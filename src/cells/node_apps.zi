@@ -112,6 +112,9 @@ node_ui_call: HostCall;
 node_ui_context: *void;
 node_ui_active: bool;
 node_package_revision: s32 = -1;
+// The next slot the pump opens; NodeAppSlots when none is waiting.
+node_open_next: s32 = NodeAppSlots;
+node_first_pump_done: bool;
 node_reconciled_at: s32;
 node_record_text: string;
 // Reading the node's list of apps, then each app's latest release.
@@ -1005,13 +1008,13 @@ NodeAppRun :: (runner: *NodeAppRunner) -> bool {
     return answer == 0 && runner.received
 }
 
-NodeAppStart :: (runner: *NodeAppRunner, bytes: string) -> bool {
+NodeAppStart :: (runner: *NodeAppRunner, bytes: string, verified: string = "") -> bool {
     runner.has_read = false
     runner.has_write = false
     if !HostedAppOpen(*runner.app, bytes) { return false }
     if HostedAppAsset(*runner.app, "assets/apps/catalog.json").found {
         HostedAppClose(*runner.app)
-        return NodeTreeStart(runner, bytes)
+        return NodeTreeStart(runner, bytes, verified)
     }
     for index: cast(s64)0..cast(s64)BundleCapabilities(runner.app.bundle) - 1 {
         if AppModule(TextFromCString(BundleCapabilityModuleName(runner.app.bundle, cast(u64)index))) {
@@ -1092,10 +1095,12 @@ NodeAppOpen :: (slot: s32) -> bool {
         return true
     }
     bytes := ""
+    verified := ""
     if NodeAppLocal(NodeAppName(slot)) {
         bytes = PackageRead(TextUntilNul(node_local_path[:]), PackageMaximumBytes)
     } else {
         bytes = PackageInstalledBytes(NodeAppIndex(slot))
+        verified = TextFromCString(*package_cached_releases[NodeAppIndex(slot)].hash[0])
         if bytes.count > 0 && !PackageTrialAllows(NodeAppIndex(slot)) {
             PackageFree(bytes)
             bytes = ""
@@ -1108,7 +1113,7 @@ NodeAppOpen :: (slot: s32) -> bool {
         return false
     }
     if !NodeAppClose(slot) { return false }
-    if !NodeAppStart(*node_runners[slot], bytes) ||
+    if !NodeAppStart(*node_runners[slot], bytes, verified) ||
     (node_runners[slot].nested == null && !NodeAppAssetsValid(node_runners[slot].app.bundle, NodeAppName(slot))) {
         unused NodeAppClose(slot)
         return false
@@ -1636,18 +1641,28 @@ NodeAppsCatalogPump :: (now: s32, wanted: bool) {
 }
 
 // Opens packages the package manager finished installing and follows
-// account changes, at most every two seconds.
+// account changes, at most every two seconds. An installed app opens when
+// a screen shows it; here only one whose games are not saved yet opens,
+// one per frame and never in the first: opening every installed app before
+// Inbe drew anything kept a phone on a black screen for seconds.
 NodeAppsPump :: (now: s32, catalog_wanted: bool) {
     NodeAppsInitialize()
     NodeAppsCatalogPump(now, catalog_wanted)
     if PackageRevision() != node_package_revision {
         node_package_revision = PackageRevision()
-        slot: s32 = 0
-        while slot < NodeAppSlots {
-            if NodeAppName(slot).count > 0 && !NodeAppRunning(slot) {
+        node_open_next = ifx node_first_pump_done then 0 else -1
+    }
+    node_first_pump_done = true
+    if node_open_next < 0 {
+        node_open_next = 0
+    } else {
+        while node_open_next < NodeAppSlots {
+            slot := node_open_next
+            node_open_next += 1
+            if NodeAppName(slot).count > 0 && !NodeAppRunning(slot) && !NodeInstalledLoad(slot) {
                 unused NodeAppOpen(slot)
+                break
             }
-            slot += 1
         }
     }
     if now - node_reconciled_at >= 2 || now < node_reconciled_at {

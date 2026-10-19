@@ -14,6 +14,10 @@
 #import, file "node_app_runner.zi";
 #import, file "node_app_tree.zi";
 #import, file "package_files.zi";
+#import, file "package_manager.zi";
+#import, file "package_release.zi";
+#import, file "../storage/temporary_data.zi";
+#import "std/byte_text_linux"
 #import, file "../app/assets.zi";
 #import, file "../storage/achievements.zi";
 
@@ -138,7 +142,148 @@ NodeInstalledScan :: (slot: s32) -> bool {
     AppHostCollect(host)
     VecFree(stack)
     node_snapshot_scanning = previous
+    if ok { NodeInstalledSave(slot) }
     return ok
+}
+
+// A root's verified leaves are also saved beside its package, for its
+// release and account, so a launch knows an installed collection's games
+// and their achievements without opening it: opening Arcade's five bundles
+// before anything else froze a phone for seconds.
+NODE_SNAPSHOT_FORMAT :: "inbe-leaves-1"
+
+NodeSnapshotCursor :: struct {
+    at: s64
+    ok: bool
+}
+
+NodeSnapshotField :: (out: *Vec(u8), text: string) {
+    BuilderPrint(out, "%:%", text.count, text)
+}
+
+NodeSnapshotNext :: (text: string, cursor: *NodeSnapshotCursor) -> string {
+    length: s64 = 0
+    digits: s32 = 0
+    while cursor.at < text.count && digits < 9 &&
+    text[cursor.at] >= cast(u8)48 && text[cursor.at] <= cast(u8)57 {
+        length = length * 10 + cast(s64)text[cursor.at] - 48
+        cursor.at += 1
+        digits += 1
+    }
+    if !cursor.ok || digits == 0 || cursor.at >= text.count ||
+    text[cursor.at] != cast(u8)58 || length > text.count - cursor.at - 1 {
+        cursor.ok = false
+        return ""
+    }
+    start := cursor.at + 1
+    cursor.at = start + length
+    return text[start:start + length]
+}
+
+NodeInstalledSave :: (slot: s32) {
+    root := NodeAppName(slot)
+    if root.count == 0 || NodeAppLocal(root) || !NodeAppRunning(slot) || node_tree_validating { return }
+    hash := TextFromCString(*package_cached_releases[NodeAppIndex(slot)].hash[0])
+    if hash.count != 64 { return }
+    // Leaves are kept for the account they were found under; a root with
+    // none installed is saved for the current account.
+    account := NodeTreeAccount()
+    captured := account == TextUntilNul(node_installed_account[:])
+    out: Vec(u8)
+    NodeSnapshotField(*out, NODE_SNAPSHOT_FORMAT)
+    NodeSnapshotField(*out, hash)
+    NodeSnapshotField(*out, account)
+    for at: cast(s64)0..node_installed_leaves.count - 1 {
+        entry := *node_installed_leaves[at]
+        if !captured || TextUntilNul(entry.root[:]) != root { continue }
+        NodeSnapshotField(*out, TextUntilNul(entry.identity.authority[:]))
+        NodeSnapshotField(*out, TextUntilNul(entry.identity.id[:]))
+        NodeSnapshotField(*out, TextUntilNul(entry.owner[:]))
+        NodeSnapshotField(*out, ifx entry.nested then "1" else "0")
+        for text: entry.assets { NodeSnapshotField(*out, text) }
+    }
+    text := BuilderFinish(out)
+    path := PackagePath(NodeAppIndex(slot), ".leaves")
+    unused PackageWrite(path, text)
+    PackageFree(path)
+    PackageFree(text)
+}
+
+// Takes the saved leaves of a root that is not open, when they belong to
+// its installed release and this account. False when there are none and
+// the root must open to find them.
+NodeInstalledLoad :: (slot: s32) -> bool {
+    root := NodeAppName(slot)
+    if root.count == 0 || NodeAppLocal(root) || DataTemporary() { return false }
+    path := PackagePath(NodeAppIndex(slot), ".leaves")
+    text := PackageRead(path, 16777216)
+    defer { PackageFree(path); PackageFree(text) }
+    cursor := NodeSnapshotCursor.{.ok = true}
+    if NodeSnapshotNext(text, *cursor) != NODE_SNAPSHOT_FORMAT { return false }
+    hash := NodeSnapshotNext(text, *cursor)
+    account := NodeSnapshotNext(text, *cursor)
+    if !cursor.ok || account != NodeTreeAccount() || !PackageInstalledMatches(NodeAppIndex(slot), hash) {
+        return false
+    }
+    // Check the whole file before taking any of it.
+    probe := cursor
+    count: s32 = 0
+    while probe.ok && probe.at < text.count {
+        check: NodeInstalledLeaf
+        authority := NodeSnapshotNext(text, *probe)
+        id := NodeSnapshotNext(text, *probe)
+        owner := NodeSnapshotNext(text, *probe)
+        unused NodeSnapshotNext(text, *probe)
+        probe.ok = probe.ok && CopyCString(authority, check.identity.authority[:]) &&
+        CopyCString(id, check.identity.id[:]) && CopyCString(owner, check.owner[:]) &&
+        CopyCString(root, check.root[:])
+        for index: cast(s32)0..12 {
+            asset := NodeSnapshotNext(text, *probe)
+            if probe.ok && asset.count > 0 &&
+            (asset.count > 262144 || (index == 0 && !AchievementCatalog(asset, id, false))) {
+                probe.ok = false
+            }
+        }
+        count += 1
+    }
+    if !probe.ok || count > 64 {
+        return false
+    }
+    if account != TextUntilNul(node_installed_account[:]) {
+        NodeInstalledClear()
+        unused CopyCString(account, node_installed_account[:])
+    }
+    while cursor.at < text.count {
+        entry: NodeInstalledLeaf
+        unused CopyCString(NodeSnapshotNext(text, *cursor), entry.identity.authority[:])
+        unused CopyCString(NodeSnapshotNext(text, *cursor), entry.identity.id[:])
+        unused CopyCString(NodeSnapshotNext(text, *cursor), entry.owner[:])
+        entry.nested = NodeSnapshotNext(text, *cursor) == "1"
+        unused CopyCString(root, entry.root[:])
+        for index: cast(s32)0..12 {
+            asset := NodeSnapshotNext(text, *cursor)
+            if asset.count == 0 { continue }
+            bytes: Vec(u8)
+            BuilderPrint(*bytes, "%", asset)
+            entry.assets[index] = BuilderFinish(bytes)
+        }
+        replaced := false
+        for at: cast(s64)0..node_installed_leaves.count - 1 {
+            saved := *node_installed_leaves[at]
+            if AppIdentityEqual(*saved.identity, *entry.identity) &&
+            TextUntilNul(saved.root[:]) == TextUntilNul(entry.root[:]) {
+                for owned: saved.assets { PackageFree(owned) }
+                saved.* = entry
+                replaced = true
+                break
+            }
+        }
+        if !replaced && (node_installed_leaves.count >= 64 || !VecPush(node_installed_leaves, entry)) {
+            for owned: entry.assets { PackageFree(owned) }
+        }
+    }
+    node_installed_revision += 1
+    return true
 }
 
 NodeInstalledVisible :: (entry: *NodeInstalledLeaf) -> bool {

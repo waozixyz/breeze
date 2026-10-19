@@ -400,6 +400,7 @@ NodeTreeEffect :: (context: *void, account: string, locator: *AppLocator,
     text := BuilderFinish(value)
     defer { PackageFree(text) }
     if state.installed && !NodeInstalledCapture(NodeAppSlotOf(runner), candidate) { return false }
+    if state.installed { NodeInstalledSave(NodeAppSlotOf(runner)) }
     storage_set_setting_text(location_key, location)
     if storage_setting_text_equals(location_key, location) == 0 {
         return false
@@ -412,7 +413,10 @@ NodeTreeEffect :: (context: *void, account: string, locator: *AppLocator,
     return true
 }
 
-NodeTreeStart :: (runner: *NodeAppRunner, bytes: string) -> bool {
+// verified is the digest the package manager just checked these bytes
+// against, or empty to hash them here; either way the Apps host does not
+// hash the whole bundle again.
+NodeTreeStart :: (runner: *NodeAppRunner, bytes: string, verified: string) -> bool {
     authority: [256]u8
     if runner.nested != null || !NodeTreeAuthority(runner, authority[:]) {
         return false
@@ -425,13 +429,15 @@ NodeTreeStart :: (runner: *NodeAppRunner, bytes: string) -> bool {
     host := *node_tree_hosts[index]
     runner.nested = host
     digest: [65]u8
-    payload := cast(*TextDescriptor)(*bytes)
-    Sha256Hex(payload.data, bytes.count, *digest[0])
+    if verified.count != 64 || !CopyCString(verified, digest[:]) {
+        payload := cast(*TextDescriptor)(*bytes)
+        Sha256Hex(payload.data, bytes.count, *digest[0])
+    }
     ready := AppHostStart(host, bytes, TextUntilNul(authority[:]), PackageID(NodeAppIndex(slot)),
         NodeAppName(slot), TextUntilNul(digest[:]), NodeTreeAccount(),
         AppPlatform.{.context = cast(*void)runner, .allows = NodeTreeAllows, .call = NodeTreeCall,
             .widgets = NodeTreeWidgets, .save = NodeTreeSave, .state = NodeTreeState,
-            .effect = NodeTreeEffect}, AppsControllerSha256, LocaleActiveCode())
+            .effect = NodeTreeEffect}, AppsControllerSha256, LocaleActiveCode(), APPS_CONTEXT_PROTOCOL, true)
     if !ready {
         runner.nested = null
         return false
