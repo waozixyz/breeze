@@ -104,3 +104,81 @@ LumiFormatMessage :: (value: string, formatted: bool) -> LumiMessageText {
     result.strong_count = counts.strong_count
     return result
 }
+
+// Web links in a message open from rows under its words, as many as fit.
+// The host measures the rows from the same links the view draws.
+LUMI_LINKS_MAX :: 3
+LUMI_LINK_ROW :: 36
+LUMI_LINK_MAX_BYTES :: 2048
+
+LumiLink :: struct {
+    start: s32
+    end: s32
+}
+
+LumiLinks :: struct {
+    items: [LUMI_LINKS_MAX]LumiLink
+    count: s32
+}
+
+LumiLinkStarts :: (value: string, at: s32) -> s32 {
+    schemes: [2]string = .["https://", "http://"]
+    for scheme: schemes {
+        end := at + cast(s32)scheme.count
+        if end <= cast(s32)value.count && value[at:end] == scheme {
+            return cast(s32)scheme.count
+        }
+    }
+    return 0
+}
+
+// A link ends at a space, a control character or a quote, and leaves out
+// punctuation that closes the sentence around it.
+LumiLinkEnd :: (value: string, start: s32) -> s32 {
+    end := start
+    while end < cast(s32)value.count {
+        byte := value[end]
+        if byte <= cast(u8)32 || byte == cast(u8)34 || byte == cast(u8)60 || byte == cast(u8)62 ||
+        byte == cast(u8)96 {
+            break
+        }
+        end += 1
+    }
+    while end > start {
+        last := value[end - 1]
+        closing := last == cast(u8)46 || last == cast(u8)44 || last == cast(u8)59 ||
+        last == cast(u8)58 || last == cast(u8)33 || last == cast(u8)63 || last == cast(u8)41 ||
+        last == cast(u8)93 || last == cast(u8)125 || last == cast(u8)39 || last == cast(u8)42
+        if !closing {
+            break
+        }
+        end -= 1
+    }
+    return end
+}
+
+LumiMessageLinks :: (value: string) -> LumiLinks {
+    links: LumiLinks
+    at: s32 = 0
+    while at < cast(s32)value.count && links.count < LUMI_LINKS_MAX {
+        scheme := LumiLinkStarts(value, at)
+        previous_word := at > 0 && value[at - 1] > cast(u8)32 && value[at - 1] != cast(u8)40
+        if scheme == 0 || previous_word {
+            at += 1
+            continue
+        }
+        end := LumiLinkEnd(value, at)
+        if end - at > scheme && end - at <= LUMI_LINK_MAX_BYTES {
+            links.items[links.count] = LumiLink.{.start = at, .end = end}
+            links.count += 1
+        }
+        at = ifx end > at then end else at + 1
+    }
+    return links
+}
+
+// Only a whole web link Lumi found in a message opens.
+LumiLinkValid :: (url: string) -> bool {
+    links := LumiMessageLinks(url)
+    return links.count == 1 && links.items[0].start == 0 && links.items[0].end == cast(s32)url.count
+}

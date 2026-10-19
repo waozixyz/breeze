@@ -15,6 +15,7 @@
 #import "box_widget"
 #import "checkbox_props"
 #import "checkbox_widget"
+#import "context_menu_widget"
 #import "press_props"
 #import "press_widget"
 #import "scroll_props"
@@ -43,6 +44,7 @@ using TextWrap;
 using TextAlign;
 using ButtonTone;
 using ButtonEmphasis;
+using ContentAlignment;
 host_api :: #system_library "host_api";
 ReadLumiUiHost :: () -> LumiUiFrame #foreign host_api;
 WriteLumiUiHost :: (frame: LumiUiFrame) #foreign host_api;
@@ -59,6 +61,7 @@ SetLumiOnlineHost :: (online: bool) -> s32 #foreign host_api;
 LumiAgreementHost :: (choice: s32) -> bool #foreign host_api;
 SmoothFramesHost :: (frames: s32) -> bool #foreign host_api;
 OpenLumiSettingsHost :: () -> bool #foreign host_api;
+OpenLinkHost :: (url: string) -> bool #foreign host_api;
 frame: LumiUiFrame;
 // The terms panel's scroll and its formatted text.
 agreement_scroll: s32;
@@ -126,6 +129,14 @@ sweep_seen: bool;
 confirm_delete: bool;
 // Copied text waits until the composer has written its own clipboard state.
 pending_copy: string;
+// Right-clicking a message opens its menu where the pointer was, as in
+// Telegram. The row is kept by its slot, which older history loading above
+// does not change.
+LUMI_MENU_COPY :: 1
+row_menu_open: bool;
+row_menu_slot: s32;
+row_menu_x: float32;
+row_menu_y: float32;
 copy_pending: bool;
 LUMI_CLOSE_ICON :: "S1.8rr:M6 6L18 18M18 6L6 18"
 LUMI_COPY_ICON :: "S1.6rr:M9 9H20V20H9ZM15 5V4H4V15H5"
@@ -603,6 +614,46 @@ RowPress :: (index: s32, bounds: Rectangle, content_y: float32) {
     if press.released {
         sweeping = false
     }
+    if press.right_clicked && !selecting {
+        row_menu_open = true
+        row_menu_slot = RowSlot(index)
+        row_menu_x = press.x
+        row_menu_y = press.y
+    }
+}
+
+// The menu a right click opens on a message. Returns the row whose words
+// Copy puts on the clipboard, or -1.
+RowMenu :: () -> s32 {
+    if !row_menu_open {
+        return -1
+    }
+    index := SlotRow(row_menu_slot)
+    if selecting || index < 0 || index >= frame.chat_count {
+        row_menu_open = false
+        return -1
+    }
+    items: [1]ContextMenuItem = .[ContextMenuItem.{.id = LUMI_MENU_COPY, .label = LumiViewLocaleHost("lumi_copy")}]
+    menu := ContextMenu(frame.session, ContextMenuProps.{.key = cast(u64)380000, .open = true,
+            .x = row_menu_x, .y = row_menu_y, .scale = frame.scale}, items[:])
+    if !menu.open {
+        row_menu_open = false
+    }
+    return ifx menu.activated_id == LUMI_MENU_COPY then index else -1
+}
+
+// A long link shows its start; the whole link opens.
+LumiLinkLabel :: (url: string) -> string {
+    if url.count <= 60 {
+        return url
+    }
+    end: s64 = 57
+    while end > 0 && (url[end] & cast(u8)192) == cast(u8)128 {
+        end -= 1
+    }
+    label: Vec(u8)
+    BuilderPrint(*label, "%…", url[:end])
+    return BuilderFinish(label)
 }
 
 // Lumi's title bar: its name, a connection button that switches between
@@ -815,7 +866,9 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
             }
             card_height := Scale(ifx row.kind == LUMI_CHAT_PROGRESS then 242 else
                 ifx row.kind == LUMI_CHAT_FEEDBACK then 54 else 0)
-            text_height := row_height - text_top - Scale(16) - card_height
+            links := LumiMessageLinks(row.text)
+            links_height := links.count * Scale(LUMI_LINK_ROW)
+            text_height := row_height - text_top - Scale(16) - card_height - links_height
             props := TextProps.{.key = cast(u64)(300403 + index * 4),
                 .bounds = Bounds(left + Scale(14), top + text_top,
                     bubble_width - Scale(28), text_height),
@@ -828,7 +881,19 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
                 props.strong = formatted.strong[:formatted.strong_count]
             }
             Text(frame.session, props)
-            card_top := top + text_top + text_height + Scale(8)
+            link_top := top + text_top + text_height
+            for link: cast(s32)0..links.count - 1 {
+                url := row.text[links.items[link].start:links.items[link].end]
+                if Button(frame.session, ButtonProps.{.id = 470000 + index * 4 + link,
+                        .bounds = Bounds(left + Scale(14), link_top + link * Scale(LUMI_LINK_ROW) + Scale(2),
+                            bubble_width - Scale(28), Scale(LUMI_LINK_ROW - 4)),
+                        .label = LumiLinkLabel(url), .tone = cast(ButtonTone)ButtonToneAccent,
+                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisLink,
+                        .content_alignment = cast(ContentAlignment)ContentAlignmentStart}) != 0 {
+                    unused OpenLinkHost(url)
+                }
+            }
+            card_top := link_top + links_height + Scale(8)
             if row.kind == LUMI_CHAT_PROGRESS {
                 ProgressCard(row, index, left + Scale(14), card_top, bubble_width - Scale(28))
             } else if row.kind == LUMI_CHAT_FEEDBACK {
@@ -1073,12 +1138,20 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
         frame.preferred_x_valid = field.preferred_x_valid
         frame.focused = field.focused
     }
+    // The message menu is an overlay, so it sits above the page.
+    copy_row := RowMenu()
     frame.clipboard_write = field.clipboard_write
     frame.clipboard_text = field.clipboard_text
     if copy_pending {
         frame.clipboard_write = true
         frame.clipboard_text = pending_copy
         copy_pending = false
+    }
+    if copy_row >= 0 {
+        words: Vec(u8)
+        BuilderPrint(*words, "%", ReadLumiChatRowHost(copy_row).text)
+        frame.clipboard_write = true
+        frame.clipboard_text = BuilderFinish(words)
     }
     send := !show_commands && Button(frame.session, ButtonProps.{.id = 30011,
             .bounds = Bounds(x + width - Scale(48), footer, Scale(48), Scale(48)),

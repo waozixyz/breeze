@@ -343,7 +343,7 @@ LumiDelegateHostAllowed :: (name: string) -> bool {
     name == "LumiLocaleHost" || name == "LumiViewLocaleHost" ||
     name == "LumiLocaleRevisionHost" ||
     name == "ReadLumiChatRowHost" || name == "AppendLumiChatHost" ||
-    name == "StartLumiOnlineHost"
+    name == "StartLumiOnlineHost" || name == "OpenLinkHost"
 }
 
 LumiHostAllowed :: (app: *InnerBreeze, name: string) -> bool {
@@ -880,6 +880,14 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         result.* = WidgetEncodeLumiChatRow(row, *lumi_row_codec)
         return 1
     }
+    // A link Lumi found in a message opens with the platform's handler.
+    if name == "OpenLinkHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        url := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        opened := LumiLinkValid(url) && OpenUri(url)
+        result.* = HostScalar("bool", ifx opened then 1 else 0)
+        return 1
+    }
     if name == "AppendLumiChatHost" && count == 2 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "bool", cast(s32)HostInteger) {
@@ -936,6 +944,8 @@ LumiMeasuredRow :: (index: s32, access: LumiRowAccess) -> LumiChatRow {
         if row.developer && row.quote.count > 0 {
             height += AppScale(LUMI_QUOTE_HEIGHT)
         }
+        // A row for each link under the words.
+        height += LumiMessageLinks(row.text).count * AppScale(LUMI_LINK_ROW)
         minimum := AppScale(ifx row.user then 54 else 80)
         lumi_row_heights[index] = ifx height < minimum then minimum else height
     }

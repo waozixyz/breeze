@@ -26,6 +26,7 @@
 - Settings › About lists the version of the Inbe harness, the package that
   carries the apps and updates them without a new app release, then each app
   you installed, including apps from the node.
+- Open web links in Lumi messages, and right-click a message to copy it.
 
 ## [2.1.35] - 2026-10-17
 

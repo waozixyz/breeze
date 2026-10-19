@@ -6,6 +6,9 @@
   per version, with a link to the full notes.
 - Show developer replies as replies from the developer, quoting the
   feedback they answer.
+- Open web links in messages from the rows under their words.
+- Right-click a message to copy it.
+- Requires Inner Breeze 2.1.36 or later.
 - Maintenance release for Inner Breeze 2.1.36.
 
 ## [1.5.1] - 2026-10-17
