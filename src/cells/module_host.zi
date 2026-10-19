@@ -90,6 +90,10 @@ lists_request_body: [262144]u8;
 habit_name: [HABIT_NAME_SIZE]u8;
 habit_description: [HABIT_DESCRIPTION_SIZE]u8;
 identifying: bool;
+// Lumi's bundled program, still being read and checked on its own thread
+// while the first frames draw: at over a second on a phone, it took longer
+// than every other app together. Lumi counts as installed meanwhile.
+lumi_preload: s32 = -1;
 ui_call: HostCall;
 ui_context: *void;
 ui_active: bool;
@@ -434,12 +438,15 @@ CellsReady :: () -> bool {
     ((enabled_apps & APP_HABITS) == 0 || slots[1].app.instance != null) &&
     ((enabled_apps & APP_PRACTICE) == 0 || slots[2].app.instance != null) &&
     ((enabled_apps & APP_DIARY) == 0 || slots[4].app.instance != null) &&
-    ((enabled_apps & APP_LUMI) == 0 || slots[5].app.instance != null) &&
+    ((enabled_apps & APP_LUMI) == 0 || slots[5].app.instance != null || lumi_preload >= 0) &&
     ((enabled_apps & APP_LEADERBOARD) == 0 || slots[6].app.instance != null)
 }
 
 #program_export
 CellsClose :: () {
+    // Its bytes belong to the root that closes here.
+    BundlePreloadDiscard(lumi_preload)
+    lumi_preload = -1
     PracticeDownloadsClose()
     AssetUnbindProvider()
     index: s32 = 0
@@ -761,6 +768,10 @@ CellsOpenInstalledFeatures :: () {
             PackageFree(bytes)
             bytes = ""
         }
+        // An installed Lumi keeps the bundled one when it fails its checks.
+        if bytes.count > 0 && index == 5 {
+            unused CellsLumiFinish(true)
+        }
         if bytes.count > 0 {
             replacement: ModuleSlot
             kind := ModuleKindForPackage(index)
@@ -931,6 +942,9 @@ CellsOpenPackage :: (bytes: string) -> bool {
             // Current builds include every cell for offline sidebar changes.
             if feature.count == 0 {
                 ready = index == 0 || index == 3 || index == 5
+            } else if index == 4 && preloads[index] >= 0 {
+                lumi_preload = preloads[index]
+                preloads[index] = -1
             } else {
 
                 slot := ModuleSlotForPackage(index + 1)
@@ -1004,7 +1018,7 @@ CellsSetEnabled :: (mask: s32) -> bool {
         slot := ModuleSlotForPackage(index + 1)
         // The mask chooses shortcuts. Keep bundled apps loaded when hidden,
         // so adding them back needs neither a download nor another VM load.
-        if slots[slot].app.instance == null {
+        if slots[slot].app.instance == null && !(slot == 5 && lumi_preload >= 0) {
 
             downloaded: string
             if local_bundle_index == index + 1 {
@@ -1041,6 +1055,9 @@ CellsPackageSize :: (index: s32) -> s64 {
         return 0
     }
     slot := ModuleSlotForPackage(index)
+    if slot == 5 && lumi_preload >= 0 {
+        return PackageFeature(4).count
+    }
     if slots[slot].app.instance == null {
         return 0
     }
@@ -1062,7 +1079,7 @@ CellsInstalledMask :: () -> s32 {
     if slots[4].app.instance != null {
         mask |= APP_DIARY
     }
-    if slots[5].app.instance != null {
+    if slots[5].app.instance != null || lumi_preload >= 0 {
         mask |= APP_LUMI
     }
     if slots[6].app.instance != null {
@@ -1294,10 +1311,43 @@ ModuleKindForPackage :: (index: s32) -> s32 {
     return index
 }
 
+// Opens the bundled Lumi once its preload is done, or waits for it when
+// wait is set. False while it is still loading, or when it failed.
+CellsLumiFinish :: (wait: bool) -> bool {
+    if lumi_preload < 0 {
+        return slots[5].app.instance != null
+    }
+    if !wait && !BundlePreloadReady(lumi_preload) {
+        return false
+    }
+    preload := lumi_preload
+    lumi_preload = -1
+    previous := identifying
+    identifying = true
+    ready := ModuleOpen(*slots[5], PackageFeature(4), MODULE_LUMI, preload) &&
+    ModuleFeatureAssetsValid(slots[5].app.bundle, MODULE_LUMI)
+    identifying = previous
+    if !ready {
+        HostedAppClose(*slots[5].app)
+        slots[5] = ModuleSlot.{}
+        enabled_apps = CellsInstalledMask()
+    }
+    return ready
+}
+
+// The frame loop's Lumi work runs only once Lumi is open; it never waits.
+#program_export
+CellsLumiOpen :: () -> bool {
+    return lumi_preload < 0 || CellsLumiFinish(false)
+}
+
 #program_export
 LumiRun :: (message: LumiMessage) -> LumiMessage {
     message.abi = MODULE_ABI
     message.succeeded = false
+    if lumi_preload >= 0 {
+        unused CellsLumiFinish(true)
+    }
     if slots[5].app.bundle == null {
         return message
     }
