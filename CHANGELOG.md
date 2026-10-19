@@ -26,6 +26,9 @@
   scroll them. Password values stay hidden.
 - Habits' save, discard and delete confirmations can improve through Habits
   updates while keeping existing data and older installed packages working.
+- A day a habit is not scheduled on no longer takes a tap, so its empty
+  space cannot add a check mark. An off day with something recorded on it
+  still opens.
 - Developer replies to your feedback appear in Lumi as replies from the
   developer, quoting the feedback they answer, like a reply in a chat app.
   Replies you received earlier change to this look too, and each reply shows

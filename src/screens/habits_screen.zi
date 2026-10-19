@@ -477,13 +477,16 @@ HabitScreenOffDayColor :: (accent: Color) -> Color {
 // A day button. With a dot, as for a counting habit's calendar day, the
 // label sits at the top and the day's dot with its count below it, and the
 // dot rather than the button shows that the day is complete. A day off the
-// habit's schedule has no background and a faded label, yet still opens.
+// habit's schedule has no background and a faded label, and opens only when
+// something was recorded on it.
 HabitScreenDayButton :: (app: *InnerBreeze, index: s32,
     day_index: s32, label: string, id: s32, bounds: Rectangle, dot: bool) {
     habit := *app.habits.items[index]
     scheduled := habit_scheduled_day(habit, day_index) != 0
     complete := HabitScreenCompletion(app, index, day_index)
-    disabled := app.modal.active != 0
+    recorded := complete || HabitScreenDayCount(app, index, day_index) > 0 ||
+    HabitScreenSpanRunning(habit, day_index)
+    disabled := app.modal.active != 0 || (!scheduled && !recorded)
     filled := complete && !dot
     faded_label := !scheduled && !filled
     props: ButtonProps
@@ -803,8 +806,9 @@ HabitScreenHabitIcon :: (app: *InnerBreeze, index: s32, bounds: Rectangle) {
 }
 
 // One of the last seven days in a habit's row: a planned day has a circle
-// that marks it. A day off the schedule has none, unless something was
-// recorded on it, which shows faded; it still opens like any other day.
+// that marks it. A day off the schedule has none and cannot be tapped,
+// unless something was recorded on it, which shows faded and opens like
+// any other day.
 HabitScreenDayCell :: (app: *InnerBreeze, habit_index: s32, day_index: s32,
     column: s32, bounds: Rectangle) {
     habit := *app.habits.items[habit_index]
@@ -812,11 +816,13 @@ HabitScreenDayCell :: (app: *InnerBreeze, habit_index: s32, day_index: s32,
     count := HabitEffectiveDayCount(habit, day_index, linked)
     complete := HabitScreenCompletion(app, habit_index, day_index)
     scheduled := habit_scheduled_day(habit, day_index) != 0
+    half := HabitScreenSpanRunning(habit, day_index)
+    shown := scheduled || complete || count > 0 || half
     marker: ButtonProps
     marker.id = cast(s32)5200000 + habit_index * 16 + column
     marker.bounds = bounds
     marker.invisible = true
-    marker.disabled = app.modal.active != 0
+    marker.disabled = app.modal.active != 0 || !shown
     clicked := Button(app.ui.session, marker) != 0
     if habit_index == habits_active_at(*app.habits, 0) && column == 0 {
         habits_first_day_bounds = bounds
@@ -839,7 +845,6 @@ HabitScreenDayCell :: (app: *InnerBreeze, habit_index: s32, day_index: s32,
         HabitScreenCircle(app, center_x, center_y, radius + AppScale(5),
             color_with_alpha(habit.color, 0.24))
     }
-    half := HabitScreenSpanRunning(habit, day_index)
     if scheduled {
         HabitScreenDayDot(app, center_x, center_y, radius, habit.color,
             complete, half, habit_counting_enabled(habit) != 0, count)
