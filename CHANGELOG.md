@@ -49,6 +49,8 @@
   node offers Arcade and you had installed Chess, Arcade installs for you with
   your saved and friend Chess games.
 - Habits earn coins, more for hard ones, to spend on your own rewards in the shop.
+- The habit shop scrolls smoothly, even with its grid of symbols open.
+- Rewards can show 28 more symbols, such as weed, cigarettes, beer, wine, fast food, sweets, TV and games.
 
 ## [2.1.35] - 2026-10-17
 
