@@ -14,22 +14,24 @@ c :: #system_library "c";
 sqlite3_bind_int :: (statement: *void, index: s32, value: s32) -> s32 #foreign c "sqlite3_bind_int";
 sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
 
-// The coins the done days of the user's habits earned, or of the habit ?2
-// alone. A day earns from its habit's coins_from day on, at the difficulty
-// the habit had that day: a difficulty change applies from the day it was
-// made, so the days before keep the value the change replaced. A day is
-// done as the habit list shows it: counted to its target, with linked
-// practice sessions as the floor, or marked.
-StorageHabitEarnedCoinsSQL :: #string SQL
-SELECT COALESCE(SUM(1+MIN(MAX(COALESCE((SELECT CAST(c.old_value AS INTEGER)
+// The half coins the done days of the user's habits earned, or of the
+// habit ?2 alone: easy one, medium two, hard four, very hard six
+// (HabitDifficultyHalfCoins). A day earns from its habit's coins_from day
+// on, at the difficulty the habit had that day: a difficulty change applies
+// from the day it was made, so the days before keep the value the change
+// replaced. A day is done as the habit list shows it: counted to its
+// target, with linked practice sessions as the floor, or marked.
+StorageHabitEarnedHalvesSQL :: #string SQL
+SELECT COALESCE(SUM(CASE WHEN e.level=3 THEN 1 ELSE 2+2*MIN(MAX(e.level,0),2) END),0)
+FROM (SELECT COALESCE((SELECT CAST(c.old_value AS INTEGER)
 FROM habit_changes c WHERE c.habit_id=h.id AND c.kind=19 AND c.deleted_at=0 AND
 CAST(strftime('%Y%m%d',c.changed_at,'unixepoch','localtime') AS INTEGER)>d.local_date
-ORDER BY c.changed_at,c.rowid LIMIT 1),h.difficulty),0),2)),0)
+ORDER BY c.changed_at,c.rowid LIMIT 1),h.difficulty) AS level
 FROM habit_days d JOIN habits h ON h.id=d.habit_id
 WHERE h.user_id=?1 AND h.deleted_at=0 AND (?2='' OR h.id=?2) AND h.coins_from>0 AND
 d.local_date>=h.coins_from AND CASE WHEN h.counter_enabled<>0 THEN
 MAX(d.count,d.session_count,CASE WHEN d.completed<>0 THEN 1 ELSE 0 END)>=MAX(h.counter_target,1)
-ELSE d.completed<>0 OR d.count>0 OR d.session_count>0 END
+ELSE d.completed<>0 OR d.count>0 OR d.session_count>0 END) e
 SQL
 
 // Coins kept from deleted habits less the coins rewards cost.
@@ -56,24 +58,26 @@ storage_habit_wallet_select :: (sql: string, habit_id: string,
     return value
 }
 
-// The coins the done days of a habit earned, or of every habit for "".
-storage_habit_earned_coins :: (habit_id: string) -> s64 {
-    return storage_habit_wallet_select(StorageHabitEarnedCoinsSQL, habit_id,
+// The half coins the done days of a habit earned, or of every habit for "".
+storage_habit_earned_halves :: (habit_id: string) -> s64 {
+    return storage_habit_wallet_select(StorageHabitEarnedHalvesSQL, habit_id,
         true)
 }
 
-// The coins there are to spend; below 0 when days that paid for a reward
-// were cleared afterwards.
-storage_habit_wallet_balance :: () -> s64 {
-    return storage_habit_earned_coins("") +
-    storage_habit_wallet_select(StorageHabitCoinRecordsSQL, "", false)
+// The half coins there are to spend; below 0 when days that paid for a
+// reward were cleared afterwards. Kept and spent coins are whole.
+storage_habit_wallet_halves :: () -> s64 {
+    records := storage_habit_wallet_select(StorageHabitCoinRecordsSQL, "",
+        false)
+    return storage_habit_earned_halves("") + records * 2
 }
 
 // Keeps the coins a habit's days earned before the habit and its days are
 // deleted. The record is the habit's own, so two devices deleting it keep
 // them once.
 storage_habit_coins_keep :: (habit_id: string, at: s64) -> s32 {
-    earned := storage_habit_earned_coins(habit_id)
+    // A kept record holds whole coins; an odd half coin goes with the habit.
+    earned := storage_habit_earned_halves(habit_id) / 2
     if earned <= 0 || habit_id.count == 0 {
         return 1
     }

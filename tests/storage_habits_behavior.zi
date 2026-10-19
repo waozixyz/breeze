@@ -12,6 +12,7 @@
 #import, file "../src/storage/storage_profile_stats.zi";
 #import, file "../src/storage/storage_sessions.zi";
 #import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_coins.zi";
 #import, file "../src/habits/habit_memory.zi";
 #import, file "../src/storage/storage_habits.zi";
 #import, file "../src/habits/habit_model.zi";
@@ -889,10 +890,10 @@ synced_changes :: (entity_type: string, entity_id: string, array: string,
 }
 
 // Done days earn coins by their habit's difficulty from its coins_from day
-// on; a difficulty change pays from the day it was made, so earlier days
-// keep what they earned. Rewards spend coins, a deleted habit's coins stay,
-// and rewards, purchases and the habits' coin fields travel to the other
-// devices.
+// on, counted in half coins; a difficulty change pays from the day it was
+// made, so earlier days keep what they earned. Rewards spend coins, a
+// deleted habit's coins stay, and rewards, purchases and the habits' coin
+// fields travel to the other devices.
 test_habit_wallet :: () {
     root := make_root("habit-wallet")
     check_true("init db", storage_init(root) != 0)
@@ -902,10 +903,10 @@ test_habit_wallet :: () {
     // Walk earns 1 on two days; push, very hard, 3 on its counted day and
     // its day of linked sessions, not before its coins_from day nor short
     // of its target.
-    check_int("done days earn by difficulty", cast(s32)storage_habit_wallet_balance(), 8)
+    check_int("done days earn by difficulty", cast(s32)storage_habit_wallet_halves(), 16)
     // Walk became hard on 2026-10-03: that day pays 2, the day before 1.
     exec_db_sql("UPDATE habits SET difficulty=1 WHERE id='walk';INSERT INTO habit_changes(id,user_id,habit_id,changed_at,kind,question,question_text,old_value,new_value,deleted_at,updated_at) VALUES('d1',(SELECT id FROM users LIMIT 1),'walk',CAST(strftime('%s','2026-10-03 12:00:00','utc') AS INTEGER),19,0,'','0','1',0,1);")
-    check_int("a difficulty change pays from its day", cast(s32)storage_habit_wallet_balance(), 9)
+    check_int("a difficulty change pays from its day", cast(s32)storage_habit_wallet_halves(), 18)
     habits_a = Habits.{}
     check_true("load habits", storage_habits_load(cast(*void)*habits_a) != 0)
     walk := find_habit(*habits_a, "Walk")
@@ -916,7 +917,7 @@ test_habit_wallet :: () {
     habits_save(*habits_a)
     check_int("the editor's change is logged",
         read_db_count("SELECT COUNT(*) FROM habit_changes WHERE habit_id='walk' AND kind=19 AND old_value='1' AND new_value='2'"), 1)
-    check_int("days before today keep their coins", cast(s32)storage_habit_wallet_balance(), 9)
+    check_int("days before today keep their coins", cast(s32)storage_habit_wallet_halves(), 18)
     // The shop.
     exec_db_sql("DELETE FROM sync_outbox;")
     movie: [HABIT_REWARD_ID_SIZE]u8
@@ -929,7 +930,7 @@ test_habit_wallet :: () {
         count == 2 && rewards[0].price == 5 && rewards[1].price == HABIT_REWARD_PRICE_MAX &&
         AppTextFromCString(*rewards[0].name[0], HABIT_REWARD_NAME_SIZE) == "Movie night")
     check_true("buy the movie night", storage_habit_reward_buy(*rewards[0]) != 0)
-    check_int("the price is spent", cast(s32)storage_habit_wallet_balance(), 4)
+    check_int("the price is spent", cast(s32)storage_habit_wallet_halves(), 8)
     renamed: [HABIT_REWARD_ID_SIZE]u8
     check_true("rename a reward", storage_habit_reward_save(TextUntilNul(other[:]),
         "Long sauna", 20, renamed[:]) != 0 && TextUntilNul(renamed[:]) == TextUntilNul(other[:]))
@@ -947,7 +948,7 @@ test_habit_wallet :: () {
     habits_delete(*habits_a, position)
     habits_save(*habits_a)
     check_int("its coins are kept", read_db_count("SELECT COUNT(*) FROM habit_coins WHERE id='kept:push' AND kind=2 AND coins=6 AND name='Push ups'"), 1)
-    check_int("the balance stays", cast(s32)storage_habit_wallet_balance(), 4)
+    check_int("the balance stays", cast(s32)storage_habit_wallet_halves(), 8)
     // The records another device receives.
     buffer: [8192]u8
     bought := read_db_text("SELECT id FROM habit_coins WHERE kind=1")
@@ -961,9 +962,9 @@ test_habit_wallet :: () {
     check_int("the reward arrives", storage_habit_rewards_load(rewards[:]), 1)
     coin_json := synced_changes("habit_coin", TextUntilNul(coin_id[:]), "habit_coins", buffer[:])
     exec_db_sql("DELETE FROM habit_coins WHERE kind=1;")
-    check_int("without the purchase", cast(s32)storage_habit_wallet_balance(), 9)
+    check_int("without the purchase", cast(s32)storage_habit_wallet_halves(), 18)
     check_true("apply the purchase", storage_apply_sync_habit_coins_json(coin_json) != 0)
-    check_int("the purchase arrives", cast(s32)storage_habit_wallet_balance(), 4)
+    check_int("the purchase arrives", cast(s32)storage_habit_wallet_halves(), 8)
     habit_json := synced_changes("habit", "walk", "habits", buffer[:])
     check_true("a habit's record has its coin fields",
         contains(habit_json, "\"difficulty\":2") && contains(habit_json, "\"coins_from\":20261001"))
@@ -971,6 +972,19 @@ test_habit_wallet :: () {
     check_true("apply the habit", storage_apply_sync_habits_json(habit_json) != 0)
     check_int("the earliest first coin day and the difficulty arrive",
         read_db_count("SELECT COUNT(*) FROM habits WHERE id='walk' AND coins_from=20261001 AND difficulty=2"), 1)
+    // An easy habit earns half a coin on each done day.
+    exec_db_sql("INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,difficulty,coins_from) VALUES('read',(SELECT id FROM users LIMIT 1),'Read',7,8,9,0,0,0,1,2,0,1782200000,3,20261001);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('read',20261001,1,1,0,1),('read',20261002,1,1,0,1),('read',20261003,1,1,0,1);")
+    check_int("easy days earn half coins", cast(s32)storage_habit_wallet_halves(), 11)
+    check_true("each level's half coins",
+        HabitDifficultyHalfCoins(HABIT_DIFFICULTY_EASY) == 1 &&
+        HabitDifficultyHalfCoins(HABIT_DIFFICULTY_MEDIUM) == 2 &&
+        HabitDifficultyHalfCoins(HABIT_DIFFICULTY_HARD) == 4 &&
+        HabitDifficultyHalfCoins(HABIT_DIFFICULTY_VERY_HARD) == 6)
+    check_true("the editor offers easy first",
+        HabitDifficultyAt(0) == HABIT_DIFFICULTY_EASY &&
+        HabitDifficultyIndex(HABIT_DIFFICULTY_MEDIUM) == 1 &&
+        HabitDifficultyAt(HabitDifficultyIndex(HABIT_DIFFICULTY_VERY_HARD)) ==
+        HABIT_DIFFICULTY_VERY_HARD)
     habits_free(*habits_a)
     storage_close()
 }

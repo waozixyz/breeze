@@ -62,18 +62,39 @@ HabitShopRefresh :: (app: *InnerBreeze) {
     }
     shop.loaded = true
     shop.revision = revision
-    shop.balance = storage_habit_wallet_balance()
+    shop.halves = storage_habit_wallet_halves()
     shop.reward_count = storage_habit_rewards_load(shop.rewards[:])
 }
 
+// The coins to spend, in half coins.
 HabitShopBalance :: (app: *InnerBreeze) -> s64 {
     HabitShopRefresh(app)
-    return app.habit_shop.balance
+    return app.habit_shop.halves
 }
 
 HabitShopNumber :: (app: *InnerBreeze, value: s64) -> string {
     buffer: [32]u8
     if !AppFormatS64(value, buffer[:]) {
+        return ""
+    }
+    return FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*buffer[0], cast(s32)buffer.count))
+}
+
+// Half coins as Habits shows them: 12, 12½ or ½.
+HabitShopCoins :: (app: *InnerBreeze, halves: s64) -> string {
+    buffer: [40]u8
+    buffer[0] = cast(u8)0
+    whole := halves / 2
+    odd := halves % 2 != 0
+    if whole != 0 || !odd {
+        if !AppFormatS64(whole, buffer[:]) {
+            return ""
+        }
+    } else if halves < 0 {
+        unused AppCopyText("-", buffer[:])
+    }
+    if odd && !AppAppendText("½", buffer[:]) {
         return ""
     }
     return FrameTextHold(*app.ui.frame_text,
@@ -276,7 +297,7 @@ HabitShopBalanceCard :: (app: *InnerBreeze, x: s32, y: s32, width: s32) -> s32 {
             cast(float32)coin})
     text_x := x + pad + coin + AppScale(14)
     text_w := width - (text_x - x) - pad
-    amount := HabitShopNumber(app, app.habit_shop.balance)
+    amount := HabitShopCoins(app, app.habit_shop.halves)
     strong := StrongWhole(amount)
     figure: TextProps
     figure.bounds = Rectangle.{cast(float32)text_x, cast(float32)(y + AppScale(14)),
@@ -347,7 +368,7 @@ HabitShopRow :: (app: *InnerBreeze, index: s32, x: s32, y: s32, width: s32) {
     HabitCoinAmount(app.ui.session, price, Rectangle.{cast(float32)price_x,
             cast(float32)y, cast(float32)price_w, cast(float32)height},
         AppFontSize(), true)
-    affordable := shop.balance >= cast(s64)reward.price
+    affordable := shop.halves >= cast(s64)reward.price * 2
     if HabitShopButton(app, 8600 + index, buy_label, Rectangle.{
             cast(float32)buy_x, cast(float32)(y + (height - AppScale(40)) / 2),
             cast(float32)buy_w, cast(float32)AppScale(40)},
@@ -617,8 +638,9 @@ HabitShopBuyDialog :: (app: *InnerBreeze) {
         AppFontSize() + AppScale(4), true)
     y += AppScale(36)
     left_args: [1]FormatArg
-    left := shop.balance - cast(s64)reward.price
-    left_args[0].number = cast(s32)left
+    left := shop.halves - cast(s64)reward.price * 2
+    left_args[0].text = HabitShopCoins(app, left)
+    left_args[0].is_text = true
     left_text: [128]u8
     unused FormatTemplate(LocaleText("habit_shop_buy_left"), left_args[:],
         left_text[:])
