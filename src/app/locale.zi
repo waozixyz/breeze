@@ -14,18 +14,40 @@ locale_extension: LocaleExtension;
 
 // Index entries borrow mounted catalog bytes. Rebuild the catalogs whenever
 // the asset provider changes, before looking up any of their borrowed slices.
-// A language with more keys than this loses its index, and every text then
-// reads the whole file: at 2058 keys over a 2048 limit that was three
-// quarters of each frame on a phone. tests/locale_capacity_test.py keeps the
-// languages well under it.
-LocaleCatalogCapacity :: 8192
-LocaleCatalogSlots :: 16384
-
+// The index is sized to its language: a fixed 2048-entry index overflowed at
+// 2058 English keys, and every text then read the whole file, three quarters
+// of each frame on a phone.
 LocaleCatalog :: struct {
-    entries: [LocaleCatalogCapacity]LocaleEntry
-    slots: [LocaleCatalogSlots]s32
-    count: s32
+    entries: *LocaleEntry
+    entry_room: s64
+    count: s64
+    // Open addressing, a power of two at least twice the keys; 0 is empty and
+    // n is entries[n - 1].
+    slots: *s32
+    slot_count: s64
     complete: bool
+}
+LocaleMemory :: (count: u64, size: u64) -> *void #foreign c_locale "calloc";
+LocaleMemoryFree :: (memory: *void) #foreign c_locale "free";
+LocaleSliceDescriptor :: struct {
+    data: *void
+    length: s64
+}
+
+LocaleEntries :: (catalog: *LocaleCatalog) -> []LocaleEntry {
+    result: []LocaleEntry
+    descriptor := cast(*LocaleSliceDescriptor)(*result)
+    descriptor.data = cast(*void)catalog.entries
+    descriptor.length = ifx catalog.entries == null then 0 else catalog.count
+    return result
+}
+
+LocaleSlots :: (catalog: *LocaleCatalog) -> []s32 {
+    result: []s32
+    descriptor := cast(*LocaleSliceDescriptor)(*result)
+    descriptor.data = cast(*void)catalog.slots
+    descriptor.length = ifx catalog.slots == null then 0 else catalog.slot_count
+    return result
 }
 
 english_catalog: LocaleCatalog;
@@ -40,48 +62,82 @@ active_catalog_ready: bool;
 active_catalog_language_index: s32;
 catalog_asset_generation: u64;
 
-LocaleCatalogSlot :: (key: string) -> s32 {
+LocaleCatalogSlot :: (key: string, slots: s64) -> s32 {
     hash: u32 = 2166136261
     index: s32 = 0
     while index < cast(s32)key.count {
         hash = (hash ^ cast(u32)key[index]) * cast(u32)16777619
         index += 1
     }
-    return cast(s32)(hash % cast(u32)LocaleCatalogSlots)
+    return cast(s32)(hash & cast(u32)(slots - 1))
 }
 
 LocaleCatalogPut :: (catalog: *LocaleCatalog, key: string, value: string) {
-    slot := LocaleCatalogSlot(key)
-    probes: s32 = 0
-    while probes < LocaleCatalogSlots {
+    slot := LocaleCatalogSlot(key, catalog.slot_count)
+    probes: s64 = 0
+    while probes < catalog.slot_count {
         stored := catalog.slots[slot]
         if stored == 0 {
-            if catalog.count >= LocaleCatalogCapacity {
+            if catalog.count >= catalog.entry_room {
                 catalog.complete = false
                 return
             }
-            catalog.entries[catalog.count] = LocaleEntry.{key, value }
+            catalog.entries[catalog.count] = LocaleEntry.{key, value}
             catalog.count += 1
-            catalog.slots[slot] = catalog.count
+            catalog.slots[slot] = cast(s32)catalog.count
             return
         }
         if catalog.entries[stored - 1].key == key {
             catalog.entries[stored - 1].value = value
             return
         }
-        slot = (slot + 1) % LocaleCatalogSlots
+        slot = cast(s32)((cast(s64)slot + 1) & (catalog.slot_count - 1))
         probes += 1
     }
     catalog.complete = false
 }
 
-LocaleCatalogBuild :: (catalog: *LocaleCatalog, source: string) {
+// Room for every key of `source`, with the slots at most half full.
+LocaleCatalogSize :: (catalog: *LocaleCatalog, source: string) -> bool {
+    keys: s64 = 0
+    cursor: s32 = 0
+    while cursor < cast(s32)source.count {
+        line := LocaleNextLine(source, cursor)
+        cursor = line.next
+        if line.end - line.start > 2 && source[line.start] == cast(u8)91 && source[line.end - 1] == cast(u8)93 {
+            keys += 1
+        }
+    }
+    wanted: s64 = 16
+    while wanted < keys * 2 {
+        wanted *= 2
+    }
     catalog.count = 0
-    catalog.complete = true
-    slot: s32 = 0
-    while slot < LocaleCatalogSlots {
+    if keys > catalog.entry_room || wanted != catalog.slot_count {
+        LocaleMemoryFree(cast(*void)catalog.entries)
+        LocaleMemoryFree(cast(*void)catalog.slots)
+        catalog.entries = cast(*LocaleEntry)LocaleMemory(cast(u64)(keys + 1), cast(u64)size_of(LocaleEntry))
+        catalog.slots = cast(*s32)LocaleMemory(cast(u64)wanted, cast(u64)size_of(s32))
+        if catalog.entries == null || catalog.slots == null {
+            LocaleMemoryFree(cast(*void)catalog.entries)
+            LocaleMemoryFree(cast(*void)catalog.slots)
+            catalog.* = LocaleCatalog.{}
+            return false
+        }
+        catalog.entry_room = keys + 1
+        catalog.slot_count = wanted
+        return true
+    }
+    for slot: cast(s64)0..wanted - 1 {
         catalog.slots[slot] = 0
-        slot += 1
+    }
+    return true
+}
+
+LocaleCatalogBuild :: (catalog: *LocaleCatalog, source: string) {
+    catalog.complete = LocaleCatalogSize(catalog, source)
+    if !catalog.complete {
+        return
     }
 
     cursor: s32 = 0
@@ -129,12 +185,12 @@ LocaleCatalogBuild :: (catalog: *LocaleCatalog, source: string) {
 LocaleCatalogFind :: (entries: []LocaleEntry, slots: []s32,
     key: string) -> LocaleTextResult {
     result: LocaleTextResult
-    if key.count == 0 {
+    if key.count == 0 || slots.count == 0 {
         return result
     }
-    slot := LocaleCatalogSlot(key)
-    probes: s32 = 0
-    while probes < LocaleCatalogSlots {
+    slot := LocaleCatalogSlot(key, slots.count)
+    probes: s64 = 0
+    while probes < slots.count {
         stored := slots[slot]
         if stored == 0 {
             return result
@@ -144,7 +200,7 @@ LocaleCatalogFind :: (entries: []LocaleEntry, slots: []s32,
             result.found = true
             return result
         }
-        slot = (slot + 1) % LocaleCatalogSlots
+        slot = cast(s32)((cast(s64)slot + 1) & (slots.count - 1))
         probes += 1
     }
     return result
@@ -331,13 +387,11 @@ LocaleText :: (key: string) -> string {
         return LocaleResolveCatalog(active_catalog_asset.data,
             english_catalog_asset.data, key)
     }
-    lookup := LocaleCatalogFind(active_catalog.entries[:],
-        active_catalog.slots[:], key)
+    lookup := LocaleCatalogFind(LocaleEntries(*active_catalog), LocaleSlots(*active_catalog), key)
     if lookup.found {
         return lookup.text
     }
-    lookup = LocaleCatalogFind(english_catalog.entries[:],
-        english_catalog.slots[:], key)
+    lookup = LocaleCatalogFind(LocaleEntries(*english_catalog), LocaleSlots(*english_catalog), key)
     if lookup.found {
         return lookup.text
     }
@@ -353,8 +407,7 @@ LocaleEnglishText :: (key: string) -> string {
         return LocaleResolveCatalog(english_catalog_asset.data,
             english_catalog_asset.data, key)
     }
-    lookup := LocaleCatalogFind(english_catalog.entries[:],
-        english_catalog.slots[:], key)
+    lookup := LocaleCatalogFind(LocaleEntries(*english_catalog), LocaleSlots(*english_catalog), key)
     if lookup.found {
         return lookup.text
     }

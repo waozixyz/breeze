@@ -4,7 +4,6 @@
 asset-text-tests:
 	@python3 tests/font_glyph_coverage_test.py
 	@python3 tests/locale_keys_test.py
-	@python3 tests/locale_capacity_test.py
 	@python3 tests/settings_keys_test.py
 
 .PHONY: version-check
