@@ -203,6 +203,8 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         for row in manager_rows():
             buttons = [node for node in row['nodes'] if node['kind'] == 'button']
             assert len(buttons) == 1, (row['name'], 'has more than one button', buttons)
+        # Every practice has a row, also the last one in the order.
+        assert 'Install' in row_text(manager_row('Astral Projection')), text
         assert 'Remove' not in text and 'Included in this version' not in text, text
         assert not (cache / 'practice-meditation.zib').exists()
         # Install adds Meditation from the app's own copy at once, without a
@@ -241,7 +243,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     with sqlite3.connect(profile / 'inbe.db') as database:
         order = database.execute('SELECT value FROM settings WHERE user_id=? AND key=?',
                                  (user, 'practice_order')).fetchone()
-        assert order and order[0] == '110324', order
+        assert order and order[0] == '1103245', order
     process, window = launch(profile, 'still-removed')
     try:
         driver.wait(contains='No practices installed')
