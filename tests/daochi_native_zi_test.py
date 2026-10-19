@@ -18,6 +18,15 @@ USER_ID = "a" * 64
 NONCE = "c" * 64
 
 
+
+def GeneratedSource(generated, name):
+    """A generated C file; package modules carry their package's prefix."""
+    path = generated / name
+    if path.exists():
+        return path
+    prefixed = sorted(path.parent.glob("p" + "[0-9a-f]" * 16 + "_" + path.name))
+    return prefixed[0] if len(prefixed) == 1 else path
+
 class Handler(BaseHTTPRequestHandler):
     friends_requests = 0
     registrations = 0
@@ -137,7 +146,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-daochi-native-") as temporary:
         f"-I{ROOT / 'build/packages/ziran/include'}", f"-I{generated}",
         f"-I{generated / 'storage'}",
         str(ROOT / "tests/daochi_native_zi_test.c"),
-        *(str(generated / source) for source in sources),
+        *(str(GeneratedSource(generated, source)) for source in sources),
         "-l:libcurl.so.4", "-o", str(executable),
     ], check=True)
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

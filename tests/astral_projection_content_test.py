@@ -13,7 +13,7 @@ course = json.loads((folder / 'session.json').read_text())
 config = json.loads((ROOT / 'design/astral-projection/narration.json').read_text())
 keys = [cue['key'] for cue in course['cues']]
 assert keys == speech.narration_keys(config)
-assert course['schema'] == 1 and course['duration'] == 900
+assert course['schema'] == 1 and course['duration'] == 2400
 assert course['cues'][0]['second'] == 0
 times = [cue['second'] for cue in course['cues']] + [course['duration']]
 assert all(a < b for a, b in zip(times, times[1:]))
@@ -34,4 +34,4 @@ if receipt_path.is_file():
         code, key = name.split('/')
         index = keys.index(key)
         assert clip['seconds'] + 1 < times[index + 1] - times[index], name
-print('All eight guidance cues have complete translations in all 12 locales')
+print(f'All {len(keys)} guidance cues of the 40-minute session have complete translations in all 12 locales')

@@ -90,6 +90,12 @@ String storage_get_setting_text(String key)
     return (String){0};
 }
 
+bool storage_setting_present(String key)
+{
+    (void)key;
+    return false;
+}
+
 void *sqlite3_db_mutex(void *database)
 {
     (void)database;

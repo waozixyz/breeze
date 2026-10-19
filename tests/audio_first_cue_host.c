@@ -21,6 +21,11 @@ bool IsAudioDeviceReady(void)
     return ready;
 }
 
+// Radio's background playback is not part of a cue's first frame.
+void BackgroundAudioInterrupt(void)
+{
+}
+
 void CloseAudioDevice(void)
 {
     ready = false;

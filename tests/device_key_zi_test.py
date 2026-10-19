@@ -4,6 +4,7 @@
 from pathlib import Path
 import argparse
 import os
+import re
 import subprocess
 import tempfile
 
@@ -29,8 +30,10 @@ with tempfile.TemporaryDirectory(prefix="inbe-device-key-") as temporary:
     ], check=True)
     names = {"device_key_store.c", "device_key.c", "crypto.c",
              "keys.c", "byte_text_linux.c", "Oqs.c", "update_transport.c"}
+    # Package modules are generated under their package's prefix,
+    # such as p0123456789abcdef_Oqs.c.
     sources = sorted(str(path) for path in generated.rglob("*.c")
-                     if path.name in names)
+                     if path.name in names or re.sub(r"^p[0-9a-f]{16}_", "", path.name) in names)
     monocypher = ROOT / "build/packages/monocypher/src"
     subprocess.run([
         args.emcc if args.wasm else os.environ.get("CC", "cc"), "-std=c11", "-O0", "-Wall", "-Wextra",

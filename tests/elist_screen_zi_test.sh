@@ -38,7 +38,12 @@ mkdir -p "$work/c"
     "$work/c/sun_salutation_inventory.c" \
     "$work/c/lists_visibility.c" "$work/c/bundle_host.c" \
     "$work/c/hosted_values.c" "$work/c/widget_host.c" "$work/c/hosted_app.c" \
-    "$root/build/ziran-toolchain/libziran.a" -lm \
+    "$work/c/bundle_preload.c" "$work/c/thread_linux.c" "$work/c/catalog.c" \
+    "$work/c/app_context_host.c" "$work/c/achievement_packages.c" \
+    "$work/c/achievements.c" "$work/c/bundle_names.c" "$work/c/date_parse.c" \
+    "$work/c/diary_wire.c" "$work/c/widget_codec.c" \
+    "$work/c/achievement_records.c" "$work/c/number_text.c" "$work/c/text_buffer.c" \
+    "$root/build/ziran-toolchain/libziran.a" -lm -lpthread \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test" "$root/build/inbe.zib"
 echo "Inbe elist screen Ziran/native test passed"
