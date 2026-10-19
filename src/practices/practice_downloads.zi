@@ -1050,6 +1050,23 @@ PracticeContentHide :: (practice: s32) {
     AssetNotifyChanged()
 }
 
+// A copy that no longer opens, as one from before an update changed the
+// pack, keeps its practice installed while the pack downloads again. A
+// removed practice, a failed download or a temporary profile stays as it is.
+PracticePackRefresh :: (index: s32) -> bool {
+    pack := *practice_packs[index]
+    if DataTemporary() || pack.removed || pack.status == 1 || pack.status == 3 ||
+    !PracticePackStored(index) {
+        return false
+    }
+    pack.requested = true
+    pack.status = 1
+    pack.attempts = 0
+    pack.present = true
+    PracticeDownloadLog(index, false, "updating", "")
+    return true
+}
+
 // Review one cache slot per frame for the manager, without mounting its data.
 PracticeContentReviewNext :: () {
     for index: cast(s32)0..practice_pack_count - 1 {
@@ -1062,13 +1079,16 @@ PracticeContentReviewNext :: () {
             continue
         }
         bundle := PracticePackLoad(index)
+        refreshed := bundle == null && PracticePackRefresh(index)
         if bundle != null {
             pack.status = 2
-        } else if pack.status == 2 {
+        } else if !refreshed && pack.status == 2 {
             pack.status = 0
         }
         // A removed practice's copy stays on this device but off Practice.
-        pack.present = bundle != null && !pack.removed
+        if !refreshed {
+            pack.present = bundle != null && !pack.removed
+        }
         CloseBundle(bundle)
         return
     }
@@ -1251,7 +1271,7 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, guide_narration: bool,
         if pack.bundle != null {
             pack.status = 2
             AssetNotifyChanged()
-        } else if pack.status == 2 {
+        } else if !PracticePackRefresh(index) && pack.status == 2 {
             pack.status = 0
         }
         if pack.status != 1 {

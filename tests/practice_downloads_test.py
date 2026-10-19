@@ -114,5 +114,5 @@ assert not (cache / 'practice-whm.zib').exists() and not (cache / 'practice-whm.
 for name, data in preserved.items():
     assert (cache / name).read_bytes() == data
 print('Practice downloads: verified content, corrupt-download retry, offline cache, narration in the app '
-      "language, chosen and removed languages, Lumi's guide narration, removal, shipped Wim Hof and granted "
-      'paid packs passed')
+      "language, chosen and removed languages, Lumi's guide narration, removal, shipped Wim Hof, granted "
+      'paid packs, and Sun Salutation downloading and updating an older copy passed')

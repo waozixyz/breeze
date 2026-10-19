@@ -1,4 +1,5 @@
 #import "byte_text_linux"
+#import "text_buffer"
 #import "drawing_props"
 #import, file "storage_test_support.zi";
 #import, file "../src/app/text_buffers.zi";
@@ -18,6 +19,10 @@
 #import, file "../src/habits/habit_answer_stats.zi";
 #import, file "../src/habits/habit_changes.zi";
 #import, file "../src/storage/sql_query.zi";
+#import, file "../src/storage/storage_habit_wallet.zi";
+#import, file "../src/storage/storage_habit_sync.zi";
+#import, file "../src/storage/sync_record_codec.zi";
+#import, file "../src/storage/json.zi";
 
 c :: #system_library "c";
 #import, file "../src/storage/import_types.zi";
@@ -865,6 +870,111 @@ test_stale_copy_keeps_synced_values :: () {
     storage_close()
 }
 
+// A record as it syncs: the payload of one outbox entry, wrapped as the
+// changes another device receives.
+synced_changes :: (entity_type: string, entity_id: string, array: string,
+    output: []u8) -> string {
+    json: StorageJsonBuilder
+    json.ok = 1
+    storage_json_builder_append_text(*json, "{\"changes\":{\"")
+    storage_json_builder_append_text(*json, array)
+    storage_json_builder_append_text(*json, "\":[")
+    storage_append_sync_op_payload(*json, entity_type, entity_id, 0)
+    storage_json_builder_append_text(*json, "]}}")
+    copied := json.ok != 0 && json.data != null &&
+        AppCopyText(AppTextFromCString(json.data, cast(s32)(json.len + 1)), output)
+    storage_json_builder_free(*json)
+    if !copied { return "" }
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}
+
+// Done days earn coins by their habit's difficulty from its coins_from day
+// on; a difficulty change pays from the day it was made, so earlier days
+// keep what they earned. Rewards spend coins, a deleted habit's coins stay,
+// and rewards, purchases and the habits' coin fields travel to the other
+// devices.
+test_habit_wallet :: () {
+    root := make_root("habit-wallet")
+    check_true("init db", storage_init(root) != 0)
+    storage_close()
+    raw_exec(root, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,difficulty,coins_from) VALUES('walk',(SELECT id FROM users LIMIT 1),'Walk',1,2,3,0,0,0,1,0,0,1782200000,0,20261001),('push',(SELECT id FROM users LIMIT 1),'Push ups',4,5,6,0,0,1,20,1,0,1782200000,2,20261003);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('walk',20260930,1,1,0,1),('walk',20261001,1,1,0,1),('walk',20261002,0,0,0,1),('walk',20261003,1,1,0,1),('push',20261002,1,20,0,1),('push',20261003,1,20,0,1),('push',20261004,1,5,0,1),('push',20261005,0,0,20,1);")
+    check_true("reopen db", storage_init(root) != 0)
+    // Walk earns 1 on two days; push, very hard, 3 on its counted day and
+    // its day of linked sessions, not before its coins_from day nor short
+    // of its target.
+    check_int("done days earn by difficulty", cast(s32)storage_habit_wallet_balance(), 8)
+    // Walk became hard on 2026-10-03: that day pays 2, the day before 1.
+    exec_db_sql("UPDATE habits SET difficulty=1 WHERE id='walk';INSERT INTO habit_changes(id,user_id,habit_id,changed_at,kind,question,question_text,old_value,new_value,deleted_at,updated_at) VALUES('d1',(SELECT id FROM users LIMIT 1),'walk',CAST(strftime('%s','2026-10-03 12:00:00','utc') AS INTEGER),19,0,'','0','1',0,1);")
+    check_int("a difficulty change pays from its day", cast(s32)storage_habit_wallet_balance(), 9)
+    habits_a = Habits.{}
+    check_true("load habits", storage_habits_load(cast(*void)*habits_a) != 0)
+    walk := find_habit(*habits_a, "Walk")
+    check_true("coin fields load", walk != null && walk.difficulty == HABIT_DIFFICULTY_HARD &&
+        walk.coins_from == 20261001)
+    if walk == null { return }
+    walk.difficulty = HABIT_DIFFICULTY_VERY_HARD
+    habits_save(*habits_a)
+    check_int("the editor's change is logged",
+        read_db_count("SELECT COUNT(*) FROM habit_changes WHERE habit_id='walk' AND kind=19 AND old_value='1' AND new_value='2'"), 1)
+    check_int("days before today keep their coins", cast(s32)storage_habit_wallet_balance(), 9)
+    // The shop.
+    exec_db_sql("DELETE FROM sync_outbox;")
+    movie: [HABIT_REWARD_ID_SIZE]u8
+    check_true("add a reward", storage_habit_reward_save("", "Movie night", 5, movie[:]) != 0)
+    other: [HABIT_REWARD_ID_SIZE]u8
+    check_true("add another", storage_habit_reward_save("", "Sauna", 12000, other[:]) != 0)
+    rewards: [4]HabitReward
+    count := storage_habit_rewards_load(rewards[:])
+    check_true("rewards load cheapest first with a price at most 9999",
+        count == 2 && rewards[0].price == 5 && rewards[1].price == HABIT_REWARD_PRICE_MAX &&
+        AppTextFromCString(*rewards[0].name[0], HABIT_REWARD_NAME_SIZE) == "Movie night")
+    check_true("buy the movie night", storage_habit_reward_buy(*rewards[0]) != 0)
+    check_int("the price is spent", cast(s32)storage_habit_wallet_balance(), 4)
+    renamed: [HABIT_REWARD_ID_SIZE]u8
+    check_true("rename a reward", storage_habit_reward_save(TextUntilNul(other[:]),
+        "Long sauna", 20, renamed[:]) != 0 && TextUntilNul(renamed[:]) == TextUntilNul(other[:]))
+    check_true("delete it", storage_habit_reward_delete(TextUntilNul(other[:])) != 0)
+    check_int("one reward is left", storage_habit_rewards_load(rewards[:]), 1)
+    check_int("rewards and the purchase wait to sync",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type IN ('habit_reward','habit_coin')"), 3)
+    // Deleting a habit keeps what its days earned.
+    push := find_habit(*habits_a, "Push ups")
+    check_true("push ups in memory", push != null)
+    position: s32 = 0
+    while position < habits_a.count && *habits_a.items[position] != push {
+        position += 1
+    }
+    habits_delete(*habits_a, position)
+    habits_save(*habits_a)
+    check_int("its coins are kept", read_db_count("SELECT COUNT(*) FROM habit_coins WHERE id='kept:push' AND kind=2 AND coins=6 AND name='Push ups'"), 1)
+    check_int("the balance stays", cast(s32)storage_habit_wallet_balance(), 4)
+    // The records another device receives.
+    buffer: [8192]u8
+    bought := read_db_text("SELECT id FROM habit_coins WHERE kind=1")
+    coin_id: [64]u8
+    unused AppCopyText(bought, coin_id[:])
+    reward_json := synced_changes("habit_reward", TextUntilNul(movie[:]), "habit_rewards", buffer[:])
+    check_true("a reward's record has its name and price",
+        contains(reward_json, "\"name\":\"Movie night\"") && contains(reward_json, "\"price\":5"))
+    exec_db_sql("DELETE FROM habit_rewards;")
+    check_true("apply the reward", storage_apply_sync_habit_rewards_json(reward_json) != 0)
+    check_int("the reward arrives", storage_habit_rewards_load(rewards[:]), 1)
+    coin_json := synced_changes("habit_coin", TextUntilNul(coin_id[:]), "habit_coins", buffer[:])
+    exec_db_sql("DELETE FROM habit_coins WHERE kind=1;")
+    check_int("without the purchase", cast(s32)storage_habit_wallet_balance(), 9)
+    check_true("apply the purchase", storage_apply_sync_habit_coins_json(coin_json) != 0)
+    check_int("the purchase arrives", cast(s32)storage_habit_wallet_balance(), 4)
+    habit_json := synced_changes("habit", "walk", "habits", buffer[:])
+    check_true("a habit's record has its coin fields",
+        contains(habit_json, "\"difficulty\":2") && contains(habit_json, "\"coins_from\":20261001"))
+    exec_db_sql("UPDATE habits SET coins_from=20261010,difficulty=0 WHERE id='walk';")
+    check_true("apply the habit", storage_apply_sync_habits_json(habit_json) != 0)
+    check_int("the earliest first coin day and the difficulty arrive",
+        read_db_count("SELECT COUNT(*) FROM habits WHERE id='walk' AND coins_from=20261001 AND difficulty=2"), 1)
+    habits_free(*habits_a)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-habits-zi-test/")
@@ -886,5 +996,6 @@ Check :: () -> s32 {
     test_entry_statistics()
     test_average_goals_and_changes()
     test_stale_copy_keeps_synced_values()
+    test_habit_wallet()
     return failures
 }

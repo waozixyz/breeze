@@ -10,6 +10,8 @@ c :: #system_library "c";
 #import, file "../habits/habit_questions.zi";
 #import, file "../habits/habit_answer_stats.zi";
 #import, file "../habits/habit_changes.zi";
+#import, file "../habits/habit_coins.zi";
+#import, file "storage_habit_wallet.zi";
 #import, file "../app/text_buffers.zi";
 #import, file "state.zi";
 #import, file "sqlite.zi";
@@ -567,7 +569,8 @@ storage_habit_day_count :: () -> s32 {
 // Reads a habit's settings from a row selecting id, name, description,
 // color_r, color_g, color_b, sync_mode, sync_activity, counter_enabled,
 // counter_target, weekdays, reminder_hour, deactivated, icon, schedule,
-// questions, span, span_goal, span_low and span_high, in that order.
+// questions, span, span_goal, span_low, span_high, difficulty and
+// coins_from, in that order.
 storage_habit_settings_row :: (habit: *Habit, stmt: *void) {
     copy_sqlite_text(*habit.id[0], HABIT_ID_SIZE, SqliteColumnText(stmt, 0))
     copy_sqlite_text(*habit.name[0], HABIT_NAME_SIZE, SqliteColumnText(stmt, 1))
@@ -607,6 +610,8 @@ storage_habit_settings_row :: (habit: *Habit, stmt: *void) {
         habit.span_goal.low = sqlite3_column_int(stmt, 18)
         habit.span_goal.high = sqlite3_column_int(stmt, 19)
     }
+    habit.difficulty = HabitDifficultyClamp(sqlite3_column_int(stmt, 20))
+    habit.coins_from = sqlite3_column_int(stmt, 21)
 }
 
 // The goals a span habit's lengths take: any of a number's.
@@ -620,7 +625,7 @@ storage_habit_settings_load :: (habit_id: string, habit: *Habit) -> bool {
     habit.* = Habit.{}
     stmt: *void = null
     if storage_db_handle() == null || SqlitePrepareText(storage_db_handle(),
-        "SELECT id,name,description,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high FROM habits WHERE id=?1 AND deleted_at=0",
+        "SELECT id,name,description,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high,difficulty,coins_from FROM habits WHERE id=?1 AND deleted_at=0",
         -1, *stmt, null) != SQLITE_OK {
         return false
     }
@@ -643,7 +648,7 @@ storage_habits_load :: (habits_ptr: *void) -> s32 {
     }
     habits_free(habits)
     habits.* = Habits.{}
-    if SqlitePrepareText(storage_db_handle(), "SELECT id,name,description,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high FROM habits WHERE deleted_at=0 ORDER BY sort_order,id LIMIT 32",
+    if SqlitePrepareText(storage_db_handle(), "SELECT id,name,description,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high,difficulty,coins_from FROM habits WHERE deleted_at=0 ORDER BY sort_order,id LIMIT 32",
         -1, *stmt, null) != SQLITE_OK {
         return 0
     }
@@ -866,6 +871,7 @@ storage_habit_merge :: (local: *Habit, base: *Habit, stored: *Habit) {
     if local.reminder_hour != base.reminder_hour { merged.reminder_hour = local.reminder_hour }
     if local.deactivated != base.deactivated { merged.deactivated = local.deactivated }
     if local.icon != base.icon { merged.icon = local.icon }
+    if local.difficulty != base.difficulty { merged.difficulty = local.difficulty }
     local_schedule: [HABIT_SCHEDULE_TEXT_SIZE]u8
     base_schedule: [HABIT_SCHEDULE_TEXT_SIZE]u8
     if storage_habit_schedule_text(local, local_schedule[:]) != storage_habit_schedule_text(base, base_schedule[:]) {
@@ -1015,8 +1021,8 @@ storage_habits_save :: (habits_ptr: *void) {
     sql_hbp1: [64] u8
     AppCopyText("INSERT OR IGNORE INTO sync_loaded_habits(id) VALUES(?1)", sql_hbp1[:])
     SqlitePrepare(storage_db_handle(), *sql_hbp1[0], -1, *loaded_stmt, null)
-    sql_hbq1: [2048] u8
-    AppCopyText("INSERT INTO habits(id,user_id,name,description,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23) ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id,name=excluded.name,description=excluded.description,color_r=excluded.color_r,color_g=excluded.color_g,color_b=excluded.color_b,sync_mode=excluded.sync_mode,sync_activity=excluded.sync_activity,counter_enabled=excluded.counter_enabled,counter_target=excluded.counter_target,sort_order=excluded.sort_order,deleted_at=0,updated_at=excluded.updated_at,weekdays=excluded.weekdays,reminder_hour=excluded.reminder_hour,deactivated=excluded.deactivated,icon=excluded.icon,schedule=excluded.schedule,questions=excluded.questions,span=excluded.span,span_goal=excluded.span_goal,span_low=excluded.span_low,span_high=excluded.span_high WHERE habits.user_id<>excluded.user_id OR habits.name<>excluded.name OR habits.color_r<>excluded.color_r OR habits.color_g<>excluded.color_g OR habits.color_b<>excluded.color_b OR habits.sync_mode<>excluded.sync_mode OR habits.sync_activity<>excluded.sync_activity OR habits.counter_enabled<>excluded.counter_enabled OR habits.counter_target<>excluded.counter_target OR habits.sort_order<>excluded.sort_order OR habits.deleted_at<>0 OR habits.weekdays<>excluded.weekdays OR habits.reminder_hour<>excluded.reminder_hour OR habits.deactivated<>excluded.deactivated OR habits.icon<>excluded.icon OR habits.schedule<>excluded.schedule OR habits.questions<>excluded.questions OR habits.span<>excluded.span OR habits.span_goal<>excluded.span_goal OR habits.span_low<>excluded.span_low OR habits.span_high<>excluded.span_high", sql_hbq1[:])
+    sql_hbq1: [2400] u8
+    AppCopyText("INSERT INTO habits(id,user_id,name,description,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high,difficulty,coins_from) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,0,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,CASE WHEN ?25>0 THEN ?25 ELSE CAST(strftime('%Y%m%d','now','localtime') AS INTEGER) END) ON CONFLICT(id) DO UPDATE SET user_id=excluded.user_id,name=excluded.name,description=excluded.description,color_r=excluded.color_r,color_g=excluded.color_g,color_b=excluded.color_b,sync_mode=excluded.sync_mode,sync_activity=excluded.sync_activity,counter_enabled=excluded.counter_enabled,counter_target=excluded.counter_target,sort_order=excluded.sort_order,deleted_at=0,updated_at=excluded.updated_at,weekdays=excluded.weekdays,reminder_hour=excluded.reminder_hour,deactivated=excluded.deactivated,icon=excluded.icon,schedule=excluded.schedule,questions=excluded.questions,span=excluded.span,span_goal=excluded.span_goal,span_low=excluded.span_low,span_high=excluded.span_high,difficulty=excluded.difficulty,coins_from=excluded.coins_from WHERE habits.user_id<>excluded.user_id OR habits.name<>excluded.name OR habits.color_r<>excluded.color_r OR habits.color_g<>excluded.color_g OR habits.color_b<>excluded.color_b OR habits.sync_mode<>excluded.sync_mode OR habits.sync_activity<>excluded.sync_activity OR habits.counter_enabled<>excluded.counter_enabled OR habits.counter_target<>excluded.counter_target OR habits.sort_order<>excluded.sort_order OR habits.deleted_at<>0 OR habits.weekdays<>excluded.weekdays OR habits.reminder_hour<>excluded.reminder_hour OR habits.deactivated<>excluded.deactivated OR habits.icon<>excluded.icon OR habits.schedule<>excluded.schedule OR habits.questions<>excluded.questions OR habits.span<>excluded.span OR habits.span_goal<>excluded.span_goal OR habits.span_low<>excluded.span_low OR habits.span_high<>excluded.span_high OR habits.difficulty<>excluded.difficulty OR habits.coins_from<>excluded.coins_from", sql_hbq1[:])
     SqlitePrepare(storage_db_handle(), *sql_hbq1[0], -1, *habit_stmt, null)
     sql_hbq2: [72] u8
     AppCopyText("UPDATE habits SET description=?2 WHERE id=?1 AND description<>?2", sql_hbq2[:])
@@ -1100,6 +1106,8 @@ storage_habits_save :: (habits_ptr: *void) {
             sqlite3_bind_int(habit_stmt, 21, span_goal.kind)
             sqlite3_bind_int(habit_stmt, 22, span_goal.low)
             sqlite3_bind_int(habit_stmt, 23, span_goal.high)
+            sqlite3_bind_int(habit_stmt, 24, HabitDifficultyClamp(habit.difficulty))
+            sqlite3_bind_int(habit_stmt, 25, habit.coins_from)
             if SqliteStep(habit_stmt) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0 {
                 storage_enqueue_sync_habit(AppTextFromCString(*habit.id[0], 40))
                 if !stored { AchievementMarkLive("habit.created") }
@@ -1169,6 +1177,9 @@ storage_habits_save :: (habits_ptr: *void) {
         {
             i: s32 = 0
             while i < deleted_count {
+                // The coins its days earned stay in the wallet.
+                unused storage_habit_coins_keep(AppTextFromCString(*deleted_ids[i][0],
+                    STORAGE_ID_SIZE), changed_at)
                 sql_hbq5: [128] u8
                 AppCopyText("SELECT local_date FROM habit_days WHERE habit_id=?1 AND (completed!=0 OR count>0 OR session_count>0)", sql_hbq5[:])
                 if SqlitePrepare(storage_db_handle(), *sql_hbq5[0], -1, *stmt, null) == SQLITE_OK {

@@ -118,7 +118,7 @@ SQL
 
 SyncHabitsSQL :: #string SQL
 INSERT INTO
-habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high)
+habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high,difficulty)
 SELECT COALESCE(json_extract(value,'$.id'),''),?2,
 COALESCE(json_extract(value,'$.name'),''),
 CAST(COALESCE(json_extract(value,'$.color_r'),0) AS INTEGER),
@@ -126,34 +126,36 @@ CAST(COALESCE(json_extract(value,'$.color_g'),0) AS INTEGER),
 CAST(COALESCE(json_extract(value,'$.color_b'),0) AS INTEGER),
 CAST(COALESCE(json_extract(value,'$.sync_mode'),0) AS INTEGER),
 CAST(COALESCE(json_extract(value,'$.sync_activity'),0) AS INTEGER),
-CAST(COALESCE(json_extract(value,'$.counter_enabled'),                     (SELECT
+CAST(COALESCE(json_extract(value,'$.counter_enabled'), (SELECT
 counter_enabled FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),
-0) AS INTEGER),       CAST(COALESCE(json_extract(value,'$.counter_target'),
+0) AS INTEGER), CAST(COALESCE(json_extract(value,'$.counter_target'),
 (SELECT counter_target FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),
-1) AS INTEGER),       CAST(COALESCE(json_extract(value,'$.sort_order'),0) AS INTEGER),
+1) AS INTEGER), CAST(COALESCE(json_extract(value,'$.sort_order'),0) AS INTEGER),
 CAST(COALESCE(json_extract(value,'$.deleted_at'),0) AS INTEGER),
 CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),'0') AS INTEGER),
-CAST(COALESCE(json_extract(value,'$.weekdays'),                     (SELECT weekdays FROM habits
+CAST(COALESCE(json_extract(value,'$.weekdays'), (SELECT weekdays FROM habits
 WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER),
-CAST(COALESCE(json_extract(value,'$.reminder_hour'),                     (SELECT reminder_hour
+CAST(COALESCE(json_extract(value,'$.reminder_hour'), (SELECT reminder_hour
 FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),-1) AS INTEGER),
-CAST(COALESCE(json_extract(value,'$.deactivated'),                     (SELECT deactivated
+CAST(COALESCE(json_extract(value,'$.deactivated'), (SELECT deactivated
 FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER),
-CAST(COALESCE(json_extract(value,'$.icon'),                     (SELECT icon
+CAST(COALESCE(json_extract(value,'$.icon'), (SELECT icon
 FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER),
-CAST(COALESCE(json_extract(value,'$.schedule'),                     (SELECT schedule
+CAST(COALESCE(json_extract(value,'$.schedule'), (SELECT schedule
 FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),'') AS TEXT),
-CAST(COALESCE(json_extract(value,'$.questions'),                     (SELECT questions
+CAST(COALESCE(json_extract(value,'$.questions'), (SELECT questions
 FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),'') AS TEXT),
-CAST(COALESCE(json_extract(value,'$.span'),                     (SELECT span
+CAST(COALESCE(json_extract(value,'$.span'), (SELECT span
 FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER),
-CAST(COALESCE(json_extract(value,'$.span_goal'),                     (SELECT span_goal
+CAST(COALESCE(json_extract(value,'$.span_goal'), (SELECT span_goal
 FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER),
-CAST(COALESCE(json_extract(value,'$.span_low'),                     (SELECT span_low
+CAST(COALESCE(json_extract(value,'$.span_low'), (SELECT span_low
 FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER),
-CAST(COALESCE(json_extract(value,'$.span_high'),                     (SELECT span_high
+CAST(COALESCE(json_extract(value,'$.span_high'), (SELECT span_high
+FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.difficulty'), (SELECT difficulty
 FROM habits WHERE id=COALESCE(json_extract(value,'$.id'),'')),0) AS INTEGER) FROM (SELECT value
-FROM json_each(?1,'$.changes.habits')       UNION ALL SELECT value FROM
+FROM json_each(?1,'$.changes.habits') UNION ALL SELECT value FROM
 json_each(?1,'$.data.habits')) WHERE COALESCE(json_extract(value,'$.id'),'')<>'' ON CONFLICT(id)
 DO UPDATE SET
 user_id=excluded.user_id,name=excluded.name,color_r=excluded.color_r,color_g=excluded.color_g,
@@ -162,9 +164,9 @@ counter_enabled=excluded.counter_enabled,counter_target=excluded.counter_target,
 updated_at=excluded.updated_at, weekdays=excluded.weekdays,reminder_hour=excluded.reminder_hour,
 deactivated=excluded.deactivated,icon=excluded.icon,schedule=excluded.schedule,
 questions=excluded.questions,span=excluded.span,span_goal=excluded.span_goal,
-span_low=excluded.span_low,span_high=excluded.span_high
+span_low=excluded.span_low,span_high=excluded.span_high,difficulty=excluded.difficulty
 WHERE excluded.updated_at > habits.updated_at OR (excluded.updated_at = habits.updated_at AND
-NOT EXISTS ( SELECT 1 FROM sync_outbox  WHERE entity_type='habit' AND entity_id=habits.id AND
+NOT EXISTS ( SELECT 1 FROM sync_outbox WHERE entity_type='habit' AND entity_id=habits.id AND
 local_date=0))
 SQL
 
@@ -185,7 +187,8 @@ questions=CASE WHEN habits.questions='' THEN COALESCE(r.questions,'') ELSE habit
 span_goal=CASE WHEN habits.span=0 AND COALESCE(r.span,0)<>0 THEN COALESCE(r.span_goal,0) ELSE habits.span_goal END,
 span_low=CASE WHEN habits.span=0 AND COALESCE(r.span,0)<>0 THEN COALESCE(r.span_low,0) ELSE habits.span_low END,
 span_high=CASE WHEN habits.span=0 AND COALESCE(r.span,0)<>0 THEN COALESCE(r.span_high,0) ELSE habits.span_high END,
-span=CASE WHEN habits.span=0 THEN COALESCE(r.span,0) ELSE habits.span END
+span=CASE WHEN habits.span=0 THEN COALESCE(r.span,0) ELSE habits.span END,
+difficulty=CASE WHEN habits.difficulty=0 THEN COALESCE(r.difficulty,0) ELSE habits.difficulty END
 FROM (SELECT CAST(json_extract(value,'$.id') AS TEXT) AS id,
 CAST(json_extract(value,'$.icon') AS INTEGER) AS icon,
 CAST(json_extract(value,'$.weekdays') AS INTEGER) AS weekdays,
@@ -195,10 +198,27 @@ CAST(json_extract(value,'$.questions') AS TEXT) AS questions,
 CAST(json_extract(value,'$.span') AS INTEGER) AS span,
 CAST(json_extract(value,'$.span_goal') AS INTEGER) AS span_goal,
 CAST(json_extract(value,'$.span_low') AS INTEGER) AS span_low,
-CAST(json_extract(value,'$.span_high') AS INTEGER) AS span_high
+CAST(json_extract(value,'$.span_high') AS INTEGER) AS span_high,
+CAST(json_extract(value,'$.difficulty') AS INTEGER) AS difficulty
 FROM incoming WHERE COALESCE(json_extract(value,'$.deleted_at'),0)=0) AS r
 WHERE habits.id=r.id AND habits.deleted_at=0
 SQL
+
+// The first day a habit earns coins is the earliest any device gave it, so
+// every device counts the same days whichever record is newer. A habit
+// from a version before coins earns from the day it arrives.
+SyncHabitCoinsFromSQL :: #string SQL
+WITH incoming AS (SELECT value FROM json_each(?1,'$.changes.habits') UNION ALL
+SELECT value FROM json_each(?1,'$.data.habits'))
+UPDATE habits SET coins_from=r.coins_from
+FROM (SELECT CAST(json_extract(value,'$.id') AS TEXT) AS id,
+MIN(CAST(json_extract(value,'$.coins_from') AS INTEGER)) AS coins_from
+FROM incoming WHERE CAST(COALESCE(json_extract(value,'$.coins_from'),0) AS INTEGER)>0
+GROUP BY 1) AS r
+WHERE habits.id=r.id AND (habits.coins_from=0 OR r.coins_from<habits.coins_from)
+SQL
+
+SyncHabitCoinsFromTodaySQL :: "UPDATE habits SET coins_from=CAST(strftime('%Y%m%d','now','localtime') AS INTEGER) WHERE coins_from=0"
 
 SyncHabitDaysSQL :: #string SQL
 INSERT INTO habit_days(habit_id,local_date,completed,count,updated_at) SELECT
@@ -259,4 +279,44 @@ json_each(?1,'$.data.habit_changes')) WHERE COALESCE(json_extract(value,'$.id'),
 COALESCE(json_extract(value,'$.habit_id'),'')<>'' ON CONFLICT(id) DO UPDATE SET
 habit_id=excluded.habit_id,deleted_at=excluded.deleted_at,updated_at=excluded.updated_at
 WHERE excluded.updated_at > habit_changes.updated_at
+SQL
+
+// The shop's rewards from another device. A newer copy wins; at an equal
+// time the device's own queued change does.
+SyncHabitRewardsSQL :: #string SQL
+INSERT INTO habit_rewards(id,user_id,name,price,deleted_at,updated_at)
+SELECT COALESCE(json_extract(value,'$.id'),''),?2,
+CAST(COALESCE(json_extract(value,'$.name'),'') AS TEXT),
+MIN(MAX(CAST(COALESCE(json_extract(value,'$.price'),1) AS INTEGER),1),9999),
+CAST(COALESCE(json_extract(value,'$.deleted_at'),0) AS INTEGER),
+CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),'0') AS INTEGER)
+FROM (SELECT value FROM json_each(?1,'$.changes.habit_rewards') UNION ALL SELECT value FROM
+json_each(?1,'$.data.habit_rewards')) WHERE COALESCE(json_extract(value,'$.id'),'')<>''
+ON CONFLICT(id) DO UPDATE SET name=excluded.name,price=excluded.price,
+deleted_at=excluded.deleted_at,updated_at=excluded.updated_at
+WHERE excluded.updated_at > habit_rewards.updated_at OR
+(excluded.updated_at = habit_rewards.updated_at AND NOT EXISTS ( SELECT 1 FROM sync_outbox
+WHERE entity_type='habit_reward' AND entity_id=habit_rewards.id))
+SQL
+
+// Coins spent on rewards and kept from deleted habits on another device.
+// A newer copy wins, as when the coins were deleted with all the data.
+SyncHabitCoinsSQL :: #string SQL
+INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at)
+SELECT COALESCE(json_extract(value,'$.id'),''),?2,
+CAST(COALESCE(json_extract(value,'$.kind'),1) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.reward_id'),'') AS TEXT),
+CAST(COALESCE(json_extract(value,'$.name'),'') AS TEXT),
+MAX(CAST(COALESCE(json_extract(value,'$.coins'),0) AS INTEGER),0),
+CAST(COALESCE(json_extract(value,'$.at'),0) AS INTEGER),
+CAST(COALESCE(json_extract(value,'$.deleted_at'),0) AS INTEGER),
+CAST(COALESCE(strftime('%s',json_extract(value,'$.updated_at')),'0') AS INTEGER)
+FROM (SELECT value FROM json_each(?1,'$.changes.habit_coins') UNION ALL SELECT value FROM
+json_each(?1,'$.data.habit_coins')) WHERE COALESCE(json_extract(value,'$.id'),'')<>'' AND
+CAST(COALESCE(json_extract(value,'$.kind'),1) AS INTEGER) IN (1,2)
+ON CONFLICT(id) DO UPDATE SET name=excluded.name,coins=excluded.coins,
+deleted_at=excluded.deleted_at,updated_at=excluded.updated_at
+WHERE excluded.updated_at > habit_coins.updated_at OR
+(excluded.updated_at = habit_coins.updated_at AND NOT EXISTS ( SELECT 1 FROM sync_outbox
+WHERE entity_type='habit_coin' AND entity_id=habit_coins.id))
 SQL

@@ -733,13 +733,17 @@ storage_total_size :: () -> s64 {
     return pages * page_size
 }
 
-// Marks every entry and change of the user's habits deleted at ?1 and
-// queues each to sync.
-storage_delete_all_habit_records: [4]string = .[
+// Marks every entry and change of the user's habits, the shop's rewards
+// and the wallet's coins deleted at ?1 and queues each to sync.
+storage_delete_all_habit_records: [8]string = .[
 "INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_entry',id,0,?1 FROM habit_entries WHERE user_id=?2 AND deleted_at=0 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at",
 "UPDATE habit_entries SET deleted_at=?1,updated_at=?1 WHERE user_id=?2 AND deleted_at=0",
 "INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_change',id,0,?1 FROM habit_changes WHERE user_id=?2 AND deleted_at=0 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at",
-"UPDATE habit_changes SET deleted_at=?1,updated_at=?1 WHERE user_id=?2 AND deleted_at=0"];
+"UPDATE habit_changes SET deleted_at=?1,updated_at=?1 WHERE user_id=?2 AND deleted_at=0",
+"INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_reward',id,0,?1 FROM habit_rewards WHERE user_id=?2 AND deleted_at=0 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at",
+"UPDATE habit_rewards SET deleted_at=?1,updated_at=MAX(updated_at+1,?1) WHERE user_id=?2 AND deleted_at=0",
+"INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_coin',id,0,?1 FROM habit_coins WHERE user_id=?2 AND deleted_at=0 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at",
+"UPDATE habit_coins SET deleted_at=?1,updated_at=MAX(updated_at+1,?1) WHERE user_id=?2 AND deleted_at=0"];
 
 storage_delete_all_sessions :: () -> s64 {
     stmt: *void = null
@@ -763,7 +767,7 @@ storage_delete_all_sessions :: () -> s64 {
         if exec_sql("BEGIN IMMEDIATE") == 0 {
             return 0
         }
-        if exec_sql("DELETE FROM session_rounds WHERE session_id IN (SELECT id FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1));DELETE FROM meditation_logs WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habit_days WHERE habit_id IN (SELECT id FROM habits WHERE user_id=(SELECT id FROM users LIMIT 1));DELETE FROM habit_entries WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habit_changes WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habits WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key LIKE 'cell.achievement.fact.%' AND json_valid(value) AND (json_extract(value,'$.metric') LIKE 'practice.%' OR json_extract(value,'$.metric') LIKE 'habit.%');DELETE FROM sync_outbox;") == 0 {
+        if exec_sql("DELETE FROM session_rounds WHERE session_id IN (SELECT id FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1));DELETE FROM meditation_logs WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM sessions WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habit_days WHERE habit_id IN (SELECT id FROM habits WHERE user_id=(SELECT id FROM users LIMIT 1));DELETE FROM habit_entries WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habit_changes WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habit_rewards WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habit_coins WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM habits WHERE user_id=(SELECT id FROM users LIMIT 1);DELETE FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key LIKE 'cell.achievement.fact.%' AND json_valid(value) AND (json_extract(value,'$.metric') LIKE 'practice.%' OR json_extract(value,'$.metric') LIKE 'habit.%');DELETE FROM sync_outbox;") == 0 {
             exec_sql("ROLLBACK")
             return 0
         }
@@ -817,7 +821,8 @@ storage_delete_all_sessions :: () -> s64 {
         SqliteFinalize(stmt)
         stmt = null
     }
-    // The habits' entries and changes go with them, as deletions that sync.
+    // The habits' entries and changes, the shop's rewards and the coins go
+    // with them, as deletions that sync.
     for table: storage_delete_all_habit_records {
         if SqlitePrepareText(storage_db_handle(), table, -1, *stmt, null) == SQLITE_OK {
             SqliteBindInt64(stmt, 1, deleted_at)

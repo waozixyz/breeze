@@ -174,6 +174,22 @@ nothing. Old text-only chat history remains readable. Cards persist in the same
 account-scoped local conversation and render with standard Kryon Text, Box and
 Button widgets.
 
+Each habit has a difficulty, medium, hard or very hard. A done day earns 1, 2
+or 3 coins, counted the way the habit list counts a day as done (marked,
+counted to its target, or covered by linked practice sessions). A changed
+difficulty applies from the day it changed, so earlier days keep what they
+earned, and each habit earns from its `coins_from` day: the day it was created,
+or for a habit from before coins, the day the upgrade first opened. Sync keeps
+the earliest such day of every device. The coins and a shop button end the line
+of today's count. The shop lists the rewards the person sets, each with a price
+of 1 to 9999 coins, and Buy asks before it spends the coins. Rewards
+(`habit_rewards`) and coin records (`habit_coins`: a reward's price as bought,
+or the coins a deleted habit's days had earned, kept under `kept:<habit id>`)
+sync as `private.inbe.v1.habit-rewards` and `private.inbe.v1.habit-coins` with
+deletions. The balance is what the days earned plus the kept coins less what
+was bought (`src/storage/storage_habit_wallet.zi`). An older app keeps a
+habit's difficulty and skips the shop.
+
 The app publishes its MCP tool schemas in `assets/mcp/tools.json`, including
 `get_settings`, `set_theme`, `set_theme_mode`, `set_setting`, `open_view` and
 `practice`. Harmony discovers and calls them through `app_mcp`; Lumi is scoped

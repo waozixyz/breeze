@@ -30,7 +30,7 @@ Check :: () -> s32 {
     if guard != 0 {
         return guard
     }
-    english_catalog = "[lumi_update_intro]\nInner Breeze has been updated to %s.\n---\n[lumi_update_full_changelog]\nFull changelog:\n---\n"
+    english_catalog = "[lumi_update_intro]\nInner Breeze has been updated to %s.\n---\n"
     install_english_catalog()
     root := data_root()
     check_true("fixture storage initialized", storage_init(root) != 0)
@@ -44,8 +44,7 @@ Check :: () -> s32 {
         contains(row.text, "Inner Breeze has been updated to 2.1.36."))
     check_true("whole notes keep visible blank lines and Unicode",
         contains(row.text, "\n\n- Lumi’s update message.\n\n- Visible paragraphs."))
-    check_true("full changelog remains available",
-        contains(row.text, "Full changelog:\nhttps://github.com/waozixyz/inbe/blob/master/CHANGELOG.md"))
+    check_true("the update links nowhere", !contains(row.text, "http"))
     receipt := CellRecordRead("cell.lumi.message.release-inbe-2.1.36")
     check_true("update has a deterministic synced record", receipt.count > 0)
     PackageFree(receipt)
@@ -90,7 +89,7 @@ Check :: () -> s32 {
     check_int("failed write retries without losing the update", LumiStoreCount(), 2)
     check_true("next version has its own record", contains(LumiStoreRow(1).text, "2.1.37"))
 
-    // Long notes stop at a whole entry; the full-notes link still fits.
+    // Long notes stop at a whole entry, and there is no link.
     long: Vec(u8)
     BuilderPrint(*long, "{\"version\":\"2.1.38\",\"notes\":[\"Short note.\",\"")
     for index: cast(s32)0..1999 {
@@ -98,14 +97,20 @@ Check :: () -> s32 {
     }
     BuilderPrint(*long, "\"]}")
     document := BuilderFinish(long)
-    message := LumiUpdateMessage(document, "Inner Breeze 2.1.38", "Full changelog:")
+    message := LumiUpdateMessage(document, "Inner Breeze 2.1.38")
     check_true("long release notes stay within chat storage and rendering limits",
         message.count < LUMI_INPUT_MAX && contains(message, "Short note.") &&
-        contains(message, "CHANGELOG.md") && !contains(message, "é"))
+        !contains(message, "http") && !contains(message, "é"))
     PackageFree(document)
     PackageFree(message)
+    // A long release shows only its first few entries.
+    many := "{\"version\":\"2.1.39\",\"notes\":[\"One.\",\"Two.\",\"Three.\",\"Four.\"]}"
+    short := LumiUpdateMessage(many, "Inner Breeze 2.1.39")
+    check_true("an update message stays short",
+        contains(short, "Three.") && !contains(short, "Four."))
+    PackageFree(short)
     check_true("invalid versions create no message",
-        !LumiUpdateAppend("{\"version\":\"next\",\"notes\":[\"Invalid\"]}", "Invalid", "Full changelog:"))
+        !LumiUpdateAppend("{\"version\":\"next\",\"notes\":[\"Invalid\"]}", "Invalid"))
     LumiStoreReset()
     storage_close()
     return failures

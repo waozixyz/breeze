@@ -1,0 +1,218 @@
+// The habit wallet: coins the done days earn, the shop's rewards and the
+// coins spent on them. Rewards and coin records sync as encrypted records
+// (private.inbe.v1.habit-rewards and private.inbe.v1.habit-coins) with
+// deletions, so every device of the account shows the same shop and coins.
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_coins.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "db.zi";
+#import, file "storage_core.zi";
+#import, file "sync_outbox.zi";
+c :: #system_library "c";
+sqlite3_bind_int :: (statement: *void, index: s32, value: s32) -> s32 #foreign c "sqlite3_bind_int";
+sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
+
+// The coins the done days of the user's habits earned, or of the habit ?2
+// alone. A day earns from its habit's coins_from day on, at the difficulty
+// the habit had that day: a difficulty change applies from the day it was
+// made, so the days before keep the value the change replaced. A day is
+// done as the habit list shows it: counted to its target, with linked
+// practice sessions as the floor, or marked.
+StorageHabitEarnedCoinsSQL :: #string SQL
+SELECT COALESCE(SUM(1+MIN(MAX(COALESCE((SELECT CAST(c.old_value AS INTEGER)
+FROM habit_changes c WHERE c.habit_id=h.id AND c.kind=19 AND c.deleted_at=0 AND
+CAST(strftime('%Y%m%d',c.changed_at,'unixepoch','localtime') AS INTEGER)>d.local_date
+ORDER BY c.changed_at,c.rowid LIMIT 1),h.difficulty),0),2)),0)
+FROM habit_days d JOIN habits h ON h.id=d.habit_id
+WHERE h.user_id=?1 AND h.deleted_at=0 AND (?2='' OR h.id=?2) AND h.coins_from>0 AND
+d.local_date>=h.coins_from AND CASE WHEN h.counter_enabled<>0 THEN
+MAX(d.count,d.session_count,CASE WHEN d.completed<>0 THEN 1 ELSE 0 END)>=MAX(h.counter_target,1)
+ELSE d.completed<>0 OR d.count>0 OR d.session_count>0 END
+SQL
+
+// Coins kept from deleted habits less the coins rewards cost.
+StorageHabitCoinRecordsSQL :: "SELECT COALESCE(SUM(CASE WHEN kind=2 THEN coins ELSE -coins END),0) FROM habit_coins WHERE user_id=?1 AND deleted_at=0"
+
+// A sum the wallet SQL selects for the user, and for one habit when the
+// statement takes one.
+storage_habit_wallet_select :: (sql: string, habit_id: string,
+    takes_habit: bool) -> s64 {
+    stmt: *void = null
+    if storage_db_handle() == null || SqlitePrepareText(storage_db_handle(),
+        sql, -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    if takes_habit {
+        bind_text(stmt, 2, habit_id)
+    }
+    value: s64 = 0
+    if SqliteStep(stmt) == SQLITE_ROW {
+        value = SqliteColumnInt64(stmt, 0)
+    }
+    SqliteFinalize(stmt)
+    return value
+}
+
+// The coins the done days of a habit earned, or of every habit for "".
+storage_habit_earned_coins :: (habit_id: string) -> s64 {
+    return storage_habit_wallet_select(StorageHabitEarnedCoinsSQL, habit_id,
+        true)
+}
+
+// The coins there are to spend; below 0 when days that paid for a reward
+// were cleared afterwards.
+storage_habit_wallet_balance :: () -> s64 {
+    return storage_habit_earned_coins("") +
+    storage_habit_wallet_select(StorageHabitCoinRecordsSQL, "", false)
+}
+
+// Keeps the coins a habit's days earned before the habit and its days are
+// deleted. The record is the habit's own, so two devices deleting it keep
+// them once.
+storage_habit_coins_keep :: (habit_id: string, at: s64) -> s32 {
+    earned := storage_habit_earned_coins(habit_id)
+    if earned <= 0 || habit_id.count == 0 {
+        return 1
+    }
+    id: [HABIT_REWARD_ID_SIZE]u8
+    if !AppCopyText("kept:", id[:]) || !AppAppendText(habit_id, id[:]) {
+        return 0
+    }
+    stored_id := AppTextFromCString(*id[0], HABIT_REWARD_ID_SIZE)
+    stmt: *void = null
+    sql := "INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at) VALUES(?1,?2,2,'',COALESCE((SELECT name FROM habits WHERE id=?3),''),?4,?5,0,?5) ON CONFLICT(id) DO UPDATE SET name=excluded.name,coins=MAX(habit_coins.coins,excluded.coins),deleted_at=0,updated_at=MAX(habit_coins.updated_at+1,excluded.updated_at)"
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, stored_id)
+    bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(stmt, 3, habit_id)
+    SqliteBindInt64(stmt, 4, earned)
+    SqliteBindInt64(stmt, 5, at)
+    done := SqliteStep(stmt) == SQLITE_DONE
+    SqliteFinalize(stmt)
+    if !done {
+        return 0
+    }
+    return storage_enqueue_sync_habit_coin(stored_id)
+}
+
+// The shop's rewards, cheapest first.
+storage_habit_rewards_load :: (output: []HabitReward) -> s32 {
+    stmt: *void = null
+    count: s32 = 0
+    if storage_db_handle() == null || SqlitePrepareText(storage_db_handle(),
+        "SELECT id,name,price FROM habit_rewards WHERE user_id=?1 AND deleted_at=0 ORDER BY price,name COLLATE NOCASE,id LIMIT ?2",
+        -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    sqlite3_bind_int(stmt, 2, cast(s32)output.count)
+    while count < cast(s32)output.count && SqliteStep(stmt) == SQLITE_ROW {
+        reward := *output[count]
+        reward.* = HabitReward.{}
+        unused AppCopyText(AppTextFromCString(SqliteColumnText(stmt, 0),
+            HABIT_REWARD_ID_SIZE), reward.id[:])
+        unused AppCopyText(AppTextFromCString(SqliteColumnText(stmt, 1),
+            HABIT_REWARD_NAME_SIZE), reward.name[:])
+        reward.price = HabitRewardPriceClamp(sqlite3_column_int(stmt, 2))
+        count += 1
+    }
+    SqliteFinalize(stmt)
+    return count
+}
+
+// Adds a reward, or changes the one with reward_id, and writes its id to
+// id_out.
+storage_habit_reward_save :: (reward_id: string, name: string, price: s32,
+    id_out: []u8) -> s32 {
+    if storage_db_handle() == null || name.count == 0 {
+        return 0
+    }
+    id: [HABIT_REWARD_ID_SIZE]u8
+    if reward_id.count > 0 {
+        if !AppCopyText(reward_id, id[:]) {
+            return 0
+        }
+    } else {
+        storage_make_uuid(*id[0])
+    }
+    stored_id := AppTextFromCString(*id[0], HABIT_REWARD_ID_SIZE)
+    stmt: *void = null
+    sql := "INSERT INTO habit_rewards(id,user_id,name,price,deleted_at,updated_at) VALUES(?1,?2,?3,?4,0,?5) ON CONFLICT(id) DO UPDATE SET name=excluded.name,price=excluded.price,deleted_at=0,updated_at=MAX(habit_rewards.updated_at+1,excluded.updated_at)"
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, stored_id)
+    bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(stmt, 3, name)
+    sqlite3_bind_int(stmt, 4, HabitRewardPriceClamp(price))
+    SqliteBindInt64(stmt, 5, now_seconds())
+    done := SqliteStep(stmt) == SQLITE_DONE
+    SqliteFinalize(stmt)
+    if !done {
+        return 0
+    }
+    unused storage_enqueue_sync_habit_reward(stored_id)
+    unused AppCopyText(stored_id, id_out)
+    storage_schedule_persist()
+    return 1
+}
+
+// Marks a reward deleted, so it leaves the shop on every device. What it
+// bought stays spent.
+storage_habit_reward_delete :: (reward_id: string) -> s32 {
+    if storage_db_handle() == null || reward_id.count == 0 {
+        return 0
+    }
+    stmt: *void = null
+    sql := "UPDATE habit_rewards SET deleted_at=?3,updated_at=MAX(updated_at+1,?3) WHERE id=?1 AND user_id=?2 AND deleted_at=0"
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, reward_id)
+    bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
+    SqliteBindInt64(stmt, 3, now_seconds())
+    done := SqliteStep(stmt) == SQLITE_DONE
+    SqliteFinalize(stmt)
+    if !done {
+        return 0
+    }
+    unused storage_enqueue_sync_habit_reward(reward_id)
+    storage_schedule_persist()
+    return 1
+}
+
+// Spends a reward's price on it. The record keeps the reward's name and
+// price as they were bought.
+storage_habit_reward_buy :: (reward: *HabitReward) -> s32 {
+    if storage_db_handle() == null || reward == null || reward.id[0] == cast(u8)0 {
+        return 0
+    }
+    id: [HABIT_REWARD_ID_SIZE]u8
+    storage_make_uuid(*id[0])
+    stored_id := AppTextFromCString(*id[0], HABIT_REWARD_ID_SIZE)
+    stmt: *void = null
+    sql := "INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at) VALUES(?1,?2,1,?3,?4,?5,?6,0,?6)"
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    at := now_seconds()
+    bind_text(stmt, 1, stored_id)
+    bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(stmt, 3, AppTextFromCString(*reward.id[0], HABIT_REWARD_ID_SIZE))
+    bind_text(stmt, 4, AppTextFromCString(*reward.name[0], HABIT_REWARD_NAME_SIZE))
+    sqlite3_bind_int(stmt, 5, HabitRewardPriceClamp(reward.price))
+    SqliteBindInt64(stmt, 6, at)
+    done := SqliteStep(stmt) == SQLITE_DONE
+    SqliteFinalize(stmt)
+    if !done {
+        return 0
+    }
+    unused storage_enqueue_sync_habit_coin(stored_id)
+    storage_schedule_persist()
+    return 1
+}

@@ -1,0 +1,664 @@
+// The habit shop: the coins the habits earned and the rewards the person
+// sets, each with its price in coins, to spend them on. A reward is added
+// or changed in the form under the list; a tap on a reward's name opens it
+// there, and Buy asks before it spends the coins.
+#import "geometry"
+#import "layout"
+#import "tree"
+#import "session"
+#import "box_props"
+#import "box_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "modal_props"
+#import "modal_frame_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "text_field_widget"
+#import "text_input_props"
+#import, file "../../app/app_types.zi";
+#import, file "../../app/app_modal_state.zi";
+#import, file "../../app/modal_rules.zi";
+#import, file "../../app/locale.zi";
+#import, file "../../app/metrics.zi";
+#import, file "../../app/cards.zi";
+#import, file "../../app/text_buffers.zi";
+#import, file "../../habits/habit_types.zi";
+#import, file "../../habits/habit_coins.zi";
+#import, file "../../storage/db.zi";
+#import, file "../../storage/storage_habit_wallet.zi";
+#import, file "../../platform/raylib_text_input.zi";
+#import, file "coins_view.zi";
+#import, file "page_header.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using ModalType;
+using TextAlign;
+using TextWrap;
+
+HABIT_SHOP_COLUMN_MAX :: 640
+HABIT_SHOP_DEFAULT_PRICE :: 5
+HABIT_SHOP_BALANCE_HEIGHT :: 92
+HABIT_SHOP_ROW_HEIGHT :: 60
+HABIT_SHOP_ROW_GAP :: 8
+HABIT_SHOP_GAP :: 16
+// The form: its title, the name, then the price with Add or Save, and
+// Delete and Cancel while it changes a reward.
+HABIT_SHOP_FORM_PADDING :: 14
+HABIT_SHOP_FIELD_HEIGHT :: 44
+
+// Reads the coins and rewards again when the stored data changed, as
+// after a done day, a purchase or a sync.
+HabitShopRefresh :: (app: *InnerBreeze) {
+    shop := *app.habit_shop
+    revision := storage_data_revision()
+    if shop.loaded && shop.revision == revision {
+        return
+    }
+    shop.loaded = true
+    shop.revision = revision
+    shop.balance = storage_habit_wallet_balance()
+    shop.reward_count = storage_habit_rewards_load(shop.rewards[:])
+}
+
+HabitShopBalance :: (app: *InnerBreeze) -> s64 {
+    HabitShopRefresh(app)
+    return app.habit_shop.balance
+}
+
+HabitShopNumber :: (app: *InnerBreeze, value: s64) -> string {
+    buffer: [32]u8
+    if !AppFormatS64(value, buffer[:]) {
+        return ""
+    }
+    return FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*buffer[0], cast(s32)buffer.count))
+}
+
+HabitShopPriceText :: (app: *InnerBreeze) {
+    shop := *app.habit_shop
+    unused AppFormatS32(shop.price, shop.price_text[:])
+    length := cast(s32)AppTextFromCString(*shop.price_text[0],
+        cast(s32)shop.price_text.count).count
+    shop.price_cursor = length
+    shop.price_anchor = length
+}
+
+// An empty form that adds a reward.
+HabitShopFormReset :: (app: *InnerBreeze) {
+    shop := *app.habit_shop
+    shop.editing[0] = cast(u8)0
+    shop.name[0] = cast(u8)0
+    shop.name_cursor = 0
+    shop.name_anchor = 0
+    shop.name_scroll_x = 0
+    shop.name_focused = 0
+    shop.price = HABIT_SHOP_DEFAULT_PRICE
+    shop.price_focused = 0
+    shop.price_scroll_x = 0
+    HabitShopPriceText(app)
+}
+
+// The form opened on a reward, to change or delete it.
+HabitShopFormEdit :: (app: *InnerBreeze, reward: *HabitReward) {
+    shop := *app.habit_shop
+    unused AppCopyText(AppTextFromCString(*reward.id[0], HABIT_REWARD_ID_SIZE),
+        shop.editing[:])
+    unused AppCopyText(AppTextFromCString(*reward.name[0], HABIT_REWARD_NAME_SIZE),
+        shop.name[:])
+    shop.name_cursor = cast(s32)AppTextFromCString(*shop.name[0],
+        HABIT_REWARD_NAME_SIZE).count
+    shop.name_anchor = shop.name_cursor
+    shop.name_scroll_x = 0
+    shop.name_focused = 0
+    shop.price = HabitRewardPriceClamp(reward.price)
+    shop.price_focused = 0
+    HabitShopPriceText(app)
+}
+
+// Opens the shop from the habit list.
+HabitShopOpen :: (app: *InnerBreeze) {
+    app.habits.screen_mode = HABITS_SCREEN_SHOP
+    app.habits.selected = -1
+    app.habits.scroll = 0
+    HabitShopFormReset(app)
+    app.habit_shop.loaded = false
+}
+
+HabitShopEditing :: (app: *InnerBreeze) -> bool {
+    return app.habit_shop.editing[0] != cast(u8)0
+}
+
+// The name typed in, without spaces around it.
+HabitShopTypedName :: (app: *InnerBreeze) -> string {
+    value := AppTextFromCString(*app.habit_shop.name[0], HABIT_REWARD_NAME_SIZE)
+    start: s64 = 0
+    end := value.count
+    while start < end && (value[start] == cast(u8)32 || value[start] == cast(u8)9) {
+        start += 1
+    }
+    while end > start && (value[end - 1] == cast(u8)32 || value[end - 1] == cast(u8)9) {
+        end -= 1
+    }
+    return value[start:end]
+}
+
+// Adds the reward the form holds, or saves the one it changes.
+HabitShopFormSubmit :: (app: *InnerBreeze) {
+    name := HabitShopTypedName(app)
+    if name.count == 0 {
+        return
+    }
+    saved: [HABIT_REWARD_ID_SIZE]u8
+    if storage_habit_reward_save(AppTextFromCString(*app.habit_shop.editing[0],
+        HABIT_REWARD_ID_SIZE), name, app.habit_shop.price, saved[:]) == 0 {
+        return
+    }
+    HabitShopFormReset(app)
+}
+
+HabitShopNameField :: (app: *InnerBreeze, bounds: Rectangle) -> TextFieldResult {
+    shop := *app.habit_shop
+    typed: [64]u8
+    field: TextFieldProps
+    field.key = KeyHash("inbe/habits/shop/name")
+    field.bounds = bounds
+    field.value = FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*shop.name[0], HABIT_REWARD_NAME_SIZE))
+    field.placeholder = LocaleText("habit_shop_name_placeholder")
+    field.cursor = shop.name_cursor
+    field.anchor = shop.name_anchor
+    field.scroll_x = shop.name_scroll_x
+    field.focused = shop.name_focused != 0
+    field.focus_id = 8411
+    field.max_bytes = HABIT_REWARD_NAME_SIZE - 1
+    field.max_codepoints = HABIT_REWARD_NAME_SIZE - 1
+    field.disabled = app.modal.active != 0
+    field.input = SampleTextFieldInput(field.focused, typed[:])
+    result := TextField(app.ui.session, field)
+    if result.edit.changed {
+        unused AppReplaceText(shop.name[:], result.edit.start, result.edit.end,
+            result.edit.replacement)
+    }
+    shop.name_cursor = result.cursor
+    shop.name_anchor = result.anchor
+    shop.name_scroll_x = result.scroll_x
+    shop.name_focused = ifx result.focused then 1 else 0
+    if result.focused {
+        shop.price_focused = 0
+    }
+    if result.clipboard_write {
+        unused TextInputWriteClipboard(result.clipboard_text)
+    }
+    return result
+}
+
+// The price as typed; an empty or zero entry keeps the last price until
+// the field is left.
+HabitShopPriceField :: (app: *InnerBreeze, bounds: Rectangle) -> TextFieldResult {
+    shop := *app.habit_shop
+    if shop.price_focused == 0 {
+        HabitShopPriceText(app)
+    }
+    typed: [16]u8
+    field: TextFieldProps
+    field.key = KeyHash("inbe/habits/shop/price")
+    field.bounds = bounds
+    field.value = FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*shop.price_text[0], cast(s32)shop.price_text.count))
+    field.cursor = shop.price_cursor
+    field.anchor = shop.price_anchor
+    field.scroll_x = shop.price_scroll_x
+    field.focused = shop.price_focused != 0
+    field.focus_id = 8412
+    field.numeric = true
+    field.max_bytes = 4
+    field.max_codepoints = 4
+    field.disabled = app.modal.active != 0
+    field.input = SampleTextFieldInput(field.focused, typed[:])
+    result := TextField(app.ui.session, field)
+    if result.edit.changed && AppReplaceText(shop.price_text[:], result.edit.start,
+        result.edit.end, result.edit.replacement) {
+        typed_text := AppTextFromCString(*shop.price_text[0],
+            cast(s32)shop.price_text.count)
+        value: s32 = 0
+        index: s64 = 0
+        while index < typed_text.count {
+            value = value * 10 + cast(s32)typed_text[index] - 48
+            index += 1
+        }
+        if value > 0 {
+            shop.price = HabitRewardPriceClamp(value)
+        }
+    }
+    shop.price_cursor = result.cursor
+    shop.price_anchor = result.anchor
+    shop.price_scroll_x = result.scroll_x
+    shop.price_focused = ifx result.focused then 1 else 0
+    if result.focused {
+        shop.name_focused = 0
+    }
+    if result.clipboard_write {
+        unused TextInputWriteClipboard(result.clipboard_text)
+    }
+    return result
+}
+
+HabitShopButton :: (app: *InnerBreeze, id: s32, label: string, bounds: Rectangle,
+    tone: ButtonTone, emphasis: ButtonEmphasis, disabled: bool) -> bool {
+    props: ButtonProps
+    props.id = id
+    props.bounds = bounds
+    props.label = label
+    props.tone = tone
+    props.emphasis = emphasis
+    props.fit_content = true
+    props.disabled = disabled || app.modal.active != 0
+    return Button(app.ui.session, props) != 0
+}
+
+// The coins to spend, large beside a gold coin, and how habits earn them.
+HabitShopBalanceCard :: (app: *InnerBreeze, x: s32, y: s32, width: s32) -> s32 {
+    height := AppScale(HABIT_SHOP_BALANCE_HEIGHT)
+    card := CardProps(Rectangle.{cast(float32)x, cast(float32)y,
+            cast(float32)width, cast(float32)height})
+    card.key = KeyHash("inbe/habits/shop/balance")
+    Box(app.ui.session, card)
+    coin := AppScale(48)
+    pad := AppScale(CARD_PADDING)
+    HabitCoinIcon(app.ui.session, Rectangle.{cast(float32)(x + pad),
+            cast(float32)(y + (height - coin) / 2), cast(float32)coin,
+            cast(float32)coin})
+    text_x := x + pad + coin + AppScale(14)
+    text_w := width - (text_x - x) - pad
+    amount := HabitShopNumber(app, app.habit_shop.balance)
+    strong := StrongWhole(amount)
+    figure: TextProps
+    figure.bounds = Rectangle.{cast(float32)text_x, cast(float32)(y + AppScale(14)),
+        cast(float32)text_w, cast(float32)AppScale(40)}
+    figure.text = amount
+    figure.font = AppFontSize() + AppScale(16)
+    figure.strong = strong[:]
+    figure.vertical_align = cast(TextAlign)TextAlignCenter
+    figure.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, figure)
+    label: TextProps
+    label.bounds = Rectangle.{cast(float32)text_x, cast(float32)(y + AppScale(54)),
+        cast(float32)text_w, cast(float32)AppScale(24)}
+    label.text = LocaleText("habit_shop_balance_label")
+    label.font = AppSmallFontSize()
+    label.class_name = MutedTextClass()
+    label.wrap = cast(TextWrap)TextWrapEllipsis
+    Text(app.ui.session, label)
+    return height
+}
+
+HabitShopRuleHeight :: (width: s32) -> s32 {
+    return AppParagraphHeight(LocaleText("habit_shop_rule"), width,
+        AppSmallFontSize(), AppScale(3))
+}
+
+// One reward: its name, which opens it in the form, and its price beside
+// Buy, which needs the coins.
+HabitShopRow :: (app: *InnerBreeze, index: s32, x: s32, y: s32, width: s32) {
+    shop := *app.habit_shop
+    reward := *shop.rewards[index]
+    height := AppScale(HABIT_SHOP_ROW_HEIGHT)
+    bounds := Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width,
+        cast(float32)height}
+    card := CardProps(bounds)
+    if index == 0 {
+        card.key = KeyHash("inbe/habits/shop/first-reward")
+    }
+    Box(app.ui.session, card)
+    pad := AppScale(CARD_PADDING)
+    buy_label := LocaleText("habit_shop_buy_button")
+    buy_w := AppTextWidth(buy_label, AppFontSize()) + AppScale(36)
+    if buy_w < AppScale(84) {
+        buy_w = AppScale(84)
+    }
+    price := HabitShopNumber(app, cast(s64)reward.price)
+    price_w := HabitCoinAmountWidth(price, AppFontSize())
+    buy_x := x + width - pad - buy_w
+    price_x := buy_x - AppScale(14) - price_w
+    name_w := price_x - x - pad - AppScale(10)
+    open: ButtonProps
+    open.id = 8500 + index
+    open.bounds = Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)(price_x - x), cast(float32)height}
+    open.invisible = true
+    open.label = AppTextFromCString(*reward.name[0], HABIT_REWARD_NAME_SIZE)
+    open.disabled = app.modal.active != 0
+    if Button(app.ui.session, open) != 0 {
+        HabitShopFormEdit(app, reward)
+    }
+    name: TextProps
+    name.bounds = Rectangle.{cast(float32)(x + pad), cast(float32)y,
+        cast(float32)name_w, cast(float32)height}
+    name.text = AppTextFromCString(*reward.name[0], HABIT_REWARD_NAME_SIZE)
+    name.vertical_align = cast(TextAlign)TextAlignCenter
+    name.wrap = cast(TextWrap)TextWrapEllipsis
+    Text(app.ui.session, name)
+    HabitCoinAmount(app.ui.session, price, Rectangle.{cast(float32)price_x,
+            cast(float32)y, cast(float32)price_w, cast(float32)height},
+        AppFontSize(), true)
+    affordable := shop.balance >= cast(s64)reward.price
+    if HabitShopButton(app, 8600 + index, buy_label, Rectangle.{
+            cast(float32)buy_x, cast(float32)(y + (height - AppScale(40)) / 2),
+            cast(float32)buy_w, cast(float32)AppScale(40)},
+        cast(ButtonTone)(ifx affordable then ButtonToneAccent else ButtonToneNeutral),
+        cast(ButtonEmphasis)(ifx affordable then ButtonEmphasisFilled else ButtonEmphasisSoft),
+        !affordable) {
+        shop.buying = reward.*
+        shop.name_focused = 0
+        shop.price_focused = 0
+        app_open_modal(app, cast(ModalType)ModalHabitBuy)
+    }
+}
+
+HabitShopFormHeight :: (app: *InnerBreeze, width: s32) -> s32 {
+    pad := AppScale(HABIT_SHOP_FORM_PADDING)
+    height := pad + AppScale(30) + AppScale(HABIT_SHOP_FIELD_HEIGHT) +
+    AppScale(10) + AppScale(HABIT_SHOP_FIELD_HEIGHT) + pad
+    if HabitShopFormWraps(app, width) {
+        height += AppScale(10) + AppScale(HABIT_SHOP_FIELD_HEIGHT)
+    }
+    if HabitShopEditing(app) {
+        height += AppScale(10) + AppScale(42)
+    }
+    return height
+}
+
+// The form that adds a reward, or changes the one opened from the list.
+HabitShopForm :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
+    shop := *app.habit_shop
+    editing := HabitShopEditing(app)
+    height := HabitShopFormHeight(app, width)
+    card := CardProps(Rectangle.{cast(float32)x, cast(float32)y,
+            cast(float32)width, cast(float32)height})
+    card.key = KeyHash("inbe/habits/shop/form")
+    Box(app.ui.session, card)
+    pad := AppScale(HABIT_SHOP_FORM_PADDING)
+    inner_x := x + pad
+    inner_w := width - pad * 2
+    row_y := y + pad
+    title_text := LocaleText(ifx editing then "habit_shop_edit_title" else "habit_shop_add_title")
+    strong := StrongWhole(title_text)
+    title: TextProps
+    title.bounds = Rectangle.{cast(float32)inner_x, cast(float32)row_y,
+        cast(float32)inner_w, cast(float32)AppScale(26)}
+    title.text = title_text
+    title.strong = strong[:]
+    title.vertical_align = cast(TextAlign)TextAlignCenter
+    title.wrap = cast(TextWrap)TextWrapEllipsis
+    Text(app.ui.session, title)
+    row_y += AppScale(30)
+    field_h := AppScale(HABIT_SHOP_FIELD_HEIGHT)
+    named := HabitShopNameField(app, Rectangle.{cast(float32)inner_x,
+            cast(float32)row_y, cast(float32)inner_w, cast(float32)field_h})
+    submit := named.committed
+    row_y += field_h + AppScale(10)
+    // Price − [n] + with a coin, then Add or Save at the row's end.
+    label := LocaleText("habit_shop_price_label")
+    label_w := AppTextWidth(label, AppFontSize()) + AppScale(10)
+    price_label: TextProps
+    price_label.bounds = Rectangle.{cast(float32)inner_x, cast(float32)row_y,
+        cast(float32)label_w, cast(float32)field_h}
+    price_label.text = label
+    price_label.class_name = MutedTextClass()
+    price_label.vertical_align = cast(TextAlign)TextAlignCenter
+    price_label.wrap = cast(TextWrap)TextWrapNone
+    Text(app.ui.session, price_label)
+    step := AppScale(44)
+    control_x := inner_x + label_w
+    if HabitShopButton(app, 8420, "-", Rectangle.{cast(float32)control_x,
+            cast(float32)row_y, cast(float32)step, cast(float32)field_h},
+        cast(ButtonTone)ButtonToneNeutral, cast(ButtonEmphasis)ButtonEmphasisSoft,
+        shop.price <= 1) {
+        shop.price = HabitRewardPriceClamp(shop.price - 1)
+        HabitShopPriceText(app)
+    }
+    priced := HabitShopPriceField(app, Rectangle.{
+            cast(float32)(control_x + step + AppScale(6)), cast(float32)row_y,
+            cast(float32)AppScale(64), cast(float32)field_h})
+    if priced.committed {
+        submit = true
+    }
+    plus_x := control_x + step + AppScale(76)
+    if HabitShopButton(app, 8421, "+", Rectangle.{cast(float32)plus_x,
+            cast(float32)row_y, cast(float32)step, cast(float32)field_h},
+        cast(ButtonTone)ButtonToneNeutral, cast(ButtonEmphasis)ButtonEmphasisSoft,
+        shop.price >= HABIT_REWARD_PRICE_MAX) {
+        shop.price = HabitRewardPriceClamp(shop.price + 1)
+        HabitShopPriceText(app)
+    }
+    coin := AppScale(22)
+    HabitCoinIcon(app.ui.session, Rectangle.{cast(float32)(plus_x + step + AppScale(8)),
+            cast(float32)(row_y + (field_h - coin) / 2), cast(float32)coin,
+            cast(float32)coin})
+    action_label := LocaleText(ifx editing then "save_button" else "habit_shop_add_button")
+    action_w := AppTextWidth(action_label, AppFontSize()) + AppScale(40)
+    if action_w < AppScale(96) {
+        action_w = AppScale(96)
+    }
+    action_x := inner_x + inner_w - action_w
+    if HabitShopFormWraps(app, width) {
+        // A narrow screen puts Add or Save on the next line.
+        row_y += field_h + AppScale(10)
+    }
+    if HabitShopButton(app, 8422, action_label, Rectangle.{cast(float32)action_x,
+            cast(float32)row_y, cast(float32)action_w, cast(float32)field_h},
+        cast(ButtonTone)ButtonToneAccent, cast(ButtonEmphasis)ButtonEmphasisFilled,
+        HabitShopTypedName(app).count == 0) {
+        submit = true
+    }
+    if submit && app.modal.active == 0 {
+        HabitShopFormSubmit(app)
+        return
+    }
+    if !editing {
+        return
+    }
+    row_y += field_h + AppScale(10)
+    half := (inner_w - AppScale(10)) / 2
+    if HabitShopButton(app, 8423, LocaleText("delete_button"), Rectangle.{
+            cast(float32)inner_x, cast(float32)row_y, cast(float32)half,
+            cast(float32)AppScale(42)},
+        cast(ButtonTone)ButtonToneDanger, cast(ButtonEmphasis)ButtonEmphasisSoft, false) {
+        unused storage_habit_reward_delete(AppTextFromCString(*shop.editing[0],
+            HABIT_REWARD_ID_SIZE))
+        HabitShopFormReset(app)
+        return
+    }
+    if HabitShopButton(app, 8424, LocaleText("cancel_button"), Rectangle.{
+            cast(float32)(inner_x + half + AppScale(10)), cast(float32)row_y,
+            cast(float32)half, cast(float32)AppScale(42)},
+        cast(ButtonTone)ButtonToneNeutral, cast(ButtonEmphasis)ButtonEmphasisOutline, false) {
+        HabitShopFormReset(app)
+    }
+}
+
+// Whether the form's Add or Save goes on its own line at this width.
+HabitShopFormWraps :: (app: *InnerBreeze, width: s32) -> bool {
+    pad := AppScale(HABIT_SHOP_FORM_PADDING)
+    inner_w := width - pad * 2
+    label_w := AppTextWidth(LocaleText("habit_shop_price_label"), AppFontSize()) +
+    AppScale(10)
+    action_label := LocaleText(ifx HabitShopEditing(app) then "save_button" else "habit_shop_add_button")
+    action_w := AppTextWidth(action_label, AppFontSize()) + AppScale(40)
+    if action_w < AppScale(96) {
+        action_w = AppScale(96)
+    }
+    controls := label_w + AppScale(44) + AppScale(76) + AppScale(44) +
+    AppScale(22) + AppScale(16)
+    return controls + action_w > inner_w
+}
+
+// Draws the shop in the bounds and returns false when Back was pressed.
+HabitShopPage :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
+    HabitShopRefresh(app)
+    shop := *app.habit_shop
+    width := cast(s32)bounds.width
+    x := cast(s32)bounds.x
+    if width > AppScale(HABIT_SHOP_COLUMN_MAX) {
+        x += (width - AppScale(HABIT_SHOP_COLUMN_MAX)) / 2
+        width = AppScale(HABIT_SHOP_COLUMN_MAX)
+    }
+    top := HabitPageHeader(app, x, cast(s32)bounds.y, width,
+        LocaleText("habit_shop_title"), LocaleText("habit_shop_subtitle"), 8400)
+    if top < 0 {
+        shop.name_focused = 0
+        shop.price_focused = 0
+        return false
+    }
+    gap := AppScale(HABIT_SHOP_GAP)
+    row_h := AppScale(HABIT_SHOP_ROW_HEIGHT)
+    row_gap := AppScale(HABIT_SHOP_ROW_GAP)
+    rewards_title := LocaleText("habit_shop_rewards_title")
+    list_h := shop.reward_count * (row_h + row_gap)
+    if shop.reward_count == 0 {
+        list_h = AppParagraphHeight(LocaleText("habit_shop_empty"), width,
+            AppFontSize(), AppScale(3)) + row_gap
+    }
+    form_h := HabitShopFormHeight(app, width)
+    content_h := AppScale(HABIT_SHOP_BALANCE_HEIGHT) + AppScale(10) +
+    HabitShopRuleHeight(width) + gap + SectionTitleHeight(rewards_title, width) +
+    AppScale(10) + list_h + gap + form_h + gap
+    viewport := Rectangle.{cast(float32)x, cast(float32)top, cast(float32)width,
+        bounds.y + bounds.height - cast(float32)top}
+    props: ScrollProps
+    props.key = KeyHash("inbe/habits/shop")
+    props.bounds = viewport
+    props.content_height = content_h
+    props.scroll_offset = app.habits.scroll
+    scrolled := Scroll(app.ui.session, props)
+    app.habits.scroll = scrolled.scroll_offset
+    if !scrolled.opened {
+        return true
+    }
+    y := cast(s32)scrolled.content.y
+    y += HabitShopBalanceCard(app, x, y, width) + AppScale(10)
+    rule: TextProps
+    rule.bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width,
+        cast(float32)HabitShopRuleHeight(width)}
+    rule.text = LocaleText("habit_shop_rule")
+    rule.font = AppSmallFontSize()
+    rule.class_name = MutedTextClass()
+    rule.wrap = cast(TextWrap)TextWrapAuto
+    Text(app.ui.session, rule)
+    y += HabitShopRuleHeight(width) + gap
+    y += SectionTitle(app.ui.session, rewards_title, x, y, width) + AppScale(10)
+    if shop.reward_count == 0 {
+        empty: TextProps
+        empty.bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width,
+            cast(float32)(list_h - row_gap)}
+        empty.text = LocaleText("habit_shop_empty")
+        empty.class_name = MutedTextClass()
+        empty.wrap = cast(TextWrap)TextWrapAuto
+        Text(app.ui.session, empty)
+    }
+    index: s32 = 0
+    while index < shop.reward_count {
+        HabitShopRow(app, index, x, y + index * (row_h + row_gap), width)
+        index += 1
+    }
+    y += list_h + gap
+    HabitShopForm(app, x, y, width)
+    unused End(app.ui.session)
+    return true
+}
+
+// Asks before a reward's price is spent: the reward, its price and the
+// coins left after it.
+HabitShopBuyDialog :: (app: *InnerBreeze) {
+    if app.modal.active == 0 || app.modal.type != cast(ModalType)ModalHabitBuy {
+        return
+    }
+    shop := *app.habit_shop
+    reward := *shop.buying
+    width := app.ui.view_width - AppScale(32)
+    if width > AppScale(380) {
+        width = AppScale(380)
+    }
+    frame := ModalFrame(app.ui.session, ModalFrameProps.{
+            .key = KeyHash("inbe/habits/shop/buy"),
+            .title = LocaleText("habit_shop_buy_title"),
+            .width = width, .height = AppScale(250)})
+    if frame.dismissed {
+        app_close_modal(app)
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    content := frame.layout.content
+    x := cast(s32)content.x
+    y := cast(s32)content.y
+    inner_w := cast(s32)content.width
+    reward_name := AppTextFromCString(*reward.name[0], HABIT_REWARD_NAME_SIZE)
+    strong := StrongWhole(reward_name)
+    name: TextProps
+    name.bounds = Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)inner_w, cast(float32)AppScale(30)}
+    name.text = reward_name
+    name.strong = strong[:]
+    name.vertical_align = cast(TextAlign)TextAlignCenter
+    name.wrap = cast(TextWrap)TextWrapEllipsis
+    Text(app.ui.session, name)
+    y += AppScale(34)
+    price := HabitShopNumber(app, cast(s64)reward.price)
+    HabitCoinAmount(app.ui.session, price, Rectangle.{cast(float32)x,
+            cast(float32)y, cast(float32)inner_w, cast(float32)AppScale(30)},
+        AppFontSize() + AppScale(4), true)
+    y += AppScale(36)
+    left_args: [1]FormatArg
+    left := shop.balance - cast(s64)reward.price
+    left_args[0].number = cast(s32)left
+    left_text: [128]u8
+    unused FormatTemplate(LocaleText("habit_shop_buy_left"), left_args[:],
+        left_text[:])
+    after: TextProps
+    after.bounds = Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)inner_w, cast(float32)AppScale(24)}
+    after.text = FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*left_text[0], cast(s32)left_text.count))
+    after.font = AppSmallFontSize()
+    after.class_name = MutedTextClass()
+    after.wrap = cast(TextWrap)TextWrapEllipsis
+    Text(app.ui.session, after)
+    button_y := content.y + content.height - cast(float32)AppScale(44)
+    half := (inner_w - AppScale(10)) / 2
+    cancel: ButtonProps
+    cancel.id = 8430
+    cancel.bounds = Rectangle.{cast(float32)x, button_y, cast(float32)half,
+        cast(float32)AppScale(42)}
+    cancel.label = LocaleText("cancel_button")
+    cancel.tone = cast(ButtonTone)ButtonToneNeutral
+    cancel.emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline
+    cancel.fit_content = true
+    buy: ButtonProps
+    buy.id = 8431
+    buy.bounds = Rectangle.{cast(float32)(x + half + AppScale(10)), button_y,
+        cast(float32)half, cast(float32)AppScale(42)}
+    buy.label = LocaleText("habit_shop_buy_button")
+    buy.tone = cast(ButtonTone)ButtonToneAccent
+    buy.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
+    buy.fit_content = true
+    buy.disabled = left < 0
+    cancelled := Button(app.ui.session, cancel) != 0
+    bought := Button(app.ui.session, buy) != 0
+    unused End(app.ui.session)
+    if cancelled {
+        app_close_modal(app)
+        return
+    }
+    if bought {
+        unused storage_habit_reward_buy(reward)
+        app_close_modal(app)
+    }
+}

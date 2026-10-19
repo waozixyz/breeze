@@ -20,8 +20,8 @@ ROOT = pathlib.Path(os.environ.get("SYNC_RESTORE_ROOT") or
 OUTBOX = (ROOT / "src/storage/sync_outbox.zi").read_text()
 SCHEMA = (ROOT / "src/storage/schema_sql.zi").read_text()
 
-TABLES = ["users", "habits", "habit_days", "habit_entries", "habit_changes", "sessions", "elist_lists",
-          "elist_items", "settings", "sync_outbox"]
+TABLES = ["users", "habits", "habit_days", "habit_entries", "habit_changes", "habit_rewards",
+          "habit_coins", "sessions", "elist_lists", "elist_items", "settings", "sync_outbox"]
 
 
 def table_sql(name):
@@ -41,7 +41,7 @@ def restore_statements():
     assert enqueue, "storage_enqueue_all_sync_state"
     inserts = re.findall(r'exec_sql\("(INSERT INTO sync_outbox[^"]*)"\)',
                          enqueue.group(1))
-    assert len(inserts) == 14, inserts
+    assert len(inserts) == 16, inserts
     return clear + inserts
 
 
@@ -68,8 +68,9 @@ ENTITIES = [
     ("cell_record", "cell.feedback.report", 0),
 ]
 
-# Apps the node offers and the account's media library: queued all or none,
-# alternating over the cases above, so the exhaustive check stays small.
+# Apps the node offers, the account's media library and the habit shop:
+# queued all or none, alternating over the cases above, so the exhaustive
+# check stays small.
 NESTED = "nested." + "ab" * 32 + ".position"
 EXTRA = [
     ("app_record", NESTED, 0),
@@ -77,6 +78,8 @@ EXTRA = [
     ("app_record", "cell.chess.computer", 0),
     ("media_record", "cell.media." + "ab" * 32, 0),
     ("media_record", "cell.media.preview." + "ab" * 32, 0),
+    ("habit_reward", "r1", 0),
+    ("habit_coin", "k1", 0),
 ]
 
 
@@ -96,6 +99,8 @@ def open_database():
                {"id": "e1", "user_id": "u1", "habit_id": "h1", "local_date": 20260101})
     insert_row(database, "habit_changes",
                {"id": "c1", "user_id": "u1", "habit_id": "h1", "changed_at": 1, "kind": 2})
+    insert_row(database, "habit_rewards", {"id": "r1", "user_id": "u1", "name": "Movie night", "price": 10})
+    insert_row(database, "habit_coins", {"id": "k1", "user_id": "u1", "kind": 1, "coins": 10, "at": 1})
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_lists", "value": "0", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_diary", "value": "1", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "cells_auto_update", "value": "0", "updated_at": 2})

@@ -67,6 +67,8 @@ storage_append_habit_row_json :: (json_handle: s64, stmt_handle: s64) {
     storage_json_append_int_field(json, "span_goal", cast(s64)sqlite3_column_int(stmt, 19))
     storage_json_append_int_field(json, "span_low", cast(s64)sqlite3_column_int(stmt, 20))
     storage_json_append_int_field(json, "span_high", cast(s64)sqlite3_column_int(stmt, 21))
+    storage_json_append_int_field(json, "difficulty", cast(s64)sqlite3_column_int(stmt, 22))
+    storage_json_append_int_field(json, "coins_from", cast(s64)sqlite3_column_int(stmt, 23))
     storage_json_builder_append_text(json, "}")
 }
 
@@ -146,6 +148,43 @@ storage_append_habit_entry_row_json :: (json_handle: s64, stmt_handle: s64) {
 
 // A change of a habit's settings: when it was made, what changed, and the
 // values before and after as text.
+storage_append_habit_reward_row_json :: (json_handle: s64, stmt_handle: s64) {
+    json: *StorageJsonBuilder = cast(*StorageJsonBuilder)json_handle
+    stmt: *void = cast(*void)stmt_handle
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "id",
+        AppTextFromCString(SqliteColumnText(stmt, 0), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "name",
+        AppTextFromCString(SqliteColumnText(stmt, 1), 8192))
+    storage_json_append_int_field(json, "price", cast(s64)sqlite3_column_int(stmt, 2))
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 3))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 4))
+    storage_json_builder_append_text(json, "}")
+}
+
+storage_append_habit_coin_row_json :: (json_handle: s64, stmt_handle: s64) {
+    json: *StorageJsonBuilder = cast(*StorageJsonBuilder)json_handle
+    stmt: *void = cast(*void)stmt_handle
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "id",
+        AppTextFromCString(SqliteColumnText(stmt, 0), 8192))
+    storage_json_append_int_field(json, "kind", cast(s64)sqlite3_column_int(stmt, 1))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "reward_id",
+        AppTextFromCString(SqliteColumnText(stmt, 2), 8192))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "name",
+        AppTextFromCString(SqliteColumnText(stmt, 3), 8192))
+    storage_json_append_int_field(json, "coins", SqliteColumnInt64(stmt, 4))
+    storage_json_append_int_field(json, "at", SqliteColumnInt64(stmt, 5))
+    storage_json_append_int_field(json, "deleted_at", SqliteColumnInt64(stmt, 6))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, SqliteColumnInt64(stmt, 7))
+    storage_json_builder_append_text(json, "}")
+}
+
 storage_append_habit_change_row_json :: (json_handle: s64, stmt_handle: s64) {
     json: *StorageJsonBuilder = cast(*StorageJsonBuilder)json_handle
     stmt: *void = cast(*void)stmt_handle
@@ -290,7 +329,7 @@ storage_append_dated_payload_json :: (json: *StorageJsonBuilder, sql: string, id
 storage_append_habit_payload_json :: (json: *StorageJsonBuilder, habit_id: string) -> s32 {
     return storage_append_id_payload_json(
         json,
-        "SELECT id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high FROM habits WHERE user_id=?1 AND id=?2",
+        "SELECT id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,weekdays,reminder_hour,deactivated,icon,schedule,questions,span,span_goal,span_low,span_high,difficulty,coins_from FROM habits WHERE user_id=?1 AND id=?2",
         habit_id, storage_append_habit_row_json)
 }
 
@@ -327,6 +366,20 @@ storage_append_habit_change_payload_json :: (json: *StorageJsonBuilder, change_i
         json,
         "SELECT id,habit_id,changed_at,kind,question,question_text,old_value,new_value,deleted_at,updated_at FROM habit_changes WHERE user_id=?1 AND id=?2",
         change_id, storage_append_habit_change_row_json)
+}
+
+storage_append_habit_reward_payload_json :: (json: *StorageJsonBuilder, reward_id: string) -> s32 {
+    return storage_append_id_payload_json(
+        json,
+        "SELECT id,name,price,deleted_at,updated_at FROM habit_rewards WHERE user_id=?1 AND id=?2",
+        reward_id, storage_append_habit_reward_row_json)
+}
+
+storage_append_habit_coin_payload_json :: (json: *StorageJsonBuilder, coin_id: string) -> s32 {
+    return storage_append_id_payload_json(
+        json,
+        "SELECT id,kind,reward_id,name,coins,at,deleted_at,updated_at FROM habit_coins WHERE user_id=?1 AND id=?2",
+        coin_id, storage_append_habit_coin_row_json)
 }
 
 storage_append_elist_item_payload_json :: (json: *StorageJsonBuilder, item_id: string) -> s32 {
@@ -387,9 +440,11 @@ storage_sync_op_is_delete :: (entity_type: string, entity_id: string, local_date
         }
     } else if storage_compare_text(entity_type, "elist_list") == 0  || storage_compare_text(entity_type, "elist_item") == 0 ||
     storage_compare_text(entity_type, "habit_entry") == 0 ||
-    storage_compare_text(entity_type, "habit_change") == 0 {
-        // A list, item, entry or change is a deletion only once it is
-        // marked deleted or is gone.
+    storage_compare_text(entity_type, "habit_change") == 0 ||
+    storage_compare_text(entity_type, "habit_reward") == 0 ||
+    storage_compare_text(entity_type, "habit_coin") == 0 {
+        // A list, item, entry, change, reward or coin record is a deletion
+        // only once it is marked deleted or is gone.
         sql := "SELECT deleted_at FROM elist_items WHERE user_id=?1 AND id=?2"
         if storage_compare_text(entity_type, "elist_list") == 0 {
             sql = "SELECT deleted_at FROM elist_lists WHERE user_id=?1 AND id=?2"
@@ -397,6 +452,10 @@ storage_sync_op_is_delete :: (entity_type: string, entity_id: string, local_date
             sql = "SELECT deleted_at FROM habit_entries WHERE user_id=?1 AND id=?2"
         } else if storage_compare_text(entity_type, "habit_change") == 0 {
             sql = "SELECT deleted_at FROM habit_changes WHERE user_id=?1 AND id=?2"
+        } else if storage_compare_text(entity_type, "habit_reward") == 0 {
+            sql = "SELECT deleted_at FROM habit_rewards WHERE user_id=?1 AND id=?2"
+        } else if storage_compare_text(entity_type, "habit_coin") == 0 {
+            sql = "SELECT deleted_at FROM habit_coins WHERE user_id=?1 AND id=?2"
         }
         if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) != SQLITE_OK {
             return 0
@@ -524,6 +583,10 @@ storage_append_sync_op_payload :: (json: *StorageJsonBuilder, entity_type: strin
         found = storage_append_habit_entry_payload_json(json, entity_id)
     } else if storage_compare_text(entity_type, "habit_change") == 0 {
         found = storage_append_habit_change_payload_json(json, entity_id)
+    } else if storage_compare_text(entity_type, "habit_reward") == 0 {
+        found = storage_append_habit_reward_payload_json(json, entity_id)
+    } else if storage_compare_text(entity_type, "habit_coin") == 0 {
+        found = storage_append_habit_coin_payload_json(json, entity_id)
     }
     if found == 0 {
         storage_json_builder_append_text(json, "{}")

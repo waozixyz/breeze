@@ -24,6 +24,9 @@ c :: #system_library "c";
 #import, file "../../habits/habit_sessions.zi";
 #import, file "../../app/exercise_types.zi";
 #import, file "../../habits/habit_icons.zi";
+#import, file "../../habits/habit_coins.zi";
+#import, file "../habit_change_text.zi";
+#import, file "coins_view.zi";
 #import, file "../../habits/habit_schedule.zi";
 #import, file "../../habits/habit_questions.zi";
 #import, file "../../habits/habit_answer_stats.zi";
@@ -139,6 +142,7 @@ habit_edit_begin :: (app: *InnerBreeze, index: s32) {
     app.habit_edit.schedule = HabitScheduleCurrent(*app.habits.items[index])
     app.habit_edit.reminder_hour = app.habits.items[index].reminder_hour
     app.habit_edit.icon = app.habits.items[index].icon
+    app.habit_edit.difficulty = app.habits.items[index].difficulty
     app.habit_edit.questions = app.habits.items[index].questions
     app.habit_edit.question_count = app.habits.items[index].question_count
     app.habit_edit.span = app.habits.items[index].span
@@ -180,6 +184,7 @@ habit_edit_changed :: (app: *InnerBreeze) -> bool {
     edit.sync_activity != original.sync_activity || edit.sync_mode != original.sync_mode ||
     edit.counter_enabled != original.counter_enabled || edit.counter_target != original.counter_target ||
     edit.reminder_hour != original.reminder_hour || edit.icon != original.icon ||
+    edit.difficulty != original.difficulty ||
     edit.span != original.span || !habit_edit_goal_same(edit.span_goal, original.span_goal) ||
     !HabitScheduleSame(*edit.schedule, *original.schedule) ||
     edit.question_count != original.question_count {
@@ -556,9 +561,11 @@ habit_edit_section_body :: (app: *InnerBreeze, section: s32,
     if section == 1 {
         return habit_edit_schedule_height(app, width)
     }
-    // Counter mode, the span toggle and practice links, with the target or
-    // which spans are good under their toggle, then the questions.
-    height := AppScale(52 + 52 + 44) + habit_edit_questions_height(app)
+    // The difficulty, counter mode, the span toggle and practice links,
+    // with the target or which spans are good under their toggle, then the
+    // questions.
+    height := AppScale(HABIT_EDIT_DIFFICULTY_HEIGHT + 52 + 52 + 44) +
+    habit_edit_questions_height(app)
     if app.habit_edit.counter_enabled != 0 {
         height += AppScale(52)
     }
@@ -1868,8 +1875,48 @@ habit_edit_span_goal :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
     }
 }
 
+// How hard the habit is, and the coins each done day earns for it.
+HABIT_EDIT_DIFFICULTY_HEIGHT :: 112
+
+habit_edit_difficulty :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
+    habit_edit_text(app, LocaleText("habit_difficulty_label"),
+        x, y, width, AppScale(26))
+    options: [HABIT_DIFFICULTY_COUNT]SegmentOption = .[
+    SegmentOption.{.label = HabitDifficultyLabel(HABIT_DIFFICULTY_MEDIUM)},
+    SegmentOption.{.label = HabitDifficultyLabel(HABIT_DIFFICULTY_HARD)},
+    SegmentOption.{.label = HabitDifficultyLabel(HABIT_DIFFICULTY_VERY_HARD)}]
+    props: SegmentedControlProps
+    props.id = 7605
+    props.bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(30)),
+        cast(float32)width, cast(float32)AppScale(42)}
+    props.height = AppScale(42)
+    props.selected_index = HabitDifficultyClamp(app.habit_edit.difficulty)
+    props.has_selection = true
+    switch := SegmentedControl(app.ui.session, props, options[:])
+    if switch.changed {
+        app.habit_edit.difficulty = HabitDifficultyClamp(switch.selected_index)
+    }
+    hint_y := y + AppScale(80)
+    coin := AppScale(18)
+    HabitCoinIcon(app.ui.session, Rectangle.{cast(float32)x,
+            cast(float32)(hint_y + (AppScale(22) - coin) / 2),
+            cast(float32)coin, cast(float32)coin})
+    hint: TextProps
+    hint.bounds = Rectangle.{cast(float32)(x + coin + AppScale(8)),
+        cast(float32)hint_y, cast(float32)(width - coin - AppScale(8)),
+        cast(float32)AppScale(22)}
+    hint.text = HabitDifficultyEarns(app.habit_edit.difficulty)
+    hint.font = AppSmallFontSize()
+    hint.class_name = MutedTextClass()
+    hint.vertical_align = cast(TextAlign)TextAlignCenter
+    hint.wrap = cast(TextWrap)TextWrapEllipsis
+    Text(app.ui.session, hint)
+}
+
 habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
     width: s32, viewport_y: s32, viewport_h: s32, content_h: s32) {
+    habit_edit_difficulty(app, x, y, width)
+    y += AppScale(HABIT_EDIT_DIFFICULTY_HEIGHT)
     counter_props := ToggleProps.{
         .id = 7610,
         .value = app.habit_edit.counter_enabled != 0,

@@ -158,6 +158,12 @@ static void upgrade_1_8_9(const char *fixture)
                       "description='Keep me' AND counter_enabled=1 AND "
                       "counter_target=1 AND weekdays=0 AND reminder_hour=-1 "
                       "AND deactivated=0 AND updated_at=125") == 1);
+        /* Coins start on the upgrade day and the shop starts empty. */
+        assert(scalar("SELECT COUNT(*) FROM habits WHERE id='habit' AND "
+                      "difficulty=0 AND coins_from="
+                      "CAST(strftime('%Y%m%d','now','localtime') AS INTEGER)") == 1);
+        assert(scalar("SELECT COUNT(*) FROM habit_rewards") == 0);
+        assert(scalar("SELECT COUNT(*) FROM habit_coins") == 0);
         assert(scalar("SELECT count FROM habit_days") == 7);
         assert(scalar("SELECT session_count FROM habit_days") == 2);
         assert(scalar("SELECT COUNT(*) FROM sessions WHERE id='session' AND "

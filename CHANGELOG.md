@@ -5,8 +5,7 @@
 - Download Astral Projection for a 15-minute guided visualization, with offline text and optional narration.
 - Leaderboard lists every practice you have installed, including Tai Chi and
   Astral Projection, in your Practice order, and leaves out the others.
-- Lumi shares changelog highlights in chat after an update, once per version,
-  with a link to the full notes.
+- Lumi shares a few changelog highlights in chat after an update, once per version.
 - Manage your name, picture and sync nodes in the redesigned Self profile.
 - Install Radio to listen to three live ambient stations while using other
   apps and practices, with separate volume controls.
@@ -47,6 +46,7 @@
   leaves your apps once Arcade has downloaded.
 
 ## [2.1.35] - 2026-10-17
+- Habits earn coins, more for hard ones, to spend on your own rewards in the shop.
 
 ### Added
 - Chess in More apps: play the computer or a friend.
