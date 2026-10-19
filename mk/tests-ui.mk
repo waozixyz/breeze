@@ -220,3 +220,11 @@ launcher-shortcut-ui-test: $(TARGET) node-apps
 		python3 tests/launcher_shortcut_ui_test.py $(abspath $(TARGET))
 
 VISUAL_TEST_TARGETS += launcher-shortcut-ui-test
+
+# Apps from the node open only once they are on the device.
+.PHONY: node-app-not-installed-ui-test
+node-app-not-installed-ui-test: $(TARGET)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/node_app_not_installed_ui_test.py $(abspath $(TARGET))
+
+VISUAL_TEST_TARGETS += node-app-not-installed-ui-test

@@ -72,6 +72,19 @@ app_nav_route_available :: (app: *InnerBreeze, route: s32) -> bool {
     return app != null && (bit == 0 || (app.enabled_apps & CellsInstalledMask() & bit) != 0)
 }
 
+// An app the node offers opens only once it is on this device. Asking for
+// one that is not starts it when its package is here, or downloads it
+// again, and leaves the current page as it is.
+app_nav_node_app_ready :: (app: *InnerBreeze, slot: s32) -> bool {
+    if !app_nav_route_available(app, AppNavNodeRoute(slot)) {
+        return false
+    }
+    if !NodeAppInstalled(slot) && !PackagePending(NodeAppIndex(slot)) {
+        unused NodeAppInstall(NodeAppName(slot))
+    }
+    return NodeAppInstalled(slot)
+}
+
 c :: #system_library "c";
 app_leave_practice_config :: (app: *InnerBreeze) #foreign c;
 save_settings :: (app: *InnerBreeze) #foreign c;
@@ -323,11 +336,14 @@ app_apply_nav_route :: (app: *InnerBreeze, route: s32) {
     if app == null || !app_nav_route_available(app, route) {
         return
     }
+    slot := AppNavNodeSlot(route)
+    if slot >= 0 && !app_nav_node_app_ready(app, slot) {
+        return
+    }
     if habit_edit_request_leave(app, route) {
         return
     }
     if !SelfHostSave(app) { return }
-    slot := AppNavNodeSlot(route)
     if slot >= 0 {
         next := app_current_route(app)
         next.screen = ScreenNodeApp

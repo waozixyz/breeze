@@ -32,8 +32,9 @@
   carries the apps and updates them without a new app release, then each app
   you installed, including apps from the node.
 - Open web links in Lumi messages, and right-click a message to copy it.
-- Opening an installed app from the node no longer stays on "Installing this
-  app"; it starts, or downloads again if it cannot.
+- Apps from the node open only once they are on your device. An installed
+  one starts when you open it; one still downloading stays closed instead of
+  showing "Installing this app".
 
 ## [2.1.35] - 2026-10-17
 
