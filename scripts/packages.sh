@@ -16,6 +16,14 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
+# Builds started together share build/ziran-bootstrap and build/packages.
+# One run at a time: a concurrent relink once followed another run's fresh
+# links and planted self-links inside every package checkout.
+if [ -z "${PACKAGES_LOCK_HELD:-}" ] && command -v flock >/dev/null 2>&1; then
+    mkdir -p build
+    PACKAGES_LOCK_HELD=1 exec flock build/packages.lock sh "$root/scripts/packages.sh" "$@"
+fi
+
 flags=""
 for argument in "$@"; do
     case "$argument" in
