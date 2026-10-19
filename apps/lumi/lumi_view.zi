@@ -44,7 +44,6 @@ using TextWrap;
 using TextAlign;
 using ButtonTone;
 using ButtonEmphasis;
-using ContentAlignment;
 host_api :: #system_library "host_api";
 ReadLumiUiHost :: () -> LumiUiFrame #foreign host_api;
 WriteLumiUiHost :: (frame: LumiUiFrame) #foreign host_api;
@@ -595,7 +594,7 @@ LumiAvatar :: (index: s32, x: s32, y: s32) {
 
 // A row's press: a hold starts selecting, and while selecting a press starts
 // a sweep that follows the pointer, even off the row and past the chat.
-RowPress :: (index: s32, bounds: Rectangle, content_y: float32) {
+RowPress :: (index: s32, bounds: Rectangle, content_y: float32) -> PressResult {
     key := ifx index == 0 then 0 else RowSlot(index) + 1
     press := Press(frame.session, PressProps.{.key = cast(u64)(410000 + key), .bounds = bounds,
             .label = LumiViewLocaleHost("lumi_message"), .now = frame.now, .capture = selecting})
@@ -620,6 +619,7 @@ RowPress :: (index: s32, bounds: Rectangle, content_y: float32) {
         row_menu_x = press.x
         row_menu_y = press.y
     }
+    return press
 }
 
 // The menu a right click opens on a message. Returns the row whose words
@@ -640,20 +640,6 @@ RowMenu :: () -> s32 {
         row_menu_open = false
     }
     return ifx menu.activated_id == LUMI_MENU_COPY then index else -1
-}
-
-// A long link shows its start; the whole link opens.
-LumiLinkLabel :: (url: string) -> string {
-    if url.count <= 60 {
-        return url
-    }
-    end: s64 = 57
-    while end > 0 && (url[end] & cast(u8)192) == cast(u8)128 {
-        end -= 1
-    }
-    label: Vec(u8)
-    BuilderPrint(*label, "%…", url[:end])
-    return BuilderFinish(label)
 }
 
 // Lumi's title bar: its name, a connection button that switches between
@@ -833,7 +819,7 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
             bubble_width := width - Scale(ifx row.user then 60 else 80)
             left := x + Scale(48)
             // The whole row takes holds and sweeps; its buttons sit above it.
-            RowPress(index, Bounds(x, top, width, row_height - Scale(10)), history.content.y)
+            row_press := RowPress(index, Bounds(x, top, width, row_height - Scale(10)), history.content.y)
             if RowSlot(index) == sweep_anchor {
                 anchor_drawn = true
             }
@@ -866,9 +852,7 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
             }
             card_height := Scale(ifx row.kind == LUMI_CHAT_PROGRESS then 242 else
                 ifx row.kind == LUMI_CHAT_FEEDBACK then 54 else 0)
-            links := LumiMessageLinks(row.text)
-            links_height := links.count * Scale(LUMI_LINK_ROW)
-            text_height := row_height - text_top - Scale(16) - card_height - links_height
+            text_height := row_height - text_top - Scale(16) - card_height
             props := TextProps.{.key = cast(u64)(300403 + index * 4),
                 .bounds = Bounds(left + Scale(14), top + text_top,
                     bubble_width - Scale(28), text_height),
@@ -880,20 +864,22 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
                 props.text = TextFromBytes(formatted.bytes[:formatted.count])
                 props.strong = formatted.strong[:formatted.strong_count]
             }
-            Text(frame.session, props)
-            link_top := top + text_top + text_height
+            // Web links are part of the words, in the theme's link color,
+            // and a tap on one opens it, as in a chat app.
+            links := LumiMessageLinks(props.text)
+            link_ranges: [LUMI_LINKS_MAX]TextRange
             for link: cast(s32)0..links.count - 1 {
-                url := row.text[links.items[link].start:links.items[link].end]
-                if Button(frame.session, ButtonProps.{.id = 470000 + index * 4 + link,
-                        .bounds = Bounds(left + Scale(14), link_top + link * Scale(LUMI_LINK_ROW) + Scale(2),
-                            bubble_width - Scale(28), Scale(LUMI_LINK_ROW - 4)),
-                        .label = LumiLinkLabel(url), .tone = cast(ButtonTone)ButtonToneAccent,
-                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisLink,
-                        .content_alignment = cast(ContentAlignment)ContentAlignmentStart}) != 0 {
-                    unused OpenLinkHost(url)
+                link_ranges[link] = TextRange.{links.items[link].start, links.items[link].end}
+            }
+            props.links = link_ranges[:links.count]
+            Text(frame.session, props)
+            if row_press.clicked && !selecting && links.count > 0 {
+                tapped := TextLinkAt(frame.session, props, row_press.x, row_press.y)
+                if tapped >= 0 {
+                    unused OpenLinkHost(props.text[link_ranges[tapped].start:link_ranges[tapped].end])
                 }
             }
-            card_top := link_top + links_height + Scale(8)
+            card_top := top + text_top + text_height + Scale(8)
             if row.kind == LUMI_CHAT_PROGRESS {
                 ProgressCard(row, index, left + Scale(14), card_top, bubble_width - Scale(28))
             } else if row.kind == LUMI_CHAT_FEEDBACK {
@@ -920,7 +906,7 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
             anchor := SlotRow(sweep_anchor)
             if anchor >= 0 && anchor < frame.chat_count {
                 anchor_top := cast(s32)history.content.y + LumiRowOffsetHost(anchor)
-                RowPress(anchor, Bounds(x, anchor_top, width,
+                unused RowPress(anchor, Bounds(x, anchor_top, width,
                         ReadLumiChatRowHost(anchor).height - Scale(10)), history.content.y)
             }
         }
