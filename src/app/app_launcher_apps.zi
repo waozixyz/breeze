@@ -70,6 +70,10 @@ LauncherAppGroup :: struct {
 
 launcher_app_groups: [2]LauncherAppGroup;
 launcher_app_catalogs: [2]string;
+// Each group's catalog without its revision, and that revision. The Apps
+// controller keeps an unchanged catalog instead of parsing it every frame.
+launcher_app_catalog_bodies: [2]string;
+launcher_app_revisions: [2]s64;
 launcher_app_button_codec: WidgetButtonPropsCodec;
 
 LauncherAppPackage :: (route: s32) -> s32 {
@@ -134,7 +138,12 @@ LauncherAppService :: (context: *void, text: string) -> string {
     group := cast(*LauncherAppGroup)context
     request: Rules.AppsRequest
     if !Rules.AppsReadRequest(text, *request) { return "" }
-    if request.operation == Rules.APPS_CATALOG { return launcher_app_catalogs[group.index] }
+    if request.operation == Rules.APPS_CATALOG {
+        if request.revision > 0 && request.revision == launcher_app_revisions[group.index] {
+            return "{\"v\":1,\"unchanged\":true}"
+        }
+        return launcher_app_catalogs[group.index]
+    }
     if request.operation == Rules.APPS_STATUS {
         if request.request != group.sequence { return "" }
         return LauncherAppReply(group, group.status)
@@ -382,17 +391,27 @@ app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
             Controller.AppControllerPlatform.{.context = cast(*void)group,
                 .service = LauncherAppService, .widgets = LauncherAppWidgets}) { return false }
     }
-    PackageFree(launcher_app_catalogs[section])
     group.count = 0
     document: Vec(u8)
-    BuilderPrint(*document, "{\"v\":1,\"title\":\"\",\"locale\":")
+    BuilderPrint(*document, "\"title\":\"\",\"locale\":")
     Rules.AppsWriteQuoted(*document, LocaleActiveCode())
     BuilderPrint(*document, ",\"presentation\":{\"mode\":\"icon\",\"tile_class\":%,\"action_class\":%,\"muted_class\":%},\"children\":[",
         KssClassId(KssMakeName("launcher-tile")), KssClassId(KssMakeName("launcher-action")), KssClassId(KssMakeName("launcher-muted")))
     for route: routes { LauncherAppCatalogEntry(group, *document, route) }
     for offer: offers { LauncherAppCatalogEntry(group, *document, -1, offer) }
     BuilderPrint(*document, "]}")
-    launcher_app_catalogs[section] = BuilderFinish(document)
+    body := BuilderFinish(document)
+    if launcher_app_revisions[section] > 0 && body == launcher_app_catalog_bodies[section] {
+        PackageFree(body)
+    } else {
+        PackageFree(launcher_app_catalog_bodies[section])
+        launcher_app_catalog_bodies[section] = body
+        launcher_app_revisions[section] += 1
+        catalog: Vec(u8)
+        BuilderPrint(*catalog, "{\"v\":1,\"revision\":%,%", launcher_app_revisions[section], body)
+        PackageFree(launcher_app_catalogs[section])
+        launcher_app_catalogs[section] = BuilderFinish(catalog)
+    }
     group.controller.app.session = app.ui.session
     group.controller.app.bounds = bounds
     group.controller.app.dark = app.dark_mode != 0
