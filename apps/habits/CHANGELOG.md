@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.2.0] - 2026-10-19
+
+- The shop now comes with Habits, so it can improve with a Habits update.
+- Requires Inner Breeze 2.1.36 or later.
+
 ## [1.1.2] - 2026-10-18
 
 - Save, discard and delete confirmations use consistent controls and can

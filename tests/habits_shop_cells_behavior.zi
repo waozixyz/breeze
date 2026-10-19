@@ -1,0 +1,101 @@
+// The habit shop is Habits' own page: the bundled package draws it from the
+// frame the host gives it and reads each reward through the host, within
+// the calls the host allows Habits. The host never composes the page.
+#import "session"
+#import "geometry"
+#import "tree"
+#import "tree_draw"
+#import "paint_queue"
+#import "bundle_host"
+#import "byte_text_linux"
+#import "hosted_values"
+#import "widget_host"
+#import, file "../src/cells/module_host.zi";
+#import, file "../src/cells/habits_types.zi";
+#import, file "../src/cells/habits_ui_types.zi";
+#import, file "../src/cells/app_codec.zi";
+// Text, shapes and the clipboard as a host that draws nothing.
+#import, file "android_text_input_host.zi";
+
+using HostValueKind;
+
+shop_test_frame: HabitsShopFrame;
+shop_test_codec: WidgetHabitsShopFrameCodec;
+shop_test_reward_codec: WidgetHabitsShopRewardCodec;
+shop_test_reads: s32;
+shop_test_rows: s32;
+shop_test_written: bool;
+
+ShopTestAssets :: (path: string) -> bool {
+    return path.count == 0
+}
+
+ShopTestCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "shop_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadHabitsShopHost" && count == 0 {
+        shop_test_reads += 1
+        result.* = WidgetEncodeHabitsShopFrame(shop_test_frame, *shop_test_codec)
+        return 1
+    }
+    if name == "WriteHabitsShopHost" && count == 1 && WidgetValidHabitsShopFrame(arguments[0]) {
+        shop_test_written = true
+        shop_test_frame.action = WidgetDecodeHabitsShopFrame(arguments[0], *shop_test_codec).action
+        return 1
+    }
+    if name == "ReadHabitRewardHost" && count == 1 {
+        shop_test_rows += 1
+        result.* = WidgetEncodeHabitsShopReward(HabitsShopReward.{.id = "reward-1",
+                .name = "Joint", .price = 5, .icon = 48}, *shop_test_reward_codec)
+        return 1
+    }
+    if name == "HabitsLocaleHost" && count == 1 {
+        text := "Shop"
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
+}
+
+// Draws the shop with two rewards and the grid of symbols open; returns 0
+// when the package drew it through the host.
+CheckHabitShop :: () -> s32 {
+    session := SessionOpen()
+    bounds := Rectangle.{0.0, 0.0, 400.0, 900.0}
+    BeginFrame(session, cast(u64)1, bounds)
+    shop_test_frame = HabitsShopFrame.{.session = session, .scale = 1.0,
+        .bounds = bounds, .view_width = 400, .font = 16, .small_font = 13,
+        .halves = 20, .reward_count = 2, .price = 5, .price_text = "5",
+        .icon = 38, .icon_open = true}
+    WidgetHostBegin(session, ShopTestAssets)
+    CellsUiBegin(ShopTestCall, null)
+    drawn := HabitsRun(HabitsMessage.{.action = HABITS_SHOP_VIEW})
+    CellsUiEnd()
+    WidgetHostEnd()
+    painted := PendingPaintCount(session)
+    unused EndFrame(session)
+    unused SessionClose(session)
+    if !drawn.succeeded { return 1 }
+    if shop_test_reads != 1 || !shop_test_written { return 2 }
+    if shop_test_rows != 2 { return 3 }
+    if painted == 0 { return 4 }
+    if shop_test_frame.action != HABITS_SHOP_NONE { return 5 }
+    return 0
+}
+
+// The shop's coins and symbols ask an image's size; this run draws none.
+#program_export
+ImageWidth :: (path: string) -> s32 {
+    unused path
+    return 0
+}
+
+#program_export
+ImageHeight :: (path: string) -> s32 {
+    unused path
+    return 0
+}

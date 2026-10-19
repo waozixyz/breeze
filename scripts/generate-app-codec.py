@@ -18,7 +18,8 @@ APP_TYPES = ['diary_ui_types', 'inbe_ui_types', 'lists_ui_types', 'lumi_ui_types
              'lumi_types', 'leaderboard_ui_types', 'habits_ui_types']
 ROOTS = ['DiaryUiFrame', 'InbeUiFrame', 'ListsUiFrame', 'ListsUiRow', 'ListsUiPerson', 'ListsUiRequest', 'LumiUiFrame',
          'LumiChatRow', 'LumiTask', 'LumiAction', 'LumiTools', 'LumiDonation',
-         'LeaderboardUiFrame', 'LeaderboardUiRow', 'HabitsUiFrame']
+         'LeaderboardUiFrame', 'LeaderboardUiRow', 'HabitsUiFrame', 'HabitsShopFrame',
+         'HabitsShopReward']
 
 command = [sys.executable, str(KRYON / 'scripts/generate-widget-codecs.py'),
            '--output', str(ROOT / 'src/cells/app_codec.zi'),

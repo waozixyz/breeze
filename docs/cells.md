@@ -20,6 +20,10 @@ habit's count dialog in its package (`apps/habits/habits_view.zi`); its
 table, editor, entries, history and statistics, and Practices' screens,
 still use compiled screen compositions; migrating those screens is required
 before every visual change can ship without rebuilding the wrapper.
+The habit shop is Habits' own page as well (`apps/habits/shop_view.zi`): the
+package draws the coins, the rewards and the form and asks the wrapper to
+save, delete or buy a reward; the wrapper checks each request against what
+is stored, so a reward is bought only at its stored price with enough coins.
 
 ## Shared app interface
 
