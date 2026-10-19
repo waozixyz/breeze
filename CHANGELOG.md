@@ -23,6 +23,8 @@
   updates while keeping existing data and older installed packages working.
 - Developer replies to your feedback appear in Lumi as replies from the
   developer, quoting the feedback they answer, like a reply in a chat app.
+- Settings › About lists the version of the Inbe harness, the package that
+  carries the apps and updates them without a new app release.
 
 ## [2.1.35] - 2026-10-17
 
