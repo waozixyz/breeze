@@ -65,6 +65,9 @@ def validate(root):
             raise ValueError(f"{name}: invalid release sequence")
         if "bundled" in component:
             raise ValueError(f"{name}: an app the node offers is never bundled")
+        # A beta app is listed only where a person shows beta apps.
+        if "beta" in component and component["beta"] is not True:
+            raise ValueError(f"{name}: beta is true or absent")
         host = component.get("host_api", ledger["host_api"])
         if type(host) is not int or not ledger["oldest_host_api"] <= host <= ledger["host_api"]:
             raise ValueError(f"{name}: host_api must be between oldest_host_api and host_api")

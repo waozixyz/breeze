@@ -547,8 +547,14 @@ originals and previews after each good sync:
   Removing a node forgets its session and its `diary_blobs` rows. Delegate
   (Telegram) accounts never move copies.
 
-`python3 scripts/package-release.py --node-app photos --beta --store ...
---key ... --key-id ...` stages its beta release, as for Chess. `make
+Photos is `"beta": true` in the ledger, so its releases are signed for the
+beta channel. The App packages workflow builds every app the node offers and
+publishes each one whose ledger names a newer release than the node serves
+(`package-release.py --node-apps`). An app the node does not list yet is
+reported and skipped: registering it takes the node operator's key. With each
+publication the node's importer writes `history-v2.json`, the app's newest
+three releases, which the node offers for going back to an earlier version;
+`--write-history` rewrites every app's history. `make
 media-store-test media-metadata-test photos-app-test` check the library, the
 Exif reader and the app through the real host; `make sync-server-test`
 (`DAOCHI_BIN=...`) adds a photo on one device and opens it on another through

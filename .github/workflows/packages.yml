@@ -11,6 +11,7 @@ on:
       - 'scripts/prepare-package-assets.py'
       - 'src/**'
       - 'scripts/build-cells.sh'
+      - 'scripts/build-node-apps.sh'
       - 'scripts/package-release.py'
       - 'scripts/practice_content.py'
       - 'design/tai-chi/narration*.json'
@@ -40,7 +41,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: ./.github/actions/ziran-packages
       - name: Install signing and test dependencies
         run: |
@@ -52,7 +53,7 @@ jobs:
           make package-workflow-test
           make package-manifest-test
           make package-upload-test
-          make cells build-laws
+          make cells node-apps build-laws
           python3 tests/package_release_test.py
       - name: Run new packages in the last released app
         run: python3 tests/package_compat_test.py --skip-forward
@@ -112,13 +113,29 @@ jobs:
             --key "$RUNNER_TEMP/inbe-publisher/publisher.pem" --key-id "$KEY_ID" \
             --ssh-target "$TARGET" --remote-store "$STORE" \
             --verify-origin https://api.waozi.xyz
+      # Each app the node offers publishes on its own when its ledger names a
+      # newer release; the node keeps its newest three releases for rollback.
+      - name: Publish new releases of the apps the node offers
+        if: steps.publisher.outputs.configured == 'true'
+        env:
+          KEY_ID: ${{ vars.INBE_PACKAGE_KEY_ID }}
+          TARGET: ${{ secrets.INBE_NODE_SSH_TARGET }}
+          STORE: ${{ secrets.INBE_NODE_PACKAGE_STORE }}
+        run: |
+          export INBE_SSH_IDENTITY="$RUNNER_TEMP/inbe-publisher/node.key"
+          export INBE_SSH_KNOWN_HOSTS="$RUNNER_TEMP/inbe-publisher/known_hosts"
+          python3 scripts/package-release.py --node-apps --store build/package-releases \
+            --key "$RUNNER_TEMP/inbe-publisher/publisher.pem" --key-id "$KEY_ID" \
+            --ssh-target "$TARGET" --remote-store "$STORE" \
+            --verify-origin https://api.waozi.xyz
       - name: Archive packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: inbe-app-packages
           path: |
             build/inbe.zib
             build/cells/*.zib
+            build/node-apps/*.zib
             build/package-releases/
           if-no-files-found: error
       - name: Remove signing material

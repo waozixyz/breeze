@@ -83,6 +83,32 @@ class PackageWorkflowTest(unittest.TestCase):
                 else:
                     self.assertIn("--ssh-target test@example.invalid --remote-store /test/packages", commands[-1])
 
+    def test_apps_the_node_offers_publish_with_the_upload_key(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "commands"
+            stub = ("python3() { printf '%s %s %s\\n' \"$INBE_SSH_IDENTITY\" \"$INBE_SSH_KNOWN_HOSTS\" \"$*\" >> "
+                    + shlex.quote(str(log)) + "; }\n")
+            env = os.environ | {"RUNNER_TEMP": temporary, "KEY_ID": "test",
+                                "TARGET": "test@example.invalid", "STORE": "/test/packages"}
+            result = subprocess.run(["bash", "-eu"],
+                                    input=stub + script("Publish new releases of the apps the node offers"),
+                                    text=True, capture_output=True, env=env, check=True)
+            self.assertEqual(result.stderr, "")
+            command = log.read_text().splitlines()[-1]
+            self.assertTrue(command.startswith(f"{temporary}/inbe-publisher/node.key "
+                                               f"{temporary}/inbe-publisher/known_hosts "
+                                               "scripts/package-release.py --node-apps "))
+            for argument in ("--key-id test", "--ssh-target test@example.invalid",
+                             "--remote-store /test/packages", "--verify-origin https://api.waozi.xyz"):
+                self.assertIn(argument, command)
+
+    def test_actions_are_pinned_to_commits(self):
+        for path in (WORKFLOW, ROOT / ".github/actions/ziran-packages/action.yml"):
+            for line in path.read_text().splitlines():
+                if "uses: actions/" in line:
+                    reference = line.split("@", 1)[1].split()[0]
+                    self.assertRegex(reference, r"\A[0-9a-f]{40}\Z", line)
+
 
 if __name__ == "__main__":
     unittest.main()

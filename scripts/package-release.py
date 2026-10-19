@@ -42,6 +42,9 @@ def trusted_pin(publishers, key_id, app_id):
                  (app_id in pin["app_ids"] or
                   (node_app_id(app_id) and "inbe." in pin.get("app_prefixes", [])))), None)
 VERSION = re.compile(r"(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\Z")
+# The node offers each app's newest three releases, so a person can go back
+# to an earlier version that still runs on their device.
+RETAINED_RELEASES = 3
 
 
 def signing_message(value):
@@ -72,6 +75,45 @@ def atomic_write(path, data):
             os.close(directory)
     finally:
         Path(name).unlink(missing_ok=True)
+
+
+def write_history(directory, app_id, publishers):
+    """Lists the newest three releases, newest first, in history-v2.json.
+
+    Every release stays archived. The history names the newest ones the node
+    still trusts and still has the bundle for.
+    """
+    releases = []
+    for path in directory.glob("release-*.json"):
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 65536:
+            continue
+        try:
+            value = json.loads(path.read_bytes())
+            validate_release(value, app_id, publishers)
+        except (ValueError, KeyError, TypeError):
+            continue
+        payload = directory / (value["artifacts"][0]["sha256"] + ".zib")
+        if path.name == f"release-{value['sequence']}.json" and payload.is_file():
+            releases.append(value)
+    if not releases:
+        return
+    releases.sort(key=lambda value: value["sequence"], reverse=True)
+    history = dict(versions=releases[:RETAINED_RELEASES])
+    atomic_write(directory / "history-v2.json", (json.dumps(history, separators=(",", ":")) + "\n").encode())
+
+
+def write_histories(store, publishers_path):
+    """Writes the history of every app in the store, under its publication lock."""
+    publishers = json.loads(publishers_path.read_text())
+    for directory in sorted(store.iterdir()):
+        app_id = directory.name
+        if directory.is_symlink() or not directory.is_dir() or \
+                (app_id not in BUNDLED_IDS and not node_app_id(app_id)) or \
+                not (directory / "latest-v2.json").is_file():
+            continue
+        with (directory / ".publish.lock").open("a+b") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            write_history(directory, app_id, publishers)
 
 
 def stage(store, key_path, key_id, publishers_path=None, *, build_directory=None):
@@ -628,6 +670,7 @@ def import_archive(archive, store, publishers_path=None):
                                                      until=until)).encode())
             elif changed or (rollout is not None and rollout["percent"] == 100):
                 staged.unlink(missing_ok=True)
+            write_history(directory, app_id, publishers)
     archive.unlink()
     archive.parent.rmdir()
 
@@ -649,7 +692,7 @@ def node_app_release(name, key, key_id, beta=False, ledger_path=None, bundle_dir
                  artifacts=[dict(variant="module", sha256=sha256(data).hexdigest(), size=len(data))],
                  dependencies=[])
     value["signature"] = key.sign(signing_message(value)).hex()
-    if beta:
+    if beta or component.get("beta") is True:
         value["channel"] = "beta"
     return value, data
 
@@ -669,11 +712,11 @@ def stage_node_app(store, name, key_path, key_id, publishers_path=None, beta=Fal
     encoded = (json.dumps(value, separators=(",", ":")) + "\n").encode()
     with (directory / ".publish.lock").open("a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        write_node_app(directory, value, encoded, data)
+        write_node_app(directory, value, encoded, data, publishers)
     return value
 
 
-def write_node_app(directory, value, encoded, data):
+def write_node_app(directory, value, encoded, data, publishers):
     """Publishes one release of an app the node offers into its directory."""
     current = directory / "latest-v2.json"
     if current.exists():
@@ -691,6 +734,7 @@ def write_node_app(directory, value, encoded, data):
     atomic_write(payload.with_name(payload.name + ".release-v2.json"), encoded)
     atomic_write(archive, encoded)
     atomic_write(current, encoded)
+    write_history(directory, value["app_id"], publishers)
 
 
 def import_node_app(entries, store, publishers, app_id):
@@ -716,7 +760,7 @@ def import_node_app(entries, store, publishers, app_id):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (directory / ".publish.lock").open("a+b") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        write_node_app(directory, value, encoded, data)
+        write_node_app(directory, value, encoded, data, publishers)
 
 
 def publish_node_app(store, name, target, remote_store):
@@ -763,6 +807,52 @@ def verify_node_app(store, name, origin, open_url=open_public_url):
     print(f"Verified the public release of {app_id}")
 
 
+def registered_apps(origin, open_url=open_public_url):
+    """The app IDs the node's registry lists as active."""
+    with open_url(origin.rstrip("/") + "/api/v1/apps", timeout=30) as response:
+        listing = json.loads(response.read(1048577))
+    return {app.get("app_id") for app in listing.get("apps", []) if app.get("status") == "active"}
+
+
+def served_release(origin, app_id, open_url=open_public_url):
+    """The release the node serves for app_id, or None before its first."""
+    try:
+        with open_url(origin.rstrip("/") + "/api/v2/packages/" + app_id + "/latest?bucket=0",
+                      timeout=30) as response:
+            encoded = response.read(65537)
+    except HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
+    if len(encoded) > 65536:
+        raise ValueError(f"{app_id}: public release metadata is too large")
+    return json.loads(encoded)
+
+
+def publish_node_apps(store, key_path, key_id, target, remote_store, origin, publishers_path=None,
+                      ledger_path=None, bundle_directory=None, open_url=open_public_url):
+    """Publishes every app the node offers whose ledger names a newer release.
+
+    Registering an app takes the node operator's key, which stays with the
+    operator, so an app the node does not list yet is reported and skipped.
+    """
+    ledger = json.loads((ledger_path or ROOT / "apps/versions.json").read_text())
+    registered = registered_apps(origin, open_url)
+    for name, component in sorted(ledger.get("node_apps", {}).items()):
+        app_id = component["id"]
+        if app_id not in registered:
+            print(f"::warning title=App packages::{app_id} is not registered on the node, so it was not published")
+            continue
+        served = served_release(origin, app_id, open_url)
+        if served is not None and served["sequence"] >= component["sequence"]:
+            print(f"{app_id} {served['version']} is already published")
+            continue
+        stage_node_app(store, name, key_path, key_id, publishers_path,
+                       ledger_path=ledger_path, bundle_directory=bundle_directory)
+        publish_node_app(store, name, target, remote_store)
+        verify_node_app(store, name, origin, open_url)
+
+
 def receive_archive(store, publishers_path):
     if shlex.split(os.environ.get("SSH_ORIGINAL_COMMAND", "")) != ["inbe-packages", str(store)]:
         raise ValueError("upload key permits only publication to its configured package store")
@@ -799,12 +889,30 @@ def main():
                         help='restore only the missing Sun Salutation picture pack')
     parser.add_argument('--repair-release', type=Path, help='existing signed Practices metadata for a content repair')
     parser.add_argument("--node-app", help="stage, and with --ssh-target publish, only this app the node offers")
+    parser.add_argument("--node-apps", action="store_true",
+                        help="publish every app the node offers whose ledger names a newer release")
+    parser.add_argument("--write-history", action="store_true",
+                        help="on the node: list each app's newest three releases for rollback")
     parser.add_argument("--app-ledger", type=Path, help="owning project's node-app version ledger")
     parser.add_argument("--bundle-directory", type=Path, help="owning project's built node-app bundles")
     parser.add_argument("--beta", action="store_true",
                         help="with --node-app: publish it as beta, listed only where beta apps are shown")
     args = parser.parse_args()
     try:
+        if args.node_apps:
+            if not (args.key and args.key_id and args.ssh_target and args.remote_store and args.verify_origin) or \
+                    args.rollout is not None:
+                parser.error("--node-apps needs --key, --key-id, --ssh-target, --remote-store and "
+                             "--verify-origin, without --rollout")
+            publish_node_apps(args.store, args.key, args.key_id, args.ssh_target, args.remote_store,
+                              args.verify_origin, args.publishers, args.app_ledger, args.bundle_directory)
+            return
+        if args.write_history:
+            if not args.publishers:
+                parser.error("--write-history needs the node's --publishers")
+            write_histories(args.store, args.publishers)
+            print("Release histories written")
+            return
         if args.node_app:
             if not args.key or not args.key_id or args.rollout is not None:
                 parser.error("--node-app needs --key and --key-id, without --rollout")
