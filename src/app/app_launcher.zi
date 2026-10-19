@@ -13,6 +13,7 @@
 #import, file "locale.zi";
 #import, file "metrics.zi";
 #import, file "text_buffers.zi";
+#import, file "smooth_frames.zi";
 #import, file "app_size.zi";
 #import, file "assets.zi";
 #import, file "widgets.zi";
@@ -158,8 +159,13 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
     }
     card.disabled = blocked
     card.fit_content = true
-    // An app the node offers has a card only while it is installed.
-    installed := (app.enabled_apps & app_nav_route_bit(route)) != 0 || AppNavNodeSlot(route) >= 0
+    // An app the node offers has a card only while it is installed; it is
+    // on this device once its package is, and until then shows the download
+    // symbol, and its progress while it downloads.
+    node_slot := AppNavNodeSlot(route)
+    installed := (app.enabled_apps & app_nav_route_bit(route)) != 0 || node_slot >= 0
+    on_device := installed && (node_slot < 0 || NodeAppInstalled(node_slot))
+    downloading := installed && !on_device && PackagePending(NodeAppIndex(node_slot))
     tapped := !card.disabled && app_launcher_drag_card(app, card, route, vertical)
     activated := Button(app.ui.session, card) != 0 || tapped
     node := TreeSubmitted(app.ui.session, TreeCurrentParent(app.ui.session),
@@ -179,7 +185,19 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
         }
     }
     size_text: [32]u8
-    if AppBundleSizeText(bytes, size_text[:]) {
+    shown := AppBundleSizeText(bytes, size_text[:])
+    if downloading {
+        percent := PackageProgress(NodeAppIndex(node_slot), bytes)
+        if percent >= 0 {
+            FormatLocaleCount(*size_text[0], cast(s64)size_text.count, "launcher_downloading_progress", percent)
+        } else {
+            unused AppCopyText(LocaleText("update_downloading"), size_text[:])
+        }
+        shown = true
+        // The percentage moves while nothing else on the screen does.
+        AppRequestSmoothFrames(2)
+    }
+    if shown {
         size_bounds := card.bounds
         size_bounds.x += cast(float32)AppScale(ifx vertical then 8 else 48)
         size_bounds.y += bounds.height - cast(float32)AppScale(16)
@@ -206,9 +224,9 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
         bounds.x + bounds.width - cast(float32)(action_size + action_inset),
         bounds.y + cast(float32)action_inset,
         cast(float32)action_size, cast(float32)action_size}
-    action.label = LocaleText(ifx installed then "launcher_app_options" else "launcher_install")
+    action.label = LocaleText(ifx on_device then "launcher_app_options" else "launcher_install")
     action.icon_only = true
-    if installed {
+    if on_device {
         action.icon_shape = "S3rr:M12 5H12.01M12 12H12.01M12 19H12.01"
     } else {
         action.icon_shape = "S1.6rr:M12 3V15M7 10L12 15L17 10M5 20H19"
@@ -219,11 +237,14 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
         action.tone = cast(ButtonTone)ButtonToneAccent
     }
     action.fit_content = true
-    action.disabled = blocked
+    action.disabled = blocked || downloading
     if Button(app.ui.session, action) != 0 {
-        if installed {
+        if on_device {
             launcher_menu_route = route
             launcher_menu_anchor = Vector2.{action.bounds.x, action.bounds.y + action.bounds.height}
+        } else if installed {
+            // Its package downloads; the card opens the app once it is here.
+            unused app_nav_node_app_ready(app, node_slot)
         } else {
             unused app_launcher_install(app, route)
         }

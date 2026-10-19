@@ -5,6 +5,7 @@
 - Inner Breeze starts several times faster: installed apps such as Arcade open when you go to them.
 - Opening Arcade takes a moment instead of several seconds on slower phones.
 - An app you tap while it is still downloading opens as soon as it is ready.
+- An app not yet on this device shows a download symbol, and its card shows the download's progress.
 - Lists, Habits, Apps, Lumi, Arcade and Pushy draw faster and scroll more smoothly.
 - Scrolling Habits no longer moves or opens a habit; hold a habit a little longer to move it.
 - Drag the border beside habit names to widen or narrow the names column.
