@@ -131,6 +131,68 @@ storage_get_setting_int :: (key: string, fallback: s32) -> s32 {
     return fallback
 }
 
+// Dew, Lumi, sync and app versions read settings on every frame, and each
+// read prepared its SQL again: a sixth of a phone's frame. Short values are
+// kept until stored data or the user changes (see storage_data_revision).
+SETTINGS_CACHE_SLOTS :: 64
+SETTINGS_CACHE_KEY :: 96
+SETTINGS_CACHE_VALUE :: 512
+SettingsCacheEntry :: struct {
+    key: [SETTINGS_CACHE_KEY]u8
+    key_count: s32
+    value: [SETTINGS_CACHE_VALUE]u8
+    value_count: s32
+}
+settings_cache: [SETTINGS_CACHE_SLOTS]SettingsCacheEntry;
+settings_cache_count: s32;
+settings_cache_next: s32;
+settings_cache_revision: s64 = -1;
+settings_cache_user: [64]u8;
+
+// The slot holding `key`, or -1, after emptying the cache when stored data
+// or the user changed. Hold the connection's mutex: threads share the cache.
+SettingsCacheFind :: (key: string) -> s32 {
+    revision := storage_data_revision()
+    user := storage_user_id_buffer()
+    same_user := true
+    for at: cast(s32)0..63 {
+        if settings_cache_user[at] != user[at] { same_user = false; break }
+        if user[at] == cast(u8)0 { break }
+    }
+    if revision != settings_cache_revision || !same_user {
+        settings_cache_count = 0
+        settings_cache_next = 0
+        settings_cache_revision = revision
+        for at: cast(s32)0..63 {
+            settings_cache_user[at] = user[at]
+            if user[at] == cast(u8)0 { break }
+        }
+        return -1
+    }
+    for slot: cast(s32)0..settings_cache_count - 1 {
+        entry := *settings_cache[slot]
+        if entry.key_count == cast(s32)key.count &&
+            TextFromBytes(entry.key[:entry.key_count]) == key { return slot }
+    }
+    return -1
+}
+
+SettingsCacheStore :: (key: string, value: string) {
+    if value.count >= SETTINGS_CACHE_VALUE { return }
+    slot := settings_cache_count
+    if slot < SETTINGS_CACHE_SLOTS {
+        settings_cache_count += 1
+    } else {
+        slot = settings_cache_next
+        settings_cache_next = (settings_cache_next + 1) % SETTINGS_CACHE_SLOTS
+    }
+    entry := *settings_cache[slot]
+    for at: cast(s32)0..cast(s32)key.count - 1 { entry.key[at] = key[at] }
+    entry.key_count = cast(s32)key.count
+    for at: cast(s32)0..cast(s32)value.count - 1 { entry.value[at] = value[at] }
+    entry.value_count = cast(s32)value.count
+}
+
 #program_export
 storage_get_setting_text :: (key: string) -> string {
     stmt: *void = null
@@ -141,6 +203,27 @@ storage_get_setting_text :: (key: string) -> string {
     text_value[0] = cast(u8)0
     if storage_db_handle() == null || key.count == 0 {
         return ""
+    }
+    cached := key.count < SETTINGS_CACHE_KEY
+    mutex := sqlite3_db_mutex(storage_db_handle())
+    if cached {
+        sqlite3_mutex_enter(mutex)
+        slot := SettingsCacheFind(key)
+        if slot >= 0 {
+            entry := *settings_cache[slot]
+            for at: cast(s32)0..entry.value_count - 1 { text_value[at] = entry.value[at] }
+            text_value[entry.value_count] = cast(u8)0
+            sqlite3_mutex_leave(mutex)
+            if entry.value_count == 0 {
+                return ""
+            }
+            return AppTextFromCString(text_value, 8192)
+        }
+    }
+    defer {
+        if cached {
+            sqlite3_mutex_leave(mutex)
+        }
     }
     settings_sql: [128] u8
     AppCopyText("SELECT value FROM settings WHERE user_id=?1 AND key=?2", settings_sql[:])
@@ -155,10 +238,11 @@ storage_get_setting_text :: (key: string) -> string {
             BytesFromPointer(text_value, 8192))
     }
     SqliteFinalize(stmt)
-    if text_value[0] != cast(u8)0 {
-        return AppTextFromCString(text_value, 8192)
+    value := ifx text_value[0] != cast(u8)0 then AppTextFromCString(text_value, 8192) else ""
+    if cached {
+        SettingsCacheStore(key, value)
     }
-    return ""
+    return value
 }
 
 #program_export
