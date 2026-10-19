@@ -1,0 +1,119 @@
+// Apps that replace an app the node offered before (NodeAppReplacement).
+// More apps lists the replacement instead, and an account that installed
+// the replaced app gets the replacement. The replaced app goes once the
+// replacement runs on this device and carries it as a verified child: the
+// collection lists inbe.<name> and is signed by the publisher allowed to
+// offer <name>, so the child keeps <name>'s records and shared games
+// (NodeTreeLegacyOwner). Its records are never deleted.
+#import "apps/tree"
+#import "apps/catalog"
+#import "std/byte_text_linux"
+#import "std/vec"
+#import "std/text_buffer"
+#import, file "catalog.zi";
+#import, file "node_apps.zi";
+#import, file "node_app_runner.zi";
+#import, file "package_manager.zi";
+#import, file "package_files.zi";
+#import, file "package_release.zi";
+#import, file "../storage/app_records.zi";
+#import, file "../app/settings_store.zi";
+
+// Offered by the node itself, not by a local file, and listed in More apps.
+NodeAppNodeOffers :: (name: string) -> bool {
+    if name.count == 0 || NodeAppLocal(name) {
+        return false
+    }
+    for index: cast(s32)0..NodeAppOfferCount() - 1 {
+        if NodeAppOfferName(index) == name {
+            return NodeAppOfferVisible(index)
+        }
+    }
+    return false
+}
+
+// Whether the signed collection running in `slot` carries `name` as a child
+// with its historical identity and publisher.
+NodeAppCarries :: (slot: s32, name: string) -> bool {
+    if slot < 0 || slot >= NodeAppSlots || !NodeAppNameValid(name) ||
+    NodeAppLocal(NodeAppName(slot)) {
+        return false
+    }
+    host := node_runners[slot].nested
+    if host == null {
+        return false
+    }
+    root := AppTreeNode(*host.tree, AppHandle.{0, 1})
+    if root == null || !root.collection {
+        return false
+    }
+    expected := PackageText("inbe.", name)
+    defer {
+        PackageFree(expected)
+    }
+    child := AppCatalogAt(*root.catalog, AppCatalogFind(*root.catalog, expected))
+    if child == null || TextUntilNul(child.expected_id[:]) != name {
+        return false
+    }
+    release := package_cached_releases[NodeAppIndex(slot)]
+    if !release.valid {
+        return false
+    }
+    metadata: Vec(u8)
+    BuilderPrint(*metadata, "{\"key_id\":\"%\"}", TextUntilNul(release.key_id[:]))
+    text := BuilderFinish(metadata)
+    defer {
+        PackageFree(text)
+    }
+    authority: [65]u8
+    if !PackageTrustedKeyFor(text, expected, authority[:]) {
+        return false
+    }
+    return TextUntilNul(authority[:]) == TextUntilNul(root.identity.authority[:])
+}
+
+// The replacement of `name` runs here and carries it.
+NodeAppReplacedHere :: (name: string) -> bool {
+    replacement := NodeAppReplacement(name)
+    if replacement.count == 0 {
+        return false
+    }
+    return NodeAppCarries(NodeAppSlotFor(replacement), name)
+}
+
+// More apps leaves out an app whose replacement the node offers or that
+// already runs here.
+NodeAppOfferReplaced :: (name: string) -> bool {
+    replacement := NodeAppReplacement(name)
+    if replacement.count == 0 {
+        return false
+    }
+    return NodeAppNodeOffers(replacement) || NodeAppReplacedHere(name)
+}
+
+// Installs the replacement for an account that installed a replaced app,
+// then removes the replaced app once the replacement carries it. Runs with
+// the reconcile, after choices synced from the account's other devices.
+NodeAppsReplace :: () {
+    for index: cast(s32)0..NODE_APP_REPLACED_COUNT - 1 {
+        name := NodeAppReplaced(index)
+        replacement := NodeAppReplacement(name)
+        // Device-local: this device installed the replacement once already.
+        key := PackageText("node_app_replaced_", name)
+        attempted := SettingsReadInt(key, 0) != 0
+        step := NodeAppReplacementStep(NodeAppMarked(name), NodeAppNodeOffers(replacement),
+            NodeAppMarked(replacement), NodeAppReplacedHere(name), attempted)
+        if step == NODE_APP_REPLACE_INSTALL {
+            unused SettingsStoreInt(key, 1)
+            unused NodeAppInstall(replacement)
+        } else if step == NODE_APP_REPLACE_RETIRE {
+            retired := NodeAppSlotFor(name)
+            if retired >= 0 {
+                NodeAppUninstall(retired)
+            } else {
+                NodeAppSetMark(name, false)
+            }
+        }
+        PackageFree(key)
+    }
+}

@@ -29,6 +29,7 @@ Time :: #import "date_time_linux";
 #import "apps/node_codec"
 #import, file "node_app_tree.zi";
 #import, file "node_app_snapshot.zi";
+#import, file "node_app_replacements.zi";
 #import, file "achievement_media.zi";
 Nested :: #import "apps/host";
 #import, file "package_manager.zi";
@@ -294,8 +295,13 @@ NodeAppOfferSize :: (index: s32) -> s64 {
     return node_offers[index].size
 }
 
-// Whether More apps lists an offer: beta ones only while beta apps are shown.
+// Whether More apps lists an offer: beta ones only while beta apps are
+// shown, and none that an app the node offers replaced.
 NodeAppOfferShown :: (index: s32) -> bool {
+    return NodeAppOfferVisible(index) && !NodeAppOfferReplaced(NodeAppOfferName(index))
+}
+
+NodeAppOfferVisible :: (index: s32) -> bool {
     return index >= 0 && index < node_offer_count && (!node_offers[index].beta || NodeAppBetaShown())
 }
 
@@ -505,7 +511,7 @@ NodeAppsReconcile :: () {
     index: s32 = 0
     while index < node_offer_count {
         name := TextUntilNul(node_offers[index].name[:])
-        if NodeAppSlotFor(name) < 0 && NodeAppMarked(name) {
+        if NodeAppSlotFor(name) < 0 && NodeAppMarked(name) && !NodeAppReplacedHere(name) {
             unused NodeAppInstall(name)
         }
         index += 1
@@ -1552,6 +1558,7 @@ NodeAppsPump :: (now: s32, catalog_wanted: bool) {
     if now - node_reconciled_at >= 2 || now < node_reconciled_at {
         node_reconciled_at = now
         NodeAppsReconcile()
+        NodeAppsReplace()
     }
 }
 
