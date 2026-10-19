@@ -13,6 +13,7 @@
 #import "hosted_values"
 #import "widget_host"
 #import "hosted_app"
+#import "bundle_preload"
 #import "kryon/app_context_host"
 Portable :: #import "kryon/app_protocol";
 #import "geometry"
@@ -508,10 +509,10 @@ ModuleRun :: (slot: *ModuleSlot) -> bool {
     return answer == 0 && slot.received
 }
 
-ModuleOpen :: (slot: *ModuleSlot, bytes: string, kind: s32) -> bool {
+ModuleOpen :: (slot: *ModuleSlot, bytes: string, kind: s32, preload: s32 = -1) -> bool {
     slot.kind = kind
     slot.bundle_bytes = 0
-    if !HostedAppOpen(*slot.app, bytes) || !ModuleInstantiate(slot) {
+    if !HostedAppOpenPreloaded(*slot.app, bytes, preload) || !ModuleInstantiate(slot) {
         return false
     }
     slot.bundle_bytes = bytes.count
@@ -912,6 +913,16 @@ CellsOpenPackage :: (bytes: string) -> bool {
     if ready {
         ready = ModulePackageAssetsValid(slots[3].app.bundle, false)
     }
+    // Every cell's program is read and checked at once, each on its own
+    // thread: one after another kept a phone from its first frame for over
+    // three seconds.
+    preloads: [PackageCount]s32
+    for index: cast(s32)0..PackageCount - 1 {
+        preloads[index] = -1
+        if ready && index < PackageCount - 1 {
+            preloads[index] = BundlePreloadStart(PackageFeature(index))
+        }
+    }
     if ready {
         index: s32 = 0
         while ready && index < PackageCount - 1 {
@@ -924,12 +935,15 @@ CellsOpenPackage :: (bytes: string) -> bool {
 
                 slot := ModuleSlotForPackage(index + 1)
                 kind := ModuleKindForPackage(index + 1)
-                ready = ModuleOpen(*slots[slot], feature, kind) &&
+                ready = ModuleOpen(*slots[slot], feature, kind, preloads[index]) &&
                 ModuleFeatureAssetsValid(slots[slot].app.bundle, kind)
+                preloads[index] = -1
             }
             index += 1
         }
     }
+    // A failed cell stops the loop; the rest still read the root's bytes.
+    for preload: preloads { BundlePreloadDiscard(preload) }
     identifying = false
     if !ready {
         CellsClose()
