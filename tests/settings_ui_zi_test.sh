@@ -24,7 +24,7 @@ for generated in "$work/c"/*.c "$work/c/screens/settings"/*.c; do
     set -- "$@" "$generated"
 done
 "${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \
-    -Wl,--gc-sections -I"$root/build/packages/ziran/include" -I"$work/c" \
+    -Wl,--gc-sections -I"$root/build/packages/ziran/include" -I"$work/c" -I"$work/c/screens/settings" \
     "$@" -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 mkdir -p "$work/device"

@@ -46,8 +46,8 @@ C
 "${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
     -I"$include" -I"$work/generated" -I"$root/vendor-builds/sqlite" \
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
-    -I"$packages/monocypher/src" -I"$packages/monocypher/src/optional" \
-    "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
+    -I"$packages/monocypher/src" -I"$packages/monocypher/src/optional" -I"$packages/raylib/src" \
+    "$work/generated"/*.c "$root/tests/node_app_audio_host.c" "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
     "$packages/monocypher/src/monocypher.c" "$packages/monocypher/src/optional/monocypher-ed25519.c" \
     "${ZIRAN_LIB:-$root/build/ziran-toolchain/libziran.a}" \
     -Wl,--gc-sections -ldl -lpthread -lz -lm "$curl" -o "$work/test"

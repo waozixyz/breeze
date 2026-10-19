@@ -61,7 +61,8 @@ cp "$root/build/cells/habits.zib" "$root/build/cells/practices.zib" "$work/inval
     -I"$root/build/packages/ziran/include" -iquote "$work/generated" -iquote "$work/generated/cells" \
     -I"$root/build/packages/monocypher/src" -I"$root/build/packages/monocypher/src/optional" \
     -I"$root/vendor-builds/sqlite" -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
-    "$root/tests/cells_host_test.c" "$work/generated"/*.c \
+    -I"$root/build/packages/raylib/src" \
+    "$root/tests/cells_host_test.c" "$root/tests/node_app_audio_host.c" "$work/generated"/*.c \
     "$root/build/packages/monocypher/src/monocypher.c" \
     "$root/build/packages/monocypher/src/optional/monocypher-ed25519.c" \
     "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" "${ZIRAN_LIB:-$(dirname "$(dirname "$ziran")")/libziran.a}" \
