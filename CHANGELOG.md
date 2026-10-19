@@ -1,8 +1,13 @@
 # Changelog
 
-## [2.1.36] - 2026-10-18
+## [2.1.36] - 2026-10-19
 
-- Download Astral Projection for a 15-minute guided visualization, with offline text and optional narration.
+- Inner Breeze starts several times faster: installed apps such as Arcade open when you go to them.
+- Opening Arcade takes a moment instead of several seconds on slower phones.
+- Lists, Habits, Apps, Lumi, Arcade and Pushy draw faster and scroll more smoothly.
+- Scrolling Habits no longer moves or opens a habit; hold a habit a little longer to move it.
+- Drag the border beside habit names to widen or narrow the names column.
+- Download Astral Projection for a 40-minute guided visualization, with offline text and English narration.
 - Manage practices opens on Installed, the practices on this device, with
   tabs for Meditation (breathing practices included), Yoga and Martial arts.
 - Leaderboard lists every practice you have installed, including Tai Chi and
