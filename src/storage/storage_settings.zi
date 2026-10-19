@@ -134,6 +134,7 @@ storage_get_setting_int :: (key: string, fallback: s32) -> s32 {
 // Dew, Lumi, sync and app versions read settings on every frame, and each
 // read prepared its SQL again: a sixth of a phone's frame. Short values are
 // kept until stored data or the user changes (see storage_data_revision).
+// A longer value, such as an account key, is only remembered as present.
 SETTINGS_CACHE_SLOTS :: 64
 SETTINGS_CACHE_KEY :: 96
 SETTINGS_CACHE_VALUE :: 512
@@ -141,6 +142,7 @@ SettingsCacheEntry :: struct {
     key: [SETTINGS_CACHE_KEY]u8
     key_count: s32
     value: [SETTINGS_CACHE_VALUE]u8
+    // -1 for a value too long to keep.
     value_count: s32
 }
 settings_cache: [SETTINGS_CACHE_SLOTS]SettingsCacheEntry;
@@ -178,7 +180,6 @@ SettingsCacheFind :: (key: string) -> s32 {
 }
 
 SettingsCacheStore :: (key: string, value: string) {
-    if value.count >= SETTINGS_CACHE_VALUE { return }
     slot := settings_cache_count
     if slot < SETTINGS_CACHE_SLOTS {
         settings_cache_count += 1
@@ -189,6 +190,10 @@ SettingsCacheStore :: (key: string, value: string) {
     entry := *settings_cache[slot]
     for at: cast(s32)0..cast(s32)key.count - 1 { entry.key[at] = key[at] }
     entry.key_count = cast(s32)key.count
+    if value.count >= SETTINGS_CACHE_VALUE {
+        entry.value_count = -1
+        return
+    }
     for at: cast(s32)0..cast(s32)value.count - 1 { entry.value[at] = value[at] }
     entry.value_count = cast(s32)value.count
 }
@@ -209,7 +214,7 @@ storage_get_setting_text :: (key: string) -> string {
     if cached {
         sqlite3_mutex_enter(mutex)
         slot := SettingsCacheFind(key)
-        if slot >= 0 {
+        if slot >= 0 && settings_cache[slot].value_count >= 0 {
             entry := *settings_cache[slot]
             for at: cast(s32)0..entry.value_count - 1 { text_value[at] = entry.value[at] }
             text_value[entry.value_count] = cast(u8)0
@@ -240,9 +245,25 @@ storage_get_setting_text :: (key: string) -> string {
     SqliteFinalize(stmt)
     value := ifx text_value[0] != cast(u8)0 then AppTextFromCString(text_value, 8192) else ""
     if cached {
-        SettingsCacheStore(key, value)
+        if SettingsCacheFind(key) < 0 { SettingsCacheStore(key, value) }
     }
     return value
+}
+
+// Whether a setting has a value, answered from the cache even when the
+// value is too long to keep there.
+#program_export
+storage_setting_present :: (key: string) -> bool {
+    if storage_db_handle() == null || key.count == 0 { return false }
+    if key.count < SETTINGS_CACHE_KEY {
+        mutex := sqlite3_db_mutex(storage_db_handle())
+        sqlite3_mutex_enter(mutex)
+        slot := SettingsCacheFind(key)
+        present := slot >= 0 && settings_cache[slot].value_count != 0
+        sqlite3_mutex_leave(mutex)
+        if slot >= 0 { return present }
+    }
+    return storage_get_setting_text(key).count != 0
 }
 
 #program_export

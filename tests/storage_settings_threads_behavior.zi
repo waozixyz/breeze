@@ -96,6 +96,25 @@ test_unmatched_end_releases_connection :: () {
     storage_close()
 }
 
+// A value too long for the settings cache is still read whole, and its
+// presence comes from the cache until stored data changes.
+test_long_values_are_read_and_present :: () {
+    root := make_root("long")
+    check_true("init long settings", storage_init(root) != 0)
+    long_value: [700]u8
+    for at: cast(s32)0..698 { long_value[at] = cast(u8)(97 + at % 26) }
+    long_value[699] = 0
+    long := TextFromBytes(long_value[:699])
+    storage_set_setting_text("long_key", long)
+    check_true("long setting is present", storage_setting_present("long_key"))
+    check_true("long setting reads whole", storage_get_setting_text("long_key") == long)
+    check_true("long setting reads whole again", storage_get_setting_text("long_key") == long)
+    check_true("missing setting is absent", !storage_setting_present("missing_key"))
+    storage_set_setting_text("missing_key", "now")
+    check_true("a write makes a setting present", storage_setting_present("missing_key"))
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-settings-threads-zi-test/")
@@ -106,5 +125,6 @@ Check :: () -> s32 {
     unused alarm(60)
     test_concurrent_batches_commit_and_release()
     test_unmatched_end_releases_connection()
+    test_long_values_are_read_and_present()
     return failures
 }
