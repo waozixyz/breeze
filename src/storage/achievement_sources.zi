@@ -6,9 +6,81 @@
 #import, file "state.zi";
 #import, file "storage_core.zi";
 #import, file "../app/text_buffers.zi";
+#import, file "../cells/package_files.zi";
 #import "std/text_buffer"
+#import "std/vec"
 
 AchievementSourceBatch :: 128
+
+// Achievements reread their sources when one of them changes. Every write
+// moves storage_data_revision, so a Wim Hof session saving its activity every
+// ten seconds made a phone rescan all sources and rerun every achievement's
+// query. Temporary triggers on this connection count only the writes to the
+// tables and records achievements read.
+AchievementSourceTriggerCount :: 30
+
+achievement_source_data: s64 = -1;
+achievement_source_changes: s64 = -1;
+achievement_source_value: s64;
+
+AchievementSourceTriggers :: () -> bool {
+    database := storage_db_handle()
+    if SqliteExecText(database, "CREATE TEMP TABLE IF NOT EXISTS achievement_source_changes(value INTEGER NOT NULL); INSERT INTO achievement_source_changes SELECT 0 WHERE NOT EXISTS(SELECT 1 FROM achievement_source_changes)") != SQLITE_OK { return false }
+    tables: [10]string = .["sessions", "session_rounds", "meditation_logs", "habits", "habit_days", "habit_changes", "habit_entries", "elist_lists", "elist_items", "settings"]
+    events: [3]string = .["INSERT", "UPDATE", "DELETE"]
+    for table: tables {
+        for event: events {
+            row := ifx event == "DELETE" then "OLD" else "NEW"
+            when := ""
+            // Settings hold every preference; only diary, photo and
+            // achievement records are sources.
+            if table == "settings" {
+                out: Vec(u8)
+                BuilderPrint(*out, "WHEN %.key GLOB 'cell.diary.file.*' OR %.key GLOB 'cell.media.*' OR %.key GLOB 'cell.achievement.*'", row, row, row)
+                when = BuilderFinish(out)
+            }
+            defer { if when.count > 0 { PackageFree(when) } }
+            sql: Vec(u8)
+            BuilderPrint(*sql, "CREATE TEMP TRIGGER IF NOT EXISTS achievement_source_%_% AFTER % ON main.% % BEGIN UPDATE achievement_source_changes SET value=value+1; END",
+                table, event, event, table, when)
+            text := BuilderFinish(sql)
+            defer { PackageFree(text) }
+            if SqliteExecText(database, text) != SQLITE_OK { return false }
+        }
+    }
+    return true
+}
+
+// The writes counted so far, or -1 when this connection lacks the counter or
+// a trigger, as after a reopen or a migration that rebuilt a table.
+AchievementSourceChanges :: () -> s64 {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT (SELECT value FROM temp.achievement_source_changes),(SELECT COUNT(*) FROM temp.sqlite_master WHERE type='trigger' AND name GLOB 'achievement_source_*')", -1, *statement, null) != SQLITE_OK { return -1 }
+    defer { SqliteFinalize(statement) }
+    if SqliteStep(statement) != SQLITE_ROW || SqliteColumnInt(statement, 1) != AchievementSourceTriggerCount { return -1 }
+    return SqliteColumnInt64(statement, 0)
+}
+
+// A revision that advances when a source of achievements may have changed
+// and stays put for other writes. It queries only after a write.
+AchievementSourceRevision :: () -> s64 {
+    data := storage_data_revision()
+    if data == achievement_source_data { return achievement_source_value }
+    achievement_source_data = data
+    changes := AchievementSourceChanges()
+    if changes < 0 {
+        // Writes went uncounted, so any source may have changed.
+        achievement_source_value += 1
+        if AchievementSourceTriggers() { changes = AchievementSourceChanges() }
+        achievement_source_changes = changes
+        return achievement_source_value
+    }
+    if changes != achievement_source_changes {
+        achievement_source_changes = changes
+        achievement_source_value += 1
+    }
+    return achievement_source_value
+}
 
 AchievementSourceRows :: (metric: string, sql: string, offset: s32, live: bool = false) -> s32 {
     statement: *void

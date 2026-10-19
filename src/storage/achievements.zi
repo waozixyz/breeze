@@ -59,6 +59,7 @@ AchievementReset :: () {
     achievement_catalog_revision += 1
     achievement_count = 0
     achievement_evaluate_at = 0
+    achievement_facts_ready = false
     achievement_definitions = .{}
     achievement_live_count = 0
     achievement_dirty = true
@@ -69,6 +70,7 @@ AchievementProfileCleared :: () {
     achievement_profile_revision += 1
     achievement_live_count = 0
     achievement_evaluate_at = 0
+    achievement_facts_ready = false
     achievement_dirty = true
     for index: cast(s32)0..achievement_count - 1 {
         entry := *achievement_definitions[index]
@@ -241,6 +243,7 @@ AchievementRecord :: (metric: string, source: string, day: s32, amount: s64 = 1,
     if !CellRecordWrite(key, value) { return false }
     achievement_dirty = true
     achievement_evaluate_at = 0
+    achievement_facts_ready = false
     if live && !deleted && amount > 0 { AchievementMarkLive(metric) }
     return true
 }
@@ -270,6 +273,7 @@ AchievementRetract :: (metric: string, source: string) -> bool {
     if !CellRecordWrite(key, value) { return false }
     achievement_dirty = true
     achievement_evaluate_at = 0
+    achievement_facts_ready = false
     return true
 }
 
@@ -285,7 +289,8 @@ SQL
 
 // Each of the 160 achievements' queries parsed every fact's JSON again: a
 // pass cost a phone several frames. A pass now parses the facts once into a
-// temporary table, kept in memory, and falls back to parsing per query.
+// temporary table, kept in memory, and falls back to parsing per query. The
+// table holds only until a fact changes or the pass ends.
 achievement_facts_ready: bool;
 
 AchievementFactsPrepare :: () {
@@ -419,6 +424,7 @@ AchievementEvaluate :: () {
     }
     achievement_evaluate_at = last + 1
     if failed { achievement_evaluate_at = 0 }
+    if achievement_evaluate_at == 0 || achievement_evaluate_at >= achievement_count { achievement_facts_ready = false }
     if achievement_evaluate_at >= achievement_count {
         achievement_live_count = 0
         achievement_evaluate_at = 0
