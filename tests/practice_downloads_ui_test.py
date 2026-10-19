@@ -131,6 +131,29 @@ def selected_tab():
     return selected[0]
 
 
+def visible_tab(label):
+    tabs = [node for node in manager_nodes() if node['role'] == 'tab' and node['label'] == label
+            and node['visible'] and node['visible_width'] >= 24]
+    return tabs[0] if tabs else None
+
+
+def swipe_to_tab(label):
+    """Swipe the tabs toward their end until a tab shows; the swipe selects
+    no tab."""
+    before = selected_tab()
+    for _ in range(6):
+        if visible_tab(label):
+            break
+        bar = next(node for node in manager_nodes() if node['kind'] == 'tab_bar')
+        y = bar['visible_y'] + bar['visible_height'] / 2
+        driver.drag((bar['visible_x'] + bar['visible_width'] - 8, y), (bar['visible_x'] + 8, y), steps=12)
+        driver.wait_idle(frames=4)
+    assert visible_tab(label), (label, manager_tabs())
+    # The selected tab may have scrolled out of view; no other tab took it.
+    chosen = [name for name, selected in manager_tabs() if selected]
+    assert chosen in ([], [before]), ('A swipe selected a tab', manager_tabs())
+
+
 def select_tab(label):
     """Show one tab's practices."""
     tabs = [node for node in manager_nodes() if node['role'] == 'tab' and node['label'] == label]
@@ -150,9 +173,9 @@ def act(name, label):
     driver.wait_idle(frames=2)
 
 
-def open_manager():
-    driver.press(label='Manage practices', role='button')
-    driver.wait(label='Close', role='button')
+def open_manager(manage='Manage practices', close='Close'):
+    driver.press(label=manage, role='button')
+    driver.wait(label=close, role='button')
     driver.wait_idle(frames=2)
 
 
@@ -365,6 +388,29 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         driver.wait(label='Sun Salutation')
     finally:
         stop(process)
+    # On a narrow phone the last tab lies past the edge in English and in
+    # Russian: a swipe across the tabs brings it into view without choosing
+    # a tab, and a tap chooses it.
+    russian = ['Установленные', 'Медитация', 'Йога', 'Боевые искусства']
+    for language, width in [('en', 320), ('en', 360), ('ru', 320), ('ru', 360)]:
+        with sqlite3.connect(profile / 'inbe.db') as database:
+            database.execute('UPDATE settings SET value=? WHERE user_id=? AND key=?', (language, user, 'language'))
+        labels = TABS if language == 'en' else russian
+        process, window = launch(profile, 'swipe-' + language + '-' + str(width), width, 640)
+        try:
+            if language == 'en':
+                open_manager()
+            else:
+                open_manager('Управление практиками', 'Закрыть')
+            assert [label for label, _ in manager_tabs()] == labels[:len(manager_tabs())], manager_tabs()
+            assert selected_tab() == labels[0], manager_tabs()
+            swipe_to_tab(labels[-1])
+            select_tab(labels[-1])
+            driver.wait(label='Tai Chi' if language == 'en' else 'Тайцзи')
+        finally:
+            stop(process)
+    with sqlite3.connect(profile / 'inbe.db') as database:
+        database.execute('UPDATE settings SET value=? WHERE user_id=? AND key=?', ('en', user, 'language'))
     with sqlite3.connect(profile / 'inbe.db') as database:
         for key, value in {'exercise_type': 4, 'voice_narration_enabled': 1}.items():
             database.execute('UPDATE settings SET value=? WHERE user_id=? AND key=?',
@@ -516,4 +562,5 @@ print('Private Practices modal: Installed, Meditation, Yoga and Martial arts tab
       'one Install, Buy, Cancel or Uninstall button per practice, real sizes, '
       'reorder that Practice follows within a tab, removal that stays, '
       'restore without download, installed-only home, saved progress, owned Tai Chi without a price, '
-      'narration languages, narrow layout, Sun Salutation narration and delete passed')
+      'narration languages, narrow layout, swiping to the last tab in English and Russian, '
+      'Sun Salutation narration and delete passed')
