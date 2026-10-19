@@ -86,6 +86,7 @@ GetTime :: () -> float64 #foreign raylib_input;
 #import "text_field_widget"
 #import "text_input_props"
 #import, file "../platform/raylib_text_input.zi";
+#import, file "../app/smooth_frames.zi";
 
 using ModalType;
 using HostValueKind;
@@ -123,8 +124,9 @@ HABITS_DEACTIVATED_HINT_HEIGHT :: 40;
 HABITS_DRAG_EDGE_MARGIN :: 48;
 HABITS_DRAG_EDGE_WAIT_SECONDS :: 0.15;
 HABITS_DRAG_EDGE_SPEED :: 700;
-// On a touch screen a row is lifted after this long a hold.
-HABITS_CARD_HOLD_SECONDS :: 0.4;
+// On a touch screen a row is lifted to move after this long a hold. A
+// shorter hold lifted rows when a finger rested before scrolling.
+HABITS_CARD_HOLD_SECONDS :: 0.6;
 // The first habit's today marker from the last drawn frame; the web smoke
 // test clicks it.
 habits_first_day_bounds: Rectangle;
@@ -1250,6 +1252,10 @@ HabitScreenRowDrag :: (app: *InnerBreeze, index: s32,
             app.habits.drag_lifted = 1
             app.habits.drag_moving = 1
             TreeCapturePressAt(app.ui.session, previous)
+        } else {
+            // A finger at rest sends no input, and without frames the hold
+            // was never noticed: the first move then scrolled instead.
+            AppRequestSmoothFrames(2)
         }
         return false
     }
@@ -1261,8 +1267,15 @@ HabitScreenRowDrag :: (app: *InnerBreeze, index: s32,
         return false
     }
     if app.habits.drag_lifted == 0 {
+        // Only a short press that stays in place opens the habit: a touch
+        // the list took over to scroll ends here too.
+        dx := point.x - app.habits.drag_origin.x
+        dy := point.y - app.habits.drag_origin.y
+        threshold := cast(float32)AppScale(6)
+        tapped := dx * dx + dy * dy < threshold * threshold &&
+        GetTime() - app.habits.drag_pressed_at < HABITS_CARD_HOLD_SECONDS
         HabitScreenEndDrag(app)
-        return true
+        return tapped
     }
     HabitScreenUpdateDrag(app, point)
     if app.habits.drag_moving == 0 {
