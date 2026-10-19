@@ -2,7 +2,9 @@
 
 ## [1.0.5] - 2026-10-18
 
-- Maintenance release for Inner Breeze 2.1.36.
+- Choose any practice you have installed, including Tai Chi and Astral
+  Projection, in your Practice order. Practices you haven't installed are
+  no longer listed. Inner Breeze 2.1.35 and earlier keep the original four.
 
 ## [1.0.4] - 2026-10-17
 

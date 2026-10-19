@@ -21,6 +21,7 @@
 #import, file "../app/locale.zi";
 #import, file "../app/text_buffers.zi";
 #import, file "../app/exercise_types.zi";
+#import, file "../practices/practice_downloads.zi";
 #import, file "../storage/storage_settings.zi";
 #import, file "../storage/storage_profile_stats.zi";
 #import, file "../storage/account_types.zi";
@@ -72,8 +73,39 @@ LeaderboardPracticeId :: (practice: s32) -> string {
     if practice == EXERCISE_MEDITATION { return "meditation" }
     if practice == EXERCISE_SUN_SALUTATION { return "sun_salutation" }
     if practice == EXERCISE_PATTERNS { return "patterns" }
+    if practice == EXERCISE_TAI_CHI { return "tai_chi" }
     if practice == EXERCISE_ASTRAL_PROJECTION { return "astral_projection" }
     return "whm"
+}
+
+// The board offers the practices installed on Practice, in Practice's order.
+LeaderboardInstalledPractices :: () -> LeaderboardMessage {
+    installed := LeaderboardMessage.{.practices_listed = true}
+    for index: cast(s32)0..EXERCISE_COUNT - 1 {
+        practice := practice_ordered_id(index)
+        if PracticeInstalled(practice) && installed.practice_count < installed.practices.count {
+            installed.practices[installed.practice_count] = practice
+            installed.practice_count += 1
+        }
+    }
+    return installed
+}
+
+// A practice that is no longer installed gives way to the first installed
+// one; reports whether the board changed practice.
+LeaderboardKeepInstalled :: (app: *InnerBreeze, installed: LeaderboardMessage) -> bool {
+    if installed.practice_count == 0 {
+        return false
+    }
+    for index: cast(s32)0..installed.practice_count - 1 {
+        if installed.practices[index] == app.leaderboard_practice {
+            return false
+        }
+    }
+    app.leaderboard_practice = installed.practices[0]
+    app.leaderboard_metric = LEADERBOARD_STREAK
+    leaderboard_ui.scroll = 0
+    return true
 }
 
 // The social refresh stores each fetched board under the same key.
@@ -358,6 +390,7 @@ leaderboard_screen_enter :: (app: *InnerBreeze) {
         return
     }
     load_friends_cache(app)
+    unused LeaderboardKeepInstalled(app, LeaderboardInstalledPractices())
     LeaderboardLoadCache(app)
     app_request_social_refresh(app)
 }
@@ -366,6 +399,11 @@ leaderboard_screen_enter :: (app: *InnerBreeze) {
 leaderboard_screen_draw :: (app: *InnerBreeze) {
     if app == null {
         return
+    }
+    installed := LeaderboardInstalledPractices()
+    if LeaderboardKeepInstalled(app, installed) {
+        LeaderboardLoadCache(app)
+        app_request_social_refresh(app)
     }
     if app.leaderboard_practice < 0 || app.leaderboard_practice >= EXERCISE_COUNT {
         app.leaderboard_practice = EXERCISE_WIM_HOF
@@ -390,7 +428,9 @@ leaderboard_screen_draw :: (app: *InnerBreeze) {
         .practice = app.leaderboard_practice, .metric = app.leaderboard_metric,
         .row_count = leaderboard_count, .signed_in = leaderboard_signed_in,
         .loading = app_social_refresh_loading() != 0,
-        .has_average = LeaderboardHasAverage(app.leaderboard_practice)}
+        .has_average = LeaderboardHasAverage(app.leaderboard_practice),
+        .practices_listed = true, .practice_count = installed.practice_count,
+        .practices = installed.practices}
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
     CellsUiBegin(LeaderboardUiCall, cast(*void)app)
     state = LeaderboardRun(state)

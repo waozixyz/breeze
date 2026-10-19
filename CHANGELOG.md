@@ -3,6 +3,8 @@
 ## [2.1.36] - 2026-10-18
 
 - Download Astral Projection for a 15-minute guided visualization, with offline text and optional narration.
+- Leaderboard lists every practice you have installed, including Tai Chi and
+  Astral Projection, in your Practice order, and leaves out the others.
 - Lumi shares changelog highlights in chat after an update, once per version,
   with a link to the full notes.
 - Manage your name, picture and sync nodes in the redesigned Self profile.

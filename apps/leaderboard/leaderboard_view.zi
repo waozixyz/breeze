@@ -31,18 +31,40 @@ LeaderboardLocaleHost :: (key: string) -> string #foreign host_api;
 frame: LeaderboardUiFrame;
 state: LeaderboardMessage;
 
-// Wim Hof, breathing patterns, meditation and Sun Salutation, as in Practice.
-PRACTICE_COUNT :: 4
-PracticeAt :: (index: s32) -> s32 {
-    ids: [PRACTICE_COUNT]s32 = .[0, 3, 1, 2]
+// Hosts that do not list the installed practices offer Wim Hof, breathing
+// patterns, meditation and Sun Salutation.
+FALLBACK_PRACTICE_COUNT :: 4
+FallbackPracticeAt :: (index: s32) -> s32 {
+    ids: [FALLBACK_PRACTICE_COUNT]s32 = .[0, 3, 1, 2]
     return ids[index]
 }
 
+// A practice this board cannot name has an empty label and is left out.
 PracticeLabel :: (practice: s32) -> string {
+    if practice == 0 { return LeaderboardLocaleHost("exercise_wim_hof") }
     if practice == 1 { return LeaderboardLocaleHost("exercise_meditation") }
     if practice == 2 { return LeaderboardLocaleHost("exercise_sun_salutation") }
     if practice == 3 { return LeaderboardLocaleHost("exercise_patterns") }
-    return LeaderboardLocaleHost("exercise_wim_hof")
+    if practice == 4 { return LeaderboardLocaleHost("exercise_tai_chi") }
+    if practice == 5 { return LeaderboardLocaleHost("exercise_astral_projection") }
+    return ""
+}
+
+// The installed practices in Practice's order, as the host lists them.
+PracticeChoices :: (ids: []s32) -> s32 {
+    listed: s32 = ifx state.practices_listed then state.practice_count else FALLBACK_PRACTICE_COUNT
+    if listed > cast(s32)state.practices.count {
+        listed = cast(s32)state.practices.count
+    }
+    count: s32 = 0
+    for index: cast(s32)0..listed - 1 {
+        practice := ifx state.practices_listed then state.practices[index] else FallbackPracticeAt(index)
+        if PracticeLabel(practice).count > 0 && count < ids.count {
+            ids[count] = practice
+            count += 1
+        }
+    }
+    return count
 }
 
 Scale :: (pixels: s32) -> s32 {
@@ -73,16 +95,27 @@ LeaderboardView :: (message: LeaderboardMessage) -> LeaderboardMessage {
     width := frame.width - x * 2
     y := Scale(12)
 
-    // Every practice stays visible: two per row on phones, four when wide.
-    per_row: s32 = ifx width >= Scale(600) then PRACTICE_COUNT else 2
+    // Every installed practice stays visible in a grid that grows with
+    // them: two per row on phones, more when wide, in rows of equal length.
+    practices: [16]s32
+    practice_count := PracticeChoices(practices[:])
     gap := Scale(8)
+    widest: s32 = (width + gap) / (Scale(160) + gap)
+    if widest < 2 {
+        widest = 2
+    }
+    rows: s32 = (practice_count + widest - 1) / widest
+    per_row: s32 = 1
+    if rows > 0 {
+        per_row = (practice_count + rows - 1) / rows
+    }
     choice_width := (width - gap * (per_row - 1)) / per_row
-    for index: cast(s32)0..PRACTICE_COUNT - 1 {
-        practice := PracticeAt(index)
+    for index: cast(s32)0..practice_count - 1 {
+        practice := practices[index]
         chosen := practice == state.practice
         choice_x := x + (index % per_row) * (choice_width + gap)
         choice_y := y + (index / per_row) * (Scale(40) + gap)
-        if Button(frame.session, ButtonProps.{.id = 7100 + index,
+        if Button(frame.session, ButtonProps.{.id = 7140 + index,
                 .bounds = Bounds(choice_x, choice_y, choice_width, Scale(40)),
                 .label = PracticeLabel(practice), .selected = chosen, .fit_content = true,
                 .tone = cast(ButtonTone)(ifx chosen then ButtonToneAccent else ButtonToneNeutral),
@@ -94,7 +127,18 @@ LeaderboardView :: (message: LeaderboardMessage) -> LeaderboardMessage {
             return Finish()
         }
     }
-    y += (PRACTICE_COUNT / per_row) * (Scale(40) + gap) + Scale(8)
+    if rows > 0 {
+        y += rows * (Scale(40) + gap) + Scale(8)
+    }
+
+    // Nothing is ranked until a practice is installed.
+    if practice_count == 0 {
+        Text(frame.session, TextProps.{.key = cast(u64)7120,
+                .bounds = Bounds(x, y, width, Scale(32)),
+                .text = LeaderboardLocaleHost("profile_no_leaderboard_data"),
+                .font = frame.font, .wrap = cast(TextWrap)TextWrapAuto})
+        return Finish()
+    }
 
     // The name column is wider when only the streak is ranked.
     columns: s32 = ifx state.has_average then 3 else 2
