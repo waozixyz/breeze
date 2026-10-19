@@ -28,6 +28,7 @@
 #import, file "../src/storage/storage_habits.zi";
 #import, file "../src/storage/sync_review.zi";
 #import, file "../src/storage/storage_habit_sync.zi";
+#import, file "../src/storage/storage_habit_wallet.zi";
 #import, file "../src/habits/habit_model.zi";
 #import, file "../src/habits/habit_calendar.zi";
 #import, file "../src/habits/habit_schedule.zi";
@@ -455,6 +456,30 @@ test_payload_includes_queued_edits :: () {
     check_true("payload builds", build_payload())
     check_true("queued habit day is sent", contains(payload(), ":20260617\""))
     check_true("its content is encrypted", !contains(payload(), "\"count\":7"))
+    storage_close()
+}
+
+// The rewards set in the habit shop, and what bought them, are private:
+// they leave the device only sealed, in the account's private collections.
+test_shop_rewards_stay_private :: () {
+    root := make_root("sync-shop-private")
+    check_true("init db", storage_init(root) != 0)
+    set_account()
+    saved: [HABIT_REWARD_ID_SIZE]u8
+    check_true("reward saves", storage_habit_reward_save("", "Joint with Sam", 5, 48,
+        saved[:]) != 0)
+    reward: HabitReward
+    unused AppCopyText(AppTextFromCString(*saved[0], HABIT_REWARD_ID_SIZE), reward.id[:])
+    unused AppCopyText("Joint with Sam", reward.name[:])
+    reward.price = 5
+    check_true("reward is bought", storage_habit_reward_buy(*reward) != 0)
+    check_true("payload builds", build_payload())
+    check_true("the reward is sent in its private collection",
+        contains(payload(), "\"private.inbe.v1.habit-rewards\""))
+    check_true("the purchase is sent in its private collection",
+        contains(payload(), "\"private.inbe.v1.habit-coins\""))
+    check_true("the reward's name is never sent readable",
+        !contains(payload(), "Joint with Sam") && !contains(payload(), "Joint"))
     storage_close()
 }
 
@@ -2191,5 +2216,6 @@ Check :: () -> s32 {
     test_app_order_syncs_between_devices()
     test_media_records_sync_between_devices()
     test_node_media_sessions()
+    test_shop_rewards_stay_private()
     return failures
 }
