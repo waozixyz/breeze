@@ -38,6 +38,7 @@ Legacy :: #import "apps/node_types";
 #import, file "../app/smooth_frames.zi";
 #import, file "app_identity_storage.zi";
 #import, file "../storage/storage_settings.zi";
+#import, file "publications.zi";
 #import, file "../storage/storage_core.zi";
 #import, file "../storage/state.zi";
 #import, file "../storage/db.zi";
@@ -149,6 +150,7 @@ NodeTreeAllows :: (context: *void, node: *AppNode, name: string) -> bool {
     if runner.nested == null || NodeTreeAccount() != TextUntilNul(runner.nested.tree.account[:]) {
         return false
     }
+    if name == "AppServiceHost" || name == PublicationsService { return true }
     if name == "AppRecordHost" || name == "SaveAppRecordHost" || name == "AppLocaleHost" ||
     name == "SmoothFramesHost" || name == "ClipboardCopyHost" || name == "ReadStoreHost" ||
     name == "WriteStoreHost" || name == "AppNowHost" || name == "AppLocalOffsetHost" ||
@@ -174,6 +176,20 @@ NodeTreeCall :: (context: *void, node: *AppNode, module: *u8, function: *u8,
     name := TextFromCString(function)
     if !NodeTreeAllows(context, node, name) {
         return 0
+    }
+    if name == "AppServiceHost" && count == 2 && HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
+    HostScalarValid(arguments[1], "string", cast(s32)HostString) {
+        if AppArgumentText(arguments[0]) != PublicationsService || node_tree_validating || node_snapshot_scanning {
+            result.* = NodeAppString("{\"status\":\"unavailable\"}")
+            return 1
+        }
+        // Answers belong to the app that asked, by its verified identity.
+        authority := PackageText(TextUntilNul(node.identity.authority[:]), "/")
+        app := PackageText(authority, TextUntilNul(node.identity.id[:]))
+        PackageFree(authority)
+        defer { PackageFree(app) }
+        result.* = NodeAppString(PublicationsCall(app, AppArgumentText(arguments[1])))
+        return 1
     }
     if (name == "AppRecordHost" && count == 1) || (name == "ReadStoreHost" && count == 2) {
         return NodeTreeRead(runner, node, name, arguments, count, result)

@@ -1,0 +1,306 @@
+// Publications: collections of custom game levels that apps publish for
+// everyone, for their author's friends or for the author alone, and that
+// people find again by the author's alias or public id. Apps call
+// AppService("publications", request). A request answers at once with its
+// number; the node's answer arrives later and the app asks for it with
+// {"operation":"status","request":N}. The author is always the signed-in
+// account; an app never names one.
+#import "auth"
+#import "json_scan"
+#import "byte_text_linux"
+#import "text_buffer"
+#import "vec"
+#import, file "../storage/sync_async.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/sync_state.zi";
+#import, file "../storage/storage_settings.zi";
+#import, file "../storage/delegate_store.zi";
+#import, file "../platform/network_transport.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "package_files.zi";
+
+PublicationsService :: "publications"
+
+// A request body holds at most 256 KiB, the document and its description.
+PUBLICATION_DOCUMENT_MAX :: 245760
+PUBLICATION_SLOTS :: 16
+PUBLICATION_REPLIES :: 16
+
+PUBLICATION_EMPTY :: 0
+PUBLICATION_QUEUED :: 1
+PUBLICATION_SENT :: 2
+PUBLICATION_DONE :: 3
+
+PublicationRequest :: struct {
+    number: s32
+    state: s32
+    app: [128]u8
+    method: [8]u8
+    path: [512]u8
+    body: string
+    // The finished answer, kept until the slot is needed again.
+    reply: string
+}
+
+publication_requests: [PUBLICATION_SLOTS]PublicationRequest;
+publication_number: s32;
+publication_order: s32;
+publication_sending: s32 = -1;
+publication_operation: StoredOperation;
+publication_transfer: NetworkTransfer;
+publication_response: [524288]u8;
+// An app keeps each answer until its run ends, so recent ones stay alive.
+publication_replies: [PUBLICATION_REPLIES]string;
+publication_reply_next: s32;
+
+PublicationsReply :: (text: string) -> string {
+    slot := publication_reply_next
+    publication_reply_next = (slot + 1) % PUBLICATION_REPLIES
+    PackageFree(publication_replies[slot])
+    publication_replies[slot] = PackageText(text, "")
+    return publication_replies[slot]
+}
+
+PublicationsError :: (status: string, error: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"status\":\"%\",\"error\":\"%\"}", status, error)
+    text := BuilderFinish(out)
+    defer { PackageFree(text) }
+    return PublicationsReply(text)
+}
+
+PublicationsReady :: () -> bool {
+    return storage_sync_enabled() != 0 && StoredAccountMode() == AccountModeOwner &&
+    storage_get_setting_text("sync_server_url").count > 0
+}
+
+// Letters, digits and the given punctuation only, so the text needs no
+// escaping in a path or query.
+PublicationsPlain :: (text: string, maximum: s32, punctuation: string) -> bool {
+    if text.count == 0 || text.count > maximum { return false }
+    for byte: text {
+        plain := (byte >= #char "a" && byte <= #char "z") || (byte >= #char "A" && byte <= #char "Z") ||
+        (byte >= #char "0" && byte <= #char "9")
+        for mark: punctuation { if byte == mark { plain = true } }
+        if !plain { return false }
+    }
+    return true
+}
+
+// The decoded text of a string member, or "" with valid false.
+PublicationsText :: (request: string, name: string, maximum: s32, valid: *bool) -> string {
+    valid.* = false
+    at := FieldAt(request, 0, name)
+    if at < 0 { return "" }
+    decoded := ReadStringValue(request, at, maximum)
+    if !decoded.valid { return "" }
+    valid.* = true
+    return BuilderFinish(decoded.value)
+}
+
+// The raw JSON of a member, quotes or braces included.
+PublicationsRaw :: (request: string, name: string) -> string {
+    at := FieldAt(request, 0, name)
+    if at < 0 { return "" }
+    end := ValueEnd(request, at, 0)
+    if end <= at { return "" }
+    return request[at:end]
+}
+
+PublicationsQueue :: (app: string, method: string, path: string, body: string) -> string {
+    slot: s32 = -1
+    oldest: s32 = -1
+    for index: cast(s32)0..PUBLICATION_SLOTS - 1 {
+        entry := *publication_requests[index]
+        if entry.state == PUBLICATION_EMPTY { slot = index; break }
+        if entry.state == PUBLICATION_DONE && (oldest < 0 || entry.number < publication_requests[oldest].number) { oldest = index }
+    }
+    if slot < 0 { slot = oldest }
+    if slot < 0 { return PublicationsError("rejected", "busy") }
+    entry := *publication_requests[slot]
+    PackageFree(entry.body)
+    PackageFree(entry.reply)
+    entry.* = .{}
+    publication_number += 1
+    if publication_number <= 0 { publication_number = 1 }
+    entry.number = publication_number
+    entry.state = PUBLICATION_QUEUED
+    if !AppCopyText(app, entry.app[:]) || !AppCopyText(method, entry.method[:]) || !AppCopyText(path, entry.path[:]) {
+        entry.* = .{}
+        return PublicationsError("rejected", "invalid")
+    }
+    entry.body = PackageText(body, "")
+    PublicationsPump()
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"status\":\"pending\",\"request\":%}", entry.number)
+    text := BuilderFinish(out)
+    defer { PackageFree(text) }
+    return PublicationsReply(text)
+}
+
+PublicationsFinish :: (slot: s32, reply: string) {
+    entry := *publication_requests[slot]
+    PackageFree(entry.body)
+    entry.body = ""
+    PackageFree(entry.reply)
+    entry.reply = PackageText(reply, "")
+    entry.state = PUBLICATION_DONE
+}
+
+PublicationsFailed :: (slot: s32, error: string) {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"status\":\"failed\",\"error\":\"%\"}", error)
+    text := BuilderFinish(out)
+    defer { PackageFree(text) }
+    PublicationsFinish(slot, text)
+}
+
+// Sends queued requests one at a time and collects the node's answers.
+PublicationsPump :: () {
+    if publication_sending >= 0 {
+        if !PollStoredOperation(*publication_operation) { return }
+        slot := publication_sending
+        publication_sending = -1
+        if publication_requests[slot].state != PUBLICATION_SENT { return }
+        if publication_operation.result == cast(s32)AuthResult.AUTH_OK {
+            json := TextUntilNul(publication_response[:])
+            end := ValueEnd(json, 0, 0)
+            if end < 0 || Space(json, end) != cast(s32)json.count || FieldAt(json, 0, "status") >= 0 {
+                PublicationsFailed(slot, "offline")
+            } else {
+                // The node's object, with the answer's status in front.
+                first := Space(json, 1)
+                out: Vec(u8)
+                BuilderPrint(*out, "{\"status\":\"done\"% %", ifx json[first] == #char "}" then "" else ",", json[first:])
+                text := BuilderFinish(out)
+                defer { PackageFree(text) }
+                PublicationsFinish(slot, text)
+            }
+        } else {
+            status := publication_operation.request.status
+            error := "offline"
+            if publication_operation.result == cast(s32)AuthResult.AUTH_NO_ACCOUNT || status == 401 { error = "signed-out" }
+            else if status == 400 { error = "invalid" }
+            else if status == 403 { error = "forbidden" }
+            else if status == 404 { error = "not-found" }
+            else if status == 413 { error = "too-large" }
+            else if status == 429 { error = "busy" }
+            PublicationsFailed(slot, error)
+        }
+    }
+    next: s32 = -1
+    for index: cast(s32)0..PUBLICATION_SLOTS - 1 {
+        entry := *publication_requests[index]
+        if entry.state == PUBLICATION_QUEUED && (next < 0 || entry.number < publication_requests[next].number) { next = index }
+    }
+    if next < 0 { return }
+    entry := *publication_requests[next]
+    if !PublicationsReady() {
+        PublicationsFailed(next, "signed-out")
+        return
+    }
+    publication_response[0] = cast(u8)0
+    if !BeginStoredRequest(*publication_operation, storage_get_setting_text("sync_server_url"),
+        NetworkTransport(*publication_transfer), TextUntilNul(entry.method[:]), TextUntilNul(entry.path[:]),
+        entry.body, publication_response[:], true) {
+        PublicationsFailed(next, ifx publication_operation.result == cast(s32)AuthResult.AUTH_NO_ACCOUNT then "signed-out" else "offline")
+        return
+    }
+    entry.state = PUBLICATION_SENT
+    publication_sending = next
+}
+
+PublicationsPublish :: (app: string, request: string) -> string {
+    valid: bool
+    format := PublicationsText(request, "format", 64, *valid)
+    defer { PackageFree(format) }
+    if !valid || !PublicationsPlain(format, 64, ".-") { return PublicationsError("rejected", "invalid") }
+    title := PublicationsText(request, "title", 80, *valid)
+    defer { PackageFree(title) }
+    if !valid || title.count == 0 { return PublicationsError("rejected", "invalid") }
+    visibility := PublicationsText(request, "visibility", 16, *valid)
+    defer { PackageFree(visibility) }
+    if !valid || (visibility != "public" && visibility != "friends" && visibility != "private") {
+        return PublicationsError("rejected", "invalid")
+    }
+    document := PublicationsRaw(request, "document")
+    if document.count == 0 || document[0] != #char "{" { return PublicationsError("rejected", "invalid") }
+    if document.count > PUBLICATION_DOCUMENT_MAX { return PublicationsError("rejected", "too-large") }
+    id := ""
+    if FieldAt(request, 0, "id") >= 0 {
+        id = PublicationsText(request, "id", 64, *valid)
+        if !valid || !PublicationsPlain(id, 64, "-_") {
+            PackageFree(id)
+            return PublicationsError("rejected", "invalid")
+        }
+    }
+    defer { PackageFree(id) }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"format\":%,\"title\":%,\"visibility\":%,\"document\":%", PublicationsRaw(request, "format"),
+        PublicationsRaw(request, "title"), PublicationsRaw(request, "visibility"), document)
+    if id.count > 0 { BuilderPrint(*out, ",\"id\":\"%\"", id) }
+    BuilderPrint(*out, "}")
+    body := BuilderFinish(out)
+    defer { PackageFree(body) }
+    return PublicationsQueue(app, "POST", "/api/v1/publications", body)
+}
+
+PublicationsCall :: (app: string, request: string) -> string {
+    if app.count == 0 { return PublicationsError("rejected", "invalid") }
+    valid: bool
+    operation := PublicationsText(request, "operation", 16, *valid)
+    defer { PackageFree(operation) }
+    if !valid { return PublicationsError("rejected", "invalid") }
+    if operation == "status" {
+        PublicationsPump()
+        at := FieldAt(request, 0, "request")
+        if at < 0 { return PublicationsError("failed", "not-found") }
+        number := ReadNumber(request, at)
+        for index: cast(s32)0..PUBLICATION_SLOTS - 1 {
+            entry := *publication_requests[index]
+            if entry.state == PUBLICATION_EMPTY || !number.valid || cast(float64)entry.number != number.value ||
+            TextUntilNul(entry.app[:]) != app { continue }
+            if entry.state == PUBLICATION_DONE { return entry.reply }
+            return "{\"status\":\"pending\"}"
+        }
+        return PublicationsError("failed", "not-found")
+    }
+    if !PublicationsReady() { return PublicationsError("rejected", "signed-out") }
+    if operation == "publish" { return PublicationsPublish(app, request) }
+    if operation == "unpublish" || operation == "fetch" {
+        id := PublicationsText(request, "id", 64, *valid)
+        defer { PackageFree(id) }
+        if !valid || !PublicationsPlain(id, 64, "-_") { return PublicationsError("rejected", "invalid") }
+        path := PackageText("/api/v1/publications/", id)
+        defer { PackageFree(path) }
+        return PublicationsQueue(app, ifx operation == "fetch" then "GET" else "DELETE", path, "")
+    }
+    if operation == "find" {
+        out: Vec(u8)
+        BuilderPrint(*out, "/api/v1/publications")
+        separator := "?"
+        if FieldAt(request, 0, "format") >= 0 {
+            format := PublicationsText(request, "format", 64, *valid)
+            defer { PackageFree(format) }
+            if !valid || !PublicationsPlain(format, 64, ".-") {
+                PackageFree(BuilderFinish(out))
+                return PublicationsError("rejected", "invalid")
+            }
+            BuilderPrint(*out, "%format=%", separator, format)
+            separator = "&"
+        }
+        query := PublicationsText(request, "query", 80, *valid)
+        defer { PackageFree(query) }
+        if query.count > 0 {
+            if !PublicationsPlain(query, 80, "@_-") {
+                PackageFree(BuilderFinish(out))
+                return PublicationsError("rejected", "invalid")
+            }
+            BuilderPrint(*out, "%author=%", separator, query)
+        }
+        path := BuilderFinish(out)
+        defer { PackageFree(path) }
+        return PublicationsQueue(app, "GET", path, "")
+    }
+    return PublicationsError("rejected", "invalid")
+}
