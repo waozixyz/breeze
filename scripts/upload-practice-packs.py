@@ -8,7 +8,9 @@ not. The owner allows uploading practice packs at any time (never app
 releases or latest-v2.json): this signs the built packs with the Inbe
 publisher key, uploads only those the node does not hold yet (a paid pack's
 product marker first, so it is never served without a grant) and checks
-that each one is served afterwards.
+that each one is served afterwards. Sun Salutation, the largest pack, is then
+downloaded from the node in full and checked, so every phone build tests
+that practices really download.
 
 Run after `make` or a phone build, from the repository root:
     python3 scripts/upload-practice-packs.py
@@ -23,6 +25,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.request
 
@@ -59,6 +62,18 @@ def matches(digest, size, timeout=120):
     return len(data) == size and sha256(data).hexdigest() == digest
 
 
+def sun_salutation_downloads(packs):
+    """Downloads the Sun Salutation pack this build lists and checks its bytes."""
+    pack = next(pack for pack in packs if pack["practice"] == "sunsalutation" and not pack["language"])
+    started = time.monotonic()
+    if not matches(pack["sha256"], pack["size"]):
+        print("Sun Salutation does not download exactly from the node", file=sys.stderr)
+        return False
+    print(f"Sun Salutation downloads from the node: {pack['size'] / 1e6:.1f} MB "
+          f"in {time.monotonic() - started:.1f} s")
+    return True
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true", help="only report packs missing on the node")
@@ -72,7 +87,8 @@ def main():
         # The store also holds the Practice app's own bundle under this app
         # ID; only the content packs its catalog names are uploaded.
         practices = (ROOT / "build/cells/practices.zib").read_bytes()
-        catalog = {pack["sha256"] for pack in package_release.catalog_from_bundle(practices)}
+        listed = package_release.catalog_from_bundle(practices)
+        catalog = {pack["sha256"] for pack in listed}
         packs = sorted(directory / (digest + ".zib") for digest in catalog)
         missing = []
         for path in packs:
@@ -85,7 +101,9 @@ def main():
                 raise SystemExit(f"node answered {status} for {'paid' if gated else 'free'} pack {digest}")
         print(f"{len(packs)} packs built, {len(missing)} missing on the node")
         if args.check or not missing:
-            return 1 if missing and args.check else 0
+            if missing and args.check:
+                return 1
+            return 0 if sun_salutation_downloads(listed) else 1
         archive = io.BytesIO()
         with tarfile.open(fileobj=archive, mode="w") as tar:
             for path in missing:
@@ -121,6 +139,8 @@ def main():
             receipt.writelines(line + "\n" for line in lines)
         print("\n".join(lines))
         print(f"Uploaded {len(lines)} practice packs; each is served")
+        if not sun_salutation_downloads(listed):
+            return 1
     return 0
 
 
