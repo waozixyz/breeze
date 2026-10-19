@@ -70,6 +70,17 @@ NodeTreeAccount :: () -> string {
     return AppTextFromCString(storage_user_id_buffer(), 64)
 }
 
+// The signed release a slot's collection runs as: the installed one, or the
+// download being checked before it is installed. A collection's first
+// install has no installed release, so checking it used to always fail.
+NodeTreeRelease :: (slot: s32) -> PackageRelease {
+    index := NodeAppIndex(slot)
+    if node_tree_validating && package_index == index && package_release.valid {
+        return package_release
+    }
+    return package_cached_releases[index]
+}
+
 NodeTreeAuthority :: (runner: *NodeAppRunner, output: []u8) -> bool {
     slot := NodeAppSlotOf(runner)
     if slot < 0 {
@@ -80,7 +91,7 @@ NodeTreeAuthority :: (runner: *NodeAppRunner, output: []u8) -> bool {
     if NodeAppLocal(NodeAppName(slot)) {
         return CopyCString("local-development", output)
     }
-    release := package_cached_releases[NodeAppIndex(slot)]
+    release := NodeTreeRelease(slot)
     if !release.valid {
         return false
     }
@@ -107,7 +118,7 @@ NodeTreeLegacyOwner :: (runner: *NodeAppRunner, node: *AppNode) -> string {
     if TextUntilNul(node.identity.id[:]) != expected {
         return ""
     }
-    release := package_cached_releases[NodeAppIndex(slot)]
+    release := NodeTreeRelease(slot)
     if !release.valid {
         return ""
     }
