@@ -1134,10 +1134,29 @@ public class MainActivity extends NativeActivity {
         return LauncherIcons.select(this, icon);
     }
 
+    /**
+     * Debug builds only: a single {@code <name>.zib} pushed to this app's
+     * external files folder is offered like a node app, through the same
+     * interface, identity and resource checks as a desktop local bundle.
+     */
+    private void offerLocalNodeApp() {
+        File folder = getExternalFilesDir(null);
+        File[] bundles = folder == null ? null : folder.listFiles((dir, name) -> name.endsWith(".zib"));
+        if (bundles == null || bundles.length != 1) return;
+        try {
+            android.system.Os.setenv("INBE_NODE_APP_FILE", bundles[0].getAbsolutePath(), true);
+        } catch (android.system.ErrnoException error) {
+            Log.w("Inbe", "Could not offer the local node app", error);
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         startupStarted = SystemClock.elapsedRealtime();
         configureSystemBars();
+        // Before the native app starts: debug builds may offer one local
+        // node-app bundle, as desktop builds do with INBE_NODE_APP_FILE.
+        if (BuildConfig.DEBUG) offerLocalNodeApp();
         super.onCreate(savedInstanceState);
         configureSystemBars();
         textInputView = new TextInputView(this, new TextInputView.Listener() {
