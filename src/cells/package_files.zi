@@ -24,6 +24,7 @@ PackageFree :: (value: string) {
 }
 c :: #system_library "c";
 PackageFreeRaw :: (bytes: *u8) #foreign c "free";
+PackageAllocRaw :: (size: u64) -> *u8 #foreign c "malloc";
 
 PackageDirectory :: () -> string {
     database := storage_db_path()
@@ -63,23 +64,24 @@ PackageRead :: (path: string, maximum: s64) -> string {
     if length <= 0 || length > maximum {
         return ""
     }
-    bytes: Vec(u8)
-    for index: 0..length - 1 {
-        if !VecPush(bytes, cast(u8)0) {
-            VecFree(bytes);
-            return ""
-        }
+    // One allocation for the whole file: growing a vector byte by byte took
+    // 23 million pushes for Sun Salutation's 22 MB pack on every load.
+    data := PackageAllocRaw(cast(u64)length + cast(u64)1)
+    if data == null {
+        return ""
     }
+    bytes := BytesFromPointer(data, cast(u64)length)
     at: s64 = 0
     while at < length {
-        count := ReadAt(file, VecSlice(bytes, at, length), at)
+        count := ReadAt(file, bytes[at:length], at)
         if count <= 0 {
-            VecFree(bytes);
+            PackageFreeRaw(data)
             return ""
         }
         at += count
     }
-    return BuilderFinish(bytes)
+    data[length] = cast(u8)0
+    return TextFromBytes(bytes)
 }
 
 // The file's size in bytes, or -1 when it cannot be opened.

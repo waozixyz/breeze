@@ -273,10 +273,7 @@ AchievementRetract :: (metric: string, source: string) -> bool {
     return true
 }
 
-AchievementMetric :: (entry: *AchievementDefinition) -> s64 {
-    // Both metric and variant are bound data. No package-supplied SQL executes.
-    prefix := #string SQL
-WITH facts AS (
+AchievementFactsSelect :: #string SQL
  SELECT json_extract(value,'$.metric') metric,json_extract(value,'$.subject') subject,
  CAST(json_extract(value,'$.day') AS INTEGER) day,CAST(json_extract(value,'$.civil') AS INTEGER) civil,
  CAST(json_extract(value,'$.amount') AS INTEGER) amount,json_extract(value,'$.variant') variant,
@@ -284,6 +281,32 @@ WITH facts AS (
  CAST(json_extract(value,'$.start') AS INTEGER) started,CAST(json_extract(value,'$.end') AS INTEGER) ended
  FROM settings WHERE user_id=?1 AND key LIKE 'cell.achievement.fact.%'
  AND json_valid(value) AND COALESCE(json_extract(value,'$.deleted'),0)=0
+SQL
+
+// Each of the 160 achievements' queries parsed every fact's JSON again: a
+// pass cost a phone several frames. A pass now parses the facts once into a
+// temporary table, kept in memory, and falls back to parsing per query.
+achievement_facts_ready: bool;
+
+AchievementFactsPrepare :: () {
+    achievement_facts_ready = false
+    unused SqliteExecText(storage_db_handle(), "DROP TABLE IF EXISTS temp.achievement_facts")
+    sql := PackageText("CREATE TEMP TABLE achievement_facts AS\n", AchievementFactsSelect)
+    defer { PackageFree(sql) }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) != SQLITE_OK { return }
+    bind_text(statement, 1, AchievementOwner())
+    created := SqliteStep(statement) == SQLITE_DONE
+    SqliteFinalize(statement)
+    achievement_facts_ready = created && SqliteExecText(storage_db_handle(),
+        "CREATE INDEX temp.achievement_facts_metric ON achievement_facts(metric)") == SQLITE_OK
+}
+
+AchievementMetric :: (entry: *AchievementDefinition) -> s64 {
+    // Both metric and variant are bound data. No package-supplied SQL executes.
+    // The facts come parsed from this pass's table when it could be made.
+    facts := ifx achievement_facts_ready then " SELECT * FROM temp.achievement_facts\n" else AchievementFactsSelect
+    prefix := #string SQL
 ), radio_intervals AS (
  SELECT day,started,ended,MAX(ended) OVER(PARTITION BY day ORDER BY started,ended ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) previous
  FROM facts WHERE metric='radio.playback' AND amount>0 AND ended>started
@@ -316,7 +339,11 @@ SQL
     if metric == "radio.playback" && rule == "days" {
         suffix = "SELECT COUNT(*) FROM (SELECT day FROM (SELECT day,started,ended,MAX(ended) OVER(PARTITION BY day ORDER BY started,ended ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) previous FROM eligible WHERE day>0 AND ended>started) GROUP BY day HAVING SUM(MAX(0,ended-MAX(started,COALESCE(previous,started))))>=60)"
     }
-    sql := PackageText(prefix, suffix)
+    head := PackageText("WITH facts AS (\n", facts)
+    defer { PackageFree(head) }
+    body := PackageText(head, prefix)
+    defer { PackageFree(body) }
+    sql := PackageText(body, suffix)
     defer { PackageFree(sql) }
     statement: *void
     if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) != SQLITE_OK { return -1 }
@@ -354,6 +381,7 @@ AchievementLiveMetric :: (metric: string) -> bool {
 
 AchievementEvaluate :: () {
     if !achievement_dirty || achievement_reconciling { return }
+    if achievement_evaluate_at == 0 { AchievementFactsPrepare() }
     failed := false
     last := achievement_evaluate_at + 15
     if last >= achievement_count { last = achievement_count - 1 }

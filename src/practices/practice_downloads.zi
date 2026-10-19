@@ -75,6 +75,11 @@ practice_owned: PracticeOwnedFn;
 
 practice_packs: [PracticePackCapacity]PracticePack;
 practice_pack_count: s32;
+// The digest each pack's bytes were last verified against while the app ran.
+// Switching practices opened the same pack again and hashed all of it, 22 MB
+// for Sun Salutation, on the frame thread every time.
+practice_pack_verified: [PracticePackCapacity][65]u8;
+practice_pack_verified_size: [PracticePackCapacity]s64;
 practice_catalog: string;
 practice_catalog_generation: u64;
 practice_transfer: FileDownload;
@@ -352,11 +357,16 @@ PracticePackOpen :: (index: s32, bytes: string) -> *void {
     if bytes.count != pack.size || bytes.count < 8 {
         return null
     }
-    actual: [65]u8
     descriptor := cast(*TextDescriptor)(*bytes)
-    Sha256Hex(descriptor.data, bytes.count, *actual[0])
-    if TextFromCString(*actual[0]) != TextFromCString(*pack.hash[0]) {
-        return null
+    if practice_pack_verified_size[index] != bytes.count ||
+    TextFromCString(*practice_pack_verified[index][0]) != TextFromCString(*pack.hash[0]) {
+        actual: [65]u8
+        Sha256Hex(descriptor.data, bytes.count, *actual[0])
+        if TextFromCString(*actual[0]) != TextFromCString(*pack.hash[0]) {
+            return null
+        }
+        practice_pack_verified[index] = actual
+        practice_pack_verified_size[index] = bytes.count
     }
     bundle := OpenBundleBytes(descriptor.data, cast(u64)bytes.count)
     if bundle == null {
@@ -896,6 +906,7 @@ PracticePackRemove :: (index: s32) {
     practice_packs[index].checked = true
     practice_packs[index].cache_checked = true
     practice_packs[index].present = false
+    practice_pack_verified_size[index] = -1
     if !DataTemporary() {
         path := PracticePackPath(index, false)
         if path.count > 0 {
@@ -1310,6 +1321,8 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, guide_narration: bool,
     temporary := PracticePackPath(index, true)
     destination := PracticePackPath(index, false)
     bytes := PackageRead(temporary, PackageMaximumBytes)
+    // New bytes on disk are hashed again, never trusted from an earlier copy.
+    practice_pack_verified_size[index] = -1
     bundle := ifx state == FileDownloadStatus.Ready then PracticePackOpen(index, bytes) else null
     PackageFree(bytes)
     if bundle != null && (DataTemporary() || RenamePath(temporary, destination)) {

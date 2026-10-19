@@ -23,6 +23,10 @@ SelfAchievements :: #import "self/model";
 achievement_projection: string;
 achievement_measure_response: string;
 achievement_catalog_generation: u64 = 18446744073709551615;
+// The bytes of the catalogs last loaded. Mounting a practice's pack changes
+// the assets but not these catalogs; reloading reset all 160 achievements
+// and re-ran their queries on every practice switch.
+achievement_catalog_fingerprint: u64;
 
 AchievementPackIndex :: (name: string) -> s32 {
     if name == "whm" { return 0 }
@@ -55,9 +59,37 @@ AchievementPackReady :: (practice: s32) -> bool {
     return practice >= 0 && achievement_pack_ready != null && achievement_pack_ready(practice)
 }
 
+AchievementCatalogPath :: (index: s32) -> string {
+    path: Vec(u8)
+    BuilderPrint(*path, "assets/%/achievements.json", ifx index == 0 then "app" else PackageName(index))
+    return BuilderFinish(path)
+}
+
+AchievementCatalogFingerprint :: () -> u64 {
+    hash: u64 = cast(u64)14695981039346656037
+    for index: cast(s32)0..PackageCount - 1 {
+        key := AchievementCatalogPath(index)
+        asset := AssetRead(key)
+        PackageFree(key)
+        if !asset.found { continue }
+        for byte: PackageID(index) { hash = (hash ^ cast(u64)byte) * cast(u64)1099511628211 }
+        hash = (hash ^ cast(u64)10) * cast(u64)1099511628211
+        for byte: asset.data { hash = (hash ^ cast(u64)byte) * cast(u64)1099511628211 }
+    }
+    return hash
+}
+
 AchievementCatalogsLoad :: () {
     changed_owner := AchievementOwner() != TextUntilNul(achievement_owner[:])
     if !changed_owner && achievement_catalog_generation == AssetGeneration() { return }
+    // The node's catalogs changed when the generation was set to its maximum.
+    fingerprint := AchievementCatalogFingerprint()
+    if !changed_owner && achievement_catalog_generation != cast(u64)18446744073709551615 &&
+    fingerprint == achievement_catalog_fingerprint {
+        achievement_catalog_generation = AssetGeneration()
+        return
+    }
+    achievement_catalog_fingerprint = fingerprint
     // Preserve pending presentations across an unrelated resource refresh.
     pending: [AchievementMaximum][97]u8
     pending_count: s32 = 0
@@ -71,11 +103,7 @@ AchievementCatalogsLoad :: () {
     }
     AchievementReset()
     for index: cast(s32)0..PackageCount - 1 {
-        name := PackageName(index)
-        directory := ifx index == 0 then "app" else name
-        path: Vec(u8)
-        BuilderPrint(*path, "assets/%/achievements.json", directory)
-        key := BuilderFinish(path)
+        key := AchievementCatalogPath(index)
         asset := AssetRead(key)
         PackageFree(key)
         if asset.found { unused AchievementCatalog(asset.data, PackageID(index)) }
