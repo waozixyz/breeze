@@ -83,7 +83,7 @@ def manager_text():
 
 def manager_rows():
     """The dialog's practices in order. Each row starts with its drag handle,
-    an unlabeled button, then its name, size, price and buttons."""
+    an unlabeled button, then its name, status, price and buttons."""
     nodes = manager_nodes()
     scroll = next(node for node in nodes if node['kind'] == 'scroll')
     rows = []
@@ -113,8 +113,9 @@ def row_text(row):
 
 def act(name, label):
     """Press the button of a practice's row."""
+    # Install and Uninstall carry the size, such as "Install · 449 KB".
     buttons = [node for node in manager_row(name)['nodes'] if node['kind'] == 'button'
-               and node['label'] == label]
+               and (node['label'] == label or node['label'].startswith(label + ' · '))]
     assert buttons, f'{name} has no {label} button: ' + manager_text()
     driver.press(key=buttons[0]['key'])
     driver.wait_idle(frames=2)

@@ -92,50 +92,40 @@ PracticeDownloadPriceText :: (app: *InnerBreeze, key: string) -> string {
 }
 
 PracticeDownloadPriceRowHeight :: () -> s32 {
-    return AppFontSize() + AppScale(16)
+    return AppSmallFontSize() + AppScale(12)
 }
 
-// The price row, with what the price is worth under it once the node's rates
-// are known.
+// The offer row, with what the price is worth under it once the node's
+// rates are known.
 PracticeDownloadPriceHeight :: () -> s32 {
+    height: s32 = 0
+    if UnlockOffer() && unlock_regular_price > 0 {
+        height = PracticeDownloadPriceRowHeight()
+    }
     worth: [128]u8
     if DewWorthText(unlock_price, worth[:]) {
-        return PracticeDownloadPriceRowHeight() + AppSmallFontSize() + AppScale(6)
+        height += AppSmallFontSize() + AppScale(6)
     }
-    return PracticeDownloadPriceRowHeight()
+    return height
 }
 
-// The Dew a paid practice needs, with the regular price struck through
-// while the node runs an offer.
+// The Unlock button says the price; during an offer the regular price is
+// struck through beside its discount badge, such as -90%.
 PracticeDownloadPrice :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
     DewRatesRefresh()
-    font := AppFontSize() + AppScale(6)
-    height := PracticeDownloadPriceRowHeight()
-    text: [32]u8
-    unused DewFormat(unlock_price, DewUnits, text[:])
-    unused AppAppendText(" Dew", text[:])
-    price := FrameTextHold(*app.ui.frame_text, TextUntilNul(text[:]))
-    left := x
-    if UnlockOffer() {
+    font := AppSmallFontSize()
+    height: s32 = 0
+    if UnlockOffer() && unlock_regular_price > 0 {
+        height = PracticeDownloadPriceRowHeight()
         regular_text: [32]u8
         unused DewFormat(unlock_regular_price, DewUnits, regular_text[:])
         unused AppAppendText(" Dew", regular_text[:])
         regular := FrameTextHold(*app.ui.frame_text, TextUntilNul(regular_text[:]))
-        regular_w := AppTextWidth(regular, AppFontSize())
+        regular_w := AppTextWidth(regular, font)
         Text(app.ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)left, cast(float32)y, cast(float32)regular_w, cast(float32)height},
-                .text = regular, .font = AppFontSize(), .vertical_align = cast(TextAlign)TextAlignCenter,
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)regular_w, cast(float32)height},
+                .text = regular, .font = font, .vertical_align = cast(TextAlign)TextAlignCenter,
                 .wrap = cast(TextWrap)TextWrapNone, .disabled = true, .strikethrough = true})
-        left += regular_w + AppScale(12)
-    }
-    strong: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)price.count}]
-    price_w := AppTextWidth(price, font)
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)left, cast(float32)y, cast(float32)price_w, cast(float32)height},
-            .text = price, .font = font, .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(TextWrap)TextWrapNone, .strong = strong[:]})
-    // The discount reads at a glance as a tinted badge, such as -90%.
-    if UnlockOffer() && unlock_regular_price > 0 {
         percent := ((unlock_regular_price - unlock_price) * 100 + unlock_regular_price / 2) / unlock_regular_price
         badge_text: [16]u8
         unused AppCopyText("-", badge_text[:])
@@ -144,30 +134,28 @@ PracticeDownloadPrice :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
         unused AppAppendText(TextUntilNul(number[:]), badge_text[:])
         unused AppAppendText("%", badge_text[:])
         badge := FrameTextHold(*app.ui.frame_text, TextUntilNul(badge_text[:]))
-        badge_h := AppSmallFontSize() + AppScale(10)
-        badge_w := AppTextWidth(badge, AppSmallFontSize()) + AppScale(16)
-        left += price_w + AppScale(12)
+        badge_h := font + AppScale(8)
+        badge_w := AppTextWidth(badge, font) + AppScale(14)
+        left := x + regular_w + AppScale(10)
         tint := StyleTokenColor("accent")
         tint.a = cast(u8)64
         Box(app.ui.session, BoxProps.{
                 .bounds = Rectangle.{cast(float32)left, cast(float32)(y + (height - badge_h) / 2),
                     cast(float32)badge_w, cast(float32)badge_h},
                 .fill = tint, .radius = cast(float32)badge_h / 2.0})
-        badge_strong: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)badge.count}]
         Text(app.ui.session, TextProps.{
                 .bounds = Rectangle.{cast(float32)left, cast(float32)(y + (height - badge_h) / 2),
                     cast(float32)badge_w, cast(float32)badge_h},
-                .text = badge, .font = AppSmallFontSize(), .align = cast(TextAlign)TextAlignCenter,
-                .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapNone,
-                .strong = badge_strong[:]})
+                .text = badge, .font = font, .align = cast(TextAlign)TextAlignCenter,
+                .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapNone})
     }
     worth: [128]u8
     if DewWorthText(unlock_price, worth[:]) {
         Text(app.ui.session, TextProps.{
                 .bounds = Rectangle.{cast(float32)x, cast(float32)(y + height),
-                    cast(float32)width, cast(float32)(AppSmallFontSize() + AppScale(6))},
+                    cast(float32)width, cast(float32)(font + AppScale(6))},
                 .text = FrameTextHold(*app.ui.frame_text, TextUntilNul(worth[:])),
-                .font = AppSmallFontSize(), .vertical_align = cast(TextAlign)TextAlignCenter,
+                .font = font, .vertical_align = cast(TextAlign)TextAlignCenter,
                 .wrap = cast(TextWrap)TextWrapNone})
     }
 }
@@ -277,9 +265,7 @@ PracticeDownloadLine :: (app: *InnerBreeze, practice: s32) -> string {
     if status == 3 {
         return LocaleText("practice_download_failed")
     }
-    size: [32]u8
-    PracticeDownloadSize(app, practice, size[:])
-    return FrameTextHold(*app.ui.frame_text, TextUntilNul(size[:]))
+    return ""
 }
 
 // Why a paid practice cannot be unlocked yet, or nothing.
@@ -306,10 +292,14 @@ PracticeDownloadActionLabel :: (app: *InnerBreeze, practice: s32, action: s32) -
     if action == PRACTICE_ACTION_CANCEL {
         return LocaleText("cancel_button")
     }
-    if action == PRACTICE_ACTION_UNINSTALL {
-        return LocaleText("practice_uninstall")
-    }
-    return LocaleText("practice_install")
+    // The size rides on the button, so the row's text stays short.
+    size: [32]u8
+    PracticeDownloadSize(app, practice, size[:])
+    label: [128]u8
+    unused AppCopyText(LocaleText(ifx action == PRACTICE_ACTION_UNINSTALL then "practice_uninstall" else "practice_install"), label[:])
+    unused AppAppendText(" · ", label[:])
+    unused AppAppendText(TextUntilNul(size[:]), label[:])
+    return FrameTextHold(*app.ui.frame_text, TextUntilNul(label[:]))
 }
 
 // Adds a practice to Practice, downloading it when it is not on this device.
@@ -372,10 +362,13 @@ PracticeDownloadShape :: (app: *InnerBreeze, practice: s32, width: s32) -> Pract
     }
     definition := practice_get(practice)
     shape.name_h = AppParagraphHeight(LocaleText(definition.label_key), shape.text_w, AppFontSize(), AppScale(3))
-    shape.line_h = AppParagraphHeight(PracticeDownloadLine(app, practice), shape.text_w,
-        AppSmallFontSize(), AppScale(3))
-    shape.text_h = shape.name_h + AppScale(4) + shape.line_h
-    if PracticeDownloadLocked(practice) {
+    line := PracticeDownloadLine(app, practice)
+    shape.text_h = shape.name_h
+    if line.count > 0 {
+        shape.line_h = AppParagraphHeight(line, shape.text_w, AppSmallFontSize(), AppScale(3))
+        shape.text_h += AppScale(4) + shape.line_h
+    }
+    if PracticeDownloadLocked(practice) && PracticeDownloadPriceHeight() > 0 {
         shape.text_h += AppScale(4) + PracticeDownloadPriceHeight()
     }
     note := PracticeDownloadNote(practice)
@@ -429,13 +422,16 @@ PracticeDownloadFace :: (app: *InnerBreeze, practice: s32, shape: PracticeDownlo
     Text(app.ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)text_x, cast(float32)text_y, cast(float32)shape.text_w, cast(float32)shape.name_h},
             .text = LocaleText(definition.label_key), .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
-    text_y += shape.name_h + AppScale(4)
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)text_x, cast(float32)text_y, cast(float32)shape.text_w, cast(float32)shape.line_h},
-            .text = PracticeDownloadLine(app, practice), .font = AppSmallFontSize(),
-            .wrap = cast(TextWrap)TextWrapAuto})
-    text_y += shape.line_h
-    if PracticeDownloadLocked(practice) {
+    text_y += shape.name_h
+    if shape.line_h > 0 {
+        text_y += AppScale(4)
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)text_x, cast(float32)text_y, cast(float32)shape.text_w, cast(float32)shape.line_h},
+                .text = PracticeDownloadLine(app, practice), .font = AppSmallFontSize(),
+                .wrap = cast(TextWrap)TextWrapAuto})
+        text_y += shape.line_h
+    }
+    if PracticeDownloadLocked(practice) && PracticeDownloadPriceHeight() > 0 {
         PracticeDownloadPrice(app, text_x, text_y + AppScale(4), shape.text_w)
         text_y += AppScale(4) + PracticeDownloadPriceHeight()
     }
