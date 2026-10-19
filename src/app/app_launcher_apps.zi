@@ -16,11 +16,13 @@ Rules :: #import "apps/protocol";
 #import "widget_kind"
 #import "kss_parser"
 #import "button_props"
+#import "text_input_props"
 #import, file "app_types.zi";
 #import, file "app_nav_state.zi";
 #import, file "app_launcher_state.zi";
 #import, file "app_launcher_pins.zi";
 #import, file "app_settings.zi";
+#import, file "app_properties.zi";
 #import, file "app_frame_transition.zi";
 #import, file "app_modal_state.zi";
 #import, file "route_types.zi";
@@ -39,6 +41,7 @@ Rules :: #import "apps/protocol";
 #import, file "app_launcher.zi";
 #import, file "../cells/apps_controller.zi";
 #import, file "../cells/node_app_tree.zi";
+#import, file "../habits/habit_icons.zi";
 
 using WidgetKind;
 using AppNavRoute;
@@ -79,10 +82,8 @@ LauncherAppPackage :: (route: s32) -> s32 {
     return -1
 }
 
-LauncherAppReply :: (group: *LauncherAppGroup, status: string) -> string {
-    bytes: Vec(u8)
-    BuilderPrint(*bytes, "{\"v\":1,\"status\":\"%\",\"request\":%}", status, group.sequence)
-    text := BuilderFinish(bytes)
+// A returned document stays valid until the controller's Run returns.
+LauncherAppKeep :: (group: *LauncherAppGroup, text: string) -> string {
     if group.response_count >= group.responses.count {
         PackageFree(text)
         return ""
@@ -90,6 +91,36 @@ LauncherAppReply :: (group: *LauncherAppGroup, status: string) -> string {
     group.responses[group.response_count] = text
     group.response_count += 1
     return text
+}
+
+LauncherAppReply :: (group: *LauncherAppGroup, status: string) -> string {
+    bytes: Vec(u8)
+    BuilderPrint(*bytes, "{\"v\":1,\"status\":\"%\",\"request\":%}", status, group.sequence)
+    return LauncherAppKeep(group, BuilderFinish(bytes))
+}
+
+// The icons Properties offers: the app's own, then Inbe's icon set.
+LauncherAppIcons :: (group: *LauncherAppGroup, id: string) -> string {
+    at := LauncherAppFind(group, id)
+    if at < 0 || group.entries[at].route < 0 {
+        return ""
+    }
+    own := app_nav_route_own_shape(group.entries[at].route)
+    if own == "" {
+        own = NODE_APP_GENERIC_ICON
+    }
+    bytes: Vec(u8)
+    BuilderPrint(*bytes, "{\"v\":1,\"icons\":[{\"id\":\"\"")
+    LauncherAppQuoted(*bytes, "shape", own)
+    BuilderPrint(*bytes, "}")
+    for icon: cast(s32)1..HABIT_ICON_COUNT {
+        BuilderPrint(*bytes, ",{\"id\":")
+        Rules.AppsWriteQuoted(*bytes, HabitIconName(icon))
+        LauncherAppQuoted(*bytes, "shape", HabitIconShape(icon))
+        BuilderPrint(*bytes, "}")
+    }
+    BuilderPrint(*bytes, "]}")
+    return LauncherAppKeep(group, BuilderFinish(bytes))
 }
 
 LauncherAppFind :: (group: *LauncherAppGroup, id: string) -> s32 {
@@ -107,6 +138,9 @@ LauncherAppService :: (context: *void, text: string) -> string {
     if request.operation == Rules.APPS_STATUS {
         if request.request != group.sequence { return "" }
         return LauncherAppReply(group, group.status)
+    }
+    if request.operation == Rules.APPS_ICONS {
+        return LauncherAppIcons(group, TextUntilNul(request.id[:]))
     }
     if group.has_pending || TextUntilNul(group.account[:]) != NodeTreeAccount() ||
     LauncherAppFind(group, TextUntilNul(request.id[:])) < 0 {
@@ -209,6 +243,20 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
         }
         group.status = "queued"
         return
+    } else if request.operation == Rules.APPS_PROPERTIES {
+        if !AppPropertiesSave(LauncherRouteName(route), TextUntilNul(request.title[:]),
+                TextUntilNul(request.icon[:])) {
+            group.status = "rejected"
+            return
+        }
+    } else if request.operation == Rules.APPS_SEEN && PackageUpdateAvailable(entry.package) &&
+    TextUntilNul(request.version[:]) == PackageAvailableVersion(entry.package) &&
+    TextUntilNul(request.sha256[:]) == PackageAvailableDigest(entry.package) {
+        // Only the exact offer shown in the menu stops showing its dot.
+        if !AppPropertiesSaveSeen(LauncherRouteName(route), PackageAvailableDigest(entry.package)) {
+            group.status = "rejected"
+            return
+        }
     } else {
         group.status = "rejected"
         return
@@ -263,6 +311,14 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
             PackageFree(image)
         }
     }
+    // Properties starts from what the person chose and can restore the app's own.
+    app_name := ifx route >= 0 then LauncherRouteName(route) else ""
+    if AppPropertiesTitle(app_name).count > 0 {
+        LauncherAppQuoted(bytes, "original_title", app_nav_route_own_label(route))
+    }
+    if AppPropertiesIcon(app_name).count > 0 {
+        LauncherAppQuoted(bytes, "icon_choice", AppPropertiesIcon(app_name))
+    }
     favorite := route >= 0 && app_launcher_is_favorite(group.owner, route)
     selected := route >= 0 && bottom_nav_route_active(group.owner, route)
     disabled := group.owner.blocked_input_frame == group.owner.breathing.frame
@@ -278,6 +334,12 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
     history_count := ifx installed then PackageHistoryCount(entry.package) else 0
     if update { BuilderPrint(bytes, ",\"update\"") }
     if history_count > 0 { BuilderPrint(bytes, ",\"rollback\"") }
+    if route >= 0 {
+        BuilderPrint(bytes, ",\"properties\"")
+    }
+    if update {
+        BuilderPrint(bytes, ",\"seen\"")
+    }
     BuilderPrint(bytes, "]")
     if entry.package >= 0 {
         LauncherAppQuoted(bytes, "current_version", PackageVersion(entry.package))
@@ -285,6 +347,10 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
             BuilderPrint(bytes, ",\"update_available\":true")
             LauncherAppQuoted(bytes, "available_version", PackageAvailableVersion(entry.package))
             LauncherAppQuoted(bytes, "available_sha256", PackageAvailableDigest(entry.package))
+            // Its dot stays until the person opens the app's options.
+            if AppPropertiesSeen(app_name) == PackageAvailableDigest(entry.package) {
+                BuilderPrint(bytes, ",\"update_seen\":true")
+            }
         }
         if history_count > 0 {
             BuilderPrint(bytes, ",\"version_history\":[")
@@ -302,7 +368,7 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
 }
 
 app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
-    offers: []s32, bounds: Rectangle) -> bool {
+    offers: []s32, bounds: Rectangle, input: TextFieldInput) -> bool {
     group := *launcher_app_groups[section]
     group.index = section
     group.owner = app
@@ -332,9 +398,12 @@ app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
     group.controller.app.dark = app.dark_mode != 0
     group.controller.app.scale = MetricsScale()
     group.controller.app.font = AppFontSize()
+    // Typing reaches the field the person focused in Properties.
+    group.controller.app.input = input
     WidgetHostBegin(app.ui.session, LauncherAppAssetAllowed, WidgetHostPackedPath)
     ok := Controller.AppControllerRun(*group.controller, APP_FRAME)
     WidgetHostEnd()
+    group.controller.app.input = .{}
     LauncherAppDrain(group)
     for index: cast(s32)0..group.response_count - 1 { PackageFree(group.responses[index]) }
     group.response_count = 0

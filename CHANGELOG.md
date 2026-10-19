@@ -14,6 +14,9 @@
   shortcuts, using each app's existing account and data.
 - Manage apps through a compact three-dot menu with Pin, Unpin and Install
   to launcher. Clear Apps search with the × shown while it contains text.
+- Rename any app and choose its icon in Properties, in the app's three-dot
+  menu. An update not yet installed or seen shows as a dot on that menu,
+  with Update at the top.
 - Choose guide and practice voices during setup, with download sizes for the
   selected language. Both start selected; you can turn them off or skip audio.
 - Go back from optional audio to correct the language, including during a

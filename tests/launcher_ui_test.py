@@ -26,6 +26,8 @@ parser.add_argument("binary")
 parser.add_argument("--layout", choices=("all", "desktop", "mobile"), default="all")
 parser.add_argument("--drag-only", action="store_true")
 parser.add_argument("--dock-only", action="store_true")
+parser.add_argument("--properties-only", action="store_true",
+                    help="Rename an app and change its icon in Apps › Properties")
 parser.add_argument("--with-tray", action="store_true",
                     help="Enable the desktop tray using the caller's locale settings")
 arguments = parser.parse_args()
@@ -361,6 +363,75 @@ with contextlib.ExitStack() as stack:
                         driver.wait(label="Pinned")
                         open_profile(log)
             print("Fitted dock: 3–5 pins, narrow windows, zoom, top/bottom and both rails passed")
+        raise SystemExit(0)
+
+    if arguments.properties_only:
+        with tempfile.TemporaryDirectory(prefix="inbe-properties-") as temporary:
+            profile = Path(temporary)
+            user = None
+            with application(profile, "properties-initialize"):
+                with database(profile) as db:
+                    user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
+            seed(profile, {"language": "en", "language_system": 0, "language_setup_done": 1,
+                           "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
+                           "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1, "lumi_guides_seen": 127,
+                           "theme": 9, "theme_source": 0, "theme_mode": 2, "package_updates_allowed": 0,
+                           "apps_last_update_check": 1900000000, "launcher_favorite_count": 2,
+                           "launcher_favorite_0": 1, "launcher_favorite_1": 2})
+
+            def labels():
+                return [item["label"] for item in navigation()]
+
+            def open_properties(label):
+                pinned, more, tree = cards()
+                card = next(card for card in pinned + more if card["label"] == label)
+                press(corner(card, tree))
+                driver.press(label="Properties", role="selectable")
+                driver.wait(label="Name", role="text_field")
+
+            with application(profile, "properties") as (window, log):
+                open_apps()
+                # Without an update offer the options carry no dot, and the
+                # old separate update symbol is gone.
+                assert not driver.find(label="Update available"), "The separate update symbol is back"
+                assert labels() == ["Habits", "Practice", "Apps"], labels()
+                open_properties("Habits")
+                driver.press(label="Name", role="text_field")
+                driver.key("a", control=True)
+                driver.type("Rituals")
+                # The app's own icon comes first, labelled with its own name.
+                driver.wait(label="Habits", role="button")
+                driver.press(label="leaf", role="button")
+                driver.press(label="Save", role="button")
+                wait_setting(profile, "app_title_habits", "Rituals", "Save did not keep the new name")
+                wait_setting(profile, "app_icon_habits", "leaf", "Save did not keep the chosen icon")
+                driver.wait_gone(label="Save", role="button")
+                # The new name is the app's name on its card and in navigation.
+                wait_for(lambda: labels() == ["Rituals", "Practice", "Apps"], lambda: f"Navigation shows {labels()}")
+                pinned, more, tree = cards()
+                assert pinned[0]["label"] == "Rituals", pinned
+                assert favorites(profile) == [1, 2], "Properties changed the pins"
+                # Cancel leaves the name and icon as they are.
+                open_properties("Rituals")
+                driver.press(label="Cancel", role="button")
+                driver.wait_gone(label="Save", role="button")
+                assert settings(profile)["app_title_habits"] == "Rituals"
+                assert settings(profile)["app_icon_habits"] == "leaf"
+            with application(profile, "properties-restart") as (window, log):
+                assert labels() == ["Rituals", "Practice", "Apps"], f"Restart lost the name: {labels()}"
+                open_apps()
+                # An empty name and the app's own icon restore both.
+                open_properties("Rituals")
+                driver.press(label="Name", role="text_field")
+                driver.key("a", control=True)
+                driver.key("backspace")
+                driver.press(label="Habits", role="button")
+                driver.press(label="Save", role="button")
+                wait_setting(profile, "app_title_habits", "", "Saving an empty name kept the old one")
+                wait_setting(profile, "app_icon_habits", "", "Choosing the app's own icon kept the old one")
+                wait_for(lambda: labels() == ["Habits", "Practice", "Apps"], lambda: f"Navigation shows {labels()}")
+                open_profile(log)
+        print("Launcher properties: rename, icon, cancel, restart and restore passed")
         raise SystemExit(0)
 
     layouts = ((900, 720), (390, 844))

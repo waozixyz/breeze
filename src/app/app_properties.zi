@@ -1,0 +1,139 @@
+// The title and icon the person gave an app in Apps › Properties, and the
+// update offer whose dot they have seen. They belong to the account on this
+// device; empty values mean the app's own title and icon.
+#import "c_string"
+#import "byte_text_linux"
+#import "text_buffer"
+#import, file "settings_key.zi";
+#import, file "settings_store.zi";
+#import, file "../cells/catalog.zi";
+#import, file "../habits/habit_icons.zi";
+
+c :: #system_library "c";
+AppPropertiesSettingText :: (key: string) -> string #foreign c "storage_get_setting_text";
+
+APP_TITLE_PREFIX :: "app_title_"
+APP_ICON_PREFIX :: "app_icon_"
+APP_UPDATE_SEEN_PREFIX :: "app_update_seen_"
+
+AppProperties :: struct {
+    // The app these were read for; empty until they are read.
+    name: [32]u8
+    title: [256]u8
+    icon: [64]u8
+    // The digest of the update offer the person has seen.
+    seen: [65]u8
+}
+
+// One entry per package slot. A node app slot reads its entry again when
+// another app takes the slot.
+app_properties: [PackageSlots]AppProperties;
+
+// Read every entry again, for example after another account's settings load.
+AppPropertiesReset :: () {
+    for index: cast(s32)0..PackageSlots - 1 {
+        app_properties[index] = AppProperties.{}
+    }
+}
+
+// An icon Apps offers: the app's own (empty) or one of Inbe's icons.
+AppIconChoiceKnown :: (icon: string) -> bool {
+    return icon.count == 0 || HabitIconNumber(icon) > 0
+}
+
+AppPropertiesKey :: (prefix: string, name: string) -> SettingsKey {
+    return SettingsKeyAppend(SettingsKeyText(prefix), name)
+}
+
+AppPropertiesRead :: (prefix: string, name: string, output: []u8) {
+    output[0] = cast(u8)0
+    key := AppPropertiesKey(prefix, name)
+    if !SettingsKeyValid(key) {
+        return
+    }
+    if !CopyCString(AppPropertiesSettingText(TextFromBytes(key.bytes[0:key.count])), output) {
+        output[0] = cast(u8)0
+    }
+}
+
+// The package slot of this app, with its saved properties read.
+AppPropertiesSlot :: (name: string) -> s32 {
+    if name.count == 0 || name.count >= 32 {
+        return -1
+    }
+    for index: cast(s32)1..PackageSlots - 1 {
+        if PackageName(index) != name {
+            continue
+        }
+        entry := *app_properties[index]
+        if TextUntilNul(entry.name[:]) != name {
+            entry.* = AppProperties.{}
+            unused CopyCString(name, entry.name[:])
+            AppPropertiesRead(APP_TITLE_PREFIX, name, entry.title[:])
+            AppPropertiesRead(APP_ICON_PREFIX, name, entry.icon[:])
+            if !AppIconChoiceKnown(TextUntilNul(entry.icon[:])) {
+                entry.icon[0] = cast(u8)0
+            }
+            AppPropertiesRead(APP_UPDATE_SEEN_PREFIX, name, entry.seen[:])
+        }
+        return index
+    }
+    return -1
+}
+
+AppPropertiesTitle :: (name: string) -> string {
+    index := AppPropertiesSlot(name)
+    if index < 0 {
+        return ""
+    }
+    return TextUntilNul(app_properties[index].title[:])
+}
+
+AppPropertiesIcon :: (name: string) -> string {
+    index := AppPropertiesSlot(name)
+    if index < 0 {
+        return ""
+    }
+    return TextUntilNul(app_properties[index].icon[:])
+}
+
+AppPropertiesSeen :: (name: string) -> string {
+    index := AppPropertiesSlot(name)
+    if index < 0 {
+        return ""
+    }
+    return TextUntilNul(app_properties[index].seen[:])
+}
+
+AppPropertiesStore :: (prefix: string, name: string, value: string) -> bool {
+    bytes: [256]u8
+    if !CopyCString(value, bytes[:]) {
+        return false
+    }
+    return SettingsStoreKeyText(AppPropertiesKey(prefix, name), bytes[:])
+}
+
+// Save an app's title and icon; empty values restore its own.
+AppPropertiesSave :: (name: string, title: string, icon: string) -> bool {
+    index := AppPropertiesSlot(name)
+    if index < 0 || title.count >= cast(s64)app_properties[index].title.count || !AppIconChoiceKnown(icon) {
+        return false
+    }
+    if !AppPropertiesStore(APP_TITLE_PREFIX, name, title) || !AppPropertiesStore(APP_ICON_PREFIX, name, icon) {
+        return false
+    }
+    unused CopyCString(title, app_properties[index].title[:])
+    unused CopyCString(icon, app_properties[index].icon[:])
+    return true
+}
+
+// The person opened the app's options and saw this update offer.
+AppPropertiesSaveSeen :: (name: string, digest: string) -> bool {
+    index := AppPropertiesSlot(name)
+    if index < 0 || digest.count >= cast(s64)app_properties[index].seen.count ||
+    !AppPropertiesStore(APP_UPDATE_SEEN_PREFIX, name, digest) {
+        return false
+    }
+    unused CopyCString(digest, app_properties[index].seen[:])
+    return true
+}
