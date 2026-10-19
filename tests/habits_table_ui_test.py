@@ -196,6 +196,9 @@ with contextlib.ExitStack() as stack:
     def details_open():
         return bool(driver.find(contains="streak", visible=True))
 
+    def setting(key):
+        return sql("SELECT value FROM settings WHERE key='" + key + "'")
+
     def inactive_header():
         return driver.wait(contains="Inactive habits", role="button")
 
@@ -209,12 +212,13 @@ with contextlib.ExitStack() as stack:
     # Opening a habit's details or the inactive habits never makes a scrollbar
     # appear and the day columns move or drop: when either would need room to
     # scroll, the scrollbar shows from the start. In a window this short, each
-    # of them alone makes the table scroll; at a phone's width the rows then
-    # show their icons alone from the start.
+    # of them alone makes the table scroll.
     def steady_columns(width, height, name):
         screen_pixels[:] = [width, height]
         resize(width, height)
         closed = header()
+        if len(closed) < 4:
+            raise Failure(f"FAIL the {name} table shows only {len(closed)} days ({TEST_DIR})")
         header_y = header_pixel_y()
         if not scrollbar_shown(capture(name + "-closed"), header_y + 30, header_y + 200):
             raise Failure(f"FAIL the {name} table shows no scrollbar before anything opens "
@@ -224,10 +228,12 @@ with contextlib.ExitStack() as stack:
         yoga = rows()[1]
         first_day = cell(yoga, closed[0])
         icon = (yoga["x"] + (first_day["x"] - yoga["x"]) / 2, yoga["y"] + yoga["height"] / 2)
-        if width < 400:
-            assert not driver.find(label="Yoga", visible=True), "a phone's rows show names"
+        if width >= 300:
+            assert driver.find(label="Yoga", visible=True), "a phone's rows hide names"
         tap(*icon)
         wait_for(details_open, f"Yoga's details did not open in the {name} table")
+        if width < 300:
+            assert driver.find(label="Yoga", visible=True), "a narrow expanded card hides its name"
         driver.wait_idle(frames=3)
         expect(header(), closed, f"opening Yoga moved the {name} table's day columns")
         tap(*icon)
@@ -254,6 +260,21 @@ with contextlib.ExitStack() as stack:
     # The day columns: today first, then yesterday and the day before, named
     # by their weekdays in the header.
     columns = header()
+    resize_handle = driver.wait(key=4100000, role="button")
+    handle_center = UiDriver.center(resize_handle)
+    drag(handle_center, (handle_center[0] + 170, handle_center[1]))
+    wait_for(lambda: setting("habits_name_width") == "320",
+             lambda: "the resized name width was not saved: " + setting("habits_name_width"))
+    assert len(header()) >= 4, "resizing the name column dropped below four days"
+    assert not driver.find(label="Yoga", visible=True), "the widest name column still shows row names"
+    yoga = rows()[1]
+    first_day = cell(yoga, header()[0])
+    icon = (yoga["x"] + (first_day["x"] - yoga["x"]) / 2, yoga["y"] + yoga["height"] / 2)
+    tap(*icon)
+    wait_for(details_open, "the icon-only row did not open its details")
+    assert driver.find(label="Yoga", visible=True), "an icon-only expanded card hides its name"
+    tap(*icon)
+    wait_for(lambda: not details_open(), "the icon-only details did not close")
     today = datetime.date.today()
     yesterday = today - datetime.timedelta(days=1)
     before_yesterday = today - datetime.timedelta(days=2)

@@ -87,6 +87,7 @@ GetTime :: () -> float64 #foreign raylib_input;
 #import "text_input_props"
 #import, file "../platform/raylib_text_input.zi";
 #import, file "../app/smooth_frames.zi";
+#import, file "../app/settings_store.zi";
 
 using ModalType;
 using HostValueKind;
@@ -111,7 +112,9 @@ HABITS_ROW_ICON_SIZE :: 34;
 HABITS_ROW_SMALL_ICON_SIZE :: 28;
 HABITS_ICON_COLUMN_WIDTH :: 36;
 HABITS_NAME_PREFERRED_WIDTH :: 150;
-HABITS_NAME_MIN_WIDTH :: 120;
+HABITS_NAME_MIN_WIDTH :: 72;
+HABITS_NAME_MAXIMUM_WIDTH :: 320;
+HABITS_NAME_RESIZE_HANDLE_WIDTH :: 24;
 HABITS_DAY_MIN_WIDTH :: 30;
 HABITS_DAY_MAX_WIDTH :: 72;
 HABITS_DEACTIVATED_ROW_HEIGHT :: 52;
@@ -885,6 +888,56 @@ HabitScreenTableHeader :: (app: *InnerBreeze, x: s32, y: s32,
     }
 }
 
+// The border between names and days resizes the name column. Its saved width
+// is in design units, so it follows the window and device scale.
+HabitScreenNameResize :: (app: *InnerBreeze, x: s32, y: s32, height: s32,
+    name_width: s32) {
+    handle_w := AppScale(HABITS_NAME_RESIZE_HANDLE_WIDTH)
+    handle: ButtonProps
+    handle.id = 4100000
+    // It sits left of the border, so it never covers today's day name.
+    handle.bounds = HabitScreenRect(x - handle_w - AppScale(2), y, handle_w, height)
+    handle.label = LocaleText("session_resize_button")
+    handle.icon_only = true
+    handle.icon_shape = "S2rr:M9 7L5 12L9 17M15 7L19 12L15 17"
+    handle.tone = cast(ButtonTone)ButtonToneNeutral
+    handle.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    handle.disabled = app.modal.active != 0
+    key := cast(u64)handle.id
+    previous := TreePrevious(app.ui.session,
+        TreeCurrentParent(app.ui.session), key, WidgetKindButton)
+    drag := TreeTakeDragAt(app.ui.session, previous)
+    if drag.started && !handle.disabled {
+        app.habits.name_resizing = 1
+        app.habits.name_resize_origin = drag.x
+        app.habits.name_resize_start = cast(float32)name_width /
+        cast(float32)AppScale(1)
+    }
+    if app.habits.name_resizing != 0 && (drag.active || drag.ended) {
+        width := app.habits.name_resize_start +
+        (drag.x - app.habits.name_resize_origin) / cast(float32)AppScale(1)
+        minimum := cast(float32)HABITS_NAME_MIN_WIDTH
+        maximum := cast(float32)HABITS_NAME_MAXIMUM_WIDTH
+        if width < minimum {
+            width = minimum
+        }
+        if width > maximum {
+            width = maximum
+        }
+        app.habits.name_width = cast(s32)(width + 0.5)
+        if drag.ended {
+            app.habits.name_resizing = 0
+            SettingsBeginWrite()
+            unused SettingsStoreInt("habits_name_width", app.habits.name_width)
+            SettingsEndWrite()
+        }
+    }
+    unused Button(app.ui.session, handle)
+    node := TreeSubmitted(app.ui.session, TreeCurrentParent(app.ui.session),
+        key, WidgetKindButton)
+    TreeSetDragCapture(app.ui.session, node, true)
+}
+
 // A habit's row: its icon and name, which open its details and drag it to
 // another place, and then a circle for each of the last seven days.
 // Returns true when the row was tapped.
@@ -943,11 +996,14 @@ HabitScreenRowFace :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
 // and this week's days.
 HABITS_DETAIL_ACTION_SIZE :: 52
 HABITS_DETAIL_PADDING :: 12
+HABITS_DETAIL_TITLE_HEIGHT :: 24
+HABITS_DETAIL_TITLE_GAP :: 8
 
 HabitScreenRowDetailHeight :: (app: *InnerBreeze, index: s32) -> s32 {
     height := AppScale(4) + AppScale(HABITS_DETAIL_PADDING) * 2 +
     AppScale(HABITS_DETAIL_ACTION_SIZE) + AppScale(12) +
     AppScale(FIGURE_CARD_HEIGHT) + AppScale(12)
+    height += AppScale(HABITS_DETAIL_TITLE_HEIGHT + HABITS_DETAIL_TITLE_GAP)
     if app.habits.items[index].description[0] != cast(u8)0 {
         height += AppScale(30)
     }
@@ -970,6 +1026,15 @@ HabitScreenRowDetail :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
     x := panel_x + inner
     width := panel_w - inner * 2
     y := panel_y + inner
+    title: TextProps
+    title.bounds = HabitScreenRect(x, y, width,
+        AppScale(HABITS_DETAIL_TITLE_HEIGHT))
+    title.text = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE)
+    title.font = AppFontSize()
+    title.vertical_align = cast(TextAlign)TextAlignCenter
+    title.wrap = cast(TextWrap)TextWrapEllipsis
+    Text(app.ui.session, title)
+    y += AppScale(HABITS_DETAIL_TITLE_HEIGHT + HABITS_DETAIL_TITLE_GAP)
     description := AppTextFromCString(*habit.description[0],
         HABIT_DESCRIPTION_SIZE)
     if description.count > 0 {
@@ -1626,8 +1691,18 @@ HabitScreenOverview :: (app: *InnerBreeze,
     pad := AppScale(12)
     table_x := cast(s32)scrolled.content.x
     table_w := cast(s32)scrolled.content.width
+    name_preferred := cast(s32)HABITS_NAME_PREFERRED_WIDTH
+    if app.habits.name_width > 0 {
+        name_preferred = app.habits.name_width
+    }
+    if name_preferred < HABITS_NAME_MIN_WIDTH {
+        name_preferred = HABITS_NAME_MIN_WIDTH
+    }
+    if name_preferred > HABITS_NAME_MAXIMUM_WIDTH {
+        name_preferred = HABITS_NAME_MAXIMUM_WIDTH
+    }
     layout := HabitTableLayoutFor(table_w - pad * 2,
-        AppScale(HABITS_NAME_PREFERRED_WIDTH), AppScale(HABITS_NAME_MIN_WIDTH),
+        AppScale(name_preferred), AppScale(HABITS_NAME_MIN_WIDTH),
         AppScale(HABITS_ICON_COLUMN_WIDTH), AppScale(HABITS_DAY_MIN_WIDTH),
         AppScale(HABITS_DAY_MAX_WIDTH))
     if active_count == 0 {
@@ -1707,6 +1782,8 @@ HabitScreenOverview :: (app: *InnerBreeze,
     End(app.ui.session)
     HabitScreenTableHeader(app, table_x + pad + layout.name_width, list_y,
         layout, header_h)
+    HabitScreenNameResize(app, table_x + pad + layout.name_width, list_y,
+        header_h, layout.name_width)
     PaintRoundedFill(app.ui.session, -1, HabitScreenRect(geometry.x, rows_y,
         geometry.width, HabitScreenHairline()), 0.0, 1,
         color_with_alpha(StyleTokenColor("text"), 0.12))
