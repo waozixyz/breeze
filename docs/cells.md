@@ -15,8 +15,9 @@ or `assets/leaderboard/`.
 The cell picker, Lists and Diary editor/calendar compose the
 standard Kryon widgets inside their ZIBs. Raylib, Android and canvas bind the
 same typed render effects to their normal widgets. File dialogs, persistence,
-account sync and native input stay in the wrapper. Habits draws a counting
-habit's count dialog in its package (`apps/habits/habits_view.zi`); its
+account sync and native input stay in the wrapper. Habits draws its count
+dialog and editor save/discard/delete confirmations in its package
+(`apps/habits/habits_view.zi` and `editor_dialogs.zi`); its
 table, editor, entries, history and statistics, and Practices' screens,
 still use compiled screen compositions; migrating those screens is required
 before every visual change can ship without rebuilding the wrapper.
@@ -51,12 +52,12 @@ on close and restart, on a private display with disposable profiles.
 
 ## Lumi
 
-Lumi is the default home for new profiles and for the first launch after her
-introduction. Existing app choices and todo data are retained. Settings lists
+New profiles choose a language and optional audio, then open Apps with Lumi,
+Habits and Practice pinned. Existing app choices and todo data are retained. Settings lists
 Lumi in the same compact list as every other cell. Removing her shortcut
 keeps her package, conversation and app abilities; she cannot be uninstalled.
 Her firefly image belongs to `assets/lumi/mascot.png` in her package and appears
-beside her replies. The conversation has no title bar; navigation uses a
+beside her replies. The conversation has compact connection controls; navigation uses a
 monochrome outlined firefly, matching the other navigation glyphs. The sidebar
 uses `assets/lumi/sidebar.shape` with the standard button size and foreground;
 navigation bars use the matching transparent `assets/lumi/sidebar.png`.
@@ -64,9 +65,14 @@ The chat avatar is mirrored toward the conversation. Enter sends a message;
 Shift+Enter inserts a new line and the composer grows with the draft.
 
 `apps/lumi/lumi_view.zi` composes the chat and command suggestions with hosted
-Kryon widgets. `apps/lumi/engine.zi` is the first small offline interpreter;
-its typed `LumiAction` output is the boundary for a future on-device model.
-There is no cloud inference, model download or trained model in this version.
+Kryon widgets. `apps/lumi/engine.zi` interprets supported commands offline;
+its typed `LumiAction` output is validated by the host before an action runs.
+Offline commands need no AI model or model download. Lumi starts offline.
+After agreement to the in-app terms, online AI can answer other requests
+through Inner Breeze's service or the person's own compatible provider.
+`src/cells/lumi_connection.zi` owns connection choice and agreement;
+`src/cells/lumi_online.zi` owns requests. Switching offline stops AI requests.
+The agreement explains the conversation and app context sent to each route.
 Translated commands and the stable `/todo TITLE`, `/done TITLE`, `/reopen TITLE`,
 `/habit NAME`, `/lists`, `/habits`, `/practices` and `/diary` forms work offline.
 `start whm` starts the Wim Hof Method immediately; meditation, Sun Salutation
@@ -95,9 +101,10 @@ The wrapper validates IDs and live state again before using the existing
 user-scoped storage, sync outbox and practice registry. A practice starts after
 the chat cell finishes its call, within the same application frame.
 
-The conversation keeps the latest 32 exchanges in the active user's local
-settings. It survives restart, resets on account changes, and is not part of
-account preference sync. The wrapper provides input, persistence and bounded
+The conversation is saved as account-scoped records, with older messages loaded
+on demand. It survives restart, follows the active account, and can sync as
+encrypted records when an account is connected. Online AI agreement is separate
+from account sync. The wrapper provides input, persistence and bounded
 app effects; no database pointers or arbitrary code cross the cell boundary.
 
 Lumi can open Settings or Appearance, change the app theme with `/theme forest`
@@ -213,9 +220,9 @@ once in APK assets and opens its bytes through the NDK asset manager. Each
 CPU library contains only the native host and small bootstrap assets, so a
 universal APK shares the artwork across all four architectures. Direct Gradle
 builds run `make cells` and stage the current package before merging assets.
-Lists and Diary are
-absent from that root and the native embedded payload. Recommended apps work
-offline. Downloaded packages are stored in the private `packages/` directory
+All six app packages are included in that root and can be opened offline;
+Lumi, Habits and Practice are pinned by default. Downloaded updates and other
+apps are stored in the private `packages/` directory
 beside `inbe.db`. The host checks signed release identity, API compatibility,
 hash, size, allowed capabilities and the typed identity handshake before
 publishing an immutable payload and atomically replacing its current pointer.

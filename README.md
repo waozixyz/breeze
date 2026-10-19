@@ -24,7 +24,8 @@ practice from another device connected to the same account.
 
 ## Features
 
-- Lumi, a local firefly companion with private chat, habit completion, practice starts, and optional todo tools
+- Lumi, a firefly companion with offline commands and optional online AI chat,
+  habit completion, practice starts, and optional todo tools
 - Guided practice sessions with visual and audio cues
 - Mind, Yoga, and Fitness organization for different practice routines
 - Customizable breathing sessions, meditation timers, and habit counters
@@ -32,6 +33,14 @@ practice from another device connected to the same account.
 - Local import and export support
 - Theme customization with light and dark variants
 - Repeat the last completed practice using its current settings
+
+Lumi starts offline. Online AI requires agreement to the data sharing shown in
+the app; you can use Inner Breeze's service or configure your own provider.
+See the [privacy policy](site/static/privacy.html) and
+[Lumi's connection modes](docs/cells.md#lumi).
+
+For changes and bug reports, see [Contributing](CONTRIBUTING.md).
+Report security issues through [Security](SECURITY.md).
 
 ## Build
 
