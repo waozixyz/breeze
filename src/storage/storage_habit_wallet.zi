@@ -109,7 +109,7 @@ storage_habit_rewards_load :: (output: []HabitReward) -> s32 {
     stmt: *void = null
     count: s32 = 0
     if storage_db_handle() == null || SqlitePrepareText(storage_db_handle(),
-        "SELECT id,name,price FROM habit_rewards WHERE user_id=?1 AND deleted_at=0 ORDER BY price,name COLLATE NOCASE,id LIMIT ?2",
+        "SELECT id,name,price,icon FROM habit_rewards WHERE user_id=?1 AND deleted_at=0 ORDER BY price,name COLLATE NOCASE,id LIMIT ?2",
         -1, *stmt, null) != SQLITE_OK {
         return 0
     }
@@ -123,6 +123,7 @@ storage_habit_rewards_load :: (output: []HabitReward) -> s32 {
         unused AppCopyText(AppTextFromCString(SqliteColumnText(stmt, 1),
             HABIT_REWARD_NAME_SIZE), reward.name[:])
         reward.price = HabitRewardPriceClamp(sqlite3_column_int(stmt, 2))
+        reward.icon = HabitRewardIconClamp(sqlite3_column_int(stmt, 3))
         count += 1
     }
     SqliteFinalize(stmt)
@@ -132,7 +133,7 @@ storage_habit_rewards_load :: (output: []HabitReward) -> s32 {
 // Adds a reward, or changes the one with reward_id, and writes its id to
 // id_out.
 storage_habit_reward_save :: (reward_id: string, name: string, price: s32,
-    id_out: []u8) -> s32 {
+    icon: s32, id_out: []u8) -> s32 {
     if storage_db_handle() == null || name.count == 0 {
         return 0
     }
@@ -146,7 +147,7 @@ storage_habit_reward_save :: (reward_id: string, name: string, price: s32,
     }
     stored_id := AppTextFromCString(*id[0], HABIT_REWARD_ID_SIZE)
     stmt: *void = null
-    sql := "INSERT INTO habit_rewards(id,user_id,name,price,deleted_at,updated_at) VALUES(?1,?2,?3,?4,0,?5) ON CONFLICT(id) DO UPDATE SET name=excluded.name,price=excluded.price,deleted_at=0,updated_at=MAX(habit_rewards.updated_at+1,excluded.updated_at)"
+    sql := "INSERT INTO habit_rewards(id,user_id,name,price,icon,deleted_at,updated_at) VALUES(?1,?2,?3,?4,?6,0,?5) ON CONFLICT(id) DO UPDATE SET name=excluded.name,price=excluded.price,icon=excluded.icon,deleted_at=0,updated_at=MAX(habit_rewards.updated_at+1,excluded.updated_at)"
     if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) != SQLITE_OK {
         return 0
     }
@@ -155,6 +156,7 @@ storage_habit_reward_save :: (reward_id: string, name: string, price: s32,
     bind_text(stmt, 3, name)
     sqlite3_bind_int(stmt, 4, HabitRewardPriceClamp(price))
     SqliteBindInt64(stmt, 5, now_seconds())
+    sqlite3_bind_int(stmt, 6, HabitRewardIconClamp(icon))
     done := SqliteStep(stmt) == SQLITE_DONE
     SqliteFinalize(stmt)
     if !done {

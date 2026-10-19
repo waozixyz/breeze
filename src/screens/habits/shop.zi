@@ -1,13 +1,15 @@
 // The habit shop: the coins the habits earned and the rewards the person
-// sets, each with its price in coins, to spend them on. A reward is added
-// or changed in the form under the list; a tap on a reward's name opens it
-// there, and Buy asks before it spends the coins.
+// sets, each with its symbol and its price in coins, to spend them on. A
+// reward is added or changed in the form under the list; a tap on a
+// reward's name opens it there, and Buy asks before it spends the coins.
 #import "geometry"
 #import "layout"
 #import "tree"
 #import "session"
 #import "box_props"
 #import "box_widget"
+#import "drawing_props"
+#import "svg_icon"
 #import "button_props"
 #import "button_widget"
 #import "control_props"
@@ -29,6 +31,7 @@
 #import, file "../../app/text_buffers.zi";
 #import, file "../../habits/habit_types.zi";
 #import, file "../../habits/habit_coins.zi";
+#import, file "../../habits/habit_icons.zi";
 #import, file "../../storage/db.zi";
 #import, file "../../storage/storage_habit_wallet.zi";
 #import, file "../../platform/raylib_text_input.zi";
@@ -51,6 +54,10 @@ HABIT_SHOP_GAP :: 16
 // Delete and Cancel while it changes a reward.
 HABIT_SHOP_FORM_PADDING :: 14
 HABIT_SHOP_FIELD_HEIGHT :: 44
+// The grid of symbols: round buttons as the habit editor's icons are.
+HABIT_SHOP_ICON_SIZE :: 40
+HABIT_SHOP_ICON_STEP_X :: 48
+HABIT_SHOP_ICON_STEP_Y :: 44
 
 // Reads the coins and rewards again when the stored data changed, as
 // after a done day, a purchase or a sync.
@@ -122,6 +129,8 @@ HabitShopFormReset :: (app: *InnerBreeze) {
     shop.price = HABIT_SHOP_DEFAULT_PRICE
     shop.price_focused = 0
     shop.price_scroll_x = 0
+    shop.icon = HABIT_ICON_GIFT
+    shop.icon_open = false
     HabitShopPriceText(app)
 }
 
@@ -139,6 +148,8 @@ HabitShopFormEdit :: (app: *InnerBreeze, reward: *HabitReward) {
     shop.name_focused = 0
     shop.price = HabitRewardPriceClamp(reward.price)
     shop.price_focused = 0
+    shop.icon = HabitRewardIconClamp(reward.icon)
+    shop.icon_open = false
     HabitShopPriceText(app)
 }
 
@@ -177,7 +188,8 @@ HabitShopFormSubmit :: (app: *InnerBreeze) {
     }
     saved: [HABIT_REWARD_ID_SIZE]u8
     if storage_habit_reward_save(AppTextFromCString(*app.habit_shop.editing[0],
-        HABIT_REWARD_ID_SIZE), name, app.habit_shop.price, saved[:]) == 0 {
+        HABIT_REWARD_ID_SIZE), name, app.habit_shop.price, app.habit_shop.icon,
+        saved[:]) == 0 {
         return
     }
     HabitShopFormReset(app)
@@ -347,7 +359,9 @@ HabitShopRow :: (app: *InnerBreeze, index: s32, x: s32, y: s32, width: s32) {
     price_w := HabitCoinAmountWidth(price, AppFontSize())
     buy_x := x + width - pad - buy_w
     price_x := buy_x - AppScale(14) - price_w
-    name_w := price_x - x - pad - AppScale(10)
+    symbol := AppScale(26)
+    name_x := x + pad + symbol + AppScale(12)
+    name_w := price_x - name_x - AppScale(10)
     open: ButtonProps
     open.id = 8500 + index
     open.bounds = Rectangle.{cast(float32)x, cast(float32)y,
@@ -358,8 +372,11 @@ HabitShopRow :: (app: *InnerBreeze, index: s32, x: s32, y: s32, width: s32) {
     if Button(app.ui.session, open) != 0 {
         HabitShopFormEdit(app, reward)
     }
+    PaintSvgIcon(app.ui.session, -1, HabitIconShape(reward.icon), Rectangle.{
+            cast(float32)(x + pad), cast(float32)(y + (height - symbol) / 2),
+            cast(float32)symbol, cast(float32)symbol}, StyleTokenColor("text"))
     name: TextProps
-    name.bounds = Rectangle.{cast(float32)(x + pad), cast(float32)y,
+    name.bounds = Rectangle.{cast(float32)name_x, cast(float32)y,
         cast(float32)name_w, cast(float32)height}
     name.text = AppTextFromCString(*reward.name[0], HABIT_REWARD_NAME_SIZE)
     name.vertical_align = cast(TextAlign)TextAlignCenter
@@ -382,10 +399,84 @@ HabitShopRow :: (app: *InnerBreeze, index: s32, x: s32, y: s32, width: s32) {
     }
 }
 
+HabitShopIconColumns :: (width: s32) -> s32 {
+    columns := width / AppScale(HABIT_SHOP_ICON_STEP_X)
+    if columns < 1 {
+        columns = 1
+    }
+    return columns
+}
+
+// The height of the open grid of symbols, one for each habit icon.
+HabitShopIconGridHeight :: (width: s32) -> s32 {
+    columns := HabitShopIconColumns(width)
+    rows := (HABIT_ICON_COUNT + columns - 1) / columns
+    return rows * AppScale(HABIT_SHOP_ICON_STEP_Y)
+}
+
+// The reward's symbol before its name. A tap opens the grid of symbols
+// under the name, or closes it again.
+HabitShopIconButton :: (app: *InnerBreeze, bounds: Rectangle) {
+    shop := *app.habit_shop
+    props: ButtonProps
+    props.id = 8425
+    props.bounds = bounds
+    props.label = LocaleText("habit_icon_label")
+    props.icon_shape = HabitIconShape(shop.icon)
+    props.icon_only = true
+    props.selected = shop.icon_open
+    props.tone = cast(ButtonTone)ButtonToneNeutral
+    props.emphasis = cast(ButtonEmphasis)(ifx shop.icon_open then
+        ButtonEmphasisOutline else ButtonEmphasisSoft)
+    props.disabled = app.modal.active != 0
+    if Button(app.ui.session, props) != 0 {
+        shop.icon_open = !shop.icon_open
+        shop.name_focused = 0
+        shop.price_focused = 0
+    }
+}
+
+// Every symbol a reward can have, as the habit editor offers its icons. A
+// tap chooses one and closes the grid.
+HabitShopIconGrid :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
+    shop := *app.habit_shop
+    columns := HabitShopIconColumns(width)
+    icon: s32 = 1
+    while icon <= HABIT_ICON_COUNT {
+        index := icon - 1
+        props: ButtonProps
+        props.id = 8700 + icon
+        props.bounds = Rectangle.{
+            cast(float32)(x + (index % columns) * AppScale(HABIT_SHOP_ICON_STEP_X) +
+            AppScale(4)),
+            cast(float32)(y + (index / columns) * AppScale(HABIT_SHOP_ICON_STEP_Y) +
+            AppScale(2)),
+            cast(float32)AppScale(HABIT_SHOP_ICON_SIZE),
+            cast(float32)AppScale(HABIT_SHOP_ICON_SIZE)}
+        props.circle = true
+        props.icon_shape = HabitIconShape(icon)
+        props.icon_only = true
+        props.selected = shop.icon == icon
+        props.tone = cast(ButtonTone)(ifx props.selected then
+            ButtonToneAccent else ButtonToneNeutral)
+        props.emphasis = cast(ButtonEmphasis)(ifx props.selected then
+            ButtonEmphasisFilled else ButtonEmphasisSoft)
+        props.disabled = app.modal.active != 0
+        if Button(app.ui.session, props) != 0 {
+            shop.icon = icon
+            shop.icon_open = false
+        }
+        icon += 1
+    }
+}
+
 HabitShopFormHeight :: (app: *InnerBreeze, width: s32) -> s32 {
     pad := AppScale(HABIT_SHOP_FORM_PADDING)
     height := pad + AppScale(30) + AppScale(HABIT_SHOP_FIELD_HEIGHT) +
     AppScale(10) + AppScale(HABIT_SHOP_FIELD_HEIGHT) + pad
+    if app.habit_shop.icon_open {
+        height += HabitShopIconGridHeight(width - pad * 2) + AppScale(10)
+    }
     if HabitShopFormWraps(app, width) {
         height += AppScale(10) + AppScale(HABIT_SHOP_FIELD_HEIGHT)
     }
@@ -420,10 +511,19 @@ HabitShopForm :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
     Text(app.ui.session, title)
     row_y += AppScale(30)
     field_h := AppScale(HABIT_SHOP_FIELD_HEIGHT)
-    named := HabitShopNameField(app, Rectangle.{cast(float32)inner_x,
-            cast(float32)row_y, cast(float32)inner_w, cast(float32)field_h})
+    // The symbol, then the name.
+    HabitShopIconButton(app, Rectangle.{cast(float32)inner_x,
+            cast(float32)row_y, cast(float32)field_h, cast(float32)field_h})
+    name_x := inner_x + field_h + AppScale(10)
+    named := HabitShopNameField(app, Rectangle.{cast(float32)name_x,
+            cast(float32)row_y, cast(float32)(inner_x + inner_w - name_x),
+            cast(float32)field_h})
     submit := named.committed
     row_y += field_h + AppScale(10)
+    if shop.icon_open {
+        HabitShopIconGrid(app, inner_x, row_y, inner_w)
+        row_y += HabitShopIconGridHeight(inner_w) + AppScale(10)
+    }
     // Price − [n] + with a coin, then Add or Save at the row's end.
     label := LocaleText("habit_shop_price_label")
     label_w := AppTextWidth(label, AppFontSize()) + AppScale(10)
@@ -623,9 +723,13 @@ HabitShopBuyDialog :: (app: *InnerBreeze) {
     inner_w := cast(s32)content.width
     reward_name := AppTextFromCString(*reward.name[0], HABIT_REWARD_NAME_SIZE)
     strong := StrongWhole(reward_name)
+    symbol := AppScale(30)
+    PaintSvgIcon(app.ui.session, -1, HabitIconShape(reward.icon), Rectangle.{
+            cast(float32)x, cast(float32)y, cast(float32)symbol, cast(float32)symbol},
+        StyleTokenColor("text"))
     name: TextProps
-    name.bounds = Rectangle.{cast(float32)x, cast(float32)y,
-        cast(float32)inner_w, cast(float32)AppScale(30)}
+    name.bounds = Rectangle.{cast(float32)(x + symbol + AppScale(10)), cast(float32)y,
+        cast(float32)(inner_w - symbol - AppScale(10)), cast(float32)AppScale(30)}
     name.text = reward_name
     name.strong = strong[:]
     name.vertical_align = cast(TextAlign)TextAlignCenter

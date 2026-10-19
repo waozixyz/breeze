@@ -163,6 +163,7 @@ static void upgrade_1_8_9(const char *fixture)
                       "difficulty=0 AND coins_from="
                       "CAST(strftime('%Y%m%d','now','localtime') AS INTEGER)") == 1);
         assert(scalar("SELECT COUNT(*) FROM habit_rewards") == 0);
+        assert(has_column("habit_rewards", "icon"));
         assert(scalar("SELECT COUNT(*) FROM habit_coins") == 0);
         assert(scalar("SELECT count FROM habit_days") == 7);
         assert(scalar("SELECT session_count FROM habit_days") == 2);
@@ -224,6 +225,16 @@ int main(int argc, char **argv)
     assert(scalar("SELECT COUNT(*) FROM users WHERE kind='local'") == 1);
     assert(load_or_create_user());
     assert(scalar("SELECT COUNT(*) FROM users WHERE kind='local'") == 1);
+    /* Rewards from before symbols keep their names and prices and show the
+     * gift until a symbol is chosen. */
+    assert(exec_sql((uint8_t *)
+        "ALTER TABLE habit_rewards DROP COLUMN icon;"
+        "INSERT INTO habit_rewards(id,user_id,name,price,deleted_at,updated_at) "
+        "VALUES('reward','upgrade-user','Movie night',5,0,140);"));
+    assert(!has_column("habit_rewards", "icon"));
+    assert(migrate_schema());
+    assert(scalar("SELECT COUNT(*) FROM habit_rewards WHERE id='reward' AND "
+                  "name='Movie night' AND price=5 AND icon=0 AND updated_at=140") == 1);
     close_database();
 
     open_memory_database();
