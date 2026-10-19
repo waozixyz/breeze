@@ -42,10 +42,10 @@
 - Apps from the node open only once they are on your device. An installed
   one starts when you open it; one still downloading stays closed instead of
   showing "Installing this app".
-- Chess moves into Arcade, a set of games that also has Pushy. Once the node
-  offers Arcade, More apps lists it instead of Chess. If you installed Chess,
-  Arcade installs for you with your saved and friend Chess games, and Chess
-  leaves your apps once Arcade has downloaded.
+- Chess moves into Arcade, a set of games that also has Pushy, so the
+  standalone Chess app no longer shows in your apps or More apps. Once the
+  node offers Arcade and you had installed Chess, Arcade installs for you with
+  your saved and friend Chess games.
 - Habits earn coins, more for hard ones, to spend on your own rewards in the shop.
 
 ## [2.1.35] - 2026-10-17
