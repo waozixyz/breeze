@@ -28,6 +28,10 @@ update_host_text :: (value: *u8) -> string {
 #import, file "settings_ui.zi";
 #import, file "../../cells/catalog.zi";
 #import, file "../../cells/node_apps.zi";
+#import, file "../../app/launcher_policy.zi";
+#import, file "../../app/route_types.zi";
+#import, file "../../app/app_launcher_apps.zi";
+#import, file "../../app/app_nav_state.zi";
 #import, file "../../cells/versions.zi";
 #import "open_uri"
 #import "link_widget"
@@ -89,6 +93,39 @@ about_link_icons_height :: (content_w: s32) -> s32 {
     return rows * icon_btn_w + (rows - 1) * row_spacing
 }
 
+// The account's apps as Apps shows them: a bundled app it added, or an app
+// the node offers in one of its slots.
+about_route_installed :: (app: *InnerBreeze, route: s32) -> bool {
+    slot := AppNavNodeSlot(route)
+    if slot >= 0 {
+        return NodeAppName(slot).count > 0
+    }
+    return (app.enabled_apps & app_nav_route_bit(route)) != 0
+}
+
+// The Inbe harness and each installed app.
+about_package_count :: (app: *InnerBreeze) -> s32 {
+    count: s32 = 1
+    routes := LauncherRoutes()
+    for route: routes {
+        if about_route_installed(app, route) {
+            count += 1
+        }
+    }
+    return count
+}
+
+about_package_row :: (app: *InnerBreeze, x: s32, w: s32, y: *s32, label: string, version: string) {
+    row: [128]u8
+    row_args: [2]FormatArg = .[FormatArg.{.text = label, .is_text = true},
+    FormatArg.{.text = version, .is_text = true}]
+    FormatTemplate("%s · %s", row_args[:], row[:])
+    Text(app.ui.session, TextProps.{.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                cast(float32)w, cast(float32)AppScale(28)},
+            .text = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*row[0], 128)), .font = AppFontSize()})
+    y.* += AppScale(28)
+}
+
 settings_about_content_height :: (content_w: s32) -> s32 {
     description := ParagraphSpec.{
         .text = LocaleText("about_text"),
@@ -100,7 +137,7 @@ settings_about_content_height :: (content_w: s32) -> s32 {
 
     pending_root := ifx PackageRootPending() then AppScale(28) else 0
     // One version row for each package, the harness included.
-    package_rows := PackageCount * AppScale(28)
+    package_rows := about_package_count(CurrentApp()) * AppScale(28)
     return AppScale(252) + package_rows + update_row + pending_root + AppParagraphHeight(description.text, description.width,
         description.font, description.line_gap) + about_link_icons_height(content_w) +
     about_package_updates_height(content_w) + about_beta_apps_height(content_w)
@@ -261,30 +298,27 @@ settings_about_draw :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
     Text(app.ui.session, TextProps.{.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
                 cast(float32)w, cast(float32)AppScale(32)}, .text = LocaleText("cells_versions"), .font = font})
     y.* += AppScale(36)
-    // The packages in catalog order: first the Inbe harness, the package
-    // that carries the apps and updates without a new APK, then the apps
-    // inside it. The APK's own version is the one above; a downloaded
-    // harness waits for a restart.
+    // First the Inbe harness, the package that carries the apps and updates
+    // without a new APK, then every app this account has installed, named as
+    // in Apps, the apps the node offers included. The APK's own version is
+    // the one above; a downloaded harness waits for a restart.
     if PackageRootPending() {
         Text(app.ui.session, TextProps.{.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
                     cast(float32)w, cast(float32)AppScale(28)}, .text = LocaleText("update_restart"), .font = font})
         y.* += AppScale(28)
     }
-    labels: [PackageCount]string = .["Inbe harness", LocaleText("tab_elist"), LocaleText("tab_habits"),
-    LocaleText("tab_practices"), LocaleText("tab_diary"), "Lumi", LocaleText("profile_leaderboard_title")]
-    for index: cast(s32)0..cast(s32)(PackageCount - 1) {
-        version := PackageVersion(index)
-        if !PackageAvailable(index) {
-            version = LocaleText("cells_not_installed")
+    about_package_row(app, x, w, y, "Inbe harness", PackageVersion(0))
+    routes := LauncherRoutes()
+    for route: routes {
+        if !about_route_installed(app, route) {
+            continue
         }
-        row: [128]u8
-        row_args: [2]FormatArg = .[FormatArg.{.text = labels[index], .is_text = true},
-        FormatArg.{.text = version, .is_text = true}]
-        FormatTemplate("%s · %s", row_args[:], row[:])
-        Text(app.ui.session, TextProps.{.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                    cast(float32)w, cast(float32)AppScale(28)},
-                .text = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*row[0], 128)), .font = font})
-        y.* += AppScale(28)
+        index := LauncherAppPackage(route)
+        version := LocaleText("cells_not_installed")
+        if PackageAvailable(index) {
+            version = PackageVersion(index)
+        }
+        about_package_row(app, x, w, y, app_nav_route_label(route), version)
     }
     y.* += AppScale(20)
     about_draw_package_updates(app, x, w, y)
