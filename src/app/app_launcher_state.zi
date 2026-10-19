@@ -77,6 +77,7 @@ app_launcher_close :: (app: *InnerBreeze) {
         save_settings(app)
     }
     app.launcher_open = false
+    app.launcher_pending_node = 0
     app.launcher_search_focused = false
     app.launcher_drag_key = 0
     app.launcher_drag_moving = false
@@ -104,6 +105,23 @@ app_launcher_toggle :: (app: *InnerBreeze) {
     app.launcher_drag_released = false
     app_route_transition_cancel(app)
     app_block_current_click(app)
+}
+
+// A tapped app that was still downloading opens by itself once it is
+// installed, as long as Apps stays open; tapping another app or leaving
+// Apps forgets it.
+app_launcher_open_pending :: (app: *InnerBreeze) {
+    if app.launcher_pending_node == 0 {
+        return
+    }
+    slot := app.launcher_pending_node - 1
+    if !app.launcher_open {
+        app.launcher_pending_node = 0
+        return
+    }
+    if NodeAppInstalled(slot) {
+        app_launcher_activate(app, AppNavNodeRoute(slot))
+    }
 }
 
 // Installs an app the node offers; its card then opens it.
@@ -139,7 +157,11 @@ app_launcher_activate :: (app: *InnerBreeze, route: s32) {
     // An app the node offers that is not on this device yet stays closed,
     // and Apps stays open.
     slot := AppNavNodeSlot(route)
-    if slot >= 0 && !app_nav_node_app_ready(app, slot) { return }
+    if slot >= 0 && !app_nav_node_app_ready(app, slot) {
+        app.launcher_pending_node = slot + 1
+        return
+    }
+    app.launcher_pending_node = 0
     if app.apps_selected == 0 {
         app.apps_selected = 1
         save_settings(app)
