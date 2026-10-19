@@ -193,6 +193,39 @@ LegacyOutboxChecks :: (root: string, delivered_id: string) {
         storage_setting_text_equals("lumi_feedback_pending", damaged) != 0)
 }
 
+// A developer's reply arrives as a reply from the developer, quoting the
+// title of the feedback it answers, and keeps both through a restart.
+DeveloperReplyChecks :: () {
+    first := LumiStoreCount()
+    replies := "{\"feedback\":[{\"id\":\"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"app_id\":\"inbe\",\"title\":\"Lumi freezes\",\"message\":\"\",\"context\":\"\",\"reply\":\"Fixed in the next update.\\nThank you!\",\"created_at\":\"2026-10-18 20:00:00\"},{\"id\":\"9999999999999999999999999999999999999999999999999999999999999999\",\"app_id\":\"inbe\",\"title\":\"\",\"message\":\"\",\"context\":\"\",\"reply\":\"An older node sends no title.\",\"created_at\":\"2026-10-18 20:01:00\"}]}"
+    check_true("replies page fits the response buffer", AppCopyText(replies, lumi_online_response[:]))
+    LumiFeedbackReplies()
+    check_int("each developer reply adds one message", LumiStoreCount(), first + 2)
+    quoted := LumiStoreRow(first)
+    check_true("developer reply is attributed to the developer", quoted.developer && !quoted.user)
+    check_true("developer reply keeps its words verbatim", quoted.text == "Fixed in the next update.\nThank you!")
+    check_true("developer reply quotes the feedback's title", quoted.quote == "Lumi freezes")
+    untitled := LumiStoreRow(first + 1)
+    check_true("reply without a title shows no quote", untitled.developer && untitled.quote.count == 0 &&
+        untitled.text == "An older node sends no title.")
+    record := CellRecordRead(lumi_keys[first])
+    defer { PackageFree(record) }
+    check_true("record names the developer and the quote for other devices",
+        contains(record, "\"from\":\"developer\"") && contains(record, "\"quote\":\"Lumi freezes\""))
+    LumiFeedbackReplies()
+    check_int("shown replies are not repeated", LumiStoreCount(), first + 2)
+    check_true("Lumi answers through the server", LumiAiRoute() == LUMI_AI_NODE)
+    check_true("a message starts a conversation", LumiOnlineStart("What did the developer say?"))
+    check_true("Lumi reads the reply as the developer's",
+        contains(lumi_online_messages, "Developer reply:\\nFixed in the next update."))
+    LumiOnlineCancel()
+    LumiStoreReset()
+    check_int("developer replies survive reopening", LumiStoreCount(), first + 2)
+    reloaded := LumiStoreRow(first)
+    check_true("reopened reply keeps its author and quote", reloaded.developer &&
+        reloaded.quote == "Lumi freezes" && reloaded.text == "Fixed in the next update.\nThank you!")
+}
+
 #program_export
 Check :: () -> s32 {
     transport := FeedbackTestTransport()
@@ -201,7 +234,7 @@ Check :: () -> s32 {
     if guard != 0 {
         return guard
     }
-    english_catalog = "[lumi_feedback_delivered]\nThe developer inbox received your feedback.\n---\n[lumi_feedback_unavailable]\nDelivery to the developer inbox is not confirmed. Your feedback is saved on this device and will retry.\n---\n"
+    english_catalog = "[lumi_feedback_delivered]\nThe developer inbox received your feedback.\n---\n[lumi_feedback_unavailable]\nDelivery to the developer inbox is not confirmed. Your feedback is saved on this device and will retry.\n---\n[lumi_developer_reply]\nDeveloper reply:\n---\n"
     install_english_catalog()
     root := "/tmp/inbe-lumi-feedback-test/data"
     check_true("fixture database initialized", storage_init(root) != 0)
@@ -291,6 +324,7 @@ Check :: () -> s32 {
     check_true("original account can still confirm its report", !Pending())
     check_int("separate report adds no message", LumiStoreCount(), 1)
     LumiOnlineCancel()
+    DeveloperReplyChecks()
     LegacyOutboxChecks(root, report_id)
     SecureWipe(*owner.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
     storage_close()

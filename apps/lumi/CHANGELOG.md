@@ -4,6 +4,8 @@
 
 - Receive Inner Breeze changelog highlights in chat after an update, once
   per version, with a link to the full notes.
+- Show developer replies as replies from the developer, quoting the
+  feedback they answer.
 - Maintenance release for Inner Breeze 2.1.36.
 
 ## [1.5.1] - 2026-10-17

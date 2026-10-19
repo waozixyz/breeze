@@ -31,6 +31,7 @@ LumiStoreReset :: () {
     for index: cast(s32)0..lumi_count - 1 {
         PackageFree(lumi_rows[index].text)
         PackageFree(lumi_rows[index].payload)
+        PackageFree(lumi_rows[index].quote)
         lumi_rows[index] = LumiChatRow.{}
     }
     VecFree(lumi_rows)
@@ -148,11 +149,29 @@ LumiStoreLoad :: () {
             lumi_store_error = true
             return
         }
+        // A developer's reply names its author and quotes the feedback it
+        // answers. Older versions ignore both fields and show its words.
+        developer := false
+        quote_bytes: [LUMI_QUOTE_MAX]u8
+        quote_length: s32 = 0
+        if kind == LUMI_CHAT_TEXT && user.value == 0.0 {
+            from_bytes: [16]u8
+            from_length := ReadStringText(document, FieldAt(document, element, "from"), from_bytes[:])
+            developer = from_length > 0 && TextFromBytes(from_bytes[:from_length]) == "developer"
+        }
+        if developer {
+            quote_length = ReadStringText(document, FieldAt(document, element, "quote"), quote_bytes[:])
+            if quote_length < 0 {
+                quote_length = 0
+            }
+        }
         row := LumiChatRow.{.text = PackageText(TextFromBytes(bytes[0:length]), ""),
-            .user = user.value == 1.0, .kind = kind, .payload = PackageText(payload, "")}
+            .user = user.value == 1.0, .kind = kind, .payload = PackageText(payload, ""),
+            .developer = developer, .quote = PackageText(TextFromBytes(quote_bytes[:quote_length]), "")}
         if !VecPush(lumi_rows, row) {
             PackageFree(row.text)
             PackageFree(row.payload)
+            PackageFree(row.quote)
             lumi_store_error = true
             return
         }
@@ -223,6 +242,15 @@ LumiStoreAppend :: (text: string, user: bool) {
 }
 
 LumiStoreAppendCard :: (text: string, user: bool, kind: s32, payload: string) -> bool {
+    return LumiStoreAppendRow(LumiChatRow.{.text = text, .user = user, .kind = kind, .payload = payload})
+}
+
+// Saves a message and shows it. Only the developer's text replies quote.
+LumiStoreAppendRow :: (message: LumiChatRow) -> bool {
+    text := message.text
+    user := message.user
+    kind := message.kind
+    payload := message.payload
     if text.count == 0 || text.count >= LUMI_INPUT_MAX {
         return false
     }
@@ -231,6 +259,11 @@ LumiStoreAppendCard :: (text: string, user: bool, kind: s32, payload: string) ->
     (kind == LUMI_CHAT_PROGRESS && !LumiChartRead(payload).valid) ||
     (kind == LUMI_CHAT_FEEDBACK && payload.count != 32) ||
     (kind != LUMI_CHAT_PROGRESS && kind != LUMI_CHAT_FEEDBACK && payload.count != 0) {
+        return false
+    }
+    if (message.developer && (user || kind != LUMI_CHAT_TEXT)) ||
+    (!message.developer && message.quote.count != 0) ||
+    message.quote.count >= LUMI_QUOTE_MAX {
         return false
     }
     LumiStoreLoad()
@@ -249,6 +282,10 @@ LumiStoreAppendCard :: (text: string, user: bool, kind: s32, payload: string) ->
     LumiJsonString(*out, text)
     BuilderPrint(*out, ",\"payload\":")
     LumiJsonString(*out, payload)
+    if message.developer {
+        BuilderPrint(*out, ",\"from\":\"developer\",\"quote\":")
+        LumiJsonString(*out, message.quote)
+    }
     BuilderPrint(*out, "}")
     value := BuilderFinish(out)
     defer { PackageFree(value) }
@@ -261,10 +298,12 @@ LumiStoreAppendCard :: (text: string, user: bool, kind: s32, payload: string) ->
         lumi_history_limit += 1
     }
     row := LumiChatRow.{.text = PackageText(text, ""), .user = user,
-        .kind = kind, .payload = PackageText(payload, "")}
+        .kind = kind, .payload = PackageText(payload, ""),
+        .developer = message.developer, .quote = PackageText(message.quote, "")}
     if !VecPush(lumi_rows, row) {
         PackageFree(row.text)
         PackageFree(row.payload)
+        PackageFree(row.quote)
         lumi_storage_revision = -1
         return false
     }

@@ -21,6 +21,8 @@
   scroll them. Password values stay hidden.
 - Habits' save, discard and delete confirmations can improve through Habits
   updates while keeping existing data and older installed packages working.
+- Developer replies to your feedback appear in Lumi as replies from the
+  developer, quoting the feedback they answer, like a reply in a chat app.
 
 ## [2.1.35] - 2026-10-17
 

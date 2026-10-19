@@ -149,7 +149,17 @@ LumiOnlineStart :: (input: string) -> bool {
         row := LumiStoreRow(index)
         BuilderPrint(*out, "%{\"role\":\"%\",\"content\":",
             ifx index == first then "" else ",", ifx row.user then "user" else "assistant")
-        LumiJsonString(*out, row.text)
+        if row.developer {
+            // Lumi learns that the developer, not Lumi, wrote this reply, so
+            // the user can answer it.
+            attributed: Vec(u8)
+            BuilderPrint(*attributed, "%\n%", LocaleText("lumi_developer_reply"), row.text)
+            content := BuilderFinish(attributed)
+            LumiJsonString(*out, content)
+            PackageFree(content)
+        } else {
+            LumiJsonString(*out, row.text)
+        }
         BuilderPrint(*out, "}")
     }
     BuilderPrint(*out, "]")
@@ -301,6 +311,11 @@ LumiOnlineRequest :: (app: *InnerBreeze) -> bool {
 }
 
 LumiOnlineAppend :: (reply: string) {
+    LumiOnlineAppendFrom(reply, false, "")
+}
+
+// The developer's reply quotes the feedback it answers in its first part.
+LumiOnlineAppendFrom :: (reply: string, developer: bool, quote: string) {
     start: s64 = 0
     while start < reply.count {
         end := start + LUMI_INPUT_MAX - 1
@@ -310,7 +325,8 @@ LumiOnlineAppend :: (reply: string) {
             end -= 1
         }
         if end <= start { return }
-        LumiStoreAppend(reply[start:end], false)
+        unused LumiStoreAppendRow(LumiChatRow.{.text = reply[start:end], .developer = developer,
+            .quote = ifx start == 0 then quote else ""})
         start = end
     }
     if lumi_ui.follow_end {
@@ -495,17 +511,16 @@ LumiFeedbackReplies :: () {
         item := ElementAt(document, at, index)
         id_bytes: [65]u8
         reply_bytes: [4097]u8
+        title_bytes: [161]u8
         id := ToolString(document[item:ValueEnd(document, item, 0)], "id", id_bytes[:])
         reply := ToolString(document[item:ValueEnd(document, item, 0)], "reply", reply_bytes[:])
+        title := ToolString(document[item:ValueEnd(document, item, 0)], "title", title_bytes[:])
         if id.count != 64 || reply.count == 0 || ContainsFoldASCII(seen, id) {
             continue
         }
-        // A developer's reply remains verbatim and is visibly attributed.
-        message: Vec(u8)
-        BuilderPrint(*message, "%\n%", LocaleText("lumi_developer_reply"), reply)
-        value := BuilderFinish(message)
-        LumiOnlineAppend(value)
-        PackageFree(value)
+        // A developer's reply remains verbatim and is attributed to the
+        // developer, quoting the title of the feedback it answers.
+        LumiOnlineAppendFrom(reply, true, title)
         BuilderPrint(*out, "%\n", id)
     }
     updated := BuilderFinish(out)
