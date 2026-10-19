@@ -51,6 +51,122 @@ lumi_history_limit: s32 = LUMI_HISTORY_PAGE;
 lumi_has_older: bool;
 lumi_next_message_id: string;
 
+// Before 2.1.36 a developer's reply was saved as Lumi's words under a
+// "Developer reply:" line in the app's language. These are the lines those
+// versions wrote, so their saved replies are still recognized after the
+// translations change. Returns the length of the line, or 0.
+LumiLegacyReplyLabel :: (text: string) -> s64 {
+    labels: [12]string = .["Developer reply:\n\n", "Odpověď vývojáře:\n\n",
+        "Antwort vom Entwickler:\n\n", "Respuesta del desarrollador:\n\n",
+        "Réponse du développeur :\n\n", "Balasan pengembang:\n\n",
+        "Risposta dello sviluppatore:\n\n", "開発者からの返信：\n\n", "개발자 답변:\n\n",
+        "Resposta do desenvolvedor:\n\n", "Ответ разработчика:\n\n", "开发者回复：\n\n"]
+    for label: labels {
+        if text.count > label.count && text[:label.count] == label {
+            return label.count
+        }
+    }
+    return 0
+}
+
+LumiReplyCopy :: struct {
+    key: string
+    time: s64
+    text: string
+    quote: string
+    legacy: bool
+}
+
+// Two saved replies are one reply when their words match and they quote the
+// same feedback, or one of them quotes nothing.
+LumiSameReply :: (left: LumiReplyCopy, right: LumiReplyCopy) -> bool {
+    return left.text == right.text &&
+    (left.quote == right.quote || left.quote.count == 0 || right.quote.count == 0)
+}
+
+// Each developer reply shows once, as the developer's. Older versions saved
+// it as Lumi's words, and every device that fetched it saved its own copy.
+// A copy saved the older way becomes the developer's reply, and every other
+// copy of a reply is deleted, which sync carries to the other devices. The
+// first copy that quotes its feedback is the one kept.
+LumiStoreRepairReplies :: (owner: string) {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT key,value FROM (SELECT key,value,json_extract(value,'$.text') AS t FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%' AND json_extract(value,'$.deleted') IS NULL AND COALESCE(json_extract(value,'$.kind'),0)=0 AND COALESCE(json_extract(value,'$.user'),0)=0) WHERE json_extract(value,'$.from')='developer' OR (instr(t,char(10)||char(10))>1 AND substr(t,instr(t,char(10)||char(10))-1,1) IN (':','：')) ORDER BY CAST(json_extract(value,'$.time') AS INTEGER),key", -1, *statement, null) != SQLITE_OK {
+        return
+    }
+    bind_text(statement, 1, owner)
+    copies: Vec(LumiReplyCopy)
+    while SqliteStep(statement) == SQLITE_ROW {
+        document := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
+        bytes: [1024]u8
+        length := ReadStringText(document, FieldAt(document, 0, "text"), bytes[:])
+        time := ReadNumber(document, FieldAt(document, 0, "time"))
+        if length <= 0 || !time.valid {
+            continue
+        }
+        words := TextFromBytes(bytes[:length])
+        from_bytes: [16]u8
+        from_length := ReadStringText(document, FieldAt(document, 0, "from"), from_bytes[:])
+        developer := from_length > 0 && TextFromBytes(from_bytes[:from_length]) == "developer"
+        label: s64 = 0
+        if !developer {
+            label = LumiLegacyReplyLabel(words)
+            if label == 0 {
+                continue
+            }
+        }
+        quote_bytes: [LUMI_QUOTE_MAX]u8
+        quote_length: s32 = 0
+        if developer {
+            quote_length = ReadStringText(document, FieldAt(document, 0, "quote"), quote_bytes[:])
+            if quote_length < 0 {
+                quote_length = 0
+            }
+        }
+        saved := LumiReplyCopy.{.key = PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 256), ""),
+            .time = cast(s64)time.value, .text = PackageText(words[label:], ""),
+            .quote = PackageText(TextFromBytes(quote_bytes[:quote_length]), ""), .legacy = !developer}
+        if !VecPush(copies, saved) {
+            PackageFree(saved.key)
+            PackageFree(saved.text)
+            PackageFree(saved.quote)
+            break
+        }
+    }
+    SqliteFinalize(statement)
+    for index: cast(s32)0..cast(s32)copies.count - 1 {
+        kept: s32 = -1
+        for other: cast(s32)0..cast(s32)copies.count - 1 {
+            if LumiSameReply(copies[index], copies[other]) &&
+            (kept < 0 || (copies[kept].quote.count == 0 && copies[other].quote.count > 0)) {
+                kept = other
+            }
+        }
+        reply := copies[index]
+        if kept == index && !reply.legacy {
+            continue
+        }
+        out: Vec(u8)
+        if kept != index {
+            BuilderPrint(*out, "{\"time\":%,\"user\":0,\"kind\":0,\"text\":\"\\u2014\",\"payload\":\"\",\"deleted\":true}",
+                reply.time)
+        } else {
+            BuilderPrint(*out, "{\"time\":%,\"user\":0,\"kind\":0,\"text\":", reply.time)
+            LumiJsonString(*out, reply.text)
+            BuilderPrint(*out, ",\"payload\":\"\",\"from\":\"developer\",\"quote\":\"\"}")
+        }
+        value := BuilderFinish(out)
+        unused CellRecordWrite(reply.key, value)
+        PackageFree(value)
+    }
+    for index: cast(s32)0..cast(s32)copies.count - 1 {
+        PackageFree(copies[index].key)
+        PackageFree(copies[index].text)
+        PackageFree(copies[index].quote)
+    }
+    VecFree(copies)
+}
+
 LumiStoreLoad :: () {
     owner := AppTextFromCString(storage_user_id_buffer(), 64)
     revision := storage_data_revision()
@@ -104,6 +220,7 @@ LumiStoreLoad :: () {
         }
         if !lumi_store_error { storage_set_setting_int("lumi_archive_migrated", 1) }
     }
+    LumiStoreRepairReplies(owner)
     // Deleted messages and the retired donation cards stay out of the chat.
     statement: *void
     if SqlitePrepareText(storage_db_handle(), "SELECT value,key FROM (SELECT value,key FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%' AND json_extract(value,'$.deleted') IS NULL AND COALESCE(json_extract(value,'$.kind'),0)!=2 ORDER BY CAST(json_extract(value,'$.time') AS INTEGER) DESC,key DESC LIMIT ?2) ORDER BY CAST(json_extract(value,'$.time') AS INTEGER),key", -1, *statement, null) != SQLITE_OK {

@@ -28,6 +28,8 @@
   updates while keeping existing data and older installed packages working.
 - Developer replies to your feedback appear in Lumi as replies from the
   developer, quoting the feedback they answer, like a reply in a chat app.
+  Replies you received earlier change to this look too, and each reply shows
+  once even when several of your devices fetched it.
 - Settings › About lists the version of the Inbe harness, the package that
   carries the apps and updates them without a new app release, then each app
   you installed, including apps from the node.

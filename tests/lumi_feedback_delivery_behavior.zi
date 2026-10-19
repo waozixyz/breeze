@@ -224,6 +224,33 @@ DeveloperReplyChecks :: () {
     reloaded := LumiStoreRow(first)
     check_true("reopened reply keeps its author and quote", reloaded.developer &&
         reloaded.quote == "Lumi freezes" && reloaded.text == "Fixed in the next update.\nThank you!")
+    check_true("a reply is saved under a record named after it",
+        lumi_keys[first] == "cell.lumi.message.reply-ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+    // Another device fetching the same reply finds it already saved.
+    storage_set_setting_text("lumi_feedback_replies_seen", "")
+    check_true("replies page fits the response buffer again", AppCopyText(replies, lumi_online_response[:]))
+    LumiFeedbackReplies()
+    check_int("a reply another device saved is not saved again", LumiStoreCount(), first + 2)
+    // Copies that older versions saved: one repeats the quoted reply, two
+    // are the same reply nobody saved the newer way.
+    check_true("older copy of a shown reply saved",
+        CellRecordWrite("cell.lumi.message.legacy-copy-1", "{\"time\":4102444800000000,\"user\":0,\"kind\":0,\"text\":\"Developer reply:\\n\\nFixed in the next update.\\nThank you!\",\"payload\":\"\"}"))
+    check_true("older reply saved",
+        CellRecordWrite("cell.lumi.message.legacy-copy-2", "{\"time\":4102444800000001,\"user\":0,\"kind\":0,\"text\":\"Antwort vom Entwickler:\\n\\nDanke!\",\"payload\":\"\"}"))
+    check_true("second device's copy of the older reply saved",
+        CellRecordWrite("cell.lumi.message.legacy-copy-3", "{\"time\":4102444800000002,\"user\":0,\"kind\":0,\"text\":\"Antwort vom Entwickler:\\n\\nDanke!\",\"payload\":\"\"}"))
+    check_true("Lumi's own message with a heading saved",
+        CellRecordWrite("cell.lumi.message.legacy-copy-4", "{\"time\":4102444800000003,\"user\":0,\"kind\":0,\"text\":\"Your plan:\\n\\nBreathe.\",\"payload\":\"\"}"))
+    LumiStoreReset()
+    check_int("each reply shows once and Lumi's message stays", LumiStoreCount(), first + 4)
+    older := LumiStoreRow(first + 2)
+    check_true("an older reply becomes the developer's, without its heading",
+        older.developer && older.text == "Danke!" && older.quote.count == 0)
+    own := LumiStoreRow(first + 3)
+    check_true("Lumi's message with a heading stays Lumi's", !own.developer && own.text == "Your plan:\n\nBreathe.")
+    duplicate := CellRecordRead("cell.lumi.message.legacy-copy-1")
+    defer { PackageFree(duplicate) }
+    check_true("a repeated copy is deleted for the other devices", contains(duplicate, "\"deleted\":true"))
 }
 
 #program_export

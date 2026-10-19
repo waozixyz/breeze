@@ -315,8 +315,11 @@ LumiOnlineAppend :: (reply: string) {
 }
 
 // The developer's reply quotes the feedback it answers in its first part.
-LumiOnlineAppendFrom :: (reply: string, developer: bool, quote: string) {
+// With an id, each part is saved under a record named after it, so every
+// device that fetches the reply writes the same messages and sync keeps one.
+LumiOnlineAppendFrom :: (reply: string, developer: bool, quote: string, id: string = "") {
     start: s64 = 0
+    part: s32 = 0
     while start < reply.count {
         end := start + LUMI_INPUT_MAX - 1
         if end > reply.count { end = reply.count }
@@ -325,9 +328,25 @@ LumiOnlineAppendFrom :: (reply: string, developer: bool, quote: string) {
             end -= 1
         }
         if end <= start { return }
+        stable_id := ""
+        if id.count > 0 && lumi_next_message_id.count == 0 {
+            name: Vec(u8)
+            if part == 0 {
+                BuilderPrint(*name, "reply-%", id)
+            } else {
+                BuilderPrint(*name, "reply-%-%", id, part)
+            }
+            stable_id = BuilderFinish(name)
+            lumi_next_message_id = stable_id
+        }
         unused LumiStoreAppendRow(LumiChatRow.{.text = reply[start:end], .developer = developer,
             .quote = ifx start == 0 then quote else ""})
+        if stable_id.count > 0 {
+            lumi_next_message_id = ""
+            PackageFree(stable_id)
+        }
         start = end
+        part += 1
     }
     if lumi_ui.follow_end {
         lumi_ui.scroll = 1000000
@@ -518,9 +537,22 @@ LumiFeedbackReplies :: () {
         if id.count != 64 || reply.count == 0 || ContainsFoldASCII(seen, id) {
             continue
         }
-        // A developer's reply remains verbatim and is attributed to the
-        // developer, quoting the title of the feedback it answers.
-        LumiOnlineAppendFrom(reply, true, title)
+        // A reply another device already saved arrives through sync; this
+        // device only marks it as seen.
+        lowercase: [65]u8
+        for byte, at: id {
+            lowercase[at] = ifx byte >= cast(u8)65 && byte <= cast(u8)90 then byte + cast(u8)32 else byte
+        }
+        stable := TextFromBytes(lowercase[:id.count])
+        record_key := PackageText("cell.lumi.message.reply-", stable)
+        existing := CellRecordRead(record_key)
+        PackageFree(record_key)
+        if existing.count == 0 {
+            // A developer's reply remains verbatim and is attributed to the
+            // developer, quoting the title of the feedback it answers.
+            LumiOnlineAppendFrom(reply, true, title, stable)
+        }
+        PackageFree(existing)
         BuilderPrint(*out, "%\n", id)
     }
     updated := BuilderFinish(out)
