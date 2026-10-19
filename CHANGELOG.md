@@ -25,6 +25,8 @@
   scroll them. Password values stay hidden.
 - Habits' save, discard and delete confirmations can improve through Habits
   updates while keeping existing data and older installed packages working.
+- Apps from the node show their own icon on Apps and in the navigation as
+  soon as they are installed, not a plain grid until they first run.
 - A day a habit is not scheduled on no longer takes a tap, so its empty
   space cannot add a check mark. An off day with something recorded on it
   still opens.

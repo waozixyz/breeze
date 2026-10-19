@@ -66,6 +66,8 @@ NODE_APP_CATALOG_SECONDS :: 21600
 NODE_APP_REGISTRY_BYTES :: 524288
 NODE_APP_SHARED_LIMIT :: 64
 NODE_APP_GENERIC_ICON :: "S1.6rr:M5 5H10V10H5ZM14 5H19V10H14ZM5 14H10V19H5ZM14 14H19V19H14Z"
+NODE_APP_ICON_MAX :: 4096
+NODE_APP_ICON_VERSION_MAX :: 64
 
 NodeAppOffer :: struct {
     name: [NODE_APP_NAME_MAX + 1]u8
@@ -136,6 +138,11 @@ node_shared_json: string;
 // to network installs only, as for a local --bundle.
 node_local_path: [4096]u8;
 node_local_name: [NODE_APP_NAME_MAX + 1]u8;
+// Each installed app's outline icon and the package version it was read
+// from, so Apps and the navigation show it before the app has run.
+node_icons: [NodeAppSlots][NODE_APP_ICON_MAX]u8;
+node_icon_sizes: [NodeAppSlots]s32;
+node_icon_versions: [NodeAppSlots][NODE_APP_ICON_VERSION_MAX]u8;
 
 // Names and slots.
 
@@ -261,7 +268,12 @@ NodeAppTitle :: (name: string) -> string {
     return name
 }
 
-// The app's outline icon from its package, or a plain grid before then.
+NodeAppIconValid :: (shape: string) -> bool {
+    return shape.count > 6 && shape.count < NODE_APP_ICON_MAX && shape[:1] == "S"
+}
+
+// The app's outline icon from its package, or a plain grid while none is
+// installed.
 NodeAppIconShape :: (slot: s32) -> string {
     if NodeAppRunning(slot) {
         path := NodeAppAssetPath(NodeAppName(slot), "sidebar.shape")
@@ -269,11 +281,94 @@ NodeAppIconShape :: (slot: s32) -> string {
             PackageFree(path)
         }
         asset := HostedAppAsset(*node_runners[slot].app, path)
-        if asset.found && asset.data.count > 6 && asset.data.count < 4096 && asset.data[:1] == "S" {
+        if asset.found && NodeAppIconValid(asset.data) {
             return asset.data
         }
     }
-    return NODE_APP_GENERIC_ICON
+    if slot < 0 || slot >= NodeAppSlots || !NodeAppInstalled(slot) {
+        return NODE_APP_GENERIC_ICON
+    }
+    version := ifx NodeAppLocal(NodeAppName(slot)) then "local" else PackageVersion(NodeAppIndex(slot))
+    if version.count == 0 || version.count >= NODE_APP_ICON_VERSION_MAX {
+        return NODE_APP_GENERIC_ICON
+    }
+    if TextUntilNul(node_icon_versions[slot][:]) != version {
+        NodeAppLoadIcon(slot, version)
+    }
+    if node_icon_sizes[slot] == 0 {
+        return NODE_APP_GENERIC_ICON
+    }
+    return TextFromBytes(node_icons[slot][:node_icon_sizes[slot]])
+}
+
+// Reads the installed package's icon once per version. The first read opens
+// the verified package; the icon is then kept beside it, as
+// "<version>\n<shape>", so later launches read only that small file. A
+// local package is read once per run.
+NodeAppLoadIcon :: (slot: s32, version: string) {
+    unused AppCopyText(version, node_icon_versions[slot][:])
+    node_icon_sizes[slot] = 0
+    if NodeAppLocal(NodeAppName(slot)) {
+        local := PackageRead(TextUntilNul(node_local_path[:]), PackageMaximumBytes)
+        unused NodeAppReadIcon(slot, local)
+        PackageFree(local)
+        return
+    }
+    index := NodeAppIndex(slot)
+    cache := PackagePath(index, ".icon")
+    defer {
+        PackageFree(cache)
+    }
+    if cache.count == 0 {
+        return
+    }
+    saved := PackageRead(cache, NODE_APP_ICON_MAX + NODE_APP_ICON_VERSION_MAX)
+    defer {
+        PackageFree(saved)
+    }
+    if saved.count > version.count + 1 && saved[:version.count] == version &&
+    saved[version.count] == cast(u8)10 && NodeAppIconValid(saved[version.count + 1:]) {
+        NodeAppKeepIcon(slot, saved[version.count + 1:])
+        return
+    }
+    bytes := PackageInstalledBytes(index)
+    defer {
+        PackageFree(bytes)
+    }
+    if NodeAppReadIcon(slot, bytes) {
+        out: Vec(u8)
+        BuilderPrint(*out, "%\n%", version, TextFromBytes(node_icons[slot][:node_icon_sizes[slot]]))
+        value := BuilderFinish(out)
+        unused PackageWrite(cache, value)
+        PackageFree(value)
+    }
+}
+
+// Keeps the icon a package carries; false when it has none.
+NodeAppReadIcon :: (slot: s32, bytes: string) -> bool {
+    if bytes.count == 0 {
+        return false
+    }
+    opened: HostedApp
+    if !HostedAppOpen(*opened, bytes) {
+        return false
+    }
+    path := NodeAppAssetPath(NodeAppName(slot), "sidebar.shape")
+    asset := HostedAppAsset(*opened, path)
+    PackageFree(path)
+    found := asset.found && NodeAppIconValid(asset.data)
+    if found {
+        NodeAppKeepIcon(slot, asset.data)
+    }
+    HostedAppClose(*opened)
+    return found
+}
+
+NodeAppKeepIcon :: (slot: s32, shape: string) {
+    for byte, at: shape {
+        node_icons[slot][at] = byte
+    }
+    node_icon_sizes[slot] = cast(s32)shape.count
 }
 
 // The apps the node offers that this build can run, as last read.
