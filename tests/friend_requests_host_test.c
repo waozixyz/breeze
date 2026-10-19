@@ -1,4 +1,5 @@
 #include "friend_requests_behavior.h"
+#include "zir_string.h"
 #include "friend_requests.h"
 
 #include <stddef.h>

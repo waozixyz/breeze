@@ -1,4 +1,5 @@
 #include "platform/raylib_text_input.h"
+#include "zir_string.h"
 
 #include <assert.h>
 #include <stdint.h>

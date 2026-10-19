@@ -13,12 +13,11 @@ rm -rf "$work"
 mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" \
-    --module-path "self=$root/build/packages/self/src" \
+    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" --module-path "kryon=$root/build/packages/kryon/src/ui" --module-path "kryon=$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/kss/src" \
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/game2d/src" \
-    --module-path "qrcode=$root/build/packages/qrcode/src" \
     --module-path "$root/build/packages/daochi-client" \
     -o "$work/c" "$root/tests/sync_recovery_behavior.zi"
 "${CC:-cc}" -std=gnu11 -w -DZIRAN_BOUNDS_CHECK -ffunction-sections \

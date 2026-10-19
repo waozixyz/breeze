@@ -1,4 +1,5 @@
 #include "settings_store_link_behavior.h"
+#include "zir_string.h"
 
 #include <assert.h>
 #include <string.h>

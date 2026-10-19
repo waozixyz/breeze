@@ -9,17 +9,17 @@ source=$root/tests/device_policy_behavior.zi
 mkdir -p "$work/ir" "$work/c"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
     -o "$work/ir" "$source"
 
 "$bin/zi2zib" bundle --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
     --entry device_policy_behavior:Answer \
     -o "$work/source.zib" "$source"
 "$bin/zi2zib" bundle --root "$work/ir" --module-path "$work/ir" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
     --entry device_policy_behavior:Answer \
     -o "$work/saved.zib" "$work/ir/device_policy_behavior.zir"
 [ "$(env -u DISPLAY -u WAYLAND_DISPLAY "$bin/zi2zib" run "$work/source.zib")" = 42 ]
@@ -28,7 +28,7 @@ cmp "$work/source.zib" "$work/saved.zib"
 
 "$bin/zi2c" --no-main --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
     -o "$work/c" "$source"
 cat > "$work/c/main.c" <<'C'
 #include "device_policy_behavior.h"

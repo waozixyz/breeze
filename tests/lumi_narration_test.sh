@@ -9,7 +9,7 @@ mkdir -p "$generated"
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/daochi-client" \
-    --module-path "oqs=$root/build/packages/oqs/src" \
+    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/kryon/src/backend" \
     -o "$generated" "$root/src/app/lumi_guide.zi"
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK \

@@ -1,4 +1,5 @@
 #include "app/text_buffers.h"
+#include "zir_string.h"
 
 #include <assert.h>
 #include <stdint.h>

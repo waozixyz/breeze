@@ -1,4 +1,5 @@
 #include "app/lumi_guide.h"
+#include "zir_string.h"
 #include "assets.h"
 
 #include <assert.h>

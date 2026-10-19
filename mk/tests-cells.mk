@@ -25,21 +25,19 @@ portable-apps-ui-test: $(TARGET) cells
 		--player "$(APP_PLAYER)" --werk "$(WERK_BINARY)" \
 		--diary $(abspath build/cells/diary.zib) --calculator "$(CALCULATOR_BUNDLE)"
 
-.PHONY: node-app-records-test node-app-codec-check
+.PHONY: node-app-records-test
 
-# Explicit local Apps handoff checks while Apps has no public dependency pin.
-# Callers provide the same retained compiler/runtime/map used by their gate.
+# Apps location and node snapshot checks against the locked Apps and Crypto packages.
 .PHONY: app-locations-test node-app-snapshot-test
-app-locations-test:
-	@test -n "$(APPS_SOURCE)" -a -n "$(APPS_TEST_TOOLCHAIN)" || { echo 'Set APPS_SOURCE and APPS_TEST_TOOLCHAIN'; exit 2; }
-	python3 tests/app_locations_test.py --ziran '$(APPS_TEST_TOOLCHAIN)/build/bin/ziran' \
-		--toolchain '$(APPS_TEST_TOOLCHAIN)' --apps '$(APPS_SOURCE)' \
+app-locations-test: $(ZIRAN_BIN)
+	python3 tests/app_locations_test.py --ziran '$(abspath $(ZIRAN_BIN))' \
+		--toolchain '$(abspath $(ZIRAN_DIR))' --apps '$(abspath build/packages/apps)' \
 		--daochi-client '$(abspath build/packages/daochi-client)'
 
 node-app-snapshot-test:
-	@test -n "$(APPS_TEST_MAP)" -a -n "$(APPS_TEST_TOOLCHAIN)" -a -n "$(APPS_TEST_RUNTIME)" -a -n "$(CRYPTO_SOURCE)" || { echo 'Set APPS_TEST_MAP, APPS_TEST_TOOLCHAIN, APPS_TEST_RUNTIME and CRYPTO_SOURCE'; exit 2; }
+	@test -n "$(APPS_TEST_MAP)" -a -n "$(APPS_TEST_TOOLCHAIN)" -a -n "$(APPS_TEST_RUNTIME)" || { echo 'Set APPS_TEST_MAP, APPS_TEST_TOOLCHAIN and APPS_TEST_RUNTIME'; exit 2; }
 	python3 tests/node_app_snapshot_test.py --module-map '$(APPS_TEST_MAP)' \
-		--toolchain '$(APPS_TEST_TOOLCHAIN)' --runtime '$(APPS_TEST_RUNTIME)' --crypto-source '$(CRYPTO_SOURCE)'
+		--toolchain '$(APPS_TEST_TOOLCHAIN)' --runtime '$(APPS_TEST_RUNTIME)' --crypto-source '$(abspath build/packages/crypto)'
 .PHONY: photos-app-test media-store-test media-metadata-test
 # Photos and the account's media library it shows.
 media-metadata-test: $(ZI2C_BIN)
@@ -53,9 +51,6 @@ photos-app-test: $(ZIRAN_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 
 node-app-records-test: $(ZI2C_BIN)
 	sh tests/node_app_records_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
-
-node-app-codec-check:
-	python3 scripts/generate-node-app-codec.py --check
 
 .PHONY: package-release-test
 package-release-test: cells $(ZIRAN_BUILD_DIR)/libziran.a

@@ -1,4 +1,5 @@
 #include "screens/settings/settings_telegram.h"
+#include "zir_string.h"
 #include "lumi_authorization.h"
 #include "lumi_telegram.h"
 #include "session.h"

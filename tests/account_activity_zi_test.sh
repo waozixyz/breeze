@@ -12,9 +12,8 @@ mkdir -p "$work/generated"
 "$compiler" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "kryon=$root/build/packages/kryon/src/ui" \
-    --module-path "kryon=$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" \
+    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/kss/src" \
     --module-path "$root/build/packages/game2d/src" --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/daochi-client" --entry account_activity_behavior:Check \
     -o "$work/generated" "$root/tests/account_activity_behavior.zi" "$root/tests/sync_test_host.zi"

@@ -1,4 +1,5 @@
 #include "app/app_nav_state.h"
+#include "zir_string.h"
 
 #include <assert.h>
 #include <string.h>

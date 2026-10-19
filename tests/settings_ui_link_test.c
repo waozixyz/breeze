@@ -1,4 +1,5 @@
 #include "screens/settings/settings_ui.h"
+#include "zir_string.h"
 #include "tree.h"
 #include "tree_input.h"
 #include "paint_queue.h"

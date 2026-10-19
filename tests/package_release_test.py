@@ -46,6 +46,11 @@ def main():
         mapping.write_text('\n'.join(dict.fromkeys(rows)) + '\n')
         environment['ZIRAN_PACKAGE_MAP'] = str(mapping.resolve())
 
+    # Dependencies are imported as PACKAGE/Module through their linked packages.
+    package_paths = subprocess.check_output(
+        ['sh', str(ROOT / 'scripts/package-paths.sh'), str(ROOT / 'build/packages')],
+        text=True).split()[1::2]
+
     def generate(target, fixture, paths):
         if target.exists():
             shutil.rmtree(target)
@@ -277,7 +282,7 @@ def main():
         (fixtures / "diary-bad").write_text(json.dumps(updated))
         generate(work / 'generated', 'package_release_behavior.zi',
                  [ROOT / 'src', toolchain / 'std', ROOT / 'build/packages/kryon/src/ui',
-                  ROOT / 'build/packages/daochi-client'])
+                  ROOT / 'build/packages/daochi-client', *package_paths])
         sources = list((work / "generated").rglob("*.c"))
         subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-D_GNU_SOURCE", "-O1",
                         "-ffunction-sections", "-fdata-sections", "-I" + str(work / "generated"),
@@ -295,7 +300,7 @@ def main():
                  [ROOT / 'src', toolchain / 'std', ROOT / 'build/packages/kryon/src/ui',
                   ROOT / 'build/packages/kryon/src/backend', ROOT / 'build/packages/daochi-client',
                   ROOT / 'build/packages/kss/src', ROOT / 'build/packages/game2d/src',
-                  'oqs=' + str(ROOT / 'build/packages/oqs/src')])
+                  *package_paths])
         # Package scoping changes generated C names, not the download API.
         # Bind this fixture's wrappers to the actual declared symbols.
         wrappers = []

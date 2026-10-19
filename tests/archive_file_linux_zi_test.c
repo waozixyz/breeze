@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "storage/archive_file_linux.h"
+#include "zir_string.h"
 #include "../src/core/version.h"
 
 #include <assert.h>

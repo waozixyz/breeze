@@ -1,4 +1,5 @@
 #include "practices/meditation/meditation_audio_archive.h"
+#include "zir_string.h"
 
 #include <stdio.h>
 #include <stdlib.h>

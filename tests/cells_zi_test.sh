@@ -38,23 +38,22 @@ Main :: () -> s32 {
     return PersistListsHost($argument)
 }
 ZIRAN
-    "$ziran" bundle --root "$work/$shape" --module-path "$root/build/packages/kryon/src/ui" \
+    "$ziran" bundle --root "$work/$shape" --module-path "$root/build/packages/kryon/src/ui" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
         --define KRYON_HOSTED_UI --entry lists:Main -o "$work/$shape.zib" "$work/$shape/lists.zi"
 done
-"$ziran" bundle --root "$root" --module-path "$root/build/packages/kryon/src/ui" \
+"$ziran" bundle --root "$root" --module-path "$root/build/packages/kryon/src/ui" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --define KRYON_HOSTED_UI --entry inbe:Main -o "$work/missing-assets.zib" \
     "$root/apps/inbe/inbe.zi"
 mkdir -p "$work/invalid-nested"
 printf 'ZIB' > "$work/invalid-nested/lists.zib"
 cp "$root/build/cells/habits.zib" "$root/build/cells/practices.zib" "$work/invalid-nested/"
-"$ziran" bundle --root "$root" --module-path "$root/build/packages/kryon/src/ui" \
+"$ziran" bundle --root "$root" --module-path "$root/build/packages/kryon/src/ui" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "cells=$work/invalid-nested" -o "$work/invalid-nested.zib" \
     "$root/apps/inbe/inbe.zi"
 "$ziran" build --target=c --no-main --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" --module-path "oqs=$root/build/packages/oqs/src" \
-    --module-path "kryon=$root/build/packages/kryon/src/ui" --module-path "kryon=$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/kryon/src/backend" --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" \
     -o "$work/generated" "$root/tests/cells_behavior.zi" "$root/tests/sync_test_host.zi"

@@ -1,4 +1,5 @@
 #include "storage/device_key_store.h"
+#include "zir_string.h"
 
 #include <assert.h>
 #include <stdint.h>

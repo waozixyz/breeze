@@ -30,13 +30,8 @@ if not sources:
 
 target_defines = os.environ.get("ZI_CHECK_DEFINES", "PLATFORM_DESKTOP").split()
 define_args = [part for name in target_defines for part in ("--define", name)]
-handoff_args = []
-for package, variable in (("apps", "APPS_SOURCE"), ("crypto", "CRYPTO_SOURCE")):
-    if os.environ.get(variable):
-        source = Path(os.environ[variable]).resolve()
-        if not (source / "ziran.toml").is_file():
-            sys.exit(f"{variable} must name the package's canonical source checkout")
-        handoff_args.extend(("--module-path", f"{package}={source / 'src'}"))
+package_args = subprocess.check_output(
+    ["sh", str(root / "scripts/package-paths.sh"), str(root / "build/packages")], text=True).split()
 (root / "build").mkdir(exist_ok=True)
 compiler_lock = (root / "build/ziran-compiler.lock").open("a")
 fcntl.flock(compiler_lock, fcntl.LOCK_EX)
@@ -49,32 +44,19 @@ result = subprocess.run(
         "--module-path",
         "src",
         "--module-path",
-        f"self={root / 'build/packages/self/src'}",
-        "--module-path",
         str(ui),
         "--module-path",
         str(kss),
         "--module-path",
-        f"oqs={root / 'build/packages/oqs/src'}",
-        # KSS imports Kryon as kryon/NAME.
-        "--module-path",
-        f"kryon={ui}",
-        "--module-path",
         str(ui.parent / "backend"),
         "--module-path",
-        f"kryon={ui.parent / 'backend'}",
-        "--module-path",
         str(game2d),
-        "--module-path",
-        f"qrcode={root / 'build/packages/qrcode/src'}",
-        "--module-path",
-        f"plot={root / 'build/packages/plot/src'}",
         "--module-path",
         str(standard),
         "--module-path",
         str(client),
         *define_args,
-        *handoff_args,
+        *package_args,
         *(str(source.relative_to(root)) for source in sources),
     ],
     cwd=root,

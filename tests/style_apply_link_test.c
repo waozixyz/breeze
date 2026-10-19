@@ -1,5 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include "style_apply_link_behavior.h"
+#include "zir_string.h"
 
 #include <assert.h>
 #include <pthread.h>

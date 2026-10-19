@@ -429,7 +429,7 @@ after the bundled seven, setting `node_app_slot_<n>`) and downloads it through
 the package manager with the same signature, hash, size, interface, trial
 and cache rules as the bundled apps. Such an app is never part of the root
 package or its dependencies. It runs in its own VM through one generic
-interface (`src/cells/node_app_types.zi`, host interface 12, and 13 for the
+interface (`apps/node_types` from the Apps package, host interface 12, and 13 for the
 media library, which Diary also reads from 14): frame and
 route messages, hosted Kryon widgets, `AppLocaleHost`, private records,
 friends and records shared with friends. It may draw only its own

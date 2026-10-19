@@ -1,4 +1,5 @@
 #include "screens/elist_screen.h"
+#include "zir_string.h"
 #include "module_host.h"
 #include "lists_visibility.h"
 #include "diary_types.h"

@@ -8,7 +8,7 @@ mkdir -p "$work/generated"
 
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/ziran/std" \
-    --module-path "oqs=$root/build/packages/oqs/src" \
+    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     -o "$work/generated" "$root/src/storage/paths.zi"
 
 "${CC:-cc}" -std=c11 -O0 -Wall -Wextra -Werror \

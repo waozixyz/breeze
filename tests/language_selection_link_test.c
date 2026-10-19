@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "app/language_selection.h"
+#include "zir_string.h"
 
 static int32_t active_index;
 static const char *system_preference = "es_AR.UTF-8";

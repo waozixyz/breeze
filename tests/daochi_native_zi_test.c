@@ -1,4 +1,5 @@
 #include "storage/daochi_native.h"
+#include "zir_string.h"
 
 #include <assert.h>
 #include <stdint.h>

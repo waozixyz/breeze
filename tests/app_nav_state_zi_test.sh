@@ -9,25 +9,21 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "kryon=$root/build/packages/kryon/src/ui" \
-    --module-path "kryon=$root/build/packages/kryon/src/backend" \
+    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" \
     --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
-    --module-path "oqs=$root/build/packages/oqs/src" \
     "$root/src/app/app_nav_state.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "kryon=$root/build/packages/kryon/src/ui" \
-    --module-path "kryon=$root/build/packages/kryon/src/backend" \
+    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" \
     --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
-    --module-path "oqs=$root/build/packages/oqs/src" \
     -o "$work/gen" "$root/src/app/app_nav_state.zi"
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -Wno-unused-function -Wno-unused-variable \

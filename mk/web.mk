@@ -6,13 +6,11 @@ $(WEB_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
 		--define PLATFORM_WEB --define __EMSCRIPTEN__ \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KSS_DIR)/src --module-path oqs=$(OQS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui --module-path kryon=$(KRYON_DIR)/src/backend \
+		--module-path $(KSS_DIR)/src \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
-		--module-path qrcode=build/packages/qrcode/src \
-		--module-path plot=build/packages/plot/src \
 		--module-path $(ZIRAN_DIR)/std \
-		--module-path build/packages/daochi-client --module-path self=build/packages/self/src $(ZI_HANDOFF_PATHS) \
+		--module-path build/packages/daochi-client $(ZI_PACKAGE_PATHS) \
 		-o $(WEB_GEN_DIR) $(ZI_SRCS) $(KRYON_DIR)/src/backend/canvas_raster.zi $(KRYON_DIR)/src/backend/canvas_audio.zi $(KRYON_DIR)/src/backend/page_route.zi
 	touch $@
 	find $(WEB_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +

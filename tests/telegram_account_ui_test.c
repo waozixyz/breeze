@@ -1,4 +1,5 @@
 #include "screens/telegram_account.h"
+#include "zir_string.h"
 #include "session.h"
 #include "tree.h"
 #include "tree_input.h"

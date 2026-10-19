@@ -1,4 +1,5 @@
 #include "audio_runtime.h"
+#include "zir_string.h"
 #include <assert.h>
 #include <stdio.h>
 #include <string.h>

@@ -10,7 +10,7 @@ ui=${KRYON_UI_DIR:-$root/build/packages/kryon/src/ui}
 
 mkdir -p "$work/ir"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
-    --module-path "$ui" --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" -o "$work/ir" "$source"
+    --module-path "$ui" --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" -o "$work/ir" "$source"
 
 for input in source saved; do
     if [ "$input" = source ]; then

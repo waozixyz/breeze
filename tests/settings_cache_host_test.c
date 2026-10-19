@@ -1,4 +1,5 @@
 #include "settings_store.h"
+#include "zir_string.h"
 #include "settings_cache.h"
 
 #include <assert.h>

@@ -18,7 +18,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-device-link-") as temporary:
         "--module-path", str(ROOT / "src"),
         "--module-path", str(ROOT / "build/packages/ziran/std"),
         "--module-path", str(ROOT / "build/packages/daochi-client"),
-        "--module-path", f"oqs={ROOT / 'build/packages/oqs/src'}",
+        *subprocess.check_output(["sh", str(ROOT / "scripts/package-paths.sh"), str(ROOT / "build/packages")], text=True).split(),
         "--entry", "device_link_behavior:Check",
         "-o", str(generated), str(ROOT / "tests/device_link_behavior.zi"),
     ], check=True)

@@ -123,7 +123,7 @@ test: android-smoke-script-test
 test: sync-recovery-test
 test: sync-record-fields-test
 test: media-metadata-test media-store-test photos-app-test
-test: node-app-records-test node-app-codec-check
+test: node-app-records-test
 test: app-click-block-zi-test
 test: phone-check-gate-test
 test: release-tooling-test

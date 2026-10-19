@@ -27,13 +27,11 @@ $(WINDOWS_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODU
 		--define PLATFORM_DESKTOP --define _WIN32 \
 		--define DESKTOP_TRAY_ENABLED \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KSS_DIR)/src --module-path oqs=$(OQS_DIR)/src --module-path kryon=$(KRYON_DIR)/src/ui --module-path kryon=$(KRYON_DIR)/src/backend \
+		--module-path $(KSS_DIR)/src \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
-		--module-path qrcode=build/packages/qrcode/src \
-		--module-path plot=build/packages/plot/src \
 		--module-path $(ZIRAN_DIR)/std \
-		--module-path build/packages/daochi-client --module-path self=build/packages/self/src $(ZI_HANDOFF_PATHS) \
+		--module-path build/packages/daochi-client $(ZI_PACKAGE_PATHS) \
 		-o $(WINDOWS_GEN_DIR) $(ZI_SRCS)
 	touch $@
 	find $(WINDOWS_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +

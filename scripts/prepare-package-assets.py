@@ -88,11 +88,9 @@ for file in sorted({p for pattern in patterns for p in ROOT.glob(pattern) if p.i
 
 # Root launcher cards share the reviewed Apps controller. A node-only build
 # can omit it; the root bundle build below requires this asset explicitly.
-apps_bundle = os.environ.get('APPS_BUNDLE')
-if not apps_bundle and os.environ.get('APPS_SOURCE'):
-    apps_bundle = str(Path(os.environ['APPS_SOURCE']) / 'build/ui/apps.zib')
-if apps_bundle:
-    controller = Path(apps_bundle).read_bytes()
+apps_bundle = ROOT / 'build/apps-ui/apps.zib'
+if apps_bundle.is_file():
+    controller = apps_bundle.read_bytes()
     source = (ROOT / 'src/cells/apps_controller.zi').read_text()
     expected = re.search(r'AppsControllerSha256\s*::\s*"([0-9a-f]{64})"', source)
     if not expected or hashlib.sha256(controller).hexdigest() != expected[1]:

@@ -1,4 +1,5 @@
 #include "practices/practice_narration.h"
+#include "zir_string.h"
 #include "assets.h"
 
 #include <assert.h>

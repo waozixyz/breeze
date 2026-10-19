@@ -7,7 +7,7 @@ work=$root/build/sync-url-zi-test
 
 mkdir -p "$work"
 "$ziran" bundle --root "$root/tests" \
-    --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" \
+    --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/ziran/std" \
     --entry sync_url_behavior:Check \
     -o "$work/sync_url.zib" "$root/tests/sync_url_behavior.zi"

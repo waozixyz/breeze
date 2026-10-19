@@ -6,7 +6,7 @@ standard=${2:-"$root/build/packages/ziran/std"}
 ui=${3:-"$root/build/packages/kryon/src/ui"}
 work="$root/build/radio-test"
 mkdir -p "$work"
-"$ziran" bundle --root "$root" --module-path "$root/src" \
+"$ziran" bundle --root "$root" --module-path "$root/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$ui" --define KRYON_HOSTED_UI --module-path "$standard" \
     --entry radio:Main -o "$work/radio.zib" "$root/apps/radio/radio.zi"
 library=${ZIRAN_LIB:-"$(dirname "$ziran")/../libziran.a"}

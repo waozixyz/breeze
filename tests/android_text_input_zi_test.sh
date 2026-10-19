@@ -10,11 +10,11 @@ mkdir -p "$work/c"
 "$bin/zi2zir" --check-only --define ANDROID_BUILD --define KRYON_ANDROID_HOST --root "$root/tests" \
     --module-path "$root/src" --module-path "$ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" "$source"
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") "$source"
 "$bin/zi2c" --define ANDROID_BUILD --define KRYON_ANDROID_HOST --root "$root/tests" \
     --module-path "$root/src" --module-path "$ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" -o "$work/c" "$source"
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") -o "$work/c" "$source"
 "${CC:-cc}" -std=c11 -D_DEFAULT_SOURCE -O2 -pthread \
     -ffunction-sections -fdata-sections -I"$root/build/packages/ziran/include" \
     -iquote "$work/c" "$work/c"/*.c -Wl,--gc-sections -o "$work/test"

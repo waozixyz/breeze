@@ -8,7 +8,7 @@ unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 for target in c cpp; do
     "$bin/ziran" build --target="$target" --root "$root" \
         --module-path "$root/build/packages/kryon/src/ui" \
-        --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
+        --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
         -o "$work/$target" "$root/tests/graphics_transition_behavior.zi"
     if test "$target" = c; then
         compiler=${CC:-cc}

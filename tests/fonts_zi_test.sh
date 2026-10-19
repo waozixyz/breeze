@@ -7,7 +7,7 @@ work=$root/build/fonts-zi-test
 
 mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kryon/src/ui" \
     -o "$work/c" "$root/tests/fonts_link_behavior.zi"
 mkdir -p "$work/c/app"

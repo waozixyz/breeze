@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #include "storage/legacy_session.h"
+#include "zir_string.h"
 #include "storage/legacy_session_files.h"
 #include "storage/legacy_session_time.h"
 #include "storage/legacy_session_zip.h"

@@ -17,13 +17,13 @@ flock 9
 
 rm -rf "$work"
 mkdir -p "$work/generated"
-"$ziran" bundle --root "$root" --module-path "$root/src" \
+"$ziran" bundle --root "$root" --module-path "$root/src" $(sh "$root/scripts/package-paths.sh" "$packages") \
     --module-path "$packages/kryon/src/ui" --module-path "$packages/ziran/std" \
     --define KRYON_HOSTED_UI --entry photos:Main -o "$work/photos.zib" "$root/apps/photos/photos.zi"
 "$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/src" \
     --module-path "$packages/kryon/src/ui" \
-    --module-path "$packages/kss/src" --module-path "oqs=$packages/oqs/src" --module-path "kryon=$packages/kryon/src/ui" \
+    --module-path "$packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$packages") \
     --module-path "$packages/kryon/src/backend" \
     --module-path "$packages/game2d/src" \
     --module-path "$packages/ziran/std" \

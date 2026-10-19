@@ -9,6 +9,7 @@ mkdir -p build
 exec 9>build/cells-build.lock
 flock 9
 ziran=${1:-build/ziran-toolchain/bin/ziran}
+packages=$(sh scripts/package-paths.sh)
 output=${2:-build/cells}
 python3 scripts/check-package-versions.py
 python3 tests/font_glyph_coverage_test.py
@@ -19,7 +20,7 @@ python3 scripts/generate-package-versions.py
 python3 scripts/animation_inventory.py --check
 python3 scripts/prepare-package-assets.py
 if [ ! -s build/package-assets/inbe/assets/apps/apps.zib ]; then
-    echo 'Root Apps requires the reviewed APPS_BUNDLE or explicit APPS_SOURCE handoff' >&2
+    echo 'Root Apps requires the reviewed Apps controller bundle; run make cells' >&2
     exit 1
 fi
 python3 scripts/release_notes.py CHANGELOG.md build/package-assets/inbe/assets/app/release-notes.json
@@ -39,10 +40,9 @@ for feature in lists habits practices diary lumi leaderboard; do
     if [ "$feature" = practices ]; then source=practice; entry=practice; fi
     locale_args=
     if [ "$feature" = diary ]; then locale_args="--asset-dir locales=build/package-assets/diary/locales"; fi
-    "$ziran" bundle --root . --module-path src $locale_args \
-        --module-path kryon=build/packages/kryon/src/backend \
+    # shellcheck disable=SC2086
+    "$ziran" bundle --root . --module-path src $locale_args $packages \
         --module-path build/packages/kryon/src/ui \
-        --module-path mingcute=build/packages/mingcute/src \
         --define KRYON_HOSTED_UI \
         --module-path build/packages/ziran/std \
         --asset-dir "assets=build/package-assets/$feature/assets" \
@@ -54,9 +54,9 @@ rm -f build/bundled-cells/practice.zib
 for feature in lists habits practices diary lumi leaderboard; do
     cp "$output/$feature.zib" build/bundled-cells/
 done
-"$ziran" bundle --root . --module-path src \
-    --module-path build/packages/ziran/std --module-path kryon=build/packages/kryon/src/backend \
-        --module-path build/packages/kryon/src/ui \
+# shellcheck disable=SC2086
+"$ziran" bundle --root . --module-path src $packages \
+    --module-path build/packages/ziran/std --module-path build/packages/kryon/src/ui \
     --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "assets=build/package-assets/inbe/assets" \
     --asset-dir "styles=build/package-assets/inbe/styles" \
@@ -65,9 +65,9 @@ done
     --asset-dir "icons=build/package-assets/inbe/icons" \
     --asset-dir "assets/self=$self_dir/assets/self" --asset-dir "assets/self/bundles=build/self" \
     --asset-dir "cells=build/bundled-cells" -o build/inbe.zib apps/inbe/inbe.zi
-"$ziran" bundle --root . --module-path src \
-    --module-path build/packages/ziran/std --module-path kryon=build/packages/kryon/src/backend \
-        --module-path build/packages/kryon/src/ui \
+# shellcheck disable=SC2086
+"$ziran" bundle --root . --module-path src $packages \
+    --module-path build/packages/ziran/std --module-path build/packages/kryon/src/ui \
     --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "assets=build/package-assets/inbe/assets" \
     --asset-dir "styles=build/package-assets/inbe/styles" \

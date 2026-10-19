@@ -9,10 +9,10 @@ source=$root/tests/patterns_session_behavior.zi
 
 "$bin/zi2zir" --check-only --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" "$source"
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" "$source"
 "$bin/zi2c" --no-main --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" -o "$work/c" "$source"
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" -o "$work/c" "$source"
 cat > "$work/c/main.c" <<'C'
 #include "patterns_session_behavior.h"
 int main(void) { return Answer() == 42 ? 0 : 1; }

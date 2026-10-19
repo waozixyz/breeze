@@ -15,6 +15,8 @@ if [ "$target" = android ]; then
 fi
 "$ziran" build --target=c --no-main "$@" --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
+    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/daochi-client" \
     --module-path "$source/std" -o "$generated" \
     "$root/tests/cells_platform_probe.zi"
 if [ "$target" = android ]; then

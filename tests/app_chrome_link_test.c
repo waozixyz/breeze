@@ -1,4 +1,5 @@
 #include "app/app_chrome.h"
+#include "zir_string.h"
 #include "app/practice_title_bar.h"
 #include "paint_queue.h"
 #include "image_raster.h"

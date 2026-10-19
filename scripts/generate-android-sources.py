@@ -31,13 +31,9 @@ for directory in (
     root / "build/packages/game2d/src", root / "build/packages/ziran/std", root / "build/packages/daochi-client",
 ):
     command.extend(["--module-path", str(directory)])
-# KSS imports Kryon as kryon/NAME, and account code imports oqs/Oqs.
-command.extend(["--module-path", f"kryon={kryon / 'src/ui'}"])
-command.extend(["--module-path", f"kryon={kryon / 'src/backend'}"])
-command.extend(["--module-path", f"qrcode={root / 'build/packages/qrcode/src'}"])
-command.extend(["--module-path", f"plot={root / 'build/packages/plot/src'}"])
-command.extend(["--module-path", f"oqs={root / 'build/packages/oqs/src'}"])
-command.extend(["--module-path", f"self={root / 'build/packages/self/src'}"])
+# Dependencies are imported as PACKAGE/Module through their linked packages.
+command.extend(subprocess.check_output(
+    ["sh", str(root / "scripts/package-paths.sh"), str(root / "build/packages")], text=True).split())
 command.extend(["-o", str(args.output)])
 command.extend(str(path.relative_to(root)) for path in sources)
 completed = subprocess.run(command, cwd=root)

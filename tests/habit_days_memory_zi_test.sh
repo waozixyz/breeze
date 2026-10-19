@@ -8,7 +8,7 @@ mkdir -p "$work/c"
 
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "oqs=$root/build/packages/oqs/src" --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
     -o "$work/c" "$root/src/habits/habit_days.zi"
 
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \

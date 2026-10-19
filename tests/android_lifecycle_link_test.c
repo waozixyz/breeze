@@ -1,4 +1,5 @@
 #include "platform/android/android_lifecycle.h"
+#include "zir_string.h"
 #include "current_app.h"
 
 #include <assert.h>

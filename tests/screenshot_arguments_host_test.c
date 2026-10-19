@@ -1,4 +1,5 @@
 #include "screenshot_arguments.h"
+#include "zir_string.h"
 #include "screenshot_request.h"
 #include "screenshot_arguments_link.h"
 
