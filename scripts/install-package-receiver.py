@@ -32,7 +32,9 @@ def install(target, store):
         raise ValueError('invalid SSH target')
     if not store.startswith('/') or any(c in store for c in '\n\r\0'):
         raise ValueError('package store must be absolute')
+    # The receiver imports the release format from the Apps package beside it.
     configuration = dict(store=store, files={
+        'node_release.py': (ROOT / 'build/packages/apps/scripts/node_release.py').read_text(),
         'package-release.py': (ROOT / 'scripts/package-release.py').read_text(),
         'practice_content.py': (ROOT / 'scripts/practice_content.py').read_text(),
         'publishers.json': (ROOT / 'apps/publishers.json').read_text(),
@@ -57,12 +59,13 @@ with tempfile.TemporaryDirectory(prefix='receiver-', dir=directory) as temporary
     stage = Path(temporary)
     for name, text in configuration['files'].items():
         (stage / name).write_text(text)
-    subprocess.run([sys.executable, '-m', 'py_compile', str(stage / 'package-release.py'),
-                    str(stage / 'practice_content.py'), str(stage / 'inbe-packages')], check=True)
+    subprocess.run([sys.executable, '-m', 'py_compile', str(stage / 'node_release.py'),
+                    str(stage / 'package-release.py'), str(stage / 'practice_content.py'),
+                    str(stage / 'inbe-packages')], check=True)
     subprocess.run([sys.executable, str(stage / 'package-release.py'), '--help'],
                     check=True, stdout=subprocess.DEVNULL)
     hashes = {}
-    for name in ('package-release.py', 'practice_content.py', 'publishers.json'):
+    for name in ('node_release.py', 'practice_content.py', 'publishers.json', 'package-release.py'):
         target = directory / name
         (stage / name).chmod(0o644)
         os.replace(stage / name, target)

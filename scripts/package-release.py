@@ -11,109 +11,29 @@ from pathlib import Path
 import re
 import shlex
 import subprocess
+import tarfile
 import tempfile
 import time
 import sys
 from urllib.parse import urlsplit
 from urllib.error import HTTPError
-from urllib.request import Request, urlopen
 
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'scripts'))
+# The release format and the apps the node offers come from the Apps package.
+# Builds link it under build/packages; the node receiver installs it here.
+sys.path.insert(0, str(ROOT / 'build/packages/apps/scripts'))
 from practice_content import catalog_from_bundle, bundle_assets
+import node_release
+from node_release import (BUNDLED_IDS, IDENTIFIER, VERSION, atomic_write, import_node_app, node_app_id,
+                          open_public_url, signing_message, upload, validate_release, version_tuple,
+                          write_histories, write_history)
 NAMES = ("habits", "practices", "lumi", "lists", "diary", "leaderboard", "inbe")
-IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9_.-]{0,62}\Z")
-# Apps the node offers: inbe.<name>, never one of the bundled IDs.
-NODE_APP_ID = re.compile(r"inbe\.[a-z][a-z0-9]{1,23}\Z")
-BUNDLED_IDS = {"inbe", "inbe.habits", "inbe.practices", "inbe.lists", "inbe.diary", "inbe.lumi",
-               "inbe.leaderboard"}
-
-
-def node_app_id(app_id):
-    return bool(NODE_APP_ID.fullmatch(app_id)) and app_id not in BUNDLED_IDS
-
-
-def trusted_pin(publishers, key_id, app_id):
-    """The pin that may sign app_id: named, or an app the node offers under its prefix."""
-    return next((pin for pin in publishers if pin["key_id"] == key_id and
-                 (app_id in pin["app_ids"] or
-                  (node_app_id(app_id) and "inbe." in pin.get("app_prefixes", [])))), None)
-VERSION = re.compile(r"(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\.(?:0|[1-9][0-9]{0,8})\Z")
-# The node offers each app's newest three releases, so a person can go back
-# to an earlier version that still runs on their device.
-RETAINED_RELEASES = 3
-
-
-def signing_message(value):
-    fields = ("app_id", "sequence", "version", "runtime", "host_api",
-              "module_api", "data_schema", "key_id")
-    lines = ["daochi-zib-release-v2", *(str(value[name]) for name in fields),
-             str(len(value["artifacts"]))]
-    for artifact in value["artifacts"]:
-        lines.extend(str(artifact[name]) for name in ("variant", "sha256", "size"))
-    lines.append(str(len(value["dependencies"])))
-    for dependency in value["dependencies"]:
-        lines.extend(str(dependency[name]) for name in ("app_id", "version", "sha256", "size"))
-    return ("\n".join(lines) + "\n").encode("ascii")
-
-
-def atomic_write(path, data):
-    fd, name = tempfile.mkstemp(prefix=".inbe-", dir=path.parent)
-    try:
-        with os.fdopen(fd, "wb") as output:
-            output.write(data)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(name, path)
-        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(directory)
-        finally:
-            os.close(directory)
-    finally:
-        Path(name).unlink(missing_ok=True)
-
-
-def write_history(directory, app_id, publishers):
-    """Lists the newest three releases, newest first, in history-v2.json.
-
-    Every release stays archived. The history names the newest ones the node
-    still trusts and still has the bundle for.
-    """
-    releases = []
-    for path in directory.glob("release-*.json"):
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > 65536:
-            continue
-        try:
-            value = json.loads(path.read_bytes())
-            validate_release(value, app_id, publishers)
-        except (ValueError, KeyError, TypeError):
-            continue
-        payload = directory / (value["artifacts"][0]["sha256"] + ".zib")
-        if path.name == f"release-{value['sequence']}.json" and payload.is_file():
-            releases.append(value)
-    if not releases:
-        return
-    releases.sort(key=lambda value: value["sequence"], reverse=True)
-    history = dict(versions=releases[:RETAINED_RELEASES])
-    atomic_write(directory / "history-v2.json", (json.dumps(history, separators=(",", ":")) + "\n").encode())
-
-
-def write_histories(store, publishers_path):
-    """Writes the history of every app in the store, under its publication lock."""
-    publishers = json.loads(publishers_path.read_text())
-    for directory in sorted(store.iterdir()):
-        app_id = directory.name
-        if directory.is_symlink() or not directory.is_dir() or \
-                (app_id not in BUNDLED_IDS and not node_app_id(app_id)) or \
-                not (directory / "latest-v2.json").is_file():
-            continue
-        with (directory / ".publish.lock").open("a+b") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX)
-            write_history(directory, app_id, publishers)
+if {"inbe" if name == "inbe" else "inbe." + name for name in NAMES} != BUNDLED_IDS:
+    raise SystemExit("Apps' node_release.py names other bundled apps than Inbe ships")
 
 
 def stage(store, key_path, key_id, publishers_path=None, *, build_directory=None):
@@ -252,7 +172,6 @@ def publish(store, target, remote_store, rollout=None):
     # restricted to this one command and this fixed store; it needs no shell,
     # SFTP access or permission to change the server's code and configuration.
     with tempfile.TemporaryDirectory(prefix="inbe-upload-") as staging:
-        import tarfile
         archive = Path(staging) / "packages.tar"
         with tarfile.open(archive, "w") as tar:
             for name in NAMES:
@@ -275,19 +194,7 @@ def publish(store, target, remote_store, rollout=None):
                 member = tarfile.TarInfo("rollout.json")
                 member.size = len(encoded)
                 tar.addfile(member, io.BytesIO(encoded))
-        options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]
-        if os.environ.get("INBE_SSH_IDENTITY"):
-            # Only the upload key, never another key from an agent or ~/.ssh.
-            options += ["-i", os.environ["INBE_SSH_IDENTITY"], "-o", "IdentitiesOnly=yes"]
-        if os.environ.get("INBE_SSH_KNOWN_HOSTS"):
-            options += ["-o", "UserKnownHostsFile=" + os.environ["INBE_SSH_KNOWN_HOSTS"]]
-        command = shlex.join(["inbe-packages", remote_store])
-        with archive.open("rb") as upload:
-            subprocess.run(["ssh", *options, "--", target, command], stdin=upload, check=True)
-
-
-def open_public_url(url, timeout):
-    return urlopen(Request(url, headers={"User-Agent": "Inbe-Publisher/1.0"}), timeout=timeout)
+        upload(archive, target, remote_store)
 
 
 def stage_content_repair(store, practice, key_path, key_id, release_path, publishers_path=None):
@@ -368,22 +275,13 @@ def publish_content_repair(store, digest, target, remote_store):
         raise ValueError('invalid SSH target')
     if not remote_store.startswith('/') or any(c in remote_store for c in '\n\r\0'):
         raise ValueError('invalid remote store')
-    import tarfile
     with tempfile.TemporaryDirectory(prefix='inbe-content-repair-') as temporary:
         archive = Path(temporary) / 'repair.tar'
         with tarfile.open(archive, 'w') as tar:
             for suffix in ('.zib', '.zib.release-v2.json'):
                 path = store / 'inbe.practices' / (digest + suffix)
                 tar.add(path, arcname=str(path.relative_to(store)), recursive=False)
-        options = ['-o', 'BatchMode=yes', '-o', 'StrictHostKeyChecking=yes']
-        if os.environ.get('INBE_SSH_IDENTITY'):
-            # Only the upload key, never another key from an agent or ~/.ssh.
-            options += ['-i', os.environ['INBE_SSH_IDENTITY'], '-o', 'IdentitiesOnly=yes']
-        if os.environ.get('INBE_SSH_KNOWN_HOSTS'):
-            options += ['-o', 'UserKnownHostsFile=' + os.environ['INBE_SSH_KNOWN_HOSTS']]
-        with archive.open('rb') as upload:
-            subprocess.run(['ssh', *options, '--', target,
-                            shlex.join(['inbe-packages', remote_store])], stdin=upload, check=True)
+        upload(archive, target, remote_store)
 
 
 def verify_origin(store, origin, open_url=open_public_url):
@@ -439,10 +337,6 @@ def verify_origin(store, origin, open_url=open_public_url):
     print("Verified public signed metadata, app packages and practice content")
 
 
-def version_tuple(value):
-    return tuple(map(int, value["version"].split(".")))
-
-
 def published_changes(store, origin, open_url=open_public_url):
     """Compare the staged releases with the ones the public node serves.
 
@@ -477,63 +371,10 @@ def published_changes(store, origin, open_url=open_public_url):
     return advanced, unversioned
 
 
-def validate_release(value, app_id, publishers):
-    fields = {"app_id", "sequence", "version", "runtime", "host_api", "module_api",
-              "data_schema", "key_id", "artifacts", "dependencies", "signature"}
-    # A beta app the node offers carries "channel":"beta"; apps hide it until
-    # a person shows beta apps. It changes who sees the app, not what runs.
-    present = set(value) - {"channel"} if isinstance(value, dict) else set()
-    if not isinstance(value, dict) or present != fields or value["app_id"] != app_id or \
-            value["runtime"] != "kryon-app-v1" or value.get("channel", "beta") != "beta" or \
-            ("channel" in value and not node_app_id(app_id)):
-        raise ValueError("invalid release identity or fields")
-    if not isinstance(value["version"], str) or not VERSION.fullmatch(value["version"]):
-        raise ValueError("invalid numeric release version")
-    for field, minimum, maximum in (("sequence", 1, 2**31 - 1), ("host_api", 1, 65535),
-                                     ("module_api", 1, 65535), ("data_schema", 0, 65535)):
-        if type(value[field]) is not int or not minimum <= value[field] <= maximum:
-            raise ValueError("invalid release sequence or API version")
-    if not isinstance(value["artifacts"], list) or len(value["artifacts"]) != 1:
-        raise ValueError("Inbe release must contain exactly one module artifact")
-    artifact = value["artifacts"][0]
-    if not isinstance(artifact, dict) or set(artifact) != {"variant", "sha256", "size"} or \
-            artifact["variant"] != "module" or not isinstance(artifact["sha256"], str) or \
-            not re.fullmatch(r"[0-9a-f]{64}", artifact["sha256"]) or \
-            type(artifact["size"]) is not int or not 8 <= artifact["size"] <= 64 * 1024 * 1024:
-        raise ValueError("invalid module artifact")
-    dependencies = value["dependencies"]
-    expected = sorted("inbe." + name for name in NAMES if name != "inbe") if app_id == "inbe" else []
-    # Roots built before Leaderboard became an app have no dependency on it.
-    if app_id == "inbe" and isinstance(dependencies, list) and \
-            len(dependencies) == len(expected) - 1:
-        expected.remove("inbe.leaderboard")
-    if not isinstance(dependencies, list) or len(dependencies) != len(expected):
-        raise ValueError("invalid root dependencies")
-    for dependency, expected_id in zip(dependencies, expected):
-        if not isinstance(dependency, dict) or set(dependency) != {"app_id", "version", "sha256", "size"} or \
-                dependency["app_id"] != expected_id or not isinstance(dependency["version"], str) or \
-                not VERSION.fullmatch(dependency["version"]) or not isinstance(dependency["sha256"], str) or \
-                not re.fullmatch(r"[0-9a-f]{64}", dependency["sha256"]) or \
-                type(dependency["size"]) is not int or not 8 <= dependency["size"] <= 64 * 1024 * 1024:
-            raise ValueError("invalid dependency descriptor")
-    pin = trusted_pin(publishers, value["key_id"], app_id)
-    if pin is None:
-        raise ValueError("publisher is not trusted for this app")
-    try:
-        if not isinstance(value["signature"], str) or not re.fullmatch(r"[0-9a-f]{128}", value["signature"]):
-            raise ValueError("invalid release signature")
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(pin["public_key"])).verify(
-            bytes.fromhex(value["signature"]), signing_message(value))
-    except Exception as error:
-        raise ValueError("release signature rejected") from error
-
-
 def import_archive(archive, store, publishers_path=None):
     """Node-side merge. Daochi still checks registry/key status on every GET."""
-    import tarfile
     publishers = json.loads((publishers_path or ROOT / "apps/publishers.json").read_text())
-    ids = {"inbe", "inbe.habits", "inbe.practices", "inbe.lists", "inbe.diary", "inbe.lumi",
-           "inbe.leaderboard"}
+    ids = BUNDLED_IDS
     entries = {}
     total = 0
     rollout = None
@@ -675,184 +516,6 @@ def import_archive(archive, store, publishers_path=None):
     archive.parent.rmdir()
 
 
-def node_app_release(name, key, key_id, beta=False, ledger_path=None, bundle_directory=None):
-    """The signed release of build/node-apps/NAME.zib from its ledger entry."""
-    versions = json.loads((ledger_path or ROOT / "apps/versions.json").read_text())
-    component = versions.get("node_apps", {}).get(name)
-    if component is None or not node_app_id(component["id"]) or component["id"] != "inbe." + name:
-        raise ValueError(f"{name} is not an app the node offers")
-    if not VERSION.fullmatch(component["version"]) or not 0 < component["sequence"] <= 2**31 - 1:
-        raise ValueError(f"invalid {name} version or sequence")
-    data = ((bundle_directory or ROOT / "build/node-apps") / f"{name}.zib").read_bytes()
-    if not data.startswith(b"ZIB\0") or not 8 <= len(data) <= 64 * 1024 * 1024:
-        raise ValueError(f"invalid {name} bundle")
-    value = dict(app_id=component["id"], sequence=component["sequence"], version=component["version"],
-                 runtime="kryon-app-v1", host_api=component.get("host_api", versions["host_api"]),
-                 module_api=versions["module_api"], data_schema=0, key_id=key_id,
-                 artifacts=[dict(variant="module", sha256=sha256(data).hexdigest(), size=len(data))],
-                 dependencies=[])
-    value["signature"] = key.sign(signing_message(value)).hex()
-    if beta or component.get("beta") is True:
-        value["channel"] = "beta"
-    return value, data
-
-
-def stage_node_app(store, name, key_path, key_id, publishers_path=None, beta=False,
-                   ledger_path=None, bundle_directory=None):
-    if not IDENTIFIER.fullmatch(key_id) or key_id in (".", ".."):
-        raise ValueError("invalid publisher key ID")
-    key = serialization.load_pem_private_key(key_path.read_bytes(), password=None)
-    if not isinstance(key, Ed25519PrivateKey):
-        raise ValueError("publisher key must be Ed25519")
-    publishers = json.loads((publishers_path or ROOT / "apps/publishers.json").read_text())
-    value, data = node_app_release(name, key, key_id, beta, ledger_path, bundle_directory)
-    validate_release(value, value["app_id"], publishers)
-    directory = store / value["app_id"]
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    encoded = (json.dumps(value, separators=(",", ":")) + "\n").encode()
-    with (directory / ".publish.lock").open("a+b") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        write_node_app(directory, value, encoded, data, publishers)
-    return value
-
-
-def write_node_app(directory, value, encoded, data, publishers):
-    """Publishes one release of an app the node offers into its directory."""
-    current = directory / "latest-v2.json"
-    if current.exists():
-        previous = json.loads(current.read_bytes())
-        if previous != value and (value["sequence"] <= previous["sequence"] or
-                version_tuple(value) <= version_tuple(previous)):
-            raise ValueError(f"{value['app_id']} changed: advance its version and sequence")
-    payload = directory / (value["artifacts"][0]["sha256"] + ".zib")
-    archive = directory / f"release-{value['sequence']}.json"
-    if payload.exists() and payload.read_bytes() != data:
-        raise ValueError("immutable payload does not match its hash")
-    if archive.exists() and archive.read_bytes() != encoded:
-        raise ValueError("release sequence is already occupied")
-    atomic_write(payload, data)
-    atomic_write(payload.with_name(payload.name + ".release-v2.json"), encoded)
-    atomic_write(archive, encoded)
-    atomic_write(current, encoded)
-    write_history(directory, value["app_id"], publishers)
-
-
-def import_node_app(entries, store, publishers, app_id):
-    """Node-side merge of one app the node offers, signed and without dependencies."""
-    encoded = entries.get(f"{app_id}/latest-v2.json")
-    if encoded is None or len(encoded) > 65536:
-        raise ValueError("missing or oversized release metadata")
-    value = json.loads(encoded)
-    validate_release(value, app_id, publishers)
-    if value["dependencies"]:
-        raise ValueError("an app the node offers has no dependencies")
-    artifact = value["artifacts"][0]
-    data = entries.get(f"{app_id}/{artifact['sha256']}.zib", b"")
-    if artifact["size"] != len(data) or sha256(data).hexdigest() != artifact["sha256"] or \
-            not data.startswith(b"ZIB\0"):
-        raise ValueError("payload hash mismatch")
-    expected = {f"{app_id}/latest-v2.json", f"{app_id}/{artifact['sha256']}.zib",
-                f"{app_id}/{artifact['sha256']}.zib.release-v2.json",
-                f"{app_id}/release-{value['sequence']}.json"}
-    if set(entries) != expected:
-        raise ValueError("archive contains unreferenced content")
-    directory = store / app_id
-    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with (directory / ".publish.lock").open("a+b") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        write_node_app(directory, value, encoded, data, publishers)
-
-
-def publish_node_app(store, name, target, remote_store):
-    if not re.fullmatch(r"[a-zA-Z0-9_.@-]+", target) or target.startswith("-"):
-        raise ValueError("invalid SSH target")
-    if not remote_store.startswith("/") or "\n" in remote_store:
-        raise ValueError("Daochi package store must be an absolute path")
-    import tarfile
-    with tempfile.TemporaryDirectory(prefix="inbe-upload-") as staging:
-        archive = Path(staging) / "packages.tar"
-        directory = store / ("inbe." + name)
-        value = json.loads((directory / "latest-v2.json").read_bytes())
-        payload = value["artifacts"][0]["sha256"] + ".zib"
-        with tarfile.open(archive, "w") as tar:
-            for filename in ("latest-v2.json", payload, payload + ".release-v2.json",
-                             f"release-{value['sequence']}.json"):
-                path = directory / filename
-                tar.add(path, arcname=str(path.relative_to(store)), recursive=False)
-        options = ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes"]
-        if os.environ.get("INBE_SSH_IDENTITY"):
-            # Only the upload key, never another key from an agent or ~/.ssh.
-            options += ["-i", os.environ["INBE_SSH_IDENTITY"], "-o", "IdentitiesOnly=yes"]
-        if os.environ.get("INBE_SSH_KNOWN_HOSTS"):
-            options += ["-o", "UserKnownHostsFile=" + os.environ["INBE_SSH_KNOWN_HOSTS"]]
-        with archive.open("rb") as upload:
-            subprocess.run(["ssh", *options, "--", target, shlex.join(["inbe-packages", remote_store])],
-                           stdin=upload, check=True)
-
-
-def verify_node_app(store, name, origin, open_url=open_public_url):
-    """Require the public node to serve the exact signed release of NAME."""
-    app_id = "inbe." + name
-    expected = json.loads((store / app_id / "latest-v2.json").read_bytes())
-    route = origin.rstrip("/") + "/api/v2/packages/" + app_id
-    with open_url(route + "/latest?bucket=0", timeout=30) as response:
-        encoded = response.read(65537)
-    if len(encoded) > 65536 or json.loads(encoded) != expected:
-        raise ValueError(f"{app_id}: public release metadata differs from the signed publication")
-    artifact = expected["artifacts"][0]
-    with open_url(route + "/" + artifact["sha256"] + ".zib", timeout=30) as response:
-        data = response.read(artifact["size"] + 1)
-    if len(data) != artifact["size"] or sha256(data).hexdigest() != artifact["sha256"]:
-        raise ValueError(f"{app_id}: public package hash or size differs from the signed publication")
-    print(f"Verified the public release of {app_id}")
-
-
-def registered_apps(origin, open_url=open_public_url):
-    """The app IDs the node's registry lists as active."""
-    with open_url(origin.rstrip("/") + "/api/v1/apps", timeout=30) as response:
-        listing = json.loads(response.read(1048577))
-    return {app.get("app_id") for app in listing.get("apps", []) if app.get("status") == "active"}
-
-
-def served_release(origin, app_id, open_url=open_public_url):
-    """The release the node serves for app_id, or None before its first."""
-    try:
-        with open_url(origin.rstrip("/") + "/api/v2/packages/" + app_id + "/latest?bucket=0",
-                      timeout=30) as response:
-            encoded = response.read(65537)
-    except HTTPError as error:
-        if error.code == 404:
-            return None
-        raise
-    if len(encoded) > 65536:
-        raise ValueError(f"{app_id}: public release metadata is too large")
-    return json.loads(encoded)
-
-
-def publish_node_apps(store, key_path, key_id, target, remote_store, origin, publishers_path=None,
-                      ledger_path=None, bundle_directory=None, open_url=open_public_url):
-    """Publishes every app the node offers whose ledger names a newer release.
-
-    Registering an app takes the node operator's key, which stays with the
-    operator, so an app the node does not list yet is reported and skipped.
-    """
-    ledger = json.loads((ledger_path or ROOT / "apps/versions.json").read_text())
-    registered = registered_apps(origin, open_url)
-    for name, component in sorted(ledger.get("node_apps", {}).items()):
-        app_id = component["id"]
-        if app_id not in registered:
-            print(f"::warning title=App packages::{app_id} is not registered on the node, so it was not published")
-            continue
-        served = served_release(origin, app_id, open_url)
-        if served is not None and served["sequence"] >= component["sequence"]:
-            print(f"{app_id} {served['version']} is already published")
-            continue
-        stage_node_app(store, name, key_path, key_id, publishers_path,
-                       ledger_path=ledger_path, bundle_directory=bundle_directory)
-        publish_node_app(store, name, target, remote_store)
-        verify_node_app(store, name, origin, open_url)
-
-
 def receive_archive(store, publishers_path):
     if shlex.split(os.environ.get("SSH_ORIGINAL_COMMAND", "")) != ["inbe-packages", str(store)]:
         raise ValueError("upload key permits only publication to its configured package store")
@@ -888,42 +551,18 @@ def main():
     parser.add_argument('--repair-content', choices=['sunsalutation'],
                         help='restore only the missing Sun Salutation picture pack')
     parser.add_argument('--repair-release', type=Path, help='existing signed Practices metadata for a content repair')
-    parser.add_argument("--node-app", help="stage, and with --ssh-target publish, only this app the node offers")
-    parser.add_argument("--node-apps", action="store_true",
-                        help="publish every app the node offers whose ledger names a newer release")
     parser.add_argument("--write-history", action="store_true",
                         help="on the node: list each app's newest three releases for rollback")
-    parser.add_argument("--app-ledger", type=Path, help="owning project's node-app version ledger")
-    parser.add_argument("--bundle-directory", type=Path, help="owning project's built node-app bundles")
-    parser.add_argument("--beta", action="store_true",
-                        help="with --node-app: publish it as beta, listed only where beta apps are shown")
+    node_release.add_node_app_arguments(parser)
     args = parser.parse_args()
     try:
-        if args.node_apps:
-            if not (args.key and args.key_id and args.ssh_target and args.remote_store and args.verify_origin) or \
-                    args.rollout is not None:
-                parser.error("--node-apps needs --key, --key-id, --ssh-target, --remote-store and "
-                             "--verify-origin, without --rollout")
-            publish_node_apps(args.store, args.key, args.key_id, args.ssh_target, args.remote_store,
-                              args.verify_origin, args.publishers, args.app_ledger, args.bundle_directory)
+        if node_release.publish_from_arguments(args, parser, ROOT):
             return
         if args.write_history:
             if not args.publishers:
                 parser.error("--write-history needs the node's --publishers")
             write_histories(args.store, args.publishers)
             print("Release histories written")
-            return
-        if args.node_app:
-            if not args.key or not args.key_id or args.rollout is not None:
-                parser.error("--node-app needs --key and --key-id, without --rollout")
-            stage_node_app(args.store, args.node_app, args.key, args.key_id, args.publishers, args.beta,
-                           args.app_ledger, args.bundle_directory)
-            if args.ssh_target:
-                if not args.remote_store or not args.verify_origin:
-                    parser.error("publishing an app the node offers needs --remote-store and --verify-origin")
-                publish_node_app(args.store, args.node_app, args.ssh_target, args.remote_store)
-                verify_node_app(args.store, args.node_app, args.verify_origin)
-            print(f"{args.node_app} release " + ("published" if args.ssh_target else "staged"))
             return
         if args.repair_content:
             if not args.key or not args.key_id or not args.repair_release or args.rollout is not None:
