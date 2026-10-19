@@ -191,6 +191,13 @@ chess-ui-test: $(TARGET)
 	@test -n "$(CHESS_BUNDLE)" || { echo "Set CHESS_BUNDLE to the Chess package built by Arcade"; exit 2; }
 	@sh tests/chess_ui_test.sh $(abspath $(TARGET)) $(abspath $(CHESS_BUNDLE))
 
+# Arcade carries Chess: its collection in More apps, and Chess's replacement.
+.PHONY: arcade-ui-test
+ARCADE_BUNDLE ?=
+arcade-ui-test: $(TARGET)
+	@test -n "$(ARCADE_BUNDLE)" || { echo "Set ARCADE_BUNDLE to the arcade.zib collection built by Arcade"; exit 2; }
+	@sh tests/arcade_ui_test.sh $(abspath $(TARGET)) $(abspath $(ARCADE_BUNDLE))
+
 # Missing practice pictures fail the visual gate in CI and releases.
 .PHONY: practice-images-ui-test
 practice-images-ui-test: $(TARGET)

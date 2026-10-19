@@ -9,8 +9,9 @@ host interface the released app accepts, so a package update that claims to
 support older apps cannot break them.
 
 Bundled packages are loaded with --bundle, which validates them and fails the
-run when the host rejects them. Published Chess is installed through More apps,
-played against the computer and restarted to check its saved game.
+run when the host rejects them. The node's Arcade, and Chess while the node
+still serves it on its own, are installed through More apps, played against
+the computer and restarted to check the saved game.
 """
 import argparse
 import hashlib
@@ -126,29 +127,53 @@ def forward(binary, origin, ledger, output):
     return checked
 
 
-def published_chess(binary, origin, ledger, output):
-    """Install and play the node's Chess, independently of Arcade's checkout."""
+def published_release(origin, ledger, app_id, output):
+    """Download the node's release of app_id for this build, or None if it serves none."""
     oldest, current = host_range(ledger)
-    route = f"{origin}/api/v2/packages/inbe.chess"
-    metadata = json.loads(fetch(
-        f"{route}/latest?host_api={current}&module_api={ledger['module_api']}", 65536))
+    route = f"{origin}/api/v2/packages/{app_id}"
+    try:
+        metadata = json.loads(fetch(
+            f"{route}/latest?host_api={current}&module_api={ledger['module_api']}", 65536))
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise
     if not oldest <= metadata["host_api"] <= current or metadata["module_api"] != ledger["module_api"]:
-        raise AssertionError("The published Chess package does not support this host")
+        raise AssertionError(f"The published {app_id} package does not support this host")
     artifact = metadata["artifacts"][0]
     data = fetch(f"{route}/{artifact['sha256']}.zib", artifact["size"])
     if len(data) != artifact["size"] or hashlib.sha256(data).hexdigest() != artifact["sha256"]:
-        raise AssertionError("The node's Chess bytes differ from its release")
-    directory = output / "published-chess"
+        raise AssertionError(f"The node's {app_id} bytes differ from its release")
+    directory = output / ("published-" + app_id.split(".")[-1])
     directory.mkdir(parents=True, exist_ok=True)
-    bundle = directory / "chess.zib"
+    bundle = directory / (app_id.split(".")[-1] + ".zib")
     bundle.write_bytes(data)
     (directory / "release.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    return bundle, metadata
+
+
+def published_games(binary, origin, ledger, output):
+    """Install and play the node's games, independently of Arcade's checkout.
+
+    Arcade carries Chess; Chess on its own is checked only while the node
+    still serves it. At least one of them must be served.
+    """
     environment = {key: value for key, value in os.environ.items() if key not in SCRUBBED}
     environment["YUE_DESKTOP_RECOVERY"] = "0"
-    subprocess.run(["sh", str(ROOT / "tests/chess_ui_test.sh"), str(binary), str(bundle)],
-                   env=environment, check=True, timeout=300)
-    print(f"forward inbe.chess {metadata['version']}: install, play, board and saved restart passed")
-    return 1
+    checked = 0
+    for app_id, test in (("inbe.arcade", "tests/arcade_ui_test.sh"), ("inbe.chess", "tests/chess_ui_test.sh")):
+        published = published_release(origin, ledger, app_id, output)
+        if published is None:
+            print(f"forward {app_id}: the node serves no release")
+            continue
+        bundle, metadata = published
+        subprocess.run(["sh", str(ROOT / test), str(binary), str(bundle)],
+                       env=environment, check=True, timeout=600)
+        print(f"forward {app_id} {metadata['version']}: install, play, board and saved restart passed")
+        checked += 1
+    if checked == 0:
+        raise AssertionError("The node serves neither Arcade nor Chess")
+    return checked
 
 
 def released_app(tag, output):
@@ -200,7 +225,7 @@ def main():
         binary = args.binary.resolve(strict=True)
         origin = args.origin.rstrip("/")
         checked += forward(binary, origin, ledger, output)
-        checked += published_chess(binary, origin, ledger, output)
+        checked += published_games(binary, origin, ledger, output)
     if not args.skip_reverse:
         tag = args.release
         if tag is None:
