@@ -44,9 +44,9 @@
   offers Arcade, More apps lists it instead of Chess. If you installed Chess,
   Arcade installs for you with your saved and friend Chess games, and Chess
   leaves your apps once Arcade has downloaded.
+- Habits earn coins, more for hard ones, to spend on your own rewards in the shop.
 
 ## [2.1.35] - 2026-10-17
-- Habits earn coins, more for hard ones, to spend on your own rewards in the shop.
 
 ### Added
 - Chess in More apps: play the computer or a friend.

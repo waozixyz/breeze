@@ -167,21 +167,14 @@ sets a habit's tracking with `set_habit_tracking` (check, count with a target,
 or span with its good length) and its questions and good answers with
 `set_habit_questions`; her context lists both for each habit.
 
-Inner Breeze has no donations; Dew is how people pay. Donation cards that older
-versions saved stay in the synced history but are no longer shown, and Lumi
-packages before 1.5.0 still import the retired donation calls, which return
-nothing. Old text-only chat history remains readable. Cards persist in the same
-account-scoped local conversation and render with standard Kryon Text, Box and
-Button widgets.
-
 Each habit has a difficulty, medium, hard or very hard. A done day earns 1, 2
 or 3 coins, counted the way the habit list counts a day as done (marked,
 counted to its target, or covered by linked practice sessions). A changed
 difficulty applies from the day it changed, so earlier days keep what they
 earned, and each habit earns from its `coins_from` day: the day it was created,
 or for a habit from before coins, the day the upgrade first opened. Sync keeps
-the earliest such day of every device. The coins and a shop button end the line
-of today's count. The shop lists the rewards the person sets, each with a price
+the earliest such day of every device. The coins and the shop's icon end the
+line of today's count. The shop lists the rewards the person sets, each with a price
 of 1 to 9999 coins, and Buy asks before it spends the coins. Rewards
 (`habit_rewards`) and coin records (`habit_coins`: a reward's price as bought,
 or the coins a deleted habit's days had earned, kept under `kept:<habit id>`)
@@ -189,6 +182,13 @@ sync as `private.inbe.v1.habit-rewards` and `private.inbe.v1.habit-coins` with
 deletions. The balance is what the days earned plus the kept coins less what
 was bought (`src/storage/storage_habit_wallet.zi`). An older app keeps a
 habit's difficulty and skips the shop.
+
+Inner Breeze has no donations; Dew is how people pay. Donation cards that older
+versions saved stay in the synced history but are no longer shown, and Lumi
+packages before 1.5.0 still import the retired donation calls, which return
+nothing. Old text-only chat history remains readable. Cards persist in the same
+account-scoped local conversation and render with standard Kryon Text, Box and
+Button widgets.
 
 The app publishes its MCP tool schemas in `assets/mcp/tools.json`, including
 `get_settings`, `set_theme`, `set_theme_mode`, `set_setting`, `open_view` and
