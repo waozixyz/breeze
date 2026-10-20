@@ -18,7 +18,6 @@ static int status_reads;
 bool storage_sync_node_failover(void) { return false; }
 int32_t app_preview_mode(void) { return 0; }
 void TraceLog(int32_t level, const char *format, ...) {}
-int64_t sqlite3_total_changes64(void *database) { return 0; }
 String storage_get_setting_text(String key) { return StringLiteral("https://sync.example"); }
 
 double

@@ -192,7 +192,7 @@ sync-status-test: $(ZI2C_BIN)
 		sh tests/sync_status_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: sync-recovery-test
-sync-recovery-test: build-laws $(ZI2C_BIN)
+sync-recovery-test: build-laws $(ZI2C_BIN) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		sh tests/sync_recovery_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 

@@ -20,16 +20,20 @@ mkdir -p "$work/c"
     --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/daochi-client" \
     -o "$work/c" "$root/tests/sync_recovery_behavior.zi"
+# The app's SQLite amalgamation resolves the database calls that the kept
+# storage helpers reach; no database opens here, so they return early.
 "${CC:-cc}" -std=gnu11 -w -DZIRAN_BOUNDS_CHECK -ffunction-sections \
     -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -iquote "$work/c" \
+    -I"$root/vendor-builds/sqlite" \
     "$root/tests/sync_recovery_link_test.c" \
+    "$root/vendor-builds/sqlite/sqlite3.c" \
     $(ls "$work/c"/*.c | grep -v -e '/storage_core.c$' -e '/sync_nodes.c$' \
         -e '/storage_settings.c$' -e '/storage_json_sql.c$' -e '/sync_outbox.c$' \
         -e '/sync_state.c$' -e '/sync_migrations.c$' -e '/sync_record_codec.c$' \
         -e '/sync_collections.c$' -e '/sync_record_crypto.c$' -e '/sync_apply.c$' \
         -e '/sync_exchange.c$' -e '/storage_profile_stats.c$' \
         -e '/storage_export_csv.c$') \
-    -lpthread -lm -o "$work/test"
+    -ldl -lpthread -lm -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "sync recovery Ziran/native test passed"
