@@ -1,7 +1,7 @@
 // What a practice's card on Practice offers when the practice is not ready:
 // Install with its size, Unlock with its price for a paid practice, or
-// Cancel while it downloads. A downloaded copy can be uninstalled from its
-// card, asked once there; practices that come with the app are always ready.
+// Cancel while it downloads; practices that come with the app are always
+// ready.
 #import, file "../../src/app/app_types.zi";
 #import, file "../../src/app/app_modal_state.zi";
 #import, file "../../src/app/app_settings.zi";
@@ -43,9 +43,6 @@ PRACTICE_ACTION_NONE :: 0
 PRACTICE_ACTION_INSTALL :: 1
 PRACTICE_ACTION_BUY :: 2
 PRACTICE_ACTION_CANCEL :: 3
-
-// The practice whose card asks whether to uninstall its downloaded copy, or -1.
-practice_delete_asked: s32 = -1;
 
 // A paid practice this account has not unlocked offers its unlock instead of
 // a download, even when its pack is on this device.
@@ -162,19 +159,6 @@ PracticeDownloadSize :: (app: *InnerBreeze, practice: s32, output: []u8) {
         args[:], output)
 }
 
-// "Uninstall Sun Salutation? This frees 24 MB. Your progress stays."
-PracticeDownloadDeleteText :: (app: *InnerBreeze, practice: s32) -> string {
-    size: [32]u8
-    PracticeDownloadSize(app, practice, size[:])
-    definition := practice_get(practice)
-    args: [2]FormatArg = .[
-    FormatArg.{.text = LocaleText(definition.label_key), .is_text = true},
-    FormatArg.{.text = TextUntilNul(size[:]), .is_text = true}]
-    buffer: [256]u8
-    unused FormatTemplate(LocaleText("practice_delete_confirm"), args[:], buffer[:])
-    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
-}
-
 // Content from an older app package, without a pack of its own: on Practice,
 // with nothing to manage.
 PracticeDownloadIncluded :: (practice: s32) -> bool {
@@ -261,7 +245,6 @@ PracticeDownloadActionLabel :: (app: *InnerBreeze, practice: s32, action: s32) -
 
 // Does what a card's download button says.
 PracticeDownloadAct :: (app: *InnerBreeze, practice: s32, action: s32) {
-    practice_delete_asked = -1
     if action == PRACTICE_ACTION_BUY {
         UnlockStart()
     } else if action == PRACTICE_ACTION_CANCEL {
@@ -285,9 +268,6 @@ PracticeDownloadsTick :: () {
                 PracticeContentRequest(practice)
             }
         }
-    }
-    if practice_delete_asked >= 0 && !PracticeDownloadStored(practice_delete_asked) {
-        practice_delete_asked = -1
     }
 }
 
@@ -357,67 +337,5 @@ PracticeCardAction :: (app: *InnerBreeze, practice: s32, bounds: Rectangle) {
             .emphasis = cast(ButtonEmphasis)(ifx cancel then ButtonEmphasisSoft else ButtonEmphasisFilled),
             .size = cast(ControlSize)ControlSizeLarge}) != 0 {
         PracticeDownloadAct(app, practice, action)
-    }
-}
-
-// "Uninstall · 23 MB" at the card's corner for a downloaded copy.
-PracticeCardUninstall :: (app: *InnerBreeze, practice: s32, right: s32, y: s32) {
-    if !PracticeDownloadStored(practice) || practice_delete_asked == practice {
-        return
-    }
-    size: [32]u8
-    PracticeDownloadSize(app, practice, size[:])
-    label: [128]u8
-    unused AppCopyText(LocaleText("practice_uninstall"), label[:])
-    unused AppAppendText(" · ", label[:])
-    unused AppAppendText(TextUntilNul(size[:]), label[:])
-    text := FrameTextHold(*app.ui.frame_text, TextUntilNul(label[:]))
-    width := AppTextWidth(text, AppFontSize()) + AppScale(32)
-    if Button(app.ui.session, ButtonProps.{
-            .id = 17400, .bounds = Rectangle.{cast(float32)(right - width), cast(float32)y,
-                cast(float32)width, cast(float32)AppScale(44)},
-            .label = text, .disabled = app.modal.active != 0 || practice_active(app) != null,
-            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-            .pill = true}) != 0 {
-        practice_delete_asked = practice
-    }
-}
-
-PracticeCardDeleteHeight :: (app: *InnerBreeze, practice: s32, width: s32) -> s32 {
-    if practice_delete_asked != practice {
-        return 0
-    }
-    return AppParagraphHeight(PracticeDownloadDeleteText(app, practice), width, AppFontSize(), AppScale(3)) +
-    AppScale(8) + AppScale(48)
-}
-
-// Uninstall asks once, in place of the card's buttons: Cancel keeps the
-// copy, Uninstall frees it.
-PracticeCardDeleteQuestion :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width: s32) {
-    text := PracticeDownloadDeleteText(app, practice)
-    question_h := AppParagraphHeight(text, width, AppFontSize(), AppScale(3))
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)question_h},
-            .text = text, .font = AppFontSize(), .align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(TextWrap)TextWrapAuto})
-    button_y := y + question_h + AppScale(8)
-    button_w := (width - AppScale(12)) / 2
-    if Button(app.ui.session, ButtonProps.{
-            .id = 17440 + practice,
-            .bounds = Rectangle.{cast(float32)x, cast(float32)button_y,
-                cast(float32)button_w, cast(float32)AppScale(48)},
-            .label = LocaleText("cancel_button"), .pill = true,
-            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        practice_delete_asked = -1
-    }
-    if Button(app.ui.session, ButtonProps.{
-            .id = 17450 + practice,
-            .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)button_y,
-                cast(float32)button_w, cast(float32)AppScale(48)},
-            .label = LocaleText("practice_uninstall"), .pill = true,
-            .disabled = practice_active(app) != null,
-            .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
-        practice_delete_asked = -1
-        PracticeContentRemove(practice)
     }
 }

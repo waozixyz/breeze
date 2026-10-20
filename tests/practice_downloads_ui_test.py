@@ -144,14 +144,6 @@ def next_card():
     driver.wait_idle(frames=2)
 
 
-def wait_file(path, present=True):
-    """A marker or pack the press wrote or removed."""
-    deadline = time.monotonic() + 5
-    while path.exists() != present:
-        assert time.monotonic() < deadline, (path, 'present' if present else 'absent')
-        time.sleep(.05)
-
-
 def visible_label(contains):
     return driver.find(contains=contains, visible=True)
 
@@ -272,11 +264,11 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                                 ('taichi-desktop', 1280, 900)]:
         process, window = launch(profile, name, width, height)
         try:
-            # Bought and on this device, Tai Chi starts; its download can be
-            # uninstalled from its card. No price is left.
+            # Bought and on this device, Tai Chi starts. No price is left, and
+            # its card offers no Uninstall.
             driver.wait(label='Start Practice', role='button')
             driver.wait(contains='Tai Chi')
-            assert buttons('Uninstall'), screen_text()
+            assert not buttons('Uninstall'), screen_text()
             text = screen_text()
             assert 'Dew' not in text and 'Unlock' not in text, text
             if name == 'taichi-desktop':
@@ -319,41 +311,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         assert not visible_label('Plays in'), screen_text()
     finally:
         stop(process)
-    # Uninstalling a downloaded practice asks once on its card, then deletes
-    # the copy and its narration.
-    with sqlite3.connect(profile / 'inbe.db') as database:
-        for key, value in {'exercise_type': 2, 'voice_narration_enabled': 0}.items():
-            database.execute('UPDATE settings SET value=? WHERE user_id=? AND key=?',
-                             (str(value), user, key))
-    process, window = launch(profile, 'sun-delete', 1280, 900)
-    try:
-        driver.wait(label='Start Practice', role='button')
-        assert selected_tab() == 'Yoga', home_tabs()
-        press_button('Uninstall')
-        question = driver.find(contains='Uninstall Sun Salutation?', visible=True)
-        assert question and 'Your progress stays.' in question[0]['label'], screen_text()
-        question = question[0]
-        assert (cache / 'practice-sunsalutation.zib').exists()
-        # Cancel and Uninstall share the row under the question, in place of
-        # Start.
-        cancel = buttons('Cancel')[0]
-        confirm = [node for node in buttons('Uninstall') if node['y'] == cancel['y']]
-        assert confirm, screen_text()
-        confirm = confirm[0]
-        assert not buttons('Start Practice'), screen_text()
-        assert question['y'] < cancel['y'] and abs(confirm['width'] - cancel['width']) < 2, (question, cancel, confirm)
-        driver.press(key=confirm['key'])
-        wait_file(cache / 'practice-sunsalutation.zib', present=False)
-        driver.wait_idle(frames=2)
-        assert not (cache / 'practice-sunsalutation.en.male.zib').exists()
-        assert not (cache / 'practice-sunsalutation.removed').exists()
-        # Its card offers Install again, with the download's size.
-        install = buttons('Install')
-        assert install and str(sun_mb) + 'MB' in install[0]['label'].replace(' ', ''), screen_text()
-        assert not buttons('Uninstall') and not buttons('Start Practice'), screen_text()
-    finally:
-        stop(process)
 print('Practice tabs: Meditation, Yoga, Martial arts and Workout listing every practice, '
       'shipped practices always ready, Install with real sizes, Unlock at its price, '
       'owned Tai Chi without a price, narration languages, swiping to the last tab in '
-      'English and Russian, and uninstalling a download from its card passed')
+      'English and Russian, and no Uninstall on a downloaded card passed')
