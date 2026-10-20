@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.5.3] - 2026-10-20
+
+- Maintenance release for Inner Breeze 2.1.37.
+
 ## [1.5.2] - 2026-10-18
 
 - Receive Inner Breeze changelog highlights in chat after an update, once

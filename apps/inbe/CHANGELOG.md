@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.37] - 2026-10-20
+
+- Bring Lumi 1.5.3, Habits 1.2.1, Practices 1.3.1, Lists 1.1.3, Diary 1.3.1 and Leaderboard 1.0.6 for Inner Breeze 2.1.37.
+
 ## [2.1.36] - 2026-10-18
 
 - Bring Practices 1.3.0, with a separate Astral Projection download, for Inner Breeze 2.1.36.

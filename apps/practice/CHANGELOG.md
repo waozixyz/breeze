@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.1] - 2026-10-20
+
+- Astral Projection has its own cover picture.
+
 ## [1.3.0] - 2026-10-18
 
 - Download Astral Projection and follow a 15-minute guided visualization, from relaxation and imagined floating to a gentle return.

@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.37] - 2026-10-20
+
+- Swipe left or right to move between Practice's tabs.
+- Astral Projection has its own cover, plus How to and Customize like the other meditations.
+- Apps can keep their own colours inside Inner Breeze, so games look like themselves.
+
 ## [2.1.36] - 2026-10-19
 
 - Inner Breeze starts several times faster: installed apps such as Arcade open when you go to them.

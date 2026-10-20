@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.2.1] - 2026-10-20
+
+- Maintenance release for Inner Breeze 2.1.37.
+
 ## [1.2.0] - 2026-10-19
 
 - The shop now comes with Habits, so it can improve with a Habits update.

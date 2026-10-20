@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.0.6] - 2026-10-20
+
+- Maintenance release for Inner Breeze 2.1.37.
+
 ## [1.0.5] - 2026-10-18
 
 - Choose any practice you have installed, including Tai Chi and Astral

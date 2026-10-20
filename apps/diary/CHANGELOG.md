@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.1] - 2026-10-20
+
+- Maintenance release for Inner Breeze 2.1.37.
+
 ## [1.3.0] - 2026-10-18
 
 - Run the same Diary package in Inner Breeze, Werkzeug, or its own desktop window.
