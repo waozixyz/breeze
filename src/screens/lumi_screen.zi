@@ -30,6 +30,7 @@
 #import, file "../cells/app_tools.zi";
 #import, file "../cells/package_files.zi";
 #import, file "../cells/module_host.zi";
+#import, file "../app/smooth_frames.zi";
 #import, file "../cells/app_codec.zi";
 #import "widget_host"
 #import "hosted_values"
@@ -1136,6 +1137,14 @@ LumiSubmit :: (app: *InnerBreeze, input: string) -> bool {
     return response.succeeded
 }
 
+// Nothing reaches Lumi this frame, no text is being typed into it and it
+// does not animate, so its last quiet frame may be shown again.
+LumiFrameQuiet :: (app: *InnerBreeze) -> bool {
+    return !app.ui.pointer_active && !app.ui.keyboard_active && !app.ui.text_input_active &&
+    !app.ui.wheel_active && !lumi_ui.waiting && !AppSmoothFramesActive() &&
+    !app.ui.route_transition_pending && !app.ui.route_transition_active
+}
+
 #program_export
 lumi_screen_draw :: (app: *InnerBreeze) {
     if !LumiContextAvailable(app) {
@@ -1168,7 +1177,12 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     lumi_ui.height = app.ui.view_height
     lumi_ui.bottom = app_content_bottom_reserved(app)
     lumi_ui.scale = MetricsScale()
-    lumi_ui.now = GetTime()
+    // A quiet frame keeps the clock it was recorded with: Lumi uses it only
+    // to animate, and a quiet frame does not animate.
+    quiet := LumiFrameQuiet(app)
+    if !quiet || lumi_ui.now == 0.0 {
+        lumi_ui.now = GetTime()
+    }
     if !lumi_ui.waiting {
         lumi_waiting_since = -1.0
     } else if lumi_waiting_since < 0.0 {
@@ -1247,7 +1261,9 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     lumi_pending_practice = -1
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
     CellsUiBegin(LumiUiCall, cast(*void)app)
+    LumiSetFrameQuiet(quiet)
     response := LumiRun(LumiMessage.{.action = LUMI_FRAME})
+    LumiSetFrameQuiet(false)
     CellsUiEnd()
     WidgetHostEnd()
     // A practice not on this device opens Manage practices instead, which
