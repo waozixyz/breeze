@@ -1,0 +1,260 @@
+// Library: books to read slowly, a chapter at a time. Its first book is the
+// Tao Te Ching. Books live in this bundle as text; the host only keeps the
+// chapter each one is open at.
+#import "session"
+#import "geometry"
+#import "vec"
+#import "text_buffer"
+#import "text_props"
+#import "text_widget"
+#import "text_measure"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import "apps/node_types"
+#import, file "../../src/cells/module_types.zi";
+#import, file "../../src/app/text_buffers.zi";
+#import, file "books.zi";
+
+host_api :: #system_library "host_api";
+ReadAppHost :: () -> AppMessage #foreign host_api;
+WriteAppHost :: (message: AppMessage) #foreign host_api;
+ReadAppUiHost :: () -> AppUiFrame #foreign host_api;
+AppLocaleHost :: (key: string) -> string #foreign host_api;
+AppRecordHost :: (record: string) -> string #foreign host_api;
+SaveAppRecordHost :: (record: string, value: string) -> bool #foreign host_api;
+
+using TextWrap;
+using ButtonTone;
+using ButtonEmphasis;
+
+LIBRARY_SHELF :: 0
+LIBRARY_CONTENTS :: 1
+LIBRARY_CHAPTER :: 2
+
+frame: AppUiFrame;
+view: s32 = LIBRARY_SHELF;
+book: s32;
+chapter: s32 = 1;
+loaded_account: string;
+loaded: bool;
+// Each view keeps its own place.
+shelf_scroll: s32;
+contents_scroll: s32;
+chapter_scroll: s32;
+
+Scale :: (value: s32) -> s32 {
+    return cast(s32)(cast(float32)value * frame.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)height}
+}
+
+// The text of key with number in place of its %s.
+Numbered :: (key: string, number: s32, buffer: []u8) -> string {
+    args: [1]FormatArg
+    args[0].number = number
+    unused FormatTemplate(AppLocaleHost(key), args[:], buffer[:])
+    return TextUntilNul(buffer)
+}
+
+ReadNumber :: (value: string) -> s32 {
+    if value.count == 0 || value.count > 4 { return 0 }
+    answer: s32 = 0
+    for index: cast(s64)0..value.count - 1 {
+        if value[index] < cast(u8)48 || value[index] > cast(u8)57 { return 0 }
+        answer = answer * 10 + cast(s32)value[index] - 48
+    }
+    return answer
+}
+
+// The chapter a book is open at, or 0 before its first reading.
+SavedChapter :: (index: s32) -> s32 {
+    saved := ReadNumber(AppRecordHost(BookRecord(index)))
+    return ifx saved >= 1 && saved <= BookChapters(index) then saved else 0
+}
+
+Open :: (index: s32, number: s32) {
+    book = index
+    chapter = number
+    chapter_scroll = 0
+    view = LIBRARY_CHAPTER
+    value: Vec(u8)
+    BuilderPrint(*value, "%", number)
+    unused SaveAppRecordHost(BookRecord(index), BuilderFinish(value))
+}
+
+LibraryBack :: () -> bool {
+    if view == LIBRARY_CHAPTER { view = LIBRARY_CONTENTS; return true }
+    if view == LIBRARY_CONTENTS { view = LIBRARY_SHELF; return true }
+    return false
+}
+
+// A centred reading column, as wide as reads comfortably.
+Column :: () -> Rectangle {
+    margin := Scale(20)
+    width := frame.width - margin * 2
+    if width > Scale(640) { width = Scale(640) }
+    top := frame.top + Scale(12)
+    return Bounds((frame.width - width) / 2, top, width, frame.height - frame.bottom - top)
+}
+
+Title :: (bounds: Rectangle, text: string, size: s32) -> s32 {
+    height := TextHeight(frame.session, TextProps.{.text = text, .font = size, .bounds = bounds,
+            .wrap = cast(TextWrap)TextWrapAuto})
+    bounds.height = cast(float32)height
+    Text(frame.session, TextProps.{.text = text, .font = size, .bounds = bounds,
+            .wrap = cast(TextWrap)TextWrapAuto})
+    return height
+}
+
+ShelfNoteHeight :: (index: s32, width: s32) -> s32 {
+    return TextHeight(frame.session, TextProps.{.text = BookNote(index), .font = frame.font - Scale(2),
+            .bounds = Bounds(0, 0, width, 0), .wrap = cast(TextWrap)TextWrapAuto})
+}
+
+ShelfView :: () {
+    column := Column()
+    height := Scale(64)
+    for index: cast(s32)0..BOOK_COUNT - 1 {
+        height += Scale(132) + ShelfNoteHeight(index, cast(s32)column.width)
+    }
+    scroll := Scroll(frame.session, ScrollProps.{.key = 27000, .bounds = column,
+            .content_height = height, .scroll_offset = shelf_scroll, .scale = frame.scale})
+    shelf_scroll = scroll.scroll_offset
+    if !scroll.opened { return }
+    defer { unused End(frame.session) }
+    x := cast(s32)scroll.content.x
+    y := cast(s32)scroll.content.y
+    width := cast(s32)scroll.content.width
+    y += Title(Bounds(x, y, width, 0), AppLocaleHost("app_name_library"), frame.font + Scale(8)) + Scale(20)
+    buffer: [128]u8
+    for index: cast(s32)0..BOOK_COUNT - 1 {
+        Text(frame.session, TextProps.{.text = BookTitle(index), .font = frame.font + Scale(4),
+                .bounds = Bounds(x, y, width, Scale(30))})
+        Text(frame.session, TextProps.{.text = BookAuthor(index), .font = frame.font - Scale(1),
+                .bounds = Bounds(x, y + Scale(30), width, Scale(22))})
+        note := ShelfNoteHeight(index, width)
+        Text(frame.session, TextProps.{.text = BookNote(index), .font = frame.font - Scale(2),
+                .bounds = Bounds(x, y + Scale(56), width, note), .wrap = cast(TextWrap)TextWrapAuto})
+        y += note + Scale(8)
+        saved := SavedChapter(index)
+        label := ifx saved > 0 then Numbered("library_continue", saved, buffer[:]) else AppLocaleHost("library_start")
+        half := (width - Scale(12)) / 2
+        if Button(frame.session, ButtonProps.{.id = 27010 + index * 2, .bounds = Bounds(x, y + Scale(60), half, Scale(48)),
+                .label = label, .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+            Open(index, ifx saved > 0 then saved else 1)
+        }
+        if Button(frame.session, ButtonProps.{.id = 27011 + index * 2,
+                .bounds = Bounds(x + half + Scale(12), y + Scale(60), half, Scale(48)),
+                .label = AppLocaleHost("library_contents"), .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            book = index
+            contents_scroll = 0
+            view = LIBRARY_CONTENTS
+        }
+        y += Scale(132)
+    }
+}
+
+// Every chapter's number, in rows, to open any of them.
+ContentsView :: () {
+    column := Column()
+    width := cast(s32)column.width
+    size := Scale(56)
+    gap := Scale(8)
+    across := (width + gap) / (size + gap)
+    if across < 1 { across = 1 }
+    count := BookChapters(book)
+    rows := (count + across - 1) / across
+    height := Scale(72) + rows * (size + gap)
+    scroll := Scroll(frame.session, ScrollProps.{.key = 27100, .bounds = column,
+            .content_height = height, .scroll_offset = contents_scroll, .scale = frame.scale})
+    contents_scroll = scroll.scroll_offset
+    if !scroll.opened { return }
+    defer { unused End(frame.session) }
+    x := cast(s32)scroll.content.x
+    y := cast(s32)scroll.content.y
+    y += Title(Bounds(x, y, width, 0), BookTitle(book), frame.font + Scale(6)) + Scale(16)
+    saved := SavedChapter(book)
+    for number: cast(s32)1..count {
+        at := number - 1
+        label: Vec(u8)
+        BuilderPrint(*label, "%", number)
+        if Button(frame.session, ButtonProps.{.id = 27200 + number,
+                .bounds = Bounds(x + (at % across) * (size + gap), y + (at / across) * (size + gap), size, size),
+                .label = BuilderFinish(label), .selected = number == saved,
+                .tone = ifx number == saved then cast(ButtonTone)ButtonToneAccent else cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            Open(book, number)
+        }
+    }
+}
+
+ChapterView :: () {
+    column := Column()
+    width := cast(s32)column.width
+    words := BookChapter(book, chapter)
+    reading := frame.font + Scale(3)
+    buttons := Scale(48)
+    text_height := TextHeight(frame.session, TextProps.{.text = words, .font = reading,
+            .bounds = Bounds(0, 0, width, 0), .wrap = cast(TextWrap)TextWrapAuto})
+    height := Scale(64) + text_height + Scale(32) + buttons + Scale(24)
+    scroll := Scroll(frame.session, ScrollProps.{.key = 27300 + cast(u64)chapter, .bounds = column,
+            .content_height = height, .scroll_offset = chapter_scroll, .scale = frame.scale})
+    chapter_scroll = scroll.scroll_offset
+    if !scroll.opened { return }
+    defer { unused End(frame.session) }
+    x := cast(s32)scroll.content.x
+    y := cast(s32)scroll.content.y
+    buffer: [64]u8
+    Text(frame.session, TextProps.{.text = Numbered("library_chapter", chapter, buffer[:]),
+            .font = frame.font - Scale(1), .bounds = Bounds(x, y, width, Scale(24))})
+    y += Scale(64)
+    Text(frame.session, TextProps.{.text = words, .font = reading, .selectable = true,
+            .bounds = Bounds(x, y, width, text_height), .wrap = cast(TextWrap)TextWrapAuto})
+    y += text_height + Scale(32)
+    half := (width - Scale(12)) / 2
+    if Button(frame.session, ButtonProps.{.id = 27400, .bounds = Bounds(x, y, half, buttons),
+            .label = AppLocaleHost("library_previous"), .disabled = chapter <= 1,
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        Open(book, chapter - 1)
+    }
+    if Button(frame.session, ButtonProps.{.id = 27401, .bounds = Bounds(x + half + Scale(12), y, half, buttons),
+            .label = AppLocaleHost("library_next"), .disabled = chapter >= BookChapters(book),
+            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        Open(book, chapter + 1)
+    }
+}
+
+LibraryView :: (message: AppMessage) -> AppMessage {
+    frame = ReadAppUiHost()
+    // Another account starts on the shelf.
+    if !loaded || loaded_account != message.account {
+        loaded = true
+        loaded_account = message.account
+        view = LIBRARY_SHELF
+    }
+    if view == LIBRARY_CHAPTER { ChapterView() }
+    else if view == LIBRARY_CONTENTS { ContentsView() }
+    else { ShelfView() }
+    message.succeeded = true
+    return message
+}
+
+#program_export "LibraryMain"
+Main :: () -> s32 {
+    message := ReadAppHost()
+    if message.abi != MODULE_ABI { return -1 }
+    if message.action == MODULE_IDENTIFY { return MODULE_NODE_APP }
+    message.succeeded = message.action == APP_ROUTE
+    if message.action == APP_FRAME { message = LibraryView(message) }
+    if message.action == APP_BACK { message.succeeded = LibraryBack() }
+    WriteAppHost(message)
+    return 0
+}
