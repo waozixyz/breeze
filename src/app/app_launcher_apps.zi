@@ -12,6 +12,7 @@ Rules :: #import "apps/protocol";
 #import "std/c_string"
 #import "std/byte_text_linux"
 #import "geometry"
+#import "raylib_trace"
 #import "tree"
 #import "widget_kind"
 #import "kss_parser"
@@ -140,6 +141,17 @@ LauncherAppFind :: (group: *LauncherAppGroup, id: string) -> s32 {
     return -1
 }
 
+// One line in the device log for each action the Apps screen asks for and
+// where it went, so a tap that does nothing on a phone shows where it stopped.
+LauncherAppLog :: (stage: string, request: *Rules.AppsRequest, detail: string) {
+    line: Vec(u8)
+    BuilderPrint(*line, "APPS: % operation % on %: %", stage, request.operation,
+        TextUntilNul(request.id[:]), detail)
+    text := BuilderFinish(line)
+    TraceLog(4, text)
+    PackageFree(text)
+}
+
 LauncherAppService :: (context: *void, text: string) -> string {
     group := cast(*LauncherAppGroup)context
     request: Rules.AppsRequest
@@ -159,6 +171,8 @@ LauncherAppService :: (context: *void, text: string) -> string {
     }
     if group.has_pending || TextUntilNul(group.account[:]) != NodeTreeAccount() ||
     LauncherAppFind(group, TextUntilNul(request.id[:])) < 0 {
+        LauncherAppLog("refused", *request, ifx group.has_pending then "another action is pending"
+            else (ifx LauncherAppFind(group, TextUntilNul(request.id[:])) < 0 then "no such card" else "account changed"))
         return LauncherAppReply(group, "rejected")
     }
     group.sequence += 1
@@ -201,6 +215,9 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
     at := LauncherAppFind(group, TextUntilNul(request.id[:]))
     if at < 0 || TextUntilNul(group.account[:]) != NodeTreeAccount() ||
     group.owner.blocked_input_frame == group.owner.breathing.frame {
+        LauncherAppLog("dropped", *request, ifx at < 0 then "no such card"
+            else (ifx group.owner.blocked_input_frame == group.owner.breathing.frame then "input blocked this frame"
+                else "account changed"))
         group.status = "rejected"
         return
     }
@@ -221,6 +238,7 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
     }
     if LauncherAppPackage(route) != entry.package ||
     PackageID(entry.package) != TextUntilNul(entry.id[:]) {
+        LauncherAppLog("dropped", *request, "card no longer matches its app")
         group.status = "rejected"
         return
     }
@@ -229,7 +247,10 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
     } else if request.operation == Rules.APPS_INSTALL && AppNavNodeSlot(route) >= 0 &&
     !NodeAppInstalled(AppNavNodeSlot(route)) {
         // Its download symbol: the package downloads, and the card says so.
-        unused app_nav_node_app_ready(app, AppNavNodeSlot(route))
+        slot := AppNavNodeSlot(route)
+        ready := app_nav_node_app_ready(app, slot)
+        LauncherAppLog("download", *request, ifx PackagePending(NodeAppIndex(slot)) then "requested"
+            else (ifx ready then "already here" else "not requested"))
         group.status = "queued"
         return
     } else if request.operation == Rules.APPS_INSTALL {
