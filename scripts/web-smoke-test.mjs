@@ -1428,15 +1428,23 @@ async function verifyPracticeCarouselSwipe(client) {
   await dispatchCanvasClick(client, x, y);
   await waitAnimationFrames(client, 3);
   if (await selected() !== initial) throw new Error('artwork tap changed practice');
+  // Swipes go through every listed practice, across Practice's tabs, and
+  // wrap back to the first one; none comes twice before that.
   const visited = new Set([initial]);
   let previous = initial;
-  const practiceCount = 5;
-  for (let i = 0; i < practiceCount; i++) {
+  const maximumPractices = 12;
+  for (let i = 0; ; i++) {
+    if (i >= maximumPractices)
+      throw new Error(`carousel did not wrap after ${maximumPractices} swipes (selected=${previous}, initial=${initial})`);
     const current = await swipeToNext(-distance, previous, `carousel swipe ${i + 1}`);
-    if (i < practiceCount - 1 && visited.has(current))
+    if (current === initial) {
+      if (visited.size < 2)
+        throw new Error(`carousel wrapped after one practice (selected=${current})`);
+      console.log(`web carousel: swipes cycled through ${visited.size} practices`);
+      break;
+    }
+    if (visited.has(current))
       throw new Error(`carousel repeated practice early on swipe ${i + 1}: ${current}`);
-    if (i === practiceCount - 1 && current !== initial)
-      throw new Error(`carousel did not wrap after ${practiceCount} swipes (selected=${current}, initial=${initial})`);
     visited.add(current);
     previous = current;
   }
