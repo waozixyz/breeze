@@ -52,9 +52,8 @@
   one starts when you open it; one still downloading stays closed instead of
   showing "Installing this app".
 - Chess moves into Arcade, a set of games that also has Pushy, so the
-  standalone Chess app no longer shows in your apps or More apps. Once the
-  node offers Arcade and you had installed Chess, Arcade installs for you with
-  your saved and friend Chess games.
+  standalone Chess app no longer shows in your apps or More apps. Install
+  Arcade from More apps to keep playing your saved and friend Chess games.
 - Habits earn coins, more for hard ones, to spend on your own rewards in the shop.
 - The habit shop scrolls smoothly, even with its grid of symbols open.
 - Rewards can show 28 more symbols, such as weed, cigarettes, beer, wine, fast food, sweets, TV and games.

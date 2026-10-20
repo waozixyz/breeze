@@ -244,25 +244,28 @@ with tempfile.TemporaryDirectory(prefix="inbe-arcade-") as directory:
     finally:
         stop(app)
 
-    # An account that installed Chess gets Arcade, and keeps Chess's game.
+    # An account that installed Chess is not given Arcade: More apps offers
+    # it with the download symbol, and Chess and its game stay.
     profile = Path(directory) / "replace"
     profile.mkdir()
     user = prepare(profile, {"node_apps_offers": "arcade|Arcade", "node_app_size_arcade": 4194304,
                              "app_used_chess": 1, "cell.chess.computer": SAVED_CHESS})
     app = launch(profile, "replace", local_package=False)
     try:
-        wait_for(lambda: settings(profile, user).get("app_used_arcade") == "1",
-                 "Arcade was not installed for an account with Chess")
+        driver.press(label="Apps", role="button")
+        card = wait_for(lambda: button("Arcade"), "More apps does not offer Arcade to an account with Chess")
+        corner = [node for node in driver.tree() if node["label"] == "Download" and
+                  card["x"] <= node["x"] and node["x"] + node["width"] <= card["x"] + card["width"] and
+                  card["y"] <= node["y"] and node["y"] + node["height"] <= card["y"] + card["height"]]
+        assert len(corner) == 1, "Arcade's card has no download symbol"
+        driver.wait_idle(frames=30)
         stored = settings(profile, user)
-        assert stored.get("node_app_replaced_chess") == "1", stored.get("node_app_replaced_chess")
+        assert stored.get("app_used_arcade") != "1", "Arcade was installed for an account with Chess"
+        assert stored.get("app_used_chess") == "1", "Chess left before Arcade was installed"
         assert stored.get("cell.chess.computer") == SAVED_CHESS, "Chess's saved game changed"
-        if args.offline:
-            # Arcade cannot run here yet, so Chess stays installed.
-            driver.wait_idle(frames=30)
-            assert settings(profile, user).get("app_used_chess") == "1", "Chess left before Arcade ran"
         log = (OUTPUT / "replace.log").read_text()
         assert app.poll() is None, log
     finally:
         stop(app)
 print("Arcade: installed from More apps, Chess played inside it and restored after a restart; "
-      "Chess left out of More apps next to Arcade, and an account with Chess got Arcade")
+      "Chess left out of More apps next to Arcade, and an account with Chess is offered Arcade to download")

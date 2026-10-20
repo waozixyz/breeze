@@ -1,9 +1,10 @@
 // Apps that replace an app the node offered before (NodeAppReplacement).
-// More apps lists the replacement instead, and an account that installed
-// the replaced app gets the replacement. The replaced app goes once the
-// replacement runs on this device and carries it as a verified child: the
-// collection lists inbe.<name> and is signed by the publisher allowed to
-// offer <name>, so the child keeps <name>'s records and shared games
+// More apps lists the replacement instead, with the download symbol for an
+// account that installed the replaced app too: it is never installed for
+// them. The replaced app goes once the user installed the replacement and
+// it runs on this device carrying it as a verified child: the collection
+// lists inbe.<name> and is signed by the publisher allowed to offer <name>,
+// so the child keeps <name>'s records and shared games
 // (NodeTreeLegacyOwner). Its records are never deleted.
 #import "apps/tree"
 #import "apps/catalog"
@@ -17,20 +18,6 @@
 #import, file "package_files.zi";
 #import, file "package_release.zi";
 #import, file "../storage/app_records.zi";
-#import, file "../app/settings_store.zi";
-
-// Offered by the node itself, not by a local file, and listed in More apps.
-NodeAppNodeOffers :: (name: string) -> bool {
-    if name.count == 0 || NodeAppLocal(name) {
-        return false
-    }
-    for index: cast(s32)0..NodeAppOfferCount() - 1 {
-        if NodeAppOfferName(index) == name {
-            return NodeAppOfferVisible(index)
-        }
-    }
-    return false
-}
 
 // Whether the signed collection running in `slot` carries `name` as a child
 // with its historical identity and publisher.
@@ -88,22 +75,14 @@ NodeAppOfferReplaced :: (name: string) -> bool {
     return NodeAppReplacement(name).count > 0
 }
 
-// Installs the replacement for an account that installed a replaced app,
-// then removes the replaced app once the replacement carries it. Runs with
-// the reconcile, after choices synced from the account's other devices.
+// Removes a replaced app once the user installed its replacement and the
+// replacement carries it. Runs with the reconcile, after choices synced
+// from the account's other devices.
 NodeAppsReplace :: () {
     for index: cast(s32)0..NODE_APP_REPLACED_COUNT - 1 {
         name := NodeAppReplaced(index)
-        replacement := NodeAppReplacement(name)
-        // Device-local: this device installed the replacement once already.
-        key := PackageText("node_app_replaced_", name)
-        attempted := SettingsReadInt(key, 0) != 0
-        step := NodeAppReplacementStep(NodeAppMarked(name), NodeAppNodeOffers(replacement),
-            NodeAppMarked(replacement), NodeAppReplacedHere(name), attempted)
-        if step == NODE_APP_REPLACE_INSTALL {
-            unused SettingsStoreInt(key, 1)
-            unused NodeAppInstall(replacement)
-        } else if step == NODE_APP_REPLACE_RETIRE {
+        step := NodeAppReplacementStep(NodeAppMarked(name), NodeAppReplacedHere(name))
+        if step == NODE_APP_REPLACE_RETIRE {
             retired := NodeAppSlotFor(name)
             if retired >= 0 {
                 NodeAppUninstall(retired)
@@ -111,6 +90,5 @@ NodeAppsReplace :: () {
                 NodeAppSetMark(name, false)
             }
         }
-        PackageFree(key)
     }
 }
