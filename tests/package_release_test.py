@@ -13,6 +13,7 @@ import argparse
 import re
 import shutil
 from io import BytesIO
+from urllib.error import HTTPError
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -79,11 +80,17 @@ def main():
         values = stage(store, private, "test-key", publishers)
         stage(store, private, "test-key", publishers)  # idempotent
 
-        def served(url, timeout):
+        paid = {pack["sha256"] + ".zib" for pack in release_tool.stored_practice_packs(store)
+                if pack.get("product")}
+
+        def served(url, timeout, paid_public=False):
             assert timeout == 30
             prefix = "https://node.example/api/v2/packages/"
             assert url.startswith(prefix)
             app_id, filename = url.removeprefix(prefix).split("/")
+            # Without the node's grant a paid pack is refused.
+            if app_id == "inbe.practices" and filename in paid and not paid_public:
+                raise HTTPError(url, 403, "Forbidden", {}, None)
             # The publisher asks as bucket 0, which receives staged releases first.
             if filename.startswith("latest"):
                 assert filename == "latest?bucket=0", filename
@@ -91,9 +98,9 @@ def main():
             return BytesIO((store / app_id / filename).read_bytes())
 
         release_tool.verify_origin(store, "https://node.example", served)
-        for failure in ("metadata", "hash", "truncated", "oversized"):
+        for failure in ("metadata", "hash", "truncated", "oversized") + (("paid-public",) if paid else ()):
             def damaged(url, timeout):
-                content = served(url, timeout).read()
+                content = served(url, timeout, failure == "paid-public").read()
                 if failure == "metadata" and "/latest" in url:
                     return BytesIO(b"{}")
                 if url.endswith(".zib"):

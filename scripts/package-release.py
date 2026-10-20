@@ -321,6 +321,16 @@ def verify_origin(store, origin, open_url=open_public_url):
             raise ValueError(f"{app_id}: public package hash or size differs from the signed publication")
     for pack in stored_practice_packs(store):
         route = origin + '/api/v2/packages/inbe.practices/' + pack['sha256'] + '.zib'
+        # The node serves a paid pack only with its grant, so the public
+        # route must refuse it.
+        if pack.get('product'):
+            try:
+                open_url(route, timeout=30).close()
+            except HTTPError as error:
+                if error.code == 403:
+                    continue
+                raise
+            raise ValueError('paid practice content is public without a grant')
         checksum = sha256()
         size = 0
         with open_url(route, timeout=30) as response:
