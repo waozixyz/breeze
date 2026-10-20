@@ -658,7 +658,12 @@ PackageCheckDue :: (now: s32) -> bool {
     (package_sequence_hint > 0 && elapsed >= 600 && package_sequence_hint > PackageSequence(0))
 }
 
-PackagePump :: (desired: s32, now: s32) {
+// During a practice only an install someone asked for moves: its release
+// and payload download meanwhile, while automatic checks and the heavy
+// verify-and-install wait until the practice ends, so its frames stay
+// smooth. Before, a tap on Download did nothing while a practice ran, even
+// in its small window.
+PackagePump :: (desired: s32, now: s32, during_practice: bool) {
     if DataTemporary() {
         return
     }
@@ -668,9 +673,11 @@ PackagePump :: (desired: s32, now: s32) {
     if package_started_at == 0 && now > 0 {
         package_started_at = now
     }
-    PackageTrialsProve(now)
+    if !during_practice {
+        PackageTrialsProve(now)
+    }
     if package_index < 0 {
-        if PackagePublisherConfigured() && now > 0 &&
+        if !during_practice && PackagePublisherConfigured() && now > 0 &&
         PackageCheckDue(now) {
             for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
                 if PackageWanted(index, desired) && !package_requested[index] {
@@ -683,7 +690,8 @@ PackagePump :: (desired: s32, now: s32) {
             package_last_check = now
         }
         for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
-            if package_requested[index] {
+            if package_requested[index] && (!during_practice ||
+            (!package_requested_automatic[index] && !package_requested_check_only[index])) {
                 package_requested[index] = false
                 package_automatic = package_requested_automatic[index]
                 package_check_only = package_requested_check_only[index]
@@ -733,8 +741,14 @@ PackagePump :: (desired: s32, now: s32) {
                 return
             }
         }
+        if during_practice {
+            return
+        }
         package_automatic = false
         unused PackageHistoryBegin()
+        return
+    }
+    if during_practice && (package_automatic || package_check_only || package_phase == 3) {
         return
     }
     if package_target && (TextUntilNul(package_target_account[:]) != PackageAccount() ||
@@ -846,6 +860,10 @@ PackagePump :: (desired: s32, now: s32) {
             return
         }
         PackageBeginPayload()
+        return
+    }
+    // The payload is here; reading, hashing and validating it waits.
+    if during_practice {
         return
     }
     path := PackagePath(package_index, ".download.zib")

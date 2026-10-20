@@ -139,7 +139,7 @@ void __wrap_file_download_FileDownloadRelease(FileDownload *download) {
     memset(download, 0, sizeof(*download));
 }
 static void pump(void) {
-    package_manager_PackagePump(8, 200000);
+    package_manager_PackagePump(8, 200000, false);
 }
 static void request(void) {
     package_manager_PackageRequest(4);
@@ -197,8 +197,14 @@ int32_t RunPackageManagerFixture(void) {
     assert(package_manager_PackageStatus(4) == 3 && package_manager_PackageSequence(4) == installed_sequence);
     manifest = "diary-new";
     assert(package_manager_PackageRequestVersion(4, version, digest, StringLiteral("fixture-account")));
-    pump();
-    pump();
+    /* During a practice the requested install downloads its release and
+       payload, but checking and installing them wait for the practice. */
+    int before_practice = starts;
+    package_manager_PackagePump(8, 200000, true);
+    package_manager_PackagePump(8, 200000, true);
+    package_manager_PackagePump(8, 200000, true);
+    assert(starts == before_practice + 2 && package_index == 4);
+    assert(package_manager_PackageSequence(4) == installed_sequence);
     pump(); /* Only the confirmed exact target may fetch the payload. */
     assert(package_manager_PackageSequence(4) == installed_sequence + 1);
     assert(!package_manager_PackageUpdateAvailable(4));
