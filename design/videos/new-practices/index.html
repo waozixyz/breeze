@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Inner Breeze — base frames for review</title>
+<style>
+  html, body { margin: 0; background: #dde9e5; }
+  canvas { display: block; width: 100vw; height: auto; }
+</style>
+<canvas aria-label="Numbered Inner Breeze review frame with actual app screenshot and draft text"></canvas>
+<script type="module">
+import { run, size } from '/.video/runtime.js';
+
+const canvas = document.querySelector('canvas');
+const context = canvas.getContext('2d');
+const { width, height } = size();
+canvas.width = width;
+canvas.height = height;
+const { sections } = await fetch('./frames.json').then(response => response.json());
+const font = new FontFace('Inbe', 'url(../../../assets/fonts/subset/NotoSans-App-Regular.ttf)');
+await font.load();
+document.fonts.add(font);
+const images = await Promise.all(sections.map(section => new Promise((resolve, reject) => {
+  const image = new Image();
+  image.onload = () => resolve(image);
+  image.onerror = () => reject(new Error(`Missing screenshot: ${section.screen}`));
+  image.src = `./screens/${section.screen}`;
+})));
+const logo = await new Promise((resolve, reject) => {
+  const image = new Image();
+  image.onload = () => resolve(image);
+  image.onerror = reject;
+  image.src = '../../../assets/app/icon.png';
+});
+
+function text(value, x, y, pixels, color) {
+  context.font = `${pixels}px Inbe`;
+  context.fillStyle = color;
+  context.fillText(value, x, y);
+}
+
+function draw(time) {
+  const index = Math.min(sections.length - 1, Math.floor(time));
+  const section = sections[index];
+  context.save();
+  context.scale(width / 1920, height / 1080);
+  context.fillStyle = '#dde9e5';
+  context.fillRect(0, 0, 1920, 1080);
+  context.fillStyle = '#a8c8d2';
+  context.fillRect(1070, 0, 850, 1080);
+  // A pale jade foreground balances the blue behind the app screen.
+  context.fillStyle = '#8fbfaf';
+  context.beginPath();
+  context.moveTo(1070, 620);
+  context.bezierCurveTo(1360, 620, 1600, 480, 1920, 510);
+  context.lineTo(1920, 1080);
+  context.lineTo(1070, 1080);
+  context.closePath();
+  context.fill();
+  // A still sheet: the app's own screen stays intact, with no invented UI.
+  context.drawImage(logo, 118, 94, 55, 55);
+  text('Inner Breeze', 192, 134, 31, '#1e4a40');
+  context.fillStyle = '#f2a65e';
+  context.fillRect(120, 218, 48, 5);
+  text(section.label, 120, 280, 27, '#3f6f8f');
+  section.title.forEach((line, row) => text(line, 114, 423 + row * 114, 88, '#1e4a40'));
+  section.copy.forEach((line, row) => text(line, 120, 664 + row * 57, 35, '#385a51'));
+  if (section.note) {
+    text(section.note, 120, 842, 23, '#6e4c36');
+  }
+  context.strokeStyle = '#9bb9ac';
+  context.lineWidth = 1;
+  context.beginPath();
+  context.moveTo(120, 936);
+  context.lineTo(950, 936);
+  context.stroke();
+  text(`${section.number}  /  ${String(sections.length).padStart(2, '0')}`, 120, 990, 26, '#1e4a40');
+  text('BASE FRAME · DRAFT FOR REVIEW', 330, 990, 20, '#3f6f8f');
+  // The portrait app capture is the focal subject; every edge remains visible.
+  const x = 1228;
+  const y = 48;
+  const screenWidth = 492;
+  const screenHeight = 984;
+  context.fillStyle = '#1e4a40';
+  context.beginPath();
+  context.roundRect(x - 9, y - 9, screenWidth + 18, screenHeight + 18, 22);
+  context.fill();
+  context.drawImage(images[index], x, y, screenWidth, screenHeight);
+  context.restore();
+}
+
+// One still per section. Timing, movement and narration wait for selection.
+await run({ length: sections.length, fps: 1, canvas, draw });
+</script>
+</html>
