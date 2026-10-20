@@ -67,8 +67,11 @@ using HostValueKind;
 using FileDownloadStatus;
 
 NODE_APP_OFFERS :: 16
-// How often the node's list of apps is read again while Apps is open.
-NODE_APP_CATALOG_SECONDS :: 21600
+// How often the node's list of apps is read again while Apps stays open,
+// and how old the last read may be when Apps opens: an app the node has
+// just published shows up the next time someone opens Apps.
+NODE_APP_CATALOG_SECONDS :: 600
+NODE_APP_CATALOG_OPEN_SECONDS :: 60
 NODE_APP_REGISTRY_BYTES :: 524288
 NODE_APP_SHARED_LIMIT :: 64
 NODE_APP_GENERIC_ICON :: "S1.6rr:M5 5H10V10H5ZM14 5H19V10H14ZM5 14H10V19H5ZM14 14H19V19H14Z"
@@ -127,6 +130,7 @@ node_record_text: string;
 node_catalog_download: FileDownload;
 node_catalog_phase: s32;
 node_catalog_checked_at: s32 = -1;
+node_catalog_was_wanted: bool;
 node_candidates: [NODE_APP_OFFERS]NodeAppOffer;
 node_candidate_count: s32;
 node_candidate_next: s32;
@@ -1581,6 +1585,8 @@ NodeAppCatalogFinish :: () {
 // Reads the node's apps when Apps is open and the last read is old, then
 // checks each app's release. Runs every frame; work happens only on change.
 NodeAppsCatalogPump :: (now: s32, wanted: bool) {
+    opened := wanted && !node_catalog_was_wanted
+    node_catalog_was_wanted = wanted
     if node_catalog_phase == 0 {
         if !wanted || now <= 0 || !PackagePublisherConfigured() {
             return
@@ -1588,7 +1594,8 @@ NodeAppsCatalogPump :: (now: s32, wanted: bool) {
         if node_catalog_checked_at < 0 {
             node_catalog_checked_at = SettingsReadInt("node_apps_checked_at", 0)
         }
-        if now - node_catalog_checked_at < NODE_APP_CATALOG_SECONDS && node_catalog_checked_at <= now {
+        interval := ifx opened then NODE_APP_CATALOG_OPEN_SECONDS else NODE_APP_CATALOG_SECONDS
+        if now - node_catalog_checked_at < interval && node_catalog_checked_at <= now {
             return
         }
         node_catalog_checked_at = now
