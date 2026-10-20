@@ -21,8 +21,8 @@
 
 PracticePackCapacity :: 96
 // Content names: the practices, then Lumi's narration-only guide.
-PracticeGuide :: 6
-PracticeContentCount :: 7
+PracticeGuide :: 7
+PracticeContentCount :: 8
 PracticePack :: struct {
     // A practice, or PracticeGuide.
     practice: s32
@@ -98,7 +98,7 @@ practice_guide_narration_selected: bool;
 practice_catalog_invalid: bool;
 
 PracticeContentName :: (practice: s32) -> string {
-    names: [PracticeContentCount]string = .["whm", "meditation", "sunsalutation", "patterns", "taichi", "astral_projection", "guide"]
+    names: [PracticeContentCount]string = .["whm", "meditation", "sunsalutation", "patterns", "taichi", "astral_projection", "workout", "guide"]
     if practice < 0 || practice >= PracticeContentCount {
         return ""
     }
@@ -255,6 +255,10 @@ PracticePackStored :: (index: s32) -> bool {
 PracticePackPresent :: (index: s32) -> bool {
     practice := practice_packs[index].practice
     base := practice_packs[index].language[0] == cast(u8)0
+    // A practice that comes with the app is always on Practice.
+    if base && PracticeShippedBytes(index).count > 0 {
+        return true
+    }
     if base && PracticeMarked(practice, ".removed") {
         return false
     }
@@ -603,7 +607,7 @@ PracticeCatalogLoad :: () {
             practice_packs[index] = packs[index]
             practice_packs[index].present = PracticePackPresent(index)
             practice_packs[index].removed = practice_packs[index].language[0] == cast(u8)0 &&
-            PracticeMarked(practice_packs[index].practice, ".removed")
+            PracticeMarked(practice_packs[index].practice, ".removed") && !practice_packs[index].present
             declined := PracticeNarrationDeclinedPath(index)
             practice_packs[index].declined = declined.count > 0 && PathExists(declined)
             PackageFree(declined)
@@ -1008,10 +1012,11 @@ PracticeContentRequest :: (practice: s32) {
 }
 
 // Takes a practice off Practice. A downloaded copy and its narration stay on
-// this device, so adding it back needs no download.
+// this device, so adding it back needs no download. A practice that comes
+// with the app always stays.
 PracticeContentHide :: (practice: s32) {
     base := PracticePackFind(practice, "")
-    if base < 0 {
+    if base < 0 || PracticeShippedBytes(base).count > 0 {
         return
     }
     for index: cast(s32)0..practice_pack_count - 1 {
@@ -1130,13 +1135,12 @@ PracticeContentRemove :: (practice: s32) {
     if !DataTemporary() {
         PracticeCacheRemove(practice)
         base := PracticePackFind(practice, "")
-        // The app keeps its own copy of a practice it installs by default,
-        // so that practice stays off Practice; others can download again.
-        installed_by_default := PracticeDefaultBytes(base).count > 0
-        PracticeMark(practice, ".removed", installed_by_default)
+        // A practice that comes with the app stays on Practice with the
+        // app's own copy; others can download again.
+        PracticeMark(practice, ".removed", false)
         PracticeMark(practice, ".added", false)
-        if base >= 0 {
-            practice_packs[base].removed = installed_by_default
+        if base >= 0 && PracticeShippedBytes(base).count > 0 {
+            practice_packs[base].present = true
         }
         sync_web_storage()
     }

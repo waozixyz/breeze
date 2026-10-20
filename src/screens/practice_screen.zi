@@ -41,6 +41,7 @@ storage_has_sync_account :: () -> s32 #foreign c3;
 #import, file "practice_manual_layout.zi";
 #import, file "../practices/practice_registry.zi";
 #import, file "../practices/practice_downloads.zi";
+#import, file "../../apps/practice/downloads_view.zi";
 #import, file "../practices/patterns/patterns_session_rules.zi";
 #import, file "practice_subscreen_layout.zi";
 #import "box_props"
@@ -221,6 +222,9 @@ practice_card_banner_asset_path :: (app: *InnerBreeze, exercise: s32) -> string 
     if id == EXERCISE_ASTRAL_PROJECTION {
         return ifx dark then "assets/practices/astral_projection/banner-dark.png" else "assets/practices/astral_projection/banner-light.png"
     }
+    if id == EXERCISE_WORKOUT {
+        return ifx dark then "assets/practices/workout/banner-dark.png" else "assets/practices/workout/banner-light.png"
+    }
     return ""
 }
 
@@ -249,17 +253,108 @@ practice_draw_card_banner :: (asset_path: string, dest: Rectangle) {
     }
 }
 
-// Practice's home offers the installed practices in their usual order.
-practice_home_ids :: (ids: []s32) -> s32 {
+// Practice lists every practice, apart from paid ones where they cannot be
+// bought, under a tab for its kind.
+practice_home_listed :: (id: s32) -> bool {
+    return !PracticeHidden(id)
+}
+
+practice_home_kind_of :: (id: s32) -> s32 {
+    return practice_get(practice_clamp_id(id)).kind
+}
+
+// The listed practices of one kind, in their usual order.
+practice_kind_ids :: (kind: s32, ids: []s32) -> s32 {
     count: s32 = 0
     for index: cast(s32)0..practice_count() - 1 {
         id := practice_ordered_id(index)
-        if PracticeInstalled(id) && count < ids.count {
+        if practice_home_listed(id) && practice_home_kind_of(id) == kind && count < ids.count {
             ids[count] = id
             count += 1
         }
     }
     return count
+}
+
+// The practices of the chosen practice's kind, which its tab shows.
+practice_home_ids :: (ids: []s32) -> s32 {
+    return practice_kind_ids(practice_home_kind_of(CurrentApp().exercise_type), ids)
+}
+
+// The tabs, in order, and the practice each one last showed.
+PRACTICE_HOME_KIND_COUNT :: 4
+practice_home_kinds: [4]s32 = .[PRACTICE_KIND_MEDITATION, PRACTICE_KIND_YOGA,
+PRACTICE_KIND_MARTIAL_ARTS, PRACTICE_KIND_WORKOUT];
+practice_home_kind_choice: [4]s32 = .[-1, -1, -1, -1];
+practice_home_tab_scroll: s32;
+// The kind whose tab was last brought into view; another kind's tab is
+// brought into view once, after which the tabs stay where a swipe leaves them.
+practice_home_tab_shown: s32 = -1;
+
+practice_kind_label :: (kind: s32) -> string {
+    if kind == PRACTICE_KIND_YOGA {
+        return LocaleText("practice_kind_yoga")
+    }
+    if kind == PRACTICE_KIND_MARTIAL_ARTS {
+        return LocaleText("practice_kind_martial_arts")
+    }
+    if kind == PRACTICE_KIND_WORKOUT {
+        return LocaleText("practice_kind_workout")
+    }
+    return LocaleText("practice_kind_meditation")
+}
+
+// One tab for each kind with a practice to list, such as Martial arts only
+// where Tai Chi can be bought. Choosing a tab shows the practice it last
+// showed, or its first.
+practice_screen_draw_home_tabs :: (app: *InnerBreeze, bounds: Rectangle) {
+    tabs: [PRACTICE_HOME_KIND_COUNT]Tab
+    tab_kinds: [PRACTICE_HOME_KIND_COUNT]s32
+    tab_slots: [PRACTICE_HOME_KIND_COUNT]s32
+    tab_count: s32 = 0
+    selected_index: s32 = 0
+    current := practice_home_kind_of(app.exercise_type)
+    for slot: cast(s32)0..PRACTICE_HOME_KIND_COUNT - 1 {
+        kind := practice_home_kinds[slot]
+        ids: [EXERCISE_COUNT]s32
+        if practice_kind_ids(kind, ids[:]) == 0 {
+            continue
+        }
+        if kind == current {
+            selected_index = tab_count
+            practice_home_kind_choice[slot] = practice_clamp_id(app.exercise_type)
+        }
+        tab_kinds[tab_count] = kind
+        tab_slots[tab_count] = slot
+        tabs[tab_count] = Tab.{.key = cast(u64)(17480 + slot), .label = practice_kind_label(kind),
+            .disabled = app.modal.active != 0}
+        tab_count += 1
+    }
+    if tab_count == 0 {
+        return
+    }
+    Box(app.ui.session, BoxProps.{.bounds = bounds, .fill = StyleTokenColor("canvas")})
+    bar := TabBar(app.ui.session, TabBarProps.{.id = 17470,
+            .bounds = Rectangle.{bounds.x + cast(float32)AppScale(12), bounds.y + cast(float32)AppScale(4),
+                bounds.width - cast(float32)AppScale(24), bounds.height - cast(float32)AppScale(8)},
+            .selected_index = selected_index, .min_tab_width = AppScale(72),
+            .max_tab_width = AppScale(220), .content_sized = true,
+            .scroll_offset = practice_home_tab_scroll, .scale = MetricsScale(),
+            .focus_selected = current != practice_home_tab_shown}, tabs[:tab_count])
+    practice_home_tab_scroll = bar.scroll_offset
+    practice_home_tab_shown = current
+    if app.modal.active != 0 || bar.selected_index < 0 || bar.selected_index >= tab_count ||
+    bar.selected_index == selected_index {
+        return
+    }
+    kind := tab_kinds[bar.selected_index]
+    choice := practice_home_kind_choice[tab_slots[bar.selected_index]]
+    if choice < 0 || practice_home_kind_of(choice) != kind || !practice_home_listed(choice) {
+        ids: [EXERCISE_COUNT]s32
+        unused practice_kind_ids(kind, ids[:])
+        choice = ids[0]
+    }
+    practice_select_home_card(app, choice)
 }
 
 practice_next_ordered :: (app: *InnerBreeze, dir: s32) -> s32 {
@@ -362,6 +457,9 @@ practice_home_subtitle :: (exercise: s32) -> string {
     }
     if id == EXERCISE_ASTRAL_PROJECTION {
         return LocaleText("practice_home_subtitle_astral_projection")
+    }
+    if id == EXERCISE_WORKOUT {
+        return LocaleText("practice_home_subtitle_workout")
     }
     return ""
 }
@@ -533,65 +631,29 @@ practice_draw_home_title :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
     }
 }
 
-// With every practice removed, Practice's home offers only Manage practices.
-practice_screen_draw_home_empty :: (app: *InnerBreeze) -> s32 {
-    left_reserved := app_content_left_reserved(app)
-    view_x := left_reserved
-    view_w := app.ui.view_width - left_reserved
-    view_h := app.ui.view_height - app_content_bottom_reserved(app)
-    if view_w < AppScale(320) {
-        view_x = 0
-        view_w = app.ui.view_width
-    }
-    if view_h <= 0 {
-        return 0
-    }
-    Box(app.ui.session, BoxProps.{
-            .bounds = Rectangle.{cast(float32)view_x, 0, cast(float32)view_w, cast(float32)view_h},
-            .fill = StyleTokenColor("canvas")})
-    text_w := view_w - AppScale(48)
-    if text_w > AppScale(520) {
-        text_w = AppScale(520)
-    }
-    message := LocaleText("practice_none_installed")
-    message_h := AppParagraphHeight(message, text_w, AppFontSize(), AppScale(3))
-    button_w := AppTextWidth(LocaleText("practice_manage_button"), AppFontSize()) + AppScale(48)
-    if button_w > text_w {
-        button_w = text_w
-    }
-    y := (view_h - message_h - AppScale(64)) / 2
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(view_x + (view_w - text_w) / 2), cast(float32)y,
-                cast(float32)text_w, cast(float32)message_h},
-            .text = message, .font = AppFontSize(), .align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(TextWrap)TextWrapAuto})
-    if Button(app.ui.session, ButtonProps.{
-            .id = 17400,
-            .bounds = Rectangle.{cast(float32)(view_x + (view_w - button_w) / 2),
-                cast(float32)(y + message_h + AppScale(16)), cast(float32)button_w, cast(float32)AppScale(48)},
-            .label = LocaleText("practice_manage_button"), .disabled = app.modal.active != 0,
-            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .pill = true}) != 0 {
-        app_open_modal(app, cast(ModalType)ModalPracticeDownloads)
-    }
-    return 1
-}
-
 practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
     if app == null {
         return 0
     }
-    installed_ids: [EXERCISE_COUNT]s32
-    installed := practice_home_ids(installed_ids[:])
-    if installed == 0 {
-        return practice_screen_draw_home_empty(app)
+    PracticeDownloadsTick()
+    // A practice that is not listed here gives way to the first one listed.
+    if !practice_home_listed(app.exercise_type) && app.modal.active == 0 {
+        for index: cast(s32)0..practice_count() - 1 {
+            if practice_home_listed(practice_ordered_id(index)) {
+                practice_select_home_card(app, practice_ordered_id(index))
+                break
+            }
+        }
     }
-    // A removed practice gives way to the first installed one.
-    if !PracticeInstalled(app.exercise_type) && app.modal.active == 0 {
-        practice_select_home_card(app, installed_ids[0])
+    listed_ids: [EXERCISE_COUNT]s32
+    listed := practice_home_ids(listed_ids[:])
+    if listed == 0 {
+        return 0
     }
 
     practice := practice_get(app.exercise_type)
+    ready := PracticeDownloadReady(app.exercise_type)
+    action := PracticeDownloadAction(app.exercise_type)
     bottom_reserved := app_content_bottom_reserved(app)
     left_reserved := app_content_left_reserved(app)
     content_view_x := left_reserved
@@ -609,11 +671,12 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
     }
     x := content_view_x + (content_view_w - content_w) / 2
     hero_h := app.ui.view_height - bottom_reserved
-    if hero_h <= 0 {
+    tabs_h := app_content_top_reserved(app)
+    if hero_h <= tabs_h {
         return 0
     }
-    hero := Rectangle.{cast(float32)content_view_x, 0,
-        cast(float32)content_view_w, cast(float32)hero_h}
+    hero := Rectangle.{cast(float32)content_view_x, cast(float32)tabs_h,
+        cast(float32)content_view_w, cast(float32)(hero_h - tabs_h)}
     button_h := AppScale(48)
     action_gap := AppScale(14)
     total_w := content_w
@@ -627,10 +690,10 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
         total_w = content_view_w - AppScale(24)
     }
     secondary_count: s32 = 0
-    if practice != null && practice.draw_manual != null {
+    if ready && practice != null && practice.draw_manual != null {
         secondary_count += 1
     }
-    if practice_home_has_config(practice) {
+    if ready && practice_home_has_config(practice) {
         secondary_count += 1
     }
     button_count := 1 + secondary_count
@@ -638,17 +701,24 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
     secondary_row: s32 = ifx (secondary_count < 2 || practice_home_actions_share_row(practice, total_w) != 0) then (1) else (0)
     rows := ifx (wide_actions != 0) then (1) else (1 + (ifx (secondary_row != 0) then ((ifx (secondary_count > 0) then (1) else (0))) else (secondary_count)))
     bottom_gap: s32 = ifx (bottom_reserved > 0) then (AppScale(28)) else (AppScale(20))
-    button_y := hero_h - bottom_gap - rows * button_h - (rows - 1) * action_gap
+    actions_h := rows * button_h + (rows - 1) * action_gap
+    // Asked whether to uninstall, the card's buttons give way to the question.
+    question_h := PracticeCardDeleteHeight(app, app.exercise_type, total_w)
+    if question_h > 0 {
+        actions_h = question_h
+    }
+    button_y := hero_h - bottom_gap - actions_h
     pager_h := practice_home_carousel_controls_height(app)
     pager_y := button_y - AppScale(10) - pager_h
     title_layout := practice_home_title_layout(app, x, content_w)
-    title_block_h := title_layout.height + AppScale(28)
+    status_h := PracticeCardStatusHeight(app, app.exercise_type, content_w)
+    title_block_h := title_layout.height + status_h + AppScale(28)
     if title_block_h < AppScale(100) {
         title_block_h = AppScale(100)
     }
     title_y := pager_y - title_block_h
-    if title_y < AppScale(8) {
-        title_y = AppScale(8)
+    if title_y < tabs_h + AppScale(8) {
+        title_y = tabs_h + AppScale(8)
     }
     primary_w: s32 = ifx (wide_actions != 0) then ((total_w - action_gap * (button_count - 1)) / button_count) else (total_w)
     secondary_w: s32 = ifx (wide_actions != 0) then (primary_w) else ((ifx (secondary_row != 0 && secondary_count > 0) then ((total_w - action_gap * (secondary_count - 1)) / secondary_count) else (total_w)))
@@ -689,7 +759,8 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
 
     banner_path := practice_card_banner_asset_path(app, app.exercise_type)
     if banner_path.count > 0 {
-        practice_draw_card_banner(banner_path, Rectangle.{hero.x, hero.y, hero.width, cast(float32)(title_y + AppScale(8))})
+        practice_draw_card_banner(banner_path, Rectangle.{hero.x, hero.y, hero.width,
+                cast(float32)(title_y + AppScale(8)) - hero.y})
     } else {
         Box(app.ui.session, BoxProps.{.bounds = hero,
                 .fill = StyleTokenColor("surface")})
@@ -714,36 +785,33 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
         0.0, 4, StyleTokenColor("canvas"))
 
     practice_draw_home_title(app, x, title_y, content_w)
+    PracticeCardStatus(app, app.exercise_type, x, title_y + title_layout.height, content_w)
 
     if practice_banner_probe_count == 1 {
         TraceLog(3, "APP PROBE: home title complete")
     }
 
-    manage_label := LocaleText("practice_manage_button")
-    manage_w := AppTextWidth(manage_label, AppFontSize()) + AppScale(32)
-    if manage_w > content_view_w - AppScale(32) {
-        manage_w = content_view_w - AppScale(32)
-    }
-    if Button(app.ui.session, ButtonProps.{
-            .id = 17400,
-            .bounds = Rectangle.{cast(float32)(content_view_x + content_view_w - manage_w - AppScale(16)),
-                cast(float32)AppScale(16), cast(float32)manage_w, cast(float32)AppScale(44)},
-            .label = manage_label, .disabled = app.modal.active != 0,
-            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .pill = true}) != 0 {
-        app_open_modal(app, cast(ModalType)ModalPracticeDownloads)
-    }
+    practice_screen_draw_home_tabs(app, Rectangle.{cast(float32)content_view_x, 0,
+            cast(float32)content_view_w, cast(float32)tabs_h})
+    PracticeCardUninstall(app, app.exercise_type, content_view_x + content_view_w - AppScale(16),
+        tabs_h + AppScale(12))
 
     current_index := practice_ordered_index(app, app.exercise_type)
-    selected_index := practice_carousel_controls(Rectangle.{cast(float32)pager_x, cast(float32)pager_y, cast(float32)pager_w, cast(float32)pager_h}, installed, current_index, app.modal.active, 7090)
-    if selected_index >= 0 && selected_index < installed && selected_index != current_index {
-        practice_select_home_card(app, installed_ids[selected_index])
+    selected_index := practice_carousel_controls(Rectangle.{cast(float32)pager_x, cast(float32)pager_y, cast(float32)pager_w, cast(float32)pager_h}, listed, current_index, app.modal.active, 7090)
+    if selected_index >= 0 && selected_index < listed && selected_index != current_index {
+        practice_select_home_card(app, listed_ids[selected_index])
     }
 
+    if question_h > 0 {
+        PracticeCardDeleteQuestion(app, app.exercise_type, action_x, button_y, total_w)
+        return 1
+    }
     app.practice_home_bounds_start = Rectangle.{cast(float32)action_x, cast(float32)button_y,
         cast(float32)primary_w, cast(float32)button_h
     }
-    content_ready := PracticeContentReady(app.exercise_type)
-    if Button(CurrentApp().ui.session, ButtonProps.{
+    if action != PRACTICE_ACTION_NONE {
+        PracticeCardAction(app, app.exercise_type, app.practice_home_bounds_start)
+    } else if Button(CurrentApp().ui.session, ButtonProps.{
             .bounds = app.practice_home_bounds_start,
             .label = LocaleText("practice_start_button"),
             .disabled = app.modal.active != 0,
@@ -752,11 +820,6 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
             .size = cast(ControlSize)ControlSizeLarge,
             .pill = true
         }) != 0 {
-        if !content_ready {
-            app_open_modal(app, cast(ModalType)ModalPracticeDownloads)
-            app.practice_downloads_scroll = -(app.exercise_type + 1)
-            return 1
-        }
         // One practice runs at a time: Start brings back the practice that
         // runs in its small window instead of starting another over it.
         if app_session_window_restore(app) {
@@ -772,7 +835,7 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
         button_y += button_h + action_gap
     }
 
-    if practice != null && practice.draw_manual != null {
+    if ready && practice != null && practice.draw_manual != null {
         app.practice_home_bounds_manual = Rectangle.{cast(float32)action_x, cast(float32)button_y,
             cast(float32)secondary_w, cast(float32)button_h
         }
@@ -793,7 +856,7 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
         }
     }
 
-    if practice_home_has_config(practice) {
+    if ready && practice_home_has_config(practice) {
         app.practice_home_bounds_config = Rectangle.{cast(float32)action_x, cast(float32)button_y,
             cast(float32)secondary_w, cast(float32)button_h
         }

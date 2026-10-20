@@ -9,10 +9,11 @@
 - Lists, Habits, Apps, Lumi, Arcade and Pushy draw faster and scroll more smoothly.
 - Scrolling Habits no longer moves or opens a habit; hold a habit a little longer to move it.
 - Drag the border beside habit names to widen or narrow the names column.
-- Download Astral Projection for a 40-minute guided visualization, with offline text and English narration.
+- Astral Projection: a 40-minute guided visualization with offline text and English narration.
 - Sun Salutation follows the classic sequence: lunges with a knee down, knees, chest and chin, and cobra, switching legs each round.
-- Manage practices opens on Installed, the practices on this device, with
-  tabs for Meditation (breathing practices included), Yoga and Martial arts.
+- New 7-Minute Workout: twelve 30-second exercises shown by an animated guide, with rests, a countdown and tips.
+- Practice has tabs for Meditation, Yoga, Martial arts and Workout; install or unlock any practice from its card.
+- Breathing, meditation, Astral Projection and the workout come with the app, ready without a download.
 - Leaderboard lists every practice you have installed, including Tai Chi and
   Astral Projection, in your Practice order, and leaves out the others.
 - Lumi shares a few changelog highlights in chat after an update, once per version.

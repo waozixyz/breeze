@@ -28,6 +28,7 @@ test: test-references-check
 test: screenshot-scene-test
 test: exercise-types-test
 test: astral-projection-test
+test: workout-test
 test: patterns-rules-zi-test
 test: patterns-session-zi-test
 test: session-results-zi-test

@@ -5,9 +5,9 @@
 - Download Astral Projection and follow a 15-minute guided visualization, from relaxation and imagined floating to a gentle return.
 - Keep its guidance offline and use narration when its language pack is installed.
 - Keep your saved practice order when Astral Projection is added.
-- Manage practices opens on Installed, the practices on this device, with
-  tabs for Meditation (breathing practices included), Yoga and Martial arts.
-  Dragging a practice in any tab changes your Practice order.
+- New 7-Minute Workout: twelve 30-second exercises shown by an animated guide, with rests, a countdown and tips.
+- Tabs for Meditation, Yoga, Martial arts and Workout list every practice; install or unlock one from its card.
+- Breathing, meditation, Astral Projection and the workout come with Practices, ready without a download.
 - Requires Inner Breeze 2.1.36 or later.
 
 ## [1.2.2] - 2026-10-18

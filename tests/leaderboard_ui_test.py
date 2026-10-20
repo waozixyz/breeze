@@ -23,7 +23,7 @@ WIDTH, HEIGHT = 390, 844
 LEADERBOARD_ROUTE = 9
 RANKED = re.compile(r"(\d+)\. @(\w+)$")
 PRACTICES = {"Wim Hof Breathing", "Meditation", "Sun Salutation", "Breathing Patterns",
-             "Tai Chi", "Astral Projection"}
+             "Tai Chi", "Astral Projection", "7-Minute Workout"}
 # A private command folder, so concurrent runs never answer each other.
 driver_directory = tempfile.TemporaryDirectory(prefix="inbe-leaderboard-driver-")
 driver = UiDriver(driver_directory.name)
@@ -155,7 +155,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
                     "launcher_favorite_count": 4, "launcher_favorite_0": 12,
                     "launcher_favorite_1": 1, "launcher_favorite_2": 2,
                     "launcher_favorite_3": LEADERBOARD_ROUTE,
-                    # Astral Projection dragged first in Manage practices.
+                    # Astral Projection first in the saved Practice order.
                     "practice_order": 1503124}
         for key, value in settings.items():
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
@@ -183,23 +183,20 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
         for kind, value in snapshots.items():
             db.execute("INSERT OR REPLACE INTO social_snapshots(user_id,kind,json,updated_at) "
                        "VALUES(?,?,?,1)", (user, kind, json.dumps(value)))
-    # Wim Hof is installed by default; Meditation and Breathing Patterns are
-    # added from the app's own copies and Astral Projection was downloaded.
-    # Sun Salutation was never downloaded, and Tai Chi's pack without an
-    # account that bought it is not installed.
+    # Wim Hof, Meditation, Breathing Patterns, Astral Projection and the
+    # 7-Minute Workout come with the app. Sun Salutation was never
+    # downloaded, and Tai Chi's pack without an account that bought it is not
+    # installed.
     packages = profile / "packages"
     packages.mkdir(exist_ok=True)
-    (packages / "practice-meditation.added").write_text("1")
-    (packages / "practice-patterns.added").write_text("1")
-    for pack in ["astral_projection.zib", "taichi.zib"]:
-        shutil.copyfile(root / "build/practice-content" / pack, packages / ("practice-" + pack))
+    shutil.copyfile(root / "build/practice-content/taichi.zib", packages / "practice-taichi.zib")
     app, window = launch(profile, "board")
     try:
         # Installed practices only, in Practice's order, two per row on phones.
-        grid = practice_grid([["Astral Projection", "Wim Hof Breathing"],
-                              ["Breathing Patterns", "Meditation"]])
-        assert grid == [["Astral Projection", "Wim Hof Breathing"], ["Breathing Patterns", "Meditation"]], \
-            f"installed practices: {grid}"
+        expected = [["Astral Projection", "Wim Hof Breathing"], ["Breathing Patterns", "Meditation"],
+                    ["7-Minute Workout"]]
+        grid = practice_grid(expected)
+        assert grid == expected, f"installed practices: {grid}"
         assert selected_practice() == "Wim Hof Breathing"
         streak = board(["maple", "river", "cedar"])
         assert [name for name, _ in streak] == ["maple", "river", "cedar"], f"streak order: {streak}"
@@ -215,7 +212,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
         choose("Breathing Patterns")
         patterns = board(["cedar", "river"])
         assert sorted(name for name, _ in patterns) == ["cedar", "river"], f"breathing patterns: {patterns}"
-        # A downloaded practice ranks its own board, by streak only.
+        # Astral Projection ranks its own board, by streak only.
         choose("Astral Projection")
         astral = board(["river", "maple", "cedar"])
         assert [name for name, _ in astral] == ["river", "maple", "cedar"], f"astral projection: {astral}"
@@ -225,17 +222,15 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
         assert app.poll() is None, log
     finally:
         stop(app)
-    # Removing Wim Hof from Practice takes it off the board, which opens on
-    # the first installed practice instead.
-    (packages / "practice-whm.removed").write_text("1")
-    app, window = launch(profile, "without-wim-hof")
+    # A downloaded Sun Salutation joins the board in Practice's order.
+    shutil.copyfile(root / "build/practice-content/sunsalutation.zib", packages / "practice-sunsalutation.zib")
+    app, window = launch(profile, "with-sun-salutation")
     try:
-        grid = practice_grid([["Astral Projection", "Breathing Patterns"], ["Meditation"]])
-        assert grid == [["Astral Projection", "Breathing Patterns"], ["Meditation"]], f"after removal: {grid}"
-        assert selected_practice() == "Astral Projection"
-        astral = board(["river", "maple", "cedar"])
-        assert [name for name, _ in astral] == ["river", "maple", "cedar"], f"first installed board: {astral}"
-        log = (output / "without-wim-hof.log").read_text()
+        expected = [["Astral Projection", "Wim Hof Breathing"], ["Breathing Patterns", "Meditation"],
+                    ["Sun Salutation", "7-Minute Workout"]]
+        grid = practice_grid(expected)
+        assert grid == expected, f"after download: {grid}"
+        log = (output / "with-sun-salutation.log").read_text()
         assert "frame rejected" not in log, log
         assert app.poll() is None, log
     finally:
@@ -258,4 +253,4 @@ with tempfile.TemporaryDirectory(prefix="inbe-about-") as directory:
     assert "out of bounds" not in stdout + stderr, stdout[-4000:]
 driver_directory.cleanup()
 print("Leaderboard: unpinned install, installed practices in order, saved ranks, average hold, "
-      "meditation time, patterns, Astral Projection, removal and About passed")
+      "meditation time, patterns, Astral Projection, a downloaded practice joining and About passed")

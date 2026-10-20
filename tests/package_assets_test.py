@@ -7,6 +7,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from animation_inventory import inventory
+from practice_content import NAMES
 
 def assets(data):
     assert data[:8] == b'ZIB\0\x1a\0\0\0'
@@ -89,17 +90,25 @@ for name in root:
         'test-background', 'source-icon', 'readme-', 'badge-', '-prompt.')), \
         f'development artwork shipped: {name}'
 assert not any(name.endswith('/banner.png') for name in practices)
-# Practice pictures ship only in their packs; Wim Hof's pack ships installed.
-assert not any(name.endswith('.png') for name in practices), \
-    [name for name in practices if name.endswith('.png')]
-whm = next(pack for pack in catalog['packs'] if pack['practice'] == 'whm' and not pack['language'])
-shipped = practices['assets/practices/default/whm.zib']
-assert len(shipped) == whm['size'] and sha256(shipped).hexdigest() == whm['sha256']
+# Practice pictures ship only in their packs, apart from every practice's
+# banners: Practice's tabs show each practice before it is downloaded.
+banner = re.compile(r'assets/practices/[a-z_]+/banner-(?:light|dark)\.png')
+assert not any(name.endswith('.png') and not banner.fullmatch(name) for name in practices), \
+    [name for name in practices if name.endswith('.png') and not banner.fullmatch(name)]
+for name in NAMES:
+    for theme in ('light', 'dark'):
+        path = f'assets/practices/{name}/banner-{theme}.png'
+        assert practices[path] == (ROOT / path).read_bytes(), path
+# The small practices ship installed with Practices, each its pack's exact
+# bytes; Sun Salutation and Tai Chi download.
+for name in ('whm', 'meditation', 'patterns', 'astral_projection', 'workout'):
+    pack = next(pack for pack in catalog['packs'] if pack['practice'] == name and not pack['language'])
+    shipped = practices['assets/practices/default/' + name + '.zib']
+    assert len(shipped) == pack['size'] and sha256(shipped).hexdigest() == pack['sha256'], name
 assert {name for name in practices if name.startswith('assets/practices/default/')} == {
-    'assets/practices/default/whm.zib'}
-# Meditation and Breathing Patterns ship too, added without a download.
-assert {name for name in practices if name.startswith('assets/practices/shipped/')} == {
-    'assets/practices/shipped/meditation.zib', 'assets/practices/shipped/patterns.zib'}
+    'assets/practices/default/' + name + '.zib'
+    for name in ('whm', 'meditation', 'patterns', 'astral_projection', 'workout')}
+assert not any(name.startswith('assets/practices/shipped/') for name in practices)
 paths, sources, unique_animation = inventory()
 packaged_animation = {name for name in content if '/characters/' in name}
 assert packaged_animation == {path.relative_to(ROOT).as_posix() for path in unique_animation}

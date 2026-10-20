@@ -243,15 +243,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
                 db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                            "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, value))
 
-    # Only Wim Hof is on Practice after a new install: install the others the
-    # way Manage practices does. Meditation and Breathing Patterns come with
-    # the app; Sun Salutation is a download. Its narration and Lumi's guide
-    # download by themselves in the app's language; their copies are already
-    # here, so the test reaches no server.
+    # Meditation and Breathing Patterns come with the app; Sun Salutation is
+    # a download. Its narration and Lumi's guide download by themselves in
+    # the app's language; their copies are already here, so the test reaches
+    # no server.
     packages = profile / "packages"
     packages.mkdir(exist_ok=True)
-    for name in ("meditation", "patterns"):
-        (packages / f"practice-{name}.added").write_text("1")
     for name in ("sunsalutation", "sunsalutation.en", "guide.en"):
         shutil.copyfile(ROOT / "build/practice-content" / (name + ".zib"), packages / f"practice-{name}.zib")
 

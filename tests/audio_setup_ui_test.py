@@ -209,9 +209,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-audio-") as temporary:
         driver.press(label="Guide voice", role="toggle")
         driver.press(label="Download selected", role="button")
         driver.wait(label="Retry downloads", role="button", timeout=30)
-        downloads = set(re.findall(r"downloading pack ([^\s]+)", log.read_text()))
-        # Practice voices only: every narrated practice in this language.
-        assert downloads == {"sunsalutation/en", "astral_projection/en"}, downloads
+        # Practice voices only: every narrated practice in this language. The
+        # packs download one after another, so Retry can show before the last
+        # one has started.
+        expected = {"sunsalutation/en", "astral_projection/en", "workout/en"}
+        deadline = time.monotonic() + 60
+        while True:
+            downloads = set(re.findall(r"downloading pack ([^\s]+)", log.read_text()))
+            if downloads >= expected or time.monotonic() > deadline:
+                break
+            time.sleep(0.2)
+        assert downloads == expected, downloads
         saved(profile, "guide_narration_enabled", 0)
         saved(profile, "voice_narration_enabled", 1)
 

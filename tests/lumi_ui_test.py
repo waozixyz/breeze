@@ -408,7 +408,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         wait_for(lambda: state(window)["breath"] > breath, "WHM did not advance")
         assert state(window)["screen"] == 1 and not state(window)["paused"]
     # Without a practice on this device Lumi asks first: no drops the offer,
-    # yes opens Manage practices at it, and nothing starts either way.
+    # yes shows it in Practice to install, and nothing starts either way.
     with sqlite3.connect(profile / "inbe.db") as db:
         db.execute("UPDATE settings SET value='4' WHERE key='main_tab'")
     with application(profile, "practice-offer", recommended=True) as window:
@@ -422,17 +422,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         assert chat(profile)[-1]["text"] == "Tai Chi is unlocked with Dew. Unlock it now?", chat(profile)[-1]
         send(window, profile, "no")
         assert chat(profile)[-1]["text"] == "Cancelled."
-        send(window, profile, "start meditation")
+        send(window, profile, "start sun salutation")
         assert chat(profile)[-1]["text"].endswith("Download it now?")
         send(window, profile, "yes")
-        assert chat(profile)[-1]["text"] == "Opening Manage practices."
+        assert chat(profile)[-1]["text"] == "Opening it in Practice, where you can install it."
         # Nothing may start in the moments after the answer.
         time.sleep(0.6)
         assert not state(window)["practice_running"]
-    # Practices other than Wim Hof are downloads; install them as Manage
-    # practices would before Lumi starts them.
+    # Sun Salutation is a download; install it as Practice would before Lumi
+    # starts it. Meditation and Breathing Patterns come with the app.
     (profile / "packages").mkdir(exist_ok=True)
-    for name in ("meditation", "sunsalutation", "patterns"):
+    for name in ("sunsalutation",):
         shutil.copyfile(ROOT / "build/practice-content" / (name + ".zib"),
                         profile / "packages" / ("practice-" + name + ".zib"))
     for label, command_text, practice_id in [

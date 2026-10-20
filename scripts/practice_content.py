@@ -14,7 +14,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = 'assets/practices/catalog.json'
-NAMES = ('whm', 'meditation', 'sunsalutation', 'patterns', 'taichi', 'astral_projection')
+NAMES = ('whm', 'meditation', 'sunsalutation', 'patterns', 'taichi', 'astral_projection', 'workout')
 GUIDE = 'guide'
 MAXIMUM = 64 * 1024 * 1024
 

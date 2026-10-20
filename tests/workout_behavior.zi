@@ -1,0 +1,191 @@
+#import, file "../apps/practice/workout_rules.zi";
+#import, file "../apps/practice/workout_moves.zi";
+#import, file "../src/practices/tai_chi/tai_chi_math.zi";
+#import, file "../src/practices/tai_chi/tai_chi_solve.zi";
+#import, file "../src/practices/tai_chi/tai_chi_view.zi";
+#import, file "../src/practices/tai_chi/tai_chi_flat.zi";
+#import "math"
+#import "file_linux"
+#import "locale_parser"
+#import "byte_text_linux"
+
+test_frame: TaiChiFlatFrame;
+test_props: TaiChiFlatFrame;
+
+StepIs :: (elapsed_ms: s64, phase: s32, exercise: s32, elapsed: s32) -> bool {
+    step := WorkoutStepAt(elapsed_ms)
+    return step.phase == phase && step.exercise == exercise && (phase == WORKOUT_PHASE_DONE || step.elapsed_ms == elapsed)
+}
+
+Near :: (value: float64, expected: float64, tolerance: float64) -> bool {
+    return Finite64(value) && TaiChiAbs(value - expected) <= tolerance
+}
+
+// Every pose keeps the figure's bones their length, its feet on or above
+// the floor and its numbers finite, and paints a full figure.
+FigureSound :: (pose: *WorkoutPose, rig: *TaiChiRig, exercise: s32) -> bool {
+    solved := WorkoutSolve(pose, rig)
+    for side: cast(s32)0..1 {
+        if !Near(TaiChiDistance3(solved.shoulders[side], solved.elbows[side]), rig.upper_arm, 0.001) ||
+        !Near(TaiChiDistance3(solved.elbows[side], solved.wrists[side]), rig.fore_arm, 0.001) ||
+        !Near(TaiChiDistance3(solved.hips[side], solved.knees[side]), rig.thigh, 0.001) ||
+        !Near(TaiChiDistance3(solved.knees[side], solved.ankles[side]), rig.shin, 0.001) {
+            return false
+        }
+        if solved.heels[side].y < -0.02 || solved.balls[side].y < -0.02 || solved.toes[side].y < -0.02 ||
+        solved.knees[side].y < -0.02 || solved.wrists[side].y < -0.02 {
+            return false
+        }
+    }
+    if !Finite64(solved.head_top.y) || solved.head_center.y < 0.05 {
+        return false
+    }
+    framing := WorkoutFramingFor(exercise)
+    TaiChiFlatPaintLook(*test_frame, *solved, rig, TaiChiFlatLookNamed("jadeWoman"), framing.camera)
+    WorkoutPaintProps(*test_props, exercise, framing.camera, false)
+    return test_frame.op_count > 40 && test_frame.op_count < TAI_CHI_FLAT_OP_CAPACITY
+}
+
+// The workout's words in one language: every name, tip and spoken line,
+// none empty, and the tips and spoken lines in the language itself.
+text_bytes: [65536]u8;
+english_bytes: [65536]u8;
+
+ReadText :: (code: string, output: []u8) -> string {
+    path: [128]u8
+    count: s64 = 0
+    parts: [3]string = .["../assets/practices/workout/text/", code, ".txt"]
+    for index: cast(s32)0..2 {
+        for byte: parts[index] {
+            path[count] = byte
+            count += 1
+        }
+    }
+    file := OpenRead(TextFromBytes(path[:count]))
+    size := FileSize(file)
+    if size <= 0 || size > cast(s64)output.count {
+        unused CloseFile(file)
+        return ""
+    }
+    read := ReadAt(file, output[:size], 0)
+    unused CloseFile(file)
+    return ifx read == size then TextFromBytes(output[:size]) else ""
+}
+
+TextComplete :: (code: string, english: string) -> bool {
+    catalog := ReadText(code, text_bytes[:])
+    if catalog.count == 0 {
+        return false
+    }
+    key: [64]u8
+    lines: s32 = 0
+    prefixes: [4]string = .["workout_name_", "workout_tip_", "workout_say_", "workout_say_next_"]
+    for exercise: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
+        for which: cast(s32)0..3 {
+            prefix := prefixes[which]
+            if prefix == "workout_say_next_" && exercise == 0 {
+                continue
+            }
+            name := WorkoutKeyFor(prefix, exercise, key[:])
+            value := LocaleFindText(catalog, name)
+            if !value.found || value.text.count == 0 {
+                return false
+            }
+            if code != "en" && prefix != "workout_name_" && value.text == LocaleFindText(english, name).text {
+                return false
+            }
+            lines += 1
+        }
+    }
+    others: [2]string = .["workout_say_start", "workout_say_switch"]
+    for which: cast(s32)0..1 {
+        if LocaleFindText(catalog, others[which]).text.count == 0 {
+            return false
+        }
+        lines += 1
+    }
+    return lines == 49
+}
+
+#program_export
+Answer :: () -> s32 {
+    if WORKOUT_TOTAL_MS != WORKOUT_PREPARE_MS + WORKOUT_EXERCISE_COUNT * WORKOUT_WORK_MS +
+    (WORKOUT_EXERCISE_COUNT - 1) * WORKOUT_REST_MS {
+        return 1
+    }
+    if !StepIs(0, WORKOUT_PHASE_PREPARE, 0, 0) || !StepIs(9999, WORKOUT_PHASE_PREPARE, 0, 9999) ||
+    !StepIs(10000, WORKOUT_PHASE_WORK, 0, 0) || !StepIs(39999, WORKOUT_PHASE_WORK, 0, 29999) ||
+    !StepIs(40000, WORKOUT_PHASE_REST, 1, 0) || !StepIs(50000, WORKOUT_PHASE_WORK, 1, 0) ||
+    !StepIs(450000, WORKOUT_PHASE_WORK, 11, 0) || !StepIs(479999, WORKOUT_PHASE_WORK, 11, 29999) ||
+    !StepIs(480000, WORKOUT_PHASE_DONE, 11, 0) || !StepIs(-5, WORKOUT_PHASE_PREPARE, 0, 0) {
+        return 2
+    }
+    if WorkoutStepSecondsLeft(WorkoutStepAt(10000)) != 30 || WorkoutStepSecondsLeft(WorkoutStepAt(39001)) != 1 ||
+    WorkoutStepSecondsLeft(WorkoutStepAt(40000)) != 10 {
+        return 3
+    }
+    if WorkoutAdvance(1000, 500, true) != 1000 || WorkoutAdvance(1000, 500, false) != 1500 ||
+    WorkoutAdvance(479000, 5000, false) != 480000 || WorkoutAdvance(1000, -3, false) != 1000 {
+        return 4
+    }
+    if WorkoutExerciseSeconds(5000) != 0 || WorkoutExerciseSeconds(25000) != 15 ||
+    WorkoutExerciseSeconds(45000) != 30 || WorkoutExerciseSeconds(480000) != 360 {
+        return 5
+    }
+    key: [64]u8
+    if WorkoutCueKey(WorkoutStepAt(0), key[:]) != "workout_say_start" ||
+    WorkoutCueKey(WorkoutStepAt(10000), key[:]) != "workout_say_jumping_jacks" ||
+    WorkoutCueKey(WorkoutStepAt(40000), key[:]) != "workout_say_next_wall_sit" ||
+    WorkoutCueKey(WorkoutStepAt(450000), key[:]) != "workout_say_side_plank" ||
+    WorkoutCueKey(WorkoutStepAt(465000), key[:]) != "workout_say_switch" ||
+    WorkoutCueKey(WorkoutStepAt(480000), key[:]) != "" {
+        return 6
+    }
+    if WorkoutKeyFor("workout_name_", 12, key[:]) != "" || WorkoutKeyFor("workout_name_", -1, key[:]) != "" ||
+    WorkoutKeyFor("workout_name_", 7, key[:]) != "workout_name_plank" {
+        return 7
+    }
+    rig := WorkoutRig()
+    if !Near(rig.height, 1.65, 0.0001) || !Near(rig.leg_length, 0.478 * 1.65, 0.0001) ||
+    !Near(rig.pelvis_height, (0.046 + 0.478 + 0.025) * 1.65, 0.0001) {
+        return 8
+    }
+    for exercise: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
+        rest := WorkoutRestPose(exercise, 1234, *rig)
+        if !FigureSound(*rest, *rig, exercise) {
+            return 100 + exercise
+        }
+        time: s64 = 0
+        while time < cast(s64)WORKOUT_WORK_MS {
+            pose := WorkoutPoseAt(exercise, time, *rig)
+            if !FigureSound(*pose, *rig, exercise) {
+                return 200 + exercise
+            }
+            time += 70
+        }
+    }
+    // Props stand only where they belong.
+    WorkoutPaintProps(*test_props, WORKOUT_SQUATS, WorkoutFramingFor(WORKOUT_SQUATS).camera, false)
+    if test_props.op_count != 0 {
+        return 9
+    }
+    WorkoutPaintProps(*test_props, WORKOUT_STEP_UPS, WorkoutFramingFor(WORKOUT_STEP_UPS).camera, true)
+    if test_props.op_count < 5 {
+        return 10
+    }
+    // The side plank switches sides halfway: the planted hand changes side.
+    first := WorkoutPoseAt(WORKOUT_SIDE_PLANK, 7000, *rig)
+    second := WorkoutPoseAt(WORKOUT_SIDE_PLANK, 22000, *rig)
+    if first.hands[1].mode != WORKOUT_AT_WORLD || second.hands[0].mode != WORKOUT_AT_WORLD ||
+    !Near(first.hands[1].at.x, -second.hands[0].at.x, 0.0001) {
+        return 11
+    }
+    english := ReadText("en", english_bytes[:])
+    codes: [12]string = .["en", "cs", "de", "es", "fr", "id", "it", "ja", "ko", "pt", "ru", "zh"]
+    for index: cast(s32)0..11 {
+        if !TextComplete(codes[index], english) {
+            return 300 + index
+        }
+    }
+    return 42
+}

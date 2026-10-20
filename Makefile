@@ -374,7 +374,7 @@ LOCALE_FILES := $(wildcard locales/*.txt)
 IMAGE_FILES := assets/app/icon.png assets/easteregg/art.png assets/easteregg/waozi.png assets/practices/whm/1.png assets/practices/whm/2.png assets/practices/meditation/1.png assets/pet/egg1.png $(wildcard assets/practices/*/banner*.png) $(wildcard assets/practices/sunsalutation/characters/*/*.png) $(wildcard assets/practices/taichi/*.png assets/practices/taichi/*/*.png) assets/practices/taichi/course.bin
 SOUND_FILES := $(wildcard assets/sounds/*.ogg)
 FONT_SUBSET_DIR := assets/fonts/subset
-FONT_SUBSET_CORPUS := locales assets/fonts/input_common.txt assets/fonts/ui_symbols.txt assets/practices/astral_projection/text
+FONT_SUBSET_CORPUS := locales assets/fonts/input_common.txt assets/fonts/ui_symbols.txt assets/practices/astral_projection/text assets/practices/workout/text
 FONT_FILES := \
 	$(FONT_SUBSET_DIR)/NotoSans-App-Regular.ttf \
 	$(FONT_SUBSET_DIR)/NotoSansSC-App-Regular.otf \
@@ -404,7 +404,7 @@ EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) assets/app/icon.png
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 # Dependencies are imported as PACKAGE/Module through their linked packages.
 ZI_PACKAGE_PATHS := $(shell sh scripts/package-paths.sh)
-ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort) apps/practice/downloads_view.zi $(wildcard apps/practice/astral_projection*.zi)
+ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort) apps/practice/downloads_view.zi $(wildcard apps/practice/astral_projection*.zi) $(wildcard apps/practice/workout*.zi)
 GAME2D_DIR := build/packages/game2d
 GAME2D_MODULES := $(wildcard $(GAME2D_DIR)/src/*/*.zi)
 DAOCHI_CLIENT_MODULES := $(wildcard build/packages/daochi-client/*.zi)

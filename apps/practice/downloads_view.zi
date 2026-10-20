@@ -1,8 +1,7 @@
-// Practice download management, rendered by the current supervising host.
-// Tabs list the practices on this device first, then each kind of practice.
-// Each row has one button for what it needs: Install, Buy for a paid
-// practice, Cancel while it downloads, or Uninstall once it is on Practice.
-// A row's handle drags it to another place in the order.
+// What a practice's card on Practice offers when the practice is not ready:
+// Install with its size, Unlock with its price for a paid practice, or
+// Cancel while it downloads. A downloaded copy can be uninstalled from its
+// card, asked once there; practices that come with the app are always ready.
 #import, file "../../src/app/app_types.zi";
 #import, file "../../src/app/app_modal_state.zi";
 #import, file "../../src/app/app_settings.zi";
@@ -25,74 +24,28 @@
 #import "button_widget"
 #import "control_props"
 #import "geometry"
-#import "modal_props"
-#import "modal_frame_widget"
 #import "paint_queue"
-#import "reorder"
-#import "reorder_widget"
-#import "scroll_props"
-#import "scroll_widget"
-#import "tab_bar_props"
-#import "tab_bar_widget"
 #import "text_props"
 #import "text_align"
 #import "text_widget"
 #import "tree"
-#import "tree_input"
-#import "widget_kind"
 #import "session"
 #import "layout"
 
 using ButtonTone;
 using ButtonEmphasis;
-using ContentAlignment;
-using IconPlacement;
+using ControlSize;
 using TextWrap;
 using TextAlign;
-using WidgetKind;
 
-PRACTICE_HANDLE_WIDTH :: 44
-PRACTICE_ROW_PADDING :: 12
-PRACTICE_PILL_WIDTH :: 180
-// Rows narrower than this put the button under the practice's name.
-PRACTICE_NARROW_WIDTH :: 460
-
-// The one thing a row's button does.
+// The one thing a card's download button does.
 PRACTICE_ACTION_NONE :: 0
 PRACTICE_ACTION_INSTALL :: 1
 PRACTICE_ACTION_BUY :: 2
 PRACTICE_ACTION_CANCEL :: 3
-PRACTICE_ACTION_UNINSTALL :: 4
 
-// The tabs, in order: every practice on this device, then each kind of
-// practice, on this device or not.
-PRACTICE_MANAGE_TAB_INSTALLED :: 0
-PRACTICE_MANAGE_TAB_MEDITATION :: 1
-PRACTICE_MANAGE_TAB_YOGA :: 2
-PRACTICE_MANAGE_TAB_MARTIAL_ARTS :: 3
-PRACTICE_MANAGE_TAB_COUNT :: 4
-PRACTICE_MANAGE_TAB_HEIGHT :: 44
-
-// The selected tab and how far the tab bar is scrolled, kept while the
-// dialog stays open. It opens on Installed again.
-practice_manage_tab: s32 = PRACTICE_MANAGE_TAB_INSTALLED;
-practice_manage_tab_scroll: s32;
-// The frame the dialog was last drawn in, so a new opening is seen.
-practice_manage_drawn_frame: s32 = -2;
-
-// The practice whose row asks whether to delete its downloaded copy, or -1.
+// The practice whose card asks whether to uninstall its downloaded copy, or -1.
 practice_delete_asked: s32 = -1;
-// The practice dragged by its handle, or -1: its row where it was grabbed,
-// the grab point inside the row, where the press began and the pointer now.
-practice_drag: s32 = -1;
-practice_drag_bounds: Rectangle;
-practice_drag_grab: Vector2;
-practice_drag_origin: Vector2;
-practice_drag_pointer: Vector2;
-practice_drag_moving: bool;
-practice_drag_released: bool;
-// The dragged practice's handle was drawn this frame.
-practice_drag_seen: bool;
 
 // A paid practice this account has not unlocked offers its unlock instead of
 // a download, even when its pack is on this device.
@@ -209,16 +162,6 @@ PracticeDownloadSize :: (app: *InnerBreeze, practice: s32, output: []u8) {
         args[:], output)
 }
 
-// A text with the practice's size in place of its %s.
-PracticeDownloadSizedText :: (app: *InnerBreeze, practice: s32, key: string) -> string {
-    size: [32]u8
-    PracticeDownloadSize(app, practice, size[:])
-    args: [1]FormatArg = .[FormatArg.{.text = TextUntilNul(size[:]), .is_text = true}]
-    buffer: [256]u8
-    unused FormatTemplate(LocaleText(key), args[:], buffer[:])
-    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
-}
-
 // "Uninstall Sun Salutation? This frees 24 MB. Your progress stays."
 PracticeDownloadDeleteText :: (app: *InnerBreeze, practice: s32) -> string {
     size: [32]u8
@@ -245,38 +188,33 @@ PracticeDownloadStored :: (practice: s32) -> bool {
     !PracticeShipped(practice) && PracticeContentStatus(practice) == 2
 }
 
-// On Practice, or on its way there while it downloads.
-PracticeDownloadOnPractice :: (practice: s32) -> bool {
-    if PracticeDownloadIncluded(practice) || PracticeInstalled(practice) {
-        return true
+// Ready to start: on this device, unlocked when it is paid.
+PracticeDownloadReady :: (practice: s32) -> bool {
+    if PracticeDownloadLocked(practice) {
+        return false
     }
-    return !PracticeDownloadLocked(practice) && PracticeContentStatus(practice) == 1
+    return PracticeDownloadIncluded(practice) || (PracticeInstalled(practice) && PracticeContentReady(practice))
 }
 
-// Buy for a paid practice not unlocked yet, Cancel while it downloads,
-// Uninstall once it is on Practice, Install otherwise. Practices from an
-// older app package have nothing to manage.
+// What the card offers in place of Start: Unlock for a paid practice not
+// unlocked yet, Cancel while it downloads, Install otherwise, and nothing
+// once it is ready.
 PracticeDownloadAction :: (practice: s32) -> s32 {
     if PracticeDownloadLocked(practice) {
         return PRACTICE_ACTION_BUY
     }
-    if PracticeDownloadIncluded(practice) {
+    if PracticeDownloadReady(practice) {
         return PRACTICE_ACTION_NONE
     }
     if PracticeContentStatus(practice) == 1 {
         return PRACTICE_ACTION_CANCEL
     }
-    if PracticeDownloadOnPractice(practice) {
-        return PRACTICE_ACTION_UNINSTALL
-    }
     return PRACTICE_ACTION_INSTALL
 }
 
-// The line under a practice's name: its size, or how its download is going.
+// The line under a practice's description: how its download is going.
 PracticeDownloadLine :: (app: *InnerBreeze, practice: s32) -> string {
-    if PracticeDownloadIncluded(practice) {
-        return LocaleText("practice_download_offline")
-    }
+    unused app
     status := PracticeContentStatus(practice)
     if status == 1 {
         return LocaleText("practice_download_busy")
@@ -315,23 +253,13 @@ PracticeDownloadActionLabel :: (app: *InnerBreeze, practice: s32, action: s32) -
     size: [32]u8
     PracticeDownloadSize(app, practice, size[:])
     label: [128]u8
-    unused AppCopyText(LocaleText(ifx action == PRACTICE_ACTION_UNINSTALL then "practice_uninstall" else "practice_install"), label[:])
+    unused AppCopyText(LocaleText("practice_install"), label[:])
     unused AppAppendText(" · ", label[:])
     unused AppAppendText(TextUntilNul(size[:]), label[:])
     return FrameTextHold(*app.ui.frame_text, TextUntilNul(label[:]))
 }
 
-// Adds a practice to Practice, downloading it when it is not on this device.
-PracticeDownloadAdd :: (app: *InnerBreeze, practice: s32) {
-    if DataTemporary() {
-        app.exercise_type = practice
-    }
-    PracticeContentRequest(practice)
-}
-
-// Does what a row's button says. Uninstalling a practice that comes with the
-// app only takes it off Practice; a downloaded one asks once before its
-// files are deleted.
+// Does what a card's download button says.
 PracticeDownloadAct :: (app: *InnerBreeze, practice: s32, action: s32) {
     practice_delete_asked = -1
     if action == PRACTICE_ACTION_BUY {
@@ -339,476 +267,18 @@ PracticeDownloadAct :: (app: *InnerBreeze, practice: s32, action: s32) {
     } else if action == PRACTICE_ACTION_CANCEL {
         PracticeContentCancel(practice)
     } else if action == PRACTICE_ACTION_INSTALL {
-        PracticeDownloadAdd(app, practice)
-    } else if action == PRACTICE_ACTION_UNINSTALL {
-        if PracticeDownloadStored(practice) {
-            practice_delete_asked = practice
-        } else if PracticeShipped(practice) {
-            PracticeContentHide(practice)
-        } else {
-            PracticeContentRemove(practice)
+        if DataTemporary() {
+            app.exercise_type = practice
         }
+        PracticeContentRequest(practice)
     }
 }
 
-// On this device: on Practice, on its way there, or kept here off Practice,
-// as a practice that ships with the app always is. A paid practice this
-// account has not unlocked is not, even with its pack here.
-PracticeDownloadOnDevice :: (practice: s32) -> bool {
-    if PracticeDownloadLocked(practice) {
-        return false
-    }
-    if PracticeDownloadOnPractice(practice) {
-        return true
-    }
-    if PracticeShipped(practice) {
-        return true
-    }
-    return PracticeContentStatus(practice) == 2
-}
-
-PracticeDownloadTabLabel :: (tab: s32) -> string {
-    if tab == PRACTICE_MANAGE_TAB_MEDITATION {
-        return LocaleText("practice_manage_meditation")
-    }
-    if tab == PRACTICE_MANAGE_TAB_YOGA {
-        return LocaleText("practice_manage_yoga")
-    }
-    if tab == PRACTICE_MANAGE_TAB_MARTIAL_ARTS {
-        return LocaleText("practice_manage_martial_arts")
-    }
-    return LocaleText("practice_manage_installed")
-}
-
-// The kind of practice a tab lists. Installed lists by where a practice is
-// instead.
-PracticeDownloadTabKind :: (tab: s32) -> s32 {
-    if tab == PRACTICE_MANAGE_TAB_MEDITATION {
-        return PRACTICE_KIND_MEDITATION
-    }
-    if tab == PRACTICE_MANAGE_TAB_YOGA {
-        return PRACTICE_KIND_YOGA
-    }
-    if tab == PRACTICE_MANAGE_TAB_MARTIAL_ARTS {
-        return PRACTICE_KIND_MARTIAL_ARTS
-    }
-    return PRACTICE_KIND_NONE
-}
-
-// Installed lists every practice on this device; each other tab lists the
-// practices of its kind, from the practice's own definition.
-PracticeDownloadListed :: (practice: s32, tab: s32) -> bool {
-    if PracticeHidden(practice) {
-        return false
-    }
-    if tab == PRACTICE_MANAGE_TAB_INSTALLED {
-        return PracticeDownloadOnDevice(practice)
-    }
-    return practice_get(practice).kind == PracticeDownloadTabKind(tab)
-}
-
-// Installed is always offered. A kind's tab is left out while it has no
-// practice to list, such as Martial arts where paid practices are not
-// offered.
-PracticeDownloadTabOffered :: (tab: s32) -> bool {
-    if tab == PRACTICE_MANAGE_TAB_INSTALLED {
-        return true
-    }
-    for index: cast(s32)0..practice_count() - 1 {
-        if PracticeDownloadListed(practice_ordered_id(index), tab) {
-            return true
-        }
-    }
-    return false
-}
-
-// The tab to show a practice in: the selected one when it lists the
-// practice, otherwise the first one that does.
-PracticeDownloadTabFor :: (practice: s32, selected: s32) -> s32 {
-    if PracticeDownloadListed(practice, selected) {
-        return selected
-    }
-    for tab: cast(s32)0..PRACTICE_MANAGE_TAB_COUNT - 1 {
-        if PracticeDownloadListed(practice, tab) {
-            return tab
-        }
-    }
-    return selected
-}
-
-// Another tab starts its list at the top, with no question or drag left
-// over from the one before.
-PracticeDownloadSelectTab :: (app: *InnerBreeze, tab: s32) {
-    if tab == practice_manage_tab {
-        return
-    }
-    practice_manage_tab = tab
-    practice_delete_asked = -1
-    PracticeDownloadEndDrag()
-    app.practice_downloads_scroll = 0
-}
-
-// Rows drag to another place unless a practice is running.
-PracticeDownloadMovable :: (app: *InnerBreeze) -> bool {
-    return practice_active(app) == null
-}
-
-// Measuring and drawing a row share these sizes.
-PracticeDownloadRowShape :: struct {
-    // The menu button sits under the name instead of beside it.
-    narrow: bool
-    text_w: s32
-    name_h: s32
-    line_h: s32
-    note_h: s32
-    // The name, line, price and note.
-    text_h: s32
-    question_h: s32
-    height: s32
-}
-
-PracticeDownloadShape :: (app: *InnerBreeze, practice: s32, width: s32) -> PracticeDownloadRowShape {
-    shape: PracticeDownloadRowShape
-    pad := AppScale(PRACTICE_ROW_PADDING)
-    handle_w := AppScale(PRACTICE_HANDLE_WIDTH)
-    shape.narrow = width < AppScale(PRACTICE_NARROW_WIDTH)
-    shape.text_w = width - handle_w - pad
-    if !shape.narrow {
-        shape.text_w -= AppScale(PRACTICE_PILL_WIDTH) + pad
-    }
-    definition := practice_get(practice)
-    shape.name_h = AppParagraphHeight(LocaleText(definition.label_key), shape.text_w, AppFontSize(), AppScale(3))
-    line := PracticeDownloadLine(app, practice)
-    shape.text_h = shape.name_h
-    if line.count > 0 {
-        shape.line_h = AppParagraphHeight(line, shape.text_w, AppSmallFontSize(), AppScale(3))
-        shape.text_h += AppScale(4) + shape.line_h
-    }
-    if PracticeDownloadLocked(practice) && PracticeDownloadPriceHeight() > 0 {
-        shape.text_h += AppScale(4) + PracticeDownloadPriceHeight()
-    }
-    note := PracticeDownloadNote(practice)
-    if note.count > 0 {
-        shape.note_h = AppParagraphHeight(note, shape.text_w, AppSmallFontSize(), AppScale(3))
-        shape.text_h += AppScale(6) + shape.note_h
-    }
-    shape.height = pad + shape.text_h + pad
-    if shape.narrow && !PracticeDownloadIncluded(practice) {
-        shape.height += AppScale(44) + AppScale(8)
-    } else if shape.height < pad + AppScale(44) + pad {
-        shape.height = pad + AppScale(44) + pad
-    }
-    if practice_delete_asked == practice {
-        shape.question_h = AppParagraphHeight(PracticeDownloadDeleteText(app, practice),
-            width - handle_w - pad, AppFontSize(), AppScale(3))
-        shape.height += shape.question_h + AppScale(8) + AppScale(44) + pad
-    }
-    return shape
-}
-
-// Six dots at a row's start show that it can be dragged, laid out like the
-// handles of Kryon's reorderable lists.
-PracticeDownloadDots :: (app: *InnerBreeze, bounds: Rectangle) {
-    paint := ReorderHandlePaintFor(bounds, MetricsScale(), ReorderHandleFace())
-    if paint.dot_count < 6 {
-        return
-    }
-    color := color_with_alpha(StyleTokenColor("text"), 0.45)
-    radius := paint.dot0.width * 0.5
-    PaintRoundedFill(app.ui.session, -1, paint.dot0, radius, 6, color)
-    PaintRoundedFill(app.ui.session, -1, paint.dot1, radius, 6, color)
-    PaintRoundedFill(app.ui.session, -1, paint.dot2, radius, 6, color)
-    PaintRoundedFill(app.ui.session, -1, paint.dot3, radius, 6, color)
-    PaintRoundedFill(app.ui.session, -1, paint.dot4, radius, 6, color)
-    PaintRoundedFill(app.ui.session, -1, paint.dot5, radius, 6, color)
-}
-
-// A practice's handle, name, line, price and note: in its row, and in the
-// copy that follows the pointer while it is dragged.
-PracticeDownloadFace :: (app: *InnerBreeze, practice: s32, shape: PracticeDownloadRowShape,
-    x: s32, y: s32, handle: bool) {
-    pad := AppScale(PRACTICE_ROW_PADDING)
-    text_x := x + AppScale(PRACTICE_HANDLE_WIDTH)
-    if handle {
-        PracticeDownloadDots(app, Rectangle.{cast(float32)x, cast(float32)y,
-                cast(float32)AppScale(PRACTICE_HANDLE_WIDTH), cast(float32)(pad + shape.text_h + pad)})
-    }
-    definition := practice_get(practice)
-    text_y := y + pad
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)text_x, cast(float32)text_y, cast(float32)shape.text_w, cast(float32)shape.name_h},
-            .text = LocaleText(definition.label_key), .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
-    text_y += shape.name_h
-    if shape.line_h > 0 {
-        text_y += AppScale(4)
-        Text(app.ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)text_x, cast(float32)text_y, cast(float32)shape.text_w, cast(float32)shape.line_h},
-                .text = PracticeDownloadLine(app, practice), .font = AppSmallFontSize(),
-                .wrap = cast(TextWrap)TextWrapAuto})
-        text_y += shape.line_h
-    }
-    if PracticeDownloadLocked(practice) && PracticeDownloadPriceHeight() > 0 {
-        PracticeDownloadPrice(app, text_x, text_y + AppScale(4), shape.text_w)
-        text_y += AppScale(4) + PracticeDownloadPriceHeight()
-    }
-    if shape.note_h > 0 {
-        Text(app.ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)text_x, cast(float32)(text_y + AppScale(6)),
-                    cast(float32)shape.text_w, cast(float32)shape.note_h},
-                .text = PracticeDownloadNote(practice), .font = AppSmallFontSize(),
-                .wrap = cast(TextWrap)TextWrapAuto})
-    }
-}
-
-PracticeDownloadEndDrag :: () {
-    practice_drag = -1
-    practice_drag_moving = false
-    practice_drag_released = false
-    practice_drag_seen = false
-}
-
-// A handle drags its row as soon as it moves, with a mouse or a finger; a
-// swipe anywhere else scrolls the list.
-PracticeDownloadHandle :: (app: *InnerBreeze, practice: s32, row: Rectangle) {
-    handle: ButtonProps
-    handle.id = 17460 + practice
-    handle.bounds = Rectangle.{row.x, row.y, cast(float32)AppScale(PRACTICE_HANDLE_WIDTH), row.height}
-    handle.tone = cast(ButtonTone)ButtonToneNeutral
-    handle.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    previous := TreePrevious(app.ui.session, TreeCurrentParent(app.ui.session),
-        cast(u64)handle.id, WidgetKindButton)
-    drag := TreeTakeDragAt(app.ui.session, previous)
-    if drag.started && practice_drag < 0 {
-        practice_drag = practice
-        practice_drag_bounds = row
-        practice_drag_grab = Vector2.{drag.grab_x, drag.grab_y}
-        practice_drag_origin = Vector2.{drag.x, drag.y}
-        practice_drag_pointer = practice_drag_origin
-        practice_drag_moving = false
-        practice_drag_released = false
-    }
-    if practice_drag == practice {
-        practice_drag_seen = true
-        if drag.active || drag.ended {
-            practice_drag_pointer = Vector2.{drag.x, drag.y}
-            dx := drag.x - practice_drag_origin.x
-            dy := drag.y - practice_drag_origin.y
-            threshold := cast(float32)AppScale(6)
-            if dx * dx + dy * dy >= threshold * threshold {
-                practice_drag_moving = true
-            }
-        }
-        if drag.ended {
-            if practice_drag_moving {
-                practice_drag_released = true
-            } else {
-                PracticeDownloadEndDrag()
-            }
-        }
-    }
-    unused Button(app.ui.session, handle)
-    node := TreeSubmitted(app.ui.session, TreeCurrentParent(app.ui.session),
-        cast(u64)handle.id, WidgetKindButton)
-    TreeSetDragCapture(app.ui.session, node, true)
-}
-
-// Uninstall asks once, in the row: Cancel keeps the copy, Uninstall frees it.
-PracticeDownloadDeleteQuestion :: (app: *InnerBreeze, practice: s32, shape: PracticeDownloadRowShape,
-    x: s32, y: s32, width: s32) {
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)shape.question_h},
-            .text = PracticeDownloadDeleteText(app, practice), .font = AppFontSize(),
-            .wrap = cast(TextWrap)TextWrapAuto})
-    button_y := y + shape.question_h + AppScale(8)
-    button_w := (width - AppScale(8)) / 2
-    if Button(app.ui.session, ButtonProps.{
-            .id = 17440 + practice,
-            .bounds = Rectangle.{cast(float32)x, cast(float32)button_y,
-                cast(float32)button_w, cast(float32)AppScale(44)},
-            .label = LocaleText("cancel_button"),
-            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        practice_delete_asked = -1
-    }
-    if Button(app.ui.session, ButtonProps.{
-            .id = 17450 + practice,
-            .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)button_y,
-                cast(float32)button_w, cast(float32)AppScale(44)},
-            .label = LocaleText("practice_uninstall"),
-            .disabled = practice_active(app) != null,
-            .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
-        practice_delete_asked = -1
-        PracticeContentRemove(practice)
-    }
-}
-
-PracticeDownloadRow :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width: s32) {
-    // The copy went away by itself, such as a failed check: nothing to ask.
-    if practice_delete_asked == practice && !PracticeDownloadStored(practice) {
-        practice_delete_asked = -1
-    }
-    shape := PracticeDownloadShape(app, practice, width)
-    pad := AppScale(PRACTICE_ROW_PADDING)
-    handle_w := AppScale(PRACTICE_HANDLE_WIDTH)
-    movable := PracticeDownloadMovable(app)
-    if movable {
-        PracticeDownloadHandle(app, practice, Rectangle.{cast(float32)x, cast(float32)y,
-                cast(float32)width, cast(float32)(pad + shape.text_h + pad)})
-    }
-    PracticeDownloadFace(app, practice, shape, x, y, movable)
-    // The button: beside the name, or under it on a narrow row.
-    pill_w := AppScale(PRACTICE_PILL_WIDTH)
-    pill_x := x + width - pad - pill_w
-    pill_y := y + pad
-    if shape.narrow {
-        pill_x = x + handle_w
-        pill_w = shape.text_w
-        pill_y = y + pad + shape.text_h + AppScale(8)
-    }
-    pill := Rectangle.{cast(float32)pill_x, cast(float32)pill_y, cast(float32)pill_w, cast(float32)AppScale(44)}
-    action := PracticeDownloadAction(practice)
-    if action != PRACTICE_ACTION_NONE {
-        disabled := practice_active(app) != null || practice_drag >= 0
-        if action == PRACTICE_ACTION_BUY {
-            disabled = disabled || !DewReady() || UnlockBuying()
-        } else if action == PRACTICE_ACTION_INSTALL {
-            disabled = disabled || !PracticePackReviewed(practice, "")
-        }
-        uninstall := action == PRACTICE_ACTION_UNINSTALL || action == PRACTICE_ACTION_CANCEL
-        if Button(app.ui.session, ButtonProps.{
-                .id = 17410 + practice * 2, .bounds = pill, .pill = true,
-                .label = PracticeDownloadActionLabel(app, practice, action),
-                .selected = practice_delete_asked == practice, .disabled = disabled,
-                .tone = cast(ButtonTone)(ifx uninstall then ButtonToneNeutral else ButtonToneAccent),
-                .emphasis = cast(ButtonEmphasis)(ifx uninstall then ButtonEmphasisSoft else ButtonEmphasisFilled)}) != 0 {
-            PracticeDownloadAct(app, practice, action)
-        }
-    }
-    if practice_delete_asked == practice {
-        question_y := y + shape.height - pad - AppScale(44) - AppScale(8) - shape.question_h
-        PracticeDownloadDeleteQuestion(app, practice, shape, x + handle_w, question_y, width - handle_w - pad)
-    }
-}
-
-PracticeDownloadAreas :: struct {
-    rows: [EXERCISE_COUNT]Rectangle
-    row_practices: [EXERCISE_COUNT]s32
-    row_count: s32
-    focus_y: s32
-}
-
-// The selected tab's practices in order, measured or drawn.
-PracticeDownloadsContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bool,
-    focus: s32) -> PracticeDownloadAreas {
-    areas: PracticeDownloadAreas
-    top := y.*
-    line := color_with_alpha(StyleTokenColor("text"), 0.12)
-    for index: cast(s32)0..practice_count() - 1 {
-        practice := practice_ordered_id(index)
-        if !PracticeDownloadListed(practice, practice_manage_tab) {
-            continue
-        }
-        if draw && y.* > top {
-            PaintRoundedFill(app.ui.session, -1, Rectangle.{cast(float32)(x + AppScale(PRACTICE_ROW_PADDING)),
-                    cast(float32)y.*, cast(float32)(width - AppScale(PRACTICE_ROW_PADDING) * 2),
-                    cast(float32)AppScale(1)}, 0.0, 1, line)
-        }
-        if practice == focus {
-            areas.focus_y = y.*
-        }
-        if draw {
-            PracticeDownloadRow(app, practice, x, y.*, width)
-        }
-        row_h := PracticeDownloadShape(app, practice, width).height
-        if areas.row_count < EXERCISE_COUNT {
-            areas.rows[areas.row_count] = Rectangle.{cast(float32)x, cast(float32)y.*,
-                cast(float32)width, cast(float32)row_h}
-            areas.row_practices[areas.row_count] = practice
-            areas.row_count += 1
-        }
-        y.* += row_h
-    }
-    return areas
-}
-
-// While a practice is dragged it follows the pointer, and the practice whose
-// place it would take is outlined; releasing it there moves it in the order
-// Practice follows. Within a tab, it moves among that tab's practices.
-PracticeDownloadDrop :: (app: *InnerBreeze, scroll: ScrollResult, areas: PracticeDownloadAreas, width: s32) {
-    if practice_drag < 0 {
-        return
-    }
-    dragged := practice_drag
-    // Its row went away, such as when a practice started.
-    if !practice_drag_seen {
-        PracticeDownloadEndDrag()
-        return
-    }
-    practice_drag_seen = false
-    point := practice_drag_pointer
-    place: s32 = -1
-    place_bounds: Rectangle
-    if practice_drag_moving && PointInBounds(point.x, point.y, scroll.viewport) {
-        row: s32 = 0
-        while row < areas.row_count {
-            if areas.row_practices[row] != dragged && PointInBounds(point.x, point.y, areas.rows[row]) {
-                place = areas.row_practices[row]
-                place_bounds = RectangleIntersection(areas.rows[row], scroll.viewport)
-            }
-            row += 1
-        }
-    }
-    outline := color_with_alpha(StyleTokenColor("text"), 0.8)
-    radius := cast(float32)AppScale(12)
-    if place >= 0 {
-        PaintRoundedOutline(app.ui.session, -1, place_bounds, radius, 12, cast(float32)AppScale(2), outline)
-    }
-    if practice_drag_released {
-        if place >= 0 {
-            practice_order_move(dragged, place)
-            save_settings(app)
-        }
-        PracticeDownloadEndDrag()
-        app_block_current_click(app)
-        return
-    }
-    if !practice_drag_moving {
-        return
-    }
-    // Near the list's top or bottom edge the list scrolls along.
-    margin := cast(float32)AppScale(40)
-    step: s32 = 0
-    if point.y < scroll.viewport.y + margin {
-        step = -AppScale(6)
-    } else if point.y > scroll.viewport.y + scroll.viewport.height - margin {
-        step = AppScale(6)
-    }
-    app.practice_downloads_scroll += step
-    if app.practice_downloads_scroll > scroll.max_scroll {
-        app.practice_downloads_scroll = scroll.max_scroll
-    }
-    if app.practice_downloads_scroll < 0 {
-        app.practice_downloads_scroll = 0
-    }
-    shape := PracticeDownloadShape(app, dragged, width)
-    lifted := practice_drag_bounds
-    lifted.x = point.x - practice_drag_grab.x
-    lifted.y = point.y - practice_drag_grab.y
-    PaintRoundedFill(app.ui.session, -1, lifted, radius, 12, StyleTokenColor("surface"))
-    PaintRoundedOutline(app.ui.session, -1, lifted, radius, 12, cast(float32)AppScale(2), outline)
-    PracticeDownloadFace(app, dragged, shape, cast(s32)lifted.x, cast(s32)lifted.y, true)
-}
-
-PracticeDownloadsModalClose :: (app: *InnerBreeze) {
-    practice_delete_asked = -1
-    PracticeDownloadEndDrag()
-    app_close_modal(app)
-}
-
-#program_export
-PracticeDownloadsModalDraw :: (app: *InnerBreeze) {
+// Each frame Practice shows: one stored copy checked, unlocks kept current,
+// and a finished unlock downloads what it unlocked.
+PracticeDownloadsTick :: () {
     PracticeContentReviewNext()
     UnlockRefresh()
-    // A finished unlock downloads what it unlocked.
     if UnlockTakeBought() {
         for practice: cast(s32)0..practice_count() - 1 {
             if PracticeProduct(practice) == UnlockTaiChi {
@@ -816,90 +286,138 @@ PracticeDownloadsModalDraw :: (app: *InnerBreeze) {
             }
         }
     }
-    width := app.ui.view_width - AppScale(32)
-    if width > AppScale(720) {
-        width = AppScale(720)
+    if practice_delete_asked >= 0 && !PracticeDownloadStored(practice_delete_asked) {
+        practice_delete_asked = -1
     }
-    height := app.ui.view_height - AppScale(48)
-    if height > AppScale(720) {
-        height = AppScale(720)
+}
+
+// The card's lines under its description: the download's progress or
+// failure, the price of a paid practice and why it cannot be unlocked yet.
+PracticeCardStatusHeight :: (app: *InnerBreeze, practice: s32, width: s32) -> s32 {
+    height: s32 = 0
+    line := PracticeDownloadLine(app, practice)
+    if line.count > 0 {
+        height += AppParagraphHeight(line, width, AppSmallFontSize(), AppScale(3)) + AppScale(4)
     }
-    frame := ModalFrame(app.ui.session, ModalFrameProps.{
-            .key = KeyHash("practices/downloads/modal"), .title = LocaleText("practice_manage_button"),
-            .width = width, .height = height, .scale = MetricsScale(),
-            .title_at_start = true, .strong_title = true,
-            .has_right_action = true, .right_label = LocaleText("close_button")})
-    if frame.dismissed || frame.right_clicked {
-        PracticeDownloadsModalClose(app)
+    if PracticeDownloadLocked(practice) && PracticeDownloadPriceHeight() > 0 {
+        height += PracticeDownloadPriceHeight() + AppScale(4)
+    }
+    note := PracticeDownloadNote(practice)
+    if note.count > 0 {
+        height += AppParagraphHeight(note, width, AppSmallFontSize(), AppScale(3)) + AppScale(4)
+    }
+    return height
+}
+
+PracticeCardStatus :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width: s32) {
+    line := PracticeDownloadLine(app, practice)
+    if line.count > 0 {
+        height := AppParagraphHeight(line, width, AppSmallFontSize(), AppScale(3))
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(4)), cast(float32)width, cast(float32)height},
+                .text = line, .font = AppSmallFontSize(), .align = cast(TextAlign)TextAlignCenter,
+                .wrap = cast(TextWrap)TextWrapAuto})
+        y += height + AppScale(4)
+    }
+    if PracticeDownloadLocked(practice) && PracticeDownloadPriceHeight() > 0 {
+        price_w := width
+        if price_w > AppScale(300) {
+            price_w = AppScale(300)
+        }
+        PracticeDownloadPrice(app, x + (width - price_w) / 2, y + AppScale(4), price_w)
+        y += PracticeDownloadPriceHeight() + AppScale(4)
+    }
+    note := PracticeDownloadNote(practice)
+    if note.count > 0 {
+        height := AppParagraphHeight(note, width, AppSmallFontSize(), AppScale(3))
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(4)), cast(float32)width, cast(float32)height},
+                .text = note, .font = AppSmallFontSize(), .align = cast(TextAlign)TextAlignCenter,
+                .wrap = cast(TextWrap)TextWrapAuto})
+    }
+}
+
+// The card's download button in place of Start.
+PracticeCardAction :: (app: *InnerBreeze, practice: s32, bounds: Rectangle) {
+    action := PracticeDownloadAction(practice)
+    if action == PRACTICE_ACTION_NONE {
         return
     }
-    if !frame.opened {
+    disabled := app.modal.active != 0 || practice_active(app) != null
+    if action == PRACTICE_ACTION_BUY {
+        disabled = disabled || !DewReady() || UnlockBuying()
+    } else if action == PRACTICE_ACTION_INSTALL {
+        disabled = disabled || !PracticePackReviewed(practice, "")
+    }
+    cancel := action == PRACTICE_ACTION_CANCEL
+    if Button(app.ui.session, ButtonProps.{
+            .id = 17410 + practice * 2, .bounds = bounds, .pill = true,
+            .label = PracticeDownloadActionLabel(app, practice, action), .disabled = disabled,
+            .tone = cast(ButtonTone)(ifx cancel then ButtonToneNeutral else ButtonToneAccent),
+            .emphasis = cast(ButtonEmphasis)(ifx cancel then ButtonEmphasisSoft else ButtonEmphasisFilled),
+            .size = cast(ControlSize)ControlSizeLarge}) != 0 {
+        PracticeDownloadAct(app, practice, action)
+    }
+}
+
+// "Uninstall · 23 MB" at the card's corner for a downloaded copy.
+PracticeCardUninstall :: (app: *InnerBreeze, practice: s32, right: s32, y: s32) {
+    if !PracticeDownloadStored(practice) || practice_delete_asked == practice {
         return
     }
-    // Each opening starts on Installed.
-    opening := app.breathing.frame - practice_manage_drawn_frame > 1
-    if opening {
-        practice_manage_tab = PRACTICE_MANAGE_TAB_INSTALLED
-        practice_manage_tab_scroll = 0
+    size: [32]u8
+    PracticeDownloadSize(app, practice, size[:])
+    label: [128]u8
+    unused AppCopyText(LocaleText("practice_uninstall"), label[:])
+    unused AppAppendText(" · ", label[:])
+    unused AppAppendText(TextUntilNul(size[:]), label[:])
+    text := FrameTextHold(*app.ui.frame_text, TextUntilNul(label[:]))
+    width := AppTextWidth(text, AppFontSize()) + AppScale(32)
+    if Button(app.ui.session, ButtonProps.{
+            .id = 17400, .bounds = Rectangle.{cast(float32)(right - width), cast(float32)y,
+                cast(float32)width, cast(float32)AppScale(44)},
+            .label = text, .disabled = app.modal.active != 0 || practice_active(app) != null,
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+            .pill = true}) != 0 {
+        practice_delete_asked = practice
     }
-    practice_manage_drawn_frame = app.breathing.frame
-    // Opened for one practice, its row is in view, in its kind's tab when
-    // it is not on this device.
-    focus: s32 = -1
-    if app.practice_downloads_scroll < 0 {
-        focus = -app.practice_downloads_scroll - 1
-        practice_manage_tab = PracticeDownloadTabFor(focus, practice_manage_tab)
+}
+
+PracticeCardDeleteHeight :: (app: *InnerBreeze, practice: s32, width: s32) -> s32 {
+    if practice_delete_asked != practice {
+        return 0
     }
-    content := frame.layout.content
-    tab_h := AppScale(PRACTICE_MANAGE_TAB_HEIGHT)
-    tabs: [PRACTICE_MANAGE_TAB_COUNT]Tab
-    tab_ids: [PRACTICE_MANAGE_TAB_COUNT]s32
-    tab_count: s32 = 0
-    // A selected tab that is no longer offered gives way to Installed.
-    selected_index: s32 = 0
-    for tab: cast(s32)0..PRACTICE_MANAGE_TAB_COUNT - 1 {
-        if !PracticeDownloadTabOffered(tab) {
-            continue
-        }
-        if tab == practice_manage_tab {
-            selected_index = tab_count
-        }
-        tab_ids[tab_count] = tab
-        tabs[tab_count] = Tab.{.label = PracticeDownloadTabLabel(tab)}
-        tab_count += 1
+    return AppParagraphHeight(PracticeDownloadDeleteText(app, practice), width, AppFontSize(), AppScale(3)) +
+    AppScale(8) + AppScale(48)
+}
+
+// Uninstall asks once, in place of the card's buttons: Cancel keeps the
+// copy, Uninstall frees it.
+PracticeCardDeleteQuestion :: (app: *InnerBreeze, practice: s32, x: s32, y: s32, width: s32) {
+    text := PracticeDownloadDeleteText(app, practice)
+    question_h := AppParagraphHeight(text, width, AppFontSize(), AppScale(3))
+    Text(app.ui.session, TextProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)question_h},
+            .text = text, .font = AppFontSize(), .align = cast(TextAlign)TextAlignCenter,
+            .wrap = cast(TextWrap)TextWrapAuto})
+    button_y := y + question_h + AppScale(8)
+    button_w := (width - AppScale(12)) / 2
+    if Button(app.ui.session, ButtonProps.{
+            .id = 17440 + practice,
+            .bounds = Rectangle.{cast(float32)x, cast(float32)button_y,
+                cast(float32)button_w, cast(float32)AppScale(48)},
+            .label = LocaleText("cancel_button"), .pill = true,
+            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        practice_delete_asked = -1
     }
-    // The selected tab is brought into view when the dialog opens; after
-    // that the tabs stay where a swipe leaves them.
-    bar := TabBar(app.ui.session, TabBarProps.{
-            .key = KeyHash("practices/downloads/tabs"),
-            .bounds = Rectangle.{content.x, content.y, content.width, cast(float32)tab_h},
-            .selected_index = selected_index, .min_tab_width = AppScale(44),
-            .max_tab_width = AppScale(220), .content_sized = true,
-            .scroll_offset = practice_manage_tab_scroll, .scale = MetricsScale(),
-            .focus_selected = opening}, tabs[:tab_count])
-    practice_manage_tab_scroll = bar.scroll_offset
-    if bar.selected_index >= 0 && bar.selected_index < tab_count {
-        PracticeDownloadSelectTab(app, tab_ids[bar.selected_index])
+    if Button(app.ui.session, ButtonProps.{
+            .id = 17450 + practice,
+            .bounds = Rectangle.{cast(float32)(x + width - button_w), cast(float32)button_y,
+                cast(float32)button_w, cast(float32)AppScale(48)},
+            .label = LocaleText("practice_uninstall"), .pill = true,
+            .disabled = practice_active(app) != null,
+            .tone = cast(ButtonTone)ButtonToneDanger, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+        practice_delete_asked = -1
+        PracticeContentRemove(practice)
     }
-    list_top := tab_h + AppScale(8)
-    list := Rectangle.{content.x, content.y + cast(float32)list_top, content.width,
-        content.height - cast(float32)list_top}
-    row_width := cast(s32)content.width - AppScale(10)
-    content_h: s32 = 0
-    measured := PracticeDownloadsContent(app, 0, *content_h, row_width, false, focus)
-    if app.practice_downloads_scroll < 0 {
-        app.practice_downloads_scroll = measured.focus_y
-    }
-    scroll := Scroll(app.ui.session, ScrollProps.{
-            .key = KeyHash("practices/downloads/scroll"), .bounds = list,
-            .content_height = content_h, .scroll_offset = app.practice_downloads_scroll})
-    app.practice_downloads_scroll = scroll.scroll_offset
-    areas: PracticeDownloadAreas
-    if scroll.opened {
-        y := cast(s32)scroll.content.y
-        areas = PracticeDownloadsContent(app, cast(s32)scroll.content.x, *y, row_width, true, -1)
-        End(app.ui.session)
-    }
-    PracticeDownloadDrop(app, scroll, areas, row_width)
-    End(app.ui.session)
 }

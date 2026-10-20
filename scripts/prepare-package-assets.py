@@ -26,7 +26,8 @@ if OUTPUT.exists():
     shutil.rmtree(OUTPUT)
 for name in ('inbe', 'lists', 'habits', 'practices', 'diary', 'lumi', 'leaderboard',
              'practice-whm', 'practice-meditation', 'practice-sunsalutation',
-             'practice-patterns', 'practice-taichi', 'practice-astral_projection') + NODE_APPS:
+             'practice-patterns', 'practice-taichi', 'practice-astral_projection',
+             'practice-workout') + NODE_APPS:
     (OUTPUT / name / 'assets').mkdir(parents=True)
 patterns = (
     'assets/mcp/*.json', 'assets/app/icon.png', 'assets/app/icon-sky-cradle.png',
@@ -38,6 +39,7 @@ patterns = (
     'assets/practices/sunsalutation/characters/*/*.png',
     'assets/practices/sunsalutation/voice/**/*', 'assets/practices/sunsalutation/voice-male/**/*',
     'assets/practices/astral_projection/**/*',
+    'assets/practices/workout/**/*',
     'assets/practices/taichi/**/*', 'assets/practices/guide/voice/**/*',
     'assets/sounds/*.ogg',
     'assets/habits/**/*', 'assets/lists/**/*', 'assets/diary/**/*', 'assets/lumi/**/*',
@@ -55,8 +57,9 @@ for file in sorted({p for pattern in patterns for p in ROOT.glob(pattern) if p.i
     owner = 'inbe'
     if path.startswith(('assets/practices/', 'assets/sounds/')):
         owner = 'practices'
-    # Each practice's pictures, banners included, ship only in its pack.
-    if path.startswith('assets/practices/'):
+    # Each practice's pictures ship only in its pack. Its banners ship with
+    # Practices, whose tabs show every practice before it is downloaded.
+    if path.startswith('assets/practices/') and '/banner-' not in path:
         practice = path.split('/')[2]
         owner = 'practice-' + practice
         if '/voice/' in path:

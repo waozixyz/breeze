@@ -1,0 +1,163 @@
+// The 7-Minute Workout's clock: ten seconds to get ready, then twelve
+// exercises of thirty seconds with a ten-second rest before each one after
+// the first, as in the circuit of Klika and Jordan (ACSM's Health & Fitness
+// Journal, 2013).
+#import "byte_text_linux"
+
+WORKOUT_EXERCISE_COUNT :: 12
+WORKOUT_PREPARE_MS :: 10000
+WORKOUT_WORK_MS :: 30000
+WORKOUT_REST_MS :: 10000
+// Ten seconds to get ready, twelve exercises and eleven rests: eight minutes.
+WORKOUT_TOTAL_MS :: 480000
+
+WORKOUT_PHASE_PREPARE :: 0
+WORKOUT_PHASE_WORK :: 1
+WORKOUT_PHASE_REST :: 2
+WORKOUT_PHASE_DONE :: 3
+
+// The exercises, in the circuit's order.
+WORKOUT_JUMPING_JACKS :: 0
+WORKOUT_WALL_SIT :: 1
+WORKOUT_PUSH_UPS :: 2
+WORKOUT_CRUNCHES :: 3
+WORKOUT_STEP_UPS :: 4
+WORKOUT_SQUATS :: 5
+WORKOUT_TRICEPS_DIPS :: 6
+WORKOUT_PLANK :: 7
+WORKOUT_HIGH_KNEES :: 8
+WORKOUT_LUNGES :: 9
+WORKOUT_PUSH_UP_ROTATION :: 10
+WORKOUT_SIDE_PLANK :: 11
+
+// The side plank holds each side for half of its time.
+WORKOUT_SIDE_SWITCH_MS :: WORKOUT_WORK_MS / 2
+
+// Where the workout is: getting ready for the first exercise, doing one,
+// resting before the next, or done. `exercise` is the one being done, or
+// the one coming next.
+WorkoutStep :: struct {
+    phase: s32
+    exercise: s32
+    elapsed_ms: s32
+    length_ms: s32
+}
+
+WorkoutStepAt :: (elapsed_ms: s64) -> WorkoutStep {
+    step: WorkoutStep
+    if elapsed_ms < 0 {
+        elapsed_ms = 0
+    }
+    if elapsed_ms < cast(s64)WORKOUT_PREPARE_MS {
+        step.phase = WORKOUT_PHASE_PREPARE
+        step.elapsed_ms = cast(s32)elapsed_ms
+        step.length_ms = WORKOUT_PREPARE_MS
+        return step
+    }
+    block := cast(s64)(WORKOUT_WORK_MS + WORKOUT_REST_MS)
+    into := elapsed_ms - cast(s64)WORKOUT_PREPARE_MS
+    index := into / block
+    within := into - index * block
+    if index >= cast(s64)WORKOUT_EXERCISE_COUNT ||
+    (index == cast(s64)(WORKOUT_EXERCISE_COUNT - 1) && within >= cast(s64)WORKOUT_WORK_MS) {
+        step.phase = WORKOUT_PHASE_DONE
+        step.exercise = WORKOUT_EXERCISE_COUNT - 1
+        return step
+    }
+    if within < cast(s64)WORKOUT_WORK_MS {
+        step.phase = WORKOUT_PHASE_WORK
+        step.exercise = cast(s32)index
+        step.elapsed_ms = cast(s32)within
+        step.length_ms = WORKOUT_WORK_MS
+        return step
+    }
+    step.phase = WORKOUT_PHASE_REST
+    step.exercise = cast(s32)index + 1
+    step.elapsed_ms = cast(s32)(within - cast(s64)WORKOUT_WORK_MS)
+    step.length_ms = WORKOUT_REST_MS
+    return step
+}
+
+// Whole seconds left in the step, counting a started second.
+WorkoutStepSecondsLeft :: (step: WorkoutStep) -> s32 {
+    left := step.length_ms - step.elapsed_ms
+    if left <= 0 {
+        return 0
+    }
+    return (left + 999) / 1000
+}
+
+// Moves the clock on while it runs; it stops at the end.
+WorkoutAdvance :: (elapsed_ms: s64, step_ms: s32, paused: bool) -> s64 {
+    if paused || step_ms <= 0 {
+        return elapsed_ms
+    }
+    next := elapsed_ms + cast(s64)step_ms
+    if next > cast(s64)WORKOUT_TOTAL_MS {
+        return cast(s64)WORKOUT_TOTAL_MS
+    }
+    return next
+}
+
+// Seconds of exercise done so far, without the getting ready or the rests.
+WorkoutExerciseSeconds :: (elapsed_ms: s64) -> s32 {
+    step := WorkoutStepAt(elapsed_ms)
+    if step.phase == WORKOUT_PHASE_PREPARE {
+        return 0
+    }
+    if step.phase == WORKOUT_PHASE_DONE {
+        return WORKOUT_EXERCISE_COUNT * WORKOUT_WORK_MS / 1000
+    }
+    done := step.exercise * WORKOUT_WORK_MS
+    if step.phase == WORKOUT_PHASE_WORK {
+        done += step.elapsed_ms
+    }
+    return done / 1000
+}
+
+WorkoutExerciseKey :: (exercise: s32) -> string {
+    keys: [WORKOUT_EXERCISE_COUNT]string = .["jumping_jacks", "wall_sit", "push_ups", "crunches",
+    "step_ups", "squats", "triceps_dips", "plank", "high_knees", "lunges", "push_up_rotation",
+    "side_plank"]
+    if exercise < 0 || exercise >= WORKOUT_EXERCISE_COUNT {
+        return ""
+    }
+    return keys[exercise]
+}
+
+// `prefix` and the exercise's key in `output`, such as "workout_name_plank".
+WorkoutKeyFor :: (prefix: string, exercise: s32, output: []u8) -> string {
+    key := WorkoutExerciseKey(exercise)
+    if key.count == 0 || prefix.count + key.count > output.count {
+        return ""
+    }
+    count: s64 = 0
+    for byte: prefix {
+        output[count] = byte
+        count += 1
+    }
+    for byte: key {
+        output[count] = byte
+        count += 1
+    }
+    return TextFromBytes(output[:count])
+}
+
+// The narrated line for the step: what is coming while getting ready or
+// resting, the exercise as it starts, and the switch halfway through the
+// side plank.
+WorkoutCueKey :: (step: WorkoutStep, output: []u8) -> string {
+    if step.phase == WORKOUT_PHASE_PREPARE {
+        return "workout_say_start"
+    }
+    if step.phase == WORKOUT_PHASE_REST {
+        return WorkoutKeyFor("workout_say_next_", step.exercise, output)
+    }
+    if step.phase == WORKOUT_PHASE_WORK {
+        if step.exercise == WORKOUT_SIDE_PLANK && step.elapsed_ms >= WORKOUT_SIDE_SWITCH_MS {
+            return "workout_say_switch"
+        }
+        return WorkoutKeyFor("workout_say_", step.exercise, output)
+    }
+    return ""
+}

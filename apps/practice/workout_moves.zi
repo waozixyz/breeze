@@ -1,0 +1,818 @@
+// How the 7-Minute Workout's figure moves: each exercise is a loop of key
+// poses, blended smoothly, and solved into the same skeleton the Tai Chi
+// figures use, so the flat Jade woman of tai_chi_flat.zi draws it.
+//
+// World axes as in tai_chi_solve.zi: +Y up, she faces +Z, her left is +X;
+// lengths are metres for her 1.65 m figure. Side 0 is her left, side 1 her
+// right.
+#import "math"
+#import, file "workout_rules.zi";
+#import, file "../../src/practices/tai_chi/tai_chi_math.zi";
+#import, file "../../src/practices/tai_chi/tai_chi_solve.zi";
+#import, file "../../src/practices/tai_chi/tai_chi_view.zi";
+#import, file "../../src/practices/tai_chi/tai_chi_flat.zi";
+#import, file "../../src/practices/tai_chi/tai_chi_rules.zi";
+
+WORKOUT_HEIGHT :: 1.65
+
+// Where a hand goes. ARM aims the arm from the shoulder: `at` is how far it
+// is raised from hanging (degrees; negative swings it back), its turn from
+// straight ahead toward the side (degrees) and its reach as a share of the
+// arm's length. The others are a point: in the world, or in the frame of
+// the pelvis or the head.
+WORKOUT_AT_ARM :: 0
+WORKOUT_AT_WORLD :: 1
+WORKOUT_AT_PELVIS :: 2
+WORKOUT_AT_HEAD :: 3
+
+WorkoutHand :: struct {
+    mode: s32
+    at: TaiChiVector3
+    // Where the elbow points, in the chest's frame, x toward her side.
+    pole: TaiChiVector3
+    // 1 lays the hand flat on what it rests on, fingers ahead.
+    flat: float64
+}
+
+WorkoutPose :: struct {
+    pelvis: TaiChiVector3
+    // Degrees: turn, forward lean, bend to her left, twist about the spine
+    // (positive turns her chest to her left), the chest's curl forward from
+    // the pelvis and the head's nod.
+    yaw: float64
+    lean: float64
+    bend: float64
+    twist: float64
+    curl: float64
+    head: float64
+    hands: [2]WorkoutHand
+    // Floor point under each ankle, yaw and pitch in degrees, lift.
+    feet: [2]TaiChiFootPose
+    // Where each knee points, in the pelvis's frame, x toward her side.
+    knees: [2]TaiChiVector3
+}
+
+WorkoutKey :: struct {
+    pose: WorkoutPose
+    hold_ms: s32
+    move_ms: s32
+}
+
+// --- Building poses --------------------------------------------------------------
+
+WorkoutStanding :: () -> WorkoutPose {
+    pose: WorkoutPose
+    pose.pelvis = TaiChiV3(0.0, 0.893, 0.0)
+    for side: cast(s32)0..1 {
+        pose.hands[side].mode = WORKOUT_AT_ARM
+        pose.hands[side].at = TaiChiV3(5.0, 60.0, 0.985)
+        pose.hands[side].pole = TaiChiV3(0.2, 0.0, -1.0)
+        pose.knees[side] = TaiChiV3(0.1, 0.0, 1.0)
+    }
+    WorkoutFeet(*pose, 0.09, 0.0, 5.0, 0.0, 0.0)
+    return pose
+}
+
+WorkoutBody :: (pose: *WorkoutPose, x: float64, y: float64, z: float64, yaw: float64, lean: float64,
+    bend: float64, twist: float64, curl: float64, head: float64) {
+    pose.pelvis = TaiChiV3(x, y, z)
+    pose.yaw = yaw
+    pose.lean = lean
+    pose.bend = bend
+    pose.twist = twist
+    pose.curl = curl
+    pose.head = head
+}
+
+WorkoutHandAt :: (pose: *WorkoutPose, side: s32, mode: s32, x: float64, y: float64, z: float64) {
+    pose.hands[side].mode = mode
+    pose.hands[side].at = TaiChiV3(x, y, z)
+}
+
+// Both hands alike: an arm aim for each, or points mirrored across her
+// middle.
+WorkoutHandsAt :: (pose: *WorkoutPose, mode: s32, x: float64, y: float64, z: float64) {
+    WorkoutHandAt(pose, 0, mode, x, y, z)
+    WorkoutHandAt(pose, 1, mode, ifx mode == WORKOUT_AT_ARM then x else -x, y, z)
+}
+
+WorkoutElbows :: (pose: *WorkoutPose, x: float64, y: float64, z: float64) {
+    pose.hands[0].pole = TaiChiV3(x, y, z)
+    pose.hands[1].pole = TaiChiV3(x, y, z)
+}
+
+WorkoutFlatHands :: (pose: *WorkoutPose, flat: float64) {
+    pose.hands[0].flat = flat
+    pose.hands[1].flat = flat
+}
+
+WorkoutFoot :: (pose: *WorkoutPose, side: s32, x: float64, z: float64, yaw: float64, pitch: float64,
+    lift: float64) {
+    pose.feet[side] = TaiChiFootPose.{.x = x, .z = z, .yaw = yaw, .pitch = pitch, .lift = lift}
+}
+
+// Both feet mirrored across her middle.
+WorkoutFeet :: (pose: *WorkoutPose, x: float64, z: float64, yaw: float64, pitch: float64, lift: float64) {
+    WorkoutFoot(pose, 0, x, z, yaw, pitch, lift)
+    WorkoutFoot(pose, 1, -x, z, -yaw, pitch, lift)
+}
+
+WorkoutKnees :: (pose: *WorkoutPose, x: float64, y: float64, z: float64) {
+    pose.knees[0] = TaiChiV3(x, y, z)
+    pose.knees[1] = TaiChiV3(x, y, z)
+}
+
+// The same pose on her other side.
+WorkoutMirror :: (pose: WorkoutPose) -> WorkoutPose {
+    mirrored := pose
+    mirrored.pelvis.x = -pose.pelvis.x
+    mirrored.yaw = -pose.yaw
+    mirrored.bend = -pose.bend
+    mirrored.twist = -pose.twist
+    for side: cast(s32)0..1 {
+        other := 1 - side
+        mirrored.hands[side] = pose.hands[other]
+        if pose.hands[other].mode != WORKOUT_AT_ARM {
+            mirrored.hands[side].at.x = -pose.hands[other].at.x
+        }
+        mirrored.feet[side] = pose.feet[other]
+        mirrored.feet[side].x = -pose.feet[other].x
+        mirrored.feet[side].yaw = -pose.feet[other].yaw
+        mirrored.knees[side] = pose.knees[other]
+    }
+    return mirrored
+}
+
+WorkoutKeyOf :: (pose: WorkoutPose, hold_ms: s32, move_ms: s32) -> WorkoutKey {
+    return WorkoutKey.{.pose = pose, .hold_ms = hold_ms, .move_ms = move_ms}
+}
+
+// --- The exercises ---------------------------------------------------------------
+
+WorkoutKeyCount :: (exercise: s32) -> s32 {
+    if exercise == WORKOUT_WALL_SIT || exercise == WORKOUT_PLANK {
+        return 1
+    }
+    if exercise == WORKOUT_STEP_UPS || exercise == WORKOUT_LUNGES {
+        return 4
+    }
+    if exercise == WORKOUT_PUSH_UP_ROTATION {
+        return 8
+    }
+    return 2
+}
+
+// Push-ups: hands under the shoulders, the body straight from heels to head.
+WorkoutPushUp :: (down: bool) -> WorkoutPose {
+    pose := WorkoutStanding()
+    if down {
+        WorkoutBody(*pose, 0.0, 0.245, 0.0, 0.0, 84.0, 0.0, 0.0, 0.0, -8.0)
+    } else {
+        WorkoutBody(*pose, 0.0, 0.41, 0.0, 0.0, 71.0, 0.0, 0.0, 0.0, -12.0)
+    }
+    WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.2, 0.035, 0.43)
+    WorkoutElbows(*pose, 0.55, -0.7, -0.35)
+    WorkoutFlatHands(*pose, 1.0)
+    WorkoutFeet(*pose, 0.09, -0.955, 0.0, -75.0, 0.0)
+    return pose
+}
+
+// Turned from the top of a push-up onto one hand, the other arm raised to
+// the ceiling: `side` is the hand she stays on.
+WorkoutRotation :: (side: s32) -> WorkoutPose {
+    pose := WorkoutPushUp(false)
+    WorkoutBody(*pose, 0.0, 0.5, -0.02, 0.0, 74.0, 0.0, -90.0, 0.0, -6.0)
+    WorkoutHandAt(*pose, 0, WORKOUT_AT_WORLD, 0.07, 0.035, 0.43)
+    WorkoutHandAt(*pose, 1, WORKOUT_AT_ARM, 180.0, 90.0, 0.99)
+    pose.hands[1].flat = 0.0
+    WorkoutFoot(*pose, 0, 0.0, -0.98, 0.0, -20.0, 0.0)
+    WorkoutFoot(*pose, 1, -0.02, -0.96, 0.0, -20.0, 0.1)
+    if side == 0 {
+        return pose
+    }
+    return WorkoutMirror(pose)
+}
+
+// The side plank on her right hand, raised, or with her hips let down.
+WorkoutSidePlank :: (raised: bool) -> WorkoutPose {
+    pose := WorkoutStanding()
+    if raised {
+        WorkoutBody(*pose, -0.13, 0.5, 0.0, 0.0, 0.0, -66.0, 0.0, 0.0, 0.0)
+        WorkoutHandAt(*pose, 0, WORKOUT_AT_WORLD, -0.47, 1.35, 0.0)
+    } else {
+        WorkoutBody(*pose, -0.16, 0.33, 0.0, 0.0, 0.0, -76.0, 0.0, 0.0, 6.0)
+        WorkoutHandAt(*pose, 0, WORKOUT_AT_PELVIS, 0.17, 0.05, 0.0)
+    }
+    WorkoutHandAt(*pose, 1, WORKOUT_AT_WORLD, -0.6, 0.035, 0.0)
+    pose.hands[1].flat = 1.0
+    WorkoutFoot(*pose, 1, 0.59, 0.0, 0.0, 0.0, 0.0)
+    WorkoutFoot(*pose, 0, 0.66, 0.0, 0.0, 0.0, 0.16)
+    return pose
+}
+
+WorkoutKeyframe :: (exercise: s32, index: s32) -> WorkoutKey {
+    pose := WorkoutStanding()
+    if exercise == WORKOUT_JUMPING_JACKS {
+        if index == 0 {
+            WorkoutHandsAt(*pose, WORKOUT_AT_ARM, 10.0, 88.0, 0.985)
+            WorkoutFeet(*pose, 0.075, 0.0, 5.0, 0.0, 0.0)
+            return WorkoutKeyOf(pose, 60, 380)
+        }
+        pose.pelvis.y = 0.872
+        WorkoutHandsAt(*pose, WORKOUT_AT_ARM, 168.0, 92.0, 0.99)
+        WorkoutFeet(*pose, 0.3, 0.0, 16.0, 0.0, 0.0)
+        return WorkoutKeyOf(pose, 60, 380)
+    }
+    if exercise == WORKOUT_WALL_SIT {
+        WorkoutBody(*pose, 0.0, 0.52, -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, -4.0)
+        WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.15, 0.565, 0.2)
+        WorkoutFlatHands(*pose, 1.0)
+        WorkoutFeet(*pose, 0.12, 0.29, 6.0, 0.0, 0.0)
+        return WorkoutKeyOf(pose, 4000, 0)
+    }
+    if exercise == WORKOUT_PUSH_UPS {
+        return WorkoutKeyOf(WorkoutPushUp(index == 1), ifx index == 0 then 250 else 120, 850)
+    }
+    if exercise == WORKOUT_CRUNCHES {
+        WorkoutBody(*pose, 0.0, 0.1, 0.0, 0.0, -90.0, 0.0, 0.0, ifx index == 0 then 0.0 else 38.0,
+            ifx index == 0 then 10.0 else 16.0)
+        WorkoutHandsAt(*pose, WORKOUT_AT_ARM, ifx index == 0 then 22.0 else 38.0, 6.0, 0.98)
+        WorkoutFeet(*pose, 0.1, 0.47, 4.0, 0.0, 0.0)
+        WorkoutKnees(*pose, 0.08, 0.0, 1.0)
+        return WorkoutKeyOf(pose, ifx index == 0 then 300 else 250, 850)
+    }
+    if exercise == WORKOUT_STEP_UPS {
+        // Up with the right foot, then the left, and down the same way.
+        if index == 0 {
+            pose.pelvis.z = -0.05
+            WorkoutFeet(*pose, 0.09, -0.05, 4.0, 0.0, 0.0)
+        } else if index == 1 {
+            WorkoutBody(*pose, 0.0, 0.93, 0.1, 0.0, 12.0, 0.0, 0.0, 0.0, -10.0)
+            WorkoutFoot(*pose, 0, 0.09, -0.05, 4.0, -28.0, 0.0)
+            WorkoutFoot(*pose, 1, -0.09, 0.42, -4.0, 0.0, WORKOUT_BENCH_TOP)
+            WorkoutHandAt(*pose, 0, WORKOUT_AT_ARM, 22.0, 10.0, 0.9)
+            WorkoutHandAt(*pose, 1, WORKOUT_AT_ARM, -18.0, 20.0, 0.92)
+        } else if index == 2 {
+            WorkoutBody(*pose, 0.0, 0.893 + WORKOUT_BENCH_TOP, 0.44, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            WorkoutFeet(*pose, 0.09, 0.45, 4.0, 0.0, WORKOUT_BENCH_TOP)
+        } else {
+            WorkoutBody(*pose, 0.0, 0.93, 0.12, 0.0, 6.0, 0.0, 0.0, 0.0, -10.0)
+            WorkoutFoot(*pose, 0, 0.09, 0.45, 4.0, 0.0, WORKOUT_BENCH_TOP)
+            WorkoutFoot(*pose, 1, -0.09, -0.05, -4.0, -10.0, 0.0)
+            WorkoutHandAt(*pose, 0, WORKOUT_AT_ARM, -15.0, 20.0, 0.92)
+            WorkoutHandAt(*pose, 1, WORKOUT_AT_ARM, 18.0, 10.0, 0.9)
+        }
+        return WorkoutKeyOf(pose, 120, 520)
+    }
+    if exercise == WORKOUT_SQUATS {
+        if index == 1 {
+            WorkoutBody(*pose, 0.0, 0.5, -0.22, 0.0, 38.0, 0.0, 0.0, 6.0, -26.0)
+            WorkoutHandsAt(*pose, WORKOUT_AT_ARM, 82.0, 8.0, 0.97)
+            WorkoutKnees(*pose, 0.25, 0.0, 1.0)
+        }
+        WorkoutFeet(*pose, 0.13, 0.0, 10.0, 0.0, 0.0)
+        return WorkoutKeyOf(pose, 150, 950)
+    }
+    if exercise == WORKOUT_TRICEPS_DIPS {
+        if index == 0 {
+            WorkoutBody(*pose, 0.0, 0.535, -0.21, 0.0, -5.0, 0.0, 0.0, 0.0, 0.0)
+        } else {
+            WorkoutBody(*pose, 0.0, 0.34, -0.19, 0.0, -5.0, 0.0, 0.0, 0.0, 4.0)
+        }
+        WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.17, WORKOUT_BENCH_TOP + 0.035, -0.27)
+        WorkoutElbows(*pose, 0.1, 0.0, -1.0)
+        WorkoutFlatHands(*pose, 1.0)
+        WorkoutFeet(*pose, 0.12, 0.3, 4.0, 0.0, 0.0)
+        return WorkoutKeyOf(pose, 200, 850)
+    }
+    if exercise == WORKOUT_PLANK {
+        WorkoutBody(*pose, 0.0, 0.256, 0.0, 0.0, 83.0, 0.0, 0.0, 0.0, -14.0)
+        WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.11, 0.045, 0.66)
+        WorkoutElbows(*pose, 0.1, -0.3, 1.0)
+        WorkoutFlatHands(*pose, 1.0)
+        WorkoutFeet(*pose, 0.09, -0.995, 0.0, -75.0, 0.0)
+        return WorkoutKeyOf(pose, 4000, 0)
+    }
+    if exercise == WORKOUT_HIGH_KNEES {
+        WorkoutBody(*pose, 0.0, 0.915, 0.0, 0.0, -3.0, 0.0, 0.0, 0.0, 0.0)
+        WorkoutElbows(*pose, 0.1, -0.4, -1.0)
+        WorkoutFoot(*pose, 0, 0.09, -0.02, 5.0, -18.0, 0.0)
+        WorkoutFoot(*pose, 1, -0.09, 0.24, -5.0, -25.0, 0.3)
+        WorkoutHandAt(*pose, 0, WORKOUT_AT_ARM, 55.0, 5.0, 0.62)
+        WorkoutHandAt(*pose, 1, WORKOUT_AT_ARM, -35.0, 10.0, 0.7)
+        if index == 1 {
+            pose = WorkoutMirror(pose)
+        }
+        return WorkoutKeyOf(pose, 0, 300)
+    }
+    if exercise == WORKOUT_LUNGES {
+        WorkoutHandsAt(*pose, WORKOUT_AT_PELVIS, 0.165, 0.07, 0.0)
+        WorkoutElbows(*pose, 0.6, 0.0, -0.8)
+        if index == 1 || index == 3 {
+            WorkoutBody(*pose, 0.0, 0.52, -0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+            WorkoutFoot(*pose, 1, -0.1, 0.42, -4.0, 0.0, 0.0)
+            WorkoutFoot(*pose, 0, 0.1, -0.48, 4.0, -45.0, 0.0)
+            if index == 3 {
+                pose = WorkoutMirror(pose)
+            }
+        } else {
+            WorkoutFeet(*pose, 0.09, 0.0, 4.0, 0.0, 0.0)
+        }
+        return WorkoutKeyOf(pose, 150, 650)
+    }
+    if exercise == WORKOUT_PUSH_UP_ROTATION {
+        // Down and up, turn onto the left hand, back, down and up, turn onto
+        // the right hand.
+        if index == 3 {
+            return WorkoutKeyOf(WorkoutRotation(0), 450, 850)
+        }
+        if index == 7 {
+            return WorkoutKeyOf(WorkoutRotation(1), 450, 850)
+        }
+        down := index == 1 || index == 5
+        return WorkoutKeyOf(WorkoutPushUp(down), ifx down then 100 else 150, 800)
+    }
+    return WorkoutKeyOf(WorkoutSidePlank(index == 1), 0, 900)
+}
+
+// --- Props -------------------------------------------------------------------------
+
+// The bench for step-ups and dips: its top's height and where its top lies
+// along her facing, ahead of her for step-ups and behind her for dips.
+WORKOUT_BENCH_TOP :: 0.42
+
+WorkoutProp :: struct {
+    bench: bool
+    bench_near: float64
+    bench_far: float64
+    wall: bool
+    wall_at: float64
+}
+
+WorkoutPropFor :: (exercise: s32) -> WorkoutProp {
+    prop: WorkoutProp
+    if exercise == WORKOUT_STEP_UPS {
+        prop.bench = true
+        prop.bench_near = 0.22
+        prop.bench_far = 0.72
+    } else if exercise == WORKOUT_TRICEPS_DIPS {
+        prop.bench = true
+        prop.bench_near = -0.24
+        prop.bench_far = -0.74
+    } else if exercise == WORKOUT_WALL_SIT {
+        prop.wall = true
+        prop.wall_at = -0.225
+    }
+    return prop
+}
+
+// --- Playing a loop --------------------------------------------------------------
+
+WorkoutLerpAngle :: (a: float64, b: float64, u: float64) -> float64 {
+    return a + (b - a) * u
+}
+
+WorkoutLerpFoot :: (a: TaiChiFootPose, b: TaiChiFootPose, u: float64) -> TaiChiFootPose {
+    foot: TaiChiFootPose
+    foot.x = a.x + (b.x - a.x) * u
+    foot.z = a.z + (b.z - a.z) * u
+    foot.yaw = a.yaw + (b.yaw - a.yaw) * u
+    foot.pitch = a.pitch + (b.pitch - a.pitch) * u
+    foot.lift = a.lift + (b.lift - a.lift) * u
+    return foot
+}
+
+// The trunk of a pose: its frames and the points the limbs hang from.
+WorkoutTrunk :: struct {
+    pelvis_quat: TaiChiQuaternion
+    chest_quat: TaiChiQuaternion
+    head_quat: TaiChiQuaternion
+    spine1: TaiChiVector3
+    chest: TaiChiVector3
+    neck_base: TaiChiVector3
+    shoulder_center: TaiChiVector3
+    shoulders: [2]TaiChiVector3
+    head_center: TaiChiVector3
+    head_top: TaiChiVector3
+}
+
+WorkoutTrunkFor :: (pose: *WorkoutPose, rig: *TaiChiRig) -> WorkoutTrunk {
+    trunk: WorkoutTrunk
+    pelvis_quat := TaiChiBodyQuat(pose.yaw * TAI_CHI_DEGREE, pose.lean * TAI_CHI_DEGREE, pose.bend * TAI_CHI_DEGREE)
+    pelvis_quat = TaiChiMultiply(pelvis_quat, TaiChiAxisAngle(TaiChiV3(0.0, 1.0, 0.0), pose.twist * TAI_CHI_DEGREE * 0.35))
+    trunk.pelvis_quat = pelvis_quat
+    curl_share: [3]float64 = .[0.3, 0.65, 1.0]
+    twist_share: [3]float64 = .[0.55, 0.85, 1.0]
+    origin := pose.pelvis
+    quat := pelvis_quat
+    for index: cast(s32)0..2 {
+        quat = TaiChiBodyQuat(pose.yaw * TAI_CHI_DEGREE, pose.lean * TAI_CHI_DEGREE, pose.bend * TAI_CHI_DEGREE)
+        quat = TaiChiMultiply(quat, TaiChiAxisAngle(TaiChiV3(0.0, 1.0, 0.0), pose.twist * TAI_CHI_DEGREE * twist_share[index]))
+        quat = TaiChiMultiply(quat, TaiChiAxisAngle(TaiChiV3(1.0, 0.0, 0.0), pose.curl * TAI_CHI_DEGREE * curl_share[index]))
+        if index == 1 {
+            trunk.spine1 = origin
+        }
+        if index == 2 {
+            trunk.chest = origin
+        }
+        origin = TaiChiAdd3(origin, TaiChiRotate(TaiChiV3(0.0, rig.spine[index], 0.0), quat))
+    }
+    trunk.chest_quat = quat
+    trunk.neck_base = origin
+    trunk.shoulder_center = TaiChiAdd3(origin, TaiChiRotate(TaiChiV3(0.0, -rig.shoulder_drop, 0.0), quat))
+    for side: cast(s32)0..1 {
+        trunk.shoulders[side] = TaiChiAdd3(trunk.shoulder_center,
+            TaiChiRotate(TaiChiV3(TaiChiSideSign(side) * rig.shoulder_half_width, 0.0, -0.004 * rig.height), quat))
+    }
+    trunk.head_quat = TaiChiMultiply(quat, TaiChiAxisAngle(TaiChiV3(1.0, 0.0, 0.0), pose.head * TAI_CHI_DEGREE))
+    neck_quat := TaiChiSlerp(quat, trunk.head_quat, 0.5)
+    pivot := TaiChiAdd3(origin, TaiChiRotate(TaiChiV3(0.0, rig.neck, 0.0), neck_quat))
+    trunk.head_center = TaiChiAdd3(pivot, TaiChiRotate(TaiChiV3(0.0, 0.065 * rig.height, 0.012 * rig.height), trunk.head_quat))
+    trunk.head_top = TaiChiAdd3(pivot, TaiChiRotate(TaiChiV3(0.0, rig.head_height, 0.0), trunk.head_quat))
+    return trunk
+}
+
+// The arm's direction from its shoulder, in the chest's frame.
+WorkoutArmDirection :: (side: s32, raise: float64, turn: float64) -> TaiChiVector3 {
+    r := raise * TAI_CHI_DEGREE
+    t := turn * TAI_CHI_DEGREE
+    return TaiChiV3(TaiChiSideSign(side) * Sin(r) * Sin(t), -Cos(r), Sin(r) * Cos(t))
+}
+
+WorkoutConjugate :: (q: TaiChiQuaternion) -> TaiChiQuaternion {
+    return TaiChiQuaternion.{.x = -q.x, .y = -q.y, .z = -q.z, .w = q.w}
+}
+
+// Where a hand reaches in the world.
+WorkoutHandTarget :: (pose: *WorkoutPose, trunk: *WorkoutTrunk, side: s32, rig: *TaiChiRig) -> TaiChiVector3 {
+    hand := pose.hands[side]
+    if hand.mode == WORKOUT_AT_WORLD {
+        return hand.at
+    }
+    if hand.mode == WORKOUT_AT_PELVIS {
+        return TaiChiAdd3(pose.pelvis, TaiChiRotate(hand.at, trunk.pelvis_quat))
+    }
+    if hand.mode == WORKOUT_AT_HEAD {
+        return TaiChiAdd3(trunk.head_center, TaiChiRotate(hand.at, trunk.head_quat))
+    }
+    direction := TaiChiRotate(WorkoutArmDirection(side, hand.at.x, hand.at.y), trunk.chest_quat)
+    return TaiChiAddScaled3(trunk.shoulders[side], direction, hand.at.z * rig.arm_length)
+}
+
+// A hand target as an arm aim, for blending hands placed different ways.
+WorkoutAimOf :: (pose: *WorkoutPose, side: s32, rig: *TaiChiRig) -> TaiChiVector3 {
+    if pose.hands[side].mode == WORKOUT_AT_ARM {
+        return pose.hands[side].at
+    }
+    trunk := WorkoutTrunkFor(pose, rig)
+    local := TaiChiRotate(TaiChiSub3(WorkoutHandTarget(pose, *trunk, side, rig), trunk.shoulders[side]),
+        WorkoutConjugate(trunk.chest_quat))
+    reach := TaiChiLength3(local)
+    if reach < 0.0001 {
+        return TaiChiV3(0.0, 0.0, 0.0)
+    }
+    direction := TaiChiScale3(local, 1.0 / reach)
+    raise := Acos(TaiChiClamp(-direction.y, -1.0, 1.0)) / TAI_CHI_DEGREE
+    turn := Atan2(TaiChiSideSign(side) * direction.x, direction.z) / TAI_CHI_DEGREE
+    return TaiChiV3(raise, turn, reach / rig.arm_length)
+}
+
+WorkoutBlend :: (a: *WorkoutPose, b: *WorkoutPose, u: float64, rig: *TaiChiRig) -> WorkoutPose {
+    pose := a.*
+    pose.pelvis = TaiChiLerp3(a.pelvis, b.pelvis, u)
+    pose.yaw = WorkoutLerpAngle(a.yaw, b.yaw, u)
+    pose.lean = WorkoutLerpAngle(a.lean, b.lean, u)
+    pose.bend = WorkoutLerpAngle(a.bend, b.bend, u)
+    pose.twist = WorkoutLerpAngle(a.twist, b.twist, u)
+    pose.curl = WorkoutLerpAngle(a.curl, b.curl, u)
+    pose.head = WorkoutLerpAngle(a.head, b.head, u)
+    for side: cast(s32)0..1 {
+        from := a.hands[side]
+        to := b.hands[side]
+        pose.hands[side].pole = TaiChiLerp3(from.pole, to.pole, u)
+        pose.hands[side].flat = from.flat + (to.flat - from.flat) * u
+        if from.mode == to.mode {
+            pose.hands[side].at = TaiChiLerp3(from.at, to.at, u)
+        } else {
+            // Placed different ways, the hand swings along an arc from the
+            // shoulder instead of cutting through the body.
+            aim_from := WorkoutAimOf(a, side, rig)
+            aim_to := WorkoutAimOf(b, side, rig)
+            turn := aim_to.y - aim_from.y
+            while turn > 180.0 {
+                turn -= 360.0
+            }
+            while turn < -180.0 {
+                turn += 360.0
+            }
+            pose.hands[side].mode = WORKOUT_AT_ARM
+            pose.hands[side].at = TaiChiV3(aim_from.x + (aim_to.x - aim_from.x) * u, aim_from.y + turn * u,
+                aim_from.z + (aim_to.z - aim_from.z) * u)
+        }
+        pose.feet[side] = WorkoutLerpFoot(a.feet[side], b.feet[side], u)
+        pose.knees[side] = TaiChiLerp3(a.knees[side], b.knees[side], u)
+    }
+    return pose
+}
+
+// A little jump while the feet move, for jumping jacks and high knees.
+WorkoutHop :: (exercise: s32) -> float64 {
+    if exercise == WORKOUT_JUMPING_JACKS {
+        return 0.07
+    }
+    if exercise == WORKOUT_HIGH_KNEES {
+        return 0.035
+    }
+    return 0.0
+}
+
+WorkoutLift :: (pose: *WorkoutPose, height: float64) {
+    pose.pelvis.y += height
+    for side: cast(s32)0..1 {
+        pose.feet[side].lift += height
+        if pose.hands[side].mode == WORKOUT_AT_WORLD {
+            pose.hands[side].at.y += height
+        }
+    }
+}
+
+// A held pose breathes: the chest rises a little every four seconds.
+WorkoutBreathe :: (pose: *WorkoutPose, time_ms: s64) {
+    phase := cast(float64)(time_ms % 4000) / 4000.0 * TAI_CHI_PI * 2.0
+    pose.curl -= Sin(phase) * 1.2
+    pose.pelvis.y += Sin(phase) * 0.003
+}
+
+// The side plank holds her right side, then her left; she lifts at each
+// start and lowers before the switch and the end.
+WorkoutSidePlankAt :: (time_ms: s64, rig: *TaiChiRig) -> WorkoutPose {
+    half := cast(s64)WORKOUT_SIDE_SWITCH_MS
+    side := ifx time_ms >= half then 1 else 0
+    local := time_ms % half
+    lowered := WorkoutSidePlank(false)
+    raised := WorkoutSidePlank(true)
+    u: float64 = 1.0
+    if local < 900 {
+        u = cast(float64)local / 900.0
+    } else if local > half - 900 {
+        u = cast(float64)(half - local) / 900.0
+    }
+    pose := WorkoutBlend(*lowered, *raised, TaiChiSmoothstep(TaiChiClamp(u, 0.0, 1.0)), rig)
+    if u >= 1.0 {
+        WorkoutBreathe(*pose, local)
+    }
+    if side == 1 {
+        pose = WorkoutMirror(pose)
+    }
+    return pose
+}
+
+// The exercise's pose `time_ms` into its loop.
+WorkoutPoseAt :: (exercise: s32, time_ms: s64, rig: *TaiChiRig) -> WorkoutPose {
+    if exercise == WORKOUT_SIDE_PLANK {
+        return WorkoutSidePlankAt(time_ms, rig)
+    }
+    count := WorkoutKeyCount(exercise)
+    if count == 1 {
+        pose := WorkoutKeyframe(exercise, 0).pose
+        WorkoutBreathe(*pose, time_ms)
+        return pose
+    }
+    period: s64 = 0
+    for index: cast(s32)0..count - 1 {
+        key := WorkoutKeyframe(exercise, index)
+        period += cast(s64)(key.hold_ms + key.move_ms)
+    }
+    t := ifx period > 0 then time_ms % period else 0
+    for index: cast(s32)0..count - 1 {
+        key := WorkoutKeyframe(exercise, index)
+        if t < cast(s64)key.hold_ms {
+            return key.pose
+        }
+        t -= cast(s64)key.hold_ms
+        if t < cast(s64)key.move_ms {
+            next := WorkoutKeyframe(exercise, (index + 1) % count)
+            u := cast(float64)t / cast(float64)key.move_ms
+            pose := WorkoutBlend(*key.pose, *next.pose, TaiChiSmoothstep(u), rig)
+            WorkoutLift(*pose, WorkoutHop(exercise) * Sin(u * TAI_CHI_PI))
+            return pose
+        }
+        t -= cast(s64)key.move_ms
+    }
+    return WorkoutKeyframe(exercise, 0).pose
+}
+
+// The pose that waits during a rest: the next exercise's first one.
+WorkoutRestPose :: (exercise: s32, time_ms: s64, rig: *TaiChiRig) -> WorkoutPose {
+    if exercise == WORKOUT_SIDE_PLANK {
+        pose := WorkoutSidePlank(false)
+        WorkoutBreathe(*pose, time_ms)
+        return pose
+    }
+    pose := WorkoutKeyframe(exercise, 0).pose
+    WorkoutBreathe(*pose, time_ms)
+    return pose
+}
+
+// --- Solving ---------------------------------------------------------------------
+
+WorkoutRig :: () -> TaiChiRig {
+    return TaiChiRigMake(WORKOUT_HEIGHT, 0.102, 0.054)
+}
+
+WorkoutSolve :: (pose: *WorkoutPose, rig: *TaiChiRig) -> TaiChiSolved {
+    solved: TaiChiSolved
+    trunk := WorkoutTrunkFor(pose, rig)
+    solved.pelvis = pose.pelvis
+    solved.pelvis_quat = trunk.pelvis_quat
+    solved.spine1 = trunk.spine1
+    solved.chest = trunk.chest
+    solved.chest_quat = trunk.chest_quat
+    solved.neck_base = trunk.neck_base
+    solved.shoulder_center = trunk.shoulder_center
+    solved.head_quat = trunk.head_quat
+    solved.head_center = trunk.head_center
+    solved.head_top = trunk.head_top
+    solved.load = 0.5
+    for side: cast(s32)0..1 {
+        hand := pose.hands[side]
+        target := WorkoutHandTarget(pose, *trunk, side, rig)
+        shoulder := trunk.shoulders[side]
+        // Long reaches draw the shoulder a little toward the hand.
+        reach := TaiChiDistance3(target, shoulder)
+        excess := TaiChiMax(0.0, reach - rig.arm_length * 0.92)
+        shoulder = TaiChiAddScaled3(shoulder, TaiChiNormalize3(TaiChiSub3(target, shoulder)),
+            TaiChiMin(excess * 0.4, 0.03 * rig.height))
+        sign := TaiChiSideSign(side)
+        pole := TaiChiRotate(TaiChiV3(sign * hand.pole.x, hand.pole.y, hand.pole.z), trunk.chest_quat)
+        arm := TaiChiSolveTwoBone(shoulder, target, rig.upper_arm, rig.fore_arm, pole)
+        solved.shoulders[side] = shoulder
+        solved.elbows[side] = arm.middle
+        solved.wrists[side] = arm.end
+        // A hanging hand carries on from the forearm with its palm turned in;
+        // a resting one lies flat, fingers ahead.
+        along := TaiChiNormalize3(TaiChiSub3(arm.end, arm.middle))
+        inward := TaiChiRotate(TaiChiV3(-sign, 0.0, 0.25), trunk.chest_quat)
+        ahead := TaiChiForwardOf(pose.yaw * TAI_CHI_DEGREE)
+        fingers := TaiChiNormalize3(TaiChiLerp3(along, ahead, hand.flat))
+        palm := TaiChiNormalize3(TaiChiLerp3(inward, TaiChiV3(0.0, -1.0, 0.0), hand.flat))
+        hand_quat := TaiChiFrameQuat(TaiChiScale3(fingers, -1.0), palm, inward, true)
+        solved.hand_quats[side] = hand_quat
+        solved.palms[side] = TaiChiAddScaled3(TaiChiAddScaled3(arm.end, fingers, rig.palm_offset), palm, 0.008 * rig.height)
+    }
+    for side: cast(s32)0..1 {
+        foot_pose := pose.feet[side]
+        foot_pose.x = foot_pose.x / rig.scale
+        foot_pose.z = foot_pose.z / rig.scale
+        foot_pose.lift = foot_pose.lift / rig.scale
+        foot_pose.yaw = (foot_pose.yaw + pose.yaw) * TAI_CHI_DEGREE
+        foot_pose.pitch = foot_pose.pitch * TAI_CHI_DEGREE
+        foot := TaiChiPlaceFoot(foot_pose, rig)
+        hip := TaiChiAdd3(pose.pelvis, TaiChiHipOffset(side, trunk.pelvis_quat, rig))
+        knee := pose.knees[side]
+        pole := TaiChiRotate(TaiChiV3(TaiChiSideSign(side) * knee.x, knee.y, knee.z), trunk.pelvis_quat)
+        leg := TaiChiSolveTwoBone(hip, foot.ankle, rig.thigh, rig.shin, pole)
+        // If the leg could not reach, the foot hangs from the real ankle.
+        offset := TaiChiSub3(leg.end, foot.ankle)
+        solved.hips[side] = hip
+        solved.knees[side] = leg.middle
+        solved.ankles[side] = leg.end
+        solved.heels[side] = TaiChiAdd3(foot.heel, offset)
+        solved.balls[side] = TaiChiAdd3(foot.ball, offset)
+        solved.toes[side] = TaiChiAdd3(foot.toe_tip, offset)
+        solved.foot_quats[side] = foot.quat
+        solved.toes_quats[side] = foot.toes_quat
+    }
+    solved.com = TaiChiLerp3(pose.pelvis, trunk.shoulder_center, 0.35)
+    solved.balance_target = solved.com
+    return solved
+}
+
+// --- Looking at her ----------------------------------------------------------------
+
+// Each exercise is seen from where it reads best: from the front for jumping
+// jacks and the side plank, from her right side for the rest.
+WorkoutFramingFor :: (exercise: s32) -> TaiChiFraming {
+    yaws: [WORKOUT_EXERCISE_COUNT]float64 = .[-22.0, -78.0, -83.0, -83.0, -90.0, -48.0, -90.0, -83.0,
+    -45.0, -80.0, -38.0, 0.0]
+    framing: TaiChiFraming
+    index := exercise
+    if index < 0 || index >= WORKOUT_EXERCISE_COUNT {
+        index = 0
+    }
+    framing.camera.yaw = yaws[index] * TAI_CHI_DEGREE
+    framing.camera.tilt = 7.0 * TAI_CHI_DEGREE
+    framing.camera.center = TaiChiV3(0.0, 0.0, 0.0)
+    framing.view_height = 2.35
+    framing.view_center = 1.0
+    if exercise == WORKOUT_STEP_UPS {
+        framing.camera.center = TaiChiV3(0.0, 0.0, 0.2)
+        framing.view_height = 2.55
+        framing.view_center = 1.12
+    }
+    if exercise == WORKOUT_PUSH_UPS || exercise == WORKOUT_CRUNCHES || exercise == WORKOUT_PLANK ||
+    exercise == WORKOUT_PUSH_UP_ROTATION {
+        framing.view_height = 2.1
+        framing.view_center = 0.72
+    }
+    if exercise == WORKOUT_SIDE_PLANK {
+        framing.view_center = 0.85
+    }
+    return framing
+}
+
+// --- Painting the props --------------------------------------------------------------
+
+// A filled polygon of world points, seen through the view, added to the
+// frame as the flat painter adds its own.
+WorkoutPropFill :: (frame: *TaiChiFlatFrame, view: *TaiChiFlatView, corners: []TaiChiVector3, color: u32) {
+    if frame.op_count >= TAI_CHI_FLAT_OP_CAPACITY ||
+    frame.point_count + cast(s32)corners.count > TAI_CHI_FLAT_POINT_CAPACITY {
+        return
+    }
+    op: TaiChiFlatOp
+    op.kind = TAI_CHI_FLAT_FILL
+    op.color = color
+    op.alpha = 1.0
+    op.first = frame.point_count
+    op.count = cast(s32)corners.count
+    for corner: corners {
+        frame.points[frame.point_count] = TaiChiProject(view, corner)
+        frame.point_count += 1
+    }
+    frame.ops[frame.op_count] = op
+    frame.op_count += 1
+}
+
+// The faces of a box that turn toward the viewer, each a flat tone: lighter
+// on top, darker on the sides.
+WorkoutPropBox :: (frame: *TaiChiFlatFrame, view: *TaiChiFlatView, low: TaiChiVector3, high: TaiChiVector3,
+    top: u32, front: u32, side: u32) {
+    if TaiChiDot3(TaiChiV3(0.0, 1.0, 0.0), view.toward) > 0.0 {
+        WorkoutPropQuad(frame, view, TaiChiV3(low.x, high.y, low.z), TaiChiV3(high.x, high.y, low.z),
+            TaiChiV3(high.x, high.y, high.z), TaiChiV3(low.x, high.y, high.z), top)
+    }
+    z := ifx view.toward.z > 0.0 then high.z else low.z
+    if TaiChiAbs(view.toward.z) > 0.02 {
+        WorkoutPropQuad(frame, view, TaiChiV3(low.x, low.y, z), TaiChiV3(high.x, low.y, z),
+            TaiChiV3(high.x, high.y, z), TaiChiV3(low.x, high.y, z), front)
+    }
+    x := ifx view.toward.x > 0.0 then high.x else low.x
+    if TaiChiAbs(view.toward.x) > 0.02 {
+        WorkoutPropQuad(frame, view, TaiChiV3(x, low.y, low.z), TaiChiV3(x, low.y, high.z),
+            TaiChiV3(x, high.y, high.z), TaiChiV3(x, high.y, low.z), side)
+    }
+}
+
+WorkoutPropQuad :: (frame: *TaiChiFlatFrame, view: *TaiChiFlatView, a: TaiChiVector3, b: TaiChiVector3,
+    c: TaiChiVector3, d: TaiChiVector3, color: u32) {
+    corners: [4]TaiChiVector3
+    corners[0] = a
+    corners[1] = b
+    corners[2] = c
+    corners[3] = d
+    WorkoutPropFill(frame, view, corners[:], color)
+}
+
+// The bench or the wall the exercise needs, behind her, in the art's earth
+// brown and mist; `dark` picks tones for the night theme.
+WorkoutPaintProps :: (frame: *TaiChiFlatFrame, exercise: s32, camera: TaiChiCamera, dark: bool) {
+    frame.op_count = 0
+    frame.point_count = 0
+    prop := WorkoutPropFor(exercise)
+    view: TaiChiFlatView
+    TaiChiFlatViewSet(*view, camera)
+    if prop.wall {
+        face: u32 = ifx dark then 0x31444a else 0xd3e2dd
+        edge: u32 = ifx dark then 0x26363b else 0xb6ccc5
+        WorkoutPropBox(frame, *view, TaiChiV3(-0.55, 0.0, prop.wall_at - 0.08), TaiChiV3(0.55, 1.95, prop.wall_at),
+            edge, face, edge)
+    }
+    if !prop.bench {
+        return
+    }
+    top: u32 = ifx dark then 0x9a7556 else 0x8c6448
+    side: u32 = ifx dark then 0x7a5a41 else 0x6e4c36
+    leg: u32 = ifx dark then 0x6a4d38 else 0x5c3f2d
+    near := TaiChiMin(prop.bench_near, prop.bench_far)
+    far := TaiChiMax(prop.bench_near, prop.bench_far)
+    half: float64 = 0.3
+    slab: float64 = 0.045
+    // The legs farther from the viewer first.
+    xs: [2]float64 = .[-half + 0.03, half - 0.07]
+    zs: [2]float64 = .[near + 0.03, far - 0.07]
+    for pass: cast(s32)0..1 {
+        for xi: cast(s32)0..1 {
+            for zi: cast(s32)0..1 {
+                point := TaiChiV3(xs[xi] + 0.02, 0.0, zs[zi] + 0.02)
+                behind := TaiChiDepth(*view, point) < TaiChiDepth(*view, TaiChiV3(0.0, 0.0, (near + far) / 2.0))
+                if (pass == 0) == behind {
+                    WorkoutPropBox(frame, *view, TaiChiV3(xs[xi], 0.0, zs[zi]),
+                        TaiChiV3(xs[xi] + 0.04, WORKOUT_BENCH_TOP - slab, zs[zi] + 0.04), leg, leg, leg)
+                }
+            }
+        }
+    }
+    WorkoutPropBox(frame, *view, TaiChiV3(-half, WORKOUT_BENCH_TOP - slab, near), TaiChiV3(half, WORKOUT_BENCH_TOP, far),
+        top, side, side)
+}
