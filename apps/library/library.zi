@@ -39,6 +39,8 @@ frame: AppUiFrame;
 view: s32 = LIBRARY_SHELF;
 book: s32;
 chapter: s32 = 1;
+// The view a chapter was opened from, where Back returns.
+came_from: s32 = LIBRARY_SHELF;
 loaded_account: string;
 loaded: bool;
 // Each view keeps its own place.
@@ -79,6 +81,7 @@ SavedChapter :: (index: s32) -> s32 {
 }
 
 Open :: (index: s32, number: s32) {
+    if view != LIBRARY_CHAPTER { came_from = view }
     book = index
     chapter = number
     chapter_scroll = 0
@@ -89,7 +92,7 @@ Open :: (index: s32, number: s32) {
 }
 
 LibraryBack :: () -> bool {
-    if view == LIBRARY_CHAPTER { view = LIBRARY_CONTENTS; return true }
+    if view == LIBRARY_CHAPTER { view = came_from; return true }
     if view == LIBRARY_CONTENTS { view = LIBRARY_SHELF; return true }
     return false
 }
@@ -196,29 +199,34 @@ ContentsView :: () {
     }
 }
 
+// The chapter scrolls above its page buttons, which stay at the bottom.
 ChapterView :: () {
     column := Column()
     width := cast(s32)column.width
     words := BookChapter(book, chapter)
     reading := frame.font + Scale(3)
     buttons := Scale(48)
+    page := column
+    page.height -= cast(float32)(buttons + Scale(24))
     text_height := TextHeight(frame.session, TextProps.{.text = words, .font = reading,
             .bounds = Bounds(0, 0, width, 0), .wrap = cast(TextWrap)TextWrapAuto})
-    height := Scale(64) + text_height + Scale(32) + buttons + Scale(24)
-    scroll := Scroll(frame.session, ScrollProps.{.key = 27300 + cast(u64)chapter, .bounds = column,
+    height := Scale(64) + text_height + Scale(24)
+    scroll := Scroll(frame.session, ScrollProps.{.key = 27300 + cast(u64)chapter, .bounds = page,
             .content_height = height, .scroll_offset = chapter_scroll, .scale = frame.scale})
     chapter_scroll = scroll.scroll_offset
-    if !scroll.opened { return }
-    defer { unused End(frame.session) }
-    x := cast(s32)scroll.content.x
-    y := cast(s32)scroll.content.y
-    buffer: [64]u8
-    Text(frame.session, TextProps.{.text = Numbered("library_chapter", chapter, buffer[:]),
-            .font = frame.font - Scale(1), .bounds = Bounds(x, y, width, Scale(24))})
-    y += Scale(64)
-    Text(frame.session, TextProps.{.text = words, .font = reading, .selectable = true,
-            .bounds = Bounds(x, y, width, text_height), .wrap = cast(TextWrap)TextWrapAuto})
-    y += text_height + Scale(32)
+    if scroll.opened {
+        x := cast(s32)scroll.content.x
+        y := cast(s32)scroll.content.y
+        buffer: [64]u8
+        Text(frame.session, TextProps.{.text = Numbered("library_chapter", chapter, buffer[:]),
+                .font = frame.font - Scale(1), .bounds = Bounds(x, y, width, Scale(24))})
+        y += Scale(64)
+        Text(frame.session, TextProps.{.text = words, .font = reading, .selectable = true,
+                .bounds = Bounds(x, y, width, text_height), .wrap = cast(TextWrap)TextWrapAuto})
+        unused End(frame.session)
+    }
+    x := cast(s32)column.x
+    y := cast(s32)(column.y + column.height) - buttons - Scale(12)
     half := (width - Scale(12)) / 2
     if Button(frame.session, ButtonProps.{.id = 27400, .bounds = Bounds(x, y, half, buttons),
             .label = AppLocaleHost("library_previous"), .disabled = chapter <= 1,

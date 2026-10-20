@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Library from More apps on a private display: the shelf starts the Tao Te
-Ching at its first chapter, the chapter buttons turn pages, the contents open
-any chapter, and after a restart the shelf continues where reading stopped.
+Ching at its first chapter, the chapter buttons turn pages, Back returns to
+where the chapter was opened (the shelf or the contents), a long chapter
+scrolls under page buttons that stay at the bottom, and after a restart the
+shelf continues where reading stopped.
 
 The node's offer comes from a local package (INBE_NODE_APP_FILE), so nothing
 is downloaded or published. Buttons and text are found in the app's widget
@@ -110,10 +112,33 @@ with tempfile.TemporaryDirectory(prefix="inbe-library-") as directory:
         previous = driver.find(label="Previous chapter", role="button")
         assert len(previous) == 1 and not previous[0]["enabled"], \
             ("the first chapter offers a previous one", previous)
-        # Back leaves the chapter for the contents.
+        # Back returns to the shelf the chapter was opened from.
+        driver.press(label="Back", role="button")
+        driver.wait(label="Continue at chapter 1", role="button")
+        driver.press(label="Contents", role="button")
+        driver.press(label="39", role="button")
+        shown(39)
+        # The chapter scrolls; its page buttons stay at the bottom.
+        driver.wait_idle(frames=3)
+        before = driver.find(label="Next chapter", role="button")[0]
+        assert before["visible"] and HEIGHT - 120 < before["visible_y"] + before["visible_height"] <= HEIGHT, \
+            ("the page buttons sit at the bottom", before)
+        top = driver.find(label="Chapter 39")[0]["visible_y"]
+        driver.pointer(WIDTH / 2, HEIGHT / 2, wheel=-6)
+        driver.release_pointer()
+        driver.wait_idle(frames=10)
+        after = driver.find(label="Next chapter", role="button")[0]
+        moved = driver.find(label="Chapter 39")
+        assert not moved or not moved[0]["visible"] or moved[0]["visible_y"] < top, ("the chapter did not scroll", moved)
+        assert after["visible"] and after["visible_y"] == before["visible_y"], ("the page buttons scrolled", before, after)
+        # Back returns to the contents it was opened from.
         driver.press(label="Back", role="button")
         driver.press(label="3", role="button")
         shown(3)
+        driver.press(label="Back", role="button")
+        driver.wait(label="39", role="button")
+        driver.press(label="Back", role="button")
+        driver.wait(label="Continue at chapter 3", role="button")
     finally:
         stop(app)
     app, window = launch(profile, "continue")
@@ -124,4 +149,5 @@ with tempfile.TemporaryDirectory(prefix="inbe-library-") as directory:
         shown(3)
     finally:
         stop(app)
-print("Library: start, turn pages both ways, open a chapter from the contents and continue after a restart passed")
+print("Library: start, turn pages both ways, Back to where a chapter opened, fixed page buttons, "
+      "open a chapter from the contents and continue after a restart passed")
