@@ -110,9 +110,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-library-") as directory:
         previous = driver.find(label="Previous chapter", role="button")
         assert len(previous) == 1 and not previous[0]["enabled"], \
             ("the first chapter offers a previous one", previous)
-        # Back leaves the chapter for the contents, then the shelf.
-        command("xdotool", "windowfocus", window)
-        command("xdotool", "key", "Escape")
+        # Back leaves the chapter for the contents.
+        driver.press(label="Back", role="button")
         driver.press(label="3", role="button")
         shown(3)
     finally:
