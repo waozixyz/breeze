@@ -304,7 +304,7 @@ with contextlib.ExitStack() as stack:
     wait_for(details_open, "the open habit shows its streak")
     # Opening scrolls the list so the whole card shows; wait until it rests.
     driver.wait_idle(frames=3)
-    driver.wait(label="This week")
+    driver.wait(label="Activity")
     # The open details make the table scroll; its scrollbar already showed, so
     # the day columns stay where they were.
     expect(header(), columns, "opening Yoga moved the day columns")
