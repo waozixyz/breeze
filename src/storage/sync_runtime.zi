@@ -1,465 +1,478 @@
 #if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
-// Inbe's data and settings adapter for the portable Daochi client.
-#import "keys"
-#import "auth"
-#import "client"
-#import "account"
-#import "social"
-#import "sync"
-#import "events"
-#import "delegated"
-#import, file "delegate_store.zi";
-#import, file "delegate_storage_types.zi";
-#import, file "delegate_storage.zi";
-#import "net_ws_curl_linux"
-#import "net_http"
-#import "net_http_curl_linux"
-#import "url"
-#import "byte_text_linux"
-#import "text_buffer"
-#import, file "account_types.zi";
-#import, file "daochi_native.zi";
-#import, file "daochi_account.zi";
-#import, file "sync_session.zi";
-#import, file "device_key.zi";
-#import, file "device_key_store.zi";
-#import, file "sync_account.zi";
-#import, file "storage_core.zi";
-#import, file "sync_state.zi";
-#import, file "storage_settings.zi";
-#import, file "sync_exchange.zi";
-#import, file "sync_node_storage.zi";
-#import, file "media_node_session.zi";
-#import, file "sync_result.zi";
-#import, file "../app/text_buffers.zi";
+    // Inbe's data and settings adapter for the portable Daochi client.
+    #import "keys"
+    #import "auth"
+    #import "client"
+    #import "account"
+    #import "social"
+    #import "sync"
+    #import "events"
+    #import "delegated"
+    #import, file "delegate_store.zi";
+    #import, file "delegate_storage_types.zi";
+    #import, file "delegate_storage.zi";
+    #import "net_ws_curl_linux"
+    #import "net_http"
+    #import "net_http_curl_linux"
+    #import "url"
+    #import "byte_text_linux"
+    #import "text_buffer"
+    #import, file "account_types.zi";
+    #import, file "daochi_native.zi";
+    #import, file "daochi_account.zi";
+    #import, file "sync_session.zi";
+    #import, file "device_key.zi";
+    #import, file "device_key_store.zi";
+    #import, file "sync_account.zi";
+    #import, file "storage_core.zi";
+    #import, file "sync_state.zi";
+    #import, file "storage_settings.zi";
+    #import, file "sync_exchange.zi";
+    #import, file "sync_node_storage.zi";
+    #import, file "media_node_session.zi";
+    #import, file "sync_result.zi";
+    #import, file "../app/text_buffers.zi";
 
-c :: #system_library "c";
-malloc :: (size: usize) -> *void #foreign c;
-free :: (pointer: *void) #foreign c;
-time :: (out: *s64) -> s64 #foreign c;
+    c :: #system_library "c";
+    malloc :: (size: usize) -> *void #foreign c;
+    free :: (pointer: *void) #foreign c;
+    time :: (out: *s64) -> s64 #foreign c;
 
-SyncResponseCapacity :: 16777216;
-SocialSend :: 1;
-SocialAccept :: 2;
-SocialDecline :: 3;
-SocialRemove :: 4;
-SocialRequests :: 5;
-SocialFriends :: 6;
-SocialStats :: 7;
-SocialAlias :: 8;
+    SyncResponseCapacity :: 16777216;
+    SocialSend :: 1;
+    SocialAccept :: 2;
+    SocialDecline :: 3;
+    SocialRemove :: 4;
+    SocialRequests :: 5;
+    SocialFriends :: 6;
+    SocialStats :: 7;
+    SocialAlias :: 8;
+    SocialPublishStats :: 9;
 
-#scope_export
-// The server greets every live-update connection with its current version.
-// That greeting, or any event at or below the newest version this device has
-// already received, is not news: treating it as a change made each sync
-// reconnect and sync again every few seconds.
-REMOTE_EVENT_CURRENT :: -1
+    #scope_export
+    // The server greets every live-update connection with its current version.
+    // That greeting, or any event at or below the newest version this device has
+    // already received, is not news: treating it as a change made each sync
+    // reconnect and sync again every few seconds.
+    REMOTE_EVENT_CURRENT :: -1
 
-#program_export
-WaitStoredRemoteEvent :: (base_url: string) -> s32 {
-    if StoredAccountMode() == AccountModeDelegate {
-        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    #program_export
+    WaitStoredRemoteEvent :: (base_url: string) -> s32 {
+        if StoredAccountMode() == AccountModeDelegate {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        account: AccountKeys
+        if sync_account_load(*account) == 0 {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        client: Client
+        if !OpenAccountClient(base_url, *account,
+            storage_sync_client_id(), *client) {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        client.send = SendNative
+        now := time(null)
+        session: Session
+        LoadSavedSession(*session, now)
+        event: RemoteEvent
+        result := WaitForEvent(client, *session, now, null,
+            ReceiveWebSocketCurl, *event)
+        SaveSession(*session)
+        known := storage_meta_int64("sync_last_server_version", 0)
+        seen := storage_meta_int64(STORAGE_SYNC_SEEN_SERVER_VERSION_KEY, 0)
+        if seen > known { known = seen }
+        if result == cast(AuthResult)AuthResult.AUTH_OK && event.server_version <= known {
+            return REMOTE_EVENT_CURRENT
+        }
+        return cast(s32)result
     }
-    account: AccountKeys
-    if sync_account_load(*account) == 0 {
-        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
-    }
-    client: Client
-    if !OpenAccountClient(base_url, *account,
-        storage_sync_client_id(), *client) {
-        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
-    }
-    client.send = SendNative
-    now := time(null)
-    session: Session
-    LoadSavedSession(*session, now)
-    event: RemoteEvent
-    result := WaitForEvent(client, *session, now, null,
-        ReceiveWebSocketCurl, *event)
-    SaveSession(*session)
-    known := storage_meta_int64("sync_last_server_version", 0)
-    seen := storage_meta_int64(STORAGE_SYNC_SEEN_SERVER_VERSION_KEY, 0)
-    if seen > known { known = seen }
-    if result == cast(AuthResult)AuthResult.AUTH_OK && event.server_version <= known {
-        return REMOTE_EVENT_CURRENT
-    }
-    return cast(s32)result
-}
 
-#scope_export
-#program_export
-SyncStoredAccount :: (base_url: string) -> s32 {
-    if base_url.count == 0 { return cast(s32)AuthResult.AUTH_INVALID_URL }
-    if StoredAccountMode() == AccountModeDelegate {
-        return SyncStoredDelegate(base_url)
-    }
-    account: AccountKeys
-    if sync_account_load(*account) == 0 {
-        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
-    }
-    material: DeviceKeyMaterial
-    if !LoadOrCreateDeviceKey(*material) {
-        return cast(s32)AuthResult.AUTH_SIGN_FAILED
-    }
-    client_id := storage_sync_client_id()
-    account_id := AccountFieldText(*account.public_id[0],
-        ACCOUNT_PUBLIC_ID_HEX_SIZE)
-    public_key := AccountFieldText(*account.public_key_hex[0],
-        ACCOUNT_PUBLIC_KEY_HEX_SIZE)
-    // An updated device downloads first and then sends its changes in a
-    // second exchange right away.
-    downloading_first := storage_sync_records_download_first()
-    payload := storage_build_sync_payload_json(account_id, public_key)
-    if payload == null {
-        WipeDeviceKey(*material)
-        return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
-    }
-    response := cast(*u8)malloc(SyncResponseCapacity)
-    if response == null {
+    #scope_export
+    #program_export
+    SyncStoredAccount :: (base_url: string) -> s32 {
+        if base_url.count == 0 { return cast(s32)AuthResult.AUTH_INVALID_URL }
+        if StoredAccountMode() == AccountModeDelegate {
+            return SyncStoredDelegate(base_url)
+        }
+        account: AccountKeys
+        if sync_account_load(*account) == 0 {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        material: DeviceKeyMaterial
+        if !LoadOrCreateDeviceKey(*material) {
+            return cast(s32)AuthResult.AUTH_SIGN_FAILED
+        }
+        client_id := storage_sync_client_id()
+        account_id := AccountFieldText(*account.public_id[0],
+            ACCOUNT_PUBLIC_ID_HEX_SIZE)
+        public_key := AccountFieldText(*account.public_key_hex[0],
+            ACCOUNT_PUBLIC_KEY_HEX_SIZE)
+        // An updated device downloads first and then sends its changes in a
+        // second exchange right away.
+        downloading_first := storage_sync_records_download_first()
+        payload := storage_build_sync_payload_json(account_id, public_key)
+        if payload == null {
+            WipeDeviceKey(*material)
+            return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+        }
+        response := cast(*u8)malloc(SyncResponseCapacity)
+        if response == null {
+            storage_free_sync_payload_json(payload)
+            WipeDeviceKey(*material)
+            return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+        }
+        now := time(null)
+        session: Session
+        LoadSavedSession(*session, now)
+        status: s32 = 0
+        result := SyncAccountPayload(base_url, *account, client_id,
+            *session, DeviceFromKey(*material), now,
+            TextFromCString(payload),
+            BytesFromPointer(response, SyncResponseCapacity), *status)
+        SaveSession(*session)
         storage_free_sync_payload_json(payload)
         WipeDeviceKey(*material)
-        return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
-    }
-    now := time(null)
-    session: Session
-    LoadSavedSession(*session, now)
-    status: s32 = 0
-    result := SyncAccountPayload(base_url, *account, client_id,
-        *session, DeviceFromKey(*material), now,
-        TextFromCString(payload),
-        BytesFromPointer(response, SyncResponseCapacity), *status)
-    SaveSession(*session)
-    storage_free_sync_payload_json(payload)
-    WipeDeviceKey(*material)
-    reply := TextUntilNul(BytesFromPointer(response, SyncResponseCapacity))
-    outcome := cast(s32)result
-    if result == cast(AuthResult)AuthResult.AUTH_OK {
-        if storage_apply_sync_response_json(reply) == 0 {
-            outcome = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
-        } else {
-            storage_purge_synced_deleted_data()
-            SyncNodeStorageRecordResponse(base_url, reply)
-        }
-    } else if status == 413 && SyncNodeStorageRecordFull(base_url, reply) {
-        outcome = cast(s32)SyncResult.SYNC_STORAGE_FULL
-    }
-    free(cast(*void)response)
-    if outcome == cast(s32)AuthResult.AUTH_OK && downloading_first &&
-    !storage_sync_records_download_first() {
-        return SyncStoredAccount(base_url)
-    }
-    return outcome
-}
-
-// Signs in to a node for photo copies and registers this device there.
-MediaSessionOpen :: (client: Client, address: string, session: *Session,
-    material: *DeviceKeyMaterial, now: s64) -> AuthResult {
-    signed_in := Login(client, session)
-    if signed_in != cast(AuthResult)AuthResult.AUTH_OK {
-        return signed_in
-    }
-    SetExpiry(session, now)
-    registered := RegisterDevice(client, session, DeviceFromKey(material), now, null, NativeNonce)
-    if registered != cast(AuthResult)AuthResult.AUTH_OK {
-        session.* = Session.{}
-        return registered
-    }
-    MediaSessionSave(address, session)
-    return cast(AuthResult)AuthResult.AUTH_OK
-}
-
-// Sends one signed blob request on a session; false when no answer came.
-SendBlobOnce :: (client: Client, session: *Session, material: *DeviceKeyMaterial, now: s64,
-    method: string, path: string, body: string, url: string, output: []u8,
-    status: *s32, length: *s64, result: *s32) -> bool {
-    transaction: [8192]u8
-    prepared := PrepareRequestHeader(client, session, DeviceFromKey(material), now,
-        null, NativeNonce, method, path, body, transaction[:])
-    if prepared != cast(AuthResult)AuthResult.AUTH_OK {
-        result.* = cast(s32)prepared
-        return false
-    }
-    headers: [1]HttpHeader
-    headers[0] = HttpHeader.{.name = "X-Daochi-Tx", .value = TextUntilNul(transaction[:])}
-    request := HttpRequest.{.method = method, .url = url,
-        .token = TextUntilNul(session.token[:]), .body = body, .headers = headers[:]}
-    if body.count > 0 {
-        request.content_type = "application/octet-stream"
-    }
-    // A copy of up to 16 MB needs longer than a sync's request.
-    answer := SendCurlWithin(request, output, 180000)
-    status.* = answer.status
-    length.* = answer.length
-    if answer.code != 0 || answer.truncated {
-        result.* = cast(s32)AuthResult.AUTH_REQUEST_FAILED
-        return false
-    }
-    result.* = cast(s32)AuthResult.AUTH_OK
-    return true
-}
-
-// One signed request for a sealed photo copy (cells/diary_blobs.zi) on the
-// node at base_url: PUT stores body at path, GET answers with the copy in
-// output. It uses that node's own media session, opened here when there is
-// none and opened again once when the node answers 401.
-#program_export
-SendStoredBlob :: (base_url: string, method: string, path: string, body: string,
-    output: []u8, status: *s32, length: *s64) -> s32 {
-    status.* = 0
-    length.* = 0
-    if StoredAccountMode() != AccountModeOwner {
-        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
-    }
-    server: [512]u8
-    url: [1024]u8
-    if !NormalizeUrl(base_url, server[:]) || !JoinUrl(TextUntilNul(server[:]), path, url[:]) {
-        return cast(s32)AuthResult.AUTH_INVALID_URL
-    }
-    address := TextUntilNul(server[:])
-    account: AccountKeys
-    if sync_account_load(*account) == 0 {
-        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
-    }
-    defer { SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
-    material: DeviceKeyMaterial
-    if !LoadOrCreateDeviceKey(*material) {
-        return cast(s32)AuthResult.AUTH_SIGN_FAILED
-    }
-    defer { WipeDeviceKey(*material) }
-    client: Client
-    if !OpenAccountClient(address, *account, storage_sync_client_id(), *client) {
-        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
-    }
-    client.send = SendNative
-    now := time(null)
-    session: Session
-    MediaSessionLoad(address, *session, now)
-    result: s32 = cast(s32)AuthResult.AUTH_OK
-    attempt: s32 = 0
-    while attempt < 2 {
-        if !TokenValid(*session, now) {
-            opened := MediaSessionOpen(client, address, *session, *material, now)
-            if opened != cast(AuthResult)AuthResult.AUTH_OK {
-                return cast(s32)opened
+        reply := TextUntilNul(BytesFromPointer(response, SyncResponseCapacity))
+        outcome := cast(s32)result
+        if result == cast(AuthResult)AuthResult.AUTH_OK {
+            if storage_apply_sync_response_json(reply) == 0 {
+                outcome = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+            } else {
+                storage_purge_synced_deleted_data()
+                SyncNodeStorageRecordResponse(base_url, reply)
             }
+        } else if status == 413 && SyncNodeStorageRecordFull(base_url, reply) {
+            outcome = cast(s32)SyncResult.SYNC_STORAGE_FULL
         }
-        if !SendBlobOnce(client, *session, *material, now, method, path, body, TextUntilNul(url[:]),
-            output, status, length, *result) {
-            return result
+        free(cast(*void)response)
+        if outcome == cast(s32)AuthResult.AUTH_OK && downloading_first &&
+        !storage_sync_records_download_first() {
+            return SyncStoredAccount(base_url)
         }
-        if status.* != 401 {
-            return result
-        }
-        // The node no longer knows this session: sign in to it once more.
-        MediaSessionForget(address)
-        ClearSession(*session)
-        attempt += 1
+        return outcome
     }
-    return result
-}
 
-// Expired context can perform only this key-bound challenge/session exchange.
-// Data payload construction remains unavailable until the answer is accepted.
-RenewStoredDelegateNative :: (base_url: string) -> AuthResult {
-    material: DelegateMaterial
-    defer { WipeDelegateMaterial(*material) }
-    client: DelegateClient
-    if storage_get_setting_int("sync_enabled", 0) == 0 ||
+    // Signs in to a node for photo copies and registers this device there.
+    MediaSessionOpen :: (client: Client, address: string, session: *Session,
+        material: *DeviceKeyMaterial, now: s64) -> AuthResult {
+        signed_in := Login(client, session)
+        if signed_in != cast(AuthResult)AuthResult.AUTH_OK {
+            return signed_in
+        }
+        SetExpiry(session, now)
+        registered := RegisterDevice(client, session, DeviceFromKey(material), now, null, NativeNonce)
+        if registered != cast(AuthResult)AuthResult.AUTH_OK {
+            session.* = Session.{}
+            return registered
+        }
+        MediaSessionSave(address, session)
+        return cast(AuthResult)AuthResult.AUTH_OK
+    }
+
+    // Sends one signed blob request on a session; false when no answer came.
+    SendBlobOnce :: (client: Client, session: *Session, material: *DeviceKeyMaterial, now: s64,
+        method: string, path: string, body: string, url: string, output: []u8,
+        status: *s32, length: *s64, result: *s32) -> bool {
+        transaction: [8192]u8
+        prepared := PrepareRequestHeader(client, session, DeviceFromKey(material), now,
+            null, NativeNonce, method, path, body, transaction[:])
+        if prepared != cast(AuthResult)AuthResult.AUTH_OK {
+            result.* = cast(s32)prepared
+            return false
+        }
+        headers: [1]HttpHeader
+        headers[0] = HttpHeader.{.name = "X-Daochi-Tx", .value = TextUntilNul(transaction[:])}
+        request := HttpRequest.{.method = method, .url = url,
+            .token = TextUntilNul(session.token[:]), .body = body, .headers = headers[:]}
+        if body.count > 0 {
+            request.content_type = "application/octet-stream"
+        }
+        // A copy of up to 16 MB needs longer than a sync's request.
+        answer := SendCurlWithin(request, output, 180000)
+        status.* = answer.status
+        length.* = answer.length
+        if answer.code != 0 || answer.truncated {
+            result.* = cast(s32)AuthResult.AUTH_REQUEST_FAILED
+            return false
+        }
+        result.* = cast(s32)AuthResult.AUTH_OK
+        return true
+    }
+
+    // One signed request for a sealed photo copy (cells/diary_blobs.zi) on the
+    // node at base_url: PUT stores body at path, GET answers with the copy in
+    // output. It uses that node's own media session, opened here when there is
+    // none and opened again once when the node answers 401.
+    #program_export
+    SendStoredBlob :: (base_url: string, method: string, path: string, body: string,
+        output: []u8, status: *s32, length: *s64) -> s32 {
+        status.* = 0
+        length.* = 0
+        if StoredAccountMode() != AccountModeOwner {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        server: [512]u8
+        url: [1024]u8
+        if !NormalizeUrl(base_url, server[:]) || !JoinUrl(TextUntilNul(server[:]), path, url[:]) {
+            return cast(s32)AuthResult.AUTH_INVALID_URL
+        }
+        address := TextUntilNul(server[:])
+        account: AccountKeys
+        if sync_account_load(*account) == 0 {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        defer { SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
+        material: DeviceKeyMaterial
+        if !LoadOrCreateDeviceKey(*material) {
+            return cast(s32)AuthResult.AUTH_SIGN_FAILED
+        }
+        defer { WipeDeviceKey(*material) }
+        client: Client
+        if !OpenAccountClient(address, *account, storage_sync_client_id(), *client) {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        client.send = SendNative
+        now := time(null)
+        session: Session
+        MediaSessionLoad(address, *session, now)
+        result: s32 = cast(s32)AuthResult.AUTH_OK
+        attempt: s32 = 0
+        while attempt < 2 {
+            if !TokenValid(*session, now) {
+                opened := MediaSessionOpen(client, address, *session, *material, now)
+                if opened != cast(AuthResult)AuthResult.AUTH_OK {
+                    return cast(s32)opened
+                }
+            }
+            if !SendBlobOnce(client, *session, *material, now, method, path, body, TextUntilNul(url[:]),
+                output, status, length, *result) {
+                return result
+            }
+            if status.* != 401 {
+                return result
+            }
+            // The node no longer knows this session: sign in to it once more.
+            MediaSessionForget(address)
+            ClearSession(*session)
+            attempt += 1
+        }
+        return result
+    }
+
+    // Expired context can perform only this key-bound challenge/session exchange.
+    // Data payload construction remains unavailable until the answer is accepted.
+    RenewStoredDelegateNative :: (base_url: string) -> AuthResult {
+        material: DelegateMaterial
+        defer { WipeDelegateMaterial(*material) }
+        client: DelegateClient
+        if storage_get_setting_int("sync_enabled", 0) == 0 ||
         !LoadDelegateForRenewal(*material) ||
         !OpenDelegateRenewalClient(base_url, *material, *client) {
-        return cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT
-    }
-    client.send = SendNative
-    response := cast(*u8)malloc(32768)
-    if response == null {
-        return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
-    }
-    defer { free(cast(*void)response) }
-    result := RenewDelegateSession(client, *material.session, time(null), BytesFromPointer(response, 32768))
-    if result == cast(AuthResult)AuthResult.AUTH_OK {
-        if !SaveStoredDelegateSession(*material) {
-            return cast(AuthResult)AuthResult.AUTH_FAILED
+            return cast(AuthResult)AuthResult.AUTH_NO_ACCOUNT
         }
-    } else if result == cast(AuthResult)AuthResult.AUTH_FAILED &&
+        client.send = SendNative
+        response := cast(*u8)malloc(32768)
+        if response == null {
+            return cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+        }
+        defer { free(cast(*void)response) }
+        result := RenewDelegateSession(client, *material.session, time(null), BytesFromPointer(response, 32768))
+        if result == cast(AuthResult)AuthResult.AUTH_OK {
+            if !SaveStoredDelegateSession(*material) {
+                return cast(AuthResult)AuthResult.AUTH_FAILED
+            }
+        } else if result == cast(AuthResult)AuthResult.AUTH_FAILED &&
         material.generation == StoredDelegateGeneration() {
-        ClearDelegate()
-    }
-    return result
-}
-
-SyncStoredDelegate :: (base_url: string) -> s32 {
-    material: DelegateMaterial
-    defer { WipeDelegateMaterial(*material) }
-    client: DelegateClient
-    if !LoadStoredDelegate(*material) {
-        refreshed := RenewStoredDelegateNative(base_url)
-        if refreshed != cast(AuthResult)AuthResult.AUTH_OK {
-            return cast(s32)refreshed
+            ClearDelegate()
         }
+        return result
     }
-    if !LoadStoredDelegate(*material) || !OpenDelegateClient(base_url, *material, *client) {
-        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
-    }
-    client.send = SendNative
-    batch: DelegateBatch
-    payload := BuildDelegateStoragePayload(client, *batch)
-    if payload == null {
-        return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
-    }
-    defer { storage_free_sync_payload_json(payload) }
-    response := cast(*u8)malloc(SyncResponseCapacity)
-    if response == null {
-        return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
-    }
-    defer { free(cast(*void)response) }
-    result: AuthResult = cast(AuthResult)AuthResult.AUTH_OK
-    if !SessionValid(client, *material.session, time(null)) {
-        result = RenewDelegateSession(client, *material.session, time(null),
-            BytesFromPointer(response, SyncResponseCapacity))
-    }
-    if result == cast(AuthResult)AuthResult.AUTH_OK {
-        status: s32
-        result = DelegateRequest(client, *material.session, time(null),
-            TextFromCString(payload), BytesFromPointer(response, SyncResponseCapacity), *status)
-    }
-    if material.generation != StoredDelegateGeneration() || StoredDelegateClientMatches(client) == 0 ||
+
+    SyncStoredDelegate :: (base_url: string) -> s32 {
+        material: DelegateMaterial
+        defer { WipeDelegateMaterial(*material) }
+        client: DelegateClient
+        if !LoadStoredDelegate(*material) {
+            refreshed := RenewStoredDelegateNative(base_url)
+            if refreshed != cast(AuthResult)AuthResult.AUTH_OK {
+                return cast(s32)refreshed
+            }
+        }
+        if !LoadStoredDelegate(*material) || !OpenDelegateClient(base_url, *material, *client) {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        client.send = SendNative
+        batch: DelegateBatch
+        payload := BuildDelegateStoragePayload(client, *batch)
+        if payload == null {
+            return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+        }
+        defer { storage_free_sync_payload_json(payload) }
+        response := cast(*u8)malloc(SyncResponseCapacity)
+        if response == null {
+            return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+        }
+        defer { free(cast(*void)response) }
+        result: AuthResult = cast(AuthResult)AuthResult.AUTH_OK
+        if !SessionValid(client, *material.session, time(null)) {
+            result = RenewDelegateSession(client, *material.session, time(null),
+                BytesFromPointer(response, SyncResponseCapacity))
+        }
+        if result == cast(AuthResult)AuthResult.AUTH_OK {
+            status: s32
+            result = DelegateRequest(client, *material.session, time(null),
+                TextFromCString(payload), BytesFromPointer(response, SyncResponseCapacity), *status)
+        }
+        if material.generation != StoredDelegateGeneration() || StoredDelegateClientMatches(client) == 0 ||
         storage_sync_enabled() == 0 || storage_get_setting_text("sync_server_url") != base_url {
-        return cast(s32)AuthResult.AUTH_REQUEST_FAILED
-    }
-    if result == cast(AuthResult)AuthResult.AUTH_OK {
-        if !SaveStoredDelegateSession(*material) ||
+            return cast(s32)AuthResult.AUTH_REQUEST_FAILED
+        }
+        if result == cast(AuthResult)AuthResult.AUTH_OK {
+            if !SaveStoredDelegateSession(*material) ||
             ApplyDelegateStorageResponse(client, *batch,
                 TextUntilNul(BytesFromPointer(response, SyncResponseCapacity))) == 0 {
-            result = cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+                result = cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+            }
+        } else if result == cast(AuthResult)AuthResult.AUTH_FAILED {
+            ClearDelegate()
         }
-    } else if result == cast(AuthResult)AuthResult.AUTH_FAILED {
-        ClearDelegate()
+        return cast(s32)result
     }
-    return cast(s32)result
-}
 
-SocialOperation :: (base_url: string, operation: s32,
-    value: string, metric: string, output: []u8) -> s32 {
-    account: AccountKeys
-    if sync_account_load(*account) == 0 {
-        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    SocialOperation :: (base_url: string, operation: s32,
+        value: string, metric: string, output: []u8, owner: string = "") -> s32 {
+        account: AccountKeys
+        if sync_account_load(*account) == 0 {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        if owner.count > 0 && owner != AccountFieldText(*account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE) {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        client: Client
+        if !OpenAccountClient(base_url, *account,
+            storage_sync_client_id(), *client) {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        client.send = SendNative
+        now := time(null)
+        session: Session
+        LoadSavedSession(*session, now)
+        scratch: [4096]u8
+        response := output
+        if response.count == 0 { response = scratch[:] }
+        status: s32 = 0
+        result: AuthResult = cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
+        if operation == SocialSend {
+            result = SendFriendRequest(client, *session, now,
+                value, response, *status)
+        } else if operation == SocialAccept {
+            result = FriendAction(client, *session, now,
+                value, "accept", response, *status)
+        } else if operation == SocialDecline {
+            result = FriendAction(client, *session, now,
+                value, "decline", response, *status)
+        } else if operation == SocialRemove {
+            result = RemoveFriend(client, *session, now,
+                value, response, *status)
+        } else if operation == SocialRequests {
+            result = FriendRequests(client, *session, now,
+                response, *status)
+        } else if operation == SocialFriends {
+            result = Friends(client, *session, now,
+                response, *status)
+        } else if operation == SocialStats {
+            result = FriendStats(client, *session, now,
+                value, metric, response, *status)
+        } else if operation == SocialAlias {
+            result = RegisterAlias(client, *session, now,
+                value, response, *status)
+        } else if operation == SocialPublishStats {
+            result = BearerRequest(client, *session, now, "PUT", "/api/v1/profile/stats", value, response, *status)
+        }
+        SaveSession(*session)
+        return cast(s32)result
     }
-    client: Client
-    if !OpenAccountClient(base_url, *account,
-        storage_sync_client_id(), *client) {
-        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+
+    #scope_export
+    #program_export
+    SendFriendRequestStored :: (base_url: string, target: string) -> s32 {
+        empty: [1]u8
+        return SocialOperation(base_url, SocialSend, target, "", empty[0:0])
     }
-    client.send = SendNative
-    now := time(null)
-    session: Session
-    LoadSavedSession(*session, now)
-    scratch: [4096]u8
-    response := output
-    if response.count == 0 { response = scratch[:] }
-    status: s32 = 0
-    result: AuthResult = cast(AuthResult)AuthResult.AUTH_PAYLOAD_FAILED
-    if operation == SocialSend {
-        result = SendFriendRequest(client, *session, now,
-            value, response, *status)
-    } else if operation == SocialAccept {
-        result = FriendAction(client, *session, now,
-            value, "accept", response, *status)
-    } else if operation == SocialDecline {
-        result = FriendAction(client, *session, now,
-            value, "decline", response, *status)
-    } else if operation == SocialRemove {
-        result = RemoveFriend(client, *session, now,
-            value, response, *status)
-    } else if operation == SocialRequests {
-        result = FriendRequests(client, *session, now,
-            response, *status)
-    } else if operation == SocialFriends {
-        result = Friends(client, *session, now,
-            response, *status)
-    } else if operation == SocialStats {
-        result = FriendStats(client, *session, now,
-            value, metric, response, *status)
-    } else if operation == SocialAlias {
-        result = RegisterAlias(client, *session, now,
-            value, response, *status)
+
+    #scope_export
+    #program_export
+    AcceptFriendRequestStored :: (base_url: string,
+        request_id: string) -> s32 {
+        empty: [1]u8
+        return SocialOperation(base_url, SocialAccept,
+            request_id, "", empty[0:0])
     }
-    SaveSession(*session)
-    return cast(s32)result
-}
 
-#scope_export
-#program_export
-SendFriendRequestStored :: (base_url: string, target: string) -> s32 {
-    empty: [1]u8
-    return SocialOperation(base_url, SocialSend, target, "", empty[0:0])
-}
-
-#scope_export
-#program_export
-AcceptFriendRequestStored :: (base_url: string,
-    request_id: string) -> s32 {
-    empty: [1]u8
-    return SocialOperation(base_url, SocialAccept,
-        request_id, "", empty[0:0])
-}
-
-#scope_export
-#program_export
-DeclineFriendRequestStored :: (base_url: string,
-    request_id: string) -> s32 {
-    empty: [1]u8
-    return SocialOperation(base_url, SocialDecline,
-        request_id, "", empty[0:0])
-}
-
-#scope_export
-#program_export
-RemoveFriendStored :: (base_url: string, friend_id: string) -> s32 {
-    empty: [1]u8
-    return SocialOperation(base_url, SocialRemove,
-        friend_id, "", empty[0:0])
-}
-
-#scope_export
-#program_export
-FetchFriendRequests :: (base_url: string, output: []u8) -> s32 {
-    return SocialOperation(base_url, SocialRequests, "", "", output)
-}
-
-#scope_export
-#program_export
-FetchFriends :: (base_url: string, output: []u8) -> s32 {
-    return SocialOperation(base_url, SocialFriends, "", "", output)
-}
-
-#scope_export
-#program_export
-FetchFriendStats :: (base_url: string, practice: string,
-    metric: string, output: []u8) -> s32 {
-    return SocialOperation(base_url, SocialStats, practice, metric, output)
-}
-
-#scope_export
-#program_export
-RegisterAliasStored :: (base_url: string, alias: string) -> s32 {
-    empty: [1]u8
-    return SocialOperation(base_url, SocialAlias, alias, "", empty[0:0])
-}
-
-#scope_export
-#program_export
-DeleteStoredAccount :: (base_url: string) -> s32 {
-    account: AccountKeys
-    if sync_account_load(*account) == 0 {
-        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+    #scope_export
+    #program_export
+    DeclineFriendRequestStored :: (base_url: string,
+        request_id: string) -> s32 {
+        empty: [1]u8
+        return SocialOperation(base_url, SocialDecline,
+            request_id, "", empty[0:0])
     }
-    client: Client
-    if !OpenAccountClient(base_url, *account,
-        storage_sync_client_id(), *client) {
-        return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+
+    #scope_export
+    #program_export
+    RemoveFriendStored :: (base_url: string, friend_id: string) -> s32 {
+        empty: [1]u8
+        return SocialOperation(base_url, SocialRemove,
+            friend_id, "", empty[0:0])
     }
-    client.send = SendNative
-    return cast(s32)DeleteAccount(client)
-}
+
+    #scope_export
+    #program_export
+    FetchFriendRequests :: (base_url: string, output: []u8) -> s32 {
+        return SocialOperation(base_url, SocialRequests, "", "", output)
+    }
+
+    #scope_export
+    #program_export
+    FetchFriends :: (base_url: string, output: []u8) -> s32 {
+        return SocialOperation(base_url, SocialFriends, "", "", output)
+    }
+
+    #scope_export
+    #program_export
+    FetchFriendStats :: (base_url: string, practice: string,
+        metric: string, output: []u8) -> s32 {
+        return SocialOperation(base_url, SocialStats, practice, metric, output)
+    }
+
+    #scope_export
+    #program_export
+    PublishStoredAppStats :: (base_url: string, statistics: string, owner: string) -> s32 {
+        output: [256]u8
+        return SocialOperation(base_url, SocialPublishStats, statistics, "", output[:], owner)
+    }
+
+    #scope_export
+    #program_export
+    RegisterAliasStored :: (base_url: string, alias: string) -> s32 {
+        empty: [1]u8
+        return SocialOperation(base_url, SocialAlias, alias, "", empty[0:0])
+    }
+
+    #scope_export
+    #program_export
+    DeleteStoredAccount :: (base_url: string) -> s32 {
+        account: AccountKeys
+        if sync_account_load(*account) == 0 {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        client: Client
+        if !OpenAccountClient(base_url, *account,
+            storage_sync_client_id(), *client) {
+            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
+        }
+        client.send = SendNative
+        return cast(s32)DeleteAccount(client)
+    }
 
 }

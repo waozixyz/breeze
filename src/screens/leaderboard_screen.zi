@@ -26,6 +26,12 @@
 #import, file "../storage/storage_profile_stats.zi";
 #import, file "../storage/account_types.zi";
 #import, file "profile_social.zi";
+#import, file "../app/launcher_policy.zi";
+#import, file "../app/route_types.zi";
+#import, file "../app/achievement_host.zi";
+#import, file "../cells/node_apps.zi";
+#import, file "../cells/package_files.zi";
+#import, file "../storage/achievements.zi";
 
 using HostValueKind;
 using ExerciseType;
@@ -63,6 +69,77 @@ leaderboard_built_metric: s32 = -1;
 leaderboard_ui: LeaderboardUiFrame;
 leaderboard_ui_codec: WidgetLeaderboardUiFrameCodec;
 leaderboard_row_codec: WidgetLeaderboardUiRowCodec;
+leaderboard_app_codec: WidgetLeaderboardUiAppCodec;
+leaderboard_app_names: [16][25]u8;
+leaderboard_app_titles: [16][128]u8;
+leaderboard_app_count: s32;
+leaderboard_built_app: [25]u8;
+
+#program_export
+LeaderboardAppName :: (app: *InnerBreeze) -> string {
+    name := AppTextFromCString(*app.leaderboard_app[0], 25)
+    return ifx name == "" then "practices" else name
+}
+
+LeaderboardListApps :: (app: *InnerBreeze) {
+    leaderboard_app_count = 0
+    routes := LauncherRoutes()
+    for route: routes {
+        slot := AppNavNodeSlot(route)
+        if !app_nav_route_available(app, route) ||
+        (slot >= 0 && !NodeAppInstalled(slot)) {
+            continue
+        }
+        name := LauncherRouteName(route)
+        if name == "" || leaderboard_app_count >= 16 {
+            continue
+        }
+        unused AppCopyText(name, leaderboard_app_names[leaderboard_app_count][:])
+        unused AppCopyText(app_nav_route_label(route), leaderboard_app_titles[leaderboard_app_count][:])
+        leaderboard_app_count += 1
+    }
+    selected := LeaderboardAppName(app)
+    for index: cast(s32)0..leaderboard_app_count - 1 {
+        if TextUntilNul(leaderboard_app_names[index][:]) == selected {
+            return
+        }
+    }
+    if leaderboard_app_count > 0 {
+        unused AppCopyText(TextUntilNul(leaderboard_app_names[0][:]), app.leaderboard_app[:])
+        app.leaderboard_loaded = 0
+    }
+}
+
+LeaderboardAppAchievements :: (name: string) -> s32 {
+    AchievementCatalogsLoad()
+    AchievementVisibility()
+    AchievementEvaluate()
+    id := PackageText("inbe.", name)
+    defer { PackageFree(id) }
+    count: s32 = 0
+    for index: cast(s32)0..achievement_count - 1 {
+        entry := achievement_definitions[index]
+        if entry.visible && entry.awarded && TextUntilNul(entry.app[:]) == id {
+            count += 1
+        }
+    }
+    return count
+}
+
+// A selected app contributes only its earned achievement count. Private
+// source records, text and activity details never enter the friend board.
+#program_export
+LeaderboardStatsBody :: (app: *InnerBreeze) -> string {
+    name := LeaderboardAppName(app)
+    if name == "practices" {
+        return ""
+    }
+    out: Vec(u8)
+    earned := LeaderboardAppAchievements(name)
+    BuilderPrint(*out, "{\"app\":\"inbe\",\"metrics\":[{\"practice\":\"%\",\"metric\":\"achievements\",\"value\":%,\"label\":\"%\",\"local_date\":%}]}",
+        name, earned, earned, LeaderboardToday())
+    return BuilderFinish(out)
+}
 
 // Wim Hof ranks average holds and meditation average time as well.
 LeaderboardHasAverage :: (practice: s32) -> bool {
@@ -133,6 +210,19 @@ LeaderboardLoadBoard :: (practice: s32, metric: s32, output: []u8) {
 }
 
 LeaderboardLoadCache :: (app: *InnerBreeze) {
+    if LeaderboardAppName(app) != "practices" {
+        out: Vec(u8)
+        BuilderPrint(*out, "leaderboard.apps.%.achievements", LeaderboardAppName(app))
+        key := BuilderFinish(out)
+        defer { PackageFree(key) }
+        if storage_get_social_cache_json(key, *app.leaderboard_json[0], 8192) == 0 {
+            unused AppCopyText("{\"rows\":[]}", app.leaderboard_json[:])
+        }
+        unused AppCopyText("{\"rows\":[]}", app.leaderboard_avg_json[:])
+        app.leaderboard_loaded = 1
+        app.leaderboard_revision += 1
+        return
+    }
     LeaderboardLoadBoard(app.leaderboard_practice, LEADERBOARD_STREAK, app.leaderboard_json[:])
     LeaderboardLoadBoard(app.leaderboard_practice, LEADERBOARD_AVERAGE, app.leaderboard_avg_json[:])
     app.leaderboard_loaded = 1
@@ -234,7 +324,8 @@ LeaderboardRebuild :: (app: *InnerBreeze) {
     if app.profile_friends_loaded == 0 {
         load_friends_cache(app)
     }
-    has_average := LeaderboardHasAverage(practice)
+    practice_app := LeaderboardAppName(app) == "practices"
+    has_average := practice_app && LeaderboardHasAverage(practice)
     account: AccountKeys
     own_id: string = ""
     if sync_account_load(*account) != 0 && account.public_id[0] != cast(u8)0 {
@@ -288,7 +379,13 @@ LeaderboardRebuild :: (app: *InnerBreeze) {
             }
         }
         if own_id.count > 0 && user_id == own_id {
-            LeaderboardOwnValues(practice, entry)
+            if practice_app {
+                LeaderboardOwnValues(practice, entry)
+            } else {
+                entry.own = true
+                entry.streak_value = cast(float64)LeaderboardAppAchievements(LeaderboardAppName(app))
+                LeaderboardFormatRounded(entry.streak_value, entry.streak[:])
+            }
         }
         leaderboard_count += 1
     }
@@ -320,7 +417,13 @@ LeaderboardRebuild :: (app: *InnerBreeze) {
         unused AppCopyText(own_id, entry.user_id[:])
         display_name(*entry.name[0], cast(s64)entry.name.count,
             storage_get_setting_text("sync_account_alias"), own_id)
-        LeaderboardOwnValues(practice, entry)
+        if practice_app {
+            LeaderboardOwnValues(practice, entry)
+        } else {
+            entry.own = true
+            entry.streak_value = cast(float64)LeaderboardAppAchievements(LeaderboardAppName(app))
+            LeaderboardFormatRounded(entry.streak_value, entry.streak[:])
+        }
         leaderboard_count += 1
     }
 
@@ -337,6 +440,7 @@ LeaderboardRebuild :: (app: *InnerBreeze) {
     leaderboard_built_revision = app.leaderboard_revision
     leaderboard_built_practice = practice
     leaderboard_built_metric = metric
+    unused AppCopyText(LeaderboardAppName(app), leaderboard_built_app[:])
 }
 
 LeaderboardUiCall :: (context: *void, module: *u8, function: *u8,
@@ -345,6 +449,17 @@ LeaderboardUiCall :: (context: *void, module: *u8, function: *u8,
         return WidgetHostCall(context, module, function, arguments, count, result)
     }
     name := TextFromCString(function)
+    if name == "ReadLeaderboardAppHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        item: LeaderboardUiApp
+        if index >= 0 && index < leaderboard_app_count {
+            item.name = TextUntilNul(leaderboard_app_names[index][:])
+            item.title = TextUntilNul(leaderboard_app_titles[index][:])
+        }
+        result.* = WidgetEncodeLeaderboardUiApp(item, *leaderboard_app_codec)
+        return 1
+    }
     if name == "ReadLeaderboardUiHost" && count == 0 {
         result.* = WidgetEncodeLeaderboardUiFrame(leaderboard_ui, *leaderboard_ui_codec)
         return 1
@@ -367,7 +482,9 @@ LeaderboardUiCall :: (context: *void, module: *u8, function: *u8,
             row.own = entry.own
             if row.own && context != null {
                 app := cast(*InnerBreeze)context
-                AchievementLeaderboardViewed(LeaderboardPracticeId(app.leaderboard_practice))
+                if LeaderboardAppName(app) == "practices" {
+                    AchievementLeaderboardViewed(LeaderboardPracticeId(app.leaderboard_practice))
+                }
             }
         }
         result.* = WidgetEncodeLeaderboardUiRow(row, *leaderboard_row_codec)
@@ -391,6 +508,7 @@ leaderboard_screen_enter :: (app: *InnerBreeze) {
         return
     }
     load_friends_cache(app)
+    LeaderboardListApps(app)
     unused LeaderboardKeepInstalled(app, LeaderboardInstalledPractices())
     LeaderboardLoadCache(app)
     app_request_social_refresh(app)
@@ -402,6 +520,7 @@ leaderboard_screen_draw :: (app: *InnerBreeze) {
         return
     }
     installed := LeaderboardInstalledPractices()
+    LeaderboardListApps(app)
     if LeaderboardKeepInstalled(app, installed) {
         LeaderboardLoadCache(app)
         app_request_social_refresh(app)
@@ -416,7 +535,8 @@ leaderboard_screen_draw :: (app: *InnerBreeze) {
     }
     if app.leaderboard_loaded == 0 || leaderboard_built_revision != app.leaderboard_revision ||
     leaderboard_built_practice != app.leaderboard_practice ||
-    leaderboard_built_metric != app.leaderboard_metric {
+    leaderboard_built_metric != app.leaderboard_metric ||
+    TextUntilNul(leaderboard_built_app[:]) != LeaderboardAppName(app) {
         LeaderboardRebuild(app)
     }
     leaderboard_ui.session = app.ui.session
@@ -425,11 +545,18 @@ leaderboard_screen_draw :: (app: *InnerBreeze) {
     leaderboard_ui.bottom = app_content_bottom_reserved(app)
     leaderboard_ui.scale = MetricsScale()
     leaderboard_ui.font = AppFontSize()
+    leaderboard_ui.app_count = leaderboard_app_count
+    for index: cast(s32)0..leaderboard_app_count - 1 {
+        if TextUntilNul(leaderboard_app_names[index][:]) == LeaderboardAppName(app) {
+            leaderboard_ui.app_index = index
+        }
+    }
     state := LeaderboardMessage.{.action = LEADERBOARD_FRAME,
         .practice = app.leaderboard_practice, .metric = app.leaderboard_metric,
         .row_count = leaderboard_count, .signed_in = leaderboard_signed_in,
         .loading = app_social_refresh_loading() != 0,
-        .has_average = LeaderboardHasAverage(app.leaderboard_practice),
+        .has_average = LeaderboardAppName(app) == "practices" && LeaderboardHasAverage(app.leaderboard_practice),
+        .app = LeaderboardAppName(app),
         .practices_listed = true, .practice_count = installed.practice_count,
         .practices = installed.practices}
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
@@ -439,6 +566,18 @@ leaderboard_screen_draw :: (app: *InnerBreeze) {
     WidgetHostEnd()
     if !state.succeeded {
         return
+    }
+    if state.app != LeaderboardAppName(app) {
+        for index: cast(s32)0..leaderboard_app_count - 1 {
+            if state.app == TextUntilNul(leaderboard_app_names[index][:]) {
+                unused AppCopyText(state.app, app.leaderboard_app[:])
+                app.leaderboard_metric = LEADERBOARD_STREAK
+                leaderboard_ui.scroll = 0
+                LeaderboardLoadCache(app)
+                app_request_social_refresh(app)
+                return
+            }
+        }
     }
     if state.practice != app.leaderboard_practice && state.practice >= 0 &&
     state.practice < EXERCISE_COUNT {

@@ -22,6 +22,10 @@ SocialRefresh :: struct {
     active: bool
     action_done: bool
     result: s32
+    metric: [32]u8
+    statistics: [512]u8
+    publishing: bool
+    published: bool
 }
 
 StartSocialStage :: (refresh: *SocialRefresh) -> bool {
@@ -32,43 +36,50 @@ StartSocialStage :: (refresh: *SocialRefresh) -> bool {
     valid := true
     if refresh.stage == {
         case 1;
-            action := TextUntilNul(refresh.action[:])
-            value := TextUntilNul(refresh.value[:])
-            method = "POST"
-            if action == "send" {
-                valid = BuildFriendRequestBody(value, body[:]) &&
-                    AppCopyText("/api/v1/friends/requests", path[:])
-            } else if action == "accept" || action == "decline" {
-                valid = BuildFriendActionPath(value, action, path[:]) &&
-                    AppCopyText("{}", body[:])
-            } else if action == "remove" {
-                method = "DELETE"
-                valid = BuildFriendPath(value, path[:])
-            } else {
-                valid = false
-            }
+        action := TextUntilNul(refresh.action[:])
+        value := TextUntilNul(refresh.value[:])
+        method = "POST"
+        if action == "send" {
+            valid = BuildFriendRequestBody(value, body[:]) &&
+            AppCopyText("/api/v1/friends/requests", path[:])
+        } else if action == "accept" || action == "decline" {
+            valid = BuildFriendActionPath(value, action, path[:]) &&
+            AppCopyText("{}", body[:])
+        } else if action == "remove" {
+            method = "DELETE"
+            valid = BuildFriendPath(value, path[:])
+        } else {
+            valid = false
+        }
         case 2;
-            valid = AppCopyText("/api/v1/friends/requests", path[:])
-            output = refresh.requests[:]
+        valid = AppCopyText("/api/v1/friends/requests", path[:])
+        output = refresh.requests[:]
         case 3;
-            valid = AppCopyText("/api/v1/friends", path[:])
-            output = refresh.friends[:]
+        valid = AppCopyText("/api/v1/friends", path[:])
+        output = refresh.friends[:]
         case 4;
+        if refresh.statistics[0] != cast(u8)0 && !refresh.published {
+            method = "PUT"
+            valid = AppCopyText("/api/v1/profile/stats", path[:])
+            refresh.publishing = true
+        } else {
             valid = BuildFriendStatsPath("inbe", TextUntilNul(refresh.practice[:]),
-                "streak", path[:])
+                TextUntilNul(refresh.metric[:]), path[:])
             output = refresh.streak[:]
+        }
         case 5;
-            practice := TextUntilNul(refresh.practice[:])
-            valid = BuildFriendStatsPath("inbe", practice,
-                ifx practice == "meditation" then "avg_time" else "avg_hold", path[:])
-            output = refresh.average[:]
+        practice := TextUntilNul(refresh.practice[:])
+        valid = BuildFriendStatsPath("inbe", practice,
+            ifx practice == "meditation" then "avg_time" else "avg_hold", path[:])
+        output = refresh.average[:]
     }
     if !valid {
         refresh.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
         return false
     }
     if !BeginStoredRequest(*refresh.operation, TextUntilNul(refresh.server[:]),
-        refresh.transport, method, TextUntilNul(path[:]), TextUntilNul(body[:]),
+        refresh.transport, method, TextUntilNul(path[:]),
+        ifx refresh.publishing then TextUntilNul(refresh.statistics[:]) else TextUntilNul(body[:]),
         output, true) {
         refresh.result = refresh.operation.result
         return false
@@ -77,16 +88,19 @@ StartSocialStage :: (refresh: *SocialRefresh) -> bool {
 }
 
 BeginSocialRefresh :: (refresh: *SocialRefresh, server: string,
-    transport: AsyncTransport, practice: string, action: string, value: string) -> bool {
+    transport: AsyncTransport, practice: string, action: string, value: string,
+    metric: string = "streak", statistics: string = "") -> bool {
     if refresh == null || refresh.active {
         return false
     }
     refresh.* = SocialRefresh.{}
     refresh.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
     if !AppCopyText(server, refresh.server[:]) ||
-        !AppCopyText(practice, refresh.practice[:]) ||
-        !AppCopyText(action, refresh.action[:]) ||
-        !AppCopyText(value, refresh.value[:]) {
+    !AppCopyText(practice, refresh.practice[:]) ||
+    !AppCopyText(metric, refresh.metric[:]) ||
+    !AppCopyText(statistics, refresh.statistics[:]) ||
+    !AppCopyText(action, refresh.action[:]) ||
+    !AppCopyText(value, refresh.value[:]) {
         return false
     }
     refresh.transport = transport
@@ -114,6 +128,17 @@ PollSocialRefresh :: (refresh: *SocialRefresh) -> bool {
     current: s32 = 0
     if StoredIdentityCurrent(*refresh.operation) {
         current = 1
+    }
+    if refresh.publishing {
+        refresh.publishing = false
+        if succeeded == 0 || current == 0 {
+            refresh.result = ifx current == 0 then cast(s32)AuthResult.AUTH_NO_ACCOUNT else result
+            refresh.active = false
+            return true
+        }
+        refresh.published = true
+        refresh.active = StartSocialStage(refresh)
+        return !refresh.active
     }
     // Wim Hof ranks average holds and meditation average time as well.
     has_average: s32 = 0

@@ -2,7 +2,8 @@
 
 ## [1.0.6] - 2026-10-20
 
-- Maintenance release for Inner Breeze 2.1.37.
+- Choose among your installed apps. Practice then lists each installed practice in your saved order.
+- Other app boards rank earned achievements separately from practice streaks and averages.
 
 ## [1.0.5] - 2026-10-18
 

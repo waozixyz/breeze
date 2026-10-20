@@ -176,6 +176,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
             "leaderboard.breathing.astral_projection.streak": {"rows": [
                 {"user_id_hash": maple, "alias": "maple", "value": 3, "label": "3"},
                 {"user_id_hash": river, "alias": "river", "value": 5, "label": "5"}]},
+            "leaderboard.apps.habits.achievements": {"rows": [
+                {"user_id_hash": river, "alias": "river", "value": 8, "label": "8"},
+                {"user_id_hash": maple, "alias": "maple", "value": 2, "label": "2"}]},
+            "leaderboard.apps.lumi.achievements": {"rows": [
+                {"user_id_hash": maple, "alias": "maple", "value": 6, "label": "6"},
+                {"user_id_hash": river, "alias": "river", "value": 1, "label": "1"}]},
             # A friend without results yet still appears, at zero.
             "friends.list": {"friends": [{"user_id_hash": river, "alias": "river"},
                                          {"user_id_hash": cedar, "alias": "cedar"}]},
@@ -217,6 +223,24 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
         astral = board(["river", "maple", "cedar"])
         assert [name for name, _ in astral] == ["river", "maple", "cedar"], f"astral projection: {astral}"
         assert not driver.find(label="Avg hold", role="button", visible=True), "Astral Projection ranks an average"
+        # App boards use separate cached scores and list only installed apps.
+        driver.press(role="combo_box")
+        options = {node["label"] for node in driver.find(role="option", visible=True)}
+        assert options == {"Habits", "Lumi", "Practice", "Leaderboard"}, options
+        driver.press(role="option", label="Habits")
+        assert practice_grid([]) == [], "app board retained practice selectors"
+        habits = board(["river", "maple", "cedar"])
+        assert habits[0] == ("river", ["8"]), f"Habits reused a practice score: {habits}"
+        subprocess.run(["import", "-window", window, str(output / "habits.png")], check=True, timeout=10)
+        driver.press(role="combo_box")
+        driver.press(role="option", label="Lumi")
+        lumi = board(["maple", "river", "cedar"])
+        assert lumi[0] == ("maple", ["6"]), f"Lumi reused another app score: {lumi}"
+        driver.press(role="combo_box")
+        driver.press(role="option", label="Practice")
+        assert practice_grid(expected) == expected
+        assert board(["river", "maple", "cedar"])[0][1] == ["5"], "Practice lost its own results"
+        subprocess.run(["import", "-window", window, str(output / "practice.png")], check=True, timeout=10)
         log = (output / "board.log").read_text()
         assert "frame rejected" not in log, log
         assert app.poll() is None, log
@@ -253,4 +277,5 @@ with tempfile.TemporaryDirectory(prefix="inbe-about-") as directory:
     assert "out of bounds" not in stdout + stderr, stdout[-4000:]
 driver_directory.cleanup()
 print("Leaderboard: unpinned install, installed practices in order, saved ranks, average hold, "
-      "meditation time, patterns, Astral Projection, a downloaded practice joining and About passed")
+      "meditation time, patterns, Astral Projection, installed app selection, separate app scores, "
+      "a downloaded practice joining and About passed")

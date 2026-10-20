@@ -5,6 +5,9 @@
 #import "byte_text_linux"
 #import "url"
 c :: #system_library "c";
+LeaderboardAppName :: (app: *InnerBreeze) -> string #foreign c;
+LeaderboardStatsBody :: (app: *InnerBreeze) -> string #foreign c;
+#import, file "../cells/package_files.zi";
 LOG_INFO :: 3
 LOG_WARNING :: 4
 LOG_ERROR :: 5
@@ -118,6 +121,8 @@ SocialWorkerArgs :: struct {
     leaderboard_avg_key: [96] u8
     action: [16] u8
     action_value: [96] u8
+    statistics: [512]u8
+    owner: [65]u8
 }
 
 SyncWorkerResult :: struct {
@@ -298,7 +303,7 @@ app_social_push_action :: (action: string, value: string) -> s32 {
 
 #if !ASYNC {
     app_social_fetch :: (url: string, practice: string, metric: string,
-        action: string, action_value: string,
+        action: string, action_value: string, statistics: string, owner: string,
         requests_json: *u8, requests_size: s64,
         friends_json: *u8, friends_size: s64,
         leaderboard_json: *u8, leaderboard_size: s64) -> SyncResult {
@@ -351,6 +356,12 @@ app_social_push_action :: (action: string, value: string) -> s32 {
         if friends_result != cast(SyncResult)SYNC_OK {
             return friends_result
         }
+        if statistics.count > 0 {
+            result = cast(SyncResult)PublishStoredAppStats(url, statistics, owner)
+            if result != cast(SyncResult)SYNC_OK {
+                return result
+            }
+        }
         leaderboard_result = cast(SyncResult)FetchFriendStats(url, practice,
             metric, BytesFromPointer(leaderboard_json,
             cast(u64)leaderboard_size))
@@ -392,8 +403,14 @@ app_social_metric_id :: (practice: s32, metric: s32) -> string {
 }
 
 app_social_leaderboard_key :: (out: *u8, out_size: s64,
-    practice: s32, metric: s32) {
+    practice: s32, metric: s32, app_name: string = "practices") {
     if out == null || out_size == 0 {
+        return
+    }
+    if app_name != "practices" {
+        SyncCopyText(out, out_size, "leaderboard.apps.")
+        SyncAppendText(out, out_size, app_name)
+        SyncAppendText(out, out_size, ".achievements")
         return
     }
     SyncCopyText(out, out_size, "leaderboard.breathing.")
@@ -423,7 +440,7 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
             current_key: [96] u8
             app_social_leaderboard_key(*current_key[0], 96,
                 app.leaderboard_practice,
-                app.leaderboard_metric)
+                app.leaderboard_metric, LeaderboardAppName(app))
             if AppTextFromCString(*current_key[0], 96) == leaderboard_key {
                 AppCopyText(ifx (leaderboard_json.count > 0) then (leaderboard_json) else ("{\"rows\":[]}"), app.leaderboard_json[:])
             }
@@ -431,7 +448,7 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
         if leaderboard_avg_key.count > 0  && leaderboard_avg_json.count > 0 {
             current_avg_key: [96] u8
             app_social_leaderboard_key(*current_avg_key[0], 96,
-                app.leaderboard_practice, 1)
+                app.leaderboard_practice, 1, LeaderboardAppName(app))
             if AppTextFromCString(*current_avg_key[0], 96) == leaderboard_avg_key {
                 AppCopyText(ifx (leaderboard_avg_json.count > 0) then (leaderboard_avg_json) else ("{\"rows\":[]}"), app.leaderboard_avg_json[:])
             }
@@ -479,9 +496,11 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
         leaderboard_avg_json: [8192] u8
         leaderboard_avg_result: SyncResult = cast(SyncResult)SYNC_OK
 
-        if args != null {
+        if args != null && AppTextFromCString(*args.owner[0], 65) == storage_get_setting_text("sync_public_id") {
             result = app_social_fetch(AppTextFromCString(*args.url[0], 256), AppTextFromCString(*args.practice[0], 32), AppTextFromCString(*args.metric[0], 32),
                 AppTextFromCString(*args.action[0], 16), AppTextFromCString(*args.action_value[0], 96),
+                AppTextFromCString(*args.statistics[0], 512),
+                AppTextFromCString(*args.owner[0], 65),
                 *requests_json[0], size_of(type_of(requests_json)),
                 *friends_json[0], size_of(type_of(friends_json)),
                 *leaderboard_json[0], size_of(type_of(leaderboard_json)))
@@ -907,18 +926,24 @@ app_apply_pending_social_refresh :: (app: *InnerBreeze) {
         sync_unlock()
 
         SyncCopyText(*args.url[0], 256, AppTextFromCString(*url[0], 256))
-        SyncCopyText(*args.practice[0], 32, app_social_practice_id(app.leaderboard_practice))
-        SyncCopyText(*args.metric[0], 32, app_social_metric_id(app.leaderboard_practice,
-            app.leaderboard_metric))
+        selected_app := LeaderboardAppName(app)
+        SyncCopyText(*args.practice[0], 32, ifx selected_app == "practices" then app_social_practice_id(app.leaderboard_practice) else selected_app)
         app_social_leaderboard_key(*args.leaderboard_key[0],
             size_of(type_of(args.leaderboard_key)),
             app.leaderboard_practice,
-            PROFILE_LEADERBOARD_STREAK)
+            PROFILE_LEADERBOARD_STREAK, selected_app)
         app_social_leaderboard_key(*args.leaderboard_avg_key[0],
             size_of(type_of(args.leaderboard_avg_key)),
             app.leaderboard_practice,
-            PROFILE_LEADERBOARD_AVG_HOLD)
-        SyncCopyText(*args.metric[0], 32, "streak")
+            PROFILE_LEADERBOARD_AVG_HOLD, selected_app)
+        if selected_app != "practices" {
+            args.leaderboard_avg_key[0] = cast(u8)0
+        }
+        SyncCopyText(*args.metric[0], 32, ifx selected_app == "practices" then "streak" else "achievements")
+        statistics := LeaderboardStatsBody(app)
+        SyncCopyText(*args.statistics[0], 512, statistics)
+        PackageFree(statistics)
+        SyncCopyText(*args.owner[0], 65, storage_get_setting_text("sync_public_id"))
         SyncCopyText(*args.action[0], 16, AppTextFromCString(*action[0], 16))
         SyncCopyText(*args.action_value[0], 96, AppTextFromCString(*action_value[0], 96))
         SyncLog(LOG_INFO, "SYNC: starting background social refresh")
@@ -945,13 +970,20 @@ app_apply_pending_social_refresh :: (app: *InnerBreeze) {
         }
         SocialQueuePeek(action[:], action_value[:])
         app_social_leaderboard_key(*g_social_streak_key[0], 96,
-            app.leaderboard_practice, PROFILE_LEADERBOARD_STREAK)
+            app.leaderboard_practice, PROFILE_LEADERBOARD_STREAK, LeaderboardAppName(app))
         app_social_leaderboard_key(*g_social_average_key[0], 96,
-            app.leaderboard_practice, PROFILE_LEADERBOARD_AVG_HOLD)
+            app.leaderboard_practice, PROFILE_LEADERBOARD_AVG_HOLD, LeaderboardAppName(app))
+        selected_app := LeaderboardAppName(app)
+        statistics := LeaderboardStatsBody(app)
+        defer { PackageFree(statistics) }
+        if selected_app != "practices" {
+            g_social_average_key[0] = cast(u8)0
+        }
         if !BeginSocialRefresh(*g_social_async, AppTextFromCString(*url[0], 256),
             NetworkTransport(*g_social_transfer),
-            app_social_practice_id(app.leaderboard_practice),
-            AppTextFromCString(*action[0], 16), AppTextFromCString(*action_value[0], 96)) {
+            ifx selected_app == "practices" then app_social_practice_id(app.leaderboard_practice) else selected_app,
+            AppTextFromCString(*action[0], 16), AppTextFromCString(*action_value[0], 96),
+            ifx selected_app == "practices" then "streak" else "achievements", statistics) {
             app_social_record_result(g_social_async.result)
             return
         }

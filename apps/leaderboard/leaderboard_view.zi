@@ -16,6 +16,8 @@
 #import "box_props"
 #import "box_widget"
 #import "tree"
+#import "dropdown_props"
+#import "dropdown_widget"
 #import, file "../../src/cells/leaderboard_ui_types.zi";
 #import, file "../../src/cells/leaderboard_types.zi";
 
@@ -27,6 +29,7 @@ host_api :: #system_library "host_api";
 ReadLeaderboardUiHost :: () -> LeaderboardUiFrame #foreign host_api;
 WriteLeaderboardUiHost :: (frame: LeaderboardUiFrame) #foreign host_api;
 ReadLeaderboardRowHost :: (index: s32) -> LeaderboardUiRow #foreign host_api;
+ReadLeaderboardAppHost :: (index: s32) -> LeaderboardUiApp #foreign host_api;
 LeaderboardLocaleHost :: (key: string) -> string #foreign host_api;
 frame: LeaderboardUiFrame;
 state: LeaderboardMessage;
@@ -78,6 +81,24 @@ Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
 }
 
 Finish :: () -> LeaderboardMessage {
+    if frame.app_count > 0 && frame.app_count <= 16 {
+        apps: [16]LeaderboardUiApp
+        options: [16]DropdownOption
+        for index: cast(s32)0..frame.app_count - 1 {
+            apps[index] = ReadLeaderboardAppHost(index)
+            options[index].label = apps[index].title
+        }
+        menu := Dropdown(frame.session, DropdownProps.{.id = 7150,
+                .bounds = Bounds(Scale(16), Scale(12), frame.width - Scale(32), Scale(44)),
+                .selected_index = frame.app_index, .scale = frame.scale}, options[0:frame.app_count])
+        if menu.changed && menu.selected_index >= 0 && menu.selected_index < frame.app_count {
+            state.app = apps[menu.selected_index].name
+            state.metric = LEADERBOARD_STREAK
+            state.refresh = true
+            frame.scroll = 0
+        }
+    }
+
     WriteLeaderboardUiHost(frame)
     state.succeeded = true
     return state
@@ -96,10 +117,13 @@ LeaderboardView :: (message: LeaderboardMessage) -> LeaderboardMessage {
     width := frame.width - x * 2
     y := Scale(12)
 
+    if frame.app_count > 0 { y += Scale(56) }
+
     // Every installed practice stays visible in a grid that grows with
     // them: two per row on phones, more when wide, in rows of equal length.
     practices: [16]s32
-    practice_count := PracticeChoices(practices[:])
+    practice_app := state.app == "" || state.app == "practices"
+    practice_count := ifx practice_app then PracticeChoices(practices[:]) else 0
     gap := Scale(8)
     widest: s32 = (width + gap) / (Scale(160) + gap)
     if widest < 2 {
@@ -133,7 +157,7 @@ LeaderboardView :: (message: LeaderboardMessage) -> LeaderboardMessage {
     }
 
     // Nothing is ranked until a practice is installed.
-    if practice_count == 0 {
+    if practice_app && practice_count == 0 {
         Text(frame.session, TextProps.{.key = cast(u64)7120,
                 .bounds = Bounds(x, y, width, Scale(32)),
                 .text = LeaderboardLocaleHost("profile_no_leaderboard_data"),
@@ -148,6 +172,9 @@ LeaderboardView :: (message: LeaderboardMessage) -> LeaderboardMessage {
     average_label := ifx state.practice == 1 then "profile_metric_avg_time" else "profile_metric_avg_hold"
     labels: [3]string = .[LeaderboardLocaleHost("profile_friends_title"),
     LeaderboardLocaleHost("profile_metric_streak"), LeaderboardLocaleHost(average_label)]
+    if !practice_app {
+        labels[1] = LeaderboardLocaleHost("achievements_title")
+    }
     header_x := x
     for column: cast(s32)0..columns - 1 {
         column_width := ifx column == 0 then name_width else ifx column == columns - 1 then x + width - header_x else value_width
