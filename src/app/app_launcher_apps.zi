@@ -220,6 +220,12 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
     }
     if request.operation == Rules.APPS_OPEN {
         if !app.launcher_drag_moving { app_launcher_activate(app, route) }
+    } else if request.operation == Rules.APPS_INSTALL && AppNavNodeSlot(route) >= 0 &&
+    !NodeAppInstalled(AppNavNodeSlot(route)) {
+        // Its download symbol: the package downloads, and the card says so.
+        unused app_nav_node_app_ready(app, AppNavNodeSlot(route))
+        group.status = "queued"
+        return
     } else if request.operation == Rules.APPS_INSTALL {
         if !app_launcher_install(app, route) { group.status = "rejected"; return }
     } else if request.operation == Rules.APPS_UNINSTALL {
@@ -288,6 +294,11 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
     shape := app_nav_route_shape(route)
     installed := route >= 0 && ((group.owner.enabled_apps & app_nav_route_bit(route)) != 0 ||
         AppNavNodeSlot(route) >= 0)
+    // An app from the node is on this device once its package is; until
+    // then its card shows the download symbol, and that it is downloading.
+    node_slot := ifx route >= 0 then AppNavNodeSlot(route) else -1
+    on_device := installed && (node_slot < 0 || NodeAppInstalled(node_slot))
+    downloading := installed && !on_device && PackagePending(NodeAppIndex(node_slot))
     size: s64
     if route >= 0 {
         unused CopyCString(PackageID(entry.package), entry.id[:])
@@ -340,7 +351,8 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
     if installed {
         BuilderPrint(bytes, ",\"uninstall\",\"%\"", ifx favorite then "unpin" else "pin")
         if LauncherShortcutSupported() { BuilderPrint(bytes, ",\"install_to_launcher\"") }
-    } else { BuilderPrint(bytes, ",\"install\"") }
+    }
+    if !on_device { BuilderPrint(bytes, ",\"install\"") }
     update := installed && entry.package >= 0 && PackageUpdateAvailable(entry.package)
     if installed && entry.package >= 0 { PackageHistoryRequest(entry.package) }
     history_count := ifx installed then PackageHistoryCount(entry.package) else 0
@@ -353,6 +365,10 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
         BuilderPrint(bytes, ",\"seen\"")
     }
     BuilderPrint(bytes, "]")
+    if !on_device {
+        BuilderPrint(bytes, ",\"on_device\":false")
+        if downloading { BuilderPrint(bytes, ",\"downloading\":true") }
+    }
     if entry.package >= 0 {
         LauncherAppQuoted(bytes, "current_version", PackageVersion(entry.package))
         if update {
