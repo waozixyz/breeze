@@ -30,6 +30,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,10 +159,29 @@ def require_unpushed(commit):
         raise Refused(f"the release commit {commit[:10]} is already pushed")
 
 
-def replay(commit, parent):
+def without_release_notes(commit, notes):
+    """Leave note edits for the final release commit, using a private index."""
+    with tempfile.TemporaryDirectory(prefix="inbe-release-notes-") as temporary:
+        environment = dict(os.environ, GIT_INDEX_FILE=str(Path(temporary) / "index"))
+        git("read-tree", commit, env=environment)
+        for path in notes:
+            entry = git("ls-tree", commit + "^", "--", path).strip()
+            if entry:
+                mode, _, blob = entry.split("\t", 1)[0].split()
+                git("update-index", "--add", "--cacheinfo", mode, blob, path, env=environment)
+            else:
+                git("update-index", "--force-remove", "--", path, env=environment)
+        tree = git("write-tree", env=environment).strip()
+    return subprocess.run(["git", "-C", ROOT, "commit-tree", tree, "-p", commit + "^", "-F", "-"],
+                          input="Release-note replay input\n", check=True, capture_output=True,
+                          text=True).stdout.strip()
+
+
+def replay(commit, parent, notes=()):
     """Commit `commit`'s change again on `parent`, without a working tree."""
+    replayed = without_release_notes(commit, notes) if notes else commit
     merged = subprocess.run(["git", "-C", ROOT, "merge-tree", "--write-tree", "--merge-base",
-                             commit + "^", parent, commit], capture_output=True, text=True)
+                             commit + "^", parent, replayed], capture_output=True, text=True)
     if merged.returncode != 0:
         raise Refused(f"{commit[:10]} changes the release commit's files, so the release commit "
                       "cannot move to the top; nothing was changed")
@@ -180,13 +200,16 @@ def move_to_top(release, version):
     require_unpushed(release)
     head = git("rev-parse", "HEAD").strip()
     files = git("diff-tree", "--no-commit-id", "--name-only", "-r", "--no-renames", release).split()
+    notes = [path for path in files if path == "CHANGELOG.md" or
+             fnmatch.fnmatchcase(path, "fastlane/metadata/android/*/changelogs/*.txt")]
     later = git("rev-list", "--reverse", "--parents", f"{release}..{head}").splitlines()
     parent = release + "^"
     for line in later:
         commit, *parents = line.split()
         if len(parents) != 1:
             raise Refused(f"{commit[:10]} is a merge; nothing was changed")
-        parent = replay(commit, git("rev-parse", parent).strip())
+        changed = set(git("diff-tree", "--no-commit-id", "--name-only", "-r", "--no-renames", commit).split())
+        parent = replay(commit, git("rev-parse", parent).strip(), [path for path in notes if path in changed])
     subprocess.run(["git", "-C", ROOT, "update-ref", "-m", "release: move the release commit to the top",
                     "refs/heads/master", parent, head], check=True)
     commit_files(files, version, amend=False)

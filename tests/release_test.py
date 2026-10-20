@@ -80,6 +80,30 @@ class ReleaseTest(unittest.TestCase):
             release.move_to_top(old, "3.0.0")
         self.assertEqual(git(self.root, "rev-parse", "HEAD"), head)
 
+    def test_late_release_notes_join_the_final_release_commit(self):
+        note = "fastlane/metadata/android/en-US/changelogs/174.txt"
+        old = self.commit({"src/core/version.zi": "3.0.0\n", "CHANGELOG.md": "First release note\n",
+                           note: "First release note\n", "releases/phone-checks/3.0.0.json": "{}\n"},
+                          "Release Inner Breeze 3.0.0")
+        self.commit({"src/fix.zi": "late fix\n", "CHANGELOG.md": "The complete release notes\n",
+                     note: "The complete release notes\n"}, "Fix a late bug and describe it")
+        self.commit({note: "The complete, concise release notes\n"}, "Clarify the store notes")
+        (self.root / "docs/notes.md").write_text("another session's work\n")
+        tree = git(self.root, "rev-parse", "HEAD^{tree}")
+        status = git(self.root, "status", "--porcelain")
+
+        release.move_to_top(old, "3.0.0")
+
+        self.assertEqual(self.subjects(), ["Release Inner Breeze 3.0.0", "Clarify the store notes",
+                                          "Fix a late bug and describe it", "Start"])
+        self.assertEqual(git(self.root, "rev-parse", "HEAD^{tree}"), tree)
+        self.assertEqual(git(self.root, "status", "--porcelain"), status)
+        self.assertEqual(git(self.root, "show", "HEAD:src/fix.zi"), "late fix\n")
+        self.assertEqual(git(self.root, "show", "HEAD:" + note), "The complete, concise release notes\n")
+        self.assertEqual(git(self.root, "ls-tree", "HEAD~1", "--", "CHANGELOG.md", note), "")
+        self.assertEqual(git(self.root, "show", "HEAD~1:src/core/version.zi"), "2.9.9\n")
+        self.assertTrue(release.release_at_head("3.0.0"))
+
     def test_later_changes_to_its_files_keep_the_history(self):
         old = self.release_commit()
         self.commit({"src/core/version.zi": "3.0.1\n"}, "Change the version again")
