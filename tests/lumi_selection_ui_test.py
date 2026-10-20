@@ -6,6 +6,7 @@ widget tree and held, swept and pressed through its own pointer path.
 import contextlib
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
 import subprocess
@@ -23,6 +24,15 @@ ENV = os.environ.copy()
 driver = UiDriver(OUTPUT / "driver")
 # A hold selects a message after half a second.
 HOLD_SECONDS = 0.9
+
+
+def release_announced(db, user):
+    """This version's release notes count as already shared, so Lumi adds no
+    update message to the chat under test."""
+    version = re.search(r'VersionString :: "([^"]+)"', (ROOT / "src/core/version.zi").read_text())[1]
+    db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
+               "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
+               (user, "lumi_release_announced", version))
 
 
 def command(*args):
@@ -128,6 +138,8 @@ def keep_offline(profile):
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                        "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
                        (user, key, value))
+        release_announced(db, user)
+        db.execute("DELETE FROM settings WHERE key LIKE 'cell.lumi.message.release-inbe-%'")
 
 
 with tempfile.TemporaryDirectory(prefix="inbe-lumi-selection-") as temporary:

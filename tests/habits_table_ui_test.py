@@ -266,7 +266,8 @@ with contextlib.ExitStack() as stack:
     wait_for(lambda: setting("habits_name_width") == "320",
              lambda: "the resized name width was not saved: " + setting("habits_name_width"))
     assert len(header()) >= 4, "resizing the name column dropped below four days"
-    assert not driver.find(label="Yoga", visible=True), "the widest name column still shows row names"
+    # The widest name column still leaves four days, and its rows keep their names.
+    assert driver.find(label="Yoga", visible=True), "the widest name column hides row names"
     yoga = rows()[1]
     first_day = cell(yoga, header()[0])
     icon = (yoga["x"] + (first_day["x"] - yoga["x"]) / 2, yoga["y"] + yoga["height"] / 2)

@@ -21,21 +21,42 @@ storage_connection_changes :: () -> s64 {
     return sqlite3_total_changes64(storage_state_handle().db)
 }
 
+// SQLite's data version moves with commits from any connection, such as
+// another process editing the same profile, which this connection's own
+// change count does not see.
+sqlite3_file_control :: (db: *void, name: *u8, op: s32, arg: *void) -> s32 #foreign sqlite3_lib "sqlite3_file_control";
+SQLITE_FCNTL_DATA_VERSION :: 35
+
+storage_connection_data_version :: () -> s64 {
+    if storage_state_handle().db == null { return -1 }
+    main: [5]u8 = .[109, 97, 105, 110, 0]
+    version: u32 = 0
+    if sqlite3_file_control(storage_state_handle().db, *main[0], SQLITE_FCNTL_DATA_VERSION,
+        cast(*void)*version) != 0 {
+        return -1
+    }
+    return cast(s64)version
+}
+
 storage_revision_value: s64;
 storage_revision_generation: s64 = -1;
 storage_revision_changes: s64 = -1;
+storage_revision_data_version: s64 = -1;
 
 // A revision that advances whenever stored data may have changed: after any
-// row change on the app's single connection, or after a reopen. Caches of
+// row change on the app's connection or a commit by another, or after a
+// reopen. Caches of
 // stored values compare it for equality; it runs no query, so screens and
 // per-frame work can check it freely. Timestamps cannot serve here: several
 // writes share one second.
 storage_data_revision :: () -> s64 {
     changes := storage_connection_changes()
-    if changes != storage_revision_changes ||
+    data_version := storage_connection_data_version()
+    if changes != storage_revision_changes || data_version != storage_revision_data_version ||
         storage_connection_generation != storage_revision_generation {
         storage_revision_value += 1
         storage_revision_changes = changes
+        storage_revision_data_version = data_version
         storage_revision_generation = storage_connection_generation
     }
     return storage_revision_value

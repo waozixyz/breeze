@@ -210,7 +210,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
             wait_log(log, "screen=0->1")
             driver.wait(label="Pause", role="button")
         with sqlite3.connect(profile / "inbe.db") as db:
-            assert list(db.iterdump()) == before, "Mini changed the persisted profile"
+            after = list(db.iterdump())
+            assert after == before, ("Mini changed the persisted profile",
+                                     sorted(set(after) - set(before))[:8], sorted(set(before) - set(after))[:8])
         assert settings(profile)["enabled_apps"] == str(mask)
         # Expanding an active mini session must preserve both its ticking
         # and the full profile's selection through a later normal save/close.

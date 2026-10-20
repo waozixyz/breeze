@@ -210,7 +210,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-audio-") as temporary:
         driver.press(label="Download selected", role="button")
         driver.wait(label="Retry downloads", role="button", timeout=30)
         downloads = set(re.findall(r"downloading pack ([^\s]+)", log.read_text()))
-        assert downloads == {"sunsalutation/en"}, downloads
+        # Practice voices only: every narrated practice in this language.
+        assert downloads == {"sunsalutation/en", "astral_projection/en"}, downloads
         saved(profile, "guide_narration_enabled", 0)
         saved(profile, "voice_narration_enabled", 1)
 

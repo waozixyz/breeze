@@ -25,6 +25,15 @@ assert all(not os.environ.get(key) for key in DISPLAY_KEYS), "Inherited desktop 
 BINARY = Path(sys.argv[1]).resolve()
 
 
+def release_announced(db, user):
+    """This version's release notes count as already shared, so Lumi adds no
+    update message to the chat under test."""
+    version = re.search(r'VersionString :: "([^"]+)"', (ROOT / "src/core/version.zi").read_text())[1]
+    db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
+               "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
+               (user, "lumi_release_announced", version))
+
+
 def stop(process):
     if process.poll() is None:
         process.terminate()
@@ -123,6 +132,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
         for key, value in settings.items():
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                        "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, value))
+        release_announced(db, user)
         for index in range(1, 141):
             value = json.dumps(dict(time=index, user=1, kind=0, payload="",
                                    text=f"History message {index:03}"))
@@ -146,18 +156,18 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
         driver.release_pointer()
         assert earliest == 1, ("Could not scroll through both older batches", earliest)
         with sqlite3.connect(profile / "inbe.db") as db:
-            assert db.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'cell.lumi.message.%'").fetchone()[0] == 140
+            assert db.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'cell.lumi.message.test-%'").fetchone()[0] == 140
         # Telegram lives in Profile: Apps, Profile, then its Telegram card.
         driver.press(label="Apps", role="button")
         driver.press(label="Profile", role="button")
-        driver.wait(label="No account")
+        driver.wait(label="No account connected")
         page = driver.wait(role="scroll")
         x, y = UiDriver.center(page)
         for _ in range(10):
             driver.pointer(x, y, wheel=-1)
         driver.release_pointer()
-        # The card's button has no label of its own; press its title.
-        driver.press(contains="Telegram input", role="text")
+        # The shared Self profile lists Telegram among Inner Breeze's extensions.
+        driver.press(label="Telegram")
         driver.wait(contains="Connect your sync account first")
         driver.wait(contains="Telegram input", role="title_bar")
         normalized = " ".join(driver.text().split())
