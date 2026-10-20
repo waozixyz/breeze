@@ -45,6 +45,7 @@ diary_blob_generation: s64;
 diary_preview_generation: s64;
 #if !#defined(_WIN32) && !#defined(PLATFORM_WEB) {
     DiaryLock :: (descriptor: s32, operation: s32) -> s32 #foreign c "flock";
+    DiaryDescriptorFlags :: (descriptor: s32, command: s32, flags: s32) -> s32 #foreign c "fcntl";
 }
 
 DiaryStorePrepare :: () -> bool {
@@ -74,7 +75,10 @@ DiaryStorePrepare :: () -> bool {
         if !diary_lock.valid {
             return false
         }
-        if DiaryLock(diary_lock.fd, 6) != 0 {
+        // Downloads and file pickers exec native helpers. They must not keep
+        // this app's lock alive when it closes and another instance opens.
+        // fcntl(F_SETFD, FD_CLOEXEC) applies on every supported Unix host.
+        if DiaryDescriptorFlags(diary_lock.fd, 2, 1) != 0 || DiaryLock(diary_lock.fd, 6) != 0 {
             unused CloseFile(diary_lock)
             diary_lock = FileHandle.{}
             return false

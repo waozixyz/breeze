@@ -20,6 +20,7 @@
 #
 #   sh scripts/release-ready.sh             every covered job; writes the stamp
 #   sh scripts/release-ready.sh TARGET...   only these make targets; no stamp
+# RELEASE_READY_DNS optionally supplies a resolver when rootless DNS is broken.
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -136,8 +137,16 @@ if [ -d "$android_sdk/ndk" ]; then
 fi
 
 status=0
+dns_option=""
+if [ -n "${RELEASE_READY_DNS:-}" ]; then
+    case "$RELEASE_READY_DNS" in
+        *[!0-9a-fA-F.:]*) echo "release-ready: RELEASE_READY_DNS must be an IP address" >&2; exit 2 ;;
+    esac
+    dns_option="--dns=$RELEASE_READY_DNS"
+fi
 # shellcheck disable=SC2086
 podman run --rm --pull=never --userns=keep-id \
+    $dns_option \
     -v "$root:/src:O" \
     -v "$root/$output/build:/src/build" \
     -v "$root/$output/home:/home/ubuntu" \

@@ -143,6 +143,7 @@ test: android-geometry-probe-test
 test: lumi-feedback-delivery-test
 test: lumi-connection-test
 test: diary-spelling-test diary-history-test diary-markdown-test
+test: cells-test
 test: device-info-test
 test: dew-test
 test: lists-sharing-test
