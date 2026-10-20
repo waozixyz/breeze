@@ -188,6 +188,27 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
             next_card()
             driver.wait(contains=name)
             assert buttons('Start Practice') and not buttons('Install'), (name, screen_text())
+            # Every meditation practice has How to and Customize.
+            assert buttons('How to') and buttons('Customize'), (name, screen_text())
+        # Astral Projection's Customize offers its music and narration, in its
+        # one voice, and How to explains the session.
+        driver.press(label='Customize', role='button')
+        driver.wait(label='Background music')
+        assert driver.find(label='Voice narration'), screen_text()
+        assert not driver.find(label='Male voice', role='button'), screen_text()
+        driver.press(label='Back', role='button')
+        driver.wait(label='Start Practice', role='button')
+        driver.press(label='How to', role='button')
+        driver.wait(contains='Lie down somewhere quiet')
+        driver.press(label='Back', role='button')
+        driver.wait(label='Start Practice', role='button')
+        # A swipe past a tab's last practice goes on to the next tab.
+        title = driver.find(contains='Astral Projection', visible=True)[0]
+        x, y = UiDriver.center(title)
+        driver.drag((x + 120, y - 140), (x - 120, y - 140), steps=8)
+        driver.wait_idle(frames=3)
+        driver.wait(contains='Sun Salutation')
+        assert selected_tab() == 'Yoga', home_tabs()
         # Yoga offers Sun Salutation to install, with its size, and no Start.
         select_tab('Yoga')
         driver.wait(contains='Sun Salutation')
