@@ -8,7 +8,9 @@
 
 using ImageFit;
 
-// Both flat characters share one transparent stage and pose timing.
+// Both flat characters share one transparent stage and pose timing. Each
+// has two frame sets: the first round's, and the next one's, in which the
+// other leg steps back first.
 
 // The number of frames of `step`; the last one is its held pose.
 SunSalutationFrameCount :: (step: s32) -> s32 {
@@ -16,19 +18,29 @@ SunSalutationFrameCount :: (step: s32) -> s32 {
         SUN_SALUTATION_STEP_COUNT - 1)]
 }
 
-// The asset of frame `index` of `step`, both counted from 0, held for this
-// frame of the app.
-SunSalutationFramePath :: (character: s32, step: s32, index: s32) -> string {
+// The frame set of `character` for a round, the other side's in every
+// other round.
+SunSalutationFrameSet :: (character: s32, other_side: bool) -> s32 {
     character = SalutationClamp(character, 0, SUN_SALUTATION_CHARACTER_COUNT - 1)
+    if other_side {
+        return character + SUN_SALUTATION_CHARACTER_COUNT
+    }
+    return character
+}
+
+// The asset of frame `index` of `step` in frame set `set`, both counted
+// from 0, held for this frame of the app.
+SunSalutationFramePath :: (set: s32, step: s32, index: s32) -> string {
+    set = SalutationClamp(set, 0, SUN_SALUTATION_FRAME_SETS - 1)
     step = SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
     index = SalutationClamp(index, 0, SunSalutationFrameCount(step) - 1)
     frames_per_character: s32 = 1 + (SUN_SALUTATION_STEP_COUNT - 1) * SUN_SALUTATION_MOVE_FRAMES
-    timeline_frame := character * frames_per_character
+    timeline_frame := set * frames_per_character
     if step > 0 {
         timeline_frame += 1 + (step - 1) * SUN_SALUTATION_MOVE_FRAMES + index
     }
     stored := SunSalutationStoredFrame(timeline_frame)
-    character = stored / frames_per_character
+    set = stored / frames_per_character
     stored %= frames_per_character
     step = 0
     index = 0
@@ -36,7 +48,7 @@ SunSalutationFramePath :: (character: s32, step: s32, index: s32) -> string {
         step = 1 + (stored - 1) / SUN_SALUTATION_MOVE_FRAMES
         index = (stored - 1) % SUN_SALUTATION_MOVE_FRAMES
     }
-    directory := sun_salutation_frame_directories[character]
+    directory := sun_salutation_frame_directories[set]
     name: [96]u8
     if !AppAppendText(directory, name[:]) ||
     !AppAppendText("00-000.png", name[:]) {
@@ -65,21 +77,21 @@ SunSalutationStage :: (bounds: Rectangle) -> Rectangle {
         bounds.y + (bounds.height - height) * 0.5, width, height}
 }
 
-// Frame `index` of `step` at its place on `stage`, -1 being the previous
-// step's held pose.
-SunSalutationFrameImage :: (character: s32, step: s32, index: s32,
+// Frame `index` of `step` in frame set `set` at its place on `stage`, -1
+// being the previous step's held pose.
+SunSalutationFrameImage :: (set: s32, step: s32, index: s32,
     stage: Rectangle) -> ImageProps {
-    character = SalutationClamp(character, 0, SUN_SALUTATION_CHARACTER_COUNT - 1)
+    set = SalutationClamp(set, 0, SUN_SALUTATION_FRAME_SETS - 1)
     step = SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
     if index < 0 && step > 0 {
         step -= 1
         index = SunSalutationFrameCount(step) - 1
     }
     index = SalutationClamp(index, 0, SunSalutationFrameCount(step) - 1)
-    pose := character * SUN_SALUTATION_STEP_COUNT + step
+    pose := set * SUN_SALUTATION_STEP_COUNT + step
     scale := stage.width / cast(float32)SUN_SALUTATION_STAGE_W
     picture: ImageProps
-    picture.asset_path = SunSalutationFramePath(character, step, index)
+    picture.asset_path = SunSalutationFramePath(set, step, index)
     picture.bounds = Rectangle.{
         stage.x + cast(float32)sun_salutation_step_x[pose] * scale,
         stage.y + cast(float32)sun_salutation_step_y[pose] * scale,
@@ -91,7 +103,8 @@ SunSalutationFrameImage :: (character: s32, step: s32, index: s32,
     return picture
 }
 
-// The pose held at `step`, as large as fits in `bounds` (thumbnails).
+// The pose held at `step` in the first round, as large as fits in
+// `bounds` (thumbnails).
 SunSalutationPoseImage :: (character: s32, step: s32,
     bounds: Rectangle) -> ImageProps {
     character = SalutationClamp(character, 0, SUN_SALUTATION_CHARACTER_COUNT - 1)

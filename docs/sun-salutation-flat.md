@@ -46,10 +46,10 @@ The shapes behind those names are tables in the script:
 
 Limbs are hulls of circles along their bones, and parts of one colour fill as
 one shape, so joints never show seams. Feet solve their own floor contact:
-flat when standing, on tucked toes behind her in plank, on the instep in
-upward-facing dog. `POSE_CHANGES` lowers a few ankles so the drawn feet
-reach the floor, and in plank keeps the head in line with the spine and the
-hips low enough that shoulders, seat and heels read as one straight line.
+flat when standing, on tucked toes behind her in plank and the lunges, on the
+instep in cobra. With her chest on the floor, an elbow that would bend down
+through it turns up toward her back instead. `--other-side` draws the next
+round, in which the other leg steps back first.
 
 ## App frames
 
@@ -60,13 +60,16 @@ python3 scripts/render-sun-salutation-characters.py
 ```
 
 It draws every listed character on a clear stage at the rig's sprite scale,
-the woman first and then the man, with the app's three-second moves: one
+the woman first and then the man, for the first round and again for the next
+one (the other leg first), with the app's three-second moves: one
 held frame for the first pose, then for each of the other eleven 90 frames
 of the move and 30 more while the hanging hair settles
 (`SETTLE_SECONDS`). The app plays those during the hold and keeps the last
 one; the rest of the hold is left out, so the hair carries on from there
 into the next move. Frames are cropped to each move, quantized to 256
-colours and saved to `assets/practices/sunsalutation/characters/NN-<id>/`.
+colours and saved to `assets/practices/sunsalutation/characters/NN-<id>/`,
+numbered by frame set: `01` and `02` for the first round, `03-<id>-other-side`
+and `04-<id>-other-side` for the next.
 It then writes `src/practices/sun_salutation/sun_salutation_frames.zi` and
 `docs/sun-salutation-characters.json`, recompresses the PNGs
 (`scripts/optimize-animation-pngs.py`, needs zopfli) and stores identical

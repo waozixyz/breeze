@@ -128,9 +128,10 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
     const root = 'assets/practices/sunsalutation/characters';
     const characters = [...new Set([...files.keys()].filter(name => name.startsWith(root + '/'))
       .map(name => name.slice(root.length + 1).split('/')[0]))].sort();
-    if (characters.length !== 2) throw new Error('expected two Sun Salutation characters');
+    // The woman and the man, for the first round and for the next, other leg first.
+    if (characters.length !== 4) throw new Error('expected four Sun Salutation frame sets');
     const frameSources = ${JSON.stringify(frameSources)};
-    if (frameSources.length !== 2 * ${characterFrames}) throw new Error('incomplete animation timeline');
+    if (frameSources.length !== 4 * ${characterFrames}) throw new Error('incomplete animation timeline');
     const storedPaths = [...files.keys()].filter(name => name.startsWith(root + '/') && name.endsWith('.png'));
     if (storedPaths.length !== new Set(frameSources).size) throw new Error('stored animation inventory differs');
     let totalFrames = 0;

@@ -47,20 +47,6 @@ def colour(value):
     return tuple(int(value[index:index + 2], 16) / 255 for index in (0, 2, 4))
 
 
-# The rig's poses were placed for the painted parts. These ankles let the
-# drawn feet reach the floor in plank and upward-facing dog.
-POSE_CHANGES = {
-    # In plank the head stays in line with the spine, looking at the floor
-    # a little ahead of the hands, not up at the horizon. The hips sit a
-    # little lower, shoulders still over the wrists, so the line from the
-    # shoulders over the seat to the heels reads straight, not piked.
-    "plank": {"ankles": [441, 395], "gaze": -45, "hip": [623.6, 333.5], "spine": -21.5},
-    "low": {"ankles": [441, 395]},
-    "stepBack": {"farAnkle": [441, 395]},
-    "upDog": {"ankles": [458, 421]},
-}
-
-
 # Shapes -------------------------------------------------------------------
 
 def circle(center, radius, count=40):
@@ -449,6 +435,13 @@ class Figure:
         shoulder = add(p.shoulder, offset)
         target = add(p.far_wrist if far else p.near_wrist, offset)
         elbow, wrist = GIRL.joint(shoulder, target, self.bones["upperArm"], self.bones["forearm"], 1)
+        # With her chest on the floor and the hands beside it, that elbow
+        # would bend down through the floor; it turns up toward her back
+        # instead. Blending the two bends is the elbow turning out of the
+        # picture, so the move into the pose stays smooth.
+        lifted, _ = GIRL.joint(shoulder, target, self.bones["upperArm"], self.bones["forearm"], -1)
+        sink = elbow[1] - (self.ground - self.sleeves["elbow"])
+        elbow = mix(elbow, lifted, smoothstep(-24.0, 0.0, sink))
         return shoulder, elbow, wrist
 
     @staticmethod
@@ -749,10 +742,15 @@ class Figure:
         return self.surface.get_data()
 
 
-def load_rig():
+def load_rig(other_side=False):
+    """The rig, for the first round or, with other_side, for the next one,
+    in which the other leg steps back first and the other knee goes down."""
     rig = json.loads(RIG.read_text())
-    for name, changes in POSE_CHANGES.items():
-        rig["poses"][name].update(changes)
+    if other_side:
+        swap = {name: other for name, other in rig["otherSide"].items() if name != "about"}
+        rig["sequence"] = [swap.get(name, name) for name in rig["sequence"]]
+        rig["stepping"] = {step: [swap.get(name, name) for name in stops] if step.isdigit() else stops
+                           for step, stops in rig["stepping"].items()}
     return rig
 
 
@@ -793,14 +791,14 @@ def run_encoder(target, width, height, fps, chapters, frames):
         raise RuntimeError(f"Encoding failed: {target}")
 
 
-def render(rig, style, character, output, width, height, fps):
+def render(rig, style, character, output, width, height, fps, suffix=""):
     figure = Figure(rig, style, character, width, height, fps)
     timeline = figure.timeline
     frames = (figure.frame(frame / fps) for frame in range(round(timeline.duration * fps)))
-    encode(rig, timeline, output / f"{character['id']}.mp4", width, height, fps, frames)
+    encode(rig, timeline, output / f"{character['id']}{suffix}.mp4", width, height, fps, frames)
 
 
-def render_grid(rig, style, characters, output, width, height, fps):
+def render_grid(rig, style, characters, output, width, height, fps, suffix=""):
     """All characters side by side, numbered, to compare them."""
     figures = [Figure(rig, style, character, width, height, fps) for character in characters]
     columns = min(3, len(figures))
@@ -832,7 +830,7 @@ def render_grid(rig, style, characters, output, width, height, fps):
             grid.flush()
             yield grid.get_data()
 
-    encode(rig, timeline, output / "choose-characters.mp4", width * columns, height * rows, fps, frames())
+    encode(rig, timeline, output / f"choose-characters{suffix}.mp4", width * columns, height * rows, fps, frames())
 
 
 def main():
@@ -849,10 +847,16 @@ def main():
     parser.add_argument("--height", type=int, default=output["height"])
     parser.add_argument("--fps", type=int, default=output["fps"])
     parser.add_argument("--still", type=float, action="append", help="render a PNG at this time in seconds")
+    parser.add_argument("--other-side", action="store_true",
+                        help="the next round: the other leg steps back first (videos get -other-side)")
     options = parser.parse_args()
+    suffix = ""
+    if options.other_side:
+        rig = load_rig(other_side=True)
+        suffix = "-other-side"
     if options.grid:
         render_grid(rig, style, style["characters"], options.output,
-                    options.width // 2, options.height // 2, options.fps)
+                    options.width // 2, options.height // 2, options.fps, suffix)
         return
     chosen = style["characters"] if options.all else [characters[options.character]]
     for character in chosen:
@@ -860,12 +864,12 @@ def main():
             figure = Figure(rig, style, character, options.width, options.height, options.fps)
             for still in sorted(options.still):
                 figure.frame(still)
-                target = options.output / "stills" / f"{character['id']}-{still:g}.png"
+                target = options.output / "stills" / f"{character['id']}{suffix}-{still:g}.png"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 figure.surface.write_to_png(str(target))
                 print(target, flush=True)
         else:
-            render(rig, style, character, options.output, options.width, options.height, options.fps)
+            render(rig, style, character, options.output, options.width, options.height, options.fps, suffix)
 
 
 if __name__ == "__main__":

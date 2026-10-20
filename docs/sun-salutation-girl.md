@@ -61,16 +61,19 @@ coverage and the white top stays intact; nothing is keyed out afterwards.
 The app plays the flat characters' frames; see
 [the flat renderer](sun-salutation-flat.md#app-frames).
 
-The app moves with the breath. Each pose is reached on one breath. The
-title bar shows only the step number; below it the session shows the pose's
-name and "Breathe in" or "Breathe out" above a bar that fills while
-breathing in and empties while breathing out: out in Mountain pose, in to the
-upward salute, out to the fold, in to the half lift, out to step back into
-plank and in while holding it, out to lower down, in to upward dog, out to
-downward dog, then in, out, in and out back up to Mountain pose. Only the
-first round starts with a breath in Mountain pose; later rounds rise straight
-from the Mountain pose that ended the previous one. The tempo is the length of
-one breath, 6 s in the first round easing to 4 s in the last by default.
+The app moves with the breath through the classic sequence. Each pose is
+reached on one breath. The title bar shows only the step number; below it the
+session shows the pose's name and "Breathe in" or "Breathe out" above a bar
+that fills while breathing in and empties while breathing out: out in
+Mountain pose, in to the upward salute, out to the fold, in to the lunge with
+one knee down, out to step back into plank and in while holding it, out to
+lower the knees, chest and chin, in to cobra, out to downward dog, in to the
+lunge with the other knee down, then out, in and out back up to Mountain
+pose. Only the first round starts with a breath in Mountain pose; later
+rounds rise straight from the Mountain pose that ended the previous one. Each
+round switches legs: the next one plays the other side's frames, in which
+the other leg steps back first. The tempo is the length of one breath, 6 s in
+the first round easing to 4 s in the last by default.
 
 The move into a pose fills three quarters of its breath, at most 4 s, showing
 one solid frame at a time, then the pose settles for the rest of the breath.
@@ -84,16 +87,27 @@ separate images so that only the few most recent ones stay loaded.
   they never pass across her face.
 - Upward salute to forward fold, and back up, is a swan dive: straight arms
   stay in line with the spine, then sweep to the floor.
-- The half lift keeps the legs straight and the back long, hands at the
-  knees.
-- Half lift to plank goes through a low lunge: she bends her knees and plants
-  her hands with long arms and her head up, then the far foot steps back
-  first with the front knee over the ankle, then the near foot. Down dog to
-  half lift steps forward the same way.
+- The hands rest beside the feet in the fold and stay planted there until
+  she stands up again; the feet stay where plank puts them until down dog.
+- Fold to lunge: she bends her knees, then the far foot steps back to where
+  plank's feet will be and its knee goes down, toes tucked, the front shin
+  standing over its ankle, chest lifted and looking forward and up.
+- Lunge to plank: the back knee lifts, then the near foot steps back.
+- Plank to knees, chest and chin: both knees go down first, then the chest
+  and chin, the hips staying a little raised. With the chest on the floor an
+  elbow bending down would pass through it, so it turns up toward her back;
+  the flat renderer blends the two bends, the elbow turning out of the
+  picture.
+- Knees, chest and chin to cobra: she slides forward onto her hips with the
+  tops of her feet down and lifts her chest on bent elbows.
+- Down dog to lunge: the far foot steps forward between the hands, then the
+  near knee goes down; the near foot then steps forward into the fold.
+- `otherSide` swaps the lunges for the next round, so the near leg steps
+  back first and the far knee goes down in the second lunge.
 - A foot steps while her hips are high: it leads hips that lower and follows
   hips that rise, skims just off the floor, and the hips lift a little as it
   passes under them. The leg reaches long instead of kicking up behind her.
-- Upward dog to downward dog rolls the toes under and lifts the ankle over
+- Cobra to downward dog rolls the toes under and lifts the ankle over
   them. The instep and flat-foot drawings share the same ankle, toe and heel
   positions at their solid handoff, using the `toe` and `heel` key points in
   the rig's foot parts. The two renderers use the same contact transforms.
