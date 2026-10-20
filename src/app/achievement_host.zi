@@ -143,16 +143,46 @@ AchievementVisibility :: () {
     }
 }
 
-AchievementPageDocument :: (page: s32) -> string {
+AchievementPageDocument :: (page: s32, app_filter: string = "") -> string {
     AchievementCatalogsLoad()
     AchievementVisibility()
     AchievementEvaluate()
     PackageFree(achievement_projection)
+    app_ids: [32][97]u8
+    app_titles: [32][256]u8
+    app_totals: [32]s32
+    app_earned: [32]s32
+    app_count: s32 = 0
+    filter_found := app_filter == ""
+    for index: cast(s32)0..achievement_count - 1 {
+        entry := achievement_definitions[index]
+        if !entry.visible { continue }
+        id := TextUntilNul(entry.app[:])
+        if id == app_filter { filter_found = true }
+        slot: s32 = -1
+        for prior: cast(s32)0..app_count - 1 {
+            if TextUntilNul(app_ids[prior][:]) == id { slot = prior; break }
+        }
+        if slot < 0 && app_count < 32 {
+            slot = app_count
+            app_count += 1
+            unused CopyCString(id, app_ids[slot][:])
+            group_key := PackageText("achievement_group_", TextUntilNul(entry.group[:]))
+            unused CopyCString(LocaleText(group_key), app_titles[slot][:])
+            PackageFree(group_key)
+        }
+        if slot >= 0 {
+            app_totals[slot] += 1
+            if entry.awarded { app_earned[slot] += 1 }
+        }
+    }
+    if !filter_found { app_filter = "" }
     total: s32 = 0
     earned: s32 = 0
     for index: cast(s32)0..achievement_count - 1 {
         entry := achievement_definitions[index]
         if !entry.visible { continue }
+        if app_filter != "" && TextUntilNul(entry.app[:]) != app_filter { continue }
         total += 1
         if entry.awarded { earned += 1 }
     }
@@ -164,12 +194,24 @@ AchievementPageDocument :: (page: s32) -> string {
     out: Vec(u8)
     BuilderPrint(*out, "{\"version\":1,\"owner\":")
     SelfAchievements.SelfQuote(*out, AchievementOwner())
-    BuilderPrint(*out, ",\"page\":%,\"pages\":%,\"total\":%,\"earned\":%,\"alerts\":%,\"rows\":[", selected, pages, total, earned, ifx AchievementAlerts() then 1 else 0)
+    BuilderPrint(*out, ",\"page\":%,\"pages\":%,\"total\":%,\"earned\":%,\"alerts\":%,\"app\":", selected, pages, total, earned, ifx AchievementAlerts() then 1 else 0)
+    SelfAchievements.SelfQuote(*out, app_filter)
+    BuilderPrint(*out, ",\"apps\":[")
+    for index: cast(s32)0..app_count - 1 {
+        if index > 0 { BuilderPrint(*out, ",") }
+        BuilderPrint(*out, "{\"id\":")
+        SelfAchievements.SelfQuote(*out, TextUntilNul(app_ids[index][:]))
+        BuilderPrint(*out, ",\"title\":")
+        SelfAchievements.SelfQuote(*out, TextUntilNul(app_titles[index][:]))
+        BuilderPrint(*out, ",\"total\":%,\"earned\":%}", app_totals[index], app_earned[index])
+    }
+    BuilderPrint(*out, "],\"rows\":[")
     position: s32 = 0
     written: s32 = 0
     for index: cast(s32)0..achievement_count - 1 {
         entry := achievement_definitions[index]
         if !entry.visible { continue }
+        if app_filter != "" && TextUntilNul(entry.app[:]) != app_filter { continue }
         position += 1
         if position <= selected * 20 || position > (selected + 1) * 20 { continue }
         if written > 0 { BuilderPrint(*out, ",") }
@@ -191,6 +233,12 @@ AchievementPageDocument :: (page: s32) -> string {
         SelfAchievements.SelfQuote(*out, group_text)
         PackageFree(group_text)
         PackageFree(group_key)
+        BuilderPrint(*out, ",\"id\":")
+        SelfAchievements.SelfQuote(*out, TextUntilNul(entry.id[:]))
+        BuilderPrint(*out, ",\"badge\":")
+        badge := AssetRead(TextUntilNul(entry.badge[:]))
+        SelfAchievements.SelfQuote(*out, ifx badge.found && badge.data.count <= 1024 then badge.data else "")
+        BuilderPrint(*out, ",\"badge_tier\":%", entry.badge_tier)
         BuilderPrint(*out, ",\"title\":")
         SelfAchievements.SelfQuote(*out, LocaleText(TextUntilNul(entry.title_key[:])))
         BuilderPrint(*out, ",\"description\":")
@@ -236,6 +284,20 @@ AchievementSelfCall :: (app: *void, name: string,
     arguments: *HostValue, count: s32, result: *HostValue) -> bool {
     if count != 2 || app == null { return false }
     key := AchievementSelfArgument(arguments[0])
+    if name == "AppServiceHost" && key == "self.achievements" {
+        document := AchievementSelfArgument(arguments[1])
+        filter: [97]u8
+        page := ReadNumber(document, FieldAt(document, 0, "page"))
+        filter_size := ReadStringText(document, FieldAt(document, 0, "app"), filter[:])
+        valid := document.count < 512 && page.valid && page.value >= 0 && page.value <= 10000 &&
+        page.value == cast(float64)cast(s32)page.value && filter_size >= 0
+        if !valid {
+            result.* = AchievementSelfText("")
+            return true
+        }
+        result.* = AchievementSelfText(AchievementPageDocument(cast(s32)page.value, TextUntilNul(filter[:])))
+        return true
+    }
     if name == "ReadStoreHost" && key.count > 23 && key[:18] == "achievements/page." && key[key.count - 5:] == ".json" {
         page: s32 = 0
         for byte: key[18:key.count - 5] {
@@ -266,8 +328,8 @@ AchievementSelfCall :: (app: *void, name: string,
         version := ReadNumber(document, FieldAt(document, 0, "version"))
         end := ValueEnd(document, Space(document, 0), 0)
         valid := document.count < 1024 && end >= 0 && Space(document, end) == document.count &&
-            version.valid && version.value == 1 && alerts.valid && (alerts.value == 0 || alerts.value == 1) &&
-            ReadStringText(document, FieldAt(document, 0, "owner"), owner[:]) > 0 && TextUntilNul(owner[:]) == AchievementOwner()
+        version.valid && version.value == 1 && alerts.valid && (alerts.value == 0 || alerts.value == 1) &&
+        ReadStringText(document, FieldAt(document, 0, "owner"), owner[:]) > 0 && TextUntilNul(owner[:]) == AchievementOwner()
         saved := valid && AchievementSetAlerts(alerts.value == 1)
         result.* = HostScalar("bool", ifx saved then 1 else 0)
         return true

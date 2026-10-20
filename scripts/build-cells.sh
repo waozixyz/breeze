@@ -29,7 +29,8 @@ mkdir -p "$output" build/bundled-cells
 self_dir="$root/build/packages/self"
 mkdir -p build/self
 "$ziran" bundle --root "$self_dir" --module-path "$self_dir/src" \
-    --module-path kryon=build/packages/kryon/src/backend --module-path build/packages/kryon/src/ui \
+    --module-path kryon=build/packages/kryon/src/backend \
+    --module-path kryon=build/packages/kryon/src/ui --module-path build/packages/kryon/src/ui \
     --module-path build/packages/ziran/std --module-path qrcode=build/packages/qrcode/src \
     --define KRYON_HOSTED_UI \
     --asset-dir "assets=$self_dir/assets" --entry self:Main -o build/self/self.zib "$self_dir/src/self.zi"

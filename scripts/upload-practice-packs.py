@@ -20,6 +20,7 @@ from datetime import datetime
 from hashlib import sha256
 import importlib.util
 import io
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -77,6 +78,9 @@ def sun_salutation_downloads(packs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true", help="only report packs missing on the node")
+    parser.add_argument("--content", action="append",
+                        choices=json.loads((ROOT / "apps/practice/content.json").read_text())["practices"],
+                        help="limit this attempt to the named practice's content pack; repeat for another practice")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="inbe-practice-packs-") as scratch:
         store = Path(scratch)
@@ -88,6 +92,8 @@ def main():
         # ID; only the content packs its catalog names are uploaded.
         practices = (ROOT / "build/cells/practices.zib").read_bytes()
         listed = package_release.catalog_from_bundle(practices)
+        if args.content:
+            listed = [pack for pack in listed if pack["practice"] in args.content and not pack["language"]]
         catalog = {pack["sha256"] for pack in listed}
         packs = sorted(directory / (digest + ".zib") for digest in catalog)
         missing = []
@@ -103,7 +109,7 @@ def main():
         if args.check or not missing:
             if missing and args.check:
                 return 1
-            return 0 if sun_salutation_downloads(listed) else 1
+            return 0 if not any(pack["practice"] == "sunsalutation" for pack in listed) or sun_salutation_downloads(listed) else 1
         archive = io.BytesIO()
         with tarfile.open(fileobj=archive, mode="w") as tar:
             for path in missing:
@@ -139,7 +145,7 @@ def main():
             receipt.writelines(line + "\n" for line in lines)
         print("\n".join(lines))
         print(f"Uploaded {len(lines)} practice packs; each is served")
-        if not sun_salutation_downloads(listed):
+        if any(pack["practice"] == "sunsalutation" for pack in listed) and not sun_salutation_downloads(listed):
             return 1
     return 0
 

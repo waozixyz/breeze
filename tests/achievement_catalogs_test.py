@@ -34,6 +34,13 @@ class AchievementCatalogs(unittest.TestCase):
                 groups.add(achievement["group"])
                 self.assertIsInstance(achievement["target"], int)
                 self.assertGreater(achievement["target"], 0)
+                namespace = "app" if app == "inbe" else ("practices" if app == "practice" else app)
+                self.assertEqual(achievement["badge"], f"assets/{namespace}/badges/{identity}.shape")
+                artwork = (directory / "badges" / (identity + ".shape")).read_text()
+                self.assertTrue(artwork.startswith("S1.5rr:"))
+                self.assertLess(len(artwork), 1024)
+                self.assertGreater(achievement["badge_tier"], 0)
+                self.assertLessEqual(achievement["badge_tier"], 99)
                 keys.update((achievement["title_key"], achievement["description_key"]))
             for locale in sorted((ROOT / "locales").glob("*.txt")):
                 if locale.stem == "index":

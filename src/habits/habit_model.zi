@@ -358,6 +358,33 @@ habits_add_default_set :: (habits: *Habits) {
     habits.selected = -1
     habits.loaded = 1
     habits_save(habits)
+    storage_set_meta_int64("workout_habit_seeded_v1", 1)
+}
+
+// Older profiles already have Meditation and Yoga, so the empty-profile
+// defaults never give them Exercise. Add it once without changing their
+// habits, recorded days, or a workout habit they already renamed or deleted.
+habits_seed_workout_if_needed :: (habits: *Habits) {
+    if habits == null || DataTemporary() ||
+    storage_meta_int64("workout_habit_seeded_v1", 0) != 0 {
+        return
+    }
+    mask := habit_activity_mask_for(EXERCISE_WORKOUT)
+    if storage_habit_activity_exists(mask) {
+        storage_set_meta_int64("workout_habit_seeded_v1", 1)
+        return
+    }
+    index := habits_add_custom(habits, LocaleText("habit_default_exercise_name"),
+        Color.{.r = 99, .g = 196, .b = 165, .a = 255}, HABIT_SYNC_ACTIVITIES, mask)
+    if index < 0 {
+        return
+    }
+    habit_model_copy_text_boundary(*habits.items[index].description[0], 128,
+        LocaleText("habit_default_exercise_description"))
+    habits_save(habits)
+    if storage_habit_activity_exists(mask) {
+        storage_set_meta_int64("workout_habit_seeded_v1", 1)
+    }
 }
 
 #program_export
@@ -657,6 +684,9 @@ habits_init_with_defaults :: (habits: *Habits, seed_defaults: s32) {
             habits.selected = -1
         }
         habits.loaded = 1
+        if seed_defaults != 0 {
+            habits_seed_workout_if_needed(habits)
+        }
         return
     }
     if seed_defaults != 0 {

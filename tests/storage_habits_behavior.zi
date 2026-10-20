@@ -17,6 +17,7 @@
 #import, file "../src/habits/habit_icons.zi";
 #import, file "../src/habits/habit_memory.zi";
 #import, file "../src/storage/storage_habits.zi";
+#import, file "../src/storage/storage_core.zi";
 #import, file "../src/habits/habit_model.zi";
 #import, file "../src/habits/habit_questions.zi";
 #import, file "../src/habits/habit_answer_stats.zi";
@@ -281,7 +282,7 @@ test_default_meditation_not_repaired :: () {
     habits_free(*habits_a)
     habits_a = Habits.{}
     habits_init(*habits_a)
-    check_int("no repair count", habits_a.count, 1)
+    check_int("meditation retained with new workout preset", habits_a.count, 2)
     meditation := find_habit(*habits_a, "Meditation")
     check_true("no repair exists", meditation != null)
     if meditation != null {
@@ -299,6 +300,42 @@ test_default_meditation_not_repaired :: () {
         check_true("persisted meditation exists", false)
     }
     habits_free(*habits_b)
+    storage_close()
+}
+
+test_workout_preset_upgrade :: () {
+    root := make_root("workout-preset-upgrade")
+    check_true("upgrade database opens", storage_init(root) != 0)
+    habits_a = Habits.{}
+    habits_add_default_set(*habits_a)
+    habits_delete(*habits_a, 2)
+    habit_set_day(*habits_a, 0, 20260618, 1)
+    habits_save(*habits_a)
+    // An older profile predates Exercise rather than deliberately removing it.
+    raw_exec(root, "DELETE FROM habits WHERE (sync_activity & 64)<>0; DELETE FROM meta WHERE key='workout_habit_seeded_v1';")
+    habits_free(*habits_a)
+    habits_a = Habits.{}
+    habits_init(*habits_a)
+    check_int("upgrade adds one workout preset", habits_a.count, 3)
+    exercise := find_habit(*habits_a, "Exercise")
+    check_true("upgrade workout exists", exercise != null)
+    if exercise != null {
+        check_int("upgrade workout links workout", habit_matches_activity(exercise, EXERCISE_WORKOUT), 1)
+        check_int("upgrade workout excludes yoga", habit_matches_activity(exercise, EXERCISE_SUN_SALUTATION), 0)
+    }
+    check_true("upgrade preserves meditation history", has_day(find_habit(*habits_a, "Meditation"), 20260618))
+    habits_free(*habits_a)
+    habits_a = Habits.{}
+    habits_init(*habits_a)
+    check_int("restart keeps one workout preset", habits_a.count, 3)
+    habits_delete(*habits_a, 2)
+    // Even an older installation without the marker respects a deleted preset.
+    storage_set_meta_int64("workout_habit_seeded_v1", 0)
+    habits_free(*habits_a)
+    habits_a = Habits.{}
+    habits_init(*habits_a)
+    check_int("deleted workout preset stays deleted", habits_a.count, 2)
+    habits_free(*habits_a)
     storage_close()
 }
 
@@ -1026,6 +1063,7 @@ Check :: () -> s32 {
     test_empty_initialized_seeds_meditation()
     test_defaults_wait_for_language()
     test_default_meditation_not_repaired()
+    test_workout_preset_upgrade()
     test_import_modes()
     test_session_metadata()
     test_profile_week_stats()

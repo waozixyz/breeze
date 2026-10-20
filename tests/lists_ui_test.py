@@ -74,6 +74,7 @@ with contextlib.ExitStack() as stack:
         return found.stdout.split()[0] if found.returncode == 0 and database.exists() else ""
     wait_for(find_window, "isolated app startup", timeout=20)
     driver.wait(label="Shopping", role="tab")
+    driver.wait(contains="Private · Only you")
     driver.wait_idle(frames=3)
 
     def sql(query):
@@ -194,6 +195,14 @@ with contextlib.ExitStack() as stack:
         close_beside()
     driver.press(label="Invitations (1)", role="button")
     wait_for(lambda: "Weekend trip" in dialog(), lambda: f"the invitation is not listed: {dialog()}")
+    assert "From: Alice" in dialog(), dialog()
+    accept = driver.wait(label="Accept", role="button")
+    decline = driver.wait(label="Decline", role="button")
+    assert accept["visible_height"] >= 44 and decline["visible_height"] >= 44
+    assert accept["x"] + accept["width"] <= decline["x"], "Invitation actions overlap"
+    window = find_window()
+    assert int(subprocess.check_output(["xdotool", "getwindowpid", window], text=True)) == app.pid
+    subprocess.run(["import", "-window", window, str(TEST_DIR / "invitations.png")], check=True)
     calm("a failed refresh shows a notice")
     driver.press(label="Accept", role="button")
     wait_for(lambda: sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:10'"),

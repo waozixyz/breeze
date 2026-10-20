@@ -15,6 +15,7 @@ static String voice_choice;
 static const char *prefix = "assets/practices/taichi/voice/en/";
 static int plays, stops, unloads, pauses, resumes, updates;
 static float volume;
+static bool clip_available = true;
 
 /* The downloaded language the practice speaks; empty when none is. */
 String practice_downloads_PracticeNarrationLanguage(int32_t content, String voice)
@@ -29,7 +30,7 @@ void app_audio_ensure_ready(InnerBreeze *app) { app->audio_ready = 1; }
 
 AssetView AssetRead(String path)
 {
-    bool found = path.length > strlen(prefix) &&
+    bool found = clip_available && path.length > strlen(prefix) &&
         memcmp(path.data, prefix, strlen(prefix)) == 0;
     return (AssetView){.data = StringView((char *)clip, clip_size), .found = found};
 }
@@ -123,6 +124,21 @@ int main(int argc, char **argv)
     prefix = "assets/practices/sunsalutation/voice-male/en/";
     assert(practice_narration_PracticeNarrationSeconds(StringLiteral("sunsalutation"), cue) > .2);
     assert(practice_narration_PracticeTaiChiReadingSeconds(cue) == 0.0);
+    /* A voice download can arrive after this cue started. Retry that same
+       cue when its asset becomes available, without waiting for the next. */
+    practice_narration_PracticeNarrationStop();
+    voice_choice = StringLiteral("");
+    prefix = "assets/practices/astral_projection/voice/en/";
+    practice = StringLiteral("astral_projection");
+    clip_available = false;
+    int before = plays;
+    practice_narration_PracticeNarrationUpdate(&app, practice, cue);
+    assert(plays == before);
+    clip_available = true;
+    practice_narration_PracticeNarrationUpdate(&app, practice, cue);
+    assert(plays == before + 1);
+    practice_narration_PracticeNarrationUpdate(&app, practice, cue);
+    assert(plays == before + 1);
     free(clip);
     puts("Practice narration: language, voice, owned audio, volume, pause/resume and mute passed");
     return 0;

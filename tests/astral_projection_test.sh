@@ -19,7 +19,7 @@ int main(void) {
 }
 C
 "${CC:-cc}" -std=c11 -I"$root/build/packages/ziran/include" -I"$work/c" \
-    "$work/c"/*.c "$root/build/ziran-toolchain/libziran.a" -lm -o "$work/test"
+    "$work/c"/*.c "$root/build/ziran-toolchain/libziran.a" -lm -lz -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS "$work/test"
 python3 "$root/tests/astral_projection_content_test.py"
 echo "Astral Projection course, clock and translated guidance passed"

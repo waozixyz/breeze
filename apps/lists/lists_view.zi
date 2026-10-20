@@ -20,6 +20,9 @@
 #import "scroll_widget"
 #import "modal_props"
 #import "modal_frame_widget"
+#import "box_props"
+#import "box_widget"
+#import "drawing_props"
 #import "tree"
 #import "icon"
 #import, file "../../src/cells/lists_ui_types.zi";
@@ -179,14 +182,16 @@ SharingRowShown :: (row: ListsUiPerson) -> bool {
 SharingDialog :: () {
     share := frame.panel == 1
     width := frame.width - Scale(32)
-    if width > Scale(440) {
-        width = Scale(440)
+    if width > Scale(520) {
+        width = Scale(520)
     }
     detail := ""
     if !frame.connected {
         detail = ListsLocaleHost("elist_connect")
     } else if share {
         detail = ListsLocaleHost("elist_share_detail")
+    } else {
+        detail = ListsLocaleHost("elist_invitations_detail")
     }
     detail_height := ParagraphHeight(detail, width - Scale(36))
     source_count := ifx share then frame.friend_count else frame.invitation_count
@@ -196,7 +201,7 @@ SharingDialog :: () {
             count += 1
         }
     }
-    row_height := Scale(ifx share then 52 else 108)
+    row_height := Scale(ifx share then 64 else 160)
     content_height := detail_height
     if frame.connected {
         if detail_height > 0 {
@@ -328,20 +333,28 @@ InvitationRow :: (row: ListsUiPerson, index: s32, x: s32, y: s32, width: s32, di
     if alias.count == 0 {
         alias = row.owner
     }
-    Text(frame.session, TextProps.{.bounds = Bounds(x, y, width, Scale(24)), .text = row.title})
-    Text(frame.session, TextProps.{.bounds = Bounds(x, y + Scale(26), width, Scale(20)), .text = alias})
-    button_width := (width - Scale(8)) / 2
-    if button_width > Scale(140) {
-        button_width = Scale(140)
-    }
+    Box(frame.session, BoxProps.{.key = cast(u64)(7800 + index),
+            .bounds = Bounds(x, y + Scale(4), width, Scale(144)),
+            .border = Color.{128, 128, 128, 64}, .radius = cast(float32)Scale(12)})
+    x += Scale(16)
+    width -= Scale(32)
+    Text(frame.session, TextProps.{.bounds = Bounds(x, y + Scale(14), width, Scale(44)),
+            .text = row.title, .font = Scale(18), .wrap = cast(TextWrap)TextWrapAuto})
+    sender: Vec(u8)
+    BuilderPrint(*sender, "%: %", ListsLocaleHost("elist_invitation_from"), alias)
+    Text(frame.session, TextProps.{.bounds = Bounds(x, y + Scale(60), width, Scale(24)),
+            .text = BuilderFinish(sender), .font = Scale(13), .wrap = cast(TextWrap)TextWrapEllipsis})
+    button_width := (width - Scale(12)) / 2
     accept := Button(frame.session, ButtonProps.{.key = cast(u64)(7600 + index * 2),
-            .bounds = Bounds(x, y + Scale(52), button_width, Scale(44)),
+            .bounds = Bounds(x, y + Scale(92), button_width, Scale(44)),
             .label = ListsLocaleHost("profile_friend_accept_button"),
             .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
             .disabled = disabled || state.list_count >= 32}) != 0
     decline := Button(frame.session, ButtonProps.{.key = cast(u64)(7601 + index * 2),
-            .bounds = Bounds(x + button_width + Scale(8), y + Scale(52), button_width, Scale(44)),
-            .label = ListsLocaleHost("profile_friend_decline_button"), .disabled = disabled}) != 0
+            .bounds = Bounds(x + button_width + Scale(12), y + Scale(92), button_width, Scale(44)),
+            .label = ListsLocaleHost("profile_friend_decline_button"), .disabled = disabled,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0
     if accept || decline {
         Remote(ifx accept then LISTS_ACCEPT else LISTS_DECLINE, "", row.id, row.list_id)
         return true
@@ -368,7 +381,13 @@ ListsPage :: () {
     tabs: [32]Tab
     for index: cast(s32)0..state.list_count - 1 {
         row := ReadListsRowHost(index, false)
-        tabs[index] = Tab.{.key = cast(u64)(6800 + index), .label = row.title}
+        label := row.title
+        if row.shared {
+            shared_label: Vec(u8)
+            BuilderPrint(*shared_label, "% · %", row.title, ListsLocaleHost("elist_shared"))
+            label = BuilderFinish(shared_label)
+        }
+        tabs[index] = Tab.{.key = cast(u64)(6800 + index), .label = label}
     }
     if state.list_count > 0 {
         selected := TabBar(frame.session, TabBarProps.{.id = 6500,
@@ -432,8 +451,14 @@ ListsPage :: () {
         y += Scale(72)
     }
     if state.editing_item != -2 && state.editing_item != -3 {
-        compact := width < Scale(440)
         owner := !current.shared || current.owner
+        if current.id.count > 0 {
+            Text(frame.session, TextProps.{.bounds = Bounds(x, y + Scale(8), width - Scale(112), Scale(32)),
+                    .text = ListsLocaleHost(ifx current.shared then "elist_shared_detail" else "elist_private_detail"),
+                    .font = Scale(13), .wrap = cast(TextWrap)TextWrapEllipsis})
+        }
+        status_y := y
+        y += Scale(52)
         if Button(frame.session, ButtonProps.{.key = cast(u64)6508,
                 .bounds = Bounds(x, y, Scale(88), Scale(44)), .label = ListsLocaleHost("elist_share"),
                 .disabled = current.id.count == 0 || !owner || current.incomplete || blocked}) != 0 {
@@ -444,13 +469,7 @@ ListsPage :: () {
         label: Vec(u8)
         BuilderPrint(*label, "% (%)", ListsLocaleHost("elist_invitations"), frame.pending_count_text)
         invitations_label := BuilderFinish(label)
-        invitations_width := width - Scale(200)
-        if compact {
-            invitations_width = width - Scale(96)
-        }
-        if !compact && invitations_width > Scale(176) {
-            invitations_width = Scale(176)
-        }
+        invitations_width := width - Scale(96)
         if Button(frame.session, ButtonProps.{.key = cast(u64)6509,
                 .bounds = Bounds(x + Scale(96), y, invitations_width, Scale(44)),
                 .label = invitations_label,
@@ -459,33 +478,29 @@ ListsPage :: () {
             frame.focused = false
             sharing_scroll = 0
         }
-        action_y := y
+        action_y := status_y
         action_width := Scale(44)
         rename_x := x + width - Scale(96)
         delete_x := x + width - Scale(44)
-        if compact {
-            action_y += Scale(56)
-            action_width = (width - Scale(8)) / 2
-            rename_x = x
-            delete_x = x + action_width + Scale(8)
-        }
         if Button(frame.session, ButtonProps.{.key = cast(u64)6503,
                 .bounds = Bounds(rename_x, action_y, action_width, Scale(44)),
-                .label = ListsLocaleHost("elist_rename"), .icon_only = !compact,
-                .icon_type = cast(s32)(ifx compact then IconNone else IconEdit),
+                .label = ListsLocaleHost("elist_rename"), .icon_only = true,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost,
+                .icon_type = cast(s32)IconEdit,
                 .disabled = current.id.count == 0 || !owner || blocked}) != 0 {
             BeginInput(-3, current.title)
             return
         }
         if Button(frame.session, ButtonProps.{.key = cast(u64)6504,
                 .bounds = Bounds(delete_x, action_y, action_width, Scale(44)),
-                .label = ListsLocaleHost("delete_button"), .icon_only = !compact,
-                .icon_type = cast(s32)(ifx compact then IconNone else IconTrash),
+                .label = ListsLocaleHost("delete_button"), .icon_only = true,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost,
+                .icon_type = cast(s32)IconTrash,
                 .disabled = current.id.count == 0 || !owner || blocked}) != 0 {
             Mutation(LISTS_DELETE_LIST, -1)
             return
         }
-        y += Scale(ifx compact then 112 else 56)
+        y += Scale(56)
     }
     if state.input_error != 0 {
         Text(frame.session, TextProps.{.bounds = Bounds(x, y, width, Scale(48)),
