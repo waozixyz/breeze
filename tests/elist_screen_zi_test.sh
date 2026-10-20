@@ -6,43 +6,43 @@ bin=${1:-"$root/build/ziran-toolchain/bin"}
 work=$root/build/elist-screen-zi-test
 mkdir -p "$work/c"
 
+# Serialize concurrent checks: the link below takes every generated file.
+exec 9>"$work.lock"
+flock 9
+
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/daochi-client" \
     "$root/src/screens/elist_screen.zi"
-"$bin/zi2c" --no-main --root "$root/src" \
+"$bin/zi2c" --no-main --prune-stale --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/daochi-client" \
     -o "$work/c" "$root/src/screens/elist_screen.zi"
 
-"${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
-    -Wno-unused-function -Wno-unused-variable \
-    -ffunction-sections -fdata-sections -Wl,--gc-sections \
-    -I"$root/build/packages/ziran/include" -I"$work/c" \
-    -I"$work/c/ui" -I"$work/c/app" -I"$work/c/platform" \
-    -I"$work/c/storage" -I"$work/c/screens" -I"$work/c/kss" \
-    -I"$work/c/daochi-client" \
-    "$root/tests/elist_screen_link_test.c" \
-    "$work/c/screens/elist_screen.c" "$work/c/text_buffers.c" \
-    "$work/c/byte_text_linux.c" \
-    "$work/c/module_host.c" "$work/c/smooth_frames.c" "$work/c/value_codec.c" \
-    "$work/c/package_files.c" "$work/c/format.c" \
-    "$work/c/practice_downloads.c" "$work/c/package_release.c" \
-    "$work/c/file_download.c" "$work/c/file_linux.c" "$work/c/json_scan.c" \
-    "$work/c/c_string.c" \
-    "$work/c/asset_paths.c" "$work/c/assets.c" \
-    "$work/c/sun_salutation_inventory.c" \
-    "$work/c/lists_visibility.c" "$work/c/bundle_host.c" \
-    "$work/c/hosted_values.c" "$work/c/widget_host.c" "$work/c/hosted_app.c" \
-    "$work/c/bundle_preload.c" "$work/c/thread_linux.c" "$work/c/catalog.c" \
-    "$work/c/app_context_host.c" "$work/c/achievement_packages.c" \
-    "$work/c/achievements.c" "$work/c/bundle_names.c" "$work/c/date_parse.c" \
-    "$work/c/diary_wire.c" "$work/c/widget_codec.c" \
-    "$work/c/achievement_records.c" "$work/c/number_text.c" "$work/c/text_buffer.c" \
+includes="-I$root/build/packages/ziran/include -I$work/c -I$work/c/screens"
+
+# The test host and the screen under test compile warning-free.
+for source in "$root/tests/elist_screen_link_test.c" "$work/c/screens/elist_screen.c"; do
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
+        -Wno-unused-function -Wno-unused-variable \
+        -ffunction-sections -fdata-sections $includes \
+        -c "$source" -o "$work/$(basename "$source" .c).o"
+done
+
+# Every other module the screen reaches links as generated, so a new import in
+# the app or Kryon needs no change here; --gc-sections drops what the test never
+# calls. The modules whose storage, sharing, Diary, node app, media library and
+# scale functions the test host replaces stay out.
+"${CC:-cc}" -std=c11 -w -ffunction-sections -fdata-sections -Wl,--gc-sections \
+    $includes "$work/elist_screen_link_test.o" "$work/elist_screen.o" \
+    $(find "$work/c" -name '*.c' | grep -v -e '/screens/elist_screen\.c$' \
+        -e '/db\.c$' -e '/storage_elist\.c$' -e '/lists_network\.c$' \
+        -e '/diary_store\.c$' -e '/node_apps\.c$' -e '/media_store\.c$' \
+        -e '/metrics\.c$') \
     "$root/build/ziran-toolchain/libziran.a" -lm -lpthread \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test" "$root/build/inbe.zib"
