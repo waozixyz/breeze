@@ -103,6 +103,10 @@ LauncherAppReply :: (group: *LauncherAppGroup, status: string) -> string {
     return LauncherAppKeep(group, BuilderFinish(bytes))
 }
 
+// The Apps controller reads at most 64 icon choices and shows none when
+// offered more, so Properties offers the app's own and Inbe's first 63.
+LAUNCHER_APP_ICON_LIMIT :: 63
+
 // The icons Properties offers: the app's own, then Inbe's icon set.
 LauncherAppIcons :: (group: *LauncherAppGroup, id: string) -> string {
     at := LauncherAppFind(group, id)
@@ -117,7 +121,9 @@ LauncherAppIcons :: (group: *LauncherAppGroup, id: string) -> string {
     BuilderPrint(*bytes, "{\"v\":1,\"icons\":[{\"id\":\"\"")
     LauncherAppQuoted(*bytes, "shape", own)
     BuilderPrint(*bytes, "}")
-    for icon: cast(s32)1..HABIT_ICON_COUNT {
+    last: s32 = HABIT_ICON_COUNT
+    if last > LAUNCHER_APP_ICON_LIMIT { last = LAUNCHER_APP_ICON_LIMIT }
+    for icon: cast(s32)1..last {
         BuilderPrint(*bytes, ",{\"id\":")
         Rules.AppsWriteQuoted(*bytes, HabitIconName(icon))
         LauncherAppQuoted(*bytes, "shape", HabitIconShape(icon))
@@ -321,12 +327,19 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
     Rules.AppsWriteQuoted(bytes, TextUntilNul(entry.id[:]))
     LauncherAppQuoted(bytes, "title", title)
     LauncherAppQuoted(bytes, "icon_shape", shape)
+    // A picture is named only once it can be read: the host refuses a card
+    // whose picture is missing, and with it the whole Apps screen. Lumi's
+    // comes with its package, which opens after the first frame; until then
+    // its card shows its symbol.
     if route >= 0 && AppNavNodeSlot(route) < 0 {
-        if route == APP_NAV_ROUTE_LUMI { LauncherAppQuoted(bytes, "icon", "assets/lumi/sidebar.png") }
-        else {
+        if route == APP_NAV_ROUTE_LUMI {
+            if LauncherAppAssetAllowed("assets/lumi/sidebar.png") {
+                LauncherAppQuoted(bytes, "icon", "assets/lumi/sidebar.png")
+            }
+        } else {
             prefix := PackageText("assets/apps/icons/", PackageName(entry.package))
             image := PackageText(prefix, ".png")
-            LauncherAppQuoted(bytes, "icon", image)
+            if LauncherAppAssetAllowed(image) { LauncherAppQuoted(bytes, "icon", image) }
             PackageFree(prefix)
             PackageFree(image)
         }

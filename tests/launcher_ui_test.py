@@ -170,15 +170,15 @@ with contextlib.ExitStack() as stack:
         # Each section's shared Apps group sits inside the page's scroll.
         grid = [node for node in tree if node["kind"] == "button"
                 and under(tree, node, "scroll") and not under(tree, node, "navigation_bar")
-                and node["label"] not in ("Install", "App options")]
+                and node["label"] not in ("Install", "Download", "App options")]
         more_top = headings["More apps"]["y"] if "More apps" in headings else float("inf")
         pinned = [node for node in grid if node["y"] < more_top]
         more = [node for node in grid if node["y"] >= more_top]
         return pinned, more, tree
 
     def corner(card, tree):
-        """The install or options symbol in a card's top-right corner."""
-        inside = [node for node in tree if node["label"] in ("Install", "App options")
+        """The download or options symbol in a card's top-right corner."""
+        inside = [node for node in tree if node["label"] in ("Install", "Download", "App options")
                   and card["x"] <= node["x"] and node["x"] + node["width"] <= card["x"] + card["width"]
                   and card["y"] <= node["y"] and node["y"] + node["height"] <= card["y"] + card["height"]]
         assert len(inside) == 1, f"{card['label']} has no corner symbol: {inside}"
@@ -580,14 +580,13 @@ with contextlib.ExitStack() as stack:
                 assert favorites(profile) == [11, 2], "Uninstall left a pinned shortcut"
                 with database(profile) as db:
                     assert db.execute("SELECT COUNT(*) FROM habits").fetchone()[0] == habit_count
-                # The same app is now first in More; Install is in the same
-                # options menu in its card's corner.
+                # The same app is now first in More; the download symbol in its
+                # card's corner installs it again.
                 pinned, more, tree = cards()
                 assert more[0]["label"] == "Habits", more
                 action = corner(more[0], tree)
-                assert action["label"] == "App options"
+                assert action["label"] == "Download"
                 press(action)
-                driver.press(label="Install", role="selectable")
                 wait_setting(profile, "app_used_habits", 1, "Install did not restore Habits")
                 assert favorites(profile) == [11, 2], "Installing unexpectedly changed pins"
                 assert settings(profile)["main_tab"] == selected_tab, "Install opened another app"
