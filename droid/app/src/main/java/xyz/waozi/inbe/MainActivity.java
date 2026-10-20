@@ -591,6 +591,7 @@ public class MainActivity extends NativeActivity {
             NotificationManager notifications = getDownloadNotificationManager();
             try {
                 if (maximumBytes <= 0 || task.cancelled) throw new java.io.IOException("download cancelled");
+                Log.i(TAG, "Download started: " + url);
                 if (parent != null && !parent.exists() && !parent.mkdirs()) {
                     throw new java.io.IOException("failed to create download directory");
                 }
@@ -629,9 +630,13 @@ public class MainActivity extends NativeActivity {
                     if (!temporary.renameTo(outputFile)) throw new java.io.IOException("failed to publish download");
                     nativeRuntimeAssetDownloadSucceeded(handle, written, status);
                 }
+                Log.i(TAG, "Download finished: " + written + " bytes from " + url);
             } catch (UnknownHostException | SocketException | SocketTimeoutException e) {
+                // A failed download used to leave no trace in the device log.
+                Log.w(TAG, "Download failed, network unavailable: " + url, e);
                 if (!task.cancelled) nativeRuntimeAssetDownloadFailed(handle, status, "NETWORK_UNAVAILABLE");
             } catch (Exception e) {
+                Log.w(TAG, "Download failed (HTTP " + status + "): " + url, e);
                 if (!task.cancelled) nativeRuntimeAssetDownloadFailed(handle, status, e.getMessage());
             } finally {
                 temporary.delete();
