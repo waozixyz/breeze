@@ -9,6 +9,7 @@
 - Open web links by tapping them in a message's words, shown in the
   theme's link color.
 - Right-click a message to copy it.
+- The chat stays smooth while a practice runs in its small window.
 - Requires Inner Breeze 2.1.36 or later.
 - Maintenance release for Inner Breeze 2.1.36.
 

@@ -69,15 +69,18 @@ agreement_strong: [32]TextRange;
 chart_selected_key: u64;
 chart_selected_point: s32;
 
-// Visible replies are unchanged between frames. Keep a bounded copy so
+// Visible rows are unchanged between frames, and formatting a row or finding
+// its links reads every byte. Each keeps a bounded copy of its source, so
 // scrolling, account changes and edited rows cannot reuse borrowed host text.
-LumiReplyText :: struct {
+LumiRowText :: struct {
     source: [LUMI_INPUT_MAX]u8
     count: s32
-    formatted: LumiMessageText
+    formatted: bool
+    text: LumiMessageText
+    links: LumiLinks
 }
 
-reply_text: [8]LumiReplyText;
+row_text: [8]LumiRowText;
 draft_intent_source: [LUMI_INPUT_MAX]u8;
 draft_intent_count: s32;
 draft_intent_revision: s64 = -1;
@@ -408,16 +411,20 @@ DraftIntent :: (value: string, commands: LumiCommands, revision: s64) -> LumiAct
     return action
 }
 
-ReplyText :: (index: s32, value: string) -> *LumiMessageText {
-    slot := *reply_text[index % cast(s32)reply_text.count]
-    if value != TextFromBytes(slot.source[:slot.count]) {
-        slot.formatted = LumiFormatMessage(value, true)
+// A row's words as drawn, Lumi's formatted and a person's as written, with
+// the web links in them.
+RowText :: (index: s32, value: string, formatted: bool) -> *LumiRowText {
+    slot := *row_text[index % cast(s32)row_text.count]
+    if slot.formatted != formatted || value != TextFromBytes(slot.source[:slot.count]) {
+        slot.formatted = formatted
+        slot.text = LumiFormatMessage(value, formatted)
+        slot.links = LumiMessageLinks(TextFromBytes(slot.text.bytes[:slot.text.count]))
         slot.count = 0
         if CopyCString(value, slot.source[:]) {
             slot.count = cast(s32)value.count
         }
     }
-    return *slot.formatted
+    return slot
 }
 
 Scale :: (value: s32) -> s32 {
@@ -859,14 +866,12 @@ LumiView :: (message: LumiMessage, commands: LumiCommands, revision: s64) -> Lum
                 .text = row.text, .font = frame.font,
                 .selectable = !selecting,
                 .wrap = cast(TextWrap)TextWrapAuto}
-            if !row.user {
-                formatted := ReplyText(index, row.text)
-                props.text = TextFromBytes(formatted.bytes[:formatted.count])
-                props.strong = formatted.strong[:formatted.strong_count]
-            }
+            drawn := RowText(index, row.text, !row.user)
+            props.text = TextFromBytes(drawn.text.bytes[:drawn.text.count])
+            props.strong = drawn.text.strong[:drawn.text.strong_count]
             // Web links are part of the words, in the theme's link color,
             // and a tap on one opens it, as in a chat app.
-            links := LumiMessageLinks(props.text)
+            links := drawn.links
             link_ranges: [LUMI_LINKS_MAX]TextRange
             for link: cast(s32)0..links.count - 1 {
                 link_ranges[link] = TextRange.{links.items[link].start, links.items[link].end}
