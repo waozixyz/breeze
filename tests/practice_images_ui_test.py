@@ -16,7 +16,8 @@ binary = Path(sys.argv[1]).resolve()
 output = root / "build/practice-images-ui-test"
 output.mkdir(parents=True, exist_ok=True)
 WIDTH, HEIGHT = 390, 844
-PRACTICES = ("wim-hof", "patterns", "meditation", "sun-salutation")
+PRACTICES = ("wim-hof", "patterns", "meditation", "astral-projection",
+             "sun-salutation", "tai-chi", "workout")
 
 
 def command(*args):
@@ -91,10 +92,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory:
     try:
         missing = []
         for index, practice in enumerate(PRACTICES):
-            if index > 0:
-                click(window, 324, 620)  # The next practice.
+            if 0 < index < 4:
+                click(window, 324, 620)  # The next meditation practice.
+            elif index == 4:
+                click(window, 145, 24)  # Yoga.
+            elif index == 5:
+                click(window, 235, 24)  # Martial arts.
+            elif index == 6:
+                click(window, 325, 24)  # Workout.
             if not pictured(capture(window, practice), (0, 40, WIDTH, 420)):
                 missing.append(practice)
+        click(window, 145, 24)  # Yoga.
         click(window, 195, 678)  # Start Sun Salutation.
         if not pictured(capture(window, "sun-salutation-running"), (100, 250, 290, 650)):
             missing.append("sun-salutation figure")
@@ -102,4 +110,4 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory:
         assert app.poll() is None, (output / "practice.log").read_text()
     finally:
         stop(app)
-print("Practice pictures: Wim Hof, patterns, meditation and Sun Salutation, and the running figure passed")
+print("All seven practice covers and the running Sun Salutation figure passed")

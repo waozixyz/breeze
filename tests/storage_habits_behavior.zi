@@ -1,6 +1,7 @@
 #import "byte_text_linux"
 #import "text_buffer"
 #import "drawing_props"
+#import, file "../src/app/exercise_types.zi";
 #import, file "storage_test_support.zi";
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/storage/data.zi";
@@ -29,6 +30,7 @@
 c :: #system_library "c";
 #import, file "../src/storage/import_types.zi";
 using StorageImportMode;
+using ExerciseType;
 
 // Habit sets are large, so the tests keep theirs in globals.
 habits_a: Habits;
@@ -131,7 +133,7 @@ test_habit_name_merge_import :: () {
     check_true("habit merge import", storage_import_zip(TextFromCString(*archive.bytes[0])) != 0)
     habits_b = Habits.{}
     check_true("habit merge load", storage_habits_load(cast(*void)*habits_b) != 0)
-    check_int("habit merge count", habits_b.count, 4)
+    check_int("habit merge count", habits_b.count, 5)
     meditation := find_habit(*habits_b, "Meditation")
     check_true("habit merge meditation exists", meditation != null)
     if meditation != null {
@@ -198,7 +200,7 @@ test_delete_all_resets :: () {
     habits_free(*habits_a)
     habits_b = Habits.{}
     check_true("load default habit after delete all", storage_habits_load(cast(*void)*habits_b) != 0)
-    check_int("default habit count after delete all", habits_b.count, 2)
+    check_int("default habit count after delete all", habits_b.count, 3)
     check_true("default meditation", find_habit(*habits_b, "Meditation") != null)
     check_true("default yoga", find_habit(*habits_b, "Yoga") != null)
     check_true("old workout day removed", !has_day(find_habit(*habits_b, "Meditation"), 20260618))
@@ -215,9 +217,17 @@ test_empty_initialized_seeds_meditation :: () {
     check_true("reopen db", storage_init(root) != 0)
     habits_a = Habits.{}
     habits_init(*habits_a)
-    check_int("startup seeds default habits", habits_a.count, 2)
+    check_int("startup seeds default habits", habits_a.count, 3)
     meditation := find_habit(*habits_a, "Meditation")
     yoga := find_habit(*habits_a, "Yoga")
+    exercise := find_habit(*habits_a, "Exercise")
+    check_true("seeds exercise", exercise != null)
+    if exercise != null {
+        check_int("exercise linked mode", exercise.sync_mode, 1)
+        check_int("exercise linked to workout", exercise.sync_activity, habit_activity_mask_for(EXERCISE_WORKOUT))
+        check_int("exercise excludes yoga", habit_matches_activity(exercise, EXERCISE_SUN_SALUTATION), 0)
+        check_int("exercise counts workout", habit_matches_activity(exercise, EXERCISE_WORKOUT), 1)
+    }
     check_true("seeds meditation", meditation != null)
     check_true("seeds yoga", yoga != null)
     if meditation != null {
@@ -231,7 +241,7 @@ test_empty_initialized_seeds_meditation :: () {
     habits_free(*habits_a)
     habits_b = Habits.{}
     check_true("load seeded defaults", storage_habits_load(cast(*void)*habits_b) != 0)
-    check_int("seeded defaults persisted", habits_b.count, 2)
+    check_int("seeded defaults persisted", habits_b.count, 3)
     persisted := find_habit(*habits_b, "Meditation")
     check_true("persisted meditation", persisted != null)
     if persisted != null {
@@ -251,14 +261,14 @@ test_defaults_wait_for_language :: () {
     habits_free(*habits_a)
     habits_a = Habits.{}
     check_true("seed defaults after language setup", habits_seed_default_set_if_needed(*habits_a) != 0)
-    check_int("deferred defaults seeded", habits_a.count, 2)
+    check_int("deferred defaults seeded", habits_a.count, 3)
     check_true("deferred meditation", find_habit(*habits_a, "Meditation") != null)
     check_true("deferred yoga", find_habit(*habits_a, "Yoga") != null)
     check_int("deferred habits initialized", storage_habits_initialized(), 1)
     habits_free(*habits_a)
     habits_b = Habits.{}
     check_true("load deferred seeded defaults", storage_habits_load(cast(*void)*habits_b) != 0)
-    check_int("deferred persisted count", habits_b.count, 2)
+    check_int("deferred persisted count", habits_b.count, 3)
     habits_free(*habits_b)
     storage_close()
 }
@@ -884,7 +894,7 @@ synced_changes :: (entity_type: string, entity_id: string, array: string,
     storage_append_sync_op_payload(*json, entity_type, entity_id, 0)
     storage_json_builder_append_text(*json, "]}}")
     copied := json.ok != 0 && json.data != null &&
-        AppCopyText(AppTextFromCString(json.data, cast(s32)(json.len + 1)), output)
+    AppCopyText(AppTextFromCString(json.data, cast(s32)(json.len + 1)), output)
     storage_json_builder_free(*json)
     if !copied { return "" }
     return AppTextFromCString(*output[0], cast(s32)output.count)

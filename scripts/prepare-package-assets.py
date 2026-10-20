@@ -37,6 +37,7 @@ patterns = (
     'assets/practices/meditation/1.png', 'assets/practices/*/banner-light.png',
     'assets/practices/*/banner-dark.png',
     'assets/practices/sunsalutation/characters/*/*.png',
+    'assets/practices/sunsalutation/flat-edge.png',
     'assets/practices/sunsalutation/voice/**/*', 'assets/practices/sunsalutation/voice-male/**/*',
     'assets/practices/astral_projection/**/*',
     'assets/practices/workout/**/*',

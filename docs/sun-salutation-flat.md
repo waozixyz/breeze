@@ -1,5 +1,14 @@
 # Flat Sun Salutation characters
 
+The app now solves Sun Salutation on the articulated body shared with Tai Chi
+and the 7-Minute Workout. `sun_salutation_pose.zi` keeps the twelve yoga poses
+and alternates the leading leg each round; `sun_salutation_draw.zi` draws the
+same Jade woman and Indigo man from a fixed side view. The session, small
+window, previews and guide all use that renderer. The timing and breathing
+cues stay with `sun_salutation_rules.zi`.
+
+The scripts below retain the earlier frame artwork for reference and exports.
+
 `scripts/render-sun-salutation-flat.py` draws the Sun Salutation in a clean,
 flat vector style: flat colours, no textures or gradients, one darker tone
 for the far limbs and shades. It reuses the pose timeline, inverse

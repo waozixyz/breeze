@@ -17,7 +17,7 @@ assert course['schema'] == 1 and course['duration'] == 2400
 assert course['cues'][0]['second'] == 0
 times = [cue['second'] for cue in course['cues']] + [course['duration']]
 assert all(a < b for a, b in zip(times, times[1:]))
-assert times[-1] - times[-2] >= 60, 'Allow time for the gentle return'
+assert times[-1] - times[-2] >= 60, 'Allow time for the final spoken cue'
 english = speech.entries(folder / 'text/en.txt')
 for code in speech.locale_codes():
     values = speech.entries(folder / 'text' / (code + '.txt'))
@@ -26,7 +26,7 @@ for code in speech.locale_codes():
     if code != 'en':
         assert all(values[key] != english[key] for key in keys), code
 
-# Already verified recordings must fit their cue, including the final return.
+# Already verified recordings must fit their cue, including the final line.
 receipt_path = ROOT / 'design/astral-projection/narration-receipt.json'
 if receipt_path.is_file():
     receipt = json.loads(receipt_path.read_text())
@@ -34,4 +34,4 @@ if receipt_path.is_file():
         code, key = name.split('/')
         index = keys.index(key)
         assert clip['seconds'] + 1 < times[index + 1] - times[index], name
-print(f'All {len(keys)} guidance cues of the 40-minute session have complete translations in all 12 locales')
+print(f'All {len(keys)} introduction cues have complete translations in all 12 locales; the session continues afterward')

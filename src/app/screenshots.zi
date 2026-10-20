@@ -20,6 +20,7 @@
 #import, file "../practices/meditation/meditation_practice.zi";
 #import, file "../practices/sun_salutation/sun_salutation_entry.zi";
 #import, file "../practices/sun_salutation/sun_salutation_rules.zi";
+#import, file "../../apps/practice/astral_projection.zi";
 #import, file "../practices/tai_chi/tai_chi_course.zi";
 #import, file "../practices/tai_chi/tai_chi_rules.zi";
 #import, file "../practices/tai_chi/tai_chi_entry.zi";
@@ -472,13 +473,16 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
         app.ui_scale_tenths = request.ui_scale_tenths
     }
     if (scene_text.count >= 8 && scene_text[:8] == "tai_chi_") ||
-        scene_text == "practice_config_tai_chi" {
+    scene_text == "practice_config_tai_chi" {
         // Screenshot fixtures supply the same verified device cache as users,
         // shown as a buyer sees it; nothing is charged or granted.
         practice_owned = ScreenshotOwned
         // Their cache holds the default recording; screenshots never download.
         app.tai_chi.voice = 0
         PracticeDownloadsPump(EXERCISE_TAI_CHI, app.voice_narration_enabled != 0, app.guide_narration_enabled != 0, true)
+    }
+    if scene_text == "astral_projection_session" {
+        PracticeDownloadsPump(EXERCISE_ASTRAL_PROJECTION, false, false, true)
     }
     if scene_text == "lumi_chat" || scene_text == "lumi_customize" ||
     scene_text == "lumi_customize_light" || scene_text == "diary" ||
@@ -705,14 +709,25 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
         app.main_tab = APP_MAIN_TAB_PRACTICE
         app.exercise_type = EXERCISE_SUN_SALUTATION
         sun_salutation_practice_start(app)
-    } else if scene_text == "sun_salutation_pose" {
+    } else if scene_text == "sun_salutation_pose" ||
+    (scene_text.count > 20 && scene_text[:20] == "sun_salutation_pose_") {
         // A full-body pose for store pages, selected by the request's step.
         app.main_tab = APP_MAIN_TAB_PRACTICE
         app.exercise_type = EXERCISE_SUN_SALUTATION
         app.sun_salutation.character = SUN_SALUTATION_MAN
         sun_salutation_practice_start(app)
         app.sun_salutation.step = screenshot_pose_step
+        if scene_text.count > 20 {
+            app.sun_salutation.step = SalutationClamp(ScreenshotParseInt(scene_text[20:], 1), 0, 11)
+        }
         app.sun_salutation.step_ticks = screenshot_pose_ticks
+        app.session_paused = 1
+    } else if scene_text == "astral_projection_session" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.exercise_type = EXERCISE_ASTRAL_PROJECTION
+        AstralStart(app)
+        AstralAdvanceElapsed(app, 2460000)
+        app.session_paused = 1
     } else if scene_text == "tai_chi_session" {
         // Part the Wild Horse's Mane, paused in its first stride.
         app.main_tab = APP_MAIN_TAB_PRACTICE
@@ -776,8 +791,16 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
         app.main_tab = APP_MAIN_TAB_PRACTICE
         app.practice_tab = PRACTICE_TAB_PLAY
         app.breathing.screen = ScreenStart
-    } else if scene_text == "meditation_home" || scene_text == "sun_salutation_home" {
-        app.exercise_type = ifx scene_text == "meditation_home" then (EXERCISE_MEDITATION) else (EXERCISE_SUN_SALUTATION)
+    } else if scene_text == "meditation_home" || scene_text == "sun_salutation_home" ||
+    scene_text == "astral_projection_home" || scene_text == "workout_home" {
+        app.exercise_type = EXERCISE_SUN_SALUTATION
+        if scene_text == "meditation_home" {
+            app.exercise_type = EXERCISE_MEDITATION
+        } else if scene_text == "astral_projection_home" {
+            app.exercise_type = EXERCISE_ASTRAL_PROJECTION
+        } else if scene_text == "workout_home" {
+            app.exercise_type = EXERCISE_WORKOUT
+        }
         app.main_tab = APP_MAIN_TAB_PRACTICE
         app.practice_tab = PRACTICE_TAB_PLAY
         app.breathing.screen = ScreenStart
@@ -935,8 +958,8 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
         app.profile_tab = PROFILE_TAB_OVERVIEW
         app.breathing.screen = ScreenProfile
     } else if scene_text == "profile_dew" || scene_text == "storage_plans" ||
-        scene_text == "storage_plans_1gb" || scene_text == "dew_top_up" ||
-        scene_text == "dew_gift" {
+    scene_text == "storage_plans_1gb" || scene_text == "dew_top_up" ||
+    scene_text == "dew_gift" {
         // A fixture Dew account in the isolated data root; nothing is fetched.
         account: AccountKeys = .{}
         if sync_account_generate(*account) == 0 ||
