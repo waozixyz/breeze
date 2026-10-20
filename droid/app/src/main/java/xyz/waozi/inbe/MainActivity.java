@@ -577,6 +577,15 @@ public class MainActivity extends NativeActivity {
         if (task.thread != null) task.thread.interrupt();
     }
 
+    // A download's address for the log, without its query or the signed
+    // grant that follows a paid pack's file name.
+    private static String loggedDownloadUrl(String url) {
+        int query = url.indexOf('?');
+        String path = query >= 0 ? url.substring(0, query) : url;
+        int pack = path.indexOf(".zib/");
+        return pack >= 0 ? path.substring(0, pack + 4) : path;
+    }
+
     public void startRuntimeAssetDownload(final String url, final String path,
                                          final long handle, final long maximumBytes) {
         final RuntimeDownload task = new RuntimeDownload();
@@ -591,7 +600,7 @@ public class MainActivity extends NativeActivity {
             NotificationManager notifications = getDownloadNotificationManager();
             try {
                 if (maximumBytes <= 0 || task.cancelled) throw new java.io.IOException("download cancelled");
-                Log.i(TAG, "Download started: " + url);
+                Log.i(TAG, "Download started: " + loggedDownloadUrl(url));
                 if (parent != null && !parent.exists() && !parent.mkdirs()) {
                     throw new java.io.IOException("failed to create download directory");
                 }
@@ -630,13 +639,13 @@ public class MainActivity extends NativeActivity {
                     if (!temporary.renameTo(outputFile)) throw new java.io.IOException("failed to publish download");
                     nativeRuntimeAssetDownloadSucceeded(handle, written, status);
                 }
-                Log.i(TAG, "Download finished: " + written + " bytes from " + url);
+                Log.i(TAG, "Download finished: " + written + " bytes from " + loggedDownloadUrl(url));
             } catch (UnknownHostException | SocketException | SocketTimeoutException e) {
                 // A failed download used to leave no trace in the device log.
-                Log.w(TAG, "Download failed, network unavailable: " + url, e);
+                Log.w(TAG, "Download failed, network unavailable: " + loggedDownloadUrl(url), e);
                 if (!task.cancelled) nativeRuntimeAssetDownloadFailed(handle, status, "NETWORK_UNAVAILABLE");
             } catch (Exception e) {
-                Log.w(TAG, "Download failed (HTTP " + status + "): " + url, e);
+                Log.w(TAG, "Download failed (HTTP " + status + "): " + loggedDownloadUrl(url), e);
                 if (!task.cancelled) nativeRuntimeAssetDownloadFailed(handle, status, e.getMessage());
             } finally {
                 temporary.delete();
