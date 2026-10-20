@@ -1116,6 +1116,18 @@ NodeAppValidate :: (slot: s32, bytes: string) -> bool {
 }
 
 // Opens the slot's installed package. False when none is installed yet.
+// A local bundle that cannot run gives way to the node's copy of its app:
+// a stale test bundle left on a debug phone kept Arcade from ever
+// downloading there.
+NodeAppLocalFailed :: (slot: s32) {
+    if !NodeAppLocal(NodeAppName(slot)) {
+        return
+    }
+    TraceLog(4, "NODE: the local bundle cannot run, so the node's copy installs instead")
+    node_local_name[0] = 0
+    node_local_path[0] = 0
+}
+
 NodeAppOpen :: (slot: s32) -> bool {
     if NodeAppRunning(slot) {
         return true
@@ -1136,17 +1148,20 @@ NodeAppOpen :: (slot: s32) -> bool {
         PackageFree(bytes)
     }
     if bytes.count == 0 {
+        NodeAppLocalFailed(slot)
         return false
     }
     if !NodeAppClose(slot) { return false }
     if !NodeAppStart(*node_runners[slot], bytes, verified) ||
     (node_runners[slot].nested == null && !NodeAppAssetsValid(node_runners[slot].app.bundle, NodeAppName(slot))) {
         unused NodeAppClose(slot)
+        NodeAppLocalFailed(slot)
         return false
     }
     // The leaves saved for this release stand in for opening every child.
     if !NodeInstalledCurrent(slot, verified) && !NodeInstalledScan(slot) {
         unused NodeAppClose(slot)
+        NodeAppLocalFailed(slot)
         return false
     }
     return true
