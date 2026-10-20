@@ -8,6 +8,7 @@
 - Astral Projection has a gently floating animated figure and a shorter introduction.
 - Existing profiles receive the Exercise preset linked to Workout, while deleted presets stay deleted.
 - Narration can finish downloading during a practice and begin speaking the current guidance.
+- Download errors use a short message without repeating that progress is saved.
 - Profile brings activity, data, friends and achievements into consistent rows, with node settings under Account.
 - Every achievement has its app's badge; filter the collection by apps installed on this device.
 - Lists clearly labels private and shared lists, with roomier invitation cards and separate Accept and Decline actions.
