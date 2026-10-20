@@ -2,7 +2,8 @@
 
 ## [1.1.3] - 2026-10-20
 
-- Maintenance release for Inner Breeze 2.1.37.
+- A shared list names who it is shared with, who is still invited, or who shared it with you.
+- Share a list with one icon, as in a document; Invitations appear only while some wait.
 
 ## [1.1.2] - 2026-10-18
 

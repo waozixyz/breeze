@@ -35,6 +35,7 @@ Legacy :: #import "apps/node_types";
 #import, file "package_files.zi";
 #import, file "catalog.zi";
 #import, file "../storage/app_records.zi";
+#import, file "../storage/game_scores.zi";
 #import, file "../app/smooth_frames.zi";
 #import, file "app_identity_storage.zi";
 #import, file "../storage/storage_settings.zi";
@@ -150,7 +151,7 @@ NodeTreeAllows :: (context: *void, node: *AppNode, name: string) -> bool {
     if runner.nested == null || NodeTreeAccount() != TextUntilNul(runner.nested.tree.account[:]) {
         return false
     }
-    if name == "AppServiceHost" || name == PublicationsService { return true }
+    if name == "AppServiceHost" || name == PublicationsService || name == "leaderboard" { return true }
     if name == "AppRecordHost" || name == "SaveAppRecordHost" || name == "AppLocaleHost" ||
     name == "SmoothFramesHost" || name == "ClipboardCopyHost" || name == "ReadStoreHost" ||
     name == "WriteStoreHost" || name == "AppNowHost" || name == "AppLocalOffsetHost" ||
@@ -179,6 +180,14 @@ NodeTreeCall :: (context: *void, node: *AppNode, module: *u8, function: *u8,
     }
     if name == "AppServiceHost" && count == 2 && HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "string", cast(s32)HostString) {
+        // A game's own score for the friends leaderboard, such as
+        // "levels 12", kept under its verified identity.
+        if AppArgumentText(arguments[0]) == "leaderboard" && !node_tree_validating && !node_snapshot_scanning {
+            saved := GameScoreReport(NodeAppName(NodeAppSlotOf(runner)), TextUntilNul(node.identity.id[:]),
+                TextUntilNul(node.entry.title[:]), AppArgumentText(arguments[1]))
+            result.* = NodeAppString(ifx saved then "{\"status\":\"saved\"}" else "{\"status\":\"rejected\"}")
+            return 1
+        }
         if AppArgumentText(arguments[0]) != PublicationsService || node_tree_validating || node_snapshot_scanning {
             result.* = NodeAppString("{\"status\":\"unavailable\"}")
             return 1

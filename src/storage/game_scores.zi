@@ -1,0 +1,160 @@
+// Scores the games inside an installed app report for the friends
+// leaderboard, such as the levels Shovey has solved. A game reports only its
+// own score, under its verified identity; the board never reads its saves.
+#import "text"
+#import "vec"
+#import "text_buffer"
+#import, file "storage_settings.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../cells/package_files.zi";
+
+GAME_SCORES_MAX :: 16
+GAME_SCORES_SETTING :: "leaderboard_game_scores"
+// The one ranked measure so far: levels a puzzle game has solved.
+GAME_SCORE_LEVELS :: "levels"
+
+GameScore :: struct {
+    // The installed app the game runs in, such as arcade.
+    app: [25]u8
+    // The game's identity, such as arcade.shovey; it names its board, so it
+    // fits the 32-byte board names social refreshes carry.
+    game: [65]u8
+    title: [65]u8
+    metric: [17]u8
+    value: s64
+}
+
+game_scores: [GAME_SCORES_MAX]GameScore;
+game_score_count: s32;
+game_scores_loaded: bool;
+
+// Letters, digits and . _ : - only, as the server's board names.
+GameScoreName :: (value: string, longest: s64) -> bool {
+    if value.count == 0 || value.count > longest { return false }
+    for byte: value {
+        letter := (byte >= cast(u8)97 && byte <= cast(u8)122) || (byte >= cast(u8)65 && byte <= cast(u8)90)
+        digit := byte >= cast(u8)48 && byte <= cast(u8)57
+        if !letter && !digit && byte != #char "." && byte != #char "_" && byte != #char ":" && byte != #char "-" {
+            return false
+        }
+    }
+    return true
+}
+
+// One line per game: app, game, title, metric and value, tab separated.
+GameScoresLoad :: () {
+    if game_scores_loaded { return }
+    game_scores_loaded = true
+    game_score_count = 0
+    stored: [8192]u8
+    unused AppCopyText(storage_get_setting_text(GAME_SCORES_SETTING), stored[:])
+    text := TextUntilNul(stored[:])
+    at: s64 = 0
+    while at < text.count && game_score_count < GAME_SCORES_MAX {
+        end := at
+        while end < text.count && text[end] != #char "\n" { end += 1 }
+        line := text[at:end]
+        at = end + 1
+        fields: [5]string
+        field: s32 = 0
+        start: s64 = 0
+        for index: cast(s64)0..line.count {
+            if index == line.count || line[index] == #char "\t" {
+                if field < 5 { fields[field] = line[start:index] }
+                field += 1
+                start = index + 1
+            }
+        }
+        if field != 5 || !GameScoreName(fields[0], 24) || !GameScoreName(fields[1], 31) {
+            continue
+        }
+        value: s64 = 0
+        for byte: fields[4] {
+            if byte < cast(u8)48 || byte > cast(u8)57 || value > 100000 { value = -1; break }
+            value = value * 10 + cast(s64)(byte - cast(u8)48)
+        }
+        if value < 0 || value > 100000 || fields[3] != GAME_SCORE_LEVELS { continue }
+        score := *game_scores[game_score_count]
+        score.* = GameScore.{.value = value}
+        unused AppCopyText(fields[0], score.app[:])
+        unused AppCopyText(fields[1], score.game[:])
+        unused AppCopyText(fields[2], score.title[:])
+        unused AppCopyText(fields[3], score.metric[:])
+        game_score_count += 1
+    }
+}
+
+GameScoresSave :: () {
+    out: Vec(u8)
+    for index: cast(s32)0..game_score_count - 1 {
+        score := *game_scores[index]
+        BuilderPrint(*out, "%\t%\t%\t%\t%\n", TextUntilNul(score.app[:]), TextUntilNul(score.game[:]),
+            TextUntilNul(score.title[:]), TextUntilNul(score.metric[:]), score.value)
+    }
+    text := BuilderFinish(out)
+    storage_set_setting_text(GAME_SCORES_SETTING, text)
+    PackageFree(text)
+}
+
+// A game's report, such as "levels 12". Saved only when it changes.
+#program_export
+GameScoreReport :: (app: string, game: string, title: string, request: string) -> bool {
+    space: s64 = 0
+    while space < request.count && request[space] != #char " " { space += 1 }
+    metric := request[:space]
+    digits := ifx space < request.count then request[space + 1:] else ""
+    value: s64 = 0
+    for byte: digits {
+        if byte < cast(u8)48 || byte > cast(u8)57 || value > 100000 { return false }
+        value = value * 10 + cast(s64)(byte - cast(u8)48)
+    }
+    if metric != GAME_SCORE_LEVELS || digits.count == 0 || value > 100000 ||
+    !GameScoreName(app, 24) || !GameScoreName(game, 31) {
+        return false
+    }
+    // A title is shown as text only; tabs and line breaks would split it.
+    shown: [65]u8
+    unused AppCopyText(title, shown[:])
+    for index: cast(s32)0..shown.count - 1 {
+        if shown[index] == #char "\t" || shown[index] == #char "\n" { shown[index] = #char " " }
+    }
+    if TextUntilNul(shown[:]).count == 0 { unused AppCopyText(game, shown[:]) }
+    GameScoresLoad()
+    found: s32 = -1
+    for index: cast(s32)0..game_score_count - 1 {
+        if TextUntilNul(game_scores[index].app[:]) == app && TextUntilNul(game_scores[index].game[:]) == game {
+            found = index
+        }
+    }
+    if found >= 0 {
+        score := *game_scores[found]
+        if score.value == value && TextUntilNul(score.title[:]) == TextUntilNul(shown[:]) { return true }
+        score.value = value
+        score.title = shown
+        GameScoresSave()
+        return true
+    }
+    if game_score_count >= GAME_SCORES_MAX { return false }
+    score := *game_scores[game_score_count]
+    score.* = GameScore.{.value = value}
+    unused AppCopyText(app, score.app[:])
+    unused AppCopyText(game, score.game[:])
+    score.title = shown
+    unused AppCopyText(metric, score.metric[:])
+    game_score_count += 1
+    GameScoresSave()
+    return true
+}
+
+// The games of an installed app that reported a score, in report order.
+GameScoresFor :: (app: string, output: []s32) -> s32 {
+    GameScoresLoad()
+    count: s32 = 0
+    for index: cast(s32)0..game_score_count - 1 {
+        if TextUntilNul(game_scores[index].app[:]) == app && count < cast(s32)output.count {
+            output[count] = index
+            count += 1
+        }
+    }
+    return count
+}

@@ -30,6 +30,7 @@ ReadLeaderboardUiHost :: () -> LeaderboardUiFrame #foreign host_api;
 WriteLeaderboardUiHost :: (frame: LeaderboardUiFrame) #foreign host_api;
 ReadLeaderboardRowHost :: (index: s32) -> LeaderboardUiRow #foreign host_api;
 ReadLeaderboardAppHost :: (index: s32) -> LeaderboardUiApp #foreign host_api;
+ReadLeaderboardBoardHost :: (index: s32) -> LeaderboardUiApp #foreign host_api;
 LeaderboardLocaleHost :: (key: string) -> string #foreign host_api;
 frame: LeaderboardUiFrame;
 state: LeaderboardMessage;
@@ -81,7 +82,8 @@ Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
 }
 
 Finish :: () -> LeaderboardMessage {
-    if frame.app_count > 0 && frame.app_count <= 16 {
+    // Choosing an app only matters once more than one has a board.
+    if frame.app_count > 1 && frame.app_count <= 16 {
         apps: [16]LeaderboardUiApp
         options: [16]DropdownOption
         for index: cast(s32)0..frame.app_count - 1 {
@@ -117,13 +119,21 @@ LeaderboardView :: (message: LeaderboardMessage) -> LeaderboardMessage {
     width := frame.width - x * 2
     y := Scale(12)
 
-    if frame.app_count > 0 { y += Scale(56) }
+    if frame.app_count > 1 { y += Scale(56) }
 
-    // Every installed practice stays visible in a grid that grows with
-    // them: two per row on phones, more when wide, in rows of equal length.
+    // Every installed practice, or every game of the chosen app with a
+    // board, stays visible in a grid that grows with them: two per row on
+    // phones, more when wide, in rows of equal length.
     practices: [16]s32
+    games: [16]LeaderboardUiApp
     practice_app := state.app == "" || state.app == "practices"
     practice_count := ifx practice_app then PracticeChoices(practices[:]) else 0
+    if !practice_app {
+        practice_count = ifx frame.board_count > 16 then 16 else frame.board_count
+        for index: cast(s32)0..practice_count - 1 {
+            games[index] = ReadLeaderboardBoardHost(index)
+        }
+    }
     gap := Scale(8)
     widest: s32 = (width + gap) / (Scale(160) + gap)
     if widest < 2 {
@@ -136,16 +146,20 @@ LeaderboardView :: (message: LeaderboardMessage) -> LeaderboardMessage {
     }
     choice_width := (width - gap * (per_row - 1)) / per_row
     for index: cast(s32)0..practice_count - 1 {
-        practice := practices[index]
-        chosen := practice == state.practice
+        chosen := ifx practice_app then practices[index] == state.practice else index == frame.board_index
         choice_x := x + (index % per_row) * (choice_width + gap)
         choice_y := y + (index / per_row) * (Scale(40) + gap)
         if Button(frame.session, ButtonProps.{.id = 7140 + index,
                 .bounds = Bounds(choice_x, choice_y, choice_width, Scale(40)),
-                .label = PracticeLabel(practice), .selected = chosen, .fit_content = true,
+                .label = ifx practice_app then PracticeLabel(practices[index]) else games[index].title,
+                .selected = chosen, .fit_content = true,
                 .tone = cast(ButtonTone)(ifx chosen then ButtonToneAccent else ButtonToneNeutral),
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 && !chosen {
-            state.practice = practice
+            if practice_app {
+                state.practice = practices[index]
+            } else {
+                state.board = games[index].name
+            }
             state.metric = LEADERBOARD_STREAK
             state.refresh = true
             frame.scroll = 0
@@ -156,8 +170,8 @@ LeaderboardView :: (message: LeaderboardMessage) -> LeaderboardMessage {
         y += rows * (Scale(40) + gap) + Scale(8)
     }
 
-    // Nothing is ranked until a practice is installed.
-    if practice_app && practice_count == 0 {
+    // Nothing is ranked until a practice is installed or a game reports.
+    if frame.app_count == 0 || practice_count == 0 {
         Text(frame.session, TextProps.{.key = cast(u64)7120,
                 .bounds = Bounds(x, y, width, Scale(32)),
                 .text = LeaderboardLocaleHost("profile_no_leaderboard_data"),
@@ -173,7 +187,7 @@ LeaderboardView :: (message: LeaderboardMessage) -> LeaderboardMessage {
     labels: [3]string = .[LeaderboardLocaleHost("profile_friends_title"),
     LeaderboardLocaleHost("profile_metric_streak"), LeaderboardLocaleHost(average_label)]
     if !practice_app {
-        labels[1] = LeaderboardLocaleHost("achievements_title")
+        labels[1] = LeaderboardLocaleHost("leaderboard_levels")
     }
     header_x := x
     for column: cast(s32)0..columns - 1 {

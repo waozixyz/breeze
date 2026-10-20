@@ -44,6 +44,8 @@ frame: ListsUiFrame;
 state: ListsMessage;
 // The open Share or Invitations dialog's scroll offset.
 sharing_scroll: s32;
+// Share, as in a document: a person with a plus.
+SHARE_ICON :: "S1.8rr:M9 4.5C10.93 4.5 12.5 6.07 12.5 8C12.5 9.93 10.93 11.5 9 11.5C7.07 11.5 5.5 9.93 5.5 8C5.5 6.07 7.07 4.5 9 4.5ZM3 20C3 16.7 5.7 14 9 14C12.3 14 15 16.7 15 20M19 8V14M16 11H22"
 
 Scale :: (pixels: s32) -> s32 {
     return cast(s32)(cast(float32)pixels * frame.scale)
@@ -170,6 +172,30 @@ ParagraphHeight :: (text: string, width: s32) -> s32 {
     }
     lines := (columns + per_line - 1) / per_line
     return lines * Scale(22)
+}
+
+// Who can open the list, by name: only you, the friends it is shared with
+// and those still invited, or who shared it with you.
+AccessText :: (current: ListsUiRow) -> string {
+    if !current.shared {
+        return ListsLocaleHost("elist_private_detail")
+    }
+    text: Vec(u8)
+    if !current.owner && current.people.count > 0 {
+        BuilderPrint(*text, "%: %", ListsLocaleHost("elist_shared_by"), current.people)
+    } else if current.owner && current.people.count > 0 {
+        BuilderPrint(*text, "%: %", ListsLocaleHost("elist_shared_with"), current.people)
+    }
+    if current.owner && current.invited.count > 0 {
+        if text.count > 0 {
+            BuilderPrint(*text, " · ")
+        }
+        BuilderPrint(*text, "%: %", ListsLocaleHost("elist_invited"), current.invited)
+    }
+    if text.count == 0 {
+        return ListsLocaleHost("elist_shared")
+    }
+    return BuilderFinish(text)
 }
 
 // Whether a sharing row belongs in the open dialog: every friend for Share,
@@ -453,35 +479,40 @@ ListsPage :: () {
     if state.editing_item != -2 && state.editing_item != -3 {
         owner := !current.shared || current.owner
         if current.id.count > 0 {
-            Text(frame.session, TextProps.{.bounds = Bounds(x, y + Scale(8), width - Scale(112), Scale(32)),
-                    .text = ListsLocaleHost(ifx current.shared then "elist_shared_detail" else "elist_private_detail"),
-                    .font = Scale(13), .wrap = cast(TextWrap)TextWrapEllipsis})
+            Text(frame.session, TextProps.{.bounds = Bounds(x, y, width - Scale(152), Scale(44)),
+                    .text = AccessText(current), .font = Scale(14),
+                    .vertical_align = cast(TextAlign)TextAlignCenter,
+                    .wrap = cast(TextWrap)TextWrapEllipsis})
         }
-        status_y := y
-        y += Scale(52)
+        action_y := y
+        action_width := Scale(44)
+        share_x := x + width - Scale(148)
+        rename_x := x + width - Scale(96)
+        delete_x := x + width - Scale(44)
+        // Sharing is one icon, as in a document: it opens who has access.
         if Button(frame.session, ButtonProps.{.key = cast(u64)6508,
-                .bounds = Bounds(x, y, Scale(88), Scale(44)), .label = ListsLocaleHost("elist_share"),
+                .bounds = Bounds(share_x, action_y, action_width, Scale(44)),
+                .label = ListsLocaleHost("elist_share"), .icon_shape = SHARE_ICON, .icon_only = true,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost,
                 .disabled = current.id.count == 0 || !owner || current.incomplete || blocked}) != 0 {
             frame.panel = 1
             frame.focused = false
             sharing_scroll = 0
         }
-        label: Vec(u8)
-        BuilderPrint(*label, "% (%)", ListsLocaleHost("elist_invitations"), frame.pending_count_text)
-        invitations_label := BuilderFinish(label)
-        invitations_width := width - Scale(96)
-        if Button(frame.session, ButtonProps.{.key = cast(u64)6509,
-                .bounds = Bounds(x + Scale(96), y, invitations_width, Scale(44)),
-                .label = invitations_label,
-                .tone = cast(ButtonTone)(ifx frame.pending_count_text != "0" then ButtonToneAccent else ButtonToneNeutral)}) != 0 {
-            frame.panel = 2
-            frame.focused = false
-            sharing_scroll = 0
+        // Invitations to other people's lists appear only while some wait.
+        if frame.pending_count_text != "0" && frame.pending_count_text != "" {
+            y += Scale(52)
+            label: Vec(u8)
+            BuilderPrint(*label, "% (%)", ListsLocaleHost("elist_invitations"), frame.pending_count_text)
+            if Button(frame.session, ButtonProps.{.key = cast(u64)6509,
+                    .bounds = Bounds(x, y, width, Scale(44)),
+                    .label = BuilderFinish(label),
+                    .tone = cast(ButtonTone)ButtonToneAccent}) != 0 {
+                frame.panel = 2
+                frame.focused = false
+                sharing_scroll = 0
+            }
         }
-        action_y := status_y
-        action_width := Scale(44)
-        rename_x := x + width - Scale(96)
-        delete_x := x + width - Scale(44)
         if Button(frame.session, ButtonProps.{.key = cast(u64)6503,
                 .bounds = Bounds(rename_x, action_y, action_width, Scale(44)),
                 .label = ListsLocaleHost("elist_rename"), .icon_only = true,

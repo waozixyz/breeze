@@ -2,8 +2,8 @@
 
 ## [1.0.6] - 2026-10-20
 
-- Choose among your installed apps. Practice then lists each installed practice in your saved order.
-- Other app boards rank earned achievements separately from practice streaks and averages.
+- Lists only installed apps with a ranking: Practice by each installed practice, and Arcade by each game.
+- Arcade games rank the levels you have solved, such as in Shovey Classic and Shovey Island.
 
 ## [1.0.5] - 2026-10-18
 

@@ -29,6 +29,8 @@ TEST_DIR.mkdir(parents=True, exist_ok=True)
 ALARMING = re.compile(r"could|fail|error|unconfirmed", re.IGNORECASE)
 # Shared list ids are UUIDs; the app ignores invitations to anything else.
 SHARED_LIST = "5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6"
+OWNED_LIST = "6be1f803-4c2d-4e7f-8091-b2c3d4e5f6a7"
+GIVEN_LIST = "7cf2a914-5d3e-4f80-9102-c3d4e5f6a7b8"
 driver = UiDriver(TEST_DIR / "driver")
 
 
@@ -142,13 +144,13 @@ with contextlib.ExitStack() as stack:
     add("Pack bag")
     wait_for(lambda: item_list("Pack bag"), "the task was not added to the new list")
     assert item_list("Pack bag") == "Travel", f"FAIL new list is selected: got {item_list('Pack bag')!r}"
-    # Share and Invitations open in a dialog over the list; a tap beside it
-    # closes it. Offline, both ask to connect an account first.
+    # Sharing is one icon that opens a dialog over the list; a tap beside it
+    # closes it. Offline, it asks to connect an account first. A private list
+    # says so, and Invitations appears only while one waits.
+    assert any("Only you" in label for label in driver.labels()), driver.labels()
+    assert not driver.find(contains="Invitations", role="button"), "Invitations shown with none waiting"
     driver.press(label="Share", role="button")
     assert re.search(r"connect|account|sharing", dialog(), re.IGNORECASE), dialog()
-    close_beside()
-    driver.press(contains="Invitations", role="button")
-    assert re.search(r"connect|account", dialog(), re.IGNORECASE), dialog()
     close_beside()
     # Synthetic credentials make the connected panel available without a real
     # account or HTTP delivery. The request must still pass through the actual
@@ -184,15 +186,34 @@ with contextlib.ExitStack() as stack:
     # scope, as a real account/server change does.
     with writable() as db, db:
         db.execute("UPDATE settings SET value='http://127.0.0.1:10' WHERE key='sync_server_url'")
-        incoming = {"lists": [], "invitations": [{"id": "invitation-fixture", "list_id": SHARED_LIST,
-                                                  "title": "Weekend trip", "owner": "a" * 64,
-                                                  "target": "b" * 64, "alias": "Alice", "status": "pending"}]}
+        # A list this account shared with Alice, who joined, and Cedar, still
+        # invited; and one Alice shared with this account.
+        owned = {"id": OWNED_LIST, "owner": "b" * 64, "alias": "me", "title": "Garden",
+                 "revision": 1, "deleted": 0, "items": []}
+        given = {"id": GIVEN_LIST, "owner": "a" * 64, "alias": "Alice", "title": "Groceries",
+                 "revision": 1, "deleted": 0, "items": []}
+        incoming = {"lists": [owned, given], "invitations": [
+            {"id": "invitation-fixture", "list_id": SHARED_LIST, "title": "Weekend trip", "owner": "a" * 64,
+             "target": "b" * 64, "alias": "Alice", "status": "pending"},
+            {"id": "invitation-alice", "list_id": OWNED_LIST, "title": "Garden", "owner": "b" * 64,
+             "alias": "me", "target": "a" * 64, "target_alias": "Alice", "status": "accepted"},
+            {"id": "invitation-cedar", "list_id": OWNED_LIST, "title": "Garden", "owner": "b" * 64,
+             "alias": "me", "target": "c" * 64, "target_alias": "Cedar", "status": "pending"}]}
         db.execute("INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,1)",
                    (user, "lists.shared/" + "b" * 64 + "/http://127.0.0.1:10", json.dumps(incoming)))
     driver.wait(label="Invitations (1)", role="button")
     # The new scope starts with its dialogs closed; close Share if it stayed.
     if driver.find(role="modal", visible=True):
         close_beside()
+    # Each shared list names who can open it.
+    driver.press(contains="Garden", role="tab")
+    wait_for(lambda: any("Shared with: Alice" in label and "Invited: Cedar" in label for label in driver.labels()),
+             lambda: f"the owned list does not name its people: {driver.labels()}")
+    driver.press(contains="Groceries", role="tab")
+    wait_for(lambda: any("Shared by: Alice" in label for label in driver.labels()),
+             lambda: f"the received list does not name who shared it: {driver.labels()}")
+    window = find_window()
+    subprocess.run(["import", "-window", window, str(TEST_DIR / "shared-names.png")], check=True)
     driver.press(label="Invitations (1)", role="button")
     wait_for(lambda: "Weekend trip" in dialog(), lambda: f"the invitation is not listed: {dialog()}")
     assert "From: Alice" in dialog(), dialog()

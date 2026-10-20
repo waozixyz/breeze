@@ -60,6 +60,44 @@ ListsSharedId :: (id: string) -> bool {
     return false
 }
 
+// The friends with access to a list this account owns, by name: those who
+// accepted in people and those still to answer in invited.
+ListsSharedPeople :: (json: string, id: string, people: []u8, invited: []u8) {
+    joined: Vec(u8)
+    waiting: Vec(u8)
+    invitations := FieldAt(json, 0, "invitations")
+    for index: cast(s32)0..ArrayCount(json, invitations) - 1 {
+        row := ElementAt(json, invitations, index)
+        list_id: [37]u8
+        status: [16]u8
+        name: [128]u8
+        ListsCopyJson(json, row, "list_id", list_id[:])
+        ListsCopyJson(json, row, "status", status[:])
+        ListsCopyJson(json, row, "target_alias", name[:])
+        if name[0] == cast(u8)0 {
+            // A friend without a name shows the start of their account ID.
+            target: [65]u8
+            ListsCopyJson(json, row, "target", target[:])
+            unused AppCopyText(AppTextFromCString(*target[0], 8), name[:])
+        }
+        state := AppTextFromCString(*status[0], 16)
+        if AppTextFromCString(*list_id[0], 37) != id || (state != "accepted" && state != "pending") {
+            continue
+        }
+        out := ifx state == "accepted" then *joined else *waiting
+        if out.count > 0 {
+            BuilderPrint(out, ", ")
+        }
+        BuilderPrint(out, "%", AppTextFromCString(*name[0], 128))
+    }
+    people_text := BuilderFinish(joined)
+    invited_text := BuilderFinish(waiting)
+    unused AppCopyText(people_text, people)
+    unused AppCopyText(invited_text, invited)
+    PackageFree(people_text)
+    PackageFree(invited_text)
+}
+
 ListsMergeShared :: (state: *EListState) {
     json := ListsSharedCache()
     array := FieldAt(json, 0, "lists")
@@ -120,6 +158,11 @@ ListsMergeShared :: (state: *EListState) {
         owner: [65]u8
         ListsCopyJson(json, row, "owner", owner[:])
         list.owner = AppTextFromCString(*owner[0], 65) == storage_get_setting_text("sync_public_id")
+        if list.owner {
+            ListsSharedPeople(json, AppTextFromCString(*list.id[0], 37), list.people[:], list.invited[:])
+        } else {
+            ListsCopyJson(json, row, "alias", list.people[:])
+        }
         list.revision = cast(s64)ReadNumber(json, FieldAt(json, row, "revision")).value
         state.list_count += 1
         items := FieldAt(json, row, "items")

@@ -5,7 +5,7 @@
 #import "byte_text_linux"
 #import "url"
 c :: #system_library "c";
-LeaderboardAppName :: (app: *InnerBreeze) -> string #foreign c;
+LeaderboardBoardName :: (app: *InnerBreeze) -> string #foreign c;
 LeaderboardStatsBody :: (app: *InnerBreeze) -> string #foreign c;
 #import, file "../cells/package_files.zi";
 LOG_INFO :: 3
@@ -121,7 +121,7 @@ SocialWorkerArgs :: struct {
     leaderboard_avg_key: [96] u8
     action: [16] u8
     action_value: [96] u8
-    statistics: [512]u8
+    statistics: [2048]u8
     owner: [65]u8
 }
 
@@ -402,15 +402,16 @@ app_social_metric_id :: (practice: s32, metric: s32) -> string {
     return ifx (practice == EXERCISE_MEDITATION) then ("avg_time") else ("avg_hold")
 }
 
+// A game's board, such as Arcade's Shovey, ranks the levels it solved.
 app_social_leaderboard_key :: (out: *u8, out_size: s64,
-    practice: s32, metric: s32, app_name: string = "practices") {
+    practice: s32, metric: s32, board: string = "") {
     if out == null || out_size == 0 {
         return
     }
-    if app_name != "practices" {
-        SyncCopyText(out, out_size, "leaderboard.apps.")
-        SyncAppendText(out, out_size, app_name)
-        SyncAppendText(out, out_size, ".achievements")
+    if board != "" {
+        SyncCopyText(out, out_size, "leaderboard.games.")
+        SyncAppendText(out, out_size, board)
+        SyncAppendText(out, out_size, ".levels")
         return
     }
     SyncCopyText(out, out_size, "leaderboard.breathing.")
@@ -440,7 +441,7 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
             current_key: [96] u8
             app_social_leaderboard_key(*current_key[0], 96,
                 app.leaderboard_practice,
-                app.leaderboard_metric, LeaderboardAppName(app))
+                app.leaderboard_metric, LeaderboardBoardName(app))
             if AppTextFromCString(*current_key[0], 96) == leaderboard_key {
                 AppCopyText(ifx (leaderboard_json.count > 0) then (leaderboard_json) else ("{\"rows\":[]}"), app.leaderboard_json[:])
             }
@@ -448,7 +449,7 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
         if leaderboard_avg_key.count > 0  && leaderboard_avg_json.count > 0 {
             current_avg_key: [96] u8
             app_social_leaderboard_key(*current_avg_key[0], 96,
-                app.leaderboard_practice, 1, LeaderboardAppName(app))
+                app.leaderboard_practice, 1, LeaderboardBoardName(app))
             if AppTextFromCString(*current_avg_key[0], 96) == leaderboard_avg_key {
                 AppCopyText(ifx (leaderboard_avg_json.count > 0) then (leaderboard_avg_json) else ("{\"rows\":[]}"), app.leaderboard_avg_json[:])
             }
@@ -499,7 +500,7 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
         if args != null && AppTextFromCString(*args.owner[0], 65) == storage_get_setting_text("sync_public_id") {
             result = app_social_fetch(AppTextFromCString(*args.url[0], 256), AppTextFromCString(*args.practice[0], 32), AppTextFromCString(*args.metric[0], 32),
                 AppTextFromCString(*args.action[0], 16), AppTextFromCString(*args.action_value[0], 96),
-                AppTextFromCString(*args.statistics[0], 512),
+                AppTextFromCString(*args.statistics[0], 2048),
                 AppTextFromCString(*args.owner[0], 65),
                 *requests_json[0], size_of(type_of(requests_json)),
                 *friends_json[0], size_of(type_of(friends_json)),
@@ -926,22 +927,22 @@ app_apply_pending_social_refresh :: (app: *InnerBreeze) {
         sync_unlock()
 
         SyncCopyText(*args.url[0], 256, AppTextFromCString(*url[0], 256))
-        selected_app := LeaderboardAppName(app)
-        SyncCopyText(*args.practice[0], 32, ifx selected_app == "practices" then app_social_practice_id(app.leaderboard_practice) else selected_app)
+        board := LeaderboardBoardName(app)
+        SyncCopyText(*args.practice[0], 32, ifx board == "" then app_social_practice_id(app.leaderboard_practice) else board)
         app_social_leaderboard_key(*args.leaderboard_key[0],
             size_of(type_of(args.leaderboard_key)),
             app.leaderboard_practice,
-            PROFILE_LEADERBOARD_STREAK, selected_app)
+            PROFILE_LEADERBOARD_STREAK, board)
         app_social_leaderboard_key(*args.leaderboard_avg_key[0],
             size_of(type_of(args.leaderboard_avg_key)),
             app.leaderboard_practice,
-            PROFILE_LEADERBOARD_AVG_HOLD, selected_app)
-        if selected_app != "practices" {
+            PROFILE_LEADERBOARD_AVG_HOLD, board)
+        if board != "" {
             args.leaderboard_avg_key[0] = cast(u8)0
         }
-        SyncCopyText(*args.metric[0], 32, ifx selected_app == "practices" then "streak" else "achievements")
+        SyncCopyText(*args.metric[0], 32, ifx board == "" then "streak" else "levels")
         statistics := LeaderboardStatsBody(app)
-        SyncCopyText(*args.statistics[0], 512, statistics)
+        SyncCopyText(*args.statistics[0], 2048, statistics)
         PackageFree(statistics)
         SyncCopyText(*args.owner[0], 65, storage_get_setting_text("sync_public_id"))
         SyncCopyText(*args.action[0], 16, AppTextFromCString(*action[0], 16))
@@ -970,20 +971,20 @@ app_apply_pending_social_refresh :: (app: *InnerBreeze) {
         }
         SocialQueuePeek(action[:], action_value[:])
         app_social_leaderboard_key(*g_social_streak_key[0], 96,
-            app.leaderboard_practice, PROFILE_LEADERBOARD_STREAK, LeaderboardAppName(app))
+            app.leaderboard_practice, PROFILE_LEADERBOARD_STREAK, LeaderboardBoardName(app))
         app_social_leaderboard_key(*g_social_average_key[0], 96,
-            app.leaderboard_practice, PROFILE_LEADERBOARD_AVG_HOLD, LeaderboardAppName(app))
-        selected_app := LeaderboardAppName(app)
+            app.leaderboard_practice, PROFILE_LEADERBOARD_AVG_HOLD, LeaderboardBoardName(app))
+        board := LeaderboardBoardName(app)
         statistics := LeaderboardStatsBody(app)
         defer { PackageFree(statistics) }
-        if selected_app != "practices" {
+        if board != "" {
             g_social_average_key[0] = cast(u8)0
         }
         if !BeginSocialRefresh(*g_social_async, AppTextFromCString(*url[0], 256),
             NetworkTransport(*g_social_transfer),
-            ifx selected_app == "practices" then app_social_practice_id(app.leaderboard_practice) else selected_app,
+            ifx board == "" then app_social_practice_id(app.leaderboard_practice) else board,
             AppTextFromCString(*action[0], 16), AppTextFromCString(*action_value[0], 96),
-            ifx selected_app == "practices" then "streak" else "achievements", statistics) {
+            ifx board == "" then "streak" else "levels", statistics) {
             app_social_record_result(g_social_async.result)
             return
         }
