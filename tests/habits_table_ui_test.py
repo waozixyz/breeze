@@ -257,9 +257,8 @@ with contextlib.ExitStack() as stack:
     resize(411, 760)
     print("PASS steady columns: opening a habit or the inactive habits keeps the day columns at a phone's and a desktop's width")
 
-    # The day columns: today first, then yesterday and the day before, named
-    # by their weekdays in the header.
-    columns = header()
+    # Dragging the border between the names and the days widens the name
+    # column; the day columns move right with it.
     resize_handle = driver.wait(key=4100000, role="button")
     handle_center = UiDriver.center(resize_handle)
     drag(handle_center, (handle_center[0] + 170, handle_center[1]))
@@ -276,6 +275,9 @@ with contextlib.ExitStack() as stack:
     assert driver.find(label="Yoga", visible=True), "an icon-only expanded card hides its name"
     tap(*icon)
     wait_for(lambda: not details_open(), "the icon-only details did not close")
+    # The day columns where the wider name column left them: today first,
+    # then yesterday and the day before, named by their weekdays in the header.
+    columns = header()
     today = datetime.date.today()
     yesterday = today - datetime.timedelta(days=1)
     before_yesterday = today - datetime.timedelta(days=2)
