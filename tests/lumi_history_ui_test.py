@@ -160,7 +160,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
         # Telegram lives in Profile: Apps, Profile, then its Telegram card.
         driver.press(label="Apps", role="button")
         driver.press(label="Profile", role="button")
-        driver.wait(label="No account connected")
+        driver.wait(label="Profile", role="title_bar")
         page = driver.wait(role="scroll")
         x, y = UiDriver.center(page)
         for _ in range(10):

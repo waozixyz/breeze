@@ -218,38 +218,43 @@ with contextlib.ExitStack() as stack:
                              "tutorial_seen": 0, "tutorial_step": 0, "habits_guide_seen": 1, "lumi_guides_seen": 255,
                              "package_updates_allowed": 0, "apps_last_update_check": 1900000000})
         with application(profile, "guide") as (window, log):
-            # A first start has only Wim Hof installed, so there is no
-            # carousel step: the guide begins at Start. Lumi flies in and
-            # starts typing her first line; it is not all there yet.
-            title = driver.wait(label="Step 1 of 2")
-            paragraph = driver.wait(contains="follow along", role="text")
+            # Bundled practices make the carousel the first of three steps.
+            # Lumi flies in and starts typing; the whole line is not there yet.
+            title = driver.wait(label="Step 1 of 3")
+            paragraph = driver.wait(contains="your practices", role="text")
             lumi = landed_lumi(title)
             still_typing(window, title, paragraph, lumi)
             # A tap on the bubble, while she types, shows the whole line and
             # stays on it.
-            driver.press(contains="follow along", role="text", settle=False)
+            driver.press(contains="your practices", role="text", settle=False)
             wait_frames(3)
-            driver.wait(label="Step 1 of 2")
+            driver.wait(label="Step 1 of 3")
             assert settings(profile, user).get("tutorial_step", "0") == "0", "The tap left the typed step"
             # The next tap, anywhere but a button, goes to the next step:
             # the whole line was there.
             guide = driver.wait(key=83100, role="modal")
-            bubble = driver.wait(contains="follow along", role="text")
+            bubble = driver.wait(contains="your practices", role="text")
             point = (guide["x"] + 32, guide["y"] + 120)
             assert inside(point, guide) and not inside(point, bubble), point
             assert not [node for node in driver.find(role="button", visible=True)
                         if inside(point, node) and node["key"] in (83110, 83111, 83112)], point
             tap(point)
-            driver.wait(label="Step 2 of 2")
+            driver.wait(label="Step 2 of 3")
             wait_setting(profile, user, "tutorial_step", "1")
             # Left goes back and Right goes on, whatever is typed.
             key(window, "Left")
-            driver.wait(label="Step 1 of 2")
+            driver.wait(label="Step 1 of 3")
             key(window, "Right")
-            driver.wait(label="Step 2 of 2")
+            driver.wait(label="Step 2 of 3")
+            key(window, "Right")
+            driver.wait(label="Step 3 of 3")
+            wait_setting(profile, user, "tutorial_step", "2")
+            key(window, "Left")
+            driver.wait(label="Step 2 of 3")
             # Escape closes the guide for good.
             key(window, "Escape")
-            driver.wait_gone(label="Step 2 of 2")
-            assert not driver.find(label="Step 1 of 2"), "Escape went back instead of closing"
+            driver.wait_gone(label="Step 2 of 3")
+            assert not driver.find(label="Step 1 of 3"), "Escape went back instead of closing"
+            assert not driver.find(label="Step 3 of 3"), "Escape advanced instead of closing"
             wait_setting(profile, user, "tutorial_seen", "1")
 print("Lumi guide UI test passed")

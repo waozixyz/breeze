@@ -66,6 +66,21 @@ def host_range(ledger):
     return ledger.get("oldest_host_api", ledger["host_api"]), ledger["host_api"]
 
 
+def latest_release_tag():
+    """GitHub's public latest link avoids shared anonymous API rate limits."""
+    request = urllib.request.Request(f"https://github.com/{REPOSITORY}/releases/latest",
+                                     headers={"User-Agent": "Inbe-Compatibility-Test/1.0"}, method="HEAD")
+    with urllib.request.urlopen(request, timeout=60) as response:
+        target = urllib.parse.urlsplit(response.geturl())
+    prefix = f"/{REPOSITORY}/releases/tag/"
+    if target.scheme != "https" or target.hostname != "github.com" or not target.path.startswith(prefix):
+        raise ValueError("GitHub's latest release link did not resolve to this repository's release")
+    tag = urllib.parse.unquote(target.path[len(prefix):])
+    if not tag or "/" in tag:
+        raise ValueError("GitHub's latest release link returned no release tag")
+    return tag
+
+
 def declared_host(ledger, name):
     return ledger["apps"][name].get("host_api", ledger["host_api"])
 
@@ -229,8 +244,7 @@ def main():
     if not args.skip_reverse:
         tag = args.release
         if tag is None:
-            latest = json.loads(fetch(f"https://api.github.com/repos/{REPOSITORY}/releases/latest", 1 << 20))
-            tag = latest["tag_name"]
+            tag = latest_release_tag()
         with tempfile.TemporaryDirectory(prefix="inbe-released-", dir=output) as directory:
             checked += reverse(tag, ledger, Path(directory))
     print(f"Package compatibility: {checked} package runs passed")
