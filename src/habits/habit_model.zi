@@ -18,6 +18,7 @@ Tm :: struct {
 #import, file "../app/app_types.zi";
 #import, file "../app/app.zi";
 #import, file "habit_types.zi";
+#import, file "habit_icons.zi";
 #import, file "habit_memory.zi";
 #import, file "habit_calendar.zi";
 #import, file "habit_days.zi";
@@ -355,6 +356,7 @@ habits_add_default_set :: (habits: *Habits) {
         LocaleText("habit_default_exercise_description"),
         Color.{.r = 99, .g = 196, .b = 165, .a = 255},
         habit_activity_mask_for(EXERCISE_WORKOUT))
+    habits.items[habits.count - 1].icon = HABIT_ICON_RUN
     habits.selected = -1
     habits.loaded = 1
     habits_save(habits)
@@ -367,23 +369,52 @@ habits_add_default_set :: (habits: *Habits) {
 habits_seed_workout_if_needed :: (habits: *Habits) {
     if habits == null || DataTemporary() ||
     storage_meta_int64("workout_habit_seeded_v1", 0) != 0 {
+        habits_seed_workout_icons(habits)
         return
     }
     mask := habit_activity_mask_for(EXERCISE_WORKOUT)
     if storage_habit_activity_exists(mask) {
         storage_set_meta_int64("workout_habit_seeded_v1", 1)
+        habits_seed_workout_icons(habits)
         return
     }
     index := habits_add_custom(habits, LocaleText("habit_default_exercise_name"),
         Color.{.r = 99, .g = 196, .b = 165, .a = 255}, HABIT_SYNC_ACTIVITIES, mask)
     if index < 0 {
+        habits_seed_workout_icons(habits)
         return
     }
+    habits.items[index].icon = HABIT_ICON_RUN
     habit_model_copy_text_boundary(*habits.items[index].description[0], 128,
         LocaleText("habit_default_exercise_description"))
     habits_save(habits)
     if storage_habit_activity_exists(mask) {
         storage_set_meta_int64("workout_habit_seeded_v1", 1)
+    }
+}
+
+// A workout habit that never chose an icon shows the run symbol, including
+// the Exercise habit seeded before it had one.
+habits_seed_workout_icons :: (habits: *Habits) {
+    if habits == null {
+        return
+    }
+    mask := habit_activity_mask_for(EXERCISE_WORKOUT)
+    changed: s32 = 0
+    {
+        i: s32 = 0
+        while i < habits.count {
+            habit: *Habit = *habits.items[i]
+            if habit.sync_mode == HABIT_SYNC_ACTIVITIES && (habit.sync_activity & mask) != 0 &&
+            habit.icon == 0 {
+                habit.icon = HABIT_ICON_RUN
+                changed = 1
+            }
+            i += 1
+        }
+    }
+    if changed != 0 {
+        habits_save(habits)
     }
 }
 

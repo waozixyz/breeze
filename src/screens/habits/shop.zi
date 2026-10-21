@@ -10,6 +10,7 @@
 #import "widget_host"
 #import "drawing_props"
 #import "box_props"
+#import "date_time"
 #import, file "../../app/app_types.zi";
 #import, file "../../app/app_modal_state.zi";
 #import, file "../../app/modal_rules.zi";
@@ -21,6 +22,7 @@
 #import, file "../../habits/habit_icons.zi";
 #import, file "../../habits/habit_coins.zi";
 #import, file "../../storage/db.zi";
+#import, file "../../storage/storage_settings.zi";
 #import, file "../../storage/storage_habit_wallet.zi";
 #import, file "../../platform/raylib_text_input.zi";
 #import, file "../../cells/habits_ui_types.zi";
@@ -37,6 +39,7 @@ HABIT_SHOP_DEFAULT_PRICE :: 5
 habit_shop_frame: HabitsShopFrame;
 habit_shop_frame_codec: WidgetHabitsShopFrameCodec;
 habit_shop_reward_codec: WidgetHabitsShopRewardCodec;
+habit_shop_activity_codec: WidgetHabitsShopActivityCodec;
 
 // Reads the coins and rewards again when the stored data changed, as
 // after a done day, a purchase or a sync.
@@ -49,7 +52,38 @@ HabitShopRefresh :: (app: *InnerBreeze) {
     shop.loaded = true
     shop.revision = revision
     shop.halves = storage_habit_wallet_halves()
+    shop.borrow_limit = storage_get_setting_int("habit_shop_borrow_limit", 0)
     shop.reward_count = storage_habit_rewards_load(shop.rewards[:])
+    shop.activity_count = storage_habit_activity_load(shop.activity[:])
+}
+
+// An Activity line's day, short: Today, or the weekday and the day of the
+// month, as "Mon 19".
+HabitShopDay :: (app: *InnerBreeze, local_date: s32) -> string {
+    local := LocalNow()
+    if local.valid && local_date == local.year * 10000 + local.month * 100 + local.day {
+        return LocaleText("habits_today")
+    }
+    year := local_date / 10000
+    month := (local_date / 100) % 100
+    day := local_date % 100
+    if month < 1 || month > 12 || day < 1 || day > 31 {
+        return ""
+    }
+    // Sakamoto's weekday, 0 for Sunday.
+    offsets: [12]s32 = .[0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
+    y := ifx month < 3 then year - 1 else year
+    weekday := (y + y / 4 - y / 100 + y / 400 + offsets[month - 1] + day) % 7
+    keys: [7]string = .["habit_day_sun", "habit_day_mon", "habit_day_tue", "habit_day_wed",
+    "habit_day_thu", "habit_day_fri", "habit_day_sat"]
+    label: [48]u8
+    if !AppCopyText(LocaleText(keys[weekday]), label[:]) || !AppAppendText(" ", label[:]) {
+        return ""
+    }
+    number: [8]u8
+    unused AppFormatS32(day, number[:])
+    unused AppAppendText(AppTextFromCString(*number[0], 8), label[:])
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*label[0], 48))
 }
 
 // The coins to spend, in half coins.
@@ -164,7 +198,9 @@ HabitShopSave :: (app: *InnerBreeze, reward: HabitsShopReward) -> bool {
 // Buys a stored reward at its stored price, when the coins cover it.
 HabitShopBuy :: (app: *InnerBreeze, id: string) -> bool {
     stored := HabitShopFind(app, id)
-    if stored == null || storage_habit_wallet_halves() < cast(s64)stored.price * 2 {
+    limit := cast(s64)storage_get_setting_int("habit_shop_borrow_limit", 0) * 2
+    if stored == null ||
+    storage_habit_wallet_halves() - cast(s64)stored.price * 2 < -limit {
         return false
     }
     return storage_habit_reward_buy(stored) != 0
@@ -176,7 +212,8 @@ HabitShopKeep :: (app: *InnerBreeze, observed: HabitsShopFrame) -> bool {
     // VM strings are borrowed only during this call.
     if !AppCopyText(observed.editing, shop.editing[:]) ||
     !AppCopyText(observed.name, shop.name[:]) ||
-    !AppCopyText(observed.price_text, shop.price_text[:]) {
+    !AppCopyText(observed.price_text, shop.price_text[:]) ||
+    !AppCopyText(observed.borrow_text, shop.borrow_text[:]) {
         return false
     }
     shop.name_cursor = observed.name_cursor
@@ -188,6 +225,20 @@ HabitShopKeep :: (app: *InnerBreeze, observed: HabitsShopFrame) -> bool {
     shop.price_anchor = observed.price_anchor
     shop.price_scroll_x = observed.price_scroll_x
     shop.price_focused = ifx observed.price_focused then 1 else 0
+    shop.borrow_cursor = observed.borrow_cursor
+    shop.borrow_anchor = observed.borrow_anchor
+    shop.borrow_scroll_x = observed.borrow_scroll_x
+    shop.borrow_focused = ifx observed.borrow_focused then 1 else 0
+    if observed.borrow_limit != shop.borrow_limit {
+        limit := observed.borrow_limit
+        if limit < 0 {
+            limit = 0
+        } else if limit > 9999 {
+            limit = 9999
+        }
+        shop.borrow_limit = limit
+        storage_set_setting_int("habit_shop_borrow_limit", limit)
+    }
     shop.icon = HabitRewardIconClamp(observed.icon)
     shop.icon_open = observed.icon_open
     app.habits.scroll = observed.scroll
@@ -233,6 +284,20 @@ HabitShopCall :: (context: *void, module: *u8, function: *u8,
         result.* = WidgetEncodeHabitsShopReward(reward, *habit_shop_reward_codec)
         return 1
     }
+    if name == "ReadHabitActivityHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        line: HabitsShopActivity
+        if index >= 0 && index < shop.activity_count {
+            entry := *shop.activity[index]
+            line = HabitsShopActivity.{
+                .name = AppTextFromCString(*entry.name[0], HABIT_REWARD_NAME_SIZE),
+                .icon = entry.icon, .halves = entry.halves,
+                .day = HabitShopDay(app, entry.local_date)}
+        }
+        result.* = WidgetEncodeHabitsShopActivity(line, *habit_shop_activity_codec)
+        return 1
+    }
     if name == "SaveHabitRewardHost" && count == 1 && WidgetValidHabitsShopReward(arguments[0]) {
         saved := HabitShopSave(app, WidgetDecodeHabitsShopReward(arguments[0],
             *habit_shop_reward_codec))
@@ -274,10 +339,12 @@ HabitShopFrameFor :: (app: *InnerBreeze, bounds: Rectangle, typed: []u8) -> Habi
         .muted_class = MutedTextClass(), .card_fill = card.fill,
         .card_border = card.border, .card_radius = cast(s32)card.radius,
         .modal_active = app.modal.active != 0,
-        .input = SampleTextFieldInput(shop.name_focused != 0 || shop.price_focused != 0,
+        .input = SampleTextFieldInput(shop.name_focused != 0 || shop.price_focused != 0 ||
+            shop.borrow_focused != 0,
             typed),
-        .halves = shop.halves, .reward_count = shop.reward_count,
-        .scroll = app.habits.scroll,
+        .halves = shop.halves, .borrow_limit = shop.borrow_limit,
+        .reward_count = shop.reward_count,
+        .activity_count = shop.activity_count, .scroll = app.habits.scroll,
         .editing = AppTextFromCString(*shop.editing[0], HABIT_REWARD_ID_SIZE),
         .name = AppTextFromCString(*shop.name[0], HABIT_REWARD_NAME_SIZE),
         .name_cursor = shop.name_cursor, .name_anchor = shop.name_anchor,
@@ -286,6 +353,9 @@ HabitShopFrameFor :: (app: *InnerBreeze, bounds: Rectangle, typed: []u8) -> Habi
         .price_text = AppTextFromCString(*shop.price_text[0], cast(s32)shop.price_text.count),
         .price_cursor = shop.price_cursor, .price_anchor = shop.price_anchor,
         .price_scroll_x = shop.price_scroll_x, .price_focused = shop.price_focused != 0,
+        .borrow_text = AppTextFromCString(*shop.borrow_text[0], cast(s32)shop.borrow_text.count),
+        .borrow_cursor = shop.borrow_cursor, .borrow_anchor = shop.borrow_anchor,
+        .borrow_scroll_x = shop.borrow_scroll_x, .borrow_focused = shop.borrow_focused != 0,
         .icon = shop.icon, .icon_open = shop.icon_open,
         .buying = HabitShopRewardValue(*shop.buying)}
 }
@@ -314,11 +384,13 @@ HabitShopPage :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
     if asked < 0 || asked == HABITS_SHOP_BACK {
         app.habit_shop.name_focused = 0
         app.habit_shop.price_focused = 0
+        app.habit_shop.borrow_focused = 0
         return false
     }
     if asked == HABITS_SHOP_BUY {
         app.habit_shop.name_focused = 0
         app.habit_shop.price_focused = 0
+        app.habit_shop.borrow_focused = 0
         app_open_modal(app, cast(ModalType)ModalHabitBuy)
     }
     return true
