@@ -1,6 +1,7 @@
 # make test runs these suites in this order; ci adds the web build.
 
 test: app-codec-check
+test: android-source-test
 test: frame-pacing-zi-test
 test: desktop-frame-pacing-policy-test
 test: habits-table-layout-test

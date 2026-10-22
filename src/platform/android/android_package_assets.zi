@@ -14,7 +14,8 @@
     PackageAssetClose :: (asset: *void) #foreign android "AAsset_close";
     PackageAsset :: struct {
         asset: *void
-        bytes: string
+        data: *u8
+        length: s64
     }
     package_assets: [2]PackageAsset;
 }
@@ -29,7 +30,7 @@ AndroidPackageBytes :: (path: string) -> string {
         }
         cached := *package_assets[index]
         if cached.asset != null {
-            return cached.bytes
+            return TextFromBytes(BytesFromPointer(cached.data, cast(u64)cached.length))
         }
         app := PackageAndroidApp()
         if app == null || app.activity == null || app.activity.asset_manager == null {
@@ -50,8 +51,12 @@ AndroidPackageBytes :: (path: string) -> string {
             return ""
         }
         cached.asset = asset
-        cached.bytes = TextFromBytes(BytesFromPointer(data, cast(u64)length))
-        return cached.bytes
+        // The open NDK asset owns these immutable bytes. Cache its raw native
+        // buffer so opening another package does not mutate a text backing
+        // store already borrowed by locales.
+        cached.data = data
+        cached.length = length
+        return TextFromBytes(BytesFromPointer(data, cast(u64)length))
     }
     return ""
 }
