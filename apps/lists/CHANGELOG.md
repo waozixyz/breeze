@@ -2,6 +2,7 @@
 
 ## [1.1.5] - 2026-10-21
 
+- Give each achievement its own meaningful icon.
 - Show everyone with access and suggest friends as you type an invitation.
 - Let owners grant full ownership, editing, or read-only access and remove collaborators.
 - Update sharing automatically without a Refresh button.

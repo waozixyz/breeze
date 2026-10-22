@@ -2,6 +2,7 @@
 
 ## [1.0.7] - 2026-10-21
 
+- Give each achievement its own meaningful icon.
 - Maintenance release for Inner Breeze 2.1.38.
 
 ## [1.0.6] - 2026-10-20

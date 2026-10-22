@@ -133,7 +133,7 @@ profile_content_height :: (content_w: s32, user_data: *void) -> s32 {
         return AppScale(12) + profile_sync_content_height(content_w)
     }
     if app != null && app.profile_tab == PROFILE_TAB_OVERVIEW {
-        return AppScale(652) + ProfileDewHeight(app, content_w)
+        return AppScale(236) + ProfileDewHeight(app, content_w)
     }
     if app != null && app.profile_tab == PROFILE_TAB_DATA {
         return AppScale(12) + profile_data_content_height(content_w)
@@ -153,234 +153,6 @@ profile_save_identity :: (app: *InnerBreeze) {
         return
     }
     save_settings(app)
-}
-
-profile_compact_public_id :: (public_id: string, output: []u8) -> bool {
-    if output.count == 0 {
-        return false
-    }
-    output[0] = cast(u8)0
-    if public_id.count <= 12 {
-        return AppCopyText(public_id, output)
-    }
-    if output.count < 12 {
-        return false
-    }
-    index: s64 = 0
-    while index < 4 {
-        output[index] = public_id[index]
-        output[7 + index] = public_id[public_id.count - 4 + index]
-        index += 1
-    }
-    output[4] = cast(u8)46
-    output[5] = cast(u8)46
-    output[6] = cast(u8)46
-    output[11] = cast(u8)0
-    return true
-}
-
-profile_alias_label :: (alias: string, output: []u8) -> bool {
-    if output.count < 2 || alias.count >= output.count - 1 {
-        return false
-    }
-    output[0] = cast(u8)64
-    index: s64 = 0
-    while index < cast(s64)alias.count {
-        output[index + 1] = alias[index]
-        index += 1
-    }
-    output[index + 1] = cast(u8)0
-    return true
-}
-
-profile_draw_avatar :: (app: *InnerBreeze,
-    x: s32, y: s32, size: s32) {
-    bounds := Rectangle.{cast(float32)x, cast(float32)y,
-        cast(float32)size, cast(float32)size}
-    label := LocaleText("tab_profile")
-    button: ButtonProps
-    button.bounds = bounds
-    button.label = label
-    button.icon_only = true
-    button.circle = true
-    button.tone = cast(ButtonTone)ButtonToneNeutral
-    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    if Button(app.ui.session, button) != 0 {
-        app.profile_picture_picker_scroll = 0
-        app_open_modal(app, cast(ModalType)ModalProfilePicturePicker)
-    }
-    inset := AppScale(1)
-    picture := ProfilePictureImage(app.profile_picture_icon, label)
-    picture.bounds = Rectangle.{cast(float32)(x + inset),
-        cast(float32)(y + inset),
-        cast(float32)(size - inset * 2),
-        cast(float32)(size - inset * 2)}
-    Image(app.ui.session, picture)
-}
-
-profile_draw_identity :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
-    account: AccountKeys
-    account_text: [80] u8
-    icon_size := AppScale(54)
-    gap := AppScale(12)
-    field_x := x + icon_size + gap
-    field_w := w - icon_size - gap
-    field_h := AppScale(36)
-    name_commit: bool = false
-    intention_commit: bool = false
-    name_was_focused := app.profile_name_focused != 0
-    intention_was_focused := app.profile_intention_focused != 0
-
-    if sync_account_load(*account) != 0 {
-        alias := storage_get_setting_text("sync_account_alias")
-        if alias.count == 0 ||
-        !profile_alias_label(alias, account_text[:]) {
-            unused profile_compact_public_id(
-                AppTextFromCString(*account.public_id[0],
-                ACCOUNT_PUBLIC_ID_HEX_SIZE), account_text[:])
-        }
-    } else {
-        AppCopyText(LocaleText("profile_no_account"), account_text[:])
-    }
-
-    profile_draw_avatar(app, x, y.* + AppScale(18), icon_size)
-
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)field_x, cast(float32)y.*,
-                cast(float32)field_w, cast(float32)AppScale(22)},
-            .text = AppTextFromCString(*account_text[0], 80),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    y.* += AppScale(22)
-
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)field_x, cast(float32)y.*,
-                cast(float32)field_w, cast(float32)AppScale(18)},
-            .text = LocaleText("profile_name_label"),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    typed_name: [64]u8
-    name_field := TextField(app.ui.session, TextFieldProps.{
-            .bounds = Rectangle.{cast(float32)field_x,
-                cast(float32)(y.* + AppScale(18)), cast(float32)field_w,
-                cast(float32)field_h},
-            .value = AppTextFromCString(*app.profile_display_name[0], 64),
-            .cursor = app.profile_name_cursor,
-            .focused = app.profile_name_focused != 0,
-            .max_bytes = 63,
-            .max_codepoints = 40,
-            .focus_id = 813,
-            .input = SampleTextFieldInput(app.profile_name_focused != 0,
-            typed_name[:])
-        })
-    if name_field.edit.changed {
-        unused AppReplaceText(app.profile_display_name[:],
-            name_field.edit.start, name_field.edit.end,
-            name_field.edit.replacement)
-    }
-    app.profile_name_cursor = name_field.cursor
-    app.profile_name_focused = ifx (name_field.focused) then (1) else (0)
-    name_commit = name_field.committed
-    if name_field.clipboard_write {
-        unused TextInputWriteClipboard(name_field.clipboard_text)
-    }
-    y.* += AppScale(64)
-
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)field_x, cast(float32)y.*,
-                cast(float32)field_w, cast(float32)AppScale(18)},
-            .text = LocaleText("profile_intention_label"),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    typed_intention: [128]u8
-    intention_field := TextField(app.ui.session, TextFieldProps.{
-            .bounds = Rectangle.{cast(float32)field_x,
-                cast(float32)(y.* + AppScale(18)), cast(float32)field_w,
-                cast(float32)field_h},
-            .value = AppTextFromCString(*app.profile_intention[0], 128),
-            .cursor = app.profile_intention_cursor,
-            .focused = app.profile_intention_focused != 0,
-            .max_bytes = 127,
-            .max_codepoints = 90,
-            .focus_id = 814,
-            .input = SampleTextFieldInput(app.profile_intention_focused != 0,
-            typed_intention[:])
-        })
-    if intention_field.edit.changed {
-        unused AppReplaceText(app.profile_intention[:],
-            intention_field.edit.start, intention_field.edit.end,
-            intention_field.edit.replacement)
-    }
-    app.profile_intention_cursor = intention_field.cursor
-    app.profile_intention_focused = ifx (intention_field.focused) then (1) else (0)
-    intention_commit = intention_field.committed
-    if intention_field.clipboard_write {
-        unused TextInputWriteClipboard(intention_field.clipboard_text)
-    }
-    y.* += AppScale(58)
-
-    if name_commit || intention_commit ||
-    (name_was_focused && app.profile_name_focused == 0) ||
-    (intention_was_focused && app.profile_intention_focused == 0) {
-        profile_save_identity(app)
-    }
-}
-
-// The corner radius that rounds off `roundness` of a box's shorter side.
-profile_corner_radius :: (roundness: float32, w: s32, h: s32) -> float32 {
-    shorter := w
-    if h < shorter {
-        shorter = h
-    }
-    return roundness * cast(float32)shorter * 0.5
-}
-
-profile_draw_metric_card :: (x: s32, w: s32, y: *s32, label: string,
-    value: string) {
-    h := AppScale(58)
-    value_w := AppTextWidth(value, AppFontSize())
-
-    Box(CurrentApp().ui.session, BoxProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)(y.*), cast(float32)w, cast(float32)h},
-            .fill = DarkenColor(StyleTokenColor("canvas"), 7),
-            .radius = profile_corner_radius(0.12, w, h)})
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(x + AppScale(12)), cast(float32)(y.* + AppScale(20)), 0, 0},
-            .text = (label),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(x + w - value_w - AppScale(12)), cast(float32)(y.* + AppScale(17)), 0, 0},
-            .text = (value),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    y.* += h + AppScale(8)
-}
-
-profile_open_tab_card :: (app: *InnerBreeze, tab: s32) {
-    if app == null {
-        return
-    }
-    if app.profile_tab == PROFILE_TAB_OVERVIEW {
-        profile_save_identity(app)
-    }
-    app.profile_view = PROFILE_VIEW_MAIN
-    app.profile_tab = clampi(tab, PROFILE_TAB_OVERVIEW,
-        PROFILE_TAB_COUNT - 1)
-    app.profile_scroll = 0
-    app.sync_server_url_focused = 0
-    if tab == PROFILE_TAB_FRIENDS {
-        app_request_social_refresh(app)
-    }
-}
-
-profile_draw_hub_section_label :: (x: s32, y: *s32, label: string) {
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y.*), 0, 0},
-            .text = (label),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    y.* += AppScale(32)
 }
 
 profile_draw_hub_stat_card :: (x: s32, y: s32, w: s32, h: s32,
@@ -422,136 +194,6 @@ profile_draw_hub_stat_card :: (x: s32, y: s32, w: s32, h: s32,
         })
 }
 
-profile_draw_hub_route_card :: (app: *InnerBreeze, x: s32, y: *s32, w: s32,
-    h: s32, icon_type: IconType, title: string,
-    subtitle: string, value: string,
-    tab: s32) {
-    bounds := Rectangle.{cast(float32)x, cast(float32)(y.*), cast(float32)w, cast(float32)h }
-    icon_box := AppScale(40)
-    icon_size := AppScale(22)
-    icon_x := x + AppScale(14)
-    text_x := icon_x + icon_box + AppScale(12)
-    arrow := "›"
-    arrow_w := AppTextWidth(arrow, AppScale(Text24))
-    value_w := ifx (value.count > 0) then (AppTextWidth(value, AppSmallFontSize())) else (0)
-    text_w := w - (text_x - x) - AppScale(48)
-
-    if value_w > 0 {
-        text_w -= value_w + AppScale(12)
-    }
-    if Button(CurrentApp().ui.session, ButtonProps.{
-            .bounds = bounds,
-            .label = "",
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-        }) != 0 {
-        profile_open_tab_card(app, tab)
-    }
-    Box(CurrentApp().ui.session, BoxProps.{
-            .bounds = Rectangle.{cast(float32)icon_x,
-                cast(float32)(y.* + h / 2 - icon_box / 2),
-                cast(float32)icon_box, cast(float32)icon_box},
-            .fill = DarkenColor(StyleTokenColor("accent"), 12),
-            .radius = cast(float32)icon_box / 2.0})
-    Image(CurrentApp().ui.session, ImageForIcon(cast(s32)icon_type,
-        Rectangle.{cast(float32)(icon_x + (icon_box - icon_size) / 2),
-            cast(float32)(y.* + h / 2 - icon_size / 2),
-            cast(float32)icon_size, cast(float32)icon_size}, ""))
-    profile_draw_fitted_text(title, text_x, y.* + AppScale(16), text_w,
-        AppFontSize())
-    profile_draw_fitted_text(subtitle, text_x, y.* + AppScale(42), text_w,
-        AppSmallFontSize())
-    if value_w > 0 {
-        Text(CurrentApp().ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)(x + w - AppScale(42) - value_w),
-                    cast(float32)(y.* + h / 2 - AppScale(9)), 0.0, 0.0},
-                .text = (value),
-                .wrap = cast(TextWrap)TextWrapNone
-            })
-    }
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(x + w - AppScale(24) - arrow_w / 2),
-                cast(float32)(y.* + h / 2 - AppScale(18)), 0.0, 0.0},
-            .text = (arrow),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    y.* += h
-}
-
-profile_draw_hub_route_divider :: (app: *InnerBreeze,
-    x: s32, y: s32, w: s32) {
-    PaintRoundedFill(app.ui.session, -1,
-        Rectangle.{cast(float32)(x + AppScale(16)), cast(float32)y,
-            cast(float32)(w - AppScale(32)), cast(float32)AppScale(1)},
-        0.0, 4, color_with_alpha(StyleTokenColor("text"), 0.10f))
-}
-
-profile_draw_hub_identity :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
-    account: AccountKeys
-    has_account := sync_account_load(*account) != 0
-    card_h := AppScale(158)
-    bounds := Rectangle.{cast(float32)x, cast(float32)(y.*), cast(float32)w, cast(float32)card_h }
-    avatar := AppScale(78)
-    avatar_x := x + AppScale(18)
-    avatar_y := y.* + AppScale(28)
-    text_x := avatar_x + avatar + AppScale(18)
-    title: [96] u8
-    subtitle: [160] u8
-
-    if has_account {
-        alias := storage_get_setting_text("sync_account_alias")
-        if alias.count == 0 || !profile_alias_label(alias, title[:]) {
-            unused profile_compact_public_id(
-                AppTextFromCString(*account.public_id[0],
-                ACCOUNT_PUBLIC_ID_HEX_SIZE), title[:])
-        }
-        unused AppCopyText(LocaleText("profile_sync_ready_body"), subtitle[:])
-    } else {
-        name := AppTextFromCString(*app.profile_display_name[0], 64)
-        unused AppCopyText(ifx (name.count > 0) then (name) else
-            (LocaleText("profile_no_account")), title[:])
-        unused AppCopyText(LocaleText("profile_sync_prompt_body"),
-            subtitle[:])
-    }
-
-    radius := profile_corner_radius(0.14, w, card_h)
-    Box(app.ui.session, BoxProps.{.bounds = bounds,
-            .fill = DarkenColor(StyleTokenColor("canvas"), 8),
-            .radius = radius})
-    // The fade covers the whole rectangle, its corners too.
-    Box(app.ui.session, BoxProps.{.bounds = bounds,
-            .fill = color_with_alpha(StyleTokenColor("accent"), 0.32f),
-            .fill_bottom = color_with_alpha(StyleTokenColor("canvas"), 0.0f),
-            .has_fill_bottom = true,
-            .border = DarkenColor(StyleTokenColor("accent"), 18),
-            .radius = radius})
-    profile_draw_avatar(app, avatar_x, avatar_y, avatar)
-    profile_draw_fitted_text(AppTextFromCString(*title[0], 96),
-        text_x, y.* + AppScale(34),
-        w - (text_x - x) - AppScale(18),
-        AppScale(Text18))
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)text_x,
-                cast(float32)(y.* + AppScale(64)),
-                cast(float32)(w - (text_x - x) - AppScale(18)),
-                cast(float32)AppScale(42)},
-            .text = AppTextFromCString(*subtitle[0], 160),
-            .font = AppSmallFontSize(),
-            .wrap = cast(TextWrap)TextWrapAuto
-        })
-    if Button(CurrentApp().ui.session, ButtonProps.{
-            .bounds = Rectangle.{cast(float32)(text_x), cast(float32)(y.* + AppScale(108)), cast(float32)(w - (text_x - x) - AppScale(18)), cast(float32)(AppScale(38))},
-            .label = LocaleText(ifx (has_account) then
-            ("sync_account_title") else ("sync_connect_account_button")),
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .disabled = false
-        }) != 0 {
-        profile_open_tab_card(app, PROFILE_TAB_SYNC)
-    }
-    y.* += card_h + AppScale(18)
-}
-
 profile_draw_overview :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
     account: AccountKeys
     today := habits_today_index()
@@ -561,14 +203,10 @@ profile_draw_overview :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
     practice_sessions: s32 = 0
     value: [64] u8
     insight: [160] u8
-    friends_value: [64] u8
-    storage_value: [64] u8
     loading := app_sync_loading() != 0
     stat_gap := AppScale(8)
     stat_w := (w - stat_gap * 2) / 3
     stat_h := AppScale(112)
-    friend_count := friends_count(app)
-    pending_friends := pending_count(app)
 
     ProfileDewDraw(app, x, y, w)
     {
@@ -586,7 +224,6 @@ profile_draw_overview :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
     }
     storage_profile_week_stats(today, *active_days, *practice_sessions)
 
-    profile_draw_hub_section_label(x, y, LocaleText("profile_progress_title"))
     if loading {
         unused AppCopyText("…", value[:])
     } else {
@@ -628,47 +265,11 @@ profile_draw_overview :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
             active_days, insight[:])
     }
 
-    route_group_h := AppScale(76 + 68 * 3)
-    PaintRoundedFill(app.ui.session, -1,
-        Rectangle.{cast(float32)x, cast(float32)y.*,
-            cast(float32)w, cast(float32)route_group_h},
-        cast(float32)AppScale(14), 12,
-        DarkenColor(StyleTokenColor("canvas"), 5))
-    profile_draw_hub_route_card(app, x, y, w, AppScale(76),
-        cast(IconType)IconProfile,
-        LocaleText("profile_friends_title"),
-        FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*insight[0], 160)), "", PROFILE_TAB_FRIENDS)
-    profile_draw_hub_route_divider(app, x, y.*, w)
-    if pending_friends > 0 {
-        unused FormatTwoNumberTemplate(
-            LocaleText("profile_friends_pending_summary"),
-            friend_count, pending_friends, friends_value[:])
-    } else {
-        unused FormatNumberTemplate(LocaleText("profile_friends_summary"),
-            friend_count, friends_value[:])
-    }
-    unused profile_format_size(storage_value[:], storage_total_size())
-    profile_draw_hub_route_card(app, x, y, w, AppScale(68),
-        cast(IconType)IconSave,
-        LocaleText("profile_data_management_title"),
-        LocaleText("profile_data_management_body"),
-        FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*storage_value[0], 64)), PROFILE_TAB_DATA)
-    profile_draw_hub_route_divider(app, x, y.*, w)
-    profile_draw_hub_route_card(app, x, y, w, AppScale(68),
-        cast(IconType)IconGlobe,
-        LocaleText("profile_account_sync_title"),
-        LocaleText(ifx (sync_account_load(*account) != 0) then
-        ("profile_account_connected_body") else
-        ("profile_account_sync_body")),
-        FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*friends_value[0], 64)), PROFILE_TAB_SYNC)
-    profile_draw_hub_route_divider(app, x, y.*, w)
-    profile_draw_hub_route_card(app, x, y, w, AppScale(68),
-        cast(IconType)IconLink,
-        LocaleText("lumi_telegram"), LocaleText("lumi_telegram_body"), "",
-        PROFILE_TAB_TELEGRAM)
+    Text(app.ui.session, TextProps.{.bounds = Rectangle.{cast(float32)x,
+                cast(float32)y.*, cast(float32)w, cast(float32)AppScale(64)},
+            .text = AppTextFromCString(*insight[0], 160), .wrap = cast(TextWrap)TextWrapAuto})
+    y.* += AppScale(76)
+
 }
 
 profile_draw_stat_row :: (x: s32, w: s32, y: *s32, label: string,
@@ -732,52 +333,6 @@ profile_tab_title :: (tab: s32) -> string {
     }
 
     return LocaleText("tab_profile")
-}
-
-profile_draw_tabs :: (app: *InnerBreeze, y: s32, h: s32) -> s32 {
-    clicked: s32 = -1
-    view_width: s32 = app.ui.view_width
-    tab_w := view_width / PROFILE_TAB_COUNT
-
-    Box(app.ui.session, BoxProps.{
-            .bounds = Rectangle.{0.0, cast(float32)y, cast(float32)view_width, cast(float32)h},
-            .fill = DarkenColor(StyleTokenColor("canvas"), 6)})
-    Line(app.ui.session, LineProps.{
-            .start = Vector2.{0.0, cast(float32)(y + h - 1)},
-            .end = Vector2.{cast(float32)view_width, cast(float32)(y + h - 1)},
-            .color = DarkenColor(StyleTokenColor("canvas"), 24)})
-    {
-        i: s32 = 0
-        while i < PROFILE_TAB_COUNT {
-
-            x := i * tab_w
-            w := ifx (i == PROFILE_TAB_COUNT - 1) then (view_width - x) else (tab_w)
-            selected := i == app.profile_tab
-            // The selected tab's underline lies under its button.
-            if selected {
-                line_w := w - AppScale(24)
-                if line_w < AppScale(24) {
-                    line_w = AppScale(24)
-                }
-                Box(app.ui.session, BoxProps.{
-                        .bounds = Rectangle.{cast(float32)(x + (w - line_w) / 2),
-                            cast(float32)(y + h - AppScale(2)),
-                            cast(float32)line_w, cast(float32)AppScale(2)},
-                        .fill = StyleTokenColor("text")})
-            }
-            if Button(CurrentApp().ui.session, ButtonProps.{
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w, cast(float32)h},
-                    .label = profile_tab_title(i),
-                    .tone = cast(ButtonTone)(ifx (selected) then (ButtonToneAccent) else (ButtonToneNeutral)),
-                    .emphasis = cast(ButtonEmphasis)(ifx (selected) then (ButtonEmphasisSoft) else (ButtonEmphasisGhost)), .selected = selected
-                }) != 0 {
-                clicked = i
-            }
-
-            i += 1
-        }
-    }
-    return clicked
 }
 
 profile_draw_fitted_text :: (text: string, x: s32, y: s32, max_w: s32,
@@ -966,6 +521,9 @@ profile_screen_draw :: (app: *InnerBreeze) -> s32 {
     shared := SelfHostRoute(app) &&
     SelfHostFrame(app, Rectangle.{0.0, cast(float32)content_y, cast(float32)view_width, cast(float32)content_h})
     if !shared {
+        if app.profile_view == PROFILE_VIEW_MAIN && app.profile_tab == PROFILE_TAB_OVERVIEW {
+            title = LocaleText("profile_progress_title")
+        }
         page_content_h = profile_content_height(content_w, cast(*void)app)
         scroll_1_bounds: Rectangle = Rectangle.{cast(float32)0, cast(float32)content_y, cast(float32)view_width, cast(float32)content_h }
         scroll_1_key: u64 = KeyHash("inbe/screens/profile_screen/scroll/1")

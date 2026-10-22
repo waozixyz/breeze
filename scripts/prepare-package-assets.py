@@ -9,6 +9,7 @@ import os
 import hashlib
 import re
 from animation_inventory import inventory
+from achievement_icons import icon_shape
 
 ROOT = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser(description=__doc__)
@@ -122,9 +123,12 @@ for catalog in sorted((ROOT / 'apps').glob('*/achievements.json')):
     destination = OUTPUT / owner / 'assets' / resource_name
     destination.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(catalog, destination / 'achievements.json')
-    badges = catalog.parent / 'badges'
-    if badges.is_dir():
-        shutil.copytree(badges, destination / 'badges', dirs_exist_ok=True)
+    icons = destination / 'icons'
+    icons.mkdir(parents=True, exist_ok=True)
+    for achievement in json.loads(catalog.read_text())['achievements']:
+        shape = icon_shape(ROOT / 'build/packages/mingcute', achievement['icon_source'])
+        (icons / (achievement['id'] + '.shape')).write_text(shape)
+    shutil.copyfile(ROOT / 'build/packages/mingcute/LICENSE', icons / 'LICENSE')
     for translation in sorted((catalog.parent / 'achievement-locales').glob('*.json')):
         target = destination / 'achievement-locales' / translation.name
         target.parent.mkdir(parents=True, exist_ok=True)

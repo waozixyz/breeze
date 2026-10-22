@@ -1,5 +1,9 @@
 # Photos changelog
 
+## [1.0.2] - 2026-10-21
+
+- Give each achievement its own meaningful icon.
+
 ## [1.0.1] - 2026-10-18
 
 - Back from an open photo returns to the gallery and keeps your place.

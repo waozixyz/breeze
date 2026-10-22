@@ -31,10 +31,10 @@ content contribute to the visible catalog and its earned/available counts.
   Opening it shows app headings, each app's earned/available count, and its
   achievements. Practices has nested headings for its general achievements
   and each installed practice.
-- Every row shows a stable badge, name, plain-language earning condition,
+- Every row shows a distinct, meaningful icon, name, plain-language earning condition,
   and progress such as `7 / 25 sessions`. Earned rows also show the earned
   date. A row can open its full description when space is limited.
-- Unearned badge artwork is gray. Keep the text readable, and show explicit
+- Unearned icons are gray. Keep the text readable, and show explicit
   **Not earned** or **Earned** status so color is never the only distinction.
   Gray rows remain focusable and readable; they are not disabled controls.
 - Use the existing profile typography, theme, standard widgets, and responsive
@@ -842,3 +842,10 @@ This planning change does not implement or deploy the feature. The catalog and
 default-on in-app alert behavior are proposed decisions for implementation;
 source-specific historical credit remains conditional on evidence as described
 above.
+
+
+Owner decision, 2026-10-21: every achievement has its own meaningful pictogram,
+without shield artwork, numbered tiers or a badge container. The catalogs name
+icons from the locked MingCute package; package preparation copies their shapes
+and license into each app. Catalog tests reject repeated icon artwork across all
+160 built-in achievements. Earned IDs, dates and progress are unchanged.

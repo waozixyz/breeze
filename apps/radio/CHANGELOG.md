@@ -1,5 +1,9 @@
 # Radio
 
+## [1.0.1] - 2026-10-21
+
+- Give each achievement its own meaningful icon.
+
 ## [1.0.0] - 2026-10-18
 
 - Listen to Ambient Sleeping Pill, a.m. ambient and Ambient Modern inside

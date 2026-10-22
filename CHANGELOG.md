@@ -4,8 +4,10 @@
 
 - Arcade switches to newly installed game updates without keeping an older campaign open.
 - Shovey's own Back button returns to its game chooser.
+- Scrolling stays responsive while a text field is focused.
+- Profile Activity shows activity without repeating profile destinations.
+- Every achievement has its own meaningful icon, without numbered badge frames.
 - Android account-key backups use the system Save dialog and confirm that the chosen file was written.
-
 - Share lists with name suggestions and an automatically updated list of everyone with access.
 - Give collaborators full owner rights, editing access, or read-only access, and remove access from the same dialog.
 - Shared-list edits preserve every task.

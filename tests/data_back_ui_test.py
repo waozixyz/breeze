@@ -68,6 +68,49 @@ def open_practice(name):
     assert whole, f"{name}: selecting Practice did not reveal its complete navigation label: {shortcut}"
 
 
+def profile_focus_and_activity(name, window):
+    field = driver.wait(label="Name", role="text_field")
+    driver.press(key=field["key"], role="text_field")
+    driver.pointer(field["x"] + field["width"] / 2,
+                   field["y"] + field["height"] / 2, wheel=-8)
+    driver.wait_idle(frames=4)
+    scrolled = driver.find(key=field["key"])[0]
+    assert scrolled["y"] < field["y"] - 80, (name, "focused input prevented scrolling", field, scrolled)
+    assert scrolled["focused"], (name, "scrolling discarded input focus", scrolled)
+    for _ in range(8):
+        later = driver.find(key=field["key"])[0]
+        assert abs(later["y"] - scrolled["y"]) < 1, (name, "focused input snapped the view back", scrolled, later)
+    # Reveal Activity through the same scroll path, keeping the field focused.
+    for _ in range(15):
+        activity = driver.find(label="Activity", role="button", visible=True)
+        if activity and activity[0]["visible_height"] == activity[0]["height"]:
+            break
+        driver.pointer(field["x"] + field["width"] / 2, 300, wheel=2)
+        driver.wait_idle(frames=3)
+    driver.press(label="Activity", role="button")
+    title("Activity")
+    buttons = {node["label"] for node in driver.find(role="button")}
+    repeated = buttons & {"Activity", "Data", "Friends", "Telegram", "Achievements", "Account", "Connect Account"}
+    assert not repeated, (name, "Activity repeats Profile destinations", repeated)
+    assert "Days active" in driver.text() or "Active days" in driver.text(), (name, driver.text())
+    subprocess.run(["import", "-window", window, str(output / f"{name}-activity.png")], check=True)
+    driver.press(label="Back", role="button")
+    title("Profile")
+    for _ in range(15):
+        achievements = driver.find(label="Achievements", role="button", visible=True)
+        if achievements and achievements[0]["visible_height"] == achievements[0]["height"]:
+            break
+        driver.pointer(field["x"] + field["width"] / 2, 300, wheel=-2)
+        driver.wait_idle(frames=3)
+    driver.press(label="Achievements", role="button")
+    driver.wait(label="Achievements", role="text")
+    assert len(driver.find(label="Back", role="button")) == 1, (name, "duplicate embedded Back controls")
+    driver.wait_idle(frames=4)
+    subprocess.run(["import", "-window", window, str(output / f"{name}-achievements.png")], check=True)
+    driver.press(label="Back", role="button")
+    title("Profile")
+
+
 for scene in ("data_from_navigation", "profile_data", "settings_overview"):
     sizes = ((360, 740),) if scene == "settings_overview" else ((900, 720), (360, 740))
     for width, height in sizes:
@@ -116,6 +159,7 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
                     title("Profile")
                     assert switches(logfile, baseline) == [], (name, "Profile Data skipped its parent",
                                                                switches(logfile, baseline))
+                    profile_focus_and_activity(name, window)
                     # The Profile hub's Back returns to Apps: one switch
                     # leaves Profile, and Data was not skipped on the way.
                     driver.press(label="Back", role="button")
@@ -137,4 +181,4 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
                     app.kill()
                     app.wait(timeout=5)
                 shutil.rmtree(Path('/tmp') / f'inbe-screenshot-{app.pid}', ignore_errors=True)
-print("Data Back: navigation exits once; Profile Data returns to its hub, whose Back returns to Apps; Settings lists no Data")
+print("Profile focus scrolling and Activity; Data Back: navigation exits once; Profile Data returns to its hub, whose Back returns to Apps; Settings lists no Data")

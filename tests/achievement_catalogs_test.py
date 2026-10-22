@@ -4,6 +4,9 @@ import json
 from pathlib import Path
 import re
 import unittest
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+from achievement_icons import icon_shape
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED = {"inbe": 10, "practice": 60, "diary": 20, "habits": 20,
@@ -17,6 +20,7 @@ def entries(path):
 class AchievementCatalogs(unittest.TestCase):
     def test_catalog_and_translations(self):
         all_ids = set()
+        all_icons = set()
         groups = set()
         for app, count in EXPECTED.items():
             directory = ROOT / "apps" / app
@@ -35,12 +39,12 @@ class AchievementCatalogs(unittest.TestCase):
                 self.assertIsInstance(achievement["target"], int)
                 self.assertGreater(achievement["target"], 0)
                 namespace = "app" if app == "inbe" else ("practices" if app == "practice" else app)
-                self.assertEqual(achievement["badge"], f"assets/{namespace}/badges/{identity}.shape")
-                artwork = (directory / "badges" / (identity + ".shape")).read_text()
-                self.assertTrue(artwork.startswith("S1.5rr:"))
-                self.assertLess(len(artwork), 1024)
-                self.assertGreater(achievement["badge_tier"], 0)
-                self.assertLessEqual(achievement["badge_tier"], 99)
+                self.assertEqual(achievement["icon"], f"assets/{namespace}/icons/{identity}.shape")
+                artwork = icon_shape(ROOT / "build/packages/mingcute", achievement["icon_source"])
+                self.assertNotIn(artwork, all_icons, f"repeated achievement icon: {identity}")
+                all_icons.add(artwork)
+                self.assertNotIn("badge", achievement)
+                self.assertNotIn("badge_tier", achievement)
                 keys.update((achievement["title_key"], achievement["description_key"]))
             for locale in sorted((ROOT / "locales").glob("*.txt")):
                 if locale.stem == "index":
