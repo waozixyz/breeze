@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.5.7] - 2026-10-22
+
+- Maintenance release for Inner Breeze 2.1.41.
+
 ## [1.5.6] - 2026-10-22
 
 - Maintenance release for Inner Breeze 2.1.40.
