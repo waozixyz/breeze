@@ -116,7 +116,7 @@ with contextlib.ExitStack() as stack:
         assert card["height"] < 100, "The app card still reserves space for a pin button"
         def options(card):
             return next(node for node in driver.find(label="App options", role="button")
-                        if card["x"] <= node["x"] < card["x"] + card["width"]
+                        if card["x"] <= node["x"] < card["x"] + card["width"] + 49
                         and card["y"] <= node["y"] < card["y"] + card["height"])
         action = options(card)
         driver.press(key=action["key"], label="App options")

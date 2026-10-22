@@ -166,6 +166,8 @@ with contextlib.ExitStack() as stack:
 
         # Photos is only offered: the tap installs it on the account, as
         # before, and does not open it.
+        driver.press(label="Find an app", role="text_field")
+        driver.type("Photos")
         photos = wait(lambda: grid_cards("Photos"), "Photos is not offered in Apps")[0]
         driver.press(key=photos["key"], label="Photos")
         wait(lambda: settings().get("app_used_photos") == "1", "The Photos tap was not taken")
