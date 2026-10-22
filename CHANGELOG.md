@@ -2,7 +2,10 @@
 
 ## [2.1.38] - 2026-10-21
 
+- Track habits you want to avoid with a daily target of 0.
+- Set custom coins per occurrence, including negative penalties and 0.
 - Simplify Apps editing, settings, navigation and app loading; make Photos available to everyone.
+- Diary and Photos share saved images and automatically compress new photo uploads.
 - Fix Profile headers, scrolling, dialogs, font freezes and Android key backups.
 - Fix large-account sync, false sync failures, sharing controls and activity and achievement views.
 

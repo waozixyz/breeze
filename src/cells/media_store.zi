@@ -48,6 +48,11 @@
 // upright, as JPEG of this quality.
 MEDIA_PREVIEW_EDGE :: 512
 MEDIA_PREVIEW_QUALITY :: 80
+// New photos use a smaller upright copy when it saves space. Small files,
+// transparency and animation keep their existing bytes.
+MEDIA_UPLOAD_EDGE :: 2048
+MEDIA_UPLOAD_QUALITY :: 88
+MEDIA_COMPRESS_BYTES :: 262144
 MEDIA_NAME_MAX :: 200
 // Originals asked for on this device, downloaded by the next media pass.
 MEDIA_WANTED_MAX :: 32
@@ -422,6 +427,8 @@ MediaAddition :: struct {
     // A file on this device with the same bytes, linked rather than copied
     // where the platform allows, or "".
     source: string
+    // Original bytes whose camera date survives an optimized library copy.
+    capture_source: string
     // Whether a photo the library has in Trash comes back, as when the
     // person picks it again.
     restore: bool
@@ -431,6 +438,28 @@ MediaAddition :: struct {
 // its record, and one in Trash comes back. The bytes always land in this
 // device's file, so a photo known from another device needs no download.
 MediaImportBytes :: (data: string, name: string) -> MediaImport {
+    if !DataTemporary() && data.count > MEDIA_COMPRESS_BYTES && data.count <= DIARY_FILE_LIMIT {
+        // A photo already in this account keeps its existing identity and
+        // record, including photos added before upload compression.
+        original_hash: [65]u8
+        descriptor := cast(*TextDescriptor)(*data)
+        storage_sha256_hex(descriptor.data, data.count, *original_hash[0])
+        if !MediaRead(TextUntilNul(original_hash[:])).valid {
+            format := DiaryImageFormat(data)
+            file_type := PackageText(".", format)
+            copy := ImageCompress(data, file_type, MEDIA_UPLOAD_EDGE,
+                MediaOrientationOf(data, format), MEDIA_UPLOAD_QUALITY)
+            defer {
+                PackageFree(file_type)
+                PackageFree(copy)
+            }
+            // Keep a copy only when the saving is meaningful.
+            if copy.count > 0 && copy.count * 10 < data.count * 9 {
+                return MediaAddBytes(copy, MediaAddition.{.name = name,
+                        .capture_source = data, .restore = true})
+            }
+        }
+    }
     return MediaAddBytes(data, MediaAddition.{.name = name, .restore = true})
 }
 
@@ -482,14 +511,16 @@ MediaAddBytes :: (data: string, addition: MediaAddition) -> MediaImport {
     }
     day: [11]u8
     taken: [26]u8
-    if !MediaWhen(data, format, addition.day, day[:], taken[:]) {
+    capture_data := ifx addition.capture_source.count > 0 then addition.capture_source else data
+    capture_format := ifx addition.capture_source.count > 0 then DiaryImageFormat(capture_data) else format
+    if !MediaWhen(capture_data, capture_format, addition.day, day[:], taken[:]) {
         return result
     }
     MediaWritePreview(hash, data, format)
     out: Vec(u8)
     BuilderPrint(*out, "{\"hash\":\"%\",\"size\":%,\"type\":\"%\",\"name\":", hash, data.count, format)
     MediaJson(*out, MediaName(addition.name))
-    capture := MediaCaptureOf(data, format)
+    capture := MediaCaptureOf(capture_data, capture_format)
     BuilderPrint(*out, ",\"day\":\"%\",\"taken\":\"%\",\"added\":%,\"capture\":%,\"trashed\":0}",
         TextUntilNul(day[:]), TextUntilNul(taken[:]), CellRecordClock() / 1000000,
         ifx capture.valid && capture.year >= 1000 then 1 else 0)

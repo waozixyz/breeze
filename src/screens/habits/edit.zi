@@ -25,6 +25,7 @@ c :: #system_library "c";
 #import, file "../../app/exercise_types.zi";
 #import, file "../../habits/habit_icons.zi";
 #import, file "../../habits/habit_coins.zi";
+#import, file "../../habits/habit_calendar.zi";
 #import, file "../habit_change_text.zi";
 #import, file "coins_view.zi";
 #import, file "../../habits/habit_schedule.zi";
@@ -139,11 +140,13 @@ habit_edit_begin :: (app: *InnerBreeze, index: s32) {
     app.habit_edit.sync_mode = app.habits.items[index].sync_mode
     app.habit_edit.sync_activity = app.habits.items[index].sync_activity
     app.habit_edit.counter_enabled = app.habits.items[index].counter_enabled
-    app.habit_edit.counter_target = ifx (app.habits.items[index].counter_target > 0) then (app.habits.items[index].counter_target) else (1)
+    app.habit_edit.counter_target = habit_counter_target(*app.habits.items[index])
     app.habit_edit.schedule = HabitScheduleCurrent(*app.habits.items[index])
     app.habit_edit.reminder_hour = app.habits.items[index].reminder_hour
     app.habit_edit.icon = app.habits.items[index].icon
     app.habit_edit.difficulty = app.habits.items[index].difficulty
+    app.habit_edit.custom_coins = app.habits.items[index].custom_coins
+    app.habit_edit.coin_halves = app.habits.items[index].coin_halves
     app.habit_edit.questions = app.habits.items[index].questions
     app.habit_edit.question_count = app.habits.items[index].question_count
     app.habit_edit.span = app.habits.items[index].span
@@ -186,6 +189,7 @@ habit_edit_changed :: (app: *InnerBreeze) -> bool {
     edit.counter_enabled != original.counter_enabled || edit.counter_target != original.counter_target ||
     edit.reminder_hour != original.reminder_hour || edit.icon != original.icon ||
     edit.difficulty != original.difficulty ||
+    edit.custom_coins != original.custom_coins || edit.coin_halves != original.coin_halves ||
     edit.span != original.span || !habit_edit_goal_same(edit.span_goal, original.span_goal) ||
     !HabitScheduleSame(*edit.schedule, *original.schedule) ||
     edit.question_count != original.question_count {
@@ -483,7 +487,7 @@ habit_edit_description_field :: (app: *InnerBreeze,
     return result.focused
 }
 
-// Shows the daily target as its number; an empty or zero entry keeps the
+// Shows the daily target as its number; an empty entry keeps the
 // last target until the field is left.
 habit_edit_counter_text :: (app: *InnerBreeze) {
     unused AppFormatS32(app.habit_edit.counter_target,
@@ -525,7 +529,7 @@ habit_edit_counter_field :: (app: *InnerBreeze,
             index += 1
         }
         if value > HABIT_COUNTER_TARGET_MAX { value = HABIT_COUNTER_TARGET_MAX }
-        if value > 0 { app.habit_edit.counter_target = value }
+        if typed_text.count > 0 { app.habit_edit.counter_target = value }
     }
     app.habit_edit.counter_cursor = result.cursor
     app.habit_edit.counter_anchor = result.anchor
@@ -565,7 +569,7 @@ habit_edit_section_body :: (app: *InnerBreeze, section: s32,
     // The difficulty, counter mode, the span toggle and practice links,
     // with the target or which spans are good under their toggle, then the
     // questions.
-    height := AppScale(HABIT_EDIT_DIFFICULTY_HEIGHT + 52 + 52 + 44) +
+    height := AppScale(habit_edit_difficulty_height(app) + 52 + 52 + 44) +
     habit_edit_questions_height(app)
     if app.habit_edit.counter_enabled != 0 {
         height += AppScale(52)
@@ -1341,6 +1345,7 @@ habit_edit_focus_only :: (app: *InnerBreeze, field: s32) {
     app.habit_edit.focused = ifx field == 1 then 1 else 0
     app.habit_edit.description_focused = ifx field == 2 then 1 else 0
     app.habit_edit.counter_focused = ifx field == 3 then 1 else 0
+    app.habit_edit.coin_focused = ifx field == 7 then 1 else 0
     app.habit_edit.formula_focused = ifx field == 4 then 1 else 0
     if field != 5 {
         app.habit_edit.question_focused = 0
@@ -1877,7 +1882,43 @@ habit_edit_span_goal :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
 }
 
 // How hard the habit is, and the coins each done day earns for it.
-HABIT_EDIT_DIFFICULTY_HEIGHT :: 112
+habit_edit_difficulty_height :: (app: *InnerBreeze) -> s32 {
+    return 164 + ifx app.habit_edit.custom_coins then 52 else 0
+}
+
+habit_edit_coin_field :: (app: *InnerBreeze, bounds: Rectangle) {
+    edit := *app.habit_edit
+    if edit.coin_focused == 0 {
+        text := HabitCoinText(edit.coin_halves, edit.coin_text[:])
+        edit.coin_cursor = cast(s32)text.count
+        edit.coin_anchor = edit.coin_cursor
+    }
+    typed: [16]u8
+    field: TextFieldProps
+    field.key = KeyHash("habit/edit/coins")
+    field.bounds = bounds
+    field.value = FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*edit.coin_text[0], 12))
+    field.cursor = edit.coin_cursor
+    field.anchor = edit.coin_anchor
+    field.scroll_x = edit.coin_scroll_x
+    field.focused = edit.coin_focused != 0
+    field.focus_id = 7607
+    field.max_bytes = 7
+    field.max_codepoints = 7
+    field.input = SampleTextFieldInput(field.focused, typed[:])
+    result := TextField(app.ui.session, field)
+    if result.edit.changed && AppReplaceText(edit.coin_text[:],
+        result.edit.start, result.edit.end, result.edit.replacement) {
+        unused HabitCoinParse(AppTextFromCString(*edit.coin_text[0], 12), *edit.coin_halves)
+    }
+    edit.coin_cursor = result.cursor
+    edit.coin_anchor = result.anchor
+    edit.coin_scroll_x = result.scroll_x
+    edit.coin_focused = ifx result.focused then 1 else 0
+    if result.focused { habit_edit_focus_only(app, 7) }
+    if result.clipboard_write { unused TextInputWriteClipboard(result.clipboard_text) }
+}
 
 habit_edit_difficulty :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
     habit_edit_text(app, LocaleText("habit_difficulty_label"),
@@ -1893,10 +1934,11 @@ habit_edit_difficulty :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
         cast(float32)width, cast(float32)AppScale(42)}
     props.height = AppScale(42)
     props.selected_index = HabitDifficultyIndex(app.habit_edit.difficulty)
-    props.has_selection = true
+    props.has_selection = !app.habit_edit.custom_coins
     switch := SegmentedControl(app.ui.session, props, options[:])
     if switch.changed {
         app.habit_edit.difficulty = HabitDifficultyAt(switch.selected_index)
+        app.habit_edit.custom_coins = false
     }
     hint_y := y + AppScale(80)
     coin := AppScale(18)
@@ -1906,19 +1948,45 @@ habit_edit_difficulty :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
     hint: TextProps
     hint.bounds = Rectangle.{cast(float32)(x + coin + AppScale(8)),
         cast(float32)hint_y, cast(float32)(width - coin - AppScale(8)),
-        cast(float32)AppScale(22)}
-    hint.text = HabitDifficultyEarns(app.habit_edit.difficulty)
+        cast(float32)AppScale(30)}
+    if app.habit_edit.custom_coins {
+        hint.text = LocaleText("habit_coins_signed_hint")
+    } else {
+        hint.text = HabitDifficultyEarns(app.habit_edit.difficulty)
+    }
     hint.font = AppSmallFontSize()
     hint.class_name = MutedTextClass()
     hint.vertical_align = cast(TextAlign)TextAlignCenter
-    hint.wrap = cast(TextWrap)TextWrapEllipsis
+    hint.wrap = cast(TextWrap)TextWrapAuto
     Text(app.ui.session, hint)
+    y += AppScale(112)
+    habit_edit_text(app, LocaleText("habit_custom_coins"),
+        x, y + AppScale(10), width - AppScale(110), AppScale(36))
+    custom := Toggle(app.ui.session, ToggleProps.{
+            .id = 7606,
+            .bounds = Rectangle.{cast(float32)(x + width - AppScale(100)),
+                cast(float32)y, cast(float32)AppScale(100), cast(float32)AppScale(36)},
+            .value = app.habit_edit.custom_coins,
+            .off_label = LocaleText("toggle_off"), .on_label = LocaleText("toggle_on")})
+    if custom.changed {
+        app.habit_edit.custom_coins = custom.value
+        if custom.value {
+            app.habit_edit.coin_halves = HabitDifficultyHalfCoins(app.habit_edit.difficulty)
+        }
+    }
+    if app.habit_edit.custom_coins {
+        y += AppScale(52)
+        habit_edit_text(app, LocaleText("habit_coins_per_occurrence"),
+            x, y + AppScale(10), width - AppScale(128), AppScale(36))
+        habit_edit_coin_field(app, Rectangle.{cast(float32)(x + width - AppScale(120)),
+                cast(float32)y, cast(float32)AppScale(120), cast(float32)AppScale(44)})
+    }
 }
 
 habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
     width: s32, viewport_y: s32, viewport_h: s32, content_h: s32) {
     habit_edit_difficulty(app, x, y, width)
-    y += AppScale(HABIT_EDIT_DIFFICULTY_HEIGHT)
+    y += AppScale(habit_edit_difficulty_height(app))
     counter_props := ToggleProps.{
         .id = 7610,
         .value = app.habit_edit.counter_enabled != 0,
@@ -1954,7 +2022,7 @@ habit_edit_tracking :: (app: *InnerBreeze, x: s32, y: s32,
                 .id = 7620,
                 .bounds = Rectangle.{cast(float32)control_x, cast(float32)y,
                     cast(float32)AppScale(44), cast(float32)AppScale(44)},
-                .label = "-", .disabled = app.habit_edit.counter_target <= 1,
+                .label = "-", .disabled = app.habit_edit.counter_target <= 0,
                 .tone = cast(ButtonTone)ButtonToneNeutral,
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
             app.habit_edit.counter_target -= 1

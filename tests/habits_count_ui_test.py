@@ -113,6 +113,17 @@ def wait_count(driver, value, message):
         time.sleep(0.05)
 
 
+def scroll_to(driver, **selector):
+    for _ in range(24):
+        nodes = driver.find(visible=True, **selector)
+        if nodes:
+            return nodes[0]
+        driver.pointer(200, 450, wheel=-3)
+        driver.release_pointer()
+        driver.wait_idle(frames=4)
+    return driver.wait(**selector)
+
+
 with scene("habit_count_dialog") as (driver, database):
     driver.wait(key=DONE)
     name = counted_habit(database)
@@ -134,6 +145,63 @@ with scene("habit_count_dialog") as (driver, database):
     driver.wait_gone(key=DONE)
     expect(driver.find(contains="Daily target", visible=True), [], "dialog after Close")
 print("PASS the count dialog steps the day's count and closes")
+
+with scene("habit_count_zero") as (driver, database):
+    driver.wait(key=DONE)
+    expect(driver.wait(contains="Daily target")["label"], "Daily target  0", "zero target text")
+    expect(shown_count(driver), 0, "zero count before recording")
+    driver.press(key=PLUS)
+    wait_count(driver, 1, "record an occurrence")
+    driver.press(key=PLUS)
+    wait_count(driver, 2, "record a second occurrence")
+    driver.press(key=MINUS)
+    wait_count(driver, 1, "correct an occurrence")
+    driver.press(key=MINUS)
+    wait_count(driver, 0, "correct back to zero")
+    driver.press(key=DONE)
+    driver.wait_gone(key=DONE)
+    expect(sql(database, "SELECT count||':'||completed FROM habit_days d JOIN habits h ON h.id=d.habit_id "
+               "WHERE h.counter_target=0 AND d.local_date=CAST(strftime('%Y%m%d','now','localtime') AS INTEGER)"),
+           "0:1", "confirmed zero stays zero and succeeds")
+print("PASS zero-target counts record occurrences and confirm a successful zero")
+
+with scene("habit_edit") as (driver, database):
+    driver.press(focus_id=7511, role="text_field")
+    driver.type("Reverse habit")
+    scroll_to(driver, key=7606)
+    driver.press(key=7606)
+    scroll_to(driver, focus_id=7607, role="text_field")
+    driver.press(focus_id=7607, role="text_field")
+    driver.key("a", control=True)
+    driver.type("-2")
+    driver.wait(focus_id=7607, value="-2")
+    scroll_to(driver, key=7610)
+    driver.press(key=7610)
+    scroll_to(driver, key=7620)
+    driver.press(key=7620)
+    driver.wait(focus_id=7622, value="0")
+    driver.press(key=7621)
+    driver.wait(focus_id=7622, value="1")
+    driver.press(focus_id=7622, role="text_field")
+    driver.key("a", control=True)
+    driver.type("0")
+    driver.wait(focus_id=7622, value="0")
+    driver.pointer(200, 450, wheel=12)
+    driver.release_pointer()
+    driver.wait_idle(frames=4)
+    scroll_to(driver, focus_id=7607, role="text_field")
+    driver.pointer(200, 450, wheel=-7)
+    driver.release_pointer()
+    driver.wait_idle(frames=5)
+    window = subprocess.check_output([
+        "xdotool", "search", "--onlyvisible", "--pid", str(driver.process.pid)], text=True)
+    subprocess.run(["import", "-window", window.splitlines()[0],
+                    str(TEST_DIR / "zero-target-negative-coins.png")], check=True)
+    driver.press(label="Create habit", role="button")
+    expect(sql(database, "SELECT counter_target||':'||custom_coins||':'||coin_halves "
+               "FROM habits WHERE name='Reverse habit' AND deleted_at=0"),
+           "0:1:-4", "editor saves a zero target and negative coins per occurrence")
+print("PASS the habit editor accepts zero by step and typing, and custom negative coins")
 
 with scene("habit_count_questions") as (driver, database):
     driver.wait(key=ENTRIES)

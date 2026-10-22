@@ -87,6 +87,7 @@ CASES = [
     ('en', 'add a habit yoga', '[]', 'exists'),
     ('en', 'push ups 3 times a day', '[]', [tracking('id-push', mode='count', target=3)]),
     ('en', 'jumping rope should count to 100', '[]', [tracking('id-rope', mode='count', target=100)]),
+    ('en', 'jumping rope should count to 0', '[]', [tracking('id-rope', mode='count', target=0)]),
     ('en', 'jumping rope should ask how many I did, higher is better', '[]', [
         questions('id-rope', dict(text='How many I did?', answer='number', good='above_average'))]),
     ('en', 'jumping rope should ask how many I did, at least 50', ROPE_QUESTIONS, [

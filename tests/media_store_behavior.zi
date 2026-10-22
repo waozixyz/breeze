@@ -18,6 +18,7 @@
 #import, file "../src/cells/package_files.zi";
 #import, file "../src/cells/diary_records.zi";
 #import, file "../src/cells/media_store.zi";
+#import, file "../src/cells/media_metadata.zi";
 
 Byte :: (out: *Vec(u8), value: s64) {
     unused VecPush(out.*, cast(u8)(value & 255))
@@ -261,6 +262,36 @@ Check :: () -> s32 {
     check_int("another account's library is empty", MediaQuery("", false), 0)
     check_true("another account cannot draw them", MediaAsset(morning_hash, false) == "" &&
         !MediaAssetAllowed(preview_asset))
+    // Both photo pickers use this same import. Only the library copy is
+    // optimized; the picked source and camera date remain intact.
+    large := Photo("2026:10:18 11:22:33", 6, 600000, 4)
+    large_source := WriteSource("camera.jpg", large)
+    optimized := MediaImportFile(large_source)
+    optimized_hash := PackageText(TextUntilNul(optimized.hash[:]), "")
+    optimized_bytes := PackageRead(MediaPath(optimized_hash, false), DIARY_FILE_LIMIT)
+    check_true("a large photo is optimized", optimized.succeeded &&
+        optimized_bytes.count > 100 && optimized_bytes.count * 10 < large.count * 9)
+    check_true("its identity matches the saved copy", Hash(optimized_bytes) == optimized_hash &&
+        optimized_hash != Hash(large))
+    check_true("the picked source is untouched", PackageRead(large_source, DIARY_FILE_LIMIT) == large)
+    check_true("the optimized copy keeps its capture date",
+        RecordField(optimized_hash, "taken", field[:]) == "2026-10-18T11:22:33")
+    check_true("rotation is baked into the saved copy", MediaOrientationOf(optimized_bytes, "jpg") == 1)
+    repeated := MediaImportFile(large_source)
+    check_true("picking the source again keeps one optimized copy", repeated.succeeded && repeated.existed &&
+        TextUntilNul(repeated.hash[:]) == optimized_hash && MediaQuery("", false) == 1)
+
+    // Existing Diary imports keep their hashes and embeds when picked again.
+    legacy := Photo("2026:10:19 12:34:56", 1, 600000, 5)
+    legacy_hash := Hash(legacy)
+    check_true("keep an older full-sized photo", MediaAddBytes(legacy,
+        MediaAddition.{.name = "older.jpg"}).succeeded)
+    legacy_again := MediaImportBytes(legacy, "older copy.jpg")
+    check_true("existing original identities survive compression", legacy_again.succeeded && legacy_again.existed &&
+        TextUntilNul(legacy_again.hash[:]) == legacy_hash &&
+        PackageRead(MediaPath(legacy_hash, false), DIARY_FILE_LIMIT) == legacy)
+    PackageFree(optimized_bytes)
+    PackageFree(optimized_hash)
     storage_close()
     return failures
 }

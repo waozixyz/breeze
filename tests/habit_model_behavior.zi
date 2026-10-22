@@ -307,10 +307,35 @@ Check :: () -> s32 {
     if guard != 0 { return guard }
     test_date_helpers()
     test_count_mutations()
+    test_zero_target_counts()
     test_dirty_flush_on_storage_failure()
     test_move_delete_and_unique_names()
     test_defaults_and_activity_matching()
     test_deactivate_and_reactivate()
     test_suggested_icons()
     return failures
+}
+
+test_zero_target_counts :: () {
+    root := make_root("habit-model-zero-target")
+    check_true("init zero target db", storage_init(root) != 0)
+    app_state = InnerBreeze.{}
+    habits := *app_state.habits
+    unused habits_add_custom(habits, "Avoid", Walk(), 0, 0)
+    habit := *habits.items[0]
+    habit.counter_enabled = 1
+    habit.counter_target = 0
+    check_int("unrecorded day stays incomplete", habit_completed_day(habit, 20261022), 0)
+    habit_set_day_count(habits, 0, 20261022, 0)
+    check_int("a confirmed zero completes the day", habit_completed_day(habit, 20261022), 1)
+    check_int("zero is not converted to one", HabitDayCount(habit, 20261022), 0)
+    habit_increment_day(habits, 0, 20261022, 3)
+    check_int("occurrences miss a zero goal", habit_completed_day(habit, 20261022), 0)
+    habit_increment_day(habits, 0, 20261022, -3)
+    check_int("correcting the count restores completion", habit_completed_day(habit, 20261022), 1)
+    habits_flush_save(*app_state)
+    check_int("the confirmed zero is stored", raw_free_count(
+        "SELECT COUNT(*) FROM habit_days WHERE local_date=20261022 AND count=0 AND completed=1"), 1)
+    habits_free(habits)
+    storage_close()
 }

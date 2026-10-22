@@ -22,33 +22,73 @@ sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3
 // replaced. A day is done as the habit list shows it: counted to its
 // target, with linked practice sessions as the floor, or marked.
 StorageHabitEarnedHalvesSQL :: #string SQL
-SELECT COALESCE(SUM(CASE WHEN e.level=3 THEN 1 ELSE 2+2*MIN(MAX(e.level,0),2) END),0)
-FROM (SELECT COALESCE((SELECT CAST(c.old_value AS INTEGER)
-FROM habit_changes c WHERE c.habit_id=h.id AND c.kind=19 AND c.deleted_at=0 AND
+WITH days AS (
+SELECT h.id,h.name,h.icon,d.local_date AS day,
+h.custom_coins,h.coin_halves,
+COALESCE((SELECT c.old_value FROM habit_changes c
+WHERE c.habit_id=h.id AND c.kind=20 AND c.deleted_at=0 AND
 CAST(strftime('%Y%m%d',c.changed_at,'unixepoch','localtime') AS INTEGER)>d.local_date
-ORDER BY c.changed_at,c.rowid LIMIT 1),h.difficulty) AS level
-FROM habit_days d JOIN habits h ON h.id=d.habit_id
-WHERE h.user_id=?1 AND h.deleted_at=0 AND (?2='' OR h.id=?2) AND h.coins_from>0 AND
-d.local_date>=h.coins_from AND CASE WHEN h.counter_enabled<>0 THEN
+ORDER BY c.changed_at,c.rowid LIMIT 1),'') AS old_coins,
+COALESCE((SELECT CAST(c.old_value AS INTEGER) FROM habit_changes c
+WHERE c.habit_id=h.id AND c.kind=19 AND c.deleted_at=0 AND
+CAST(strftime('%Y%m%d',c.changed_at,'unixepoch','localtime') AS INTEGER)>d.local_date
+ORDER BY c.changed_at,c.rowid LIMIT 1),h.difficulty) AS level,
+MAX(d.count,d.session_count,CASE WHEN d.completed<>0 AND
+NOT(h.counter_enabled<>0 AND h.counter_target=0) THEN 1 ELSE 0 END) AS occurrences,
+CASE WHEN h.counter_enabled<>0 AND h.counter_target=0 THEN
+(d.completed<>0 AND MAX(d.count,d.session_count)=0)
+WHEN h.counter_enabled<>0 THEN
 MAX(d.count,d.session_count,CASE WHEN d.completed<>0 THEN 1 ELSE 0 END)>=MAX(h.counter_target,1)
-ELSE d.completed<>0 OR d.count>0 OR d.session_count>0 END) e
+ELSE d.completed<>0 OR d.count>0 OR d.session_count>0 END AS done
+FROM habit_days d JOIN habits h ON h.id=d.habit_id
+WHERE h.user_id=?1 AND h.deleted_at=0 AND h.coins_from>0 AND d.local_date>=h.coins_from
+), valued AS (
+SELECT *,CASE WHEN substr(old_coins,1,1)='1' THEN old_coins
+WHEN old_coins='' AND custom_coins<>0 THEN
+'1:'||CAST(MIN(MAX(coin_halves,-19998),19998) AS TEXT)
+ELSE '0:'||CAST(CASE WHEN level=3 THEN 1 ELSE 2+2*MIN(MAX(level,0),2) END AS TEXT)
+END AS policy FROM days
+), earned AS (
+SELECT id,name,icon,day,CAST(substr(policy,3) AS INTEGER)*
+CASE WHEN substr(policy,1,1)='1' THEN occurrences ELSE done END AS halves FROM valued
+)
+SELECT COALESCE(SUM(halves),0) FROM earned WHERE (?2='' OR id=?2)
 SQL
 
-// The latest coin movements, newest first: each done day as the balance
-// counts it (StorageHabitEarnedHalvesSQL) and each reward bought, with the
-// habit's or reward's name and symbol and its local date.
+// Each day's signed earnings and purchases, newest first.
 StorageHabitActivitySQL :: #string SQL
-SELECT name,icon,halves,day FROM (
-SELECT e.name AS name,e.icon AS icon,CASE WHEN e.level=3 THEN 1 ELSE 2+2*MIN(MAX(e.level,0),2) END AS halves,e.day AS day,0 AS at
-FROM (SELECT h.name AS name,h.icon AS icon,d.local_date AS day,COALESCE((SELECT CAST(c.old_value AS INTEGER)
-FROM habit_changes c WHERE c.habit_id=h.id AND c.kind=19 AND c.deleted_at=0 AND
+WITH days AS (
+SELECT h.id,h.name,h.icon,d.local_date AS day,
+h.custom_coins,h.coin_halves,
+COALESCE((SELECT c.old_value FROM habit_changes c
+WHERE c.habit_id=h.id AND c.kind=20 AND c.deleted_at=0 AND
 CAST(strftime('%Y%m%d',c.changed_at,'unixepoch','localtime') AS INTEGER)>d.local_date
-ORDER BY c.changed_at,c.rowid LIMIT 1),h.difficulty) AS level
-FROM habit_days d JOIN habits h ON h.id=d.habit_id
-WHERE h.user_id=?1 AND h.deleted_at=0 AND h.coins_from>0 AND
-d.local_date>=h.coins_from AND CASE WHEN h.counter_enabled<>0 THEN
+ORDER BY c.changed_at,c.rowid LIMIT 1),'') AS old_coins,
+COALESCE((SELECT CAST(c.old_value AS INTEGER) FROM habit_changes c
+WHERE c.habit_id=h.id AND c.kind=19 AND c.deleted_at=0 AND
+CAST(strftime('%Y%m%d',c.changed_at,'unixepoch','localtime') AS INTEGER)>d.local_date
+ORDER BY c.changed_at,c.rowid LIMIT 1),h.difficulty) AS level,
+MAX(d.count,d.session_count,CASE WHEN d.completed<>0 AND
+NOT(h.counter_enabled<>0 AND h.counter_target=0) THEN 1 ELSE 0 END) AS occurrences,
+CASE WHEN h.counter_enabled<>0 AND h.counter_target=0 THEN
+(d.completed<>0 AND MAX(d.count,d.session_count)=0)
+WHEN h.counter_enabled<>0 THEN
 MAX(d.count,d.session_count,CASE WHEN d.completed<>0 THEN 1 ELSE 0 END)>=MAX(h.counter_target,1)
-ELSE d.completed<>0 OR d.count>0 OR d.session_count>0 END) e
+ELSE d.completed<>0 OR d.count>0 OR d.session_count>0 END AS done
+FROM habit_days d JOIN habits h ON h.id=d.habit_id
+WHERE h.user_id=?1 AND h.deleted_at=0 AND h.coins_from>0 AND d.local_date>=h.coins_from
+), valued AS (
+SELECT *,CASE WHEN substr(old_coins,1,1)='1' THEN old_coins
+WHEN old_coins='' AND custom_coins<>0 THEN
+'1:'||CAST(MIN(MAX(coin_halves,-19998),19998) AS TEXT)
+ELSE '0:'||CAST(CASE WHEN level=3 THEN 1 ELSE 2+2*MIN(MAX(level,0),2) END AS TEXT)
+END AS policy FROM days
+), earned AS (
+SELECT id,name,icon,day,CAST(substr(policy,3) AS INTEGER)*
+CASE WHEN substr(policy,1,1)='1' THEN occurrences ELSE done END AS halves FROM valued
+)
+SELECT name,icon,halves,day FROM (
+SELECT name,icon,halves,day,0 AS at FROM earned WHERE halves<>0
 UNION ALL
 SELECT c.name,COALESCE(r.icon,0),-2*c.coins,
 CAST(strftime('%Y%m%d',c.at,'unixepoch','localtime') AS INTEGER),c.at
@@ -124,7 +164,7 @@ storage_habit_wallet_halves :: () -> s64 {
 storage_habit_coins_keep :: (habit_id: string, at: s64) -> s32 {
     // A kept record holds whole coins; an odd half coin goes with the habit.
     earned := storage_habit_earned_halves(habit_id) / 2
-    if earned <= 0 || habit_id.count == 0 {
+    if earned == 0 || habit_id.count == 0 {
         return 1
     }
     id: [HABIT_REWARD_ID_SIZE]u8
@@ -133,7 +173,7 @@ storage_habit_coins_keep :: (habit_id: string, at: s64) -> s32 {
     }
     stored_id := AppTextFromCString(*id[0], HABIT_REWARD_ID_SIZE)
     stmt: *void = null
-    sql := "INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at) VALUES(?1,?2,2,'',COALESCE((SELECT name FROM habits WHERE id=?3),''),?4,?5,0,?5) ON CONFLICT(id) DO UPDATE SET name=excluded.name,coins=MAX(habit_coins.coins,excluded.coins),deleted_at=0,updated_at=MAX(habit_coins.updated_at+1,excluded.updated_at)"
+    sql := "INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at) VALUES(?1,?2,2,'',COALESCE((SELECT name FROM habits WHERE id=?3),''),?4,?5,0,?5) ON CONFLICT(id) DO UPDATE SET name=excluded.name,coins=excluded.coins,deleted_at=0,updated_at=MAX(habit_coins.updated_at+1,excluded.updated_at)"
     if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) != SQLITE_OK {
         return 0
     }

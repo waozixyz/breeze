@@ -2,6 +2,7 @@
 
 ## [1.5.4] - 2026-10-21
 
+- Set a habit's counting target to 0 and show its recorded progress correctly.
 - Give each achievement its own meaningful icon.
 - Maintenance release for Inner Breeze 2.1.38.
 

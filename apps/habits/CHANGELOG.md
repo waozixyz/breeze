@@ -2,6 +2,7 @@
 
 ## [1.2.3] - 2026-10-21
 
+- Track zero-occurrence goals and choose custom coins, including 0 and negative coins per occurrence.
 - Give each achievement its own meaningful icon.
 - Maintenance release for Inner Breeze 2.1.38.
 

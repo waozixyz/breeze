@@ -13,6 +13,7 @@
 #import, file "../src/storage/storage_profile_stats.zi";
 #import, file "../src/storage/storage_sessions.zi";
 #import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_days.zi";
 #import, file "../src/habits/habit_coins.zi";
 #import, file "../src/habits/habit_icons.zi";
 #import, file "../src/habits/habit_memory.zi";
@@ -1083,5 +1084,80 @@ Check :: () -> s32 {
     test_average_goals_and_changes()
     test_stale_copy_keeps_synced_values()
     test_habit_wallet()
+    test_zero_target_and_custom_coins()
     return failures
+}
+
+test_zero_target_and_custom_coins :: () {
+    root := make_root("habit-custom-coins")
+    check_true("init custom coins db", storage_init(root) != 0)
+    storage_close()
+    raw_exec(root, "INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,custom_coins,coin_halves,coins_from,updated_at) VALUES('avoid',(SELECT id FROM users LIMIT 1),'Avoid',1,2,3,0,0,1,0,0,0,1,-4,20261001,1);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('avoid',20261001,1,0,0,1),('avoid',20261002,1,3,0,1),('avoid',20261003,1,1,0,1),('avoid',20261004,0,0,0,1);")
+    check_true("open custom coins db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    check_true("load custom coins", storage_habits_load(cast(*void)*habits_a) != 0)
+    habit := find_habit(*habits_a, "Avoid")
+    if habit == null { check_true("avoid exists", false); storage_close(); return }
+    check_true("zero target and negative coins survive load", habit.counter_target == 0 &&
+        habit.custom_coins && habit.coin_halves == -4)
+    check_true("a recorded zero succeeds; occurrences and cleared days do not",
+        HabitCompletedFor(habit, 20261001) && !HabitCompletedFor(habit, 20261002) &&
+        !HabitCompletedFor(habit, 20261004) && !HabitCompletedFor(habit, 20261005))
+    check_int("every occurrence deducts coins", cast(s32)storage_habit_wallet_halves(), -16)
+    activity: [8]HabitCoinActivity
+    check_int("penalties appear in coin activity", storage_habit_activity_load(activity[:]), 2)
+    check_true("activity shows signed occurrence totals", activity[0].halves == -4 && activity[1].halves == -12)
+    habits_save(*habits_a)
+    check_int("saving preserves the recorded zero", read_db_count(
+        "SELECT COUNT(*) FROM habit_days WHERE habit_id='avoid' AND local_date=20261001 AND completed=1 AND count=0"), 1)
+    today := habits_today_index()
+    check_true("save today's occurrences", storage_habit_day_save("avoid", today, 1, 2) != 0)
+    habit.coin_halves = 0
+    habits_save(*habits_a)
+    check_int("zero coins give no reward or penalty and preserve earlier rates",
+        cast(s32)storage_habit_wallet_halves(), -16)
+    habit.coin_halves = -2
+    habits_save(*habits_a)
+    check_int("negative coins apply per occurrence today", cast(s32)storage_habit_wallet_halves(), -20)
+    buffer: [8192]u8
+    json := synced_changes("habit", "avoid", "habits", buffer[:])
+    check_true("sync carries zero targets and custom signed coins",
+        contains(json, "\"counter_target\":0") && contains(json, "\"custom_coins\":1") &&
+        contains(json, "\"coin_halves\":-2"))
+    exec_db_sql("UPDATE habits SET custom_coins=0,coin_halves=0,counter_target=1,updated_at=0 WHERE id='avoid';")
+    check_true("apply synced coin settings", storage_apply_sync_habits_json(json) != 0)
+    check_int("synced signed coins are retained", read_db_count(
+        "SELECT COUNT(*) FROM habits WHERE id='avoid' AND custom_coins=1 AND coin_halves=-2 AND counter_target=0"), 1)
+    check_int("sync replay does not multiply penalties", cast(s32)storage_habit_wallet_halves(), -20)
+    check_true("keep a deleted habit's negative coins", storage_habit_coins_keep("avoid", 100) != 0)
+    check_int("deletion preserves penalties", read_db_count(
+        "SELECT COUNT(*) FROM habit_coins WHERE reward_id='' AND kind=2 AND coins=-10"), 1)
+    coin_json := synced_changes("habit_coin", "kept:avoid", "habit_coins", buffer[:])
+    exec_db_sql("DELETE FROM habit_coins WHERE id='kept:avoid';")
+    check_true("sync kept negative coins", storage_apply_sync_habit_coins_json(coin_json) != 0)
+    check_int("kept penalties stay negative after sync", read_db_count(
+        "SELECT COUNT(*) FROM habit_coins WHERE id='kept:avoid' AND coins=-10"), 1)
+    halves: s32 = 77
+    check_true("signed and zero coin inputs", HabitCoinParse("-2", *halves) && halves == -4 &&
+        HabitCoinParse("0", *halves) && halves == 0 && HabitCoinParse("-0.5", *halves) && halves == -1)
+    check_true("invalid coin amounts are rejected", !HabitCoinParse("-", *halves) &&
+        !HabitCoinParse("10000", *halves) && !HabitCoinParse("1.3", *halves))
+    archive: TextBuffer
+    append(*archive, root)
+    append(*archive, "/custom.zip")
+    check_true("export custom coins", storage_export_zip(TextFromCString(*archive.bytes[0])) != 0)
+    habits_free(*habits_a)
+    storage_close()
+    destination := make_root("habit-custom-coins-import")
+    check_true("open custom coins import db", storage_init(destination) != 0)
+    check_true("import custom coins", storage_import_zip(TextFromCString(*archive.bytes[0])) != 0)
+    habits_a = Habits.{}
+    check_true("load imported custom coins", storage_habits_load(cast(*void)*habits_a) != 0)
+    imported := find_habit(*habits_a, "Avoid")
+    check_true("backup retains zero goals and signed coins", imported != null &&
+        imported.counter_target == 0 && imported.custom_coins && imported.coin_halves == -2)
+    check_true("backup retains a recorded zero", HabitCompletedFor(imported, 20261001) &&
+        HabitDayCount(imported, 20261001) == 0)
+    habits_free(*habits_a)
+    storage_close()
 }

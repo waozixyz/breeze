@@ -178,6 +178,18 @@ sets a habit's tracking with `set_habit_tracking` (check, count with a target,
 or span with its good length) and its questions and good answers with
 `set_habit_questions`; her context lists both for each habit.
 
+A counting habit can have a daily target of 0 to track something the person
+wants to avoid. A recorded count of 0 completes that day; occurrences miss the
+goal, and unrecorded or cleared days stay incomplete. Closing the count dialog
+with 0 records that zero. Stored counts and linked sessions remain visible.
+
+Custom coins replace difficulty rewards with a signed amount for every
+occurrence, regardless of whether the target is reached. For example, -2 coins
+with 3 occurrences deducts 6; 0 gives no reward or penalty. A recorded zero
+never creates an occurrence. Edits and sync recalculate each day's amount
+without charging twice. Rate changes apply from their local day onward, keeping
+earlier days' rates, and deleted habits retain their earned coins or penalties.
+
 Each habit has a difficulty, medium, hard or very hard. A done day earns 1, 2
 or 3 coins, counted the way the habit list counts a day as done (marked,
 counted to its target, or covered by linked practice sessions). A changed
@@ -512,6 +524,13 @@ Photos (`apps/photos/`, `inbe.photos`, host interface 13) is the second app
 the node offers: a newest-first grid of the library's photos under the day
 each was taken, a viewer with previous, next and Move to Trash, and Trash,
 where a photo can be restored. Install it from the normal app catalog.
+
+Diary and Photos use the same host import and account storage, even when
+Photos is not installed. New opaque still images larger than 256 KiB are
+stored as upright JPEG copies at quality 88 and at most 2048 pixels on the
+longest edge, only when this saves more than 10%. Source files stay untouched;
+capture dates remain in the shared record. Small, transparent and animated
+images retain their bytes, as do photos already in the library.
 
 The library belongs to the account, not to Photos, so its photos stay when
 Photos is removed. The host keeps it (`src/cells/media_store.zi`): each photo

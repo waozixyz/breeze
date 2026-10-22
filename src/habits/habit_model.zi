@@ -96,18 +96,11 @@ habits_today_index :: () -> s32 {
 #program_export
 habit_completed_day :: (habit: *Habit, day_index: s32) -> s32 {
     index := habit_find_day(habit, day_index)
-    if index >= 0 && habit_counting_enabled(habit) != 0 {
-        count := ifx (habit.days[index].count > 0) then (habit.days[index].count) else (ifx (habit.days[index].completed != 0) then (1) else (0))
-        if count >= habit_counter_target(habit) { return 1 }
-        return 0
-    }
     if index < 0 {
         return 0
     }
-    if habit.days[index].completed != 0 {
-        return 1
-    }
-    return ifx (habit.days[index].count > 0) then (1) else (0)
+    return ifx HabitDayComplete(habit.days[index],
+        habit_counting_enabled(habit) != 0, habit_counter_target(habit)) then 1 else 0
 }
 
 habit_completed_today :: (habit: *Habit) -> s32 {
@@ -775,21 +768,24 @@ habit_set_day_count :: (habits: *Habits, index: s32, day_index: s32, count: s32)
     }
 
     habit = *habits.items[index]
+    recorded := count > 0 || (habit_counting_enabled(habit) != 0 &&
+        habit_counter_target(habit) == 0)
     existing_index = habit_find_day(habit, day_index)
     if existing_index >= 0 {
         habit.days[existing_index].count = count
-        if count > 0 {
+        if recorded {
             habit.days[existing_index].completed = 1
         } else {
             habit.days[existing_index].completed = 0
         }
-    } else if count > 0 && habit_reserve_days(habit, habit.day_count + 1) != 0 {
+    } else if recorded && habit_reserve_days(habit, habit.day_count + 1) != 0 {
         habit.days[habit.day_count].day_index = day_index
         habit.days[habit.day_count].count = count
         habit.days[habit.day_count].completed = 1
         habit.day_count += 1
     }
-    habits_queue_day_save_completed(habits, habit, day_index, count, count)
+    habits_queue_day_save_completed(habits, habit, day_index,
+        ifx recorded then 1 else 0, count)
 }
 
 habit_toggle_day :: (habits: *Habits, index: s32, day_index: s32) {

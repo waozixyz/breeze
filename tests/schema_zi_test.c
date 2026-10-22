@@ -165,6 +165,7 @@ static void upgrade_1_8_9(const char *fixture)
         assert(scalar("SELECT COUNT(*) FROM habit_rewards") == 0);
         assert(has_column("habit_rewards", "icon"));
         assert(scalar("SELECT COUNT(*) FROM habit_coins") == 0);
+        assert(scalar("SELECT COUNT(*) FROM habits WHERE custom_coins=0 AND coin_halves=0") == 1);
         assert(scalar("SELECT count FROM habit_days") == 7);
         assert(scalar("SELECT session_count FROM habit_days") == 2);
         assert(scalar("SELECT COUNT(*) FROM sessions WHERE id='session' AND "

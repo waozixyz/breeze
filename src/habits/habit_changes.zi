@@ -4,6 +4,7 @@
 #import, file "habit_types.zi";
 #import, file "habit_questions.zi";
 #import, file "habit_schedule.zi";
+#import, file "habit_coins.zi";
 #import, file "../app/text_buffers.zi";
 
 HABIT_CHANGE_CREATED :: 1
@@ -25,10 +26,26 @@ HABIT_CHANGE_QUESTION_GOAL :: 16
 HABIT_CHANGE_DELETED :: 17
 HABIT_CHANGE_SPAN_GOAL :: 18
 HABIT_CHANGE_DIFFICULTY :: 19
+HABIT_CHANGE_COINS :: 20
 
 HABIT_CHANGE_VALUE_SIZE :: 256
 // A save can change every setting and every question.
-HABIT_CHANGE_MAX :: 14 + HABIT_QUESTION_MAX * 4
+HABIT_CHANGE_MAX :: 15 + HABIT_QUESTION_MAX * 4
+
+// The mode and rate before a change: custom coins per occurrence or
+// difficulty coins per completed day, in half coins.
+HabitCoinSettingText :: (habit: *Habit, output: []u8) -> string {
+    cursor: s32 = 0
+    output[0] = 0
+    unused TextBufferAppendNumber(output, *cursor, ifx habit.custom_coins then 1 else 0)
+    unused TextBufferAppendByte(output, *cursor, #char ":")
+    halves := HabitDifficultyHalfCoins(habit.difficulty)
+    if habit.custom_coins {
+        halves = HabitCoinHalvesClamp(habit.coin_halves)
+    }
+    unused TextBufferAppendNumber(output, *cursor, halves)
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}
 
 // One change of a habit's settings: what changed, the question it concerns
 // with its words then, and the value before and after as stored text.
@@ -236,6 +253,12 @@ HabitChangesBetween :: (before: *Habit, after: *Habit,
     if before.difficulty != after.difficulty {
         HabitChangeAddNumber(output, *count, HABIT_CHANGE_DIFFICULTY,
             before.difficulty, after.difficulty)
+    }
+    if before.custom_coins != after.custom_coins ||
+    (after.custom_coins && before.coin_halves != after.coin_halves) ||
+    (!after.custom_coins && before.difficulty != after.difficulty) {
+        unused HabitChangeAdd(output, *count, HABIT_CHANGE_COINS,
+            HabitCoinSettingText(before, first[:]), HabitCoinSettingText(after, second[:]))
     }
     if HabitTrackingText(before, first[:]) != HabitTrackingText(after, second[:]) {
         unused HabitChangeAdd(output, *count, HABIT_CHANGE_TRACKING,

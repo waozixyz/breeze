@@ -144,6 +144,8 @@ with tempfile.TemporaryDirectory(prefix='inbe-habit-tracking-') as directory:
                           low='14:00', high='36:30')
         assert result['tracking'] == dict(mode='span', target=1, good='between',
                                           low='14:00', high='36:30'), result
+        result = tracking(window, id=identifier, mode='count', target=0)
+        assert result['tracking'] == dict(mode='count', target=0), result
         result = tracking(window, id=identifier, mode='count', target=3)
         assert result['tracking'] == dict(mode='count', target=3), result
         result = tracking(window, id=identifier, mode='span')
@@ -190,7 +192,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-habit-tracking-') as directory:
             assert result['ok'] is False and error in result['error'], (items, result)
         for wrong, error in [
                 (dict(mode='timer'), 'mode'),
-                (dict(mode='count', target=0), 'target'),
+                (dict(mode='count', target=-1), 'target'),
                 (dict(mode='count', good='at_most', high='8:00'), 'spans only'),
                 (dict(mode='span', good='at_most'), 'H:MM'),
                 (dict(mode='span', good='at_most', high='8'), 'H:MM'),
