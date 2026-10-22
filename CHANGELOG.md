@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.42] - 2026-10-22
+
+- Keep practice animation smooth in the browser.
+
 ## [2.1.41] - 2026-10-22
 
 - Reduce practice-animation stutter on slower browsers.
