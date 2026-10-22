@@ -79,12 +79,16 @@ with contextlib.ExitStack() as stack:
     driver.wait(label="Share", role="button")
     driver.wait_idle(frames=3)
 
-    def sql(query):
+    def sql(query, parameters=()):
         # Read-only, so closing it never checkpoints the running app's WAL.
         uri = database.as_uri() + "?mode=ro"
         with contextlib.closing(sqlite3.connect(uri, uri=True, timeout=2)) as db:
-            row = db.execute(query).fetchone()
-            return "" if row is None or row[0] is None else row[0]
+            row = db.execute(query, parameters).fetchone()
+            if row is None:
+                return ""
+            if len(row) > 1:
+                return row
+            return "" if row[0] is None else row[0]
 
     def writable():
         """A connection for fixtures written while the app runs. It never
@@ -131,6 +135,35 @@ with contextlib.ExitStack() as stack:
     def calm(message):
         shown = [label for label in driver.labels() if ALARMING.search(label)]
         assert not shown, f"FAIL {message}: {shown} ({TEST_DIR})"
+
+    # Undo follows the real bundle and typed persistence bridge, preserving
+    # the original completed item and its comment rather than creating a copy.
+    def row_control(title, kind):
+        row = driver.wait(label=title)
+        controls = [node for node in driver.tree() if node["kind"] == kind and node["visible"] and
+                    (kind != "button" or node["label"] == "Rename")]
+        control = min(controls, key=lambda node: abs(node["y"] - row["y"]))
+        assert abs(control["y"] - row["y"]) < 64, (row, control)
+        return control["key"]
+
+    original = sql("SELECT id,comment,sort_order FROM elist_items WHERE title='Fresh fruit' AND deleted_at=0")
+    driver.press(key=row_control("Fresh fruit", "checkbox"))
+    wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 1,
+             "the undo fixture was not completed")
+    driver.press(label="All", role="tab")
+    driver.press(key=row_control("Fresh fruit", "button"))
+    driver.press(label="Delete item", role="button")
+    wait_for(lambda: sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) > 0,
+             "the item was not deleted")
+    driver.press(label="Undo delete", role="button")
+    wait_for(lambda: sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) == 0,
+             "Undo did not restore the item")
+    restored = sql("SELECT id,comment,sort_order,done FROM elist_items WHERE title='Fresh fruit' AND deleted_at=0")
+    assert restored == (*original, 1), ("Undo changed the item", original, restored)
+    assert sql("SELECT COUNT(*) FROM elist_items WHERE title='Fresh fruit'") == 1, "Undo made a duplicate"
+    driver.press(key=row_control("Fresh fruit", "checkbox"))
+    wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 0,
+             "the original completion state was not restored")
 
     driver.press(label="Weekend", role="tab")
     add("Weekend task")
@@ -262,4 +295,4 @@ with contextlib.ExitStack() as stack:
     command = json.loads(sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:10'"))
     assert command["action"] == "accept" and command["invitation_id"] == "invitation-fixture", command
     assert sql(f"SELECT COUNT(*) FROM elist_lists WHERE id='{SHARED_LIST}'") == 0
-    print(f"PASS list tabs, private task destination, friend invitation, inbox acceptance and durable delivery ({TEST_DIR})")
+    print(f"PASS item deletion and identity-preserving undo, list tabs, private task destination, friend invitation, inbox acceptance and durable delivery ({TEST_DIR})")

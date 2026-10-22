@@ -20,4 +20,4 @@ This review continues the 21 October Inbe session. It records the requested fixe
 
 ## Verification
 
-Behavior tests cover complete-document edits beyond the screen capacity and restoring deleted item data. UI checks exercise Lists sharing, the shop's final activity row at phone and desktop sizes and 200% zoom, Library swipes and Back, and returning from Chess to Arcade. Release status and exact check results are recorded in `backup/session-completion/`; this file does not claim a build or publication has completed.
+Behavior tests cover complete-document edits beyond the screen capacity and restoring deleted item data. UI checks exercise deletion and undo through the actual Lists bundle and persistence bridge, Lists sharing, the shop's final activity row at phone and desktop sizes and 200% zoom, Library swipes and Back, and returning from Chess to Arcade. Release status and exact check results are recorded in `backup/session-completion/`; this file does not claim a build or publication has completed.
