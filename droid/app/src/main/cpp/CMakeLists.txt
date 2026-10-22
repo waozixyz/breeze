@@ -26,6 +26,8 @@ set(SQLITE_AMALGAMATION_C "${SQLITE_BUILD_DIR}/sqlite3.c")
 set(SQLITE_AMALGAMATION_H "${SQLITE_BUILD_DIR}/sqlite3.h")
 include("${KRYON_DIR}/cmake/KryonAndroid.cmake")
 kryon_android_reproducible_paths("${REPO_ROOT}")
+# Apply the release size policy to static dependencies as well as the host.
+add_compile_options("$<$<NOT:$<CONFIG:Debug>>:-Oz>")
 set(OQS_BUILD_ONLY_LIB ON CACHE BOOL "" FORCE)
 set(OQS_USE_OPENSSL OFF CACHE BOOL "" FORCE)
 set(OQS_MINIMAL_BUILD "SIG_ml_dsa_44;KEM_ml_kem_768" CACHE STRING "" FORCE)
@@ -222,7 +224,7 @@ execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/build-bundle-runt
     --source "${ZIRAN_DIR}" --output "${APP_BUNDLE_RUNTIME_DIR}"
     --cc "${CMAKE_C_COMPILER} --target=${CMAKE_C_COMPILER_TARGET} --sysroot=${CMAKE_SYSROOT}"
     --ar "${CMAKE_AR}" --objcopy "${CMAKE_OBJCOPY}"
-    "--flags=-O2 -fPIC"
+    "--flags=-Oz -fPIC -ffunction-sections -fdata-sections"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${REPO_ROOT}/scripts/build-bundle-runtime.py" "${REPO_ROOT}/ziran.lock")
@@ -265,6 +267,11 @@ add_library(main SHARED
     ${APP_ZIRAN_GENERATED_SOURCES}
 )
 kryon_android_app(main)
+# Optimize across generated modules while retaining the Android export map.
+# Use the NDK's ThinLTO directly: older CMake IPO selects the retired gold
+# linker, whereas Android's Clang already uses lld. Keep debug builds separate.
+target_compile_options(main PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-flto=thin>")
+target_link_options(main PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-flto=thin>")
 add_dependencies(main app_ziran_generated app_clean_runtime_api app_build_laws app_zi_check)
 
 target_include_directories(main PRIVATE
@@ -314,6 +321,7 @@ target_link_libraries(main oqs z "${APP_BUNDLE_RUNTIME}")
 # functions from the statically linked runtime and graphics dependencies.
 set(APP_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/libmain.map.txt")
 target_link_options(main PRIVATE
+    "$<$<NOT:$<CONFIG:Debug>>:-Wl,-O2,--icf=safe>"
     "-Wl,--version-script,${APP_EXPORT_MAP}"
     "-Wl,--no-undefined-version")
 set_property(TARGET main APPEND PROPERTY LINK_DEPENDS "${APP_EXPORT_MAP}")
