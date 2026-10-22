@@ -63,11 +63,15 @@ jobs:
           python3 scripts/check-secrets.py --history
 
   test:
-    name: Test
+    name: Test (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     needs: secret-scan
     # Run the complete test, visual and package compatibility suites.
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
     env:
       APT_CACHE_DIR: /tmp/apt-cache
 
@@ -106,18 +110,20 @@ jobs:
         run: .github/scripts/install-apt-packages.sh .github/apt/test-packages.txt
 
       - name: Run Tests
-        run: make test
+        run: sh scripts/test-shard.sh ${{ matrix.shard }} 3
 
       - name: Require Visual Tests
+        if: matrix.shard == 1
         run: make visual-test
 
       - name: Run Packages Across App Versions
+        if: matrix.shard == 2
         run: make package-compat-test
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
       - name: Save Visual Test Evidence
-        if: always()
+        if: always() && matrix.shard == 1
         uses: actions/upload-artifact@v4
         with:
           name: release-visual-tests
