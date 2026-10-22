@@ -4,7 +4,8 @@
 
 - Connecting an account starts sync automatically, and existing connections recover a missing node address.
 - Sync startup failures show their cause and retry correctly instead of remaining queued.
-- Move apps only by their handles, including apps not downloaded yet; dragging a row scrolls the list.
+- Move apps by their handles in Edit apps, including apps not downloaded yet; dragging a row scrolls the list.
+- Open main settings from Apps’ top-right corner instead of a separate Settings app.
 - Lists and Leaderboard come preinstalled, the app list uses a simple divider, and every row stays clear of navigation.
 - Account IDs use the first and last four characters, and Account has one heading.
 - Downloads keep transferring while package installation waits for scrolling and dragging to finish.
@@ -12,7 +13,7 @@
 - Open a friend to view and copy their full public ID.
 - Account shows one current sync status, and local database size is distinguished from node storage.
 - Switch Apps between a scrollable list and a grid; your chosen view is remembered.
-- Move apps with their drag handles, and pin Profile and Settings alongside your other apps.
+- Pin Profile alongside your other apps.
 - Apps opens faster when first showing your apps.
 - Arcade switches to newly installed game updates without keeping an older campaign open.
 - Shovey's own Back button returns to its game chooser.

@@ -126,7 +126,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
         saved = settings()
         assert saved["launcher_favorite_count"] == "2", "Opening Apps changed pins"
         assert saved["enabled_apps"] == "22", "Opening Apps changed app choices"
-        # A card moves from Pinned to More; no separate editing or pin control.
+        # Reordering is explicit; browsing keeps the handles hidden.
+        assert not driver.find(label="Move app", role="button")
+        driver.press(label="Edit apps", role="button")
         pinned, more = cards()
         assert [card["label"] for card in pinned] == ["Lumi", "Habits"], pinned
         handle = next(node for node in driver.find(label="Move app", role="button", visible=True)
@@ -141,4 +143,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
         assert saved["enabled_apps"] == "22", "Dragging changed app choices"
         pinned, more = cards()
         assert [card["label"] for card in pinned] == ["Habits"], pinned
+        driver.press(label="Done", role="button")
+        assert not driver.find(label="Move app", role="button")
 print("Apps: dragging arranges pins and preserves app choices")

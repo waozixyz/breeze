@@ -169,7 +169,7 @@ with contextlib.ExitStack() as stack:
         return matches[0]
 
     def cards():
-        """The Apps cards in Pinned and in More apps, in order."""
+        """The app cards above and below the library divider, in order."""
         tree = driver.tree()
         headings = {node["label"]: node for node in tree
                     if node["kind"] == "text" and node["label"] in ("Pinned", "More apps")}
@@ -217,6 +217,9 @@ with contextlib.ExitStack() as stack:
         return matches[0]
 
     def move(card, destination):
+        if driver.find(label="Edit apps", role="button", visible=True):
+            driver.press(label="Edit apps", role="button")
+            driver.wait(label="Done", role="button")
         driver.drag(UiDriver.center(handle(card)), destination, steps=16)
         driver.wait_idle(frames=3)
 
@@ -266,6 +269,8 @@ with contextlib.ExitStack() as stack:
 
     def open_profile(log):
         """Profile, an Apps action, replaces Apps with its own page."""
+        if driver.find(label="Done", role="button", visible=True):
+            driver.press(label="Done", role="button")
         before = len(transitions(log))
         driver.press(focus_id=6791, role="text_field")
         driver.key("a", control=True)
@@ -344,13 +349,16 @@ with contextlib.ExitStack() as stack:
                     assert driver.wait(label="List view", role="button")["selected"]
                     pinned, more, tree = cards()
                     assert all(abs(card["height"] - 64) <= 1 for card in pinned + more), cards()
+                    assert not driver.find(label="Move app", role="button"), "Browsing shows reorder controls"
+                    driver.press(label="Edit apps", role="button")
+                    pinned, more, tree = cards()
                     handles = driver.find(label="Move app", role="button", visible=True)
                     first_handle = next(h for h in handles if abs(h["y"] + h["height"] / 2 - pinned[0]["y"] - 32) < 2)
                     assert first_handle["x"] + first_handle["width"] <= pinned[0]["x"], first_handle
-                    # The handle moves immediately, without a long press.
+                    # In edit mode the handle moves immediately, without a long press.
                     driver.drag(UiDriver.center(first_handle), UiDriver.center(pinned[1]), steps=12)
                     wait_for(lambda: favorites(profile) == [1, 12, 2], "The drag handle did not move the app")
-                    assert not driver.find(label="Done", role="button"), "Moving left Apps in an edit mode"
+                    assert driver.find(label="Done", role="button"), "A move unexpectedly exited edit mode"
                     # Downloadable offers have the same handle and can be
                     # moved without installing them or claiming a node slot.
                     library = reveal_card("Library")
@@ -386,9 +394,17 @@ with contextlib.ExitStack() as stack:
                     assert favorites(profile) == [1, 12, 2], "View restart lost the app order"
                     driver.press(label="List view", role="button")
                     wait_setting(profile, "launcher_grid_view", 0)
-                    # Profile and Settings have ordinary cards and the same
-                    # options as other apps, including pinning.
-                    for label, route in (("Profile", 0), ("Settings", 4)):
+                    # Main settings live in Apps' top-right corner. Profile
+                    # remains an ordinary card, including pinning.
+                    assert not any(card["label"] == "Settings" for card in sum(cards()[:2], []))
+                    settings_button = driver.wait(label="Settings", role="button", visible=True)
+                    assert not under(driver.tree(), settings_button, "scroll"), settings_button
+                    assert settings_button["x"] > width / 2 and settings_button["y"] < 80, settings_button
+                    driver.press(label="Settings", role="button")
+                    driver.wait(label="Settings", role="title_bar")
+                    driver.press(label="Back", role="button")
+                    driver.wait(label="Pinned")
+                    for label, route in (("Profile", 0),):
                         driver.press(focus_id=6791, role="text_field")
                         driver.key("a", control=True)
                         driver.type(label)
@@ -419,7 +435,7 @@ with contextlib.ExitStack() as stack:
                     driver.key("escape")
                     driver.wait_gone(label=friend_id[:32] + "\n" + friend_id[32:])
                     driver.wait(label="@river", role="button")
-        print("Launcher views: immediate drag handles, grid/list, saved view/order and regular Profile/Settings cards passed")
+        print("Launcher views: edit-only handles, grid/list, saved view/order, Profile card and Apps settings passed")
         raise SystemExit(0)
 
     if arguments.measure:
@@ -688,10 +704,11 @@ with contextlib.ExitStack() as stack:
                     apps_x, apps_y, apps_width, apps_height = to_pixels(pin("Apps"), tree)
                     assert apps_y + apps_height > height - 60 and apps_x > width / 2, "Apps left the dock's end"
                 open_apps(hold=.35)
-                # The title's corner no longer closes Apps.
-                tap_pixel(width - 42, 44)
-                driver.wait_idle(frames=3)
-                assert apps_open(), "The Apps title corner still dismisses the page"
+                # Main settings belong to the top-right Apps action.
+                driver.press(label="Settings", role="button")
+                driver.wait(label="Settings", role="title_bar")
+                driver.press(label="Back", role="button")
+                driver.wait(label="Pinned")
                 open_profile(log)
                 open_apps()
                 assert favorites(profile) == [1, 2], "Opening Apps changed pinned cards"
@@ -731,7 +748,7 @@ with contextlib.ExitStack() as stack:
                     command("xdotool", "windowsize", window, str(width), str(height))
                     wait_for(lambda: abs(driver.tree()[0]["height"] - height) < 1, "Phone viewport did not restore")
                     driver.wait_idle(frames=3)
-                # A brief hold remains a click; only the visible handle can reorder.
+                # A brief hold remains a click; edit-mode handles own reordering.
                 pinned, more, tree = cards()
                 assert more[0]["label"] == "Diary", more
                 press(more[0], hold=.3)
@@ -756,7 +773,9 @@ with contextlib.ExitStack() as stack:
                 move(more[0], UiDriver.center(navigation(tree)[0]))
                 wait_for(lambda: favorites(profile) == [11, 1, 2], "Dragging a card to navigation did not place it")
                 assert [item["label"] for item in navigation()] == ["Diary", "Habits", "Practice", "Apps"]
-                assert not driver.find(label="Done", role="button")
+                assert driver.find(label="Done", role="button")
+                driver.press(label="Done", role="button")
+                assert not driver.find(label="Move app", role="button"), "Done left reorder controls visible"
                 # Profile stays in Apps after favorite changes.
                 assert apps_open(), "Dragging closed Apps"
                 open_profile(log)

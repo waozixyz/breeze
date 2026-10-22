@@ -88,12 +88,12 @@ app_launcher_update_drag :: (app: *InnerBreeze, point: Vector2) {
 // click and scroll gestures, even after another app has been moved.
 app_launcher_drag_handle :: (app: *InnerBreeze, card: ButtonProps,
     route: s32, vertical: bool) {
+    if !app.launcher_editing { return }
     key := card.key
     previous := TreePrevious(app.ui.session, TreeCurrentParent(app.ui.session),
         key, WidgetKindButton)
     drag := TreeTakeDragAt(app.ui.session, previous)
     if drag.started {
-        app.launcher_editing = true
         app.launcher_drag_key = key
         app.launcher_drag_route = route
         unused AppCopyText(LauncherLibraryName(route), app.launcher_drag_name[:])
@@ -203,13 +203,11 @@ app_draw_launcher :: (app: *InnerBreeze) {
                 }
             }
             if !found {
-                app.launcher_editing = false
                 app.launcher_drag_key = 0
                 app.launcher_drag_moving = false
             }
         }
         if !pointer.down && !pointer.released {
-            app.launcher_editing = false
             app.launcher_drag_key = 0
             app.launcher_drag_moving = false
         } else {
@@ -239,8 +237,36 @@ app_draw_launcher :: (app: *InnerBreeze) {
     Text(app.ui.session, TextProps.{.text = LocaleText("launcher_title"),
             .font = AppScale(28), .wrap = cast(TextWrap)TextWrapNone,
             .bounds = Rectangle.{cast(float32)x, cast(float32)title_y,
-                cast(float32)width, cast(float32)AppScale(40)},
+                cast(float32)(width - AppScale(156)), cast(float32)AppScale(40)},
             .class_name = KssClassId(KssMakeName("launcher-title"))})
+    edit: ButtonProps
+    edit.key = KeyHash("inbe/apps/edit")
+    edit.label = LocaleText(ifx app.launcher_editing then "done_button" else "launcher_edit_apps")
+    edit.fit_content = true
+    edit.selected = app.launcher_editing
+    edit.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
+    edit.bounds = Rectangle.{cast(float32)(x + width - AppScale(148)),
+        cast(float32)title_y, cast(float32)AppScale(96), cast(float32)AppScale(44)}
+    if Button(app.ui.session, edit) != 0 {
+        app.launcher_editing = !app.launcher_editing
+        app.launcher_drag_key = 0
+        app.launcher_drag_moving = false
+        app_block_current_click(app)
+    }
+    settings: ButtonProps
+    settings.key = KeyHash("inbe/apps/settings")
+    settings.label = LocaleText("settings_title")
+    settings.icon_shape = app_nav_route_own_shape(APP_NAV_ROUTE_SETTINGS)
+    settings.icon_only = true
+    settings.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    settings.bounds = Rectangle.{cast(float32)(x + width - AppScale(44)),
+        cast(float32)title_y, cast(float32)AppScale(44), cast(float32)AppScale(44)}
+    if Button(app.ui.session, settings) != 0 {
+        app_launcher_close(app)
+        app_apply_nav_route(app, APP_NAV_ROUTE_SETTINGS)
+        unused End(app.ui.session)
+        return
+    }
     search_y := title_y + AppScale(56)
     typed: [128]u8
     field: TextFieldProps
@@ -294,7 +320,7 @@ app_draw_launcher :: (app: *InnerBreeze) {
     }
     query := AppTextFromCString(*app.launcher_search[0], 128)
     routes := LauncherRoutes()
-    canonical: [LAUNCHER_APP_COUNT]string = .{"Diary", "Habits", "Lists", "Lumi", "Practice", "Leaderboard", "Profile", "Settings",
+    canonical: [LAUNCHER_APP_COUNT]string = .{"Diary", "Habits", "Lists", "Lumi", "Practice", "Leaderboard", "Profile",
         "", "", "", "", "", "", "", ""}
     matches: [LAUNCHER_APP_COUNT]s32
     match_count: s32 = 0
@@ -468,7 +494,6 @@ app_draw_launcher :: (app: *InnerBreeze) {
                 target = GridIndexAt(more_cells, point.x, point.y, tile_height, more_count)
                 LauncherLibraryMove(app, more[:more_count], app.launcher_drag_route, target)
             }
-            app.launcher_editing = false
             app.launcher_drag_key = 0
             app.launcher_drag_moving = false
             app_block_current_click(app)
@@ -510,7 +535,6 @@ app_draw_launcher :: (app: *InnerBreeze) {
             unused Button(app.ui.session, preview)
         }
     } else if app.launcher_drag_released {
-        app.launcher_editing = false
         app.launcher_drag_key = 0
     }
     unused End(app.ui.session)
