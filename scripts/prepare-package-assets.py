@@ -33,6 +33,7 @@ for name in ('inbe', 'lists', 'habits', 'practices', 'diary', 'lumi', 'leaderboa
 patterns = (
     'assets/mcp/*.json', 'assets/app/icon.png', 'assets/app/icon-sky-cradle.png',
     'assets/app/icon-ink-and-air.png', 'assets/easteregg/*.png', 'assets/pet/*.png',
+    'assets/apps/icons/*.png',
     'assets/social/*.png', 'assets/profile-pictures/*.png',
     'assets/practices/whm/1.png', 'assets/practices/whm/2.png',
     'assets/practices/meditation/1.png', 'assets/practices/*/banner-light.png',
@@ -112,16 +113,6 @@ if apps_bundle.is_file():
     destination = OUTPUT / 'inbe/assets/apps/apps.zib'
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(controller)
-
-# Preserve the existing launcher atlas art as complete packed images. The
-# portable card needs no native atlas handle or renderer-specific crop state.
-from PIL import Image
-with Image.open(OUTPUT / 'inbe/icons/ui.png') as atlas:
-    for name, x, y in (('diary', 64, 448), ('lists', 320, 0), ('habits', 128, 448),
-                       ('practices', 192, 448), ('leaderboard', 192, 320)):
-        destination = OUTPUT / 'inbe/assets/apps/icons' / (name + '.png')
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        atlas.crop((x, y, x + 64, y + 64)).save(destination)
 
 # Each app owns its bounded achievement catalog and translations, including
 # optional node apps. Source presence never determines device visibility.

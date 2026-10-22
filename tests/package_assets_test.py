@@ -43,6 +43,9 @@ def assets(data):
     return result
 
 root = assets((ROOT / 'build/inbe.zib').read_bytes())
+for name in ('diary', 'lists', 'habits', 'practices', 'leaderboard'):
+    path = 'assets/apps/icons/' + name + '.png'
+    assert root[path] == (ROOT / path).read_bytes(), f'missing or stale launcher icon: {name}'
 for name in ('photos', 'radio', 'library'):
     shape = (ROOT / 'assets' / name / 'sidebar.shape').read_bytes()
     assert root['assets/apps/icons/' + name + '.shape'] == shape

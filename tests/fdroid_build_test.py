@@ -3,12 +3,61 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
+import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class FDroidBuildTest(unittest.TestCase):
+    def test_thinlto_builds_match_across_checkout_locations(self):
+        sdk = Path(os.environ.get("ANDROID_SDK_ROOT") or os.environ.get("ANDROID_HOME")
+                   or Path.home() / "Android/Sdk")
+        clang = sdk / "ndk/28.2.13676358/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+        if not clang.is_file():
+            self.skipTest("Android NDK 28.2.13676358 is not installed")
+
+        with tempfile.TemporaryDirectory(prefix="inbe-thinlto-repro-") as temporary:
+            binaries = []
+            for name in ("release", "different-fdroid-checkout"):
+                root = Path(temporary) / name
+                source = root / "src"
+                build = root / "build"
+                source.mkdir(parents=True)
+                build.mkdir()
+                (source / "shared.h").write_text("int external(int);\n")
+                (source / "one.c").write_text(
+                    '#include "shared.h"\n'
+                    'static int lookup[8] = {1, 3, 5, 7, 9, 11, 13, 15};\n'
+                    '__attribute__((noinline)) static int local(int x) {\n'
+                    '    return lookup[x & 7];\n'
+                    '}\n'
+                    'int external(int x) { return local(x) + local(x + 1); }\n')
+                (source / "two.c").write_text(
+                    '#include "shared.h"\n'
+                    'int api(int x) { return external(x) + external(x + 2); }\n')
+                objects = []
+                for stem in ("one", "two"):
+                    target = build / f"{stem}.o"
+                    objects.append(str(target))
+                    subprocess.run([
+                        sys.executable, str(ROOT / "scripts/relative-compile.py"), str(clang),
+                        "--target=i686-none-linux-android21", "-Oz", "-g1", "-fPIC",
+                        "-fdebug-compilation-dir=.", f"-ffile-prefix-map={root}=.",
+                        "-flto=thin", "-c", str(source / f"{stem}.c"), "-o", str(target),
+                    ], cwd=build, check=True, capture_output=True)
+                target = build / "libtest.so"
+                subprocess.run([
+                    str(clang), "--target=i686-none-linux-android21", "-fuse-ld=lld",
+                    "-flto=thin", "-nostdlib", "-shared", "-Wl,--build-id=sha1",
+                    *objects, "-o", str(target),
+                ], cwd=build, check=True, capture_output=True)
+                binaries.append(target.read_bytes())
+            # Compare the unstripped libraries, including build IDs and crash
+            # symbols. Stripping or ignoring the identifier would hide the bug.
+            self.assertEqual(binaries[0], binaries[1])
+
     def test_refuses_the_owner_checkout_even_with_ci_environment(self):
         for actions in ("false", "true"):
             with self.subTest(actions=actions):

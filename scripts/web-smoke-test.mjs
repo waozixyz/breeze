@@ -9,6 +9,7 @@ import { Readable } from 'node:stream';
 import { inflateSync } from 'node:zlib';
 import { verifyAppearanceCanvas, verifySunSalutationCanvas } from './web-sun-salutation-test.mjs';
 import { verifyCanvasTextResolution } from './web-canvas-text-test.mjs';
+import { waitForFirefoxBidi } from './firefox-startup.mjs';
 import { musicAudioInstrumentation, verifyMusicAcrossTabs } from './web-music-test.mjs';
 
 if (typeof WebSocket === 'undefined') {
@@ -612,36 +613,6 @@ async function waitForHealthyBidiPage(client, context) {
   throw new Error(`Firefox web app did not become healthy within ${timeoutMs}ms; state=${JSON.stringify(lastState)}`);
 }
 
-async function waitForFirefoxBidi(browser, stderrLines) {
-  const start = Date.now();
-  let exited = false;
-  const onExit = () => {
-    exited = true;
-  };
-  browser.once('exit', onExit);
-
-  try {
-    while (Date.now() - start < timeoutMs) {
-      if (exited) {
-        const stderr = stderrLines.join('').trim();
-        throw new Error(`Firefox exited before BiDi was ready${stderr ? `; firefox stderr: ${stderr.slice(-4000)}` : ''}`);
-      }
-
-      const stderr = stderrLines.join('');
-      const match = stderr.match(/WebDriver BiDi listening on (ws:\/\/[^\s]+)/);
-      if (match)
-        return match[1].replace(/\/?$/, '/session');
-
-      await delay(50);
-    }
-  } finally {
-    browser.off('exit', onExit);
-  }
-
-  const stderr = stderrLines.join('').trim();
-  throw new Error(`timed out waiting for Firefox BiDi${stderr ? `; firefox stderr: ${stderr.slice(-4000)}` : ''}`);
-}
-
 function writeFirefoxPrefs() {
   writeFileSync(join(userDataDir, 'user.js'), [
     'user_pref("browser.shell.checkDefaultBrowser", false);',
@@ -1043,6 +1014,27 @@ async function dispatchCanvasClick(client, x, y) {
   await waitAnimationFrames(client, 3);
 }
 
+async function dispatchCanvasDrag(client, x, y, endX, endY) {
+  await waitRouteTransition(client);
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed', x, y, button: 'left', clickCount: 1
+  });
+  // The idle input sampler needs a held press. Wall-clock spacing keeps the
+  // complete swipe inside its 1.2 second limit even when frames arrive late.
+  await delay(45);
+  for (let step = 1; step <= 6; step++) {
+    await client.send('Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: x + (endX - x) * step / 6,
+      y: y + (endY - y) * step / 6, button: 'left', buttons: 1
+    });
+    await delay(45);
+  }
+  await client.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased', x: endX, y: endY, button: 'left', clickCount: 1
+  });
+  await waitAnimationFrames(client, 3);
+}
+
 async function firstRunGuideButtonTarget(client, kind) {
   const suffix = kind === 'close' ? 'close' : 'next';
   const target = await pageJson(client, `(() => JSON.stringify((() => {
@@ -1396,26 +1388,9 @@ async function verifyPracticeCarouselSwipe(client) {
   const y = target.rect.top + (target.y - target.rect.top) * 0.4;
   const distance = target.rect.width * 0.4;
   async function drag(dx, dy) {
-    await waitRouteTransition(client);
     const startX = x - dx / 2;
     const startY = y - dy / 2;
-    await client.send('Input.dispatchMouseEvent', {
-      type: 'mousePressed', x: startX, y: startY, button: 'left', clickCount: 1
-    });
-    await waitAnimationFrames(client, 2);
-    for (let step = 1; step <= 6; step++) {
-      await client.send('Input.dispatchMouseEvent', {
-        type: 'mouseMoved', x: startX + dx * step / 6, y: startY + dy * step / 6,
-        button: 'left', buttons: 1
-      });
-      // Keep moves visible to the 30 fps input sampler without stretching
-      // a swipe past its 1.2 second limit on a slow software renderer.
-      await delay(45);
-    }
-    await client.send('Input.dispatchMouseEvent', {
-      type: 'mouseReleased', x: startX + dx, y: startY + dy, button: 'left', clickCount: 1
-    });
-    await waitAnimationFrames(client, 3);
+    await dispatchCanvasDrag(client, startX, startY, startX + dx, startY + dy);
   }
   async function swipeToNext(dx, previous, label) {
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -1824,19 +1799,7 @@ async function sunSalutationChecks(client, browser) {
     },
     click: async (x, y, endX, endY) => {
       if (endX === undefined) return dispatchCanvasClick(client, x, y);
-      await waitRouteTransition(client);
-      await client.send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
-      for (let step = 1; step <= 6; step++) {
-        await client.send('Input.dispatchMouseEvent', {
-          type: 'mouseMoved', x: x + (endX - x) * step / 6,
-          y: y + (endY - y) * step / 6, button: 'left', buttons: 1
-        });
-        await waitAnimationFrames(client, 1);
-      }
-      await client.send('Input.dispatchMouseEvent', {
-        type: 'mouseReleased', x: endX, y: endY, button: 'left', clickCount: 1
-      });
-      await waitAnimationFrames(client, 3);
+      await dispatchCanvasDrag(client, x, y, endX, endY);
     }
   };
   await verifyAppearanceCanvas(driver);
@@ -1929,7 +1892,6 @@ try {
       ...browserArgs,
       'about:blank'
     ];
-    const firefoxStderr = [];
     // Linux Firefox needs a display for WebGL, even in headless mode.
     // Start our own server after scrubbing the owner's display variables.
     const displayRunner = process.platform === 'linux' ? findOnPath('xvfb-run') : '';
@@ -1938,19 +1900,13 @@ try {
     const command = displayRunner || browser;
     const argumentsForBrowser = displayRunner ?
       ['-a', '-s', '-screen 0 1366x900x24', browser, ...args] : args;
-    chrome = spawn(command, argumentsForBrowser, { stdio: ['ignore', 'ignore', 'pipe'], detached: true, env: browserEnvironment });
-    chrome.stderr.setEncoding('utf8');
-    chrome.stderr.on('data', chunk => {
-      firefoxStderr.push(chunk);
-      while (firefoxStderr.join('').length > 8000)
-        firefoxStderr.shift();
-    });
+    chrome = spawn(command, argumentsForBrowser, { stdio: ['ignore', 'pipe', 'pipe'], detached: true, env: browserEnvironment });
     chrome.once('error', error => {
       if (!failure)
         failure = error;
     });
 
-    const bidiUrl = await waitForFirefoxBidi(chrome, firefoxStderr);
+    const bidiUrl = await waitForFirefoxBidi(chrome, timeoutMs);
     client = await connectBidi(bidiUrl);
     await client.send('session.new', { capabilities: {} });
     await client.send('session.subscribe', { events: ['log.entryAdded'] });
@@ -1991,7 +1947,9 @@ try {
       '--ignore-gpu-blocklist',
       '--enable-webgl',
       '--use-gl=angle',
-      '--use-angle=swiftshader',
+      // Emulate WebGL only; emulating 2D GPU composition as well makes
+      // canvas-to-canvas copies dominate animation on headless runners.
+      '--use-angle=swiftshader-webgl',
       ...browserArgs,
       'about:blank'
     ];

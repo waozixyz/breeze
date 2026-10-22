@@ -37,6 +37,7 @@ test: patterns-session-zi-test
 test: session-results-zi-test
 test: settings-cache-test
 test: web-storage-bridge-test
+test: firefox-startup-test
 test: device-policy-test
 test: device-preferences-zi-test device-host-sdl-test
 test: fonts-zi-test

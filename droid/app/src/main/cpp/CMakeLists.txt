@@ -272,6 +272,12 @@ kryon_android_app(main)
 # linker, whereas Android's Clang already uses lld. Keep debug builds separate.
 target_compile_options(main PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-flto=thin>")
 target_link_options(main PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-flto=thin>")
+# Prefix maps do not normalize the source filename in LLVM bitcode. Keep
+# compiler inputs relative so ThinLTO's symbol hashes and build IDs match
+# across the release runner and F-Droid, while retaining native crash symbols.
+set(APP_COMPILER_LAUNCHER "${HOST_PYTHON}" "${REPO_ROOT}/scripts/relative-compile.py")
+list(APPEND APP_COMPILER_LAUNCHER ${CMAKE_C_COMPILER_LAUNCHER})
+set_property(TARGET main PROPERTY C_COMPILER_LAUNCHER "${APP_COMPILER_LAUNCHER}")
 add_dependencies(main app_ziran_generated app_clean_runtime_api app_build_laws app_zi_check)
 
 target_include_directories(main PRIVATE

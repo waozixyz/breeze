@@ -1,5 +1,9 @@
 # Web tests: browser smoke runs, extensions, web hosts and site assets.
 
+.PHONY: firefox-startup-test
+firefox-startup-test:
+	node --test tests/firefox_startup_test.mjs
+
 .PHONY: web-storage-bridge-test
 web-storage-bridge-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
