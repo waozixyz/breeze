@@ -1,0 +1,107 @@
+// A guest may navigate Back after submitting images but before painting.
+// Runtime assets survive until frame collection; its AppNode does not.
+#import "std/bundle_host"
+#import "std/byte_text_linux"
+#import "std/c_string"
+#import "std/vec"
+#import "std/text_buffer"
+#import "apps/host"
+#import "apps/tree"
+#import "crypto"
+#import, file "../src/cells/node_app_tree.zi";
+#import, file "../src/cells/node_app_runner.zi";
+#import, file "../src/cells/node_apps.zi";
+#import, file "../src/cells/catalog.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../src/app/assets.zi";
+#import, file "node_app_icons_behavior.zi";
+
+ImagesOpen :: (host: *AppHost, bytes: string) -> *AppNode {
+    node := New(AppNode)
+    runtime := New(AppRuntime)
+    if node == null || runtime == null {
+        return null
+    }
+    descriptor := cast(*TextDescriptor)(*bytes)
+    runtime.app.app.bundle = OpenBundleBytes(descriptor.data, cast(u64)bytes.count)
+    if runtime.app.app.bundle == null {
+        return null
+    }
+    runtime.host = host
+    runtime.node = node
+    node.runtime = cast(*void)runtime
+    node.generation = host.tree.generation + 1
+    host.tree.generation = node.generation
+    node.bytes = bytes.count
+    Sha256Hex(descriptor.data, bytes.count, *node.entry.sha256[0])
+    if !VecPush(host.tree.nodes, AppSlot.{node}) {
+        return null
+    }
+    host.tree.bytes += node.bytes
+    host.tree.active = AppHandle.{0, node.generation}
+    host.tree.provider.context = cast(*void)host
+    host.tree.provider.close = AppHostClose
+    return node
+}
+
+NodeTreeImagesCheck :: () -> s32 {
+    first := PackageRead(IconsEnvironmentPath("ICON_VALID_BUNDLE"), PackageMaximumBytes)
+    second := PackageRead(IconsEnvironmentPath("IMAGE_REPLACEMENT_BUNDLE"), PackageMaximumBytes)
+    defer {
+        PackageFree(first)
+        PackageFree(second)
+    }
+    host: AppHost
+    slot := cast(s32)(NodeAppSlots - 1)
+    node_runners[slot].nested = *host
+    node := ImagesOpen(*host, first)
+    if node == null {
+        return 100
+    }
+    node_tree_widget_node = node
+    path := NodeTreeAssetPath("assets/fixture/picture.png")
+    image := NodeTreeAsset(path)
+    if path == "" || !image.found || image.mime != "image/png" || image.data.count < 60 ||
+    image.data[0] != cast(u8)137 || image.data[1:4] != "PNG" {
+        return 101
+    }
+    original := NodeTreeAsset(path).data
+    // Many tiles may draw the same packed image. They share one mapping
+    // instead of copying paths and growing the vector for every tile.
+    for tile: cast(s32)0..999 {
+        if NodeTreeAssetPath("assets/fixture/picture.png") != path {
+            return 102
+        }
+    }
+    mappings := node_tree_images.count
+    AppTreeDrop(*host.tree, host.tree.active)
+    // The real close callback retired the runtime and freed the AppNode.
+    // The queued image must still resolve while its bytes remain alive.
+    retired := NodeTreeAsset(path)
+    if !retired.found || retired.data != original || mappings != 1 {
+        return 103
+    }
+    node = ImagesOpen(*host, second)
+    if node == null {
+        return 104
+    }
+    node_tree_widget_node = node
+    replacement := NodeTreeAssetPath("assets/fixture/picture.png")
+    current := NodeTreeAsset(replacement)
+    if replacement == path || !current.found || current.data == original ||
+    NodeTreeAsset(path).data != original || node_tree_images.count != 2 {
+        return 105
+    }
+    AppTreeDrop(*host.tree, host.tree.active)
+    if !NodeTreeAsset(replacement).found || NodeTreeAsset(path).data != original {
+        return 106
+    }
+    // Collection runs after painting has consumed both old and new bytes.
+    NodeTreeCollect()
+    if node_tree_images.count != 0 || node_tree_widget_node != null ||
+    host.retired != null || !AppTreeClose(*host.tree) {
+        return 107
+    }
+    node_runners[slot].nested = null
+    return 0
+}

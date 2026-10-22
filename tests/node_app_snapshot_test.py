@@ -1,10 +1,13 @@
-"""Run installed-leaf discovery against production SQLite and locked packages."""
+"""Check installed apps, background icons and queued images with production SQLite."""
 import argparse
 import os
 from pathlib import Path
 import shutil
+import shlex
+import struct
 import subprocess
 import tempfile
+import zlib
 
 
 def main():
@@ -27,11 +30,19 @@ def main():
     fixture.mkdir(exist_ok=True)
     source = fixture / 'fixture.zi'
     source.write_text('#program_export\nMain :: () -> s32 { return 1 }\n')
-    for name, shape in [('valid', 'S1.6rr:M5 5H10V10H5Z'), ('invalid', 'invalid'), ('empty', None)]:
+    for name, shape in [('valid', 'S1.6rr:M5 5H10V10H5Z'), ('replacement', 'S1.6rr:M5 5H10V10H5Z'),
+                        ('invalid', 'invalid'), ('empty', None)]:
         assets = fixture / name
         assets.mkdir(exist_ok=True)
         if shape is not None:
             (assets / 'sidebar.shape').write_text(shape)
+        if name in ('valid', 'replacement'):
+            def chunk(kind, data):
+                return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+            pixel = bytes([0, 40, 160, 100]) if name == 'valid' else bytes([0, 60, 100, 180])
+            (assets / 'picture.png').write_bytes(
+                b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 1, 1, 8, 2, 0, 0, 0)) +
+                chunk(b'IDAT', zlib.compress(pixel)) + chunk(b'IEND', b''))
         subprocess.run([str(args.ziran.resolve()), 'bundle', '--root', str(fixture),
                         '--entry', 'fixture:Main', '--asset-dir', f'assets/fixture={assets}',
                         '-o', str(fixture / f'{name}.zib'), str(source)],
@@ -55,6 +66,7 @@ def main():
     includes = [item for directory in [generated, *sorted(p for p in generated.rglob('*') if p.is_dir())]
                 for item in ('-iquote', str(directory))]
     result = subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-O0', '-ffunction-sections', '-fdata-sections',
+                    *shlex.split(os.environ.get('CFLAGS', '')),
                     '-I' + str(root / 'build/packages/ziran/include'), *includes,
                     '-I' + str(root / 'build/packages/monocypher/src'),
                     *map(str, sorted(generated.rglob('*.c'))),
@@ -72,10 +84,11 @@ def main():
         subprocess.run([str(work / 'test')], env=environment | {
             'APP_DATA_ROOT': profile,
             'ICON_CACHE_PATH': str(Path(profile) / 'fixture.icon'),
+            'IMAGE_REPLACEMENT_BUNDLE': str(fixture / 'replacement.zib'),
             **{f'ICON_{name.upper()}_BUNDLE': str(fixture / f'{name}.zib')
                for name in ('valid', 'invalid', 'empty', 'corrupt')},
         }, check=True)
-    print('Installed-leaf SQLite snapshot and icons: discovery, nonblocking loading, digest caches and stale-job isolation passed')
+    print('Installed apps: leaf discovery, background icons, stale-job isolation, deferred images and shared mappings passed')
 
 
 if __name__ == '__main__':

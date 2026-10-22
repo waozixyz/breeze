@@ -4,6 +4,7 @@ app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c3;
 #import, file "../../habits/habit_types.zi";
 #import, file "../../core/types.zi";
 #import, file "../../app/app_types.zi";
+#import, file "../../app/session_details.zi";
 #import, file "../../app/locale.zi";
 #import "layout"
 #import "geometry"
@@ -307,6 +308,44 @@ habit_session_divider :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
         0.0, 1, color_with_alpha(StyleTokenColor("text"), 0.1))
 }
 
+habit_session_details :: (app: *InnerBreeze, entry: *HabitLinkedEntry,
+    x: s32, y: s32, width: s32, draw: s32) -> s32 {
+    if entry.details.version != SessionDetailsVersion {
+        return y
+    }
+    line: [512]u8
+    details := entry.details
+    if entry.activity == EXERCISE_SUN_SALUTATION {
+        duration: [32]u8
+        first: [96]u8
+        last: [96]u8
+        habit_format_duration(details.duration_seconds, *duration[0], duration.count)
+        unused FormatNumberTemplate(LocaleText("sun_salutation_seconds_per_breath"), details.start_seconds, first[:])
+        unused FormatNumberTemplate(LocaleText("sun_salutation_seconds_per_breath"), details.end_seconds, last[:])
+        unused AppCopyText(AppTextFromCString(*duration[0], 32), line[:])
+        unused AppAppendText(" · ", line[:])
+        unused AppAppendText(AppTextFromCString(*first[0], 96), line[:])
+        unused AppAppendText(" → ", line[:])
+        unused AppAppendText(AppTextFromCString(*last[0], 96), line[:])
+    } else if details.title[0] != cast(u8)0 {
+        key := AppTextFromCString(*details.item[0], 96)
+        title := LocaleText(key)
+        unused AppCopyText(ifx title == key || title.count == 0 then
+            AppTextFromCString(*details.title[0], 160) else title, line[:])
+    }
+    if line[0] == cast(u8)0 {
+        return y
+    }
+    if draw != 0 {
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                    cast(float32)width, cast(float32)AppScale(32)},
+                .text = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*line[0], 512)),
+                .font = AppSmallFontSize(), .wrap = cast(TextWrap)TextWrapEllipsis})
+    }
+    return y + AppScale(32)
+}
+
 // One practice's sessions of the day on its card: the practice's name, each
 // session's time and summary with a button that deletes it, and a breathing
 // session's rounds below it, each with buttons that change or delete it.
@@ -420,8 +459,10 @@ habit_session_draw_practice :: (app: *InnerBreeze, ctx: *HabitLinkedContext,
         }
         y += summary_h
 
+        y = habit_session_details(app, *ctx.entries[i], x, y, width, draw)
+
         if activity == EXERCISE_MEDITATION  || activity == EXERCISE_SUN_SALUTATION ||
-            activity == EXERCISE_TAI_CHI || activity == EXERCISE_ASTRAL_PROJECTION || activity == EXERCISE_WORKOUT {
+        activity == EXERCISE_TAI_CHI || activity == EXERCISE_ASTRAL_PROJECTION || activity == EXERCISE_WORKOUT {
             i += 1
             continue
         }
@@ -575,8 +616,8 @@ habit_session_draw_edit_content :: (app: *InnerBreeze, ctx: *HabitLinkedContext,
                 content_x, content_w, y, 0) - y
             if draw != 0 {
                 Box(app.ui.session, CardProps(Rectangle.{
-                            cast(float32)content_x, cast(float32)y,
-                            cast(float32)content_w, cast(float32)card_h}))
+                        cast(float32)content_x, cast(float32)y,
+                        cast(float32)content_w, cast(float32)card_h}))
                 if habit_session_draw_practice(app, ctx, activity,
                     content_x, content_w, y, 1) < 0 {
                     return y

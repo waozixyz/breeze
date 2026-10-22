@@ -5,7 +5,9 @@
 - Keep practice animation smooth in the browser.
 - Restore clean F-Droid builds.
 - Show distinct Photos, Radio and Library icons in Apps, including before installation.
-- Use the shared Entity profile with your existing Inner Breeze account.
+- Open your shared Entity profile beside Settings, with your existing account and Dew balance.
+- Follow a gentler Sun Salutation pace, with seconds per breath, a duration estimate and clearer audio settings.
+- Keep Sun Salutation repetitions and tempo, and Tai Chi lesson details, in linked habit sessions and across account sync.
 
 ## [2.1.41] - 2026-10-22
 

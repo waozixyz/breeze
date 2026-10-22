@@ -6,13 +6,14 @@ SUN_SALUTATION_CHARACTER_COUNT :: 2
 SUN_SALUTATION_MAN :: 1
 // The move into a pose fills most of the breath that carries it: three
 // quarters of the breath, and at most this long.
-SUN_SALUTATION_TRANSITION_SECONDS :: 4
+SUN_SALUTATION_TRANSITION_SECONDS :: 6
 // The tempo is the length of one breath, in or out.
 SUN_SALUTATION_SECONDS_MIN :: 3
 SUN_SALUTATION_SECONDS_MAX :: 12
 SUN_SALUTATION_DEFAULT_REPETITIONS :: 3
-SUN_SALUTATION_DEFAULT_START_SECONDS :: 6
-SUN_SALUTATION_DEFAULT_END_SECONDS :: 4
+SUN_SALUTATION_DEFAULT_START_SECONDS :: 8
+SUN_SALUTATION_DEFAULT_END_SECONDS :: 6
+SUN_SALUTATION_TEMPO_VERSION :: 2
 
 // Breathing. Each pose of the classic sequence is reached on one breath,
 // in and out in turn: out in Mountain pose, in to the upward salute, out to
@@ -94,6 +95,21 @@ SalutationInit :: (state: SunSalutationPracticeState) -> SunSalutationPracticeSt
         state.end_seconds = SUN_SALUTATION_DEFAULT_END_SECONDS
     }
     return SalutationNormalizeSettings(state)
+}
+
+// Move an unchanged earlier default to the gentler tempo once. Other saved
+// choices, including a fast tempo selected after this update, remain intact.
+#program_export
+SalutationMigrateTempo :: (state: SunSalutationPracticeState,
+    version: s32) -> SunSalutationPracticeState {
+    legacy_default := version == 0 && state.start_seconds == 8 && state.end_seconds == 5
+    previous_default := version < SUN_SALUTATION_TEMPO_VERSION &&
+    state.start_seconds == 6 && state.end_seconds == 4
+    if legacy_default || previous_default {
+        state.start_seconds = SUN_SALUTATION_DEFAULT_START_SECONDS
+        state.end_seconds = SUN_SALUTATION_DEFAULT_END_SECONDS
+    }
+    return state
 }
 
 #program_export
@@ -221,6 +237,23 @@ SalutationBreathSeconds :: (state: SunSalutationPracticeState) -> s32 {
 #program_export
 SalutationStepSeconds :: (state: SunSalutationPracticeState) -> s32 {
     return SalutationBreathSeconds(state) * SalutationStepBreaths(state.step)
+}
+
+// Match actual playback: the first round has Mountain pose and thirteen
+// breaths; later rounds start with the upward salute and have twelve.
+#program_export
+SalutationDurationSeconds :: (state: SunSalutationPracticeState) -> s32 {
+    state = SalutationInit(state)
+    total: s32 = 0
+    for repetition: 0..state.repetitions - 1 {
+        state.repetition = cast(s32)repetition
+        first_step := ifx repetition == 0 then 0 else SUN_SALUTATION_REPEAT_STEP
+        for step: first_step..SUN_SALUTATION_STEP_COUNT - 1 {
+            state.step = cast(s32)step
+            total += SalutationStepSeconds(state)
+        }
+    }
+    return total
 }
 
 // The breath being taken `state.step_ticks` into the current step.

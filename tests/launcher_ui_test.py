@@ -270,15 +270,11 @@ with contextlib.ExitStack() as stack:
         driver.wait(label="Pinned")
 
     def open_profile(log):
-        """Profile, an Apps action, replaces Apps with its own page."""
+        """The permanent Profile header action opens its own page."""
         if driver.find(label="Done", role="button", visible=True):
             driver.press(label="Done", role="button")
         before = len(transitions(log))
-        driver.press(focus_id=6791, role="text_field")
-        driver.key("a", control=True)
-        driver.type("Profile")
-        driver.wait(label="Profile", role="button", visible=True)
-        driver.press(label="Profile", role="button")
+        driver.press(focus_id=6792, role="button")
         driver.wait_gone(label="Pinned")
         driver.wait(label="Profile", role="title_bar")
         wait_for(lambda: transitions(log) and transitions(log)[-1] == "10",
@@ -328,7 +324,7 @@ with contextlib.ExitStack() as stack:
                 stop(app)
 
     def check_profile_navigation():
-        """Pinned and unpinned Profile share one header and the same Back stack."""
+        """Old Profile pins migrate to the permanent header and preserve Back."""
         with tempfile.TemporaryDirectory(prefix="inbe-profile-navigation-") as temporary:
             profile = Path(temporary)
             user = None
@@ -384,8 +380,12 @@ with contextlib.ExitStack() as stack:
                         open_profile(log)
                         driver.wait(label="Profile picture", role="button")
                         one_header("Profile")
-                        assert [node["label"] for node in navigation()] == \
-                            (["Profile"] if pinned else []) + ["Habits", "Practice", "Apps"]
+                        assert [node["label"] for node in navigation()] == ["Habits", "Practice", "Apps"]
+                        with database(profile) as db:
+                            saved = dict(db.execute("SELECT key,value FROM settings WHERE user_id=?", (user,)))
+                        active_pins = [int(saved.get(f"launcher_favorite_{i}", -1))
+                                       for i in range(int(saved.get("launcher_favorite_count", 0)))]
+                        assert 0 not in active_pins, "Legacy Profile pin was not removed"
                         if width == 390 and placement == 4 and not pinned:
                             capture(window, name)
                         reveal_action("Connect Account")
@@ -485,8 +485,7 @@ with contextlib.ExitStack() as stack:
                     assert favorites(profile) == [1, 12, 2], "View restart lost the app order"
                     driver.press(label="List view", role="button")
                     wait_setting(profile, "launcher_grid_view", 0)
-                    # Main settings live in Apps' top-right corner. Profile
-                    # remains an ordinary card, including pinning.
+                    # Account and Settings are permanent header controls.
                     assert not any(card["label"] == "Settings" for card in sum(cards()[:2], []))
                     settings_button = driver.wait(label="Settings", role="button", visible=True)
                     assert not under(driver.tree(), settings_button, "scroll"), settings_button
@@ -495,17 +494,10 @@ with contextlib.ExitStack() as stack:
                     driver.wait(label="Settings", role="title_bar")
                     driver.press(label="Back", role="button")
                     driver.wait(label="Pinned")
-                    for label, route in (("Profile", 0),):
-                        driver.press(focus_id=6791, role="text_field")
-                        driver.key("a", control=True)
-                        driver.type(label)
-                        card = driver.wait(label=label, role="button", visible=True)
-                        assert under(driver.tree(), card, "scroll"), (label, card)
-                        assert card["key"] != 7200 + route, "The old footer is still present"
-                        press(corner(card, driver.tree()))
-                        assert not driver.find(label="Uninstall", role="selectable", visible=True), "A built-in app can be uninstalled"
-                        driver.press(label="Pin", role="selectable")
-                        wait_for(lambda: route in favorites(profile), f"{label} was not pinned")
+                    account = driver.wait(focus_id=6792, role="button")
+                    assert not under(driver.tree(), account, "scroll"), account
+                    assert account["x"] + account["width"] <= settings_button["x"], account
+                    assert all(card["label"] != "Profile" for card in sum(cards()[:2], [])), "Profile still has an app tile"
                     driver.press(focus_id=6791, role="text_field")
                     driver.key("a", control=True)
                     driver.key("backspace")
@@ -526,7 +518,7 @@ with contextlib.ExitStack() as stack:
                     driver.key("escape")
                     driver.wait_gone(label=friend_id[:32] + "\n" + friend_id[32:])
                     driver.wait(label="@river", role="button")
-        print("Launcher views: edit-only handles, grid/list, saved view/order, Profile card and Apps settings passed")
+        print("Launcher views: edit-only handles, grid/list, saved view/order, permanent Profile and Settings passed")
         raise SystemExit(0)
 
     if arguments.measure:

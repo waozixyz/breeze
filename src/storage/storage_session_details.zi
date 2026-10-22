@@ -1,0 +1,176 @@
+#import, file "../app/session_details.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "storage_sessions.zi";
+#import, file "sqlite.zi";
+#import, file "db.zi";
+#import, file "state.zi";
+#import, file "storage_core.zi";
+#import, file "sync_outbox.zi";
+#import, file "json.zi";
+#import "std/byte_text_linux"
+
+c :: #system_library "c";
+sqlite3_changes :: (database: *void) -> s32 #foreign c;
+
+SessionDetailsNumber :: (json: *StorageJsonBuilder, name: string, number: s32) {
+    value: [24]u8
+    unused AppFormatS32(number, value[:])
+    storage_json_builder_append_text(json, ",\"")
+    storage_json_builder_append_text(json, name)
+    storage_json_builder_append_text(json, "\":")
+    storage_json_builder_append_text(json, AppTextFromCString(*value[0], 24))
+}
+
+SessionDetailsValid :: (details: *SessionDetails) -> bool {
+    return details != null && details.version == SessionDetailsVersion &&
+    details.duration_seconds >= 0 && details.duration_seconds <= 864000 &&
+    details.repetitions >= 0 && details.repetitions <= 1000 &&
+    details.start_seconds >= 0 && details.start_seconds <= 3600 &&
+    details.end_seconds >= 0 && details.end_seconds <= 3600 &&
+    details.cycles >= 0 && details.cycles <= 1000000
+}
+
+// The record, its measured details and the linked habit day succeed together.
+storage_save_session_with_details :: (round_times: *s32, round_count: s32,
+    topic: s32, activity: s32, details: *SessionDetails,
+    output: *u8, capacity: s64) -> s32 {
+    if !SessionDetailsValid(details) || output == null || capacity <= 0 {
+        return 0
+    }
+    output[0] = cast(u8)0
+    if exec_sql("SAVEPOINT practice_session") == 0 {
+        return 0
+    }
+    committed := false
+    defer {
+        if !committed {
+            unused exec_sql("ROLLBACK TO practice_session")
+            unused exec_sql("RELEASE practice_session")
+        }
+    }
+    identity: [96]u8
+    if storage_save_session_for_activity(round_times, round_count, topic, activity,
+        *identity[0], identity.count) == 0 ||
+    storage_save_session_details(AppTextFromCString(*identity[0], 96), details) == 0 ||
+    !AppCopyText(AppTextFromCString(*identity[0], 96), BytesFromPointer(output, cast(u64)capacity)) {
+        return 0
+    }
+    if exec_sql("RELEASE practice_session") == 0 {
+        output[0] = cast(u8)0
+        return 0
+    }
+    committed = true
+    return 1
+}
+
+#program_export
+storage_save_session_details :: (path: string, details: *SessionDetails) -> s32 {
+    id: [STORAGE_ID_SIZE]u8
+    if !SessionDetailsValid(details) || storage_db_handle() == null ||
+    parse_db_id(path, *id[0], STORAGE_ID_SIZE) == 0 {
+        return 0
+    }
+    json: StorageJsonBuilder
+    json.ok = 1
+    defer { storage_json_builder_free(*json) }
+    storage_json_builder_append_text(*json, "{\"version\":1")
+    SessionDetailsNumber(*json, "duration_seconds", details.duration_seconds)
+    SessionDetailsNumber(*json, "repetitions", details.repetitions)
+    SessionDetailsNumber(*json, "start_seconds", details.start_seconds)
+    SessionDetailsNumber(*json, "end_seconds", details.end_seconds)
+    SessionDetailsNumber(*json, "cycles", details.cycles)
+    storage_json_builder_append_text(*json, ",")
+    storage_json_builder_key_value_text(*json, "item",
+        AppTextFromCString(*details.item[0], cast(s32)details.item.count))
+    storage_json_builder_append_text(*json, ",")
+    storage_json_builder_key_value_text(*json, "title",
+        AppTextFromCString(*details.title[0], cast(s32)details.title.count))
+    storage_json_builder_append_text(*json, "}")
+    if json.ok == 0 || json.data == null || json.len > 4096 {
+        return 0
+    }
+    return storage_write_session_details(path, AppTextFromCString(json.data, cast(s32)json.len + 1))
+}
+
+// Import and sync retain object fields a newer app may understand.
+storage_write_session_details :: (path: string, json: string) -> s32 {
+    id: [STORAGE_ID_SIZE]u8
+    if json.count == 0 || json.count > 4096 || storage_db_handle() == null ||
+    parse_db_id(path, *id[0], STORAGE_ID_SIZE) == 0 {
+        return 0
+    }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "UPDATE sessions SET details=?1,updated_at=?2 WHERE id=?3 AND user_id=?4 AND deleted_at=0 AND CASE WHEN json_valid(?1) THEN json_type(?1)='object' ELSE 0 END",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(statement, 1, json)
+    SqliteBindInt64(statement, 2, storage_next_change_time())
+    bind_text(statement, 3, AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    bind_text(statement, 4, AppTextFromCString(storage_user_id_buffer(), STORAGE_ID_SIZE))
+    changed := SqliteStep(statement) == SQLITE_DONE &&
+    sqlite3_changes(storage_db_handle()) > 0
+    unused SqliteFinalize(statement)
+    if !changed {
+        return 0
+    }
+    if storage_enqueue_sync_session(AppTextFromCString(*id[0], STORAGE_ID_SIZE)) == 0 {
+        return 0
+    }
+    storage_schedule_persist()
+    return 1
+}
+
+SessionDetailsReadSQL :: #string SQL
+WITH saved AS (
+    SELECT CASE WHEN json_valid(details) THEN details ELSE '{}' END AS value
+    FROM sessions WHERE id=?1 AND user_id=?2 AND deleted_at=0
+)
+SELECT COALESCE(json_extract(value,'$.version'),0),
+       COALESCE(json_extract(value,'$.duration_seconds'),0),
+       COALESCE(json_extract(value,'$.repetitions'),0),
+       COALESCE(json_extract(value,'$.start_seconds'),0),
+       COALESCE(json_extract(value,'$.end_seconds'),0),
+       COALESCE(json_extract(value,'$.cycles'),0),
+       COALESCE(json_extract(value,'$.item'),''),
+       COALESCE(json_extract(value,'$.title'),'')
+FROM saved
+SQL
+
+#program_export
+storage_load_session_details :: (path: string, details: *SessionDetails) -> s32 {
+    if details == null {
+        return 0
+    }
+    details.* = SessionDetails.{}
+    id: [STORAGE_ID_SIZE]u8
+    if storage_db_handle() == null || parse_db_id(path, *id[0], STORAGE_ID_SIZE) == 0 {
+        return 0
+    }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), SessionDetailsReadSQL, -1,
+        *statement, null) != SQLITE_OK {
+        return 0
+    }
+    defer { unused SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+    bind_text(statement, 2, AppTextFromCString(storage_user_id_buffer(), STORAGE_ID_SIZE))
+    if SqliteStep(statement) != SQLITE_ROW {
+        return 0
+    }
+    value: SessionDetails
+    value.version = SqliteColumnInt(statement, 0)
+    value.duration_seconds = SqliteColumnInt(statement, 1)
+    value.repetitions = SqliteColumnInt(statement, 2)
+    value.start_seconds = SqliteColumnInt(statement, 3)
+    value.end_seconds = SqliteColumnInt(statement, 4)
+    value.cycles = SqliteColumnInt(statement, 5)
+    if !AppCopyText(AppTextFromCString(SqliteColumnText(statement, 6), 4096), value.item[:]) ||
+    !AppCopyText(AppTextFromCString(SqliteColumnText(statement, 7), 4096), value.title[:]) ||
+    !SessionDetailsValid(*value) {
+        return 0
+    }
+    details.* = value
+    return 1
+}

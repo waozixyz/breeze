@@ -37,6 +37,7 @@
 #import, file "../../app/app_chrome.zi";
 #import, file "../../app/locale.zi";
 #import, file "../../app/app_nav_state.zi";
+#import, file "../../app/text_buffers.zi";
 #import "slider"
 #import "dropdown"
 #import "dropdown_props"
@@ -96,19 +97,17 @@ preview_height :: (content_w: s32) -> s32 {
     if thumb_w > AppScale(56) {
         thumb_w = AppScale(56)
     }
-    return thumb_w * 2 + AppScale(56)
+    return thumb_w * 2 + AppScale(58)
 }
 
 draw_preview :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
     label_font := AppFontSize()
-    small_font := AppSmallFontSize()
     label_w: s32
     thumb_w := (w - AppScale(22)) / 6
     thumb_h: s32
     gap := AppScale(4)
     active_step: s32
     preview_step_ticks: s32
-    row_y: s32
     muted := DarkenColor(StyleTokenColor("text"), 40)
 
     if thumb_w < AppScale(34) {
@@ -169,15 +168,6 @@ draw_preview :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
         }
     }
 
-    row_y = y + thumb_h * 2 + AppScale(26)
-    if AppTextWidth(LocaleText("sun_salutation_tempo_preview_hint"),
-        small_font) <= w {
-        Text(CurrentApp().ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)(x), cast(float32)(row_y), 0, 0},
-                .text = (LocaleText("sun_salutation_tempo_preview_hint")),
-                .wrap = cast(TextWrap)TextWrapNone
-            })
-    }
 }
 
 config_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
@@ -189,8 +179,10 @@ config_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
 
     bottom_padding = app_content_bottom_reserved(app) + AppScale(24)
     app.practice_config_tab = 0
-    return AppScale(86) + preview_height(content_w) + AppScale(16) +
-    AppScale(74) * 3 + meditation_music_measure_practice_settings(app,
+    timing_hint_h := AppParagraphHeight(LocaleText("sun_salutation_tempo_preview_hint"),
+        content_w, AppSmallFontSize(), AppScale(3))
+    return AppScale(76 + 24 + 32 + 74 * 3 + 24 + 86 + 24 + 32 + 74) +
+    timing_hint_h + preview_height(content_w) + meditation_music_measure_practice_settings(app,
         EXERCISE_SUN_SALUTATION,
         content_w, 0, 1) + AppScale(12) +
     PracticeNarrationSettingsHeight(app, EXERCISE_SUN_SALUTATION,
@@ -249,15 +241,41 @@ sun_salutation_config_screen_draw :: (app: *InnerBreeze) {
 
         y := cast(s32)page.y
 
-        draw_character_picker(app, content_x, y, content_w)
-        y += AppScale(86)
-        draw_preview(app, content_x, y, content_w)
-        y += preview_height(content_w) + AppScale(16)
+        duration := SalutationDurationSeconds(app.sun_salutation)
+        duration_text: [128]u8
+        duration_args: [2]FormatArg = .[
+            FormatArg.{.number = duration / 60},
+            FormatArg.{.number = duration % 60}]
+        unused FormatTemplate(LocaleText("sun_salutation_duration_value"),
+            duration_args[:], duration_text[:])
+        Box(app.ui.session, BoxProps.{
+                .bounds = Rectangle.{cast(float32)content_x, cast(float32)y,
+                    cast(float32)content_w, cast(float32)AppScale(76)},
+                .fill = DarkenColor(StyleTokenColor("canvas"), 6)})
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)(content_x + AppScale(14)),
+                    cast(float32)(y + AppScale(10)), 0, 0},
+                .text = LocaleText("sun_salutation_duration_label"),
+                .font = AppSmallFontSize(), .wrap = cast(TextWrap)TextWrapNone})
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)(content_x + AppScale(14)),
+                    cast(float32)(y + AppScale(35)), 0, 0},
+                .text = AppTextFromCString(*duration_text[0], 128),
+                .font = AppFontSize() + AppScale(3), .wrap = cast(TextWrap)TextWrapNone})
+        y += AppScale(100)
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)content_x, cast(float32)y, 0, 0},
+                .text = LocaleText("sun_salutation_timing_label"),
+                .wrap = cast(TextWrap)TextWrapNone})
+        y += AppScale(32)
 
         repetitions = app.sun_salutation.repetitions
+        repetitions_text: [24]u8
+        unused AppFormatS32(repetitions, repetitions_text[:])
         rep_step := DiscreteSlider(CurrentApp().ui.session, DiscreteSliderProps.{.id = 610,
                 .bounds = Rectangle.{cast(float32)content_x, cast(float32)y, cast(float32)content_w, cast(float32)AppScale(56)},
                 .label = LocaleText("sun_salutation_repetitions_label"),
+                .value_text = AppTextFromCString(*repetitions_text[0], 24),
                 .value = repetitions, .min = 2, .max = 12})
         if rep_step.changed {
             app.sun_salutation.repetitions = rep_step.value
@@ -266,9 +284,12 @@ sun_salutation_config_screen_draw :: (app: *InnerBreeze) {
         y += AppScale(74)
 
         start_seconds = app.sun_salutation.start_seconds
+        start_text: [96]u8
+        FormatLocaleCount(*start_text[0], 96, "sun_salutation_seconds_per_breath", start_seconds)
         start_step := DiscreteSlider(CurrentApp().ui.session, DiscreteSliderProps.{.id = 611,
                 .bounds = Rectangle.{cast(float32)content_x, cast(float32)y, cast(float32)content_w, cast(float32)AppScale(56)},
                 .label = LocaleText("sun_salutation_start_speed_label"),
+                .value_text = AppTextFromCString(*start_text[0], 96),
                 .value = start_seconds, .min = SUN_SALUTATION_SECONDS_MIN,
                 .max = SUN_SALUTATION_SECONDS_MAX})
         if start_step.changed {
@@ -279,14 +300,52 @@ sun_salutation_config_screen_draw :: (app: *InnerBreeze) {
         y += AppScale(74)
 
         end_seconds = app.sun_salutation.end_seconds
+        end_text: [96]u8
+        FormatLocaleCount(*end_text[0], 96, "sun_salutation_seconds_per_breath", end_seconds)
         end_step := DiscreteSlider(CurrentApp().ui.session, DiscreteSliderProps.{.id = 612,
                 .bounds = Rectangle.{cast(float32)content_x, cast(float32)y, cast(float32)content_w, cast(float32)AppScale(56)},
                 .label = LocaleText("sun_salutation_end_speed_label"),
+                .value_text = AppTextFromCString(*end_text[0], 96),
                 .value = end_seconds, .min = SUN_SALUTATION_SECONDS_MIN,
                 .max = app.sun_salutation.start_seconds})
         if end_step.changed {
             app.sun_salutation.end_seconds = end_step.value
             app.sun_salutation = SalutationNormalizeSettings(app.sun_salutation)
+            save_settings(app)
+        }
+        y += AppScale(74)
+
+        timing_hint_h := AppParagraphHeight(LocaleText("sun_salutation_tempo_preview_hint"),
+            content_w, AppSmallFontSize(), AppScale(3))
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)content_x, cast(float32)y,
+                    cast(float32)content_w, cast(float32)timing_hint_h},
+                .text = LocaleText("sun_salutation_tempo_preview_hint"),
+                .font = AppSmallFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+        y += timing_hint_h + AppScale(24)
+
+        draw_character_picker(app, content_x, y, content_w)
+        y += AppScale(86)
+        draw_preview(app, content_x, y, content_w)
+        y += preview_height(content_w) + AppScale(24)
+
+        Text(app.ui.session, TextProps.{
+                .bounds = Rectangle.{cast(float32)content_x, cast(float32)y, 0, 0},
+                .text = LocaleText("settings_tab_audio"),
+                .wrap = cast(TextWrap)TextWrapNone})
+        y += AppScale(32)
+        volume_text: [24]u8
+        volume_args: [1]FormatArg = .[FormatArg.{.number = app.music_volume}]
+        unused FormatTemplate("%d%%", volume_args[:], volume_text[:])
+        volume := DiscreteSlider(app.ui.session, DiscreteSliderProps.{
+                .id = 614,
+                .bounds = Rectangle.{cast(float32)content_x, cast(float32)y,
+                    cast(float32)content_w, cast(float32)AppScale(56)},
+                .label = LocaleText("music_volume_label"),
+                .value_text = AppTextFromCString(*volume_text[0], 24),
+                .value = app.music_volume, .min = 0, .max = 100})
+        if volume.changed {
+            app.music_volume = volume.value
             save_settings(app)
         }
         y += AppScale(74)

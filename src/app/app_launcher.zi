@@ -59,6 +59,7 @@
 #import "widget_kind"
 GridIcon :: #import "mingcute/mingcute_regular_layout_grid";
 ListIcon :: #import "mingcute/mingcute_regular_list_check";
+EditIcon :: #import "mingcute/mingcute_regular_edit";
 
 c :: #system_library "c";
 GetTime :: () -> float64 #foreign c;
@@ -234,24 +235,47 @@ app_draw_launcher :: (app: *InnerBreeze, dock_drawn: bool) {
     x := cast(s32)panel.x + margin
     width := cast(s32)panel.width - margin * 2
     title_y := AppScale(24)
+    compact_header := width < AppScale(500)
+    edit_w := AppScale(ifx compact_header then 44 else 96)
+    profile_w := AppScale(ifx compact_header then 104 else 160)
+    profile_x := x + width - AppScale(52) - profile_w
+    edit_x := profile_x - AppScale(8) - edit_w
     Text(app.ui.session, TextProps.{.text = LocaleText("launcher_title"),
             .font = AppScale(28), .wrap = cast(TextWrap)TextWrapNone,
             .bounds = Rectangle.{cast(float32)x, cast(float32)title_y,
-                cast(float32)(width - AppScale(156)), cast(float32)AppScale(40)},
+                cast(float32)(edit_x - x - AppScale(8)), cast(float32)AppScale(40)},
             .class_name = KssClassId(KssMakeName("launcher-title"))})
     edit: ButtonProps
     edit.key = KeyHash("inbe/apps/edit")
     edit.label = LocaleText(ifx app.launcher_editing then "done_button" else "launcher_edit_apps")
+    edit.icon_shape = EditIcon.Shape
+    edit.icon_only = compact_header
     edit.fit_content = true
     edit.selected = app.launcher_editing
     edit.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    edit.bounds = Rectangle.{cast(float32)(x + width - AppScale(148)),
-        cast(float32)title_y, cast(float32)AppScale(96), cast(float32)AppScale(44)}
+    edit.bounds = Rectangle.{cast(float32)edit_x,
+        cast(float32)title_y, cast(float32)edit_w, cast(float32)AppScale(44)}
     if Button(app.ui.session, edit) != 0 {
         app.launcher_editing = !app.launcher_editing
         app.launcher_drag_key = 0
         app.launcher_drag_moving = false
         app_block_current_click(app)
+    }
+    identity: [128]u8
+    subtitle: [128]u8
+    app_nav_profile_identity(app, identity[:], identity.count, subtitle[:], subtitle.count)
+    account: ButtonProps
+    account.key = KeyHash("inbe/apps/profile")
+    account.id = 6792
+    account.label = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*identity[0], cast(s32)identity.count))
+    account.icon_shape = app_nav_route_own_shape(APP_NAV_ROUTE_PROFILE)
+    account.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    account.bounds = Rectangle.{cast(float32)profile_x, cast(float32)title_y,
+        cast(float32)profile_w, cast(float32)AppScale(44)}
+    if Button(app.ui.session, account) != 0 {
+        app_launcher_activate(app, APP_NAV_ROUTE_PROFILE)
+        unused End(app.ui.session)
+        return
     }
     settings: ButtonProps
     settings.key = KeyHash("inbe/apps/settings")
@@ -320,7 +344,7 @@ app_draw_launcher :: (app: *InnerBreeze, dock_drawn: bool) {
     }
     query := AppTextFromCString(*app.launcher_search[0], 128)
     routes := LauncherRoutes()
-    canonical: [LAUNCHER_APP_COUNT]string = .{"Diary", "Habits", "Lists", "Lumi", "Practice", "Leaderboard", "Profile",
+    canonical: [LAUNCHER_APP_COUNT]string = .{"Diary", "Habits", "Lists", "Lumi", "Practice", "Leaderboard",
         "", "", "", "", "", "", "", ""}
     matches: [LAUNCHER_APP_COUNT]s32
     match_count: s32 = 0
@@ -544,7 +568,7 @@ app_draw_launcher :: (app: *InnerBreeze, dock_drawn: bool) {
         steps: [3]GuideOverlayStep
         steps[0] = GuideOverlayStepFor(field.bounds, "launcher_guide_find")
         steps[1] = GuideOverlayStepFor(scroll.bounds, "launcher_guide_manage")
-        steps[2] = GuideOverlayStepFor(scroll.bounds, "launcher_guide_profile")
+        steps[2] = GuideOverlayStepFor(account.bounds, "launcher_guide_profile")
         guide: GuideOverlayProps
         guide.steps = *steps[0]
         guide.count = 3

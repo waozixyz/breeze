@@ -9,6 +9,8 @@ app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c;
 #import, file "../app/exercise_types.zi";
 #import, file "../storage/data.zi";
 #import, file "../storage/storage_sessions.zi";
+#import, file "../storage/storage_session_details.zi";
+#import, file "../app/session_details.zi";
 #import, file "habit_types.zi";
 #import, file "habit_memory.zi";
 #import, file "habit_model.zi";
@@ -35,8 +37,13 @@ habit_linked_session_callback :: (path: string, year: s32, month: s32,
     path_bytes: [512] u8
     AppCopyText(path, path_bytes[:])
     times: *s32 = *round_times[0]
-    unused HabitLinkedAppend(ctx, *path_bytes[0], year, month, day, hour, minute,
-        second, activity, times, round_count)
+    if HabitLinkedAppend(ctx, *path_bytes[0], year, month, day, hour, minute,
+        second, activity, times, round_count) {
+        details: SessionDetails
+        if storage_load_session_details(path, *details) != 0 {
+            HabitLinkedSetDetails(ctx, details)
+        }
+    }
 }
 
 // Every recorded session, loaded once per session change. Each habit and day
@@ -83,9 +90,11 @@ habit_collect_linked_entries :: (habit: *Habit, day_filter: s32,
     index: s32 = 0
     while index < records.count {
         entry := *records.entries[index]
-        unused HabitLinkedAppend(ctx, *entry.path[0], entry.year, entry.month,
+        if HabitLinkedAppend(ctx, *entry.path[0], entry.year, entry.month,
             entry.day, entry.hour, entry.minute, entry.second,
-            entry.activity, *entry.rounds[0], entry.round_count)
+            entry.activity, *entry.rounds[0], entry.round_count) {
+            HabitLinkedSetDetails(ctx, entry.details)
+        }
         index += 1
     }
 }

@@ -80,9 +80,10 @@ with contextlib.ExitStack() as stack:
     def open_profile():
         driver.press(label="Apps", role="button")
         driver.wait(label="Pinned")
-        driver.press(focus_id=6791, role="text_field")
-        driver.type("Profile")
-        driver.press(label="Profile", role="button")
+        account = driver.wait(focus_id=6792, role="button")
+        settings = driver.wait(label="Settings", role="button")
+        assert account["x"] + account["width"] <= settings["x"], "Profile is not left of Settings"
+        driver.press(focus_id=6792, role="button")
         driver.wait(label="Name", role="text_field")
         assert len(driver.find(role="title_bar", visible=True)) == 1
 
@@ -92,6 +93,10 @@ with contextlib.ExitStack() as stack:
         assert len(identities) == 1 and len(next(iter(identities))) == 64, "Fixture account missing"
         owner = next(iter(identities))
         open_profile()
+        driver.press(label="Dew balance", role="button")
+        driver.wait(label="Dew balance", role="title_bar")
+        driver.press(label="Back", role="button")
+        driver.wait(label="Name", role="text_field")
         driver.press(label="Name", role="text_field")
         driver.key("a", control=True)
         driver.type("Entity desktop fixture")

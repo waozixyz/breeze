@@ -1,6 +1,7 @@
 // Entity owns the common profile UI. Inner Breeze keeps its database, account
 // keys and specialized screens behind its native host services.
 Entity :: #import "entity/model";
+#import "entity/dew_model"
 Provider :: #import "entity/native_management";
 #import "kryon/app_context_host"
 Portable :: #import "kryon/app_protocol";
@@ -27,6 +28,8 @@ Shared :: #import "entity/native_files";
 #import, file "../storage/delegate_store.zi";
 #import, file "../storage/storage_settings.zi";
 #import, file "../storage/storage_profile_stats.zi";
+#import, file "../platform/dew_payment.zi";
+#import, file "../storage/dew.zi";
 #import, file "../habits/habit_model.zi";
 #import, file "../platform/raylib_text_input.zi";
 
@@ -36,6 +39,9 @@ entity_document: string;
 entity_inner_breeze: bool;
 entity_reload_after_route: bool;
 entity_account_route: bool;
+entity_dew_ready: bool;
+entity_dew_known: bool;
+entity_dew_balance: s64;
 
 InbeEntityRead :: (app: *InnerBreeze) -> string {
     Entity.EntityFree(entity_document)
@@ -68,6 +74,20 @@ InbeEntityRead :: (app: *InnerBreeze) -> string {
     }
     state.host_navigation = true
     Entity.EntityAddExtension(*state, "account", LocaleText("sync_account_title"))
+    if DewAvailable() {
+        Entity.EntityAddExtension(*state, "dew", LocaleText("profile_dew_title"))
+        entity_dew_ready = DewReady()
+        entity_dew_known = entity_dew_ready && dew_account.known
+        entity_dew_balance = dew_account.balance
+        summary: [256]u8
+        if entity_dew_known {
+            unused DewFormat(dew_account.balance, DewUnits, summary[:])
+            unused AppAppendText(" Dew", summary[:])
+        } else {
+            unused CopyCString(LocaleText(ifx DewReady() then "profile_dew_loading" else "profile_dew_connect"), summary[:])
+        }
+        unused Entity.EntityDescribeExtension(*state, "dew", TextUntilNul(summary[:]), "", "")
+    }
     Entity.EntityAddExtension(*state, "inbe", LocaleText("profile_progress_title"))
     Entity.EntityAddExtension(*state, "data", LocaleText("profile_data"))
     Entity.EntityAddExtension(*state, "friends", LocaleText("profile_friends_title"))
@@ -262,6 +282,15 @@ EntityHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
         entity_opened = true
     }
     InbeManagementPump(app)
+    if entity_document.count > 0 && DewAvailable() &&
+    (entity_dew_ready != DewReady() ||
+        entity_dew_known != (DewReady() && dew_account.known) ||
+        (entity_dew_known && entity_dew_balance != dew_account.balance)) {
+        // Save current edits before refreshing the balance shown by Entity.
+        if AppContextRun(*entity_context, Portable.APP_SAVE) {
+            entity_reload_after_route = true
+        }
+    }
     typed: [1024]u8
     if entity_reload_after_route {
         entity_context.command = "reload"
@@ -293,10 +322,17 @@ EntityHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
     else if route == "data" { app.profile_tab = PROFILE_TAB_DATA; app.profile_scroll = 0 }
     else if route == "friends" { app.profile_tab = PROFILE_TAB_FRIENDS; app.profile_scroll = 0 }
     else if route == "telegram" { app.profile_tab = PROFILE_TAB_TELEGRAM; app.profile_scroll = 0 }
+    else if route == "dew" && DewAvailable() { app.profile_view = PROFILE_VIEW_DEW; app.profile_scroll = 0 }
     return true
 }
 
 EntityHostBack :: (app: *InnerBreeze) -> bool {
+    if app.profile_view == PROFILE_VIEW_DEW {
+        app.profile_view = PROFILE_VIEW_MAIN
+        app.profile_tab = PROFILE_TAB_OVERVIEW
+        entity_reload_after_route = true
+        return true
+    }
     if entity_opened && !entity_inner_breeze && EntityHostRoute(app) {
         entity_context.command = "back"
         unused AppContextRun(*entity_context, Portable.APP_COMMAND)

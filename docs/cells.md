@@ -389,6 +389,12 @@ completed job is published only while its slot, account, package revision and
 temporary-session state still match; obsolete jobs finish without blocking
 navigation or starting more workers alongside them.
 
+Nested app images capture their verified asset view while the guest is drawing.
+Back can remove its tree node before painting finishes; the retired runtime
+keeps those bytes alive until the frame is collected. Image lookup never follows
+the removed node. Repeated images share a frame mapping keyed by package digest
+and packed path, so tiles reuse it and different releases retain separate bytes.
+
 Practice downloads, cold loads and cache reviews use the same owned content
 worker. Recently used verified packs stay in memory within a soft 64 MiB
 budget; the selected practice and its voices are never evicted for that limit.

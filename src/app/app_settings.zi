@@ -109,8 +109,12 @@ load_bottom_nav_routes :: (app: *InnerBreeze) {
             app.launcher_favorites[index] = SettingsCacheIntBytes(
                 key.bytes[0:key.count], APP_NAV_ROUTE_NONE)
         }
+        previous_favorite_count := app.launcher_favorite_count
         app.launcher_favorite_count = LauncherSanitizeFavorites(
             app.launcher_favorites[:], app.launcher_favorite_count)
+        if app.launcher_favorite_count != previous_favorite_count && !TelegramHostPresent() {
+            save_launcher_favorites(app)
+        }
     } else {
         // Preserve every personal shortcut without changing app choices.
         app.launcher_favorite_count = 0
@@ -333,7 +337,7 @@ save_settings :: (app: *InnerBreeze) {
         app.sun_salutation.start_seconds)
     save_setting_int("sun_salutation_end_seconds",
         app.sun_salutation.end_seconds)
-    save_setting_int("sun_salutation_breath_tempo", 1)
+    save_setting_int("sun_salutation_breath_tempo", SUN_SALUTATION_TEMPO_VERSION)
     save_setting_int("sun_salutation_voice", app.sun_salutation_voice)
     unused SettingsStoreText("sun_salutation_narration_language", app.sun_salutation_narration_language[:])
     unused SettingsStoreText("astral_projection_narration_language", app.astral_projection_narration_language[:])
@@ -715,16 +719,11 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
     load_clamped_setting(*app.sun_salutation.end_seconds,
         "sun_salutation_end_seconds", SUN_SALUTATION_DEFAULT_END_SECONDS,
         SUN_SALUTATION_SECONDS_MIN, SUN_SALUTATION_SECONDS_MAX)
-    // Each pose now follows one breath. Settings still on the old default
-    // tempo (8 s slowing to 5 s per pose, saved with every setting) move to
-    // the breath tempo once; a tempo chosen later stays.
+    // Upgrade unchanged default tempos once; retain other saved choices.
     breath_tempo: s32 = 0
-    load_clamped_setting(*breath_tempo, "sun_salutation_breath_tempo", 0, 0, 1)
-    if breath_tempo == 0 && app.sun_salutation.start_seconds == 8 &&
-    app.sun_salutation.end_seconds == 5 {
-        app.sun_salutation.start_seconds = SUN_SALUTATION_DEFAULT_START_SECONDS
-        app.sun_salutation.end_seconds = SUN_SALUTATION_DEFAULT_END_SECONDS
-    }
+    load_clamped_setting(*breath_tempo, "sun_salutation_breath_tempo", 0, 0,
+        SUN_SALUTATION_TEMPO_VERSION)
+    app.sun_salutation = SalutationMigrateTempo(app.sun_salutation, breath_tempo)
     load_clamped_setting(*app.sun_salutation_voice, "sun_salutation_voice", -1, -1, 1)
     unused SettingsCacheCopyText("sun_salutation_narration_language", app.sun_salutation_narration_language[:])
     unused SettingsCacheCopyText("astral_projection_narration_language", app.astral_projection_narration_language[:])

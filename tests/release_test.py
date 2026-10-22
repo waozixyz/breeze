@@ -1,10 +1,14 @@
 """make release keeps one unpushed release commit and checks what CI will build."""
 import importlib.util
+import contextlib
+import io
 import json
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("release", ROOT / "scripts/release.py")
@@ -162,6 +166,53 @@ class ReleaseTest(unittest.TestCase):
         git(package, "commit", "-q", "-am", "two")
         with self.assertRaisesRegex(release.Refused, "the lock pins"):
             release.require_locked_overrides()
+
+
+class MotoWorkflowGateTest(unittest.TestCase):
+    def check_run(self, jobs, *, head=None, path=".github/workflows/release.yml"):
+        workflow = (ROOT / ".github/workflows/android-moto.yml").read_text()
+        script = workflow.split("          python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+        script = "\n".join(line[10:] for line in script.splitlines())
+        commit = "1" * 40
+        run = {"head_sha": head or commit, "path": path}
+
+        def response(command, **kwargs):
+            self.assertEqual(command[:2], ["gh", "api"])
+            value = {"jobs": jobs} if command[2].endswith("/jobs?per_page=100") else run
+            return json.dumps(value)
+
+        environment = {"SOURCE_COMMIT": commit, "VERIFIED_RUN": "123",
+                       "GITHUB_REPOSITORY": "waozixyz/inbe"}
+        with mock.patch.dict(os.environ, environment), \
+                mock.patch("subprocess.check_output", side_effect=response), \
+                contextlib.redirect_stdout(io.StringIO()):
+            exec(compile(script, "android-moto gate", "exec"), {})
+
+    def passing_jobs(self):
+        return [{"name": name, "conclusion": "success"} for name in
+                ("Secret Scan", "Test (0/3)", "Test (1/3)", "Test (2/3)")]
+
+    def test_all_three_shards_allow_the_exact_release(self):
+        self.check_run(self.passing_jobs())
+
+    def test_missing_failed_cancelled_and_duplicate_checks_are_rejected(self):
+        for index in range(4):
+            with self.subTest(index=index, state="missing"), self.assertRaises(SystemExit):
+                self.check_run(self.passing_jobs()[:index] + self.passing_jobs()[index + 1:])
+            for state in ("failure", "cancelled", "skipped", None):
+                jobs = self.passing_jobs()
+                jobs[index]["conclusion"] = state
+                with self.subTest(index=index, state=state), self.assertRaises(SystemExit):
+                    self.check_run(jobs)
+            jobs = self.passing_jobs()
+            with self.subTest(index=index, state="duplicate"), self.assertRaises(SystemExit):
+                self.check_run(jobs + [jobs[index]])
+
+    def test_a_different_commit_or_workflow_is_rejected(self):
+        with self.assertRaises(SystemExit):
+            self.check_run(self.passing_jobs(), head="2" * 40)
+        with self.assertRaises(SystemExit):
+            self.check_run(self.passing_jobs(), path=".github/workflows/ci.yml")
 
 
 if __name__ == "__main__":

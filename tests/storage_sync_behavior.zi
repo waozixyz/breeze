@@ -23,6 +23,9 @@
 #import "crypto"
 #import "keys"
 #import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/storage/storage_session_details.zi";
+#import, file "../src/storage/sync_sql.zi";
+#import, file "../src/app/session_details.zi";
 #import, file "../src/habits/habit_types.zi";
 #import, file "../src/habits/habit_memory.zi";
 #import, file "../src/storage/storage_habits.zi";
@@ -2203,10 +2206,68 @@ test_node_media_sessions :: () {
     storage_close()
 }
 
+test_practice_session_details :: () {
+    first := make_root("practice-details-a")
+    second := make_root("practice-details-b")
+    repetitions: s32 = 3
+    id: [96]u8
+    details := SessionDetails.{.version = SessionDetailsVersion,
+        .duration_seconds = 226, .repetitions = 3, .start_seconds = 8,
+        .end_seconds = 6}
+    check_true("initialize practice details", storage_init(first) != 0)
+    set_account()
+    check_true("practice and metadata save together",
+        storage_save_session_with_details(*repetitions, 1, 0, 2, *details, *id[0], 96) != 0)
+    loaded: SessionDetails
+    check_true("practice metadata loads", storage_load_session_details(TextFromCString(*id[0]), *loaded) != 0)
+    check_int("actual practice duration retained", loaded.duration_seconds, 226)
+    check_int("practice repetitions retained", loaded.repetitions, 3)
+    check_int("practice first tempo retained", loaded.start_seconds, 8)
+    check_int("practice last tempo retained", loaded.end_seconds, 6)
+    before := read_db_count("SELECT COUNT(*) FROM sessions")
+    before_queue := read_db_count("SELECT COUNT(*) FROM sync_outbox")
+    unused exec_sql("CREATE TEMP TRIGGER reject_session_details BEFORE UPDATE OF details ON sessions BEGIN SELECT RAISE(ABORT,'fixture details write failure'); END")
+    repetitions = 4
+    failed_id: [96]u8
+    check_int("failed metadata rejects the whole session",
+        storage_save_session_with_details(*repetitions, 1, 0, 2, *details, *failed_id[0], 96), 0)
+    check_int("failed metadata leaves no partial session", read_db_count("SELECT COUNT(*) FROM sessions"), before)
+    check_int("failed metadata leaves no queued partial write", read_db_count("SELECT COUNT(*) FROM sync_outbox"), before_queue)
+    unused exec_sql("DROP TRIGGER reject_session_details")
+    storage_close()
+    check_true("initialize metadata receiver", storage_init(second) != 0)
+    set_account()
+    storage_close()
+    check_true("encrypted practice metadata syncs", ship_to(first, second, 1))
+    check_true("reopen metadata receiver", storage_init(second) != 0)
+    set_account()
+    check_true("received metadata loads", storage_load_session_details(TextFromCString(*id[0]), *loaded) != 0)
+    check_int("received duration is not repetition count", loaded.duration_seconds, 226)
+    check_int("received repetitions retained", loaded.repetitions, 3)
+    json: StorageJsonBuilder
+    json.ok = 1
+    storage_json_builder_append_text(*json, "{\"changes\":{\"sessions\":[{")
+    storage_json_builder_key_value_text(*json, "id", TextFromCString(*id[0]))
+    storage_json_builder_append_text(*json, ",\"updated_at\":\"2099-01-01T00:00:00Z\",\"mood_after\":4}]}}")
+    statement: *void
+    check_int("prepare an older client's session edit",
+        SqlitePrepareText(storage_db_handle(), SyncSessionsSQL, -1, *statement, null), SQLITE_OK)
+    bind_text(statement, 1, AppTextFromCString(json.data, cast(s32)json.len + 1))
+    bind_text(statement, 2, AppTextFromCString(storage_user_id_buffer(), 64))
+    check_int("apply an older client's session edit", SqliteStep(statement), SQLITE_DONE)
+    unused SqliteFinalize(statement)
+    storage_json_builder_free(*json)
+    check_true("older edit keeps practice metadata", storage_load_session_details(TextFromCString(*id[0]), *loaded) != 0)
+    check_int("older edit keeps repetitions", loaded.repetitions, 3)
+    check_int("older edit keeps duration", loaded.duration_seconds, 226)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
     if guard != 0 { return guard }
+    test_practice_session_details()
     test_node_cursors()
     test_record_page_storage()
     test_node_storage_and_media()
