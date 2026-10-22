@@ -48,10 +48,10 @@ app_name_arcade app_name_chess app_name_photos
 
 
 def tai_chi_course_keys():
-    """The Tai Chi course's words: locale keys named in course.bin's strings."""
-    data = (root / "assets/practices/taichi/course.bin").read_bytes()
+    """The Tai Chi course's words: locale keys named in course.tch's strings."""
+    data = (root / "assets/practices/taichi/course.tch").read_bytes()
     if data[:4] != b"TCH2":
-        failures.append("assets/practices/taichi/course.bin is not a course file")
+        failures.append("assets/practices/taichi/course.tch is not a course file")
         return []
     count = int.from_bytes(data[4:8], "little")
     at = 8

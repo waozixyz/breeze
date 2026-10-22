@@ -115,6 +115,19 @@ class PhoneCheckGateTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "no phone check"):
             gate.validate(self.root, "3.0.0")
 
+    def test_explicit_owner_waiver_is_bound_to_the_version_and_app(self):
+        waiver = {"schema": 3, "status": "waived", "version": "3.0.0",
+                  "app_tree": self.checked_app, "reason": "Owner explicitly waived the Moto check"}
+        target = "releases/phone-checks/3.0.0.json"
+        self.commit({target: json.dumps(waiver)})
+        self.assertEqual(gate.validate(self.root, "3.0.0")["status"], "waived")
+        for changes in ({"version": "3.0.1"}, {"app_tree": "0" * 64}, {"reason": " "},
+                        {"passed": True}, {"practice": {"fps": 60}}):
+            with self.subTest(changes=changes):
+                self.commit({target: json.dumps(waiver | changes)})
+                with self.assertRaises(ValueError):
+                    gate.validate(self.root, "3.0.0")
+
     def test_failed_or_mismatched_checks(self):
         cases = {
             "slow": lambda value: value["practice"].update(fps=41.0),

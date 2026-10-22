@@ -371,7 +371,7 @@ SYSTEM_THEME_CFLAGS :=
 SYSTEM_THEME_LDLIBS :=
 
 LOCALE_FILES := $(wildcard locales/*.txt)
-IMAGE_FILES := assets/app/icon.png assets/easteregg/art.png assets/easteregg/waozi.png assets/practices/whm/1.png assets/practices/whm/2.png assets/practices/meditation/1.png assets/pet/egg1.png $(wildcard assets/practices/*/banner*.png) $(wildcard assets/practices/sunsalutation/characters/*/*.png) $(wildcard assets/practices/taichi/*.png assets/practices/taichi/*/*.png) assets/practices/taichi/course.bin
+IMAGE_FILES := assets/app/icon.png assets/easteregg/art.png assets/easteregg/waozi.png assets/practices/whm/1.png assets/practices/whm/2.png assets/practices/meditation/1.png assets/pet/egg1.png $(wildcard assets/practices/*/banner*.png) $(wildcard assets/practices/sunsalutation/characters/*/*.png) $(wildcard assets/practices/taichi/*.png assets/practices/taichi/*/*.png) assets/practices/taichi/course.tch
 SOUND_FILES := $(wildcard assets/sounds/*.ogg)
 FONT_SUBSET_DIR := assets/fonts/subset
 FONT_SUBSET_CORPUS := locales assets/fonts/input_common.txt assets/fonts/ui_symbols.txt assets/practices/astral_projection/text assets/practices/workout/text

@@ -143,7 +143,7 @@ not fit (Sun Salutation's 991 frames per character are about 10 MB; the
 24-form would be about 100 MB per character), so the app samples and solves
 the key poses the way the studio does:
 
-- `node tools/export-app.mjs` writes `assets/practices/taichi/course.bin`
+- `node tools/export-app.mjs` writes `assets/practices/taichi/course.tch`
   (key poses, rigs, part anchors and the course outline; its layout is
   described at the top of the tool), the two painted characters at 0.65
   scale with 256-colour palettes, the floor shadow, the course words as
@@ -156,6 +156,6 @@ the key poses the way the studio does:
   vertices for both characters must match.
 
 After changing choreography, the solver or the painted layout, run the
-export again, commit the new `course.bin` and reference, and translate any
+export again, commit the new `course.tch` and reference, and translate any
 new words in `text/<lang>.txt` (the export prints how many there are); the
 course words live in Inbe's `locales/*.txt` as `tai_chi_text_*` entries.

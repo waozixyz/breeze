@@ -22,6 +22,7 @@ Nothing is pushed or tagged. Pushing master starts the Release workflow, so it
 waits for the owner's say-so.
 """
 import argparse
+from datetime import datetime, timezone
 import fnmatch
 import importlib.util
 import json
@@ -261,7 +262,11 @@ def main():
     parser.add_argument("--apk", type=Path, help="an APK built from the current sources")
     parser.add_argument("--host", default=os.environ.get("INBE_PHONE_HOST", "auto"))
     parser.add_argument("--serial", default=os.environ.get("INBE_PHONE_SERIAL", "ZE2223BQZT"))
+    parser.add_argument("--phone-check-waiver", metavar="OWNER_AUTHORIZATION",
+                        help="skip the Moto only when explicitly authorized by the owner for this release")
     args = parser.parse_args()
+    if args.phone_check_waiver is not None and not args.phone_check_waiver.strip():
+        parser.error("the phone-check waiver must quote the owner's explicit authorization")
     try:
         if git("symbolic-ref", "--short", "HEAD").strip() != "master":
             raise Refused("releases are made on master")
@@ -297,28 +302,41 @@ def main():
         if phone_check.app_tree(ROOT) != checked_app:
             raise Refused("app files changed on disk; commit them or wait for their owner")
 
-        phone = phone_check.Phone(phone_check.resolve_host(args.host, args.serial), args.serial)
-        if phone.adb("get-state").decode().strip() != "device":
-            raise Refused("the development Moto is not connected and authorized")
-        if args.apk:
-            apk = args.apk.resolve(strict=True)
+        if args.phone_check_waiver:
+            receipt = dict(schema=3, status="waived", version=version, app_tree=checked_app,
+                           source_commit=git("rev-parse", "HEAD").strip(),
+                           reason=args.phone_check_waiver.strip(),
+                           authorized_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+            target = ROOT / phone_check.RECEIPTS / f"{version}.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(json.dumps(receipt, indent=2) + "\n")
+            step("Moto check explicitly waived by owner for this release")
         else:
-            step("Building the debug APK for the Moto")
-            apk = build_apk(phone)
-        if phone_check.app_tree(ROOT) != checked_app:
-            raise Refused("app files changed during the build; run make release again")
+            phone = phone_check.Phone(phone_check.resolve_host(args.host, args.serial), args.serial)
+            if phone.adb("get-state").decode().strip() != "device":
+                raise Refused("the development Moto is not connected and authorized")
+            if args.apk:
+                apk = args.apk.resolve(strict=True)
+            else:
+                step("Building the debug APK for the Moto")
+                apk = build_apk(phone)
+            if phone_check.app_tree(ROOT) != checked_app:
+                raise Refused("app files changed during the build; run make release again")
 
-        step(f"Phone check of {apk.name} on the Moto")
-        subprocess.run([sys.executable, ROOT / "scripts/phone-check.py", apk, "--record",
-                        "--host", phone.host, "--serial", args.serial], check=True)
+            step(f"Phone check of {apk.name} on the Moto")
+            subprocess.run([sys.executable, ROOT / "scripts/phone-check.py", apk, "--record",
+                            "--host", phone.host, "--serial", args.serial], check=True)
         receipt = gate.validate(ROOT, version)
         if receipt["app_tree"] != checked_app:
             raise Refused("the recorded check is for other app content")
 
         step("Release commit")
-        practice = receipt["practice"]
-        details = (f"Phone check on the {receipt['device']['model']}: {practice['fps']} fps, "
-                   f"{practice['late_percent']}% late frames, app content {checked_app[:12]}.")
+        if receipt.get("status") == "waived":
+            details = f"Moto check waived by owner: {receipt['reason']} App content {checked_app[:12]}."
+        else:
+            practice = receipt["practice"]
+            details = (f"Phone check on the {receipt['device']['model']}: {practice['fps']} fps, "
+                       f"{practice['late_percent']}% late frames, app content {checked_app[:12]}.")
         commit_files([f"{phone_check.RECEIPTS}/{version}.json"], version,
                      amend=release_at_head(version), details=details)
         gate.validate(ROOT, version, "HEAD")

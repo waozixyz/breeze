@@ -31,6 +31,10 @@ A fresh clone failed with `fatal: unable to read tree`, before Gradle ran.
 The current lock pins the replacement history. Never rewrite public package
 history after an application has released a lock referring to it.
 
+The clean scan also caught Tai Chi's animation data named `course.bin` as a
+generic binary. Its `TCH2` data format now uses `course.tch`, including the
+exporter, package and reader. No executable scanner rule or path is ignored.
+
 The upstream F-Droid entry must use the full commit of a successfully
 published release and its corresponding `inbe-VERSION-fdroid.apk` binary.
 A passing GitHub check does not mean F-Droid has merged or distributed that

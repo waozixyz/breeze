@@ -9,7 +9,7 @@ from practice_content import course_narration_keys
 
 config = json.loads((ROOT / 'design/tai-chi/narration.json').read_text())
 actual = json.loads((ROOT / config['keys_file']).read_text())
-course = (ROOT / 'assets/practices/taichi/course.bin').read_bytes()
+course = (ROOT / 'assets/practices/taichi/course.tch').read_bytes()
 expected = course_narration_keys(course)
 assert len(expected) > 200
 assert actual == expected, 'Export Tai Chi after changing spoken cues'

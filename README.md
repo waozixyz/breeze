@@ -23,7 +23,7 @@ account to sync across devices.
 ## Make space for yourself
 
 - **Practice:** guided breathing, meditation, Astral Projection, Sun Salutation,
-  Tai Chi and a 7-Minute Workout, with animated guides and optional narration.
+  a 7-Minute Workout, with animated guides and optional narration.
 - **Habits:** track daily goals, practices and habits you want to avoid; follow
   your history and choose your own rewards.
 - **Diary and Photos:** write, reflect and keep pictures together, with shared
@@ -51,14 +51,16 @@ account to sync across devices.
 </p>
 <p align="center"><em>Habits · Diary · Lumi</em></p>
 
+Tai Chi is an optional Dew unlock outside Google Play.
+
 ## Your data and choices
 
 Your data is stored locally. Account sync is optional. Lumi starts offline;
 connecting an AI provider asks for your agreement to the data sharing shown
 in the app. Use Inner Breeze's service or configure your own provider.
 
-[Privacy policy](site/static/privacy.html)
-· [Account and sync](docs/ACCOUNT_ACTIVITY.md)
+[Privacy policy](https://inbe.waozi.xyz/privacy.html)
+· [Account recovery and sync](docs/SYNC_RECOVERY.md)
 · [Appearance](docs/appearance.md)
 
 ## Build and contribute

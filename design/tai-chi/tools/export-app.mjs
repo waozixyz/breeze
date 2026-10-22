@@ -5,12 +5,12 @@
 //   node tools/export-app.mjs
 //
 // Writes (paths from the Inbe repository root):
-//   assets/practices/taichi/course.bin        keys, course outline, rigs
+//   assets/practices/taichi/course.tch        keys, course outline, rigs
 //   assets/practices/taichi/flat-edge.png      soft edges of the figure's shapes
 //   design/tai-chi/text/en.txt                 course words as locale entries
 //   tests/fixtures/tai-chi-reference.json      sampled poses, joints, shapes
 //
-// course.bin is little-endian. Every string is a u16 byte length and UTF-8
+// course.tch is little-endian. Every string is a u16 byte length and UTF-8
 // bytes; a string index of -1 means none. Sections in order:
 //   "TCH2"
 //   strings: u32 count, strings (locale keys and asset paths)
@@ -302,7 +302,7 @@ function rigValue(rig, field) {
     return match ? rig.spine[Number(match[1])] : rig[field]
 }
 
-// --- Write course.bin --------------------------------------------------------
+// --- Write course.tch --------------------------------------------------------
 
 const characterRecords = characters.map((entry) => ({
     id: stringId(entry.id),
@@ -391,7 +391,7 @@ for (const module of outline) {
 }
 const binary = writer.finish()
 mkdirSync(ASSET_DIR, { recursive: true })
-writeFileSync(join(ASSET_DIR, 'course.bin'), binary)
+writeFileSync(join(ASSET_DIR, 'course.tch'), binary)
 
 // --- Words ---------------------------------------------------------------------
 
@@ -485,5 +485,5 @@ const roundDeep = (value) => (typeof value === 'number' ? Math.round(value * 1e6
 writeFileSync(REFERENCE_FILE, `${JSON.stringify(roundDeep(reference))}\n`)
 
 const keyCount = keySets.reduce((sum, set) => sum + set.length, 0)
-console.log(`course.bin: ${(binary.length / 1024).toFixed(0)} KB, ${keySets.length} key sets, ${keyCount} keys, ${strings.length} strings, ${words.size} words to translate`)
+console.log(`course.tch: ${(binary.length / 1024).toFixed(0)} KB, ${keySets.length} key sets, ${keyCount} keys, ${strings.length} strings, ${words.size} words to translate`)
 console.log(`items: ${itemIds.length}; reference samples: ${reference.samples.length}`)

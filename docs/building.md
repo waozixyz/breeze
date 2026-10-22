@@ -1,5 +1,10 @@
 # Building Inner Breeze
 
+The owner may explicitly waive the development Moto check for a particular
+release with `python3 scripts/release.py --phone-check-waiver "owner's authorization"`.
+This records a version- and content-bound waiver, without claiming a passing
+phone test. All other release gates still run.
+
 
 The build checks Inbe's laws with the Ziran compiler (`ziran check`); no
 separate proof tool is needed. The build host needs Python 3 and the platform's
@@ -37,9 +42,6 @@ make site
 ```
 
 Run the test suite:
-
-[Custom appearance](appearance.md) describes live KSS editing, per-app
-customizations, reset, and Lumi's appearance tools.
 
 ```bash
 make test
@@ -127,7 +129,7 @@ make sync-server-test DAOCHI_BIN=/absolute/path/to/daochi
 ```
 
 This uses disposable client databases and a loopback server; see
-[web and sync test coverage](WEB_RENDERER_TESTS.md) for details.
+[web and sync test coverage](../WEB_RENDERER_TESTS.md) for details.
 
 The Apps picker, independent ZIB packages, update settings, account choices and
 publisher setup are described in [app packages](cells.md).

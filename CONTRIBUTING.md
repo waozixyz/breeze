@@ -9,7 +9,7 @@ For a security issue, use [Security](SECURITY.md).
 ## Development
 
 Build with `make native cells`. Dependencies and the Ziran toolchain are pinned
-in `ziran.lock`; see [README](README.md#build) for other platforms. Read
+in `ziran.lock`; see [build guide](docs/building.md) for other platforms. Read
 [AGENTS.md](AGENTS.md) for repository conventions and
 [app packages](docs/cells.md) for module ownership.
 

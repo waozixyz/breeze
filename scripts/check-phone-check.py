@@ -40,6 +40,16 @@ def validate(root, version, revision="HEAD"):
         raise ValueError(f"{version} has no phone check; run make release with the development Moto "
                          "connected")
     receipt = json.loads(path.read_text())
+    if receipt.get("schema") == 3 and receipt.get("status") == "waived":
+        if receipt.get("version") != version:
+            raise ValueError("the owner waiver is for a different version")
+        if not isinstance(receipt.get("reason"), str) or not receipt["reason"].strip():
+            raise ValueError("the owner waiver must state the explicit authorization")
+        if receipt.get("app_tree") != phone_check.app_tree(root, revision):
+            raise ValueError("the app changed after its owner waiver")
+        if receipt.get("passed") is not None or receipt.get("practice") is not None:
+            raise ValueError("a waived check must not claim a passing phone test")
+        return receipt
     if receipt.get("schema") != 2:
         raise ValueError("the phone check was recorded without the app's content; run make release again")
     if receipt.get("version") != version:
@@ -73,6 +83,9 @@ def main():
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"Phone check required: {error}", file=sys.stderr)
         return 1
+    if receipt.get("status") == "waived":
+        print(f"{args.version}: Moto check waived by owner: {receipt['reason']}")
+        return 0
     timing = receipt["practice"]
     print(f"{args.version} passed its phone check on {receipt['device']['model']}: {timing['fps']} fps, "
           f"{timing['late_percent']}% late frames")

@@ -79,10 +79,10 @@ for file in sorted({p for pattern in patterns for p in ROOT.glob(pattern) if p.i
             path = path.removeprefix(prefix)
     target = OUTPUT / owner / path
     target.parent.mkdir(parents=True, exist_ok=True)
-    if path == 'assets/practices/taichi/course.bin':
+    if path == 'assets/practices/taichi/course.tch':
         # Keep the exported data exact; only its packaged representation is
         # compressed. Fixed metadata makes repeated builds byte-identical.
-        member = zipfile.ZipInfo('course.bin', (1980, 1, 1, 0, 0, 0))
+        member = zipfile.ZipInfo('course.tch', (1980, 1, 1, 0, 0, 0))
         member.create_system = 3
         member.compress_type = zipfile.ZIP_DEFLATED
         member.external_attr = 0o644 << 16

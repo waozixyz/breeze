@@ -195,7 +195,7 @@ def prepare(compiler):
         raise ValueError('unsupported practice content configuration')
     speech = json.loads((ROOT / configuration['narration']['taichi']['config']).read_text())
     declared = json.loads((ROOT / speech['keys_file']).read_text())
-    if course_narration_keys((ROOT / 'assets/practices/taichi/course.bin').read_bytes()) != declared:
+    if course_narration_keys((ROOT / 'assets/practices/taichi/course.tch').read_bytes()) != declared:
         raise ValueError('export Tai Chi again to update its narration inventory')
     astral = json.loads((ROOT / 'assets/practices/astral_projection/session.json').read_text())
     astral_speech = json.loads((ROOT / configuration['narration']['astral_projection']['config']).read_text())
