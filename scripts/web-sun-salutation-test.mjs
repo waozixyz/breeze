@@ -211,8 +211,24 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
     const probe = window.__inbeAnimationProbe = {
       active: false, last: 0, gaps: [], decodes: [], readbacks: 0, uploads: 0,
       meshSources: new WeakMap(), meshTransfers: 0, meshPixels: 0, meshStacks: [],
+      meshResizes: 0, meshFullCopies: 0, meshRetainedCrops: 0, meshInvalidCrops: 0,
       meshDraws: 0, meshVertices: 0, meshIndices: 0, meshBuffers: 0, meshBytes: 0, meshUploads: 0
     };
+    // Resizing a WebGL canvas reallocates its backing surface. Count writes,
+    // even unchanged dimensions, to catch per-frame allocation regressions.
+    for (const prototype of [HTMLCanvasElement.prototype,
+      ...(typeof OffscreenCanvas === 'undefined' ? [] : [OffscreenCanvas.prototype])]) {
+      for (const dimension of ['width', 'height']) {
+        const descriptor = Object.getOwnPropertyDescriptor(prototype, dimension);
+        Object.defineProperty(prototype, dimension, {
+          ...descriptor,
+          set(value) {
+            if (probe.active && probe.meshSources.get(this)) probe.meshResizes++;
+            descriptor.set.call(this, value);
+          }
+        });
+      }
+    }
     for (const method of ['drawArrays', 'drawElements', 'bufferData', 'texImage2D']) {
       const original = WebGLRenderingContext.prototype[method];
       WebGLRenderingContext.prototype[method] = function(...args) {
@@ -253,6 +269,17 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
                 probe.meshTransfers++;
                 probe.meshPixels += args.length === 9
                   ? args[3] * args[4] : source.width * source.height;
+                if (args.length !== 9) {
+                  probe.meshFullCopies++;
+                } else {
+                  const [, x, y, width, height] = args;
+                  if (![x, y, width, height].every(Number.isFinite) ||
+                      x < 0 || y < 0 || width <= 0 || height <= 0 ||
+                      x + width > source.width || y + height > source.height) {
+                    probe.meshInvalidCrops++;
+                  }
+                  if (width < source.width || height < source.height) probe.meshRetainedCrops++;
+                }
                 if (${process.env.WEB_SMOKE_MESH_TRACE === '1'} && probe.meshStacks.length < 2) {
                   Error.stackTraceLimit = 40;
                   probe.meshStacks.push(new Error('mesh transfer').stack);
@@ -423,6 +450,8 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
       decodeMeanMs: probe.decodes.reduce((sum, value) => sum + value, 0) / probe.decodes.length,
       readbacks: probe.readbacks, uploads: probe.uploads,
       meshTransfers: probe.meshTransfers, meshPixels: probe.meshPixels,
+      meshResizes: probe.meshResizes, meshFullCopies: probe.meshFullCopies,
+      meshRetainedCrops: probe.meshRetainedCrops, meshInvalidCrops: probe.meshInvalidCrops,
       meshDraws: probe.meshDraws, meshVertices: probe.meshVertices, meshIndices: probe.meshIndices,
       meshBuffers: probe.meshBuffers, meshBytes: probe.meshBytes, meshUploads: probe.meshUploads,
       meshStacks: probe.meshStacks
@@ -432,8 +461,15 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
   // A practice that fell back to the idle rate draws at 30 fps. CI runners
   // render this canvas at only about 46 fps, so a 45 fps floor failed on a
   // slow runner's few late frames; 40 fps (25 ms) still catches the idle rate.
-  if (performance.fps < 40 || performance.medianMs > 25)
+  if (performance.frames < 60 || !Number.isFinite(performance.fps) ||
+      performance.fps < 40 || performance.medianMs > 25)
     throw new Error(`Sun Salutation rendering missed its active frame rate: ${JSON.stringify(performance)}`);
+  // Allow occasional growth and viewport changes, but never resize with each
+  // animation frame or copy the unused part of a retained backing surface.
+  if (performance.meshResizes > Math.max(12, performance.meshTransfers / 10) ||
+      performance.meshFullCopies !== 0 || performance.meshInvalidCrops !== 0 ||
+      (performance.meshTransfers > 0 && performance.meshRetainedCrops === 0))
+    throw new Error(`Sun Salutation mesh surfaces were not reused with bounded crops: ${JSON.stringify(performance)}`);
   if (performance.readbacks !== 0 || performance.uploads !== 0)
     throw new Error(`Sun Salutation playback copied textures through CPU pixel buffers: ${JSON.stringify(performance)}`);
   if (output) writeFileSync(join(output, `${browser}-animation-performance.json`), JSON.stringify(performance, null, 2));
