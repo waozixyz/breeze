@@ -256,13 +256,11 @@ PackagePayloadPath :: (index: s32, hash: string) -> string {
     return PackagePath(index, full_suffix)
 }
 
-PackageInstalledBytes :: (index: s32) -> string {
-    if index < 0 || index >= PackageSlots {
-        return ""
-    }
-    package_versions[index][0] = cast(u8)0
-    if DataTemporary() {
-        return ""
+// A small signed descriptor can be captured on the frame thread before a
+// worker reads its immutable payload. This never marks unchecked bytes usable.
+PackageInstalledRelease :: (index: s32) -> PackageRelease {
+    if index < 0 || index >= PackageSlots || DataTemporary() {
+        return PackageRelease.{}
     }
     pointer := PackagePath(index, ".current.json")
     defer {
@@ -274,15 +272,27 @@ PackageInstalledBytes :: (index: s32) -> string {
     }
     release := PackageTrustedRelease(metadata, index)
     if !release.valid {
-        return ""
+        return PackageRelease.{}
     }
     high_water := PackageSequence(index)
     approved := PackageRollbackAllows(index, release)
     if release.sequence < high_water && !approved {
-        return ""
+        return PackageRelease.{}
     }
     if PackageBundledSequence(index) > 0 &&
     PackageVersionCompare(TextFromCString(*release.version[0]), PackageFallbackVersion(index)) < 0 && !approved {
+        return PackageRelease.{}
+    }
+    return release
+}
+
+PackageInstalledBytes :: (index: s32) -> string {
+    if index < 0 || index >= PackageSlots {
+        return ""
+    }
+    package_versions[index][0] = cast(u8)0
+    release := PackageInstalledRelease(index)
+    if !release.valid {
         return ""
     }
     path := PackagePayloadPath(index, TextFromCString(*release.hash[0]))

@@ -1,0 +1,148 @@
+// An icon cache miss must never open a whole app while its navigation draws.
+// One worker owns the file paths, signed descriptor, payload and copied shape.
+#import "bundle_host"
+#import "byte_text_linux"
+#import "text"
+#import "vec"
+#import, file "package_files.zi";
+#import, file "package_release.zi";
+#import, file "catalog.zi";
+
+NODE_APP_ICON_MAX :: 4096
+NODE_APP_ICON_VERSION_MAX :: 64
+NODE_ICON_THREADS :: !#defined(PLATFORM_WEB) && !#defined(_WIN32)
+#if NODE_ICON_THREADS {
+    #import "std/thread_linux"
+}
+
+NodeIconWork :: struct {
+    path: string
+    cache: string
+    resource: string
+    release: PackageRelease
+    local: bool
+    shape: [NODE_APP_ICON_MAX]u8
+    size: s32
+    ready: bool
+    slot: s32
+    generation: s32
+    #if NODE_ICON_THREADS {
+        thread: Thread
+    }
+}
+
+node_icon_c :: #system_library "c";
+NodeIconAllocate :: (size: usize) -> *void #foreign node_icon_c "malloc";
+NodeIconRelease :: (memory: *void) #foreign node_icon_c "free";
+
+NodeAppIconValid :: (shape: string) -> bool {
+    return shape.count > 6 && shape.count < NODE_APP_ICON_MAX && shape[:1] == "S"
+}
+
+NodeIconWorkKeep :: (work: *NodeIconWork, shape: string) -> bool {
+    if !NodeAppIconValid(shape) {
+        return false
+    }
+    for byte, at: shape {
+        work.shape[at] = byte
+    }
+    work.size = cast(s32)shape.count
+    return true
+}
+
+NodeIconWorkRun :: (argument: *void) {
+    work := cast(*NodeIconWork)argument
+    if !work.local && !work.release.valid {
+        return
+    }
+    key := TextFromBytes(work.release.hash[:64])
+    if !work.local && work.cache.count > 0 {
+        saved := PackageRead(work.cache, NODE_APP_ICON_MAX + 65)
+        defer {
+            PackageFree(saved)
+        }
+        if saved.count > 65 && saved[:64] == key && saved[64] == cast(u8)10 &&
+        NodeIconWorkKeep(work, saved[65:]) {
+            return
+        }
+    }
+    bytes := PackageRead(work.path, PackageMaximumBytes)
+    defer {
+        PackageFree(bytes)
+    }
+    if bytes.count == 0 || (!work.local && !PackageVerifyBytes(bytes, work.release)) {
+        return
+    }
+    descriptor := cast(*TextDescriptor)(*bytes)
+    bundle := OpenBundleBytes(descriptor.data, cast(u64)bytes.count)
+    if bundle == null {
+        return
+    }
+    defer {
+        CloseBundle(bundle)
+    }
+    // Use the raw bundle API: HostedAppAsset's shared index belongs to the
+    // frame thread. No instance, host callback or shared codec runs here.
+    asset: u64 = 0
+    while asset < BundleAssets(bundle) {
+        if TextFromCString(BundleAssetPath(bundle, asset)) != work.resource {
+            asset += 1
+            continue
+        }
+        size := BundleAssetLength(bundle, asset)
+        if size >= cast(u64)NODE_APP_ICON_MAX {
+            return
+        }
+        shape := TextFromBytes(BytesFromPointer(BundleAssetBytes(bundle, asset), size))
+        if !NodeIconWorkKeep(work, shape) || work.local || work.cache.count == 0 {
+            return
+        }
+        out: Vec(u8)
+        BuilderPrint(*out, "%\n%", key, shape)
+        saved := BuilderFinish(out)
+        unused PackageWrite(work.cache, saved)
+        PackageFree(saved)
+        return
+    }
+}
+
+NodeIconWorkReady :: (work: *NodeIconWork) -> bool {
+    #if NODE_ICON_THREADS {
+        if !work.ready {
+            work.ready = !ThreadRunning(*work.thread) || ThreadFinished(*work.thread)
+        }
+    }
+    return work.ready
+}
+
+NodeIconWorkFree :: (work: *NodeIconWork) {
+    PackageFree(work.path)
+    PackageFree(work.cache)
+    PackageFree(work.resource)
+    NodeIconRelease(cast(*void)work)
+}
+
+NodeIconWorkCreate :: (path: string, cache: string, resource: string,
+    release: PackageRelease, local: bool) -> *NodeIconWork {
+    work := cast(*NodeIconWork)NodeIconAllocate(size_of(NodeIconWork))
+    if work == null {
+        return null
+    }
+    work.* = NodeIconWork.{}
+    work.path = PackageText(path, "")
+    work.cache = PackageText(cache, "")
+    work.resource = PackageText(resource, "")
+    work.release = release
+    work.local = local
+    #if NODE_ICON_THREADS {
+        procedure: ThreadProcedure = NodeIconWorkRun
+        if !ThreadStart(*work.thread, procedure, cast(*void)work) {
+            NodeIconWorkFree(work)
+            return null
+        }
+    } else {
+        NodeIconWorkRun(cast(*void)work)
+        work.ready = true
+    }
+    return work
+}

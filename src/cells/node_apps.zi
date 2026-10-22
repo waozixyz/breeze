@@ -38,6 +38,7 @@ Time :: #import "date_time_linux";
 #import, file "node_app_tree.zi";
 #import, file "node_app_snapshot.zi";
 #import, file "node_app_replacements.zi";
+#import, file "node_icon_work.zi";
 #import, file "achievement_media.zi";
 Nested :: #import "apps/host";
 #import, file "package_manager.zi";
@@ -78,8 +79,6 @@ NODE_APP_CATALOG_RETRY_SECONDS :: 30
 NODE_APP_REGISTRY_BYTES :: 524288
 NODE_APP_SHARED_LIMIT :: 64
 NODE_APP_GENERIC_ICON :: "S1.6rr:M5 5H10V10H5ZM14 5H19V10H14ZM5 14H10V19H5ZM14 14H19V19H14Z"
-NODE_APP_ICON_MAX :: 4096
-NODE_APP_ICON_VERSION_MAX :: 64
 
 NodeAppOffer :: struct {
     name: [NODE_APP_NAME_MAX + 1]u8
@@ -156,11 +155,23 @@ node_shared_json: string;
 // to network installs only, as for a local --bundle.
 node_local_path: [4096]u8;
 node_local_name: [NODE_APP_NAME_MAX + 1]u8;
-// Each installed app's outline icon and the package version it was read
-// from, so Apps and the navigation show it before the app has run.
-node_icons: [NodeAppSlots][NODE_APP_ICON_MAX]u8;
-node_icon_sizes: [NodeAppSlots]s32;
-node_icon_versions: [NodeAppSlots][NODE_APP_ICON_VERSION_MAX]u8;
+NodeAppIconState :: struct {
+    name: [NODE_APP_NAME_MAX + 1]u8
+    account: [65]u8
+    version: [NODE_APP_ICON_VERSION_MAX]u8
+    revision: s32
+    generation: s32
+    requested: bool
+    attempted: bool
+    temporary: bool
+    shape: [NODE_APP_ICON_MAX]u8
+    size: s32
+}
+
+node_app_icons: [NodeAppSlots]NodeAppIconState;
+// A canceled job still owns its inputs until it finishes. Keeping it here
+// also bounds icon work to one worker, including work that became obsolete.
+node_icon_work: *NodeIconWork;
 
 // Names and slots.
 
@@ -229,6 +240,7 @@ NodeAppAssign :: (slot: s32, name: string) {
     unused AppCopyText(name, bytes[:])
     unused SettingsStoreText(key, bytes[:])
     PackageSetNodeApp(slot, name)
+    NodeAppForgetIcon(slot)
     // Another app in this slot has none of the previous one's leaves.
     node_installed_releases[slot][0] = 0
 }
@@ -290,10 +302,6 @@ NodeAppTitle :: (name: string) -> string {
     return name
 }
 
-NodeAppIconValid :: (shape: string) -> bool {
-    return shape.count > 6 && shape.count < NODE_APP_ICON_MAX && shape[:1] == "S"
-}
-
 // Small catalog icons remain available before the app is downloaded.
 NodeAppCatalogIcon :: (name: string) -> string {
     if !NodeAppNameValid(name) { return NODE_APP_GENERIC_ICON }
@@ -310,6 +318,9 @@ NodeAppCatalogIcon :: (name: string) -> string {
 
 // Prefer an installed app's own outline, then its catalog icon.
 NodeAppIconShape :: (slot: s32) -> string {
+    if slot < 0 || slot >= NodeAppSlots {
+        return NODE_APP_GENERIC_ICON
+    }
     if NodeAppRunning(slot) {
         path := NodeAppAssetPath(NodeAppName(slot), "sidebar.shape")
         defer {
@@ -320,92 +331,113 @@ NodeAppIconShape :: (slot: s32) -> string {
             return asset.data
         }
     }
-    if slot < 0 || slot >= NodeAppSlots {
-        return NODE_APP_GENERIC_ICON
-    }
     fallback := NodeAppCatalogIcon(NodeAppName(slot))
     if !NodeAppInstalled(slot) { return fallback }
     version := ifx NodeAppLocal(NodeAppName(slot)) then "local" else PackageVersion(NodeAppIndex(slot))
     if version.count == 0 || version.count >= NODE_APP_ICON_VERSION_MAX {
         return fallback
     }
-    if TextUntilNul(node_icon_versions[slot][:]) != version {
-        NodeAppLoadIcon(slot, version)
-    }
-    if node_icon_sizes[slot] == 0 {
+    NodeAppRequestIcon(slot, version)
+    state := *node_app_icons[slot]
+    if state.size == 0 {
         return fallback
     }
-    return TextFromBytes(node_icons[slot][:node_icon_sizes[slot]])
+    return TextFromBytes(state.shape[:state.size])
 }
 
-// Reads the installed package's icon once per version. The first read opens
-// the verified package; the icon is then kept beside it, as
-// "<version>\n<shape>", so later launches read only that small file. A
-// local package is read once per run.
-NodeAppLoadIcon :: (slot: s32, version: string) {
-    unused AppCopyText(version, node_icon_versions[slot][:])
-    node_icon_sizes[slot] = 0
-    if NodeAppLocal(NodeAppName(slot)) {
-        local := PackageRead(TextUntilNul(node_local_path[:]), PackageMaximumBytes)
-        unused NodeAppReadIcon(slot, local)
-        PackageFree(local)
+NodeAppForgetIcon :: (slot: s32) {
+    generation := node_app_icons[slot].generation + 1
+    node_app_icons[slot] = NodeAppIconState.{.generation = generation}
+}
+
+// Drawing only requests work and returns the icon already in memory. Slot,
+// account and release changes invalidate both copied icons and pending jobs.
+NodeAppRequestIcon :: (slot: s32, version: string) {
+    state := *node_app_icons[slot]
+    name := NodeAppName(slot)
+    account := PackageAccount()
+    revision := PackageRevisionFor(NodeAppIndex(slot))
+    if state.requested && TextUntilNul(state.name[:]) == name &&
+    TextUntilNul(state.account[:]) == account && TextUntilNul(state.version[:]) == version &&
+    state.revision == revision && state.temporary == DataTemporary() {
         return
     }
+    NodeAppForgetIcon(slot)
+    unused AppCopyText(name, state.name[:])
+    unused AppCopyText(account, state.account[:])
+    unused AppCopyText(version, state.version[:])
+    state.revision = revision
+    state.temporary = DataTemporary()
+    state.requested = true
+}
+
+NodeAppIconCurrent :: (slot: s32) -> bool {
+    state := *node_app_icons[slot]
+    return state.requested && TextUntilNul(state.name[:]) == NodeAppName(slot) &&
+    TextUntilNul(state.account[:]) == PackageAccount() &&
+    TextUntilNul(state.version[:]) ==
+    (ifx NodeAppLocal(NodeAppName(slot)) then "local" else PackageVersion(NodeAppIndex(slot))) &&
+    state.revision == PackageRevisionFor(NodeAppIndex(slot)) &&
+    state.temporary == DataTemporary() && NodeAppInstalled(slot)
+}
+
+NodeAppsIconsPump :: () {
+    if node_icon_work != null {
+        if !NodeIconWorkReady(node_icon_work) {
+            return
+        }
+        state := *node_app_icons[node_icon_work.slot]
+        if state.generation == node_icon_work.generation && NodeAppIconCurrent(node_icon_work.slot) {
+            for at: cast(s32)0..node_icon_work.size - 1 {
+                state.shape[at] = node_icon_work.shape[at]
+            }
+            state.size = node_icon_work.size
+        }
+        NodeIconWorkFree(node_icon_work)
+        node_icon_work = null
+    }
+    for slot: cast(s32)0..NodeAppSlots - 1 {
+        state := *node_app_icons[slot]
+        if !state.requested || state.attempted || !NodeAppIconCurrent(slot) {
+            continue
+        }
+        state.attempted = true
+        NodeAppStartIcon(slot)
+        break
+    }
+}
+
+NodeAppStartIcon :: (slot: s32) {
     index := NodeAppIndex(slot)
-    cache := PackagePath(index, ".icon")
+    local := NodeAppLocal(NodeAppName(slot))
+    release: PackageRelease
+    if !local {
+        release = PackageInstalledRelease(index)
+        if !release.valid || TextUntilNul(release.version[:]) != TextUntilNul(node_app_icons[slot].version[:]) {
+            return
+        }
+    }
+    path: string
+    if local {
+        path = PackageText(TextUntilNul(node_local_path[:]), "")
+    } else {
+        path = PackagePayloadPath(index, TextUntilNul(release.hash[:]))
+    }
+    cache := ifx local then "" else PackagePath(index, ".icon")
+    resource := NodeAppAssetPath(NodeAppName(slot), "sidebar.shape")
     defer {
+        PackageFree(path)
         PackageFree(cache)
+        PackageFree(resource)
     }
-    if cache.count == 0 {
+    if path.count == 0 || (!local && cache.count == 0) {
         return
     }
-    saved := PackageRead(cache, NODE_APP_ICON_MAX + NODE_APP_ICON_VERSION_MAX)
-    defer {
-        PackageFree(saved)
+    node_icon_work = NodeIconWorkCreate(path, cache, resource, release, local)
+    if node_icon_work != null {
+        node_icon_work.slot = slot
+        node_icon_work.generation = node_app_icons[slot].generation
     }
-    if saved.count > version.count + 1 && saved[:version.count] == version &&
-    saved[version.count] == cast(u8)10 && NodeAppIconValid(saved[version.count + 1:]) {
-        NodeAppKeepIcon(slot, saved[version.count + 1:])
-        return
-    }
-    bytes := PackageInstalledBytes(index)
-    defer {
-        PackageFree(bytes)
-    }
-    if NodeAppReadIcon(slot, bytes) {
-        out: Vec(u8)
-        BuilderPrint(*out, "%\n%", version, TextFromBytes(node_icons[slot][:node_icon_sizes[slot]]))
-        value := BuilderFinish(out)
-        unused PackageWrite(cache, value)
-        PackageFree(value)
-    }
-}
-
-// Keeps the icon a package carries; false when it has none.
-NodeAppReadIcon :: (slot: s32, bytes: string) -> bool {
-    if bytes.count == 0 {
-        return false
-    }
-    opened: HostedApp
-    if !HostedAppOpen(*opened, bytes) {
-        return false
-    }
-    path := NodeAppAssetPath(NodeAppName(slot), "sidebar.shape")
-    asset := HostedAppAsset(*opened, path)
-    PackageFree(path)
-    found := asset.found && NodeAppIconValid(asset.data)
-    if found {
-        NodeAppKeepIcon(slot, asset.data)
-    }
-    HostedAppClose(*opened)
-    return found
-}
-
-NodeAppKeepIcon :: (slot: s32, shape: string) {
-    for byte, at: shape {
-        node_icons[slot][at] = byte
-    }
-    node_icon_sizes[slot] = cast(s32)shape.count
 }
 
 // The apps the node offers that this build can run, as last read.
@@ -1782,6 +1814,7 @@ NodeAppsCatalogPump :: (now: s32, wanted: bool) {
 NodeAppsPump :: (now: s32, catalog_wanted: bool, defer_open: bool = false) {
     NodeAppsInitialize()
     NodeAppsCatalogPump(now, catalog_wanted)
+    NodeAppsIconsPump()
     if PackageRevision() != node_package_revision {
         node_package_revision = PackageRevision()
         node_open_next = ifx node_first_pump_done then 0 else -1

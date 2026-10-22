@@ -1,0 +1,207 @@
+// A parser blocked on another thread cannot block drawing or publish into
+// a different account, slot, release or temporary session.
+#import "crypto"
+#import "std/byte_text_linux"
+#import "std/c_string"
+#import "std/file_linux"
+#import, file "../src/cells/node_apps.zi";
+#import, file "../src/cells/node_icon_work.zi";
+#import, file "../src/cells/package_manager.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../src/cells/package_release.zi";
+#import, file "../src/cells/catalog.zi";
+#import, file "../src/storage/temporary_data.zi";
+
+icons_c :: #system_library "c";
+IconsBlockParser :: (blocked: bool) #foreign icons_c;
+IconsParserStarted :: () -> bool #foreign icons_c;
+IconsBundleOpens :: () -> s32 #foreign icons_c;
+IconsYield :: () #foreign icons_c;
+IconsNow :: () -> float64 #foreign icons_c;
+IconsOtherAccount :: (enabled: bool) #foreign icons_c;
+IconsEnvironment :: (name: *u8) -> *u8 #foreign icons_c "getenv";
+
+ICONS_SHAPE :: "S1.6rr:M5 5H10V10H5Z"
+
+IconsEnvironmentPath :: (key: string) -> string {
+    name: [64]u8
+    unused CopyCString(key, name[:])
+    return TextFromCString(IconsEnvironment(*name[0]))
+}
+
+IconsRelease :: (path: string) -> PackageRelease {
+    bytes := PackageRead(path, PackageMaximumBytes)
+    defer {
+        PackageFree(bytes)
+    }
+    release: PackageRelease
+    release.valid = true
+    release.size = bytes.count
+    unused CopyCString("1.0.0", release.version[:])
+    descriptor := cast(*TextDescriptor)(*bytes)
+    Sha256Hex(descriptor.data, bytes.count, *release.hash[0])
+    return release
+}
+
+IconsRequest :: (slot: s32) {
+    NodeAppForgetIcon(slot)
+    PackageSetNodeApp(slot, "fixture")
+    unused CopyCString("1.0.0", package_versions[NodeAppIndex(slot)][:])
+    unused NodeAppIconShape(slot)
+    // Tests supply a trusted release directly, keeping signing tests in the
+    // package lifecycle fixture and exercising the real worker and publisher.
+    node_app_icons[slot].attempted = true
+}
+
+IconsStart :: (slot: s32, path: string, cache: string, release: PackageRelease,
+    local: bool = false) -> bool {
+    node_icon_work = NodeIconWorkCreate(path, cache, "assets/fixture/sidebar.shape", release, local)
+    if node_icon_work == null {
+        return false
+    }
+    node_icon_work.slot = slot
+    node_icon_work.generation = node_app_icons[slot].generation
+    return true
+}
+
+IconsWait :: () -> bool {
+    end := IconsNow() + 10.0
+    while node_icon_work != null && IconsNow() < end {
+        NodeAppsIconsPump()
+        IconsYield()
+    }
+    return node_icon_work == null
+}
+
+IconsWaitParser :: () -> bool {
+    end := IconsNow() + 10.0
+    while !IconsParserStarted() && IconsNow() < end {
+        IconsYield()
+    }
+    return IconsParserStarted()
+}
+
+IconsStaleCheck :: (slot: s32, path: string, release: PackageRelease) -> s32 {
+    for change: cast(s32)0..4 {
+        IconsRequest(slot)
+        IconsBlockParser(true)
+        if !IconsStart(slot, path, "", release, true) || !IconsWaitParser() {
+            IconsBlockParser(false)
+            return 40
+        }
+        if change == 0 {
+            PackageSetNodeApp(slot, "replacement")
+        } else if change == 1 {
+            IconsOtherAccount(true)
+        } else if change == 2 {
+            package_slot_revisions[NodeAppIndex(slot)] += 1
+        } else if change == 3 {
+            DataSetTemporary(true)
+        } else {
+            NodeAppForgetIcon(slot)
+        }
+        start := IconsNow()
+        for frame: cast(s32)0..99 {
+            NodeAppsIconsPump()
+        }
+        if IconsNow() - start > 0.05 || node_icon_work == null {
+            IconsBlockParser(false)
+            return 41
+        }
+        IconsBlockParser(false)
+        if !IconsWait() || node_app_icons[slot].size != 0 {
+            return 42 + change
+        }
+        IconsOtherAccount(false)
+        DataSetTemporary(false)
+    }
+    return 0
+}
+
+NodeAppIconsCheck :: () -> s32 {
+    slot := cast(s32)(NodeAppSlots - 1)
+    path := IconsEnvironmentPath("ICON_VALID_BUNDLE")
+    release := IconsRelease(path)
+    cache := IconsEnvironmentPath("ICON_CACHE_PATH")
+    unused RemoveFile(cache)
+    before := IconsBundleOpens()
+    IconsRequest(slot)
+    if NodeAppIconShape(slot) != NODE_APP_GENERIC_ICON || IconsBundleOpens() != before ||
+    NodeAppIconShape(-1) != NODE_APP_GENERIC_ICON || NodeAppIconShape(NodeAppSlots) != NODE_APP_GENERIC_ICON {
+        return 30
+    }
+    // The job copies its input paths before starting. The caller can free
+    // its path immediately, even while the parser is deliberately blocked.
+    owned := PackageText(path, "")
+    IconsBlockParser(true)
+    started := IconsStart(slot, owned, cache, release)
+    PackageFree(owned)
+    if !started || !IconsWaitParser() {
+        IconsBlockParser(false)
+        return 31
+    }
+    start := IconsNow()
+    for frame: cast(s32)0..99 {
+        if NodeAppIconShape(slot) != NODE_APP_GENERIC_ICON {
+            IconsBlockParser(false)
+            return 32
+        }
+        NodeAppsIconsPump()
+    }
+    if IconsNow() - start > 0.05 || IconsBundleOpens() != before + 1 {
+        IconsBlockParser(false)
+        return 33
+    }
+    IconsBlockParser(false)
+    if !IconsWait() || NodeAppIconShape(slot) != ICONS_SHAPE {
+        return 34
+    }
+    // A warm cache is keyed by the signed digest and does not reopen code.
+    IconsRequest(slot)
+    before = IconsBundleOpens()
+    if !IconsStart(slot, "missing-payload", cache, release) || !IconsWait() ||
+    NodeAppIconShape(slot) != ICONS_SHAPE || IconsBundleOpens() != before {
+        return 35
+    }
+    // Exercise the actual draw -> pump -> start -> publish path as well as
+    // the controlled worker fixtures, using the supported local app mode.
+    unused CopyCString("fixture", node_local_name[:])
+    unused CopyCString(path, node_local_path[:])
+    NodeAppForgetIcon(slot)
+    if NodeAppIconShape(slot) != NODE_APP_GENERIC_ICON || node_icon_work != null {
+        return 38
+    }
+    NodeAppsIconsPump()
+    if node_icon_work == null || !IconsWait() || NodeAppIconShape(slot) != ICONS_SHAPE {
+        return 39
+    }
+    node_local_name[0] = cast(u8)0
+    node_local_path[0] = cast(u8)0
+    before = IconsBundleOpens()
+    // A different digest cannot reuse the previous icon, even at the same
+    // version. A corrupt payload never reaches the bundle parser.
+    IconsRequest(slot)
+    wrong := release
+    wrong.hash[0] = ifx wrong.hash[0] == #char "0" then #char "1" else #char "0"
+    if !IconsStart(slot, path, cache, wrong) || !IconsWait() ||
+    node_app_icons[slot].size != 0 || IconsBundleOpens() != before {
+        return 36
+    }
+    invalid: [3]string = .["ICON_INVALID_BUNDLE", "ICON_EMPTY_BUNDLE", "ICON_CORRUPT_BUNDLE"]
+    for key: invalid {
+        IconsRequest(slot)
+        fixture := IconsEnvironmentPath(key)
+        if !IconsStart(slot, fixture, "", IconsRelease(fixture)) || !IconsWait() ||
+        node_app_icons[slot].size != 0 {
+            return 37
+        }
+    }
+    stale := IconsStaleCheck(slot, path, release)
+    if stale != 0 {
+        return stale
+    }
+    NodeAppForgetIcon(slot)
+    PackageSetNodeApp(slot, "")
+    package_versions[NodeAppIndex(slot)][0] = cast(u8)0
+    return 0
+}

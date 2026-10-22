@@ -380,6 +380,15 @@ unrelated app VMs. Cancellation retires jobs until their workers and parsers
 finish; it never joins an unfinished worker in a frame. Web and Windows retain
 the synchronous fallback, as does validation of additional node-app trees.
 
+Additional app icons also load through one owned worker on Linux and Android.
+Drawing requests an icon and uses the catalog outline until its copied shape
+is ready. Cache reads, payload hashing, program verification and cache writes
+run on that worker without invoking an app or the host's shared asset index.
+The small persistent icon cache is keyed by the signed payload digest. A
+completed job is published only while its slot, account, package revision and
+temporary-session state still match; obsolete jobs finish without blocking
+navigation or starting more workers alongside them.
+
 Practice downloads, cold loads and cache reviews use the same owned content
 worker. Recently used verified packs stay in memory within a soft 64 MiB
 budget; the selected practice and its voices are never evicted for that limit.
