@@ -151,7 +151,8 @@ NodeTreeAllows :: (context: *void, node: *AppNode, name: string) -> bool {
     if runner.nested == null || NodeTreeAccount() != TextUntilNul(runner.nested.tree.account[:]) {
         return false
     }
-    if name == "AppServiceHost" || name == PublicationsService || name == "leaderboard" { return true }
+    if name == "AppServiceHost" || name == PublicationsService || name == "leaderboard" ||
+    name == "arcade.navigation" { return true }
     if name == "AppRecordHost" || name == "SaveAppRecordHost" || name == "AppLocaleHost" ||
     name == "SmoothFramesHost" || name == "ClipboardCopyHost" || name == "ReadStoreHost" ||
     name == "WriteStoreHost" || name == "AppNowHost" || name == "AppLocalOffsetHost" ||
@@ -180,6 +181,15 @@ NodeTreeCall :: (context: *void, node: *AppNode, module: *u8, function: *u8,
     }
     if name == "AppServiceHost" && count == 2 && HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "string", cast(s32)HostString) {
+        if AppArgumentText(arguments[0]) == "arcade.navigation" && AppArgumentText(arguments[1]) == "back" &&
+        !node_tree_validating && !node_snapshot_scanning && runner.nested != null {
+            // Queue the parent transition until the guest frame returns.
+            // Calling Back inside this callback would re-enter the running VM.
+            reply := AppTreeQueue(*runner.nested.tree, runner.nested.tree.running,
+                AppsRequest.{.operation = APPS_BACK})
+            result.* = NodeAppString(ifx reply.status == APPS_QUEUED then "queued" else "unavailable")
+            return 1
+        }
         // A game's own score for the friends leaderboard, such as
         // "levels 12", kept under its verified identity.
         if AppArgumentText(arguments[0]) == "leaderboard" && !node_tree_validating && !node_snapshot_scanning {

@@ -2,6 +2,8 @@
 
 ## [2.1.38] - 2026-10-21
 
+- Arcade switches to newly installed game updates without keeping an older campaign open.
+- Shovey's own Back button returns to its game chooser.
 - Android account-key backups use the system Save dialog and confirm that the chosen file was written.
 
 - Share lists with name suggestions and an automatically updated list of everyone with access.

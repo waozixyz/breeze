@@ -1168,6 +1168,33 @@ NodeAppOpen :: (slot: s32) -> bool {
         NodeAppLocalFailed(slot)
         return false
     }
+    unused AppCopyText(verified, node_runners[slot].release_hash[:])
+    return true
+}
+
+// Apply downloaded node-app updates at the host's existing safe reload
+// boundary. Keeping a running VM here left Arcade on its previous campaign
+// even after the package manager had installed the newer signed bundle.
+NodeAppsReloadUpdated :: () -> bool {
+    for slot: cast(s32)0..NodeAppSlots - 1 {
+        if !NodeAppRunning(slot) || NodeAppLocal(NodeAppName(slot)) {
+            continue
+        }
+        path := PackagePath(NodeAppIndex(slot), ".current.json")
+        metadata := PackageRead(path, 65536)
+        release := PackageTrustedRelease(metadata, NodeAppIndex(slot))
+        PackageFree(metadata)
+        PackageFree(path)
+        if !release.valid || TextUntilNul(release.hash[:]) == TextUntilNul(node_runners[slot].release_hash[:]) {
+            continue
+        }
+        if !NodeAppClose(slot) {
+            return false
+        }
+        if !NodeAppOpen(slot) {
+            return false
+        }
+    }
     return true
 }
 
