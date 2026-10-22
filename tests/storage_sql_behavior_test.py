@@ -64,6 +64,8 @@ db.executescript(
         span_low INTEGER NOT NULL DEFAULT 0,
         span_high INTEGER NOT NULL DEFAULT 0,
         difficulty INTEGER NOT NULL DEFAULT 0,
+        custom_coins INTEGER NOT NULL DEFAULT 0,
+        coin_halves INTEGER NOT NULL DEFAULT 0,
         coins_from INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE habit_entries(
         id TEXT PRIMARY KEY, user_id TEXT, habit_id TEXT, local_date INTEGER,
