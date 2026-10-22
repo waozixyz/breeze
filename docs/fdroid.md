@@ -42,15 +42,14 @@ F-Droid build cannot accidentally rely on a bundle left by a desktop build.
 The reviewed Apps controller now lives once in APK assets, beside the main
 app package, rather than being embedded in every CPU library. The Android
 asset reader retains each package independently across Activity replacement.
-Archive checks require both shared packages and keep the native size budgets.
+Archive checks require both shared packages.
 
-The native-library budget is an Inbe regression guard against duplicated
-assets, not a F-Droid security limit. A later x86 clean build reached 6.40 MB
-because unused runtime code and repeated native code remained in the library.
-Android release builds now size-optimize static dependencies, discard unused
+The former 5.50 MB per-native-library budget was an Inbe regression guard,
+not a F-Droid or Android requirement. It has been removed at the owner's
+request. Shared-package checks and overall delivered-size budgets still run.
+Android release builds size-optimize static dependencies, discard unused
 runtime sections, optimize across app modules, and safely merge identical code
-and strings. The 5.50 MB budget, all four architectures, artwork, and scanner
-checks remain in place.
+and strings. All four architectures, artwork and scanner checks remain in place.
 
 The upstream F-Droid entry must use the full commit of a successfully
 published release and its corresponding `inbe-VERSION-fdroid.apk` binary.

@@ -247,8 +247,8 @@ keeps its full four-character, 30 fps timeline while storing identical PNGs
 once. Character regeneration losslessly compresses the PNGs and regenerates
 `sun_salutation_inventory.zi`; builds check that this table is current. The
 compression step requires Python `zopfli`, while ordinary builds use the
-committed PNGs. `packaging/size-budgets.json` bounds the app package, native
-libraries, Linux binary and release APKs. Android releases include a smaller
+committed PNGs. `packaging/size-budgets.json` bounds the app package,
+Linux binary and release APKs. Android releases include a smaller
 APK for each CPU architecture as well as the universal APK.
 The native library exports only the NativeActivity and JNI loading entries;
 registered JNI methods stay internal. This follows the Android NDK

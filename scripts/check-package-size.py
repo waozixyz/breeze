@@ -36,10 +36,6 @@ def check(path, budgets):
                      and entry.filename.endswith("/libmain.so")]
         if not libraries:
             raise ValueError("Missing native application libraries")
-        for library in libraries:
-            within(library.filename, library.file_size, budgets["native_library_bytes"])
-            # A portable package header may occur as a tiny reader constant;
-            # embedding megabytes of images is caught by the library budget.
         if bundle:
             size = sum(entry.compress_size for entry in files
                        if entry.filename.startswith("base/"))

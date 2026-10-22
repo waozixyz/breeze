@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject asset duplication and native-library growth in real ZIP inventories."""
+"""Check shared assets and delivered package sizes in real ZIP inventories."""
 import importlib.util
 from pathlib import Path
 import tempfile
@@ -14,7 +14,7 @@ SPEC.loader.exec_module(MODULE)
 
 class PackageSizeTest(unittest.TestCase):
     def check_archive(self, entries, suffix=".apk", **limits):
-        budgets = dict.fromkeys(("app_package_bytes", "native_library_bytes",
+        budgets = dict.fromkeys(("app_package_bytes",
                                 "apk_single_abi_bytes", "apk_universal_bytes",
                                 "bundle_payload_bytes"), 10000)
         budgets.update(limits)
@@ -40,12 +40,20 @@ class PackageSizeTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exactly one shared"):
             self.check_archive({"assets/inbe.zib": b"package", "assets/copy/inbe.zib": b"package"})
 
-    def test_native_asset_bloat_fails(self):
-        with self.assertRaisesRegex(ValueError, "libmain.so"):
+    def test_native_library_has_no_individual_size_limit(self):
+        for suffix in (".apk", ".aab"):
+            with self.subTest(suffix=suffix):
+                prefix = "base/" if suffix == ".aab" else ""
+                self.assertIn("one shared package", self.check_archive({
+                    prefix + "assets/inbe.zib": b"package",
+                    prefix + "assets/apps.zib": b"controller",
+                    prefix + "lib/x86/libmain.so": b"x" * 5_600_000,
+                }, suffix=suffix))
+
+    def test_missing_native_library_fails(self):
+        with self.assertRaisesRegex(ValueError, "Missing native application libraries"):
             self.check_archive({"assets/inbe.zib": b"package",
-                                "assets/apps.zib": b"controller",
-                                "lib/arm64-v8a/libmain.so": b"image" * 100},
-                               native_library_bytes=100)
+                                "assets/apps.zib": b"controller"})
 
     def test_bundle_checks_delivered_payload_without_crash_symbols(self):
         self.assertIn("one shared package", self.check_archive({
