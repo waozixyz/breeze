@@ -589,10 +589,10 @@ with contextlib.ExitStack() as stack:
                 wait_setting(profile, "launcher_guide_seen", 1, "Apps guide did not finish")
                 # The existing update question appears after the guide and
                 # remembers its answer, without another connection dialog.
-                driver.wait(label="App updates")
+                driver.wait(label="Don't allow", role="button")
                 driver.press(label="Don't allow", role="button")
                 wait_setting(profile, "package_updates_allowed", 0)
-                driver.wait_gone(label="App updates")
+                driver.wait_gone(label="Don't allow", role="button")
                 # Practice is the third pinned card in the same grid as the rest.
                 pinned, more, tree = cards()
                 assert [card["label"] for card in pinned] == ["Lumi", "Habits", "Practice"], pinned
@@ -642,11 +642,15 @@ with contextlib.ExitStack() as stack:
                 open_apps()
                 assert favorites(profile) == [1, 2], "Opening Apps changed pinned cards"
                 if not mobile:
-                    # The grid fills the page, beyond the old drawer.
+                    # The scroll page, including the drag handles, fills
+                    # the content area beyond the old drawer.
                     pinned, more, tree = cards()
-                    grid = by_index(tree)[pinned[0]["parent"]]
+                    nodes = by_index(tree)
+                    page = nodes[pinned[0]["parent"]]
+                    while page["kind"] != "scroll":
+                        page = nodes[page["parent"]]
                     content = tree[0]["width"] - [node for node in tree if node["kind"] == "navigation_bar"][0]["width"]
-                    assert grid["width"] >= content - 40, "Apps did not fill the desktop content area"
+                    assert page["width"] >= content - 40, "Apps did not fill the desktop content area"
                     assert pinned[1]["label"] == "Practice"
                     press(pinned[1])
                     driver.wait_gone(label="Pinned")
