@@ -4,7 +4,7 @@
 
 - Simplify Apps editing, settings, navigation and app loading.
 - Fix Profile headers, scrolling, dialogs, font freezes and Android key backups.
-- Fix large-account sync, sharing controls and activity and achievement views.
+- Fix large-account sync, false sync failures, sharing controls and activity and achievement views.
 
 ## [2.1.37] - 2026-10-20
 
