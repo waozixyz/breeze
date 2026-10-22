@@ -65,6 +65,7 @@ native-text-pixels-test: $(TARGET)
 VISUAL_TEST_TARGETS := practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test native-visual-test launcher-ui-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-ui-test lumi-history-ui-test habits-table-ui-test habits-count-ui-test habit-schedule-tool-test habit-tracking-tool-test lists-ui-test sync-review-ui-test data-back-ui-test lumi-selection-ui-test lumi-harness-ui-test lumi-guide-ui-test lumi-emphasis-ui-test customize-nav-ui-test
 VISUAL_TEST_TARGETS += audio-setup-ui-test cells-onboarding-test practice-downloads-ui-test tab-switch-performance-test habit-unsaved-ui-test
 VISUAL_TEST_TARGETS += entity-profile-ui-test
+VISUAL_TEST_TARGETS += music-navigation-test
 visual-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
 		-u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \

@@ -318,8 +318,11 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     process, window = launch(profile, 'sun-customize', 1280, 900)
     try:
         driver.press(label='Customize', role='button')
-        driver.wait(label='Background music')
-        parent = driver.find(label='Background music')[0]['parent']
+        driver.wait(label='Estimated duration')
+        driver.wait(label='First round', role='slider')
+        driver.wait(label='Last round', role='slider')
+        driver.wait(label='Music volume', role='slider')
+        parent = driver.find(label='Music volume', role='slider')[0]['parent']
         scroll = next(node for node in driver.tree() if node['index'] == parent)
         x, y = UiDriver.center(scroll)
         for _ in range(20):

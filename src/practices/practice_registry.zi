@@ -1,6 +1,8 @@
 c :: #system_library "c";
 #import, file "../core/types.zi";
 #import, file "../app/app_types.zi";
+#import, file "../app/app_route_state.zi";
+#import, file "../app/app_route_url.zi";
 #import, file "../app/session_screen.zi";
 #import, file "../app/exercise_types.zi";
 #import "geometry"
@@ -248,15 +250,49 @@ practice_initialize_definitions :: () {
 }
 
 practice_start_downloaded :: (app: *InnerBreeze) {
-    if app == null { return }
+    if app == null {
+        return
+    }
+    app.pending_practice_start = 0
     id := practice_clamp_id(app.exercise_type)
-    PracticeDownloadsPump(id, app.voice_narration_enabled != 0, app.guide_narration_enabled != 0, practice_active(app) == null)
+    PracticeDownloadsPump(id, app.voice_narration_enabled != 0,
+        app.guide_narration_enabled != 0, practice_active(app) == null)
     if !PracticeContentReady(id) {
+        if PracticeInstalled(id) {
+            app.pending_practice_start = id + 1
+        }
         PracticeContentRequest(id)
         return
     }
     start := practices[id].start_downloaded
-    if start != null { start(app) }
+    if start != null {
+        start(app)
+    }
+}
+
+// An explicit Start survives asynchronous verification of installed content.
+// Leaving its card, opening another view or starting another session cancels it.
+practice_start_pending_update :: (app: *InnerBreeze) {
+    if app == null || app.pending_practice_start == 0 {
+        return
+    }
+    id := app.pending_practice_start - 1
+    if id < 0 || id >= EXERCISE_COUNT || app.exercise_type != id ||
+    app.breathing.screen != ScreenStart || app.launcher_open || app.modal.active != 0 ||
+    practice_active(app) != null || !PracticeInstalled(id) {
+        app.pending_practice_start = 0
+        return
+    }
+    if !PracticeContentReady(id) {
+        return
+    }
+    app.pending_practice_start = 0
+    before := app_current_route(app)
+    start := practice_get(id).start_downloaded
+    if start != null {
+        start(app)
+    }
+    app_observe_direct_route_change(app, before)
 }
 
 practice_whm_is_active :: (app: *InnerBreeze) -> s32 {

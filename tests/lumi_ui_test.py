@@ -447,6 +447,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
             send(window, profile, command_text)
             wait_for(lambda: state(window)["practice_running"] and state(window)["practice"] == practice_id,
                      f"{command_text} did not start its practice")
+            driver.wait_idle(frames=10)
+            running = state(window)
+            assert running["practice_running"] and running["practice"] == practice_id, running
             assert not state(window)["paused"]
     with sqlite3.connect(profile / "inbe.db") as db:
         for key, value in {"enabled_apps": "16", "app_used_habits": "0", "app_used_practices": "0",

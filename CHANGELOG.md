@@ -9,6 +9,7 @@
 - Follow a gentler Sun Salutation pace, with seconds per breath, a duration estimate and clearer audio settings.
 - Keep Sun Salutation repetitions and tempo, and Tai Chi lesson details, in linked habit sessions and across account sync.
 - About lists only installed apps; published apps appear in More apps without a beta setting.
+- Start installed practices reliably from Lumi while their content opens.
 
 ## [2.1.41] - 2026-10-22
 

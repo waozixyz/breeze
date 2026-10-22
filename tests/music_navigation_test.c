@@ -2,8 +2,9 @@
 #include "current_app.h"
 #include "meditation_music.h"
 #include "meditation_session.h"
+#include "practice_registry.h"
 #include "settings_audio.h"
-#include "src/platform/audio_runtime.h"
+#include "audio_runtime.h"
 #include "storage_core.h"
 #include "raylib_runtime.h"
 #include <assert.h>
@@ -135,6 +136,32 @@ static void settings_tab(int tab)
     app_request_route(&app, route);
 }
 
+static void check_pending_practice_cancellation(void)
+{
+    app_apply_nav_route(&app, AppNavRoute_APP_NAV_ROUTE_PRACTICE);
+    app.exercise_type = ExerciseType_EXERCISE_MEDITATION;
+    app.pending_practice_start = ExerciseType_EXERCISE_MEDITATION + 1;
+    app_apply_nav_route(&app, AppNavRoute_APP_NAV_ROUTE_HABITS);
+    for (int frame = 0; frame < 20; frame++) {
+        app_frame(&app);
+        assert(app.breathing.screen == ScreenHabits);
+        assert(app.pending_practice_start == 0);
+        assert(practice_registry_practice_active(&app) == NULL);
+    }
+
+    app_apply_nav_route(&app, AppNavRoute_APP_NAV_ROUTE_PRACTICE);
+    app.pending_practice_start = ExerciseType_EXERCISE_MEDITATION + 1;
+    AppRoute route = app_current_route(&app);
+    route.exercise_type = ExerciseType_EXERCISE_WIM_HOF;
+    app_request_route(&app, route);
+    for (int frame = 0; frame < 20; frame++) {
+        app_frame(&app);
+        assert(app.exercise_type == ExerciseType_EXERCISE_WIM_HOF);
+        assert(app.pending_practice_start == 0);
+        assert(practice_registry_practice_active(&app) == NULL);
+    }
+}
+
 int main(int argc, char **argv)
 {
     assert(argc == 2 && getenv("APP_DATA_ROOT") != NULL);
@@ -156,6 +183,7 @@ int main(int argc, char **argv)
     snprintf((char *)app.audio_custom_music[0].title,
         sizeof(app.audio_custom_music[0].title), "Navigation test track");
     int track = AUDIO_BUILTIN_MUSIC_COUNT;
+    check_pending_practice_cancellation();
 
     /* An imported track plays without the built-in music download, so
        Customize offers Test instead of "not installed" and Download. */
@@ -211,7 +239,7 @@ int main(int argc, char **argv)
     /* Starting a practice clears its preview before ringing the opening bell. */
     meditation_session_meditation_start_seconds(&app, 60);
     assert(preview->unloaded && !preview->playing && bell_calls == 1);
-    meditation_music_meditation_music_stop(&app);
+    meditation_music_stop(&app);
 
     /* A Wim Hof session keeps the breathing animation chosen in Customize. */
     app.exercise_type = ExerciseType_EXERCISE_WIM_HOF;
@@ -219,7 +247,7 @@ int main(int argc, char **argv)
         app.breathing.breath_animation = animation;
         session_start(&app);
         assert(app.breathing.breath_animation == animation);
-        meditation_music_meditation_music_stop(&app);
+        meditation_music_stop(&app);
     }
 
     /* Breath cues keep playing while the practice runs in its small window
