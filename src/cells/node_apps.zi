@@ -74,6 +74,7 @@ NODE_APP_OFFERS :: 16
 // just published shows up the next time someone opens Apps.
 NODE_APP_CATALOG_SECONDS :: 600
 NODE_APP_CATALOG_OPEN_SECONDS :: 60
+NODE_APP_CATALOG_RETRY_SECONDS :: 30
 NODE_APP_REGISTRY_BYTES :: 524288
 NODE_APP_SHARED_LIMIT :: 64
 NODE_APP_GENERIC_ICON :: "S1.6rr:M5 5H10V10H5ZM14 5H19V10H14ZM5 14H10V19H5ZM14 14H19V19H14Z"
@@ -133,6 +134,8 @@ node_catalog_download: FileDownload;
 node_catalog_phase: s32;
 node_catalog_checked_at: s32 = -1;
 node_catalog_was_wanted: bool;
+node_catalog_retry_at: s32;
+node_catalog_failed: bool;
 node_candidates: [NODE_APP_OFFERS]NodeAppOffer;
 node_candidate_count: s32;
 node_candidate_next: s32;
@@ -1635,6 +1638,7 @@ NodeAppCandidateStart :: () -> bool {
         if started {
             return true
         }
+        node_catalog_failed = true
         node_candidate_next += 1
     }
     return false
@@ -1642,14 +1646,29 @@ NodeAppCandidateStart :: () -> bool {
 
 // Keeps the candidates with a signed release this build can run.
 NodeAppCatalogFinish :: () {
-    node_offer_count = 0
-    index: s32 = 0
-    while index < node_candidate_count {
-        if node_runnable[index] {
-            node_offers[node_offer_count] = node_candidates[index]
-            node_offer_count += 1
+    if node_catalog_failed {
+        node_catalog_retry_at = cast(s32)now_seconds() + NODE_APP_CATALOG_RETRY_SECONDS
+    } else {
+        node_catalog_retry_at = 0
+        node_catalog_checked_at = cast(s32)now_seconds()
+        unused SettingsStoreInt("node_apps_checked_at", node_catalog_checked_at)
+        node_offer_count = 0
+    }
+    // Keep cached offers during a partial failure, while adding every new
+    // release that was verified successfully in this read.
+    for index: cast(s32)0..node_candidate_count - 1 {
+        if !node_runnable[index] { continue }
+        candidate := node_candidates[index]
+        target := node_offer_count
+        for existing: cast(s32)0..node_offer_count - 1 {
+            if TextUntilNul(node_offers[existing].name[:]) == TextUntilNul(candidate.name[:]) {
+                target = existing
+                break
+            }
         }
-        index += 1
+        if target >= NODE_APP_OFFERS { continue }
+        node_offers[target] = candidate
+        if target == node_offer_count { node_offer_count += 1 }
     }
     NodeAppSaveOffers()
     NodeAppLocalOffer()
@@ -1666,14 +1685,17 @@ NodeAppsCatalogPump :: (now: s32, wanted: bool) {
             return
         }
         if node_catalog_checked_at < 0 {
-            node_catalog_checked_at = SettingsReadInt("node_apps_checked_at", 0)
+            node_catalog_checked_at = ifx node_offer_count == 0 then 0 else SettingsReadInt("node_apps_checked_at", 0)
         }
-        interval := ifx opened then NODE_APP_CATALOG_OPEN_SECONDS else NODE_APP_CATALOG_SECONDS
-        if now - node_catalog_checked_at < interval && node_catalog_checked_at <= now {
+        if node_catalog_retry_at > now {
             return
         }
-        node_catalog_checked_at = now
-        unused SettingsStoreInt("node_apps_checked_at", now)
+        interval := ifx opened then NODE_APP_CATALOG_OPEN_SECONDS else NODE_APP_CATALOG_SECONDS
+        if node_catalog_retry_at == 0 && now - node_catalog_checked_at < interval && node_catalog_checked_at <= now {
+            return
+        }
+        node_catalog_failed = false
+        node_catalog_retry_at = now + NODE_APP_CATALOG_RETRY_SECONDS
         destination := NodeAppCatalogPath("/node-apps.json")
         defer {
             PackageFree(destination)
@@ -1695,6 +1717,7 @@ NodeAppsCatalogPump :: (now: s32, wanted: bool) {
         path := NodeAppCatalogPath("/node-apps.json")
         json := PackageRead(path, NODE_APP_REGISTRY_BYTES)
         NodeAppCatalogParse(json)
+        node_catalog_failed = FieldAt(json, 0, "apps") < 0
         PackageFree(json)
         unused RemoveFile(path)
         PackageFree(path)
@@ -1716,6 +1739,7 @@ NodeAppsCatalogPump :: (now: s32, wanted: bool) {
             release = PackageParseReleaseFor(metadata, id, -1, TextFromCString(*key[0]))
         }
         node_runnable[node_candidate_next] = release.valid
+        if !release.valid { node_catalog_failed = true }
         if release.valid {
             node_candidates[node_candidate_next].size = release.size
         }
@@ -1725,6 +1749,8 @@ NodeAppsCatalogPump :: (now: s32, wanted: bool) {
         PackageFree(metadata)
         unused RemoveFile(path)
         PackageFree(path)
+    } else {
+        node_catalog_failed = true
     }
     node_candidate_next += 1
     if !NodeAppCandidateStart() {

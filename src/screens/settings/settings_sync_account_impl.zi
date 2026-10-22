@@ -584,6 +584,11 @@ SettingsDeviceLinkDraw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32, has_a
     y.* += button_h + AppScale(10)
 }
 
+SettingsSyncStatusHeight :: (width: s32) -> s32 {
+    height := AppParagraphHeight(LocaleText(app_sync_status_key()), width, AppSmallFontSize(), 0)
+    return ifx height > AppScale(24) then height else AppScale(24)
+}
+
 #program_export
 settings_sync_account_config_content_height :: (content_w: s32) -> s32 {
     account: AccountKeys
@@ -592,7 +597,7 @@ settings_sync_account_config_content_height :: (content_w: s32) -> s32 {
         return AppScale(176) + link
     }
     hint_height := SettingsSyncNodeHintHeight(content_w)
-    return AppScale(384 + SyncNodeCount() * 60 + (ifx sync_account_details then 240 else 0)) + hint_height + link
+    return AppScale(357 + SyncNodeCount() * 60 + (ifx sync_account_details then 240 else 0)) + hint_height + link + SettingsSyncStatusHeight(content_w) - AppScale(24)
 }
 
 #program_export
@@ -655,16 +660,12 @@ settings_sync_account_draw_config :: (app: *InnerBreeze,
     Text(app.ui.session, SettingsSyncTextProps(display_id,
         x, y.*, width, AppScale(32), false))
     y.* += AppScale(36)
-    sync_status: StorageSyncStatus
-    unused storage_sync_status(*sync_status)
-    Text(app.ui.session, SettingsSyncTextProps(
-        LocaleText("sync_step_account_connected"),
-        x, y.*, width, AppScale(24), true))
-    y.* += AppScale(27)
     step := app_sync_status_key()
-    Text(app.ui.session, SettingsSyncTextProps(LocaleText(step),
-        x, y.*, width, AppScale(24), true))
-    y.* += AppScale(32)
+    status_height := SettingsSyncStatusHeight(width)
+    status_props: TextProps = SettingsSyncTextProps(LocaleText(step), x, y.*, width, status_height, true)
+    status_props.wrap = cast(TextWrap)TextWrapAuto
+    Text(app.ui.session, status_props)
+    y.* += status_height + AppScale(8)
     sync_now := SettingsSyncButtonProps(LocaleText("sync_now_button"),
         x, y.*, width, button_h, 5204, true)
     if Button(app.ui.session, sync_now) != 0 {
@@ -922,13 +923,13 @@ settings_sync_account_draw_alias_modal :: (app: *InnerBreeze) -> s32 {
 }
 
 #program_export
-settings_sync_account_draw_public_id_modal :: (app: *InnerBreeze) -> s32 {
+settings_sync_account_draw_public_id_modal :: (app: *InnerBreeze, public_id: string = "") -> s32 {
     account: AccountKeys
-    if app == null || sync_account_load(*account) == 0 {
+    if app == null || (public_id.count == 0 && sync_account_load(*account) == 0) {
         return 1
     }
     frame := SettingsSyncModal(app, "inbe/account/public-id",
-        LocaleText("sync_public_id_full_title"), AppScale(245))
+        LocaleText("sync_public_id_full_title"), AppScale(300))
     if frame.dismissed {
         return 1
     }
@@ -943,9 +944,18 @@ settings_sync_account_draw_public_id_modal :: (app: *InnerBreeze) -> s32 {
         LocaleText("sync_public_id_full_message"),
         x, y, width, AppScale(48), false))
     y += AppScale(55)
-    account_id := SettingsSyncAccountId(*account)
-    Text(app.ui.session, SettingsSyncTextProps(
-        account_id, x, y, width, AppScale(50), true))
+    account_id := ifx public_id.count > 0 then public_id else SettingsSyncAccountId(*account)
+    // Show the two halves on separate lines; copying keeps the raw ID.
+    displayed_id: [80]u8
+    unused AppCopyText(account_id, displayed_id[:])
+    if account_id.count == 64 {
+        unused AppCopyText(account_id[:32], displayed_id[:])
+        displayed_id[32] = cast(u8)10
+        unused AppCopyText(account_id[32:], displayed_id[33:])
+    }
+    id_props: TextProps = SettingsSyncTextProps(AppTextFromCString(*displayed_id[0], 80), x, y, width, AppScale(50), true)
+    id_props.wrap = cast(TextWrap)TextWrapAuto
+    Text(app.ui.session, id_props)
     y += AppScale(60)
     copy := SettingsSyncButtonProps(LocaleText("sync_copy_id_button"),
         x, y, width, AppScale(38), 5250, false)

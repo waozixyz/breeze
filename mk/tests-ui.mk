@@ -14,6 +14,9 @@ launcher-ui-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
 		python3 tests/launcher_ui_test.py $(abspath $(TARGET)) --properties-only
 
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/launcher_ui_test.py $(abspath $(TARGET)) --views-only
+
 .PHONY: native-screenshot-test
 native-screenshot-test: $(TARGET)
 	sh tests/native_screenshot_test.sh $(abspath $(TARGET))

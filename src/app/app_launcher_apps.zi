@@ -79,6 +79,7 @@ launcher_app_revisions: [2]s64;
 launcher_app_button_codec: WidgetButtonPropsCodec;
 
 LauncherAppPackage :: (route: s32) -> s32 {
+    if route == APP_NAV_ROUTE_PROFILE || route == APP_NAV_ROUTE_SETTINGS { return -1 }
     slot := AppNavNodeSlot(route)
     if slot >= 0 { return NodeAppIndex(slot) }
     bit := app_nav_route_bit(route)
@@ -86,6 +87,12 @@ LauncherAppPackage :: (route: s32) -> s32 {
         if PackageBit(index) == bit { return index }
     }
     return -1
+}
+
+LauncherAppID :: (route: s32) -> string {
+    if route == APP_NAV_ROUTE_PROFILE { return "inbe.profile" }
+    if route == APP_NAV_ROUTE_SETTINGS { return "inbe.settings" }
+    return PackageID(LauncherAppPackage(route))
 }
 
 // A returned document stays valid until the controller's Run returns.
@@ -192,13 +199,15 @@ LauncherAppWidgets :: (context: *void, module: *u8, function: *u8,
     card := WidgetDecodeButtonProps(arguments[1], *launcher_app_button_codec)
     for index: cast(s32)0..group.count - 1 {
         entry := group.entries[index]
-        if entry.route < 0 || card.key != Rules.AppCardKey(TextUntilNul(entry.id[:])) { continue }
+        if entry.route < 0 { continue }
+        handle := card.key == Rules.AppReorderKey(TextUntilNul(entry.id[:]))
+        if !handle && card.key != Rules.AppCardKey(TextUntilNul(entry.id[:])) { continue }
         // Only the base card captures native drag. The menu/update buttons
         // retain their own keys and ordinary pointer behavior.
-        unused app_launcher_drag_card(group.owner, card, entry.route, false)
+        unused app_launcher_drag_card(group.owner, card, entry.route, group.owner.launcher_grid_view, handle)
         node := TreeSubmitted(group.owner.ui.session, TreeCurrentParent(group.owner.ui.session),
             card.key, WidgetKindButton)
-        TreeSetDragCapture(group.owner.ui.session, node, group.owner.launcher_editing && !card.disabled)
+        TreeSetDragCapture(group.owner.ui.session, node, (handle || group.owner.launcher_editing) && !card.disabled)
         break
     }
     return called
@@ -238,7 +247,7 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
         return
     }
     if LauncherAppPackage(route) != entry.package ||
-    PackageID(entry.package) != TextUntilNul(entry.id[:]) {
+    LauncherAppID(route) != TextUntilNul(entry.id[:]) {
         LauncherAppLog("dropped", *request, "card no longer matches its app")
         group.status = "rejected"
         return
@@ -328,7 +337,8 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
     entry.package = LauncherAppPackage(route)
     title := app_nav_route_label(route)
     shape := app_nav_route_shape(route)
-    installed := route >= 0 && ((group.owner.enabled_apps & app_nav_route_bit(route)) != 0 ||
+    builtin := route == APP_NAV_ROUTE_PROFILE || route == APP_NAV_ROUTE_SETTINGS
+    installed := route >= 0 && (builtin || (group.owner.enabled_apps & app_nav_route_bit(route)) != 0 ||
         AppNavNodeSlot(route) >= 0)
     // An app from the node is on this device once its package is; until
     // then its card shows the download symbol, and that it is downloading.
@@ -337,9 +347,9 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
     downloading := installed && !on_device && PackagePending(NodeAppIndex(node_slot))
     size: s64
     if route >= 0 {
-        unused CopyCString(PackageID(entry.package), entry.id[:])
+        unused CopyCString(LauncherAppID(route), entry.id[:])
         if AppNavNodeSlot(route) >= 0 { size = NodeAppPackageSize(AppNavNodeSlot(route)) }
-        else { size = CellsPackageSize(entry.package) }
+        else if entry.package >= 0 { size = CellsPackageSize(entry.package) }
     } else {
         name := NodeAppOfferName(offer)
         unused CopyCString(name, entry.offer[:])
@@ -361,7 +371,7 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
     // whose picture is missing, and with it the whole Apps screen. Lumi's
     // comes with its package, which opens after the first frame; until then
     // its card shows its symbol.
-    if route >= 0 && AppNavNodeSlot(route) < 0 {
+    if route >= 0 && entry.package >= 0 && AppNavNodeSlot(route) < 0 {
         if route == APP_NAV_ROUTE_LUMI {
             if LauncherAppAssetAllowed("assets/lumi/sidebar.png") {
                 LauncherAppQuoted(bytes, "icon", "assets/lumi/sidebar.png")
@@ -392,7 +402,8 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
         ifx installed then "true" else "false", ifx favorite then "true" else "false",
         ifx selected then "true" else "false", size)
     if installed {
-        BuilderPrint(bytes, ",\"uninstall\",\"%\"", ifx favorite then "unpin" else "pin")
+        if !builtin { BuilderPrint(bytes, ",\"uninstall\"") }
+        BuilderPrint(bytes, ",\"%\"", ifx favorite then "unpin" else "pin")
         if LauncherShortcutSupported() { BuilderPrint(bytes, ",\"install_to_launcher\"") }
     }
     if !on_device { BuilderPrint(bytes, ",\"install\"") }
@@ -408,6 +419,7 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
         BuilderPrint(bytes, ",\"seen\"")
     }
     BuilderPrint(bytes, "]")
+    if route >= 0 { BuilderPrint(bytes, ",\"reorderable\":true") }
     if !on_device {
         BuilderPrint(bytes, ",\"on_device\":false")
         if downloading { BuilderPrint(bytes, ",\"downloading\":true") }
@@ -439,7 +451,7 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
 }
 
 app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
-    offers: []s32, bounds: Rectangle, input: TextFieldInput, section_break: s32) -> bool {
+    offers: []s32, bounds: Rectangle, input: TextFieldInput, section_break: s32, columns: s32) -> bool {
     group := *launcher_app_groups[section]
     group.index = section
     group.owner = app
@@ -459,8 +471,8 @@ app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
     document: Vec(u8)
     BuilderPrint(*document, "\"title\":\"\",\"locale\":")
     Rules.AppsWriteQuoted(*document, LocaleActiveCode())
-    BuilderPrint(*document, ",\"presentation\":{\"mode\":\"list\",\"section_break\":%,\"tile_class\":%,\"action_class\":%,\"muted_class\":%},\"children\":[",
-        section_break, KssClassId(KssMakeName("launcher-tile")), KssClassId(KssMakeName("launcher-action")), KssClassId(KssMakeName("launcher-muted")))
+    BuilderPrint(*document, ",\"presentation\":{\"mode\":\"%\",\"section_break\":%,\"columns\":%,\"tile_class\":%,\"action_class\":%,\"muted_class\":%},\"children\":[",
+        ifx app.launcher_grid_view then "icon" else "list", section_break, columns, KssClassId(KssMakeName("launcher-tile")), KssClassId(KssMakeName("launcher-action")), KssClassId(KssMakeName("launcher-muted")))
     for route: routes { LauncherAppCatalogEntry(group, *document, route) }
     for offer: offers { LauncherAppCatalogEntry(group, *document, -1, offer) }
     BuilderPrint(*document, "]}")

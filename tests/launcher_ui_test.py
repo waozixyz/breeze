@@ -26,6 +26,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("binary")
 parser.add_argument("--layout", choices=("all", "desktop", "mobile"), default="all")
 parser.add_argument("--drag-only", action="store_true")
+parser.add_argument("--views-only", action="store_true")
 parser.add_argument("--root-bundle", type=Path, help="Exercise an older root with the native launcher")
 parser.add_argument("--measure", action="store_true", help="Measure cold Apps opens in disposable profiles")
 parser.add_argument("--dock-only", action="store_true")
@@ -173,7 +174,7 @@ with contextlib.ExitStack() as stack:
         # Each section's shared Apps group sits inside the page's scroll.
         grid = [node for node in tree if node["kind"] == "button"
                 and under(tree, node, "scroll") and not under(tree, node, "navigation_bar")
-                and node["label"] not in ("Install", "Download", "App options")]
+                and node["label"] not in ("Install", "Download", "App options", "Move app")]
         more_top = headings["More apps"]["y"] if "More apps" in headings else float("inf")
         pinned = [node for node in grid if node["y"] < more_top]
         more = [node for node in grid if node["y"] >= more_top]
@@ -236,6 +237,10 @@ with contextlib.ExitStack() as stack:
     def open_profile(log):
         """Profile, an Apps action, replaces Apps with its own page."""
         before = len(transitions(log))
+        driver.press(focus_id=6791, role="text_field")
+        driver.key("a", control=True)
+        driver.type("Profile")
+        driver.wait(label="Profile", role="button", visible=True)
         driver.press(label="Profile", role="button")
         driver.wait_gone(label="Pinned")
         driver.wait(label="Profile", role="title_bar")
@@ -284,6 +289,88 @@ with contextlib.ExitStack() as stack:
                 assert "portable subset" not in log_path.read_text(), log_path.read_text()
             finally:
                 stop(app)
+
+    if arguments.views_only:
+        for width, height in ((900, 720), (390, 844)):
+            with tempfile.TemporaryDirectory(prefix="inbe-launcher-views-") as temporary:
+                profile = Path(temporary)
+                user = None
+                with application(profile, f"views-{width}-prepare", width, height):
+                    with database(profile) as db:
+                        user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
+                seed(profile, {"language": "en", "language_system": 0, "language_setup_done": 1,
+                               "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
+                               "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1,
+                               "lumi_guides_seen": 127, "launcher_guide_seen": 1,
+                               "theme": 9, "theme_source": 0, "theme_mode": 2,
+                               "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
+                               "launcher_favorite_count": 3, "launcher_favorite_0": 12,
+                               "launcher_favorite_1": 1, "launcher_favorite_2": 2})
+                with application(profile, f"views-{width}", width, height) as (window, log):
+                    open_apps()
+                    assert driver.wait(label="List view", role="button")["selected"]
+                    pinned, more, tree = cards()
+                    assert all(abs(card["height"] - 64) <= 1 for card in pinned + more), cards()
+                    handles = driver.find(label="Move app", role="button", visible=True)
+                    first_handle = next(h for h in handles if abs(h["y"] + h["height"] / 2 - pinned[0]["y"] - 32) < 2)
+                    assert first_handle["x"] + first_handle["width"] <= pinned[0]["x"], first_handle
+                    # The handle moves immediately, without a long press.
+                    driver.drag(UiDriver.center(first_handle), UiDriver.center(pinned[1]), steps=12)
+                    wait_for(lambda: favorites(profile) == [1, 12, 2], "The drag handle did not move the app")
+                    driver.press(label="Done", role="button")
+                    driver.press(label="Grid view", role="button")
+                    assert driver.wait(label="Grid view", role="button")["selected"]
+                    wait_setting(profile, "launcher_grid_view", 1)
+                    pinned, more, tree = cards()
+                    assert all(abs(card["height"] - 88) <= 1 for card in pinned + more), cards()
+                    if width > 500:
+                        assert abs(pinned[0]["y"] - pinned[1]["y"]) < 1 and pinned[1]["x"] > pinned[0]["x"], pinned
+                    capture(window, f"views-{width}-grid")
+                friend_id = "b" * 64
+                with contextlib.closing(sqlite3.connect(profile / "inbe.db", timeout=3)) as db, db:
+                    db.execute("INSERT OR REPLACE INTO social_snapshots(user_id,kind,json,updated_at) VALUES(?,?,?,1)",
+                               (user, "friends.list", json.dumps({"friends": [{"user_id_hash": friend_id, "alias": "river"}]})))
+                with application(profile, f"views-{width}-restart", width, height) as (window, log):
+                    open_apps()
+                    assert driver.wait(label="Grid view", role="button")["selected"]
+                    assert favorites(profile) == [1, 12, 2], "View restart lost the app order"
+                    driver.press(label="List view", role="button")
+                    wait_setting(profile, "launcher_grid_view", 0)
+                    # Profile and Settings have ordinary cards and the same
+                    # options as other apps, including pinning.
+                    for label, route in (("Profile", 0), ("Settings", 4)):
+                        driver.press(focus_id=6791, role="text_field")
+                        driver.key("a", control=True)
+                        driver.type(label)
+                        card = driver.wait(label=label, role="button", visible=True)
+                        assert under(driver.tree(), card, "scroll"), (label, card)
+                        assert card["key"] != 7200 + route, "The old footer is still present"
+                        press(corner(card, driver.tree()))
+                        assert not driver.find(label="Uninstall", role="selectable", visible=True), "A built-in app can be uninstalled"
+                        driver.press(label="Pin", role="selectable")
+                        wait_for(lambda: route in favorites(profile), f"{label} was not pinned")
+                    driver.press(focus_id=6791, role="text_field")
+                    driver.key("a", control=True)
+                    driver.key("backspace")
+                    capture(window, f"views-{width}-list")
+                    open_profile(log)
+                    for _ in range(16):
+                        if driver.find(label="Friends", role="button", visible=True):
+                            break
+                        driver.pointer(width / 2, height / 2, wheel=-4)
+                        driver.wait_idle(frames=2)
+                    driver.press(label="Friends", role="button")
+                    driver.press(label="@river", role="button")
+                    driver.wait(role="modal")
+                    driver.wait(label=friend_id[:32] + "\n" + friend_id[32:])
+                    driver.press(label="Copy ID", role="button")
+                    assert command("xclip", "-selection", "clipboard", "-o") == friend_id
+                    capture(window, f"friend-public-id-{width}")
+                    driver.key("escape")
+                    driver.wait_gone(label=friend_id[:32] + "\n" + friend_id[32:])
+                    driver.wait(label="@river", role="button")
+        print("Launcher views: immediate drag handles, grid/list, saved view/order and regular Profile/Settings cards passed")
+        raise SystemExit(0)
 
     if arguments.measure:
         measurements = []
@@ -500,11 +587,12 @@ with contextlib.ExitStack() as stack:
                     driver.wait(label=f"Step {step} of 3")
                     key(window, "Right", lambda: not driver.find(label=f"Step {step} of 3", visible=True))
                 wait_setting(profile, "launcher_guide_seen", 1, "Apps guide did not finish")
-                # Opening Apps never asks about automatic updates; available
-                # updates appear on each app's card instead.
-                driver.wait_idle(frames=3)
-                assert not driver.find(label="Don't allow", visible=True), "Apps asked about automatic updates"
-                assert "package_updates_allowed" not in settings(profile)
+                # The existing update question appears after the guide and
+                # remembers its answer, without another connection dialog.
+                driver.wait(label="App updates")
+                driver.press(label="Don't allow", role="button")
+                wait_setting(profile, "package_updates_allowed", 0)
+                driver.wait_gone(label="App updates")
                 # Practice is the third pinned card in the same grid as the rest.
                 pinned, more, tree = cards()
                 assert [card["label"] for card in pinned] == ["Lumi", "Habits", "Practice"], pinned
