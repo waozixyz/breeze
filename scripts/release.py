@@ -246,10 +246,9 @@ def build_apk(phone):
         raise Refused(f"the phone reported no usable ABI: {abi!r}")
     started = time.time()
     environment = dict(os.environ)
-    environment["ORG_GRADLE_PROJECT_app.onlyAbi"] = abi
     for name in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"):
         environment.pop(name, None)
-    subprocess.run(["make", "-C", ROOT, "android-debug"], check=True, env=environment)
+    subprocess.run(["make", "-C", ROOT, "android-debug", f"ANDROID_ABI={abi}"], check=True, env=environment)
     apk = ROOT / f"droid/app/build/outputs/apk/debug/app-{abi}-debug.apk"
     if not apk.is_file() or apk.stat().st_mtime < started:
         raise Refused(f"the build did not produce {apk.relative_to(ROOT)}")
