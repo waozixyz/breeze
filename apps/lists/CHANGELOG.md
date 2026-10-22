@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.1.5] - 2026-10-21
+
+- Maintenance release for Inner Breeze 2.1.38.
+
+## [1.1.4] - 2026-10-21
+
+- Sharing shows accepted and pending collaborators consistently.
+- Editing a shared list preserves tasks beyond the visible screen buffer.
+- Undo restores a task with its comment and completion state.
+
 ## [1.1.3] - 2026-10-20
 
 - A shared list names who it is shared with, who is still invited, or who shared it with you.

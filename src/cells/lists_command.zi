@@ -1,0 +1,136 @@
+#import "byte_text_linux"
+#import "text_buffer"
+#import, file "lists_types.zi";
+#import, file "package_files.zi";
+#import, file "../screens/elist_types.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../storage/state.zi";
+#import, file "../storage/sqlite.zi";
+#import "vec"
+#import "json_scan"
+#import, file "../../apps/lists/sharing.zi";
+#import, file "../storage/storage_elist.zi";
+#import, file "../storage/lists_shared_storage.zi";
+#import, file "lists_ui_types.zi";
+
+ListsCommandText :: (json: string, row: s32, field: string) -> string {
+    decoded := ReadStringValue(json, FieldAt(json, row, field), ListsSharedCacheCapacity)
+    return BuilderFinish(decoded.value)
+}
+
+ListsCommandFree :: (rows: []ListsUiRow) {
+    for row: rows {
+        PackageFree(row.id)
+        PackageFree(row.parent_id)
+        PackageFree(row.title)
+        PackageFree(row.comment)
+    }
+}
+
+// Commands use the complete saved document, never the bounded screen projection.
+ListsPrepareCommand :: (state: *EListState, request: ListsUiRequest) -> string {
+    list: ListsUiRow
+    list.id = request.list_id
+    rows: Vec(ListsUiRow)
+    defer {
+        ListsCommandFree(VecSlice(rows, 0, rows.count))
+        VecFree(rows)
+    }
+    message := ListsMessage.{.action = request.action, .index = request.index,
+        .editing_item = request.editing_item, .done = request.done,
+        .id = request.item_id, .comment = request.comment}
+    invitation := request.action == LISTS_ACCEPT || request.action == LISTS_DECLINE
+    if !invitation {
+        if request.selected_list < 0 || request.selected_list >= state.list_count {
+            return ""
+        }
+        source := *state.lists[request.selected_list]
+        if TextUntilNul(source.id[:]) != request.list_id {
+            return ""
+        }
+        list.title = TextUntilNul(source.title[:])
+        list.revision = source.revision
+        if source.shared {
+            json := ListsSharedCache()
+            array := FieldAt(json, 0, "lists")
+            found: bool
+            for index: cast(s32)0..ArrayCount(json, array) - 1 {
+                object := ElementAt(json, array, index)
+                id := ListsCommandText(json, object, "id")
+                matches := id == list.id
+                PackageFree(id)
+                if !matches {
+                    continue
+                }
+                items := FieldAt(json, object, "items")
+                if ArrayCount(json, items) < 0 || ReadNumber(json, FieldAt(json, object, "deleted")).value != 0.0 {
+                    return ""
+                }
+                for item_index: cast(s32)0..ArrayCount(json, items) - 1 {
+                    item := ElementAt(json, items, item_index)
+                    unused VecPush(rows, ListsUiRow.{
+                            .id = ListsCommandText(json, item, "id"),
+                            .parent_id = PackageText(list.id, ""),
+                            .title = ListsCommandText(json, item, "title"),
+                            .comment = ListsCommandText(json, item, "comment"),
+                            .done = cast(s32)ReadNumber(json, FieldAt(json, item, "done")).value})
+                }
+                found = true
+                break
+            }
+            if !found {
+                return ""
+            }
+        } else {
+            statement: *void = null
+            if SqlitePrepareText(storage_db_handle(),
+                "SELECT id,title,comment,done FROM elist_items WHERE user_id=?1 AND list_id=?2 AND deleted_at=0 ORDER BY sort_order,updated_at,id",
+                -1, *statement, null) != SQLITE_OK {
+                return ""
+            }
+            unused elist_bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 128))
+            unused elist_bind_text(statement, 2, list.id)
+            result := SqliteStep(statement)
+            while result == SQLITE_ROW {
+                unused VecPush(rows, ListsUiRow.{
+                        .id = PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 4096), ""),
+                        .parent_id = PackageText(list.id, ""),
+                        .title = PackageText(AppTextFromCString(SqliteColumnText(statement, 1), 4096), ""),
+                        .comment = PackageText(AppTextFromCString(SqliteColumnText(statement, 2), 4096), ""),
+                        .done = SqliteColumnInt(statement, 3)})
+                result = SqliteStep(statement)
+            }
+            unused SqliteFinalize(statement)
+            if result != SQLITE_DONE {
+                return ""
+            }
+        }
+        if rows.count != cast(s64)source.item_total {
+            return ""
+        }
+        index := ifx request.action == LISTS_COMMIT then request.editing_item else request.index
+        if (request.action == LISTS_DELETE_ITEM || request.action == LISTS_SET_DONE ||
+            request.action == LISTS_COMMIT) && index >= 0 {
+            if index >= state.item_count {
+                return ""
+            }
+            id := TextUntilNul(state.items[index].id[:])
+            found: bool
+            at: s32 = 0
+            while at < cast(s32)rows.count {
+                if rows[at].id == id && rows[at].parent_id == list.id {
+                    message.index = at
+                    message.editing_item = at
+                    found = true
+                    break
+                }
+                at += 1
+            }
+            if !found {
+                return ""
+            }
+        }
+    }
+    return ListsBuildCommand(message, ListsUiFrame.{.value = request.value,
+            .next_id = request.next_id}, list, VecSlice(rows, 0, rows.count), request.target, request.invitation)
+}

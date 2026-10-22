@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.38] - 2026-10-21
+
+- Shared lists preserve every task when edited, show who already has access, and let members edit and share them.
+- Undo restores a deleted task with its comment and completion state.
+- The Habits shop scrolls through all recent activity and offers a soda reward symbol.
+- Games hide the surrounding navigation and keep a clear return path to Arcade.
+- Library chapters turn with a swipe and use a warm paper background without the sidebar.
+
 ## [2.1.37] - 2026-10-20
 
 - Leaderboard ranks each installed practice and each Arcade game you play, such as Shovey's levels solved.

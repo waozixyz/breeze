@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.0.7] - 2026-10-21
+
+- Maintenance release for Inner Breeze 2.1.38.
+
 ## [1.0.6] - 2026-10-20
 
 - Lists only installed apps with a ranking: Practice by each installed practice, and Arcade by each game.

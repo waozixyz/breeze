@@ -195,6 +195,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-arcade-") as directory:
         driver.press(label="Easy", role="button")
         driver.press(label="Start", role="button")
         driver.wait(label="Your move")
+        driver.wait_gone(label="Apps", role="button")
         position = start_position()
         wait_for(lambda: board() == position, f"start position: {board()}")
         driver.press(key=SQUARE_KEY + square_index("e2"))

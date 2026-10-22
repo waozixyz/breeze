@@ -533,6 +533,24 @@ storage_elist_delete_item :: (id: string) -> s32 {
     return ifx (result != 0 && storage_enqueue_sync_elist_item(id) != 0) then (1) else (0)
 }
 
+storage_elist_restore_item :: (id: string) -> s32 {
+    if storage_db_handle() == null || id.count == 0 || elist_item_is_shared(id) {
+        return 0
+    }
+    statement: *void = null
+    if SqlitePrepareText(storage_db_handle(),
+        "UPDATE elist_items SET deleted_at=0,updated_at=?3 WHERE id=?1 AND user_id=?2 AND deleted_at!=0 AND EXISTS(SELECT 1 FROM elist_lists l WHERE l.id=elist_items.list_id AND l.user_id=?2 AND l.deleted_at=0)",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    unused elist_bind_text(statement, 1, id)
+    unused elist_bind_text(statement, 2, AppTextFromCString(storage_user_id_buffer(), 128))
+    unused SqliteBindInt64(statement, 3, storage_next_change_time())
+    saved := SqliteStep(statement) == SQLITE_DONE && sqlite3_changes(storage_db_handle()) == 1
+    unused SqliteFinalize(statement)
+    return ifx saved then storage_enqueue_sync_elist_item(id) else 0
+}
+
 elist_expand_sql :: (template: string, array_name: string, output: []u8) -> bool {
     index: s64 = 0
     used: s64 = 0

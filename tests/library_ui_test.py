@@ -26,7 +26,7 @@ BINARY = Path(sys.argv[1]).resolve()
 PACKAGE = Path(sys.argv[2]).resolve()
 OUTPUT = ROOT / "build/library-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
-WIDTH, HEIGHT = 390, 844
+WIDTH, HEIGHT = int(os.environ.get("INBE_LIBRARY_TEST_WIDTH", "390")), 844
 driver = UiDriver(OUTPUT / "driver")
 
 
@@ -102,8 +102,18 @@ with tempfile.TemporaryDirectory(prefix="inbe-library-") as directory:
         # More apps offers Library because the node (here, the local file) does.
         driver.press(label="Library", role="button")
         driver.wait(label="Tao Te Ching")
+        assert "the local bundle cannot run" not in (OUTPUT / "reading.log").read_text(), "new Library bundle was rejected and an older one downloaded"
         driver.press(label="Start reading", role="button")
         shown(1)
+        driver.wait_gone(label="Apps", role="button")
+        subprocess.run(["import", "-window", window, str(OUTPUT / f"reader-{WIDTH}.png")], check=True)
+        for start, finish, expected in [(WIDTH - 60, 60, 2), (60, WIDTH - 60, 1)]:
+            driver.pointer(start, HEIGHT / 2, down=True)
+            driver.pointer((start + finish) / 2, HEIGHT / 2, down=True)
+            driver.pointer(finish, HEIGHT / 2, down=True)
+            driver.pointer(finish, HEIGHT / 2)
+            driver.release_pointer()
+            shown(expected)
         driver.press(label="Next chapter", role="button")
         shown(2)
         driver.press(label="Previous chapter", role="button")

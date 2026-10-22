@@ -104,6 +104,12 @@ ListsNetworkBusy :: () -> bool {
     return lists_operation.active
 }
 
+// True only while the person's own change is being saved. A background
+// refresh must never lock the screen.
+ListsNetworkSaving :: () -> bool {
+    return lists_operation.active && lists_writing
+}
+
 ListsNetworkStart :: (message: ListsMessage) {
     ListsNetworkContext()
     writing := message.action != LISTS_REFRESH
@@ -179,7 +185,14 @@ ListsNetworkTick :: (app: *InnerBreeze, now: float64, visible: bool) {
             ArrayCount(json, FieldAt(json, 0, "invitations")) >= 0
             previous := ifx valid then PackageText(ListsSharedCache(), "") else ""
             defer { PackageFree(previous) }
-            if valid && ListsCacheWrite("lists.shared", json) != 0 {
+            // A refresh that brings nothing new changes nothing on screen.
+            unchanged := valid && !lists_writing && previous == json
+            if unchanged {
+                lists_failures = 0
+                if !ListsNetworkPending() {
+                    lists_status = 0
+                }
+            } else if valid && ListsCacheWrite("lists.shared", json) != 0 {
                 AchievementSharedListReconcile(previous, json)
                 if lists_writing {
                     AchievementSharedListConfirmed(TextUntilNul(lists_attempt[:]), previous, json)

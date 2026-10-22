@@ -239,3 +239,9 @@ node-app-not-installed-ui-test: $(TARGET)
 		python3 tests/node_app_not_installed_ui_test.py $(abspath $(TARGET))
 
 VISUAL_TEST_TARGETS += node-app-not-installed-ui-test
+
+.PHONY: habit-shop-ui-test
+habit-shop-ui-test: $(TARGET)
+	sh tests/habit_shop_ui_test.sh $(abspath $(TARGET))
+
+VISUAL_TEST_TARGETS += habit-shop-ui-test library-ui-test

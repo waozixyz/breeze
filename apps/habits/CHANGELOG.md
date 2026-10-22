@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.2.3] - 2026-10-21
+
+- Maintenance release for Inner Breeze 2.1.38.
+
+## [1.2.2] - 2026-10-21
+
+- The shop scrolls to the final activity row at phone and desktop sizes.
+- Rewards can use a soda can symbol.
+
 ## [1.2.1] - 2026-10-20
 
 - Maintenance release for Inner Breeze 2.1.37.

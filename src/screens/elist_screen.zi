@@ -1,6 +1,7 @@
 #import, file "../cells/module_host.zi";
 #import, file "../cells/lists_types.zi";
 #import, file "../cells/lists_visibility.zi";
+#import, file "../cells/lists_command.zi";
 #import, file "../cells/lists_network.zi";
 #import, file "../storage/lists_shared_storage.zi";
 #import, file "../storage/app_records.zi";
@@ -321,6 +322,7 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
             row.sort_order = source.sort_order
             row.shared = source.shared
             row.owner = source.owner
+            row.owner_id = AppTextFromCString(*source.owner_id[0], 65)
             row.people = AppTextFromCString(*source.people[0], 256)
             row.invited = AppTextFromCString(*source.invited[0], 256)
             row.revision = source.revision
@@ -367,33 +369,8 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "PrepareListsCommandHost" && count == 1 && WidgetValidListsUiRequest(arguments[0]) {
         request := WidgetDecodeListsUiRequest(arguments[0], *lists_request_codec)
-        list: ListsUiRow
-        if request.action != LISTS_ACCEPT && request.action != LISTS_DECLINE &&
-        request.selected_list >= 0 && request.selected_list < app.elist.list_count {
-            source := *app.elist.lists[request.selected_list]
-            if source.incomplete {
-                return 0
-            }
-            list.id = AppTextFromCString(*source.id[0], 37)
-            list.title = AppTextFromCString(*source.title[0], ELIST_TITLE_SIZE)
-            list.revision = source.revision
-        }
-        list.id = request.list_id
-        rows: [ELIST_ITEM_MAX]ListsUiRow
-        for index: cast(s32)0..app.elist.item_count - 1 {
-            source := *app.elist.items[index]
-            rows[index] = ListsUiRow.{.id = AppTextFromCString(*source.id[0], 37),
-                .parent_id = AppTextFromCString(*source.list_id[0], 37),
-                .title = AppTextFromCString(*source.title[0], ELIST_TITLE_SIZE),
-                .comment = AppTextFromCString(*source.comment[0], ELIST_COMMENT_SIZE),
-                .done = source.done}
-        }
-        message := ListsMessage.{.action = request.action, .index = request.index,
-            .editing_item = request.editing_item, .done = request.done}
-        observed := ListsUiFrame.{.value = request.value, .next_id = request.next_id}
         PackageFree(lists_prepared_body)
-        lists_prepared_body = ListsBuildCommand(message, observed, list,
-            rows[:app.elist.item_count], request.target, request.invitation)
+        lists_prepared_body = ListsPrepareCommand(*app.elist, request)
         result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
             .data = HostTextData(lists_prepared_body), .length = cast(usize)lists_prepared_body.count}
         return 1
@@ -441,7 +418,7 @@ draw_elist_screen :: (app: *InnerBreeze) {
         .scroll_x = app.elist.input_scroll_x, .focused = app.elist.input_focused != 0,
         .scroll = app.elist.scroll, .tab_scroll = app.elist.tab_scroll,
         .panel = app.elist.panel, .sharing_status = lists_status,
-        .sharing_busy = ListsNetworkBusy(), .sharing_pending = ListsNetworkNeedsRetry(),
+        .sharing_busy = ListsNetworkSaving(), .sharing_pending = ListsNetworkNeedsRetry(),
         .connected = ListsNetworkReady(), .public_id = storage_get_setting_text("sync_public_id"),
         .friend_count = ArrayCount(AppTextFromCString(*lists_friends[0], 8192),
             FieldAt(AppTextFromCString(*lists_friends[0], 8192), 0, "friends")),

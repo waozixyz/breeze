@@ -33,6 +33,9 @@ ListsJsonString :: (out: *Vec(u8), value: string) {
 ListsBuildCommand :: (message: ListsMessage, frame: ListsUiFrame,
     list: ListsUiRow, rows: []ListsUiRow, target: string = "",
     invitation: string = "") -> string {
+    if list.incomplete {
+        return ""
+    }
     action := "save"
     if message.action == LISTS_INVITE {
         action = "invite"
@@ -61,6 +64,12 @@ ListsBuildCommand :: (message: ListsMessage, frame: ListsUiFrame,
     }
     ListsJsonString(*out, title)
     BuilderPrint(*out, ",\"revision\":%,\"items\":[", list.revision)
+    restoring := message.action == LISTS_RESTORE_ITEM
+    for row: rows {
+        if row.id == message.id && row.parent_id == list.id {
+            restoring = false
+        }
+    }
     count: s32 = 0
     for index: cast(s32)0..cast(s32)rows.count - 1 {
         row := rows[index]
@@ -74,6 +83,15 @@ ListsBuildCommand :: (message: ListsMessage, frame: ListsUiFrame,
         if message.action == LISTS_SET_DONE && index == message.index {
             row.done = message.done
         }
+        if restoring && count == message.index {
+            if count > 0 {
+                BuilderPrint(*out, ",")
+            }
+            ListsWriteItem(*out, ListsUiRow.{.id = message.id, .title = frame.value,
+                    .comment = message.comment, .done = message.done})
+            count += 1
+            restoring = false
+        }
         if count > 0 {
             BuilderPrint(*out, ",")
         }
@@ -85,6 +103,13 @@ ListsBuildCommand :: (message: ListsMessage, frame: ListsUiFrame,
             BuilderPrint(*out, ",")
         }
         ListsWriteItem(*out, ListsUiRow.{.id = frame.next_id, .title = frame.value})
+    }
+    if restoring {
+        if count > 0 {
+            BuilderPrint(*out, ",")
+        }
+        ListsWriteItem(*out, ListsUiRow.{.id = message.id, .title = frame.value,
+                .comment = message.comment, .done = message.done})
     }
     BuilderPrint(*out, "]}}")
     return BuilderFinish(out)

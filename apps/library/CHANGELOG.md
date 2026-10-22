@@ -1,5 +1,10 @@
 # Library
 
+## [1.0.2] - 2026-10-21
+
+- Swipe left or right to turn chapters.
+- Reading uses a warm paper background and hides the surrounding navigation.
+
 ## [1.0.1] - 2026-10-20
 
 - Previous and Next stay at the bottom while the chapter scrolls.

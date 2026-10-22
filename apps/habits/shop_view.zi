@@ -58,6 +58,8 @@ SHOP_BALANCE_HEIGHT :: 92
 SHOP_ROW_HEIGHT :: 60
 SHOP_ROW_GAP :: 8
 SHOP_GAP :: 16
+// Room kept at the right edge of the scrolled page for its scroll bar.
+SHOP_SCROLLBAR_ROOM :: 14
 SHOP_CARD_PADDING :: 16
 // The form: its title, the name, then the price with Add or Save, and
 // Delete and Cancel while it changes a reward.
@@ -495,37 +497,68 @@ BorrowRow :: (x: s32, y: s32, width: s32) -> s32 {
     return height
 }
 
-// One movement of coins: the habit's or reward's symbol and name, its day,
-// and the coins it earned (+) or spent (-).
-ActivityRow :: (index: s32, x: s32, y: s32, width: s32) {
-    line := ReadHabitActivityHost(index)
-    height := Scale(SHOP_ACTIVITY_ROW)
-    symbol := Scale(20)
-    shape := ifx line.icon > 0 then HabitIconShape(line.icon) else ""
-    SvgIcon(shop.session, SvgIconProps.{
-            .bounds = Bounds(x, y + (height - symbol) / 2, symbol, symbol),
-            .shape = ifx shape.count > 0 then shape else SHOP_DONE_SHAPE,
-            .color = shop.text_color})
+ActivityAmount :: (line: HabitsShopActivity) -> string {
     amount := Coins(ifx line.halves < 0 then -line.halves else line.halves)
     signed: Vec(u8)
     BuilderPrint(*signed, "%", ifx line.halves < 0 then "-" else "+")
     BuilderPrint(*signed, "%", amount)
-    amount = BuilderFinish(signed)
+    return BuilderFinish(signed)
+}
+
+ActivityStacked :: (line: HabitsShopActivity, width: s32) -> bool {
+    amount_w := CoinAmountWidth(ActivityAmount(line), shop.font)
+    day_w := Width(line.day, shop.small_font) + Scale(12)
+    return width - Scale(32) - amount_w - day_w - Scale(12) < Scale(100)
+}
+
+ActivityRowHeight :: (index: s32, width: s32) -> s32 {
+    line := ReadHabitActivityHost(index)
+    if !ActivityStacked(line, width) {
+        return Scale(SHOP_ACTIVITY_ROW)
+    }
+    name_w := width - Scale(44) - CoinAmountWidth(ActivityAmount(line), shop.font)
+    if name_w < 1 {
+        name_w = 1
+    }
+    height := ParagraphHeight(line.name, name_w, shop.font)
+    if height < Scale(24) {
+        height = Scale(24)
+    }
+    return height + Scale(32)
+}
+
+// Narrow rows put the day below the name, leaving the amount on the right.
+ActivityRow :: (index: s32, x: s32, y: s32, width: s32) -> s32 {
+    line := ReadHabitActivityHost(index)
+    height := ActivityRowHeight(index, width)
+    stacked := ActivityStacked(line, width)
+    first_height := ifx stacked then height - Scale(32) else height
+    symbol := Scale(20)
+    icon_height := ifx stacked then Scale(24) else height
+    shape := ifx line.icon > 0 then HabitIconShape(line.icon) else ""
+    SvgIcon(shop.session, SvgIconProps.{
+            .bounds = Bounds(x, y + (icon_height - symbol) / 2, symbol, symbol),
+            .shape = ifx shape.count > 0 then shape else SHOP_DONE_SHAPE,
+            .color = shop.text_color})
+    amount := ActivityAmount(line)
     amount_w := CoinAmountWidth(amount, shop.font)
     day_w := Width(line.day, shop.small_font) + Scale(12)
     name_x := x + symbol + Scale(12)
     amount_x := x + width - amount_w
-    day_x := amount_x - Scale(12) - day_w
+    day_x := ifx stacked then name_x else amount_x - Scale(12) - day_w
+    name_w := ifx stacked then amount_x - Scale(12) - name_x else day_x - name_x
     Text(shop.session, TextProps.{
-            .bounds = Bounds(name_x, y, day_x - name_x, height), .text = line.name,
+            .bounds = Bounds(name_x, y, name_w, first_height), .text = line.name,
             .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(TextWrap)TextWrapEllipsis})
+            .wrap = cast(TextWrap)(ifx stacked then TextWrapAuto else TextWrapEllipsis)})
     Text(shop.session, TextProps.{
-            .bounds = Bounds(day_x, y, day_w, height), .text = line.day,
+            .bounds = Bounds(day_x, ifx stacked then y + first_height else y,
+            day_w, ifx stacked then Scale(24) else height), .text = line.day,
             .font = shop.small_font, .class_name = shop.muted_class,
             .vertical_align = cast(TextAlign)TextAlignCenter,
             .wrap = cast(TextWrap)TextWrapNone})
-    CoinAmount(amount, Bounds(amount_x, y, amount_w, height), shop.font)
+    CoinAmount(amount, Bounds(amount_x, y, amount_w, ifx stacked then Scale(24) else height), shop.font)
+    return height
 }
 
 // A section's title above its cards: strong and a little larger than the
@@ -548,42 +581,66 @@ SectionTitle :: (title: string, x: s32, y: s32, width: s32) -> s32 {
 
 // One reward: its symbol and name, which open it in the form, and its price
 // beside Buy, which needs the coins.
-RewardRow :: (index: s32, x: s32, y: s32, width: s32) {
+RewardBuyWidth :: () -> s32 {
+    width := Width(Locale("habit_shop_buy_button"), shop.font) + Scale(36)
+    return ifx width < Scale(84) then Scale(84) else width
+}
+
+RewardStacked :: (reward: HabitsShopReward, width: s32) -> bool {
+    price_w := CoinAmountWidth(Number(cast(s64)reward.price), shop.font)
+    return width - Scale(94) - price_w - RewardBuyWidth() < Scale(100)
+}
+
+RewardRowHeight :: (index: s32, width: s32) -> s32 {
     reward := ReadHabitRewardHost(index)
-    height := Scale(SHOP_ROW_HEIGHT)
+    if !RewardStacked(reward, width) {
+        return Scale(SHOP_ROW_HEIGHT)
+    }
+    name_h := ParagraphHeight(reward.name, width - Scale(70), shop.font)
+    if name_h < Scale(26) {
+        name_h = Scale(26)
+    }
+    return name_h + Scale(SHOP_CARD_PADDING) * 2 + Scale(48)
+}
+
+RewardRow :: (index: s32, x: s32, y: s32, width: s32) -> s32 {
+    reward := ReadHabitRewardHost(index)
+    height := RewardRowHeight(index, width)
+    stacked := RewardStacked(reward, width)
     Card(Bounds(x, y, width, height), ifx index == 0 then "inbe/habits/shop/first-reward" else "")
     pad := Scale(SHOP_CARD_PADDING)
     buy_label := Locale("habit_shop_buy_button")
-    buy_w := Width(buy_label, shop.font) + Scale(36)
-    if buy_w < Scale(84) {
-        buy_w = Scale(84)
-    }
+    buy_w := RewardBuyWidth()
     price := Number(cast(s64)reward.price)
     price_w := CoinAmountWidth(price, shop.font)
     buy_x := x + width - pad - buy_w
-    price_x := buy_x - Scale(14) - price_w
+    price_x := ifx stacked then x + pad else buy_x - Scale(14) - price_w
     symbol := Scale(26)
     name_x := x + pad + symbol + Scale(12)
-    name_w := price_x - name_x - Scale(10)
+    name_w := ifx stacked then x + width - pad - name_x else price_x - name_x - Scale(10)
+    name_y := ifx stacked then y + pad else y
+    name_h := ifx stacked then height - pad * 2 - Scale(48) else height
     if Button(shop.session, ButtonProps.{
-            .id = 8500 + index, .bounds = Bounds(x, y, price_x - x, height),
+            .id = 8500 + index,
+            .bounds = Bounds(x, name_y, ifx stacked then width else price_x - x, name_h),
             .invisible = true, .label = reward.name,
             .disabled = shop.modal_active}) != 0 {
         FormEdit(reward)
     }
     SvgIcon(shop.session, SvgIconProps.{
-            .bounds = Bounds(x + pad, y + (height - symbol) / 2, symbol, symbol),
+            .bounds = Bounds(x + pad, name_y + (name_h - symbol) / 2, symbol, symbol),
             .shape = HabitIconShape(HabitRewardIconClamp(reward.icon)),
             .color = shop.text_color})
     Text(shop.session, TextProps.{
-            .bounds = Bounds(name_x, y, name_w, height), .text = reward.name,
+            .bounds = Bounds(name_x, name_y, name_w, name_h), .text = reward.name,
             .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(TextWrap)TextWrapEllipsis})
-    CoinAmount(price, Bounds(price_x, y, price_w, height), shop.font)
+            .wrap = cast(TextWrap)(ifx stacked then TextWrapAuto else TextWrapEllipsis)})
+    controls_y := ifx stacked then y + height - pad - Scale(40) else y + (height - Scale(40)) / 2
+    CoinAmount(price, Bounds(price_x, controls_y, price_w, Scale(40)), shop.font)
     affordable := shop.halves + cast(s64)shop.borrow_limit * 2 >=
-        cast(s64)reward.price * 2
+    cast(s64)reward.price * 2
     if ShopButton(8600 + index, buy_label,
-        Bounds(buy_x, y + (height - Scale(40)) / 2, buy_w, Scale(40)),
+        Bounds(buy_x, controls_y, buy_w, Scale(40)),
         cast(ButtonTone)(ifx affordable then ButtonToneAccent else ButtonToneNeutral),
         cast(ButtonEmphasis)(ifx affordable then ButtonEmphasisFilled else ButtonEmphasisSoft),
         !affordable) {
@@ -592,6 +649,7 @@ RewardRow :: (index: s32, x: s32, y: s32, width: s32) {
         shop.price_focused = false
         shop.action = HABITS_SHOP_BUY
     }
+    return height
 }
 
 IconColumns :: (width: s32) -> s32 {
@@ -617,7 +675,7 @@ IconButton :: (bounds: Rectangle) {
             .icon_shape = HabitIconShape(shop.icon), .icon_only = true,
             .selected = shop.icon_open, .tone = cast(ButtonTone)ButtonToneNeutral,
             .emphasis = cast(ButtonEmphasis)(ifx shop.icon_open then
-                ButtonEmphasisOutline else ButtonEmphasisSoft),
+            ButtonEmphasisOutline else ButtonEmphasisSoft),
             .disabled = shop.modal_active}) != 0 {
         shop.icon_open = !shop.icon_open
         shop.name_focused = false
@@ -636,13 +694,13 @@ IconGrid :: (x: s32, y: s32, width: s32) {
         if Button(shop.session, ButtonProps.{
                 .id = 8700 + icon,
                 .bounds = Bounds(x + (index % columns) * Scale(SHOP_ICON_STEP_X) + Scale(4),
-                    y + (index / columns) * Scale(SHOP_ICON_STEP_Y) + Scale(2),
-                    Scale(SHOP_ICON_SIZE), Scale(SHOP_ICON_SIZE)),
+                y + (index / columns) * Scale(SHOP_ICON_STEP_Y) + Scale(2),
+                Scale(SHOP_ICON_SIZE), Scale(SHOP_ICON_SIZE)),
                 .circle = true,
                 .icon_shape = HabitIconShape(icon), .icon_only = true, .selected = selected,
                 .tone = cast(ButtonTone)(ifx selected then ButtonToneAccent else ButtonToneNeutral),
                 .emphasis = cast(ButtonEmphasis)(ifx selected then
-                    ButtonEmphasisFilled else ButtonEmphasisSoft),
+                ButtonEmphasisFilled else ButtonEmphasisSoft),
                 .disabled = shop.modal_active}) != 0 {
             shop.icon = icon
             shop.icon_open = false
@@ -794,26 +852,30 @@ ShopPage :: () {
         return
     }
     gap := Scale(SHOP_GAP)
-    row_h := Scale(SHOP_ROW_HEIGHT)
     row_gap := Scale(SHOP_ROW_GAP)
+    // The scroll bar takes the right edge; the cards stop short of it.
+    content_width := width - Scale(SHOP_SCROLLBAR_ROOM)
     rewards_title := Locale("habit_shop_rewards_title")
-    title_h := SectionTitleHeight(rewards_title, width)
+    title_h := SectionTitleHeight(rewards_title, content_width)
     empty_text := Locale("habit_shop_empty")
-    list_h := shop.reward_count * (row_h + row_gap)
+    list_h: s32 = 0
+    for index: cast(s32)0..shop.reward_count - 1 {
+        list_h += RewardRowHeight(index, content_width) + row_gap
+    }
     if shop.reward_count == 0 {
-        list_h = ParagraphHeight(empty_text, width, shop.font) + row_gap
+        list_h = ParagraphHeight(empty_text, content_width, shop.font) + row_gap
     }
-    form_h := FormHeight(width)
-    // The latest coins earned and spent, once there are any.
+    form_h := FormHeight(content_width)
     activity_title := Locale("profile_progress_title")
-    activity_h: s32 = 0
-    if shop.activity_count > 0 {
-        activity_h = SectionTitleHeight(activity_title, width) + Scale(6) +
-        shop.activity_count * Scale(SHOP_ACTIVITY_ROW) + gap
-    }
     content_h := Scale(SHOP_BALANCE_HEIGHT) + Scale(10) + BorrowRowHeight() + gap +
-        title_h +
-    Scale(10) + list_h + gap + activity_h + form_h + gap
+    title_h + Scale(10) + list_h + gap + form_h + gap
+    // The latest coins earned and spent, once there are any.
+    if shop.activity_count > 0 {
+        content_h += SectionTitleHeight(activity_title, content_width) + Scale(6) + gap
+        for index: cast(s32)0..shop.activity_count - 1 {
+            content_h += ActivityRowHeight(index, content_width)
+        }
+    }
     scrolled := Scroll(shop.session, ScrollProps.{
             .key = KeyHash("inbe/habits/shop"),
             .bounds = Rectangle.{cast(float32)x, cast(float32)top, cast(float32)width,
@@ -824,29 +886,30 @@ ShopPage :: () {
         return
     }
     y := cast(s32)scrolled.content.y
-    y += BalanceCard(x, y, width) + Scale(10)
-    y += BorrowRow(x, y, width) + gap
-    y += SectionTitle(rewards_title, x, y, width) + Scale(10)
+    y += BalanceCard(x, y, content_width) + Scale(10)
+    y += BorrowRow(x, y, content_width) + gap
+    y += SectionTitle(rewards_title, x, y, content_width) + Scale(10)
     if shop.reward_count == 0 {
         Text(shop.session, TextProps.{
-                .bounds = Bounds(x, y, width, list_h - row_gap), .text = empty_text,
+                .bounds = Bounds(x, y, content_width, list_h - row_gap), .text = empty_text,
                 .class_name = shop.muted_class, .wrap = cast(TextWrap)TextWrapAuto})
     }
+    reward_y := y
     index: s32 = 0
     while index < shop.reward_count {
-        RewardRow(index, x, y + index * (row_h + row_gap), width)
+        reward_y += RewardRow(index, x, reward_y, content_width) + row_gap
         index += 1
     }
     y += list_h + gap
+    Form(x, y, content_width)
+    y += form_h + gap
+    // Activity sits below the form that adds a reward.
     if shop.activity_count > 0 {
-        y += SectionTitle(activity_title, x, y, width) + Scale(6)
+        y += SectionTitle(activity_title, x, y, content_width) + Scale(6)
         for index: cast(s32)0..shop.activity_count - 1 {
-            ActivityRow(index, x, y, width)
-            y += Scale(SHOP_ACTIVITY_ROW)
+            y += ActivityRow(index, x, y, content_width)
         }
-        y += gap
     }
-    Form(x, y, width)
     unused End(shop.session)
 }
 

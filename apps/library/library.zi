@@ -14,6 +14,13 @@
 #import "scroll_props"
 #import "scroll_widget"
 #import "tree"
+#import "pointer_input"
+#import "swipe"
+#import "swipe_props"
+#import "box_props"
+#import "drawing_props"
+#import "box_widget"
+#import, file "../../src/cells/app_presentation.zi";
 #import "apps/node_types"
 #import, file "../../src/cells/module_types.zi";
 #import, file "../../src/app/text_buffers.zi";
@@ -47,6 +54,7 @@ loaded: bool;
 shelf_scroll: s32;
 contents_scroll: s32;
 chapter_scroll: s32;
+chapter_swipe: SwipeGesture;
 
 Scale :: (value: s32) -> s32 {
     return cast(s32)(cast(float32)value * frame.scale)
@@ -201,13 +209,29 @@ ContentsView :: () {
 
 // The chapter scrolls above its page buttons, which stay at the bottom.
 ChapterView :: () {
+    paper := ifx frame.dark then Color.{40, 35, 29, 255} else Color.{248, 241, 224, 255}
+    unused Box(frame.session, BoxProps.{.key = cast(u64)27500,
+            .bounds = Bounds(0, 0, frame.width, frame.height), .fill = paper})
     column := Column()
     width := cast(s32)column.width
-    words := BookChapter(book, chapter)
     reading := frame.font + Scale(3)
     buttons := Scale(48)
     page := column
     page.height -= cast(float32)(buttons + Scale(24))
+    pointer := SamplePointer()
+    turn := Swipe(SwipeSpec.{.bounds = Bounds(0, frame.top, frame.width, cast(s32)(page.y + page.height) - frame.top),
+            .directions = cast(u32)SwipeDirection.SwipeHorizontal,
+            .min_distance = cast(float32)Scale(48), .axis_bias = 1.5, .max_duration = 0.8},
+        chapter_swipe, SwipeFrame.{.pointer = Vector2.{pointer.x, pointer.y},
+            .pressed = pointer.pressed, .down = pointer.down, .released = pointer.released,
+            .input_clear = true, .owner_clear = true, .now_seconds = frame.now, .scale = frame.scale})
+    chapter_swipe = turn.gesture
+    if turn.direction == SwipeDirection.SwipeLeft && chapter < BookChapters(book) {
+        Open(book, chapter + 1)
+    } else if turn.direction == SwipeDirection.SwipeRight && chapter > 1 {
+        Open(book, chapter - 1)
+    }
+    words := BookChapter(book, chapter)
     text_height := TextHeight(frame.session, TextProps.{.text = words, .font = reading,
             .bounds = Bounds(0, 0, width, 0), .wrap = cast(TextWrap)TextWrapAuto})
     height := Scale(64) + text_height + Scale(24)
@@ -263,6 +287,10 @@ Main :: () -> s32 {
     message.succeeded = message.action == APP_ROUTE
     if message.action == APP_FRAME { message = LibraryView(message) }
     if message.action == APP_BACK { message.succeeded = LibraryBack() }
+    if message.action == APP_PRESENTATION {
+        message.succeeded = true
+        message.screen = ifx view == LIBRARY_CHAPTER then APP_PRESENTATION_IMMERSIVE else 0
+    }
     WriteAppHost(message)
     return 0
 }

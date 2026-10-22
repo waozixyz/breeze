@@ -76,7 +76,7 @@ with contextlib.ExitStack() as stack:
         return found.stdout.split()[0] if found.returncode == 0 and database.exists() else ""
     wait_for(find_window, "isolated app startup", timeout=20)
     driver.wait(label="Shopping", role="tab")
-    driver.wait(contains="Private · Only you")
+    driver.wait(label="Share", role="button")
     driver.wait_idle(frames=3)
 
     def sql(query):
@@ -145,9 +145,11 @@ with contextlib.ExitStack() as stack:
     wait_for(lambda: item_list("Pack bag"), "the task was not added to the new list")
     assert item_list("Pack bag") == "Travel", f"FAIL new list is selected: got {item_list('Pack bag')!r}"
     # Sharing is one icon that opens a dialog over the list; a tap beside it
-    # closes it. Offline, it asks to connect an account first. A private list
-    # says so, and Invitations appears only while one waits.
-    assert any("Only you" in label for label in driver.labels()), driver.labels()
+    # closes it. Offline, it asks to connect an account first. No line above
+    # the list says who has access, and Invitations appears only while one
+    # waits.
+    assert not any(label.startswith("Shared") or "Only you" in label for label in driver.labels()), driver.labels()
+    assert not driver.find(label="Delete", role="button"), "a Delete button is on the list screen"
     assert not driver.find(contains="Invitations", role="button"), "Invitations shown with none waiting"
     driver.press(label="Share", role="button")
     assert re.search(r"connect|account|sharing", dialog(), re.IGNORECASE), dialog()
@@ -172,6 +174,7 @@ with contextlib.ExitStack() as stack:
     calm("a failed refresh shows a notice")
     driver.press(label="Share", role="button")
     wait_for(lambda: "Alice" in dialog(), lambda: f"Alice is not offered: {dialog()}")
+    subprocess.run(["import", "-window", find_window(), str(TEST_DIR / "share-dialog.png")], check=True)
     driver.press(label="Invite", role="button")
     # The first failed delivery is retried quietly; nothing alarming is shown.
     wait_for(lambda: sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%'"),
@@ -205,13 +208,41 @@ with contextlib.ExitStack() as stack:
     # The new scope starts with its dialogs closed; close Share if it stayed.
     if driver.find(role="modal", visible=True):
         close_beside()
-    # Each shared list names who can open it.
+    # The screen carries no access line; sharing is the one Share button.
     driver.press(contains="Garden", role="tab")
-    wait_for(lambda: any("Shared with: Alice" in label and "Invited: Cedar" in label for label in driver.labels()),
-             lambda: f"the owned list does not name its people: {driver.labels()}")
+    driver.wait(label="Share", role="button")
+    assert not any("Shared with" in label or "Invited:" in label for label in driver.labels()), driver.labels()
+    # The owner's Share dialog on a list that already has people: a friend
+    # who joined, one still invited and several more to invite.
+    with writable() as db, db:
+        user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
+        db.execute("INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,1)",
+                   (user, "friends.list", json.dumps({"friends": [
+                       {"user_id_hash": "a" * 64, "alias": "Alice"}, {"user_id_hash": "c" * 64, "alias": "Cedar"},
+                       {"user_id_hash": "d" * 64, "alias": "Dana"}, {"user_id_hash": "e" * 64, "alias": "Emerald"}]})))
+    time.sleep(.5)
+    driver.press(label="Share", role="button")
+    time.sleep(1.0)
+    subprocess.run(["import", "-window", find_window(), str(TEST_DIR / "share-owned.png")], check=True)
+    wait_for(lambda: "Cedar" in dialog(), lambda: f"friends are not listed: {dialog()}")
+    names = dialog()
+    assert all(name in names for name in ("Alice", "Cedar", "Dana", "Emerald")), f"friend names missing: {names}"
+    assert "Accepted" in names and "Invited" in names, f"who has access is not shown: {names}"
+    # A list someone else owns never offers its owner an invitation.
+    close_beside()
     driver.press(contains="Groceries", role="tab")
-    wait_for(lambda: any("Shared by: Alice" in label for label in driver.labels()),
-             lambda: f"the received list does not name who shared it: {driver.labels()}")
+    driver.press(label="Share", role="button")
+    wait_for(lambda: "Cedar" in dialog(), lambda: f"friends are not listed: {dialog()}")
+    assert "Alice" not in dialog(), f"the owner is offered an invitation: {dialog()}"
+    close_beside()
+    driver.press(contains="Garden", role="tab")
+    driver.press(label="Share", role="button")
+    wait_for(lambda: "Cedar" in dialog(), lambda: f"friends are not listed: {dialog()}")
+    driver.wait_idle(frames=3)
+    subprocess.run(["import", "-window", find_window(), str(TEST_DIR / "share-owned.png")], check=True)
+    close_beside()
+    driver.press(contains="Groceries", role="tab")
+    assert not any("Shared by" in label for label in driver.labels()), driver.labels()
     window = find_window()
     subprocess.run(["import", "-window", window, str(TEST_DIR / "shared-names.png")], check=True)
     driver.press(label="Invitations (1)", role="button")
