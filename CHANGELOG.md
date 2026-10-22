@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.39] - 2026-10-22
+
+- Keep the Sun Salutation guide visible and its Back button working.
+
 ## [2.1.38] - 2026-10-21
 
 - Track habits you want to avoid with a daily target of 0.

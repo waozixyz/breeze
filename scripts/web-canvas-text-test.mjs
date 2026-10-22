@@ -23,7 +23,8 @@ export async function verifyCanvasTextResolution({ evaluate, resize, capture, ca
             this.canvas.height === canvas.height) {
           const transform = this.getTransform();
           const draws = window.__inbeTextProbe.draws;
-          draws.push({ text, font: this.font, scale: transform.a });
+          draws.push({ text, font: this.font, scale: transform.a,
+            width: canvas.width, height: canvas.height });
           if (draws.length > 2000) draws.shift();
         }
         return original.apply(this, arguments);
@@ -33,19 +34,21 @@ export async function verifyCanvasTextResolution({ evaluate, resize, capture, ca
   try {
     for (const width of [450, 1280]) {
       for (const dpi of [1, 1.25, 2]) {
-        await resize(width, 800, dpi);
         for (const [page, hook] of [
           ['appearance', 'app_web_test_show_appearance'],
           ['practice', 'app_web_test_show_practice_home']
         ]) {
-          await callHook(hook);
-          await delay(500);
+          // Retained pages can reuse their painted frame after settling.
+          // Observe the paint caused by the resize or route change itself.
           await evaluate('window.__inbeTextProbe.draws.length = 0');
-          await delay(250);
+          await resize(width, 800, dpi);
+          await callHook(hook);
+          await delay(750);
           const state = await evaluate(`(() => {
             const canvas = Module.canvas;
             const rect = canvas.getBoundingClientRect();
-            const draws = window.__inbeTextProbe.draws;
+            const draws = window.__inbeTextProbe.draws.filter(draw =>
+              draw.width === canvas.width && draw.height === canvas.height);
             return {
               width: canvas.width, height: canvas.height,
               cssWidth: rect.width, cssHeight: rect.height,

@@ -276,6 +276,8 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
         throw new Error(`Sun Salutation ${name} did not open: tab=${tab}, target=${JSON.stringify(point)}`);
       }
       await save(`${label}-${name}`);
+      if (name === 'manual')
+        await state();
       if (name === 'customize') {
         const picker = await evaluate(`(() => ({
           x: Module._app_web_test_control_x(613), y: Module._app_web_test_control_y(613),
@@ -292,7 +294,8 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
           await save(`${label}-character-${character}`);
         }
       }
-      await click(24, 24);
+      const back = await target('app_web_test_music_button', 12);
+      await click(back.x, back.y);
       await delay(500);
       if (await evaluate('Module._app_web_test_practice_tab()') !== 1)
         throw new Error(`Sun Salutation ${name} Back did not return home`);

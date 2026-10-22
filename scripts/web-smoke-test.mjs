@@ -2034,6 +2034,9 @@ try {
   console.log(`web smoke: PASS (${renderer})`);
 } catch (error) {
   failure = error;
+  const recent = (client?.events || []).map(eventText).filter(Boolean).slice(-30);
+  if (recent.length)
+    console.error(`web smoke browser logs:\n${recent.join('\n').slice(-12000)}`);
 } finally {
   if (client)
     client.close();

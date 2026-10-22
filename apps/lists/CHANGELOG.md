@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.6] - 2026-10-22
+
+- Maintenance release for Inner Breeze 2.1.39.
+
 ## [1.1.5] - 2026-10-21
 
 - Give each achievement its own meaningful icon.

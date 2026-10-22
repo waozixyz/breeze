@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.39] - 2026-10-22
+
+- Bring Lumi 1.5.5, Habits 1.2.4, Practices 1.3.3, Lists 1.1.6, Diary 1.3.3 and Leaderboard 1.0.8 for Inner Breeze 2.1.39.
+
 ## [2.1.38] - 2026-10-21
 
 - Show activity once, with a single Profile interface and distinct achievement icons.
