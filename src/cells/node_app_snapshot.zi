@@ -29,6 +29,11 @@ NodeInstalledLeaf :: struct {
     assets: [13]string
 }
 NodeSnapshotStep :: struct { handle: AppHandle; next: s64 }
+NodeSnapshotScan :: struct {
+    stack: Vec(NodeSnapshotStep)
+    account: [65]u8
+}
+node_snapshot_scans: [NodeAppSlots]NodeSnapshotScan;
 node_installed_leaves: Vec(NodeInstalledLeaf);
 node_installed_account: [65]u8;
 node_snapshot_scanning: bool;
@@ -115,46 +120,94 @@ NodeInstalledCapture :: (slot: s32, node: *AppNode) -> bool {
     return true
 }
 
-// Run before any frame is queued, when opening a verified installed root.
-// The explicit stack supports arbitrary nesting without a native call stack.
-NodeInstalledScan :: (slot: s32) -> bool {
+// Scan-owned children are distinct from the active app's navigation path.
+// Retire them before closing or replacing the root that owns their assets.
+NodeInstalledScanCancel :: (slot: s32) {
+    scan := *node_snapshot_scans[slot]
     host := node_runners[slot].nested
-    if host == null { return NodeInstalledCapture(slot, null) }
-    stack: Vec(NodeSnapshotStep)
-    if !VecPush(stack, NodeSnapshotStep.{AppHandle.{0, 1}, 0}) { return false }
+    while scan.stack.count > 0 {
+        step := VecPop(scan.stack)
+        if host != null && step.has_value && step.value.handle.slot != 0 {
+            AppTreeDrop(*host.tree, step.value.handle)
+        }
+    }
+    VecFree(scan.stack)
+    scan.account[0] = 0
+    if host != null { AppHostCollect(host) }
+}
+
+// A root opens immediately. Discover its installed leaves on later frames,
+// rather than hashing and opening an entire collection in the input thread.
+NodeInstalledScanStart :: (slot: s32) -> bool {
+    host := node_runners[slot].nested
+    if host == null {
+        if !NodeInstalledCapture(slot, null) { return false }
+        NodeInstalledSave(slot)
+        return true
+    }
+    scan := *node_snapshot_scans[slot]
+    if !CopyCString(NodeTreeAccount(), scan.account[:]) ||
+    !VecPush(scan.stack, NodeSnapshotStep.{AppHandle.{0, 1}, 0}) { return false }
+    return true
+}
+
+// At most one child opens per frame, across all roots. Every step returns to
+// the event loop, and gestures/practices can defer the next step entirely.
+NodeInstalledScanPump :: () -> bool {
+    for slot: cast(s32)0..NodeAppSlots - 1 {
+        scan := *node_snapshot_scans[slot]
+        if scan.stack.count == 0 { continue }
+        host := node_runners[slot].nested
+        if host == null || TextUntilNul(scan.account[:]) != NodeTreeAccount() {
+            NodeInstalledScanCancel(slot)
+            return true
+        }
+        if host.tree.busy || host.tree.draining { return false }
+        if !NodeInstalledScanStep(slot) {
+            NodeInstalledScanCancel(slot)
+            unused NodeAppClose(slot)
+            NodeAppLocalFailed(slot)
+        }
+        return true
+    }
+    return false
+}
+
+NodeInstalledScanStep :: (slot: s32) -> bool {
+    host := node_runners[slot].nested
+    scan := *node_snapshot_scans[slot]
     previous := node_snapshot_scanning
     node_snapshot_scanning = true
-    ok := true
-    while stack.count > 0 {
-        step := *stack[stack.count - 1]
-        node := AppTreeNode(*host.tree, step.handle)
-        if node == null { ok = false; break }
-        if !node.collection || step.next >= node.catalog.count {
-            if !node.collection {
-                state: AppState
-                if !NodeTreeState(cast(*void)(*node_runners[slot]), NodeTreeAccount(), *node.identity, *state) ||
-                (state.installed && !NodeInstalledCapture(slot, node)) { ok = false; break }
-            }
-            handle := step.handle
-            unused VecPop(stack)
-            if handle.slot != 0 { AppTreeDrop(*host.tree, handle); AppHostCollect(host) }
-            continue
+    defer { node_snapshot_scanning = previous }
+    step := *scan.stack[scan.stack.count - 1]
+    node := AppTreeNode(*host.tree, step.handle)
+    if node == null { return false }
+    if !node.collection || step.next >= node.catalog.count {
+        if !node.collection {
+            state: AppState
+            if !NodeTreeState(cast(*void)(*node_runners[slot]), NodeTreeAccount(), *node.identity, *state) ||
+            (state.installed && !NodeInstalledCapture(slot, node)) { return false }
         }
-        entry := AppCatalogAt(*node.catalog, step.next)
-        step.next += 1
-        handle := AppTreeOpenChild(*host.tree, step.handle, entry)
-        if handle.slot < 0 { ok = false; break }
-        if !VecPush(stack, NodeSnapshotStep.{handle, 0}) { AppTreeDrop(*host.tree, handle); ok = false; break }
+        handle := step.handle
+        unused VecPop(scan.stack)
+        if handle.slot != 0 { AppTreeDrop(*host.tree, handle) }
+        AppHostCollect(host)
+        if scan.stack.count == 0 {
+            VecFree(scan.stack)
+            scan.account[0] = 0
+            NodeInstalledSave(slot)
+        }
+        return true
     }
-    while stack.count > 0 {
-        step := VecPop(stack)
-        if step.has_value && step.value.handle.slot != 0 { AppTreeDrop(*host.tree, step.value.handle) }
+    entry := AppCatalogAt(*node.catalog, step.next)
+    step.next += 1
+    handle := AppTreeOpenChild(*host.tree, step.handle, entry)
+    if handle.slot < 0 { return false }
+    if !VecPush(scan.stack, NodeSnapshotStep.{handle, 0}) {
+        AppTreeDrop(*host.tree, handle)
+        return false
     }
-    AppHostCollect(host)
-    VecFree(stack)
-    node_snapshot_scanning = previous
-    if ok { NodeInstalledSave(slot) }
-    return ok
+    return true
 }
 
 // A root's verified leaves are also saved beside its package, for its
@@ -192,6 +245,7 @@ NodeSnapshotNext :: (text: string, cursor: *NodeSnapshotCursor) -> string {
 }
 
 NodeInstalledSave :: (slot: s32) {
+    if slot < 0 || slot >= NodeAppSlots || node_snapshot_scans[slot].stack.count > 0 { return }
     root := NodeAppName(slot)
     if root.count == 0 || NodeAppLocal(root) || !NodeAppRunning(slot) || node_tree_validating { return }
     hash := TextFromCString(*package_cached_releases[NodeAppIndex(slot)].hash[0])

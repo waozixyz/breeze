@@ -34,10 +34,9 @@ app-locations-test: $(ZIRAN_BIN)
 		--toolchain '$(abspath $(ZIRAN_DIR))' --apps '$(abspath build/packages/apps)' \
 		--daochi-client '$(abspath build/packages/daochi-client)'
 
-node-app-snapshot-test:
-	@test -n "$(APPS_TEST_MAP)" -a -n "$(APPS_TEST_TOOLCHAIN)" -a -n "$(APPS_TEST_RUNTIME)" || { echo 'Set APPS_TEST_MAP, APPS_TEST_TOOLCHAIN and APPS_TEST_RUNTIME'; exit 2; }
-	python3 tests/node_app_snapshot_test.py --module-map '$(APPS_TEST_MAP)' \
-		--toolchain '$(APPS_TEST_TOOLCHAIN)' --runtime '$(APPS_TEST_RUNTIME)' --crypto-source '$(abspath build/packages/crypto)'
+node-app-snapshot-test: $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
+	python3 tests/node_app_snapshot_test.py --ziran '$(abspath $(ZIRAN_BIN))' \
+		--runtime '$(abspath $(ZIRAN_BUILD_DIR)/libziran.a)'
 .PHONY: photos-app-test media-store-test media-metadata-test
 # Photos and the account's media library it shows.
 media-metadata-test: $(ZI2C_BIN)

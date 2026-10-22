@@ -145,6 +145,7 @@ final class HttpTransport {
             transfer.state = 0;
             transfer.response = null;
         }
+        System.err.println("HTTP: request deadline exceeded");
         stop(transfer);
     }
 
@@ -179,6 +180,8 @@ final class HttpTransport {
     private void perform(int id, Transfer transfer, byte[] body) {
         HttpURLConnection connection = null;
         int status = 0;
+        int receivedStatus = 0;
+        String stage = "connect";
         byte[] response = null;
         try {
             if (transfer.cancelled) {
@@ -199,13 +202,15 @@ final class HttpTransport {
                 return;
             }
             if (body.length > 0) {
+                stage = "send";
                 connection.setDoOutput(true);
                 connection.setFixedLengthStreamingMode(body.length);
                 try (OutputStream output = connection.getOutputStream()) {
                     output.write(body);
                 }
             }
-            int receivedStatus = connection.getResponseCode();
+            stage = "response";
+            receivedStatus = connection.getResponseCode();
             if (connection.getContentLength() >= transfer.capacity) {
                 throw new java.io.IOException("response capacity exceeded");
             }
@@ -214,6 +219,7 @@ final class HttpTransport {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream(
                 Math.min(transfer.capacity - 1, 8192));
             if (stream != null) {
+                stage = "read";
                 try (InputStream input = stream) {
                     byte[] buffer = new byte[Math.min(transfer.capacity, 8192)];
                     int count;
@@ -228,7 +234,10 @@ final class HttpTransport {
             response = bytes.toByteArray();
             status = receivedStatus;
         } catch (Exception error) {
-            // Transport errors are reported without logging credentials or response data.
+            // Class and stage only: exception messages may contain private URLs.
+            System.err.println("HTTP: request failed stage=" + stage + " cause=" +
+                error.getClass().getSimpleName() + " status=" + receivedStatus +
+                " capacity=" + transfer.capacity);
         } finally {
             if (connection != null) {
                 connection.disconnect();

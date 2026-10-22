@@ -4,12 +4,88 @@
 #import "std/text_buffer"
 #import "std/vec"
 #import "std/byte_text_linux"
+#import "apps/tree"
+#import "apps/host"
+#import "apps/catalog"
+#import "apps/protocol"
 #import, file "delegate_account_host.zi";
 #import, file "../src/cells/node_app_snapshot.zi";
 #import, file "../src/cells/node_app_tree.zi";
 #import, file "../src/cells/node_apps.zi";
+#import, file "../src/cells/catalog.zi";
+#import, file "../src/cells/node_app_runner.zi";
 #import, file "../src/storage/db.zi";
 #import, file "../src/storage/storage_settings.zi";
+
+snapshot_opened: s32;
+snapshot_fail_open: bool;
+
+// The native fixture has no browser filesystem to flush.
+#program_export "app_web_storage_flush"
+SnapshotWebStorageFlush :: (log_success: s32) {}
+
+SnapshotOpen :: (context: *void, parent: *AppNode, entry: *AppEntry, candidate: *AppNode) -> bool {
+    snapshot_opened += 1
+    if snapshot_fail_open { return false }
+    candidate.identity.authority = parent.identity.authority
+    candidate.identity.id = entry.id
+    candidate.entry = entry.*
+    candidate.runtime = cast(*void)candidate
+    candidate.bytes = 1
+    return true
+}
+
+SnapshotSave :: (context: *void, node: *AppNode) -> bool { return true }
+SnapshotClose :: (context: *void, node: *AppNode) {}
+SnapshotEffect :: (context: *void, account: string, locator: *AppLocator,
+    operation: s32, reply: *AppsReply) -> bool { return false }
+
+// Discovery yields after opening each child. Its private traversal never
+// drops the active child opened by navigation, even when discovery cancels.
+SnapshotDiscoveryCheck :: () -> s32 {
+    host: AppHost
+    root := New(AppNode)
+    if root == null { return 10 }
+    root.runtime = cast(*void)root
+    root.collection = true
+    root.bytes = 1
+    unused CopyCString("publisher", root.identity.authority[:])
+    unused CopyCString("fixture.root", root.identity.id[:])
+    ids: [2]string = .["fixture.one", "fixture.two"]
+    for id: ids {
+        entry: AppEntry
+        unused CopyCString(id, entry.id[:])
+        unused CopyCString(id, entry.expected_id[:])
+        unused CopyCString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", entry.sha256[:])
+        entry.protocol = APPS_CONTEXT_PROTOCOL
+        if !AppCatalogAppend(*root.catalog, entry) { return 11 }
+    }
+    if !AppTreeStart(*host.tree, root, NodeTreeAccount(), AppProvider.{
+        .open = SnapshotOpen, .save = SnapshotSave, .close = SnapshotClose,
+        .effect = SnapshotEffect}) { return 12 }
+    slot := cast(s32)(NodeAppSlots - 1)
+    node_runners[slot].nested = *host
+    if !NodeInstalledScanStart(slot) || snapshot_opened != 0 { return 13 }
+    for step: cast(s32)0..4 {
+        before := snapshot_opened
+        if !NodeInstalledScanStep(slot) || snapshot_opened - before > 1 ||
+        node_snapshot_scanning || !AppHandleEqual(host.tree.active, AppHandle.{0, 1}) { return 14 }
+    }
+    if snapshot_opened != 2 || node_snapshot_scans[slot].stack.count != 0 { return 15 }
+    active := AppTreeOpenChild(*host.tree, AppHandle.{0, 1}, AppCatalogAt(*root.catalog, 0))
+    if active.slot < 0 { return 16 }
+    host.tree.active = active
+    if !NodeInstalledScanStart(slot) || !NodeInstalledScanStep(slot) { return 17 }
+    NodeInstalledScanCancel(slot)
+    if node_snapshot_scans[slot].stack.count != 0 || AppTreeNode(*host.tree, active) == null ||
+    !AppHandleEqual(host.tree.active, active) || host.tree.nodes.count != 2 { return 18 }
+    snapshot_fail_open = true
+    if !NodeInstalledScanStart(slot) || NodeInstalledScanStep(slot) || node_snapshot_scanning { return 19 }
+    NodeInstalledScanCancel(slot)
+    if AppTreeNode(*host.tree, active) == null || !AppTreeClose(*host.tree) { return 20 }
+    node_runners[slot].nested = null
+    return 0
+}
 
 #program_export
 Check :: () -> s32 {
@@ -52,6 +128,8 @@ Check :: () -> s32 {
     before = NodeAppInstalledLeafRevision()
     NodeInstalledClear()
     if NodeAppInstalledLeafRevision() == before { return 9 }
+    discovery := SnapshotDiscoveryCheck()
+    if discovery != 0 { return discovery }
     storage_close()
     return 0
 }

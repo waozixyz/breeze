@@ -617,6 +617,7 @@ NodeAppUninstall :: (slot: s32) {
 }
 
 NodeAppClose :: (slot: s32) -> bool {
+    NodeInstalledScanCancel(slot)
     if !NodeTreeClose(*node_runners[slot]) { return false }
     BackgroundAudioStop(slot)
     HostedAppClose(*node_runners[slot].app)
@@ -1166,7 +1167,7 @@ NodeAppOpen :: (slot: s32) -> bool {
         return false
     }
     // The leaves saved for this release stand in for opening every child.
-    if !NodeInstalledCurrent(slot, verified) && !NodeInstalledScan(slot) {
+    if !NodeInstalledCurrent(slot, verified) && !NodeInstalledScanStart(slot) {
         unused NodeAppClose(slot)
         NodeAppLocalFailed(slot)
         return false
@@ -1771,19 +1772,21 @@ NodeAppsPump :: (now: s32, catalog_wanted: bool, defer_open: bool = false) {
         node_open_next = ifx node_first_pump_done then 0 else -1
     }
     node_first_pump_done = true
+    worked := !defer_open && NodeInstalledScanPump()
     if node_open_next < 0 {
         node_open_next = 0
-    } else if !defer_open {
+    } else if !defer_open && !worked {
         while node_open_next < NodeAppSlots {
             slot := node_open_next
             node_open_next += 1
             if NodeAppName(slot).count > 0 && !NodeAppRunning(slot) && !NodeInstalledLoad(slot) {
                 unused NodeAppOpen(slot)
+                worked = true
                 break
             }
         }
     }
-    if !defer_open && (now - node_reconciled_at >= 2 || now < node_reconciled_at) {
+    if !defer_open && !worked && (now - node_reconciled_at >= 2 || now < node_reconciled_at) {
         node_reconciled_at = now
         NodeAppsReconcile()
         NodeAppsReplace()

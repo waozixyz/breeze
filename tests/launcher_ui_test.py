@@ -32,6 +32,8 @@ parser.add_argument("--measure", action="store_true", help="Measure cold Apps op
 parser.add_argument("--dock-only", action="store_true")
 parser.add_argument("--properties-only", action="store_true",
                     help="Rename an app and change its icon in Apps › Properties")
+parser.add_argument("--profile-navigation-only", action="store_true",
+                    help="Check Profile's own Back stack with saved navigation placements")
 parser.add_argument("--with-tray", action="store_true",
                     help="Enable the desktop tray using the caller's locale settings")
 arguments = parser.parse_args()
@@ -325,6 +327,90 @@ with contextlib.ExitStack() as stack:
             finally:
                 stop(app)
 
+    def check_profile_navigation():
+        """Pinned and unpinned Profile share one header and the same Back stack."""
+        with tempfile.TemporaryDirectory(prefix="inbe-profile-navigation-") as temporary:
+            profile = Path(temporary)
+            user = None
+            with application(profile, "profile-navigation-initialize"):
+                with database(profile) as db:
+                    user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
+
+            def profile_settings(values):
+                # seed() closes over the launcher's outer user variable.
+                with contextlib.closing(sqlite3.connect(profile / "inbe.db", timeout=3)) as db, db:
+                    for name, value in values.items():
+                        db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
+                                   "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
+                                   (user, name, str(value)))
+
+            def one_header(title):
+                driver.wait(label=title, role="title_bar")
+                bars = driver.find(role="title_bar", visible=True)
+                assert len(bars) == 1, f"Duplicate {title} navigation: {bars}"
+                assert len(driver.find(label="Back", role="button", visible=True)) == 1
+                assert not driver.find(label="Return to Apps", role="button", visible=True)
+
+            def reveal_action(label):
+                driver.pointer(window_size[0] / 2, window_size[1] / 2, wheel=30)
+                driver.wait_idle(frames=2)
+                for _ in range(18):
+                    if driver.find(label=label, role="button", visible=True):
+                        return
+                    driver.pointer(window_size[0] / 2, window_size[1] / 2, wheel=-4)
+                    driver.wait_idle(frames=2)
+                driver.wait(label=label, role="button")
+
+            common = {"language": "en", "language_system": 0, "language_setup_done": 1,
+                      "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
+                      "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1,
+                      "lumi_guides_seen": 127, "launcher_guide_seen": 1,
+                      "voice_narration_enabled": 0, "guide_narration_enabled": 0,
+                      "theme": 9, "theme_source": 0, "theme_mode": 2,
+                      "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
+                      "app_used_lists": 1, "app_used_habits": 1,
+                      "app_used_practices": 1, "app_used_diary": 1, "app_used_lumi": 1}
+            cases = [(390, 844, 4), (390, 844, 2),
+                     (900, 720, 4), (900, 720, 1)]
+            for width, height, placement in cases:
+                for pinned in (False, True):
+                    routes = [0, 1, 2] if pinned else [1, 2]
+                    profile_settings(common | {"navigation_placement": placement,
+                                               "launcher_favorite_count": len(routes)} |
+                                     {f"launcher_favorite_{i}": route for i, route in enumerate(routes)})
+                    name = f"profile-navigation-{width}-{placement}-{'pinned' if pinned else 'unpinned'}"
+                    with application(profile, name, width, height) as (window, log):
+                        open_apps()
+                        open_profile(log)
+                        driver.wait(label="Profile picture", role="button")
+                        one_header("Profile")
+                        assert [node["label"] for node in navigation()] == \
+                            (["Profile"] if pinned else []) + ["Habits", "Practice", "Apps"]
+                        if width == 390 and placement == 4 and not pinned:
+                            capture(window, name)
+                        reveal_action("Connect Account")
+                        driver.press(label="Connect Account", role="button")
+                        driver.wait(contains="Create", role="button")
+                        one_header("Profile")
+                        driver.press(label="Back", role="button")
+                        driver.wait(label="Profile picture", role="button", visible=False)
+                        one_header("Profile")
+                        reveal_action("Activity")
+                        driver.press(label="Activity", role="button")
+                        one_header("Activity")
+                        driver.press(label="Back", role="button")
+                        driver.wait(label="Profile picture", role="button", visible=False)
+                        one_header("Profile")
+                        driver.press(label="Back", role="button")
+                        driver.wait(label="Pinned")
+                        assert not driver.find(role="title_bar", visible=True)
+                        print(f"{name}: one header and complete Back stack passed", flush=True)
+        print("Profile: one header, Account/Activity Back stack, pinned/unpinned, saved top/bottom/side navigation passed")
+
+    if arguments.profile_navigation_only:
+        check_profile_navigation()
+        raise SystemExit(0)
+
     if arguments.views_only:
         for width, height in ((900, 720), (390, 844)):
             with tempfile.TemporaryDirectory(prefix="inbe-launcher-views-") as temporary:
@@ -349,8 +435,13 @@ with contextlib.ExitStack() as stack:
                     assert driver.wait(label="List view", role="button")["selected"]
                     pinned, more, tree = cards()
                     assert all(abs(card["height"] - 64) <= 1 for card in pinned + more), cards()
+                    assert not any(card.get("selected", False) for card in pinned + more), "Apps highlights the previous route"
                     assert not driver.find(label="Move app", role="button"), "Browsing shows reorder controls"
+                    open_apps()
+                    assert apps_open(), "Tapping the selected Apps destination closed it"
                     driver.press(label="Edit apps", role="button")
+                    open_apps()
+                    assert driver.find(label="Done", role="button"), "Reselecting Apps reset edit mode"
                     pinned, more, tree = cards()
                     handles = driver.find(label="Move app", role="button", visible=True)
                     first_handle = next(h for h in handles if abs(h["y"] + h["height"] / 2 - pinned[0]["y"] - 32) < 2)
@@ -831,4 +922,5 @@ with contextlib.ExitStack() as stack:
                     open_apps()
                     open_profile(log)
                     assert favorites(profile) == []
+    check_profile_navigation()
     print("Launcher: first-run language, desktop defaults, clean sections, click/hold/drag, profile and persistence passed")

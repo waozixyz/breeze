@@ -125,7 +125,7 @@ test: sync-recovery-test
 test: sync-connection-test
 test: sync-record-fields-test
 test: media-metadata-test media-store-test photos-app-test
-test: node-app-records-test
+test: node-app-records-test node-app-snapshot-test
 test: app-click-block-zi-test
 test: phone-check-gate-test
 test: release-tooling-test
