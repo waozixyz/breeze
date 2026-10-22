@@ -21,6 +21,8 @@ Habits :: #import, file "storage_habits.zi";
 #import, file "sync_record_crypto.zi";
 #import, file "storage_json_sql.zi";
 #import, file "sync_apply.zi";
+#import, file "sync_page_store.zi";
+#import "sync_flow"
 c :: #system_library "c";
 malloc :: (size: usize) -> *void #foreign c;
 free :: (ptr: *void) #foreign c;
@@ -30,6 +32,10 @@ LOG_INFO :: 3
 
 #program_export
 storage_build_sync_payload_json :: (user_id_hash: string, public_key_hex: string) -> *u8 {
+    return BuildStoredSyncPayload(user_id_hash, public_key_hex, STORAGE_SYNC_OP_BATCH_LIMIT)
+}
+
+BuildStoredSyncPayload :: (user_id_hash: string, public_key_hex: string, maximum_records: s32) -> *u8 {
     json: StorageJsonBuilder
     since_server_version: s64
     through_seq: s64
@@ -76,9 +82,9 @@ storage_build_sync_payload_json :: (user_id_hash: string, public_key_hex: string
     if storage_meta_int64(STORAGE_SYNC_RECORD_FIELDS_KEY, 0) < STORAGE_SYNC_RECORD_FIELDS {
         since_server_version = 0
     }
-    // Chunked diary photos must stay within the public node's 1 MiB request.
-    batch_limit: s32 = cast(s32)STORAGE_SYNC_OP_BATCH_LIMIT
-    if db_select_int64_text("SELECT EXISTS(SELECT 1 FROM sync_outbox WHERE entity_type='cell_record')", 0) != 0 {
+    batch_limit := maximum_records
+    // Chunked diary photos must stay within the public node's request limit.
+    if batch_limit > 64 && db_select_int64_text("SELECT EXISTS(SELECT 1 FROM sync_outbox WHERE entity_type='cell_record')", 0) != 0 {
         batch_limit = 64
     }
     through_seq = storage_sync_outbox_batch_seq(batch_limit)
@@ -99,11 +105,11 @@ storage_build_sync_payload_json :: (user_id_hash: string, public_key_hex: string
     storage_json_builder_append_text(*json, ",")
     storage_json_builder_key_value_text(*json, "client_id", storage_sync_client_id())
     server_version_text: [24] u8
-    AppFormatS32(cast(s32)since_server_version, server_version_text[:])
+    unused AppFormatS64(since_server_version, server_version_text[:])
     storage_json_builder_append_text(*json, ",\"since_server_version\":")
     storage_json_builder_append_text(*json, AppTextFromCString(*server_version_text[0], 24))
     client_clock_text: [24] u8
-    AppFormatS32(cast(s32)storage_meta_int64(STORAGE_SYNC_SERVER_CLOCK_KEY, 0), client_clock_text[:])
+    unused AppFormatS64(storage_meta_int64(STORAGE_SYNC_SERVER_CLOCK_KEY, 0), client_clock_text[:])
     storage_json_builder_append_text(*json, ",\"client_clock\":")
     storage_json_builder_append_text(*json, AppTextFromCString(*client_clock_text[0], 24))
     if storage_meta_int64(STORAGE_SYNC_FULL_REPLACE_KEY, 0) != 0 {
@@ -157,6 +163,11 @@ storage_sync_response_has_changes :: (json: string) -> s32 {
 
 #program_export
 storage_apply_sync_response_json :: (response_json: string) -> s32 {
+    return ApplyStoredSyncResponse(response_json, null)
+}
+
+ApplyStoredSyncResponse :: (response_json: string, page: *SyncPageState) -> s32 {
+    incomplete := page != null && page.pending
     server_version: s64
     server_clock: s64
     old_server_version: s64
@@ -230,7 +241,7 @@ storage_apply_sync_response_json :: (response_json: string) -> s32 {
         return 0
     }
     storage_clear_uploaded_outbox(storage_state_handle().pending_sync_outbox_seq)
-    if storage_apply_sync_records(response_json) == 0 {
+    if storage_apply_sync_records(response_json) == 0 || (page != null && !SaveStoredSyncPage(storage_get_setting_text("sync_server_url"), page)) {
         exec_sql("ROLLBACK TO sync_apply")
         exec_sql("RELEASE sync_apply")
         return 0
@@ -255,10 +266,10 @@ storage_apply_sync_response_json :: (response_json: string) -> s32 {
     if server_version > old_server_version && storage_sync_response_has_changes(response_json) != 0 {
         storage_state_handle().last_sync_changed = 1
     }
-    if server_version > 0 {
+    if server_version > 0 && !incomplete {
         storage_set_meta_int64("sync_last_server_version", server_version)
     }
-    if server_clock > 0 {
+    if server_clock > 0 && !incomplete {
         storage_set_meta_int64(STORAGE_SYNC_SERVER_CLOCK_KEY, server_clock)
     }
     if storage_json_extract_text(response_json, "$.server_state_hash", *server_hash[0],
@@ -276,6 +287,10 @@ storage_apply_sync_response_json :: (response_json: string) -> s32 {
     storage_set_meta_int64(STORAGE_SYNC_APPLY_REVIEW_KEY, 0)
     set_meta_int64_buf(STORAGE_SYNC_FULL_REPLACE_KEY, 0)
     storage_state_handle().pending_sync_outbox_seq = 0
+    if incomplete {
+        storage_schedule_persist()
+        return 1
+    }
     storage_set_meta_int64("sync_full_upload_done", 1)
     storage_set_meta_int64(STORAGE_SYNC_BACKFILL_KEY, 1)
     storage_set_meta_int64(STORAGE_SYNC_HABIT_NAME_REPAIR_KEY, 1)

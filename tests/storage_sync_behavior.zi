@@ -44,6 +44,8 @@
 #import, file "../src/storage/media_node_session.zi";
 #import, file "../src/storage/sync_session.zi";
 #import "auth"
+#import "sync_flow"
+#import, file "../src/storage/sync_page_store.zi";
 #import "text_buffer"
 #import, file "../src/storage/sqlite.zi";
 #import "json_scan"
@@ -88,6 +90,44 @@ test_node_cursors :: () {
     check_true("do not reuse another account's cursor", storage_meta_int64("sync_last_server_version", 0) == 0)
     check_true("return with another account", SyncNodeActivate("https://one.example"))
     check_true("keep account cursors separate", storage_meta_int64("sync_last_server_version", 0) == 0)
+    storage_close()
+}
+
+test_record_page_storage :: () {
+    root := make_root("sync-record-pages")
+    check_true("init paged device", storage_init(root) != 0)
+    set_account()
+    storage_set_setting_text("sync_server_url", "https://one.example")
+    page: SyncPageState
+    page.enabled = true
+    page.pending = true
+    unused AppCopyText("{\"version\":7,\"collection\":\"private.inbe.v1.habits\",\"id\":\"habit-1\"}", page.cursor[:])
+    check_true("persist page recovery", SaveStoredSyncPage("https://one.example", *page))
+    loaded: SyncPageState
+    check_true("load saved progress", LoadStoredSyncPage("https://one.example", *loaded))
+    check_true("resume the last committed cursor", loaded.enabled && loaded.pending &&
+        TextUntilNul(loaded.cursor[:]) == TextUntilNul(page.cursor[:]))
+    check_true("another node has its own state", LoadStoredSyncPage("https://two.example", *loaded) && !loaded.enabled)
+    storage_set_setting_text("sync_public_id", "other-account")
+    check_true("another account has its own state", LoadStoredSyncPage("https://one.example", *loaded) && !loaded.enabled)
+    set_account()
+    check_true("restore the original account progress", LoadStoredSyncPage("https://one.example", *loaded) && loaded.pending)
+    response := "{\"protocol_version\":6,\"server_version\":50,\"server_clock\":50,\"changes\":{\"encrypted_records\":[]}}"
+    check_true("apply a partial page", ApplyStoredSyncResponse(response, *page) != 0)
+    check_true("keep watermark until the terminal page", storage_meta_int64("sync_last_server_version", 0) == 0)
+    check_true("keep repairs pending during download", storage_meta_int64("sync_full_upload_done", 0) == 0)
+    page.pending = false
+    page.cursor[0] = cast(u8)0
+    // A failing cursor write must reject the page and leave previous progress.
+    check_true("install cursor failure fixture", SqliteExecText(storage_db_handle(),
+        "CREATE TEMP TRIGGER reject_cursor BEFORE UPDATE ON settings WHEN NEW.key GLOB 'sync_node_*.record_cursor' BEGIN SELECT RAISE(ABORT,'test cursor failure'); END") == SQLITE_OK)
+    check_true("failed cursor save rejects the page", ApplyStoredSyncResponse(response, *page) == 0)
+    check_true("remove cursor failure fixture", SqliteExecText(storage_db_handle(), "DROP TRIGGER reject_cursor") == SQLITE_OK)
+    check_true("failed page does not advance watermark", storage_meta_int64("sync_last_server_version", 0) == 0)
+    check_true("failed page keeps the committed cursor", LoadStoredSyncPage("https://one.example", *loaded) && loaded.pending && loaded.cursor[0] != cast(u8)0)
+    check_true("accept terminal page", ApplyStoredSyncResponse(response, *page) != 0)
+    check_true("terminal page advances the watermark", storage_meta_int64("sync_last_server_version", 0) == 50)
+    check_true("terminal page clears recovery cursor", LoadStoredSyncPage("https://one.example", *loaded) && !loaded.pending && loaded.cursor[0] == cast(u8)0)
     storage_close()
 }
 
@@ -2160,6 +2200,7 @@ Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
     if guard != 0 { return guard }
     test_node_cursors()
+    test_record_page_storage()
     test_node_storage_and_media()
     test_payload_after_upload_marker()
     test_backfill_includes_existing_habits()

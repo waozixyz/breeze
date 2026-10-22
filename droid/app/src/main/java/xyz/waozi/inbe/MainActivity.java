@@ -281,6 +281,10 @@ public class MainActivity extends NativeActivity {
         return httpTransport.poll(handle);
     }
 
+    public int httpFailure(int handle) {
+        return httpTransport.failure(handle);
+    }
+
     public byte[] httpResponse(int handle) {
         return httpTransport.response(handle);
     }

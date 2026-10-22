@@ -1,0 +1,43 @@
+// Inbe persists Daochi Client's cursor with this account and node. The
+// library owns page requests, validation, retries and completion decisions.
+#import "sync_flow"
+#import "text_buffer"
+#import "c_string"
+#import, file "sync_nodes.zi";
+#import, file "storage_settings.zi";
+#import, file "../cells/package_files.zi";
+
+LoadStoredSyncPage :: (server: string, state: *SyncPageState) -> bool {
+    address := PackageText(server, "")
+    defer { PackageFree(address) }
+    enabled := SyncNodeCursorKey(address, "record_pages")
+    pending := SyncNodeCursorKey(address, "record_pending")
+    cursor := SyncNodeCursorKey(address, "record_cursor")
+    defer {
+        PackageFree(enabled)
+        PackageFree(pending)
+        PackageFree(cursor)
+    }
+    state.enabled = storage_get_setting_int(enabled, 0) != 0
+    state.pending = storage_get_setting_int(pending, 0) != 0
+    return CopyCString(storage_get_setting_text(cursor), state.cursor[:])
+}
+
+SaveStoredSyncPage :: (server: string, state: *SyncPageState) -> bool {
+    address := PackageText(server, "")
+    defer { PackageFree(address) }
+    enabled := SyncNodeCursorKey(address, "record_pages")
+    pending := SyncNodeCursorKey(address, "record_pending")
+    cursor := SyncNodeCursorKey(address, "record_cursor")
+    defer {
+        PackageFree(enabled)
+        PackageFree(pending)
+        PackageFree(cursor)
+    }
+    storage_set_setting_int(enabled, ifx state.enabled then 1 else 0)
+    storage_set_setting_int(pending, ifx state.pending then 1 else 0)
+    storage_set_setting_text(cursor, TextUntilNul(state.cursor[:]))
+    return storage_setting_text_equals(enabled, ifx state.enabled then "1" else "0") != 0 &&
+    storage_setting_text_equals(pending, ifx state.pending then "1" else "0") != 0 &&
+    storage_setting_text_equals(cursor, TextUntilNul(state.cursor[:])) != 0
+}

@@ -6,6 +6,8 @@
     #import "account"
     #import "social"
     #import "sync"
+    #import, file "sync_async.zi";
+    #import, file "../platform/network_transport.zi";
     #import "events"
     #import "delegated"
     #import, file "delegate_store.zi";
@@ -37,6 +39,7 @@
     malloc :: (size: usize) -> *void #foreign c;
     free :: (pointer: *void) #foreign c;
     time :: (out: *s64) -> s64 #foreign c;
+    SyncWait :: (microseconds: u32) -> s32 #foreign c "usleep";
 
     SyncResponseCapacity :: 16777216;
     SocialSend :: 1;
@@ -94,62 +97,20 @@
         if StoredAccountMode() == AccountModeDelegate {
             return SyncStoredDelegate(base_url)
         }
-        account: AccountKeys
-        if sync_account_load(*account) == 0 {
-            return cast(s32)AuthResult.AUTH_NO_ACCOUNT
-        }
-        material: DeviceKeyMaterial
-        if !LoadOrCreateDeviceKey(*material) {
-            return cast(s32)AuthResult.AUTH_SIGN_FAILED
-        }
-        client_id := storage_sync_client_id()
-        account_id := AccountFieldText(*account.public_id[0],
-            ACCOUNT_PUBLIC_ID_HEX_SIZE)
-        public_key := AccountFieldText(*account.public_key_hex[0],
-            ACCOUNT_PUBLIC_KEY_HEX_SIZE)
-        // An updated device downloads first and then sends its changes in a
-        // second exchange right away.
         downloading_first := storage_sync_records_download_first()
-        payload := storage_build_sync_payload_json(account_id, public_key)
-        if payload == null {
-            WipeDeviceKey(*material)
-            return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+        operation: StoredOperation
+        network: NetworkTransfer
+        if !BeginStoredSync(*operation, base_url, NetworkTransport(*network)) {
+            return operation.result
         }
-        response := cast(*u8)malloc(SyncResponseCapacity)
-        if response == null {
-            storage_free_sync_payload_json(payload)
-            WipeDeviceKey(*material)
-            return cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
+        while !PollStoredOperation(*operation) {
+            unused SyncWait(10000)
         }
-        now := time(null)
-        session: Session
-        LoadSavedSession(*session, now)
-        status: s32 = 0
-        result := SyncAccountPayload(base_url, *account, client_id,
-            *session, DeviceFromKey(*material), now,
-            TextFromCString(payload),
-            BytesFromPointer(response, SyncResponseCapacity), *status)
-        SaveSession(*session)
-        storage_free_sync_payload_json(payload)
-        WipeDeviceKey(*material)
-        reply := TextUntilNul(BytesFromPointer(response, SyncResponseCapacity))
-        outcome := cast(s32)result
-        if result == cast(AuthResult)AuthResult.AUTH_OK {
-            if storage_apply_sync_response_json(reply) == 0 {
-                outcome = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
-            } else {
-                storage_purge_synced_deleted_data()
-                SyncNodeStorageRecordResponse(base_url, reply)
-            }
-        } else if status == 413 && SyncNodeStorageRecordFull(base_url, reply) {
-            outcome = cast(s32)SyncResult.SYNC_STORAGE_FULL
-        }
-        free(cast(*void)response)
-        if outcome == cast(s32)AuthResult.AUTH_OK && downloading_first &&
+        if operation.result == cast(s32)AuthResult.AUTH_OK && downloading_first &&
         !storage_sync_records_download_first() {
             return SyncStoredAccount(base_url)
         }
-        return outcome
+        return operation.result
     }
 
     // Signs in to a node for photo copies and registers this device there.

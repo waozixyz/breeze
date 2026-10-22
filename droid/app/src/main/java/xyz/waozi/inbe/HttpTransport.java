@@ -40,6 +40,7 @@ final class HttpTransport {
         volatile boolean cancelled;
         boolean sent;
         int state = -1;
+        int failure;
         byte[] response;
 
         Transfer(String method, URL url, int capacity, int timeout) {
@@ -181,7 +182,9 @@ final class HttpTransport {
         HttpURLConnection connection = null;
         int status = 0;
         int receivedStatus = 0;
+        int receivedBytes = 0;
         String stage = "connect";
+        String failure = "io";
         byte[] response = null;
         try {
             if (transfer.cancelled) {
@@ -212,6 +215,7 @@ final class HttpTransport {
             stage = "response";
             receivedStatus = connection.getResponseCode();
             if (connection.getContentLength() >= transfer.capacity) {
+                failure = "capacity";
                 throw new java.io.IOException("response capacity exceeded");
             }
             InputStream stream = receivedStatus >= 400
@@ -224,10 +228,16 @@ final class HttpTransport {
                     byte[] buffer = new byte[Math.min(transfer.capacity, 8192)];
                     int count;
                     while ((count = input.read(buffer)) != -1) {
-                        if (transfer.cancelled || count > transfer.capacity - bytes.size() - 1) {
-                            throw new java.io.IOException("response cancelled or capacity exceeded");
+                        if (transfer.cancelled) {
+                            failure = "cancelled";
+                            throw new java.io.IOException("response cancelled");
+                        }
+                        if (count > transfer.capacity - bytes.size() - 1) {
+                            failure = "capacity";
+                            throw new java.io.IOException("response capacity exceeded");
                         }
                         bytes.write(buffer, 0, count);
+                        receivedBytes = bytes.size();
                     }
                 }
             }
@@ -236,7 +246,8 @@ final class HttpTransport {
         } catch (Exception error) {
             // Class and stage only: exception messages may contain private URLs.
             System.err.println("HTTP: request failed stage=" + stage + " cause=" +
-                error.getClass().getSimpleName() + " status=" + receivedStatus +
+                error.getClass().getSimpleName() + " reason=" + failure +
+                " status=" + receivedStatus + " bytes=" + receivedBytes +
                 " capacity=" + transfer.capacity);
         } finally {
             if (connection != null) {
@@ -246,6 +257,7 @@ final class HttpTransport {
             synchronized (transfer) {
                 if (!transfer.cancelled && transfers.get(id) == transfer) {
                     transfer.response = response;
+                    transfer.failure = status > 0 ? 0 : ("capacity".equals(failure) ? 2 : 1);
                     transfer.state = status;
                 }
             }
@@ -270,6 +282,12 @@ final class HttpTransport {
         synchronized (transfer) {
             return transfer.state > 0 ? transfer.response : null;
         }
+    }
+
+    int failure(int id) {
+        Transfer transfer = transfers.get(id);
+        if (transfer == null) { return 1; }
+        synchronized (transfer) { return transfer.failure; }
     }
 
     void cancel(int id) {

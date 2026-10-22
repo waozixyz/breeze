@@ -130,6 +130,7 @@ public final class AndroidHttpTransportTest {
                 id = request(transport, "GET", base + path, 8, 1000, new byte[0]);
                 require(waitFor(transport, id) == 0 && transport.response(id) == null,
                     "bounded response " + path);
+                require(transport.failure(id) == 2, "capacity failure classification " + path);
                 transport.cancel(id);
             }
             id = request(transport, "GET", base + "/redirect", 64, 1000, new byte[0]);

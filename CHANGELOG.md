@@ -2,37 +2,9 @@
 
 ## [2.1.38] - 2026-10-21
 
-- Connecting an account starts sync automatically, and existing connections recover a missing node address.
-- Sync startup failures show their cause and retry correctly instead of remaining queued.
-- Move apps by their handles in Edit apps, including apps not downloaded yet; dragging a row scrolls the list.
-- Open main settings from Apps’ top-right corner instead of a separate Settings app.
-- Tapping Apps again keeps it open, and every app row keeps its normal appearance and options menu.
-- Profile has one header, and Back returns through Account and Activity before Apps even when Profile is unpinned.
-- Lists and Leaderboard come preinstalled, the app list uses a simple divider, and every row stays clear of navigation.
-- Account IDs use the first and last four characters, and Account has one heading.
-- Downloads keep transferring while package installation waits for scrolling and dragging to finish.
-- Installed collections discover their games over successive frames instead of opening every game at once.
-- Apps asks about automatic updates again, and discovering apps retries after a connection failure.
-- Open a friend to view and copy their full public ID.
-- Account shows one current sync status, and local database size is distinguished from node storage.
-- Switch Apps between a scrollable list and a grid; your chosen view is remembered.
-- Pin Profile alongside your other apps.
-- Apps opens faster when first showing your apps.
-- Arcade switches to newly installed game updates without keeping an older campaign open.
-- Android launches use current game packages even when an older developer copy remains on the device.
-- Shovey's own Back button returns to its game chooser.
-- Escape closes the open dialog, including while an input is focused.
-- Scrolling stays responsive while a text field is focused.
-- Profile Activity shows activity without repeating profile destinations.
-- Every achievement has its own meaningful icon, without numbered badge frames.
-- Android account-key backups use the system Save dialog and confirm that the chosen file was written.
-- Share lists with name suggestions and an automatically updated list of everyone with access.
-- Give collaborators full owner rights, editing access, or read-only access, and remove access from the same dialog.
-- Shared-list edits preserve every task.
-- Undo restores a deleted task with its comment and completion state.
-- The Habits shop scrolls through all recent activity and offers a soda reward symbol.
-- Games hide the surrounding navigation and keep a clear return path to Arcade.
-- Library chapters turn with a swipe and use a warm paper background without the sidebar.
+- Simplify Apps editing, settings, navigation and app loading.
+- Fix duplicate Profile headers, scrolling, Escape handling and Android key backups.
+- Fix large-account sync, sharing controls and activity and achievement views.
 
 ## [2.1.37] - 2026-10-20
 

@@ -5,6 +5,8 @@ Auth :: #import "auth";
 #import "client"
 #import "async_client"
 #import "async_sync"
+#import "sync_flow"
+#import, file "sync_page_store.zi";
 #import "async_account"
 #import "delegated"
 #import "async_delegated"
@@ -191,6 +193,49 @@ PrepareStoredOperation :: (operation: *StoredOperation, server: string,
     return true
 }
 
+LoadOperationSyncPage :: (context: *void, state: *SyncPageState) -> bool {
+    operation := cast(*StoredOperation)context
+    return StoredIdentityCurrent(operation) &&
+    LoadStoredSyncPage(TextUntilNul(operation.server[:]), state)
+}
+
+SaveOperationSyncPage :: (context: *void, state: *SyncPageState) -> bool {
+    operation := cast(*StoredOperation)context
+    return StoredIdentityCurrent(operation) &&
+    SaveStoredSyncPage(TextUntilNul(operation.server[:]), state)
+}
+
+PrepareOperationSyncBody :: (context: *void, maximum_records: s32) -> string {
+    operation := cast(*StoredOperation)context
+    if !StoredIdentityCurrent(operation) {
+        return ""
+    }
+    if operation.payload != null {
+        storage_free_sync_payload_json(operation.payload)
+    }
+    operation.payload = BuildStoredSyncPayload(
+        operation.client.identity.account_id, operation.client.identity.public_key, maximum_records)
+    return TextFromCString(operation.payload)
+}
+
+AcceptOperationSyncPage :: (context: *void, response: string, next: *SyncPageState) -> bool {
+    operation := cast(*StoredOperation)context
+    if !StoredIdentityCurrent(operation) || ApplyStoredSyncResponse(response, next) == 0 {
+        return false
+    }
+    storage_purge_synced_deleted_data()
+    if storage_last_sync_changed() != 0 {
+        operation.changed = 1
+    }
+    SyncNodeStorageRecordResponse(TextUntilNul(operation.server[:]), response)
+    return true
+}
+
+OperationSyncClock :: (context: *void) -> s64 {
+    unused context
+    return Clock.UnixNow()
+}
+
 BeginStoredSync :: (operation: *StoredOperation, server: string,
     transport: AsyncTransport) -> bool {
     if !PrepareStoredOperation(operation, server, true) {
@@ -217,12 +262,6 @@ BeginStoredSync :: (operation: *StoredOperation, server: string,
         return false
     }
     operation.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
-    operation.payload = storage_build_sync_payload_json(
-        operation.client.identity.account_id, operation.client.identity.public_key)
-    if operation.payload == null {
-        ReleaseStoredOperation(operation)
-        return false
-    }
     operation.response = cast(*u8)AsyncAllocate(AsyncResponseCapacity)
     if operation.response == null {
         ReleaseStoredOperation(operation)
@@ -231,8 +270,10 @@ BeginStoredSync :: (operation: *StoredOperation, server: string,
     operation.result = cast(s32)AuthResult.AUTH_REQUEST_FAILED
     if !BeginSync(*operation.sync, operation.client, *operation.session,
         DeviceFromKey(*operation.material), Clock.UnixNow(), null, NativeNonce,
-        transport, TextFromCString(operation.payload),
-        BytesFromPointer(operation.response, AsyncResponseCapacity)) {
+        transport, "", BytesFromPointer(operation.response, AsyncResponseCapacity),
+        SyncFlow.{.context = cast(*void)operation, .load = LoadOperationSyncPage,
+            .prepare = PrepareOperationSyncBody, .save = SaveOperationSyncPage,
+            .accept = AcceptOperationSyncPage, .clock = OperationSyncClock}) {
         ReleaseStoredOperation(operation)
         return false
     }
@@ -373,15 +414,7 @@ PollStoredOperation :: (operation: *StoredOperation) -> bool {
         }
         response := TextUntilNul(BytesFromPointer(operation.response, AsyncResponseCapacity))
         server := TextUntilNul(operation.server[:])
-        if operation.result == cast(s32)AuthResult.AUTH_OK {
-            if storage_apply_sync_response_json(response) == 0 {
-                operation.result = cast(s32)AuthResult.AUTH_PAYLOAD_FAILED
-            } else {
-                storage_purge_synced_deleted_data()
-                operation.changed = storage_last_sync_changed()
-                SyncNodeStorageRecordResponse(server, response)
-            }
-        } else if operation.sync.status == 413 && SyncNodeStorageRecordFull(server, response) {
+        if operation.sync.status == 413 && SyncNodeStorageRecordFull(server, response) {
             operation.result = cast(s32)SyncResult.SYNC_STORAGE_FULL
         }
     } else if operation.is_deletion {
