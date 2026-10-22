@@ -36,7 +36,8 @@ db.executescript(
         local_date INTEGER, topic INTEGER, activity INTEGER, source TEXT,
         imported_at INTEGER, rounds_hash INTEGER, mood_before INTEGER,
         mood_after INTEGER, energy INTEGER, stress INTEGER, note TEXT,
-        tags TEXT, deleted_at INTEGER, updated_at INTEGER);
+        tags TEXT, details TEXT NOT NULL DEFAULT '{}',
+        deleted_at INTEGER, updated_at INTEGER);
     CREATE TABLE session_rounds(
         session_id TEXT, round_index INTEGER, seconds INTEGER);
     CREATE TABLE meditation_logs(
@@ -104,6 +105,7 @@ response = json.dumps(
                     "id": "remote", "started_at": "2026-09-26T12:00:00Z",
                     "updated_at": "2026-09-26T12:00:00Z",
                     "local_date": 20260926, "activity": 1,
+                    "details": {"version": 1, "duration_seconds": 300},
                     "rounds": [{"round_index": 0, "hold_seconds": 80}],
                 },
                 {
@@ -141,6 +143,9 @@ assert db.execute(
 assert db.execute(
     "SELECT seconds FROM session_rounds WHERE session_id='remote'"
 ).fetchone() == (80,)
+assert json.loads(db.execute(
+    "SELECT details FROM sessions WHERE id='remote'"
+).fetchone()[0]) == {"version": 1, "duration_seconds": 300}
 assert db.execute(
     "SELECT activity FROM sessions WHERE id='local'"
 ).fetchone() == (3,), "newer local edit was overwritten"
