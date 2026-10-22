@@ -1408,9 +1408,9 @@ async function verifyPracticeCarouselSwipe(client) {
         type: 'mouseMoved', x: startX + dx * step / 6, y: startY + dy * step / 6,
         button: 'left', buttons: 1
       });
-      // The app samples idle input at 30 fps; one 60 Hz browser frame
-      // can otherwise skip a move entirely.
-      await waitAnimationFrames(client, 2);
+      // Keep moves visible to the 30 fps input sampler without stretching
+      // a swipe past its 1.2 second limit on a slow software renderer.
+      await delay(45);
     }
     await client.send('Input.dispatchMouseEvent', {
       type: 'mouseReleased', x: startX + dx, y: startY + dy, button: 'left', clickCount: 1
