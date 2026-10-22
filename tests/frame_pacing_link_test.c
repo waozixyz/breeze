@@ -103,5 +103,25 @@ main(void)
         decision = app_update_frame_pacing(&app, sample);
     }
     assert(decision.state.target_fps == 15);
+    /* A gesture defers package installation. Keeping a field focused or
+       animating afterward never prevents the transfer from being installed. */
+    FramePacingReset();
+    sample.pointer_active = true;
+    app_update_frame_pacing(&app, sample);
+    assert(AppBackgroundWorkDeferred());
+    sample.pointer_active = false;
+    sample.text_input_active = true;
+    guide_animating = true;
+    for (int frame = 0; frame < 12; frame++) {
+        app_update_frame_pacing(&app, sample);
+        assert(AppBackgroundWorkDeferred());
+    }
+    app_update_frame_pacing(&app, sample);
+    assert(!AppBackgroundWorkDeferred());
+    sample.keyboard_active = true;
+    app_update_frame_pacing(&app, sample);
+    assert(AppBackgroundWorkDeferred());
+    FramePacingReset();
+    assert(!AppBackgroundWorkDeferred());
     return 0;
 }

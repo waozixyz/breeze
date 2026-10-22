@@ -18,6 +18,8 @@ FrameActivitySample :: struct {
 
 frame_activity_state: FrameActivityState;
 frame_pacing_state: FramePacing;
+frame_work_activity: FrameActivityState;
+frame_work_deferred: bool;
 
 ACTIVE_GRACE_FRAMES :: 12
 
@@ -25,6 +27,15 @@ ACTIVE_GRACE_FRAMES :: 12
 FramePacingReset :: () {
     frame_activity_state = FrameActivityState.{}
     frame_pacing_state = FramePacing.{}
+    frame_work_activity = FrameActivityState.{}
+    frame_work_deferred = false
+}
+
+// Owned by the drawing thread, independently of Android's background sync
+// timer. A focused field or an animation alone never holds downloads back.
+#program_export
+AppBackgroundWorkDeferred :: () -> bool {
+    return frame_work_deferred
 }
 
 PracticeFrameActive :: (screen: s32) -> bool {
@@ -34,6 +45,10 @@ PracticeFrameActive :: (screen: s32) -> bool {
 #program_export
 app_update_frame_pacing :: (app: *InnerBreeze,
     sample: FrameActivitySample) -> FramePacingDecision {
+    work := FrameActivityStep(frame_work_activity, 0, 0,
+        sample.pointer_active || sample.keyboard_active, false, ACTIVE_GRACE_FRAMES)
+    frame_work_activity = work.state
+    frame_work_deferred = work.active
     engaged: bool = false
     if app != null {
         // A practice running in its small window animates at full rate too.
