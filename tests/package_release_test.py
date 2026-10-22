@@ -31,7 +31,7 @@ def main():
     parser.add_argument('--runtime', type=Path)
     parser.add_argument('--bundle-build-dir', type=Path, default=ROOT / 'build')
     options = parser.parse_args()
-    work = ROOT / "build/package-release-test"
+    work = Path(os.environ.get('INBE_PACKAGE_TEST_OUTPUT', str(ROOT / "build/package-release-test")))
     work.mkdir(parents=True, exist_ok=True)
     toolchain = options.toolchain or ROOT / 'build/packages/ziran'
     runtime = options.runtime or ROOT / 'build/ziran-toolchain/libziran.a'
@@ -328,8 +328,8 @@ def main():
                         str(ROOT / "build/packages/monocypher/src/monocypher.c"),
                         str(ROOT / "build/packages/monocypher/src/optional/monocypher-ed25519.c"),
                         str(runtime), *wrappers, "-Wl,--wrap=storage_db_path", "-Wl,--wrap=storage_user_id_buffer",
-                        "-Wl,--wrap=SecureRandom",
-                        "-Wl,--gc-sections", "-lm", "-o", str(work / "manager-test")], check=True)
+                        "-Wl,--wrap=SecureRandom", "-Wl,--wrap=Sha256Hex",
+                        "-Wl,--gc-sections", "-lm", "-pthread", "-o", str(work / "manager-test")], check=True)
         subprocess.run([str(work / "manager-test"), str(fixtures)], env=environment, check=True)
     print("Signed package identity, API, canonical metadata, payload and nested-dependency and update lifecycle tests passed")
 

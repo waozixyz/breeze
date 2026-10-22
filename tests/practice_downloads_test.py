@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from practice_content import NAMES
 
-work = ROOT / 'build/practice-downloads-test'
+work = Path(os.environ.get('INBE_PRACTICE_TEST_OUTPUT', str(ROOT / 'build/practice-downloads-test')))
 if work.exists():
     shutil.rmtree(work)
 work.mkdir(parents=True)
@@ -100,8 +100,9 @@ subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-D_GNU_SOURCE', '-O1',
     str(ROOT / 'build/ziran-toolchain/libziran.a'), '-Wl,--gc-sections',
     '-Wl,--wrap=file_download_FileDownloadStart', '-Wl,--wrap=file_download_FileDownloadPoll',
     '-Wl,--wrap=file_download_FileDownloadRelease', '-Wl,--wrap=storage_db_path',
-    '-lm', '-o', str(work / 'test')], check=True)
-subprocess.run([str(work / 'test'), str(fixtures)], check=True,
+    '-Wl,--wrap=Sha256Hex',
+    '-lm', '-pthread', '-o', str(work / 'test')], check=True)
+subprocess.run([str(work / 'test'), str(fixtures)], check=True, timeout=120,
                env={key: value for key, value in os.environ.items()
                     if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')})
 cache = fixtures / 'cache/packages'

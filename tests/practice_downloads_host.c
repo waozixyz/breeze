@@ -7,6 +7,37 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdatomic.h>
+#include <time.h>
+
+void FixtureContentYield(void) { usleep(1000); }
+static atomic_int content_blocked;
+static atomic_int content_entered;
+
+void FixtureBlockContent(bool blocked)
+{
+    atomic_store(&content_entered, 0);
+    atomic_store(&content_blocked, blocked);
+}
+
+bool FixtureContentStarted(void) { return atomic_load(&content_entered) != 0; }
+
+uint64_t FixtureContentNow(void)
+{
+    struct timespec value;
+    assert(clock_gettime(CLOCK_MONOTONIC, &value) == 0);
+    return (uint64_t)value.tv_sec * 1000000000ULL + value.tv_nsec;
+}
+
+void __real_Sha256Hex(const unsigned char *data, int64_t size, unsigned char *digest);
+void __wrap_Sha256Hex(const unsigned char *data, int64_t size, unsigned char *digest)
+{
+    if (atomic_load(&content_blocked)) {
+        atomic_store(&content_entered, 1);
+        while (atomic_load(&content_blocked)) usleep(1000);
+    }
+    __real_Sha256Hex(data, size, digest);
+}
 
 static const char *fixtures;
 static char database[4096];

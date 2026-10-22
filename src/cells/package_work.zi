@@ -1,0 +1,90 @@
+// One payload job owns every byte used by its worker. The host polls the job
+// before reading results, then retains it until all parser preloads finish.
+#import, file "package_files.zi";
+#import, file "package_release.zi";
+#import, file "catalog.zi";
+
+PACKAGE_WORK_THREADS :: !#defined(PLATFORM_WEB) && !#defined(_WIN32)
+#if PACKAGE_WORK_THREADS {
+    #import "std/thread_linux"
+}
+
+PackageWork :: struct {
+    path: string
+    immutable: string
+    bytes: string
+    account: string
+    identity: string
+    release: PackageRelease
+    writing: bool
+    ready: bool
+    ok: bool
+    next: *PackageWork
+    #if PACKAGE_WORK_THREADS {
+        thread: Thread
+    }
+}
+
+package_work_c :: #system_library "c";
+PackageWorkAllocate :: (size: usize) -> *void #foreign package_work_c "malloc";
+PackageWorkRelease :: (memory: *void) #foreign package_work_c "free";
+
+PackageWorkRun :: (argument: *void) {
+    work := cast(*PackageWork)argument
+    if work.writing {
+        work.ok = PackageWrite(work.immutable, work.bytes)
+        return
+    }
+    work.bytes = PackageRead(work.path, PackageMaximumBytes)
+    work.ok = PackageVerifyBytes(work.bytes, work.release)
+}
+
+PackageWorkReady :: (work: *PackageWork) -> bool {
+    #if PACKAGE_WORK_THREADS {
+        if !work.ready {
+            work.ready = !ThreadRunning(*work.thread) || ThreadFinished(*work.thread)
+        }
+    }
+    return work.ready
+}
+
+PackageWorkRunAsync :: (work: *PackageWork) -> bool {
+    work.ready = false
+    work.ok = false
+    #if PACKAGE_WORK_THREADS {
+        procedure: ThreadProcedure = PackageWorkRun
+        return ThreadStart(*work.thread, procedure, cast(*void)work)
+    } else {
+        PackageWorkRun(cast(*void)work)
+        work.ready = true
+        return true
+    }
+}
+
+PackageWorkFree :: (work: *PackageWork) {
+    PackageFree(work.path)
+    PackageFree(work.immutable)
+    PackageFree(work.bytes)
+    PackageFree(work.account)
+    PackageFree(work.identity)
+    PackageWorkRelease(cast(*void)work)
+}
+
+PackageWorkCreate :: (path: string, immutable: string, account: string,
+    identity: string, release: PackageRelease) -> *PackageWork {
+    work := cast(*PackageWork)PackageWorkAllocate(size_of(PackageWork))
+    if work == null {
+        return null
+    }
+    work.* = PackageWork.{}
+    work.path = PackageText(path, "")
+    work.immutable = PackageText(immutable, "")
+    work.account = PackageText(account, "")
+    work.identity = PackageText(identity, "")
+    work.release = release
+    if !PackageWorkRunAsync(work) {
+        PackageWorkFree(work)
+        return null
+    }
+    return work
+}

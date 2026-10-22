@@ -19,6 +19,11 @@
 #import, file "../storage/temporary_data.zi";
 #import, file "../storage/paths.zi";
 
+PRACTICE_CONTENT_THREADS :: !#defined(PLATFORM_WEB) && !#defined(_WIN32)
+#if PRACTICE_CONTENT_THREADS {
+    #import "std/thread_linux"
+}
+
 PracticePackCapacity :: 96
 // Content names: the practices, then Lumi's narration-only guide.
 PracticeGuide :: 7
@@ -75,11 +80,6 @@ practice_owned: PracticeOwnedFn;
 
 practice_packs: [PracticePackCapacity]PracticePack;
 practice_pack_count: s32;
-// The digest each pack's bytes were last verified against while the app ran.
-// Switching practices opened the same pack again and hashed all of it, 22 MB
-// for Sun Salutation, on the frame thread every time.
-practice_pack_verified: [PracticePackCapacity][65]u8;
-practice_pack_verified_size: [PracticePackCapacity]s64;
 practice_catalog: string;
 practice_catalog_generation: u64;
 practice_transfer: FileDownload;
@@ -96,6 +96,162 @@ practice_voice_selected: [8]u8;
 practice_narration_selected: bool;
 practice_guide_narration_selected: bool;
 practice_catalog_invalid: bool;
+practice_content_clock: u64;
+practice_content_used: [PracticePackCapacity]u64;
+PracticeContentCacheBytes :: 64 * 1024 * 1024
+
+// Keep recently shown content in memory. Moving between practices then needs
+// neither another bundle open nor a global image-cache invalidation. The
+// current practice and its voices are never evicted to meet this soft limit.
+PracticeContentTrim :: () {
+    cached: s64 = 0
+    for pack: practice_packs[:practice_pack_count] {
+        if pack.bundle != null {
+            cached += pack.size
+        }
+    }
+    while cached > PracticeContentCacheBytes {
+        oldest: s32 = -1
+        for index: cast(s32)0..practice_pack_count - 1 {
+            pack := *practice_packs[index]
+            if pack.bundle == null || PracticePackWanted(pack) {
+                continue
+            }
+            if oldest < 0 || practice_content_used[index] < practice_content_used[oldest] {
+                oldest = index
+            }
+        }
+        if oldest < 0 {
+            return
+        }
+        pack := *practice_packs[oldest]
+        cached -= pack.size
+        CloseBundle(pack.bundle)
+        pack.bundle = null
+        pack.checked = false
+        AssetNotifyChanged()
+    }
+}
+
+// A worker owns its input path and catalog snapshot. It never reads the live
+// catalog, touches a mounted bundle, or publishes assets from another thread.
+PracticeContentWork :: struct {
+    pack: PracticePack
+    path: string
+    fallback: string
+    bundle: *void
+    ready: bool
+    next: *PracticeContentWork
+    #if PRACTICE_CONTENT_THREADS {
+        thread: Thread
+    }
+}
+practice_transfer_work: *PracticeContentWork;
+practice_load_work: [PracticePackCapacity]*PracticeContentWork;
+practice_retired_work: *PracticeContentWork;
+practice_content_jobs: s32;
+practice_work_c :: #system_library "c";
+PracticeWorkAllocate :: (size: usize) -> *void #foreign practice_work_c "malloc";
+PracticeWorkRelease :: (memory: *void) #foreign practice_work_c "free";
+
+PracticeContentWorkRun :: (argument: *void) {
+    work := cast(*PracticeContentWork)argument
+    bytes := PackageRead(work.path, PackageMaximumBytes)
+    work.bundle = PracticePackValidate(work.pack, bytes)
+    PackageFree(bytes)
+    if work.bundle == null && work.fallback.count > 0 {
+        work.bundle = PracticePackValidate(work.pack, work.fallback)
+    }
+}
+
+PracticeContentWorkReady :: (work: *PracticeContentWork) -> bool {
+    if work == null {
+        return false
+    }
+    #if PRACTICE_CONTENT_THREADS {
+        if !work.ready {
+            work.ready = ThreadFinished(*work.thread)
+        }
+    }
+    return work.ready
+}
+
+PracticeContentWorkFree :: (work: *PracticeContentWork) {
+    CloseBundle(work.bundle)
+    PackageFree(work.path)
+    PackageFree(work.fallback)
+    practice_content_jobs -= 1
+    PracticeWorkRelease(cast(*void)work)
+}
+
+PracticeContentWorkRetire :: (work: *PracticeContentWork) {
+    if work == null {
+        return
+    }
+    work.next = practice_retired_work
+    practice_retired_work = work
+}
+
+PracticeContentWorkCollect :: () {
+    previous: *PracticeContentWork
+    work := practice_retired_work
+    while work != null {
+        next := work.next
+        if !PracticeContentWorkReady(work) {
+            previous = work
+            work = next
+            continue
+        }
+        if previous == null {
+            practice_retired_work = next
+        } else {
+            previous.next = next
+        }
+        PracticeContentWorkFree(work)
+        work = next
+    }
+}
+
+PracticeContentWorkStart :: (pack: PracticePack, path: string, fallback: string = "") -> *PracticeContentWork {
+    work := cast(*PracticeContentWork)PracticeWorkAllocate(size_of(PracticeContentWork))
+    if work == null {
+        return null
+    }
+    work.* = PracticeContentWork.{}
+    practice_content_jobs += 1
+    work.pack = pack
+    work.pack.bundle = null
+    work.path = PackageText(path, "")
+    work.fallback = PackageText(fallback, "")
+    #if PRACTICE_CONTENT_THREADS {
+        procedure: ThreadProcedure = PracticeContentWorkRun
+        if !ThreadStart(*work.thread, procedure, cast(*void)work) {
+            PracticeContentWorkFree(work)
+            return null
+        }
+    } else {
+        PracticeContentWorkRun(cast(*void)work)
+        work.ready = true
+    }
+    return work
+}
+
+PracticeContentLoadStart :: (index: s32) -> bool {
+    if practice_load_work[index] != null {
+        return true
+    }
+    // Count canceled workers too, so rapid navigation cannot create a burst
+    // of hashing jobs or payload allocations on a phone.
+    if practice_content_jobs > 0 {
+        return false
+    }
+    pack := practice_packs[index]
+    path := PracticePackPath(index, false)
+    fallback := ifx pack.present then PracticeShippedBytes(index) else ""
+    practice_load_work[index] = PracticeContentWorkStart(pack, path, fallback)
+    PackageFree(path)
+    return practice_load_work[index] != null
+}
 
 PracticeContentName :: (practice: s32) -> string {
     names: [PracticeContentCount]string = .["whm", "meditation", "sunsalutation", "patterns", "taichi", "astral_projection", "workout", "guide"]
@@ -271,19 +427,6 @@ PracticePackPresent :: (index: s32) -> bool {
     return PracticeShippedBytes(index).count > 0 && PracticeMarked(practice, ".added")
 }
 
-// The downloaded copy, or the one shipped with the app while installed.
-PracticePackLoad :: (index: s32) -> *void {
-    path := PracticePackPath(index, false)
-    bytes := PackageRead(path, PackageMaximumBytes)
-    bundle := PracticePackOpen(index, bytes)
-    PackageFree(path)
-    PackageFree(bytes)
-    if bundle == null && practice_packs[index].present {
-        bundle = PracticePackOpen(index, PracticeShippedBytes(index))
-    }
-    return bundle
-}
-
 PracticeCacheFileOwned :: (practice: s32, name: string) -> bool {
     content := PracticeContentName(practice)
     prefix := "practice-"
@@ -356,21 +499,17 @@ PracticePackAcceptsPath :: (pack: PracticePack, path: string) -> bool {
     rest[directory.count + language.count] == cast(u8)47
 }
 
-PracticePackOpen :: (index: s32, bytes: string) -> *void {
-    pack := practice_packs[index]
+// Pure validation also runs in the content worker. All strings used here
+// belong to the supplied bytes or copied pack, never the current account.
+PracticePackValidate :: (pack: PracticePack, bytes: string) -> *void {
     if bytes.count != pack.size || bytes.count < 8 {
         return null
     }
     descriptor := cast(*TextDescriptor)(*bytes)
-    if practice_pack_verified_size[index] != bytes.count ||
-    TextFromCString(*practice_pack_verified[index][0]) != TextFromCString(*pack.hash[0]) {
-        actual: [65]u8
-        Sha256Hex(descriptor.data, bytes.count, *actual[0])
-        if TextFromCString(*actual[0]) != TextFromCString(*pack.hash[0]) {
-            return null
-        }
-        practice_pack_verified[index] = actual
-        practice_pack_verified_size[index] = bytes.count
+    actual: [65]u8
+    Sha256Hex(descriptor.data, bytes.count, *actual[0])
+    if TextFromCString(*actual[0]) != TextFromCString(*pack.hash[0]) {
+        return null
     }
     bundle := OpenBundleBytes(descriptor.data, cast(u64)bytes.count)
     if bundle == null {
@@ -434,6 +573,12 @@ PracticeDownloadFailed :: (index: s32, reason: string) {
 
 PracticeDownloadsCancel :: () {
     FileDownloadRelease(*practice_transfer)
+    if practice_transfer_work != null {
+        // Cancellation must not join a worker on the frame thread. Its path
+        // and catalog bytes remain owned until a later nonblocking collect.
+        PracticeContentWorkRetire(practice_transfer_work)
+        practice_transfer_work = null
+    }
     if practice_transfer_index >= 0 {
         path := PracticePackPath(practice_transfer_index, true)
         unused RemoveFile(path)
@@ -445,6 +590,9 @@ PracticeDownloadsCancel :: () {
 PracticeDownloadsClose :: () {
     PracticeDownloadsCancel()
     for index: cast(s32)0..practice_pack_count - 1 {
+        PracticeContentWorkRetire(practice_load_work[index])
+        practice_load_work[index] = null
+        practice_content_used[index] = 0
         CloseBundle(practice_packs[index].bundle)
         practice_packs[index] = PracticePack.{}
     }
@@ -883,6 +1031,8 @@ PracticePackCancel :: (index: s32) {
     if practice_transfer_index == index {
         PracticeDownloadsCancel()
     }
+    PracticeContentWorkRetire(practice_load_work[index])
+    practice_load_work[index] = null
     practice_packs[index].requested = false
     if practice_packs[index].status == 1 {
         practice_packs[index].status = 0
@@ -910,7 +1060,6 @@ PracticePackRemove :: (index: s32) {
     practice_packs[index].checked = true
     practice_packs[index].cache_checked = true
     practice_packs[index].present = false
-    practice_pack_verified_size[index] = -1
     if !DataTemporary() {
         path := PracticePackPath(index, false)
         if path.count > 0 {
@@ -926,7 +1075,8 @@ PracticeContentReady :: (practice: s32) -> bool {
     index := PracticePackFind(practice, "")
     // Older signed packages remain usable with their bundled assets.
     return !practice_catalog_invalid && (practice_catalog.count == 0 ||
-        (index >= 0 && practice_packs[index].bundle != null))
+        (index >= 0 && practice_packs[index].bundle != null &&
+        PracticePackWanted(*practice_packs[index])))
 }
 
 PracticeProduct :: (practice: s32) -> string {
@@ -1072,18 +1222,27 @@ PracticePackRefresh :: (index: s32) -> bool {
     return true
 }
 
-// Review one cache slot per frame for the manager, without mounting its data.
+// Review one cache slot without blocking the manager while it reads/hashes.
 PracticeContentReviewNext :: () {
+    PracticeContentWorkCollect()
     for index: cast(s32)0..practice_pack_count - 1 {
         pack := *practice_packs[index]
         if pack.cache_checked || pack.status == 1 {
             continue
         }
-        pack.cache_checked = true
         if pack.bundle != null {
+            pack.cache_checked = true
             continue
         }
-        bundle := PracticePackLoad(index)
+        if !PracticeContentLoadStart(index) || !PracticeContentWorkReady(practice_load_work[index]) {
+            return
+        }
+        work := practice_load_work[index]
+        bundle := work.bundle
+        work.bundle = null
+        PracticeContentWorkFree(work)
+        practice_load_work[index] = null
+        pack.cache_checked = true
         refreshed := bundle == null && PracticePackRefresh(index)
         if bundle != null {
             pack.status = 2
@@ -1094,7 +1253,17 @@ PracticeContentReviewNext :: () {
         if !refreshed {
             pack.present = bundle != null && !pack.removed
         }
-        CloseBundle(bundle)
+        if bundle != null && !pack.removed {
+            pack.bundle = bundle
+            practice_content_clock += 1
+            practice_content_used[index] = practice_content_clock
+            if PracticePackWanted(pack) {
+                AssetNotifyChanged()
+            }
+        } else {
+            CloseBundle(bundle)
+        }
+        PracticeContentTrim()
         return
     }
 }
@@ -1117,9 +1286,7 @@ PracticeContentRemove :: (practice: s32) {
         if practice_packs[index].practice != practice {
             continue
         }
-        if practice_transfer_index == index {
-            PracticeDownloadsCancel()
-        }
+        PracticePackCancel(index)
         CloseBundle(practice_packs[index].bundle)
         practice_packs[index].bundle = null
         practice_packs[index].requested = false
@@ -1150,7 +1317,8 @@ PracticeContentRemove :: (practice: s32) {
 PracticeDownloadsAsset :: (path: string) -> AssetView {
     for index: cast(s32)0..practice_pack_count - 1 {
         pack := practice_packs[index]
-        if pack.bundle == null || !PracticePackAcceptsPath(pack, path) {
+        if pack.bundle == null || !PracticePackWanted(*practice_packs[index]) ||
+        !PracticePackAcceptsPath(pack, path) {
             continue
         }
         count := BundleAssets(pack.bundle)
@@ -1193,6 +1361,7 @@ PracticePackWanted :: (pack: *PracticePack) -> bool {
 }
 
 PracticeDownloadsPump :: (selected: s32, narration: bool, guide_narration: bool, idle: bool) {
+    PracticeContentWorkCollect()
     // Never replace borrowed animation/course/audio data during a session.
     if !idle {
         // Voice packs contain no borrowed practice animation or course data.
@@ -1220,14 +1389,18 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, guide_narration: bool,
         unused AppCopyText(voice, practice_voice_selected[:])
         unused AppCopyText(spoken, practice_narration_language[:])
         unused AppCopyText(guide_spoken, practice_guide_language[:])
-        // Keep cached bytes on disk, mounting only what plays now. A download
-        // continues whatever is shown.
+        // Recent content stays in memory within a budget. Temporary data
+        // still keeps only the practice shown. A download continues regardless.
         for index: cast(s32)0..practice_pack_count - 1 {
             pack := *practice_packs[index]
             if PracticePackWanted(pack) {
                 pack.checked = false
+                practice_content_clock += 1
+                practice_content_used[index] = practice_content_clock
                 continue
             }
+            PracticeContentWorkRetire(practice_load_work[index])
+            practice_load_work[index] = null
             if DataTemporary() {
                 if practice_transfer_index == index {
                     PracticeDownloadsCancel()
@@ -1237,13 +1410,11 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, guide_narration: bool,
                     pack.status = 0
                 }
             }
-            if pack.bundle != null {
+            if pack.bundle != null && DataTemporary() {
                 CloseBundle(pack.bundle)
                 pack.bundle = null
-                if DataTemporary() {
-                    pack.status = 0
-                    pack.cache_checked = false
-                }
+                pack.status = 0
+                pack.cache_checked = false
                 AssetNotifyChanged()
             }
         }
@@ -1270,12 +1441,23 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, guide_narration: bool,
         if pack.removed {
             continue
         }
-        pack.checked = true
         pack.cache_checked = true
         if pack.bundle != null {
+            pack.checked = true
             continue
         }
-        pack.bundle = PracticePackLoad(index)
+        if !PracticeContentLoadStart(index) {
+            continue
+        }
+        work := practice_load_work[index]
+        if !PracticeContentWorkReady(work) {
+            continue
+        }
+        pack.bundle = work.bundle
+        work.bundle = null
+        PracticeContentWorkFree(work)
+        practice_load_work[index] = null
+        pack.checked = true
         if pack.bundle != null {
             pack.status = 2
             AssetNotifyChanged()
@@ -1287,6 +1469,7 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, guide_narration: bool,
         }
     }
     PracticeTransfersPump(false)
+    PracticeContentTrim()
 }
 
 PracticeTransfersPump :: (narration_only: bool) {
@@ -1359,20 +1542,37 @@ PracticeTransfersPump :: (narration_only: bool) {
     index := practice_transfer_index
     temporary := PracticePackPath(index, true)
     destination := PracticePackPath(index, false)
-    bytes := PackageRead(temporary, PackageMaximumBytes)
-    // New bytes on disk are hashed again, never trusted from an earlier copy.
-    practice_pack_verified_size[index] = -1
-    bundle := ifx state == FileDownloadStatus.Ready then PracticePackOpen(index, bytes) else null
-    PackageFree(bytes)
+    if state == FileDownloadStatus.Ready && practice_transfer_work == null {
+        if practice_content_jobs > 0 {
+            PackageFree(temporary)
+            PackageFree(destination)
+            return
+        }
+        practice_transfer_work = PracticeContentWorkStart(practice_packs[index], temporary)
+        if practice_transfer_work != null {
+            PackageFree(temporary)
+            PackageFree(destination)
+            return
+        }
+    }
+    if practice_transfer_work != null && !PracticeContentWorkReady(practice_transfer_work) {
+        PackageFree(temporary)
+        PackageFree(destination)
+        return
+    }
+    bundle: *void
+    if practice_transfer_work != null {
+        bundle = practice_transfer_work.bundle
+        practice_transfer_work.bundle = null
+        PracticeContentWorkFree(practice_transfer_work)
+        practice_transfer_work = null
+    }
     if bundle != null && (DataTemporary() || RenamePath(temporary, destination)) {
         CloseBundle(practice_packs[index].bundle)
-        if PracticePackWanted(*practice_packs[index]) || DataTemporary() {
-            practice_packs[index].bundle = bundle
-            AssetNotifyChanged()
-        } else {
-            practice_packs[index].bundle = null
-            CloseBundle(bundle)
-        }
+        practice_packs[index].bundle = bundle
+        practice_content_clock += 1
+        practice_content_used[index] = practice_content_clock
+        AssetNotifyChanged()
         practice_packs[index].status = 2
         practice_packs[index].cache_checked = true
         practice_packs[index].present = true

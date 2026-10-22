@@ -21,8 +21,15 @@
 #import, file "../platform/web_storage.zi";
 #import, file "../storage/temporary_data.zi";
 #import, file "../storage/paths.zi";
+#import, file "package_work.zi";
 
 using FileDownloadStatus;
+
+PACKAGE_PHASE_IDLE :: 0
+PACKAGE_PHASE_METADATA :: 1
+PACKAGE_PHASE_PAYLOAD :: 2
+PACKAGE_PHASE_HISTORY :: 3
+PACKAGE_PHASE_PREPARING :: 4
 
 package_download: FileDownload;
 package_index: s32 = -1;
@@ -57,6 +64,7 @@ package_fallback_versions: [PackageSlots][32]u8;
 package_cached_releases: [PackageSlots]PackageRelease;
 package_status: [PackageSlots]s32;
 package_revision: s32;
+package_slot_revisions: [PackageSlots]s32;
 // Update checks run daily, once after each start, and soon after a sync
 // reports a newer root package. The schedule stays in memory: the pump runs
 // every frame and settings reads are database queries.
@@ -74,6 +82,64 @@ c :: #system_library "c";
 PackageSettingText :: (key: string) -> string #foreign c "storage_get_setting_text";
 PackageAccountBytes :: () -> *u8 #foreign c "storage_user_id_buffer";
 
+// Retired jobs retain their inputs until both IO and parser workers finish.
+package_work: *PackageWork;
+package_retired_work: *PackageWork;
+package_work_count: s32;
+
+PackageWorkCollect :: () {
+    // A canceled parser may still borrow the worker's payload. Poll it before
+    // releasing that memory; cancellation never waits for a parser thread.
+    if !CellsPreparationIdle() {
+        return
+    }
+    previous: *PackageWork
+    work := package_retired_work
+    while work != null {
+        next := work.next
+        if !PackageWorkReady(work) {
+            previous = work
+            work = next
+            continue
+        }
+        if previous == null {
+            package_retired_work = next
+        } else {
+            previous.next = next
+        }
+        PackageWorkFree(work)
+        package_work_count -= 1
+        work = next
+    }
+}
+
+PackageWorkCancel :: () {
+    CellsDiscardPreparation()
+    if package_work == null {
+        return
+    }
+    unused RemoveFile(package_work.path)
+    package_work.next = package_retired_work
+    package_retired_work = package_work
+    package_work = null
+}
+
+PackageWorkStart :: () -> bool {
+    path := PackagePath(package_index, ".download.zib")
+    immutable := PackagePayloadPath(package_index, TextUntilNul(package_release.hash[:]))
+    defer {
+        PackageFree(path)
+        PackageFree(immutable)
+    }
+    package_work = PackageWorkCreate(path, immutable, PackageAccount(), PackageID(package_index), package_release)
+    if package_work == null {
+        unused RemoveFile(path)
+        return false
+    }
+    package_work_count += 1
+    return true
+}
+
 PackageAccount :: () -> string {
     return AppTextFromCString(PackageAccountBytes(), 64)
 }
@@ -88,6 +154,14 @@ PackageStatus :: (index: s32) -> s32 {
 
 PackageRevision :: () -> s32 {
     return package_revision
+}
+
+// A host keeps unaffected app instances alive when another package changes.
+PackageRevisionFor :: (index: s32) -> s32 {
+    if index < 0 || index >= PackageSlots {
+        return 0
+    }
+    return package_slot_revisions[index]
 }
 
 // Whether the package waits to download or is downloading now.
@@ -405,11 +479,12 @@ PackageRequestAll :: (desired: s32) {
 }
 
 PackageCancel :: () {
+    PackageWorkCancel()
     FileDownloadRelease(*package_download)
     PackageFree(package_metadata)
     package_metadata = ""
     package_index = -1
-    package_phase = 0
+    package_phase = PACKAGE_PHASE_IDLE
     package_automatic = false
     for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
         package_requested[index] = false
@@ -466,12 +541,13 @@ PackageSetAutomatic :: (enabled: bool) {
     unused SettingsStoreInt(PACKAGE_UPDATES_KEY, package_updates_answer)
     if !enabled {
         if package_automatic && package_index >= 0 {
+            PackageWorkCancel()
             FileDownloadRelease(*package_download)
             package_status[package_index] = 0
             PackageFree(package_metadata)
             package_metadata = ""
             package_index = -1
-            package_phase = 0
+            package_phase = PACKAGE_PHASE_IDLE
             package_automatic = false
         }
         for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
@@ -551,18 +627,23 @@ PackageStartTransfer :: (suffix: string, destination: string) -> bool {
 }
 
 PackageFinish :: (ok: bool) {
+    PackageWorkCancel()
     FileDownloadRelease(*package_download)
-    if package_phase != 3 { package_status[package_index] = ifx ok then 2 else 3 }
+    if package_phase != PACKAGE_PHASE_HISTORY { package_status[package_index] = ifx ok then 2 else 3 }
     PackageFree(package_metadata)
     package_metadata = ""
     package_index = -1
-    package_phase = 0
+    package_phase = PACKAGE_PHASE_IDLE
     package_target = false
     package_rollback = false
 }
 
-// Validating includes the module capability allowlist and identity handshake.
-CellsValidatePackage :: (index: s32, bytes: string) -> bool #foreign c;
+// Preparation polls the parser and checks one isolated instance per frame.
+// It returns 0 while pending, 1 when valid, and -1 on failure.
+CellsPreparePackage :: (index: s32, bytes: string) -> s32 #foreign c;
+CellsDiscardPreparation :: () #foreign c;
+CellsPreparationIdle :: () -> bool #foreign c;
+CellsCommitPreparation :: (index: s32, revision: s32) #foreign c;
 
 PackageTrialKey :: (prefix: string, index: s32) -> string {
     return PackageText(prefix, PackageName(index))
@@ -662,6 +743,7 @@ PackageCheckDue :: (now: s32) -> bool {
 // install transfers its release and payload. Automatic checks and heavy
 // verification wait until the practice ends or input becomes idle.
 PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
+    PackageWorkCollect()
     if DataTemporary() {
         return
     }
@@ -735,7 +817,7 @@ PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
                     PackageFinish(false)
                     return
                 }
-                package_phase = 1
+                package_phase = PACKAGE_PHASE_METADATA
                 return
             }
         }
@@ -746,7 +828,7 @@ PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
         unused PackageHistoryBegin()
         return
     }
-    if defer_installation && (package_automatic || package_check_only || package_phase == 3) {
+    if defer_installation && (package_automatic || package_check_only || package_phase == PACKAGE_PHASE_HISTORY) {
         return
     }
     if package_target && (TextUntilNul(package_target_account[:]) != PackageAccount() ||
@@ -756,21 +838,21 @@ PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
         return
     }
     downloading := package_download.status == FileDownloadStatus.Downloading
-    status := FileDownloadPoll(*package_download)
+    status := ifx package_phase == PACKAGE_PHASE_PREPARING then FileDownloadStatus.Ready else FileDownloadPoll(*package_download)
     #if #defined(PLATFORM_WEB) {
         if downloading && status != FileDownloadStatus.Downloading {
             schedule_web_storage_sync(120, 0)
         }
     }
     if status == cast(FileDownloadStatus)Error {
-        if package_phase == 3 { PackageHistoryComplete(package_index) }
+        if package_phase == PACKAGE_PHASE_HISTORY { PackageHistoryComplete(package_index) }
         PackageFinish(false);
         return
     }
     if status != cast(FileDownloadStatus)Ready {
         return
     }
-    if package_phase == 3 {
+    if package_phase == PACKAGE_PHASE_HISTORY {
         path := PackagePath(package_index, ".history.download.json")
         text := PackageRead(path, 262144)
         if TextUntilNul(package_history_requested_id[package_index][:]) == PackageID(package_index) {
@@ -783,7 +865,7 @@ PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
         PackageFinish(true)
         return
     }
-    if package_phase == 1 {
+    if package_phase == PACKAGE_PHASE_METADATA {
         metadata_path := PackagePath(package_index, ".download.json")
         defer {
             PackageFree(metadata_path);
@@ -860,33 +942,53 @@ PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
         PackageBeginPayload()
         return
     }
-    // The payload is here; reading, hashing and validating it waits.
+    // The payload is here. Keep file IO, hashing and parser work off frames;
+    // preserve the safe installation boundary while a practice is active.
     if defer_installation {
         return
     }
-    path := PackagePath(package_index, ".download.zib")
-    defer {
-        PackageFree(path);
-        unused RemoveFile(path)
-    }
-    bytes := PackageRead(path, PackageMaximumBytes)
-    defer {
-        PackageFree(bytes)
-    }
-    if !PackageVerifyBytes(bytes, package_release) ||
-    !CellsValidatePackage(package_index, bytes) {
-        PackageFinish(false);
+    if package_work == null {
+        if package_work_count > 0 {
+            return
+        }
+        if !PackageWorkStart() {
+            PackageFinish(false)
+            return
+        }
+        package_phase = PACKAGE_PHASE_PREPARING
         return
     }
-    immutable := PackagePayloadPath(package_index,
-        TextFromCString(*package_release.hash[0]))
+    if package_work.account != PackageAccount() || package_work.identity != PackageID(package_index) {
+        PackageFinish(false)
+        return
+    }
+    if !PackageWorkReady(package_work) {
+        return
+    }
+    if !package_work.ok {
+        PackageFinish(false)
+        return
+    }
+    if !package_work.writing {
+        prepared := CellsPreparePackage(package_index, package_work.bytes)
+        if prepared == 0 {
+            return
+        }
+        if prepared < 0 {
+            PackageFinish(false)
+            return
+        }
+        package_work.writing = true
+        if !PackageWorkRunAsync(package_work) {
+            PackageFinish(false)
+        }
+        return
+    }
     pointer := PackagePath(package_index, ".current.json")
     defer {
-        PackageFree(immutable);
         PackageFree(pointer)
     }
-    if !PackageWrite(immutable, bytes) ||
-    (package_rollback && !PackageRollbackStore(package_index, package_release)) ||
+    if (package_rollback && !PackageRollbackStore(package_index, package_release)) ||
     !PackageWrite(pointer, package_metadata) {
         PackageFinish(false)
         return
@@ -908,6 +1010,8 @@ PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
     }
     unused AppCopyText(TextFromCString(*package_release.version[0]), package_versions[package_index][:])
     package_revision += 1
+    package_slot_revisions[package_index] = package_revision
+    CellsCommitPreparation(package_index, package_revision)
     PackageFinish(true)
 }
 
@@ -942,7 +1046,7 @@ PackageBeginPayload :: () {
         PackageFinish(false)
         return
     }
-    package_phase = 2
+    package_phase = PACKAGE_PHASE_PAYLOAD
 }
 
 PackageAvailableVersion :: (index: s32) -> string {

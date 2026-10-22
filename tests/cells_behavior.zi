@@ -12,6 +12,23 @@ ModuleTestInstanceOpens :: () -> s32 #foreign c_cache;
 ModuleTestCorruptCachedLists :: (enabled: bool) #foreign c_cache;
 ModuleTestFailInstantiate :: () #foreign c_cache;
 ModuleTestFailRun :: () #foreign c_cache;
+ModuleTestSetRevision :: (index: s32, revision: s32) #foreign c_cache;
+ModuleTestYield :: () #foreign c_cache;
+ModuleTestBlockParser :: (enabled: bool) #foreign c_cache;
+ModuleTestParserStarted :: () -> bool #foreign c_cache;
+ModuleTestNow :: () -> float64 #foreign c_cache;
+
+ModuleTestPrepare :: (index: s32, bytes: string) -> s32 {
+    result: s32 = 0
+    for attempt: 0..20000 {
+        result = CellsPreparePackage(index, bytes)
+        if result != 0 {
+            return result
+        }
+        ModuleTestYield()
+    }
+    return result
+}
 #import, file "../src/cells/shared_state.zi";
 #import, file "../src/cells/lists_types.zi";
 #import, file "../src/cells/lists_visibility.zi";
@@ -995,6 +1012,61 @@ CheckModules :: () -> s32 {
     }
     Expect(CellsInstalledMask() == APP_ALL, 98)
     Expect(CellsPackageSize(1) == lists.count && CellsPackageSize(2) == habits.count, 235)
+    // Unrelated updates do not close/reopen working apps. A changed app is
+    // replaced transactionally, including a generic Diary with bound context.
+    unchanged_opens := ModuleTestBundleOpens()
+    unchanged_instances := ModuleTestInstanceOpens()
+    Expect(CellsReloadFeatures(APP_ALL), 251)
+    Expect(ModuleTestBundleOpens() == unchanged_opens &&
+        ModuleTestInstanceOpens() == unchanged_instances, 252)
+    habits_reads := ModuleTestCachedReads(2)
+    diary_reads := ModuleTestCachedReads(4)
+    ModuleTestSetRevision(1, 1)
+    ModuleTestCorruptCachedLists(true)
+    Expect(!CellsReloadFeatures(APP_ALL), 253)
+    Expect(ListsRun(ListsMessage.{.action = LISTS_ROUTE, .screen = ScreenEList}).succeeded, 254)
+    ModuleTestCorruptCachedLists(false)
+    Expect(CellsReloadFeatures(APP_ALL), 255)
+    Expect(ModuleTestCachedReads(2) == habits_reads && ModuleTestCachedReads(4) == diary_reads, 256)
+    ModuleTestSetRevision(4, 2)
+    Expect(CellsReloadFeatures(APP_ALL), 257)
+    Expect(ModuleTestCachedReads(2) == habits_reads && ModuleTestCachedReads(4) == diary_reads + 1, 258)
+    Expect(ModuleTestPrepare(0, ModuleTestText("inbe")) == 1, 259)
+    CellsDiscardPreparation()
+    Expect(CellsPreparationIdle(), 260)
+    Expect(ModuleTestPrepare(0, ModuleTestText("invalid-nested")) < 0, 261)
+    Expect(CellsPreparationIdle(), 262)
+    Expect(ModuleTestPrepare(1, lists) == 1, 263)
+    prepared_opens := ModuleTestBundleOpens()
+    prepared_reads := ModuleTestCachedReads(1)
+    CellsCommitPreparation(1, 3)
+    ModuleTestSetRevision(1, 3)
+    Expect(CellsReloadFeatures(APP_ALL), 264)
+    Expect(ModuleTestBundleOpens() == prepared_opens && ModuleTestCachedReads(1) == prepared_reads, 265)
+    Expect(ListsRun(ListsMessage.{.action = LISTS_ROUTE, .screen = ScreenEList}).succeeded, 266)
+    Expect(ModuleTestPrepare(4, ModuleTestText("diary")) == 1, 267)
+    CellsCommitPreparation(4, 4)
+    ModuleTestSetRevision(4, 4)
+    Expect(CellsReloadFeatures(APP_ALL) && DiaryRoute(ScreenDiary), 268)
+    ModuleTestBlockParser(true)
+    Expect(CellsPreparePackage(1, lists) == 0, 269)
+    for attempt: 0..5000 {
+        if ModuleTestParserStarted() { break }
+        ModuleTestYield()
+    }
+    Expect(ModuleTestParserStarted(), 270)
+    cancel_started := ModuleTestNow()
+    CellsDiscardPreparation()
+    Expect(!CellsPreparationIdle() && ModuleTestNow() - cancel_started < 0.05, 271)
+    Expect(ListsRun(ListsMessage.{.action = LISTS_ROUTE, .screen = ScreenEList}).succeeded, 272)
+    ModuleTestBlockParser(false)
+    for attempt: 0..5000 {
+        if CellsPreparationIdle() { break }
+        ModuleTestYield()
+    }
+    Expect(CellsPreparationIdle(), 273)
+    ModuleTestSetRevision(1, 0)
+    ModuleTestSetRevision(4, 0)
     CellsClose()
     ModuleTestCorruptCachedLists(true)
     Expect(CellsOpen() && CellsInstalledMask() == APP_ALL, 104)

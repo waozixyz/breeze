@@ -5,22 +5,67 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
+#include <time.h>
+#include <unistd.h>
 
 static unsigned char *payloads[11];
 static size_t sizes[11];
 static int32_t module_runs;
 static bool use_cached_bundles;
 static int32_t cached_reads[7];
-static int32_t bundle_opens;
+static _Atomic int32_t bundle_opens;
+static _Atomic bool block_parser;
+static _Atomic bool parser_started;
 static int32_t instance_opens;
 static bool corrupt_cached_lists;
 static bool fail_next_instance;
 static bool fail_next_run;
+static int32_t package_revisions[15];
+
+void ModuleTestSetRevision(int32_t index, int32_t revision)
+{
+    assert(index >= 0 && index < 15);
+    package_revisions[index] = revision;
+}
+
+void ModuleTestYield(void)
+{
+    usleep(1000);
+}
+
+void ModuleTestBlockParser(bool enabled)
+{
+    atomic_store(&block_parser, enabled);
+    if (enabled) atomic_store(&parser_started, false);
+}
+
+bool ModuleTestParserStarted(void)
+{
+    return atomic_load(&parser_started);
+}
+
+double ModuleTestNow(void)
+{
+    struct timespec now;
+    assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+    return (double)now.tv_sec + (double)now.tv_nsec / 1e9;
+}
+
+int32_t __wrap_package_manager_PackageRevisionFor(int32_t index)
+{
+    assert(index >= 0 && index < 15);
+    return package_revisions[index];
+}
 
 Bundle *__real_BundleOpenBytes(const unsigned char *data, size_t count);
 Bundle *__wrap_BundleOpenBytes(const unsigned char *data, size_t count)
 {
     bundle_opens++;
+    if (atomic_load(&block_parser)) {
+        atomic_store(&parser_started, true);
+        while (atomic_load(&block_parser)) usleep(1000);
+    }
     return __real_BundleOpenBytes(data, count);
 }
 

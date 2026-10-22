@@ -54,8 +54,23 @@ ModuleSlot :: struct {
     has_write: bool
 }
 
+ModulePreparation :: struct {
+    slot: ModuleSlot
+    index: s32
+    preload: s32
+    bytes: string
+    child: s32
+    target: s32
+    checked: bool
+    canceled: bool
+}
+
 #scope_file
 slots: [PackageCount]ModuleSlot;
+module_revisions: [PackageCount]s32;
+module_prepared: [PackageCount]ModuleSlot;
+module_prepared_revisions: [PackageCount]s32;
+module_preparation: ModulePreparation = ModulePreparation.{.index = -1, .preload = -1};
 leaderboard_message: LeaderboardMessage;
 leaderboard_codec: LeaderboardMessageCodec;
 lumi_message: LumiMessage;
@@ -453,6 +468,10 @@ CellsClose :: () {
     while index < PackageCount {
         HostedAppClose(*slots[index].app)
         slots[index] = ModuleSlot.{}
+        module_revisions[index] = 0
+        HostedAppClose(*module_prepared[index].app)
+        module_prepared[index] = ModuleSlot.{}
+        module_prepared_revisions[index] = 0
         index += 1
     }
     enabled_apps = APP_RECOMMENDED
@@ -801,6 +820,7 @@ CellsOpenInstalledFeatures :: () {
             }
         }
         PackageFree(bytes)
+        module_revisions[index] = PackageRevisionFor(index)
     }
     enabled_apps = CellsInstalledMask()
 }
@@ -1044,6 +1064,7 @@ CellsSetEnabled :: (mask: s32) -> bool {
                     return false
                 }
             }
+            module_revisions[index + 1] = PackageRevisionFor(index + 1)
         }
         index += 1
     }
@@ -1121,6 +1142,157 @@ CellsValidatePackage :: (index: s32, bytes: string) -> bool {
     identifying = previous
     HostedAppClose(*test.app)
     return ok
+}
+
+// Only the parser runs on its worker. Identity handshakes and message codecs
+// remain on the frame thread, one component at a time, with effects disabled.
+#program_export
+CellsPreparePackage :: (index: s32, bytes: string) -> s32 {
+    #if #defined(PLATFORM_WEB) || #defined(_WIN32) {
+        return ifx CellsValidatePackage(index, bytes) then 1 else -1
+    }
+    if index >= PackageCount {
+        return ifx CellsValidatePackage(index, bytes) then 1 else -1
+    }
+    if index < 0 {
+        return -1
+    }
+    if module_preparation.index < 0 {
+        return ModulePreparationStart(index, bytes)
+    }
+    if module_preparation.index != index || module_preparation.canceled {
+        return -1
+    }
+    if module_preparation.checked && index != 0 {
+        return 1
+    }
+    if module_preparation.preload >= 0 {
+        return ModulePreparationCheck()
+    }
+    if index != 0 {
+        return 1
+    }
+    return ModulePreparationNextChild()
+}
+
+ModulePreparationStart :: (index: s32, bytes: string) -> s32 {
+    module_preparation.index = index
+    module_preparation.target = index
+    module_preparation.bytes = bytes
+    module_preparation.preload = BundlePreloadStart(bytes)
+    if module_preparation.preload < 0 {
+        CellsDiscardPreparation()
+        return -1
+    }
+    return 0
+}
+
+ModulePreparationCheck :: () -> s32 {
+    if !BundlePreloadReady(module_preparation.preload) {
+        return 0
+    }
+    bundle := BundlePreloadTake(module_preparation.preload, module_preparation.bytes)
+    module_preparation.preload = -1
+    candidate: ModuleSlot
+    candidate.app.bundle = bundle
+    candidate.bundle_bytes = module_preparation.bytes.count
+    candidate.kind = ModuleKindForPackage(module_preparation.target)
+    previous := identifying
+    identifying = true
+    ok := bundle != null && ModuleInstantiate(*candidate)
+    if ok {
+        if module_preparation.target == 0 {
+            ok = ModulePackageAssetsValid(bundle, false)
+        } else {
+            ok = ModuleFeatureAssetsValid(bundle, candidate.kind)
+        }
+    }
+    identifying = previous
+    if !ok {
+        HostedAppClose(*candidate.app)
+        CellsDiscardPreparation()
+        return -1
+    }
+    if !module_preparation.checked {
+        // The candidate's callbacks are rebound at its permanent address
+        // only after the verified payload has been published.
+        CloseBundleInstance(candidate.app.instance)
+        candidate.app.instance = null
+        module_preparation.slot = candidate
+        module_preparation.checked = true
+        module_preparation.child = 1
+    } else {
+        HostedAppClose(*candidate.app)
+        module_preparation.child += 1
+    }
+    // No second handshake or nested program is checked in this frame.
+    return 0
+}
+
+ModulePreparationNextChild :: () -> s32 {
+    names: [PackageCount - 1]string = .["cells/lists.zib", "cells/habits.zib", "cells/practices.zib",
+    "cells/diary.zib", "cells/lumi.zib", "cells/leaderboard.zib"]
+    while module_preparation.child < PackageCount {
+        child := module_preparation.child
+        bundle := module_preparation.slot.app.bundle
+        for asset: cast(u64)0..BundleAssets(bundle) - cast(u64)1 {
+            if CellBundlePath(TextFromCString(BundleAssetPath(bundle, asset))) == names[child - 1] {
+                module_preparation.target = child
+                module_preparation.bytes = TextFromBytes(BytesFromPointer(BundleAssetBytes(bundle, asset),
+                    BundleAssetLength(bundle, asset)))
+                module_preparation.preload = BundlePreloadStart(module_preparation.bytes)
+                if module_preparation.preload < 0 {
+                    CellsDiscardPreparation()
+                    return -1
+                }
+                return 0
+            }
+        }
+        module_preparation.child += 1
+    }
+    return 1
+}
+
+#program_export
+CellsDiscardPreparation :: () {
+    if module_preparation.index < 0 {
+        return
+    }
+    module_preparation.canceled = true
+    unused CellsPreparationIdle()
+}
+
+// A canceled preload still borrows its input. The package worker retains
+// that input until this nonblocking poll has released every parser handle.
+#program_export
+CellsPreparationIdle :: () -> bool {
+    if module_preparation.index < 0 {
+        return true
+    }
+    if !module_preparation.canceled {
+        return true
+    }
+    if module_preparation.preload >= 0 {
+        if !BundlePreloadReady(module_preparation.preload) {
+            return false
+        }
+        BundlePreloadDiscard(module_preparation.preload)
+    }
+    HostedAppClose(*module_preparation.slot.app)
+    module_preparation = ModulePreparation.{.index = -1, .preload = -1}
+    return true
+}
+
+#program_export
+CellsCommitPreparation :: (index: s32, revision: s32) {
+    if index > 0 && index < PackageCount && module_preparation.index == index &&
+    module_preparation.checked {
+        HostedAppClose(*module_prepared[index].app)
+        module_prepared[index] = module_preparation.slot
+        module_prepared_revisions[index] = revision
+        module_preparation.slot = ModuleSlot.{}
+    }
+    CellsDiscardPreparation()
 }
 
 ModuleFeatureAssetsValid :: (bundle: *void, kind: s32) -> bool {
@@ -1277,12 +1449,51 @@ CellsReloadFeatures :: (mask: s32) -> bool {
     if !NodeAppsReloadUpdated() {
         return false
     }
-    for index: cast(s32)0..cast(s32)(PackageCount - 1) {
-        if index == 3 {
+    for index: cast(s32)1..cast(s32)(PackageCount - 1) {
+        revision := PackageRevisionFor(index)
+        if module_revisions[index] == revision {
             continue
         }
-        HostedAppClose(*slots[index].app)
-        slots[index] = ModuleSlot.{}
+        slot := ModuleSlotForPackage(index)
+        if slot == 5 && lumi_preload >= 0 && !CellsLumiFinish(false) {
+            return false
+        }
+        replacement: ModuleSlot
+        ready := module_prepared_revisions[index] == revision && module_prepared[index].app.bundle != null
+        if ready {
+            replacement = module_prepared[index]
+            module_prepared[index] = ModuleSlot.{}
+            module_prepared_revisions[index] = 0
+        }
+        previous_identifying := identifying
+        identifying = true
+        if !ready {
+            bytes := PackageInstalledBytes(index)
+            kind := ModuleKindForPackage(index)
+            ready = bytes.count > 0 && ModuleOpen(*replacement, bytes, kind) &&
+            ModuleFeatureAssetsValid(replacement.app.bundle, kind)
+            PackageFree(bytes)
+        }
+        if !ready {
+            HostedAppClose(*replacement.app)
+            identifying = previous_identifying
+            return false
+        }
+        // Bind callbacks again at the permanent slot address. Keep the running
+        // instance until both the candidate and its final binding succeed.
+        CloseBundleInstance(replacement.app.instance)
+        replacement.app.instance = null
+        previous := slots[slot]
+        slots[slot] = replacement
+        if !ModuleInstantiate(*slots[slot]) {
+            HostedAppClose(*slots[slot].app)
+            slots[slot] = previous
+            identifying = previous_identifying
+            return false
+        }
+        identifying = previous_identifying
+        HostedAppClose(*previous.app)
+        module_revisions[index] = revision
     }
     return CellsSetEnabled(mask)
 }

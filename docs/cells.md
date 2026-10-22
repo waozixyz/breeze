@@ -371,6 +371,21 @@ state can be preserved. Root updates activate on restart; About identifies a pen
 Recommended feature versions follow the active signed root dependencies, and
 newer independently cached cells remain selected after restart.
 
+On Linux and Android, payload jobs own their paths, release descriptors and
+bytes. Reading, hashing and writing large files runs off the frame thread.
+Built-in cell programs are parsed in the background, then one isolated identity
+handshake runs per frame with effects disabled. A verified feature candidate is
+retained for activation, so installing it does not parse it again or reopen
+unrelated app VMs. Cancellation retires jobs until their workers and parsers
+finish; it never joins an unfinished worker in a frame. Web and Windows retain
+the synchronous fallback, as does validation of additional node-app trees.
+
+Practice downloads, cold loads and cache reviews use the same owned content
+worker. Recently used verified packs stay in memory within a soft 64 MiB
+budget; the selected practice and its voices are never evicted for that limit.
+Only selected content is exposed through the asset provider. Removing content
+also retires its pending load, so a late result cannot mount it again.
+
 `apps/versions.json` records separate numeric versions and increasing sequences
 for every package. Every app release versions all bundled packages: bundles
 share host code and Kryon, so any release changes them, and the node refuses

@@ -5,6 +5,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdatomic.h>
+#include <time.h>
 
 static const char *fixtures;
 static char database[4096];
@@ -18,7 +20,26 @@ static bool deny_approval;
 static const char *manifest = "diary";
 static char account[65] = "fixture-account";
 static EmbeddedAssetEntry publisher;
+static atomic_bool block_hash;
+static atomic_bool hash_started;
 extern int32_t FixtureHabitsSequence(void);
+
+static double monotonic_seconds(void) {
+    struct timespec now;
+    assert(clock_gettime(CLOCK_MONOTONIC, &now) == 0);
+    return (double)now.tv_sec + (double)now.tv_nsec / 1e9;
+}
+
+void __real_Sha256Hex(const unsigned char *data, int64_t size, unsigned char *digest);
+void __wrap_Sha256Hex(const unsigned char *data, int64_t size, unsigned char *digest) {
+    if (atomic_load(&block_hash)) {
+        atomic_store(&hash_started, true);
+        while (atomic_load(&block_hash)) {
+            usleep(1000);
+        }
+    }
+    __real_Sha256Hex(data, size, digest);
+}
 
 uint8_t *__wrap_storage_user_id_buffer(void) {
     return (uint8_t *)account;
@@ -80,6 +101,17 @@ bool CellsValidatePackage(int32_t index, String bytes) {
     assert((index == 0 || index == 4) && bytes.length > 8);
     return true; /* The capability decoder is covered by cells-test. */
 }
+int32_t CellsPreparePackage(int32_t index, String bytes) {
+    return CellsValidatePackage(index, bytes) ? 1 : -1;
+}
+void CellsDiscardPreparation(void) {
+}
+bool CellsPreparationIdle(void) {
+    return true;
+}
+void CellsCommitPreparation(int32_t index, int32_t revision) {
+    assert(index >= 0 && revision > 0);
+}
 
 /* Wraps daochi-client's SecureRandom so the device bucket is fixed. */
 int32_t __wrap_SecureRandom(uint8_t *output, int64_t length) {
@@ -140,6 +172,11 @@ void __wrap_file_download_FileDownloadRelease(FileDownload *download) {
 }
 static void pump(void) {
     package_manager_PackagePump(8, 200000, false);
+    for (int attempt = 0; package_phase == 4 && attempt < 10000; attempt++) {
+        usleep(1000);
+        package_manager_PackagePump(8, 200000, false);
+    }
+    assert(package_phase != 4);
 }
 static void request(void) {
     package_manager_PackageRequest(4);
@@ -205,7 +242,30 @@ int32_t RunPackageManagerFixture(void) {
     package_manager_PackagePump(8, 200000, true);
     assert(starts == before_practice + 2 && package_index == 4);
     assert(package_manager_PackageSequence(4) == installed_sequence);
-    pump(); /* Only the confirmed exact target may fetch the payload. */
+    /* Even an arbitrarily slow hash cannot block a pump or cancellation,
+       publish the payload, or keep a borrowed job alive after it finishes. */
+    atomic_store(&block_hash, true);
+    package_manager_PackagePump(8, 200000, false);
+    for (int attempt = 0; !atomic_load(&hash_started) && attempt < 5000; attempt++) {
+        usleep(1000);
+    }
+    assert(atomic_load(&hash_started));
+    double cancel_started = monotonic_seconds();
+    package_manager_PackagePump(8, 200000, false);
+    package_manager_PackageCancel();
+    assert(monotonic_seconds() - cancel_started < 0.05);
+    assert(package_index == -1 && package_work_count > 0);
+    assert(package_manager_PackageSequence(4) == installed_sequence);
+    atomic_store(&block_hash, false);
+    for (int attempt = 0; package_work_count > 0 && attempt < 5000; attempt++) {
+        usleep(1000);
+        package_manager_PackagePump(8, 200000, false);
+    }
+    assert(package_work_count == 0);
+    assert(package_manager_PackageRequestVersion(4, version, digest, StringLiteral("fixture-account")));
+    pump();
+    pump();
+    pump(); /* Only the confirmed exact target may publish the payload. */
     assert(package_manager_PackageSequence(4) == installed_sequence + 1);
     assert(!package_manager_PackageUpdateAvailable(4));
     installed = package_manager_PackageInstalledBytes(4);
