@@ -26,14 +26,14 @@ fi
 python3 scripts/release_notes.py CHANGELOG.md build/package-assets/inbe/assets/app/release-notes.json
 python3 scripts/practice_content.py "$ziran"
 mkdir -p "$output" build/bundled-cells
-self_dir="$root/build/packages/self"
-mkdir -p build/self
-"$ziran" bundle --root "$self_dir" --module-path "$self_dir/src" \
+entity_dir="$root/build/packages/entity"
+mkdir -p build/entity
+"$ziran" bundle --root "$entity_dir" --module-path "$entity_dir/src" \
     --module-path kryon=build/packages/kryon/src/backend \
     --module-path kryon=build/packages/kryon/src/ui --module-path build/packages/kryon/src/ui \
     --module-path build/packages/ziran/std --module-path qrcode=build/packages/qrcode/src \
     --define KRYON_HOSTED_UI \
-    --asset-dir "assets=$self_dir/assets" --entry self:Main -o build/self/self.zib "$self_dir/src/self.zi"
+    --asset-dir "assets=$entity_dir/assets" --entry entity:Main -o build/entity/entity.zib "$entity_dir/src/entity.zi"
 rm -f "$output/practice.zib"
 for feature in lists habits practices diary lumi leaderboard; do
     source=$feature
@@ -64,7 +64,7 @@ done
     --asset-dir "themes=build/package-assets/inbe/themes" \
     --asset-dir "locales=build/package-assets/inbe/locales" \
     --asset-dir "icons=build/package-assets/inbe/icons" \
-    --asset-dir "assets/self=$self_dir/assets/self" --asset-dir "assets/self/bundles=build/self" \
+    --asset-dir "assets/entity=$entity_dir/assets/entity" --asset-dir "assets/entity/bundles=build/entity" \
     --asset-dir "cells=build/bundled-cells" -o build/inbe.zib apps/inbe/inbe.zi
 # shellcheck disable=SC2086
 "$ziran" bundle --root . --module-path src $packages \
@@ -75,5 +75,5 @@ done
     --asset-dir "themes=build/package-assets/inbe/themes" \
     --asset-dir "locales=build/package-assets/inbe/locales" \
     --asset-dir "icons=build/package-assets/inbe/icons" \
-    --asset-dir "assets/self=$self_dir/assets/self" --asset-dir "assets/self/bundles=build/self" \
+    --asset-dir "assets/entity=$entity_dir/assets/entity" --asset-dir "assets/entity/bundles=build/entity" \
     --asset-dir "cells=$output" -o build/inbe-full.zib apps/inbe/inbe.zi

@@ -3,21 +3,21 @@
 Date: 18 October 2026. Status: implementation in progress; final application
 integration and device verification remain pending.
 
-The 160 catalogs, app earning adapters, shared Self view and alert control are
+The 160 catalogs, app earning adapters, shared Entity view and alert control are
 implemented. Facts and permanent awards use validated account-owned settings
 records in their own encrypted collection, rather than a second database.
 Presentation receipts remain local. Native SQLite checks cover earning,
 source deletion and purge, sync merging, archive restore and profile replacement.
 Successful focused checks do not establish that the final application is released.
 
-Achievements live in the shared **Self** profile app. Each installed Inner
+Achievements live in the shared **Entity** profile app. Each installed Inner
 Breeze app supplies its own achievements, and Practices supplies an additional
-set for each installed practice. Self shows both earned and unearned
+set for each installed practice. Entity shows both earned and unearned
 achievements; unearned achievements have gray artwork and visible requirements
 and progress. A single **Achievement alerts** switch lets the person enable or
 disable alerts without changing whether achievements are earned.
 
-The initial catalog below defines **160 achievements**: Self 10, Practices 60
+The initial catalog below defines **160 achievements**: Entity 10, Practices 60
 (10 general and 10 for each of five practices), Diary 20, Habits 20, Lists 15,
 Lumi 10, Photos 10, Radio 10, and Leaderboard 5. This is the full catalog, not
 the number every installation must display. Only the installed apps and practice
@@ -27,7 +27,7 @@ content contribute to the visible catalog and its earned/available counts.
 
 ### Where achievements appear
 
-- Add **Achievements** inside Self, alongside the existing profile content.
+- Add **Achievements** inside Entity, alongside the existing profile content.
   Opening it shows app headings, each app's earned/available count, and its
   achievements. Practices has nested headings for its general achievements
   and each installed practice.
@@ -39,7 +39,7 @@ content contribute to the visible catalog and its earned/available counts.
   Gray rows remain focusable and readable; they are not disabled controls.
 - Use the existing profile typography, theme, standard widgets, and responsive
   layout. Keep one scrolling collection with clear app headings. Do not add
-  search, filters, new navigation destinations outside Self, or separate
+  search, filters, new navigation destinations outside Entity, or separate
   achievement screens in every app for this work.
 - Show progress for each individual achievement, including first-step awards.
   Use counts for simple thresholds and explanatory progress for compound rules.
@@ -100,7 +100,7 @@ content contribute to the visible catalog and its earned/available counts.
 
 ## 2. Achievement alerts
 
-The requested control is one standard toggle in **Self → Achievements**:
+The requested control is one standard toggle in **Entity → Achievements**:
 
 **Achievement alerts**
 
@@ -143,24 +143,24 @@ The requested control is one standard toggle in **Self → Achievements**:
   platform quiet-mode and accessibility behavior.
 - Keep presentation receipts local to each device. Mark a receipt consumed
   before dispatch for best-effort, at-most-once presentation; a crash may miss
-  an alert but must not replay an uncertain alert. Awards remain visible in Self.
+  an alert but must not replay an uncertain alert. Awards remain visible in Entity.
 
 ## 3. Existing code and ownership
 
 The current checkout already provides these integration points:
 
-- [`../src/app/self_host.zi`](../src/app/self_host.zi) loads the independent
-  Self bundle, supplies `self.json`, maps profile data and allows scoped store
+- [`../src/app/entity_host.zi`](../src/app/entity_host.zi) loads the independent
+  Entity bundle, supplies `entity.json`, maps profile data and allows scoped store
   and locale calls. It currently adds account, progress, data, friends and
   Telegram extensions; it has no achievement catalog or award contract.
-- Self is a dependency in [`../ziran.toml`](../ziran.toml). Its canonical
-  repository is `waozixyz/self`; `src/model.zi` owns the profile document and
-  `src/self.zi` owns its UI. Make shared Self UI changes there first, commit
+- Entity is a dependency in [`../ziran.toml`](../ziran.toml). Its canonical
+  repository is `waozixyz/entity`; `src/model.zi` owns the profile document and
+  `src/entity.zi` owns its UI. Make shared Entity UI changes there first, commit
   there, then update Inbe's dependency with the package tool. Do not edit a
   cached package or build copy.
 - [`../src/screens/profile_screen.zi`](../src/screens/profile_screen.zi) still
   hosts Inner Breeze progress content. It should not become a second
-  implementation of the shared Self achievement collection.
+  implementation of the shared Entity achievement collection.
 - [`../src/cells/catalog.zi`](../src/cells/catalog.zi),
   [`../src/cells/node_apps.zi`](../src/cells/node_apps.zi), and the Apps
   installation path distinguish bundled selections, node apps, and downloads.
@@ -188,7 +188,7 @@ The current checkout already provides these integration points:
 
 App-specific definitions, text, thresholds and fact rules belong in
 `apps/<app>/`, with Practices using its existing `apps/practice/` source
-directory. Shared Self presentation belongs in the Self repository. Inbe's
+directory. Shared Entity presentation belongs in the Entity repository. Inbe's
 host supplies generic storage, scoped access, event persistence, notification
 dispatch and installed-package information. Apps do not read another app's
 database tables or internals. Existing compiled practice completion paths may
@@ -201,7 +201,7 @@ unrelated rewrite of every practice screen.
 
 Each achievement-capable app ships a versioned `achievements.json` manifest
 inside its signed package, plus its localized strings. Practice definitions
-also declare their content-pack ID. The root integration supplies the Self
+also declare their content-pack ID. The root integration supplies the Entity
 overview definitions to the shared profile display.
 
 Each definition contains:
@@ -295,7 +295,7 @@ Use the existing encrypted, account-authenticated sync envelope and protocol
 v6 for a separate achievement record namespace, proposed
 `private.inbe.v1.achievements`. Do not put achievement records into Lumi's
 restricted collection. Confirm node support before enabling the new namespace;
-earning and Self remain available locally when sync is unavailable.
+earning and Entity remain available locally when sync is unavailable.
 
 Synced awards merge by stable identity as a union; preserve the earliest known
 valid earned time and keep unknown time distinct. Merge facts by canonical
@@ -315,15 +315,15 @@ tombstones to avoid resurrecting deleted progress.
    Imports, backfills, replays, sync, startup rebuilds and catalog discovery
    initialize consumed receipts silently. A live local action may still qualify
    after a local outbox retry in the current foreground run.
-4. Project the installed catalog, progress, awards and saved preference to Self.
-   Self renders this data and writes only the alerts preference. It cannot
+4. Project the installed catalog, progress, awards and saved preference to Entity.
+   Entity renders this data and writes only the alerts preference. It cannot
    create or edit awards.
 
-Provide bounded, paginated projections over Self's existing generic store
+Provide bounded, paginated projections over Entity's existing generic store
 bridge, with explicitly allowed document names for the catalog, pages and
-settings. Do not place the 160 definitions into `self.json`: Self's current
+settings. Do not place the 160 definitions into `entity.json`: Entity's current
 identity decoder has an 8192-byte input limit. Add optional capability
-negotiation so old Self packages keep working and old hosts do not claim to
+negotiation so old Entity packages keep working and old hosts do not claim to
 support achievements. Any host interface change must use the existing app
 version/compatibility machinery and requires a host update before packages
 can rely on it.
@@ -335,7 +335,7 @@ These rules make each requirement below implementable and consistent:
 - **Active day:** a date containing at least one qualifying saved practice,
   habit completion, nonempty diary day, first task completion, confirmed useful
   Lumi action, successful photo import/open, one minute of active Radio
-  playback, or a successful own-row Leaderboard check-in. Self overview uses
+  playback, or a successful own-row Leaderboard check-in. Entity overview uses
   the union of these dates. Source updates, settings changes and merely
   installing or opening an app are not activity.
 - **Practice session:** a distinct saved session meeting its practice's
@@ -402,7 +402,7 @@ action may cross multiple tiers and produces one grouped alert.
 Every numbered line defines one achievement, its stable proposed ID and its
 earning condition. Session, day, completion and return terms use section 5.
 
-### Self overview — 10 achievements
+### Entity overview — 10 achievements
 
 These are the profile's cross-app milestones, supplied by the root integration.
 
@@ -702,18 +702,18 @@ describe earning, muted alerts, uninstalled apps and historical ambiguity.
 Exit: real source actions and restored history produce correct deterministic
 awards offline, including retries and restarts, without showing alerts yet.
 
-### Stage 3 — Self collection and alerts switch
+### Stage 3 — Entity collection and alerts switch
 
 - Implement the shared collection, grouped app headings, nested practice
   headings, gray unearned badges, accessible progress and earned dates in the
-  canonical Self repository. Add the standard alerts toggle and save behavior.
+  canonical Entity repository. Add the standard alerts toggle and save behavior.
 - Connect Inbe's scoped projection and preference provider, with pagination
-  and capability negotiation. Update Self through Inbe's package dependency.
+  and capability negotiation. Update Entity through Inbe's package dependency.
 - Use existing icons or vector badge primitives for the first implementation.
   A separate request for illustrated badges can supply bitmap assets later;
   no generated image production is required for the achievement behavior.
 
-Exit: Self renders correct installed-only results at phone and desktop sizes;
+Exit: Entity renders correct installed-only results at phone and desktop sizes;
 the toggle survives restart and account changes without losing achievements.
 
 ### Stage 4 — Complete every app and sync
@@ -735,12 +735,12 @@ if the UI lists awards that have no implemented trigger.
   alerts in every shipped locale. Keep localized strings owned by the packages
   that supply the feature; never copy English placeholders to other locales.
 - Check old-host/new-package and new-host/old-package behavior, including an
-  older Self package and packages without achievement definitions.
+  older Entity package and packages without achievement definitions.
 - Run the targeted tests below and the repository's required compatibility,
   proof, locale and visual gates. Reuse stable build output directories.
 - For an eventual approved release, add its numeric changelog entry and use
   `update_version.sh`, followed by the existing release-ready and exact-artifact
-  phone checks. App and Self version changes must use their owning workflows.
+  phone checks. App and Entity version changes must use their owning workflows.
   Publishing or releasing remains a separate owner-authorized action.
 
 Exit: all 160 earning rules and alert states pass, translations are complete,
@@ -776,7 +776,7 @@ and the exact artifacts are ready for the existing release process.
 - Photos and Radio remain optional. Prerequisite-dependent Lumi and
   Leaderboard rows follow installed state, including different device layouts
   on the same account. Catalog loading handles more than the initial 160 rows
-  without exceeding the Self identity-document limit.
+  without exceeding the Entity identity-document limit.
 - Malformed catalogs, duplicate IDs, cross-app award attempts and unsupported
   capabilities are rejected without replacing the working package or data.
 
@@ -832,7 +832,7 @@ and the exact artifacts are ready for the existing release process.
 
 ## 10. Completion boundary
 
-The requested feature is complete when Self owns the achievement UI, all 160
+The requested feature is complete when Entity owns the achievement UI, all 160
 catalog entries can be earned through implemented app actions, only installed
 apps/practices are shown, unearned badges are gray and understandable, profile
 history survives restart/reinstall/sync, and the alerts toggle reliably controls

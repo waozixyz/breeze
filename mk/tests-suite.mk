@@ -18,6 +18,7 @@ test: lumi-narration-test
 test: ziran-behavior-tests asset-text-tests
 test: route-host-test
 test: profile-host-test
+test: entity-picker-test
 test: launcher-policy-test launcher-entry-test android-text-selection-test
 test: button-api-check
 test: version-check version-test

@@ -6,8 +6,8 @@ APP_CODEC_SCHEMAS := $(KRYON_DIR)/scripts/generate-widget-codecs.py $(KRYON_DIR)
 src/cells/app_codec.zi: scripts/generate-app-codec.py $(APP_CODEC_SCHEMAS)
 	python3 scripts/generate-app-codec.py
 
-SELF_DIR := build/packages/self
-SELF_SOURCES = $(wildcard $(SELF_DIR)/src/*.zi $(SELF_DIR)/assets/self/*)
+ENTITY_DIR := build/packages/entity
+ENTITY_SOURCES = $(wildcard $(ENTITY_DIR)/src/*.zi $(ENTITY_DIR)/assets/entity/*)
 # The shared Apps controller is built from the locked Apps package with its
 # own pinned graph, so its digest identifies the reviewed Apps release.
 APPS_DIR := build/packages/apps
@@ -20,7 +20,7 @@ cells: $(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE)
 
 $(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE): CHANGELOG.md scripts/release_notes.py $(APPS_BUNDLE) src/cells/apps_controller.zi
 
-$(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(SELF_SOURCES) $(CELL_SOURCES) $(CELL_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/achievement_icons.py scripts/animation_inventory.py scripts/build-cells.sh src/practices/sun_salutation/sun_salutation_assets.zi src/practices/sun_salutation/sun_salutation_inventory.zi $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
+$(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(ENTITY_SOURCES) $(CELL_SOURCES) $(CELL_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/achievement_icons.py scripts/animation_inventory.py scripts/build-cells.sh src/practices/sun_salutation/sun_salutation_assets.zi src/practices/sun_salutation/sun_salutation_inventory.zi $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
 	sh scripts/build-cells.sh $(ZIRAN_BIN)
 
 # Apps the node offers build on their own, never into the root package.

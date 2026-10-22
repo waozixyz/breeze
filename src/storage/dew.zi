@@ -1,6 +1,7 @@
 // Dew is prepaid storage credit on the Waozi node. The node owns the balance,
 // payment confirmations and expiry; a device never grants itself credit.
 #import "auth"
+#import "entity/dew_model"
 #import "json_scan"
 #import "text_buffer"
 #import "byte_text_linux"
@@ -20,8 +21,6 @@ DewNow :: () -> s64 {
     return Clock.UnixNow()
 }
 
-DewNode :: "https://api.waozi.xyz"
-DewUnits :: 1000000
 DewRead :: 1
 DewUpgrade :: 2
 DewAddress :: 3
@@ -32,29 +31,6 @@ DewGiftNone :: 0
 DewGiftSending :: 1
 DewGiftSent :: 2
 DewGiftRefused :: 3
-
-// The node's paid storage sizes, in the order the app offers them.
-DewPlanCount :: 2
-DewPlanSizes: [2]string = .["1gb", "5gb"];
-
-DewStoragePlan :: struct {
-    limit_bytes: s64
-    monthly_units: s64
-    yearly_units: s64
-}
-
-DewAccount :: struct {
-    known: bool
-    enabled: bool
-    balance: s64
-    used_bytes: s64
-    limit_bytes: s64
-    expires_at: s64
-    free_bytes: s64
-    // 1 + the index of the account's paid size, or 0 without a paid plan.
-    plan_size: s32
-    plans: [DewPlanCount]DewStoragePlan
-}
 
 // The node's Monero price in US cents and its Dew funding ratio. Shown
 // for orientation only; the node charges Dew and credits Monero by itself.
@@ -150,95 +126,6 @@ DewContext :: () {
     } else {
         dew_gift_attempt[0] = cast(u8)0
     }
-}
-
-// Read integer units without converting credit through floating point.
-DewInteger :: (json: string, at: s32, value: *s64) -> bool {
-    if at < 0 || at >= cast(s32)json.count {
-        return false
-    }
-    cursor := at
-    number: s64 = 0
-    while cursor < cast(s32)json.count && json[cursor] >= cast(u8)48 && json[cursor] <= cast(u8)57 {
-        digit := cast(s64)(json[cursor] - cast(u8)48)
-        if number > (9223372036854775807 - digit) / 10 {
-            return false
-        }
-        number = number * 10 + digit
-        cursor += 1
-    }
-    if cursor == at || ValueEnd(json, at, 0) != cursor {
-        return false
-    }
-    value.* = number
-    return true
-}
-
-DewPlanSlot :: (size: string) -> s32 {
-    for index: cast(s32)0..DewPlanCount - 1 {
-        if size == DewPlanSizes[index] {
-            return index
-        }
-    }
-    return -1
-}
-
-DewParseAccount :: (json: string, identity: string, account: *DewAccount) -> bool {
-    owner: [65]u8
-    asset: [32]u8
-    size: [16]u8
-    plan := FieldAt(json, 0, "plan")
-    plans := FieldAt(json, 0, "plans")
-    units: s64
-    if Space(json, ValueEnd(json, 0, 0)) != cast(s32)json.count || plan < 0 || plans < 0 ||
-    ReadStringText(json, FieldAt(json, 0, "account_id"), owner[:]) != 64 ||
-    TextUntilNul(owner[:]) != identity ||
-    ReadStringText(json, FieldAt(json, 0, "asset_id"), asset[:]) != 11 ||
-    TextUntilNul(asset[:]) != "waozi:token" ||
-    !DewInteger(json, FieldAt(json, 0, "units_per_dew"), *units) || units != DewUnits ||
-    !DewInteger(json, FieldAt(json, plan, "balance"), *account.balance) ||
-    !DewInteger(json, FieldAt(json, plan, "limit_bytes"), *account.limit_bytes) ||
-    !DewInteger(json, FieldAt(json, plan, "expires_at"), *account.expires_at) ||
-    !DewInteger(json, FieldAt(json, 0, "free_bytes"), *account.free_bytes) ||
-    !DewInteger(json, FieldAt(json, 0, "used_bytes"), *account.used_bytes) {
-        return false
-    }
-    // Sizes this app does not know yet are skipped; each known size is priced by the node.
-    for index: cast(s32)0..ArrayCount(json, plans) - 1 {
-        at := ElementAt(json, plans, index)
-        size = .{}
-        unused ReadStringText(json, FieldAt(json, at, "size"), size[:])
-        slot := DewPlanSlot(TextUntilNul(size[:]))
-        if slot >= 0 {
-            offer := *account.plans[slot]
-            if !DewInteger(json, FieldAt(json, at, "limit_bytes"), *offer.limit_bytes) ||
-            !DewInteger(json, FieldAt(json, at, "monthly_units"), *offer.monthly_units) ||
-            !DewInteger(json, FieldAt(json, at, "yearly_units"), *offer.yearly_units) {
-                return false
-            }
-        }
-    }
-    size = .{}
-    unused ReadStringText(json, FieldAt(json, plan, "size"), size[:])
-    account.plan_size = DewPlanSlot(TextUntilNul(size[:])) + 1
-    enabled := FieldAt(json, 0, "enabled")
-    if enabled < 0 {
-        return false
-    }
-    end := ValueEnd(json, enabled, 0)
-    if end <= enabled || (json[enabled:end] != "true" && json[enabled:end] != "false") {
-        return false
-    }
-    account.enabled = json[enabled:end] == "true"
-    if account.enabled {
-        for offer: account.plans {
-            if offer.limit_bytes <= account.free_bytes || offer.monthly_units <= 0 || offer.yearly_units <= 0 {
-                return false
-            }
-        }
-    }
-    account.known = true
-    return true
 }
 
 // Six decimal places match the existing signed ledger; trailing zeros vanish.
@@ -415,49 +302,13 @@ DewTopUp :: () {
 }
 
 DewParseAddress :: (json: string) -> bool {
-    owner: [65]u8
-    address: [128]u8
-    asset: [32]u8
-    network: [16]u8
-    atomic: s64
-    units: s64
-    confirmations: s64
-    minimum: s64
-    if Space(json, ValueEnd(json, 0, 0)) != cast(s32)json.count ||
-    ReadStringText(json, FieldAt(json, 0, "account_id"), owner[:]) != 64 ||
-    TextUntilNul(owner[:]) != TextUntilNul(dew_identity[:]) ||
-    ReadStringText(json, FieldAt(json, 0, "asset_id"), asset[:]) != 11 ||
-    TextUntilNul(asset[:]) != "waozi:token" ||
-    ReadStringText(json, FieldAt(json, 0, "network"), network[:]) != 7 ||
-    TextUntilNul(network[:]) != "mainnet" ||
-    ReadStringText(json, FieldAt(json, 0, "address"), address[:]) != 95 ||
-    (address[0] != cast(u8)52 && address[0] != cast(u8)56) {
-        return false
-    }
-    alphabet := "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
-    for byte: TextUntilNul(address[:]) {
-        found := false
-        for allowed: alphabet {
-            found = found || byte == allowed
-        }
-        if !found {
-            return false
-        }
-    }
-    rate := FieldAt(json, 0, "rate")
-    if rate < 0 ||
-    !DewInteger(json, FieldAt(json, rate, "xmr_atomic_units"), *atomic) || atomic <= 0 ||
-    !DewInteger(json, FieldAt(json, rate, "token_units"), *units) || units <= 0 ||
-    !DewInteger(json, FieldAt(json, 0, "confirmations_required"), *confirmations) ||
-    confirmations <= 0 || confirmations > 2147483647 ||
-    !DewInteger(json, FieldAt(json, 0, "minimum_atomic_amount"), *minimum) || minimum <= 0 {
-        return false
-    }
-    dew_address = address
-    dew_rate_atomic = atomic
-    dew_rate_units = units
-    dew_confirmations = confirmations
-    dew_minimum_atomic = minimum
+    funding: DewFunding
+    if !DewParseFunding(json, TextUntilNul(dew_identity[:]), *funding) { return false }
+    dew_address = funding.address
+    dew_rate_atomic = funding.atomic
+    dew_rate_units = funding.units
+    dew_confirmations = funding.confirmations
+    dew_minimum_atomic = funding.minimum
     return true
 }
 

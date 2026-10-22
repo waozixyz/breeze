@@ -52,7 +52,8 @@ class UiDriver:
         self.reset()
 
     def environment(self):
-        return {"KRYON_TEST_DRIVER": str(self.directory)}
+        return {"KRYON_TEST_DRIVER": str(self.directory),
+                "ENTITY_DATA": str((self.directory / "entity").resolve())}
 
     def attach(self, process, log=None):
         """Follow a newly started app, so a crash fails at once."""

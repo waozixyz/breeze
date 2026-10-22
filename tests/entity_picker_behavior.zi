@@ -1,0 +1,43 @@
+// A rejected account request must not leave its document for the next owner.
+#import, file "../src/app/entity_management.zi";
+Provider :: #import "entity/native_management";
+#import "entity/management"
+#import, file "../src/platform/android/android_import.zi";
+#import "kryon/android_picker"
+#import "std/file"
+#import "std/c_string"
+
+#program_export
+Check :: () -> s32 {
+    path := "/tmp/inbe-entity-picker-test/stale.key"
+    if !CreatePrivateDirectory("/tmp/inbe-entity-picker-test") || !WriteEntireFile(path, "fixture: stale account key") { return 1 }
+    entity_management_picker = true
+    entity_management_picker_kind = cast(s32)AndroidImportKind.ANDROID_IMPORT_KIND_SYNC_KEY
+    entity_management.queue.pending = false
+    PickerStore(cast(s32)AndroidImportKind.ANDROID_IMPORT_KIND_SYNC_KEY, 0, null)
+    InbeManagementDiscardPicker()
+    if !entity_management_picker || !entity_management_picker_abandoned { return 2 }
+    // A new request cannot turn the abandoned document into its own result.
+    entity_management.queue.pending = true
+    bytes: [128]u8
+    if !CopyCString(path, bytes[:]) { return 3 }
+    PickerStore(cast(s32)AndroidImportKind.ANDROID_IMPORT_KIND_SYNC_KEY, 1, *bytes[0])
+    InbeManagementDiscardPicker()
+    if entity_management_picker || entity_management_picker_abandoned || PathExists(path) { return 4 }
+    selected: [128]u8
+    if AndroidPickerPoll(cast(s32)AndroidImportKind.ANDROID_IMPORT_KIND_SYNC_KEY, selected[:]) != .AndroidPickerNone { return 5 }
+    entity_management_picker = true
+    entity_management_picker_kind = cast(s32)AndroidImportKind.ANDROID_IMPORT_KIND_SYNC_KEY
+    entity_management.queue.pending = false
+    PickerStore(cast(s32)AndroidImportKind.ANDROID_IMPORT_KIND_SYNC_KEY, 2, null)
+    InbeManagementDiscardPicker()
+    if entity_management_picker || entity_management_picker_abandoned { return 6 }
+    if !WriteEntireFile(path, "fixture: abandoned export") { return 7 }
+    entity_management_picker = true
+    entity_management_picker_kind = cast(s32)AndroidImportKind.ANDROID_EXPORT_KIND_SYNC_KEY
+    entity_management.queue.pending = false
+    PickerStore(entity_management_picker_kind, 1, *bytes[0])
+    InbeManagementDiscardPicker()
+    if entity_management_picker || entity_management_picker_abandoned || PathExists(path) { return 8 }
+    return 0
+}

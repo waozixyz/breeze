@@ -178,8 +178,6 @@ diary-markdown-test: $(ZI2C_BIN) $(ZIRAN_BIN)
 launcher-entry-test: $(ZI2C_BIN)
 	sh tests/launcher_entry_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
-# Local Apps handoff checks supply their verified consumer module map.
-.PHONY: self-picker-test
-self-picker-test:
-	@test -n "$(ZIRAN_PACKAGE_MAP)" || { echo 'Set ZIRAN_PACKAGE_MAP to the verified consumer module map'; exit 1; }
-	ZI2C="$(ZI2C_BIN)" ZIRAN_STD_ROOT="$(ZIRAN_DIR)" python3 tests/self_picker_test.py
+.PHONY: entity-picker-test
+entity-picker-test: $(ZI2C_BIN)
+	ZI2C="$(ZI2C_BIN)" ZIRAN_STD_ROOT="$(ZIRAN_DIR)" python3 tests/entity_picker_test.py

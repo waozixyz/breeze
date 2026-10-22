@@ -1,0 +1,327 @@
+// Entity owns the common profile UI. Inner Breeze keeps its database, account
+// keys and specialized screens behind its native host services.
+Entity :: #import "entity/model";
+Provider :: #import "entity/native_management";
+#import "kryon/app_context_host"
+Portable :: #import "kryon/app_protocol";
+#import "hosted_values"
+#import "std/bundle_host"
+#import "geometry"
+#import "widget_host"
+#import "std/byte_text_linux"
+#import "std/c_string"
+#import "std/text_buffer"
+#import, file "app_types.zi";
+#import, file "../core/types.zi";
+#import, file "app_settings.zi";
+#import, file "route_types.zi";
+#import, file "text_buffers.zi";
+#import, file "locale.zi";
+#import, file "metrics.zi";
+#import, file "assets.zi";
+#import, file "profile_picture_policy.zi";
+#import, file "achievement_host.zi";
+#import, file "entity_management.zi";
+Shared :: #import "entity/native_files";
+#import, file "../storage/sync_nodes.zi";
+#import, file "../storage/delegate_store.zi";
+#import, file "../storage/storage_settings.zi";
+#import, file "../storage/storage_profile_stats.zi";
+#import, file "../habits/habit_model.zi";
+#import, file "../platform/raylib_text_input.zi";
+
+entity_context: AppContext;
+entity_opened: bool;
+entity_document: string;
+entity_inner_breeze: bool;
+entity_reload_after_route: bool;
+entity_account_route: bool;
+
+InbeEntityRead :: (app: *InnerBreeze) -> string {
+    Entity.EntityFree(entity_document)
+    state := Entity.EntityDefault()
+    state.controls = Entity.ENTITY_IDENTITY | Entity.ENTITY_INTENTION | Entity.ENTITY_NODES
+    state.pictures &= ~((1 << 21) | (1 << 22) | (1 << 23))
+    state.name = app.profile_display_name
+    state.intention = app.profile_intention
+    icon := app.profile_picture_icon
+    state.picture = ifx icon >= 124 && icon <= 126 then 25 + icon - 124 else icon - 41
+    if state.picture < 0 || state.picture > 27 { state.picture = 0 }
+    count := SyncNodeCount()
+    if count > 0 {
+        state.node_count = count
+        preferred: [256]u8
+        unused CopyCString(storage_get_setting_text("sync_preferred_node"), preferred[:])
+        if preferred[0] == cast(u8)0 { unused CopyCString(storage_get_setting_text("sync_server_url"), preferred[:]) }
+        for index: 0..count - 1 {
+            address := SyncNodeAt(cast(s32)index)
+            unused CopyCString(address, state.nodes[index][:])
+            if address == TextUntilNul(preferred[:]) { state.preferred = cast(s32)index }
+            Entity.EntityFree(address)
+        }
+    }
+    owner: [65]u8
+    unused InbeEntityOwner(owner[:])
+    state.owner_id = owner
+    if StoredAccountMode() != AccountModeDelegate {
+        unused Shared.SharedProfileLoad(TextUntilNul(owner[:]), *state)
+    }
+    state.host_navigation = true
+    Entity.EntityAddExtension(*state, "account", LocaleText("sync_account_title"))
+    Entity.EntityAddExtension(*state, "inbe", LocaleText("profile_progress_title"))
+    Entity.EntityAddExtension(*state, "data", LocaleText("profile_data"))
+    Entity.EntityAddExtension(*state, "friends", LocaleText("profile_friends_title"))
+    Entity.EntityAddExtension(*state, "telegram", "Telegram")
+    Entity.EntityAddExtension(*state, "achievements", LocaleText("achievements_title"))
+    active_days: s32
+    sessions: s32
+    unused storage_profile_week_stats(habits_today_index(), *active_days, *sessions)
+    summary: [256]u8
+    unused FormatNumberTemplate(LocaleText("profile_weekly_insight"), active_days, summary[:])
+    unused Entity.EntityDescribeExtension(*state, "inbe", TextUntilNul(summary[:]), "", "activity")
+    entity_document = Entity.EntityEncode(state)
+    return entity_document
+}
+
+InbeEntityWrite :: (app: *InnerBreeze, document: string) -> bool {
+    state: Entity.EntityState
+    if !Entity.EntityDecode(document, *state) { return false }
+    owner: [65]u8
+    unused InbeEntityOwner(owner[:])
+    if TextUntilNul(state.owner_id[:]) != TextUntilNul(owner[:]) { return false }
+    picture := ifx state.picture >= 25 then 124 + state.picture - 25 else 41 + state.picture
+    if !ProfilePictureValid(picture) { return false }
+    for byte: state.name { if byte == cast(u8)10 || byte == cast(u8)13 { return false } }
+    for byte: state.intention { if byte == cast(u8)10 || byte == cast(u8)13 { return false } }
+    // Existing node operations retain per-node cursors and do not opt an
+    // account into synchronization.
+    for index: 0..state.node_count - 1 {
+        if !SyncNodeAdd(TextUntilNul(state.nodes[index][:])) { return false }
+    }
+    preferred := TextUntilNul(state.nodes[state.preferred][:])
+    current: [256]u8
+    unused CopyCString(storage_get_setting_text("sync_server_url"), current[:])
+    if preferred != TextUntilNul(current[:]) && !SyncNodePrefer(preferred) { return false }
+    index := SyncNodeCount() - 1
+    while index >= 0 {
+        address := SyncNodeAt(index)
+        retained := false
+        for next: 0..state.node_count - 1 {
+            if address == TextUntilNul(state.nodes[next][:]) { retained = true }
+        }
+        Entity.EntityFree(address)
+        if !retained && !SyncNodeRemove(index) { return false }
+        index -= 1
+    }
+    if StoredAccountMode() != AccountModeDelegate && !Shared.SharedProfileSave(TextUntilNul(owner[:]), state) {
+        return false
+    }
+    app.profile_display_name = state.name
+    app.profile_intention = state.intention
+    app.profile_picture_icon = picture
+    save_settings(app)
+    return true
+}
+
+EntityHostAllows :: (context: *void, name: string) -> bool {
+    return name == "ReadStoreHost" || name == "WriteStoreHost" ||
+    name == "AppLocaleHost" || name == "ClipboardCopyHost" ||
+    name == "AppServiceHost" || name == "entity.management" || name == "entity.text_height" ||
+    name == "entity.achievements"
+}
+
+EntityHostText :: (text: string) -> HostValue {
+    return HostValue.{.kind = cast(s32)HostValueKind.HostString, .type_name = HostTextData("string"),
+        .data = HostTextData(text), .length = cast(usize)text.count}
+}
+
+EntityHostLocale :: (key: string) -> string {
+    if key == "achievements_title" || (key.count >= 12 && key[:12] == "achievement_") {
+        return LocaleText(key)
+    }
+    if key == "entity.title" { return LocaleText("tab_profile") }
+    if key == "entity.name_placeholder" { return LocaleText("profile_name_label") }
+    if key == "entity.name" { return LocaleText("profile_name_label") }
+    if key == "entity.intention" { return LocaleText("profile_intention_label") }
+    if key == "entity.nodes" { return LocaleText("sync_nodes_title") }
+    if key == "entity.node_address" { return LocaleText("sync_remote_label") }
+    if key == "entity.add" { return LocaleText("sync_nodes_add") }
+    if key == "entity.remove" { return LocaleText("launcher_uninstall") }
+    if key == "entity.picture" || key == "entity.change_picture" { return LocaleText("profile_picture_title") }
+    if key == "entity.done" { return LocaleText("close_button") }
+    if key == "entity.node_invalid" { return LocaleText("sync_server_url_invalid") }
+    if key == "entity.node_limit" { return LocaleText("sync_nodes_limit") }
+    if key == "entity.account" { return LocaleText("sync_account_title") }
+    if key == "entity.manage_account" { return LocaleText("sync_account_title") }
+    if key == "entity.connect_account" { return LocaleText("sync_connect_account_button") }
+    if key == "entity.account_local" { return LocaleText("sync_no_account") }
+    if key == "entity.public_id" { return LocaleText("sync_public_id_label") }
+    if key == "entity.copy_id" { return LocaleText("sync_copy_id_button") }
+    if key == "entity.alias" { return LocaleText("sync_alias_title") }
+    if key == "entity.save" { return LocaleText("save_button") }
+    if key == "entity.sync" { return LocaleText("sync_status_title") }
+    if key == "entity.sync_now" { return LocaleText("sync_now_button") }
+    if key == "entity.backup_key" { return LocaleText("sync_backup_title") }
+    if key == "entity.create_account" { return LocaleText("sync_create_account_button") }
+    if key == "entity.import_key" { return LocaleText("sync_import_key_dialog_title") }
+    if key == "entity.logout" { return LocaleText("sync_logout_button") }
+    if key == "entity.clear_remote" { return LocaleText("sync_clear_remote_data_button") }
+    if key == "entity.switch_account" { return LocaleText("sync_account_switch_title") }
+    if key == "entity.merge" { return LocaleText("sync_account_switch_merge_button") }
+    if key == "entity.replace" { return LocaleText("sync_account_switch_clear_button") }
+    if key == "entity.cancel" { return LocaleText("cancel_button") }
+    if key == "entity.back" { return LocaleText("back_button") }
+    if key == "entity.choose_file" { return LocaleText("sync_import_key_button") }
+    if key == "entity.passphrase" { return LocaleText("telegram_account_passphrase") }
+    if key == "entity.logout_help" { return LocaleText("sync_logged_out_local_data_kept") }
+    if key == "entity.clear_remote_help" { return LocaleText("sync_clear_remote_data_message") }
+    if key == "entity.switch_help" { return LocaleText("sync_account_switch_message") }
+    if key == "entity.key_file_help" { return LocaleText("sync_backup_warning") }
+    if key == "entity.working" { return LocaleText("device_link_working") }
+    if key == "entity.connect_device" { return LocaleText("device_link_title") }
+    if key == "entity.connect" { return LocaleText("device_link_connect") }
+    if key == "entity.scan_code" { return LocaleText("device_link_scan") }
+    if key == "entity.show_code" { return LocaleText("device_link_show") }
+    if key == "entity.confirm_device" { return LocaleText("device_link_connect") }
+    if key == "entity.cancel_connection" { return LocaleText("cancel_button") }
+    if key == "entity.active_node" { return LocaleText("profile_node_storage_active") }
+    if key == "entity.storage_unknown" { return LocaleText("profile_node_storage_unknown") }
+    if key == "entity.storage_used_of" { return LocaleText("profile_node_storage_used_of") }
+    if key == "entity.storage_used_unlimited" { return LocaleText("profile_node_storage_used_unlimited") }
+    if key == "entity.storage_full" { return LocaleText("profile_node_storage_full") }
+    if key == "entity.node_media" { return LocaleText("profile_node_storage_media") }
+    return key
+}
+
+EntityHostCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    app := cast(*InnerBreeze)context
+    name := TextFromCString(function)
+    if AchievementEntityCall(cast(*void)app, name, arguments, count, result) {
+        return 1
+    }
+    if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.management" {
+        InbeManagementStart(app)
+        request := AppArgumentText(arguments[1])
+        if request == "" {
+            Provider.ProviderRefresh(*entity_management)
+            result.* = EntityHostText(entity_management.document)
+        } else {
+            result.* = EntityHostText(ifx Provider.ProviderEnqueue(*entity_management, request) then "queued" else "rejected")
+        }
+        return 1
+    }
+    if name == "AppLocaleHost" && count == 1 {
+        result.* = EntityHostText(EntityHostLocale(AppArgumentText(arguments[0])))
+        return 1
+    }
+    if name == "ClipboardCopyHost" && count == 2 {
+        result.* = HostScalar("bool", ifx TextInputWriteClipboard(AppArgumentText(arguments[0])) then 1 else 0)
+        return 1
+    }
+    if name == "ReadStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.json" {
+        document := InbeEntityRead(app)
+        output := arguments[1]
+        if output.kind != cast(s32)HostValueKind.HostSlice || output.elements == null || output.length <= cast(usize)document.count { return 0 }
+        for index: 0..document.count {
+            byte := ifx index < document.count then document[index] else cast(u8)0
+            output.elements[index].bits = cast(u64)byte
+            output.elements[index].integer = cast(s64)byte
+        }
+        result.* = HostScalar("s32", document.count)
+        return 1
+    }
+    if name == "WriteStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.json" {
+        result.* = HostScalar("bool", ifx InbeEntityWrite(app, AppArgumentText(arguments[1])) then 1 else 0)
+        return 1
+    }
+    return 0
+}
+
+EntityHostAssetAllowed :: (path: string) -> bool {
+    return path == "" || path == "assets/entity/pfp.png" || path == "assets/entity/flowers.png"
+}
+
+EntityHostRoute :: (app: *InnerBreeze) -> bool {
+    return app.profile_view == PROFILE_VIEW_SYNC_ACCOUNT ||
+    (app.profile_view == PROFILE_VIEW_MAIN &&
+        (app.profile_tab == PROFILE_TAB_OVERVIEW || app.profile_tab == PROFILE_TAB_SYNC))
+}
+
+EntityHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
+    if entity_inner_breeze { return false }
+    if !entity_opened {
+        bundle := AssetRead("assets/entity/bundles/entity.zib")
+        if !bundle.found { return false }
+        entity_context.expected_id = "entity"
+        entity_context.context = cast(*void)app
+        entity_context.allows = EntityHostAllows
+        entity_context.services = EntityHostCall
+        entity_context.widgets = WidgetHostCall
+        if !AppContextOpen(*entity_context, bundle.data) { return false }
+        entity_opened = true
+    }
+    InbeManagementPump(app)
+    typed: [1024]u8
+    if entity_reload_after_route {
+        entity_context.command = "reload"
+        unused AppContextRun(*entity_context, Portable.APP_COMMAND)
+        entity_reload_after_route = false
+    }
+    account_route := app.profile_view == PROFILE_VIEW_SYNC_ACCOUNT || app.profile_tab == PROFILE_TAB_SYNC
+    if account_route && !entity_account_route {
+        entity_context.command = "account"
+        unused AppContextRun(*entity_context, Portable.APP_COMMAND)
+    }
+    entity_account_route = account_route
+    entity_context.session = app.ui.session
+    entity_context.bounds = bounds
+    entity_context.dark = app.dark_mode != 0
+    entity_context.scale = MetricsScale()
+    entity_context.font = AppFontSize()
+    entity_context.input = SampleTextFieldInput(true, typed[:])
+    WidgetHostBegin(app.ui.session, EntityHostAssetAllowed)
+    ran := AppContextRun(*entity_context, Portable.APP_FRAME)
+    WidgetHostEnd()
+    entity_context.input = .{}
+    InbeManagementPump(app)
+    if !ran { return false }
+    route := entity_context.reply
+    if route != "" { entity_reload_after_route = true }
+    if route == "inbe" { entity_inner_breeze = true; app.profile_scroll = 0 }
+    else if route == "account" { app.profile_tab = PROFILE_TAB_SYNC; app.profile_scroll = 0 }
+    else if route == "data" { app.profile_tab = PROFILE_TAB_DATA; app.profile_scroll = 0 }
+    else if route == "friends" { app.profile_tab = PROFILE_TAB_FRIENDS; app.profile_scroll = 0 }
+    else if route == "telegram" { app.profile_tab = PROFILE_TAB_TELEGRAM; app.profile_scroll = 0 }
+    return true
+}
+
+EntityHostBack :: (app: *InnerBreeze) -> bool {
+    if entity_opened && !entity_inner_breeze && EntityHostRoute(app) {
+        entity_context.command = "back"
+        unused AppContextRun(*entity_context, Portable.APP_COMMAND)
+        if entity_context.reply == "handled" {
+            if entity_account_route {
+                app.profile_view = PROFILE_VIEW_MAIN
+                app.profile_tab = PROFILE_TAB_OVERVIEW
+                entity_account_route = false
+            }
+            return true
+        }
+    }
+    if !entity_inner_breeze || app.profile_view != PROFILE_VIEW_MAIN || app.profile_tab != PROFILE_TAB_OVERVIEW { return false }
+    entity_inner_breeze = false
+    return true
+}
+
+EntityHostSave :: (app: *InnerBreeze) -> bool {
+    if !entity_opened || entity_inner_breeze || app.breathing.screen != ScreenProfile ||
+    !EntityHostRoute(app) { return true }
+    return AppContextRun(*entity_context, Portable.APP_SAVE)
+}
+
+EntityHostReset :: () {
+    entity_inner_breeze = false
+    entity_account_route = false
+    entity_reload_after_route = true
+}

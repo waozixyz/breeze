@@ -5,7 +5,7 @@
 set -eu
 packages=${1:-build/packages}
 for path in kryon=kryon/src/ui kryon=kryon/src/backend apps=apps/src \
-    crypto=crypto/src self=self/src plot=plot/src qrcode=qrcode/src \
+    crypto=crypto/src entity=entity/src plot=plot/src qrcode=qrcode/src \
     oqs=oqs/src mingcute=mingcute/src daochi_client=daochi-client; do
     printf '%s\n' --module-path "${path%%=*}=$packages/${path#*=}"
 done

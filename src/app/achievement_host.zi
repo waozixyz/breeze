@@ -1,6 +1,6 @@
-// Self's read-only achievement projection and owner-guarded alert preference.
-// The shared Self package owns the collection's UI, not this native adapter.
-SelfAchievements :: #import "self/model";
+// Entity's read-only achievement projection and owner-guarded alert preference.
+// The shared Entity package owns the collection's UI, not this native adapter.
+EntityAchievements :: #import "entity/model";
 #import "std/json_scan"
 #import "std/date_parse"
 #import "std/c_string"
@@ -193,16 +193,16 @@ AchievementPageDocument :: (page: s32, app_filter: string = "") -> string {
     if selected >= pages { selected = pages - 1 }
     out: Vec(u8)
     BuilderPrint(*out, "{\"version\":1,\"owner\":")
-    SelfAchievements.SelfQuote(*out, AchievementOwner())
+    EntityAchievements.EntityQuote(*out, AchievementOwner())
     BuilderPrint(*out, ",\"page\":%,\"pages\":%,\"total\":%,\"earned\":%,\"alerts\":%,\"app\":", selected, pages, total, earned, ifx AchievementAlerts() then 1 else 0)
-    SelfAchievements.SelfQuote(*out, app_filter)
+    EntityAchievements.EntityQuote(*out, app_filter)
     BuilderPrint(*out, ",\"apps\":[")
     for index: cast(s32)0..app_count - 1 {
         if index > 0 { BuilderPrint(*out, ",") }
         BuilderPrint(*out, "{\"id\":")
-        SelfAchievements.SelfQuote(*out, TextUntilNul(app_ids[index][:]))
+        EntityAchievements.EntityQuote(*out, TextUntilNul(app_ids[index][:]))
         BuilderPrint(*out, ",\"title\":")
-        SelfAchievements.SelfQuote(*out, TextUntilNul(app_titles[index][:]))
+        EntityAchievements.EntityQuote(*out, TextUntilNul(app_titles[index][:]))
         BuilderPrint(*out, ",\"total\":%,\"earned\":%}", app_totals[index], app_earned[index])
     }
     BuilderPrint(*out, "],\"rows\":[")
@@ -230,18 +230,18 @@ AchievementPageDocument :: (page: s32, app_filter: string = "") -> string {
         BuilderPrint(*group, "% · % / %", group_title, group_earned, group_total)
         group_text := BuilderFinish(group)
         BuilderPrint(*out, "{\"group\":")
-        SelfAchievements.SelfQuote(*out, group_text)
+        EntityAchievements.EntityQuote(*out, group_text)
         PackageFree(group_text)
         PackageFree(group_key)
         BuilderPrint(*out, ",\"id\":")
-        SelfAchievements.SelfQuote(*out, TextUntilNul(entry.id[:]))
+        EntityAchievements.EntityQuote(*out, TextUntilNul(entry.id[:]))
         BuilderPrint(*out, ",\"icon\":")
         icon := AssetRead(TextUntilNul(entry.icon[:]))
-        SelfAchievements.SelfQuote(*out, ifx icon.found && icon.data.count < 1024 then icon.data else "")
+        EntityAchievements.EntityQuote(*out, ifx icon.found && icon.data.count < 1024 then icon.data else "")
         BuilderPrint(*out, ",\"title\":")
-        SelfAchievements.SelfQuote(*out, LocaleText(TextUntilNul(entry.title_key[:])))
+        EntityAchievements.EntityQuote(*out, LocaleText(TextUntilNul(entry.title_key[:])))
         BuilderPrint(*out, ",\"description\":")
-        SelfAchievements.SelfQuote(*out, LocaleText(TextUntilNul(entry.description_key[:])))
+        EntityAchievements.EntityQuote(*out, LocaleText(TextUntilNul(entry.description_key[:])))
         BuilderPrint(*out, ",\"earned\":%,\"progress\":", ifx entry.awarded then 1 else 0)
         progress: Vec(u8)
         if TextUntilNul(entry.rule[:]) == "return" {
@@ -253,7 +253,7 @@ AchievementPageDocument :: (page: s32, app_filter: string = "") -> string {
             BuilderPrint(*progress, "% / %", current, entry.target)
         }
         progress_text := BuilderFinish(progress)
-        SelfAchievements.SelfQuote(*out, progress_text)
+        EntityAchievements.EntityQuote(*out, progress_text)
         PackageFree(progress_text)
         BuilderPrint(*out, ",\"date\":")
         date: [11]u8
@@ -261,7 +261,7 @@ AchievementPageDocument :: (page: s32, app_filter: string = "") -> string {
             unused WriteIsoDay(AchievementDayIndex(entry.earned_day) * 86400, date[:10])
         }
         date_text := ifx entry.earned_day > 0 then TextFromBytes(date[:10]) else (ifx entry.awarded then LocaleText("achievement_earlier") else "")
-        SelfAchievements.SelfQuote(*out, date_text)
+        EntityAchievements.EntityQuote(*out, date_text)
         BuilderPrint(*out, "}")
     }
     BuilderPrint(*out, "]}")
@@ -269,32 +269,32 @@ AchievementPageDocument :: (page: s32, app_filter: string = "") -> string {
     return achievement_projection
 }
 
-AchievementSelfText :: (value: string) -> HostValue {
+AchievementEntityText :: (value: string) -> HostValue {
     return HostValue.{.kind = cast(s32)HostValueKind.HostString, .type_name = HostTextData("string"),
         .data = HostTextData(value), .length = cast(usize)value.count}
 }
 
-AchievementSelfArgument :: (value: HostValue) -> string {
+AchievementEntityArgument :: (value: HostValue) -> string {
     if value.kind != cast(s32)HostValueKind.HostString || value.data == null || value.length > cast(usize)65536 { return "" }
     return TextFromBytes(BytesFromPointer(value.data, cast(u64)value.length))
 }
 
-AchievementSelfCall :: (app: *void, name: string,
+AchievementEntityCall :: (app: *void, name: string,
     arguments: *HostValue, count: s32, result: *HostValue) -> bool {
     if count != 2 || app == null { return false }
-    key := AchievementSelfArgument(arguments[0])
-    if name == "AppServiceHost" && key == "self.achievements" {
-        document := AchievementSelfArgument(arguments[1])
+    key := AchievementEntityArgument(arguments[0])
+    if name == "AppServiceHost" && key == "entity.achievements" {
+        document := AchievementEntityArgument(arguments[1])
         filter: [97]u8
         page := ReadNumber(document, FieldAt(document, 0, "page"))
         filter_size := ReadStringText(document, FieldAt(document, 0, "app"), filter[:])
         valid := document.count < 512 && page.valid && page.value >= 0 && page.value <= 10000 &&
         page.value == cast(float64)cast(s32)page.value && filter_size >= 0
         if !valid {
-            result.* = AchievementSelfText("")
+            result.* = AchievementEntityText("")
             return true
         }
-        result.* = AchievementSelfText(AchievementPageDocument(cast(s32)page.value, TextUntilNul(filter[:])))
+        result.* = AchievementEntityText(AchievementPageDocument(cast(s32)page.value, TextUntilNul(filter[:])))
         return true
     }
     if name == "ReadStoreHost" && key.count > 23 && key[:18] == "achievements/page." && key[key.count - 5:] == ".json" {
@@ -321,7 +321,7 @@ AchievementSelfCall :: (app: *void, name: string,
         return true
     }
     if name == "WriteStoreHost" && key == "achievements/settings.json" {
-        document := AchievementSelfArgument(arguments[1])
+        document := AchievementEntityArgument(arguments[1])
         owner: [97]u8
         alerts := ReadNumber(document, FieldAt(document, 0, "alerts"))
         version := ReadNumber(document, FieldAt(document, 0, "version"))
@@ -333,14 +333,14 @@ AchievementSelfCall :: (app: *void, name: string,
         result.* = HostScalar("bool", ifx saved then 1 else 0)
         return true
     }
-    if name == "AppServiceHost" && key == "self.text_height" {
-        document := AchievementSelfArgument(arguments[1])
+    if name == "AppServiceHost" && key == "entity.text_height" {
+        document := AchievementEntityArgument(arguments[1])
         text: [4096]u8
         width := ReadNumber(document, FieldAt(document, 0, "width"))
         font := ReadNumber(document, FieldAt(document, 0, "font"))
         size := ReadStringText(document, FieldAt(document, 0, "text"), text[:])
         if !width.valid || !font.valid || width.value < 1 || width.value > 10000 || font.value < 1 || font.value > 256 || size < 0 {
-            result.* = AchievementSelfText("0")
+            result.* = AchievementEntityText("0")
             return true
         }
         value := TextUntilNul(text[:])
@@ -353,7 +353,7 @@ AchievementSelfCall :: (app: *void, name: string,
         BuilderPrint(*response, "%", height)
         PackageFree(achievement_measure_response)
         achievement_measure_response = BuilderFinish(response)
-        result.* = AchievementSelfText(achievement_measure_response)
+        result.* = AchievementEntityText(achievement_measure_response)
         return true
     }
     return false

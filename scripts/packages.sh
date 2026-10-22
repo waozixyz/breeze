@@ -97,7 +97,7 @@ link game2d game2d
 link qrcode qrcode
 link plot plot
 link mingcute mingcute
-link self self
+link entity entity
 link apps apps
 link crypto crypto
 link daochi-client daochi_client

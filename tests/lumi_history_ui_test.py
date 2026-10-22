@@ -166,7 +166,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
         for _ in range(10):
             driver.pointer(x, y, wheel=-1)
         driver.release_pointer()
-        # The shared Self profile lists Telegram among Inner Breeze's extensions.
+        # The shared Entity profile lists Telegram among Inner Breeze's extensions.
         driver.press(label="Telegram")
         driver.wait(contains="Connect your sync account first")
         driver.wait(contains="Telegram input", role="title_bar")
