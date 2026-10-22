@@ -50,6 +50,14 @@ frame: ListsUiFrame;
 state: ListsMessage;
 // The open Share or Invitations dialog's scroll offset.
 sharing_scroll: s32;
+SharingAccessControl :: struct {
+    target: [65]u8
+    bounds: Rectangle
+    role: s32
+    disabled: bool
+}
+sharing_controls: Vec(SharingAccessControl);
+sharing_viewport: Rectangle;
 invite_text: string;
 invite_target: [65]u8;
 invite_cursor: s32;
@@ -339,7 +347,7 @@ InviteSuggestions :: (x: s32, y: s32, list_id: string, owner: string) {
 
 // Each owner has the same edit, deletion, invitation and permission controls.
 MemberRow :: (row: ListsUiPerson, x: s32, y: s32, width: s32, manages: bool,
-    original_owner: bool, disabled: bool) -> bool {
+    original_owner: bool, disabled: bool) {
     target: [65]u8
     unused CopyCString(row.target, target[:])
     name := row.target_alias
@@ -362,33 +370,46 @@ MemberRow :: (row: ListsUiPerson, x: s32, y: s32, width: s32, manages: bool,
     role_y := y + ifx narrow then Scale(52) else 0
     role_x := ifx narrow then x else x + width - role_width
     labels: [3]string = .[ListsLocaleHost("elist_owner"), ListsLocaleHost("elist_can_edit"), ListsLocaleHost("elist_read_only")]
-    if manages && !original_owner {
-        options: [4]DropdownOption
-        for index: cast(s32)0..2 {
-            options[index] = DropdownOption.{.key = cast(u64)(index + 1), .label = labels[index]}
-        }
-        options[3] = DropdownOption.{.key = cast(u64)4, .label = ListsLocaleHost("elist_remove_access"), .separator_before = true}
-        changed := Dropdown(frame.session, DropdownProps.{.key = KeyHash(TextUntilNul(target[:])),
-                .bounds = Bounds(role_x, role_y, role_width, Scale(44)), .selected_index = role,
-                .disabled = disabled, .scale = frame.scale}, options[:4])
+    bounds := Bounds(role_x, role_y, role_width, Scale(44))
+    if manages && !original_owner && bounds.y >= sharing_viewport.y &&
+    bounds.y + bounds.height <= sharing_viewport.y + sharing_viewport.height {
+        // Submit after Scroll ends: its viewport must not crop the menu.
+        unused VecPush(sharing_controls, SharingAccessControl.{.target = target,
+                .bounds = bounds, .role = role, .disabled = disabled})
+    } else {
+        Text(frame.session, TextProps.{.bounds = bounds,
+                .text = labels[role], .vertical_align = cast(TextAlign)TextAlignCenter})
+    }
+}
+
+SharingAccessControls :: () -> bool {
+    labels: [3]string = .[ListsLocaleHost("elist_owner"), ListsLocaleHost("elist_can_edit"), ListsLocaleHost("elist_read_only")]
+    options: [4]DropdownOption
+    for index: cast(s32)0..2 {
+        options[index] = DropdownOption.{.key = cast(u64)(index + 1), .label = labels[index]}
+    }
+    options[3] = DropdownOption.{.key = cast(u64)4, .label = ListsLocaleHost("elist_remove_access"), .separator_before = true}
+    for control: sharing_controls {
+        target := TextUntilNul(control.target[:])
+        changed := Dropdown(frame.session, DropdownProps.{.key = KeyHash(target),
+                .bounds = control.bounds, .selected_index = control.role,
+                .disabled = control.disabled, .scale = frame.scale}, options[:4])
         if changed.changed {
             if changed.selected_index == 3 {
-                Remote(LISTS_REMOVE_ACCESS, TextUntilNul(target[:]))
+                Remote(LISTS_REMOVE_ACCESS, target)
             } else {
                 access: [3]string = .["owner", "editor", "viewer"]
-                Remote(LISTS_SET_ACCESS, TextUntilNul(target[:]), "", "", access[changed.selected_index])
+                Remote(LISTS_SET_ACCESS, target, "", "", access[changed.selected_index])
             }
             return true
         }
-    } else {
-        Text(frame.session, TextProps.{.bounds = Bounds(role_x, role_y, role_width, Scale(44)),
-                .text = labels[role], .vertical_align = cast(TextAlign)TextAlignCenter})
     }
     return false
 }
 
 // Share and Invitations update automatically while the dialog is open.
 SharingDialog :: () {
+    VecClear(sharing_controls)
     share := frame.panel == 1
     list: ListsUiRow
     if share && state.selected_list >= 0 && state.selected_list < state.list_count {
@@ -465,6 +486,7 @@ SharingDialog :: () {
                 .bounds = Bounds(x, y, content_width, bottom - y),
                 .content_height = count * row_height, .scroll_offset = sharing_scroll})
         sharing_scroll = scroll.scroll_offset
+        sharing_viewport = scroll.viewport
         if scroll.opened {
             row_y := cast(s32)scroll.content.y
             changed: bool
@@ -473,7 +495,7 @@ SharingDialog :: () {
                 if !list.shared || list.owner_id == frame.public_id {
                     name = ListsLocaleHost("elist_you")
                 }
-                unused MemberRow(ListsUiPerson.{.target = list.owner_id, .target_alias = name, .access = "owner"},
+                MemberRow(ListsUiPerson.{.target = list.owner_id, .target_alias = name, .access = "owner"},
                     x, row_y, content_width - Scale(14), false, true, disabled)
                 row_y += row_height
             }
@@ -485,7 +507,7 @@ SharingDialog :: () {
                 }
                 if row_y + row_height > cast(s32)scroll.viewport.y && row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height) {
                     if share {
-                        changed = MemberRow(row, x, row_y, content_width - Scale(14), list.owner, false, disabled)
+                        MemberRow(row, x, row_y, content_width - Scale(14), list.owner, false, disabled)
                     } else {
                         changed = InvitationRow(row, index, x, row_y, content_width - Scale(14), disabled)
                     }
@@ -501,6 +523,10 @@ SharingDialog :: () {
                 return
             }
         }
+    }
+    if SharingAccessControls() {
+        End(frame.session)
+        return
     }
     // Emit the floating menu last so it sits above all collaborator rows.
     if share && !list.read_only && !disabled {
