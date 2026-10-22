@@ -127,6 +127,21 @@ class ReleaseTest(unittest.TestCase):
                    if any(release.fnmatch.fnmatchcase(path, pattern) for pattern in release.VERSION_FILES)]
         self.assertEqual(allowed, files)
 
+    def test_a_new_receipt_commits_without_taking_other_staged_work(self):
+        receipt = "releases/phone-checks/3.0.0.json"
+        path = self.root / receipt
+        path.parent.mkdir(parents=True)
+        path.write_text('{"passed": true}\n')
+        (self.root / "docs/notes.md").write_text("another session's work\n")
+        git(self.root, "add", "docs/notes.md")
+
+        release.commit_files([receipt], "3.0.0", amend=False)
+
+        self.assertEqual(git(self.root, "show", "--format=", "--name-only", "HEAD").split(),
+                         [receipt])
+        self.assertEqual(git(self.root, "show", "HEAD:docs/notes.md"), "notes\n")
+        self.assertEqual(git(self.root, "status", "--porcelain"), "M  docs/notes.md\n")
+
     def test_package_overrides_must_sit_clean_on_the_lock(self):
         package = self.root.parent / "kryon"
         git(self.root.parent, "init", "-q", str(package))

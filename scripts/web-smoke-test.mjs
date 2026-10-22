@@ -2029,7 +2029,18 @@ try {
     await verifyPracticeStartClick(client);
     await verifyPracticeCompletionPersistence(client);
     await verifyTaiChiCourse(client);
-    await sunSalutationChecks(client, 'chromium');
+    if (process.env.WEB_SMOKE_CPU_PROFILE) {
+      await client.send('Profiler.enable');
+      await client.send('Profiler.start');
+    }
+    try {
+      await sunSalutationChecks(client, 'chromium');
+    } finally {
+      if (process.env.WEB_SMOKE_CPU_PROFILE) {
+        const { profile } = await client.send('Profiler.stop');
+        writeFileSync(process.env.WEB_SMOKE_CPU_PROFILE, JSON.stringify(profile));
+      }
+    }
   }
   console.log(`web smoke: PASS (${renderer})`);
 } catch (error) {

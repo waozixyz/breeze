@@ -218,6 +218,7 @@ def move_to_top(release, version):
 
 def commit_files(files, version, amend, details=""):
     message = SUBJECT.format(version=version) + ("\n\n" + details if details else "")
+    subprocess.run(["git", "-C", ROOT, "add", "--", *files], check=True)
     argv = ["git", "-C", ROOT, "commit", "-q", "--only", "-m", message]
     if amend:
         argv.insert(4, "--amend")
