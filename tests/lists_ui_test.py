@@ -206,7 +206,14 @@ with contextlib.ExitStack() as stack:
     driver.wait_idle(frames=3)
     calm("a failed refresh shows a notice")
     driver.press(label="Share", role="button")
-    wait_for(lambda: "Alice" in dialog(), lambda: f"Alice is not offered: {dialog()}")
+    driver.wait(label="People with access")
+    assert "Refresh" not in dialog() and "Alice" not in dialog(), dialog()
+    driver.press(key=6540)
+    driver.type("ali")
+    driver.wait(label="Alice")
+    assert not sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%'"), "typing sent an invitation"
+    driver.press(label="Alice")
+    driver.wait(key=6540, value="Alice")
     subprocess.run(["import", "-window", find_window(), str(TEST_DIR / "share-dialog.png")], check=True)
     driver.press(label="Invite", role="button")
     # The first failed delivery is retried quietly; nothing alarming is shown.
@@ -225,16 +232,16 @@ with contextlib.ExitStack() as stack:
         # A list this account shared with Alice, who joined, and Cedar, still
         # invited; and one Alice shared with this account.
         owned = {"id": OWNED_LIST, "owner": "b" * 64, "alias": "me", "title": "Garden",
-                 "revision": 1, "deleted": 0, "items": []}
+                 "revision": 1, "deleted": 0, "access": "owner", "items": []}
         given = {"id": GIVEN_LIST, "owner": "a" * 64, "alias": "Alice", "title": "Groceries",
-                 "revision": 1, "deleted": 0, "items": []}
+                 "revision": 1, "deleted": 0, "access": "viewer", "items": []}
         incoming = {"lists": [owned, given], "invitations": [
             {"id": "invitation-fixture", "list_id": SHARED_LIST, "title": "Weekend trip", "owner": "a" * 64,
              "target": "b" * 64, "alias": "Alice", "status": "pending"},
             {"id": "invitation-alice", "list_id": OWNED_LIST, "title": "Garden", "owner": "b" * 64,
-             "alias": "me", "target": "a" * 64, "target_alias": "Alice", "status": "accepted"},
+             "alias": "me", "target": "a" * 64, "target_alias": "Alice", "status": "accepted", "access": "owner"},
             {"id": "invitation-cedar", "list_id": OWNED_LIST, "title": "Garden", "owner": "b" * 64,
-             "alias": "me", "target": "c" * 64, "target_alias": "Cedar", "status": "pending"}]}
+             "alias": "me", "target": "c" * 64, "target_alias": "Cedar", "status": "pending", "access": "viewer"}]}
         db.execute("INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,1)",
                    (user, "lists.shared/" + "b" * 64 + "/http://127.0.0.1:10", json.dumps(incoming)))
     driver.wait(label="Invitations (1)", role="button")
@@ -259,21 +266,69 @@ with contextlib.ExitStack() as stack:
     subprocess.run(["import", "-window", find_window(), str(TEST_DIR / "share-owned.png")], check=True)
     wait_for(lambda: "Cedar" in dialog(), lambda: f"friends are not listed: {dialog()}")
     names = dialog()
-    assert all(name in names for name in ("Alice", "Cedar", "Dana", "Emerald")), f"friend names missing: {names}"
-    assert "Accepted" in names and "Invited" in names, f"who has access is not shown: {names}"
-    # A list someone else owns never offers its owner an invitation.
+    assert all(name in names for name in ("Alice", "Cedar", "You")), names
+    assert "Dana" not in names and "Emerald" not in names, names
+    assert "Owner" in names and "Invited" in names and "Read only" in names, names
+    assert "Refresh" not in names, names
+    # The same open dialog remains readable on a phone-sized viewport.
+    subprocess.run(["xdotool", "windowsize", find_window(), "390", "844"], check=True)
+    wait_for(lambda: driver.wait(role="modal")["width"] <= 390,
+             "the sharing dialog did not fit the phone viewport")
+    driver.wait_idle(frames=3)
+    phone_roles = driver.find(role="dropdown", visible=True)
+    assert len(phone_roles) == 2, "collaborator controls do not fit the phone dialog"
+    cedar = driver.wait(label="Cedar")
+    cedar_role = driver.wait(label="Read only", role="dropdown")
+    assert cedar_role["y"] >= cedar["y"] + cedar["height"], "phone name overlaps access controls"
+    subprocess.run(["import", "-window", find_window(), str(TEST_DIR / "share-owned-phone.png")], check=True)
+    subprocess.run(["xdotool", "windowsize", find_window(), "900", "720"], check=True)
+    driver.wait_idle(frames=3)
+    # A collaborator outside the friend cache is still shown by name.
+    with writable() as db, db:
+        db.execute("INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,1)",
+                   (user, "friends.list", json.dumps({"friends": [
+                       {"user_id_hash": "d" * 64, "alias": "Dana"}, {"user_id_hash": "e" * 64, "alias": "Emerald"}]})))
+    driver.wait_idle(frames=3)
+    assert "Alice" in dialog() and "Cedar" in dialog(), dialog()
+    driver.press(key=6540)
+    driver.type("da")
+    driver.wait(label="Dana")
+    assert not driver.find(label="Emerald", visible=True), "suggestions did not filter by typed name"
+    driver.press(label="Dana")
+    driver.wait(key=6540, value="Dana")
+    # Viewers can inspect all access but cannot edit, invite or manage roles.
     close_beside()
     driver.press(contains="Groceries", role="tab")
     driver.press(label="Share", role="button")
-    wait_for(lambda: "Cedar" in dialog(), lambda: f"friends are not listed: {dialog()}")
-    assert "Alice" not in dialog(), f"the owner is offered an invitation: {dialog()}"
+    driver.wait(label="People with access")
+    assert "Alice" in dialog() and "Owner" in dialog(), dialog()
+    assert not driver.find(key=6540, visible=True), "viewer can invite"
+    assert not driver.find(role="dropdown", visible=True), "viewer can manage permissions"
     close_beside()
+    assert not driver.wait(key=6507)["enabled"], "viewer can add tasks"
+    assert not driver.wait(key=6503)["enabled"], "viewer can rename a list"
+    # Owners change a collaborator's role without sending its document again.
     driver.press(contains="Garden", role="tab")
     driver.press(label="Share", role="button")
-    wait_for(lambda: "Cedar" in dialog(), lambda: f"friends are not listed: {dialog()}")
-    driver.wait_idle(frames=3)
-    subprocess.run(["import", "-window", find_window(), str(TEST_DIR / "share-owned.png")], check=True)
+    driver.wait(label="Cedar")
+    driver.press(label="Read only")
+    driver.wait(label="Can edit", role="option")
+    driver.wait(label="Owner", role="option")
+    driver.wait(label="Remove access", role="option")
+    driver.press(label="Can edit", role="option")
+    wait_for(lambda: sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:10'"),
+             "the permission change was not stored")
+    permission = json.loads(sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:10'"))
+    assert permission["action"] == "access" and permission["access"] == "editor" and permission["target"] == "c" * 64, permission
+    assert permission["list"] == {"id": OWNED_LIST}, permission
     close_beside()
+    # Move the receipt out of this fixture's scope before testing the inbox.
+    with writable() as db, db:
+        db.execute("DELETE FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:10'")
+        db.execute("UPDATE settings SET value='http://127.0.0.1:11' WHERE key='sync_server_url'")
+        db.execute("INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,1)",
+                   (user, "lists.shared/" + "b" * 64 + "/http://127.0.0.1:11", json.dumps(incoming)))
+    driver.wait(label="Groceries", role="tab")
     driver.press(contains="Groceries", role="tab")
     assert not any("Shared by" in label for label in driver.labels()), driver.labels()
     window = find_window()
@@ -290,9 +345,9 @@ with contextlib.ExitStack() as stack:
     subprocess.run(["import", "-window", window, str(TEST_DIR / "invitations.png")], check=True)
     calm("a failed refresh shows a notice")
     driver.press(label="Accept", role="button")
-    wait_for(lambda: sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:10'"),
+    wait_for(lambda: sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:11'"),
              "the acceptance was not stored for delivery")
-    command = json.loads(sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:10'"))
+    command = json.loads(sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:11'"))
     assert command["action"] == "accept" and command["invitation_id"] == "invitation-fixture", command
     assert sql(f"SELECT COUNT(*) FROM elist_lists WHERE id='{SHARED_LIST}'") == 0
     print(f"PASS item deletion and identity-preserving undo, list tabs, private task destination, friend invitation, inbox acceptance and durable delivery ({TEST_DIR})")

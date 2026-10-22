@@ -7,7 +7,9 @@ This review continues the 21 October Inbe session. It records the requested fixe
 - Android account-key backups use a system-picked document URI, stage bytes in private storage, and report success only after writing and closing the destination. Cancellation and failed writes remain distinct from success.
 
 - Lists prepares shared edits from the complete account-scoped saved document in `src/cells/lists_command.zi`. The screen's bounded item buffer is a view, not a replacement document. Local sharing reads all saved items from SQLite; shared edits read the complete confirmed cache.
-- The Share dialog uses the list's owner and accepted/pending invitations. It copies strings that must survive another host read. Daochi supplies the same collaborator states to authorized members and the owner.
+- The Share dialog shows the original owner and every active or pending collaborator, including people outside the viewer's friends cache. Name suggestions select an invitee before the explicit Invite action. Sharing refreshes silently.
+- Owners can give others the same full list rights: editing, deletion, invitations and permission management. Editors can change content and invite; viewers can read. Permission changes and removal are enforced by Daochi. The original owner retains the list's storage identity.
+- Released sharing translations remain available to older app packages while the new interface uses the new role labels.
 - Undo restores a private item's existing row, retaining its ID, comment, completion and order. Shared undo retains the item ID, comment and completion in the next revision.
 - Games inside Arcade use the existing nested Back path. Host navigation hides during a game and the return bar remains available, including when Arcade is pinned.
 - Library uses the existing Kryon horizontal swipe decision for chapter turns. Vertical movement remains chapter scrolling. Reading hides host navigation and uses a paper background. The current catalog contains one book; no additional books have been selected or added.

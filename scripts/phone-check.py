@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 import fnmatch
 import hashlib
 import io
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -71,8 +72,16 @@ class Phone:
     def __init__(self, host, serial):
         if not re.fullmatch(r"[A-Za-z0-9_.@-]+", host) or host.startswith("-"):
             raise ValueError("invalid ADB host")
-        if not re.fullmatch(r"[A-Za-z0-9]+", serial):
-            raise ValueError("invalid phone serial")
+        valid_serial = re.fullmatch(r"[A-Za-z0-9]+", serial) is not None
+        if not valid_serial:
+            address, separator, port = serial.rpartition(":")
+            try:
+                ipaddress.IPv4Address(address)
+                valid_serial = bool(separator and port.isdecimal() and 1 <= int(port) <= 65535)
+            except ipaddress.AddressValueError:
+                valid_serial = False
+        if not valid_serial:
+            raise ValueError("invalid phone serial or wireless ADB address")
         self.host = host
         self.serial = serial
 

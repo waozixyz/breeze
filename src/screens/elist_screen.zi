@@ -1,3 +1,4 @@
+#import "vec"
 #import, file "../cells/module_host.zi";
 #import, file "../cells/lists_types.zi";
 #import, file "../cells/lists_visibility.zi";
@@ -265,10 +266,10 @@ lists_friends: [8192]u8;
 lists_sharing_source: string;
 // The invitations to lists, as indexes into the shared cache's invitations:
 // other apps' invitations, such as to a Chess game, are left out.
-lists_invitation_rows: [64]s32;
+lists_invitation_rows: Vec(s32);
 lists_invitation_count: s32;
 lists_person_codec: WidgetListsUiPersonCodec;
-lists_person_text: [7][512]u8;
+lists_person_text: [9][512]u8;
 lists_pending_number: [24]u8;
 lists_prepared_body: string;
 lists_request_codec: WidgetListsUiRequestCodec;
@@ -323,6 +324,8 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
             row.shared = source.shared
             row.owner = source.owner
             row.owner_id = AppTextFromCString(*source.owner_id[0], 65)
+            row.owner_alias = AppTextFromCString(*source.owner_alias[0], 128)
+            row.read_only = source.read_only
             row.people = AppTextFromCString(*source.people[0], 256)
             row.invited = AppTextFromCString(*source.invited[0], 256)
             row.revision = source.revision
@@ -352,8 +355,8 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
         row: ListsUiPerson
         if index >= 0 && index < ArrayCount(source, array) {
             object := ElementAt(source, array, index)
-            fields: [7]string = .[ifx invitation then "id" else "user_id_hash", "alias", "owner", "target", "list_id", "title", "status"]
-            for field: cast(s32)0..6 {
+            fields: [9]string = .[ifx invitation then "id" else "user_id_hash", "alias", "owner", "target", "list_id", "title", "status", "target_alias", "access"]
+            for field: cast(s32)0..8 {
                 ListsCopyJson(source, object, fields[field], lists_person_text[field][:])
             }
             row.id = AppTextFromCString(*lists_person_text[0][0], 512)
@@ -363,6 +366,8 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
             row.list_id = AppTextFromCString(*lists_person_text[4][0], 512)
             row.title = AppTextFromCString(*lists_person_text[5][0], 512)
             row.status = AppTextFromCString(*lists_person_text[6][0], 512)
+            row.target_alias = AppTextFromCString(*lists_person_text[7][0], 512)
+            row.access = AppTextFromCString(*lists_person_text[8][0], 512)
         }
         result.* = WidgetEncodeListsUiPerson(row, *lists_person_codec)
         return 1
@@ -391,15 +396,15 @@ draw_elist_screen :: (app: *InnerBreeze) {
     invitations := FieldAt(lists_sharing_source, 0, "invitations")
     incoming: s32 = 0
     lists_invitation_count = 0
+    VecClear(lists_invitation_rows)
     for index: cast(s32)0..ArrayCount(lists_sharing_source, invitations) - 1 {
         row := ElementAt(lists_sharing_source, invitations, index)
         list_id: [64]u8
         ListsCopyJson(lists_sharing_source, row, "list_id", list_id[:])
-        if !SharedIdLooksLikeList(AppTextFromCString(*list_id[0], 64)) ||
-        lists_invitation_count >= cast(s32)lists_invitation_rows.count {
+        if !SharedIdLooksLikeList(AppTextFromCString(*list_id[0], 64)) {
             continue
         }
-        lists_invitation_rows[lists_invitation_count] = index
+        unused VecPush(lists_invitation_rows, index)
         lists_invitation_count += 1
         target := ReadString(lists_sharing_source, FieldAt(lists_sharing_source, row, "target"))
         status := ReadString(lists_sharing_source, FieldAt(lists_sharing_source, row, "status"))

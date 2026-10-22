@@ -4,7 +4,9 @@
 
 - Android account-key backups use the system Save dialog and confirm that the chosen file was written.
 
-- Shared lists preserve every task when edited, show who already has access, and let members edit and share them.
+- Share lists with name suggestions and an automatically updated list of everyone with access.
+- Give collaborators full owner rights, editing access, or read-only access, and remove access from the same dialog.
+- Shared-list edits preserve every task.
 - Undo restores a deleted task with its comment and completion state.
 - The Habits shop scrolls through all recent activity and offers a soda reward symbol.
 - Games hide the surrounding navigation and keep a clear return path to Arcade.

@@ -4,6 +4,12 @@
 #import "geometry"
 #import "text"
 #import "vec"
+#import "c_string"
+#import "text_buffer"
+#import "layout"
+#import "dropdown_props"
+#import "dropdown_widget"
+#import "context_menu_widget"
 #import "text_props"
 #import "text_align"
 #import "text_widget"
@@ -44,6 +50,13 @@ frame: ListsUiFrame;
 state: ListsMessage;
 // The open Share or Invitations dialog's scroll offset.
 sharing_scroll: s32;
+invite_text: string;
+invite_target: [65]u8;
+invite_cursor: s32;
+invite_anchor: s32;
+invite_scroll: s32;
+invite_focused: bool;
+invite_suggestions: bool;
 // Delete lives inside Edit and asks first; this is true once it has asked.
 delete_confirm: bool;
 // The last deleted item, kept briefly so Undo can bring it back.
@@ -127,13 +140,13 @@ Mutation :: (action: s32, index: s32) {
     }
 }
 
-Field :: (bounds: Rectangle, placeholder: string) -> bool {
+Field :: (bounds: Rectangle, placeholder: string, read_only: bool = false) -> bool {
     edited := TextField(frame.session, TextFieldProps.{.key = cast(u64)6501,
             .bounds = bounds, .value = frame.value, .placeholder = placeholder, .cursor = frame.cursor,
             .anchor = frame.anchor, .scroll_x = frame.scroll_x,
             .focused = frame.focused, .focus_id = 6501,
             .max_bytes = 127, .max_codepoints = 127, .input = frame.input,
-            .disabled = frame.sharing_busy || frame.sharing_pending})
+            .disabled = frame.sharing_busy || frame.sharing_pending || read_only})
     if edited.edit.changed {
         start := edited.edit.start
         end := edited.edit.end
@@ -158,7 +171,7 @@ Field :: (bounds: Rectangle, placeholder: string) -> bool {
 }
 
 Remote :: (action: s32, target: string = "", invitation: string = "",
-    invitation_list: string = "") {
+    invitation_list: string = "", access: string = "") {
     state.action = action
     state.remote = true
     list: ListsUiRow
@@ -174,7 +187,7 @@ Remote :: (action: s32, target: string = "", invitation: string = "",
             .selected_list = state.selected_list, .done = state.done,
             .value = ifx action == LISTS_RESTORE_ITEM then state.title else frame.value,
             .next_id = frame.next_id, .item_id = state.id, .comment = state.comment,
-            .target = target, .invitation = invitation, .list_id = list.id})
+            .target = target, .invitation = invitation, .list_id = list.id, .access = access})
 }
 
 // Cells cannot measure text, so a paragraph's height allows a generous
@@ -200,66 +213,221 @@ ParagraphHeight :: (text: string, width: s32) -> s32 {
     return lines * Scale(22)
 }
 
-// Whether a sharing row belongs in the open dialog: every friend for Share,
-// invitations still waiting for this account for Invitations.
-SharingRowShown :: (row: ListsUiPerson) -> bool {
-    if frame.panel == 1 {
-        // The person who owns the list already has it; never offer an invite.
-        if state.selected_list >= 0 && state.selected_list < state.list_count {
-            owner := ReadListsRowHost(state.selected_list, false).owner_id
-            if owner.count > 0 && owner == row.id {
+// Active and pending collaborators, independent of this account's friends.
+SharingMemberShown :: (row: ListsUiPerson, list_id: string) -> bool {
+    return row.list_id == list_id && (row.status == "accepted" || row.status == "pending")
+}
+
+InvitationAvailable :: (friend: string, list_id: string, owner: string) -> bool {
+    if friend == frame.public_id || friend == owner {
+        return false
+    }
+    for index: cast(s32)0..frame.invitation_count - 1 {
+        if SharingMemberShown(ReadListsSharingRowHost(index, true), list_id) {
+            if ReadListsSharingRowHost(index, true).target == friend {
                 return false
             }
         }
-        return true
     }
-    return row.target == frame.public_id && row.status == "pending"
+    return true
 }
 
-// Share and Invitations open in a dialog over the list.
+ResetInvite :: () {
+    invite_text = ""
+    invite_target[0] = cast(u8)0
+    invite_cursor = 0
+    invite_anchor = 0
+    invite_scroll = 0
+    invite_focused = false
+    invite_suggestions = false
+}
+
+// An explicit invitation follows selection from the name suggestions.
+InviteField :: (x: s32, y: s32, width: s32, disabled: bool) -> bool {
+    button_width := Scale(96)
+    previous_bytes: [128]u8
+    unused CopyCString(invite_text, previous_bytes[:])
+    previous := TextUntilNul(previous_bytes[:])
+    edited := TextField(frame.session, TextFieldProps.{.key = cast(u64)6540,
+            .bounds = Bounds(x, y, width - button_width - Scale(8), Scale(44)),
+            .value = previous, .placeholder = ListsLocaleHost("elist_invite_by_name"),
+            .cursor = invite_cursor, .anchor = invite_anchor, .scroll_x = invite_scroll,
+            .focused = invite_focused, .focus_id = 6540, .scale = frame.scale,
+            .max_bytes = 127, .max_codepoints = 127, .input = frame.input, .disabled = disabled})
+    if edited.edit.changed {
+        value := previous
+        if edited.edit.start >= 0 && edited.edit.end >= edited.edit.start && edited.edit.end <= value.count {
+            text: Vec(u8)
+            BuilderPrint(*text, "%", value[:edited.edit.start])
+            BuilderPrint(*text, "%", edited.edit.replacement)
+            BuilderPrint(*text, "%", value[edited.edit.end:])
+            invite_text = BuilderFinish(text)
+            invite_target[0] = cast(u8)0
+            invite_suggestions = true
+        }
+    }
+    invite_cursor = edited.cursor
+    invite_anchor = edited.anchor
+    invite_scroll = edited.scroll_x
+    invite_focused = edited.focused
+    frame.focused = invite_focused
+    if edited.clipboard_write {
+        frame.clipboard_write = true
+        frame.clipboard_text = edited.clipboard_text
+    }
+    if edited.escaped {
+        invite_suggestions = false
+    }
+    if Button(frame.session, ButtonProps.{.key = cast(u64)6541,
+            .bounds = Bounds(x + width - button_width, y, button_width, Scale(44)),
+            .label = ListsLocaleHost("elist_invite"),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .disabled = disabled || invite_target[0] == cast(u8)0}) != 0 {
+        Remote(LISTS_INVITE, TextUntilNul(invite_target[:]))
+        ResetInvite()
+        return true
+    }
+    return false
+}
+
+// Suggestions float below the input while typing and only select a person.
+InviteSuggestions :: (x: s32, y: s32, list_id: string, owner: string) {
+    if !invite_suggestions || invite_text.count == 0 {
+        return
+    }
+    options: [8]ContextMenuItem
+    names: [8][128]u8
+    targets: [8][65]u8
+    count: s32 = 0
+    for index: cast(s32)0..frame.friend_count - 1 {
+        friend := ReadListsSharingRowHost(index, false)
+        id: [65]u8
+        alias: [128]u8
+        unused CopyCString(friend.id, id[:])
+        unused CopyCString(friend.alias, alias[:])
+        if !ContainsFoldASCII(TextUntilNul(alias[:]), invite_text) ||
+        !InvitationAvailable(TextUntilNul(id[:]), list_id, owner) {
+            continue
+        }
+        names[count] = alias
+        targets[count] = id
+        options[count] = ContextMenuItem.{.id = count + 1, .label = TextUntilNul(names[count][:])}
+        count += 1
+        if count == 8 {
+            break
+        }
+    }
+    if count == 0 {
+        options[0] = ContextMenuItem.{.id = 1, .label = ListsLocaleHost("elist_no_matches"), .disabled = true}
+        count = 1
+    }
+    result := ContextMenu(frame.session, ContextMenuProps.{.key = cast(u64)6542,
+            .open = true, .x = cast(float32)x, .y = cast(float32)y,
+            .escape = frame.input.escape, .scale = frame.scale}, options[:count])
+    if result.activated_id > 0 && result.activated_id <= count && !options[result.activated_id - 1].disabled {
+        selected := result.activated_id - 1
+        invite_text = Copied(TextUntilNul(names[selected][:]))
+        invite_target = targets[selected]
+        invite_cursor = cast(s32)invite_text.count
+        invite_anchor = invite_cursor
+        invite_suggestions = false
+    } else if result.closed {
+        invite_suggestions = false
+    }
+}
+
+// Each owner has the same edit, deletion, invitation and permission controls.
+MemberRow :: (row: ListsUiPerson, x: s32, y: s32, width: s32, manages: bool,
+    original_owner: bool, disabled: bool) -> bool {
+    target: [65]u8
+    unused CopyCString(row.target, target[:])
+    name := row.target_alias
+    if name.count == 0 {
+        name = row.target[:ifx row.target.count > 8 then 8 else row.target.count]
+    }
+    if row.target == frame.public_id {
+        name = ListsLocaleHost("elist_you")
+    }
+    narrow := width < Scale(360)
+    role_width := ifx narrow then width else Scale(168)
+    name_width := ifx narrow then width else width - role_width - Scale(12)
+    Text(frame.session, TextProps.{.bounds = Bounds(x, y, name_width, Scale(28)),
+            .text = name, .wrap = cast(TextWrap)TextWrapEllipsis})
+    if row.status == "pending" {
+        Text(frame.session, TextProps.{.bounds = Bounds(x, y + Scale(28), name_width, Scale(24)),
+                .text = ListsLocaleHost("elist_invited"), .font = Scale(13)})
+    }
+    role: s32 = ifx original_owner || row.access == "owner" then 0 else ifx row.access == "viewer" then 2 else 1
+    role_y := y + ifx narrow then Scale(52) else 0
+    role_x := ifx narrow then x else x + width - role_width
+    labels: [3]string = .[ListsLocaleHost("elist_owner"), ListsLocaleHost("elist_can_edit"), ListsLocaleHost("elist_read_only")]
+    if manages && !original_owner {
+        options: [4]DropdownOption
+        for index: cast(s32)0..2 {
+            options[index] = DropdownOption.{.key = cast(u64)(index + 1), .label = labels[index]}
+        }
+        options[3] = DropdownOption.{.key = cast(u64)4, .label = ListsLocaleHost("elist_remove_access"), .separator_before = true}
+        changed := Dropdown(frame.session, DropdownProps.{.key = KeyHash(TextUntilNul(target[:])),
+                .bounds = Bounds(role_x, role_y, role_width, Scale(44)), .selected_index = role,
+                .disabled = disabled, .scale = frame.scale}, options[:4])
+        if changed.changed {
+            if changed.selected_index == 3 {
+                Remote(LISTS_REMOVE_ACCESS, TextUntilNul(target[:]))
+            } else {
+                access: [3]string = .["owner", "editor", "viewer"]
+                Remote(LISTS_SET_ACCESS, TextUntilNul(target[:]), "", "", access[changed.selected_index])
+            }
+            return true
+        }
+    } else {
+        Text(frame.session, TextProps.{.bounds = Bounds(role_x, role_y, role_width, Scale(44)),
+                .text = labels[role], .vertical_align = cast(TextAlign)TextAlignCenter})
+    }
+    return false
+}
+
+// Share and Invitations update automatically while the dialog is open.
 SharingDialog :: () {
     share := frame.panel == 1
+    list: ListsUiRow
+    if share && state.selected_list >= 0 && state.selected_list < state.list_count {
+        list = ReadListsRowHost(state.selected_list, false)
+    }
     width := frame.width - Scale(32)
     if width > Scale(520) {
         width = Scale(520)
     }
-    detail := ""
-    if !frame.connected {
-        detail = ListsLocaleHost("elist_connect")
-    } else if share {
-        detail = ListsLocaleHost("elist_share_detail")
-    } else {
-        detail = ListsLocaleHost("elist_invitations_detail")
+    detail := ListsLocaleHost("elist_connect")
+    if frame.connected {
+        detail = ListsLocaleHost(ifx share then "elist_people_with_access" else "elist_invitations_detail")
     }
-    detail_height := ParagraphHeight(detail, width - Scale(36))
-    source_count := ifx share then frame.friend_count else frame.invitation_count
-    count: s32 = 0
-    for index: cast(s32)0..source_count - 1 {
-        if SharingRowShown(ReadListsSharingRowHost(index, !share)) {
+    count: s32 = ifx share then 1 else 0
+    for index: cast(s32)0..frame.invitation_count - 1 {
+        row := ReadListsSharingRowHost(index, true)
+        if (share && SharingMemberShown(row, list.id)) ||
+        (!share && row.target == frame.public_id && row.status == "pending") {
             count += 1
         }
     }
-    row_height := Scale(ifx share then 64 else 160)
-    content_height := detail_height
-    if frame.connected {
-        if detail_height > 0 {
-            content_height += Scale(12)
-        }
-        shown := ifx count > 4 then 4 else count
-        if count == 0 {
-            content_height += Scale(48)
-        } else {
-            content_height += shown * row_height
-        }
-        content_height += Scale(12) + Scale(44)
+    row_height := Scale(ifx !share then 160 else ifx width - Scale(36) < Scale(360) then 104 else 64)
+    shown := ifx count > 4 then 4 else count
+    height := Scale(120) + shown * row_height
+    if share && frame.connected {
+        height += Scale(64)
+    }
+    if height > frame.height - frame.bottom - Scale(32) {
+        height = frame.height - frame.bottom - Scale(32)
     }
     dialog := ModalFrame(frame.session, ModalFrameProps.{.key = cast(u64)6520,
             .title = ListsLocaleHost(ifx share then "elist_share" else "elist_invitations"),
-            .width = width, .height = content_height + Scale(74), .scale = frame.scale,
+            .width = width, .height = height, .scale = frame.scale,
             .has_right_action = true, .right_label = ListsLocaleHost("close_button")})
     if dialog.dismissed || dialog.right_clicked {
         frame.panel = 0
+        frame.focused = false
         sharing_scroll = 0
+        ResetInvite()
         return
     }
     if !dialog.opened {
@@ -269,100 +437,76 @@ SharingDialog :: () {
     y := cast(s32)dialog.layout.content.y
     content_width := cast(s32)dialog.layout.content.width
     bottom := cast(s32)(dialog.layout.content.y + dialog.layout.content.height)
-    if detail_height > 0 {
-        Text(frame.session, TextProps.{.bounds = Bounds(x, y, content_width, detail_height),
-                .text = detail, .wrap = cast(TextWrap)TextWrapAuto})
-        y += detail_height + Scale(12)
+    disabled := frame.sharing_busy || frame.sharing_pending
+    suggestions_y := y + Scale(48)
+    if share && frame.connected && !list.read_only {
+        if InviteField(x, y, content_width, disabled || list.incomplete) {
+            End(frame.session)
+            return
+        }
+        y += Scale(60)
+    } else if share && frame.connected {
+        Text(frame.session, TextProps.{.bounds = Bounds(x, y, content_width, Scale(44)),
+                .text = ListsLocaleHost("elist_read_only"), .vertical_align = cast(TextAlign)TextAlignCenter})
+        y += Scale(52)
     }
+    Text(frame.session, TextProps.{.bounds = Bounds(x, y, content_width, Scale(32)),
+            .text = detail, .wrap = cast(TextWrap)TextWrapAuto})
+    y += Scale(40)
     if !frame.connected {
         End(frame.session)
         return
     }
-    refresh_width := ifx content_width < Scale(140) then content_width else Scale(140)
-    if Button(frame.session, ButtonProps.{.key = cast(u64)6511,
-            .bounds = Bounds(x + content_width - refresh_width, bottom - Scale(44), refresh_width, Scale(44)),
-            .label = ListsLocaleHost("elist_refresh"), .disabled = frame.sharing_busy}) != 0 {
-        state.action = LISTS_REFRESH
-        state.remote = true
-    }
     if count == 0 {
-        Text(frame.session, TextProps.{.bounds = Bounds(x, y, content_width, Scale(48)),
-                .text = ListsLocaleHost(ifx share then "elist_no_friends" else "elist_no_invitations"),
-                .wrap = cast(TextWrap)TextWrapAuto})
-        End(frame.session)
-        return
-    }
-    scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)6512,
-            .bounds = Bounds(x, y, content_width, bottom - Scale(56) - y),
-            .content_height = count * row_height, .scroll_offset = sharing_scroll})
-    sharing_scroll = scroll.scroll_offset
-    if !scroll.opened {
-        End(frame.session)
-        return
-    }
-    row_y := cast(s32)scroll.content.y
-    disabled := frame.sharing_busy || frame.sharing_pending
-    for index: cast(s32)0..source_count - 1 {
-        row := ReadListsSharingRowHost(index, !share)
-        if !SharingRowShown(row) {
-            continue
-        }
-        if row_y + row_height <= cast(s32)scroll.viewport.y ||
-        row_y >= cast(s32)(scroll.viewport.y + scroll.viewport.height) {
-            row_y += row_height
-            continue
-        }
-        if share {
-            if InviteRow(row, index, x, row_y, content_width, disabled) {
-                End(frame.session)
+        Text(frame.session, TextProps.{.bounds = Bounds(x, y, content_width, Scale(44)),
+                .text = ListsLocaleHost("elist_no_invitations"), .wrap = cast(TextWrap)TextWrapAuto})
+    } else {
+        scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)6512,
+                .bounds = Bounds(x, y, content_width, bottom - y),
+                .content_height = count * row_height, .scroll_offset = sharing_scroll})
+        sharing_scroll = scroll.scroll_offset
+        if scroll.opened {
+            row_y := cast(s32)scroll.content.y
+            changed: bool
+            if share {
+                name := ifx list.owner_alias.count > 0 then list.owner_alias else list.owner_id
+                if !list.shared || list.owner_id == frame.public_id {
+                    name = ListsLocaleHost("elist_you")
+                }
+                unused MemberRow(ListsUiPerson.{.target = list.owner_id, .target_alias = name, .access = "owner"},
+                    x, row_y, content_width - Scale(14), false, true, disabled)
+                row_y += row_height
+            }
+            for index: cast(s32)0..frame.invitation_count - 1 {
+                row := ReadListsSharingRowHost(index, true)
+                if (share && !SharingMemberShown(row, list.id)) ||
+                (!share && (row.target != frame.public_id || row.status != "pending")) {
+                    continue
+                }
+                if row_y + row_height > cast(s32)scroll.viewport.y && row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height) {
+                    if share {
+                        changed = MemberRow(row, x, row_y, content_width - Scale(14), list.owner, false, disabled)
+                    } else {
+                        changed = InvitationRow(row, index, x, row_y, content_width - Scale(14), disabled)
+                    }
+                    if changed {
+                        break
+                    }
+                }
+                row_y += row_height
+            }
+            End(frame.session)
+            if changed {
                 End(frame.session)
                 return
             }
-        } else if InvitationRow(row, index, x, row_y, content_width, disabled) {
-            End(frame.session)
-            End(frame.session)
-            return
-        }
-        row_y += row_height
-    }
-    End(frame.session)
-    End(frame.session)
-}
-
-// A friend and the Invite button for the selected list. True once an
-// invitation is sent.
-InviteRow :: (row: ListsUiPerson, index: s32, x: s32, y: s32, width: s32, disabled: bool) -> bool {
-    // Copied first: reading the invitations below reuses the row's buffer.
-    friend := Copied(row.id)
-    alias := Copied(row.alias)
-    if alias.count == 0 {
-        alias = friend
-    }
-    status := ""
-    selected := ReadListsRowHost(state.selected_list, false)
-    for invitation_index: cast(s32)0..frame.invitation_count - 1 {
-        invite := ReadListsSharingRowHost(invitation_index, true)
-        if invite.list_id == selected.id && invite.target == friend {
-            status = Copied(invite.status)
         }
     }
-    button_width := Scale(112)
-    Text(frame.session, TextProps.{.bounds = Bounds(x, y, width - button_width - Scale(12), Scale(44)),
-            .text = alias, .vertical_align = cast(TextAlign)TextAlignCenter})
-    key := "elist_invite"
-    if status == "accepted" {
-        key = "elist_accepted"
-    } else if status == "pending" {
-        key = "elist_invited"
+    // Emit the floating menu last so it sits above all collaborator rows.
+    if share && !list.read_only && !disabled {
+        InviteSuggestions(x, suggestions_y, list.id, list.owner_id)
     }
-    if Button(frame.session, ButtonProps.{.key = cast(u64)(7400 + index),
-            .bounds = Bounds(x + width - button_width, y, button_width, Scale(44)),
-            .label = ListsLocaleHost(key), .disabled = disabled || status == "pending" || status == "accepted",
-            .tone = cast(ButtonTone)ButtonToneAccent}) != 0 {
-        Remote(LISTS_INVITE, friend)
-        return true
-    }
-    return false
+    End(frame.session)
 }
 
 // An invitation to a list, who sent it, and Accept and Decline. True once
@@ -404,7 +548,13 @@ InvitationRow :: (row: ListsUiPerson, index: s32, x: s32, y: s32, width: s32, di
 ListsView :: (message: ListsMessage) -> ListsMessage {
     frame = ReadListsUiHost()
     state = message
+    input := frame.input
+    if frame.panel != 0 {
+        frame.input = TextFieldInput.{}
+        frame.focused = false
+    }
     ListsPage()
+    frame.input = input
     if frame.panel != 0 {
         SharingDialog()
     }
@@ -457,10 +607,11 @@ ListsPage :: () {
             .label = ListsLocaleHost("elist_share"), .icon_shape = SHARE_ICON, .icon_only = true,
             .tone = cast(ButtonTone)ButtonToneAccent,
             .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .disabled = current.id.count == 0 || current.incomplete || blocked || editing_list}) != 0 {
+            .disabled = current.id.count == 0 || editing_list}) != 0 {
         frame.panel = 1
         frame.focused = false
         sharing_scroll = 0
+        ResetInvite()
     }
     // Edit opens the name; Delete is inside it, behind a question.
     if Button(frame.session, ButtonProps.{.key = cast(u64)6503,
@@ -468,7 +619,7 @@ ListsPage :: () {
             .label = ListsLocaleHost("elist_rename"), .icon_only = true,
             .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost,
             .icon_type = cast(s32)IconEdit,
-            .disabled = current.id.count == 0 || blocked || editing_list}) != 0 {
+            .disabled = current.id.count == 0 || current.read_only || blocked || editing_list}) != 0 {
         delete_confirm = false
         BeginInput(-3, current.title)
         return
@@ -513,6 +664,9 @@ ListsPage :: () {
                 .text = ListsLocaleHost("elist_capacity"), .wrap = cast(TextWrap)TextWrapAuto})
         y += Scale(72)
     }
+    if current.read_only && state.editing_item != -2 {
+        blocked = true
+    }
     if !editing_list {
         // Invitations to other people's lists appear only while some wait.
         if frame.pending_count_text != "0" && frame.pending_count_text != "" {
@@ -537,7 +691,7 @@ ListsPage :: () {
     if state.editing_item == -2 || state.editing_item == -3 {
         owner := !current.shared || current.owner
         committed := Field(Bounds(x, y, width, Scale(44)),
-            ListsLocaleHost(ifx state.editing_item == -3 then "elist_list_name_placeholder" else "elist_new_list_placeholder"))
+            ListsLocaleHost(ifx state.editing_item == -3 then "elist_list_name_placeholder" else "elist_new_list_placeholder"), blocked)
         button_width := (width - Scale(8)) / 2
         if Button(frame.session, ButtonProps.{.key = cast(u64)6506,
                 .label = ListsLocaleHost(ifx state.editing_item == -3 then "done_button" else "elist_create_list"),
@@ -581,7 +735,7 @@ ListsPage :: () {
         return
     }
     committed := Field(Bounds(x, y, width - Scale(96), Scale(44)),
-        ListsLocaleHost(ifx state.editing_item >= 0 then "elist_item_name_placeholder" else "elist_add_item_placeholder"))
+        ListsLocaleHost(ifx state.editing_item >= 0 then "elist_item_name_placeholder" else "elist_add_item_placeholder"), blocked)
     if Button(frame.session, ButtonProps.{.key = cast(u64)6507,
             .label = ListsLocaleHost(ifx state.editing_item >= 0 then "done_button" else "elist_add_item"),
             .bounds = Bounds(x + width - Scale(88), y, Scale(88), Scale(44)),

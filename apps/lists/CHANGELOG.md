@@ -2,7 +2,9 @@
 
 ## [1.1.5] - 2026-10-21
 
-- Maintenance release for Inner Breeze 2.1.38.
+- Show everyone with access and suggest friends as you type an invitation.
+- Let owners grant full ownership, editing, or read-only access and remove collaborators.
+- Update sharing automatically without a Refresh button.
 
 ## [1.1.4] - 2026-10-21
 
