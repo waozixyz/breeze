@@ -3,6 +3,7 @@
 ## [2.1.42] - 2026-10-22
 
 - Keep practice animation smooth in the browser.
+- Restore clean F-Droid builds.
 
 ## [2.1.41] - 2026-10-22
 

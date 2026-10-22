@@ -1,5 +1,9 @@
 # Source, asset and release tooling checks that make test runs.
 
+.PHONY: fdroid-build-test
+fdroid-build-test:
+	python3 tests/fdroid_build_test.py
+
 .SILENT: package-check test font-bundle-check audio-test-fixture-check embedded-image-assets-check
 
 package-check:

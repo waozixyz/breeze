@@ -21,6 +21,7 @@ test: profile-host-test
 test: launcher-policy-test launcher-entry-test android-text-selection-test
 test: button-api-check
 test: version-check version-test
+test: fdroid-build-test
 test: habit-merge-sql-test sync-restore-sql-test
 test: proof-test
 test: clean-text-api-check package-check secret-check storage-literals-check font-bundle-check audio-test-fixture-check embedded-image-assets-check icon-sheets-check
