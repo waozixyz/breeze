@@ -165,6 +165,26 @@ OR (excluded.updated_at = settings.updated_at AND NOT EXISTS (
 ))
 SQL
 
+// A borrowed-coin allowance belongs to the account. Keep pending local edits
+// on a timestamp tie, and never let a remote setting write another key.
+SyncHabitSettingsSQL :: #string SQL
+INSERT INTO settings(user_id,key,value,updated_at)
+SELECT ?2,json_extract(value,'$.key'),json_extract(value,'$.value'),
+ CAST(strftime('%s',json_extract(value,'$.updated_at')) AS INTEGER)
+FROM json_each(?1,'$.changes.habit_settings')
+WHERE json_extract(value,'$.key')='habit_shop_borrow_limit'
+AND json_type(value,'$.value')='text'
+AND length(json_extract(value,'$.value')) BETWEEN 1 AND 4
+AND json_extract(value,'$.value') NOT GLOB '*[^0-9]*'
+AND strftime('%s',json_extract(value,'$.updated_at')) IS NOT NULL
+ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at
+WHERE excluded.updated_at > settings.updated_at
+OR (excluded.updated_at = settings.updated_at AND excluded.value != settings.value AND NOT EXISTS (
+ SELECT 1 FROM sync_outbox WHERE entity_type='habit_setting'
+ AND entity_id=settings.key AND local_date=0
+))
+SQL
+
 // The pinned apps' order from another device: the newest order wins, and a
 // pending local order wins a tie. The value is a list of package names.
 SyncAppOrderSQL :: #string SQL

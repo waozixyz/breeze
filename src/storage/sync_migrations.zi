@@ -20,6 +20,30 @@ storage_migrate_preinstalled_apps :: () {
     if MigrationChanges(storage_db_handle()) > 0 { storage_schedule_persist() }
 }
 
+// Queue an older device's allowance without changing its value or clock.
+#program_export
+storage_migrate_habit_settings :: () -> s32 {
+    if storage_meta_int64("sync_habit_settings_v1_done", 0) != 0 { return 1 }
+    if exec_sql("SAVEPOINT inbe_habit_settings_migration") == 0 { return 0 }
+    queued := exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_setting',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key='habit_shop_borrow_limit' ON CONFLICT(entity_type,entity_id,local_date) DO NOTHING")
+    marked: s32 = 0
+    if queued != 0 {
+        marked = exec_sql("INSERT INTO meta(key,value) VALUES('sync_habit_settings_v1_done','1') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    }
+    if queued == 0 || marked == 0 {
+        unused exec_sql("ROLLBACK TO inbe_habit_settings_migration")
+        unused exec_sql("RELEASE inbe_habit_settings_migration")
+        return 0
+    }
+    if exec_sql("RELEASE inbe_habit_settings_migration") == 0 {
+        unused exec_sql("ROLLBACK TO inbe_habit_settings_migration")
+        unused exec_sql("RELEASE inbe_habit_settings_migration")
+        return 0
+    }
+    storage_schedule_persist()
+    return 1
+}
+
 #program_export
 // The outbox and marker commit together. The old settings and server history
 // remain intact; new writes and queued copies use the separate Lumi scope.

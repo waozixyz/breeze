@@ -41,7 +41,7 @@ def restore_statements():
     assert enqueue, "storage_enqueue_all_sync_state"
     inserts = re.findall(r'exec_sql\("(INSERT INTO sync_outbox[^"]*)"\)',
                          enqueue.group(1))
-    assert len(inserts) == 16, inserts
+    assert len(inserts) == 17, inserts
     return clear + inserts
 
 
@@ -80,6 +80,7 @@ EXTRA = [
     ("media_record", "cell.media.preview." + "ab" * 32, 0),
     ("habit_reward", "r1", 0),
     ("habit_coin", "k1", 0),
+    ("habit_setting", "habit_shop_borrow_limit", 0),
 ]
 
 
@@ -105,6 +106,7 @@ def open_database():
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_diary", "value": "1", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "cells_auto_update", "value": "0", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "app_order", "value": "lumi,diary", "updated_at": 2})
+    insert_row(database, "settings", {"user_id": "u1", "key": "habit_shop_borrow_limit", "value": "75", "updated_at": 2})
     # A default nobody chose is never queued.
     insert_row(database, "settings", {"user_id": "u1", "key": "app_used_leaderboard", "value": "0", "updated_at": 1})
     for key in ("cell.lumi.message.history", "cell.diary.entry.today", "cell.feedback.report"):
@@ -120,6 +122,7 @@ def open_database():
                 "nested." + "ab" * 32 + ".Big", "app_used_achievement"):
         insert_row(database, "settings", {"user_id": "u1", "key": key, "value": "1", "updated_at": 2})
     insert_row(database, "users", {"id": "u2"})
+    insert_row(database, "settings", {"user_id": "u2", "key": "habit_shop_borrow_limit", "value": "999", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u2", "key": "nested." + "cd" * 32 + ".position", "value": "foreign", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u2", "key": "cell.lumi.message.foreign", "value": "{}", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "telegram.sent.local", "value": "1", "updated_at": 2})

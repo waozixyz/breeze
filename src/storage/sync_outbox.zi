@@ -19,9 +19,9 @@ storage_enqueue_sync_entity :: (entity_type: string, entity_id: string, local_da
         return 0
     }
     query := "INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES(?1,?2,?3,?4) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at"
-    if entity_type == "cell_record" {
-        // Cell receipts name the exact submitted sequence. Replacing a cell
-        // allocates a fresh sequence even for edits within the same second.
+    if entity_type == "cell_record" || entity_type == "habit_setting" {
+        // These receipts name the exact submitted sequence. Replacing a
+        // setting allocates a fresh sequence even within the same second.
         // Owner habit/session saves retain their existing queue behaviour.
         query = "INSERT OR REPLACE INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES(?1,?2,?3,?4)"
     }
@@ -106,6 +106,7 @@ storage_enqueue_all_sync_state :: () {
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_coin',id,0,strftime('%s','now') FROM habit_coins WHERE user_id=(SELECT id FROM users LIMIT 1) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     // A default app choice (stored at AppDefaultTime) is not a choice and
     // never goes out, so a new device cannot replace the account's apps.
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'habit_setting',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key='habit_shop_borrow_limit' ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_preference',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key IN ('app_used_lists','app_used_habits','app_used_practices','app_used_diary','app_used_lumi','app_used_leaderboard') AND updated_at>1 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_order',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key='app_order' AND updated_at>1 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'app_install',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'app_used_[a-z]*' AND length(key) BETWEEN 11 AND 33 AND substr(key,10) NOT GLOB '*[^a-z0-9]*' AND key NOT IN ('app_used_inbe','app_used_lists','app_used_habits','app_used_practices','app_used_practice','app_used_diary','app_used_lumi','app_used_leaderboard','app_used_feedback','app_used_app','app_used_apps','app_used_media','app_used_achievement') AND updated_at>1 ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")

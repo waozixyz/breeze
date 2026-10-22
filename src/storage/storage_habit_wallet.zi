@@ -58,7 +58,7 @@ SQL
 // Each day's signed earnings and purchases, newest first.
 StorageHabitActivitySQL :: #string SQL
 WITH days AS (
-SELECT h.id,h.name,h.icon,d.local_date AS day,
+SELECT h.id,h.name,h.icon,d.local_date AS day,d.updated_at AS at,
 h.custom_coins,h.coin_halves,
 COALESCE((SELECT c.old_value FROM habit_changes c
 WHERE c.habit_id=h.id AND c.kind=20 AND c.deleted_at=0 AND
@@ -84,17 +84,17 @@ WHEN old_coins='' AND custom_coins<>0 THEN
 ELSE '0:'||CAST(CASE WHEN level=3 THEN 1 ELSE 2+2*MIN(MAX(level,0),2) END AS TEXT)
 END AS policy FROM days
 ), earned AS (
-SELECT id,name,icon,day,CAST(substr(policy,3) AS INTEGER)*
+SELECT id,name,icon,day,at,CAST(substr(policy,3) AS INTEGER)*
 CASE WHEN substr(policy,1,1)='1' THEN occurrences ELSE done END AS halves FROM valued
 )
-SELECT name,icon,halves,day FROM (
-SELECT name,icon,halves,day,0 AS at FROM earned WHERE halves<>0
+SELECT name,icon,halves,day,at FROM (
+SELECT name,icon,halves,day,at,id FROM earned WHERE halves<>0
 UNION ALL
 SELECT c.name,COALESCE(r.icon,0),-2*c.coins,
-CAST(strftime('%Y%m%d',c.at,'unixepoch','localtime') AS INTEGER),c.at
+CAST(strftime('%Y%m%d',c.at,'unixepoch','localtime') AS INTEGER),c.at,c.id
 FROM habit_coins c LEFT JOIN habit_rewards r ON r.id=c.reward_id
 WHERE c.user_id=?1 AND c.deleted_at=0 AND c.kind=1)
-ORDER BY day DESC,at DESC LIMIT ?2
+ORDER BY at DESC,day DESC,id DESC LIMIT ?2
 SQL
 
 storage_habit_activity_load :: (output: []HabitCoinActivity) -> s32 {
@@ -114,6 +114,7 @@ storage_habit_activity_load :: (output: []HabitCoinActivity) -> s32 {
         entry.icon = sqlite3_column_int(stmt, 1)
         entry.halves = SqliteColumnInt64(stmt, 2)
         entry.local_date = sqlite3_column_int(stmt, 3)
+        entry.at = SqliteColumnInt64(stmt, 4)
         count += 1
     }
     SqliteFinalize(stmt)

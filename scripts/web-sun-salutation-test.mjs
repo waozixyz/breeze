@@ -45,6 +45,9 @@ const stateExpression = `(() => {
 })()`;
 
 export async function verifySunSalutationCanvas({ evaluate, click, resize, capture, callHook, browser }) {
+  const poseCount = Number(process.env.WEB_SMOKE_SUN_POSES || 12);
+  if (!Number.isInteger(poseCount) || poseCount < 2 || poseCount > 12)
+    throw new Error('WEB_SMOKE_SUN_POSES must be an integer from 2 to 12');
   const output = process.env.WEB_SMOKE_ARTIFACT_DIR;
   if (output) mkdirSync(output, { recursive: true });
   const evidence = [];
@@ -206,7 +209,8 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
 
   await evaluate(`(() => {
     const probe = window.__inbeAnimationProbe = {
-      active: false, last: 0, gaps: [], decodes: [], readbacks: 0, uploads: 0
+      active: false, last: 0, gaps: [], decodes: [], readbacks: 0, uploads: 0,
+      meshSources: new WeakMap(), meshTransfers: 0, meshPixels: 0, meshStacks: []
     };
     for (const prototype of [CanvasRenderingContext2D.prototype,
       ...(typeof OffscreenCanvasRenderingContext2D === 'undefined' ? [] :
@@ -219,6 +223,21 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
               const now = performance.now();
               if (probe.last) probe.gaps.push(now - probe.last);
               probe.last = now;
+            }
+            if (method === 'drawImage' && args[0] &&
+                (args[0] instanceof HTMLCanvasElement ||
+                 (typeof OffscreenCanvas !== 'undefined' && args[0] instanceof OffscreenCanvas))) {
+              const source = args[0];
+              if (!probe.meshSources.has(source))
+                probe.meshSources.set(source, !!source.getContext('webgl'));
+              if (probe.meshSources.get(source)) {
+                probe.meshTransfers++;
+                probe.meshPixels += source.width * source.height;
+                if (${process.env.WEB_SMOKE_MESH_TRACE === '1'} && probe.meshStacks.length < 2) {
+                  Error.stackTraceLimit = 40;
+                  probe.meshStacks.push(new Error('mesh transfer').stack);
+                }
+              }
             }
             if (this.canvas !== Module.canvas && method === 'getImageData') probe.readbacks++;
             if (method === 'putImageData') probe.uploads++;
@@ -317,7 +336,7 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
     if ((await state()).step !== 0) throw new Error('Sun Salutation Previous did not return');
     await save(`${label}-mountain`);
 
-    for (let step = 1; step < 12; step++) {
+    for (let step = 1; step < poseCount; step++) {
       await control(2);
       const before = await state();
       if (before.step !== step || before.paused !== 1 || before.ticks !== 0)
@@ -369,7 +388,7 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
       if (label === 'phone') await save(`${label}-pose-${String(step + 1).padStart(2, '0')}`);
       evidence.push({ viewport: label, step: step + 1, ...held });
     }
-    console.log(`web Sun Salutation: all 12 poses, previews, controls and pause passed (${browser}, ${label})`);
+    console.log(`web Sun Salutation: ${poseCount} poses, previews, controls and pause passed (${browser}, ${label})`);
   }
   const performance = await evaluate(`(() => {
     const probe = window.__inbeAnimationProbe;
@@ -382,7 +401,9 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
       maxMs: sorted[sorted.length - 1],
       decodes: probe.decodes.length,
       decodeMeanMs: probe.decodes.reduce((sum, value) => sum + value, 0) / probe.decodes.length,
-      readbacks: probe.readbacks, uploads: probe.uploads
+      readbacks: probe.readbacks, uploads: probe.uploads,
+      meshTransfers: probe.meshTransfers, meshPixels: probe.meshPixels,
+      meshStacks: probe.meshStacks
     };
   })()`);
   console.log('web Sun Salutation frame timing: ' + JSON.stringify({ browser, ...performance }));

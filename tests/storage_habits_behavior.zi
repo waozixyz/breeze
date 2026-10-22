@@ -27,6 +27,9 @@
 #import, file "../src/storage/storage_habit_wallet.zi";
 #import, file "../src/storage/storage_habit_sync.zi";
 #import, file "../src/storage/sync_record_codec.zi";
+#import, file "../src/storage/sync_apply.zi";
+#import, file "../src/storage/sync_collections.zi";
+#import, file "../src/storage/sync_outbox.zi";
 #import, file "../src/storage/json.zi";
 
 c :: #system_library "c";
@@ -1084,8 +1087,66 @@ Check :: () -> s32 {
     test_average_goals_and_changes()
     test_stale_copy_keeps_synced_values()
     test_habit_wallet()
+    test_habit_shop_order_and_borrow_sync()
     test_zero_target_and_custom_coins()
     return failures
+}
+
+test_habit_shop_order_and_borrow_sync :: () {
+    root := make_root("habit-shop-order-sync")
+    check_true("open shop fixture", storage_init(root) != 0)
+    storage_close()
+    raw_exec(root, "INSERT INTO settings(user_id,key,value,updated_at) SELECT id,'habit_shop_borrow_limit','75',123 FROM users LIMIT 1;DELETE FROM meta WHERE key='sync_habit_settings_v1_done';INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,difficulty,coins_from) VALUES('walk',(SELECT id FROM users LIMIT 1),'Walk',1,2,3,0,0,0,1,0,0,1,0,20261001);INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('walk',20261005,1,1,0,300);INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at) VALUES('buy-first',(SELECT id FROM users LIMIT 1),1,'','First purchase',2,100,0,100),('buy-last',(SELECT id FROM users LIMIT 1),1,'','Last purchase',3,400,0,400);")
+    check_true("upgrade shop fixture", storage_init(root) != 0)
+    check_true("existing allowance and clock survive upgrade",
+        storage_get_setting_int("habit_shop_borrow_limit", 0) == 75 && read_db_count(
+        "SELECT updated_at FROM settings WHERE key='habit_shop_borrow_limit'") == 123)
+    check_int("existing allowance is queued once", read_db_count(
+        "SELECT COUNT(*) FROM sync_outbox WHERE entity_type='habit_setting' AND entity_id='habit_shop_borrow_limit'"), 1)
+    activity: [4]HabitCoinActivity
+    check_int("all coin movements load", storage_habit_activity_load(activity[:]), 3)
+    check_true("earnings and purchases interleave by their actual timestamp",
+        TextUntilNul(activity[0].name[:]) == "Last purchase" && activity[0].at == 400 &&
+        TextUntilNul(activity[1].name[:]) == "Walk" && activity[1].at == 300 &&
+        activity[1].local_date == 20261005 && activity[2].at == 100)
+    queued_sequence := read_db_count("SELECT rowid FROM sync_outbox WHERE entity_type='habit_setting' AND entity_id='habit_shop_borrow_limit'")
+    storage_set_setting_int("habit_shop_borrow_limit", 125)
+    check_true("an older receipt cannot clear a newer allowance", read_db_count(
+        "SELECT rowid FROM sync_outbox WHERE entity_type='habit_setting' AND entity_id='habit_shop_borrow_limit'") > queued_sequence)
+    check_true("borrow settings use their own encrypted collection",
+        storage_encrypted_collection_for_entity("habit_setting", "habit_shop_borrow_limit") ==
+        "private.inbe.v1.habit-settings" &&
+        storage_decrypted_array_name("private.inbe.v1.habit-settings") == "habit_settings")
+    buffer: [2048]u8
+    payload := synced_changes("habit_setting", "habit_shop_borrow_limit", "habit_settings", buffer[:])
+    check_true("sync includes the current allowance", contains(payload, "\"value\":\"125\""))
+    collection := "private.inbe.v1.habit-settings"
+    newest := "{\"key\":\"habit_shop_borrow_limit\",\"value\":\"250\",\"updated_at\":\"2030-01-01T00:00:00Z\"}"
+    check_true("receive another device's allowance",
+        storage_apply_decrypted_record(collection, "habit_shop_borrow_limit", newest) != 0 &&
+        storage_get_setting_int("habit_shop_borrow_limit", 0) == 250)
+    exec_db_sql("UPDATE settings SET value='300' WHERE key='habit_shop_borrow_limit';")
+    check_true("a pending local edit wins a timestamp tie",
+        storage_apply_decrypted_record(collection, "habit_shop_borrow_limit", newest) != 0 &&
+        storage_get_setting_int("habit_shop_borrow_limit", 0) == 300)
+    invalid := "{\"key\":\"habit_shop_borrow_limit\",\"value\":\"-1\",\"updated_at\":\"2031-01-01T00:00:00Z\"}"
+    check_true("invalid allowances cannot replace the saved amount",
+        storage_apply_decrypted_record(collection, "habit_shop_borrow_limit", invalid) != 0 &&
+        storage_get_setting_int("habit_shop_borrow_limit", 0) == 300)
+    foreign := "{\"key\":\"sync_private_key\",\"value\":\"999\",\"updated_at\":\"2031-01-01T00:00:00Z\"}"
+    check_true("shop records cannot write other settings",
+        storage_apply_decrypted_record(collection, "habit_shop_borrow_limit", foreign) != 0 &&
+        storage_get_setting_text("sync_private_key").count == 0)
+    exec_db_sql("DELETE FROM sync_outbox;")
+    storage_enqueue_all_sync_state()
+    check_int("full sync includes the allowance", read_db_count(
+        "SELECT COUNT(*) FROM sync_outbox WHERE entity_type='habit_setting' AND entity_id='habit_shop_borrow_limit'"), 1)
+    exec_db_sql("DELETE FROM sync_outbox;")
+    storage_close()
+    check_true("reopen upgraded shop", storage_init(root) != 0)
+    check_int("completed migration does not replay acknowledged settings", read_db_count(
+        "SELECT COUNT(*) FROM sync_outbox WHERE entity_type='habit_setting'"), 0)
+    storage_close()
 }
 
 test_zero_target_and_custom_coins :: () {

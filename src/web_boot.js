@@ -198,6 +198,7 @@ function runStorageSync(retryDelay) {
   var shouldLog = !!Module.__inbeStorageSyncLogSuccess;
   Module.__inbeStorageSyncLogSuccess = false;
   if (!Module.__inbeStorageSyncPromise) {
+    Module.__inbeStorageSyncRetry = 0;
     Module.__inbeStorageSyncPromise = new Promise(function(resolve) {
       Module.__inbeStorageSyncResolve = resolve;
     });
@@ -229,13 +230,35 @@ function runStorageSync(retryDelay) {
     }, retryDelay);
   }
 
+  function storageSyncFailed(error) {
+    var message = error && (error.message || error.name);
+    if (!message) message = String(error);
+    if (error && typeof error.errno === 'number') message += ' (errno ' + error.errno + ')';
+    Module.__inbeStorageSyncLastError = message;
+    Module.__inbeStorageSyncPending = true;
+    console.error('IDBFS save failed: ' + message);
+    // A package can replace a temporary file while IDBFS enumerates it.
+    // Start a fresh snapshot after that race; persistent failures still
+    // resolve false, leaving the dirty state available to an explicit save.
+    var transient = error && (error.errno === 44 || error.name === 'NotFoundError' || error.name === 'AbortError');
+    var attempt = Module.__inbeStorageSyncRetry || 0;
+    if (transient && attempt < 3) {
+      Module.__inbeStorageSyncRetry = attempt + 1;
+      if (Module.__inbeStorageSyncTimer) clearTimeout(Module.__inbeStorageSyncTimer);
+      Module.__inbeStorageSyncTimer = setTimeout(function() {
+        Module.__inbeStorageSyncTimer = 0;
+        runStorageSync(retryDelay);
+      }, 100 * Math.pow(2, attempt));
+      return;
+    }
+    finishStorageSync(false);
+  }
+
   try {
     FS.syncfs(false, function(err) {
       Module.__inbeStorageSyncing = false;
       if (err) {
-        Module.__inbeStorageSyncLastError = err && err.message ? err.message : String(err);
-        console.error('IDBFS save failed:', err);
-        finishStorageSync(false);
+        storageSyncFailed(err);
       } else {
         if (shouldLog) console.log('IDBFS synced');
         drainPendingStorageSync();
@@ -243,8 +266,7 @@ function runStorageSync(retryDelay) {
     });
   } catch (e) {
     Module.__inbeStorageSyncing = false;
-    console.error('IDBFS sync error:', e);
-    finishStorageSync(false);
+    storageSyncFailed(e);
   }
 
   return promise;

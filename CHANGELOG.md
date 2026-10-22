@@ -2,7 +2,9 @@
 
 ## [2.1.39] - 2026-10-22
 
-- Keep the Sun Salutation guide visible and its Back button working.
+- Fix account sync, Shop borrowing and history, Android key backups and Profile navigation.
+- Share photo storage between Diary and Photos and compress new uploads.
+- Keep practice guides visible, browser animations smooth and web saves recoverable.
 
 ## [2.1.38] - 2026-10-21
 

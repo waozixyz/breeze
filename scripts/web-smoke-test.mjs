@@ -377,6 +377,8 @@ function connectBidi(wsUrl) {
 }
 
 function eventText(event) {
+  if (event.method === 'log.entryAdded')
+    return event.params.text || '';
   if (event.method === 'Runtime.consoleAPICalled') {
     return (event.params.args || []).map(arg => arg.value ?? arg.description ?? '').join(' ');
   }
@@ -668,11 +670,14 @@ async function waitForStorageIdle(client) {
       expression: `(() => ({
         syncing: !!Module.__inbeStorageSyncing,
         pending: !!Module.__inbeStorageSyncPending,
-        timer: !!Module.__inbeStorageSyncTimer
+        timer: !!Module.__inbeStorageSyncTimer,
+        error: Module.__inbeStorageSyncLastError || ''
       }))()`,
       returnByValue: true
     });
     lastState = result.result?.value;
+    if (lastState && !lastState.syncing && !lastState.timer && lastState.error)
+      throw new Error('IDBFS save failed: ' + lastState.error);
     if (lastState && !lastState.syncing && !lastState.pending && !lastState.timer)
       return;
     await new Promise(resolveDelay => setTimeout(resolveDelay, 50));
@@ -1925,7 +1930,15 @@ try {
       'about:blank'
     ];
     const firefoxStderr = [];
-    chrome = spawn(browser, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: true, env: browserEnvironment });
+    // Linux Firefox needs a display for WebGL, even in headless mode.
+    // Start our own server after scrubbing the owner's display variables.
+    const displayRunner = process.platform === 'linux' ? findOnPath('xvfb-run') : '';
+    if (process.platform === 'linux' && !displayRunner)
+      throw new Error('Firefox checks require xvfb-run for a private graphics display');
+    const command = displayRunner || browser;
+    const argumentsForBrowser = displayRunner ?
+      ['-a', '-s', '-screen 0 1366x900x24', browser, ...args] : args;
+    chrome = spawn(command, argumentsForBrowser, { stdio: ['ignore', 'ignore', 'pipe'], detached: true, env: browserEnvironment });
     chrome.stderr.setEncoding('utf8');
     chrome.stderr.on('data', chunk => {
       firefoxStderr.push(chunk);
@@ -2007,6 +2020,17 @@ try {
     await client.send('Log.enable');
     await client.send('Page.enable');
     await client.send('Page.addScriptToEvaluateOnNewDocument', { source: musicAudioInstrumentation });
+    if (process.env.WEB_SMOKE_NO_WEBGL === '1') {
+      await client.send('Page.addScriptToEvaluateOnNewDocument', { source: `
+        for (const prototype of [HTMLCanvasElement.prototype, OffscreenCanvas.prototype]) {
+          const original = prototype.getContext;
+          prototype.getContext = function(kind, ...args) {
+            if (kind === 'webgl' || kind === 'webgl2' || kind === 'experimental-webgl') return null;
+            return original.call(this, kind, ...args);
+          };
+        }
+      ` });
+    }
     if (process.env.WEB_SMOKE_CPU_THROTTLE)
       await client.send('Emulation.setCPUThrottlingRate', {
         rate: Number(process.env.WEB_SMOKE_CPU_THROTTLE)
@@ -2042,6 +2066,9 @@ try {
       }
     }
   }
+  const rejected = client.events.map(eventText).filter(text => text.includes('APP: frame rejected'));
+  if (rejected.length)
+    throw new Error(`Application rejected ${rejected.length} UI frames: ${rejected.join(' | ')}`);
   console.log(`web smoke: PASS (${renderer})`);
 } catch (error) {
   failure = error;
