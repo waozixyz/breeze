@@ -199,15 +199,21 @@ LauncherAppWidgets :: (context: *void, module: *u8, function: *u8,
     card := WidgetDecodeButtonProps(arguments[1], *launcher_app_button_codec)
     for index: cast(s32)0..group.count - 1 {
         entry := group.entries[index]
-        if entry.route < 0 { continue }
         handle := card.key == Rules.AppReorderKey(TextUntilNul(entry.id[:]))
-        if !handle && card.key != Rules.AppCardKey(TextUntilNul(entry.id[:])) { continue }
-        // Only the base card captures native drag. The menu/update buttons
-        // retain their own keys and ordinary pointer behavior.
-        unused app_launcher_drag_card(group.owner, card, entry.route, group.owner.launcher_grid_view, handle)
+        if !handle { continue }
+        item := entry.route
+        if item < 0 {
+            for offer: cast(s32)0..NodeAppOfferCount() - 1 {
+                if NodeAppOfferName(offer) == TextUntilNul(entry.offer[:]) {
+                    item = -offer - 2
+                    break
+                }
+            }
+        }
+        app_launcher_drag_handle(group.owner, card, item, group.owner.launcher_grid_view)
         node := TreeSubmitted(group.owner.ui.session, TreeCurrentParent(group.owner.ui.session),
             card.key, WidgetKindButton)
-        TreeSetDragCapture(group.owner.ui.session, node, (handle || group.owner.launcher_editing) && !card.disabled)
+        TreeSetDragCapture(group.owner.ui.session, node, !card.disabled)
         break
     }
     return called
@@ -419,7 +425,7 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
         BuilderPrint(bytes, ",\"seen\"")
     }
     BuilderPrint(bytes, "]")
-    if route >= 0 { BuilderPrint(bytes, ",\"reorderable\":true") }
+    BuilderPrint(bytes, ",\"reorderable\":true")
     if !on_device {
         BuilderPrint(bytes, ",\"on_device\":false")
         if downloading { BuilderPrint(bytes, ",\"downloading\":true") }
@@ -451,7 +457,7 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
 }
 
 app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
-    offers: []s32, bounds: Rectangle, input: TextFieldInput, section_break: s32, columns: s32) -> bool {
+    bounds: Rectangle, input: TextFieldInput, section_break: s32, columns: s32) -> bool {
     group := *launcher_app_groups[section]
     group.index = section
     group.owner = app
@@ -473,8 +479,10 @@ app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
     Rules.AppsWriteQuoted(*document, LocaleActiveCode())
     BuilderPrint(*document, ",\"presentation\":{\"mode\":\"%\",\"section_break\":%,\"columns\":%,\"tile_class\":%,\"action_class\":%,\"muted_class\":%},\"children\":[",
         ifx app.launcher_grid_view then "icon" else "list", section_break, columns, KssClassId(KssMakeName("launcher-tile")), KssClassId(KssMakeName("launcher-action")), KssClassId(KssMakeName("launcher-muted")))
-    for route: routes { LauncherAppCatalogEntry(group, *document, route) }
-    for offer: offers { LauncherAppCatalogEntry(group, *document, -1, offer) }
+    for route: routes {
+        if route >= 0 { LauncherAppCatalogEntry(group, *document, route) }
+        else { LauncherAppCatalogEntry(group, *document, -1, -route - 2) }
+    }
     BuilderPrint(*document, "]}")
     body := BuilderFinish(document)
     if launcher_app_revisions[section] > 0 && body == launcher_app_catalog_bodies[section] {

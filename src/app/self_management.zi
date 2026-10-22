@@ -98,7 +98,12 @@ InbeRecoveryApply :: (context: *void, incoming: *Recovery.Recovery, choice: s32)
             return 0
         }
     }
-    enabled := storage_sync_enabled()
+    server: [256]u8
+    normalized: [256]u8
+    if !InbeManagementServer(context, server[:]) ||
+    !SyncNodeAddress(TextUntilNul(server[:]), normalized[:]) {
+        return 0
+    }
     data_choice := cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_ASK
     if choice == 1 {
         data_choice = cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_MERGE
@@ -112,11 +117,13 @@ InbeRecoveryApply :: (context: *void, incoming: *Recovery.Recovery, choice: s32)
     if saved != cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_OK {
         return 0
     }
-    storage_set_sync_enabled(enabled)
-    SelfReloadData(app, 0)
-    if enabled != 0 {
-        unused SelfRequestSync(app)
+    // Connecting the account is the person's consent to synchronize it.
+    // Persist the node shown by Self before scheduling the first request.
+    if !InbeManagementConnect(context) {
+        return 0
     }
+    SelfReloadData(app, 0)
+    unused SelfRequestSync(app)
     return 1
 }
 
@@ -126,6 +133,22 @@ InbeManagementServer :: (context: *void, output: []u8) -> bool {
         address = Self.SELF_DEFAULT_NODE
     }
     return CopyCString(address, output)
+}
+
+InbeManagementConnect :: (context: *void) -> bool {
+    server: [256]u8
+    normalized: [256]u8
+    if !InbeManagementServer(context, server[:]) ||
+    !SyncNodeAddress(TextUntilNul(server[:]), normalized[:]) {
+        return false
+    }
+    if StoredAccountMode() != AccountModeDelegate &&
+    (!SyncNodeAdd(TextUntilNul(normalized[:])) ||
+        !SyncNodePrefer(TextUntilNul(normalized[:]))) {
+        return false
+    }
+    storage_set_sync_enabled(1)
+    return true
 }
 
 InbeManagementSnapshot :: (context: *void, output: *Manage.Management) {
@@ -258,9 +281,13 @@ InbeManagementAction :: (context: *void, request: *Manage.ManagementRequest) -> 
         return SelfRequestSync(app)
     }
     if operation == "set_sync" {
-        storage_set_sync_enabled(ifx request.choice == 1 then 1 else 0)
         if request.choice == 1 {
+            if !InbeManagementConnect(context) {
+                return 0
+            }
             unused SelfRequestSync(app)
+        } else {
+            storage_set_sync_enabled(0)
         }
         return 1
     }

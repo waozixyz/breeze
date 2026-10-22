@@ -1,0 +1,79 @@
+#import, file "storage_test_support.zi";
+#import, file "../src/app/self_management.zi";
+#import, file "../src/storage/sync_async.zi";
+#import, file "../src/storage/sync_state.zi";
+#import, file "../src/storage/storage_settings.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/sync_nodes.zi";
+#import, file "../src/storage/sync_migrations.zi";
+#import, file "../src/app/app_route_state.zi";
+#import, file "../src/app/sync_safety.zi";
+#import, file "../src/app/route_types.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/core/types.zi";
+#import "self/recovery"
+#import "self/management"
+#import "std/c_string"
+#import "keys"
+
+// The host callbacks count automatic dispatches without opening a window or
+// sending any account data. Every database belongs to this disposable root.
+c :: #system_library "c";
+ConnectionRequests :: () -> s32 #foreign c;
+
+#program_export
+Check :: () -> s32 {
+    if support_begin("/tmp/inbe-sync-connection.") != 0 { return 100 }
+    root := make_root("connect")
+    check_true("open disposable profile", storage_init(root) != 0)
+    incoming: Recovery
+    check_true("generate disposable identity", CreateAccountKeys(*incoming.keys) != 0)
+    check_int("connecting saves the identity", InbeRecoveryApply(null, *incoming, 0), 1)
+    check_int("connecting enables sync without another approval", storage_sync_enabled(), 1)
+    check_true("connecting saves the displayed default node",
+        storage_get_setting_text("sync_server_url") == "https://api.waozi.xyz")
+    check_int("connecting requests the first sync", ConnectionRequests(), 1)
+
+    // An older connected profile could have the enable flag but no endpoint.
+    storage_set_setting_text("sync_server_url", "")
+    request: ManagementRequest
+    unused CopyCString("set_sync", request.operation[:])
+    request.choice = 1
+    check_int("enabling an old account repairs its endpoint", InbeManagementAction(null, *request), 1)
+    check_true("the repaired node is persisted",
+        storage_get_setting_text("sync_server_url") == "https://api.waozi.xyz")
+    operation: StoredOperation
+    check_true("Android's stored operation accepts the connected identity",
+        PrepareStoredOperation(*operation, "https://api.waozi.xyz", true))
+    CancelStoredOperation(*operation)
+
+    // A previously selected node stays selected when another account is
+    // explicitly connected. This never silently selects the public default.
+    check_true("select private node", SyncNodePrefer("https://sync.example"))
+    storage_set_sync_enabled(0)
+    check_int("reconnect", InbeRecoveryApply(null, *incoming, 0), 1)
+    check_true("reconnect retains the selected node",
+        storage_get_setting_text("sync_server_url") == "https://sync.example")
+    check_int("reconnect enables synchronization", storage_sync_enabled(), 1)
+    storage_set_setting_default_text("app_used_lists", "0")
+    storage_set_setting_default_text("app_used_leaderboard", "0")
+    storage_migrate_preinstalled_apps()
+    check_true("old untouched Lists default becomes preinstalled", storage_get_setting_text("app_used_lists") == "1")
+    check_true("old untouched Leaderboard default becomes preinstalled", storage_get_setting_text("app_used_leaderboard") == "1")
+    storage_set_setting_int("app_used_lists", 0)
+    storage_migrate_preinstalled_apps()
+    check_true("an explicit removal stays removed", storage_get_setting_text("app_used_lists") == "0")
+    app: InnerBreeze
+    app.breathing.screen = ScreenProfile
+    app.profile_friend_input_focused = 1
+    app.sync_alias_focused = 1
+    app.sync_server_url_focused = 1
+    route: AppRoute
+    route.screen = ScreenHabits
+    apply_route(*app, route)
+    check_true("leaving account and friend fields releases the sync guard",
+        app_background_sync_safe(*app) != 0)
+    RecoveryClear(*incoming)
+    storage_close()
+    return failures
+}

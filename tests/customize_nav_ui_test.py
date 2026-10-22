@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
         """Apps' cards in Pinned and in More apps, in order."""
         tree = driver.tree()
         parents = {node["index"]: node for node in tree}
-        more_top = [node for node in tree if node["label"] == "More apps"][0]["y"]
+        more_top = [node for node in tree if node["kind"] == "separator"][0]["y"]
         def in_scroll(node):
             # Each section's shared Apps group sits inside the page's scroll.
             parent = parents.get(node["parent"])
@@ -90,7 +90,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
                 parent = parents.get(parent["parent"])
             return False
         grid = [node for node in tree if node["kind"] == "button" and node["visible"]
-                and in_scroll(node) and node["label"] not in ("Install", "Uninstall", "App options")]
+                and in_scroll(node) and node["label"] not in ("Install", "Uninstall", "Download", "App options", "Move app")]
         return ([node for node in grid if node["y"] < more_top],
                 [node for node in grid if node["y"] >= more_top])
 
@@ -107,9 +107,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
                   "launcher_favorite_count": 2, "launcher_favorite_0": 12, "launcher_favorite_1": 1,
                   "bottom_nav_route_count": 4, "bottom_nav_route_0": 12,
                   "bottom_nav_route_1": 1, "bottom_nav_route_2": 2, "bottom_nav_route_3": 4}
+        for bit, name in enumerate(("lists", "habits", "practices", "diary", "lumi", "leaderboard")):
+            values["app_used_" + name] = int(bool(int(values["enabled_apps"]) & (1 << bit)))
         for key, value in values.items():
-            db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
-                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
+            db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,2) "
+                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", (user, key, str(value)))
 
     with application("app") as (window, log):
         # Apps, at the end of the navigation, opens with a held press.
@@ -127,7 +129,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-entry-") as temporary:
         # A card moves from Pinned to More; no separate editing or pin control.
         pinned, more = cards()
         assert [card["label"] for card in pinned] == ["Lumi", "Habits"], pinned
-        driver.drag(UiDriver.center(pinned[0]), UiDriver.center(more[0]), steps=12)
+        handle = next(node for node in driver.find(label="Move app", role="button", visible=True)
+                      if abs(node["y"] + node["height"] / 2 - pinned[0]["y"] - pinned[0]["height"] / 2) < 2)
+        driver.drag(UiDriver.center(handle), UiDriver.center(more[0]), steps=12)
         deadline = time.monotonic() + 5
         while settings()["launcher_favorite_count"] != "1":
             assert time.monotonic() < deadline, "Dragging to More did not remove the pin"

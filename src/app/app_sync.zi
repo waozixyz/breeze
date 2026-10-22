@@ -212,11 +212,24 @@ app_social_record_result :: (result: s32) {
     }
 }
 
+// A failure before the first network poll is still a completed attempt.
+// Record its real cause and consume a manual retry, so it neither remains
+// labelled Queued nor spins every frame without respecting the backoff.
+app_sync_start_failed :: (result: s32) {
+    g_sync.sync_running = 0
+    g_sync.retry_requested = false
+    app_sync_record_result(ifx result == SYNC_OK then SYNC_REQUEST_FAILED else result)
+}
+
 #program_export
 app_sync_status_key :: () -> string {
     status: SyncStatus
     if storage_sync_enabled() == 0 {
         return SyncStatusKeyFor(false, false, 0, false, status)
+    }
+    url: [256]u8
+    if app_sync_url(*url[0], 256) == 0 {
+        return "sync_server_url_invalid"
     }
     if app_sync_loading() != 0 {
         return SyncStatusKeyFor(true, true, 0, false, status)
@@ -831,14 +844,14 @@ app_modal_type_name :: (type: ModalType) -> string {
 }
 
 app_sync_record_input :: (app: *InnerBreeze, now: float64) {
-    if app.ui.pointer_active {
+    if app.ui.pointer_active || app.ui.keyboard_active {
         g_sync.last_input_at = now
     }
 }
 
 app_sync_user_idle :: (app: *InnerBreeze, now: float64) -> s32 {
     return ifx SyncUserIdle(now, g_sync.last_input_at,
-        app.ui.pointer_active) then 1 else 0
+        app.ui.pointer_active || app.ui.keyboard_active) then 1 else 0
 }
 
 app_sync_ui_update_safe :: (app: *InnerBreeze, now: float64) -> s32 {
@@ -1182,7 +1195,7 @@ app_sync_now :: (app: *InnerBreeze) -> s32 {
         args = cast(*SyncWorkerArgs)SyncWorkerAlloc(cast(usize)size_of(SyncWorkerArgs))
         if args == null {
             sync_lock()
-            g_sync.sync_running = 0
+            app_sync_start_failed(SYNC_REQUEST_FAILED)
             sync_unlock()
             return 0
         }
@@ -1191,7 +1204,7 @@ app_sync_now :: (app: *InnerBreeze) -> s32 {
         if SyncStart(app_sync_worker, cast(*void)args) == 0 {
             SyncWorkerFree(cast(*void)args)
             sync_lock()
-            g_sync.sync_running = 0
+            app_sync_start_failed(SYNC_REQUEST_FAILED)
             sync_unlock()
             SyncLog(LOG_WARNING, "SYNC: failed to start background sync thread")
             return 0
@@ -1205,7 +1218,7 @@ app_sync_now :: (app: *InnerBreeze) -> s32 {
         SyncLog(LOG_INFO, "SYNC: starting background sync")
         if !BeginStoredSync(*g_sync_operation, AppTextFromCString(*url[0], 256),
             NetworkTransport(*g_sync_transfer)) {
-            g_sync.sync_running = 0
+            app_sync_start_failed(g_sync_operation.result)
             SyncLog(LOG_WARNING, "SYNC: failed to start background sync")
             return 0
         }

@@ -21,7 +21,14 @@
 #import, file "../cells/module_host.zi";
 #import, file "../cells/catalog.zi";
 #import, file "../cells/package_manager.zi";
+#import, file "../cells/package_files.zi";
 #import, file "../cells/node_apps.zi";
+#import, file "../storage/storage_settings.zi";
+#import, file "../storage/temporary_data.zi";
+#import "std/vec"
+#import "std/text_buffer"
+#import "separator_props"
+#import "separator_widget"
 #import "button_props"
 #import "button_widget"
 #import "control_props"
@@ -56,43 +63,6 @@ ListIcon :: #import "mingcute/mingcute_regular_list_check";
 c :: #system_library "c";
 GetTime :: () -> float64 #foreign c;
 
-launcher_menu_route: s32 = -1;
-launcher_menu_anchor: Vector2;
-
-app_launcher_draw_menu :: (app: *InnerBreeze) {
-    if launcher_menu_route < 0 { return }
-    items: [3]ContextMenuItem
-    items[0] = ContextMenuItem.{.id = 3,
-        .label = LocaleText(ifx app_launcher_is_favorite(app, launcher_menu_route) then "launcher_unpin" else "launcher_pin")}
-    count: s32 = 1
-    if LauncherShortcutSupported() {
-        items[count] = ContextMenuItem.{.id = 1, .label = LocaleText("launcher_install_system")}
-        count += 1
-    }
-    items[count] = ContextMenuItem.{.id = 2, .label = LocaleText("launcher_uninstall")}
-    count += 1
-    menu: ContextMenuProps
-    menu.key = KeyHash("inbe/apps/options")
-    menu.open = true
-    menu.x = launcher_menu_anchor.x
-    menu.y = launcher_menu_anchor.y
-    menu.scale = MetricsScale()
-    menu.escape = TextInputKeyPressed(TextInputKeyEscape)
-    result := ContextMenu(app.ui.session, menu, items[:count])
-    route := launcher_menu_route
-    if !result.open { launcher_menu_route = -1 }
-    if result.activated_id == 1 {
-        app_launcher_pin(app, route)
-    } else if result.activated_id == 2 {
-        app_launcher_uninstall(app, route)
-    } else if result.activated_id == 3 {
-        app.launcher_favorite_count = LauncherToggleFavorite(
-            app.launcher_favorites[:], app.launcher_favorite_count, route)
-        app_launcher_pins_changed(app)
-        app_block_current_click(app)
-    }
-}
-
 using AppNavRoute;
 using ButtonEmphasis;
 using ButtonTone;
@@ -114,230 +84,106 @@ app_launcher_update_drag :: (app: *InnerBreeze, point: Vector2) {
     }
 }
 
-// Keep the ordinary Button face and click behavior, while its retained press
-// can move to another favorite slot without becoming a content scroll.
-app_launcher_drag_card :: (app: *InnerBreeze, card: ButtonProps,
-    route: s32, vertical: bool, handle: bool = false) -> bool {
-    key := ifx card.key != cast(u64)0 then card.key else cast(u64)card.id
+// Only the explicit handle captures a drag. The card retains its ordinary
+// click and scroll gestures, even after another app has been moved.
+app_launcher_drag_handle :: (app: *InnerBreeze, card: ButtonProps,
+    route: s32, vertical: bool) {
+    key := card.key
     previous := TreePrevious(app.ui.session, TreeCurrentParent(app.ui.session),
         key, WidgetKindButton)
     drag := TreeTakeDragAt(app.ui.session, previous)
     if drag.started {
-        if handle { app.launcher_editing = true }
-        app.launcher_hold_at = GetTime()
+        app.launcher_editing = true
         app.launcher_drag_key = key
         app.launcher_drag_route = route
+        unused AppCopyText(LauncherLibraryName(route), app.launcher_drag_name[:])
         app.launcher_drag_moving = false
         app.launcher_drag_released = false
         app.launcher_drag_vertical = vertical
         app.launcher_drag_bounds = card.bounds
         app.launcher_drag_origin = Vector2.{drag.x, drag.y}
         app.launcher_drag_grab = Vector2.{drag.grab_x, drag.grab_y}
-        if handle {
-            row := TreePrevious(app.ui.session, TreeCurrentParent(app.ui.session), key - cast(u64)7, WidgetKindButton)
-            if row >= 0 {
-                app.launcher_drag_bounds = TreeNodeAt(app.ui.session, row).bounds
-                app.launcher_drag_grab = Vector2.{drag.x - app.launcher_drag_bounds.x, drag.y - app.launcher_drag_bounds.y}
-            }
-        }
-    }
-    if drag.active && app.launcher_drag_key == key && !app.launcher_editing {
-        dx := drag.x - app.launcher_drag_origin.x
-        dy := drag.y - app.launcher_drag_origin.y
-        threshold := cast(float32)AppScale(6)
-        if dx * dx + dy * dy >= threshold * threshold {
-            app.launcher_drag_key = 0
-            return false
-        }
-        AppRequestSmoothFrames(2)
-        if GetTime() - app.launcher_hold_at >= 1.0 {
-            app.launcher_editing = true
-            TreeCapturePressAt(app.ui.session, previous)
+        row := TreePrevious(app.ui.session, TreeCurrentParent(app.ui.session), key - cast(u64)7, WidgetKindButton)
+        if row >= 0 {
+            app.launcher_drag_bounds = TreeNodeAt(app.ui.session, row).bounds
+            app.launcher_drag_grab = Vector2.{drag.x - app.launcher_drag_bounds.x, drag.y - app.launcher_drag_bounds.y}
         }
     }
     if (drag.active || drag.ended) && app.launcher_drag_key == key {
         app_launcher_update_drag(app, Vector2.{drag.x, drag.y})
         app.launcher_drag_released = drag.ended
-        return drag.ended && !app.launcher_editing && !app.launcher_drag_moving &&
-        TreeHoveredAt(app.ui.session, previous)
-    }
-    return false
-}
-
-// Every app card has the same click and drag behavior in both sections.
-app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
-    bounds: Rectangle, vertical: bool) {
-    blocked := app.blocked_input_frame == app.breathing.frame
-    card: ButtonProps
-    card.id = 6900 + route
-    card.bounds = bounds
-    card.label = app_nav_route_label(route)
-    card.image = bottom_nav_route_image(route)
-    card.icon_shape = app_nav_route_shape(route)
-    if vertical { card.icon_placement = cast(IconPlacement)IconPlacementAbove }
-    else { card.content_alignment = cast(ContentAlignment)ContentAlignmentStart }
-    card.class_name = KssClassId(KssMakeName("launcher-tile"))
-    card.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    card.selected = bottom_nav_route_active(app, route)
-    if card.selected {
-        card.tone = cast(ButtonTone)ButtonToneAccent
-        card.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    }
-    card.disabled = blocked
-    card.fit_content = true
-    // An app the node offers has a card only while it is installed; it is
-    // on this device once its package is, and until then shows the download
-    // symbol, and its progress while it downloads.
-    node_slot := AppNavNodeSlot(route)
-    installed := (app.enabled_apps & app_nav_route_bit(route)) != 0 || node_slot >= 0
-    on_device := installed && (node_slot < 0 || NodeAppInstalled(node_slot))
-    downloading := installed && !on_device && PackagePending(NodeAppIndex(node_slot))
-    tapped := !card.disabled && app_launcher_drag_card(app, card, route, vertical)
-    activated := Button(app.ui.session, card) != 0 || tapped
-    node := TreeSubmitted(app.ui.session, TreeCurrentParent(app.ui.session),
-        cast(u64)card.id, WidgetKindButton)
-    TreeSetDragCapture(app.ui.session, node, app.launcher_editing)
-    // An installed app shows the size of its package, bundled or from the node.
-    bytes: s64 = 0
-    if AppNavNodeSlot(route) >= 0 {
-        bytes = NodeAppPackageSize(AppNavNodeSlot(route))
-    } else {
-        bit := app_nav_route_bit(route)
-        for index: cast(s32)1..PackageCount - 1 {
-            if PackageBit(index) == bit {
-                bytes = CellsPackageSize(index)
-                break
-            }
-        }
-    }
-    size_text: [32]u8
-    shown := AppBundleSizeText(bytes, size_text[:])
-    if downloading {
-        percent := PackageProgress(NodeAppIndex(node_slot), bytes)
-        if percent >= 0 {
-            FormatLocaleCount(*size_text[0], cast(s64)size_text.count, "launcher_downloading_progress", percent)
-        } else {
-            unused AppCopyText(LocaleText("update_downloading"), size_text[:])
-        }
-        shown = true
-        // The percentage moves while nothing else on the screen does.
-        AppRequestSmoothFrames(2)
-    }
-    if shown {
-        size_bounds := card.bounds
-        size_bounds.x += cast(float32)AppScale(ifx vertical then 8 else 48)
-        size_bounds.y += bounds.height - cast(float32)AppScale(16)
-        size_bounds.width -= cast(float32)AppScale(ifx vertical then 16 else 56)
-        size_bounds.height = cast(float32)AppScale(12)
-        Text(app.ui.session, TextProps.{
-                .text = FrameTextHold(*app.ui.frame_text,
-                AppTextFromCString(*size_text[0], 32)),
-                .font = AppScale(11), .wrap = cast(TextWrap)TextWrapNone,
-                .align = cast(TextAlign)(ifx vertical then TextAlignCenter else TextAlignStart),
-                .bounds = size_bounds,
-                .class_name = KssClassId(KssMakeName("launcher-muted"))})
-    }
-    if activated && !app.launcher_drag_moving {
-        app_launcher_activate(app, route)
-    }
-    // The options or install symbol sits inside the card's top-right corner.
-    // It is submitted after the card, so a tap on it reaches only the action.
-    action_size := AppScale(36)
-    action_inset := AppScale(4)
-    action: ButtonProps
-    action.id = 7300 + route
-    action.bounds = Rectangle.{
-        bounds.x + bounds.width - cast(float32)(action_size + action_inset),
-        bounds.y + cast(float32)action_inset,
-        cast(float32)action_size, cast(float32)action_size}
-    action.label = LocaleText(ifx on_device then "launcher_app_options" else "launcher_install")
-    action.icon_only = true
-    if on_device {
-        action.icon_shape = "S3rr:M12 5H12.01M12 12H12.01M12 19H12.01"
-    } else {
-        action.icon_shape = "S1.6rr:M12 3V15M7 10L12 15L17 10M5 20H19"
-    }
-    action.class_name = KssClassId(KssMakeName("launcher-action"))
-    action.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    if card.selected {
-        action.tone = cast(ButtonTone)ButtonToneAccent
-    }
-    action.fit_content = true
-    action.disabled = blocked || downloading
-    if Button(app.ui.session, action) != 0 {
-        if on_device {
-            launcher_menu_route = route
-            launcher_menu_anchor = Vector2.{action.bounds.x, action.bounds.y + action.bounds.height}
-        } else if installed {
-            // Its package downloads; the card opens the app once it is here.
-            unused app_nav_node_app_ready(app, node_slot)
-        } else {
-            unused app_launcher_install(app, route)
-        }
     }
 }
 
-// An app the node offers that is not installed: a tap or its download symbol
-// installs it and its card opens it from then on.
-app_launcher_draw_offer :: (app: *InnerBreeze, offer: s32, bounds: Rectangle) {
-    blocked := app.blocked_input_frame == app.breathing.frame
-    name := NodeAppOfferName(offer)
-    card: ButtonProps
-    card.id = 7400 + offer
-    card.bounds = bounds
-    card.label = NodeAppTitle(name)
-    card.icon_shape = NODE_APP_GENERIC_ICON
-    card.icon_placement = cast(IconPlacement)IconPlacementAbove
-    card.class_name = KssClassId(KssMakeName("launcher-tile"))
-    card.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    card.disabled = blocked
-    card.fit_content = true
-    if Button(app.ui.session, card) != 0 {
-        slot := app_launcher_install_offer(app, name)
-        if slot >= 0 {
-            app_launcher_activate(app, AppNavNodeRoute(slot))
+// Negative items refer to offers, so moving an undownloaded app neither
+// reserves an installed slot nor starts a download.
+LauncherLibraryName :: (item: s32) -> string {
+    return ifx item >= 0 then LauncherRouteName(item) else NodeAppOfferName(-item - 2)
+}
+
+LauncherLibraryRank :: (order: string, name: string) -> s32 {
+    start: s64 = 0
+    rank: s32 = 0
+    while start < order.count {
+        end := start
+        while end < order.count && order[end] != cast(u8)44 { end += 1 }
+        if order[start:end] == name { return rank }
+        rank += 1
+        start = end + 1
+    }
+    return 2147483647
+}
+
+LauncherLibrarySort :: (app: *InnerBreeze, items: []s32) {
+    order := AppTextFromCString(*app.launcher_library_order[0], 4096)
+    for index: cast(s32)1..cast(s32)items.count - 1 {
+        item := items[index]
+        rank := LauncherLibraryRank(order, LauncherLibraryName(item))
+        at := index
+        while at > 0 && LauncherLibraryRank(order, LauncherLibraryName(items[at - 1])) > rank {
+            items[at] = items[at - 1]
+            at -= 1
+        }
+        items[at] = item
+    }
+}
+
+LauncherLibraryMove :: (app: *InnerBreeze, items: []s32, item: s32, target: s32) {
+    ordered: [LAUNCHER_APP_COUNT + NODE_APP_OFFERS]s32
+    count: s32 = 0
+    for current: items {
+        if current != item {
+            ordered[count] = current
+            count += 1
         }
     }
-    size_text: [32]u8
-    if AppBundleSizeText(NodeAppOfferSize(offer), size_text[:]) {
-        Text(app.ui.session, TextProps.{
-                .text = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*size_text[0], 32)),
-                .font = AppScale(11), .wrap = cast(TextWrap)TextWrapNone,
-                .align = cast(TextAlign)TextAlignCenter,
-                .bounds = Rectangle.{bounds.x + cast(float32)AppScale(8),
-                    bounds.y + bounds.height - cast(float32)AppScale(16),
-                    bounds.width - cast(float32)AppScale(16), cast(float32)AppScale(12)},
-                .class_name = KssClassId(KssMakeName("launcher-muted"))})
+    if target < 0 { target = 0 }
+    if target > count { target = count }
+    at := count
+    while at > target {
+        ordered[at] = ordered[at - 1]
+        at -= 1
     }
-    action_size := AppScale(36)
-    action_inset := AppScale(4)
-    action: ButtonProps
-    action.id = 7450 + offer
-    action.bounds = Rectangle.{
-        bounds.x + bounds.width - cast(float32)(action_size + action_inset),
-        bounds.y + cast(float32)action_inset,
-        cast(float32)action_size, cast(float32)action_size}
-    action.label = LocaleText("launcher_install")
-    action.icon_only = true
-    action.icon_shape = "S1.6rr:M12 3V15M7 10L12 15L17 10M5 20H19"
-    action.class_name = KssClassId(KssMakeName("launcher-action"))
-    action.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    action.fit_content = true
-    action.disabled = blocked
-    if Button(app.ui.session, action) != 0 {
-        unused app_launcher_install_offer(app, name)
+    ordered[target] = item
+    count += 1
+    text: Vec(u8)
+    for index: cast(s32)0..count - 1 {
+        if index > 0 { BuilderPrint(*text, ",") }
+        BuilderPrint(*text, "%", LauncherLibraryName(ordered[index]))
     }
+    value := BuilderFinish(text)
+    unused AppCopyText(value, app.launcher_library_order[:])
+    if !DataTemporary() { storage_set_setting_text("launcher_library_order", value) }
+    PackageFree(value)
 }
 
 #program_export
 app_draw_launcher :: (app: *InnerBreeze) {
     app.launcher_panel_node = -1
     if !app.launcher_open || app.host_feature != 0 {
-        launcher_menu_route = -1
         return
     }
     if app.modal.active != 0 {
-        launcher_menu_route = -1
         app_launcher_close(app)
         return
     }
@@ -347,7 +193,23 @@ app_draw_launcher :: (app: *InnerBreeze) {
     }
     pointer := PointerSample(app.ui.session)
     if app.launcher_drag_key != 0 {
+        if app.launcher_drag_route < 0 {
+            found := false
+            for offer: cast(s32)0..NodeAppOfferCount() - 1 {
+                if NodeAppOfferName(offer) == AppTextFromCString(*app.launcher_drag_name[0], 25) {
+                    app.launcher_drag_route = -offer - 2
+                    found = true
+                    break
+                }
+            }
+            if !found {
+                app.launcher_editing = false
+                app.launcher_drag_key = 0
+                app.launcher_drag_moving = false
+            }
+        }
         if !pointer.down && !pointer.released {
+            app.launcher_editing = false
             app.launcher_drag_key = 0
             app.launcher_drag_moving = false
         } else {
@@ -363,7 +225,6 @@ app_draw_launcher :: (app: *InnerBreeze) {
     overlay.dismiss_disabled = app.breathing.screen == ScreenAppSelection
     result := DismissibleOverlay(app.ui.session, overlay)
     if result.closed {
-        launcher_menu_route = -1
         app_launcher_close(app)
         return
     }
@@ -380,19 +241,6 @@ app_draw_launcher :: (app: *InnerBreeze) {
             .bounds = Rectangle.{cast(float32)x, cast(float32)title_y,
                 cast(float32)width, cast(float32)AppScale(40)},
             .class_name = KssClassId(KssMakeName("launcher-title"))})
-    if app.launcher_editing {
-        done: ButtonProps
-        done.key = KeyHash("inbe/apps/done")
-        done.label = LocaleText("done_button")
-        done.bounds = Rectangle.{cast(float32)(x + width - AppScale(96)), cast(float32)title_y,
-            cast(float32)AppScale(96), cast(float32)AppScale(40)}
-        if Button(app.ui.session, done) != 0 {
-            app.launcher_editing = false
-            app.launcher_drag_key = 0
-            app.launcher_drag_moving = false
-            app_block_current_click(app)
-        }
-    }
     search_y := title_y + AppScale(56)
     typed: [128]u8
     field: TextFieldProps
@@ -414,7 +262,6 @@ app_draw_launcher :: (app: *InnerBreeze) {
     field.input = SampleTextFieldInput(app.launcher_search_focused, typed[:])
     searched := TextField(app.ui.session, field)
     if searched.edit.changed {
-        launcher_menu_route = -1
         unused AppReplaceText(app.launcher_search[:], searched.edit.start,
             searched.edit.end, searched.edit.replacement)
         app.launcher_scroll = 0
@@ -463,7 +310,7 @@ app_draw_launcher :: (app: *InnerBreeze) {
         }
     }
     pinned: [LAUNCHER_APP_COUNT]s32
-    more: [LAUNCHER_APP_COUNT]s32
+    more: [LAUNCHER_APP_COUNT + NODE_APP_OFFERS]s32
     pinned_count: s32 = 0
     more_count: s32 = 0
     for index: cast(s32)0..app.launcher_favorite_count - 1 {
@@ -481,15 +328,14 @@ app_draw_launcher :: (app: *InnerBreeze) {
             more_count += 1
         }
     }
-    offers: [NODE_APP_OFFERS]s32
-    offer_count: s32 = 0
     for offer: cast(s32)0..NodeAppOfferCount() - 1 {
         name := NodeAppOfferName(offer)
         if NodeAppOfferShown(offer) && NodeAppSlotFor(name) < 0 && LauncherMatches(NodeAppTitle(name), query) {
-            offers[offer_count] = offer
-            offer_count += 1
+            more[more_count] = -offer - 2
+            more_count += 1
         }
     }
+    LauncherLibrarySort(app, more[:more_count])
     tile_height := AppScale(64)
     gap := AppScale(4)
     columns: s32 = 1
@@ -502,12 +348,12 @@ app_draw_launcher :: (app: *InnerBreeze) {
     cells := MeasureGrid(GridProps.{.columns = columns, .gap = gap,
             .bounds = Rectangle.{cast(float32)x, 0.0, cast(float32)width, 0.0}})
     pinned_rows := GridRowCount(cells, pinned_count)
-    more_rows := GridRowCount(cells, more_count + offer_count)
+    more_rows := GridRowCount(cells, more_count)
     pinned_height := AppScale(36) + pinned_rows * (tile_height + gap)
     more_height := AppScale(36) + more_rows * (tile_height + gap)
-    if more_count + offer_count == 0 { more_height += AppScale(64) }
+    if more_count == 0 { more_height += AppScale(64) }
     content_height := pinned_height + more_height
-    if match_count + offer_count == 0 { content_height += AppScale(64) }
+    if pinned_count + more_count == 0 { content_height += AppScale(64) }
     bottom_dock := app_content_bottom_reserved(app)
     body_bottom := app.ui.view_height - bottom_dock - AppScale(12)
     body_y := search_y + AppScale(68)
@@ -530,6 +376,7 @@ app_draw_launcher :: (app: *InnerBreeze) {
     pinned_bounds: Rectangle
     pinned_cells: GridMetrics
     more_bounds: Rectangle
+    more_cells: GridMetrics
     pinned_slots: [LAUNCHER_APP_COUNT]Rectangle
     library_bounds: Rectangle
     // Typing goes to the search field or else to a field in an app's Properties.
@@ -544,11 +391,16 @@ app_draw_launcher :: (app: *InnerBreeze) {
             cast(float32)width, cast(float32)pinned_height}
         for section: cast(s32)0..cast(s32)1 {
             count := ifx section == 0 then pinned_count else more_count
-            Text(app.ui.session, TextProps.{
-                    .text = LocaleText(ifx section == 0 then "launcher_favorites" else "launcher_all_apps"),
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                        cast(float32)width, cast(float32)AppScale(28)},
-                    .class_name = KssClassId(KssMakeName("launcher-heading"))})
+            if section == 0 {
+                Text(app.ui.session, TextProps.{.text = LocaleText("launcher_favorites"),
+                        .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                            cast(float32)width, cast(float32)AppScale(28)},
+                        .class_name = KssClassId(KssMakeName("launcher-heading"))})
+            } else {
+                Separator(app.ui.session, SeparatorProps.{.key = KeyHash("inbe/apps/library-divider"),
+                        .bounds = Rectangle.{cast(float32)x, cast(float32)y,
+                            cast(float32)width, cast(float32)AppScale(32)}})
+            }
             if section == 1 {
                 more_bounds = Rectangle.{cast(float32)x, cast(float32)y,
                     cast(float32)width, cast(float32)more_height}
@@ -559,23 +411,20 @@ app_draw_launcher :: (app: *InnerBreeze) {
             section_cells := MeasureGrid(GridProps.{.columns = columns, .gap = gap,
                     .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, 0.0}})
             if section == 0 { pinned_cells = section_cells }
+            else { more_cells = section_cells }
             for index: cast(s32)0..count - 1 {
                 route := ifx section == 0 then pinned[index] else more[index]
                 bounds := GridCellBounds(section_cells, index, tile_height)
                 if section == 0 { pinned_slots[index] = bounds }
             }
-            group_offers := offers[:ifx section == 1 then offer_count else 0]
-            group_count := count + cast(s32)group_offers.count
-
-            count = group_count
             y += GridRowCount(section_cells, count) * (tile_height + gap)
         }
-        library_routes: [LAUNCHER_APP_COUNT]s32
+        library_routes: [LAUNCHER_APP_COUNT + NODE_APP_OFFERS]s32
         for index: cast(s32)0..pinned_count - 1 { library_routes[index] = pinned[index] }
         for index: cast(s32)0..more_count - 1 { library_routes[pinned_count + index] = more[index] }
         unused app_launcher_shared_group(app, 0, library_routes[:pinned_count + more_count],
-            offers[:offer_count], library_bounds, apps_input, pinned_count, columns)
-        if match_count + offer_count == 0 {
+            library_bounds, apps_input, pinned_count, columns)
+        if pinned_count + more_count == 0 {
             Text(app.ui.session, TextProps.{.text = LocaleText("launcher_no_results"),
                     .bounds = Rectangle.{cast(float32)x, cast(float32)y,
                         cast(float32)width, cast(float32)AppScale(56)},
@@ -601,7 +450,7 @@ app_draw_launcher :: (app: *InnerBreeze) {
         }
         if app.launcher_drag_released {
             if target >= 0 {
-                if app_launcher_install(app, app.launcher_drag_route) {
+                if app.launcher_drag_route >= 0 && app_launcher_install(app, app.launcher_drag_route) {
                     app.launcher_favorite_count = LauncherPlaceFavorite(
                         app.launcher_favorites[:], app.launcher_favorite_count,
                         app.launcher_drag_route, target)
@@ -609,13 +458,17 @@ app_draw_launcher :: (app: *InnerBreeze) {
                 }
             } else if query.count == 0 && scrolled.opened &&
             PointInBounds(point.x, point.y, scrolled.viewport) &&
-            PointInBounds(point.x, point.y, more_bounds) &&
-            app_launcher_is_favorite(app, app.launcher_drag_route) {
-                app.launcher_favorite_count = LauncherToggleFavorite(
-                    app.launcher_favorites[:], app.launcher_favorite_count,
-                    app.launcher_drag_route)
-                app_launcher_pins_changed(app)
+            PointInBounds(point.x, point.y, more_bounds) {
+                if app.launcher_drag_route >= 0 && app_launcher_is_favorite(app, app.launcher_drag_route) {
+                    app.launcher_favorite_count = LauncherToggleFavorite(
+                        app.launcher_favorites[:], app.launcher_favorite_count,
+                        app.launcher_drag_route)
+                    app_launcher_pins_changed(app)
+                }
+                target = GridIndexAt(more_cells, point.x, point.y, tile_height, more_count)
+                LauncherLibraryMove(app, more[:more_count], app.launcher_drag_route, target)
             }
+            app.launcher_editing = false
             app.launcher_drag_key = 0
             app.launcher_drag_moving = false
             app_block_current_click(app)
@@ -636,9 +489,14 @@ app_draw_launcher :: (app: *InnerBreeze) {
             }
             preview: ButtonProps
             preview.id = 7290
-            preview.label = app_nav_route_label(app.launcher_drag_route)
-            preview.image = bottom_nav_route_image(app.launcher_drag_route)
-            preview.icon_shape = app_nav_route_shape(app.launcher_drag_route)
+            if app.launcher_drag_route >= 0 {
+                preview.label = app_nav_route_label(app.launcher_drag_route)
+                preview.image = bottom_nav_route_image(app.launcher_drag_route)
+                preview.icon_shape = app_nav_route_shape(app.launcher_drag_route)
+            } else {
+                preview.label = NodeAppTitle(LauncherLibraryName(app.launcher_drag_route))
+                preview.icon_shape = NODE_APP_GENERIC_ICON
+            }
             preview.bounds = app.launcher_drag_bounds
             preview.bounds.x = point.x - app.launcher_drag_grab.x
             preview.bounds.y = point.y - app.launcher_drag_grab.y
@@ -652,9 +510,9 @@ app_draw_launcher :: (app: *InnerBreeze) {
             unused Button(app.ui.session, preview)
         }
     } else if app.launcher_drag_released {
+        app.launcher_editing = false
         app.launcher_drag_key = 0
     }
-    app_launcher_draw_menu(app)
     unused End(app.ui.session)
     if app.launcher_guide_seen == 0 {
         steps: [3]GuideOverlayStep
@@ -679,7 +537,7 @@ app_draw_launcher :: (app: *InnerBreeze) {
             save_settings(app)
             app_block_current_click(app)
         }
-    } else if launcher_menu_route < 0 {
+    } else {
         app_launcher_ask_package_updates(app)
     }
 }

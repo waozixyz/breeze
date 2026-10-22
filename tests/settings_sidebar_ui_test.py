@@ -105,9 +105,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-settings-") as temporary, contextl
                   "launcher_favorite_count": 2, "launcher_favorite_0": 12, "launcher_favorite_1": 1,
                   "bottom_nav_route_count": 4, "bottom_nav_route_0": 12,
                   "bottom_nav_route_1": 1, "bottom_nav_route_2": 2, "bottom_nav_route_3": 4}
+        for bit, name in enumerate(("lists", "habits", "practices", "diary", "lumi", "leaderboard")):
+            values["app_used_" + name] = int(bool(int(values["enabled_apps"]) & (1 << bit)))
         for key, value in values.items():
-            db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
-                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
+            db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,2) "
+                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", (user, key, str(value)))
         db.execute("INSERT INTO elist_lists(id,user_id,title,sort_order,deleted_at,updated_at) "
                    "VALUES('settings-preserved-list',?,'Keep this saved list',0,0,1)", (user,))
         db.execute("INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,sort_order,updated_at) "

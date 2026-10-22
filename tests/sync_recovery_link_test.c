@@ -14,11 +14,19 @@ static int64_t queued;
 static int repair;
 static int full_upload;
 static int status_reads;
+static bool valid_server = true;
 
 bool storage_sync_node_failover(void) { return false; }
 int32_t app_preview_mode(void) { return 0; }
 void TraceLog(int32_t level, const char *format, ...) {}
-String storage_get_setting_text(String key) { return StringLiteral("https://sync.example"); }
+String storage_get_setting_text(String key) {
+    return valid_server ? StringLiteral("https://sync.example") : StringLiteral("");
+}
+
+void recovery_set_url(bool valid) {
+    valid_server = valid;
+    storage_connection_generation++;
+}
 
 double
 GetTime(void)

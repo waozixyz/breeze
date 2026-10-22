@@ -658,12 +658,10 @@ PackageCheckDue :: (now: s32) -> bool {
     (package_sequence_hint > 0 && elapsed >= 600 && package_sequence_hint > PackageSequence(0))
 }
 
-// During a practice only an install someone asked for moves: its release
-// and payload download meanwhile, while automatic checks and the heavy
-// verify-and-install wait until the practice ends, so its frames stay
-// smooth. Before, a tap on Download did nothing while a practice ran, even
-// in its small window.
-PackagePump :: (desired: s32, now: s32, during_practice: bool) {
+// During a practice or an input gesture only an explicitly requested
+// install transfers its release and payload. Automatic checks and heavy
+// verification wait until the practice ends or input becomes idle.
+PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
     if DataTemporary() {
         return
     }
@@ -673,11 +671,11 @@ PackagePump :: (desired: s32, now: s32, during_practice: bool) {
     if package_started_at == 0 && now > 0 {
         package_started_at = now
     }
-    if !during_practice {
+    if !defer_installation {
         PackageTrialsProve(now)
     }
     if package_index < 0 {
-        if !during_practice && PackagePublisherConfigured() && now > 0 &&
+        if !defer_installation && PackagePublisherConfigured() && now > 0 &&
         PackageCheckDue(now) {
             for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
                 if PackageWanted(index, desired) && !package_requested[index] {
@@ -690,8 +688,8 @@ PackagePump :: (desired: s32, now: s32, during_practice: bool) {
             package_last_check = now
         }
         for index: cast(s32)0..cast(s32)(PackageSlots - 1) {
-            if package_requested[index] && (!during_practice ||
-            (!package_requested_automatic[index] && !package_requested_check_only[index])) {
+            if package_requested[index] && (!defer_installation ||
+                (!package_requested_automatic[index] && !package_requested_check_only[index])) {
                 package_requested[index] = false
                 package_automatic = package_requested_automatic[index]
                 package_check_only = package_requested_check_only[index]
@@ -741,14 +739,14 @@ PackagePump :: (desired: s32, now: s32, during_practice: bool) {
                 return
             }
         }
-        if during_practice {
+        if defer_installation {
             return
         }
         package_automatic = false
         unused PackageHistoryBegin()
         return
     }
-    if during_practice && (package_automatic || package_check_only || package_phase == 3) {
+    if defer_installation && (package_automatic || package_check_only || package_phase == 3) {
         return
     }
     if package_target && (TextUntilNul(package_target_account[:]) != PackageAccount() ||
@@ -844,7 +842,7 @@ PackagePump :: (desired: s32, now: s32, during_practice: bool) {
                 return
             }
             usable := PackageInstalledMatches(package_index, TextFromCString(*package_release.hash[0])) &&
-                PackageVersion(package_index) == TextUntilNul(package_release.version[:])
+            PackageVersion(package_index) == TextUntilNul(package_release.version[:])
             if usable {
                 PackageFinish(true);
                 return
@@ -863,7 +861,7 @@ PackagePump :: (desired: s32, now: s32, during_practice: bool) {
         return
     }
     // The payload is here; reading, hashing and validating it waits.
-    if during_practice {
+    if defer_installation {
         return
     }
     path := PackagePath(package_index, ".download.zib")

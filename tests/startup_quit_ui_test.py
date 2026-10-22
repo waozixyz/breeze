@@ -127,9 +127,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
                       "navigation_placement": 1, "navigation_collapsed": 0,
                       "bottom_nav_route_count": 2, "bottom_nav_route_0": 0,
                       "bottom_nav_route_1": 4}
+            for bit, name in enumerate(("lists", "habits", "practices", "diary", "lumi", "leaderboard")):
+                values["app_used_" + name] = int(bool(int(values["enabled_apps"]) & (1 << bit)))
             for key, value in values.items():
-                db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
-                           "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
+                db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,2) "
+                           "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at", (user, key, str(value)))
         with application(profile, profile.name + "-all", *args) as (app, window, log):
             # The Apps library lists every app, with Profile and Settings.
             driver.wait(label="Apps", role="text")
@@ -149,13 +151,13 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
             order = [int(saved[f"launcher_favorite_{i}"]) for i in range(int(saved["launcher_favorite_count"]))]
             assert order == [12, 1, 2], "Defaults are not Lumi, Habits and Practice: " + str(order)
             wait_log(log, "->0", "Practices click was ignored")
-            # Diary is not installed; its card in More apps installs and
+            # Diary is not installed; its card below the divider installs and
             # opens it. Apps sits in the sidebar's bottom corner.
             apps = in_navigation("Apps")
             screen = next(node for node in driver.tree() if node["kind"] == "screen")
             assert apps["y"] - screen["y"] > 720 - 120, f"Apps left the sidebar's bottom corner: {apps}"
             driver.press(key=apps["key"])
-            driver.wait(label="More apps")
+            driver.wait(label="Pinned")
             driver.press(label="Diary", role="button")
             wait_log(log, "screen=0->22", "Diary click was ignored")
             driver.wait(label="Diary", role="title_bar")
@@ -186,7 +188,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
                 time.sleep(.05)
             assert app.poll() is None, "Escape quit the app behind the close prompt"
             if scene == "close_prompt_over_apps":
-                driver.wait(label="More apps")
+                driver.wait(label="Pinned")
             receipts[scene + "_escape"] = "dismissed without quitting"
         with application(Path(temporary) / scene, "quit-" + scene, "--screenshot",
                          str(Path(temporary) / (scene + ".png")), "--screenshot-scene", scene,
@@ -194,7 +196,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
                          preview=True) as (app, window, log):
             driver.wait(contains="keep Inner Breeze running")
             if scene == "close_prompt_over_apps":
-                assert driver.find(label="More apps", visible=True), "The Apps overlay is not open"
+                assert driver.find(label="Pinned", visible=True), "The Apps overlay is not open"
             quit_button = driver.wait(label="Quit", role="button")
             started = time.monotonic()
             try:

@@ -126,6 +126,8 @@ with contextlib.ExitStack() as stack:
 
     def seed(profile, values):
         values.setdefault("launcher_guide_seen", 1)
+        values.setdefault("voice_narration_enabled", 0)
+        values.setdefault("guide_narration_enabled", 0)
         if "enabled_apps" in values:
             for bit, name in enumerate(("lists", "habits", "practices", "diary", "lumi")):
                 values["app_used_" + name] = int(bool(int(values["enabled_apps"]) & (1 << bit)))
@@ -175,10 +177,26 @@ with contextlib.ExitStack() as stack:
         grid = [node for node in tree if node["kind"] == "button"
                 and under(tree, node, "scroll") and not under(tree, node, "navigation_bar")
                 and node["label"] not in ("Install", "Download", "App options", "Move app")]
-        more_top = headings["More apps"]["y"] if "More apps" in headings else float("inf")
+        divider = [node for node in tree if node["kind"] == "separator" and under(tree, node, "scroll")]
+        more_top = divider[0]["y"] if divider else float("inf")
         pinned = [node for node in grid if node["y"] < more_top]
         more = [node for node in grid if node["y"] >= more_top]
         return pinned, more, tree
+
+    def reveal_card(label):
+        for attempt in range(12):
+            pinned, more, tree = cards()
+            card = next(node for node in pinned + more if node["label"] == label)
+            if card["visible"] and card["visible_height"] >= card["height"] - 1:
+                bars = [node for node in tree if node["kind"] == "navigation_bar"
+                        and node["width"] > node["height"] and node["y"] > 0]
+                assert not bars or card["y"] + card["height"] <= min(node["y"] for node in bars), "The navigation covers the last app"
+                return card
+            page = next(node for node in tree if node["kind"] == "scroll" and node["visible"])
+            driver.pointer(page["visible_x"] + page["visible_width"] / 2,
+                           page["visible_y"] + page["visible_height"] / 2, wheel=-12)
+            driver.wait_idle(frames=3)
+        raise AssertionError(f"Could not reach {label} above the navigation")
 
     def corner(card, tree):
         """The download or options symbol at the end of an app row."""
@@ -189,6 +207,18 @@ with contextlib.ExitStack() as stack:
         assert inside[0]["x"] + inside[0]["width"] / 2 > card["x"] + card["width"] / 2, "Symbol is not at the right"
         assert abs(inside[0]["y"] + inside[0]["height"] / 2 - card["y"] - card["height"] / 2) < 2, "Symbol is not centered in its row"
         return inside[0]
+
+    def handle(card, tree=None):
+        tree = tree if tree is not None else driver.tree()
+        matches = [node for node in tree if node["label"] == "Move app"
+                   and abs(node["y"] + node["height"] / 2 - card["y"] - card["height"] / 2) < 24
+                   and card["x"] - 46 <= node["x"] < card["x"] + card["width"]]
+        assert len(matches) == 1, (card, matches)
+        return matches[0]
+
+    def move(card, destination):
+        driver.drag(UiDriver.center(handle(card)), destination, steps=16)
+        driver.wait_idle(frames=3)
 
     def press(node, hold=0.0):
         """Press one widget found in the tree, held for a while if asked."""
@@ -304,6 +334,9 @@ with contextlib.ExitStack() as stack:
                                "lumi_guides_seen": 127, "launcher_guide_seen": 1,
                                "theme": 9, "theme_source": 0, "theme_mode": 2,
                                "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
+                               "node_apps_offers": "photos|Photos\nlibrary|Library\n",
+                               "node_apps_checked_at": int(time.time()),
+                               "node_app_size_photos": 1024, "node_app_size_library": 2048,
                                "launcher_favorite_count": 3, "launcher_favorite_0": 12,
                                "launcher_favorite_1": 1, "launcher_favorite_2": 2})
                 with application(profile, f"views-{width}", width, height) as (window, log):
@@ -317,7 +350,24 @@ with contextlib.ExitStack() as stack:
                     # The handle moves immediately, without a long press.
                     driver.drag(UiDriver.center(first_handle), UiDriver.center(pinned[1]), steps=12)
                     wait_for(lambda: favorites(profile) == [1, 12, 2], "The drag handle did not move the app")
-                    driver.press(label="Done", role="button")
+                    assert not driver.find(label="Done", role="button"), "Moving left Apps in an edit mode"
+                    # Downloadable offers have the same handle and can be
+                    # moved without installing them or claiming a node slot.
+                    library = reveal_card("Library")
+                    photos = next(node for node in cards()[1] if node["label"] == "Photos")
+                    assert corner(library, driver.tree())["label"] == "Download"
+                    assert handle(library)["enabled"] and handle(photos)["enabled"]
+                    move(library, UiDriver.center(photos))
+                    wait_for(lambda: "launcher_library_order" in settings(profile), "Offer order was not saved")
+                    offer_order = settings(profile)["launcher_library_order"]
+                    assert "library" in offer_order.split(",") and "photos" in offer_order.split(","), offer_order
+                    assert offer_order.split(",").index("library") < offer_order.split(",").index("photos"), offer_order
+                    assert settings(profile).get("app_used_library", "0") == "0"
+                    assert settings(profile).get("app_used_photos", "0") == "0"
+                    reveal_card("Photos")
+                    capture(window, f"views-{width}-last-row")
+                    driver.pointer(width / 2, height / 2, wheel=30)
+                    driver.wait_idle(frames=3)
                     driver.press(label="Grid view", role="button")
                     assert driver.wait(label="Grid view", role="button")["selected"]
                     wait_setting(profile, "launcher_grid_view", 1)
@@ -571,7 +621,7 @@ with contextlib.ExitStack() as stack:
                 assert settings(profile)["language_setup_done"] == "0", "Fresh start skipped the language picker"
                 assert settings(profile)["apps_setup_done"] == "0"
                 assert favorites(profile) == [12, 1, 2], "New profiles do not pin Lumi, Habits and Practice"
-                assert settings(profile)["enabled_apps"] == "22", "New profiles do not install Lumi, Habits and Practice"
+                assert settings(profile)["enabled_apps"] == "55", "Lists and Leaderboard must ship preinstalled alongside Lumi, Habits and Practice"
                 assert settings(profile)["theme"] == "9" and settings(profile)["theme_source"] == "0"
                 assert settings(profile)["theme_mode"] == "2"
             # Merely opening and closing the picker does not complete setup.
@@ -593,6 +643,10 @@ with contextlib.ExitStack() as stack:
                 driver.press(label="Don't allow", role="button")
                 wait_setting(profile, "package_updates_allowed", 0)
                 driver.wait_gone(label="Don't allow", role="button")
+                assert not driver.find(label="More apps"), "The old section heading remains"
+                for label in ("Lists", "Leaderboard"):
+                    card = next(node for node in cards()[1] if node["label"] == label)
+                    assert corner(card, driver.tree())["label"] == "App options", f"{label} is not preinstalled"
                 # Practice is the third pinned card in the same grid as the rest.
                 pinned, more, tree = cards()
                 assert [card["label"] for card in pinned] == ["Lumi", "Habits", "Practice"], pinned
@@ -677,7 +731,7 @@ with contextlib.ExitStack() as stack:
                     command("xdotool", "windowsize", window, str(width), str(height))
                     wait_for(lambda: abs(driver.tree()[0]["height"] - height) < 1, "Phone viewport did not restore")
                     driver.wait_idle(frames=3)
-                # A brief hold remains a click. A deliberate long press enters edit mode.
+                # A brief hold remains a click; only the visible handle can reorder.
                 pinned, more, tree = cards()
                 assert more[0]["label"] == "Diary", more
                 press(more[0], hold=.3)
@@ -689,25 +743,20 @@ with contextlib.ExitStack() as stack:
                 drag(more[0], UiDriver.center(pinned[0]))
                 assert favorites(profile) == [1, 2], "A browsing swipe rearranged favorites"
                 pinned, more, tree = cards()
-                press(more[0], hold=1.15)
-                driver.wait(label="Done", role="button")
-                assert apps_open(), "A long press opened an app"
-                capture(window, name + "-apps-edit")
-                pinned, more, tree = cards()
-                drag(more[0], UiDriver.center(pinned[0]))
+                assert not driver.find(label="Done", role="button")
+                move(more[0], UiDriver.center(pinned[0]))
                 wait_for(lambda: favorites(profile) == [11, 1, 2], "Dragging into Pinned did not place Diary first")
                 pinned, more, tree = cards()
                 assert [card["label"] for card in pinned] == ["Diary", "Habits", "Practice"], pinned
                 # Pinned has one extra row; drop Diary on the first of More.
-                drag(pinned[0], UiDriver.center(more[0]))
+                move(pinned[0], UiDriver.center(more[0]))
                 wait_for(lambda: favorites(profile) == [1, 2], "Dragging into More did not remove the shortcut")
                 pinned, more, tree = cards()
                 assert more[0]["label"] == "Diary", more
-                drag(more[0], UiDriver.center(navigation(tree)[0]))
+                move(more[0], UiDriver.center(navigation(tree)[0]))
                 wait_for(lambda: favorites(profile) == [11, 1, 2], "Dragging a card to navigation did not place it")
                 assert [item["label"] for item in navigation()] == ["Diary", "Habits", "Practice", "Apps"]
-                driver.press(label="Done", role="button")
-                driver.wait_gone(label="Done", role="button")
+                assert not driver.find(label="Done", role="button")
                 # Profile stays in Apps after favorite changes.
                 assert apps_open(), "Dragging closed Apps"
                 open_profile(log)
@@ -733,11 +782,10 @@ with contextlib.ExitStack() as stack:
                 assert favorites(profile) == [11, 2], "Uninstall left a pinned shortcut"
                 with database(profile) as db:
                     assert db.execute("SELECT COUNT(*) FROM habits").fetchone()[0] == habit_count
-                # The same app is now first in More; the download symbol in its
-                # card's corner installs it again.
-                pinned, more, tree = cards()
-                assert more[0]["label"] == "Habits", more
-                action = corner(more[0], tree)
+                # Removing an app retains the library order. Its download
+                # control stays reachable above the navigation.
+                habit = reveal_card("Habits")
+                action = corner(habit, driver.tree())
                 assert action["label"] == "Download"
                 press(action)
                 wait_setting(profile, "app_used_habits", 1, "Install did not restore Habits")

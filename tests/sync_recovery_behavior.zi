@@ -13,6 +13,7 @@ recovery_set_time :: (seconds: float64) #foreign recovery_c;
 recovery_set_enabled :: (enabled: s32) #foreign recovery_c;
 recovery_set_queue :: (queued: s64, repair: s32, full_upload: s32) #foreign recovery_c;
 recovery_status_reads :: () -> s32 #foreign recovery_c;
+recovery_set_url :: (valid: bool) #foreign recovery_c;
 
 Retry :: (attempt: s32) -> bool {
     return SettingsStoreInt("sync_retry_attempt", attempt)
@@ -144,10 +145,33 @@ Answer :: () -> s32 {
     if recovery_status_reads() != reads { return 43 }
     recovery_set_queue(2, 0, 1)
     if !app_sync_queue_status(*status, now + 0.26) || status.queued_changes != 2 ||
-        recovery_status_reads() != reads + 1 { return 44 }
+    recovery_status_reads() != reads + 1 { return 44 }
     // A data revision, including disconnect, invalidates immediately.
     recovery_set_enabled(0)
     if !app_sync_queue_status(*status, now + 0.27) || status.enabled != 0 ||
-        recovery_status_reads() != reads + 2 { return 45 }
+    recovery_status_reads() != reads + 2 { return 45 }
+    recovery_set_enabled(1)
+    g_sync.sync_running = 1
+    g_sync.retry_requested = true
+    app_sync_start_failed(3)
+    if g_sync.sync_running != 0 || g_sync.retry_requested ||
+    SettingsReadInt("sync_last_result", 0) != 3 ||
+    app_sync_retry_ready(3, now) { return 46 }
+    g_sync.retry_requested = true
+    app_sync_start_failed(5)
+    if g_sync.retry_requested || app_sync_status_key() != "sync_sign_failed" { return 47 }
+    app.ui.pointer_active = true
+    app_sync_record_input(*app, now)
+    if app_sync_user_idle(*app, now + 2.0) != 0 { return 48 }
+    app.ui.pointer_active = false
+    if app_sync_user_idle(*app, now + 1.49) != 0 ||
+    app_sync_user_idle(*app, now + 1.5) == 0 { return 49 }
+    app.ui.keyboard_active = true
+    app_sync_record_input(*app, now + 3.0)
+    app.ui.keyboard_active = false
+    if app_sync_user_idle(*app, now + 4.0) != 0 { return 50 }
+    recovery_set_url(false)
+    if app_sync_status_key() != "sync_server_url_invalid" { return 51 }
+    recovery_set_url(true)
     return 0
 }

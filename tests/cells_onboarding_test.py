@@ -153,7 +153,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         # A new profile comes with Lumi, Habits and Practice, pinned in that
         # order. They are defaults, not choices: stored at time 1 and not
         # queued, so an account's apps replace them after sign-in.
-        assert saved["enabled_apps"] == "22"
+        assert saved["enabled_apps"] == "55"
         assert saved["launcher_favorite_count"] == "3"
         assert [int(saved[f"launcher_favorite_{i}"]) for i in range(3)] == [12, 1, 2]
         with database(profile) as db:
@@ -161,7 +161,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
                 "SELECT key,value,updated_at FROM settings WHERE key LIKE 'app_used_%'")}
             queued = db.execute("SELECT COUNT(*) FROM sync_outbox WHERE entity_type IN "
                                 "('app_preference','app_order')").fetchone()[0]
-        assert defaults == {f"app_used_{name}": (str(int(name in ("habits", "practices", "lumi"))), 1)
+        assert defaults == {f"app_used_{name}": (str(int(name in ("lists", "habits", "practices", "lumi", "leaderboard"))), 1)
                             for name in ("lists", "habits", "practices", "diary", "lumi", "leaderboard")}, defaults
         assert queued == 0, "a new profile queued its default apps"
         assert "app_order" not in saved, "a new profile sent its default pins"
@@ -173,18 +173,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
             driver.wait(label=f"Step {step} of 3")
             key(window, "Right", lambda: not driver.find(label=f"Step {step} of 3", visible=True))
         wait_setting(profile, "launcher_guide_seen", 1)
-        # Apps never asks about automatic updates; cards show available ones.
-        assert not driver.find(label="Don't allow", visible=True), "Apps asked about automatic updates"
+        # The existing question is asked once, after the launcher guide.
+        driver.wait(label="Don't allow", role="button")
+        driver.press(label="Don't allow", role="button")
+        wait_setting(profile, "package_updates_allowed", 0)
         driver.press(label="Find an app", role="text_field")
         driver.type("Lists")
         driver.wait(label="Find an app", role="text_field", value="Lists")
-        # Lists is not installed, so its card is the first in More apps.
-        more_apps = driver.wait(label="More apps")
-        cards = [node for node in driver.find(role="button", visible=True)
-                 if node["y"] > more_apps["y"] and node["label"] not in ("Install", "Uninstall", "App options")
-                 and node["y"] < driver.wait(label="Profile", role="button")["y"]]
-        assert cards and cards[0]["label"] == "Lists", cards
-        driver.press(key=cards[0]["key"], label="Lists")
+        # Lists is preinstalled and opens straight from the filtered list.
+        card = driver.wait(label="Lists", role="button")
+        assert not driver.find(label="Download", role="button", visible=True)
+        driver.press(key=card["key"], label="Lists")
         wait_setting(profile, "apps_setup_done", 1)
         wait_setting(profile, "main_tab", 2)
         wait_log(log, "screen=21->16")

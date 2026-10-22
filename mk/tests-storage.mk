@@ -196,6 +196,10 @@ sync-recovery-test: build-laws $(ZI2C_BIN) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		sh tests/sync_recovery_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
+.PHONY: sync-connection-test
+sync-connection-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
+	@sh tests/sync_connection_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
 .PHONY: sync-record-fields-test
 sync-record-fields-test:
 	python3 tests/sync_record_fields_test.py

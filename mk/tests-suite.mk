@@ -122,6 +122,7 @@ test: theme-catalog-bundle-check
 test: site-assets-test
 test: android-smoke-script-test
 test: sync-recovery-test
+test: sync-connection-test
 test: sync-record-fields-test
 test: media-metadata-test media-store-test photos-app-test
 test: node-app-records-test
