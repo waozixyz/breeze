@@ -2,7 +2,7 @@
 
 ## [2.1.38] - 2026-10-21
 
-- Simplify Apps editing, settings, navigation and app loading.
+- Simplify Apps editing, settings, navigation and app loading; make Photos available to everyone.
 - Fix Profile headers, scrolling, dialogs, font freezes and Android key backups.
 - Fix large-account sync, false sync failures, sharing controls and activity and achievement views.
 

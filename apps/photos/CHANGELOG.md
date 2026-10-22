@@ -1,5 +1,9 @@
 # Photos changelog
 
+## [1.0.3] - 2026-10-22
+
+- Make Photos available to everyone without enabling beta apps.
+
 ## [1.0.2] - 2026-10-21
 
 - Give each achievement its own meaningful icon.

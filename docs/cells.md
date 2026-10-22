@@ -511,8 +511,7 @@ Ordinary launches ignore these files and keep using signed node packages.
 Photos (`apps/photos/`, `inbe.photos`, host interface 13) is the second app
 the node offers: a newest-first grid of the library's photos under the day
 each was taken, a viewer with previous, next and Move to Trash, and Trash,
-where a photo can be restored. It is published as beta and installed from
-More apps like Chess.
+where a photo can be restored. Install it from the normal app catalog.
 
 The library belongs to the account, not to Photos, so its photos stay when
 Photos is removed. The host keeps it (`src/cells/media_store.zi`): each photo
@@ -588,8 +587,8 @@ originals and previews after each good sync:
   Removing a node forgets its session and its `diary_blobs` rows. Delegate
   (Telegram) accounts never move copies.
 
-Photos is `"beta": true` in the ledger, so its releases are signed for the
-beta channel. The App packages workflow builds every app the node offers and
+Photos is available in the normal app catalog without enabling beta apps.
+The App packages workflow builds every app the node offers and
 publishes each one whose ledger names a newer release than the node serves
 (`package-release.py --node-apps`). An app the node does not list yet is
 reported and skipped: registering it takes the node operator's key. With each
