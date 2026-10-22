@@ -502,6 +502,9 @@ stages its release through Inbe's existing signed publisher; with
 App packages workflow never publishes these apps. For a local preview or a
 test, `INBE_NODE_APP_FILE=/absolute/path/chess.zib` offers that package as if
 the node did; it passes the same interface, identity and resource checks.
+On Android debug builds, a single `<name>.zib` in the app's external files
+folder is offered only when the launch intent includes `--ez local_node_app true`.
+Ordinary launches ignore these files and keep using signed node packages.
 
 ## Photos and the account's media library
 

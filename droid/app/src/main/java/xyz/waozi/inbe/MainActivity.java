@@ -1186,16 +1186,17 @@ public class MainActivity extends NativeActivity {
     }
 
     /**
-     * Debug builds only: a single {@code <name>.zib} pushed to this app's
-     * external files folder is offered like a node app, through the same
-     * interface, identity and resource checks as a desktop local bundle.
+     * Local bundles require an explicit debug launch. A leftover file must
+     * never shadow signed node updates on ordinary launches after an upgrade.
      */
     private void offerLocalNodeApp() {
-        File folder = getExternalFilesDir(null);
-        File[] bundles = folder == null ? null : folder.listFiles((dir, name) -> name.endsWith(".zib"));
-        if (bundles == null || bundles.length != 1) return;
+        File bundle = LocalNodeApp.offered(BuildConfig.DEBUG, getIntent(), getExternalFilesDir(null));
         try {
-            android.system.Os.setenv("INBE_NODE_APP_FILE", bundles[0].getAbsolutePath(), true);
+            if (bundle == null) {
+                android.system.Os.unsetenv("INBE_NODE_APP_FILE");
+            } else {
+                android.system.Os.setenv("INBE_NODE_APP_FILE", bundle.getAbsolutePath(), true);
+            }
         } catch (android.system.ErrnoException error) {
             Log.w("Inbe", "Could not offer the local node app", error);
         }
@@ -1205,9 +1206,8 @@ public class MainActivity extends NativeActivity {
     protected void onCreate(Bundle savedInstanceState) {
         startupStarted = SystemClock.elapsedRealtime();
         configureSystemBars();
-        // Before the native app starts: debug builds may offer one local
-        // node-app bundle, as desktop builds do with INBE_NODE_APP_FILE.
-        if (BuildConfig.DEBUG) offerLocalNodeApp();
+        // Set or clear the local override before the native app starts.
+        offerLocalNodeApp();
         super.onCreate(savedInstanceState);
         configureSystemBars();
         textInputView = new TextInputView(this, new TextInputView.Listener() {
