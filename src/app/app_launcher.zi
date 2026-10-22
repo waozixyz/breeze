@@ -103,6 +103,7 @@ using WidgetKind;
 
 app_launcher_update_drag :: (app: *InnerBreeze, point: Vector2) {
     app.launcher_drag_pointer = point
+    if !app.launcher_editing { return }
     dx := point.x - app.launcher_drag_origin.x
     dy := point.y - app.launcher_drag_origin.y
     threshold := cast(float32)AppScale(6)
@@ -120,6 +121,7 @@ app_launcher_drag_card :: (app: *InnerBreeze, card: ButtonProps,
         key, WidgetKindButton)
     drag := TreeTakeDragAt(app.ui.session, previous)
     if drag.started {
+        app.launcher_hold_at = GetTime()
         app.launcher_drag_key = key
         app.launcher_drag_route = route
         app.launcher_drag_moving = false
@@ -129,10 +131,24 @@ app_launcher_drag_card :: (app: *InnerBreeze, card: ButtonProps,
         app.launcher_drag_origin = Vector2.{drag.x, drag.y}
         app.launcher_drag_grab = Vector2.{drag.grab_x, drag.grab_y}
     }
+    if drag.active && app.launcher_drag_key == key && !app.launcher_editing {
+        dx := drag.x - app.launcher_drag_origin.x
+        dy := drag.y - app.launcher_drag_origin.y
+        threshold := cast(float32)AppScale(6)
+        if dx * dx + dy * dy >= threshold * threshold {
+            app.launcher_drag_key = 0
+            return false
+        }
+        AppRequestSmoothFrames(2)
+        if GetTime() - app.launcher_hold_at >= 1.0 {
+            app.launcher_editing = true
+            TreeCapturePressAt(app.ui.session, previous)
+        }
+    }
     if (drag.active || drag.ended) && app.launcher_drag_key == key {
         app_launcher_update_drag(app, Vector2.{drag.x, drag.y})
         app.launcher_drag_released = drag.ended
-        return drag.ended && !app.launcher_drag_moving &&
+        return drag.ended && !app.launcher_editing && !app.launcher_drag_moving &&
         TreeHoveredAt(app.ui.session, previous)
     }
     return false
@@ -170,7 +186,7 @@ app_launcher_draw_card :: (app: *InnerBreeze, route: s32,
     activated := Button(app.ui.session, card) != 0 || tapped
     node := TreeSubmitted(app.ui.session, TreeCurrentParent(app.ui.session),
         cast(u64)card.id, WidgetKindButton)
-    TreeSetDragCapture(app.ui.session, node, true)
+    TreeSetDragCapture(app.ui.session, node, app.launcher_editing)
     // An installed app shows the size of its package, bundled or from the node.
     bytes: s64 = 0
     if AppNavNodeSlot(route) >= 0 {
@@ -354,6 +370,19 @@ app_draw_launcher :: (app: *InnerBreeze) {
             .bounds = Rectangle.{cast(float32)x, cast(float32)title_y,
                 cast(float32)width, cast(float32)AppScale(40)},
             .class_name = KssClassId(KssMakeName("launcher-title"))})
+    if app.launcher_editing {
+        done: ButtonProps
+        done.key = KeyHash("inbe/apps/done")
+        done.label = LocaleText("done_button")
+        done.bounds = Rectangle.{cast(float32)(x + width - AppScale(96)), cast(float32)title_y,
+            cast(float32)AppScale(96), cast(float32)AppScale(40)}
+        if Button(app.ui.session, done) != 0 {
+            app.launcher_editing = false
+            app.launcher_drag_key = 0
+            app.launcher_drag_moving = false
+            app_block_current_click(app)
+        }
+    }
     search_y := title_y + AppScale(56)
     typed: [128]u8
     field: TextFieldProps
@@ -430,11 +459,9 @@ app_draw_launcher :: (app: *InnerBreeze) {
             offer_count += 1
         }
     }
-    tile_height := AppScale(88)
-    gap := AppScale(12)
-    // The tiles reflow into as many columns as the panel's width allows.
-    columns := MeasureGrid(GridProps.{.bounds = Rectangle.{cast(float32)x, 0.0, cast(float32)width, 0.0},
-            .min_item_width = AppScale(140), .max_columns = 6, .gap = gap}).columns
+    tile_height := AppScale(64)
+    gap := AppScale(4)
+    columns: s32 = 1
     cells := MeasureGrid(GridProps.{.columns = columns, .gap = gap,
             .bounds = Rectangle.{cast(float32)x, 0.0, cast(float32)width, 0.0}})
     pinned_rows := GridRowCount(cells, pinned_count)
@@ -467,12 +494,15 @@ app_draw_launcher :: (app: *InnerBreeze) {
     pinned_cells: GridMetrics
     more_bounds: Rectangle
     pinned_slots: [LAUNCHER_APP_COUNT]Rectangle
+    library_bounds: Rectangle
     // Typing goes to the search field or else to a field in an app's Properties.
     apps_typed: [1024]u8
     apps_input := SampleTextFieldInput(!app.launcher_search_focused, apps_typed[:])
     if scrolled.opened {
         width = cast(s32)scrolled.content.width
         y := cast(s32)scrolled.content.y
+        library_bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(36)),
+            cast(float32)width, cast(float32)(content_height - AppScale(36))}
         pinned_bounds = Rectangle.{cast(float32)x, cast(float32)y,
             cast(float32)width, cast(float32)pinned_height}
         for section: cast(s32)0..cast(s32)1 {
@@ -497,15 +527,17 @@ app_draw_launcher :: (app: *InnerBreeze) {
                 bounds := GridCellBounds(section_cells, index, tile_height)
                 if section == 0 { pinned_slots[index] = bounds }
             }
-            group_routes := ifx section == 0 then pinned[:count] else more[:count]
             group_offers := offers[:ifx section == 1 then offer_count else 0]
             group_count := count + cast(s32)group_offers.count
-            group_bounds := Rectangle.{cast(float32)x, cast(float32)y,
-                cast(float32)width, cast(float32)(GridRowCount(section_cells, group_count) * (tile_height + gap))}
-            unused app_launcher_shared_group(app, section, group_routes, group_offers, group_bounds, apps_input)
+
             count = group_count
             y += GridRowCount(section_cells, count) * (tile_height + gap)
         }
+        library_routes: [LAUNCHER_APP_COUNT]s32
+        for index: cast(s32)0..pinned_count - 1 { library_routes[index] = pinned[index] }
+        for index: cast(s32)0..more_count - 1 { library_routes[pinned_count + index] = more[index] }
+        unused app_launcher_shared_group(app, 0, library_routes[:pinned_count + more_count],
+            offers[:offer_count], library_bounds, apps_input, pinned_count)
         if match_count + offer_count == 0 {
             Text(app.ui.session, TextProps.{.text = LocaleText("launcher_no_results"),
                     .bounds = Rectangle.{cast(float32)x, cast(float32)y,

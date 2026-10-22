@@ -118,5 +118,5 @@ for index, original in enumerate(paths):
 assert not any('/characters/' in name or name.endswith('/course.zip') for name in practices)
 native = (ROOT / 'build/obj/inbe_embedded_assets.c').read_text()
 entries = set(re.findall(r'\{(?:\(uint8_t \*\))?"([^"\n]+)"', native))
-assert entries == {'assets/app/icon.png', 'apps/publishers.json', 'inbe.zib'}, entries
+assert entries == {'assets/app/icon.png', 'apps/publishers.json', 'inbe.zib', 'apps.zib'}, entries
 print(f'Package assets: {len(root)} root resources, {len(practices)} Practice resources; exact image/font/locale ownership passed')

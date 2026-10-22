@@ -5,6 +5,7 @@ its widget tree by label and pressed through its own pointer path.
 """
 
 import contextlib
+import json
 import argparse
 import os
 from pathlib import Path
@@ -25,6 +26,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument("binary")
 parser.add_argument("--layout", choices=("all", "desktop", "mobile"), default="all")
 parser.add_argument("--drag-only", action="store_true")
+parser.add_argument("--root-bundle", type=Path, help="Exercise an older root with the native launcher")
+parser.add_argument("--measure", action="store_true", help="Measure cold Apps opens in disposable profiles")
 parser.add_argument("--dock-only", action="store_true")
 parser.add_argument("--properties-only", action="store_true",
                     help="Rename an app and change its icon in Apps › Properties")
@@ -177,13 +180,13 @@ with contextlib.ExitStack() as stack:
         return pinned, more, tree
 
     def corner(card, tree):
-        """The download or options symbol in a card's top-right corner."""
+        """The download or options symbol at the end of an app row."""
         inside = [node for node in tree if node["label"] in ("Install", "Download", "App options")
-                  and card["x"] <= node["x"] and node["x"] + node["width"] <= card["x"] + card["width"]
+                  and card["x"] <= node["x"] and node["x"] + node["width"] <= card["x"] + card["width"] + 49
                   and card["y"] <= node["y"] and node["y"] + node["height"] <= card["y"] + card["height"]]
         assert len(inside) == 1, f"{card['label']} has no corner symbol: {inside}"
         assert inside[0]["x"] + inside[0]["width"] / 2 > card["x"] + card["width"] / 2, "Symbol is not at the right"
-        assert inside[0]["y"] + inside[0]["height"] / 2 < card["y"] + card["height"] / 2, "Symbol is not at the top"
+        assert abs(inside[0]["y"] + inside[0]["height"] / 2 - card["y"] - card["height"] / 2) < 2, "Symbol is not centered in its row"
         return inside[0]
 
     def press(node, hold=0.0):
@@ -224,7 +227,7 @@ with contextlib.ExitStack() as stack:
         driver.release_pointer()
 
     def apps_open():
-        return bool(driver.find(label="Pinned", visible=True))
+        return bool(driver.find(label="Find an app", role="text_field", visible=True))
 
     def open_apps(hold=0.0):
         press(pin("Apps"), hold)
@@ -247,7 +250,10 @@ with contextlib.ExitStack() as stack:
         app_env = env | {"APP_DATA_ROOT": str(profile)}
         log_path = OUTPUT / (name + ".log")
         with log_path.open("w") as log:
-            app = subprocess.Popen([str(BINARY)], cwd=ROOT, env=app_env,
+            command_line = [str(BINARY)]
+            if arguments.root_bundle:
+                command_line += ["--bundle", str(arguments.root_bundle.resolve())]
+            app = subprocess.Popen(command_line, cwd=ROOT, env=app_env,
                                    stdout=log, stderr=subprocess.STDOUT)
             driver.attach(app, log_path)
             try:
@@ -278,6 +284,32 @@ with contextlib.ExitStack() as stack:
                 assert "portable subset" not in log_path.read_text(), log_path.read_text()
             finally:
                 stop(app)
+
+    if arguments.measure:
+        measurements = []
+        with tempfile.TemporaryDirectory(prefix="inbe-launcher-timing-") as temporary:
+            profile = Path(temporary)
+            user = None
+            with application(profile, "measure-initialize"):
+                with database(profile) as db:
+                    user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
+            seed(profile, {"language": "en", "language_system": 0, "language_setup_done": 1,
+                           "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
+                           "main_tab": 3, "tutorial_seen": 1, "lumi_guides_seen": 127,
+                           "package_updates_allowed": 0, "apps_last_update_check": 1900000000})
+            for attempt in range(3):
+                with application(profile, "measure-" + str(attempt)):
+                    started = time.monotonic()
+                    open_apps()
+                    driver.wait(label="Habits", role="button")
+                    measurements.append(time.monotonic() - started)
+                    if arguments.root_bundle:
+                        rows = cards()[0] + cards()[1]
+                        assert rows and all(abs(row["height"] - 64) <= 1 for row in rows), "Older root replaced the launcher list controller"
+        result = dict(binary=str(BINARY), apps_first_open_seconds=measurements)
+        (OUTPUT / ("measure-" + BINARY.name + ".json")).write_text(json.dumps(result, indent=2) + "\n")
+        print(json.dumps(result))
+        raise SystemExit(0)
 
     if arguments.dock_only:
         with tempfile.TemporaryDirectory(prefix="inbe-dock-") as temporary:
@@ -535,13 +567,40 @@ with contextlib.ExitStack() as stack:
                     key(window, "Escape", lambda: not apps_open())
                     assert settings(profile)["main_tab"] == "1", "Closing Apps changed the current page"
                     open_apps()
-                # Holding is an ordinary click. It opens the app and never pins it.
+                # Every app occupies one clean row, on phone and desktop.
+                pinned, more, tree = cards()
+                rows = pinned + more
+                assert len({round(row["x"]) for row in rows}) == 1, "Apps are not one list"
+                assert all(abs(row["height"] - 64) <= 1 for row in rows), rows
+                capture(window, name + "-apps")
+                if mobile:
+                    command("xdotool", "windowsize", window, "390", "500")
+                    wait_for(lambda: abs(driver.tree()[0]["height"] - 500) < 1, "Small phone viewport did not resize")
+                    pinned, more, tree = cards()
+                    before_y = pinned[0]["y"]
+                    driver.drag(UiDriver.center(pinned[1]), (pinned[1]["x"] + 60, pinned[0]["y"] + 5), steps=16)
+                    wait_for(lambda: cards()[0][0]["y"] < before_y - 20, "Swiping over an app did not scroll the list")
+                    assert favorites(profile) == [1, 2], "Scrolling rearranged the apps"
+                    assert apps_open(), "Scrolling opened an app"
+                    command("xdotool", "windowsize", window, str(width), str(height))
+                    wait_for(lambda: abs(driver.tree()[0]["height"] - height) < 1, "Phone viewport did not restore")
+                    driver.wait_idle(frames=3)
+                # A brief hold remains a click. A deliberate long press enters edit mode.
                 pinned, more, tree = cards()
                 assert more[0]["label"] == "Diary", more
-                press(more[0], hold=.85)
+                press(more[0], hold=.3)
                 wait_setting(profile, "main_tab", 3, log.read_text())
                 assert favorites(profile) == [1, 2], "Holding an app changed its pin"
                 open_apps()
+                pinned, more, tree = cards()
+                # A swipe must never rearrange apps while browsing.
+                drag(more[0], UiDriver.center(pinned[0]))
+                assert favorites(profile) == [1, 2], "A browsing swipe rearranged favorites"
+                pinned, more, tree = cards()
+                press(more[0], hold=1.15)
+                driver.wait(label="Done", role="button")
+                assert apps_open(), "A long press opened an app"
+                capture(window, name + "-apps-edit")
                 pinned, more, tree = cards()
                 drag(more[0], UiDriver.center(pinned[0]))
                 wait_for(lambda: favorites(profile) == [11, 1, 2], "Dragging into Pinned did not place Diary first")
@@ -555,6 +614,8 @@ with contextlib.ExitStack() as stack:
                 drag(more[0], UiDriver.center(navigation(tree)[0]))
                 wait_for(lambda: favorites(profile) == [11, 1, 2], "Dragging a card to navigation did not place it")
                 assert [item["label"] for item in navigation()] == ["Diary", "Habits", "Practice", "Apps"]
+                driver.press(label="Done", role="button")
+                driver.wait_gone(label="Done", role="button")
                 # Profile stays in Apps after favorite changes.
                 assert apps_open(), "Dragging closed Apps"
                 open_profile(log)

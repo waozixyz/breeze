@@ -31,6 +31,8 @@ def emit(output: Path, files: list[Path], root: Path) -> None:
         path = Path(os.path.abspath(file)).relative_to(root).as_posix()
         if path.startswith("build/cells/"):
             path = path.removeprefix("build/")
+        if path == "build/apps-ui/apps.zib":
+            path = "apps.zib"
         if path == "build/inbe.zib":
             path = "inbe.zib"
         if path.startswith("build/packages/kss/styles/"):

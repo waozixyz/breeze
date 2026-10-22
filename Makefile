@@ -400,7 +400,7 @@ CELL_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achieve
 # Read here, before TARGET is set: its UI tests do not build $(TARGET) first.
 include mk/tests-lumi.mk
 
-EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) assets/app/icon.png
+EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) build/apps-ui/apps.zib assets/app/icon.png
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 # Dependencies are imported as PACKAGE/Module through their linked packages.
 ZI_PACKAGE_PATHS := $(shell sh scripts/package-paths.sh)

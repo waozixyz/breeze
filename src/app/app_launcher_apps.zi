@@ -195,10 +195,10 @@ LauncherAppWidgets :: (context: *void, module: *u8, function: *u8,
         if entry.route < 0 || card.key != Rules.AppCardKey(TextUntilNul(entry.id[:])) { continue }
         // Only the base card captures native drag. The menu/update buttons
         // retain their own keys and ordinary pointer behavior.
-        unused app_launcher_drag_card(group.owner, card, entry.route, true)
+        unused app_launcher_drag_card(group.owner, card, entry.route, false)
         node := TreeSubmitted(group.owner.ui.session, TreeCurrentParent(group.owner.ui.session),
             card.key, WidgetKindButton)
-        TreeSetDragCapture(group.owner.ui.session, node, !card.disabled)
+        TreeSetDragCapture(group.owner.ui.session, node, group.owner.launcher_editing && !card.disabled)
         break
     }
     return called
@@ -218,7 +218,7 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
     group.owner.blocked_input_frame == group.owner.breathing.frame {
         LauncherAppLog("dropped", *request, ifx at < 0 then "no such card"
             else (ifx group.owner.blocked_input_frame == group.owner.breathing.frame then "input blocked this frame"
-                else "account changed"))
+            else "account changed"))
         group.status = "rejected"
         return
     }
@@ -244,7 +244,7 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
         return
     }
     if request.operation == Rules.APPS_OPEN {
-        if !app.launcher_drag_moving { app_launcher_activate(app, route) }
+        if !app.launcher_editing && !app.launcher_drag_moving { app_launcher_activate(app, route) }
     } else if request.operation == Rules.APPS_INSTALL && AppNavNodeSlot(route) >= 0 &&
     !NodeAppInstalled(AppNavNodeSlot(route)) {
         // Its download symbol: the package downloads, and the card says so.
@@ -283,12 +283,12 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
     TextUntilNul(request.sha256[:]) == PackageAvailableDigest(entry.package) {
         // The transfer also binds the exact confirmed version/digest.
         if !PackageRequestVersion(entry.package, TextUntilNul(request.version[:]),
-                TextUntilNul(request.sha256[:]), NodeTreeAccount()) { group.status = "rejected"; return }
+            TextUntilNul(request.sha256[:]), NodeTreeAccount()) { group.status = "rejected"; return }
         group.status = "queued"
         return
     } else if request.operation == Rules.APPS_ROLLBACK {
         if !PackageRollbackRequest(entry.package, TextUntilNul(request.version[:]),
-                TextUntilNul(request.sha256[:]), NodeTreeAccount()) {
+            TextUntilNul(request.sha256[:]), NodeTreeAccount()) {
             group.status = "rejected"
             return
         }
@@ -296,7 +296,7 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
         return
     } else if request.operation == Rules.APPS_PROPERTIES {
         if !AppPropertiesSave(LauncherRouteName(route), TextUntilNul(request.title[:]),
-                TextUntilNul(request.icon[:])) {
+            TextUntilNul(request.icon[:])) {
             group.status = "rejected"
             return
         }
@@ -439,7 +439,7 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
 }
 
 app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
-    offers: []s32, bounds: Rectangle, input: TextFieldInput) -> bool {
+    offers: []s32, bounds: Rectangle, input: TextFieldInput, section_break: s32) -> bool {
     group := *launcher_app_groups[section]
     group.index = section
     group.owner = app
@@ -448,7 +448,9 @@ app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
     }
     unused CopyCString(NodeTreeAccount(), group.account[:])
     if !group.controller.ready {
-        bytes := AssetRead("assets/apps/apps.zib")
+        // The native launcher uses its reviewed controller even when an
+        // older downloaded root still carries the previous icon grid.
+        bytes := AssetRead("apps.zib")
         if !bytes.found || !Controller.AppControllerOpen(*group.controller, bytes.data, AppsControllerSha256,
             Controller.AppControllerPlatform.{.context = cast(*void)group,
                 .service = LauncherAppService, .widgets = LauncherAppWidgets}) { return false }
@@ -457,8 +459,8 @@ app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
     document: Vec(u8)
     BuilderPrint(*document, "\"title\":\"\",\"locale\":")
     Rules.AppsWriteQuoted(*document, LocaleActiveCode())
-    BuilderPrint(*document, ",\"presentation\":{\"mode\":\"icon\",\"tile_class\":%,\"action_class\":%,\"muted_class\":%},\"children\":[",
-        KssClassId(KssMakeName("launcher-tile")), KssClassId(KssMakeName("launcher-action")), KssClassId(KssMakeName("launcher-muted")))
+    BuilderPrint(*document, ",\"presentation\":{\"mode\":\"list\",\"section_break\":%,\"tile_class\":%,\"action_class\":%,\"muted_class\":%},\"children\":[",
+        section_break, KssClassId(KssMakeName("launcher-tile")), KssClassId(KssMakeName("launcher-action")), KssClassId(KssMakeName("launcher-muted")))
     for route: routes { LauncherAppCatalogEntry(group, *document, route) }
     for offer: offers { LauncherAppCatalogEntry(group, *document, -1, offer) }
     BuilderPrint(*document, "]}")

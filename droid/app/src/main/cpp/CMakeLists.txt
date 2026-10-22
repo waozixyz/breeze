@@ -228,6 +228,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${REPO_ROOT}/scripts/build-bundle-runtime.py" "${REPO_ROOT}/ziran.lock")
 
 set(APP_EMBEDDED_INPUTS
+    build/apps-ui/apps.zib
     apps/publishers.json
     assets/app/icon.png
 )

@@ -3,8 +3,7 @@
 ## [2.1.38] - 2026-10-21
 
 - Apps uses clean scrollable lists. Hold an app for one second to arrange favorites, then tap Done to return to browsing.
-- Apps opens with one shared renderer for its pinned and other apps.
-
+- Apps opens faster when first showing your apps.
 - Arcade switches to newly installed game updates without keeping an older campaign open.
 - Shovey's own Back button returns to its game chooser.
 - Escape closes the open dialog, including while an input is focused.
