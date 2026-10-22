@@ -35,6 +35,10 @@ The clean scan also caught Tai Chi's animation data named `course.bin` as a
 generic binary. Its `TCH2` data format now uses `course.tch`, including the
 exporter, package and reader. No executable scanner rule or path is ignored.
 
+A clean Gradle build also needs the shared Apps controller before native
+compilation. Android's CMake tasks now depend on package preparation, so the
+F-Droid build cannot accidentally rely on a bundle left by a desktop build.
+
 The upstream F-Droid entry must use the full commit of a successfully
 published release and its corresponding `inbe-VERSION-fdroid.apk` binary.
 A passing GitHub check does not mean F-Droid has merged or distributed that
