@@ -6,18 +6,20 @@
 
 static int account_present;
 static const char *account_alias;
+static const char public_id[] =
+    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 int32_t sync_account_load(AccountKeys *account)
 {
-    if (!account_present)
-        return 0;
-    memset(account, 0, sizeof(*account));
-    memcpy(account->public_id, "abcdefghijklmnop", 16);
-    return 1;
+    (void)account;
+    assert(0 && "Navigation must not load private account keys");
+    return 0;
 }
 
 String storage_get_setting_text(String key)
 {
+    if (StringEqual(key, StringView("sync_public_id", 14)))
+        return StringView(public_id, account_present ? sizeof(public_id) - 1 : 0);
     assert(StringEqual(key, StringView("sync_account_alias", 18)));
     return StringView(account_alias, strlen(account_alias));
 }
@@ -72,11 +74,11 @@ int main(void)
     app.profile_display_name[0] = 0;
     account_alias = "";
     app_nav_profile_identity(&app, out, sizeof(name), sub, sizeof(subtitle));
-    assert(strcmp((char *)name, "abcd...mnop") == 0);
+    assert(strcmp((char *)name, "0123...cdef") == 0);
     assert(strcmp((char *)subtitle, "Profile") == 0);
 
     app_nav_profile_identity(&app, (Slice){small, sizeof(small)}, 5,
                              sub, sizeof(subtitle));
-    assert(strcmp((char *)small, "abcd") == 0);
+    assert(strcmp((char *)small, "0123") == 0);
     return 0;
 }
