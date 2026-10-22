@@ -1,5 +1,6 @@
 """The real shop can scroll through its full activity at phone and desktop sizes."""
 import os
+import re
 import shutil
 from pathlib import Path
 import subprocess
@@ -39,16 +40,19 @@ for width, height, scale in [(390, 844, 10), (900, 720, 10), (390, 844, 20)]:
             driver.wait_idle(frames=30)
             nodes = driver.tree()
             activity = next(node for node in nodes if node["label"] == "Activity")
-            spending = [node for node in nodes if node["label"].startswith("-") and
-                        any(char.isdigit() for char in node["label"]) and node["y"] > activity["y"]]
-            assert len(spending) == 10, (name, "fixture must have ten purchases", spending)
-            last = max(spending, key=lambda node: node["y"])
+            # Activity mixes earnings and purchases in timestamp order.
+            # Both signed whole coins and half coins must remain reachable.
+            movements = [node for node in nodes if node["kind"] == "text" and
+                         re.fullmatch(r"[+-](?:[0-9]+½?|½)", node["label"]) and
+                         node["y"] > activity["y"]]
+            assert len(movements) == 10, (name, "fixture must have ten coin movements", movements)
+            last = max(movements, key=lambda node: node["y"])
             assert last["visible"] and last["visible_height"] >= last["height"] - 1, \
                 (name, "last activity is clipped at the scroll limit", last)
             days = [node for node in nodes if node["label"] == "Today" and node["y"] > activity["y"]]
             last_day = max(days, key=lambda node: node["y"])
             assert last_day["visible"] and last_day["visible_height"] >= last_day["height"] - 1,                 (name, "last activity date is clipped", last_day)
-            for node in spending:
+            for node in movements:
                 if node["visible"]:
                     assert node["visible_x"] >= 0 and node["visible_x"] + node["visible_width"] <= width, \
                         (name, "amount overlaps the right edge", node)
