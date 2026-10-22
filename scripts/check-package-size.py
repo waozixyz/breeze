@@ -28,6 +28,9 @@ def check(path, budgets):
             raise ValueError("Expected exactly one shared assets/inbe.zib")
         package = packages[0]
         within("Portable app package", package.file_size, budgets["app_package_bytes"])
+        controllers = [entry for entry in files if entry.filename.endswith("/apps.zib")]
+        if len(controllers) != 1 or controllers[0].filename != prefix + "assets/apps.zib":
+            raise ValueError("Expected exactly one shared assets/apps.zib controller")
         libraries = [entry for entry in files
                      if entry.filename.startswith(prefix + "lib/")
                      and entry.filename.endswith("/libmain.so")]

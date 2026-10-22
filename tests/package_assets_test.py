@@ -43,6 +43,10 @@ def assets(data):
     return result
 
 root = assets((ROOT / 'build/inbe.zib').read_bytes())
+for name in ('photos', 'radio', 'library'):
+    shape = (ROOT / 'assets' / name / 'sidebar.shape').read_bytes()
+    assert root['assets/apps/icons/' + name + '.shape'] == shape
+    assert shape.startswith(b'S') and len(shape) < 4096
 assert set(name for name in root if name.startswith('cells/')) == {
     'cells/lumi.zib', 'cells/habits.zib', 'cells/practices.zib',
     'cells/lists.zib', 'cells/diary.zib', 'cells/leaderboard.zib'}

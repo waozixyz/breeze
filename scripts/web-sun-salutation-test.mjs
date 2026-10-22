@@ -251,7 +251,8 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
                 probe.meshSources.set(source, !!source.getContext('webgl'));
               if (probe.meshSources.get(source)) {
                 probe.meshTransfers++;
-                probe.meshPixels += source.width * source.height;
+                probe.meshPixels += args.length === 9
+                  ? args[3] * args[4] : source.width * source.height;
                 if (${process.env.WEB_SMOKE_MESH_TRACE === '1'} && probe.meshStacks.length < 2) {
                   Error.stackTraceLimit = 40;
                   probe.meshStacks.push(new Error('mesh transfer').stack);

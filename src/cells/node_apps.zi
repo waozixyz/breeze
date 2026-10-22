@@ -294,8 +294,21 @@ NodeAppIconValid :: (shape: string) -> bool {
     return shape.count > 6 && shape.count < NODE_APP_ICON_MAX && shape[:1] == "S"
 }
 
-// The app's outline icon from its package, or a plain grid while none is
-// installed.
+// Small catalog icons remain available before the app is downloaded.
+NodeAppCatalogIcon :: (name: string) -> string {
+    if !NodeAppNameValid(name) { return NODE_APP_GENERIC_ICON }
+    prefix := PackageText("assets/apps/icons/", name)
+    path := PackageText(prefix, ".shape")
+    defer {
+        PackageFree(prefix)
+        PackageFree(path)
+    }
+    asset := AssetRead(path)
+    if asset.found && NodeAppIconValid(asset.data) { return asset.data }
+    return NODE_APP_GENERIC_ICON
+}
+
+// Prefer an installed app's own outline, then its catalog icon.
 NodeAppIconShape :: (slot: s32) -> string {
     if NodeAppRunning(slot) {
         path := NodeAppAssetPath(NodeAppName(slot), "sidebar.shape")
@@ -307,18 +320,20 @@ NodeAppIconShape :: (slot: s32) -> string {
             return asset.data
         }
     }
-    if slot < 0 || slot >= NodeAppSlots || !NodeAppInstalled(slot) {
+    if slot < 0 || slot >= NodeAppSlots {
         return NODE_APP_GENERIC_ICON
     }
+    fallback := NodeAppCatalogIcon(NodeAppName(slot))
+    if !NodeAppInstalled(slot) { return fallback }
     version := ifx NodeAppLocal(NodeAppName(slot)) then "local" else PackageVersion(NodeAppIndex(slot))
     if version.count == 0 || version.count >= NODE_APP_ICON_VERSION_MAX {
-        return NODE_APP_GENERIC_ICON
+        return fallback
     }
     if TextUntilNul(node_icon_versions[slot][:]) != version {
         NodeAppLoadIcon(slot, version)
     }
     if node_icon_sizes[slot] == 0 {
-        return NODE_APP_GENERIC_ICON
+        return fallback
     }
     return TextFromBytes(node_icons[slot][:node_icon_sizes[slot]])
 }

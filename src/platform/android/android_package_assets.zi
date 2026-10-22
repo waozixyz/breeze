@@ -1,5 +1,5 @@
-// The portable app package is shared by every ABI in the APK. Keep the NDK
-// asset open for the lifetime of its borrowed bytes, including Activity resets.
+// Portable packages are shared by every ABI in the APK. Keep each NDK asset
+// open for the lifetime of its borrowed bytes, including Activity resets.
 #import "android_jni"
 #import "byte_text_linux"
 
@@ -12,21 +12,34 @@
     PackageAssetBuffer :: (asset: *void) -> *u8 #foreign android "AAsset_getBuffer";
     PackageAssetLength :: (asset: *void) -> s64 #foreign android "AAsset_getLength64";
     PackageAssetClose :: (asset: *void) #foreign android "AAsset_close";
-    package_asset: *void;
-    package_bytes: string;
+    PackageAsset :: struct {
+        asset: *void
+        bytes: string
+    }
+    package_assets: [2]PackageAsset;
 }
 
-AndroidPackageBytes :: () -> string {
+AndroidPackageBytes :: (path: string) -> string {
     #if #defined(ANDROID_BUILD) {
-        if package_asset != null {
-            return package_bytes
+        index: s32 = 0
+        if path == "apps.zib" {
+            index = 1
+        } else if path != "inbe.zib" {
+            return ""
+        }
+        cached := *package_assets[index]
+        if cached.asset != null {
+            return cached.bytes
         }
         app := PackageAndroidApp()
         if app == null || app.activity == null || app.activity.asset_manager == null {
             return ""
         }
-        path: [9]u8 = .[105, 110, 98, 101, 46, 122, 105, 98, 0]
-        asset := PackageAssetOpen(app.activity.asset_manager, *path[0], 3)
+        name: [9]u8
+        for offset: cast(s32)0..7 {
+            name[offset] = path[offset]
+        }
+        asset := PackageAssetOpen(app.activity.asset_manager, *name[0], 3)
         if asset == null {
             return ""
         }
@@ -36,9 +49,9 @@ AndroidPackageBytes :: () -> string {
             PackageAssetClose(asset)
             return ""
         }
-        package_asset = asset
-        package_bytes = TextFromBytes(BytesFromPointer(data, cast(u64)length))
-        return package_bytes
+        cached.asset = asset
+        cached.bytes = TextFromBytes(BytesFromPointer(data, cast(u64)length))
+        return cached.bytes
     }
     return ""
 }

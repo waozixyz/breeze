@@ -396,6 +396,7 @@ CELL_SOURCES := $(shell find apps src/cells -name '*.zi' | LC_ALL=C sort) src/co
 CELL_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp 2>/dev/null)
 CELL_RESOURCES += $(shell rg --files assets/practices design/tai-chi/text 2>/dev/null) apps/practice/content.json design/tai-chi/narration.json design/tai-chi/narration-lines.json $(wildcard design/tai-chi/narration-receipt.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt) $(wildcard design/lumi-guide/*.json) scripts/practice_content.py scripts/generate-lumi-guide-narration.py
 CELL_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievement-locales/*.json)
+CELL_RESOURCES += $(wildcard assets/*/sidebar.shape)
 
 # Read here, before TARGET is set: its UI tests do not build $(TARGET) first.
 include mk/tests-lumi.mk

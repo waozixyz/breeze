@@ -91,6 +91,15 @@ for file in sorted({p for pattern in patterns for p in ROOT.glob(pattern) if p.i
         continue
     shutil.copyfile(file, target)
 
+# Catalog outlines are small metadata, available before an app is installed.
+# The app retains its own copy for standalone and embedded use.
+for name in NODE_APPS:
+    source = ROOT / 'assets' / name / 'sidebar.shape'
+    if source.is_file():
+        destination = OUTPUT / 'inbe/assets/apps/icons' / (name + '.shape')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+
 # Root launcher cards share the reviewed Apps controller. A node-only build
 # can omit it; the root bundle build below requires this asset explicitly.
 apps_bundle = ROOT / 'build/apps-ui/apps.zib'

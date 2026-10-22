@@ -4,6 +4,7 @@
 
 - Keep practice animation smooth in the browser.
 - Restore clean F-Droid builds.
+- Show distinct Photos, Radio and Library icons in Apps, including before installation.
 
 ## [2.1.41] - 2026-10-22
 

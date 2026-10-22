@@ -39,6 +39,11 @@ A clean Gradle build also needs the shared Apps controller before native
 compilation. Android's CMake tasks now depend on package preparation, so the
 F-Droid build cannot accidentally rely on a bundle left by a desktop build.
 
+The reviewed Apps controller now lives once in APK assets, beside the main
+app package, rather than being embedded in every CPU library. The Android
+asset reader retains each package independently across Activity replacement.
+Archive checks require both shared packages and keep the native size budgets.
+
 The upstream F-Droid entry must use the full commit of a successfully
 published release and its corresponding `inbe-VERSION-fdroid.apk` binary.
 A passing GitHub check does not mean F-Droid has merged or distributed that
