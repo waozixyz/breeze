@@ -53,8 +53,10 @@ def assert_selection(image, bounds, name, expected="apps", below_label=12, node=
     label = tile.crop((8, height // 2 + 5, width - 8, height - below_label))
     colors = label.getcolors(label.width * label.height)
     _, ink = max(colors, key=lambda entry: contrast(entry[1], fill))
-    ink_count = sum(count for count, color in colors if contrast(color, fill) >= 3)
-    assert ink_count >= 8, f"{name}: label has no readable glyph interiors"
+    # Small navigation labels contain antialiased strokes with few fully
+    # opaque pixels. Check their presence separately from the 4.5:1 ink test.
+    ink_count = sum(count for count, color in colors if contrast(color, fill) >= 2)
+    assert ink_count >= 8, f"{name}: label has no readable glyph strokes"
     ratio = contrast(ink, fill)
     assert ratio >= 4.5, f"{name}: active label contrast is {ratio:.2f}:1"
     # The tile is the widget the app reports there: its label, and the
@@ -74,8 +76,8 @@ def assert_regressions_rejected(image, bounds, name):
     label = (left + 8, top + (bottom - top) // 2 + 5, right - 8, bottom - 12)
     for defect, message in (("fill", "no visible fill"),
                             ("outline", "outline blends"),
-                            ("missing-label", "readable glyph interiors"),
-                            ("faint-label", "readable glyph interiors")):
+                            ("missing-label", "readable glyph strokes"),
+                            ("faint-label", "readable glyph strokes")):
         broken = image.copy()
         if defect == "fill":
             broken.putpixel(((left + right) // 2, top + 6), outside)
@@ -97,6 +99,37 @@ def assert_regressions_rejected(image, bounds, name):
             assert message in str(error), f"{defect}: failed for an unrelated reason: {error}"
         else:
             raise AssertionError(f"Visual oracle accepted {defect}")
+
+
+def assert_app_entry(image, bounds, name, node):
+    tile = image.crop(bounds)
+    width, height = tile.size
+    fill = tile.getpixel((width // 2, 6))
+    label = tile.crop((60, 8, width - 8, height - 8))
+    colors = label.getcolors(label.width * label.height)
+    _, ink = max(colors, key=lambda entry: contrast(entry[1], fill))
+    ink_count = sum(count for count, color in colors if contrast(color, fill) >= 3)
+    assert ink_count >= 8, f"{name}: app name has no readable glyph interiors"
+    ratio = contrast(ink, fill)
+    assert ratio >= 4.5, f"{name}: app name contrast is {ratio:.2f}:1"
+    assert node["label"] == "Practice", f"{name}: Practice label is missing"
+    assert not node["selected"], f"{name}: last-opened app is highlighted"
+    return {"label_contrast": round(ratio, 2), "selected": False}
+
+
+def assert_app_entry_regressions_rejected(image, bounds, name, node):
+    left, top, right, bottom = bounds
+    fill = image.getpixel(((left + right) // 2, top + 6))
+    missing = image.copy()
+    missing.paste(fill, (left + 60, top + 8, right - 8, bottom - 8))
+    for broken, entry, message in ((missing, node, "no readable glyph interiors"),
+                                   (image, node | {"selected": True}, "last-opened app is highlighted")):
+        try:
+            assert_app_entry(broken, bounds, name, entry)
+        except AssertionError as error:
+            assert message in str(error), f"App entry failed for an unrelated reason: {error}"
+        else:
+            raise AssertionError("App entry oracle accepted a missing name or highlighted app")
 
 
 def main():
@@ -267,20 +300,19 @@ def run_cases(arguments, evidence):
                                     and theme == (9 if arguments.quick else 0)):
                                 assert_regressions_rejected(image, bounds, name)
                                 evidence.append({"case": name, "negative_controls": 4})
-                        # Cancel activation: releasing inside Apps toggles the
-                        # launcher and would make the next card assertion inspect
-                        # the Practice page instead of the app library.
+                        # Release away from Apps to isolate the pointer-state
+                        # checks from navigation.
                         point(width - 2, 2, down=True)
                         point(width - 2, 2)
                         settle(.15)
-                        # Practice is the second pinned card. Apps reflows to five
-                        # 144 wide cards on the desktop and keeps two on a phone.
+                        # This fixture pins Habits then Practice. List entries
+                        # stack vertically and keep the last-opened app ordinary.
                         nodes = driver.tree()
                         practice = in_page(nodes, "Practice")
                         assert len(driver.find(key=practice["key"])) == 1, f"{name}: two widgets share a key"
                         pinned = [node for node in nodes if node["parent"] == practice["parent"]
-                                  and node["kind"] == "button" and node["width"] == practice["width"]
-                                  and node["y"] == practice["y"]]
+                                  and node["kind"] == "button" and node["width"] == practice["width"]]
+                        pinned.sort(key=lambda node: (node["y"], node["x"]))
                         assert pinned.index(practice) == 1, f"{name}: Practice is not the second pinned card"
                         card = on_screen(practice)
                         middle = ((card[0] + card[2]) // 2, (card[1] + card[3]) // 2)
@@ -289,11 +321,16 @@ def run_cases(arguments, evidence):
                                 point(*middle, down=state == "pressed")
                                 settle()
                             image = capture("-card-" + state)
-                            # App cards show their download size on a muted line just
-                            # below the name; check the name above that line.
                             selected = driver.find(key=practice["key"])[0]
-                            metrics = assert_selection(image, card, name + "-card-" + state, "practice",
-                                                       below_label=17, node=selected)
+                            metrics = assert_app_entry(image, card, name + "-card-" + state, selected)
+                            if state == "idle":
+                                ordinary = on_screen(in_page(driver.tree(), "Habits"))
+                                normal_fill = image.getpixel(((ordinary[0] + ordinary[2]) // 2, ordinary[1] + 6))
+                                assert image.getpixel(((card[0] + card[2]) // 2, card[1] + 6)) == normal_fill, \
+                                    f"{name}: last-opened app has a different fill"
+                            if layout == "desktop" and dark == 0 and state == "idle" and theme == (9 if arguments.quick else 0):
+                                assert_app_entry_regressions_rejected(image, card, name, selected)
+                                metrics["negative_controls"] = 2
                             evidence.append({"case": name, "state": "card-" + state, **metrics})
                         # Finish the held press outside the card so it cannot open
                         # a route before the fixture's last frame is checked.

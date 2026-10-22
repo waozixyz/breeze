@@ -143,8 +143,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
         saved = dict(db.execute("SELECT key,value FROM settings WHERE user_id=?", (user,)))
         favorites = [int(saved[f"launcher_favorite_{i}"])
                      for i in range(int(saved.get("launcher_favorite_count", 0)))]
-        # A new profile adds Leaderboard from More apps.
-        assert not int(saved["enabled_apps"]) & 32, "Leaderboard was installed for a new profile"
+        # Leaderboard ships installed, while the person's pins stay separate.
+        assert int(saved["enabled_apps"]) & 32, "Leaderboard was not preinstalled for a new profile"
+        assert int(saved["app_used_leaderboard"]) == 1, "Leaderboard's stored install choice is missing"
         assert LEADERBOARD_ROUTE not in favorites, "Leaderboard was pinned by default"
         settings = {"language": "en", "language_system": 0, "language_setup_done": 1,
                     "apps_setup_done": 1, "app_used_leaderboard": 1, "main_tab": 5, "tutorial_seen": 1,
@@ -260,6 +261,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-about-") as directory:
     assert about.returncode == 0 and shot.exists(), stdout[-4000:] + stderr[-2000:]
     assert "out of bounds" not in stdout + stderr, stdout[-4000:]
 driver_directory.cleanup()
-print("Leaderboard: unpinned install, installed practices in order, saved ranks, average hold, "
+print("Leaderboard: preinstalled and unpinned, installed practices in order, saved ranks, average hold, "
       "meditation time, patterns, Astral Projection, only ranked apps offered, "
       "a downloaded practice joining and About passed")

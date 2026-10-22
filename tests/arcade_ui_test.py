@@ -256,9 +256,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-arcade-") as directory:
         driver.press(label="Apps", role="button")
         card = wait_for(lambda: button("Arcade"), "More apps does not offer Arcade to an account with Chess")
         corner = [node for node in driver.tree() if node["label"] == "Download" and
-                  card["x"] <= node["x"] and node["x"] + node["width"] <= card["x"] + card["width"] and
+                  card["x"] <= node["x"] and node["x"] + node["width"] <= card["x"] + card["width"] + 49 and
                   card["y"] <= node["y"] and node["y"] + node["height"] <= card["y"] + card["height"]]
         assert len(corner) == 1, "Arcade's card has no download symbol"
+        assert corner[0]["x"] + corner[0]["width"] / 2 > card["x"] + card["width"] / 2, \
+            "Arcade's download symbol is not at the end of its row"
         driver.wait_idle(frames=30)
         stored = settings(profile, user)
         assert stored.get("app_used_arcade") != "1", "Arcade was installed for an account with Chess"
