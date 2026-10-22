@@ -24,8 +24,8 @@ shop_test_codec: WidgetHabitsShopFrameCodec;
 shop_test_reward_codec: WidgetHabitsShopRewardCodec;
 shop_test_activity_codec: WidgetHabitsShopActivityCodec;
 shop_test_reads: s32;
-shop_test_rows: s32;
-shop_test_activity_rows: s32;
+shop_test_rewards_seen: u32;
+shop_test_activity_seen: u32;
 shop_test_written: bool;
 
 ShopTestAssets :: (path: string) -> bool {
@@ -49,16 +49,19 @@ ShopTestCall :: (context: *void, module: *u8, function: *u8,
         return 1
     }
     if name == "ReadHabitRewardHost" && count == 1 {
-        shop_test_rows += 1
+        index := cast(s32)arguments[0].integer
+        if index < 0 || index >= shop_test_frame.reward_count { return 0 }
+        shop_test_rewards_seen |= cast(u32)1 << cast(u32)index
         result.* = WidgetEncodeHabitsShopReward(HabitsShopReward.{.id = "reward-1",
                 .name = "Joint", .price = 5, .icon = 48}, *shop_test_reward_codec)
         return 1
     }
     if name == "ReadHabitActivityHost" && count == 1 {
         index := cast(s32)arguments[0].integer
+        if index < 0 || index >= shop_test_frame.activity_count { return 0 }
+        shop_test_activity_seen |= cast(u32)1 << cast(u32)index
         line := HabitsShopActivity.{.name = ifx index == 0 then "Meditate" else "Joint",
             .icon = 20, .halves = ifx index == 0 then 2 else -10, .day = "Today"}
-        shop_test_activity_rows += 1
         result.* = WidgetEncodeHabitsShopActivity(line, *shop_test_activity_codec)
         return 1
     }
@@ -91,7 +94,9 @@ CheckHabitShop :: () -> s32 {
     unused SessionClose(session)
     if !drawn.succeeded { return 1 }
     if shop_test_reads != 1 || !shop_test_written { return 2 }
-    if shop_test_rows != 2 || shop_test_activity_rows != 2 { return 3 }
+    // Layout measures wrapped rows before drawing them; every row must be
+    // available in both passes, independently of the number of host reads.
+    if shop_test_rewards_seen != cast(u32)3 || shop_test_activity_seen != cast(u32)3 { return 3 }
     if painted == 0 { return 4 }
     if shop_test_frame.action != HABITS_SHOP_NONE { return 5 }
     // Buy's dialog draws the reward it asks about.
