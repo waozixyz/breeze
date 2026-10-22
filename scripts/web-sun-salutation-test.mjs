@@ -210,8 +210,26 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
   await evaluate(`(() => {
     const probe = window.__inbeAnimationProbe = {
       active: false, last: 0, gaps: [], decodes: [], readbacks: 0, uploads: 0,
-      meshSources: new WeakMap(), meshTransfers: 0, meshPixels: 0, meshStacks: []
+      meshSources: new WeakMap(), meshTransfers: 0, meshPixels: 0, meshStacks: [],
+      meshDraws: 0, meshVertices: 0, meshBuffers: 0, meshBytes: 0, meshUploads: 0
     };
+    for (const method of ['drawArrays', 'bufferData', 'texImage2D']) {
+      const original = WebGLRenderingContext.prototype[method];
+      WebGLRenderingContext.prototype[method] = function(...args) {
+        if (probe.active) {
+          if (method === 'drawArrays') {
+            probe.meshDraws++;
+            probe.meshVertices += args[2];
+          }
+          if (method === 'bufferData') {
+            probe.meshBuffers++;
+            probe.meshBytes += args[1].byteLength || 0;
+          }
+          if (method === 'texImage2D') probe.meshUploads++;
+        }
+        return original.apply(this, args);
+      };
+    }
     for (const prototype of [CanvasRenderingContext2D.prototype,
       ...(typeof OffscreenCanvasRenderingContext2D === 'undefined' ? [] :
         [OffscreenCanvasRenderingContext2D.prototype])]) {
@@ -403,6 +421,8 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
       decodeMeanMs: probe.decodes.reduce((sum, value) => sum + value, 0) / probe.decodes.length,
       readbacks: probe.readbacks, uploads: probe.uploads,
       meshTransfers: probe.meshTransfers, meshPixels: probe.meshPixels,
+      meshDraws: probe.meshDraws, meshVertices: probe.meshVertices,
+      meshBuffers: probe.meshBuffers, meshBytes: probe.meshBytes, meshUploads: probe.meshUploads,
       meshStacks: probe.meshStacks
     };
   })()`);

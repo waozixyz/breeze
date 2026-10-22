@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.40] - 2026-10-22
+
+- Keep practice animations smooth in browsers on slower devices.
+
 ## [2.1.39] - 2026-10-22
 
 - Fix account sync, Shop borrowing and history, Android key backups and Profile navigation.
