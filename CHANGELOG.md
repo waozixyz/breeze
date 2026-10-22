@@ -3,7 +3,7 @@
 ## [2.1.38] - 2026-10-21
 
 - Simplify Apps editing, settings, navigation and app loading.
-- Fix duplicate Profile headers, scrolling, Escape handling and Android key backups.
+- Fix Profile headers, scrolling, dialogs, font freezes and Android key backups.
 - Fix large-account sync, sharing controls and activity and achievement views.
 
 ## [2.1.37] - 2026-10-20
