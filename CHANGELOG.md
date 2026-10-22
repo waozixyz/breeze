@@ -2,6 +2,8 @@
 
 ## [2.1.38] - 2026-10-21
 
+- Android account-key backups use the system Save dialog and confirm that the chosen file was written.
+
 - Shared lists preserve every task when edited, show who already has access, and let members edit and share them.
 - Undo restores a deleted task with its comment and completion state.
 - The Habits shop scrolls through all recent activity and offers a soda reward symbol.

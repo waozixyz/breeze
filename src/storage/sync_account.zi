@@ -1,4 +1,3 @@
-#import "file_export"
 #import, file "account_types.zi";
 #import "crypto"
 #import "keys"
@@ -26,7 +25,6 @@ SyncSaveFileData :: (path: *u8, body: *u8, length: s32) -> bool #foreign c "Save
 
 
 
-AccountExportPlatform :: () -> s32 #foreign c "inbe_account_export_platform";
 
 sync_public_id_key: string = "sync_public_id";
 sync_public_key_key: string = "sync_public_key";
@@ -41,7 +39,7 @@ account_has_values :: (account: *AccountKeys) -> s32 {
         return 0
     }
     if account.public_id[0] == 0 || account.public_key_hex[0] == 0 ||
-       account.private_key_hex[0] == 0 {
+    account.private_key_hex[0] == 0 {
         return 0
     }
     return 1
@@ -137,7 +135,7 @@ sync_account_generate :: (account: *AccountKeys) -> s32 {
 }
 
 sync_account_import_private_key_preview :: (account: *AccountKeys,
-                                               filename: *u8) -> s32 {
+    filename: *u8) -> s32 {
     data_init()
     if account == null || filename == null || filename[0] == 0 {
         return 0
@@ -152,7 +150,7 @@ sync_account_import_private_key_preview :: (account: *AccountKeys,
 }
 
 sync_account_save :: (account: *AccountKeys,
-                         local_data_choice: SyncAccountLocalDataChoice) -> SyncAccountSaveResult {
+    local_data_choice: SyncAccountLocalDataChoice) -> SyncAccountSaveResult {
     owner: string
 
     data_init()
@@ -167,12 +165,12 @@ sync_account_save :: (account: *AccountKeys,
 
     owner = storage_sync_data_owner_public_id()
     if owner.count > 0 && sync_account_same_owner(owner, account) == 0 &&
-        storage_has_local_syncable_data() != 0 {
+    storage_has_local_syncable_data() != 0 {
         if local_data_choice == cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_ASK {
             return cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_NEEDS_CLEAR
         }
         if local_data_choice == cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_REPLACE &&
-            storage_clear_local_syncable_data() == 0 {
+        storage_clear_local_syncable_data() == 0 {
             return cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_FAILED
         }
     }
@@ -196,8 +194,9 @@ sync_account_clear :: () -> s32 {
 }
 
 sync_account_export_private_key :: (account: *AccountKeys,
-                                       filename: *u8) -> s32 {
+    filename: *u8) -> s32 {
     body: [ACCOUNT_EXPORT_TEXT_SIZE] u8
+    defer { SecureWipe(*body[0], body.count) }
 
     if account_has_values(account) == 0 || filename == null || filename[0] == 0 {
         return 0
@@ -207,42 +206,34 @@ sync_account_export_private_key :: (account: *AccountKeys,
     }
     len := cast(s32)AppTextFromCString(*body[0], ACCOUNT_EXPORT_TEXT_SIZE).count
 
-    platform := AccountExportPlatform()
-    if platform == 1 || platform == 2 {
-        return ifx ExportBytes(AppTextFromCString(*body[0], ACCOUNT_EXPORT_TEXT_SIZE),
-            AppTextFromCString(filename, AccountPathCapacity), "application/octet-stream",
-            LocaleText("share_sheet_title")) then 1 else 0
-    } else {
-        index: s32 = 0
-        full_path: bool = false
-        while index < AccountPathCapacity && filename[index] != 0 {
-            if filename[index] == cast(u8)47 || filename[index] == cast(u8)92 {
-                full_path = true
-            }
-            index += 1
+    index: s32 = 0
+    full_path: bool = false
+    while index < AccountPathCapacity && filename[index] != 0 {
+        if filename[index] == cast(u8)47 || filename[index] == cast(u8)92 {
+            full_path = true
         }
-        if index == AccountPathCapacity { return 0 }
-        if full_path {
-            return ifx (SyncSaveFileData(filename, *body[0], len)) then (1) else (0)
-        }
-        path: [AccountPathCapacity] u8
-        root: [AccountPathCapacity]u8
-        if !AppCopyText(data_root(), root[:]) ||
-            storage_join_path(*path[0], AccountPathCapacity,
-                *root[0], filename) == 0 {
-            return 0
-        }
-        return ifx (SyncSaveFileData(*path[0], *body[0], len)) then (1) else (0)
+        index += 1
     }
+    if index == AccountPathCapacity { return 0 }
+    if full_path {
+        return ifx SyncSaveFileData(filename, *body[0], len) then 1 else 0
+    }
+    path: [AccountPathCapacity]u8
+    root: [AccountPathCapacity]u8
+    if !AppCopyText(data_root(), root[:]) ||
+    storage_join_path(*path[0], AccountPathCapacity, *root[0], filename) == 0 {
+        return 0
+    }
+    return ifx SyncSaveFileData(*path[0], *body[0], len) then 1 else 0
 }
 
 sync_account_sign_hex :: (message: *u8, message_len: s64,
-                             out_signature_hex: *u8, out_size: s64) -> s32 {
+    out_signature_hex: *u8, out_size: s64) -> s32 {
     account: AccountKeys
 
     if sync_account_load(*account) == 0 {
         return 0
     }
     return SignAccountKeysHex(*account, message, message_len, out_signature_hex,
-                              out_size)
+        out_size)
 }

@@ -45,6 +45,7 @@ SelfReloadData :: (app: *InnerBreeze, settings: s32) #foreign c "app_reload_afte
 self_management: Provider.ManagementProvider;
 self_management_started: bool;
 self_management_picker: bool;
+self_management_picker_kind: s32;
 self_management_picker_abandoned: bool;
 self_management_scan: bool;
 self_management_delivered: bool;
@@ -187,25 +188,33 @@ InbeManagementSnapshot :: (context: *void, output: *Manage.Management) {
 
 InbeManagementChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
     if AndroidPlatform() != 0 {
-        if save {
-            return ifx Native.NativeJoin(output, data_root(), "self-account.key") != "" then 1 else -1
-        }
         InbeManagementDiscardPicker()
         if self_management_picker_abandoned { return -1 }
         if !self_management_picker {
-            if !AndroidPickerOpen(cast(s32)ANDROID_IMPORT_KIND_SYNC_KEY, "*/*") {
+            self_management_picker_kind = cast(s32)(ifx save then ANDROID_EXPORT_KIND_SYNC_KEY else ANDROID_IMPORT_KIND_SYNC_KEY)
+            opened: bool
+            if save {
+                opened = AndroidSavePickerOpen(self_management_picker_kind,
+                    "self-account.key", "application/octet-stream")
+            } else {
+                opened = AndroidPickerOpen(self_management_picker_kind, "*/*")
+            }
+            if !opened {
                 return -1
             }
             self_management_picker = true
             return 2
         }
-        result := AndroidPickerPoll(cast(s32)ANDROID_IMPORT_KIND_SYNC_KEY, output)
+        result := AndroidPickerPoll(self_management_picker_kind, output)
         if result == .AndroidPickerNone {
             return 2
         }
         self_management_picker = false
         if result == .AndroidPickerCancelled {
             return 0
+        }
+        if output.count == 0 || output[0] == cast(u8)0 {
+            return -1
         }
         unused CopyCString(TextUntilNul(output), self_management_selected[:])
         return 1
@@ -219,6 +228,11 @@ InbeManagementChooseFile :: (context: *void, save: bool, output: []u8) -> s32 {
 }
 
 InbeManagementDeliver :: (context: *void, path: string) -> bool {
+    if AndroidPlatform() != 0 {
+        result := AndroidSavePickerCommit(path)
+        unused RemoveFile(path)
+        return result
+    }
     if AndroidPlatform() == 0 && WebPlatform() == 0 {
         return true
     }
@@ -311,7 +325,7 @@ InbeManagementDiscardPicker :: () {
     if !self_management.queue.pending { self_management_picker_abandoned = true }
     if !self_management_picker_abandoned { return }
     abandoned: [4096]u8
-    result := AndroidPickerPoll(cast(s32)ANDROID_IMPORT_KIND_SYNC_KEY, abandoned[:])
+    result := AndroidPickerPoll(self_management_picker_kind, abandoned[:])
     if result == .AndroidPickerNone { return }
     self_management_picker = false
     self_management_picker_abandoned = false

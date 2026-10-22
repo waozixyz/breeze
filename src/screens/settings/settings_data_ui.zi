@@ -1,6 +1,7 @@
 // Data transfer choices and account safety prompts remain in Ziran.
 c :: #system_library "c";
 #import "keys"
+#import "crypto"
 #import, file "../../app/app.zi";
 #import, file "../../app/app_types.zi";
 #import, file "../../app/modal_rules.zi";
@@ -73,6 +74,8 @@ free :: (value: *void) #foreign c;
 pending_import_path: [4096]u8;
 pending_import_info: DataImportInfo;
 pending_android_import_kind: s32 = -1;
+key_backup_picker_pending: bool;
+key_backup_owner: [65]u8;
 
 SettingsDataRect :: (x: s32, y: s32, width: s32,
     height: s32) -> Rectangle {
@@ -104,7 +107,7 @@ SettingsDataButtonProps :: (label: string, x: s32, y: s32,
 SettingsDataPick :: (title: string, filter: string,
     suggested: string, save: bool, output: []u8) -> s32 {
     return PickFile(FilePickerProps.{.title = title, .filter = filter,
-        .suggested_name = suggested, .save = save}, output)
+            .suggested_name = suggested, .save = save}, output)
 }
 
 SettingsDataExportPath :: (filename: string, output: []u8) -> bool {
@@ -217,15 +220,36 @@ SettingsDataImportKeyPath :: (app: *InnerBreeze, path: string) -> s32 {
 
 SettingsDataSaveKey :: (app: *InnerBreeze, filename: string) -> s32 {
     account: AccountKeys
+    defer { SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
     path: [4096]u8
-    if sync_account_load(*account) == 0 {
-        return 3
-    }
     if AndroidPlatform() != 0 {
-        if !SettingsDataExportPath(filename, path[:]) {
+        kind := cast(s32)ANDROID_EXPORT_KIND_DATA_KEY
+        if !key_backup_picker_pending {
+            if sync_account_load(*account) == 0 ||
+            !AndroidSavePickerOpen(kind, filename, "application/octet-stream") {
+                return 3
+            }
+            key_backup_owner = account.public_id
+            key_backup_picker_pending = true
+            return 0
+        }
+        picked := AndroidPickerPoll(kind, path[:])
+        if picked == .AndroidPickerNone {
+            return 0
+        }
+        key_backup_picker_pending = false
+        if picked == .AndroidPickerCancelled {
+            return 4
+        }
+        if path[0] == cast(u8)0 || sync_account_load(*account) == 0 ||
+        AppTextFromCString(*account.public_id[0], 65) != AppTextFromCString(*key_backup_owner[0], 65) {
+            SettingsDataReleaseExportPath(AppTextFromCString(*path[0], 4096))
             return 3
         }
     } else {
+        if sync_account_load(*account) == 0 {
+            return 3
+        }
         choice := SettingsDataPick(LocaleText("sync_save_key_dialog_title"),
             "Key files | *.key", filename, true, path[:])
         if choice == 0 {
@@ -239,9 +263,15 @@ SettingsDataSaveKey :: (app: *InnerBreeze, filename: string) -> s32 {
         SettingsDataReleaseExportPath(AppTextFromCString(*path[0], 4096))
         return 3
     }
-    if !SettingsDataDeliverExport(
-        AppTextFromCString(*path[0], 4096), filename,
-        "application/octet-stream") {
+    delivered: bool
+    if AndroidPlatform() != 0 {
+        delivered = AndroidSavePickerCommit(AppTextFromCString(*path[0], 4096))
+        SettingsDataReleaseExportPath(AppTextFromCString(*path[0], 4096))
+    } else {
+        delivered = SettingsDataDeliverExport(
+            AppTextFromCString(*path[0], 4096), filename, "application/octet-stream")
+    }
+    if !delivered {
         SettingsDataReleaseExportPath(AppTextFromCString(*path[0], 4096))
         return 3
     }

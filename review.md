@@ -4,6 +4,8 @@ This review continues the 21 October Inbe session. It records the requested fixe
 
 ## Changes in this continuation
 
+- Android account-key backups use a system-picked document URI, stage bytes in private storage, and report success only after writing and closing the destination. Cancellation and failed writes remain distinct from success.
+
 - Lists prepares shared edits from the complete account-scoped saved document in `src/cells/lists_command.zi`. The screen's bounded item buffer is a view, not a replacement document. Local sharing reads all saved items from SQLite; shared edits read the complete confirmed cache.
 - The Share dialog uses the list's owner and accepted/pending invitations. It copies strings that must survive another host read. Daochi supplies the same collaborator states to authorized members and the owner.
 - Undo restores a private item's existing row, retaining its ID, comment, completion and order. Shared undo retains the item ID, comment and completion in the next revision.

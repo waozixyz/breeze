@@ -56,6 +56,8 @@ import java.util.Arrays;
 
 public class MainActivity extends NativeActivity {
     private final HttpTransport httpTransport = new HttpTransport();
+    private final DocumentExport documentExport = new DocumentExport();
+    private int pendingSaveKind;
     private FrameLayout startupView;
     private boolean firstFrameReady;
     private long startupStarted;
@@ -298,6 +300,7 @@ public class MainActivity extends NativeActivity {
     private static final int REQUEST_IMPORT_ZIP = 1001;
     private static final int REQUEST_POST_NOTIFICATIONS = 1002;
     private static final int REQUEST_QR_SCAN = 1003;
+    private static final int REQUEST_SAVE_DOCUMENT = 1004;
     private static final int REQUEST_HEALTH_CONNECT = HealthConnectExport.REQUEST_CODE;
     private static final String DOWNLOAD_CHANNEL_ID = "runtime_downloads";
     private static final int DOWNLOAD_NOTIFICATION_ID = 2001;
@@ -730,6 +733,23 @@ public class MainActivity extends NativeActivity {
         });
     }
 
+    public void openSavePicker(String filename, String mimeType, int kind) {
+        runOnUiThread(() -> {
+            documentExport.clear();
+            pendingSaveKind = kind;
+            try {
+                startActivityForResult(DocumentExport.picker(filename, mimeType), REQUEST_SAVE_DOCUMENT);
+            } catch (Exception error) {
+                Log.e(TAG, "Could not open the document save picker", error);
+                nativeImportSelectedFile(kind, "");
+            }
+        });
+    }
+
+    public boolean savePickedFile(String path) {
+        return documentExport.commit(getContentResolver(), path);
+    }
+
     private static String[] parseMimeTypes(String mimeTypesCsv) {
         if (mimeTypesCsv == null || mimeTypesCsv.trim().isEmpty()) {
             return new String[0];
@@ -910,6 +930,23 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+
+        if (requestCode == REQUEST_SAVE_DOCUMENT) {
+            if (resultCode != RESULT_OK || data == null || data.getData() == null) {
+                documentExport.clear();
+                nativeImportCancelled(pendingSaveKind);
+            } else {
+                try {
+                    String path = documentExport.selected(getCacheDir(), data.getData());
+                    nativeImportSelectedFile(pendingSaveKind, path);
+                } catch (Exception error) {
+                    documentExport.clear();
+                    Log.e(TAG, "Could not prepare the selected document", error);
+                    nativeImportSelectedFile(pendingSaveKind, "");
+                }
+            }
+            return;
+        }
 
         if (requestCode == REQUEST_HEALTH_CONNECT) {
             HealthConnectExport.handleResult(this, resultCode, data, lastHealthConnectPath);
