@@ -80,6 +80,11 @@ with editor("keep-discard") as (driver, database, app):
     # Capture only this test process's window on its private display.
     found = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)], text=True)
     subprocess.run(["import", "-window", found.splitlines()[0], str(OUTPUT / "prompt.png")], check=True)
+    driver.key("escape")
+    driver.wait(focus_id=NAME, value="Unsaved habit")
+    assert not driver.find(label=PROMPT), "Escape did not dismiss the unsaved prompt"
+    assert not saved(database, "Unsaved habit"), "Escape saved the draft"
+    driver.press(label="Back", role="button")
     driver.press(label="Keep editing", role="button")
     driver.wait(focus_id=NAME, value="Unsaved habit")
     assert not saved(database, "Unsaved habit"), "keeping the draft saved it"

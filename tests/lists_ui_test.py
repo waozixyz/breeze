@@ -270,6 +270,18 @@ with contextlib.ExitStack() as stack:
     assert "Dana" not in names and "Emerald" not in names, names
     assert "Owner" in names and "Invited" in names and "Read only" in names, names
     assert "Refresh" not in names, names
+    # Escape works with the invite field focused and stays on this list.
+    driver.press(key=6540)
+    subprocess.run(["xdotool", "windowfocus", find_window()], check=True)
+    subprocess.run(["xdotool", "keydown", "Escape"], check=True)
+    time.sleep(.12)
+    subprocess.run(["xdotool", "keyup", "Escape"], check=True)
+    wait_for(lambda: not driver.find(role="modal", visible=True),
+             "Escape did not close the focused sharing dialog")
+    driver.wait(label="Share", role="button")
+    driver.wait(contains="Garden", role="tab")
+    driver.press(label="Share", role="button")
+    driver.wait(label="Cedar")
     # The same open dialog remains readable on a phone-sized viewport.
     subprocess.run(["xdotool", "windowsize", find_window(), "390", "844"], check=True)
     wait_for(lambda: driver.wait(role="modal")["width"] <= 390,
@@ -315,6 +327,12 @@ with contextlib.ExitStack() as stack:
     driver.wait(label="Can edit", role="option")
     driver.wait(label="Owner", role="option")
     driver.wait(label="Remove access", role="option")
+    # The first Escape closes the access popup, leaving Share open.
+    driver.key("escape")
+    wait_for(lambda: not driver.find(role="option", visible=True),
+             "Escape did not close the access popup")
+    driver.wait(label="People with access")
+    driver.press(label="Read only")
     driver.press(label="Can edit", role="option")
     wait_for(lambda: sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:10'"),
              "the permission change was not stored")

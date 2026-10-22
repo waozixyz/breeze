@@ -171,6 +171,23 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
     # Preview windows used to discard the close dialog result forever. The
     # prompt must also appear and work above the Apps overlay.
     for scene in ("close_prompt", "close_prompt_over_apps"):
+        with application(Path(temporary) / (scene + "-escape"), "escape-" + scene, "--screenshot",
+                         str(Path(temporary) / (scene + "-escape.png")), "--screenshot-scene", scene,
+                         "--screenshot-width", "900", "--screenshot-height", "720",
+                         preview=True) as (app, window, log):
+            driver.wait(contains="keep Inner Breeze running")
+            command("xdotool", "windowfocus", window)
+            command("xdotool", "keydown", "Escape")
+            time.sleep(.12)
+            command("xdotool", "keyup", "Escape")
+            deadline = time.monotonic() + 5
+            while driver.find(contains="keep Inner Breeze running", visible=True):
+                assert time.monotonic() < deadline, "Escape did not dismiss the close prompt\n" + driver.text()
+                time.sleep(.05)
+            assert app.poll() is None, "Escape quit the app behind the close prompt"
+            if scene == "close_prompt_over_apps":
+                driver.wait(label="More apps")
+            receipts[scene + "_escape"] = "dismissed without quitting"
         with application(Path(temporary) / scene, "quit-" + scene, "--screenshot",
                          str(Path(temporary) / (scene + ".png")), "--screenshot-scene", scene,
                          "--screenshot-width", "900", "--screenshot-height", "720",

@@ -2,8 +2,12 @@
 
 ## [2.1.38] - 2026-10-21
 
+- Apps uses clean scrollable lists. Hold an app for one second to arrange favorites, then tap Done to return to browsing.
+- Apps opens with one shared renderer for its pinned and other apps.
+
 - Arcade switches to newly installed game updates without keeping an older campaign open.
 - Shovey's own Back button returns to its game chooser.
+- Escape closes the open dialog, including while an input is focused.
 - Scrolling stays responsive while a text field is focused.
 - Profile Activity shows activity without repeating profile destinations.
 - Every achievement has its own meaningful icon, without numbered badge frames.
