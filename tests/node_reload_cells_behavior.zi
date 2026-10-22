@@ -1,0 +1,92 @@
+// Running extra apps review only their own package generation. Waiting for a
+// safe save boundary retains the verified replacement without repeated IO.
+#import "std/c_string"
+#import "std/text_buffer"
+#import, file "../src/cells/node_apps.zi";
+#import, file "../src/cells/node_app_runner.zi";
+#import, file "../src/cells/package_manager.zi";
+#import, file "../src/cells/package_release.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../src/cells/catalog.zi";
+Nested :: #import "apps/host";
+
+NodeReloadExpect :: #type (ok: bool, code: s32) -> void;
+reload_host :: #system_library "c";
+ReloadSetRevision :: (index: s32, revision: s32) #foreign reload_host "ModuleTestSetRevision";
+ReloadTrackMetadataReads :: (enabled: bool) #foreign reload_host "ModuleTestTrackMetadataReads";
+ReloadMetadataReads :: () -> s32 #foreign reload_host "ModuleTestMetadataReads";
+ReloadTrustedReleaseReal :: (metadata: string,
+    index: s32) -> PackageRelease #foreign reload_host "__real_package_manager_PackageTrustedRelease";
+
+node_reload_force_update: bool;
+node_reload_target_index: s32;
+
+// Signature validation is covered by the signed lifecycle fixture. This
+// descriptor lets the reload test hold a verified replacement at its save
+// boundary without publishing or starting a package.
+#program_export "__wrap_package_manager_PackageTrustedRelease"
+NodeReloadTrustedRelease :: (metadata: string, index: s32) -> PackageRelease {
+    if node_reload_force_update && index == node_reload_target_index {
+        release: PackageRelease
+        release.valid = true
+        unused CopyCString("1111111111111111111111111111111111111111111111111111111111111111", release.hash[:])
+        return release
+    }
+    return ReloadTrustedReleaseReal(metadata, index)
+}
+
+CheckNodeReloadRevisions :: (expect: NodeReloadExpect) {
+    slot := cast(s32)(NodeAppSlots - 1)
+    index := NodeAppIndex(slot)
+    saved := node_runners[slot]
+    saved_local := node_local_name
+    saved_name := PackageText(NodeAppName(slot), "")
+    node_revision := PackageRevisionFor(index)
+    lists_revision := PackageRevisionFor(1)
+    habits_revision := PackageRevisionFor(2)
+    defer {
+        node_reload_force_update = false
+        ReloadTrackMetadataReads(false)
+        node_runners[slot] = saved
+        node_local_name = saved_local
+        PackageSetNodeApp(slot, saved_name)
+        PackageFree(saved_name)
+        ReloadSetRevision(index, node_revision)
+        ReloadSetRevision(1, lists_revision)
+        ReloadSetRevision(2, habits_revision)
+    }
+    host: Nested.AppHost
+    host.tree.busy = true
+    node_runners[slot] = NodeAppRunner.{.nested = *host}
+    node_local_name[0] = cast(u8)0
+    PackageSetNodeApp(slot, "revisionprobe")
+    ReloadSetRevision(index, 0)
+    ReloadTrackMetadataReads(true)
+    expect(NodeAppsReloadUpdated() && ReloadMetadataReads() == 0, 274)
+    ReloadSetRevision(1, 75)
+    expect(NodeAppsReloadUpdated() && ReloadMetadataReads() == 0, 275)
+    ReloadSetRevision(index, 76)
+    // Missing/bad metadata preserves the working instance, but this
+    // generation is checked only once. A repair publishes a new generation.
+    expect(NodeAppsReloadUpdated() && ReloadMetadataReads() == 1 &&
+        NodeAppRunning(slot) && node_runners[slot].checked_revision == 76, 276)
+    expect(NodeAppsReloadUpdated() && ReloadMetadataReads() == 1, 277)
+    ReloadSetRevision(2, 77)
+    expect(NodeAppsReloadUpdated() && ReloadMetadataReads() == 1, 278)
+    ReloadSetRevision(index, 78)
+    expect(NodeAppsReloadUpdated() && ReloadMetadataReads() == 2 && NodeAppRunning(slot), 279)
+    node_reload_target_index = index
+    node_reload_force_update = true
+    ReloadSetRevision(index, 79)
+    expect(!NodeAppsReloadUpdated() && node_runners[slot].checked_revision == 79 &&
+        node_runners[slot].reload_pending && NodeAppRunning(slot) && ReloadMetadataReads() == 3, 280)
+    expect(!NodeAppsReloadUpdated() && node_runners[slot].reload_pending &&
+        NodeAppRunning(slot) && ReloadMetadataReads() == 3, 281)
+    node_reload_force_update = false
+    ReloadSetRevision(index, 80)
+    expect(NodeAppsReloadUpdated() && !node_runners[slot].reload_pending &&
+        NodeAppRunning(slot) && ReloadMetadataReads() == 4, 282)
+    unused CopyCString("revisionprobe", node_local_name[:])
+    ReloadSetRevision(index, 81)
+    expect(NodeAppsReloadUpdated() && ReloadMetadataReads() == 4 && NodeAppRunning(slot), 283)
+}

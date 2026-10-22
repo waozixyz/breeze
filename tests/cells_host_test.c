@@ -22,6 +22,31 @@ static bool corrupt_cached_lists;
 static bool fail_next_instance;
 static bool fail_next_run;
 static int32_t package_revisions[15];
+static atomic_bool track_metadata_reads;
+static atomic_int metadata_reads;
+
+void ModuleTestTrackMetadataReads(bool enabled)
+{
+    if (enabled) atomic_store(&metadata_reads, 0);
+    atomic_store(&track_metadata_reads, enabled);
+}
+
+int32_t ModuleTestMetadataReads(void)
+{
+    return atomic_load(&metadata_reads);
+}
+
+String __real_package_files_PackageRead(String path, int64_t maximum);
+String __wrap_package_files_PackageRead(String path, int64_t maximum)
+{
+    const char suffix[] = ".current.json";
+    const size_t length = sizeof(suffix) - 1;
+    if (atomic_load(&track_metadata_reads) && path.length >= (int64_t)length &&
+        memcmp(path.data + path.length - length, suffix, length) == 0) {
+        atomic_fetch_add(&metadata_reads, 1);
+    }
+    return __real_package_files_PackageRead(path, maximum);
+}
 
 void ModuleTestSetRevision(int32_t index, int32_t revision)
 {

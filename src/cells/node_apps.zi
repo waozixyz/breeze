@@ -84,26 +84,6 @@ NodeAppOffer :: struct {
     name: [NODE_APP_NAME_MAX + 1]u8
     title: [65]u8
     size: s64
-    // Published as beta: listed only while beta apps are shown.
-    beta: bool
-}
-
-// Beta apps show in More apps only on a device where Settings › About's
-// Show beta apps is on. The choice stays on this device.
-NODE_APP_BETA_KEY :: "node_apps_beta"
-
-NodeAppBetaShown :: () -> bool {
-    return SettingsReadInt(NODE_APP_BETA_KEY, 0) != 0
-}
-
-// Turning beta apps on reads the node's list again the next time Apps is
-// open, so a beta app published since the last read shows at once.
-NodeAppSetBetaShown :: (shown: bool) {
-    unused SettingsStoreInt(NODE_APP_BETA_KEY, ifx shown then 1 else 0)
-    if shown {
-        node_catalog_checked_at = 0
-        unused SettingsStoreInt("node_apps_checked_at", 0)
-    }
 }
 
 #import, file "node_app_runner.zi";
@@ -459,14 +439,13 @@ NodeAppOfferSize :: (index: s32) -> s64 {
     return node_offers[index].size
 }
 
-// Whether More apps lists an offer: beta ones only while beta apps are
-// shown, and none that an app the node offers replaced.
+// Every published offer is visible unless another app replaced it.
 NodeAppOfferShown :: (index: s32) -> bool {
     return NodeAppOfferVisible(index) && !NodeAppOfferReplaced(NodeAppOfferName(index))
 }
 
 NodeAppOfferVisible :: (index: s32) -> bool {
-    return index >= 0 && index < node_offer_count && (!node_offers[index].beta || NodeAppBetaShown())
+    return index >= 0 && index < node_offer_count
 }
 
 NodeAppOffered :: (name: string) -> bool {
@@ -480,17 +459,13 @@ NodeAppOffered :: (name: string) -> bool {
     return false
 }
 
-// The offers are saved as "name|title" lines, with "|beta" after a beta
-// app's, so Apps lists them offline.
+// Save the published offers as "name|title" lines for offline use.
 NodeAppSaveOffers :: () {
     out: Vec(u8)
     index: s32 = 0
     while index < node_offer_count {
         BuilderPrint(*out, "%|%", TextUntilNul(node_offers[index].name[:]),
             TextUntilNul(node_offers[index].title[:]))
-        if node_offers[index].beta {
-            BuilderPrint(*out, "|beta")
-        }
         BuilderPrint(*out, "\n")
         size_key := PackageText("node_app_size_", TextUntilNul(node_offers[index].name[:]))
         unused SettingsStoreInt(size_key, cast(s32)node_offers[index].size)
@@ -526,7 +501,8 @@ NodeAppLoadOffers :: () {
             unused AppCopyText(line[:bar], offer.name[:])
             title := line[bar + 1:]
             if title.count >= 5 && title[title.count - 5:] == "|beta" {
-                offer.beta = true
+                // Preserve titles from catalogs saved before beta filtering
+                // was removed; the old marker has no effect on visibility.
                 title = title[:title.count - 5]
             }
             unused AppCopyText(title, offer.title[:])
@@ -1220,23 +1196,34 @@ NodeAppOpen :: (slot: s32) -> bool {
         return false
     }
     unused AppCopyText(verified, node_runners[slot].release_hash[:])
+    node_runners[slot].checked_revision = PackageRevisionFor(NodeAppIndex(slot))
     return true
 }
 
 // Apply downloaded node-app updates at the host's existing safe reload
 // boundary. Keeping a running VM here left Arcade on its previous campaign
 // even after the package manager had installed the newer signed bundle.
+// Review each generation once. A replacement waiting for a successful save
+// stays pending without repeating its metadata read or signature check.
 NodeAppsReloadUpdated :: () -> bool {
     for slot: cast(s32)0..NodeAppSlots - 1 {
         if !NodeAppRunning(slot) || NodeAppLocal(NodeAppName(slot)) {
             continue
         }
-        path := PackagePath(NodeAppIndex(slot), ".current.json")
-        metadata := PackageRead(path, 65536)
-        release := PackageTrustedRelease(metadata, NodeAppIndex(slot))
-        PackageFree(metadata)
-        PackageFree(path)
-        if !release.valid || TextUntilNul(release.hash[:]) == TextUntilNul(node_runners[slot].release_hash[:]) {
+        index := NodeAppIndex(slot)
+        revision := PackageRevisionFor(index)
+        runner := *node_runners[slot]
+        if runner.checked_revision != revision {
+            path := PackagePath(index, ".current.json")
+            metadata := PackageRead(path, 65536)
+            release := PackageTrustedRelease(metadata, index)
+            PackageFree(metadata)
+            PackageFree(path)
+            runner.reload_pending = release.valid &&
+                TextUntilNul(release.hash[:]) != TextUntilNul(runner.release_hash[:])
+            runner.checked_revision = revision
+        }
+        if !runner.reload_pending {
             continue
         }
         if !NodeAppClose(slot) {
@@ -1791,8 +1778,6 @@ NodeAppsCatalogPump :: (now: s32, wanted: bool) {
         if release.valid {
             node_candidates[node_candidate_next].size = release.size
         }
-        channel: [16]u8
-        node_candidates[node_candidate_next].beta = NodeAppJsonText(metadata, 0, "channel", channel[:]) == "beta"
         PackageFree(id)
         PackageFree(metadata)
         unused RemoveFile(path)

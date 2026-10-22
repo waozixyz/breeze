@@ -20,7 +20,6 @@ update_host_text :: (value: *u8) -> string {
 }
 #import, file "../../app/app_types.zi";
 
-#import, file "../../app/app.zi";
 #import, file "../../app/text_buffers.zi";
 #import, file "../../app/app_modal_state.zi";
 #import, file "../../core/version.zi";
@@ -93,14 +92,17 @@ about_link_icons_height :: (content_w: s32) -> s32 {
     return rows * icon_btn_w + (rows - 1) * row_spacing
 }
 
-// The account's apps as Apps shows them: a bundled app it added, or an app
-// the node offers in one of its slots.
+// Show apps installed on this device, not every app offered by the node.
 about_route_installed :: (app: *InnerBreeze, route: s32) -> bool {
+    if app == null {
+        return false
+    }
     slot := AppNavNodeSlot(route)
     if slot >= 0 {
-        return NodeAppName(slot).count > 0
+        return NodeAppInstalled(slot) && PackageAvailable(NodeAppIndex(slot))
     }
-    return (app.enabled_apps & app_nav_route_bit(route)) != 0
+    return (app.enabled_apps & app_nav_route_bit(route)) != 0 &&
+    PackageAvailable(LauncherAppPackage(route))
 }
 
 // The Inbe harness and each installed app.
@@ -140,29 +142,7 @@ settings_about_content_height :: (content_w: s32) -> s32 {
     package_rows := about_package_count(CurrentApp()) * AppScale(28)
     return AppScale(252) + package_rows + update_row + pending_root + AppParagraphHeight(description.text, description.width,
         description.font, description.line_gap) + about_link_icons_height(content_w) +
-    about_package_updates_height(content_w) + about_beta_apps_height(content_w)
-}
-
-// Developers show apps their node publishes as beta in More apps.
-about_beta_apps_height :: (content_w: s32) -> s32 {
-    note_h := AppParagraphHeight(LocaleText("node_apps_beta_note"), content_w,
-        AppFontSize(), AppScale(4))
-    return toggle_row_height(LocaleText("node_apps_beta_setting"), content_w) +
-    note_h + AppScale(20)
-}
-
-about_draw_beta_apps :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
-    shown: s32 = ifx NodeAppBetaShown() then 1 else 0
-    if draw_toggle_row(app, x, w, y, LocaleText("node_apps_beta_setting"), *shown) {
-        NodeAppSetBetaShown(shown != 0)
-    }
-    note := LocaleText("node_apps_beta_note")
-    note_h := AppParagraphHeight(note, w, AppFontSize(), AppScale(4))
-    Text(app.ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                cast(float32)w, cast(float32)note_h},
-            .text = note, .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
-    y.* += note_h + AppScale(20)
+    about_package_updates_height(content_w)
 }
 
 // Changes the answer to the Apps question about package updates.
@@ -314,15 +294,10 @@ settings_about_draw :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
             continue
         }
         index := LauncherAppPackage(route)
-        version := LocaleText("cells_not_installed")
-        if PackageAvailable(index) {
-            version = PackageVersion(index)
-        }
-        about_package_row(app, x, w, y, app_nav_route_label(route), version)
+        about_package_row(app, x, w, y, app_nav_route_label(route), PackageVersion(index))
     }
     y.* += AppScale(20)
     about_draw_package_updates(app, x, w, y)
-    about_draw_beta_apps(app, x, w, y)
 
     if update_available() != 0 {
         if update_can_self_update() != 0 {

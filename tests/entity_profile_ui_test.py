@@ -37,7 +37,8 @@ with contextlib.ExitStack() as stack:
     environment.update(driver.environment())
     environment.update(APP_DATA_ROOT=str(profile), INBE_SCREENSHOT_DATA_ROOT=str(profile),
                        APP_NO_TRAY="1", APP_SHOT_WINDOW="1", YUE_DESKTOP_RECOVERY="0",
-                       SDL_VIDEODRIVER="x11", SDL_AUDIODRIVER="dummy", LIBGL_ALWAYS_SOFTWARE="1")
+                       SDL_VIDEODRIVER="x11", SDL_AUDIODRIVER="dummy", LIBGL_ALWAYS_SOFTWARE="1",
+                       https_proxy="http://127.0.0.1:9", http_proxy="http://127.0.0.1:9", NO_PROXY="")
     display_log = stack.enter_context((OUTPUT / "display.log").open("w"))
     display = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1100x900x24",
                                 "-nolisten", "tcp"], env=environment,
@@ -112,11 +113,6 @@ with contextlib.ExitStack() as stack:
         assert document["owner_id"] == owner, "Entity used a different account"
         assert credentials() == before, "Editing Entity changed Inbe account keys"
         assert not (Path(environment["ENTITY_DATA"]) / "account.key").exists(), "Entity made another account"
-        window = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--pid", str(process.pid)],
-                                         env=environment, text=True).splitlines()[0]
-        subprocess.run(["import", "-window", window, str(OUTPUT / "profile.png")],
-                       env=environment, check=True)
-
     with application("restart"):
         open_profile()
         field = driver.wait(label="Name", role="text_field")
@@ -124,4 +120,29 @@ with contextlib.ExitStack() as stack:
         assert credentials() == before, "Restart changed Inbe account keys"
         assert json.loads(shared.read_text())["owner_id"] == owner
 
-print("Entity desktop: profile editing, existing host account, saved name and restart passed")
+    with sqlite3.connect(profile / "inbe.db") as database:
+        user = database.execute("SELECT user_id FROM settings WHERE key='sync_public_id' "
+                                "AND length(value)=64 LIMIT 1").fetchone()[0]
+        choices = {"enabled_apps": "2", "app_used_habits": "1", "app_used_lists": "0",
+                   "app_used_practices": "0", "app_used_diary": "0", "app_used_lumi": "0",
+                   "app_used_leaderboard": "0", "node_app_slot_0": "photos",
+                   "app_used_photos": "1", "package_updates_allowed": "0"}
+        for key, value in choices.items():
+            database.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,2) "
+                             "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,"
+                             "updated_at=excluded.updated_at",
+                             (user, key, value))
+    with application("about-installed"):
+        driver.press(label="Apps", role="button")
+        driver.press(label="Settings", role="button")
+        driver.press(label="About", role="button")
+        driver.wait(label="App versions", role="text")
+        labels = [node["label"] for node in driver.tree() if node["visible"]]
+        versions = [label for label in labels if " · " in label]
+        assert any(label.startswith("Habits · ") for label in versions), versions
+        assert not any(label.startswith(("Photos · ", "Lists · ", "Practice · ",
+                                         "Diary · ", "Lumi · ", "Leaderboard · "))
+                       for label in versions), versions
+        assert "Show beta apps" not in labels, "Removed beta setting is still visible"
+
+print("Entity desktop: profile editing, existing host account, saved name, restart and installed-only About passed")

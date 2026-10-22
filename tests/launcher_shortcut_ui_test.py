@@ -93,7 +93,7 @@ with contextlib.ExitStack() as stack:
         settings = dict(language="en", language_system=0, language_setup_done=1,
                         apps_setup_done=1, enabled_apps=63, lumi_introduced=1,
                         tutorial_seen=1, habits_guide_seen=1, launcher_guide_seen=1,
-                        lumi_guides_seen=127, main_tab=3, package_updates_allowed=0, node_apps_beta=1,
+                        lumi_guides_seen=127, main_tab=3, package_updates_allowed=0,
                         apps_last_update_check=1900000000)
         for name in ("lists", "habits", "practices", "diary", "lumi", "leaderboard"):
             settings["app_used_" + name] = 1

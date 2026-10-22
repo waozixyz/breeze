@@ -134,7 +134,7 @@ with contextlib.ExitStack() as stack:
                       launcher_guide_seen=1, lumi_guides_seen=127, main_tab=3,
                       # No update check or catalog read is due.
                       package_updates_allowed=0, apps_last_update_check=1900000000,
-                      node_apps_checked_at=int(time.time()), node_apps_beta=1,
+                      node_apps_checked_at=int(time.time()),
                       node_apps_offers="radio|Radio\nphotos|Photos\n",
                       node_app_size_radio=120000, node_app_size_photos=150000,
                       # Radio is on the account in this device's first slot,

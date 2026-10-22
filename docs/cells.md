@@ -380,6 +380,11 @@ unrelated app VMs. Cancellation retires jobs until their workers and parsers
 finish; it never joins an unfinished worker in a frame. Web and Windows retain
 the synchronous fallback, as does validation of additional node-app trees.
 
+Running additional apps review only changes to their own package generation.
+An unrelated update does not reread their signed release files. A replacement
+that cannot save yet stays pending and retries at a safe boundary without
+repeating that metadata read or signature check; the working app stays alive.
+
 Additional app icons also load through one owned worker on Linux and Android.
 Drawing requests an icon and uses the catalog outline until its copied shape
 is ready. Cache reads, payload hashing, program verification and cache writes

@@ -69,6 +69,8 @@ cp "$root/build/cells/habits.zib" "$root/build/cells/practices.zib" "$work/inval
     "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" "${ZIRAN_LIB:-$(dirname "$(dirname "$ziran")")/libziran.a}" \
     -Wl,--wrap=tmpfile -Wl,--wrap=BundleInstanceRun -Wl,--wrap=BundleInstantiate -Wl,--wrap=BundleOpenBytes \
     -Wl,--wrap=package_manager_PackageInstalledBytes -Wl,--wrap=package_manager_PackageRevisionFor \
+    -Wl,--wrap=package_files_PackageRead \
+    -Wl,--wrap=package_manager_PackageTrustedRelease \
     -Wl,--gc-sections -ldl -lpthread -lz -lm "$curl" -o "$work/test"
 # All data and fixture upgrade paths are disposable. No owner profile is used.
 data=$(mktemp -d)
