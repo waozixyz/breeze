@@ -10,6 +10,7 @@ import argparse
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
 import subprocess
 import tempfile
@@ -38,7 +39,7 @@ parser.add_argument("--with-tray", action="store_true",
                     help="Enable the desktop tray using the caller's locale settings")
 arguments = parser.parse_args()
 BINARY = Path(arguments.binary).resolve()
-DESKTOP_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS")
+DESKTOP_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "SESSION_MANAGER", "GDK_DISPLAY")
 assert all(not os.environ.get(key) for key in DESKTOP_ENV), "Inherited desktop environment"
 # Each favorite route's name in the navigation and on its Apps card.
 ROUTE_LABELS = {12: "Lumi", 1: "Habits", 2: "Practice", 3: "Lists", 11: "Diary"}
@@ -79,7 +80,13 @@ with contextlib.ExitStack() as stack:
     stack.callback(stop, display)
     number = display.stdout.readline().decode().strip()
     display.stdout.close()
-    assert number.isdecimal(), "Private display did not start"
+    assert number.isdecimal() and display.poll() is None, "Private display did not start"
+    server = Path(f"/proc/{display.pid}")
+    assert server.stat().st_uid == os.getuid(), "Private X server has another owner"
+    assert server.joinpath("exe").resolve() == Path(shutil.which("Xvfb")).resolve(), "Unexpected X server"
+    assert b"-displayfd\x001\x00" in server.joinpath("cmdline").read_bytes(), "Unexpected display allocation source"
+    display_log.write(f"Verified owned Xvfb pid={display.pid} display=:{number}\n")
+    display_log.flush()
     env["DISPLAY"] = ":" + number
 
     def command(*args):

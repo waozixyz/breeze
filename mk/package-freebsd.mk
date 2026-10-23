@@ -52,8 +52,9 @@ stage: $(TARGET)
 	icon_dir="$(DESTDIR)$(PREFIX)/share/icons/hicolor/$(APP_ICON_SIZE)/apps"; \
 	meta_dir="$(DESTDIR)$(PREFIX)/share/metainfo"; \
 	mkdir -p "$$bin_dir"; \
-	cp "$(TARGET)" "$$bin_dir/$(APP_EXECUTABLE)"; \
-	chmod 755 "$$bin_dir/$(APP_EXECUTABLE)"; \
+	cp "$(TARGET)" "$$bin_dir/$(APP_EXECUTABLE).new"; \
+	chmod 755 "$$bin_dir/$(APP_EXECUTABLE).new"; \
+	mv -f "$$bin_dir/$(APP_EXECUTABLE).new" "$$bin_dir/$(APP_EXECUTABLE)"; \
 	if [ -n "$(strip $(APP_DESKTOP))" ]; then \
 		mkdir -p "$$app_dir"; \
 		sed -e 's/^Icon=.*/Icon=$(APP_ICON_NAME)/' \

@@ -57,6 +57,8 @@
 #import "tree"
 #import "tree_input"
 #import "widget_kind"
+SharedLauncher :: #import "apps/launcher";
+
 GridIcon :: #import "mingcute/mingcute_regular_layout_grid";
 ListIcon :: #import "mingcute/mingcute_regular_list_check";
 EditIcon :: #import "mingcute/mingcute_regular_edit";
@@ -176,6 +178,23 @@ LauncherLibraryMove :: (app: *InnerBreeze, items: []s32, item: s32, target: s32)
     unused AppCopyText(value, app.launcher_library_order[:])
     if !DataTemporary() { storage_set_setting_text("launcher_library_order", value) }
     PackageFree(value)
+}
+
+// The shared screen retains its widget state; account-owned values are
+// copied in and out for the current Inbe profile each frame.
+launcher_screen: SharedLauncher.AppLauncherState;
+launcher_screen_routes: [LAUNCHER_APP_COUNT + NODE_APP_OFFERS]s32;
+
+LauncherScreenCards :: (context: *void, indices: []s32, bounds: Rectangle,
+    input: TextFieldInput, section_break: s32, columns: s32) -> bool {
+    app := cast(*InnerBreeze)context
+    routes: [LAUNCHER_APP_COUNT + NODE_APP_OFFERS]s32
+    for index: cast(s32)0..cast(s32)indices.count - 1 {
+        routes[index] = launcher_screen_routes[indices[index]]
+    }
+    quiet := app_launcher_cards_quiet(app, PointerSample(app.ui.session), bounds)
+    return app_launcher_shared_group(app, 0, routes[:indices.count], bounds,
+        input, section_break, columns, launcher_screen.grid, quiet)
 }
 
 // Whether the touch or click that is down began on the app cards.
@@ -319,197 +338,111 @@ app_draw_launcher :: (app: *InnerBreeze, dock_drawn: bool) {
         return
     }
     search_y := title_y + AppScale(56)
-    typed: [128]u8
-    field: TextFieldProps
-    field.focus_id = 6791
-    field.scale = MetricsScale()
-    field.value = AppTextFromCString(*app.launcher_search[0], 128)
-    field.clear_label = LocaleText("launcher_clear_search")
-    field.placeholder = LocaleText("launcher_search")
-    field.label = LocaleText("launcher_search")
-    field.cursor = app.launcher_search_cursor
-    field.anchor = app.launcher_search_anchor
-    field.scroll_x = app.launcher_search_scroll
-    field.focused = app.launcher_search_focused
-    field.max_bytes = 127
-    field.max_codepoints = 80
-    field.class_name = KssClassId(KssMakeName("launcher-search"))
-    field.bounds = Rectangle.{cast(float32)x, cast(float32)search_y,
-        cast(float32)(width - AppScale(104)), cast(float32)AppScale(48)}
-    field.input = SampleTextFieldInput(app.launcher_search_focused, typed[:])
-    searched := TextField(app.ui.session, field)
-    if searched.edit.changed {
-        unused AppReplaceText(app.launcher_search[:], searched.edit.start,
-            searched.edit.end, searched.edit.replacement)
-        app.launcher_scroll = 0
-    }
-    app.launcher_search_cursor = searched.cursor
-    app.launcher_search_anchor = searched.anchor
-    app.launcher_search_scroll = searched.scroll_x
-    app.launcher_search_focused = searched.focused
-    if searched.clipboard_write { unused TextInputWriteClipboard(searched.clipboard_text) }
-    for mode: cast(s32)0..cast(s32)1 {
-        grid := mode == 1
-        view: ButtonProps
-        view.key = KeyHash(ifx grid then "inbe/apps/grid-view" else "inbe/apps/list-view")
-        view.label = LocaleText(ifx grid then "launcher_grid_view" else "launcher_list_view")
-        view.icon_shape = ifx grid then GridIcon.Shape else ListIcon.Shape
-        view.icon_only = true
-        view.selected = app.launcher_grid_view == grid
-        view.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-        view.tone = cast(ButtonTone)(ifx view.selected then ButtonToneAccent else ButtonToneNeutral)
-        view.bounds = Rectangle.{cast(float32)(x + width - AppScale(96) + mode * AppScale(52)),
-            cast(float32)(search_y + AppScale(2)), cast(float32)AppScale(44), cast(float32)AppScale(44)}
-        if Button(app.ui.session, view) != 0 && app.launcher_grid_view != grid {
-            app.launcher_grid_view = grid
-            app.launcher_scroll = 0
-            app.launcher_drag_key = 0
-            app.launcher_drag_moving = false
-            save_settings(app)
-            app_block_current_click(app)
-        }
-    }
-    query := AppTextFromCString(*app.launcher_search[0], 128)
+    launcher_screen.query = app.launcher_search
+    launcher_screen.cursor = app.launcher_search_cursor
+    launcher_screen.anchor = app.launcher_search_anchor
+    launcher_screen.scroll_x = app.launcher_search_scroll
+    launcher_screen.focused = app.launcher_search_focused
+    launcher_screen.grid = app.launcher_grid_view
+    launcher_screen.scroll = app.launcher_scroll
+    items: [LAUNCHER_APP_COUNT + NODE_APP_OFFERS]SharedLauncher.AppLauncherItem
+    titles: [LAUNCHER_APP_COUNT + NODE_APP_OFFERS][256]u8
     routes := LauncherRoutes()
-    canonical: [LAUNCHER_APP_COUNT]string = .{"Diary", "Habits", "Lists", "Lumi", "Practice", "Leaderboard",
-        "", "", "", "", "", "", "", ""}
-    matches: [LAUNCHER_APP_COUNT]s32
-    match_count: s32 = 0
-    for index: cast(s32)0..LAUNCHER_APP_COUNT - 1 {
-        // A slot without an installed app the node offers has no card.
-        if AppNavNodeSlot(routes[index]) >= 0 && !app_nav_route_available(app, routes[index]) {
-            continue
-        }
-        if LauncherMatches(app_nav_route_label(routes[index]), query) ||
-        LauncherMatches(canonical[index], query) {
-            matches[match_count] = routes[index]
-            match_count += 1
-        }
-    }
-    pinned: [LAUNCHER_APP_COUNT]s32
-    more: [LAUNCHER_APP_COUNT + NODE_APP_OFFERS]s32
-    pinned_count: s32 = 0
-    more_count: s32 = 0
+    canonical: [6]string = .{"Diary", "Habits", "Lists", "Lumi", "Practice", "Leaderboard"}
+    count: s32
+    // Favorite order is account-owned. The shared module filters and groups
+    // these entries, including native routes and undownloaded offers alike.
     for index: cast(s32)0..app.launcher_favorite_count - 1 {
-        route := app.launcher_favorites[index]
-        for match: cast(s32)0..match_count - 1 {
-            if matches[match] == route {
-                pinned[pinned_count] = route
-                pinned_count += 1
-            }
-        }
+        launcher_screen_routes[count] = app.launcher_favorites[index]
+        count += 1
     }
-    for index: cast(s32)0..match_count - 1 {
-        if !app_launcher_is_favorite(app, matches[index]) {
-            more[more_count] = matches[index]
-            more_count += 1
-        }
+    more_catalog: [LAUNCHER_APP_COUNT + NODE_APP_OFFERS]s32
+    more_catalog_count: s32
+    for route: routes {
+        if app_launcher_is_favorite(app, route) ||
+        (AppNavNodeSlot(route) >= 0 && !app_nav_route_available(app, route)) { continue }
+        more_catalog[more_catalog_count] = route
+        more_catalog_count += 1
     }
     for offer: cast(s32)0..NodeAppOfferCount() - 1 {
         name := NodeAppOfferName(offer)
-        if NodeAppOfferShown(offer) && NodeAppSlotFor(name) < 0 && LauncherMatches(NodeAppTitle(name), query) {
-            more[more_count] = -offer - 2
-            more_count += 1
+        if NodeAppOfferShown(offer) && NodeAppSlotFor(name) < 0 {
+            more_catalog[more_catalog_count] = -offer - 2
+            more_catalog_count += 1
         }
     }
-    LauncherLibrarySort(app, more[:more_count])
-    tile_height := AppScale(64)
-    gap := AppScale(4)
-    columns: s32 = 1
-    if app.launcher_grid_view {
-        tile_height = AppScale(88)
-        gap = AppScale(12)
-        columns = MeasureGrid(GridProps.{.bounds = Rectangle.{cast(float32)x, 0.0, cast(float32)width, 0.0},
-                .min_item_width = AppScale(140), .max_columns = 6, .gap = gap}).columns
+    LauncherLibrarySort(app, more_catalog[:more_catalog_count])
+    for index: cast(s32)0..more_catalog_count - 1 {
+        launcher_screen_routes[count] = more_catalog[index]
+        count += 1
     }
-    cells := MeasureGrid(GridProps.{.columns = columns, .gap = gap,
-            .bounds = Rectangle.{cast(float32)x, 0.0, cast(float32)width, 0.0}})
-    pinned_rows := GridRowCount(cells, pinned_count)
-    more_rows := GridRowCount(cells, more_count)
-    pinned_height := AppScale(36) + pinned_rows * (tile_height + gap)
-    more_height := AppScale(36) + more_rows * (tile_height + gap)
-    if more_count == 0 { more_height += AppScale(64) }
-    content_height := pinned_height + more_height
-    if pinned_count + more_count == 0 { content_height += AppScale(64) }
+    for index: cast(s32)0..count - 1 {
+        route := launcher_screen_routes[index]
+        title := ifx route >= 0 then app_nav_route_label(route) else NodeAppTitle(LauncherLibraryName(route))
+        unused AppCopyText(title, titles[index][:])
+        search := LauncherLibraryName(route)
+        for at: cast(s32)0..5 { if routes[at] == route { search = canonical[at] } }
+        items[index] = SharedLauncher.AppLauncherItem.{
+            .title = AppTextFromCString(*titles[index][0], 256), .search = search,
+            .favorite = route >= 0 && app_launcher_is_favorite(app, route)}
+    }
     bottom_dock := app_content_bottom_reserved(app)
-    body_bottom := app.ui.view_height - bottom_dock - AppScale(12)
-    body_y := search_y + AppScale(68)
+    status := ""
     if launcher_pin_status >= 0 {
         status_key := ifx launcher_pin_status == 2 then "launcher_pin_added" else "launcher_pin_requested"
         if launcher_pin_status == 0 { status_key = "launcher_pin_failed" }
-        Text(app.ui.session, TextProps.{.text = LocaleText(status_key),
-                .bounds = Rectangle.{cast(float32)x, cast(float32)body_y,
-                    cast(float32)width, cast(float32)AppScale(44)}, .font = AppSmallFontSize()})
-        body_y += AppScale(48)
+        status = LocaleText(status_key)
     }
-    scroll: ScrollProps
-    scroll.key = KeyHash("inbe/apps/library")
-    scroll.bounds = Rectangle.{cast(float32)x, cast(float32)body_y,
-        cast(float32)width, cast(float32)(body_bottom - body_y)}
-    scroll.content_height = content_height
-    scroll.scroll_offset = app.launcher_scroll
-    scrolled := Scroll(app.ui.session, scroll)
-    app.launcher_scroll = scrolled.scroll_offset
-    pinned_bounds: Rectangle
-    pinned_cells: GridMetrics
-    more_bounds: Rectangle
-    more_cells: GridMetrics
+    typed: [1024]u8
+    input := SampleTextFieldInput(true, typed[:])
+    layout := SharedLauncher.AppLauncherScreen(app.ui.session, *launcher_screen,
+        SharedLauncher.AppLauncherProps.{
+            .bounds = Rectangle.{cast(float32)x, cast(float32)search_y, cast(float32)width,
+                cast(float32)(app.ui.view_height - bottom_dock - AppScale(12) - search_y)},
+            .scale = MetricsScale(), .locale = LocaleActiveCode(), .input = input,
+            .search_class = KssClassId(KssMakeName("launcher-search")),
+            .heading_class = KssClassId(KssMakeName("launcher-heading")),
+            .muted_class = KssClassId(KssMakeName("launcher-muted")),
+            .empty_favorites = true, .status = status, .context = cast(*void)app,
+            .cards = LauncherScreenCards}, items[:count])
+    app.launcher_search = launcher_screen.query
+    app.launcher_search_cursor = launcher_screen.cursor
+    app.launcher_search_anchor = launcher_screen.anchor
+    app.launcher_search_scroll = launcher_screen.scroll_x
+    app.launcher_search_focused = launcher_screen.focused
+    app.launcher_scroll = launcher_screen.scroll
+    if layout.clipboard_write {
+        unused TextInputWriteClipboard(AppTextFromCString(*layout.clipboard_text[0], 128))
+    }
+    if layout.changed {
+        app.launcher_grid_view = launcher_screen.grid
+        app.launcher_drag_key = 0
+        app.launcher_drag_moving = false
+        save_settings(app)
+        app_block_current_click(app)
+    }
+    pinned_count := launcher_screen.favorites
+    more_count := launcher_screen.count - pinned_count
+    pinned: [LAUNCHER_APP_COUNT]s32
+    more: [LAUNCHER_APP_COUNT + NODE_APP_OFFERS]s32
+    for index: cast(s32)0..pinned_count - 1 {
+        pinned[index] = launcher_screen_routes[launcher_screen.visible[index]]
+    }
+    for index: cast(s32)0..more_count - 1 {
+        more[index] = launcher_screen_routes[launcher_screen.visible[pinned_count + index]]
+    }
+    scrolled := layout.scrolled
+    pinned_bounds := layout.favorites_bounds
+    more_bounds := layout.library_bounds
+    tile_height := layout.tile_height
+    gap := layout.gap
+    pinned_cells := MeasureGrid(GridProps.{.columns = layout.columns, .gap = gap,
+            .bounds = Rectangle.{pinned_bounds.x, pinned_bounds.y + cast(float32)AppScale(36), pinned_bounds.width, 0.0}})
+    more_cells := MeasureGrid(GridProps.{.columns = layout.columns, .gap = gap,
+            .bounds = Rectangle.{more_bounds.x, more_bounds.y + cast(float32)AppScale(36), more_bounds.width, 0.0}})
     pinned_slots: [LAUNCHER_APP_COUNT]Rectangle
-    library_bounds: Rectangle
-    // Typing goes to the search field or else to a field in an app's Properties.
-    apps_typed: [1024]u8
-    apps_input := SampleTextFieldInput(!app.launcher_search_focused, apps_typed[:])
-    if scrolled.opened {
-        width = cast(s32)scrolled.content.width
-        y := cast(s32)scrolled.content.y
-        library_bounds = Rectangle.{cast(float32)x, cast(float32)(y + AppScale(36)),
-            cast(float32)width, cast(float32)(content_height - AppScale(36))}
-        pinned_bounds = Rectangle.{cast(float32)x, cast(float32)y,
-            cast(float32)width, cast(float32)pinned_height}
-        for section: cast(s32)0..cast(s32)1 {
-            count := ifx section == 0 then pinned_count else more_count
-            if section == 0 {
-                Text(app.ui.session, TextProps.{.text = LocaleText("launcher_favorites"),
-                        .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                            cast(float32)width, cast(float32)AppScale(28)},
-                        .class_name = KssClassId(KssMakeName("launcher-heading"))})
-            } else {
-                Separator(app.ui.session, SeparatorProps.{.key = KeyHash("inbe/apps/library-divider"),
-                        .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                            cast(float32)width, cast(float32)AppScale(32)}})
-            }
-            if section == 1 {
-                more_bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                    cast(float32)width, cast(float32)more_height}
-            }
-            y += AppScale(36)
-            // The scroll's content may be narrower than the panel; the column
-            // count chosen for the panel keeps the content height exact.
-            section_cells := MeasureGrid(GridProps.{.columns = columns, .gap = gap,
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, 0.0}})
-            if section == 0 { pinned_cells = section_cells }
-            else { more_cells = section_cells }
-            for index: cast(s32)0..count - 1 {
-                route := ifx section == 0 then pinned[index] else more[index]
-                bounds := GridCellBounds(section_cells, index, tile_height)
-                if section == 0 { pinned_slots[index] = bounds }
-            }
-            y += GridRowCount(section_cells, count) * (tile_height + gap)
-        }
-        library_routes: [LAUNCHER_APP_COUNT + NODE_APP_OFFERS]s32
-        for index: cast(s32)0..pinned_count - 1 { library_routes[index] = pinned[index] }
-        for index: cast(s32)0..more_count - 1 { library_routes[pinned_count + index] = more[index] }
-        cards_quiet := app_launcher_cards_quiet(app, pointer, scrolled.viewport)
-        unused app_launcher_shared_group(app, 0, library_routes[:pinned_count + more_count],
-            library_bounds, apps_input, pinned_count, columns, cards_quiet)
-        if pinned_count + more_count == 0 {
-            Text(app.ui.session, TextProps.{.text = LocaleText("launcher_no_results"),
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                        cast(float32)width, cast(float32)AppScale(56)},
-                    .class_name = KssClassId(KssMakeName("launcher-muted"))})
-        }
-        unused End(app.ui.session)
-    }
+    for index: cast(s32)0..pinned_count - 1 { pinned_slots[index] = GridCellBounds(pinned_cells, index, tile_height) }
+    query := AppTextFromCString(*app.launcher_search[0], 128)
     if !dock_drawn {
         app_draw_favorites_dock(app)
     }
@@ -594,8 +527,8 @@ app_draw_launcher :: (app: *InnerBreeze, dock_drawn: bool) {
     unused End(app.ui.session)
     if app.launcher_guide_seen == 0 {
         steps: [3]GuideOverlayStep
-        steps[0] = GuideOverlayStepFor(field.bounds, "launcher_guide_find")
-        steps[1] = GuideOverlayStepFor(scroll.bounds, "launcher_guide_manage")
+        steps[0] = GuideOverlayStepFor(layout.search_bounds, "launcher_guide_find")
+        steps[1] = GuideOverlayStepFor(layout.scroll_bounds, "launcher_guide_manage")
         steps[2] = GuideOverlayStepFor(account.bounds, "launcher_guide_profile")
         guide: GuideOverlayProps
         guide.steps = *steps[0]
