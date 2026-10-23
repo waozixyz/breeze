@@ -106,22 +106,6 @@ PracticeScreenConstants :: enum {
 
 PracticeLeaveConfigFn :: #type (app: *InnerBreeze) -> ();
 
-practice_activity_count_for_tab :: (tab: s32) -> s32 {
-    unused tab
-    return practice_count()
-}
-
-practice_activity_for_tab :: (tab: s32, index: s32) -> s32 {
-    unused tab
-    if index < 0 {
-        return EXERCISE_WIM_HOF
-    }
-    if index >= practice_count() {
-        return practice_ordered_id(practice_count() - 1)
-    }
-    return practice_ordered_id(index)
-}
-
 
 empty_options_storage: [1] DropdownOption;
 empty_toolbar_actions_storage: [1] ToolbarAction;
@@ -494,47 +478,6 @@ practice_home_meditation_minutes :: (app: *InnerBreeze) -> s32 {
         return 120
     }
     return ifx (app != null) then (clampi(app.meditation.custom_minutes, 1, 240)) else (15)
-}
-
-practice_home_metadata :: (app: *InnerBreeze, out: *u8, out_size: s64) {
-    if out == null || out_size == 0 {
-        return
-    }
-    out[0] = cast(u8)0
-    if app == null {
-        return
-    }
-    id := practice_clamp_id(app.exercise_type)
-    if id == {
-        case EXERCISE_MEDITATION;
-        FormatLocaleCount(out, out_size, "practice_home_minutes", practice_home_meditation_minutes(app))
-        case EXERCISE_SUN_SALUTATION;
-        FormatLocaleCount(out, out_size, "practice_home_repetitions", sun_salutation_default_repetitions())
-        case EXERCISE_TAI_CHI;
-        if TaiChiCourseLoad() {
-            args: [1]FormatArg = .[FormatArg.{.text = TaiChiItemTitle(TaiChiItemToPlay(app.tai_chi)), .is_text = true}]
-            unused FormatTemplate(LocaleText("tai_chi_home_next"), args[:],
-                BytesFromPointer(out, cast(u64)out_size))
-        }
-        case EXERCISE_PATTERNS;
-        ratio: [24] u8
-        patterns_ratio_text(app, *ratio[0], size_of(type_of(ratio)))
-        if app.patterns.duration_minutes > 0 {
-            args: [2]FormatArg = .[
-            FormatArg.{.text = AppTextFromCString(*ratio[0], 24), .is_text = true},
-            FormatArg.{.number = app.patterns.duration_minutes}
-            ]
-            unused FormatTemplate(LocaleText("practice_home_patterns_metadata"), args[:],
-                BytesFromPointer(out, cast(u64)out_size))
-        } else {
-            unused AppCopyText(AppTextFromCString(*ratio[0], 24),
-                BytesFromPointer(out, cast(u64)out_size))
-        }
-        case;
-        unused FormatTwoNumberTemplate(LocaleText("practice_home_wim_hof_metadata"),
-            app.breathing.max_rounds, BreathDigitsRead(app.breathing.maxbreaths[:]),
-            BytesFromPointer(out, cast(u64)out_size))
-    }
 }
 
 PracticeHomeTitleLayout :: struct {
@@ -980,125 +923,6 @@ practice_screen_draw_desktop_tab_bar :: (app: *InnerBreeze, y: s32) -> s32 {
     }
     bar_result := TabBar(CurrentApp().ui.session, TabBarProps.{.bounds = Rectangle.{0, cast(float32)y, cast(float32)app.ui.view_width, cast(float32)GetTabBarHeight()}, .selected_index = selected_index}, tabs[:tab_count])
     return ifx (bar_result.node >= 0 && bar_result.node < tab_count) then (values[bar_result.node]) else (-1)
-}
-
-practice_screen_draw_top_bar :: (app: *InnerBreeze, draw_menu: s32) {
-    exercise_options: [EXERCISE_COUNT] DropdownOption
-    exercise_values: [EXERCISE_COUNT] s32
-    activity_count: s32 = 0
-    activity_index: s32 = 0
-    route := AppRoute.{0 }
-
-    if app == null {
-        return
-    }
-    practice_clamp_activity_to_tab(app)
-    {
-        i: s32 = 0
-        while i < practice_count() {
-            id := practice_ordered_id(i)
-            i += 1
-            if !PracticeInstalled(id) {
-                continue
-            }
-            if id == app.exercise_type {
-                activity_index = activity_count
-            }
-            exercise_values[activity_count] = id
-            exercise_options[activity_count] = DropdownOption.{.label = practice_activity_label(id)}
-            activity_count += 1
-        }
-
-    }
-    if activity_count <= 0 {
-        return
-    }
-    if draw_menu != 0 {
-        menu_result: ToolbarResult = Toolbar(CurrentApp().ui.session, ToolbarProps.{.id = 300, .x = 0, .y = 0, .width = app.ui.view_width, .height = app_content_top_reserved(app)}, exercise_options[:activity_count], no_toolbar_actions())
-        if app.modal.active == 0 && menu_result.selected_menu_item >= 0 {
-            route = app_current_route(app)
-            if app.practice_tab == PRACTICE_TAB_CONFIG {
-                app_leave_practice_config(app)
-            }
-            route.exercise_type = exercise_values[activity_index]
-            route.practice_tab = PRACTICE_TAB_PLAY
-            route.practice_config_tab = 0
-            route.screen = ScreenStart
-            app.manual_scroll = 0
-            app.settings_scroll = 0
-            app.practice_home_scroll = 0
-            app.tutorial_step = 0
-            app.practice_config_tab = 0
-            app_switch_route(app, route)
-        }
-        return
-    }
-    if app_should_use_tab_bar(app) != 0 {
-        clicked_exercise := practice_screen_draw_desktop_tab_bar(app, 0)
-        if clicked_exercise >= 0 && clicked_exercise != app.exercise_type {
-            route = app_current_route(app)
-            if app.practice_tab == PRACTICE_TAB_CONFIG {
-                app_leave_practice_config(app)
-            }
-            route.exercise_type = clicked_exercise
-            route.practice_tab = PRACTICE_TAB_PLAY
-            route.practice_config_tab = 0
-            route.screen = ScreenStart
-            app.manual_scroll = 0
-            app.settings_scroll = 0
-            app.practice_home_scroll = 0
-            app.tutorial_step = 0
-            app.practice_config_tab = 0
-            app_switch_route(app, route)
-        }
-    } else {
-        Toolbar(CurrentApp().ui.session, ToolbarProps.{.id = 300, .x = 0, .y = 0, .width = app.ui.view_width, .height = GetTabBarHeight()}, exercise_options[:activity_count], no_toolbar_actions())
-    }
-    if app.modal.active == 0 {
-        app.practice_tab = PRACTICE_TAB_PLAY
-    }
-}
-
-practice_screen_draw_floating_actions :: (app: *InnerBreeze) {
-    icon_size := AppScale(22)
-    icon_padding := AppScale(9)
-    button_w := icon_size + icon_padding * 2
-    gap := AppScale(10)
-    margin := AppScale(14)
-    y := app_content_top_reserved(app) + AppScale(10)
-    x := app.ui.view_width - margin
-
-    if app == null || app.modal.active != 0 || app.breathing.screen != ScreenStart {
-        return
-    }
-    practice := practice_get(app.exercise_type)
-    if practice_home_has_config(practice) {
-        x -= button_w
-        if Button(CurrentApp().ui.session, ButtonProps.{
-                .id = 0,
-                .bounds = Rectangle.{cast(float32)(x), cast(float32)(y),
-                    cast(float32)((icon_size) + (icon_padding) * 2),
-                    cast(float32)((icon_size) + (icon_padding) * 2)},
-                .icon_type = cast(s32)IconWrench, .icon_only = true,
-                .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-            }) != 0 {
-            practice_screen_open_tab(app, PRACTICE_TAB_CONFIG)
-        }
-        x -= gap
-    }
-    if practice.draw_manual != null {
-        x -= button_w
-        if Button(CurrentApp().ui.session, ButtonProps.{
-                .id = 0,
-                .bounds = Rectangle.{cast(float32)(x), cast(float32)(y),
-                    cast(float32)((icon_size) + (icon_padding) * 2),
-                    cast(float32)((icon_size) + (icon_padding) * 2)},
-                .icon_type = cast(s32)IconManual, .icon_only = true,
-                .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-            }) != 0 {
-            practice_screen_open_tab(app, PRACTICE_TAB_MANUAL)
-        }
-    }
 }
 
 practice_screen_draw_modal :: (app: *InnerBreeze) {
