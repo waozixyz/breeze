@@ -11,6 +11,7 @@ int32_t SqliteBindTextString(void *statement, int32_t index,
                              String value, int32_t length);
 int32_t SqliteStep(void *statement);
 int32_t SqliteFinalize(void *statement);
+int32_t SqliteClose(void *database);
 int32_t SqliteExecText(void *database, String sql);
 
 int
@@ -58,7 +59,8 @@ main(void)
     assert(SqliteExecText(db, StringView(long_sql, 6000)) == SQLITE_OK);
     assert(sqlite3_exec(db, "INSERT INTO test VALUES(7)", NULL, NULL, NULL) == SQLITE_OK);
 
-    assert(sqlite3_close(db) == SQLITE_OK);
+    // Statements the wrapper keeps for reuse are released by its close.
+    assert(SqliteClose(db) == SQLITE_OK);
     puts("Ziran SQLite text preserves long and binary values after binding");
     return 0;
 }

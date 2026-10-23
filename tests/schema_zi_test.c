@@ -100,9 +100,12 @@ static void open_memory_database(void)
     memset(current_user_id, 0, sizeof current_user_id);
 }
 
+int32_t SqliteClose(void *database);
+
 static void close_database(void)
 {
-    assert(sqlite3_close(database) == SQLITE_OK);
+    // Statements the wrapper keeps for reuse are released by its close.
+    assert(SqliteClose(database) == SQLITE_OK);
     database = NULL;
 }
 

@@ -41,6 +41,122 @@ BackupStepRaw :: (backup: *void, pages: s32) -> s32 #foreign sqlite "sqlite3_bac
 BackupFinishRaw :: (backup: *void) -> s32 #foreign sqlite "sqlite3_backup_finish";
 ExecRaw :: (database: *void, sql: *u8, callback: *void,
     argument: *void, error: **u8) -> s32 #foreign sqlite "sqlite3_exec";
+MutexAllocRaw :: (kind: s32) -> *void #foreign sqlite "sqlite3_mutex_alloc";
+MutexEnterRaw :: (mutex: *void) #foreign sqlite "sqlite3_mutex_enter";
+MutexLeaveRaw :: (mutex: *void) #foreign sqlite "sqlite3_mutex_leave";
+CompareBytes :: (first: *void, second: *void, size: usize) -> s32 #foreign c "memcmp";
+TextLength :: (text: *u8) -> usize #foreign c "strlen";
+
+// Prepared statements kept for the next caller of the same SQL on the same
+// connection. Preparing parses and plans a query every time, and the app's
+// queries repeat with new bindings, so a finished statement is reset and
+// kept instead of finalized. The cache's own lock is never held while
+// SQLite works, because callers may already hold a connection's lock.
+SQLITE_MUTEX_STATIC_APP1 :: 8
+SQLITE_KEPT_STATEMENTS :: 48
+SQLITE_KEPT_SQL_LIMIT :: 2048
+
+SqliteKept :: struct {
+    db: *void
+    statement: *void
+    sql: *u8
+    length: usize
+    hash: u64
+    busy: bool
+    used: u64
+}
+
+sqlite_kept: [SQLITE_KEPT_STATEMENTS]SqliteKept;
+sqlite_kept_clock: u64;
+
+SqliteKeptLock :: () -> *void {
+    mutex := MutexAllocRaw(SQLITE_MUTEX_STATIC_APP1)
+    MutexEnterRaw(mutex)
+    return mutex
+}
+
+SqliteKeptHash :: (sql: *u8, length: usize) -> u64 {
+    hash: u64 = 14695981039346656037
+    index: usize = 0
+    while index < length {
+        hash = (hash ^ cast(u64)sql[index]) * 1099511628211
+        index += 1
+    }
+    return hash
+}
+
+// A kept statement for this SQL that no one is using, now taken; null when
+// there is none.
+SqliteKeptTake :: (db: *void, sql: *u8, length: usize, hash: u64) -> *void {
+    mutex := SqliteKeptLock()
+    defer { MutexLeaveRaw(mutex) }
+    for index: cast(s32)0..SQLITE_KEPT_STATEMENTS - 1 {
+        kept := *sqlite_kept[index]
+        if kept.statement != null && !kept.busy && kept.db == db && kept.length == length &&
+        kept.hash == hash && CompareBytes(cast(*void)kept.sql, cast(*void)sql, length) == 0 {
+            kept.busy = true
+            sqlite_kept_clock += 1
+            kept.used = sqlite_kept_clock
+            return kept.statement
+        }
+    }
+    return null
+}
+
+// Keeps a statement just prepared, in use by its caller. The statement the
+// cache gives up for it, if any, is returned for finalizing.
+SqliteKeptAdd :: (db: *void, statement: *void, sql: *u8, length: usize, hash: u64) -> *void {
+    copy := cast(*u8)malloc(length + 1)
+    if copy == null {
+        return null
+    }
+    for index: cast(usize)0..length - 1 {
+        copy[index] = sql[index]
+    }
+    copy[length] = cast(u8)0
+    mutex := SqliteKeptLock()
+    defer { MutexLeaveRaw(mutex) }
+    slot: s32 = -1
+    for index: cast(s32)0..SQLITE_KEPT_STATEMENTS - 1 {
+        kept := sqlite_kept[index]
+        if kept.statement == null {
+            slot = index
+            break
+        }
+        if !kept.busy && (slot < 0 || kept.used < sqlite_kept[slot].used) {
+            slot = index
+        }
+    }
+    if slot < 0 {
+        free(cast(*void)copy)
+        return null
+    }
+    evicted := sqlite_kept[slot].statement
+    free(cast(*void)sqlite_kept[slot].sql)
+    sqlite_kept_clock += 1
+    sqlite_kept[slot] = SqliteKept.{.db = db, .statement = statement, .sql = copy, .length = length,
+        .hash = hash, .busy = true, .used = sqlite_kept_clock}
+    return evicted
+}
+
+SqliteKeptFind :: (statement: *void) -> s32 {
+    mutex := SqliteKeptLock()
+    defer { MutexLeaveRaw(mutex) }
+    for index: cast(s32)0..SQLITE_KEPT_STATEMENTS - 1 {
+        if sqlite_kept[index].statement == statement && sqlite_kept[index].busy {
+            return index
+        }
+    }
+    return -1
+}
+
+SqliteKeptRelease :: (index: s32, statement: *void) {
+    mutex := SqliteKeptLock()
+    defer { MutexLeaveRaw(mutex) }
+    if sqlite_kept[index].statement == statement {
+        sqlite_kept[index].busy = false
+    }
+}
 
 CopyStringBytes :: (source: string, destination: *u8) {
     index: s32 = 0
@@ -52,10 +168,31 @@ CopyStringBytes :: (source: string, destination: *u8) {
 }
 
 #scope_export
+// Statements a caller walks through with `tail` are prepared afresh.
 #program_export
 SqlitePrepare :: (db: *void, sql: *u8, length: s32,
     statement: **void, tail: **u8) -> s32 {
-    return PrepareRaw(db, sql, length, statement, tail)
+    if tail != null || sql == null || statement == null {
+        return PrepareRaw(db, sql, length, statement, tail)
+    }
+    size := ifx length < 0 then TextLength(sql) else cast(usize)length
+    if size == cast(usize)0 || size > cast(usize)SQLITE_KEPT_SQL_LIMIT {
+        return PrepareRaw(db, sql, length, statement, tail)
+    }
+    hash := SqliteKeptHash(sql, size)
+    kept := SqliteKeptTake(db, sql, size, hash)
+    if kept != null {
+        statement.* = kept
+        return SQLITE_OK
+    }
+    result := PrepareRaw(db, sql, length, statement, null)
+    if result == SQLITE_OK && statement.* != null {
+        evicted := SqliteKeptAdd(db, statement.*, sql, size, hash)
+        if evicted != null {
+            unused FinalizeRaw(evicted)
+        }
+    }
+    return result
 }
 
 #scope_export
@@ -69,14 +206,14 @@ SqlitePrepareText :: (db: *void, sql: string, length: s32,
     if sql.count < 512 {
         short_sql: [512]u8
         CopyStringBytes(sql, *short_sql[0])
-        return PrepareRaw(db, *short_sql[0], length, statement, null)
+        return SqlitePrepare(db, *short_sql[0], length, statement, null)
     }
     buffer: *u8 = cast(*u8)malloc(cast(usize)sql.count + 1)
     if buffer == null {
         return SQLITE_NOMEM
     }
     CopyStringBytes(sql, buffer)
-    result := PrepareRaw(db, buffer, length, statement, null)
+    result := SqlitePrepare(db, buffer, length, statement, null)
     free(cast(*void)buffer)
     return result
 }
@@ -110,9 +247,18 @@ SqliteStep :: (statement: *void) -> s32 {
     return StepRaw(statement)
 }
 
+// A kept statement is reset, with its bindings cleared, for the next caller
+// of its SQL. Like finalizing, that reports the last step's error.
 #program_export
 SqliteFinalize :: (statement: *void) -> s32 {
-    return FinalizeRaw(statement)
+    index := SqliteKeptFind(statement)
+    if index < 0 {
+        return FinalizeRaw(statement)
+    }
+    result := ResetRaw(statement)
+    unused ClearBindingsRaw(statement)
+    SqliteKeptRelease(index, statement)
+    return result
 }
 
 #program_export
@@ -171,7 +317,36 @@ SqliteOpen :: (path: *u8, database: **void, flags: s32) -> s32 {
 
 #program_export
 SqliteClose :: (database: *void) -> s32 {
+    SqliteReleaseKept(database)
     return CloseRaw(database)
+}
+
+// Finalizes the connection's kept statements that are not in use; one still
+// in use is its caller's to finalize. SQLite will not close a connection
+// with statements left, and the next prepare of their SQL starts afresh.
+#program_export
+SqliteReleaseKept :: (database: *void) {
+    idle: [SQLITE_KEPT_STATEMENTS]*void
+    idle_count: s32 = 0
+    {
+        mutex := SqliteKeptLock()
+        defer { MutexLeaveRaw(mutex) }
+        for index: cast(s32)0..SQLITE_KEPT_STATEMENTS - 1 {
+            kept := *sqlite_kept[index]
+            if kept.statement == null || kept.db != database {
+                continue
+            }
+            if !kept.busy {
+                idle[idle_count] = kept.statement
+                idle_count += 1
+            }
+            free(cast(*void)kept.sql)
+            kept.* = SqliteKept.{}
+        }
+    }
+    for index: cast(s32)0..idle_count - 1 {
+        unused FinalizeRaw(idle[index])
+    }
 }
 
 #program_export

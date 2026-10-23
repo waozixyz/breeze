@@ -21,6 +21,8 @@
 #include <string.h>
 #include <time.h>
 
+int32_t SqliteClose(void *database);
+
 static LocalDateTime forced_local;
 static bool use_forced_local;
 
@@ -200,7 +202,8 @@ main(void)
         assert(sqlite3_column_int(stmt, 0) == BREAK_TYPE_COUNT);
         assert(sqlite3_finalize(stmt) == SQLITE_OK);
     }
-    assert(sqlite3_close(database) == SQLITE_OK);
+    // Statements the storage wrapper keeps for reuse are released by its close.
+    assert(SqliteClose(database) == SQLITE_OK);
     puts("break stats Ziran and SQLite passed");
     return 0;
 }
