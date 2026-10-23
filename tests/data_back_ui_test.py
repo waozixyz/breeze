@@ -17,6 +17,7 @@ from ui_driver import UiDriver
 assert int(os.environ.get("DISPLAY", ":0").split(":")[-1].split(".")[0]) >= 300
 root = Path(__file__).resolve().parents[1]
 binary = Path(sys.argv[1]).resolve()
+bundle = Path(os.environ.get("INBE_TEST_BUNDLE", root / "build/inbe-full.zib")).resolve()
 output = root / "build/data-back-ui-test"
 output.mkdir(parents=True, exist_ok=True)
 driver = UiDriver(output / "driver")
@@ -68,39 +69,22 @@ def open_practice(name):
     assert whole, f"{name}: selecting Practice did not reveal its complete navigation label: {shortcut}"
 
 
-def profile_focus_and_activity(name, window):
-    field = driver.wait(label="Name", role="text_field")
-    driver.press(key=field["key"], role="text_field")
-    driver.pointer(field["x"] + field["width"] / 2,
-                   field["y"] + field["height"] / 2, wheel=-8)
-    driver.wait_idle(frames=4)
-    scrolled = driver.find(key=field["key"])[0]
-    assert scrolled["y"] < field["y"] - 80, (name, "focused input prevented scrolling", field, scrolled)
-    assert scrolled["focused"], (name, "scrolling discarded input focus", scrolled)
-    for _ in range(8):
-        later = driver.find(key=field["key"])[0]
-        assert abs(later["y"] - scrolled["y"]) < 1, (name, "focused input snapped the view back", scrolled, later)
-    # Reveal Activity through the same scroll path, keeping the field focused.
-    for _ in range(15):
-        activity = driver.find(label="Activity", role="button", visible=True)
-        if activity and activity[0]["visible_height"] == activity[0]["height"]:
-            break
-        driver.pointer(field["x"] + field["width"] / 2, 300, wheel=2)
-        driver.wait_idle(frames=3)
-    driver.press(label="Activity", role="button")
-    title("Activity")
-    buttons = {node["label"] for node in driver.find(role="button")}
-    repeated = buttons & {"Activity", "Data", "Friends", "Telegram", "Achievements", "Account", "Connect Account"}
-    assert not repeated, (name, "Activity repeats Profile destinations", repeated)
-    assert "Days active" in driver.text() or "Active days" in driver.text(), (name, driver.text())
-    subprocess.run(["import", "-window", window, str(output / f"{name}-activity.png")], check=True)
-    driver.press(label="Back", role="button")
+def profile_inline_activity(name, window, width):
+    driver.wait(label="Change picture", role="button", visible=False)
+    assert not driver.find(label="Name", role="text_field"), "Removed Name field is visible"
+    assert not driver.find(label="Intention", role="text_field"), "Removed Intention field is visible"
+    assert not driver.find(label="Activity", role="button"), "Activity should be inline"
+    for label in ("Today", "Active days", "Sessions"):
+        driver.wait(label=label, role="text", visible=False)
+    # Activity stays in Profile; Data returns to the same hub without a
+    # separate Activity route or the removed personal text fields.
     title("Profile")
+    subprocess.run(["import", "-window", window, str(output / f"{name}-activity.png")], check=True)
     for _ in range(15):
         achievements = driver.find(label="Achievements", role="button", visible=True)
         if achievements and achievements[0]["visible_height"] == achievements[0]["height"]:
             break
-        driver.pointer(field["x"] + field["width"] / 2, 300, wheel=-2)
+        driver.pointer(width / 2, 300, wheel=-2)
         driver.wait_idle(frames=3)
     driver.press(label="Achievements", role="button")
     driver.wait(label="Achievements", role="text")
@@ -123,7 +107,7 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
         env.update(driver.environment())
         with logfile.open("w") as log:
             app = subprocess.Popen([str(binary), "--screenshot", str(initial),
-                "--bundle", str(root / "build/inbe-full.zib"),
+                "--bundle", str(bundle),
                 "--screenshot-scene", scene, "--screenshot-width", str(width),
                 "--screenshot-height", str(height), "--screenshot-ui-scale", "10"],
                 cwd=root, env=env, stdout=log, stderr=subprocess.STDOUT)
@@ -159,7 +143,7 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
                     title("Profile")
                     assert switches(logfile, baseline) == [], (name, "Profile Data skipped its parent",
                                                                switches(logfile, baseline))
-                    profile_focus_and_activity(name, window)
+                    profile_inline_activity(name, window, width)
                     # The Profile hub's Back returns to Apps: one switch
                     # leaves Profile, and Data was not skipped on the way.
                     driver.press(label="Back", role="button")
@@ -181,4 +165,4 @@ for scene in ("data_from_navigation", "profile_data", "settings_overview"):
                     app.kill()
                     app.wait(timeout=5)
                 shutil.rmtree(Path('/tmp') / f'inbe-screenshot-{app.pid}', ignore_errors=True)
-print("Profile focus scrolling and Activity; Data Back: navigation exits once; Profile Data returns to its hub, whose Back returns to Apps; Settings lists no Data")
+print("Inline Profile Activity and Achievements; Data Back: navigation exits once; Profile Data returns to its hub, whose Back returns to Apps; Settings lists no Data")

@@ -378,7 +378,7 @@ with contextlib.ExitStack() as stack:
                     with application(profile, name, width, height) as (window, log):
                         open_apps()
                         open_profile(log)
-                        driver.wait(label="Profile picture", role="button")
+                        driver.wait(label="Change picture", role="button")
                         one_header("Profile")
                         assert [node["label"] for node in navigation()] == ["Habits", "Practice", "Apps"]
                         with database(profile) as db:
@@ -393,19 +393,22 @@ with contextlib.ExitStack() as stack:
                         driver.wait(contains="Create", role="button")
                         one_header("Profile")
                         driver.press(label="Back", role="button")
-                        driver.wait(label="Profile picture", role="button", visible=False)
+                        driver.wait(label="Change picture", role="button", visible=False)
                         one_header("Profile")
-                        reveal_action("Activity")
-                        driver.press(label="Activity", role="button")
-                        one_header("Activity")
+                        for label in ("Today", "Active days", "Sessions"):
+                            driver.wait(label=label, role="text", visible=False)
+                        assert not driver.find(label="Activity", role="button"), "Inline Activity still has a route"
+                        reveal_action("Manage data")
+                        driver.press(label="Manage data", role="button")
+                        one_header("Data")
                         driver.press(label="Back", role="button")
-                        driver.wait(label="Profile picture", role="button", visible=False)
+                        driver.wait(label="Change picture", role="button", visible=False)
                         one_header("Profile")
                         driver.press(label="Back", role="button")
                         driver.wait(label="Pinned")
                         assert not driver.find(role="title_bar", visible=True)
                         print(f"{name}: one header and complete Back stack passed", flush=True)
-        print("Profile: one header, Account/Activity Back stack, pinned/unpinned, saved top/bottom/side navigation passed")
+        print("Profile: one header, Account/Data Back stack, inline Activity, pinned/unpinned, saved top/bottom/side navigation passed")
 
     if arguments.profile_navigation_only:
         check_profile_navigation()

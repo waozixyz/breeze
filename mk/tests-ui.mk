@@ -1,5 +1,11 @@
 # UI tests that run the desktop app on a private display, and the visual gate.
 
+.PHONY: visual-runner-test
+visual-runner-test:
+	python3 tests/visual_runner_test.py
+
+test: visual-runner-test
+
 .PHONY: tai-chi-ui-test
 tai-chi-ui-test: $(TARGET)
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
@@ -66,7 +72,7 @@ VISUAL_TEST_TARGETS := practice-images-ui-test leaderboard-ui-test native-screen
 VISUAL_TEST_TARGETS += audio-setup-ui-test cells-onboarding-test practice-downloads-ui-test tab-switch-performance-test habit-unsaved-ui-test
 VISUAL_TEST_TARGETS += entity-profile-ui-test
 VISUAL_TEST_TARGETS += music-navigation-test
-visual-test: $(TARGET) $(INBE_FULL_BUNDLE)
+visual-test: $(TARGET) $(INBE_FULL_BUNDLE) $(NODE_APP_BUNDLES)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
 		-u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \
 		python3 tests/visual_test.py $(abspath $(TARGET)) $(VISUAL_TEST_TARGETS)
