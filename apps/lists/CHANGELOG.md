@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.10] - 2026-10-23
+
+- Tap an item to finish it, swipe right to edit it and swipe left to delete it.
+
 ## [1.1.9] - 2026-10-22
 
 - Maintenance release for Inner Breeze 2.1.42.

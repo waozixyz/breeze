@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.8] - 2026-10-23
+
+- Maintenance release for Inner Breeze 2.1.43.
+
 ## [1.3.7] - 2026-10-23
 
 - Jumping jacks in the 7-Minute Workout follow a calmer pace.

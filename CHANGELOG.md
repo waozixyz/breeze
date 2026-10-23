@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.43] - 2026-10-23
+
+- Lists: tap an item to finish it, swipe right to edit it and swipe left to delete it.
+- The desktop practice window has its own sound, Breath and double-tap controls.
+- Sun Salutation follows the classic chart poses, and its guide shows the whole sequence.
+- Jumping jacks in the 7-Minute Workout follow a calmer pace.
+- Switching to and from Apps is quicker.
+
 ## [2.1.42] - 2026-10-22
 
 - Keep practice animation smooth in the browser.
