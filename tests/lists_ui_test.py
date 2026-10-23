@@ -76,7 +76,7 @@ with contextlib.ExitStack() as stack:
         return found.stdout.split()[0] if found.returncode == 0 and database.exists() else ""
     wait_for(find_window, "isolated app startup", timeout=20)
     driver.wait(label="Shopping", role="button")
-    driver.wait(label="Share", role="button")
+    driver.wait(label="Add", role="button")
     driver.wait_idle(frames=3)
 
     def sql(query, parameters=()):
@@ -119,18 +119,25 @@ with contextlib.ExitStack() as stack:
                 inside.add(node["index"])
         return "\n".join(node["label"] for node in tree if node["index"] in inside and node["label"])
 
-    def close_beside():
-        """A tap beside the dialog, on the dimmed page, closes it."""
-        tree = driver.tree()
-        modal = [node for node in tree if node["kind"] == "modal" and node["visible"]][0]
-        panel = [node for node in tree if node["parent"] == modal["index"] and node["kind"] == "custom"][0]
-        x = modal["x"] + modal["width"] / 2
-        y = (panel["y"] + panel["height"] + modal["y"] + modal["height"]) / 2
-        driver.pointer(x, y)
-        driver.pointer(x, y, down=True)
-        driver.pointer(x, y, down=False)
-        driver.release_pointer()
-        wait_for(lambda: not driver.find(role="modal", visible=True), "a tap beside the dialog did not close it")
+    def open_settings(name):
+        """Tap a list's chip: the first tap selects it, a tap on the
+        selected chip (with its gear) opens List settings."""
+        driver.press(contains=name, role="button")
+        try:
+            driver.wait(label="List settings", timeout=2)
+        except Exception:
+            driver.press(contains=name, role="button")
+            driver.wait(label="List settings")
+        driver.wait_idle(frames=3)
+
+    def page():
+        """Every label List settings shows."""
+        return "\n".join(driver.labels())
+
+    def back():
+        driver.press(label="Back", role="button")
+        driver.wait_gone(label="List settings")
+        driver.wait(label="Add", role="button")
 
     def calm(message):
         shown = [label for label in driver.labels() if ALARMING.search(label)]
@@ -158,9 +165,9 @@ with contextlib.ExitStack() as stack:
     # shows them above the open ones.
     driver.wait_gone(label="Fresh fruit", role="button")
     assert not driver.find(contains="Finished", visible=True), "the list still names its finished items"
-    share = driver.wait(label="Share", role="button")
-    pull_x = share["visible_x"] - 200
-    pull_y = share["visible_y"] + share["visible_height"] + 40
+    add_button = driver.wait(label="Add", role="button")
+    pull_x = add_button["visible_x"] - 200
+    pull_y = add_button["visible_y"] + add_button["visible_height"] + 60
     driver.drag((pull_x, pull_y), (pull_x, pull_y + 260), steps=12)
     driver.wait(label="Fresh fruit", role="button")
     assert not driver.find(contains="Finished", visible=True), "a heading names the finished items"
@@ -169,10 +176,21 @@ with contextlib.ExitStack() as stack:
     swipe("Fresh fruit", 0.2)
     assert driver.find(role="text_field", value="", visible=True), "a short swipe right began editing"
     assert sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) == 0, "a short swipe left deleted"
+    # A swipe right turns the item's own row into its field, with a check.
     swipe("Fresh fruit", 0.6)
-    driver.wait(role="text_field", value="Fresh fruit")
-    driver.wait(label="Done", role="button")
+    in_row = driver.wait(role="text_field", value="Fresh fruit")
+    assert in_row["y"] > add_button["y"] + add_button["height"], "the item is edited in the top field, not its row"
+    wait_for(lambda: driver.find(role="text_field", value="Fresh fruit", visible=True)[0]["focused"],
+             "the item's field does not take the keyboard")
+    driver.wait(label="Save", role="button")
     assert not driver.find(label="Delete item", role="button", visible=True), "Edit still shows a delete button"
+    # Escape leaves the row as it was.
+    subprocess.run(["xdotool", "windowfocus", find_window()], check=True)
+    subprocess.run(["xdotool", "keydown", "Escape"], check=True)
+    time.sleep(.12)
+    subprocess.run(["xdotool", "keyup", "Escape"], check=True)
+    driver.wait(label="Fresh fruit", role="button")
+    assert sql("SELECT title FROM elist_items WHERE id=?", (original[0],)) == "Fresh fruit", "Escape changed the item"
     swipe("Fresh fruit", -0.6)
     wait_for(lambda: sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) > 0,
              "a swipe left did not delete the item")
@@ -227,23 +245,25 @@ with contextlib.ExitStack() as stack:
     driver.wait(label="Fresh fruit", role="button")
     driver.press(label="Travel", role="button")
     driver.wait(label="Pack bag", role="button")
+    # List settings holds the name, the people and Delete, which asks first.
     for name in extra:
-        driver.press(label=name, role="button")
-        driver.press(label="Rename", role="button")
+        open_settings(name)
         driver.press(label="Delete list", role="button")
-        driver.press(label="Tap again to delete this list", role="button")
+        driver.wait(label="Delete this list?")
+        driver.press(label="Delete list", role="button")
         driver.wait_gone(label=name, role="button", visible=False)
+        driver.wait(label="Add", role="button")
     driver.press(label="Travel", role="button")
-    # Sharing is one icon that opens a dialog over the list; a tap beside it
-    # closes it. Offline, it asks to connect an account first. No line above
-    # the list says who has access, and Invitations appears only while one
-    # waits.
-    assert not any(label.startswith("Shared") or "Only you" in label for label in driver.labels()), driver.labels()
-    assert not driver.find(label="Delete", role="button"), "a Delete button is on the list screen"
+    # Sharing lives in List settings, opened from the selected chip's gear.
+    # Offline, it asks to connect an account first. A private list shows no
+    # line about access, and Invitations appears only while one waits.
+    assert not driver.find(label="Share", role="button"), "a Share button is still on the list screen"
+    assert not driver.find(label="Rename", role="button"), "a Rename button is still on the list screen"
     assert not driver.find(contains="Invitations", role="button"), "Invitations shown with none waiting"
-    driver.press(label="Share", role="button")
-    assert re.search(r"connect|account|sharing", dialog(), re.IGNORECASE), dialog()
-    close_beside()
+    open_settings("Travel")
+    assert re.search(r"connect|account|sharing", page(), re.IGNORECASE), page()
+    assert not driver.find(label="Delete this list?", visible=True), "Delete did not wait to be asked"
+    back()
     # Synthetic credentials make the connected panel available without a real
     # account or HTTP delivery. The request must still pass through the actual
     # bundle, typed host codec, document builder and durable-attempt storage.
@@ -257,14 +277,14 @@ with contextlib.ExitStack() as stack:
         db.execute("INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,1)",
                    (user, "friends.list", json.dumps({"friends": [{"user_id_hash": "a" * 64, "alias": "Alice"}]})))
     # The fixture node is unreachable: a failed refresh keeps the lists and
-    # shows no notice, so Share stays in its usual place. The refresh runs in
-    # the background, so give it real time to fail.
+    # shows no notice. The refresh runs in the background, so give it real
+    # time to fail.
     time.sleep(.7)
     driver.wait_idle(frames=3)
     calm("a failed refresh shows a notice")
-    driver.press(label="Share", role="button")
+    open_settings("Shopping")
     driver.wait(label="People with access")
-    assert "Refresh" not in dialog() and "Alice" not in dialog(), dialog()
+    assert "Refresh" not in page() and "Alice" not in page(), page()
     driver.press(key=6540)
     driver.type("ali")
     driver.wait(label="Alice")
@@ -280,8 +300,10 @@ with contextlib.ExitStack() as stack:
     calm("a first failed delivery shows an error")
     command = json.loads(sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%'"))
     assert command["action"] == "invite" and command["target"] == "a" * 64, command
+    assert command["access"] == "editor", command
     assert command["list"]["title"] == "Shopping", command
     assert {row["title"] for row in command["list"]["items"]} == {"Fresh fruit", "Buy tea"}, command
+    back()
     # A different fixture server selects a separate cache and pending-attempt
     # scope, as a real account/server change does.
     with writable() as db, db:
@@ -302,14 +324,10 @@ with contextlib.ExitStack() as stack:
         db.execute("INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,1)",
                    (user, "lists.shared/" + "b" * 64 + "/http://127.0.0.1:10", json.dumps(incoming)))
     driver.wait(label="Invitations (1)", role="button")
-    # The new scope starts with its dialogs closed; close Share if it stayed.
-    if driver.find(role="modal", visible=True):
-        close_beside()
-    # The screen carries no access line; sharing is the one Share button.
+    # A shared list names its people under the chips, as a document does.
     driver.press(contains="Garden", role="button")
-    driver.wait(label="Share", role="button")
-    assert not any("Shared with" in label or "Invited:" in label for label in driver.labels()), driver.labels()
-    # The owner's Share dialog on a list that already has people: a friend
+    driver.wait(label="Alice · Cedar (Invited)", role="button")
+    # The owner's List settings on a list that already has people: a friend
     # who joined, one still invited and several more to invite.
     with writable() as db, db:
         user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
@@ -318,37 +336,37 @@ with contextlib.ExitStack() as stack:
                        {"user_id_hash": "a" * 64, "alias": "Alice"}, {"user_id_hash": "c" * 64, "alias": "Cedar"},
                        {"user_id_hash": "d" * 64, "alias": "Dana"}, {"user_id_hash": "e" * 64, "alias": "Emerald"}]})))
     time.sleep(.5)
-    driver.press(label="Share", role="button")
+    driver.press(label="Alice · Cedar (Invited)", role="button")
+    driver.wait(label="List settings")
     time.sleep(1.0)
     subprocess.run(["import", "-window", find_window(), str(TEST_DIR / "share-owned.png")], check=True)
-    wait_for(lambda: "Cedar" in dialog(), lambda: f"friends are not listed: {dialog()}")
-    names = dialog()
-    assert all(name in names for name in ("Alice", "Cedar", "You")), names
+    wait_for(lambda: "Cedar" in page(), lambda: f"friends are not listed: {page()}")
+    names = page()
+    assert all(name in names for name in ("Alice", "Cedar (Invited)", "You")), names
     assert "Dana" not in names and "Emerald" not in names, names
-    assert "Owner" in names and "Invited" in names and "Read only" in names, names
+    assert "Owner" in names and "Read only" in names, names
     assert "Refresh" not in names, names
-    # Escape works with the invite field focused and stays on this list.
+    # Escape leaves List settings and stays on this list.
     driver.press(key=6540)
     subprocess.run(["xdotool", "windowfocus", find_window()], check=True)
     subprocess.run(["xdotool", "keydown", "Escape"], check=True)
     time.sleep(.12)
     subprocess.run(["xdotool", "keyup", "Escape"], check=True)
-    wait_for(lambda: not driver.find(role="modal", visible=True),
-             "Escape did not close the focused sharing dialog")
-    driver.wait(label="Share", role="button")
-    driver.wait(contains="Garden", role="button")
-    driver.press(label="Share", role="button")
-    driver.wait(label="Cedar")
-    # The same open dialog remains readable on a phone-sized viewport.
+    wait_for(lambda: not driver.find(label="List settings", visible=True),
+             "Escape did not leave List settings")
+    driver.wait(label="Alice · Cedar (Invited)", role="button")
+    open_settings("Garden")
+    driver.wait(contains="Cedar")
+    # The same page stays readable on a phone-sized viewport.
     subprocess.run(["xdotool", "windowsize", find_window(), "390", "844"], check=True)
-    wait_for(lambda: driver.wait(role="modal")["width"] <= 390,
-             "the sharing dialog did not fit the phone viewport")
+    wait_for(lambda: driver.wait(label="List settings")["x"] < 390, "List settings did not fit the phone viewport")
     driver.wait_idle(frames=3)
     phone_roles = driver.find(role="dropdown", visible=True)
-    assert len(phone_roles) == 2, "collaborator controls do not fit the phone dialog"
-    cedar = driver.wait(label="Cedar")
+    assert len(phone_roles) == 3, f"access menus do not fit the phone page: {[node['label'] for node in phone_roles]}"
+    cedar = driver.wait(contains="Cedar")
     cedar_role = driver.wait(label="Read only", role="dropdown")
-    assert cedar_role["y"] >= cedar["y"] + cedar["height"], "phone name overlaps access controls"
+    assert cedar_role["x"] >= cedar["x"] + cedar["width"] - 1, "phone name overlaps access controls"
+    assert cedar_role["x"] + cedar_role["width"] <= 390, "an access menu runs off the phone page"
     subprocess.run(["import", "-window", find_window(), str(TEST_DIR / "share-owned-phone.png")], check=True)
     subprocess.run(["xdotool", "windowsize", find_window(), "900", "720"], check=True)
     driver.wait_idle(frames=3)
@@ -358,33 +376,33 @@ with contextlib.ExitStack() as stack:
                    (user, "friends.list", json.dumps({"friends": [
                        {"user_id_hash": "d" * 64, "alias": "Dana"}, {"user_id_hash": "e" * 64, "alias": "Emerald"}]})))
     driver.wait_idle(frames=3)
-    assert "Alice" in dialog() and "Cedar" in dialog(), dialog()
+    assert "Alice" in page() and "Cedar" in page(), page()
     driver.press(key=6540)
     driver.type("da")
     driver.wait(label="Dana")
     assert not driver.find(label="Emerald", visible=True), "suggestions did not filter by typed name"
     driver.press(label="Dana")
     driver.wait(key=6540, value="Dana")
-    # Viewers can inspect all access but cannot edit, invite or manage roles.
-    close_beside()
-    driver.press(contains="Groceries", role="button")
-    driver.press(label="Share", role="button")
+    # Viewers can read all access but cannot rename, invite, manage roles or
+    # delete.
+    back()
+    open_settings("Groceries")
     driver.wait(label="People with access")
-    assert "Alice" in dialog() and "Owner" in dialog(), dialog()
+    assert "Alice" in page() and "Owner" in page(), page()
     assert not driver.find(key=6540, visible=True), "viewer can invite"
     assert not driver.find(role="dropdown", visible=True), "viewer can manage permissions"
-    close_beside()
+    assert not driver.wait(key=6551)["enabled"], "viewer can rename a list"
+    assert not driver.find(label="Delete list", visible=True), "viewer can delete the list"
+    back()
     assert not driver.wait(key=6507)["enabled"], "viewer can add tasks"
-    assert not driver.wait(key=6503)["enabled"], "viewer can rename a list"
     # Owners change a collaborator's role without sending its document again.
-    driver.press(contains="Garden", role="button")
-    driver.press(label="Share", role="button")
-    driver.wait(label="Cedar")
+    open_settings("Garden")
+    driver.wait(contains="Cedar")
     driver.press(label="Read only")
     driver.wait(label="Can edit", role="option")
     driver.wait(label="Owner", role="option")
     driver.wait(label="Remove access", role="option")
-    # The first Escape closes the access popup, leaving Share open.
+    # The first Escape closes the access popup, leaving List settings open.
     driver.key("escape")
     wait_for(lambda: not driver.find(role="option", visible=True),
              "Escape did not close the access popup")
@@ -396,7 +414,7 @@ with contextlib.ExitStack() as stack:
     permission = json.loads(sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:10'"))
     assert permission["action"] == "access" and permission["access"] == "editor" and permission["target"] == "c" * 64, permission
     assert permission["list"] == {"id": OWNED_LIST}, permission
-    close_beside()
+    back()
     # Move the receipt out of this fixture's scope before testing the inbox.
     with writable() as db, db:
         db.execute("DELETE FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:10'")
@@ -405,7 +423,7 @@ with contextlib.ExitStack() as stack:
                    (user, "lists.shared/" + "b" * 64 + "/http://127.0.0.1:11", json.dumps(incoming)))
     driver.wait(label="Groceries", role="button")
     driver.press(contains="Groceries", role="button")
-    assert not any("Shared by" in label for label in driver.labels()), driver.labels()
+    driver.wait(label="Alice", role="button")
     window = find_window()
     subprocess.run(["import", "-window", window, str(TEST_DIR / "shared-names.png")], check=True)
     driver.press(label="Invitations (1)", role="button")

@@ -34,6 +34,8 @@
 #import "tree"
 #import "icon"
 EditIcon :: #import "mingcute/mingcute_regular_edit_2";
+SettingsIcon :: #import "mingcute/mingcute_regular_settings_3";
+BackIcon :: #import "mingcute/mingcute_regular_arrow_left";
 #import, file "../../src/cells/lists_ui_types.zi";
 #import, file "../../src/cells/lists_types.zi";
 
@@ -42,6 +44,8 @@ using ButtonEmphasis;
 using TextAlign;
 using TextWrap;
 using IconType;
+using IconPlacement;
+using ContentAlignment;
 host_api :: #system_library "host_api";
 ReadListsUiHost :: () -> ListsUiFrame #foreign host_api;
 WriteListsUiHost :: (frame: ListsUiFrame) #foreign host_api;
@@ -76,8 +80,13 @@ undo_account: string;
 undo_until: float64;
 // A pull down on the items that shows or hides the finished ones.
 finished_pull: SwipeGesture;
-// Share, as in a document: a person with a plus.
-SHARE_ICON :: "S1.8rr:M9 4.5C10.93 4.5 12.5 6.07 12.5 8C12.5 9.93 10.93 11.5 9 11.5C7.07 11.5 5.5 9.93 5.5 8C5.5 6.07 7.07 4.5 9 4.5ZM3 20C3 16.7 5.7 14 9 14C12.3 14 15 16.7 15 20M19 8V14M16 11H22"
+// List settings replaces the page: the name, who has access and Delete.
+settings_open: bool;
+settings_scroll: s32;
+// An access menu was open in the last frame, so Escape closes it first.
+settings_menu_open: bool;
+// The access an invitation gives: 0 Owner, 1 Can edit, 2 Read only.
+invite_role: s32 = 1;
 // The same trash can as Photos and Lumi.
 TRASH_ICON :: "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
 // As in 1List, a tap on an item finishes it, a swipe right edits it and a
@@ -92,6 +101,33 @@ EditSwipe :: () -> SwipeRowAction {
 DeleteSwipe :: () -> SwipeRowAction {
     return SwipeRowAction.{.fill = Color.{198, 52, 52, 255},
         .icon_shape = TRASH_ICON, .icon_color = Color.{255, 255, 255, 255}, .removes = true}
+}
+
+// Avatar circles take one of four fills, by the person's place in the list.
+AvatarFill :: (place: s32) -> Color {
+    if place % 4 == 1 {
+        return Color.{46, 139, 120, 255}
+    }
+    if place % 4 == 2 {
+        return Color.{123, 92, 180, 255}
+    }
+    if place % 4 == 3 {
+        return Color.{176, 112, 58, 255}
+    }
+    return Color.{58, 110, 165, 255}
+}
+
+// A round avatar with the first letter of a name.
+Avatar :: (key: u64, name: string, place: s32, x: s32, y: s32, size: s32) {
+    Box(frame.session, BoxProps.{.key = key, .bounds = Bounds(x, y, size, size),
+            .fill = AvatarFill(place), .radius = cast(float32)size / 2.0})
+    letter_end: s64 = 1
+    while letter_end < name.count && (name[letter_end] & cast(u8)192) == cast(u8)128 {
+        letter_end += 1
+    }
+    letter := ifx name.count > 0 then name[:letter_end] else "?"
+    Text(frame.session, TextProps.{.bounds = Bounds(x, y, size, size), .text = letter,
+            .align = cast(TextAlign)TextAlignCenter, .vertical_align = cast(TextAlign)TextAlignCenter})
 }
 
 Scale :: (pixels: s32) -> s32 {
@@ -168,12 +204,23 @@ Mutation :: (action: s32, index: s32) {
     }
 }
 
+// Escape in the last Field drawn, which leaves an item's edit.
+field_escaped: bool;
+// The next Field takes the focus from whatever held it, as when a swipe
+// turns a row into its field.
+field_focus_request: bool;
+
 Field :: (bounds: Rectangle, placeholder: string, read_only: bool = false) -> bool {
+    input := frame.input
+    if field_focus_request {
+        input.focus = true
+        field_focus_request = false
+    }
     edited := TextField(frame.session, TextFieldProps.{.key = cast(u64)6501,
             .bounds = bounds, .value = frame.value, .placeholder = placeholder, .cursor = frame.cursor,
             .anchor = frame.anchor, .scroll_x = frame.scroll_x,
             .focused = frame.focused, .focus_id = 6501,
-            .max_bytes = 127, .max_codepoints = 127, .input = frame.input,
+            .max_bytes = 127, .max_codepoints = 127, .input = input,
             .disabled = frame.sharing_busy || frame.sharing_pending || read_only})
     if edited.edit.changed {
         start := edited.edit.start
@@ -195,6 +242,7 @@ Field :: (bounds: Rectangle, placeholder: string, read_only: bool = false) -> bo
     frame.focused = edited.focused
     frame.clipboard_write = edited.clipboard_write
     frame.clipboard_text = edited.clipboard_text
+    field_escaped = edited.escaped
     return edited.committed
 }
 
@@ -270,14 +318,27 @@ ResetInvite :: () {
     invite_suggestions = false
 }
 
-// An explicit invitation follows selection from the name suggestions.
+// An explicit invitation follows selection from the name suggestions. The
+// access it gives sits between the name and Invite, or under the name on a
+// narrow screen; its menu opens after the page's scroll ends.
+invite_role_bounds: Rectangle;
+
+InviteFieldHeight :: (width: s32) -> s32 {
+    return ifx width < Scale(480) then Scale(96) else Scale(44)
+}
+
 InviteField :: (x: s32, y: s32, width: s32, disabled: bool) -> bool {
     button_width := Scale(96)
+    role_width := Scale(140)
+    narrow := width < Scale(480)
+    field_width := ifx narrow then width else width - button_width - role_width - Scale(16)
+    row_y := ifx narrow then y + Scale(52) else y
+    invite_role_bounds = Bounds(ifx narrow then x else x + field_width + Scale(8), row_y, role_width, Scale(44))
     previous_bytes: [128]u8
     unused CopyCString(invite_text, previous_bytes[:])
     previous := TextUntilNul(previous_bytes[:])
     edited := TextField(frame.session, TextFieldProps.{.key = cast(u64)6540,
-            .bounds = Bounds(x, y, width - button_width - Scale(8), Scale(44)),
+            .bounds = Bounds(x, y, field_width, Scale(44)),
             .value = previous, .placeholder = ListsLocaleHost("elist_invite_by_name"),
             .cursor = invite_cursor, .anchor = invite_anchor, .scroll_x = invite_scroll,
             .focused = invite_focused, .focus_id = 6540, .scale = frame.scale,
@@ -298,7 +359,11 @@ InviteField :: (x: s32, y: s32, width: s32, disabled: bool) -> bool {
     invite_anchor = edited.anchor
     invite_scroll = edited.scroll_x
     invite_focused = edited.focused
-    frame.focused = invite_focused
+    // The host shows the keyboard while a field is focused; the name field
+    // treats the flag as its own only while this one is not focused.
+    if invite_focused {
+        frame.focused = true
+    }
     if edited.clipboard_write {
         frame.clipboard_write = true
         frame.clipboard_text = edited.clipboard_text
@@ -307,16 +372,39 @@ InviteField :: (x: s32, y: s32, width: s32, disabled: bool) -> bool {
         invite_suggestions = false
     }
     if Button(frame.session, ButtonProps.{.key = cast(u64)6541,
-            .bounds = Bounds(x + width - button_width, y, button_width, Scale(44)),
+            .bounds = Bounds(x + width - button_width, row_y, button_width, Scale(44)),
             .label = ListsLocaleHost("elist_invite"),
             .tone = cast(ButtonTone)ButtonToneAccent,
             .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
             .disabled = disabled || invite_target[0] == cast(u8)0}) != 0 {
-        Remote(LISTS_INVITE, TextUntilNul(invite_target[:]))
+        access: [3]string = .["owner", "editor", "viewer"]
+        Remote(LISTS_INVITE, TextUntilNul(invite_target[:]), "", "", access[invite_role])
         ResetInvite()
         return true
     }
     return false
+}
+
+// The access a new invitation gives, as a menu like each person's.
+InviteRole :: (disabled: bool) {
+    if invite_role_bounds.width <= 0.0 || invite_role_bounds.y < sharing_viewport.y ||
+    invite_role_bounds.y + invite_role_bounds.height > sharing_viewport.y + sharing_viewport.height {
+        return
+    }
+    labels: [3]string = .[ListsLocaleHost("elist_owner"), ListsLocaleHost("elist_can_edit"), ListsLocaleHost("elist_read_only")]
+    options: [3]DropdownOption
+    for index: cast(s32)0..2 {
+        options[index] = DropdownOption.{.key = cast(u64)(index + 1), .label = labels[index]}
+    }
+    chosen := Dropdown(frame.session, DropdownProps.{.key = cast(u64)6543,
+            .bounds = invite_role_bounds, .selected_index = invite_role,
+            .disabled = disabled, .scale = frame.scale}, options[:3])
+    if chosen.open {
+        settings_menu_open = true
+    }
+    if chosen.changed {
+        invite_role = chosen.selected_index
+    }
 }
 
 // Suggestions float below the input while typing and only select a person.
@@ -365,8 +453,11 @@ InviteSuggestions :: (x: s32, y: s32, list_id: string, owner: string) {
     }
 }
 
-// Each owner has the same edit, deletion, invitation and permission controls.
-MemberRow :: (row: ListsUiPerson, x: s32, y: s32, width: s32, manages: bool,
+// A person with access: an avatar, the name (marked while invited) and the
+// access, which an owner changes from a menu. Rows are MEMBER_ROW tall.
+MEMBER_ROW :: 56;
+
+MemberRow :: (row: ListsUiPerson, place: s32, x: s32, y: s32, width: s32, manages: bool,
     original_owner: bool, disabled: bool) {
     target: [65]u8
     unused CopyCString(row.target, target[:])
@@ -377,28 +468,30 @@ MemberRow :: (row: ListsUiPerson, x: s32, y: s32, width: s32, manages: bool,
     if row.target == frame.public_id {
         name = ListsLocaleHost("elist_you")
     }
-    narrow := width < Scale(360)
-    role_width := ifx narrow then width else Scale(168)
-    name_width := ifx narrow then width else width - role_width - Scale(12)
-    Text(frame.session, TextProps.{.bounds = Bounds(x, y, name_width, Scale(28)),
-            .text = name, .wrap = cast(TextWrap)TextWrapEllipsis})
+    shown := name
     if row.status == "pending" {
-        Text(frame.session, TextProps.{.bounds = Bounds(x, y + Scale(28), name_width, Scale(24)),
-                .text = ListsLocaleHost("elist_invited"), .font = Scale(13)})
+        invited: Vec(u8)
+        BuilderPrint(*invited, "% (%)", Copied(name), ListsLocaleHost("elist_invited"))
+        shown = BuilderFinish(invited)
     }
+    avatar := Scale(36)
+    Avatar(cast(u64)(7900 + place), shown, place, x, y + (Scale(MEMBER_ROW) - avatar) / 2, avatar)
+    role_width := Scale(140)
+    name_x := x + avatar + Scale(12)
+    Text(frame.session, TextProps.{.bounds = Bounds(name_x, y, x + width - role_width - Scale(8) - name_x, Scale(MEMBER_ROW)),
+            .text = shown, .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapEllipsis})
     role: s32 = ifx original_owner || row.access == "owner" then 0 else ifx row.access == "viewer" then 2 else 1
-    role_y := y + ifx narrow then Scale(52) else 0
-    role_x := ifx narrow then x else x + width - role_width
     labels: [3]string = .[ListsLocaleHost("elist_owner"), ListsLocaleHost("elist_can_edit"), ListsLocaleHost("elist_read_only")]
-    bounds := Bounds(role_x, role_y, role_width, Scale(44))
+    bounds := Bounds(x + width - role_width, y + (Scale(MEMBER_ROW) - Scale(40)) / 2, role_width, Scale(40))
     if manages && !original_owner && bounds.y >= sharing_viewport.y &&
     bounds.y + bounds.height <= sharing_viewport.y + sharing_viewport.height {
         // Submit after Scroll ends: its viewport must not crop the menu.
         unused VecPush(sharing_controls, SharingAccessControl.{.target = target,
                 .bounds = bounds, .role = role, .disabled = disabled})
     } else {
-        Text(frame.session, TextProps.{.bounds = bounds,
-                .text = labels[role], .vertical_align = cast(TextAlign)TextAlignCenter})
+        Text(frame.session, TextProps.{.bounds = bounds, .text = labels[role],
+                .align = cast(TextAlign)TextAlignEnd, .vertical_align = cast(TextAlign)TextAlignCenter,
+                .disabled = true})
     }
 }
 
@@ -414,6 +507,9 @@ SharingAccessControls :: () -> bool {
         changed := Dropdown(frame.session, DropdownProps.{.key = KeyHash(target),
                 .bounds = control.bounds, .selected_index = control.role,
                 .disabled = control.disabled, .scale = frame.scale}, options[:4])
+        if changed.open {
+            settings_menu_open = true
+        }
         if changed.changed {
             if changed.selected_index == 3 {
                 Remote(LISTS_REMOVE_ACCESS, target)
@@ -427,48 +523,34 @@ SharingAccessControls :: () -> bool {
     return false
 }
 
-// Share and Invitations update automatically while the dialog is open.
-SharingDialog :: () {
-    VecClear(sharing_controls)
-    share := frame.panel == 1
-    list: ListsUiRow
-    if share && state.selected_list >= 0 && state.selected_list < state.list_count {
-        list = ReadListsRowHost(state.selected_list, false)
-    }
+// Invitations to other people's lists update while the dialog is open.
+InvitationsDialog :: () {
     width := frame.width - Scale(32)
     if width > Scale(520) {
         width = Scale(520)
     }
-    detail := ListsLocaleHost("elist_connect")
-    if frame.connected {
-        detail = ListsLocaleHost(ifx share then "elist_people_with_access" else "elist_invitations_detail")
-    }
-    count: s32 = ifx share then 1 else 0
+    detail := ListsLocaleHost(ifx frame.connected then "elist_invitations_detail" else "elist_connect")
+    count: s32 = 0
     for index: cast(s32)0..frame.invitation_count - 1 {
         row := ReadListsSharingRowHost(index, true)
-        if (share && SharingMemberShown(row, list.id)) ||
-        (!share && row.target == frame.public_id && row.status == "pending") {
+        if row.target == frame.public_id && row.status == "pending" {
             count += 1
         }
     }
-    row_height := Scale(ifx !share then 160 else ifx width - Scale(36) < Scale(360) then 104 else 64)
+    row_height := Scale(160)
     shown := ifx count > 4 then 4 else count
     height := Scale(120) + shown * row_height
-    if share && frame.connected {
-        height += Scale(64)
-    }
     if height > frame.height - frame.bottom - Scale(32) {
         height = frame.height - frame.bottom - Scale(32)
     }
     dialog := ModalFrame(frame.session, ModalFrameProps.{.key = cast(u64)6520,
-            .title = ListsLocaleHost(ifx share then "elist_share" else "elist_invitations"),
+            .title = ListsLocaleHost("elist_invitations"),
             .width = width, .height = height, .scale = frame.scale,
             .has_right_action = true, .right_label = ListsLocaleHost("close_button")})
     if dialog.dismissed || dialog.right_clicked {
         frame.panel = 0
         frame.focused = false
         sharing_scroll = 0
-        ResetInvite()
         return
     }
     if !dialog.opened {
@@ -479,18 +561,6 @@ SharingDialog :: () {
     content_width := cast(s32)dialog.layout.content.width
     bottom := cast(s32)(dialog.layout.content.y + dialog.layout.content.height)
     disabled := frame.sharing_busy || frame.sharing_pending
-    suggestions_y := y + Scale(48)
-    if share && frame.connected && !list.read_only {
-        if InviteField(x, y, content_width, disabled || list.incomplete) {
-            End(frame.session)
-            return
-        }
-        y += Scale(60)
-    } else if share && frame.connected {
-        Text(frame.session, TextProps.{.bounds = Bounds(x, y, content_width, Scale(44)),
-                .text = ListsLocaleHost("elist_read_only"), .vertical_align = cast(TextAlign)TextAlignCenter})
-        y += Scale(52)
-    }
     Text(frame.session, TextProps.{.bounds = Bounds(x, y, content_width, Scale(32)),
             .text = detail, .wrap = cast(TextWrap)TextWrapAuto})
     y += Scale(40)
@@ -501,56 +571,30 @@ SharingDialog :: () {
     if count == 0 {
         Text(frame.session, TextProps.{.bounds = Bounds(x, y, content_width, Scale(44)),
                 .text = ListsLocaleHost("elist_no_invitations"), .wrap = cast(TextWrap)TextWrapAuto})
-    } else {
-        scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)6512,
-                .bounds = Bounds(x, y, content_width, bottom - y),
-                .content_height = count * row_height, .scroll_offset = sharing_scroll})
-        sharing_scroll = scroll.scroll_offset
-        sharing_viewport = scroll.viewport
-        if scroll.opened {
-            row_y := cast(s32)scroll.content.y
-            changed: bool
-            if share {
-                name := ifx list.owner_alias.count > 0 then list.owner_alias else list.owner_id
-                if !list.shared || list.owner_id == frame.public_id {
-                    name = ListsLocaleHost("elist_you")
-                }
-                MemberRow(ListsUiPerson.{.target = list.owner_id, .target_alias = name, .access = "owner"},
-                    x, row_y, content_width - Scale(14), false, true, disabled)
-                row_y += row_height
-            }
-            for index: cast(s32)0..frame.invitation_count - 1 {
-                row := ReadListsSharingRowHost(index, true)
-                if (share && !SharingMemberShown(row, list.id)) ||
-                (!share && (row.target != frame.public_id || row.status != "pending")) {
-                    continue
-                }
-                if row_y + row_height > cast(s32)scroll.viewport.y && row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height) {
-                    if share {
-                        MemberRow(row, x, row_y, content_width - Scale(14), list.owner, false, disabled)
-                    } else {
-                        changed = InvitationRow(row, index, x, row_y, content_width - Scale(14), disabled)
-                    }
-                    if changed {
-                        break
-                    }
-                }
-                row_y += row_height
-            }
-            End(frame.session)
-            if changed {
-                End(frame.session)
-                return
-            }
-        }
-    }
-    if SharingAccessControls() {
         End(frame.session)
         return
     }
-    // Emit the floating menu last so it sits above all collaborator rows.
-    if share && !list.read_only && !disabled {
-        InviteSuggestions(x, suggestions_y, list.id, list.owner_id)
+    scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)6512,
+            .bounds = Bounds(x, y, content_width, bottom - y),
+            .content_height = count * row_height, .scroll_offset = sharing_scroll})
+    sharing_scroll = scroll.scroll_offset
+    if scroll.opened {
+        row_y := cast(s32)scroll.content.y
+        changed: bool
+        for index: cast(s32)0..frame.invitation_count - 1 {
+            row := ReadListsSharingRowHost(index, true)
+            if row.target != frame.public_id || row.status != "pending" {
+                continue
+            }
+            if row_y + row_height > cast(s32)scroll.viewport.y && row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height) {
+                changed = InvitationRow(row, index, x, row_y, content_width - Scale(14), disabled)
+                if changed {
+                    break
+                }
+            }
+            row_y += row_height
+        }
+        End(frame.session)
     }
     End(frame.session)
 }
@@ -594,17 +638,52 @@ InvitationRow :: (row: ListsUiPerson, index: s32, x: s32, y: s32, width: s32, di
 ListsView :: (message: ListsMessage) -> ListsMessage {
     frame = ReadListsUiHost()
     state = message
+    // Sharing lives in List settings; an older saved Share panel opens it.
+    if frame.panel == 1 {
+        frame.panel = 0
+        if state.selected_list >= 0 && state.selected_list < state.list_count {
+            OpenSettings(ReadListsRowHost(state.selected_list, false).title)
+        }
+    }
+    if settings_open && (state.selected_list < 0 || state.selected_list >= state.list_count) {
+        CloseSettings()
+    }
     input := frame.input
     if frame.panel != 0 {
         frame.input = TextFieldInput.{}
         frame.focused = false
     }
-    ListsPage()
+    if settings_open {
+        ListSettingsPage()
+    } else {
+        ListsPage()
+    }
     frame.input = input
-    if frame.panel != 0 {
-        SharingDialog()
+    if frame.panel == 2 {
+        InvitationsDialog()
     }
     return Finish()
+}
+
+// List settings opens with its name ready to change but no keyboard.
+OpenSettings :: (title: string) {
+    settings_open = true
+    settings_scroll = 0
+    delete_confirm = false
+    invite_role = 1
+    ResetInvite()
+    BeginInput(-3, title)
+    frame.focused = false
+    frame.panel = 0
+}
+
+CloseSettings :: () {
+    settings_open = false
+    delete_confirm = false
+    ResetInvite()
+    state.editing_item = -1
+    state.reset_input = true
+    frame.focused = false
 }
 
 ListChipsResult :: struct {
@@ -630,6 +709,10 @@ ListChips :: (x: s32, y: s32, width: s32, blocked: bool) -> ListChipsResult {
         if index < state.list_count {
             label := ReadListsRowHost(index, false).title
             chip_width[index] = TextWidth(frame.session, TextProps.{.text = label}) + padding * 2
+            // The selected chip carries the gear that opens List settings.
+            if index == state.selected_list {
+                chip_width[index] += Scale(26)
+            }
         }
         if chip_width[index] > width {
             chip_width[index] = width
@@ -669,16 +752,22 @@ ListChips :: (x: s32, y: s32, width: s32, blocked: bool) -> ListChipsResult {
             continue
         }
         chosen := index == state.selected_list
+        title := ReadListsRowHost(index, false).title
         if Button(frame.session, ButtonProps.{.key = cast(u64)(6800 + index), .bounds = bounds,
-                .label = ReadListsRowHost(index, false).title, .pill = true, .selected = chosen,
+                .label = title, .pill = true, .selected = chosen,
+                .icon_shape = ifx chosen then SettingsIcon.Shape else "",
+                .icon_placement = cast(IconPlacement)IconPlacementTrailing,
                 .tone = cast(ButtonTone)(ifx chosen then ButtonToneAccent else ButtonToneNeutral),
-                .emphasis = cast(ButtonEmphasis)(ifx chosen then ButtonEmphasisFilled else ButtonEmphasisOutline)}) != 0 &&
-        !chosen {
-            state.action = LISTS_SELECT
-            state.index = index
-            undo_until = 0.0
-            delete_confirm = false
-            frame.panel = 0
+                .emphasis = cast(ButtonEmphasis)(ifx chosen then ButtonEmphasisFilled else ButtonEmphasisOutline)}) != 0 {
+            if chosen {
+                OpenSettings(Copied(title))
+            } else {
+                state.action = LISTS_SELECT
+                state.index = index
+                undo_until = 0.0
+                delete_confirm = false
+                frame.panel = 0
+            }
             result.acted = true
         }
     }
@@ -686,7 +775,237 @@ ListChips :: (x: s32, y: s32, width: s32, blocked: bool) -> ListChipsResult {
     return result
 }
 
-// The selected list: its chips, actions, new item field and items.
+// List settings replaces the page: the name, the people with access and an
+// invitation, and for the owner a Delete that asks first. Back returns.
+ListSettingsPage :: () {
+    x := Scale(16)
+    width := frame.width - x * 2
+    if width > Scale(640) {
+        x = (frame.width - Scale(640)) / 2
+        width = Scale(640)
+    }
+    y := Scale(12)
+    blocked := frame.sharing_busy || frame.sharing_pending
+    row := ReadListsRowHost(state.selected_list, false)
+    list_id := Copied(row.id)
+    title := Copied(row.title)
+    owner_id := Copied(row.owner_id)
+    owner_alias := Copied(row.owner_alias)
+    shared := row.shared
+    owns := !row.shared || row.owner
+    read_only := row.read_only
+    incomplete := row.incomplete
+    VecClear(sharing_controls)
+    invite_role_bounds = Rectangle.{}
+    menu_was_open := settings_menu_open
+    settings_menu_open = false
+    if frame.input.escape && !menu_was_open && !invite_suggestions {
+        CloseSettings()
+        return
+    }
+    if Button(frame.session, ButtonProps.{.key = cast(u64)6550,
+            .bounds = Bounds(x, y, Scale(44), Scale(44)),
+            .label = ListsLocaleHost("back_button"), .icon_shape = BackIcon.Shape, .icon_only = true,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+        CloseSettings()
+        return
+    }
+    Text(frame.session, TextProps.{.bounds = Bounds(x + Scale(56), y, width - Scale(56), Scale(44)),
+            .text = ListsLocaleHost("elist_settings"), .font = Scale(20),
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+    y += Scale(60)
+    // After Save the host clears the field; it opens again with the new name.
+    if state.editing_item != -3 {
+        BeginInput(-3, title)
+        frame.focused = false
+    }
+    members: s32 = 1
+    for index: cast(s32)0..frame.invitation_count - 1 {
+        if SharingMemberShown(ReadListsSharingRowHost(index, true), list_id) {
+            members += 1
+        }
+    }
+    inner := width - Scale(14)
+    can_invite := frame.connected && !read_only
+    content := Scale(28 + 44 + 28 + 32 + 20)
+    content += ifx frame.connected then members * Scale(MEMBER_ROW) else Scale(64)
+    if can_invite {
+        content += InviteFieldHeight(inner) + Scale(24)
+    }
+    if owns {
+        content += ifx delete_confirm then Scale(170) else Scale(52)
+    }
+    scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)6560,
+            .bounds = Bounds(x, y, width, frame.height - frame.bottom - y - Scale(12)),
+            .content_height = content, .scroll_offset = settings_scroll})
+    settings_scroll = scroll.scroll_offset
+    sharing_viewport = scroll.viewport
+    if !scroll.opened {
+        return
+    }
+    cy := cast(s32)scroll.content.y
+    Text(frame.session, TextProps.{.bounds = Bounds(x, cy, inner, Scale(24)),
+            .text = ListsLocaleHost("elist_list_name_placeholder"), .disabled = true})
+    cy += Scale(28)
+    if invite_focused {
+        frame.focused = false
+    }
+    committed := Field(Bounds(x, cy, inner - Scale(96), Scale(44)),
+        ListsLocaleHost("elist_list_name_placeholder"), read_only || blocked)
+    renamed := frame.value.count > 0 && frame.value != title && !read_only && !blocked
+    if Button(frame.session, ButtonProps.{.key = cast(u64)6551,
+            .bounds = Bounds(x + inner - Scale(88), cy, Scale(88), Scale(44)),
+            .label = ListsLocaleHost("save_button"),
+            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .disabled = !renamed}) != 0 || (committed && renamed) {
+        Mutation(LISTS_COMMIT, -1)
+        frame.focused = false
+        End(frame.session)
+        return
+    }
+    cy += Scale(72)
+    Text(frame.session, TextProps.{.bounds = Bounds(x, cy, inner, Scale(24)),
+            .text = ListsLocaleHost("elist_people_with_access"), .disabled = true})
+    cy += Scale(32)
+    if !frame.connected {
+        Text(frame.session, TextProps.{.bounds = Bounds(x, cy, inner, Scale(64)),
+                .text = ListsLocaleHost("elist_connect"), .wrap = cast(TextWrap)TextWrapAuto})
+        cy += Scale(64)
+    } else {
+        owner_name := ifx owner_alias.count > 0 then owner_alias else owner_id
+        if !shared || owner_id == frame.public_id {
+            owner_name = ListsLocaleHost("elist_you")
+        }
+        MemberRow(ListsUiPerson.{.target = owner_id, .target_alias = owner_name, .access = "owner"},
+            0, x, cy, inner, false, true, blocked)
+        cy += Scale(MEMBER_ROW)
+        place: s32 = 1
+        for index: cast(s32)0..frame.invitation_count - 1 {
+            person := ReadListsSharingRowHost(index, true)
+            if !SharingMemberShown(person, list_id) {
+                continue
+            }
+            MemberRow(person, place, x, cy, inner, owns, false, blocked)
+            place += 1
+            cy += Scale(MEMBER_ROW)
+        }
+    }
+    cy += Scale(20)
+    suggestions_y := cy + Scale(48)
+    if can_invite {
+        if InviteField(x, cy, inner, blocked || incomplete) {
+            End(frame.session)
+            return
+        }
+        cy += InviteFieldHeight(inner) + Scale(24)
+    }
+    // Only the owner deletes, and only after a second, explicit answer.
+    if owns && !delete_confirm {
+        if Button(frame.session, ButtonProps.{.key = cast(u64)6515,
+                .bounds = Bounds(x, cy, inner, Scale(44)),
+                .label = ListsLocaleHost("elist_delete_list"), .icon_shape = TRASH_ICON,
+                .tone = cast(ButtonTone)ButtonToneDanger,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .disabled = blocked}) != 0 {
+            delete_confirm = true
+        }
+    } else if owns {
+        Box(frame.session, BoxProps.{.key = cast(u64)6518, .bounds = Bounds(x, cy, inner, Scale(160)),
+                .border = Color.{198, 52, 52, 160}, .radius = cast(float32)Scale(12)})
+        Text(frame.session, TextProps.{.bounds = Bounds(x + Scale(16), cy + Scale(12), inner - Scale(32), Scale(30)),
+                .text = ListsLocaleHost("elist_delete_question"), .font = Scale(18)})
+        Text(frame.session, TextProps.{.bounds = Bounds(x + Scale(16), cy + Scale(44), inner - Scale(32), Scale(48)),
+                .text = ListsLocaleHost("elist_delete_detail"), .wrap = cast(TextWrap)TextWrapAuto,
+                .disabled = true})
+        button_width := (inner - Scale(44)) / 2
+        if Button(frame.session, ButtonProps.{.key = cast(u64)6514,
+                .bounds = Bounds(x + Scale(16), cy + Scale(100), button_width, Scale(44)),
+                .label = ListsLocaleHost("cancel_button")}) != 0 {
+            delete_confirm = false
+        }
+        if Button(frame.session, ButtonProps.{.key = cast(u64)6516,
+                .bounds = Bounds(x + Scale(28) + button_width, cy + Scale(100), button_width, Scale(44)),
+                .label = ListsLocaleHost("elist_delete_list"),
+                .tone = cast(ButtonTone)ButtonToneDanger,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled, .disabled = blocked}) != 0 {
+            CloseSettings()
+            Mutation(LISTS_DELETE_LIST, -1)
+            End(frame.session)
+            return
+        }
+    }
+    End(frame.session)
+    if SharingAccessControls() {
+        return
+    }
+    if can_invite {
+        InviteRole(blocked || incomplete)
+        if !blocked {
+            InviteSuggestions(x, suggestions_y, list_id, owner_id)
+        }
+    }
+}
+
+// Under the chips, a shared list shows who has it, as a document does:
+// avatars and names, invited people marked. A tap opens List settings.
+SharedLine :: (current: ListsUiRow, x: s32, y: s32, width: s32) -> bool {
+    people := Copied(current.people)
+    invited := ifx current.owner then Copied(current.invited) else ""
+    invited_label := Copied(ListsLocaleHost("elist_invited"))
+    title := Copied(current.title)
+    text: Vec(u8)
+    initials: [3]string
+    count: s32 = 0
+    for group: cast(s32)0..1 {
+        source := ifx group == 0 then people else invited
+        start: s64 = 0
+        at: s64 = 0
+        while at <= source.count {
+            separator := at + 1 < source.count && source[at] == cast(u8)44 && source[at + 1] == cast(u8)32
+            if at == source.count || separator {
+                name := source[start:at]
+                if name.count > 0 {
+                    if text.count > 0 {
+                        BuilderPrint(*text, " · ")
+                    }
+                    if group == 0 {
+                        BuilderPrint(*text, "%", name)
+                    } else {
+                        BuilderPrint(*text, "% (%)", name, invited_label)
+                    }
+                    if count < 3 {
+                        initials[count] = name
+                    }
+                    count += 1
+                }
+                start = at + 2
+                at += 2
+            } else {
+                at += 1
+            }
+        }
+    }
+    if count == 0 {
+        return false
+    }
+    size := Scale(32)
+    step := Scale(22)
+    shown := ifx count > 3 then 3 else count
+    for place: cast(s32)0..shown - 1 {
+        Avatar(cast(u64)(7950 + place), initials[place], place, x + place * step, y + Scale(4), size)
+    }
+    text_x := x + (shown - 1) * step + size + Scale(10)
+    if Button(frame.session, ButtonProps.{.key = cast(u64)6508,
+            .bounds = Bounds(text_x, y, x + width - text_x, Scale(40)),
+            .label = BuilderFinish(text),
+            .content_alignment = cast(ContentAlignment)ContentAlignmentStart,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+        OpenSettings(title)
+        return true
+    }
+    return false
+}
+
+// The selected list: its chips, who has it, the new item field and items.
 ListsPage :: () {
     x := Scale(16)
     width := frame.width - x * 2
@@ -696,11 +1015,22 @@ ListsPage :: () {
     if state.selected_list >= 0 && state.selected_list < state.list_count {
         current = ReadListsRowHost(state.selected_list, false)
     }
+    // Rename and Delete live in List settings now.
+    if state.editing_item == -3 {
+        state.editing_item = -1
+        state.reset_input = true
+    }
     chips := ListChips(x, y, width, blocked)
     if chips.acted {
         return
     }
     y += chips.height + Scale(12)
+    if current.shared {
+        if SharedLine(current, x, y, width) {
+            return
+        }
+        y += Scale(48)
+    }
     if (frame.sharing_status != 0 && frame.sharing_status != 2) || frame.sharing_pending {
         key := "elist_saving"
         if frame.sharing_pending && !frame.sharing_busy {
@@ -735,7 +1065,7 @@ ListsPage :: () {
     if current.read_only && state.editing_item != -2 {
         blocked = true
     }
-    editing_list := state.editing_item == -2 || state.editing_item == -3
+    editing_list := state.editing_item == -2
     if !editing_list {
         // Invitations to other people's lists appear only while some wait.
         if frame.pending_count_text != "0" && frame.pending_count_text != "" {
@@ -758,12 +1088,11 @@ ListsPage :: () {
         y += Scale(56)
     }
     if editing_list {
-        owner := !current.shared || current.owner
         committed := Field(Bounds(x, y, width, Scale(44)),
-            ListsLocaleHost(ifx state.editing_item == -3 then "elist_list_name_placeholder" else "elist_new_list_placeholder"), blocked)
+            ListsLocaleHost("elist_new_list_placeholder"), blocked)
         button_width := (width - Scale(8)) / 2
         if Button(frame.session, ButtonProps.{.key = cast(u64)6506,
-                .label = ListsLocaleHost(ifx state.editing_item == -3 then "done_button" else "elist_create_list"),
+                .label = ListsLocaleHost("elist_create_list"),
                 .bounds = Bounds(x, y + Scale(56), button_width, Scale(44)),
                 .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
                 .disabled = frame.value.count == 0 || blocked}) != 0 || (committed && !blocked) {
@@ -773,25 +1102,8 @@ ListsPage :: () {
                 .label = ListsLocaleHost("cancel_button"),
                 .bounds = Bounds(x + button_width + Scale(8), y + Scale(56), button_width, Scale(44)),
                 .disabled = blocked}) != 0 {
-            delete_confirm = false
             state.editing_item = -1
             state.reset_input = true
-        }
-        // Delete is only here, inside Edit, and asks before it removes anything.
-        if state.editing_item == -3 {
-            if Button(frame.session, ButtonProps.{.key = cast(u64)6515,
-                    .label = ListsLocaleHost(ifx delete_confirm then "elist_delete_list_confirm" else "elist_delete_list"),
-                    .bounds = Bounds(x, y + Scale(112), width, Scale(44)),
-                    .tone = cast(ButtonTone)ButtonToneDanger,
-                    .emphasis = cast(ButtonEmphasis)(ifx delete_confirm then ButtonEmphasisFilled else ButtonEmphasisGhost),
-                    .disabled = current.id.count == 0 || !owner || blocked}) != 0 {
-                if delete_confirm {
-                    delete_confirm = false
-                    Mutation(LISTS_DELETE_LIST, -1)
-                    return
-                }
-                delete_confirm = true
-            }
         }
         return
     }
@@ -803,15 +1115,32 @@ ListsPage :: () {
                 .wrap = cast(TextWrap)TextWrapAuto})
         return
     }
-    committed := Field(Bounds(x, y, width - Scale(96), Scale(44)),
-        ListsLocaleHost(ifx state.editing_item >= 0 then "elist_item_name_placeholder" else "elist_add_item_placeholder"), blocked)
-    if Button(frame.session, ButtonProps.{.key = cast(u64)6507,
-            .label = ListsLocaleHost(ifx state.editing_item >= 0 then "done_button" else "elist_add_item"),
-            .bounds = Bounds(x + width - Scale(88), y, Scale(88), Scale(44)),
-            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .disabled = frame.value.count == 0 || blocked}) != 0 || (committed && !blocked) {
-        Mutation(LISTS_COMMIT, -1)
-        return
+    if state.editing_item >= 0 {
+        // The item's own row holds its field; Escape or Back leaves it.
+        if frame.input.escape {
+            state.editing_item = -1
+            state.reset_input = true
+            frame.focused = false
+        }
+        unused TextField(frame.session, TextFieldProps.{.key = cast(u64)6502,
+                .bounds = Bounds(x, y, width - Scale(96), Scale(44)),
+                .placeholder = ListsLocaleHost("elist_add_item_placeholder"), .disabled = true})
+        unused Button(frame.session, ButtonProps.{.key = cast(u64)6510,
+                .label = ListsLocaleHost("elist_add_item"),
+                .bounds = Bounds(x + width - Scale(88), y, Scale(88), Scale(44)),
+                .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+                .disabled = true})
+    } else {
+        committed := Field(Bounds(x, y, width - Scale(96), Scale(44)),
+            ListsLocaleHost("elist_add_item_placeholder"), blocked)
+        if Button(frame.session, ButtonProps.{.key = cast(u64)6507,
+                .label = ListsLocaleHost("elist_add_item"),
+                .bounds = Bounds(x + width - Scale(88), y, Scale(88), Scale(44)),
+                .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+                .disabled = frame.value.count == 0 || blocked}) != 0 || (committed && !blocked) {
+            Mutation(LISTS_COMMIT, -1)
+            return
+        }
     }
     y += Scale(56)
     // Finished items stay out of the way, as in 1List: a pull down on the
@@ -836,34 +1165,6 @@ ListsPage :: () {
             finished_count += 1
         }
     }
-    // One line under the field: the selected list's Share and Edit.
-    button_size := Scale(44)
-    edit_x := x + width - button_size
-    share_x := edit_x - Scale(4) - button_size
-    // Share is one clear button, as in a document: it opens who has access.
-    if Button(frame.session, ButtonProps.{.key = cast(u64)6508,
-            .bounds = Bounds(share_x, y, button_size, button_size),
-            .label = ListsLocaleHost("elist_share"), .icon_shape = SHARE_ICON, .icon_only = true,
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .disabled = current.id.count == 0}) != 0 {
-        frame.panel = 1
-        frame.focused = false
-        sharing_scroll = 0
-        ResetInvite()
-    }
-    // Edit opens the name; Delete is inside it, behind a question.
-    if Button(frame.session, ButtonProps.{.key = cast(u64)6503,
-            .bounds = Bounds(edit_x, y, button_size, button_size),
-            .label = ListsLocaleHost("elist_rename"), .icon_only = true,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost,
-            .icon_type = cast(s32)IconEdit,
-            .disabled = current.id.count == 0 || current.read_only || blocked}) != 0 {
-        delete_confirm = false
-        BeginInput(-3, current.title)
-        return
-    }
-    y += Scale(52)
     // The items fill what is left above the bottom bar, never past it. Undo
     // takes a line under them for the few seconds it is offered.
     list_height := frame.height - frame.bottom - y - Scale(12)
@@ -941,8 +1242,32 @@ ListsPage :: () {
         row_right := x + width - Scale(14)
         for position: cast(s32)0..shown_finished + open_count - 1 {
             index := ifx position < shown_finished then finished_order[position] else open_order[position - shown_finished]
-            if row_y + Scale(64) > cast(s32)scroll.viewport.y &&
-            row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height) {
+            visible_row := row_y + Scale(64) > cast(s32)scroll.viewport.y &&
+            row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height)
+            // An item being edited becomes a field in its own row, with a
+            // check that saves it.
+            if visible_row && index == state.editing_item {
+                check_x := row_right - Scale(44)
+                committed := Field(Bounds(x, row_y + Scale(10), check_x - Scale(8) - x, Scale(44)),
+                    ListsLocaleHost("elist_item_name_placeholder"), blocked)
+                if field_escaped {
+                    state.editing_item = -1
+                    state.reset_input = true
+                    frame.focused = false
+                    End(frame.session)
+                    return
+                }
+                if Button(frame.session, ButtonProps.{.key = cast(u64)6511,
+                        .bounds = Bounds(check_x, row_y + Scale(10), Scale(44), Scale(44)),
+                        .label = ListsLocaleHost("save_button"), .icon_type = cast(s32)IconCheck,
+                        .icon_only = true, .tone = cast(ButtonTone)ButtonToneAccent,
+                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+                        .disabled = frame.value.count == 0 || blocked}) != 0 || (committed && !blocked) {
+                    Mutation(LISTS_COMMIT, -1)
+                    End(frame.session)
+                    return
+                }
+            } else if visible_row {
                 row := ReadListsRowHost(index, true)
                 swiped := SwipeRow(frame.session, SwipeRowProps.{.key = cast(u64)(7000 + index * 4),
                         .bounds = Bounds(x, row_y, row_right - x, Scale(64)),
@@ -968,6 +1293,7 @@ ListsPage :: () {
                 }
                 if swiped.swiped_start {
                     BeginInput(index, row.title)
+                    field_focus_request = true
                 }
                 if swiped.swiped_end {
                     // Deleting leaves Edit, since the items after it move up.
