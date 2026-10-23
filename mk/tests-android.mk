@@ -1,5 +1,9 @@
 # Android tests: Ziran host modules, Gradle tests, smoke and device checks.
 
+.PHONY: android-sdk-install-test
+android-sdk-install-test:
+	python3 tests/android_sdk_install_test.py
+
 .PHONY: android-source-test
 android-source-test: $(ZI2ZIR_BIN) | build-laws
 	ZI_CHECK_DEFINES="ANDROID_BUILD KRYON_ANDROID_HOST __aarch64__" \

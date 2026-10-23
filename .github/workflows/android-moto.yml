@@ -47,11 +47,11 @@ jobs:
           if run['head_sha'] != commit or run['path'] != '.github/workflows/release.yml':
               raise SystemExit('The Release checks must belong to the requested source commit')
           jobs = api(f'repos/{repository}/actions/runs/{run_id}/jobs?per_page=100')['jobs']
-          for name in ('Secret Scan', 'Test (0/3)', 'Test (1/3)', 'Test (2/3)'):
+          for name in ('Secret Scan', 'Test (0/3)', 'Test (1/3)', 'Test (2/3)', 'Visual Tests'):
               checks = [job for job in jobs if job['name'] == name]
               if len(checks) != 1 or checks[0]['conclusion'] != 'success':
                   raise SystemExit(f'{name} must have passed before signing')
-          print('Verified passing Secret Scan and all three Test shards for ' + commit)
+          print('Verified passing Secret Scan, all three Test shards and Visual Tests for ' + commit)
           PY
 
       - name: Checkout verified source
@@ -82,19 +82,16 @@ jobs:
         with:
           path: |
             ${{ env.ANDROID_HOME }}/platforms/android-36
-            ${{ env.ANDROID_HOME }}/build-tools/34.0.0
+            ${{ env.ANDROID_HOME }}/build-tools/35.0.0
             ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
             ${{ env.ANDROID_HOME }}/cmake/3.22.1
-          key: android-moto-sdk-${{ runner.os }}-api36-ndk28-cmake322
+          key: android-sdk-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/android-sdk-packages.txt') }}
           restore-keys: |
-            android-sdk-${{ runner.os }}-${{ runner.arch }}-
+            android-sdk-v2-${{ runner.os }}-${{ runner.arch }}-
 
-      - name: Install Android SDK components
-        run: |
-          set -euo pipefail
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platforms;android-36" "build-tools;34.0.0" "ndk;28.2.13676358" "cmake;3.22.1"
+      - name: Verify and install Android SDK components
+        timeout-minutes: 20
+        run: python3 .github/scripts/install-android-sdk.py
 
       - name: Prepare Android signing key
         env:
@@ -129,7 +126,7 @@ jobs:
           VERSION=$(python3 scripts/check-version.py --print-version)
           mkdir -p build/release/moto
           cp droid/app/build/outputs/apk/release/app-armeabi-v7a-release.apk "build/release/moto/inbe-$VERSION-moto.apk"
-          "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --print-certs "build/release/moto/inbe-$VERSION-moto.apk"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "build/release/moto/inbe-$VERSION-moto.apk"
           printf '%s\n' "$SOURCE_COMMIT" > build/release/moto/source-commit.txt
           (
             cd build/release/moto

@@ -133,38 +133,6 @@ jobs:
       - name: Run Tests
         run: sh scripts/test-shard.sh ${{ matrix.shard }} 3
 
-      - name: Require Visual Tests
-        if: matrix.shard == 1
-        run: make visual-test
-
-      - name: Save Visual Test Evidence
-        if: always() && matrix.shard == 1
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-visual-tests
-          path: |
-            build/visual-test/
-            build/native-visual-test/
-            build/entity-profile-ui-test/
-            build/native-zoom-test/*.png
-            build/native-zoom-test/app.log
-            build/launcher-ui-test/
-            build/locale-render-ui-test/
-            build/native-screenshot-test/
-            build/native-text-pixels-test/*.png
-            build/native-text-pixels-test/*.log
-            build/settings-sidebar-test/
-            build/startup-quit-test/
-            build/lumi-ui-test/
-            build/lumi-history-ui-test/
-            build/habits-table-ui-test/
-            build/lists-ui-test/
-            build/sync-review-ui-test/
-            build/data-back-ui-test/
-            build/leaderboard-ui-test/
-            build/practice-images-ui-test/
-          retention-days: 7
-
       - name: Read sync test server revision
         if: matrix.shard == 0
         id: sync-test-server
@@ -193,6 +161,79 @@ jobs:
         run: |
           make -C .test-server build
           make sync-server-test DAOCHI_BIN="$GITHUB_WORKSPACE/.test-server/daochi"
+
+  visual-test:
+    name: Visual Tests
+    runs-on: ubuntu-latest
+    needs: guard-package-urls
+    timeout-minutes: 120
+    env:
+      APT_CACHE_DIR: /tmp/apt-cache
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          lfs: true
+
+      - name: Fetch Ziran packages
+        uses: ./.github/actions/ziran-packages
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Cache Test apt packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.APT_CACHE_DIR }}
+          key: test-apt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/apt/test-packages.txt') }}
+          restore-keys: |
+            test-apt-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install Test Dependencies
+        timeout-minutes: 15
+        run: .github/scripts/install-apt-packages.sh .github/apt/test-packages.txt
+
+      - name: Require Visual Tests
+        run: make visual-test
+
+      - name: Save Visual Test Evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-visual-tests
+          path: |
+            build/visual-test/
+            build/native-visual-test/
+            build/entity-profile-ui-test/
+            build/native-zoom-test/*.png
+            build/native-zoom-test/app.log
+            build/launcher-ui-test/
+            build/locale-render-ui-test/
+            build/native-screenshot-test/
+            build/native-text-pixels-test/*.png
+            build/native-text-pixels-test/*.log
+            build/settings-sidebar-test/
+            build/startup-quit-test/
+            build/lumi-ui-test/
+            build/lumi-history-ui-test/
+            build/habits-table-ui-test/
+            build/lists-ui-test/
+            build/sync-review-ui-test/
+            build/data-back-ui-test/
+            build/leaderboard-ui-test/
+            build/practice-images-ui-test/
+          retention-days: 7
+
 
   browser-addons:
     # Builds the web app once, packages it for Chrome and Firefox, and runs

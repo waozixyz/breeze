@@ -81,7 +81,7 @@ jobs:
     name: Test (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     needs: secret-scan
-    # Run the complete test, visual and package compatibility suites.
+    # Run every unit shard and the package compatibility suite.
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -128,18 +128,61 @@ jobs:
       - name: Run Tests
         run: sh scripts/test-shard.sh ${{ matrix.shard }} 3
 
-      - name: Require Visual Tests
-        if: matrix.shard == 1
-        run: make visual-test
-
       - name: Run Packages Across App Versions
         if: matrix.shard == 2
         run: make package-compat-test
         env:
           GITHUB_TOKEN: ${{ github.token }}
 
+
+  visual-test:
+    name: Visual Tests
+    runs-on: ubuntu-latest
+    needs: secret-scan
+    timeout-minutes: 120
+    env:
+      APT_CACHE_DIR: /tmp/apt-cache
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision || github.sha }}
+          fetch-depth: 1
+          lfs: true
+
+      - name: Fetch Ziran packages
+        uses: ./.github/actions/ziran-packages
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Robolectric's Android 16 (SDK 36) sandbox needs Java 21.
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Cache Test apt packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.APT_CACHE_DIR }}
+          key: test-apt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/apt/test-packages.txt') }}
+          restore-keys: |
+            test-apt-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install Test Dependencies
+        timeout-minutes: 15
+        run: .github/scripts/install-apt-packages.sh .github/apt/test-packages.txt
+
+      - name: Require Visual Tests
+        run: make visual-test
+
       - name: Save Visual Test Evidence
-        if: always() && matrix.shard == 1
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: release-visual-tests
@@ -208,7 +251,7 @@ jobs:
     name: Build Web
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: test
+    needs: secret-scan
     env:
       APT_CACHE_DIR: /tmp/apt-cache
 
@@ -264,7 +307,7 @@ jobs:
     name: Build Chrome Extension
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: test
+    needs: secret-scan
     env:
       APT_CACHE_DIR: /tmp/apt-cache
 
@@ -320,7 +363,7 @@ jobs:
     name: Build Firefox Add-on
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: test
+    needs: secret-scan
     env:
       APT_CACHE_DIR: /tmp/apt-cache
 
@@ -377,7 +420,7 @@ jobs:
     name: Build Linux AppImage
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    needs: test
+    needs: secret-scan
     strategy:
       fail-fast: false
       matrix:
@@ -495,7 +538,7 @@ jobs:
     name: Build Linux Deb
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    needs: test
+    needs: secret-scan
     strategy:
       fail-fast: false
       matrix:
@@ -556,7 +599,7 @@ jobs:
     name: Build Linux RPM
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    needs: test
+    needs: secret-scan
     strategy:
       fail-fast: false
       matrix:
@@ -617,7 +660,7 @@ jobs:
     name: Build Linux Snap
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    needs: test
+    needs: secret-scan
     strategy:
       fail-fast: false
       matrix:
@@ -675,7 +718,7 @@ jobs:
     name: Build Linux Flatpak
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
-    needs: test
+    needs: secret-scan
     strategy:
       fail-fast: false
       matrix:
@@ -733,7 +776,7 @@ jobs:
     name: Build Windows
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: test
+    needs: secret-scan
     env:
       APT_CACHE_DIR: /tmp/apt-cache
 
@@ -798,7 +841,9 @@ jobs:
     name: Build Android
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    needs: test
+    needs: secret-scan
+    env:
+      APT_CACHE_DIR: /tmp/apt-cache
 
     steps:
       - name: Checkout Repository
@@ -806,6 +851,40 @@ jobs:
         with:
           ref: ${{ inputs.revision || github.sha }}
           fetch-depth: 1
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Cache Android SDK packages
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ANDROID_HOME }}/platforms/android-36
+            ${{ env.ANDROID_HOME }}/build-tools/35.0.0
+            ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
+            ${{ env.ANDROID_HOME }}/cmake/3.22.1
+          key: android-sdk-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/android-sdk-packages.txt') }}
+          restore-keys: |
+            android-sdk-v2-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Verify and install Android SDK components
+        timeout-minutes: 20
+        run: python3 .github/scripts/install-android-sdk.py
+
+      - name: Cache Android apt packages
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.APT_CACHE_DIR }}
+          key: android-apt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('.github/apt/android-packages.txt') }}
+          restore-keys: |
+            android-apt-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install translation check dependency
+        timeout-minutes: 15
+        run: .github/scripts/install-apt-packages.sh .github/apt/android-packages.txt
 
       - name: Fetch Ziran packages
         uses: ./.github/actions/ziran-packages
@@ -815,30 +894,8 @@ jobs:
         with:
           node-version: 22
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-
-      - name: Install translation check dependency
-        run: sudo apt-get update && sudo apt-get install -y python3-fonttools
-
-      - name: Cache Android SDK packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ${{ env.ANDROID_HOME }}/platforms/android-36
-            ${{ env.ANDROID_HOME }}/build-tools/34.0.0
-            ${{ env.ANDROID_HOME }}/ndk/25.1.8937393
-            ${{ env.ANDROID_HOME }}/ndk/28.2.13676358
-            ${{ env.ANDROID_HOME }}/cmake/3.22.1
-          key: android-sdk-${{ runner.os }}-${{ runner.arch }}-api36-bt34-ndk25-ndk28-cmake322
-          restore-keys: |
-            android-sdk-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Cache Android native build
         uses: actions/cache@v4
@@ -846,16 +903,9 @@ jobs:
           path: |
             droid/app/.cxx
             droid/app/build/intermediates/cxx
-          key: android-native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('droid/app/src/main/cpp/CMakeLists.txt', 'droid/app/build.gradle', 'src/**/*.c', 'src/**/*.h', 'ziran.lock') }}
+          key: android-native-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('droid/app/src/main/cpp/CMakeLists.txt', 'droid/app/build.gradle', 'droid/build.gradle', 'src/**/*.zi', 'src/**/*.c', 'src/**/*.h', 'ziran.lock') }}
           restore-keys: |
-            android-native-${{ runner.os }}-${{ runner.arch }}-
-
-      - name: Install Android SDK Components
-        run: |
-          set -euo pipefail
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platforms;android-36" "build-tools;34.0.0" "ndk;25.1.8937393" "cmake;3.22.1"
+            android-native-v2-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Prepare Android signing key
         env:
@@ -945,6 +995,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs:
+      - test
+      - visual-test
       - build-web
       - build-chrome-extension
       - build-firefox-addons

@@ -156,6 +156,7 @@ test: practice-downloads-test
 test: practice-narration-test
 test: practice-narration-keys-test
 test: practice-narration-snapshot-test
+test: android-sdk-install-test
 
 ## Local parity with the ci.yml gate: unit tests plus the web build (emcc).
 ## Run before pushing to catch web-only breakage -- e.g. code under

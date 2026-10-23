@@ -225,13 +225,13 @@ class MotoWorkflowGateTest(unittest.TestCase):
 
     def passing_jobs(self):
         return [{"name": name, "conclusion": "success"} for name in
-                ("Secret Scan", "Test (0/3)", "Test (1/3)", "Test (2/3)")]
+                ("Secret Scan", "Test (0/3)", "Test (1/3)", "Test (2/3)", "Visual Tests")]
 
     def test_all_three_shards_allow_the_exact_release(self):
         self.check_run(self.passing_jobs())
 
     def test_missing_failed_cancelled_and_duplicate_checks_are_rejected(self):
-        for index in range(4):
+        for index in range(len(self.passing_jobs())):
             with self.subTest(index=index, state="missing"), self.assertRaises(SystemExit):
                 self.check_run(self.passing_jobs()[:index] + self.passing_jobs()[index + 1:])
             for state in ("failure", "cancelled", "skipped", None):
