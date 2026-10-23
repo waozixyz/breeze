@@ -253,6 +253,13 @@ class MotoWorkflowGateTest(unittest.TestCase):
 
 
 class ReleaseArtifactReuseTest(unittest.TestCase):
+    def test_new_pushes_keep_the_fixed_source_ci_running(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+        concurrency = workflow.split("\nconcurrency:\n", 1)[1].split("\njobs:", 1)[0]
+        self.assertIn("group: ${{ github.workflow }}-${{ github.sha }}", concurrency)
+        self.assertIn("cancel-in-progress: false", concurrency)
+        self.assertNotIn("github.ref", concurrency)
+
     def setUp(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
         section = workflow.split("      - name: Verify identical source and every gate before reusing artifacts\n", 1)[1]
