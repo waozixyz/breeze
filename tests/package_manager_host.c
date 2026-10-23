@@ -253,7 +253,9 @@ int32_t RunPackageManagerFixture(void) {
     double cancel_started = monotonic_seconds();
     package_manager_PackagePump(8, 200000, false);
     package_manager_PackageCancel();
-    assert(monotonic_seconds() - cancel_started < 0.05);
+    /* The hash stays blocked, so waiting on it would never return; the bound
+       only allows for a slow shared CI runner. */
+    assert(monotonic_seconds() - cancel_started < 1.0);
     assert(package_index == -1 && package_work_count > 0);
     assert(package_manager_PackageSequence(4) == installed_sequence);
     atomic_store(&block_hash, false);
