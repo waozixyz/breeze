@@ -93,11 +93,13 @@ SunSalutationPose :: (step: s32, other_side: bool) -> WorkoutPose {
         WorkoutFlatHands(*pose, 1.0)
         WorkoutFeet(*pose, 0.075, SUN_SALUTATION_BACK_FOOT, 0.0, -75.0, 0.0)
     } else if step == 6 {
-        // Cobra lifts the chest high on long arms, looking ahead and up.
-        WorkoutBody(*pose, 0.0, 0.135, 0.042, 0.0, 46.0, 0.0, 0.0, -14.0, -72.0)
+        // Cobra: the hips rest on the floor and the legs lie long behind,
+        // the chest lifted high on the arms, looking ahead and up.
+        WorkoutBody(*pose, 0.0, 0.13, 0.25, 0.0, 50.0, 0.0, 0.0, -14.0, -72.0)
         WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.17, 0.055, 0.447)
         WorkoutFlatHands(*pose, 1.0)
-        WorkoutFeet(*pose, 0.075, SUN_SALUTATION_BACK_FOOT + 0.009, 0.0, 0.0, 0.0)
+        // The feet roll over onto their tops, toes pointing back.
+        WorkoutFeet(*pose, 0.075, SUN_SALUTATION_BACK_FOOT, 0.0, -170.0, 0.0)
     } else if step == 7 {
         WorkoutBody(*pose, 0.0, 0.744, -0.268, 0.0, 132.0, 0.0, 0.0, 0.0, -22.0)
         WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.17, 0.055, 0.447)
@@ -124,6 +126,8 @@ SUN_SALUTATION_STEP_LIFT :: 0.12
 SUN_SALUTATION_PLANK_PIKE :: 10.0
 SUN_SALUTATION_PLANK_RISE :: 0.081
 SUN_SALUTATION_PLANK_BACK :: 0.022
+// How early a leading part arrives, as a share of the move.
+SUN_SALUTATION_LEAD :: 0.4
 // While holding a pose the chest opens this far with each breath, degrees.
 SUN_SALUTATION_BREATH_CURL :: 2.0
 SUN_SALUTATION_BREATH_NOD :: 1.5
@@ -156,6 +160,11 @@ SunSalutationTransition :: (state: SunSalutationPracticeState) -> float64 {
 // still arriving with the rest.
 SunSalutationPartAmount :: (progress: float64, lag: float64) -> float64 {
     return TaiChiSmoothstep(TaiChiClamp((progress - lag) / (1.0 - SUN_SALUTATION_HEAD_LAG), 0.0, 1.0))
+}
+
+// How far a part that leads has come: it arrives `lead` before the move ends.
+SunSalutationLeadAmount :: (progress: float64, lead: float64) -> float64 {
+    return TaiChiSmoothstep(TaiChiClamp(progress / (1.0 - lead), 0.0, 1.0))
 }
 
 // Holding a pose she keeps breathing: the chest opens and the chin lifts
@@ -204,6 +213,23 @@ SunSalutationPoseAt :: (state: SunSalutationPracticeState, rig: *TaiChiRig) -> W
     arms := WorkoutBlend(*from, *to, SunSalutationPartAmount(progress, SUN_SALUTATION_ARMS_LAG), rig)
     for side: cast(s32)0..1 {
         pose.hands[side] = arms.hands[side]
+    }
+    // Into cobra the hips slide forward before they settle and the feet
+    // roll onto their tops, and out of it the hips lift before they press
+    // back, so the knees never press into the floor.
+    if state.step == 6 {
+        pose.pelvis.z = from.pelvis.z + (to.pelvis.z - from.pelvis.z) * SunSalutationLeadAmount(progress, SUN_SALUTATION_LEAD)
+        feet := SunSalutationPartAmount(progress, SUN_SALUTATION_HEAD_LAG)
+        for side: cast(s32)0..1 {
+            pose.feet[side] = WorkoutLerpFoot(from.feet[side], to.feet[side], feet)
+        }
+    }
+    if state.step == 7 {
+        // The trunk tips over as the hips lift, so the shoulders stay low
+        // over the planted hands.
+        rise := SunSalutationLeadAmount(progress, SUN_SALUTATION_LEAD)
+        pose.pelvis.y = from.pelvis.y + (to.pelvis.y - from.pelvis.y) * rise
+        pose.lean = WorkoutLerpAngle(from.lean, to.lean, rise)
     }
     pose.head = WorkoutLerpAngle(from.head, to.head, SunSalutationPartAmount(progress, SUN_SALUTATION_HEAD_LAG))
     SunSalutationBreathe(*pose, state)

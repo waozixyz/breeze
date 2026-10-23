@@ -107,6 +107,9 @@ TaiChiRigMake :: (height: float64, shoulder_half_width: float64, hip_half_width:
     return rig
 }
 
+// How high the ankle rests above the floor with the foot on its top.
+TAI_CHI_FOOT_TOP_REST :: 0.05
+
 // A foot set on the floor (or lifted): its ankle, frame and contact points.
 TaiChiPlacedFoot :: struct {
     ankle: TaiChiVector3
@@ -260,6 +263,18 @@ TaiChiPlaceFoot :: (foot: TaiChiFootPose, rig: *TaiChiRig) -> TaiChiPlacedFoot {
     }
     placed: TaiChiPlacedFoot
     placed.ankle = TaiChiAddScaled3(TaiChiAdd3(contact, TaiChiRotate(from_contact, tilt)), up, lift)
+    // Turned past standing on its toes, the foot rolls about the ankle onto
+    // its top, toes pointing back: the ankle keeps its place over the floor
+    // and comes down to rest just above it.
+    over := TaiChiClamp((-foot.pitch - TAI_CHI_PI / 2.0) / (TAI_CHI_PI / 2.0), 0.0, 1.0)
+    if over > 0.0 {
+        on_toes := TaiChiAdd3(contact, TaiChiRotate(from_contact, TaiChiAxisAngle(left, TAI_CHI_PI / 2.0)))
+        rest := TAI_CHI_FOOT_TOP_REST * rig.scale
+        down := TaiChiSmoothstep(over)
+        laid := TaiChiAddScaled3(TaiChiV3(on_toes.x, on_toes.y + (rest - on_toes.y) * down, on_toes.z), up, lift)
+        // Just past upright it still turns about the ball, then settles.
+        placed.ankle = TaiChiLerp3(placed.ankle, laid, TaiChiSmoothstep(TaiChiClamp(over * 3.0, 0.0, 1.0)))
+    }
     placed.quat = TaiChiMultiply(tilt, TaiChiYawQuat(foot.yaw))
     placed.heel = TaiChiAdd3(placed.ankle, TaiChiRotate(TaiChiV3(0.0, -rig.ankle_height, -rig.heel_back), placed.quat))
     placed.ball = TaiChiAdd3(placed.ankle, TaiChiRotate(TaiChiV3(0.0, -rig.ankle_height, rig.ball), placed.quat))
@@ -267,7 +282,7 @@ TaiChiPlaceFoot :: (foot: TaiChiFootPose, rig: *TaiChiRig) -> TaiChiPlacedFoot {
     // once it lifts.
     placed.toes_quat = placed.quat
     if foot.pitch < 0.0 {
-        follow := TaiChiMin(1.0, lift / (0.04 * rig.scale))
+        follow := TaiChiMax(TaiChiMin(1.0, lift / (0.04 * rig.scale)), TaiChiSmoothstep(over))
         placed.toes_quat = TaiChiSlerp(TaiChiYawQuat(foot.yaw), placed.quat, follow)
     }
     placed.toe_tip = TaiChiAdd3(placed.ball, TaiChiRotate(TaiChiV3(0.0, 0.0, rig.toe_tip - rig.ball), placed.toes_quat))
