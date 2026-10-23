@@ -761,19 +761,12 @@ TaiChiFlatLoft :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine, from: f
     previous: TaiChiFlatScratch
     current: TaiChiFlatScratch
     both: TaiChiFlatScratch
-    step := (to - from) / cast(float64)stations
     for station: cast(s32)0..stations {
         current.count = 0
-        share := from + step * cast(float64)station
+        share := from + (to - from) * cast(float64)station / cast(float64)stations
         TaiChiFlatProjectRing(painter, TaiChiFlatJacketRing(painter, spine, share), *current)
         if station > 0 {
             both.count = 0
-            // Each filled band reaches a little into the one below, so
-            // neighbouring fills overlap instead of leaving a hairline seam.
-            // Kept bands stay exact: they clip shades that must not double.
-            if station > 1 && kept.count == 0 {
-                TaiChiFlatProjectRing(painter, TaiChiFlatJacketRing(painter, spine, share - step * 1.35), *both)
-            }
             for index: cast(s32)0..previous.count - 1 {
                 TaiChiFlatPush(*both, previous.points[index])
             }
@@ -789,6 +782,19 @@ TaiChiFlatLoft :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine, from: f
         }
         previous = current
     }
+}
+
+// A plain top in one piece: the hull of its rings from hem to shoulders.
+// Bands side by side show their soft edges as stripes across the cloth.
+TaiChiFlatPlainTop :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine, from: float64, to: float64,
+    color: u32) {
+    rings := TAI_CHI_FLAT_SCRATCH / TAI_CHI_FLAT_RING_POINTS
+    points: TaiChiFlatScratch
+    for station: cast(s32)0..rings - 1 {
+        share := from + (to - from) * cast(float64)station / cast(float64)(rings - 1)
+        TaiChiFlatProjectRing(painter, TaiChiFlatJacketRing(painter, spine, share), *points)
+    }
+    TaiChiFlatFill(painter, TaiChiFlatHull(painter.frame, *points), color, 1.0)
 }
 
 // A point on the jacket's front, `across` from -1 (her right) to 1 (her
@@ -1481,7 +1487,11 @@ TaiChiFlatPaintLook :: (frame: *TaiChiFlatFrame, solved: *TaiChiSolved, rig: *Ta
     TaiChiFlatLegPaint(*painter, *legs[far_first])
     TaiChiFlatLegPaint(*painter, *legs[1 - far_first])
     TaiChiFlatFill(*painter, neck, palette.skin, 1.0)
-    TaiChiFlatLoft(*painter, *spine, bottom, top, TAI_CHI_FLAT_TORSO_STATIONS, palette.top, no_clips)
+    if painter.look.plain_top {
+        TaiChiFlatPlainTop(*painter, *spine, bottom, top, palette.top)
+    } else {
+        TaiChiFlatLoft(*painter, *spine, bottom, top, TAI_CHI_FLAT_TORSO_STATIONS, palette.top, no_clips)
+    }
     TaiChiFlatLoft(*painter, *spine, bottom, bottom + 0.022, 2, palette.top_shade, no_clips)
     for band: cast(s32)0..painter.look.sash_count - 1 {
         TaiChiFlatLoft(*painter, *spine, painter.look.sash_from[band], painter.look.sash_to[band], 2,
