@@ -40,7 +40,7 @@ with contextlib.ExitStack() as stack:
                        SDL_VIDEODRIVER="x11", SDL_AUDIODRIVER="dummy", LIBGL_ALWAYS_SOFTWARE="1",
                        https_proxy="http://127.0.0.1:9", http_proxy="http://127.0.0.1:9", NO_PROXY="")
     display_log = stack.enter_context((OUTPUT / "display.log").open("w"))
-    display = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1100x900x24",
+    display = subprocess.Popen(["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0", "1100x900x24",
                                 "-nolisten", "tcp"], env=environment,
                                stdout=subprocess.PIPE, stderr=display_log)
     stack.callback(stop, display)

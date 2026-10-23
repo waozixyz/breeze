@@ -10,7 +10,7 @@ mkdir -p "$output"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
     -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
     APP_NO_TRAY=1 timeout 30s xvfb-run -a -n 300 -e /dev/stderr \
-    -s '-screen 0 1280x900x24' "$binary" \
+    -s '-noreset -screen 0 1280x900x24' "$binary" \
     --screenshot "$output/home.png" --screenshot-scene home \
     --screenshot-width 900 --screenshot-height 720 > "$output/app.log" 2>&1 || {
         result=$?

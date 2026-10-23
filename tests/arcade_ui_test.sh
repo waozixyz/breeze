@@ -16,5 +16,5 @@ fi
 # shellcheck disable=SC2086
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \
     -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 SDL_AUDIODRIVER=dummy APP_NO_TRAY=1 \
-    $isolate timeout 300s xvfb-run -a -n 300 -s '-screen 0 1280x900x24' \
+    $isolate timeout 300s xvfb-run -a -n 300 -s '-noreset -screen 0 1280x900x24' \
     python3 "$root/tests/arcade_ui_test.py" "$binary" "$package" $offline

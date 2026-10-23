@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-whm-frames-") as temporary, contex
                YUE_DESKTOP_RECOVERY="0", INBE_DEBUG_ROUTE="1")
     log_path = OUTPUT / "frames.log"
     log = stack.enter_context(log_path.open("w"))
-    display = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1080x1000x24",
+    display = subprocess.Popen(["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0", "1080x1000x24",
                                 "-nolisten", "tcp"], env=env, stdout=subprocess.PIPE, stderr=log)
     stack.callback(stop, display)
     number = display.stdout.readline().decode().strip()

@@ -196,7 +196,7 @@ def capture(binary):
                     env.update(INBE_SCREENSHOT_DATA_ROOT=str(Path(profile).resolve()),
                                ENTITY_DATA=str(Path(profile).resolve() / "entity"),
                                YUE_DESKTOP_RECOVERY="0", APP_NO_TRAY="1", SDL_VIDEODRIVER="x11", LIBGL_ALWAYS_SOFTWARE="1")
-                    command = ["xvfb-run", "-a", "-n", "300", "-s", f'-screen 0 {bucket["width"]}x{bucket["height"]}x24', str(binary), "--bundle", str(bundle), "--screenshot", str(path.resolve()), "--screenshot-scene", scene["scene"], "--screenshot-width", str(bucket["width"]), "--screenshot-height", str(bucket["height"]), "--screenshot-ui-scale", str(bucket["scale"]), "--screenshot-theme", str(scene.get("theme", -1)), "--screenshot-dark", str(scene.get("dark", 0))]
+                    command = ["xvfb-run", "-a", "-n", "300", "-s", f'-noreset -screen 0 {bucket["width"]}x{bucket["height"]}x24', str(binary), "--bundle", str(bundle), "--screenshot", str(path.resolve()), "--screenshot-scene", scene["scene"], "--screenshot-width", str(bucket["width"]), "--screenshot-height", str(bucket["height"]), "--screenshot-ui-scale", str(bucket["scale"]), "--screenshot-theme", str(scene.get("theme", -1)), "--screenshot-dark", str(scene.get("dark", 0))]
                     with path.with_suffix(".log").open("w") as log:
                         run_capture(command, env, log)
                 require("APP: frame rejected with status" not in path.with_suffix(".log").read_text(), f"render rejected: {path}")

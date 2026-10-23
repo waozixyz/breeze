@@ -44,7 +44,7 @@ with tempfile.TemporaryDirectory(prefix="music-navigation-", dir=ROOT / "build")
     test_env["APP_NO_TRAY"] = "1"
     test_env["LIBGL_ALWAYS_SOFTWARE"] = "1"
     command = ["timeout", "30s", "xvfb-run", "-a", "-n", "300",
-               "-s", "-screen 0 1280x900x24", str(binary),
+               "-s", "-noreset -screen 0 1280x900x24", str(binary),
                str(ROOT / "test-fixtures/audio/autumn-sunset.mp3")]
     result = subprocess.run(command, cwd=ROOT, env=test_env,
                             capture_output=True, text=True)

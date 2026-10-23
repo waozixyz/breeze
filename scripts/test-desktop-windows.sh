@@ -33,7 +33,7 @@ done
 
 if [ -z "${INBE_DESKTOP_WINDOW_TEST_XVFB:-}" ]; then
     exec env -u DISPLAY -u WAYLAND_DISPLAY -u SESSION_MANAGER \
-        -u DBUS_SESSION_BUS_ADDRESS xvfb-run -a -s "-screen 0 $GEOMETRY" \
+        -u DBUS_SESSION_BUS_ADDRESS xvfb-run -a -s "-noreset -screen 0 $GEOMETRY" \
         env -u WAYLAND_DISPLAY INBE_DESKTOP_WINDOW_TEST_XVFB=1 "$0" "$@"
 fi
 

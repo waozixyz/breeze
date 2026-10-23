@@ -215,7 +215,7 @@ def run_cases(arguments, cases, suffix, evidence):
                        LIBGL_ALWAYS_SOFTWARE="1", APP_SHOT_WINDOW="1", LANGUAGE="en")
     with contextlib.ExitStack() as stack:
         display_log = stack.enter_context((OUTPUT / f"display{suffix}.log").open("w"))
-        display = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0",
+        display = subprocess.Popen(["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0",
                                     "1280x1000x24", "-nolisten", "tcp"],
                                    env=environment, stdout=subprocess.PIPE, stderr=display_log)
         stack.callback(stop, display)

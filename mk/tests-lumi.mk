@@ -34,7 +34,7 @@ lumi-guide-ui-test: $(TARGET)
 lumi-emphasis-ui-test: $(TARGET) $(CELL_BUNDLES) $(INBE_FULL_BUNDLE)
 	env -u INBE_DIARY_IMPORT -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
 		-u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 APP_NO_TRAY=1 SDL_VIDEODRIVER=x11 LIBGL_ALWAYS_SOFTWARE=1 \
-		xvfb-run -a -n 300 -s '-screen 0 1280x900x24' \
+		xvfb-run -a -n 300 -s '-noreset -screen 0 1280x900x24' \
 		python3 tests/lumi_emphasis_ui_test.py $(abspath $(TARGET))
 
 # Frame time and memory with a long Lumi history, saved per label to compare
