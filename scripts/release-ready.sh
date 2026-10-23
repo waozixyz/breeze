@@ -12,11 +12,11 @@
 # edits files during the run, the run names them and records no pass.
 # Build outputs stay in build/release-ready/; a run takes about 90 minutes.
 #
-# Covered: ci.yml Secret Scan (publishers, versions, secrets), Package URLs,
-# the large-file guard, Test (make test: all three shards, then
-# make visual-test) and release.yml's make package-compat-test.
-# Not covered: Build Browser Add-ons (Chrome and Firefox web smoke), shard 0's
-# Daochi sync server test, and the release platform builds.
+# Covered: ci.yml Secret Scan, Package URLs, large-file guard, all three test
+# shards, visual tests, Chrome/Firefox add-ons and smoke, the real pinned Daochi
+# sync server, and release.yml's package compatibility test. Platform release
+# builds remain separate. The server comes from its canonical checkout through
+# another private overlay; no temporary source checkout is created.
 #
 #   sh scripts/release-ready.sh             every covered job; writes the stamp
 #   sh scripts/release-ready.sh TARGET...   only these make targets; no stamp
@@ -27,7 +27,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
 output=build/release-ready
-image_tag=$(cat .github/local-ci/Containerfile .github/apt/test-packages.txt | sha256sum | cut -c1-12)
+image_tag=$(cat .github/local-ci/Containerfile .github/apt/test-packages.txt .github/apt/web-packages.txt .github/emscripten-version | sha256sum | cut -c1-12)
 image=localhost/inbe-ci:$image_tag
 commit=$(git rev-parse HEAD)
 
@@ -36,10 +36,12 @@ commit=$(git rev-parse HEAD)
 # disk during the run while the container still read them from this checkout.
 state() {
     python3 -c 'import importlib.util, subprocess, sys
+import os
+from pathlib import Path
 spec = importlib.util.spec_from_file_location("phone_check", "scripts/phone-check.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-root = module.ROOT
+root = Path(os.environ.get("RELEASE_READY_STATE_ROOT", str(module.ROOT)))
 command = sys.argv[1]
 if command == "content":
     print(module.release_content(root, sys.argv[2]))
@@ -99,6 +101,8 @@ else
     job "Test: make test" make -k test
     job "Test: make visual-test" make visual-test
     job "Test: make package-compat-test" make package-compat-test
+    job "Browser add-ons: Chrome and Firefox" sh .github/local-ci/check-browser.sh
+    job "Sync: pinned Daochi server" sh .github/local-ci/check-sync.sh
 fi
 if [ -n "$failed" ]; then
     printf "\nrelease-ready: FAILED:%s\n" "$failed"
@@ -107,6 +111,16 @@ fi
 printf "\nrelease-ready: every covered CI job passed\n"'
 
 mkdir -p "$output/build" "$output/home"
+sync_server=""
+sync_mount_source="$root/$output/sync-unused"
+mkdir -p "$sync_mount_source"
+if [ "$#" -eq 0 ]; then
+    sync_server=${RELEASE_READY_DAOCHI_SOURCE:-"$root/../../kryonlabs/daochi"}
+    sync_server=$(CDPATH= cd -- "$sync_server" && pwd)
+    sync_commit=$(cat .github/sync-test-server-commit)
+    git -C "$sync_server" cat-file -e "$sync_commit^{commit}"
+    sync_mount_source=$sync_server
+fi
 # One run at a time: runs share build/release-ready/.
 exec 9>"$output/lock"
 if ! flock -n 9; then
@@ -116,7 +130,7 @@ fi
 
 if ! podman image exists "$image"; then
     echo "release-ready: building $image"
-    podman build -t "$image" -f .github/local-ci/Containerfile .github/apt
+    podman build -t "$image" -f .github/local-ci/Containerfile .github
     # Replace the images of older package lists; one still in use stays.
     podman images --format '{{.Repository}}:{{.Tag}}' localhost/inbe-ci \
         | grep -v ":$image_tag\$" | xargs -r podman rmi >/dev/null 2>&1 || true
@@ -126,6 +140,10 @@ rm -f "$output/stamp.json"
 content=$(state content "$commit")
 tree_before=$(state tree)
 state untracked > "$output/untracked-before"
+if [ -n "$sync_server" ]; then
+    sync_tree_before=$(RELEASE_READY_STATE_ROOT="$sync_server" state tree)
+    RELEASE_READY_STATE_ROOT="$sync_server" state untracked > "$output/sync-untracked-before"
+fi
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 echo "release-ready: testing $(git log -1 --format='%h %s' "$commit")"
 
@@ -150,6 +168,7 @@ podman run --rm --pull=never --userns=keep-id \
     -v "$root:/src:O" \
     -v "$root/$output/build:/src/build" \
     -v "$root/$output/home:/home/ubuntu" \
+    -v "$sync_mount_source:/sync-server:O" \
     $android_mount \
     -e HOME=/home/ubuntu -e CI=true -e RELEASE_READY_COMMIT="$commit" \
     -w /src "$image" sh -c "$inside" release-ready "$@" || status=$?
@@ -158,6 +177,15 @@ podman run --rm --pull=never --userns=keep-id \
 # overlay, so another session's edits during the run can reach the tests.
 leaked=$(state leaked "$tree_before" "$commit" "$output/untracked-before")
 rm -f "$output/untracked-before"
+if [ -n "$sync_server" ]; then
+    sync_leaked=$(RELEASE_READY_STATE_ROOT="$sync_server" state leaked "$sync_tree_before" "$sync_commit" "$output/sync-untracked-before")
+    rm -f "$output/sync-untracked-before"
+    if [ -n "$sync_leaked" ]; then
+        echo "release-ready: Daochi source changed during the run; refusing a clean result:" >&2
+        printf '%s\n' "$sync_leaked" | head -n 10 | sed 's/^/  /' >&2
+        exit 3
+    fi
+fi
 if [ -n "$leaked" ]; then
     count=$(printf '%s\n' "$leaked" | grep -c .)
     echo "release-ready: $count files changed in the checkout during the run and may have reached" >&2

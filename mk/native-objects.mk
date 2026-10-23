@@ -21,7 +21,7 @@ $(FLAGS_STAMP): FORCE
 	@printf '%s\n' '$(subst ','"'"',$(NATIVE_CFLAGS))' > $@.new
 	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
 
-$(OBJ_DIR)/%.o: /%.c $(FLAGS_STAMP)
+$(OBJ_DIR)/%.o: /%.c $(FLAGS_STAMP) mk/native-objects.mk
 	@mkdir -p $(dir $@)
 	@printf '  CC %s\n' '$<'
 	@$(CC) $(NATIVE_CFLAGS) -MMD -MP -c '$<' -o '$@'

@@ -53,7 +53,7 @@
   explicit product intent and separate review from implementation changes.
 - Run `make proof-test sync-recovery-test version-test` for these contracts.
   Coverage, trust boundaries, and the next proof migrations are described in
-  [docs/build-laws-plan.md](docs/build-laws-plan.md).
+  [docs/build-laws.md](docs/build-laws.md).
 
 ## Public UI and sync boundaries
 

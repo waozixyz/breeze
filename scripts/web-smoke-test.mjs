@@ -622,6 +622,8 @@ function writeFirefoxPrefs() {
     'user_pref("dom.webgpu.enabled", false);',
     'user_pref("gfx.webrender.software", true);',
     'user_pref("media.autoplay.default", 0);',
+    // Silence the test profile's output while keeping media playback active.
+    'user_pref("media.volume_scale", "0.0");',
     'user_pref("privacy.fingerprintingProtection", false);',
     'user_pref("privacy.resistFingerprinting", false);',
     'user_pref("webgl.disabled", false);',

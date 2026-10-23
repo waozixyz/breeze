@@ -20,7 +20,7 @@ paths. Translate changed app strings in every supported locale.
 Run the tests that exercise the changed behavior and `git diff --check`.
 For UI changes, run `make clean-text-api-check button-api-check` and the relevant
 private-display UI tests. `make test` and `make visual-test` are the CI gates.
-Android adapter tests need Java 17 and Android SDK platform 36; set
+Android adapter tests need Java 21 and Android SDK platform 36; set
 `ANDROID_SDK_ROOT` to your SDK directory.
 Visual tests create disposable profiles and private displays; they must never
 use your desktop or personal profile. See [verification](docs/cells.md#verification)

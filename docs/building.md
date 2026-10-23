@@ -8,7 +8,7 @@ phone test. All other release gates still run.
 
 The build checks Inbe's laws with the Ziran compiler (`ziran check`); no
 separate proof tool is needed. The build host needs Python 3 and the platform's
-native build dependencies. See [build laws](build-laws-plan.md) for the
+native build dependencies. See [build laws](build-laws.md) for the
 checked behavior.
 
 Build commands fetch the dependencies pinned in `ziran.lock`.
@@ -91,37 +91,6 @@ and the existing release workflow, which builds and publishes the signed
 Google Play AAB and owns release tags. A local build or commit is not a Play
 deployment.
 
-`make lumi-promo` renders a narrated portrait review MP4 from the exact
-reviewed phone captures and the generated artwork in `design/lumi-promo/`.
-Lumi uses eight generated wing-flapping frames, flies to each screen and settles
-facing the app while a narrator explains it. Lumi turns with the flight direction
-and flips inward after arriving on the right. Wings flap continuously using
-distinct poses; each app screen stays in a fixed position without sliding in.
-The audio contains speech only, without music or sound effects. Scene timings
-expand to fit the complete spoken lines.
-`make lumi-narration` generates the stored narrator clips through OpenRouter
-using a locally configured `OPENROUTER_API_KEY`; unchanged clips are reused.
-The voice, script and provider options are in `design/lumi-promo/narration.json`.
-The chat example runs real local theme actions; the surrounding forest and
-glow are marketing effects. Inspect `build/lumi-promo/storyboard.jpg` and
-`build/lumi-promo/inner-breeze-lumi-review.mp4` before using it publicly.
-Google Play's preview video field takes a YouTube URL, so the MP4 needs an
-approved public or unlisted YouTube upload with embedding enabled before it can
-be added to the listing. Pass `--video-url https://www.youtube.com/watch?v=VIDEO_ID`
-to the listing uploader, or configure `PLAY_VIDEO_URL`. To update only the
-video, use `PLAY_COMMIT=1 python3 scripts/upload-play-screenshots.py --video-only --video-url URL`.
-The [Inner Breeze trailer](https://www.youtube.com/watch?v=GTly6Fu5zPk),
-"A Day with Lumi", is public on YouTube and configured in every Google Play
-listing language.
-`design/promo-film/` holds the trailer's sources: `film.json` (clips, voice
-times, app-screen inserts), `narrate.py` (Lumi's voice), `score.py` (music),
-`mix.py`, `keyframes.py` and `compose.py`, which renders the cut with the real
-app screens into `build/promo-video/`. `mix.py --short` and
-`compose.py --short` render the 36-second vertical short from `short.json`,
-the portrait keyframes in `keyframes-vertical/` and sections of the same score.
-Screenshot publishing still requires the complete current
-capture, visual review, export and locked build preflight.
-
 To test sync and recovery against an isolated local server:
 
 ```bash
@@ -129,7 +98,7 @@ make sync-server-test DAOCHI_BIN=/absolute/path/to/daochi
 ```
 
 This uses disposable client databases and a loopback server; see
-[web and sync test coverage](../WEB_RENDERER_TESTS.md) for details.
+[web and sync test coverage](web-testing.md) for details.
 
 The Apps picker, independent ZIB packages, update settings, account choices and
 publisher setup are described in [app packages](cells.md).

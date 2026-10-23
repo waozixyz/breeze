@@ -1,8 +1,8 @@
 # Build laws in Ziran
 
 Every Inbe law is stated, implemented, and checked in Ziran. Bend, its Node.js
-checker, and the generated `.zi` tables are gone. This file records what the
-laws cover, how they are enforced, and what is still to do.
+checker, and the generated `.zi` tables are gone. This reference describes the
+checked behavior, enforcement and limits.
 
 ## Implemented
 
@@ -57,7 +57,7 @@ laws cover, how they are enforced, and what is still to do.
   Seven laws over every dialog type and screen numbers -2 to 20: each
   screen-specific dialog appears only where it belongs, all others appear
   anywhere, and the habit-tab flag cannot leak a dialog onto another screen.
-- **Ziran `forall` laws** (in `~/Projects/ziran`).
+- **Ziran `forall` laws** (in the pinned Ziran package).
   `#law NAME forall x: 0..4, k: SomeEnum => condition;` checks every
   combination of integer ranges and enum members with the compile-time
   evaluator. A failure reports the counterexample; a domain over 1,000,000
@@ -65,9 +65,8 @@ laws cover, how they are enforced, and what is still to do.
   the gate unless explicitly waived.
 
 The laws do not prove server availability, delivery, alias/friend restoration,
-filesystem or SQLite behavior, or arbitrary `.zi` code. Integration tests for
-those effects remain, and the sync recovery native build still stops at the
-unfinished Ziran source gate.
+filesystem or SQLite behavior, or arbitrary `.zi` code. Integration tests check
+those effects separately.
 
 ## Build behavior and verification
 
@@ -83,22 +82,19 @@ longer required to build, and the Flatpak no longer carries a Node build tool.
   not vacuous.
 - `make sync-retry-zi-test`: behavior across the portable bundle and the C, C++,
   and Go targets, from source and saved IR.
-- `make sync-recovery-test`: generated Ziran C and the coordinator; blocked by
-  the unfinished app source gate.
+- `make sync-recovery-test`: generated Ziran C and the coordinator.
 - `make version-test`: release synchronization and mismatch rejection.
 
 Compiler regression tests, the text/button scanners, migration tests, and the
 sync integration suite are separate checks with their own scope; none is a
 proof of application behavior.
 
-## Toolchain pin
+## Toolchain
 
-`ziran.lock` pins Ziran commit `9235688` on `master`, which has `forall` laws
-over ranges, enums, and bounded sequences, enum-aware `custom` laws, and law
-identity and waiver validation.
-`ziran lock` currently also re-resolves Kryon, whose working tree needs raylib,
-so the pin was changed by hand to the toolchain commit only. Local builds use
-the `../ziran` and `../kryon` working trees through `ziran.local.toml`.
+`ziran.lock` selects the exact Ziran package. Release builds use
+`PACKAGE_FLAGS=--locked`; local canonical checkout overrides belong only in the
+ignored `ziran.local.toml`. Update dependencies through the package command,
+then run `make package-check` and the relevant law and behavior checks.
 
 ## Model and implementation
 
@@ -108,19 +104,12 @@ code, a test runs that code against the same statements (`habit-merge-sql-test`,
 broken implementation. What is not covered is stated next to each law; no law
 claims to prove a separately implemented path it does not check.
 
-## Remaining work
+## Limits
 
-1. **Determinism matrix in Ziran.** Law tables byte-identical across runs and
-   between source and saved IR is tested for `forall`, enum, and sequence laws
-   in `tests/laws.sh`, not across the whole compiler matrix.
-2. **Mutation gate as a Ziran library.** `tests/law_mutation_test.sh` is local to
-   Inbe; Ziran should provide the reusable form.
-3. **Unbounded and wider domains.** Sequence laws are exhaustive up to 1,000,000
-   cases and 16 elements; larger merges are covered by the bounded model plus
-   the SQL test, not by proof.
-4. **Widget behavior beyond dialog rules.** Rendering, layout, and hover/press
-   transitions stay covered by portable value tests and host boundary tests.
-   Ziran stays unaware of UI widgets.
+The proofs cover their declared finite domains. Wider or unbounded merges are
+not established by the bounded model or by a passing SQL test. Rendering,
+layout and interaction transitions use runtime tests, not formal UI proofs.
+The mutation harness remains local to this application.
 
 ## Trust and use with smaller models
 

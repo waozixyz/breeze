@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The shipped catalog, plan, translations and package resources agree."""
+"""The shipped catalog, reference, translations and package resources agree."""
 import json
 from pathlib import Path
 import re
@@ -56,8 +56,8 @@ class AchievementCatalogs(unittest.TestCase):
                     self.assertTrue(value.strip())
                     self.assertEqual(root_text[key], value)
         self.assertEqual(len(all_ids), 160)
-        plan = (ROOT / "docs/achievements-plan.md").read_text()
-        listed = set(re.findall(r"\*\* — `([a-z0-9_.-]+)`:", plan))
+        reference = (ROOT / "docs/achievements.md").read_text()
+        listed = set(re.findall(r"\*\* — `([a-z0-9_.-]+)`:", reference))
         self.assertEqual(all_ids, listed)
         for locale in sorted((ROOT / "locales").glob("*.txt")):
             if locale.stem != "index":

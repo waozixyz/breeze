@@ -1,12 +1,14 @@
 # The Test job's machine for `make release-ready`: the runner's Ubuntu, the
-# packages ci.yml installs from .github/apt/test-packages.txt, and Node 22.
-# Build context: .github/apt (scripts/release-ready.sh builds and tags it).
+# packages CI installs for native/browser tests, its pinned SDK, and Node 22.
+# Build context: .github (scripts/release-ready.sh builds and tags it).
 FROM docker.io/library/ubuntu:24.04
 
 ARG NODE_VERSION=22.12.0
 ARG GO_VERSION=1.24.4
 
-COPY test-packages.txt /tmp/test-packages.txt
+COPY apt/test-packages.txt /tmp/test-packages.txt
+COPY apt/web-packages.txt /tmp/web-packages.txt
+COPY emscripten-version /tmp/emscripten-version
 
 # The hosted runner also ships git, Git LFS, curl, cmake, zip, jq, OpenSSL's
 # headers, libsodium, D-Bus, Java 21, Go and the Android SDK
@@ -15,12 +17,30 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         git git-lfs python3 curl xz-utils make cmake zip unzip jq file libssl-dev \
         libsodium23 dbus openjdk-21-jdk-headless \
-        $(grep -v '^#' /tmp/test-packages.txt | tr '\n' ' ') \
-    && rm -rf /var/lib/apt/lists/* /tmp/test-packages.txt
+        libgtk-3-0t64 libasound2t64 libdbus-glib-1-2 libxt6t64 libxtst6 libpci3 \
+        $(grep -v '^#' /tmp/test-packages.txt /tmp/web-packages.txt | cut -d: -f2- | sort -u | tr '\n' ' ') \
+    && curl -fsSL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/chrome.deb \
+    && rm -rf /var/lib/apt/lists/* /tmp/test-packages.txt /tmp/web-packages.txt /tmp/chrome.deb
 
 RUN curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
         | tar -xJ -C /usr/local --strip-components=1 \
     && node --version
+
+RUN mkdir -p /opt/emsdk /opt/firefox \
+    && curl -fsSL https://github.com/emscripten-core/emsdk/archive/refs/heads/main.tar.gz \
+        | tar -xz -C /opt/emsdk --strip-components=1
+RUN /opt/emsdk/emsdk install "$(cat /tmp/emscripten-version)" \
+    && /opt/emsdk/emsdk activate "$(cat /tmp/emscripten-version)" \
+    && /opt/emsdk/upstream/emscripten/embuilder build zlib \
+    && chmod -R a+rwX /opt/emsdk/upstream/emscripten/cache \
+    && rm /tmp/emscripten-version
+RUN curl -fsSL 'https://download.mozilla.org/?product=firefox-latest&os=linux64&lang=en-US' \
+        | tar -xJ -C /opt/firefox --strip-components=1 \
+    && ln -s /opt/firefox/firefox /usr/local/bin/firefox
+
+ENV PATH=/opt/emsdk/upstream/emscripten:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
+ENV EM_CONFIG=/opt/emsdk/.emscripten
 
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -xz -C /usr/local \
     && ln -s /usr/local/go/bin/go /usr/local/bin/go \

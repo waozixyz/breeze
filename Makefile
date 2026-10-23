@@ -398,9 +398,6 @@ CELL_RESOURCES += $(shell rg --files assets/practices design/tai-chi/text 2>/dev
 CELL_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievement-locales/*.json)
 CELL_RESOURCES += $(wildcard assets/*/sidebar.shape)
 
-# Read here, before TARGET is set: its UI tests do not build $(TARGET) first.
-include mk/tests-lumi.mk
-
 EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) build/apps-ui/apps.zib assets/app/icon.png
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 # Dependencies are imported as PACKAGE/Module through their linked packages.
@@ -873,6 +870,12 @@ $(WIN64_TARGET): $(WINDOWS_BUNDLE_RUNTIME)
 $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(WEB_BUNDLE_RUNTIME)
 $(CLICK_BIN): $(CLICK_BUNDLE_RUNTIME)
 
+# Build fragments affect the artifacts even when Makefile itself is unchanged.
+BUILD_MAKEFILES := $(filter-out mk/tests-%.mk,$(MAKEFILE_LIST)) mk/native-objects.mk
+$(TARGET) $(KRYON_HOST_TARGET) $(KRY_GEN_STAMP) $(WINDOWS_GEN_STAMP) $(WEB_GEN_STAMP) $(WIN64_TARGET) $(WEB_JS_TARGET) $(WEB_TARGET) $(WEB_CANVAS_TARGET) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) $(CELL_BUNDLES): $(BUILD_MAKEFILES)
+
+# UI prerequisites are expanded only after all artifact paths are defined.
+include mk/tests-lumi.mk
 include mk/tests-checks.mk
 include mk/tests-storage.mk
 include mk/tests-practices.mk
