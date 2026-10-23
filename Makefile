@@ -1,6 +1,8 @@
 .DEFAULT_GOAL := all
 
 APP_NAME := inbe
+# The program people run; package, store and data names keep APP_NAME.
+APP_EXECUTABLE := breeze
 APP_TITLE := Inner Breeze
 # `make install` installs the production desktop app for this user.
 PREFIX ?= $(HOME)/.local
@@ -488,7 +490,7 @@ else
 WIN64_THREAD_LDFLAGS :=
 endif
 
-BINARY_NAME := $(APP_NAME)-$(NATIVE_PLATFORM)-$(ARCH)
+BINARY_NAME := $(APP_EXECUTABLE)-$(NATIVE_PLATFORM)-$(ARCH)
 TARGET := $(NATIVE_BIN_DIR)/$(BINARY_NAME)
 # Native sources compile to per-file objects through mk/native-objects.mk.
 NATIVE_OBJ_DIR := $(abspath $(BUILD_OBJ_DIR)/native)
@@ -498,7 +500,7 @@ NATIVE_COMPILE_FLAGS = $(KRYON_NATIVE_CFLAGS) $(APP_INCLUDE) $(KRYON_INCLUDE) \
 	$(KRYON_NATIVE_BACKEND_CFLAGS) -DHAS_LIBOQS=1 -DSUPPORT_MODULE_RAUDIO=1 \
 	-DSUPPORT_FILEFORMAT_OGG=1 -DSUPPORT_FILEFORMAT_MP3=1
 KRYON_HOST_TARGET := $(BUILD_DIR)/kryon/app_host.so
-WIN64_BINARY_NAME := $(APP_NAME)-windows-$(WIN64_ARCH).exe
+WIN64_BINARY_NAME := $(APP_EXECUTABLE)-windows-$(WIN64_ARCH).exe
 WIN64_TARGET := $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)/$(WIN64_BINARY_NAME)
 WINDOWS_DIST := $(WINDOWS_DIST_DIR)/$(APP_NAME)-windows.zip
 APPIMAGE_NAME := $(APP_NAME)-linux-$(ARCH).AppImage

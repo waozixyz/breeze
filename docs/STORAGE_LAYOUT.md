@@ -39,7 +39,7 @@ be linked from the full app build.
 is unset). `make run-fresh` uses a disposable temporary profile.
 
 `make install` installs the production desktop app under `~/.local` by default.
-Launching `inbe` or its desktop entry uses `$XDG_DATA_HOME/inbe` (or
+Launching `breeze` or its desktop entry uses `$XDG_DATA_HOME/inbe` (or
 `~/.local/share/inbe`). Sync keys, settings, sessions, habits, and downloaded
 meditation audio stay inside their respective profile directories. `PREFIX`
 can be set explicitly for a system installation; it does not change the

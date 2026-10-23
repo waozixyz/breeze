@@ -69,6 +69,44 @@ LauncherExecutable :: (output: []u8) -> string {
     return ""
 }
 
+#if !#defined(ANDROID_BUILD) && !#defined(_WIN32) && !#defined(PLATFORM_WEB) {
+    // The app's entry in the person's applications folder, created when asked.
+    LauncherDesktopEntryPath :: (name: string, create: bool) -> string {
+        directory := LauncherEnvironment("XDG_DATA_HOME")
+        owned: string
+        if directory.count == 0 || directory[0] != 47 {
+            home := LauncherEnvironment("HOME")
+            if home.count == 0 || home[0] != 47 { return "" }
+            owned = PackageText(home, "/.local/share")
+            directory = owned
+        }
+        defer { PackageFree(owned) }
+        applications := PackageText(directory, "/applications")
+        defer { PackageFree(applications) }
+        if create && storage_ensure_dir(applications) == 0 { return "" }
+        filename := PackageText("/xyz.waozi.inbe.", name)
+        defer { PackageFree(filename) }
+        stem := PackageText(applications, filename)
+        defer { PackageFree(stem) }
+        return PackageText(stem, ".desktop")
+    }
+}
+
+// Whether the entry LauncherShortcutInstall wrote is still on this device.
+// Android keeps pinned shortcuts itself, so none is reported here.
+LauncherShortcutPresent :: (name: string) -> bool {
+    if !LauncherAppNameValid(name) { return false }
+    path: string
+    #if #defined(_WIN32) {
+        path = WindowsLauncherShortcutPath(name, false)
+    }
+    #if !#defined(ANDROID_BUILD) && !#defined(_WIN32) && !#defined(PLATFORM_WEB) {
+        path = LauncherDesktopEntryPath(name, false)
+    }
+    defer { PackageFree(path) }
+    return path.count > 0 && PackageFileSize(path) >= 0
+}
+
 // 1 means Android's confirmation was requested; 2 means the entry exists.
 // No Android request is reported as a completed installation.
 LauncherShortcutInstall :: (name: string, label: string, icon: string) -> s32 {
@@ -87,24 +125,9 @@ LauncherShortcutInstall :: (name: string, label: string, icon: string) -> s32 {
         }
         executable_bytes: [4096]u8
         executable := LauncherExecutable(executable_bytes[:])
-        directory := LauncherEnvironment("XDG_DATA_HOME")
-        owned: string
-        if directory.count == 0 || directory[0] != 47 {
-            home := LauncherEnvironment("HOME")
-            if home.count == 0 || home[0] != 47 { return 0 }
-            owned = PackageText(home, "/.local/share")
-            directory = owned
-        }
-        defer { PackageFree(owned) }
-        applications := PackageText(directory, "/applications")
-        defer { PackageFree(applications) }
-        if storage_ensure_dir(applications) == 0 { return 0 }
-        filename := PackageText("/xyz.waozi.inbe.", name)
-        defer { PackageFree(filename) }
-        stem := PackageText(applications, filename)
-        defer { PackageFree(stem) }
-        path := PackageText(stem, ".desktop")
+        path := LauncherDesktopEntryPath(name, true)
         defer { PackageFree(path) }
+        if path.count == 0 { return 0 }
         entry := LauncherDesktopEntry(executable, name, label, icon, LauncherEnvironment("APP_DATA_ROOT"))
         defer { PackageFree(entry) }
         if entry.count == 0 || !PackageWrite(path, entry) { return 0 }

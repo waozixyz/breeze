@@ -20,7 +20,7 @@
 
 set -u
 
-BIN=${1:-./build/bin/linux/inbe-linux-x86_64}
+BIN=${1:-./build/bin/linux/breeze-linux-x86_64}
 GEOMETRY="1280x800x24"
 
 [ -x "$BIN" ] || { echo "FAIL: binary not found: $BIN"; exit 1; }

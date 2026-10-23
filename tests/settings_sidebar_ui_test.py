@@ -17,7 +17,7 @@ OUTPUT = ROOT / "build/settings-sidebar-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS")
 assert all(not os.environ.get(key) for key in KEYS), "Inherited desktop environment"
-BINARY = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "build/bin/linux/inbe-linux-x86_64")
+BINARY = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "build/bin/linux/breeze-linux-x86_64")
 
 
 def stop(process):

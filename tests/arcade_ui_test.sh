@@ -5,7 +5,7 @@
 # never contacted.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary=${1:-"$root/build/bin/linux/inbe-linux-x86_64"}
+binary=${1:-"$root/build/bin/linux/breeze-linux-x86_64"}
 package=${2:?Pass an Arcade package, arcade.zib}
 isolate=
 offline=

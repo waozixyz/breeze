@@ -3,6 +3,7 @@ import contextlib
 import os
 from pathlib import Path
 import sqlite3
+import shutil
 import signal
 import subprocess
 import sys
@@ -64,10 +65,10 @@ with contextlib.ExitStack() as stack:
     env.update(driver.environment())
 
     @contextlib.contextmanager
-    def application(name, *arguments):
+    def application(name, *arguments, binary=BINARY):
         log_path = OUTPUT / (name + ".log")
         with log_path.open("w") as log:
-            app = subprocess.Popen([str(BINARY), *arguments], cwd=ROOT, env=env,
+            app = subprocess.Popen([str(binary), *arguments], cwd=ROOT, env=env,
                                    stdout=log, stderr=subprocess.STDOUT)
             driver.attach(app, log_path)
             try:
@@ -243,4 +244,24 @@ with contextlib.ExitStack() as stack:
         wait(node_opened, "The pinned node app did not follow its new slot")
         assert not driver.find(label="Apps", role="button"), "Harness navigation is still visible"
 
-print("Launcher pin, icon, duplicate prevention, desktop entry, profile, six bundled apps and relocated node app passed")
+    # Shortcuts follow the program to a new place, such as after an update
+    # renamed it. A shortcut the person removed is not created again.
+    diary_entry = data / "applications/xyz.waozi.inbe.diary.desktop"
+    (data / "applications/xyz.waozi.inbe.photos.desktop").unlink()
+    moved = temporary / "renamed" / "breeze"
+    moved.parent.mkdir()
+    shutil.copy2(BINARY, moved)
+    exec_path = '"' + str(moved).replace("%", "%%") + '" --app diary\n'
+    with application("moved-executable", binary=moved):
+        wait(lambda: exec_path in diary_entry.read_text(), "The shortcut did not follow the moved program")
+    text = diary_entry.read_text()
+    assert "Name=Diary\n" in text and str(BINARY) not in text, text
+    assert not (data / "applications/xyz.waozi.inbe.photos.desktop").exists(), "A removed shortcut came back"
+    assert (profile / "packages/launcher/executable").read_text() == str(moved)
+    written = diary_entry.stat().st_mtime_ns
+    with application("same-executable", binary=moved):
+        driver.wait(label="Apps", role="button")
+    assert diary_entry.stat().st_mtime_ns == written, "An up-to-date shortcut was rewritten"
+
+print("Launcher pin, icon, duplicate prevention, desktop entry, profile, six bundled apps, relocated node app "
+      "and moved program passed")

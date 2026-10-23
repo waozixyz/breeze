@@ -76,9 +76,9 @@ $(CLICK_TARGET): Makefile $(CLICK_BIN_INPUT) $(CLICK_DIR)/$(APP_NAME).apparmor $
 	rm -f $(CLICK_DIST_DIR)/$(CLICK_ID)_*_$(CLICK_ARCH).click
 	rm -f $(CLICK_ID)_$(APP_VERSION)_$(CLICK_ARCH).click
 	mkdir -p $(CLICK_ROOT)/usr/bin $(CLICK_ROOT)/usr/lib $(CLICK_ROOT)/usr/share/applications $(CLICK_ROOT)/usr/share/icons/hicolor/512x512/apps $(CLICK_ROOT)/usr/share/metainfo
-	cp $(CLICK_BIN_INPUT) $(CLICK_ROOT)/usr/bin/$(APP_NAME)
+	cp $(CLICK_BIN_INPUT) $(CLICK_ROOT)/usr/bin/$(APP_EXECUTABLE)
 	cp $(CLICK_RUNNER) $(CLICK_ROOT)/run-$(APP_NAME).sh
-	chmod +x $(CLICK_ROOT)/run-$(APP_NAME).sh $(CLICK_ROOT)/usr/bin/$(APP_NAME)
+	chmod +x $(CLICK_ROOT)/run-$(APP_NAME).sh $(CLICK_ROOT)/usr/bin/$(APP_EXECUTABLE)
 	@for lib in $(CLICK_RUNTIME_LIBS); do \
 		if [ -f "$$lib" ]; then \
 			cp -L "$$lib" $(CLICK_ROOT)/usr/lib/; \
@@ -143,8 +143,8 @@ $(APPIMAGE_TARGET): $(TARGET) $(LINUX_APPIMAGE_APPRUN) $(LINUX_APPIMAGE_DESKTOP)
 	rm -rf $(LINUX_DIST_DIR)/*.AppDir
 	rm -f $(LINUX_DIST_DIR)/*.AppImage
 	mkdir -p $(LINUX_APPDIR)/usr/bin $(LINUX_APPDIR)/usr/lib $(LINUX_APPDIR)/usr/share/applications $(LINUX_APPDIR)/usr/share/icons/hicolor/512x512/apps $(LINUX_APPDIR)/usr/share/metainfo $(LINUX_APPDIR)/usr/share/appdata
-	cp $(TARGET) $(LINUX_APPDIR)/usr/bin/$(APP_NAME)
-	patchelf --set-interpreter $(APPIMAGE_INTERPRETER) $(LINUX_APPDIR)/usr/bin/$(APP_NAME)
+	cp $(TARGET) $(LINUX_APPDIR)/usr/bin/$(APP_EXECUTABLE)
+	patchelf --set-interpreter $(APPIMAGE_INTERPRETER) $(LINUX_APPDIR)/usr/bin/$(APP_EXECUTABLE)
 	cp $(LINUX_APPIMAGE_APPRUN) $(LINUX_APPDIR)/AppRun
 	chmod +x $(LINUX_APPDIR)/AppRun
 	@loader=$$(LC_ALL=C readelf -l $(TARGET) | sed -n 's#.*Requesting program interpreter: \(.*\)]#\1#p'); \
@@ -189,7 +189,7 @@ $(APPIMAGE_TARGET): $(TARGET) $(LINUX_APPIMAGE_APPRUN) $(LINUX_APPIMAGE_DESKTOP)
 	fi; \
 	cd $(LINUX_APPIMAGE_BUILD_DIR) && env -u SOURCE_DATE_EPOCH ARCH=$(ARCH) LDAI_OUTPUT=$(abspath $(APPIMAGE_TARGET)) LDAI_UPDATE_INFORMATION='gh-releases-zsync|waozixyz|inbe|latest|$(APPIMAGE_NAME)' $(LINUXDEPLOY) \
 		--appdir $(APP_NAME).AppDir \
-		--executable $(abspath $(LINUX_APPDIR)/usr/bin/$(APP_NAME)) \
+		--executable $(abspath $(LINUX_APPDIR)/usr/bin/$(APP_EXECUTABLE)) \
 		--desktop-file $(abspath $(LINUX_APPDIR)/usr/share/applications/$(APP_DESKTOP_ID).desktop) \
 		--icon-file $(abspath $(LINUX_APPDIR)/usr/share/icons/hicolor/512x512/apps/$(APP_ICON_NAME).png) \
 		$$LIBRARY_FLAGS \
@@ -211,8 +211,8 @@ deb-check:
 $(DEB_TARGET): $(DEB_TARGET_PREREQS) deb-check | $(DEB_BUILD_DIR) $(DEB_DIST_DIR)
 	rm -rf $(DEB_ROOT)
 	mkdir -p $(DEB_ROOT)/DEBIAN $(DEB_ROOT)/usr/bin $(DEB_ROOT)/usr/share/applications $(DEB_ROOT)/usr/share/icons/hicolor/512x512/apps $(DEB_ROOT)/usr/share/metainfo
-	cp $(DEB_BIN_INPUT) $(DEB_ROOT)/usr/bin/$(APP_NAME)
-	chmod 755 $(DEB_ROOT)/usr/bin/$(APP_NAME)
+	cp $(DEB_BIN_INPUT) $(DEB_ROOT)/usr/bin/$(APP_EXECUTABLE)
+	chmod 755 $(DEB_ROOT)/usr/bin/$(APP_EXECUTABLE)
 	sed -e 's/^Icon=.*/Icon=$(APP_ICON_NAME)/' \
 		$(LINUX_APPIMAGE_DESKTOP) > $(DEB_ROOT)/usr/share/applications/$(APP_DESKTOP_ID).desktop
 	cp $(LINUX_APPIMAGE_ICON) $(DEB_ROOT)/usr/share/icons/hicolor/512x512/apps/$(APP_ICON_NAME).png
@@ -271,14 +271,14 @@ $(RPM_TARGET): $(RPM_TARGET_PREREQS) rpm-check | $(RPM_BUILD_DIR) $(RPM_DIST_DIR
 		printf '%s\n' '%install'; \
 		printf '%s\n' 'rm -rf %{buildroot}'; \
 		printf '%s\n' 'mkdir -p %{buildroot}/usr/bin %{buildroot}/usr/share/applications %{buildroot}/usr/share/icons/hicolor/512x512/apps %{buildroot}/usr/share/metainfo'; \
-		printf '%s\n' 'cp "$(abspath $(RPM_BIN_INPUT))" %{buildroot}/usr/bin/$(APP_NAME)'; \
-		printf '%s\n' 'chmod 755 %{buildroot}/usr/bin/$(APP_NAME)'; \
+		printf '%s\n' 'cp "$(abspath $(RPM_BIN_INPUT))" %{buildroot}/usr/bin/$(APP_EXECUTABLE)'; \
+		printf '%s\n' 'chmod 755 %{buildroot}/usr/bin/$(APP_EXECUTABLE)'; \
 		printf '%s\n' 'sed -e '\''s/^Icon=.*/Icon=$(APP_ICON_NAME)/'\'' "$(abspath $(LINUX_APPIMAGE_DESKTOP))" > %{buildroot}/usr/share/applications/$(APP_DESKTOP_ID).desktop'; \
 		printf '%s\n' 'cp "$(abspath $(LINUX_APPIMAGE_ICON))" %{buildroot}/usr/share/icons/hicolor/512x512/apps/$(APP_ICON_NAME).png'; \
 		printf '%s\n' 'sed -e '\''s/<release version="[^"]*"/<release version="$(APP_VERSION)"/'\'' -e '\''s#<launchable type="desktop-id">[^<]*</launchable>#<launchable type="desktop-id">$(APP_DESKTOP_ID).desktop</launchable>#'\'' "$(abspath $(LINUX_APPIMAGE_APPDATA))" > %{buildroot}/usr/share/metainfo/$(ANDROID_APP_ID).metainfo.xml'; \
 		printf '%s\n' ''; \
 		printf '%s\n' '%files'; \
-		printf '%s\n' '/usr/bin/$(APP_NAME)'; \
+		printf '%s\n' '/usr/bin/$(APP_EXECUTABLE)'; \
 		printf '%s\n' '/usr/share/applications/$(APP_DESKTOP_ID).desktop'; \
 		printf '%s\n' '/usr/share/icons/hicolor/512x512/apps/$(APP_ICON_NAME).png'; \
 		printf '%s\n' '/usr/share/metainfo/$(ANDROID_APP_ID).metainfo.xml'; \
@@ -320,7 +320,7 @@ $(FLATPAK_TARGET): Makefile $(FLATPAK_MANIFEST) scripts/install-build-fonttools.
 		-v "$(abspath .):/work" \
 		-w /work \
 		$(FLATPAK_IMAGE) \
-		sh -lc 'set -eu; sh scripts/install-build-node.sh /tmp/inbe-build-node; export PATH=/tmp/inbe-build-node/bin:$$PATH; sh scripts/install-build-fonttools.sh /tmp/inbe-build-fonttools; export PYTHONPATH=/tmp/inbe-build-fonttools; rm -rf .flatpak-builder $(FLATPAK_BUILD_DIR)/repo $(FLATPAK_BUILD_DIR)/build-dir; flatpak-builder --disable-rofiles-fuse --force-clean --repo=$(FLATPAK_BUILD_DIR)/repo $(FLATPAK_BUILD_DIR)/build-dir $(FLATPAK_MANIFEST) || { rm -rf $(FLATPAK_BUILD_DIR)/repo $(FLATPAK_BUILD_DIR)/build-dir vendor-builds/linux build/bin/linux; make vendor-prebuilds-native; make native; flatpak build-init $(FLATPAK_BUILD_DIR)/build-dir $(APP_ID) org.gnome.Sdk org.gnome.Platform 46; install -D -m755 "$$(find build/bin/linux -maxdepth 1 -type f -name '\''inbe-linux-*'\'' | head -n 1)" $(FLATPAK_BUILD_DIR)/build-dir/files/bin/inbe; install -D -m644 packaging/linux/appimage/inbe.desktop $(FLATPAK_BUILD_DIR)/build-dir/files/share/applications/$(APP_ID).desktop; sed -i '\''s/^Icon=.*/Icon=$(APP_ID)/'\'' $(FLATPAK_BUILD_DIR)/build-dir/files/share/applications/$(APP_ID).desktop; install -D -m644 packaging/linux/appimage/inbe.png $(FLATPAK_BUILD_DIR)/build-dir/files/share/icons/hicolor/512x512/apps/$(APP_ID).png; install -D -m644 packaging/linux/appimage/inbe.appdata.xml $(FLATPAK_BUILD_DIR)/build-dir/files/share/metainfo/$(APP_ID).metainfo.xml; flatpak build-finish --share=ipc --share=network --socket=fallback-x11 --socket=wayland --socket=pulseaudio --device=dri --filesystem=home $(FLATPAK_BUILD_DIR)/build-dir; flatpak build-export $(FLATPAK_BUILD_DIR)/repo $(FLATPAK_BUILD_DIR)/build-dir; }; flatpak build-bundle $(FLATPAK_BUILD_DIR)/repo $(FLATPAK_TARGET) $(APP_ID)'
+		sh -lc 'set -eu; sh scripts/install-build-node.sh /tmp/inbe-build-node; export PATH=/tmp/inbe-build-node/bin:$$PATH; sh scripts/install-build-fonttools.sh /tmp/inbe-build-fonttools; export PYTHONPATH=/tmp/inbe-build-fonttools; rm -rf .flatpak-builder $(FLATPAK_BUILD_DIR)/repo $(FLATPAK_BUILD_DIR)/build-dir; flatpak-builder --disable-rofiles-fuse --force-clean --repo=$(FLATPAK_BUILD_DIR)/repo $(FLATPAK_BUILD_DIR)/build-dir $(FLATPAK_MANIFEST) || { rm -rf $(FLATPAK_BUILD_DIR)/repo $(FLATPAK_BUILD_DIR)/build-dir vendor-builds/linux build/bin/linux; make vendor-prebuilds-native; make native; flatpak build-init $(FLATPAK_BUILD_DIR)/build-dir $(APP_ID) org.gnome.Sdk org.gnome.Platform 46; install -D -m755 "$$(find build/bin/linux -maxdepth 1 -type f -name '\''$(APP_EXECUTABLE)-linux-*'\'' | head -n 1)" $(FLATPAK_BUILD_DIR)/build-dir/files/bin/$(APP_EXECUTABLE); install -D -m644 packaging/linux/appimage/inbe.desktop $(FLATPAK_BUILD_DIR)/build-dir/files/share/applications/$(APP_ID).desktop; sed -i '\''s/^Icon=.*/Icon=$(APP_ID)/'\'' $(FLATPAK_BUILD_DIR)/build-dir/files/share/applications/$(APP_ID).desktop; install -D -m644 packaging/linux/appimage/inbe.png $(FLATPAK_BUILD_DIR)/build-dir/files/share/icons/hicolor/512x512/apps/$(APP_ID).png; install -D -m644 packaging/linux/appimage/inbe.appdata.xml $(FLATPAK_BUILD_DIR)/build-dir/files/share/metainfo/$(APP_ID).metainfo.xml; flatpak build-finish --share=ipc --share=network --socket=fallback-x11 --socket=wayland --socket=pulseaudio --device=dri --filesystem=home $(FLATPAK_BUILD_DIR)/build-dir; flatpak build-export $(FLATPAK_BUILD_DIR)/repo $(FLATPAK_BUILD_DIR)/build-dir; }; flatpak build-bundle $(FLATPAK_BUILD_DIR)/repo $(FLATPAK_TARGET) $(APP_ID)'
 	test -f $@
 
 NEEDS_CLICK_ENV := $(filter click click-verify,$(MAKECMDGOALS))

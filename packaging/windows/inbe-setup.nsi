@@ -44,9 +44,11 @@ FunctionEnd
 Section "Inner Breeze"
     SetOutPath "$INSTDIR"
     File "${WIN64_EXE}"
+    ; Releases through 2.1.43 named the program inbe-windows-x86_64.exe.
+    Delete "$INSTDIR\inbe-windows-x86_64.exe"
 
     Var /GLOBAL ExeName
-    StrCpy $ExeName "inbe-windows-x86_64.exe"
+    StrCpy $ExeName "breeze-windows-x86_64.exe"
 
     CreateDirectory "$SMPROGRAMS\Inner Breeze"
     CreateShortcut "$SMPROGRAMS\Inner Breeze\Inner Breeze.lnk" "$INSTDIR\$ExeName"
@@ -63,7 +65,7 @@ Section "Inner Breeze"
 SectionEnd
 
 Section "Uninstall"
-    Delete "$INSTDIR\inbe-windows-x86_64.exe"
+    Delete "$INSTDIR\breeze-windows-x86_64.exe"
     ; Installs from before 64-bit only releases also carried this file.
     Delete "$INSTDIR\inbe-windows-i686.exe"
     Delete "$INSTDIR\uninstall.exe"

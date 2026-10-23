@@ -22,25 +22,76 @@
 launcher_pin_status: s32 = -1;
 launcher_pending_name: [25]u8;
 launcher_request_attempted: bool;
+launcher_executable_followed: bool;
+
+// Shortcut icons, and the executable the shortcuts open, beside the packages.
+app_launcher_folder :: () -> string {
+    packages := PackageDirectory()
+    defer { PackageFree(packages) }
+    if packages.count == 0 { return "" }
+    return PackageText(packages, "/launcher")
+}
+
+app_launcher_icon :: (folder: string, name: string) -> string {
+    stem := PackageText("/", name)
+    defer { PackageFree(stem) }
+    path := PackageText(folder, stem)
+    defer { PackageFree(path) }
+    return PackageText(path, ifx WindowsPlatform() != 0 then ".ico" else ".png")
+}
+
+app_launcher_record_executable :: (folder: string, executable: string) {
+    record := PackageText(folder, "/executable")
+    defer { PackageFree(record) }
+    unused PackageWrite(record, executable)
+}
 
 app_launcher_pin :: (app: *InnerBreeze, route: s32) {
     launcher_pin_status = 0
     name := LauncherRouteName(route)
     if !LauncherAppNameValid(name) || !app_nav_route_available(app, route) { return }
-    packages := PackageDirectory()
-    defer { PackageFree(packages) }
-    directory := PackageText(packages, "/launcher")
+    directory := app_launcher_folder()
     defer { PackageFree(directory) }
-    if storage_ensure_dir(directory) == 0 { return }
-    stem := PackageText("/", name)
-    defer { PackageFree(stem) }
-    path := PackageText(directory, stem)
-    defer { PackageFree(path) }
-    icon := PackageText(path, ifx WindowsPlatform() != 0 then ".ico" else ".png")
+    if directory.count == 0 || storage_ensure_dir(directory) == 0 { return }
+    icon := app_launcher_icon(directory, name)
     defer { PackageFree(icon) }
     if LauncherIconWrite(icon, app_nav_route_shape(route), WindowsPlatform() != 0) {
         launcher_pin_status = LauncherShortcutInstall(name, app_nav_route_label(route), icon)
     }
+    executable_bytes: [4096]u8
+    executable := LauncherExecutable(executable_bytes[:])
+    if launcher_pin_status == 2 && executable.count > 0 {
+        app_launcher_record_executable(directory, executable)
+    }
+}
+
+// Shortcuts open the executable that wrote them. When another one runs, such
+// as after an update renamed the program, the shortcuts still on this device
+// are rewritten for it; ones the person removed stay removed.
+app_launcher_follow_executable :: () {
+    launcher_executable_followed = true
+    executable_bytes: [4096]u8
+    executable := LauncherExecutable(executable_bytes[:])
+    directory := app_launcher_folder()
+    defer { PackageFree(directory) }
+    if executable.count == 0 || directory.count == 0 { return }
+    record := PackageText(directory, "/executable")
+    recorded := PackageRead(record, 4096)
+    PackageFree(record)
+    same := recorded == executable
+    PackageFree(recorded)
+    if same { return }
+    routes := LauncherRoutes()
+    for route: routes {
+        name := LauncherRouteName(route)
+        if !LauncherShortcutPresent(name) { continue }
+        icon := app_launcher_icon(directory, name)
+        if PackageFileSize(icon) >= 0 {
+            unused LauncherShortcutInstall(name, app_nav_route_label(route), icon)
+        }
+        PackageFree(icon)
+    }
+    app_launcher_record_executable(directory, executable)
 }
 
 // Keep an unresolved cold launch while its already installed package loads.
@@ -53,6 +104,9 @@ app_launcher_request_app :: (name: string) {
 }
 
 app_launcher_pump_request :: (app: *InnerBreeze) {
+    if !launcher_executable_followed && app.language_selected != 0 && app.apps_selected != 0 {
+        app_launcher_follow_executable()
+    }
     incoming := LauncherShortcutTakeApp()
     if incoming.count > 0 { app_launcher_request_app(incoming) }
     name := AppTextFromCString(*launcher_pending_name[0], 25)

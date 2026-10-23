@@ -1,6 +1,7 @@
 PREFIX ?= /usr/local
 DESTDIR ?=
 APP_NAME ?= app
+APP_EXECUTABLE ?= $(APP_NAME)
 APP_TITLE ?= $(APP_NAME)
 APP_ID ?= $(APP_NAME)
 APP_DESKTOP_ID ?= $(APP_ID)
@@ -37,7 +38,7 @@ install-user: $(TARGET)
 	@$(MAKE) stage PREFIX="$(HOME)/.local" DESTDIR=
 
 uninstall:
-	rm -f "$(DESTDIR)$(PREFIX)/bin/$(APP_NAME)"
+	rm -f "$(DESTDIR)$(PREFIX)/bin/$(APP_EXECUTABLE)"
 	rm -f "$(DESTDIR)$(PREFIX)/share/applications/$(APP_DESKTOP_ID).desktop"
 	rm -f "$(DESTDIR)$(PREFIX)/share/applications/$(APP_NAME).desktop"
 	rm -f "$(DESTDIR)$(PREFIX)/share/icons/hicolor/$(APP_ICON_SIZE)/apps/$(APP_ICON_NAME).png"
@@ -51,8 +52,8 @@ stage: $(TARGET)
 	icon_dir="$(DESTDIR)$(PREFIX)/share/icons/hicolor/$(APP_ICON_SIZE)/apps"; \
 	meta_dir="$(DESTDIR)$(PREFIX)/share/metainfo"; \
 	mkdir -p "$$bin_dir"; \
-	cp "$(TARGET)" "$$bin_dir/$(APP_NAME)"; \
-	chmod 755 "$$bin_dir/$(APP_NAME)"; \
+	cp "$(TARGET)" "$$bin_dir/$(APP_EXECUTABLE)"; \
+	chmod 755 "$$bin_dir/$(APP_EXECUTABLE)"; \
 	if [ -n "$(strip $(APP_DESKTOP))" ]; then \
 		mkdir -p "$$app_dir"; \
 		sed -e 's/^Icon=.*/Icon=$(APP_ICON_NAME)/' \

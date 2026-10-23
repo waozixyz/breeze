@@ -2,7 +2,7 @@
 # Runs only on a private Xvfb display with its own session bus.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary=${1:-"$root/build/bin/linux/inbe-linux-x86_64"}
+binary=${1:-"$root/build/bin/linux/breeze-linux-x86_64"}
 exec env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
     -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 APP_NO_TRAY=1 SDL_VIDEODRIVER=x11 \
     LIBGL_ALWAYS_SOFTWARE=1 \

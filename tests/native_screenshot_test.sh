@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-binary=${1:-"$root/build/bin/linux/inbe-linux-x86_64"}
+binary=${1:-"$root/build/bin/linux/breeze-linux-x86_64"}
 output="$root/build/native-screenshot-test"
 mkdir -p "$output"
 

@@ -79,18 +79,16 @@
         return TextUntilNul(output)
     }
 
-    WindowsLauncherInstall :: (name: string, label: string, icon: string) -> s32 {
-        executable_bytes: [4096]u8
-        executable := WindowsLauncherExecutable(executable_bytes[:])
-        if executable.count == 0 { return 0 }
+    // The Start menu shortcut for an app, created as its folder when asked.
+    WindowsLauncherShortcutPath :: (name: string, create: bool) -> string {
         programs: [260]u16
         // CSIDL_PROGRAMS | CSIDL_FLAG_CREATE, resolved by Windows even when relocated.
-        if SpecialFolder(null, 0x8002, null, 0, *programs[0]) < 0 { return 0 }
+        if SpecialFolder(null, 0x8002, null, 0, *programs[0]) < 0 { return "" }
         folder: [4096]u8
-        if FromWide(65001, 0, *programs[0], -1, *folder[0], 4096, null, null) <= 0 { return 0 }
+        if FromWide(65001, 0, *programs[0], -1, *folder[0], 4096, null, null) <= 0 { return "" }
         stem := PackageText(TextUntilNul(folder[:]), "/Inner Breeze")
         defer { PackageFree(stem) }
-        if storage_ensure_dir(stem) == 0 { return 0 }
+        if create && storage_ensure_dir(stem) == 0 { return "" }
         display: [25]u8
         unused CopyCString(name, display[:])
         if display[0] >= 97 && display[0] <= 122 { display[0] -= cast(u8)32 }
@@ -99,8 +97,16 @@
         defer { PackageFree(suffix) }
         base := PackageText(stem, suffix)
         defer { PackageFree(base) }
-        filename := PackageText(base, ".lnk")
+        return PackageText(base, ".lnk")
+    }
+
+    WindowsLauncherInstall :: (name: string, label: string, icon: string) -> s32 {
+        executable_bytes: [4096]u8
+        executable := WindowsLauncherExecutable(executable_bytes[:])
+        if executable.count == 0 { return 0 }
+        filename := WindowsLauncherShortcutPath(name, true)
         defer { PackageFree(filename) }
+        if filename.count == 0 { return 0 }
         argument := PackageText("--app ", name)
         defer { PackageFree(argument) }
         path_wide: [4096]u16
