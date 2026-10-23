@@ -266,7 +266,7 @@ class ReleaseArtifactReuseTest(unittest.TestCase):
         self.workflow = workflow
 
     def evaluate(self, *, jobs=None, changed=None, run_changes=None, source_receipt=False,
-                 ancestor=True, phone_passes=True, run_id="123"):
+                 ancestor=True, phone_passes=True, run_id="123", ci_changes=None):
         source = "1" * 40
         candidate = "2" * 40
         run = {"path": ".github/workflows/release.yml", "event": "push", "head_branch": "master",
@@ -280,6 +280,11 @@ class ReleaseArtifactReuseTest(unittest.TestCase):
 
         def read(command, **kwargs):
             if command[:2] == ["gh", "api"]:
+                if '/actions/workflows/ci.yml/runs?' in command[-1]:
+                    ci = dict(head_sha=source, path='.github/workflows/ci.yml', event='push',
+                              head_branch='master', status='completed', conclusion='success')
+                    ci.update(ci_changes or {})
+                    return json.dumps({'workflow_runs': [ci]})
                 return json.dumps({"jobs": jobs} if command[-1].endswith("/jobs?per_page=100") else run)
             if command[:2] == ["git", "diff"]:
                 self.assertEqual(command[-2:], [source, candidate])
@@ -372,6 +377,14 @@ class ReleaseArtifactReuseTest(unittest.TestCase):
             self.evaluate(ancestor=False)
         with self.assertRaises(SystemExit):
             self.evaluate(source_receipt=True)
+
+    def test_ci_and_browser_smoke_must_also_pass_for_the_identical_source(self):
+        for change in ({"conclusion": "failure"}, {"conclusion": "cancelled"},
+                       {"status": "in_progress"}, {"head_sha": "3" * 40},
+                       {"head_branch": "other"}, {"event": "workflow_dispatch"},
+                       {"path": ".github/workflows/other.yml"}):
+            with self.subTest(change=change), self.assertRaises(SystemExit):
+                self.evaluate(ci_changes=change)
 
     def test_reuse_policy_covers_every_declared_build_and_reproducibility_gate(self):
         builds = set()

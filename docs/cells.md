@@ -841,6 +841,7 @@ A release names one fixed commit while peers keep working on master:
 
 When an earlier Release run already passed every test, visual, platform and
 F-Droid reproducibility job for the source, supply its run ID as `reuse_run`.
+The identical source must also pass CI, including browser add-on smoke tests.
 The workflow admits reuse only when the release commit adds that version's
 valid phone-check receipt and changes no other file. It downloads the original
 immutable build artifacts for publication and store delivery. A changed source,
