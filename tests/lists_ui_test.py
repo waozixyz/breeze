@@ -194,6 +194,52 @@ with contextlib.ExitStack() as stack:
     add("Pack bag")
     wait_for(lambda: item_list("Pack bag"), "the task was not added to the new list")
     assert item_list("Pack bag") == "Travel", f"FAIL new list is selected: got {item_list('Pack bag')!r}"
+    # The tabs have their row to themselves. With more lists than fit, a
+    # swipe back to the first list stays there instead of jumping back to
+    # the selected tab.
+    extra = [f"Long list name number {number} to scroll past" for number in range(1, 5)]
+    for name in extra:
+        driver.press(label="New list", role="button")
+        driver.wait(label="Create list", role="button")
+        add(name)
+        driver.wait(label=name, role="tab")
+
+    def swipe_tabs(to_start):
+        """Drag along the tab row towards its first or its last tab."""
+        shown = driver.find(role="tab", visible=True)
+        # The list tabs come first; Open and All are tabs on a lower row.
+        tabs = [tab for tab in shown if tab["visible_y"] == shown[0]["visible_y"]]
+        y = UiDriver.center(tabs[0])[1]
+        left = min(tab["visible_x"] for tab in tabs) + 20
+        right = max(tab["visible_x"] + tab["visible_width"] for tab in tabs) - 20
+        start, end = (left, right) if to_start else (right, left)
+        for _ in range(2):
+            driver.drag((start, y), (end, y), steps=12)
+        driver.wait_idle(frames=5, timeout=3)
+
+    def delete_selected_list(name):
+        driver.press(label="Rename", role="button")
+        driver.press(label="Delete list", role="button")
+        driver.press(label="Tap again to delete this list", role="button")
+        driver.wait_gone(label=name, role="tab", visible=False)
+
+    assert not driver.find(label="Shopping", role="tab", visible=True), "the tabs did not overflow their row"
+    tab_row = driver.wait(label=extra[-1], role="tab")
+    tab_labels = {tab["label"] for tab in driver.find(role="tab")}
+    beside_tabs = [node["label"] for node in driver.find(role="button", visible=True)
+                   if node["label"] not in tab_labels and
+                   abs(UiDriver.center(node)[1] - UiDriver.center(tab_row)[1]) < tab_row["visible_height"] / 2]
+    assert not beside_tabs, f"buttons still share the tab row: {beside_tabs}"
+    swipe_tabs(to_start=True)
+    driver.wait(label="Shopping", role="tab")
+    driver.wait_idle(frames=10, timeout=3)
+    assert driver.find(label="Shopping", role="tab", visible=True), "the tabs jumped back to the selected list"
+    delete_selected_list(extra[-1])
+    for name in reversed(extra[:-1]):
+        swipe_tabs(to_start=False)
+        driver.press(label=name, role="tab")
+        delete_selected_list(name)
+    driver.press(label="Travel", role="tab")
     # Sharing is one icon that opens a dialog over the list; a tap beside it
     # closes it. Offline, it asks to connect an account first. No line above
     # the list says who has access, and Invitations appears only while one

@@ -72,6 +72,9 @@ delete_confirm: bool;
 undo_item: ListsUiRow;
 undo_account: string;
 undo_until: float64;
+// The list whose tab was last scrolled into view. Only a new selection
+// scrolls the tabs again, so a swipe through them stays where it stops.
+revealed_list: s32 = -1;
 // Share, as in a document: a person with a plus.
 SHARE_ICON :: "S1.8rr:M9 4.5C10.93 4.5 12.5 6.07 12.5 8C12.5 9.93 10.93 11.5 9 11.5C7.07 11.5 5.5 9.93 5.5 8C5.5 6.07 7.07 4.5 9 4.5ZM3 20C3 16.7 5.7 14 9 14C12.3 14 15 16.7 15 20M19 8V14M16 11H22"
 // The same trash can as Photos and Lumi.
@@ -613,27 +616,22 @@ ListsPage :: () {
     if state.selected_list >= 0 && state.selected_list < state.list_count {
         current = ReadListsRowHost(state.selected_list, false)
     }
-    // Everything that manages lists sits in this one row: the tabs, then
-    // Share, Edit and New list.
-    button_size := Scale(44)
-    button_gap := Scale(8)
-    new_x := x + width - button_size
-    edit_x := new_x - button_gap - button_size
-    share_x := edit_x - button_gap - button_size
-    editing_list := state.editing_item == -2 || state.editing_item == -3
-    tabs: [32]Tab
-    for index: cast(s32)0..state.list_count - 1 {
-        row := ReadListsRowHost(index, false)
-        tabs[index] = Tab.{.key = cast(u64)(6800 + index), .label = row.title}
-    }
+    // The tabs have the whole first row to themselves, so names have room
+    // and a swipe anywhere along the row scrolls them.
     if state.list_count > 0 {
+        tabs: [32]Tab
+        for index: cast(s32)0..state.list_count - 1 {
+            row := ReadListsRowHost(index, false)
+            tabs[index] = Tab.{.key = cast(u64)(6800 + index), .label = row.title}
+        }
         selected := TabBar(frame.session, TabBarProps.{.id = 6500,
-                .bounds = Bounds(x, y, share_x - Scale(12) - x, Scale(44)),
+                .bounds = Bounds(x, y, width, Scale(44)),
                 .selected_index = state.selected_list, .min_tab_width = Scale(88),
                 .max_tab_width = Scale(220), .content_sized = true,
                 .scroll_offset = frame.tab_scroll, .scale = frame.scale,
-                .focus_selected = frame.tab_scroll == 0}, tabs[:state.list_count])
+                .focus_selected = state.selected_list != revealed_list}, tabs[:state.list_count])
         frame.tab_scroll = selected.scroll_offset
+        revealed_list = state.selected_list
         if selected.selected_index != state.selected_list {
             state.action = LISTS_SELECT
             state.index = selected.selected_index
@@ -642,39 +640,8 @@ ListsPage :: () {
             frame.panel = 0
             return
         }
+        y += Scale(56)
     }
-    // Share is one clear button, as in a document: it opens who has access.
-    if Button(frame.session, ButtonProps.{.key = cast(u64)6508,
-            .bounds = Bounds(share_x, y, button_size, Scale(44)),
-            .label = ListsLocaleHost("elist_share"), .icon_shape = SHARE_ICON, .icon_only = true,
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .disabled = current.id.count == 0 || editing_list}) != 0 {
-        frame.panel = 1
-        frame.focused = false
-        sharing_scroll = 0
-        ResetInvite()
-    }
-    // Edit opens the name; Delete is inside it, behind a question.
-    if Button(frame.session, ButtonProps.{.key = cast(u64)6503,
-            .bounds = Bounds(edit_x, y, button_size, Scale(44)),
-            .label = ListsLocaleHost("elist_rename"), .icon_only = true,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost,
-            .icon_type = cast(s32)IconEdit,
-            .disabled = current.id.count == 0 || current.read_only || blocked || editing_list}) != 0 {
-        delete_confirm = false
-        BeginInput(-3, current.title)
-        return
-    }
-    if Button(frame.session, ButtonProps.{.key = cast(u64)6505,
-            .bounds = Bounds(new_x, y, button_size, Scale(44)),
-            .label = ListsLocaleHost("elist_new_list"), .icon_type = cast(s32)IconPlus,
-            .icon_only = true, .disabled = blocked || state.list_count >= 32}) != 0 {
-        BeginInput(-2, "")
-        frame.panel = 0
-        return
-    }
-    y += Scale(56)
     if (frame.sharing_status != 0 && frame.sharing_status != 2) || frame.sharing_pending {
         key := "elist_saving"
         if frame.sharing_pending && !frame.sharing_busy {
@@ -709,6 +676,7 @@ ListsPage :: () {
     if current.read_only && state.editing_item != -2 {
         blocked = true
     }
+    editing_list := state.editing_item == -2 || state.editing_item == -3
     if !editing_list {
         // Invitations to other people's lists appear only while some wait.
         if frame.pending_count_text != "0" && frame.pending_count_text != "" {
@@ -730,7 +698,7 @@ ListsPage :: () {
                 .text = ListsLocaleHost("results_write_failed"), .wrap = cast(TextWrap)TextWrapAuto})
         y += Scale(56)
     }
-    if state.editing_item == -2 || state.editing_item == -3 {
+    if editing_list {
         owner := !current.shared || current.owner
         committed := Field(Bounds(x, y, width, Scale(44)),
             ListsLocaleHost(ifx state.editing_item == -3 then "elist_list_name_placeholder" else "elist_new_list_placeholder"), blocked)
@@ -774,6 +742,15 @@ ListsPage :: () {
         Text(frame.session, TextProps.{.bounds = Bounds(x, y + Scale(72), width, Scale(64)),
                 .text = ListsLocaleHost("elist_empty_detail"), .align = cast(TextAlign)TextAlignCenter,
                 .wrap = cast(TextWrap)TextWrapAuto})
+        create_width := Scale(200)
+        if Button(frame.session, ButtonProps.{.key = cast(u64)6505,
+                .bounds = Bounds(x + (width - create_width) / 2, y + Scale(148), create_width, Scale(44)),
+                .label = ListsLocaleHost("elist_new_list"), .icon_type = cast(s32)IconPlus,
+                .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled, .disabled = blocked}) != 0 {
+            BeginInput(-2, "")
+            frame.panel = 0
+        }
         return
     }
     committed := Field(Bounds(x, y, width - Scale(96), Scale(44)),
@@ -787,13 +764,22 @@ ListsPage :: () {
         return
     }
     y += Scale(56)
-    // One small line under the field: filter the finished items, or take
-    // back the last deletion.
+    // One line under the field: the filter on the left, and on the right
+    // the selected list's Share, Edit and New list.
+    button_size := Scale(44)
+    button_gap := Scale(4)
+    new_x := x + width - button_size
+    edit_x := new_x - button_gap - button_size
+    share_x := edit_x - button_gap - button_size
+    filter_width := share_x - Scale(12) - x
+    if filter_width > Scale(190) {
+        filter_width = Scale(190)
+    }
     filters: [2]Tab
     filters[0] = Tab.{.key = cast(u64)6840, .label = ListsLocaleHost("elist_filter_open")}
     filters[1] = Tab.{.key = cast(u64)6841, .label = ListsLocaleHost("elist_filter_all")}
     chosen := TabBar(frame.session, TabBarProps.{.id = 6530,
-            .bounds = Bounds(x, y, Scale(190), Scale(40)),
+            .bounds = Bounds(x, y + Scale(2), filter_width, Scale(40)),
             .selected_index = state.show_completed, .min_tab_width = Scale(80),
             .max_tab_width = Scale(120), .content_sized = true, .scale = frame.scale},
         filters[:2])
@@ -801,12 +787,53 @@ ListsPage :: () {
         state.show_completed = chosen.selected_index
         frame.scroll = 0
     }
-    side_width := Scale(150)
-    if undo_item.title.count > 0 && state.now < undo_until &&
-    undo_item.parent_id == current.id && undo_account == frame.public_id {
+    // Share is one clear button, as in a document: it opens who has access.
+    if Button(frame.session, ButtonProps.{.key = cast(u64)6508,
+            .bounds = Bounds(share_x, y, button_size, button_size),
+            .label = ListsLocaleHost("elist_share"), .icon_shape = SHARE_ICON, .icon_only = true,
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .disabled = current.id.count == 0}) != 0 {
+        frame.panel = 1
+        frame.focused = false
+        sharing_scroll = 0
+        ResetInvite()
+    }
+    // Edit opens the name; Delete is inside it, behind a question.
+    if Button(frame.session, ButtonProps.{.key = cast(u64)6503,
+            .bounds = Bounds(edit_x, y, button_size, button_size),
+            .label = ListsLocaleHost("elist_rename"), .icon_only = true,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost,
+            .icon_type = cast(s32)IconEdit,
+            .disabled = current.id.count == 0 || current.read_only || blocked}) != 0 {
+        delete_confirm = false
+        BeginInput(-3, current.title)
+        return
+    }
+    if Button(frame.session, ButtonProps.{.key = cast(u64)6505,
+            .bounds = Bounds(new_x, y, button_size, button_size),
+            .label = ListsLocaleHost("elist_new_list"), .icon_type = cast(s32)IconPlus,
+            .icon_only = true, .disabled = blocked || state.list_count >= 32}) != 0 {
+        BeginInput(-2, "")
+        frame.panel = 0
+        return
+    }
+    y += Scale(52)
+    // The items fill what is left above the bottom bar, never past it. Undo
+    // takes a line under them for the few seconds it is offered.
+    list_height := frame.height - frame.bottom - y - Scale(12)
+    undo_shown := undo_item.title.count > 0 && state.now < undo_until &&
+    undo_item.parent_id == current.id && undo_account == frame.public_id
+    if undo_shown {
+        list_height -= Scale(52)
+    }
+    if list_height < Scale(72) {
+        list_height = Scale(72)
+    }
+    if undo_shown {
         if Button(frame.session, ButtonProps.{.key = cast(u64)6517,
                 .label = ListsLocaleHost("elist_undo"),
-                .bounds = Bounds(x + width - side_width, y, side_width, Scale(36)),
+                .bounds = Bounds(x, y + list_height + Scale(8), width, Scale(44)),
                 .tone = cast(ButtonTone)ButtonToneAccent,
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost, .disabled = blocked}) != 0 {
             state.action = LISTS_RESTORE_ITEM
@@ -823,12 +850,6 @@ ListsPage :: () {
             undo_until = 0.0
             return
         }
-    }
-    y += Scale(44)
-    // The items fill what is left above the bottom bar, never past it.
-    list_height := frame.height - frame.bottom - y - Scale(12)
-    if list_height < Scale(72) {
-        list_height = Scale(72)
     }
     visible: [256]bool
     count: s32 = 0
