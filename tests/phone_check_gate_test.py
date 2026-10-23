@@ -106,6 +106,10 @@ class PhoneCheckGateTest(unittest.TestCase):
                 1, ["adb"], output=b"device offline")):
             with self.assertRaises(subprocess.CalledProcessError):
                 phone.pid("fixture.debug")
+        with mock.patch.object(phone, "shell", side_effect=subprocess.CalledProcessError(
+                1, ["adb"], output=b"", stderr=b"device offline")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                phone.pid("fixture.debug")
 
     def test_docs_tests_and_tooling_may_change_after_the_check(self):
         self.record()

@@ -13,6 +13,13 @@ if (hasGplayFirebaseConfig) {
     }
 }
 def appOnlyAbi = (project.findProperty('app.onlyAbi') ?: '').toString()
+def verificationInstance = (project.findProperty('app.verificationInstance') ?: 'false').toString().toBoolean()
+if (verificationInstance && gradle.startParameter.taskNames.any {
+    def name = it.toLowerCase()
+    name.contains('release') || name.contains('gplay') || name.contains('bundle')
+}) {
+    throw new GradleException('The verification instance is only available for debug APK checks')
+}
 def buildingAndroidBundle = gradle.startParameter.taskNames.any { it.toLowerCase().contains("bundle") }
 def kryonDirOverride = (project.findProperty('kryon.dir') ?: System.getenv("KRYON_DIR") ?: '').toString()
 
@@ -104,13 +111,14 @@ android {
             buildConfigField "String", "UPDATE_FEED", '""'
         }
         debug {
-            applicationIdSuffix ".debug"
+            // Device verification must not replace or restart the owner's debug app.
+            applicationIdSuffix verificationInstance ? ".verification" : ".debug"
             signingConfig signingConfigs.debug
             buildConfigField "boolean", "GPLAY", "false"
             // Debug builds update only from a test feed: -Papp.updateFeed=URL.
             buildConfigField "boolean", "SELF_UPDATE", project.hasProperty('app.updateFeed') ? "true" : "false"
             buildConfigField "String", "UPDATE_FEED", '"' + (project.findProperty('app.updateFeed') ?: '') + '"'
-            manifestPlaceholders.inbeAppLabel = "Inner Breeze Debug"
+            manifestPlaceholders.inbeAppLabel = verificationInstance ? "Inner Breeze Verification" : "Inner Breeze Debug"
             manifestPlaceholders.inbeUsesCleartextTraffic = "true"
         }
     }

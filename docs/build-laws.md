@@ -1,8 +1,7 @@
 # Build laws in Ziran
 
-Every Inbe law is stated, implemented, and checked in Ziran. Bend, its Node.js
-checker, and the generated `.zi` tables are gone. This reference describes the
-checked behavior, enforcement and limits.
+Every Inbe law is stated, implemented, and checked in Ziran. This reference
+describes the checked behavior, enforcement and limits.
 
 ## Implemented
 
@@ -72,8 +71,8 @@ those effects separately.
 
 `make build-laws` runs the version check and `ziran check` on each module in
 `LAW_MODULES`. Failed checking prevents compilation; no old generated output can
-satisfy it because none exists. Gradle and CMake run the same checks. Node is no
-longer required to build, and the Flatpak no longer carries a Node build tool.
+satisfy it because none exists. Gradle and CMake run the same checks. Native
+builds and Flatpak use the locked Ziran toolchain; browser tests also need Node.
 
 - `make proof-test` runs `tests/law_mutation_test.sh`: the unmutated tree
   passes, and eight deliberate breakages (a changed result code, delay,

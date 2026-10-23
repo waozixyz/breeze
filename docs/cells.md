@@ -821,8 +821,11 @@ A release names one fixed commit while peers keep working on master:
    directories, so later edits, new files and commits cannot enter the run.
    Outputs stay in `build/release-ready/`.
 3. Build the Moto APK in the same fixed-source overlay and save its content
-   identity and SHA-256 build receipt. With the development app closed by
-   the owner, run `make release REVISION=COMMIT APK=PATH BUILD_RECEIPT=PATH`.
+   identity and SHA-256 build receipt. Use `ANDROID_VERIFY_INSTANCE=1` for
+   the separate `xyz.waozi.inbe.verification` debug instance when the owner's
+   regular app is running; it has its own process and private data. This
+   option is rejected for production packages. Run
+   `make release REVISION=COMMIT APK=PATH BUILD_RECEIPT=PATH`.
    The exact APK must pass the minute-long practice and resume check;
    physical-phone images use Harmony's owner-only review. The command checks
    both the local gate stamp and APK provenance against the fixed candidate.

@@ -124,7 +124,7 @@ class Phone:
         try:
             return self.shell("pidof", package).strip()
         except subprocess.CalledProcessError as error:
-            if error.returncode == 1 and not error.stdout:
+            if error.returncode == 1 and not error.stdout and not error.stderr:
                 return ""
             raise
 
@@ -398,7 +398,7 @@ def main():
                    limits=dict(minimum_refresh_share=MINIMUM_REFRESH_SHARE, maximum_late_percent=MAXIMUM_LATE_PERCENT,
                                maximum_frame_ms=MAXIMUM_FRAME_MS,
                                maximum_resume_layout_shift=MAXIMUM_RESUME_LAYOUT_SHIFT),
-                   checks=["installed over the existing app", "launch", "Wim Hof frame timing",
+                   checks=["installed without clearing existing data", "launch", "Wim Hof frame timing",
                            "background and resume"],
                    passed=passed, checked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
     (evidence / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")

@@ -39,7 +39,7 @@ android-local-properties:
 	@printf 'sdk.dir=%s\ncmake.dir=%s\n' "$(ANDROID_SDK)" "$(ANDROID_CMAKE_DIR)" > droid/local.properties
 
 android-debug: android-copy-assets android-local-properties
-	$(ANDROID_GRADLE_ENV) $(GRADLE) -p droid assembleDebug $(if $(ANDROID_ABI),-Papp.onlyAbi="$(ANDROID_ABI)") $(ANDROID_GRADLE_ARGS)
+	$(ANDROID_GRADLE_ENV) $(GRADLE) -p droid assembleDebug $(if $(ANDROID_ABI),-Papp.onlyAbi="$(ANDROID_ABI)") $(if $(ANDROID_VERIFY_INSTANCE),-Papp.verificationInstance=true) $(ANDROID_GRADLE_ARGS)
 	$(MAKE) android-copy-debug-apks
 
 android-release:
