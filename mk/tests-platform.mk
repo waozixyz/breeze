@@ -105,9 +105,7 @@ main-platform-zi-test: $(ZI2C_BIN) $(RAYLIB_A)
 	@RAY_LDLIBS='$(RAY_LDLIBS)' sh tests/main_platform_zi_test.sh \
 		$(abspath $(dir $(ZI2C_BIN))) $(abspath $(RAYLIB_A))
 
-.PHONY: plan9-host-zi-test update-transport-zi-test
-plan9-host-zi-test: $(ZI2C_BIN)
-	@sh tests/plan9_host_zi_test.sh $(abspath $(dir $(ZI2C_BIN)))
+.PHONY: update-transport-zi-test
 
 update-transport-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \

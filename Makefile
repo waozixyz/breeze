@@ -181,8 +181,6 @@ APP_VERSION := $(shell awk '/APP_VERSION_STRING/ { print $$3; exit }' $(VERSION_
 KRYON_DIR ?= build/packages/kryon
 KSS_DIR ?= build/packages/kss
 OQS_DIR ?= build/packages/oqs
-KRYON_BACKEND ?= raylib
-PLAN9PORT_DIR ?= /mnt/storage/Projects/plan9port
 RAYLIB_DIR = build/packages/raylib/src
 RAYLIB_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/raylib
 RAYLIB_A := $(RAYLIB_BUILD_DIR)/libraylib.a
@@ -225,13 +223,10 @@ KRYON_ICON_TYPES_H := $(KRYON_GENERATED_INCLUDE_DIR)/ui_icon_types.h
 KRYON_SRCS := $(filter-out $(KRYON_DIR)/src/ui/ui_icon_assets.c $(KRYON_DIR)/src/ui/ui_icon_names.c,$(shell find $(KRYON_DIR)/src -type f -name '*.c' | LC_ALL=C sort)) $(KRYON_ICON_ASSETS_C) $(KRYON_ICON_NAMES_C) $(KRYON_UI_C) $(KRYON_KSS_C)
 KRYON_SYNC_ICONS := $(KRYON_DIR)/scripts/sync-icons.sh
 WEB_SHARED_ICON_SHEETS := platforms language tiles
-KRYON_LIBDRAW_SRCS := $(filter $(KRYON_DIR)/src/backend/libdraw_%.c,$(KRYON_SRCS))
-KRYON_TERMI_SRCS := $(filter $(KRYON_DIR)/src/backend/termi_%.c,$(KRYON_SRCS))
-KRYON_SRCS := $(filter-out $(KRYON_LIBDRAW_SRCS),$(KRYON_SRCS))
-KRYON_SRCS := $(filter-out $(KRYON_TERMI_SRCS),$(KRYON_SRCS))
-ifneq ($(KRYON_BACKEND),libdraw)
-KRYON_SRCS := $(filter-out $(KRYON_DIR)/src/platform/plan9/%.c,$(KRYON_SRCS))
-endif
+# Inbe's desktop uses Kryon's raylib backend, not its libdraw, terminal or
+# Plan 9 hosts.
+KRYON_SRCS := $(filter-out $(KRYON_DIR)/src/backend/libdraw_%.c $(KRYON_DIR)/src/backend/termi_%.c \
+	$(KRYON_DIR)/src/platform/plan9/%.c,$(KRYON_SRCS))
 # The web build uses kryon's Canvas2D backend directly: no raylib, no WebGL.
 KRYON_WEB_SRCS := $(KRYON_SRCS)
 KRYON_WEB_SRCS := $(filter-out $(KRYON_DIR)/src/backend/dom_%.c,$(KRYON_WEB_SRCS))
@@ -533,26 +528,12 @@ $(RAYLIB_A): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
 		CUSTOM_CFLAGS="-DUSING_SDL2_PROJECT $(RAY_CFLAGS) $(APP_RAYLIB_CONFIG) -O2 -ffunction-sections -fdata-sections"
 	@test -f $@
 
-KRYON_NATIVE_BACKEND_DEPS :=
-KRYON_NATIVE_BACKEND_LIBS :=
 KRYON_NATIVE_CFLAGS := $(CFLAGS)
-KRYON_NATIVE_BACKEND_CFLAGS :=
-KRYON_NATIVE_BACKEND_LDLIBS :=
-ifeq ($(KRYON_BACKEND),raylib)
 KRYON_SRCS += $(KRYON_RAYLIB_WRAPPERS_C)
 KRYON_NATIVE_BACKEND_DEPS := $(RAYLIB_A)
 KRYON_NATIVE_BACKEND_LIBS := $(RAYLIB_A)
 KRYON_NATIVE_BACKEND_CFLAGS := -DKRYON_BACKEND_RAYLIB=1 $(RAY_CFLAGS)
 KRYON_NATIVE_BACKEND_LDLIBS := $(RAY_LDLIBS)
-else ifeq ($(KRYON_BACKEND),libdraw)
-KRYON_SRCS += $(KRYON_LIBDRAW_SRCS)
-KRYON_NATIVE_CFLAGS := $(filter-out -DNATIVE_WINDOW_HAVE_SDL,$(COMMON_CFLAGS)) -std=c99 $(RUNTIME_ASSET_CFLAGS) $(SYSTEM_THEME_CFLAGS) $(KRYON_NOTIFICATION_CPPFLAGS) $(KRYON_NOTIFICATION_CFLAGS)
-ZI_NATIVE_DEFINES += KRYON_BACKEND_LIBDRAW
-KRYON_NATIVE_BACKEND_CFLAGS := -DKRYON_BACKEND_LIBDRAW=1 -I$(PLAN9PORT_DIR)/include -idirafter $(RAYLIB_DIR)/external
-KRYON_NATIVE_BACKEND_LDLIBS := -L$(PLAN9PORT_DIR)/lib -ldraw -lmemdraw -lmux -lthread -l9 -lpthread -lm
-else
-$(error Unknown KRYON_BACKEND '$(KRYON_BACKEND)' (expected raylib or libdraw))
-endif
 ifneq ($(strip $(APP_GIO_LDLIBS)),)
 KRYON_NATIVE_BACKEND_CFLAGS += -DAPP_HAVE_GIO $(APP_GIO_CFLAGS)
 NATIVE_SYSTEM_LDLIBS += $(APP_GIO_LDLIBS)
@@ -790,7 +771,6 @@ NEEDS_NATIVE_ENV := $(if $(MAKECMDGOALS),$(filter all native install install-use
 # Check the build environment on that second read, against real sources.
 ifeq ($(PACKAGES_READY),1)
 ifneq ($(strip $(NEEDS_NATIVE_ENV)),)
-ifeq ($(KRYON_BACKEND),raylib)
 ifeq ($(strip $(RAY_CFLAGS)),)
 $(error RAY_CFLAGS is not set. Install pkg-config metadata for $(RAY_PKGS), or set RAY_CFLAGS explicitly)
 endif
@@ -806,15 +786,6 @@ endif
 ifeq ($(strip $(RAY_RAYLIB_CONFIG)),)
 $(error RAY_RAYLIB_CONFIG is not set. Set RAY_RAYLIB_CONFIG explicitly)
 endif
-endif
-ifeq ($(KRYON_BACKEND),libdraw)
-ifeq ($(wildcard $(PLAN9PORT_DIR)/include/draw.h),)
-$(error plan9port draw.h is missing. Set PLAN9PORT_DIR to a plan9port install with include/draw.h)
-endif
-ifeq ($(wildcard $(PLAN9PORT_DIR)/lib/libdraw.a),)
-$(error plan9port libdraw.a is missing. Set PLAN9PORT_DIR to a plan9port install with lib/libdraw.a)
-endif
-endif
 ifeq ($(strip $(KRYON_CURL_LDLIBS)),)
 $(error libcurl metadata is missing. Install libcurl pkg-config metadata or set KRYON_CURL_CFLAGS/KRYON_CURL_LDLIBS explicitly)
 endif
@@ -826,7 +797,6 @@ endif
 
 include mk/laws.mk
 include mk/cells.mk
-include mk/plan9.mk
 include mk/windows.mk
 include mk/web.mk
 include mk/android.mk

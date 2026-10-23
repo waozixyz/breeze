@@ -75,7 +75,7 @@ test: android-text-selection-test
 test: accessibility-test
 test: main-platform-zi-test
 test: web-window-zi-test
-test: plan9-host-zi-test android-jni-zi-test update-transport-zi-test
+test: android-jni-zi-test update-transport-zi-test
 test: update-policy-zi-test
 test: raylib-log-host-test
 test: dpi-state-zi-test

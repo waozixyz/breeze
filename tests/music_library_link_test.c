@@ -24,7 +24,6 @@ static int saves;
 static int reloads;
 
 const char *data_root(void) { return test_root; }
-int32_t app_plan9_platform(void) { return 0; }
 void AudioSettingsSave(InnerBreeze *app) { assert(app != NULL); saves++; }
 void app_audio_reload_cue_sounds(InnerBreeze *app) { assert(app != NULL); reloads++; }
 

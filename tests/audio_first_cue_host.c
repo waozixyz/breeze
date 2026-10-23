@@ -119,11 +119,6 @@ int app_preview_mode(void)
     return 0;
 }
 
-int app_plan9_platform(void)
-{
-    return 0;
-}
-
 void app_audio_trace(int level, String message)
 {
     if(level >= 5) {

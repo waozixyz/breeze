@@ -27,7 +27,6 @@ int app_desktop_platform(void) { return platform == 1; }
 int app_web_platform(void) { return platform == 0; }
 int app_android_platform(void) { return platform == 2; }
 int app_windows_platform(void) { return 0; }
-int app_plan9_platform(void) { return 0; }
 int app_web_extension_available(void) { return 0; }
 
 bool LoadTypefaceData(String name, String extension, String data,
