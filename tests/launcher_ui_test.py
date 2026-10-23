@@ -295,8 +295,7 @@ with contextlib.ExitStack() as stack:
                                    stdout=log, stderr=subprocess.STDOUT)
             driver.attach(app, log_path)
             try:
-                # Startup shares the processors with the other visual suites.
-                deadline = time.monotonic() + 60
+                deadline = time.monotonic() + 20
                 window = ""
                 while time.monotonic() < deadline:
                     assert app.poll() is None, log_path.read_text()
