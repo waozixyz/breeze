@@ -100,10 +100,11 @@ node_apps_NodeAppAsset(String path)
 }
 
 bool
-node_apps_NodeAppValidate(int32_t slot, String bytes)
+node_apps_NodeAppValidate(int32_t slot, String bytes, AppPreparation* preparation)
 {
     (void)slot;
     (void)bytes;
+    (void)preparation;
     assert(!"Lists validated a node app package");
     return false;
 }
