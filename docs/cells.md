@@ -814,7 +814,7 @@ A release names one fixed commit while peers keep working on master:
    another session's work.
 2. `RELEASE_READY_REVISION=COMMIT make release-ready` runs the local CI suites
    in the Ubuntu 24.04 container with the candidate's locked packages:
-   Secret Scan, package URLs, file sizes, all tests, visual tests, package
+   Secret Scan, package URLs, file sizes, all tests, package
    compatibility, Chrome and muted Firefox smoke tests, and the pinned real
    Daochi sync server. Platform release builds remain separate. The existing
    repository overlay materializes every candidate file and recreates source
@@ -839,7 +839,7 @@ A release names one fixed commit while peers keep working on master:
    Subsequent master commits cannot cancel its release. Only the workflow
    creates the release tag after all required gates pass.
 
-When an earlier Release run already passed every test, visual, platform and
+When an earlier Release run already passed every test, platform and
 F-Droid reproducibility job for the source, supply its run ID as `reuse_run`.
 The identical source must also pass CI, including browser add-on smoke tests.
 The workflow admits reuse only when the release commit adds that version's

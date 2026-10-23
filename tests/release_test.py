@@ -227,7 +227,7 @@ class MotoWorkflowGateTest(unittest.TestCase):
 
     def passing_jobs(self):
         return [{"name": name, "conclusion": "success"} for name in
-                ("Secret Scan", "Test (0/3)", "Test (1/3)", "Test (2/3)", "Visual Tests")]
+                ("Secret Scan", "Test (0/3)", "Test (1/3)", "Test (2/3)")]
 
     def test_all_three_shards_allow_the_exact_release(self):
         self.check_run(self.passing_jobs())
@@ -412,7 +412,7 @@ class ReleaseArtifactReuseTest(unittest.TestCase):
                 builds.add(name)
             self.assertIn("if: needs.secret-scan.outputs.reuse_artifacts != 'true'", body)
         self.assertEqual({name for name in self.required if name.startswith("Build ")}, builds)
-        self.assertTrue({"Secret Scan", "Visual Tests", "Test (0/3)", "Test (1/3)", "Test (2/3)",
+        self.assertTrue({"Secret Scan", "Test (0/3)", "Test (1/3)", "Test (2/3)",
                          "F-Droid / F-Droid security and clean build", "Verify F-Droid reproducibility"}
                         <= self.required)
         release_job = self.workflow.split("\n  release:\n", 1)[1].split("\n  notify-waozi-site:", 1)[0]

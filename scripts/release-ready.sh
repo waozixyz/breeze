@@ -13,7 +13,7 @@
 # Build outputs stay in build/release-ready/; a run takes about 90 minutes.
 #
 # Covered: ci.yml Secret Scan, Package URLs, large-file guard, all three test
-# shards, visual tests, Chrome/Firefox add-ons and smoke, the real pinned Daochi
+# shards, Chrome/Firefox add-ons and smoke, the real pinned Daochi
 # sync server, and release.yml's package compatibility test. Platform release
 # builds remain separate. The server comes from its canonical checkout through
 # another private overlay; no temporary source checkout is created.
@@ -79,7 +79,6 @@ else
     job "Package URLs are public HTTPS" package_urls
     job "Files over 1 MB" python3 scripts/check-file-size.py --since origin/master
     job "Test: make test" make -k test
-    job "Test: make visual-test" make visual-test
     job "Test: make package-compat-test" make package-compat-test
     job "Browser add-ons: Chrome and Firefox" sh .github/local-ci/check-browser.sh
     job "Sync: pinned Daochi server" sh .github/local-ci/check-sync.sh

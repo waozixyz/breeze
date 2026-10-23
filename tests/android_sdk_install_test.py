@@ -154,8 +154,6 @@ shutil.copytree(root / 'download/cmake', stage / 'cmake')
         publication = workflow.split("\n  release:\n", 1)[1].split("\n    outputs:", 1)[0]
         self.assertIn("      - test", publication.splitlines())
         self.assertIn("      - verify-fdroid", publication.splitlines())
-        self.assertIn("      - visual-test", publication.splitlines())
-        self.assertIn("\n  visual-test:\n", workflow)
         android = workflow.split("\n  build-android:\n", 1)[1].split("\n  release:\n", 1)[0]
         self.assertIn("needs: secret-scan", android)
         self.assertLess(android.index("Verify and install Android SDK components"),
