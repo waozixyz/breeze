@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.13] - 2026-10-23
+
+- Maintenance release for Inner Breeze 2.1.45.
+
 ## [1.1.12] - 2026-10-23
 
 - Lists are chips that wrap onto more rows; pull the items down to show or hide finished ones.

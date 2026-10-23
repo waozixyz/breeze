@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.45] - 2026-10-23
+
+- Practice illustrations keep clean, smooth edges on desktop, without dark seams across the Sun Salutation guide.
+
 ## [2.1.44] - 2026-10-23
 
 - Lists: lists are chips that wrap onto more rows; pull the items down to show finished ones.
