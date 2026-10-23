@@ -75,6 +75,8 @@ TaiChiFlatLook :: struct {
     has_sleeve: bool
     wrap: u32
     has_wrap: bool
+    // A plain top, such as a sweater, has no wrap line across the chest.
+    plain_top: bool
     collar: u32
     has_collar: bool
     band: u32
@@ -612,7 +614,7 @@ TaiChiFlatFill :: (painter: *TaiChiFlatPainter, shape: TaiChiFlatShape, color: u
 TaiChiFlatLine :: (painter: *TaiChiFlatPainter, scratch: *TaiChiFlatScratch, color: u32, width: float64, alpha: float64) {
     frame := painter.frame
     if scratch.count < 2 || frame.op_count >= TAI_CHI_FLAT_OP_CAPACITY ||
-        frame.point_count + scratch.count > TAI_CHI_FLAT_POINT_CAPACITY {
+    frame.point_count + scratch.count > TAI_CHI_FLAT_POINT_CAPACITY {
         return
     }
     op := *frame.ops[frame.op_count]
@@ -759,12 +761,19 @@ TaiChiFlatLoft :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine, from: f
     previous: TaiChiFlatScratch
     current: TaiChiFlatScratch
     both: TaiChiFlatScratch
+    step := (to - from) / cast(float64)stations
     for station: cast(s32)0..stations {
         current.count = 0
-        share := from + (to - from) * cast(float64)station / cast(float64)stations
+        share := from + step * cast(float64)station
         TaiChiFlatProjectRing(painter, TaiChiFlatJacketRing(painter, spine, share), *current)
         if station > 0 {
             both.count = 0
+            // Each filled band reaches a little into the one below, so
+            // neighbouring fills overlap instead of leaving a hairline seam.
+            // Kept bands stay exact: they clip shades that must not double.
+            if station > 1 && kept.count == 0 {
+                TaiChiFlatProjectRing(painter, TaiChiFlatJacketRing(painter, spine, share - step * 1.35), *both)
+            }
             for index: cast(s32)0..previous.count - 1 {
                 TaiChiFlatPush(*both, previous.points[index])
             }
@@ -812,17 +821,19 @@ TaiChiFlatTorsoLines :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine) {
     height := painter.height
     run: TaiChiFlatScratch
     // The wrap line from the collar across her chest to her right side.
-    for step: cast(s32)0..16 {
-        u := cast(float64)step / 16.0
-        share := 0.826 + (0.6 - 0.826) * u
-        facing: float64
-        point := TaiChiFlatJacketSurface(painter, spine, share, 0.22 + (-0.78 - 0.22) * TaiChiSmoothRamp(u, 0.0, 1.0), *facing)
-        TaiChiFlatFacingRun(painter, *run, point, facing, painter.palette.wrap, 0.0045 * height)
+    if !painter.look.plain_top {
+        for step: cast(s32)0..16 {
+            u := cast(float64)step / 16.0
+            share := 0.826 + (0.6 - 0.826) * u
+            facing: float64
+            point := TaiChiFlatJacketSurface(painter, spine, share, 0.22 + (-0.78 - 0.22) * TaiChiSmoothRamp(u, 0.0, 1.0), *facing)
+            TaiChiFlatFacingRun(painter, *run, point, facing, painter.palette.wrap, 0.0045 * height)
+        }
+        if run.count > 1 {
+            TaiChiFlatLine(painter, *run, painter.palette.wrap, 0.0045 * height, 1.0)
+        }
+        run.count = 0
     }
-    if run.count > 1 {
-        TaiChiFlatLine(painter, *run, painter.palette.wrap, 0.0045 * height, 1.0)
-    }
-    run.count = 0
     // The collar: the top ring all round.
     ring := TaiChiFlatJacketRing(painter, spine, painter.look.jacket[TAI_CHI_FLAT_JACKET_ROWS - 1][0])
     for index: cast(s32)0..TAI_CHI_FLAT_RING_POINTS {
@@ -1491,7 +1502,9 @@ TaiChiFlatPaintLook :: (frame: *TaiChiFlatFrame, solved: *TaiChiSolved, rig: *Ta
         front[0] = front[1]
         front[1] = swap
     }
+    // A plain top is drawn clean, without the arms' crisp shade on it.
+    shade_clips := ifx painter.look.plain_top then no_clips else clips[:]
     for index: cast(s32)0..front_count - 1 {
-        TaiChiFlatArmPaint(*painter, *arms[front[index]], clips[:])
+        TaiChiFlatArmPaint(*painter, *arms[front[index]], shade_clips)
     }
 }
