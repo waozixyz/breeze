@@ -65,6 +65,9 @@ for choice, width, height, dark in [('merge', 900, 720, 0), ('replace', 411, 813
                 time.sleep(0.1)
             assert window, 'fixture did not become ready'
             command('xdotool', 'windowfocus', '--sync', window)
+            # The display keeps the pointer where the last case left it, over
+            # an action button; rest it outside the panel before comparing.
+            command('xdotool', 'mousemove', '--window', window, '1', '1')
             time.sleep(0.5)
             assert count(db, "SELECT COUNT(*) FROM habits WHERE id='local-review-walk'") == 1
             assert count(db, "SELECT COUNT(*) FROM habits WHERE id<>'local-review-walk'") == 0
