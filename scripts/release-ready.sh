@@ -108,6 +108,13 @@ if ! flock -n 9; then
     exit 1
 fi
 
+# Containers here need no session keyring. Creating one counts against the
+# account's kernel key quota (200 keys), which long-lived sessions fill, and
+# a full quota stops every container from starting.
+printf '[containers]\nkeyring = false\n' > "$output/containers.conf"
+CONTAINERS_CONF_OVERRIDE="$root/$output/containers.conf"
+export CONTAINERS_CONF_OVERRIDE
+
 if ! podman image exists "$image"; then
     echo "release-ready: building $image"
     git archive "$commit:.github" | podman build -t "$image" -f local-ci/Containerfile -
