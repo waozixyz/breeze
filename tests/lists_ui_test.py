@@ -222,6 +222,11 @@ with contextlib.ExitStack() as stack:
                 apart = (chip["x"] + chip["width"] <= other["x"] or other["x"] + other["width"] <= chip["x"] or
                          chip["y"] + chip["height"] <= other["y"] or other["y"] + other["height"] <= chip["y"])
                 assert apart, f"list chips overlap: {chip['label']} and {other['label']}"
+    # With many lists, each list still shows its own items.
+    driver.press(label="Shopping", role="button")
+    driver.wait(label="Fresh fruit", role="button")
+    driver.press(label="Travel", role="button")
+    driver.wait(label="Pack bag", role="button")
     for name in extra:
         driver.press(label=name, role="button")
         driver.press(label="Rename", role="button")
