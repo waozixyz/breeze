@@ -4,8 +4,8 @@
 #import "std/c_string"
 #import "std/text_buffer"
 #import "std/vec"
-#import "toast_widget"
-#import "toast_props"
+#import "entity/achievement_toast"
+#import "drawing_props"
 #import "geometry"
 #import "notification"
 #import, file "achievement_host.zi";
@@ -44,8 +44,7 @@ achievement_scan_profile_revision: u64;
 achievement_scan_restart: bool;
 achievement_snapshot_revision: u64 = 18446744073709551615;
 achievement_habits: Habits;
-achievement_toast: ToastState;
-achievement_toast_message: string;
+achievement_toast: AchievementToast;
 
 AchievementInstalled :: (id: string) -> bool {
     for index: cast(s32)1..PackageCount - 1 {
@@ -126,8 +125,6 @@ AchievementFrame :: (app: *InnerBreeze) {
         achievement_scan_restart = false
         unused CopyCString(owner, achievement_scan_owner[:])
         achievement_toast = .{}
-        PackageFree(achievement_toast_message)
-        achievement_toast_message = ""
         achievement_radio_account = .{}
         achievement_radio_seconds = 0.0
         achievement_radio_audible = false
@@ -205,39 +202,41 @@ AchievementFrame :: (app: *InnerBreeze) {
 AchievementDrawAlerts :: (app: *InnerBreeze) {
     if app == null { return }
     if !AchievementAlerts() {
-        achievement_toast = .{}
-        PackageFree(achievement_toast_message)
-        achievement_toast_message = ""
+        AchievementToastClose(*achievement_toast)
         unused AchievementConsumeAlerts()
         return
     }
     if app_is_session_screen(app.breathing.screen) || app_is_session_screen(app.session_window.screen) ||
     app.modal.active != 0 || app.launcher_open { return }
     if achievement_dirty || achievement_reconciling { return }
-    earned := AchievementConsumeAlerts()
-    if earned > 0 {
-        PackageFree(achievement_toast_message)
-        out: Vec(u8)
-        BuilderPrint(*out, "% · %", LocaleText("achievements_title"), earned)
-        achievement_toast_message = BuilderFinish(out)
+    latest: s32 = -1
+    earned := AchievementConsumeAlerts(*latest)
+    if earned > 0 && latest >= 0 {
+        entry := *achievement_definitions[latest]
+        // The newest award by name; several at once say how many.
+        label: Vec(u8)
+        if earned > 1 { BuilderPrint(*label, "% · %", LocaleText("achievement_unlocked"), earned) }
+        else { BuilderPrint(*label, "%", LocaleText("achievement_unlocked")) }
+        text := BuilderFinish(label)
+        AchievementToastShow(*achievement_toast, text, LocaleText(TextUntilNul(entry.title_key[:])),
+            AchievementIconShape(entry), AchievementFrameTime())
+        PackageFree(text)
     }
     if app.backgrounded != 0 {
         if earned > 0 && NotificationsAllowed() {
             unused Notify(NotificationProps.{
-                    .title = LocaleText("achievements_title"), .body = achievement_toast_message,
+                    .title = TextUntilNul(achievement_toast.label[:]), .body = TextUntilNul(achievement_toast.title[:]),
                     .tag = "inbe.achievements", .id = 8,
                     .priority = NotificationPriority.NotificationPriorityLow,
                     .suppress_when_focused = true})
         }
-        achievement_toast = .{}
-        PackageFree(achievement_toast_message)
-        achievement_toast_message = ""
+        AchievementToastClose(*achievement_toast)
         return
     }
-    if achievement_toast.message.count == 0 && earned == 0 { return }
-    achievement_toast = Toast(app.ui.session, ToastProps.{
+    unused AchievementToastDraw(app.ui.session, *achievement_toast, AchievementToastProps.{
             .key = cast(u64)0x61636869657665,
             .viewport = Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width, cast(float32)app.ui.view_height},
-            .state = achievement_toast, .message = ifx earned > 0 then achievement_toast_message else "",
-            .seconds = 4.0, .now_seconds = AchievementFrameTime(), .scale = 1.0}).state
+            .top = cast(float32)AppTitleBarHeight(), .scale = MetricsScale(), .now = AchievementFrameTime(),
+            .fill = StyleTokenColor("surface"), .border = DarkenColor(StyleTokenColor("canvas"), 18),
+            .accent = StyleTokenColor("accent")})
 }

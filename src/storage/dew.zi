@@ -61,6 +61,13 @@ dew_action: s32;
 dew_next_refresh: float64;
 dew_notice: string;
 dew_sync_requested: bool;
+// The node's last confirmed answer for this account, kept between launches
+// so Profile shows a balance at once; a fresh read replaces it.
+dew_account_json: [8192]u8;
+dew_account_fresh: bool;
+dew_background_reads: s32;
+// Profile's refresh requests count up; an older one is ignored.
+dew_sequence: s32;
 // A gift waiting for the node's answer, as the request it sends, kept until
 // the node confirms or refuses it so an uncertain send repeats the same ID.
 dew_gift_attempt: [192]u8;
@@ -73,6 +80,10 @@ dew_gift_units: s64;
 DewReady :: () -> bool {
     return StoredAccountMode() == AccountModeOwner && storage_sync_enabled() != 0 &&
     SyncNodeSameAddress(storage_get_setting_text("sync_server_url"), DewNode)
+}
+
+DewBusy :: () -> bool {
+    return dew_operation.active
 }
 
 DewCancel :: () {
@@ -89,6 +100,9 @@ DewCancel :: () {
     dew_next_refresh = 0.0
     dew_notice = ""
     dew_sync_requested = false
+    dew_account_json = .{}
+    dew_account_fresh = false
+    dew_background_reads = 0
     dew_gift_attempt = .{}
     dew_gift_retry_at = 0.0
     dew_gift_state = DewGiftNone
@@ -115,6 +129,13 @@ DewContext :: () {
     }
     DewCancel()
     dew_identity = identity
+    cached: [8192]u8
+    unused storage_get_social_cache_json("dew.account", *cached[0], 8192)
+    if DewParseAccount(TextUntilNul(cached[:]), TextUntilNul(dew_identity[:]), *dew_account) {
+        dew_account_json = cached
+    } else {
+        dew_account = DewAccount.{}
+    }
     unused storage_get_social_cache_json("dew.upgrade", *dew_attempt[0], 256)
     if FieldAt(TextUntilNul(dew_attempt[:]), 0, "request_id") < 0 {
         dew_attempt[0] = cast(u8)0
@@ -126,34 +147,6 @@ DewContext :: () {
     } else {
         dew_gift_attempt[0] = cast(u8)0
     }
-}
-
-// Six decimal places match the existing signed ledger; trailing zeros vanish.
-DewFormat :: (units: s64, divisor: s64, output: []u8) -> bool {
-    if units < 0 || divisor <= 0 || !AppFormatS64(units / divisor, output) {
-        return false
-    }
-    remainder := units % divisor
-    if remainder == 0 {
-        return true
-    }
-    if !AppAppendText(".", output) {
-        return false
-    }
-    scale := divisor / 10
-    while scale > 0 {
-        digit: [2]u8
-        digit[0] = cast(u8)(48 + remainder / scale)
-        if !AppAppendText(TextUntilNul(digit[:]), output) {
-            return false
-        }
-        remainder %= scale
-        if remainder == 0 {
-            return true
-        }
-        scale /= 10
-    }
-    return true
 }
 
 DewBegin :: (action: s32, path: string, body: string) -> bool {
@@ -342,6 +335,9 @@ DewTick :: (visible: bool, now: float64) {
                 if DewParseAccount(json, TextUntilNul(dew_identity[:]), *received) {
                     previous := SyncNodeStorageRead(DewNode)
                     dew_account = received
+                    dew_account_fresh = true
+                    unused AppCopyText(json, dew_account_json[:])
+                    unused storage_set_social_cache_json("dew.account", json)
                     storage := SyncNodeStorage.{
                         .known = true,
                         .used_bytes = received.used_bytes,
@@ -358,7 +354,7 @@ DewTick :: (visible: bool, now: float64) {
                         dew_sync_requested = true
                     }
                 } else {
-                    dew_account.known = false
+                    // The last confirmed balance stays, marked as not refreshed.
                     dew_notice = "profile_dew_error"
                 }
             }
@@ -399,10 +395,34 @@ DewTick :: (visible: bool, now: float64) {
         dew_gift_retry_at = now + 15.0
         return
     }
-    if visible && DewReady() && !dew_operation.active && now >= dew_next_refresh {
+    // One read soon after launch keeps the balance current before Profile
+    // opens; a few background tries, then only while Profile shows it.
+    background := !dew_account_fresh && dew_background_reads < 3
+    if (visible || background) && DewReady() && !dew_operation.active && now >= dew_next_refresh {
+        if !visible { dew_background_reads += 1 }
         unused DewBegin(DewRead, "/api/v1/storage/plan", "")
         dew_next_refresh = now + 15.0
     }
+}
+
+// Profile asks for a fresh read; the request names the account and a newer sequence.
+DewRequestRefresh :: (request: string) -> bool {
+    DewContext()
+    owner: [65]u8
+    operation: [24]u8
+    sequence: s64
+    if !DewReady() || Space(request, ValueEnd(request, 0, 0)) != cast(s32)request.count ||
+    ReadStringText(request, FieldAt(request, 0, "owner"), owner[:]) != 64 ||
+    TextUntilNul(owner[:]) != TextUntilNul(dew_identity[:]) ||
+    !DewInteger(request, FieldAt(request, 0, "sequence"), *sequence) ||
+    sequence <= cast(s64)dew_sequence || sequence > 2147483647 ||
+    ReadStringText(request, FieldAt(request, 0, "operation"), operation[:]) <= 0 ||
+    TextUntilNul(operation[:]) != "refresh" {
+        return false
+    }
+    dew_sequence = cast(s32)sequence
+    dew_next_refresh = 0.0
+    return true
 }
 
 // {"xmr_usd_cents":N,"updated_at":unix,"sources":[...],"xmr_atomic_units":N,"token_units":N}

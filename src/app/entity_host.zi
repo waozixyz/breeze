@@ -30,7 +30,15 @@ Shared :: #import "entity/native_files";
 #import, file "../storage/storage_profile_stats.zi";
 #import, file "../platform/dew_payment.zi";
 #import, file "../storage/dew.zi";
+#import, file "../screens/profile_dew.zi";
+#import, file "app_sync.zi";
+#import "std/vec"
+#import "std/format"
+#import, file "../screens/dew_worth.zi";
 #import, file "../habits/habit_model.zi";
+#import, file "../habits/habit_calendar.zi";
+#import, file "../storage/sync_node_storage.zi";
+#import, file "current_app.zi";
 #import, file "../platform/raylib_text_input.zi";
 
 entity_context: AppContext;
@@ -39,14 +47,13 @@ entity_document: string;
 entity_inner_breeze: bool;
 entity_reload_after_route: bool;
 entity_account_route: bool;
-entity_dew_ready: bool;
-entity_dew_known: bool;
-entity_dew_balance: s64;
+entity_snapshot: string;
 
 InbeEntityRead :: (app: *InnerBreeze) -> string {
     Entity.EntityFree(entity_document)
     state := Entity.EntityDefault()
-    state.controls = Entity.ENTITY_IDENTITY | Entity.ENTITY_INTENTION | Entity.ENTITY_NODES
+    // Name and Intention stay stored but Profile no longer edits them.
+    state.controls = Entity.ENTITY_NODES
     state.pictures &= ~((1 << 21) | (1 << 22) | (1 << 23))
     state.name = app.profile_display_name
     state.intention = app.profile_intention
@@ -74,31 +81,12 @@ InbeEntityRead :: (app: *InnerBreeze) -> string {
     }
     state.host_navigation = true
     Entity.EntityAddExtension(*state, "account", LocaleText("sync_account_title"))
-    if DewAvailable() {
-        Entity.EntityAddExtension(*state, "dew", LocaleText("profile_dew_title"))
-        entity_dew_ready = DewReady()
-        entity_dew_known = entity_dew_ready && dew_account.known
-        entity_dew_balance = dew_account.balance
-        summary: [256]u8
-        if entity_dew_known {
-            unused DewFormat(dew_account.balance, DewUnits, summary[:])
-            unused AppAppendText(" Dew", summary[:])
-        } else {
-            unused CopyCString(LocaleText(ifx DewReady() then "profile_dew_loading" else "profile_dew_connect"), summary[:])
-        }
-        unused Entity.EntityDescribeExtension(*state, "dew", TextUntilNul(summary[:]), "", "")
-    }
-    Entity.EntityAddExtension(*state, "inbe", LocaleText("profile_progress_title"))
-    Entity.EntityAddExtension(*state, "data", LocaleText("profile_data"))
+    // The Dew card holds the balance, storage plans and data management;
+    // builds without Dew keep Data as its own row.
+    if !DewAvailable() { Entity.EntityAddExtension(*state, "data", LocaleText("profile_data")) }
     Entity.EntityAddExtension(*state, "friends", LocaleText("profile_friends_title"))
     Entity.EntityAddExtension(*state, "telegram", "Telegram")
     Entity.EntityAddExtension(*state, "achievements", LocaleText("achievements_title"))
-    active_days: s32
-    sessions: s32
-    unused storage_profile_week_stats(habits_today_index(), *active_days, *sessions)
-    summary: [256]u8
-    unused FormatNumberTemplate(LocaleText("profile_weekly_insight"), active_days, summary[:])
-    unused Entity.EntityDescribeExtension(*state, "inbe", TextUntilNul(summary[:]), "", "activity")
     entity_document = Entity.EntityEncode(state)
     return entity_document
 }
@@ -147,7 +135,108 @@ EntityHostAllows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" ||
     name == "AppLocaleHost" || name == "ClipboardCopyHost" ||
     name == "AppServiceHost" || name == "entity.management" || name == "entity.text_height" ||
-    name == "entity.achievements"
+    name == "entity.achievements" || name == "entity.activity" || (name == "entity.dew" && DewAvailable())
+}
+
+// The node-confirmed Dew account and Inner Breeze's own summaries for the
+// shared balance card; its buttons come back as dew-* routes.
+InbeEntityDew :: () -> string {
+    DewContext()
+    Entity.EntityFree(entity_snapshot)
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"sequence\":%,\"busy\":%,\"available\":%,\"error\":%,\"host_actions\":true,\"manage_data\":true,\"owner\":",
+        cast(s64)dew_sequence, ifx DewBusy() then "true" else "false",
+        ifx DewReady() then "true" else "false", ifx dew_notice != "" then "true" else "false")
+    Entity.EntityQuote(*out, storage_get_setting_text("sync_public_id"))
+    account := TextUntilNul(dew_account_json[:])
+    if dew_account.known && account != "" {
+        DewRatesRefresh()
+        BuilderPrint(*out, ",\"account\":%", account)
+        line: [256]u8
+        if DewWorthText(dew_account.balance, line[:]) {
+            BuilderPrint(*out, ",\"worth\":")
+            Entity.EntityQuote(*out, TextUntilNul(line[:]))
+        }
+        line = .{}
+        size: [24]u8
+        if ProfileDewCurrentSize() > 0 {
+            ProfileDewSizeText(dew_account.limit_bytes, size[:])
+            arguments: [2]FormatArg = .[FormatArg.{.text = TextUntilNul(size[:]), .is_text = true},
+            FormatArg.{.number = ProfileDewDaysLeft()}]
+            unused FormatTemplate(LocaleText("profile_dew_paid"), arguments[:], line[:])
+        } else {
+            free := ifx dew_account.free_bytes > 0 then dew_account.free_bytes else dew_account.limit_bytes
+            if free > 0 {
+                ProfileDewSizeText(free, size[:])
+                arguments: [1]FormatArg = .[FormatArg.{.text = TextUntilNul(size[:]), .is_text = true}]
+                unused FormatTemplate(LocaleText("profile_dew_free"), arguments[:], line[:])
+            } else {
+                unused AppCopyText(LocaleText("profile_dew_plan_free"), line[:])
+            }
+        }
+        BuilderPrint(*out, ",\"plan_summary\":")
+        Entity.EntityQuote(*out, TextUntilNul(line[:]))
+        if dew_account.limit_bytes > 0 {
+            used: [32]u8
+            limit: [32]u8
+            unused SyncStorageFormatBytes(dew_account.used_bytes, used[:])
+            unused SyncStorageFormatBytes(dew_account.limit_bytes, limit[:])
+            arguments: [2]FormatArg = .[FormatArg.{.text = TextUntilNul(used[:]), .is_text = true},
+            FormatArg.{.text = TextUntilNul(limit[:]), .is_text = true}]
+            line = .{}
+            unused FormatTemplate(LocaleText("profile_node_storage_used_of"), arguments[:], line[:])
+            BuilderPrint(*out, ",\"usage_summary\":")
+            Entity.EntityQuote(*out, TextUntilNul(line[:]))
+        }
+    } else {
+        BuilderPrint(*out, ",\"account\":null")
+    }
+    BuilderPrint(*out, "}")
+    entity_snapshot = BuilderFinish(out)
+    return entity_snapshot
+}
+
+// Today's habits and this week's practice, shown on Profile only in Inner Breeze.
+InbeEntityActivity :: () -> string {
+    today := habits_today_index()
+    due: s32 = 0
+    done: s32 = 0
+    app := CurrentApp()
+    if app != null {
+        for index: 0..app.habits.count - 1 {
+            if habit_scheduled_day(*app.habits.items[index], today) != 0 {
+                due += 1
+                if habit_completed_day(*app.habits.items[index], today) != 0 { done += 1 }
+            }
+        }
+    }
+    active_days: s32
+    sessions: s32
+    unused storage_profile_week_stats(today, *active_days, *sessions)
+    loading := app_sync_loading() != 0
+    values: [3][24]u8
+    if loading {
+        for index: 0..2 { unused AppCopyText("…", values[index][:]) }
+    } else {
+        unused FormatTwoNumberTemplate("%d/%d", done, due, values[0][:])
+        unused AppFormatS32(active_days, values[1][:])
+        unused AppFormatS32(sessions, values[2][:])
+    }
+    labels: [3]string = .["profile_today_short", "profile_active_days_short", "profile_sessions_short"]
+    icons: [3]string = .["today", "days", "sessions"]
+    Entity.EntityFree(entity_snapshot)
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"stats\":[")
+    for index: 0..2 {
+        BuilderPrint(*out, "%{\"label\":", ifx index > 0 then "," else "")
+        Entity.EntityQuote(*out, LocaleText(labels[index]))
+        BuilderPrint(*out, ",\"value\":")
+        Entity.EntityQuote(*out, TextUntilNul(values[index][:]))
+        BuilderPrint(*out, ",\"icon\":\"%\"}", icons[index])
+    }
+    BuilderPrint(*out, "]}")
+    entity_snapshot = BuilderFinish(out)
+    return entity_snapshot
 }
 
 EntityHostText :: (text: string) -> HostValue {
@@ -167,8 +256,9 @@ EntityHostLocale :: (key: string) -> string {
     if key == "entity.node_address" { return LocaleText("sync_remote_label") }
     if key == "entity.add" { return LocaleText("sync_nodes_add") }
     if key == "entity.remove" { return LocaleText("launcher_uninstall") }
-    if key == "entity.picture" || key == "entity.change_picture" { return LocaleText("profile_picture_title") }
-    if key == "entity.done" { return LocaleText("close_button") }
+    if key == "entity.picture" { return LocaleText("profile_picture_title") }
+    if key == "entity.change_picture" { return LocaleText("profile_change_picture") }
+    if key == "entity.done" { return LocaleText("done_button") }
     if key == "entity.node_invalid" { return LocaleText("sync_server_url_invalid") }
     if key == "entity.node_limit" { return LocaleText("sync_nodes_limit") }
     if key == "entity.account" { return LocaleText("sync_account_title") }
@@ -210,6 +300,9 @@ EntityHostLocale :: (key: string) -> string {
     if key == "entity.storage_used_unlimited" { return LocaleText("profile_node_storage_used_unlimited") }
     if key == "entity.storage_full" { return LocaleText("profile_node_storage_full") }
     if key == "entity.node_media" { return LocaleText("profile_node_storage_media") }
+    if key == "entity.manage_data" { return LocaleText("profile_manage_data") }
+    // The shared Dew card reads Inner Breeze's own Dew strings.
+    if key.count > 12 && key[:12] == "profile_dew_" { return LocaleText(key) }
     return key
 }
 
@@ -218,6 +311,15 @@ EntityHostCall :: (context: *void, module: *u8, function: *u8,
     app := cast(*InnerBreeze)context
     name := TextFromCString(function)
     if AchievementEntityCall(cast(*void)app, name, arguments, count, result) {
+        return 1
+    }
+    if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.dew" && DewAvailable() {
+        request := AppArgumentText(arguments[1])
+        result.* = EntityHostText(ifx request == "" then InbeEntityDew() else ifx DewRequestRefresh(request) then "queued" else "rejected")
+        return 1
+    }
+    if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.activity" {
+        result.* = EntityHostText(InbeEntityActivity())
         return 1
     }
     if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.management" {
@@ -282,15 +384,6 @@ EntityHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
         entity_opened = true
     }
     InbeManagementPump(app)
-    if entity_document.count > 0 && DewAvailable() &&
-    (entity_dew_ready != DewReady() ||
-        entity_dew_known != (DewReady() && dew_account.known) ||
-        (entity_dew_known && entity_dew_balance != dew_account.balance)) {
-        // Save current edits before refreshing the balance shown by Entity.
-        if AppContextRun(*entity_context, Portable.APP_SAVE) {
-            entity_reload_after_route = true
-        }
-    }
     typed: [1024]u8
     if entity_reload_after_route {
         entity_context.command = "reload"
@@ -316,6 +409,10 @@ EntityHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
     InbeManagementPump(app)
     if !ran { return false }
     route := entity_context.reply
+    // The Dew card's buttons open Inner Breeze's own windows over Profile.
+    if route == "dew-topup" && DewAvailable() { ProfileTopUpOpen(app); return true }
+    if route == "dew-plans" && DewAvailable() { ProfileStoragePlansOpen(app); return true }
+    if route == "dew-data" { route = "data" }
     if route != "" { entity_reload_after_route = true }
     if route == "inbe" { entity_inner_breeze = true; app.profile_scroll = 0 }
     else if route == "account" { app.profile_tab = PROFILE_TAB_SYNC; app.profile_scroll = 0 }

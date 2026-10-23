@@ -196,9 +196,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
     shutil.copyfile(root / "build/practice-content/taichi.zib", packages / "practice-taichi.zib")
     app, window = launch(profile, "board")
     try:
-        # Installed practices only, in Practice's order, two per row on phones.
-        expected = [["Astral Projection", "Wim Hof Breathing"], ["Breathing Patterns", "Meditation"],
-                    ["7-Minute Workout"]]
+        # Only Wim Hof and Meditation are ranked, in Practice's order, side by side on phones.
+        expected = [["Wim Hof Breathing", "Meditation"]]
         grid = practice_grid(expected)
         assert grid == expected, f"installed practices: {grid}"
         assert selected_practice() == "Wim Hof Breathing"
@@ -208,19 +207,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
         choose("Avg hold")
         average = board(["river", "maple", "cedar"])
         assert [name for name, _ in average] == ["river", "maple", "cedar"], f"average hold order: {average}"
-        # Meditation is on the second row of the phone grid.
         choose("Meditation")
         meditation = board(["river", "cedar"])
         assert [name for name, _ in meditation] == ["river", "cedar"] and "0:15" in dict(meditation)["river"], \
             f"meditation: {meditation}"
-        choose("Breathing Patterns")
-        patterns = board(["cedar", "river"])
-        assert sorted(name for name, _ in patterns) == ["cedar", "river"], f"breathing patterns: {patterns}"
-        # Astral Projection ranks its own board, by streak only.
-        choose("Astral Projection")
-        astral = board(["river", "maple", "cedar"])
-        assert [name for name, _ in astral] == ["river", "maple", "cedar"], f"astral projection: {astral}"
-        assert not driver.find(label="Avg hold", role="button", visible=True), "Astral Projection ranks an average"
+        for other in ("Breathing Patterns", "Astral Projection", "7-Minute Workout"):
+            assert not driver.find(label=other, role="button", visible=True), f"{other} is ranked"
         # Only apps with a ranking are offered. Without a game that reported
         # a score, that is Practice alone, so there is nothing to choose.
         assert not driver.find(role="combo_box", visible=True), "an app without a ranking was offered"
@@ -231,12 +223,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
         assert app.poll() is None, log
     finally:
         stop(app)
-    # A downloaded Sun Salutation joins the board in Practice's order.
+    # A downloaded Sun Salutation is not ranked either.
     shutil.copyfile(root / "build/practice-content/sunsalutation.zib", packages / "practice-sunsalutation.zib")
     app, window = launch(profile, "with-sun-salutation")
     try:
-        expected = [["Astral Projection", "Wim Hof Breathing"], ["Breathing Patterns", "Meditation"],
-                    ["Sun Salutation", "7-Minute Workout"]]
+        expected = [["Wim Hof Breathing", "Meditation"]]
         grid = practice_grid(expected)
         assert grid == expected, f"after download: {grid}"
         log = (output / "with-sun-salutation.log").read_text()
@@ -261,6 +252,5 @@ with tempfile.TemporaryDirectory(prefix="inbe-about-") as directory:
     assert about.returncode == 0 and shot.exists(), stdout[-4000:] + stderr[-2000:]
     assert "out of bounds" not in stdout + stderr, stdout[-4000:]
 driver_directory.cleanup()
-print("Leaderboard: preinstalled and unpinned, installed practices in order, saved ranks, average hold, "
-      "meditation time, patterns, Astral Projection, only ranked apps offered, "
-      "a downloaded practice joining and About passed")
+print("Leaderboard: preinstalled and unpinned, only Wim Hof and Meditation ranked, saved ranks, average hold, "
+      "meditation time, only ranked apps offered, a downloaded practice staying unranked and About passed")
