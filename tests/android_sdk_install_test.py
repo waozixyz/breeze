@@ -3,6 +3,8 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -84,6 +86,20 @@ shutil.copytree(root / 'download/cmake', stage / 'cmake')
         binary = self.root / "cmake/3.22.1/bin/cmake"
         binary.write_text("#!/bin/sh\nprintf '%s\\n' 'cmake version 3.22.1-g37088a8'\n")
         self.assertTrue(sdk.valid(self.root, PACKAGE))
+
+    def test_fdroid_explicit_sdk_works_without_sdk_environment_variables(self):
+        component(self.root)
+        packages = self.root / "packages.txt"
+        packages.write_text(PACKAGE + "\n")
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("ANDROID_HOME", "ANDROID_SDK_ROOT")}
+        result = subprocess.run([sys.executable, str(ROOT / ".github/scripts/install-android-sdk.py"),
+                                 "--sdk-root", str(self.root), "--sdkmanager", str(self.manager),
+                                 "--packages", str(packages)], env=environment,
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        workflow = (ROOT / ".github/workflows/fdroid.yml").read_text()
+        self.assertIn('--sdk-root /opt/android-sdk --sdkmanager "$(command -v sdkmanager)"', workflow)
 
     def test_pinned_components_match_the_actual_android_build(self):
         gradle = (ROOT / "droid/app/build.gradle").read_text()
