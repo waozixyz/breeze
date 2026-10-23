@@ -272,6 +272,7 @@ int32_t RunPackageManagerFixture(void) {
     assert(!package_manager_PackageUpdateAvailable(4));
     installed = package_manager_PackageInstalledBytes(4);
     assert(installed.length > 8);
+    assert(!package_manager_PackageInstalledIsBundled(4)); /* A newer saved release replaces the bundled app. */
     free((void *)installed.data);
     /* The node supplies at most three fully signed, ordered releases. A
        rejected replacement cannot erase the last verified history. */
@@ -367,6 +368,7 @@ int32_t RunPackageManagerFixture(void) {
     assert(package_manager_PackageRootPending());
     installed = package_manager_PackageInstalledBytes(0);
     assert(installed.length > 8);
+    assert(!package_manager_PackageInstalledIsBundled(0)); /* A newer saved root replaces the bundled one. */
     free((void *)installed.data);
     package_manager_PackageMarkRootActive(true); /* Restart activates the cached root. */
     assert(!package_manager_PackageRootPending());
