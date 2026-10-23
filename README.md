@@ -17,7 +17,7 @@ Free, open-source apps for breathing, meditation, habits and everyday life.
 Use them offline, keep your data on your device, and optionally connect an
 account to sync across devices.
 
-[Download the latest release](https://github.com/waozixyz/inbe/releases/latest)
+[Download the latest release](https://github.com/waozixyz/breeze/releases/latest)
 · [What's new](CHANGELOG.md)
 
 ## Make space for yourself

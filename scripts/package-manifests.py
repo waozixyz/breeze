@@ -75,7 +75,7 @@ def manifest_for(component, existing, key_id, public):
     values = {field: existing[field] for field in FIELDS if existing.get(field)}
     values.update(app_id=component["id"], display_name=NAMES.get(component["name"]) or component["title"],
                   homepage_url="https://inbe.waozi.xyz/",
-                  source_url=component.get("source_url", "https://github.com/waozixyz/inbe"), status="active",
+                  source_url=component.get("source_url", "https://github.com/waozixyz/breeze"), status="active",
                   current_client_version=component["version"])
     keys = [dict(key) for key in existing.get("keys", [])]
     old_key = next((key for key in keys if key["key_id"] == key_id), None)

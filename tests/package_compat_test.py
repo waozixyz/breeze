@@ -29,7 +29,7 @@ import urllib.request
 from PIL import Image, ImageStat
 
 ROOT = Path(__file__).resolve().parents[1]
-REPOSITORY = "waozixyz/inbe"
+REPOSITORY = "waozixyz/breeze"
 # (ledger name, app ID, local bundle, --feature name)
 PACKAGES = (
     ("inbe", "inbe", "build/inbe.zib", None),

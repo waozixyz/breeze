@@ -13,7 +13,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 APP_ID = "xyz.waozi.inbe"
-REPO = "https://github.com/waozixyz/inbe.git"
+REPO = "https://github.com/waozixyz/breeze.git"
 
 
 def run(*argv, **kwargs):
@@ -50,7 +50,7 @@ def main():
     build = dict(versionName=version, versionCode=code, commit=commit, **recipe)
     metadata = {
         "Categories": ["Sports & Health"], "License": "BSD-3-Clause",
-        "SourceCode": "https://github.com/waozixyz/inbe",
+        "SourceCode": "https://github.com/waozixyz/breeze",
         "AutoName": "Inner Breeze", "RepoType": "git", "Repo": REPO,
         "Builds": [build], "AutoUpdateMode": "Version", "UpdateCheckMode": "Tags",
         "CurrentVersion": version, "CurrentVersionCode": code,

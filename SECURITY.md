@@ -5,6 +5,6 @@ Inner Breeze version, platform, reproduction steps and expected impact.
 Use a disposable account or sample data when possible. Do not include private
 keys, API keys or other people's data.
 
-Use [GitHub Issues](https://github.com/waozixyz/inbe/issues) for ordinary bugs.
+Use [GitHub Issues](https://github.com/waozixyz/breeze/issues) for ordinary bugs.
 Please keep unpatched security details out of public reports while the issue
 is investigated.

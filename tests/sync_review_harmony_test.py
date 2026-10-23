@@ -43,7 +43,7 @@ class ReviewHostTest(AppControlTest):
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        wrapper = cls.projects / 'waozixyz/inbe/build/bin/linux/inbe-linux-x86_64'
+        wrapper = cls.projects / 'waozixyz/breeze/build/bin/linux/breeze-linux-x86_64'
         wrapper.write_text('#!/bin/sh\nexport APP_SHOT_WINDOW=1\nexec ' +
             shlex.quote(str(OUTPUT / 'inbe')) + ' --screenshot ' +
             shlex.quote(str(OUTPUT / 'fixture.png')) +

@@ -226,7 +226,7 @@ class MotoWorkflowGateTest(unittest.TestCase):
             return json.dumps(value)
 
         environment = {"SOURCE_COMMIT": commit, "VERIFIED_RUN": "123",
-                       "GITHUB_REPOSITORY": "waozixyz/inbe"}
+                       "GITHUB_REPOSITORY": "waozixyz/breeze"}
         with mock.patch.dict(os.environ, environment), \
                 mock.patch("subprocess.check_output", side_effect=response), \
                 contextlib.redirect_stdout(io.StringIO()):
@@ -291,7 +291,7 @@ class ReleaseArtifactReuseTest(unittest.TestCase):
         source = "1" * 40
         candidate = "2" * 40
         run = {"path": ".github/workflows/release.yml", "event": "push", "head_branch": "master",
-               "repository": {"full_name": "waozixyz/inbe"}, "head_sha": source}
+               "repository": {"full_name": "waozixyz/breeze"}, "head_sha": source}
         run.update(run_changes or {})
         if jobs is None:
             jobs = [{"name": name, "status": "completed", "conclusion": "success"}
@@ -333,7 +333,7 @@ class ReleaseArtifactReuseTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="inbe-reuse-gate-") as temporary:
             output = Path(temporary) / "output"
             environment = {"VERIFIED_RUN": run_id, "CANDIDATE": candidate,
-                           "GITHUB_REPOSITORY": "waozixyz/inbe", "GITHUB_OUTPUT": str(output)}
+                           "GITHUB_REPOSITORY": "waozixyz/breeze", "GITHUB_OUTPUT": str(output)}
             with mock.patch.dict(os.environ, environment), \
                     mock.patch("subprocess.check_output", side_effect=read) as reads, \
                     mock.patch("subprocess.run", side_effect=check) as commands, \

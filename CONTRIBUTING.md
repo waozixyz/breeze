@@ -1,7 +1,7 @@
 # Contributing to Inner Breeze
 
 Report a bug through Lumi's feedback card in the app or
-[GitHub Issues](https://github.com/waozixyz/inbe/issues). Include the app version,
+[GitHub Issues](https://github.com/waozixyz/breeze/issues). Include the app version,
 platform, steps to reproduce, what you expected, and what happened. Keep account
 keys, private conversations and personal practice data out of public reports.
 For a security issue, use [Security](SECURITY.md).
