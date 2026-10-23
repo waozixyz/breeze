@@ -22,6 +22,12 @@ def script(name):
 
 
 class PackageWorkflowTest(unittest.TestCase):
+    def test_package_runtime_fixture_repairs_start_the_workflow(self):
+        trigger = WORKFLOW.read_text().split("  push:\n", 1)[1].split("  workflow_dispatch:\n", 1)[0]
+        for path in ("tests/package_release_test.py", "tests/package_manager_host.c",
+                     "tests/package_manager_behavior.zi"):
+            self.assertIn("      - '" + path + "'", trigger)
+
     def test_private_node_configuration_is_masked_by_github(self):
         workflow = WORKFLOW.read_text()
         for name in ("INBE_NODE_KNOWN_HOSTS", "INBE_NODE_SSH_TARGET", "INBE_NODE_PACKAGE_STORE"):

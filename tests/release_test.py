@@ -253,6 +253,13 @@ class MotoWorkflowGateTest(unittest.TestCase):
 
 
 class ReleaseArtifactReuseTest(unittest.TestCase):
+    def test_test_repairs_start_the_release_pipeline(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        trigger = workflow.split("  push:\n", 1)[1].split("  workflow_dispatch:\n", 1)[0]
+        self.assertIn("      - 'tests/**'", trigger)
+        self.assertIn("      - 'mk/**'", trigger)
+        self.assertNotIn("      - '!mk/tests-*.mk'", trigger)
+
     def test_new_pushes_keep_the_fixed_source_ci_running(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text()
         concurrency = workflow.split("\nconcurrency:\n", 1)[1].split("\njobs:", 1)[0]
