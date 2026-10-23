@@ -18,6 +18,10 @@ release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
 
 
+REPOSITORY_CONFIG = (("maintenance.auto", "false"), ("user.email", "test@example.invalid"),
+                     ("user.name", "Test"))
+
+
 def git(root, *argv):
     return subprocess.run(["git", "-C", str(root), *argv], check=True, capture_output=True,
                           text=True).stdout
@@ -32,7 +36,10 @@ class ReleaseTest(unittest.TestCase):
         self.root = base / "inbe"
         git(base, "init", "-q", "--bare", "-b", "master", str(self.origin))
         git(base, "init", "-q", "-b", "master", str(self.root))
-        for key, value in (("user.email", "test@example.invalid"), ("user.name", "Test")):
+        # Commits and pushes otherwise start git maintenance in the background,
+        # which can still be writing while the temporary directory is removed.
+        git(self.origin, "config", "maintenance.auto", "false")
+        for key, value in REPOSITORY_CONFIG:
             git(self.root, "config", key, value)
         git(self.root, "remote", "add", "origin", str(self.origin))
         self.commit({".gitignore": "/build/\n", "src/main.zi": "one\n", "src/core/version.zi": "2.9.9\n", "docs/notes.md": "notes\n"},
@@ -151,7 +158,7 @@ class ReleaseTest(unittest.TestCase):
     def test_package_overrides_must_sit_clean_on_the_lock(self):
         package = self.root.parent / "kryon"
         git(self.root.parent, "init", "-q", str(package))
-        for key, value in (("user.email", "test@example.invalid"), ("user.name", "Test")):
+        for key, value in REPOSITORY_CONFIG:
             git(package, "config", key, value)
         (package / "ui.zi").write_text("one\n")
         git(package, "add", "ui.zi")

@@ -32,6 +32,9 @@ class PhoneCheckGateTest(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.git("init", "-q")
+        # Commits otherwise start git maintenance in the background, which can
+        # still be writing to .git while the temporary directory is removed.
+        self.git("config", "maintenance.auto", "false")
         self.git("config", "user.email", "test@example.invalid")
         self.git("config", "user.name", "Test")
         self.commit({"src/main.zi": "one\n", "src/core/version.zi": "VersionString :: \"2.9.9\"\n",
