@@ -203,10 +203,19 @@ with contextlib.ExitStack() as stack:
         return driver.wait(contains="Inactive habits", role="button")
 
     screen_pixels = [411, 760]
+
+    def seeded_order():
+        """The habits' order once the scene has created and seeded its tables."""
+        try:
+            return order()
+        except sqlite3.OperationalError:
+            return ""
+
     # The screenshot scene seeds its habits after the window and database
-    # appear; wait for the seed instead of assuming a fixed startup time.
-    wait_for(lambda: database.exists() and order() == ORDER,
-             lambda: f"initial order: got {order()!r}, expected {ORDER!r}")
+    # appear, and the file exists before its tables do; wait for the seed
+    # instead of assuming a fixed startup time.
+    wait_for(lambda: database.exists() and seeded_order() == ORDER,
+             lambda: f"initial order: got {seeded_order()!r}, expected {ORDER!r}")
     driver.wait(contains="Inactive habits", role="button")
 
     # Opening a habit's details or the inactive habits never makes a scrollbar
