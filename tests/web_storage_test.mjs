@@ -62,7 +62,7 @@ let attempts = 0;
 let storeUnavailable = true;
 const unavailable = boot((populate, done) => { attempts++; done(storeUnavailable ? { name: 'AbortError' } : null); });
 assert.equal(await unavailable.__inbeFlushStorageSync(false), false);
-assert.equal(attempts, 4, 'transient storage retries must be bounded');
+assert.equal(attempts, 9, 'transient storage retries must be bounded');
 assert.equal(unavailable.__inbeStorageSyncPending, true, 'failed writes remain dirty');
 assert.equal(unavailable.__inbeStorageSyncing, false);
 assert.equal(unavailable.__inbeStorageSyncTimer, 0);

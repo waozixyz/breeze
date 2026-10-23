@@ -68,6 +68,8 @@ def plan(files):
     python = [path for path in files if path.endswith(".py") and (ROOT / path).is_file()]
     if python:
         checks.append(("Python syntax", ["python3", "-m", "py_compile", *python]))
+    if any_of("src/web_boot.js", "tests/web_storage_test.mjs"):
+        checks.append(("web storage", ["node", "tests/web_storage_test.mjs"]))
     scripts = [path for path in files if path.endswith((".js", ".mjs")) and (ROOT / path).is_file()]
     for path in scripts:
         checks.append((path + " syntax", ["node", "--check", path]))
