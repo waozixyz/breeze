@@ -104,6 +104,12 @@ sun-salutation-pose-test: $(ZI2C_BIN)
 
 test: sun-salutation-pose-test
 
+.PHONY: sun-salutation-artwork-test
+sun-salutation-artwork-test: $(ZI2C_BIN)
+	sh tests/practice_figure_test.sh $(ZIRAN_BUILD_DIR)/bin tests/sun_salutation_artwork_behavior.zi
+
+test: sun-salutation-artwork-test
+
 practice-narration-keys-test:
 	python3 tests/practice_narration_keys_test.py
 

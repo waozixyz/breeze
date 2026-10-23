@@ -103,6 +103,12 @@ TaiChiFlatLook :: struct {
     sash_to: [TAI_CHI_FLAT_SASH_CAPACITY]float64
     sash_color: [TAI_CHI_FLAT_SASH_CAPACITY]u32
     limbs: float64
+    // Rounded buttocks that run into the thighs, rather than one ball.
+    glutes: bool
+    // Hand size, foot length and foot thickness as shares of the usual.
+    hand_size: float64
+    foot_length: float64
+    foot_depth: float64
     neck: float64
     head_scale: float64
     blush_alpha: float64
@@ -230,6 +236,9 @@ TaiChiFlatLookNamed :: (id: string) -> TaiChiFlatLook {
     look: TaiChiFlatLook
     look.collar_width = 0.006
     look.limbs = 1.0
+    look.hand_size = 1.0
+    look.foot_length = 1.0
+    look.foot_depth = 1.0
     TaiChiFlatLegs(*look, false)
     look.accent = 0xf2a65e
     if id == "indigoMan" {
@@ -893,14 +902,20 @@ TaiChiFlatLegFor :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved, side: s
     TaiChiFlatSphere(painter, *scratch, ankle, 0.0185 * height)
     TaiChiFlatSphere(painter, *scratch, TaiChiAddScaled3(ankle, up, 0.045 * height), 0.0175 * height)
     leg.ankle = TaiChiFlatHull(painter.frame, *scratch)
-    // The bare foot: heel, ball and toes sit on the sole.
+    // The bare foot: heel, ball and toes sit on the sole. A shorter foot
+    // shrinks toward the sole under the ankle, which stays where it stands.
     foot_up := TaiChiAxis(solved.foot_quats[side], 0.0, 1.0, 0.0)
     toes_up := TaiChiAxis(solved.toes_quats[side], 0.0, 1.0, 0.0)
+    under := TaiChiLerp3(solved.heels[side], solved.balls[side], 0.26)
+    heel := TaiChiLerp3(under, solved.heels[side], look.foot_length)
+    ball := TaiChiLerp3(under, solved.balls[side], look.foot_length)
+    toes := TaiChiAddScaled3(ball, TaiChiSub3(solved.toes[side], solved.balls[side]), look.foot_length)
+    depth := look.foot_depth * height
     scratch.count = 0
-    TaiChiFlatSphere(painter, *scratch, ankle, 0.02 * height)
-    TaiChiFlatSphere(painter, *scratch, TaiChiAddScaled3(solved.heels[side], foot_up, 0.019 * height), 0.019 * height)
-    TaiChiFlatSphere(painter, *scratch, TaiChiAddScaled3(solved.balls[side], foot_up, 0.021 * height), 0.021 * height)
-    TaiChiFlatSphere(painter, *scratch, TaiChiAddScaled3(solved.toes[side], toes_up, 0.013 * height), 0.013 * height)
+    TaiChiFlatSphere(painter, *scratch, ankle, 0.02 * depth)
+    TaiChiFlatSphere(painter, *scratch, TaiChiAddScaled3(heel, foot_up, 0.019 * depth), 0.019 * depth)
+    TaiChiFlatSphere(painter, *scratch, TaiChiAddScaled3(ball, foot_up, 0.021 * depth), 0.021 * depth)
+    TaiChiFlatSphere(painter, *scratch, TaiChiAddScaled3(toes, toes_up, 0.013 * depth), 0.013 * depth)
     leg.foot = TaiChiFlatHull(painter.frame, *scratch)
     leg.depth = (TaiChiFlatDepth(painter, hip) + TaiChiFlatDepth(painter, knee) + TaiChiFlatDepth(painter, ankle)) / 3.0
     return leg
@@ -932,11 +947,12 @@ TaiChiFlatHand :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved, side: s32
     hook := solved.hand_shapes[side][2]
     wrist_point := solved.wrists[side]
     wrist := TaiChiFlatProject(painter, wrist_point)
-    tip := TaiChiFlatProject(painter, TaiChiAddScaled3(wrist_point, fingers, painter.hand_length))
+    tip := TaiChiFlatProject(painter, TaiChiAddScaled3(wrist_point, fingers,
+        painter.hand_length * painter.look.hand_size))
     reach := 1.0 - 0.42 * fist - 0.25 * hook
     along := TaiChiV2((tip.x - wrist.x) * reach, (tip.y - wrist.y) * reach)
     open := TaiChiAbs(TaiChiDot3(palm_normal, painter.view.toward))
-    half := (0.0125 + (0.023 - 0.0125) * open) * height * painter.look.limbs
+    half := (0.0125 + (0.023 - 0.0125) * open) * height * painter.look.limbs * painter.look.hand_size
     scratch: TaiChiFlatScratch
     TaiChiFlatCircle(*scratch, wrist, half * 0.8)
     TaiChiFlatCircle(*scratch, TaiChiAdd2(wrist, TaiChiScale2(along, 0.38)), half)
@@ -1463,10 +1479,32 @@ TaiChiFlatPaintLook :: (frame: *TaiChiFlatFrame, solved: *TaiChiSolved, rig: *Ta
     TaiChiFlatLoft(*painter, *spine, bottom, top, TAI_CHI_FLAT_CLIP_STATIONS, 0, clips[:])
     scratch: TaiChiFlatScratch
     pelvis_up := TaiChiAxis(solved.pelvis_quat, 0.0, 1.0, 0.0)
-    TaiChiFlatSphere(*painter, *scratch, solved.hips[0], 0.05 * height * painter.look.limbs)
-    TaiChiFlatSphere(*painter, *scratch, solved.hips[1], 0.05 * height * painter.look.limbs)
-    TaiChiFlatSphere(*painter, *scratch, TaiChiAddScaled3(spine.hip_center, pelvis_up, -0.03 * height), 0.04 * height * painter.look.limbs)
-    seat := TaiChiFlatHull(frame, *scratch)
+    seat_k := height * painter.look.limbs
+    seats: [2]TaiChiFlatShape
+    seat_count: s32 = 1
+    if painter.look.glutes {
+        // Each buttock rounds back from its hip and on down into its own
+        // thigh, so a bent hip shows a seat rather than a ball.
+        pelvis_back := TaiChiAxis(solved.pelvis_quat, 0.0, 0.0, -1.0)
+        for side: cast(s32)0..1 {
+            hip := solved.hips[side]
+            glute := TaiChiAddScaled3(TaiChiAddScaled3(hip, pelvis_back, 0.022 * height), pelvis_up, -0.03 * height)
+            scratch.count = 0
+            TaiChiFlatSphere(*painter, *scratch, hip, 0.05 * seat_k)
+            TaiChiFlatSphere(*painter, *scratch, glute, 0.046 * seat_k)
+            TaiChiFlatSphere(*painter, *scratch, TaiChiLerp3(hip, solved.knees[side], 0.3),
+                painter.look.leg_thigh[1] * seat_k)
+            TaiChiFlatSphere(*painter, *scratch, TaiChiAddScaled3(spine.hip_center, pelvis_up, -0.03 * height),
+                0.04 * seat_k)
+            seats[side] = TaiChiFlatHull(frame, *scratch)
+        }
+        seat_count = 2
+    } else {
+        TaiChiFlatSphere(*painter, *scratch, solved.hips[0], 0.05 * seat_k)
+        TaiChiFlatSphere(*painter, *scratch, solved.hips[1], 0.05 * seat_k)
+        TaiChiFlatSphere(*painter, *scratch, TaiChiAddScaled3(spine.hip_center, pelvis_up, -0.03 * height), 0.04 * seat_k)
+        seats[0] = TaiChiFlatHull(frame, *scratch)
+    }
     head := TaiChiFlatHeadFor(*painter, solved)
     scratch.count = 0
     TaiChiFlatSphere(*painter, *scratch, solved.neck_base, painter.look.neck * height)
@@ -1481,7 +1519,9 @@ TaiChiFlatPaintLook :: (frame: *TaiChiFlatFrame, solved: *TaiChiSolved, rig: *Ta
             TaiChiFlatArmPaint(*painter, *arms[side], no_clips)
         }
     }
-    TaiChiFlatFill(*painter, seat, palette.pants, 1.0)
+    for index: cast(s32)0..seat_count - 1 {
+        TaiChiFlatFill(*painter, seats[index], palette.pants, 1.0)
+    }
     // The farther leg first.
     far_first := ifx legs[0].depth <= legs[1].depth then 0 else 1
     TaiChiFlatLegPaint(*painter, *legs[far_first])

@@ -3,6 +3,7 @@
 #import, file "sun_salutation_pose.zi";
 #import, file "sun_salutation_rules.zi";
 #import, file "../../../apps/practice/workout_moves.zi";
+#import, file "../../../apps/practice/sun_salutation_artwork.zi";
 #import, file "../tai_chi/tai_chi_math.zi";
 #import, file "../tai_chi/tai_chi_solve.zi";
 #import, file "../tai_chi/tai_chi_flat.zi";
@@ -11,54 +12,7 @@
 #import, file "../tai_chi/tai_chi_view.zi";
 
 SUN_SALUTATION_EDGE_PATH :: "assets/practices/sunsalutation/flat-edge.png"
-// Camera turns in degrees, as in the classic sequence charts: prayer and the
-// last upward salute face the viewer, and every other pose is seen from the
-// side so the angles of the back, arms and legs read clearly.
-SUN_SALUTATION_FRONT_YAW :: 0.0
-SUN_SALUTATION_SIDE_YAW :: -90.0
-// The width in metres the view keeps clear: standing poses fill the page, and
-// the view widens for the poses on the floor.
-SUN_SALUTATION_STANDING_SPAN :: 1.3
-SUN_SALUTATION_FLOOR_SPAN :: 2.2
-// Where along the mat the view is centred, in metres forward: on her when
-// she stands, and between her hands and feet when she is on the floor.
-SUN_SALUTATION_STANDING_CENTER :: 0.25
-SUN_SALUTATION_FLOOR_CENTER :: -0.08
 sun_salutation_figure: TaiChiFlatFrame;
-
-// Where the camera stands for a pose: its turn in degrees and the width it
-// keeps in view.
-SunSalutationView :: struct {
-    yaw: float64
-    span: float64
-    center: float64
-}
-
-SunSalutationStepView :: (step: s32) -> SunSalutationView {
-    view := SunSalutationView.{.yaw = SUN_SALUTATION_SIDE_YAW, .span = SUN_SALUTATION_FLOOR_SPAN,
-        .center = SUN_SALUTATION_FLOOR_CENTER}
-    if step == 0 || step == SUN_SALUTATION_STEP_COUNT - 2 || step == SUN_SALUTATION_STEP_COUNT - 1 {
-        view.yaw = SUN_SALUTATION_FRONT_YAW
-    }
-    if step <= 2 || step >= SUN_SALUTATION_STEP_COUNT - 3 {
-        view.span = SUN_SALUTATION_STANDING_SPAN
-        view.center = SUN_SALUTATION_STANDING_CENTER
-    }
-    return view
-}
-
-// The camera turns and widens with the move into each step.
-SunSalutationViewAt :: (state: SunSalutationPracticeState) -> SunSalutationView {
-    to := SunSalutationStepView(state.step)
-    if state.step <= 0 {
-        return to
-    }
-    from := SunSalutationStepView(state.step - 1)
-    amount := SunSalutationTransition(state)
-    return SunSalutationView.{.yaw = from.yaw + (to.yaw - from.yaw) * amount,
-        .span = from.span + (to.span - from.span) * amount,
-        .center = from.center + (to.center - from.center) * amount}
-}
 
 SunSalutationDrawState :: (session: Session, state: SunSalutationPracticeState,
     area: Rectangle, key: u64, alt_text: string) {
@@ -79,22 +33,8 @@ SunSalutationDrawPose :: (session: Session, character: s32, pose: WorkoutPose, v
     if area.width <= 0.0 || area.height <= 0.0 {
         return
     }
-    rig := WorkoutRig()
-    solved := WorkoutSolve(*pose, *rig)
-    framing: TaiChiFraming
-    framing.camera.yaw = view.yaw * TAI_CHI_DEGREE
-    framing.camera.tilt = 6.0 * TAI_CHI_DEGREE
-    framing.camera.center = TaiChiV3(0.0, 0.0, view.center)
-    framing.view_height = 2.35
-    framing.view_center = 1.02
-    across := framing.view_height * cast(float64)area.width / cast(float64)area.height
-    if across < view.span {
-        framing.view_height *= view.span / across
-    }
-    look := TaiChiFlatLookNamed(ifx character == SUN_SALUTATION_MAN then "indigoMan" else "jadeWoman")
-    // His top is a plain sweater, as in the classic sequence charts.
-    look.plain_top = character == SUN_SALUTATION_MAN
-    TaiChiFlatPaintLook(*sun_salutation_figure, *solved, *rig, look, framing.camera)
+    framing := SunSalutationPaintPose(*sun_salutation_figure, character, pose, view,
+        cast(float64)area.width, cast(float64)area.height)
     TaiChiPaintFlatEdge(session, *sun_salutation_figure, framing, false, area, key,
         alt_text, SUN_SALUTATION_EDGE_PATH)
 }

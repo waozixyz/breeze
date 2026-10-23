@@ -1,10 +1,15 @@
 // The classic sequence on the same articulated body as Tai Chi and Workout.
 // Positions preserve the original yoga choreography in metres, with +Y up
 // and +Z forward. The two lunges exchange legs on alternating rounds.
+#import "math"
 #import, file "sun_salutation_rules.zi";
 #import, file "../../../apps/practice/workout_moves.zi";
 #import, file "../tai_chi/tai_chi_math.zi";
 #import, file "../tai_chi/tai_chi_solve.zi";
+
+// Hands flat on the floor, the elbows point back along the ribs and a
+// little up, never down into the floor when the chest lowers between them.
+SUN_SALUTATION_ELBOW_RISE :: 0.6
 
 // A forward fold turns the pelvis through a half turn. Joint directions
 // must stay in the body's sagittal plane instead of following that turn;
@@ -17,10 +22,14 @@ SunSalutationJointPlanes :: (pose: WorkoutPose) -> WorkoutPose {
         knee := TaiChiRotate(TaiChiV3(sign * 0.025, 0.0, 1.0),
             WorkoutConjugate(trunk.pelvis_quat))
         pose.knees[side] = TaiChiV3(sign * knee.x, knee.y, knee.z)
-        if pose.hands[side].flat > 0.0 {
-            elbow := TaiChiRotate(TaiChiV3(sign * 0.08, 0.0, -1.0),
+        // As the hands come down flat the elbows turn into that plane by the
+        // same share, so they never flip from one frame to the next.
+        flat := pose.hands[side].flat
+        if flat > 0.0 {
+            elbow := TaiChiRotate(TaiChiV3(sign * 0.08, SUN_SALUTATION_ELBOW_RISE, -1.0),
                 WorkoutConjugate(trunk.chest_quat))
-            pose.hands[side].pole = TaiChiV3(sign * elbow.x, elbow.y, elbow.z)
+            pose.hands[side].pole = TaiChiLerp3(pose.hands[side].pole,
+                TaiChiV3(sign * elbow.x, elbow.y, elbow.z), flat)
         }
     }
     return pose
@@ -29,12 +38,20 @@ SunSalutationJointPlanes :: (pose: WorkoutPose) -> WorkoutPose {
 SunSalutationPose :: (step: s32, other_side: bool) -> WorkoutPose {
     step = SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
     pose := WorkoutStanding()
+    // Standing tall: the legs straight, just short of the rig's full reach.
+    pose.pelvis.y = SUN_SALUTATION_STANDING_PELVIS
     pose.pelvis.z = 0.284
     WorkoutFeet(*pose, 0.075, 0.301, 0.0, 0.0, 0.0)
     // Prayer: palms together upright before the chest, elbows low and out,
     // so seen from the front the forearms rise to meet like a steeple.
     WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.012, 1.26, 0.5)
     WorkoutElbows(*pose, 0.7, -0.7, 0.1)
+    pose.hands[0].upright = 1.0
+    pose.hands[1].upright = 1.0
+    if step != 0 && step != SUN_SALUTATION_STEP_COUNT - 1 {
+        pose.hands[0].upright = 0.0
+        pose.hands[1].upright = 0.0
+    }
     if step == 1 {
         // On the way up the salute arches back: hips forward, chest open,
         // arms reaching up and back, eyes following the hands.
@@ -48,59 +65,147 @@ SunSalutationPose :: (step: s32, other_side: bool) -> WorkoutPose {
         WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.17, 0.055, 0.447)
         WorkoutFlatHands(*pose, 1.0)
     } else if step == 3 || step == 8 {
-        WorkoutBody(*pose, 0.0, 0.45, -0.086, 0.0, 63.0, 0.0, 0.0, 0.0, -70.0)
+        // The back knee down, low enough over the front thigh that the hands
+        // rest flat on the floor.
+        WorkoutBody(*pose, 0.0, 0.45, -0.086, 0.0, 73.0, 0.0, 0.0, 0.0, -79.0)
         WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.17, 0.055, 0.447)
         WorkoutFlatHands(*pose, 1.0)
         WorkoutFoot(*pose, 0, 0.075, 0.301, 0.0, 0.0, 0.0)
-        WorkoutFoot(*pose, 1, -0.075, -0.783, 0.0, -75.0, 0.0)
+        WorkoutFoot(*pose, 1, -0.075, SUN_SALUTATION_BACK_FOOT, 0.0, -75.0, 0.0)
         if (step == 8) != other_side {
             pose = WorkoutMirror(pose)
         }
     } else if step == 4 {
-        pose = WorkoutPushUp(false)
+        // Plank on the same spots as the lunge and the lowering around it,
+        // so nothing slides: the front foot steps back beside the other, the
+        // body long with the knees just soft and the shoulders a little
+        // ahead of the hands, ready to lower.
+        WorkoutBody(*pose, 0.0, 0.415, 0.18, 0.0, 71.0, 0.0, 0.0, 0.0, -12.0)
+        WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.17, 0.055, 0.447)
+        WorkoutElbows(*pose, 0.55, -0.7, -0.35)
+        WorkoutFlatHands(*pose, 1.0)
+        WorkoutFeet(*pose, 0.075, SUN_SALUTATION_BACK_FOOT, 0.0, -75.0, 0.0)
     } else if step == 5 {
         // Shift the chest forward over the planted hands before lowering;
         // hands ahead of the chest force the elbows to point forwards.
         WorkoutBody(*pose, 0.0, 0.31, 0.094, 0.0, 116.0, 0.0, 0.0, 0.0, -96.0)
         WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.17, 0.055, 0.447)
         WorkoutFlatHands(*pose, 1.0)
-        WorkoutFeet(*pose, 0.075, -0.783, 0.0, -75.0, 0.0)
+        WorkoutFeet(*pose, 0.075, SUN_SALUTATION_BACK_FOOT, 0.0, -75.0, 0.0)
     } else if step == 6 {
         // Cobra lifts the chest high on long arms, looking ahead and up.
-        WorkoutBody(*pose, 0.0, 0.14, 0.082, 0.0, 46.0, 0.0, 0.0, -14.0, -72.0)
+        WorkoutBody(*pose, 0.0, 0.135, 0.042, 0.0, 46.0, 0.0, 0.0, -14.0, -72.0)
         WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.17, 0.055, 0.447)
         WorkoutFlatHands(*pose, 1.0)
-        WorkoutFeet(*pose, 0.075, -0.774, 0.0, 0.0, 0.0)
+        WorkoutFeet(*pose, 0.075, SUN_SALUTATION_BACK_FOOT + 0.009, 0.0, 0.0, 0.0)
     } else if step == 7 {
-        WorkoutBody(*pose, 0.0, 0.744, -0.258, 0.0, 132.0, 0.0, 0.0, 0.0, -22.0)
+        WorkoutBody(*pose, 0.0, 0.744, -0.268, 0.0, 132.0, 0.0, 0.0, 0.0, -22.0)
         WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.17, 0.055, 0.447)
         WorkoutFlatHands(*pose, 1.0)
-        WorkoutFeet(*pose, 0.075, -0.783, 0.0, -22.0, 0.0)
+        WorkoutFeet(*pose, 0.075, SUN_SALUTATION_BACK_FOOT, 0.0, -22.0, 0.0)
     }
     return SunSalutationJointPlanes(pose)
 }
 
-// How far the move into the current step has come, eased: 0 as the step
-// begins and 1 once its pose is reached. The first step has no move.
-SunSalutationTransition :: (state: SunSalutationPracticeState) -> float64 {
-    if state.step <= 0 {
-        return 1.0
-    }
-    transition := SUN_SALUTATION_TRANSITION_SECONDS * 60
+// Where the feet stand on the floor from the lunge's back foot through
+// Down Dog: one spot, so they never slide between poses.
+SUN_SALUTATION_BACK_FOOT :: -0.783
+// The pelvis height that leaves her legs straight in Mountain pose.
+SUN_SALUTATION_STANDING_PELVIS :: 0.904
+// The body leads each move, the arms follow and the head comes last, as
+// shares of the move, so the figure never starts and stops as one block.
+SUN_SALUTATION_ARMS_LAG :: 0.08
+SUN_SALUTATION_HEAD_LAG :: 0.16
+// How high a stepping foot lifts at most, metres.
+SUN_SALUTATION_STEP_LIFT :: 0.12
+// On the step back into plank the hips pike up to let the front leg pass
+// under them, turning about the shoulders so the hands stay planted:
+// degrees of extra lean, and the pelvis's rise and shift back in metres.
+SUN_SALUTATION_PLANK_PIKE :: 10.0
+SUN_SALUTATION_PLANK_RISE :: 0.081
+SUN_SALUTATION_PLANK_BACK :: 0.022
+// While holding a pose the chest opens this far with each breath, degrees.
+SUN_SALUTATION_BREATH_CURL :: 2.0
+SUN_SALUTATION_BREATH_NOD :: 1.5
+
+// How long the move into a step takes, in ticks.
+SunSalutationMoveTicks :: (state: SunSalutationPracticeState) -> s32 {
+    transition: s32 = SUN_SALUTATION_TRANSITION_SECONDS * 60
     breath := SalutationBreathSeconds(state) * 60
     if transition > breath * 3 / 4 {
         transition = breath * 3 / 4
     }
-    amount := TaiChiClamp(cast(float64)state.step_ticks / cast(float64)transition, 0.0, 1.0)
-    return TaiChiSmoothstep(amount)
+    return transition
+}
+
+// How far the move into the current step has come: 0 as the step begins
+// and 1 once its pose is reached. The first step has no move.
+SunSalutationProgress :: (state: SunSalutationPracticeState) -> float64 {
+    if state.step <= 0 {
+        return 1.0
+    }
+    return TaiChiClamp(cast(float64)state.step_ticks / cast(float64)SunSalutationMoveTicks(state), 0.0, 1.0)
+}
+
+// The same, eased; the camera turns and widens along it.
+SunSalutationTransition :: (state: SunSalutationPracticeState) -> float64 {
+    return TaiChiSmoothstep(SunSalutationProgress(state))
+}
+
+// How far one part of the body has come, starting `lag` into the move and
+// still arriving with the rest.
+SunSalutationPartAmount :: (progress: float64, lag: float64) -> float64 {
+    return TaiChiSmoothstep(TaiChiClamp((progress - lag) / (1.0 - SUN_SALUTATION_HEAD_LAG), 0.0, 1.0))
+}
+
+// Holding a pose she keeps breathing: the chest opens and the chin lifts
+// a little with each breath, from stillness to stillness, so a hold never
+// freezes her and the next move starts from rest.
+SunSalutationBreathe :: (pose: *WorkoutPose, state: SunSalutationPracticeState) {
+    start := ifx state.step <= 0 then 0 else SunSalutationMoveTicks(state)
+    length := SalutationStepSeconds(state) * 60 - start
+    held := state.step_ticks - start
+    if length <= 0 || held <= 0 || held >= length {
+        return
+    }
+    breaths := TaiChiMax(1.0, cast(float64)((length + 120) / 240))
+    swell := Sin(TAI_CHI_PI * breaths * cast(float64)held / cast(float64)length)
+    swell *= swell
+    pose.curl -= SUN_SALUTATION_BREATH_CURL * swell
+    pose.head -= SUN_SALUTATION_BREATH_NOD * swell
 }
 
 SunSalutationPoseAt :: (state: SunSalutationPracticeState, rig: *TaiChiRig) -> WorkoutPose {
     other_side := SalutationOtherSide(state)
     to := SunSalutationPose(state.step, other_side)
     if state.step <= 0 {
+        SunSalutationBreathe(*to, state)
         return to
     }
     from := SunSalutationPose(state.step - 1, other_side)
-    return SunSalutationJointPlanes(WorkoutBlend(*from, *to, SunSalutationTransition(state), rig))
+    progress := SunSalutationProgress(state)
+    body := SunSalutationPartAmount(progress, 0.0)
+    pose := WorkoutBlend(*from, *to, body, rig)
+    // A foot that steps to a new place lifts clear of the floor on the way,
+    // highest halfway, instead of sliding along it.
+    for side: cast(s32)0..1 {
+        travel := TaiChiHypot(to.feet[side].x - from.feet[side].x, to.feet[side].z - from.feet[side].z)
+        if travel > 0.05 {
+            arc := Sin(TAI_CHI_PI * body)
+            pose.feet[side].lift += TaiChiMin(SUN_SALUTATION_STEP_LIFT, travel * 0.15) * arc * arc
+        }
+    }
+    if state.step == 4 {
+        arc := Sin(TAI_CHI_PI * body)
+        pose.lean += SUN_SALUTATION_PLANK_PIKE * arc * arc
+        pose.pelvis.y += SUN_SALUTATION_PLANK_RISE * arc * arc
+        pose.pelvis.z -= SUN_SALUTATION_PLANK_BACK * arc * arc
+    }
+    arms := WorkoutBlend(*from, *to, SunSalutationPartAmount(progress, SUN_SALUTATION_ARMS_LAG), rig)
+    for side: cast(s32)0..1 {
+        pose.hands[side] = arms.hands[side]
+    }
+    pose.head = WorkoutLerpAngle(from.head, to.head, SunSalutationPartAmount(progress, SUN_SALUTATION_HEAD_LAG))
+    SunSalutationBreathe(*pose, state)
+    return SunSalutationJointPlanes(pose)
 }
