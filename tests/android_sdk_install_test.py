@@ -148,6 +148,9 @@ shutil.copytree(root / 'download/cmake', stage / 'cmake')
 
     def test_release_builds_start_early_but_publication_keeps_all_gates(self):
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        triggers = workflow.split("  workflow_dispatch:", 1)[0]
+        for path in (".github/android-sdk-packages.txt", ".github/scripts/**", ".github/apt/**"):
+            self.assertIn("      - '" + path + "'", triggers)
         publication = workflow.split("\n  release:\n", 1)[1].split("\n    outputs:", 1)[0]
         self.assertIn("      - test", publication.splitlines())
         self.assertIn("      - verify-fdroid", publication.splitlines())
