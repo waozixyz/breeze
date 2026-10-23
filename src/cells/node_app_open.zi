@@ -1,0 +1,240 @@
+// One owned read and parser job keeps package work away from animation frames.
+// Cancellation retains the source bytes until both workers have completed.
+#import "apps/preparation"
+#import "std/c_string"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import, file "node_apps.zi";
+#import, file "node_app_runner.zi";
+#import, file "node_app_tree.zi";
+#import, file "node_app_snapshot.zi";
+#import, file "package_work.zi";
+#import, file "package_manager.zi";
+#import, file "package_files.zi";
+#import, file "package_release.zi";
+#import, file "catalog.zi";
+
+node_open_work: *PackageWork;
+node_open_preparation: *AppPreparation;
+node_open_slot: s32 = -1;
+node_open_revision: s32;
+node_open_local: bool;
+node_open_canceled: bool;
+node_open_rejected: bool;
+node_open_requested: [NodeAppSlots]bool;
+node_open_failed: [NodeAppSlots]bool;
+node_open_failed_revision: [NodeAppSlots]s32;
+node_open_account: [65]u8;
+
+NodeOpenDiscard :: () -> bool {
+    if node_open_work == null {
+        return true
+    }
+    if !PackageWorkReady(node_open_work) || !AppPreparationClose(node_open_preparation) {
+        return false
+    }
+    node_open_preparation = null
+    PackageWorkFree(node_open_work)
+    node_open_work = null
+    node_open_slot = -1
+    node_open_canceled = false
+    node_open_rejected = false
+    return true
+}
+
+NodeOpenObserveAccount :: () {
+    account := NodeTreeAccount()
+    if TextUntilNul(node_open_account[:]) == account {
+        return
+    }
+    for slot: cast(s32)0..NodeAppSlots - 1 {
+        node_open_requested[slot] = false
+        node_open_failed[slot] = false
+    }
+    node_open_canceled = node_open_work != null
+    unused CopyCString(account, node_open_account[:])
+}
+
+NodeAppOpening :: (slot: s32) -> bool {
+    return slot >= 0 && slot < NodeAppSlots &&
+    (node_open_requested[slot] || (node_open_work != null &&
+        node_open_slot == slot && !node_open_canceled))
+}
+
+NodeOpenQueue :: (slot: s32, replacement: bool = false) -> bool {
+    NodeOpenObserveAccount()
+    if slot < 0 || slot >= NodeAppSlots || NodeAppName(slot).count == 0 {
+        return false
+    }
+    if (!replacement && NodeAppRunning(slot)) || NodeAppOpening(slot) {
+        return true
+    }
+    if node_open_failed[slot] &&
+    node_open_failed_revision[slot] != PackageRevisionFor(NodeAppIndex(slot)) {
+        node_open_failed[slot] = false
+    }
+    if node_open_failed[slot] ||
+    (!replacement && !NodeAppLocal(NodeAppName(slot)) && !PackageAvailable(NodeAppIndex(slot))) {
+        return false
+    }
+    node_open_requested[slot] = true
+    return true
+}
+
+NodeOpenCancel :: (slot: s32) -> bool {
+    node_open_requested[slot] = false
+    node_open_failed[slot] = false
+    if node_open_work == null || node_open_slot != slot {
+        return true
+    }
+    node_open_canceled = true
+    return NodeOpenDiscard()
+}
+
+NodeOpenCurrent :: () -> bool {
+    return node_open_work != null && node_open_slot >= 0 &&
+    node_open_work.account == NodeTreeAccount() &&
+    node_open_work.identity == NodeAppName(node_open_slot) &&
+    node_open_revision == PackageRevisionFor(NodeAppIndex(node_open_slot)) &&
+    node_open_local == NodeAppLocal(NodeAppName(node_open_slot))
+}
+
+NodeOpenBegin :: (slot: s32) -> bool {
+    index := NodeAppIndex(slot)
+    local := NodeAppLocal(NodeAppName(slot))
+    release: PackageRelease
+    if !local {
+        release = PackageInstalledRelease(index)
+    }
+    if !local && !release.valid {
+        return false
+    }
+    path := ""
+    if local {
+        path = PackageText(TextUntilNul(node_local_path[:]), "")
+    } else {
+        path = PackagePayloadPath(index, TextUntilNul(release.hash[:]))
+    }
+    work := PackageWorkCreate(path, "", NodeTreeAccount(), NodeAppName(slot), release, !local)
+    PackageFree(path)
+    if work == null {
+        return false
+    }
+    node_open_work = work
+    node_open_slot = slot
+    node_open_revision = PackageRevisionFor(index)
+    node_open_local = local
+    return true
+}
+
+NodeOpenFail :: (repair_payload: bool = false) {
+    slot := node_open_slot
+    if NodeOpenCurrent() {
+        node_open_failed[slot] = true
+        node_open_failed_revision[slot] = node_open_revision
+        node_runners[slot].reload_pending = false
+        was_local := NodeAppLocal(NodeAppName(slot))
+        NodeAppLocalFailed(slot)
+        if (repair_payload || was_local) && !NodeAppLocal(NodeAppName(slot)) &&
+        NodeAppMarked(NodeAppName(slot)) {
+            PackageRequest(NodeAppIndex(slot))
+        }
+    }
+    node_open_canceled = true
+    unused NodeOpenDiscard()
+}
+
+NodeOpenActivate :: () -> bool {
+    slot := node_open_slot
+    digest := TextUntilNul(node_open_work.digest[:])
+    runner := *node_runners[slot]
+    if !NodeAppStart(runner, node_open_work.bytes, digest, node_open_preparation) ||
+    (runner.nested == null && !NodeAppAssetsValid(runner.app.bundle, NodeAppName(slot))) ||
+    (!NodeInstalledCurrent(slot, digest) && !NodeInstalledScanStart(slot)) {
+        return false
+    }
+    unused CopyCString(digest, runner.release_hash[:])
+    runner.checked_revision = node_open_revision
+    return true
+}
+
+// Polling does not join an unfinished worker. A ready replacement also waits
+// for the old app's save boundary before it can take over the visible slot.
+NodeOpenPump :: (activate: bool) -> bool {
+    NodeOpenObserveAccount()
+    if node_open_work == null {
+        for slot: cast(s32)0..NodeAppSlots - 1 {
+            if !node_open_requested[slot] {
+                continue
+            }
+            node_open_requested[slot] = false
+            if !NodeOpenBegin(slot) {
+                node_open_failed[slot] = true
+                node_open_failed_revision[slot] = PackageRevisionFor(NodeAppIndex(slot))
+            }
+            return true
+        }
+        return false
+    }
+    if node_open_canceled || !NodeOpenCurrent() {
+        if !node_open_canceled && node_open_work.account == NodeTreeAccount() &&
+        node_open_work.identity == NodeAppName(node_open_slot) {
+            node_open_requested[node_open_slot] = true
+        }
+        node_open_canceled = true
+        unused NodeOpenDiscard()
+        return true
+    }
+    if node_open_rejected {
+        if NodeAppCloseRuntime(node_open_slot) {
+            NodeOpenFail()
+        }
+        return true
+    }
+    if !PackageWorkReady(node_open_work) {
+        return true
+    }
+    if !node_open_work.ok {
+        NodeOpenFail(true)
+        return true
+    }
+    if node_open_preparation == null {
+        node_open_preparation = AppPrepare(node_open_work.bytes,
+            TextUntilNul(node_open_work.digest[:]), PackageID(NodeAppIndex(node_open_slot)))
+        if node_open_preparation == null {
+            NodeOpenFail()
+        }
+        return true
+    }
+    if !AppPreparationReady(node_open_preparation) || !activate {
+        return true
+    }
+    if !node_open_preparation.valid {
+        NodeOpenFail()
+        return true
+    }
+    slot := node_open_slot
+    index := NodeAppIndex(slot)
+    if AppPreparationAsset(node_open_preparation.bundle, "assets/apps/catalog.json").count == 0 &&
+    !NodeAppAssetsValid(node_open_preparation.bundle, NodeAppName(slot)) {
+        NodeOpenFail()
+        return true
+    }
+    if !node_open_local && !PackageReleaseTrialAllows(index, node_open_work.release) {
+        NodeOpenFail()
+        return true
+    }
+    if !NodeAppCloseRuntime(slot) {
+        return true
+    }
+    if !node_open_local {
+        package_cached_releases[index] = node_open_work.release
+        unused CopyCString(TextUntilNul(node_open_work.release.version[:]), package_versions[index][:])
+    }
+    if !NodeOpenActivate() {
+        node_open_rejected = true
+        return true
+    }
+    unused NodeOpenDiscard()
+    return true
+}

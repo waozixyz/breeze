@@ -1,5 +1,7 @@
 """Check installed apps, background icons and queued images with production SQLite."""
 import argparse
+import ctypes.util
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -54,6 +56,32 @@ def main():
                                     'build/packages/kss/src', 'build/packages/game2d/src',
                                     'build/packages/ziran/std', 'build/packages/daochi-client')
                     for item in ('--module-path', str(root / path))]
+    guest = fixture / 'fixture_app.zi'
+    guest.write_text('''#import "kryon/app_context"
+#import "kryon/app_protocol"
+#program_export
+Main :: () -> s32 {
+    if AppMode() == APP_IDENTIFY {
+        AppIdentity("fixture")
+        AppDescribe("Fixture", "")
+        return APP_PROTOCOL
+    }
+    return 0
+}
+''')
+    leaf = fixture / 'leaf.zib'
+    packed_root = fixture / 'root.zib'
+    packed_assets = fixture / 'root-assets'
+    packed_assets.mkdir(exist_ok=True)
+    for target, assets in ((leaf, None), (packed_root, packed_assets)):
+        command = [str(args.ziran.resolve()), 'bundle', '--root', str(fixture),
+                   '--entry', 'fixture_app:Main', *module_paths, *package_paths,
+                   '-o', str(target)]
+        if assets is not None:
+            shutil.copyfile(leaf, packed_assets / 'leaf.zib')
+            command += ['--asset-dir', f'assets/fixture={assets}']
+        command.append(str(guest))
+        subprocess.run(command, cwd=root, env=environment, check=True)
     subprocess.run([str(args.ziran.resolve()), 'build', '--target=c', '--define', 'PLATFORM_DESKTOP',
                     '--no-main', '--root', str(root / 'tests'), *module_paths, *package_paths,
                     '-o', str(generated), str(root / 'tests/node_app_snapshot_behavior.zi'),
@@ -65,6 +93,9 @@ def main():
         'if (result) fprintf(stderr, "snapshot check %d failed\\n", result); return result; }\n')
     includes = [item for directory in [generated, *sorted(p for p in generated.rglob('*') if p.is_dir())]
                 for item in ('-iquote', str(directory))]
+    curl_library = os.environ.get('CURL_LIBRARY')
+    if not curl_library:
+        curl_library = '-l:' + (ctypes.util.find_library('curl') or 'libcurl.so.4')
     result = subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-O0', '-ffunction-sections', '-fdata-sections',
                     *shlex.split(os.environ.get('CFLAGS', '')),
                     '-I' + str(root / 'build/packages/ziran/include'), *includes,
@@ -77,7 +108,9 @@ def main():
                     str(root / 'vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a'),
                     '-Wl,--gc-sections', '-Wl,--wrap=BundleOpenBytes',
                     '-Wl,--wrap=storage_user_id_buffer',
-                    '-lm', '-ldl', '-lpthread', '-o', str(work / 'test')])
+                    '-lm', '-ldl', '-lpthread', '-lz',
+                    *shlex.split(curl_library),
+                    '-o', str(work / 'test')])
     if result.returncode:
         raise SystemExit('Snapshot native link failed; see compiler diagnostics above')
     with tempfile.TemporaryDirectory(prefix='profile-', dir=work) as profile:
@@ -85,6 +118,9 @@ def main():
             'APP_DATA_ROOT': profile,
             'ICON_CACHE_PATH': str(Path(profile) / 'fixture.icon'),
             'IMAGE_REPLACEMENT_BUNDLE': str(fixture / 'replacement.zib'),
+            'NODE_OPEN_ROOT_BUNDLE': str(packed_root),
+            'NODE_OPEN_ROOT_SHA256': hashlib.sha256(packed_root.read_bytes()).hexdigest(),
+            'NODE_OPEN_LEAF_SHA256': hashlib.sha256(leaf.read_bytes()).hexdigest(),
             **{f'ICON_{name.upper()}_BUNDLE': str(fixture / f'{name}.zib')
                for name in ('valid', 'invalid', 'empty', 'corrupt')},
         }, check=True)

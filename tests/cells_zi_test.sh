@@ -3,12 +3,15 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
-work=$root/build/cells-test
+work=${CELLS_TEST_DIR:-$root/build/cells-test}
+bundles=${CELLS_TEST_BUNDLES:-$root/build}
 # Apps the node offers reach the shared-list service, which links curl; the
 # system library is linked by name where there is no development symlink.
 curl=${CURL_LIBRARY:-$(ls /usr/lib/x86_64-linux-gnu/libcurl.so.4 2>/dev/null || echo -lcurl)}
 mkdir -p "$work/generated" "$work/wrong-record" "$work/wrong-scalar"
-sh "$root/scripts/build-cells.sh" "$ziran"
+if [ -z "${CELLS_TEST_BUNDLES:-}" ]; then
+    sh "$root/scripts/build-cells.sh" "$ziran"
+fi
 # These are valid portable bundles with an identity handshake and all three
 # named capabilities. Their mismatched values must never reach a decoder.
 for shape in wrong-record wrong-scalar; do
@@ -46,7 +49,7 @@ done
     "$root/apps/inbe/inbe.zi"
 mkdir -p "$work/invalid-nested"
 printf 'ZIB' > "$work/invalid-nested/lists.zib"
-cp "$root/build/cells/habits.zib" "$root/build/cells/practices.zib" "$work/invalid-nested/"
+cp "$bundles/cells/habits.zib" "$bundles/cells/practices.zib" "$work/invalid-nested/"
 "$ziran" bundle --root "$root" --module-path "$root/build/packages/kryon/src/ui" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "cells=$work/invalid-nested" -o "$work/invalid-nested.zib" \
@@ -79,8 +82,8 @@ mkdir -p "$data/module-data"
 cp "$root/tests/fixtures/schema-1.8.9.sql" "$data/"
 cd "$data"
 env -u INBE_DIARY_IMPORT -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-    APP_DATA_ROOT="$data/module-data" "$work/test" "$root/build/cells/lists.zib" \
-    "$root/build/cells/habits.zib" "$root/build/cells/practices.zib" \
-    "$work/wrong-record.zib" "$work/wrong-scalar.zib" "$root/build/inbe-full.zib" \
-    "$work/missing-assets.zib" "$work/invalid-nested.zib" "$root/build/cells/diary.zib" "$root/build/cells/lumi.zib" \
-    "$root/build/cells/leaderboard.zib"
+    APP_DATA_ROOT="$data/module-data" "$work/test" "$bundles/cells/lists.zib" \
+    "$bundles/cells/habits.zib" "$bundles/cells/practices.zib" \
+    "$work/wrong-record.zib" "$work/wrong-scalar.zib" "$bundles/inbe-full.zib" \
+    "$work/missing-assets.zib" "$work/invalid-nested.zib" "$bundles/cells/diary.zib" "$bundles/cells/lumi.zib" \
+    "$bundles/cells/leaderboard.zib"

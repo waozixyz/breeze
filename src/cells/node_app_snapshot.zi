@@ -125,6 +125,9 @@ NodeInstalledCapture :: (slot: s32, node: *AppNode) -> bool {
 NodeInstalledScanCancel :: (slot: s32) {
     scan := *node_snapshot_scans[slot]
     host := node_runners[slot].nested
+    if host != null {
+        AppHostCancelChild(host)
+    }
     while scan.stack.count > 0 {
         step := VecPop(scan.stack)
         if host != null && step.has_value && step.value.handle.slot != 0 {
@@ -200,9 +203,15 @@ NodeInstalledScanStep :: (slot: s32) -> bool {
         return true
     }
     entry := AppCatalogAt(*node.catalog, step.next)
+    handle: AppHandle
+    opened := AppHostOpenChild(host, step.handle, TextUntilNul(entry.id[:]), *handle)
+    if opened == 0 {
+        return true
+    }
+    if opened < 0 {
+        return false
+    }
     step.next += 1
-    handle := AppTreeOpenChild(*host.tree, step.handle, entry)
-    if handle.slot < 0 { return false }
     if !VecPush(scan.stack, NodeSnapshotStep.{handle, 0}) {
         AppTreeDrop(*host.tree, handle)
         return false

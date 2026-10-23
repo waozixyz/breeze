@@ -2,6 +2,10 @@
 #import, file "habits_shop_cells_behavior.zi";
 #import, file "cells_locale_behavior.zi";
 #import, file "node_reload_cells_behavior.zi";
+Packages :: #import, file "../src/cells/package_manager.zi";
+#import, file "../src/cells/package_release.zi";
+#import, file "../src/cells/node_apps.zi";
+#import, file "../src/cells/catalog.zi";
 #import, file "../src/cells/module_host.zi";
 #import, file "../src/cells/asset_paths.zi";
 #import, file "../src/cells/module_types.zi";
@@ -29,6 +33,48 @@ ModuleTestPrepare :: (index: s32, bytes: string) -> s32 {
         ModuleTestYield()
     }
     return result
+}
+
+// Download validation owns its parser until cancellation finishes. Polling a
+// held parser must leave the visible app usable and return within a frame.
+CheckNodePackagePreparation :: (bytes: string) {
+    slot := cast(s32)(NodeAppSlots - 1)
+    index := NodeAppIndex(slot)
+    saved_index := Packages.package_index
+    saved_release := Packages.package_release
+    saved_name := PackageText(NodeAppName(slot), "")
+    defer {
+        Packages.package_index = saved_index
+        Packages.package_release = saved_release
+        NodeAppAssign(slot, saved_name)
+        PackageFree(saved_name)
+    }
+    NodeAppAssign(slot, "parserprobe")
+    Packages.package_index = index
+    Packages.package_release.valid = true
+    unused DiaryTestHash(DiaryTestBytes(bytes), Packages.package_release.hash[:])
+    ModuleTestBlockParser(true)
+    Expect(CellsPreparePackage(index, bytes) == 0, 400)
+    for attempt: 0..5000 {
+        if ModuleTestParserStarted() { break }
+        ModuleTestYield()
+    }
+    Expect(ModuleTestParserStarted(), 401)
+    started := ModuleTestNow()
+    for frame: 0..99 {
+        Expect(CellsPreparePackage(index, bytes) == 0, 402)
+    }
+    CellsDiscardPreparation()
+    Expect(!CellsPreparationIdle() && ModuleTestNow() - started < 0.05, 403)
+    Expect(ListsRun(ListsMessage.{.action = LISTS_ROUTE, .screen = ScreenEList}).succeeded, 404)
+    ModuleTestBlockParser(false)
+    for attempt: 0..5000 {
+        if CellsPreparationIdle() { break }
+        ModuleTestYield()
+    }
+    Expect(CellsPreparationIdle(), 405)
+    // A Lists cell is a valid ZIB but cannot impersonate this node app.
+    Expect(ModuleTestPrepare(index, bytes) < 0 && CellsPreparationIdle(), 406)
 }
 
 #import, file "../src/cells/shared_state.zi";
@@ -1068,6 +1114,7 @@ CheckModules :: () -> s32 {
         ModuleTestYield()
     }
     Expect(CellsPreparationIdle(), 273)
+    CheckNodePackagePreparation(lists)
     ModuleTestSetRevision(1, 0)
     ModuleTestSetRevision(4, 0)
     CellsClose()

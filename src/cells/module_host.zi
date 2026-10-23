@@ -1,6 +1,7 @@
 #import, file "achievement_packages.zi";
 // Independently versioned feature VMs share persistence and platform effects.
 #import "bundle_host"
+#import "apps/preparation"
 #import "byte_text_linux"
 #import "c_string"
 #import, file "module_types.zi";
@@ -63,6 +64,7 @@ ModulePreparation :: struct {
     target: s32
     checked: bool
     canceled: bool
+    node: *AppPreparation
 }
 
 #scope_file
@@ -1148,10 +1150,13 @@ CellsValidatePackage :: (index: s32, bytes: string) -> bool {
 // remain on the frame thread, one component at a time, with effects disabled.
 #program_export
 CellsPreparePackage :: (index: s32, bytes: string) -> s32 {
-    #if #defined(PLATFORM_WEB) || #defined(_WIN32) {
+    #if #defined(PLATFORM_WEB) {
         return ifx CellsValidatePackage(index, bytes) then 1 else -1
     }
     if index >= PackageCount {
+        return NodePackagePrepare(index, bytes)
+    }
+    #if #defined(_WIN32) {
         return ifx CellsValidatePackage(index, bytes) then 1 else -1
     }
     if index < 0 {
@@ -1173,6 +1178,38 @@ CellsPreparePackage :: (index: s32, bytes: string) -> s32 {
         return 1
     }
     return ModulePreparationNextChild()
+}
+
+NodePackagePrepare :: (index: s32, bytes: string) -> s32 {
+    if index >= PackageSlots {
+        return -1
+    }
+    if module_preparation.index < 0 {
+        module_preparation.index = index
+        module_preparation.bytes = bytes
+        module_preparation.node = AppPrepare(bytes, PackagePreparingDigest(index), PackageID(index))
+        if module_preparation.node == null {
+            CellsDiscardPreparation()
+            return -1
+        }
+        return 0
+    }
+    if module_preparation.index != index || module_preparation.canceled {
+        return -1
+    }
+    if module_preparation.checked {
+        return 1
+    }
+    if !AppPreparationReady(module_preparation.node) {
+        return 0
+    }
+    if !module_preparation.node.valid ||
+    !NodeAppValidate(index - PackageCount, bytes, module_preparation.node) {
+        CellsDiscardPreparation()
+        return -1
+    }
+    module_preparation.checked = true
+    return 1
 }
 
 ModulePreparationStart :: (index: s32, bytes: string) -> s32 {
@@ -1272,6 +1309,10 @@ CellsPreparationIdle :: () -> bool {
     if !module_preparation.canceled {
         return true
     }
+    if !AppPreparationClose(module_preparation.node) {
+        return false
+    }
+    module_preparation.node = null
     if module_preparation.preload >= 0 {
         if !BundlePreloadReady(module_preparation.preload) {
             return false

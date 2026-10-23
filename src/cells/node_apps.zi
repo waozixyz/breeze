@@ -5,6 +5,7 @@
 // through the generic app interface (apps/node_types), so a new app needs
 // no host code. Whether an app is installed syncs with the account.
 #import "bundle_host"
+#import "apps/preparation"
 // Radio's background playback (app/background_audio.zi), declared here so
 // apps do not import Radio's streaming, music and achievements.
 node_audio_c :: #system_library "c";
@@ -38,6 +39,7 @@ Time :: #import "date_time_linux";
 #import, file "node_app_tree.zi";
 #import, file "node_app_snapshot.zi";
 #import, file "node_app_replacements.zi";
+#import, file "node_app_open.zi";
 #import, file "node_icon_work.zi";
 #import, file "achievement_media.zi";
 Nested :: #import "apps/host";
@@ -223,6 +225,7 @@ NodeAppAssign :: (slot: s32, name: string) {
     NodeAppForgetIcon(slot)
     // Another app in this slot has none of the previous one's leaves.
     node_installed_releases[slot][0] = 0
+    node_open_failed[slot] = false
 }
 
 NodeAppRunning :: (slot: s32) -> bool {
@@ -640,6 +643,13 @@ NodeAppUninstall :: (slot: s32) {
 }
 
 NodeAppClose :: (slot: s32) -> bool {
+    if !NodeOpenCancel(slot) {
+        return false
+    }
+    return NodeAppCloseRuntime(slot)
+}
+
+NodeAppCloseRuntime :: (slot: s32) -> bool {
     NodeInstalledScanCancel(slot)
     if !NodeTreeClose(*node_runners[slot]) { return false }
     BackgroundAudioStop(slot)
@@ -1065,10 +1075,22 @@ NodeAppRun :: (runner: *NodeAppRunner) -> bool {
     return answer == 0 && runner.received
 }
 
-NodeAppStart :: (runner: *NodeAppRunner, bytes: string, verified: string = "") -> bool {
+NodeAppStart :: (runner: *NodeAppRunner, bytes: string, verified: string = "",
+    preparation: *AppPreparation = null) -> bool {
     runner.has_read = false
     runner.has_write = false
-    if !HostedAppOpen(*runner.app, bytes) { return false }
+    if preparation != null &&
+    AppPreparationAsset(preparation.bundle, "assets/apps/catalog.json").count > 0 {
+        return NodeTreeStart(runner, bytes, verified, preparation)
+    }
+    if preparation != null {
+        runner.app.bundle = AppPreparationTakeRoot(preparation)
+        if runner.app.bundle == null {
+            return false
+        }
+    } else if !HostedAppOpen(*runner.app, bytes) {
+        return false
+    }
     if HostedAppAsset(*runner.app, "assets/apps/catalog.json").found {
         HostedAppClose(*runner.app)
         return NodeTreeStart(runner, bytes, verified)
@@ -1127,7 +1149,7 @@ NodeAppAssetsValid :: (bundle: *void, name: string) -> bool {
 
 // Checks a downloaded package before it is published: the generic
 // interface only, the node app's identity and its own resources.
-NodeAppValidate :: (slot: s32, bytes: string) -> bool {
+NodeAppValidate :: (slot: s32, bytes: string, preparation: *AppPreparation = null) -> bool {
     if slot < 0 || slot >= NodeAppSlots || NodeAppName(slot).count == 0 {
         return false
     }
@@ -1137,7 +1159,7 @@ NodeAppValidate :: (slot: s32, bytes: string) -> bool {
     node_runners[slot] = NodeAppRunner.{}
     previous_validation := node_tree_validating
     node_tree_validating = true
-    ok := NodeAppStart(*node_runners[slot], bytes) &&
+    ok := NodeAppStart(*node_runners[slot], bytes, "", preparation) &&
     (node_runners[slot].nested != null || NodeAppAssetsValid(node_runners[slot].app.bundle, NodeAppName(slot)))
     if !NodeTreeClose(*node_runners[slot]) { ok = false }
     HostedAppClose(*node_runners[slot].app)
@@ -1160,44 +1182,7 @@ NodeAppLocalFailed :: (slot: s32) {
 }
 
 NodeAppOpen :: (slot: s32) -> bool {
-    if NodeAppRunning(slot) {
-        return true
-    }
-    bytes := ""
-    verified := ""
-    if NodeAppLocal(NodeAppName(slot)) {
-        bytes = PackageRead(TextUntilNul(node_local_path[:]), PackageMaximumBytes)
-    } else {
-        bytes = PackageInstalledBytes(NodeAppIndex(slot))
-        verified = TextFromCString(*package_cached_releases[NodeAppIndex(slot)].hash[0])
-        if bytes.count > 0 && !PackageTrialAllows(NodeAppIndex(slot)) {
-            PackageFree(bytes)
-            bytes = ""
-        }
-    }
-    defer {
-        PackageFree(bytes)
-    }
-    if bytes.count == 0 {
-        NodeAppLocalFailed(slot)
-        return false
-    }
-    if !NodeAppClose(slot) { return false }
-    if !NodeAppStart(*node_runners[slot], bytes, verified) ||
-    (node_runners[slot].nested == null && !NodeAppAssetsValid(node_runners[slot].app.bundle, NodeAppName(slot))) {
-        unused NodeAppClose(slot)
-        NodeAppLocalFailed(slot)
-        return false
-    }
-    // The leaves saved for this release stand in for opening every child.
-    if !NodeInstalledCurrent(slot, verified) && !NodeInstalledScanStart(slot) {
-        unused NodeAppClose(slot)
-        NodeAppLocalFailed(slot)
-        return false
-    }
-    unused AppCopyText(verified, node_runners[slot].release_hash[:])
-    node_runners[slot].checked_revision = PackageRevisionFor(NodeAppIndex(slot))
-    return true
+    return NodeOpenQueue(slot)
 }
 
 // Apply downloaded node-app updates at the host's existing safe reload
@@ -1220,18 +1205,16 @@ NodeAppsReloadUpdated :: () -> bool {
             PackageFree(metadata)
             PackageFree(path)
             runner.reload_pending = release.valid &&
-                TextUntilNul(release.hash[:]) != TextUntilNul(runner.release_hash[:])
+            TextUntilNul(release.hash[:]) != TextUntilNul(runner.release_hash[:])
             runner.checked_revision = revision
         }
         if !runner.reload_pending {
             continue
         }
-        if !NodeAppClose(slot) {
+        if NodeOpenQueue(slot, true) {
             return false
         }
-        if !NodeAppOpen(slot) {
-            return false
-        }
+        runner.reload_pending = false
     }
     return true
 }
@@ -1805,7 +1788,10 @@ NodeAppsPump :: (now: s32, catalog_wanted: bool, defer_open: bool = false) {
         node_open_next = ifx node_first_pump_done then 0 else -1
     }
     node_first_pump_done = true
-    worked := !defer_open && NodeInstalledScanPump()
+    worked := node_open_work != null
+    if !defer_open && !worked {
+        worked = NodeInstalledScanPump()
+    }
     if node_open_next < 0 {
         node_open_next = 0
     } else if !defer_open && !worked {

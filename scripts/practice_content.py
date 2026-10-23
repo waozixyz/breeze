@@ -189,7 +189,9 @@ def catalog_from_bundle(data):
                          size=pack['size']) for pack in guide]
 
 
-def prepare(compiler):
+def prepare(compiler, assets_root=None, output=None):
+    assets_root = assets_root or ROOT / 'build/package-assets'
+    output = output or ROOT / 'build/practice-content'
     configuration = json.loads((ROOT / 'apps/practice/content.json').read_text())
     if configuration['schema'] != 1 or tuple(configuration['practices']) != NAMES:
         raise ValueError('unsupported practice content configuration')
@@ -201,14 +203,13 @@ def prepare(compiler):
     astral_speech = json.loads((ROOT / configuration['narration']['astral_projection']['config']).read_text())
     if [cue['key'] for cue in astral['cues']] != astral_speech['keys']:
         raise ValueError('Astral Projection guidance and narration inventory differ')
-    output = ROOT / 'build/practice-content'
     output.mkdir(parents=True, exist_ok=True)
     packs = []
     guide = []
     for practice in NAMES + (GUIDE,):
         # Lumi's guide has narration only, without a base pack.
-        directories = [] if practice == GUIDE else [ROOT / ('build/package-assets/practice-' + practice)]
-        directories += sorted((ROOT / 'build/package-assets').glob('practice-' + practice + '-voice-*'))
+        directories = [] if practice == GUIDE else [assets_root / ('practice-' + practice)]
+        directories += sorted(assets_root.glob('practice-' + practice + '-voice-*'))
         for directory in directories:
             language = directory.name.split('-voice-', 1)[1] if '-voice-' in directory.name else ''
             # practice-taichi-voice-en-male holds the male recording.
@@ -246,7 +247,7 @@ def prepare(compiler):
             if practice in configuration['products']:
                 pack['product'] = configuration['products'][practice]
             packs.append(pack)
-    target = ROOT / 'build/package-assets/practices' / CATALOG
+    target = assets_root / 'practices' / CATALOG
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(dict(schema=1, packs=packs, guide=guide), separators=(',', ':')) + '\n')
     # Default practices ship inside Practices, installed until removed; other
@@ -255,7 +256,7 @@ def prepare(compiler):
         for practice in names:
             if practice not in NAMES or practice in configuration['products']:
                 raise ValueError('unknown or paid shipped practice')
-            shipped = ROOT / 'build/package-assets/practices/assets/practices' / folder / (practice + '.zib')
+            shipped = assets_root / 'practices/assets/practices' / folder / (practice + '.zib')
             shipped.parent.mkdir(parents=True, exist_ok=True)
             shipped.write_bytes((output / (practice + '.zib')).read_bytes())
     if set(configuration['default']) & set(configuration.get('shipped', [])):
@@ -299,5 +300,13 @@ def narration_current(configuration, practice, language, assets=None, voice=''):
 
 
 if __name__ == '__main__':
-    import sys
-    prepare(Path(sys.argv[1]).resolve())
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('compiler', type=Path)
+    parser.add_argument('--assets', type=Path, default=ROOT / 'build/package-assets')
+    parser.add_argument('--output', type=Path, default=ROOT / 'build/practice-content')
+    args = parser.parse_args()
+    for path in (args.assets, args.output):
+        if not path.resolve().is_relative_to(ROOT / 'build') or path.resolve() == ROOT / 'build':
+            parser.error('package output directories must be below the project build directory')
+    prepare(args.compiler.resolve(), args.assets.resolve(), args.output.resolve())

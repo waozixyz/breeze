@@ -3,10 +3,16 @@
 #import, file "package_files.zi";
 #import, file "package_release.zi";
 #import, file "catalog.zi";
+#import "std/byte_text_linux"
+#import "crypto/sha256"
 
-PACKAGE_WORK_THREADS :: !#defined(PLATFORM_WEB) && !#defined(_WIN32)
+PACKAGE_WORK_THREADS :: !#defined(PLATFORM_WEB)
 #if PACKAGE_WORK_THREADS {
-    #import "std/thread_linux"
+    #if #defined(_WIN32) {
+        #import "std/thread_windows"
+    } else {
+        #import "std/thread_linux"
+    }
 }
 
 PackageWork :: struct {
@@ -17,6 +23,8 @@ PackageWork :: struct {
     identity: string
     release: PackageRelease
     writing: bool
+    verify: bool
+    digest: [65]u8
     ready: bool
     ok: bool
     next: *PackageWork
@@ -36,7 +44,16 @@ PackageWorkRun :: (argument: *void) {
         return
     }
     work.bytes = PackageRead(work.path, PackageMaximumBytes)
-    work.ok = PackageVerifyBytes(work.bytes, work.release)
+    if work.verify {
+        work.ok = PackageVerifyBytes(work.bytes, work.release)
+        if work.ok {
+            work.digest = work.release.hash
+        }
+    } else if work.bytes.count > 0 {
+        payload := cast(*TextDescriptor)(*work.bytes)
+        Sha256Hex(payload.data, work.bytes.count, *work.digest[0])
+        work.ok = true
+    }
 }
 
 PackageWorkReady :: (work: *PackageWork) -> bool {
@@ -71,7 +88,7 @@ PackageWorkFree :: (work: *PackageWork) {
 }
 
 PackageWorkCreate :: (path: string, immutable: string, account: string,
-    identity: string, release: PackageRelease) -> *PackageWork {
+    identity: string, release: PackageRelease, verify: bool = true) -> *PackageWork {
     work := cast(*PackageWork)PackageWorkAllocate(size_of(PackageWork))
     if work == null {
         return null
@@ -82,6 +99,7 @@ PackageWorkCreate :: (path: string, immutable: string, account: string,
     work.account = PackageText(account, "")
     work.identity = PackageText(identity, "")
     work.release = release
+    work.verify = verify
     if !PackageWorkRunAsync(work) {
         PackageWorkFree(work)
         return null

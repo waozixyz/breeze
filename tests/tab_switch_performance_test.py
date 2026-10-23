@@ -15,7 +15,7 @@ import time
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "build/tab-switch-test"
+OUTPUT = Path(os.environ.get("INBE_TEST_OUTPUT", ROOT / "build/tab-switch-test")).resolve()
 OUTPUT.mkdir(parents=True, exist_ok=True)
 DISPLAY_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS")
 assert all(not os.environ.get(key) for key in DISPLAY_KEYS), "Inherited desktop environment"

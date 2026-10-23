@@ -3,6 +3,7 @@
 ## [2.1.42] - 2026-10-22
 
 - Keep practice animation smooth in the browser.
+- Keep navigation responsive while apps open or update, including during a running practice.
 - Restore clean F-Droid builds.
 - Show distinct Photos, Radio and Library icons in Apps, including before installation.
 - Open your shared Entity profile beside Settings, with your existing account and Dew balance.

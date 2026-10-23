@@ -7,11 +7,12 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 packages=${INBE_PACKAGES:-"$root/build/packages"}
-work=$root/build/photos-app-test
+work=${PHOTOS_APP_TEST_DIR:-"$root/build/photos-app-test"}
 include=$packages/ziran/include
 curl=${CURL_LIBRARY:-$(ls /usr/lib/x86_64-linux-gnu/libcurl.so.4 2>/dev/null || echo -lcurl)}
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 
+mkdir -p "$(dirname "$work")"
 exec 9>"$work.lock"
 flock 9
 
@@ -51,8 +52,9 @@ C
     "$packages/monocypher/src/monocypher.c" "$packages/monocypher/src/optional/monocypher-ed25519.c" \
     "${ZIRAN_LIB:-$root/build/ziran-toolchain/libziran.a}" \
     -Wl,--gc-sections -ldl -lpthread -lz -lm "$curl" -o "$work/test"
-APP_DATA_ROOT=/tmp/inbe-photos-app-test/data
+profile=$(mktemp -d /tmp/inbe-photos-app-test.XXXXXX)
+trap 'rm -rf "$profile"' EXIT HUP INT TERM
+APP_DATA_ROOT=$profile/data
 export APP_DATA_ROOT
 INBE_NODE_APP_FILE=$work/photos.zib "$work/test"
-rm -rf /tmp/inbe-photos-app-test
 echo "Photos adds, shows, opens, trashes and restores photos through the node-app host and the media library"

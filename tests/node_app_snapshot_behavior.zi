@@ -8,19 +8,31 @@
 #import "apps/host"
 #import "apps/catalog"
 #import "apps/protocol"
+#import "apps/preparation"
 #import, file "delegate_account_host.zi";
 #import, file "node_app_icons_behavior.zi";
 #import, file "node_tree_images_behavior.zi";
+#import, file "background_audio_stub.zi";
 #import, file "../src/cells/node_app_snapshot.zi";
 #import, file "../src/cells/node_app_tree.zi";
 #import, file "../src/cells/node_apps.zi";
 #import, file "../src/cells/catalog.zi";
 #import, file "../src/cells/node_app_runner.zi";
+#import, file "../src/cells/node_app_open.zi";
+#import, file "../src/cells/package_files.zi";
 #import, file "../src/storage/db.zi";
 #import, file "../src/storage/storage_settings.zi";
 
 snapshot_opened: s32;
 snapshot_fail_open: bool;
+snapshot_fail_save: bool;
+
+snapshot_c :: #system_library "c";
+SnapshotNow :: () -> float64 #foreign snapshot_c "IconsNow";
+SnapshotYield :: () #foreign snapshot_c "IconsYield";
+SnapshotBlockParser :: (blocked: bool) #foreign snapshot_c "IconsBlockParser";
+SnapshotParserStarted :: () -> bool #foreign snapshot_c "IconsParserStarted";
+SnapshotOtherAccount :: (enabled: bool) #foreign snapshot_c "IconsOtherAccount";
 
 // The native fixture has no browser filesystem to flush.
 #program_export "app_web_storage_flush"
@@ -29,15 +41,10 @@ SnapshotWebStorageFlush :: (log_success: s32) {}
 SnapshotOpen :: (context: *void, parent: *AppNode, entry: *AppEntry, candidate: *AppNode) -> bool {
     snapshot_opened += 1
     if snapshot_fail_open { return false }
-    candidate.identity.authority = parent.identity.authority
-    candidate.identity.id = entry.id
-    candidate.entry = entry.*
-    candidate.runtime = cast(*void)candidate
-    candidate.bytes = 1
-    return true
+    return AppHostOpen(context, parent, entry, candidate)
 }
 
-SnapshotSave :: (context: *void, node: *AppNode) -> bool { return true }
+SnapshotSave :: (context: *void, node: *AppNode) -> bool { return !snapshot_fail_save }
 SnapshotClose :: (context: *void, node: *AppNode) {}
 SnapshotEffect :: (context: *void, account: string, locator: *AppLocator,
     operation: s32, reply: *AppsReply) -> bool { return false }
@@ -46,35 +53,43 @@ SnapshotEffect :: (context: *void, account: string, locator: *AppLocator,
 // drops the active child opened by navigation, even when discovery cancels.
 SnapshotDiscoveryCheck :: () -> s32 {
     host: AppHost
-    root := New(AppNode)
-    if root == null { return 10 }
-    root.runtime = cast(*void)root
+    bytes := PackageRead(IconsEnvironmentPath("NODE_OPEN_ROOT_BUNDLE"), PackageMaximumBytes)
+    defer { PackageFree(bytes) }
+    if !AppHostStart(*host, bytes, "publisher", "fixture.root", "fixture",
+        IconsEnvironmentPath("NODE_OPEN_ROOT_SHA256"), NodeTreeAccount(),
+        AppPlatform.{.save = SnapshotSave}) { return 10 }
+    root := AppTreeNode(*host.tree, AppHandle.{0, 1})
     root.collection = true
-    root.bytes = 1
-    unused CopyCString("publisher", root.identity.authority[:])
-    unused CopyCString("fixture.root", root.identity.id[:])
     ids: [2]string = .["fixture.one", "fixture.two"]
     for id: ids {
         entry: AppEntry
         unused CopyCString(id, entry.id[:])
-        unused CopyCString(id, entry.expected_id[:])
-        unused CopyCString("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", entry.sha256[:])
+        unused CopyCString("fixture", entry.expected_id[:])
+        unused CopyCString("assets/fixture/leaf.zib", entry.bundle[:])
+        unused CopyCString(IconsEnvironmentPath("NODE_OPEN_LEAF_SHA256"), entry.sha256[:])
         entry.protocol = APPS_CONTEXT_PROTOCOL
         if !AppCatalogAppend(*root.catalog, entry) { return 11 }
     }
-    if !AppTreeStart(*host.tree, root, NodeTreeAccount(), AppProvider.{
-            .open = SnapshotOpen, .save = SnapshotSave, .close = SnapshotClose,
-            .effect = SnapshotEffect}) { return 12 }
+    host.tree.provider.open = SnapshotOpen
     slot := cast(s32)(NodeAppSlots - 1)
     node_runners[slot].nested = *host
     if !NodeInstalledScanStart(slot) || snapshot_opened != 0 { return 13 }
-    for step: cast(s32)0..4 {
+    deadline := SnapshotNow() + 10.0
+    while node_snapshot_scans[slot].stack.count > 0 && SnapshotNow() < deadline {
         before := snapshot_opened
         if !NodeInstalledScanStep(slot) || snapshot_opened - before > 1 ||
         node_snapshot_scanning || !AppHandleEqual(host.tree.active, AppHandle.{0, 1}) { return 14 }
+        SnapshotYield()
     }
     if snapshot_opened != 2 || node_snapshot_scans[slot].stack.count != 0 { return 15 }
-    active := AppTreeOpenChild(*host.tree, AppHandle.{0, 1}, AppCatalogAt(*root.catalog, 0))
+    active: AppHandle
+    opened: s32
+    deadline = SnapshotNow() + 10.0
+    while opened == 0 && SnapshotNow() < deadline {
+        opened = AppHostOpenChild(*host, AppHandle.{0, 1}, "fixture.one", *active)
+        SnapshotYield()
+    }
+    if opened != 1 { return 16 }
     if active.slot < 0 { return 16 }
     host.tree.active = active
     if !NodeInstalledScanStart(slot) || !NodeInstalledScanStep(slot) { return 17 }
@@ -82,10 +97,129 @@ SnapshotDiscoveryCheck :: () -> s32 {
     if node_snapshot_scans[slot].stack.count != 0 || AppTreeNode(*host.tree, active) == null ||
     !AppHandleEqual(host.tree.active, active) || host.tree.nodes.count != 2 { return 18 }
     snapshot_fail_open = true
-    if !NodeInstalledScanStart(slot) || NodeInstalledScanStep(slot) || node_snapshot_scanning { return 19 }
+    if !NodeInstalledScanStart(slot) { return 19 }
+    healthy := true
+    deadline = SnapshotNow() + 10.0
+    while healthy && SnapshotNow() < deadline {
+        healthy = NodeInstalledScanStep(slot)
+        SnapshotYield()
+    }
+    if healthy || node_snapshot_scanning { return 19 }
     NodeInstalledScanCancel(slot)
-    if AppTreeNode(*host.tree, active) == null || !AppTreeClose(*host.tree) { return 20 }
+    if AppTreeNode(*host.tree, active) == null { return 20 }
+    stopped := AppHostStop(*host)
+    deadline = SnapshotNow() + 10.0
+    while !stopped && SnapshotNow() < deadline {
+        stopped = AppHostStop(*host)
+        SnapshotYield()
+    }
+    if !stopped { return 20 }
     node_runners[slot].nested = null
+    return 0
+}
+
+SnapshotWaitOpen :: (slot: s32) -> bool {
+    deadline := SnapshotNow() + 10.0
+    while NodeAppOpening(slot) && SnapshotNow() < deadline {
+        unused NodeOpenPump(true)
+        SnapshotYield()
+    }
+    return NodeAppRunning(slot) && !node_open_failed[slot]
+}
+
+SnapshotWaitClose :: (slot: s32) -> bool {
+    deadline := SnapshotNow() + 10.0
+    while !NodeAppClose(slot) && SnapshotNow() < deadline {
+        SnapshotYield()
+    }
+    return node_open_work == null && !NodeAppRunning(slot)
+}
+
+SnapshotWaitParser :: () -> bool {
+    deadline := SnapshotNow() + 10.0
+    while !SnapshotParserStarted() && SnapshotNow() < deadline {
+        unused NodeOpenPump(true)
+        SnapshotYield()
+    }
+    return SnapshotParserStarted()
+}
+
+// Actual packed programs exercise the loader, cancellation and save boundary.
+// A held parser cannot block a frame or publish into a different account.
+SnapshotRootOpenCheck :: () -> s32 {
+    slot := cast(s32)(NodeAppSlots - 2)
+    previous_path := node_local_path
+    previous_name := node_local_name
+    defer {
+        SnapshotBlockParser(false)
+        SnapshotOtherAccount(false)
+        node_local_path = previous_path
+        node_local_name = previous_name
+    }
+    unused CopyCString("fixture", node_local_name[:])
+    unused CopyCString(IconsEnvironmentPath("NODE_OPEN_ROOT_BUNDLE"), node_local_path[:])
+    NodeAppAssign(slot, "fixture")
+    SnapshotBlockParser(true)
+    if !NodeAppOpen(slot) || !SnapshotWaitParser() { return 100 }
+    start := SnapshotNow()
+    for frame: cast(s32)0..99 {
+        unused NodeOpenPump(true)
+        if NodeAppRunning(slot) { return 101 }
+    }
+    if SnapshotNow() - start > 0.05 || NodeAppClose(slot) || node_open_work == null {
+        return 102
+    }
+    SnapshotBlockParser(false)
+    if !SnapshotWaitClose(slot) { return 103 }
+    if !NodeAppOpen(slot) || !SnapshotWaitOpen(slot) { return 104 }
+
+    instance := node_runners[slot].app.instance
+    SnapshotBlockParser(true)
+    if !NodeOpenQueue(slot, true) || !SnapshotWaitParser() { return 105 }
+    SnapshotOtherAccount(true)
+    start = SnapshotNow()
+    for frame: cast(s32)0..99 {
+        unused NodeOpenPump(true)
+        if node_runners[slot].app.instance != instance { return 106 }
+    }
+    if SnapshotNow() - start > 0.05 || node_open_work == null { return 107 }
+    SnapshotBlockParser(false)
+    deadline := SnapshotNow() + 10.0
+    while node_open_work != null && SnapshotNow() < deadline {
+        unused NodeOpenPump(true)
+        SnapshotYield()
+    }
+    SnapshotOtherAccount(false)
+    if node_open_work != null || node_runners[slot].app.instance != instance ||
+    !SnapshotWaitClose(slot) { return 108 }
+
+    host: AppHost
+    bytes := PackageRead(IconsEnvironmentPath("NODE_OPEN_ROOT_BUNDLE"), PackageMaximumBytes)
+    defer { PackageFree(bytes) }
+    if !AppHostStart(*host, bytes, "publisher", "fixture.root", "fixture",
+        IconsEnvironmentPath("NODE_OPEN_ROOT_SHA256"), NodeTreeAccount(),
+        AppPlatform.{.save = SnapshotSave}) { return 109 }
+    node_runners[slot].nested = *host
+    snapshot_fail_save = true
+    defer { snapshot_fail_save = false }
+    if !NodeOpenQueue(slot, true) { return 110 }
+    deadline = SnapshotNow() + 10.0
+    while (node_open_preparation == null || !AppPreparationReady(node_open_preparation)) &&
+    SnapshotNow() < deadline {
+        unused NodeOpenPump(true)
+        SnapshotYield()
+    }
+    if node_open_preparation == null || !AppPreparationReady(node_open_preparation) { return 111 }
+    start = SnapshotNow()
+    for frame: cast(s32)0..99 {
+        unused NodeOpenPump(true)
+        if node_runners[slot].nested != *host || host.tree.nodes.count != 1 { return 112 }
+    }
+    if SnapshotNow() - start > 0.05 { return 113 }
+    snapshot_fail_save = false
+    if !SnapshotWaitOpen(slot) || node_runners[slot].nested != null ||
+    host.tree.nodes.count != 0 || !SnapshotWaitClose(slot) { return 114 }
+    NodeAppAssign(slot, "")
     return 0
 }
 
@@ -132,6 +266,8 @@ Check :: () -> s32 {
     if NodeAppInstalledLeafRevision() == before { return 9 }
     discovery := SnapshotDiscoveryCheck()
     if discovery != 0 { return discovery }
+    opening := SnapshotRootOpenCheck()
+    if opening != 0 { return opening }
     icons := NodeAppIconsCheck()
     if icons != 0 { return icons }
     images := NodeTreeImagesCheck()

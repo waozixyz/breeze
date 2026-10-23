@@ -1,6 +1,7 @@
 // Inbe supplies account storage and platform services to the shared Apps
 // runtime. The shared package alone owns nested VM lifecycle and navigation.
 #import "apps/host"
+#import "apps/preparation"
 #import "apps/tree"
 #import "apps/protocol"
 #import "kryon/app_context_host"
@@ -438,7 +439,8 @@ NodeTreeEffect :: (context: *void, account: string, locator: *AppLocator,
 // verified is the digest the package manager just checked these bytes
 // against, or empty to hash them here; either way the Apps host does not
 // hash the whole bundle again.
-NodeTreeStart :: (runner: *NodeAppRunner, bytes: string, verified: string) -> bool {
+NodeTreeStart :: (runner: *NodeAppRunner, bytes: string, verified: string,
+    preparation: *AppPreparation = null) -> bool {
     authority: [256]u8
     if runner.nested != null || !NodeTreeAuthority(runner, authority[:]) {
         return false
@@ -451,7 +453,7 @@ NodeTreeStart :: (runner: *NodeAppRunner, bytes: string, verified: string) -> bo
     host := *node_tree_hosts[index]
     runner.nested = host
     digest: [65]u8
-    if verified.count != 64 || !CopyCString(verified, digest[:]) {
+    if preparation == null && (verified.count != 64 || !CopyCString(verified, digest[:])) {
         payload := cast(*TextDescriptor)(*bytes)
         Sha256Hex(payload.data, bytes.count, *digest[0])
     }
@@ -459,11 +461,19 @@ NodeTreeStart :: (runner: *NodeAppRunner, bytes: string, verified: string) -> bo
     unused AppHostTrustHarness(host, AppsControllerIconGrid)
     unused AppHostTrustHarness(host, AppsControllerList)
     unused AppHostTrustHarness(host, AppsControllerHandles)
-    ready := AppHostStart(host, bytes, TextUntilNul(authority[:]), PackageID(NodeAppIndex(slot)),
-        NodeAppName(slot), TextUntilNul(digest[:]), NodeTreeAccount(),
-        AppPlatform.{.context = cast(*void)runner, .allows = NodeTreeAllows, .call = NodeTreeCall,
-            .widgets = NodeTreeWidgets, .save = NodeTreeSave, .state = NodeTreeState,
-            .effect = NodeTreeEffect}, AppsControllerSha256, LocaleActiveCode(), APPS_CONTEXT_PROTOCOL, true)
+    platform := AppPlatform.{.context = cast(*void)runner, .allows = NodeTreeAllows, .call = NodeTreeCall,
+        .widgets = NodeTreeWidgets, .save = NodeTreeSave, .state = NodeTreeState,
+        .effect = NodeTreeEffect}
+    ready := false
+    if preparation != null {
+        ready = AppHostStartPrepared(host, preparation, TextUntilNul(authority[:]), PackageID(NodeAppIndex(slot)),
+            NodeAppName(slot), NodeTreeAccount(), platform, AppsControllerSha256,
+            LocaleActiveCode(), APPS_CONTEXT_PROTOCOL)
+    } else {
+        ready = AppHostStart(host, bytes, TextUntilNul(authority[:]), PackageID(NodeAppIndex(slot)),
+            NodeAppName(slot), TextUntilNul(digest[:]), NodeTreeAccount(), platform,
+            AppsControllerSha256, LocaleActiveCode(), APPS_CONTEXT_PROTOCOL, true)
+    }
     if !ready {
         runner.nested = null
         return false

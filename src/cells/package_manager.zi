@@ -653,6 +653,15 @@ PackageFinish :: (ok: bool) {
 CellsPreparePackage :: (index: s32, bytes: string) -> s32 #foreign c;
 CellsDiscardPreparation :: () #foreign c;
 CellsPreparationIdle :: () -> bool #foreign c;
+
+// The signed release whose payload worker is currently being validated.
+// A parser copies this digest before starting; it never reads manager state.
+PackagePreparingDigest :: (index: s32) -> string {
+    if index != package_index || !package_release.valid {
+        return ""
+    }
+    return TextUntilNul(package_release.hash[:])
+}
 CellsCommitPreparation :: (index: s32, revision: s32) #foreign c;
 
 PackageTrialKey :: (prefix: string, index: s32) -> string {
@@ -673,7 +682,15 @@ PackageTrialAllows :: (index: s32) -> bool {
     if index < 0 || index >= PackageSlots {
         return false
     }
-    hash := TextFromCString(*package_cached_releases[index].hash[0])
+    return PackageReleaseTrialAllows(index, package_cached_releases[index])
+}
+
+// A prepared replacement is checked before changing the running release.
+PackageReleaseTrialAllows :: (index: s32, release: PackageRelease) -> bool {
+    if index < 0 || index >= PackageSlots {
+        return false
+    }
+    hash := TextUntilNul(release.hash[:])
     good_key := PackageTrialKey("package_good_", index)
     bad_key := PackageTrialKey("package_bad_", index)
     trial_key := PackageTrialKey("package_trial_", index)
