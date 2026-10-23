@@ -839,6 +839,13 @@ A release names one fixed commit while peers keep working on master:
    Subsequent master commits cannot cancel its release. Only the workflow
    creates the release tag after all required gates pass.
 
+When an earlier Release run already passed every test, visual, platform and
+F-Droid reproducibility job for the source, supply its run ID as `reuse_run`.
+The workflow admits reuse only when the release commit adds that version's
+valid phone-check receipt and changes no other file. It downloads the original
+immutable build artifacts for publication and store delivery. A changed source,
+unfinished gate or missing result requires the normal complete build.
+
 Harmony Projects shows this wrapper release, every cell version and its Moto
 screenshots. Harmony's `make inbe-release-verify` checks the latest published
 APK on the development Moto and writes private evidence under

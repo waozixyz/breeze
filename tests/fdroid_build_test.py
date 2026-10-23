@@ -1,6 +1,7 @@
 """Guard the isolated source scanner and the pre-publication release gate."""
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -85,7 +86,8 @@ class FDroidBuildTest(unittest.TestCase):
         release = workflow.split("\n  release:\n", 1)[1].split("\n    outputs:", 1)[0]
         self.assertIn("      - verify-fdroid", release.splitlines())
         verifier = workflow.split("\n  verify-fdroid:\n", 1)[1].split("\n  build-web:\n", 1)[0]
-        self.assertIn("needs: [fdroid, build-android]", verifier)
+        dependencies = re.search(r"needs: \[([^]]+)\]", verifier)[1].split(",")
+        self.assertTrue({"fdroid", "build-android"} <= {value.strip() for value in dependencies})
         self.assertIn("apksigcopier compare --unsigned", verifier)
         self.assertIn("apksigner verify --print-certs", verifier)
 

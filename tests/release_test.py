@@ -1,9 +1,11 @@
 """make release keeps one unpushed release commit and checks what CI will build."""
 import importlib.util
+import ast
 import contextlib
 import io
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -248,6 +250,151 @@ class MotoWorkflowGateTest(unittest.TestCase):
             self.check_run(self.passing_jobs(), head="2" * 40)
         with self.assertRaises(SystemExit):
             self.check_run(self.passing_jobs(), path=".github/workflows/ci.yml")
+
+
+class ReleaseArtifactReuseTest(unittest.TestCase):
+    def setUp(self):
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        section = workflow.split("      - name: Verify identical source and every gate before reusing artifacts\n", 1)[1]
+        script = section.split("          python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+        self.script = "\n".join(line[10:] for line in script.splitlines())
+        tree = ast.parse(self.script)
+        self.required = next(ast.literal_eval(node.value) for node in ast.walk(tree)
+                             if isinstance(node, ast.Assign) and any(
+                                 isinstance(target, ast.Name) and target.id == "required"
+                                 for target in node.targets))
+        self.workflow = workflow
+
+    def evaluate(self, *, jobs=None, changed=None, run_changes=None, source_receipt=False,
+                 ancestor=True, phone_passes=True, run_id="123"):
+        source = "1" * 40
+        candidate = "2" * 40
+        run = {"path": ".github/workflows/release.yml", "event": "push", "head_branch": "master",
+               "repository": {"full_name": "waozixyz/inbe"}, "head_sha": source}
+        run.update(run_changes or {})
+        if jobs is None:
+            jobs = [{"name": name, "status": "completed", "conclusion": "success"}
+                    for name in sorted(self.required)]
+        if changed is None:
+            changed = ["releases/phone-checks/3.0.0.json"]
+
+        def read(command, **kwargs):
+            if command[:2] == ["gh", "api"]:
+                return json.dumps({"jobs": jobs} if command[-1].endswith("/jobs?per_page=100") else run)
+            if command[:2] == ["git", "diff"]:
+                self.assertEqual(command[-2:], [source, candidate])
+                return "\n".join(changed) + "\n"
+            if command == ["python3", "scripts/check-version.py", "--print-version"]:
+                return "3.0.0\n"
+            self.fail("Unexpected read: " + repr(command))
+
+        def check(command, **kwargs):
+            if command[:2] == ["git", "merge-base"]:
+                self.assertEqual(command[-2:], [source, candidate])
+                if not ancestor:
+                    raise subprocess.CalledProcessError(1, command)
+            elif command[:2] == ["git", "cat-file"]:
+                self.assertEqual(command[-1], source + ":releases/phone-checks/3.0.0.json")
+                return subprocess.CompletedProcess(command, 0 if source_receipt else 1)
+            elif command[:2] == ["python3", "scripts/check-phone-check.py"]:
+                self.assertEqual(command[-2:], ["--revision", candidate])
+                if not phone_passes:
+                    raise subprocess.CalledProcessError(1, command)
+            else:
+                self.fail("Unexpected command: " + repr(command))
+            return subprocess.CompletedProcess(command, 0)
+
+        with tempfile.TemporaryDirectory(prefix="inbe-reuse-gate-") as temporary:
+            output = Path(temporary) / "output"
+            environment = {"VERIFIED_RUN": run_id, "CANDIDATE": candidate,
+                           "GITHUB_REPOSITORY": "waozixyz/inbe", "GITHUB_OUTPUT": str(output)}
+            with mock.patch.dict(os.environ, environment), \
+                    mock.patch("subprocess.check_output", side_effect=read) as reads, \
+                    mock.patch("subprocess.run", side_effect=check) as commands, \
+                    contextlib.redirect_stdout(io.StringIO()):
+                try:
+                    exec(compile(self.script, "release artifact reuse", "exec"), {})
+                except SystemExit as error:
+                    if error.code != 0:
+                        raise
+                if not run_id:
+                    reads.assert_not_called()
+                    commands.assert_not_called()
+                return output.read_text()
+
+    def test_receipt_only_candidate_reuses_every_passing_platform(self):
+        self.assertEqual(self.evaluate(), "reuse_artifacts=true\n")
+
+    def test_normal_build_does_not_need_a_previous_run(self):
+        self.assertEqual(self.evaluate(run_id=""), "reuse_artifacts=false\n")
+
+    def test_missing_failed_skipped_cancelled_or_duplicate_gates_are_rejected(self):
+        jobs = [{"name": name, "status": "completed", "conclusion": "success"}
+                for name in sorted(self.required)]
+        for index in range(len(jobs)):
+            with self.subTest(job=jobs[index]["name"], state="missing"), self.assertRaises(SystemExit):
+                self.evaluate(jobs=jobs[:index] + jobs[index + 1:])
+            for state in ("failure", "cancelled", "skipped", None):
+                damaged = [dict(job) for job in jobs]
+                damaged[index]["conclusion"] = state
+                with self.subTest(job=jobs[index]["name"], state=state), self.assertRaises(SystemExit):
+                    self.evaluate(jobs=damaged)
+            with self.subTest(job=jobs[index]["name"], state="duplicate"), self.assertRaises(SystemExit):
+                self.evaluate(jobs=jobs + [jobs[index]])
+            damaged = [dict(job) for job in jobs]
+            damaged[index]["status"] = "in_progress"
+            with self.subTest(job=jobs[index]["name"], state="unfinished"), self.assertRaises(SystemExit):
+                self.evaluate(jobs=damaged)
+
+    def test_changed_application_tests_tooling_or_unrelated_source_are_rejected(self):
+        for extra in ("src/main.zi", "ziran.lock", "droid/app/build.gradle", "tests/new_test.py",
+                      ".github/workflows/release.yml", "CHANGELOG.md", "docs/notes.md"):
+            with self.subTest(path=extra), self.assertRaises(SystemExit):
+                self.evaluate(changed=["releases/phone-checks/3.0.0.json", extra])
+        for changed in ([], ["releases/phone-checks/2.9.9.json"]):
+            with self.subTest(changed=changed), self.assertRaises(SystemExit):
+                self.evaluate(changed=changed)
+
+    def test_wrong_repository_workflow_event_branch_or_run_is_rejected(self):
+        for change in ({"repository": {"full_name": "elsewhere/inbe"}},
+                       {"path": ".github/workflows/ci.yml"}, {"event": "workflow_dispatch"},
+                       {"head_branch": "other"}, {"head_sha": "master"}):
+            with self.subTest(change=change), self.assertRaises(SystemExit):
+                self.evaluate(run_changes=change)
+        for run_id in ("0", "123;echo", "master"):
+            with self.subTest(run_id=run_id), self.assertRaises(SystemExit):
+                self.evaluate(run_id=run_id)
+
+    def test_invalid_phone_result_unrelated_history_and_existing_receipt_are_rejected(self):
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.evaluate(phone_passes=False)
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.evaluate(ancestor=False)
+        with self.assertRaises(SystemExit):
+            self.evaluate(source_receipt=True)
+
+    def test_reuse_policy_covers_every_declared_build_and_reproducibility_gate(self):
+        builds = set()
+        for identifier, body in re.findall(r"^  (build-[a-z-]+):\n(.*?)(?=^  [a-z][a-z-]*:|\Z)",
+                                           self.workflow, re.M | re.S):
+            name = re.search(r"^    name: (.+)$", body, re.M)[1]
+            matrix = re.findall(r"^\s+- arch: (.+)\n\s+runner: (.+)(?:\n\s+tool_arch: (.+))?", body, re.M)
+            if matrix:
+                builds.update(name + " (" + ", ".join(value for value in row if value) + ")" for row in matrix)
+            else:
+                builds.add(name)
+            self.assertIn("if: needs.secret-scan.outputs.reuse_artifacts != 'true'", body)
+        self.assertEqual({name for name in self.required if name.startswith("Build ")}, builds)
+        self.assertTrue({"Secret Scan", "Visual Tests", "Test (0/3)", "Test (1/3)", "Test (2/3)",
+                         "F-Droid / F-Droid security and clean build", "Verify F-Droid reproducibility"}
+                        <= self.required)
+        release_job = self.workflow.split("\n  release:\n", 1)[1].split("\n  notify-waozi-site:", 1)[0]
+        for state in ("failure", "cancelled", "skipped"):
+            self.assertIn("!contains(needs.*.result, '" + state + "')", release_job)
+        for download in self.workflow.split("uses: actions/download-artifact@")[1:]:
+            settings = download.split("\n      - name:", 1)[0]
+            self.assertIn("run-id: ${{ inputs.reuse_run || github.run_id }}", settings)
+            self.assertIn("github-token: ${{ github.token }}", settings)
 
 
 if __name__ == "__main__":

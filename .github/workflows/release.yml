@@ -33,9 +33,14 @@ on:
         description: Exact committed release candidate (defaults to the triggering commit)
         required: false
         type: string
+      reuse_run:
+        description: Verified Release run to reuse when only its phone-check receipt was added
+        required: false
+        type: string
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.revision || github.sha }}
@@ -45,6 +50,8 @@ jobs:
   secret-scan:
     name: Secret Scan
     runs-on: ubuntu-latest
+    outputs:
+      reuse_artifacts: ${{ steps.reuse.outputs.reuse_artifacts }}
     steps:
       - name: Require an immutable candidate
         env:
@@ -60,6 +67,79 @@ jobs:
         with:
           ref: ${{ inputs.revision || github.sha }}
           fetch-depth: 0
+
+      - name: Verify identical source and every gate before reusing artifacts
+        id: reuse
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERIFIED_RUN: ${{ inputs.reuse_run }}
+          CANDIDATE: ${{ inputs.revision || github.sha }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          run_id = os.environ.get('VERIFIED_RUN', '')
+          output = Path(os.environ['GITHUB_OUTPUT'])
+          if not run_id:
+              with output.open('a') as stream:
+                  stream.write('reuse_artifacts=false\n')
+              raise SystemExit(0)
+          if not re.fullmatch(r'[1-9][0-9]*', run_id):
+              raise SystemExit('A numeric verified Release run ID is required')
+          repository = os.environ['GITHUB_REPOSITORY']
+
+          def api(path):
+              return json.loads(subprocess.check_output(['gh', 'api', path], text=True))
+
+          run = api(f'repos/{repository}/actions/runs/{run_id}')
+          if (run['path'] != '.github/workflows/release.yml' or
+                  run['event'] != 'push' or run['head_branch'] != 'master' or
+                  run['repository']['full_name'] != repository):
+              raise SystemExit('Artifacts must come from this repository master Release workflow')
+          source = run['head_sha']
+          candidate = os.environ['CANDIDATE']
+          if (not re.fullmatch(r'[0-9a-f]{40}', source) or
+                  not re.fullmatch(r'[0-9a-f]{40}', candidate)):
+              raise SystemExit('The verified source must be an immutable commit')
+          subprocess.run(['git', 'merge-base', '--is-ancestor', source, candidate], check=True)
+          version = subprocess.check_output(
+              ['python3', 'scripts/check-version.py', '--print-version'], text=True).strip()
+          receipt = f'releases/phone-checks/{version}.json'
+          changed = subprocess.check_output(
+              ['git', 'diff', '--name-only', '--no-renames', source, candidate], text=True).splitlines()
+          if changed != [receipt]:
+              raise SystemExit('Reuse requires identical source with only the phone-check receipt added')
+          if subprocess.run(['git', 'cat-file', '-e', source + ':' + receipt],
+                            capture_output=True).returncode == 0:
+              raise SystemExit('The source run already had a phone receipt; do not race its publication')
+          subprocess.run(['python3', 'scripts/check-phone-check.py', version,
+                          '--revision', candidate], check=True)
+          required = {
+              'Secret Scan', 'Test (0/3)', 'Test (1/3)', 'Test (2/3)', 'Visual Tests',
+              'F-Droid / F-Droid security and clean build', 'Verify F-Droid reproducibility',
+              'Build Web', 'Build Chrome Extension', 'Build Firefox Add-on', 'Build Windows',
+              'Build Android',
+              'Build Linux AppImage (x86_64, ubuntu-22.04, x86_64)',
+              'Build Linux AppImage (aarch64, ubuntu-22.04-arm, aarch64)',
+              'Build Linux Deb (amd64, ubuntu-22.04)', 'Build Linux Deb (arm64, ubuntu-22.04-arm)',
+              'Build Linux RPM (x86_64, ubuntu-22.04)', 'Build Linux RPM (aarch64, ubuntu-22.04-arm)',
+              'Build Linux Snap (x86_64, ubuntu-22.04)', 'Build Linux Snap (aarch64, ubuntu-22.04-arm)',
+              'Build Linux Flatpak (x86_64, ubuntu-22.04)', 'Build Linux Flatpak (aarch64, ubuntu-22.04-arm)',
+          }
+          jobs = api(f'repos/{repository}/actions/runs/{run_id}/jobs?per_page=100')['jobs']
+          for name in required:
+              matches = [job for job in jobs if job['name'] == name]
+              if (len(matches) != 1 or matches[0]['status'] != 'completed' or
+                      matches[0]['conclusion'] != 'success'):
+                  raise SystemExit(name + ' must have passed for the identical source')
+          with output.open('a') as stream:
+              stream.write('reuse_artifacts=true\n')
+          print('All source, test, visual, platform and F-Droid gates passed; reusing their immutable artifacts')
+          PY
 
       - name: Fetch Ziran packages
         uses: ./.github/actions/ziran-packages
@@ -81,6 +161,7 @@ jobs:
           python3 scripts/check-secrets.py --history
 
   test:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: Test (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     needs: secret-scan
@@ -139,6 +220,7 @@ jobs:
 
 
   visual-test:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: Visual Tests
     runs-on: ubuntu-latest
     needs: secret-scan
@@ -213,6 +295,7 @@ jobs:
           retention-days: 7
 
   fdroid:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: F-Droid
     needs: secret-scan
     uses: ./.github/workflows/fdroid.yml
@@ -222,18 +305,23 @@ jobs:
   verify-fdroid:
     name: Verify F-Droid reproducibility
     runs-on: ubuntu-latest
-    needs: [fdroid, build-android]
+    needs: [secret-scan, fdroid, build-android]
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     timeout-minutes: 15
     steps:
       - name: Download independent F-Droid build
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_run || github.run_id }}
           name: fdroid-unsigned
           path: fdroid
 
       - name: Download signed Android release
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_run || github.run_id }}
           name: release-android
           path: signed
 
@@ -251,6 +339,7 @@ jobs:
           apksigcopier compare --unsigned "${signed[0]}" "${rebuilt[0]}"
 
   build-web:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: Build Web
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -307,6 +396,7 @@ jobs:
           if-no-files-found: error
 
   build-chrome-extension:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: Build Chrome Extension
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -363,6 +453,7 @@ jobs:
           if-no-files-found: error
 
   build-firefox-addons:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: Build Firefox Add-on
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -420,6 +511,7 @@ jobs:
           if-no-files-found: error
 
   build-linux-appimage:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: Build Linux AppImage
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -538,6 +630,7 @@ jobs:
           if-no-files-found: error
 
   build-linux-deb:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: Build Linux Deb
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -599,6 +692,7 @@ jobs:
           if-no-files-found: error
 
   build-linux-rpm:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: Build Linux RPM
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -660,6 +754,7 @@ jobs:
           if-no-files-found: error
 
   build-linux-snap:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: Build Linux Snap
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -718,6 +813,7 @@ jobs:
           if-no-files-found: error
 
   build-linux-flatpak:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: Build Linux Flatpak
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -776,6 +872,7 @@ jobs:
           if-no-files-found: error
 
   build-windows:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: Build Windows
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -841,6 +938,7 @@ jobs:
           if-no-files-found: error
 
   build-android:
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
     name: Build Android
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -994,10 +1092,16 @@ jobs:
           if-no-files-found: error
 
   release:
+    if: >-
+      always() && !cancelled() && needs.secret-scan.result == 'success' &&
+      (needs.secret-scan.outputs.reuse_artifacts == 'true' ||
+      (!contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') &&
+      !contains(needs.*.result, 'skipped')))
     name: Release
     runs-on: ubuntu-latest
     timeout-minutes: 60
     needs:
+      - secret-scan
       - test
       - visual-test
       - build-web
@@ -1027,6 +1131,8 @@ jobs:
       - name: Download Release Artifacts
         uses: actions/download-artifact@v4
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_run || github.run_id }}
           pattern: release-*
           path: build/release
           merge-multiple: true
@@ -1198,7 +1304,7 @@ jobs:
     needs:
       - build-web
       - release
-    if: needs.release.outputs.tag_pushed == 'true'
+    if: always() && !cancelled() && needs.release.result == 'success' && needs.release.outputs.tag_pushed == 'true'
     env:
       BUTLER_API_KEY: ${{ secrets.ITCH_API_KEY }}
 
@@ -1219,6 +1325,8 @@ jobs:
       - name: Download Release Artifacts
         uses: actions/download-artifact@v4
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_run || github.run_id }}
           pattern: release-*
           path: build/release
           merge-multiple: true
@@ -1297,7 +1405,7 @@ jobs:
     needs:
       - build-android
       - release
-    if: needs.release.outputs.tag_pushed == 'true'
+    if: always() && !cancelled() && needs.release.result == 'success' && needs.release.outputs.tag_pushed == 'true'
 
     steps:
       - name: Check Google Play Secret
@@ -1313,6 +1421,8 @@ jobs:
       - name: Download Android Release Artifact
         uses: actions/download-artifact@v4
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_run || github.run_id }}
           name: release-android
           path: build/release/android
 
@@ -1333,7 +1443,7 @@ jobs:
     needs:
       - build-android
       - release
-    if: needs.release.outputs.tag_pushed == 'true'
+    if: always() && !cancelled() && needs.release.result == 'success' && needs.release.outputs.tag_pushed == 'true'
     env:
       AMAZON_CLIENT_ID: ${{ secrets.AMAZON_CLIENT_ID }}
       AMAZON_CLIENT_SECRET: ${{ secrets.AMAZON_CLIENT_SECRET }}
@@ -1362,6 +1472,8 @@ jobs:
         if: steps.amazon_secrets.outputs.configured == 'true'
         uses: actions/download-artifact@v4
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_run || github.run_id }}
           name: release-android
           path: build/release/android
 
@@ -1389,7 +1501,7 @@ jobs:
     needs:
       - build-chrome-extension
       - release
-    if: needs.release.outputs.tag_pushed == 'true'
+    if: always() && !cancelled() && needs.release.result == 'success' && needs.release.outputs.tag_pushed == 'true'
 
     steps:
       - name: Check Chrome Web Store Secrets
@@ -1421,6 +1533,8 @@ jobs:
         if: steps.chrome_secrets.outputs.configured == 'true'
         uses: actions/download-artifact@v4
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_run || github.run_id }}
           name: release-chrome-web-store
           path: build/release/chrome-web-store
 
@@ -1515,7 +1629,7 @@ jobs:
     needs:
       - build-firefox-addons
       - release
-    if: needs.release.outputs.tag_pushed == 'true'
+    if: always() && !cancelled() && needs.release.result == 'success' && needs.release.outputs.tag_pushed == 'true'
 
     steps:
       - name: Check Firefox Add-ons Secrets
@@ -1541,6 +1655,8 @@ jobs:
         if: steps.firefox_secrets.outputs.configured == 'true'
         uses: actions/download-artifact@v4
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.reuse_run || github.run_id }}
           name: release-firefox-addons
           path: build/release/firefox-addons
 
@@ -1576,7 +1692,7 @@ jobs:
     timeout-minutes: 15
     continue-on-error: true
     needs: release
-    if: needs.release.outputs.tag_pushed == 'true'
+    if: always() && !cancelled() && needs.release.result == 'success' && needs.release.outputs.tag_pushed == 'true'
     env:
       WINGET_TOKEN: ${{ secrets.WINGET_TOKEN }}
 
