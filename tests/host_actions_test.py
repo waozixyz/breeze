@@ -20,7 +20,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-host-actions-') as temporary:
                YUE_DESKTOP_RECOVERY='0', APP_NO_TRAY='1', SDL_AUDIODRIVER='dummy', SDL_VIDEODRIVER='x11',
                LIBGL_ALWAYS_SOFTWARE='1', INBE_DEBUG_ROUTE='1')
     with (root / 'app.log').open('w+b') as log:
-        display = subprocess.Popen(['Xvfb', '-displayfd', '1', '-screen', '0',
+        display = subprocess.Popen(['Xvfb', '-noreset', '-displayfd', '1', '-screen', '0',
                                     '1024x768x24', '-nolisten', 'tcp'],
                                    env=env, stdout=subprocess.PIPE, stderr=log)
         app = None

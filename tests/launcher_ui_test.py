@@ -74,7 +74,7 @@ with contextlib.ExitStack() as stack:
     if arguments.with_tray:
         env.pop("APP_NO_TRAY", None)
     display_log = stack.enter_context((OUTPUT / "display.log").open("w"))
-    display = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1280x1000x24",
+    display = subprocess.Popen(["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0", "1280x1000x24",
                                 "-nolisten", "tcp"], env=env, stdout=subprocess.PIPE, stderr=display_log)
     stack.callback(stop, display)
     number = display.stdout.readline().decode().strip()
@@ -295,7 +295,8 @@ with contextlib.ExitStack() as stack:
                                    stdout=log, stderr=subprocess.STDOUT)
             driver.attach(app, log_path)
             try:
-                deadline = time.monotonic() + 20
+                # Startup shares the processors with the other visual suites.
+                deadline = time.monotonic() + 60
                 window = ""
                 while time.monotonic() < deadline:
                     assert app.poll() is None, log_path.read_text()

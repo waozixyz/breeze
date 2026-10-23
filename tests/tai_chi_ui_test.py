@@ -47,7 +47,7 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
                APP_NO_TRAY='1', SDL_AUDIODRIVER='dummy', SDL_VIDEODRIVER='x11',
                LIBGL_ALWAYS_SOFTWARE='1', APP_SHOT_WINDOW='1')
     display_log = stack.enter_context((OUTPUT / 'display.log').open('w'))
-    display = subprocess.Popen(['Xvfb', ':951', '-displayfd', '1', '-screen', '0', '1280x900x24',
+    display = subprocess.Popen(['Xvfb', '-noreset', ':951', '-displayfd', '1', '-screen', '0', '1280x900x24',
                                 '-nolisten', 'tcp'], env=env, stdout=subprocess.PIPE, stderr=display_log)
     stack.callback(stop, display)
     number = display.stdout.readline().decode().strip()

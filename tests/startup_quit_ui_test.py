@@ -39,7 +39,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
     env.update(YUE_DESKTOP_RECOVERY="0", APP_NO_TRAY="1", SDL_AUDIODRIVER="dummy",
                INBE_DEBUG_ROUTE="1")
     display_log = stack.enter_context((OUTPUT / "display.log").open("w"))
-    server = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1280x900x24",
+    server = subprocess.Popen(["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0", "1280x900x24",
                                "-nolisten", "tcp"], env=env, stdout=subprocess.PIPE, stderr=display_log)
     stack.callback(stop, server)
     number = server.stdout.readline().decode().strip()

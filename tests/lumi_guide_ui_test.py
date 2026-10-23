@@ -63,7 +63,7 @@ with contextlib.ExitStack() as stack:
     runtime = stack.enter_context(tempfile.TemporaryDirectory(prefix="runtime-", dir=OUTPUT))
     env.update(XDG_RUNTIME_DIR=runtime, PULSE_SERVER="unix:" + runtime + "/no-pulse")
     display_log = stack.enter_context((OUTPUT / "display.log").open("w"))
-    display = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1280x1000x24",
+    display = subprocess.Popen(["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0", "1280x1000x24",
                                 "-nolisten", "tcp"], env=env, stdout=subprocess.PIPE,
                                stderr=display_log)
     stack.callback(stop, display)

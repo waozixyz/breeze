@@ -73,7 +73,7 @@ def main():
                    XDG_CACHE_HOME=str(temporary / "cache"),
                    WERK_ASSETS=str(args.werk.parent))
         display_log = stack.enter_context((output / "display.log").open("w"))
-        display = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1200x900x24",
+        display = subprocess.Popen(["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0", "1200x900x24",
                                     "-nolisten", "tcp"], env=env, stdout=subprocess.PIPE, stderr=display_log)
         stack.callback(stop, display)
         number = display.stdout.readline().decode().strip()

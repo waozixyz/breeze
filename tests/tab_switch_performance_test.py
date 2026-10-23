@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-tab-switch-") as temporary, contex
                SDL_VIDEODRIVER="x11", LIBGL_ALWAYS_SOFTWARE="1",
                APP_DATA_ROOT=str(profile), APP_PROFILE="1", INBE_DEBUG_ROUTE="1")
     display_log = stack.enter_context((OUTPUT / (LABEL + "-display.log")).open("w"))
-    display = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "1280x1000x24",
+    display = subprocess.Popen(["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0", "1280x1000x24",
                                 "-nolisten", "tcp"], env=env, stdout=subprocess.PIPE, stderr=display_log)
     stack.callback(stop, display)
     number = display.stdout.readline().decode().strip()

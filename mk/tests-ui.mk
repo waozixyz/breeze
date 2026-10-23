@@ -149,7 +149,7 @@ host-actions-test: $(TARGET)
 hosted-feature-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \
 		-u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 LIBGL_ALWAYS_SOFTWARE=1 SDL_VIDEODRIVER=x11 SDL_AUDIODRIVER=dummy \
-		xvfb-run -a -n 300 -s '-screen 0 1280x1024x24 -nolisten tcp' \
+		xvfb-run -a -n 300 -s '-noreset -screen 0 1280x1024x24 -nolisten tcp' \
 		python3 tests/hosted_feature_test.py $(abspath $(TARGET))
 
 VISUAL_TEST_TARGETS += hosted-feature-test
@@ -177,7 +177,7 @@ DEVICE_LINK_DETECT_QR ?= ../photos/build/detect-qr/detect_qr
 device-link-ui-test: $(TARGET) $(INBE_FULL_BUNDLE) $(BUILD_DIR)/cells/lumi.zib
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \
 		-u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 SDL_AUDIODRIVER=dummy APP_NO_TRAY=1 \
-		timeout 300s xvfb-run -a -n 340 -s '-screen 0 1920x900x24' \
+		timeout 300s xvfb-run -a -n 340 -s '-noreset -screen 0 1920x900x24' \
 		python3 tests/device_link_ui_test.py $(abspath $(TARGET)) $(abspath $(DEVICE_LINK_DETECT_QR))
 
 # Needs a Harmony checkout beside Inbe with its app-control test build.
@@ -231,14 +231,14 @@ cells-diary-test: $(TARGET)
 practice-downloads-ui-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \
 		YUE_DESKTOP_RECOVERY=0 SDL_AUDIODRIVER=dummy APP_NO_TRAY=1 \
-		xvfb-run -a -n 900 -s '-screen 0 1600x1000x24 -nolisten tcp' \
+		xvfb-run -a -n 900 -s '-noreset -screen 0 1600x1000x24 -nolisten tcp' \
 		python3 tests/practice_downloads_ui_test.py $(abspath $(TARGET))
 
 .PHONY: audio-setup-ui-test
 audio-setup-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
 		YUE_DESKTOP_RECOVERY=0 LIBGL_ALWAYS_SOFTWARE=1 \
-		xvfb-run -a -n 300 -s '-screen 0 1280x1000x24' \
+		xvfb-run -a -n 300 -s '-noreset -screen 0 1280x1000x24' \
 		python3 tests/audio_setup_ui_test.py $(abspath $(TARGET))
 
 .PHONY: launcher-shortcut-ui-test

@@ -92,7 +92,7 @@ def run_app(binary, bundle, feature, output, label):
     image = output / (label + ".png")
     log = output / (label + ".log")
     image.unlink(missing_ok=True)
-    command = ["xvfb-run", "-a", "-n", "361", "-s", "-screen 0 1280x900x24", str(binary),
+    command = ["xvfb-run", "-a", "-n", "361", "-s", "-noreset -screen 0 1280x900x24", str(binary),
                "--bundle", str(bundle), *(["--feature", feature] if feature else []),
                "--screenshot", str(image), "--screenshot-width", "540", "--screenshot-height", "960"]
     with tempfile.TemporaryDirectory(prefix=label + '-profile-', dir=output) as profile, log.open("w") as stream:

@@ -40,7 +40,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-performance-") as temporary, 
                SDL_VIDEODRIVER="x11", LIBGL_ALWAYS_SOFTWARE="1",
                APP_DATA_ROOT=str(profile), APP_PROFILE="1", INBE_DEBUG_ROUTE="1")
     display_log = stack.enter_context((OUTPUT / (LABEL + "-display.log")).open("w"))
-    server = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0", "900x900x24",
+    server = subprocess.Popen(["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0", "900x900x24",
                                "-nolisten", "tcp"], env=env, stdout=subprocess.PIPE, stderr=display_log)
     stack.callback(stop, server)
     number = server.stdout.readline().decode().strip()
