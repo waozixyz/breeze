@@ -178,6 +178,33 @@ LauncherLibraryMove :: (app: *InnerBreeze, items: []s32, item: s32, target: s32)
     PackageFree(value)
 }
 
+// Whether the touch or click that is down began on the app cards.
+launcher_press_on_cards: bool;
+
+// Nothing reaches the app cards this frame and nothing animates them, so
+// the Apps controller may show its last quiet frame again. A tap on the
+// bottom bar or the search field stays clear of the cards; a menu or
+// dialog the controller showed may cover more than the cards.
+app_launcher_cards_quiet :: (app: *InnerBreeze, pointer: PointerFrame, cards: Rectangle) -> bool {
+    on_cards := PointInBounds(pointer.x, pointer.y, cards)
+    if pointer.pressed {
+        launcher_press_on_cards = on_cards
+    }
+    pressed_on_cards := launcher_press_on_cards
+    if !pointer.down && !pointer.pressed {
+        launcher_press_on_cards = false
+    }
+    if app.ui.keyboard_active || app.ui.text_input_active || app.ui.wheel_active ||
+    AppSmoothFramesActive() || app.ui.route_transition_pending || app.ui.route_transition_active ||
+    app.launcher_drag_key != 0 || app_launcher_overlay_drawn(0) {
+        return false
+    }
+    if !app.ui.pointer_active {
+        return true
+    }
+    return !on_cards && !pressed_on_cards
+}
+
 #program_export
 app_draw_launcher :: (app: *InnerBreeze, dock_drawn: bool) {
     app.launcher_panel_node = -1
@@ -472,8 +499,9 @@ app_draw_launcher :: (app: *InnerBreeze, dock_drawn: bool) {
         library_routes: [LAUNCHER_APP_COUNT + NODE_APP_OFFERS]s32
         for index: cast(s32)0..pinned_count - 1 { library_routes[index] = pinned[index] }
         for index: cast(s32)0..more_count - 1 { library_routes[pinned_count + index] = more[index] }
+        cards_quiet := app_launcher_cards_quiet(app, pointer, scrolled.viewport)
         unused app_launcher_shared_group(app, 0, library_routes[:pinned_count + more_count],
-            library_bounds, apps_input, pinned_count, columns)
+            library_bounds, apps_input, pinned_count, columns, cards_quiet)
         if pinned_count + more_count == 0 {
             Text(app.ui.session, TextProps.{.text = LocaleText("launcher_no_results"),
                     .bounds = Rectangle.{cast(float32)x, cast(float32)y,

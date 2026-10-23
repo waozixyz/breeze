@@ -77,6 +77,10 @@ launcher_app_catalogs: [2]string;
 launcher_app_catalog_bodies: [2]string;
 launcher_app_revisions: [2]s64;
 launcher_app_button_codec: WidgetButtonPropsCodec;
+// Whether the Apps controller's last frame showed a menu or dialog, which
+// may cover more than its cards.
+launcher_app_overlay_drawn: [2]bool;
+launcher_app_overlay_frame: [2]bool;
 
 LauncherAppPackage :: (route: s32) -> s32 {
     if route == APP_NAV_ROUTE_PROFILE { return -1 }
@@ -193,7 +197,11 @@ LauncherAppWidgets :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     group := cast(*LauncherAppGroup)context
     called := WidgetHostCall(context, module, function, arguments, count, result)
-    if called == 0 || TextFromCString(function) != "ButtonHostedHost" || count != 2 ||
+    name := TextFromCString(function)
+    if name == "ContextMenuHostedHost" || name == "ModalFrameHostedHost" || name == "ActionModalHostedHost" {
+        launcher_app_overlay_frame[group.index] = true
+    }
+    if called == 0 || name != "ButtonHostedHost" || count != 2 ||
     !WidgetValidButtonProps(arguments[1]) { return called }
     card := WidgetDecodeButtonProps(arguments[1], *launcher_app_button_codec)
     for index: cast(s32)0..group.count - 1 {
@@ -454,8 +462,16 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
     BuilderPrint(bytes, "}")
 }
 
+// Whether the Apps controller's last frame showed a menu or dialog.
+app_launcher_overlay_drawn :: (section: s32) -> bool {
+    return launcher_app_overlay_drawn[section]
+}
+
+// A quiet frame shows the controller's last quiet frame again without
+// running it; see AppControllerRun.
 app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
-    bounds: Rectangle, input: TextFieldInput, section_break: s32, columns: s32) -> bool {
+    bounds: Rectangle, input: TextFieldInput, section_break: s32, columns: s32,
+    quiet: bool = false) -> bool {
     group := *launcher_app_groups[section]
     group.index = section
     group.owner = app
@@ -502,7 +518,9 @@ app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
     // Typing reaches the field the person focused in Properties.
     group.controller.app.input = input
     WidgetHostBegin(app.ui.session, LauncherAppAssetAllowed, WidgetHostPackedPath)
-    ok := Controller.AppControllerRun(*group.controller, APP_FRAME)
+    launcher_app_overlay_frame[section] = false
+    ok := Controller.AppControllerRun(*group.controller, APP_FRAME, quiet)
+    launcher_app_overlay_drawn[section] = launcher_app_overlay_frame[section]
     WidgetHostEnd()
     group.controller.app.input = .{}
     LauncherAppDrain(group)
