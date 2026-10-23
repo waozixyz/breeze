@@ -641,7 +641,7 @@ originals and previews after each good sync:
   Removing a node forgets its session and its `diary_blobs` rows. Delegate
   (Telegram) accounts never move copies.
 
-Photos is available in the normal app catalog without enabling beta apps.
+Photos is available in the normal app catalog.
 The App packages workflow builds every app the node offers and
 publishes each one whose ledger names a newer release than the node serves
 (`package-release.py --node-apps`). An app the node does not list yet is

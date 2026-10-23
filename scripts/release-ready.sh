@@ -5,11 +5,11 @@
 #
 # The container is the Test job's machine: Ubuntu 24.04 with
 # .github/apt/test-packages.txt and Node 22 (.github/local-ci/Containerfile).
-# It sees this checkout through an overlay and resets it to HEAD there, so it
-# tests the committed content with the locked packages (no ziran.local.toml),
-# without untracked files or secrets; nothing it writes reaches the checkout.
-# Files nobody changed since HEAD are read live, so when another session
-# edits files during the run, the run names them and records no pass.
+# It materializes one fixed commit in this checkout’s private overlay, including
+# every tracked file. Source directories are recreated in the overlay so later
+# edits and new files in the canonical checkout cannot enter the tests. Peers
+# keep working on master; nothing this container writes reaches their checkout.
+# Packages use the fixed lock without local overrides or untracked secrets.
 # Build outputs stay in build/release-ready/; a run takes about 90 minutes.
 #
 # Covered: ci.yml Secret Scan, Package URLs, large-file guard, all three test
@@ -29,49 +29,24 @@ cd "$root"
 output=build/release-ready
 image_tag=$(cat .github/local-ci/Containerfile .github/apt/test-packages.txt .github/apt/web-packages.txt .github/emscripten-version | sha256sum | cut -c1-12)
 image=localhost/inbe-ci:$image_tag
-commit=$(git rev-parse HEAD)
+commit=$(git rev-parse "${RELEASE_READY_REVISION:-HEAD}^{commit}")
 
-# content COMMIT: what make release compares; tree: the tracked files on disk;
-# untracked: untracked files; leaked BEFORE COMMIT LIST: files that changed on
-# disk during the run while the container still read them from this checkout.
-state() {
-    python3 -c 'import importlib.util, subprocess, sys
-import os
-from pathlib import Path
+# Read the candidate from Git objects, never the changing files on disk.
+content=$(python3 - "$commit" <<'PY_CONTENT'
+import importlib.util
+import sys
 spec = importlib.util.spec_from_file_location("phone_check", "scripts/phone-check.py")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
-root = Path(os.environ.get("RELEASE_READY_STATE_ROOT", str(module.ROOT)))
-command = sys.argv[1]
-if command == "content":
-    print(module.release_content(root, sys.argv[2]))
-elif command == "tree":
-    print(module.working_tree(root))
-elif command == "untracked":
-    print(module.git(root, "ls-files", "--others", "--exclude-standard"), end="")
-else:
-    before, commit, listing = sys.argv[2:5]
-    after = module.working_tree(root)
-    names = lambda *argv: set(module.git(root, "diff-tree", "-r", "--name-only", "--no-renames", *argv).split())
-    # Files that differed from the commit at the start were rewritten inside
-    # the container and are its own; the others were read live.
-    leaked = names(before, after) - names(commit, before)
-    leaked |= set(module.git(root, "ls-files", "--others", "--exclude-standard").split()) - set(open(listing).read().split())
-    print("\n".join(sorted(leaked)))' "$@"
-}
+print(module.release_content(module.ROOT, sys.argv[1]))
+PY_CONTENT
+)
+snapshot=$(cat scripts/check-release-overlay.py)
 
 # Runs inside the container, from this variable rather than the script file,
 # because resetting the overlay to HEAD may rewrite this script.
 inside='set -eu
-filesystem=$(awk '\''$5 == "/src" { for (i = 7; i <= NF; i++) if ($i == "-") { print $(i + 1); exit } }'\'' /proc/self/mountinfo)
-if [ "$filesystem" != overlay ]; then
-    echo "release-ready: /src is not an overlay; refusing to reset it" >&2
-    exit 2
-fi
-git config --global --add safe.directory /src
-git lfs install --skip-repo >/dev/null
-git -c core.hooksPath=/dev/null reset -q --hard "$RELEASE_READY_COMMIT"
-git clean -ffdxq -e /build
+python3 -c "$RELEASE_READY_SNAPSHOT" /src "$RELEASE_READY_COMMIT"
 failed=""
 job() {
     name=$1
@@ -108,7 +83,8 @@ if [ -n "$failed" ]; then
     printf "\nrelease-ready: FAILED:%s\n" "$failed"
     exit 1
 fi
-printf "\nrelease-ready: every covered CI job passed\n"'
+git diff --exit-code "$RELEASE_READY_COMMIT" -- .
+printf "\nrelease-ready: every covered local CI job passed\n"'
 
 mkdir -p "$output/build" "$output/home"
 sync_server=""
@@ -117,7 +93,7 @@ mkdir -p "$sync_mount_source"
 if [ "$#" -eq 0 ]; then
     sync_server=${RELEASE_READY_DAOCHI_SOURCE:-"$root/../../kryonlabs/daochi"}
     sync_server=$(CDPATH= cd -- "$sync_server" && pwd)
-    sync_commit=$(cat .github/sync-test-server-commit)
+    sync_commit=$(git show "$commit:.github/sync-test-server-commit")
     git -C "$sync_server" cat-file -e "$sync_commit^{commit}"
     sync_mount_source=$sync_server
 fi
@@ -137,13 +113,6 @@ if ! podman image exists "$image"; then
 fi
 
 rm -f "$output/stamp.json"
-content=$(state content "$commit")
-tree_before=$(state tree)
-state untracked > "$output/untracked-before"
-if [ -n "$sync_server" ]; then
-    sync_tree_before=$(RELEASE_READY_STATE_ROOT="$sync_server" state tree)
-    RELEASE_READY_STATE_ROOT="$sync_server" state untracked > "$output/sync-untracked-before"
-fi
 started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 echo "release-ready: testing $(git log -1 --format='%h %s' "$commit")"
 
@@ -171,28 +140,9 @@ podman run --rm --pull=never --userns=keep-id \
     -v "$sync_mount_source:/sync-server:O" \
     $android_mount \
     -e HOME=/home/ubuntu -e CI=true -e RELEASE_READY_COMMIT="$commit" \
+    -e RELEASE_READY_SNAPSHOT="$snapshot" \
     -w /src "$image" sh -c "$inside" release-ready "$@" || status=$?
 
-# The container sees files nobody changed since HEAD live through the
-# overlay, so another session's edits during the run can reach the tests.
-leaked=$(state leaked "$tree_before" "$commit" "$output/untracked-before")
-rm -f "$output/untracked-before"
-if [ -n "$sync_server" ]; then
-    sync_leaked=$(RELEASE_READY_STATE_ROOT="$sync_server" state leaked "$sync_tree_before" "$sync_commit" "$output/sync-untracked-before")
-    rm -f "$output/sync-untracked-before"
-    if [ -n "$sync_leaked" ]; then
-        echo "release-ready: Daochi source changed during the run; refusing a clean result:" >&2
-        printf '%s\n' "$sync_leaked" | head -n 10 | sed 's/^/  /' >&2
-        exit 3
-    fi
-fi
-if [ -n "$leaked" ]; then
-    count=$(printf '%s\n' "$leaked" | grep -c .)
-    echo "release-ready: $count files changed in the checkout during the run and may have reached" >&2
-    echo "the tests, so this is not a clean result; run again when other sessions are idle:" >&2
-    printf '%s\n' "$leaked" | head -n 10 | sed 's/^/  /' >&2
-    exit 3
-fi
 if [ "$status" -ne 0 ] || [ "$#" -gt 0 ]; then
     exit "$status"
 fi

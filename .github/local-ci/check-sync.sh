@@ -8,8 +8,7 @@ if [ "$filesystem" != overlayfs ]; then
     exit 2
 fi
 commit=$(cat .github/sync-test-server-commit)
-git -c safe.directory="$server" -C "$server" -c core.hooksPath=/dev/null reset -q --hard "$commit"
-git -c safe.directory="$server" -C "$server" clean -ffdxq
+python3 -c "$RELEASE_READY_SNAPSHOT" "$server" "$commit"
 expected=$(git -c safe.directory="$server" -C "$server" rev-parse HEAD:vendor/liboqs)
 actual=$(git -c safe.directory="$server/vendor/liboqs" -C "$server/vendor/liboqs" rev-parse HEAD)
 if [ "$expected" != "$actual" ]; then
@@ -22,3 +21,4 @@ if [ -n "$(git -c safe.directory="$server/vendor/liboqs" -C "$server/vendor/libo
 fi
 make -C "$server" BUILD_DIR=/src/build/sync-test-server build
 DAOCHI_BIN="$server/daochi" make sync-server-test
+git -c safe.directory="$server" -C "$server" diff --exit-code "$commit" -- .
