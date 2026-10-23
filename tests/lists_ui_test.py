@@ -136,6 +136,17 @@ with contextlib.ExitStack() as stack:
         shown = [label for label in driver.labels() if ALARMING.search(label)]
         assert not shown, f"FAIL {message}: {shown} ({TEST_DIR})"
 
+    def alerts_quiet(seconds=2.0):
+        """Achievement alerts open one after another over the field's right
+        end, where Done and Delete are; wait until none has shown a while."""
+        quiet_since = time.monotonic()
+        deadline = quiet_since + 60
+        while time.monotonic() - quiet_since < seconds:
+            if driver.find(contains="Achievement unlocked", visible=True):
+                quiet_since = time.monotonic()
+            assert time.monotonic() < deadline, f"FAIL achievement alerts kept showing ({TEST_DIR})"
+            time.sleep(0.05)
+
     # Undo follows the real bundle and typed persistence bridge, preserving
     # the original completed item and its comment rather than creating a copy.
     def row_control(title, kind):
@@ -152,9 +163,18 @@ with contextlib.ExitStack() as stack:
              "the undo fixture was not completed")
     driver.press(label="All", role="tab")
     driver.press(key=row_control("Fresh fruit", "button"))
+    driver.wait(role="text_field", value="Fresh fruit")
+    alerts_quiet()
+    delete = driver.wait(label="Delete item", role="button")
+    assert delete["width"] <= delete["height"] * 1.2, f"Delete is not a trash icon: {delete}"
     driver.press(label="Delete item", role="button")
     wait_for(lambda: sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) > 0,
              "the item was not deleted")
+    # Deleting leaves Edit: the field is empty again, ready to add.
+    driver.wait(label="Add", role="button")
+    assert not driver.find(label="Delete item", role="button", visible=True), "Delete stayed after deleting"
+    assert driver.find(role="text_field", value="", visible=True), \
+        f"the deleted item's name stayed in the field: {driver.find(role='text_field')}"
     driver.press(label="Undo delete", role="button")
     wait_for(lambda: sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) == 0,
              "Undo did not restore the item")

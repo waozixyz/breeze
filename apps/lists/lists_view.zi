@@ -73,6 +73,8 @@ undo_account: string;
 undo_until: float64;
 // Share, as in a document: a person with a plus.
 SHARE_ICON :: "S1.8rr:M9 4.5C10.93 4.5 12.5 6.07 12.5 8C12.5 9.93 10.93 11.5 9 11.5C7.07 11.5 5.5 9.93 5.5 8C5.5 6.07 7.07 4.5 9 4.5ZM3 20C3 16.7 5.7 14 9 14C12.3 14 15 16.7 15 20M19 8V14M16 11H22"
+// The same trash can as Photos and Lumi.
+TRASH_ICON :: "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
 
 Scale :: (pixels: s32) -> s32 {
     return cast(s32)(cast(float32)pixels * frame.scale)
@@ -760,7 +762,12 @@ ListsPage :: () {
                 .wrap = cast(TextWrap)TextWrapAuto})
         return
     }
-    committed := Field(Bounds(x, y, width - Scale(96), Scale(44)),
+    editing_row := state.editing_item >= 0 && state.editing_item < state.item_count
+    field_width := width - Scale(96)
+    if editing_row {
+        field_width -= Scale(52)
+    }
+    committed := Field(Bounds(x, y, field_width, Scale(44)),
         ListsLocaleHost(ifx state.editing_item >= 0 then "elist_item_name_placeholder" else "elist_add_item_placeholder"), blocked)
     if Button(frame.session, ButtonProps.{.key = cast(u64)6507,
             .label = ListsLocaleHost(ifx state.editing_item >= 0 then "done_button" else "elist_add_item"),
@@ -770,9 +777,26 @@ ListsPage :: () {
         Mutation(LISTS_COMMIT, -1)
         return
     }
+    // While an item is in Edit, a trash can beside Done deletes it and
+    // leaves Edit with an empty field; Undo brings the item back.
+    if editing_row {
+        if Button(frame.session, ButtonProps.{.key = cast(u64)6516,
+                .label = ListsLocaleHost("elist_delete_item"),
+                .bounds = Bounds(x + field_width + Scale(8), y, Scale(44), Scale(44)),
+                .icon_shape = TRASH_ICON, .icon_only = true,
+                .tone = cast(ButtonTone)ButtonToneDanger,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost, .disabled = blocked}) != 0 {
+            editing := state.editing_item
+            RememberDeleted(ReadListsRowHost(editing, true))
+            Mutation(LISTS_DELETE_ITEM, editing)
+            state.editing_item = -1
+            state.reset_input = true
+            return
+        }
+    }
     y += Scale(56)
-    // One small line under the field: filter the finished items, delete the
-    // item being edited, or take back the last deletion.
+    // One small line under the field: filter the finished items, or take
+    // back the last deletion.
     filters: [2]Tab
     filters[0] = Tab.{.key = cast(u64)6840, .label = ListsLocaleHost("elist_filter_open")}
     filters[1] = Tab.{.key = cast(u64)6841, .label = ListsLocaleHost("elist_filter_all")}
@@ -786,20 +810,7 @@ ListsPage :: () {
         frame.scroll = 0
     }
     side_width := Scale(150)
-    if state.editing_item >= 0 && state.editing_item < state.item_count {
-        if Button(frame.session, ButtonProps.{.key = cast(u64)6516,
-                .label = ListsLocaleHost("elist_delete_item"),
-                .bounds = Bounds(x + width - side_width, y, side_width, Scale(36)),
-                .tone = cast(ButtonTone)ButtonToneDanger,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost, .disabled = blocked}) != 0 {
-            editing := state.editing_item
-            RememberDeleted(ReadListsRowHost(editing, true))
-            Mutation(LISTS_DELETE_ITEM, editing)
-            state.editing_item = -1
-            state.reset_input = true
-            return
-        }
-    } else if undo_item.title.count > 0 && state.now < undo_until &&
+    if undo_item.title.count > 0 && state.now < undo_until &&
     undo_item.parent_id == current.id && undo_account == frame.public_id {
         if Button(frame.session, ButtonProps.{.key = cast(u64)6517,
                 .label = ListsLocaleHost("elist_undo"),
