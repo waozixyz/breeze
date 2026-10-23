@@ -18,8 +18,8 @@
 #import "button_props"
 #import "button_widget"
 #import "control_props"
-#import "checkbox_props"
-#import "checkbox_widget"
+#import "swipe_row_props"
+#import "swipe_row"
 #import "tab_bar_props"
 #import "tab_bar_widget"
 #import "scroll_props"
@@ -31,6 +31,7 @@
 #import "drawing_props"
 #import "tree"
 #import "icon"
+EditIcon :: #import "mingcute/mingcute_regular_edit_2";
 #import, file "../../src/cells/lists_ui_types.zi";
 #import, file "../../src/cells/lists_types.zi";
 
@@ -75,6 +76,19 @@ undo_until: float64;
 SHARE_ICON :: "S1.8rr:M9 4.5C10.93 4.5 12.5 6.07 12.5 8C12.5 9.93 10.93 11.5 9 11.5C7.07 11.5 5.5 9.93 5.5 8C5.5 6.07 7.07 4.5 9 4.5ZM3 20C3 16.7 5.7 14 9 14C12.3 14 15 16.7 15 20M19 8V14M16 11H22"
 // The same trash can as Photos and Lumi.
 TRASH_ICON :: "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
+// As in 1List, a tap on an item finishes it, a swipe right edits it and a
+// swipe left deletes it; Undo brings a deleted item back.
+row_swipe: SwipeRowState;
+
+EditSwipe :: () -> SwipeRowAction {
+    return SwipeRowAction.{.fill = Color.{58, 110, 165, 255},
+        .icon_shape = EditIcon.Shape, .icon_color = Color.{255, 255, 255, 255}}
+}
+
+DeleteSwipe :: () -> SwipeRowAction {
+    return SwipeRowAction.{.fill = Color.{198, 52, 52, 255},
+        .icon_shape = TRASH_ICON, .icon_color = Color.{255, 255, 255, 255}, .removes = true}
+}
 
 Scale :: (pixels: s32) -> s32 {
     return cast(s32)(cast(float32)pixels * frame.scale)
@@ -762,12 +776,7 @@ ListsPage :: () {
                 .wrap = cast(TextWrap)TextWrapAuto})
         return
     }
-    editing_row := state.editing_item >= 0 && state.editing_item < state.item_count
-    field_width := width - Scale(96)
-    if editing_row {
-        field_width -= Scale(52)
-    }
-    committed := Field(Bounds(x, y, field_width, Scale(44)),
+    committed := Field(Bounds(x, y, width - Scale(96), Scale(44)),
         ListsLocaleHost(ifx state.editing_item >= 0 then "elist_item_name_placeholder" else "elist_add_item_placeholder"), blocked)
     if Button(frame.session, ButtonProps.{.key = cast(u64)6507,
             .label = ListsLocaleHost(ifx state.editing_item >= 0 then "done_button" else "elist_add_item"),
@@ -776,23 +785,6 @@ ListsPage :: () {
             .disabled = frame.value.count == 0 || blocked}) != 0 || (committed && !blocked) {
         Mutation(LISTS_COMMIT, -1)
         return
-    }
-    // While an item is in Edit, a trash can beside Done deletes it and
-    // leaves Edit with an empty field; Undo brings the item back.
-    if editing_row {
-        if Button(frame.session, ButtonProps.{.key = cast(u64)6516,
-                .label = ListsLocaleHost("elist_delete_item"),
-                .bounds = Bounds(x + field_width + Scale(8), y, Scale(44), Scale(44)),
-                .icon_shape = TRASH_ICON, .icon_only = true,
-                .tone = cast(ButtonTone)ButtonToneDanger,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost, .disabled = blocked}) != 0 {
-            editing := state.editing_item
-            RememberDeleted(ReadListsRowHost(editing, true))
-            Mutation(LISTS_DELETE_ITEM, editing)
-            state.editing_item = -1
-            state.reset_input = true
-            return
-        }
     }
     y += Scale(56)
     // One small line under the field: filter the finished items, or take
@@ -863,30 +855,41 @@ ListsPage :: () {
             if row_y + Scale(64) > cast(s32)scroll.viewport.y &&
             row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height) {
                 row := ReadListsRowHost(index, true)
-                key := cast(u64)(7000 + index * 4)
-                checked := Checkbox(frame.session, CheckboxProps.{.key = key,
-                        .bounds = Bounds(x, row_y + Scale(10), Scale(44), Scale(44)),
-                        .checked = row.done != 0, .disabled = blocked})
-                if checked.changed {
-                    state.done = ifx checked.checked then 1 else 0
-                    Mutation(LISTS_SET_DONE, index)
-                    End(frame.session)
-                    return
-                }
-                text_width := row_right - (x + Scale(52)) - Scale(52)
-                Text(frame.session, TextProps.{.bounds = Bounds(x + Scale(52), row_y,
+                swiped := SwipeRow(frame.session, SwipeRowProps.{.key = cast(u64)(7000 + index * 4),
+                        .bounds = Bounds(x, row_y, row_right - x, Scale(64)),
+                        .label = row.title, .now = state.now, .scale = frame.scale,
+                        .start = EditSwipe(), .end = DeleteSwipe(), .disabled = blocked},
+                    row_swipe)
+                row_swipe = swiped.state
+                text_x := x + Scale(12) + cast(s32)swiped.offset
+                text_width := row_right - x - Scale(24)
+                Text(frame.session, TextProps.{.bounds = Bounds(text_x, row_y,
                         text_width, ifx row.comment.count > 0 then Scale(30) else Scale(64)),
                         .text = row.title, .vertical_align = cast(TextAlign)TextAlignCenter,
                         .strikethrough = row.done != 0})
                 if row.comment.count > 0 {
-                    Text(frame.session, TextProps.{.bounds = Bounds(x + Scale(52), row_y + Scale(34),
+                    Text(frame.session, TextProps.{.bounds = Bounds(text_x, row_y + Scale(34),
                             text_width, Scale(24)), .text = row.comment})
                 }
-                if Button(frame.session, ButtonProps.{.key = key + cast(u64)1,
-                        .bounds = Bounds(row_right - Scale(44), row_y + Scale(10), Scale(44), Scale(44)),
-                        .label = ListsLocaleHost("elist_rename"), .icon_type = cast(s32)IconEdit,
-                        .icon_only = true, .disabled = blocked}) != 0 {
+                if swiped.clicked {
+                    state.done = ifx row.done != 0 then 0 else 1
+                    Mutation(LISTS_SET_DONE, index)
+                    End(frame.session)
+                    return
+                }
+                if swiped.swiped_start {
                     BeginInput(index, row.title)
+                }
+                if swiped.swiped_end {
+                    // Deleting leaves Edit, since the items after it move up.
+                    RememberDeleted(row)
+                    Mutation(LISTS_DELETE_ITEM, index)
+                    if state.editing_item >= 0 {
+                        state.editing_item = -1
+                        state.reset_input = true
+                    }
+                    End(frame.session)
+                    return
                 }
             }
             row_y += Scale(72)

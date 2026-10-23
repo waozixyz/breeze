@@ -136,54 +136,51 @@ with contextlib.ExitStack() as stack:
         shown = [label for label in driver.labels() if ALARMING.search(label)]
         assert not shown, f"FAIL {message}: {shown} ({TEST_DIR})"
 
-    def alerts_quiet(seconds=2.0):
-        """Achievement alerts open one after another over the field's right
-        end, where Done and Delete are; wait until none has shown a while."""
-        quiet_since = time.monotonic()
-        deadline = quiet_since + 60
-        while time.monotonic() - quiet_since < seconds:
-            if driver.find(contains="Achievement unlocked", visible=True):
-                quiet_since = time.monotonic()
-            assert time.monotonic() < deadline, f"FAIL achievement alerts kept showing ({TEST_DIR})"
-            time.sleep(0.05)
-
-    # Undo follows the real bundle and typed persistence bridge, preserving
-    # the original completed item and its comment rather than creating a copy.
-    def row_control(title, kind):
-        row = driver.wait(label=title)
-        controls = [node for node in driver.tree() if node["kind"] == kind and node["visible"] and
-                    (kind != "button" or node["label"] == "Rename")]
-        control = min(controls, key=lambda node: abs(node["y"] - row["y"]))
-        assert abs(control["y"] - row["y"]) < 64, (row, control)
-        return control["key"]
+    # As in 1List, a tap on an item finishes it, a swipe right edits it and
+    # a swipe left deletes it. Undo follows the real bundle and typed
+    # persistence bridge, preserving the original completed item and its
+    # comment rather than creating a copy.
+    def swipe(title, share):
+        """Drag the item's row sideways by this share of its width."""
+        row = driver.wait(label=title, role="button")
+        x, y = UiDriver.center(row)
+        driver.drag((x, y), (x + row["visible_width"] * share, y), steps=10)
+        driver.wait_idle(frames=3, timeout=2)
 
     original = sql("SELECT id,comment,sort_order FROM elist_items WHERE title='Fresh fruit' AND deleted_at=0")
-    driver.press(key=row_control("Fresh fruit", "checkbox"))
+    assert not driver.find(role="checkbox", visible=True), "items still have checkboxes"
+    assert not [node for node in driver.tree() if node["visible"] and node["label"] == "Rename" and node["y"] > 160], \
+        "items still have edit buttons"
+    driver.press(label="Fresh fruit", role="button")
     wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 1,
-             "the undo fixture was not completed")
+             "a tap did not finish the item")
     driver.press(label="All", role="tab")
-    driver.press(key=row_control("Fresh fruit", "button"))
+    # A short swipe slides back and changes nothing.
+    swipe("Fresh fruit", -0.2)
+    swipe("Fresh fruit", 0.2)
+    assert driver.find(role="text_field", value="", visible=True), "a short swipe right began editing"
+    assert sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) == 0, "a short swipe left deleted"
+    swipe("Fresh fruit", 0.6)
     driver.wait(role="text_field", value="Fresh fruit")
-    alerts_quiet()
-    delete = driver.wait(label="Delete item", role="button")
-    assert delete["width"] <= delete["height"] * 1.2, f"Delete is not a trash icon: {delete}"
-    driver.press(label="Delete item", role="button")
+    driver.wait(label="Done", role="button")
+    assert not driver.find(label="Delete item", role="button", visible=True), "Edit still shows a delete button"
+    swipe("Fresh fruit", -0.6)
     wait_for(lambda: sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) > 0,
-             "the item was not deleted")
+             "a swipe left did not delete the item")
     # Deleting leaves Edit: the field is empty again, ready to add.
     driver.wait(label="Add", role="button")
-    assert not driver.find(label="Delete item", role="button", visible=True), "Delete stayed after deleting"
     assert driver.find(role="text_field", value="", visible=True), \
         f"the deleted item's name stayed in the field: {driver.find(role='text_field')}"
+    assert not driver.find(label="Fresh fruit", role="button", visible=True), "the deleted item is still listed"
     driver.press(label="Undo delete", role="button")
     wait_for(lambda: sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) == 0,
              "Undo did not restore the item")
     restored = sql("SELECT id,comment,sort_order,done FROM elist_items WHERE title='Fresh fruit' AND deleted_at=0")
     assert restored == (*original, 1), ("Undo changed the item", original, restored)
     assert sql("SELECT COUNT(*) FROM elist_items WHERE title='Fresh fruit'") == 1, "Undo made a duplicate"
-    driver.press(key=row_control("Fresh fruit", "checkbox"))
+    driver.press(label="Fresh fruit", role="button")
     wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 0,
-             "the original completion state was not restored")
+             "a second tap did not reopen the item")
 
     driver.press(label="Weekend", role="tab")
     add("Weekend task")
