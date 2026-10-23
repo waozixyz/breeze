@@ -23,6 +23,12 @@ DISPLAY_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "GDK_DISPLAY",
 EXCLUSIVE_TARGETS = {"tab-switch-performance-test"}
 
 
+def default_jobs():
+    """Leave one processor for the shared build and display work, using at most four."""
+    processors = len(os.sched_getaffinity(0))
+    return max(2, min(4, processors - 1))
+
+
 def artifacts(binary):
     paths = [binary, ROOT / "ziran.lock", ROOT / "build/inbe.zib",
              ROOT / "build/inbe-full.zib", *sorted((ROOT / "build/cells").glob("*.zib")),
@@ -49,7 +55,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)
     parser.add_argument("targets", nargs="+")
-    parser.add_argument("--jobs", type=int, default=int(os.environ.get("VISUAL_TEST_JOBS", "2")))
+    parser.add_argument("--jobs", type=int, default=int(os.environ.get("VISUAL_TEST_JOBS", default_jobs())))
     arguments = parser.parse_args()
     if arguments.jobs < 1:
         parser.error("--jobs must be positive")
@@ -62,7 +68,11 @@ def main():
 
 
 def run_suites(targets, jobs, execute, complete, cancel=lambda: None):
-    """Bound concurrent UI processes and leave timing suites uncontended."""
+    """Bound concurrent UI processes and leave timing suites uncontended.
+
+    Timing suites run alone after every other suite, so waiting for them
+    never idles the other workers in the middle of the gate.
+    """
     with ThreadPoolExecutor(max_workers=jobs) as pool:
         pending = set()
 
@@ -77,13 +87,14 @@ def run_suites(targets, jobs, execute, complete, cancel=lambda: None):
         try:
             for target in targets:
                 if target in EXCLUSIVE_TARGETS:
-                    collect(all_pending=True)
-                    complete(execute(target))
-                else:
-                    pending.add(pool.submit(execute, target))
-                    if len(pending) >= jobs:
-                        collect()
+                    continue
+                pending.add(pool.submit(execute, target))
+                if len(pending) >= jobs:
+                    collect()
             collect(all_pending=True)
+            for target in targets:
+                if target in EXCLUSIVE_TARGETS:
+                    complete(execute(target))
         except BaseException:
             cancel()
             for future in pending:

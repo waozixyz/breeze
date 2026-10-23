@@ -48,10 +48,14 @@ music-navigation-test: $(TARGET)
 native-zoom-test: $(TARGET)
 	sh tests/native_zoom_test.sh $(abspath $(TARGET))
 
-.PHONY: native-visual-test visual-test
-native-visual-test: $(TARGET)
+# The palette and scale matrix runs as parts the visual gate can run at once.
+NATIVE_VISUAL_PARTS := 1 2 3 4
+NATIVE_VISUAL_TARGETS := $(foreach part,$(NATIVE_VISUAL_PARTS),native-visual-test-$(part))
+.PHONY: native-visual-test visual-test $(NATIVE_VISUAL_TARGETS)
+native-visual-test: $(NATIVE_VISUAL_TARGETS)
+$(NATIVE_VISUAL_TARGETS): native-visual-test-%: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
-		python3 tests/native_visual_test.py $(abspath $(TARGET))
+		python3 tests/native_visual_test.py $(abspath $(TARGET)) --part $*/$(words $(NATIVE_VISUAL_PARTS))
 
 .PHONY: entity-profile-ui-test
 entity-profile-ui-test: $(TARGET)
@@ -68,7 +72,8 @@ native-text-pixels-test: $(TARGET)
 		sh $(KRYON_DIR)/tests/raylib_text_pixels_test.sh
 
 # Run every visual suite and retain a receipt even when an earlier suite fails.
-VISUAL_TEST_TARGETS := practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test native-visual-test launcher-ui-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-ui-test lumi-history-ui-test habits-table-ui-test habits-count-ui-test habit-schedule-tool-test habit-tracking-tool-test lists-ui-test sync-review-ui-test data-back-ui-test lumi-selection-ui-test lumi-harness-ui-test lumi-guide-ui-test lumi-emphasis-ui-test customize-nav-ui-test
+# The longest suites come first so the gate does not end waiting on one.
+VISUAL_TEST_TARGETS := $(NATIVE_VISUAL_TARGETS) launcher-ui-test lumi-ui-test practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-history-ui-test habits-table-ui-test habits-count-ui-test habit-schedule-tool-test habit-tracking-tool-test lists-ui-test sync-review-ui-test data-back-ui-test lumi-selection-ui-test lumi-harness-ui-test lumi-guide-ui-test lumi-emphasis-ui-test customize-nav-ui-test
 VISUAL_TEST_TARGETS += audio-setup-ui-test cells-onboarding-test practice-downloads-ui-test tab-switch-performance-test habit-unsaved-ui-test
 VISUAL_TEST_TARGETS += entity-profile-ui-test
 VISUAL_TEST_TARGETS += music-navigation-test

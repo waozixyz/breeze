@@ -50,7 +50,12 @@ class VisualRunnerTest(unittest.TestCase):
         self.assertEqual(len(completed), len(targets))
         self.assertEqual([check for check in completed if check["status"] == "failed"],
                          [{"suite": "failure", "status": "failed"}])
-        self.assertEqual(completed[2]["suite"], "tab-switch-performance-test")
+        self.assertEqual(completed[-1]["suite"], "tab-switch-performance-test")
+
+    def test_default_jobs_use_spare_processors_within_bounds(self):
+        for processors, jobs in ((1, 2), (2, 2), (4, 3), (5, 4), (32, 4)):
+            with mock.patch.object(gate.os, "sched_getaffinity", return_value=set(range(processors))):
+                self.assertEqual(gate.default_jobs(), jobs)
 
     def test_interrupted_scheduling_cancels_its_children(self):
         cancelled = []

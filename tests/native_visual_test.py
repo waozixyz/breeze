@@ -132,29 +132,69 @@ def assert_app_entry_regressions_rejected(image, bounds, name, node):
             raise AssertionError("App entry oracle accepted a missing name or highlighted app")
 
 
+def part(value):
+    """PART/PARTS, such as 2/4: one share of the case matrix."""
+    index, _, count = value.partition("/")
+    if not (index.isdecimal() and count.isdecimal() and 1 <= int(index) <= int(count)):
+        raise argparse.ArgumentTypeError("expected PART/PARTS with 1 <= PART <= PARTS")
+    return int(index), int(count)
+
+
+def part_cases(arguments):
+    """This part's cases; the parts together run every case exactly once."""
+    layouts = () if arguments.appearance_only else ((900, 720, "desktop"), (390, 844, "phone"))
+    cases = [("selection", width, height, layout, theme, dark)
+             for width, height, layout in layouts
+             for theme in ([9] if arguments.quick else range(13))
+             for dark in (0, 1)]
+    scales = (22, 25) if arguments.quick else range(10, 26)
+    cases += [("appearance", scale) for scale in scales]
+    index, count = arguments.part
+    return [case for number, case in enumerate(cases) if number % count == index - 1]
+
+
+def expected_checks(arguments, cases):
+    """Six states per palette case, one more for its negative controls, one per scale."""
+    negative_control = (900, 720, "desktop", 9 if arguments.quick else 0, 0)
+    expected = 0
+    for case in cases:
+        if case[0] == "appearance":
+            expected += 1
+        else:
+            expected += 6
+            if case[1:] == negative_control:
+                expected += 1
+    return expected
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("binary", type=Path)
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--appearance-only", action="store_true",
                         help="Investigate label layout without rerunning the palette matrix")
+    parser.add_argument("--part", type=part, default=(1, 1),
+                        help="Run one PART/PARTS share of the cases, so parts can run at once")
     arguments = parser.parse_args()
     OUTPUT.mkdir(parents=True, exist_ok=True)
     evidence = []
+    cases = part_cases(arguments)
+    index, count = arguments.part
     receipt = {
         "status": "running",
         "quick": arguments.quick,
         "binary_sha256": hashlib.sha256(arguments.binary.read_bytes()).hexdigest(),
         "appearance_only": arguments.appearance_only,
-        "expected_checks": ((0 if arguments.appearance_only else (25 if arguments.quick else 313))
-                            + (2 if arguments.quick else 16)),
+        "part": f"{index}/{count}",
+        "expected_checks": expected_checks(arguments, cases),
         "appearance_range_percent": [220, 250] if arguments.quick else [100, 250],
         "checks": evidence,
     }
-    result_path = OUTPUT / "results.json"
+    suffix = "" if count == 1 else f"-{index}-of-{count}"
+    result_path = OUTPUT / f"results{suffix}.json"
     result_path.write_text(json.dumps(receipt, indent=2) + "\n")
     try:
-        run_cases(arguments, evidence)
+        run_cases(arguments, cases, suffix, evidence)
         assert len(evidence) == receipt["expected_checks"], "Incomplete visual matrix"
         receipt["status"] = "passed"
     except BaseException as error:
@@ -166,15 +206,15 @@ def main():
     print(f"Native visual checks: {len(evidence)} text and navigation checks passed", flush=True)
 
 
-def run_cases(arguments, evidence):
-    driver = UiDriver(OUTPUT / "driver")
+def run_cases(arguments, cases, suffix, evidence):
+    driver = UiDriver(OUTPUT / ("driver" + suffix))
     environment = {key: value for key, value in os.environ.items() if key not in DESKTOP_ENV}
     environment.update(driver.environment())
     environment.update(YUE_DESKTOP_RECOVERY="0", APP_NO_TRAY="1",
                        SDL_VIDEODRIVER="x11", SDL_AUDIODRIVER="dummy",
                        LIBGL_ALWAYS_SOFTWARE="1", APP_SHOT_WINDOW="1", LANGUAGE="en")
     with contextlib.ExitStack() as stack:
-        display_log = stack.enter_context((OUTPUT / "display.log").open("w"))
+        display_log = stack.enter_context((OUTPUT / f"display{suffix}.log").open("w"))
         display = subprocess.Popen(["Xvfb", "-displayfd", "1", "-screen", "0",
                                     "1280x1000x24", "-nolisten", "tcp"],
                                    env=environment, stdout=subprocess.PIPE, stderr=display_log)
@@ -267,77 +307,76 @@ def run_cases(arguments, evidence):
 
         # Every app palette must distinguish the active route at rest, on hover
         # and while pressed, on the actual desktop and phone compositions.
-        layouts = () if arguments.appearance_only else ((900, 720, "desktop"), (390, 844, "phone"))
-        for width, height, layout in layouts:
-            for theme in ([9] if arguments.quick else range(13)):
-                for dark in (0, 1):
-                    name = f"selection-{layout}-{theme}-{dark}"
-                    # Desktop Apps sits in the sidebar's bottom corner; the
-                    # phone's compact dock is 56 units tall at the bottom edge.
-                    below_label = 12 if layout == "desktop" else 6
-                    with application(name, "launcher", width, height, theme=theme,
-                                     dark=dark) as (window, capture, on_screen, point):
-                        nodes = driver.tree()
-                        apps = in_navigation(nodes, "Apps")
-                        assert len(driver.find(key=apps["key"])) == 1, f"{name}: two widgets share a key"
-                        bounds = on_screen(apps)
-                        if layout == "desktop":
-                            assert bounds[0] < 100 and bounds[3] > height - 120, \
-                                f"{name}: Apps left the sidebar's bottom corner: {bounds}"
-                        else:
-                            assert bounds[1] >= height - 60, f"{name}: Apps left the bottom dock: {bounds}"
-                        middle = ((bounds[0] + bounds[2]) // 2, (bounds[1] + bounds[3]) // 2)
-                        for state in ("idle", "hover", "pressed"):
-                            if state != "idle":
-                                point(*middle, down=state == "pressed")
-                                settle()
-                            image = capture("-" + state)
-                            selected = driver.find(key=apps["key"])[0]
-                            metrics = assert_selection(image, bounds, name + "-" + state,
-                                                       below_label=below_label, node=selected)
-                            evidence.append({"case": name, "state": state, **metrics})
-                            if (layout == "desktop" and dark == 0 and state == "idle"
-                                    and theme == (9 if arguments.quick else 0)):
-                                assert_regressions_rejected(image, bounds, name)
-                                evidence.append({"case": name, "negative_controls": 4})
-                        # Release away from Apps to isolate the pointer-state
-                        # checks from navigation.
-                        point(width - 2, 2, down=True)
-                        point(width - 2, 2)
-                        settle(.15)
-                        # This fixture pins Habits then Practice. List entries
-                        # stack vertically and keep the last-opened app ordinary.
-                        nodes = driver.tree()
-                        practice = in_page(nodes, "Practice")
-                        assert len(driver.find(key=practice["key"])) == 1, f"{name}: two widgets share a key"
-                        pinned = [node for node in nodes if node["parent"] == practice["parent"]
-                                  and node["kind"] == "button" and node["width"] == practice["width"]]
-                        pinned.sort(key=lambda node: (node["y"], node["x"]))
-                        assert pinned.index(practice) == 1, f"{name}: Practice is not the second pinned card"
-                        card = on_screen(practice)
-                        middle = ((card[0] + card[2]) // 2, (card[1] + card[3]) // 2)
-                        for state in ("idle", "hover", "pressed"):
-                            if state != "idle":
-                                point(*middle, down=state == "pressed")
-                                settle()
-                            image = capture("-card-" + state)
-                            selected = driver.find(key=practice["key"])[0]
-                            metrics = assert_app_entry(image, card, name + "-card-" + state, selected)
-                            if state == "idle":
-                                ordinary = on_screen(in_page(driver.tree(), "Habits"))
-                                normal_fill = image.getpixel(((ordinary[0] + ordinary[2]) // 2, ordinary[1] + 6))
-                                assert image.getpixel(((card[0] + card[2]) // 2, card[1] + 6)) == normal_fill, \
-                                    f"{name}: last-opened app has a different fill"
-                            if layout == "desktop" and dark == 0 and state == "idle" and theme == (9 if arguments.quick else 0):
-                                assert_app_entry_regressions_rejected(image, card, name, selected)
-                                metrics["negative_controls"] = 2
-                            evidence.append({"case": name, "state": "card-" + state, **metrics})
-                        # Finish the held press outside the card so it cannot open
-                        # a route before the fixture's last frame is checked.
-                        point(width - 2, 2, down=True)
-                        point(width - 2, 2)
-                        settle(.15)
-            print(f"Selection palettes passed for {layout}", flush=True)
+        selections = [case[1:] for case in cases if case[0] == "selection"]
+        for width, height, layout, theme, dark in selections:
+            name = f"selection-{layout}-{theme}-{dark}"
+            # Desktop Apps sits in the sidebar's bottom corner; the
+            # phone's compact dock is 56 units tall at the bottom edge.
+            below_label = 12 if layout == "desktop" else 6
+            with application(name, "launcher", width, height, theme=theme,
+                             dark=dark) as (window, capture, on_screen, point):
+                nodes = driver.tree()
+                apps = in_navigation(nodes, "Apps")
+                assert len(driver.find(key=apps["key"])) == 1, f"{name}: two widgets share a key"
+                bounds = on_screen(apps)
+                if layout == "desktop":
+                    assert bounds[0] < 100 and bounds[3] > height - 120, \
+                        f"{name}: Apps left the sidebar's bottom corner: {bounds}"
+                else:
+                    assert bounds[1] >= height - 60, f"{name}: Apps left the bottom dock: {bounds}"
+                middle = ((bounds[0] + bounds[2]) // 2, (bounds[1] + bounds[3]) // 2)
+                for state in ("idle", "hover", "pressed"):
+                    if state != "idle":
+                        point(*middle, down=state == "pressed")
+                        settle()
+                    image = capture("-" + state)
+                    selected = driver.find(key=apps["key"])[0]
+                    metrics = assert_selection(image, bounds, name + "-" + state,
+                                               below_label=below_label, node=selected)
+                    evidence.append({"case": name, "state": state, **metrics})
+                    if (layout == "desktop" and dark == 0 and state == "idle"
+                            and theme == (9 if arguments.quick else 0)):
+                        assert_regressions_rejected(image, bounds, name)
+                        evidence.append({"case": name, "negative_controls": 4})
+                # Release away from Apps to isolate the pointer-state
+                # checks from navigation.
+                point(width - 2, 2, down=True)
+                point(width - 2, 2)
+                settle(.15)
+                # This fixture pins Habits then Practice. List entries
+                # stack vertically and keep the last-opened app ordinary.
+                nodes = driver.tree()
+                practice = in_page(nodes, "Practice")
+                assert len(driver.find(key=practice["key"])) == 1, f"{name}: two widgets share a key"
+                pinned = [node for node in nodes if node["parent"] == practice["parent"]
+                          and node["kind"] == "button" and node["width"] == practice["width"]]
+                pinned.sort(key=lambda node: (node["y"], node["x"]))
+                assert pinned.index(practice) == 1, f"{name}: Practice is not the second pinned card"
+                card = on_screen(practice)
+                middle = ((card[0] + card[2]) // 2, (card[1] + card[3]) // 2)
+                for state in ("idle", "hover", "pressed"):
+                    if state != "idle":
+                        point(*middle, down=state == "pressed")
+                        settle()
+                    image = capture("-card-" + state)
+                    selected = driver.find(key=practice["key"])[0]
+                    metrics = assert_app_entry(image, card, name + "-card-" + state, selected)
+                    if state == "idle":
+                        ordinary = on_screen(in_page(driver.tree(), "Habits"))
+                        normal_fill = image.getpixel(((ordinary[0] + ordinary[2]) // 2, ordinary[1] + 6))
+                        assert image.getpixel(((card[0] + card[2]) // 2, card[1] + 6)) == normal_fill, \
+                            f"{name}: last-opened app has a different fill"
+                    if layout == "desktop" and dark == 0 and state == "idle" and theme == (9 if arguments.quick else 0):
+                        assert_app_entry_regressions_rejected(image, card, name, selected)
+                        metrics["negative_controls"] = 2
+                    evidence.append({"case": name, "state": "card-" + state, **metrics})
+                # Finish the held press outside the card so it cannot open
+                # a route before the fixture's last frame is checked.
+                point(width - 2, 2, down=True)
+                point(width - 2, 2)
+                settle(.15)
+        if selections:
+            print(f"Selection palettes passed for {len(selections)} cases", flush=True)
 
         # Narrow Appearance labels must wrap and remain reachable when enlarged,
         # including the reported 220%/250% failures: each label scrolls wholly
@@ -345,7 +384,7 @@ def run_cases(arguments, evidence):
         # box shows every line it wraps to (Kryon reports hidden_lines). The
         # pixel-reference test covers small glyphs down to 50%, and the zoom
         # test checks a readable title at all 21 scale values.
-        scales = (22, 25) if arguments.quick else range(10, 26)
+        scales = [case[1] for case in cases if case[0] == "appearance"]
         for scale in scales:
             labels = ("style", "color theme", "mode", "scale factor",
                       "navigation position", "material", "mono", "light",
