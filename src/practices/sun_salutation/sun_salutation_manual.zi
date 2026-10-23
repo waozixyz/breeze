@@ -13,6 +13,7 @@ app_start_practice_from_ui :: (app: *InnerBreeze, id: s32) -> bool #foreign manu
 #import "session"
 #import "style"
 #import "surface"
+#import "text_align"
 #import "text_props"
 #import "text_widget"
 #import "tree"
@@ -37,6 +38,7 @@ app_start_practice_from_ui :: (app: *InnerBreeze, id: s32) -> bool #foreign manu
 
 using ExerciseType;
 using ImageFit;
+using TextAlign;
 using ModalType;
 using TextWrap;
 
@@ -85,10 +87,65 @@ SunManualParagraph :: (step: s32,
         LocaleText(SunManualBodyKey(step)), width)
 }
 
+// The first page shows the whole sequence like a classic chart: a card for
+// each step, three to a row, with its number, its pose seen from its own side
+// and its name.
+SUN_MANUAL_CHART_COLUMNS :: 3
+
+SunManualChartCardHeight :: (width: s32) -> s32 {
+    card_width := (width - AppScale(20) - AppScale(8) * (SUN_MANUAL_CHART_COLUMNS - 1)) / SUN_MANUAL_CHART_COLUMNS
+    return card_width * 4 / 3
+}
+
+SunManualVisualHeight :: (step: s32, width: s32) -> s32 {
+    if step != 0 {
+        return AppScale(178)
+    }
+    rows := (SUN_SALUTATION_STEP_COUNT + SUN_MANUAL_CHART_COLUMNS - 1) / SUN_MANUAL_CHART_COLUMNS
+    // Room below the cards for the page dots.
+    return AppScale(10) + rows * (SunManualChartCardHeight(width) + AppScale(8)) + AppScale(28)
+}
+
 SunManualContentHeight :: (step: s32, width: s32) -> s32 {
     paragraph := SunManualParagraph(step, width)
-    return AppScale(178 + 18) + manual_screen_guide_header_height() +         AppParagraphHeight(paragraph.text, paragraph.width,
+    return SunManualVisualHeight(step, width) + AppScale(18) + manual_screen_guide_header_height() +
+    AppParagraphHeight(paragraph.text, paragraph.width,
         paragraph.font, paragraph.line_gap)
+}
+
+SunManualChart :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
+    gap := AppScale(8)
+    inset := AppScale(10)
+    card_width := (width - inset * 2 - gap * (SUN_MANUAL_CHART_COLUMNS - 1)) / SUN_MANUAL_CHART_COLUMNS
+    card_height := SunManualChartCardHeight(width)
+    number_height := AppScale(22)
+    name_height := AppScale(38)
+    face := GuideFace(2)
+    card_color := DarkenColor(ColorFromPacked(face.value.background), 8)
+    for step: cast(s32)0..SUN_SALUTATION_STEP_COUNT - 1 {
+        column := step % SUN_MANUAL_CHART_COLUMNS
+        row := step / SUN_MANUAL_CHART_COLUMNS
+        card := Rectangle.{cast(float32)(x + inset + column * (card_width + gap)),
+            cast(float32)(y + inset + row * (card_height + gap)),
+            cast(float32)card_width, cast(float32)card_height}
+        PaintRoundedFill(app.ui.session, -1, card, cast(float32)AppScale(12), 10, card_color)
+        Text(app.ui.session, TextProps.{.text = SunManualNumber(app, step + 1, "%d"),
+                .font = AppSmallFontSize(), .wrap = cast(TextWrap)TextWrapNone,
+                .bounds = Rectangle.{card.x + cast(float32)AppScale(8), card.y + cast(float32)AppScale(4),
+                    card.width - cast(float32)AppScale(16), cast(float32)number_height}})
+        name_buffer: [40]u8
+        unused FormatNumberTemplate("sun_salutation_step_%d", step + 1, name_buffer[:])
+        name := LocaleText(AppTextFromCString(*name_buffer[0], 40))
+        figure := Rectangle.{card.x + cast(float32)AppScale(4), card.y + cast(float32)number_height,
+            card.width - cast(float32)AppScale(8), card.height - cast(float32)(number_height + name_height)}
+        SunSalutationDrawHeld(app.ui.session, app.sun_salutation.character, step, figure,
+            KeyHash("sun-salutation/manual/chart") + cast(u64)step * cast(u64)4096, name)
+        Text(app.ui.session, TextProps.{.text = name, .font = AppSmallFontSize(),
+                .wrap = cast(TextWrap)TextWrapAuto, .align = cast(TextAlign)TextAlignCenter,
+                .bounds = Rectangle.{card.x + cast(float32)AppScale(4),
+                    card.y + card.height - cast(float32)name_height,
+                    card.width - cast(float32)AppScale(8), cast(float32)name_height}})
+    }
 }
 
 SunManualNumber :: (app: *InnerBreeze, value: s32,
@@ -123,7 +180,7 @@ SunManualStat :: (app: *InnerBreeze, label: string,
 
 SunManualVisual :: (app: *InnerBreeze, x: s32, width: s32,
     step: s32, y: *s32) {
-    height := AppScale(178)
+    height := SunManualVisualHeight(step, width)
     bounds := Rectangle.{cast(float32)x, cast(float32)y.*,
         cast(float32)width, cast(float32)height
     }
@@ -131,15 +188,17 @@ SunManualVisual :: (app: *InnerBreeze, x: s32, width: s32,
     PaintRoundedFill(app.ui.session, -1, bounds,
         cast(float32)AppScale(16), 10,
         ColorFromPacked(face.value.background))
-    if step < 2 {
+    if step == 0 {
+        SunManualChart(app, x, y.*, width)
+    } else if step == 1 {
         pose_width := (width - AppScale(36)) / 3
         pose_keys: [3]string = .{"sun-salutation/manual/first",
             "sun-salutation/manual/middle", "sun-salutation/manual/last"}
         index: s32 = 0
         while index < 3 {
             pose: s32 = 0
-            if index == 1 { pose = ifx step == 0 then 5 else 3 }
-            if index == 2 { pose = ifx step == 0 then 11 else 7 }
+            if index == 1 { pose = 3 }
+            if index == 2 { pose = 7 }
             pose_bounds := Rectangle.{
                 cast(float32)(x + AppScale(10) +                     index * (pose_width + AppScale(8))),
                 cast(float32)(y.* + AppScale(24)),
@@ -223,7 +282,7 @@ sun_manual_draw :: (app: *InnerBreeze) {
     if result.opened {
         y := cast(s32)result.content.y
         hero := manual_screen_hero_bounds(column.x, column.width,
-            y, AppScale(178))
+            y, SunManualVisualHeight(step, column.width))
         SunManualVisual(app, cast(s32)hero.x,
             cast(s32)hero.width, step, *y)
         manual_screen_draw_hero_progress(hero, step,

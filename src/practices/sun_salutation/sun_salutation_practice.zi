@@ -57,15 +57,6 @@ sun_salutation_practice_init :: (app: *InnerBreeze) {
     app.sun_salutation = SalutationInit(app.sun_salutation)
 }
 
-draw_preview_pose :: (step: s32, x: s32, y: s32, w: s32, h: s32) {
-    inset := AppScale(3)
-    app := CurrentApp()
-    SunSalutationDrawHeld(app.ui.session, app.sun_salutation.character, step,
-        Rectangle.{cast(float32)(x + inset), cast(float32)(y + inset),
-            cast(float32)(w - inset * 2), cast(float32)(h - inset * 2)},
-        KeyHash("sun-salutation/preview") + cast(u64)step * cast(u64)4096, "")
-}
-
 draw_character_picker :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
     Text(app.ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)x, cast(float32)y, 0, 0},
@@ -88,88 +79,6 @@ draw_character_picker :: (app: *InnerBreeze, x: s32, y: s32, width: s32) {
     }
 }
 
-preview_height :: (content_w: s32) -> s32 {
-    thumb_w := (content_w - AppScale(22)) / 6
-
-    if thumb_w < AppScale(34) {
-        thumb_w = AppScale(34)
-    }
-    if thumb_w > AppScale(56) {
-        thumb_w = AppScale(56)
-    }
-    return thumb_w * 2 + AppScale(58)
-}
-
-draw_preview :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
-    label_font := AppFontSize()
-    label_w: s32
-    thumb_w := (w - AppScale(22)) / 6
-    thumb_h: s32
-    gap := AppScale(4)
-    active_step: s32
-    preview_step_ticks: s32
-    muted := DarkenColor(StyleTokenColor("text"), 40)
-
-    if thumb_w < AppScale(34) {
-        thumb_w = AppScale(34)
-    }
-    if thumb_w > AppScale(56) {
-        thumb_w = AppScale(56)
-    }
-    thumb_h = thumb_w
-
-    label_w = AppTextWidth(LocaleText("sun_salutation_tempo_preview_label"),
-        label_font)
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(x + (w - label_w) / 2), cast(float32)(y), 0, 0},
-            .text = (LocaleText("sun_salutation_tempo_preview_label")),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    y += AppScale(28)
-
-    preview_step_ticks = app.sun_salutation.start_seconds * 60
-    if preview_step_ticks <= 0 {
-        preview_step_ticks = SUN_SALUTATION_DEFAULT_START_SECONDS * 60
-    }
-    active_step = (app.breathing.frame / preview_step_ticks) %
-    SUN_SALUTATION_STEP_COUNT
-
-    {
-        i: s32 = 0
-        while i < SUN_SALUTATION_STEP_COUNT {
-            col := i % 6
-            row := i / 6
-            px := x + col * (thumb_w + gap) +             (w - (thumb_w * 6 + gap * 5)) / 2
-            py := y + row * (thumb_h + AppScale(18))
-
-            // The step being shown is outlined.
-            outline := Color.{0, 0, 0, 0}
-            if i == active_step {
-                outline = StyleTokenColor("accent-hover")
-            }
-            Box(app.ui.session, BoxProps.{
-                    .bounds = Rectangle.{cast(float32)px, cast(float32)py,
-                        cast(float32)thumb_w, cast(float32)thumb_h},
-                    .fill = DarkenColor(StyleTokenColor("canvas"), 6),
-                    .border = outline})
-            draw_preview_pose(i, px, py, thumb_w, thumb_h)
-            if i < SUN_SALUTATION_STEP_COUNT - 1 {
-                next_col := (i + 1) % 6
-
-                if next_col != 0 {
-                    link_y := cast(float32)(py + thumb_h / 2)
-                    Line(app.ui.session, LineProps.{
-                            .start = Vector2.{cast(float32)(px + thumb_w + AppScale(1)), link_y},
-                            .end = Vector2.{cast(float32)(px + thumb_w + gap - AppScale(1)), link_y},
-                            .color = muted})
-                }
-            }
-            i += 1
-        }
-    }
-
-}
-
 config_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
     bottom_padding: s32
 
@@ -181,8 +90,8 @@ config_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
     app.practice_config_tab = 0
     timing_hint_h := AppParagraphHeight(LocaleText("sun_salutation_tempo_preview_hint"),
         content_w, AppSmallFontSize(), AppScale(3))
-    return AppScale(76 + 24 + 32 + 74 * 3 + 24 + 86 + 24 + 32 + 74) +
-    timing_hint_h + preview_height(content_w) + meditation_music_measure_practice_settings(app,
+    return AppScale(76 + 24 + 32 + 74 * 3 + 24 + 86 + 32 + 74) +
+    timing_hint_h + meditation_music_measure_practice_settings(app,
         EXERCISE_SUN_SALUTATION,
         content_w, 0, 1) + AppScale(12) +
     PracticeNarrationSettingsHeight(app, EXERCISE_SUN_SALUTATION,
@@ -244,8 +153,8 @@ sun_salutation_config_screen_draw :: (app: *InnerBreeze) {
         duration := SalutationDurationSeconds(app.sun_salutation)
         duration_text: [128]u8
         duration_args: [2]FormatArg = .[
-            FormatArg.{.number = duration / 60},
-            FormatArg.{.number = duration % 60}]
+        FormatArg.{.number = duration / 60},
+        FormatArg.{.number = duration % 60}]
         unused FormatTemplate(LocaleText("sun_salutation_duration_value"),
             duration_args[:], duration_text[:])
         Box(app.ui.session, BoxProps.{
@@ -324,10 +233,10 @@ sun_salutation_config_screen_draw :: (app: *InnerBreeze) {
                 .font = AppSmallFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
         y += timing_hint_h + AppScale(24)
 
+        // The whole sequence is drawn in the guide, so the settings stay
+        // to what can be changed.
         draw_character_picker(app, content_x, y, content_w)
         y += AppScale(86)
-        draw_preview(app, content_x, y, content_w)
-        y += preview_height(content_w) + AppScale(24)
 
         Text(app.ui.session, TextProps.{
                 .bounds = Rectangle.{cast(float32)content_x, cast(float32)y, 0, 0},
