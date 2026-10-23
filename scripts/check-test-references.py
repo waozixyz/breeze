@@ -27,7 +27,6 @@ REFERENCE_ROOTS = (
     "Makefile",
     "GNUmakefile",
     "makefile",
-    "mkfile",
     "mk/",
     ".github/",
     ".githooks/",

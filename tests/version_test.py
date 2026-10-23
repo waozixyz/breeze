@@ -20,7 +20,7 @@ class VersionTest(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         paths = (
-            "CHANGELOG.md", "Makefile", "mkfile", "update_version.sh",
+            "CHANGELOG.md", "Makefile", "update_version.sh",
             "apps/versions.json", "apps/inbe/CHANGELOG.md", "apps/lists/CHANGELOG.md",
             "apps/habits/CHANGELOG.md", "apps/practice/CHANGELOG.md", "apps/diary/CHANGELOG.md",
             "apps/lumi/CHANGELOG.md", "apps/leaderboard/CHANGELOG.md",

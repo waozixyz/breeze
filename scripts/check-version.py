@@ -112,7 +112,7 @@ def validate(root, structure_only=False):
         check(f"{path}: date", release.get("date"), release_date)
 
     # Inspect maintained application and release sources, never vendor/build output.
-    sources = [root / path for path in ("Makefile", "mkfile", "update_version.sh", "site/build.sh")]
+    sources = [root / path for path in ("Makefile", "update_version.sh", "site/build.sh")]
     sources.extend(sorted((root / "mk").glob("*.mk")))
     for directory in ("src", "scripts", ".github"):
         sources.extend(path for path in (root / directory).rglob("*")
