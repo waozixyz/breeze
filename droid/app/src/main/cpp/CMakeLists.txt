@@ -26,10 +26,6 @@ set(SQLITE_AMALGAMATION_C "${SQLITE_BUILD_DIR}/sqlite3.c")
 set(SQLITE_AMALGAMATION_H "${SQLITE_BUILD_DIR}/sqlite3.h")
 include("${KRYON_DIR}/cmake/KryonAndroid.cmake")
 kryon_android_reproducible_paths("${REPO_ROOT}")
-# Ninja names the NDK's native_app_glue relative to the build directory, a
-# spelling that carries both install locations. Newer Kryon maps it as well.
-file(RELATIVE_PATH APP_NDK_FROM_BUILD "${CMAKE_BINARY_DIR}" "${ANDROID_NDK}")
-add_compile_options("-ffile-prefix-map=${APP_NDK_FROM_BUILD}=./ndk")
 # Apply the release size policy to static dependencies as well as the host.
 add_compile_options("$<$<NOT:$<CONFIG:Debug>>:-Oz>")
 set(OQS_BUILD_ONLY_LIB ON CACHE BOOL "" FORCE)
