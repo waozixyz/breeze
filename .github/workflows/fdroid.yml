@@ -8,7 +8,16 @@ on:
   schedule:
     - cron: '23 7 * * *'
   workflow_dispatch:
+    inputs:
+      revision:
+        description: Exact committed candidate (defaults to the triggering commit)
+        required: false
+        type: string
   workflow_call:
+    inputs:
+      revision:
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -22,6 +31,16 @@ jobs:
       # Official F-Droid buildserver, pinned for repeatable verification.
       image: registry.gitlab.com/fdroid/fdroidserver@sha256:1ea8bef1820bff06c2974e31b4fc4c79c364cd24231b86e71fa4b926797e0dac
     steps:
+      - name: Require an immutable candidate
+        env:
+          CANDIDATE: ${{ inputs.revision || github.sha }}
+        shell: bash
+        run: |
+          if ! [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::revision must be a full commit ID, never a branch or tag"
+            exit 1
+          fi
+
       # Checkout's LFS support requires git-lfs inside the job container.
       - name: Install recipe dependencies
         run: |
@@ -33,6 +52,7 @@ jobs:
       - name: Checkout candidate
         uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
+          ref: ${{ inputs.revision || github.sha }}
           path: build/xyz.waozi.inbe
           lfs: true
           persist-credentials: false

@@ -231,15 +231,96 @@ def release_at_head(version):
     return subject == SUBJECT.format(version=version) and unpushed_release(version) != ""
 
 
-def require_release_ready():
+def require_release_ready(revision="HEAD"):
     try:
         stamp = json.loads(READY_STAMP.read_text())
     except (OSError, ValueError):
         raise Refused("make release-ready has not passed here; run it first") from None
-    content = phone_check.release_content(ROOT, "HEAD")
+    content = phone_check.release_content(ROOT, revision)
     if stamp.get("passed") is not True or stamp.get("content") != content:
         raise Refused("make release-ready passed for other content "
-                      f"({stamp.get('commit', '?')[:10]}); run it again for HEAD")
+                      f"({stamp.get('commit', '?')[:10]}); run it again for the candidate")
+
+
+def fixed_release_commit(base, version, details):
+    """Keep the tested source immutable and preserve later master work verbatim."""
+    path = f"{phone_check.RECEIPTS}/{version}.json"
+    blob = subprocess.run(["git", "-C", ROOT, "hash-object", "-w", "--stdin"],
+                          input=(ROOT / path).read_bytes(), capture_output=True, check=True).stdout.decode().strip()
+    author = dict(os.environ, GIT_AUTHOR_NAME="Waozi", GIT_AUTHOR_EMAIL="waozi@proton.me",
+                  GIT_COMMITTER_NAME="Waozi", GIT_COMMITTER_EMAIL="waozi@proton.me")
+
+    def record(parent, message, other_parent=None):
+        with tempfile.TemporaryDirectory(prefix="inbe-release-index-") as temporary:
+            environment = dict(author, GIT_INDEX_FILE=str(Path(temporary) / "index"))
+            git("read-tree", parent, env=environment)
+            git("update-index", "--add", "--cacheinfo", "100644", blob, path, env=environment)
+            tree = git("write-tree", env=environment).strip()
+        command = ["git", "-C", ROOT, "commit-tree", tree, "-p", parent]
+        if other_parent:
+            command += ["-p", other_parent]
+        return subprocess.run(command, input=message + "\n", env=author, text=True,
+                              check=True, capture_output=True).stdout.strip()
+
+    release = record(base, SUBJECT.format(version=version) + "\n\n" + details)
+    for _ in range(10):
+        head = git("rev-parse", "refs/heads/master").strip()
+        if subprocess.run(["git", "-C", ROOT, "merge-base", "--is-ancestor", base, head],
+                          capture_output=True).returncode:
+            raise Refused("the candidate is outside master's history; no branch was changed")
+        target = release if head == base else record(
+            head, f"Merge tested Inner Breeze {version} release history", release)
+        result = subprocess.run(["git", "-C", ROOT, "update-ref", "refs/heads/master", target, head],
+                                capture_output=True)
+        if result.returncode == 0:
+            # Only this receipt enters the real index. Peer edits and staged
+            # files are untouched; the merge tree retains their committed source.
+            git("update-index", "--add", "--cacheinfo", "100644", blob, path)
+            output = ROOT / "build/release-candidate.json"
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text(json.dumps(dict(version=version, source_commit=base,
+                                             release_commit=release, master_commit=target), indent=2) + "\n")
+            return release
+    raise Refused("master advanced repeatedly; the immutable release object is saved and no peer work was changed")
+
+
+def release_fixed(args):
+    revision = git("rev-parse", args.revision + "^{commit}").strip()
+    headings = re.findall(r"^## \[(\d+\.\d+\.\d+)\]", git("show", revision + ":CHANGELOG.md"), re.M)
+    if not headings:
+        raise Refused("the candidate has no numeric release entry")
+    version = headings[0]
+    step(f"Inner Breeze {version}: fixed committed candidate")
+    require_new_version(version)
+    require_release_ready(revision)
+    checked_app = phone_check.app_tree(ROOT, revision)
+    if args.phone_check_waiver:
+        receipt = dict(schema=3, status="waived", version=version, app_tree=checked_app,
+                       source_commit=revision, reason=args.phone_check_waiver.strip(),
+                       authorized_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
+        target = ROOT / phone_check.RECEIPTS / f"{version}.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(receipt, indent=2) + "\n")
+    else:
+        if args.apk is None:
+            raise Refused("a fixed candidate needs its isolated APK and --build-receipt")
+        apk = args.apk.resolve(strict=True)
+        phone_check.require_build_receipt(apk, args.build_receipt, revision)
+        subprocess.run([sys.executable, ROOT / "scripts/phone-check.py", apk, "--record",
+                        "--host", args.host, "--serial", args.serial, "--revision", revision,
+                        "--build-receipt", args.build_receipt], check=True)
+        receipt = gate.validate(ROOT, version, revision)
+    if receipt["app_tree"] != checked_app:
+        raise Refused("the recorded check is for other app content")
+    if receipt.get("status") == "waived":
+        details = "Moto check waived by owner: " + receipt["reason"]
+    else:
+        timing = receipt["practice"]
+        details = f"Phone check: {timing['fps']} fps, {timing['late_percent']}% late frames."
+    release = fixed_release_commit(revision, version, details)
+    gate.validate(ROOT, version, release)
+    print("Fixed release commit prepared; master and peer working files are preserved. Nothing was pushed.")
+    return 0
 
 
 def build_apk(phone):
@@ -262,6 +343,8 @@ def main():
     parser.add_argument("--apk", type=Path, help="an APK built from the current sources")
     parser.add_argument("--host", default=os.environ.get("INBE_PHONE_HOST", "auto"))
     parser.add_argument("--serial", default=os.environ.get("INBE_PHONE_SERIAL", "ZE2223BQZT"))
+    parser.add_argument("--revision", help="release this tested fixed commit while peers keep working on master")
+    parser.add_argument("--build-receipt", type=Path, help="provenance for the isolated candidate APK")
     parser.add_argument("--phone-check-waiver", metavar="OWNER_AUTHORIZATION",
                         help="skip the Moto only when explicitly authorized by the owner for this release")
     args = parser.parse_args()
@@ -270,6 +353,8 @@ def main():
     try:
         if git("symbolic-ref", "--short", "HEAD").strip() != "master":
             raise Refused("releases are made on master")
+        if args.revision:
+            return release_fixed(args)
         version = changelog_version()
         step(f"Inner Breeze {version}")
         require_new_version(version)

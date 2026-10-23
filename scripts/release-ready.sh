@@ -27,9 +27,14 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
 output=build/release-ready
-image_tag=$(cat .github/local-ci/Containerfile .github/apt/test-packages.txt .github/apt/web-packages.txt .github/emscripten-version | sha256sum | cut -c1-12)
-image=localhost/inbe-ci:$image_tag
 commit=$(git rev-parse "${RELEASE_READY_REVISION:-HEAD}^{commit}")
+image_tag=$({
+    git show "$commit:.github/local-ci/Containerfile"
+    git show "$commit:.github/apt/test-packages.txt"
+    git show "$commit:.github/apt/web-packages.txt"
+    git show "$commit:.github/emscripten-version"
+} | sha256sum | cut -c1-12)
+image=localhost/inbe-ci:$image_tag
 
 # Read the candidate from Git objects, never the changing files on disk.
 content=$(python3 - "$commit" <<'PY_CONTENT'
@@ -106,7 +111,7 @@ fi
 
 if ! podman image exists "$image"; then
     echo "release-ready: building $image"
-    podman build -t "$image" -f .github/local-ci/Containerfile .github
+    git archive "$commit:.github" | podman build -t "$image" -f local-ci/Containerfile -
     # Replace the images of older package lists; one still in use stays.
     podman images --format '{{.Repository}}:{{.Tag}}' localhost/inbe-ci \
         | grep -v ":$image_tag\$" | xargs -r podman rmi >/dev/null 2>&1 || true

@@ -33,7 +33,7 @@ class ReleaseTest(unittest.TestCase):
         for key, value in (("user.email", "test@example.invalid"), ("user.name", "Test")):
             git(self.root, "config", key, value)
         git(self.root, "remote", "add", "origin", str(self.origin))
-        self.commit({"src/main.zi": "one\n", "src/core/version.zi": "2.9.9\n", "docs/notes.md": "notes\n"},
+        self.commit({".gitignore": "/build/\n", "src/main.zi": "one\n", "src/core/version.zi": "2.9.9\n", "docs/notes.md": "notes\n"},
                     "Start")
         git(self.root, "push", "-q", "origin", "master")
         git(self.root, "fetch", "-q", "origin")
@@ -166,6 +166,41 @@ class ReleaseTest(unittest.TestCase):
         git(package, "commit", "-q", "-am", "two")
         with self.assertRaisesRegex(release.Refused, "the lock pins"):
             release.require_locked_overrides()
+
+    def test_fixed_release_preserves_later_commits_and_staged_source(self):
+        base = git(self.root, "rev-parse", "HEAD").strip()
+        peer = self.commit({"src/main.zi": "peer committed\n"}, "Peer feature")
+        (self.root / "src/main.zi").write_text("peer staged\n")
+        git(self.root, "add", "src/main.zi")
+        (self.root / "docs/notes.md").write_text("peer unfinished\n")
+        receipt = self.root / "releases/phone-checks/3.0.0.json"
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text('{"passed":true}\n')
+
+        candidate = release.fixed_release_commit(base, "3.0.0", "Verified fixture")
+
+        self.assertEqual(git(self.root, "show", candidate + ":src/main.zi"), "one\n")
+        self.assertEqual(git(self.root, "show", "HEAD:src/main.zi"), "peer committed\n")
+        self.assertEqual(git(self.root, "show", ":src/main.zi"), "peer staged\n")
+        self.assertEqual((self.root / "src/main.zi").read_text(), "peer staged\n")
+        self.assertEqual((self.root / "docs/notes.md").read_text(), "peer unfinished\n")
+        self.assertEqual(git(self.root, "show", candidate + ":releases/phone-checks/3.0.0.json"),
+                         receipt.read_text())
+        self.assertEqual(git(self.root, "log", "-1", "--format=%P").split(), [peer, candidate])
+        self.assertEqual(git(self.root, "log", "-1", "--format=%an <%ae>", candidate).strip(),
+                         "Waozi <waozi@proton.me>")
+        self.assertEqual(git(self.root, "status", "--porcelain"),
+                         " M docs/notes.md\nM  src/main.zi\n")
+
+    def test_fixed_release_appends_without_rewriting_history(self):
+        base = git(self.root, "rev-parse", "HEAD").strip()
+        receipt = self.root / "releases/phone-checks/3.0.0.json"
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text('{"passed":true}\n')
+        candidate = release.fixed_release_commit(base, "3.0.0", "Verified fixture")
+        self.assertEqual(git(self.root, "rev-parse", "HEAD").strip(), candidate)
+        self.assertEqual(git(self.root, "log", "-1", "--format=%P").strip(), base)
+        self.assertEqual(git(self.root, "status", "--porcelain"), "")
 
 
 class MotoWorkflowGateTest(unittest.TestCase):

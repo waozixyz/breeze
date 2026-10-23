@@ -1,11 +1,13 @@
 """The release gate accepts only a passing phone check of the released app content."""
 import copy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("check_phone_check", ROOT / "scripts/check-phone-check.py")
@@ -67,6 +69,43 @@ class PhoneCheckGateTest(unittest.TestCase):
     def test_passing_check_of_the_released_app(self):
         self.record()
         self.assertEqual(gate.validate(self.root, "3.0.0")["version"], "3.0.0")
+
+    def test_fixed_apk_provenance_is_independent_of_peer_source_edits(self):
+        apk = self.root / "candidate.apk"
+        apk.write_bytes(b"synthetic isolated APK")
+        path = self.root / "build.json"
+        path.write_text(json.dumps(dict(status="passed", app_tree=self.checked_app,
+                                       apk=dict(sha256=hashlib.sha256(apk.read_bytes()).hexdigest()))))
+        self.commit({"src/main.zi": "peer committed work\n"})
+        (self.root / "src/core/version.zi").write_text('VersionString :: "4.0.0"\n')
+        with mock.patch.object(phone_check, "ROOT", self.root):
+            phone_check.require_build_receipt(apk, path, self.checked)
+            self.assertEqual(phone_check.source_state(self.checked), (self.checked, [], [], "2.9.9"))
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                phone_check.require_build_receipt(apk, path, "HEAD")
+            apk.write_bytes(b"different APK")
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                phone_check.require_build_receipt(apk, path, self.checked)
+
+    def test_running_owner_app_rejects_before_install_or_input(self):
+        phone = mock.Mock()
+        phone.adb.return_value = b"device\n"
+        phone.pid.return_value = "1234"
+        with mock.patch.object(phone_check, "apk_identity", return_value={"package": "fixture.debug"}):
+            with self.assertRaisesRegex(ValueError, "already running"):
+                phone_check.check(phone, self.root / "candidate.apk", 60, self.root)
+        self.assertEqual(phone.adb.call_args_list, [mock.call("get-state")])
+        phone.shell.assert_not_called()
+
+    def test_missing_process_is_empty_but_adb_failure_is_not_ignored(self):
+        phone = phone_check.Phone("local", "Fixture")
+        with mock.patch.object(phone, "shell", side_effect=subprocess.CalledProcessError(
+                1, ["pidof"], output=b"")):
+            self.assertEqual(phone.pid("fixture.debug"), "")
+        with mock.patch.object(phone, "shell", side_effect=subprocess.CalledProcessError(
+                1, ["adb"], output=b"device offline")):
+            with self.assertRaises(subprocess.CalledProcessError):
+                phone.pid("fixture.debug")
 
     def test_docs_tests_and_tooling_may_change_after_the_check(self):
         self.record()

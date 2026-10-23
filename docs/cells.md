@@ -807,29 +807,34 @@ the `TOOLING` that only checks or publishes). The Release workflow refuses a
 new tag without it or when the pushed app content differs. Tests, docs and
 tooling may change after the check; any app change needs a new one.
 
-A release is one commit, made last:
+A release names one fixed commit while peers keep working on master:
 
-1. Add the numeric `CHANGELOG.md` entry and run `./update_version.sh` while
-   the release takes shape, as before.
-2. `make release-ready` runs CI's checks on HEAD in the Test job's Ubuntu
-   24.04 container with the locked packages: Secret Scan, package URLs, the
-   large-file guard, `make test`, `make visual-test` and
-   `make package-compat-test`. It does not run the browser add-on smoke
-   tests, shard 0's Daochi sync test or the platform builds. A run takes
-   about 90 minutes; outputs stay in `build/release-ready/`. The container
-   reads unchanged files from this checkout, so when another session edits
-   files during the run, it reports them and records no pass.
-3. With the development Moto connected (here or through the ThinkPad),
-   `make release` builds the debug APK for its ABI (or takes `APK=...`),
-   checks it and commits the receipt and any version files as
-   "Release Inner Breeze X.Y.Z". It refuses uncommitted app files, package
-   overrides that are not clean on their `ziran.lock` commit, and content
-   that `make release-ready` did not pass.
-4. A late fix is an ordinary commit followed by steps 2 and 3 again; the
-   unpushed release commit moves above the fix and takes the new receipt.
-   Pushed history is never rewritten.
-5. Push master only with the owner's say-so; the workflow tags and
-   publishes.
+1. Add the numeric `CHANGELOG.md` entry, run `./update_version.sh`, and commit
+   the intended source. Do not freeze the repository, dependency lock or
+   another session's work.
+2. `RELEASE_READY_REVISION=COMMIT make release-ready` runs the local CI suites
+   in the Ubuntu 24.04 container with the candidate's locked packages:
+   Secret Scan, package URLs, file sizes, all tests, visual tests, package
+   compatibility, Chrome and muted Firefox smoke tests, and the pinned real
+   Daochi sync server. Platform release builds remain separate. The existing
+   repository overlay materializes every candidate file and recreates source
+   directories, so later edits, new files and commits cannot enter the run.
+   Outputs stay in `build/release-ready/`.
+3. Build the Moto APK in the same fixed-source overlay and save its content
+   identity and SHA-256 build receipt. With the development app closed by
+   the owner, run `make release REVISION=COMMIT APK=PATH BUILD_RECEIPT=PATH`.
+   The exact APK must pass the minute-long practice and resume check;
+   physical-phone images use Harmony's owner-only review. The command checks
+   both the local gate stamp and APK provenance against the fixed candidate.
+4. The command creates "Release Inner Breeze X.Y.Z" from the tested source
+   plus its receipt. If master advanced, a merge keeps the release in its
+   history while preserving every newer committed source file, staged edit
+   and unfinished file. No existing history is rewritten.
+5. Push the approved history and run Release for its exact release commit
+   using the workflow's `revision` input when master has moved on. Every
+   platform and reusable F-Droid build checks out that same candidate.
+   Subsequent master commits cannot cancel its release. Only the workflow
+   creates the release tag after all required gates pass.
 
 Harmony Projects shows this wrapper release, every cell version and its Moto
 screenshots. Harmony's `make inbe-release-verify` checks the latest published

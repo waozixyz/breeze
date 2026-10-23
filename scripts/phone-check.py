@@ -121,7 +121,12 @@ class Phone:
             raise ValueError("Inner Breeze did not start: " + output.strip())
 
     def pid(self, package):
-        return self.shell("pidof", package).strip()
+        try:
+            return self.shell("pidof", package).strip()
+        except subprocess.CalledProcessError as error:
+            if error.returncode == 1 and not error.stdout:
+                return ""
+            raise
 
 
 def apk_identity(apk):
@@ -205,11 +210,29 @@ def changed_app_files(root):
     return changed, untracked
 
 
-def source_state():
-    commit = git(ROOT, "rev-parse", "HEAD").strip()
+def source_state(revision=None):
+    commit = git(ROOT, "rev-parse", (revision or "HEAD") + "^{commit}").strip()
+    if revision:
+        text = git(ROOT, "show", commit + ":src/core/version.zi")
+        versions = re.findall(r'^VersionString :: "([0-9]+\.[0-9]+\.[0-9]+)"$', text, re.M)
+        if len(versions) != 1:
+            raise ValueError("the fixed candidate has no valid application version")
+        return commit, [], [], versions[0]
     changed, untracked = changed_app_files(ROOT)
     version = run([sys.executable, ROOT / "scripts/check-version.py", "--print-version"]).decode().strip()
     return commit, changed, untracked, version
+
+
+def require_build_receipt(apk, path, revision):
+    """Bind a fixed-source phone run to the APK exported by its isolated build."""
+    if path is None:
+        raise ValueError("a fixed candidate requires its isolated APK build receipt")
+    receipt = json.loads(path.read_text())
+    digest = receipt.get("apk", {}).get("sha256")
+    if (receipt.get("status") != "passed" or
+            receipt.get("app_tree") != app_tree(ROOT, revision) or
+            digest != hashlib.sha256(apk.read_bytes()).hexdigest()):
+        raise ValueError("the APK build receipt does not match this fixed app content and APK")
 
 
 def layout_shift(before, after):
@@ -281,6 +304,8 @@ def check(phone, apk, seconds, evidence):
     package = identity["package"]
     if phone.adb("get-state").decode().strip() != "device":
         raise ValueError("the phone is not connected and authorized")
+    if phone.pid(package):
+        raise ValueError("the development app is already running; leave it open until the owner closes it")
     transfer = ""
     try:
         if phone.host != "local":
@@ -343,14 +368,21 @@ def main():
     parser.add_argument("--seconds", type=int, default=60)
     parser.add_argument("--record", action="store_true",
                         help="write a passing result to releases/phone-checks/VERSION.json for the release gate")
+    parser.add_argument("--revision", help="check the APK of this fixed committed candidate while master changes")
+    parser.add_argument("--build-receipt", type=Path,
+                        help="isolated APK build provenance, required with --revision")
     args = parser.parse_args()
     for name in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"):
         os.environ.pop(name, None)
     apk = args.apk.resolve(strict=True)
-    commit, changed, untracked, version = source_state()
+    commit, changed, untracked, version = source_state(args.revision)
+    if args.revision:
+        require_build_receipt(apk, args.build_receipt, commit)
     if args.record and (untracked or args.seconds < 60):
         parser.error("a recorded check needs a full minute and no untracked app files:\n" + "\n".join(untracked))
-    checked_app = app_tree(ROOT)
+    checked_app = app_tree(ROOT, commit if args.revision else None)
+    if apk_identity(apk)["version_name"] != version:
+        raise ValueError("the APK version differs from the candidate; no installation attempted")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     evidence = ROOT / "backup/phone-checks" / f"{version}-{stamp}"
     evidence.mkdir(parents=True, exist_ok=True)
@@ -370,7 +402,7 @@ def main():
                            "background and resume"],
                    passed=passed, checked_at=datetime.now(timezone.utc).isoformat(timespec="seconds"))
     (evidence / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
-    if args.record and app_tree(ROOT) != checked_app:
+    if args.record and not args.revision and app_tree(ROOT) != checked_app:
         raise SystemExit("app files changed during the check; nothing was recorded")
     if args.record and passed:
         target = ROOT / RECEIPTS / f"{version}.json"

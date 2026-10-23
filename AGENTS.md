@@ -15,12 +15,14 @@
   Only the GitHub Actions release workflow creates or pushes release tags.
 - A new version publishes only with a passing phone check of its exact app
   content (`app_tree` over `APP_PATHS` in `scripts/phone-check.py`). Release
-  with `make release-ready` (CI's checks in its Ubuntu container), then
-  `make release` with the development Moto connected: it checks the APK and
-  makes the one "Release Inner Breeze X.Y.Z" commit. After a late fix, run
-  both again; the unpushed release commit moves above the fix, so there are
-  no "Record" commits. Tests, docs and tooling may change after the check,
-  app paths may not. See [docs/cells.md](docs/cells.md#verification).
+  with `RELEASE_READY_REVISION=COMMIT make release-ready`, then
+  `make release REVISION=COMMIT APK=PATH BUILD_RECEIPT=PATH` with the development
+  Moto connected. The APK and its provenance come from the same fixed-source
+  overlay. Master, locks and peer edits keep changing freely. The release
+  commit retains the tested source; if master advanced, a merge preserves
+  all newer source and history. The workflow can release that exact commit
+  through its `revision` input. Never freeze the checkout for testing.
+  See [docs/cells.md](docs/cells.md#verification).
 - Packages declare the oldest host interface they run on (`host_api` per app
   in `apps/versions.json`); the host runs `oldest_host_api` to `host_api`.
   Raise `host_api` when the host interface changes and `oldest_host_api` only

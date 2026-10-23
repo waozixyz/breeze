@@ -39,4 +39,4 @@ release-ready:
 	sh scripts/release-ready.sh
 
 release:
-	python3 scripts/release.py $(if $(APK),--apk "$(APK)",)
+	python3 scripts/release.py $(if $(REVISION),--revision "$(REVISION)",) $(if $(APK),--apk "$(APK)",) $(if $(BUILD_RECEIPT),--build-receipt "$(BUILD_RECEIPT)",)

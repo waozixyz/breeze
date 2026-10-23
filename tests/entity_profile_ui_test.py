@@ -1,4 +1,4 @@
-"""Entity edits reuse Inbe's account and survive restart on a private display."""
+"""Entity Profile preserves the host account, picture and inline Dew on a private display."""
 import contextlib
 import json
 import os
@@ -85,38 +85,59 @@ with contextlib.ExitStack() as stack:
         settings = driver.wait(label="Settings", role="button")
         assert account["x"] + account["width"] <= settings["x"], "Profile is not left of Settings"
         driver.press(focus_id=6792, role="button")
-        driver.wait(label="Name", role="text_field")
+        driver.wait(label="Change picture", role="button")
+        driver.wait(label="Dew balance", role="text")
+        assert not driver.find(label="Dew balance", role="button"), "Dew is still a separate shortcut"
+        assert not driver.find(label="Name", role="text_field"), "Removed Name field is visible"
+        assert not driver.find(label="Intention", role="text_field"), "Removed Intention field is visible"
         assert len(driver.find(role="title_bar", visible=True)) == 1
 
-    with application("edit", seed=True) as process:
+    with application("seed", seed=True):
         before = credentials()
         identities = {value for _, key, value in before if key == "sync_public_id" and value}
         assert len(identities) == 1 and len(next(iter(identities))) == 64, "Fixture account missing"
         owner = next(iter(identities))
+    with sqlite3.connect(profile / "inbe.db") as database:
+        user = database.execute("SELECT user_id FROM settings WHERE key='sync_public_id' "
+                                "AND value=? LIMIT 1", (owner,)).fetchone()[0]
+        for key, value in (("profile_display_name", "Existing desktop name"),
+                           ("profile_intention", "Existing private intention")):
+            database.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,2) "
+                             "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,"
+                             "updated_at=excluded.updated_at", (user, key, value))
+    shared = Path(environment["ENTITY_DATA"]) / "profiles" / owner / "profile.json"
+    if shared.exists():
+        saved = json.loads(shared.read_text())
+        saved.update(name="Existing desktop name", intention="Existing private intention")
+        shared.write_text(json.dumps(saved) + "\n")
+    with application("edit"):
         open_profile()
-        driver.press(label="Dew balance", role="button")
-        driver.wait(label="Dew balance", role="title_bar")
-        driver.press(label="Back", role="button")
-        driver.wait(label="Name", role="text_field")
-        driver.press(label="Name", role="text_field")
-        driver.key("a", control=True)
-        driver.type("Entity desktop fixture")
-        driver.key("enter")
-        shared = Path(environment["ENTITY_DATA"]) / "profiles" / owner / "profile.json"
+        driver.wait(label="Manage data", role="button")
+        for label in ("Today", "Active days", "Sessions"):
+            driver.wait(label=label, role="text", visible=False)
+        assert not driver.find(label="Progress", role="button"), "Activity still uses a separate row"
+        driver.press(label="Change picture", role="button")
+        driver.wait(label="Profile picture", role="button")
+        driver.press(label="Profile picture", role="button", index=1)
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            if shared.exists() and json.loads(shared.read_text()).get("name") == "Entity desktop fixture":
+            if shared.exists() and json.loads(shared.read_text()).get("picture") == 1:
                 break
             time.sleep(.05)
         document = json.loads(shared.read_text())
-        assert document["name"] == "Entity desktop fixture", "Profile edit was not saved"
+        assert document["picture"] == 1, "Picture edit was not saved"
+        assert document["name"] == "Existing desktop name", "Hidden name was changed"
+        assert document["intention"] == "Existing private intention", "Hidden intention was changed"
         assert document["owner_id"] == owner, "Entity used a different account"
         assert credentials() == before, "Editing Entity changed Inbe account keys"
         assert not (Path(environment["ENTITY_DATA"]) / "account.key").exists(), "Entity made another account"
+        driver.press(label="Done", role="button")
+        driver.wait(label="Dew balance", role="text")
     with application("restart"):
         open_profile()
-        field = driver.wait(label="Name", role="text_field")
-        assert field.get("value") == "Entity desktop fixture", "Profile edit was lost after restart"
+        driver.press(label="Change picture", role="button")
+        pictures = driver.find(label="Profile picture", role="button", visible=True)
+        assert len(pictures) > 1 and pictures[1].get("selected"), "Picture edit was lost after restart"
         assert credentials() == before, "Restart changed Inbe account keys"
         assert json.loads(shared.read_text())["owner_id"] == owner
 
@@ -145,4 +166,4 @@ with contextlib.ExitStack() as stack:
                        for label in versions), versions
         assert "Show beta apps" not in labels, "Removed beta setting is still visible"
 
-print("Entity desktop: profile editing, existing host account, saved name, restart and installed-only About passed")
+print("Entity desktop: inline Dew/Activity, preserved hidden fields, host account, saved picture, restart and installed-only About passed")
