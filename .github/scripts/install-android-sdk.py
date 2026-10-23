@@ -52,6 +52,26 @@ def valid(root, package):
         return False
 
 
+def merge_licenses(source, destination):
+    """Keep runner-owned permissions and accepted licence hashes intact."""
+    if not source.is_dir():
+        return
+    destination.mkdir(exist_ok=True)
+    for license_file in source.iterdir():
+        if not license_file.is_file():
+            continue
+        target = destination / license_file.name
+        accepted = target.read_text().splitlines() if target.exists() else []
+        additions = [line for line in license_file.read_text().splitlines()
+                     if line.strip() and line not in accepted]
+        if not additions:
+            continue
+        # copytree/copy2 also chmod and set timestamps. Hosted SDK licences
+        # can be writable but owned by root, so metadata copying fails.
+        with target.open("a") as output:
+            output.write("\n" + "\n".join(additions) + "\n")
+
+
 def install(root, packages, manager, sleep=time.sleep):
     root = Path(root).resolve()
     manager = Path(manager).resolve(strict=True)
@@ -81,8 +101,7 @@ def install(root, packages, manager, sleep=time.sleep):
                     if destination.exists():
                         destination.rename(stage / "incomplete-component")
                     source.rename(destination)
-                    if (stage / "licenses").is_dir():
-                        shutil.copytree(stage / "licenses", root / "licenses", dirs_exist_ok=True)
+                    merge_licenses(stage / "licenses", root / "licenses")
                     if not valid(root, package):
                         raise RuntimeError("SDK component failed validation after installation: " + package)
                     break

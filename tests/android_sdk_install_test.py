@@ -74,6 +74,41 @@ shutil.copytree(root / 'download/cmake', stage / 'cmake')
         self.assertEqual(len(json.loads((self.root / "attempts.json").read_text())), 3)
         self.assertFalse(list(self.root.glob(".inbe-sdk-*")))
 
+    def test_preinstalled_runner_license_metadata_is_never_overwritten(self):
+        licenses = self.root / "licenses"
+        licenses.mkdir()
+        license_file = licenses / "android-sdk-license"
+        license_file.write_text("already-accepted\n")
+        before = license_file.stat()
+        original = sdk.shutil.copystat
+
+        def runner_owned_metadata(source, destination, **kwargs):
+            if Path(destination) in (licenses, license_file):
+                raise PermissionError("runner cannot chmod root-owned SDK licences")
+            return original(source, destination, **kwargs)
+
+        with mock.patch.object(sdk.shutil, "copystat", side_effect=runner_owned_metadata):
+            sdk.install(self.root, [PACKAGE], self.manager, sleep=lambda _: None)
+        self.assertTrue(sdk.valid(self.root, PACKAGE))
+        self.assertEqual(license_file.read_text(), "already-accepted\n")
+        self.assertEqual(license_file.stat().st_mtime_ns, before.st_mtime_ns)
+        self.assertEqual(license_file.stat().st_mode, before.st_mode)
+
+    def test_newly_accepted_licenses_are_merged_without_removing_existing_hashes(self):
+        source = self.root / "incoming-licenses"
+        destination = self.root / "licenses"
+        source.mkdir()
+        destination.mkdir()
+        (source / "android-sdk-license").write_text("accepted-before\nnewly-accepted\n")
+        (destination / "android-sdk-license").write_text("accepted-before\n")
+        (source / "android-sdk-preview-license").write_text("preview-accepted\n")
+        sdk.merge_licenses(source, destination)
+        sdk.merge_licenses(source, destination)
+        self.assertEqual((destination / "android-sdk-license").read_text().split(),
+                         ["accepted-before", "newly-accepted"])
+        self.assertEqual((destination / "android-sdk-preview-license").read_text().split(),
+                         ["preview-accepted"])
+
     def test_wrong_version_and_unsafe_package_path_are_rejected(self):
         component(self.root, "3.21.0")
         self.assertFalse(sdk.valid(self.root, PACKAGE))
