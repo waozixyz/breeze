@@ -31,7 +31,7 @@ public class TextInputViewTest extends InstrumentationTestCase {
         getInstrumentation().runOnMainSync(() -> {
             Changes changes = new Changes();
             TextInputView view = new TextInputView(getInstrumentation().getTargetContext(), changes);
-            view.update(1, 0, bytes("prefix "), 7, 7, false, true);
+            view.update(1, 0, bytes("prefix "), 7, 7, false, false, true);
             InputConnection connection = view.onCreateInputConnection(new EditorInfo());
             assertNotNull(connection);
             connection.beginBatchEdit();
@@ -41,7 +41,7 @@ public class TextInputViewTest extends InstrumentationTestCase {
             assertEquals("prefix hello", changes.value);
             assertEquals(12, changes.cursor);
             long acknowledged = changes.revision;
-            view.update(1, acknowledged, bytes(changes.value), 12, 12, false, true);
+            view.update(1, acknowledged, bytes(changes.value), 12, 12, false, false, true);
             assertTrue(BaseInputConnection.getComposingSpanStart(view.getText()) >= 0);
             assertTrue(connection.commitText("hello ", 1));
             assertEquals("prefix hello ", changes.value);
@@ -64,12 +64,12 @@ public class TextInputViewTest extends InstrumentationTestCase {
         getInstrumentation().runOnMainSync(() -> {
             Changes changes = new Changes();
             TextInputView view = new TextInputView(getInstrumentation().getTargetContext(), changes);
-            view.update(10, 0, bytes(""), 0, 0, false, true);
+            view.update(10, 0, bytes(""), 0, 0, false, false, true);
             InputConnection old = view.onCreateInputConnection(new EditorInfo());
             assertTrue(old.commitText("fresh", 1));
-            view.update(10, 0, bytes("stale"), 5, 5, false, true);
+            view.update(10, 0, bytes("stale"), 5, 5, false, false, true);
             assertEquals("fresh", view.getText().toString());
-            view.update(11, 0, bytes("saved"), 5, 5, false, true);
+            view.update(11, 0, bytes("saved"), 5, 5, false, false, true);
             assertFalse(old.commitText("late", 1));
             assertEquals("saved", view.getText().toString());
             InputConnection current = view.onCreateInputConnection(new EditorInfo());
