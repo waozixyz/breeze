@@ -96,7 +96,13 @@ astral-projection-test: $(ZI2C_BIN)
 
 .PHONY: workout-test
 workout-test: $(ZI2C_BIN)
-	sh tests/workout_test.sh $(ZIRAN_BUILD_DIR)/bin
+	sh tests/practice_figure_test.sh $(ZIRAN_BUILD_DIR)/bin tests/workout_behavior.zi
+
+.PHONY: sun-salutation-pose-test
+sun-salutation-pose-test: $(ZI2C_BIN)
+	sh tests/practice_figure_test.sh $(ZIRAN_BUILD_DIR)/bin tests/sun_salutation_pose_behavior.zi
+
+test: sun-salutation-pose-test
 
 practice-narration-keys-test:
 	python3 tests/practice_narration_keys_test.py

@@ -1,0 +1,49 @@
+// Geometry invariants shared by practice tests; no choreography lives here.
+#import, file "../apps/practice/workout_moves.zi";
+#import, file "../apps/practice/workout_rules.zi";
+#import, file "../src/practices/tai_chi/tai_chi_math.zi";
+#import, file "../src/practices/tai_chi/tai_chi_solve.zi";
+#import, file "../src/practices/tai_chi/tai_chi_view.zi";
+#import, file "../src/practices/tai_chi/tai_chi_flat.zi";
+#import "math"
+
+test_frame: TaiChiFlatFrame;
+test_props: TaiChiFlatFrame;
+
+WorkoutPropsSound :: () -> bool {
+    WorkoutPaintProps(*test_props, WORKOUT_SQUATS, WorkoutFramingFor(WORKOUT_SQUATS).camera, false)
+    if test_props.op_count != 0 {
+        return false
+    }
+    WorkoutPaintProps(*test_props, WORKOUT_STEP_UPS, WorkoutFramingFor(WORKOUT_STEP_UPS).camera, true)
+    return test_props.op_count >= 5
+}
+
+Near :: (value: float64, expected: float64, tolerance: float64) -> bool {
+    return Finite64(value) && TaiChiAbs(value - expected) <= tolerance
+}
+
+// Every pose keeps the figure's bones their length, its feet on or above
+// the floor and its numbers finite, and paints a full figure.
+FigureSound :: (pose: *WorkoutPose, rig: *TaiChiRig, exercise: s32) -> bool {
+    solved := WorkoutSolve(pose, rig)
+    for side: cast(s32)0..1 {
+        if !Near(TaiChiDistance3(solved.shoulders[side], solved.elbows[side]), rig.upper_arm, 0.001) ||
+        !Near(TaiChiDistance3(solved.elbows[side], solved.wrists[side]), rig.fore_arm, 0.001) ||
+        !Near(TaiChiDistance3(solved.hips[side], solved.knees[side]), rig.thigh, 0.001) ||
+        !Near(TaiChiDistance3(solved.knees[side], solved.ankles[side]), rig.shin, 0.001) {
+            return false
+        }
+        if solved.heels[side].y < -0.02 || solved.balls[side].y < -0.02 || solved.toes[side].y < -0.02 ||
+        solved.knees[side].y < -0.02 || solved.wrists[side].y < -0.02 {
+            return false
+        }
+    }
+    if !Finite64(solved.head_top.y) || solved.head_center.y < 0.05 {
+        return false
+    }
+    framing := WorkoutFramingFor(exercise)
+    TaiChiFlatPaintLook(*test_frame, *solved, rig, TaiChiFlatLookNamed("jadeWoman"), framing.camera)
+    return test_frame.op_count > 40 && test_frame.op_count < TAI_CHI_FLAT_OP_CAPACITY
+}
+

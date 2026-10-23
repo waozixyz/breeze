@@ -6,6 +6,26 @@
 #import, file "../tai_chi/tai_chi_math.zi";
 #import, file "../tai_chi/tai_chi_solve.zi";
 
+// A forward fold turns the pelvis through a half turn. Joint directions
+// must stay in the body's sagittal plane instead of following that turn;
+// otherwise a bent knee or elbow swings sideways through the camera.
+SunSalutationJointPlanes :: (pose: WorkoutPose) -> WorkoutPose {
+    rig := WorkoutRig()
+    trunk := WorkoutTrunkFor(*pose, *rig)
+    for side: cast(s32)0..1 {
+        sign := TaiChiSideSign(side)
+        knee := TaiChiRotate(TaiChiV3(sign * 0.025, 0.0, 1.0),
+            WorkoutConjugate(trunk.pelvis_quat))
+        pose.knees[side] = TaiChiV3(sign * knee.x, knee.y, knee.z)
+        if pose.hands[side].flat > 0.0 {
+            elbow := TaiChiRotate(TaiChiV3(sign * 0.08, 0.0, -1.0),
+                WorkoutConjugate(trunk.chest_quat))
+            pose.hands[side].pole = TaiChiV3(sign * elbow.x, elbow.y, elbow.z)
+        }
+    }
+    return pose
+}
+
 SunSalutationPose :: (step: s32, other_side: bool) -> WorkoutPose {
     step = SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
     pose := WorkoutStanding()
@@ -17,7 +37,7 @@ SunSalutationPose :: (step: s32, other_side: bool) -> WorkoutPose {
         WorkoutHandsAt(*pose, WORKOUT_AT_ARM, 178.0, 30.0, 0.985)
         pose.head = -8.0
     } else if step == 2 || step == 9 {
-        WorkoutBody(*pose, 0.0, 0.899, 0.284, 0.0, 150.0, 0.0, 0.0, 0.0, -30.0)
+        WorkoutBody(*pose, 0.0, 0.82, 0.284, 0.0, 150.0, 0.0, 0.0, 0.0, -30.0)
         WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.17, 0.055, 0.447)
         WorkoutFlatHands(*pose, 1.0)
     } else if step == 3 || step == 8 {
@@ -26,27 +46,22 @@ SunSalutationPose :: (step: s32, other_side: bool) -> WorkoutPose {
         WorkoutFlatHands(*pose, 1.0)
         WorkoutFoot(*pose, 0, 0.075, 0.301, 0.0, 0.0, 0.0)
         WorkoutFoot(*pose, 1, -0.075, -0.783, 0.0, -75.0, 0.0)
-        WorkoutKnees(*pose, 0.1, 0.0, 1.0)
-        // The front knee rises over its planted foot; only the rear knee
-        // lowers to the floor. Poles are expressed in the pelvis frame.
-        pose.knees[0] = TaiChiV3(0.05, 1.0, 0.0)
         if (step == 8) != other_side {
             pose = WorkoutMirror(pose)
         }
     } else if step == 4 {
         pose = WorkoutPushUp(false)
     } else if step == 5 {
-        WorkoutBody(*pose, 0.0, 0.36, -0.026, 0.0, 116.0, 0.0, 0.0, 0.0, -96.0)
+        // Shift the chest forward over the planted hands before lowering;
+        // hands ahead of the chest force the elbows to point forwards.
+        WorkoutBody(*pose, 0.0, 0.31, 0.094, 0.0, 116.0, 0.0, 0.0, 0.0, -96.0)
         WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.17, 0.055, 0.447)
         WorkoutFlatHands(*pose, 1.0)
-        WorkoutElbows(*pose, 0.25, 0.0, -1.0)
         WorkoutFeet(*pose, 0.075, -0.783, 0.0, -75.0, 0.0)
-        WorkoutKnees(*pose, 0.05, 0.0, 1.0)
     } else if step == 6 {
         WorkoutBody(*pose, 0.0, 0.14, 0.082, 0.0, 58.0, 0.0, 0.0, 0.0, -60.0)
         WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.17, 0.055, 0.447)
         WorkoutFlatHands(*pose, 1.0)
-        WorkoutElbows(*pose, 0.25, 0.0, -1.0)
         WorkoutFeet(*pose, 0.075, -0.774, 0.0, 0.0, 0.0)
     } else if step == 7 {
         WorkoutBody(*pose, 0.0, 0.744, -0.258, 0.0, 132.0, 0.0, 0.0, 0.0, -22.0)
@@ -54,7 +69,7 @@ SunSalutationPose :: (step: s32, other_side: bool) -> WorkoutPose {
         WorkoutFlatHands(*pose, 1.0)
         WorkoutFeet(*pose, 0.075, -0.783, 0.0, -22.0, 0.0)
     }
-    return pose
+    return SunSalutationJointPlanes(pose)
 }
 
 SunSalutationPoseAt :: (state: SunSalutationPracticeState, rig: *TaiChiRig) -> WorkoutPose {
@@ -70,5 +85,5 @@ SunSalutationPoseAt :: (state: SunSalutationPracticeState, rig: *TaiChiRig) -> W
         transition = breath * 3 / 4
     }
     amount := TaiChiClamp(cast(float64)state.step_ticks / cast(float64)transition, 0.0, 1.0)
-    return WorkoutBlend(*from, *to, TaiChiSmoothstep(amount), rig)
+    return SunSalutationJointPlanes(WorkoutBlend(*from, *to, TaiChiSmoothstep(amount), rig))
 }

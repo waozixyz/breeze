@@ -1,51 +1,14 @@
 #import, file "../apps/practice/workout_rules.zi";
 #import, file "../apps/practice/workout_moves.zi";
-#import, file "../src/practices/tai_chi/tai_chi_math.zi";
-#import, file "../src/practices/tai_chi/tai_chi_solve.zi";
-#import, file "../src/practices/tai_chi/tai_chi_view.zi";
-#import, file "../src/practices/tai_chi/tai_chi_flat.zi";
-#import, file "../src/practices/sun_salutation/sun_salutation_pose.zi";
-#import, file "../src/practices/sun_salutation/sun_salutation_rules.zi";
+#import, file "figure_test_support.zi";
 #import "math"
 #import "file_linux"
 #import "locale_parser"
 #import "byte_text_linux"
 
-test_frame: TaiChiFlatFrame;
-test_props: TaiChiFlatFrame;
-
 StepIs :: (elapsed_ms: s64, phase: s32, exercise: s32, elapsed: s32) -> bool {
     step := WorkoutStepAt(elapsed_ms)
     return step.phase == phase && step.exercise == exercise && (phase == WORKOUT_PHASE_DONE || step.elapsed_ms == elapsed)
-}
-
-Near :: (value: float64, expected: float64, tolerance: float64) -> bool {
-    return Finite64(value) && TaiChiAbs(value - expected) <= tolerance
-}
-
-// Every pose keeps the figure's bones their length, its feet on or above
-// the floor and its numbers finite, and paints a full figure.
-FigureSound :: (pose: *WorkoutPose, rig: *TaiChiRig, exercise: s32) -> bool {
-    solved := WorkoutSolve(pose, rig)
-    for side: cast(s32)0..1 {
-        if !Near(TaiChiDistance3(solved.shoulders[side], solved.elbows[side]), rig.upper_arm, 0.001) ||
-        !Near(TaiChiDistance3(solved.elbows[side], solved.wrists[side]), rig.fore_arm, 0.001) ||
-        !Near(TaiChiDistance3(solved.hips[side], solved.knees[side]), rig.thigh, 0.001) ||
-        !Near(TaiChiDistance3(solved.knees[side], solved.ankles[side]), rig.shin, 0.001) {
-            return false
-        }
-        if solved.heels[side].y < -0.02 || solved.balls[side].y < -0.02 || solved.toes[side].y < -0.02 ||
-        solved.knees[side].y < -0.02 || solved.wrists[side].y < -0.02 {
-            return false
-        }
-    }
-    if !Finite64(solved.head_top.y) || solved.head_center.y < 0.05 {
-        return false
-    }
-    framing := WorkoutFramingFor(exercise)
-    TaiChiFlatPaintLook(*test_frame, *solved, rig, TaiChiFlatLookNamed("jadeWoman"), framing.camera)
-    WorkoutPaintProps(*test_props, exercise, framing.camera, false)
-    return test_frame.op_count > 40 && test_frame.op_count < TAI_CHI_FLAT_OP_CAPACITY
 }
 
 // The workout's words in one language: every name, tip and spoken line,
@@ -167,13 +130,8 @@ Answer :: () -> s32 {
         }
     }
     // Props stand only where they belong.
-    WorkoutPaintProps(*test_props, WORKOUT_SQUATS, WorkoutFramingFor(WORKOUT_SQUATS).camera, false)
-    if test_props.op_count != 0 {
+    if !WorkoutPropsSound() {
         return 9
-    }
-    WorkoutPaintProps(*test_props, WORKOUT_STEP_UPS, WorkoutFramingFor(WORKOUT_STEP_UPS).camera, true)
-    if test_props.op_count < 5 {
-        return 10
     }
     // The side plank switches sides halfway: the planted hand changes side.
     first := WorkoutPoseAt(WORKOUT_SIDE_PLANK, 7000, *rig)
@@ -188,32 +146,6 @@ Answer :: () -> s32 {
         if !TextComplete(codes[index], english) {
             return 300 + index
         }
-    }
-    // Sun Salutation shares this rig: sample every move on both sides.
-    for round: cast(s32)0..1 {
-        for step: cast(s32)0..11 {
-            state := SalutationInit(SunSalutationPracticeState.{})
-            state.step = step
-            state.repetition = round
-            for ticks: cast(s32)0..240 {
-                state.step_ticks = ticks
-                pose := SunSalutationPoseAt(state, *rig)
-                if !FigureSound(*pose, *rig, WORKOUT_PLANK) {
-                    return 400 + step
-                }
-            }
-        }
-    }
-    first_lunge := SunSalutationPose(3, false)
-    other_lunge := SunSalutationPose(3, true)
-    if first_lunge.feet[0].z == other_lunge.feet[0].z {
-        return 412
-    }
-    first_solved := WorkoutSolve(*first_lunge, *rig)
-    other_solved := WorkoutSolve(*other_lunge, *rig)
-    if first_solved.knees[0].y < 0.25 || first_solved.knees[1].y > 0.12 ||
-    other_solved.knees[1].y < 0.25 || other_solved.knees[0].y > 0.12 {
-        return 413
     }
     return 42
 }

@@ -8,6 +8,7 @@
 - Show distinct Photos, Radio and Library icons in Apps, including before installation.
 - Open your shared Entity profile beside Settings, with your existing account and Dew balance.
 - Follow a gentler Sun Salutation pace, with seconds per breath, a duration estimate and clearer audio settings.
+- Keep knees and elbows aligned through Sun Salutation's Low Lunge and Knees, Chest and Chin transitions.
 - Keep Sun Salutation repetitions and tempo, and Tai Chi lesson details, in linked habit sessions and across account sync.
 - About lists only installed apps; published apps appear in More apps without a beta setting.
 - Start installed practices reliably from Lumi while their content opens.
