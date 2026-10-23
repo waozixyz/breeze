@@ -157,13 +157,13 @@ with contextlib.ExitStack() as stack:
     # As in 1List, finished items leave the list; a pull down on the items
     # shows them above the open ones.
     driver.wait_gone(label="Fresh fruit", role="button")
-    driver.wait(contains="Finished (2) · Pull down to show")
+    assert not driver.find(contains="Finished", visible=True), "the list still names its finished items"
     share = driver.wait(label="Share", role="button")
     pull_x = share["visible_x"] - 200
     pull_y = share["visible_y"] + share["visible_height"] + 40
     driver.drag((pull_x, pull_y), (pull_x, pull_y + 260), steps=12)
     driver.wait(label="Fresh fruit", role="button")
-    driver.wait(contains="Pull down to hide")
+    assert not driver.find(contains="Finished", visible=True), "a heading names the finished items"
     # A short swipe slides back and changes nothing.
     swipe("Fresh fruit", -0.2)
     swipe("Fresh fruit", 0.2)
