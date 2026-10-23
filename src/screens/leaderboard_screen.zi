@@ -155,24 +155,41 @@ LeaderboardGameValue :: (app: *InnerBreeze) -> float64 {
     return 0.0
 }
 
-// Every game score this device holds, published with the next refresh.
-// Only the reported numbers leave the device, never a game's saves.
+// The Wim Hof and meditation figures from this device's own records, which
+// the node cannot read once sessions sync encrypted, and every game score,
+// published with the next refresh. Only these numbers leave the device.
 #program_export
 LeaderboardStatsBody :: (app: *InnerBreeze) -> string {
     unused app
     GameScoresLoad()
-    if game_score_count == 0 {
-        return ""
-    }
+    today := LeaderboardToday()
     out: Vec(u8)
     BuilderPrint(*out, "{\"app\":\"inbe\",\"metrics\":[")
+    count: s32 = 0
+    practices: [2]s32 = .[EXERCISE_WIM_HOF, EXERCISE_MEDITATION]
+    for practice: practices {
+        streak: s32
+        average: s64
+        if storage_profile_activity_stats(practice, today, *streak, *average) == 0 { continue }
+        id := LeaderboardPracticeId(practice)
+        BuilderPrint(*out, "%{\"practice\":\"%\",\"metric\":\"streak\",\"value\":%,\"label\":\"%\",\"local_date\":%}",
+            ifx count > 0 then "," else "", id, cast(s64)streak, cast(s64)streak, today)
+        BuilderPrint(*out, ",{\"practice\":\"%\",\"metric\":\"%\",\"value\":%,\"label\":\"%\",\"local_date\":%}",
+            id, ifx practice == EXERCISE_MEDITATION then "avg_time" else "avg_hold", average, average, today)
+        count += 2
+    }
     for index: cast(s32)0..game_score_count - 1 {
         score := *game_scores[index]
         BuilderPrint(*out, "%{\"practice\":\"%\",\"metric\":\"%\",\"value\":%,\"label\":\"%\",\"local_date\":%}",
-            ifx index > 0 then "," else "", TextUntilNul(score.game[:]), TextUntilNul(score.metric[:]),
-            score.value, score.value, LeaderboardToday())
+            ifx count > 0 then "," else "", TextUntilNul(score.game[:]), TextUntilNul(score.metric[:]),
+            score.value, score.value, today)
+        count += 1
     }
     BuilderPrint(*out, "]}")
+    if count == 0 {
+        PackageFree(BuilderFinish(out))
+        return ""
+    }
     return BuilderFinish(out)
 }
 

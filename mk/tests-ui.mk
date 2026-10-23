@@ -92,12 +92,6 @@ startup-quit-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
 		python3 tests/startup_quit_ui_test.py $(abspath $(TARGET))
 
-test-tui-screenshot test-termi-screenshot:
-	@$(MAKE) --no-print-directory KRYON_BACKEND=termi test-termi-screenshot-direct
-
-test-termi-screenshot-direct: $(TARGET)
-	bash ./tests/termi_screenshot_test.sh "$(TARGET)"
-
 ## End-to-end desktop window-mode tests on a private Xvfb display: window
 ## close across startup/keep-running/ask modes.
 ## Requires Xvfb, xfwm4, xdotool, x11-utils and sqlite3.

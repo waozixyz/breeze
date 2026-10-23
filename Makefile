@@ -182,9 +182,6 @@ KRYON_DIR ?= build/packages/kryon
 KSS_DIR ?= build/packages/kss
 OQS_DIR ?= build/packages/oqs
 KRYON_BACKEND ?= raylib
-ifeq ($(KRYON_BACKEND),tui)
-KRYON_BACKEND := termi
-endif
 PLAN9PORT_DIR ?= /mnt/storage/Projects/plan9port
 RAYLIB_DIR = build/packages/raylib/src
 RAYLIB_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/raylib
@@ -553,12 +550,8 @@ KRYON_NATIVE_CFLAGS := $(filter-out -DNATIVE_WINDOW_HAVE_SDL,$(COMMON_CFLAGS)) -
 ZI_NATIVE_DEFINES += KRYON_BACKEND_LIBDRAW
 KRYON_NATIVE_BACKEND_CFLAGS := -DKRYON_BACKEND_LIBDRAW=1 -I$(PLAN9PORT_DIR)/include -idirafter $(RAYLIB_DIR)/external
 KRYON_NATIVE_BACKEND_LDLIBS := -L$(PLAN9PORT_DIR)/lib -ldraw -lmemdraw -lmux -lthread -l9 -lpthread -lm
-else ifeq ($(KRYON_BACKEND),termi)
-KRYON_SRCS += $(KRYON_TERMI_SRCS) $(KRYON_NULL_BACKEND_C)
-KRYON_NATIVE_CFLAGS := $(filter-out -DNATIVE_WINDOW_HAVE_SDL,$(COMMON_CFLAGS)) -std=c99 $(RUNTIME_ASSET_CFLAGS) $(SYSTEM_THEME_CFLAGS) $(KRYON_NOTIFICATION_CPPFLAGS) $(KRYON_NOTIFICATION_CFLAGS)
-KRYON_NATIVE_BACKEND_CFLAGS := -DKRYON_BACKEND_TERMI=1
 else
-$(error Unknown KRYON_BACKEND '$(KRYON_BACKEND)' (expected raylib, libdraw, or termi))
+$(error Unknown KRYON_BACKEND '$(KRYON_BACKEND)' (expected raylib or libdraw))
 endif
 ifneq ($(strip $(APP_GIO_LDLIBS)),)
 KRYON_NATIVE_BACKEND_CFLAGS += -DAPP_HAVE_GIO $(APP_GIO_CFLAGS)
@@ -622,9 +615,9 @@ MEDITATION_AUDIO_TRACKS := \
 
 include mk/package-freebsd.mk
 
-.PHONY: web-canvas web-canvas-smoke-test web-compare-test web-side-by-side-test all native kryon-host install install-user uninstall stage package-freebsd deb package-deb deb-check rpm package-rpm rpm-check snap package-snap snap-cache-clean flatpak package-flatpak podman-check validate-desktop run tui run-tui run-termi run-termi-direct run-fresh screenshot test ci dist appimage click click-verify vendor-prebuilds vendor-prebuilds-native vendor-prebuilds-web vendor-prebuilds-windows font-subsets font-bundle-check clean clean-linux clean-native clean-vendor-builds windows-setup windows-setup-check android-avd android-audio-e2e android-check-keystore android-copy-assets android-copy-debug-apks android-copy-release-apks android-copy-fdroid-apk android-copy-bundle android-smoke android-local-properties android-debug android-release android-bundle android-install android-install-release android-clean android-rebuild validate-meditation-audio package-unpackaged-assets windows-runtime-assets-check windows windows64 web web-tools-check web-smoke-test web-smoke-test-firefox web-smoke-test-librewolf site site-release-assets-check chrome-web-store chrome-web-store-test firefox-addons firefox-addons-lint firefox-addons-source-zip verify-firefox-addons sync-web-icons
+.PHONY: web-canvas web-canvas-smoke-test web-compare-test web-side-by-side-test all native kryon-host install install-user uninstall stage package-freebsd deb package-deb deb-check rpm package-rpm rpm-check snap package-snap snap-cache-clean flatpak package-flatpak podman-check validate-desktop run run-fresh screenshot test ci dist appimage click click-verify vendor-prebuilds vendor-prebuilds-native vendor-prebuilds-web vendor-prebuilds-windows font-subsets font-bundle-check clean clean-linux clean-native clean-vendor-builds windows-setup windows-setup-check android-avd android-audio-e2e android-check-keystore android-copy-assets android-copy-debug-apks android-copy-release-apks android-copy-fdroid-apk android-copy-bundle android-smoke android-local-properties android-debug android-release android-bundle android-install android-install-release android-clean android-rebuild validate-meditation-audio package-unpackaged-assets windows-runtime-assets-check windows windows64 web web-tools-check web-smoke-test web-smoke-test-firefox web-smoke-test-librewolf site site-release-assets-check chrome-web-store chrome-web-store-test firefox-addons firefox-addons-lint firefox-addons-source-zip verify-firefox-addons sync-web-icons
 .PHONY: zi-check
-.PHONY: clean-text-api-check package-check secret-check secret-check-history hooks-install test-tui-screenshot test-termi-screenshot test-termi-screenshot-direct
+.PHONY: clean-text-api-check package-check secret-check secret-check-history hooks-install
 .NOTPARALLEL: all native test visual-test ci zi-check dist windows windows64 android-release android-bundle click deb package-deb rpm package-rpm snap package-snap flatpak package-flatpak
 
 all: native
@@ -705,13 +698,6 @@ vendor-prebuilds-web: web-tools-check $(SQLITE_AMALGAMATION_C) $(SQLITE_AMALGAMA
 vendor-prebuilds-windows: $(WIN64_RAYLIB_A) $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(SQLITE_AMALGAMATION_C) $(SQLITE_AMALGAMATION_H)
 
 run: $(TARGET)
-	@root="$${XDG_DATA_HOME:-$$HOME/.local/share}/inbe-debug"; \
-	APP_DATA_ROOT="$$root" ./$(TARGET)
-
-tui run-tui run-termi:
-	@$(MAKE) --no-print-directory KRYON_BACKEND=termi run-termi-direct
-
-run-termi-direct: $(TARGET)
 	@root="$${XDG_DATA_HOME:-$$HOME/.local/share}/inbe-debug"; \
 	APP_DATA_ROOT="$$root" ./$(TARGET)
 

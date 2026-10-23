@@ -20,12 +20,6 @@ make native
 make run
 ```
 
-Run the terminal backend:
-
-```bash
-make tui
-```
-
 Build Android artifacts:
 
 ```bash

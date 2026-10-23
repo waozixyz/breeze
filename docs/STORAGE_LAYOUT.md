@@ -34,7 +34,7 @@ be linked from the full app build.
 
 ## Desktop profiles
 
-`make run` and `make run-termi` use the persistent debug profile at
+`make run` uses the persistent debug profile at
 `$XDG_DATA_HOME/inbe-debug` (or `~/.local/share/inbe-debug` when XDG_DATA_HOME
 is unset). `make run-fresh` uses a disposable temporary profile.
 
