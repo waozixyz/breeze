@@ -8,6 +8,7 @@ paint operations, pose solver, timing and framing as the app.
 
 import argparse
 import ctypes
+import json
 import math
 import os
 from pathlib import Path
@@ -31,6 +32,37 @@ class Operation(ctypes.Structure):
         ("alpha", ctypes.c_double), ("width", ctypes.c_double),
         ("first", ctypes.c_int32), ("count", ctypes.c_int32),
     ]
+
+
+V3 = ctypes.c_double * 3
+QUAT = ctypes.c_double * 4
+
+
+class Solved(ctypes.Structure):
+    """TaiChiSolved in src/practices/tai_chi/tai_chi_solve.zi, field by field."""
+    _fields_ = [
+        ("pelvis", V3), ("pelvis_quat", QUAT), ("spine1", V3), ("chest", V3), ("chest_quat", QUAT),
+        ("head_quat", QUAT), ("neck_base", V3), ("shoulder_center", V3), ("head_center", V3),
+        ("head_top", V3), ("com", V3), ("balance_target", V3), ("load", ctypes.c_double),
+        ("shoulders", V3 * 2), ("elbows", V3 * 2), ("wrists", V3 * 2), ("palms", V3 * 2),
+        ("hand_quats", QUAT * 2), ("hand_shapes", (ctypes.c_double * 3) * 2),
+        ("hips", V3 * 2), ("knees", V3 * 2), ("ankles", V3 * 2), ("heels", V3 * 2),
+        ("balls", V3 * 2), ("toes", V3 * 2), ("foot_quats", QUAT * 2), ("toes_quats", QUAT * 2),
+    ]
+
+
+def solved_json(solved):
+    """Every joint as plain lists, sides as [left, right]."""
+    record = {}
+    for name, kind in Solved._fields_:
+        value = getattr(solved, name)
+        if kind is ctypes.c_double:
+            record[name] = value
+        elif kind in (V3, QUAT):
+            record[name] = [round(v, 6) for v in value]
+        else:
+            record[name] = [[round(v, 6) for v in item] for item in value]
+    return record
 
 
 class Frame(ctypes.Structure):
@@ -68,6 +100,10 @@ class Renderer:
         self.native = ctypes.CDLL(str(compile_renderer()))
         self.native.PreviewFrame.argtypes = [ctypes.c_double, ctypes.c_int32, ctypes.c_int32]
         self.native.PreviewFrame.restype = ctypes.POINTER(Frame)
+        self.native.PreviewSolved.argtypes = [ctypes.c_double]
+        self.native.PreviewSolved.restype = ctypes.POINTER(Solved)
+        self.native.PreviewYaw.argtypes = []
+        self.native.PreviewYaw.restype = ctypes.c_double
         for name in ("PreviewDuration", "PreviewHeight", "PreviewCenter"):
             function = getattr(self.native, name)
             function.argtypes = []
@@ -122,12 +158,25 @@ def main():
     parser.add_argument("--fps", type=int, default=30)
     parser.add_argument("--still", type=float, action="append")
     parser.add_argument("--review", action="store_true", help="save review poses before the complete video")
+    parser.add_argument("--motion", type=Path,
+                        help="write every frame's solved skeleton and camera turn as JSON, for the three.js lab")
     options = parser.parse_args()
     if options.width <= 0 or options.height <= 0 or options.fps <= 0:
         parser.error("Width, height and frame rate must be positive")
     if not options.still and (options.width % 2 or options.height % 2):
         parser.error("H.264 dimensions must be even")
     renderer = Renderer(options.width, options.height)
+    if options.motion:
+        frames = []
+        for index in range(round(renderer.duration * options.fps)):
+            second = index / options.fps
+            record = solved_json(renderer.native.PreviewSolved(second).contents)
+            record["yaw"] = renderer.native.PreviewYaw()
+            frames.append(record)
+        options.motion.parent.mkdir(parents=True, exist_ok=True)
+        options.motion.write_text(json.dumps({"fps": options.fps, "height": 1.65, "frames": frames}))
+        print(f"Saved {options.motion} ({len(frames)} frames)")
+        return
     options.output.parent.mkdir(parents=True, exist_ok=True)
     if options.still or options.review:
         for second in options.still or [0, 11, 41]:

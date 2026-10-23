@@ -50,7 +50,7 @@ function privateEnvironment() {
     return environment
 }
 
-function launchBrowser(url, width, height) {
+export function launchBrowser(url, width, height) {
     const profile = mkdtempSync(join(tmpdir(), 'tai-chi-render-'))
     const browser = spawn(chromiumBinary(), [
         '--headless=new',

@@ -103,8 +103,11 @@ TaiChiFlatLook :: struct {
     sash_to: [TAI_CHI_FLAT_SASH_CAPACITY]float64
     sash_color: [TAI_CHI_FLAT_SASH_CAPACITY]u32
     limbs: float64
-    // Buttocks as rounded domes behind the hips, rather than one ball.
-    glutes: bool
+    // The trousers' seat as one ellipsoid on the pelvis, as the 3D studio
+    // figures have it: half width, height and depth, then its drop and
+    // forward offset from the pelvis, as height shares. Zero width keeps the
+    // round seat of spheres.
+    seat: [5]float64
     // Hand size, foot length and foot thickness as shares of the usual.
     hand_size: float64
     foot_length: float64
@@ -862,21 +865,19 @@ TaiChiFlatTorsoLines :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine) {
     }
 }
 
-// Each buttock is a dome on the pelvis, behind and a little below its hip
-// joint, so from any side it shows one smooth curve into the thigh.
-TaiChiFlatGlutes :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved, spine: *TaiChiFlatSpine, color: u32) {
+// The seat of the trousers: one ellipsoid on the pelvis under the top's hem,
+// as in the 3D studio (design/tai-chi/src/view/characters.js).
+TaiChiFlatSeat :: (painter: *TaiChiFlatPainter, solved: *TaiChiSolved, color: u32) {
     height := painter.height
-    k := height * painter.look.limbs
+    seat := painter.look.seat
     pelvis: TaiChiFlatHead
     pelvis.quat = solved.pelvis_quat
     pelvis.inverse = TaiChiFlatConjugate(solved.pelvis_quat)
-    pelvis.pivot = spine.hip_center
-    for side: cast(s32)0..1 {
-        part: TaiChiFlatPart
-        part.center = TaiChiV3(TaiChiSideSign(side) * 0.042 * height, -0.03 * height, -0.03 * height)
-        part.radii = TaiChiV3(0.058 * k, 0.07 * k, 0.056 * k)
-        TaiChiFlatFill(painter, TaiChiFlatOutline(painter, *pelvis, part), color, 1.0)
-    }
+    pelvis.pivot = solved.pelvis
+    part: TaiChiFlatPart
+    part.center = TaiChiV3(0.0, seat[3] * height, seat[4] * height)
+    part.radii = TaiChiV3(seat[0] * height, seat[1] * height, seat[2] * height)
+    TaiChiFlatFill(painter, TaiChiFlatOutline(painter, *pelvis, part), color, 1.0)
 }
 
 // --- Limbs -----------------------------------------------------------------------
@@ -1524,13 +1525,12 @@ TaiChiFlatPaintLook :: (frame: *TaiChiFlatFrame, solved: *TaiChiSolved, rig: *Ta
             TaiChiFlatArmPaint(*painter, *arms[side], no_clips)
         }
     }
-    // The farther leg first. Buttocks lie over the farther leg, so its
-    // darker tone never shows across them.
+    // The farther leg first. An ellipsoid seat lies over the farther leg, so
+    // its darker tone never shows across it.
     far_first := ifx legs[0].depth <= legs[1].depth then 0 else 1
-    if painter.look.glutes {
+    if painter.look.seat[0] > 0.0 {
         TaiChiFlatLegPaint(*painter, *legs[far_first])
-        TaiChiFlatFill(*painter, seat, palette.pants, 1.0)
-        TaiChiFlatGlutes(*painter, solved, *spine, palette.pants)
+        TaiChiFlatSeat(*painter, solved, palette.pants)
     } else {
         TaiChiFlatFill(*painter, seat, palette.pants, 1.0)
         TaiChiFlatLegPaint(*painter, *legs[far_first])

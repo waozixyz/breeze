@@ -41,6 +41,32 @@ const LOOKS = {
         neckRadius: 0.025,
         handSize: 0.95,
     },
+    // The app's Sun Salutation woman: the Jade woman in the chosen auburn
+    // colours, in a slimmer jacket and trousers (apps/practice/sun_salutation_artwork.zi).
+    sunWoman: {
+        skin: 0xf7c4a3,
+        skinShade: 0xe8ad8c,
+        lips: 0xd9937c,
+        eyes: 0x3a2119,
+        brows: 0x5a2818,
+        hair: 0x7c3a24,
+        hairTie: 0x5a2818,
+        jacket: 0x3f8f7a,
+        buttons: 0x3f8f7a,
+        trousers: 0x2e3d63,
+        trousersInside: 0x222d4a,
+        slipper: 0xf7c4a3,
+        sole: 0xe8ad8c,
+        style: 'bun',
+        jacketShape: {
+            hem: 0.112, hip: 0.106, waist: 0.09, chest: 0.097, shoulder: 0.1,
+            hemDepth: 0.075, waistDepth: 0.062, chestDepth: 0.071, bust: 0.006,
+        },
+        // The seat sits inside the slimmer jacket.
+        seat: [0.088, 0.058, 0.06, -0.03, -0.008],
+        neckRadius: 0.025,
+        handSize: 0.92,
+    },
     sageMale: {
         skin: 0xe9b691,
         skinShade: 0xd59c78,
@@ -393,8 +419,10 @@ function buildCharacter(figure, rig, options, lookName) {
         addMesh(g.spine1, ellipsoid(0.008 * H, 0.0035 * H, 0.004 * H), buttons, [0, local, (depth + forward) * H - 0.001 * H])
     }
 
-    // Seat of the trousers under the hem.
-    addMesh(g.pelvis, ellipsoid(0.098 * H, 0.06 * H, 0.074 * H), trousers, [0, -0.028 * H, -0.004 * H])
+    // Seat of the trousers under the hem: half width, height and depth, and
+    // its drop and forward offset from the pelvis, as shares of the height.
+    const seat = look.seat ?? [0.098, 0.06, 0.074, -0.028, -0.004]
+    addMesh(g.pelvis, ellipsoid(seat[0] * H, seat[1] * H, seat[2] * H), trousers, [0, seat[3] * H, seat[4] * H])
 
     // Sleeves and trousers.
     for (const side of SIDES) {
@@ -535,3 +563,4 @@ function buildHead(figure, rig, look, mats) {
 
 registerStyle('sageBun', (figure, rig, options) => buildCharacter(figure, rig, options, 'sageBun'))
 registerStyle('sageMale', (figure, rig, options) => buildCharacter(figure, rig, options, 'sageMale'))
+registerStyle('sunWoman', (figure, rig, options) => buildCharacter(figure, rig, options, 'sunWoman'))
