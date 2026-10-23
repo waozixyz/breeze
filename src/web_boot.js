@@ -237,18 +237,20 @@ function runStorageSync(retryDelay) {
     Module.__inbeStorageSyncLastError = message;
     Module.__inbeStorageSyncPending = true;
     console.error('IDBFS save failed: ' + message);
-    // A package can replace a temporary file while IDBFS enumerates it.
-    // Start a fresh snapshot after that race; persistent failures still
-    // resolve false, leaving the dirty state available to an explicit save.
+    // A package can replace a temporary file while IDBFS enumerates it, and
+    // practice packs keep installing for several seconds after start. Start
+    // a fresh snapshot after that race, waiting longer each time (about ten
+    // seconds in all); persistent failures still resolve false, leaving the
+    // dirty state available to an explicit save.
     var transient = error && (error.errno === 44 || error.name === 'NotFoundError' || error.name === 'AbortError');
     var attempt = Module.__inbeStorageSyncRetry || 0;
-    if (transient && attempt < 3) {
+    if (transient && attempt < 8) {
       Module.__inbeStorageSyncRetry = attempt + 1;
       if (Module.__inbeStorageSyncTimer) clearTimeout(Module.__inbeStorageSyncTimer);
       Module.__inbeStorageSyncTimer = setTimeout(function() {
         Module.__inbeStorageSyncTimer = 0;
         runStorageSync(retryDelay);
-      }, 100 * Math.pow(2, attempt));
+      }, Math.min(2000, 100 * Math.pow(2, attempt)));
       return;
     }
     finishStorageSync(false);

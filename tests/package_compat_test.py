@@ -22,6 +22,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -167,6 +168,20 @@ def published_release(origin, ledger, app_id, output):
     return bundle, metadata
 
 
+def published_release_retried(origin, ledger, app_id, output, attempts=6, delay=15):
+    """The node restarts for a minute or so whenever it is deployed; ask
+    again for a while before deciding that it serves no release."""
+    for attempt in range(attempts):
+        try:
+            return published_release(origin, ledger, app_id, output)
+        except (OSError, ValueError) as error:
+            if attempt == attempts - 1:
+                raise
+            print(f"forward {app_id}: the node did not answer ({error}); asking again")
+            time.sleep(delay)
+    return None
+
+
 def published_games(binary, origin, ledger, output):
     """Install and play the node's games, independently of Arcade's checkout.
 
@@ -177,7 +192,7 @@ def published_games(binary, origin, ledger, output):
     environment["YUE_DESKTOP_RECOVERY"] = "0"
     checked = 0
     for app_id, test in (("inbe.arcade", "tests/arcade_ui_test.sh"), ("inbe.chess", "tests/chess_ui_test.sh")):
-        published = published_release(origin, ledger, app_id, output)
+        published = published_release_retried(origin, ledger, app_id, output)
         if published is None:
             print(f"forward {app_id}: the node serves no release")
             continue

@@ -16,6 +16,11 @@ clean-text-api-check:
 button-api-check:
 	bash scripts/check-button-api.sh
 
+# The checks the pre-push hook runs, for everything not yet on origin/master.
+.PHONY: pre-push-check
+pre-push-check:
+	python3 scripts/pre-push-checks.py --unpushed
+
 .PHONY: version-test
 version-test:
 	python3 tests/version_test.py

@@ -609,13 +609,16 @@ def main():
                 if args.verify_origin:
                     advanced, unversioned = published_changes(args.store, args.verify_origin)
                     # A package that changed without a new version waits for
-                    # its next version; that is not a failure. Only a new
-                    # version that ships with an unversioned change fails,
-                    # because the node accepts every app together or none.
+                    # its next version; that is not a failure. The node
+                    # accepts every app together or none, so a new version
+                    # that ships beside an unversioned change waits too: the
+                    # release, whose ./update_version.sh versions every
+                    # package, publishes them together.
                     if unversioned and advanced:
-                        raise ValueError(", ".join(unversioned) + " changed without a new version, "
-                                         "so " + ", ".join(advanced) + " cannot be published with it; "
-                                         "./update_version.sh versions every package for the release")
+                        print("::notice title=App packages::Waiting for the next release: " +
+                              ", ".join(advanced) + " ships together with " + ", ".join(unversioned) +
+                              ", which changed without a new version")
+                        return
                     if unversioned:
                         print("::notice title=App packages::Not published: " + ", ".join(unversioned) +
                               " changed without a new version and will publish with the next one")

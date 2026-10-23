@@ -52,6 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       reuse_artifacts: ${{ steps.reuse.outputs.reuse_artifacts }}
+      release_due: ${{ steps.due.outputs.release_due }}
     steps:
       - name: Require an immutable candidate
         env:
@@ -67,6 +68,22 @@ jobs:
         with:
           ref: ${{ inputs.revision || github.sha }}
           fetch-depth: 0
+
+      # A push of a version that is already released has nothing to release:
+      # CI tests it, and the platform builds wait for the next version.
+      - name: Release only a new version or a requested run
+        id: due
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          version=$(python3 scripts/check-version.py --print-version)
+          if [ "$EVENT" = "workflow_dispatch" ] || ! git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
+            echo "release_due=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_due=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Release::v$version is already released; CI tests this push and no release builds run"
+          fi
 
       - name: Verify identical source and every gate before reusing artifacts
         id: reuse
@@ -168,7 +185,7 @@ jobs:
           python3 scripts/check-secrets.py --history
 
   test:
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     name: Test (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     needs: secret-scan
@@ -227,7 +244,7 @@ jobs:
 
 
   fdroid:
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     name: F-Droid
     needs: secret-scan
     uses: ./.github/workflows/fdroid.yml
@@ -238,7 +255,7 @@ jobs:
     name: Verify F-Droid reproducibility
     runs-on: ubuntu-latest
     needs: [secret-scan, fdroid, build-android]
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     timeout-minutes: 15
     steps:
       - name: Download independent F-Droid build
@@ -271,7 +288,7 @@ jobs:
           apksigcopier compare --unsigned "${signed[0]}" "${rebuilt[0]}"
 
   build-web:
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     name: Build Web
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -328,7 +345,7 @@ jobs:
           if-no-files-found: error
 
   build-chrome-extension:
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     name: Build Chrome Extension
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -385,7 +402,7 @@ jobs:
           if-no-files-found: error
 
   build-firefox-addons:
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     name: Build Firefox Add-on
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -443,7 +460,7 @@ jobs:
           if-no-files-found: error
 
   build-linux-appimage:
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     name: Build Linux AppImage
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -562,7 +579,7 @@ jobs:
           if-no-files-found: error
 
   build-linux-deb:
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     name: Build Linux Deb
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -624,7 +641,7 @@ jobs:
           if-no-files-found: error
 
   build-linux-rpm:
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     name: Build Linux RPM
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -686,7 +703,7 @@ jobs:
           if-no-files-found: error
 
   build-linux-snap:
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     name: Build Linux Snap
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -745,7 +762,7 @@ jobs:
           if-no-files-found: error
 
   build-linux-flatpak:
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     name: Build Linux Flatpak
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -804,7 +821,7 @@ jobs:
           if-no-files-found: error
 
   build-windows:
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     name: Build Windows
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -870,7 +887,7 @@ jobs:
           if-no-files-found: error
 
   build-android:
-    if: needs.secret-scan.outputs.reuse_artifacts != 'true'
+    if: needs.secret-scan.outputs.reuse_artifacts != 'true' && needs.secret-scan.outputs.release_due == 'true'
     name: Build Android
     runs-on: ubuntu-latest
     timeout-minutes: 60
