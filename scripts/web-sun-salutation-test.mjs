@@ -44,7 +44,7 @@ const stateExpression = `(() => {
   };
 })()`;
 
-export async function verifySunSalutationCanvas({ evaluate, click, resize, capture, callHook, browser }) {
+export async function verifySunSalutationCanvas({ evaluate, click, scroll, resize, capture, callHook, browser }) {
   const poseCount = Number(process.env.WEB_SMOKE_SUN_POSES || 12);
   if (!Number.isInteger(poseCount) || poseCount < 2 || poseCount > 12)
     throw new Error('WEB_SMOKE_SUN_POSES must be an integer from 2 to 12');
@@ -345,11 +345,26 @@ export async function verifySunSalutationCanvas({ evaluate, click, resize, captu
       if (name === 'manual')
         await state();
       if (name === 'customize') {
-        const picker = await evaluate(`(() => ({
+        const pickerExpression = `(() => ({
           x: Module._app_web_test_control_x(613), y: Module._app_web_test_control_y(613),
           width: Module._app_web_test_control_width(613), height: Module._app_web_test_control_height(613)
-        }))()`);
+        }))()`;
+        let picker = await evaluate(pickerExpression);
         if (picker.width <= 0 || picker.height <= 0) throw new Error('Character selector is missing');
+        // Customize's duration and timing controls put this selector near the
+        // bottom of the phone viewport. Scroll it up before clicking its rows;
+        // the menu otherwise opens upward to stay on screen.
+        if (picker.y > viewport.height * 0.5) {
+          await scroll(picker.x + picker.width / 2,
+            Math.min(picker.y + picker.height / 2, viewport.height - 24),
+            Math.round(picker.y - viewport.height * 0.4));
+          await delay(500);
+          picker = await evaluate(pickerExpression);
+        }
+        if (picker.y < 0 || picker.y + picker.height * 3.5 >= viewport.height) {
+          await save(`${label}-character-selector-clipped`);
+          throw new Error(`Character selector rows are outside the viewport: ${JSON.stringify(picker)}`);
+        }
         for (const character of [1, 0]) {
           await click(picker.x + picker.width / 2, picker.y + picker.height / 2);
           await delay(200);

@@ -1800,6 +1800,14 @@ async function sunSalutationChecks(client, browser) {
     click: async (x, y, endX, endY) => {
       if (endX === undefined) return dispatchCanvasClick(client, x, y);
       await dispatchCanvasDrag(client, x, y, endX, endY);
+    },
+    scroll: async (x, y, deltaY) => {
+      await client.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+      await waitAnimationFrames(client, 2);
+      await client.send('Input.dispatchMouseEvent', {
+        type: 'mouseWheel', x, y, deltaX: 0, deltaY
+      });
+      await waitAnimationFrames(client, 6);
     }
   };
   await verifyAppearanceCanvas(driver);
@@ -1862,6 +1870,15 @@ function firefoxPageClient(bidi, context) {
         });
       }
       if (method === 'Input.dispatchMouseEvent') {
+        if (params.type === 'mouseWheel') {
+          return bidi.send('input.performActions', { context, actions: [{
+            type: 'wheel', id: 'inbe-test-wheel', actions: [{
+              type: 'scroll', x: Math.round(params.x), y: Math.round(params.y),
+              deltaX: Math.round(params.deltaX || 0), deltaY: Math.round(params.deltaY || 0),
+              origin: 'viewport', duration: 0
+            }]
+          }] });
+        }
         const actions = [{ type: 'pointerMove', x: Math.round(params.x), y: Math.round(params.y), origin: 'viewport', duration: 0 }];
         if (params.type === 'mousePressed') actions.push({ type: 'pointerDown', button: 0 });
         if (params.type === 'mouseReleased') actions.push({ type: 'pointerUp', button: 0 });
