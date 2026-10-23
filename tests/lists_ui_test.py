@@ -1,6 +1,6 @@
 """Lists on a private display, driven through Kryon's test driver.
 
-Run by lists_ui_test.sh on its own Xvfb display: list tabs choose where a
+Run by lists_ui_test.sh on its own Xvfb display: list chips choose where a
 task goes, a new list is created with Enter, Share and Invitations open in a
 dialog, and a friend invitation and an accepted invitation are stored as
 durable deliveries without alarming the person when the node is unreachable.
@@ -75,7 +75,7 @@ with contextlib.ExitStack() as stack:
                                capture_output=True, text=True, timeout=5)
         return found.stdout.split()[0] if found.returncode == 0 and database.exists() else ""
     wait_for(find_window, "isolated app startup", timeout=20)
-    driver.wait(label="Shopping", role="tab")
+    driver.wait(label="Shopping", role="button")
     driver.wait(label="Share", role="button")
     driver.wait_idle(frames=3)
 
@@ -154,7 +154,16 @@ with contextlib.ExitStack() as stack:
     driver.press(label="Fresh fruit", role="button")
     wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 1,
              "a tap did not finish the item")
-    driver.press(label="All", role="tab")
+    # As in 1List, finished items leave the list; a pull down on the items
+    # shows them above the open ones.
+    driver.wait_gone(label="Fresh fruit", role="button")
+    driver.wait(contains="Finished (2) · Pull down to show")
+    share = driver.wait(label="Share", role="button")
+    pull_x = share["visible_x"] - 200
+    pull_y = share["visible_y"] + share["visible_height"] + 40
+    driver.drag((pull_x, pull_y), (pull_x, pull_y + 260), steps=12)
+    driver.wait(label="Fresh fruit", role="button")
+    driver.wait(contains="Pull down to hide")
     # A short swipe slides back and changes nothing.
     swipe("Fresh fruit", -0.2)
     swipe("Fresh fruit", 0.2)
@@ -182,7 +191,7 @@ with contextlib.ExitStack() as stack:
     wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 0,
              "a second tap did not reopen the item")
 
-    driver.press(label="Weekend", role="tab")
+    driver.press(label="Weekend", role="button")
     add("Weekend task")
     wait_for(lambda: item_list("Weekend task"), "the task was not added")
     assert item_list("Weekend task") == "Weekend", f"FAIL tab selects destination list: got {item_list('Weekend task')!r}"
@@ -190,56 +199,36 @@ with contextlib.ExitStack() as stack:
     driver.wait(label="Create list", role="button")
     add("Travel")
     wait_for(lambda: sql("SELECT COUNT(*) FROM elist_lists WHERE title='Travel'") == 1, "create list with Enter")
-    driver.wait(label="Travel", role="tab")
+    driver.wait(label="Travel", role="button")
     add("Pack bag")
     wait_for(lambda: item_list("Pack bag"), "the task was not added to the new list")
     assert item_list("Pack bag") == "Travel", f"FAIL new list is selected: got {item_list('Pack bag')!r}"
-    # The tabs have their row to themselves. With more lists than fit, a
-    # swipe back to the first list stays there instead of jumping back to
-    # the selected tab.
-    extra = [f"Long list name number {number} to scroll past" for number in range(1, 5)]
+    # Lists are chips that wrap onto more rows, as in 1List: however many
+    # there are, each shows its whole name and none is cut off.
+    extra = [f"Long list name number {number} to wrap" for number in range(1, 5)]
     for name in extra:
         driver.press(label="New list", role="button")
         driver.wait(label="Create list", role="button")
         add(name)
-        driver.wait(label=name, role="tab")
-
-    def swipe_tabs(to_start):
-        """Drag along the tab row towards its first or its last tab."""
-        shown = driver.find(role="tab", visible=True)
-        # The list tabs come first; Open and All are tabs on a lower row.
-        tabs = [tab for tab in shown if tab["visible_y"] == shown[0]["visible_y"]]
-        y = UiDriver.center(tabs[0])[1]
-        left = min(tab["visible_x"] for tab in tabs) + 20
-        right = max(tab["visible_x"] + tab["visible_width"] for tab in tabs) - 20
-        start, end = (left, right) if to_start else (right, left)
-        for _ in range(2):
-            driver.drag((start, y), (end, y), steps=12)
-        driver.wait_idle(frames=5, timeout=3)
-
-    def delete_selected_list(name):
+        driver.wait(label=name, role="button")
+    driver.wait_idle(frames=5, timeout=3)
+    chips = [driver.wait(label=name, role="button") for name in ["Shopping", "Weekend", "Travel", *extra]]
+    cut = [chip["label"] for chip in chips if chip["visible_width"] < chip["width"] - 1]
+    assert not cut, f"list chips are cut off: {cut}"
+    assert len({chip["y"] for chip in chips}) >= 2, "the list chips did not wrap onto another row"
+    for chip in chips:
+        for other in chips:
+            if chip is not other:
+                apart = (chip["x"] + chip["width"] <= other["x"] or other["x"] + other["width"] <= chip["x"] or
+                         chip["y"] + chip["height"] <= other["y"] or other["y"] + other["height"] <= chip["y"])
+                assert apart, f"list chips overlap: {chip['label']} and {other['label']}"
+    for name in extra:
+        driver.press(label=name, role="button")
         driver.press(label="Rename", role="button")
         driver.press(label="Delete list", role="button")
         driver.press(label="Tap again to delete this list", role="button")
-        driver.wait_gone(label=name, role="tab", visible=False)
-
-    assert not driver.find(label="Shopping", role="tab", visible=True), "the tabs did not overflow their row"
-    tab_row = driver.wait(label=extra[-1], role="tab")
-    tab_labels = {tab["label"] for tab in driver.find(role="tab")}
-    beside_tabs = [node["label"] for node in driver.find(role="button", visible=True)
-                   if node["label"] not in tab_labels and
-                   abs(UiDriver.center(node)[1] - UiDriver.center(tab_row)[1]) < tab_row["visible_height"] / 2]
-    assert not beside_tabs, f"buttons still share the tab row: {beside_tabs}"
-    swipe_tabs(to_start=True)
-    driver.wait(label="Shopping", role="tab")
-    driver.wait_idle(frames=10, timeout=3)
-    assert driver.find(label="Shopping", role="tab", visible=True), "the tabs jumped back to the selected list"
-    delete_selected_list(extra[-1])
-    for name in reversed(extra[:-1]):
-        swipe_tabs(to_start=False)
-        driver.press(label=name, role="tab")
-        delete_selected_list(name)
-    driver.press(label="Travel", role="tab")
+        driver.wait_gone(label=name, role="button", visible=False)
+    driver.press(label="Travel", role="button")
     # Sharing is one icon that opens a dialog over the list; a tap beside it
     # closes it. Offline, it asks to connect an account first. No line above
     # the list says who has access, and Invitations appears only while one
@@ -312,7 +301,7 @@ with contextlib.ExitStack() as stack:
     if driver.find(role="modal", visible=True):
         close_beside()
     # The screen carries no access line; sharing is the one Share button.
-    driver.press(contains="Garden", role="tab")
+    driver.press(contains="Garden", role="button")
     driver.wait(label="Share", role="button")
     assert not any("Shared with" in label or "Invited:" in label for label in driver.labels()), driver.labels()
     # The owner's Share dialog on a list that already has people: a friend
@@ -342,7 +331,7 @@ with contextlib.ExitStack() as stack:
     wait_for(lambda: not driver.find(role="modal", visible=True),
              "Escape did not close the focused sharing dialog")
     driver.wait(label="Share", role="button")
-    driver.wait(contains="Garden", role="tab")
+    driver.wait(contains="Garden", role="button")
     driver.press(label="Share", role="button")
     driver.wait(label="Cedar")
     # The same open dialog remains readable on a phone-sized viewport.
@@ -373,7 +362,7 @@ with contextlib.ExitStack() as stack:
     driver.wait(key=6540, value="Dana")
     # Viewers can inspect all access but cannot edit, invite or manage roles.
     close_beside()
-    driver.press(contains="Groceries", role="tab")
+    driver.press(contains="Groceries", role="button")
     driver.press(label="Share", role="button")
     driver.wait(label="People with access")
     assert "Alice" in dialog() and "Owner" in dialog(), dialog()
@@ -383,7 +372,7 @@ with contextlib.ExitStack() as stack:
     assert not driver.wait(key=6507)["enabled"], "viewer can add tasks"
     assert not driver.wait(key=6503)["enabled"], "viewer can rename a list"
     # Owners change a collaborator's role without sending its document again.
-    driver.press(contains="Garden", role="tab")
+    driver.press(contains="Garden", role="button")
     driver.press(label="Share", role="button")
     driver.wait(label="Cedar")
     driver.press(label="Read only")
@@ -409,8 +398,8 @@ with contextlib.ExitStack() as stack:
         db.execute("UPDATE settings SET value='http://127.0.0.1:11' WHERE key='sync_server_url'")
         db.execute("INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,1)",
                    (user, "lists.shared/" + "b" * 64 + "/http://127.0.0.1:11", json.dumps(incoming)))
-    driver.wait(label="Groceries", role="tab")
-    driver.press(contains="Groceries", role="tab")
+    driver.wait(label="Groceries", role="button")
+    driver.press(contains="Groceries", role="button")
     assert not any("Shared by" in label for label in driver.labels()), driver.labels()
     window = find_window()
     subprocess.run(["import", "-window", window, str(TEST_DIR / "shared-names.png")], check=True)

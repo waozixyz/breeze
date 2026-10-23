@@ -20,8 +20,10 @@
 #import "control_props"
 #import "swipe_row_props"
 #import "swipe_row"
-#import "tab_bar_props"
-#import "tab_bar_widget"
+#import "text_measure"
+#import "pointer_input"
+#import "swipe"
+#import "swipe_props"
 #import "scroll_props"
 #import "scroll_widget"
 #import "modal_props"
@@ -72,9 +74,8 @@ delete_confirm: bool;
 undo_item: ListsUiRow;
 undo_account: string;
 undo_until: float64;
-// The list whose tab was last scrolled into view. Only a new selection
-// scrolls the tabs again, so a swipe through them stays where it stops.
-revealed_list: s32 = -1;
+// A pull down on the items that shows or hides the finished ones.
+finished_pull: SwipeGesture;
 // Share, as in a document: a person with a plus.
 SHARE_ICON :: "S1.8rr:M9 4.5C10.93 4.5 12.5 6.07 12.5 8C12.5 9.93 10.93 11.5 9 11.5C7.07 11.5 5.5 9.93 5.5 8C5.5 6.07 7.07 4.5 9 4.5ZM3 20C3 16.7 5.7 14 9 14C12.3 14 15 16.7 15 20M19 8V14M16 11H22"
 // The same trash can as Photos and Lumi.
@@ -606,7 +607,86 @@ ListsView :: (message: ListsMessage) -> ListsMessage {
     return Finish()
 }
 
-// The selected list: its tabs, actions, new item field and items.
+ListChipsResult :: struct {
+    height: s32
+    acted: bool
+}
+
+// The lists are chips that wrap onto more rows, as in 1List, so each keeps
+// its whole name however many there are; the last chip makes a new list.
+// Past three rows the chips scroll.
+ListChips :: (x: s32, y: s32, width: s32, blocked: bool) -> ListChipsResult {
+    result: ListChipsResult
+    chip_height := Scale(40)
+    gap := Scale(8)
+    padding := Scale(18)
+    chip_x: [33]s32
+    chip_row: [33]s32
+    chip_width: [33]s32
+    row: s32 = 0
+    row_x: s32 = 0
+    for index: cast(s32)0..state.list_count {
+        chip_width[index] = chip_height
+        if index < state.list_count {
+            label := ReadListsRowHost(index, false).title
+            chip_width[index] = TextWidth(frame.session, TextProps.{.text = label}) + padding * 2
+        }
+        if chip_width[index] > width {
+            chip_width[index] = width
+        }
+        if row_x > 0 && row_x + chip_width[index] > width {
+            row += 1
+            row_x = 0
+        }
+        chip_x[index] = row_x
+        chip_row[index] = row
+        row_x += chip_width[index] + gap
+    }
+    rows := row + 1
+    shown_rows := ifx rows > 3 then 3 else rows
+    result.height = shown_rows * chip_height + (shown_rows - 1) * gap
+    scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)6500,
+            .bounds = Bounds(x, y, width, result.height),
+            .content_height = rows * chip_height + (rows - 1) * gap,
+            .scroll_offset = frame.tab_scroll})
+    frame.tab_scroll = scroll.scroll_offset
+    if !scroll.opened {
+        return result
+    }
+    for index: cast(s32)0..state.list_count {
+        bounds := Bounds(x + chip_x[index], cast(s32)scroll.content.y + chip_row[index] * (chip_height + gap),
+            chip_width[index], chip_height)
+        if index == state.list_count {
+            if Button(frame.session, ButtonProps.{.key = cast(u64)6505, .bounds = bounds,
+                    .label = ListsLocaleHost("elist_new_list"), .icon_type = cast(s32)IconPlus,
+                    .icon_only = true, .pill = true,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline,
+                    .disabled = blocked || state.list_count >= 32}) != 0 {
+                BeginInput(-2, "")
+                frame.panel = 0
+                result.acted = true
+            }
+            continue
+        }
+        chosen := index == state.selected_list
+        if Button(frame.session, ButtonProps.{.key = cast(u64)(6800 + index), .bounds = bounds,
+                .label = ReadListsRowHost(index, false).title, .pill = true, .selected = chosen,
+                .tone = cast(ButtonTone)(ifx chosen then ButtonToneAccent else ButtonToneNeutral),
+                .emphasis = cast(ButtonEmphasis)(ifx chosen then ButtonEmphasisFilled else ButtonEmphasisOutline)}) != 0 &&
+        !chosen {
+            state.action = LISTS_SELECT
+            state.index = index
+            undo_until = 0.0
+            delete_confirm = false
+            frame.panel = 0
+            result.acted = true
+        }
+    }
+    End(frame.session)
+    return result
+}
+
+// The selected list: its chips, actions, new item field and items.
 ListsPage :: () {
     x := Scale(16)
     width := frame.width - x * 2
@@ -616,32 +696,11 @@ ListsPage :: () {
     if state.selected_list >= 0 && state.selected_list < state.list_count {
         current = ReadListsRowHost(state.selected_list, false)
     }
-    // The tabs have the whole first row to themselves, so names have room
-    // and a swipe anywhere along the row scrolls them.
-    if state.list_count > 0 {
-        tabs: [32]Tab
-        for index: cast(s32)0..state.list_count - 1 {
-            row := ReadListsRowHost(index, false)
-            tabs[index] = Tab.{.key = cast(u64)(6800 + index), .label = row.title}
-        }
-        selected := TabBar(frame.session, TabBarProps.{.id = 6500,
-                .bounds = Bounds(x, y, width, Scale(44)),
-                .selected_index = state.selected_list, .min_tab_width = Scale(88),
-                .max_tab_width = Scale(220), .content_sized = true,
-                .scroll_offset = frame.tab_scroll, .scale = frame.scale,
-                .focus_selected = state.selected_list != revealed_list}, tabs[:state.list_count])
-        frame.tab_scroll = selected.scroll_offset
-        revealed_list = state.selected_list
-        if selected.selected_index != state.selected_list {
-            state.action = LISTS_SELECT
-            state.index = selected.selected_index
-            undo_until = 0.0
-            delete_confirm = false
-            frame.panel = 0
-            return
-        }
-        y += Scale(56)
+    chips := ListChips(x, y, width, blocked)
+    if chips.acted {
+        return
     }
+    y += chips.height + Scale(12)
     if (frame.sharing_status != 0 && frame.sharing_status != 2) || frame.sharing_pending {
         key := "elist_saving"
         if frame.sharing_pending && !frame.sharing_busy {
@@ -742,15 +801,6 @@ ListsPage :: () {
         Text(frame.session, TextProps.{.bounds = Bounds(x, y + Scale(72), width, Scale(64)),
                 .text = ListsLocaleHost("elist_empty_detail"), .align = cast(TextAlign)TextAlignCenter,
                 .wrap = cast(TextWrap)TextWrapAuto})
-        create_width := Scale(200)
-        if Button(frame.session, ButtonProps.{.key = cast(u64)6505,
-                .bounds = Bounds(x + (width - create_width) / 2, y + Scale(148), create_width, Scale(44)),
-                .label = ListsLocaleHost("elist_new_list"), .icon_type = cast(s32)IconPlus,
-                .tone = cast(ButtonTone)ButtonToneAccent,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled, .disabled = blocked}) != 0 {
-            BeginInput(-2, "")
-            frame.panel = 0
-        }
         return
     }
     committed := Field(Bounds(x, y, width - Scale(96), Scale(44)),
@@ -764,28 +814,41 @@ ListsPage :: () {
         return
     }
     y += Scale(56)
-    // One line under the field: the filter on the left, and on the right
-    // the selected list's Share, Edit and New list.
-    button_size := Scale(44)
-    button_gap := Scale(4)
-    new_x := x + width - button_size
-    edit_x := new_x - button_gap - button_size
-    share_x := edit_x - button_gap - button_size
-    filter_width := share_x - Scale(12) - x
-    if filter_width > Scale(190) {
-        filter_width = Scale(190)
+    // Finished items stay out of the way, as in 1List: a pull down on the
+    // items shows them above the open ones, and another pull hides them.
+    open_order: [256]s32
+    open_count: s32 = 0
+    finished_order: [256]s32
+    finished_count: s32 = 0
+    for index: cast(s32)0..state.item_count - 1 {
+        row := ReadListsRowHost(index, true)
+        if row.parent_id != current.id {
+            continue
+        }
+        // A hidden item just finished stays in place a moment before it goes.
+        leaving := state.show_completed == 0 && row.id == state.completing_id &&
+        state.now < state.completing_until
+        if row.done == 0 || leaving {
+            open_order[open_count] = index
+            open_count += 1
+        } else {
+            finished_order[finished_count] = index
+            finished_count += 1
+        }
     }
-    filters: [2]Tab
-    filters[0] = Tab.{.key = cast(u64)6840, .label = ListsLocaleHost("elist_filter_open")}
-    filters[1] = Tab.{.key = cast(u64)6841, .label = ListsLocaleHost("elist_filter_all")}
-    chosen := TabBar(frame.session, TabBarProps.{.id = 6530,
-            .bounds = Bounds(x, y + Scale(2), filter_width, Scale(40)),
-            .selected_index = state.show_completed, .min_tab_width = Scale(80),
-            .max_tab_width = Scale(120), .content_sized = true, .scale = frame.scale},
-        filters[:2])
-    if chosen.selected_index != state.show_completed {
-        state.show_completed = chosen.selected_index
-        frame.scroll = 0
+    // One line under the field: how many items are finished, then the
+    // selected list's Share and Edit.
+    button_size := Scale(44)
+    edit_x := x + width - button_size
+    share_x := edit_x - Scale(4) - button_size
+    if finished_count > 0 {
+        finished := Copied(ListsLocaleHost("elist_finished"))
+        hint: Vec(u8)
+        BuilderPrint(*hint, "% (%) · %", finished, finished_count,
+            ListsLocaleHost(ifx state.show_completed != 0 then "elist_pull_hide" else "elist_pull_show"))
+        Text(frame.session, TextProps.{.bounds = Bounds(x, y, share_x - Scale(8) - x, button_size),
+                .text = BuilderFinish(hint), .vertical_align = cast(TextAlign)TextAlignCenter,
+                .disabled = true})
     }
     // Share is one clear button, as in a document: it opens who has access.
     if Button(frame.session, ButtonProps.{.key = cast(u64)6508,
@@ -808,14 +871,6 @@ ListsPage :: () {
             .disabled = current.id.count == 0 || current.read_only || blocked}) != 0 {
         delete_confirm = false
         BeginInput(-3, current.title)
-        return
-    }
-    if Button(frame.session, ButtonProps.{.key = cast(u64)6505,
-            .bounds = Bounds(new_x, y, button_size, button_size),
-            .label = ListsLocaleHost("elist_new_list"), .icon_type = cast(s32)IconPlus,
-            .icon_only = true, .disabled = blocked || state.list_count >= 32}) != 0 {
-        BeginInput(-2, "")
-        frame.panel = 0
         return
     }
     y += Scale(52)
@@ -851,28 +906,60 @@ ListsPage :: () {
             return
         }
     }
-    visible: [256]bool
-    count: s32 = 0
-    for index: cast(s32)0..state.item_count - 1 {
-        row := ReadListsRowHost(index, true)
-        visible[index] = row.parent_id == current.id && (row.done == 0 ||
-            state.show_completed != 0 || (row.id == state.completing_id && state.now < state.completing_until))
-        if visible[index] {
-            count += 1
+    // The pull starts only with the items at their top. The rows follow the
+    // finger down, and a release past the threshold shows or hides the
+    // finished items.
+    pointer := SamplePointer()
+    pull := Swipe(SwipeSpec.{.bounds = Bounds(x, y, width, list_height),
+            .directions = cast(u32)SwipeDirection.SwipeDown,
+            .min_distance = cast(float32)Scale(96), .axis_bias = 1.5},
+        finished_pull, SwipeFrame.{.pointer = Vector2.{pointer.x, pointer.y},
+            .pressed = pointer.pressed, .down = pointer.down, .released = pointer.released,
+            .input_clear = frame.scroll == 0 && frame.panel == 0 &&
+            (finished_count > 0 || state.show_completed != 0),
+            .owner_clear = frame.scroll == 0, .now_seconds = state.now, .scale = frame.scale})
+    finished_pull = pull.gesture
+    if pull.direction == SwipeDirection.SwipeDown {
+        state.show_completed = ifx state.show_completed != 0 then 0 else 1
+        frame.scroll = 0
+    }
+    pull_offset: s32 = 0
+    if pull.dragging != 0 && pull.delta.y > 0.0 {
+        pull_offset = cast(s32)(pull.delta.y / 2.0)
+        if pull_offset > Scale(64) {
+            pull_offset = Scale(64)
         }
     }
+    if pull_offset >= Scale(24) {
+        key := ifx state.show_completed != 0 then "elist_pull_hide" else "elist_pull_show"
+        if pull.progress >= 1.0 {
+            key = ifx state.show_completed != 0 then "elist_release_hide" else "elist_release_show"
+        }
+        Text(frame.session, TextProps.{.bounds = Bounds(x, y, width, pull_offset),
+                .text = ListsLocaleHost(key), .align = cast(TextAlign)TextAlignCenter,
+                .vertical_align = cast(TextAlign)TextAlignCenter, .disabled = true})
+    }
+    shown_finished := ifx state.show_completed != 0 then finished_count else 0
+    header_height := ifx shown_finished > 0 then Scale(40) else 0
     scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)6600,
-            .bounds = Bounds(x, y, width, list_height),
-            .content_height = count * Scale(72), .scroll_offset = frame.scroll})
+            .bounds = Bounds(x, y + pull_offset, width, list_height - pull_offset),
+            .content_height = header_height + (shown_finished + open_count) * Scale(72),
+            .scroll_offset = frame.scroll})
     frame.scroll = scroll.scroll_offset
     if scroll.opened {
         row_y := cast(s32)scroll.content.y
         // Rows stop short of the right edge so the scroll bar has room.
         row_right := x + width - Scale(14)
-        for index: cast(s32)0..state.item_count - 1 {
-            if !visible[index] {
-                continue
-            }
+        if header_height > 0 {
+            heading: Vec(u8)
+            BuilderPrint(*heading, "% (%)", ListsLocaleHost("elist_finished"), finished_count)
+            Text(frame.session, TextProps.{.bounds = Bounds(x + Scale(12), row_y, row_right - x - Scale(24), header_height),
+                    .text = BuilderFinish(heading), .vertical_align = cast(TextAlign)TextAlignCenter,
+                    .disabled = true})
+            row_y += header_height
+        }
+        for position: cast(s32)0..shown_finished + open_count - 1 {
+            index := ifx position < shown_finished then finished_order[position] else open_order[position - shown_finished]
             if row_y + Scale(64) > cast(s32)scroll.viewport.y &&
             row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height) {
                 row := ReadListsRowHost(index, true)
