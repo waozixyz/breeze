@@ -577,7 +577,85 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
         wait_screen(window, SCREEN_SESSION, "A picture tap did not restore the practice")
         wait_running(window, "Restoring from the practice window ended the practice")
 
+    # The desktop window has the practice's own controls, used with the X
+    # pointer: the cue sound button and its volume slider, the held breath's
+    # Breath button, and a double tap that breathes when set to.
+    def saved_setting(key):
+        with sqlite3.connect((profile / "inbe.db").as_uri() + "?mode=ro", uri=True) as db:
+            row = db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            return row[0] if row else None
+
+    for double_tap_mode in (False, True):
+        mode = "double-tap" if double_tap_mode else "button"
+        save_settings(dict(advanced_session_controls="1", picture_in_picture="1",
+                           double_tap_to_breathe="1" if double_tap_mode else "0"))
+
+        def held():
+            if double_tap_mode:
+                return bool(shown(contains="Double tap"))
+            return bool(shown(label="BREATH", role="button"))
+
+        with application("desktop-controls-" + mode, 900, 720) as window:
+            def window_tap(detached, x, y, clicks=1):
+                command("xdotool", "mousemove", "--window", detached, str(x), str(y))
+                for click in range(clicks):
+                    command("xdotool", "mousedown", "1")
+                    time.sleep(.06)
+                    command("xdotool", "mouseup", "1")
+                    time.sleep(.06)
+                time.sleep(.4)
+
+            action(window, "mcp.open_view", "open-habits-controls-" + mode, {"view": "habits"})
+            action(window, "practice.whm.start", "start-whm-controls-" + mode)
+            wait_screen(window, SCREEN_SESSION, "Breathing did not start for the window's controls")
+            for step in range(4):
+                driver.wait_idle(frames=2)
+                if held():
+                    break
+                driver.press(label="Next")
+            else:
+                assert False, "Next did not reach the held breath"
+            driver.press(label="Minimize")
+            wait_screen(window, SCREEN_HABITS, "Minimize did not open the window during the held breath")
+            detached = practice_window_id()
+            capture(detached, "desktop-controls-" + mode)
+
+            if not double_tap_mode:
+                # The cue sound button sits at the top left. Its slider opens
+                # below it, inside the window, and leaves the open page alone.
+                before = saved_setting("sound_volume")
+                window_tap(detached, 26, 24)
+                assert state(window)["screen"] == SCREEN_HABITS, "The sound button returned to the practice"
+                window_tap(detached, 26, 208)
+                deadline = time.monotonic() + 5
+                while saved_setting("sound_volume") in (before, None) or int(saved_setting("sound_volume")) > 30:
+                    assert time.monotonic() < deadline, ("The window's cue slider did not lower the volume",
+                                                         before, saved_setting("sound_volume"))
+                    time.sleep(.1)
+                assert state(window)["screen"] == SCREEN_HABITS, "The volume slider returned to the practice"
+                # A tap outside the open slider only closes it.
+                window_tap(detached, 130, 140)
+                assert state(window)["screen"] == SCREEN_HABITS, "Closing the slider returned to the practice"
+                # Breath sits centered above the window's lines.
+                window_tap(detached, 130, 248)
+            else:
+                # A single tap waits for the second; a double tap breathes.
+                window_tap(detached, 130, 140)
+                time.sleep(.6)
+                assert state(window)["screen"] == SCREEN_HABITS, "A single tap left the open page"
+                window_tap(detached, 130, 140, clicks=2)
+            assert state(window)["screen"] == SCREEN_HABITS, "Breathing from the window left the open page"
+            wait_running(window, "Breathing from the window ended the practice")
+            # Maximize, beside the X, returns to the practice past its held breath.
+            window_tap(detached, 200, 20)
+            wait_screen(window, SCREEN_SESSION, "Maximize in the window did not return to the practice")
+            driver.wait(label="Minimize")
+            driver.wait_idle(frames=2)
+            assert not held(), "The practice is still holding the breath after breathing from the window"
+    save_settings(dict(advanced_session_controls="0", double_tap_to_breathe="0"))
+
 if DESKTOP_ONLY:
-    print("Desktop practice window: open on minimize, animate, resize, hide main window, close and restore passed")
+    print("Desktop practice window: open on minimize, animate, resize, hide main window, close, restore, "
+          "sound, Breath and double tap passed")
 else:
     print("Session window: all practice pictures, card controls and detached desktop windows passed")

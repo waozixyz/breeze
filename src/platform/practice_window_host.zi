@@ -7,6 +7,7 @@
 #import, file "../app/locale.zi";
 #import, file "../app/metrics.zi";
 #import, file "../practices/practice_registry.zi";
+#import, file "../practices/practice_audio_controls.zi";
 #import "raylib_secondary_window"
 #import "window_flags"
 using NativeWindowFlags;
@@ -30,6 +31,74 @@ using ButtonEmphasis;
 
 practice_window: SecondaryWindow;
 practice_window_session: Session;
+
+// What a frame of the detached window asks the app to do.
+PRACTICE_WINDOW_STAY :: 0
+PRACTICE_WINDOW_RESTORE :: 1
+PRACTICE_WINDOW_CLOSE :: 2
+// Pixels: the row holding the window's sound and window buttons.
+PRACTICE_WINDOW_BUTTON_ROW :: 48.0
+
+// The detached window's controls: the practice's sound buttons, the same
+// Breath button and double tap as the in-app window, maximize and close.
+// A tap anywhere else returns to the practice, unless taps breathe.
+PracticeWindowControls :: (app: *InnerBreeze, bounds: Rectangle) -> s32 {
+    session := app.ui.session
+    // The controls are submitted after the whole-window button, so their
+    // taps stay their own.
+    card: ButtonProps
+    card.id = SESSION_WINDOW_DESKTOP_ID + 2
+    card.bounds = bounds
+    card.invisible = true
+    card.label = practice_label(session_window_practice(app.session_window.screen))
+    tapped := Button(session, card) != 0
+
+    names: [2]string = .[LocaleText("session_maximize_button"),
+    LocaleText("close_button")]
+    icons: [2]string = .["S1.8rr:M14 5H19V10M10 19H5V14M19 5L13 11M5 19L11 13",
+    "S1.8rr:M6 6L18 18M18 6L6 18"]
+    action: s32 = PRACTICE_WINDOW_STAY
+    for index: cast(s32)0..cast(s32)1 {
+        button: ButtonProps
+        button.id = SESSION_WINDOW_DESKTOP_ID + index
+        button.bounds = Rectangle.{bounds.width - 78.0 + cast(float32)index * 36.0,
+            2.0, 36.0, 36.0}
+        button.label = names[index]
+        button.icon_only = true
+        button.icon_shape = icons[index]
+        button.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+        if Button(session, button) != 0 {
+            action = ifx index == 0 then PRACTICE_WINDOW_RESTORE else PRACTICE_WINDOW_CLOSE
+        }
+    }
+
+    practice := practice_get(session_window_practice(app.session_window.screen))
+    can_breathe := session_window_can_breathe(app, practice)
+    double_tap := can_breathe && app.double_tap_to_breathe != 0
+    if !double_tap {
+        app.breath_tap_last_time = 0.0
+    }
+    breathed := can_breathe && !double_tap && session_window_breathe_button(app, bounds)
+    // Drawn last, so an open volume slider covers the window below it.
+    practice_draw_audio_controls_at(app, AppScale(4), AppScale(52), 2)
+    if action != PRACTICE_WINDOW_STAY {
+        return action
+    }
+    if breathed {
+        practice.breathe(app)
+        return PRACTICE_WINDOW_STAY
+    }
+    if !tapped {
+        return PRACTICE_WINDOW_STAY
+    }
+    // Set to double tap, taps on the window are for breathing; maximize
+    // still returns to the practice.
+    if double_tap {
+        session_window_breathe_tap(app, practice)
+        return PRACTICE_WINDOW_STAY
+    }
+    return PRACTICE_WINDOW_RESTORE
+}
 
 ClosePracticeWindow :: (app: *InnerBreeze) {
     CloseSecondaryWindow(practice_window)
@@ -101,40 +170,36 @@ UpdatePracticeWindow :: (app: *InnerBreeze) {
             width: s32
             height: s32
             GetSecondaryWindowSize(practice_window, *width, *height)
+            // The window's own session and size, for this frame only.
             main_session := app.ui.session
+            main_width := app.ui.view_width
+            main_height := app.ui.view_height
             app.ui.session = practice_window_session
+            app.ui.view_width = width
+            app.ui.view_height = height
+            // Its buttons and sliders answer this window's own pointer.
+            unused SecondaryWindowInput(practice_window, practice_window_session)
+            action: s32 = PRACTICE_WINDOW_STAY
             if BeginSecondaryFrame(practice_window_session, width, height) {
                 bounds := Rectangle.{0.0, 0.0, cast(float32)width, cast(float32)height}
-                app_session_window_picture(app, app.session_window.screen, bounds, 40.0)
-                names: [2]string = .[LocaleText("session_maximize_button"),
-                LocaleText("close_button")]
-                icons: [2]string = .["S1.8rr:M14 5H19V10M10 19H5V14M19 5L13 11M5 19L11 13",
-                "S1.8rr:M6 6L18 18M18 6L6 18"]
-                for index: cast(s32)0..cast(s32)1 {
-                    button: ButtonProps
-                    button.id = SESSION_WINDOW_DESKTOP_ID + index
-                    button.bounds = Rectangle.{cast(float32)(width - 78 + index * 36),
-                        2.0, 36.0, 36.0}
-                    button.label = names[index]
-                    button.icon_only = true
-                    button.icon_shape = icons[index]
-                    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-                    unused Button(practice_window_session, button)
-                }
+                app_session_window_picture(app, app.session_window.screen, bounds,
+                    PRACTICE_WINDOW_BUTTON_ROW)
+                action = PracticeWindowControls(app, bounds)
                 EndSecondaryFrame(practice_window_session)
             }
             app.ui.session = main_session
+            app.ui.view_width = main_width
+            app.ui.view_height = main_height
             if !EndSecondaryWindow(practice_window) {
                 ClosePracticeWindow(app)
                 return
             }
-            if IsSecondaryWindowClicked(practice_window) {
-                x: s32
-                y: s32
-                GetSecondaryWindowClickPosition(practice_window, *x, *y)
+            // The controls above decide what a click does.
+            unused IsSecondaryWindowClicked(practice_window)
+            if action != PRACTICE_WINDOW_STAY {
                 ClosePracticeWindow(app)
                 FocusPracticeApp()
-                if y >= 2 && y < 38 && x >= width - 42 {
+                if action == PRACTICE_WINDOW_CLOSE {
                     app.session_window.close_requested = true
                 } else {
                     app.session_window.restore_requested = true
