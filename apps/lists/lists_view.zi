@@ -33,6 +33,8 @@
 #import "drawing_props"
 #import "tree"
 #import "icon"
+#import "image_props"
+#import "image_widget"
 EditIcon :: #import "mingcute/mingcute_regular_edit_2";
 SettingsIcon :: #import "mingcute/mingcute_regular_settings_3";
 BackIcon :: #import "mingcute/mingcute_regular_arrow_left";
@@ -117,8 +119,15 @@ AvatarFill :: (place: s32) -> Color {
     return Color.{58, 110, 165, 255}
 }
 
-// A round avatar with the first letter of a name.
-Avatar :: (key: u64, name: string, place: s32, x: s32, y: s32, size: s32) {
+// A person's profile picture, or a round avatar with the first letter of
+// their name when they have not chosen one.
+Avatar :: (key: u64, name: string, place: s32, x: s32, y: s32, size: s32, icon: s32) {
+    if (icon >= 41 && icon <= 65) || (icon >= 124 && icon <= 126) {
+        picture := ImageForIcon(icon, Bounds(x, y, size, size), name)
+        picture.key = key
+        Image(frame.session, picture)
+        return
+    }
     Box(frame.session, BoxProps.{.key = key, .bounds = Bounds(x, y, size, size),
             .fill = AvatarFill(place), .radius = cast(float32)size / 2.0})
     letter_end: s64 = 1
@@ -475,7 +484,8 @@ MemberRow :: (row: ListsUiPerson, place: s32, x: s32, y: s32, width: s32, manage
         shown = BuilderFinish(invited)
     }
     avatar := Scale(36)
-    Avatar(cast(u64)(7900 + place), shown, place, x, y + (Scale(MEMBER_ROW) - avatar) / 2, avatar)
+    icon := ifx row.target == frame.public_id then frame.profile_icon else row.profile_icon
+    Avatar(cast(u64)(7900 + place), shown, place, x, y + (Scale(MEMBER_ROW) - avatar) / 2, avatar, icon)
     role_width := Scale(140)
     name_x := x + avatar + Scale(12)
     Text(frame.session, TextProps.{.bounds = Bounds(name_x, y, x + width - role_width - Scale(8) - name_x, Scale(MEMBER_ROW)),
@@ -876,8 +886,8 @@ ListSettingsPage :: () {
         if !shared || owner_id == frame.public_id {
             owner_name = ListsLocaleHost("elist_you")
         }
-        MemberRow(ListsUiPerson.{.target = owner_id, .target_alias = owner_name, .access = "owner"},
-            0, x, cy, inner, false, true, blocked)
+        MemberRow(ListsUiPerson.{.target = owner_id, .target_alias = owner_name, .access = "owner",
+                .profile_icon = FriendIcon(owner_id)}, 0, x, cy, inner, false, true, blocked)
         cy += Scale(MEMBER_ROW)
         place: s32 = 1
         for index: cast(s32)0..frame.invitation_count - 1 {
@@ -945,43 +955,65 @@ ListSettingsPage :: () {
     }
 }
 
+// A friend's profile picture, or this account's own; 0 when unknown.
+FriendIcon :: (id: string) -> s32 {
+    if id == frame.public_id {
+        return frame.profile_icon
+    }
+    for index: cast(s32)0..frame.friend_count - 1 {
+        friend := ReadListsSharingRowHost(index, false)
+        if friend.id == id {
+            return friend.profile_icon
+        }
+    }
+    return 0
+}
+
 // Under the chips, a shared list shows who has it, as a document does:
-// avatars and names, invited people marked. A tap opens List settings.
+// pictures and names, invited people marked. A tap opens List settings.
 SharedLine :: (current: ListsUiRow, x: s32, y: s32, width: s32) -> bool {
-    people := Copied(current.people)
-    invited := ifx current.owner then Copied(current.invited) else ""
-    invited_label := Copied(ListsLocaleHost("elist_invited"))
+    list_id := Copied(current.id)
+    owner_id := Copied(current.owner_id)
+    owner_name := Copied(ifx current.owner_alias.count > 0 then current.owner_alias else current.people)
+    owns := current.owner
     title := Copied(current.title)
+    invited_label := Copied(ListsLocaleHost("elist_invited"))
     text: Vec(u8)
-    initials: [3]string
+    names: [3]string
+    icons: [3]s32
     count: s32 = 0
-    for group: cast(s32)0..1 {
-        source := ifx group == 0 then people else invited
-        start: s64 = 0
-        at: s64 = 0
-        while at <= source.count {
-            separator := at + 1 < source.count && source[at] == cast(u8)44 && source[at + 1] == cast(u8)32
-            if at == source.count || separator {
-                name := source[start:at]
-                if name.count > 0 {
-                    if text.count > 0 {
-                        BuilderPrint(*text, " · ")
-                    }
-                    if group == 0 {
-                        BuilderPrint(*text, "%", name)
-                    } else {
-                        BuilderPrint(*text, "% (%)", name, invited_label)
-                    }
-                    if count < 3 {
-                        initials[count] = name
-                    }
-                    count += 1
-                }
-                start = at + 2
-                at += 2
-            } else {
-                at += 1
+    if !owns {
+        BuilderPrint(*text, "%", owner_name)
+        names[0] = owner_name
+        icons[0] = FriendIcon(owner_id)
+        count = 1
+    }
+    // People who joined come first, then those still invited.
+    for pass: cast(s32)0..1 {
+        if !owns {
+            break
+        }
+        for index: cast(s32)0..frame.invitation_count - 1 {
+            row := ReadListsSharingRowHost(index, true)
+            if !SharingMemberShown(row, list_id) || (row.status == "pending") != (pass == 1) {
+                continue
             }
+            icon := row.profile_icon
+            name := Copied(ifx row.target_alias.count > 0 then row.target_alias else
+                row.target[:ifx row.target.count > 8 then 8 else row.target.count])
+            if text.count > 0 {
+                BuilderPrint(*text, " · ")
+            }
+            if pass == 0 {
+                BuilderPrint(*text, "%", name)
+            } else {
+                BuilderPrint(*text, "% (%)", name, invited_label)
+            }
+            if count < 3 {
+                names[count] = name
+                icons[count] = icon
+            }
+            count += 1
         }
     }
     if count == 0 {
@@ -991,7 +1023,7 @@ SharedLine :: (current: ListsUiRow, x: s32, y: s32, width: s32) -> bool {
     step := Scale(22)
     shown := ifx count > 3 then 3 else count
     for place: cast(s32)0..shown - 1 {
-        Avatar(cast(u64)(7950 + place), initials[place], place, x + place * step, y + Scale(4), size)
+        Avatar(cast(u64)(7950 + place), names[place], place, x + place * step, y + Scale(4), size, icons[place])
     }
     text_x := x + (shown - 1) * step + size + Scale(10)
     if Button(frame.session, ButtonProps.{.key = cast(u64)6508,

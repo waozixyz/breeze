@@ -27,6 +27,7 @@ app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c;
 
 #import, file "../screens/elist_types.zi";
 #import, file "../app/metrics.zi";
+#import, file "../app/profile_picture_policy.zi";
 
 elist_ids_equal :: (first: *u8, second: *u8) -> bool {
     if first == null || second == null {
@@ -308,6 +309,14 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
             row.status = AppTextFromCString(*lists_person_text[6][0], 512)
             row.target_alias = AppTextFromCString(*lists_person_text[7][0], 512)
             row.access = AppTextFromCString(*lists_person_text[8][0], 512)
+            if !invitation {
+                row.profile_icon = ListsProfileIcon(source, object)
+            } else {
+                // An invitation shows the other person: whoever it went to,
+                // or the owner when it came to this account.
+                person := ifx row.target == storage_get_setting_text("sync_public_id") then row.owner else row.target
+                row.profile_icon = ListsFriendIcon(AppTextFromCString(*lists_friends[0], 8192), person)
+            }
         }
         result.* = WidgetEncodeListsUiPerson(row, *lists_person_codec)
         return 1
@@ -319,6 +328,38 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
         result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
             .data = HostTextData(lists_prepared_body), .length = cast(usize)lists_prepared_body.count}
         return 1
+    }
+    return 0
+}
+
+// A friend's profile picture as Kryon's icon number. The node still keeps
+// pictures chosen in older clients by their own numbers 1 to 11; those map
+// to the same pictures.
+ListsProfileIcon :: (friends: string, friend: s32) -> s32 {
+    at := FieldAt(friends, friend, "profile_icon")
+    if at < 0 {
+        return 0
+    }
+    icon := cast(s32)ReadNumber(friends, at).value
+    legacy: [12]s32 = .[0, 42, 43, 46, 53, 54, 55, 62, 63, 64, 65, 65]
+    if icon >= 0 && icon <= 11 {
+        return legacy[icon]
+    }
+    return ifx ProfilePictureValid(icon) then icon else 0
+}
+
+ListsFriendIcon :: (friends: string, id: string) -> s32 {
+    if id.count == 0 {
+        return 0
+    }
+    array := FieldAt(friends, 0, "friends")
+    for index: cast(s32)0..ArrayCount(friends, array) - 1 {
+        friend := ElementAt(friends, array, index)
+        user: [65]u8
+        ListsCopyJson(friends, friend, "user_id_hash", user[:])
+        if AppTextFromCString(*user[0], 65) == id {
+            return ListsProfileIcon(friends, friend)
+        }
     }
     return 0
 }
@@ -369,7 +410,7 @@ draw_elist_screen :: (app: *InnerBreeze) {
             FieldAt(AppTextFromCString(*lists_friends[0], 8192), 0, "friends")),
         .invitation_count = lists_invitation_count,
         .pending_count_text = AppTextFromCString(*lists_pending_number[0], 24),
-        .next_id = next_id}
+        .next_id = next_id, .profile_icon = app.profile_picture_icon}
     message := elist_message_for(*app.elist, LISTS_FRAME, -1)
     message.now = GetTime()
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)

@@ -333,9 +333,14 @@ with contextlib.ExitStack() as stack:
         user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
         db.execute("INSERT OR REPLACE INTO social_snapshots VALUES(?,?,?,1)",
                    (user, "friends.list", json.dumps({"friends": [
-                       {"user_id_hash": "a" * 64, "alias": "Alice"}, {"user_id_hash": "c" * 64, "alias": "Cedar"},
+                       {"user_id_hash": "a" * 64, "alias": "Alice", "profile_icon": 55},
+                       {"user_id_hash": "c" * 64, "alias": "Cedar", "profile_icon": 0},
                        {"user_id_hash": "d" * 64, "alias": "Dana"}, {"user_id_hash": "e" * 64, "alias": "Emerald"}]})))
     time.sleep(.5)
+    # People show their own profile picture; someone without one keeps the
+    # first letter of their name.
+    driver.wait(label="Alice", role="image")
+    assert not driver.find(label="Cedar (Invited)", role="image"), "a person without a picture got one"
     driver.press(label="Alice · Cedar (Invited)", role="button")
     driver.wait(label="List settings")
     time.sleep(1.0)
@@ -346,6 +351,8 @@ with contextlib.ExitStack() as stack:
     assert "Dana" not in names and "Emerald" not in names, names
     assert "Owner" in names and "Read only" in names, names
     assert "Refresh" not in names, names
+    driver.wait(label="Alice", role="image")
+    driver.wait(label="You", role="image")
     # Escape leaves List settings and stays on this list.
     driver.press(key=6540)
     subprocess.run(["xdotool", "windowfocus", find_window()], check=True)

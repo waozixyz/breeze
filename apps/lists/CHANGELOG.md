@@ -4,7 +4,7 @@
 
 - Lists are chips that wrap onto more rows; pull the items down to show or hide finished ones.
 - List settings, from the gear on the selected list: its name, who has access, invitations with a role, and Delete after a question.
-- A shared list names its people under the lists; items are edited in their own row.
+- A shared list names its people under the lists, with their profile pictures; items are edited in their own row.
 
 ## [1.1.10] - 2026-10-23
 
