@@ -21,6 +21,7 @@ TAI_CHI_FLAT_TORSO_STATIONS :: 20
 TAI_CHI_FLAT_CLIP_STATIONS :: 8
 TAI_CHI_FLAT_HIP_SHARE :: 0.524
 TAI_CHI_FLAT_JACKET_ROWS :: 15
+TAI_CHI_FLAT_SEAT_ROWS :: 7
 TAI_CHI_FLAT_OP_CAPACITY :: 512
 TAI_CHI_FLAT_POINT_CAPACITY :: 16384
 // The most points gathered for one hull or produced by one clip.
@@ -103,8 +104,10 @@ TaiChiFlatLook :: struct {
     sash_to: [TAI_CHI_FLAT_SASH_CAPACITY]float64
     sash_color: [TAI_CHI_FLAT_SASH_CAPACITY]u32
     limbs: float64
-    // Rounded buttocks that run into the thighs, rather than one ball.
-    glutes: bool
+    // The trousers' seat as rows like the jacket's, from the fold under the
+    // buttocks up to the waist, when the look has one.
+    seat: [TAI_CHI_FLAT_JACKET_ROWS][4]float64
+    has_seat: bool
     // Hand size, foot length and foot thickness as shares of the usual.
     hand_size: float64
     foot_length: float64
@@ -181,6 +184,23 @@ TaiChiFlatJacket :: (look: *TaiChiFlatLook, hem: float64, hip: float64, waist: f
     TaiChiFlatJacketRow(look, 12, 0.817, shoulder - 0.032, chest_depth - 0.026, -0.002)
     TaiChiFlatJacketRow(look, 13, 0.826, shoulder * 0.55, 0.05, -0.002)
     TaiChiFlatJacketRow(look, 14, 0.834, 0.05, 0.044, 0.0)
+}
+
+// A woman's seat in fitted trousers: rows of (height share, half width,
+// half depth, forward offset), fullest a little below the hip joints and
+// set back behind them, rounding under into the fold above the thighs.
+TaiChiFlatSeat :: (look: *TaiChiFlatLook) {
+    shares: [TAI_CHI_FLAT_SEAT_ROWS]float64 = .[0.436, 0.448, 0.465, 0.49, 0.515, 0.545, 0.575]
+    halves: [TAI_CHI_FLAT_SEAT_ROWS]float64 = .[0.035, 0.065, 0.09, 0.102, 0.104, 0.1, 0.092]
+    depths: [TAI_CHI_FLAT_SEAT_ROWS]float64 = .[0.022, 0.04, 0.053, 0.058, 0.058, 0.055, 0.053]
+    forwards: [TAI_CHI_FLAT_SEAT_ROWS]float64 = .[-0.008, -0.024, -0.025, -0.02, -0.016, -0.008, -0.002]
+    for row: cast(s32)0..TAI_CHI_FLAT_SEAT_ROWS - 1 {
+        look.seat[row][0] = shares[row]
+        look.seat[row][1] = halves[row]
+        look.seat[row][2] = depths[row]
+        look.seat[row][3] = forwards[row]
+    }
+    look.has_seat = true
 }
 
 TaiChiFlatSash :: (look: *TaiChiFlatLook, from: float64, to: float64, color: u32) {
@@ -721,16 +741,23 @@ TaiChiFlatRingFrame :: struct {
 
 // The jacket's ring at a height share.
 TaiChiFlatJacketRing :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine, share: float64) -> TaiChiFlatRingFrame {
-    rows := painter.look.jacket
+    return TaiChiFlatRowsRing(painter, spine, painter.look.jacket, TAI_CHI_FLAT_JACKET_ROWS, share)
+}
+
+// The ring at a height share through rows of (share, half width, half
+// depth, forward offset), as the jacket and the seat give them.
+TaiChiFlatRowsRing :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine,
+    rows: [TAI_CHI_FLAT_JACKET_ROWS][4]float64, count: s32, share: float64) -> TaiChiFlatRingFrame {
+    last := count - 1
     values: [3]float64
     values[0] = rows[0][1]
     values[1] = rows[0][2]
     values[2] = rows[0][3]
     if share > rows[0][0] {
-        values[0] = rows[TAI_CHI_FLAT_JACKET_ROWS - 1][1]
-        values[1] = rows[TAI_CHI_FLAT_JACKET_ROWS - 1][2]
-        values[2] = rows[TAI_CHI_FLAT_JACKET_ROWS - 1][3]
-        for index: cast(s32)1..TAI_CHI_FLAT_JACKET_ROWS - 1 {
+        values[0] = rows[last][1]
+        values[1] = rows[last][2]
+        values[2] = rows[last][3]
+        for index: cast(s32)1..last {
             if share <= rows[index][0] {
                 u := (share - rows[index - 1][0]) / (rows[index][0] - rows[index - 1][0])
                 for column: cast(s32)0..2 {
@@ -750,6 +777,34 @@ TaiChiFlatJacketRing :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine, s
     ring.a = values[0] * height
     ring.b = values[1] * height
     return ring
+}
+
+// The trousers' seat: the hulls of neighbouring seat rings, so it curves
+// from the waist over the buttocks and in again at the fold.
+TaiChiFlatSeatPaint :: (painter: *TaiChiFlatPainter, spine: *TaiChiFlatSpine, color: u32) {
+    rows := painter.look.seat
+    previous: TaiChiFlatScratch
+    current: TaiChiFlatScratch
+    both: TaiChiFlatScratch
+    stations: s32 = 16
+    from := rows[0][0]
+    to := rows[TAI_CHI_FLAT_SEAT_ROWS - 1][0]
+    for station: cast(s32)0..stations {
+        current.count = 0
+        share := from + (to - from) * cast(float64)station / cast(float64)stations
+        TaiChiFlatProjectRing(painter, TaiChiFlatRowsRing(painter, spine, rows, TAI_CHI_FLAT_SEAT_ROWS, share), *current)
+        if station > 0 {
+            both.count = 0
+            for index: cast(s32)0..previous.count - 1 {
+                TaiChiFlatPush(*both, previous.points[index])
+            }
+            for index: cast(s32)0..current.count - 1 {
+                TaiChiFlatPush(*both, current.points[index])
+            }
+            TaiChiFlatFill(painter, TaiChiFlatHull(painter.frame, *both), color, 1.0)
+        }
+        previous = current
+    }
 }
 
 TaiChiFlatRingPoint :: (ring: TaiChiFlatRingFrame, angle: float64) -> TaiChiVector3 {
@@ -1489,32 +1544,10 @@ TaiChiFlatPaintLook :: (frame: *TaiChiFlatFrame, solved: *TaiChiSolved, rig: *Ta
     TaiChiFlatLoft(*painter, *spine, bottom, top, TAI_CHI_FLAT_CLIP_STATIONS, 0, clips[:])
     scratch: TaiChiFlatScratch
     pelvis_up := TaiChiAxis(solved.pelvis_quat, 0.0, 1.0, 0.0)
-    seat_k := height * painter.look.limbs
-    seats: [2]TaiChiFlatShape
-    seat_count: s32 = 1
-    if painter.look.glutes {
-        // Each buttock rounds back from its hip and on down into its own
-        // thigh, so a bent hip shows a seat rather than a ball.
-        pelvis_back := TaiChiAxis(solved.pelvis_quat, 0.0, 0.0, -1.0)
-        for side: cast(s32)0..1 {
-            hip := solved.hips[side]
-            glute := TaiChiAddScaled3(TaiChiAddScaled3(hip, pelvis_back, 0.02 * height), pelvis_up, -0.034 * height)
-            scratch.count = 0
-            TaiChiFlatSphere(*painter, *scratch, hip, 0.05 * seat_k)
-            TaiChiFlatSphere(*painter, *scratch, glute, 0.049 * seat_k)
-            TaiChiFlatSphere(*painter, *scratch, TaiChiLerp3(hip, solved.knees[side], 0.3),
-                painter.look.leg_thigh[1] * seat_k)
-            TaiChiFlatSphere(*painter, *scratch, TaiChiAddScaled3(spine.hip_center, pelvis_up, -0.03 * height),
-                0.04 * seat_k)
-            seats[side] = TaiChiFlatHull(frame, *scratch)
-        }
-        seat_count = 2
-    } else {
-        TaiChiFlatSphere(*painter, *scratch, solved.hips[0], 0.05 * seat_k)
-        TaiChiFlatSphere(*painter, *scratch, solved.hips[1], 0.05 * seat_k)
-        TaiChiFlatSphere(*painter, *scratch, TaiChiAddScaled3(spine.hip_center, pelvis_up, -0.03 * height), 0.04 * seat_k)
-        seats[0] = TaiChiFlatHull(frame, *scratch)
-    }
+    TaiChiFlatSphere(*painter, *scratch, solved.hips[0], 0.05 * height * painter.look.limbs)
+    TaiChiFlatSphere(*painter, *scratch, solved.hips[1], 0.05 * height * painter.look.limbs)
+    TaiChiFlatSphere(*painter, *scratch, TaiChiAddScaled3(spine.hip_center, pelvis_up, -0.03 * height), 0.04 * height * painter.look.limbs)
+    seat := TaiChiFlatHull(frame, *scratch)
     head := TaiChiFlatHeadFor(*painter, solved)
     scratch.count = 0
     TaiChiFlatSphere(*painter, *scratch, solved.neck_base, painter.look.neck * height)
@@ -1529,12 +1562,16 @@ TaiChiFlatPaintLook :: (frame: *TaiChiFlatFrame, solved: *TaiChiSolved, rig: *Ta
             TaiChiFlatArmPaint(*painter, *arms[side], no_clips)
         }
     }
-    for index: cast(s32)0..seat_count - 1 {
-        TaiChiFlatFill(*painter, seats[index], palette.pants, 1.0)
-    }
-    // The farther leg first.
+    // The farther leg first. A seat of rows lies over the farther leg, so
+    // its darker tone never shows across the buttocks.
     far_first := ifx legs[0].depth <= legs[1].depth then 0 else 1
-    TaiChiFlatLegPaint(*painter, *legs[far_first])
+    if painter.look.has_seat {
+        TaiChiFlatLegPaint(*painter, *legs[far_first])
+        TaiChiFlatSeatPaint(*painter, *spine, palette.pants)
+    } else {
+        TaiChiFlatFill(*painter, seat, palette.pants, 1.0)
+        TaiChiFlatLegPaint(*painter, *legs[far_first])
+    }
     TaiChiFlatLegPaint(*painter, *legs[1 - far_first])
     TaiChiFlatFill(*painter, neck, palette.skin, 1.0)
     if painter.look.plain_top {
