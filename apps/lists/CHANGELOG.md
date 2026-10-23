@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.1.11] - 2026-10-23
+## [1.1.12] - 2026-10-23
 
 - Lists are chips that wrap onto more rows; pull the items down to show or hide finished ones.
 - List settings, from the gear on the selected list: its name, who has access, invitations with a role, and Delete after a question.

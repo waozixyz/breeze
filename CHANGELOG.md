@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.44] - 2026-10-23
+
+- Lists: lists are chips that wrap onto more rows; pull the items down to show finished ones.
+- Lists: the gear on a list opens its settings: name, who has access and their roles, invitations, and Delete.
+- Your profile picture is shared with friends, and shared lists show everyone's pictures.
+- On Linux the program is now called breeze.
+
 ## [2.1.43] - 2026-10-23
 
 - Lists: tap an item to finish it, swipe right to edit it and swipe left to delete it.
