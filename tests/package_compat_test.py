@@ -6,7 +6,9 @@ host interface. Phones still hold those packages when they install this app.
 
 Reverse: the last released app runs each package built here that declares a
 host interface the released app accepts, so a package update that claims to
-support older apps cannot break them.
+support older apps cannot break them. Packages reach only apps that run their
+format: an app released before the ZX format never asks the node for `.zx`
+packages, so there is nothing to check against it.
 
 Bundled packages are loaded with --bundle, which validates them and fails the
 run when the host rejects them. The node's Arcade, and Chess while the node
@@ -220,6 +222,10 @@ def released_app(tag, output):
 
 def reverse(tag, ledger, output):
     released = json.loads(fetch(f"https://raw.githubusercontent.com/{REPOSITORY}/{tag}/apps/versions.json", 65536))
+    if released.get("package_format", "zib") != ledger.get("package_format", "zib"):
+        print(f"reverse {tag}: the released app runs {released.get('package_format', 'zib')} packages and is "
+              f"never offered these {ledger.get('package_format', 'zib')} ones; nothing to check")
+        return 0
     oldest, current = host_range(released)
     candidates = [package for package in PACKAGES
                   if oldest <= declared_host(ledger, package[0]) <= current and

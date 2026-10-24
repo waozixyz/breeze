@@ -98,7 +98,8 @@ export async function verifySunSalutationCanvas({ evaluate, click, scroll, resiz
     if (!response.ok) throw new Error('Sun Salutation content is unavailable');
     const bundle = new Uint8Array(await response.arrayBuffer());
     const view = new DataView(bundle.buffer);
-    if (view.getUint32(0, true) !== 0x0042495a || view.getUint32(4, true) !== 26)
+    // "ZX" and two zero bytes, then the little-endian format version.
+    if (view.getUint32(0, true) !== 0x0000585a || view.getUint32(4, true) !== 26)
       throw new Error('Unsupported Practices package');
     let at = 8;
     function number() {

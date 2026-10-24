@@ -297,8 +297,9 @@ def verify_origin(store, origin, open_url=open_public_url):
         app_id = "inbe" if name == "inbe" else "inbe." + name
         expected = json.loads((store / app_id / "latest-v2.json").read_bytes())
         route = origin + "/api/v2/packages/" + app_id
-        # Bucket 0 receives a staged release first.
-        with open_url(route + "/latest?bucket=0", timeout=30) as response:
+        # Bucket 0 receives a staged release first. Hosts that run ZX ask with
+        # format=zx; without it the node offers only legacy .zib releases.
+        with open_url(route + "/latest?bucket=0&format=zx", timeout=30) as response:
             encoded = response.read(65537)
         if len(encoded) > 65536 or json.loads(encoded) != expected:
             raise ValueError(f"{app_id}: public release metadata differs from the signed publication")
@@ -361,7 +362,7 @@ def published_changes(store, origin, open_url=open_public_url):
         app_id = "inbe" if name == "inbe" else "inbe." + name
         staged = json.loads((store / app_id / "latest-v2.json").read_bytes())
         try:
-            with open_url(origin + "/api/v2/packages/" + app_id + "/latest?bucket=0",
+            with open_url(origin + "/api/v2/packages/" + app_id + "/latest?bucket=0&format=zx",
                           timeout=30) as response:
                 encoded = response.read(65537)
         except HTTPError as error:

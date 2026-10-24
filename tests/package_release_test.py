@@ -91,9 +91,10 @@ def main():
             # Without the node's grant a paid pack is refused.
             if app_id == "inbe.practices" and filename in paid and not paid_public:
                 raise HTTPError(url, 403, "Forbidden", {}, None)
-            # The publisher asks as bucket 0, which receives staged releases first.
+            # The publisher asks as bucket 0, which receives staged releases
+            # first, for the ZX releases it publishes.
             if filename.startswith("latest"):
-                assert filename == "latest?bucket=0", filename
+                assert filename == "latest?bucket=0&format=zx", filename
                 filename = "latest-v2.json"
             return BytesIO((store / app_id / filename).read_bytes())
 

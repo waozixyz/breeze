@@ -128,7 +128,7 @@ class RestrictedUploadTest(unittest.TestCase):
             app_id = url.split("/api/v2/packages/")[1].split("/")[0]
             if app_id not in served:
                 raise release.HTTPError(url, 404, "Not Found", None, None)
-            self.assertTrue(url.endswith("/latest?bucket=0"))
+            self.assertTrue(url.endswith("/latest?bucket=0&format=zx"))
             return BytesIO(served[app_id])
 
         changes = lambda: release.published_changes(self.store, "https://node.example/", open_url)
