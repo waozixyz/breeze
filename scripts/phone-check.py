@@ -13,7 +13,6 @@ import argparse
 from datetime import datetime, timezone
 import fnmatch
 import hashlib
-import io
 import ipaddress
 import json
 import os
@@ -71,6 +70,8 @@ def run(argv, *, timeout=60, **kwargs):
 
 class Phone:
     def __init__(self, host, serial):
+        self.pending = None
+        self.shots = []
         if not re.fullmatch(r"[A-Za-z0-9_.@-]+", host) or host.startswith("-"):
             raise ValueError("invalid ADB host")
         valid_serial = re.fullmatch(r"[A-Za-z0-9]+", serial) is not None
@@ -106,15 +107,18 @@ class Phone:
             raise ValueError("Inner Breeze does not own the foreground window: " + line.strip())
 
     def screenshot(self, package, path):
-        from PIL import Image, ImageStat
+        """Keep the phone's screen as a private pending copy for the owner.
 
+        Nothing reads its pixels until the owner approves it (approve())."""
         self.focused(package)
         data = self.adb("exec-out", "screencap", "-p")
-        with Image.open(io.BytesIO(data)) as image:
-            body = image.convert("RGB").crop((0, image.height // 10, image.width, image.height * 9 // 10))
-            if max(ImageStat.Stat(body).stddev) < 2:
-                raise ValueError(f"Inner Breeze rendered a blank screen ({path.name})")
-        path.write_bytes(data)
+        if self.pending is None:
+            self.pending = Path(tempfile.mkdtemp(prefix="inbe-phone-pending-"))
+        pending = self.pending / path.name
+        descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(data)
+        self.shots.append((pending, path))
 
     def start(self, package, *extra):
         output = self.shell("am", "start", "-W", "-n", f"{package}/{ACTIVITY}", *extra)
@@ -249,6 +253,55 @@ def layout_shift(before, after):
         return round(sum(ImageStat.Stat(difference).mean) / 3, 1)
 
 
+def consent_script():
+    script = Path(os.environ.get("HARMONY_SCREENSHOT_CONSENT") or
+                  ROOT.parent / "harmony/scripts/screenshot-consent.py")
+    if not script.is_file():
+        raise ValueError("phone screenshots need the owner's approval through Harmony's "
+                         f"screenshot consent ({script}); nothing was recorded")
+    return script
+
+
+def approve(phone, display):
+    """Show each phone screenshot to the owner; only approved images are read.
+
+    A discard, a closed window or the popup's timeout denies the check. It is
+    never asked again automatically."""
+    script = consent_script()
+    environment = dict(os.environ, **display)
+    try:
+        for pending, destination in phone.shots:
+            label = f"Breeze phone check: {destination.stem} on the {phone.serial} phone"
+            result = subprocess.run([sys.executable, str(script), "--owned", "--label", label,
+                                     "--path", str(pending), "--destination", str(destination)],
+                                    env=environment, capture_output=True, text=True, timeout=600)
+            if result.returncode != 0 or not destination.is_file():
+                raise ValueError(f"the owner did not approve the {destination.stem} screenshot; "
+                                 "nothing was recorded")
+    finally:
+        discard(phone)
+
+
+def discard(phone):
+    """Delete every pending screenshot the owner has not released."""
+    if phone.pending is not None:
+        shutil.rmtree(phone.pending, ignore_errors=True)
+        phone.pending = None
+    phone.shots = []
+
+
+def review(evidence, timing):
+    """Blank-screen and resume checks on the approved screenshots."""
+    from PIL import Image, ImageStat
+
+    for name in ("launch", "practice-start", "practice-end", "resume"):
+        with Image.open(evidence / f"{name}.png") as image:
+            body = image.convert("RGB").crop((0, image.height // 10, image.width, image.height * 9 // 10))
+            if max(ImageStat.Stat(body).stddev) < 2:
+                raise ValueError(f"Inner Breeze rendered a blank screen ({name}.png)")
+    timing["resume_layout_shift"] = layout_shift(evidence / "practice-end.png", evidence / "resume.png")
+
+
 def frame_timing(phone, package, seconds):
     """Collect every presented frame of the app's window for the session."""
     # Android 9 names layers "<id> package/activity#N"; tokens are not layers.
@@ -346,7 +399,6 @@ def check(phone, apk, seconds, evidence):
     if phone.pid(package) != pid:
         raise ValueError("Inner Breeze restarted when it returned from the background")
     phone.screenshot(package, evidence / "resume.png")
-    timing["resume_layout_shift"] = layout_shift(evidence / "practice-end.png", evidence / "resume.png")
     model = phone.shell("getprop", "ro.product.model").strip()
     android = phone.shell("getprop", "ro.build.version.release").strip()
     return identity, timing, dict(model=model, android=android)
@@ -373,8 +425,11 @@ def main():
     parser.add_argument("--build-receipt", type=Path,
                         help="isolated APK build provenance, required with --revision")
     args = parser.parse_args()
-    for name in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"):
-        os.environ.pop(name, None)
+    # The app checks run without a desktop; only the owner's consent popup
+    # uses it.
+    display = {name: os.environ.pop(name) for name in
+               ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS") if name in os.environ}
+    consent_script()
     apk = args.apk.resolve(strict=True)
     commit, changed, untracked, version = source_state(args.revision)
     if args.revision:
@@ -388,7 +443,12 @@ def main():
     evidence = ROOT / "backup/phone-checks" / f"{version}-{stamp}"
     evidence.mkdir(parents=True, exist_ok=True)
     phone = Phone(resolve_host(args.host, args.serial), args.serial)
-    identity, timing, device = check(phone, apk, args.seconds, evidence)
+    try:
+        identity, timing, device = check(phone, apk, args.seconds, evidence)
+        approve(phone, display)
+    finally:
+        discard(phone)
+    review(evidence, timing)
     if identity["version_name"] != version:
         raise SystemExit(f"the APK is {identity['version_name']}, but the source is {version}")
     passed = smooth(timing) and resumed_in_place(timing)
