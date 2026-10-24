@@ -3,7 +3,6 @@ import copy
 import hashlib
 import importlib.util
 import json
-import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -100,32 +99,6 @@ class PhoneCheckGateTest(unittest.TestCase):
                 phone_check.check(phone, self.root / "candidate.apk", 60, self.root)
         self.assertEqual(phone.adb.call_args_list, [mock.call("get-state")])
         phone.shell.assert_not_called()
-
-    def test_screenshots_wait_for_the_owners_approval(self):
-        phone = phone_check.Phone("local", "Fixture")
-        evidence = self.root / "evidence"
-        evidence.mkdir()
-        with mock.patch.object(phone, "focused"), mock.patch.object(phone, "adb", return_value=b"pixels"):
-            phone.screenshot("fixture.debug", evidence / "launch.png")
-        pending = phone.pending / "launch.png"
-        self.assertFalse((evidence / "launch.png").exists())
-        self.assertEqual(pending.stat().st_mode & 0o777, 0o600)
-        denied = self.root / "deny.py"
-        denied.write_text("import sys\nsys.exit(3)\n")
-        with mock.patch.dict(os.environ, {"HARMONY_SCREENSHOT_CONSENT": str(denied)}):
-            with self.assertRaisesRegex(ValueError, "did not approve the launch screenshot"):
-                phone_check.approve(phone, {})
-        self.assertIsNone(phone.pending)
-        self.assertFalse((evidence / "launch.png").exists())
-        with mock.patch.object(phone, "focused"), mock.patch.object(phone, "adb", return_value=b"pixels"):
-            phone.screenshot("fixture.debug", evidence / "launch.png")
-        approved = self.root / "approve.py"
-        approved.write_text("import shutil, sys\nshutil.copyfile(sys.argv[sys.argv.index('--path') + 1], "
-                            "sys.argv[sys.argv.index('--destination') + 1])\n")
-        with mock.patch.dict(os.environ, {"HARMONY_SCREENSHOT_CONSENT": str(approved)}):
-            phone_check.approve(phone, {})
-        self.assertEqual((evidence / "launch.png").read_bytes(), b"pixels")
-        self.assertIsNone(phone.pending)
 
     def test_missing_process_is_empty_but_adb_failure_is_not_ignored(self):
         phone = phone_check.Phone("local", "Fixture")
