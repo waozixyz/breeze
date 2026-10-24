@@ -786,9 +786,9 @@ async function verifyAppSettingsReloadPersistence(client) {
     throw new Error('app settings did not persist across reload');
 }
 
-async function verifyLanguageRouteDoesNotOverrideSavedOnboarding(client, port) {
+async function verifySetupRouteDoesNotOverrideSavedOnboarding(client, port) {
   await waitForStorageIdle(client);
-  await client.send('Page.navigate', { url: `http://127.0.0.1:${port}/index.html#/language` });
+  await client.send('Page.navigate', { url: `http://127.0.0.1:${port}/index.html#/audio_setup` });
   await waitForHealthyPage(client);
   await waitForStorageIdle(client);
 
@@ -803,9 +803,9 @@ async function verifyLanguageRouteDoesNotOverrideSavedOnboarding(client, port) {
   });
   const value = result.result?.value || {};
   if (value.onboarding !== 1)
-    throw new Error(`saved onboarding state missing before language route check; state=${JSON.stringify(value)}`);
-  if (value.hash === '#/language')
-    throw new Error('saved onboarding state was overridden by stale #/language route');
+    throw new Error(`saved onboarding state missing before setup route check; state=${JSON.stringify(value)}`);
+  if (value.hash === '#/audio_setup')
+    throw new Error('saved onboarding state was overridden by stale #/audio_setup route');
 }
 
 async function verifySyncKeyImport(client) {
@@ -1943,7 +1943,7 @@ try {
     const pageClient = firefoxPageClient(client, context);
     await verifyReloadPersistence(pageClient);
     await verifyAppSettingsReloadPersistence(pageClient);
-    await verifyLanguageRouteDoesNotOverrideSavedOnboarding(pageClient, port);
+    await verifySetupRouteDoesNotOverrideSavedOnboarding(pageClient, port);
     await verifyFirstRunGuideCanvasFlow(pageClient);
     await verifyHabitsClickDoesNotReload(pageClient);
     await installPracticeContentFixtures(pageClient);
@@ -2020,7 +2020,7 @@ try {
     await verifyRenderingLive(client);
     await verifyReloadPersistence(client);
     await verifyAppSettingsReloadPersistence(client);
-    await verifyLanguageRouteDoesNotOverrideSavedOnboarding(client, port);
+    await verifySetupRouteDoesNotOverrideSavedOnboarding(client, port);
     await verifyFirstRunGuideCanvasFlow(client);
     await verifySyncKeyImport(client);
     // Check an empty habit day before completion links a session to it.

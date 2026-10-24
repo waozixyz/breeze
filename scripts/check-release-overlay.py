@@ -3,8 +3,22 @@
 from pathlib import Path
 import os
 import shutil
+import stat
 import subprocess
 import sys
+
+
+def remove_read_only(function, path, error):
+    """Let rmtree remove entries of read-only directories, such as a backup's.
+
+    The mode changes only the overlay's copy; the checkout keeps its own."""
+    parent = os.path.dirname(path)
+    os.chmod(parent, stat.S_IMODE(os.lstat(parent).st_mode) | stat.S_IRWXU)
+    if os.path.isdir(path) and not os.path.islink(path):
+        os.chmod(path, stat.S_IMODE(os.lstat(path).st_mode) | stat.S_IRWXU)
+        shutil.rmtree(path, onexc=remove_read_only)
+    else:
+        function(path)
 
 
 def prepare(root, revision):
@@ -40,7 +54,7 @@ def prepare(root, revision):
         if entry.name in retained:
             continue
         if entry.is_dir() and not entry.is_symlink():
-            shutil.rmtree(entry)
+            shutil.rmtree(entry, onexc=remove_read_only)
         else:
             entry.unlink()
     git("checkout-index", "--all", "--force")
