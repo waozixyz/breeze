@@ -3,6 +3,7 @@
 ## [2.1.45] - 2026-10-23
 
 - Practice illustrations keep clean, smooth edges on desktop, without dark seams across the Sun Salutation guide.
+- Smoother on phones: the How to guides, still screens and paused practices draw far less.
 - Apps and practices use the new ZX format and update themselves after installing.
 
 ## [2.1.44] - 2026-10-23

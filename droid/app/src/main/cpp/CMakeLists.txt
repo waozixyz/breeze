@@ -26,7 +26,8 @@ set(SQLITE_AMALGAMATION_C "${SQLITE_BUILD_DIR}/sqlite3.c")
 set(SQLITE_AMALGAMATION_H "${SQLITE_BUILD_DIR}/sqlite3.h")
 include("${KRYON_DIR}/cmake/KryonAndroid.cmake")
 kryon_android_reproducible_paths("${REPO_ROOT}")
-# Apply the release size policy to static dependencies as well as the host.
+# Size-optimize static dependencies in release builds. Kryon compiles the
+# host and raylib for speed, after this option, because they draw every frame.
 add_compile_options("$<$<NOT:$<CONFIG:Debug>>:-Oz>")
 set(OQS_BUILD_ONLY_LIB ON CACHE BOOL "" FORCE)
 set(OQS_USE_OPENSSL OFF CACHE BOOL "" FORCE)
@@ -224,7 +225,7 @@ execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/build-bundle-runt
     --source "${ZIRAN_DIR}" --output "${APP_BUNDLE_RUNTIME_DIR}"
     --cc "${CMAKE_C_COMPILER} --target=${CMAKE_C_COMPILER_TARGET} --sysroot=${CMAKE_SYSROOT}"
     --ar "${CMAKE_AR}" --objcopy "${CMAKE_OBJCOPY}"
-    "--flags=-Oz -fPIC -ffunction-sections -fdata-sections"
+    "--flags=-O2 -fPIC -ffunction-sections -fdata-sections"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${REPO_ROOT}/scripts/build-bundle-runtime.py" "${REPO_ROOT}/ziran.lock")

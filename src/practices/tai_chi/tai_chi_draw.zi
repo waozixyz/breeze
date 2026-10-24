@@ -57,9 +57,149 @@ TaiChiPaintFlat :: (session: Session, frame: *TaiChiFlatFrame, framing: TaiChiFr
     TaiChiPaintFlatEdge(session, frame, framing, mirrored, area, key, alt_text, TAI_CHI_FLAT_EDGE_PATH)
 }
 
-// The same painting with another practice's copy of the edge image.
+// A figure that holds still, such as a guide's pose chart or a paused
+// practice, paints the same meshes every frame. Its caller names what the
+// figure depends on with a digest. After the same digest comes twice in a
+// row the meshes are kept, and later frames replay them instead of solving
+// and meshing the figure again. A moving figure never repeats its digest,
+// so it is never copied.
+TAI_CHI_FLAT_CACHE_SLOTS :: 16
+TAI_CHI_FLAT_CACHE_OPS :: 384
+TAI_CHI_FLAT_CACHE_POINTS :: 24576
+
+TaiChiFlatCachedOp :: struct {
+    index: s32
+    first: s32
+    count: s32
+    columns: s32
+    tint: u32
+    labelled: bool
+}
+
+// Points are kept relative to the area's corner, so a figure that only
+// moves, as in a scrolling page, still replays.
+TaiChiFlatCacheSlot :: struct {
+    key: u64
+    digest: u64
+    width: float32
+    height: float32
+    stored: bool
+    used: u64
+    op_count: s32
+    point_count: s32
+    ops: [TAI_CHI_FLAT_CACHE_OPS]TaiChiFlatCachedOp
+    points: [TAI_CHI_FLAT_CACHE_POINTS]Vector2
+}
+
+tai_chi_flat_cache: [TAI_CHI_FLAT_CACHE_SLOTS]TaiChiFlatCacheSlot;
+tai_chi_flat_cache_clock: u64;
+
+// This figure's slot at this size, or -1.
+TaiChiFlatCacheFind :: (key: u64, area: Rectangle) -> s32 {
+    for index: cast(s32)0..TAI_CHI_FLAT_CACHE_SLOTS - 1 {
+        slot := *tai_chi_flat_cache[index]
+        if slot.used != 0 && slot.key == key && slot.width == area.width &&
+        slot.height == area.height {
+            return index
+        }
+    }
+    return -1
+}
+
+// Draws the kept meshes of this figure when they were kept for this digest.
+TaiChiPaintFlatCached :: (session: Session, key: u64, digest: u64, area: Rectangle,
+    alt_text: string, edge_path: string) -> bool {
+    found := TaiChiFlatCacheFind(key, area)
+    if digest == 0 || found < 0 {
+        return false
+    }
+    slot := *tai_chi_flat_cache[found]
+    if !slot.stored || slot.digest != digest {
+        return false
+    }
+    tai_chi_flat_cache_clock += 1
+    slot.used = tai_chi_flat_cache_clock
+    screen: [TAI_CHI_FLAT_MESH_CAPACITY]Vector2
+    for at: cast(s32)0..slot.op_count - 1 {
+        op := slot.ops[at]
+        for point: cast(s32)0..op.count - 1 {
+            kept := slot.points[op.first + point]
+            screen[point] = Vector2.{area.x + kept.x, area.y + kept.y}
+        }
+        picture: ImageProps
+        picture.key = key + cast(u64)op.index
+        picture.bounds = area
+        picture.smooth = true
+        picture.alt_text = ifx op.labelled then alt_text else ""
+        picture.asset_path = edge_path
+        picture.tint = op.tint
+        picture.mesh.columns = op.columns
+        picture.mesh.rows = op.count / op.columns
+        picture.mesh.points = screen[:op.count]
+        Image(session, picture)
+    }
+    return true
+}
+
+// The slot to fill while this figure paints, or -1. The first frame with a
+// new digest only remembers it; the second one keeps the meshes.
+TaiChiFlatCacheBegin :: (key: u64, digest: u64, area: Rectangle) -> s32 {
+    if digest == 0 {
+        return -1
+    }
+    found := TaiChiFlatCacheFind(key, area)
+    tai_chi_flat_cache_clock += 1
+    if found < 0 {
+        found = 0
+        for index: cast(s32)1..TAI_CHI_FLAT_CACHE_SLOTS - 1 {
+            if tai_chi_flat_cache[index].used < tai_chi_flat_cache[found].used {
+                found = index
+            }
+        }
+        slot := *tai_chi_flat_cache[found]
+        slot.key = key
+        slot.width = area.width
+        slot.height = area.height
+        slot.digest = 0
+    }
+    slot := *tai_chi_flat_cache[found]
+    slot.used = tai_chi_flat_cache_clock
+    slot.op_count = 0
+    slot.point_count = 0
+    if slot.digest != digest {
+        slot.digest = digest
+        slot.stored = false
+        return -1
+    }
+    return found
+}
+
+// Keeps one painted mesh; false when the slot is full and cannot keep this
+// figure.
+TaiChiFlatCacheKeep :: (slot: *TaiChiFlatCacheSlot, index: s32, mesh: []Vector2,
+    columns: s32, tint: u32, labelled: bool, area: Rectangle) -> bool {
+    count := cast(s32)mesh.count
+    if slot.op_count >= TAI_CHI_FLAT_CACHE_OPS ||
+    slot.point_count + count > TAI_CHI_FLAT_CACHE_POINTS {
+        return false
+    }
+    slot.ops[slot.op_count] = TaiChiFlatCachedOp.{.index = index, .first = slot.point_count,
+        .count = count, .columns = columns, .tint = tint, .labelled = labelled}
+    for point: cast(s32)0..count - 1 {
+        slot.points[slot.point_count + point] = Vector2.{mesh[point].x - area.x, mesh[point].y - area.y}
+    }
+    slot.op_count += 1
+    slot.point_count += count
+    return true
+}
+
+// The same painting with another practice's copy of the edge image. A
+// non-zero digest offers the figure to the cache (TaiChiPaintFlatCached).
 TaiChiPaintFlatEdge :: (session: Session, frame: *TaiChiFlatFrame, framing: TaiChiFraming,
-    mirrored: bool, area: Rectangle, key: u64, alt_text: string, edge_path: string) {
+    mirrored: bool, area: Rectangle, key: u64, alt_text: string, edge_path: string,
+    digest: u64 = 0) {
+    keeping := TaiChiFlatCacheBegin(key, digest, area)
+    kept := keeping >= 0
     // Metres on the picture plane to pixels in the area: the view's height
     // fills the area's height, centred on its middle.
     pixels := cast(float64)area.height / framing.view_height
@@ -94,17 +234,26 @@ TaiChiPaintFlatEdge :: (session: Session, frame: *TaiChiFlatFrame, framing: TaiC
         if alpha == cast(u32)0 {
             continue
         }
+        labelled := index == frame.op_count - 1
+        tint := (op.color << cast(u32)8) | alpha
         picture: ImageProps
         picture.key = key + cast(u64)index
         picture.bounds = area
         picture.smooth = true
-        picture.alt_text = ifx index == frame.op_count - 1 then alt_text else ""
+        picture.alt_text = ifx labelled then alt_text else ""
         picture.asset_path = edge_path
-        picture.tint = (op.color << cast(u32)8) | alpha
+        picture.tint = tint
         picture.mesh.columns = columns
         picture.mesh.rows = count / columns
         picture.mesh.points = screen[:count]
         Image(session, picture)
+        if kept {
+            kept = TaiChiFlatCacheKeep(*tai_chi_flat_cache[keeping], index, screen[:count],
+                columns, tint, labelled, area)
+        }
+    }
+    if keeping >= 0 {
+        tai_chi_flat_cache[keeping].stored = kept
     }
 }
 

@@ -349,7 +349,7 @@ app_frame :: (app: *InnerBreeze) {
     width := GetScreenWidth()
     height := GetScreenHeight()
 
-    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+    #if !#defined(PLATFORM_WEB) {
         render_width := GetRenderWidth()
         render_height := GetRenderHeight()
         if render_width > width {
@@ -512,55 +512,45 @@ app_frame :: (app: *InnerBreeze) {
             cast(float32)viewport.height}
         AndroidTextInputBeginFrame(app.ui.session)
     }
-    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
-        app.ui.retained_target_active = false
+    // Native frames draw into a retained target. When a frame's paint
+    // matches the previous one, that target is presented again without
+    // rasterizing anything, so a still screen costs almost no drawing.
+    retained := false
+    app.ui.retained_target_active = false
+    #if !#defined(PLATFORM_WEB) {
+        // Android may have replaced its GL context, which also discards the
+        // retained targets; reload before creating one. Without a surface
+        // the frame draws directly and app_update_draw skips it.
+        graphics_ready := true
+        #if #defined(ANDROID_BUILD) {
+            graphics_ready = app_reload_graphics_resources(app)
+        }
         // The detached SDL surface has its own presentation state. Draw the
         // main window directly while it is open, avoiding failed framebuffer
         // allocations on each animation frame.
-        if !app.session_window.detached && BeginRetainedFrame(width, height) {
-            app.ui.retained_target_active = true
-            if first_frame {
-                TraceLog(LOG_INFO, "APP PROBE: drawing begun")
-            }
-            ClearBackground(StyleTokenColor("canvas"))
-            app_update_draw(cast(*void)app, frame_bounds)
-            if first_frame {
-                TraceLog(LOG_INFO, "APP PROBE: app draw complete")
-            }
-            retained_ok := true
-            if app.ui.retained_frame_unchanged {
-                retained_ok = EndRetainedFrameReusePrevious()
-            } else {
-                retained_ok = EndRetainedFrame()
-            }
-            if !retained_ok && first_frame {
-                TraceLog(LOG_WARNING, "APP PROBE: retained frame failed")
-            }
-        } else {
-            BeginDrawing()
-            ClearBackground(StyleTokenColor("canvas"))
-            app_update_draw(cast(*void)app, frame_bounds)
-            EndDrawing()
-        }
-    } else {
+        retained = graphics_ready && !app.session_window.detached &&
+        BeginRetainedFrame(width, height)
+        app.ui.retained_target_active = retained
+    }
+    if !retained {
         BeginDrawing()
-        if first_frame {
-            TraceLog(LOG_INFO, "APP PROBE: drawing begun")
-        }
-        #if #defined(ANDROID_BUILD) {
-            canvas := StyleTokenColor("canvas")
-            ClearAndroidFrame(AndroidViewport.{cast(s32)frame_bounds.x,
-                    cast(s32)frame_bounds.y, cast(s32)frame_bounds.width,
-                    cast(s32)frame_bounds.height, .{0, 0, 0, 0}, 1},
-                (cast(u32)canvas.r << 24) | (cast(u32)canvas.g << 16) |
-                (cast(u32)canvas.b << 8) | cast(u32)canvas.a)
-        } else {
-            ClearBackground(StyleTokenColor("canvas"))
-        }
-        app_update_draw(cast(*void)app, frame_bounds)
-        if first_frame {
-            TraceLog(LOG_INFO, "APP PROBE: app draw complete")
-        }
+    }
+    if first_frame {
+        TraceLog(LOG_INFO, "APP PROBE: drawing begun")
+    }
+    #if #defined(ANDROID_BUILD) {
+        canvas := StyleTokenColor("canvas")
+        ClearAndroidFrame(AndroidViewport.{cast(s32)frame_bounds.x,
+                cast(s32)frame_bounds.y, cast(s32)frame_bounds.width,
+                cast(s32)frame_bounds.height, .{0, 0, 0, 0}, 1},
+            (cast(u32)canvas.r << 24) | (cast(u32)canvas.g << 16) |
+            (cast(u32)canvas.b << 8) | cast(u32)canvas.a)
+    } else {
+        ClearBackground(StyleTokenColor("canvas"))
+    }
+    app_update_draw(cast(*void)app, frame_bounds)
+    if first_frame {
+        TraceLog(LOG_INFO, "APP PROBE: app draw complete")
     }
     #if #defined(ANDROID_DEBUG) {
         running := practice_active(app)
@@ -590,7 +580,21 @@ app_frame :: (app: *InnerBreeze) {
         }
         AndroidTextInputFrame(app.ui.session, active)
     }
-    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) {
+    #if !#defined(PLATFORM_WEB) {
+        if retained {
+            retained_ok := true
+            if app.ui.retained_frame_unchanged {
+                retained_ok = EndRetainedFrameReusePrevious()
+            } else {
+                retained_ok = EndRetainedFrame()
+            }
+            if !retained_ok && first_frame {
+                TraceLog(LOG_WARNING, "APP PROBE: retained frame failed")
+            }
+        } else {
+            EndDrawing()
+        }
+    } else {
         EndDrawing()
     }
     if first_frame {
