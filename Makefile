@@ -449,7 +449,7 @@ LAW_MODULES := src/app/sync_retry_laws.zi src/app/practice_lifecycle_laws.zi \
 	src/app/modal_rules_laws.zi \
 	src/app/sync_recovery_policy_laws.zi src/storage/habit_merge_laws.zi \
 	src/storage/sync_restore_laws.zi src/storage/storage_layout_laws.zi \
-	src/guide_laws.zi
+	src/guide_laws.zi src/cells/node_app_input_laws.zi
 RAY_PKGS ?= sdl2 libdrm gbm egl glesv2
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
 RAY_SDL_LDLIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null)

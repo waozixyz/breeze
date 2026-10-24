@@ -37,6 +37,7 @@
 #import, file "text_buffers.zi";
 #import, file "../screens/diary_screen.zi";
 #import, file "../cells/node_apps.zi";
+#import, file "../cells/node_app_input.zi";
 #import, file "../cells/node_app_open.zi";
 #import, file "../cells/package_manager.zi";
 #import, file "../practices/practice_downloads.zi";
@@ -129,6 +130,7 @@ app_update_draw_last_content_x: s32 = -1;
 app_update_draw_last_content_w: s32 = -1;
 app_update_draw_last_log_time: float64 = -1.0;
 app_last_frame_status: s32;
+app_last_repeated_key: u64;
 app_finish_frame :: (app: *InnerBreeze) {
     status: s32
     paint_unchanged: bool = false
@@ -141,6 +143,14 @@ app_finish_frame :: (app: *InnerBreeze) {
     } else {
         status = cast(s32)EndFrame(app.ui.session)
     }
+    // A widget key used twice still draws (Kryon derives a key for the
+    // repeat); say which, once, so the app can be fixed.
+    repeated := TreeFrameRepeatedKey(app.ui.session)
+    if repeated != cast(u64)0 && repeated != app_last_repeated_key {
+        TraceLogResult(LOG_WARNING, "APP: widget key %d used twice, drawn anyway", cast(s32)repeated)
+        TraceLogResult(LOG_WARNING, "APP: repeated widget kind %d", TreeFrameRepeatedKind(app.ui.session))
+    }
+    app_last_repeated_key = repeated
     if status != 0 && status != app_last_frame_status {
         TraceLogResult(LOG_WARNING, "APP: frame rejected with status %d", status)
         TraceLogResult(LOG_WARNING, "APP: rejected widget key %d",
@@ -357,8 +367,9 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
         EndScissorMode()
     }
     // A game played full screen keeps the display on; see main_platform.
-    native_keep_display_awake(app.breathing.screen == ScreenNodeApp && !app.launcher_open &&
-        NodeAppImmersive(app.node_app_slot))
+    on_app := app.breathing.screen == ScreenNodeApp
+    native_keep_display_awake(NodeAppDisplayAwakeFor(on_app, app.launcher_open,
+        on_app && NodeAppImmersive(app.node_app_slot)))
     profile_habits_start = app_profile_now()
     if app.request_quit != 0 {
         return
