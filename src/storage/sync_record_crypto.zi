@@ -16,6 +16,7 @@
 #import, file "sync_record_codec.zi";
 #import, file "sync_collections.zi";
 #import, file "entity_records.zi";
+#import, file "../cells/package_files.zi";
 #import, file "entity_record_crypto.zi";
 Entity :: #import "daochi_client/entity";
 c :: #system_library "c";
@@ -162,7 +163,9 @@ storage_sync_record_merge :: (plain: *StorageJsonBuilder, collection: string, re
     }
     own := AppTextFromCString(plain.data, cast(s32)(plain.len + 1))
     sql: [256]u8
-    AppCopyText("SELECT json_patch(json,?3) FROM sync_record_copies WHERE collection=?1 AND id=?2 AND json_valid(json) AND json_valid(?3) AND json_type(json)='object' AND json_type(?3)='object'", sql[:])
+    AppCopyText(ifx collection == EntityGameProgressCollection then
+        "SELECT json FROM sync_record_copies WHERE collection=?1 AND id=?2" else
+        "SELECT json_patch(json,?3) FROM sync_record_copies WHERE collection=?1 AND id=?2 AND json_valid(json) AND json_valid(?3) AND json_type(json)='object' AND json_type(?3)='object'", sql[:])
     if SqlitePrepare(storage_db_handle(), *sql[0], -1, *stmt, null) != SQLITE_OK {
         return
     }
@@ -174,7 +177,11 @@ storage_sync_record_merge :: (plain: *StorageJsonBuilder, collection: string, re
     if SqliteStep(stmt) == SQLITE_ROW {
         value := SqliteColumnText(stmt, 0)
         if value != null {
-            storage_json_builder_append(*merged, value)
+            if collection == EntityGameProgressCollection {
+                union := EntityGameProgressMerge(AppTextFromCString(value, 65536), own, true)
+                storage_json_builder_append_text(*merged, union)
+                PackageFree(union)
+            } else { storage_json_builder_append(*merged, value) }
         }
     }
     SqliteFinalize(stmt)

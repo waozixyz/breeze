@@ -16,6 +16,8 @@ Scan :: #import "json_scan"
 #import, file "achievement_records.zi";
 #import, file "media_records.zi";
 #import, file "entity_records.zi";
+#import, file "entity_service.zi";
+#import, file "../cells/package_files.zi";
 #import, file "entity_record_crypto.zi";
 #import, file "storage_layout.zi";
 #import, file "db.zi";
@@ -316,6 +318,29 @@ storage_entity_photo_valid :: (record_id: string, plaintext: string) -> bool {
 // That change goes out merged over the record that arrived.
 storage_apply_entity_record :: (collection: string, record_id: string, plaintext: string,
     updated_at: string) -> s32 {
+    if collection == EntityGameProgressCollection {
+        if !EntityGameProgressValid(record_id, plaintext) { return 1 }
+        key := PackageText(ENTITY_GAME_PROGRESS_PREFIX, record_id)
+        current := EntityServiceRead(key)
+        merged := EntityGameProgressMerge(current, plaintext, !EntityServicePending(key))
+        defer { PackageFree(key); PackageFree(current); PackageFree(merged) }
+        if merged == "" || merged == current { return 1 }
+        statement: *void
+        if SqlitePrepareText(storage_db_handle(),
+            "INSERT INTO settings(user_id,key,value,updated_at) VALUES(?1,?2,?3,COALESCE(CAST(strftime('%s',NULLIF(?4,'')) AS INTEGER),CAST(strftime('%s','now') AS INTEGER))) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+            -1, *statement, null) != SQLITE_OK { return 0 }
+        bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        bind_text(statement, 2, key)
+        bind_text(statement, 3, merged)
+        bind_text(statement, 4, updated_at)
+        result := SqliteStep(statement)
+        SqliteFinalize(statement)
+        if result != SQLITE_DONE { return 0 }
+        entity_progress_revision += 1
+        // If each installation earned different wins, send their union.
+        if merged != plaintext { unused storage_enqueue_sync_entity("entity_record", key, 0) }
+        return 1
+    }
     if collection != EntityPhotosCollection || !storage_entity_photo_valid(record_id, plaintext) {
         LogStorageText(LOG_WARNING, "SYNC: entity record skipped: ", collection)
         return 1

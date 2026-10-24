@@ -13,6 +13,7 @@
 #import, file "../src/storage/sync_migrations.zi";
 #import, file "../src/storage/sync_state.zi";
 #import, file "../src/storage/storage_settings.zi";
+#import, file "../src/storage/entity_service.zi";
 #import, file "../src/storage/sync_collections.zi";
 #import, file "../src/storage/sync_record_crypto.zi";
 #import, file "../src/storage/sync_exchange.zi";
@@ -2314,6 +2315,46 @@ test_entity_records_sync_between_devices :: () {
     storage_close()
 }
 
+// A hosted game uses the same account collection and canonical ID as the
+// standalone Entity provider. New installations pull before uploading an
+// old/default campaign, and both devices retain every earned completion.
+test_shared_game_progress :: () {
+    first := make_root("game-progress-a")
+    second := make_root("game-progress-b")
+    check_true("open shared progress a", storage_init(first) != 0)
+    set_account()
+    storage_set_setting_text("sync_public_id", ENTITY_VECTOR_ACCOUNT)
+    saved := EntityServiceAnswer("{\"operation\":\"put\",\"kind\":\"game-progress\",\"schema\":\"entity.game-progress.v1\",\"document\":{\"game\":\"shovey.classic\",\"unlocked\":40,\"completed\":\"110\",\"state\":\"advanced\"}}")
+    check_true("canonical account record saved", contains(saved, "fd65a3d7ac3d5ceb2d4d96cc5224a740"))
+    unused exec_sql("CREATE TRIGGER reject_game_progress BEFORE UPDATE ON settings WHEN NEW.key LIKE 'entity.game-progress.%' BEGIN SELECT RAISE(ABORT,'test write failure'); END")
+    failed := EntityServiceAnswer("{\"operation\":\"put\",\"kind\":\"game-progress\",\"schema\":\"entity.game-progress.v1\",\"document\":{\"game\":\"shovey.classic\",\"unlocked\":41,\"completed\":\"111\",\"state\":\"unsaved\"}}")
+    check_true("a refused write is never acknowledged", contains(failed, "failed"))
+    unused exec_sql("DROP TRIGGER reject_game_progress")
+    check_true("first sync downloads before sending game progress", build_payload() &&
+        !contains(payload(), EntityGameProgressCollection))
+    check_true("initial account pull completes", storage_apply_sync_response_json(response_with(1, "[]")) != 0)
+    check_true("shared campaign goes out encrypted", build_payload() && contains(payload(), EntityGameProgressCollection) &&
+        !contains(payload(), "advanced") && !contains(payload(), "shovey.classic"))
+    copy := PackageText(records_array(), "")
+    storage_close()
+
+    check_true("open fresh progress b", storage_init(second) != 0)
+    set_account()
+    storage_set_setting_text("sync_public_id", ENTITY_VECTOR_ACCOUNT)
+    unused EntityServiceAnswer("{\"operation\":\"put\",\"kind\":\"game-progress\",\"schema\":\"entity.game-progress.v1\",\"document\":{\"game\":\"shovey.classic\",\"unlocked\":5,\"completed\":\"001\",\"state\":\"fresh\"}}")
+    check_true("fresh copy waits for account download", build_payload() && !contains(payload(), EntityGameProgressCollection))
+    check_true("fresh copy accepts account progress", storage_apply_sync_response_json(response_with(2, copy)) != 0)
+    reply := EntityServiceAnswer("{\"operation\":\"get\",\"kind\":\"game-progress\",\"game\":\"shovey.classic\"}")
+    check_true("shared unlocks never go backwards", contains(reply, "\"unlocked\":40") && contains(reply, "\"completed\":\"111\"") && contains(reply, "advanced"))
+    check_int("one authoritative campaign row", read_db_count("SELECT COUNT(*) FROM settings WHERE key LIKE 'entity.game-progress.%'"), 1)
+    check_int("no wrapper campaign created", read_db_count("SELECT COUNT(*) FROM settings WHERE key LIKE 'cell.shovey.%' OR key LIKE 'nested.%'"), 0)
+    storage_enqueue_all_sync_state()
+    check_int("backfill queues one canonical record", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='entity_record'"), 1)
+    check_true("union is sent under the shared ID", build_payload() && contains(payload(), "fd65a3d7ac3d5ceb2d4d96cc5224a740"))
+    PackageFree(copy)
+    storage_close()
+}
+
 // Each node has its own media session on this device, apart from the
 // sync's; removing a node forgets it and which copies the node holds.
 test_node_media_sessions :: () {
@@ -2470,6 +2511,7 @@ Check :: () -> s32 {
     test_app_order_syncs_between_devices()
     test_media_records_sync_between_devices()
     test_entity_records_sync_between_devices()
+    test_shared_game_progress()
     test_node_media_sessions()
     test_shop_rewards_stay_private()
     return failures

@@ -7,6 +7,10 @@
 // Its bytes travel as sealed chunks (cells/diary_blobs.zi). Everything is
 // private: nothing here is shared without a separate, explicit step.
 #import, file "media_records.zi";
+Progress :: #import "entity/game_progress";
+ProgressID :: #import "entity/game_progress_id";
+#import "std/text_buffer"
+#import "std/vec"
 
 EntityPhotosCollection :: "private.entity.v1.photos"
 ENTITY_PHOTOS_KIND :: "photos"
@@ -14,6 +18,46 @@ ENTITY_PHOTO_SCHEMA :: "entity.photo.v1"
 ENTITY_PHOTO_PREFIX :: "entity.photos."
 // The record of a photo on this device: the prefix and 64 hex digits.
 ENTITY_PHOTO_KEY_BYTES :: 78
+EntityGameProgressCollection :: "private.entity.v1.game-progress"
+ENTITY_GAME_PROGRESS_PREFIX :: "entity.game-progress."
+
+EntityProgressIDValid :: (id: string) -> bool {
+    if id.count != 32 { return false }
+    for byte: id {
+        if !((byte >= #char "0" && byte <= #char "9") || (byte >= #char "a" && byte <= #char "f")) { return false }
+    }
+    return true
+}
+
+EntityRecordID :: (key: string) -> string {
+    if EntityPhotoKeyAccepted(key) { return EntityPhotoKeyHash(key) }
+    prefix := ENTITY_GAME_PROGRESS_PREFIX
+    if key.count > prefix.count && key[:prefix.count] == prefix && EntityProgressIDValid(key[prefix.count:]) {
+        return key[prefix.count:]
+    }
+    return ""
+}
+
+EntityRecordKeyAccepted :: (key: string) -> bool { return EntityRecordID(key) != "" }
+
+EntityGameProgressValid :: (id: string, text: string) -> bool {
+    value: Progress.GameProgressRecord
+    canonical: [33]u8
+    return Progress.GameProgressRead(text, *value) &&
+    ProgressID.GameProgressID(TextUntilNul(value.game[:]), canonical[:]) && TextUntilNul(canonical[:]) == id
+}
+
+EntityGameProgressMerge :: (current: string, incoming: string, incoming_position: bool) -> string {
+    right: Progress.GameProgressRecord
+    if !Progress.GameProgressRead(incoming, *right) { return "" }
+    left: Progress.GameProgressRecord
+    if Progress.GameProgressRead(current, *left) {
+        if !Progress.GameProgressMerge(*left, *right, incoming_position) { return "" }
+    } else { left = right }
+    out: Vec(u8)
+    Progress.GameProgressWrite(*left, *out)
+    return BuilderFinish(out)
+}
 
 // entity.photos.<sha256>, the key of one photo's record on this device.
 EntityPhotoKeyAccepted :: (key: string) -> bool {
@@ -35,19 +79,21 @@ EntityRecordCollection :: (key: string) -> string {
     if EntityPhotoKeyAccepted(key) {
         return EntityPhotosCollection
     }
+    if EntityRecordID(key) != "" { return EntityGameProgressCollection }
     return ""
 }
 
 // Entity collections this version reads; records of other kinds, such as
 // another app's levels, arrive in the same replies and are left alone.
 EntityCollectionKnown :: (collection: string) -> bool {
-    return collection == EntityPhotosCollection
+    return collection == EntityPhotosCollection || collection == EntityGameProgressCollection
 }
 
 EntityCollectionKind :: (collection: string) -> string {
     if collection == EntityPhotosCollection {
         return ENTITY_PHOTOS_KIND
     }
+    if collection == EntityGameProgressCollection { return Progress.GAME_PROGRESS_KIND }
     return ""
 }
 
@@ -55,5 +101,6 @@ EntityCollectionSchema :: (collection: string) -> string {
     if collection == EntityPhotosCollection {
         return ENTITY_PHOTO_SCHEMA
     }
+    if collection == EntityGameProgressCollection { return Progress.GAME_PROGRESS_SCHEMA }
     return ""
 }

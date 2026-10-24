@@ -12,9 +12,9 @@ ENTITY_SOURCES = $(wildcard $(ENTITY_DIR)/src/*.zi $(ENTITY_DIR)/assets/entity/*
 # own pinned graph, so its digest identifies the reviewed Apps release.
 APPS_DIR := build/packages/apps
 APPS_BUNDLE := build/apps-ui/apps.zx
-$(BUILD_DIR)/apps-ui/apps.zx: ziran.lock $(wildcard $(APPS_DIR)/ziran.lock $(APPS_DIR)/src/*.zi $(APPS_DIR)/ui/*.zi $(APPS_DIR)/ui/locales/*.json)
+$(BUILD_DIR)/apps-ui/apps.zx: ziran.lock scripts/build-apps.py $(wildcard $(APPS_DIR)/ziran.lock $(APPS_DIR)/src/*.zi $(APPS_DIR)/ui/*.zi $(APPS_DIR)/ui/locales/*.json)
 	env -u DISPLAY -u WAYLAND_DISPLAY PATH="$(abspath $(dir $(ZIRAN_BIN))):$$PATH" \
-		python3 $(APPS_DIR)/scripts/build-ui.py --output $(abspath $(dir $@))
+        python3 scripts/build-apps.py --ziran $(abspath $(ZIRAN_BIN)) --output $(abspath $(dir $@))
 .PHONY: cells
 cells: $(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE)
 

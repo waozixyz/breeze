@@ -1,0 +1,127 @@
+// Hosted apps use the account store and sync already owned by Breeze.
+// They never start another account provider or keep a second campaign.
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/vec"
+Progress :: #import "entity/game_progress";
+ProgressID :: #import "entity/game_progress_id";
+Model :: #import "entity/model";
+#import, file "entity_records.zi";
+#import, file "storage_settings.zi";
+#import, file "state.zi";
+#import, file "storage_core.zi";
+#import, file "sync_state.zi";
+#import, file "sqlite.zi";
+#import, file "db.zi";
+#import, file "sql_query.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../cells/package_files.zi";
+
+entity_service_reply: string;
+entity_progress_revision: s64;
+
+EntityServiceRead :: (key: string) -> string {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT value FROM settings WHERE user_id=?1 AND key=?2", -1, *statement, null) != SQLITE_OK { return "" }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, key)
+    if SqliteStep(statement) != SQLITE_ROW { return "" }
+    return PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 65536), "")
+}
+
+EntityServicePending :: (key: string) -> bool {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT 1 FROM sync_outbox WHERE entity_type='entity_record' AND entity_id=?1 LIMIT 1", -1, *statement, null) != SQLITE_OK { return true }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, key)
+    return SqliteStep(statement) == SQLITE_ROW
+}
+
+EntityServiceAnswer :: (request: string) -> string {
+    PackageFree(entity_service_reply)
+    entity_service_reply = ""
+    out: Vec(u8)
+    EntityServiceBuild(request, *out)
+    entity_service_reply = BuilderFinish(out)
+    return entity_service_reply
+}
+
+EntityServiceBuild :: (request: string, out: *Vec(u8)) {
+    if request.count < 2 || request[0] != #char "{" || ValueEnd(request, 0, 0) != request.count {
+        BuilderPrint(out, "{\"status\":\"rejected\"}"); return
+    }
+    operation_bytes: [32]u8
+    operation_count := ReadStringText(request, FieldAt(request, 0, "operation"), operation_bytes[:])
+    operation := ifx operation_count > 0 then TextView(operation_bytes[:operation_count]) else ""
+    if storage_db_handle() == null { BuilderPrint(out, "{\"status\":\"unavailable\"}"); return }
+    if operation == "status" {
+        status := "local"
+        if storage_has_sync_account() != 0 {
+            status = "synced"
+            if storage_sync_records_outdated() { status = "syncing" }
+            else if db_select_int64_text("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='entity_record' AND entity_id LIKE 'entity.game-progress.%'", 0) > 0 { status = "pending" }
+        }
+        BuilderPrint(out, "{\"status\":\"done\",\"account\":")
+        Model.EntityQuote(out, storage_get_setting_text(STORAGE_SYNC_PUBLIC_ID_KEY))
+        BuilderPrint(out, ",\"sync\":\"%\",\"revision\":%,\"game_progress\":\"account-v1\"}", status, entity_progress_revision)
+        return
+    }
+    kind: [49]u8
+    if ReadStringText(request, FieldAt(request, 0, "kind"), kind[:]) < 0 || TextUntilNul(kind[:]) != Progress.GAME_PROGRESS_KIND {
+        BuilderPrint(out, "{\"status\":\"unavailable\"}")
+        return
+    }
+    id: [33]u8
+    id_count := ReadStringText(request, FieldAt(request, 0, "id"), id[:])
+    if operation == "get" && id_count < 0 {
+        game: [97]u8
+        if ReadStringText(request, FieldAt(request, 0, "game"), game[:]) >= 0 &&
+        ProgressID.GameProgressID(TextUntilNul(game[:]), id[:]) { id_count = 32 }
+    }
+    if operation == "put" {
+        schema: [96]u8
+        document_at := FieldAt(request, 0, "document")
+        document_end := ValueEnd(request, document_at, 0)
+        incoming: Progress.GameProgressRecord
+        canonical: [33]u8
+        if ReadStringText(request, FieldAt(request, 0, "schema"), schema[:]) < 0 ||
+        TextUntilNul(schema[:]) != Progress.GAME_PROGRESS_SCHEMA || document_at < 0 || document_end <= document_at ||
+        !Progress.GameProgressRead(request[document_at:document_end], *incoming) ||
+        !ProgressID.GameProgressID(TextUntilNul(incoming.game[:]), canonical[:]) ||
+        (id_count >= 0 && TextUntilNul(id[:]) != TextUntilNul(canonical[:])) {
+            BuilderPrint(out, "{\"status\":\"rejected\"}"); return
+        }
+        id = canonical
+        key := PackageText(ENTITY_GAME_PROGRESS_PREFIX, TextUntilNul(id[:]))
+        defer { PackageFree(key) }
+        existing := EntityServiceRead(key)
+        defer { PackageFree(existing) }
+        previous: Progress.GameProgressRecord
+        if Progress.GameProgressRead(existing, *previous) {
+            if !Progress.GameProgressMerge(*incoming, *previous, false) { BuilderPrint(out, "{\"status\":\"rejected\"}"); return }
+        }
+        incoming.updated_at = now_seconds()
+        encoded: Vec(u8)
+        Progress.GameProgressWrite(*incoming, *encoded)
+        document := BuilderFinish(encoded)
+        defer { PackageFree(document) }
+        storage_set_setting_text(key, document)
+        if storage_setting_text_equals(key, document) == 0 {
+            BuilderPrint(out, "{\"status\":\"failed\"}"); return
+        }
+        entity_progress_revision += 1
+        BuilderPrint(out, "{\"status\":\"done\",\"id\":\"%\",\"updated_at\":%}", TextUntilNul(id[:]), incoming.updated_at)
+        return
+    }
+    if operation == "get" && id_count == 32 && EntityProgressIDValid(TextUntilNul(id[:])) {
+        key := PackageText(ENTITY_GAME_PROGRESS_PREFIX, TextUntilNul(id[:]))
+        document := EntityServiceRead(key)
+        defer { PackageFree(key); PackageFree(document) }
+        if document == "" { BuilderPrint(out, "{\"status\":\"missing\"}"); return }
+        BuilderPrint(out, "{\"status\":\"done\",\"id\":\"%\",\"schema\":\"%\",\"document\":%}",
+            TextUntilNul(id[:]), Progress.GAME_PROGRESS_SCHEMA, document)
+        return
+    }
+    BuilderPrint(out, "{\"status\":\"rejected\"}")
+}
