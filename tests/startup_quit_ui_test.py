@@ -114,7 +114,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
     # navigation settings without rewriting an owner's saved app preferences.
     for full in (False, True):
         profile = Path(temporary) / ("full" if full else "base")
-        args = ["--bundle", str(ROOT / "build/inbe-full.zib")] if full else []
+        args = ["--bundle", str(ROOT / "build/inbe-full.zx")] if full else []
         with application(profile, profile.name + "-prepare", *args):
             pass
         with sqlite3.connect(profile / "inbe.db") as db:

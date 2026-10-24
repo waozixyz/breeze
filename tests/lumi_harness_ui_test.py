@@ -137,7 +137,7 @@ def application(profile, size, label):
     width, height, _ = size
     log_path = OUTPUT / (label + '.log')
     with log_path.open('w') as log:
-        app = subprocess.Popen([sys.argv[1], '--bundle', str(ROOT / 'build/inbe-full.zib')], cwd=ROOT,
+        app = subprocess.Popen([sys.argv[1], '--bundle', str(ROOT / 'build/inbe-full.zx')], cwd=ROOT,
                                env=ENV | driver.environment() | dict(APP_DATA_ROOT=str(profile)),
                                stdout=log, stderr=subprocess.STDOUT)
         driver.attach(app, log_path)

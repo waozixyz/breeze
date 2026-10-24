@@ -10,8 +10,8 @@ source=$root/tests/mood_average_behavior.zi
 "$bin/ziran" bundle --root "$root" \
     --module-path "$root/src" \
     --entry mood_average_behavior:Answer \
-    -o "$work/mood.zib" "$source"
-test "$("$bin/ziran" run "$work/mood.zib")" = 42
+    -o "$work/mood.zx" "$source"
+test "$("$bin/ziran" run "$work/mood.zx")" = 42
 
 "$bin/zi2c" --no-main --root "$root" \
     --module-path "$root/src" \

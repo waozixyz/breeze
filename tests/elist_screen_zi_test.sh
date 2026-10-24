@@ -45,5 +45,5 @@ done
         -e '/metrics\.c$') \
     "$root/build/ziran-toolchain/libziran.a" -lm -lpthread \
     -o "$work/test"
-env -u DISPLAY -u WAYLAND_DISPLAY "$work/test" "$root/build/inbe.zib"
+env -u DISPLAY -u WAYLAND_DISPLAY "$work/test" "$root/build/inbe.zx"
 echo "Inbe elist screen Ziran/native test passed"

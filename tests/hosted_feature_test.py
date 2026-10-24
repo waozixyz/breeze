@@ -35,7 +35,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-hosted-feature-') as directory:
     env.pop('WAYLAND_DISPLAY', None)
     with (OUTPUT / 'app.log').open('w') as log:
         app = subprocess.Popen([
-            sys.argv[1], '--bundle', str(ROOT / 'build/inbe-full.zib'),
+            sys.argv[1], '--bundle', str(ROOT / 'build/inbe-full.zx'),
             '--feature', 'practices', '--screenshot', str(OUTPUT / 'initial.png'),
             '--screenshot-scene', 'start_practice', '--screenshot-width', '900',
             '--screenshot-height', '720',

@@ -193,7 +193,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
     # installed.
     packages = profile / "packages"
     packages.mkdir(exist_ok=True)
-    shutil.copyfile(root / "build/practice-content/taichi.zib", packages / "practice-taichi.zib")
+    shutil.copyfile(root / "build/practice-content/taichi.zx", packages / "practice-taichi.zx")
     app, window = launch(profile, "board")
     try:
         # Only Wim Hof and Meditation are ranked, in Practice's order, side by side on phones.
@@ -224,7 +224,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
     finally:
         stop(app)
     # A downloaded Sun Salutation is not ranked either.
-    shutil.copyfile(root / "build/practice-content/sunsalutation.zib", packages / "practice-sunsalutation.zib")
+    shutil.copyfile(root / "build/practice-content/sunsalutation.zx", packages / "practice-sunsalutation.zx")
     app, window = launch(profile, "with-sun-salutation")
     try:
         expected = [["Wim Hof Breathing", "Meditation"]]

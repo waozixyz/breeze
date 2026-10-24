@@ -11,8 +11,8 @@ ENTITY_SOURCES = $(wildcard $(ENTITY_DIR)/src/*.zi $(ENTITY_DIR)/assets/entity/*
 # The shared Apps controller is built from the locked Apps package with its
 # own pinned graph, so its digest identifies the reviewed Apps release.
 APPS_DIR := build/packages/apps
-APPS_BUNDLE := build/apps-ui/apps.zib
-$(BUILD_DIR)/apps-ui/apps.zib: ziran.lock $(wildcard $(APPS_DIR)/ziran.lock $(APPS_DIR)/src/*.zi $(APPS_DIR)/ui/*.zi $(APPS_DIR)/ui/locales/*.json)
+APPS_BUNDLE := build/apps-ui/apps.zx
+$(BUILD_DIR)/apps-ui/apps.zx: ziran.lock $(wildcard $(APPS_DIR)/ziran.lock $(APPS_DIR)/src/*.zi $(APPS_DIR)/ui/*.zi $(APPS_DIR)/ui/locales/*.json)
 	env -u DISPLAY -u WAYLAND_DISPLAY PATH="$(abspath $(dir $(ZIRAN_BIN))):$$PATH" \
 		python3 $(APPS_DIR)/scripts/build-ui.py --output $(abspath $(dir $@))
 .PHONY: cells
@@ -25,7 +25,7 @@ $(CELL_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(ENTITY_SOURCES) $(CELL_S
 
 # Apps the node offers build on their own, never into the root package.
 NODE_APP_NAMES := $(shell python3 -c 'import json; print(" ".join(json.load(open("apps/versions.json")).get("node_apps", {})))')
-NODE_APP_BUNDLES := $(addprefix $(BUILD_DIR)/node-apps/,$(addsuffix .zib,$(NODE_APP_NAMES)))
+NODE_APP_BUNDLES := $(addprefix $(BUILD_DIR)/node-apps/,$(addsuffix .zx,$(NODE_APP_NAMES)))
 $(NODE_APP_BUNDLES) &: $(CELL_SOURCES) $(shell rg --files $(addprefix assets/,$(NODE_APP_NAMES)) 2>/dev/null) apps/versions.json scripts/build-node-apps.sh scripts/prepare-package-assets.py scripts/achievement_icons.py $(ZIRAN_BIN)
 	sh scripts/build-node-apps.sh $(ZIRAN_BIN)
 

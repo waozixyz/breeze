@@ -126,8 +126,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory, c
     # Start the real practice offline. A cover on the Install screen must
     # never count as the running guide, even though both contain a picture.
     for name in ("sunsalutation", "guide.en"):
-        shutil.copyfile(root / "build/practice-content" / (name + ".zib"),
-                        cache / ("practice-" + name + ".zib"))
+        shutil.copyfile(root / "build/practice-content" / (name + ".zx"),
+                        cache / ("practice-" + name + ".zx"))
     app, _ = launch(profile, "first-start")
     stop(app)
     with sqlite3.connect(profile / "inbe.db") as db:

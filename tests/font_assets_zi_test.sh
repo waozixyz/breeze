@@ -24,11 +24,11 @@ for input in source saved; do
     output=$work/$input
     rm -rf "$output/c" "$output/cpp" "$output/go"
     mkdir -p "$output/c" "$output/cpp" "$output/go"
-    "$bin/zi2zib" bundle --root "$module_root" \
+    "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$module_path" \
         --entry font_assets_behavior:Answer \
-        -o "$output/font_assets.zib" "$file"
-    [ "$("$bin/zi2zib" run "$output/font_assets.zib")" = 42 ]
+        -o "$output/font_assets.zx" "$file"
+    [ "$("$bin/zi2zx" run "$output/font_assets.zx")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$module_path" -o "$output/c" "$file"
@@ -68,7 +68,7 @@ GO
     GO111MODULE=off go test "$output/go"/*.go
 done
 
-cmp "$work/source/font_assets.zib" "$work/saved/font_assets.zib"
+cmp "$work/source/font_assets.zx" "$work/saved/font_assets.zx"
 echo "font assets Ziran test passed"
 
 # Every font the locale mapping can pick is in the repository.

@@ -271,7 +271,21 @@ PracticeContentIndex :: (name: string) -> s32 {
 }
 
 PracticePackPath :: (index: s32, temporary: bool) -> string {
-    return PracticePackFile(index, ifx temporary then ".download" else ".zib")
+    return PracticePackFile(index, ifx temporary then ".download" else ".zx")
+}
+
+// Versions before the ZX format stored packs as .zib. Such a copy cannot
+// run, but it shows the practice was installed, so it is updated in place.
+PRACTICE_PACK_LEGACY_SUFFIX :: ".zib"
+
+PracticePackLegacyRemove :: (index: s32) {
+    path := PracticePackFile(index, PRACTICE_PACK_LEGACY_SUFFIX)
+    defer {
+        PackageFree(path)
+    }
+    if path.count > 0 {
+        unused RemoveFile(path)
+    }
 }
 
 // A narration language the person removed keeps this marker beside its slot.
@@ -323,7 +337,7 @@ PracticeShippedFrom :: (index: s32, folder: string) -> string {
     }
     directory := PackageText("assets/practices/", folder)
     prefix := PackageText(directory, PracticeContentName(practice_packs[index].practice))
-    path := PackageText(prefix, ".zib")
+    path := PackageText(prefix, ".zx")
     defer {
         PackageFree(directory)
         PackageFree(prefix)
@@ -402,10 +416,12 @@ PracticeMark :: (practice: s32, suffix: string, marked: bool) {
 // version.
 PracticePackStored :: (index: s32) -> bool {
     path := PracticePackPath(index, false)
+    legacy := PracticePackFile(index, PRACTICE_PACK_LEGACY_SUFFIX)
     defer {
         PackageFree(path)
+        PackageFree(legacy)
     }
-    return path.count > 0 && PathExists(path)
+    return path.count > 0 && (PathExists(path) || PathExists(legacy))
 }
 
 PracticePackPresent :: (index: s32) -> bool {
@@ -436,7 +452,7 @@ PracticeCacheFileOwned :: (practice: s32, name: string) -> bool {
         return false
     }
     rest := name[prefix.count + content.count:]
-    if rest == ".zib" || rest == ".download" {
+    if rest == ".zx" || rest == PRACTICE_PACK_LEGACY_SUFFIX || rest == ".download" {
         return true
     }
     if rest.count < 4 || rest[0] != cast(u8)46 ||
@@ -448,7 +464,8 @@ PracticeCacheFileOwned :: (practice: s32, name: string) -> bool {
     if tail.count > 5 && tail[:5] == ".male" {
         tail = tail[5:]
     }
-    return tail == ".zib" || tail == ".download" || tail == ".removed"
+    return tail == ".zx" || tail == PRACTICE_PACK_LEGACY_SUFFIX || tail == ".download" ||
+    tail == ".removed"
 }
 
 PracticeCacheRemove :: (practice: s32) {
@@ -1509,7 +1526,7 @@ PracticeTransfersPump :: (narration_only: bool) {
             path := PracticePackPath(index, true)
             route := PackageText("https://api.waozi.xyz/api/v2/packages/inbe.practices/",
                 TextFromCString(*practice_packs[index].hash[0]))
-            file := PackageText(route, ".zib")
+            file := PackageText(route, ".zx")
             separator := PackageText(file, ifx product.count > 0 then "/" else "")
             url := PackageText(separator, TextFromCString(*grant[0]))
             PackageFree(file)
@@ -1574,6 +1591,7 @@ PracticeTransfersPump :: (narration_only: bool) {
         practice_packs[index].attempts = 0
         PracticeDownloadLog(index, false, "installed", "")
         if !DataTemporary() {
+            PracticePackLegacyRemove(index)
             sync_web_storage()
         }
     } else {

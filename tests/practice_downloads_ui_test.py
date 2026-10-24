@@ -36,7 +36,7 @@ def stop(process):
 def launch(profile, name, width=390, height=844):
     log_path = output / (name + '.log')
     log = log_path.open('w')
-    process = subprocess.Popen([str(binary), '--bundle', str(ROOT / 'build/inbe-full.zib')],
+    process = subprocess.Popen([str(binary), '--bundle', str(ROOT / 'build/inbe-full.zx')],
         cwd=ROOT, env=os.environ | driver.environment() | {'APP_DATA_ROOT': str(profile),
         'APP_NO_TRAY': '1', 'SDL_AUDIODRIVER': 'dummy', 'YUE_DESKTOP_RECOVERY': '0'},
         stdout=log, stderr=subprocess.STDOUT)
@@ -153,7 +153,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     # Lumi's guide narration downloads by itself in the app's language; its
     # copy is already here, so the test reaches no server.
     (profile / 'packages').mkdir()
-    shutil.copyfile(ROOT / 'build/practice-content/guide.en.zib', profile / 'packages/practice-guide.en.zib')
+    shutil.copyfile(ROOT / 'build/practice-content/guide.en.zx', profile / 'packages/practice-guide.en.zx')
     process, _ = launch(profile, 'initialize')
     stop(process)
     with sqlite3.connect(profile / 'inbe.db') as database:
@@ -166,10 +166,10 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         for key, value in settings.items():
             database.execute('INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) '
                 'ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value', (user, key, str(value)))
-    sizes = {name: (ROOT / 'build/practice-content' / (name + '.zib')).stat().st_size
+    sizes = {name: (ROOT / 'build/practice-content' / (name + '.zx')).stat().st_size
              for name in ('whm', 'meditation', 'sunsalutation')}
     cache = profile / 'packages'
-    sizes = {name: (ROOT / 'build/practice-content' / (name + '.zib')).stat().st_size
+    sizes = {name: (ROOT / 'build/practice-content' / (name + '.zx')).stat().st_size
              for name in ('whm', 'sunsalutation')}
     sun_mb = (sizes['sunsalutation'] + 512 * 1024) // (1024 * 1024)
     # A practice that comes with the app stays ready even when an older
@@ -254,9 +254,9 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         for key, value in {'exercise_type': 4, 'voice_narration_enabled': 1}.items():
             database.execute('UPDATE settings SET value=? WHERE user_id=? AND key=?',
                              (str(value), user, key))
-    shutil.copyfile(ROOT / 'build/practice-content/taichi.zib', cache / 'practice-taichi.zib')
-    shutil.copyfile(ROOT / 'build/practice-content/taichi.en.zib', cache / 'practice-taichi.en.zib')
-    shutil.copyfile(ROOT / 'build/practice-content/taichi.en.male.zib', cache / 'practice-taichi.en.male.zib')
+    shutil.copyfile(ROOT / 'build/practice-content/taichi.zx', cache / 'practice-taichi.zx')
+    shutil.copyfile(ROOT / 'build/practice-content/taichi.en.zx', cache / 'practice-taichi.en.zx')
+    shutil.copyfile(ROOT / 'build/practice-content/taichi.en.male.zx', cache / 'practice-taichi.en.male.zx')
     # A Tai Chi pack on the device without an account that bought it stays
     # locked: its card offers Unlock at its price.
     process, window = launch(profile, 'taichi-unowned', 1280, 900)
@@ -313,8 +313,8 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                              'ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value',
                              (user, key, str(value), int(time.time())))
     for name in ('sunsalutation', 'sunsalutation.en.male'):
-        shutil.copyfile(ROOT / 'build/practice-content' / (name + '.zib'),
-                        cache / ('practice-' + name + '.zib'))
+        shutil.copyfile(ROOT / 'build/practice-content' / (name + '.zx'),
+                        cache / ('practice-' + name + '.zx'))
     process, window = launch(profile, 'sun-customize', 1280, 900)
     try:
         driver.press(label='Customize', role='button')

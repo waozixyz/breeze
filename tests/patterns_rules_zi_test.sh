@@ -9,11 +9,11 @@ source=$root/tests/patterns_rules_behavior.zi
 
 "$bin/zi2zir" --check-only --root "$root/tests" \
     --module-path "$root/src" "$source"
-"$bin/zi2zib" bundle --root "$root/tests" \
+"$bin/zi2zx" bundle --root "$root/tests" \
     --module-path "$root/src" \
     --entry patterns_rules_behavior:Answer \
-    -o "$work/patterns.zib" "$source"
-test "$("$bin/zi2zib" run "$work/patterns.zib")" = 42
+    -o "$work/patterns.zx" "$source"
+test "$("$bin/zi2zx" run "$work/patterns.zx")" = 42
 "$bin/zi2c" --no-main --root "$root/tests" \
     --module-path "$root/src" -o "$work/c" "$source"
 cat > "$work/c/main.c" <<'C'

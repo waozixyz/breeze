@@ -13,7 +13,7 @@ practice and works offline afterwards. Each feature can add private resources un
 `assets/lumi/`, `assets/habits/`, `assets/practices/`, `assets/lists/`, `assets/diary/`
 or `assets/leaderboard/`.
 The cell picker, Lists and Diary editor/calendar compose the
-standard Kryon widgets inside their ZIBs. Raylib, Android and canvas bind the
+standard Kryon widgets inside their ZX bundles. Raylib, Android and canvas bind the
 same typed render effects to their normal widgets. File dialogs, persistence,
 account sync and native input stay in the wrapper. Habits draws its count
 dialog and editor save/discard/delete confirmations in its package
@@ -35,8 +35,8 @@ provides account-scoped documents, sync, input, locales and optional photo
 and spelling services. Older compatible Diary packages keep their existing
 host interface.
 
-The same `diary.zib` can run in Werkzeug with `werk --bundle diary.zib` or
-in Kryon's desktop player with `kryon run diary.zib`, without `inbe.zib`.
+The same `diary.zx` can run in Werkzeug with `werk --bundle diary.zx` or
+in Kryon's desktop player with `kryon run diary.zx`, without `inbe.zx`.
 The desktop providers keep private local documents and support photo picking;
 online spelling is available only where the harness supplies it. Documents
 outside Inner Breeze do not automatically join its account sync. Other
@@ -223,11 +223,11 @@ Enable chat / Disable chat control preserves the agent and saved conversation.
 
 `make cells` produces:
 
-- `build/inbe.zib`, containing every cell under `cells/`.
-- Independent `build/cells/{lumi,habits,practices,lists,diary,leaderboard}.zib` files.
-- `build/inbe-full.zib`, a local development and test bundle containing all six.
+- `build/inbe.zx`, containing every cell under `cells/`.
+- Independent `build/cells/{lumi,habits,practices,lists,diary,leaderboard}.zx` files.
+- `build/inbe-full.zx`, a local development and test bundle containing all six.
 
-Native and browser builds embed the base root. Android stores `inbe.zib`
+Native and browser builds embed the base root. Android stores `inbe.zx`
 once in APK assets and opens its bytes through the NDK asset manager. Each
 CPU library contains only the native host and small bootstrap assets, so a
 universal APK shares the artwork across all four architectures. Direct Gradle
@@ -271,7 +271,7 @@ after them. The list shows icons, names and controls without status paragraphs.
 
 ## Practice content and narration
 
-`build/practice-content/*.zib` contains the separate practice data and language
+`build/practice-content/*.zx` contains the separate practice data and language
 packs. Practice → Manage practices has four tabs and opens on the first,
 Installed, which lists every practice on this device. Meditation (breathing
 practices included), Yoga and Martial arts list each kind of practice whether
@@ -346,7 +346,7 @@ It does not publish packages, change SSH keys or restart the node.
 
 Downloads use the Daochi release v2 endpoints on `https://api.waozi.xyz`:
 `/api/v2/packages/{app_id}/latest` and
-`/api/v2/packages/{app_id}/{sha256}.zib`. IDs are `inbe`, `inbe.habits`,
+`/api/v2/packages/{app_id}/{sha256}.zx`. IDs are `inbe`, `inbe.habits`,
 `inbe.practices`, `inbe.lists`, `inbe.diary` and `inbe.lumi`.
 
 Automatic updates default on and check daily for the root and selected apps,
@@ -547,9 +547,9 @@ with its moves in coordinates. From the Arcade repository,
 stages its release through Inbe's existing signed publisher; with
 `--ssh-target`, `--remote-store` and `--verify-origin` it publishes it. The
 App packages workflow never publishes these apps. For a local preview or a
-test, `INBE_NODE_APP_FILE=/absolute/path/chess.zib` offers that package as if
+test, `INBE_NODE_APP_FILE=/absolute/path/chess.zx` offers that package as if
 the node did; it passes the same interface, identity and resource checks.
-On Android debug builds, a single `<name>.zib` in the app's external files
+On Android debug builds, a single `<name>.zx` in the app's external files
 folder is offered only when the launch intent includes `--ez local_node_app true`.
 Ordinary launches ignore these files and keep using signed node packages.
 
@@ -736,8 +736,8 @@ metadata does not restore a second Diary engine. Native and Android use
 their ordinary photo pickers; Android's keeps the picked file's own bytes,
 as for Photos.
 
-The desktop wrapper accepts `--bundle /path/to/inbe.zib`, or an individual
-Lumi, Habits, Practices, Lists or Diary ZIB. A feature bundle opens its own app using
+The desktop wrapper accepts `--bundle /path/to/inbe.zx`, or an individual
+Lumi, Habits, Practices, Lists or Diary ZX. A feature bundle opens its own app using
 the same host and account. Explicit local files still pass capability and
 identity checks; publisher verification applies to network installation.
 `--feature lumi|habits|practices|lists|diary` opens a selected feature.

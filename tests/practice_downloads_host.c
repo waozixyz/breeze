@@ -71,14 +71,14 @@ AssetView FixtureAsset(String path) {
         if (!catalog.data) catalog = FixtureCatalog();
         result.data = bad_catalog ? StringLiteral("{\"schema\":1,\"packs\":[]}") : catalog;
         result.found = true;
-    } else if (shipped && StringEqual(path, StringLiteral("assets/practices/default/whm.zib"))) {
+    } else if (shipped && StringEqual(path, StringLiteral("assets/practices/default/whm.zx"))) {
         static String pack;
-        if (!pack.data) pack = read_fixture("default-whm.zib");
+        if (!pack.data) pack = read_fixture("default-whm.zx");
         result.data = pack;
         result.found = true;
-    } else if (shipped && StringEqual(path, StringLiteral("assets/practices/shipped/patterns.zib"))) {
+    } else if (shipped && StringEqual(path, StringLiteral("assets/practices/shipped/patterns.zx"))) {
         static String pack;
-        if (!pack.data) pack = read_fixture("shipped-patterns.zib");
+        if (!pack.data) pack = read_fixture("shipped-patterns.zx");
         result.data = pack;
         result.found = true;
     } else if (StringEqual(path, StringLiteral("locales/index.txt"))) {
@@ -94,7 +94,7 @@ int32_t FixtureGrantedStarts(void) { return granted_starts; }
 int32_t FixtureStarts(void) { return starts; }
 bool FixtureTaiChiSaved(void) {
     char path[4096];
-    snprintf(path, sizeof path, "%s/cache/packages/practice-taichi.zib", fixtures);
+    snprintf(path, sizeof path, "%s/cache/packages/practice-taichi.zx", fixtures);
     return access(path, F_OK) == 0;
 }
 String __wrap_storage_db_path(void) { return StringView(database, strlen(database)); }
@@ -105,17 +105,20 @@ void app_web_storage_flush(void) {}
 bool __wrap_file_download_FileDownloadStart(FileDownload *download, String url, String destination) {
     const char prefix[] = "https://api.waozi.xyz/api/v2/packages/inbe.practices/";
     const char grant[] = "/fixture-grant";
+    const char suffix[] = ".zx";
+    const size_t named = 64 + sizeof suffix - 1;
     // A paid pack's grant is the last path segment; free packs have none.
-    if (url.length == sizeof prefix - 1 + 64 + 4 + sizeof grant - 1) {
-        assert(memcmp(url.data + sizeof prefix - 1 + 68, grant, sizeof grant - 1) == 0);
+    if (url.length == sizeof prefix - 1 + named + sizeof grant - 1) {
+        assert(memcmp(url.data + sizeof prefix - 1 + named, grant, sizeof grant - 1) == 0);
         granted_starts++;
     } else {
-        assert(url.length == sizeof prefix - 1 + 64 + 4);
+        assert(url.length == sizeof prefix - 1 + named);
     }
     assert(memcmp(url.data, prefix, sizeof prefix - 1) == 0);
+    assert(memcmp(url.data + sizeof prefix - 1 + 64, suffix, sizeof suffix - 1) == 0);
     char name[69];
-    memcpy(name, url.data + sizeof prefix - 1, 68);
-    name[68] = 0;
+    memcpy(name, url.data + sizeof prefix - 1, named);
+    name[named] = 0;
     String bytes = read_fixture(name);
     assert(bytes.length == download->maximum_bytes);
     snprintf((char *)download->destination, sizeof download->destination,

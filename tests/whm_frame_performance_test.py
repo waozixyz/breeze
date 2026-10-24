@@ -42,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-whm-frames-") as temporary, contex
     display.stdout.close()
     assert number.isdecimal(), "Private display did not start"
     env["DISPLAY"] = ":" + number
-    app = subprocess.Popen([str(BINARY), "--bundle", str(ROOT / "build/inbe-full.zib")],
+    app = subprocess.Popen([str(BINARY), "--bundle", str(ROOT / "build/inbe-full.zx")],
                            cwd=ROOT, env=env, stdout=log, stderr=log)
     stack.callback(stop, app)
 

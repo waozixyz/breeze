@@ -44,7 +44,7 @@ def wait_for(predicate, message):
 @contextlib.contextmanager
 def application(profile, label):
     with (OUTPUT / (label + '.log')).open('w') as log:
-        app = subprocess.Popen([sys.argv[1], '--bundle', str(ROOT / 'build/inbe-full.zib')],
+        app = subprocess.Popen([sys.argv[1], '--bundle', str(ROOT / 'build/inbe-full.zx')],
                                cwd=ROOT, env=ENV | dict(APP_DATA_ROOT=str(profile)),
                                stdout=log, stderr=subprocess.STDOUT)
         try:

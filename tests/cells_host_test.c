@@ -237,8 +237,8 @@ bool ModuleTestPackageBytes(void)
         BundleClose(root);
         return false;
     }
-    const char *names[] = {"cells/lists.zib", "cells/habits.zib", "cells/practices.zib", "cells/diary.zib",
-                           "cells/lumi.zib", "cells/leaderboard.zib"};
+    const char *names[] = {"cells/lists.zx", "cells/habits.zx", "cells/practices.zx", "cells/diary.zx",
+                           "cells/lumi.zx", "cells/leaderboard.zx"};
     bool matched[6] = {false};
     bool valid = true;
     for(size_t asset = 0; asset < BundleAssetCount(root); asset++) {

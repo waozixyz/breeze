@@ -94,7 +94,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-account-activity.') as temporary:
 
     publish()
     with (OUTPUT / 'app.log').open('w') as log:
-        app = subprocess.Popen([sys.argv[1], '--bundle', str(ROOT / 'build/inbe-full.zib')],
+        app = subprocess.Popen([sys.argv[1], '--bundle', str(ROOT / 'build/inbe-full.zx')],
                                cwd=ROOT, env=ENV | dict(APP_DATA_ROOT=str(profile)) | driver.environment(),
                                stdout=log, stderr=subprocess.STDOUT)
         driver.attach(app, OUTPUT / 'app.log')

@@ -20,7 +20,7 @@ rm -rf "$work"
 mkdir -p "$work/generated"
 "$ziran" bundle --root "$root" --module-path "$root/src" $(sh "$root/scripts/package-paths.sh" "$packages") \
     --module-path "$packages/kryon/src/ui" --module-path "$packages/ziran/std" \
-    --define KRYON_HOSTED_UI --entry photos:Main -o "$work/photos.zib" "$root/apps/photos/photos.zi"
+    --define KRYON_HOSTED_UI --entry photos:Main -o "$work/photos.zx" "$root/apps/photos/photos.zi"
 "$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/src" \
     --module-path "$packages/kryon/src/ui" \
@@ -56,5 +56,5 @@ profile=$(mktemp -d /tmp/inbe-photos-app-test.XXXXXX)
 trap 'rm -rf "$profile"' EXIT HUP INT TERM
 APP_DATA_ROOT=$profile/data
 export APP_DATA_ROOT
-INBE_NODE_APP_FILE=$work/photos.zib "$work/test"
+INBE_NODE_APP_FILE=$work/photos.zx "$work/test"
 echo "Photos adds, shows, opens, trashes and restores photos through the node-app host and the media library"

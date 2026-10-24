@@ -255,9 +255,9 @@ def run():
     env = {key: value for key, value in os.environ.items()
            if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')}
     subprocess.run([str(ZIRAN), 'bundle', '--root', str(WORK), '--module-path', str(ROOT / 'apps/lumi'),
-                    '--entry', 'lumi_habit_cases:Answer', '-o', str(WORK / 'cases.zib'), str(source)],
+                    '--entry', 'lumi_habit_cases:Answer', '-o', str(WORK / 'cases.zx'), str(source)],
                    check=True, env=env)
-    output = subprocess.run([str(ZIRAN), 'run', str(WORK / 'cases.zib')], check=True,
+    output = subprocess.run([str(ZIRAN), 'run', str(WORK / 'cases.zx')], check=True,
                             capture_output=True, text=True, env=env).stdout
     results = {}
     current = None

@@ -22,15 +22,15 @@ def check(path, budgets):
     prefix = "base/" if bundle else ""
     with zipfile.ZipFile(path) as archive:
         files = archive.infolist()
-        package_path = prefix + "assets/inbe.zib"
-        packages = [entry for entry in files if entry.filename.endswith("/inbe.zib")]
+        package_path = prefix + "assets/inbe.zx"
+        packages = [entry for entry in files if entry.filename.endswith("/inbe.zx")]
         if len(packages) != 1 or packages[0].filename != package_path:
-            raise ValueError("Expected exactly one shared assets/inbe.zib")
+            raise ValueError("Expected exactly one shared assets/inbe.zx")
         package = packages[0]
         within("Portable app package", package.file_size, budgets["app_package_bytes"])
-        controllers = [entry for entry in files if entry.filename.endswith("/apps.zib")]
-        if len(controllers) != 1 or controllers[0].filename != prefix + "assets/apps.zib":
-            raise ValueError("Expected exactly one shared assets/apps.zib controller")
+        controllers = [entry for entry in files if entry.filename.endswith("/apps.zx")]
+        if len(controllers) != 1 or controllers[0].filename != prefix + "assets/apps.zx":
+            raise ValueError("Expected exactly one shared assets/apps.zx controller")
         libraries = [entry for entry in files
                      if entry.filename.startswith(prefix + "lib/")
                      and entry.filename.endswith("/libmain.so")]

@@ -4,48 +4,48 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work="$root/build/lumi-engine-test"
 mkdir -p "$work"
 "$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
-    --entry lumi_tool_budget_behavior:Answer -o "$work/tool-budget.zib" \
+    --entry lumi_tool_budget_behavior:Answer -o "$work/tool-budget.zx" \
     "$root/tests/lumi_tool_budget_behavior.zi"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-    "$root/build/ziran-toolchain/bin/ziran" run "$work/tool-budget.zib")
+    "$root/build/ziran-toolchain/bin/ziran" run "$work/tool-budget.zx")
 [ "$result" = 42 ]
 printf '%s\n' 'Lumi tools: complete appearance workflow and bounded continuations passed'
 "$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
-    --entry lumi_engine_behavior:Answer -o "$work/engine.zib" \
+    --entry lumi_engine_behavior:Answer -o "$work/engine.zx" \
     "$root/tests/lumi_engine_behavior.zi"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-    "$root/build/ziran-toolchain/bin/ziran" run "$work/engine.zib")
+    "$root/build/ziran-toolchain/bin/ziran" run "$work/engine.zx")
 [ "$result" = 42 ]
 "$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
-    --entry lumi_response_behavior:Answer -o "$work/response.zib" \
+    --entry lumi_response_behavior:Answer -o "$work/response.zx" \
     "$root/tests/lumi_response_behavior.zi"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-    "$root/build/ziran-toolchain/bin/ziran" run "$work/response.zib")
+    "$root/build/ziran-toolchain/bin/ziran" run "$work/response.zx")
 [ "$result" = 42 ]
 printf '%s\n' 'Lumi responses: JSON trailing whitespace accepted; malformed and trailing data rejected'
 printf '%s\n' 'Lumi engine: translated commands, Unicode titles, completion matching and bounded actions passed'
 "$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --entry lumi_message_text_behavior:Answer -o "$work/message-text.zib" \
+    --entry lumi_message_text_behavior:Answer -o "$work/message-text.zx" \
     "$root/tests/lumi_message_text_behavior.zi"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-    "$root/build/ziran-toolchain/bin/ziran" run "$work/message-text.zib")
+    "$root/build/ziran-toolchain/bin/ziran" run "$work/message-text.zx")
 [ "$result" = 42 ]
 printf '%s\n' 'Lumi emphasis: visible bold ranges, Unicode, escapes, code and literal user messages passed'
 "$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
     --module-path "$root/build/packages/kryon/src/ui" --define KRYON_HOSTED_UI \
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --entry lumi_reply_cache_behavior:Answer -o "$work/reply-cache.zib" \
+    --entry lumi_reply_cache_behavior:Answer -o "$work/reply-cache.zx" \
     "$root/tests/lumi_reply_cache_behavior.zi"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-    "$root/build/ziran-toolchain/bin/ziran" run "$work/reply-cache.zib")
+    "$root/build/ziran-toolchain/bin/ziran" run "$work/reply-cache.zx")
 [ "$result" = 42 ]
 printf '%s\n' 'Lumi reply cache: edited text, Unicode emphasis and slot eviction passed'
 "$root/build/ziran-toolchain/bin/ziran" bundle --root "$root/tests" \
-    --entry lumi_chart_behavior:Answer -o "$work/chart.zib" \
+    --entry lumi_chart_behavior:Answer -o "$work/chart.zx" \
     "$root/tests/lumi_chart_behavior.zi"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-    "$root/build/ziran-toolchain/bin/ziran" run "$work/chart.zib")
+    "$root/build/ziran-toolchain/bin/ziran" run "$work/chart.zx")
 [ "$result" = 42 ]
 python3 "$root/tests/lumi_progress_sql_test.py"
 printf '%s\n' 'Lumi charts: snapshots, validation, leap days, year boundaries and account-scoped history passed'

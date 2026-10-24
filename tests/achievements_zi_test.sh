@@ -13,10 +13,10 @@ printf '%s\n' '{"schema":1,"app":"inbe","achievements":[{"id":"invalid","metric"
 for fixture in valid invalid empty; do
     if [ "$fixture" = empty ]; then
         "$ziran" bundle --root "$root/tests" --entry achievement_package_fixture:Main \
-            -o "$work/$fixture.zib" "$root/tests/achievement_package_fixture.zi"
+            -o "$work/$fixture.zx" "$root/tests/achievement_package_fixture.zi"
     else
         "$ziran" bundle --root "$root/tests" --entry achievement_package_fixture:Main \
-            --asset-dir "assets=$work/$fixture/assets" -o "$work/$fixture.zib" \
+            --asset-dir "assets=$work/$fixture/assets" -o "$work/$fixture.zx" \
             "$root/tests/achievement_package_fixture.zi"
     fi
 done

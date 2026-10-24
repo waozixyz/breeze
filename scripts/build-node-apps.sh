@@ -22,5 +22,5 @@ for name in $(python3 -c 'import json; print(" ".join(sorted(json.load(open("app
         --define KRYON_HOSTED_UI \
         --module-path build/packages/ziran/std \
         --asset-dir "assets=$assets" \
-        --entry "$name:Main" -o "$output/$name.zib" "apps/$name/$name.zi"
+        --entry "$name:Main" -o "$output/$name.zx" "apps/$name/$name.zi"
 done

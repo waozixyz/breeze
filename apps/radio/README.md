@@ -1,6 +1,6 @@
 # Radio
 
-Radio is an optional installable app built as `build/node-apps/radio.zib`.
+Radio is an optional installable app built as `build/node-apps/radio.zx`.
 It requires host API 18, which adds owner-scoped `AudioStartHost`,
 `AudioStopHost`, `AudioStateHost` and `AudioVolumeHost` effects. A package
 can start an HTTPS audio stream, observe its state, set volume and stop its

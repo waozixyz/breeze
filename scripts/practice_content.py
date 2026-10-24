@@ -1,7 +1,7 @@
 """Small signed Practices catalog and immutable resource packs.
 
 The catalog is an asset of the signed Practices harness. Its exact hashes bind
-each practice and language to a resource-only ZIB. Lumi's guide narration is
+each practice and language to a resource-only ZX. Lumi's guide narration is
 listed separately under "guide", one pack per language, so hosts that predate
 it keep reading the practice list unchanged. All blobs use the existing
 inbe.practices publisher and Daochi artifact endpoint, with no new registry IDs.
@@ -96,8 +96,8 @@ def course_narration_keys(data):
 
 
 def bundle_assets(data):
-    """Read the bounded ZIB v26 resource table; never execute a bundle."""
-    if data[:8] != b'ZIB\0\x1a\0\0\0' or len(data) > MAXIMUM:
+    """Read the bounded ZX v26 resource table; never execute a bundle."""
+    if data[:8] != b'ZX\0\0\x1a\0\0\0' or len(data) > MAXIMUM:
         raise ValueError('unsupported resource bundle')
     at = 8
 
@@ -142,7 +142,7 @@ def bundle_assets(data):
 
 def catalog_from_bundle(data):
     # Older releases have no content catalog and remain installable.
-    if data[:8] != b'ZIB\0\x1a\0\0\0':
+    if data[:8] != b'ZX\0\0\x1a\0\0\0':
         return []
     assets = bundle_assets(data)
     if CATALOG not in assets:
@@ -227,7 +227,7 @@ def prepare(compiler, assets_root=None, output=None):
             if voice:
                 fields['voice'] = voice
             identity.write_text(json.dumps(fields, separators=(',', ':')) + '\n')
-            path = output / (practice + ('.' + language if language else '') + ('.' + voice if voice else '') + '.zib')
+            path = output / (practice + ('.' + language if language else '') + ('.' + voice if voice else '') + '.zx')
             subprocess.run([str(compiler), 'bundle', '--root', str(ROOT),
                 '--entry', 'content:Main', '--asset-dir', 'assets=' + str(assets),
                 '-o', str(path), str(ROOT / 'apps/practice/content.zi')], check=True)
@@ -256,9 +256,9 @@ def prepare(compiler, assets_root=None, output=None):
         for practice in names:
             if practice not in NAMES or practice in configuration['products']:
                 raise ValueError('unknown or paid shipped practice')
-            shipped = assets_root / 'practices/assets/practices' / folder / (practice + '.zib')
+            shipped = assets_root / 'practices/assets/practices' / folder / (practice + '.zx')
             shipped.parent.mkdir(parents=True, exist_ok=True)
-            shipped.write_bytes((output / (practice + '.zib')).read_bytes())
+            shipped.write_bytes((output / (practice + '.zx')).read_bytes())
     if set(configuration['default']) & set(configuration.get('shipped', [])):
         raise ValueError('a practice is either installed by default or only shipped')
     print(f'Prepared {len(packs)} separate practice content packs and {len(guide)} guide narration packs')

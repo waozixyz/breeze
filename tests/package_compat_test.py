@@ -33,13 +33,13 @@ ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "waozixyz/breeze"
 # (ledger name, app ID, local bundle, --feature name)
 PACKAGES = (
-    ("inbe", "inbe", "build/inbe.zib", None),
-    ("lists", "inbe.lists", "build/cells/lists.zib", "lists"),
-    ("habits", "inbe.habits", "build/cells/habits.zib", "habits"),
-    ("practices", "inbe.practices", "build/cells/practices.zib", "practices"),
-    ("diary", "inbe.diary", "build/cells/diary.zib", "diary"),
-    ("lumi", "inbe.lumi", "build/cells/lumi.zib", "lumi"),
-    ("leaderboard", "inbe.leaderboard", "build/cells/leaderboard.zib", None),
+    ("inbe", "inbe", "build/inbe.zx", None),
+    ("lists", "inbe.lists", "build/cells/lists.zx", "lists"),
+    ("habits", "inbe.habits", "build/cells/habits.zx", "habits"),
+    ("practices", "inbe.practices", "build/cells/practices.zx", "practices"),
+    ("diary", "inbe.diary", "build/cells/diary.zx", "diary"),
+    ("lumi", "inbe.lumi", "build/cells/lumi.zx", "lumi"),
+    ("leaderboard", "inbe.leaderboard", "build/cells/leaderboard.zx", None),
 )
 SCRUBBED = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
             "SESSION_MANAGER", "GDK_DISPLAY")
@@ -121,7 +121,7 @@ def forward(binary, origin, ledger, output):
     for name, app_id, _, feature in PACKAGES:
         route = f"{origin}/api/v2/packages/{app_id}"
         try:
-            metadata = json.loads(fetch(f"{route}/latest?host_api={current}&module_api={ledger['module_api']}", 65536))
+            metadata = json.loads(fetch(f"{route}/latest?host_api={current}&module_api={ledger['module_api']}&format=zx", 65536))
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 print(f"forward {app_id}: the node has no release this build can run")
@@ -132,10 +132,10 @@ def forward(binary, origin, ledger, output):
                   f"{metadata['host_api']} outside {oldest}..{current}")
             continue
         artifact = metadata["artifacts"][0]
-        data = fetch(f"{route}/{artifact['sha256']}.zib", artifact["size"])
+        data = fetch(f"{route}/{artifact['sha256']}.zx", artifact["size"])
         if len(data) != artifact["size"] or hashlib.sha256(data).hexdigest() != artifact["sha256"]:
             raise AssertionError(f"forward {app_id}: the node served bytes that differ from its release")
-        bundle = output / f"published-{name}.zib"
+        bundle = output / f"published-{name}.zx"
         bundle.write_bytes(data)
         run_app(binary, bundle, feature, output, f"forward-{name}")
         print(f"forward {app_id} {metadata['version']} (host {metadata['host_api']}): runs in this build")
@@ -149,7 +149,7 @@ def published_release(origin, ledger, app_id, output):
     route = f"{origin}/api/v2/packages/{app_id}"
     try:
         metadata = json.loads(fetch(
-            f"{route}/latest?host_api={current}&module_api={ledger['module_api']}", 65536))
+            f"{route}/latest?host_api={current}&module_api={ledger['module_api']}&format=zx", 65536))
     except urllib.error.HTTPError as error:
         if error.code == 404:
             return None
@@ -157,12 +157,12 @@ def published_release(origin, ledger, app_id, output):
     if not oldest <= metadata["host_api"] <= current or metadata["module_api"] != ledger["module_api"]:
         raise AssertionError(f"The published {app_id} package does not support this host")
     artifact = metadata["artifacts"][0]
-    data = fetch(f"{route}/{artifact['sha256']}.zib", artifact["size"])
+    data = fetch(f"{route}/{artifact['sha256']}.zx", artifact["size"])
     if len(data) != artifact["size"] or hashlib.sha256(data).hexdigest() != artifact["sha256"]:
         raise AssertionError(f"The node's {app_id} bytes differ from its release")
     directory = output / ("published-" + app_id.split(".")[-1])
     directory.mkdir(parents=True, exist_ok=True)
-    bundle = directory / (app_id.split(".")[-1] + ".zib")
+    bundle = directory / (app_id.split(".")[-1] + ".zx")
     bundle.write_bytes(data)
     (directory / "release.json").write_text(json.dumps(metadata, indent=2) + "\n")
     return bundle, metadata

@@ -41,7 +41,7 @@ def saved(profile, name, value):
 def application(profile, name, width, height):
     path = OUTPUT / (name + ".log")
     with path.open("w") as log:
-        app = subprocess.Popen([str(BINARY), "--bundle", str(ROOT / "build/inbe-full.zib")],
+        app = subprocess.Popen([str(BINARY), "--bundle", str(ROOT / "build/inbe-full.zx")],
             cwd=ROOT, env=ENV | {"APP_DATA_ROOT": str(profile)},
             stdout=log, stderr=subprocess.STDOUT)
         driver.attach(app, path)

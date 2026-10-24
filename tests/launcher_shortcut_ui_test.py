@@ -210,7 +210,7 @@ with contextlib.ExitStack() as stack:
 
     # Use an app owned by this repository; Chess is built and released by
     # Arcade, and its published package is checked by the release suite.
-    node_bundle = ROOT / "build/node-apps/photos.zib"
+    node_bundle = ROOT / "build/node-apps/photos.zx"
     assert node_bundle.is_file(), "Run make node-apps before this check"
     env["INBE_NODE_APP_FILE"] = str(node_bundle)
     with application("install-node-app"):

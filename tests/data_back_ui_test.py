@@ -17,7 +17,7 @@ from ui_driver import UiDriver
 assert int(os.environ.get("DISPLAY", ":0").split(":")[-1].split(".")[0]) >= 300
 root = Path(__file__).resolve().parents[1]
 binary = Path(sys.argv[1]).resolve()
-bundle = Path(os.environ.get("INBE_TEST_BUNDLE", root / "build/inbe-full.zib")).resolve()
+bundle = Path(os.environ.get("INBE_TEST_BUNDLE", root / "build/inbe-full.zx")).resolve()
 output = root / "build/data-back-ui-test"
 output.mkdir(parents=True, exist_ok=True)
 driver = UiDriver(output / "driver")

@@ -39,7 +39,7 @@ if check.returncode != 0:
     failures.append(check.stdout.strip() or check.stderr.strip())
 work = root / "build/lumi-guide-test"
 work.mkdir(parents=True, exist_ok=True)
-bundle = work / "ogg_length.zib"
+bundle = work / "ogg_length.zx"
 built = subprocess.run([ziran, "bundle", "--root", str(root / "tests"),
     "--module-path", str(root / "src"),
     "--module-path", str(root / "build/packages/ziran/std"),

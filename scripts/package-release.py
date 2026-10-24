@@ -59,9 +59,9 @@ def stage(store, key_path, key_id, publishers_path=None, *, build_directory=None
         sequence = component["sequence"]
         if not VERSION.fullmatch(component["version"]) or not 0 < sequence <= 2**31 - 1:
             raise ValueError(f"invalid {name} version or sequence")
-        path = build_directory / ("inbe.zib" if name == "inbe" else f"cells/{name}.zib")
+        path = build_directory / ("inbe.zx" if name == "inbe" else f"cells/{name}.zx")
         data = path.read_bytes()
-        if not data.startswith(b"ZIB\0") or not 8 <= len(data) <= 64 * 1024 * 1024:
+        if not data.startswith(b"ZX\0\0") or not 8 <= len(data) <= 64 * 1024 * 1024:
             raise ValueError(f"invalid {name} bundle")
         artifact = dict(variant="module", sha256=sha256(data).hexdigest(), size=len(data))
         dependencies = []
@@ -84,7 +84,7 @@ def stage(store, key_path, key_id, publishers_path=None, *, build_directory=None
     content_payloads = []
     for pack in catalog_from_bundle(payloads['practices']):
         filename = (pack['practice'] + ('.' + pack['language'] if pack['language'] else '') +
-                    ('.' + pack['voice'] if pack.get('voice') else '') + '.zib')
+                    ('.' + pack['voice'] if pack.get('voice') else '') + '.zx')
         data = (build_directory / 'practice-content' / filename).read_bytes()
         if len(data) != pack['size'] or sha256(data).hexdigest() != pack['sha256']:
             raise ValueError('practice content differs from its signed catalog')
@@ -111,7 +111,7 @@ def stage(store, key_path, key_id, publishers_path=None, *, build_directory=None
                     raise ValueError(f"{name} changed: advance its version and sequence")
             value = releases[name]
             encoded = (json.dumps(value, separators=(",", ":")) + "\n").encode()
-            payload = directory / (value["artifacts"][0]["sha256"] + ".zib")
+            payload = directory / (value["artifacts"][0]["sha256"] + ".zx")
             archive = directory / f"release-{value['sequence']}.json"
             if payload.exists() and payload.read_bytes() != payloads[name]:
                 raise ValueError("immutable payload does not match its hash")
@@ -120,15 +120,15 @@ def stage(store, key_path, key_id, publishers_path=None, *, build_directory=None
         # Content is installed before the harness advertises its hashes.
         for digest, data, value, product in content_payloads:
             directory = store / 'inbe.practices'
-            payload = directory / (digest + '.zib')
+            payload = directory / (digest + '.zx')
             if payload.exists() and payload.read_bytes() != data:
                 raise ValueError('immutable practice payload differs')
             # A paid pack is marked for the node before it can be served, so
             # Daochi only hands it out with a grant for its unlock.
             if product:
-                atomic_write(directory / (digest + '.zib.product'), product.encode())
+                atomic_write(directory / (digest + '.zx.product'), product.encode())
             atomic_write(payload, data)
-            atomic_write(directory / (digest + '.zib.release-v2.json'),
+            atomic_write(directory / (digest + '.zx.release-v2.json'),
                          (json.dumps(value, separators=(',', ':')) + '\n').encode())
         for name in NAMES:
             value = releases[name]
@@ -136,7 +136,7 @@ def stage(store, key_path, key_id, publishers_path=None, *, build_directory=None
             encoded = (json.dumps(value, separators=(",", ":")) + "\n").encode()
             if len(encoded) > 65536:
                 raise ValueError("release metadata exceeds the client limit")
-            payload = directory / (value["artifacts"][0]["sha256"] + ".zib")
+            payload = directory / (value["artifacts"][0]["sha256"] + ".zx")
             archive = directory / f"release-{value['sequence']}.json"
             if payload.exists() and payload.read_bytes() != payloads[name]:
                 raise ValueError("immutable payload does not match its hash")
@@ -159,7 +159,7 @@ def rollout_value(percent, hours):
 def stored_practice_packs(store):
     directory = store / 'inbe.practices'
     value = json.loads((directory / 'latest-v2.json').read_bytes())
-    data = (directory / (value['artifacts'][0]['sha256'] + '.zib')).read_bytes()
+    data = (directory / (value['artifacts'][0]['sha256'] + '.zx')).read_bytes()
     return catalog_from_bundle(data)
 
 
@@ -178,7 +178,7 @@ def publish(store, target, remote_store, rollout=None):
                 app_id = "inbe" if name == "inbe" else "inbe." + name
                 directory = store / app_id
                 value = json.loads((directory / "latest-v2.json").read_bytes())
-                payload = value["artifacts"][0]["sha256"] + ".zib"
+                payload = value["artifacts"][0]["sha256"] + ".zx"
                 for filename in ("latest-v2.json", payload, payload + ".release-v2.json",
                                  f"release-{value['sequence']}.json"):
                     path = directory / filename
@@ -186,7 +186,7 @@ def publish(store, target, remote_store, rollout=None):
             for pack in stored_practice_packs(store):
                 # A paid pack's marker goes too, so the node gates it; an
                 # importer that cannot write markers refuses the upload.
-                for suffix in ('.zib', '.zib.release-v2.json') + (('.zib.product',) if pack.get('product') else ()):
+                for suffix in ('.zx', '.zx.release-v2.json') + (('.zx.product',) if pack.get('product') else ()):
                     path = store / 'inbe.practices' / (pack['sha256'] + suffix)
                     tar.add(path, arcname=str(path.relative_to(store)), recursive=False)
             if rollout is not None:
@@ -214,7 +214,7 @@ def stage_content_repair(store, practice, key_path, key_id, release_path, publis
     if len(matches) != 1 or matches[0].get('product'):
         raise ValueError('repair requires one free base practice pack')
     pack = matches[0]
-    data = (ROOT / 'build/practice-content' / (practice + '.zib')).read_bytes()
+    data = (ROOT / 'build/practice-content' / (practice + '.zx')).read_bytes()
     if len(data) != pack['size'] or sha256(data).hexdigest() != pack['sha256']:
         raise ValueError('repair content differs from the app catalog')
     validate_repair_assets(data)
@@ -224,8 +224,8 @@ def stage_content_repair(store, practice, key_path, key_id, release_path, publis
     validate_release(value, 'inbe.practices', publishers)
     directory = store / 'inbe.practices'
     directory.mkdir(parents=True, exist_ok=True)
-    atomic_write(directory / (pack['sha256'] + '.zib'), data)
-    atomic_write(directory / (pack['sha256'] + '.zib.release-v2.json'),
+    atomic_write(directory / (pack['sha256'] + '.zx'), data)
+    atomic_write(directory / (pack['sha256'] + '.zx.release-v2.json'),
                  json.dumps(value, separators=(',', ':')).encode())
     return pack['sha256']
 
@@ -242,7 +242,7 @@ def validate_repair_assets(data):
 def import_content_repair(entries, store, publishers):
     if len(entries) != 2:
         raise ValueError('repair must contain exactly one pack and its signature')
-    payloads = [name for name in entries if re.fullmatch(r'inbe\.practices/[0-9a-f]{64}\.zib', name)]
+    payloads = [name for name in entries if re.fullmatch(r'inbe\.practices/[0-9a-f]{64}\.zx', name)]
     if len(payloads) != 1 or payloads[0] + '.release-v2.json' not in entries:
         raise ValueError('invalid content repair archive')
     name = payloads[0]
@@ -278,7 +278,7 @@ def publish_content_repair(store, digest, target, remote_store):
     with tempfile.TemporaryDirectory(prefix='inbe-content-repair-') as temporary:
         archive = Path(temporary) / 'repair.tar'
         with tarfile.open(archive, 'w') as tar:
-            for suffix in ('.zib', '.zib.release-v2.json'):
+            for suffix in ('.zx', '.zx.release-v2.json'):
                 path = store / 'inbe.practices' / (digest + suffix)
                 tar.add(path, arcname=str(path.relative_to(store)), recursive=False)
         upload(archive, target, remote_store)
@@ -308,7 +308,7 @@ def verify_origin(store, origin, open_url=open_public_url):
             raise ValueError(f"{app_id}: invalid staged artifact")
         checksum = sha256()
         size = 0
-        with open_url(route + "/" + digest + ".zib", timeout=30) as response:
+        with open_url(route + "/" + digest + ".zx", timeout=30) as response:
             while True:
                 block = response.read(65536)
                 if not block:
@@ -320,7 +320,7 @@ def verify_origin(store, origin, open_url=open_public_url):
         if size != artifact["size"] or checksum.hexdigest() != digest:
             raise ValueError(f"{app_id}: public package hash or size differs from the signed publication")
     for pack in stored_practice_packs(store):
-        route = origin + '/api/v2/packages/inbe.practices/' + pack['sha256'] + '.zib'
+        route = origin + '/api/v2/packages/inbe.practices/' + pack['sha256'] + '.zx'
         # The node serves a paid pack only with its grant, so the public
         # route must refuse it.
         if pack.get('product'):
@@ -440,11 +440,11 @@ def import_archive(archive, store, publishers_path=None):
             value = json.loads(encoded)
             validate_release(value, app_id, publishers)
             artifact = value["artifacts"][0]
-            data = entries[f"{app_id}/{artifact['sha256']}.zib"]
+            data = entries[f"{app_id}/{artifact['sha256']}.zx"]
             if artifact["size"] != len(data) or sha256(data).hexdigest() != artifact["sha256"]:
                 raise ValueError("payload hash mismatch")
-            if not data.startswith(b"ZIB\0"):
-                raise ValueError("payload is not a ZIB bundle")
+            if not data.startswith(b"ZX\0\0"):
+                raise ValueError("payload is not a ZX bundle")
             current = directory / "latest-v2.json"
             old = None
             if current.exists():
@@ -462,10 +462,10 @@ def import_archive(archive, store, publishers_path=None):
         expected_entries = set()
         for app_id, (value, encoded, data, _) in releases.items():
             digest = value['artifacts'][0]['sha256']
-            expected_entries.update((f'{app_id}/latest-v2.json', f'{app_id}/{digest}.zib',
-                f'{app_id}/{digest}.zib.release-v2.json', f"{app_id}/release-{value['sequence']}.json"))
+            expected_entries.update((f'{app_id}/latest-v2.json', f'{app_id}/{digest}.zx',
+                f'{app_id}/{digest}.zx.release-v2.json', f"{app_id}/release-{value['sequence']}.json"))
         for pack in catalog_from_bundle(releases['inbe.practices'][2]):
-            path = 'inbe.practices/' + pack['sha256'] + '.zib'
+            path = 'inbe.practices/' + pack['sha256'] + '.zx'
             expected_entries.update((path, path + '.release-v2.json'))
             product = pack.get('product', '')
             if product:
@@ -504,7 +504,7 @@ def import_archive(archive, store, publishers_path=None):
         for app_id in sorted(present, key=lambda value: value == "inbe"):
             value, encoded, data, changed = releases[app_id]
             directory = store / app_id
-            payload = directory / (value["artifacts"][0]["sha256"] + ".zib")
+            payload = directory / (value["artifacts"][0]["sha256"] + ".zx")
             archived = directory / f"release-{value['sequence']}.json"
             if archived.exists() and archived.read_bytes() != encoded:
                 raise ValueError("release sequence is already occupied")
@@ -587,8 +587,8 @@ def main():
                 if parsed.scheme != 'https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment or parsed.username or parsed.password:
                     raise ValueError('repair verification requires an HTTPS origin')
                 publish_content_repair(args.store, digest, args.ssh_target, args.remote_store)
-                expected = (args.store / 'inbe.practices' / (digest + '.zib')).read_bytes()
-                with open_public_url(origin + '/api/v2/packages/inbe.practices/' + digest + '.zib', 30) as response:
+                expected = (args.store / 'inbe.practices' / (digest + '.zx')).read_bytes()
+                with open_public_url(origin + '/api/v2/packages/inbe.practices/' + digest + '.zx', 30) as response:
                     if response.read(len(expected) + 1) != expected:
                         raise ValueError('public repair differs from the app catalog')
             print('Sun Salutation picture pack repaired' if args.ssh_target else 'Sun Salutation picture repair staged')

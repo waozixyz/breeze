@@ -26,12 +26,12 @@ for input in source saved; do
     fi
     output=$work/$input
     mkdir -p "$output/c" "$output/cpp" "$output/go"
-    "$bin/zi2zib" bundle --root "$module_root" \
+    "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$app_path" --module-path "$kryon" \
         --module-path "$std" \
         --entry app_zoom_behavior:Answer \
-        -o "$output/zoom.zib" "$file"
-    [ "$(env -u DISPLAY -u WAYLAND_DISPLAY "$bin/zi2zib" run "$output/zoom.zib")" = 42 ]
+        -o "$output/zoom.zx" "$file"
+    [ "$(env -u DISPLAY -u WAYLAND_DISPLAY "$bin/zi2zx" run "$output/zoom.zx")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$app_path" --module-path "$kryon" \
@@ -71,4 +71,4 @@ GO
     GO111MODULE=off go test "$output/go"/*.go
 done
 
-cmp "$work/source/zoom.zib" "$work/saved/zoom.zib"
+cmp "$work/source/zoom.zx" "$work/saved/zoom.zx"

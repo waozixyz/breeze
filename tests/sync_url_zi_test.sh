@@ -10,5 +10,5 @@ mkdir -p "$work"
     --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/ziran/std" \
     --entry sync_url_behavior:Check \
-    -o "$work/sync_url.zib" "$root/tests/sync_url_behavior.zi"
-test "$("$ziran" run "$work/sync_url.zib")" = 0
+    -o "$work/sync_url.zx" "$root/tests/sync_url_behavior.zi"
+test "$("$ziran" run "$work/sync_url.zx")" = 0

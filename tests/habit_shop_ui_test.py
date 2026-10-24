@@ -23,7 +23,7 @@ for width, height, scale in [(390, 844, 10), (900, 720, 10), (390, 844, 20)]:
             (OUTPUT / f"{name}.log").open("w") as log:
         process = subprocess.Popen([
             str(BINARY), "--screenshot", str(Path(directory) / "start.png"),
-            "--bundle", str(ROOT / "build/inbe-full.zib"), "--feature", "habits",
+            "--bundle", str(ROOT / "build/inbe-full.zx"), "--feature", "habits",
             "--screenshot-scene", "habits_shop", "--screenshot-width", str(width),
             "--screenshot-height", str(height), "--screenshot-ui-scale", str(scale),
             "--screenshot-theme", "0", "--screenshot-dark", "0"], cwd=ROOT,

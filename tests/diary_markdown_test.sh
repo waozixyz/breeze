@@ -35,7 +35,7 @@ C
 env -u DISPLAY -u WAYLAND_DISPLAY ASAN_OPTIONS=detect_leaks=0 "$work/test"
 # shellcheck disable=SC2086
 "$bin/ziran" bundle --root "$root/tests" $modules --define KRYON_HOSTED_UI \
-    --entry diary_markdown_behavior:Answer -o "$work/check.zib" \
+    --entry diary_markdown_behavior:Answer -o "$work/check.zx" \
     "$root/tests/diary_markdown_behavior.zi"
-test "$("$bin/ziran" run "$work/check.zib")" = 42
+test "$("$bin/ziran" run "$work/check.zx")" = 42
 printf '%s\n' 'Diary Markdown: embeds, library places, inserted photos, the editor preview and spelling masking passed natively and in the VM'

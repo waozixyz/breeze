@@ -64,7 +64,7 @@ def application(scene):
             [
                 sys.argv[1],
                 "--bundle",
-                str(ROOT / "build/inbe-full.zib"),
+                str(ROOT / "build/inbe-full.zx"),
                 *(["--feature", "lists"] if scene == "lists" else []),
                 "--screenshot",
                 str(OUTPUT / f"{scene}-initial.png"),

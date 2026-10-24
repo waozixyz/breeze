@@ -43,5 +43,5 @@ fi
 if [ "$target" = android ]; then
     sh tests/cells_android_probe.sh
 else
-    "$binary" "$root/build/inbe.zib" "$root/build/inbe-full.zib"
+    "$binary" "$root/build/inbe.zx" "$root/build/inbe-full.zx"
 fi

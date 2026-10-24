@@ -383,16 +383,16 @@ IMAGE_FILES += assets/app/icon-sky-cradle.png assets/app/icon-ink-and-air.png
 IMAGE_FILES += $(wildcard assets/social/*.png)
 IMAGE_FILES += $(wildcard assets/profile-pictures/*.png)
 IMAGE_FILES += $(KRYON_DIR)/icons/ui.png $(KRYON_DIR)/icons/pfp.png
-CELL_BUNDLES := $(addprefix $(BUILD_DIR)/cells/,lists.zib habits.zib practices.zib diary.zib lumi.zib leaderboard.zib)
-INBE_BUNDLE := $(BUILD_DIR)/inbe.zib
-INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zib
+CELL_BUNDLES := $(addprefix $(BUILD_DIR)/cells/,lists.zx habits.zx practices.zx diary.zx lumi.zx leaderboard.zx)
+INBE_BUNDLE := $(BUILD_DIR)/inbe.zx
+INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zx
 CELL_SOURCES := $(shell find apps src/cells -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
 CELL_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp 2>/dev/null)
 CELL_RESOURCES += $(shell rg --files assets/practices design/tai-chi/text 2>/dev/null) apps/practice/content.json design/tai-chi/narration.json design/tai-chi/narration-lines.json $(wildcard design/tai-chi/narration-receipt.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt) $(wildcard design/lumi-guide/*.json) scripts/practice_content.py scripts/generate-lumi-guide-narration.py
 CELL_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievement-locales/*.json)
 CELL_RESOURCES += $(wildcard assets/*/sidebar.shape)
 
-EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) build/apps-ui/apps.zib assets/app/icon.png
+EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) build/apps-ui/apps.zx assets/app/icon.png
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 # Dependencies are imported as PACKAGE/Module through their linked packages.
 ZI_PACKAGE_PATHS := $(shell sh scripts/package-paths.sh)
@@ -607,7 +607,7 @@ all: native
 
 # Tests take the whole toolchain directory, so every tool rebuilds together;
 # mixing a new zi2zir with an old ziran fails on the ZIR version.
-ZIRAN_TOOLS := $(addprefix $(ZIRAN_BUILD_DIR)/bin/,zi2c zi2zir zi2zib zi2cpp zi2go ziran)
+ZIRAN_TOOLS := $(addprefix $(ZIRAN_BUILD_DIR)/bin/,zi2c zi2zir zi2zx zi2cpp zi2go ziran)
 
 $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a &: $(ZIRAN_SOURCES) ziran.lock
 	$(MAKE) -C $(ZIRAN_DIR) BUILD_DIR=$(ZIRAN_BUILD_DIR) $(ZIRAN_TOOLS) $(ZIRAN_BUILD_DIR)/libziran.a

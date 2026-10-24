@@ -27,7 +27,7 @@ def resource(path):
         value = value.encode()
         return number(len(value)) + value
 
-    return (b'ZIB\0' + number(26) + text('content') + text('Main') + number(0) * 4 +
+    return (b'ZX\0\0' + number(26) + text('content') + text('Main') + number(0) * 4 +
             number(1) + text(path) + number(3) + b'png')
 
 
@@ -51,7 +51,7 @@ class ContentRepairTest(unittest.TestCase):
         catalog = self.root / 'build/package-assets/practices/assets/practices/catalog.json'
         catalog.parent.mkdir(parents=True)
         catalog.write_text(json.dumps(dict(schema=1, packs=[pack])))
-        source = self.root / 'build/practice-content/sunsalutation.zib'
+        source = self.root / 'build/practice-content/sunsalutation.zx'
         source.parent.mkdir(parents=True)
         source.write_bytes(self.data)
         value = dict(app_id='inbe.practices', sequence=7, version='1.1.5', runtime='kryon-app-v1',
@@ -65,7 +65,7 @@ class ContentRepairTest(unittest.TestCase):
             digest = publisher.stage_content_repair(self.store, 'sunsalutation', self.key,
                                                    'test', self.release, self.publishers)
         self.assertEqual(self.digest, digest)
-        self.filename = 'inbe.practices/' + digest + '.zib'
+        self.filename = 'inbe.practices/' + digest + '.zx'
         self.entries = {name: (self.store / name).read_bytes() for name in
                         (self.filename, self.filename + '.release-v2.json')}
         self.remote = self.root / 'remote'

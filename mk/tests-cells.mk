@@ -23,7 +23,7 @@ portable-apps-ui-test: $(TARGET) cells
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER \
 		python3 tests/portable_apps_ui_test.py --inbe $(abspath $(TARGET)) \
 		--player "$(APP_PLAYER)" --werk "$(WERK_BINARY)" \
-		--diary $(abspath build/cells/diary.zib) --calculator "$(CALCULATOR_BUNDLE)"
+		--diary $(abspath build/cells/diary.zx) --calculator "$(CALCULATOR_BUNDLE)"
 
 .PHONY: node-app-records-test
 

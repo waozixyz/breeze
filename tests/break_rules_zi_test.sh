@@ -25,11 +25,11 @@ for input in source saved; do
     rm -rf "$output/c" "$output/cpp" "$output/go"
     mkdir -p "$output/c" "$output/cpp" "$output/go"
 
-    "$bin/zi2zib" bundle --root "$module_root" \
+    "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$module_path" \
         --entry break_rules_behavior:Answer \
-        -o "$output/break_rules.zib" "$file"
-    [ "$("$bin/zi2zib" run "$output/break_rules.zib")" = 42 ]
+        -o "$output/break_rules.zx" "$file"
+    [ "$("$bin/zi2zx" run "$output/break_rules.zx")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$module_path" -o "$output/c" "$file"
@@ -65,5 +65,5 @@ GO
     GO111MODULE=off go test "$output/go"/*.go
 done
 
-cmp "$work/source/break_rules.zib" "$work/saved/break_rules.zib"
+cmp "$work/source/break_rules.zx" "$work/saved/break_rules.zx"
 echo "break rules Ziran test passed"

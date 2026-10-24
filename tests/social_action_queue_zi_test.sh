@@ -23,11 +23,11 @@ for input in source saved; do
     fi
     output=$work/$input
     mkdir -p "$output/c" "$output/cpp" "$output/go"
-    "$bin/zi2zib" bundle --root "$module_root" \
+    "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$app_path" \
         --entry social_action_queue_behavior:Answer \
-        -o "$output/queue.zib" "$file"
-    [ "$(env -u DISPLAY -u WAYLAND_DISPLAY "$bin/zi2zib" run "$output/queue.zib")" = 42 ]
+        -o "$output/queue.zx" "$file"
+    [ "$(env -u DISPLAY -u WAYLAND_DISPLAY "$bin/zi2zx" run "$output/queue.zx")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$app_path" -o "$output/c" "$file"
@@ -65,4 +65,4 @@ GO
     GO111MODULE=off go test "$output/go"/*.go
 done
 
-cmp "$work/source/queue.zib" "$work/saved/queue.zib"
+cmp "$work/source/queue.zx" "$work/saved/queue.zx"

@@ -80,7 +80,7 @@ def main():
         values = stage(store, private, "test-key", publishers)
         stage(store, private, "test-key", publishers)  # idempotent
 
-        paid = {pack["sha256"] + ".zib" for pack in release_tool.stored_practice_packs(store)
+        paid = {pack["sha256"] + ".zx" for pack in release_tool.stored_practice_packs(store)
                 if pack.get("product")}
 
         def served(url, timeout, paid_public=False):
@@ -103,7 +103,7 @@ def main():
                 content = served(url, timeout, failure == "paid-public").read()
                 if failure == "metadata" and "/latest" in url:
                     return BytesIO(b"{}")
-                if url.endswith(".zib"):
+                if url.endswith(".zx"):
                     if failure == "hash":
                         content = content[:-1] + bytes([content[-1] ^ 1])
                     elif failure == "truncated":
@@ -131,7 +131,7 @@ def main():
             for value in values.values():
                 assert json.loads((remote / value["app_id"] / "latest-v2.json").read_bytes()) == value
         # The node gates each paid pack by the marker the importer writes.
-        markers = sorted(store.glob("inbe.practices/*.zib.product"))
+        markers = sorted(store.glob("inbe.practices/*.zx.product"))
         assert markers
         for marker in markers:
             assert (remote / marker.relative_to(store)).read_bytes() == marker.read_bytes()
@@ -249,7 +249,7 @@ def main():
         root["dependencies"][0]["sha256"] = "0" * 64
         root["signature"] = key.sign(release_tool.signing_message(root)).hex()
         (fixtures / "wrong-nested").write_text(json.dumps(root))
-        root_data = (options.bundle_build_dir / "inbe.zib").read_bytes()
+        root_data = (options.bundle_build_dir / "inbe.zx").read_bytes()
         (fixtures / "root-bytes").write_bytes(root_data)
         updated_root = json.loads(json.dumps(values["inbe"]))
         root_version = list(map(int, values["inbe"]["version"].split(".")))
@@ -263,10 +263,10 @@ def main():
                 dependency["version"] = "1.2.0"
         updated_root["signature"] = key.sign(release_tool.signing_message(updated_root)).hex()
         (fixtures / "root-new").write_text(json.dumps(updated_root))
-        data = (options.bundle_build_dir / "cells/habits.zib").read_bytes()
+        data = (options.bundle_build_dir / "cells/habits.zx").read_bytes()
         (fixtures / "habits-bytes").write_bytes(data)
         (fixtures / "corrupt-bytes").write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
-        (fixtures / "diary-bytes").write_bytes((options.bundle_build_dir / "cells/diary.zib").read_bytes())
+        (fixtures / "diary-bytes").write_bytes((options.bundle_build_dir / "cells/diary.zx").read_bytes())
         updated = json.loads(json.dumps(values["diary"]))
         diary_version = list(map(int, updated["version"].split(".")))
         diary_version[2] += 1

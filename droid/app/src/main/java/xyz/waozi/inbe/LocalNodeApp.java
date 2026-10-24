@@ -15,7 +15,7 @@ public final class LocalNodeApp {
                 || folder == null) {
             return null;
         }
-        File[] bundles = folder.listFiles(file -> file.isFile() && file.getName().endsWith(".zib"));
+        File[] bundles = folder.listFiles(file -> file.isFile() && file.getName().endsWith(".zx"));
         if (bundles == null || bundles.length != 1) {
             return null;
         }

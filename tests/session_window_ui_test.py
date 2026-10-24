@@ -78,7 +78,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
     def application(label, width, height):
         log_path = OUTPUT / (label + ".log")
         with log_path.open("w") as log:
-            app = subprocess.Popen([str(BINARY), "--bundle", str(ROOT / "build/inbe-full.zib")],
+            app = subprocess.Popen([str(BINARY), "--bundle", str(ROOT / "build/inbe-full.zx")],
                                    cwd=ROOT, env=env, stdout=log, stderr=log)
             driver.attach(app, log_path)
             try:
@@ -250,7 +250,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
     packages = profile / "packages"
     packages.mkdir(exist_ok=True)
     for name in ("sunsalutation", "sunsalutation.en", "guide.en"):
-        shutil.copyfile(ROOT / "build/practice-content" / (name + ".zib"), packages / f"practice-{name}.zib")
+        shutil.copyfile(ROOT / "build/practice-content" / (name + ".zx"), packages / f"practice-{name}.zx")
 
     with application("initialize", 390, 720):
         pass

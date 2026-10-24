@@ -12,8 +12,8 @@ source=$root/tests/statistics_date_behavior.zi
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
     --entry statistics_date_behavior:Answer \
-    -o "$work/date.zib" "$source"
-test "$("$bin/ziran" run "$work/date.zib")" = 42
+    -o "$work/date.zx" "$source"
+test "$("$bin/ziran" run "$work/date.zx")" = 42
 
 "$bin/zi2c" --no-main --root "$root" \
     --module-path "$root/src" \

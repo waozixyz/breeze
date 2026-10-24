@@ -174,7 +174,7 @@ sync-review-ui-test: $(TARGET)
 # Photos repository's build.
 DEVICE_LINK_DETECT_QR ?= ../photos/build/detect-qr/detect_qr
 .PHONY: device-link-ui-test
-device-link-ui-test: $(TARGET) $(INBE_FULL_BUNDLE) $(BUILD_DIR)/cells/lumi.zib
+device-link-ui-test: $(TARGET) $(INBE_FULL_BUNDLE) $(BUILD_DIR)/cells/lumi.zx
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \
 		-u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 SDL_AUDIODRIVER=dummy APP_NO_TRAY=1 \
 		timeout 300s xvfb-run -a -n 340 -s '-noreset -screen 0 1920x900x24' \
@@ -195,11 +195,11 @@ leaderboard-ui-test: $(TARGET)
 
 .PHONY: photos-ui-test
 photos-ui-test: $(TARGET) $(NODE_APP_BUNDLES)
-	@sh tests/photos_ui_test.sh $(abspath $(TARGET)) $(abspath $(BUILD_DIR)/node-apps/photos.zib)
+	@sh tests/photos_ui_test.sh $(abspath $(TARGET)) $(abspath $(BUILD_DIR)/node-apps/photos.zx)
 
 .PHONY: library-ui-test
 library-ui-test: $(TARGET) $(NODE_APP_BUNDLES)
-	@sh tests/library_ui_test.sh $(abspath $(TARGET)) $(abspath $(BUILD_DIR)/node-apps/library.zib)
+	@sh tests/library_ui_test.sh $(abspath $(TARGET)) $(abspath $(BUILD_DIR)/node-apps/library.zx)
 
 .PHONY: habit-unsaved-ui-test
 habit-unsaved-ui-test: $(TARGET)
@@ -215,7 +215,7 @@ chess-ui-test: $(TARGET)
 .PHONY: arcade-ui-test
 ARCADE_BUNDLE ?=
 arcade-ui-test: $(TARGET)
-	@test -n "$(ARCADE_BUNDLE)" || { echo "Set ARCADE_BUNDLE to the arcade.zib collection built by Arcade"; exit 2; }
+	@test -n "$(ARCADE_BUNDLE)" || { echo "Set ARCADE_BUNDLE to the arcade.zx collection built by Arcade"; exit 2; }
 	@sh tests/arcade_ui_test.sh $(abspath $(TARGET)) $(abspath $(ARCADE_BUNDLE))
 
 # Missing practice pictures fail the visual gate in CI and releases.

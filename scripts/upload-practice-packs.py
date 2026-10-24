@@ -48,7 +48,7 @@ spec.loader.exec_module(package_release)
 
 def served(digest, timeout=30):
     """The node's status for a pack: 200 served, 403 paid and present, 404 missing."""
-    request = urllib.request.Request(NODE + digest + ".zib", method="HEAD", headers=HEADERS)
+    request = urllib.request.Request(NODE + digest + ".zx", method="HEAD", headers=HEADERS)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status
@@ -57,7 +57,7 @@ def served(digest, timeout=30):
 
 
 def matches(digest, size, timeout=120):
-    request = urllib.request.Request(NODE + digest + ".zib", headers=HEADERS)
+    request = urllib.request.Request(NODE + digest + ".zx", headers=HEADERS)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         data = response.read(size + 1)
     return len(data) == size and sha256(data).hexdigest() == digest
@@ -90,16 +90,16 @@ def main():
         directory = store / "inbe.practices"
         # The store also holds the Practice app's own bundle under this app
         # ID; only the content packs its catalog names are uploaded.
-        practices = (ROOT / "build/cells/practices.zib").read_bytes()
+        practices = (ROOT / "build/cells/practices.zx").read_bytes()
         listed = package_release.catalog_from_bundle(practices)
         if args.content:
             listed = [pack for pack in listed if pack["practice"] in args.content and not pack["language"]]
         catalog = {pack["sha256"] for pack in listed}
-        packs = sorted(directory / (digest + ".zib") for digest in catalog)
+        packs = sorted(directory / (digest + ".zx") for digest in catalog)
         missing = []
         for path in packs:
             digest = path.stem
-            gated = (directory / (digest + ".zib.product")).exists()
+            gated = (directory / (digest + ".zx.product")).exists()
             status = served(digest)
             if status == 404:
                 missing.append(path)
@@ -113,7 +113,7 @@ def main():
         archive = io.BytesIO()
         with tarfile.open(fileobj=archive, mode="w") as tar:
             for path in missing:
-                for suffix in (".zib.product", ".zib", ".zib.release-v2.json"):
+                for suffix in (".zx.product", ".zx", ".zx.release-v2.json"):
                     member = directory / (path.stem + suffix)
                     if member.exists():
                         info = tar.gettarinfo(str(member), arcname="inbe.practices/" + member.name)
@@ -125,13 +125,13 @@ def main():
         # Extract only into the practices folder, never over a file that is
         # already there: packs are immutable once served.
         command = ("set -e; cd " + STORE + " && tar -x --keep-old-files --no-same-permissions "
-                   "--wildcards 'inbe.practices/*' -f - && chmod 600 inbe.practices/*.zib*")
+                   "--wildcards 'inbe.practices/*' -f - && chmod 600 inbe.practices/*.zx*")
         subprocess.run(["ssh", "-o", "BatchMode=yes", TARGET, command],
                        input=archive.getvalue(), check=True)
         lines = []
         for path in missing:
             digest = path.stem
-            gated = (directory / (digest + ".zib.product")).exists()
+            gated = (directory / (digest + ".zx.product")).exists()
             if gated:
                 if served(digest) != 403:
                     raise SystemExit(f"paid pack {digest} is not withheld by the node")

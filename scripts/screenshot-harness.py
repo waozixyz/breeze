@@ -165,7 +165,7 @@ def contact_sheet(rows, bucket, output):
 
 def capture(binary):
     binary = Path(binary).resolve()
-    bundle = ROOT / "build/inbe-full.zib"
+    bundle = ROOT / "build/inbe-full.zx"
     require(binary.is_file() and os.access(binary, os.X_OK), "Run make native first")
     require(bundle.is_file(), "Run make cells first")
     require(binary.stat().st_mtime >= max(p.stat().st_mtime for p in (ROOT / "src").rglob("*.zi")), "native source is newer than the binary; rebuild")
@@ -229,7 +229,7 @@ def verify(output=OUTPUT, reviewed=False, current=True):
     require(value["config_sha256"] == digest(CONFIG), "scene definitions changed; recapture")
     if current:
         require(value["source_sha256"] == source_digest(), "source changed; rebuild and recapture before Play publishing")
-        require(value["binary_sha256"] == digest(value["binary"]) and value["bundle_sha256"] == digest(ROOT / "build/inbe-full.zib"), "build changed; recapture")
+        require(value["binary_sha256"] == digest(value["binary"]) and value["bundle_sha256"] == digest(ROOT / "build/inbe-full.zx"), "build changed; recapture")
         require(value["kryon_sha256"] == dependency_digest(value["kryon_source"]), "Kryon changed; recapture")
     for row in value["rows"]:
         scene = next(s for s in definition["scenes"] if s["slug"] == row["slug"])

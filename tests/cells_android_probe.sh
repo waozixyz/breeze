@@ -36,7 +36,7 @@ if [ -n "$existing" ]; then
     exit 1
 fi
 timeout 180 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "mkdir -p $remote"
-timeout 180 scp -q -o ConnectTimeout=10 "$work/probe.apk" "$work/android-armv7" build/inbe.zib build/inbe-full.zib "$host:$remote/"
+timeout 180 scp -q -o ConnectTimeout=10 "$work/probe.apk" "$work/android-armv7" build/inbe.zx build/inbe-full.zx "$host:$remote/"
 installed=0
 cleanup() {
     if [ "$installed" = 1 ]; then
@@ -53,23 +53,23 @@ timeout 180 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" "adb -s $serial sh
 timeout 180 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
     "adb -s $serial push $remote/android-armv7 $device_transfer/host-probe"
 timeout 180 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
-    "adb -s $serial push $remote/inbe.zib $device_transfer/inbe.zib"
+    "adb -s $serial push $remote/inbe.zx $device_transfer/inbe.zx"
 timeout 180 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
     "adb -s $serial shell run-as $package cp $device_transfer/host-probe files/probe/host-probe"
 timeout 180 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
-    "adb -s $serial shell run-as $package cp $device_transfer/inbe.zib files/probe/inbe.zib"
+    "adb -s $serial shell run-as $package cp $device_transfer/inbe.zx files/probe/inbe.zx"
 timeout 180 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
-    "adb -s $serial push $remote/inbe-full.zib $device_transfer/inbe-full.zib"
+    "adb -s $serial push $remote/inbe-full.zx $device_transfer/inbe-full.zx"
 timeout 180 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
-    "adb -s $serial shell run-as $package cp $device_transfer/inbe-full.zib files/probe/inbe-full.zib"
-expected=$(sha256sum build/inbe.zib | cut -d ' ' -f 1)
+    "adb -s $serial shell run-as $package cp $device_transfer/inbe-full.zx files/probe/inbe-full.zx"
+expected=$(sha256sum build/inbe.zx | cut -d ' ' -f 1)
 actual=$(timeout 180 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
-    "adb -s $serial shell run-as $package sha256sum files/probe/inbe.zib" | tr -d '\r' | cut -d ' ' -f 1)
+    "adb -s $serial shell run-as $package sha256sum files/probe/inbe.zx" | tr -d '\r' | cut -d ' ' -f 1)
 if [ "$actual" != "$expected" ]; then
     echo "Transferred root bundle hash differs from the built package" >&2
     exit 1
 fi
 echo "App-private root package transfer matches SHA-256 $expected"
 timeout 180 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" \
-    "adb -s $serial shell \"run-as $package sh -c 'chmod 700 files/probe/host-probe; cd files/probe; unset TMPDIR; id; ./host-probe inbe.zib inbe-full.zib'\""
+    "adb -s $serial shell \"run-as $package sh -c 'chmod 700 files/probe/host-probe; cd files/probe; unset TMPDIR; id; ./host-probe inbe.zx inbe-full.zx'\""
 echo 'Headless Android app-UID catalogs, package reload, root/nested loader and feature execution passed'

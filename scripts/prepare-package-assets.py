@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', default='build/package-assets',
                     help='Build directory for staged package assets')
-parser.add_argument('--apps-controller', type=Path, default=ROOT / 'build/apps-ui/apps.zib',
+parser.add_argument('--apps-controller', type=Path, default=ROOT / 'build/apps-ui/apps.zx',
                     help='Reviewed Apps controller to include in the root package')
 options = parser.parse_args()
 OUTPUT = (ROOT / options.output).resolve()
@@ -112,7 +112,7 @@ if apps_bundle.is_file():
     expected = re.search(r'AppsControllerSha256\s*::\s*"([0-9a-f]{64})"', source)
     if not expected or hashlib.sha256(controller).hexdigest() != expected[1]:
         raise SystemExit('Apps controller differs from the reviewed native digest')
-    destination = OUTPUT / 'inbe/assets/apps/apps.zib'
+    destination = OUTPUT / 'inbe/assets/apps/apps.zx'
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(controller)
 

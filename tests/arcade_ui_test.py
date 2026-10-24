@@ -28,12 +28,12 @@ assert int(os.environ.get("DISPLAY", ":0").split(":")[-1].split(".")[0]) >= 300
 ROOT = Path(__file__).resolve().parents[1]
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("binary", type=Path)
-parser.add_argument("package", type=Path, help="an Arcade package, arcade.zib")
+parser.add_argument("package", type=Path, help="an Arcade package, arcade.zx")
 parser.add_argument("--offline", action="store_true", help="the node cannot be reached")
 args = parser.parse_args()
 BINARY = args.binary.resolve(strict=True)
 PACKAGE = args.package.resolve(strict=True)
-assert PACKAGE.name == "arcade.zib", "INBE_NODE_APP_FILE names the app by its file: arcade.zib"
+assert PACKAGE.name == "arcade.zx", "INBE_NODE_APP_FILE names the app by its file: arcade.zx"
 OUTPUT = ROOT / "build/arcade-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 WIDTH, HEIGHT = 390, 844

@@ -24,11 +24,11 @@ for input in source saved; do
     output=$work/$input
     rm -rf "$output/c" "$output/cpp" "$output/go"
     mkdir -p "$output/c" "$output/cpp" "$output/go"
-    "$bin/zi2zib" bundle --root "$module_root" \
+    "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$module_path" \
         --entry modal_rules_behavior:Answer \
-        -o "$output/modal_rules.zib" "$file"
-    [ "$("$bin/zi2zib" run "$output/modal_rules.zib")" = 42 ]
+        -o "$output/modal_rules.zx" "$file"
+    [ "$("$bin/zi2zx" run "$output/modal_rules.zx")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$module_path" -o "$output/c" "$file"
@@ -68,5 +68,5 @@ GO
     GO111MODULE=off go test "$output/go"/*.go
 done
 
-cmp "$work/source/modal_rules.zib" "$work/saved/modal_rules.zib"
+cmp "$work/source/modal_rules.zx" "$work/saved/modal_rules.zx"
 echo "modal rules Ziran test passed"

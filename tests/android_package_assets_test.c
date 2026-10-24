@@ -7,8 +7,8 @@
 static NativeActivity activity;
 static NativeAndroidApp app;
 static int available;
-static uint8_t package_bytes[] = {'Z', 'I', 'B', 0, 26, 0, 0, 0};
-static uint8_t apps_bytes[] = {'Z', 'I', 'B', 0, 26, 0, 0, 0, 'A'};
+static uint8_t package_bytes[] = {'Z', 'X', 0, 0, 26, 0, 0, 0};
+static uint8_t apps_bytes[] = {'Z', 'X', 0, 0, 26, 0, 0, 0, 'A'};
 
 typedef struct {
     int fail_open;
@@ -31,10 +31,10 @@ void *AAssetManager_open(void *manager, uint8_t *path, int32_t mode)
     assert(manager == &activity);
     assert(mode == 3);
     TestAsset *asset;
-    if (strcmp((char *)path, "inbe.zib") == 0) {
+    if (strcmp((char *)path, "inbe.zx") == 0) {
         asset = &package_asset;
     } else {
-        assert(strcmp((char *)path, "apps.zib") == 0);
+        assert(strcmp((char *)path, "apps.zx") == 0);
         asset = &apps_asset;
     }
     asset->opens++;

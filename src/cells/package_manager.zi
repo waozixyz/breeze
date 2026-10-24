@@ -125,7 +125,7 @@ PackageWorkCancel :: () {
 }
 
 PackageWorkStart :: () -> bool {
-    path := PackagePath(package_index, ".download.zib")
+    path := PackagePath(package_index, ".download.zx")
     immutable := PackagePayloadPath(package_index, TextUntilNul(package_release.hash[:]))
     defer {
         PackageFree(path)
@@ -246,14 +246,27 @@ PackageTrustedRelease :: (metadata: string, index: s32) -> PackageRelease {
     return PackageParseRelease(metadata, index, TextFromCString(*key[0]))
 }
 
-PackagePayloadPath :: (index: s32, hash: string) -> string {
+PackagePayloadPath :: (index: s32, hash: string, extension: string = ".zx") -> string {
     suffix := PackageText(".", hash)
-    full_suffix := PackageText(suffix, ".zib")
+    full_suffix := PackageText(suffix, extension)
     defer {
         PackageFree(suffix);
         PackageFree(full_suffix)
     }
     return PackagePath(index, full_suffix)
+}
+
+// A release installed before the ZX format left its payload as .zib, which
+// this host cannot run. Free that space; the next update check installs the
+// app's ZX release.
+PackageLegacyPayloadRemove :: (index: s32, hash: string) {
+    legacy := PackagePayloadPath(index, hash, ".zib")
+    defer {
+        PackageFree(legacy)
+    }
+    if PackageFileSize(legacy) > 0 {
+        unused RemoveFile(legacy)
+    }
 }
 
 // A small signed descriptor can be captured on the frame thread before a
@@ -301,6 +314,9 @@ PackageInstalledBytes :: (index: s32) -> string {
     }
     bytes := PackageRead(path, PackageMaximumBytes)
     if !PackageVerifyBytes(bytes, release) {
+        if bytes.count == 0 {
+            PackageLegacyPayloadRemove(index, TextFromCString(*release.hash[0]))
+        }
         PackageFree(bytes)
         return ""
     }
@@ -616,14 +632,15 @@ PackageBucket :: () -> s32 {
     return bucket
 }
 
-// The node answers with the newest release this host can run.
+// The node answers with the newest release this host can run. Asking for
+// the ZX format keeps it from offering releases built for older hosts.
 PackageLatestQuery :: () -> string {
     return PackageReleaseQuery("/latest")
 }
 
 PackageReleaseQuery :: (route: string) -> string {
     out: Vec(u8)
-    BuilderPrint(*out, "%?host_api=%&module_api=%&bucket=%", route, cast(s32)PackageHostAPI,
+    BuilderPrint(*out, "%?host_api=%&module_api=%&bucket=%&format=zx", route, cast(s32)PackageHostAPI,
         cast(s32)PackageModuleAPI, PackageBucket())
     return BuilderFinish(out)
 }
@@ -1074,8 +1091,8 @@ PackageHighWaterMatches :: (index: s32, release: PackageRelease) -> bool {
 
 PackageBeginPayload :: () {
     suffix := PackageText("/", TextUntilNul(package_release.hash[:]))
-    full_suffix := PackageText(suffix, ".zib")
-    destination := PackagePath(package_index, ".download.zib")
+    full_suffix := PackageText(suffix, ".zx")
+    destination := PackagePath(package_index, ".download.zx")
     defer {
         PackageFree(suffix)
         PackageFree(full_suffix)

@@ -22,7 +22,7 @@ public class LocalNodeAppTest {
     }
 
     @Test public void ordinaryLaunchIgnoresOldArcadeAndPreservesItsFile() throws Exception {
-        File oldArcade = external.newFile("arcade.zib");
+        File oldArcade = external.newFile("arcade.zx");
         byte[] contents = "old developer campaign".getBytes(StandardCharsets.UTF_8);
         Files.write(oldArcade.toPath(), contents);
 
@@ -34,29 +34,29 @@ public class LocalNodeAppTest {
     }
 
     @Test public void explicitDebugLaunchCanStillUseOneBundle() throws Exception {
-        File bundle = external.newFile("arcade.zib");
+        File bundle = external.newFile("arcade.zx");
         external.newFile("notes.txt");
-        external.newFolder("directory.zib");
+        external.newFolder("directory.zx");
         assertEquals(bundle, LocalNodeApp.offered(true, requested(), external.getRoot()));
     }
 
     @Test public void localRequestDoesNotPersistAcrossNormalLaunches() throws Exception {
-        File bundle = external.newFile("arcade.zib");
+        File bundle = external.newFile("arcade.zx");
         assertEquals(bundle, LocalNodeApp.offered(true, requested(), external.getRoot()));
         assertNull(LocalNodeApp.offered(true, new Intent(Intent.ACTION_MAIN), external.getRoot()));
         assertNull(LocalNodeApp.offered(true, null, external.getRoot()));
     }
 
     @Test public void releaseBuildNeverOffersLocalBundles() throws Exception {
-        external.newFile("arcade.zib");
+        external.newFile("arcade.zx");
         assertNull(LocalNodeApp.offered(false, requested(), external.getRoot()));
     }
 
     @Test public void missingAndAmbiguousBundlesUseNormalPackages() throws Exception {
         assertNull(LocalNodeApp.offered(true, requested(), null));
         assertNull(LocalNodeApp.offered(true, requested(), external.getRoot()));
-        external.newFile("arcade.zib");
-        external.newFile("chess.zib");
+        external.newFile("arcade.zx");
+        external.newFile("chess.zx");
         assertNull(LocalNodeApp.offered(true, requested(), external.getRoot()));
         assertNull(LocalNodeApp.offered(true, requested(), new File(external.getRoot(), "missing")));
     }

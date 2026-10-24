@@ -145,7 +145,7 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
   const practiceFixture = url.pathname.replace('/__test_practice_content__/', '');
   if (url.pathname.startsWith('/__test_practice_content__/') &&
-      ['whm.zib', 'meditation.zib', 'sunsalutation.zib', 'patterns.zib', 'taichi.zib', 'taichi.en.zib', 'taichi.es.zib'].includes(practiceFixture)) {
+      ['whm.zx', 'meditation.zx', 'sunsalutation.zx', 'patterns.zx', 'taichi.zx', 'taichi.en.zx', 'taichi.es.zx'].includes(practiceFixture)) {
     const fixture = new URL('../build/practice-content/' + practiceFixture, import.meta.url);
     if (!existsSync(fixture)) {
       res.writeHead(404);
@@ -161,8 +161,8 @@ const server = createServer(async (req, res) => {
     createReadStream(new URL('../assets/sounds/bell.ogg', import.meta.url)).pipe(res);
     return;
   }
-  if (url.pathname === '/__test_cells__/lists.zib' ||
-      url.pathname === '/__test_cells__/practices.zib') {
+  if (url.pathname === '/__test_cells__/lists.zx' ||
+      url.pathname === '/__test_cells__/practices.zx') {
     const name = url.pathname.split('/').pop();
     const fixture = new URL('../build/cells/' + name, import.meta.url);
     if (!existsSync(fixture)) {
@@ -1729,9 +1729,9 @@ async function installPracticeContentFixtures(client) {
   await pageJson(client, `(async () => {
     FS.mkdirTree('/home/inbe/packages');
     for (const name of ['whm', 'meditation', 'sunsalutation', 'patterns', 'taichi', 'taichi.en', 'taichi.es']) {
-      const response = await fetch('/__test_practice_content__/' + name + '.zib');
+      const response = await fetch('/__test_practice_content__/' + name + '.zx');
       if (!response.ok) throw new Error('Missing practice fixture: ' + name);
-      FS.writeFile('/home/inbe/packages/practice-' + name + '.zib', new Uint8Array(await response.arrayBuffer()));
+      FS.writeFile('/home/inbe/packages/practice-' + name + '.zx', new Uint8Array(await response.arrayBuffer()));
     }
     ${wasmHookEvalHelper()}
     await callWasmHook('app_web_test_review_practice_cache');

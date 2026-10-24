@@ -28,13 +28,13 @@ with tempfile.TemporaryDirectory(prefix='settings-status-', dir=ROOT / 'build') 
     bundles = []
     for source, root in ((ROOT / 'tests/settings_status_behavior.zi', ROOT / 'tests'),
                          (ir / 'settings_status_behavior.zir', ir)):
-        bundle = work / ('source.zib' if source.suffix == '.zi' else 'saved.zib')
-        subprocess.run([BIN / 'zi2zib', 'bundle', '--root', root,
+        bundle = work / ('source.zx' if source.suffix == '.zi' else 'saved.zx')
+        subprocess.run([BIN / 'zi2zx', 'bundle', '--root', root,
                         '--entry', 'settings_status_behavior:main', '-o', bundle,
                         source], env=ENV, check=True)
-        result = subprocess.run([BIN / 'zi2zib', 'run', bundle], env=ENV,
+        result = subprocess.run([BIN / 'zi2zx', 'run', bundle], env=ENV,
                                 capture_output=True, text=True, check=True)
         assert result.stdout.strip() == '0', (result.stdout, result.stderr)
         bundles.append(bundle.read_bytes())
     assert bundles[0] == bundles[1]
-print('Settings status ownership, replacement and UTF-8 bounds passed native and source/saved Zib')
+print('Settings status ownership, replacement and UTF-8 bounds passed native and source/saved ZX')

@@ -24,11 +24,11 @@ for input in source saved; do
     output=$work/$input
     rm -rf "$output/c" "$output/cpp" "$output/go"
     mkdir -p "$output/c" "$output/cpp" "$output/go"
-    "$bin/zi2zib" bundle --root "$module_root" \
+    "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$library_path" \
         --entry breath_timing_behavior:Answer \
-        -o "$output/breath.zib" "$file"
-    [ "$("$bin/zi2zib" run "$output/breath.zib")" = 42 ]
+        -o "$output/breath.zx" "$file"
+    [ "$("$bin/zi2zx" run "$output/breath.zx")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$library_path" -o "$output/c" "$file"
@@ -64,5 +64,5 @@ GO
     GO111MODULE=off go test "$output/go"/*.go
 done
 
-cmp "$work/source/breath.zib" "$work/saved/breath.zib"
+cmp "$work/source/breath.zx" "$work/saved/breath.zx"
 echo "breath timing Ziran test passed"

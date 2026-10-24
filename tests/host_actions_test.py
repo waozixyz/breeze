@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-host-actions-') as temporary:
             display.stdout.close()
             env['DISPLAY'] = ':' + number
             binary = Path(sys.argv[1]).resolve()
-            app = subprocess.Popen([str(binary), '--bundle', str(ROOT / 'build/inbe-full.zib'),
+            app = subprocess.Popen([str(binary), '--bundle', str(ROOT / 'build/inbe-full.zx'),
                                     '--feature', 'habits'],
                                    cwd=ROOT, env=env, stdout=log, stderr=log)
 

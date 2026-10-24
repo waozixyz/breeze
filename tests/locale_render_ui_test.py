@@ -37,9 +37,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-locales-") as temporary:
     # All languages must exercise the same artifacts, even while an Android
     # build regenerates the shared cell bundles in the checkout.
     binary = Path(temporary) / "inbe"
-    bundle = Path(temporary) / "inbe.zib"
+    bundle = Path(temporary) / "inbe.zx"
     shutil.copy2(sys.argv[1], binary)
-    shutil.copy2(ROOT / "build/inbe.zib", bundle)
+    shutil.copy2(ROOT / "build/inbe.zx", bundle)
     for language in languages:
         profile = Path(temporary) / language
         profile.mkdir()

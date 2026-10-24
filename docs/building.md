@@ -94,7 +94,7 @@ make sync-server-test DAOCHI_BIN=/absolute/path/to/daochi
 This uses disposable client databases and a loopback server; see
 [web and sync test coverage](web-testing.md) for details.
 
-The Apps picker, independent ZIB packages, update settings, account choices and
+The Apps picker, independent ZX packages, update settings, account choices and
 publisher setup are described in [app packages](cells.md).
 
 Native binaries are written to `build/bin/<platform>/`. Release artifacts are

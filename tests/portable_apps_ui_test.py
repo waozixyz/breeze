@@ -58,11 +58,11 @@ def main():
 
     with contextlib.ExitStack() as stack:
         temporary = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="portable-apps-")))
-        diary = temporary / "diary.zib"
-        calculator = temporary / "calculator.zib"
+        diary = temporary / "diary.zx"
+        calculator = temporary / "calculator.zx"
         shutil.copyfile(args.diary, diary)
         shutil.copyfile(args.calculator, calculator)
-        assert not (temporary / "inbe.zib").exists()
+        assert not (temporary / "inbe.zx").exists()
         picked = temporary / "picked.png"
         Image.new("RGB", (400, 300), (128, 72, 176)).save(picked)
         tools = temporary / "bin"
@@ -260,7 +260,7 @@ def main():
             driver.wait(label="42", role="text")
         with inbe("inbe-calculator-restart", "--app", "calculator"):
             driver.wait(label="C", role="button")
-        print("One unchanged Diary bundle: standalone and Werkzeug editing, photo bytes/rendering, save on close and restart passed without inbe.zib")
+        print("One unchanged Diary bundle: standalone and Werkzeug editing, photo bytes/rendering, save on close and restart passed without inbe.zx")
         print("Werkzeug Calculator opened standalone and in Inbe, calculated by keypad and keyboard, and reopened after restart")
 
 

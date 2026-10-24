@@ -26,13 +26,13 @@ for input in source saved; do
     output=$work/$input
     rm -rf "$output/c" "$output/cpp" "$output/go"
     mkdir -p "$output/c" "$output/cpp" "$output/go"
-    "$bin/zi2zib" bundle --root "$module_root" \
+    "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$module_path" \
         --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
         --entry navigation_routes_behavior:Answer \
-        -o "$output/navigation_routes.zib" "$file"
-    [ "$("$bin/zi2zib" run "$output/navigation_routes.zib")" = 42 ]
+        -o "$output/navigation_routes.zx" "$file"
+    [ "$("$bin/zi2zx" run "$output/navigation_routes.zx")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$module_path" \
@@ -85,5 +85,5 @@ GO
     GO111MODULE=off go test "$output/go"/*.go
 done
 
-cmp "$work/source/navigation_routes.zib" "$work/saved/navigation_routes.zib"
+cmp "$work/source/navigation_routes.zx" "$work/saved/navigation_routes.zx"
 echo "navigation routes Ziran test passed"

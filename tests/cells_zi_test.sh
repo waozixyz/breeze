@@ -42,17 +42,17 @@ Main :: () -> s32 {
 }
 ZIRAN
     "$ziran" bundle --root "$work/$shape" --module-path "$root/build/packages/kryon/src/ui" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-        --define KRYON_HOSTED_UI --entry lists:Main -o "$work/$shape.zib" "$work/$shape/lists.zi"
+        --define KRYON_HOSTED_UI --entry lists:Main -o "$work/$shape.zx" "$work/$shape/lists.zi"
 done
 "$ziran" bundle --root "$root" --module-path "$root/build/packages/kryon/src/ui" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --define KRYON_HOSTED_UI --entry inbe:Main -o "$work/missing-assets.zib" \
+    --define KRYON_HOSTED_UI --entry inbe:Main -o "$work/missing-assets.zx" \
     "$root/apps/inbe/inbe.zi"
 mkdir -p "$work/invalid-nested"
-printf 'ZIB' > "$work/invalid-nested/lists.zib"
-cp "$bundles/cells/habits.zib" "$bundles/cells/practices.zib" "$work/invalid-nested/"
+printf 'ZX' > "$work/invalid-nested/lists.zx"
+cp "$bundles/cells/habits.zx" "$bundles/cells/practices.zx" "$work/invalid-nested/"
 "$ziran" bundle --root "$root" --module-path "$root/build/packages/kryon/src/ui" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --define KRYON_HOSTED_UI --entry inbe:Main \
-    --asset-dir "cells=$work/invalid-nested" -o "$work/invalid-nested.zib" \
+    --asset-dir "cells=$work/invalid-nested" -o "$work/invalid-nested.zx" \
     "$root/apps/inbe/inbe.zi"
 "$ziran" build --target=c --no-main --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
@@ -82,8 +82,8 @@ mkdir -p "$data/module-data"
 cp "$root/tests/fixtures/schema-1.8.9.sql" "$data/"
 cd "$data"
 env -u INBE_DIARY_IMPORT -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-    APP_DATA_ROOT="$data/module-data" "$work/test" "$bundles/cells/lists.zib" \
-    "$bundles/cells/habits.zib" "$bundles/cells/practices.zib" \
-    "$work/wrong-record.zib" "$work/wrong-scalar.zib" "$bundles/inbe-full.zib" \
-    "$work/missing-assets.zib" "$work/invalid-nested.zib" "$bundles/cells/diary.zib" "$bundles/cells/lumi.zib" \
-    "$bundles/cells/leaderboard.zib"
+    APP_DATA_ROOT="$data/module-data" "$work/test" "$bundles/cells/lists.zx" \
+    "$bundles/cells/habits.zx" "$bundles/cells/practices.zx" \
+    "$work/wrong-record.zx" "$work/wrong-scalar.zx" "$bundles/inbe-full.zx" \
+    "$work/missing-assets.zx" "$work/invalid-nested.zx" "$bundles/cells/diary.zx" "$bundles/cells/lumi.zx" \
+    "$bundles/cells/leaderboard.zx"

@@ -10,15 +10,15 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 source=$root/tests/meditation_timing_behavior.zi
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
     -o "$work/ir" "$source"
-"$bin/zi2zib" bundle --root "$root/tests" --module-path "$root/src" \
+"$bin/zi2zx" bundle --root "$root/tests" --module-path "$root/src" \
     --entry meditation_timing_behavior:Answer \
-    -o "$work/source.zib" "$source"
-"$bin/zi2zib" bundle --root "$work/ir" \
+    -o "$work/source.zx" "$source"
+"$bin/zi2zx" bundle --root "$work/ir" \
     --entry meditation_timing_behavior:Answer \
-    -o "$work/saved.zib" "$work/ir/meditation_timing_behavior.zir"
-cmp "$work/source.zib" "$work/saved.zib"
-test "$("$bin/zi2zib" run "$work/source.zib")" = 42
-test "$("$bin/zi2zib" run "$work/saved.zib")" = 42
+    -o "$work/saved.zx" "$work/ir/meditation_timing_behavior.zir"
+cmp "$work/source.zx" "$work/saved.zx"
+test "$("$bin/zi2zx" run "$work/source.zx")" = 42
+test "$("$bin/zi2zx" run "$work/saved.zx")" = 42
 
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
     -o "$work/c" "$source"

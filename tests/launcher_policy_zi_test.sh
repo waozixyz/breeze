@@ -23,11 +23,11 @@ for input in source saved; do
     fi
     output=$work/$input
     mkdir -p "$output/c" "$output/cpp" "$output/go"
-    "$bin/zi2zib" bundle --root "$module_root" \
+    "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$app_path" --module-path "$root/build/packages/ziran/std" \
         --entry launcher_policy_behavior:Answer \
-        -o "$output/policy.zib" "$file"
-    [ "$(env -u DISPLAY -u WAYLAND_DISPLAY "$bin/zi2zib" run "$output/policy.zib")" = 42 ]
+        -o "$output/policy.zx" "$file"
+    [ "$(env -u DISPLAY -u WAYLAND_DISPLAY "$bin/zi2zx" run "$output/policy.zx")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$app_path" -o "$output/c" "$file"
@@ -64,4 +64,4 @@ GO
     GO111MODULE=off go test "$output/go"/*.go
 done
 
-cmp "$work/source/policy.zib" "$work/saved/policy.zib"
+cmp "$work/source/policy.zx" "$work/saved/policy.zx"

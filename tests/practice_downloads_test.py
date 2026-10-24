@@ -20,9 +20,9 @@ fixtures = work / 'fixtures'
 compiler = ROOT / 'build/ziran-toolchain/bin/ziran'
 packs = []
 for name in NAMES:
-    data = (ROOT / 'build/practice-content' / (name + '.zib')).read_bytes()
+    data = (ROOT / 'build/practice-content' / (name + '.zx')).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
-    (fixtures / (digest + '.zib')).write_bytes(data)
+    (fixtures / (digest + '.zx')).write_bytes(data)
     pack = dict(practice=name, language='', sha256=digest, size=len(data))
     if name == 'taichi':
         pack['product'] = 'inbe.practice.taichi'
@@ -32,13 +32,13 @@ for code in ('en', 'es'):
     voice = assets / ('practices/taichi/voice/' + code)
     voice.mkdir(parents=True)
     (voice / 'test.ogg').write_bytes(b'fixture audio')
-    bundle = work / (code + '.zib')
+    bundle = work / (code + '.zx')
     subprocess.run([str(compiler), 'bundle', '--root', str(ROOT), '--entry', 'content:Main',
         '--asset-dir', 'assets=' + str(assets), '-o', str(bundle),
         str(ROOT / 'apps/practice/content.zi')], check=True)
     data = bundle.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
-    (fixtures / (digest + '.zib')).write_bytes(data)
+    (fixtures / (digest + '.zx')).write_bytes(data)
     packs.append(dict(practice='taichi', language=code, sha256=digest, size=len(data),
                       product='inbe.practice.taichi'))
 # The male recording is a separate English pack in its own folder.
@@ -46,13 +46,13 @@ assets = work / 'en-male' / 'assets'
 voice = assets / 'practices/taichi/voice-male/en'
 voice.mkdir(parents=True)
 (voice / 'test.ogg').write_bytes(b'fixture male audio')
-bundle = work / 'en-male.zib'
+bundle = work / 'en-male.zx'
 subprocess.run([str(compiler), 'bundle', '--root', str(ROOT), '--entry', 'content:Main',
     '--asset-dir', 'assets=' + str(assets), '-o', str(bundle),
     str(ROOT / 'apps/practice/content.zi')], check=True)
 data = bundle.read_bytes()
 digest = hashlib.sha256(data).hexdigest()
-(fixtures / (digest + '.zib')).write_bytes(data)
+(fixtures / (digest + '.zx')).write_bytes(data)
 packs.append(dict(practice='taichi', language='en', voice='male', sha256=digest, size=len(data),
                   product='inbe.practice.taichi'))
 # Lumi's guide lists its narration on its own, one free pack per language.
@@ -60,24 +60,24 @@ assets = work / 'guide-en' / 'assets'
 voice = assets / 'practices/guide/voice/en'
 voice.mkdir(parents=True)
 (voice / 'test.ogg').write_bytes(b'fixture guide audio')
-bundle = work / 'guide-en.zib'
+bundle = work / 'guide-en.zx'
 subprocess.run([str(compiler), 'bundle', '--root', str(ROOT), '--entry', 'content:Main',
     '--asset-dir', 'assets=' + str(assets), '-o', str(bundle),
     str(ROOT / 'apps/practice/content.zi')], check=True)
 data = bundle.read_bytes()
 digest = hashlib.sha256(data).hexdigest()
-(fixtures / (digest + '.zib')).write_bytes(data)
+(fixtures / (digest + '.zx')).write_bytes(data)
 guide = [dict(language='en', sha256=digest, size=len(data))]
 (fixtures / 'catalog.json').write_text(json.dumps(dict(schema=1, packs=packs, guide=guide)) + '\n')
-(fixtures / 'default-whm.zib').write_bytes((ROOT / 'build/practice-content/whm.zib').read_bytes())
-(fixtures / 'shipped-patterns.zib').write_bytes((ROOT / 'build/practice-content/patterns.zib').read_bytes())
+(fixtures / 'default-whm.zx').write_bytes((ROOT / 'build/practice-content/whm.zx').read_bytes())
+(fixtures / 'shipped-patterns.zx').write_bytes((ROOT / 'build/practice-content/patterns.zx').read_bytes())
 # Stale content in a stable cache slot must be verified and replaced.
-(fixtures / 'cache/packages/practice-whm.zib').write_bytes(b'old release')
-(fixtures / 'cache/packages/practice-taichi.fr.zib').write_bytes(b'retired language')
+(fixtures / 'cache/packages/practice-whm.zx').write_bytes(b'old release')
+(fixtures / 'cache/packages/practice-taichi.fr.zx').write_bytes(b'retired language')
 preserved = {
     'progress.json': b'preserve progress',
-    'practice-taichi.bad.zib': b'unrelated file',
-    'practice-taichix.zib': b'other namespace',
+    'practice-taichi.bad.zx': b'unrelated file',
+    'practice-taichix.zx': b'other namespace',
 }
 for name, data in preserved.items():
     (fixtures / 'cache/packages' / name).write_bytes(data)
@@ -106,12 +106,12 @@ subprocess.run([str(work / 'test'), str(fixtures)], check=True, timeout=120,
                env={key: value for key, value in os.environ.items()
                     if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')})
 cache = fixtures / 'cache/packages'
-assert not list(cache.glob('practice-taichi.??.zib'))
+assert not list(cache.glob('practice-taichi.??.zx'))
 # Removing Tai Chi forgets its removed languages; Lumi's guide keeps its own.
 assert not list(cache.glob('practice-taichi.*.removed'))
 assert (cache / 'practice-guide.en.removed').exists()
 # Wim Hof ends installed from the app's own copy, with no removal marker.
-assert not (cache / 'practice-whm.zib').exists() and not (cache / 'practice-whm.removed').exists()
+assert not (cache / 'practice-whm.zx').exists() and not (cache / 'practice-whm.removed').exists()
 for name, data in preserved.items():
     assert (cache / name).read_bytes() == data
 print('Practice downloads: verified content, corrupt-download retry, offline cache, narration in the app '

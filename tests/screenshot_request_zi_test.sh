@@ -8,11 +8,11 @@ source=$root/tests/screenshot_request_behavior.zi
 mkdir -p "$work/ir" "$work/c"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" -o "$work/ir" "$source"
-"$bin/zi2zib" bundle --root "$root/tests" --module-path "$root/src" \
+"$bin/zi2zx" bundle --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" \
     --entry screenshot_request_behavior:Answer \
-    -o "$work/request.zib" "$source"
-[ "$("$bin/zi2zib" run "$work/request.zib")" = 42 ]
+    -o "$work/request.zx" "$source"
+[ "$("$bin/zi2zx" run "$work/request.zx")" = 42 ]
 "$bin/zi2c" --no-main --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$source"

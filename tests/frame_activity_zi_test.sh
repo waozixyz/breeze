@@ -24,11 +24,11 @@ for input in source saved; do
     output=$work/$input
     rm -rf "$output/c" "$output/cpp" "$output/go"
     mkdir -p "$output/c" "$output/cpp" "$output/go"
-    "$bin/zi2zib" bundle --root "$module_root" \
+    "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$module_path" \
         --entry frame_activity_behavior:Answer \
-        -o "$output/frame_activity.zib" "$file"
-    [ "$("$bin/zi2zib" run "$output/frame_activity.zib")" = 42 ]
+        -o "$output/frame_activity.zx" "$file"
+    [ "$("$bin/zi2zx" run "$output/frame_activity.zx")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$module_path" -o "$output/c" "$file"
@@ -68,5 +68,5 @@ GO
     GO111MODULE=off go test "$output/go"/*.go
 done
 
-cmp "$work/source/frame_activity.zib" "$work/saved/frame_activity.zib"
+cmp "$work/source/frame_activity.zx" "$work/saved/frame_activity.zx"
 echo "frame activity Ziran test passed"

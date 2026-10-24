@@ -10,8 +10,8 @@ source=$root/tests/habit_session_rules_behavior.zi
 "$bin/ziran" bundle --root "$root" \
     --module-path "$root/src" \
     --entry habit_session_rules_behavior:Answer \
-    -o "$work/rules.zib" "$source"
-test "$("$bin/ziran" run "$work/rules.zib")" = 42
+    -o "$work/rules.zx" "$source"
+test "$("$bin/ziran" run "$work/rules.zx")" = 42
 
 "$bin/zi2c" --no-main --root "$root" \
     --module-path "$root/src" \

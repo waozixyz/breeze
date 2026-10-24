@@ -89,7 +89,7 @@ with tempfile.TemporaryDirectory() as temporary:
     rejects(lambda: harness.check_image(image, (1080, 1920)), "wrong viewport passed")
     rows = [dict(s, bucket=b["name"], width=320, height=320, file="screen.png", store_dir=b["store"], sha256=harness.digest(image)) for b in definition["buckets"] for s in definition["scenes"]]
     binary = output / "binary"
-    bundle = output / "build/inbe-full.zib"
+    bundle = output / "build/inbe-full.zx"
     bundle.parent.mkdir()
     binary.write_bytes(b"binary")
     bundle.write_bytes(b"bundle")

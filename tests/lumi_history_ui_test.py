@@ -69,7 +69,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
     def application(label):
         log_path = OUTPUT / (label + ".log")
         with log_path.open("w") as log:
-            app = subprocess.Popen([str(BINARY), "--bundle", str(ROOT / "build/inbe-full.zib")],
+            app = subprocess.Popen([str(BINARY), "--bundle", str(ROOT / "build/inbe-full.zx")],
                                    cwd=ROOT, env=env, stdout=log, stderr=log)
             driver.attach(app, log_path)
             try:

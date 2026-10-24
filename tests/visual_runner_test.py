@@ -74,7 +74,7 @@ class VisualRunnerTest(unittest.TestCase):
             output = root / "build/visual-test"
             output.mkdir(parents=True)
             binary = root / "build/app"
-            paths = [binary, root / "ziran.lock", root / "build/inbe.zib", root / "build/inbe-full.zib"]
+            paths = [binary, root / "ziran.lock", root / "build/inbe.zx", root / "build/inbe-full.zx"]
             for path in paths:
                 path.write_text("immutable\n")
             child = root / "child.py"

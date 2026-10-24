@@ -12,8 +12,8 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 "$bin/ziran" bundle --root "$root/tests" \
     --module-path "$root/src/platform/android" \
     --entry android_timer_policy_behavior:TimerPolicyCheck \
-    -o "$work/timer.zib" "$root/tests/android_timer_policy_behavior.zi"
-test "$("$bin/ziran" run "$work/timer.zib")" = 42
+    -o "$work/timer.zx" "$root/tests/android_timer_policy_behavior.zi"
+test "$("$bin/ziran" run "$work/timer.zx")" = 42
 "$bin/zi2c" --no-main --define ANDROID_BUILD --root "$root/src" \
     -o "$work/gen" "$root/src/platform/android/android_timer.zi" \
     "$root/src/platform/android/android_timer_host.zi" \

@@ -23,11 +23,11 @@ for input in source saved; do
     fi
     output=$work/$input
     mkdir -p "$output/c" "$output/cpp" "$output/go"
-    "$bin/zi2zib" bundle --root "$module_root" \
+    "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$app_path" \
         --entry exercise_types_behavior:Answer \
-        -o "$output/exercises.zib" "$file"
-    [ "$("$bin/zi2zib" run "$output/exercises.zib")" = 42 ]
+        -o "$output/exercises.zx" "$file"
+    [ "$("$bin/zi2zx" run "$output/exercises.zx")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$app_path" -o "$output/c" "$file"
@@ -63,5 +63,5 @@ GO
     GO111MODULE=off go test "$output/go"/*.go
 done
 
-cmp "$work/source/exercises.zib" "$work/saved/exercises.zib"
+cmp "$work/source/exercises.zx" "$work/saved/exercises.zx"
 echo "exercise types Ziran test passed"

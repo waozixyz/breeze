@@ -51,7 +51,7 @@ with contextlib.ExitStack() as stack:
     # open for the test. Its own start capture goes to a temporary folder.
     app = subprocess.Popen(
         [BINARY, "--screenshot", str(temporary / "start.png"),
-         "--bundle", str(ROOT / "build/inbe-full.zib"), "--feature", "lists",
+         "--bundle", str(ROOT / "build/inbe-full.zx"), "--feature", "lists",
          "--screenshot-scene", "lists", "--screenshot-width", "900", "--screenshot-height", "720",
          "--screenshot-ui-scale", "10", "--screenshot-theme", "0", "--screenshot-dark", "1"],
         env=os.environ | {"APP_SHOT_WINDOW": "1"} | driver.environment(),

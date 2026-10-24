@@ -132,13 +132,14 @@ bool __wrap_file_download_FileDownloadStart(FileDownload *download, String url, 
     if (strstr(target, ".history.download.json")) {
         char text[512];
         snprintf(text, sizeof(text), "%.*s", (int)url.length, url.data);
-        assert(strstr(text, "/history?host_api=") && strstr(text, "&module_api=") && strstr(text, "&bucket="));
+        assert(strstr(text, "/history?host_api=") && strstr(text, "&module_api=") && strstr(text, "&bucket=") &&
+               strstr(text, "&format=zx"));
         assert(download->maximum_bytes == 262144);
     } else if (strstr(target, ".download.json")) {
         char text[512];
         snprintf(text, sizeof(text), "%.*s", (int)url.length, url.data);
         const char *query = strstr(text, "/latest?host_api=");
-        assert(query && strstr(query, "&module_api=") && strstr(query, "&bucket="));
+        assert(query && strstr(query, "&module_api=") && strstr(query, "&bucket=") && strstr(query, "&format=zx"));
         assert(!latest_query[0] || strcmp(latest_query, query) == 0);
         snprintf(latest_query, sizeof(latest_query), "%s", query);
     }

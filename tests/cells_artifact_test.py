@@ -16,20 +16,20 @@ result = {
     "bundles": {},
     "deployment": False,
 }
-root_payload = (ROOT / "build/inbe.zib").read_bytes()
+root_payload = (ROOT / "build/inbe.zx").read_bytes()
 assert data.count(root_payload) == 1, "root payload missing or duplicated"
-assert b"inbe.zib\0" in data, "root asset name missing"
+assert b"inbe.zx\0" in data, "root asset name missing"
 result["root_bundle"] = {
     "sha256": hashlib.sha256(root_payload).hexdigest(),
     "bytes": len(root_payload),
     "embedded_identically": True,
 }
 for name in ("lumi", "habits", "practices", "lists", "diary"):
-    path = ROOT / "build/cells" / f"{name}.zib"
+    path = ROOT / "build/cells" / f"{name}.zx"
     payload = path.read_bytes()
     assert data.count(payload) == 1, f"{name} payload missing or duplicated"
     assert root_payload.count(payload) == 1, f"{name} is not the root's exact nested payload"
-    assert f"cells/{name}.zib".encode() in root_payload, name
+    assert f"cells/{name}.zx".encode() in root_payload, name
     result["bundles"][name] = {
         "sha256": hashlib.sha256(payload).hexdigest(),
         "bytes": len(payload),

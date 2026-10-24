@@ -47,8 +47,8 @@ def application(profile, label, standalone=False, recommended=False):
     global driver
     if driver is None:
         driver = UiDriver(OUTPUT / "driver")
-    bundle = ROOT / ("build/cells/lumi.zib" if standalone else
-                     "build/inbe.zib" if recommended else "build/inbe-full.zib")
+    bundle = ROOT / ("build/cells/lumi.zx" if standalone else
+                     "build/inbe.zx" if recommended else "build/inbe-full.zx")
     log_path = OUTPUT / f"{label}.log"
     with log_path.open("w") as log:
         app = subprocess.Popen([sys.argv[1], "--bundle", str(bundle)], cwd=ROOT,
@@ -433,8 +433,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
     # starts it. Meditation and Breathing Patterns come with the app.
     (profile / "packages").mkdir(exist_ok=True)
     for name in ("sunsalutation",):
-        shutil.copyfile(ROOT / "build/practice-content" / (name + ".zib"),
-                        profile / "packages" / ("practice-" + name + ".zib"))
+        shutil.copyfile(ROOT / "build/practice-content" / (name + ".zx"),
+                        profile / "packages" / ("practice-" + name + ".zx"))
     for label, command_text, practice_id in [
         ("meditation-typo", "start meditaiton", 1),
         ("meditation-uppercase", "START MEDITATION", 1),

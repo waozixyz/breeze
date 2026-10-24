@@ -26,8 +26,8 @@ class PackageSizeTest(unittest.TestCase):
             return MODULE.check(path, budgets)
 
     def test_one_shared_package_for_four_abis(self):
-        entries = {"assets/inbe.zib": b"portable program and artwork",
-                   "assets/apps.zib": b"reviewed Apps controller"}
+        entries = {"assets/inbe.zx": b"portable program and artwork",
+                   "assets/apps.zx": b"reviewed Apps controller"}
         for abi in ("arm64-v8a", "armeabi-v7a", "x86", "x86_64"):
             entries[f"lib/{abi}/libmain.so"] = b"native platform host"
         self.assertIn("4 ABI(s); one shared package", self.check_archive(entries))
@@ -38,46 +38,46 @@ class PackageSizeTest(unittest.TestCase):
 
     def test_duplicate_package_fails(self):
         with self.assertRaisesRegex(ValueError, "exactly one shared"):
-            self.check_archive({"assets/inbe.zib": b"package", "assets/copy/inbe.zib": b"package"})
+            self.check_archive({"assets/inbe.zx": b"package", "assets/copy/inbe.zx": b"package"})
 
     def test_native_library_has_no_individual_size_limit(self):
         for suffix in (".apk", ".aab"):
             with self.subTest(suffix=suffix):
                 prefix = "base/" if suffix == ".aab" else ""
                 self.assertIn("one shared package", self.check_archive({
-                    prefix + "assets/inbe.zib": b"package",
-                    prefix + "assets/apps.zib": b"controller",
+                    prefix + "assets/inbe.zx": b"package",
+                    prefix + "assets/apps.zx": b"controller",
                     prefix + "lib/x86/libmain.so": b"x" * 5_600_000,
                 }, suffix=suffix))
 
     def test_missing_native_library_fails(self):
         with self.assertRaisesRegex(ValueError, "Missing native application libraries"):
-            self.check_archive({"assets/inbe.zib": b"package",
-                                "assets/apps.zib": b"controller"})
+            self.check_archive({"assets/inbe.zx": b"package",
+                                "assets/apps.zx": b"controller"})
 
     def test_bundle_checks_delivered_payload_without_crash_symbols(self):
         self.assertIn("one shared package", self.check_archive({
-            "base/assets/inbe.zib": b"package", "base/assets/apps.zib": b"controller",
+            "base/assets/inbe.zx": b"package", "base/assets/apps.zx": b"controller",
             "base/lib/arm64-v8a/libmain.so": b"host",
             "BUNDLE-METADATA/com.android.tools.build.debugsymbols/symbols": b"symbol" * 10000,
         }, suffix=".aab", bundle_payload_bytes=100))
 
     def test_total_apk_budget_fails(self):
         with self.assertRaisesRegex(ValueError, "APK"):
-            self.check_archive({"assets/inbe.zib": b"package",
-                                "assets/apps.zib": b"controller",
+            self.check_archive({"assets/inbe.zx": b"package",
+                                "assets/apps.zx": b"controller",
                                 "lib/arm64-v8a/libmain.so": b"host"}, apk_single_abi_bytes=10)
 
     def test_missing_shared_controller_fails(self):
-        with self.assertRaisesRegex(ValueError, "exactly one shared assets/apps.zib"):
-            self.check_archive({"assets/inbe.zib": b"package",
+        with self.assertRaisesRegex(ValueError, "exactly one shared assets/apps.zx"):
+            self.check_archive({"assets/inbe.zx": b"package",
                                 "lib/arm64-v8a/libmain.so": b"host"})
 
     def test_duplicate_controller_fails(self):
-        with self.assertRaisesRegex(ValueError, "exactly one shared assets/apps.zib"):
-            self.check_archive({"assets/inbe.zib": b"package",
-                                "assets/apps.zib": b"controller",
-                                "assets/copy/apps.zib": b"controller",
+        with self.assertRaisesRegex(ValueError, "exactly one shared assets/apps.zx"):
+            self.check_archive({"assets/inbe.zx": b"package",
+                                "assets/apps.zx": b"controller",
+                                "assets/copy/apps.zx": b"controller",
                                 "lib/arm64-v8a/libmain.so": b"host"})
 
 

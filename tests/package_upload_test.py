@@ -37,7 +37,7 @@ class RestrictedUploadTest(unittest.TestCase):
         self.payloads = {}
         for name in release.NAMES:
             app_id = "inbe" if name == "inbe" else "inbe." + name
-            data = b"ZIB\0" + name.encode() + b"-fixture"
+            data = b"ZX\0\0" + name.encode() + b"-fixture"
             dependencies = []
             if name == "inbe":
                 for child in sorted(release.NAMES[:-1]):
@@ -59,7 +59,7 @@ class RestrictedUploadTest(unittest.TestCase):
         with tarfile.open(fileobj=stream, mode="w") as tar:
             for app_id, value in self.values.items():
                 entries = {"latest-v2.json": json.dumps(value).encode(),
-                           value["artifacts"][0]["sha256"] + ".zib": self.payloads[app_id]}
+                           value["artifacts"][0]["sha256"] + ".zx": self.payloads[app_id]}
                 for name, data in entries.items():
                     member = tarfile.TarInfo(app_id + "/" + name)
                     member.size = len(data)
@@ -79,7 +79,7 @@ class RestrictedUploadTest(unittest.TestCase):
         for app_id, value in self.values.items():
             self.assertEqual(json.loads((self.store / app_id / "latest-v2.json").read_bytes()), value)
             artifact = value["artifacts"][0]
-            self.assertEqual((self.store / app_id / (artifact["sha256"] + ".zib")).read_bytes(), self.payloads[app_id])
+            self.assertEqual((self.store / app_id / (artifact["sha256"] + ".zx")).read_bytes(), self.payloads[app_id])
             history = json.loads((self.store / app_id / "history-v2.json").read_bytes())
             self.assertEqual(history, dict(versions=[value]))
 

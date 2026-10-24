@@ -1,4 +1,4 @@
-"""Check ZIB resource inventories and the small native bootstrap table."""
+"""Check ZX resource inventories and the small native bootstrap table."""
 from pathlib import Path
 import re
 import struct
@@ -10,7 +10,7 @@ from animation_inventory import inventory
 from practice_content import NAMES
 
 def assets(data):
-    assert data[:8] == b'ZIB\0\x1a\0\0\0'
+    assert data[:8] == b'ZX\0\0\x1a\0\0\0'
     at = 8
     def number():
         nonlocal at
@@ -42,7 +42,7 @@ def assets(data):
     assert at == len(data)
     return result
 
-root = assets((ROOT / 'build/inbe.zib').read_bytes())
+root = assets((ROOT / 'build/inbe.zx').read_bytes())
 for name in ('diary', 'lists', 'habits', 'practices', 'leaderboard'):
     path = 'assets/apps/icons/' + name + '.png'
     assert root[path] == (ROOT / path).read_bytes(), f'missing or stale launcher icon: {name}'
@@ -51,15 +51,15 @@ for name in ('photos', 'radio', 'library'):
     assert root['assets/apps/icons/' + name + '.shape'] == shape
     assert shape.startswith(b'S') and len(shape) < 4096
 assert set(name for name in root if name.startswith('cells/')) == {
-    'cells/lumi.zib', 'cells/habits.zib', 'cells/practices.zib',
-    'cells/lists.zib', 'cells/diary.zib', 'cells/leaderboard.zib'}
-practices = assets(root['cells/practices.zib'])
+    'cells/lumi.zx', 'cells/habits.zx', 'cells/practices.zx',
+    'cells/lists.zx', 'cells/diary.zx', 'cells/leaderboard.zx'}
+practices = assets(root['cells/practices.zx'])
 import json
 catalog = json.loads(practices['assets/practices/catalog.json'])
 content = {}
 for pack in catalog['packs']:
     suffix = ('.' + pack['language'] if pack['language'] else '') + ('.' + pack['voice'] if pack.get('voice') else '')
-    data = (ROOT / 'build/practice-content' / (pack['practice'] + suffix + '.zib')).read_bytes()
+    data = (ROOT / 'build/practice-content' / (pack['practice'] + suffix + '.zx')).read_bytes()
     from hashlib import sha256
     assert len(data) == pack['size'] and sha256(data).hexdigest() == pack['sha256']
     content.update(assets(data))
@@ -67,13 +67,13 @@ for pack in catalog['packs']:
 codes = [line.split('|', 1)[0] for line in (ROOT / 'locales/index.txt').read_text().splitlines() if '|' in line]
 assert sorted(pack['language'] for pack in catalog['guide']) == sorted(codes)
 for pack in catalog['guide']:
-    data = (ROOT / 'build/practice-content' / ('guide.' + pack['language'] + '.zib')).read_bytes()
+    data = (ROOT / 'build/practice-content' / ('guide.' + pack['language'] + '.zx')).read_bytes()
     assert len(data) == pack['size'] and sha256(data).hexdigest() == pack['sha256']
     spoken = assets(data)
     folder = 'assets/practices/guide/voice/' + pack['language'] + '/'
     assert all(name.startswith(folder) for name in spoken), sorted(spoken)[:3]
     content.update(spoken)
-lumi = assets(root['cells/lumi.zib'])
+lumi = assets(root['cells/lumi.zx'])
 assert not any(name.endswith('.ogg') for name in lumi), [name for name in lumi if name.endswith('.ogg')][:3]
 combined = root | practices | content
 source = '\n'.join(path.read_text(errors='replace') for path in (ROOT / 'src').rglob('*.zi'))
@@ -110,10 +110,10 @@ for name in NAMES:
 # bytes; Sun Salutation and Tai Chi download.
 for name in ('whm', 'meditation', 'patterns', 'astral_projection', 'workout'):
     pack = next(pack for pack in catalog['packs'] if pack['practice'] == name and not pack['language'])
-    shipped = practices['assets/practices/default/' + name + '.zib']
+    shipped = practices['assets/practices/default/' + name + '.zx']
     assert len(shipped) == pack['size'] and sha256(shipped).hexdigest() == pack['sha256'], name
 assert {name for name in practices if name.startswith('assets/practices/default/')} == {
-    'assets/practices/default/' + name + '.zib'
+    'assets/practices/default/' + name + '.zx'
     for name in ('whm', 'meditation', 'patterns', 'astral_projection', 'workout')}
 assert not any(name.startswith('assets/practices/shipped/') for name in practices)
 paths, sources, unique_animation = inventory()
@@ -125,5 +125,5 @@ for index, original in enumerate(paths):
 assert not any('/characters/' in name or name.endswith('/course.zip') for name in practices)
 native = (ROOT / 'build/obj/inbe_embedded_assets.c').read_text()
 entries = set(re.findall(r'\{(?:\(uint8_t \*\))?"([^"\n]+)"', native))
-assert entries == {'assets/app/icon.png', 'apps/publishers.json', 'inbe.zib', 'apps.zib'}, entries
+assert entries == {'assets/app/icon.png', 'apps/publishers.json', 'inbe.zx', 'apps.zx'}, entries
 print(f'Package assets: {len(root)} root resources, {len(practices)} Practice resources; exact image/font/locale ownership passed')

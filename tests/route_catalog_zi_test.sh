@@ -29,11 +29,11 @@ for input in source saved; do
     output=$work/$input
     rm -rf "$output/c" "$output/cpp" "$output/go"
     mkdir -p "$output/c" "$output/cpp" "$output/go"
-    "$bin/zi2zib" bundle --root "$module_root" \
+    "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$app_path" --module-path "$ui_path" --module-path "$std_path" \
         --entry route_catalog_behavior:Answer \
-        -o "$output/routes.zib" "$file"
-    [ "$("$bin/zi2zib" run "$output/routes.zib")" = 42 ]
+        -o "$output/routes.zx" "$file"
+    [ "$("$bin/zi2zx" run "$output/routes.zx")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$app_path" --module-path "$ui_path" --module-path "$std_path" \
@@ -74,5 +74,5 @@ GO
     GO111MODULE=off go test "$output/go"/*.go
 done
 
-cmp "$work/source/routes.zib" "$work/saved/routes.zib"
+cmp "$work/source/routes.zx" "$work/saved/routes.zx"
 echo "route catalog Ziran test passed"

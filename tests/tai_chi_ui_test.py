@@ -18,7 +18,7 @@ OUTPUT.mkdir(parents=True, exist_ok=True)
 DESKTOP_KEYS = ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')
 assert all(not os.environ.get(key) for key in DESKTOP_KEYS), 'Inherited desktop environment'
 BINARY = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / 'build/bin/linux/breeze-linux-x86_64')
-BUNDLE = Path(sys.argv[2] if len(sys.argv) > 2 else ROOT / 'build/inbe-full.zib')
+BUNDLE = Path(sys.argv[2] if len(sys.argv) > 2 else ROOT / 'build/inbe-full.zx')
 
 
 def stop(process):
@@ -38,8 +38,8 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
     cache = Path(profile) / 'packages'
     cache.mkdir()
     for name in ('taichi', 'taichi.en'):
-        shutil.copyfile(ROOT / 'build/practice-content' / (name + '.zib'),
-                        cache / ('practice-' + name + '.zib'))
+        shutil.copyfile(ROOT / 'build/practice-content' / (name + '.zx'),
+                        cache / ('practice-' + name + '.zx'))
     driver = UiDriver(OUTPUT / 'driver')
     env = {key: value for key, value in os.environ.items() if key not in DESKTOP_KEYS}
     env.update(driver.environment())

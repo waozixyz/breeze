@@ -23,12 +23,12 @@ for input in source saved; do
     fi
     output=$work/$input
     mkdir -p "$output/c" "$output/cpp" "$output/go"
-    "$bin/zi2zib" bundle --root "$module_root" \
+    "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$app_path" \
         --module-path "$root/build/packages/ziran/std" \
         --entry settings_cache_behavior:Answer \
-        -o "$output/settings.zib" "$file"
-    [ "$(env -u DISPLAY -u WAYLAND_DISPLAY "$bin/zi2zib" run "$output/settings.zib")" = 42 ]
+        -o "$output/settings.zx" "$file"
+    [ "$(env -u DISPLAY -u WAYLAND_DISPLAY "$bin/zi2zx" run "$output/settings.zx")" = 42 ]
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$app_path" --module-path "$root/build/packages/ziran/std" \
@@ -68,7 +68,7 @@ GO
     GO111MODULE=off go test "$output/go"/*.go
 done
 
-cmp "$work/source/settings.zib" "$work/saved/settings.zib"
+cmp "$work/source/settings.zx" "$work/saved/settings.zx"
 mkdir -p "$work/source/c/app"
 cp "$work/source/c/settings_cache.h" "$work/source/c/app/settings_cache.h"
 cp "$work/source/c/settings_key.h" "$work/source/c/app/settings_key.h"

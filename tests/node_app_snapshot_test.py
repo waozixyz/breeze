@@ -47,9 +47,9 @@ def main():
                 chunk(b'IDAT', zlib.compress(pixel)) + chunk(b'IEND', b''))
         subprocess.run([str(args.ziran.resolve()), 'bundle', '--root', str(fixture),
                         '--entry', 'fixture:Main', '--asset-dir', f'assets/fixture={assets}',
-                        '-o', str(fixture / f'{name}.zib'), str(source)],
+                        '-o', str(fixture / f'{name}.zx'), str(source)],
                        cwd=root, env=environment, check=True)
-    (fixture / 'corrupt.zib').write_bytes(b'ZIB\0invalid envelope')
+    (fixture / 'corrupt.zx').write_bytes(b'ZX\0\0invalid envelope')
     package_paths = subprocess.check_output(['sh', str(root / 'scripts/package-paths.sh'),
                                             str(root / 'build/packages')], text=True).splitlines()
     module_paths = [item for path in ('src', 'build/packages/kryon/src/ui', 'build/packages/kryon/src/backend',
@@ -69,8 +69,8 @@ Main :: () -> s32 {
     return 0
 }
 ''')
-    leaf = fixture / 'leaf.zib'
-    packed_root = fixture / 'root.zib'
+    leaf = fixture / 'leaf.zx'
+    packed_root = fixture / 'root.zx'
     packed_assets = fixture / 'root-assets'
     packed_assets.mkdir(exist_ok=True)
     for target, assets in ((leaf, None), (packed_root, packed_assets)):
@@ -78,7 +78,7 @@ Main :: () -> s32 {
                    '--entry', 'fixture_app:Main', *module_paths, *package_paths,
                    '-o', str(target)]
         if assets is not None:
-            shutil.copyfile(leaf, packed_assets / 'leaf.zib')
+            shutil.copyfile(leaf, packed_assets / 'leaf.zx')
             command += ['--asset-dir', f'assets/fixture={assets}']
         command.append(str(guest))
         subprocess.run(command, cwd=root, env=environment, check=True)
@@ -117,11 +117,11 @@ Main :: () -> s32 {
         subprocess.run([str(work / 'test')], env=environment | {
             'APP_DATA_ROOT': profile,
             'ICON_CACHE_PATH': str(Path(profile) / 'fixture.icon'),
-            'IMAGE_REPLACEMENT_BUNDLE': str(fixture / 'replacement.zib'),
+            'IMAGE_REPLACEMENT_BUNDLE': str(fixture / 'replacement.zx'),
             'NODE_OPEN_ROOT_BUNDLE': str(packed_root),
             'NODE_OPEN_ROOT_SHA256': hashlib.sha256(packed_root.read_bytes()).hexdigest(),
             'NODE_OPEN_LEAF_SHA256': hashlib.sha256(leaf.read_bytes()).hexdigest(),
-            **{f'ICON_{name.upper()}_BUNDLE': str(fixture / f'{name}.zib')
+            **{f'ICON_{name.upper()}_BUNDLE': str(fixture / f'{name}.zx')
                for name in ('valid', 'invalid', 'empty', 'corrupt')},
         }, check=True)
     print('Installed apps: leaf discovery, background icons, stale-job isolation, deferred images and shared mappings passed')

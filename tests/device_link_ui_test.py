@@ -123,7 +123,7 @@ def setting(profile, key):
 def prepare(profile, server):
     """Creates a fresh profile and points it at the local mailbox."""
     driver = UiDriver(OUTPUT / "driver-first-start")
-    first = subprocess.Popen([BINARY, "--bundle", str(ROOT / "build/cells/lumi.zib")], cwd=ROOT,
+    first = subprocess.Popen([BINARY, "--bundle", str(ROOT / "build/cells/lumi.zx")], cwd=ROOT,
                              env=os.environ | {"APP_DATA_ROOT": str(profile)} | driver.environment(),
                              stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     driver.attach(first)
@@ -152,7 +152,7 @@ def application(profile, label, left, scan_file):
     log_path = OUTPUT / f"{label}.log"
     driver = UiDriver(OUTPUT / f"driver-{label}")
     with log_path.open("w") as log:
-        app = subprocess.Popen([BINARY, "--bundle", str(ROOT / "build/inbe-full.zib")], cwd=ROOT,
+        app = subprocess.Popen([BINARY, "--bundle", str(ROOT / "build/inbe-full.zx")], cwd=ROOT,
                                env=os.environ | {"APP_DATA_ROOT": str(profile),
                                                  "INBE_TEST_DEVICE_LINK_SCAN": str(scan_file)} |
                                driver.environment(),

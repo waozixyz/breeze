@@ -96,7 +96,7 @@ def application(profile, label, import_source=None, size=(900, 720)):
         environment = ENV | {"APP_DATA_ROOT": str(profile)} | driver.environment()
         if import_source is not None:
             environment["INBE_DIARY_IMPORT"] = str(import_source)
-        app = subprocess.Popen([sys.argv[1], "--bundle", str(ROOT / "build/cells/diary.zib")],
+        app = subprocess.Popen([sys.argv[1], "--bundle", str(ROOT / "build/cells/diary.zx")],
                                cwd=ROOT, env=environment,
                                stdout=log, stderr=subprocess.STDOUT)
         driver.attach(app)

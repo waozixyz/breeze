@@ -589,8 +589,9 @@ public class MainActivity extends NativeActivity {
     private static String loggedDownloadUrl(String url) {
         int query = url.indexOf('?');
         String path = query >= 0 ? url.substring(0, query) : url;
-        int pack = path.indexOf(".zib/");
-        return pack >= 0 ? path.substring(0, pack + 4) : path;
+        String bundle = ".zx";
+        int pack = path.indexOf(bundle + "/");
+        return pack >= 0 ? path.substring(0, pack + bundle.length()) : path;
     }
 
     public void startRuntimeAssetDownload(final String url, final String path,

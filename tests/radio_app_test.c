@@ -131,6 +131,6 @@ int main(int argc,char **argv) {
     assert(strstr(drawn,"55"));
     click=26002; run(instance,2); assert(starts==3 && volume==55 && strstr(station,"/ama-s"));
     BundleInstanceClose(instance); BundleClose(bundle);
-    puts("radio.zib: identity, station choices, playback, independent volume, navigation and saved preferences passed.");
+    puts("radio.zx: identity, station choices, playback, independent volume, navigation and saved preferences passed.");
     return 0;
 }

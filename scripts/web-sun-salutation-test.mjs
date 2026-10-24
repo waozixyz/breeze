@@ -94,7 +94,7 @@ export async function verifySunSalutationCanvas({ evaluate, click, scroll, resiz
   // Decode every shipped frame in the browser, including frames a slow device
   // can skip during playback. This verifies the separate practice content pack.
   const assets = await evaluate(`(async () => {
-    const response = await fetch('/__test_practice_content__/sunsalutation.zib');
+    const response = await fetch('/__test_practice_content__/sunsalutation.zx');
     if (!response.ok) throw new Error('Sun Salutation content is unavailable');
     const bundle = new Uint8Array(await response.arrayBuffer());
     const view = new DataView(bundle.buffer);
