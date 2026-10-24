@@ -37,6 +37,7 @@ GetFrameTime :: () -> float32 #foreign c;
 #import "modal_frame_widget"
 #import "modal_props"
 #import "text_widget"
+#import "text_measure"
 #import "toggle_widget"
 #import "drawing_props"
 #import "session"
@@ -225,8 +226,14 @@ whm_config_session_card_height :: () -> s32 {
     return AppScale(82) * 3 + AppScale(24)
 }
 
-whm_config_options_card_height :: () -> s32 {
-    return AppScale(88) * 4
+whm_config_options_card_height :: (content_w: s32) -> s32 {
+    hint_height := TextHeight(CurrentApp().ui.session, TextProps.{
+            .bounds = Rectangle.{0.0, 0.0,
+                cast(float32)(content_w - AppScale(44)), 0.0},
+            .text = LocaleText("whm_time_signals_hint"),
+            .font = AppScale(14)})
+    return AppScale(22) * 2 + AppScale(88) * 2 +
+    AppScale(26 + 48 + 12) + cast(s32)hint_height
 }
 
 whm_config_draw_breath_card :: (app: *InnerBreeze, content_x: s32, content_w: s32,
@@ -426,8 +433,19 @@ whm_config_draw_options_card :: (app: *InnerBreeze, content_x: s32, content_w: s
     double_tap_to_breathe := app.double_tap_to_breathe
     advanced_session_controls := app.advanced_session_controls
     retention_marker_enabled := app.retention_marker_enabled
-    minute_bell_enabled := app.minute_bell_enabled
-    card_h := whm_config_options_card_height()
+    signal_index: s32 = 0
+    if app.minute_bell_enabled != 0 {
+        signal_index += 1
+    }
+    if retention_marker_enabled != 0 {
+        signal_index += 2
+    }
+    signal_options: [4]DropdownOption
+    signal_options[0] = DropdownOption.{.label = LocaleText("whm_time_signals_off")}
+    signal_options[1] = DropdownOption.{.label = LocaleText("whm_time_signals_minute")}
+    signal_options[2] = DropdownOption.{.label = LocaleText("whm_time_signals_retention")}
+    signal_options[3] = DropdownOption.{.label = LocaleText("whm_time_signals_both")}
+    card_h := whm_config_options_card_height(content_w)
     card_pad := AppScale(22)
     inner_x := content_x + card_pad
     inner_w := content_w - card_pad * 2
@@ -482,39 +500,30 @@ whm_config_draw_options_card :: (app: *InnerBreeze, content_x: s32, content_w: s
 
     Text(CurrentApp().ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)(inner_x), cast(float32)(inner_y), 0, 0},
-            .text = (LocaleText("retention_marker_label")),
+            .text = LocaleText("whm_time_signals_label"),
             .wrap = cast(TextWrap)TextWrapNone
         })
-    marker_toggle := Toggle(CurrentApp().ui.session, ToggleProps.{.id = 1203,
-            .bounds = Rectangle.{cast(float32)(inner_x + inner_w - toggle_w),
-                cast(float32)(inner_y + (AppScale(60) - toggle_h) / 2),
-                cast(float32)toggle_w, cast(float32)toggle_h},
-            .value = retention_marker_enabled != 0,
-            .off_label = LocaleText("toggle_off"),
-            .on_label = LocaleText("toggle_on")})
-    if marker_toggle.changed {
-        app.retention_marker_enabled = ifx (marker_toggle.value) then (1) else (0)
-        app.retention_marker_last_bucket = 0
+    signal_pick := Dropdown(CurrentApp().ui.session, DropdownProps.{.id = 1203,
+            .bounds = Rectangle.{cast(float32)inner_x,
+                cast(float32)(inner_y + AppScale(26)),
+                cast(float32)inner_w, cast(float32)AppScale(48)},
+            .selected_index = signal_index}, signal_options[:])
+    if signal_pick.changed {
+        app.minute_bell_enabled = ifx (signal_pick.selected_index == 1 ||
+            signal_pick.selected_index == 3) then (1) else (0)
+        app.retention_marker_enabled = ifx (signal_pick.selected_index == 2 ||
+            signal_pick.selected_index == 3) then (1) else (0)
+        if app.retention_marker_enabled != retention_marker_enabled {
+            app.retention_marker_last_bucket = 0
+        }
         app.settings_dirty = 1
     }
-    inner_y += AppScale(88)
-
     Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(inner_x), cast(float32)(inner_y), 0, 0},
-            .text = (LocaleText("minute_bell_label")),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    minute_bell_toggle := Toggle(CurrentApp().ui.session, ToggleProps.{.id = 1204,
-            .bounds = Rectangle.{cast(float32)(inner_x + inner_w - toggle_w),
-                cast(float32)(inner_y + (AppScale(60) - toggle_h) / 2),
-                cast(float32)toggle_w, cast(float32)toggle_h},
-            .value = minute_bell_enabled != 0,
-            .off_label = LocaleText("toggle_off"),
-            .on_label = LocaleText("toggle_on")})
-    if minute_bell_toggle.changed {
-        app.minute_bell_enabled = ifx (minute_bell_toggle.value) then (1) else (0)
-        app.settings_dirty = 1
-    }
+            .bounds = Rectangle.{cast(float32)inner_x,
+                cast(float32)(inner_y + AppScale(86)),
+                cast(float32)inner_w, 0.0},
+            .text = LocaleText("whm_time_signals_hint"),
+            .font = AppScale(14)})
 
     return y + card_h + AppScale(16)
 }
@@ -578,7 +587,7 @@ whm_config_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
     app.modal.type != cast(ModalType)ModalPracticeConfig
     bottom_padding := (ifx (integrated) then (app_content_bottom_reserved(app)) else (0)) + AppScale(24)
 
-    return whm_config_breath_card_height(app) + AppScale(16) +            whm_config_session_card_height() + AppScale(16) +            whm_config_options_card_height() + AppScale(40) +            meditation_music_measure_practice_settings(app, EXERCISE_WIM_HOF,
+    return whm_config_breath_card_height(app) + AppScale(16) +            whm_config_session_card_height() + AppScale(16) +            whm_config_options_card_height(content_w) + AppScale(40) +            meditation_music_measure_practice_settings(app, EXERCISE_WIM_HOF,
         content_w, 0, 1) +            AppScale(12) +            AppScale(48) + AppScale(24) +            bottom_padding
 }
 
