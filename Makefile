@@ -483,7 +483,7 @@ WEB_CFLAGS := $(filter-out -Os -DNATIVE_WINDOW_HAVE_SDL,$(COMMON_CFLAGS)) -O2 -s
 CLICK_CFLAGS := -Wall -Wextra -std=c99 -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DDISABLE_KRYON_FILE_DIALOG -DHAS_LIBCURL=1 -DKRYON_WITH_SYNC=1 $(AARCH64_KRYON_CURL_CFLAGS)
 LDFLAGS := -Wl,--gc-sections -s
 WINDOWS_LDFLAGS := -Wl,--gc-sections -static -static-libgcc -mwindows
-WINDOWS_LDLIBS := -lgdi32 -lwinmm -lopengl32 -luser32 -lshell32 -lole32 -lcomdlg32 -lcomctl32 -luuid -lwininet -lws2_32 -liphlpapi -lcrypt32 -lsecur32 -lbcrypt -ladvapi32 -lz -lm -latomic
+WINDOWS_LDLIBS := -lgdi32 -lwinmm -lopengl32 -luser32 -lshell32 -lole32 -lcomdlg32 -lcomctl32 -luuid -lwininet -lws2_32 -liphlpapi -lcrypt32 -lsecur32 -lbcrypt -ladvapi32 -lz -lm -latomic -lpthread
 ifneq ($(strip $(MCFGTHREADS)),)
 WIN64_THREAD_LDFLAGS := -L$(MCFGTHREADS)/lib
 else
