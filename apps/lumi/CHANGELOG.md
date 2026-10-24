@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.5.12] - 2026-10-24
+
+- Lumi types with the same loading dots every app shows.
+
 ## [1.5.11] - 2026-10-23
 
 - Maintenance release for Inner Breeze 2.1.45.
