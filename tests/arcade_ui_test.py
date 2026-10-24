@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Arcade from More apps on a private display: Chess inside it, and Chess's replacement.
+"""Arcade from More apps on a private display: Shovey inside it, and Chess's replacement.
 
-The first profile installs a local Arcade package (INBE_NODE_APP_FILE), opens
-Chess from Arcade's library, plays the computer, queues that nested record for
-the profile's sync, goes back to the library and restores the game after a
-restart. Local packages have their own trust domain, so this game is Arcade's
-own, not an account's earlier Chess games.
+The first profile installs a local Arcade package (INBE_NODE_APP_FILE) through
+Apps' download dialog, opens Shovey's Classic from Arcade's library, moves
+Shovey, queues that nested record for the profile's sync, goes back to the
+library and finds Shovey where it was left after a restart. Local packages
+have their own trust domain, so this progress is Arcade's own.
 
 Two more profiles use only the node's cached offers. With Arcade offered,
 More apps leaves Chess out. An account that installed Chess gets Arcade
@@ -37,10 +37,9 @@ assert PACKAGE.name == "arcade.zx", "INBE_NODE_APP_FILE names the app by its fil
 OUTPUT = ROOT / "build/arcade-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 WIDTH, HEIGHT = 390, 844
-SQUARE_KEY = 8010
-PIECE_KEY = 8400
-START = {"a": "Rook", "b": "Knight", "c": "Bishop", "d": "Queen",
-         "e": "King", "f": "Bishop", "g": "Knight", "h": "Rook"}
+# A tap on the cell beside Shovey moves him there; portrait steps are left,
+# up, right and down on the screen.
+STEPS = ((-1, 0), (0, -1), (1, 0), (0, 1))
 SAVED_CHESS = "v=1;level=0;color=w;moves=e2e4 e7e5"
 driver = UiDriver(OUTPUT / "driver")
 
@@ -55,35 +54,6 @@ def wait_for(predicate, message, timeout=30):
             driver.tree()
             raise driver._failure(message)
         time.sleep(0.05)
-
-
-def square_index(square):
-    return (8 - int(square[1])) * 8 + ord(square[0]) - ord("a")
-
-
-def square_name(index):
-    return "abcdefgh"[index % 8] + str(8 - index // 8)
-
-
-def board():
-    return {square_name(node["key"] - PIECE_KEY): node["label"] for node in driver.tree()
-            if node["kind"] == "image" and node["visible"] and PIECE_KEY <= node["key"] < PIECE_KEY + 64}
-
-
-def start_position():
-    pieces = {}
-    for file, piece in START.items():
-        pieces[file + "1"] = piece
-        pieces[file + "8"] = piece
-        pieces[file + "2"] = "Pawn"
-        pieces[file + "7"] = "Pawn"
-    return pieces
-
-
-def play(pieces, move):
-    after = dict(pieces)
-    after[move[2:4]] = after.pop(move[0:2])
-    return after
 
 
 def button(label):
@@ -154,12 +124,10 @@ def prepare(profile, extra):
     return user
 
 
-def arcade_record_entry(profile, user):
-    """Chess's saved game inside Arcade, keyed to its verified nested identity."""
-    for key, value in settings(profile, user).items():
-        if re.fullmatch(r"nested\.[0-9a-f]{64}\.computer", key):
-            return key, value
-    return "", ""
+def arcade_records(profile, user):
+    """Shovey's records inside Arcade, keyed to its verified nested identity."""
+    return {key: value for key, value in settings(profile, user).items()
+            if re.fullmatch(r"nested\.[0-9a-f]{64}\.[a-z0-9._-]+", key)}
 
 
 def queued_entity(profile, key):
@@ -169,64 +137,107 @@ def queued_entity(profile, key):
         return row[0] if row else ""
 
 
-def saved_moves(profile, user):
-    _, record = arcade_record_entry(profile, user)
-    return record.split("moves=")[1].split() if "moves=" in record else []
+def library_shows_shovey():
+    """Arcade's cover: Shovey's Classic card and its Play button."""
+    driver.wait(label="Classic", role="text", timeout=30)
+    return wait_for(lambda: button("Play"), "Arcade's library has no Shovey card")
 
 
-def library_shows_chess():
-    driver.wait(label="Arcade")
-    return wait_for(lambda: button("Chess"), "Arcade's library has no Chess card")
+def open_arcade():
+    """Arcade from Apps. Before it is on the device, Apps asks first: Download
+    beside Cancel confirms, then Open once it is ready."""
+    driver.press(label="Apps", role="button")
+    press_button("arcade")
+    deadline = time.monotonic() + 60
+    while driver.find(label="Find an app", role="text_field", visible=True):
+        assert time.monotonic() < deadline, "Arcade did not open: " + ", ".join(driver.labels())
+        cancel = driver.find(label="Cancel", role="button", visible=True)
+        if cancel:
+            downloads = driver.find(label="Download", role="button", visible=True)
+            nearest = min(range(len(downloads)), key=lambda at: abs(downloads[at]["y"] - cancel[0]["y"]))
+            driver.press(label="Download", role="button", visible=True, index=nearest)
+        elif driver.find(label="Ready to open", role="text", visible=True):
+            driver.press(label="Open", role="button", visible=True)
+        time.sleep(0.1)
+
+
+def play_classic():
+    """Play on the cover opens the level; Shovey's first questions are
+    answered as a player would: no level downloads, swipe and tap."""
+    press_button("Play")
+    deadline = time.monotonic() + 30
+    while not driver.find(contains="Level 1 / ", role="text", visible=True) or \
+            driver.find(label="Not now", role="button", visible=True) or \
+            driver.find(label="How do you want to move?", role="text", visible=True):
+        assert time.monotonic() < deadline, "Shovey's level did not open: " + ", ".join(driver.labels())
+        if driver.find(label="Not now", role="button", visible=True):
+            driver.press(label="Not now", role="button")
+        elif driver.find(label="How do you want to move?", role="text", visible=True):
+            driver.press(contains="Swipe")
+        time.sleep(0.1)
+
+
+def shovey_cell():
+    found = [node for node in driver.tree() if node["label"] == "Shovey" and node["kind"] == "image" and
+             node["visible"]]
+    return (round(found[0]["x"]), round(found[0]["y"])) if found else None
+
+
+def move_shovey():
+    """Tap beside Shovey until he moves; return where he stands."""
+    start = wait_for(shovey_cell, "Shovey is not on the board")
+    me = [node for node in driver.tree() if node["label"] == "Shovey" and node["kind"] == "image"][0]
+    for dx, dy in STEPS:
+        x, y = me["x"] + me["width"] * (0.5 + dx), me["y"] + me["height"] * (0.5 + dy)
+        for down in (False, True, False):
+            driver.pointer(x, y, down=down)
+            driver.wait_idle(frames=1, timeout=1)
+        driver.release_pointer()
+        driver.wait_idle(frames=12, timeout=4)
+        now = shovey_cell()
+        if now and now != start:
+            return now
+    raise AssertionError("Shovey did not move from " + str(start))
 
 
 with tempfile.TemporaryDirectory(prefix="inbe-arcade-") as directory:
-    # Arcade from More apps, with Chess inside it.
+    # Arcade from More apps, with Shovey inside it.
     profile = Path(directory) / "arcade"
     profile.mkdir()
     user = prepare(profile, {})
     assert settings(profile, user).get("app_used_arcade") is None, "Arcade was installed for a new profile"
     app = launch(profile, "install")
     try:
-        driver.press(label="Apps", role="button")
-        press_button("arcade")
-        library_shows_chess()
-        press_button("Chess")
-        driver.wait(label="Hard", role="button")
-        driver.press(label="Easy", role="button")
-        driver.press(label="Start", role="button")
-        driver.wait(label="Your move")
+        open_arcade()
+        library_shows_shovey()
+        play_classic()
         driver.wait_gone(label="Apps", role="button")
-        position = start_position()
-        wait_for(lambda: board() == position, f"start position: {board()}")
-        driver.press(key=SQUARE_KEY + square_index("e2"))
-        driver.press(key=SQUARE_KEY + square_index("e4"))
-        moves = wait_for(lambda: (found if len(found := saved_moves(profile, user)) == 2 else None),
-                         "the computer did not answer e4 inside Arcade")
-        assert moves[0] == "e2e4", moves
-        position = play(play(position, "e2e4"), moves[1])
-        wait_for(lambda: board() == position, f"the board does not show {moves}")
+        cell = move_shovey()
+        records = wait_for(lambda: {key: value for key, value in arcade_records(profile, user).items()
+                                    if key.endswith(".campaign")} or None,
+                           "Shovey's progress is not in the profile's nested records")
         stored = settings(profile, user)
         assert stored.get("app_used_arcade") == "1", stored.get("app_used_arcade")
         assert stored.get("node_app_slot_0") == "arcade", stored.get("node_app_slot_0")
-        record_key, _ = arcade_record_entry(profile, user)
-        assert record_key, "Arcade's Chess progress is not in the profile's nested records"
-        assert queued_entity(profile, record_key) == "app_record", "Arcade progress was not queued for profile sync"
-        assert "cell.chess.computer" not in stored, "a local Arcade wrote an account's Chess records"
-        # Back leaves Chess for Arcade's library.
-        press_button("Back")
-        library_shows_chess()
+        record_key = next(iter(records))
+        wait_for(lambda: queued_entity(profile, record_key) == "app_record",
+                 "Arcade progress was not queued for profile sync")
+        # Shovey's own Back, below Inbe's title bar, leaves the level for
+        # Arcade's library.
+        backs = [node for node in driver.tree() if node["kind"] == "button" and node["visible"] and
+                 node["label"] == "Back"]
+        driver.press(key=max(backs, key=lambda node: node["y"])["key"])
+        library_shows_shovey()
         log = (OUTPUT / "install.log").read_text()
         assert "frame rejected" not in log and app.poll() is None, log
     finally:
         stop(app)
     app = launch(profile, "restart")
     try:
-        driver.press(label="Apps", role="button")
-        press_button("arcade")
-        library_shows_chess()
-        press_button("Chess")
-        driver.wait(label="Your move")
-        wait_for(lambda: board() == position, f"the saved game was not restored: {board()}")
+        open_arcade()
+        library_shows_shovey()
+        play_classic()
+        wait_for(lambda: shovey_cell() == cell, f"Shovey was not restored where he was left: {shovey_cell()}")
         log = (OUTPUT / "restart.log").read_text()
         assert "frame rejected" not in log and app.poll() is None, log
     finally:
@@ -270,5 +281,5 @@ with tempfile.TemporaryDirectory(prefix="inbe-arcade-") as directory:
         assert app.poll() is None, log
     finally:
         stop(app)
-print("Arcade: installed from More apps, Chess played inside it and restored after a restart; "
+print("Arcade: installed from More apps, Shovey played inside it and restored after a restart; "
       "Chess left out of More apps next to Arcade, and an account with Chess is offered Arcade to download")
