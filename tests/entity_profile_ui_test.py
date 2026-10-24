@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/entity-profile-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 BINARY = Path(sys.argv[1]).resolve()
+FRIENDS_ONLY = "--friends-only" in sys.argv[2:]
 DESKTOP_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
                "SESSION_MANAGER", "GDK_DISPLAY")
 assert all(not os.environ.get(key) for key in DESKTOP_ENV), "Inherited desktop environment"
@@ -86,8 +87,9 @@ with contextlib.ExitStack() as stack:
         assert account["x"] + account["width"] <= settings["x"], "Profile is not left of Settings"
         driver.press(focus_id=6792, role="button")
         driver.wait(label="Change picture", role="button")
-        driver.wait(label="Dew balance", role="text")
-        assert not driver.find(label="Dew balance", role="button"), "Dew is still a separate shortcut"
+        if not FRIENDS_ONLY:
+            driver.wait(label="Dew balance", role="text")
+            assert not driver.find(label="Dew balance", role="button"), "Dew is still a separate shortcut"
         assert not driver.find(label="Name", role="text_field"), "Removed Name field is visible"
         assert not driver.find(label="Intention", role="text_field"), "Removed Intention field is visible"
         assert len(driver.find(role="title_bar", visible=True)) == 1
@@ -110,36 +112,71 @@ with contextlib.ExitStack() as stack:
         saved = json.loads(shared.read_text())
         saved.update(name="Existing desktop name", intention="Existing private intention")
         shared.write_text(json.dumps(saved) + "\n")
-    with application("edit"):
+    if not FRIENDS_ONLY:
+        with application("edit"):
+            open_profile()
+            driver.wait(label="Manage data", role="button")
+            for label in ("Today", "Active days", "Sessions"):
+                driver.wait(label=label, role="text", visible=False)
+            assert not driver.find(label="Progress", role="button"), "Activity still uses a separate row"
+            driver.press(label="Change picture", role="button")
+            driver.wait(label="Profile picture", role="button")
+            driver.press(label="Profile picture", role="button", index=1)
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline:
+                if shared.exists() and json.loads(shared.read_text()).get("picture") == 1:
+                    break
+                time.sleep(.05)
+            document = json.loads(shared.read_text())
+            assert document["picture"] == 1, "Picture edit was not saved"
+            assert document["name"] == "Existing desktop name", "Hidden name was changed"
+            assert document["intention"] == "Existing private intention", "Hidden intention was changed"
+            assert document["owner_id"] == owner, "Entity used a different account"
+            assert credentials() == before, "Editing Entity changed Inbe account keys"
+            assert not (Path(environment["ENTITY_DATA"]) / "account.key").exists(), "Entity made another account"
+            driver.press(label="Done", role="button")
+            driver.wait(label="Dew balance", role="text")
+        with application("restart"):
+            open_profile()
+            driver.press(label="Change picture", role="button")
+            pictures = driver.find(label="Profile picture", role="button", visible=True)
+            assert len(pictures) > 1 and pictures[1].get("selected"), "Picture edit was lost after restart"
+            assert credentials() == before, "Restart changed Inbe account keys"
+            assert json.loads(shared.read_text())["owner_id"] == owner
+
+    with sqlite3.connect(profile / "inbe.db") as database:
+        user = database.execute("SELECT user_id FROM settings WHERE key='sync_public_id' "
+                                "AND length(value)=64 LIMIT 1").fetchone()[0]
+        friends = {"friends": [{"user_id_hash": "a" * 64, "alias": "willow", "profile_icon": 55},
+                               {"user_id_hash": "b" * 64, "alias": "river", "profile_icon": 1},
+                               {"user_id_hash": "c" * 64, "alias": "fern"}]}
+        database.execute("INSERT INTO social_snapshots(user_id,kind,json,updated_at) VALUES(?,?,?,2) "
+                         "ON CONFLICT(user_id,kind) DO UPDATE SET json=excluded.json",
+                         (user, "friends.list", json.dumps(friends)))
+    with application("friends") as process:
         open_profile()
-        driver.wait(label="Manage data", role="button")
-        for label in ("Today", "Active days", "Sessions"):
-            driver.wait(label=label, role="text", visible=False)
-        assert not driver.find(label="Progress", role="button"), "Activity still uses a separate row"
-        driver.press(label="Change picture", role="button")
-        driver.wait(label="Profile picture", role="button")
-        driver.press(label="Profile picture", role="button", index=1)
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            if shared.exists() and json.loads(shared.read_text()).get("picture") == 1:
-                break
-            time.sleep(.05)
-        document = json.loads(shared.read_text())
-        assert document["picture"] == 1, "Picture edit was not saved"
-        assert document["name"] == "Existing desktop name", "Hidden name was changed"
-        assert document["intention"] == "Existing private intention", "Hidden intention was changed"
-        assert document["owner_id"] == owner, "Entity used a different account"
-        assert credentials() == before, "Editing Entity changed Inbe account keys"
-        assert not (Path(environment["ENTITY_DATA"]) / "account.key").exists(), "Entity made another account"
-        driver.press(label="Done", role="button")
-        driver.wait(label="Dew balance", role="text")
-    with application("restart"):
-        open_profile()
-        driver.press(label="Change picture", role="button")
-        pictures = driver.find(label="Profile picture", role="button", visible=True)
-        assert len(pictures) > 1 and pictures[1].get("selected"), "Picture edit was lost after restart"
-        assert credentials() == before, "Restart changed Inbe account keys"
-        assert json.loads(shared.read_text())["owner_id"] == owner
+        driver.press(label="Friends", role="button")
+        rows = [driver.wait(label="@" + name, role="button") for name in ("willow", "river", "fern")]
+        for row in rows:
+            picture = driver.wait(label=row["label"], role="image")
+            assert picture["width"] >= 40 and picture["height"] >= 40, picture
+            assert picture["x"] + picture["width"] < row["x"], "Picture overlaps friend name"
+        for first, second in zip(rows, rows[1:]):
+            assert second["y"] - first["y"] >= 64, "Friend rows lack spacing"
+        assert credentials() == before, "Friends changed account keys"
+        destination = os.environ.get("BREEZE_FRIENDS_CAPTURE")
+        if destination:
+            assert display.poll() is None
+            assert Path(f"/proc/{display.pid}/exe").resolve().name == "Xvfb"
+            assert "-displayfd" in display.args and number.isdecimal()
+            window = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--pid", str(process.pid)],
+                                             env=environment, text=True).splitlines()[0]
+            assert subprocess.check_output(["xdotool", "getwindowpid", window], env=environment,
+                                           text=True).strip() == str(process.pid)
+            output = Path(destination)
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.with_suffix(".source.txt").write_text(repr((display.pid, display.args, number, process.pid, window)))
+            subprocess.run(["import", "-window", window, str(output)], env=environment, check=True)
 
     with sqlite3.connect(profile / "inbe.db") as database:
         user = database.execute("SELECT user_id FROM settings WHERE key='sync_public_id' "
@@ -153,17 +190,18 @@ with contextlib.ExitStack() as stack:
                              "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,"
                              "updated_at=excluded.updated_at",
                              (user, key, value))
-    with application("about-installed"):
-        driver.press(label="Apps", role="button")
-        driver.press(label="Settings", role="button")
-        driver.press(label="About", role="button")
-        driver.wait(label="App versions", role="text")
-        labels = [node["label"] for node in driver.tree() if node["visible"]]
-        versions = [label for label in labels if " · " in label]
-        assert any(label.startswith("Habits · ") for label in versions), versions
-        assert not any(label.startswith(("Photos · ", "Lists · ", "Practice · ",
-                                         "Diary · ", "Lumi · ", "Leaderboard · "))
-                       for label in versions), versions
-        assert "Show beta apps" not in labels, "Removed beta setting is still visible"
+    if not FRIENDS_ONLY:
+        with application("about-installed"):
+            driver.press(label="Apps", role="button")
+            driver.press(label="Settings", role="button")
+            driver.press(label="About", role="button")
+            driver.wait(label="App versions", role="text")
+            labels = [node["label"] for node in driver.tree() if node["visible"]]
+            versions = [label for label in labels if " · " in label]
+            assert any(label.startswith("Habits · ") for label in versions), versions
+            assert not any(label.startswith(("Photos · ", "Lists · ", "Practice · ",
+                                             "Diary · ", "Lumi · ", "Leaderboard · "))
+                           for label in versions), versions
+            assert "Show beta apps" not in labels, "Removed beta setting is still visible"
 
-print("Entity desktop: inline Dew/Activity, preserved hidden fields, host account, saved picture, restart and installed-only About passed")
+print("Friends profile pictures, legacy choices, fallback picture, spaced rows and account preservation passed" if FRIENDS_ONLY else "Entity desktop: inline Dew/Activity, preserved hidden fields, host account, saved picture, restart and installed-only About passed")
