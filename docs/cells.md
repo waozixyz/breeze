@@ -696,9 +696,14 @@ picker on a private Xvfb display.
 
 ## Account app choices
 
-A new profile comes with Lumi, Habits and Practice installed and pinned, in
-that order; Lists, Diary and Leaderboard are added from More apps. Existing
-profiles keep their apps.
+A new profile comes with every app Inner Breeze ships installed: Lumi, Habits
+and Practice pinned, in that order, and Lists, Diary and Leaderboard ready
+under them. Existing profiles keep their apps; a profile whose Lists, Diary or
+Leaderboard choice is still the untouched default gets that app installed
+(`storage_migrate_preinstalled_apps`), while a removal stays removed. Each
+release builds these apps from the current source into the app, so it ships
+their newest versions; a package the node publishes later reaches devices as
+an update, and an older one never replaces the shipped copy.
 
 Sync v6 uses `private.inbe.v1.app-preferences`. Each of the six `app_used_*`
 keys is a separate timestamped record, including explicit zero values for

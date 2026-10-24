@@ -730,7 +730,7 @@ with contextlib.ExitStack() as stack:
                 assert settings(profile)["language_setup_done"] == "0", "Fresh start skipped the language picker"
                 assert settings(profile)["apps_setup_done"] == "0"
                 assert favorites(profile) == [12, 1, 2], "New profiles do not pin Lumi, Habits and Practice"
-                assert settings(profile)["enabled_apps"] == "55", "Lists and Leaderboard must ship preinstalled alongside Lumi, Habits and Practice"
+                assert settings(profile)["enabled_apps"] == "63", "Lists, Diary and Leaderboard must ship preinstalled alongside Lumi, Habits and Practice"
                 assert settings(profile)["theme"] == "9" and settings(profile)["theme_source"] == "0"
                 assert settings(profile)["theme_mode"] == "2"
             # Merely opening and closing the picker does not complete setup.
@@ -753,7 +753,7 @@ with contextlib.ExitStack() as stack:
                 wait_setting(profile, "package_updates_allowed", 0)
                 driver.wait_gone(label="Don't allow", role="button")
                 assert not driver.find(label="More apps"), "The old section heading remains"
-                for label in ("Lists", "Leaderboard"):
+                for label in ("Lists", "Diary", "Leaderboard"):
                     card = next(node for node in cards()[1] if node["label"] == label)
                     assert corner(card, driver.tree())["label"] == "App options", f"{label} is not preinstalled"
                 # Practice is the third pinned card in the same grid as the rest.

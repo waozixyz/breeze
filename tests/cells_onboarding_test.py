@@ -150,10 +150,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         saved = settings(profile)
         assert saved["apps_setup_done"] == "0"
         assert saved["language_setup_done"] == "1"
-        # A new profile comes with Lumi, Habits and Practice, pinned in that
-        # order. They are defaults, not choices: stored at time 1 and not
-        # queued, so an account's apps replace them after sign-in.
-        assert saved["enabled_apps"] == "55"
+        # A new profile comes with every app the app ships, Lumi, Habits and
+        # Practice pinned in that order. They are defaults, not choices:
+        # stored at time 1 and not queued, so an account's apps replace them
+        # after sign-in.
+        assert saved["enabled_apps"] == "63"
         assert saved["launcher_favorite_count"] == "3"
         assert [int(saved[f"launcher_favorite_{i}"]) for i in range(3)] == [12, 1, 2]
         with database(profile) as db:
@@ -161,7 +162,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
                 "SELECT key,value,updated_at FROM settings WHERE key LIKE 'app_used_%'")}
             queued = db.execute("SELECT COUNT(*) FROM sync_outbox WHERE entity_type IN "
                                 "('app_preference','app_order')").fetchone()[0]
-        assert defaults == {f"app_used_{name}": (str(int(name in ("lists", "habits", "practices", "lumi", "leaderboard"))), 1)
+        assert defaults == {f"app_used_{name}": ("1", 1)
                             for name in ("lists", "habits", "practices", "diary", "lumi", "leaderboard")}, defaults
         assert queued == 0, "a new profile queued its default apps"
         assert "app_order" not in saved, "a new profile sent its default pins"
@@ -284,8 +285,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         db.execute("UPDATE settings SET value='1' WHERE key IN ('tutorial_seen','habits_guide_seen')")
         db.execute("UPDATE settings SET value='0' WHERE key='main_tab'")
     with application(profile, "existing-profile") as (window, log):
-        # Upgrading also installs Leaderboard once, without pinning it.
-        wait_setting(profile, "enabled_apps", 55)
+        # A profile that never chose its apps gets every app the app ships,
+        # without pinning them.
+        wait_setting(profile, "enabled_apps", 63)
         wait_setting(profile, "main_tab", 0)
         routes = [int(settings(profile)[f"bottom_nav_route_{index}"])
                   for index in range(int(settings(profile)["bottom_nav_route_count"]))]
