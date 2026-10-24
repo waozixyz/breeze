@@ -1,26 +1,76 @@
 #import, file "../src/core/types.zi";
 #import, file "../src/core/breath_timing.zi";
+#import "hold_reminder"
 
 using BreathAnimation;
 
+CheckHoldReminders :: () -> bool {
+    intervals: [2]s32 = .[30, 60]
+    for index: 0..1 {
+        interval := intervals[index]
+        bucket: s32 = 0
+        rings: s32 = 0
+        // Starting, breathing, and recovery do not accumulate reminders.
+        before_hold := HoldReminderAdvance(false, 120, interval, 3)
+        if before_hold.ring || before_hold.last_bucket != 0 {
+            return false
+        }
+        for second: cast(s32)0..125 {
+            reminder := HoldReminderAdvance(true, second, interval, bucket)
+            if reminder.ring {
+                if second == 0 || second % interval != 0 {
+                    return false
+                }
+                rings += 1
+            }
+            bucket = reminder.last_bucket
+            // Multiple frames, or a pause at a boundary, never repeat it.
+            repeated := HoldReminderAdvance(true, second, interval, bucket)
+            if repeated.ring || repeated.last_bucket != bucket {
+                return false
+            }
+        }
+        if rings != 120 / interval {
+            return false
+        }
+        next_round := HoldReminderAdvance(false, 0, interval, bucket)
+        if next_round.ring || next_round.last_bucket != 0 ||
+        HoldReminderAdvance(true, 0, interval, next_round.last_bucket).ring {
+            return false
+        }
+    }
+    skipped := HoldReminderAdvance(true, 61, 60, 0)
+    if !skipped.ring || skipped.last_bucket != 1 ||
+    HoldReminderAdvance(true, 61, 60, skipped.last_bucket).ring ||
+    HoldReminderAdvance(true, 120, 0, 0).ring ||
+    HoldReminderAdvance(true, 120, 17, 0).ring ||
+    HoldReminderAdvance(true, -1, 60, 0).ring {
+        return false
+    }
+    return true
+}
+
 #program_export
 Answer :: () -> s32 {
+    if !CheckHoldReminders() {
+        return -30
+    }
     if BreathHalfTicksForSpeed(0) != 180 ||
     BreathHalfTicksForSpeed(6) != 108 ||
     BreathHalfTicksForSpeed(9) != 74 { return -1 }
 
     digits: [CountSize]u8
     if !BreathDigitsWrite(digits[:], 37) ||
-        BreathDigitsRead(digits[:]) != 37 || digits[0] != cast(u8)48 ||
-        digits[1] != cast(u8)51 || digits[2] != cast(u8)55 ||
-        digits[3] != 0 {
+    BreathDigitsRead(digits[:]) != 37 || digits[0] != cast(u8)48 ||
+    digits[1] != cast(u8)51 || digits[2] != cast(u8)55 ||
+    digits[3] != 0 {
         return -21
     }
     if !BreathDigitsWrite(digits[:], -10) ||
-        BreathDigitsRead(digits[:]) != 0 ||
-        !BreathDigitsWrite(digits[:], 2000) ||
-        BreathDigitsRead(digits[:]) != 999 ||
-        BreathDigitsWrite(digits[0:3], 10) {
+    BreathDigitsRead(digits[:]) != 0 ||
+    !BreathDigitsWrite(digits[:], 2000) ||
+    BreathDigitsRead(digits[:]) != 999 ||
+    BreathDigitsWrite(digits[0:3], 10) {
         return -22
     }
 
@@ -37,7 +87,7 @@ Answer :: () -> s32 {
     bounds.count[2] = cast(u8)50
     bounds = BreathResetRoundBreathe(bounds)
     if bounds.phase != BreathPhaseBreathe || bounds.r != bounds.rmin ||
-        BreathCountValue(bounds) != 0 {
+    BreathCountValue(bounds) != 0 {
         return -24
     }
 

@@ -17,6 +17,7 @@ client = root / "build/packages/daochi-client"
 game2d = root / "build/packages/game2d/src"
 sources = sorted((root / "src").rglob("*.zi"))
 sources.append(root / "apps/practice/downloads_view.zi")
+sources.append(root / "apps/practice/hold_reminder.zi")
 legacy = sorted((root / "src").rglob("*.kry"))
 
 if legacy:

@@ -1,6 +1,7 @@
-#import, file "../../cells/shared_state.zi";
-#import, file "../../cells/module_host.zi";
-#import, file "../../cells/practice_types.zi";
+#import "shared_state"
+#import "module_host"
+#import "practice_types"
+#import "hold_reminder"
 c :: #system_library "c";
 PI :: 3.14159265358979f;
 WHM_LOG_INFO :: 3;
@@ -17,8 +18,6 @@ sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c;
 practice_update_session_sounds :: (app: *InnerBreeze) #foreign c;
 practice_background_start :: (app: *InnerBreeze, id: s32) #foreign c;
 practice_active_background_stop :: (app: *InnerBreeze) #foreign c;
-// The breath engine advances 60 ticks per second.
-MINUTE_BELL_TICKS :: 3600;
 clampi :: (value: s32, min_value: s32, max_value: s32) -> s32 {
     if value < min_value {
         return min_value
@@ -35,40 +34,40 @@ GetFrameTime :: () -> float32 #foreign c;
 IsMouseButtonReleased :: (button: s32) -> bool #foreign c;
 MOUSE_BUTTON_LEFT :: 0;
 GetTime :: () -> float64 #foreign c;
-#import, file "../../app/modal_rules.zi";
-#import, file "../../app/app_types.zi";
-#import, file "../../app/session_screen.zi";
-#import, file "../../core/types.zi";
-#import, file "../../core/breath_timing.zi";
+#import "modal_rules"
+#import "app_types"
+#import "session_screen"
+#import "types"
+#import "breath_timing"
 #import "layout"
 #import "layout_props"
 #import "layout_widget"
 #import "tree"
-#import, file "../../app/app_notifications.zi";
-#import, file "../../app/app_settings.zi";
-#import, file "../../app/app_modal_state.zi";
-#import, file "../../storage/data.zi";
+#import "app_notifications"
+#import "app_settings"
+#import "app_modal_state"
+#import "data"
 
 
-#import, file "../../app/app_nav_state.zi";
-#import, file "../../app/practice_title_bar.zi";
-#import, file "../../app/widgets.zi";
-#import, file "../../app/text_buffers.zi";
-#import, file "../../app/locale.zi";
+#import "app_nav_state"
+#import "practice_title_bar"
+#import "widgets"
+#import "text_buffers"
+#import "locale"
 
 
-#import, file "../meditation/meditation_music.zi";
-#import, file "../practice_audio_controls.zi";
-#import, file "../session_results.zi";
-#import, file "../practice_window.zi";
+#import "meditation_music"
+#import "practice_audio_controls"
+#import "session_results"
+#import "practice_window"
 #import "control_props"
 #import "text_align"
 #import "kss_parser"
 #import "text_props"
-#import, file "../../app/exercise_types.zi";
-#import, file "../../app/metrics.zi";
-#import, file "../../app/color.zi";
-#import, file "../../app/current_app.zi";
+#import "exercise_types"
+#import "metrics"
+#import "color"
+#import "current_app"
 #import "button_widget"
 #import "text_widget"
 #import "drawing_props"
@@ -95,7 +94,7 @@ using ButtonEmphasis;
 
 ANDROID :: #defined(ANDROID_BUILD)
 #if ANDROID {
-    #import, file "../../platform/android/android_wakelock.zi";
+    #import "android_wakelock"
 }
 
 whm_log :: (level: s32, message: string) {
@@ -251,7 +250,7 @@ remember_sound_state :: (app: *InnerBreeze) {
     // The practice may run in its small window while another app is open.
     screen := app_session_screen(app)
     if screen != ScreenSession  || app.breathing.phase != BreathPhaseHold {
-        app.retention_marker_last_bucket = 0
+        app.hold_reminder_last_bucket = 0
     }
     app.sound_last_screen = screen
     app.sound_last_phase = app.breathing.phase
@@ -260,52 +259,22 @@ remember_sound_state :: (app: *InnerBreeze) {
     app.sound_last_count[1] = app.breathing.count[1]
     app.sound_last_count[2] = app.breathing.count[2]
     app.sound_last_count[3] = 0
-    // Minutes passed while cues were silent never ring later.
-    app.minute_bell_last_minute = app.minute_bell_ticks / MINUTE_BELL_TICKS
 }
 
-update_retention_marker :: (app: *InnerBreeze, phase_changed: s32) -> bool {
-    seconds: s32
-    bucket: s32
-
+update_hold_reminder :: (app: *InnerBreeze, phase_changed: bool) {
     if app == null {
-        return false
-    }
-    if app.retention_marker_enabled == 0  || app.breathing.phase != BreathPhaseHold {
-        app.retention_marker_last_bucket = 0
-        return false
-    }
-    if phase_changed != 0 {
-        app.retention_marker_last_bucket = 0
-    }
-
-    seconds = BreathDigitsRead(app.breathing.count[:])
-    bucket = seconds / 30
-    if bucket <= 0 || bucket <= app.retention_marker_last_bucket {
-        return false
-    }
-
-    app.retention_marker_last_bucket = bucket
-    app_play_bell_cue(app, 0.45f)
-    return true
-}
-
-// Rings once for each whole minute of running practice time, counted from
-// the start; paused time does not count. When another bell rings at the
-// same moment, that bell marks the minute.
-update_minute_bell :: (app: *InnerBreeze, bell_played: bool) {
-    if app == null || app.minute_bell_enabled == 0 {
         return
     }
-    minute := app.minute_bell_ticks / MINUTE_BELL_TICKS
-    if minute <= app.minute_bell_last_minute {
-        return
+    if phase_changed {
+        app.hold_reminder_last_bucket = 0
     }
-    app.minute_bell_last_minute = minute
-    if bell_played {
-        return
+    reminder := HoldReminderAdvance(app.breathing.phase == BreathPhaseHold,
+        BreathDigitsRead(app.breathing.count[:]), app.hold_reminder_seconds,
+        app.hold_reminder_last_bucket)
+    app.hold_reminder_last_bucket = reminder.last_bucket
+    if reminder.ring {
+        app_play_bell_cue(app, 0.45f)
     }
-    app_play_bell_cue(app, 0.85f)
 }
 
 FormatLocaleCount :: (out: []u8, key: string, count: s32) {
@@ -390,7 +359,6 @@ update_session_sounds :: (app: *InnerBreeze) {
     count_changed := !(app.sound_last_count[0] == app.breathing.count[0] &&
         app.sound_last_count[1] == app.breathing.count[1] &&
         app.sound_last_count[2] == app.breathing.count[2])
-    bell_played := false
 
     if app.breathing.phase == BreathPhaseBreathe {
         if screen_changed || phase_changed || dir_changed {
@@ -401,7 +369,6 @@ update_session_sounds :: (app: *InnerBreeze) {
             maxbreaths_value: s32 = BreathDigitsRead(app.breathing.maxbreaths[:])
             if count_value == maxbreaths_value - 1 {
                 app_play_bell_cue(app, 0.8f)
-                bell_played = true
             }
         }
     } else if phase_changed {
@@ -410,10 +377,7 @@ update_session_sounds :: (app: *InnerBreeze) {
         }
     }
 
-    if update_retention_marker(app, ifx (phase_changed) then (1) else (0)) {
-        bell_played = true
-    }
-    update_minute_bell(app, bell_played)
+    update_hold_reminder(app, phase_changed)
     remember_sound_state(app)
 }
 
@@ -451,7 +415,6 @@ session_advance_seconds :: (app: *InnerBreeze, seconds: float64) {
                 return
             }
             app.breathing = step.breathing
-            app.minute_bell_ticks += 1
             if app.breathing.completed != 0 {
                 session_complete(app)
                 break
@@ -498,8 +461,7 @@ session_start :: (app: *InnerBreeze) {
     app.session_paused = 0
     app.results_saved = 0
     app.results_path[0] = cast(u8)0
-    app.retention_marker_last_bucket = 0
-    app.minute_bell_ticks = 0
+    app.hold_reminder_last_bucket = 0
     remember_sound_state(app)
 
     #if ANDROID {
