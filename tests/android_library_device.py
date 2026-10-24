@@ -204,8 +204,7 @@ class AndroidDriver(UiDriver):
         self.phone.private("rm", "-f", DRIVER + "/command", DRIVER + "/reply", DRIVER + "/reply.tmp")
 
     def send(self, verb, timeout=30, **fields):
-        if verb in ("press", "pointer", "type", "key"):
-            self.phone.owns_foreground()
+        self.phone.owns_foreground()
         self.serial += 1
         parts = [str(self.serial), verb]
         for name, value in fields.items():

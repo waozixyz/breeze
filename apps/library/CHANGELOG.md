@@ -1,5 +1,11 @@
 # Library
 
+## [1.0.4] - 2026-10-24
+
+- Browse books on wooden shelves, with the title and author on the cover.
+- Open a book with a short animation and continue from your saved page.
+- Swipe through pages and use the top tools for passage annotations, font, layout, contents and independent light or dark reading.
+
 ## [1.0.3] - 2026-10-24
 
 - Download on the current Inner Breeze, which only runs the new app format.
