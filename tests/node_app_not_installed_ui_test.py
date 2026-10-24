@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/node-app-not-installed-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 BINARY = Path(sys.argv[1]).resolve()
+FAILURE_ONLY = "--failure-only" in sys.argv[2:]
 DESKTOP_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS")
 assert all(not os.environ.get(key) for key in DESKTOP_ENV), "Inherited desktop environment"
 WIDTH, HEIGHT = 390, 844
@@ -148,41 +149,70 @@ with contextlib.ExitStack() as stack:
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                        "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
 
-    with application("taps") as (window, log_path):
-        driver.wait(label="Apps", role="button", focus_id=NAVIGATION)
-        stays_closed(log_path, "start")
+    if not FAILURE_ONLY:
+        with application("taps") as (window, log_path):
+            driver.wait(label="Apps", role="button", focus_id=NAVIGATION)
+            stays_closed(log_path, "start")
 
-        # Radio's pin in the navigation.
-        driver.press(label="Radio", role="button", focus_id=NAVIGATION)
-        stays_closed(log_path, "navigation pin")
+            # Radio's pin in the navigation.
+            driver.press(label="Radio", role="button", focus_id=NAVIGATION)
+            stays_closed(log_path, "navigation pin")
 
-        # Radio's card in Apps: Apps stays open on its list.
-        driver.press(label="Apps", role="button", focus_id=NAVIGATION)
-        wait(apps_open, "Apps did not open")
-        radio = wait(lambda: grid_cards("Radio"), "Radio has no card in Apps")[0]
-        driver.press(key=radio["key"], label="Radio")
-        stays_closed(log_path, "Apps card")
-        assert apps_open(), "Tapping an app that is not installed closed Apps"
+            # Radio's card in Apps: Apps stays open on its list.
+            driver.press(label="Apps", role="button", focus_id=NAVIGATION)
+            wait(apps_open, "Apps did not open")
+            radio = wait(lambda: grid_cards("Radio"), "Radio has no card in Apps")[0]
+            driver.press(key=radio["key"], label="Radio")
+            stays_closed(log_path, "Apps card")
+            assert apps_open(), "Tapping an app that is not installed closed Apps"
 
-        # Photos is only offered: the tap installs it on the account, as
-        # before, and does not open it.
-        driver.press(label="Find an app", role="text_field")
-        driver.type("Photos")
-        photos = wait(lambda: grid_cards("Photos"), "Photos is not offered in Apps")[0]
-        driver.press(key=photos["key"], label="Photos")
-        wait(lambda: settings().get("app_used_photos") == "1", "The Photos tap was not taken")
-        stays_closed(log_path, "offered app")
-        assert apps_open(), "Tapping an offered app closed Apps"
+            # Photos is only offered: the tap installs it on the account, as
+            # before, and does not open it.
+            driver.press(label="Find an app", role="text_field")
+            driver.type("Photos")
+            photos = wait(lambda: grid_cards("Photos"), "Photos is not offered in Apps")[0]
+            driver.press(key=photos["key"], label="Photos")
+            wait(lambda: settings().get("app_used_photos") == "1", "The Photos tap was not taken")
+            stays_closed(log_path, "offered app")
+            assert apps_open(), "Tapping an offered app closed Apps"
 
-    # A launcher's shortcut asks for Radio by name: Inbe starts on its own
-    # page, with its navigation, instead of on Radio's.
-    with application("launcher", "--app", "radio") as (window, log_path):
-        driver.wait(label="Apps", role="button", focus_id=NAVIGATION)
-        stays_closed(log_path, "launcher shortcut")
-        driver.wait(label="Apps", role="button", focus_id=NAVIGATION)
-        title = subprocess.run(["xdotool", "getwindowname", window], env=env,
-                               capture_output=True, text=True, timeout=5).stdout.strip()
-        assert title != "Radio", "The launcher opened Radio"
+        # A launcher's shortcut asks for Radio by name: Inbe starts on its own
+        # page, with its navigation, instead of on Radio's.
+        with application("launcher", "--app", "radio") as (window, log_path):
+            driver.wait(label="Apps", role="button", focus_id=NAVIGATION)
+            stays_closed(log_path, "launcher shortcut")
+            driver.wait(label="Apps", role="button", focus_id=NAVIGATION)
+            title = subprocess.run(["xdotool", "getwindowname", window], env=env,
+                                   capture_output=True, text=True, timeout=5).stdout.strip()
+            assert title != "Radio", "The launcher opened Radio"
 
-print("Apps from the node that are not on this device stay closed from the navigation, "
+    # A real opening failure has a dialog over the loading state. It never
+    # becomes the app's page or appears while the background work is pending.
+    broken = profile / "radio.zx"
+    broken.write_bytes(b"ZX\0truncated-test-package")
+    env["INBE_NODE_APP_FILE"] = str(broken)
+    with application("failed-open", "--app", "radio") as (window, log_path):
+        driver.wait(label="This app could not be installed. Check your connection and try again from Apps.",
+                    role="text", timeout=60)
+        driver.wait(role="modal")
+        destination = os.environ.get("BREEZE_LOADING_CAPTURE")
+        if destination:
+            assert display.poll() is None and Path(f"/proc/{display.pid}/exe").resolve().name == "Xvfb"
+            assert "-displayfd" in display.args
+            pid = subprocess.check_output(["xdotool", "getwindowpid", window], env=env, text=True).strip()
+            assert pid == str(driver.process.pid)
+            target = Path(destination)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.with_suffix(".source.txt").write_text(repr((display.pid, display.args, number, pid, window)))
+            subprocess.run(["import", "-window", window, str(target)], env=env, check=True)
+        driver.wait(label="Retry", role="button")
+        driver.press(label="Retry", role="button")
+        driver.wait_gone(role="modal", timeout=5)
+        driver.wait(role="modal", timeout=60)
+        driver.press(label="Close", role="button")
+        driver.wait(label="Find an app", role="text_field")
+        assert not driver.find(label="Retry", role="button", visible=True), "The failure dialog stayed after Close"
+
+print("Failed opening uses a Retry/Close modal over loading and Close returns to Apps" if FAILURE_ONLY else
+      "Apps from the node that are not on this device stay closed from the navigation, "
       "Apps, an offer and a launcher shortcut, and never show the installing notice")
