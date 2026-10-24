@@ -5,7 +5,7 @@ app-codec-check:
 	python3 scripts/generate-app-codec.py --check
 
 .PHONY: cells-test
-cells-test: cells $(ZIRAN_BUILD_DIR)/libziran.a $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
+cells-test: library-reader-test cells $(ZIRAN_BUILD_DIR)/libziran.a $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	sh tests/cells_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 .PHONY: cells-platform-test cells-android-probe
@@ -107,3 +107,7 @@ radio-android-test:
 
 radio-test: radio-app-test radio-native-test radio-web-test radio-android-test
 test: radio-app-test radio-native-test radio-web-test
+
+.PHONY: library-reader-test
+library-reader-test: $(ZIRAN_BIN)
+	sh tests/library_reader_test.sh $(ZIRAN_BIN)

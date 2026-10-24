@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
-"""Library from More apps on a private display: the shelf starts the Tao Te
-Ching at its first chapter, the chapter buttons turn pages, Back returns to
-where the chapter was opened (the shelf or the contents), a long chapter
-scrolls under page buttons that stay at the bottom, and after a restart the
-shelf continues where reading stopped.
-
-The node's offer comes from a local package (INBE_NODE_APP_FILE), so nothing
-is downloaded or published. Buttons and text are found in the app's widget
-tree through Kryon's test driver.
-"""
+"""Exercise Library's actual package with a disposable profile and private Xvfb.
+Book covers, gestures, reflow, resume and annotations use Kryon's widget tree.
+Optional captures verify the private X server and the app window first."""
 import os
 from pathlib import Path
 import re
@@ -19,6 +12,7 @@ import tempfile
 import time
 
 from ui_driver import UiDriver
+from library_reader_cases import LibraryReaderCases
 
 assert int(os.environ.get("DISPLAY", ":0").split(":")[-1].split(".")[0]) >= 300
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,18 +63,35 @@ def launch(profile, name):
 
 
 def chapter_text(number):
-    """Chapter number's words, as the bundle's book source holds them."""
     source = (ROOT / "apps/library/tao_te_ching.zi").read_text()
     return re.search(rf"^TAO_{number} :: #string END\n(.*?)\nEND;$", source, re.M | re.S)[1]
 
 
-def first_line(number):
-    return chapter_text(number).splitlines()[0]
-
-
-def shown(number):
-    driver.wait(label=f"Chapter {number}")
-    driver.wait(contains=first_line(number))
+def capture(name):
+    destination = os.environ.get("BREEZE_LIBRARY_CAPTURE")
+    if not destination:
+        return
+    if name == "opening":
+        driver.wait(key=27800, timeout=2)
+        time.sleep(.06)
+    display = os.environ["DISPLAY"].split(".")[0]
+    servers = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            args = (entry / "cmdline").read_bytes().split(b"\0")
+            executable = (entry / "exe").resolve(strict=True)
+            if executable.name == "Xvfb" and display.encode() in args:
+                servers.append((entry.name, [arg.decode() for arg in args if arg]))
+        except (OSError, ValueError):
+            continue
+    assert len(servers) == 1, ("Private Xvfb source could not be verified", display, servers)
+    assert command("xdotool", "getwindowpid", window) == str(app.pid)
+    output = Path(destination)
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "capture-source.txt").write_text(repr((display, servers, app.pid, window)) + "\n")
+    subprocess.run(["import", "-window", window, str(output / (name + ".png"))], check=True)
 
 
 with tempfile.TemporaryDirectory(prefix="inbe-library-") as directory:
@@ -97,67 +108,14 @@ with tempfile.TemporaryDirectory(prefix="inbe-library-") as directory:
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                        "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
     app, window = launch(profile, "reading")
+    cases = LibraryReaderCases(driver, chapter_text, lambda: (OUTPUT / "reading.log").read_text(), capture)
     try:
-        driver.press(label="Apps", role="button")
-        # More apps offers Library because the node (here, the local file) does.
-        driver.press(label="Library", role="button")
-        driver.wait(label="Tao Te Ching")
-        assert "the local bundle cannot run" not in (OUTPUT / "reading.log").read_text(), "new Library bundle was rejected and an older one downloaded"
-        driver.press(label="Start reading", role="button")
-        shown(1)
-        driver.wait_gone(label="Apps", role="button")
-        subprocess.run(["import", "-window", window, str(OUTPUT / f"reader-{WIDTH}.png")], check=True)
-        for start, finish, expected in [(WIDTH - 60, 60, 2), (60, WIDTH - 60, 1)]:
-            driver.pointer(start, HEIGHT / 2, down=True)
-            driver.pointer((start + finish) / 2, HEIGHT / 2, down=True)
-            driver.pointer(finish, HEIGHT / 2, down=True)
-            driver.pointer(finish, HEIGHT / 2)
-            driver.release_pointer()
-            shown(expected)
-        driver.press(label="Next chapter", role="button")
-        shown(2)
-        driver.press(label="Previous chapter", role="button")
-        shown(1)
-        driver.wait_idle(frames=3)
-        previous = driver.find(label="Previous chapter", role="button")
-        assert len(previous) == 1 and not previous[0]["enabled"], \
-            ("the first chapter offers a previous one", previous)
-        # Back returns to the shelf the chapter was opened from.
-        driver.press(label="Back", role="button")
-        driver.wait(label="Continue at chapter 1", role="button")
-        driver.press(label="Contents", role="button")
-        driver.press(label="39", role="button")
-        shown(39)
-        # The chapter scrolls; its page buttons stay at the bottom.
-        driver.wait_idle(frames=3)
-        before = driver.find(label="Next chapter", role="button")[0]
-        assert before["visible"] and HEIGHT - 120 < before["visible_y"] + before["visible_height"] <= HEIGHT, \
-            ("the page buttons sit at the bottom", before)
-        top = driver.find(label="Chapter 39")[0]["visible_y"]
-        driver.pointer(WIDTH / 2, HEIGHT / 2, wheel=-6)
-        driver.release_pointer()
-        driver.wait_idle(frames=10)
-        after = driver.find(label="Next chapter", role="button")[0]
-        moved = driver.find(label="Chapter 39")
-        assert not moved or not moved[0]["visible"] or moved[0]["visible_y"] < top, ("the chapter did not scroll", moved)
-        assert after["visible"] and after["visible_y"] == before["visible_y"], ("the page buttons scrolled", before, after)
-        # Back returns to the contents it was opened from.
-        driver.press(label="Back", role="button")
-        driver.press(label="3", role="button")
-        shown(3)
-        driver.press(label="Back", role="button")
-        driver.wait(label="39", role="button")
-        driver.press(label="Back", role="button")
-        driver.wait(label="Continue at chapter 3", role="button")
+        saved = cases.exercise()
     finally:
         stop(app)
     app, window = launch(profile, "continue")
     try:
-        driver.press(label="Apps", role="button")
-        driver.press(label="Library", role="button")
-        driver.press(label="Continue at chapter 3", role="button")
-        shown(3)
+        cases.resume(saved)
     finally:
         stop(app)
-print("Library: start, turn pages both ways, Back to where a chapter opened, fixed page buttons, "
-      "open a chapter from the contents and continue after a restart passed")
+print("Library bookshelf, swipe and arrow pages, contents, font reflow, resume and annotations persist after restart")

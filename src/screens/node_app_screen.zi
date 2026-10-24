@@ -21,6 +21,8 @@
 #import "layout"
 #import "layout_widget"
 #import "tree"
+#import "tree_input"
+#import "test_driver"
 #import, file "../platform/raylib_text_input.zi";
 #import, file "../cells/node_apps.zi";
 #import, file "../cells/node_app_runner.zi";
@@ -37,6 +39,8 @@
 #import, file "../app/app_types.zi";
 #import, file "../app/app.zi";
 #import, file "../app/app_nav_state.zi";
+#import, file "../app/app_launcher_state.zi";
+#import, file "../app/app_modal_state.zi";
 #import, file "../app/locale.zi";
 #import, file "../app/metrics.zi";
 #import, file "../app/text_buffers.zi";
@@ -104,6 +108,9 @@ NodeScreenFriend :: (app: *InnerBreeze, index: s32) -> AppPerson {
     return AppPerson.{.id = id, .name = NodeAppPersonName(alias, id, node_screen_friend_name[:])}
 }
 
+node_screen_input_text: [1024]u8;
+node_screen_input_codec: WidgetTextFieldInputCodec;
+
 NodeScreenUiCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     app := cast(*InnerBreeze)context
@@ -115,6 +122,31 @@ NodeScreenUiCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "ReadAppUiHost" && count == 0 {
         result.* = WidgetEncodeAppUiFrame(node_screen_frame, *node_screen_frame_codec)
+        return 1
+    }
+    if name == "AppKeyHost" && count == 0 {
+        key := NodeAppKeyFor(NodePressedKey(), NodeRepeatedKey())
+        if key == 0 && TestDriverActive() {
+            for candidate: cast(s32)32..348 {
+                if TestDriverKeyPressed(candidate) {
+                    key = candidate
+                    break
+                }
+            }
+        }
+        if key == 0 { key = KeyboardTake(app.ui.session) }
+        result.* = HostScalar("s32", key)
+        return 1
+    }
+    if name == "CloseAppHost" && count == 0 {
+        app_block_current_click(app)
+        app_launcher_open(app)
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    if name == "AppFieldInputHost" && count == 0 {
+        input := SampleTextFieldInput(true, node_screen_input_text[:])
+        result.* = WidgetEncodeTextFieldInput(input, *node_screen_input_codec)
         return 1
     }
     if name == "AppLocaleHost" && count == 1 &&

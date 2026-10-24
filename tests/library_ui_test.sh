@@ -6,6 +6,6 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 binary=${1:-"$root/build/bin/linux/breeze-linux-x86_64"}
 package=${2:-"$root/build/node-apps/library.zx"}
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \
-    -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 SDL_AUDIODRIVER=dummy APP_NO_TRAY=1 \
+    -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 SDL_VIDEODRIVER=x11 LIBGL_ALWAYS_SOFTWARE=1 SDL_AUDIODRIVER=dummy APP_NO_TRAY=1 \
     timeout 240s xvfb-run -a -n 311 -s '-noreset -screen 0 1280x900x24' \
     python3 "$root/tests/library_ui_test.py" "$binary" "$package"

@@ -1,28 +1,55 @@
-// The Library's books, each a list of chapters.
+// Book content, stable text positions and the account record format.
+#import "text_buffer"
 #import, file "tao_te_ching.zi";
 
 BOOK_COUNT :: 1
+LIBRARY_PAGE_LIMIT :: 4096
+LIBRARY_ANNOTATION_LIMIT :: 128
+
+LibraryPage :: struct {
+    chapter: s32
+    start: s32
+    end: s32
+}
+
+LibraryAnnotation :: struct {
+    start: s32
+    end: s32
+    highlighted: bool
+    note: string
+}
 
 BookTitle :: (index: s32) -> string {
     unused index
     return TAO_TE_CHING_TITLE
 }
 
+BookCover :: (index: s32) -> string {
+    unused index
+    return "assets/library/tao-te-ching.png"
+}
+
 BookAuthor :: (index: s32) -> string {
     unused index
-    return TAO_TE_CHING_AUTHOR
+    return "Lao Tzu"
 }
 
-// Where the book's words come from.
-BookNote :: (index: s32) -> string {
-    unused index
-    return TAO_TE_CHING_NOTE
-}
-
-// The record that keeps the chapter a book is open at.
+// Keep reading the released chapter record when no text position exists.
 BookRecord :: (index: s32) -> string {
     unused index
     return "tao-te-ching.chapter"
+}
+
+BookPositionRecord :: (index: s32) -> string {
+    unused index
+    return "tao-te-ching.position"
+}
+
+BookAnnotationsRecord :: (index: s32, chapter: s32) -> string {
+    unused index
+    value: Vec(u8)
+    BuilderPrint(*value, "tao-te-ching.annotations.%", chapter)
+    return BuilderFinish(value)
 }
 
 BookChapters :: (index: s32) -> s32 {
@@ -30,8 +57,66 @@ BookChapters :: (index: s32) -> s32 {
     return TAO_TE_CHING_CHAPTERS
 }
 
-// Chapter number's words, from 1.
 BookChapter :: (index: s32, number: s32) -> string {
     unused index
     return TaoTeChing(number)
+}
+
+// Decimal fields are bounded and separated by one non-digit byte.
+ReadLibraryNumber :: (text: string, at: *s32) -> s32 {
+    value: s32
+    digits: s32
+    while at.* < text.count && text[at.*] >= #char "0" && text[at.*] <= #char "9" {
+        if digits >= 7 { return -1 }
+        value = value * 10 + cast(s32)text[at.*] - 48
+        at.* += 1
+        digits += 1
+    }
+    if digits == 0 { return -1 }
+    if at.* < text.count { at.* += 1 }
+    return value
+}
+
+LibraryPageFor :: (pages: []LibraryPage, chapter: s32, offset: s32) -> s32 {
+    found: s32
+    for index: cast(s32)0..cast(s32)pages.count - 1 {
+        page := pages[index]
+        if page.chapter < chapter || (page.chapter == chapter && page.start <= offset) {
+            found = index
+        }
+    }
+    return found
+}
+
+LibraryOverlaps :: (page: LibraryPage, annotation: LibraryAnnotation) -> bool {
+    return annotation.start < page.end && annotation.end > page.start
+}
+
+// Length-prefixed notes preserve newlines and punctuation without an escape
+// convention. Each chapter has a single atomic account record.
+DecodeLibraryAnnotations :: (text: string, output: []LibraryAnnotation) -> s32 {
+    at: s32
+    count: s32
+    while at < text.count && count < output.count {
+        start := ReadLibraryNumber(text, *at)
+        end := ReadLibraryNumber(text, *at)
+        highlight := ReadLibraryNumber(text, *at)
+        length := ReadLibraryNumber(text, *at)
+        if start < 0 || end <= start || highlight < 0 || highlight > 1 ||
+        length < 0 || length > 2048 || length > text.count - at { return 0 }
+        output[count] = LibraryAnnotation.{start, end, highlight == 1, text[at:at + length]}
+        at += length
+        count += 1
+    }
+    if at != text.count { return 0 }
+    return count
+}
+
+EncodeLibraryAnnotations :: (annotations: []LibraryAnnotation) -> string {
+    value: Vec(u8)
+    for annotation: annotations {
+        BuilderPrint(*value, "% % % %\n%", annotation.start, annotation.end,
+            ifx annotation.highlighted then 1 else 0, annotation.note.count, annotation.note)
+    }
+    return BuilderFinish(value)
 }
