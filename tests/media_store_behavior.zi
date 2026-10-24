@@ -1,6 +1,8 @@
 // The account's media library on a real database: a photo is kept once by
-// its hash with its capture day and a JPEG preview, Trash keeps it, queries
-// list it by day or all newest first, and only this account's photos draw.
+// its hash as a record of the account's entity data, with its capture day
+// and a JPEG preview, Trash keeps it, queries list it by day or all newest
+// first, a released version's library record lists until its photo moves,
+// and only this account's photos draw.
 #import "byte_text_linux"
 #import "vec"
 #import "text"
@@ -15,6 +17,8 @@
 #import, file "../src/storage/storage_core.zi";
 #import, file "../src/storage/storage_settings.zi";
 #import, file "../src/storage/media_records.zi";
+#import, file "../src/storage/entity_records.zi";
+#import, file "../src/cells/entity_photos.zi";
 #import, file "../src/cells/package_files.zi";
 #import, file "../src/cells/diary_records.zi";
 #import, file "../src/cells/media_store.zi";
@@ -103,7 +107,7 @@ Hash :: (data: string) -> string {
 }
 
 RecordField :: (hash: string, field: string, output: []u8) -> string {
-    key := PackageText(MEDIA_RECORD_PREFIX, hash)
+    key := EntityPhotoKey(hash)
     record := MediaRecordRead(key)
     count := ReadStringText(record, FieldAt(record, 0, field), output)
     PackageFree(key)
@@ -146,11 +150,18 @@ Check :: () -> s32 {
     check_true("its capture time is the camera's",
         RecordField(morning_hash, "taken", field[:]) == "2026-10-17T08:15:00")
     check_true("its name is the file's", RecordField(morning_hash, "name", field[:]) == "IMG_2041.jpg")
-    check_true("its type is read from its bytes", RecordField(morning_hash, "type", field[:]) == "jpg")
+    check_true("its type is read from its bytes", RecordField(morning_hash, "type", field[:]) == "image/jpeg")
     item := MediaRead(morning_hash)
-    check_true("the record reads back", item.valid && item.size == morning.count && !item.trashed)
-    check_int("the photo and its preview queue to sync",
-        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='media_record'"), 2)
+    check_true("the record reads back", item.valid && item.entity && item.size == morning.count && !item.trashed)
+    check_int("one record of the account's entity data queues to sync",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='entity_record'"), 1)
+    check_int("nothing goes to the released versions' library",
+        read_db_count("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.media.*'"), 0)
+    check_int("its capture time is in seconds, read as UTC without an offset",
+        read_db_count(PackageText(PackageText("SELECT json_extract(value,'$.taken_at') FROM settings WHERE key='entity.photos.",
+        morning_hash), "'")), 1792224900)
+    check_int("it names no chunks before a node has them",
+        read_db_count("SELECT COUNT(*) FROM settings WHERE key GLOB 'entity.photos.*' AND json_type(value,'$.blobs') IS NOT NULL"), 0)
 
     // The preview: an upright JPEG at most 512 pixels on its longer side.
     preview_path := MediaPath(morning_hash, true)
@@ -168,11 +179,11 @@ Check :: () -> s32 {
     preview_width := cast(s32)preview[sof + 7] * 256 + cast(s32)preview[sof + 8]
     check_int("the preview is upright and 512 tall", preview_height, 512)
     check_int("the preview is 341 wide", preview_width, 341)
-    preview_key := PackageText(MEDIA_PREVIEW_PREFIX, morning_hash)
-    preview_record := MediaRecordRead(preview_key)
-    check_true("the preview's record names its bytes",
-        DiaryMediaMatches(DiaryMediaParse(preview_record), preview))
-    PackageFree(preview_record)
+    photo_record := MediaEntityRecord(morning_hash)
+    preview_content := EntityPreviewContent(photo_record)
+    check_true("the photo's record names its preview's bytes",
+        EntityContentMatches(preview_content, preview) && TextUntilNul(preview_content.format[:]) == "jpg")
+    PackageFree(photo_record)
 
     // Assets: the preview draws; asking for the original finds it here.
     preview_asset := PackageText(MediaAsset(morning_hash, false), "")
@@ -203,11 +214,11 @@ Check :: () -> s32 {
     check_true("opening it asks for the original", MediaOriginalWanted(morning_hash))
 
     // The same bytes again add nothing; the file comes back.
-    queued := read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='media_record'")
+    queued := read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='entity_record'")
     again := MediaImportBytes(morning, "copy of IMG_2041.jpg")
     check_true("the same photo is added once", again.succeeded && again.existed)
     check_int("nothing new is queued",
-        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='media_record'"), queued)
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='entity_record'"), queued)
     check_true("its name stays", RecordField(morning_hash, "name", field[:]) == "IMG_2041.jpg")
     check_true("the file is back", PackageRead(original_path, DIARY_FILE_LIMIT) == morning)
 
@@ -241,15 +252,51 @@ Check :: () -> s32 {
         !MediaRead(evening_hash).trashed)
     check_true("rename a photo", MediaSetName(earlier_hash, "Lake \"walk\"\n.jpg"))
     check_true("the name is one line", RecordField(earlier_hash, "name", field[:]) == "Lake \"walk\" .jpg")
-    // A sealed copy's name keeps every other field.
-    key := PackageText(MEDIA_RECORD_PREFIX, earlier_hash)
+    // Fields another app added stay when this one changes the record.
+    key := EntityPhotoKey(earlier_hash)
     record := MediaRecordRead(key)
-    copy_blob := "abababababababababababababababababababababababababababababababab"
-    copy_key := "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
-    check_true("name the sealed copy", MediaRecordSetCopy(key, record, copy_blob, copy_key))
-    check_true("the copy is named", RecordField(earlier_hash, "blob", field[:]) == copy_blob &&
-        DiaryMediaUploaded(DiaryMediaParse(MediaRecordRead(key))))
-    check_true("the other fields stay", RecordField(earlier_hash, "day", field[:]) == "2026-10-15")
+    tagged := MediaRecordWith(record, "caption", "\"By the lake\"")
+    check_true("another app adds a field", MediaRecordWrite(key, tagged))
+    check_true("trash it with the field", MediaSetTrashed(earlier_hash, true) && MediaSetTrashed(earlier_hash, false))
+    check_true("the other app's field stays", RecordField(earlier_hash, "caption", field[:]) == "By the lake" &&
+        RecordField(earlier_hash, "day", field[:]) == "2026-10-15")
+    check_int("Trash is true or false in the shared record",
+        read_db_count(PackageText(PackageText("SELECT json_type(value,'$.trashed')='false' FROM settings WHERE key='entity.photos.",
+        earlier_hash), "'")), 1)
+
+    // A released version's library record lists its photo until the photo
+    // moves; its entity record then keeps its name, day, Trash and the time
+    // it was added, and the old record stays for released versions.
+    older := Photo("2026:10:12 09:00:00", 1, 50000, 6)
+    older_hash := Hash(older)
+    older_key := PackageText(MEDIA_RECORD_PREFIX, older_hash)
+    older_out: Vec(u8)
+    BuilderPrint(*older_out, "{\"hash\":\"%\",\"size\":%,\"type\":\"jpg\",\"name\":\"Old walk.jpg\",", older_hash, older.count)
+    BuilderPrint(*older_out, "\"day\":\"2026-10-12\",\"taken\":\"2026-10-12T09:00:00\",\"added\":1792000000,")
+    BuilderPrint(*older_out, "\"capture\":1,\"trashed\":1,\"blob\":\"%\",\"key\":\"%\"}",
+        "abababababababababababababababababababababababababababababababab",
+        "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd")
+    older_record := BuilderFinish(older_out)
+    check_true("a released version's record arrives", MediaRecordWrite(older_key, older_record))
+    older_item := MediaRead(older_hash)
+    check_true("its photo lists from it", older_item.valid && !older_item.entity && older_item.trashed &&
+        TextUntilNul(older_item.day[:]) == "2026-10-12")
+    check_int("Trash lists it", MediaQuery("", true), 1)
+    older_path := MediaPath(older_hash, false)
+    check_true("its bytes arrive", PackageWrite(older_path, older))
+    moved := MediaAddBytes(older, MediaAddition.{.source = older_path})
+    check_true("the photo moves", moved.succeeded && moved.existed && MediaRead(older_hash).entity)
+    check_true("its name and day stay", RecordField(older_hash, "name", field[:]) == "Old walk.jpg" &&
+        RecordField(older_hash, "day", field[:]) == "2026-10-12" &&
+        RecordField(older_hash, "taken", field[:]) == "2026-10-12T09:00:00")
+    check_true("it stays in Trash", MediaRead(older_hash).trashed)
+    check_int("the time it was added stays",
+        read_db_count(PackageText(PackageText("SELECT json_extract(value,'$.added_at') FROM settings WHERE key='entity.photos.",
+        older_hash), "'")), 1792000000)
+    check_true("the old record stays as it was", MediaRecordRead(older_key) == older_record)
+    check_int("Trash lists the photo once", MediaQuery("", true), 1)
+    check_true("restore it", MediaSetTrashed(older_hash, false))
+    check_true("the old record is not touched", MediaRecordRead(older_key) == older_record)
 
     // Files that are not photos are refused.
     check_true("text is no photo", !MediaImportBytes("just some text", "notes.txt").succeeded)

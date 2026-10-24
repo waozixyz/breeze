@@ -37,4 +37,4 @@ env -u DISPLAY -u WAYLAND_DISPLAY ASAN_OPTIONS=detect_leaks=0 "$work/test"
     --entry media_metadata_behavior:Answer -o "$work/check.zx" \
     "$root/tests/media_metadata_behavior.zi"
 test "$("$bin/ziran" run "$work/check.zx")" = 42
-printf '%s\n' 'Media metadata: Exif capture times and orientations passed natively and in the VM'
+printf '%s\n' 'Media metadata: Exif capture times, orientations and picture sizes passed natively and in the VM'

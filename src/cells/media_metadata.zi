@@ -324,3 +324,90 @@ MediaOrientationOf :: (data: string, format: string) -> s32 {
     }
     return cast(s32)value
 }
+
+// A picture's size in pixels, from its header alone.
+MediaSize :: struct {
+    valid: bool
+    width: s64
+    height: s64
+}
+
+// A JPEG's frame size, from its first start-of-frame segment.
+MediaJpegSize :: (data: string) -> MediaSize {
+    at: s64 = 2
+    while at + 4 <= data.count {
+        if data[at] != cast(u8)255 {
+            return MediaSize.{}
+        }
+        marker := data[at + 1]
+        if marker == cast(u8)217 || marker == cast(u8)218 {
+            return MediaSize.{}
+        }
+        if marker == cast(u8)255 {
+            at += 1
+            continue
+        }
+        if marker == cast(u8)1 || (marker >= cast(u8)208 && marker <= cast(u8)215) {
+            at += 2
+            continue
+        }
+        length := MediaNumber(data, at + 2, 2, false)
+        if length < 2 || at + 2 + length > data.count {
+            return MediaSize.{}
+        }
+        // SOF0 to SOF15, except DHT (196), JPG (200) and DAC (204).
+        frame := marker >= cast(u8)192 && marker <= cast(u8)207 && marker != cast(u8)196 &&
+        marker != cast(u8)200 && marker != cast(u8)204
+        if frame && length >= 7 {
+            return MediaSize.{.valid = true, .width = MediaNumber(data, at + 7, 2, false),
+                .height = MediaNumber(data, at + 5, 2, false)}
+        }
+        at += 2 + length
+    }
+    return MediaSize.{}
+}
+
+// A WebP's canvas: lossy (VP8), lossless (VP8L) or extended (VP8X).
+MediaWebpSize :: (data: string) -> MediaSize {
+    if data.count < 30 {
+        return MediaSize.{}
+    }
+    kind := data[12:16]
+    if kind == "VP8 " && data[23] == cast(u8)157 && data[24] == cast(u8)1 && data[25] == cast(u8)42 {
+        return MediaSize.{.valid = true, .width = MediaNumber(data, 26, 2, true) & 16383,
+            .height = MediaNumber(data, 28, 2, true) & 16383}
+    }
+    if kind == "VP8L" && data[20] == cast(u8)47 {
+        bits := MediaNumber(data, 21, 4, true)
+        return MediaSize.{.valid = true, .width = (bits & 16383) + 1, .height = ((bits >> 14) & 16383) + 1}
+    }
+    if kind == "VP8X" {
+        return MediaSize.{.valid = true, .width = MediaNumber(data, 24, 3, true) + 1,
+            .height = MediaNumber(data, 27, 3, true) + 1}
+    }
+    return MediaSize.{}
+}
+
+// The picture's size as it shows: turned when the camera says its pixels
+// lie on their side (orientations 5 to 8).
+MediaSizeOf :: (data: string, format: string) -> MediaSize {
+    size: MediaSize
+    if format == "png" && data.count >= 24 && data[12:16] == "IHDR" {
+        size = MediaSize.{.valid = true, .width = MediaNumber(data, 16, 4, false),
+            .height = MediaNumber(data, 20, 4, false)}
+    } else if format == "gif" && data.count >= 10 {
+        size = MediaSize.{.valid = true, .width = MediaNumber(data, 6, 2, true),
+            .height = MediaNumber(data, 8, 2, true)}
+    } else if format == "jpg" {
+        size = MediaJpegSize(data)
+    } else if format == "webp" {
+        size = MediaWebpSize(data)
+    }
+    if !size.valid || size.width < 1 || size.height < 1 {
+        return MediaSize.{}
+    }
+    if MediaOrientationOf(data, format) >= 5 {
+        return MediaSize.{.valid = true, .width = size.height, .height = size.width}
+    }
+    return size
+}

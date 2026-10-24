@@ -1,0 +1,59 @@
+// Names of the account's entity data (Daochi docs/entity-data.md): what the
+// account owns, kept once for the account and shared by every app it uses,
+// whichever app added it. This version keeps one kind, photos. Each photo is
+// one record, entity.photos.<sha256> on this device, that syncs as record
+// <sha256> of private.entity.v1.photos in the account's own signed sync,
+// sealed with the account's entity key for photos (entity_record_crypto.zi).
+// Its bytes travel as sealed chunks (cells/diary_blobs.zi). Everything is
+// private: nothing here is shared without a separate, explicit step.
+#import, file "media_records.zi";
+
+EntityPhotosCollection :: "private.entity.v1.photos"
+ENTITY_PHOTOS_KIND :: "photos"
+ENTITY_PHOTO_SCHEMA :: "entity.photo.v1"
+ENTITY_PHOTO_PREFIX :: "entity.photos."
+// The record of a photo on this device: the prefix and 64 hex digits.
+ENTITY_PHOTO_KEY_BYTES :: 78
+
+// entity.photos.<sha256>, the key of one photo's record on this device.
+EntityPhotoKeyAccepted :: (key: string) -> bool {
+    return EntityPhotoKeyHash(key).count == 64
+}
+
+// The photo's hash in entity.photos.<sha256>, or empty.
+EntityPhotoKeyHash :: (key: string) -> string {
+    prefix := ENTITY_PHOTO_PREFIX
+    if key.count != ENTITY_PHOTO_KEY_BYTES || key[:prefix.count] != prefix ||
+    !MediaHashValid(key[prefix.count:]) {
+        return ""
+    }
+    return key[prefix.count:]
+}
+
+// The collection a local entity record syncs in, or empty.
+EntityRecordCollection :: (key: string) -> string {
+    if EntityPhotoKeyAccepted(key) {
+        return EntityPhotosCollection
+    }
+    return ""
+}
+
+// Entity collections this version reads; records of other kinds, such as
+// another app's levels, arrive in the same replies and are left alone.
+EntityCollectionKnown :: (collection: string) -> bool {
+    return collection == EntityPhotosCollection
+}
+
+EntityCollectionKind :: (collection: string) -> string {
+    if collection == EntityPhotosCollection {
+        return ENTITY_PHOTOS_KIND
+    }
+    return ""
+}
+
+EntityCollectionSchema :: (collection: string) -> string {
+    if collection == EntityPhotosCollection {
+        return ENTITY_PHOTO_SCHEMA
+    }
+    return ""
+}

@@ -568,40 +568,70 @@ capture dates remain in the shared record. Small, transparent and animated
 images retain their bytes, as do photos already in the library.
 
 The library belongs to the account, not to Photos, so its photos stay when
-Photos is removed. The host keeps it (`src/cells/media_store.zi`): each photo
-is stored once by the SHA-256 of its bytes under
-`media/<account>/<sha256>`, with an upright JPEG preview of at most 512
-pixels (`<sha256>.preview`) made on import by Kryon's `ImagePreview`
-(`image_preview.zi`: the host decodes, portable Ziran scales by area
-averages, turns by the Exif orientation and writes a baseline JPEG). The
-capture day and time come from the file's Exif original date
-(`media_metadata.zi`), otherwise from the day it was added. Records sync in
-their own collection, `private.inbe.v1.media`, which released versions skip:
+Photos is removed. Each photo is a record of the account's entity data
+(Daochi `docs/entity-data.md`), which every app of the account shares: Diary
+embeds the same photo, and other apps such as the standalone Photos read and
+write the same record. Everything there is private. The host keeps it
+(`src/cells/media_store.zi`, `entity_photos.zi`): each photo is stored once
+by the SHA-256 of its bytes under `media/<account>/<sha256>`, with an
+upright JPEG preview of at most 512 pixels (`<sha256>.preview`) made on
+import by Kryon's `ImagePreview` (`image_preview.zi`: the host decodes,
+portable Ziran scales by area averages, turns by the Exif orientation and
+writes a baseline JPEG). The capture day and time come from the file's Exif
+original date (`media_metadata.zi`), otherwise from the day it was added.
+The record is `entity.photos.<sha256>` on the device and record `<sha256>`
+of `private.entity.v1.photos` in the account's signed v6 sync, sealed in
+Daochi's record profile (`storage/entity_record_crypto.zi`: XChaCha20-Poly1305
+with the account's photos record key, key ID `entity-v1`, the same bytes as
+libsodium's):
+
+```json
+{"hash","size","type":"image/jpeg","taken_at","width","height",
+ "blobs":[{"address","size"}],"preview":{"hash","size","type","blobs"},
+ "added_at","name","trashed":false,"day","taken","capture":true}
+```
+
+`blobs` names the photo's sealed chunks once a node has them all, and the
+preview names its own. Fields this version does not know are kept when it
+writes a record back, and an entity record of another kind, or one that does
+not open, changes nothing and never stops a sync. A record that arrives
+replaces this device's copy, keeping fields only this device has, unless a
+change here has not gone out yet; that change then goes out over it.
+
+Released versions kept the library in `private.inbe.v1.media`, which they
+read through 2027-10-24, and each photo's bytes as one old sealed copy at
+`/api/v1/blobs/inbe/` (`diary_records.zi`):
 
 | Key | Value |
 |---|---|
-| `cell.media.<sha256>` | `{"hash","size","type","name","day","taken","added","trashed"[,"blob","key"]}` |
-| `cell.media.preview.<sha256>` | `{"hash","size","type"[,"blob","key"]}` |
+| `cell.media.<sha256>` | `{"hash","size","type","name","day","taken","added","trashed"[,"blob","key"][,"photo"]}` |
+| `cell.media.preview.<sha256>` | `{"hash","size","type"[,"blob","key"][,"photo"]}` |
 
-Diary photos older versions attached as Diary files belong to the library
-too (`media_diary_photos.zi`): each Diary file a day's entry still includes,
-by a `photos` row or a `diary:` embed, joins it once by its hash through the
-photo button's path (`MediaAddBytes`), named as the entry names it and,
-without an Exif date, under the entry's day (`taken` is then the day
-alone). The entry is not rewritten. A Diary file no entry includes stays
-out, and an existing `cell.media.<sha256>` record, in Trash or not, is left
-as it is. The library file is a hard link to the Diary file where the
-platform allows (a copy on the web), and its sealed copy is the Diary
-photo's, so nothing is kept or uploaded twice. A check is due at start, for
-another account, after each good sync and when a photo's file arrives; it
-reads the day entries only when the Diary files outside the library or the
-entries changed, and adds four photos per frame while the person is idle
-and no practice shows.
+Those photos and Diary photos older versions attached as Diary files move to
+the entity data (`media_diary_photos.zi`). A library photo moves once its
+bytes are on the device, its old copy downloading for it, and its entity
+record takes its name, day, Trash and the time it was added. Each Diary file
+a day's entry still includes, by a `photos` row or a `diary:` embed, moves by
+its hash through the photo button's path (`MediaAddBytes`), named as the
+entry names it and, without an Exif date, under the entry's day (`taken` is
+then the day alone); its library file is a hard link to the Diary file where
+the platform allows. Entries are not rewritten, and Diary draws a moved photo
+by its hash. A Diary file no entry includes stays as it is. Once the sync
+node confirmed a moved photo's record and chunks and the media pass
+downloaded them back whole (`verified_contents`), its old records name it,
+`"photo": "<sha256>"`, keeping every other field; then its Diary file
+leaves the device, its hex chunks from before copies shrink to one byte
+each, and the media pass deletes its old copies from every node
+(`old_copies_deleted`). Any failure keeps the old copy for a later pass, and
+a delegate (Telegram) device moves nothing. A check is due at start, for
+another account, after each good sync and when a photo's file arrives or
+comes back whole; it reads the day entries only when what has not moved or
+the entries changed, and moves four photos per frame while the person is
+idle and no practice shows.
 
-The apply branch accepts any `cell.media.*` key with a JSON value, so a later
-version can add kinds of records; a record this version cannot read changes
-nothing and never stops a sync. `media` is a reserved app name, so these keys
-are never taken for an app's records.
+The legacy apply branch still accepts any `cell.media.*` key with a JSON
+value, so released versions' records keep syncing; `media` is a reserved app
+name, so these keys are never taken for an app's records.
 
 Apps reach the library only through the media calls, which the host grants
 to Photos alone among the apps the node offers (`NodeAppMediaGranted`); a
@@ -618,12 +648,15 @@ pick did, the library's revision and this device's date, and
 `MediaUpdateHost(hash, field, value)` changes `trashed` or `name`. The hosted
 asset policy draws `media/` paths of the current account's library only.
 
-Photo bytes travel as the Diary's sealed copies (`diary_records.zi`): a key
-made from the account's Diary copy key and the file's hash, ChaCha20-Poly1305
-with a fixed nonce, `PUT /api/v1/blobs/inbe/<sha256 of the copy>`. The same
-picture in Diary and in the library is therefore the same copy, uploaded once
-per node. The media pass (`diary_blobs.zi`) moves Diary photos, library
-originals and previews after each good sync:
+Photo bytes travel as the entity data's sealed chunks: chunks of at most
+8 MiB, each sealed with a key made from the account key, the photo's hash and
+the chunk's index (DaochiClient's `entity.zi`), ChaCha20-Poly1305 with a zero
+nonce, `PUT /api/v1/blobs/entity/<sha256 of the chunk>`, signed with Inbe's
+own app ID and device key. The same picture is therefore the same chunks for
+every app of the account, uploaded once per node. The media pass
+(`diary_blobs.zi`) moves photos, previews, the old copies photos still need
+in order to move, and deletes of moved photos' old copies after each good
+sync:
 
 - Copies go to every node in the account's node list whose photo upload is
   on (Profile › Data), not only the sync node. `diary_blobs(node, blob)`
@@ -632,7 +665,9 @@ originals and previews after each good sync:
   only that node full; a node that fails only loses its turn.
 - Downloads ask the sync node first, then the other nodes in list order; a
   404 moves on to the next node. Previews download everywhere, originals only
-  where they are wanted (`media_wanted`, the last 32 photos opened here).
+  where they are wanted (`media_wanted`, the last 32 photos opened here) or
+  when a photo has no preview. Deletes go first, so a node has room for what
+  moves; a node that answers 405 keeps its old copies for a later pass.
 - Blob requests never use the sync's session. Each node has its own media
   session, saved on this device under `SyncNodeCursorKey(address,
   "media_auth_*")`, opened with a login and a device registration on that
@@ -650,10 +685,14 @@ publication the node's importer writes `history-v2.json`, the app's newest
 three releases, which the node offers for going back to an earlier version;
 `--write-history` rewrites every app's history. `make
 media-store-test media-metadata-test photos-app-test` check the library, the
-Exif reader and the app through the real host; `make sync-server-test`
-(`DAOCHI_BIN=...`) adds a photo on one device and opens it on another through
-two real Daochi nodes, and `make photos-ui-test` adds a camera photo through
-the desktop picker on a private Xvfb display.
+Exif reader and the app through the real host; `make entity-photos-test`
+upgrades a 2.1.43 profile (`tests/fixtures/photos-2.1.43.sql`) against nodes
+answered from memory, with interrupted passes, a full node, an unreachable
+node, a node that cannot delete and a damaged chunk; `make sync-server-test`
+(`DAOCHI_BIN=...`, Daochi 17bfd12 or later) adds a photo on one device and
+opens it on another through two real Daochi nodes and moves an old copy
+there; and `make photos-ui-test` adds a camera photo through the desktop
+picker on a private Xvfb display.
 
 ## Account app choices
 

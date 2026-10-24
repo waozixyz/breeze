@@ -1,0 +1,557 @@
+// A profile Inbe 2.1.43 left (fixtures/photos-2.1.43.sql, made by
+// fixtures/make_photos_fixture.py) upgrades: its Diary and library photos
+// move to the account's entity data, and nothing is lost on the way.
+// Every photo stays listed and drawn throughout. An old copy goes only
+// after the sync node confirmed the photo's record and chunks and they came
+// back whole; an interrupted pass, a full node, an unreachable node, a node
+// that cannot delete yet and a damaged chunk each keep the old copies for a
+// later pass. Released versions keep reading every old record. A delegate
+// device moves nothing, and the account's other device draws each moved
+// photo from its entity record alone. The nodes here answer from memory.
+#import "byte_text_linux"
+#import "vec"
+#import "text"
+#import "file_linux"
+#import "json_scan"
+#import "text_buffer"
+#import "crypto"
+#import "keys"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_settings.zi";
+#import, file "../src/storage/media_records.zi";
+#import, file "../src/storage/entity_records.zi";
+#import, file "../src/storage/sync_exchange.zi";
+#import, file "../src/storage/sync_outbox.zi";
+#import, file "../src/storage/sync_apply.zi";
+#import, file "../src/storage/sync_nodes.zi";
+#import, file "../src/storage/sync_node_storage.zi";
+#import, file "../src/storage/sqlite.zi";
+#import, file "../src/storage/paths.zi";
+#import, file "../src/cells/package_files.zi";
+#import, file "../src/cells/diary_records.zi";
+#import, file "../src/cells/diary_store.zi";
+#import, file "../src/cells/diary_photos.zi";
+#import, file "../src/cells/diary_blobs.zi";
+#import, file "../src/cells/entity_photos.zi";
+#import, file "../src/cells/media_store.zi";
+#import, file "../src/cells/media_diary_photos.zi";
+
+entity_test_c :: #system_library "c";
+EnvironmentText :: (name: *u8) -> *u8 #foreign entity_test_c "getenv";
+FixtureOpen :: (path: *u8, db: **void) -> s32 #foreign entity_test_c "sqlite3_open";
+FixtureExec :: (db: *void, sql: *u8, callback: *void, argument: *void, error: **u8) -> s32 #foreign entity_test_c "sqlite3_exec";
+FixtureClose :: (db: *void) -> s32 #foreign entity_test_c "sqlite3_close";
+
+FIXTURE_SYNC_NODE :: "https://sync.photos.test"
+FIXTURE_OTHER_NODE :: "https://other.photos.test"
+FIXTURE_ACCOUNT :: "7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d"
+WALK_FILE :: "photo-20240402081500-1.bin"
+TEA_FILE :: "photo-20240403090000-1.bin"
+RAIN_FILE :: "photo-20240301000000-1.bin"
+ORPHAN_FILE :: "photo-20240405000000-1.bin"
+
+// PNG's signature, then (index * 7 + seed) % 251, as the fixture's photos.
+FixturePhoto :: (size: s64, seed: s64) -> string {
+    out: Vec(u8)
+    header: [8]u8 = .[cast(u8)137, cast(u8)80, cast(u8)78, cast(u8)71, cast(u8)13, cast(u8)10, cast(u8)26, cast(u8)10]
+    for index: cast(s64)0..size - 1 {
+        unused VecPush(out, ifx index < 8 then header[index] else cast(u8)((index * 7 + seed) % 251))
+    }
+    return BuilderFinish(out)
+}
+
+Hash :: (data: string) -> string {
+    output: [65]u8
+    descriptor := cast(*TextDescriptor)(*data)
+    storage_sha256_hex(descriptor.data, data.count, *output[0])
+    return PackageText(TextFromCString(*output[0]), "")
+}
+
+// What the nodes hold and how they answer.
+FakeBlob :: struct {
+    node: [64]u8
+    address: [65]u8
+    bytes: string
+}
+
+FakeNode :: struct {
+    address: [64]u8
+    // Deletes answer 405, as a node from before deletes.
+    no_deletes: bool
+    // Uploads answer 413.
+    full: bool
+    // Nothing answers.
+    offline: bool
+}
+
+FAKE_BLOBS :: 64
+fake_blobs: [FAKE_BLOBS]FakeBlob;
+fake_blob_count: s32;
+fake_nodes: [2]FakeNode;
+fake_requests: s32;
+fake_puts: s32;
+fake_deletes: s32;
+
+FakeFind :: (node: string, address: string) -> s32 {
+    for index: cast(s32)0..fake_blob_count - 1 {
+        blob := *fake_blobs[index]
+        if blob.bytes.count > 0 && TextUntilNul(blob.node[:]) == node && TextUntilNul(blob.address[:]) == address {
+            return index
+        }
+    }
+    return -1
+}
+
+FakeHas :: (node: string, address: string) -> bool {
+    return FakeFind(node, address) >= 0
+}
+
+FakeStore :: (node: string, address: string, bytes: string) {
+    at := FakeFind(node, address)
+    if at < 0 {
+        at = fake_blob_count
+        fake_blob_count += 1
+    }
+    check_true("the fake nodes have room", at < FAKE_BLOBS)
+    blob := *fake_blobs[at]
+    unused AppCopyText(node, blob.node[:])
+    unused AppCopyText(address, blob.address[:])
+    blob.bytes = PackageText(bytes, "")
+}
+
+FakeNodeOf :: (address: string) -> *FakeNode {
+    if TextUntilNul(fake_nodes[1].address[:]) == address {
+        return *fake_nodes[1]
+    }
+    return *fake_nodes[0]
+}
+
+// The old copies the fixture's nodes hold.
+FakeLoadFixture :: () {
+    statement: *void
+    check_true("read the fixture's nodes", SqlitePrepareText(storage_db_handle(),
+        "SELECT node,address,bytes FROM fixture_node_blobs", -1, *statement, null) == SQLITE_OK)
+    while SqliteStep(statement) == SQLITE_ROW {
+        hex := AppTextFromCString(SqliteColumnText(statement, 2), 65536)
+        out: Vec(u8)
+        for index: cast(s64)0..hex.count / 2 - 1 {
+            unused VecPush(out, cast(u8)0)
+        }
+        bytes := BuilderFinish(out)
+        descriptor := cast(*TextDescriptor)(*bytes)
+        unused HexToBytes(hex, descriptor.data, bytes.count)
+        FakeStore(AppTextFromCString(SqliteColumnText(statement, 0), 64),
+            AppTextFromCString(SqliteColumnText(statement, 1), 65), bytes)
+        PackageFree(bytes)
+    }
+    SqliteFinalize(statement)
+}
+
+// One pass, as the host runs it, of at most `limit` requests: the nodes
+// answer from memory. The answer: the requests sent.
+RunPass :: (limit: s32) -> s32 {
+    pass: DiaryBlobPass
+    sent: s32 = 0
+    if !DiaryBlobPlan(*pass, FIXTURE_SYNC_NODE) {
+        return 0
+    }
+    request: DiaryBlobRequest
+    while sent < limit && DiaryBlobNext(*pass, *request) {
+        sent += 1
+        fake_requests += 1
+        node := TextUntilNul(request.node[:])
+        fake := FakeNodeOf(node)
+        path := TextUntilNul(request.path[:])
+        address := path[path.count - 64:]
+        if fake.offline {
+            DiaryBlobFailed(*pass, *request)
+            DiaryBlobAbandon(*request)
+            continue
+        }
+        status: s32 = 404
+        answer := ""
+        if request.method == "PUT" {
+            status = ifx fake.full then cast(s32)413 else cast(s32)204
+            if !fake.full {
+                FakeStore(node, address, request.body)
+                fake_puts += 1
+            }
+        } else if request.method == "DELETE" {
+            status = ifx fake.no_deletes then cast(s32)405 else cast(s32)204
+            at := FakeFind(node, address)
+            if !fake.no_deletes && at >= 0 {
+                PackageFree(fake_blobs[at].bytes)
+                fake_blobs[at].bytes = ""
+                fake_deletes += 1
+            }
+        } else {
+            at := FakeFind(node, address)
+            if at >= 0 {
+                status = 200
+                answer = fake_blobs[at].bytes
+            }
+        }
+        if status == 413 {
+            answer = "{\"code\":\"storage_full\",\"account_storage\":{\"used_bytes\":20971000,\"limit_bytes\":20971520}}"
+        }
+        descriptor := cast(*TextDescriptor)(*answer)
+        unused DiaryBlobFinish(*pass, *request, status, BytesFromPointer(descriptor.data, cast(u64)answer.count))
+        DiaryBlobAbandon(*request)
+    }
+    DiaryBlobPassEnd(*pass)
+    return sent
+}
+
+// Passes until one sends nothing.
+RunPasses :: () {
+    for round: 0..20 {
+        unused round
+        if RunPass(1000) == 0 {
+            return
+        }
+    }
+}
+
+MoveSteps :: () {
+    MediaDiaryPhotosDue()
+    for step: 0..80 {
+        unused step
+        unused MediaDiaryPhotosStep()
+    }
+}
+
+// Good syncs: every queued record goes to the sync node, which keeps it,
+// batch after batch.
+GoodSync :: () {
+    for batch: 0..20 {
+        unused batch
+        payload := storage_build_sync_payload_json(FIXTURE_ACCOUNT, "fixture-public-key")
+        check_true("a sync payload builds", payload != null)
+        storage_free_sync_payload_json(payload)
+        storage_clear_uploaded_outbox(storage_state_handle().pending_sync_outbox_seq)
+        if storage_has_pending_sync_outbox() == 0 {
+            break
+        }
+    }
+    check_int("the node has every record", storage_has_pending_sync_outbox(), 0)
+    MediaDiaryPhotosDue()
+}
+
+Setting :: (key: string) -> string {
+    return PackageText(storage_get_setting_text(key), "")
+}
+
+EntityField :: (hash: string, field: string) -> string {
+    sql := PackageText(PackageText(PackageText("SELECT COALESCE(json_extract(value,'$.", field), "'),'') FROM settings WHERE key='entity.photos."),
+        PackageText(hash, "'"))
+    defer { PackageFree(sql) }
+    return PackageText(read_db_text(sql), "")
+}
+
+Count :: (sql: string) -> s32 {
+    return read_db_count(sql)
+}
+
+// The first column of the query's first row, whole, to free.
+ReadText :: (sql: string) -> string {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) != SQLITE_OK {
+        return ""
+    }
+    defer { SqliteFinalize(statement) }
+    if SqliteStep(statement) != SQLITE_ROW {
+        return ""
+    }
+    return PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 1048576), "")
+}
+
+// Every record a released version reads, whole: the Diary's and the
+// library's.
+OldRecords :: () -> string {
+    return ReadText("SELECT group_concat(key||'='||value,'|') FROM (SELECT key,value FROM settings WHERE key GLOB 'cell.diary.*' OR key GLOB 'cell.media.*' ORDER BY key)")
+}
+
+LoadFixture :: (root: string) {
+    path: TextBuffer
+    raw_database(root, *path)
+    name: TextBuffer
+    append(*name, "ENTITY_PHOTOS_FIXTURE")
+    fixture := PackageRead(TextFromCString(EnvironmentText(*name.bytes[0])), 1048576)
+    check_true("read the 2.1.43 profile", fixture.count > 1000)
+    copy := PackageText(fixture, "\0")
+    descriptor := cast(*TextDescriptor)(*copy)
+    db: *void = null
+    error: *u8 = null
+    check_true("open the 2.1.43 database", FixtureOpen(*path.bytes[0], *db) == 0 && db != null)
+    check_true("write the 2.1.43 profile", FixtureExec(db, descriptor.data, null, null, *error) == 0)
+    unused FixtureClose(db)
+    PackageFree(copy)
+    PackageFree(fixture)
+}
+
+#program_export
+Check :: () -> s32 {
+    guard := support_begin(data_root())
+    if guard != 0 { return guard }
+    walk := FixturePhoto(2600, 11)
+    tea := FixturePhoto(2700, 12)
+    rain := FixturePhoto(2500, 9)
+    lake := FixturePhoto(2900, 14)
+    lake_preview := FixturePhoto(900, 21)
+    orphan := FixturePhoto(2800, 13)
+    walk_hash := Hash(walk)
+    tea_hash := Hash(tea)
+    rain_hash := Hash(rain)
+    lake_hash := Hash(lake)
+    orphan_hash := Hash(orphan)
+
+    // The profile as 2.1.43 left it, with its files.
+    root := make_root("photos-2.1.43")
+    LoadFixture(root)
+    check_true("the 2.1.43 profile opens and upgrades", storage_init(root) != 0)
+    check_int("the upgrade keeps its records", Count("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.*'"), 16)
+    check_int("the upgrade adds the old-copy tables",
+        Count("SELECT COUNT(*) FROM sqlite_master WHERE name IN ('old_copies_deleted','verified_contents')"), 2)
+    FakeLoadFixture()
+    unused AppCopyText(FIXTURE_SYNC_NODE, fake_nodes[0].address[:])
+    unused AppCopyText(FIXTURE_OTHER_NODE, fake_nodes[1].address[:])
+    check_true("the account has two nodes", SyncNodeAdd(FIXTURE_SYNC_NODE) && SyncNodeAdd(FIXTURE_OTHER_NODE))
+    check_true("write walk", DiaryStorePrepare() && PackageWrite(DiaryStorePath(WALK_FILE), walk))
+    check_true("write tea", PackageWrite(DiaryStorePath(TEA_FILE), tea))
+    check_true("write the orphan", PackageWrite(DiaryStorePath(ORPHAN_FILE), orphan))
+    directory := MediaDirectory()
+    check_true("write the library", storage_ensure_dir(directory) != 0 &&
+        PackageWrite(MediaPath(walk_hash, false), walk) && PackageWrite(MediaPath(lake_hash, true), lake_preview))
+    old_records := OldRecords()
+    check_true("the old records read whole", old_records.count > 4000)
+    // The other node cannot delete until the end.
+    fake_nodes[1].no_deletes = true
+
+    // Before anything moves, every photo lists and draws as before.
+    check_int("the library lists walk", MediaQuery("", false), 1)
+    check_int("Trash lists lake", MediaQuery("", true), 1)
+    check_true("Diary draws walk from the library", DiaryPhotoAsset(PackageText("diary:", WALK_FILE)) ==
+        PackageText(PackageText("media/", walk_hash), ".png"))
+    check_true("Diary draws tea from its file", DiaryPhotoAsset(PackageText("diary:", TEA_FILE)) ==
+        PackageText(PackageText("diary/photos/", TEA_FILE), ".png"))
+
+    // A delegate device moves nothing.
+    storage_delegate_mode = FixtureDelegateMode
+    MoveSteps()
+    check_int("a delegate moves nothing", Count("SELECT COUNT(*) FROM settings WHERE key GLOB 'entity.*'"), 0)
+    storage_delegate_mode = FixtureOwnerMode
+
+    // The photos whose bytes are here move; nothing old changes.
+    MoveSteps()
+    check_int("walk, tea and rain move", Count("SELECT COUNT(*) FROM settings WHERE key GLOB 'entity.photos.*'"), 3)
+    check_true("walk keeps its library name and day", EntityField(walk_hash, "name") == "IMG_2041.png" &&
+        EntityField(walk_hash, "day") == "2024-04-02" && EntityField(walk_hash, "added_at") == "1792000100")
+    check_true("tea is named as its entry names it", EntityField(tea_hash, "name") == "Tea cup" &&
+        EntityField(tea_hash, "day") == "2024-04-03")
+    check_true("rain moves from its chunks", EntityField(rain_hash, "size") == "2500" &&
+        PackageRead(MediaPath(rain_hash, false), DIARY_FILE_LIMIT) == rain)
+    check_true("lake waits for its bytes, and the orphan stays", EntityField(lake_hash, "hash") == "" &&
+        EntityField(orphan_hash, "hash") == "")
+    check_true("no old record changes while photos move", OldRecords() == old_records)
+    check_true("the Diary files stay", PackageRead(DiaryStorePath(WALK_FILE), DIARY_FILE_LIMIT) == walk &&
+        PackageRead(DiaryStorePath(TEA_FILE), DIARY_FILE_LIMIT) == tea)
+    check_int("each photo lists once", MediaQuery("", false), 3)
+    check_int("lake still lists in Trash", MediaQuery("", true), 1)
+    // A photo over 8 MiB is two chunks.
+    big := FixturePhoto(9000000, 31)
+    big_hash := Hash(big)
+    check_true("a large photo is added", MediaAddBytes(big, MediaAddition.{.name = "pano.png"}).succeeded)
+
+    // An interrupted pass, then a full other node and an unreachable one:
+    // no old copy goes, and the record names chunks only once a node has
+    // them all.
+    fake_nodes[1].full = true
+    sent := RunPass(1)
+    check_int("the pass is interrupted after one request", sent, 1)
+    check_int("nothing is deleted", fake_deletes, 0)
+    fake_nodes[0].offline = true
+    unused RunPass(1000)
+    check_int("an unreachable sync node gets nothing", Count("SELECT COUNT(*) FROM settings WHERE key GLOB 'entity.photos.*' AND json_type(value,'$.blobs') IS NOT NULL"), 0)
+    fake_nodes[0].offline = false
+    RunPasses()
+    check_true("lake's old copy came here", PackageRead(MediaPath(lake_hash, false), DIARY_FILE_LIMIT) == lake)
+    check_int("the full node got none", Count(PackageText(PackageText("SELECT COUNT(*) FROM diary_blobs WHERE node='", FIXTURE_OTHER_NODE),
+        "' AND blob NOT IN (SELECT address FROM fixture_node_blobs)")), 0)
+    check_true("the full node is marked full", SyncNodeStorageRead(FIXTURE_OTHER_NODE).full)
+    MoveSteps()
+    check_true("lake moves, in Trash, with its name and preview", EntityField(lake_hash, "name") == "Lake.png" &&
+        EntityField(lake_hash, "trashed") == "1" && EntityField(lake_hash, "preview.hash") == Hash(lake_preview))
+    RunPasses()
+    check_int("every moved photo names its chunks",
+        Count("SELECT COUNT(*) FROM settings WHERE key GLOB 'entity.photos.*' AND json_array_length(value,'$.blobs')=1"), 4)
+    check_true("the large photo names two chunks of their sealed sizes",
+        EntityField(big_hash, "blobs[0].size") == "8388624" && EntityField(big_hash, "blobs[1].size") == "611408" &&
+        FakeHas(FIXTURE_SYNC_NODE, EntityField(big_hash, "blobs[1].address")))
+    check_true("each chunk is on the sync node", FakeHas(FIXTURE_SYNC_NODE, EntityField(walk_hash, "blobs[0].address")) &&
+        FakeHas(FIXTURE_SYNC_NODE, EntityField(lake_hash, "preview.blobs[0].address")))
+    check_int("still no old copy goes before the node confirms", fake_deletes, 0)
+    MoveSteps()
+    check_true("and no old record changes", OldRecords() == old_records)
+
+    // The node keeps the records; a damaged chunk there holds back walk.
+    GoodSync()
+    walk_chunk := EntityField(walk_hash, "blobs[0].address")
+    damaged := FakeFind(FIXTURE_SYNC_NODE, walk_chunk)
+    good_bytes := PackageText(fake_blobs[damaged].bytes, "")
+    damaged_descriptor := cast(*TextDescriptor)(*fake_blobs[damaged].bytes)
+    damaged_descriptor.data[30] = cast(u8)((cast(s32)damaged_descriptor.data[30] + 1) % 256)
+    RunPasses()
+    MoveSteps()
+    check_true("a photo whose chunk comes back damaged keeps its old records",
+        FieldAt(Setting(PackageText("cell.diary.file.", WALK_FILE)), 0, "photo") < 0 &&
+        FieldAt(Setting(PackageText("cell.media.", walk_hash)), 0, "photo") < 0)
+    check_true("and its Diary file", PathExists(DiaryStorePath(WALK_FILE)))
+    check_true("tea comes back whole and its entry names it",
+        Setting(PackageText("cell.diary.file.", TEA_FILE)) ==
+        PackageText(PackageText(PackageText("{\"hash\":\"", tea_hash), "\",\"size\":2700,\"photo\":\""), PackageText(tea_hash, "\"}")))
+    check_true("tea's Diary file left, its library file stays", !PathExists(DiaryStorePath(TEA_FILE)) &&
+        PackageRead(MediaPath(tea_hash, false), DIARY_FILE_LIMIT) == tea)
+    check_int("rain's chunks shrink", Count(PackageText(PackageText("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.diary.chunk.",
+        rain_hash), ".*' AND value='-'")), 3)
+    check_true("lake's old records name it and keep every field",
+        FieldAt(Setting(PackageText("cell.media.", lake_hash)), 0, "blob") >= 0 &&
+        FieldAt(Setting(PackageText("cell.media.", lake_hash)), 0, "photo") >= 0 &&
+        FieldAt(Setting(PackageText("cell.media.preview.", lake_hash)), 0, "photo") >= 0)
+    fake_blobs[damaged].bytes = good_bytes
+    exec_db_sql("DELETE FROM verified_contents")
+    RunPasses()
+    MoveSteps()
+    check_true("walk, whole now, moves too", FieldAt(Setting(PackageText("cell.diary.file.", WALK_FILE)), 0, "photo") >= 0 &&
+        FieldAt(Setting(PackageText("cell.media.", walk_hash)), 0, "photo") >= 0 && !PathExists(DiaryStorePath(WALK_FILE)))
+    check_true("Diary draws walk from the library without its file",
+        DiaryPhotoAsset(PackageText("diary:", WALK_FILE)).count > 0 && DiaryPhotoAsset(PackageText("diary:", WALK_FILE))[:6] == "media/")
+    check_true("the orphan stays as it was", PathExists(DiaryStorePath(ORPHAN_FILE)) &&
+        FieldAt(Setting(PackageText("cell.diary.file.", ORPHAN_FILE)), 0, "photo") < 0)
+
+    // Old copies go, but not from a node that cannot delete yet.
+    RunPasses()
+    check_true("the sync node deleted walk's, lake's and its preview's old copies",
+        Count("SELECT COUNT(*) FROM old_copies_deleted WHERE node='https://sync.photos.test'") == 3)
+    walk_old := PackageText(read_db_text(PackageText(PackageText("SELECT json_extract(value,'$.blob') FROM settings WHERE key='cell.media.",
+        walk_hash), "'")), "")
+    check_true("the other node keeps walk's old copy for now",
+        Count("SELECT COUNT(*) FROM old_copies_deleted WHERE node='https://other.photos.test'") == 0 &&
+        FakeHas(FIXTURE_OTHER_NODE, walk_old) && !FakeHas(FIXTURE_SYNC_NODE, walk_old))
+    fake_nodes[1].no_deletes = false
+    RunPasses()
+    check_int("then it deletes it", Count("SELECT COUNT(*) FROM old_copies_deleted WHERE node='https://other.photos.test'"), 3)
+    check_true("walk's old copy is gone everywhere", !FakeHas(FIXTURE_OTHER_NODE, walk_old))
+    check_true("the orphan's old copy stays", FakeHas(FIXTURE_SYNC_NODE,
+        read_db_text("SELECT json_extract(value,'$.blob') FROM settings WHERE key='cell.diary.file.photo-20240405000000-1.bin'")))
+    check_int("every photo still lists", MediaQuery("", false), 4)
+    check_int("lake still lists in Trash", MediaQuery("", true), 1)
+    check_true("the full node keeps being asked, and nothing else goes", RunPass(1000) == 1 && fake_puts > 0)
+    fake_nodes[1].full = false
+    RunPasses()
+    check_true("with room it gets every photo", FakeHas(FIXTURE_OTHER_NODE, EntityField(walk_hash, "blobs[0].address")) &&
+        FakeHas(FIXTURE_OTHER_NODE, EntityField(lake_hash, "preview.blobs[0].address")))
+    check_int("then nothing more goes", RunPass(1000), 0)
+
+    // Another app moved a photo first: its record lacks what the old
+    // record knows, which joins it before the old record names it.
+    harbor := FixturePhoto(3300, 41)
+    harbor_hash := Hash(harbor)
+    harbor_old := PackageText(PackageText("{\"hash\":\"", harbor_hash),
+        "\",\"size\":3300,\"type\":\"png\",\"name\":\"Harbor.png\",\"day\":\"2024-06-01\",\"taken\":\"2024-06-01\",\"added\":1792000300,\"capture\":0,\"trashed\":1}")
+    storage_set_setting_text(PackageText("cell.media.", harbor_hash), harbor_old)
+    storage_set_setting_text(EntityPhotoKey(harbor_hash), PackageText(PackageText("{\"hash\":\"", harbor_hash),
+        "\",\"size\":3300,\"type\":\"image/png\",\"taken_at\":1717200000,\"caption\":\"From Photos\"}"))
+    check_true("its bytes are here", PackageWrite(MediaPath(harbor_hash, false), harbor))
+    RunPasses()
+    GoodSync()
+    RunPasses()
+    MoveSteps()
+    check_true("the old record's name, day and Trash join the photo's record",
+        EntityField(harbor_hash, "name") == "Harbor.png" && EntityField(harbor_hash, "day") == "2024-06-01" &&
+        EntityField(harbor_hash, "trashed") == "1" && EntityField(harbor_hash, "added_at") == "1792000300" &&
+        EntityField(harbor_hash, "caption") == "From Photos")
+    check_true("the old record waits until that goes out", FieldAt(Setting(PackageText("cell.media.", harbor_hash)), 0, "photo") < 0)
+    GoodSync()
+    RunPasses()
+    MoveSteps()
+    check_true("then it names the photo", FieldAt(Setting(PackageText("cell.media.", harbor_hash)), 0, "photo") >= 0)
+    PackageFree(harbor_old)
+
+    // The account's other device draws each photo from its entity record.
+    moved: [4]string = .[walk_hash, tea_hash, rain_hash, lake_hash]
+    records: [4]string
+    for index: 0..3 {
+        records[index] = MediaEntityRecord(moved[index])
+    }
+    big_record := MediaEntityRecord(big_hash)
+    storage_close()
+    second := make_root("photos-second-device")
+    check_true("init the other device", storage_init(second) != 0)
+    storage_set_setting_text("sync_private_key", read_fixture_key())
+    storage_set_setting_text("sync_public_id", FIXTURE_ACCOUNT)
+    storage_set_setting_text("sync_server_url", FIXTURE_SYNC_NODE)
+    for index: 0..3 {
+        storage_set_setting_text(EntityPhotoKey(moved[index]), records[index])
+        PackageFree(records[index])
+    }
+    storage_set_setting_text(EntityPhotoKey(big_hash), big_record)
+    PackageFree(big_record)
+    check_int("it has the five photos", MediaQuery("", false) + MediaQuery("", true), 5)
+    RunPasses()
+    check_int("each photo's preview comes, or without one its original", FixturePreviewsHere(moved), 4)
+    check_true("lake's original waits until it is opened", PathExists(MediaPath(lake_hash, true)) &&
+        !PathExists(MediaPath(lake_hash, false)))
+    check_true("the moved photos draw on this device", MediaAsset(walk_hash, false).count > 0 &&
+        MediaAsset(tea_hash, false).count > 0 && MediaAsset(rain_hash, false).count > 0)
+    MediaWant(lake_hash)
+    MediaWant(big_hash)
+    RunPasses()
+    check_true("an original opened here comes", PackageRead(MediaPath(lake_hash, false), DIARY_FILE_LIMIT) == lake)
+    check_true("the large photo comes in its two chunks", PackageRead(MediaPath(big_hash, false), DIARY_FILE_LIMIT) == big)
+    storage_close()
+    PackageFree(old_records)
+    return failures
+}
+
+// How many of these photos have their preview, or when they have none their
+// original, on this device.
+FixturePreviewsHere :: (hashes: [4]string) -> s32 {
+    here: s32 = 0
+    for hash: hashes {
+        record := MediaEntityRecord(hash)
+        preview := EntityPreviewContent(record)
+        photo := EntityPhotoContent(record)
+        path := MediaPath(hash, preview.valid)
+        content := ifx preview.valid then preview else photo
+        if EntityContentMatches(content, PackageRead(path, DIARY_FILE_LIMIT)) {
+            here += 1
+        }
+        PackageFree(path)
+        PackageFree(record)
+    }
+    return here
+}
+
+FixtureDelegateMode :: () -> s32 {
+    return 2
+}
+
+FixtureOwnerMode :: () -> s32 {
+    return 0
+}
+
+// The fixture account's private key, "42" repeated.
+read_fixture_key :: () -> string {
+    out: Vec(u8)
+    for index: 0..2559 {
+        unused index
+        BuilderPrint(*out, "42")
+    }
+    return BuilderFinish(out)
+}
+

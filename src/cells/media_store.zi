@@ -4,21 +4,25 @@
 // is its interface; the library belongs to the account, so its photos stay
 // when an app that added them is removed.
 //
-// Records sync in their own collection, private.inbe.v1.media, which older
-// versions skip (storage/media_records.zi):
+// Each photo is a record of the account's entity data, entity.photos.<sha256>
+// (entity_photos.zi), which every app of the account shares: Diary embeds
+// the same photo, and other apps such as Photos read and write the same
+// record. Its bytes travel as the entity data's sealed chunks
+// (diary_blobs.zi), so the same picture is stored once on each node. Files
+// live per account under media/<account>/<sha256> and <sha256>.preview,
+// beside the Diary's folder. Previews download on every device; an original
+// only where it is wanted, such as when Photos opens it.
+//
+// Released versions kept the library in private.inbe.v1.media
+// (storage/media_records.zi), which they still read through 2027-10-24:
 //
 //   cell.media.<sha256>          {"hash","size","type","name","day","taken",
-//                                 "added","trashed"[,"blob","key"]}
-//   cell.media.preview.<sha256>  {"hash","size","type"[,"blob","key"]}
+//                                 "added","trashed"[,"blob","key"][,"photo"]}
+//   cell.media.preview.<sha256>  {"hash","size","type"[,"blob","key"][,"photo"]}
 //
-// "day" is the capture day on the camera's clock (or the day the photo was
-// added), "taken" the capture time, with its offset when the camera wrote
-// one. The bytes travel as the same sealed copies as Diary photos
-// (diary_records.zi, diary_blobs.zi): a key made from the account key and
-// the file's hash, so the same picture is one copy on each node. Files live
-// per account under media/<account>/<sha256> and <sha256>.preview, beside
-// the Diary's folder. Previews download on every device; an original only
-// where it is wanted, such as when Photos opens it.
+// A photo there without an entity record is listed from it until it moves
+// (media_diary_photos.zi): its entity record takes its fields, and its old
+// copy goes once the node has the new one.
 #import "file_linux"
 #import "byte_text_linux"
 #import "vec"
@@ -29,6 +33,8 @@
 #import, file "diary_records.zi";
 #import, file "diary_store.zi";
 #import, file "media_metadata.zi";
+#import, file "entity_photos.zi";
+#import, file "../storage/entity_records.zi";
 #import, file "package_files.zi";
 #import, file "../storage/media_records.zi";
 #import, file "../storage/cell_records.zi";
@@ -72,6 +78,8 @@ MediaItem :: struct {
     taken: [26]u8
     added: s64
     trashed: bool
+    // An entity record; otherwise a released version's library record.
+    entity: bool
 }
 
 MediaImport :: struct {
@@ -119,9 +127,10 @@ MediaPreviewKey :: (hash: string) -> string {
     return PackageText(MEDIA_PREVIEW_PREFIX, hash)
 }
 
-// A record of the library, or empty.
+// A record of the library: an entity record, or a released version's, or
+// empty.
 MediaRecordRead :: (key: string) -> string {
-    if !MediaRecordKeyAccepted(key) || storage_db_handle() == null {
+    if (!MediaRecordKeyAccepted(key) && !EntityPhotoKeyAccepted(key)) || storage_db_handle() == null {
         return ""
     }
     statement: *void
@@ -139,9 +148,10 @@ MediaRecordRead :: (key: string) -> string {
     return PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 65536), "")
 }
 
-// Saves a record of the library; it syncs in the library's collection.
+// Saves a record of the library; it syncs in its record's collection.
 MediaRecordWrite :: (key: string, value: string) -> bool {
-    if !MediaRecordKeyAccepted(key) || value.count == 0 || value.count >= 65536 {
+    if (!MediaRecordKeyAccepted(key) && !EntityPhotoKeyAccepted(key)) || value.count == 0 ||
+    value.count >= 65536 {
         return false
     }
     storage_set_setting_text(key, value)
@@ -212,7 +222,77 @@ MediaJson :: (out: *Vec(u8), value: string) {
     BuilderPrint(out, "\"")
 }
 
+// A day as YYYY-MM-DD from seconds since 1970 in UTC.
+MediaDayOfSeconds :: (seconds: s64, output: []u8) -> bool {
+    days := seconds / 86400
+    if seconds < 0 && seconds % 86400 != 0 {
+        days -= 1
+    }
+    // Days to a civil date (proleptic Gregorian).
+    shifted := days + 719468
+    era := ifx shifted >= 0 then shifted / 146097 else (shifted - 146096) / 146097
+    day_of_era := shifted - era * 146097
+    year_of_era := (day_of_era - day_of_era / 1460 + day_of_era / 36524 - day_of_era / 146096) / 365
+    day_of_year := day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100)
+    month_index := (5 * day_of_year + 2) / 153
+    day := day_of_year - (153 * month_index + 2) / 5 + 1
+    month := ifx month_index < 10 then month_index + 3 else month_index - 9
+    year := year_of_era + era * 400 + ifx month <= 2 then cast(s64)1 else cast(s64)0
+    if year < 1000 || year > 9999 {
+        return false
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%-", year)
+    BuilderPrint(*out, "%-", MediaTwo(cast(s32)month))
+    BuilderPrint(*out, "%", MediaTwo(cast(s32)day))
+    value := BuilderFinish(out)
+    defer { PackageFree(value) }
+    return AppCopyText(value, output)
+}
+
+// A photo's entity record as the library lists it. A record another app
+// wrote may lack the capture day; its capture time's UTC day stands in.
+MediaParseEntity :: (record: string) -> MediaItem {
+    item: MediaItem
+    content := EntityPhotoContent(record)
+    format := TextUntilNul(content.format[:])
+    if !content.valid || format.count == 0 {
+        return item
+    }
+    item.hash = content.hash
+    item.size = content.size
+    unused AppCopyText(format, item.format[:])
+    if ReadStringText(record, FieldAt(record, 0, "day"), item.day[:]) != 10 ||
+    !MediaDayValid(TextFromBytes(item.day[:10])) {
+        taken_at := ReadNumber(record, FieldAt(record, 0, "taken_at"))
+        if !taken_at.valid || !MediaDayOfSeconds(cast(s64)taken_at.value, item.day[:]) {
+            return MediaItem.{}
+        }
+    }
+    unused ReadStringText(record, FieldAt(record, 0, "name"), item.name[:])
+    unused ReadStringText(record, FieldAt(record, 0, "taken"), item.taken[:])
+    added := ReadNumber(record, FieldAt(record, 0, "added_at"))
+    if added.valid {
+        item.added = cast(s64)added.value
+    }
+    trashed := FieldAt(record, 0, "trashed")
+    item.trashed = MatchLiteral(record, trashed, "true")
+    item.entity = true
+    item.valid = true
+    return item
+}
+
+// A library record of either kind.
 MediaParse :: (record: string) -> MediaItem {
+    if FieldAt(record, 0, "added_at") >= 0 || FieldAt(record, 0, "blobs") >= 0 ||
+    FieldAt(record, 0, "taken_at") >= 0 {
+        return MediaParseEntity(record)
+    }
+    return MediaParseLegacy(record)
+}
+
+// A released version's library record.
+MediaParseLegacy :: (record: string) -> MediaItem {
     item: MediaItem
     media := DiaryMediaParse(record)
     if !media.valid {
@@ -236,9 +316,22 @@ MediaParse :: (record: string) -> MediaItem {
     return item
 }
 
+// The library's photo: its entity record, or a released version's record
+// while the photo has none.
 MediaRead :: (hash: string) -> MediaItem {
     if !MediaHashValid(hash) {
         return MediaItem.{}
+    }
+    entity_key := EntityPhotoKey(hash)
+    entity_record := MediaRecordRead(entity_key)
+    PackageFree(entity_key)
+    if entity_record.count > 0 {
+        item := MediaParseEntity(entity_record)
+        PackageFree(entity_record)
+        if item.valid && TextFromBytes(item.hash[:64]) != hash {
+            return MediaItem.{}
+        }
+        return item
     }
     key := MediaRecordKey(hash)
     record := MediaRecordRead(key)
@@ -246,11 +339,21 @@ MediaRead :: (hash: string) -> MediaItem {
         PackageFree(key)
         PackageFree(record)
     }
-    item := MediaParse(record)
+    item := MediaParseLegacy(record)
     if item.valid && TextFromBytes(item.hash[:64]) != hash {
         return MediaItem.{}
     }
     return item
+}
+
+// The photo's entity record, or empty.
+MediaEntityRecord :: (hash: string) -> string {
+    if !MediaHashValid(hash) {
+        return ""
+    }
+    key := EntityPhotoKey(hash)
+    defer { PackageFree(key) }
+    return MediaRecordRead(key)
 }
 
 media_two: [3]u8;
@@ -395,28 +498,6 @@ MediaRecordWith :: (record: string, field: string, value: string) -> string {
     return PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 65536), "")
 }
 
-// The record once its sealed copy is on a node: it names the copy's address
-// and key, so the account's other devices can download it.
-MediaRecordSetCopy :: (key: string, record: string, blob: string, key_hex: string) -> bool {
-    if !MediaHashValid(blob) || !MediaHashValid(key_hex) {
-        return false
-    }
-    blob_text: Vec(u8)
-    BuilderPrint(*blob_text, "\"%\"", blob)
-    quoted_blob := BuilderFinish(blob_text)
-    with_blob := MediaRecordWith(record, "blob", quoted_blob)
-    key_text: Vec(u8)
-    BuilderPrint(*key_text, "\"%\"", key_hex)
-    quoted_key := BuilderFinish(key_text)
-    named := MediaRecordWith(with_blob, "key", quoted_key)
-    written := named.count > 0 && MediaRecordWrite(key, named)
-    PackageFree(quoted_blob)
-    PackageFree(with_blob)
-    PackageFree(quoted_key)
-    PackageFree(named)
-    return written
-}
-
 // How a photo joins the library.
 MediaAddition :: struct {
     // The name the photo came with; folders are dropped.
@@ -463,8 +544,98 @@ MediaImportBytes :: (data: string, name: string) -> MediaImport {
     return MediaAddBytes(data, MediaAddition.{.name = name, .restore = true})
 }
 
+// A preview this device made for a photo: its file is written, and the
+// photo's record names it.
+MediaPreviewMade :: struct {
+    valid: bool
+    hash: [65]u8
+    size: s64
+    format: [8]u8
+}
+
+// The capture time as seconds since 1970, read as UTC when the camera wrote
+// no offset; -1 when it is no time.
+MediaTakenAt :: (taken: string) -> s64 {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT COALESCE(CAST(strftime('%s',?1) AS INTEGER),-1)", -1,
+        *statement, null) != SQLITE_OK {
+        return -1
+    }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, taken)
+    if SqliteStep(statement) != SQLITE_ROW {
+        return -1
+    }
+    return SqliteColumnInt64(statement, 0)
+}
+
+// What a photo's entity record says about it besides its bytes.
+MediaEntityFields :: struct {
+    name: string
+    day: string
+    taken: string
+    added: s64
+    trashed: bool
+    capture: bool
+    preview: MediaPreviewMade
+}
+
+// A new entity record for the photo's bytes.
+MediaEntityEntry :: (hash: string, data: string, format: string, fields: MediaEntityFields) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"hash\":\"%\",\"size\":%,\"type\":\"%\"", hash, data.count, EntityTypeOfFormat(format))
+    taken_at := MediaTakenAt(fields.taken)
+    if taken_at >= 0 {
+        BuilderPrint(*out, ",\"taken_at\":%", taken_at)
+    }
+    size := MediaSizeOf(data, format)
+    if size.valid {
+        BuilderPrint(*out, ",\"width\":%,\"height\":%", size.width, size.height)
+    }
+    if fields.preview.valid {
+        BuilderPrint(*out, ",\"preview\":{\"hash\":\"%\",\"size\":%,\"type\":\"%\"}",
+            TextUntilNul(fields.preview.hash[:]), fields.preview.size,
+            EntityTypeOfFormat(TextUntilNul(fields.preview.format[:])))
+    }
+    BuilderPrint(*out, ",\"added_at\":%,\"name\":", fields.added)
+    MediaJson(*out, MediaName(fields.name))
+    BuilderPrint(*out, ",\"trashed\":%,\"day\":\"%\",\"taken\":", ifx fields.trashed then "true" else "false",
+        fields.day)
+    MediaJson(*out, fields.taken)
+    BuilderPrint(*out, ",\"capture\":%}", ifx fields.capture then "true" else "false")
+    return BuilderFinish(out)
+}
+
+// A released version's preview of the photo, when its file is here, as the
+// photo's preview: the same bytes, so it is not made again.
+MediaLegacyPreview :: (hash: string) -> MediaPreviewMade {
+    made: MediaPreviewMade
+    key := MediaPreviewKey(hash)
+    record := MediaRecordRead(key)
+    path := MediaPath(hash, true)
+    data := PackageRead(path, DIARY_FILE_LIMIT)
+    defer {
+        PackageFree(key)
+        PackageFree(record)
+        PackageFree(path)
+        PackageFree(data)
+    }
+    media := DiaryMediaParse(record)
+    format := DiaryImageFormat(data)
+    if format.count == 0 || !DiaryMediaMatches(media, data) {
+        return made
+    }
+    made.hash = media.hash
+    made.size = media.size
+    unused AppCopyText(format, made.format[:])
+    made.valid = true
+    return made
+}
+
 // Adds the photo's bytes to the library once. A photo it already has keeps
-// its record, and leaves Trash only when the addition says so.
+// its record, and leaves Trash only when the addition says so. A photo a
+// released version's library keeps gets its entity record now, with that
+// record's name, day, Trash and the time it was added.
 MediaAddBytes :: (data: string, addition: MediaAddition) -> MediaImport {
     result: MediaImport
     if DataTemporary() || data.count <= 0 || data.count > DIARY_FILE_LIMIT {
@@ -487,17 +658,17 @@ MediaAddBytes :: (data: string, addition: MediaAddition) -> MediaImport {
     !MediaPlaceFile(path, data, addition.source) {
         return result
     }
-    key := MediaRecordKey(hash)
+    key := EntityPhotoKey(hash)
     record := MediaRecordRead(key)
     defer {
         PackageFree(key)
         PackageFree(record)
     }
-    existing := MediaParse(record)
+    existing := MediaParseEntity(record)
     if existing.valid {
         result.existed = true
         if existing.trashed && addition.restore {
-            restored := MediaRecordWith(record, "trashed", "0")
+            restored := MediaRecordWith(record, "trashed", "false")
             written := restored.count > 0 && MediaRecordWrite(key, restored)
             PackageFree(restored)
             if !written {
@@ -509,27 +680,48 @@ MediaAddBytes :: (data: string, addition: MediaAddition) -> MediaImport {
         result.succeeded = true
         return result
     }
+    legacy_key := MediaRecordKey(hash)
+    legacy_record := MediaRecordRead(legacy_key)
+    legacy := MediaParseLegacy(legacy_record)
+    legacy_capture := ReadNumber(legacy_record, FieldAt(legacy_record, 0, "capture"))
+    PackageFree(legacy_key)
+    PackageFree(legacy_record)
     day: [11]u8
     taken: [26]u8
+    fields: MediaEntityFields
     capture_data := ifx addition.capture_source.count > 0 then addition.capture_source else data
     capture_format := ifx addition.capture_source.count > 0 then DiaryImageFormat(capture_data) else format
-    if !MediaWhen(capture_data, capture_format, addition.day, day[:], taken[:]) {
-        return result
-    }
-    MediaWritePreview(hash, data, format)
-    out: Vec(u8)
-    BuilderPrint(*out, "{\"hash\":\"%\",\"size\":%,\"type\":\"%\",\"name\":", hash, data.count, format)
-    MediaJson(*out, MediaName(addition.name))
     capture := MediaCaptureOf(capture_data, capture_format)
-    BuilderPrint(*out, ",\"day\":\"%\",\"taken\":\"%\",\"added\":%,\"capture\":%,\"trashed\":0}",
-        TextUntilNul(day[:]), TextUntilNul(taken[:]), CellRecordClock() / 1000000,
-        ifx capture.valid && capture.year >= 1000 then 1 else 0)
-    entry := BuilderFinish(out)
+    if legacy.valid && TextFromBytes(legacy.hash[:64]) == hash {
+        result.existed = true
+        fields.name = TextUntilNul(legacy.name[:])
+        fields.day = TextUntilNul(legacy.day[:])
+        fields.taken = TextUntilNul(legacy.taken[:])
+        fields.added = legacy.added
+        fields.trashed = legacy.trashed && !addition.restore
+        fields.capture = ifx legacy_capture.valid then legacy_capture.value != 0.0 else capture.valid && capture.year >= 1000
+        fields.preview = MediaLegacyPreview(hash)
+    } else {
+        if !MediaWhen(capture_data, capture_format, addition.day, day[:], taken[:]) {
+            return result
+        }
+        fields.name = addition.name
+        fields.day = TextUntilNul(day[:])
+        fields.taken = TextUntilNul(taken[:])
+        fields.added = CellRecordClock() / 1000000
+        fields.capture = capture.valid && capture.year >= 1000
+    }
+    if !fields.preview.valid {
+        fields.preview = MediaWritePreview(hash, data, format)
+    }
+    entry := MediaEntityEntry(hash, data, format, fields)
     defer { PackageFree(entry) }
     if !MediaRecordWrite(key, entry) {
         return result
     }
-    AchievementPhotoImported(hash)
+    if !legacy.valid {
+        AchievementPhotoImported(hash)
+    }
     MediaAssetsChanged()
     sync_web_storage()
     result.succeeded = true
@@ -538,7 +730,8 @@ MediaAddBytes :: (data: string, addition: MediaAddition) -> MediaImport {
 
 // A preview turns the photo upright and makes it small. A small upright
 // photo is its own preview and gets none.
-MediaWritePreview :: (hash: string, data: string, source_format: string) {
+MediaWritePreview :: (hash: string, data: string, source_format: string) -> MediaPreviewMade {
+    made: MediaPreviewMade
     orientation := MediaOrientationOf(data, source_format)
     file_type := PackageText(".", source_format)
     preview := ImagePreview(data, file_type, MEDIA_PREVIEW_EDGE, orientation, MEDIA_PREVIEW_QUALITY)
@@ -548,24 +741,19 @@ MediaWritePreview :: (hash: string, data: string, source_format: string) {
     }
     format := DiaryImageFormat(preview)
     if format.count == 0 || (orientation == 1 && preview.count >= data.count) {
-        return
+        return made
     }
     path := MediaPath(hash, true)
     defer { PackageFree(path) }
     if !MediaWriteFile(path, preview) {
-        return
+        return made
     }
     descriptor := cast(*TextDescriptor)(*preview)
-    preview_hash: [65]u8
-    storage_sha256_hex(descriptor.data, preview.count, *preview_hash[0])
-    out: Vec(u8)
-    BuilderPrint(*out, "{\"hash\":\"%\",\"size\":%,\"type\":\"%\"}",
-        TextFromCString(*preview_hash[0]), preview.count, format)
-    entry := BuilderFinish(out)
-    key := MediaPreviewKey(hash)
-    unused MediaRecordWrite(key, entry)
-    PackageFree(entry)
-    PackageFree(key)
+    storage_sha256_hex(descriptor.data, preview.count, *made.hash[0])
+    made.size = preview.count
+    unused AppCopyText(format, made.format[:])
+    made.valid = true
+    return made
 }
 
 // Adds a file the person picked. Only its bytes and its name are kept.
@@ -613,13 +801,28 @@ MediaPlaceHash :: (place: string) -> string {
 
 // Queries.
 
+// Entity records, and a released version's records of photos that have
+// none yet. A record another app wrote may lack the capture day and time;
+// its capture time's UTC day and time stand in.
 MediaQuerySQL :: #string SQL_END
-SELECT substr(key,12),json_extract(value,'$.day') FROM settings
-WHERE user_id=?1 AND key GLOB 'cell.media.*' AND length(key)=75
-  AND substr(key,12) NOT GLOB '*[^0-9a-f]*' AND json_valid(value)
-  AND (?2='' OR json_extract(value,'$.day')=?2)
-  AND (CASE WHEN COALESCE(json_extract(value,'$.trashed'),0)=0 THEN 0 ELSE 1 END)=?3
-ORDER BY json_extract(value,'$.taken') DESC,key DESC
+SELECT hash,day FROM (
+  SELECT substr(key,15) AS hash,
+    COALESCE(json_extract(value,'$.day'),date(json_extract(value,'$.taken_at'),'unixepoch')) AS day,
+    COALESCE(json_extract(value,'$.taken'),
+      strftime('%Y-%m-%dT%H:%M:%S',json_extract(value,'$.taken_at'),'unixepoch')) AS taken,
+    COALESCE(json_extract(value,'$.trashed'),0) AS trashed
+  FROM settings WHERE user_id=?1 AND key GLOB 'entity.photos.*' AND length(key)=78
+    AND substr(key,15) NOT GLOB '*[^0-9a-f]*' AND json_valid(value)
+    AND json_extract(value,'$.type') IN ('image/png','image/jpeg','image/gif','image/webp')
+  UNION ALL
+  SELECT substr(l.key,12),json_extract(l.value,'$.day'),json_extract(l.value,'$.taken'),
+    COALESCE(json_extract(l.value,'$.trashed'),0)
+  FROM settings l WHERE l.user_id=?1 AND l.key GLOB 'cell.media.*' AND length(l.key)=75
+    AND substr(l.key,12) NOT GLOB '*[^0-9a-f]*' AND json_valid(l.value)
+    AND NOT EXISTS (SELECT 1 FROM settings e WHERE e.user_id=?1 AND e.key='entity.photos.'||substr(l.key,12))
+)
+WHERE (?2='' OR day=?2) AND (CASE WHEN trashed=0 THEN 0 ELSE 1 END)=?3
+ORDER BY taken DESC,hash DESC
 LIMIT ?4
 SQL_END;
 
@@ -780,25 +983,8 @@ MediaAssetsChanged :: () {
     diary_blob_generation += 1
 }
 
-// The local file's format when it holds as many bytes as its record names.
-MediaLocalFormat :: (hash: string, preview: bool) -> string {
-    key := ifx preview then MediaPreviewKey(hash) else MediaRecordKey(hash)
-    record := MediaRecordRead(key)
-    defer {
-        PackageFree(key)
-        PackageFree(record)
-    }
-    media := DiaryMediaParse(record)
-    format: [8]u8
-    if !media.valid || ReadStringText(record, FieldAt(record, 0, "type"), format[:]) <= 0 {
-        return ""
-    }
-    path := MediaPath(hash, preview)
-    defer { PackageFree(path) }
-    if PackageFileSize(path) != media.size {
-        return ""
-    }
-    value := TextUntilNul(format[:])
+// A format word as a constant, or empty.
+MediaFormatLiteral :: (value: string) -> string {
     if value == "png" {
         return "png"
     }
@@ -812,6 +998,45 @@ MediaLocalFormat :: (hash: string, preview: bool) -> string {
         return "webp"
     }
     return ""
+}
+
+// What the photo's record says of its original or its preview: the hash,
+// size and format the file must have.
+MediaContentOf :: (hash: string, preview: bool) -> EntityContent {
+    entity := MediaEntityRecord(hash)
+    defer { PackageFree(entity) }
+    if entity.count > 0 {
+        return ifx preview then EntityPreviewContent(entity) else EntityPhotoContent(entity)
+    }
+    key := ifx preview then MediaPreviewKey(hash) else MediaRecordKey(hash)
+    record := MediaRecordRead(key)
+    defer {
+        PackageFree(key)
+        PackageFree(record)
+    }
+    media := DiaryMediaParse(record)
+    content: EntityContent
+    if !media.valid || ReadStringText(record, FieldAt(record, 0, "type"), content.format[:]) <= 0 {
+        return content
+    }
+    content.hash = media.hash
+    content.size = media.size
+    content.valid = true
+    return content
+}
+
+// The local file's format when it holds as many bytes as its record names.
+MediaLocalFormat :: (hash: string, preview: bool) -> string {
+    content := MediaContentOf(hash, preview)
+    if !content.valid {
+        return ""
+    }
+    path := MediaPath(hash, preview)
+    defer { PackageFree(path) }
+    if PackageFileSize(path) != content.size {
+        return ""
+    }
+    return MediaFormatLiteral(TextUntilNul(content.format[:]))
 }
 
 MediaAssetLookup :: (hash: string, original: bool) -> string {
@@ -931,15 +1156,11 @@ MediaAssetView :: (path: string) -> AssetView {
         return AssetView.{}
     }
     preview := path[6:14] == "preview/"
-    key := ifx preview then MediaPreviewKey(hash) else MediaRecordKey(hash)
-    record := MediaRecordRead(key)
+    content := MediaContentOf(hash, preview)
     file := MediaPath(hash, preview)
     defer {
-        PackageFree(key)
-        PackageFree(record)
         PackageFree(file)
     }
-    media := DiaryMediaParse(record)
     PackageFree(media_asset_bytes)
     media_asset_bytes = PackageRead(file, DIARY_FILE_LIMIT)
     format := DiaryImageFormat(media_asset_bytes)
@@ -947,7 +1168,7 @@ MediaAssetView :: (path: string) -> AssetView {
     while at > 0 && path[at] != cast(u8)46 {
         at -= 1
     }
-    if !DiaryMediaMatches(media, media_asset_bytes) || format != path[at + 1:] {
+    if !EntityContentMatches(content, media_asset_bytes) || format != path[at + 1:] {
         PackageFree(media_asset_bytes)
         media_asset_bytes = ""
         return AssetView.{}
@@ -957,39 +1178,47 @@ MediaAssetView :: (path: string) -> AssetView {
 
 // Changes.
 
-// Moves a photo to Trash or back. Trash keeps the photo and its copies.
-MediaSetTrashed :: (hash: string, trashed: bool) -> bool {
+// Sets one field of the photo's record, keeping all others: its entity
+// record, or a released version's while it has none.
+MediaSetField :: (hash: string, field: string, entity_value: string, legacy_value: string) -> bool {
     if !MediaRead(hash).valid {
         return false
     }
-    key := MediaRecordKey(hash)
-    record := MediaRecordRead(key)
-    changed := MediaRecordWith(record, "trashed", ifx trashed then "1" else "0")
-    written := changed.count > 0 && MediaRecordWrite(key, changed)
-    PackageFree(key)
+    entity_key := EntityPhotoKey(hash)
+    entity_record := MediaRecordRead(entity_key)
+    legacy_key := MediaRecordKey(hash)
+    defer {
+        PackageFree(entity_key)
+        PackageFree(entity_record)
+        PackageFree(legacy_key)
+    }
+    if entity_record.count > 0 {
+        changed := MediaRecordWith(entity_record, field, entity_value)
+        written := changed.count > 0 && MediaRecordWrite(entity_key, changed)
+        PackageFree(changed)
+        return written
+    }
+    record := MediaRecordRead(legacy_key)
+    changed := MediaRecordWith(record, field, legacy_value)
+    written := changed.count > 0 && MediaRecordWrite(legacy_key, changed)
     PackageFree(record)
     PackageFree(changed)
     return written
 }
 
+// Moves a photo to Trash or back. Trash keeps the photo and its copies.
+MediaSetTrashed :: (hash: string, trashed: bool) -> bool {
+    return MediaSetField(hash, "trashed", ifx trashed then "true" else "false", ifx trashed then "1" else "0")
+}
+
 // Renames a photo: one line of at most MEDIA_NAME_MAX bytes.
 MediaSetName :: (hash: string, name: string) -> bool {
-    if !MediaRead(hash).valid {
-        return false
-    }
     trimmed := MediaNameCut(name)
     out: Vec(u8)
     MediaJson(*out, trimmed)
     quoted := BuilderFinish(out)
-    key := MediaRecordKey(hash)
-    record := MediaRecordRead(key)
-    changed := MediaRecordWith(record, "name", quoted)
-    written := changed.count > 0 && MediaRecordWrite(key, changed)
-    PackageFree(quoted)
-    PackageFree(key)
-    PackageFree(record)
-    PackageFree(changed)
-    return written
+    defer { PackageFree(quoted) }
+    return MediaSetField(hash, "name", quoted, quoted)
 }
 
 MediaStoreClose :: () {

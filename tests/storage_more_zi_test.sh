@@ -35,7 +35,8 @@ C
 "${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
     -I"$include" -I"$work/generated" -I"$root/vendor-builds/sqlite" \
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
-    "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
+    "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
+    "$root/build/packages/monocypher/src/monocypher.c" "$liboqs" \
     -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
 # Storage must never open the real data directory.
 APP_DATA_ROOT=/tmp/inbe-storage-more-zi-test/data

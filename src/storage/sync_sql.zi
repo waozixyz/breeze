@@ -255,6 +255,21 @@ OR (excluded.updated_at = settings.updated_at AND excluded.value != settings.val
 ))
 SQL
 
+// One entity record of the account (storage/entity_records.zi), checked
+// first. Fields only this device has stay; a change not sent yet keeps
+// this device's record until it goes out.
+SyncEntityRecordSQL :: #string SQL
+INSERT INTO settings(user_id,key,value,updated_at)
+VALUES(?1,?2,json(?3),COALESCE(CAST(strftime('%s',NULLIF(?4,'')) AS INTEGER),CAST(strftime('%s','now') AS INTEGER)))
+ON CONFLICT(user_id,key) DO UPDATE SET
+ value=CASE WHEN json_valid(settings.value) THEN json_patch(settings.value,excluded.value) ELSE excluded.value END,
+ updated_at=excluded.updated_at
+WHERE NOT EXISTS (
+ SELECT 1 FROM sync_outbox WHERE entity_type='entity_record'
+ AND entity_id=settings.key AND local_date=0
+) AND (NOT json_valid(settings.value) OR json_patch(settings.value,excluded.value) != settings.value)
+SQL
+
 SyncCellRecordsSQL :: #string SQL
 INSERT INTO settings(user_id,key,value,updated_at)
 SELECT ?2,json_extract(value,'$.key'),json_extract(value,'$.value'),

@@ -7,9 +7,11 @@
 #import, file "achievement_records.zi";
 #import, file "app_records.zi";
 #import, file "media_records.zi";
+#import, file "entity_records.zi";
 #import, file "habit_settings.zi";
 #import, file "storage_layout.zi";
 #import, file "storage_core.zi";
+#import "daochi_client/entity"
 
 // The collection of a node app's record key, such as
 // private.inbe.v1.app.chess, held until the next call.
@@ -57,6 +59,9 @@ storage_encrypted_collection_for_entity :: (entity_type: string, entity_id: stri
     if entity_type == "media_record" {
         return ifx MediaRecordKeyAccepted(entity_id) then MediaCollection else ""
     }
+    if entity_type == "entity_record" {
+        return EntityRecordCollection(entity_id)
+    }
     if entity_type.count == 0 {
         return ""
     }
@@ -97,7 +102,11 @@ storage_encrypted_record_id :: (entity_type: string, entity_id: string, local_da
     }
     out[0] = cast(u8)0
     written = 0
-    if storage_compare_text(entity_type, "habit_day") == 0 {
+    if entity_type == "entity_record" {
+        // An entity record is named by its content's hash alone, as every
+        // app of the account names it.
+        AppCopyText(EntityPhotoKeyHash(entity_id), BytesFromPointer(out, cast(u64)out_size))
+    } else if storage_compare_text(entity_type, "habit_day") == 0 {
         AppCopyText(entity_id, BytesFromPointer(out, cast(u64)out_size))
         date_text: [16] u8
         AppFormatS32(local_date, date_text[:])
@@ -121,6 +130,9 @@ storage_encrypted_collection_key_id :: (collection: string) -> string {
     if collection == LumiPrivateCollection {
         return LumiPrivateKeyID
     }
+    if EntityCollectionKnown(collection) {
+        return ENTITY_RECORD_KEY_ID
+    }
     return STORAGE_SYNC_RECORD_KEY_ID
 }
 
@@ -143,6 +155,9 @@ storage_decrypted_array_name :: (collection: string) -> string {
     }
     if collection == MediaCollection {
         return "media_records"
+    }
+    if collection == EntityPhotosCollection {
+        return "entity_photos"
     }
     if storage_compare_text(collection, "private.inbe.v1.habits") == 0 {
         return "habits"

@@ -32,7 +32,8 @@ C
     -I"$root/build/packages/ziran/include" -I"$work/generated" \
     -I"$root/vendor-builds/sqlite" \
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
-    "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
+    "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
+    "$root/build/packages/monocypher/src/monocypher.c" "$liboqs" \
     -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
 APP_DATA_ROOT=/tmp/inbe-storage-delegate-zi-test/data \
     env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \

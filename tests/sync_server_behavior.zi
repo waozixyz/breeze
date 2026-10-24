@@ -36,6 +36,12 @@
 #import, file "../src/cells/diary_blobs_native.zi";
 #import, file "../src/cells/diary_blobs.zi";
 #import, file "../src/cells/media_store.zi";
+#import, file "../src/cells/media_diary_photos.zi";
+#import, file "../src/cells/entity_photos.zi";
+#import, file "../src/storage/entity_records.zi";
+#import, file "../src/storage/sync_record_crypto.zi";
+#import "crypto"
+#import "json_scan"
 #import, file "../src/storage/sync_nodes.zi";
 #import, file "../src/storage/sync_node_storage.zi";
 #import, file "../src/storage/media_node_session.zi";
@@ -169,75 +175,173 @@ synchronize :: (url: string) {
     check_true("sync drained the queued changes", false)
 }
 
-// A Diary photo travels as one sealed copy, which the node keeps at the
-// photo's size plus 16 bytes, and arrives whole on the account's other
-// device.
-expect_photo_copy :: (url: string, a: string, b: string) {
-    open_client(a)
-    png: [6000]u8
-    for index: cast(s32)0..cast(s32)5999 {
-        png[index] = cast(u8)((index * 13 + 7) % 251)
-    }
-    header: [8]u8 = .[cast(u8)137, cast(u8)80, cast(u8)78, cast(u8)71, cast(u8)13, cast(u8)10, cast(u8)26, cast(u8)10]
-    for index: cast(s32)0..7 {
-        png[index] = header[index]
-    }
-    image := TextFromBytes(png[:])
-    source: TextBuffer
-    append(*source, data_root())
-    append(*source, "/photo-source.png")
-    source_path := TextFromCString(*source.bytes[0])
-    unused RemoveFile(source_path)
-    file := OpenExclusivePrivate(source_path)
-    written := file.valid && WriteTextAt(file, image, 0) == image.count
-    check_true("write the photo to attach", CloseFile(file) && written)
-    name := DiaryStoreAttach(source_path)
-    check_true("attach the photo", name.count > 0)
-    DiaryStoreClose()
-    synchronize(url)
-    DiaryBlobsSendNative(url)
-    media := DiaryMediaRead(name)
-    check_true("the photo's copy is on the node", DiaryMediaUploaded(media))
-    synchronize(url)
-    blob_path: TextBuffer
-    append(*blob_path, data_root())
-    append(*blob_path, "/server.db.blobs/")
-    append(*blob_path, storage_get_setting_text("sync_public_id"))
-    append(*blob_path, "/inbe/")
-    append(*blob_path, TextFromBytes(media.blob[:64]))
-    check_int("the node keeps the photo's size plus 16 bytes",
-        cast(s32)PackageFileSize(TextFromCString(*blob_path.bytes[0])), 6016)
-    open_client(b)
-    synchronize(url)
-    check_true("the photo waits on the second device", !DiaryStoreRead(name).succeeded)
-    DiaryStoreClose()
-    DiaryBlobsSendNative(url)
-    check_true("the photo arrives whole on the second device", DiaryStoreRead(name).data == image)
-    DiaryStoreClose()
-    PackageFree(name)
-}
-
-// The node's file for a sealed copy, under the server's data directory.
-server_blob_size :: (server: string, blob: string) -> s32 {
+// The node's file for a blob of `app` under the server's data directory.
+server_app_blob_size :: (server: string, app: string, blob: string) -> s32 {
     path: TextBuffer
     append(*path, data_root())
     append(*path, server)
     append(*path, "server.db.blobs/")
     append(*path, storage_get_setting_text("sync_public_id"))
-    append(*path, "/inbe/")
+    append(*path, "/")
+    append(*path, app)
+    append(*path, "/")
     append(*path, blob)
     return cast(s32)PackageFileSize(TextFromCString(*path.bytes[0]))
 }
 
-library_record_blob :: (key: string, output: []u8) -> string {
-    record := MediaRecordRead(key)
-    media := DiaryMediaParse(record)
+// The node's file for a sealed chunk of the account's entity data.
+server_blob_size :: (server: string, blob: string) -> s32 {
+    return server_app_blob_size(server, "entity", blob)
+}
+
+// The address of the photo's chunk, or of its preview's.
+library_record_blob :: (hash: string, preview: bool, output: []u8) -> string {
+    record := MediaEntityRecord(hash)
+    content := ifx preview then EntityPreviewContent(record) else EntityPhotoContent(record)
     PackageFree(record)
-    unused AppCopyText(TextFromBytes(media.blob[:64]), output)
-    if !DiaryMediaUploaded(media) {
-        output[0] = cast(u8)0
+    output[0] = cast(u8)0
+    if content.chunk_count == 1 {
+        unused AppCopyText(TextUntilNul(content.chunks[0].address[:]), output)
     }
     return TextUntilNul(output)
+}
+
+// A photo's bytes: PNG's signature, then a pattern of `seed`.
+server_photo :: (bytes: []u8, seed: s32) -> string {
+    header: [8]u8 = .[cast(u8)137, cast(u8)80, cast(u8)78, cast(u8)71, cast(u8)13, cast(u8)10, cast(u8)26, cast(u8)10]
+    for index: cast(s32)0..cast(s32)bytes.count - 1 {
+        bytes[index] = ifx index < 8 then header[index] else cast(u8)((index * 13 + seed) % 251)
+    }
+    return TextFromBytes(bytes)
+}
+
+server_photo_file :: (name: string, image: string) -> string {
+    source: TextBuffer
+    append(*source, data_root())
+    append(*source, "/")
+    append(*source, name)
+    path := PackageText(TextFromCString(*source.bytes[0]), "")
+    unused RemoveFile(path)
+    file := OpenExclusivePrivate(path)
+    written := file.valid && WriteTextAt(file, image, 0) == image.count
+    check_true("write the photo to add", CloseFile(file) && written)
+    return path
+}
+
+server_move_steps :: () {
+    MediaDiaryPhotosDue()
+    for step: 0..80 {
+        unused step
+        unused MediaDiaryPhotosStep()
+    }
+}
+
+// A photo travels as the account's entity data: its record in the
+// account's own signed sync, its bytes as one sealed chunk, which the node
+// keeps at the photo's size plus 16 bytes. The account's other device gets
+// the record in its normal sync and opens the photo whole.
+expect_photo_copy :: (url: string, a: string, b: string) {
+    open_client(a)
+    png: [6000]u8
+    image := server_photo(png[:], 7)
+    source_path := server_photo_file("photo-source.png", image)
+    added := MediaImportFile(source_path)
+    check_true("add the photo", added.succeeded)
+    hash := PackageText(TextFromBytes(added.hash[:64]), "")
+    synchronize(url)
+    DiaryBlobsSendNative(url)
+    record := MediaEntityRecord(hash)
+    content := EntityPhotoContent(record)
+    PackageFree(record)
+    check_true("the photo's chunk is on the node", content.chunk_count == 1)
+    synchronize(url)
+    check_int("the node keeps the photo's size plus 16 bytes",
+        server_blob_size("/", TextUntilNul(content.chunks[0].address[:])), 6016)
+    open_client(b)
+    synchronize(url)
+    item := MediaRead(hash)
+    check_true("the other device has the photo's record from its sync", item.valid && item.entity)
+    check_true("its original waits there", PackageFileSize(MediaPath(hash, false)) != image.count)
+    MediaWant(hash)
+    DiaryBlobsSendNative(url)
+    check_true("the photo arrives whole on the other device",
+        PackageRead(MediaPath(hash, false), DIARY_FILE_LIMIT) == image)
+    PackageFree(hash)
+    PackageFree(source_path)
+}
+
+// A photo a released version kept as an old copy at /api/v1/blobs/inbe/
+// moves on a real node: its old copy comes to this device, its chunks go
+// to the node, the node confirms them, they come back whole, and only then
+// does the node delete the old copy.
+expect_old_copy_moves :: (url: string, a: string) {
+    open_client(a)
+    png: [7000]u8
+    image := server_photo(png[:], 29)
+    descriptor := cast(*TextDescriptor)(*image)
+    hash_bytes: [65]u8
+    storage_sha256_hex(descriptor.data, image.count, *hash_bytes[0])
+    hash := PackageText(TextFromCString(*hash_bytes[0]), "")
+    // Sealed as released versions sealed it.
+    master: [32]u8
+    check_true("the account key makes old copies",
+        storage_private_record_key_for_context("inbe-diary-blob-key-v1", *master[0]) != 0)
+    file_key: [32]u8
+    check_true("the file's key", HmacSha256Text(*master[0], 32, hash, *file_key[0]) != 0)
+    sealed: [7016]u8
+    nonce: [12]u8
+    aad := "inbe.diary.blob.v1"
+    aad_bytes := cast(*TextDescriptor)(*aad)
+    check_true("seal the old copy", ChaCha20Poly1305Seal(*file_key[0], *nonce[0], descriptor.data, image.count,
+        aad_bytes.data, aad.count, *sealed[0], 7016) != 0)
+    address_bytes: [65]u8
+    storage_sha256_hex(*sealed[0], 7016, *address_bytes[0])
+    address := TextFromCString(*address_bytes[0])
+    key_hex: [65]u8
+    unused BytesToHex(*file_key[0], 32, *key_hex[0], 65)
+    old_path := PackageText("/api/v1/blobs/inbe/", address)
+    answer: [64]u8
+    status: s32 = 0
+    length: s64 = 0
+    check_int("a released version puts its old copy on the node",
+        SendStoredBlob(url, "PUT", old_path, TextFromBytes(sealed[:]), answer[:], *status, *length), 0)
+    check_int("the node keeps it", status, 204)
+    check_int("at the photo's size plus 16 bytes", server_app_blob_size("/", "inbe", address), 7016)
+    old_out: Vec(u8)
+    BuilderPrint(*old_out, "{\"hash\":\"%\",\"size\":7000,\"type\":\"png\",\"name\":\"Old.png\",", hash)
+    BuilderPrint(*old_out, "\"day\":\"2024-05-01\",\"taken\":\"2024-05-01\",\"added\":1792000000,\"capture\":0,")
+    BuilderPrint(*old_out, "\"trashed\":0,\"blob\":\"%\",\"key\":\"%\"}", address, TextFromCString(*key_hex[0]))
+    old_record := BuilderFinish(old_out)
+    old_key := PackageText("cell.media.", hash)
+    storage_set_setting_text(old_key, old_record)
+    server_move_steps()
+    check_true("without its bytes the photo waits", !MediaRead(hash).entity)
+    DiaryBlobsSendNative(url)
+    check_true("its old copy comes", PackageRead(MediaPath(hash, false), DIARY_FILE_LIMIT) == image)
+    server_move_steps()
+    check_true("then it moves", MediaRead(hash).entity)
+    synchronize(url)
+    DiaryBlobsSendNative(url)
+    synchronize(url)
+    check_int("the old copy stays until the photo comes back whole", server_app_blob_size("/", "inbe", address), 7016)
+    DiaryBlobsSendNative(url)
+    server_move_steps()
+    check_true("its old record names the photo", FieldAt(storage_get_setting_text(old_key), 0, "photo") >= 0)
+    synchronize(url)
+    DiaryBlobsSendNative(url)
+    check_true("the node deleted the old copy", server_app_blob_size("/", "inbe", address) <= 0)
+    record := MediaEntityRecord(hash)
+    content := EntityPhotoContent(record)
+    PackageFree(record)
+    check_int("the node keeps the photo's chunk", server_blob_size("/", TextUntilNul(content.chunks[0].address[:])), 7016)
+    check_true("the old record keeps every field", FieldAt(storage_get_setting_text(old_key), 0, "blob") >= 0 &&
+        FieldAt(storage_get_setting_text(old_key), 0, "name") >= 0)
+    SecureWipe(*master[0], 32)
+    SecureWipe(*file_key[0], 32)
+    PackageFree(old_key)
+    PackageFree(old_record)
+    PackageFree(old_path)
+    PackageFree(hash)
 }
 
 // A photo added to the library on one device appears on the other with its
@@ -272,15 +376,13 @@ expect_library_copies :: (url: string, second: string, a: string, b: string) {
     hash_bytes: [65]u8
     unused AppCopyText(TextFromBytes(added.hash[:64]), hash_bytes[:])
     hash := TextUntilNul(hash_bytes[:])
-    item_key := MediaRecordKey(hash)
-    preview_key := MediaPreviewKey(hash)
-    check_true("a made a preview", MediaRecordRead(preview_key).count > 0)
+    check_true("a made a preview", EntityPreviewContent(MediaEntityRecord(hash)).valid)
     synchronize(url)
     DiaryBlobsSendNative(url)
     original_blob: [65]u8
     preview_blob: [65]u8
-    check_int("the original's copy is named", cast(s32)library_record_blob(item_key, original_blob[:]).count, 64)
-    check_int("the preview's copy is named", cast(s32)library_record_blob(preview_key, preview_blob[:]).count, 64)
+    check_int("the original's chunk is named", cast(s32)library_record_blob(hash, false, original_blob[:]).count, 64)
+    check_int("the preview's chunk is named", cast(s32)library_record_blob(hash, true, preview_blob[:]).count, 64)
     check_int("the second node keeps the original sealed",
         server_blob_size("/second/", TextUntilNul(original_blob[:])), 9016)
     check_true("the second node keeps the preview",
@@ -303,7 +405,8 @@ expect_library_copies :: (url: string, second: string, a: string, b: string) {
     open_client(b)
     check_true("b adds the second node", SyncNodeAdd(second))
     synchronize(url)
-    check_int("the photo is in b's library", MediaQuery("", false), 1)
+    // The photo of the photo check is there too.
+    check_int("the photo is in b's library", MediaQuery("", false), 2)
     check_true("its preview waits on b", MediaAsset(hash, false) == "")
     DiaryBlobsSendNative(url)
     preview_asset := PackageText(MediaAsset(hash, false), "")
@@ -325,8 +428,6 @@ expect_library_copies :: (url: string, second: string, a: string, b: string) {
     check_int("the sync node now keeps the original", server_blob_size("/", TextUntilNul(original_blob[:])), 9016)
     check_true("and the preview", server_blob_size("/", TextUntilNul(preview_blob[:])) > 16)
     check_true("still nothing is sent twice", !DiaryBlobPlan(*pass, url))
-    PackageFree(item_key)
-    PackageFree(preview_key)
     MediaStoreClose()
 }
 
@@ -507,6 +608,7 @@ Check :: () -> s32 {
     check_int("live activity does not duplicate results", storage_session_count(), 1)
     expect_photo_copy(url, a, b)
     expect_library_copies(url, second_url, a, b)
+    expect_old_copy_moves(url, a)
     open_client(b)
     check_true("complete the item", storage_elist_update_item(item_text, "Pack bag", "Passport", 1, 0) != 0)
     synchronize(url)

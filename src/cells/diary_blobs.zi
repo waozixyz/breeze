@@ -1,25 +1,36 @@
-// The account's media pass: Diary photos and the media library's photos and
-// previews travel between this device and the account's nodes as sealed
-// copies (diary_records.zi), one request per copy, after each good sync.
+// The account's media pass, after each good sync: the photos of the
+// account's entity data (entity_photos.zi) travel between this device and
+// the account's nodes as sealed chunks, one request per chunk, and the old
+// copies of photos that moved there go.
 //
-// - Copies go to every node in the account's node list whose photo upload
+// - Chunks go to every node in the account's node list whose photo upload
 //   is on (sync_node_<sha>.media_upload, Profile › Data), not only the sync
-//   node. A copy this device has goes to each such node it is not known on
-//   yet (diary_blobs), so the same picture uploads once per node. Each pass
-//   starts with the node where the previous one stopped, so every node makes
-//   progress within the pass's limit.
-// - A photo whose copy is named but whose file is not on this device is
-//   downloaded: from the sync node first, then the other nodes in list
-//   order. A 404 moves on to the next node; a copy found anywhere is
-//   remembered on that node. Diary photos and library previews always
-//   download; library originals only when wanted on this device
-//   (media_store.zi), such as when Photos opens one.
-// - A photo from before copies, kept as hex chunks, is uploaded the same
-//   way; its chunks then shrink to one byte each, freeing their room.
+//   node. A chunk this device has goes to each such node it is not known on
+//   yet (diary_blobs), so the same picture uploads once per node. Once all
+//   of a photo's chunks, or of its preview, are on a node, its record names
+//   them. Each pass starts with the node where the previous one stopped, so
+//   every node makes progress within the pass's limit.
+// - A photo whose record names its chunks and whose file is not on this
+//   device is downloaded: from the sync node first, then the other nodes in
+//   list order, chunk by chunk. A 404 moves on to the next node; a chunk
+//   found anywhere is remembered on that node. Previews always download;
+//   originals when wanted on this device (media_store.zi), such as when
+//   Photos opens one, and when a photo has no preview.
+// - Released versions sealed each Diary photo and library photo as one old
+//   copy at /api/v1/blobs/inbe/ (diary_records.zi). A photo that has not
+//   moved to the entity data yet and whose bytes are not on this device
+//   gets its old copy downloaded, so it can move (media_diary_photos.zi).
+//   Once it moved and the sync node confirmed its record and chunks, the
+//   pass downloads every chunk of the photo and its preview back from the
+//   sync node and checks them against their hashes. Only then do its old
+//   records name it ("photo"), and its old copies are deleted from every
+//   node of the account. Any failure keeps the old copy for a later pass,
+//   and so does a node that cannot delete yet (405).
 //
 // Nothing here stops a photo from saving: a node without photo upload, or
-// one that is full (413), only keeps its copy off that node. The host sends
-// each request on the node's own media session and passes the answer back.
+// one that is full (413), only keeps its chunks off that node. The host
+// sends each request on the node's own media session and passes the answer
+// back, and ends the pass with DiaryBlobPassEnd.
 #import "byte_text_linux"
 #import "vec"
 #import "text"
@@ -27,11 +38,14 @@
 #import "text_buffer"
 #import "keys"
 #import "crypto"
+#import "daochi_client/entity"
 #import, file "diary_records.zi";
 #import, file "diary_store.zi";
+#import, file "entity_photos.zi";
 #import, file "media_store.zi";
 #import, file "package_files.zi";
 #import, file "../storage/cell_records.zi";
+#import, file "../storage/entity_records.zi";
 #import, file "../storage/media_records.zi";
 #import, file "../storage/storage_core.zi";
 #import, file "../storage/storage_settings.zi";
@@ -45,25 +59,50 @@
 #import, file "../app/text_buffers.zi";
 
 // One pass after a sync moves at most this many files and bytes, so a sync
-// is never held up for long; the next sync continues.
+// is never held up for long; the next sync continues. Deletes carry no
+// bytes and have their own limit.
 DIARY_BLOB_PASS_FILES :: 8
 DIARY_BLOB_PASS_BYTES :: 33554432
+DIARY_BLOB_PASS_DELETES :: 32
+DIARY_BLOB_PASS_JOBS :: DIARY_BLOB_PASS_FILES + DIARY_BLOB_PASS_DELETES
 DIARY_BLOB_RECORD_KEY :: 181
 DIARY_BLOB_NODE_ADDRESS :: 256
+DIARY_BLOB_PRIVATE_KEY :: (ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2
 
+// A photo's chunks, or its preview's, to a node.
 DIARY_BLOB_UPLOAD :: 1
+// A photo's chunks, or its preview's, from the account's nodes.
 DIARY_BLOB_DOWNLOAD :: 2
+// A released version's old copy, from the account's nodes.
+DIARY_BLOB_OLD_DOWNLOAD :: 3
+// A released version's old copy, deleted from a node.
+DIARY_BLOB_OLD_DELETE :: 4
+// A moved photo's chunks, or its preview's, downloaded back from the sync
+// node and checked, before its old copy goes.
+DIARY_BLOB_VERIFY :: 5
+
+diary_blobs_c :: #system_library "c";
+DiaryAllocate :: (size: usize) -> *void #foreign diary_blobs_c "malloc";
+DiaryRelease :: (pointer: *void) #foreign diary_blobs_c "free";
 
 // Where the next pass starts uploading, on this device only.
 DIARY_BLOB_NEXT_NODE_KEY :: "media_pass_next_node"
 
 DiaryBlobJob :: struct {
     kind: s32
-    // The record that names the copy: cell.diary.file.<name>,
-    // cell.media.<sha256> or cell.media.preview.<sha256>.
+    // entity.photos.<sha256> for a photo's chunks. For an old copy, the
+    // record that names it: cell.diary.file.<name>, cell.media.<sha256> or
+    // cell.media.preview.<sha256>.
     key: [DIARY_BLOB_RECORD_KEY]u8
-    // The node an upload goes to; for a download, the node to ask next.
+    // The photo's preview rather than the photo.
+    preview: bool
+    // The node an upload or delete goes to; for a download, the node to
+    // ask next.
     node: s32
+    // The next chunk to move.
+    chunk: s32
+    // The old copy a delete removes.
+    blob: [65]u8
 }
 
 DiaryBlobPass :: struct {
@@ -74,13 +113,21 @@ DiaryBlobPass :: struct {
     // The node refused an upload for room, or failed; it gets no more
     // uploads in this pass.
     stopped: [SYNC_NODE_LIMIT]bool
-    jobs: [DIARY_BLOB_PASS_FILES]DiaryBlobJob
+    // The node cannot delete old copies now.
+    deletes_stopped: [SYNC_NODE_LIMIT]bool
+    jobs: [DIARY_BLOB_PASS_JOBS]DiaryBlobJob
     count: s32
+    files: s32
     next: s32
+    // The chunks the current upload sealed so far.
+    sealed: [ENTITY_PHOTO_LOCAL_CHUNKS]EntityChunk
+    // The plain bytes the current download opened so far.
+    received: *u8
+    received_size: s64
 }
 
-// One request: PUT stores body as the copy at path on the node; GET answers
-// with the copy, which needs answer_bytes of room.
+// One request: PUT stores body at path on the node, GET answers with what
+// is stored there, which needs answer_bytes of room, and DELETE removes it.
 DiaryBlobRequest :: struct {
     kind: s32
     key: [DIARY_BLOB_RECORD_KEY]u8
@@ -90,13 +137,16 @@ DiaryBlobRequest :: struct {
     path: [128]u8
     body: string
     answer_bytes: s64
+    // The chunk's or old copy's address.
     blob: [65]u8
-    key_hex: [65]u8
-    // An entry from before copies: its hash, size and chunk count.
-    chunked: bool
+    // The content a chunk belongs to, or the old copy's plain bytes.
+    preview: bool
+    chunk: s32
     hash: [65]u8
     size: s64
-    chunks: s32
+    sealed_size: s64
+    // An old copy's own key.
+    key_hex: [65]u8
 }
 
 DiaryBlobEntriesSQL :: #string SQL_END
@@ -108,11 +158,27 @@ WHERE user_id=(SELECT id FROM users LIMIT 1)
 ORDER BY updated_at DESC
 SQL_END;
 
-DiaryBlobOnNode :: (node: string, blob: string) -> bool {
+DiaryBlobEntitySQL :: #string SQL_END
+SELECT key,value FROM settings
+WHERE user_id=(SELECT id FROM users LIMIT 1)
+  AND key GLOB 'entity.photos.*' AND length(key)=78 AND json_valid(value)
+ORDER BY updated_at DESC
+SQL_END;
+
+// Old copies of photos that moved: their records name the entity record.
+DiaryBlobMovedSQL :: #string SQL_END
+SELECT json_extract(value,'$.blob') FROM settings
+WHERE user_id=(SELECT id FROM users LIMIT 1)
+  AND ((key GLOB 'cell.diary.file.*' AND key NOT GLOB '*.json')
+    OR (key GLOB 'cell.media.*' AND (length(key)=75 OR length(key)=83)))
+  AND json_valid(value) AND length(json_extract(value,'$.photo'))=64
+  AND length(json_extract(value,'$.blob'))=64
+ORDER BY updated_at DESC
+SQL_END;
+
+DiaryBlobKnown :: (table_sql: string, node: string, blob: string) -> bool {
     statement: *void
-    if SqlitePrepareText(storage_db_handle(),
-        "SELECT 1 FROM diary_blobs WHERE node=?1 AND blob=?2", -1,
-        *statement, null) != SQLITE_OK {
+    if SqlitePrepareText(storage_db_handle(), table_sql, -1, *statement, null) != SQLITE_OK {
         return false
     }
     defer { SqliteFinalize(statement) }
@@ -121,17 +187,33 @@ DiaryBlobOnNode :: (node: string, blob: string) -> bool {
     return SqliteStep(statement) == SQLITE_ROW
 }
 
-DiaryBlobRemember :: (node: string, blob: string) {
+DiaryBlobOnNode :: (node: string, blob: string) -> bool {
+    return DiaryBlobKnown("SELECT 1 FROM diary_blobs WHERE node=?1 AND blob=?2", node, blob)
+}
+
+DiaryBlobDeletedOn :: (node: string, blob: string) -> bool {
+    return DiaryBlobKnown("SELECT 1 FROM old_copies_deleted WHERE node=?1 AND blob=?2", node, blob)
+}
+
+DiaryBlobRun :: (sql: string, node: string, blob: string) {
     statement: *void
-    if SqlitePrepareText(storage_db_handle(),
-        "INSERT OR IGNORE INTO diary_blobs(node,blob) VALUES(?1,?2)", -1,
-        *statement, null) != SQLITE_OK {
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) != SQLITE_OK {
         return
     }
     unused bind_text(statement, 1, node)
     unused bind_text(statement, 2, blob)
     unused SqliteStep(statement)
     SqliteFinalize(statement)
+}
+
+DiaryBlobRemember :: (node: string, blob: string) {
+    DiaryBlobRun("INSERT OR IGNORE INTO diary_blobs(node,blob) VALUES(?1,?2)", node, blob)
+}
+
+// The node deleted an old copy, or never had it.
+DiaryBlobDeleted :: (node: string, blob: string) {
+    DiaryBlobRun("INSERT OR IGNORE INTO old_copies_deleted(node,blob) VALUES(?1,?2)", node, blob)
+    DiaryBlobRun("DELETE FROM diary_blobs WHERE node=?1 AND blob=?2", node, blob)
 }
 
 // The Diary file a cell.diary.file.<name> key names, or empty.
@@ -144,7 +226,7 @@ DiaryBlobDiaryName :: (key: string) -> string {
     return key[prefix.count:]
 }
 
-// The local file that holds the copy's plain bytes, to free with
+// The local file that holds an old copy's plain bytes, to free with
 // PackageFree, or empty for a key that names no copy.
 DiaryBlobLocalPath :: (key: string) -> string {
     name := DiaryBlobDiaryName(key)
@@ -162,6 +244,13 @@ DiaryBlobLocalPath :: (key: string) -> string {
     return ""
 }
 
+DiaryBlobDirectory :: (key: string) -> string {
+    if DiaryBlobDiaryName(key).count > 0 {
+        return DiaryStoreDirectory()
+    }
+    return MediaDirectory()
+}
+
 DiaryBlobEntryRead :: (key: string) -> string {
     if DiaryBlobDiaryName(key).count > 0 {
         return CellRecordRead(key)
@@ -169,30 +258,32 @@ DiaryBlobEntryRead :: (key: string) -> string {
     return MediaRecordRead(key)
 }
 
-// An entry from before copies: a photo kept as chunks.
-DiaryBlobChunked :: (entry: string, request: *DiaryBlobRequest) -> bool {
-    count := ReadNumber(entry, FieldAt(entry, 0, "count"))
-    size := ReadNumber(entry, FieldAt(entry, 0, "size"))
-    if !count.valid || !size.valid || size.value < 1 || size.value > cast(float64)DIARY_FILE_LIMIT ||
-    count.value != cast(float64)((cast(s64)size.value + DIARY_CHUNK_BYTES - 1) / DIARY_CHUNK_BYTES) ||
-    ReadStringText(entry, FieldAt(entry, 0, "hash"), request.hash[:]) != 64 ||
-    !DiaryHex64(TextFromBytes(request.hash[:64])) {
-        return false
-    }
-    request.chunked = true
-    request.size = cast(s64)size.value
-    request.chunks = cast(s32)count.value
-    return true
+// Whether a photo of this hash is in the account's entity data.
+DiaryBlobMoved :: (hash: string) -> bool {
+    record := MediaEntityRecord(hash)
+    defer { PackageFree(record) }
+    return EntityPhotoContent(record).valid
 }
 
-DiaryBlobAdd :: (pass: *DiaryBlobPass, kind: s32, key: string, node: s32) {
-    if pass.count >= DIARY_BLOB_PASS_FILES {
+DiaryBlobAdd :: (pass: *DiaryBlobPass, kind: s32, key: string, preview: bool, node: s32) {
+    if pass.count >= DIARY_BLOB_PASS_JOBS {
         return
     }
-    pass.jobs[pass.count].kind = kind
-    pass.jobs[pass.count].node = node
-    unused AppCopyText(key, pass.jobs[pass.count].key[:])
+    job := *pass.jobs[pass.count]
+    job.* = DiaryBlobJob.{}
+    job.kind = kind
+    job.preview = preview
+    job.node = node
+    unused AppCopyText(key, job.key[:])
     pass.count += 1
+    if kind != DIARY_BLOB_OLD_DELETE {
+        pass.files += 1
+    }
+}
+
+DiaryBlobFull :: (pass: *DiaryBlobPass, bytes: s64) -> bool {
+    return pass.files >= DIARY_BLOB_PASS_FILES || bytes >= DIARY_BLOB_PASS_BYTES ||
+    pass.count >= DIARY_BLOB_PASS_JOBS
 }
 
 // Copies the address of the pass's node `index` into output.
@@ -233,18 +324,210 @@ DiaryBlobNodes :: (pass: *DiaryBlobPass, active: string) {
     }
 }
 
-// Whether this device should fetch the copy an entry names; `wanted` lists
-// the library originals asked for here (MediaWantedRead).
-DiaryBlobWanted :: (key: string, wanted: string) -> bool {
-    if DiaryBlobDiaryName(key).count > 0 || MediaPreviewKeyHash(key).count > 0 {
-        return true
+// Old copies of moved photos, deleted from every node that has not
+// deleted them yet.
+DiaryBlobPlanDeletes :: (pass: *DiaryBlobPass) {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), DiaryBlobMovedSQL, -1, *statement, null) != SQLITE_OK {
+        return
     }
-    hash := MediaItemKeyHash(key)
-    return hash.count > 0 && MediaWantedIn(wanted, hash)
+    defer { SqliteFinalize(statement) }
+    deletes: s32 = 0
+    while deletes < DIARY_BLOB_PASS_DELETES && SqliteStep(statement) == SQLITE_ROW {
+        blob := AppTextFromCString(SqliteColumnText(statement, 0), 65)
+        if !MediaHashValid(blob) {
+            continue
+        }
+        for node: cast(s32)0..pass.node_count - 1 {
+            if deletes >= DIARY_BLOB_PASS_DELETES {
+                break
+            }
+            if DiaryBlobDeletedOn(TextUntilNul(pass.nodes[node][:]), blob) {
+                continue
+            }
+            DiaryBlobAdd(pass, DIARY_BLOB_OLD_DELETE, "", false, node)
+            unused AppCopyText(blob, pass.jobs[pass.count - 1].blob[:])
+            deletes += 1
+        }
+    }
 }
 
-// Chooses this pass's files: downloads first, so a photo shows on this
-// device soon, then uploads to each node that takes photos and lacks them.
+// Moved photos whose record the sync node has, while their old records
+// still lack their pointer: each content not checked yet comes back once
+// from the sync node, so the old copy only goes once the new one is known
+// whole there.
+DiaryBlobPlanVerifies :: (pass: *DiaryBlobPass, bytes: *s64) {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), DiaryBlobEntriesSQL, -1, *statement, null) != SQLITE_OK {
+        return
+    }
+    defer { SqliteFinalize(statement) }
+    sync_node := TextUntilNul(pass.nodes[0][:])
+    while !DiaryBlobFull(pass, bytes.*) && SqliteStep(statement) == SQLITE_ROW {
+        record_key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
+        entry := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
+        photo_hash := MediaPreviewKeyHash(record_key)
+        if photo_hash.count == 0 {
+            photo_hash = MediaItemKeyHash(record_key)
+        }
+        if photo_hash.count == 0 {
+            photo_hash = DiaryEntryHash(entry)
+        }
+        if FieldAt(entry, 0, "photo") >= 0 || photo_hash.count != 64 {
+            continue
+        }
+        record := MediaEntityRecord(photo_hash)
+        if record.count == 0 || !EntityPhotoAcknowledged(photo_hash, record) {
+            PackageFree(record)
+            continue
+        }
+        parts: [2]EntityContent = .[EntityPhotoContent(record), EntityPreviewContent(record)]
+        PackageFree(record)
+        entity_key := EntityPhotoKey(photo_hash)
+        for part: cast(s32)0..1 {
+            content := parts[part]
+            if !content.valid || content.chunk_count == 0 || content.chunk_count > ENTITY_PHOTO_LOCAL_CHUNKS ||
+            EntityContentVerified(content, sync_node) || DiaryBlobFull(pass, bytes.*) ||
+            DiaryBlobPlanned(pass, DIARY_BLOB_VERIFY, entity_key, part == 1) {
+                continue
+            }
+            DiaryBlobAdd(pass, DIARY_BLOB_VERIFY, entity_key, part == 1, 0)
+            bytes.* += content.size
+        }
+        PackageFree(entity_key)
+    }
+}
+
+// Whether the pass already has this job.
+DiaryBlobPlanned :: (pass: *DiaryBlobPass, kind: s32, key: string, preview: bool) -> bool {
+    for index: cast(s32)0..pass.count - 1 {
+        job := *pass.jobs[index]
+        if job.kind == kind && job.preview == preview && TextUntilNul(job.key[:]) == key {
+            return true
+        }
+    }
+    return false
+}
+
+// Whether this device should fetch the content: a preview always, an
+// original when wanted here or when its photo has no preview. Content this
+// version could not keep stays on the node.
+DiaryBlobWanted :: (content: EntityContent, preview: bool, has_preview: bool, wanted: string) -> bool {
+    if content.chunk_count == 0 || content.chunk_count > ENTITY_PHOTO_LOCAL_CHUNKS ||
+    content.size > DIARY_FILE_LIMIT || TextUntilNul(content.format[:]).count == 0 {
+        return false
+    }
+    return preview || !has_preview || MediaWantedIn(wanted, TextUntilNul(content.hash[:]))
+}
+
+// Downloads, from the sync node first: the entity data's photos, then old
+// copies of photos that have not moved yet and are not on this device.
+DiaryBlobPlanDownloads :: (pass: *DiaryBlobPass, wanted: string, opening: bool, bytes: *s64) {
+    statement: *void
+    if opening && SqlitePrepareText(storage_db_handle(), DiaryBlobEntitySQL, -1, *statement, null) == SQLITE_OK {
+        while !DiaryBlobFull(pass, bytes.*) && SqliteStep(statement) == SQLITE_ROW {
+            record_key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
+            record := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
+            hash := EntityPhotoKeyHash(record_key)
+            photo := EntityPhotoContent(record)
+            preview := EntityPreviewContent(record)
+            if !photo.valid || TextFromBytes(photo.hash[:64]) != hash {
+                continue
+            }
+            parts: [2]EntityContent = .[photo, preview]
+            for part: cast(s32)0..1 {
+                content := parts[part]
+                if !content.valid || DiaryBlobFull(pass, bytes.*) ||
+                !DiaryBlobWanted(content, part == 1, preview.valid, wanted) {
+                    continue
+                }
+                path := MediaPath(hash, part == 1)
+                local := PackageFileSize(path)
+                PackageFree(path)
+                if local != content.size {
+                    DiaryBlobAdd(pass, DIARY_BLOB_DOWNLOAD, record_key, part == 1, 0)
+                    bytes.* += content.size
+                }
+            }
+        }
+        SqliteFinalize(statement)
+    }
+    if SqlitePrepareText(storage_db_handle(), DiaryBlobEntriesSQL, -1, *statement, null) != SQLITE_OK {
+        return
+    }
+    defer { SqliteFinalize(statement) }
+    while !DiaryBlobFull(pass, bytes.*) && SqliteStep(statement) == SQLITE_ROW {
+        record_key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
+        entry := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
+        media := DiaryMediaParse(entry)
+        photo_hash := MediaPreviewKeyHash(record_key)
+        if photo_hash.count == 0 {
+            photo_hash = TextFromBytes(media.hash[:64])
+        }
+        if !DiaryMediaUploaded(media) || media.pointed || DiaryBlobMoved(photo_hash) {
+            continue
+        }
+        path := DiaryBlobLocalPath(record_key)
+        local := PackageFileSize(path)
+        PackageFree(path)
+        if local != media.size {
+            DiaryBlobAdd(pass, DIARY_BLOB_OLD_DOWNLOAD, record_key, false, 0)
+            bytes.* += media.size
+        }
+    }
+}
+
+// Uploads, one node after another, starting where the last pass stopped:
+// each photo and preview this device has whose chunks the node lacks.
+DiaryBlobPlanUploads :: (pass: *DiaryBlobPass, bytes: *s64) {
+    first := storage_get_setting_int(DIARY_BLOB_NEXT_NODE_KEY, 0)
+    if first < 0 || first >= pass.node_count {
+        first = 0
+    }
+    round: s32 = 0
+    while round < pass.node_count {
+        node := (first + round) % pass.node_count
+        address := TextUntilNul(pass.nodes[node][:])
+        round += 1
+        if !SyncNodeMediaUpload(address) {
+            continue
+        }
+        if DiaryBlobFull(pass, bytes.*) {
+            // The next pass starts with this node.
+            storage_set_setting_int(DIARY_BLOB_NEXT_NODE_KEY, node)
+            return
+        }
+        statement: *void
+        if SqlitePrepareText(storage_db_handle(), DiaryBlobEntitySQL, -1, *statement, null) != SQLITE_OK {
+            return
+        }
+        while !DiaryBlobFull(pass, bytes.*) && SqliteStep(statement) == SQLITE_ROW {
+            record_key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
+            record := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
+            hash := EntityPhotoKeyHash(record_key)
+            parts: [2]EntityContent = .[EntityPhotoContent(record), EntityPreviewContent(record)]
+            for part: cast(s32)0..1 {
+                content := parts[part]
+                if !content.valid || content.size > DIARY_FILE_LIMIT || DiaryBlobFull(pass, bytes.*) ||
+                (content.chunk_count > 0 && EntityContentOnNode(content, address)) {
+                    continue
+                }
+                path := MediaPath(hash, part == 1)
+                local := PackageFileSize(path)
+                PackageFree(path)
+                if local == content.size {
+                    DiaryBlobAdd(pass, DIARY_BLOB_UPLOAD, record_key, part == 1, node)
+                    bytes.* += content.size
+                }
+            }
+        }
+        SqliteFinalize(statement)
+    }
+}
+
+// Chooses this pass's requests: deletes of old copies first, so a node has
+// room for what moves, then downloads, so a photo shows on this device
+// soon, then uploads to each node that takes photos and lacks them.
 DiaryBlobPlan :: (pass: *DiaryBlobPass, active: string) -> bool {
     pass.* = DiaryBlobPass.{}
     // A delegate (Telegram) account plans too, but its requests are never
@@ -256,273 +539,371 @@ DiaryBlobPlan :: (pass: *DiaryBlobPass, active: string) -> bool {
     if pass.node_count == 0 {
         return false
     }
-    key: [32]u8
-    sealing := storage_private_record_key_for_context(DIARY_BLOB_CONTEXT, *key[0]) != 0
-    SecureWipe(*key[0], 32)
-    bytes: s64 = 0
+    private_key: [DIARY_BLOB_PRIVATE_KEY]u8
+    sealing := storage_account_private_key(private_key[:]) > 0
+    SecureWipe(*private_key[0], DIARY_BLOB_PRIVATE_KEY)
     wanted: [MEDIA_WANTED_MAX * 65 + 1]u8
     MediaWantedRead(wanted[:])
-    // Downloads, from the sync node first.
-    statement: *void
-    if SqlitePrepareText(storage_db_handle(), DiaryBlobEntriesSQL, -1, *statement, null) != SQLITE_OK {
-        return false
+    bytes: s64 = 0
+    DiaryBlobPlanDeletes(pass)
+    if sealing {
+        DiaryBlobPlanVerifies(pass, *bytes)
     }
-    while pass.count < DIARY_BLOB_PASS_FILES && bytes < DIARY_BLOB_PASS_BYTES &&
-    SqliteStep(statement) == SQLITE_ROW {
-        record_key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
-        entry := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
-        media := DiaryMediaParse(entry)
-        if !DiaryMediaUploaded(media) || !DiaryBlobWanted(record_key, TextUntilNul(wanted[:])) {
-            continue
-        }
-        path := DiaryBlobLocalPath(record_key)
-        local := PackageFileSize(path)
-        PackageFree(path)
-        if local != media.size {
-            DiaryBlobAdd(pass, DIARY_BLOB_DOWNLOAD, record_key, 0)
-            bytes += media.size
-        }
-    }
-    SqliteFinalize(statement)
-    if !sealing {
-        return pass.count > 0
-    }
-    // Uploads, one node after another, starting where the last pass stopped.
-    first := storage_get_setting_int(DIARY_BLOB_NEXT_NODE_KEY, 0)
-    if first < 0 || first >= pass.node_count {
-        first = 0
-    }
-    round: s32 = 0
-    while round < pass.node_count {
-        node := (first + round) % pass.node_count
-        address_bytes: [DIARY_BLOB_NODE_ADDRESS]u8
-        unused DiaryBlobNode(pass, node, address_bytes[:])
-        address := TextUntilNul(address_bytes[:])
-        round += 1
-        if !SyncNodeMediaUpload(address) {
-            continue
-        }
-        if pass.count >= DIARY_BLOB_PASS_FILES || bytes >= DIARY_BLOB_PASS_BYTES {
-            // The next pass starts with this node.
-            storage_set_setting_int(DIARY_BLOB_NEXT_NODE_KEY, node)
-            return pass.count > 0
-        }
-        if SqlitePrepareText(storage_db_handle(), DiaryBlobEntriesSQL, -1, *statement, null) != SQLITE_OK {
-            return pass.count > 0
-        }
-        while pass.count < DIARY_BLOB_PASS_FILES && bytes < DIARY_BLOB_PASS_BYTES &&
-        SqliteStep(statement) == SQLITE_ROW {
-            record_key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
-            entry := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
-            path := DiaryBlobLocalPath(record_key)
-            local := PackageFileSize(path)
-            PackageFree(path)
-            media := DiaryMediaParse(entry)
-            if media.valid {
-                if local == media.size && (!DiaryMediaUploaded(media) ||
-                    !DiaryBlobOnNode(address, TextFromBytes(media.blob[:64]))) {
-                    DiaryBlobAdd(pass, DIARY_BLOB_UPLOAD, record_key, node)
-                    bytes += media.size
-                }
-                continue
-            }
-            old: DiaryBlobRequest
-            if DiaryBlobDiaryName(record_key).count > 0 && DiaryBlobChunked(entry, *old) {
-                DiaryBlobAdd(pass, DIARY_BLOB_UPLOAD, record_key, node)
-                bytes += old.size
-            }
-        }
-        SqliteFinalize(statement)
+    DiaryBlobPlanDownloads(pass, TextUntilNul(wanted[:]), sealing, *bytes)
+    if sealing {
+        DiaryBlobPlanUploads(pass, *bytes)
     }
     return pass.count > 0
 }
 
-// The bytes of a photo this device has, or "": its file, or for a Diary
-// photo from before copies, its chunks when the file is gone.
-DiaryBlobLocalBytes :: (key: string, hash: string, size: s64, chunked: bool) -> string {
-    path := DiaryBlobLocalPath(key)
-    data := PackageRead(path, DIARY_FILE_LIMIT)
-    PackageFree(path)
-    if data.count == size {
-        descriptor := cast(*TextDescriptor)(*data)
-        actual: [65]u8
-        storage_sha256_hex(descriptor.data, data.count, *actual[0])
-        if TextFromCString(*actual[0]) == hash {
-            return data
-        }
-    }
-    PackageFree(data)
-    name := DiaryBlobDiaryName(key)
-    if chunked && name.count > 0 {
-        return DiaryRecordRead(name)
-    }
-    return ""
-}
-
-DiaryBlobPath :: (request: *DiaryBlobRequest) {
+DiaryBlobPath :: (request: *DiaryBlobRequest, app: string) {
     out: Vec(u8)
-    BuilderPrint(*out, "/api/v1/blobs/inbe/%", TextFromBytes(request.blob[:64]))
+    BuilderPrint(*out, "/api/v1/blobs/%/%", app, TextFromBytes(request.blob[:64]))
     path := BuilderFinish(out)
     unused AppCopyText(path, request.path[:])
     PackageFree(path)
 }
 
-// Prepares the pass's next request, or false when the pass is done.
-DiaryBlobNext :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest) -> bool {
-    while pass.next < pass.count {
-        job := pass.jobs[pass.next]
-        record_key := TextUntilNul(job.key[:])
-        request.* = DiaryBlobRequest.{}
-        request.kind = job.kind
-        request.key = job.key
-        request.node_index = job.node
-        entry := DiaryBlobEntryRead(record_key)
-        media := DiaryMediaParse(entry)
-        if job.kind == DIARY_BLOB_DOWNLOAD {
-            PackageFree(entry)
-            if !DiaryMediaUploaded(media) || job.node >= pass.node_count {
-                pass.next += 1
-                continue
-            }
-            unused DiaryBlobNode(pass, job.node, request.node[:])
-            request.method = "GET"
-            request.blob = media.blob
-            request.key_hex = media.key
-            request.hash = media.hash
-            request.size = media.size
-            request.answer_bytes = media.size + DIARY_BLOB_TAG + 1
-            DiaryBlobPath(request)
-            return true
+// The content an upload or download job moves, from its photo's record.
+DiaryBlobContent :: (job: *DiaryBlobJob) -> EntityContent {
+    record := MediaRecordRead(TextUntilNul(job.key[:]))
+    defer { PackageFree(record) }
+    content := ifx job.preview then EntityPreviewContent(record) else EntityPhotoContent(record)
+    if !content.valid || content.size > DIARY_FILE_LIMIT {
+        return EntityContent.{}
+    }
+    return content
+}
+
+// The record names the content's chunks once they are all on a node, so
+// the account's other devices and apps can fetch them. A record that
+// names chunks keeps them.
+DiaryBlobChunksNamed :: (pass: *DiaryBlobPass, job: *DiaryBlobJob, content: EntityContent) {
+    if content.chunk_count > 0 {
+        return
+    }
+    key := TextUntilNul(job.key[:])
+    record := MediaRecordRead(key)
+    defer { PackageFree(record) }
+    current := ifx job.preview then EntityPreviewContent(record) else EntityPhotoContent(record)
+    if !current.valid || current.chunk_count > 0 || TextFromBytes(current.hash[:64]) != TextFromBytes(content.hash[:64]) {
+        return
+    }
+    blobs := EntityBlobsJson(pass.sealed[:EntityChunkCount(content.size)])
+    named := MediaRecordWith(record, ifx job.preview then "preview.blobs" else "blobs", blobs)
+    if named.count > 0 {
+        unused MediaRecordWrite(key, named)
+    }
+    PackageFree(blobs)
+    PackageFree(named)
+}
+
+// Seals the job's next chunk the node lacks into a PUT, or names the
+// content once every chunk is there; false when the job is done.
+DiaryBlobUploadNext :: (pass: *DiaryBlobPass, job: *DiaryBlobJob, request: *DiaryBlobRequest) -> bool {
+    content := DiaryBlobContent(job)
+    if !content.valid || job.node < 0 || job.node >= pass.node_count || pass.stopped[job.node] {
+        return false
+    }
+    hash := TextFromBytes(content.hash[:64])
+    photo_hash := EntityPhotoKeyHash(TextUntilNul(job.key[:]))
+    path := MediaPath(photo_hash, job.preview)
+    data := PackageRead(path, DIARY_FILE_LIMIT)
+    PackageFree(path)
+    defer { PackageFree(data) }
+    if !EntityContentMatches(content, data) {
+        return false
+    }
+    node := TextUntilNul(pass.nodes[job.node][:])
+    count := EntityChunkCount(content.size)
+    if job.chunk == 0 {
+        for index: cast(s32)0..ENTITY_PHOTO_LOCAL_CHUNKS - 1 {
+            pass.sealed[index] = EntityChunk.{}
         }
-        pass.next += 1
-        if job.node < 0 || job.node >= pass.node_count || pass.stopped[job.node] {
-            PackageFree(entry)
-            continue
+    }
+    descriptor := cast(*TextDescriptor)(*data)
+    plain_bytes := BytesFromPointer(descriptor.data, cast(u64)data.count)
+    while job.chunk < count {
+        start := cast(s64)job.chunk * ENTITY_CHUNK_BYTES
+        plain := EntityChunkPlain(content.size, job.chunk)
+        sealed_size := plain + 16
+        sealed := cast(*u8)DiaryAllocate(cast(usize)sealed_size)
+        if sealed == null {
+            return false
         }
-        unused DiaryBlobNode(pass, job.node, request.node[:])
-        if media.valid {
-            request.hash = media.hash
-            request.size = media.size
-        } else if DiaryBlobDiaryName(record_key).count == 0 || !DiaryBlobChunked(entry, request) {
-            PackageFree(entry)
-            continue
+        private_key: [DIARY_BLOB_PRIVATE_KEY]u8
+        length := storage_account_private_key(private_key[:])
+        made := length > 0 && SealEntityChunk(private_key[:length], ENTITY_PHOTOS_KIND, hash, cast(s64)job.chunk,
+            plain_bytes[start:start + plain], BytesFromPointer(sealed, cast(u64)sealed_size)) == sealed_size
+        SecureWipe(*private_key[0], DIARY_BLOB_PRIVATE_KEY)
+        if !made {
+            DiaryRelease(cast(*void)sealed)
+            return false
         }
-        PackageFree(entry)
-        hash := TextFromBytes(request.hash[:64])
-        data := DiaryBlobLocalBytes(record_key, hash, request.size, request.chunked)
-        if data.count == 0 {
-            continue
+        chunk := *pass.sealed[job.chunk]
+        storage_sha256_hex(sealed, sealed_size, *chunk.address[0])
+        chunk.size = sealed_size
+        // A chunk the record names must be the same chunk.
+        if content.chunk_count > 0 && TextUntilNul(chunk.address[:]) != TextUntilNul(content.chunks[job.chunk].address[:]) {
+            DiaryRelease(cast(*void)sealed)
+            return false
         }
-        file_key: [32]u8
-        sealed: string = ""
-        if DiaryMediaUploaded(media) {
-            if HexToBytes(TextFromBytes(media.key[:64]), *file_key[0], 32) != 0 {
-                sealed = DiaryBlobSeal(data, *file_key[0])
-            }
-        } else if DiaryBlobKey(hash, *file_key[0]) {
-            sealed = DiaryBlobSeal(data, *file_key[0])
-        }
-        PackageFree(data)
-        if sealed.count == 0 {
-            SecureWipe(*file_key[0], 32)
-            continue
-        }
-        descriptor := cast(*TextDescriptor)(*sealed)
-        storage_sha256_hex(descriptor.data, sealed.count, *request.blob[0])
-        unused BytesToHex(*file_key[0], 32, *request.key_hex[0], 65)
-        SecureWipe(*file_key[0], 32)
-        // A named copy is re-made only to reach another node; it must be
-        // the same copy.
-        if DiaryMediaUploaded(media) && TextFromBytes(request.blob[:64]) != TextFromBytes(media.blob[:64]) {
-            PackageFree(sealed)
-            continue
-        }
-        // Another job of this pass may already have put it there.
-        if DiaryBlobOnNode(TextUntilNul(request.node[:]), TextFromBytes(request.blob[:64])) {
-            PackageFree(sealed)
-            DiaryBlobNamed(request)
+        if DiaryBlobOnNode(node, TextUntilNul(chunk.address[:])) {
+            DiaryRelease(cast(*void)sealed)
+            job.chunk += 1
             continue
         }
         request.method = "PUT"
-        request.body = sealed
-        DiaryBlobPath(request)
+        request.body = TextFromBytes(BytesFromPointer(sealed, cast(u64)sealed_size))
+        request.blob = chunk.address
+        request.chunk = job.chunk
+        request.hash = content.hash
+        request.size = content.size
+        request.sealed_size = sealed_size
+        unused AppCopyText(node, request.node[:])
+        DiaryBlobPath(request, "entity")
         return true
+    }
+    DiaryBlobChunksNamed(pass, job, content)
+    return false
+}
+
+// Prepares the next request of the job's next chunk to fetch; false when
+// the job is done.
+DiaryBlobDownloadNext :: (pass: *DiaryBlobPass, job: *DiaryBlobJob, request: *DiaryBlobRequest) -> bool {
+    content := DiaryBlobContent(job)
+    if !content.valid || content.chunk_count == 0 || content.chunk_count > ENTITY_PHOTO_LOCAL_CHUNKS ||
+    job.node >= pass.node_count || job.chunk >= content.chunk_count {
+        return false
+    }
+    if job.chunk == 0 && pass.received == null {
+        pass.received = cast(*u8)DiaryAllocate(cast(usize)content.size)
+        pass.received_size = 0
+    }
+    if pass.received == null {
+        return false
+    }
+    unused DiaryBlobNode(pass, job.node, request.node[:])
+    request.method = "GET"
+    request.blob = content.chunks[job.chunk].address
+    request.chunk = job.chunk
+    request.hash = content.hash
+    request.size = content.size
+    request.sealed_size = content.chunks[job.chunk].size
+    request.answer_bytes = request.sealed_size + 1
+    DiaryBlobPath(request, "entity")
+    return true
+}
+
+// Prepares an old copy's download from the job's node; false when there is
+// nothing to fetch.
+DiaryBlobOldDownloadNext :: (pass: *DiaryBlobPass, job: *DiaryBlobJob, request: *DiaryBlobRequest) -> bool {
+    entry := DiaryBlobEntryRead(TextUntilNul(job.key[:]))
+    media := DiaryMediaParse(entry)
+    PackageFree(entry)
+    if !DiaryMediaUploaded(media) || media.pointed || job.node >= pass.node_count {
+        return false
+    }
+    unused DiaryBlobNode(pass, job.node, request.node[:])
+    request.method = "GET"
+    request.blob = media.blob
+    request.key_hex = media.key
+    request.hash = media.hash
+    request.size = media.size
+    request.answer_bytes = media.size + DIARY_BLOB_TAG + 1
+    DiaryBlobPath(request, "inbe")
+    return true
+}
+
+// The pass's job is done; it frees what a download held.
+DiaryBlobJobDone :: (pass: *DiaryBlobPass) {
+    if pass.received != null {
+        SecureWipe(pass.received, pass.received_size)
+        DiaryRelease(cast(*void)pass.received)
+    }
+    pass.received = null
+    pass.received_size = 0
+    pass.next += 1
+}
+
+// Prepares the pass's next request, or false when the pass is done.
+DiaryBlobNext :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest) -> bool {
+    while pass.next < pass.count {
+        job := *pass.jobs[pass.next]
+        request.* = DiaryBlobRequest.{}
+        request.kind = job.kind
+        request.key = job.key
+        request.preview = job.preview
+        request.node_index = job.node
+        ready := false
+        if job.kind == DIARY_BLOB_OLD_DELETE {
+            node := TextUntilNul(pass.nodes[job.node][:])
+            blob := TextUntilNul(job.blob[:])
+            if !pass.deletes_stopped[job.node] && !DiaryBlobDeletedOn(node, blob) {
+                unused AppCopyText(node, request.node[:])
+                request.method = "DELETE"
+                request.blob = job.blob
+                DiaryBlobPath(request, "inbe")
+                ready = true
+            }
+        } else if job.kind == DIARY_BLOB_OLD_DOWNLOAD {
+            ready = DiaryBlobOldDownloadNext(pass, job, request)
+        } else if job.kind == DIARY_BLOB_DOWNLOAD || job.kind == DIARY_BLOB_VERIFY {
+            ready = DiaryBlobDownloadNext(pass, job, request)
+        } else {
+            ready = DiaryBlobUploadNext(pass, job, request)
+        }
+        if ready {
+            return true
+        }
+        DiaryBlobJobDone(pass)
     }
     return false
 }
 
-// A photo from before copies frees its chunks once its copy is on a node:
-// each becomes one byte, so its room on the node shrinks with it.
-DiaryBlobShrinkChunks :: (request: *DiaryBlobRequest) {
-    storage_settings_begin_write()
-    defer { storage_settings_end_write() }
-    for index: cast(s32)0..request.chunks - 1 {
-        chunk := DiaryChunkKey(TextFromBytes(request.hash[:64]), index)
-        unused CellRecordWrite(chunk, "-")
-        PackageFree(chunk)
+// A download that found nothing on this node asks the next one for the
+// same chunk, or ends when every node was asked.
+DiaryBlobAskNext :: (pass: *DiaryBlobPass) {
+    if pass.next >= pass.count {
+        return
+    }
+    pass.jobs[pass.next].node += 1
+    if pass.jobs[pass.next].node >= pass.node_count {
+        DiaryBlobJobDone(pass)
     }
 }
 
-// The entry still describes the uploaded file; it now names the copy, so
-// the account's other devices can download it.
-DiaryBlobNamed :: (request: *DiaryBlobRequest) {
+// Writes fetched plain bytes to their file once they are the content.
+DiaryBlobStore :: (key: string, path: string, data: string, check: EntityContent) -> bool {
+    if !EntityContentMatches(check, data) {
+        return false
+    }
+    directory := DiaryBlobDirectory(key)
+    defer { PackageFree(directory) }
+    if directory.count == 0 || storage_ensure_dir(directory) == 0 || !PackageWrite(path, data) {
+        return false
+    }
+    diary_blob_generation += 1
+    return true
+}
+
+// A chunk arrived: it joins what the job opened so far, and once every
+// chunk is here the content is checked and saved.
+DiaryBlobChunkArrived :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, answer: []u8) {
+    job := *pass.jobs[pass.next]
+    hash := TextFromBytes(request.hash[:64])
+    plain := EntityChunkPlain(request.size, request.chunk)
+    if pass.received == null || cast(s64)answer.count != request.sealed_size ||
+    pass.received_size != cast(s64)request.chunk * ENTITY_CHUNK_BYTES {
+        DiaryBlobJobDone(pass)
+        return
+    }
+    private_key: [DIARY_BLOB_PRIVATE_KEY]u8
+    length := storage_account_private_key(private_key[:])
+    opened := length > 0 && OpenEntityChunk(private_key[:length], ENTITY_PHOTOS_KIND, hash, cast(s64)request.chunk,
+        answer, BytesFromPointer(*pass.received[pass.received_size], cast(u64)plain)) == plain
+    SecureWipe(*private_key[0], DIARY_BLOB_PRIVATE_KEY)
+    if !opened {
+        DiaryBlobJobDone(pass)
+        return
+    }
+    node := TextUntilNul(request.node[:])
+    DiaryBlobRemember(node, TextUntilNul(request.blob[:]))
+    pass.received_size += plain
+    job.chunk += 1
+    if pass.received_size < request.size {
+        return
+    }
+    check := EntityContent.{.valid = true, .hash = request.hash, .size = request.size}
+    received := TextFromBytes(BytesFromPointer(pass.received, cast(u64)pass.received_size))
+    if request.kind == DIARY_BLOB_VERIFY {
+        if EntityContentMatches(check, received) {
+            DiaryBlobRun("INSERT OR IGNORE INTO verified_contents(node,hash) VALUES(?1,?2)", node,
+                TextFromBytes(request.hash[:64]))
+            // The photo's old records may name it now (media_diary_photos.zi).
+            diary_blob_generation += 1
+        }
+        DiaryBlobJobDone(pass)
+        return
+    }
+    photo_hash := EntityPhotoKeyHash(TextUntilNul(request.key[:]))
+    path := MediaPath(photo_hash, request.preview)
+    unused DiaryBlobStore(TextUntilNul(request.key[:]), path, received, check)
+    PackageFree(path)
+    DiaryBlobJobDone(pass)
+}
+
+// An old copy arrived: the photo's bytes, checked against its record, land
+// in its file so the photo can move.
+DiaryBlobOldArrived :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, answer: []u8) {
     record_key := TextUntilNul(request.key[:])
-    blob := TextFromBytes(request.blob[:64])
-    key_hex := TextFromBytes(request.key_hex[:64])
     entry := DiaryBlobEntryRead(record_key)
     media := DiaryMediaParse(entry)
-    if DiaryMediaUploaded(media) {
-        PackageFree(entry)
-        return
-    }
-    same := media.valid && TextFromBytes(media.hash[:64]) == TextFromBytes(request.hash[:64])
-    if DiaryBlobDiaryName(record_key).count == 0 {
-        // A library record keeps every other field, including a later
-        // version's.
-        if same {
-            unused MediaRecordSetCopy(record_key, entry, blob, key_hex)
-        }
-        PackageFree(entry)
-        return
-    }
     PackageFree(entry)
-    if !same && !request.chunked {
+    DiaryBlobJobDone(pass)
+    if !DiaryMediaUploaded(media) || TextFromBytes(media.blob[:64]) != TextFromBytes(request.blob[:64]) {
         return
     }
-    described: DiaryMedia
-    described.valid = true
-    described.hash = request.hash
-    described.size = request.size
-    named := DiaryMediaUploadedEntry(described, blob, key_hex)
-    written := CellRecordWrite(record_key, named)
-    PackageFree(named)
-    if written && request.chunked {
-        DiaryBlobShrinkChunks(request)
+    plain := DiaryBlobOpen(media, answer)
+    if plain.count == 0 {
+        return
     }
+    path := DiaryBlobLocalPath(record_key)
+    check := EntityContent.{.valid = true, .hash = media.hash, .size = media.size}
+    if DiaryBlobStore(record_key, path, plain, check) {
+        DiaryBlobRemember(TextUntilNul(request.node[:]), TextFromBytes(request.blob[:64]))
+    }
+    PackageFree(path)
+    PackageFree(plain)
 }
 
 // Applies one answer. False stops the pass: the account cannot move copies
-// now. A node that fails only stops its own uploads.
+// now. A node that fails only stops its own uploads or deletes.
 DiaryBlobFinish :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, status: s32,
     answer: []u8) -> bool {
-    record_key := TextUntilNul(request.key[:])
     node := TextUntilNul(request.node[:])
-    blob := TextFromBytes(request.blob[:64])
+    index := request.node_index
+    known_node := index >= 0 && index < pass.node_count
     if request.kind == DIARY_BLOB_UPLOAD {
         PackageFree(request.body)
         request.body = ""
-        index := request.node_index
         if status == 413 {
             unused SyncNodeStorageRecordFull(node, TextFromBytes(answer))
         }
         if status != 204 && status != 200 {
-            if index >= 0 && index < pass.node_count {
+            if known_node {
                 pass.stopped[index] = true
             }
             return true
         }
-        DiaryBlobRemember(node, blob)
-        DiaryBlobNamed(request)
+        DiaryBlobRemember(node, TextFromBytes(request.blob[:64]))
+        if pass.next >= pass.count {
+            return true
+        }
+        // Once its last chunk is there, the record names them all.
+        job := *pass.jobs[pass.next]
+        job.chunk += 1
+        content := DiaryBlobContent(job)
+        if content.valid && job.chunk >= EntityChunkCount(content.size) {
+            DiaryBlobChunksNamed(pass, job, content)
+            DiaryBlobJobDone(pass)
+        }
+        return true
+    }
+    if request.kind == DIARY_BLOB_OLD_DELETE {
+        // A node that deleted the copy, or never had it, says so the same.
+        if status == 204 || status == 200 || status == 404 {
+            DiaryBlobDeleted(node, TextFromBytes(request.blob[:64]))
+        } else if known_node {
+            pass.deletes_stopped[index] = true
+        }
+        DiaryBlobJobDone(pass)
+        return true
+    }
+    // A check asks the sync node alone; one that fails waits for a later
+    // pass, keeping the old copy.
+    if request.kind == DIARY_BLOB_VERIFY && status != 200 {
+        DiaryBlobJobDone(pass)
         return true
     }
     // A download that found nothing on this node asks the next one.
@@ -530,46 +911,12 @@ DiaryBlobFinish :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, status: s3
         DiaryBlobAskNext(pass)
         return true
     }
-    pass.next += 1
-    entry := DiaryBlobEntryRead(record_key)
-    media := DiaryMediaParse(entry)
-    PackageFree(entry)
-    if !DiaryMediaUploaded(media) || TextFromBytes(media.blob[:64]) != blob {
-        return true
+    if request.kind == DIARY_BLOB_DOWNLOAD || request.kind == DIARY_BLOB_VERIFY {
+        DiaryBlobChunkArrived(pass, request, answer)
+    } else {
+        DiaryBlobOldArrived(pass, request, answer)
     }
-    plain := DiaryBlobOpen(media, answer)
-    if plain.count == 0 {
-        return true
-    }
-    path := DiaryBlobLocalPath(record_key)
-    directory := DiaryBlobDirectory(record_key)
-    if directory.count > 0 && storage_ensure_dir(directory) != 0 && PackageWrite(path, plain) {
-        DiaryBlobRemember(node, blob)
-        diary_blob_generation += 1
-    }
-    PackageFree(directory)
-    PackageFree(path)
-    PackageFree(plain)
     return true
-}
-
-// A failed download moves on to the next node, or ends when every node
-// was asked.
-DiaryBlobAskNext :: (pass: *DiaryBlobPass) {
-    if pass.next >= pass.count {
-        return
-    }
-    pass.jobs[pass.next].node += 1
-    if pass.jobs[pass.next].node >= pass.node_count {
-        pass.next += 1
-    }
-}
-
-DiaryBlobDirectory :: (key: string) -> string {
-    if DiaryBlobDiaryName(key).count > 0 {
-        return DiaryStoreDirectory()
-    }
-    return MediaDirectory()
 }
 
 // Frees what a request still holds, after its answer or without one.
@@ -579,14 +926,35 @@ DiaryBlobAbandon :: (request: *DiaryBlobRequest) {
 }
 
 // A request that got no answer: an upload stops that node's uploads for
-// this pass, and a download asks the next node.
+// this pass, a delete its deletes, and a download asks the next node.
 DiaryBlobFailed :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest) {
-    if request.kind == DIARY_BLOB_DOWNLOAD {
+    if request.kind == DIARY_BLOB_VERIFY {
+        DiaryBlobJobDone(pass)
+        return
+    }
+    if request.kind == DIARY_BLOB_DOWNLOAD || request.kind == DIARY_BLOB_OLD_DOWNLOAD {
         DiaryBlobAskNext(pass)
         return
     }
     index := request.node_index
-    if index >= 0 && index < pass.node_count {
-        pass.stopped[index] = true
+    if index < 0 || index >= pass.node_count {
+        return
     }
+    if request.kind == DIARY_BLOB_OLD_DELETE {
+        pass.deletes_stopped[index] = true
+        DiaryBlobJobDone(pass)
+        return
+    }
+    pass.stopped[index] = true
+}
+
+// Ends the pass, freeing what a download held.
+DiaryBlobPassEnd :: (pass: *DiaryBlobPass) {
+    if pass.received != null {
+        SecureWipe(pass.received, pass.received_size)
+        DiaryRelease(cast(*void)pass.received)
+    }
+    pass.received = null
+    pass.received_size = 0
+    pass.next = pass.count
 }

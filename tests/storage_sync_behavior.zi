@@ -44,6 +44,9 @@
 #import, file "../src/storage/sync_nodes.zi";
 #import, file "../src/storage/sync_node_storage.zi";
 #import, file "../src/storage/media_records.zi";
+#import, file "../src/storage/entity_records.zi";
+#import, file "../src/storage/entity_record_crypto.zi";
+#import "daochi_client/entity"
 #import, file "../src/storage/media_node_session.zi";
 #import, file "../src/storage/sync_session.zi";
 #import "auth"
@@ -2174,6 +2177,143 @@ test_media_records_sync_between_devices :: () {
     storage_close()
 }
 
+// The record of tests/entity_record_vector.py, sealed with libsodium as
+// other apps of the account seal theirs.
+ENTITY_VECTOR_ACCOUNT :: "7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d"
+ENTITY_VECTOR_KEY :: "c47a6fab7d9d756295c797df5b56e10bed452cf4c1c646d262080f5d99ee9869"
+ENTITY_VECTOR_PLAIN :: "{\"added_at\":1792224960,\"caption\":\"Written by another app\",\"hash\":\"1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988\",\"height\":3024,\"name\":\"IMG_2041.jpg\",\"size\":6000,\"taken_at\":1792224900,\"type\":\"image/jpeg\",\"width\":4032}"
+ENTITY_VECTOR_NONCE :: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYX"
+ENTITY_VECTOR_CIPHERTEXT :: "eyJhYWQiOnsiYWNjb3VudF9pZCI6IjdlMWQ3ZTFkN2UxZDdlMWQ3ZTFkN2UxZDdlMWQ3ZTFkN2UxZDdlMWQ3ZTFkN2UxZDdlMWQ3ZTFkN2UxZDdlMWQiLCJhcHBfaWQiOiJlbnRpdHkiLCJjb2xsZWN0aW9uIjoicHJpdmF0ZS5lbnRpdHkudjEucGhvdG9zIiwiaWQiOiIxZjJlM2Q0YzViNmE3OTg4MWYyZTNkNGM1YjZhNzk4ODFmMmUzZDRjNWI2YTc5ODgxZjJlM2Q0YzViNmE3OTg4Iiwic2NoZW1hIjoiZW50aXR5LnBob3RvLnYxIn0sImFsZyI6InhjaGFjaGEyMHBvbHkxMzA1IiwiY2lwaGVydGV4dCI6IlhsYkVDTTRCc09wRXpLc1gyV3JPYnlMMG1rb3htSGVXMmdVdS1IRXFkQ2xrWk4tZ2sxdmJsZHgxbmlNTU80RDFvVjBtVWNZLVRTei1oZ0xnUGF1RXVIcGdpX1lxMDVOT1pzcWJ4c19NWTR6ZHhIMEpJZDExN1pDZmZhQkw2V1RyaElJSzU5NkVMT21JUDJQTEhxdEMyelZobGJFRVM4ZE4xQTdNY1dvNXNJalVyTW9oWXFfQnp4aktZUFhlZGs1ZnRydFdyY0FvOWVUVU5wZEpYZk5CVHdtdUZCbEV3cXhNSGdrdkk4OU0xZlg3SWJ4VTJJUkJYV0JTNFBaNm1iWUdvUWZPZmxZM3RLMFU4MEduQXYzRWZoS0RUcjI5YzQwS3drbVhRanduN0RWTkduZXltOFd1RlhqR0pTTV96NGI2SzFsMWNHLVQwc0Q1WmRvIiwia2V5X2lkIjoiZW50aXR5LXYxIiwibm9uY2UiOiJBQUVDQXdRRkJnY0lDUW9MREEwT0R4QVJFaE1VRlJZWCIsInByb2ZpbGUiOiJkYW9jaGktcmVjb3JkLXYxIn0"
+
+// One encrypted record of a sync reply.
+entity_reply_record :: (collection: string, id: string, nonce: string, ciphertext: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "[{\"collection\":\"%\",\"id\":\"%\",\"key_id\":\"entity-v1\",", collection, id)
+    BuilderPrint(*out, "\"nonce\":\"%\",\"ciphertext\":\"%\",\"updated_at\":\"2030-03-17T17:46:40Z\"}]", nonce, ciphertext)
+    return BuilderFinish(out)
+}
+
+// Photos of the account's entity data sync as private.entity.v1.photos in
+// Daochi's record profile, so every app of the account reads them: libsodium
+// seals the same bytes as this version, both ways. A record of another kind,
+// or one that does not open, changes nothing and never stops a sync.
+test_entity_records_sync_between_devices :: () {
+    first := make_root("sync-entity-a")
+    second := make_root("sync-entity-b")
+    check_true("init entity device a", storage_init(first) != 0)
+    set_account()
+    storage_set_setting_text("sync_public_id", ENTITY_VECTOR_ACCOUNT)
+    key: [32]u8
+    check_true("the account has its photos' record key",
+        storage_private_collection_key(EntityPhotosCollection, ENTITY_RECORD_KEY_ID, *key[0]) != 0)
+    key_hex: [65]u8
+    unused BytesToHex(*key[0], 32, *key_hex[0], 65)
+    check_true("it is the key every app derives", TextFromCString(*key_hex[0]) == ENTITY_VECTOR_KEY)
+    check_true("no other key opens photos",
+        storage_private_collection_key(EntityPhotosCollection, STORAGE_SYNC_RECORD_KEY_ID, *key[0]) == 0)
+    metadata := EntityRecordMetadata.{.account_id = ENTITY_VECTOR_ACCOUNT, .collection = EntityPhotosCollection,
+        .id = MediaTestHash(), .schema = ENTITY_PHOTO_SCHEMA}
+    plain := ENTITY_VECTOR_PLAIN
+    plain_bytes := cast(*TextDescriptor)(*plain)
+    nonce_bytes: [24]u8
+    for index: cast(s32)0..23 {
+        nonce_bytes[index] = cast(u8)index
+    }
+    ciphertext: Vec(u8)
+    nonce: Vec(u8)
+    unused storage_private_collection_key(EntityPhotosCollection, ENTITY_RECORD_KEY_ID, *key[0])
+    check_true("seal the vector's record", EntitySealRecordWith(*key[0], metadata,
+        BytesFromPointer(plain_bytes.data, cast(u64)plain.count), nonce_bytes[:], *ciphertext, *nonce))
+    check_true("the envelope is libsodium's, byte for byte",
+        TextFromBytes(VecSlice(ciphertext, 0, ciphertext.count)) == ENTITY_VECTOR_CIPHERTEXT &&
+        TextFromBytes(VecSlice(nonce, 0, nonce.count)) == ENTITY_VECTOR_NONCE)
+    VecFree(ciphertext)
+    VecFree(nonce)
+    SecureWipe(*key[0], 32)
+    opened: *u8 = null
+    check_true("libsodium's record opens", storage_open_entity_record(EntityPhotosCollection, MediaTestHash(),
+        ENTITY_RECORD_KEY_ID, ENTITY_VECTOR_NONCE, ENTITY_VECTOR_CIPHERTEXT, *opened) != 0 &&
+        TextFromCString(opened) == ENTITY_VECTOR_PLAIN)
+    sqlite_free(cast(*void)opened)
+    check_true("a record of another photo does not open", storage_open_entity_record(EntityPhotosCollection,
+        "2f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988", ENTITY_RECORD_KEY_ID,
+        ENTITY_VECTOR_NONCE, ENTITY_VECTOR_CIPHERTEXT, *opened) == 0)
+    check_true("a record of another kind does not open", storage_open_entity_record("private.entity.v1.levels",
+        MediaTestHash(), ENTITY_RECORD_KEY_ID, ENTITY_VECTOR_NONCE, ENTITY_VECTOR_CIPHERTEXT, *opened) == 0)
+    storage_set_setting_text("sync_public_id", "8e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d")
+    check_true("another account's record does not open", storage_open_entity_record(EntityPhotosCollection,
+        MediaTestHash(), ENTITY_RECORD_KEY_ID, ENTITY_VECTOR_NONCE, ENTITY_VECTOR_CIPHERTEXT, *opened) == 0)
+    storage_set_setting_text("sync_public_id", ENTITY_VECTOR_ACCOUNT)
+
+    // This device's photo goes out sealed, named by its hash alone.
+    item_key := PackageText(ENTITY_PHOTO_PREFIX, MediaTestHash())
+    item := "{\"hash\":\"1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988\",\"size\":6000,\"type\":\"image/jpeg\",\"taken_at\":1792224900,\"added_at\":1792224960,\"name\":\"IMG_2041.jpg\",\"trashed\":false,\"day\":\"2026-10-17\",\"taken\":\"2026-10-17T08:15:00\",\"capture\":true}"
+    storage_set_setting_text(item_key, item)
+    check_int("the photo queues once",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='entity_record'"), 1)
+    check_true("entity payload builds", build_payload())
+    check_true("it goes to the entity data", contains(payload(), "\"collection\":\"private.entity.v1.photos\"") &&
+        contains(payload(), "\"key_id\":\"entity-v1\""))
+    check_true("its record ID is its hash", contains(payload(), "\"id\":\"1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988\""))
+    check_true("its name never leaves the device", !contains(payload(), "IMG_2041") && !contains(payload(), "entity.photos."))
+    check_true("nothing goes to an app's collection", !contains(payload(), "private.inbe.v1.media") &&
+        !contains(payload(), "private.inbe.v1.cells"))
+    copy: TextBuffer
+    append(*copy, records_array())
+    storage_enqueue_all_sync_state()
+    check_int("a backfill queues the photo again",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='entity_record'"), 1)
+    storage_close()
+
+    check_true("init entity device b", storage_init(second) != 0)
+    set_account()
+    storage_set_setting_text("sync_public_id", ENTITY_VECTOR_ACCOUNT)
+    check_true("device b applies a's photo",
+        storage_apply_sync_response_json(response_with(4, TextFromCString(*copy.bytes[0]))) != 0)
+    check_true("b has a's photo", storage_get_setting_text(item_key) == item)
+    check_int("b does not send a's photo back",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='entity_record'"), 0)
+    // Another app's record of the same photo: its new field joins, and the
+    // fields only this device knows stay.
+    other_app := entity_reply_record(EntityPhotosCollection, MediaTestHash(), ENTITY_VECTOR_NONCE, ENTITY_VECTOR_CIPHERTEXT)
+    check_true("another app's record applies", storage_apply_sync_response_json(response_with(5, other_app)) != 0)
+    check_true("its field joins", read_db_text(PackageText(PackageText("SELECT json_extract(value,'$.caption') FROM settings WHERE key='",
+        item_key), "'")) == "Written by another app")
+    check_true("this device's fields stay", read_db_text(PackageText(PackageText("SELECT json_extract(value,'$.day') FROM settings WHERE key='",
+        item_key), "'")) == "2026-10-17")
+    // Records this version cannot use leave everything as it was.
+    before := PackageText(storage_get_setting_text(item_key), "")
+    unreadable: [4]string = .[
+    entity_reply_record(EntityPhotosCollection, "2f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c5b6a7988",
+        ENTITY_VECTOR_NONCE, ENTITY_VECTOR_CIPHERTEXT),
+    entity_reply_record("private.entity.v1.levels", "0123456789abcdef0123456789abcdef", ENTITY_VECTOR_NONCE,
+        ENTITY_VECTOR_CIPHERTEXT),
+    entity_reply_record(EntityPhotosCollection, MediaTestHash(), "AAECAwQFBgcICQoLDA0ODxAREhMUFRYY",
+        ENTITY_VECTOR_CIPHERTEXT),
+    entity_reply_record(EntityPhotosCollection, MediaTestHash(), ENTITY_VECTOR_NONCE, "e30")
+    ]
+    for reply: unreadable {
+        check_true("an entity record this version cannot use doesn't stop the sync",
+            storage_apply_sync_response_json(response_with(6, reply)) != 0)
+    }
+    check_true("they change nothing", storage_get_setting_text(item_key) == before)
+    check_int("they store nothing", read_db_count("SELECT COUNT(*) FROM settings WHERE key GLOB 'entity.*'"), 1)
+    // A change b has not sent yet stays when an earlier record arrives, and
+    // goes out over it with every field.
+    trashed := PackageText(read_db_text(PackageText(PackageText("SELECT json_set(value,'$.trashed',json('true')) FROM settings WHERE key='",
+        item_key), "'")), "")
+    storage_set_setting_text(item_key, trashed)
+    check_int("b's change queues", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='entity_record'"), 1)
+    check_true("an earlier record applies", storage_apply_sync_response_json(response_with(7, TextFromCString(*copy.bytes[0]))) != 0)
+    check_true("b's Trash stays", read_db_count(PackageText(PackageText("SELECT json_extract(value,'$.trashed') FROM settings WHERE key='",
+        item_key), "'")) == 1)
+    check_true("b's change goes out", build_payload() && contains(payload(), MediaTestHash()))
+    PackageFree(before)
+    PackageFree(trashed)
+    PackageFree(item_key)
+    storage_close()
+}
+
 // Each node has its own media session on this device, apart from the
 // sync's; removing a node forgets it and which copies the node holds.
 test_node_media_sessions :: () {
@@ -2329,6 +2469,7 @@ Check :: () -> s32 {
     test_nested_app_records_sync_between_devices()
     test_app_order_syncs_between_devices()
     test_media_records_sync_between_devices()
+    test_entity_records_sync_between_devices()
     test_node_media_sessions()
     test_shop_rewards_stay_private()
     return failures

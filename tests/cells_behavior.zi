@@ -91,6 +91,7 @@ Dates :: #import, file "../apps/diary/diary_date.zi";
 #import, file "../src/cells/diary_photos.zi";
 #import, file "../src/cells/media_store.zi";
 #import, file "../src/cells/media_diary_photos.zi";
+#import, file "../src/cells/entity_photos.zi";
 #import, file "../src/storage/cell_records.zi";
 #import, file "../src/cells/package_files.zi";
 #import, file "../src/app/app_types.zi";
@@ -509,15 +510,13 @@ DiaryTestHash :: (data: []u8, output: []u8) -> string {
     return TextFromCString(*output[0])
 }
 
-// The pass's job for one photo, on any node or on the node at `node`, or 0;
-// other Diary tests leave photos too.
-DiaryTestNodeJob :: (pass: *DiaryBlobPass, name: string, node: string) -> s32 {
-    key := DiaryRecordKey(name)
-    defer { PackageFree(key) }
+// The pass's job for one photo's original, on any node or on the node at
+// `node`, or 0; other Diary tests leave photos too.
+DiaryTestNodeJob :: (pass: *DiaryBlobPass, key: string, node: string) -> s32 {
     for index: cast(s32)0..pass.count - 1 {
         address: [256]u8
         unused DiaryBlobNode(pass, pass.jobs[index].node, address[:])
-        if TextUntilNul(pass.jobs[index].key[:]) == key &&
+        if TextUntilNul(pass.jobs[index].key[:]) == key && !pass.jobs[index].preview &&
         (node.count == 0 || TextUntilNul(address[:]) == node) {
             return pass.jobs[index].kind
         }
@@ -525,31 +524,36 @@ DiaryTestNodeJob :: (pass: *DiaryBlobPass, name: string, node: string) -> s32 {
     return 0
 }
 
-DiaryTestJob :: (pass: *DiaryBlobPass, name: string) -> s32 {
-    return DiaryTestNodeJob(pass, name, "")
+DiaryTestJob :: (pass: *DiaryBlobPass, key: string) -> s32 {
+    return DiaryTestNodeJob(pass, key, "")
 }
 
-// The pass's request for one photo, skipping the others.
-DiaryTestNext :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, name: string) -> bool {
-    key := DiaryRecordKey(name)
-    defer { PackageFree(key) }
+// The pass's request for one photo's original, skipping the others.
+DiaryTestNext :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, key: string) -> bool {
     while DiaryBlobNext(pass, request) {
-        if TextUntilNul(request.key[:]) == key {
+        if TextUntilNul(request.key[:]) == key && !request.preview {
             return true
         }
         DiaryBlobAbandon(request)
+        DiaryBlobJobDone(pass)
     }
     return false
 }
 
-// A photo is its file: only its entry syncs, and its sealed copy, the file's
-// size plus 16 bytes, travels to a node and back to the account's devices.
+DiaryTestChunks :: (hash: string) -> EntityContent {
+    record := MediaEntityRecord(hash)
+    defer { PackageFree(record) }
+    return EntityPhotoContent(record)
+}
+
+// A photo travels as the account's entity data, sealed in chunks of its
+// size plus 16 bytes, to a node and back to the account's devices.
 CheckDiaryPhotoCopies :: () {
     node := "https://copies.test"
     sync_was_enabled := storage_sync_enabled()
     storage_set_sync_enabled(1)
     storage_set_setting_text("sync_server_url", node)
-    // The account key lets this device seal copies.
+    // The account key lets this device seal chunks.
     private: [5121]u8
     for index: cast(s32)0..cast(s32)5119 {
         private[index] = ifx index % 2 == 0 then #char "a" else #char "7"
@@ -557,45 +561,44 @@ CheckDiaryPhotoCopies :: () {
     storage_set_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY, TextFromBytes(private[:5120]))
     png: [3000]u8
     image := DiaryTestImage(png[:], 3)
-    source := "copied-photo.png"
-    unused RemoveFile(source)
-    file := OpenExclusivePrivate(source)
-    written := file.valid && WriteTextAt(file, image, 0) == image.count
-    Expect(CloseFile(file) && written, 430)
-    name := DiaryStoreAttach(source)
-    unused RemoveFile(source)
-    Expect(name.count > 0, 431)
-    media := DiaryMediaRead(name)
+    added := MediaImportBytes(image, "copied-photo.png")
+    Expect(added.succeeded && !added.existed, 430)
     hash_text: [65]u8
     hash := DiaryTestHash(png[:], hash_text[:])
-    Expect(media.valid && !DiaryMediaUploaded(media) && media.size == 3000 &&
-        TextFromBytes(media.hash[:64]) == hash, 432)
-    no_chunks := PackageText(PackageText("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.diary.chunk.", hash), ".*'")
-    Expect(ModuleTestCount(no_chunks) == 0, 433)
-    PackageFree(no_chunks)
-    // A pass seals and uploads it, then its entry names the copy.
+    key := EntityPhotoKey(hash)
+    Expect(TextFromBytes(added.hash[:64]) == hash, 431)
+    content := DiaryTestChunks(hash)
+    Expect(content.valid && content.chunk_count == 0 && content.size == 3000, 432)
+    no_copies := PackageText(PackageText("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.diary.chunk.", hash), ".*' OR key GLOB 'cell.media.*'")
+    Expect(ModuleTestCount(no_copies) == 0, 433)
+    PackageFree(no_copies)
+    // A pass seals and uploads it, then its record names the chunk.
     pass: DiaryBlobPass
     request: DiaryBlobRequest
-    Expect(DiaryBlobPlan(*pass, node) && DiaryTestJob(*pass, name) == DIARY_BLOB_UPLOAD, 434)
-    Expect(DiaryTestNext(*pass, *request, name) && request.method == "PUT" &&
-        request.body.count == image.count + DIARY_BLOB_TAG && request.body != image, 435)
+    Expect(DiaryBlobPlan(*pass, node) && DiaryTestJob(*pass, key) == DIARY_BLOB_UPLOAD, 434)
+    Expect(DiaryTestNext(*pass, *request, key) && request.method == "PUT" &&
+        request.body.count == image.count + 16 && request.body != image, 435)
     sealed := PackageText(request.body, "")
     blob_text: [65]u8
     blob := DiaryTestHash(DiaryTestBytes(sealed), blob_text[:])
-    blob_path := PackageText("/api/v1/blobs/inbe/", blob)
+    blob_path := PackageText("/api/v1/blobs/entity/", blob)
     Expect(TextUntilNul(request.path[:]) == blob_path, 436)
     Expect(DiaryBlobFinish(*pass, *request, 204, png[0:0]), 437)
-    media = DiaryMediaRead(name)
-    Expect(DiaryMediaUploaded(media) && TextFromBytes(media.blob[:64]) == blob, 438)
+    DiaryBlobPassEnd(*pass)
+    content = DiaryTestChunks(hash)
+    Expect(content.chunk_count == 1 && TextUntilNul(content.chunks[0].address[:]) == blob &&
+        content.chunks[0].size == 3016, 438)
     unused DiaryBlobPlan(*pass, node)
-    Expect(DiaryTestJob(*pass, name) == 0, 439)
-    // Another device of the account has only the entry: the photo shows as
-    // not on the device until its copy arrives, opened and checked.
-    path := DiaryStorePath(name)
+    Expect(DiaryTestJob(*pass, key) == 0, 439)
+    DiaryBlobPassEnd(*pass)
+    // Another device of the account has only the record: the photo is not
+    // on the device until its chunks arrive, opened and checked.
+    path := MediaPath(hash, false)
     unused RemoveFile(path)
-    Expect(!DiaryStoreRead(name).succeeded && DiaryStorePreview(name).count == 0, 440)
-    Expect(DiaryBlobPlan(*pass, node) && DiaryTestJob(*pass, name) == DIARY_BLOB_DOWNLOAD, 441)
-    Expect(DiaryTestNext(*pass, *request, name) && request.method == "GET" &&
+    MediaWant(hash)
+    Expect(!PathExists(path), 440)
+    Expect(DiaryBlobPlan(*pass, node) && DiaryTestJob(*pass, key) == DIARY_BLOB_DOWNLOAD, 441)
+    Expect(DiaryTestNext(*pass, *request, key) && request.method == "GET" &&
         request.answer_bytes == sealed.count + 1, 442)
     tampered := PackageText(sealed, "")
     changed := DiaryTestBytes(tampered)
@@ -603,65 +606,51 @@ CheckDiaryPhotoCopies :: () {
     generation := diary_blob_generation
     Expect(DiaryBlobFinish(*pass, *request, 200, changed) &&
         !PathExists(path) && diary_blob_generation == generation, 443)
-    Expect(DiaryBlobFinish(*pass, *request, 404, png[0:0]) && !PathExists(path), 444)
-    Expect(DiaryBlobFinish(*pass, *request, 200, DiaryTestBytes(sealed)) &&
-        diary_blob_generation > generation, 445)
-    Expect(DiaryStoreRead(name).data == image && DiaryStorePreview(name) == image, 446)
-    // A new node gets the same copy once.
+    DiaryBlobPassEnd(*pass)
+    Expect(DiaryBlobPlan(*pass, node) && DiaryTestNext(*pass, *request, key) &&
+        DiaryBlobFinish(*pass, *request, 404, png[0:0]) && !PathExists(path), 444)
+    DiaryBlobPassEnd(*pass)
+    Expect(DiaryBlobPlan(*pass, node) && DiaryTestNext(*pass, *request, key) &&
+        DiaryBlobFinish(*pass, *request, 200, DiaryTestBytes(sealed)) && diary_blob_generation > generation, 445)
+    DiaryBlobPassEnd(*pass)
+    Expect(PackageRead(path, DIARY_FILE_LIMIT) == image, 446)
+    // A new node gets the same chunk once.
     other := "https://other-copies.test"
-    Expect(DiaryBlobPlan(*pass, other) && DiaryTestJob(*pass, name) == DIARY_BLOB_UPLOAD, 447)
-    Expect(DiaryTestNext(*pass, *request, name) && request.body == sealed, 448)
+    Expect(DiaryBlobPlan(*pass, other) && DiaryTestNodeJob(*pass, key, other) == DIARY_BLOB_UPLOAD, 447)
+    while DiaryTestNext(*pass, *request, key) && TextUntilNul(request.node[:]) != other {
+        DiaryBlobAbandon(*request)
+        DiaryBlobJobDone(*pass)
+    }
+    Expect(request.body == sealed, 448)
     Expect(DiaryBlobFinish(*pass, *request, 204, png[0:0]), 449)
+    DiaryBlobPassEnd(*pass)
     unused DiaryBlobPlan(*pass, other)
-    Expect(DiaryTestJob(*pass, name) == 0, 459)
+    Expect(DiaryTestNodeJob(*pass, key, other) == 0, 459)
+    DiaryBlobPassEnd(*pass)
     // A node without photo upload receives none; a full one stops uploads
     // to it alone.
     third := "https://third-copies.test"
-    Expect(SyncNodeSetMediaUpload(third, false) && DiaryBlobPlan(*pass, third) &&
-        DiaryTestNodeJob(*pass, name, third) == 0, 450)
+    Expect(SyncNodeSetMediaUpload(third, false), 450)
+    unused DiaryBlobPlan(*pass, third)
+    Expect(DiaryTestNodeJob(*pass, key, third) == 0, 450)
+    DiaryBlobPassEnd(*pass)
     Expect(SyncNodeSetMediaUpload(third, true) && DiaryBlobPlan(*pass, third) &&
-        DiaryTestNodeJob(*pass, name, third) == DIARY_BLOB_UPLOAD && DiaryTestNext(*pass, *request, name), 451)
+        DiaryTestNodeJob(*pass, key, third) == DIARY_BLOB_UPLOAD, 451)
+    while DiaryTestNext(*pass, *request, key) && TextUntilNul(request.node[:]) != third {
+        DiaryBlobAbandon(*request)
+        DiaryBlobJobDone(*pass)
+    }
     full := "{\"code\":\"storage_full\",\"account_storage\":{\"used_bytes\":20971000,\"limit_bytes\":20971520}}"
     full_text := PackageText(full, "")
     Expect(DiaryBlobFinish(*pass, *request, 413, DiaryTestBytes(full_text)) &&
         pass.stopped[request.node_index] && SyncNodeStorageRead(third).full, 452)
+    DiaryBlobPassEnd(*pass)
     PackageFree(full_text)
-    // A photo from before copies, kept as hex chunks, uploads the same copy
-    // and its chunks shrink to one byte each.
-    older: [2500]u8
-    old_image := DiaryTestImage(older[:], 9)
-    old_name := "photo-20240301000000-1.bin"
-    old_hash_text: [65]u8
-    old_hash := DiaryTestHash(older[:], old_hash_text[:])
-    for index: cast(s32)0..2 {
-        start := index * 1024
-        size: s32 = 1024
-        if start + size > 2500 {
-            size = 2500 - start
-        }
-        hex: [2049]u8
-        unused BytesToHex(*older[start], cast(s64)size, *hex[0], 2049)
-        chunk := DiaryChunkKey(old_hash, index)
-        Expect(CellRecordWrite(chunk, TextFromCString(*hex[0])), 453)
-        PackageFree(chunk)
-    }
-    old_entry := PackageText(PackageText("{\"hash\":\"", old_hash), "\",\"count\":3,\"size\":2500}")
-    old_key := DiaryRecordKey(old_name)
-    Expect(CellRecordWrite(old_key, old_entry) && DiaryStoreRead(old_name).data == old_image, 454)
-    Expect(DiaryBlobPlan(*pass, node) && DiaryTestJob(*pass, old_name) == DIARY_BLOB_UPLOAD &&
-        DiaryTestNext(*pass, *request, old_name) && request.chunked && request.body.count == 2500 + DIARY_BLOB_TAG, 455)
-    Expect(DiaryBlobFinish(*pass, *request, 204, png[0:0]) && DiaryMediaUploaded(DiaryMediaRead(old_name)), 456)
-    shrunk := PackageText(PackageText("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.diary.chunk.", old_hash), ".*' AND value='-'")
-    Expect(ModuleTestCount(shrunk) == 3, 457)
-    PackageFree(shrunk)
-    Expect(DiaryStoreRead(old_name).data == old_image, 458)
-    PackageFree(old_key)
-    PackageFree(old_entry)
     PackageFree(tampered)
     PackageFree(blob_path)
     PackageFree(sealed)
     PackageFree(path)
-    PackageFree(name)
+    PackageFree(key)
     storage_set_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY, "")
     storage_set_setting_text("sync_server_url", "")
     storage_set_sync_enabled(sync_was_enabled)
@@ -689,15 +678,13 @@ DiaryLibraryRun :: () {
 }
 
 DiaryLibraryRecord :: (hash: string) -> string {
-    key := MediaRecordKey(hash)
-    defer { PackageFree(key) }
-    return MediaRecordRead(key)
+    return MediaEntityRecord(hash)
 }
 
-// Photos older versions attached to Diary entries join the media library,
-// which Photos shows, under the entry's day and with the entry's name. A
-// Diary file no entry includes stays out, a photo in Trash stays there, and
-// looking again changes nothing.
+// Photos older versions attached to Diary entries move to the account's
+// entity data, which Photos shows, under the entry's day and with the
+// entry's name. A Diary file no entry includes stays out, a photo in Trash
+// stays there, and looking again changes nothing.
 CheckDiaryPhotosInLibrary :: () {
     first: [2600]u8
     second: [2700]u8
@@ -753,8 +740,9 @@ CheckDiaryPhotosInLibrary :: () {
     Expect(!MediaRead(orphan_hash).valid && !MediaRead(later_hash).valid, 487)
     trashed_now := DiaryLibraryRecord(trashed_hash)
     Expect(trashed_now == trashed_record && MediaRead(trashed_hash).trashed, 488)
-    // Diary files of other checks belong to no entry either.
-    Expect(ModuleTestCount("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.media.*' AND length(key)=75") == 3, 489)
+    // Diary files of other checks belong to no entry either; the photo the
+    // copies check added is the fourth.
+    Expect(ModuleTestCount("SELECT COUNT(*) FROM settings WHERE key GLOB 'entity.photos.*' AND length(key)=78") == 4, 489)
     Expect(DiaryStoreRead("2024-04-02.json").data == first_entry &&
         DiaryStoreRead("2024-04-03.json").data == second_entry, 490)
     // The entry's Diary file draws as the library's photo, so Diary's day
@@ -784,7 +772,8 @@ CheckDiaryPhotosInLibrary :: () {
     trashed_again := DiaryLibraryRecord(trashed_hash)
     Expect(first_again == first_record && second_again == second_record && later_again == later_record &&
         trashed_again == trashed_record, 494)
-    Expect(ModuleTestCount("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.media.*' AND length(key)=75") == 4, 495)
+    Expect(ModuleTestCount("SELECT COUNT(*) FROM settings WHERE key GLOB 'entity.photos.*' AND length(key)=78") == 5, 495)
+    Expect(ModuleTestCount("SELECT COUNT(*) FROM settings WHERE key GLOB 'cell.media.*'") == 0, 499)
     // The library's file is the Diary file, linked, not a second copy: a
     // byte changed in place in one shows in the other.
     diary_path := DiaryStorePath(first_name)

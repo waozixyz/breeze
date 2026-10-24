@@ -1,0 +1,268 @@
+// The account's photos as entity records (Daochi docs/entity-data.md,
+// storage/entity_records.zi), shared by every app of the account:
+//
+//   entity.photos.<sha256>  {"hash","size","type","taken_at","width","height",
+//                            "blobs":[{"address","size"}],
+//                            "preview":{"hash","size","type","blobs"},
+//                            "added_at","name","trashed","day","taken","capture"}
+//
+// "type" is the MIME type, "size" the plain size of the whole content, and
+// each "blobs" entry one sealed chunk of at most 8 MiB plain bytes, in order,
+// with its sealed size. A record names its chunks once they are on a node
+// (diary_blobs.zi), and the preview names its own. "day" is the capture day
+// on the camera's clock and "taken" the capture time as the camera wrote it;
+// fields this version does not know are kept when it writes a record back.
+#import "byte_text_linux"
+#import "vec"
+#import "text"
+#import "json_scan"
+#import "text_buffer"
+#import "daochi_client/entity"
+#import, file "package_files.zi";
+#import, file "../storage/entity_records.zi";
+#import, file "../storage/media_records.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/sqlite.zi";
+#import, file "../storage/db.zi";
+#import, file "../storage/state.zi";
+#import, file "../app/text_buffers.zi";
+
+// Content of at most the Diary's 16 MiB file limit has two chunks; records
+// of larger content from other apps list more and stay on the node.
+ENTITY_PHOTO_CHUNKS :: 8
+ENTITY_PHOTO_LOCAL_CHUNKS :: 2
+
+EntityChunk :: struct {
+    address: [65]u8
+    size: s64
+}
+
+// One content of a photo record: the photo itself or its preview.
+EntityContent :: struct {
+    valid: bool
+    hash: [65]u8
+    size: s64
+    // png, jpg, gif or webp; empty for a type this version does not show.
+    format: [8]u8
+    // The chunks on a node, in order; none until they are there.
+    chunks: [ENTITY_PHOTO_CHUNKS]EntityChunk
+    chunk_count: s32
+}
+
+EntityPhotoKey :: (hash: string) -> string {
+    return PackageText(ENTITY_PHOTO_PREFIX, hash)
+}
+
+// The chunks content of `size` plain bytes is cut into.
+EntityChunkCount :: (size: s64) -> s32 {
+    return cast(s32)((size + ENTITY_CHUNK_BYTES - 1) / ENTITY_CHUNK_BYTES)
+}
+
+// The plain bytes of chunk `index` within content of `size` bytes.
+EntityChunkPlain :: (size: s64, index: s32) -> s64 {
+    start := cast(s64)index * ENTITY_CHUNK_BYTES
+    rest := size - start
+    if rest > ENTITY_CHUNK_BYTES {
+        return ENTITY_CHUNK_BYTES
+    }
+    return rest
+}
+
+EntityFormatOfType :: (type_name: string) -> string {
+    if type_name == "image/png" {
+        return "png"
+    }
+    if type_name == "image/jpeg" {
+        return "jpg"
+    }
+    if type_name == "image/gif" {
+        return "gif"
+    }
+    if type_name == "image/webp" {
+        return "webp"
+    }
+    return ""
+}
+
+EntityTypeOfFormat :: (format: string) -> string {
+    if format == "jpg" {
+        return "image/jpeg"
+    }
+    if format == "gif" {
+        return "image/gif"
+    }
+    if format == "webp" {
+        return "image/webp"
+    }
+    return "image/png"
+}
+
+// The content described by the object at `at`: the record itself (0) or
+// its "preview". Chunks that do not match the content's size are not its
+// chunks, and leave it without any.
+EntityContentAt :: (record: string, at: s32) -> EntityContent {
+    content: EntityContent
+    if at < 0 || at >= cast(s32)record.count || record[at] != cast(u8)123 {
+        return content
+    }
+    size := ReadNumber(record, FieldAt(record, at, "size"))
+    type_name: [64]u8
+    if ReadStringText(record, FieldAt(record, at, "hash"), content.hash[:]) != 64 ||
+    !MediaHashValid(TextFromBytes(content.hash[:64])) || !size.valid || size.value < 1.0 ||
+    size.value > cast(float64)ENTITY_CHUNK_BYTES * cast(float64)ENTITY_PHOTO_CHUNKS {
+        return EntityContent.{}
+    }
+    content.size = cast(s64)size.value
+    if cast(float64)content.size != size.value {
+        return EntityContent.{}
+    }
+    type_count := ReadStringText(record, FieldAt(record, at, "type"), type_name[:])
+    if type_count > 0 && type_count < 64 {
+        unused AppCopyText(EntityFormatOfType(TextFromBytes(type_name[:type_count])), content.format[:])
+    }
+    content.valid = true
+    blobs := FieldAt(record, at, "blobs")
+    count := ArrayCount(record, blobs)
+    if count != EntityChunkCount(content.size) {
+        return content
+    }
+    for index: cast(s32)0..count - 1 {
+        chunk := ElementAt(record, blobs, index)
+        sealed := ReadNumber(record, FieldAt(record, chunk, "size"))
+        entry := *content.chunks[index]
+        if ReadStringText(record, FieldAt(record, chunk, "address"), entry.address[:]) != 64 ||
+        !MediaHashValid(TextFromBytes(entry.address[:64])) || !sealed.valid ||
+        sealed.value != cast(float64)(EntityChunkPlain(content.size, index) + 16) {
+            content.chunk_count = 0
+            return content
+        }
+        entry.size = cast(s64)sealed.value
+    }
+    content.chunk_count = count
+    return content
+}
+
+EntityPhotoContent :: (record: string) -> EntityContent {
+    return EntityContentAt(record, 0)
+}
+
+EntityPreviewContent :: (record: string) -> EntityContent {
+    return EntityContentAt(record, FieldAt(record, 0, "preview"))
+}
+
+// Whether the bytes are exactly this content.
+EntityContentMatches :: (content: EntityContent, data: string) -> bool {
+    if !content.valid || data.count != content.size {
+        return false
+    }
+    descriptor := cast(*TextDescriptor)(*data)
+    actual: [65]u8
+    storage_sha256_hex(descriptor.data, data.count, *actual[0])
+    return TextFromCString(*actual[0]) == TextFromBytes(content.hash[:64])
+}
+
+// The "blobs" list naming these chunks.
+EntityBlobsJson :: (chunks: []EntityChunk) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "[")
+    for index: cast(s64)0..chunks.count - 1 {
+        if index > 0 {
+            BuilderPrint(*out, ",")
+        }
+        BuilderPrint(*out, "{\"address\":\"%\",\"size\":%}", TextUntilNul(chunks[index].address[:]),
+            chunks[index].size)
+    }
+    BuilderPrint(*out, "]")
+    return BuilderFinish(out)
+}
+
+// Whether the node has every chunk of this content, as this device knows
+// from what it put there or fetched from there (diary_blobs).
+EntityContentOnNode :: (content: EntityContent, node: string) -> bool {
+    if !content.valid || content.chunk_count == 0 || storage_db_handle() == null {
+        return false
+    }
+    for index: cast(s32)0..content.chunk_count - 1 {
+        statement: *void
+        if SqlitePrepareText(storage_db_handle(),
+            "SELECT 1 FROM diary_blobs WHERE node=?1 AND blob=?2", -1, *statement, null) != SQLITE_OK {
+            return false
+        }
+        unused bind_text(statement, 1, node)
+        unused bind_text(statement, 2, TextUntilNul(content.chunks[index].address[:]))
+        found := SqliteStep(statement) == SQLITE_ROW
+        SqliteFinalize(statement)
+        if !found {
+            return false
+        }
+    }
+    return true
+}
+
+// Whether this device downloaded the content back from the node and found
+// it whole (diary_blobs.zi).
+EntityContentVerified :: (content: EntityContent, node: string) -> bool {
+    if !content.valid || storage_db_handle() == null {
+        return false
+    }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT 1 FROM verified_contents WHERE node=?1 AND hash=?2", -1, *statement, null) != SQLITE_OK {
+        return false
+    }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, node)
+    unused bind_text(statement, 2, TextUntilNul(content.hash[:]))
+    return SqliteStep(statement) == SQLITE_ROW
+}
+
+// Whether every content of the photo, itself and its preview, came back
+// whole from the node.
+EntityPhotoVerified :: (record: string, node: string) -> bool {
+    photo := EntityPhotoContent(record)
+    if !EntityContentVerified(photo, node) {
+        return false
+    }
+    return FieldAt(record, 0, "preview") < 0 || EntityContentVerified(EntityPreviewContent(record), node)
+}
+
+EntityPhotoConfirmedSQL :: #string SQL_END
+SELECT 1 FROM settings s JOIN sync_record_copies c
+  ON c.collection=?3 AND c.id=?4 AND json_valid(c.json)
+WHERE s.user_id=?1 AND s.key=?2 AND json_valid(s.value)
+  AND json_extract(c.json,'$.blobs')=json_extract(s.value,'$.blobs')
+  AND COALESCE(json_extract(c.json,'$.preview.blobs'),'')=COALESCE(json_extract(s.value,'$.preview.blobs'),'')
+  AND NOT EXISTS (SELECT 1 FROM sync_outbox WHERE entity_type='entity_record' AND entity_id=?2)
+SQL_END;
+
+// Whether the sync node has the photo's record as this device has it,
+// naming its chunks and its preview's: an upload of it was answered, or it
+// arrived from there, and no change of it waits to go out.
+EntityPhotoAcknowledged :: (hash: string, record: string) -> bool {
+    photo := EntityPhotoContent(record)
+    if !photo.valid || TextFromBytes(photo.hash[:64]) != hash || photo.chunk_count == 0 {
+        return false
+    }
+    key := EntityPhotoKey(hash)
+    defer { PackageFree(key) }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), EntityPhotoConfirmedSQL, -1, *statement, null) != SQLITE_OK {
+        return false
+    }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    unused bind_text(statement, 2, key)
+    unused bind_text(statement, 3, EntityPhotosCollection)
+    unused bind_text(statement, 4, hash)
+    return SqliteStep(statement) == SQLITE_ROW
+}
+
+// Whether the sync node confirmed this photo: it has the record as this
+// device has it and every chunk the record names, of the photo and its
+// preview. Only then may an old copy of the photo go.
+EntityPhotoConfirmed :: (hash: string, record: string, node: string) -> bool {
+    if !EntityPhotoAcknowledged(hash, record) || !EntityContentOnNode(EntityPhotoContent(record), node) {
+        return false
+    }
+    return FieldAt(record, 0, "preview") < 0 || EntityContentOnNode(EntityPreviewContent(record), node)
+}

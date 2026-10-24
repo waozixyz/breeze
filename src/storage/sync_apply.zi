@@ -3,6 +3,7 @@
 // after checking that it is a record this version can read.
 #import, file "../app/text_buffers.zi";
 #import "byte_text_linux"
+#import "text_buffer"
 Scan :: #import "json_scan"
 #import, file "../cells/catalog.zi";
 #import, file "state.zi";
@@ -14,6 +15,8 @@ Scan :: #import "json_scan"
 #import, file "app_records.zi";
 #import, file "achievement_records.zi";
 #import, file "media_records.zi";
+#import, file "entity_records.zi";
+#import, file "entity_record_crypto.zi";
 #import, file "storage_layout.zi";
 #import, file "db.zi";
 #import, file "storage_habit_sync.zi";
@@ -291,7 +294,52 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
     return ok
 }
 
-storage_apply_encrypted_records_query: string = "SELECT json_extract(value,'$.collection'),json_extract(value,'$.id'),json_extract(value,'$.key_id'),json_extract(value,'$.nonce'),json_extract(value,'$.ciphertext'),COALESCE(json_extract(value,'$.content_hash'),'')FROM json_each(?1,?2)";
+storage_apply_encrypted_records_query: string = "SELECT json_extract(value,'$.collection'),json_extract(value,'$.id'),json_extract(value,'$.key_id'),json_extract(value,'$.nonce'),json_extract(value,'$.ciphertext'),COALESCE(json_extract(value,'$.content_hash'),''),COALESCE(json_extract(value,'$.updated_at'),'')FROM json_each(?1,?2)";
+
+// A photo of the account's entity data, as another app or device wrote it:
+// one JSON object naming the photo it is the record of.
+storage_entity_photo_valid :: (record_id: string, plaintext: string) -> bool {
+    start := Scan.Space(plaintext, 0)
+    if start < 0 || start >= cast(s32)plaintext.count || plaintext[start] != cast(u8)123 ||
+    Scan.Space(plaintext, Scan.ValueEnd(plaintext, start, 0)) != cast(s32)plaintext.count {
+        return false
+    }
+    hash: [65]u8
+    size := Scan.ReadNumber(plaintext, Scan.FieldAt(plaintext, start, "size"))
+    return Scan.ReadStringText(plaintext, Scan.FieldAt(plaintext, start, "hash"), hash[:]) == 64 &&
+    TextFromBytes(hash[:64]) == record_id && MediaHashValid(record_id) && size.valid && size.value >= 1.0
+}
+
+// Stores an entity record that arrived, in the order the node keeps them:
+// it replaces this device's copy, keeping fields only this device has,
+// unless this device changed the record and has not sent the change yet.
+// That change goes out merged over the record that arrived.
+storage_apply_entity_record :: (collection: string, record_id: string, plaintext: string,
+    updated_at: string) -> s32 {
+    if collection != EntityPhotosCollection || !storage_entity_photo_valid(record_id, plaintext) {
+        LogStorageText(LOG_WARNING, "SYNC: entity record skipped: ", collection)
+        return 1
+    }
+    key: [ENTITY_PHOTO_KEY_BYTES + 1]u8
+    unused AppCopyText(ENTITY_PHOTO_PREFIX, key[:])
+    unused AppAppendText(record_id, key[:])
+    statement: *void = null
+    if SqlitePrepareText(storage_db_handle(), SyncEntityRecordSQL, -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, TextUntilNul(key[:]))
+    bind_text(statement, 3, plaintext)
+    bind_text(statement, 4, updated_at)
+    if SqliteStep(statement) != SQLITE_DONE {
+        return 0
+    }
+    if sqlite3_changes(storage_db_handle()) > 0 {
+        storage_media_changes += 1
+    }
+    return 1
+}
 
 storage_apply_encrypted_records :: (response_json: string) -> s32 {
     habit_batch_storage: StorageJsonBuilder = StorageJsonBuilder.{}
@@ -312,7 +360,7 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
     if count <= 0 {
         return 1
     }
-    fields = cast(**u8)calloc(cast(usize)count * 6,
+    fields = cast(**u8)calloc(cast(usize)count * 7,
         cast(usize)size_of(type_of(<<fields)))
     if fields == null {
         return 0
@@ -326,14 +374,14 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
     while loaded < count && SqliteStep(statement) == SQLITE_ROW {
         {
             column: s32 = 0
-            while column < 6 {
+            while column < 7 {
                 value: *u8 = SqliteColumnText(statement, column)
                 if value == null {
-                    fields[loaded * 6 + column] = cast(*u8)calloc(1, 1)
+                    fields[loaded * 7 + column] = cast(*u8)calloc(1, 1)
                 } else {
-                    fields[loaded * 6 + column] = storage_duplicate_cstring(value)
+                    fields[loaded * 7 + column] = storage_duplicate_cstring(value)
                 }
-                if fields[loaded * 6 + column] == null {
+                if fields[loaded * 7 + column] == null {
                     ok = 0
                     break
                 }
@@ -352,15 +400,30 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
     {
         index: s32 = 0
         while ok != 0 && index < loaded {
-            collection: string = AppTextFromCString(fields[index * 6], 2147483647)
-            record_id: string = AppTextFromCString(fields[index * 6 + 1], 2147483647)
-            key_id: string = AppTextFromCString(fields[index * 6 + 2], 2147483647)
-            nonce: string = AppTextFromCString(fields[index * 6 + 3], 2147483647)
-            ciphertext: string = AppTextFromCString(fields[index * 6 + 4], 2147483647)
-            content_hash: string = AppTextFromCString(fields[index * 6 + 5], 2147483647)
+            collection: string = AppTextFromCString(fields[index * 7], 2147483647)
+            record_id: string = AppTextFromCString(fields[index * 7 + 1], 2147483647)
+            key_id: string = AppTextFromCString(fields[index * 7 + 2], 2147483647)
+            nonce: string = AppTextFromCString(fields[index * 7 + 3], 2147483647)
+            ciphertext: string = AppTextFromCString(fields[index * 7 + 4], 2147483647)
+            content_hash: string = AppTextFromCString(fields[index * 7 + 5], 2147483647)
+            updated_at: string = AppTextFromCString(fields[index * 7 + 6], 2147483647)
             plaintext: *u8 = null
             if collection.count == 0 || storage_decrypted_array_name(collection).count == 0 {
                 index += 1; continue
+            }
+            if EntityCollectionKnown(collection) {
+                // An entity record another app wrote and this one cannot
+                // open changes nothing here and doesn't stop the sync.
+                if storage_open_entity_record(collection, record_id, key_id, nonce, ciphertext, *plaintext) == 0 {
+                    LogStorageText(LOG_WARNING, "SYNC: entity record could not be opened: ", collection)
+                } else {
+                    entity_plain := AppTextFromCString(plaintext, ENTITY_RECORD_PLAIN_MAX + 1)
+                    storage_sync_record_copy_store(collection, record_id, entity_plain)
+                    ok = storage_apply_entity_record(collection, record_id, entity_plain, updated_at)
+                    free(cast(*void)plaintext)
+                }
+                index += 1
+                continue
             }
             ok = ifx (record_id.count > 0 && key_id.count > 0 && nonce.count > 0  && ciphertext.count > 0  && storage_decrypt_record(collection, record_id, key_id, nonce,
                 ciphertext, content_hash, *plaintext) != 0) then (1) else (0)
@@ -404,7 +467,7 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
     }
     {
         index: s32 = 0
-        while index < count * 6 {
+        while index < count * 7 {
             free(cast(*void)fields[index])
             index += 1
         }

@@ -5,6 +5,7 @@
 - Practice illustrations keep clean, smooth edges on desktop, without dark seams across the Sun Salutation guide.
 - Smoother on phones: the How to guides, still screens and paused practices draw far less.
 - Apps and practices use the new ZX format and update themselves after installing.
+- Diary and Photos keep each photo once for your account, privately, shared by all your apps. Photos saved before move there by themselves, and their old copies are removed only once the new ones are safely stored.
 
 ## [2.1.44] - 2026-10-23
 

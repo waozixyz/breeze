@@ -128,7 +128,7 @@ test: android-smoke-script-test
 test: sync-recovery-test
 test: sync-connection-test
 test: sync-record-fields-test
-test: media-metadata-test media-store-test photos-app-test
+test: media-metadata-test media-store-test entity-photos-test photos-app-test
 test: node-app-records-test node-app-snapshot-test
 test: app-click-block-zi-test
 test: phone-check-gate-test

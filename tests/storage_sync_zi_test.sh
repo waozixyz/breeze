@@ -52,10 +52,12 @@ int main(void)
     return result == 0 ? 0 : 1;
 }
 C
+# Entity records use Monocypher's XChaCha20-Poly1305, as the app does.
+monocypher=$root/build/packages/monocypher/src
 "${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
     -I"$include" -I"$work/generated" -I"$root/vendor-builds/sqlite" \
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
-    "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
+    "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$monocypher/monocypher.c" "$liboqs" \
     -Wl,--wrap=sqlite3_prepare_v2 -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
 # Storage must never open the real data directory.
 APP_DATA_ROOT=/tmp/inbe-storage-sync-zi-test/data

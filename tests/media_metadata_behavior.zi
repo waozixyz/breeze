@@ -152,8 +152,109 @@ Webp :: (date: string) -> string {
     return BuilderFinish(out)
 }
 
+// A file of `format` whose header names a width and height, as the size
+// reader finds them; webp is lossy (VP8), lossless (VP8L) or extended (VP8X).
+Sized :: (format: string, width: s64, height: s64) -> string {
+    out: Vec(u8)
+    if format == "png" {
+        Byte(*out, 137)
+        Chars(*out, "PNG")
+        Byte(*out, 13)
+        Byte(*out, 10)
+        Byte(*out, 26)
+        Byte(*out, 10)
+        Long(*out, 13, false)
+        Chars(*out, "IHDR")
+        Long(*out, width, false)
+        Long(*out, height, false)
+        Byte(*out, 8)
+    } else if format == "gif" {
+        Chars(*out, "GIF89a")
+        Word(*out, width, true)
+        Word(*out, height, true)
+        Byte(*out, 0)
+    } else if format == "jpg" {
+        Byte(*out, 255)
+        Byte(*out, 216)
+        // A comment segment before the frame is skipped.
+        Byte(*out, 255)
+        Byte(*out, 254)
+        Word(*out, 4, false)
+        Chars(*out, "hi")
+        Byte(*out, 255)
+        Byte(*out, 192)
+        Word(*out, 11, false)
+        Byte(*out, 8)
+        Word(*out, height, false)
+        Word(*out, width, false)
+        Byte(*out, 1)
+        Chars(*out, "abc")
+    } else {
+        Chars(*out, "RIFF")
+        Long(*out, 30, true)
+        Chars(*out, "WEBP")
+        Chars(*out, format)
+        Long(*out, 10, true)
+        if format == "VP8 " {
+            Chars(*out, "abc")
+            Byte(*out, 157)
+            Byte(*out, 1)
+            Byte(*out, 42)
+            Word(*out, width, true)
+            Word(*out, height, true)
+        } else if format == "VP8L" {
+            Byte(*out, 47)
+            Long(*out, (width - 1) | ((height - 1) << 14), true)
+            Chars(*out, "abcde")
+        } else {
+            Long(*out, 0, true)
+            Byte(*out, (width - 1) & 255)
+            Word(*out, (width - 1) >> 8, true)
+            Byte(*out, (height - 1) & 255)
+            Word(*out, (height - 1) >> 8, true)
+        }
+    }
+    return BuilderFinish(out)
+}
+
+// The JPEG with a frame of this size before its end.
+Framed :: (jpeg: string, width: s64, height: s64) -> string {
+    out: Vec(u8)
+    Chars(*out, jpeg[:jpeg.count - 2])
+    Byte(*out, 255)
+    Byte(*out, 192)
+    Word(*out, 11, false)
+    Byte(*out, 8)
+    Word(*out, height, false)
+    Word(*out, width, false)
+    Byte(*out, 1)
+    Chars(*out, "abc")
+    Byte(*out, 255)
+    Byte(*out, 217)
+    return BuilderFinish(out)
+}
+
+SizeIs :: (data: string, format: string, width: s64, height: s64) -> bool {
+    size := MediaSizeOf(data, format)
+    return size.valid && size.width == width && size.height == height
+}
+
 #program_export
 Answer :: () -> s32 {
+    // Sizes come from headers alone; a photo on its side reads upright.
+    if !SizeIs(Sized("png", 4032, 3024), "png", 4032, 3024) { return 20 }
+    if !SizeIs(Sized("gif", 320, 200), "gif", 320, 200) { return 21 }
+    if !SizeIs(Sized("jpg", 600, 400), "jpg", 600, 400) { return 22 }
+    if !SizeIs(Sized("VP8 ", 640, 480), "webp", 640, 480) { return 23 }
+    if !SizeIs(Sized("VP8L", 1000, 700), "webp", 1000, 700) { return 24 }
+    if !SizeIs(Sized("VP8X", 5000, 3000), "webp", 5000, 3000) { return 25 }
+    if MediaSizeOf(Jpeg("2024:06:15 08:30:05", "", 6), "jpg").valid { return 26 }
+    if !SizeIs(Framed(Jpeg("2024:06:15 08:30:05", "", 6), 600, 400), "jpg", 400, 600) { return 29 }
+    sized := Sized("png", 10, 20)
+    for length: cast(s64)0..sized.count - 2 {
+        if MediaSizeOf(sized[:length], "png").valid { return 27 }
+    }
+    if MediaSizeOf(Sized("png", 0, 20), "png").valid || MediaSizeOf(sized, "jpg").valid { return 28 }
     capture := MediaCaptureOf(Jpeg("2024:06:15 08:30:05", "-03:00"), "jpg")
     if !capture.valid || capture.year != 2024 || capture.month != 6 || capture.day != 15 ||
     capture.hour != 8 || capture.minute != 30 || capture.second != 5 { return 1 }

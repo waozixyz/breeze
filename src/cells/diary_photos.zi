@@ -2,7 +2,9 @@
 // a photo of the account's media library by its place there,
 // photos/YYYY/MM/DD/<sha256>.<type>, or to a Diary file an older version
 // attached, diary:<file>. Diary draws each through an asset path the hosted
-// asset policy allows: the library's preview, or the Diary file itself.
+// asset policy allows: the library's preview, or the Diary file itself
+// while the photo has not moved to the library (media_diary_photos.zi).
+// A moved photo's Diary file may be gone; its entry still names its hash.
 #import "vec"
 #import "text"
 #import "byte_text_linux"
@@ -11,6 +13,7 @@
 #import, file "diary_store.zi";
 #import, file "media_store.zi";
 #import, file "package_files.zi";
+#import, file "../storage/cell_records.zi";
 #import, file "../storage/sync_apply.zi";
 #import, file "../app/text_buffers.zi";
 
@@ -48,10 +51,14 @@ DiaryPhotoFile :: (name: string) -> *DiaryPhotoFormat {
     slot.* = DiaryPhotoFormat.{}
     unused AppCopyText(name, slot.name[:])
     unused AppCopyText(format, slot.format[:])
-    media := DiaryMediaRead(name)
-    if format.count > 0 && media.valid && MediaRead(TextFromBytes(media.hash[:64])).valid {
-        slot.library = media.hash
+    key := DiaryRecordKey(name)
+    entry := CellRecordRead(key)
+    hash := DiaryEntryHash(entry)
+    if hash.count == 64 && DiaryRecordMedia(name) && MediaRead(hash).valid {
+        unused AppCopyText(hash, slot.library[:])
     }
+    PackageFree(key)
+    PackageFree(entry)
     slot.generation = diary_blob_generation
     slot.media_changes = storage_media_changes
     return slot
@@ -69,14 +76,14 @@ DiaryPhotoAsset :: (destination: string) -> string {
             return ""
         }
         file := DiaryPhotoFile(name)
-        format := TextUntilNul(file.format[:])
-        if format.count == 0 {
-            return ""
-        }
         library := TextUntilNul(file.library[:])
         if library.count == 64 && AppCopyText(MediaAsset(library, false), diary_photo_asset[:]) &&
         diary_photo_asset[0] != cast(u8)0 {
             return TextUntilNul(diary_photo_asset[:])
+        }
+        format := TextUntilNul(file.format[:])
+        if format.count == 0 {
+            return ""
         }
         out: Vec(u8)
         BuilderPrint(*out, "diary/photos/%.%", name, format)

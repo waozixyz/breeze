@@ -1,0 +1,321 @@
+// Entity records in Daochi's encrypted record profile (daochi-record-v1,
+// Daochi docs/encrypted-record-profile-v1.md and docs/entity-data.md), so
+// every app of the account reads what this one writes. A record is sealed
+// with XChaCha20-Poly1305, a fresh 24-byte nonce and the record key of its
+// kind; the associated data names the account, the entity app, the
+// collection, the record and its schema:
+//
+//   {"account_id":…,"app_id":"entity","collection":…,"id":…,"schema":…}
+//
+// The envelope is sorted-key JSON whose binary fields are base64url without
+// padding, as DaochiClient's SealRecord writes it:
+//
+//   {"aad":{…},"alg":"xchacha20poly1305","ciphertext":…,"key_id":"entity-v1",
+//    "nonce":…,"profile":"daochi-record-v1"}
+//
+// In a sync request the record's "ciphertext" is the envelope, base64url, and
+// its "nonce" the nonce. Monocypher's AEAD is the same XChaCha20-Poly1305 as
+// libsodium's, which other apps use (tests/entity_records_test.py).
+#import "byte_text_linux"
+#import "vec"
+#import "keys"
+#import "daochi_client/entity"
+Scan :: #import "json_scan"
+
+entity_record_c :: #system_library "c";
+EntityLock :: (cipher: *u8, mac: *u8, key: *u8, nonce: *u8, ad: *u8, ad_size: usize,
+    plain: *u8, size: usize) #foreign entity_record_c "crypto_aead_lock";
+EntityUnlock :: (plain: *u8, mac: *u8, key: *u8, nonce: *u8, ad: *u8, ad_size: usize,
+    cipher: *u8, size: usize) -> s32 #foreign entity_record_c "crypto_aead_unlock";
+EntityAllocate :: (size: usize) -> *void #foreign entity_record_c "malloc";
+EntityRelease :: (pointer: *void) #foreign entity_record_c "free";
+
+ENTITY_RECORD_APP_ID :: "entity"
+ENTITY_RECORD_PROFILE :: "daochi-record-v1"
+ENTITY_RECORD_ALGORITHM :: "xchacha20poly1305"
+ENTITY_RECORD_NONCE_BYTES :: 24
+ENTITY_RECORD_TAG_BYTES :: 16
+// A record's plain text is one JSON document; the profile allows 8 MiB.
+ENTITY_RECORD_PLAIN_MAX :: 8388608
+
+// Unescaped printable ASCII without quotes or backslashes, so the associated
+// data is the same canonical JSON in every implementation.
+EntityRecordPlain :: (value: string) -> bool {
+    if value.count < 1 || value.count > 256 {
+        return false
+    }
+    for byte: value {
+        if byte < cast(u8)32 || byte > cast(u8)126 || byte == cast(u8)34 || byte == cast(u8)92 {
+            return false
+        }
+    }
+    return true
+}
+
+// What a record's associated data names.
+EntityRecordMetadata :: struct {
+    account_id: string
+    collection: string
+    id: string
+    schema: string
+}
+
+EntityRecordMetadataValid :: (metadata: EntityRecordMetadata) -> bool {
+    return metadata.account_id.count == 64 && EntityRecordPlain(metadata.account_id) &&
+    EntityRecordPlain(metadata.collection) && EntityRecordPlain(metadata.id) &&
+    EntityRecordPlain(metadata.schema)
+}
+
+// Each metadata value is at most 256 bytes, so the associated data fits.
+ENTITY_RECORD_AAD_MAX :: 1200
+
+EntityRecordAppend :: (output: []u8, length: s64, text: string) -> s64 {
+    if length < 0 || length + text.count > output.count {
+        return -1
+    }
+    at := length
+    for byte: text {
+        output[at] = byte
+        at += 1
+    }
+    return at
+}
+
+// The associated data in output; its length, or -1 when it does not fit.
+EntityRecordAAD :: (metadata: EntityRecordMetadata, output: []u8) -> s64 {
+    length := EntityRecordAppend(output, 0, "{\"account_id\":\"")
+    length = EntityRecordAppend(output, length, metadata.account_id)
+    length = EntityRecordAppend(output, length, "\",\"app_id\":\"")
+    length = EntityRecordAppend(output, length, ENTITY_RECORD_APP_ID)
+    length = EntityRecordAppend(output, length, "\",\"collection\":\"")
+    length = EntityRecordAppend(output, length, metadata.collection)
+    length = EntityRecordAppend(output, length, "\",\"id\":\"")
+    length = EntityRecordAppend(output, length, metadata.id)
+    length = EntityRecordAppend(output, length, "\",\"schema\":\"")
+    length = EntityRecordAppend(output, length, metadata.schema)
+    return EntityRecordAppend(output, length, "\"}")
+}
+
+ENTITY_BASE64_ALPHABET :: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+
+// Base64url without padding.
+EntityBase64Append :: (out: *Vec(u8), bytes: []u8) {
+    alphabet := ENTITY_BASE64_ALPHABET
+    at: s64 = 0
+    while at + 3 <= bytes.count {
+        value := (cast(u32)bytes[at] << 16) | (cast(u32)bytes[at + 1] << 8) | cast(u32)bytes[at + 2]
+        unused VecPush(out.*, alphabet[cast(s64)((value >> 18) & 63)])
+        unused VecPush(out.*, alphabet[cast(s64)((value >> 12) & 63)])
+        unused VecPush(out.*, alphabet[cast(s64)((value >> 6) & 63)])
+        unused VecPush(out.*, alphabet[cast(s64)(value & 63)])
+        at += 3
+    }
+    left := bytes.count - at
+    if left == 1 {
+        value := cast(u32)bytes[at] << 16
+        unused VecPush(out.*, alphabet[cast(s64)((value >> 18) & 63)])
+        unused VecPush(out.*, alphabet[cast(s64)((value >> 12) & 63)])
+    } else if left == 2 {
+        value := (cast(u32)bytes[at] << 16) | (cast(u32)bytes[at + 1] << 8)
+        unused VecPush(out.*, alphabet[cast(s64)((value >> 18) & 63)])
+        unused VecPush(out.*, alphabet[cast(s64)((value >> 12) & 63)])
+        unused VecPush(out.*, alphabet[cast(s64)((value >> 6) & 63)])
+    }
+}
+
+EntityBase64Digit :: (byte: u8) -> s32 {
+    if byte >= #char "A" && byte <= #char "Z" {
+        return cast(s32)(byte - #char "A")
+    }
+    if byte >= #char "a" && byte <= #char "z" {
+        return cast(s32)(byte - #char "a") + 26
+    }
+    if byte >= #char "0" && byte <= #char "9" {
+        return cast(s32)(byte - #char "0") + 52
+    }
+    if byte == #char "-" {
+        return 62
+    }
+    if byte == #char "_" {
+        return 63
+    }
+    return -1
+}
+
+// The decoded length of base64url text without padding, or -1 for a length
+// no encoding has.
+EntityBase64Size :: (count: s64) -> s64 {
+    if count % 4 == 1 {
+        return -1
+    }
+    return count / 4 * 3 + ifx count % 4 == 0 then cast(s64)0 else count % 4 - 1
+}
+
+// Decodes text into output; the length, or -1 when text is not canonical
+// base64url without padding or output is too small.
+EntityBase64Decode :: (text: string, output: []u8) -> s64 {
+    size := EntityBase64Size(text.count)
+    if size < 0 || size > output.count {
+        return -1
+    }
+    value: u32 = 0
+    bits: s32 = 0
+    length: s64 = 0
+    for byte: text {
+        digit := EntityBase64Digit(byte)
+        if digit < 0 {
+            return -1
+        }
+        value = (value << 6) | cast(u32)digit
+        bits += 6
+        if bits >= 8 {
+            bits -= 8
+            output[length] = cast(u8)((value >> cast(u32)bits) & 255)
+            length += 1
+        }
+    }
+    // Leftover bits must be zero, so each record has one encoding.
+    if bits > 0 && (value & ((cast(u32)1 << cast(u32)bits) - 1)) != 0 {
+        return -1
+    }
+    return length
+}
+
+// Seals plain under key as the profile's envelope, with a fresh random
+// nonce. `ciphertext` receives the envelope and `nonce` the nonce, both
+// base64url as a sync request carries them.
+EntitySealRecord :: (key: *u8, metadata: EntityRecordMetadata, plain: []u8,
+    ciphertext: *Vec(u8), nonce: *Vec(u8)) -> bool {
+    random: [ENTITY_RECORD_NONCE_BYTES]u8
+    if SecureRandom(*random[0], ENTITY_RECORD_NONCE_BYTES) == 0 {
+        return false
+    }
+    return EntitySealRecordWith(key, metadata, plain, random[:], ciphertext, nonce)
+}
+
+// EntitySealRecord with a given nonce, which must never repeat for a key:
+// known-answer tests compare its envelope with other implementations'.
+EntitySealRecordWith :: (key: *u8, metadata: EntityRecordMetadata, plain: []u8, random: []u8,
+    ciphertext: *Vec(u8), nonce: *Vec(u8)) -> bool {
+    if key == null || !EntityRecordMetadataValid(metadata) || plain.count < 1 ||
+    plain.count > ENTITY_RECORD_PLAIN_MAX || random.count != ENTITY_RECORD_NONCE_BYTES {
+        return false
+    }
+    aad: [ENTITY_RECORD_AAD_MAX]u8
+    aad_count := EntityRecordAAD(metadata, aad[:])
+    if aad_count < 0 {
+        return false
+    }
+    sealed_count := plain.count + ENTITY_RECORD_TAG_BYTES
+    sealed := cast(*u8)EntityAllocate(cast(usize)sealed_count)
+    if sealed == null {
+        return false
+    }
+    defer {
+        SecureWipe(sealed, sealed_count)
+        EntityRelease(cast(*void)sealed)
+    }
+    EntityLock(sealed, *sealed[plain.count], key, *random[0], *aad[0], cast(usize)aad_count,
+        *plain[0], cast(usize)plain.count)
+    envelope: Vec(u8)
+    defer { VecFree(envelope) }
+    BuilderPrint(*envelope, "{\"aad\":%,\"alg\":\"%\",\"ciphertext\":\"",
+        TextFromBytes(aad[:aad_count]), ENTITY_RECORD_ALGORITHM)
+    EntityBase64Append(*envelope, BytesFromPointer(sealed, cast(u64)sealed_count))
+    BuilderPrint(*envelope, "\",\"key_id\":\"%\",\"nonce\":\"", ENTITY_RECORD_KEY_ID)
+    EntityBase64Append(*envelope, random)
+    BuilderPrint(*envelope, "\",\"profile\":\"%\"}", ENTITY_RECORD_PROFILE)
+    EntityBase64Append(ciphertext, VecSlice(envelope, 0, envelope.count))
+    EntityBase64Append(nonce, random)
+    return true
+}
+
+// Whether the string at `at` in text is exactly `expected`.
+EntityRecordField :: (text: string, at: s32, expected: string) -> bool {
+    if at < 0 {
+        return false
+    }
+    return Scan.SpanEqualsASCII(text, Scan.ReadString(text, at), expected)
+}
+
+// The plain text of a record whose envelope names this record, or empty: a
+// NUL-terminated copy to free with EntityRelease, through `plain`. The
+// associated data is authenticated as the writer serialized it, and each of
+// its fields must name this account, app, collection, record and schema.
+EntityOpenRecord :: (key: *u8, metadata: EntityRecordMetadata, key_id: string,
+    nonce_text: string, ciphertext_text: string, plain: **u8) -> s64 {
+    plain.* = null
+    if key == null || !EntityRecordMetadataValid(metadata) || key_id != ENTITY_RECORD_KEY_ID {
+        return -1
+    }
+    envelope_size := EntityBase64Size(ciphertext_text.count)
+    if envelope_size < 2 || envelope_size > ENTITY_RECORD_PLAIN_MAX * 2 {
+        return -1
+    }
+    envelope_pointer := cast(*u8)EntityAllocate(cast(usize)envelope_size)
+    if envelope_pointer == null {
+        return -1
+    }
+    defer { EntityRelease(cast(*void)envelope_pointer) }
+    envelope_bytes := BytesFromPointer(envelope_pointer, cast(u64)envelope_size)
+    if EntityBase64Decode(ciphertext_text, envelope_bytes) != envelope_size {
+        return -1
+    }
+    envelope := TextFromBytes(envelope_bytes)
+    start := Scan.Space(envelope, 0)
+    if start < 0 || Scan.Space(envelope, Scan.ValueEnd(envelope, start, 0)) != cast(s32)envelope.count {
+        return -1
+    }
+    aad_at := Scan.FieldAt(envelope, start, "aad")
+    aad_end := ifx aad_at < 0 then cast(s32)-1 else Scan.ValueEnd(envelope, aad_at, 0)
+    if aad_at < 0 || aad_end <= aad_at || envelope[aad_at] != cast(u8)123 ||
+    !EntityRecordField(envelope, Scan.FieldAt(envelope, start, "profile"), ENTITY_RECORD_PROFILE) ||
+    !EntityRecordField(envelope, Scan.FieldAt(envelope, start, "alg"), ENTITY_RECORD_ALGORITHM) ||
+    !EntityRecordField(envelope, Scan.FieldAt(envelope, start, "key_id"), ENTITY_RECORD_KEY_ID) ||
+    !EntityRecordField(envelope, Scan.FieldAt(envelope, start, "nonce"), nonce_text) ||
+    !EntityRecordField(envelope, Scan.FieldAt(envelope, aad_at, "account_id"), metadata.account_id) ||
+    !EntityRecordField(envelope, Scan.FieldAt(envelope, aad_at, "app_id"), ENTITY_RECORD_APP_ID) ||
+    !EntityRecordField(envelope, Scan.FieldAt(envelope, aad_at, "collection"), metadata.collection) ||
+    !EntityRecordField(envelope, Scan.FieldAt(envelope, aad_at, "id"), metadata.id) ||
+    !EntityRecordField(envelope, Scan.FieldAt(envelope, aad_at, "schema"), metadata.schema) {
+        return -1
+    }
+    nonce: [ENTITY_RECORD_NONCE_BYTES]u8
+    if EntityBase64Decode(nonce_text, nonce[:]) != ENTITY_RECORD_NONCE_BYTES {
+        return -1
+    }
+    sealed_at := Scan.FieldAt(envelope, start, "ciphertext")
+    sealed_span := Scan.ReadString(envelope, sealed_at)
+    if sealed_at < 0 || !sealed_span.valid {
+        return -1
+    }
+    sealed_text := envelope[sealed_span.start:sealed_span.end]
+    sealed_size := EntityBase64Size(sealed_text.count)
+    if sealed_size <= ENTITY_RECORD_TAG_BYTES || sealed_size > ENTITY_RECORD_PLAIN_MAX + ENTITY_RECORD_TAG_BYTES {
+        return -1
+    }
+    sealed := cast(*u8)EntityAllocate(cast(usize)sealed_size)
+    if sealed == null {
+        return -1
+    }
+    defer { EntityRelease(cast(*void)sealed) }
+    if EntityBase64Decode(sealed_text, BytesFromPointer(sealed, cast(u64)sealed_size)) != sealed_size {
+        return -1
+    }
+    length := sealed_size - ENTITY_RECORD_TAG_BYTES
+    output := cast(*u8)EntityAllocate(cast(usize)(length + 1))
+    if output == null {
+        return -1
+    }
+    aad := envelope[aad_at:aad_end]
+    aad_bytes := cast(*TextDescriptor)(*aad)
+    if EntityUnlock(output, *sealed[length], key, *nonce[0], aad_bytes.data, cast(usize)aad.count,
+        sealed, cast(usize)length) != 0 {
+        SecureWipe(output, length + 1)
+        EntityRelease(cast(*void)output)
+        return -1
+    }
+    output[length] = cast(u8)0
+    plain.* = output
+    return length
+}

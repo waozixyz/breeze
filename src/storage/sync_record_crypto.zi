@@ -7,11 +7,17 @@
 #import, file "storage_layout.zi";
 #import "crypto"
 #import "keys"
+#import "vec"
+#import "byte_text_linux"
+#import "text_buffer"
 #import, file "db.zi";
 #import, file "storage_core.zi";
 #import, file "storage_settings.zi";
 #import, file "sync_record_codec.zi";
 #import, file "sync_collections.zi";
+#import, file "entity_records.zi";
+#import, file "entity_record_crypto.zi";
+#import "daochi_client/entity"
 c :: #system_library "c";
 sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
 malloc :: (size: usize) -> *void #foreign c;
@@ -39,6 +45,41 @@ storage_private_record_key_for_context :: (context: string, out: *u8) -> s32 {
     }
     SecureWipe(*private_key[0], key_size)
     return ok
+}
+
+// The account private key (the ML-DSA-44 secret key bytes) in output, which
+// the caller wipes; its length, or 0 without an owner's key on this device.
+storage_account_private_key :: (output: []u8) -> s64 {
+    if storage_delegate_mode != null && storage_delegate_mode() == 2 {
+        return 0
+    }
+    private_key_hex: string = storage_get_setting_text(STORAGE_SYNC_PRIVATE_KEY_KEY)
+    key_size: s64 = (ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2
+    if private_key_hex.count != key_size * 2 || output.count < key_size {
+        return 0
+    }
+    if HexToBytes(private_key_hex, *output[0], key_size) == 0 {
+        SecureWipe(*output[0], key_size)
+        return 0
+    }
+    return key_size
+}
+
+// The record key of an entity collection, the same in every app of the
+// account (Daochi docs/entity-data.md).
+storage_entity_record_key :: (collection: string, out: *u8) -> s32 {
+    private_key: [(ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2]u8
+    length := storage_account_private_key(private_key[:])
+    defer { SecureWipe(*private_key[0], (ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2) }
+    kind := EntityCollectionKind(collection)
+    if length == 0 || kind.count == 0 {
+        return 0
+    }
+    if !EntityRecordKey(private_key[:length], kind, BytesFromPointer(out, 32)) {
+        SecureWipe(out, 32)
+        return 0
+    }
+    return 1
 }
 
 storage_private_record_key :: (out: *u8) -> s32 {
@@ -70,6 +111,12 @@ storage_private_collection_key :: (collection: string, key_id: string, out: *u8)
             return 0
         }
         return storage_private_record_key_for_context(LumiPrivateKeyContext, out)
+    }
+    if EntityCollectionKnown(collection) {
+        if key_id != ENTITY_RECORD_KEY_ID {
+            return 0
+        }
+        return storage_entity_record_key(collection, out)
     }
     if key_id != STORAGE_SYNC_RECORD_KEY_ID ||
     storage_decrypted_array_name(collection).count == 0 {
@@ -214,6 +261,94 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
     return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
 }
 
+// The account's public ID, the user_id_hash every app's associated data
+// names, in output.
+storage_entity_account_id :: (output: []u8) -> string {
+    if !AppCopyText(storage_get_setting_text(STORAGE_SYNC_PUBLIC_ID_KEY), output) {
+        return ""
+    }
+    return TextUntilNul(output)
+}
+
+// An entity record goes out in Daochi's record profile, so every app of the
+// account reads it (entity_record_crypto.zi). Its plain text is the record's
+// own document, merged over its kept copy like every record, so fields
+// another app added stay. A record no longer on this device sends nothing.
+storage_append_entity_record_json :: (json: *StorageJsonBuilder, key: *u8, collection: string,
+    record_id: string, entity_id: string, queued_at: s64) -> s32 {
+    plain: StorageJsonBuilder
+    plain.ok = 1
+    defer { storage_json_builder_free(*plain) }
+    statement: *void = null
+    if SqlitePrepareText(storage_db_handle(), "SELECT value FROM settings WHERE user_id=?1 AND key=?2 AND json_valid(value)",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, entity_id)
+    if SqliteStep(statement) == SQLITE_ROW {
+        storage_json_builder_append_text(*plain, AppTextFromCString(SqliteColumnText(statement, 0), ENTITY_RECORD_PLAIN_MAX))
+    }
+    SqliteFinalize(statement)
+    if plain.ok == 0 {
+        return 0
+    }
+    if plain.data == null || plain.len == 0 {
+        return 2
+    }
+    storage_sync_record_merge(*plain, collection, record_id)
+    if plain.ok == 0 || plain.data == null || plain.len == 0 {
+        return 0
+    }
+    account: [65]u8
+    metadata := EntityRecordMetadata.{.account_id = storage_entity_account_id(account[:]),
+        .collection = collection, .id = record_id, .schema = EntityCollectionSchema(collection)}
+    ciphertext: Vec(u8)
+    nonce: Vec(u8)
+    defer {
+        VecFree(ciphertext)
+        VecFree(nonce)
+    }
+    if !EntitySealRecord(key, metadata, BytesFromPointer(plain.data, cast(u64)plain.len), *ciphertext, *nonce) {
+        return 0
+    }
+    storage_json_builder_append_text(json, "{")
+    storage_json_builder_key_value_text(json, "collection", collection)
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "id", record_id)
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "key_id", ENTITY_RECORD_KEY_ID)
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "nonce", TextFromBytes(VecSlice(nonce, 0, nonce.count)))
+    storage_json_builder_append_text(json, ",")
+    storage_json_builder_key_value_text(json, "ciphertext", TextFromBytes(VecSlice(ciphertext, 0, ciphertext.count)))
+    storage_json_builder_append_text(json, ",\"updated_at\":")
+    storage_json_builder_append_epoch(json, queued_at)
+    storage_json_builder_append_text(json, ",\"schema_version\":1}")
+    return json.ok
+}
+
+// Opens an entity record that arrived in a sync reply: its plain text, to
+// free, through plaintext_out.
+storage_open_entity_record :: (collection: string, record_id: string, key_id: string,
+    nonce: string, ciphertext: string, plaintext_out: **u8) -> s32 {
+    plaintext_out.* = null
+    key: [32]u8
+    defer { SecureWipe(*key[0], 32) }
+    if storage_private_collection_key(collection, key_id, *key[0]) == 0 {
+        return 0
+    }
+    account: [65]u8
+    metadata := EntityRecordMetadata.{.account_id = storage_entity_account_id(account[:]),
+        .collection = collection, .id = record_id, .schema = EntityCollectionSchema(collection)}
+    plain: *u8 = null
+    if EntityOpenRecord(*key[0], metadata, key_id, nonce, ciphertext, *plain) < 0 {
+        return 0
+    }
+    plaintext_out.* = plain
+    return 1
+}
+
 storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq: s64) {
     stmt: *void = null
     key: [32] u8
@@ -245,14 +380,34 @@ storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq
                     json.ok = 0
                     break
                 }
-                if first == 0 {
-                    storage_json_builder_append_text(json, ",")
-                }
-                first = 0
                 if storage_private_collection_key(collection, key_id, *key[0]) == 0 {
                     json.ok = 0
                     break
                 }
+                if EntityCollectionKnown(collection) {
+                    record: StorageJsonBuilder
+                    record.ok = 1
+                    appended := storage_append_entity_record_json(*record, *key[0], collection,
+                        AppTextFromCString(*record_id[0], 180), entity_id, queued_at)
+                    if appended == 1 && record.data != null {
+                        if first == 0 {
+                            storage_json_builder_append_text(json, ",")
+                        }
+                        first = 0
+                        storage_json_builder_append_text(json, AppTextFromCString(record.data, cast(s32)(record.len + 1)))
+                    }
+                    storage_json_builder_free(*record)
+                    SecureWipe(*key[0], 32)
+                    if appended == 0 {
+                        json.ok = 0
+                        break
+                    }
+                    continue
+                }
+                if first == 0 {
+                    storage_json_builder_append_text(json, ",")
+                }
+                first = 0
                 if storage_append_encrypted_record_json(json, *key[0], collection, key_id, AppTextFromCString(*record_id[0], 180),
                     entity_type, entity_id, local_date,
                     queued_at, is_delete) == 0 {

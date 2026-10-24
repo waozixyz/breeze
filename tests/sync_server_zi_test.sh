@@ -34,7 +34,7 @@ int main(void)
 {
     int result = Check();
     if (result != 0) fprintf(stderr, "sync server check failed with code %d\n", result);
-    if (result == 0) puts("PASS two-client sync, habit/session/list/alias/friend recovery, Diary photo copies, library photos on two nodes, offline retry, conflict, backup restore, deletion");
+    if (result == 0) puts("PASS two-client sync, habit/session/list/alias/friend recovery, entity photos and their chunks, library photos on two nodes, an old copy moved then deleted, offline retry, conflict, backup restore, deletion");
     return result == 0 ? 0 : 1;
 }
 C

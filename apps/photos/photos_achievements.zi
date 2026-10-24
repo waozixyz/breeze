@@ -14,7 +14,7 @@
 AchievementPhotoBackfill :: (offset: s32) -> s32 {
     statement: *void
     if SqlitePrepareText(storage_db_handle(),
-        "SELECT value FROM settings WHERE user_id=?1 AND key GLOB 'cell.media.*' AND length(key)=75 ORDER BY key LIMIT 128 OFFSET ?2",
+        "SELECT value FROM settings WHERE user_id=?1 AND ((key GLOB 'entity.photos.*' AND length(key)=78) OR (key GLOB 'cell.media.*' AND length(key)=75 AND NOT EXISTS (SELECT 1 FROM settings e WHERE e.user_id=?1 AND e.key='entity.photos.'||substr(settings.key,12)))) ORDER BY key LIMIT 128 OFFSET ?2",
         -1, *statement, null) != SQLITE_OK { return -1 }
     defer { SqliteFinalize(statement) }
     bind_text(statement, 1, AchievementOwner())
@@ -24,8 +24,11 @@ AchievementPhotoBackfill :: (offset: s32) -> s32 {
         document := AppTextFromCString(SqliteColumnText(statement, 0), 65536)
         item := MediaParse(document)
         if item.valid {
-            capture := ReadNumber(document, FieldAt(document, 0, "capture"))
-            day := ifx capture.valid && capture.value == 1 then AchievementParseDay(TextUntilNul(item.day[:])) else 0
+            // Entity records say true; a released version's library said 1.
+            capture_at := FieldAt(document, 0, "capture")
+            capture := ReadNumber(document, capture_at)
+            captured := MatchLiteral(document, capture_at, "true") || (capture.valid && capture.value == 1)
+            day := ifx captured then AchievementParseDay(TextUntilNul(item.day[:])) else 0
             unused AchievementRecord("photo.original", TextUntilNul(item.hash[:]), day, 1, "", "", false, false, item.trashed)
         }
         rows += 1

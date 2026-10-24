@@ -79,8 +79,13 @@ def ink_bottom(path, box):
 
 
 def library_has(profile, digest):
-    """Whether the profile's photo library keeps the photo with this hash."""
-    return bool(list((profile / "media").glob("*/" + digest)))
+    """Whether the profile's photo library keeps the photo with this hash:
+    its file, and its record in the account's entity data."""
+    if not list((profile / "media").glob("*/" + digest)):
+        return False
+    with sqlite3.connect(profile / "inbe.db", timeout=3) as database:
+        return database.execute("select count(*) from settings where key=?",
+                                ("entity.photos." + digest,)).fetchone()[0] == 1
 
 
 def wait_for_text(entry, matches, message):

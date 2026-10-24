@@ -143,7 +143,7 @@ def jpeg(image, quality=88):
 
 
 def seed_photo(db, user, folder, color, day, taken, name, size):
-    """A photo and its preview, as the media library stores them."""
+    """A photo and its preview, as released versions' media library stores them."""
     image = Image.new("RGB", size, color)
     ImageDraw.Draw(image).ellipse((size[0] // 4, size[1] // 4, size[0] // 2, size[1] // 2),
                                   fill=tuple(min(255, c + 30) for c in color))
@@ -187,6 +187,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-photos-") as directory:
         ]
         # A synced preview whose original has not reached this device yet.
         (folder / photos[2]).unlink()
+        seeded_records = dict(db.execute("SELECT key,value FROM settings WHERE user_id=? AND key GLOB 'cell.media.*'",
+                                         (user,)))
     # A camera's portrait photo: stored 1200 by 800, Exif orientation 6.
     picked = profile / PICKED_NAME
     sideways = Image.new("RGB", (1200, 800), PICKED)
@@ -225,8 +227,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-photos-") as directory:
         with sqlite3.connect(profile / "inbe.db", timeout=3) as db:
             stored = dict(db.execute("SELECT key,value FROM settings WHERE user_id=?", (user,)))
         assert stored.get("app_used_photos") == "1", stored.get("app_used_photos")
-        item = json.loads(stored[f"cell.media.{digest}"])
-        assert item["name"] == PICKED_NAME and item["type"] == "jpg", item
+        # The added photo is a record of the account's entity data.
+        item = json.loads(stored[f"entity.photos.{digest}"])
+        assert item["name"] == PICKED_NAME and item["type"] == "image/jpeg", item
+        assert item["preview"]["size"] == (folder / (digest + ".preview")).stat().st_size, item
+        assert f"cell.media.{digest}" not in stored, "a released version's record was written"
         assert (folder / digest).read_bytes() == picked.read_bytes(), "the original is not kept as picked"
         with Image.open(folder / (digest + ".preview")) as preview:
             assert preview.format == "JPEG" and preview.size == (341, 512), preview.size
@@ -268,6 +273,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-photos-") as directory:
         assert "frame rejected" not in log and app.poll() is None, log
     finally:
         stop(app)
+    # The seeded photos may move to the entity data while the app runs, but
+    # released versions' records stay exactly as they were: nothing here
+    # confirms a move, so nothing old changes.
+    with sqlite3.connect(profile / "inbe.db") as db:
+        records = dict(db.execute("SELECT key,value FROM settings WHERE user_id=? AND key GLOB 'cell.media.*'", (user,)))
+    assert records == seeded_records, "a released version's record changed"
 
     # A saved Photos pin must survive restart and draw in either dock layout.
     with sqlite3.connect(profile / "inbe.db") as db:
