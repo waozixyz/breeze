@@ -1,5 +1,9 @@
 # Radio
 
+## [1.0.3] - 2026-10-24
+
+- Download on the current Inner Breeze, which only runs the new app format.
+
 ## [1.0.2] - 2026-10-22
 
 - Give Radio its own icon in Apps and the sidebar.

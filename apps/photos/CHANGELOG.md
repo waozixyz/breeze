@@ -1,5 +1,9 @@
 # Photos changelog
 
+## [1.0.4] - 2026-10-24
+
+- Download on the current Inner Breeze, which only runs the new app format.
+
 ## [1.0.3] - 2026-10-22
 
 - Make Photos available to everyone without enabling beta apps.
