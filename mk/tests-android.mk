@@ -27,6 +27,15 @@ android-text-selection-test:
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
 		$(GRADLE) --no-daemon --project-dir tests/android-text-selection test
 
+# Manual USB Moto test; the helper accepts only the separate verification APK
+# and restores the existing verification profile after its reader cases.
+.PHONY: android-library-device-test
+android-library-device-test:
+	@test -n "$(APK)" || { echo "Set APK to the Android verification APK"; exit 2; }
+	$(MAKE) $(BUILD_DIR)/node-apps/library.zx
+	python3 tests/android_library_device.py run --apk "$(abspath $(APK))" \
+		--bundle "$(abspath $(BUILD_DIR)/node-apps/library.zx)"
+
 .PHONY: android-jni-zi-test
 android-jni-zi-test: $(ZI2C_BIN)
 	@python3 tests/android_jni_zi_test.py $(abspath $(dir $(ZI2C_BIN)))

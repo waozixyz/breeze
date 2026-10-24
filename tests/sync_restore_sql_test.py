@@ -41,7 +41,7 @@ def restore_statements():
     assert enqueue, "storage_enqueue_all_sync_state"
     inserts = re.findall(r'exec_sql\("(INSERT INTO sync_outbox[^"]*)"\)',
                          enqueue.group(1))
-    assert len(inserts) == 18, inserts
+    assert len(inserts) == 19, inserts
     return clear + inserts
 
 
@@ -72,6 +72,7 @@ ENTITIES = [
 # queued all or none, alternating over the cases above, so the exhaustive
 # check stays small.
 NESTED = "nested." + "ab" * 32 + ".position"
+GAME_PROGRESS = "entity.game-progress." + "ab" * 16
 EXTRA = [
     ("app_record", NESTED, 0),
     ("app_install", "app_used_chess", 0),
@@ -81,6 +82,7 @@ EXTRA = [
     ("habit_reward", "r1", 0),
     ("habit_coin", "k1", 0),
     ("habit_setting", "habit_shop_borrow_limit", 0),
+    ("entity_record", GAME_PROGRESS, 0),
     ("entity_record", "entity.photos." + "ab" * 32, 0),
 ]
 
@@ -122,12 +124,19 @@ def open_database():
     for key in ("nested." + "ag" * 32 + ".position", "nested." + "ab" * 32 + ".",
                 "nested." + "ab" * 32 + ".Big", "app_used_achievement"):
         insert_row(database, "settings", {"user_id": "u1", "key": key, "value": "1", "updated_at": 2})
+    # Game progress uses a 32-hex entity ID and valid JSON in this account.
+    insert_row(database, "settings", {"user_id": "u1", "key": GAME_PROGRESS, "value": "{}", "updated_at": 2})
+    for key, value in (("entity.game-progress." + "ag" * 16, "{}"),
+                       ("entity.game-progress." + "ab" * 15, "{}"),
+                       ("entity.game-progress." + "cd" * 16, "not json")):
+        insert_row(database, "settings", {"user_id": "u1", "key": key, "value": value, "updated_at": 2})
     # A photo kept once in the account's entity data, by its 64-hex digest;
     # other names and unreadable values are never queued.
     insert_row(database, "settings", {"user_id": "u1", "key": "entity.photos." + "ab" * 32, "value": "{}", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "entity.photos." + "ag" * 32, "value": "{}", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "entity.photos." + "cd" * 32, "value": "not json", "updated_at": 2})
     insert_row(database, "users", {"id": "u2"})
+    insert_row(database, "settings", {"user_id": "u2", "key": "entity.game-progress." + "ef" * 16, "value": "{}", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u2", "key": "entity.photos." + "ef" * 32, "value": "{}", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u2", "key": "habit_shop_borrow_limit", "value": "999", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u2", "key": "nested." + "cd" * 32 + ".position", "value": "foreign", "updated_at": 2})
