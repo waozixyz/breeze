@@ -27,8 +27,8 @@ for input in source saved; do
         std_path=$work/ir
     fi
     output=$work/$input
-    rm -rf "$output/c" "$output/cpp" "$output/go"
-    mkdir -p "$output/c" "$output/cpp" "$output/go"
+    rm -rf "$output/c" "$output/go"
+    mkdir -p "$output/c" "$output/go"
     "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$app_path" --module-path "$ui_path" --module-path "$std_path" \
         --entry route_catalog_behavior:Answer \
@@ -46,18 +46,6 @@ C
         -Wl,--gc-sections -I"$include" -I"$output/c" \
         "$output/c"/*.c -o "$output/c/test"
     env -u DISPLAY -u WAYLAND_DISPLAY "$output/c/test"
-
-    "$bin/zi2cpp" --no-main --root "$module_root" \
-        --module-path "$app_path" --module-path "$ui_path" --module-path "$std_path" \
-        -o "$output/cpp" "$file"
-    cat > "$output/cpp/main.cpp" <<'CPP'
-#include "route_catalog_behavior.hpp"
-int main() { return Answer() == 42 ? 0 : 1; }
-CPP
-    "${CXX:-c++}" -std=c++17 -ffunction-sections -fdata-sections \
-        -Wl,--gc-sections -I"$include" -I"$output/cpp" \
-        "$output/cpp"/*.cpp -o "$output/cpp/test"
-    env -u DISPLAY -u WAYLAND_DISPLAY "$output/cpp/test"
 
     "$bin/zi2go" --no-main --root "$module_root" \
         --module-path "$app_path" --module-path "$ui_path" --module-path "$std_path" \

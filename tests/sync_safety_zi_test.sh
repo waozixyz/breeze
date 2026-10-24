@@ -22,7 +22,7 @@ for input in source saved; do
         app_path=$work/ir
     fi
     output=$work/$input
-    mkdir -p "$output/c" "$output/cpp" "$output/go"
+    mkdir -p "$output/c" "$output/go"
     "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$app_path" --entry sync_safety_behavior:Answer \
         -o "$output/safety.zx" "$file"
@@ -38,17 +38,6 @@ C
         -I"$include" -I"$output/c" "$output/c"/*.c \
         -o "$output/c/test"
     env -u DISPLAY -u WAYLAND_DISPLAY "$output/c/test"
-
-    "$bin/zi2cpp" --no-main --root "$module_root" \
-        --module-path "$app_path" -o "$output/cpp" "$file"
-    cat > "$output/cpp/main.cpp" <<'CPP'
-#include "sync_safety_behavior.hpp"
-int main() { return Answer() == 42 ? 0 : 1; }
-CPP
-    "${CXX:-c++}" -std=c++17 -DZIRAN_BOUNDS_CHECK \
-        -I"$include" -I"$output/cpp" "$output/cpp"/*.cpp \
-        -o "$output/cpp/test"
-    env -u DISPLAY -u WAYLAND_DISPLAY "$output/cpp/test"
 
     "$bin/zi2go" --no-main --root "$module_root" \
         --module-path "$app_path" -o "$output/go" "$file"

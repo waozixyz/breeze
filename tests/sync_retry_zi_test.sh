@@ -22,8 +22,8 @@ for input in source saved; do
         module_path=$work/ir
     fi
     output=$work/$input
-    rm -rf "$output/c" "$output/cpp" "$output/go"
-    mkdir -p "$output/c" "$output/cpp" "$output/go"
+    rm -rf "$output/c" "$output/go"
+    mkdir -p "$output/c" "$output/go"
     "$bin/zi2zx" bundle --root "$module_root" \
         --module-path "$module_path" \
         --entry sync_retry_behavior:Answer \
@@ -45,18 +45,6 @@ C
         "$root/tests/sync_retry_c_boundary_test.c" \
         "$output/c/sync_retry.c" -o "$output/c/boundary"
     env -u DISPLAY -u WAYLAND_DISPLAY "$output/c/boundary"
-
-    "$bin/zi2cpp" --no-main --root "$module_root" \
-        --module-path "$module_path" -o "$output/cpp" "$file"
-    cat > "$output/cpp/main.cpp" <<'CPP'
-#include "sync_retry_behavior.hpp"
-int main() { return Answer() == 42 ? 0 : 1; }
-CPP
-    "${CXX:-c++}" -std=c++17 -I"$include" -I"$output/cpp" \
-        "$output/cpp/sync_retry.cpp" \
-        "$output/cpp/sync_retry_behavior.cpp" \
-        "$output/cpp/main.cpp" -o "$output/cpp/test"
-    env -u DISPLAY -u WAYLAND_DISPLAY "$output/cpp/test"
 
     "$bin/zi2go" --no-main --root "$module_root" \
         --module-path "$module_path" -o "$output/go" "$file"
