@@ -6,6 +6,7 @@
 - Smoother on phones: the How to guides, still screens and paused practices draw far less.
 - Apps and practices use the new ZX format and update themselves after installing.
 - New installs start with Diary, Lists and Leaderboard installed, along with Lumi, Habits and Practice.
+- New installs follow your device's language and ask just once whether to download voice guidance. Both stay changeable in Settings.
 - Diary and Photos keep each photo once for your account, privately, shared by all your apps. Photos saved before move there by themselves, and their old copies are removed only once the new ones are safely stored.
 
 ## [2.1.44] - 2026-10-23

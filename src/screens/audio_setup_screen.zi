@@ -1,166 +1,80 @@
-// The second half of first-run language setup. Audio stays optional, and no
-// narration is requested until Download selected confirms these choices.
+// First run asks one question: download voice guidance or not. Settings and
+// each practice keep the voice controls for later changes.
 #import "button_props"
 #import "button_widget"
 #import "control_props"
 #import "geometry"
 #import "layout"
-#import "scroll_props"
-#import "scroll_widget"
 #import "text_buffer"
 #import "text_props"
 #import "text_widget"
-#import "toggle_props"
-#import "toggle_widget"
-#import "tree"
 #import, file "../app/app_types.zi";
-#import, file "../app/app_route_state.zi";
 #import, file "../app/audio_setup.zi";
-#import, file "../app/language_selection.zi";
 #import, file "../app/locale.zi";
 #import, file "../app/metrics.zi";
 #import, file "../app/text_buffers.zi";
-#import, file "../core/types.zi";
-#import, file "../practices/practice_downloads.zi";
 
-using AudioSetupStep;
 using ButtonTone;
 using ButtonEmphasis;
 using TextWrap;
 
-AudioSetupParagraph :: (app: *InnerBreeze, text: string, x: s32, y: *s32,
-    width: s32, font: s32, draw: bool) {
-    height := AppParagraphHeight(text, width, font, AppScale(3))
-    if draw {
-        Text(app.ui.session, TextProps.{.text = text, .font = font,
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                    cast(float32)width, cast(float32)height},
-                .wrap = cast(TextWrap)TextWrapAuto})
-    }
-    y.* += height + AppScale(12)
-}
-
-AudioSetupChoice :: (app: *InnerBreeze, guide: bool, x: s32, y: *s32,
-    width: s32, draw: bool) {
-    value := ifx guide then *app.guide_narration_enabled else *app.voice_narration_enabled
-    label := LocaleText(ifx guide then "guide_narration_label" else "practice_narration_label")
-    AudioSetupParagraph(app, label, x, y, width, AppFontSize(), draw)
-    if draw {
-        result := Toggle(app.ui.session, ToggleProps.{
-                .id = ifx guide then 262 else 263,
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                    cast(float32)width, cast(float32)AppScale(48)},
-                .label = label, .value = value.* != 0,
-                .off_label = LocaleText("toggle_off"), .on_label = LocaleText("toggle_on"),
-                .disabled = app.audio_setup_step == cast(AudioSetupStep)AudioSetupDownloading})
-        if result.changed {
-            AudioSetupSelect(app, guide, result.value)
-        }
-    }
-    y.* += AppScale(60)
-    narration := PracticeNarrationSummary(guide, LocaleActiveCode())
-    bytes := narration.bytes
+AudioSetupSizeText :: (bytes: s64, buffer: []u8) -> string {
     amount := cast(s32)((bytes + 1023) / 1024)
     format := "practice_size_kb"
     if bytes >= 1024 * 1024 {
         amount = cast(s32)((bytes + 512 * 1024) / (1024 * 1024))
         format = "practice_size_mb"
     }
-    buffer: [64]u8
     args: [1]FormatArg = .[FormatArg.{.number = amount}]
-    unused FormatTemplate(LocaleText(format), args[:], buffer[:])
-    AudioSetupParagraph(app, TextUntilNul(buffer[:]), x, y, width,
-        AppSmallFontSize(), draw)
-    y.* += AppScale(8)
+    unused FormatTemplate(LocaleText(format), args[:], buffer)
+    return TextUntilNul(buffer)
 }
 
-AudioSetupContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bool) {
-    if draw {
-        back_label := LocaleText("back_button")
-        back_width := AppTextWidth(back_label, AppFontSize()) + AppScale(24)
-        if back_width < AppScale(48) {
-            back_width = AppScale(48)
-        }
-        if back_width > width {
-            back_width = width
-        }
-        if Button(app.ui.session, ButtonProps.{.id = 266,
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                    cast(float32)back_width, cast(float32)AppScale(48)},
-                .label = back_label, .fit_content = true,
-                .tone = cast(ButtonTone)ButtonToneNeutral,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
-            app_return_to_language_selection(app)
-            return
-        }
-    }
-    y.* += AppScale(60)
-    title := LocaleText("optional_audio_title")
-    AudioSetupParagraph(app, title, x, y, width, AppTitleFontSize(title, width), draw)
-    AudioSetupChoice(app, true, x, y, width, draw)
-    AudioSetupChoice(app, false, x, y, width, draw)
-
-    downloads := AudioSetupSummary(app)
-    if app.audio_setup_step == cast(AudioSetupStep)AudioSetupDownloading {
-        status := "optional_audio_ready"
-        if downloads.failed > 0 {
-            status = "optional_audio_failed"
-        } else if downloads.pending > 0 {
-            status = "practice_download_busy"
-        }
-        AudioSetupParagraph(app, LocaleText(status), x, y, width, AppSmallFontSize(), draw)
-    }
-    selected := app.guide_narration_enabled != 0 || app.voice_narration_enabled != 0
-    start := app.audio_setup_step == cast(AudioSetupStep)AudioSetupChoices
-    retry := app.audio_setup_step == cast(AudioSetupStep)AudioSetupDownloading && downloads.failed > 0
-    primary := "optional_audio_continue"
-    if start && selected {
-        primary = "optional_audio_download"
-    } else if retry {
-        primary = "optional_audio_retry"
-    }
-    if draw {
-        if Button(app.ui.session, ButtonProps.{.id = 264,
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                    cast(float32)width, cast(float32)AppScale(48)},
-                .label = LocaleText(primary), .fit_content = true,
-                .tone = cast(ButtonTone)ButtonToneAccent,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
-            if (start && selected) || retry {
-                AudioSetupStart(app)
-            } else {
-                AudioSetupFinish(app, false)
-            }
-        }
-    }
-    y.* += AppScale(60)
-    secondary := ifx app.audio_setup_step == cast(AudioSetupStep)AudioSetupChoices then "optional_audio_skip" else "optional_audio_continue"
-    if draw && ((start && selected) || retry) {
-        if Button(app.ui.session, ButtonProps.{.id = 265,
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                    cast(float32)width, cast(float32)AppScale(48)},
-                .label = LocaleText(secondary), .fit_content = true,
-                .tone = cast(ButtonTone)ButtonToneNeutral,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-            AudioSetupFinish(app, app.audio_setup_step == cast(AudioSetupStep)AudioSetupChoices)
-        }
-    }
-    y.* += AppScale(60)
+// One line of text centered across the screen at this height.
+AudioSetupLine :: (app: *InnerBreeze, text: string, font: s32, y: s32) {
+    width := AppTextWidth(text, font)
+    Text(app.ui.session, TextProps.{.text = text, .font = font,
+            .bounds = Rectangle.{cast(float32)((app.ui.view_width - width) / 2),
+                cast(float32)y, cast(float32)width, cast(float32)AppTextLineHeight(font)},
+            .wrap = cast(TextWrap)TextWrapNone})
 }
 
 AudioSetupScreen :: (app: *InnerBreeze) {
     column := CenteredColumnFor(app.ui.view_width, AppScale(380), AppScale(16))
-    width := column.width - AppScale(12)
-    height: s32 = AppScale(16)
-    AudioSetupContent(app, 0, *height, width, false)
-    scroll := Scroll(app.ui.session, ScrollProps.{.key = cast(u64)82600,
-            .bounds = Rectangle.{cast(float32)column.x, cast(float32)AppScale(16),
-                cast(float32)column.width, cast(float32)(app.ui.view_height - AppScale(32))},
-            .content_height = height, .scroll_offset = app.audio_setup_scroll})
-    app.audio_setup_scroll = scroll.scroll_offset
-    if scroll.opened {
-        y := cast(s32)scroll.content.y
-        AudioSetupContent(app, cast(s32)scroll.content.x, *y, width, true)
-        End(app.ui.session)
+    gap := AppScale(12)
+    button_height := AppScale(48)
+    title := LocaleText("optional_audio_title")
+    title_font := AppTitleFontSize(title, column.width)
+    size_buffer: [64]u8
+    size := AudioSetupSizeText(AudioSetupBytes(), size_buffer[:])
+    content_height := AppTextLineHeight(title_font) + AppTextLineHeight(AppSmallFontSize()) +
+        button_height * 2 + gap * 4
+    y := (app.ui.view_height - content_height) / 2
+    if y < AppScale(16) {
+        y = AppScale(16)
+    }
+
+    AudioSetupLine(app, title, title_font, y)
+    y += AppTextLineHeight(title_font) + gap
+    AudioSetupLine(app, size, AppSmallFontSize(), y)
+    y += AppTextLineHeight(AppSmallFontSize()) + gap * 2
+
+    if Button(app.ui.session, ButtonProps.{.id = 264,
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)y,
+                cast(float32)column.width, cast(float32)button_height},
+            .label = LocaleText("practice_narration_download"),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+        AudioSetupFinish(app, true)
+        return
+    }
+    y += button_height + gap
+    if Button(app.ui.session, ButtonProps.{.id = 265,
+            .bounds = Rectangle.{cast(float32)column.x, cast(float32)y,
+                cast(float32)column.width, cast(float32)button_height},
+            .label = LocaleText("optional_audio_skip"),
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        AudioSetupFinish(app, false)
     }
 }

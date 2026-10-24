@@ -470,7 +470,7 @@ class LauncherDevice:
                       lumi_introduced=1, lumi_guides_seen=127, habits_guide_seen=1, lumi_online=0,
                       package_updates_allowed=0, apps_last_update_check=1900000000,
                       guide_narration_enabled=0, voice_narration_enabled=0, sound_volume=0,
-                      audio_setup_step=1, ui_scale=10)
+                      ui_scale=10)
         for name in ("lists", "habits", "practices", "diary", "lumi", "leaderboard"):
             values["app_used_" + name] = 1
         user = self.settings(**values)

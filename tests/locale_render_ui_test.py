@@ -71,15 +71,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-locales-") as temporary:
                     assert time.monotonic() < deadline, f"{language}: first frame did not finish"
                     time.sleep(0.1)
                 time.sleep(0.2)
-                language_frame = capture(environment, window, f"{language}-language")
-                command(environment, "xdotool", "mousemove", "--window", window, "450", "425")
-                command(environment, "xdotool", "mousedown", "1")
-                time.sleep(0.08)
-                command(environment, "xdotool", "mouseup", "1")
+                question_frame = capture(environment, window, f"{language}-voice-question")
                 driver.attach(app, log_path)
-                driver.wait(role="toggle")
-                driver.wait_idle(frames=3, timeout=5, required=True)
-                capture(environment, window, f"{language}-optional-audio")
                 driver.press(key=265, role="button")
                 deadline = time.monotonic() + 5
                 while True:
@@ -89,17 +82,16 @@ with tempfile.TemporaryDirectory(prefix="inbe-locales-") as temporary:
                         break
                     assert time.monotonic() < deadline, (language, settings)
                     time.sleep(0.1)
-                # Accepting the detected language retains system-language mode.
-                # Its stored code is empty so future device-language changes work.
+                # First run keeps following the device language. Its stored
+                # code is empty so future device-language changes work.
                 assert settings["language"] == "", (language, settings["language"])
-                # Persisting the choice precedes reloading the locale fonts.
-                # Wait for the cell instructions to replace the empty region
-                # below the language title, including on slower CJK font loads.
+                # Wait for the cell picker to fill the empty region above the
+                # question, including on slower CJK font loads.
                 deadline = time.monotonic() + 30
                 while True:
                     assert app.poll() is None, log_path.read_text()
                     cell_frame = capture(environment, window, f"{language}-cells")
-                    difference = ImageChops.difference(language_frame, cell_frame).crop(
+                    difference = ImageChops.difference(question_frame, cell_frame).crop(
                         (240, 65, 660, 150))
                     red, green, blue = difference.split()
                     strongest = ImageChops.lighter(ImageChops.lighter(red, green), blue)
@@ -118,4 +110,4 @@ with tempfile.TemporaryDirectory(prefix="inbe-locales-") as temporary:
                     except subprocess.TimeoutExpired:
                         app.kill()
                         app.wait(timeout=3)
-print(f"All {len(languages)} locales rendered language setup and the real cell picker")
+print(f"All {len(languages)} locales rendered the voice guidance question and the real cell picker")

@@ -34,7 +34,7 @@ env["XDG_DATA_HOME"] = str(data / "data")
 env["XDG_CONFIG_HOME"] = str(data / "config")
 env["XDG_CACHE_HOME"] = str(data / "cache")
 os.makedirs(env["XDG_DATA_HOME"])
-TITLE = "Choose Language"
+TITLE = "Add voice guidance?"
 
 
 def command(*args):

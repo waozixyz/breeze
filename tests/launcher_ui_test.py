@@ -723,22 +723,20 @@ with contextlib.ExitStack() as stack:
         with tempfile.TemporaryDirectory(prefix="inbe-launcher-") as temporary:
             profile = Path(temporary)
             user = None
-            with application(profile, name + "-language", width, height) as (window, log):
-                driver.wait(label="Choose Language")
+            with application(profile, name + "-voice", width, height) as (window, log):
+                driver.wait(label="Add voice guidance?")
                 with database(profile) as db:
                     user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
-                assert settings(profile)["language_setup_done"] == "0", "Fresh start skipped the language picker"
+                assert settings(profile)["language_setup_done"] == "0", "Fresh start skipped the voice guidance question"
                 assert settings(profile)["apps_setup_done"] == "0"
                 assert favorites(profile) == [12, 1, 2], "New profiles do not pin Lumi, Habits and Practice"
                 assert settings(profile)["enabled_apps"] == "63", "Lists, Diary and Leaderboard must ship preinstalled alongside Lumi, Habits and Practice"
                 assert settings(profile)["theme"] == "9" and settings(profile)["theme_source"] == "0"
                 assert settings(profile)["theme_mode"] == "2"
-            # Merely opening and closing the picker does not complete setup.
-            with application(profile, name + "-language-restart", width, height) as (window, log):
+            # Merely opening and closing the question does not complete setup.
+            with application(profile, name + "-voice-restart", width, height) as (window, log):
                 assert settings(profile)["language_setup_done"] == "0"
-                driver.press(label="Next", role="button")
-                driver.wait(label="Optional audio")
-                driver.press(label="Skip for now", role="button")
+                driver.press(label="Not now", role="button")
                 wait_setting(profile, "language_setup_done", 1, log.read_text())
                 driver.wait(label="Pinned")
                 assert settings(profile).get("launcher_guide_seen", "0") == "0"
@@ -925,4 +923,4 @@ with contextlib.ExitStack() as stack:
                     open_profile(log)
                     assert favorites(profile) == []
     check_profile_navigation()
-    print("Launcher: first-run language, desktop defaults, clean sections, click/hold/drag, profile and persistence passed")
+    print("Launcher: first-run voice question, desktop defaults, clean sections, click/hold/drag, profile and persistence passed")

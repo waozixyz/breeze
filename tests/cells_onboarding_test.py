@@ -138,13 +138,11 @@ def application(profile, label, *, mini=False, feature=None, graceful_close=Fals
 result = {"display": os.environ["DISPLAY"], "deployment": False}
 with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
     profile = Path(temporary)
-    # First start requires language confirmation before opening the Apps library.
+    # First start asks about voice guidance before opening the Apps library.
     with application(profile, "fresh-apps") as (window, log):
-        driver.wait(label="Choose Language")
+        driver.wait(label="Add voice guidance?")
         assert settings(profile)["language_setup_done"] == "0"
-        driver.press(label="Next", role="button")
-        driver.wait(label="Optional audio")
-        driver.press(label="Skip for now", role="button")
+        driver.press(label="Not now", role="button")
         wait_setting(profile, "language_setup_done", 1)
         driver.wait(label="Pinned")
         saved = settings(profile)

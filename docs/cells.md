@@ -52,8 +52,9 @@ on close and restart, on a private display with disposable profiles.
 
 ## Lumi
 
-New profiles choose a language and optional audio, then open Apps with Lumi,
-Habits and Practice pinned. Existing app choices and todo data are retained. Settings lists
+New profiles follow the device language, or English when Inner Breeze has no
+translation for it, and ask once whether to download voice guidance, then open
+Apps with Lumi, Habits and Practice pinned. Existing app choices and todo data are retained. Settings lists
 Lumi in the same compact list as every other cell. Removing her shortcut
 keeps her package, conversation and app abilities; she cannot be uninstalled.
 Her firefly image belongs to `assets/lumi/mascot.png` in her package and appears

@@ -15,7 +15,6 @@ static int seeds;
 static int web_flushes;
 static int web_platform;
 static int setup_done;
-static int audio_cancellations;
 
 static bool
 equals(String value, const char *literal)
@@ -110,13 +109,6 @@ save_settings(InnerBreeze *app)
     saves++;
 }
 
-void
-practice_downloads_PracticeNarrationCancelLanguage(String language)
-{
-    assert(equals(language, "es"));
-    audio_cancellations++;
-}
-
 int32_t
 settings_store_SettingsReadInt(String key, int32_t fallback)
 {
@@ -162,35 +154,36 @@ main(void)
 {
     static InnerBreeze app;
 
-    apply_language_selection(NULL, 1, 1);
+    apply_language_selection(NULL, 1);
     assert(font_loads == 0 && refreshes == 0 && saves == 0);
 
-    apply_language_selection(&app, 1, 0);
+    apply_language_selection(&app, 1);
     assert(app.language_system == 0 && app.language_selected == 1);
     assert(app.language_index == 1 && strcmp((char *)app.language, "es") == 0);
-    assert(font_loads == 1 && refreshes == 1 && saves == 0);
+    assert(font_loads == 1 && refreshes == 1 && saves == 1);
 
-    apply_language_selection(&app, -1, 1);
+    apply_language_selection(&app, -1);
     assert(app.language_index == 0 && strcmp((char *)app.language, "en") == 0);
-    assert(font_loads == 2 && refreshes == 2 && saves == 1);
+    assert(font_loads == 2 && refreshes == 2 && saves == 2);
 
-    apply_system_language_selection(&app, 1);
+    apply_system_language_selection(&app);
     assert(app.language_system == 1 && app.language_index == 1);
     assert(strcmp((char *)app.language, "es") == 0);
-    assert(font_loads == 3 && refreshes == 3 && saves == 2);
+    assert(font_loads == 3 && refreshes == 3 && saves == 3);
 
     system_preference = "unsupported";
-    apply_system_language_selection(&app, 0);
+    apply_system_language_selection(&app);
     assert(app.language_system == 1 && app.language_index == 0);
     assert(strcmp((char *)app.language, "en") == 0);
-    assert(font_loads == 4 && refreshes == 4 && saves == 2);
+    assert(font_loads == 4 && refreshes == 4 && saves == 4);
 
-    app.language_system = 0;
+    // First run keeps the language it started in.
     app.language_selected = 0;
     app.habits.selected = 5;
     app_accept_language_selection(&app);
-    assert(saves == 3 && seeds == 1 && web_flushes == 0);
-    assert(app.language_selected == 1 && strcmp((char *)app.language, "en") == 0);
+    assert(saves == 5 && seeds == 1 && web_flushes == 0 && font_loads == 4);
+    assert(app.language_selected == 1 && app.language_system == 1);
+    assert(strcmp((char *)app.language, "en") == 0);
     assert(app.habits.screen_mode == HABITS_SCREEN_STATISTICS);
     assert(app.habits.tab == HABIT_TAB_WEEKLY);
     assert(app.habits.view_mode == HABIT_VIEW_WEEKLY);
@@ -198,32 +191,13 @@ main(void)
 
     setup_done = 1;
     app_accept_language_selection(&app);
-    assert(saves == 4 && seeds == 1);
+    assert(saves == 6 && seeds == 1);
 
     web_platform = 1;
-    app.language_system = 1;
-    system_preference = "es_AR.UTF-8";
     app_accept_language_selection(&app);
-    assert(app.language_index == 1 && app.language_system == 1);
-    assert(saves == 5 && seeds == 1 && web_flushes == 1);
+    assert(saves == 7 && seeds == 1 && web_flushes == 1);
 
     app_accept_language_selection(NULL);
-    assert(saves == 5 && seeds == 1 && web_flushes == 1);
-
-    app_return_to_language_selection(NULL);
-    app_return_to_language_selection(&app);
-    assert(saves == 5 && audio_cancellations == 0);
-    for (int step = 1; step <= 2; step++) {
-        app.audio_setup_step = step;
-        app.audio_setup_scroll = 180;
-        app.guide_narration_enabled = 1;
-        app.voice_narration_enabled = 0;
-        app_return_to_language_selection(&app);
-        assert(app.audio_setup_step == 0 && app.audio_setup_scroll == 0);
-        assert(app.language_selected == 0 && app.language_index == 1);
-        assert(app.guide_narration_enabled == 1 && app.voice_narration_enabled == 0);
-        assert(saves == 5 + step && audio_cancellations == step);
-        assert(web_flushes == 1 + step && seeds == 1);
-    }
+    assert(saves == 7 && seeds == 1 && web_flushes == 1);
     return 0;
 }
