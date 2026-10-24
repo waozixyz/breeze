@@ -206,7 +206,8 @@ LauncherAppWidgets :: (context: *void, module: *u8, function: *u8,
     card := WidgetDecodeButtonProps(arguments[1], *launcher_app_button_codec)
     for index: cast(s32)0..group.count - 1 {
         entry := group.entries[index]
-        handle := card.key == Rules.AppReorderKey(TextUntilNul(entry.id[:]))
+        // While editing, the whole card is the handle that drags it.
+        handle := group.owner.launcher_editing && card.key == Rules.AppCardKey(TextUntilNul(entry.id[:]))
         if !handle { continue }
         item := entry.route
         if item < 0 {
@@ -431,10 +432,19 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
         BuilderPrint(bytes, ",\"seen\"")
     }
     BuilderPrint(bytes, "]")
-    BuilderPrint(bytes, ",\"reorderable\":%", ifx group.owner.launcher_editing then "true" else "false")
     if !on_device {
         BuilderPrint(bytes, ",\"on_device\":false")
-        if downloading { BuilderPrint(bytes, ",\"downloading\":true") }
+        node_name := ifx route >= 0 then NodeAppName(node_slot) else NodeAppOfferName(offer)
+        // The download dialog lists what the app may reach before it comes.
+        BuilderPrint(bytes, ",\"permissions\":[\"account\",\"friends\",\"audio\"%]",
+            ifx NodeAppMediaGranted(node_name) then ",\"media\"" else "")
+        if downloading {
+            BuilderPrint(bytes, ",\"downloading\":true")
+            progress := PackageProgress(NodeAppIndex(node_slot), size)
+            if progress >= 0 { BuilderPrint(bytes, ",\"progress\":%", progress) }
+        } else if node_slot >= 0 && PackageStatus(NodeAppIndex(node_slot)) == 3 {
+            BuilderPrint(bytes, ",\"download_failed\":true")
+        }
     }
     if entry.package >= 0 {
         LauncherAppQuoted(bytes, "current_version", PackageVersion(entry.package))
@@ -491,7 +501,7 @@ app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
     document: Vec(u8)
     BuilderPrint(*document, "\"title\":\"\",\"locale\":")
     Rules.AppsWriteQuoted(*document, LocaleActiveCode())
-    BuilderPrint(*document, ",\"presentation\":{\"mode\":\"%\",\"section_break\":%,\"columns\":%,\"tile_class\":%,\"action_class\":%,\"muted_class\":%},\"children\":[",
+    BuilderPrint(*document, ",\"presentation\":{\"mode\":\"%\",\"hide_sizes\":true,\"section_break\":%,\"columns\":%,\"tile_class\":%,\"action_class\":%,\"muted_class\":%},\"children\":[",
         ifx grid then "icon" else "list", section_break, columns, KssClassId(KssMakeName("launcher-tile")), KssClassId(KssMakeName("launcher-action")), KssClassId(KssMakeName("launcher-muted")))
     for route: routes {
         if route >= 0 { LauncherAppCatalogEntry(group, *document, route) }

@@ -16,6 +16,10 @@
 #import "widget_host"
 #import "widget_codec"
 #import "kryon/app_context_host"
+#import "layout_props"
+#import "layout"
+#import "layout_widget"
+#import "tree"
 #import, file "../platform/raylib_text_input.zi";
 #import, file "../cells/node_apps.zi";
 #import, file "../cells/node_app_runner.zi";
@@ -51,6 +55,16 @@ using AndroidImportKind;
 c :: #system_library "c";
 GetTime :: () -> float64 #foreign c;
 NodePressedKey :: () -> s32 #foreign c "GetKeyPressed";
+NodeKeyRepeated :: (key: s32) -> bool #foreign c "IsKeyPressedRepeat";
+
+// A held key repeats as the system repeats typing, so a game keeps moving
+// while an arrow is held; GetKeyPressed reports only the first press.
+NodeRepeatedKey :: () -> s32 {
+    for key: cast(s32)32..348 {
+        if NodeKeyRepeated(key) { return key }
+    }
+    return 0
+}
 app_request_social_refresh :: (app: *InnerBreeze) #foreign c;
 
 node_screen_frame: AppUiFrame;
@@ -250,6 +264,7 @@ node_app_screen_draw :: (app: *InnerBreeze) {
     if NodeAppPortable(slot) || node_runners[slot].nested != null {
         input := SampleTextFieldInput(true, typed[:])
         key := NodePressedKey()
+        if key == 0 { key = NodeRepeatedKey() }
         // Native and IME commands are sampled with the field input. Keep
         // them even when the raw key queue has already been drained.
         if input.commit { key = TextInputKeyEnter }
@@ -274,9 +289,16 @@ node_app_screen_draw :: (app: *InnerBreeze) {
     } else {
         WidgetHostBegin(app.ui.session, HostedAssetAllowed, WidgetHostPackedPath)
     }
+    // The app draws only inside its area: covers sliding past its edge
+    // would otherwise paint over the sidebar's negative content x.
+    area := Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
+        cast(float32)(app.ui.view_height - app_content_bottom_reserved(app))}
+    clip := Group(app.ui.session, ColumnProps.{.bounds = area, .key = KeyHash("inbe/node-app-clip")})
+    if clip.node >= 0 { TreeSetChildClip(app.ui.session, clip.node, area) }
     NodeAppUiBegin(NodeScreenUiCall, cast(*void)app)
     unused NodeAppRunMessage(slot, message)
     NodeAppUiEnd()
+    if clip.opened { unused End(app.ui.session) }
     WidgetHostEnd()
     NodeScreenMediaPicker(app)
 }
