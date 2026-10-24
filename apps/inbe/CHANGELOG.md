@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.46] - 2026-10-24
+
+- Bring Lumi 1.5.13, Habits 1.2.11, Practices 1.3.11, Lists 1.1.14, Diary 1.3.10 and Leaderboard 1.0.15 for Inner Breeze 2.1.46.
+
 ## [2.1.45] - 2026-10-23
 
 - Bring Lumi 1.5.11, Habits 1.2.10, Practices 1.3.10, Lists 1.1.13, Diary 1.3.9 and Leaderboard 1.0.14 for Inner Breeze 2.1.45.

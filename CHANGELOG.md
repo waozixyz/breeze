@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.46] - 2026-10-24
+
+- Wim Hof reminders now count from the start of each breath hold, with clear Off, every 30 seconds and every minute choices.
+
 ## [2.1.45] - 2026-10-24
 
 - Smoother on phones: apps run as native code, and Shovey runs over twice as fast.
