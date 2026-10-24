@@ -1,13 +1,15 @@
 # Changelog
 
-## [2.1.45] - 2026-10-23
+## [2.1.45] - 2026-10-24
 
-- Practice illustrations keep clean, smooth edges on desktop, without dark seams across the Sun Salutation guide.
-- Smoother on phones: the How to guides, still screens and paused practices draw far less.
-- Apps and practices use the new ZX format and update themselves after installing.
-- New installs start with Diary, Lists and Leaderboard installed, along with Lumi, Habits and Practice.
-- New installs follow your device's language and ask just once whether to download voice guidance. Both stay changeable in Settings.
-- Diary and Photos keep each photo once for your account, privately, shared by all your apps. Photos saved before move there by themselves, and their old copies are removed only once the new ones are safely stored.
+- Smoother on phones: apps run as native code, and Shovey runs over twice as fast.
+- Apps ask before downloading and show one loading animation.
+- Games repeat held keys and keep the screen on.
+- Finishing an Arcade level no longer turns the screen black.
+- New installs follow your device's language and start with Diary, Lists and Leaderboard.
+- Diary and Photos keep each photo once, privately, for all your apps.
+- Profiles show your @name or a short ID.
+- Linux tray: Show or Hide comes first.
 
 ## [2.1.44] - 2026-10-23
 
