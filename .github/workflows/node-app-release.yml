@@ -1,0 +1,124 @@
+name: Node app release
+
+# Publishes one app the node offers that is built and checked in its own
+# repository, such as Arcade from Shovey's publisher. That publisher builds
+# the bundle, runs its screen checks, records the version in its repository's
+# apps/versions.json and attaches the checked bundle to a GitHub release
+# there. This workflow signs exactly those bytes with the package key, which
+# lives only in this repository's secrets, uploads the release to Waozi's
+# node and verifies what the node serves.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: The app's name in its ledger, such as arcade
+        required: true
+        type: string
+      repository:
+        description: Repository whose commit records the release, such as waozixyz/arcade
+        required: true
+        type: string
+      commit:
+        description: Full commit in that repository whose apps/versions.json names the release
+        required: true
+        type: string
+      tag:
+        description: GitHub release in that repository with the checked bundle attached as APP.zx
+        required: true
+        type: string
+      sha256:
+        description: SHA-256 of the checked bundle; any other bytes are refused
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: inbe-package-publishing
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Check the request
+        env:
+          APP: ${{ inputs.app }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMIT: ${{ inputs.commit }}
+          TAG: ${{ inputs.tag }}
+          SHA256: ${{ inputs.sha256 }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          checks = {'APP': r'[a-z][a-z0-9-]{0,63}', 'REPOSITORY': r'waozixyz/[A-Za-z0-9._-]+',
+                    'COMMIT': r'[0-9a-f]{40}', 'TAG': r'[A-Za-z0-9._-]{1,100}', 'SHA256': r'[0-9a-f]{64}'}
+          for name, pattern in checks.items():
+              if not re.fullmatch(pattern, os.environ[name]):
+                  raise SystemExit(f'{name} is not valid')
+          PY
+      - name: Fetch the release record, the publisher and the checked bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APP: ${{ inputs.app }}
+          REPOSITORY: ${{ inputs.repository }}
+          COMMIT: ${{ inputs.commit }}
+          TAG: ${{ inputs.tag }}
+          SHA256: ${{ inputs.sha256 }}
+        run: |
+          set -eu
+          work="$RUNNER_TEMP/node-app"
+          mkdir -p "$work/bundles"
+          git init -q "$work/source"
+          git -C "$work/source" fetch -q --depth 1 "https://github.com/$REPOSITORY.git" "$COMMIT"
+          git -C "$work/source" checkout -q FETCH_HEAD
+          # The Apps publisher at the commit the release's own lock pins.
+          apps=$(python3 -c 'import json,sys; print(next(p["commit"] for p in json.load(open(sys.argv[1]))["packages"] if p["url"].rstrip("/").removesuffix(".git").endswith("waozixyz/apps")))' "$work/source/ziran.lock")
+          git init -q "$work/apps"
+          git -C "$work/apps" fetch -q --depth 1 https://github.com/waozixyz/apps.git "$apps"
+          git -C "$work/apps" checkout -q FETCH_HEAD
+          gh release download "$TAG" --repo "$REPOSITORY" --pattern "$APP.zx" --dir "$work/bundles"
+          echo "$SHA256  $work/bundles/$APP.zx" | sha256sum --check --strict
+      - name: Install signing dependencies
+        run: sudo apt-get update && sudo apt-get install -y python3-cryptography
+      - name: Configure publisher
+        env:
+          SIGNING_KEY: ${{ secrets.INBE_PACKAGE_SIGNING_KEY }}
+          SSH_KEY: ${{ secrets.INBE_NODE_SSH_KEY }}
+          SSH_HOSTS: ${{ secrets.INBE_NODE_KNOWN_HOSTS }}
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          directory = Path(os.environ['RUNNER_TEMP']) / 'inbe-publisher'
+          directory.mkdir(mode=0o700)
+          for filename, name in (('publisher.pem', 'SIGNING_KEY'), ('node.key', 'SSH_KEY'), ('known_hosts', 'SSH_HOSTS')):
+              if not os.environ.get(name):
+                  raise SystemExit(f'{name} is not configured')
+              path = directory / filename
+              path.write_text(os.environ[name] + '\n')
+              path.chmod(0o600)
+          PY
+      - name: Sign, publish to Waozi's Daochi node and verify
+        env:
+          APP: ${{ inputs.app }}
+          KEY_ID: ${{ vars.INBE_PACKAGE_KEY_ID }}
+          TARGET: ${{ secrets.INBE_NODE_SSH_TARGET }}
+          STORE: ${{ secrets.INBE_NODE_PACKAGE_STORE }}
+        run: |
+          set -eu
+          work="$RUNNER_TEMP/node-app"
+          export INBE_SSH_IDENTITY="$RUNNER_TEMP/inbe-publisher/node.key"
+          export INBE_SSH_KNOWN_HOSTS="$RUNNER_TEMP/inbe-publisher/known_hosts"
+          python3 "$work/apps/scripts/node_release.py" --store "$work/releases" --node-app "$APP" \
+            --key "$RUNNER_TEMP/inbe-publisher/publisher.pem" --key-id "$KEY_ID" \
+            --publishers apps/publishers.json --app-ledger "$work/source/apps/versions.json" \
+            --bundle-directory "$work/bundles" \
+            --ssh-target "$TARGET" --remote-store "$STORE" --verify-origin https://api.waozi.xyz
+      - name: Remove signing material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/inbe-publisher"
