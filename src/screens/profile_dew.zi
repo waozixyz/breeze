@@ -169,8 +169,8 @@ ProfileDewContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
         unused AppCopyText("—", value[:])
     }
     busy := dew_operation.active
-    // Top-ups belong to the balance they fill.
-    if dew_account.known && DewReady() {
+    // Top-ups belong to the balance they fill; the Play build sells no Dew.
+    if dew_account.known && DewReady() && DewTopUpAvailable() {
         label := LocaleText("profile_dew_topup")
         button_w := AppTextWidth(label, AppFontSize()) + AppScale(32)
         if button_w > width / 2 {
@@ -179,21 +179,12 @@ ProfileDewContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
         row_y := y.*
         text_w := width - button_w - AppScale(12)
         text_h := AppParagraphHeight(TextUntilNul(value[:]), text_w, AppScale(Text24), 0)
-        worth: [128]u8
-        worth_h: s32 = 0
-        if DewWorthText(dew_account.balance, worth[:]) {
-            worth_h = AppScale(2) + AppParagraphHeight(TextUntilNul(worth[:]), text_w, AppSmallFontSize(), 0)
-        }
         row_h := AppScale(44)
-        if text_h + worth_h > row_h {
-            row_h = text_h + worth_h
+        if text_h > row_h {
+            row_h = text_h
         }
-        text_y := row_y + (row_h - text_h - worth_h) / 2
-        worth_y := text_y + text_h + AppScale(2)
+        text_y := row_y + (row_h - text_h) / 2
         ProfileDewText(app, TextUntilNul(value[:]), x, *text_y, text_w, AppScale(Text24), draw)
-        if worth_h > 0 {
-            ProfileDewText(app, TextUntilNul(worth[:]), x, *worth_y, text_w, AppSmallFontSize(), draw)
-        }
         button_y := row_y + (row_h - AppScale(44)) / 2
         if ProfileDewButton(app, label, x + width - button_w, *button_y, button_w, busy, draw) {
             ProfileTopUpOpen(app)
@@ -320,11 +311,7 @@ ProfileStoragePlansContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
     draw: bool) {
     line: [192]u8
     ProfileDewFormatDew(dew_account.balance, LocaleText("profile_dew_balance_line"), line[:])
-    DewAppendWorth(dew_account.balance, line[:])
     ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
-    if ProfileDewExchangeText(line[:]) {
-        ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
-    }
     ProfileDewUsage(app, x, y, width, draw)
     labels: [1 + DewPlanCount][24]u8
     unused AppCopyText(LocaleText("profile_dew_plan_free"), labels[0][:])
@@ -386,17 +373,14 @@ ProfileStoragePlansContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
             DewBuyStorage("", "")
         }
     } else {
+        // Plans are priced in Dew alone.
         offer := dew_account.plans[tab - 1]
-        worth: [128]u8
         ProfileDewFormatDew(offer.monthly_units, LocaleText("profile_dew_month"), line[:])
-        unused DewWorthText(offer.monthly_units, worth[:])
-        if ProfileDewButton(app, TextUntilNul(line[:]), x, y, width, busy, draw, TextUntilNul(worth[:])) {
+        if ProfileDewButton(app, TextUntilNul(line[:]), x, y, width, busy, draw) {
             DewBuyStorage(DewPlanSizes[tab - 1], "monthly")
         }
         ProfileDewFormatDew(offer.yearly_units, LocaleText("profile_dew_year"), line[:])
-        worth = .{}
-        unused DewWorthText(offer.yearly_units, worth[:])
-        if ProfileDewButton(app, TextUntilNul(line[:]), x, y, width, busy, draw, TextUntilNul(worth[:])) {
+        if ProfileDewButton(app, TextUntilNul(line[:]), x, y, width, busy, draw) {
             DewBuyStorage(DewPlanSizes[tab - 1], "yearly")
         }
     }
@@ -502,11 +486,16 @@ ProfileTopUpAddressText :: (output: []u8) {
     }
 }
 
+// Topping up is the one place Dew shows its money value: the balance's
+// worth and the node's exchange rate.
 ProfileTopUpContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bool) {
     line: [384]u8
     ProfileDewFormatDew(dew_account.balance, LocaleText("profile_dew_balance_line"), line[:])
     DewAppendWorth(dew_account.balance, line[:])
     ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
+    if ProfileDewExchangeText(line[:]) {
+        ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
+    }
     if dew_address[0] == cast(u8)0 {
         if profile_topup_failed {
             ProfileDewText(app, LocaleText("profile_dew_topup_error"), x, y, width, AppFontSize(), draw)

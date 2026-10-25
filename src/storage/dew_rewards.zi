@@ -1,0 +1,86 @@
+// The entity.dew service Breeze's hosted games call, answered from Breeze's
+// own Dew account in the shape Entity answers it in other hosts:
+//
+//     balance        {"connected":true,"units":1200000} (units -1 until known)
+//     claim:REWARD   {"status":"pending"}, "signin", "busy" or "failed"
+//     claim-status   {"status":"pending"} or, once answered,
+//                    {"status":"done","reward":"…","credited":true,"units":…,"balance":…}
+//                    or {"status":"failed","reward":"…"}
+//
+// A game only names a reward, such as Shovey's secret chest; the node keeps
+// the catalog and gives each reward to an account once (daochi_client's
+// rewards), so claiming again credits nothing.
+#import "auth"
+#import "entity/dew_model"
+#import "text_buffer"
+#import "c_string"
+#import "vec"
+#import "daochi_client/rewards"
+#import, file "sync_async.zi";
+#import, file "dew.zi";
+#import, file "../platform/network_transport.zi";
+#import, file "../app/text_buffers.zi";
+
+dew_reward_operation: StoredOperation;
+dew_reward_transfer: NetworkTransfer;
+dew_reward_response: [1024]u8;
+dew_reward_name: [80]u8;
+dew_reward_active: bool;
+// The last claim's answer for the game, kept until the next claim.
+dew_reward_answer: [320]u8;
+dew_game_reply: [320]u8;
+
+DewGameAnswer :: (request: string) -> string {
+    DewContext()
+    out: Vec(u8)
+    if request == "balance" {
+        if !DewReady() {
+            BuilderPrint(*out, "{\"connected\":false,\"units\":0}")
+        } else {
+            BuilderPrint(*out, "{\"connected\":true,\"units\":%}", ifx dew_account.known then dew_account.balance else cast(s64)-1)
+        }
+    } else if request.count > 6 && request[:6] == "claim:" {
+        reward := request[6:]
+        body: [128]u8
+        if !DewReady() {
+            BuilderPrint(*out, "{\"status\":\"signin\"}")
+        } else if dew_reward_active {
+            BuilderPrint(*out, "{\"status\":\"busy\"}")
+        } else if !BuildRewardBody(reward, body[:]) || !CopyCString(reward, dew_reward_name[:]) {
+            BuilderPrint(*out, "{\"status\":\"failed\"}")
+        } else {
+            dew_reward_response = .{}
+            dew_reward_answer = .{}
+            dew_reward_active = BeginStoredRequest(*dew_reward_operation, DewNode, NetworkTransport(*dew_reward_transfer),
+                "POST", REWARDS_PATH, TextUntilNul(body[:]), dew_reward_response[:], true)
+            if dew_reward_active { BuilderPrint(*out, "{\"status\":\"pending\"}") }
+            else { BuilderPrint(*out, "{\"status\":\"failed\"}") }
+        }
+    } else if request == "claim-status" {
+        if dew_reward_active || dew_reward_answer[0] == cast(u8)0 { BuilderPrint(*out, "{\"status\":\"pending\"}") }
+        else { BuilderPrint(*out, "%", TextUntilNul(dew_reward_answer[:])) }
+    } else {
+        BuilderPrint(*out, "{\"status\":\"unknown\"}")
+    }
+    unused CopyCString(TextView(VecSlice(out, 0, out.count)), dew_game_reply[:])
+    VecFree(out)
+    return TextUntilNul(dew_game_reply[:])
+}
+
+// Advances a claim each frame; a credited reward shows in the balance at once.
+DewRewardsTick :: () {
+    if !dew_reward_active || !PollStoredOperation(*dew_reward_operation) { return }
+    dew_reward_active = false
+    claim: RewardClaim
+    out: Vec(u8)
+    if dew_reward_operation.result == cast(s32)AuthResult.AUTH_OK &&
+    ParseRewardClaim(TextUntilNul(dew_reward_response[:]), *claim) {
+        if dew_account.known { dew_account.balance = claim.balance }
+        BuilderPrint(*out, "{\"status\":\"done\",\"reward\":\"%\",\"credited\":%,\"units\":%,\"balance\":%}",
+            TextUntilNul(dew_reward_name[:]), claim.credited, claim.units, claim.balance)
+    } else {
+        BuilderPrint(*out, "{\"status\":\"failed\",\"reward\":\"%\"}", TextUntilNul(dew_reward_name[:]))
+    }
+    unused CopyCString(TextView(VecSlice(out, 0, out.count)), dew_reward_answer[:])
+    VecFree(out)
+}
