@@ -108,10 +108,17 @@ lists_request_body: [262144]u8;
 habit_name: [HABIT_NAME_SIZE]u8;
 habit_description: [HABIT_DESCRIPTION_SIZE]u8;
 identifying: bool;
-// Lumi's bundled program, still being read and checked on its own thread
-// while the first frames draw: at over a second on a phone, it took longer
-// than every other app together. Lumi counts as installed meanwhile.
-lumi_preload: s32 = -1;
+// The bundled apps' programs, by slot, still being read and checked on their
+// own threads while the first frames draw: waiting for all of them kept a
+// phone from its first frame for seconds. A pending app counts as installed;
+// it opens once its thread is done (see AppsFeaturesPump) or the first time
+// it runs or its assets are read, whichever comes first. Each holds the
+// preload handle plus one, so zero means none.
+feature_preloads: [PackageCount]s32;
+
+FeaturePreload :: (slot: s32) -> s32 {
+    return feature_preloads[slot] - 1
+}
 ui_call: HostCall;
 ui_context: *void;
 ui_active: bool;
@@ -449,22 +456,29 @@ ModuleCapabilityAllowed :: (kind: s32, name: string) -> bool {
         name == "SunSalutationStoredFrame")
 }
 
+// An open app, or a bundled one still opening on its own thread.
+AppsSlotPresent :: (slot: s32) -> bool {
+    return slots[slot].app.instance != null || FeaturePreload(slot) >= 0
+}
+
 #program_export
 AppsReady :: () -> bool {
     return (!package_required || slots[3].app.instance != null) &&
-    ((enabled_apps & APP_LISTS) == 0 || slots[0].app.instance != null) &&
-    ((enabled_apps & APP_HABITS) == 0 || slots[1].app.instance != null) &&
-    ((enabled_apps & APP_PRACTICE) == 0 || slots[2].app.instance != null) &&
-    ((enabled_apps & APP_DIARY) == 0 || slots[4].app.instance != null) &&
-    ((enabled_apps & APP_LUMI) == 0 || slots[5].app.instance != null || lumi_preload >= 0) &&
-    ((enabled_apps & APP_LEADERBOARD) == 0 || slots[6].app.instance != null)
+    ((enabled_apps & APP_LISTS) == 0 || AppsSlotPresent(0)) &&
+    ((enabled_apps & APP_HABITS) == 0 || AppsSlotPresent(1)) &&
+    ((enabled_apps & APP_PRACTICE) == 0 || AppsSlotPresent(2)) &&
+    ((enabled_apps & APP_DIARY) == 0 || AppsSlotPresent(4)) &&
+    ((enabled_apps & APP_LUMI) == 0 || AppsSlotPresent(5)) &&
+    ((enabled_apps & APP_LEADERBOARD) == 0 || AppsSlotPresent(6))
 }
 
 #program_export
 AppsClose :: () {
-    // Its bytes belong to the root that closes here.
-    BundlePreloadDiscard(lumi_preload)
-    lumi_preload = -1
+    // Their bytes belong to the root that closes here.
+    for slot: cast(s32)0..PackageCount - 1 {
+        BundlePreloadDiscard(FeaturePreload(slot))
+        feature_preloads[slot] = 0
+    }
     PracticeDownloadsClose()
     AssetUnbindProvider()
     index: s32 = 0
@@ -832,10 +846,8 @@ AppsOpenInstalledFeatures :: () {
             PackageFree(bytes)
             bytes = ""
         }
-        // An installed Lumi keeps the bundled one when it fails its checks.
-        if bytes.count > 0 && index == 5 {
-            unused AppsLumiFinish(true)
-        }
+        // An installed app keeps the bundled one, still pending or open, when
+        // it fails its checks.
         if bytes.count > 0 {
             replacement: ModuleSlot
             kind := ModuleKindForPackage(index)
@@ -935,13 +947,18 @@ AppsAsset :: (path: string) -> AssetView {
     }
     // Frames read a few assets each time, and Practices holds thousands.
     // Search the package that owns the path first, then the others.
+    // An app still opening is not waited for: its assets are missing until
+    // it opens, and then the asset generation changes so readers look again.
     owner := AppsAssetOwner(path)
-    found := AppsAssetIn(owner, path)
-    if found.found {
-        return found
+    found: AssetView
+    if AppsFeatureOpenNow(owner) {
+        found = AppsAssetIn(owner, path)
+        if found.found {
+            return found
+        }
     }
     for slot: cast(s32)0..cast(s32)(PackageCount - 1) {
-        if slot == owner { continue }
+        if slot == owner || FeaturePreload(slot) >= 0 { continue }
         found = AppsAssetIn(slot, path)
         if found.found {
             return found
@@ -1007,8 +1024,8 @@ AppsOpenPackage :: (bytes: string) -> bool {
             // Current builds include every app for offline sidebar changes.
             if feature.count == 0 {
                 ready = index == 0 || index == 3 || index == 5
-            } else if index == 4 && preloads[index] >= 0 {
-                lumi_preload = preloads[index]
+            } else if preloads[index] >= 0 {
+                feature_preloads[ModuleSlotForPackage(index + 1)] = preloads[index] + 1
                 preloads[index] = -1
             } else {
 
@@ -1030,7 +1047,8 @@ AppsOpenPackage :: (bytes: string) -> bool {
     }
     package_required = true
     enabled_apps = AppsInstalledMask()
-    PracticeCatalogLoad()
+    // Practices read their catalog when they need it; reading it here would
+    // wait for the Practice app's program before the first frame.
     return true
 }
 
@@ -1083,7 +1101,7 @@ AppsSetEnabled :: (mask: s32) -> bool {
         slot := ModuleSlotForPackage(index + 1)
         // The mask chooses shortcuts. Keep bundled apps loaded when hidden,
         // so adding them back needs neither a download nor another VM load.
-        if slots[slot].app.instance == null && !(slot == 5 && lumi_preload >= 0) {
+        if !AppsSlotPresent(slot) {
 
             downloaded: string
             if local_bundle_index == index + 1 {
@@ -1125,8 +1143,8 @@ AppsFeaturePackageSize :: (index: s32) -> s64 {
         return 0
     }
     slot := ModuleSlotForPackage(index)
-    if slot == 5 && lumi_preload >= 0 {
-        return PackageFeature(4).count
+    if FeaturePreload(slot) >= 0 {
+        return PackageFeature(index - 1).count
     }
     if slots[slot].app.instance == null {
         return 0
@@ -1137,22 +1155,22 @@ AppsFeaturePackageSize :: (index: s32) -> s64 {
 #program_export
 AppsInstalledMask :: () -> s32 {
     mask: s32 = 0
-    if slots[0].app.instance != null {
+    if AppsSlotPresent(0) {
         mask |= APP_LISTS
     }
-    if slots[1].app.instance != null {
+    if AppsSlotPresent(1) {
         mask |= APP_HABITS
     }
-    if slots[2].app.instance != null {
+    if AppsSlotPresent(2) {
         mask |= APP_PRACTICE
     }
-    if slots[4].app.instance != null {
+    if AppsSlotPresent(4) {
         mask |= APP_DIARY
     }
-    if slots[5].app.instance != null || lumi_preload >= 0 {
+    if AppsSlotPresent(5) {
         mask |= APP_LUMI
     }
-    if slots[6].app.instance != null {
+    if AppsSlotPresent(6) {
         mask |= APP_LEADERBOARD
     }
     return mask
@@ -1436,6 +1454,7 @@ DiaryRoute :: (screen: s32) -> bool {
     diary_routing = true
     diary_route_screen = screen
     diary_route_allowed = false
+    AppsFeatureWait(4)
     ok := ModuleRun(*slots[4]) && diary_route_allowed
     diary_routing = false
     return ok
@@ -1457,6 +1476,7 @@ AppsUiEnd :: () {
 DiaryRun :: (message: DiaryMessage) -> DiaryMessage {
     message.abi = MODULE_ABI
     message.succeeded = false
+    AppsFeatureWait(4)
     if slots[4].app.bundle == null {
         return message
     }
@@ -1476,6 +1496,7 @@ DiaryRun :: (message: DiaryMessage) -> DiaryMessage {
 ListsRun :: (message: ListsMessage) -> ListsMessage {
     message.abi = MODULE_ABI
     message.succeeded = false
+    AppsFeatureWait(0)
     lists_message = message
     if !ModuleRun(*slots[0]) {
         message.succeeded = false
@@ -1486,6 +1507,7 @@ ListsRun :: (message: ListsMessage) -> ListsMessage {
 
 #program_export
 ListsUiRun :: (message: ListsMessage) -> ListsMessage {
+    AppsFeatureWait(0)
     if slots[0].app.bundle == null {
         return ListsMessage.{}
     }
@@ -1499,6 +1521,7 @@ ListsUiRun :: (message: ListsMessage) -> ListsMessage {
 HabitsRun :: (message: HabitsMessage) -> HabitsMessage {
     message.abi = MODULE_ABI
     message.succeeded = false
+    AppsFeatureWait(1)
     habits_message = message
     if !ModuleRun(*slots[1]) {
         message.succeeded = false
@@ -1511,6 +1534,7 @@ HabitsRun :: (message: HabitsMessage) -> HabitsMessage {
 PracticeRun :: (message: PracticeMessage) -> PracticeMessage {
     message.abi = MODULE_ABI
     message.succeeded = false
+    AppsFeatureWait(2)
     practice_message = message
     if !ModuleRun(*slots[2]) {
         message.succeeded = false
@@ -1538,7 +1562,7 @@ AppsReloadFeatures :: (mask: s32) -> bool {
             continue
         }
         slot := ModuleSlotForPackage(index)
-        if slot == 5 && lumi_preload >= 0 && !AppsLumiFinish(false) {
+        if FeaturePreload(slot) >= 0 && !AppsFeatureFinish(slot, false) {
             return false
         }
         replacement: ModuleSlot
@@ -1613,34 +1637,84 @@ ModuleKindForPackage :: (index: s32) -> s32 {
     return index
 }
 
-// Opens the bundled Lumi once its preload is done, or waits for it when
-// wait is set. False while it is still loading, or when it failed.
-AppsLumiFinish :: (wait: bool) -> bool {
-    if lumi_preload < 0 {
-        return slots[5].app.instance != null
+// The package of an app slot, as ModuleSlotForPackage maps them.
+PackageForSlot :: (slot: s32) -> s32 {
+    if slot == 3 {
+        return 0
     }
-    if !wait && !BundlePreloadReady(lumi_preload) {
+    if slot < 3 {
+        return slot + 1
+    }
+    return slot
+}
+
+// Opens a bundled app once its preload is done, or waits for it when wait
+// is set. False while it is still loading, or when it failed.
+AppsFeatureFinish :: (slot: s32, wait: bool) -> bool {
+    preload := FeaturePreload(slot)
+    if preload < 0 {
+        return slots[slot].app.instance != null
+    }
+    if slots[slot].app.instance != null {
+        // An installed copy holds the slot; the bundled program closes once
+        // its thread is done.
+        if BundlePreloadReady(preload) {
+            BundlePreloadDiscard(preload)
+            feature_preloads[slot] = 0
+        }
+        return true
+    }
+    if !wait && !BundlePreloadReady(preload) {
         return false
     }
-    preload := lumi_preload
-    lumi_preload = -1
+    feature_preloads[slot] = 0
+    package := PackageForSlot(slot)
+    kind := ModuleKindForPackage(package)
     previous := identifying
     identifying = true
-    ready := ModuleOpen(*slots[5], PackageFeature(4), MODULE_LUMI, preload) &&
-    ModuleFeatureAssetsValid(slots[5].app.bundle, MODULE_LUMI)
+    ready := ModuleOpen(*slots[slot], PackageFeature(package - 1), kind, preload) &&
+    ModuleFeatureAssetsValid(slots[slot].app.bundle, kind)
     identifying = previous
     if !ready {
-        HostedAppClose(*slots[5].app)
-        slots[5] = ModuleSlot.{}
+        HostedAppClose(*slots[slot].app)
+        slots[slot] = ModuleSlot.{}
         enabled_apps = AppsInstalledMask()
     }
+    // Readers that looked while it was opening found none of its assets.
+    AssetNotifyChanged()
     return ready
+}
+
+// An app still opening is waited for the first time it runs.
+AppsFeatureWait :: (slot: s32) {
+    if FeaturePreload(slot) >= 0 {
+        unused AppsFeatureFinish(slot, true)
+    }
+}
+
+// From the frame loop: opens at most one bundled app whose thread is done,
+// so apps are open before they are first shown and no frame waits for one.
+#program_export
+AppsFeaturesPump :: () {
+    for slot: cast(s32)0..PackageCount - 1 {
+        if FeaturePreload(slot) >= 0 && BundlePreloadReady(FeaturePreload(slot)) {
+            unused AppsFeatureFinish(slot, false)
+            return
+        }
+    }
+}
+
+// Whether an app is open, opening it now if its thread is done; it never
+// waits. A screen shows a loading indicator while this is false.
+#program_export
+AppsFeatureOpenNow :: (slot: s32) -> bool {
+    return FeaturePreload(slot) < 0 || AppsFeatureFinish(slot, false)
 }
 
 // The frame loop's Lumi work runs only once Lumi is open; it never waits.
 #program_export
 AppsLumiOpen :: () -> bool {
-    return lumi_preload < 0 || AppsLumiFinish(false)
+    return AppsFeatureOpenNow(5)
 }
 
 // Set by Lumi's screen for each frame: nothing reached Lumi since its last
@@ -1655,9 +1729,7 @@ LumiSetFrameQuiet :: (quiet: bool) {
 LumiRun :: (message: LumiMessage) -> LumiMessage {
     message.abi = MODULE_ABI
     message.succeeded = false
-    if lumi_preload >= 0 {
-        unused AppsLumiFinish(true)
-    }
+    AppsFeatureWait(5)
     if slots[5].app.bundle == null {
         return message
     }
@@ -1678,6 +1750,7 @@ LumiRun :: (message: LumiMessage) -> LumiMessage {
 LeaderboardRun :: (message: LeaderboardMessage) -> LeaderboardMessage {
     message.abi = MODULE_ABI
     message.succeeded = false
+    AppsFeatureWait(6)
     if slots[6].app.bundle == null {
         return message
     }
