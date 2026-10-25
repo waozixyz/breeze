@@ -4,7 +4,8 @@
 Each guide line listed in design/lumi-guide/narration.json is read from
 locales/<code>.txt and spoken by the configured voice into
 assets/practices/guide/voice/<code>/<key>.ogg, one downloadable pack per
-language. The receipt beside the configuration
+language. Recordings go into the practices checkout that
+ziran.local.toml maps (scripts/practice_media.py). The receipt beside the configuration
 records a hash of each line's text and settings, so only changed lines are
 generated again. Every new clip is transcribed and kept only when the
 transcript matches its line.
@@ -30,11 +31,13 @@ import unicodedata
 import urllib.error
 import urllib.request
 
+from practice_media import media_path, packaged_path, writable_media
+
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "design/lumi-guide/narration.json"
 RECEIPT = ROOT / "design/lumi-guide/receipt.json"
 LOCALES = ROOT / "locales"
-VOICE = ROOT / "assets/practices/guide/voice"
+VOICE = media_path("assets/practices/guide/voice")
 SPEECH = "https://openrouter.ai/api/v1/audio/speech"
 CHAT = "https://openrouter.ai/api/v1/chat/completions"
 ATTEMPTS = 4
@@ -334,7 +337,7 @@ def generate(config, key, code, name, text):
     temporary.write_bytes(best["data"])
     temporary.replace(destination)
     row = {name: value for name, value in best.items() if name != "data"}
-    row.update(file=destination.relative_to(ROOT).as_posix(),
+    row.update(file=packaged_path(destination),
                text_sha256=text_hash(config, text), sha256=digest(best["data"]),
                transcriber=config.get('locale_transcribers', {}).get(code, config['transcriber']),
                bytes=len(best["data"]))
@@ -367,9 +370,11 @@ def main():
         settings = json.loads((ROOT / "apps/practice/content.json").read_text())["narration"][args.practice]
         CONFIG = ROOT / settings["config"]
         RECEIPT = ROOT / settings["receipt"]
-        VOICE = ROOT / settings["output_directory"]
-        LOCALES = ROOT / settings["text_directory"]
+        VOICE = media_path(settings["output_directory"])
+        LOCALES = media_path(settings["text_directory"])
     if not args.check:
+        # Recordings are written only into a practices checkout.
+        writable_media()
         import fcntl
         lock_directory = ROOT / 'backup/narration'
         lock_directory.mkdir(parents=True, exist_ok=True)

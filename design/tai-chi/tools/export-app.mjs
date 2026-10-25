@@ -4,9 +4,11 @@
 //
 //   node tools/export-app.mjs
 //
-// Writes (paths from the Inbe repository root):
-//   assets/practices/taichi/course.tch        keys, course outline, rigs
-//   assets/practices/taichi/flat-edge.png      soft edges of the figure's shapes
+// Writes (paths from the Inbe repository root; the practice media goes into
+// the practices checkout that ziran.local.toml maps to
+// build/packages/practices):
+//   build/packages/practices/taichi/course.tch    keys, course outline, rigs
+//   build/packages/practices/taichi/flat-edge.png soft edges of the figure's shapes
 //   design/tai-chi/text/en.txt                 course words as locale entries
 //   tests/fixtures/tai-chi-reference.json      sampled poses, joints, shapes
 //
@@ -35,8 +37,8 @@
 
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { dirname, join, resolve, sep } from 'node:path'
 import { buildCourse, readingTime, timelineFor } from '../src/course.js'
 import { FLAT_LOOKS, createFlatShapes } from '../src/flat/shapes.js'
 import { FlatView } from '../src/painted/layout.js'
@@ -45,7 +47,11 @@ import { solvePose } from '../src/solve.js'
 import { STUDIO_ROOT } from './serve.mjs'
 
 const INBE_ROOT = resolve(STUDIO_ROOT, '..', '..')
-const ASSET_DIR = join(INBE_ROOT, 'assets', 'practices', 'taichi')
+const MEDIA_DIR = realpathSync(join(INBE_ROOT, 'build', 'packages', 'practices'))
+if (MEDIA_DIR.includes(`${sep}.cache${sep}ziran${sep}`)) {
+    throw new Error('build/packages/practices is the locked package; map practices to your practices checkout in ziran.local.toml')
+}
+const ASSET_DIR = join(MEDIA_DIR, 'taichi')
 const TEXT_FILE = join(STUDIO_ROOT, 'text', 'en.txt')
 const REFERENCE_FILE = join(INBE_ROOT, 'tests', 'fixtures', 'tai-chi-reference.json')
 // The app's characters, in the order it lists them; the men speak with the

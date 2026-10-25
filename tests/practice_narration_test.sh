@@ -21,4 +21,4 @@ mkdir -p "$generated"
     "$generated/byte_text_linux.c" "$generated/text_buffers.c" \
     "$root/build/ziran-toolchain/libziran.a" -lm -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-    "$work/test" "$root/assets/practices/guide/voice/en/practice_guide_start.ogg"
+    "$work/test" "$root/build/packages/practices/guide/voice/en/practice_guide_start.ogg"

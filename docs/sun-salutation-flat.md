@@ -76,7 +76,8 @@ of the move and 30 more while the hanging hair settles
 (`SETTLE_SECONDS`). The app plays those during the hold and keeps the last
 one; the rest of the hold is left out, so the hair carries on from there
 into the next move. Frames are cropped to each move, quantized to 256
-colours and saved to `assets/practices/sunsalutation/characters/NN-<id>/`,
+colours and saved to `sunsalutation/characters/NN-<id>/` in the
+practices checkout (packaged as `assets/practices/sunsalutation/characters/`),
 numbered by frame set: `01` and `02` for the first round, `03-<id>-other-side`
 and `04-<id>-other-side` for the next.
 It then writes `src/practices/sun_salutation/sun_salutation_frames.zi` and

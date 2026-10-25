@@ -9,6 +9,7 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from practice_content import narration_current
+from practice_media import media_path
 
 spec = importlib.util.spec_from_file_location('speech', ROOT / 'scripts/generate-lumi-guide-narration.py')
 speech = importlib.util.module_from_spec(spec)
@@ -32,7 +33,7 @@ with tempfile.TemporaryDirectory(prefix='narration-snapshot-', dir=ROOT / 'build
     voice = assets / 'practices/taichi/voice/en'
     voice.mkdir(parents=True)
     for key in keys:
-        shutil.copyfile(ROOT / 'assets/practices/taichi/voice/en' / (key + '.ogg'),
+        shutil.copyfile(media_path('assets/practices/taichi/voice/en') / (key + '.ogg'),
                         voice / (key + '.ogg'))
     (voice / 'unused-label.ogg').write_bytes(b'unspoken label')
     (voice / 'unfinished.ogg.part').write_bytes(b'partial recording')

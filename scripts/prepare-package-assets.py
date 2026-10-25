@@ -10,6 +10,7 @@ import hashlib
 import re
 from animation_inventory import inventory
 from achievement_icons import icon_shape
+from practice_media import MEDIA, PREFIX
 
 ROOT = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser(description=__doc__)
@@ -37,15 +38,6 @@ patterns = (
     'assets/app/icon-ink-and-air.png', 'assets/easteregg/*.png', 'assets/pet/*.png',
     'assets/apps/icons/*.png',
     'assets/social/*.png', 'assets/profile-pictures/*.png',
-    'assets/practices/whm/1.png', 'assets/practices/whm/2.png',
-    'assets/practices/meditation/1.png', 'assets/practices/*/banner-light.png',
-    'assets/practices/*/banner-dark.png',
-    'assets/practices/sunsalutation/characters/*/*.png',
-    'assets/practices/sunsalutation/flat-edge.png',
-    'assets/practices/sunsalutation/voice/**/*', 'assets/practices/sunsalutation/voice-male/**/*',
-    'assets/practices/astral_projection/**/*',
-    'assets/practices/workout/**/*',
-    'assets/practices/taichi/**/*', 'assets/practices/guide/voice/**/*',
     'assets/sounds/*.ogg',
     'assets/habits/**/*', 'assets/lists/**/*', 'assets/diary/**/*', 'assets/lumi/**/*',
     'assets/fonts/subset/*-App-Regular.*', 'assets/styles/*.kss',
@@ -53,12 +45,25 @@ patterns = (
     'build/packages/kss/styles/*.kss', 'build/packages/kryon/icons/ui.png',
     'build/packages/kryon/icons/pfp.png',
 ) + tuple(f'assets/{name}/**/*' for name in NODE_APPS)
-for file in sorted({p for pattern in patterns for p in ROOT.glob(pattern) if p.is_file()}):
+# The practice media comes from the practices package and is packaged
+# under assets/practices/.
+practice_patterns = (
+    'whm/1.png', 'whm/2.png', 'meditation/1.png', '*/banner-light.png', '*/banner-dark.png',
+    'sunsalutation/characters/*/*.png', 'sunsalutation/flat-edge.png',
+    'sunsalutation/voice/**/*', 'sunsalutation/voice-male/**/*',
+    'astral_projection/**/*', 'workout/**/*', 'taichi/**/*', 'guide/voice/**/*',
+)
+sources = {p: p.relative_to(ROOT).as_posix()
+           for pattern in patterns for p in ROOT.glob(pattern) if p.is_file()}
+sources.update({p: PREFIX + p.relative_to(MEDIA).as_posix()
+                for pattern in practice_patterns for p in MEDIA.glob(pattern) if p.is_file()})
+if not any(path.startswith(PREFIX) for path in sources.values()):
+    raise SystemExit(f'no practice media in {MEDIA}; run make packages')
+for file, path in sorted(sources.items(), key=lambda source: source[1]):
     if '-prompt.' in file.name:
         continue
-    if '/sunsalutation/characters/' in file.as_posix() and file not in unique_animation:
+    if '/sunsalutation/characters/' in path and file not in unique_animation:
         continue
-    path = file.relative_to(ROOT).as_posix()
     owner = 'inbe'
     if path.startswith(('assets/practices/', 'assets/sounds/')):
         owner = 'practices'

@@ -9,6 +9,9 @@
   `ziran.lock`. Run `make package-check` after dependency changes. For local
   debugging, map a package to a working repository in the ignored
   `ziran.local.toml`; release builds use `PACKAGE_FLAGS=--locked`.
+- Practice media (pictures, course data, recordings) lives in the
+  `practices` package (waozixyz/practices), not under
+  `assets/`. Commit media there, then update the lock here.
 - Add the numeric release to `CHANGELOG.md`, then run `./update_version.sh`.
   The canonical macros are `APP_VERSION_STRING`, `APP_VERSION_MAJOR`,
   `APP_VERSION_MINOR`, and `APP_VERSION_PATCH`; do not create aliases.

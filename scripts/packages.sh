@@ -101,6 +101,7 @@ link entity entity
 link apps apps
 link crypto crypto
 link daochi-client daochi_client
+link practices practices
 link sqlite sqlite
 link curl curl
 link liboqs liboqs

@@ -11,7 +11,7 @@ from pathlib import Path
 import struct
 import zlib
 
-ROOT = Path(__file__).resolve().parents[1]
+from practice_media import writable_media
 
 
 def optimize(job):
@@ -59,7 +59,7 @@ def main():
     args = parser.parse_args()
     if args.jobs < 1 or args.iterations < 1:
         parser.error("jobs and iterations must be positive")
-    paths = sorted((ROOT / "assets/practices/sunsalutation/characters").glob("*/*.png"))
+    paths = sorted((writable_media() / "sunsalutation/characters").glob("*/*.png"))
     if not paths:
         raise SystemExit("No character animation frames found")
     before = 0

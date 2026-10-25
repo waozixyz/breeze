@@ -5,6 +5,8 @@ from hashlib import sha256
 import json
 from pathlib import Path
 
+from practice_media import media_path
+
 ROOT = Path(__file__).resolve().parents[1]
 TABLE = ROOT / "src/practices/sun_salutation/sun_salutation_inventory.zi"
 
@@ -15,7 +17,7 @@ def inventory():
     for character in manifest["characters"]:
         for step, entry in enumerate(character["steps"], 1):
             for frame in range(1, entry["frames"] + 1):
-                paths.append(ROOT / character["directory"] / f"{step:02d}-{frame:03d}.png")
+                paths.append(media_path(character["directory"]) / f"{step:02d}-{frame:03d}.png")
     seen = {}
     sources = []
     unique = []

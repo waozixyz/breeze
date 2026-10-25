@@ -6,10 +6,11 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from practice_content import course_narration_keys
+from practice_media import media_path
 
 config = json.loads((ROOT / 'design/tai-chi/narration.json').read_text())
 actual = json.loads((ROOT / config['keys_file']).read_text())
-course = (ROOT / 'assets/practices/taichi/course.tch').read_bytes()
+course = media_path('assets/practices/taichi/course.tch').read_bytes()
 expected = course_narration_keys(course)
 assert len(expected) > 200
 assert actual == expected, 'Export Tai Chi after changing spoken cues'

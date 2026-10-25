@@ -8,9 +8,3 @@ release workflow and changelog.
 
 - Move the remaining host-drawn Practices screens into `apps/practice/`, so
   they can update without a new APK, as Habits' screens already do.
-
-## Media sources
-
-- Practice packs download separately on devices, but their source media is
-  still tracked here. Moving it out requires an owner-approved home for the
-  pack sources first.

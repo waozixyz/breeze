@@ -5,10 +5,13 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import sys
 
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+from practice_media import media_path, packaged_path
 
 
 def main():
@@ -40,7 +43,7 @@ def main():
         assert character["move_frames"] >= character["transition_frames"]
         assert len(character["steps"]) == 12
         expected = set()
-        directory = ROOT / character["directory"]
+        directory = media_path(character["directory"])
         for step, entry in enumerate(character["steps"]):
             assert entry["frames"] == (1 if step == 0 else character["move_frames"])
             left, top, right, bottom = entry["box"]
@@ -65,13 +68,13 @@ def main():
                     if step == 3 and index == entry["frames"] - 1:
                         lunges[character["id"]] = hashlib.sha256(rgba.tobytes()).hexdigest()
                 if args.embedded_c:
-                    assert str(path.relative_to(ROOT)) in embedded, "Frame not embedded: " + str(path)
+                    assert packaged_path(path) in embedded, "Frame not embedded: " + str(path)
                 total += 1
         assert {p.name for p in directory.glob("*.png")} == expected, "Missing or stale frames"
     assert len(held_signatures) == 2, "The two characters must have distinct artwork"
     for first, other in zip(characters[:2], characters[2:]):
         assert lunges[first["id"]] != lunges[other["id"]], "The next round must lunge on the other leg"
-    assert not (ROOT / "assets/practices/sunsalutation/girl").exists(), "Retired character still ships"
+    assert not media_path("assets/practices/sunsalutation/girl").exists(), "Retired character still ships"
     print(f"Validated {total} transparent frames: two characters on both sides, twelve poses each")
 
 

@@ -143,7 +143,8 @@ not fit (Sun Salutation's 991 frames per character are about 10 MB; the
 24-form would be about 100 MB per character), so the app samples and solves
 the key poses the way the studio does:
 
-- `node tools/export-app.mjs` writes `assets/practices/taichi/course.tch`
+- `node tools/export-app.mjs` writes `taichi/course.tch` in the
+  practices checkout that Breeze's `ziran.local.toml` maps
   (key poses, rigs, part anchors and the course outline; its layout is
   described at the top of the tool), the two painted characters at 0.65
   scale with 256-colour palettes, the floor shadow, the course words as

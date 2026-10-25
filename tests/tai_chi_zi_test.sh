@@ -17,7 +17,7 @@ import zipfile
 root, work = map(Path, sys.argv[1:])
 with zipfile.ZipFile(work / 'course.zip', 'w', zipfile.ZIP_DEFLATED,
                      compresslevel=9) as archive:
-    archive.writestr('course.tch', (root / 'assets/practices/taichi/course.tch').read_bytes())
+    archive.writestr('course.tch', (root / 'build/packages/practices/taichi/course.tch').read_bytes())
 PY
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" \

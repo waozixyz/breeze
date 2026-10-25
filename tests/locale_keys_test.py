@@ -12,6 +12,8 @@ import json
 import sys
 
 root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(root / "scripts"))
+from practice_media import media_path
 failures = []
 
 PRACTICE_LABELS = ["exercise_wim_hof", "exercise_patterns",
@@ -49,7 +51,7 @@ app_name_arcade app_name_chess app_name_photos app_name_library
 
 def tai_chi_course_keys():
     """The Tai Chi course's words: locale keys named in course.tch's strings."""
-    data = (root / "assets/practices/taichi/course.tch").read_bytes()
+    data = media_path("assets/practices/taichi/course.tch").read_bytes()
     if data[:4] != b"TCH2":
         failures.append("assets/practices/taichi/course.tch is not a course file")
         return []

@@ -1,6 +1,7 @@
 # Tai Chi practice banners
 
-`assets/practices/taichi/banner-light.png` and `banner-dark.png` are the
+`taichi/banner-light.png` and `banner-dark.png` in
+[practices](https://github.com/waozixyz/practices) are the
 central 2:1 band of these 1536×1024 sources, scaled to 1024×512 with a
 256-colour palette (octree, which keeps the prayer flags' colours), like
 the other practice banners.

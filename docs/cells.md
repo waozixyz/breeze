@@ -11,7 +11,14 @@ The root contains shared fonts, translations, themes and icons. Practices keeps
 small previews, controls and shared cues. Heavy content is downloaded per
 practice and works offline afterwards. Each feature can add private resources under
 `assets/lumi/`, `assets/habits/`, `assets/practices/`, `assets/lists/`, `assets/diary/`
-or `assets/leaderboard/`.
+or `assets/leaderboard/`. The practices' media (pictures, course data and
+recordings) is not kept in this repository: it is the
+[practices](https://github.com/waozixyz/practices) package, pinned
+in `ziran.lock`, linked at `build/packages/practices` and packaged under
+`assets/practices/` (`scripts/practice_media.py`). Change it there, then run
+`ziran update practices` and commit the lock. The narration, character
+and Tai Chi generators write into a practices checkout mapped in
+`ziran.local.toml` and refuse the locked package.
 The cell picker, Lists and Diary editor/calendar compose the
 standard Kryon widgets inside their ZX bundles. Raylib, Android and canvas bind the
 same typed render effects to their normal widgets. File dialogs, persistence,

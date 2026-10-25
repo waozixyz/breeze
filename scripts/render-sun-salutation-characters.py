@@ -19,8 +19,12 @@ import cairo
 import numpy as np
 from PIL import Image
 
+from practice_media import PREFIX, writable_media
+
 ROOT = Path(__file__).resolve().parents[1]
-DIRECTORY = "assets/practices/sunsalutation/characters"
+# The frames go into the practices checkout; the manifest names them
+# by their packaged path.
+DIRECTORY = "sunsalutation/characters"
 TABLE = ROOT / "src/practices/sun_salutation/sun_salutation_frames.zi"
 MANIFEST = ROOT / "docs/sun-salutation-characters.json"
 # After each move the app keeps playing while the hanging hair settles, so
@@ -65,7 +69,7 @@ def export_character(flat, rig, style, character, number, other_side):
     times = flat.GIRL.sprite_times(dict(rig, sprites=dict(sprites, settle=SETTLE_SECONDS)),
                                    figure.timeline)
     name = f"{number:02d}-{character['id']}" + ("-other-side" if other_side else "")
-    directory = ROOT / DIRECTORY / name
+    directory = writable_media() / DIRECTORY / name
     directory.mkdir(parents=True, exist_ok=True)
     expected = set()
     steps = []
@@ -110,7 +114,7 @@ def export_character(flat, rig, style, character, number, other_side):
             stale.unlink()
     return {
         "id": name, "name": character["name"], "other_side": other_side,
-        "directory": f"{DIRECTORY}/{name}/", "steps": steps,
+        "directory": f"{PREFIX}{DIRECTORY}/{name}/", "steps": steps,
         "fps": fps,
         "transition_frames": round(rig["timing"]["transition"] * fps),
         "move_frames": steps[1]["frames"],
@@ -189,7 +193,7 @@ def main():
             characters.append(export_character(flat, rig, style, character, len(characters) + 1, other_side))
     # Characters no longer listed leave no frames behind.
     listed = {Path(character["directory"]).name for character in characters}
-    for directory in (ROOT / DIRECTORY).iterdir():
+    for directory in (writable_media() / DIRECTORY).iterdir():
         if directory.is_dir() and directory.name not in listed:
             for stale in directory.glob("*.png"):
                 stale.unlink()

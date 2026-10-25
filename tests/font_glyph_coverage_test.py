@@ -16,6 +16,8 @@ import sys
 from fontTools.ttLib import TTFont
 
 root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(root / "scripts"))
+from practice_media import media_path
 fonts = {
     "latin": root / "assets/fonts/subset/NotoSans-App-Regular.ttf",
     "sc": root / "assets/fonts/subset/NotoSansSC-App-Regular.otf",
@@ -25,7 +27,7 @@ fonts = {
 }
 LATIN_LOCALES = ["en", "es", "cs", "de", "fr", "id", "it", "pt", "ru"]
 CJK_LOCALES = ["ja", "ko", "zh"]
-GUIDANCE = root / "assets/practices/astral_projection/text"
+GUIDANCE = media_path("assets/practices/astral_projection/text")
 
 
 def is_cjk(cp):

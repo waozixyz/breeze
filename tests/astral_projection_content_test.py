@@ -2,13 +2,16 @@
 import importlib.util
 import json
 from pathlib import Path
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'scripts'))
+from practice_media import media_path
 spec = importlib.util.spec_from_file_location(
     'speech', ROOT / 'scripts/generate-lumi-guide-narration.py')
 speech = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(speech)
-folder = ROOT / 'assets/practices/astral_projection'
+folder = media_path('assets/practices/astral_projection')
 course = json.loads((folder / 'session.json').read_text())
 config = json.loads((ROOT / 'design/astral-projection/narration.json').read_text())
 keys = [cue['key'] for cue in course['cues']]

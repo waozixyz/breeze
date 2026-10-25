@@ -12,6 +12,8 @@ from pathlib import Path
 import struct
 import subprocess
 
+from practice_media import media_path
+
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = 'assets/practices/catalog.json'
 NAMES = ('whm', 'meditation', 'sunsalutation', 'patterns', 'taichi', 'astral_projection', 'workout')
@@ -197,9 +199,9 @@ def prepare(compiler, assets_root=None, output=None):
         raise ValueError('unsupported practice content configuration')
     speech = json.loads((ROOT / configuration['narration']['taichi']['config']).read_text())
     declared = json.loads((ROOT / speech['keys_file']).read_text())
-    if course_narration_keys((ROOT / 'assets/practices/taichi/course.tch').read_bytes()) != declared:
+    if course_narration_keys(media_path('assets/practices/taichi/course.tch').read_bytes()) != declared:
         raise ValueError('export Tai Chi again to update its narration inventory')
-    astral = json.loads((ROOT / 'assets/practices/astral_projection/session.json').read_text())
+    astral = json.loads(media_path('assets/practices/astral_projection/session.json').read_text())
     astral_speech = json.loads((ROOT / configuration['narration']['astral_projection']['config']).read_text())
     if [cue['key'] for cue in astral['cues']] != astral_speech['keys']:
         raise ValueError('Astral Projection guidance and narration inventory differ')
@@ -277,8 +279,8 @@ def narration_current(configuration, practice, language, assets=None, voice=''):
     spec = importlib.util.spec_from_file_location('practice_speech', ROOT / 'scripts/generate-lumi-guide-narration.py')
     speech = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(speech)
-    speech.LOCALES = ROOT / settings['text_directory']
-    speech.VOICE = ROOT / settings['output_directory']
+    speech.LOCALES = media_path(settings['text_directory'])
+    speech.VOICE = media_path(settings['output_directory'])
     config = json.loads((ROOT / settings['config']).read_text())
     keys = speech.narration_keys(config)
     receipt = json.loads(receipt_path.read_text())

@@ -365,10 +365,13 @@ SYSTEM_THEME_CFLAGS :=
 SYSTEM_THEME_LDLIBS :=
 
 LOCALE_FILES := $(wildcard locales/*.txt)
-IMAGE_FILES := assets/app/icon.png assets/easteregg/art.png assets/easteregg/waozi.png assets/practices/whm/1.png assets/practices/whm/2.png assets/practices/meditation/1.png assets/pet/egg1.png $(wildcard assets/practices/*/banner*.png) $(wildcard assets/practices/sunsalutation/characters/*/*.png) $(wildcard assets/practices/taichi/*.png assets/practices/taichi/*/*.png) assets/practices/taichi/course.tch
+# The practice media is the practices package, packaged under
+# assets/practices/ (scripts/practice_media.py).
+PRACTICE_MEDIA := build/packages/practices
+IMAGE_FILES := assets/app/icon.png assets/easteregg/art.png assets/easteregg/waozi.png $(PRACTICE_MEDIA)/whm/1.png $(PRACTICE_MEDIA)/whm/2.png $(PRACTICE_MEDIA)/meditation/1.png assets/pet/egg1.png $(wildcard $(PRACTICE_MEDIA)/*/banner*.png) $(wildcard $(PRACTICE_MEDIA)/sunsalutation/characters/*/*.png) $(wildcard $(PRACTICE_MEDIA)/taichi/*.png $(PRACTICE_MEDIA)/taichi/*/*.png) $(PRACTICE_MEDIA)/taichi/course.tch
 SOUND_FILES := $(wildcard assets/sounds/*.ogg)
 FONT_SUBSET_DIR := assets/fonts/subset
-FONT_SUBSET_CORPUS := locales assets/fonts/input_common.txt assets/fonts/ui_symbols.txt assets/practices/astral_projection/text assets/practices/workout/text
+FONT_SUBSET_CORPUS := locales assets/fonts/input_common.txt assets/fonts/ui_symbols.txt $(PRACTICE_MEDIA)/astral_projection/text $(PRACTICE_MEDIA)/workout/text
 FONT_FILES := \
 	$(FONT_SUBSET_DIR)/NotoSans-App-Regular.ttf \
 	$(FONT_SUBSET_DIR)/NotoSansSC-App-Regular.otf \
@@ -388,7 +391,7 @@ INBE_BUNDLE := $(BUILD_DIR)/inbe.zx
 INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zx
 CELL_SOURCES := $(shell find apps src/cells -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
 CELL_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp 2>/dev/null)
-CELL_RESOURCES += $(shell rg --files assets/practices design/tai-chi/text 2>/dev/null) apps/practice/content.json design/tai-chi/narration.json design/tai-chi/narration-lines.json $(wildcard design/tai-chi/narration-receipt.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt) $(wildcard design/lumi-guide/*.json) scripts/practice_content.py scripts/generate-lumi-guide-narration.py
+CELL_RESOURCES += $(shell find -L $(PRACTICE_MEDIA) -type f -not -path '*/.git/*' 2>/dev/null) $(shell rg --files design/tai-chi/text 2>/dev/null) apps/practice/content.json design/tai-chi/narration.json design/tai-chi/narration-lines.json $(wildcard design/tai-chi/narration-receipt.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt) $(wildcard design/lumi-guide/*.json) scripts/practice_content.py scripts/generate-lumi-guide-narration.py
 CELL_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievement-locales/*.json)
 CELL_RESOURCES += $(wildcard assets/*/sidebar.shape)
 
