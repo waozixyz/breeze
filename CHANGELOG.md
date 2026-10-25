@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.48] - 2026-10-25
+
+- Arcade uses large rounded game covers in the same dark library on every device.
+- Download Apfelwurm and other Arcade games individually while keeping installed games and saves.
+
 ## [2.1.47] - 2026-10-25
 
 - App downloads show their progress and open the app when ready.
