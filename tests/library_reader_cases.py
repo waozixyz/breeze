@@ -31,7 +31,11 @@ class LibraryReaderCases:
         return int(self.page_label().split(" / ")[0])
 
     def page_text(self):
-        return self.driver.wait(key=27502)["label"]
+        passage = self.driver.wait(key=27502)
+        heading = self.driver.wait(key=27501)
+        assert passage["hidden_lines"] == heading["hidden_lines"] == 0, (heading, passage)
+        assert passage["y"] >= heading["y"] + heading["height"], (heading, passage)
+        return passage["label"]
 
     def wait_page(self, number):
         deadline = time.monotonic() + 20
@@ -48,10 +52,11 @@ class LibraryReaderCases:
         self.driver.wait_idle(frames=3)
 
     def press_chapter(self, number):
-        for _ in range(14):
-            matches = self.driver.find(label=str(number), role="button", visible=True)
+        for _ in range(82):
+            matches = self.driver.find(key=27200 + number, role="button", visible=True)
             if matches:
-                self.driver.press(label=str(number), role="button")
+                assert matches[0]["label"].startswith(f"{number} · "), matches[0]
+                self.driver.press(key=27200 + number, role="button")
                 return
             self.driver.pointer(*self.driver.center(self.driver.wait(key=27605)), wheel=-3)
             self.driver.release_pointer()
@@ -73,6 +78,7 @@ class LibraryReaderCases:
         self.driver.wait_gone(key=27800)
         first = self.page_text()
         assert self.chapter_text(1).startswith(first), first
+        self.driver.wait(key=27501, label="1 · The Nameless Tao")
         initial_total = int(self.page_label().split(" / ")[1])
         assert initial_total >= 81
         self.driver.wait_gone(label="Apps", role="button")
@@ -98,7 +104,14 @@ class LibraryReaderCases:
         self.capture("reader-light" if theme_after == "Dark" else "reader-dark")
         # Open contents inside the one reader panel; jump to a longer chapter.
         self.open_tools("Contents")
+        self.driver.wait(label="1 · The Nameless Tao", role="button")
+        self.capture("contents")
+        self.press_chapter(81)
+        self.driver.wait(key=27501, label="81 · Words That Are True")
+        assert self.chapter_text(81).startswith(self.page_text()), self.page_text()
+        self.open_tools("Contents")
         self.press_chapter(39)
+        self.driver.wait(key=27501, label="39 · Holding to the One")
         assert self.chapter_text(39).startswith(self.page_text()), self.page_text()
         before = self.page_number()
         self.driver.key("right")

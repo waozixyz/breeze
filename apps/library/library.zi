@@ -184,8 +184,23 @@ ReadingBounds :: () -> Rectangle {
     return Bounds((frame.width - width) / 2, top, width, height)
 }
 
-ReadingProps :: () -> TextProps {
-    return TextProps.{.bounds = ReadingBounds(), .font = Scale(font_size),
+ChapterHeadingProps :: (chapter: s32) -> TextProps {
+    props := TextProps.{.key = 27501,
+        .text = LibraryChapterLabel(chapter, BookChapterTitle(book, chapter)),
+        .bounds = ReadingBounds(), .font = Scale(font_size),
+        .typeface = ifx font_face == 1 then "assets/library/noto-sans.ttf" else "ui",
+        .align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapAuto}
+    props.bounds.height = cast(float32)TextHeight(frame.session, props)
+    return props
+}
+
+ReadingProps :: (chapter: s32) -> TextProps {
+    bounds := ReadingBounds()
+    heading := ChapterHeadingProps(chapter)
+    inset := heading.bounds.height + cast(float32)Scale(16)
+    bounds.y += inset
+    bounds.height -= inset
+    return TextProps.{.bounds = bounds, .font = Scale(font_size),
         .typeface = ifx font_face == 1 then "assets/library/noto-sans.ttf" else "ui",
         .line_gap = Scale(line_gap), .wrap = cast(TextWrap)TextWrapAuto}
 }
@@ -198,8 +213,8 @@ Reflow :: () {
     // passage rather than saving a fabricated page with no room for a line.
     if bounds.width < cast(float32)Scale(60) || bounds.height < cast(float32)Scale(font_size + line_gap) { return }
     count: s32
-    props := ReadingProps()
     for chapter: cast(s32)1..BookChapters(book) {
+        props := ReadingProps(chapter)
         props.text = BookChapter(book, chapter)
         at: s32
         while at < props.text.count && count < LIBRARY_PAGE_LIMIT {
@@ -560,11 +575,14 @@ LayoutPanel :: (bounds: Rectangle) {
 }
 
 ContentsPanel :: (bounds: Rectangle) {
-    grid := MeasureGrid(GridProps.{.bounds = bounds, .min_item_width = Scale(56), .gap = Scale(8)})
     for chapter: cast(s32)1..BookChapters(book) {
         if Button(frame.session, ButtonProps.{.id = 27200 + chapter,
-                .bounds = GridCellBounds(grid, chapter - 1, Scale(48)),
-                .label = NumberText(chapter), .selected = chapter == pages[page_index].chapter,
+                .bounds = Bounds(cast(s32)bounds.x, cast(s32)bounds.y + (chapter - 1) * Scale(56),
+                cast(s32)bounds.width, Scale(48)),
+                .label = LibraryChapterLabel(chapter, BookChapterTitle(book, chapter)),
+                .content_alignment = ContentAlignment.ContentAlignmentStart, .fit_content = true,
+                .size = ControlSize.ControlSizeLarge,
+                .selected = chapter == pages[page_index].chapter,
                 .tone = cast(ButtonTone)ButtonToneNeutral,
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
             TurnPage(LibraryPageFor(pages[:page_count], chapter, 0))
@@ -644,8 +662,7 @@ ReaderPanel :: () {
         }
     }
     if panel_tab == 3 {
-        grid := MeasureGrid(GridProps.{.bounds = bounds, .min_item_width = Scale(56), .gap = Scale(8)})
-        content_height = GridCellsHeight(grid, BookChapters(book), Scale(48))
+        content_height = BookChapters(book) * Scale(56) - Scale(8)
     }
     scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)(27602 + panel_tab), .bounds = bounds,
             .content_height = content_height, .scroll_offset = panel_scroll, .scale = frame.scale})
@@ -692,7 +709,8 @@ ReaderView :: () {
         else if swipe.direction == SwipeDirection.SwipeRight || key == KeyLeft { TurnPage(page_index - 1) }
     }
     current := pages[page_index]
-    props := ReadingProps()
+    heading: TextProps = ChapterHeadingProps(current.chapter)
+    props: TextProps = ReadingProps(current.chapter)
     props.text = BookChapter(book, current.chapter)[current.start:current.end]
     props.key = 27502
     // Emphasize only marked words; never paint a rectangle over the page.
@@ -720,7 +738,10 @@ ReaderView :: () {
         }
     }
     props.strong = marks[:merged]
-    if !panel_open { Text(frame.session, props) }
+    if !panel_open {
+        Text(frame.session, heading)
+        Text(frame.session, props)
+    }
     ReaderToolbar()
     label: Vec(u8)
     BuilderPrint(*label, "% / %", page_index + 1, page_count)

@@ -101,6 +101,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-library-") as directory:
     with sqlite3.connect(profile / "inbe.db") as db:
         user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
         seeded = {"language": "en", "language_system": 0, "language_setup_done": 1, "apps_setup_done": 1,
+                  "theme": 4, "ui_scale": 10,
                   "tutorial_seen": 1, "habits_guide_seen": 1, "lumi_guides_seen": 127, "launcher_guide_seen": 1,
                   "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
                   "node_apps_checked_at": int(time.time())}
