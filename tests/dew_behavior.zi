@@ -312,8 +312,31 @@ Check :: () -> s32 {
         "{\"xmr_usd_cents\":34512,\"updated_at\":1789000000,\"sources\":[\"coingecko\",\"kraken\"],\"xmr_atomic_units\":1000000000000,\"token_units\":10000000000}",
         *rates) && rates.known && rates.usd_cents_per_xmr == 34512)
     dew_rates = rates
+    dew_address = .{}
     check_true("100 Dew is 0.01 XMR at 10000 Dew per XMR", DewXmrAtomic(100 * DewUnits) == 10000000000)
     check_true("0.01 XMR at 345.12 USD is 3.45 USD", DewUsdCents(10000000000) == 345)
+    // The public response can predate a changed deposit quote. The balance
+    // must use the quote that will actually credit this address.
+    dew_rates.token_units = 1000 * DewUnits
+    unused AppCopyText(TestAddress, dew_address[:])
+    dew_rate_atomic = 1000000000000LL
+    dew_rate_units = 10000 * DewUnits
+    check_true("98 Dew uses the deposit quote despite an older public ratio",
+        DewXmrAtomic(98 * DewUnits) == 9800000000LL)
+    check_true("98 Dew dollar value follows the same deposit quote",
+        DewUsdCents(DewXmrAtomic(98 * DewUnits)) == 338)
+    funding := DewFundingRate()
+    check_true("displayed exchange and balance use one invertible quote",
+        DewUnitsForXmr(DewXmrAtomic(98 * DewUnits), funding.xmr_atomic_units,
+            funding.token_units) == 98 * DewUnits)
+    dew_rates = DewRates.{}
+    check_true("a deposit quote works without a public rates response",
+        DewXmrAtomic(98 * DewUnits) == 9800000000LL)
+    check_true("a deposit quote alone never invents a dollar price",
+        DewUsdCents(DewXmrAtomic(98 * DewUnits)) == 0)
+    dew_address = .{}
+    check_true("a quote without its address is not reused",
+        DewXmrAtomic(98 * DewUnits) == 0)
     stale: DewRates
     check_true("a node without a current price still gives the Dew ratio", DewParseRates(
         "{\"xmr_usd_cents\":0,\"updated_at\":0,\"sources\":[],\"xmr_atomic_units\":1000000000000,\"token_units\":10000000000}",

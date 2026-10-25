@@ -268,14 +268,15 @@ ProfileDewDraw :: (app: *InnerBreeze, x: s32, y: *s32, width: s32) {
     y.* += height
 }
 
-// "0.1 XMR = 1000 Dew, about 55.66 USD" from the node's published rates; the
+// "0.1 XMR = 1000 Dew, about 55.66 USD" from the node's funding quote; the
 // USD part only while the node has a current Monero price.
 ProfileDewExchangeText :: (output: []u8) -> bool {
-    if !dew_rates.known {
+    rates := DewFundingRate()
+    if !rates.known {
         return false
     }
     atomic: s64 = DewExampleAtomic
-    units := DewUnitsForXmr(atomic, dew_rates.xmr_atomic_units, dew_rates.token_units)
+    units := DewUnitsForXmr(atomic, rates.xmr_atomic_units, rates.token_units)
     if units <= 0 {
         return false
     }
@@ -445,6 +446,13 @@ ProfileTopUpOpen :: (app: *InnerBreeze) {
     profile_topup_started = false
     profile_topup_failed = false
     profile_topup_copied = false
+    // Reopening asks for a fresh quote, even if this account has deposited
+    // before. Never keep an old address rate for the lifetime of the app.
+    dew_address = .{}
+    dew_rate_atomic = 0
+    dew_rate_units = 0
+    dew_confirmations = 0
+    dew_minimum_atomic = 0
     app_open_modal(app, cast(ModalType)ModalDewTopUp)
 }
 
@@ -508,24 +516,6 @@ ProfileTopUpContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bo
         }
         return
     }
-    // The address's rate, shown for 0.1 XMR like every Dew price.
-    xmr: [48]u8
-    dew: [48]u8
-    unused DewFormat(DewExampleAtomic, 1000000000000LL, xmr[:])
-    unused DewFormat(DewUnitsForXmr(DewExampleAtomic, dew_rate_atomic, dew_rate_units), DewUnits, dew[:])
-    rate_arguments: [2]FormatArg = .[
-    FormatArg.{.text = TextUntilNul(xmr[:]), .is_text = true},
-    FormatArg.{.text = TextUntilNul(dew[:]), .is_text = true}]
-    unused FormatTemplate(LocaleText("profile_dew_rate"), rate_arguments[:], line[:])
-    rate_usd: [48]u8
-    if DewUsdText(DewExampleAtomic, rate_usd[:]) {
-        about: [96]u8
-        usd_arguments: [1]FormatArg = .[FormatArg.{.text = TextUntilNul(rate_usd[:]), .is_text = true}]
-        unused FormatTemplate(LocaleText("dew_about_usd"), usd_arguments[:], about[:])
-        unused AppAppendText(" · ", line[:])
-        unused AppAppendText(TextUntilNul(about[:]), line[:])
-    }
-    ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppFontSize(), draw)
     // A minimum below one Dew's worth is noise, so only a real one is named.
     line = .{}
     if dew_minimum_atomic >= TopUpMinimumShown {
