@@ -68,7 +68,7 @@ with tempfile.TemporaryDirectory(prefix='breeze-account-progress-') as directory
             with sqlite3.connect((profile / 'inbe.db').as_uri() + '?mode=ro', uri=True) as db:
                 record = json.loads(db.execute('SELECT value FROM settings WHERE user_id=? AND key=?', (user, key)).fetchone()[0])
                 assert record['unlocked'] == 40 and record['completed'] == '1' * 39, record
-                assert record['state'].startswith('M1'), record
+                assert 'state' not in record, record
                 assert db.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'entity.game-progress.%'").fetchone()[0] == 1
-                assert db.execute("SELECT COUNT(*) FROM settings WHERE key LIKE '%.campaign' AND value<>''").fetchone()[0] == 0
-print('Breeze nested Shovey resumes level 40 and completion marks after a cold restart, with one shared campaign and no wrapper campaign')
+                assert db.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'local.%.campaign' AND value<>''").fetchone()[0] == 1
+print('Breeze nested Shovey resumes level 40 and completion marks after a cold restart, with unlock-only account progress and a device-only campaign')
