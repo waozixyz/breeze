@@ -162,6 +162,18 @@ storage_sync_record_merge :: (plain: *StorageJsonBuilder, collection: string, re
         return
     }
     own := AppTextFromCString(plain.data, cast(s32)(plain.len + 1))
+    // Old cached records may still contain a board. Canonicalize before
+    // encryption even when no earlier remote copy exists to merge with.
+    if collection == EntityGameProgressCollection {
+        progress := EntityGameProgressMerge(own, own)
+        if progress == "" { plain.ok = 0; return }
+        storage_json_builder_free(plain)
+        plain.ok = 1
+        storage_json_builder_append_text(plain, progress)
+        PackageFree(progress)
+        if plain.ok == 0 || plain.data == null { return }
+        own = AppTextFromCString(plain.data, cast(s32)(plain.len + 1))
+    }
     sql: [256]u8
     AppCopyText(ifx collection == EntityGameProgressCollection then
         "SELECT json FROM sync_record_copies WHERE collection=?1 AND id=?2" else

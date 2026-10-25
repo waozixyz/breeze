@@ -50,7 +50,7 @@ with tempfile.TemporaryDirectory(prefix='breeze-account-progress-') as directory
                         app_used_practices=1, package_updates_allowed=0, sync_enabled=0,
                         apps_last_update_check=1900000000, node_apps_checked_at=int(time.time()),
                         navigation_placement=2, node_apps_offers='arcade|Arcade\n', node_app_slot_0='arcade', app_used_arcade=1)
-        settings[key] = json.dumps(dict(game='shovey.classic', unlocked=40, completed='1' * 39, state=''))
+        settings[key] = json.dumps(dict(game='shovey.classic', unlocked=40, completed='1' * 39))
         for name, value in settings.items():
             db.execute('INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value', (user, name, str(value)))
     for attempt in ('first', 'restart'):
