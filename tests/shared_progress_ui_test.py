@@ -17,6 +17,11 @@ assert int(os.environ['DISPLAY'].split(':')[-1].split('.')[0]) >= 400
 assert os.environ['YUE_DESKTOP_RECOVERY'] == '0'
 root = Path(__file__).resolve().parents[1]
 binary, bundle = map(lambda value: Path(value).resolve(), sys.argv[1:3])
+sys.path.insert(0, str(root / 'scripts'))
+from practice_content import bundle_assets
+
+catalog = json.loads(bundle_assets(bundle.read_bytes())['assets/apps/catalog.json'])
+assert catalog['id'] == 'inbe.arcade', 'Pass the Arcade collection, not standalone Shovey'
 output = root / 'build/shared-progress-ui-test'
 output.mkdir(parents=True, exist_ok=True)
 driver = UiDriver(output / 'driver')

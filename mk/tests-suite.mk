@@ -139,6 +139,7 @@ test: app-preferences-sync-test
 test: package-version-test
 test: play-screenshots-test
 test: package-workflow-test
+test: node-app-games-test
 test: package-manifest-test
 test: package-upload-test
 test: package-receiver-test

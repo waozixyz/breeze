@@ -79,6 +79,10 @@ package-version-test:
 package-workflow-test:
 	python3 tests/package_workflow_test.py
 
+.PHONY: node-app-games-test
+node-app-games-test:
+	python3 tests/node_app_games_test.py
+
 .PHONY: package-manifest-test
 package-manifest-test:
 	python3 tests/package_manifests_test.py
