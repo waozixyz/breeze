@@ -18,12 +18,18 @@
 #import "kryon/app_context_host"
 #import "layout_props"
 #import "loading_indicator"
+#import "drawing_props"
+#import "box_widget"
+#import "box_props"
 #import "layout"
 #import "layout_widget"
 #import "tree"
 #import "tree_input"
 #import "test_driver"
 #import, file "../platform/raylib_text_input.zi";
+#if #defined(PLATFORM_WEB) == false {
+    #import "kryon/raylib_runtime"
+}
 #import, file "../apps/node_apps.zi";
 #import, file "../apps/node_app_runner.zi";
 #import, file "../apps/node_app_tree.zi";
@@ -258,6 +264,48 @@ node_app_screen_opens :: (slot: s32) -> bool {
     return NodeAppInstalled(slot)
 }
 
+// The apps and games, by identity, shown whole once. Until then their first
+// frame, and every frame while Kryon still decodes pictures, shows the
+// loading screen instead of drawing gaps where the pictures will be.
+// Pictures already decoded keep the cover to that first frame.
+node_screen_shown: [16]u64;
+node_screen_shown_next: s32;
+node_screen_opening: u64;
+
+NodeScreenIdentity :: (slot: s32) -> u64 {
+    identity := (cast(u64)(slot + 1) << cast(u64)48)
+    runtime := NodeTreeRuntime(slot)
+    if runtime != null && runtime.node != null {
+        identity = identity ^ KeyHash(TextUntilNul(runtime.node.identity.id[:]))
+    }
+    return identity
+}
+
+NodeScreenShown :: (identity: u64) -> bool {
+    for shown: node_screen_shown {
+        if shown == identity { return true }
+    }
+    return false
+}
+
+// Pictures the backend still reads or decodes; the browser draws each one
+// itself when it is ready.
+NodeScreenImagesPending :: () -> s32 {
+    #if #defined(PLATFORM_WEB) {
+        return 0
+    } else {
+        return ImagesPending()
+    }
+}
+
+NodeScreenCover :: (app: *InnerBreeze, area: Rectangle) {
+    Box(app.ui.session, BoxProps.{.key = KeyHash("inbe/node-app/cover"), .bounds = area,
+            .fill = StyleTokenColor("canvas")})
+    LoadingIndicator(app.ui.session, LoadingIndicatorProps.{.key = KeyHash("inbe/node-app/cover-loading"),
+            .bounds = area, .now = GetTime(), .scale = MetricsScale()})
+    AppRequestSmoothFrames(2)
+}
+
 // While an app opens: Kryon's loading dots, the same everywhere, in the
 // middle of the app's area.
 NodeScreenLoading :: (app: *InnerBreeze) {
@@ -354,6 +402,18 @@ node_app_screen_draw :: (app: *InnerBreeze) {
     NodeAppUiBegin(NodeScreenUiCall, cast(*void)app)
     unused NodeAppRunMessage(slot, message)
     NodeAppUiEnd()
+    identity := NodeScreenIdentity(slot)
+    if !NodeScreenShown(identity) {
+        if node_screen_opening != identity {
+            node_screen_opening = identity
+            NodeScreenCover(app, area)
+        } else if NodeScreenImagesPending() > 0 {
+            NodeScreenCover(app, area)
+        } else {
+            node_screen_shown[node_screen_shown_next] = identity
+            node_screen_shown_next = (node_screen_shown_next + 1) % 16
+        }
+    }
     if clip.opened { unused End(app.ui.session) }
     WidgetHostEnd()
     NodeScreenMediaPicker(app)
