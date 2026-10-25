@@ -1,0 +1,135 @@
+// Practice's home is Practices' own: the bundled package draws the chosen
+// practice's card from the frame the host gives it, reads each tab through
+// the host, and gives back what was asked for with where its buttons were.
+#import "session"
+#import "geometry"
+#import "tree"
+#import "tree_draw"
+#import "paint_queue"
+#import "bundle_host"
+#import "byte_text_linux"
+#import "hosted_values"
+#import "widget_host"
+#import "drawing_props"
+#import, file "../src/apps/module_host.zi";
+#import, file "../src/apps/practice_types.zi";
+#import, file "../src/apps/practice_ui_types.zi";
+#import, file "../src/apps/app_codec.zi";
+
+using HostValueKind;
+
+home_test_frame: PracticeHomeFrame;
+home_test_codec: WidgetPracticeHomeFrameCodec;
+home_test_tab_codec: WidgetPracticeHomeTabCodec;
+home_test_reads: s32;
+home_test_writes: s32;
+home_test_tabs: s32;
+
+HomeTestAssets :: (path: string) -> bool {
+    return path.count == 0
+}
+
+HomeTestCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "practice_home_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadPracticeHomeHost" && count == 0 {
+        home_test_reads += 1
+        result.* = WidgetEncodePracticeHomeFrame(home_test_frame, *home_test_codec)
+        return 1
+    }
+    if name == "WritePracticeHomeHost" && count == 1 && WidgetValidPracticeHomeFrame(arguments[0]) {
+        home_test_writes += 1
+        home_test_frame = WidgetDecodePracticeHomeFrame(arguments[0], *home_test_codec)
+        return 1
+    }
+    if name == "ReadPracticeHomeTabHost" && count == 1 {
+        index := cast(s32)arguments[0].integer
+        if index < 0 || index >= home_test_frame.tab_count { return 0 }
+        home_test_tabs += 1
+        tab := PracticeHomeTab.{.label = ifx index == 0 then "Meditation" else "Yoga", .slot = index}
+        result.* = WidgetEncodePracticeHomeTab(tab, *home_test_tab_codec)
+        return 1
+    }
+    if name == "PracticeLocaleHost" && count == 1 {
+        text := "Start"
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
+}
+
+HomeTestDraw :: (frame: PracticeHomeFrame, frame_id: u64) -> s32 {
+    session := SessionOpen()
+    BeginFrame(session, frame_id, Rectangle.{0.0, 0.0, 411.0, 900.0})
+    frame.session = session
+    home_test_frame = frame
+    home_test_reads = 0
+    home_test_writes = 0
+    home_test_tabs = 0
+    WidgetHostBegin(session, HomeTestAssets)
+    AppsUiBegin(HomeTestCall, null)
+    drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_HOME_VIEW})
+    AppsUiEnd()
+    WidgetHostEnd()
+    painted := PendingPaintCount(session)
+    unused EndFrame(session)
+    unused SessionClose(session)
+    if !drawn.succeeded { return 1 }
+    if home_test_reads != 1 || home_test_writes != 1 { return 2 }
+    if painted == 0 { return 3 }
+    return 0
+}
+
+HomeTestInside :: (inner: Rectangle, outer: Rectangle) -> bool {
+    return inner.width > 0.0 && inner.height > 0.0 && inner.x >= outer.x &&
+    inner.y >= outer.y && inner.x + inner.width <= outer.x + outer.width &&
+    inner.y + inner.height <= outer.y + outer.height
+}
+
+// Draws a ready practice with its manual and settings, then asks for the
+// next and previous practice with the arrow keys, and draws one that offers
+// Install; returns 0 when the package drew each through the host.
+CheckPracticeHome :: () -> s32 {
+    frame := PracticeHomeFrame.{.scale = 1.0, .view_width = 411, .view_height = 900,
+        .top = 48, .bottom = 60, .font = 16, .small_font = 14,
+        .canvas_color = Color.{.r = 245, .g = 248, .b = 246, .a = 255},
+        .surface_color = Color.{.r = 255, .g = 255, .b = 255, .a = 255},
+        .accent_color = Color.{.r = 120, .g = 200, .b = 160, .a = 255},
+        .choosing = true, .practice = 1, .title = "Meditation",
+        .subtitle = "Settle in with a quiet timer", .tab_count = 4, .tab_selected = 0,
+        .listed = 4, .index = 1, .ready = true, .has_manual = true, .has_config = true}
+    ready := HomeTestDraw(frame, cast(u64)1)
+    if ready != 0 { return ready }
+    if home_test_tabs != 4 { return 4 }
+    if home_test_frame.action != PRACTICE_HOME_NONE { return 5 }
+    page := Rectangle.{0.0, 48.0, 411.0, 792.0}
+    // Start, the manual and the settings are on the card, for Lumi's guide.
+    if !HomeTestInside(home_test_frame.start, page) ||
+    !HomeTestInside(home_test_frame.manual, page) ||
+    !HomeTestInside(home_test_frame.config, page) || home_test_frame.card.height <= 0.0 { return 6 }
+    frame.key_right = true
+    if HomeTestDraw(frame, cast(u64)2) != 0 || home_test_frame.action != PRACTICE_HOME_STEP ||
+    home_test_frame.value != 1 { return 7 }
+    frame.key_right = false
+    frame.key_left = true
+    if HomeTestDraw(frame, cast(u64)3) != 0 || home_test_frame.action != PRACTICE_HOME_STEP ||
+    home_test_frame.value != -1 { return 8 }
+    // Under Lumi's guide the arrow keys are the guide's.
+    frame.choosing = false
+    if HomeTestDraw(frame, cast(u64)4) != 0 || home_test_frame.action != PRACTICE_HOME_NONE { return 9 }
+    frame.key_left = false
+    frame.choosing = true
+    frame.ready = false
+    frame.offer = PRACTICE_OFFER_INSTALL
+    frame.offer_label = "Install · 164 KB"
+    frame.status = "Downloading…"
+    if HomeTestDraw(frame, cast(u64)5) != 0 { return 10 }
+    // A practice that is not ready has only its offer, no manual or settings.
+    if !HomeTestInside(home_test_frame.start, page) || home_test_frame.manual.width != 0.0 ||
+    home_test_frame.config.width != 0.0 { return 11 }
+    return 0
+}

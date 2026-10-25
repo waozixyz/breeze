@@ -3,7 +3,7 @@
 
 Released versions kept Diary photos as Diary files and the media library in
 private.inbe.v1.media, each photo's bytes as one old sealed copy at
-/api/v1/blobs/inbe/ (src/cells/diary_records.zi). The fixture holds that
+/api/v1/blobs/inbe/ (src/apps/diary_records.zi). The fixture holds that
 profile's database rows and, in fixture_node_blobs, the old copies its two
 nodes hold. Its tables are Inbe 1.8.9's (schema-1.8.9.sql) with the
 sync_record_copies and diary_blobs tables of 2.1.43; the upgrade adds the

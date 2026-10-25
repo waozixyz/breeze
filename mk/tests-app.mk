@@ -9,7 +9,7 @@ route-catalog-test: $(ZI2C_BIN)
 	@sh tests/route_catalog_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: ziran-behavior-tests
-ziran-behavior-tests: cells $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A) $(RAYLIB_A)
+ziran-behavior-tests: apps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A) $(RAYLIB_A)
 	@set -e; for t in storage_more habit_model habit_sessions habit_form; do \
 		env -u DISPLAY -u WAYLAND_DISPLAY sh tests/$${t}_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A); \
 	done
@@ -157,7 +157,7 @@ modal-rules-test: build-laws $(ZI2C_BIN)
 	@sh tests/modal_rules_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: elist-screen-test
-elist-screen-test: cells $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
+elist-screen-test: apps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
 	@sh tests/elist_screen_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: app-click-block-zi-test

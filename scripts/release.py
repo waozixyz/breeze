@@ -40,7 +40,7 @@ SUBJECT = "Release Inner Breeze {version}"
 # What ./update_version.sh writes; only these may join the release commit.
 VERSION_FILES = ("droid/app/build.gradle", "src/core/version.h", "src/core/version.zi", "windows/inbe.rc",
                  "packaging/*", "fastlane/metadata/android/en-US/changelogs/*.txt", "apps/*/CHANGELOG.md",
-                 "apps/versions.json", "src/cells/versions.zi", "src/cells/host_api.zi")
+                 "apps/versions.json", "src/apps/versions.zi", "src/apps/host_api.zi")
 
 
 def load(name, path):

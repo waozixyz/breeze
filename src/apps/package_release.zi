@@ -1,0 +1,194 @@
+// Inner Breeze's policy over daochi-client's signed releases (release.zi):
+// which app, runtime, APIs and dependencies a release may name.
+#import "json_scan"
+#import "byte_text_linux"
+#import "text"
+#import "vec"
+#import "bundle_host"
+#import "release"
+#import, file "asset_paths.zi";
+#import, file "module_types.zi";
+#import, file "catalog.zi";
+#import, file "host_api.zi";
+#import, file "inbe_types.zi";
+#import, file "package_files.zi";
+#import, file "../app/text_buffers.zi";
+#import "crypto"
+
+c :: #system_library "c";
+PackageCheckSignature :: (signature: *u8, public_key: *u8,
+    message: *u8, length: usize) -> s32 #foreign c "crypto_ed25519_check";
+
+PackageRelease :: struct {
+    sequence: s32
+    version: [32]u8
+    hash: [65]u8
+    key_id: [64]u8
+    size: s64
+    valid: bool
+    dependency_hashes: [PackageCount][65]u8
+    dependency_sizes: [PackageCount]s64
+    dependency_versions: [PackageCount][32]u8
+}
+
+PackageField :: (json: string, at: s32, key: string, output: []u8) -> string {
+    count := ReadStringText(json, FieldAt(json, at, key), output)
+    if count <= 0 || count >= output.count {
+        return ""
+    }
+    output[count] = cast(u8)0
+    return TextFromBytes(output[0:count])
+}
+
+PackageNumber :: (json: string, at: s32, key: string) -> s64 {
+    number := ReadNumber(json, FieldAt(json, at, key))
+    if !number.valid || number.value < 0.0 || number.value > 2147483647.0 {
+        return -1
+    }
+    integer := cast(s64)number.value
+    if cast(float64)integer != number.value {
+        return -1
+    }
+    return integer
+}
+
+PackageVerifySignature :: (signature: *u8, public_key: *u8, message: *u8, length: usize) -> bool {
+    return PackageCheckSignature(signature, public_key, message, length) == 0
+}
+
+PackageParseRelease :: (json: string, index: s32, public_hex: string) -> PackageRelease {
+    return PackageParseReleaseFor(json, PackageID(index), index, public_hex)
+}
+
+// A release of app_id; index is its package slot, or -1 for an app the
+// node offers that has none yet. Only the root has dependencies.
+PackageParseReleaseFor :: (json: string, app_id: string, index: s32, public_hex: string) -> PackageRelease {
+    release: PackageRelease
+    signed := DaochiParseRelease(json, public_hex, PackageMaximumBytes, PackageVerifySignature)
+    if !signed.valid || app_id.count == 0 || TextFromCString(*signed.app_id[0]) != app_id ||
+    TextFromCString(*signed.runtime[0]) != "kryon-app-v1" ||
+    signed.host_api < PackageHostAPIOldest || signed.host_api > PackageHostAPI ||
+    signed.module_api != PackageModuleAPI || signed.data_schema != 0 {
+        return release
+    }
+    count := signed.dependency_count
+    if (index == 0 && count != 3 && count != 5 && count != 6) || (index != 0 && count != 0) {
+        return release
+    }
+    for dependency: cast(s32)0..count - 1 {
+        entry := signed.dependencies[dependency]
+        id := TextFromCString(*entry.app_id[0])
+        dependency_index: s32 = -1
+        for candidate: cast(s32)1..cast(s32)(PackageCount - 1) {
+            if count == 3 && (PackageBit(candidate) & APP_RECOMMENDED) == 0 { continue }
+            if id == PackageID(candidate) {
+                dependency_index = candidate
+            }
+        }
+        if dependency_index < 0 || release.dependency_sizes[dependency_index] != 0 {
+            return PackageRelease.{}
+        }
+        unused AppCopyText(TextFromCString(*entry.sha256[0]), release.dependency_hashes[dependency_index][:])
+        release.dependency_sizes[dependency_index] = entry.size
+        unused AppCopyText(TextFromCString(*entry.version[0]), release.dependency_versions[dependency_index][:])
+    }
+    unused AppCopyText(TextFromCString(*signed.version[0]), release.version[:])
+    unused AppCopyText(TextFromCString(*signed.key_id[0]), release.key_id[:])
+    unused AppCopyText(TextFromCString(*signed.artifacts[0].sha256[0]), release.hash[:])
+    release.size = signed.artifacts[0].size
+    release.sequence = cast(s32)signed.sequence
+    release.valid = true
+    return release
+}
+
+PackageCompare :: (left: string, right: string) -> s32 {
+    at: s64 = 0
+    while at < left.count && at < right.count {
+        if left[at] < right[at] {
+            return -1
+        }
+        if left[at] > right[at] {
+            return 1
+        }
+        at += 1
+    }
+    return ifx left.count < right.count then -1 else ifx left.count > right.count then 1 else 0
+}
+
+PackageVerifyBytes :: (bytes: string, release: PackageRelease) -> bool {
+    // A ZX bundle starts with "ZX" and two zero bytes.
+    if !release.valid || bytes.count != release.size || bytes.count < 8 ||
+    bytes[0] != cast(u8)90 || bytes[1] != cast(u8)88 ||
+    bytes[2] != cast(u8)0 || bytes[3] != cast(u8)0 {
+        return false
+    }
+    actual: [65]u8
+    payload := cast(*TextDescriptor)(*bytes)
+    Sha256Hex(payload.data,
+        bytes.count, *actual[0])
+    if TextFromCString(*actual[0]) != TextFromBytes(release.hash[0:64]) {
+        return false
+    }
+    dependent := false
+    for index: cast(s32)1..cast(s32)(PackageCount - 1) {
+        dependent = dependent || release.dependency_sizes[index] != 0
+    }
+    if !dependent {
+        return true
+    }
+    root := OpenBundleBytes(payload.data, cast(u64)bytes.count)
+    if root == null {
+        return false
+    }
+    defer {
+        CloseBundle(root)
+    }
+    if BundleAssets(root) < cast(u64)2 || BundleAssets(root) > cast(u64)2048 {
+        return false
+    }
+    matched: [PackageCount]bool
+    asset: u64 = 0
+    while asset < BundleAssets(root) {
+        name := AppBundlePath(TextFromCString(BundleAssetPath(root, asset)))
+        index: s32 = -1
+        if name == "cells/lists.zx" {
+            index = 1
+        }
+        if name == "cells/habits.zx" {
+            index = 2
+        }
+        if name == "cells/practices.zx" {
+            index = 3
+        }
+        if name == "cells/lumi.zx" {
+            index = 5
+        }
+        if name == "cells/diary.zx" {
+            index = 4
+        }
+        if name == "cells/leaderboard.zx" {
+            index = 6
+        }
+        if index < 0 {
+            if !PackageResourceValid(name, MODULE_INBE) { return false }
+            asset += 1
+            continue
+        }
+        if matched[index] || cast(s64)BundleAssetLength(root, asset) != release.dependency_sizes[index] {
+            return false
+        }
+        Sha256Hex(BundleAssetBytes(root, asset),
+            cast(s64)BundleAssetLength(root, asset), *actual[0])
+        if TextFromCString(*actual[0]) != TextFromBytes(release.dependency_hashes[index][0:64]) {
+            return false
+        }
+        matched[index] = true
+        asset += 1
+    }
+    for index: cast(s32)1..cast(s32)(PackageCount - 1) {
+        if release.dependency_sizes[index] > 0 && !matched[index] {
+            return false
+        }
+    }
+    return true
+}

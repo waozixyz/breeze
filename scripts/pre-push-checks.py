@@ -59,8 +59,8 @@ def plan(files):
         checks.append(("translations and fonts", ["make", "-s", "locale-check"]))
     if any_suffix(".zi"):
         checks.append(("canonical UI APIs", ["make", "-s", "clean-text-api-check", "button-api-check"]))
-    if any_of("apps/", "src/cells/", "locales/"):
-        checks.append(("app bundles", ["make", "-s", "cells-test"]))
+    if any_of("apps/", "src/apps/", "locales/"):
+        checks.append(("app bundles", ["make", "-s", "apps-test"]))
     if any_of(".github/workflows/", "scripts/package-release.py", "scripts/release",
               "scripts/check-version.py", "tests/release_test.py", "tests/package_workflow_test.py"):
         checks.append(("release workflow", ["python3", "tests/release_test.py"]))

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit typed Ziran value codecs for the cell protocol, with schema-sized storage."""
+"""Emit typed Ziran value codecs for the app protocol, with schema-sized storage."""
 
 from pathlib import Path
 import re
@@ -7,7 +7,7 @@ import re
 root = Path(__file__).resolve().parent.parent
 schema = {}
 for file in [
-    *sorted((root / "src/cells").glob("*_types.zi")),
+    *sorted((root / "src/apps").glob("*_types.zi")),
     root / "apps/diary/diary_types.zi",
     root / "src/core/types.zi",
     root / "src/practices/patterns/patterns_types.zi",
@@ -281,4 +281,4 @@ for t in needed:
     lines += ["    return true", "}", ""]
 source = "\n".join(lines)
 source = re.sub(r'("[^"\n]+"|data\.\w+|type_name)\.data', r"HostTextData(\1)", source)
-(root / "src/cells/value_codec.zi").write_text(source)
+(root / "src/apps/value_codec.zi").write_text(source)

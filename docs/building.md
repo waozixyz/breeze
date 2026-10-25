@@ -59,7 +59,7 @@ check viewport sizes, nonblank rendering, and expected screen text. They do
 not copy images into the store listing until visual review is recorded:
 
 ```bash
-make native cells PACKAGE_FLAGS=--locked
+make native apps PACKAGE_FLAGS=--locked
 make screenshot
 # Inspect build/screenshots/review-*.jpg and the full-size PNGs.
 make screenshot-review REVIEWER="your name"
@@ -95,7 +95,7 @@ This uses disposable client databases and a loopback server; see
 [web and sync test coverage](web-testing.md) for details.
 
 The Apps picker, independent ZX packages, update settings, account choices and
-publisher setup are described in [app packages](cells.md).
+publisher setup are described in [app packages](apps.md).
 
 Native binaries are written to `build/bin/<platform>/`. Release artifacts are
 written under `build/dist/`.

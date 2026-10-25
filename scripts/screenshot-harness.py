@@ -167,9 +167,9 @@ def capture(binary):
     binary = Path(binary).resolve()
     bundle = ROOT / "build/inbe-full.zx"
     require(binary.is_file() and os.access(binary, os.X_OK), "Run make native first")
-    require(bundle.is_file(), "Run make cells first")
+    require(bundle.is_file(), "Run make apps first")
     require(binary.stat().st_mtime >= max(p.stat().st_mtime for p in (ROOT / "src").rglob("*.zi")), "native source is newer than the binary; rebuild")
-    require(bundle.stat().st_mtime >= max(p.stat().st_mtime for p in (ROOT / "apps").rglob("*.zi")), "app source is newer than the bundle; rebuild cells")
+    require(bundle.stat().st_mtime >= max(p.stat().st_mtime for p in (ROOT / "apps").rglob("*.zi")), "app source is newer than the bundle; rebuild apps")
     require(shutil.which("xvfb-run") and shutil.which("tesseract"), "Install xvfb and tesseract")
     OUTPUT.mkdir(parents=True, exist_ok=True)
     with (OUTPUT / ".capture.lock").open("w") as lock:

@@ -1,0 +1,781 @@
+// Online Lumi and external MCP clients execute the same validated app actions.
+#import "text"
+#import "vec"
+#import "json_scan"
+#import "byte_text_linux"
+#import "text_buffer"
+#import, file "package_files.zi";
+#import, file "../screens/elist_types.zi";
+#import, file "../screens/diary_screen.zi";
+#import, file "../app/app_types.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/route_types.zi";
+#import, file "../core/types.zi";
+#import, file "module_host.zi";
+#import, file "lumi_types.zi";
+#import, file "lumi_ui_types.zi";
+#import, file "../storage/storage_elist.zi";
+#import, file "lumi_store.zi";
+#import, file "lumi_progress.zi";
+#import, file "lumi_chart.zi";
+#import, file "feedback_store.zi";
+#import, file "../platform/host_actions.zi";
+#import, file "../screens/lumi_screen.zi";
+#import, file "../apps/diary_store.zi";
+#import, file "../app/settings_actions.zi";
+#import, file "../app/appearance_actions.zi";
+#import, file "../app/assets.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../core/device_info.zi";
+#import, file "../core/version.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../practices/practice_registry.zi";
+#import, file "../app/account_activity.zi";
+#import, file "../habits/habit_actions.zi";
+#import, file "../habits/habit_model.zi";
+#import, file "../habits/habit_schedule.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_questions.zi";
+#import, file "../habits/habit_answer_stats.zi";
+#import, file "../habits/habit_calendar.zi";
+#import, file "lumi_habit_tools.zi";
+#import "date_time"
+using AppNavRoute;
+
+AppToolContext :: (app: *InnerBreeze) -> string {
+    out: Vec(u8)
+    active := practice_active(app)
+    BuilderPrint(*out, "{\"app\":\"inbe\",\"locale\":\"%\",\"screen\":%,\"available_apps\":%,\"settings\":{\"theme\":\"%\",\"mode\":%,\"scale\":%,\"navigation\":%,\"style\":%},\"practice\":{\"id\":%,\"paused\":%},\"habits\":[",
+        LocaleActiveCode(), app.breathing.screen, app.enabled_apps & AppsInstalledMask(),
+        AppThemeName(app.theme_id), app.theme_mode, app.ui_scale_tenths,
+        app.navigation_placement, app.style_index,
+        ifx active == null then -1 else cast(s32)active.id, app.session_paused != 0)
+    count := LumiHabitCount(app)
+    if count > 8 { count = 8 }
+    for index: cast(s32)0..count - 1 {
+        habit := LumiHabitAt(app, index)
+        BuilderPrint(*out, "%{\"id\":", ifx index == 0 then "" else ",")
+        LumiJsonString(*out, habit.id)
+        BuilderPrint(*out, ",\"title\":")
+        LumiJsonString(*out, habit.title)
+        progress := LumiHabitProgressAt(app, index)
+        BuilderPrint(*out, ",\"done\":%,\"scheduled_last_14_days\":%,\"done_last_14_days\":%,\"streak_days\":%,\"schedule\":",
+            habit.done, progress.scheduled_days, progress.done_days, progress.streak)
+        stored := *app.habits.items[habits_active_at(*app.habits, index)]
+        schedule := HabitScheduleCurrent(stored)
+        described: [256]u8
+        LumiJsonString(*out, HabitScheduleDescribe(*schedule, described[:]))
+        BuilderPrint(*out, ",\"notification_hour\":%", stored.reminder_hour)
+        AppToolTrackingContext(*out, stored)
+        BuilderPrint(*out, "}")
+    }
+    // Paused habits keep their days out of the list; Lumi can resume them.
+    BuilderPrint(*out, "],\"paused_habits\":[")
+    paused: s32 = 0
+    if app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+        for index: cast(s32)0..app.habits.count - 1 {
+            stored := *app.habits.items[index]
+            if stored.deactivated == 0 || paused >= 8 {
+                continue
+            }
+            BuilderPrint(*out, "%{\"id\":", ifx paused == 0 then "" else ",")
+            LumiJsonString(*out, AppTextFromCString(*stored.id[0], HABIT_ID_SIZE))
+            BuilderPrint(*out, ",\"title\":")
+            LumiJsonString(*out, AppTextFromCString(*stored.name[0], HABIT_NAME_SIZE))
+            BuilderPrint(*out, "}")
+            paused += 1
+        }
+    }
+    BuilderPrint(*out, "],\"tasks\":[")
+    if app_nav_route_available(app, APP_NAV_ROUTE_ELIST) {
+        unused storage_elist_load(cast(*void)*lumi_tasks)
+        count = lumi_tasks.item_count
+        if count > 8 { count = 8 }
+        for index: cast(s32)0..count - 1 {
+            task := LumiTaskAt(index)
+            BuilderPrint(*out, "%{\"id\":", ifx index == 0 then "" else ",")
+            LumiJsonString(*out, task.id)
+            BuilderPrint(*out, ",\"title\":")
+            LumiJsonString(*out, task.title)
+            BuilderPrint(*out, ",\"done\":%}", task.done)
+        }
+    }
+    activity: [2048]u8
+    unused ActivityContext(activity[:])
+    BuilderPrint(*out, "],\"account_activity\":%,\"local_time\":", TextUntilNul(activity[:]))
+    LumiJsonString(*out, DiaryStoreClock())
+    BuilderPrint(*out, ",\"apps\":{\"lists\":%,\"habits\":%,\"practices\":%,\"diary\":%},\"context_item_limit\":8}",
+        app_nav_route_available(app, APP_NAV_ROUTE_ELIST), app_nav_route_available(app, APP_NAV_ROUTE_HABITS),
+        app_nav_route_available(app, APP_NAV_ROUTE_PRACTICE), app_nav_route_available(app, APP_NAV_ROUTE_DIARY))
+    return BuilderFinish(out)
+}
+
+AppFeedbackContext :: (app: *InnerBreeze) -> string {
+    out: Vec(u8)
+    // Reports carry diagnostics without copying diary, task or habit contents.
+    // The version, system and device let the developer check whether a newer
+    // release already fixes the problem.
+    BuilderPrint(*out, "{\"screen\":%,\"apps\":%,\"theme\":\"%\",\"scale\":%",
+        app.breathing.screen, app.enabled_apps & AppsInstalledMask(), AppThemeName(app.theme_id), app.ui_scale_tenths)
+    details: DeviceDetails
+    DeviceDescribe(*details)
+    BuilderPrint(*out, ",\"version\":\"%\",\"platform\":\"%\",\"system\":", VersionString, DevicePlatform())
+    LumiJsonString(*out, DeviceSystem(*details))
+    BuilderPrint(*out, ",\"device\":")
+    LumiJsonString(*out, DeviceModel(*details))
+    BuilderPrint(*out, ",\"package\":")
+    LumiJsonString(*out, DevicePackage(*details))
+    BuilderPrint(*out, "}")
+    return BuilderFinish(out)
+}
+
+AppToolGoalName :: (kind: s32) -> string {
+    if kind == HABIT_GOAL_AT_LEAST { return "at_least" }
+    if kind == HABIT_GOAL_AT_MOST { return "at_most" }
+    if kind == HABIT_GOAL_BETWEEN { return "between" }
+    if kind == HABIT_GOAL_YES { return "yes" }
+    if kind == HABIT_GOAL_NO { return "no" }
+    if kind == HABIT_GOAL_ABOVE_AVERAGE { return "above_average" }
+    if kind == HABIT_GOAL_BELOW_AVERAGE { return "below_average" }
+    return "none"
+}
+
+AppToolGoalKind :: (name: string) -> s32 {
+    if name == "at_least" { return HABIT_GOAL_AT_LEAST }
+    if name == "at_most" { return HABIT_GOAL_AT_MOST }
+    if name == "between" { return HABIT_GOAL_BETWEEN }
+    if name == "yes" { return HABIT_GOAL_YES }
+    if name == "no" { return HABIT_GOAL_NO }
+    if name == "above_average" { return HABIT_GOAL_ABOVE_AVERAGE }
+    if name == "below_average" { return HABIT_GOAL_BELOW_AVERAGE }
+    if name == "none" || name == "" { return HABIT_GOAL_NONE }
+    return -1
+}
+
+// A goal's bound as Lumi reads and writes it: a time as HH:MM, a number as
+// itself.
+AppToolGoalBound :: (out: *Vec(u8), name: string, value: s32, answer_type: s32) {
+    if answer_type == HABIT_ANSWER_NUMBER {
+        BuilderPrint(out, ",\"%\":%", name, value)
+        return
+    }
+    text: [16]u8
+    BuilderPrint(out, ",\"%\":", name)
+    if answer_type == HABIT_ANSWER_SPAN {
+        LumiJsonString(out, AppToolLengthText(value, text[:]))
+        return
+    }
+    LumiJsonString(out, HabitAnswerTimeText(value, text[:]))
+}
+
+// A span's length as Lumi writes it, hours and minutes: "8:00", "36:30".
+AppToolLengthText :: (minutes: s32, output: []u8) -> string {
+    args: [2]FormatArg
+    args[0].number = minutes / 60
+    args[1].number = minutes % 60
+    unused FormatTemplate("%d:%02d", args[:], output)
+    return AppTextFromCString(*output[0], cast(s32)output.count)
+}
+
+// A length written "H:MM", with up to three digits of hours, in minutes,
+// or -1.
+AppToolLength :: (text: string) -> s32 {
+    colon: s64 = -1
+    index: s64 = 0
+    while index < text.count {
+        if text[index] == cast(u8)58 {
+            colon = index
+        }
+        index += 1
+    }
+    if colon < 1 || colon > 3 || text.count - colon != 3 {
+        return -1
+    }
+    hours: s32 = 0
+    minutes: s32 = 0
+    index = 0
+    while index < text.count {
+        if index != colon {
+            if !HabitTimeDigit(text[index]) {
+                return -1
+            }
+            if index < colon {
+                hours = hours * 10 + cast(s32)text[index] - 48
+            } else {
+                minutes = minutes * 10 + cast(s32)text[index] - 48
+            }
+        }
+        index += 1
+    }
+    if minutes > 59 {
+        return -1
+    }
+    return hours * 60 + minutes
+}
+
+AppToolGoalContext :: (out: *Vec(u8), goal: HabitGoal, answer_type: s32) {
+    BuilderPrint(out, ",\"good\":\"%\"", AppToolGoalName(goal.kind))
+    if goal.kind == HABIT_GOAL_AT_LEAST || goal.kind == HABIT_GOAL_BETWEEN {
+        AppToolGoalBound(out, "low", goal.low, answer_type)
+    }
+    if goal.kind == HABIT_GOAL_AT_MOST || goal.kind == HABIT_GOAL_BETWEEN {
+        AppToolGoalBound(out, "high", goal.high, answer_type)
+    }
+}
+
+// How a habit tracks its days, and the questions it asks, for Lumi.
+AppToolTrackingContext :: (out: *Vec(u8), habit: *Habit) {
+    mode := "check"
+    if habit.span != 0 {
+        mode = "span"
+    } else if habit_counting_enabled(habit) != 0 {
+        mode = "count"
+    }
+    BuilderPrint(out, ",\"tracking\":{\"mode\":\"%\",\"target\":%", mode,
+        habit_counter_target(habit))
+    if habit.span != 0 {
+        AppToolGoalContext(out, habit.span_goal, HABIT_ANSWER_SPAN)
+    }
+    BuilderPrint(out, "},\"questions\":[")
+    index: s32 = 0
+    while index < habit.question_count {
+        question := *habit.questions[index]
+        BuilderPrint(out, "%{\"text\":", ifx index == 0 then "" else ",")
+        LumiJsonString(out, HabitQuestionText(question))
+        BuilderPrint(out, ",\"answer\":\"%\"", HabitAnswerTypeName(question.answer_type))
+        if question.answer_type != HABIT_ANSWER_TEXT {
+            AppToolGoalContext(out, question.goal, question.answer_type)
+        }
+        BuilderPrint(out, "}")
+        index += 1
+    }
+    BuilderPrint(out, "]")
+}
+
+ToolFailure :: (error: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"ok\":false,\"error\":")
+    LumiJsonString(*out, error)
+    BuilderPrint(*out, "}")
+    return BuilderFinish(out)
+}
+
+// Builds the schedule Lumi asked for (set_habit_schedule in
+// assets/mcp/tools.json) and gives it to the habit from today on.
+AppHabitScheduleTool :: (app: *InnerBreeze, arguments: string) -> string {
+    if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+        return ToolFailure("habits unavailable")
+    }
+    id_bytes: [65]u8
+    id := ToolString(arguments, "id", id_bytes[:])
+    index: s32 = -1
+    for position: cast(s32)0..LumiHabitCount(app) - 1 {
+        if id.count > 0 && LumiHabitAt(app, position).id == id {
+            index = habits_active_at(*app.habits, position)
+        }
+    }
+    if index < 0 {
+        return ToolFailure("no active habit has this id")
+    }
+    repeat_bytes: [16]u8
+    rule: HabitSchedule
+    // Without repeat the habit keeps its days; only the notification changes.
+    keep_days := FieldAt(arguments, 0, "repeat") < 0
+    rule.repeat = HabitScheduleRepeatNamed(ToolString(arguments, "repeat",
+        repeat_bytes[:]))
+    if keep_days {
+        rule = HabitScheduleCurrent(*app.habits.items[index])
+        rule.from = 0
+    } else if rule.repeat == 0 {
+        return ToolFailure("repeat must be daily, weekly, monthly, yearly, formula or none")
+    }
+    if !keep_days {
+        rule.every = 1
+    }
+    every_at := FieldAt(arguments, 0, "every")
+    if keep_days && (every_at >= 0 || FieldAt(arguments, 0, "weekdays") >= 0 ||
+        FieldAt(arguments, 0, "month_days") >= 0 || FieldAt(arguments, 0, "formula") >= 0 ||
+        FieldAt(arguments, 0, "week_of_month") >= 0 || FieldAt(arguments, 0, "start") >= 0 ||
+        FieldAt(arguments, 0, "last_day_of_month") >= 0) {
+        return ToolFailure("planned days need repeat")
+    }
+    if every_at >= 0 {
+        every := ReadNumber(arguments, every_at)
+        if !every.valid || every.value < 1 || every.value > cast(float64)HABIT_SCHEDULE_EVERY_MAX ||
+        every.value != cast(float64)cast(s32)every.value {
+            return ToolFailure("every must be an integer from 1 to 999")
+        }
+        rule.every = cast(s32)every.value
+    }
+    weekdays_at := FieldAt(arguments, 0, "weekdays")
+    if weekdays_at >= 0 {
+        count := ArrayCount(arguments, weekdays_at)
+        if count < 0 {
+            return ToolFailure("weekdays must be a list of day names")
+        }
+        for element: cast(s32)0..count - 1 {
+            name_bytes: [8]u8
+            count_read := ReadStringText(arguments, ElementAt(arguments, weekdays_at, element), name_bytes[:])
+            named: s32 = -1
+            for day: cast(s32)0..cast(s32)6 {
+                if count_read > 0 && count_read < 8 &&
+                TextFromBytes(name_bytes[:count_read]) == HabitScheduleDayNames[day] {
+                    named = day
+                }
+            }
+            if named < 0 {
+                return ToolFailure("weekdays are mon, tue, wed, thu, fri, sat and sun")
+            }
+            rule.weekdays |= 1 << named
+        }
+    }
+    days_at := FieldAt(arguments, 0, "month_days")
+    if days_at >= 0 {
+        count := ArrayCount(arguments, days_at)
+        if count < 0 {
+            return ToolFailure("month_days must be a list of days")
+        }
+        for element: cast(s32)0..count - 1 {
+            day := ReadNumber(arguments, ElementAt(arguments, days_at, element))
+            if !day.valid || day.value < 1 || day.value > 31 ||
+            day.value != cast(float64)cast(s32)day.value {
+                return ToolFailure("month_days are integers from 1 to 31")
+            }
+            rule.month_days |= 1 << (cast(s32)day.value - 1)
+        }
+    }
+    last_at := FieldAt(arguments, 0, "last_day_of_month")
+    if last_at >= 0 && MatchLiteral(arguments, last_at, "true") {
+        rule.last_day = 1
+    }
+    week_bytes: [8]u8
+    week := ToolString(arguments, "week_of_month", week_bytes[:])
+    if week.count > 0 {
+        weeks: [6]string = .["first", "second", "third", "fourth", "fifth", "last"]
+        for which: cast(s32)0..cast(s32)5 {
+            if week == weeks[which] {
+                rule.week_of_month = ifx which == 5 then -1 else which + 1
+            }
+        }
+        if rule.week_of_month == 0 {
+            return ToolFailure("week_of_month must be first, second, third, fourth, fifth or last")
+        }
+        if rule.weekdays == 0 {
+            return ToolFailure("week_of_month needs weekdays")
+        }
+    }
+    start_bytes: [16]u8
+    start := ToolString(arguments, "start", start_bytes[:])
+    if start.count > 0 {
+        rule.start = HabitScheduleDateFromText(start)
+        if rule.start == 0 {
+            return ToolFailure("start must be a date written YYYY-MM-DD")
+        }
+    }
+    formula_bytes: [HABIT_FORMULA_SIZE]u8
+    formula := ToolString(arguments, "formula", formula_bytes[:])
+    if !keep_days && rule.repeat == HABIT_REPEAT_FORMULA {
+        if !HabitScheduleSetFormula(*rule, formula) || !HabitFormulaValid(formula) {
+            return ToolFailure("the formula does not read; see the tool description")
+        }
+    }
+    habit := *app.habits.items[index]
+    reminder_hour := habit.reminder_hour
+    notification_at := FieldAt(arguments, 0, "notification")
+    hour_at := FieldAt(arguments, 0, "notification_hour")
+    if hour_at >= 0 {
+        hour := ReadNumber(arguments, hour_at)
+        if !hour.valid || hour.value < 0 || hour.value > 23 ||
+        hour.value != cast(float64)cast(s32)hour.value {
+            return ToolFailure("notification_hour must be an integer from 0 to 23")
+        }
+        reminder_hour = cast(s32)hour.value
+    }
+    if notification_at >= 0 && MatchLiteral(arguments, notification_at, "false") {
+        reminder_hour = -1
+    } else if notification_at >= 0 && hour_at < 0 && reminder_hour < 0 {
+        return ToolFailure("turning the notification on needs notification_hour")
+    }
+    if !habit_set_schedule(app, index, rule, reminder_hour) {
+        return ToolFailure("the schedule could not be saved")
+    }
+    current := HabitScheduleCurrent(habit)
+    described: [256]u8
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"ok\":true,\"schedule\":")
+    LumiJsonString(*out, HabitScheduleDescribe(*current, described[:]))
+    BuilderPrint(*out, ",\"notification_hour\":%}", habit.reminder_hour)
+    return BuilderFinish(out)
+}
+
+// The active habit with the exact id in arguments, or -1.
+AppToolHabitIndex :: (app: *InnerBreeze, arguments: string) -> s32 {
+    id_bytes: [65]u8
+    id := ToolString(arguments, "id", id_bytes[:])
+    index: s32 = -1
+    for position: cast(s32)0..LumiHabitCount(app) - 1 {
+        if id.count > 0 && LumiHabitAt(app, position).id == id {
+            index = habits_active_at(*app.habits, position)
+        }
+    }
+    return index
+}
+
+// Reads a goal's kind and bounds from the object at object_at: a number
+// or a time as answer_type says. Returns an error or "".
+AppToolReadGoal :: (document: string, object_at: s32, answer_type: s32,
+    goal: *HabitGoal) -> string {
+    goal.* = HabitGoal.{}
+    good_bytes: [16]u8
+    good_at := FieldAt(document, object_at, "good")
+    if good_at < 0 {
+        // Without "good", numbers and times are judged against their
+        // average, as in the editor.
+        goal.* = HabitGoalDefault(answer_type)
+        return ""
+    }
+    good := ""
+    count := ReadStringText(document, good_at, good_bytes[:])
+    if count > 0 && count < 16 {
+        good = TextFromBytes(good_bytes[:count])
+    }
+    kind := AppToolGoalKind(good)
+    if kind < 0 {
+        return "good must be none, above_average, below_average, at_least, at_most, between, yes or no"
+    }
+    if HabitGoalIsAverage(kind) && answer_type != HABIT_ANSWER_NUMBER &&
+    answer_type != HABIT_ANSWER_TIME && answer_type != HABIT_ANSWER_SPAN {
+        return "above_average and below_average judge number and time answers only"
+    }
+    yes_no := kind == HABIT_GOAL_YES || kind == HABIT_GOAL_NO
+    if answer_type == HABIT_ANSWER_TEXT && kind != HABIT_GOAL_NONE {
+        return "text answers have no good answers"
+    }
+    if yes_no != (answer_type == HABIT_ANSWER_YES_NO) && kind != HABIT_GOAL_NONE {
+        return "yes and no are the good answers of yes_no questions only"
+    }
+    goal.kind = kind
+    names: [2]string = .["low", "high"]
+    for which: cast(s32)0..cast(s32)1 {
+        needed := (which == 0 && (kind == HABIT_GOAL_AT_LEAST || kind == HABIT_GOAL_BETWEEN)) ||
+        (which == 1 && (kind == HABIT_GOAL_AT_MOST || kind == HABIT_GOAL_BETWEEN))
+        if needed {
+            at := FieldAt(document, object_at, names[which])
+            value: s32 = -1
+            if at >= 0 && answer_type == HABIT_ANSWER_NUMBER {
+                number := ReadNumber(document, at)
+                if number.valid && number.value >= 0 && number.value <= 999999999 &&
+                number.value == cast(float64)cast(s32)number.value {
+                    value = cast(s32)number.value
+                }
+            } else if at >= 0 {
+                text_bytes: [16]u8
+                count := ReadStringText(document, at, text_bytes[:])
+                if count > 0 && count < 16 && answer_type == HABIT_ANSWER_SPAN {
+                    value = AppToolLength(TextFromBytes(text_bytes[:count]))
+                } else if count > 0 && count < 16 {
+                    hours: s32 = 0
+                    minutes: s32 = 0
+                    if HabitTimeParts(TextFromBytes(text_bytes[:count]),
+                        *hours, *minutes) {
+                        value = hours * 60 + minutes
+                    }
+                }
+            }
+            if value < 0 && answer_type == HABIT_ANSWER_NUMBER {
+                return "low and high must be whole numbers"
+            }
+            if value < 0 && answer_type == HABIT_ANSWER_SPAN {
+                return "a span's low and high are lengths written H:MM, as 8:00"
+            }
+            if value < 0 {
+                return "low and high must be written H:MM"
+            }
+            if which == 0 {
+                goal.low = value
+            } else {
+                goal.high = value
+            }
+        }
+    }
+    if kind == HABIT_GOAL_BETWEEN && answer_type != HABIT_ANSWER_TIME &&
+    goal.low > goal.high {
+        return "low must not be above high"
+    }
+    return ""
+}
+
+// Sets the questions a habit asks (set_habit_questions). A question with
+// the words of one the habit has keeps its id, so its answers stay its.
+AppHabitQuestionsTool :: (app: *InnerBreeze, arguments: string) -> string {
+    if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+        return ToolFailure("habits unavailable")
+    }
+    index := AppToolHabitIndex(app, arguments)
+    if index < 0 {
+        return ToolFailure("no active habit has this id")
+    }
+    list_at := FieldAt(arguments, 0, "questions")
+    count := ArrayCount(arguments, list_at)
+    if list_at < 0 || count < 0 {
+        return ToolFailure("questions must be a list")
+    }
+    if count > HABIT_QUESTION_MAX {
+        return ToolFailure("a habit asks at most 8 questions")
+    }
+    habit := *app.habits.items[index]
+    questions: [HABIT_QUESTION_MAX]HabitQuestion
+    question_count: s32 = 0
+    now := UnixNow()
+    for element: cast(s32)0..count - 1 {
+        item_at := ElementAt(arguments, list_at, element)
+        text_bytes: [HABIT_QUESTION_TEXT_SIZE]u8
+        text_count := ReadStringText(arguments, FieldAt(arguments, item_at, "text"),
+            text_bytes[:])
+        if text_count <= 0 || text_count >= HABIT_QUESTION_TEXT_SIZE {
+            return ToolFailure("each question needs words, up to 95 bytes")
+        }
+        text := TextFromBytes(text_bytes[:text_count])
+        answer_bytes: [16]u8
+        answer_count := ReadStringText(arguments, FieldAt(arguments, item_at, "answer"),
+            answer_bytes[:])
+        answer := ""
+        if answer_count > 0 && answer_count < 16 {
+            answer = TextFromBytes(answer_bytes[:answer_count])
+        }
+        if answer != "text" && answer != "number" && answer != "time" && answer != "yes_no" {
+            return ToolFailure("answer must be text, number, time or yes_no")
+        }
+        question := *questions[question_count]
+        question.answer_type = HabitAnswerTypeFromName(answer)
+        unused AppCopyText(text, question.text[:])
+        failure := AppToolReadGoal(arguments, item_at, question.answer_type,
+            *question.goal)
+        if failure.count > 0 {
+            return ToolFailure(failure)
+        }
+        for kept: cast(s32)0..habit.question_count - 1 {
+            if HabitQuestionText(*habit.questions[kept]) == text {
+                question.id = habit.questions[kept].id
+            }
+        }
+        if question.id == 0 {
+            question.id = HabitQuestionNewId(questions[:], question_count, now)
+            for kept: cast(s32)0..habit.question_count - 1 {
+                if habit.questions[kept].id >= question.id {
+                    question.id = habit.questions[kept].id + 1
+                }
+            }
+        }
+        question_count += 1
+    }
+    if !habit_set_questions(app, index, questions[:], question_count) {
+        return ToolFailure("the questions could not be saved")
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"ok\":true")
+    AppToolTrackingContext(*out, habit)
+    BuilderPrint(*out, "}")
+    return BuilderFinish(out)
+}
+
+// Sets how a habit tracks its days (set_habit_tracking): marked, counted
+// to a target, or measured as spans from start to end.
+AppHabitTrackingTool :: (app: *InnerBreeze, arguments: string) -> string {
+    if !app_nav_route_available(app, APP_NAV_ROUTE_HABITS) {
+        return ToolFailure("habits unavailable")
+    }
+    index := AppToolHabitIndex(app, arguments)
+    if index < 0 {
+        return ToolFailure("no active habit has this id")
+    }
+    habit := *app.habits.items[index]
+    mode_bytes: [8]u8
+    mode := ToolString(arguments, "mode", mode_bytes[:])
+    if mode != "check" && mode != "count" && mode != "span" {
+        return ToolFailure("mode must be check, count or span")
+    }
+    target := habit_counter_target(habit)
+    target_at := FieldAt(arguments, 0, "target")
+    if target_at >= 0 {
+        number := ReadNumber(arguments, target_at)
+        if !number.valid || number.value < 0 ||
+        number.value > cast(float64)HABIT_COUNTER_TARGET_MAX ||
+        number.value != cast(float64)cast(s32)number.value {
+            return ToolFailure("target must be an integer from 0 to 9999")
+        }
+        target = cast(s32)number.value
+    }
+    // A span habit's spans are good by their length: at least, at most or
+    // between lengths, or against their average. A habit that starts
+    // measuring spans takes shorter than the average unless told.
+    span_goal := ifx habit.span != 0 then habit.span_goal else HabitSpanGoalDefault()
+    if FieldAt(arguments, 0, "good") >= 0 {
+        if mode != "span" {
+            return ToolFailure("good judges spans only")
+        }
+        failure := AppToolReadGoal(arguments, 0, HABIT_ANSWER_SPAN, *span_goal)
+        if failure.count > 0 {
+            return ToolFailure(failure)
+        }
+        if span_goal.kind == HABIT_GOAL_YES || span_goal.kind == HABIT_GOAL_NO {
+            return ToolFailure("yes and no are the good answers of yes_no questions only")
+        }
+    }
+    if !habit_set_tracking(app, index, mode == "count", target, mode == "span",
+        span_goal) {
+        return ToolFailure("the tracking could not be saved")
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"ok\":true")
+    AppToolTrackingContext(*out, habit)
+    BuilderPrint(*out, "}")
+    return BuilderFinish(out)
+}
+
+ToolString :: (document: string, name: string, output: []u8) -> string {
+    count := ReadStringText(document, FieldAt(document, 0, name), output)
+    if count <= 0 || count >= output.count {
+        return ""
+    }
+    return TextFromBytes(output[:count])
+}
+
+AppToolExecute :: (app: *InnerBreeze, name: string, arguments: string) -> string {
+    if ValueEnd(arguments, 0, 0) != arguments.count || arguments.count == 0 || arguments[0] != cast(u8)123 {
+        return PackageText("{\"ok\":false,\"error\":\"invalid arguments\"}", "")
+    }
+    if name == "get_settings" {
+        return AppSettingsReport(app)
+    }
+    if name == "read_context" {
+        return AppToolContext(app)
+    }
+    if name == "set_habit_schedule" {
+        return AppHabitScheduleTool(app, arguments)
+    }
+    if name == "set_habit_questions" {
+        return AppHabitQuestionsTool(app, arguments)
+    }
+    if name == "set_habit_tracking" {
+        return AppHabitTrackingTool(app, arguments)
+    }
+    if name == "create_habit" || name == "rename_habit" || name == "set_habit_active" ||
+    name == "read_habit" || name == "delete_habit" {
+        return LumiHabitTool(app, name, arguments)
+    }
+    if name == "read_style" || name == "inspect_style" || name == "preview_style" ||
+    name == "save_style" || name == "reset_style" || name == "undo_style" ||
+    name == "discard_style" || name == "format_style" {
+        return AppearanceTool(app, name, arguments)
+    }
+    if name == "show_progress_chart" {
+        metric_bytes: [32]u8
+        metric_text := ToolString(arguments, "metric", metric_bytes[:])
+        metrics: [4]string = .["sessions", "meditation", "retention", "habits"]
+        metric: s32 = -1
+        for index: cast(s32)0..cast(s32)3 {
+            if metric_text == metrics[index] {
+                metric = index
+            }
+        }
+        days := ReadNumber(arguments, FieldAt(arguments, 0, "days"))
+        if !days.valid || days.value < 1 || days.value > LUMI_PROGRESS_MAX_DAYS ||
+        days.value != cast(float64)cast(s32)days.value {
+            return PackageText("{\"ok\":false,\"error\":\"days must be an integer from 1 to 31\"}", "")
+        }
+        payload := LumiProgressJson(app, metric, cast(s32)days.value)
+        defer { PackageFree(payload) }
+        if payload.count == 0 || !LumiStoreAppendCard(LocaleText(LumiChartTitleKey(metric)),
+            false, LUMI_CHAT_PROGRESS, payload) {
+            return PackageText("{\"ok\":false,\"error\":\"progress unavailable\"}", "")
+        }
+        out: Vec(u8)
+        BuilderPrint(*out, "{\"ok\":true,\"displayed\":true,\"chart\":%}", payload)
+        return BuilderFinish(out)
+    }
+    if name == "report_feedback" {
+        title: [161]u8
+        message: [4097]u8
+        summary := ToolString(arguments, "title", title[:])
+        report := ToolString(arguments, "message", message[:])
+        context := AppFeedbackContext(app)
+        defer { PackageFree(context) }
+        id := FeedbackDraft(summary, report, context)
+        defer { PackageFree(id) }
+        if id.count != 32 || !LumiStoreAppendCard(LocaleText("lumi_feedback_confirm"), false, LUMI_CHAT_FEEDBACK, id) {
+            return PackageText("{\"ok\":false,\"error\":\"feedback could not be saved\"}", "")
+        }
+        result: Vec(u8)
+        BuilderPrint(*result, "{\"ok\":true,\"id\":\"%\",\"delivery\":\"awaiting user confirmation\"}", id)
+        return BuilderFinish(result)
+    }
+    if name == "read_diary" {
+        if !app_nav_route_available(app, APP_NAV_ROUTE_DIARY) {
+            return PackageText("{\"ok\":false,\"error\":\"diary unavailable\"}", "")
+        }
+        date: [11]u8
+        day := ToolString(arguments, "date", date[:])
+        if day.count != 10 || day[4] != cast(u8)45 || day[7] != cast(u8)45 {
+            return PackageText("{\"ok\":false,\"error\":\"date must be YYYY-MM-DD\"}", "")
+        }
+        for index: cast(s32)0..cast(s32)9 {
+            if index != 4 && index != 7 && (day[index] < cast(u8)48 || day[index] > cast(u8)57) {
+                return PackageText("{\"ok\":false,\"error\":\"invalid date\"}", "")
+            }
+        }
+        if !app_diary_save() {
+            return PackageText("{\"ok\":false,\"error\":\"diary save failed\"}", "")
+        }
+        file := PackageText(day, ".json")
+        defer { PackageFree(file) }
+        value := DiaryStoreRead(file)
+        out: Vec(u8)
+        BuilderPrint(*out, "{\"ok\":%,\"entry\":", value.succeeded)
+        contents := value.data
+        if contents.count > 2048 { contents = contents[:2048] }
+        LumiJsonString(*out, contents)
+        BuilderPrint(*out, "}")
+        return BuilderFinish(out)
+    }
+    succeeded: bool
+    if name == "set_theme" || name == "set_theme_mode" || name == "set_setting" ||
+    name == "open_view" || name == "practice" {
+        succeeded = AppMcpAction(app, name, arguments)
+        if succeeded && (name == "set_theme" || name == "set_theme_mode" || name == "set_setting") {
+            settings := AppSettingsReport(app)
+            defer { PackageFree(settings) }
+            output: Vec(u8)
+            BuilderPrint(*output, "{\"ok\":true,\"settings\":%}", settings)
+            return BuilderFinish(output)
+        }
+    } else {
+        title: [1024]u8
+        id: [65]u8
+        field := ifx name == "write_diary" then "text" else "title"
+        title_value := ToolString(arguments, field, title[:])
+        id_value := ToolString(arguments, "id", id[:])
+        action: LumiAction
+        if name == "write_diary" {
+            action.kind = LUMI_WRITE_DIARY
+            action.title = title_value
+        } else if name == "add_todo" {
+            action.kind = LUMI_ADD_TODO
+            action.title = title_value
+        } else if name == "complete_todo" || name == "reopen_todo" || name == "complete_habit" {
+            action.kind = LUMI_REOPEN_TODO
+            if name == "complete_habit" {
+                action.kind = LUMI_COMPLETE_HABIT
+            } else if name == "complete_todo" {
+                action.kind = LUMI_COMPLETE_TODO
+            }
+            action.id = id_value
+        }
+        if action.kind != 0 {
+            succeeded = LumiPerform(app, action)
+        }
+    }
+    return PackageText(ifx succeeded then "{\"ok\":true}" else
+        "{\"ok\":false,\"error\":\"action unavailable or invalid\"}", "")
+}

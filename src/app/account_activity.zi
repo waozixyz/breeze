@@ -11,7 +11,7 @@
 #import, file "text_buffers.zi";
 #import, file "../core/breath_timing.zi";
 #import, file "../practices/tai_chi/tai_chi_rules.zi";
-#import, file "../storage/cell_records.zi";
+#import, file "../storage/bundled_app_records.zi";
 #import, file "../storage/sync_state.zi";
 #import, file "../storage/storage_settings.zi";
 #import, file "../storage/db.zi";
@@ -19,7 +19,7 @@
 #import "crypto"
 #import, file "../storage/delegate_store.zi";
 #import, file "../storage/temporary_data.zi";
-#import, file "../cells/package_files.zi";
+#import, file "../apps/package_files.zi";
 #import, file "../platform/environment.zi";
 
 c :: #system_library "c";
@@ -193,7 +193,7 @@ ActivitySample :: (app: *InnerBreeze, previous: AccountActivity, now: s64) -> Ac
 // No remote device advances the originating session or saves a second result.
 // An acknowledged control can never apply to a replacement session or replay.
 ActivityApplyControl :: (app: *InnerBreeze, now: s64) -> bool {
-    document := CellRecordRead(ActivityControlKey)
+    document := BundledAppRecordRead(ActivityControlKey)
     defer { PackageFree(document) }
     command: ActivityControl
     state := *account_activity
@@ -233,7 +233,7 @@ ActivityPump :: (app: *InnerBreeze) {
     if revision != state.read_revision || clock < state.last_read || clock - state.last_read >= 2.0 {
         state.read_revision = revision
         state.last_read = clock
-        document := CellRecordRead(ActivityRecordKey)
+        document := BundledAppRecordRead(ActivityRecordKey)
         unused ActivityRead(document, *state.remote)
         PackageFree(document)
     }
@@ -259,7 +259,7 @@ ActivityPump :: (app: *InnerBreeze) {
             ended.revision += 1
             payload: [2048]u8
             if ActivityWrite(ended, payload[:]) &&
-            CellRecordWrite(ActivityRecordKey, TextUntilNul(payload[:])) {
+            BundledAppRecordWrite(ActivityRecordKey, TextUntilNul(payload[:])) {
                 state.remote = ended
                 unused ActivityScheduleSync(app)
             }
@@ -302,7 +302,7 @@ ActivityPump :: (app: *InnerBreeze) {
         return
     }
     payload: [2048]u8
-    if ActivityWrite(state.local, payload[:]) && CellRecordWrite(ActivityRecordKey, TextUntilNul(payload[:])) {
+    if ActivityWrite(state.local, payload[:]) && BundledAppRecordWrite(ActivityRecordKey, TextUntilNul(payload[:])) {
         state.last_publish = now
         state.was_running = running
         unused ActivityScheduleSync(app)
@@ -323,7 +323,7 @@ ActivityEndRemote :: (app: *InnerBreeze) -> bool {
     ended.revision += 1
     payload: [2048]u8
     if !ActivityWrite(ended, payload[:]) ||
-    !CellRecordWrite(ActivityRecordKey, TextUntilNul(payload[:])) {
+    !BundledAppRecordWrite(ActivityRecordKey, TextUntilNul(payload[:])) {
         return false
     }
     state.remote = ended
@@ -357,7 +357,7 @@ ActivityRequestPause :: (app: *InnerBreeze, paused: s32) -> bool {
     writer = WriteByte(writer, cast(u8)44)
     writer = JsonNumberField(writer, "paused", paused)
     writer = WriteByte(writer, cast(u8)125)
-    if !writer.valid || !CellRecordWrite(ActivityControlKey, TextUntilNul(output[:])) {
+    if !writer.valid || !BundledAppRecordWrite(ActivityControlKey, TextUntilNul(output[:])) {
         return false
     }
     state.pending_control = id

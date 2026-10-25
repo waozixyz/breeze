@@ -5,19 +5,19 @@
 #import "byte_text_linux"
 #import "text_buffer"
 Scan :: #import "json_scan"
-#import, file "../cells/catalog.zi";
+#import, file "../apps/catalog.zi";
 #import, file "state.zi";
 #import, file "sqlite.zi";
 #import, file "json.zi";
 #import, file "storage_habit_materialize.zi";
 #import, file "sync_sql.zi";
-#import, file "cell_records.zi";
+#import, file "bundled_app_records.zi";
 #import, file "app_records.zi";
 #import, file "achievement_records.zi";
 #import, file "media_records.zi";
 #import, file "entity_records.zi";
 #import, file "entity_service.zi";
-#import, file "../cells/package_files.zi";
+#import, file "../apps/package_files.zi";
 #import, file "entity_record_crypto.zi";
 #import, file "storage_layout.zi";
 #import, file "db.zi";
@@ -35,7 +35,7 @@ sqlite3_changes :: (database: *void) -> s32 #foreign c "sqlite3_changes";
 free :: (ptr: *void) #foreign c;
 
 // Counts library records that arrived from other devices, so the media
-// library lists them again (cells/media_store.zi).
+// library lists them again (apps/media_store.zi).
 storage_media_changes: s32;
 
 storage_apply_sync_sessions_json :: (response_json: string) -> s32 {
@@ -52,9 +52,9 @@ storage_apply_sync_social_json :: (response_json: string) -> s32 {
         storage_exec_json_user_sql(SyncSocialCacheSQL, response_json) != 0) then (1) else (0)
 }
 
-// Cell plaintext has one object with one occurrence of each known string
+// App plaintext has one object with one occurrence of each known string
 // field. Decode member names when checking uniqueness, including escapes.
-storage_cell_plaintext_fields_valid :: (plaintext: string) -> bool {
+storage_bundled_app_plaintext_fields_valid :: (plaintext: string) -> bool {
     cursor := Scan.Space(plaintext, 0)
     if cursor < 0 || cursor >= cast(s32)plaintext.count ||
     plaintext[cursor] != cast(u8)123 {
@@ -136,7 +136,7 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
         return 0
     }
     if array_name == "cell_records" {
-        if record_id.count == 0 || !storage_cell_plaintext_fields_valid(plaintext) {
+        if record_id.count == 0 || !storage_bundled_app_plaintext_fields_valid(plaintext) {
             storage_json_builder_free(*response)
             return 0
         }
@@ -152,8 +152,8 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
         value_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, at, "value"), value_bytes[:])
         if key_count <= 0 || key_count >= 181 || value_count <= 0 || value_count >= 65536 ||
         TextFromBytes(key_bytes[:key_count]) != record_id ||
-        !CellRecordValid(TextFromBytes(key_bytes[:key_count])) ||
-        (collection == LumiPrivateCollection && !LumiCellRecordValid(TextFromBytes(key_bytes[:key_count]))) {
+        !BundledAppRecordValid(TextFromBytes(key_bytes[:key_count])) ||
+        (collection == LumiPrivateCollection && !LumiBundledAppRecordValid(TextFromBytes(key_bytes[:key_count]))) {
             storage_json_builder_free(*response)
             return 0
         }
@@ -168,7 +168,7 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
         achievement_key[:23] == "cell.achievement.award."
         fact := collection == AchievementCollection && achievement_key.count == 86 &&
         achievement_key[:22] == "cell.achievement.fact."
-        query := ifx award then SyncAchievementAwardsSQL else (ifx fact then SyncAchievementFactsSQL else SyncCellRecordsSQL)
+        query := ifx award then SyncAchievementAwardsSQL else (ifx fact then SyncAchievementFactsSQL else SyncBundledAppRecordsSQL)
         ok = storage_exec_json_user_sql(query, record_response)
         if ok != 0 && achievement_key == AchievementAlertsKey && storage_setting_text_equals(AchievementAlertsKey, "0") != 0 {
             AchievementDiscardAlerts()
@@ -178,8 +178,8 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
             // local award through the ordinary encrypted outbox.
             ok = storage_enqueue_sync_entity("cell_record", achievement_key, 0)
         }
-        if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 && collection == LegacyPrivateCellsCollection &&
-        LumiCellRecordValid(TextFromBytes(key_bytes[:key_count])) {
+        if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 && collection == LegacyPrivateAppsCollection &&
+        LumiBundledAppRecordValid(TextFromBytes(key_bytes[:key_count])) {
             // An older device may upload legacy Lumi after the local migration.
             // Queue a copy only when the legacy record changes local history;
             // replaying an unchanged snapshot must not keep uploads pending.
@@ -222,7 +222,7 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
         // nothing and doesn't stop the sync.
         records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), array_name)
         ok = 1
-        if Scan.ArrayCount(record_response, records) == 1 && storage_cell_plaintext_fields_valid(plaintext) {
+        if Scan.ArrayCount(record_response, records) == 1 && storage_bundled_app_plaintext_fields_valid(plaintext) {
             at := Scan.ElementAt(record_response, records, 0)
             key_bytes: [181]u8
             key_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, at, "key"), key_bytes[:])
@@ -239,7 +239,7 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
         // name it refuses, changes nothing and doesn't stop the sync.
         records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), array_name)
         ok = 1
-        if Scan.ArrayCount(record_response, records) == 1 && storage_cell_plaintext_fields_valid(plaintext) {
+        if Scan.ArrayCount(record_response, records) == 1 && storage_bundled_app_plaintext_fields_valid(plaintext) {
             at := Scan.ElementAt(record_response, records, 0)
             key_bytes: [181]u8
             key_count := Scan.ReadStringText(record_response, Scan.FieldAt(record_response, at, "key"), key_bytes[:])
@@ -255,7 +255,7 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
         records := Scan.FieldAt(record_response, Scan.FieldAt(record_response, 0, "changes"), array_name)
         ok = 1
         if record_id == "habit_shop_borrow_limit" &&
-        Scan.ArrayCount(record_response, records) == 1 && storage_cell_plaintext_fields_valid(plaintext) {
+        Scan.ArrayCount(record_response, records) == 1 && storage_bundled_app_plaintext_fields_valid(plaintext) {
             ok = storage_exec_json_user_sql(SyncHabitSettingsSQL, record_response)
         }
     } else if array_name == "app_order" {

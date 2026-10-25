@@ -1,0 +1,59 @@
+// The bridge for Habits' packaged views. App state stays with the caller;
+// the package receives a value frame and returns the person's action.
+#import "byte_text_linux"
+#import "bundle_host"
+#import "hosted_values"
+#import "widget_host"
+#import, file "habits_ui_types.zi";
+#import, file "habits_types.zi";
+#import, file "app_codec.zi";
+#import, file "hosted_assets.zi";
+#import, file "module_host.zi";
+#import, file "../app/locale.zi";
+
+using HostValueKind;
+
+HabitsUiResult :: struct {
+    drawn: bool
+    action: s32
+}
+
+habits_ui: HabitsUiFrame;
+habits_ui_codec: WidgetHabitsUiFrameCodec;
+
+HabitsUiCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "habits_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadHabitsUiHost" && count == 0 {
+        result.* = WidgetEncodeHabitsUiFrame(habits_ui, *habits_ui_codec)
+        return 1
+    }
+    if name == "WriteHabitsUiHost" && count == 1 && WidgetValidHabitsUiFrame(arguments[0]) {
+        habits_ui.action = WidgetDecodeHabitsUiFrame(arguments[0], *habits_ui_codec).action
+        return 1
+    }
+    if name == "HabitsLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
+}
+
+HabitsUiDraw :: (frame: HabitsUiFrame, action: s32, context: *void) -> HabitsUiResult {
+    habits_ui = frame
+    WidgetHostBegin(frame.session, HostedAssetAllowed)
+    AppsUiBegin(HabitsUiCall, context)
+    drawn := HabitsRun(HabitsMessage.{.action = action})
+    AppsUiEnd()
+    WidgetHostEnd()
+    result := HabitsUiResult.{.drawn = drawn.succeeded, .action = habits_ui.action}
+    habits_ui = HabitsUiFrame.{}
+    return result
+}

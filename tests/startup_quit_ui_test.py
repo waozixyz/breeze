@@ -168,7 +168,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
             saved = settings(profile)
             assert saved["enabled_apps"] == "30", "Restart lost the explicit Diary choice"
             restored = [int(saved[f"launcher_favorite_{i}"]) for i in range(int(saved["launcher_favorite_count"]))]
-            assert restored == order, "Restart lost a selected cell: " + str(restored)
+            assert restored == order, "Restart lost a selected app: " + str(restored)
 
     # Preview windows used to discard the close dialog result forever. The
     # prompt must also appear and work above the Apps overlay.

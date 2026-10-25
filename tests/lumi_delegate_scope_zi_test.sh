@@ -22,7 +22,7 @@ cat > "$work/generated/main.c" <<'C'
 #include <stdio.h>
 #include <stdint.h>
 // Only installed-bundle host facts are synthetic; no fake bundle is called.
-int32_t __wrap_CellsInstalledMask(void) { return 1 | 2 | 8 | 16; }
+int32_t __wrap_AppsInstalledMask(void) { return 1 | 2 | 8 | 16; }
 int main(void) {
     int result = Check();
     if (result) fprintf(stderr, "Lumi delegated scope check failed with code %d\n", result);
@@ -34,6 +34,6 @@ C
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" -I"$monocypher/src" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
     "$monocypher/src/monocypher.c" "$monocypher/src/optional/monocypher-ed25519.c" "$liboqs" \
-    -Wl,--gc-sections -Wl,--wrap=CellsInstalledMask -ldl -lpthread -lm -o "$work/test"
+    -Wl,--gc-sections -Wl,--wrap=AppsInstalledMask -ldl -lpthread -lm -o "$work/test"
 APP_DATA_ROOT="$work/data" "$work/test"
 printf '%s\n' 'Lumi delegated history scope, private tools, expiry and owner policy checks passed'

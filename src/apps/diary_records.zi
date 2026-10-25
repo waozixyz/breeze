@@ -1,0 +1,270 @@
+// Each Diary file has an entry, cell.diary.file.NAME, that syncs.
+//
+// A day document (YYYY-MM-DD.json) syncs its bytes as hex chunks beside the
+// entry, which becomes readable only when all chunks and its hash validate.
+//
+// A photo or video an older version attached stays a file on the device.
+// Its entry syncs {"hash","size"}; once a released version put its sealed
+// old copy on a node it also names that copy, "blob" (the copy's SHA-256,
+// its address on the node) and "key". The copy is the file sealed with a key
+// made for that file alone, so it takes the file's size plus 16 bytes.
+// Entries with "count" are photos from before copies, kept as hex chunks.
+// Such photos move to the account's entity data (media_diary_photos.zi);
+// then the entry also names it, "photo" (its SHA-256), and keeps its other
+// fields for released versions.
+#import "json_scan"
+#import "byte_text_linux"
+#import "vec"
+#import "text"
+#import "keys"
+#import, file "../storage/bundled_app_records.zi";
+#import "crypto"
+#import, file "lumi_store.zi";
+#import, file "package_files.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/storage_settings.zi";
+#import, file "../storage/sync_record_crypto.zi";
+
+DIARY_CHUNK_BYTES :: 1024
+DIARY_FILE_LIMIT :: 16777216
+// Released versions sealed each photo as one old copy with a key made for
+// that file alone, from the account key with the context
+// "inbe-diary-blob-key-v1", a zero nonce and this associated data; sealing
+// adds a 16-byte tag. Photos move from there to the account's entity data
+// (media_diary_photos.zi), and old copies are only opened.
+DIARY_BLOB_TAG :: 16
+DIARY_BLOB_AAD :: "inbe.diary.blob.v1"
+
+diary_records_c :: #system_library "c";
+DiaryAllocate :: (size: usize) -> *void #foreign diary_records_c "malloc";
+DiaryRelease :: (pointer: *void) #foreign diary_records_c "free";
+
+DiaryRecordKey :: (name: string) -> string {
+    return PackageText("cell.diary.file.", name)
+}
+
+DiaryChunkKey :: (hash: string, index: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "cell.diary.chunk.%.%", hash, index)
+    return BuilderFinish(out)
+}
+
+// Day documents are YYYY-MM-DD.json; every other Diary file is media.
+DiaryRecordMedia :: (name: string) -> bool {
+    return name.count < 5 || name[name.count - 5:] != ".json"
+}
+
+DiaryRecordSave :: (name: string, data: string) -> bool {
+    if data.count <= 0 || data.count > DIARY_FILE_LIMIT {
+        return false
+    }
+    descriptor := cast(*TextDescriptor)(*data)
+    hash_bytes: [65]u8
+    storage_sha256_hex(descriptor.data, data.count, *hash_bytes[0])
+    hash := TextFromCString(*hash_bytes[0])
+    count := cast(s32)((data.count + DIARY_CHUNK_BYTES - 1) / DIARY_CHUNK_BYTES)
+    key := DiaryRecordKey(name)
+    defer { PackageFree(key) }
+    previous := BundledAppRecordRead(key)
+    defer { PackageFree(previous) }
+    old_hash: [65]u8
+    length := ReadStringText(previous, FieldAt(previous, 0, "hash"), old_hash[:])
+    if length == 64 && TextFromBytes(old_hash[:length]) == hash {
+        return true
+    }
+    if DiaryRecordMedia(name) {
+        // The file holds the bytes; only the entry syncs until the sealed
+        // copy is uploaded.
+        entry: Vec(u8)
+        BuilderPrint(*entry, "{\"hash\":\"%\",\"size\":%}", hash, data.count)
+        compact := BuilderFinish(entry)
+        defer { PackageFree(compact) }
+        return BundledAppRecordWrite(key, compact)
+    }
+    storage_settings_begin_write()
+    defer { storage_settings_end_write() }
+    for index: cast(s32)0..count - 1 {
+        start := cast(s64)index * DIARY_CHUNK_BYTES
+        size := data.count - start
+        if size > DIARY_CHUNK_BYTES { size = DIARY_CHUNK_BYTES }
+        encoded: [DIARY_CHUNK_BYTES * 2 + 1]u8
+        if BytesToHex(*descriptor.data[start], size, *encoded[0], encoded.count) == 0 {
+            return false
+        }
+        chunk_key := DiaryChunkKey(hash, index)
+        written := BundledAppRecordWrite(chunk_key, TextFromCString(*encoded[0]))
+        PackageFree(chunk_key)
+        if !written { return false }
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"hash\":\"%\",\"count\":%,\"size\":%}", hash, count, data.count)
+    manifest := BuilderFinish(out)
+    defer { PackageFree(manifest) }
+    return BundledAppRecordWrite(key, manifest)
+}
+
+DiaryRecordRead :: (name: string) -> string {
+    key := DiaryRecordKey(name)
+    manifest := BundledAppRecordRead(key)
+    defer { PackageFree(key); PackageFree(manifest) }
+    hash_bytes: [65]u8
+    length := ReadStringText(manifest, FieldAt(manifest, 0, "hash"), hash_bytes[:])
+    parts := ReadNumber(manifest, FieldAt(manifest, 0, "count"))
+    size := ReadNumber(manifest, FieldAt(manifest, 0, "size"))
+    if length != 64 || !parts.valid || !size.valid || size.value < 1 || size.value > 16777216 ||
+    parts.value != cast(float64)((cast(s64)size.value + DIARY_CHUNK_BYTES - 1) / DIARY_CHUNK_BYTES) {
+        return ""
+    }
+    hash := TextFromBytes(hash_bytes[:length])
+    output: Vec(u8)
+    for index: cast(s32)0..cast(s32)parts.value - 1 {
+        chunk_key := DiaryChunkKey(hash, index)
+        encoded := BundledAppRecordRead(chunk_key)
+        decoded: [DIARY_CHUNK_BYTES]u8
+        count := encoded.count / 2
+        valid := encoded.count > 0 && encoded.count % 2 == 0 && count <= DIARY_CHUNK_BYTES &&
+        HexToBytes(encoded, *decoded[0], count) != 0
+        PackageFree(chunk_key)
+        PackageFree(encoded)
+        if !valid {
+            VecFree(output)
+            return ""
+        }
+        for byte: decoded[:count] { unused VecPush(output, byte) }
+    }
+    value := BuilderFinish(output)
+    descriptor := cast(*TextDescriptor)(*value)
+    actual: [65]u8
+    storage_sha256_hex(descriptor.data, value.count, *actual[0])
+    if value.count != cast(s64)size.value || TextFromCString(*actual[0]) != hash {
+        PackageFree(value)
+        return ""
+    }
+    return value
+}
+
+// A photo's entry without chunks, or not valid when the entry has chunks or
+// does not parse.
+DiaryMedia :: struct {
+    valid: bool
+    hash: [65]u8
+    size: s64
+    // Both empty until the sealed copy is on a node.
+    blob: [65]u8
+    key: [65]u8
+    // The photo moved to the account's entity data, and the entry names its
+    // record, "photo" (media_diary_photos.zi).
+    pointed: bool
+}
+
+DiaryHex64 :: (text: string) -> bool {
+    if text.count != 64 {
+        return false
+    }
+    for byte: text {
+        if !((byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 102)) {
+            return false
+        }
+    }
+    return true
+}
+
+DiaryMediaParse :: (entry: string) -> DiaryMedia {
+    result: DiaryMedia
+    if entry.count == 0 || FieldAt(entry, 0, "count") >= 0 {
+        return result
+    }
+    size := ReadNumber(entry, FieldAt(entry, 0, "size"))
+    if ReadStringText(entry, FieldAt(entry, 0, "hash"), result.hash[:]) != 64 ||
+    !DiaryHex64(TextFromBytes(result.hash[:64])) || !size.valid || size.value < 1 ||
+    size.value > cast(float64)DIARY_FILE_LIMIT {
+        return DiaryMedia.{}
+    }
+    result.size = cast(s64)size.value
+    photo: [65]u8
+    result.pointed = ReadStringText(entry, FieldAt(entry, 0, "photo"), photo[:]) == 64 &&
+    TextFromBytes(photo[:64]) == TextFromBytes(result.hash[:64])
+    if FieldAt(entry, 0, "blob") >= 0 {
+        if ReadStringText(entry, FieldAt(entry, 0, "blob"), result.blob[:]) != 64 ||
+        ReadStringText(entry, FieldAt(entry, 0, "key"), result.key[:]) != 64 ||
+        !DiaryHex64(TextFromBytes(result.blob[:64])) || !DiaryHex64(TextFromBytes(result.key[:64])) {
+            return DiaryMedia.{}
+        }
+    }
+    result.valid = true
+    return result
+}
+
+// The hash an entry names, with or without chunks, or empty. The answer
+// is a view of the entry.
+DiaryEntryHash :: (entry: string) -> string {
+    at := FieldAt(entry, 0, "hash")
+    span := ReadString(entry, at)
+    if at < 0 || !span.valid || span.end - span.start != 64 || !DiaryHex64(entry[span.start:span.end]) {
+        return ""
+    }
+    return entry[span.start:span.end]
+}
+
+DiaryMediaRead :: (name: string) -> DiaryMedia {
+    key := DiaryRecordKey(name)
+    entry := BundledAppRecordRead(key)
+    defer { PackageFree(key); PackageFree(entry) }
+    return DiaryMediaParse(entry)
+}
+
+DiaryMediaUploaded :: (media: DiaryMedia) -> bool {
+    return media.valid && media.blob[0] != cast(u8)0
+}
+
+// Whether data is exactly the file an entry describes.
+DiaryMediaMatches :: (media: DiaryMedia, data: string) -> bool {
+    if !media.valid || data.count != media.size {
+        return false
+    }
+    descriptor := cast(*TextDescriptor)(*data)
+    actual: [65]u8
+    storage_sha256_hex(descriptor.data, data.count, *actual[0])
+    return TextFromCString(*actual[0]) == TextFromBytes(media.hash[:64])
+}
+
+DiaryBlobAad :: (output: []u8) {
+    text := DIARY_BLOB_AAD
+    for index: cast(s64)0..text.count - 1 {
+        output[index] = text[index]
+    }
+}
+
+// The file inside a sealed copy, or "" when the copy is not the one its
+// entry names.
+DiaryBlobOpen :: (media: DiaryMedia, sealed: []u8) -> string {
+    if !DiaryMediaUploaded(media) || cast(s64)sealed.count != media.size + DIARY_BLOB_TAG {
+        return ""
+    }
+    actual: [65]u8
+    storage_sha256_hex(*sealed[0], cast(s64)sealed.count, *actual[0])
+    if TextFromCString(*actual[0]) != TextFromBytes(media.blob[:64]) {
+        return ""
+    }
+    key: [32]u8
+    if HexToBytes(TextFromBytes(media.key[:64]), *key[0], 32) == 0 {
+        return ""
+    }
+    output := cast(*u8)DiaryAllocate(cast(usize)media.size)
+    if output == null {
+        SecureWipe(*key[0], 32)
+        return ""
+    }
+    nonce: [12]u8
+    aad: [32]u8
+    DiaryBlobAad(aad[:])
+    opened := ChaCha20Poly1305Open(*key[0], *nonce[0], *sealed[0], cast(s64)sealed.count,
+        *aad[0], cast(s64)DIARY_BLOB_AAD.count, output, media.size) != 0
+    SecureWipe(*key[0], 32)
+    value := TextFromBytes(BytesFromPointer(output, cast(u64)media.size))
+    if !opened || !DiaryMediaMatches(media, value) {
+        DiaryRelease(cast(*void)output)
+        return ""
+    }
+    return value
+}

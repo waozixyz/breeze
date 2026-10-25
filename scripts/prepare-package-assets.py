@@ -113,7 +113,7 @@ for name in NODE_APPS:
 apps_bundle = options.apps_controller.resolve()
 if apps_bundle.is_file():
     controller = apps_bundle.read_bytes()
-    source = (ROOT / 'src/cells/apps_controller.zi').read_text()
+    source = (ROOT / 'src/apps/apps_controller.zi').read_text()
     expected = re.search(r'AppsControllerSha256\s*::\s*"([0-9a-f]{64})"', source)
     if not expected or hashlib.sha256(controller).hexdigest() != expected[1]:
         raise SystemExit('Apps controller differs from the reviewed native digest')

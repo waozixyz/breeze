@@ -59,7 +59,7 @@ def stage(store, key_path, key_id, publishers_path=None, *, build_directory=None
         sequence = component["sequence"]
         if not VERSION.fullmatch(component["version"]) or not 0 < sequence <= 2**31 - 1:
             raise ValueError(f"invalid {name} version or sequence")
-        path = build_directory / ("inbe.zx" if name == "inbe" else f"cells/{name}.zx")
+        path = build_directory / ("inbe.zx" if name == "inbe" else f"apps/{name}.zx")
         data = path.read_bytes()
         if not data.startswith(b"ZX\0\0") or not 8 <= len(data) <= 64 * 1024 * 1024:
             raise ValueError(f"invalid {name} bundle")
@@ -427,7 +427,7 @@ def import_archive(archive, store, publishers_path=None):
         archive.parent.rmdir()
         return
     if present != ids and present != ids - {"inbe.leaderboard"}:
-        raise ValueError("archive must contain the root and every cell")
+        raise ValueError("archive must contain the root and every app")
     with ExitStack() as stack:
         releases = {}
         for app_id in sorted(present):
@@ -490,7 +490,7 @@ def import_archive(archive, store, publishers_path=None):
             artifact = child["artifacts"][0]
             if dependency != dict(app_id=child["app_id"], version=child["version"],
                                   sha256=artifact["sha256"], size=artifact["size"]) or root[2].count(payload) != 1:
-                raise ValueError("root does not contain its exact signed cell dependency")
+                raise ValueError("root does not contain its exact signed app dependency")
         # Content precedes both the harness and the root that references it.
         for path, data, encoded, product in content_payloads:
             target = store / path

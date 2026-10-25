@@ -1,16 +1,16 @@
 // Real account storage and feedback pump; only the HTTP transport is synthetic.
-#import, file "../src/cells/lumi_online.zi";
-#import, file "../src/cells/lumi_connection.zi";
-#import, file "../src/cells/feedback_store.zi";
-#import, file "../src/cells/lumi_store.zi";
-#import, file "../src/cells/package_files.zi";
+#import, file "../src/apps/lumi_online.zi";
+#import, file "../src/apps/lumi_connection.zi";
+#import, file "../src/apps/feedback_store.zi";
+#import, file "../src/apps/lumi_store.zi";
+#import, file "../src/apps/package_files.zi";
 #import, file "../src/app/app_types.zi";
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/storage/account_types.zi";
 #import, file "../src/storage/db.zi";
 #import, file "../src/storage/state.zi";
 #import, file "../src/storage/storage_settings.zi";
-#import, file "../src/storage/cell_records.zi";
+#import, file "../src/storage/bundled_app_records.zi";
 #import, file "../src/storage/sync_async.zi";
 #import "keys"
 #import "crypto"
@@ -153,9 +153,9 @@ LegacyOutboxChecks :: (root: string, delivered_id: string) {
     second_key := PackageText("cell.feedback.pending.", second_id)
     delivered_key := PackageText("cell.feedback.pending.", delivered_id)
     defer { PackageFree(first_key); PackageFree(second_key); PackageFree(delivered_key) }
-    first := CellRecordRead(first_key)
-    second := CellRecordRead(second_key)
-    delivered := CellRecordRead(delivered_key)
+    first := BundledAppRecordRead(first_key)
+    second := BundledAppRecordRead(second_key)
+    delivered := BundledAppRecordRead(delivered_key)
     defer { PackageFree(first); PackageFree(second); PackageFree(delivered) }
     check_true("large reports retain their IDs, message and context",
         contains(first, first_id) && contains(first, message) && contains(first, context) &&
@@ -164,7 +164,7 @@ LegacyOutboxChecks :: (root: string, delivered_id: string) {
     check_true("recovered report can be marked received", FeedbackDelivered(first_id))
     storage_set_setting_text("lumi_feedback_pending", legacy)
     check_true("replayed legacy data keeps the remaining pending report", Pending())
-    tombstone := CellRecordRead(first_key)
+    tombstone := BundledAppRecordRead(first_key)
     defer { PackageFree(tombstone) }
     check_true("retry and replay preserve delivery tombstones", tombstone == "{\"delivered\":true}")
     check_true("remaining recovered report can complete", FeedbackDelivered(second_id))
@@ -208,7 +208,7 @@ DeveloperReplyChecks :: () {
     untitled := LumiStoreRow(first + 1)
     check_true("reply without a title shows no quote", untitled.developer && untitled.quote.count == 0 &&
         untitled.text == "An older node sends no title.")
-    record := CellRecordRead(lumi_keys[first])
+    record := BundledAppRecordRead(lumi_keys[first])
     defer { PackageFree(record) }
     check_true("record names the developer and the quote for other devices",
         contains(record, "\"from\":\"developer\"") && contains(record, "\"quote\":\"Lumi freezes\""))
@@ -234,13 +234,13 @@ DeveloperReplyChecks :: () {
     // Copies that older versions saved: one repeats the quoted reply, two
     // are the same reply nobody saved the newer way.
     check_true("older copy of a shown reply saved",
-        CellRecordWrite("cell.lumi.message.legacy-copy-1", "{\"time\":4102444800000000,\"user\":0,\"kind\":0,\"text\":\"Developer reply:\\n\\nFixed in the next update.\\nThank you!\",\"payload\":\"\"}"))
+        BundledAppRecordWrite("cell.lumi.message.legacy-copy-1", "{\"time\":4102444800000000,\"user\":0,\"kind\":0,\"text\":\"Developer reply:\\n\\nFixed in the next update.\\nThank you!\",\"payload\":\"\"}"))
     check_true("older reply saved",
-        CellRecordWrite("cell.lumi.message.legacy-copy-2", "{\"time\":4102444800000001,\"user\":0,\"kind\":0,\"text\":\"Antwort vom Entwickler:\\n\\nDanke!\",\"payload\":\"\"}"))
+        BundledAppRecordWrite("cell.lumi.message.legacy-copy-2", "{\"time\":4102444800000001,\"user\":0,\"kind\":0,\"text\":\"Antwort vom Entwickler:\\n\\nDanke!\",\"payload\":\"\"}"))
     check_true("second device's copy of the older reply saved",
-        CellRecordWrite("cell.lumi.message.legacy-copy-3", "{\"time\":4102444800000002,\"user\":0,\"kind\":0,\"text\":\"Antwort vom Entwickler:\\n\\nDanke!\",\"payload\":\"\"}"))
+        BundledAppRecordWrite("cell.lumi.message.legacy-copy-3", "{\"time\":4102444800000002,\"user\":0,\"kind\":0,\"text\":\"Antwort vom Entwickler:\\n\\nDanke!\",\"payload\":\"\"}"))
     check_true("Lumi's own message with a heading saved",
-        CellRecordWrite("cell.lumi.message.legacy-copy-4", "{\"time\":4102444800000003,\"user\":0,\"kind\":0,\"text\":\"Your plan:\\n\\nBreathe.\",\"payload\":\"\"}"))
+        BundledAppRecordWrite("cell.lumi.message.legacy-copy-4", "{\"time\":4102444800000003,\"user\":0,\"kind\":0,\"text\":\"Your plan:\\n\\nBreathe.\",\"payload\":\"\"}"))
     LumiStoreReset()
     check_int("each reply shows once and Lumi's message stays", LumiStoreCount(), first + 4)
     older := LumiStoreRow(first + 2)
@@ -248,7 +248,7 @@ DeveloperReplyChecks :: () {
         older.developer && older.text == "Danke!" && older.quote.count == 0)
     own := LumiStoreRow(first + 3)
     check_true("Lumi's message with a heading stays Lumi's", !own.developer && own.text == "Your plan:\n\nBreathe.")
-    duplicate := CellRecordRead("cell.lumi.message.legacy-copy-1")
+    duplicate := BundledAppRecordRead("cell.lumi.message.legacy-copy-1")
     defer { PackageFree(duplicate) }
     check_true("a repeated copy is deleted for the other devices", contains(duplicate, "\"deleted\":true"))
 }

@@ -42,7 +42,7 @@ patterns-session-zi-test: $(ZI2C_BIN)
 	@sh tests/patterns_session_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: session-results-zi-test
-session-results-zi-test: cells $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A) $(RAYLIB_A)
+session-results-zi-test: apps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A) $(RAYLIB_A)
 	@sh tests/session_results_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
 	@$(ZI2C_BIN) --no-main --root tests --module-path build/packages/ziran/std \
 		-o $(BUILD_DIR)/session-mood-generated tests/session_result_storage_behavior.zi
@@ -82,7 +82,7 @@ $(BREAK_RULES_GEN_DIR)/breaks/break_rules.c: src/breaks/break_rules.zi src/break
 		-o $(BREAK_RULES_GEN_DIR) src/breaks/break_rules.zi
 
 .PHONY: practice-downloads-test
-practice-downloads-test: cells $(ZIRAN_BUILD_DIR)/libziran.a
+practice-downloads-test: apps $(ZIRAN_BUILD_DIR)/libziran.a
 	python3 tests/practice_downloads_test.py
 
 .PHONY: practice-narration-test

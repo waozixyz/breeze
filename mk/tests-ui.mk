@@ -74,7 +74,7 @@ native-text-pixels-test: $(TARGET)
 # Run every visual suite and retain a receipt even when an earlier suite fails.
 # The longest suites come first so the gate does not end waiting on one.
 VISUAL_TEST_TARGETS := $(NATIVE_VISUAL_TARGETS) launcher-ui-test lumi-ui-test practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-history-ui-test habits-table-ui-test habits-count-ui-test habit-day-ui-test habit-schedule-tool-test habit-tracking-tool-test lists-ui-test sync-review-ui-test data-back-ui-test lumi-selection-ui-test lumi-harness-ui-test lumi-guide-ui-test lumi-emphasis-ui-test customize-nav-ui-test
-VISUAL_TEST_TARGETS += audio-setup-ui-test cells-onboarding-test practice-downloads-ui-test tab-switch-performance-test habit-unsaved-ui-test
+VISUAL_TEST_TARGETS += audio-setup-ui-test apps-onboarding-test practice-downloads-ui-test tab-switch-performance-test habit-unsaved-ui-test
 VISUAL_TEST_TARGETS += entity-profile-ui-test
 VISUAL_TEST_TARGETS += music-navigation-test
 visual-test: $(TARGET) $(INBE_FULL_BUNDLE) $(NODE_APP_BUNDLES)
@@ -141,9 +141,9 @@ VISUAL_TEST_TARGETS += lumi-habit-tools-test
 account-activity-ui-test: $(TARGET) $(INBE_FULL_BUNDLE) account-activity-test
 	sh tests/account_activity_ui_test.sh $(abspath $(TARGET))
 
-.PHONY: cells-navigation-test
-cells-navigation-test: $(TARGET)
-	sh tests/cells_navigation_test.sh $(abspath $(TARGET))
+.PHONY: apps-navigation-test
+apps-navigation-test: $(TARGET)
+	sh tests/apps_navigation_test.sh $(abspath $(TARGET))
 
 .PHONY: host-actions-test
 host-actions-test: $(TARGET)
@@ -158,13 +158,13 @@ hosted-feature-test: $(TARGET) $(INBE_FULL_BUNDLE)
 
 VISUAL_TEST_TARGETS += hosted-feature-test
 
-.PHONY: cells-artifact-test
-cells-artifact-test: $(TARGET) $(CELL_BUNDLES)
-	python3 tests/cells_artifact_test.py $(abspath $(TARGET))
+.PHONY: apps-artifact-test
+apps-artifact-test: $(TARGET) $(APP_BUNDLES)
+	python3 tests/apps_artifact_test.py $(abspath $(TARGET))
 
-.PHONY: cells-onboarding-test
-cells-onboarding-test: $(TARGET)
-	sh tests/cells_onboarding_test.sh $(abspath $(TARGET))
+.PHONY: apps-onboarding-test
+apps-onboarding-test: $(TARGET)
+	sh tests/apps_onboarding_test.sh $(abspath $(TARGET))
 
 .PHONY: locale-render-ui-test
 locale-render-ui-test: $(TARGET) $(INBE_BUNDLE)
@@ -178,7 +178,7 @@ sync-review-ui-test: $(TARGET)
 # Photos repository's build.
 DEVICE_LINK_DETECT_QR ?= ../photos/build/detect-qr/detect_qr
 .PHONY: device-link-ui-test
-device-link-ui-test: $(TARGET) $(INBE_FULL_BUNDLE) $(BUILD_DIR)/cells/lumi.zx
+device-link-ui-test: $(TARGET) $(INBE_FULL_BUNDLE) $(BUILD_DIR)/apps/lumi.zx
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \
 		-u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 SDL_AUDIODRIVER=dummy APP_NO_TRAY=1 \
 		timeout 300s xvfb-run -a -n 340 -s '-noreset -screen 0 1920x900x24' \
@@ -232,9 +232,9 @@ shared-progress-ui-test: $(TARGET)
 practice-images-ui-test: $(TARGET)
 	@sh tests/practice_images_ui_test.sh $(abspath $(TARGET))
 
-.PHONY: cells-diary-test
-cells-diary-test: $(TARGET)
-	sh tests/cells_diary_test.sh $(abspath $(TARGET))
+.PHONY: apps-diary-test
+apps-diary-test: $(TARGET)
+	sh tests/apps_diary_test.sh $(abspath $(TARGET))
 
 .PHONY: practice-downloads-ui-test
 practice-downloads-ui-test: $(TARGET)

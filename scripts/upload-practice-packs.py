@@ -90,7 +90,7 @@ def main():
         directory = store / "inbe.practices"
         # The store also holds the Practice app's own bundle under this app
         # ID; only the content packs its catalog names are uploaded.
-        practices = (ROOT / "build/cells/practices.zx").read_bytes()
+        practices = (ROOT / "build/apps/practices.zx").read_bytes()
         listed = package_release.catalog_from_bundle(practices)
         if args.content:
             listed = [pack for pack in listed if pack["practice"] in args.content and not pack["language"]]

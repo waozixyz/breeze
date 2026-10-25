@@ -15,9 +15,9 @@
 #import, file "db.zi";
 #import, file "storage_core.zi";
 #import, file "storage_settings.zi";
-#import, file "cell_records.zi";
+#import, file "bundled_app_records.zi";
 #import, file "../app/text_buffers.zi";
-#import, file "../cells/package_files.zi";
+#import, file "../apps/package_files.zi";
 
 AchievementMaximum :: 512
 AchievementDefinition :: struct {
@@ -223,7 +223,7 @@ AchievementRecord :: (metric: string, source: string, day: s32, amount: s64 = 1,
     saved_day := day
     saved_variant := variant
     saved_active := active
-    previous := CellRecordRead(key)
+    previous := BundledAppRecordRead(key)
     defer { PackageFree(previous) }
     if AchievementRecordPayloadValid(key, previous) {
         if metric == "list.completed" || metric == "list.comment" {
@@ -248,7 +248,7 @@ AchievementRecord :: (metric: string, source: string, day: s32, amount: s64 = 1,
     defer { PackageFree(value) }
     if !AchievementRecordPayloadValid(key, value) { return false }
     if storage_setting_text_equals(key, value) != 0 { return true }
-    if !CellRecordWrite(key, value) { return false }
+    if !BundledAppRecordWrite(key, value) { return false }
     achievement_dirty = true
     achievement_evaluate_at = 0
     achievement_facts_ready = false
@@ -266,7 +266,7 @@ AchievementToday :: () -> s32 {
 // tombstone. No source text or presentation state is added to that tombstone.
 AchievementRetract :: (metric: string, source: string) -> bool {
     key := AchievementKey(metric, source)
-    previous := CellRecordRead(key)
+    previous := BundledAppRecordRead(key)
     defer { PackageFree(key); PackageFree(previous) }
     if previous.count == 0 { return true }
     if !AchievementRecordPayloadValid(key, previous) { return false }
@@ -278,7 +278,7 @@ AchievementRetract :: (metric: string, source: string) -> bool {
     BuilderPrint(*out, "%1%", previous[:at], previous[end:])
     value := BuilderFinish(out)
     defer { PackageFree(value) }
-    if !CellRecordWrite(key, value) { return false }
+    if !BundledAppRecordWrite(key, value) { return false }
     achievement_dirty = true
     achievement_evaluate_at = 0
     achievement_facts_ready = false
@@ -374,7 +374,7 @@ AchievementAlerts :: () -> bool {
 
 AchievementSetAlerts :: (enabled: bool) -> bool {
     value := ifx enabled then "1" else "0"
-    if !CellRecordWrite(AchievementAlertsKey, value) { return false }
+    if !BundledAppRecordWrite(AchievementAlertsKey, value) { return false }
     if !enabled { AchievementDiscardAlerts() }
     return true
 }
@@ -408,7 +408,7 @@ AchievementEvaluate :: () {
         entry.progress = value
         key := PackageText("cell.achievement.award.", TextUntilNul(entry.id[:]))
         defer { PackageFree(key) }
-        award := CellRecordRead(key)
+        award := BundledAppRecordRead(key)
         defer { PackageFree(award) }
         if award.count > 0 && AchievementRecordPayloadValid(key, award) {
             entry.awarded = true
@@ -422,7 +422,7 @@ AchievementEvaluate :: () {
             BuilderPrint(*out, "{\"version\":1,\"earned\":%,\"day\":%,\"rule\":1}", time, ifx live then AchievementToday() else 0)
             document := BuilderFinish(out)
             defer { PackageFree(document) }
-            if CellRecordWrite(key, document) {
+            if BundledAppRecordWrite(key, document) {
                 entry.awarded = true
                 entry.earned = time
                 entry.earned_day = ifx live then AchievementToday() else 0

@@ -102,7 +102,7 @@ def records(profile):
 def application(profile, label):
     log_path = OUTPUT / f"{label}.log"
     with log_path.open("w") as log:
-        app = subprocess.Popen([sys.argv[1], "--bundle", str(ROOT / "build/cells/lumi.zx")],
+        app = subprocess.Popen([sys.argv[1], "--bundle", str(ROOT / "build/apps/lumi.zx")],
                                cwd=ROOT, env=ENV | driver.environment() |
                                {"APP_DATA_ROOT": str(profile), "APP_NO_TRAY": "1"},
                                stdout=log, stderr=subprocess.STDOUT)

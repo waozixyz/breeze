@@ -36,12 +36,12 @@ REPOSITORY = "waozixyz/breeze"
 # (ledger name, app ID, local bundle, --feature name)
 PACKAGES = (
     ("inbe", "inbe", "build/inbe.zx", None),
-    ("lists", "inbe.lists", "build/cells/lists.zx", "lists"),
-    ("habits", "inbe.habits", "build/cells/habits.zx", "habits"),
-    ("practices", "inbe.practices", "build/cells/practices.zx", "practices"),
-    ("diary", "inbe.diary", "build/cells/diary.zx", "diary"),
-    ("lumi", "inbe.lumi", "build/cells/lumi.zx", "lumi"),
-    ("leaderboard", "inbe.leaderboard", "build/cells/leaderboard.zx", None),
+    ("lists", "inbe.lists", "build/apps/lists.zx", "lists"),
+    ("habits", "inbe.habits", "build/apps/habits.zx", "habits"),
+    ("practices", "inbe.practices", "build/apps/practices.zx", "practices"),
+    ("diary", "inbe.diary", "build/apps/diary.zx", "diary"),
+    ("lumi", "inbe.lumi", "build/apps/lumi.zx", "lumi"),
+    ("leaderboard", "inbe.leaderboard", "build/apps/leaderboard.zx", None),
 )
 SCRUBBED = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
             "SESSION_MANAGER", "GDK_DISPLAY")
@@ -105,7 +105,7 @@ def run_app(binary, bundle, feature, output, label):
     text = log.read_text(errors="replace")
     if result.returncode != 0 or not image.exists():
         raise AssertionError(f"{label}: the app rejected the package (exit {result.returncode})\n{text[-2000:]}")
-    if "cell launch rejected" in text:
+    if any(message in text for message in ("app launch rejected", "cell launch rejected")):
         raise AssertionError(f"{label}: the package loaded but its app did not open\n{text[-2000:]}")
     # A host call whose records do not fit fails inside the package and the
     # screen silently loses that part, so any failed call fails the check.

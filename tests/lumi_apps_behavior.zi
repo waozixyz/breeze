@@ -1,0 +1,359 @@
+#import "bundle_host"
+#import "byte_text_linux"
+#import, file "../src/apps/module_host.zi";
+test_runtime :: #system_library "c";
+ModuleTestFailRun :: () #foreign test_runtime;
+#import, file "../src/apps/lumi_types.zi";
+#import, file "../src/apps/lumi_ui_types.zi";
+#import, file "../src/apps/lumi_store.zi";
+#import, file "../src/apps/feedback_store.zi";
+#import, file "../src/apps/package_files.zi";
+#import, file "../src/apps/value_codec.zi";
+#import, file "../src/apps/app_codec.zi";
+#import "hosted_values"
+#import, file "../src/apps/inbe_types.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/storage_settings.zi";
+#import, file "../src/storage/bundled_app_records.zi";
+#import, file "../src/storage/sqlite.zi";
+#import, file "../src/storage/db.zi";
+
+using HostValueKind;
+task_codec: WidgetLumiTaskCodec;
+frame_codec: WidgetLumiToolsCodec;
+available_apps: s32 = 15;
+choosing_habit: bool;
+choosing_diary: bool;
+action_codec: WidgetLumiActionCodec;
+action_count: s32;
+last_action: LumiAction;
+last_id: [37]u8;
+last_reply: [1024]u8;
+
+TestLumiCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    unused context
+    unused module
+    name := TextFromCString(function)
+    if name == "LumiLocaleRevisionHost" && count == 0 {
+        result.* = HostScalar("s64", 1)
+        return 1
+    }
+    if name == "StartLumiOnlineHost" {
+        result.* = HostScalar("bool", 0)
+        return 1
+    }
+    if (name == "LumiLocaleHost" || name == "LumiEnglishLocaleHost") && count == 1 {
+        result.* = arguments[0]
+        return 1
+    }
+    if name == "LumiToolHost" && count == 2 {
+        tool := TextFromBytes(BytesFromPointer(arguments[0].data,
+                cast(u64)arguments[0].length))
+        if tool != "read_context" {
+            return 0
+        }
+        // This fixture has no paused habits; all active rows come from its
+        // typed ReadLumiHabitHost response below.
+        payload := "{\"habits\":[]}"
+        result.* = HostValue.{.kind = cast(s32)HostString,
+            .type_name = HostTextData("string"), .data = HostTextData(payload),
+            .length = cast(usize)payload.count}
+        return 1
+    }
+    if name == "ReadLumiToolsHost" && count == 0 {
+        result.* = WidgetEncodeLumiTools(LumiTools.{.available_apps = available_apps,
+                .task_count = 4, .habit_count = 3, .choosing_habit = choosing_habit,
+                .choosing_diary = choosing_diary}, *frame_codec)
+        return 1
+    }
+    if name == "ReadLumiHabitHost" && count == 1 {
+        habits: [3]LumiTask = .[LumiTask.{.id = "water-habit", .title = "Drink water", .done = true},
+        LumiTask.{.id = "tea-habit", .title = "Drink tea"},
+        LumiTask.{.id = "walk-habit", .title = "Walk outside"}]
+        index := cast(s32)arguments[0].integer
+        if index < 0 || index >= 3 {
+            return 0
+        }
+        result.* = WidgetEncodeLumiTask(habits[index], *task_codec)
+        return 1
+    }
+    if name == "SetLumiHabitChoiceHost" && count == 1 {
+        choosing_habit = arguments[0].integer != 0
+        return 1
+    }
+    if name == "SetLumiDiaryChoiceHost" && count == 1 {
+        choosing_diary = arguments[0].integer != 0
+        return 1
+    }
+    if name == "LumiTaskCountHost" && count == 0 {
+        result.* = HostScalar("s32", 4)
+        return 1
+    }
+    if name == "ReadLumiTaskHost" && count == 1 {
+        tasks: [4]LumiTask = .[LumiTask.{.id = "water", .title = "Drink water"},
+        LumiTask.{.id = "tea", .title = "Drink tea"},
+        LumiTask.{.id = "walk", .title = "Walk outside"},
+        LumiTask.{.id = "done", .title = "Read a book", .done = true}]
+        index := cast(s32)arguments[0].integer
+        if index < 0 || index > 3 {
+            return 0
+        }
+        result.* = WidgetEncodeLumiTask(tasks[index], *task_codec)
+        return 1
+    }
+    if name == "PerformLumiActionHost" && count == 1 && WidgetValidLumiAction(arguments[0]) {
+        last_action = WidgetDecodeLumiAction(arguments[0], *action_codec)
+        unused AppCopyText(last_action.id, last_id[:])
+        action_count += 1
+        result.* = HostScalar("bool", 1)
+        return 1
+    }
+    if name == "AppendLumiChatHost" && count == 2 {
+        if arguments[1].integer == 0 {
+            unused AppCopyText(TextFromBytes(BytesFromPointer(arguments[0].data,
+                cast(u64)arguments[0].length)), last_reply[:])
+        }
+        return 1
+    }
+    return 0
+}
+
+SendLumi :: (input: string) -> bool {
+    AppsUiBegin(TestLumiCall, null)
+    result := LumiRun(LumiMessage.{.action = LUMI_SEND, .input = input})
+    AppsUiEnd()
+    return result.succeeded
+}
+
+CheckLumiConversation :: () -> s32 {
+    if !AppsSetEnabled(APP_ALL) {
+        return 101
+    }
+    action_count = 0
+    if !SendLumi("/done Drink") || action_count != 0 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_ambiguous" {
+        return 102
+    }
+    if !SendLumi("/done Drink water") || action_count != 1 ||
+    AppTextFromCString(*last_id[0], 37) != "water" || last_action.kind != LUMI_COMPLETE_TODO {
+        return 103
+    }
+    if !SendLumi("/done Walk") || action_count != 2 || AppTextFromCString(*last_id[0], 37) != "walk" {
+        return 104
+    }
+    if !SendLumi("/done Unknown") || action_count != 2 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_not_found" {
+        return 105
+    }
+    if !SendLumi("/reopen Read a book") || action_count != 3 || last_action.kind != LUMI_REOPEN_TODO {
+        return 106
+    }
+    if !SendLumi("/todo 水を飲む") || action_count != 4 || last_action.kind != LUMI_ADD_TODO {
+        return 107
+    }
+    if !SendLumi("delete all tasks") || action_count != 4 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_unknown" {
+        return 108
+    }
+    if !SendLumi("complete habit Drink") || action_count != 4 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_ambiguous" {
+        return 116
+    }
+    if !SendLumi("complete habit Drink water") || action_count != 5 ||
+    last_action.kind != LUMI_COMPLETE_HABIT || AppTextFromCString(*last_id[0], 37) != "water-habit" {
+        return 117
+    }
+    if !SendLumi("start whm") || action_count != 6 ||
+    last_action.kind != LUMI_START_PRACTICE || last_action.practice != 0 {
+        return 118
+    }
+    available_apps = LUMI_HABITS
+    if !SendLumi("/todo No Lists") || action_count != 6 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_unavailable" {
+        return 119
+    }
+    if !SendLumi("/done Drink water") || action_count != 6 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_unavailable" {
+        return 120
+    }
+    if !SendLumi("start whm") || action_count != 6 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_unavailable" {
+        return 121
+    }
+    available_apps = 15
+    if !SendLumi("COMPLETE HABIT") || !choosing_habit || action_count != 6 {
+        return 122
+    }
+    if !SendLumi("DRINK WATER") || choosing_habit || action_count != 7 ||
+    last_action.kind != LUMI_COMPLETE_HABIT {
+        return 123
+    }
+    // Hiding the shortcut must leave the shipped harness and its tools live.
+    if !AppsSetEnabled(APP_ALL & ~APP_LUMI) ||
+    (AppsInstalledMask() & APP_LUMI) == 0 || !SendLumi("/theme forest") ||
+    action_count != 8 || last_action.kind != LUMI_SET_THEME {
+        return 109
+    }
+    if !AppsSetEnabled(APP_ALL) {
+        return 110
+    }
+    if !SendLumi("write this to my diary:") || !choosing_diary || action_count != 8 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_diary_prompt" {
+        return 124
+    }
+    if !SendLumi("/todo This is diary text\nWith a second line") || choosing_diary ||
+    action_count != 9 || last_action.kind != LUMI_WRITE_DIARY ||
+    last_action.title != "/todo This is diary text\nWith a second line" ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_diary_saved" {
+        return 125
+    }
+    if !SendLumi("write this to my diary:") || !choosing_diary ||
+    !SendLumi("/cancel") || choosing_diary || action_count != 9 {
+        return 126
+    }
+    available_apps = LUMI_HABITS
+    if !SendLumi("write this to my diary: Unavailable") || choosing_diary ||
+    action_count != 9 || AppTextFromCString(*last_reply[0], 1024) != "lumi_unavailable" {
+        return 127
+    }
+    available_apps = 15
+    ModuleTestFailRun()
+    if SendLumi("An unclear request") || !AppsReady() {
+        return 128
+    }
+    if !SendLumi("An unclear request") || !AppsReady() ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_unknown" {
+        return 129
+    }
+    for index: cast(s32)0..cast(s32)127 {
+        if !SendLumi("An unclear request") || !AppsReady() {
+            return 130
+        }
+    }
+    LumiStoreReset()
+    LumiStoreAppend("Tea \"quoted\" \\ 水", true)
+    LumiStoreAppend("Ready", false)
+    if !LumiStoreSave() {
+        return 111
+    }
+    LumiStoreReset()
+    if LumiStoreCount() != 2 || LumiStoreRow(0).text != "Tea \"quoted\" \\ 水" || !LumiStoreRow(0).user {
+        return 112
+    }
+    owner: [64]u8
+    unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), owner[:])
+    unused AppCopyText("different-user", g_storage.user_id[:])
+    other_count := LumiStoreCount()
+    unused AppCopyText(AppTextFromCString(*owner[0], 64), g_storage.user_id[:])
+    if other_count != 0 || LumiStoreCount() != 2 {
+        return 113
+    }
+    payload := "{\"metric\":0,\"points\":[{\"date\":20261007,\"value\":3}]}"
+    // Donation cards are retired: none can be added.
+    if !LumiStoreAppendCard("Practice sessions", false, LUMI_CHAT_PROGRESS, payload) ||
+    LumiStoreAppendCard("Support Inner Breeze", false, LUMI_CHAT_RETIRED, "") ||
+    LumiStoreAppendCard("Invalid chart", false, LUMI_CHAT_PROGRESS, "{}") ||
+    LumiStoreAppendCard("User chart", true, LUMI_CHAT_PROGRESS, payload) || !LumiStoreSave() {
+        return 135
+    }
+    LumiStoreReset()
+    if LumiStoreCount() != 3 || LumiStoreRow(2).kind != LUMI_CHAT_PROGRESS ||
+    LumiStoreRow(2).payload != payload {
+        return 136
+    }
+    // A donation card an older version saved, as sync brings it, stays hidden.
+    if !BundledAppRecordWrite("cell.lumi.message.retired-donation",
+        "{\"time\":1,\"user\":0,\"kind\":2,\"text\":\"Support Inner Breeze\",\"payload\":\"\"}") {
+        return 137
+    }
+    LumiStoreReset()
+    if LumiStoreCount() != 3 {
+        return 138
+    }
+    for index: cast(s32)0..cast(s32)64 {
+        LumiStoreAppend("Another message", index % 2 == 0)
+    }
+    if LumiStoreCount() != 68 || !LumiStoreSave() {
+        return 114
+    }
+    storage_set_setting_text("lumi_chat", "invalid document")
+    LumiStoreReset()
+    // Once archived, a stale legacy setting cannot replace the conversation.
+    if LumiStoreCount() == 0 || !LumiStoreSave() ||
+    storage_setting_text_equals("lumi_chat", "invalid document") == 0 {
+        return 115
+    }
+    LumiStoreReset()
+    // The feedback card is the whole answer: no text repeats it.
+    last_reply = .{}
+    if !SendLumi("fix switching to Lumi freezes") || last_action.kind != LUMI_REPORT_FEEDBACK ||
+    last_reply[0] != cast(u8)0 {
+        return 131
+    }
+    report_id := FeedbackEnqueue("Lag", "Fix Lumi: 水 \\ and \"quotes\"", "view=lumi")
+    defer { PackageFree(report_id) }
+    if report_id.count != 64 || FeedbackFirst().count == 0 || FeedbackDelivered("wrong-id") {
+        return 132
+    }
+    unused AppCopyText("different-user", g_storage.user_id[:])
+    other_report := FeedbackFirst()
+    defer { PackageFree(other_report) }
+    unused AppCopyText(AppTextFromCString(*owner[0], 64), g_storage.user_id[:])
+    if other_report.count != 0 || !FeedbackDelivered(report_id) {
+        return 133
+    }
+    first_report := FeedbackFirst()
+    defer { PackageFree(first_report) }
+    if first_report.count != 0 {
+        return 134
+    }
+    draft := FeedbackDraft("Consent", "Please fix this", "view=lumi")
+    defer { PackageFree(draft) }
+    pending := FeedbackFirst()
+    defer { PackageFree(pending) }
+    if draft.count != 32 || pending.count != 0 || !FeedbackChoice(draft, 0) ||
+    !FeedbackChoice(draft, 2) || FeedbackChoice(draft, 1) {
+        return 137
+    }
+    approved := FeedbackDraft("Consent", "Please fix this", "view=lumi")
+    defer { PackageFree(approved) }
+    if !FeedbackChoice(approved, 1) || FeedbackChoice(approved, 1) {
+        return 138
+    }
+    queued := FeedbackFirst()
+    defer { PackageFree(queued) }
+    if queued.count == 0 {
+        return 139
+    }
+    // Scrolling prepends older messages without dropping the newest messages.
+    // Appending while reading history preserves the expanded conversation.
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT COUNT(*) FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%'", -1, *statement, null) != SQLITE_OK {
+        return 140
+    }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    archived := ifx SqliteStep(statement) == SQLITE_ROW then SqliteColumnInt64(statement, 0) else 0
+    SqliteFinalize(statement)
+    // Each scroll to the top adds one page until the whole history is loaded.
+    // The archive also holds the retired donation card, which never shows.
+    if archived != 69 || LumiStoreCount() != LUMI_HISTORY_PAGE {
+        return 141
+    }
+    loaded := LUMI_HISTORY_PAGE
+    while loaded < 68 {
+        loaded = ifx loaded + LUMI_HISTORY_PAGE < 68 then loaded + LUMI_HISTORY_PAGE else 68
+        if !LumiStoreLoadOlder() || LumiStoreCount() != loaded {
+            return 141
+        }
+    }
+    if LumiStoreLoadOlder() {
+        return 141
+    }
+    LumiStoreAppend("Newest after scrolling", false)
+    if LumiStoreCount() != 69 || LumiStoreRow(LumiStoreCount() - 1).text != "Newest after scrolling" {
+        return 142
+    }
+    return 0
+}

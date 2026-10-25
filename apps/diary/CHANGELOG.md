@@ -111,7 +111,7 @@
 
 ## [1.1.1] - 2026-10-06
 
-- Use Cells consistently in the cell and its independently delivered package.
+- Use Apps consistently in the app and its independently delivered package.
 
 ## [1.1.0] - 2026-10-06
 

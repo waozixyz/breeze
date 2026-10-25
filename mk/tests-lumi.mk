@@ -7,7 +7,7 @@ lumi-updates-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_
 	sh tests/lumi_updates_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 .PHONY: lumi-test
-lumi-test: cells
+lumi-test: apps
 	sh tests/lumi_engine_test.sh
 	python3 tests/lumi_habit_intent_test.py
 
@@ -21,7 +21,7 @@ lumi-history-ui-test: $(TARGET)
 		python3 tests/lumi_history_ui_test.py $(abspath $(TARGET))
 
 .PHONY: lumi-selection-ui-test lumi-harness-ui-test lumi-guide-ui-test lumi-emphasis-ui-test
-lumi-selection-ui-test: $(TARGET) $(CELL_BUNDLES)
+lumi-selection-ui-test: $(TARGET) $(APP_BUNDLES)
 	sh tests/lumi_selection_ui_test.sh $(abspath $(TARGET))
 
 lumi-harness-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
@@ -31,7 +31,7 @@ lumi-guide-ui-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
 		dbus-run-session -- python3 tests/lumi_guide_ui_test.py $(abspath $(TARGET))
 
-lumi-emphasis-ui-test: $(TARGET) $(CELL_BUNDLES) $(INBE_FULL_BUNDLE)
+lumi-emphasis-ui-test: $(TARGET) $(APP_BUNDLES) $(INBE_FULL_BUNDLE)
 	env -u INBE_DIARY_IMPORT -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
 		-u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 APP_NO_TRAY=1 SDL_VIDEODRIVER=x11 LIBGL_ALWAYS_SOFTWARE=1 \
 		xvfb-run -a -n 300 -s '-noreset -screen 0 1280x900x24' \

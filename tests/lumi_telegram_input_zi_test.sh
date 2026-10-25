@@ -52,7 +52,7 @@ void OpenURI(const char *uri)
     fputs("unexpected external URI in input fixture\n", stderr);
     abort();
 }
-int32_t __wrap_CellsInstalledMask(void)
+int32_t __wrap_AppsInstalledMask(void)
 {
     return 31;
 }
@@ -72,7 +72,7 @@ monocypher=$root/build/packages/monocypher/src
     -I"$monocypher" -I"$monocypher/optional" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
     "$monocypher/monocypher.c" "$monocypher/optional/monocypher-ed25519.c" \
-    "$liboqs" -Wl,--gc-sections -Wl,--wrap=network_transport_NetworkTransport -Wl,--wrap=CellsInstalledMask -Wl,--wrap=lumi_screen_LumiSubmit -Wl,--wrap=lumi_telegram_LumiTelegramOpen -ldl -lpthread -lz -lm -o "$work/test"
+    "$liboqs" -Wl,--gc-sections -Wl,--wrap=network_transport_NetworkTransport -Wl,--wrap=AppsInstalledMask -Wl,--wrap=lumi_screen_LumiSubmit -Wl,--wrap=lumi_telegram_LumiTelegramOpen -ldl -lpthread -lz -lm -o "$work/test"
 APP_DATA_ROOT=/tmp/inbe-lumi-telegram-input-test/data \
     env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
     YUE_DESKTOP_RECOVERY=0 "$work/test"

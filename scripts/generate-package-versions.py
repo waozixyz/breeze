@@ -25,7 +25,7 @@ interfaces = "\n".join([
     f"PackageHostAPI :: {ledger['host_api']}",
     f"PackageHostAPIOldest :: {ledger['oldest_host_api']}",
     f"PackageModuleAPI :: {ledger['module_api']}", ""])
-interface_path = root / "src/cells/host_api.zi"
+interface_path = root / "src/apps/host_api.zi"
 if not interface_path.exists() or interface_path.read_text() != interfaces:
     interface_path.write_text(interfaces)
 lines = ["// Generated from apps/versions.json; module releases are independent.",
@@ -37,7 +37,7 @@ lines = ["// Generated from apps/versions.json; module releases are independent.
          f"    if index < 0 || index >= {len(names)} {{", "        return 0", "    }",
          f"    sequences: [{len(names)}]s32 = .[" + ", ".join(str(apps[n]["sequence"] if apps[n]["bundled"] else 0) for n in names) + "]",
          "    return sequences[index]", "}", ""]
-path = root / "src/cells/versions.zi"
+path = root / "src/apps/versions.zi"
 content = "\n".join(lines)
 if not path.exists() or path.read_text() != content:
     path.write_text(content)

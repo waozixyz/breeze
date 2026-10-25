@@ -25,7 +25,7 @@
   commit retains the tested source; if master advanced, a merge preserves
   all newer source and history. The workflow can release that exact commit
   through its `revision` input. Never freeze the checkout for testing.
-  See [docs/cells.md](docs/cells.md#verification).
+  See [docs/apps.md](docs/apps.md#verification).
 - Packages declare the oldest host interface they run on (`host_api` per app
   in `apps/versions.json`); the host runs `oldest_host_api` to `host_api`.
   Raise `host_api` when the host interface changes and `oldest_host_api` only
@@ -35,7 +35,7 @@
   without a new APK. Work toward it in small steps alongside requested work;
   discuss larger moves with the owner first. Put app screens, rules and text
   in `apps/<app>/`, not in the host under `src/`. Practices still draws
-  compiled host screens (see [docs/cells.md](docs/cells.md)); when work
+  compiled host screens (see [docs/apps.md](docs/apps.md)); when work
   touches one, prefer moving it into its package. Keep the host interface
   small and generic (storage, network, locale, platform effects), because
   each new host call needs an APK before a package can use it. Apps share

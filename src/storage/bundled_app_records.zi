@@ -1,0 +1,80 @@
+// Account-owned app records share the v6 encrypted outbox. Lumi has its own
+// collection and key; Diary and feedback retain the owner-only legacy scope.
+// Device settings, signing keys and credentials never enter either collection.
+#import, file "storage_settings.zi";
+#import, file "achievement_records.zi";
+#import, file "sqlite.zi";
+#import, file "state.zi";
+#import, file "db.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../apps/package_files.zi";
+#import "byte_text_linux"
+
+BundledAppRecordValid :: (key: string) -> bool {
+    if AchievementRecordValid(key) { return true }
+    if key.count < 12 || key.count > 180 {
+        return false
+    }
+    if key[:10] != "cell.lumi." && key[:11] != "cell.diary." &&
+    (key.count < 14 || key[:14] != "cell.feedback.") {
+        return false
+    }
+    for byte: key {
+        if !((byte >= 48 && byte <= 57) || (byte >= 97 && byte <= 122) ||
+            byte == 45 || byte == 46) {
+            return false
+        }
+    }
+    return true
+}
+
+LumiBundledAppRecordValid :: (key: string) -> bool {
+    return BundledAppRecordValid(key) && key[:10] == "cell.lumi."
+}
+
+BundledAppRecordRead :: (key: string) -> string {
+    if !BundledAppRecordValid(key) {
+        return ""
+    }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT value FROM settings WHERE user_id=?1 AND key=?2", -1,
+        *statement, null) != SQLITE_OK {
+        return ""
+    }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, key)
+    if SqliteStep(statement) != SQLITE_ROW {
+        return ""
+    }
+    return PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 65536), "")
+}
+
+BundledAppRecordWrite :: (key: string, value: string) -> bool {
+    if !BundledAppRecordValid(key) || value.count == 0 || value.count >= 65536 ||
+        (AchievementRecordValid(key) && !AchievementRecordPayloadValid(key, value)) {
+        return false
+    }
+    storage_set_setting_text(key, value)
+    return storage_setting_text_equals(key, value) != 0
+}
+
+bundled_app_clock_last: s64;
+BundledAppRecordClock :: () -> s64 {
+    statement: *void
+    value := bundled_app_clock_last
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT CAST(strftime('%s','now') AS INTEGER)*1000000+CAST(substr(strftime('%f','now'),4,3) AS INTEGER)*1000",
+        -1, *statement, null) == SQLITE_OK {
+        if SqliteStep(statement) == SQLITE_ROW {
+            value = SqliteColumnInt64(statement, 0)
+        }
+        SqliteFinalize(statement)
+    }
+    if value <= bundled_app_clock_last {
+        value = bundled_app_clock_last + 1
+    }
+    bundled_app_clock_last = value
+    return value
+}

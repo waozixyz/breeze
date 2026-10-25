@@ -1,4 +1,4 @@
-"""Render every shipped locale and its cell picker in disposable profiles."""
+"""Render every shipped locale and its app picker in disposable profiles."""
 import os
 from pathlib import Path
 import shutil
@@ -35,7 +35,7 @@ languages = [line.split("|")[0] for line in (ROOT / "locales/index.txt").read_te
              if "|" in line and not line.startswith("#")]
 with tempfile.TemporaryDirectory(prefix="inbe-locales-") as temporary:
     # All languages must exercise the same artifacts, even while an Android
-    # build regenerates the shared cell bundles in the checkout.
+    # build regenerates the shared app bundles in the checkout.
     binary = Path(temporary) / "inbe"
     bundle = Path(temporary) / "inbe.zx"
     shutil.copy2(sys.argv[1], binary)
@@ -85,20 +85,20 @@ with tempfile.TemporaryDirectory(prefix="inbe-locales-") as temporary:
                 # First run keeps following the device language. Its stored
                 # code is empty so future device-language changes work.
                 assert settings["language"] == "", (language, settings["language"])
-                # Wait for the cell picker to fill the empty region above the
+                # Wait for the app picker to fill the empty region above the
                 # question, including on slower CJK font loads.
                 deadline = time.monotonic() + 30
                 while True:
                     assert app.poll() is None, log_path.read_text()
-                    cell_frame = capture(environment, window, f"{language}-cells")
-                    difference = ImageChops.difference(question_frame, cell_frame).crop(
+                    picker_frame = capture(environment, window, f"{language}-apps")
+                    difference = ImageChops.difference(question_frame, picker_frame).crop(
                         (240, 65, 660, 150))
                     red, green, blue = difference.split()
                     strongest = ImageChops.lighter(ImageChops.lighter(red, green), blue)
                     changed = sum(strongest.histogram()[11:])
                     if changed > 500:
                         break
-                    assert time.monotonic() < deadline, f"{language}: cell picker did not render"
+                    assert time.monotonic() < deadline, f"{language}: app picker did not render"
                     time.sleep(0.2)
                 assert "portable execution failed" not in log_path.read_text(), log_path.read_text()
                 assert "APP: frame rejected" not in log_path.read_text(), log_path.read_text()
@@ -110,4 +110,4 @@ with tempfile.TemporaryDirectory(prefix="inbe-locales-") as temporary:
                     except subprocess.TimeoutExpired:
                         app.kill()
                         app.wait(timeout=3)
-print(f"All {len(languages)} locales rendered the voice guidance question and the real cell picker")
+print(f"All {len(languages)} locales rendered the voice guidance question and the real app picker")

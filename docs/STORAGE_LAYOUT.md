@@ -55,7 +55,7 @@ HMAC-SHA-256 of the owner's full ML-DSA private key with the distinct context
 Diary, feedback, sessions and other private records retain their existing
 owner-only collections and legacy key context. A Lumi delegate must receive
 only the approved Lumi key; the legacy global key and combined
-`private.inbe.v1.cells` collection must never be delegated.
+`private.inbe.v1.apps` collection must never be delegated.
 
 Opening an owner profile queues existing Lumi settings for upload under the
 new collection and saves `sync_lumi_collection_v2_done` in the same SQLite

@@ -38,7 +38,7 @@ class PhoneCheckGateTest(unittest.TestCase):
         self.git("config", "user.email", "test@example.invalid")
         self.git("config", "user.name", "Test")
         self.commit({"src/main.zi": "one\n", "src/core/version.zi": "VersionString :: \"2.9.9\"\n",
-                     "scripts/build-cells.sh": "build\n", "scripts/check-version.py": "check\n",
+                     "scripts/build-apps.sh": "build\n", "scripts/check-version.py": "check\n",
                      "CHANGELOG.md": "## [3.0.0]\n"})
         self.checked = self.git("rev-parse", "HEAD").strip()
         self.checked_app = phone_check.app_tree(self.root, "HEAD")
@@ -128,7 +128,7 @@ class PhoneCheckGateTest(unittest.TestCase):
     def test_app_changed_after_the_check(self):
         self.record()
         for name in ("src/main.zi", "ziran.lock", "droid/app/build.gradle", "Makefile", "mk/sync.mk",
-                     "scripts/build-cells.sh", "scripts/new-generator.py", "assets/app/icon.png",
+                     "scripts/build-apps.sh", "scripts/new-generator.py", "assets/app/icon.png",
                      "locales/pt.txt", "apps/diary/diary.zi", "design/tai-chi/text/en.txt"):
             with self.subTest(path=name):
                 self.commit({name: "changed " + name + "\n"})
@@ -153,9 +153,9 @@ class PhoneCheckGateTest(unittest.TestCase):
         self.assertEqual(gate.validate(self.root, "3.0.0")["version"], "3.0.0")
 
     def test_untracked_app_files_are_reported(self):
-        self.write({"src/cells/new.zi": "draft\n", "docs/draft.md": "draft\n"})
+        self.write({"src/apps/new.zi": "draft\n", "docs/draft.md": "draft\n"})
         changed, untracked = phone_check.changed_app_files(self.root)
-        self.assertEqual((changed, untracked), ([], ["src/cells/new.zi"]))
+        self.assertEqual((changed, untracked), ([], ["src/apps/new.zi"]))
 
     def test_missing_check(self):
         with self.assertRaisesRegex(ValueError, "no phone check"):

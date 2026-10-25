@@ -1,14 +1,14 @@
 #!/bin/sh
 # Apps the node offers (node_apps in apps/versions.json) are built on their
 # own into build/node-apps. They never go into the root package or its
-# cells: released hosts reject a root that carries an app they don't know.
+# apps: released hosts reject a root that carries an app they don't know.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 ziran=${1:-build/ziran-toolchain/bin/ziran}
 output=${2:-build/node-apps}
 mkdir -p build "$output"
-exec 9>build/cells-build.lock
+exec 9>build/apps-build.lock
 flock 9
 packages=$(sh scripts/package-paths.sh)
 python3 scripts/check-package-versions.py

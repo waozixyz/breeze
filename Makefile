@@ -386,14 +386,14 @@ IMAGE_FILES += assets/app/icon-sky-cradle.png assets/app/icon-ink-and-air.png
 IMAGE_FILES += $(wildcard assets/social/*.png)
 IMAGE_FILES += $(wildcard assets/profile-pictures/*.png)
 IMAGE_FILES += $(KRYON_DIR)/icons/ui.png $(KRYON_DIR)/icons/pfp.png
-CELL_BUNDLES := $(addprefix $(BUILD_DIR)/cells/,lists.zx habits.zx practices.zx diary.zx lumi.zx leaderboard.zx)
+APP_BUNDLES := $(addprefix $(BUILD_DIR)/apps/,lists.zx habits.zx practices.zx diary.zx lumi.zx leaderboard.zx)
 INBE_BUNDLE := $(BUILD_DIR)/inbe.zx
 INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zx
-CELL_SOURCES := $(shell find apps src/cells -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
-CELL_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp 2>/dev/null)
-CELL_RESOURCES += $(shell find -L $(PRACTICE_MEDIA) -type f -not -path '*/.git/*' 2>/dev/null) $(shell rg --files design/tai-chi/text 2>/dev/null) apps/practice/content.json design/tai-chi/narration.json design/tai-chi/narration-lines.json $(wildcard design/tai-chi/narration-receipt.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt) $(wildcard design/lumi-guide/*.json) scripts/practice_content.py scripts/generate-lumi-guide-narration.py
-CELL_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievement-locales/*.json)
-CELL_RESOURCES += $(wildcard assets/*/sidebar.shape)
+APP_SOURCES := $(shell find apps src/apps -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
+APP_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp 2>/dev/null)
+APP_RESOURCES += $(shell find -L $(PRACTICE_MEDIA) -type f -not -path '*/.git/*' 2>/dev/null) $(shell rg --files design/tai-chi/text 2>/dev/null) apps/practice/content.json design/tai-chi/narration.json design/tai-chi/narration-lines.json $(wildcard design/tai-chi/narration-receipt.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt) $(wildcard design/lumi-guide/*.json) scripts/practice_content.py scripts/generate-lumi-guide-narration.py
+APP_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievement-locales/*.json)
+APP_RESOURCES += $(wildcard assets/*/sidebar.shape)
 
 EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) build/apps-ui/apps.zx assets/app/icon.png
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
@@ -452,7 +452,7 @@ LAW_MODULES := src/app/sync_retry_laws.zi src/app/practice_lifecycle_laws.zi \
 	src/app/modal_rules_laws.zi \
 	src/app/sync_recovery_policy_laws.zi src/storage/habit_merge_laws.zi \
 	src/storage/sync_restore_laws.zi src/storage/storage_layout_laws.zi \
-	src/guide_laws.zi src/cells/node_app_input_laws.zi
+	src/guide_laws.zi src/apps/node_app_input_laws.zi
 RAY_PKGS ?= sdl2 libdrm gbm egl glesv2
 RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
 RAY_SDL_LDLIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null)
@@ -801,7 +801,7 @@ endif
 endif
 
 include mk/laws.mk
-include mk/cells.mk
+include mk/apps.mk
 include mk/windows.mk
 include mk/web.mk
 include mk/android.mk
@@ -833,7 +833,7 @@ $(CLICK_BIN): $(CLICK_BUNDLE_RUNTIME)
 
 # Build fragments affect the artifacts even when Makefile itself is unchanged.
 BUILD_MAKEFILES := $(filter-out mk/tests-%.mk,$(MAKEFILE_LIST)) mk/native-objects.mk
-$(TARGET) $(KRYON_HOST_TARGET) $(KRY_GEN_STAMP) $(WINDOWS_GEN_STAMP) $(WEB_GEN_STAMP) $(WIN64_TARGET) $(WEB_JS_TARGET) $(WEB_TARGET) $(WEB_CANVAS_TARGET) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) $(CELL_BUNDLES): $(BUILD_MAKEFILES)
+$(TARGET) $(KRYON_HOST_TARGET) $(KRY_GEN_STAMP) $(WINDOWS_GEN_STAMP) $(WEB_GEN_STAMP) $(WIN64_TARGET) $(WEB_JS_TARGET) $(WEB_TARGET) $(WEB_CANVAS_TARGET) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) $(APP_BUNDLES): $(BUILD_MAKEFILES)
 
 # UI prerequisites are expanded only after all artifact paths are defined.
 include mk/tests-lumi.mk
@@ -844,6 +844,6 @@ include mk/tests-platform.mk
 include mk/tests-app.mk
 include mk/tests-android.mk
 include mk/tests-web.mk
-include mk/tests-cells.mk
+include mk/tests-apps.mk
 include mk/tests-ui.mk
 include mk/tests-suite.mk

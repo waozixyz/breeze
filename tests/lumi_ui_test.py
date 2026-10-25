@@ -1,4 +1,4 @@
-"""Exercise Lumi's real cell chat against a disposable, account-scoped profile.
+"""Exercise Lumi's real app chat against a disposable, account-scoped profile.
 
 The app runs on a private display and is driven through Kryon's test driver:
 widgets are found in its committed tree and pressed, typed into and read
@@ -47,7 +47,7 @@ def application(profile, label, standalone=False, recommended=False):
     global driver
     if driver is None:
         driver = UiDriver(OUTPUT / "driver")
-    bundle = ROOT / ("build/cells/lumi.zx" if standalone else
+    bundle = ROOT / ("build/apps/lumi.zx" if standalone else
                      "build/inbe.zx" if recommended else "build/inbe-full.zx")
     log_path = OUTPUT / f"{label}.log"
     with log_path.open("w") as log:
@@ -468,7 +468,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         assert query(profile, "SELECT habit_id,local_date,completed,count FROM habit_days ORDER BY habit_id,local_date") == before_habits
     (OUTPUT / "result.json").write_text(json.dumps({
         "passed": True, "exchanges": len(transcript) // 2,
-        "checked": ["standalone cell", "default Lumi home", "add todo", "unique completion",
+        "checked": ["standalone app", "default Lumi home", "add todo", "unique completion",
                     "reopen", "ambiguous completion", "suggestions do not execute", "restart persistence",
                     "habit ambiguity", "habit counter target", "no uncompletion on repeated command",
                     "Lists absent", "WHM starts and advances immediately", "Practices and Habits absent", "habit question and name reply",
@@ -480,4 +480,4 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
                     "command waits for its text", "tapped command", "no todo suggestions without Lists",
                     "narrow chat fits"],
     }, indent=2) + "\n")
-print("Lumi UI: chat, installed-cell tools, habit targets, WHM start, autocomplete and persistence passed")
+print("Lumi UI: chat, installed-app tools, habit targets, WHM start, autocomplete and persistence passed")

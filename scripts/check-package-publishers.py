@@ -11,7 +11,7 @@ ledger = json.loads((root / "apps/versions.json").read_text())
 required = {value["id"] for value in ledger["apps"].values()}
 node_apps = ledger.get("node_apps", {})
 if not isinstance(publishers, list) or not 0 < len(publishers) <= 32:
-    raise SystemExit("Release requires registered public publisher pins in apps/publishers.json; see docs/cells.md")
+    raise SystemExit("Release requires registered public publisher pins in apps/publishers.json; see docs/apps.md")
 covered = set()
 seen = set()
 for publisher in publishers:
@@ -35,5 +35,5 @@ for publisher in publishers:
     covered.update(apps)
     seen.add(key_id)
 if not covered >= required or covered - required - {value["id"] for value in node_apps.values()}:
-    raise SystemExit("Release requires publisher coverage for the root and all five cells")
-print("Publisher pins cover the root and all five cells")
+    raise SystemExit("Release requires publisher coverage for the root and all five apps")
+print("Publisher pins cover the root and all five apps")

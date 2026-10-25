@@ -31,7 +31,7 @@ phone-check:
 	@test -n "$(APK)" || { echo "Set APK=path/to/inbe.apk"; exit 1; }
 	python3 scripts/phone-check.py "$(APK)" --record
 
-# The release routine (docs/cells.md, "Verification"): run CI's checks here, then
+# The release routine (docs/apps.md, "Verification"): run CI's checks here, then
 # check on the development Moto and make the one release commit. Never pushes.
 # make release [APK=path/to/inbe.apk]
 .PHONY: release-ready release

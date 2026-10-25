@@ -5,7 +5,7 @@ import sqlite3
 
 root = Path(__file__).resolve().parents[1]
 sql = dict(re.findall(r'(\w+) :: #string SQL\n(.*?)\nSQL',
-                      (root / 'src/cells/lumi_progress.zi').read_text(), re.S))
+                      (root / 'src/apps/lumi_progress.zi').read_text(), re.S))
 schema = dict(re.findall(r'(\w+) :: #string SQL\n(.*?)\nSQL',
                          (root / 'src/storage/schema_sql.zi').read_text(), re.S))
 with sqlite3.connect(':memory:') as db:

@@ -93,11 +93,11 @@ class PackageVersionsTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     versions.validate(self.root)
 
-    def test_every_cell_is_available_offline(self):
+    def test_every_app_is_available_offline(self):
         value = copy.deepcopy(self.ledger)
         value["apps"]["habits"]["bundled"] = False
         self.write(value)
-        with self.assertRaisesRegex(ValueError, "every cell must be bundled"):
+        with self.assertRaisesRegex(ValueError, "every app must be bundled"):
             versions.validate(self.root)
 
     def test_changelog_requires_a_numeric_first_release(self):
@@ -122,11 +122,11 @@ class PackageVersionsTest(unittest.TestCase):
 
         for path in ("apps/diary/diary_view.zi", "assets/practices/breath.png",
                      "locales/en.txt", "themes/catalog_dark.kss",
-                     "scripts/prepare-package-assets.py", "src/cells/versions.zi"):
+                     "scripts/prepare-package-assets.py", "src/apps/versions.zi"):
             with self.subTest(path=path):
                 self.assertTrue(triggered("packages.yml", path))
                 self.assertFalse(triggered("release.yml", path))
-        for path in ("src/cells/module_host.zi", "droid/app/build.gradle",
+        for path in ("src/apps/module_host.zi", "droid/app/build.gradle",
                      "CHANGELOG.md", "apps/publishers.json"):
             with self.subTest(path=path):
                 self.assertTrue(triggered("release.yml", path))

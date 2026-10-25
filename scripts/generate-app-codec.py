@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate src/cells/app_codec.zi with Kryon's widget codec generator.
+"""Generate src/apps/app_codec.zi with Kryon's widget codec generator.
 
 Kryon encodes its own widget records in its widget_codec module. This adds
 the frames and rows Inner Breeze's apps exchange with their screens.
@@ -29,13 +29,13 @@ ROOTS = ['DiaryUiFrame', 'InbeUiFrame', 'ListsUiFrame', 'ListsUiRow', 'ListsUiPe
          'PracticeResultRound']
 
 command = [sys.executable, str(KRYON / 'scripts/generate-widget-codecs.py'),
-           '--output', str(ROOT / 'src/cells/app_codec.zi'),
+           '--output', str(ROOT / 'src/apps/app_codec.zi'),
            '--uses', str(KRYON / 'src/backend/widget_codec.zi'),
            '--generated-by', 'scripts/generate-app-codec.py']
 for module in KRYON_MODULES:
     command += ['--source', str(KRYON / 'src/ui' / (module + '.zi'))]
 for name in APP_TYPES:
-    command += ['--source', str(ROOT / ('apps/diary' if name == 'diary_ui_types' else 'src/cells') / (name + '.zi'))]
+    command += ['--source', str(ROOT / ('apps/diary' if name == 'diary_ui_types' else 'src/apps') / (name + '.zi'))]
 for root in ROOTS:
     command += ['--root', root]
 for line in ['"std/bundle_host"', '"std/byte_text_linux"', '"hosted_values"', '"widget_codec"',

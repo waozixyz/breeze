@@ -2,7 +2,7 @@
 
 android-copy-assets:
 	$(MAKE) $(FONT_FILES)
-	$(MAKE) cells
+	$(MAKE) apps
 	rm -rf droid/app/src/main/assets
 	mkdir -p droid/app/src/main/assets
 

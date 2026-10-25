@@ -97,19 +97,19 @@ size_t asset_entry_total(void) {
 }
 void app_web_storage_flush(void) {
 }
-bool CellsValidatePackage(int32_t index, String bytes) {
+bool AppsValidatePackage(int32_t index, String bytes) {
     assert((index == 0 || index == 4) && bytes.length > 8);
-    return true; /* The capability decoder is covered by cells-test. */
+    return true; /* The capability decoder is covered by apps-test. */
 }
-int32_t CellsPreparePackage(int32_t index, String bytes) {
-    return CellsValidatePackage(index, bytes) ? 1 : -1;
+int32_t AppsPreparePackage(int32_t index, String bytes) {
+    return AppsValidatePackage(index, bytes) ? 1 : -1;
 }
-void CellsDiscardPreparation(void) {
+void AppsDiscardPreparation(void) {
 }
-bool CellsPreparationIdle(void) {
+bool AppsPreparationIdle(void) {
     return true;
 }
-void CellsCommitPreparation(int32_t index, int32_t revision) {
+void AppsCommitPreparation(int32_t index, int32_t revision) {
     assert(index >= 0 && revision > 0);
 }
 
@@ -202,7 +202,7 @@ int32_t RunPackageManagerFixture(void) {
     assert(package_manager_PackageSequence(2) == baseline);
     storage_set_setting_int(StringLiteral("package_sequence_habits"), -10);
     assert(package_manager_PackageSequence(2) == baseline); /* Installed baseline is the floor. */
-    request(); /* A manual check reuses the bundled cell at the same sequence. */
+    request(); /* A manual check reuses the bundled app at the same sequence. */
     assert(package_manager_PackageStatus(4) == 2 && starts == 1);
     int32_t installed_sequence = package_manager_PackageSequence(4);
     assert(installed_sequence > 0);

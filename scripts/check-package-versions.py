@@ -22,7 +22,7 @@ def validate(root):
     if ledger["oldest_host_api"] > ledger["host_api"]:
         raise ValueError("oldest_host_api is newer than host_api")
     if set(ledger["apps"]) != set(NAMES):
-        raise ValueError("the ledger must contain the root and all six cells")
+        raise ValueError("the ledger must contain the root and all six apps")
     for name, source in NAMES.items():
         component = ledger["apps"][name]
         expected_id = "inbe" if name == "inbe" else "inbe." + name
@@ -33,7 +33,7 @@ def validate(root):
         if type(component.get("sequence")) is not int or not 0 < component["sequence"] <= 2147483647:
             raise ValueError(f"{name}: invalid release sequence")
         if component.get("bundled") is not True:
-            raise ValueError(f"{name}: every cell must be bundled for offline use")
+            raise ValueError(f"{name}: every app must be bundled for offline use")
         # The Inner Breeze release this version was made for, once per release.
         if "release" in component and (not isinstance(component["release"], str) or
                                        not re.fullmatch(VERSION, component["release"])):
@@ -49,7 +49,7 @@ def validate(root):
             raise ValueError(f"{name}: first changelog entry must be a numeric release")
         date.fromisoformat(headings[0][1])
         if headings[0][0] != component["version"]:
-            raise ValueError(f"{name}: changelog and ledger differ; run ./update_version.sh --cell {name}")
+            raise ValueError(f"{name}: changelog and ledger differ; run ./update_version.sh --app {name}")
     # Apps the node offers are not bundled: they need no place in the root,
     # and a newer host interface of theirs does not hold the root back.
     for name, component in ledger.get("node_apps", {}).items():
@@ -74,7 +74,7 @@ def validate(root):
         headings = re.findall(r"^## \[([^\]]+)\] - ([^\n]+)$",
                               (root / "apps" / name / "CHANGELOG.md").read_text(), re.M)
         if not headings or headings[0][0] != component["version"]:
-            raise ValueError(f"{name}: changelog and ledger differ; run ./update_version.sh --cell {name}")
+            raise ValueError(f"{name}: changelog and ledger differ; run ./update_version.sh --app {name}")
         date.fromisoformat(headings[0][1])
     # The root package carries every app for offline use, so a host that
     # cannot run one of them cannot open the root package either.

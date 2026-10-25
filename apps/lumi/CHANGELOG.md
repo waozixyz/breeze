@@ -162,7 +162,7 @@
 
 - Place Lumi’s avatar beside her replies in a chat without a title bar.
 - Complete habits for today and start WHM, meditation, Sun Salutation or breathing patterns directly from chat.
-- Offer only commands supported by installed and enabled cells.
+- Offer only commands supported by installed and enabled apps.
 - Ask which habit to complete, choose it by name, and use compact autocomplete chips with case-insensitive matching and command spelling correction.
 
 ## [1.0.0] - 2026-10-06

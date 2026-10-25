@@ -10,7 +10,7 @@
 #import, file "../src/app/app_types.zi";
 #import, file "../src/core/types.zi";
 #import, file "../src/storage/sync_state.zi";
-#import, file "../src/storage/cell_records.zi";
+#import, file "../src/storage/bundled_app_records.zi";
 #import, file "../src/storage/sync_account.zi";
 #import, file "../src/storage/account_types.zi";
 #import, file "../src/storage/data.zi";
@@ -19,7 +19,7 @@
 #import, file "../src/storage/storage_sessions.zi";
 #import, file "../src/storage/sql_query.zi";
 #import, file "../src/storage/delegate_store.zi";
-#import, file "../src/cells/package_files.zi";
+#import, file "../src/apps/package_files.zi";
 #import, file "../src/app/text_buffers.zi";
 #import, file "background_audio_stub.zi";
 
@@ -44,12 +44,12 @@ WriteControl :: (activity: AccountActivity, id: string, revision: s64, now: s64)
     writer = WriteByte(writer, cast(u8)44)
     writer = JsonNumberField(writer, "revision", revision)
     writer = WriteText(writer, ",\"paused\":1}")
-    check_true("write control", writer.valid && CellRecordWrite(ActivityControlKey, TextUntilNul(document[:])))
+    check_true("write control", writer.valid && BundledAppRecordWrite(ActivityControlKey, TextUntilNul(document[:])))
 }
 
 ReadStored :: () -> AccountActivity {
     value: AccountActivity
-    document := CellRecordRead(ActivityRecordKey)
+    document := BundledAppRecordRead(ActivityRecordKey)
     check_true("read activity record", ActivityRead(document, *value))
     PackageFree(document)
     return value
@@ -163,7 +163,7 @@ Check :: () -> s32 {
     remote.device_id[0] = ifx remote.device_id[0] == cast(u8)97 then cast(u8)98 else cast(u8)97
     output: [2048]u8
     check_true("serialize remote record", ActivityWrite(remote, output[:]))
-    check_true("receive remote record", CellRecordWrite(ActivityRecordKey, TextUntilNul(output[:])))
+    check_true("receive remote record", BundledAppRecordWrite(ActivityRecordKey, TextUntilNul(output[:])))
     FixtureAdvance(1)
     ActivityPump(*fixture_app)
     check_true("remote session visible", ActivityRemoteVisible() && !ActivityStartAllowed())
@@ -183,10 +183,10 @@ Check :: () -> s32 {
     leftover.time = ActivityCurrentTime()
     leftover.active = 1
     check_true("serialize leftover record", ActivityWrite(leftover, output[:]))
-    check_true("keep leftover record", CellRecordWrite(ActivityRecordKey, TextUntilNul(output[:])))
+    check_true("keep leftover record", BundledAppRecordWrite(ActivityRecordKey, TextUntilNul(output[:])))
     FixtureAdvance(1)
     ActivityPump(*fixture_app)
-    leftover_document := CellRecordRead(ActivityRecordKey)
+    leftover_document := BundledAppRecordRead(ActivityRecordKey)
     ended_leftover: AccountActivity
     check_true("own leftover session is ended", ActivityRead(leftover_document, *ended_leftover) &&
         ended_leftover.active == 0 && TextUntilNul(ended_leftover.session_id[:]) == TextUntilNul(first.session_id[:]))
@@ -198,14 +198,14 @@ Check :: () -> s32 {
     other.active = 1
     other.revision = 5
     check_true("serialize other record", ActivityWrite(other, output[:]))
-    check_true("receive other record", CellRecordWrite(ActivityRecordKey, TextUntilNul(output[:])))
+    check_true("receive other record", BundledAppRecordWrite(ActivityRecordKey, TextUntilNul(output[:])))
     FixtureAdvance(1)
     ActivityPump(*fixture_app)
     check_true("updating session cannot be ended here", ActivityRemoteVisible() && !ActivityEndRemote(*fixture_app))
     FixtureAdvance(ActivityFreshSeconds + 1)
     ActivityPump(*fixture_app)
     check_true("stale session ends for every device", ActivityEndRemote(*fixture_app) && !ActivityRemoteVisible())
-    ended_document := CellRecordRead(ActivityRecordKey)
+    ended_document := BundledAppRecordRead(ActivityRecordKey)
     ended_other: AccountActivity
     check_true("ended record is shared", ActivityRead(ended_document, *ended_other) && ended_other.active == 0 &&
         TextUntilNul(ended_other.session_id[:]) == TextUntilNul(other.session_id[:]))

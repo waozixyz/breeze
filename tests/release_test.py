@@ -134,7 +134,7 @@ class ReleaseTest(unittest.TestCase):
     def test_the_release_commit_takes_only_version_files(self):
         files = ["droid/app/build.gradle", "src/core/version.zi", "packaging/snap/snap/snapcraft.yaml",
                  "fastlane/metadata/android/en-US/changelogs/173.txt", "apps/diary/CHANGELOG.md",
-                 "apps/versions.json", "src/cells/versions.zi"]
+                 "apps/versions.json", "src/apps/versions.zi"]
         stray = ["src/screens/diary_screen.zi", "locales/pt.txt", "apps/diary/diary.zi"]
         allowed = [path for path in files + stray
                    if any(release.fnmatch.fnmatchcase(path, pattern) for pattern in release.VERSION_FILES)]

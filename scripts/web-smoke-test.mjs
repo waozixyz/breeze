@@ -161,13 +161,13 @@ const server = createServer(async (req, res) => {
     createReadStream(new URL('../assets/sounds/bell.ogg', import.meta.url)).pipe(res);
     return;
   }
-  if (url.pathname === '/__test_cells__/lists.zx' ||
-      url.pathname === '/__test_cells__/practices.zx') {
+  if (url.pathname === '/__test_apps__/lists.zx' ||
+      url.pathname === '/__test_apps__/practices.zx') {
     const name = url.pathname.split('/').pop();
-    const fixture = new URL('../build/cells/' + name, import.meta.url);
+    const fixture = new URL('../build/apps/' + name, import.meta.url);
     if (!existsSync(fixture)) {
       res.writeHead(404);
-      res.end('Build the cell fixtures before running the smoke test');
+      res.end('Build the app fixtures before running the smoke test');
       return;
     }
     res.writeHead(200, { 'content-type': 'application/octet-stream' });

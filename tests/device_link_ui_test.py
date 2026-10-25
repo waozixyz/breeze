@@ -123,7 +123,7 @@ def setting(profile, key):
 def prepare(profile, server):
     """Creates a fresh profile and points it at the local mailbox."""
     driver = UiDriver(OUTPUT / "driver-first-start")
-    first = subprocess.Popen([BINARY, "--bundle", str(ROOT / "build/cells/lumi.zx")], cwd=ROOT,
+    first = subprocess.Popen([BINARY, "--bundle", str(ROOT / "build/apps/lumi.zx")], cwd=ROOT,
                              env=os.environ | {"APP_DATA_ROOT": str(profile)} | driver.environment(),
                              stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     driver.attach(first)

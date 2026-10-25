@@ -1,0 +1,308 @@
+// Whether Lumi may use the network. Lumi starts offline and stays offline
+// until the person agrees to the terms for where its requests go: Inner
+// Breeze's server, or an OpenAI-compatible provider they set up. Offline,
+// Lumi makes no network request at all.
+//
+// The server agreement is a Lumi record, so it syncs to the account's
+// other devices like the chat and is withdrawn the same way. An own
+// provider, its key and the agreement to send to it stay on this device.
+#import "json_scan"
+#import "text"
+#import "vec"
+#import "byte_text_linux"
+#import "text_buffer"
+#import, file "../storage/sync_state.zi";
+#import, file "../storage/storage_settings.zi";
+#import, file "../storage/bundled_app_records.zi";
+#import, file "../storage/delegate_store.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "package_files.zi";
+
+// Raise when the terms change in substance; everyone agrees again.
+LUMI_AGREEMENT_VERSION :: 1
+// Until Lumi's title bar switch and terms panel ship, Lumi keeps going
+// online as before. They ship together with this set to 1.
+LUMI_AGREEMENT_REQUIRED :: 1
+LumiAgreementRecord :: "cell.lumi.agreement"
+LumiOnlineSetting :: "lumi_online"
+LumiProviderSetting :: "lumi_provider"
+LumiProviderUrlSetting :: "lumi_provider_url"
+LumiProviderModelSetting :: "lumi_provider_model"
+LumiProviderKeySetting :: "lumi_provider_key"
+LumiProviderAgreementSetting :: "lumi_provider_agreement"
+LUMI_PROVIDER_URL_MAX :: 512
+LUMI_PROVIDER_KEY_MAX :: 512
+LUMI_PROVIDER_MODEL_MAX :: 128
+
+c :: #system_library "c";
+#if #defined(_WIN32) {
+    ConnectionNow :: (out: *s64) -> s64 #foreign c "_time64";
+} else {
+    ConnectionNow :: (out: *s64) -> s64 #foreign c "time";
+}
+
+LumiAgreement :: struct {
+    agreed: bool
+    // Agreed or withdrawn under the current terms.
+    answered: bool
+    time: s64
+}
+
+// The server agreement as recorded, synced from any of the account's
+// devices. A record of an older version no longer counts.
+LumiNodeAgreement :: () -> LumiAgreement {
+    agreement: LumiAgreement
+    record := BundledAppRecordRead(LumiAgreementRecord)
+    defer { PackageFree(record) }
+    if record.count == 0 || ValueEnd(record, 0, 0) != record.count {
+        return agreement
+    }
+    version := ReadNumber(record, FieldAt(record, 0, "version"))
+    time := ReadNumber(record, FieldAt(record, 0, "time"))
+    agreed_at := FieldAt(record, 0, "agreed")
+    agreement.answered = version.valid && version.value == cast(float64)LUMI_AGREEMENT_VERSION &&
+    agreed_at >= 0
+    agreement.agreed = agreement.answered && MatchLiteral(record, agreed_at, "true")
+    if time.valid {
+        agreement.time = cast(s64)time.value
+    }
+    return agreement
+}
+
+LumiNodeAgreed :: () -> bool {
+    return LumiNodeAgreement().agreed
+}
+
+// Withdrawn on this or another device under the current terms.
+LumiNodeDeclined :: () -> bool {
+    agreement := LumiNodeAgreement()
+    return agreement.answered && !agreement.agreed
+}
+
+LumiRecordNodeAgreement :: (agreed: bool) -> bool {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"version\":%,\"agreed\":%,\"time\":%}", LUMI_AGREEMENT_VERSION,
+        agreed, ConnectionNow(null))
+    value := BuilderFinish(out)
+    defer { PackageFree(value) }
+    return BundledAppRecordWrite(LumiAgreementRecord, value)
+}
+
+LumiProviderText :: (byte: u8) -> bool {
+    return byte > cast(u8)32 && byte < cast(u8)127
+}
+
+// Where a provider URL's host starts, after "https://" or "http://", or -1.
+LumiProviderHostStart :: (url: string) -> s64 {
+    if url.count > 8 && url[:8] == "https://" {
+        return 8
+    }
+    if url.count > 7 && url[:7] == "http://" {
+        return 7
+    }
+    return -1
+}
+
+// The host and port a provider URL names, for showing where requests go.
+LumiProviderHost :: (url: string) -> string {
+    start := LumiProviderHostStart(url)
+    if start < 0 {
+        return ""
+    }
+    end := start
+    while end < url.count && url[end] != cast(u8)47 && url[end] != cast(u8)63 &&
+    url[end] != cast(u8)35 {
+        end += 1
+    }
+    return url[start:end]
+}
+
+LumiProviderLoopback :: (host: string) -> bool {
+    names: [3]string = .["localhost", "127.0.0.1", "[::1]"]
+    for name: names {
+        if host == name {
+            return true
+        }
+        if host.count > name.count && host[:name.count] == name &&
+        host[name.count] == cast(u8)58 {
+            return true
+        }
+    }
+    return false
+}
+
+// An https address, or plain http only to this device itself, without
+// credentials, spaces or control characters.
+LumiProviderUrlValid :: (url: string) -> bool {
+    if url.count == 0 || url.count >= LUMI_PROVIDER_URL_MAX {
+        return false
+    }
+    for byte: url {
+        if !LumiProviderText(byte) {
+            return false
+        }
+    }
+    start := LumiProviderHostStart(url)
+    host := LumiProviderHost(url)
+    if start < 0 || host.count == 0 {
+        return false
+    }
+    for byte: host {
+        if byte == cast(u8)64 {
+            return false
+        }
+    }
+    return start == 8 || LumiProviderLoopback(host)
+}
+
+LumiProviderKeyValid :: (key: string) -> bool {
+    if key.count >= LUMI_PROVIDER_KEY_MAX {
+        return false
+    }
+    for byte: key {
+        if !LumiProviderText(byte) {
+            return false
+        }
+    }
+    return true
+}
+
+LumiProviderModelValid :: (model: string) -> bool {
+    if model.count == 0 || model.count >= LUMI_PROVIDER_MODEL_MAX {
+        return false
+    }
+    for byte: model {
+        if byte < cast(u8)32 || byte == cast(u8)127 || byte == cast(u8)34 || byte == cast(u8)92 {
+            return false
+        }
+    }
+    return true
+}
+
+// The chat completions endpoint of a provider's base URL. A URL that
+// already names the endpoint is used as it is.
+LumiProviderEndpoint :: (url: string, output: []u8) -> string {
+    base := url
+    while base.count > 0 && base[base.count - 1] == cast(u8)47 {
+        base = base[:base.count - 1]
+    }
+    suffix := "/chat/completions"
+    out: Vec(u8)
+    if base.count >= suffix.count && base[base.count - suffix.count:] == suffix {
+        BuilderPrint(*out, "%", base)
+    } else {
+        BuilderPrint(*out, "%", base)
+        BuilderPrint(*out, "%", suffix)
+    }
+    value := BuilderFinish(out)
+    defer { PackageFree(value) }
+    if !AppCopyText(value, output) {
+        return ""
+    }
+    return TextUntilNul(output)
+}
+
+LumiOwnProviderSelected :: () -> bool {
+    return storage_get_setting_text(LumiProviderSetting) == "own"
+}
+
+// An own provider with a usable address and model; the key may be empty
+// for a provider on this device that needs none.
+LumiOwnProviderReady :: () -> bool {
+    url: [LUMI_PROVIDER_URL_MAX]u8
+    unused AppCopyText(storage_get_setting_text(LumiProviderUrlSetting), url[:])
+    return LumiOwnProviderSelected() && LumiProviderUrlValid(TextUntilNul(url[:])) &&
+    LumiProviderModelValid(storage_get_setting_text(LumiProviderModelSetting))
+}
+
+// The agreement to send to an own provider names its address: changing
+// the address needs agreeing again.
+LumiProviderAgreementText :: (url: string, output: []u8) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "% %", LUMI_AGREEMENT_VERSION, url)
+    value := BuilderFinish(out)
+    defer { PackageFree(value) }
+    if !AppCopyText(value, output) {
+        return ""
+    }
+    return TextUntilNul(output)
+}
+
+LumiProviderAgreed :: () -> bool {
+    url: [LUMI_PROVIDER_URL_MAX]u8
+    unused AppCopyText(storage_get_setting_text(LumiProviderUrlSetting), url[:])
+    expected: [LUMI_PROVIDER_URL_MAX + 16]u8
+    agreement := LumiProviderAgreementText(TextUntilNul(url[:]), expected[:])
+    return agreement.count > 0 && storage_get_setting_text(LumiProviderAgreementSetting) == agreement
+}
+
+LumiOnlineWanted :: () -> bool {
+    return storage_get_setting_int(LumiOnlineSetting, 1) != 0
+}
+
+// The agreement for where Lumi's AI requests go now.
+LumiAiAgreed :: () -> bool {
+    if LUMI_AGREEMENT_REQUIRED == 0 {
+        return true
+    }
+    if LumiOwnProviderSelected() {
+        return LumiProviderAgreed()
+    }
+    return LumiNodeAgreed()
+}
+
+// What Lumi's title bar shows: online when wanted and agreed.
+LumiToggleOn :: () -> bool {
+    return StoredAccountMode() != AccountModeDelegate && LumiOnlineWanted() && LumiAiAgreed()
+}
+
+LUMI_AI_OFFLINE :: 0
+LUMI_AI_NODE :: 1
+LUMI_AI_OWN :: 2
+// Online and agreed, but the server needs an account to answer.
+LUMI_AI_NEEDS_ACCOUNT :: 3
+// Online and agreed to an own provider that lacks an address or model.
+LUMI_AI_NEEDS_PROVIDER :: 4
+
+LumiAiRoute :: () -> s32 {
+    if !LumiToggleOn() {
+        return LUMI_AI_OFFLINE
+    }
+    if LumiOwnProviderSelected() {
+        return ifx LumiOwnProviderReady() then LUMI_AI_OWN else LUMI_AI_NEEDS_PROVIDER
+    }
+    return ifx storage_has_sync_account() != 0 then LUMI_AI_NODE else LUMI_AI_NEEDS_ACCOUNT
+}
+
+// Feedback delivery, developer replies and the Telegram relay go to Inner
+// Breeze's server whichever AI answers, so they need its agreement.
+LumiNodeTrafficAllowed :: () -> bool {
+    if LUMI_AGREEMENT_REQUIRED == 0 {
+        return StoredAccountMode() != AccountModeDelegate
+    }
+    return StoredAccountMode() != AccountModeDelegate && LumiOnlineWanted() && LumiNodeAgreed()
+}
+
+// Agreeing covers the server and, with an own provider, that provider.
+LumiAgree :: () -> bool {
+    if !LumiRecordNodeAgreement(true) {
+        return false
+    }
+    if LumiOwnProviderSelected() {
+        url: [LUMI_PROVIDER_URL_MAX]u8
+        unused AppCopyText(storage_get_setting_text(LumiProviderUrlSetting), url[:])
+        agreement: [LUMI_PROVIDER_URL_MAX + 16]u8
+        storage_set_setting_text(LumiProviderAgreementSetting,
+            LumiProviderAgreementText(TextUntilNul(url[:]), agreement[:]))
+    }
+    storage_set_setting_int(LumiOnlineSetting, 1)
+    return LumiAiAgreed()
+}
+
+// Withdrawing takes Lumi offline here and, through sync, on the account's
+// other devices.
+LumiWithdraw :: () -> bool {
+    storage_set_setting_int(LumiOnlineSetting, 0)
+    storage_set_setting_text(LumiProviderAgreementSetting, "")
+    return LumiRecordNodeAgreement(false)
+}

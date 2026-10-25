@@ -36,7 +36,7 @@ check_pattern '"/home/(breathing|inbe)"' \
 # its two type-name operations are allowed; paths in this file still fail.
 check_pattern '"BreathSession"' \
     'Directory names come from the storage layout.' \
-    '^src/cells/value_codec\.zi:[0-9]+:    (value\.type_name = HostTextData\("BreathSession"\)|if value\.kind != cast\(s32\)HostRecord \|\| TextFromCString\(value\.type_name\) != "BreathSession" \|\|)$'
+    '^src/apps/value_codec\.zi:[0-9]+:    (value\.type_name = HostTextData\("BreathSession"\)|if value\.kind != cast\(s32\)HostRecord \|\| TextFromCString\(value\.type_name\) != "BreathSession" \|\|)$'
 check_pattern '"(breathing|inbe)-sessions\.csv"|"breathing-web-export' \
     'Export artifact names come from the storage layout.'
 check_pattern '\bjoin_path2\b' \

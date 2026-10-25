@@ -1,4 +1,4 @@
-"""Direct cell opens omit app navigation, on an owned private Xvfb display."""
+"""Direct app opens omit app navigation, on an owned private Xvfb display."""
 import json
 import os
 from pathlib import Path

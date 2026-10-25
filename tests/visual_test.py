@@ -31,7 +31,7 @@ def default_jobs():
 
 def artifacts(binary):
     paths = [binary, ROOT / "ziran.lock", ROOT / "build/inbe.zx",
-             ROOT / "build/inbe-full.zx", *sorted((ROOT / "build/cells").glob("*.zx")),
+             ROOT / "build/inbe-full.zx", *sorted((ROOT / "build/apps").glob("*.zx")),
              *sorted((ROOT / "build/node-apps").glob("*.zx"))]
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in paths}

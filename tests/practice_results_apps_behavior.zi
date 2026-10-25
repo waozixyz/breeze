@@ -1,0 +1,114 @@
+// Practices draws a finished practice's results: the bundled package reads
+// each Wim Hof round through the host, draws the chart and the mood faces,
+// and gives back the mood picked, Discard or Done.
+#import "session"
+#import "geometry"
+#import "tree"
+#import "tree_draw"
+#import "paint_queue"
+#import "bundle_host"
+#import "byte_text_linux"
+#import "hosted_values"
+#import "widget_host"
+#import "drawing_props"
+#import, file "../src/apps/module_host.zi";
+#import, file "../src/apps/practice_types.zi";
+#import, file "../src/apps/practice_ui_types.zi";
+#import, file "../src/apps/app_codec.zi";
+#import, file "../src/app/exercise_types.zi";
+
+using ExerciseType;
+using HostValueKind;
+
+results_test_frame: PracticeResultsFrame;
+results_test_codec: WidgetPracticeResultsFrameCodec;
+results_test_round_codec: WidgetPracticeResultRoundCodec;
+results_test_writes: s32;
+results_test_rounds: s32;
+
+ResultsTestAssets :: (path: string) -> bool {
+    return path.count == 0
+}
+
+ResultsTestCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "results_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadPracticeResultsHost" && count == 0 {
+        result.* = WidgetEncodePracticeResultsFrame(results_test_frame, *results_test_codec)
+        return 1
+    }
+    if name == "WritePracticeResultsHost" && count == 1 && WidgetValidPracticeResultsFrame(arguments[0]) {
+        results_test_writes += 1
+        results_test_frame = WidgetDecodePracticeResultsFrame(arguments[0], *results_test_codec)
+        return 1
+    }
+    if name == "ReadPracticeResultRoundHost" && count == 1 {
+        index := cast(s32)arguments[0].integer
+        if index < 0 || index >= results_test_frame.round_count { return 0 }
+        results_test_rounds += 1
+        result.* = WidgetEncodePracticeResultRound(PracticeResultRound.{.seconds = 60 + index * 15},
+            *results_test_round_codec)
+        return 1
+    }
+    if name == "ResultsLocaleHost" && count == 1 {
+        text := "Round %d: %ds"
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
+}
+
+ResultsTestDraw :: (frame: PracticeResultsFrame, frame_id: u64) -> s32 {
+    session := SessionOpen()
+    BeginFrame(session, frame_id, Rectangle.{0.0, 0.0, 411.0, 900.0})
+    frame.session = session
+    results_test_frame = frame
+    results_test_writes = 0
+    results_test_rounds = 0
+    WidgetHostBegin(session, ResultsTestAssets)
+    AppsUiBegin(ResultsTestCall, null)
+    drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_RESULTS_VIEW})
+    AppsUiEnd()
+    WidgetHostEnd()
+    painted := PendingPaintCount(session)
+    unused EndFrame(session)
+    unused SessionClose(session)
+    if !drawn.succeeded { return 1 }
+    if results_test_writes != 1 { return 2 }
+    if painted == 0 { return 3 }
+    return 0
+}
+
+// Draws four Wim Hof rounds, one round, and a breathing pattern's time;
+// returns 0 when each went through the host and asked for nothing.
+CheckPracticeResults :: () -> s32 {
+    frame := PracticeResultsFrame.{.scale = 1.0, .view_width = 411, .view_height = 900,
+        .canvas_color = Color.{.r = 245, .g = 248, .b = 246, .a = 255},
+        .surface_color = Color.{.r = 255, .g = 255, .b = 255, .a = 255},
+        .border_color = Color.{.r = 210, .g = 215, .b = 212, .a = 255},
+        .link_color = Color.{.r = 60, .g = 120, .b = 200, .a = 255},
+        .text_color = Color.{.r = 30, .g = 30, .b = 30, .a = 255}, .center_x = 205,
+        .activity = EXERCISE_WIM_HOF, .name = "Wim Hof Breathing", .saved = true, .mood = 4,
+        .round_count = 4}
+    rounds := ResultsTestDraw(frame, cast(u64)1)
+    if rounds != 0 { return rounds }
+    if results_test_rounds != 4 || results_test_frame.action != PRACTICE_RESULTS_NONE { return 4 }
+    frame.round_count = 1
+    one := ResultsTestDraw(frame, cast(u64)2)
+    if one != 0 { return 4 + one }
+    frame.activity = EXERCISE_PATTERNS
+    frame.name = "Breathing Patterns"
+    frame.round_count = 0
+    frame.primary = 300
+    frame.secondary = 12
+    frame.detail = "Box"
+    frame.saved = false
+    pattern := ResultsTestDraw(frame, cast(u64)3)
+    if pattern != 0 { return 8 + pattern }
+    if results_test_frame.action != PRACTICE_RESULTS_NONE { return 12 }
+    return 0
+}

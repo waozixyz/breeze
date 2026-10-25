@@ -8,10 +8,10 @@ For a security issue, use [Security](SECURITY.md).
 
 ## Development
 
-Build with `make native cells`. Dependencies and the Ziran toolchain are pinned
+Build with `make native apps`. Dependencies and the Ziran toolchain are pinned
 in `ziran.lock`; see [build guide](docs/building.md) for other platforms. Read
 [AGENTS.md](AGENTS.md) for repository conventions and
-[app packages](docs/cells.md) for module ownership.
+[app packages](docs/apps.md) for module ownership.
 
 Keep a change focused. Put app UI in its owning package, reusable Kryon changes
 in Kryon, and compiler changes in Ziran. Preserve existing data and upgrade
@@ -23,7 +23,7 @@ private-display UI tests. `make test` and `make visual-test` are the CI gates.
 Android adapter tests need Java 21 and Android SDK platform 36; set
 `ANDROID_SDK_ROOT` to your SDK directory.
 Visual tests create disposable profiles and private displays; they must never
-use your desktop or personal profile. See [verification](docs/cells.md#verification)
+use your desktop or personal profile. See [verification](docs/apps.md#verification)
 for the additional exact-source phone and release checks.
 
 In a pull request, explain the user-visible change and list the checks you ran,

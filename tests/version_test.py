@@ -24,7 +24,7 @@ class VersionTest(unittest.TestCase):
             "apps/versions.json", "apps/inbe/CHANGELOG.md", "apps/lists/CHANGELOG.md",
             "apps/habits/CHANGELOG.md", "apps/practice/CHANGELOG.md", "apps/diary/CHANGELOG.md",
             "apps/lumi/CHANGELOG.md", "apps/leaderboard/CHANGELOG.md",
-            "src/cells/versions.zi",
+            "src/apps/versions.zi",
             "scripts/update-package-version.py", "scripts/generate-package-versions.py",
             "src/core/version.h", "src/core/version.zi",
             "src/storage/sync_result.zi",
@@ -213,7 +213,7 @@ class VersionTest(unittest.TestCase):
         self.assertIn(f"## [{habits}] - ", self.read("apps/habits/CHANGELOG.md"))
         self.assertIn("- Maintenance release for Inner Breeze 9.8.7.", self.read("apps/habits/CHANGELOG.md"))
         self.assertIn(f"Lumi {lumi}, Habits {habits}, ", self.read("apps/inbe/CHANGELOG.md"))
-        self.assertIn(f'"{habits}"', self.read("src/cells/versions.zi"))
+        self.assertIn(f'"{habits}"', self.read("src/apps/versions.zi"))
         # Running it again for the same release changes nothing.
         before = self.snapshot()
         subprocess.run(["bash", str(script)], capture_output=True, text=True, check=True)

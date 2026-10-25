@@ -172,7 +172,7 @@ def registrations(origin, key_path, approval_path, key_id, output, open_url=urlo
     pin = next((pin for pin in pins if pin["key_id"] == key_id and pin["public_key"] == public), None)
     versions = json.loads((ROOT / "apps/versions.json").read_text())
     if pin is None or not {app["id"] for app in versions["apps"].values()} <= set(pin["app_ids"]):
-        raise ValueError("publisher must match the shipped pin for the root and every cell")
+        raise ValueError("publisher must match the shipped pin for the root and every app")
     prepared = {}
     node_apps = versions.get("node_apps", {})
     if (node_apps or ledger_path is not None) and "inbe." not in pin.get("app_prefixes", []):

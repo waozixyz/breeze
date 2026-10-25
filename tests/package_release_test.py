@@ -264,10 +264,10 @@ def main():
                 dependency["version"] = "1.2.0"
         updated_root["signature"] = key.sign(release_tool.signing_message(updated_root)).hex()
         (fixtures / "root-new").write_text(json.dumps(updated_root))
-        data = (options.bundle_build_dir / "cells/habits.zx").read_bytes()
+        data = (options.bundle_build_dir / "apps/habits.zx").read_bytes()
         (fixtures / "habits-bytes").write_bytes(data)
         (fixtures / "corrupt-bytes").write_bytes(data[:-1] + bytes([data[-1] ^ 1]))
-        (fixtures / "diary-bytes").write_bytes((options.bundle_build_dir / "cells/diary.zx").read_bytes())
+        (fixtures / "diary-bytes").write_bytes((options.bundle_build_dir / "apps/diary.zx").read_bytes())
         updated = json.loads(json.dumps(values["diary"]))
         diary_version = list(map(int, updated["version"].split(".")))
         diary_version[2] += 1

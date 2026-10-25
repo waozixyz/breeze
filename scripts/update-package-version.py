@@ -100,10 +100,10 @@ def main(arguments):
         component = sync(root, ledger, arguments[0])
         message = f"{arguments[0]} {component['version']}, sequence {component['sequence']}; native wrapper version retained"
     else:
-        raise SystemExit("usage: ./update_version.sh --cell inbe|lists|habits|practices|diary|lumi|leaderboard|"
+        raise SystemExit("usage: ./update_version.sh --app inbe|lists|habits|practices|diary|lumi|leaderboard|"
                          + "|".join(sorted(node_apps)) + "\n       update-package-version.py --release X.Y.Z")
-    for cell in ledger["apps"].values():
-        cell["bundled"] = True
+    for app in ledger["apps"].values():
+        app["bundled"] = True
     path.write_text(json.dumps(ledger, indent=2) + "\n")
     print(message)
 
