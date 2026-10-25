@@ -1,3 +1,6 @@
+#import, file "../../apps/practice_ui_types.zi";
+#import, file "../../apps/practice_types.zi";
+#import, file "../practice_movement_host.zi";
 #import, file "../../apps/shared_state.zi";
 c3 :: #system_library "c";
 GetFrameTime :: () -> float32 #foreign c3;
@@ -238,88 +241,14 @@ tai_chi_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) -> 
     return text
 }
 
-TaiChiDrawCue :: (app: *InnerBreeze, top_y: s32) -> s32 {
-    side := AppScale(24)
-    width := app.ui.view_width - side * 2
-    subtitle := TaiChiSubtitle(app)
-    y := top_y
-    if subtitle.count > 0 {
-        font := AppScale(Text16)
-        Text(CurrentApp().ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)side, cast(float32)y, cast(float32)width, 0},
-                .text = subtitle,
-                .font = font,
-                .class_name = MutedTextClass(),
-                .align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(TextWrap)TextWrapEllipsis})
-        y += AppTextLineHeight(font) + AppScale(4)
-    }
-    cue := TaiChiCueText(app)
-    cue_font := AppScale(Text20)
-    // Room for two lines, so the figure does not jump as cues change.
-    if cue.count > 0 {
-        Text(CurrentApp().ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)side, cast(float32)y, cast(float32)width,
-                    cast(float32)(AppTextLineHeight(cue_font) * 2)},
-                .text = cue,
-                .font = cue_font,
-                .align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(TextWrap)TextWrapAuto})
-    }
-    return y + AppTextLineHeight(cue_font) * 2
-}
-
-TaiChiDrawProgress :: (app: *InnerBreeze, y: s32) {
-    bar_w := app.ui.view_width - AppScale(96)
-    if bar_w > AppScale(420) {
-        bar_w = AppScale(420)
-    }
-    duration := TaiChiDuration(app.tai_chi)
-    bar: ProgressProps
-    bar.key = KeyHash("inbe/practices/tai_chi/progress")
-    bar.bounds = Rectangle.{cast(float32)((app.ui.view_width - bar_w) / 2), cast(float32)y,
-        cast(float32)bar_w, cast(float32)AppScale(10)}
-    bar.min = 0
-    bar.max = 1000
-    if duration > 0.0 {
-        bar.value = cast(s32)(app.tai_chi.time / duration * 1000.0)
-    }
-    Progress(CurrentApp().ui.session, bar)
-}
-
-// Buttons to see her from the front, back, side or at an angle; the choice
-// is kept for later sessions.
-TaiChiDrawAngles :: (app: *InnerBreeze, y: s32, height: s32) {
-    width := app.ui.view_width - AppScale(48)
-    if width > AppScale(440) {
-        width = AppScale(440)
-    }
-    options: [TAI_CHI_VIEW_COUNT]SegmentOption = .[
-    SegmentOption.{.label = LocaleText("tai_chi_view_front")},
-    SegmentOption.{.label = LocaleText("tai_chi_view_back")},
-    SegmentOption.{.label = LocaleText("tai_chi_view_side")},
-    SegmentOption.{.label = LocaleText("tai_chi_view_angled")}]
-    props: SegmentedControlProps
-    props.key = KeyHash("inbe/practices/tai_chi/angle")
-    props.bounds = Rectangle.{cast(float32)((app.ui.view_width - width) / 2), cast(float32)y,
-        cast(float32)width, cast(float32)height}
-    props.height = height
-    props.selected_index = app.tai_chi.view
-    props.has_selection = true
-    choice := SegmentedControl(app.ui.session, props, options[:])
-    if choice.changed && choice.selected_index != app.tai_chi.view {
-        app.tai_chi.view = choice.selected_index
-        app.settings_dirty = 1
-        save_settings(app)
-    }
+TaiChiSessionFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
+    TaiChiDrawFigure(app.ui.session, *app.tai_chi, request.bounds,
+        cast(float64)GetFrameTime(), app.tai_chi.time <= 0.0, request.alt_text)
 }
 
 #program_export
 tai_chi_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
-    if app == null {
-        return
-    }
-    if tai_chi_handle_exit_modal(app) != 0 {
+    if app == null || tai_chi_handle_exit_modal(app) != 0 {
         return
     }
     if app.tai_chi.built_item < 0 {
@@ -332,53 +261,39 @@ tai_chi_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
         return
     }
     practice_draw_audio_controls(app)
-
-    controls: [3]IconRowAction
-    controls[0] = IconRowAction.{.icon = ActionIcon.IconBack, .disabled = app.tai_chi.time <= 0.0}
-    pause_icon := ActionIcon.IconPause
-    if app.session_paused != 0 {
-        pause_icon = ActionIcon.IconPlay
+    frame := PracticeMovementFrameFor(app, EXERCISE_TAI_CHI, title_h)
+    frame.subtitle = TaiChiSubtitle(app)
+    frame.cue = TaiChiCueText(app)
+    frame.can_back = app.tai_chi.time > 0.0
+    frame.view = app.tai_chi.view
+    duration := TaiChiDuration(app.tai_chi)
+    if duration > 0.0 {
+        frame.progress = cast(s32)(app.tai_chi.time / duration * 1000.0)
     }
-    controls[1] = IconRowAction.{.icon = pause_icon}
-    controls[2] = IconRowAction.{.icon = ActionIcon.IconNext}
-    row := PracticeControlRow(IconRowRequest.{
-            .center_x = center_x,
-            .view_width = app.ui.view_width,
-            .view_height = app.ui.view_height,
-            .count = 3,
-            .items = *controls[0]
-        })
-
-    figure_top := TaiChiDrawCue(app, title_h + AppScale(12)) + AppScale(8)
-    progress_y := row.y - AppScale(22)
-    angle_h := AppScale(40)
-    angle_y := progress_y - AppScale(12) - angle_h
-    figure_bottom := angle_y - AppScale(12)
-    TaiChiDrawProgress(app, progress_y)
-    TaiChiDrawAngles(app, angle_y, angle_h)
-    snap := app.tai_chi.time <= 0.0
-    TaiChiDrawFigure(app.ui.session, *app.tai_chi,
-        Rectangle.{cast(float32)AppScale(12), cast(float32)figure_top,
-            cast(float32)(app.ui.view_width - AppScale(24)), cast(float32)(figure_bottom - figure_top)},
-        cast(float64)GetFrameTime(), snap, LocaleText("exercise_tai_chi"))
-
-    if row.clicked_index == {
-        case 0;
+    frame = PracticeMovementRun(app, frame, TaiChiSessionFigure)
+    if frame.action == PRACTICE_MOVEMENT_BACK && frame.can_back {
         PracticeNarrationStop()
         app.tai_chi = TaiChiSeek(app.tai_chi, TaiChiNextStepTime(app.tai_chi, false))
         return
-        case 1;
+    }
+    if frame.action == PRACTICE_MOVEMENT_PAUSE {
         app.session_paused = ifx app.session_paused != 0 then 0 else 1
         return
-        case 2;
+    }
+    if frame.action == PRACTICE_MOVEMENT_NEXT {
         PracticeNarrationStop()
         app.tai_chi = TaiChiSeek(app.tai_chi, TaiChiNextStepTime(app.tai_chi, true))
         return
     }
-
+    if frame.action == PRACTICE_MOVEMENT_VIEWPOINT && frame.value >= 0 && frame.value < TAI_CHI_VIEW_COUNT {
+        app.tai_chi.view = frame.value
+        app.settings_dirty = 1
+        save_settings(app)
+    }
     PracticeNarrationUpdate(app, "taichi", TaiChiCueKey(app))
     if app.session_paused == 0 {
         TaiChiAdvanceBy(app, cast(float64)GetFrameTime())
     }
+    unused center_x
     unused center_y
 }

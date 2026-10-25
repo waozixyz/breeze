@@ -1,3 +1,6 @@
+#import, file "../../apps/practice_ui_types.zi";
+#import, file "../../apps/practice_types.zi";
+#import, file "../practice_movement_host.zi";
 #import, file "../../apps/shared_state.zi";
 #import, file "../../apps/module_host.zi";
 #import, file "../../apps/practice_types.zi";
@@ -247,130 +250,45 @@ step_number :: (app: *InnerBreeze) -> string {
     return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 48))
 }
 
-// One line of text centred across the screen, smaller if it would not fit.
-draw_centered_line :: (app: *InnerBreeze, text: string, y: s32, font: s32,
-    smaller: s32, strong: bool) -> s32 {
-    if AppTextWidth(text, font) > app.ui.view_width - AppScale(80) {
-        font = smaller
-    }
-    width := AppTextWidth(text, font)
-    emphasis := StrongWhole(text)
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)((app.ui.view_width - width) / 2),
-                cast(float32)y, 0, 0},
-            .text = text,
-            .font = font,
-            .strong = ifx strong then emphasis[:1] else emphasis[:0],
-            .wrap = cast(TextWrap)TextWrapNone})
-    return y + AppTextLineHeight(font)
-}
-
-// The pose to move into in bold, then the breath to take now in smaller
-// letters, over a bar that fills while you breathe in and empties while you
-// breathe out. Returns the y below it.
-draw_breath_cue :: (app: *InnerBreeze, top_y: s32) -> s32 {
-    breath := SalutationBreathAt(app.sun_salutation)
-    y := draw_centered_line(app, SunSalutationPoseName(app.sun_salutation.step), top_y,
-        AppScale(Text24), AppScale(Text20), true)
-    y = draw_centered_line(app, breath_label(app), y + AppScale(2),
-        AppScale(Text20), AppScale(Text18), false)
-
-    bar_w := app.ui.view_width - AppScale(96)
-    if bar_w > AppScale(280) {
-        bar_w = AppScale(280)
-    }
-    bar_h := AppScale(10)
-    bar_y := y + AppScale(8)
-    fullness := breath.progress
-    if breath.direction == SUN_SALUTATION_BREATH_OUT {
-        fullness = 1000 - breath.progress
-    }
-    bar: ProgressProps
-    bar.bounds = Rectangle.{cast(float32)((app.ui.view_width - bar_w) / 2),
-        cast(float32)bar_y, cast(float32)bar_w, cast(float32)bar_h}
-    bar.min = 0
-    bar.max = 1000
-    bar.value = fullness
-    Progress(CurrentApp().ui.session, bar)
-    return bar_y + bar_h
+SunSalutationFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
+    draw_pose(app, request.bounds)
 }
 
 sun_salutation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
-    controls: [3] IconRowAction
-    row: IconRowResult
-    step_label: string
-    step: s32
-    repetition: s32
-    repetitions: s32
-    pause_icon: ActionIcon
-    title_h := PracticeTitleBarHeight()
-    content_top := title_h + AppScale(8)
-    image_bottom: s32
-
-    if app == null {
+    if app == null || sun_salutation_handle_exit_modal(app) != 0 {
         return
     }
-
-    if sun_salutation_handle_exit_modal(app) != 0 {
-        return
-    }
-
     app.sun_salutation = SalutationNormalizeDraw(app.sun_salutation)
-    step = app.sun_salutation.step
-    repetition = app.sun_salutation.repetition
-    repetitions = app.sun_salutation.repetitions
-
-    step_label = step_number(app)
-    if PracticeTitleBar(app, step_label, title_h) {
+    title_h := PracticeTitleBarHeight()
+    if PracticeTitleBar(app, step_number(app), title_h) {
         sun_salutation_request_exit(app)
         return
     }
     practice_draw_audio_controls(app)
-
-    controls[0] = IconRowAction.{
-        .icon = ActionIcon.IconBack,
-        .disabled = step <= 0 && repetition <= 0
-    }
-    pause_icon = ActionIcon.IconPause
-    if app.session_paused != 0 {
-        pause_icon = ActionIcon.IconPlay
-    }
-    controls[1] = IconRowAction.{
-        .icon = pause_icon
-    }
-    controls[2] = IconRowAction.{
-        .icon = ActionIcon.IconNext
-    }
-    row = PracticeControlRow(IconRowRequest.{
-            .center_x = center_x,
-            .view_width = app.ui.view_width,
-            .view_height = app.ui.view_height,
-            .count = 3,
-            .items = *controls[0]
-        })
-
-    image_bottom = row.y - AppScale(18)
-    pose_top := draw_breath_cue(app, content_top + AppScale(10)) + AppScale(12)
-    draw_pose(app, Rectangle.{cast(float32)AppScale(24), cast(float32)pose_top,
-            cast(float32)(app.ui.view_width - AppScale(48)),
-            cast(float32)(image_bottom - pose_top)})
-
-    if row.clicked_index == {
-        case 0;
+    breath := SalutationBreathAt(app.sun_salutation)
+    frame := PracticeMovementFrameFor(app, EXERCISE_SUN_SALUTATION, title_h)
+    frame.heading = SunSalutationPoseName(app.sun_salutation.step)
+    frame.cue = breath_label(app)
+    frame.progress = ifx breath.direction == SUN_SALUTATION_BREATH_OUT then 1000 - breath.progress else breath.progress
+    frame.can_back = app.sun_salutation.step > 0 || app.sun_salutation.repetition > 0
+    frame = PracticeMovementRun(app, frame, SunSalutationFigure)
+    if frame.action == PRACTICE_MOVEMENT_BACK && frame.can_back {
         PracticeNarrationStop()
         app.sun_salutation = SalutationBack(app.sun_salutation)
         return
-        case 1;
-        app.session_paused = ifx (app.session_paused != 0) then (0) else (1)
+    }
+    if frame.action == PRACTICE_MOVEMENT_PAUSE {
+        app.session_paused = ifx app.session_paused != 0 then 0 else 1
         return
-        case 2;
+    }
+    if frame.action == PRACTICE_MOVEMENT_NEXT {
         PracticeNarrationStop()
         step_forward(app)
         return
     }
-
     sun_salutation_narrate(app)
     update_timer(app)
+    unused center_x
     unused center_y
 }
 

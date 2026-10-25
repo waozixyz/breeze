@@ -1,0 +1,377 @@
+#import "layout"
+#import "tree_input"
+#import "input_protocol"
+#import, file "../src/practices/practice_figure_host.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/app/exercise_types.zi";
+// Practices draws the running practices: the bundled package lays out
+// Meditation's circle with its extend controls and Finish, a breathing
+// pattern's circle with Pause or Resume, and a Wim Hof round's circle with
+// its band and the Breath button or double-tap hint from the frame the host
+// gives it, and gives back nothing until something is pressed.
+#import "session"
+#import "geometry"
+#import "tree"
+#import "tree_draw"
+#import "paint_queue"
+#import "bundle_host"
+#import "byte_text_linux"
+#import "hosted_values"
+#import "widget_host"
+#import "drawing_props"
+#import, file "../src/apps/module_host.zi";
+#import, file "../src/apps/practice_types.zi";
+#import, file "../src/apps/practice_ui_types.zi";
+#import, file "../src/apps/app_codec.zi";
+
+using HostValueKind;
+using ExerciseType;
+
+sessions_test_meditation: PracticeMeditationFrame;
+sessions_test_meditation_codec: WidgetPracticeMeditationFrameCodec;
+sessions_test_patterns: PracticePatternsFrame;
+sessions_test_patterns_codec: WidgetPracticePatternsFrameCodec;
+sessions_test_whm: PracticeWhmFrame;
+sessions_test_whm_codec: WidgetPracticeWhmFrameCodec;
+sessions_test_writes: s32;
+sessions_test_movement: PracticeMovementFrame;
+sessions_test_movement_codec: WidgetPracticeMovementFrameCodec;
+sessions_test_figure_codec: WidgetPracticeFigureRequestCodec;
+sessions_test_figures: s32;
+sessions_test_figure: PracticeFigureRequest;
+sessions_test_native_app: InnerBreeze;
+sessions_test_native_paints: s32;
+sessions_test_course: PracticeCourseFrame;
+sessions_test_course_codec: WidgetPracticeCourseFrameCodec;
+sessions_test_row_codec: WidgetPracticeCourseRowCodec;
+
+SessionsTestAssets :: (path: string) -> bool {
+    return path.count == 0 || path == "icons/ui.png"
+}
+
+SessionsTestCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    view := TextFromCString(module)
+    name := TextFromCString(function)
+    if view == "figure_view" && name == "DrawPracticeFigureHost" && count == 1 &&
+    WidgetValidPracticeFigureRequest(arguments[0]) {
+        sessions_test_figure = WidgetDecodePracticeFigureRequest(arguments[0], *sessions_test_figure_codec)
+        sessions_test_figures += 1
+        return 1
+    }
+    if view == "movement_view" {
+        if name == "ReadPracticeMovementHost" && count == 0 {
+            result.* = WidgetEncodePracticeMovementFrame(sessions_test_movement, *sessions_test_movement_codec)
+            return 1
+        }
+        if name == "WritePracticeMovementHost" && count == 1 && WidgetValidPracticeMovementFrame(arguments[0]) {
+            sessions_test_writes += 1
+            sessions_test_movement = WidgetDecodePracticeMovementFrame(arguments[0], *sessions_test_movement_codec)
+            return 1
+        }
+        if name == "MovementLocaleHost" && count == 1 {
+            text := "Practice"
+            result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+            return 1
+        }
+        return 0
+    }
+    if view == "course_view" {
+        if name == "ReadPracticeCourseHost" && count == 0 {
+            result.* = WidgetEncodePracticeCourseFrame(sessions_test_course, *sessions_test_course_codec)
+            return 1
+        }
+        if name == "WritePracticeCourseHost" && count == 1 && WidgetValidPracticeCourseFrame(arguments[0]) {
+            sessions_test_writes += 1
+            sessions_test_course = WidgetDecodePracticeCourseFrame(arguments[0], *sessions_test_course_codec)
+            return 1
+        }
+        if name == "ReadPracticeCourseRowHost" && count == 2 {
+            row := PracticeCourseRow.{.title = "Foundations", .subtitle = "Follow along",
+                .summary = "Learn the movement", .detail = "2:00", .first = 0, .count = 4, .done = true}
+            result.* = WidgetEncodePracticeCourseRow(row, *sessions_test_row_codec)
+            return 1
+        }
+        if name == "CourseLocaleHost" && count == 1 {
+            text := "Tai Chi course"
+            result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+            return 1
+        }
+        return 0
+    }
+    if view == "meditation_view" {
+        if name == "ReadPracticeMeditationHost" && count == 0 {
+            result.* = WidgetEncodePracticeMeditationFrame(sessions_test_meditation,
+                *sessions_test_meditation_codec)
+            return 1
+        }
+        if name == "WritePracticeMeditationHost" && count == 1 &&
+        WidgetValidPracticeMeditationFrame(arguments[0]) {
+            sessions_test_writes += 1
+            sessions_test_meditation = WidgetDecodePracticeMeditationFrame(arguments[0],
+                *sessions_test_meditation_codec)
+            return 1
+        }
+        return 0
+    }
+    if view == "patterns_view" {
+        if name == "ReadPracticePatternsHost" && count == 0 {
+            result.* = WidgetEncodePracticePatternsFrame(sessions_test_patterns,
+                *sessions_test_patterns_codec)
+            return 1
+        }
+        if name == "WritePracticePatternsHost" && count == 1 &&
+        WidgetValidPracticePatternsFrame(arguments[0]) {
+            sessions_test_writes += 1
+            sessions_test_patterns = WidgetDecodePracticePatternsFrame(arguments[0],
+                *sessions_test_patterns_codec)
+            return 1
+        }
+        return 0
+    }
+    if view == "whm_view" {
+        if name == "ReadPracticeWhmHost" && count == 0 {
+            result.* = WidgetEncodePracticeWhmFrame(sessions_test_whm, *sessions_test_whm_codec)
+            return 1
+        }
+        if name == "WritePracticeWhmHost" && count == 1 && WidgetValidPracticeWhmFrame(arguments[0]) {
+            sessions_test_writes += 1
+            sessions_test_whm = WidgetDecodePracticeWhmFrame(arguments[0], *sessions_test_whm_codec)
+            return 1
+        }
+        return 0
+    }
+    return WidgetHostCall(context, module, function, arguments, count, result)
+}
+
+// Runs one of the practice views on a fresh session; 0 when the package drew
+// something and wrote its frame back once.
+SessionsTestDraw :: (action: s32, frame_id: u64) -> s32 {
+    session := SessionOpen()
+    width := ifx action == PRACTICE_MOVEMENT_VIEW then sessions_test_movement.view_width else ifx action == PRACTICE_COURSE_VIEW then sessions_test_course.view_width else 411
+    height := ifx action == PRACTICE_MOVEMENT_VIEW then sessions_test_movement.view_height else ifx action == PRACTICE_COURSE_VIEW then sessions_test_course.view_height else 900
+    BeginFrame(session, frame_id, Rectangle.{0.0, 0.0, cast(float32)width, cast(float32)height})
+    sessions_test_meditation.session = session
+    sessions_test_patterns.session = session
+    sessions_test_whm.session = session
+    sessions_test_movement.session = session
+    sessions_test_course.session = session
+    sessions_test_writes = 0
+    sessions_test_figures = 0
+    WidgetHostBegin(session, SessionsTestAssets)
+    AppsUiBegin(SessionsTestCall, null)
+    drawn := PracticeRun(PracticeMessage.{.action = action})
+    AppsUiEnd()
+    WidgetHostEnd()
+    painted := PendingPaintCount(session)
+    unused EndFrame(session)
+    unused SessionClose(session)
+    if !drawn.succeeded {
+        return 1
+    }
+    if sessions_test_writes != 1 {
+        return 2
+    }
+    if painted == 0 {
+        return 3
+    }
+    return 0
+}
+
+// A real quick tap goes through the retained host tree into the bundle,
+// then returns the existing action to the application.
+SessionsTestClick :: (practice: s32) -> s32 {
+    session := SessionOpen()
+    sessions_test_movement.session = session
+    sessions_test_movement.practice = practice
+    sessions_test_movement.view_width = 411
+    sessions_test_movement.view_height = 900
+    clicked: Rectangle
+    found := false
+    for frame: cast(s32)0..1 {
+        if frame == 1 {
+            unused TreePointerUpdate(session, PointerFrame.{.x = clicked.x + clicked.width / 2.0,
+                    .y = clicked.y + clicked.height / 2.0, .down = true, .pressed = true})
+            unused TreePointerUpdate(session, PointerFrame.{.x = clicked.x + clicked.width / 2.0,
+                    .y = clicked.y + clicked.height / 2.0, .released = true})
+        }
+        BeginFrame(session, cast(u64)100, Rectangle.{0.0, 0.0, 411.0, 900.0})
+        WidgetHostBegin(session, SessionsTestAssets)
+        AppsUiBegin(SessionsTestCall, null)
+        drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_MOVEMENT_VIEW})
+        AppsUiEnd()
+        WidgetHostEnd()
+        unused EndFrame(session)
+        if !drawn.succeeded {
+            unused SessionClose(session)
+            return 1
+        }
+        if frame == 0 {
+            for index: cast(s32)0..TreeCount(session) - 1 {
+                node := TreeNodeAt(session, index)
+                if node.focus_id == 83001 || node.key == KeyHash("astral/pause") || node.key == KeyHash("workout/pause") {
+                    clicked = node.bounds
+                    found = true
+                    break
+                }
+            }
+            if !found {
+                unused SessionClose(session)
+                return 2
+            }
+        }
+    }
+    unused SessionClose(session)
+    if sessions_test_movement.action != PRACTICE_MOVEMENT_PAUSE {
+        return 3
+    }
+    return 0
+}
+
+SessionsTestNativePainter :: (app: *InnerBreeze, request: PracticeFigureRequest) {
+    sessions_test_native_paints += 1
+    unused app
+    unused request
+}
+
+// An inactive page, another practice and invalid bounds must not reach a
+// native renderer; one valid request reaches it once.
+SessionsTestFigureBoundary :: () -> s32 {
+    sessions_test_native_paints = 0
+    request := PracticeFigureRequest.{.practice = EXERCISE_TAI_CHI, .bounds = Rectangle.{0, 0, 100, 200}}
+    result: HostValue
+    argument := WidgetEncodePracticeFigureRequest(request, *sessions_test_figure_codec)
+    if PracticeFigureCall(HostTextData("figure_view"), HostTextData("DrawPracticeFigureHost"), *argument, 1, *result) != 0 {
+        return 1
+    }
+    PracticeFigureBegin(*sessions_test_native_app, EXERCISE_TAI_CHI, SessionsTestNativePainter)
+    if PracticeFigureCall(HostTextData("figure_view"), HostTextData("DrawPracticeFigureHost"), *argument, 1, *result) != 1 {
+        PracticeFigureEnd()
+        return 2
+    }
+    request.practice = EXERCISE_WORKOUT
+    argument = WidgetEncodePracticeFigureRequest(request, *sessions_test_figure_codec)
+    if PracticeFigureCall(HostTextData("figure_view"), HostTextData("DrawPracticeFigureHost"), *argument, 1, *result) != 0 {
+        PracticeFigureEnd()
+        return 3
+    }
+    request.practice = EXERCISE_TAI_CHI
+    request.bounds.width = -1.0
+    argument = WidgetEncodePracticeFigureRequest(request, *sessions_test_figure_codec)
+    if PracticeFigureCall(HostTextData("figure_view"), HostTextData("DrawPracticeFigureHost"), *argument, 1, *result) != 0 {
+        PracticeFigureEnd()
+        return 4
+    }
+    PracticeFigureEnd()
+    request.bounds.width = 100.0
+    argument = WidgetEncodePracticeFigureRequest(request, *sessions_test_figure_codec)
+    if PracticeFigureCall(HostTextData("figure_view"), HostTextData("DrawPracticeFigureHost"), *argument, 1, *result) != 0 ||
+    sessions_test_native_paints != 1 {
+        return 5
+    }
+    return 0
+}
+
+CheckPracticeSessions :: () -> s32 {
+    accent := Color.{.r = 120, .g = 200, .b = 160, .a = 255}
+    sessions_test_meditation = PracticeMeditationFrame.{.scale = 1.0, .view_width = 411,
+        .center_x = 205, .center_y = 450, .accent_color = accent, .time_text = "14:59",
+        .extend = true, .complete = true, .finish_label = "Finish"}
+    meditation := SessionsTestDraw(PRACTICE_MEDITATION_VIEW, cast(u64)1)
+    if meditation != 0 {
+        return meditation
+    }
+    if sessions_test_meditation.action != PRACTICE_MEDITATION_NONE {
+        return 4
+    }
+
+    sessions_test_patterns = PracticePatternsFrame.{.scale = 1.0, .view_width = 411,
+        .center_x = 205, .center_y = 460, .status_y = 102, .small_font = 14,
+        .well_color = Color.{.r = 236, .g = 240, .b = 238, .a = 255}, .accent_color = accent,
+        .max_radius = 123, .radius = 80, .phase_label = "Breathe in",
+        .status = "Cycle 2  ·  4:05", .pause_label = "Pause", .resume_label = "Resume"}
+    patterns := SessionsTestDraw(PRACTICE_PATTERNS_VIEW, cast(u64)2)
+    if patterns != 0 {
+        return 4 + patterns
+    }
+    if sessions_test_patterns.action != PRACTICE_PATTERNS_NONE {
+        return 8
+    }
+    sessions_test_patterns.paused = true
+    paused := SessionsTestDraw(PRACTICE_PATTERNS_VIEW, cast(u64)3)
+    if paused != 0 {
+        return 8 + paused
+    }
+
+    sessions_test_whm = PracticeWhmFrame.{.scale = 1.0, .view_width = 411, .center_x = 205,
+        .center_y = 450, .font = 16, .accent_color = accent, .radius = 140.0, .rmin = 90,
+        .rmax = 160, .ticks = 30, .progress = 0.4, .count = "12", .hold = true,
+        .hint = "Double tap to breathe", .breath_label = "Breath", .breath_max_y = 760}
+    whm := SessionsTestDraw(PRACTICE_WHM_VIEW, cast(u64)4)
+    if whm != 0 {
+        return 12 + whm
+    }
+    if sessions_test_whm.action != PRACTICE_WHM_NONE {
+        return 16
+    }
+    sessions_test_whm.double_tap = true
+    sessions_test_whm.countdown = true
+    sessions_test_whm.ticks = 60
+    tapping := SessionsTestDraw(PRACTICE_WHM_VIEW, cast(u64)5)
+    if tapping != 0 {
+        return 16 + tapping
+    }
+    sessions_test_movement = PracticeMovementFrame.{.scale = 1.0, .view_width = 411,
+        .view_height = 900, .top = 48, .font = 16, .small_font = 14,
+        .heading = "Mountain pose", .subtitle = "Follow along", .cue = "Breathe in",
+        .time = "2:05", .progress = 500, .can_back = true,
+        .exercise = 3, .phase = 1, .length_ms = 30000, .elapsed_ms = 15000, .seconds_left = 15,
+        .accent_color = accent, .text_color = Color.{.r = 30, .g = 40, .b = 35, .a = 255}}
+    practices: [4]s32 = .[EXERCISE_SUN_SALUTATION, EXERCISE_TAI_CHI,
+    EXERCISE_ASTRAL_PROJECTION, EXERCISE_WORKOUT]
+    for index: cast(s32)0..3 {
+        sessions_test_movement.practice = practices[index]
+        for layout: cast(s32)0..1 {
+            sessions_test_movement.view_width = ifx layout == 0 then 411 else 1024
+            sessions_test_movement.view_height = ifx layout == 0 then 900 else 768
+            sessions_test_movement.paused = layout == 1
+            tested := SessionsTestDraw(PRACTICE_MOVEMENT_VIEW, cast(u64)(20 + index * 2 + layout))
+            if tested != 0 {
+                return 20 + tested
+            }
+            if sessions_test_movement.action != PRACTICE_MOVEMENT_NONE || sessions_test_figures != 1 {
+                return 24
+            }
+            area := sessions_test_figure.bounds
+            if sessions_test_figure.practice != practices[index] || area.width <= 0.0 || area.height <= 0.0 ||
+            area.x < 0.0 || area.y < 48.0 || area.x + area.width > cast(float32)sessions_test_movement.view_width ||
+            area.y + area.height > cast(float32)sessions_test_movement.view_height { return 25 }
+        }
+    }
+    sessions_test_course = PracticeCourseFrame.{.scale = 1.0, .view_width = 411, .view_height = 900,
+        .font = 16, .small_font = 14, .lesson_count = 2, .lesson = 0,
+        .next_item = 0, .progress = "1 of 4 practised"}
+    for layout: cast(s32)0..1 {
+        sessions_test_course.view_width = ifx layout == 0 then 411 else 1024
+        sessions_test_course.view_height = ifx layout == 0 then 900 else 768
+        tested := SessionsTestDraw(PRACTICE_COURSE_VIEW, cast(u64)(40 + layout))
+        if tested != 0 {
+            return 30 + tested
+        }
+        if sessions_test_course.action != PRACTICE_COURSE_NONE || sessions_test_figures < 1 ||
+        sessions_test_figures > 4 { return 34 }
+    }
+    for index: cast(s32)0..3 {
+        tapped := SessionsTestClick(practices[index])
+        if tapped != 0 { return 100 + index * 10 + tapped }
+    }
+    if SessionsTestFigureBoundary() != 0 { return 44 }
+    // Out-of-range host data is rejected before indexing the dropdown buffer.
+    sessions_test_course.lesson_count = 33
+    if SessionsTestDraw(PRACTICE_COURSE_VIEW, cast(u64)43) != 1 {
+        return 35
+    }
+    return 0
+}

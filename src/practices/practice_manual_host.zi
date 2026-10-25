@@ -1,3 +1,6 @@
+#import, file "practice_figure_host.zi";
+#import, file "sun_salutation/sun_salutation_draw.zi";
+#import, file "sun_salutation/sun_salutation_rules.zi";
 // The manuals of Wim Hof, Meditation, Patterns and Astral Projection, which
 // Practices draws (apps/practice/manual_view.zi). The host gives the page,
 // the theme's guide colours and the settings the pages show, keeps the Wim
@@ -45,6 +48,9 @@ practice_manual_frame_codec: WidgetPracticeManualFrameCodec;
 PracticeManualCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     if TextFromCString(module) != "manual_view" {
+        if PracticeFigureCall(module, function, arguments, count, result) != 0 {
+            return 1
+        }
         return WidgetHostCall(context, module, function, arguments, count, result)
     }
     name := TextFromCString(function)
@@ -128,7 +134,9 @@ practice_manual_frame_for :: (app: *InnerBreeze) -> PracticeManualFrame {
         .speed_max = SETTINGS_SPEED_MAX, .hold_progress = app.breathing.frame % 60,
         .preset = app.patterns.preset, .inhale = app.patterns.custom[0],
         .hold_in = app.patterns.custom[1], .exhale = app.patterns.custom[2],
-        .hold_out = app.patterns.custom[3], .duration_minutes = app.patterns.duration_minutes}
+        .hold_out = app.patterns.custom[3], .duration_minutes = app.patterns.duration_minutes,
+        .sun_character = app.sun_salutation.character, .sun_repetitions = app.sun_salutation.repetitions,
+        .sun_start_seconds = app.sun_salutation.start_seconds, .sun_end_seconds = app.sun_salutation.end_seconds}
     if app.exercise_type == EXERCISE_WIM_HOF && app.tutorial_step == 1 {
         max_width := cast(s32)(cast(float32)app.ui.view_width * 0.96)
         if max_width > AppScale(640) {
@@ -151,11 +159,13 @@ PracticeManualDraw :: (app: *InnerBreeze) -> s32 {
         return PRACTICE_MANUAL_NONE
     }
     practice_manual_frame = practice_manual_frame_for(app)
+    PracticeFigureBegin(app, app.exercise_type, PracticeManualFigure)
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
     AppsUiBegin(PracticeManualCall, cast(*void)app)
     drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_MANUAL_VIEW})
     AppsUiEnd()
     WidgetHostEnd()
+    PracticeFigureEnd()
     frame := practice_manual_frame
     if !drawn.succeeded {
         return PRACTICE_MANUAL_NONE
@@ -178,4 +188,12 @@ PracticeManualDraw :: (app: *InnerBreeze) -> s32 {
         app.settings_dirty = 1
     }
     return frame.action
+}
+
+PracticeManualFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
+    if request.practice == EXERCISE_SUN_SALUTATION && request.preview &&
+    request.index >= 0 && request.index < SUN_SALUTATION_STEP_COUNT {
+        SunSalutationDrawHeld(app.ui.session, app.sun_salutation.character, request.index,
+            request.bounds, request.key, request.alt_text)
+    }
 }

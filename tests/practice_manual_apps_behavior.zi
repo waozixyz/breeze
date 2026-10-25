@@ -24,6 +24,7 @@ using HostValueKind;
 manual_test_frame: PracticeManualFrame;
 manual_test_codec: WidgetPracticeManualFrameCodec;
 manual_test_writes: s32;
+manual_test_figures: s32;
 
 ManualTestAssets :: (path: string) -> bool {
     return path.count == 0 || (path.count > 17 && path[:17] == "assets/practices/")
@@ -31,6 +32,11 @@ ManualTestAssets :: (path: string) -> bool {
 
 ManualTestCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) == "figure_view" && TextFromCString(function) == "DrawPracticeFigureHost" &&
+    count == 1 && WidgetValidPracticeFigureRequest(arguments[0]) {
+        manual_test_figures += 1
+        return 1
+    }
     if TextFromCString(module) != "manual_view" {
         return WidgetHostCall(context, module, function, arguments, count, result)
     }
@@ -59,6 +65,7 @@ ManualTestDraw :: (frame: PracticeManualFrame, frame_id: u64) -> s32 {
     frame.session = session
     manual_test_frame = frame
     manual_test_writes = 0
+    manual_test_figures = 0
     WidgetHostBegin(session, ManualTestAssets)
     AppsUiBegin(ManualTestCall, null)
     drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_MANUAL_VIEW})
@@ -67,9 +74,15 @@ ManualTestDraw :: (frame: PracticeManualFrame, frame_id: u64) -> s32 {
     painted := PendingPaintCount(session)
     unused EndFrame(session)
     unused SessionClose(session)
-    if !drawn.succeeded { return 1 }
-    if manual_test_writes != 1 { return 2 }
-    if painted == 0 { return 3 }
+    if !drawn.succeeded {
+        return 1
+    }
+    if manual_test_writes != 1 {
+        return 2
+    }
+    if painted == 0 {
+        return 3
+    }
     return 0
 }
 
@@ -84,17 +97,25 @@ CheckPracticeManual :: () -> s32 {
         .guide_border = Color.{.r = 200, .g = 210, .b = 205, .a = 255},
         .speed = 3, .speed_min = 1, .speed_max = 8, .breath_radius = 60, .hold_progress = 20,
         .preset = 1, .inhale = 4, .hold_in = 4, .exhale = 4, .hold_out = 4}
-    practices: [4]s32 = .[EXERCISE_WIM_HOF, EXERCISE_MEDITATION, EXERCISE_PATTERNS,
-        EXERCISE_ASTRAL_PROJECTION]
-    pages: [4]s32 = .[4, 2, 3, 2]
+    practices: [5]s32 = .[EXERCISE_WIM_HOF, EXERCISE_MEDITATION, EXERCISE_PATTERNS,
+    EXERCISE_ASTRAL_PROJECTION, EXERCISE_SUN_SALUTATION]
+    pages: [5]s32 = .[4, 2, 3, 2, 3]
     id: u64 = 1
-    for index: 0..3 {
+    for index: 0..4 {
         frame.practice = practices[index]
         for page: cast(s32)0..pages[index] - 1 {
             frame.page = page
             drawn := ManualTestDraw(frame, id)
             id += cast(u64)1
-            if drawn != 0 { return drawn }
+            if drawn != 0 {
+                return drawn
+            }
+            if frame.practice == EXERCISE_SUN_SALUTATION {
+                expected := ifx page == 0 then 12 else ifx page == 1 then 3 else 0
+                if manual_test_figures != expected {
+                    return 10
+                }
+            }
             if manual_test_frame.action != PRACTICE_MANUAL_NONE || manual_test_frame.page != page {
                 return 4
             }
@@ -111,7 +132,9 @@ CheckPracticeManual :: () -> s32 {
     manual_test_frame.action != PRACTICE_MANUAL_START { return 6 }
     frame.next = false
     frame.previous = true
-    if ManualTestDraw(frame, id + cast(u64)2) != 0 || manual_test_frame.page != 1 { return 7 }
+    if ManualTestDraw(frame, id + cast(u64)2) != 0 || manual_test_frame.page != 1 {
+        return 7
+    }
     frame.previous = false
     frame.close = true
     if ManualTestDraw(frame, id + cast(u64)3) != 0 ||

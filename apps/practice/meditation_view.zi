@@ -1,0 +1,121 @@
+// A running Meditation: the circle with the time left in it and, when the
+// time can be extended, +1, +5 and +10 minutes, with Finish once the time is
+// up. The host keeps the clock, the bell and the music, draws the title bar
+// and the question on leaving, and does what was pressed.
+#import "session"
+#import "geometry"
+#import "dpi"
+#import "drawing_props"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "text_measure"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "shape_props"
+#import "shape_widget"
+#import, file "../../src/apps/practice_ui_types.zi";
+#import, file "../../src/apps/practice_types.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using TextAlign;
+using TextWrap;
+host_api :: #system_library "host_api";
+ReadPracticeMeditationHost :: () -> PracticeMeditationFrame #foreign host_api;
+WritePracticeMeditationHost :: (frame: PracticeMeditationFrame) #foreign host_api;
+meditation: PracticeMeditationFrame;
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, meditation.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+FitFont :: (text: string, max_width: s32, preferred: s32, minimum: s32) -> s32 {
+    font := preferred
+    while font > minimum &&
+    TextWidth(meditation.session, TextProps.{.text = text, .font = font}) > max_width {
+        font -= 1
+    }
+    return font
+}
+
+// Keeps a row of the given width inside the screen's side margins.
+RowX :: (center_x: s32, width: s32) -> s32 {
+    x := center_x - width / 2
+    margin := Scale(12)
+    if x < margin {
+        x = margin
+    }
+    if x + width > meditation.view_width - margin {
+        x = meditation.view_width - margin - width
+    }
+    return x
+}
+
+ExtendControls :: (y: s32) {
+    if !meditation.extend {
+        return
+    }
+    minutes: [3]s32 = .[1, 5, 10]
+    labels: [3]string = .["+1", "+5", "+10"]
+    gap := Scale(8)
+    height := Scale(34)
+    width := Scale(58)
+    x := RowX(meditation.center_x, width * 3 + gap * 2)
+    for index: cast(s32)0..2 {
+        if Button(meditation.session, ButtonProps.{
+                .bounds = Bounds(x + index * (width + gap), y, width, height),
+                .label = labels[index],
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            meditation.action = PRACTICE_MEDITATION_EXTEND
+            meditation.value = minutes[index] * 60
+        }
+    }
+    if !meditation.complete {
+        return
+    }
+    finish_width := Scale(96)
+    if Button(meditation.session, ButtonProps.{
+            .bounds = Bounds(RowX(meditation.center_x, finish_width),
+                y + height + Scale(10), finish_width, height),
+            .label = meditation.finish_label,
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+        meditation.action = PRACTICE_MEDITATION_FINISH
+    }
+}
+
+PracticeMeditationView :: (message: PracticeMessage) -> PracticeMessage {
+    meditation = ReadPracticeMeditationHost()
+    meditation.action = PRACTICE_MEDITATION_NONE
+    meditation.value = 0
+    radius := Scale(86)
+    center := Vector2.{cast(float32)meditation.center_x, cast(float32)meditation.center_y}
+    halo := meditation.accent_color
+    halo.a = cast(u8)(255.0 * 0.24)
+    Circle(meditation.session, CircleProps.{.center = center,
+            .radius = cast(float32)(radius + Scale(20)), .fill = halo})
+    Circle(meditation.session, CircleProps.{.center = center,
+            .radius = cast(float32)radius, .fill = meditation.accent_color})
+    Text(meditation.session, TextProps.{
+            .text = meditation.time_text,
+            .bounds = Bounds(meditation.center_x - radius,
+                meditation.center_y - radius, radius * 2, radius * 2),
+            .font = FitFont(meditation.time_text, radius * 2 - Scale(20),
+                Scale(Text24), Scale(Text16)),
+            .class_name = meditation.ink_class,
+            .wrap = cast(TextWrap)TextWrapNone,
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+    ExtendControls(meditation.center_y + radius + Scale(24))
+    WritePracticeMeditationHost(meditation)
+    message.succeeded = true
+    return message
+}

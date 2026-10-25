@@ -1,5 +1,6 @@
 // Practices draws its Customize pages: the bundled package lays out
-// Meditation's settings, the music and the narration from the frame the host
+// Meditation's settings, a breathing pattern's, Wim Hof's with its preview
+// and start speed editor, the music and the narration from the frame the host
 // gives it, reads each track and language through the host, and gives back
 // the one change asked for.
 #import "session"
@@ -25,7 +26,10 @@ settings_test_frame: PracticeSettingsFrame;
 settings_test_codec: WidgetPracticeSettingsFrameCodec;
 settings_test_track_codec: WidgetPracticeMusicTrackCodec;
 settings_test_language_codec: WidgetPracticeNarrationChoiceCodec;
+settings_test_character_codec: WidgetPracticeCharacterChoiceCodec;
 settings_test_writes: s32;
+settings_test_figures: s32;
+settings_test_characters: s32;
 settings_test_tracks: s32;
 settings_test_languages: s32;
 
@@ -35,6 +39,11 @@ SettingsTestAssets :: (path: string) -> bool {
 
 SettingsTestCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) == "figure_view" && TextFromCString(function) == "DrawPracticeFigureHost" &&
+    count == 1 && WidgetValidPracticeFigureRequest(arguments[0]) {
+        settings_test_figures += 1
+        return 1
+    }
     if TextFromCString(module) != "settings_view" {
         return WidgetHostCall(context, module, function, arguments, count, result)
     }
@@ -50,7 +59,9 @@ SettingsTestCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "ReadPracticeMusicTrackHost" && count == 1 {
         index := cast(s32)arguments[0].integer
-        if index < 0 || index >= settings_test_frame.music_count { return 0 }
+        if index < 0 || index >= settings_test_frame.music_count {
+            return 0
+        }
         settings_test_tracks += 1
         result.* = WidgetEncodePracticeMusicTrack(PracticeMusicTrack.{.label = "Deep Meditation"},
             *settings_test_track_codec)
@@ -58,10 +69,18 @@ SettingsTestCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "ReadPracticeNarrationHost" && count == 1 {
         index := cast(s32)arguments[0].integer
-        if index < 0 || index >= settings_test_frame.narration_count { return 0 }
+        if index < 0 || index >= settings_test_frame.narration_count {
+            return 0
+        }
         settings_test_languages += 1
         result.* = WidgetEncodePracticeNarrationChoice(PracticeNarrationChoice.{.label = "English",
                 .state = 2, .rank = index}, *settings_test_language_codec)
+        return 1
+    }
+    if name == "ReadPracticeCharacterHost" && count == 1 {
+        settings_test_characters += 1
+        result.* = WidgetEncodePracticeCharacterChoice(PracticeCharacterChoice.{.label = "Jade woman"},
+            *settings_test_character_codec)
         return 1
     }
     if name == "SettingsLocaleHost" && count == 1 {
@@ -79,6 +98,8 @@ SettingsTestDraw :: (frame: PracticeSettingsFrame, frame_id: u64) -> s32 {
     frame.session = session
     settings_test_frame = frame
     settings_test_writes = 0
+    settings_test_figures = 0
+    settings_test_characters = 0
     settings_test_tracks = 0
     settings_test_languages = 0
     WidgetHostBegin(session, SettingsTestAssets)
@@ -89,9 +110,15 @@ SettingsTestDraw :: (frame: PracticeSettingsFrame, frame_id: u64) -> s32 {
     painted := PendingPaintCount(session)
     unused EndFrame(session)
     unused SessionClose(session)
-    if !drawn.succeeded { return 1 }
-    if settings_test_writes != 1 { return 2 }
-    if painted == 0 { return 3 }
+    if !drawn.succeeded {
+        return 1
+    }
+    if settings_test_writes != 1 {
+        return 2
+    }
+    if painted == 0 {
+        return 3
+    }
     return 0
 }
 
@@ -108,8 +135,12 @@ CheckPracticeSettings :: () -> s32 {
         .music_built_in = true, .music_show_status = true, .music_downloading = true,
         .music_bytes = 40, .music_total = 100, .music_status = "Downloading 40%"}
     meditation := SettingsTestDraw(frame, cast(u64)1)
-    if meditation != 0 { return meditation }
-    if settings_test_tracks != 3 || settings_test_frame.action != PRACTICE_SETTINGS_NONE { return 4 }
+    if meditation != 0 {
+        return meditation
+    }
+    if settings_test_tracks != 3 || settings_test_frame.action != PRACTICE_SETTINGS_NONE {
+        return 4
+    }
     frame.practice = EXERCISE_ASTRAL_PROJECTION
     frame.music_selection = 0
     frame.narration = true
@@ -119,7 +150,77 @@ CheckPracticeSettings :: () -> s32 {
     frame.narration_selected = 0
     frame.narration_status = "Downloading English…"
     astral := SettingsTestDraw(frame, cast(u64)2)
-    if astral != 0 { return 4 + astral }
-    if settings_test_languages != 2 || settings_test_frame.action != PRACTICE_SETTINGS_NONE { return 8 }
+    if astral != 0 {
+        return 4 + astral
+    }
+    if settings_test_languages != 2 || settings_test_frame.action != PRACTICE_SETTINGS_NONE {
+        return 8
+    }
+    frame.narration = false
+    frame.practice = EXERCISE_PATTERNS
+    frame.pattern = 4
+    frame.pattern_inhale = 4
+    frame.pattern_hold_in = 2
+    frame.pattern_exhale = 6
+    frame.pattern_minutes = 5
+    patterns := SettingsTestDraw(frame, cast(u64)3)
+    if patterns != 0 {
+        return 8 + patterns
+    }
+    if settings_test_frame.action != PRACTICE_SETTINGS_NONE {
+        return 12
+    }
+    frame.practice = EXERCISE_WIM_HOF
+    frame.whm_speed = 6
+    frame.whm_speed_min = 1
+    frame.whm_speed_max = 8
+    frame.whm_rounds = 3
+    frame.whm_rounds_max = 12
+    frame.whm_breaths = 30
+    frame.whm_breaths_min = 15
+    frame.whm_breaths_max = 80
+    frame.whm_pause_max = 30
+    frame.whm_progressive = true
+    frame.whm_start_speed = 3
+    frame.whm_reminder = 30
+    frame.whm_preview = 0.5
+    frame.whm_editor = true
+    frame.whm_editor_preview = 0.25
+    frame.surface_color = Color.{.r = 255, .g = 255, .b = 255, .a = 255}
+    frame.border_color = Color.{.r = 220, .g = 224, .b = 222, .a = 255}
+    frame.link_color = Color.{.r = 40, .g = 120, .b = 90, .a = 255}
+    frame.text_color = Color.{.r = 20, .g = 24, .b = 22, .a = 255}
+    whm := SettingsTestDraw(frame, cast(u64)4)
+    if whm != 0 {
+        return 12 + whm
+    }
+    if settings_test_frame.action != PRACTICE_SETTINGS_NONE {
+        return 16
+    }
+    frame.practice = EXERCISE_SUN_SALUTATION
+    frame.sun_repetitions = 4
+    frame.sun_start_seconds = 6
+    frame.sun_end_seconds = 3
+    frame.sun_seconds_min = 1
+    frame.sun_seconds_max = 20
+    frame.sun_duration = 240
+    frame.whm_editor = false
+    frame.narration = true
+    sun := SettingsTestDraw(frame, cast(u64)5)
+    if sun != 0 {
+        return 16 + sun
+    }
+    if settings_test_frame.action != PRACTICE_SETTINGS_NONE {
+        return 20
+    }
+    frame.practice = EXERCISE_TAI_CHI
+    frame.tai_character_count = 4
+    frame.tai_preview_item = 0
+    tai := SettingsTestDraw(frame, cast(u64)6)
+    if tai != 0 {
+        return 20 + tai
+    }
+    if settings_test_figures != 4 || settings_test_characters != 4 ||
+    settings_test_frame.action != PRACTICE_SETTINGS_NONE { return 24 }
     return 0
 }

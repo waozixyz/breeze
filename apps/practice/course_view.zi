@@ -1,0 +1,240 @@
+// Tai Chi's course chooser uses the same package-owned widget surface as
+// its running session. The host supplies course records and plays a choice.
+#import "session"
+#import "geometry"
+#import "dpi"
+#import "layout"
+#import "text_props"
+#import "semantic"
+#import "text_align"
+#import "text_widget"
+#import "text_measure"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "dropdown_props"
+#import "dropdown_widget"
+#import "modal_props"
+#import "modal_frame_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import, file "../../src/apps/practice_ui_types.zi";
+#import, file "../../src/apps/practice_types.zi";
+#import, file "../../src/app/exercise_types.zi";
+#import, file "figure_view.zi";
+
+using ExerciseType;
+using SemanticKind;
+using ButtonTone;
+using ButtonEmphasis;
+using ContentAlignment;
+using TextAlign;
+using TextWrap;
+host_api :: #system_library "host_api";
+ReadPracticeCourseHost :: () -> PracticeCourseFrame #foreign host_api;
+WritePracticeCourseHost :: (frame: PracticeCourseFrame) #foreign host_api;
+ReadPracticeCourseRowHost :: (lesson: bool, index: s32) -> PracticeCourseRow #foreign host_api;
+CourseLocaleHost :: (key: string) -> string #foreign host_api;
+course: PracticeCourseFrame;
+COURSE_LESSON_LIMIT :: 32
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, course.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)height}
+}
+
+Locale :: (key: string) -> string {
+    return CourseLocaleHost(key)
+}
+
+ParagraphHeight :: (text: string, width: s32, font: s32) -> s32 {
+    return TextHeight(course.session, TextProps.{.text = text, .font = font,
+            .bounds = Bounds(0, 0, width, 0), .line_gap = Scale(3)})
+}
+
+Section :: (text: string, bounds: Rectangle) {
+    strong: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)text.count}]
+    Text(course.session, TextProps.{.text = text, .bounds = bounds,
+            .font = course.font + Scale(2), .strong = strong[:],
+            .semantic_kind = cast(SemanticKind)SemanticHeading, .heading_level = 2})
+}
+
+ChooseLesson :: (lesson: s32) {
+    if lesson != course.lesson && lesson >= 0 && lesson < course.lesson_count {
+        course.lesson = lesson
+        course.item_scroll = 0
+        course.reveal_next = false
+    }
+}
+
+Navigation :: (bounds: Rectangle) {
+    gap := Scale(8)
+    row_h := Scale(58)
+    scrolled := Scroll(course.session, ScrollProps.{.key = KeyHash("inbe/tai_chi/lessons"),
+            .bounds = bounds, .content_height = course.lesson_count * (row_h + gap), .scroll_offset = course.lesson_scroll})
+    course.lesson_scroll = scrolled.scroll_offset
+    if !scrolled.opened {
+        return
+    }
+    for index: cast(s32)0..course.lesson_count - 1 {
+        lesson := ReadPracticeCourseRowHost(true, index)
+        selected := index == course.lesson
+        if Button(course.session, ButtonProps.{.key = KeyHash("inbe/tai_chi/lesson") + cast(u64)index,
+                .bounds = Rectangle.{scrolled.content.x, scrolled.content.y + cast(float32)(index * (row_h + gap)),
+                    bounds.width - cast(float32)Scale(10), cast(float32)row_h},
+                .label = lesson.title, .detail = lesson.subtitle, .selected = selected,
+                .tone = cast(ButtonTone)(ifx selected then ButtonToneAccent else ButtonToneNeutral),
+                .emphasis = cast(ButtonEmphasis)(ifx selected then ButtonEmphasisFilled else ButtonEmphasisSoft),
+                .content_alignment = cast(ContentAlignment)ContentAlignmentStart}) != 0 {
+            ChooseLesson(index)
+        }
+    }
+    unused End(course.session)
+}
+
+Card :: (bounds: Rectangle, index: s32, row: PracticeCourseRow) -> bool {
+    key := KeyHash("inbe/tai_chi/item-card") + cast(u64)index * cast(u64)4096
+    clicked := Button(course.session, ButtonProps.{.key = key, .bounds = bounds,
+            .selected = index == course.next_item, .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
+    padding := cast(float32)Scale(14)
+    text_y := bounds.y + bounds.height - cast(float32)Scale(76)
+    PracticeFigure(PracticeFigureRequest.{.practice = EXERCISE_TAI_CHI, .preview = true,
+            .index = index, .character = course.character, .key = key + cast(u64)1000, .alt_text = row.title,
+            .bounds = Rectangle.{bounds.x + padding, bounds.y + padding,
+                bounds.width - padding * 2.0, bounds.height - cast(float32)Scale(94)}})
+    Text(course.session, TextProps.{.text = row.title, .font = course.font,
+            .bounds = Rectangle.{bounds.x + padding, text_y, bounds.width - padding * 2.0, cast(float32)Scale(44)}})
+    Text(course.session, TextProps.{.text = row.detail, .font = course.small_font, .class_name = course.muted_class,
+            .wrap = cast(TextWrap)TextWrapEllipsis, .bounds = Rectangle.{bounds.x + padding,
+                text_y + cast(float32)Scale(48), bounds.width - padding * 2.0, cast(float32)Scale(24)}})
+    if row.done {
+        unused Button(course.session, ButtonProps.{.key = key + cast(u64)2000,
+                .bounds = Rectangle.{bounds.x + bounds.width - cast(float32)Scale(38), bounds.y + cast(float32)Scale(8),
+                    cast(float32)Scale(30), cast(float32)Scale(30)},
+                .icon_only = true, .icon_shape = TAI_CHI_DONE_ICON, .disabled = true,
+                .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft})
+    }
+    return clicked
+}
+
+Cards :: (bounds: Rectangle) {
+    lesson := ReadPracticeCourseRowHost(true, course.lesson)
+    gap := Scale(14)
+    columns: s32 = ifx bounds.width >= cast(float32)Scale(460) then 2 else 1
+    card_w := (cast(s32)bounds.width - gap * (columns - 1) - Scale(10)) / columns
+    card_h := Scale(252)
+    heading_h := ParagraphHeight(lesson.title, cast(s32)bounds.width - Scale(12), course.font + Scale(2))
+    summary_h: s32 = 0
+    if lesson.summary.count > 0 {
+        summary_h = ParagraphHeight(lesson.summary, cast(s32)bounds.width - Scale(12), course.font) + gap
+    }
+    header_h := heading_h + gap + summary_h + gap
+    rows := (lesson.count + columns - 1) / columns
+    if course.reveal_next {
+        course.reveal_next = false
+        offset := course.next_item - lesson.first
+        if offset >= columns {
+            course.item_scroll = header_h + (offset / columns) * (card_h + gap)
+        }
+    }
+    scrolled := Scroll(course.session, ScrollProps.{.key = KeyHash("inbe/tai_chi/items"),
+            .bounds = bounds, .content_height = header_h + rows * (card_h + gap), .scroll_offset = course.item_scroll})
+    course.item_scroll = scrolled.scroll_offset
+    if !scrolled.opened {
+        return
+    }
+    Section(lesson.title, Rectangle.{scrolled.content.x, scrolled.content.y, bounds.width - cast(float32)Scale(12),
+            cast(float32)heading_h})
+    Text(course.session, TextProps.{.text = lesson.summary, .class_name = course.muted_class,
+            .bounds = Rectangle.{scrolled.content.x, scrolled.content.y + cast(float32)(heading_h + gap),
+                bounds.width - cast(float32)Scale(12), cast(float32)summary_h}})
+    for offset: cast(s32)0..lesson.count - 1 {
+        index := lesson.first + offset
+        card := Rectangle.{scrolled.content.x + cast(float32)(offset % columns * (card_w + gap)),
+            scrolled.content.y + cast(float32)(header_h + offset / columns * (card_h + gap)),
+            cast(float32)card_w, cast(float32)card_h}
+        if card.y + card.height < bounds.y || card.y > bounds.y + bounds.height {
+            continue
+        }
+        if Card(card, index, ReadPracticeCourseRowHost(false, index)) {
+            course.action = PRACTICE_COURSE_PLAY
+            course.value = index
+            break
+        }
+    }
+    unused End(course.session)
+}
+
+Course :: () {
+    width := course.view_width - Scale(32)
+    if width > Scale(1060) {
+        width = Scale(1060)
+    }
+    height := course.view_height - Scale(48)
+    if height > Scale(740) {
+        height = Scale(740)
+    }
+    frame := ModalFrame(course.session, ModalFrameProps.{.key = KeyHash("inbe/tai_chi/modal"),
+            .title = Locale("tai_chi_course_title"), .width = width, .height = height, .scale = course.scale,
+            .title_at_start = true, .strong_title = true, .has_right_action = true, .right_label = Locale("close_button")})
+    if frame.dismissed || frame.right_clicked {
+        course.action = PRACTICE_COURSE_CLOSE
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    bounds := frame.layout.content
+    progress_h := Scale(32)
+    Text(course.session, TextProps.{.text = course.progress, .class_name = course.muted_class,
+            .wrap = cast(TextWrap)TextWrapEllipsis,
+            .bounds = Rectangle.{bounds.x, bounds.y, bounds.width, cast(float32)progress_h}})
+    bounds.y += cast(float32)(progress_h + Scale(10))
+    bounds.height -= cast(float32)(progress_h + Scale(10))
+    if bounds.width >= cast(float32)Scale(700) {
+        sidebar := bounds
+        sidebar.width = cast(float32)Scale(190)
+        Navigation(sidebar)
+        bounds.x += sidebar.width + cast(float32)Scale(24)
+        bounds.width -= sidebar.width + cast(float32)Scale(24)
+    } else {
+        options: [COURSE_LESSON_LIMIT]DropdownOption
+        for index: cast(s32)0..course.lesson_count - 1 {
+            options[index].label = ReadPracticeCourseRowHost(true, index).title
+        }
+        choice := Dropdown(course.session, DropdownProps.{.key = KeyHash("inbe/tai_chi/lesson-select"),
+                .bounds = Rectangle.{bounds.x, bounds.y, bounds.width, cast(float32)Scale(48)},
+                .selected_index = course.lesson}, options[:course.lesson_count])
+        if choice.changed {
+            ChooseLesson(choice.selected_index)
+        }
+        bounds.y += cast(float32)Scale(62)
+        bounds.height -= cast(float32)Scale(62)
+    }
+    Cards(bounds)
+    unused End(course.session)
+}
+
+PracticeCourseView :: (message: PracticeMessage) -> PracticeMessage {
+    course = ReadPracticeCourseHost()
+    course.action = PRACTICE_COURSE_NONE
+    course.value = 0
+    if course.lesson_count < 1 || course.lesson_count > COURSE_LESSON_LIMIT {
+        message.succeeded = false
+        return message
+    }
+    if course.lesson < 0 || course.lesson >= course.lesson_count {
+        course.lesson = 0
+    }
+    Course()
+    WritePracticeCourseHost(course)
+    message.succeeded = true
+    return message
+}
+
+TAI_CHI_DONE_ICON :: "F:M8.46431 11.2095C8.07379 10.819 7.44063 10.819 7.0501 11.2095C6.65958 11.6 6.65958 12.2332 7.0501 12.6237L7.75721 11.9166L8.46431 11.2095ZM10.5856 14.745L9.87853 15.4522C10.2691 15.8427 10.9022 15.8427 11.2927 15.4522L10.5856 14.745ZM16.9496 9.7953C17.3401 9.40478 17.3401 8.77161 16.9496 8.38109C16.5591 7.99056 15.9259 7.99056 15.5354 8.38109L16.2425 9.08819L16.9496 9.7953ZM21 12H20C20 16.4183 16.4183 20 12 20V21V22C17.5228 22 22 17.5228 22 12H21ZM12 21V20C7.58172 20 4 16.4183 4 12H3H2C2 17.5228 6.47715 22 12 22V21ZM3 12H4C4 7.58172 7.58172 4 12 4V3V2C6.47715 2 2 6.47715 2 12H3ZM12 3V4C16.4183 4 20 7.58172 20 12H21H22C22 6.47715 17.5228 2 12 2V3ZM7.75721 11.9166L7.0501 12.6237L9.87853 15.4522L10.5856 14.745L11.2927 14.0379L8.46431 11.2095L7.75721 11.9166ZM10.5856 14.745L11.2927 15.4522L16.9496 9.7953L16.2425 9.08819L15.5354 8.38109L9.87853 14.0379L10.5856 14.745Z"

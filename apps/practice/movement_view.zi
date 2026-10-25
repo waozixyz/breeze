@@ -1,0 +1,328 @@
+#import "session"
+#import "geometry"
+#import "dpi"
+#import "layout"
+#import "vec"
+#import "drawing_props"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "text_measure"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "toolbar"
+#import "toolbar_props"
+#import "image_props"
+#import "progress_props"
+#import "progress_widget"
+#import "box_props"
+#import "box_widget"
+#import "shape_props"
+#import "shape_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "segmented_control_props"
+#import "segmented_control_widget"
+#import "tree"
+#import, file "../../src/apps/practice_ui_types.zi";
+#import, file "../../src/apps/practice_types.zi";
+#import, file "../../src/app/exercise_types.zi";
+#import, file "workout_rules.zi";
+#import, file "figure_view.zi";
+
+using ExerciseType;
+using TextAlign;
+using TextWrap;
+using ButtonTone;
+using ButtonEmphasis;
+host_api :: #system_library "host_api";
+ReadPracticeMovementHost :: () -> PracticeMovementFrame #foreign host_api;
+WritePracticeMovementHost :: (frame: PracticeMovementFrame) #foreign host_api;
+MovementLocaleHost :: (key: string) -> string #foreign host_api;
+movement: PracticeMovementFrame;
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, movement.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)height}
+}
+
+Locale :: (key: string) -> string {
+    return MovementLocaleHost(key)
+}
+
+Alpha :: (color: Color, opacity: float32) -> Color {
+    color.a = cast(u8)(cast(float32)color.a * opacity)
+    return color
+}
+
+ParagraphHeight :: (text: string, width: s32, font: s32, gap: s32 = 0) -> s32 {
+    return TextHeight(movement.session, TextProps.{.text = text, .font = font,
+            .bounds = Bounds(0, 0, width, 0), .line_gap = gap, .wrap = cast(TextWrap)TextWrapAuto})
+}
+
+Figure :: (bounds: Rectangle, key: string, alt: string) {
+    PracticeFigure(PracticeFigureRequest.{.practice = movement.practice,
+            .bounds = bounds, .key = KeyHash(key), .alt_text = alt})
+}
+
+// The same three 44-unit targets and bottom-row geometry as the host used.
+Controls :: () -> s32 {
+    layout := BottomIconRowLayoutFor(BottomIconRowProps.{
+            .center_x = movement.view_width / 2, .view_width = movement.view_width,
+            .view_height = movement.view_height, .count = 3}, movement.scale)
+    labels: [3]string = .[Locale("back_button"),
+    Locale(ifx movement.paused then "play_button" else "pause_button"), Locale("next_button")]
+    sources: [3]Rectangle = .[Rectangle.{128, 0, 64, 64},
+    Rectangle.{ifx movement.paused then 256.0 else 64.0, 192, 64, 64}, Rectangle.{128, 64, 64, 64}]
+    for index: cast(s32)0..2 {
+        if Button(movement.session, ButtonProps.{.id = 83000 + index,
+                .bounds = BottomIconRowButtonBoundsFor(layout, index), .label = labels[index],
+                .icon_only = true, .image = ImageProps.{.asset_path = "icons/ui.png",
+                    .source = sources[index], .alt_text = labels[index]},
+                .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                .disabled = index == 0 && !movement.can_back}) != 0 {
+            movement.action = index + 1
+        }
+    }
+    return layout.y
+}
+
+CenteredLine :: (text: string, y: s32, preferred: s32, minimum: s32, strong: bool) -> s32 {
+    font := preferred
+    if TextWidth(movement.session, TextProps.{.text = text, .font = font}) > movement.view_width - Scale(80) {
+        font = minimum
+    }
+    emphasis: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)text.count}]
+    Text(movement.session, TextProps.{.text = text,
+            .bounds = Bounds(0, y, movement.view_width, 0), .font = font,
+            .align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapNone,
+            .strong = ifx strong then emphasis[:1] else emphasis[:0]})
+    return y + TextHeight(movement.session, TextProps.{.text = "M", .font = font})
+}
+
+SunSalutation :: () {
+    bottom := Controls() - Scale(18)
+    y := CenteredLine(movement.heading, movement.top + Scale(18), Scale(24), Scale(20), true)
+    y = CenteredLine(movement.cue, y + Scale(2), Scale(20), Scale(18), false)
+    width := movement.view_width - Scale(96)
+    if width > Scale(280) {
+        width = Scale(280)
+    }
+    y += Scale(8)
+    Progress(movement.session, ProgressProps.{.bounds = Bounds((movement.view_width - width) / 2,
+            y, width, Scale(10)), .min = 0, .max = 1000, .value = movement.progress})
+    y += Scale(22)
+    Figure(Bounds(Scale(24), y, movement.view_width - Scale(48), bottom - y),
+        "sun-salutation/figure", Locale("exercise_sun_salutation"))
+}
+
+TaiChi :: () {
+    row_y := Controls()
+    y := movement.top + Scale(12)
+    if movement.subtitle.count > 0 {
+        Text(movement.session, TextProps.{.text = movement.subtitle,
+                .bounds = Bounds(Scale(24), y, movement.view_width - Scale(48), 0),
+                .font = Scale(16), .class_name = movement.muted_class,
+                .align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapEllipsis})
+        y += TextHeight(movement.session, TextProps.{.text = "M", .font = Scale(16)}) + Scale(4)
+    }
+    cue_height := TextHeight(movement.session, TextProps.{.text = "M", .font = Scale(20)}) * 2
+    Text(movement.session, TextProps.{.text = movement.cue,
+            .bounds = Bounds(Scale(24), y, movement.view_width - Scale(48), cue_height),
+            .font = Scale(20), .align = cast(TextAlign)TextAlignCenter})
+    y += cue_height + Scale(8)
+    progress_y := row_y - Scale(22)
+    width := movement.view_width - Scale(96)
+    if width > Scale(420) {
+        width = Scale(420)
+    }
+    Progress(movement.session, ProgressProps.{.key = KeyHash("inbe/practices/tai_chi/progress"),
+            .bounds = Bounds((movement.view_width - width) / 2, progress_y, width, Scale(10)),
+            .min = 0, .max = 1000, .value = movement.progress})
+    angle_y := progress_y - Scale(52)
+    width = movement.view_width - Scale(48)
+    if width > Scale(440) {
+        width = Scale(440)
+    }
+    options: [4]SegmentOption = .[SegmentOption.{.label = Locale("tai_chi_view_front")},
+    SegmentOption.{.label = Locale("tai_chi_view_back")}, SegmentOption.{.label = Locale("tai_chi_view_side")},
+    SegmentOption.{.label = Locale("tai_chi_view_angled")}]
+    choice := SegmentedControl(movement.session, SegmentedControlProps.{
+            .key = KeyHash("inbe/practices/tai_chi/angle"), .bounds = Bounds((movement.view_width - width) / 2,
+            angle_y, width, Scale(40)), .height = Scale(40), .selected_index = movement.view,
+            .has_selection = true}, options[:])
+    if choice.changed {
+        movement.action = PRACTICE_MOVEMENT_VIEWPOINT
+        movement.value = choice.selected_index
+    }
+    Figure(Bounds(Scale(12), y, movement.view_width - Scale(24), angle_y - Scale(12) - y),
+        "inbe/practices/tai_chi/figure", Locale("exercise_tai_chi"))
+}
+
+Pause :: (x: s32, y: s32, width: s32) {
+    if Button(movement.session, ButtonProps.{
+            .key = KeyHash(ifx movement.practice == EXERCISE_WORKOUT then "workout/pause" else "astral/pause"),
+            .label = Locale(ifx movement.paused then "patterns_resume_button" else "pause_button"),
+            .bounds = Bounds(x, y, width, Scale(48)), .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        movement.action = PRACTICE_MOVEMENT_PAUSE
+    }
+}
+
+Astral :: () {
+    pad := Scale(24)
+    width := movement.view_width - pad * 2
+    Text(movement.session, TextProps.{.text = movement.time,
+            .bounds = Bounds(pad, movement.top + Scale(12), width, Scale(48)),
+            .font = Scale(28), .align = cast(TextAlign)TextAlignCenter})
+    y := movement.top + Scale(80)
+    button_y := movement.view_height - Scale(76)
+    height := button_y - y - Scale(16)
+    if height < Scale(40) {
+        height = Scale(40)
+    }
+    if height >= Scale(160) {
+        scene_height := height * 48 / 100
+        Figure(Bounds(pad, y, width, scene_height), "astral/scene", Locale("exercise_astral_projection"))
+        y += scene_height + Scale(12)
+        height -= scene_height + Scale(12)
+    }
+    text_h := ParagraphHeight(movement.cue, width, movement.font)
+    scrolled := Scroll(movement.session, ScrollProps.{.key = KeyHash("astral/guidance"),
+            .bounds = Bounds(pad, y, width, height), .content_height = text_h, .scroll_offset = movement.scroll})
+    movement.scroll = scrolled.scroll_offset
+    if scrolled.opened {
+        Text(movement.session, TextProps.{.text = movement.cue,
+                .bounds = Rectangle.{scrolled.content.x, scrolled.content.y, cast(float32)width, cast(float32)text_h},
+                .font = movement.font, .align = cast(TextAlign)TextAlignCenter})
+        unused End(movement.session)
+    }
+    button_w := Scale(220)
+    if button_w > width {
+        button_w = width
+    }
+    Pause((movement.view_width - button_w) / 2, button_y, button_w)
+}
+
+WorkoutProgress :: (x: s32, y: s32, width: s32) {
+    gap := Scale(4)
+    bar_w := (width - gap * (WORKOUT_EXERCISE_COUNT - 1)) / WORKOUT_EXERCISE_COUNT
+    bar_h := Scale(6)
+    for index: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
+        bar := Bounds(x + index * (bar_w + gap), y, bar_w, bar_h)
+        Box(movement.session, BoxProps.{.bounds = bar, .fill = Alpha(movement.text_color, 0.14),
+                .radius = cast(float32)bar_h / 2.0})
+        share: float32 = 0.0
+        if index < movement.exercise || movement.phase == WORKOUT_PHASE_DONE {
+            share = 1.0
+        } else if index == movement.exercise && movement.phase == WORKOUT_PHASE_WORK && movement.length_ms > 0 {
+            share = cast(float32)movement.elapsed_ms / cast(float32)movement.length_ms
+        }
+        if share > 0.0 {
+            bar.width *= share
+            if bar.width < cast(float32)bar_h {
+                bar.width = cast(float32)bar_h
+            }
+            Box(movement.session, BoxProps.{.bounds = bar, .fill = movement.accent_color,
+                    .radius = cast(float32)bar_h / 2.0})
+        }
+    }
+}
+
+WorkoutCountdown :: (center: Vector2, radius: float32) {
+    thickness := cast(float32)Scale(6)
+    Ring(movement.session, RingProps.{.center = center, .inner_radius = radius - thickness,
+            .outer_radius = radius, .start_angle = 0.0, .end_angle = 360.0,
+            .color = Alpha(movement.text_color, 0.12)})
+    left: float32 = 1.0
+    if movement.length_ms > 0 {
+        left -= cast(float32)movement.elapsed_ms / cast(float32)movement.length_ms
+    }
+    if left > 0.0 {
+        Ring(movement.session, RingProps.{.center = center, .inner_radius = radius - thickness,
+                .outer_radius = radius, .start_angle = -90.0, .end_angle = -90.0 + 360.0 * left,
+                .color = ifx movement.phase == WORKOUT_PHASE_WORK then movement.accent_color else Alpha(movement.text_color, 0.55)})
+    }
+    number: Vec(u8)
+    BuilderPrint(*number, "%", movement.seconds_left)
+    Text(movement.session, TextProps.{.text = BuilderFinish(number),
+            .bounds = Rectangle.{center.x - radius, center.y - radius, radius * 2.0, radius * 2.0},
+            .font = Scale(30), .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapNone})
+}
+
+Workout :: () {
+    pad := Scale(20)
+    wide := movement.view_width >= Scale(760) && movement.view_width * 10 >= movement.view_height * 12
+    panel_w := ifx wide then movement.view_width * 2 / 5 else movement.view_width - pad * 2
+    if panel_w > Scale(560) {
+        panel_w = Scale(560)
+    }
+    panel_x := ifx wide then movement.view_width - pad - panel_w else pad
+    progress_y := movement.top + Scale(10)
+    WorkoutProgress(pad, progress_y, movement.view_width - pad * 2)
+    heading_h := ParagraphHeight(movement.heading, panel_w, Scale(26))
+    sub_h := ParagraphHeight(movement.subtitle, panel_w, movement.font)
+    tip_h := ParagraphHeight(movement.cue, panel_w, movement.font, Scale(3))
+    content_top := progress_y + Scale(20)
+    words_h := heading_h + Scale(4) + sub_h
+    ring_r := Scale(44)
+    lower_h := tip_h + Scale(16) + ring_r * 2 + Scale(16 + 48 + 20)
+    panel_top := content_top
+    stage: Rectangle
+    if wide {
+        stage = Bounds(pad, content_top, panel_x - pad * 2, movement.view_height - content_top - pad)
+        panel_top = content_top + (movement.view_height - content_top - pad - words_h - Scale(24) - lower_h) / 2
+        if panel_top < content_top {
+            panel_top = content_top
+        }
+    } else {
+        stage = Bounds(pad, content_top + words_h + Scale(8), movement.view_width - pad * 2,
+            movement.view_height - content_top - words_h - Scale(12) - lower_h)
+    }
+    emphasis: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)movement.heading.count}]
+    Text(movement.session, TextProps.{.text = movement.heading,
+            .bounds = Bounds(panel_x, panel_top, panel_w, heading_h), .font = Scale(26),
+            .align = cast(TextAlign)TextAlignCenter, .strong = emphasis[:1]})
+    Text(movement.session, TextProps.{.text = movement.subtitle,
+            .bounds = Bounds(panel_x, panel_top + heading_h + Scale(4), panel_w, sub_h),
+            .font = movement.font, .align = cast(TextAlign)TextAlignCenter, .disabled = true})
+    if stage.height > cast(float32)Scale(60) {
+        Figure(stage, "workout/figure", movement.heading)
+    }
+    lower_y := ifx wide then panel_top + words_h + Scale(24) else movement.view_height - lower_h
+    Text(movement.session, TextProps.{.text = movement.cue, .bounds = Bounds(panel_x, lower_y, panel_w, tip_h),
+            .font = movement.font, .align = cast(TextAlign)TextAlignCenter})
+    WorkoutCountdown(Vector2.{cast(float32)(panel_x + panel_w / 2),
+            cast(float32)(lower_y + tip_h + Scale(16) + ring_r)}, cast(float32)ring_r)
+    width := Scale(220)
+    if width > panel_w {
+        width = panel_w
+    }
+    Pause(panel_x + (panel_w - width) / 2, lower_y + tip_h + Scale(16) + ring_r * 2 + Scale(16), width)
+}
+
+PracticeMovementView :: (message: PracticeMessage) -> PracticeMessage {
+    movement = ReadPracticeMovementHost()
+    movement.action = PRACTICE_MOVEMENT_NONE
+    movement.value = 0
+    if movement.practice == EXERCISE_SUN_SALUTATION {
+        SunSalutation()
+    } else if movement.practice == EXERCISE_TAI_CHI {
+        TaiChi()
+    } else if movement.practice == EXERCISE_ASTRAL_PROJECTION {
+        Astral()
+    } else if movement.practice == EXERCISE_WORKOUT {
+        Workout()
+    } else {
+        message.succeeded = false
+        return message
+    }
+    WritePracticeMovementHost(movement)
+    message.succeeded = true
+    return message
+}

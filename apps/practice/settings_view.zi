@@ -1,6 +1,9 @@
+#import, file "figure_view.zi";
 // A practice's Customize page: Meditation's duration, extend controls and
-// interval bell, the background music with its test and download, and
-// Astral Projection's voice narration with its voice and language. The host
+// interval bell, a breathing pattern with its custom seconds and minutes,
+// Wim Hof's breathing, rounds and session options with a breathing preview,
+// the background music with its test and download, and Astral Projection's
+// voice narration with its voice and language. The host
 // keeps the settings, the music and the narration downloads, and saves each
 // change the page asks for.
 #import "session"
@@ -10,6 +13,7 @@
 #import "layout"
 #import "drawing_props"
 #import "text_props"
+#import "semantic"
 #import "text_align"
 #import "text_widget"
 #import "text_measure"
@@ -29,22 +33,30 @@
 #import "segmented_control_widget"
 #import "scroll_props"
 #import "scroll_widget"
+#import "slider_props"
+#import "slider_widget"
+#import "modal_props"
+#import "modal_frame_widget"
 #import "title_bar_props"
 #import "title_bar_widget"
 #import "tree"
 #import, file "../../src/apps/practice_ui_types.zi";
 #import, file "../../src/apps/practice_types.zi";
 #import, file "../../src/app/exercise_types.zi";
+#import, file "../../src/practices/patterns/patterns_rules.zi";
 
 using ButtonTone;
 using ButtonEmphasis;
 using ExerciseType;
+using SemanticKind;
 using TextWrap;
+using TextAlign;
 host_api :: #system_library "host_api";
 ReadPracticeSettingsHost :: () -> PracticeSettingsFrame #foreign host_api;
 WritePracticeSettingsHost :: (frame: PracticeSettingsFrame) #foreign host_api;
 ReadPracticeMusicTrackHost :: (index: s32) -> PracticeMusicTrack #foreign host_api;
 ReadPracticeNarrationHost :: (index: s32) -> PracticeNarrationChoice #foreign host_api;
+ReadPracticeCharacterHost :: (index: s32) -> PracticeCharacterChoice #foreign host_api;
 SettingsLocaleHost :: (key: string) -> string #foreign host_api;
 settings: PracticeSettingsFrame;
 
@@ -113,7 +125,7 @@ DurationHeight :: (width: s32) -> s32 {
 // interval bell.
 Duration :: (x: s32, width: s32, y: *s32) {
     labels: [6]string = .[Locale("duration_5m"), Locale("duration_15m"), Locale("duration_30m"),
-        Locale("duration_1h"), Locale("duration_2h"), Locale("meditation_duration_custom")]
+    Locale("duration_1h"), Locale("duration_2h"), Locale("meditation_duration_custom")]
     gap := Scale(8)
     button_height := Scale(48)
     Label(Locale("meditation_duration_setting"), x, y.*)
@@ -122,7 +134,7 @@ Duration :: (x: s32, width: s32, y: *s32) {
     button_width := (width - gap * (columns - 1)) / columns
     for index: cast(s32)0..MEDITATION_PRESETS {
         if Choice(Bounds(x + (index % columns) * (button_width + gap),
-                y.* + (index / columns) * (button_height + gap), button_width, button_height),
+            y.* + (index / columns) * (button_height + gap), button_width, button_height),
             labels[index], index == settings.duration_mode) {
             Ask(PRACTICE_SETTINGS_DURATION, index)
         }
@@ -140,7 +152,7 @@ Duration :: (x: s32, width: s32, y: *s32) {
     for index: cast(s32)0..3 {
         if Button(settings.session, ButtonProps.{
                 .bounds = Bounds(adjust_x + index * (adjust_width + gap), custom_y + Scale(34),
-                    adjust_width, button_height),
+                adjust_width, button_height),
                 .label = adjust_labels[index], .tone = cast(ButtonTone)ButtonToneNeutral,
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
             Ask(PRACTICE_SETTINGS_CUSTOM, adjust_values[index])
@@ -179,13 +191,373 @@ Duration :: (x: s32, width: s32, y: *s32) {
     }
     for index: cast(s32)0..6 {
         if Choice(Bounds(x + (index % bell_columns) * (bell_width + gap),
-                y.* + Scale(26) + (index / bell_columns) * (button_height + gap), bell_width,
-                button_height), bell_labels[index], index == bell_chosen) {
+            y.* + Scale(26) + (index / bell_columns) * (button_height + gap), bell_width,
+            button_height), bell_labels[index], index == bell_chosen) {
             Ask(PRACTICE_SETTINGS_BELL, bell_values[index])
         }
     }
     bell_rows := (7 + bell_columns - 1) / bell_columns
     y.* += Scale(26) + bell_rows * button_height + (bell_rows - 1) * gap + Scale(12)
+}
+
+// ---- Breathing patterns ---------------------------------------------------------------
+
+PatternSeconds :: (phase: s32) -> s32 {
+    if phase == PATTERNS_PHASE_HOLD_IN {
+        return settings.pattern_hold_in
+    }
+    if phase == PATTERNS_PHASE_EXHALE {
+        return settings.pattern_exhale
+    }
+    if phase == PATTERNS_PHASE_HOLD_OUT {
+        return settings.pattern_hold_out
+    }
+    return settings.pattern_inhale
+}
+
+PatternHeight :: () -> s32 {
+    button_height := Scale(48)
+    gap := Scale(8)
+    height := Scale(24) + Scale(30) + PATTERNS_PRESET_COUNT * (button_height + gap) + Scale(10)
+    if settings.pattern == PATTERNS_PRESET_CUSTOM {
+        height += Scale(30) + 4 * (button_height + gap) + Scale(6)
+    }
+    return height + Scale(30) + button_height + Scale(10)
+}
+
+// The patterns with their seconds, the custom pattern's seconds for each
+// phase, and how many minutes to breathe.
+Pattern :: (x: s32, width: s32, y: *s32) {
+    button_height := Scale(48)
+    gap := Scale(8)
+    Label(Locale("patterns_preset_label"), x, y.*)
+    y.* += Scale(30)
+    for preset: cast(s32)0..PATTERNS_PRESET_COUNT - 1 {
+        seconds: [4]s32
+        for phase: cast(s32)0..3 {
+            seconds[phase] = patterns_preset_ratio(preset, phase)
+            if preset == PATTERNS_PRESET_CUSTOM {
+                seconds[phase] = PatternSeconds(phase)
+            }
+        }
+        label: Vec(u8)
+        BuilderPrint(*label, "%  %-%-%-%", Locale(patterns_preset_label_key(preset)),
+            seconds[0], seconds[1], seconds[2], seconds[3])
+        if Choice(Bounds(x, y.* + preset * (button_height + gap), width, button_height),
+            BuilderFinish(label), settings.pattern == preset) {
+            Ask(PRACTICE_SETTINGS_PATTERN, preset)
+        }
+    }
+    y.* += PATTERNS_PRESET_COUNT * (button_height + gap) + Scale(10)
+
+    if settings.pattern == PATTERNS_PRESET_CUSTOM {
+        Label(Locale("patterns_custom_label"), x, y.*)
+        y.* += Scale(30)
+        phases: [4]string = .[Locale("patterns_phase_inhale"), Locale("patterns_phase_hold_in"),
+        Locale("patterns_phase_exhale"), Locale("patterns_phase_hold_out")]
+        step_width := Scale(46)
+        for phase: cast(s32)0..3 {
+            Label(phases[phase], x, y.*)
+            if Button(settings.session, ButtonProps.{
+                    .bounds = Bounds(x + width - step_width * 2 - gap, y.*, step_width, button_height),
+                    .label = "-5", .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+                Ask(PRACTICE_SETTINGS_PATTERN_LESS, phase)
+            }
+            if Button(settings.session, ButtonProps.{
+                    .bounds = Bounds(x + width - step_width, y.*, step_width, button_height),
+                    .label = "+5", .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+                Ask(PRACTICE_SETTINGS_PATTERN_MORE, phase)
+            }
+            value: Vec(u8)
+            BuilderPrint(*value, "% s", PatternSeconds(phase))
+            value_text := BuilderFinish(value)
+            Label(value_text, x + width - step_width * 2 - gap - Width(value_text, settings.font) -
+                Scale(8), y.*)
+            y.* += button_height + gap
+        }
+        y.* += Scale(6)
+    }
+
+    Label(Locale("patterns_duration_label"), x, y.*)
+    y.* += Scale(30)
+    minutes: [5]s32 = .[0, 3, 5, 10, 20]
+    minutes_width := (width - gap * 4) / 5
+    for index: cast(s32)0..4 {
+        label: Vec(u8)
+        if minutes[index] == 0 {
+            BuilderPrint(*label, "%", Locale("patterns_duration_open"))
+        } else {
+            BuilderPrint(*label, "%", minutes[index])
+        }
+        if Choice(Bounds(x + index * (minutes_width + gap), y.*, minutes_width, button_height),
+            BuilderFinish(label), settings.pattern_minutes == minutes[index]) {
+            Ask(PRACTICE_SETTINGS_PATTERN_MINUTES, minutes[index])
+        }
+    }
+    y.* += button_height + Scale(10)
+}
+
+// ---- Wim Hof -----------------------------------------------------------------------------
+
+// A setting's label and value over its slider; its value when it changed.
+SliderRow :: (id: s32, x: s32, width: s32, y: *s32, row_height: s32, label: string,
+    minimum: s32, maximum: s32, value: s32, suffix: string) -> SliderDiscreteStep {
+    number: Vec(u8)
+    BuilderPrint(*number, "%", value)
+    BuilderPrint(*number, "%", suffix)
+    Text(settings.session, TextProps.{.text = label, .font = settings.small_font,
+            .wrap = cast(TextWrap)TextWrapNone, .bounds = Bounds(x, y.*, width - Scale(64), Scale(20))})
+    Text(settings.session, TextProps.{.text = BuilderFinish(number), .font = settings.small_font,
+            .wrap = cast(TextWrap)TextWrapNone, .align = cast(TextAlign)TextAlignEnd,
+            .bounds = Bounds(x + width - Scale(64), y.*, Scale(64), Scale(20))})
+    step := DiscreteSlider(settings.session, DiscreteSliderProps.{.id = id,
+            .bounds = Bounds(x, y.* + Scale(20), width, Scale(36)), .semantic_label = label,
+            .value = value, .min = minimum, .max = maximum})
+    y.* += row_height
+    return step
+}
+
+// The card the breathing, rounds and options each sit on, its corners
+// rounding off 8% of its shorter side.
+Card :: (x: s32, y: s32, width: s32, height: s32) {
+    shorter := ifx height < width then height else width
+    Box(settings.session, BoxProps.{.bounds = Bounds(x, y, width, height),
+            .fill = settings.surface_color, .border = settings.border_color,
+            .radius = 0.08 * cast(float32)shorter * 0.5})
+}
+
+// The breathing preview, sized for its room as the session's circle is and
+// breathing at this share of its range.
+BreathPreview :: (center_x: s32, center_y: s32, width: s32, height: s32, share: float32) {
+    span := ifx height > 0 && height < width then height else width
+    largest := span / 2
+    if largest < Scale(60) {
+        largest = Scale(60)
+    }
+    if largest > Scale(120) {
+        largest = Scale(120)
+    }
+    smallest := largest / 2
+    if smallest < Scale(24) {
+        smallest = Scale(24)
+    }
+    if smallest > largest - Scale(10) {
+        smallest = largest - Scale(10)
+    }
+    if smallest < 8 {
+        smallest = 8
+    }
+    if largest < smallest + 8 {
+        largest = smallest + 8
+    }
+    radius := (cast(float32)smallest + share * cast(float32)(largest - smallest)) * 0.72
+    if radius <= 0.0 {
+        return
+    }
+    center := Vector2.{cast(float32)center_x, cast(float32)center_y}
+    Circle(settings.session, CircleProps.{.center = center, .radius = radius, .fill = settings.accent_color})
+    Ring(settings.session, RingProps.{.center = center, .inner_radius = radius - 0.75,
+            .outer_radius = radius + 0.75, .start_angle = 0.0, .end_angle = 360.0,
+            .color = settings.text_color})
+}
+
+// A setting's label with its Off and On toggle at the row's end.
+ToggleRow :: (id: s32, label: string, value: bool, x: s32, width: s32, y: s32,
+    row_height: s32) -> ToggleValueResult {
+    Label(label, x, y)
+    toggle := ToggleProps.{.id = id, .value = value, .off_label = Locale("toggle_off"),
+        .on_label = Locale("toggle_on")}
+    size := ToggleSize(settings.session, toggle)
+    toggle_height := ifx size.y > cast(float32)Scale(30) then cast(s32)size.y else Scale(30)
+    toggle.bounds = Bounds(x + width - cast(s32)size.x, y + (row_height - toggle_height) / 2,
+        cast(s32)size.x, toggle_height)
+    return Toggle(settings.session, toggle)
+}
+
+WhmBreathHeight :: () -> s32 {
+    height := Scale(88) + Scale(154) + Scale(78) + Scale(72)
+    if settings.whm_progressive {
+        height += Scale(66)
+    }
+    return height
+}
+
+WhmRoundsHeight :: () -> s32 {
+    return Scale(82) * 3 + Scale(24)
+}
+
+WhmOptionsHeight :: () -> s32 {
+    return Scale(22) * 2 + Scale(88) * 2 + Scale(26 + 48)
+}
+
+WhmHeight :: (width: s32) -> s32 {
+    return Scale(16) + WhmBreathHeight() + Scale(16) + WhmRoundsHeight() + Scale(16) +
+    WhmOptionsHeight() + Scale(40) + MusicHeight(width) + Scale(12) + Scale(48) + Scale(24) +
+    settings.bottom + Scale(24)
+}
+
+// The breath animation with its preview, the speed, and speeding up through
+// the round with the start speed's editor.
+WhmBreath :: (x: s32, width: s32, y: *s32) {
+    height := WhmBreathHeight()
+    Card(x, y.*, width, height)
+    padding := Scale(22)
+    inner_x := x + padding
+    inner_width := width - padding * 2
+    inner_y := y.* + padding
+    Label(Locale("breath_animation_label"), inner_x, inner_y)
+    animations: [2]DropdownOption = .[DropdownOption.{.label = Locale("breath_animation_linear")},
+    DropdownOption.{.label = Locale("breath_animation_in_out")}]
+    animation := Dropdown(settings.session, DropdownProps.{.id = 104,
+            .bounds = Bounds(inner_x, inner_y + Scale(26), inner_width, Scale(48)),
+            .selected_index = settings.whm_animation}, animations[:])
+    if animation.changed {
+        Ask(PRACTICE_SETTINGS_WHM_ANIMATION, animation.selected_index)
+    }
+    inner_y += Scale(82)
+
+    preview_height := Scale(144)
+    halo := settings.link_color
+    halo.a = cast(u8)(255.0 * 0.16)
+    clear := settings.canvas_color
+    clear.a = 0
+    Circle(settings.session, CircleProps.{
+            .center = Vector2.{cast(float32)(inner_x + inner_width / 2),
+                cast(float32)(inner_y + preview_height / 2)},
+            .radius = cast(float32)Scale(72), .fill = halo, .edge = clear, .has_edge = true})
+    BreathPreview(inner_x + inner_width / 2, inner_y + preview_height / 2, inner_width,
+        preview_height, settings.whm_preview)
+    inner_y += preview_height + Scale(20)
+
+    speed := SliderRow(1, inner_x, inner_width, *inner_y, Scale(78), Locale("speed_label"),
+        settings.whm_speed_min, settings.whm_speed_max, settings.whm_speed, "")
+    if speed.changed {
+        Ask(PRACTICE_SETTINGS_WHM_SPEED, speed.value)
+    }
+    progressive := ToggleRow(1101, Locale("progressive_speed_label"), settings.whm_progressive,
+        inner_x, inner_width, inner_y, Scale(58))
+    if progressive.changed {
+        Ask(PRACTICE_SETTINGS_WHM_PROGRESSIVE, ifx progressive.value then 1 else 0)
+    }
+    inner_y += Scale(58)
+    if settings.whm_progressive {
+        if FittedButton(Locale("modify_start_speed_button"), inner_x, inner_y, inner_width, false) {
+            Ask(PRACTICE_SETTINGS_WHM_START_EDITOR, 0)
+        }
+    }
+    y.* += height + Scale(16)
+}
+
+// The rounds, the breaths in each and the pause after one.
+WhmRounds :: (x: s32, width: s32, y: *s32) {
+    height := WhmRoundsHeight()
+    Card(x, y.*, width, height)
+    padding := Scale(22)
+    inner_x := x + padding
+    inner_width := width - padding * 2
+    inner_y := y.* + padding
+    rounds := SliderRow(2, inner_x, inner_width, *inner_y, Scale(82), Locale("max_rounds_label"),
+        1, settings.whm_rounds_max, settings.whm_rounds, "")
+    if rounds.changed {
+        Ask(PRACTICE_SETTINGS_WHM_ROUNDS, rounds.value)
+    }
+    breaths := SliderRow(3, inner_x, inner_width, *inner_y, Scale(82), Locale("max_breaths_label"),
+        settings.whm_breaths_min, settings.whm_breaths_max, settings.whm_breaths, "")
+    if breaths.changed {
+        Ask(PRACTICE_SETTINGS_WHM_BREATHS, breaths.value)
+    }
+    pause := SliderRow(4, inner_x, inner_width, *inner_y, Scale(56), Locale("pause_after_round_label"),
+        settings.whm_pause_min, settings.whm_pause_max, settings.whm_pause, "s")
+    if pause.changed {
+        Ask(PRACTICE_SETTINGS_WHM_PAUSE, pause.value)
+    }
+    y.* += height + Scale(16)
+}
+
+// Double tap to breathe, the session controls, and the hold reminder.
+WhmOptions :: (x: s32, width: s32, y: *s32) {
+    height := WhmOptionsHeight()
+    Card(x, y.*, width, height)
+    padding := Scale(22)
+    inner_x := x + padding
+    inner_width := width - padding * 2
+    inner_y := y.* + padding
+    double_tap := ToggleRow(1201, Locale("double_tap_to_breathe_label"), settings.whm_double_tap,
+        inner_x, inner_width, inner_y, Scale(60))
+    if double_tap.changed {
+        Ask(PRACTICE_SETTINGS_WHM_DOUBLE_TAP, ifx double_tap.value then 1 else 0)
+    }
+    inner_y += Scale(88)
+    controls := ToggleRow(1202, Locale("advanced_session_controls_label"), settings.whm_controls,
+        inner_x, inner_width, inner_y, Scale(60))
+    if controls.changed {
+        Ask(PRACTICE_SETTINGS_WHM_CONTROLS, ifx controls.value then 1 else 0)
+    }
+    inner_y += Scale(88)
+    Label(Locale("whm_hold_reminder_label"), inner_x, inner_y)
+    seconds: [3]s32 = .[0, 30, 60]
+    reminders: [3]DropdownOption = .[DropdownOption.{.label = Locale("whm_hold_reminder_off")},
+    DropdownOption.{.label = Locale("whm_hold_reminder_30s")},
+    DropdownOption.{.label = Locale("whm_hold_reminder_60s")}]
+    chosen: s32 = ifx settings.whm_reminder == 30 then 1 else ifx settings.whm_reminder == 60 then 2 else 0
+    reminder := Dropdown(settings.session, DropdownProps.{.id = 1203,
+            .bounds = Bounds(inner_x, inner_y + Scale(26), inner_width, Scale(48)),
+            .selected_index = chosen}, reminders[:])
+    if reminder.changed && reminder.selected_index >= 0 && reminder.selected_index < 3 {
+        Ask(PRACTICE_SETTINGS_WHM_REMINDER, seconds[reminder.selected_index])
+    }
+    y.* += height + Scale(16)
+}
+
+Whm :: (x: s32, width: s32, y: *s32) {
+    y.* += Scale(16)
+    WhmBreath(x, width, y)
+    WhmRounds(x, width, y)
+    WhmOptions(x, width, y)
+    y.* += Scale(24)
+    Music(x, width, y)
+    y.* += Scale(12)
+    label := Locale("reset_to_defaults_label")
+    reset_width := Width(label, settings.font) + Scale(24)
+    if reset_width > width {
+        reset_width = width
+    }
+    if Button(settings.session, ButtonProps.{.bounds = Bounds(x + width - reset_width, y.*,
+            reset_width, Scale(48)), .label = label, .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        Ask(PRACTICE_SETTINGS_WHM_RESET, 0)
+    }
+    y.* += Scale(48) + Scale(24)
+}
+
+// The start speed's editor over the page: its own preview and slider, up to
+// the speed the round reaches.
+WhmStartSpeedEditor :: () {
+    frame := ModalFrame(settings.session, ModalFrameProps.{.key = KeyHash("whm/start_speed"),
+            .title = Locale("progressive_start_speed_editor_title"), .width = Scale(340),
+            .height = Scale(360), .scale = settings.scale, .has_right_action = true,
+            .right_label = Locale("close_button")})
+    if frame.dismissed || frame.right_clicked {
+        Ask(PRACTICE_SETTINGS_WHM_EDITOR_CLOSE, 0)
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    content := frame.layout.content
+    x := cast(s32)content.x
+    y := cast(s32)content.y
+    width := cast(s32)content.width
+    BreathPreview(x + width / 2, y + Scale(90), width, Scale(180), settings.whm_editor_preview)
+    slider_y := y + Scale(206)
+    start := SliderRow(12, x, width, *slider_y, Scale(56), Locale("progressive_start_speed_label"),
+        settings.whm_speed_min, settings.whm_speed, settings.whm_start_speed, "")
+    if start.changed {
+        Ask(PRACTICE_SETTINGS_WHM_START_SPEED, start.value)
+    }
+    unused End(settings.session)
 }
 
 // ---- Background music ----------------------------------------------------------------
@@ -253,7 +625,7 @@ MusicProgress :: (x: s32, y: s32, width: s32) {
             inner = Scale(2)
         }
         Box(settings.session, BoxProps.{.bounds = Bounds(x + Scale(2), y + Scale(2), inner,
-                    bar_height - Scale(4)), .fill = settings.accent_color})
+                bar_height - Scale(4)), .fill = settings.accent_color})
     }
 }
 
@@ -272,7 +644,7 @@ FittedButton :: (label: string, x: s32, y: s32, width: s32, accent: bool) -> boo
 // device, Download for a built-in track that is not, and how a download goes.
 Music :: (x: s32, width: s32, y: *s32) {
     Label(Locale(ifx settings.practice == EXERCISE_SUN_SALUTATION then
-            "sun_salutation_music_track_label" else "practice_background_music_label"), x, y.*)
+        "sun_salutation_music_track_label" else "practice_background_music_label"), x, y.*)
     count := settings.music_count
     if count > SETTINGS_MUSIC_TRACK_MAX {
         count = SETTINGS_MUSIC_TRACK_MAX
@@ -298,7 +670,7 @@ Music :: (x: s32, width: s32, y: *s32) {
     }
     if settings.music_installed {
         if FittedButton(Locale(ifx settings.music_playing then "meditation_music_stop_test_button"
-                    else "meditation_music_test_button"), x, y.*, width, false) {
+            else "meditation_music_test_button"), x, y.*, width, false) {
             Ask(PRACTICE_SETTINGS_MUSIC_TEST, 0)
         }
         y.* += Scale(60)
@@ -306,7 +678,7 @@ Music :: (x: s32, width: s32, y: *s32) {
     // The download only brings the built-in tracks.
     if settings.music_built_in && (!settings.music_installed || settings.music_redownload) {
         if FittedButton(Locale(ifx settings.music_installed then "meditation_music_redownload_button"
-                    else "meditation_music_download_button"), x, y.*, width, true) {
+            else "meditation_music_download_button"), x, y.*, width, true) {
             Ask(PRACTICE_SETTINGS_MUSIC_DOWNLOAD, 0)
         }
         y.* += Scale(60)
@@ -406,7 +778,7 @@ Narration :: (x: s32, width: s32, y: *s32) {
     }
     if settings.narration_voices {
         voices: [2]SegmentOption = .[SegmentOption.{.label = Locale("practice_voice_female")},
-            SegmentOption.{.label = Locale("practice_voice_male")}]
+        SegmentOption.{.label = Locale("practice_voice_male")}]
         voice := SegmentedControl(settings.session, SegmentedControlProps.{
                 .key = KeyHash("inbe/practice/customize/voice") + cast(u64)settings.practice,
                 .bounds = Bounds(x, y.*, width, Scale(42)), .height = Scale(42),
@@ -420,27 +792,266 @@ Narration :: (x: s32, width: s32, y: *s32) {
     NarrationLanguages(x, width, y)
 }
 
+// The existing movement settings, carried by the independently updated page.
+MovementVolume :: (x: s32, width: s32, y: *s32, cue: bool) {
+    value := ifx cue then settings.cue_volume else settings.music_volume
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value)
+    slider := DiscreteSlider(settings.session, DiscreteSliderProps.{
+            .id = ifx cue then 15421 else ifx settings.practice == EXERCISE_SUN_SALUTATION then 614 else 15420,
+            .bounds = Bounds(x, y.*, width, Scale(56)),
+            .label = Locale(ifx cue then "cue_volume_label" else "music_volume_label"),
+            .value_text = BuilderFinish(out), .value = value, .min = 0, .max = 100})
+    if slider.changed {
+        Ask(ifx cue then PRACTICE_SETTINGS_CUE_VOLUME else PRACTICE_SETTINGS_MUSIC_VOLUME, slider.value)
+    }
+    y.* += Scale(74)
+}
+
+SunHeight :: (width: s32) -> s32 {
+    return Scale(76 + 24 + 32 + 74 * 3 + 24 + 86 + 32 + 74 + 12) +
+    ParagraphHeight(Locale("sun_salutation_tempo_preview_hint"), width, settings.small_font, Scale(3)) +
+    MusicHeight(width) + NarrationHeight(width) + settings.bottom + Scale(24)
+}
+
+SunSetting :: (id: s32, key: string, value: s32, minimum: s32, maximum: s32,
+    action: s32, x: s32, width: s32, y: *s32) {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value)
+    shown := BuilderFinish(out)
+    if id != 610 {
+        shown = CountText(Locale("sun_salutation_seconds_per_breath"), value)
+    }
+    slider := DiscreteSlider(settings.session, DiscreteSliderProps.{.id = id,
+            .bounds = Bounds(x, y.*, width, Scale(56)), .label = Locale(key), .value_text = shown,
+            .value = value, .min = minimum, .max = maximum})
+    if slider.changed {
+        Ask(action, slider.value)
+    }
+    y.* += Scale(74)
+}
+
+Sun :: (x: s32, width: s32, y: *s32) {
+    fill := settings.canvas_color
+    fill.r = ifx fill.r > 6 then fill.r - cast(u8)6 else cast(u8)0
+    fill.g = ifx fill.g > 6 then fill.g - cast(u8)6 else cast(u8)0
+    fill.b = ifx fill.b > 6 then fill.b - cast(u8)6 else cast(u8)0
+    Box(settings.session, BoxProps.{.bounds = Bounds(x, y.*, width, Scale(76)), .fill = fill})
+    Text(settings.session, TextProps.{.bounds = Bounds(x + Scale(14), y.* + Scale(10), 0, 0),
+            .text = Locale("sun_salutation_duration_label"), .font = settings.small_font})
+    // The locale uses minutes and seconds, including a padded seconds field.
+    Text(settings.session, TextProps.{.bounds = Bounds(x + Scale(14), y.* + Scale(35), 0, 0),
+            .text = SunDuration(), .font = settings.font + Scale(3)})
+    y.* += Scale(100)
+    Label(Locale("sun_salutation_timing_label"), x, y.*)
+    y.* += Scale(32)
+    SunSetting(610, "sun_salutation_repetitions_label", settings.sun_repetitions, 2, 12,
+        PRACTICE_SETTINGS_SUN_REPETITIONS, x, width, y)
+    SunSetting(611, "sun_salutation_start_speed_label", settings.sun_start_seconds,
+        settings.sun_seconds_min, settings.sun_seconds_max, PRACTICE_SETTINGS_SUN_START, x, width, y)
+    SunSetting(612, "sun_salutation_end_speed_label", settings.sun_end_seconds,
+        settings.sun_seconds_min, settings.sun_start_seconds, PRACTICE_SETTINGS_SUN_END, x, width, y)
+    hint := Locale("sun_salutation_tempo_preview_hint")
+    height := ParagraphHeight(hint, width, settings.small_font, Scale(3))
+    Text(settings.session, TextProps.{.text = hint, .bounds = Bounds(x, y.*, width, height),
+            .font = settings.small_font})
+    y.* += height + Scale(24)
+    Label(Locale("sun_salutation_character_label"), x, y.*)
+    options: [2]DropdownOption = .[DropdownOption.{.label = Locale("sun_salutation_character_bun_woman")},
+    DropdownOption.{.label = Locale("sun_salutation_character_short_hair_man")}]
+    picked := Dropdown(settings.session, DropdownProps.{.id = 613,
+            .bounds = Bounds(x, y.* + Scale(26), width, Scale(44)), .selected_index = settings.sun_character}, options[:])
+    if picked.changed {
+        Ask(PRACTICE_SETTINGS_SUN_CHARACTER, picked.selected_index)
+    }
+    y.* += Scale(86)
+    Label(Locale("settings_tab_audio"), x, y.*)
+    y.* += Scale(32)
+    MovementVolume(x, width, y, false)
+    Music(x, width, y)
+    y.* += Scale(12)
+    Narration(x, width, y)
+}
+
+// Preserve the locale's existing two-number duration template, including %02d.
+SunDuration :: () -> string {
+    template := Locale("sun_salutation_duration_value")
+    out: Vec(u8)
+    at: s64 = 0
+    part: s32 = 0
+    while at < template.count {
+        if at + 3 < template.count && template[at:at + 4] == "%02d" {
+            value := settings.sun_duration % 60
+            if value < 10 {
+                BuilderPrint(*out, "0")
+            }
+            BuilderPrint(*out, "%", value)
+            at += 4
+            part += 1
+        } else if at + 1 < template.count && template[at:at + 2] == "%d" {
+            BuilderPrint(*out, "%", ifx part == 0 then settings.sun_duration / 60 else settings.sun_duration % 60)
+            part += 1
+            at += 2
+        } else {
+            BuilderPrint(*out, "%", template[at:at + 1])
+            at += 1
+        }
+    }
+    return BuilderFinish(out)
+}
+
+TaiAudioHeight :: (width: s32) -> s32 {
+    return MusicHeight(width) + Scale(12 + 74 * 2) + NarrationHeight(width) +
+    ParagraphHeight(Locale("tai_chi_narration_hint"), width, settings.font, Scale(3))
+}
+
+TaiAudio :: (x: s32, width: s32, y: s32) {
+    Music(x, width, *y)
+    y += Scale(12)
+    MovementVolume(x, width, *y, false)
+    MovementVolume(x, width, *y, true)
+    Narration(x, width, *y)
+    text := Locale("tai_chi_narration_hint")
+    Text(settings.session, TextProps.{.text = text, .bounds = Bounds(x, y, width,
+            ParagraphHeight(text, width, settings.font, Scale(3))), .font = settings.font, .disabled = true})
+}
+
+TaiCharacters :: (bounds: Rectangle) {
+    gap := Scale(16)
+    card_w := (cast(s32)bounds.width - gap) / 2
+    card_h := Scale(280)
+    for character: cast(s32)0..settings.tai_character_count - 1 {
+        title := ReadPracticeCharacterHost(character).label
+        key := KeyHash("inbe/tai_chi/character-card") + cast(u64)character * cast(u64)4096
+        card := Bounds(cast(s32)bounds.x + character % 2 * (card_w + gap),
+            cast(s32)bounds.y + character / 2 * (card_h + gap), card_w, card_h)
+        if Button(settings.session, ButtonProps.{.key = key, .bounds = card,
+                .selected = settings.tai_character == character, .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            Ask(PRACTICE_SETTINGS_TAI_CHARACTER, character)
+        }
+        PracticeFigure(PracticeFigureRequest.{.practice = EXERCISE_TAI_CHI, .preview = true,
+                .index = settings.tai_preview_item, .character = character,
+                .bounds = Rectangle.{card.x + cast(float32)Scale(14), card.y + cast(float32)Scale(14),
+                    card.width - cast(float32)Scale(28), card.height - cast(float32)Scale(94)},
+                .key = key + cast(u64)1000, .alt_text = title})
+        Text(settings.session, TextProps.{.text = title, .font = settings.font,
+                .bounds = Rectangle.{card.x + cast(float32)Scale(14), card.y + card.height - cast(float32)Scale(76),
+                    card.width - cast(float32)Scale(28), cast(float32)Scale(44)}})
+    }
+}
+
+TaiCustomize :: () {
+    width := settings.view_width - Scale(32)
+    if width > Scale(940) {
+        width = Scale(940)
+    }
+    height := settings.view_height - Scale(48)
+    if height > Scale(740) {
+        height = Scale(740)
+    }
+    frame := ModalFrame(settings.session, ModalFrameProps.{.key = KeyHash("inbe/tai_chi/modal"),
+            .title = Locale("practice_configure_button"), .width = width, .height = height, .scale = settings.scale,
+            .title_at_start = true, .strong_title = true, .has_right_action = true, .right_label = Locale("close_button")})
+    if frame.dismissed || frame.right_clicked {
+        Ask(PRACTICE_SETTINGS_BACK, 0)
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    bounds := frame.layout.content
+    gap := Scale(24)
+    wide := bounds.width >= cast(float32)Scale(700)
+    audio_w := cast(s32)bounds.width - Scale(10)
+    character_w := audio_w
+    if wide {
+        character_w = (audio_w - gap) / 2
+        audio_w -= character_w + gap
+    }
+    audio_h := TaiAudioHeight(audio_w)
+    rows := (settings.tai_character_count + 1) / 2
+    if rows < 1 {
+        rows = 1
+    }
+    // Section title's existing scale-aware height.
+    title := Locale("tai_chi_character_label")
+    title_font := settings.font + Scale(2)
+    title_h := ParagraphHeight(title, character_w, title_font, Scale(3))
+    character_h := title_h + Scale(12) + rows * Scale(280) + (rows - 1) * Scale(16)
+    content_h := audio_h + gap + character_h
+    if wide {
+        content_h = ifx audio_h > character_h then audio_h else character_h
+    }
+    scrolled := Scroll(settings.session, ScrollProps.{.key = KeyHash("inbe/tai_chi/customize/scroll"),
+            .bounds = bounds, .content_height = content_h + Scale(16), .scroll_offset = settings.scroll})
+    settings.scroll = scrolled.scroll_offset
+    if scrolled.opened {
+        x := cast(s32)scrolled.content.x
+        y := cast(s32)scrolled.content.y
+        character_y := ifx wide then y else y + audio_h + gap
+        audio_x := ifx wide then x + character_w + gap else x
+        TaiAudio(audio_x, audio_w, y)
+        Text(settings.session, TextProps.{.text = title, .font = title_font,
+                .bounds = Bounds(x, character_y, character_w, title_h)})
+        TaiCharacters(Bounds(x, character_y + title_h + Scale(12), character_w, character_h - title_h - Scale(12)))
+        unused End(settings.session)
+    }
+    unused End(settings.session)
+}
+
 // ---- The page ---------------------------------------------------------------------------
 
 ContentHeight :: (width: s32) -> s32 {
+    if settings.practice == EXERCISE_SUN_SALUTATION {
+        return SunHeight(width)
+    }
     if settings.practice == EXERCISE_ASTRAL_PROJECTION {
         return Scale(320) + NarrationHeight(width)
+    }
+    if settings.practice == EXERCISE_PATTERNS {
+        return PatternHeight() + MusicHeight(width) + Scale(24)
+    }
+    if settings.practice == EXERCISE_WIM_HOF {
+        return WhmHeight(width)
     }
     return DurationHeight(width) + MusicHeight(width) + settings.bottom + Scale(24)
 }
 
 ScrollKey :: () -> u64 {
+    if settings.practice == EXERCISE_SUN_SALUTATION {
+        return KeyHash("inbe/practices/sun_salutation/sun_salutation_practice/scroll/1")
+    }
     if settings.practice == EXERCISE_ASTRAL_PROJECTION {
         return KeyHash("astral/customize/scroll")
+    }
+    if settings.practice == EXERCISE_PATTERNS {
+        return KeyHash("inbe/practices/patterns/patterns_practice/scroll/1")
+    }
+    if settings.practice == EXERCISE_WIM_HOF {
+        return KeyHash("inbe/practices/whm/whm_config/scroll/1")
     }
     return KeyHash("inbe/practices/meditation/meditation_config/scroll/1")
 }
 
 Page :: (x: s32, width: s32, y: s32) {
+    if settings.practice == EXERCISE_SUN_SALUTATION {
+        Sun(x, width, *y)
+        return
+    }
     if settings.practice == EXERCISE_ASTRAL_PROJECTION {
         Music(x, width, *y)
         y += Scale(12)
         Narration(x, width, *y)
+        return
+    }
+    if settings.practice == EXERCISE_PATTERNS {
+        Pattern(x, width, *y)
+        Music(x, width, *y)
+        return
+    }
+    if settings.practice == EXERCISE_WIM_HOF {
+        Whm(x, width, *y)
         return
     }
     Duration(x, width, *y)
@@ -448,6 +1059,10 @@ Page :: (x: s32, width: s32, y: s32) {
 }
 
 Settings :: () {
+    if settings.practice == EXERCISE_TAI_CHI {
+        TaiCustomize()
+        return
+    }
     options: [1]DropdownOption
     bar := TitleBar(settings.session, TitleBarProps.{.title = Locale("practice_configure_button"),
             .height = settings.title_height, .has_leading_action = true,
@@ -461,10 +1076,19 @@ Settings :: () {
         padding = Scale(16)
     }
     max_width := Scale(SETTINGS_CONTENT_MAX_WIDTH)
-    if max_width > settings.view_width - padding * 2 {
-        max_width = settings.view_width - padding * 2
+    available := settings.view_width - padding * 2
+    if max_width > available {
+        max_width = available
     }
-    if max_width < Scale(320) {
+    if settings.practice == EXERCISE_WIM_HOF {
+        // Wim Hof's cards take a phone's whole width.
+        if max_width < available && settings.view_width <= Scale(520) {
+            max_width = available
+        }
+        if max_width < Scale(240) {
+            max_width = available
+        }
+    } else if max_width < Scale(320) {
         max_width = Scale(320)
     }
     x := padding
@@ -481,6 +1105,9 @@ Settings :: () {
         Page(x, width, cast(s32)scrolled.content.y)
         unused End(settings.session)
     }
+    if settings.practice == EXERCISE_WIM_HOF && settings.whm_editor {
+        WhmStartSpeedEditor()
+    }
 }
 
 PracticeSettingsView :: (message: PracticeMessage) -> PracticeMessage {
@@ -491,4 +1118,24 @@ PracticeSettingsView :: (message: PracticeMessage) -> PracticeMessage {
     WritePracticeSettingsHost(settings)
     message.succeeded = true
     return message
+}
+
+CountText :: (template: string, value: s32) -> string {
+    out: Vec(u8)
+    at: s64 = 0
+    replaced := false
+    while at < template.count {
+        if !replaced && at + 1 < template.count && template[at:at + 2] == "%d" {
+            BuilderPrint(*out, "%", value)
+            replaced = true
+            at += 2
+        } else {
+            BuilderPrint(*out, "%", template[at:at + 1])
+            at += 1
+        }
+    }
+    if !replaced {
+        BuilderPrint(*out, " %", value)
+    }
+    return BuilderFinish(out)
 }

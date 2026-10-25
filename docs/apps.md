@@ -35,22 +35,29 @@ Unlock or Cancel with the download's status and price, from
 `src/practices/practice_offer.zi`), and does what the page asks: start,
 open the manual or settings, press the offer, or choose another practice by
 swipe, arrow key, arrow button or tab. The manuals of Wim Hof, Meditation,
-Patterns and Astral Projection are the package's too
+Patterns, Astral Projection and Sun Salutation are the package's too
 (`apps/practice/manual_view.zi`): the host gives the page, the guide's
 colours and the settings the pages show, runs the Wim Hof breathing preview
 and saves a speed changed on its page (`src/practices/practice_manual_host.zi`),
 and each practice closes its manual or starts from what the page asks.
-Meditation's and Astral Projection's Customize pages come from the package
-as well (`apps/practice/settings_view.zi`): the host gives the settings, the
+The Customize pages of Meditation, Breathing Patterns, Wim Hof, Astral
+Projection, Sun Salutation and Tai Chi come from the package as well (`apps/practice/settings_view.zi`): the host gives the settings, the
 music tracks with the chosen track's download, and the languages narration
 is recorded in, and saves the one change the page asks for
 (`src/practices/practice_settings_host.zi`). A finished practice's results
 are drawn there too (`apps/practice/results_view.zi`): the host gives the
 session's numbers and reads out each Wim Hof round, and keeps the mood
-picked, discards the session or closes the results as asked. Practices' Sun
-Salutation manual, the other practices' Customize pages and the sessions
-still use compiled screen compositions; migrating them is required before every visual
-change can ship without rebuilding the wrapper.
+picked, discards the session or closes the results as asked. The running
+Meditation, Patterns and Wim Hof layouts are in `meditation_view.zi`,
+`patterns_view.zi` and `whm_view.zi`; Sun Salutation, Tai Chi, Astral Projection
+and the 7-Minute Workout use `movement_view.zi`. Tai Chi's course chooser is
+in `course_view.zi`. These pages return actions to the host, which retains
+session clocks, saved settings, audio, lifecycle and routing. Detailed
+movement figures stay on the render thread with their native mesh caches:
+`figure_view.zi` submits one bounded figure request, accepted only by the
+painter installed for the active page. The package owns each figure's bounds,
+labels and surrounding controls; changing native pose/rendering capabilities
+still needs a wrapper release. Practices 1.5.0 requires host interface 31.
 The list's frame (`HabitsListFrame`) carries the page's bounds, the theme
 and the state the host keeps: the open habit, scrolling, the name column's
 width, a dragged row. The package reads each habit with
@@ -861,10 +868,11 @@ way, through `ReadHabitsUiHost`, `WriteHabitsUiHost` and `HabitsLocaleHost`
 supplies the day's count, target, linked sessions and the theme's text
 colour, and applies the step, the opened day or the closing the dialog asks
 for. Every other Habits screen follows since Habits 1.3.0 (host interface
-30), and Practice's home since Practices 1.4.0. Practices' other screens
-still contain compiled screen compositions; moving those into its bundle is
-required to finish the entirely portable architecture. Changes to their compiled UI or
-to native host capabilities still require a wrapper release.
+30), and Practice's home since Practices 1.4.0. Practices 1.5.0 moves the
+remaining session layouts, manuals, Customize pages and Tai Chi course
+chooser into its bundle (host interface 31). Session effects and the detailed
+figure painters remain native; changes to those host capabilities require a
+wrapper release.
 
 ## Device launcher entries
 

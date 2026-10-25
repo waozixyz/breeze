@@ -25,8 +25,9 @@ ROOTS = ['DiaryUiFrame', 'InbeUiFrame', 'ListsUiFrame', 'ListsUiRow', 'ListsUiPe
          'HabitsEditPractice', 'HabitsStatsFrame', 'HabitsStatsChart', 'HabitsStatsPoint',
          'HabitsStatsRecent', 'HabitsStatsHold', 'HabitsStatsChange', 'PracticeHomeFrame',
          'PracticeHomeTab', 'PracticeManualFrame', 'PracticeSettingsFrame',
-         'PracticeMusicTrack', 'PracticeNarrationChoice', 'PracticeResultsFrame',
-         'PracticeResultRound']
+         'PracticeMusicTrack', 'PracticeNarrationChoice', 'PracticeCharacterChoice', 'PracticeResultsFrame',
+         'PracticeResultRound', 'PracticeMeditationFrame', 'PracticePatternsFrame', 'PracticeWhmFrame',
+         'PracticeMovementFrame', 'PracticeFigureRequest', 'PracticeCourseFrame', 'PracticeCourseRow']
 
 command = [sys.executable, str(KRYON / 'scripts/generate-widget-codecs.py'),
            '--output', str(ROOT / 'src/apps/app_codec.zi'),

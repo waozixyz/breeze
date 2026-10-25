@@ -1,3 +1,6 @@
+#import, file "../../src/apps/practice_ui_types.zi";
+#import, file "../../src/apps/practice_types.zi";
+#import, file "../../src/practices/practice_movement_host.zi";
 // Astral Projection owns its guidance and session; the host supplies the
 // existing audio, storage and platform lifecycle effects.
 #import, file "astral_projection_rules.zi";
@@ -212,8 +215,13 @@ AstralDrawWindow :: (app: *InnerBreeze, picture: Rectangle, output: []u8) -> str
     return AstralTimeText(output)
 }
 
+AstralSessionFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
+    AstralSceneDraw(app.ui.session, cast(s64)astral_clock.elapsed_seconds * 1000 + astral_clock.remainder_ms,
+        request.bounds, app.theme_mode == APP_THEME_DARK || (app.theme_mode != APP_THEME_LIGHT && app.dark_mode != 0),
+        request.key, request.alt_text)
+}
+
 AstralDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
-    unused center_y
     top := PracticeTitleBarHeight()
     if PracticeTitleBar(app, LocaleText("exercise_astral_projection"), top) {
         AstralRequestExit(app)
@@ -222,55 +230,19 @@ AstralDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
         return
     }
     practice_draw_audio_controls(app)
-    pad := AppScale(24)
-    width := app.ui.view_width - pad * 2
-    time: [32]u8
-    Text(app.ui.session, TextProps.{
-            .text = FrameTextHold(*app.ui.frame_text, AstralTimeText(time[:])),
-            .bounds = Rectangle.{cast(float32)pad, cast(float32)(top + AppScale(12)),
-                cast(float32)width, cast(float32)AppScale(48)},
-            .font = AppScale(28), .align = cast(TextAlign)TextAlignCenter})
     cue := AstralCueAt(*astral_course, AstralElapsed())
     if cue != astral_last_cue {
         astral_scroll = 0
         astral_last_cue = cue
     }
-    text := AstralCueText()
-    text_top := top + AppScale(80)
-    button_y := app.ui.view_height - AppScale(76)
-    height := button_y - text_top - AppScale(16)
-    if height < AppScale(40) {
-        height = AppScale(40)
-    }
-    if height >= AppScale(160) {
-        scene_height := height * 48 / 100
-        AstralSceneDraw(app.ui.session, cast(s64)astral_clock.elapsed_seconds * 1000 + astral_clock.remainder_ms,
-            Rectangle.{cast(float32)pad, cast(float32)text_top, cast(float32)width, cast(float32)scene_height},
-            app.theme_mode == APP_THEME_DARK || (app.theme_mode != APP_THEME_LIGHT && app.dark_mode != 0),
-            KeyHash("astral/scene"), LocaleText("exercise_astral_projection"))
-        text_top += scene_height + AppScale(12)
-        height -= scene_height + AppScale(12)
-    }
-    text_h := AppParagraphHeight(text, width, AppFontSize(), 0)
-    scroll := Scroll(app.ui.session, ScrollProps.{.key = KeyHash("astral/guidance"),
-            .bounds = Rectangle.{cast(float32)pad, cast(float32)text_top,
-                cast(float32)width, cast(float32)height},
-            .content_height = text_h, .scroll_offset = astral_scroll})
-    astral_scroll = scroll.scroll_offset
-    Text(app.ui.session, TextProps.{.text = text, .bounds = Rectangle.{
-                scroll.content.x, scroll.content.y, cast(float32)width, cast(float32)text_h},
-            .font = AppFontSize(), .align = cast(TextAlign)TextAlignCenter})
-    unused End(app.ui.session)
-    button_w := AppScale(220)
-    if button_w > width {
-        button_w = width
-    }
-    if Button(app.ui.session, ButtonProps.{.key = KeyHash("astral/pause"),
-            .label = LocaleText(ifx app.session_paused != 0 then "patterns_resume_button" else "pause_button"),
-            .bounds = Rectangle.{cast(float32)(center_x - button_w / 2), cast(float32)button_y,
-                cast(float32)button_w, cast(float32)AppScale(48)},
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+    time: [32]u8
+    frame := PracticeMovementFrameFor(app, EXERCISE_ASTRAL_PROJECTION, top)
+    frame.time = FrameTextHold(*app.ui.frame_text, AstralTimeText(time[:]))
+    frame.cue = AstralCueText()
+    frame.scroll = astral_scroll
+    frame = PracticeMovementRun(app, frame, AstralSessionFigure)
+    astral_scroll = frame.scroll
+    if frame.action == PRACTICE_MOVEMENT_PAUSE {
         app.session_paused = ifx app.session_paused != 0 then 0 else 1
     }
     if app.backgrounded == 0 {
@@ -279,4 +251,6 @@ AstralDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
         astral_frame_carry = total - cast(float64)milliseconds
         AstralAdvanceElapsed(app, milliseconds)
     }
+    unused center_x
+    unused center_y
 }

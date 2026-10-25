@@ -2,6 +2,7 @@
 
 ## [2.1.46] - 2026-10-24
 
+- Practices can update its session controls, guides and settings without reinstalling Breeze.
 - Wim Hof reminders now count from the start of each breath hold, with clear Off, every 30 seconds and every minute choices.
 - Dew works in every version of the app; the Play version doesn't offer top-ups yet.
 - Prices show in Dew; the dollar value appears only when you top up.

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.5.0] - 2026-10-25
+
+- Running Meditation, Breathing Patterns, Wim Hof, Sun Salutation, Tai Chi, Astral Projection and 7-Minute Workout layouts now come with Practices.
+- Move the remaining Customize pages, Sun Salutation's manual and Tai Chi's course chooser into the package.
+- Keep animated movement figures smooth while their screens update independently. This Practices version requires an updated Breeze app.
+
 ## [1.4.0] - 2026-10-24
 
 - Practice's home, the Wim Hof, Meditation, Patterns and Astral Projection manuals, Meditation's and Astral Projection's Customize pages, and the results after a practice now come with Practices, so they can change without an app update.

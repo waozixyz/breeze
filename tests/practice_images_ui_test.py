@@ -20,6 +20,7 @@ DISPLAY_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_AD
 assert all(not os.environ.get(key) for key in DISPLAY_KEYS), "Inherited desktop environment"
 root = Path(__file__).resolve().parents[1]
 binary = Path(sys.argv[1]).resolve()
+bundle = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None
 output = root / "build/practice-images-ui-test"
 output.mkdir(parents=True, exist_ok=True)
 WIDTH, HEIGHT = 390, 844
@@ -86,7 +87,8 @@ def stop(process):
 
 def launch(profile, name):
     log = (output / (name + ".log")).open("w")
-    app = subprocess.Popen([str(binary)], cwd=root, env=environment | {"APP_DATA_ROOT": str(profile)},
+    arguments = [str(binary)] + (["--bundle", str(bundle)] if bundle else [])
+    app = subprocess.Popen(arguments, cwd=root, env=environment | {"APP_DATA_ROOT": str(profile)},
                            stdout=log, stderr=subprocess.STDOUT)
     driver.attach(app, output / (name + ".log"))
     for _ in range(200):

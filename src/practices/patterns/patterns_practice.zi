@@ -38,6 +38,7 @@ sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c3;
 #import, file "../session_results.zi";
 #import, file "../../screens/practice_screen_calls.zi";
 #import, file "../../screens/practice_subscreen_layout.zi";
+#import, file "../practice_settings_host.zi";
 #import, file "patterns_rules.zi";
 #import, file "patterns_session_rules.zi";
 #import, file "patterns_entry.zi";
@@ -55,6 +56,15 @@ sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c3;
 #import "button_props"
 #import "shape_props"
 #import "shape_widget"
+#import "byte_text_linux"
+#import "bundle_host"
+#import "hosted_values"
+#import "widget_host"
+#import, file "../../apps/practice_types.zi";
+#import, file "../../apps/practice_ui_types.zi";
+#import, file "../../apps/app_codec.zi";
+#import, file "../../apps/hosted_assets.zi";
+#import, file "../../apps/module_host.zi";
 
 
 
@@ -180,231 +190,14 @@ patterns_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
     }
 }
 
-draw_config :: (app: *InnerBreeze) {
-    layout := PracticeSubscreenLayout.{0 }
-    side_padding := GetPageSidePadding()
-    max_content_w := AppScale(CONTENT_MAX_W)
-    content_x: s32 = 0
-    content_w: s32 = 0
-    x: s32
-    w: s32
-    y: s32
-
-    PracticeConfigLayout(app, ModalPracticeConfig, AppScale(18), *layout)
-    PracticeConfigTitle(app, LocaleText("practice_configure_button"),
-        cast(s32)ModalPracticeConfig, 1)
-
-    if max_content_w > app.ui.view_width - side_padding * 2 {
-        max_content_w = app.ui.view_width - side_padding * 2
-    }
-    if max_content_w < AppScale(320) {
-        max_content_w = AppScale(320)
-    }
-    GetCenteredColumn(max_content_w, side_padding, *content_x, *content_w)
-    content_h := patterns_config_content_height(app, content_w)
-
-    {
-        scroll_1_bounds: Rectangle = Rectangle.{cast(float32)0, cast(float32)layout.scroll_y,
-            cast(float32)app.ui.view_width, cast(float32)layout.scroll_h}
-        scroll_1_key: u64 = KeyHash("inbe/practices/patterns/patterns_practice/scroll/1")
-        scroll_1_props: ScrollProps
-        scroll_1_props.key = scroll_1_key
-        scroll_1_props.bounds = scroll_1_bounds
-        scroll_1_props.content_height = content_h
-        scroll_1_props.scroll_offset = app.settings_scroll
-        scroll_1_result: ScrollResult = Scroll(CurrentApp().ui.session, scroll_1_props)
-        app.settings_scroll = scroll_1_result.scroll_offset
-        page: Rectangle = scroll_1_result.content
-
-        y := cast(s32)page.y
-        x := content_x
-        w := content_w
-        btn_h := AppScale(48)
-        gap := AppScale(8)
-
-        Text(CurrentApp().ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)(x), cast(float32)(y), 0, 0},
-                .text = (LocaleText("patterns_preset_label")),
-                .wrap = cast(TextWrap)TextWrapNone
-            })
-        y += AppScale(30)
-
-        preset_w := w
-        {
-            i: s32 = 0
-            while i < PATTERNS_PRESET_COUNT {
-
-                row := i
-                label: [96] u8
-                ratio: [4] s32
-
-                {
-                    j: s32 = 0
-                    while j < 4 {
-                        ratio[j] = patterns_preset_ratio(i, j)
-                        j += 1
-                    }
-                }
-                if i == PATTERNS_PRESET_CUSTOM {
-                    {
-                        j: s32 = 0
-                        while j < 4 {
-                            ratio[j] = app.patterns.custom[j]
-                            j += 1
-                        }
-                    }
-                }
-                args: [5]FormatArg = .[
-                FormatArg.{.text = LocaleText(patterns_preset_label_key(i)), .is_text = true},
-                FormatArg.{.number = ratio[0]}, FormatArg.{.number = ratio[1]},
-                FormatArg.{.number = ratio[2]}, FormatArg.{.number = ratio[3]}
-                ]
-                FormatTemplate("%s  %d-%d-%d-%d", args[:], label[:])
-                style := cast(ButtonTone)(ifx (app.patterns.preset == i) then (ButtonToneAccent) else (ButtonToneNeutral))
-                if Button(CurrentApp().ui.session, ButtonProps.{
-                        .bounds = Rectangle.{cast(float32)(x), cast(float32)(y + row * (btn_h + gap)), cast(float32)(preset_w), cast(float32)(btn_h)},
-                        .label = AppTextFromCString(*label[0], 64),
-                        .tone = style,
-                        .emphasis = cast(ButtonEmphasis)(ifx (style == cast(ButtonTone)ButtonToneAccent) then (cast(ButtonEmphasis)ButtonEmphasisFilled) else (cast(ButtonEmphasis)ButtonEmphasisSoft)),
-                        .disabled = false
-                    }) != 0 {
-                    app.patterns.preset = i
-                    app.settings_dirty = 1
-                    save_settings(app)
-                }
-
-                i += 1
-            }
-        }
-        y += PATTERNS_PRESET_COUNT * (btn_h + gap) + AppScale(10)
-
-        if app.patterns.preset == PATTERNS_PRESET_CUSTOM {
-            Text(CurrentApp().ui.session, TextProps.{
-                    .bounds = Rectangle.{cast(float32)(x), cast(float32)(y), 0, 0},
-                    .text = LocaleText("patterns_custom_label"),
-                    .wrap = cast(TextWrap)TextWrapNone
-                })
-            y += AppScale(30)
-            step_labels: [4] string = .[LocaleText("patterns_phase_inhale"), LocaleText("patterns_phase_hold_in"), LocaleText("patterns_phase_exhale"), LocaleText("patterns_phase_hold_out")]
-            {
-                i: s32 = 0
-                while i < 4 {
-                    Text(CurrentApp().ui.session, TextProps.{
-                            .bounds = Rectangle.{cast(float32)(x), cast(float32)(y), 0, 0},
-                            .text = (step_labels[i]),
-                            .wrap = cast(TextWrap)TextWrapNone
-                        })
-                    minus_w := AppScale(46)
-                    if Button(CurrentApp().ui.session, ButtonProps.{
-                            .bounds = Rectangle.{cast(float32)(x + w - minus_w * 2 - gap), cast(float32)(y), cast(float32)(minus_w), cast(float32)(btn_h)},
-                            .label = "-5",
-                            .tone = cast(ButtonTone)ButtonToneNeutral,
-                            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-                            .disabled = false
-                        }) != 0 {
-                        app.patterns.custom[i] -= 5
-                        if app.patterns.custom[i] < 0 {
-                            app.patterns.custom[i] = 0
-                        }
-                        app.settings_dirty = 1
-                        save_settings(app)
-                    }
-                    if Button(CurrentApp().ui.session, ButtonProps.{
-                            .bounds = Rectangle.{cast(float32)(x + w - minus_w), cast(float32)(y), cast(float32)(minus_w), cast(float32)(btn_h)},
-                            .label = "+5",
-                            .tone = cast(ButtonTone)ButtonToneNeutral,
-                            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-                            .disabled = false
-                        }) != 0 {
-                        app.patterns.custom[i] += 5
-                        if app.patterns.custom[i] > PATTERNS_MAX_SECONDS {
-                            app.patterns.custom[i] = PATTERNS_MAX_SECONDS
-                        }
-                        app.settings_dirty = 1
-                        save_settings(app)
-                    }
-                    value_text: [16] u8
-                    AppFormatS32(app.patterns.custom[i], value_text[:])
-                    AppAppendText(" s", value_text[:])
-                    value_w := AppTextWidth(AppTextFromCString(*value_text[0], 16), AppFontSize())
-                    Text(CurrentApp().ui.session, TextProps.{
-                            .bounds = Rectangle.{cast(float32)(x + w - minus_w * 2 - gap - value_w - AppScale(8)), cast(float32)(y), 0, 0},
-                            .text = AppTextFromCString(*value_text[0], 96),
-                            .wrap = cast(TextWrap)TextWrapNone
-                        })
-                    y += btn_h + gap
-                    i += 1
-                }
-
-            }
-            y += AppScale(6)
-        }
-
-        Text(CurrentApp().ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)(x), cast(float32)(y), 0, 0},
-                .text = (LocaleText("patterns_duration_label")),
-                .wrap = cast(TextWrap)TextWrapNone
-            })
-        y += AppScale(30)
-        duration_values: [5] s32 = .[0, 3, 5, 10, 20]
-        {
-            i: s32 = 0
-            while i < 5 {
-
-                label: [32] u8
-                if duration_values[i] == 0 {
-                    AppCopyText(LocaleText("patterns_duration_open"), label[:])
-                } else {
-                    AppFormatS32(duration_values[i], label[:])
-                }
-                dur_w := (w - gap * 4) / 5
-                style := cast(ButtonTone)(ifx (app.patterns.duration_minutes == duration_values[i]) then (ButtonToneAccent) else (ButtonToneNeutral))
-                if Button(CurrentApp().ui.session, ButtonProps.{
-                        .bounds = Rectangle.{cast(float32)(x + i * (dur_w + gap)), cast(float32)(y), cast(float32)(dur_w), cast(float32)(btn_h)},
-                        .label = AppTextFromCString(*label[0], 64),
-                        .tone = style,
-                        .emphasis = cast(ButtonEmphasis)(ifx (style == cast(ButtonTone)ButtonToneAccent) then (cast(ButtonEmphasis)ButtonEmphasisFilled) else (cast(ButtonEmphasis)ButtonEmphasisSoft)),
-                        .disabled = false
-                    }) != 0 {
-                    app.patterns.duration_minutes = duration_values[i]
-                    app.settings_dirty = 1
-                    save_settings(app)
-                }
-
-                i += 1
-            }
-        }
-        y += btn_h + AppScale(10)
-
-        meditation_music_draw_practice_settings(app, EXERCISE_PATTERNS,
-            x, w, *y, 0, 1)
-        unused End(CurrentApp().ui.session)
-    }
-}
-
-patterns_config_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
-    btn_h := AppScale(48)
-    gap := AppScale(8)
-    height := AppScale(24)
-
-    height += AppScale(30)
-    height += PATTERNS_PRESET_COUNT * (btn_h + gap) + AppScale(10)
-    if app != null && app.patterns.preset == PATTERNS_PRESET_CUSTOM {
-        height += AppScale(30) + 4 * (btn_h + gap) + AppScale(6)
-    }
-    height += AppScale(30) + btn_h + AppScale(10)
-    height += meditation_music_measure_practice_settings(app, EXERCISE_PATTERNS,
-        content_w, 0, 1)
-    height += AppScale(24)
-    return height
-}
-
+// Practices draws the page (practice_settings_host.zi).
 patterns_config_screen_draw :: (app: *InnerBreeze) {
     if app == null {
         return
     }
-    app.practice_config_tab = 0
-    draw_config(app)
+    if PracticeSettingsDraw(app, EXERCISE_PATTERNS) != 0 {
+        PracticeConfigLeave(app, cast(s32)ModalPracticeConfig)
+    }
 }
 
 patterns_draw_session_title_bar :: (app: *InnerBreeze, title: string, height: s32) -> s32 {
@@ -463,31 +256,106 @@ patterns_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) ->
     return AppTextFromCString(*status[0], cast(s32)status.count)
 }
 
+// ---- The circle, phase, cycle and Pause, which Practices draws -------------
+
+practice_patterns_frame: PracticePatternsFrame;
+practice_patterns_frame_codec: WidgetPracticePatternsFrameCodec;
+
+PracticePatternsCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "patterns_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadPracticePatternsHost" && count == 0 {
+        result.* = WidgetEncodePracticePatternsFrame(practice_patterns_frame,
+            *practice_patterns_frame_codec)
+        return 1
+    }
+    if name == "WritePracticePatternsHost" && count == 1 &&
+    WidgetValidPracticePatternsFrame(arguments[0]) {
+        observed := WidgetDecodePracticePatternsFrame(arguments[0],
+            *practice_patterns_frame_codec)
+        practice_patterns_frame.action = observed.action
+        return 1
+    }
+    return 0
+}
+
+// "Cycle 3  ·  4:05", counting down when the pattern has a duration.
+patterns_status_text :: (app: *InnerBreeze, out: []u8) {
+    cycle_text: [32]u8
+    time_text: [32]u8
+    cycle_args: [2]FormatArg = .[
+    FormatArg.{.text = LocaleText("patterns_cycle_label"), .is_text = true},
+    FormatArg.{.number = app.patterns.cycle + 1}
+    ]
+    FormatTemplate("%s %d", cycle_args[:], cycle_text[:])
+    seconds := app.patterns.elapsed_seconds
+    if app.patterns.duration_minutes > 0 {
+        seconds = app.patterns.duration_minutes * 60 - app.patterns.elapsed_seconds
+        if seconds < 0 {
+            seconds = 0
+        }
+    }
+    time_args: [2]FormatArg = .[FormatArg.{.number = seconds / 60}, FormatArg.{.number = seconds % 60}]
+    FormatTemplate("%d:%02d", time_args[:], time_text[:])
+    status_args: [2]FormatArg = .[
+    FormatArg.{.text = AppTextFromCString(*cycle_text[0], cast(s32)cycle_text.count), .is_text = true},
+    FormatArg.{.text = AppTextFromCString(*time_text[0], cast(s32)time_text.count), .is_text = true}
+    ]
+    FormatTemplate("%s  ·  %s", status_args[:], out)
+}
+
+// Has Practices draw the pattern's circle, phase, cycle and Pause; returns
+// what was pressed there. The question asked on leaving shows the page
+// without them.
+patterns_draw_content :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> PracticePatternsFrame {
+    if app.modal.active != 0 &&
+    app.modal.type == cast(ModalType)ModalConfirmExitSession {
+        return PracticePatternsFrame.{}
+    }
+    max_radius := pattern_circle_max_radius()
+    min_radius := max_radius * 38 / 100
+    status: [72]u8
+    patterns_status_text(app, status[:])
+    practice_patterns_frame = PracticePatternsFrame.{.session = app.ui.session,
+        .scale = MetricsScale(), .view_width = app.ui.view_width,
+        .center_x = center_x, .center_y = center_y,
+        .status_y = PracticeTitleBarHeight() + AppScale(26), .small_font = AppSmallFontSize(),
+        .well_color = DarkenColor(StyleTokenColor("canvas"), 8),
+        .accent_color = StyleTokenColor("accent"), .max_radius = max_radius,
+        .radius = cast(s32)(cast(float32)min_radius +
+            patterns_circle_fraction(app) * cast(float32)(max_radius - min_radius)),
+        .phase_label = LocaleText(patterns_phase_label_key(app.patterns.phase)),
+        .status = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*status[0], 72)),
+        .paused = app.patterns.paused != 0,
+        .pause_label = LocaleText("patterns_pause_button"),
+        .resume_label = LocaleText("patterns_resume_button")}
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    AppsUiBegin(PracticePatternsCall, cast(*void)app)
+    drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_PATTERNS_VIEW})
+    AppsUiEnd()
+    WidgetHostEnd()
+    if !drawn.succeeded {
+        return PracticePatternsFrame.{}
+    }
+    return practice_patterns_frame
+}
+
 patterns_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
-    cycle_text: [32] u8
-    time_text: [32] u8
-
-    title_h := PracticeTitleBarHeight()
-    button_w := app.ui.view_width - AppScale(112)
-    button_h := AppScale(56)
-    button_y: s32 = 0
-    session_top: s32 = 0
-    session_bottom: s32 = 0
-
     if app == null {
         return
     }
-    session_top = title_h + AppScale(114)
-    session_bottom = app.ui.view_height - AppScale(174)
+    title_h := PracticeTitleBarHeight()
+    session_top := title_h + AppScale(114)
+    session_bottom := app.ui.view_height - AppScale(174)
     if session_bottom > session_top {
         center_y = (session_top + session_bottom) / 2 + AppScale(8)
     }
     // On a short screen the circle reaches under the title bar, so it comes
-    // first. The question asked on leaving shows the page without it.
-    if app.modal.active == 0 ||
-    app.modal.type != cast(ModalType)ModalConfirmExitSession {
-        pattern_circle_draw(app, center_x, center_y, patterns_circle_fraction(app))
-    }
+    // first.
+    content := patterns_draw_content(app, center_x, center_y)
     if patterns_draw_session_title_bar(app, LocaleText("patterns_title"), title_h) != 0 {
         patterns_request_exit(app)
         return
@@ -497,84 +365,13 @@ patterns_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     }
     practice_draw_audio_controls(app)
 
-    label := LocaleText(patterns_phase_label_key(app.patterns.phase))
-    instruction_font: s32 = AppScale(Text32)
-    max_instruction_w := app.ui.view_width - AppScale(80)
-
-    if AppTextWidth(label, instruction_font) > max_instruction_w {
-        instruction_font = AppScale(Text24)
-    }
-    label_w := AppTextWidth(label, instruction_font)
-    Text(CurrentApp().ui.session, TextProps.{
-            .text = label,
-            .bounds = Rectangle.{cast(float32)(center_x - label_w / 2), cast(float32)(center_y - AppTextLineHeight(instruction_font) / 2), 0, 0},
-            .font = instruction_font,
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-
-    cycle_args: [2]FormatArg = .[
-    FormatArg.{.text = LocaleText("patterns_cycle_label"), .is_text = true},
-    FormatArg.{.number = app.patterns.cycle + 1}
-    ]
-    FormatTemplate("%s %d", cycle_args[:], cycle_text[:])
-    if app.patterns.duration_minutes > 0 {
-        remain: s32 = app.patterns.duration_minutes * 60 -                   app.patterns.elapsed_seconds
-        if remain < 0 {
-            remain = 0
-        }
-        time_args: [2]FormatArg = .[
-        FormatArg.{.number = remain / 60},
-        FormatArg.{.number = remain % 60}
-        ]
-        FormatTemplate("%d:%02d", time_args[:], time_text[:])
-    } else {
-        time_args: [2]FormatArg = .[
-        FormatArg.{.number = app.patterns.elapsed_seconds / 60},
-        FormatArg.{.number = app.patterns.elapsed_seconds % 60}
-        ]
-        FormatTemplate("%d:%02d", time_args[:], time_text[:])
-    }
-    status_text: [72] u8
-    status_args: [2]FormatArg = .[
-    FormatArg.{.text = AppTextFromCString(*cycle_text[0], cast(s32)cycle_text.count), .is_text = true},
-    FormatArg.{.text = AppTextFromCString(*time_text[0], cast(s32)time_text.count), .is_text = true}
-    ]
-    FormatTemplate("%s  ·  %s", status_args[:], status_text[:])
-    status_font: s32 = AppScale(Text20)
-    status_y := title_h + AppScale(26)
-    max_status_w := app.ui.view_width - AppScale(96)
-    if AppTextWidth(AppTextFromCString(*status_text[0], 72), status_font) > max_status_w {
-        status_font = AppSmallFontSize()
-    }
-    status_w := AppTextWidth(AppTextFromCString(*status_text[0], 72), status_font)
-    text_y := status_y - AppTextLineHeight(status_font) / 2
-    Text(CurrentApp().ui.session, TextProps.{
-            .text = AppTextFromCString(*status_text[0], 72),
-            .bounds = Rectangle.{cast(float32)(center_x - status_w / 2), cast(float32)(text_y), 0, 0},
-            .font = status_font,
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-
-    button_y = center_y + pattern_circle_max_radius() + AppScale(42)
     if app.patterns.paused != 0 {
-        if Button(CurrentApp().ui.session, ButtonProps.{
-                .bounds = Rectangle.{cast(float32)(center_x - button_w / 2), cast(float32)(button_y), cast(float32)(button_w), cast(float32)(button_h)},
-                .label = LocaleText("patterns_resume_button"),
-                .tone = cast(ButtonTone)ButtonToneAccent,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-                .disabled = false
-            }) != 0 {
+        if content.action == PRACTICE_PATTERNS_RESUME {
             app.patterns.paused = 0
         }
         return
     }
-    if IsKeyPressed(KEY_SPACE) || Button(CurrentApp().ui.session, ButtonProps.{
-            .bounds = Rectangle.{cast(float32)(center_x - button_w / 2), cast(float32)(button_y), cast(float32)(button_w), cast(float32)(button_h)},
-            .label = LocaleText("patterns_pause_button"),
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-            .disabled = false
-        }) != 0 {
+    if IsKeyPressed(KEY_SPACE) || content.action == PRACTICE_PATTERNS_PAUSE {
         app.patterns.paused = 1
     }
 
@@ -610,27 +407,6 @@ pattern_circle_max_radius :: () -> s32 {
         max_r = AppScale(104)
     }
     return max_r
-}
-
-pattern_circle_draw :: (app: *InnerBreeze, center_x: s32, center_y: s32,
-    fraction: float32) {
-    max_r := pattern_circle_max_radius()
-    min_r := max_r * 38 / 100
-    if fraction < 0.0 {
-        fraction = 0.0
-    }
-    if fraction > 1.0 {
-        fraction = 1.0
-    }
-    r := cast(s32)(cast(float32)min_r + fraction * cast(float32)(max_r - min_r))
-    circle := StyleTokenColor("accent")
-
-    center := Vector2.{cast(float32)center_x, cast(float32)center_y}
-    Circle(app.ui.session, CircleProps.{.center = center,
-            .radius = cast(float32)max_r,
-            .fill = DarkenColor(StyleTokenColor("canvas"), 8)})
-    Circle(app.ui.session, CircleProps.{.center = center,
-            .radius = cast(float32)r, .fill = circle})
 }
 
 patterns :: (app: *InnerBreeze) {

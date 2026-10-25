@@ -1,0 +1,77 @@
+#import "session"
+#import "style_sheet"
+#import "drawing_props"
+#import, file "../app/cards.zi";
+#import "bundle_host"
+#import "hosted_values"
+#import "byte_text_linux"
+#import "widget_host"
+#import, file "../app/app_types.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../apps/app_codec.zi";
+#import, file "../apps/practice_types.zi";
+#import, file "../apps/practice_ui_types.zi";
+#import, file "../apps/hosted_assets.zi";
+#import, file "../apps/module_host.zi";
+#import, file "practice_figure_host.zi";
+
+using HostValueKind;
+practice_movement_frame: PracticeMovementFrame;
+practice_movement_codec: WidgetPracticeMovementFrameCodec;
+
+PracticeMovementCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "movement_view" {
+        if PracticeFigureCall(module, function, arguments, count, result) != 0 {
+            return 1
+        }
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadPracticeMovementHost" && count == 0 {
+        result.* = WidgetEncodePracticeMovementFrame(practice_movement_frame, *practice_movement_codec)
+        return 1
+    }
+    if name == "WritePracticeMovementHost" && count == 1 && WidgetValidPracticeMovementFrame(arguments[0]) {
+        observed := WidgetDecodePracticeMovementFrame(arguments[0], *practice_movement_codec)
+        practice_movement_frame.action = observed.action
+        practice_movement_frame.value = observed.value
+        practice_movement_frame.scroll = observed.scroll
+        return 1
+    }
+    if name == "MovementLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
+}
+
+PracticeMovementFrameFor :: (app: *InnerBreeze, practice: s32, top: s32) -> PracticeMovementFrame {
+    return PracticeMovementFrame.{.session = app.ui.session, .scale = MetricsScale(),
+        .view_width = app.ui.view_width, .view_height = app.ui.view_height, .top = top,
+        .font = AppFontSize(), .small_font = AppSmallFontSize(), .muted_class = MutedTextClass(),
+        .practice = practice, .paused = app.session_paused != 0,
+        .accent_color = StyleTokenColor("accent"), .text_color = StyleTokenColor("text")}
+}
+
+PracticeMovementRun :: (app: *InnerBreeze, frame: PracticeMovementFrame,
+    painter: PracticeFigurePainter) -> PracticeMovementFrame {
+    practice_movement_frame = frame
+    PracticeFigureBegin(app, frame.practice, painter)
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    AppsUiBegin(PracticeMovementCall, cast(*void)app)
+    drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_MOVEMENT_VIEW})
+    AppsUiEnd()
+    WidgetHostEnd()
+    PracticeFigureEnd()
+    if !drawn.succeeded {
+        frame.action = PRACTICE_MOVEMENT_NONE
+        return frame
+    }
+    return practice_movement_frame
+}

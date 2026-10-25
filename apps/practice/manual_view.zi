@@ -1,3 +1,4 @@
+#import, file "figure_view.zi";
 // A practice's manual: a few pages, each with a picture or a small preview,
 // its title with "Step 1 of 4", and what to know, turned with Back and Next,
 // a swipe or the arrow keys; the last page's Next starts the practice. The
@@ -122,7 +123,7 @@ Number :: (value: s32) -> string {
 
 PageCount :: () -> s32 {
     if manual.practice == EXERCISE_WIM_HOF { return 4 }
-    if manual.practice == EXERCISE_PATTERNS { return 3 }
+    if manual.practice == EXERCISE_PATTERNS || manual.practice == EXERCISE_SUN_SALUTATION { return 3 }
     return 2
 }
 
@@ -159,7 +160,7 @@ Panel :: (bounds: Rectangle, radius: s32, outline: bool) {
 
 Disc :: (center_x: s32, center_y: s32, radius: s32, color: Color) {
     Box(manual.session, BoxProps.{.bounds = Bounds(center_x - radius, center_y - radius,
-                radius * 2, radius * 2), .fill = color, .radius = cast(float32)radius})
+            radius * 2, radius * 2), .fill = color, .radius = cast(float32)radius})
 }
 
 HeaderHeight :: () -> s32 {
@@ -225,7 +226,7 @@ CustomizeRing :: (hero: Rectangle, label: string) {
     Disc(center_x, center_y, Scale(48), manual.guide_background)
     inner := Scale(48)
     Text(manual.session, TextProps.{.bounds = Bounds(center_x - inner, center_y - inner,
-                inner * 2, inner * 2), .text = label, .wrap = cast(TextWrap)TextWrapNone,
+            inner * 2, inner * 2), .text = label, .wrap = cast(TextWrap)TextWrapNone,
             .align = cast(TextAlign)TextAlignCenter, .vertical_align = cast(TextAlign)TextAlignCenter})
 }
 
@@ -502,9 +503,9 @@ PatternsPresets :: (x: s32, width: s32, y: *s32) {
     card_height := Scale(58)
     card_width := (width - padding * 2 - gap) / 2
     Label(Locale("patterns_preset_label"), Bounds(x + padding, y.* + Scale(18), width - padding * 2,
-            Scale(24)), manual.font, false)
+        Scale(24)), manual.font, false)
     Label(PatternsRatio(manual.preset), Bounds(x + padding, y.* + Scale(44), width - padding * 2,
-            Scale(22)), manual.small_font, false)
+        Scale(22)), manual.small_font, false)
     count := patterns_preset_count()
     for index: cast(s32)0..count - 1 {
         card_x := x + padding + (index % 2) * (card_width + gap)
@@ -582,9 +583,99 @@ PatternsPage :: (x: s32, width: s32, y: *s32) {
     Paragraph(Locale(PatternsBodyKey(manual.page)), x, y, width, cast(TextAlign)TextAlignStart)
 }
 
+// Sun Salutation's twelve-pose chart, timing guide and current settings.
+SunBodyKey :: () -> string {
+    if manual.page == 0 { return "sun_manual_move_text" }
+    if manual.page == 1 { return "sun_manual_guide_text" }
+    return "sun_manual_customize_text"
+}
+
+SunTitleKey :: () -> string {
+    if manual.page == 0 { return "exercise_sun_salutation" }
+    if manual.page == 1 { return "sun_salutation_tempo_preview_label" }
+    return "practice_configure_button"
+}
+
+SunVisualHeight :: (width: s32) -> s32 {
+    if manual.page != 0 { return Scale(178) }
+    card_width := (width - Scale(20) - Scale(8) * 2) / 3
+    return Scale(10) + 4 * (card_width * 4 / 3 + Scale(8)) + Scale(28)
+}
+
+SunFigure :: (step: s32, bounds: Rectangle, key: u64, alt: string) {
+    PracticeFigure(PracticeFigureRequest.{.practice = EXERCISE_SUN_SALUTATION,
+            .preview = true, .index = step, .character = manual.sun_character,
+            .bounds = bounds, .key = key, .alt_text = alt})
+}
+
+SunStat :: (label: string, value: string, x: s32, y: s32, width: s32) {
+    Label(label, Bounds(x + Scale(18), y, width - Scale(100), Scale(32)), manual.font, false)
+    Label(value, Bounds(x + width - Scale(70), y, Scale(54), Scale(32)), manual.font, false)
+}
+
+SunPage :: (x: s32, width: s32, y: *s32) {
+    height := SunVisualHeight(width)
+    hero := Hero(x, width, y.*, height)
+    Panel(hero, Scale(16), false)
+    x = cast(s32)hero.x
+    width = cast(s32)hero.width
+    if manual.page == 0 {
+        gap := Scale(8)
+        inset := Scale(10)
+        card_w := (width - inset * 2 - gap * 2) / 3
+        card_h := card_w * 4 / 3
+        number_h := Scale(22)
+        name_h := Scale(38)
+        card_color := manual.guide_background
+        card_color.r = ifx card_color.r > 8 then card_color.r - cast(u8)8 else cast(u8)0
+        card_color.g = ifx card_color.g > 8 then card_color.g - cast(u8)8 else cast(u8)0
+        card_color.b = ifx card_color.b > 8 then card_color.b - cast(u8)8 else cast(u8)0
+        for step: cast(s32)0..11 {
+            card := Bounds(x + inset + step % 3 * (card_w + gap),
+                y.* + inset + step / 3 * (card_h + gap), card_w, card_h)
+            Box(manual.session, BoxProps.{.bounds = card, .fill = card_color, .radius = cast(float32)Scale(12)})
+            Label(Number(step + 1), Rectangle.{card.x + cast(float32)Scale(8), card.y + cast(float32)Scale(4),
+                    card.width - cast(float32)Scale(16), cast(float32)number_h}, manual.small_font, false)
+            key: Vec(u8)
+            BuilderPrint(*key, "sun_salutation_step_%", step + 1)
+            name := Locale(BuilderFinish(key))
+            SunFigure(step, Rectangle.{card.x + cast(float32)Scale(4), card.y + cast(float32)number_h,
+                    card.width - cast(float32)Scale(8), card.height - cast(float32)(number_h + name_h)},
+                KeyHash("sun-salutation/manual/chart") + cast(u64)step * cast(u64)4096, name)
+            Text(manual.session, TextProps.{.text = name, .font = manual.small_font,
+                    .align = cast(TextAlign)TextAlignCenter,
+                    .bounds = Rectangle.{card.x + cast(float32)Scale(4), card.y + card.height - cast(float32)name_h,
+                        card.width - cast(float32)Scale(8), cast(float32)name_h}})
+        }
+    } else if manual.page == 1 {
+        pose_width := (width - Scale(36)) / 3
+        steps: [3]s32 = .[0, 3, 7]
+        keys: [3]string = .["sun-salutation/manual/first", "sun-salutation/manual/middle", "sun-salutation/manual/last"]
+        for index: cast(s32)0..2 {
+            pose_bounds := Bounds(x + Scale(10) + index * (pose_width + Scale(8)),
+                y.* + Scale(24), pose_width, Scale(112))
+            SunFigure(steps[index], pose_bounds, KeyHash(keys[index]), Locale("exercise_sun_salutation"))
+            Disc(cast(s32)(pose_bounds.x + pose_bounds.width / 2.0), y.* + Scale(151), Scale(4),
+                ifx index == 1 then manual.guide_foreground else manual.guide_border)
+        }
+    } else {
+        row_y := y.* + Scale(24)
+        SunStat(Locale("sun_salutation_repetitions_label"), Filled("%dx", manual.sun_repetitions, 0), x, row_y, width)
+        row_y += Scale(45)
+        SunStat(Locale("sun_salutation_start_speed_label"), Filled("%d s", manual.sun_start_seconds, 0), x, row_y, width)
+        row_y += Scale(45)
+        SunStat(Locale("sun_salutation_end_speed_label"), Filled("%d s", manual.sun_end_seconds, 0), x, row_y, width)
+    }
+    y.* += height + Scale(18)
+    HeroDots(hero)
+    Header(Locale(SunTitleKey()), x, y, width)
+    Paragraph(Locale(SunBodyKey()), x, y, width, cast(TextAlign)TextAlignStart)
+}
+
 // ---- The manual ------------------------------------------------------------------------
 
 Title :: () -> string {
+    if manual.practice == EXERCISE_SUN_SALUTATION { return Locale("exercise_sun_salutation") }
     if manual.practice == EXERCISE_WIM_HOF { return Locale("practice_manual_button") }
     if manual.practice == EXERCISE_PATTERNS { return Locale("patterns_title") }
     if manual.practice == EXERCISE_ASTRAL_PROJECTION { return Locale("exercise_astral_projection") }
@@ -592,13 +683,18 @@ Title :: () -> string {
 }
 
 PageHeight :: (width: s32) -> s32 {
+    if manual.practice == EXERCISE_SUN_SALUTATION {
+        return SunVisualHeight(width) + Scale(18) + HeaderHeight() + ParagraphHeight(Locale(SunBodyKey()), width)
+    }
     if manual.practice == EXERCISE_WIM_HOF { return WhmPageHeight(width) }
     if manual.practice == EXERCISE_PATTERNS { return PatternsPageHeight(width) }
     return PicturePageHeight(width)
 }
 
 Page :: (x: s32, width: s32, y: s32) {
-    if manual.practice == EXERCISE_WIM_HOF {
+    if manual.practice == EXERCISE_SUN_SALUTATION {
+        SunPage(x, width, *y)
+    } else if manual.practice == EXERCISE_WIM_HOF {
         WhmPage(x, width, *y)
     } else if manual.practice == EXERCISE_PATTERNS {
         PatternsPage(x, width, *y)
@@ -609,6 +705,7 @@ Page :: (x: s32, width: s32, y: s32) {
 
 // Each manual keeps its own scroll position, as before.
 ScrollKey :: () -> u64 {
+    if manual.practice == EXERCISE_SUN_SALUTATION { return KeyHash("sun/manual/scroll") }
     if manual.practice == EXERCISE_WIM_HOF { return KeyHash("whm/manual/scroll") }
     if manual.practice == EXERCISE_PATTERNS { return KeyHash("patterns/manual/scroll") }
     if manual.practice == EXERCISE_ASTRAL_PROJECTION { return KeyHash("astral/manual/scroll") }
@@ -616,6 +713,7 @@ ScrollKey :: () -> u64 {
 }
 
 FocusId :: () -> s32 {
+    if manual.practice == EXERCISE_SUN_SALUTATION { return 440 }
     if manual.practice == EXERCISE_WIM_HOF { return 400 }
     if manual.practice == EXERCISE_PATTERNS { return 460 }
     if manual.practice == EXERCISE_ASTRAL_PROJECTION { return 425 }

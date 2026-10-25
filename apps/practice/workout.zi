@@ -1,3 +1,6 @@
+#import, file "../../src/apps/practice_ui_types.zi";
+#import, file "../../src/apps/practice_types.zi";
+#import, file "../../src/practices/practice_movement_host.zi";
 // The 7-Minute Workout owns its circuit, figure and session; the host
 // supplies the existing audio, storage and platform lifecycle effects.
 #import, file "workout_rules.zi";
@@ -303,65 +306,6 @@ WorkoutDrawFigure :: (app: *InnerBreeze, step: WorkoutStep, area: Rectangle, key
         alt_text, WORKOUT_EDGE_PATH)
 }
 
-// Twelve short bars across the top, one per exercise, filling as each is
-// done.
-WorkoutDrawProgress :: (app: *InnerBreeze, step: WorkoutStep, x: s32, y: s32, width: s32) {
-    gap := AppScale(4)
-    bar_w := (width - gap * (WORKOUT_EXERCISE_COUNT - 1)) / WORKOUT_EXERCISE_COUNT
-    bar_h := AppScale(6)
-    track := color_with_alpha(StyleTokenColor("text"), 0.14)
-    fill := StyleTokenColor("accent")
-    for index: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
-        bar := Rectangle.{cast(float32)(x + index * (bar_w + gap)), cast(float32)y,
-            cast(float32)bar_w, cast(float32)bar_h}
-        Box(app.ui.session, BoxProps.{.bounds = bar, .fill = track, .radius = cast(float32)bar_h / 2.0})
-        share: float32 = 0.0
-        if index < step.exercise || step.phase == WORKOUT_PHASE_DONE {
-            share = 1.0
-        } else if index == step.exercise && step.phase == WORKOUT_PHASE_WORK {
-            share = cast(float32)step.elapsed_ms / cast(float32)step.length_ms
-        }
-        if share > 0.0 {
-            done := bar
-            done.width = bar.width * share
-            if done.width < cast(float32)bar_h {
-                done.width = cast(float32)bar_h
-            }
-            Box(app.ui.session, BoxProps.{.bounds = done, .fill = fill, .radius = cast(float32)bar_h / 2.0})
-        }
-    }
-}
-
-// The seconds left in the step inside a ring that empties as they pass.
-WorkoutDrawCountdown :: (app: *InnerBreeze, step: WorkoutStep, center: Vector2, radius: float32) {
-    thickness := cast(float32)AppScale(6)
-    Ring(app.ui.session, RingProps.{.center = center, .inner_radius = radius - thickness,
-            .outer_radius = radius, .start_angle = 0.0, .end_angle = 360.0,
-            .color = color_with_alpha(StyleTokenColor("text"), 0.12)})
-    left: float32 = 1.0
-    if step.length_ms > 0 {
-        left = 1.0 - cast(float32)step.elapsed_ms / cast(float32)step.length_ms
-    }
-    color := color_with_alpha(StyleTokenColor("text"), 0.55)
-    if step.phase == WORKOUT_PHASE_WORK {
-        color = StyleTokenColor("accent")
-    }
-    if left > 0.0 {
-        Ring(app.ui.session, RingProps.{.center = center, .inner_radius = radius - thickness,
-                .outer_radius = radius, .start_angle = -90.0, .end_angle = -90.0 + 360.0 * left,
-                .color = color})
-    }
-    number: [16]u8
-    cursor: s32 = 0
-    unused TextBufferAppendNumber(number[:], *cursor, WorkoutStepSecondsLeft(step))
-    font := AppScale(30)
-    Text(app.ui.session, TextProps.{
-            .text = FrameTextHold(*app.ui.frame_text, TextUntilNul(number[:])),
-            .bounds = Rectangle.{center.x - radius, center.y - radius, radius * 2.0, radius * 2.0},
-            .font = font, .align = cast(TextAlign)TextAlignCenter,
-            .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapNone})
-}
-
 WorkoutDrawWindow :: (app: *InnerBreeze, picture: Rectangle, output: []u8) -> string {
     step := WorkoutStepAt(workout_elapsed_ms)
     WorkoutDrawFigure(app, step, picture, KeyHash("workout/window/figure"), "")
@@ -376,9 +320,11 @@ WorkoutDrawWindow :: (app: *InnerBreeze, picture: Rectangle, output: []u8) -> st
     return TextUntilNul(output)
 }
 
+WorkoutSessionFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
+    WorkoutDrawFigure(app, WorkoutStepAt(workout_elapsed_ms), request.bounds, request.key, request.alt_text)
+}
+
 WorkoutDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
-    unused center_x
-    unused center_y
     top := PracticeTitleBarHeight()
     if PracticeTitleBar(app, LocaleText("exercise_workout"), top) {
         WorkoutRequestExit(app)
@@ -388,77 +334,17 @@ WorkoutDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     }
     practice_draw_audio_controls(app)
     step := WorkoutStepAt(workout_elapsed_ms)
-    pad := AppScale(20)
-    view_w := app.ui.view_width
-    view_h := app.ui.view_height
-    // Side by side when there is room: the figure on the left, the words,
-    // the countdown and Pause on the right.
-    wide := view_w >= AppScale(760) && view_w * 10 >= view_h * 12
-    panel_w := ifx wide then view_w * 2 / 5 else view_w - pad * 2
-    if panel_w > AppScale(560) {
-        panel_w = AppScale(560)
-    }
-    panel_x := ifx wide then view_w - pad - panel_w else pad
-    progress_y := top + AppScale(10)
-    WorkoutDrawProgress(app, step, pad, progress_y, view_w - pad * 2)
-    button_h := AppScale(48)
-    ring_r := AppScale(44)
-    heading_font := AppScale(26)
-    small_font := AppFontSize()
-    heading := WorkoutHeading(app, step)
-    subheading := WorkoutSubheading(app, step)
-    tip := WorkoutTip(app, step)
-    heading_h := AppParagraphHeight(heading, panel_w, heading_font, 0)
-    sub_h := AppParagraphHeight(subheading, panel_w, small_font, 0)
-    tip_h := AppParagraphHeight(tip, panel_w, small_font, AppScale(3))
-    content_top := progress_y + AppScale(20)
-    words_h := heading_h + AppScale(4) + sub_h
-    lower_h := tip_h + AppScale(16) + ring_r * 2 + AppScale(16) + button_h + AppScale(20)
-    stage: Rectangle
-    panel_top := content_top
-    if wide {
-        stage = Rectangle.{cast(float32)pad, cast(float32)content_top,
-            cast(float32)(panel_x - pad * 2), cast(float32)(view_h - content_top - pad)}
-        panel_top = content_top + (view_h - content_top - pad - words_h - AppScale(24) - lower_h) / 2
-        if panel_top < content_top {
-            panel_top = content_top
-        }
-    } else {
-        stage_h := view_h - content_top - words_h - AppScale(12) - lower_h
-        stage = Rectangle.{cast(float32)pad, cast(float32)(content_top + words_h + AppScale(8)),
-            cast(float32)(view_w - pad * 2), cast(float32)stage_h}
-    }
-    emphasis := StrongWhole(heading)
-    Text(app.ui.session, TextProps.{.text = heading,
-            .bounds = Rectangle.{cast(float32)panel_x, cast(float32)panel_top, cast(float32)panel_w, cast(float32)heading_h},
-            .font = heading_font, .align = cast(TextAlign)TextAlignCenter, .strong = emphasis[:1]})
-    Text(app.ui.session, TextProps.{.text = subheading,
-            .bounds = Rectangle.{cast(float32)panel_x, cast(float32)(panel_top + heading_h + AppScale(4)),
-                cast(float32)panel_w, cast(float32)sub_h},
-            .font = small_font, .align = cast(TextAlign)TextAlignCenter, .disabled = true})
-    if stage.height > cast(float32)AppScale(60) {
-        alt: [192]u8
-        unused AppCopyText(heading, alt[:])
-        WorkoutDrawFigure(app, step, stage, KeyHash("workout/figure"), TextUntilNul(alt[:]))
-    }
-    lower_y := ifx wide then panel_top + words_h + AppScale(24) else view_h - lower_h
-    Text(app.ui.session, TextProps.{.text = tip,
-            .bounds = Rectangle.{cast(float32)panel_x, cast(float32)lower_y, cast(float32)panel_w, cast(float32)tip_h},
-            .font = small_font, .align = cast(TextAlign)TextAlignCenter})
-    ring_center := Vector2.{cast(float32)(panel_x + panel_w / 2),
-        cast(float32)(lower_y + tip_h + AppScale(16) + ring_r)}
-    WorkoutDrawCountdown(app, step, ring_center, cast(float32)ring_r)
-    button_w := AppScale(220)
-    if button_w > panel_w {
-        button_w = panel_w
-    }
-    button_y := lower_y + tip_h + AppScale(16) + ring_r * 2 + AppScale(16)
-    if Button(app.ui.session, ButtonProps.{.key = KeyHash("workout/pause"),
-            .label = LocaleText(ifx app.session_paused != 0 then "patterns_resume_button" else "pause_button"),
-            .bounds = Rectangle.{cast(float32)(panel_x + (panel_w - button_w) / 2), cast(float32)button_y,
-                cast(float32)button_w, cast(float32)button_h},
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+    frame := PracticeMovementFrameFor(app, EXERCISE_WORKOUT, top)
+    frame.heading = WorkoutHeading(app, step)
+    frame.subtitle = WorkoutSubheading(app, step)
+    frame.cue = WorkoutTip(app, step)
+    frame.exercise = step.exercise
+    frame.phase = step.phase
+    frame.elapsed_ms = step.elapsed_ms
+    frame.length_ms = step.length_ms
+    frame.seconds_left = WorkoutStepSecondsLeft(step)
+    frame = PracticeMovementRun(app, frame, WorkoutSessionFigure)
+    if frame.action == PRACTICE_MOVEMENT_PAUSE {
         app.session_paused = ifx app.session_paused != 0 then 0 else 1
     }
     if app.backgrounded == 0 {
@@ -467,4 +353,6 @@ WorkoutDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
         workout_frame_carry = total - cast(float64)milliseconds
         WorkoutAdvanceElapsed(app, milliseconds)
     }
+    unused center_x
+    unused center_y
 }

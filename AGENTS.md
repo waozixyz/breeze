@@ -34,10 +34,10 @@
 - Goal (owner, 2026-10-11): every app updates through its own package
   without a new APK. Work toward it in small steps alongside requested work;
   discuss larger moves with the owner first. Put app screens, rules and text
-  in `apps/<app>/`, not in the host under `src/`. Practices still draws
-  compiled host screens (see [docs/apps.md](docs/apps.md)); when work
-  touches one, prefer moving it into its package. Keep the host interface
-  small and generic (storage, network, locale, platform effects), because
+  in `apps/<app>/`, not in the host under `src/`. Practices draws its
+  screen layouts in `apps/practice/`; its native figure painters and
+  platform effects remain host capabilities (see [docs/apps.md](docs/apps.md)).
+  Keep the host interface small and generic (storage, network, locale, platform effects), because
   each new host call needs an APK before a package can use it. Apps share
   data only through the host interface, never another app's internals.
 - Translate changed strings in every affected locale; no English placeholders.

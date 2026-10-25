@@ -1,0 +1,46 @@
+// Figure painters stay on the render thread with their native mesh caches.
+// A page may request only the painter installed for that page's practice.
+#import "bundle_host"
+#import "hosted_values"
+#import "byte_text_linux"
+#import, file "../app/app_types.zi";
+#import, file "../apps/app_codec.zi";
+#import, file "../apps/practice_ui_types.zi";
+
+PracticeFigurePainter :: #type (app: *InnerBreeze, request: PracticeFigureRequest) -> void;
+practice_figure_app: *InnerBreeze;
+practice_figure_practice: s32 = -1;
+practice_figure_painter: PracticeFigurePainter;
+practice_figure_codec: WidgetPracticeFigureRequestCodec;
+
+PracticeFigureBegin :: (app: *InnerBreeze, practice: s32,
+    painter: PracticeFigurePainter) {
+    practice_figure_app = app
+    practice_figure_practice = practice
+    practice_figure_painter = painter
+}
+
+PracticeFigureEnd :: () {
+    practice_figure_app = null
+    practice_figure_practice = -1
+}
+
+PracticeFigureCall :: (module: *u8, function: *u8, arguments: *HostValue,
+    count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "figure_view" || TextFromCString(function) != "DrawPracticeFigureHost" ||
+    count != 1 || practice_figure_app == null || practice_figure_painter == null ||
+    !WidgetValidPracticeFigureRequest(arguments[0]) {
+        return 0
+    }
+    request := WidgetDecodePracticeFigureRequest(arguments[0], *practice_figure_codec)
+    area := request.bounds
+    // Comparisons also reject non-finite values before native mesh arithmetic.
+    if request.practice != practice_figure_practice ||
+    !(area.width > 0.0 && area.width <= 16384.0 && area.height > 0.0 && area.height <= 16384.0 &&
+        area.x >= -32768.0 && area.x <= 32768.0 && area.y >= -32768.0 && area.y <= 32768.0) {
+        return 0
+    }
+    practice_figure_painter(practice_figure_app, request)
+    unused result
+    return 1
+}

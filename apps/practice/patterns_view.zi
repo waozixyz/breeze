@@ -1,0 +1,87 @@
+// A running breathing pattern: the circle growing on the inhale and
+// shrinking on the exhale inside its well, the phase to breathe, the cycle
+// with the time, and Pause, or Resume while paused. The host keeps the
+// pattern's clock and cues, draws the title bar and the question on leaving,
+// and does what was pressed.
+#import "session"
+#import "geometry"
+#import "dpi"
+#import "drawing_props"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "text_measure"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "shape_props"
+#import "shape_widget"
+#import, file "../../src/apps/practice_ui_types.zi";
+#import, file "../../src/apps/practice_types.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using TextWrap;
+host_api :: #system_library "host_api";
+ReadPracticePatternsHost :: () -> PracticePatternsFrame #foreign host_api;
+WritePracticePatternsHost :: (frame: PracticePatternsFrame) #foreign host_api;
+patterns: PracticePatternsFrame;
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, patterns.scale)
+}
+
+Width :: (text: string, font: s32) -> s32 {
+    return TextWidth(patterns.session, TextProps.{.text = text, .font = font})
+}
+
+// A line of text centred on x with its middle at y.
+CenteredLine :: (text: string, font: s32, x: s32, y: s32) {
+    width := Width(text, font)
+    Text(patterns.session, TextProps.{.text = text, .font = font,
+            .bounds = Rectangle.{cast(float32)(x - width / 2), cast(float32)(y - font / 2), 0, 0},
+            .wrap = cast(TextWrap)TextWrapNone})
+}
+
+PracticePatternsView :: (message: PracticeMessage) -> PracticeMessage {
+    patterns = ReadPracticePatternsHost()
+    patterns.action = PRACTICE_PATTERNS_NONE
+    patterns.value = 0
+    center_x := patterns.center_x
+    center_y := patterns.center_y
+    center := Vector2.{cast(float32)center_x, cast(float32)center_y}
+    Circle(patterns.session, CircleProps.{.center = center,
+            .radius = cast(float32)patterns.max_radius, .fill = patterns.well_color})
+    Circle(patterns.session, CircleProps.{.center = center,
+            .radius = cast(float32)patterns.radius, .fill = patterns.accent_color})
+
+    phase_font := Scale(Text32)
+    if Width(patterns.phase_label, phase_font) > patterns.view_width - Scale(80) {
+        phase_font = Scale(Text24)
+    }
+    CenteredLine(patterns.phase_label, phase_font, center_x, center_y)
+    status_font := Scale(Text20)
+    if Width(patterns.status, status_font) > patterns.view_width - Scale(96) {
+        status_font = patterns.small_font
+    }
+    CenteredLine(patterns.status, status_font, center_x, patterns.status_y)
+
+    width := patterns.view_width - Scale(112)
+    bounds := Rectangle.{cast(float32)(center_x - width / 2),
+        cast(float32)(center_y + patterns.max_radius + Scale(42)), cast(float32)width,
+        cast(float32)Scale(56)}
+    if patterns.paused {
+        if Button(patterns.session, ButtonProps.{.bounds = bounds, .label = patterns.resume_label,
+                .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+            patterns.action = PRACTICE_PATTERNS_RESUME
+        }
+    } else if Button(patterns.session, ButtonProps.{.bounds = bounds, .label = patterns.pause_label,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        patterns.action = PRACTICE_PATTERNS_PAUSE
+    }
+    WritePracticePatternsHost(patterns)
+    message.succeeded = true
+    return message
+}

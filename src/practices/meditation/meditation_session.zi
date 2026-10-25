@@ -1,6 +1,13 @@
 #import, file "../../apps/shared_state.zi";
 #import, file "../../apps/module_host.zi";
 #import, file "../../apps/practice_types.zi";
+#import, file "../../apps/practice_ui_types.zi";
+#import, file "../../apps/app_codec.zi";
+#import, file "../../apps/hosted_assets.zi";
+#import "byte_text_linux"
+#import "bundle_host"
+#import "hosted_values"
+#import "widget_host"
 c3 :: #system_library "c";
 practice_background_start :: (app: *InnerBreeze, id: s32) #foreign c3;
 practice_active_background_stop :: (app: *InnerBreeze) #foreign c3;
@@ -429,66 +436,6 @@ meditation_draw_setup_modal :: (app: *InnerBreeze) {
     }
 }
 
-draw_extend_controls :: (app: *InnerBreeze, center_x: s32, y: s32) {
-    add_seconds: [3] s32 = .[60, 5 * 60, 10 * 60]
-    labels: [3] string = .["+1", "+5", "+10"]
-    gap := AppScale(8)
-    btn_h := AppScale(34)
-    btn_w := AppScale(58)
-    finish_w := AppScale(96)
-    total_w := btn_w * 3 + gap * 2
-    x := center_x - total_w / 2
-
-    if app == null || app.meditation.show_extend_controls == 0 {
-        return
-    }
-
-    if x < AppScale(12) {
-        x = AppScale(12)
-    }
-    if x + total_w > app.ui.view_width - AppScale(12) {
-        x = app.ui.view_width - AppScale(12) - total_w
-    }
-
-    {
-        i: s32 = 0
-        while i < 3 {
-            if Button(CurrentApp().ui.session, ButtonProps.{
-                    .bounds = Rectangle.{cast(float32)(x + i * (btn_w + gap)), cast(float32)(y), cast(float32)(btn_w), cast(float32)(btn_h)},
-                    .label = labels[i],
-                    .tone = cast(ButtonTone)ButtonToneNeutral,
-                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-                    .disabled = false
-                }) != 0 {
-                extend_session(app, add_seconds[i])
-            }
-            i += 1
-        }
-    }
-
-    if app.meditation.complete_waiting != 0 {
-        finish_x := center_x - finish_w / 2
-        finish_y := y + btn_h + AppScale(10)
-
-        if finish_x < AppScale(12) {
-            finish_x = AppScale(12)
-        }
-        if finish_x + finish_w > app.ui.view_width - AppScale(12) {
-            finish_x = app.ui.view_width - AppScale(12) - finish_w
-        }
-
-        if Button(CurrentApp().ui.session, ButtonProps.{
-                .bounds = Rectangle.{cast(float32)(finish_x), cast(float32)(finish_y), cast(float32)(finish_w), cast(float32)(btn_h)},
-                .label = LocaleText("finish_button"),
-                .tone = cast(ButtonTone)ButtonToneAccent,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-                .disabled = false
-            }) != 0 {
-            finish(app)
-        }
-    }
-}
-
 // A meditation waiting at its end to be extended has finished its time;
 // the floating window shows that with the time so far.
 meditation_window_result :: (app: *InnerBreeze, result: *SessionResult) -> s32 {
@@ -515,26 +462,69 @@ meditation_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) 
     return AppTextFromCString(*status[0], cast(s32)status.count)
 }
 
-meditation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
-    time_text: [32] u8
-    font: s32
-    circle: Color = StyleTokenColor("accent")
-    circle_radius := AppScale(86)
-    title_h := PracticeTitleBarHeight()
+// ---- The circle, time and extend controls, which Practices draws ----------
 
-    // On a short screen the circle reaches under the title bar, so it comes
-    // first. The question asked on leaving shows the page without it.
-    if app.modal.active == 0 ||
-    app.modal.type != cast(ModalType)ModalConfirmExitSession {
-        center := Vector2.{cast(float32)center_x, cast(float32)center_y}
-        Circle(app.ui.session, CircleProps.{.center = center,
-                .radius = cast(float32)(circle_radius + AppScale(20)),
-                .fill = color_with_alpha(circle, 0.24f)})
-        Circle(app.ui.session, CircleProps.{.center = center,
-                .radius = cast(float32)circle_radius, .fill = circle})
+practice_meditation_frame: PracticeMeditationFrame;
+practice_meditation_frame_codec: WidgetPracticeMeditationFrameCodec;
+
+PracticeMeditationCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "meditation_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
     }
+    name := TextFromCString(function)
+    if name == "ReadPracticeMeditationHost" && count == 0 {
+        result.* = WidgetEncodePracticeMeditationFrame(practice_meditation_frame,
+            *practice_meditation_frame_codec)
+        return 1
+    }
+    if name == "WritePracticeMeditationHost" && count == 1 &&
+    WidgetValidPracticeMeditationFrame(arguments[0]) {
+        observed := WidgetDecodePracticeMeditationFrame(arguments[0],
+            *practice_meditation_frame_codec)
+        practice_meditation_frame.action = observed.action
+        practice_meditation_frame.value = observed.value
+        return 1
+    }
+    return 0
+}
 
-    if PracticeTitleBar(app, LocaleText("meditation_title"), title_h) {
+// Has Practices draw the circle with the time left and the extend controls;
+// returns what was pressed there. The question asked on leaving shows the
+// page without them.
+meditation_draw_content :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> PracticeMeditationFrame {
+    if app.modal.active != 0 &&
+    app.modal.type == cast(ModalType)ModalConfirmExitSession {
+        return PracticeMeditationFrame.{}
+    }
+    time_text: [32]u8
+    format_time(time_text[:], app.meditation.remaining_seconds)
+    practice_meditation_frame = PracticeMeditationFrame.{.session = app.ui.session,
+        .scale = MetricsScale(), .view_width = app.ui.view_width,
+        .center_x = center_x, .center_y = center_y,
+        .accent_color = StyleTokenColor("accent"),
+        .ink_class = KssClassId(KssMakeName("circle-ink")),
+        .time_text = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*time_text[0], 32)),
+        .extend = app.meditation.show_extend_controls != 0,
+        .complete = app.meditation.complete_waiting != 0,
+        .finish_label = LocaleText("finish_button")}
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    AppsUiBegin(PracticeMeditationCall, cast(*void)app)
+    drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_MEDITATION_VIEW})
+    AppsUiEnd()
+    WidgetHostEnd()
+    if !drawn.succeeded {
+        return PracticeMeditationFrame.{}
+    }
+    return practice_meditation_frame
+}
+
+meditation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
+    // On a short screen the circle reaches under the title bar, so it comes
+    // first.
+    content := meditation_draw_content(app, center_x, center_y)
+
+    if PracticeTitleBar(app, LocaleText("meditation_title"), PracticeTitleBarHeight()) {
         meditation_request_exit(app)
         return
     }
@@ -545,23 +535,12 @@ meditation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
 
     practice_draw_audio_controls(app)
 
-    format_time(time_text[:], app.meditation.remaining_seconds)
-    time_label := AppTextFromCString(*time_text[0], 32)
-    font = AppFitFontSize(time_label, circle_radius * 2 - AppScale(20),
-        AppScale(Text24), AppScale(Text16))
-    Text(CurrentApp().ui.session, TextProps.{
-            .text = FrameTextHold(*app.ui.frame_text, time_label),
-            .bounds = Rectangle.{cast(float32)(center_x - circle_radius),
-                cast(float32)(center_y - circle_radius),
-                cast(float32)(circle_radius * 2), cast(float32)(circle_radius * 2)},
-            .font = font,
-            .class_name = KssClassId(KssMakeName("circle-ink")),
-            .wrap = cast(TextWrap)TextWrapNone,
-            .align = cast(TextAlign)TextAlignCenter,
-            .vertical_align = cast(TextAlign)TextAlignCenter
-        })
-
-    draw_extend_controls(app, center_x, center_y + circle_radius + AppScale(24))
+    if content.action == PRACTICE_MEDITATION_EXTEND {
+        extend_session(app, content.value)
+    } else if content.action == PRACTICE_MEDITATION_FINISH &&
+    app.meditation.complete_waiting != 0 {
+        finish(app)
+    }
     if app.meditation.complete_waiting != 0 {
         return
     }

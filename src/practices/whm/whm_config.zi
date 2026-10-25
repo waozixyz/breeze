@@ -18,6 +18,9 @@ GetFrameTime :: () -> float32 #foreign c;
 #import "widgets"
 #import "meditation_music"
 #import "whm_session"
+#import "practice_settings_host"
+#import "practice_types"
+#import "practice_ui_types"
 
 
 #import "practice_screen_calls"
@@ -126,506 +129,186 @@ whm_preview_step_elapsed :: (preview: *BreathSession, remainder: *float64) {
     }
 }
 
-whm_draw_exact_speed_preview :: (preview: *BreathSession, preview_speed: *s32,
-    speed: s32, max_rounds: s32, max_breaths: s32,
-    pause_seconds: s32, animation: s32,
-    content_w: s32, content_h: s32,
-    center_x: s32, center_y: s32,
-    remainder: *float64) {
-    if preview == null || preview_speed == null {
-        return
+// The preview's share of its range now: 0 at its smallest, 1 at its largest.
+whm_preview_share :: (preview: *BreathSession, fraction: float32) -> float32 {
+    span := preview.rmax - preview.rmin
+    if span <= 0 {
+        return 0.0
     }
-
-    if whm_preview_needs_reset(preview, speed, max_rounds, max_breaths,
-        pause_seconds, animation) != 0 || preview_speed.* != speed {
-        whm_preview_reset(preview, speed, max_rounds, max_breaths,
-            pause_seconds, animation, content_w, content_h,
-            remainder)
-        preview_speed.* = speed
-    } else {
-        update_preview_bounds(preview, content_w, content_h)
+    share := (BreathDrawRadiusAt(preview.*, fraction) - cast(float32)preview.rmin) /
+        cast(float32)span
+    if share < 0.0 {
+        return 0.0
     }
-
-    whm_preview_step_elapsed(preview, remainder)
-    fraction: float32 = 0.0
-    if remainder != null { fraction = cast(float32)remainder.* }
-    draw_breath_preview(preview, center_x, center_y, fraction)
+    if share > 1.0 {
+        return 1.0
+    }
+    return share
 }
 
-whm_draw_progressive_start_speed_editor :: (app: *InnerBreeze) {
-    if app == null {
-        return
+// Steps a preview breathing at these settings, starting it again when they
+// changed or its round ended. Only the share of its range is drawn, so its
+// room does not matter here.
+whm_preview_advance :: (preview: *BreathSession, speed: s32, max_rounds: s32,
+    max_breaths: s32, pause_seconds: s32, animation: s32, remainder: *float64,
+    step: bool) -> float32 {
+    room := AppScale(240)
+    if whm_preview_needs_reset(preview, speed, max_rounds, max_breaths, pause_seconds,
+        animation) != 0 {
+        whm_preview_reset(preview, speed, max_rounds, max_breaths, pause_seconds,
+            animation, room, room, remainder)
     }
-    max_speed := app.breathing.speed_level
-    start_speed := WhmConfigClamp(app.breathing.progressive_start_speed,
-        SETTINGS_SPEED_MIN, max_speed)
-    frame := ModalFrame(app.ui.session, ModalFrameProps.{
-            .key = KeyHash("whm/start_speed"),
-            .title = LocaleText("progressive_start_speed_editor_title"),
-            .width = AppScale(340),
-            .height = AppScale(360),
-            .scale = MetricsScale(),
-            .has_right_action = true,
-            .right_label = LocaleText("close_button")
-        })
-    if frame.dismissed || frame.right_clicked {
-        app_close_modal(app)
-        return
+    if step {
+        whm_preview_step_elapsed(preview, remainder)
     }
-    if !frame.opened {
-        return
+    if preview.phase != BreathPhaseBreathe {
+        whm_preview_reset(preview, speed, max_rounds, max_breaths, pause_seconds,
+            animation, room, room, remainder)
     }
-    content := frame.layout.content
-    content_x := cast(s32)content.x
-    content_y := cast(s32)content.y
-    content_w := cast(s32)content.width
-    whm_draw_exact_speed_preview(*app.start_speed_preview,
-        *app.start_speed_preview_speed, start_speed,
-        app.breathing.max_rounds,
-        BreathDigitsRead(app.breathing.maxbreaths[:]),
-        app.breathing.pause_seconds,
-        app.breathing.breath_animation,
-        content_w, AppScale(180),
-        content_x + content_w / 2,
-        content_y + AppScale(90),
-        *whm_start_speed_preview_remainder)
-    slider_y := content_y + AppScale(206)
-    if commit_slider_row(app, 12, content_x, content_w,
-        *slider_y, AppScale(56), LocaleText("progressive_start_speed_label"),
-        SETTINGS_SPEED_MIN, max_speed, *start_speed, "", 0) != 0 {
-        app.breathing.progressive_start_speed = start_speed
-    }
-    unused End(app.ui.session)
+    return whm_preview_share(preview, cast(float32)remainder.*)
 }
 
-whm_config_draw_card :: (x: s32, y: s32, w: s32, h: s32) {
-    bounds := Rectangle.{cast(float32)x, cast(float32)y, cast(float32)w, cast(float32)h }
-    // The corners round off 8% of the card's shorter side.
-    shorter := w
-    if h < shorter {
-        shorter = h
-    }
-
-    Box(CurrentApp().ui.session, BoxProps.{.bounds = bounds,
-            .fill = StyleTokenColor("surface"),
-            .border = StyleTokenColor("border"),
-            .radius = 0.08 * cast(float32)shorter * 0.5})
-}
-
-whm_config_breath_card_height :: (app: *InnerBreeze) -> s32 {
-    h := AppScale(88) + AppScale(154) + AppScale(78) +          AppScale(72)
-
-    if app != null && app.breathing.progressive_speed != 0 {
-        h += AppScale(66)
-    }
-    return h
-}
-
-whm_config_session_card_height :: () -> s32 {
-    return AppScale(82) * 3 + AppScale(24)
-}
-
-whm_config_options_card_height :: () -> s32 {
-    return AppScale(22) * 2 + AppScale(88) * 2 + AppScale(26 + 48)
-}
-
-whm_config_draw_breath_card :: (app: *InnerBreeze, content_x: s32, content_w: s32,
-    y: s32) -> s32 {
-    animation_options: [WhmAnimationOptionCount]DropdownOption
-    card_h := whm_config_breath_card_height(app)
-    card_pad := AppScale(22)
-    card_x := content_x
-    inner_x := content_x + card_pad
-    inner_w := content_w - card_pad * 2
-    inner_y := y + card_pad
-    preview_h := AppScale(144)
+// The Customize page's frame: the settings, and the previews breathing.
+whm_settings_frame :: (app: *InnerBreeze) -> PracticeSettingsFrame {
+    frame := practice_settings_frame_for(app, EXERCISE_WIM_HOF)
     speed := app.breathing.speed_level
     max_rounds := app.breathing.max_rounds
     max_breaths := BreathDigitsRead(app.breathing.maxbreaths[:])
     pause_seconds := app.breathing.pause_seconds
-    progressive_start_speed := app.breathing.progressive_start_speed
-    progressive_speed := app.breathing.progressive_speed
-    // Off and On toggles take the room their labels need.
-    toggle_size := ToggleMinimumSize(ToggleProps.{
-            .off_label = LocaleText("toggle_off"),
-            .on_label = LocaleText("toggle_on")})
-    toggle_w := cast(s32)toggle_size.x
-    toggle_h := cast(s32)toggle_size.y
-    if toggle_h < AppScale(30) {
-        toggle_h = AppScale(30)
-    }
-
-    animation_options[0] = DropdownOption.{.label = LocaleText("breath_animation_linear")}
-    animation_options[1] = DropdownOption.{.label = LocaleText("breath_animation_in_out")}
     app.breathing.breath_animation = WhmConfigClamp(app.breathing.breath_animation,
-        BreathAnimationLinear,
-        BreathAnimationCount - 1)
+        BreathAnimationLinear, BreathAnimationCount - 1)
+    if app.breathing.progressive_speed != 0 {
+        start := WhmConfigClamp(app.breathing.progressive_start_speed, SETTINGS_SPEED_MIN, speed)
+        if start != app.breathing.progressive_start_speed {
+            app.breathing.progressive_start_speed = start
+            app.settings_preview.progressive_start_speed = start
+            app.settings_dirty = 1
+        }
+    }
+    editing := app.modal.active != 0 &&
+    app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed
+    // Customize itself may be a full-screen modal; any other modal covers
+    // this page, and the preview holds still behind it.
+    covered := app.modal.active != 0 && app.modal.type != cast(ModalType)ModalPracticeConfig
+    frame.whm_preview = whm_preview_advance(*app.settings_preview, speed, max_rounds,
+        max_breaths, pause_seconds, app.breathing.breath_animation,
+        *whm_config_preview_remainder, !covered)
+    if editing {
+        start_speed := WhmConfigClamp(app.breathing.progressive_start_speed,
+            SETTINGS_SPEED_MIN, speed)
+        if app.start_speed_preview_speed != start_speed {
+            app.start_speed_preview.phase = BreathPhaseStarting
+            app.start_speed_preview_speed = start_speed
+        }
+        frame.whm_editor_preview = whm_preview_advance(*app.start_speed_preview, start_speed,
+            max_rounds, max_breaths, pause_seconds, app.breathing.breath_animation,
+            *whm_start_speed_preview_remainder, true)
+    }
+    frame.whm_animation = app.breathing.breath_animation
+    frame.whm_speed = speed
+    frame.whm_speed_min = SETTINGS_SPEED_MIN
+    frame.whm_speed_max = SETTINGS_SPEED_MAX
+    frame.whm_rounds = max_rounds
+    frame.whm_rounds_max = MaxRounds
+    frame.whm_breaths = max_breaths
+    frame.whm_breaths_min = SETTINGS_BREATHS_MIN
+    frame.whm_breaths_max = SETTINGS_BREATHS_MAX
+    frame.whm_pause = pause_seconds
+    frame.whm_pause_min = SETTINGS_PAUSE_MIN
+    frame.whm_pause_max = SETTINGS_PAUSE_MAX
+    frame.whm_progressive = app.breathing.progressive_speed != 0
+    frame.whm_start_speed = WhmConfigClamp(app.breathing.progressive_start_speed,
+        SETTINGS_SPEED_MIN, speed)
+    frame.whm_double_tap = app.double_tap_to_breathe != 0
+    frame.whm_controls = app.advanced_session_controls != 0
+    frame.whm_reminder = app.hold_reminder_seconds
+    frame.whm_editor = editing
+    frame.surface_color = StyleTokenColor("surface")
+    frame.border_color = StyleTokenColor("border")
+    frame.link_color = StyleTokenColor("link")
+    frame.text_color = StyleTokenColor("text")
+    return frame
+}
 
-    whm_config_draw_card(card_x, y, content_w, card_h)
+// Applies the round's settings to the session and its preview.
+whm_settings_rounds :: (app: *InnerBreeze, speed: s32, max_rounds: s32, max_breaths: s32,
+    pause_seconds: s32) {
+    apply_settings(*app.breathing, speed, max_rounds, max_breaths, pause_seconds)
+    apply_settings(*app.settings_preview, speed, max_rounds, max_breaths, pause_seconds)
+    app.settings_dirty = 1
+}
 
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(inner_x), cast(float32)(inner_y), 0, 0},
-            .text = (LocaleText("breath_animation_label")),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    animation_pick := Dropdown(CurrentApp().ui.session, DropdownProps.{.id = 104,
-            .bounds = Rectangle.{cast(float32)inner_x,
-                cast(float32)(inner_y + AppScale(26)),
-                cast(float32)inner_w, cast(float32)AppScale(48)},
-            .selected_index = app.breathing.breath_animation},
-        animation_options[:])
-    if animation_pick.changed {
-        app.breathing.breath_animation = animation_pick.selected_index
-        app.breathing.breath_animation = WhmConfigClamp(app.breathing.breath_animation,
-            BreathAnimationLinear,
+// Does what Customize asked for; the music is Customize's own.
+whm_settings_apply :: (app: *InnerBreeze, frame: PracticeSettingsFrame) {
+    action := frame.action
+    value := frame.value
+    speed := app.breathing.speed_level
+    max_rounds := app.breathing.max_rounds
+    max_breaths := BreathDigitsRead(app.breathing.maxbreaths[:])
+    pause_seconds := app.breathing.pause_seconds
+    if action == PRACTICE_SETTINGS_WHM_ANIMATION {
+        app.breathing.breath_animation = WhmConfigClamp(value, BreathAnimationLinear,
             BreathAnimationCount - 1)
         app.settings_preview.breath_animation = app.breathing.breath_animation
         app.settings_preview.progressive_speed = 0
         app.settings_dirty = 1
-    }
-    inner_y += AppScale(82)
-
-    if whm_preview_needs_reset(*app.settings_preview, speed, max_rounds,
-        max_breaths, pause_seconds,
-        app.breathing.breath_animation) != 0 {
-        whm_preview_reset(*app.settings_preview, speed, max_rounds,
-            max_breaths, pause_seconds,
-            app.breathing.breath_animation, inner_w,
-            preview_h, *whm_config_preview_remainder)
-    } else {
-        update_preview_bounds(*app.settings_preview, inner_w, preview_h)
-    }
-    Circle(CurrentApp().ui.session, CircleProps.{
-            .center = Vector2.{cast(float32)(inner_x + inner_w / 2),
-                cast(float32)(inner_y + preview_h / 2)},
-            .radius = cast(float32)AppScale(72),
-            .fill = color_with_alpha(StyleTokenColor("link"), 0.16f),
-            .edge = color_with_alpha(StyleTokenColor("canvas"), 0.0f),
-            .has_edge = true})
-    // Customize itself may be a full-screen modal; any other modal covers
-    // this page, and the preview holds still behind it.
-    covered_by_modal := app.modal.active != 0 &&
-    app.modal.type != cast(ModalType)ModalPracticeConfig
-    if !covered_by_modal {
-        whm_preview_step_elapsed(*app.settings_preview,
-            *whm_config_preview_remainder)
-    }
-    if app.settings_preview.phase != BreathPhaseBreathe {
-        whm_preview_reset(*app.settings_preview, speed, max_rounds,
-            max_breaths, pause_seconds,
-            app.breathing.breath_animation, inner_w,
-            preview_h, *whm_config_preview_remainder)
-    }
-    draw_breath_preview(*app.settings_preview,
-        inner_x + inner_w / 2,
-        inner_y + preview_h / 2, cast(float32)whm_config_preview_remainder)
-    inner_y += preview_h + AppScale(20)
-
-    if commit_slider_row(app, 1, inner_x, inner_w, *inner_y, AppScale(78),
-        LocaleText("speed_label"), SETTINGS_SPEED_MIN, SETTINGS_SPEED_MAX,
-        *speed, "", 0) != 0 {
-        apply_settings(*app.breathing, speed, max_rounds, max_breaths, pause_seconds)
-        apply_settings(*app.settings_preview, speed, max_rounds,
-            max_breaths, pause_seconds)
+    } else if action == PRACTICE_SETTINGS_WHM_SPEED {
+        whm_settings_rounds(app, WhmConfigClamp(value, SETTINGS_SPEED_MIN, SETTINGS_SPEED_MAX),
+            max_rounds, max_breaths, pause_seconds)
         app.settings_preview.progressive_speed = 0
-    }
-
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(inner_x), cast(float32)(inner_y), 0, 0},
-            .text = (LocaleText("progressive_speed_label")),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    progressive_toggle := Toggle(CurrentApp().ui.session,
-        ToggleProps.{.id = 1101,
-            .bounds = Rectangle.{cast(float32)(inner_x + inner_w - toggle_w),
-                cast(float32)(inner_y + (AppScale(58) - toggle_h) / 2),
-                cast(float32)toggle_w, cast(float32)toggle_h},
-            .value = progressive_speed != 0,
-            .off_label = LocaleText("toggle_off"),
-            .on_label = LocaleText("toggle_on")})
-    if progressive_toggle.changed {
-        app.breathing.progressive_speed = ifx (progressive_toggle.value) then (1) else (0)
+    } else if action == PRACTICE_SETTINGS_WHM_PROGRESSIVE {
+        app.breathing.progressive_speed = ifx value != 0 then 1 else 0
         app.settings_preview.progressive_speed = 0
         app.settings_dirty = 1
-    }
-    inner_y += AppScale(58)
-
-    if app.breathing.progressive_speed != 0 {
-        modify_w := AppTextWidth(LocaleText("modify_start_speed_button"),
-            AppFontSize()) + AppScale(24)
-
-
-        if modify_w > inner_w {
-            modify_w = inner_w
-        }
-        if progressive_start_speed != WhmConfigClamp(progressive_start_speed,
-            SETTINGS_SPEED_MIN, speed) {
-            app.breathing.progressive_start_speed =
-            WhmConfigClamp(progressive_start_speed, SETTINGS_SPEED_MIN, speed)
-            app.settings_preview.progressive_start_speed =
-            app.breathing.progressive_start_speed
-            app.settings_dirty = 1
-        }
-        if Button(CurrentApp().ui.session, ButtonProps.{
-                .bounds = Rectangle.{cast(float32)(inner_x), cast(float32)(inner_y), cast(float32)(modify_w), cast(float32)(AppScale(48))},
-                .label = LocaleText("modify_start_speed_button"),
-                .tone = cast(ButtonTone)ButtonToneNeutral,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-                .disabled = false
-            }) != 0 {
-            app_open_modal(app, cast(ModalType)ModalEditProgressiveStartSpeed)
-        }
-    }
-
-    return y + card_h + AppScale(16)
-}
-
-whm_config_draw_session_card :: (app: *InnerBreeze, content_x: s32, content_w: s32,
-    y: s32) -> s32 {
-    speed := app.breathing.speed_level
-    max_rounds := app.breathing.max_rounds
-    max_breaths := BreathDigitsRead(app.breathing.maxbreaths[:])
-    pause_seconds := app.breathing.pause_seconds
-    card_h := whm_config_session_card_height()
-    card_pad := AppScale(22)
-    inner_x := content_x + card_pad
-    inner_w := content_w - card_pad * 2
-    inner_y := y + card_pad
-
-    whm_config_draw_card(content_x, y, content_w, card_h)
-
-    if commit_slider_row(app, 2, inner_x, inner_w, *inner_y, AppScale(82),
-        LocaleText("max_rounds_label"), 1, MaxRounds,
-        *max_rounds, "", 0) != 0 {
-        apply_settings(*app.breathing, speed, max_rounds, max_breaths, pause_seconds)
-        apply_settings(*app.settings_preview, speed, max_rounds,
-            max_breaths, pause_seconds)
-    }
-
-    if commit_slider_row(app, 3, inner_x, inner_w, *inner_y, AppScale(82),
-        LocaleText("max_breaths_label"), SETTINGS_BREATHS_MIN,
-        SETTINGS_BREATHS_MAX, *max_breaths, "", 0) != 0 {
-        apply_settings(*app.breathing, speed, max_rounds, max_breaths, pause_seconds)
-        apply_settings(*app.settings_preview, speed, max_rounds,
-            max_breaths, pause_seconds)
-    }
-
-    if commit_slider_row(app, 4, inner_x, inner_w, *inner_y, AppScale(56),
-        LocaleText("pause_after_round_label"), SETTINGS_PAUSE_MIN,
-        SETTINGS_PAUSE_MAX, *pause_seconds, "s", 0) != 0 {
-        apply_settings(*app.breathing, speed, max_rounds, max_breaths, pause_seconds)
-        apply_settings(*app.settings_preview, speed, max_rounds,
-            max_breaths, pause_seconds)
-    }
-
-    return y + card_h + AppScale(16)
-}
-
-whm_config_draw_options_card :: (app: *InnerBreeze, content_x: s32, content_w: s32,
-    y: s32) -> s32 {
-    double_tap_to_breathe := app.double_tap_to_breathe
-    advanced_session_controls := app.advanced_session_controls
-    reminder_index: s32 = 0
-    if app.hold_reminder_seconds == 30 {
-        reminder_index = 1
-    } else if app.hold_reminder_seconds == 60 {
-        reminder_index = 2
-    }
-    reminder_seconds: [3]s32 = .[0, 30, 60]
-    reminder_options: [3]DropdownOption
-    reminder_options[0] = DropdownOption.{.label = LocaleText("whm_hold_reminder_off")}
-    reminder_options[1] = DropdownOption.{.label = LocaleText("whm_hold_reminder_30s")}
-    reminder_options[2] = DropdownOption.{.label = LocaleText("whm_hold_reminder_60s")}
-    card_h := whm_config_options_card_height()
-    card_pad := AppScale(22)
-    inner_x := content_x + card_pad
-    inner_w := content_w - card_pad * 2
-    inner_y := y + card_pad
-    // Off and On toggles take the room their labels need.
-    toggle_size := ToggleMinimumSize(ToggleProps.{
-            .off_label = LocaleText("toggle_off"),
-            .on_label = LocaleText("toggle_on")})
-    toggle_w := cast(s32)toggle_size.x
-    toggle_h := cast(s32)toggle_size.y
-    if toggle_h < AppScale(30) {
-        toggle_h = AppScale(30)
-    }
-
-    whm_config_draw_card(content_x, y, content_w, card_h)
-
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(inner_x), cast(float32)(inner_y), 0, 0},
-            .text = (LocaleText("double_tap_to_breathe_label")),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    double_tap_toggle := Toggle(CurrentApp().ui.session, ToggleProps.{.id = 1201,
-            .bounds = Rectangle.{cast(float32)(inner_x + inner_w - toggle_w),
-                cast(float32)(inner_y + (AppScale(60) - toggle_h) / 2),
-                cast(float32)toggle_w, cast(float32)toggle_h},
-            .value = double_tap_to_breathe != 0,
-            .off_label = LocaleText("toggle_off"),
-            .on_label = LocaleText("toggle_on")})
-    if double_tap_toggle.changed {
-        app.double_tap_to_breathe = ifx (double_tap_toggle.value) then (1) else (0)
+    } else if action == PRACTICE_SETTINGS_WHM_START_EDITOR {
+        app_open_modal(app, cast(ModalType)ModalEditProgressiveStartSpeed)
+    } else if action == PRACTICE_SETTINGS_WHM_ROUNDS {
+        whm_settings_rounds(app, speed, WhmConfigClamp(value, 1, MaxRounds), max_breaths,
+            pause_seconds)
+    } else if action == PRACTICE_SETTINGS_WHM_BREATHS {
+        whm_settings_rounds(app, speed, max_rounds,
+            WhmConfigClamp(value, SETTINGS_BREATHS_MIN, SETTINGS_BREATHS_MAX), pause_seconds)
+    } else if action == PRACTICE_SETTINGS_WHM_PAUSE {
+        whm_settings_rounds(app, speed, max_rounds, max_breaths,
+            WhmConfigClamp(value, SETTINGS_PAUSE_MIN, SETTINGS_PAUSE_MAX))
+    } else if action == PRACTICE_SETTINGS_WHM_DOUBLE_TAP {
+        app.double_tap_to_breathe = ifx value != 0 then 1 else 0
         app.settings_dirty = 1
-    }
-    inner_y += AppScale(88)
-
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(inner_x), cast(float32)(inner_y), 0, 0},
-            .text = (LocaleText("advanced_session_controls_label")),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    controls_toggle := Toggle(CurrentApp().ui.session, ToggleProps.{.id = 1202,
-            .bounds = Rectangle.{cast(float32)(inner_x + inner_w - toggle_w),
-                cast(float32)(inner_y + (AppScale(60) - toggle_h) / 2),
-                cast(float32)toggle_w, cast(float32)toggle_h},
-            .value = advanced_session_controls != 0,
-            .off_label = LocaleText("toggle_off"),
-            .on_label = LocaleText("toggle_on")})
-    if controls_toggle.changed {
-        app.advanced_session_controls = ifx (controls_toggle.value) then (1) else (0)
+    } else if action == PRACTICE_SETTINGS_WHM_CONTROLS {
+        app.advanced_session_controls = ifx value != 0 then 1 else 0
         app.settings_dirty = 1
-    }
-    inner_y += AppScale(88)
-
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(inner_x), cast(float32)(inner_y), 0, 0},
-            .text = LocaleText("whm_hold_reminder_label"),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    reminder_pick := Dropdown(CurrentApp().ui.session, DropdownProps.{.id = 1203,
-            .bounds = Rectangle.{cast(float32)inner_x,
-                cast(float32)(inner_y + AppScale(26)),
-                cast(float32)inner_w, cast(float32)AppScale(48)},
-            .selected_index = reminder_index}, reminder_options[:])
-    if reminder_pick.changed {
-        app.hold_reminder_seconds = reminder_seconds[reminder_pick.selected_index]
+    } else if action == PRACTICE_SETTINGS_WHM_REMINDER && (value == 0 || value == 30 || value == 60) {
+        app.hold_reminder_seconds = value
         app.hold_reminder_last_bucket = 0
         app.settings_dirty = 1
-    }
-
-    return y + card_h + AppScale(16)
-}
-
-whm_config_draw_reset_button :: (app: *InnerBreeze, content_x: s32, content_w: s32,
-    y: s32) -> s32 {
-    speed := app.breathing.speed_level
-    max_rounds := app.breathing.max_rounds
-    max_breaths := BreathDigitsRead(app.breathing.maxbreaths[:])
-    pause_seconds := app.breathing.pause_seconds
-    reset_w := AppTextWidth(LocaleText("reset_to_defaults_label"),
-        AppFontSize()) + AppScale(24)
-    reset_h := AppScale(48)
-
-
-    if reset_w > content_w {
-        reset_w = content_w
-    }
-    if Button(CurrentApp().ui.session, ButtonProps.{
-            .bounds = Rectangle.{cast(float32)(content_x + content_w - reset_w), cast(float32)(y), cast(float32)(reset_w), cast(float32)(reset_h)},
-            .label = LocaleText("reset_to_defaults_label"),
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-            .disabled = false
-        }) != 0 {
-        speed = DefaultSpeedLevel
-        max_rounds = DefaultMaxRounds
-        max_breaths = DefaultMaxBreaths
-        pause_seconds = DefaultPauseSeconds
+    } else if action == PRACTICE_SETTINGS_WHM_RESET {
         app.breathing.progressive_start_speed = DefaultProgressiveStartSpeed
         app.settings_preview.progressive_start_speed = DefaultProgressiveStartSpeed
         app.breathing.breath_animation = BreathAnimationLinear
         app.settings_preview.breath_animation = BreathAnimationLinear
         app.advanced_session_controls = 0
         app.double_tap_to_breathe = 0
-        apply_settings(*app.breathing, speed, max_rounds, max_breaths, pause_seconds)
-        apply_settings(*app.settings_preview, speed, max_rounds,
-            max_breaths, pause_seconds)
+        whm_settings_rounds(app, DefaultSpeedLevel, DefaultMaxRounds, DefaultMaxBreaths,
+            DefaultPauseSeconds)
+    } else if action == PRACTICE_SETTINGS_WHM_START_SPEED {
+        app.breathing.progressive_start_speed = WhmConfigClamp(value, SETTINGS_SPEED_MIN, speed)
         app.settings_dirty = 1
+    } else if action == PRACTICE_SETTINGS_WHM_EDITOR_CLOSE {
+        app_close_modal(app)
+    } else {
+        practice_settings_apply(app, EXERCISE_WIM_HOF, frame)
     }
-    return y + reset_h + AppScale(24)
 }
 
-whm_config_draw_combined :: (app: *InnerBreeze, content_x: s32, content_w: s32,
-    y: s32) -> s32 {
-    y = whm_config_draw_breath_card(app, content_x, content_w, y)
-    y = whm_config_draw_session_card(app, content_x, content_w, y)
-    y = whm_config_draw_options_card(app, content_x, content_w, y)
-    y += AppScale(24)
-
-    meditation_music_draw_practice_settings(app, EXERCISE_WIM_HOF,
-        content_x, content_w, *y, 0, 1)
-    y += AppScale(12)
-    y = whm_config_draw_reset_button(app, content_x, content_w, y)
-
-    return y
-}
-
-whm_config_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
-    integrated := app.breathing.screen == ScreenStart &&
-    app.modal.type != cast(ModalType)ModalPracticeConfig
-    bottom_padding := (ifx (integrated) then (app_content_bottom_reserved(app)) else (0)) + AppScale(24)
-
-    return whm_config_breath_card_height(app) + AppScale(16) +            whm_config_session_card_height() + AppScale(16) +            whm_config_options_card_height() + AppScale(40) +            meditation_music_measure_practice_settings(app, EXERCISE_WIM_HOF,
-        content_w, 0, 1) +            AppScale(12) +            AppScale(48) + AppScale(24) +            bottom_padding
-}
-
+// Practices draws the page (apps/practice/settings_view.zi).
 whm_config_screen_draw :: (app: *InnerBreeze) {
-    if app == null {
+    if app == null || !SessionValid(app.ui.session) {
         return
     }
-    layout := PracticeSubscreenLayout.{}
-    side_padding := GetPageSidePadding()
-    max_content_w := AppScale(CONTENT_MAX_W)
-    content_x: s32 = 0
-    content_w: s32 = 0
-    if app.practice_config_tab < 0 || app.practice_config_tab > 1 {
-        app.practice_config_tab = 0
-    }
-
-    PracticeConfigLayout(app, cast(s32)ModalPracticeConfig, 0, *layout)
-    if PracticeConfigTitle(app, LocaleText("practice_configure_button"),
-        cast(s32)ModalPracticeConfig, 0) != 0 {
+    frame := PracticeSettingsRun(app, whm_settings_frame(app))
+    if frame.action == PRACTICE_SETTINGS_BACK {
+        PracticeConfigLeave(app, cast(s32)ModalPracticeConfig)
         return
     }
-
-    available_w := app.ui.view_width - side_padding * 2
-    top_gap := AppScale(16)
-
-    if max_content_w > available_w {
-        max_content_w = available_w
-    }
-    if max_content_w < available_w && app.ui.view_width <= AppScale(520) {
-        max_content_w = available_w
-    }
-    if max_content_w < AppScale(240) {
-        max_content_w = available_w
-    }
-    GetCenteredColumn(max_content_w, side_padding, *content_x, *content_w)
-    content_h := whm_config_content_height(app, content_w) + top_gap
-
-    {
-        scroll_1_bounds: Rectangle = Rectangle.{cast(float32)0, cast(float32)layout.scroll_y,
-            cast(float32)app.ui.view_width, cast(float32)layout.scroll_h
-        }
-        scroll_1_key: u64 = KeyHash("inbe/practices/whm/whm_config/scroll/1")
-        scroll_1_props: ScrollProps
-        scroll_1_props.key = scroll_1_key
-        scroll_1_props.bounds = scroll_1_bounds
-        scroll_1_props.content_height = content_h
-        scroll_1_props.scroll_offset = app.settings_scroll
-        scroll_1_result: ScrollResult = Scroll(CurrentApp().ui.session, scroll_1_props)
-        app.settings_scroll = scroll_1_result.scroll_offset
-        page: Rectangle = scroll_1_result.content
-
-        whm_config_draw_combined(app, content_x, content_w,
-            cast(s32)page.y + top_gap)
-        unused End(CurrentApp().ui.session)
-    }
-
-    if app.modal.active != 0 &&
-    app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed {
-        whm_draw_progressive_start_speed_editor(app)
-    }
+    whm_settings_apply(app, frame)
 }

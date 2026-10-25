@@ -1,0 +1,185 @@
+// A running Wim Hof round: the breathing circle with a band of ticks
+// showing the round's progress, counting down while waiting and recovering,
+// the count inside it, and while the breath is held the Breath button or the
+// hint to tap twice. The host keeps the round's clock, sounds and results,
+// draws the title bar, the controls and the question on leaving, and does
+// what was pressed.
+#import "std/math"
+#import "session"
+#import "geometry"
+#import "dpi"
+#import "drawing_props"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "text_measure"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "shape_props"
+#import "shape_widget"
+#import, file "../../src/apps/practice_ui_types.zi";
+#import, file "../../src/apps/practice_types.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using TextAlign;
+using TextWrap;
+host_api :: #system_library "host_api";
+ReadPracticeWhmHost :: () -> PracticeWhmFrame #foreign host_api;
+WritePracticeWhmHost :: (frame: PracticeWhmFrame) #foreign host_api;
+whm: PracticeWhmFrame;
+WHM_PI :: 3.14159265358979
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, whm.scale)
+}
+
+Width :: (text: string, font: s32) -> s32 {
+    return TextWidth(whm.session, TextProps.{.text = text, .font = font})
+}
+
+WithAlpha :: (color: Color, alpha: s32) -> Color {
+    color.a = cast(u8)alpha
+    return color
+}
+
+// Black text on a light circle, white on a dark one.
+Contrast :: (background: Color) -> Color {
+    luma := cast(s32)background.r * 299 + cast(s32)background.g * 587 + cast(s32)background.b * 114
+    if luma >= 128000 {
+        return Color.{0, 0, 0, 255}
+    }
+    return Color.{255, 255, 255, 255}
+}
+
+ThinRing :: (center: Vector2, radius: float32, color: Color) {
+    Ring(whm.session, RingProps.{.center = center, .inner_radius = radius - 0.75,
+            .outer_radius = radius + 0.75, .start_angle = 0.0, .end_angle = 360.0, .color = color})
+}
+
+// The circle, with the band inside its edge filling as the round goes on
+// (emptying while it counts down) and a tick for each step.
+ProgressCircle :: () {
+    gap := Scale(5)
+    band_width := Scale(10)
+    if band_width > whm.rmin - gap - 4 {
+        band_width = whm.rmin - gap - 4
+    }
+    if band_width < 1 {
+        band_width = 1
+    }
+    thickness := ifx whm.ticks <= 40 then Scale(3) else Scale(2)
+    if thickness < 1 {
+        thickness = 1
+    }
+    outer := whm.radius - cast(float32)gap
+    inner := outer - cast(float32)band_width
+    center := Vector2.{cast(float32)whm.center_x, cast(float32)whm.center_y}
+    Circle(whm.session, CircleProps.{.center = center, .radius = whm.radius, .fill = whm.accent_color})
+    if outer <= inner {
+        return
+    }
+    contrast := Contrast(whm.accent_color)
+    band := WithAlpha(contrast, 72)
+    Ring(whm.session, RingProps.{.center = center, .inner_radius = inner, .outer_radius = outer,
+            .start_angle = 0.0, .end_angle = 360.0, .color = WithAlpha(contrast, 30)})
+    progress := whm.progress
+    if whm.countdown {
+        if progress < 1.0 {
+            Ring(whm.session, RingProps.{.center = center, .inner_radius = inner,
+                    .outer_radius = outer, .start_angle = -450.0,
+                    .end_angle = -90.0 - 360.0 * progress, .color = band})
+        }
+    } else if progress > 0.0 {
+        Ring(whm.session, RingProps.{.center = center, .inner_radius = inner, .outer_radius = outer,
+                .start_angle = -90.0, .end_angle = -90.0 + 360.0 * progress, .color = band})
+    }
+    ring := WithAlpha(contrast, 175)
+    ThinRing(center, inner, ring)
+    ThinRing(center, outer, ring)
+    ticks := whm.ticks
+    if ticks < 1 {
+        ticks = 1
+    }
+    for index: cast(s32)0..ticks - 1 {
+        share := cast(float32)index / cast(float32)ticks
+        direction: float32 = ifx whm.countdown then -1.0 else 1.0
+        angle := -WHM_PI * 0.5 + cast(float64)(direction * share) * 2.0 * WHM_PI
+        if whm.countdown && index == 0 {
+            share = 1.0
+        }
+        done := share <= progress + 0.0001
+        if whm.countdown {
+            done = share > progress + 0.0001
+        }
+        c := cast(float32)Cos(angle)
+        s := cast(float32)Sin(angle)
+        Line(whm.session, LineProps.{
+                .start = Vector2.{center.x + c * inner, center.y + s * inner},
+                .end = Vector2.{center.x + c * outer, center.y + s * outer},
+                .thickness = cast(float32)thickness,
+                .color = WithAlpha(contrast, ifx done then 235 else 96)})
+    }
+}
+
+Count :: () {
+    radius := cast(s32)whm.radius
+    font: s32 = Text48
+    while font > Text24 && Width(whm.count, font) > cast(s32)(cast(float32)radius * 1.12) {
+        font -= 1
+    }
+    Text(whm.session, TextProps.{.text = whm.count,
+            .bounds = Rectangle.{cast(float32)(whm.center_x - radius), cast(float32)(whm.center_y - radius),
+                cast(float32)(radius * 2), cast(float32)(radius * 2)},
+            .font = font, .class_name = whm.ink_class, .wrap = cast(TextWrap)TextWrapNone,
+            .align = cast(TextAlign)TextAlignCenter, .vertical_align = cast(TextAlign)TextAlignCenter})
+}
+
+// The hint to tap twice under the circle, or the Breath button across its
+// lower edge.
+Hold :: () {
+    if whm.double_tap {
+        width := Width(whm.hint, whm.font)
+        y := whm.center_y + whm.rmax + Scale(12)
+        if y > whm.breath_max_y {
+            y = whm.breath_max_y
+        }
+        Text(whm.session, TextProps.{.text = whm.hint,
+                .bounds = Rectangle.{cast(float32)(whm.center_x - width / 2), cast(float32)y, 0, 0},
+                .wrap = cast(TextWrap)TextWrapNone})
+        return
+    }
+    width := Width(whm.breath_label, Text16) + Scale(72)
+    if width < Scale(184) {
+        width = Scale(184)
+    }
+    if width > whm.view_width - Scale(24) {
+        width = whm.view_width - Scale(24)
+    }
+    y := whm.center_y + whm.rmax - Scale(42)
+    if y > whm.breath_max_y {
+        y = whm.breath_max_y
+    }
+    if Button(whm.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)(whm.center_x - width / 2), cast(float32)y,
+                cast(float32)width, cast(float32)(Text16 + Scale(28))},
+            .label = whm.breath_label, .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+        whm.action = PRACTICE_WHM_BREATH
+    }
+}
+
+PracticeWhmView :: (message: PracticeMessage) -> PracticeMessage {
+    whm = ReadPracticeWhmHost()
+    whm.action = PRACTICE_WHM_NONE
+    whm.value = 0
+    ProgressCircle()
+    Count()
+    if whm.hold {
+        Hold()
+    }
+    WritePracticeWhmHost(whm)
+    message.succeeded = true
+    return message
+}

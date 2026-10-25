@@ -1,5 +1,11 @@
-// The Customize pages of Meditation and Astral Projection, which Practices
-// draws (apps/practice/settings_view.zi). The host gives the settings, the
+#import, file "tai_chi/tai_chi_entry.zi";
+#import, file "practice_figure_host.zi";
+#import, file "sun_salutation/sun_salutation_rules.zi";
+#import, file "tai_chi/tai_chi_rules.zi";
+#import, file "tai_chi/tai_chi_course.zi";
+#import, file "tai_chi/tai_chi_draw.zi";
+// The Customize pages of Meditation, Breathing Patterns and Astral
+// Projection, which Practices draws (apps/practice/settings_view.zi). The host gives the settings, the
 // music tracks with the chosen track's download, and the languages narration
 // is recorded in, and saves each change the page asks for.
 c3 :: #system_library "c";
@@ -28,6 +34,7 @@ save_settings :: (app: *InnerBreeze) #foreign c3 "save_settings";
 #import, file "../screens/practice_screen_calls.zi";
 #import, file "../screens/practice_subscreen_layout.zi";
 #import, file "meditation/meditation_music.zi";
+#import, file "patterns/patterns_rules.zi";
 #import, file "practice_downloads.zi";
 #import, file "practice_voice_settings.zi";
 #import, file "../apps/practice_types.zi";
@@ -47,6 +54,7 @@ practice_settings_frame: PracticeSettingsFrame;
 practice_settings_frame_codec: WidgetPracticeSettingsFrameCodec;
 practice_settings_track_codec: WidgetPracticeMusicTrackCodec;
 practice_settings_language_codec: WidgetPracticeNarrationChoiceCodec;
+practice_settings_character_codec: WidgetPracticeCharacterChoiceCodec;
 // The languages narration is listed in this frame: each one's pack, code,
 // name, state and place among the app's languages.
 practice_settings_packs: [PRACTICE_SETTINGS_LANGUAGE_MAX]s32;
@@ -58,6 +66,9 @@ PracticeSettingsCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     app := cast(*InnerBreeze)context
     if TextFromCString(module) != "settings_view" {
+        if PracticeFigureCall(module, function, arguments, count, result) != 0 {
+            return 1
+        }
         return WidgetHostCall(context, module, function, arguments, count, result)
     }
     name := TextFromCString(function)
@@ -94,6 +105,16 @@ PracticeSettingsCall :: (context: *void, module: *u8, function: *u8,
                 .rank = practice_settings_ranks[index]}
         }
         result.* = WidgetEncodePracticeNarrationChoice(choice, *practice_settings_language_codec)
+        return 1
+    }
+    if name == "ReadPracticeCharacterHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        choice: PracticeCharacterChoice
+        if practice_settings_frame.practice == EXERCISE_TAI_CHI && index >= 0 && index < tai_chi_course.character_count {
+            choice.label = LocaleText(TaiChiCourseString(tai_chi_course.characters[index].name))
+        }
+        result.* = WidgetEncodePracticeCharacterChoice(choice, *practice_settings_character_codec)
         return 1
     }
     if name == "SettingsLocaleHost" && count == 1 &&
@@ -152,7 +173,7 @@ practice_settings_music :: (app: *InnerBreeze, practice: s32, frame: *PracticeSe
     } else {
         frame.music_status = FrameTextHold(*app.ui.frame_text,
             AppTextFromCString(*app.meditation.music_status[0],
-                size_of(type_of(app.meditation.music_status))))
+            size_of(type_of(app.meditation.music_status))))
     }
 }
 
@@ -160,6 +181,14 @@ practice_settings_music :: (app: *InnerBreeze, practice: s32, frame: *PracticeSe
 // failed, or while none is on this device.
 practice_settings_narration :: (app: *InnerBreeze, practice: s32, frame: *PracticeSettingsFrame) {
     voice := ""
+    if practice == EXERCISE_SUN_SALUTATION {
+        frame.narration_male = SalutationMaleVoice(app.sun_salutation_voice, app.sun_salutation.character)
+    } else if practice == EXERCISE_TAI_CHI {
+        frame.narration_male = TaiChiMaleVoice(app.tai_chi)
+    }
+    if frame.narration_male {
+        voice = "male"
+    }
     frame.narration = true
     frame.narration_enabled = app.voice_narration_enabled != 0
     frame.narration_voices = PracticeVoiceRecorded(practice, "male")
@@ -193,7 +222,12 @@ practice_settings_narration :: (app: *InnerBreeze, practice: s32, frame: *Practi
 practice_settings_frame_for :: (app: *InnerBreeze, practice: s32) -> PracticeSettingsFrame {
     integrated := PracticeConfigIntegrated(app, cast(s32)ModalPracticeConfig) != 0
     layout := PracticeSubscreenLayout.{}
-    top_gap := ifx practice == EXERCISE_ASTRAL_PROJECTION then AppScale(14) else AppScale(18)
+    top_gap := AppScale(18)
+    if practice == EXERCISE_ASTRAL_PROJECTION || practice == EXERCISE_SUN_SALUTATION {
+        top_gap = AppScale(14)
+    } else if practice == EXERCISE_WIM_HOF {
+        top_gap = 0
+    }
     PracticeConfigLayout(app, cast(s32)ModalPracticeConfig, top_gap, *layout)
     frame := PracticeSettingsFrame.{.session = app.ui.session, .scale = MetricsScale(),
         .view_width = app.ui.view_width, .view_height = app.ui.view_height,
@@ -216,8 +250,37 @@ practice_settings_frame_for :: (app: *InnerBreeze, practice: s32) -> PracticeSet
         frame.extend_controls = app.meditation.show_extend_controls != 0
         frame.bell_minutes = app.meditation.interval_bell_minutes
     }
+    if practice == EXERCISE_PATTERNS {
+        frame.pattern = app.patterns.preset
+        frame.pattern_inhale = app.patterns.custom[PATTERNS_PHASE_INHALE]
+        frame.pattern_hold_in = app.patterns.custom[PATTERNS_PHASE_HOLD_IN]
+        frame.pattern_exhale = app.patterns.custom[PATTERNS_PHASE_EXHALE]
+        frame.pattern_hold_out = app.patterns.custom[PATTERNS_PHASE_HOLD_OUT]
+        frame.pattern_minutes = app.patterns.duration_minutes
+    }
     practice_settings_music(app, practice, *frame)
-    if practice == EXERCISE_ASTRAL_PROJECTION {
+    if practice == EXERCISE_SUN_SALUTATION {
+        app.sun_salutation = SalutationNormalizeSettings(app.sun_salutation)
+        frame.sun_character = app.sun_salutation.character
+        frame.sun_repetitions = app.sun_salutation.repetitions
+        frame.sun_start_seconds = app.sun_salutation.start_seconds
+        frame.sun_end_seconds = app.sun_salutation.end_seconds
+        frame.sun_duration = SalutationDurationSeconds(app.sun_salutation)
+        frame.sun_seconds_min = SUN_SALUTATION_SECONDS_MIN
+        frame.sun_seconds_max = SUN_SALUTATION_SECONDS_MAX
+    } else if practice == EXERCISE_TAI_CHI {
+        app.tai_chi = TaiChiNormalizeSettings(app.tai_chi)
+        frame.scroll = tai_chi_customize_scroll
+        frame.tai_character = app.tai_chi.character
+        frame.tai_character_count = tai_chi_course.character_count
+        frame.tai_preview_item = TaiChiCourseItemIndex("lesson-4/single-whip/demo")
+        if frame.tai_preview_item < 0 {
+            frame.tai_preview_item = 0
+        }
+    }
+    frame.music_volume = app.music_volume
+    frame.cue_volume = app.sound_volume
+    if practice == EXERCISE_ASTRAL_PROJECTION || practice == EXERCISE_SUN_SALUTATION || practice == EXERCISE_TAI_CHI {
         practice_settings_narration(app, practice, *frame)
     }
     return frame
@@ -231,7 +294,44 @@ practice_settings_save :: (app: *InnerBreeze) {
 practice_settings_apply :: (app: *InnerBreeze, practice: s32, frame: PracticeSettingsFrame) {
     action := frame.action
     value := frame.value
-    if action == PRACTICE_SETTINGS_DURATION && value >= 0 && value <= MEDITATION_DURATION_PRESETS {
+    if practice == EXERCISE_SUN_SALUTATION && action == PRACTICE_SETTINGS_SUN_REPETITIONS && value >= 2 && value <= 12 {
+        app.sun_salutation.repetitions = value
+        practice_settings_save(app)
+    } else if practice == EXERCISE_SUN_SALUTATION && action == PRACTICE_SETTINGS_SUN_START &&
+    value >= SUN_SALUTATION_SECONDS_MIN && value <= SUN_SALUTATION_SECONDS_MAX {
+        app.sun_salutation.start_seconds = value
+        app.sun_salutation = SalutationNormalizeSettings(app.sun_salutation)
+        practice_settings_save(app)
+    } else if practice == EXERCISE_SUN_SALUTATION && action == PRACTICE_SETTINGS_SUN_END &&
+    value >= SUN_SALUTATION_SECONDS_MIN && value <= app.sun_salutation.start_seconds {
+        app.sun_salutation.end_seconds = value
+        app.sun_salutation = SalutationNormalizeSettings(app.sun_salutation)
+        practice_settings_save(app)
+    } else if practice == EXERCISE_SUN_SALUTATION && action == PRACTICE_SETTINGS_SUN_CHARACTER &&
+    value >= 0 && value < SUN_SALUTATION_CHARACTER_COUNT {
+        app.sun_salutation.character = value
+        app.sun_salutation_voice = -1
+        practice_settings_save(app)
+    } else if practice == EXERCISE_TAI_CHI && action == PRACTICE_SETTINGS_TAI_CHARACTER &&
+    value >= 0 && value < tai_chi_course.character_count {
+        app.tai_chi.character = value
+        app.tai_chi.voice = -1
+        practice_settings_save(app)
+    } else if action == PRACTICE_SETTINGS_MUSIC_VOLUME && value >= 0 && value <= 100 {
+        app.music_volume = value
+        practice_settings_save(app)
+    } else if action == PRACTICE_SETTINGS_CUE_VOLUME && value >= 0 && value <= 100 {
+        app.sound_volume = value
+        practice_settings_save(app)
+    } else if action == PRACTICE_SETTINGS_VOICE && value >= 0 && value <= 1 {
+        if practice == EXERCISE_SUN_SALUTATION {
+            app.sun_salutation_voice = value
+        }
+        if practice == EXERCISE_TAI_CHI {
+            app.tai_chi.voice = value
+        }
+        practice_settings_save(app)
+    } else if action == PRACTICE_SETTINGS_DURATION && value >= 0 && value <= MEDITATION_DURATION_PRESETS {
         app.meditation.duration_mode = value
         practice_settings_save(app)
     } else if action == PRACTICE_SETTINGS_CUSTOM {
@@ -244,6 +344,23 @@ practice_settings_apply :: (app: *InnerBreeze, practice: s32, frame: PracticeSet
         practice_settings_save(app)
     } else if action == PRACTICE_SETTINGS_BELL && value >= 0 && value <= 30 {
         app.meditation.interval_bell_minutes = value
+        practice_settings_save(app)
+    } else if action == PRACTICE_SETTINGS_PATTERN && value >= 0 && value < PATTERNS_PRESET_COUNT {
+        app.patterns.preset = value
+        practice_settings_save(app)
+    } else if (action == PRACTICE_SETTINGS_PATTERN_LESS || action == PRACTICE_SETTINGS_PATTERN_MORE) &&
+    value >= 0 && value < 4 {
+        seconds := app.patterns.custom[value] + ifx action == PRACTICE_SETTINGS_PATTERN_MORE then 5 else -5
+        if seconds < 0 {
+            seconds = 0
+        } else if seconds > PATTERNS_MAX_SECONDS {
+            seconds = PATTERNS_MAX_SECONDS
+        }
+        app.patterns.custom[value] = seconds
+        practice_settings_save(app)
+    } else if action == PRACTICE_SETTINGS_PATTERN_MINUTES &&
+    (value == 0 || value == 3 || value == 5 || value == 10 || value == 20) {
+        app.patterns.duration_minutes = value
         practice_settings_save(app)
     } else if action == PRACTICE_SETTINGS_MUSIC && value >= 0 && value <= frame.music_count {
         if value == 0 {
@@ -268,6 +385,10 @@ practice_settings_apply :: (app: *InnerBreeze, practice: s32, frame: PracticeSet
     } else if action == PRACTICE_SETTINGS_LANGUAGE && value >= 0 && value < frame.narration_count {
         if practice == EXERCISE_ASTRAL_PROJECTION {
             unused AppCopyText(practice_settings_codes[value], app.astral_projection_narration_language[:])
+        } else if practice == EXERCISE_SUN_SALUTATION {
+            unused AppCopyText(practice_settings_codes[value], app.sun_salutation_narration_language[:])
+        } else if practice == EXERCISE_TAI_CHI {
+            unused AppCopyText(practice_settings_codes[value], app.tai_chi_narration_language[:])
         }
         PracticeNarrationPrefer(practice, practice_settings_codes[value])
         PracticeNarrationDownload(practice_settings_packs[value])
@@ -283,27 +404,48 @@ practice_settings_apply :: (app: *InnerBreeze, practice: s32, frame: PracticeSet
     }
 }
 
+// Has Practices draw a Customize page from this frame; returns the frame with
+// what was asked there, nothing when the page could not be drawn.
+PracticeSettingsRun :: (app: *InnerBreeze, frame: PracticeSettingsFrame) -> PracticeSettingsFrame {
+    app.practice_config_tab = 0
+    practice_settings_frame = frame
+    PracticeFigureBegin(app, frame.practice, PracticeSettingsFigure)
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    AppsUiBegin(PracticeSettingsCall, cast(*void)app)
+    drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_SETTINGS_VIEW})
+    AppsUiEnd()
+    WidgetHostEnd()
+    PracticeFigureEnd()
+    if !drawn.succeeded {
+        frame.action = PRACTICE_SETTINGS_NONE
+        return frame
+    }
+    if frame.practice == EXERCISE_TAI_CHI {
+        tai_chi_customize_scroll = practice_settings_frame.scroll
+    } else {
+        app.settings_scroll = practice_settings_frame.scroll
+    }
+    return practice_settings_frame
+}
+
 // Has Practices draw the practice's Customize page and saves what changed
 // there. Returns 1 when Back was pressed.
 PracticeSettingsDraw :: (app: *InnerBreeze, practice: s32) -> s32 {
     if app == null || !SessionValid(app.ui.session) {
         return 0
     }
-    app.practice_config_tab = 0
-    practice_settings_frame = practice_settings_frame_for(app, practice)
-    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
-    AppsUiBegin(PracticeSettingsCall, cast(*void)app)
-    drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_SETTINGS_VIEW})
-    AppsUiEnd()
-    WidgetHostEnd()
-    frame := practice_settings_frame
-    if !drawn.succeeded {
-        return 0
-    }
-    app.settings_scroll = frame.scroll
+    frame := PracticeSettingsRun(app, practice_settings_frame_for(app, practice))
     if frame.action == PRACTICE_SETTINGS_BACK {
         return 1
     }
     practice_settings_apply(app, practice, frame)
     return 0
+}
+
+PracticeSettingsFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
+    if request.practice == EXERCISE_TAI_CHI && request.preview && request.index >= 0 &&
+    request.index < tai_chi_course.item_count && request.character >= 0 && request.character < tai_chi_course.character_count {
+        TaiChiDrawPreview(app.ui.session, request.index, request.character, app.tai_chi.view,
+            request.bounds, request.key, request.alt_text)
+    }
 }
