@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.1] - 2026-10-25
+
+- Maintenance release for Inner Breeze 2.1.47.
+
 ## [1.3.0] - 2026-10-24
 
 - The habit list, each habit's week and calendar, its day with its entries, its editor and its statistics now come with Habits, so they can change without an app update.

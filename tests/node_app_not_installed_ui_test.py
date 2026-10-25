@@ -26,7 +26,8 @@ OUTPUT = ROOT / "build/node-app-not-installed-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 BINARY = Path(sys.argv[1]).resolve()
 FAILURE_ONLY = "--failure-only" in sys.argv[2:]
-DESKTOP_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS")
+DESKTOP_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
+               "GDK_DISPLAY", "SESSION_MANAGER")
 assert all(not os.environ.get(key) for key in DESKTOP_ENV), "Inherited desktop environment"
 WIDTH, HEIGHT = 390, 844
 # ScreenNodeApp, the screen of an app the node offers.
@@ -126,6 +127,11 @@ with contextlib.ExitStack() as stack:
         return [node for node in driver.find(label=label, role="button", visible=True)
                 if node.get("focus_id") != NAVIGATION and node["width"] > 60]
 
+    def close_download():
+        driver.wait(role="modal")
+        driver.key("escape")
+        driver.wait_gone(role="modal")
+
     with application("initialize"):
         pass
     with contextlib.closing(sqlite3.connect(profile / "inbe.db")) as db, db:
@@ -156,6 +162,7 @@ with contextlib.ExitStack() as stack:
 
             # Radio's pin in the navigation.
             driver.press(label="Radio", role="button", focus_id=NAVIGATION)
+            close_download()
             stays_closed(log_path, "navigation pin")
 
             # Radio's card in Apps: Apps stays open on its list.
@@ -163,16 +170,18 @@ with contextlib.ExitStack() as stack:
             wait(apps_open, "Apps did not open")
             radio = wait(lambda: grid_cards("Radio"), "Radio has no card in Apps")[0]
             driver.press(key=radio["key"], label="Radio")
+            close_download()
             stays_closed(log_path, "Apps card")
             assert apps_open(), "Tapping an app that is not installed closed Apps"
 
-            # Photos is only offered: the tap installs it on the account, as
-            # before, and does not open it.
+            # An offered app asks in the same dialog before installing.
             driver.press(label="Find an app", role="text_field")
             driver.type("Photos")
             photos = wait(lambda: grid_cards("Photos"), "Photos is not offered in Apps")[0]
             driver.press(key=photos["key"], label="Photos")
-            wait(lambda: settings().get("app_used_photos") == "1", "The Photos tap was not taken")
+            driver.wait(contains="Download size:")
+            assert settings().get("app_used_photos") != "1", "The app downloaded before consent"
+            close_download()
             stays_closed(log_path, "offered app")
             assert apps_open(), "Tapping an offered app closed Apps"
 

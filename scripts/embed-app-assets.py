@@ -28,11 +28,12 @@ def emit(output: Path, files: list[Path], root: Path) -> None:
         resolved = file.resolve(strict=True)
         # Keep build/packages/<name> links unresolved so package assets get
         # stable embedded names regardless of the package cache location.
-        path = Path(os.path.abspath(file)).relative_to(root).as_posix()
+        if file.name == "apps.zx":
+            path = "apps.zx"
+        else:
+            path = Path(os.path.abspath(file)).relative_to(root).as_posix()
         if path.startswith("build/apps/"):
             path = "cells/" + path.removeprefix("build/apps/")
-        if path == "build/apps-ui/apps.zx":
-            path = "apps.zx"
         if path == "build/inbe.zx":
             path = "inbe.zx"
         if path.startswith("build/packages/kss/styles/"):

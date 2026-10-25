@@ -1197,6 +1197,12 @@ public class MainActivity extends NativeActivity {
     private void offerLocalNodeApp() {
         File bundle = LocalNodeApp.offered(BuildConfig.DEBUG, getIntent(), getExternalFilesDir(null));
         try {
+            String origin = bundle == null ? null : LocalNodeApp.origin(BuildConfig.DEBUG, getIntent());
+            if (origin == null) {
+                android.system.Os.unsetenv("INBE_LOCAL_PACKAGE_ORIGIN");
+            } else {
+                android.system.Os.setenv("INBE_LOCAL_PACKAGE_ORIGIN", origin, true);
+            }
             if (bundle == null) {
                 android.system.Os.unsetenv("INBE_NODE_APP_FILE");
             } else {

@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.5.1] - 2026-10-25
+
+- Maintenance release for Inner Breeze 2.1.47.
+
 ## [1.5.0] - 2026-10-25
 
 - Running Meditation, Breathing Patterns, Wim Hof, Sun Salutation, Tai Chi, Astral Projection and 7-Minute Workout layouts now come with Practices.

@@ -9,6 +9,7 @@ mkdir -p build
 exec 9>build/apps-build.lock
 flock 9
 ziran=${1:-build/ziran-toolchain/bin/ziran}
+controller=${3:-build/apps-ui/apps.zx}
 packages=$(sh scripts/package-paths.sh)
 output=${2:-build/apps}
 python3 scripts/check-package-versions.py
@@ -18,7 +19,7 @@ python3 tests/locale_used_keys_test.py
 python3 tests/lumi_guide_narration_test.py "$ziran"
 python3 scripts/generate-package-versions.py
 python3 scripts/animation_inventory.py --check
-python3 scripts/prepare-package-assets.py
+python3 scripts/prepare-package-assets.py --apps-controller "$controller"
 if [ ! -s build/package-assets/inbe/assets/apps/apps.zx ]; then
     echo 'Root Apps requires the reviewed Apps controller bundle; run make apps' >&2
     exit 1

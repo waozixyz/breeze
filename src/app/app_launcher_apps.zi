@@ -256,6 +256,7 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
         }
         slot := app_launcher_install_offer(app, name)
         if slot < 0 { group.status = "rejected"; return }
+        app.launcher_pending_node = slot + 1
         if request.operation == Rules.APPS_OPEN { app_launcher_activate(app, AppNavNodeRoute(slot)) }
         group.status = "applied"
         return
@@ -272,6 +273,7 @@ LauncherAppDrain :: (group: *LauncherAppGroup) {
     !NodeAppInstalled(AppNavNodeSlot(route)) {
         // Its download symbol: the package downloads, and the card says so.
         slot := AppNavNodeSlot(route)
+        app.launcher_pending_node = slot + 1
         state: Vec(u8)
         BuilderPrint(*state, "slot % name % available % installed % pending % found % temporary %",
             slot, NodeAppName(slot), ifx app_nav_route_available(app, route) then 1 else 0,
@@ -501,8 +503,13 @@ app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
     document: Vec(u8)
     BuilderPrint(*document, "\"title\":\"\",\"locale\":")
     Rules.AppsWriteQuoted(*document, LocaleActiveCode())
-    BuilderPrint(*document, ",\"presentation\":{\"mode\":\"%\",\"hide_sizes\":true,\"section_break\":%,\"columns\":%,\"tile_class\":%,\"action_class\":%,\"muted_class\":%},\"children\":[",
+    BuilderPrint(*document, ",\"presentation\":{\"mode\":\"%\",\"hide_sizes\":true,\"section_break\":%,\"columns\":%,\"tile_class\":%,\"action_class\":%,\"muted_class\":%",
         ifx grid then "icon" else "list", section_break, columns, KssClassId(KssMakeName("launcher-tile")), KssClassId(KssMakeName("launcher-action")), KssClassId(KssMakeName("launcher-muted")))
+    if app.launcher_pending_node > 0 {
+        LauncherAppQuoted(*document, "download_id", TextUntilNul(app.launcher_download_id[:]))
+        BuilderPrint(*document, ",\"download_request\":%", app.launcher_download_request)
+    }
+    BuilderPrint(*document, "},\"children\":[")
     for route: routes {
         if route >= 0 { LauncherAppCatalogEntry(group, *document, route) }
         else { LauncherAppCatalogEntry(group, *document, -1, -route - 2) }

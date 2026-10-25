@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.47] - 2026-10-25
+
+- App downloads show their progress and open the app when ready.
+- Installed apps no longer show download sizes.
+- Arcade can download each game separately from its smaller catalog.
+
 ## [2.1.46] - 2026-10-24
 
 - Practices can update its session controls, guides and settings without reinstalling Breeze.

@@ -1,0 +1,253 @@
+// Games declared by a signed collection download independently. Its catalog
+// authenticates each digest; only that parent's package route can supply it.
+#import "apps/host"
+#import "apps/tree"
+#import "apps/catalog"
+#import "apps/protocol"
+#import "kryon/hosted_app"
+#import "std/c_string"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import "file_download"
+#import "file_linux"
+#import, file "node_apps.zi";
+#import, file "node_app_runner.zi";
+#import, file "node_app_tree.zi";
+#import, file "package_manager.zi";
+#import, file "package_work.zi";
+#import, file "package_files.zi";
+#import, file "package_release.zi";
+#import, file "catalog.zi";
+#import, file "../app/assets.zi";
+#import, file "../storage/temporary_data.zi";
+#import, file "../storage/data.zi";
+
+using FileDownloadStatus;
+NODE_CHILD_LIMIT :: 32
+NODE_CHILD_MEMORY_LIMIT :: 64 * 1024 * 1024
+
+NodeChildPackage :: struct {
+    used: bool
+    root: s32
+    account: [65]u8
+    root_hash: [65]u8
+    digest: [65]u8
+    bytes: string
+    path: string
+    status: s32
+    requested: bool
+    retired: bool
+    size: s64
+}
+
+node_children: [NODE_CHILD_LIMIT]NodeChildPackage;
+node_child_active: s32 = -1;
+node_child_transfer: FileDownload;
+node_child_work: *PackageWork;
+node_child_memory: s64;
+
+NodeChildOrigin :: (root: s32) -> string {
+    value := DataEnvironment("INBE_LOCAL_PACKAGE_ORIGIN")
+    if NodeAppLocal(NodeAppName(root)) && value != null {
+        address := TextFromCString(value)
+        prefix := "http://127.0.0.1:"
+        if address.count > prefix.count && address.count <= prefix.count + 5 &&
+        address[:prefix.count] == prefix {
+            port: s32
+            valid := true
+            for digit: address[prefix.count:] {
+                if digit < #char "0" || digit > #char "9" { valid = false; break }
+                port = port * 10 + cast(s32)(digit - #char "0")
+            }
+            if valid && port > 0 && port <= 65535 { return address }
+        }
+    }
+    return TextUntilNul(package_origin[:])
+}
+
+NodeChildFind :: (runner: *NodeAppRunner, entry: *AppEntry) -> s32 {
+    root := NodeAppSlotOf(runner)
+    if root < 0 || runner.nested == null ||
+    TextUntilNul(runner.nested.tree.account[:]) != NodeTreeAccount() ||
+    !AppDigestValid(TextUntilNul(entry.sha256[:])) {
+        return -1
+    }
+    empty: s32 = -1
+    for index: cast(s32)0..NODE_CHILD_LIMIT - 1 {
+        child := *node_children[index]
+        if !child.used {
+            if empty < 0 { empty = index }
+        } else if !child.retired && child.root == root &&
+        TextUntilNul(child.account[:]) == NodeTreeAccount() &&
+        TextUntilNul(child.root_hash[:]) == TextUntilNul(runner.release_hash[:]) &&
+        TextUntilNul(child.digest[:]) == TextUntilNul(entry.sha256[:]) {
+            return index
+        }
+    }
+    if empty < 0 { return -1 }
+    child := *node_children[empty]
+    child.used = true
+    child.root = root
+    child.root_hash = runner.release_hash
+    child.digest = entry.sha256
+    unused CopyCString(NodeTreeAccount(), child.account[:])
+    directory := PackageDirectory()
+    path: Vec(u8)
+    BuilderPrint(*path, "%/child-%-%.zx", directory, PackageID(NodeAppIndex(root)),
+        TextUntilNul(child.digest[:]))
+    PackageFree(directory)
+    child.path = BuilderFinish(path)
+    child.requested = PackageFileSize(child.path) > 0
+    if child.requested { child.status = 1 }
+    return empty
+}
+
+NodeChildBundle :: (context: *void, parent: *AppNode, entry: *AppEntry) -> HostedAsset {
+    unused parent
+    index := NodeChildFind(cast(*NodeAppRunner)context, entry)
+    if index < 0 || node_children[index].status != 2 { return HostedAsset.{} }
+    return HostedAsset.{.found = true, .data = node_children[index].bytes}
+}
+
+NodeChildDownload :: (context: *void, parent: *AppNode, entry: *AppEntry,
+    download: *AppDownload) -> bool {
+    runner := cast(*NodeAppRunner)context
+    // Packed children keep their normal offline path and do not allocate a job.
+    packed := AppHostAsset(parent, TextUntilNul(entry.bundle[:]))
+    if packed.found { return false }
+    index := NodeChildFind(runner, entry)
+    if index < 0 {
+        download.failed = true
+        return true
+    }
+    child := *node_children[index]
+    if child.status == 2 { return false }
+    download.downloading = child.status == 1
+    download.failed = child.status == 3
+    download.bytes = child.size
+    download.progress = -1
+    if index == node_child_active && node_child_work == null && node_child_transfer.total_bytes > 0 {
+        download.bytes = cast(s64)node_child_transfer.total_bytes
+        received := cast(s64)node_child_transfer.bytes
+        if received > download.bytes { received = download.bytes }
+        download.progress = cast(s32)(received * 100 / download.bytes)
+    }
+    return true
+}
+
+NodeChildFetch :: (context: *void, account: string, parent: *AppNode, entry: *AppEntry,
+    operation: s32, reply: *AppsReply) -> bool {
+    runner := cast(*NodeAppRunner)context
+    if operation != APPS_INSTALL || account != NodeTreeAccount() ||
+    AppHostAsset(parent, TextUntilNul(entry.bundle[:])).found { return false }
+    index := NodeChildFind(runner, entry)
+    if index < 0 {
+        reply.* = AppRejected("download queue full")
+        return true
+    }
+    child := *node_children[index]
+    if child.status == 2 { return false }
+    child.requested = true
+    child.status = 1
+    reply.status = APPS_QUEUED
+    return true
+}
+
+NodeChildClear :: (index: s32) {
+    child := *node_children[index]
+    node_child_memory -= child.bytes.count
+    PackageFree(child.bytes)
+    if DataTemporary() { unused RemoveFile(child.path) }
+    PackageFree(child.path)
+    child.* = NodeChildPackage.{}
+}
+
+NodeChildClose :: (root: s32) {
+    for index: cast(s32)0..NODE_CHILD_LIMIT - 1 {
+        if !node_children[index].used || node_children[index].root != root { continue }
+        if index == node_child_active {
+            node_children[index].retired = true
+            FileDownloadRelease(*node_child_transfer)
+            if node_child_work != null { continue }
+            node_child_active = -1
+        }
+        NodeChildClear(index)
+    }
+}
+
+NodeChildFinish :: (ok: bool) {
+    child := *node_children[node_child_active]
+    FileDownloadRelease(*node_child_transfer)
+    temporary := PackageText(child.path, ".download")
+    unused RemoveFile(temporary)
+    PackageFree(temporary)
+    child.status = ifx ok then 2 else 3
+    child.requested = false
+    if child.retired { NodeChildClear(node_child_active) }
+    node_child_active = -1
+    AssetNotifyAvailable()
+}
+
+NodeChildPump :: () {
+    if node_child_active < 0 {
+        for index: cast(s32)0..NODE_CHILD_LIMIT - 1 {
+            child := *node_children[index]
+            if !child.used || !child.requested || child.retired { continue }
+            node_child_active = index
+            child.requested = false
+            if PackageFileSize(child.path) > 0 {
+                node_child_work = PackageWorkCreate(child.path, "", TextUntilNul(child.account[:]),
+                    PackageID(NodeAppIndex(child.root)), PackageRelease.{}, false)
+                if node_child_work == null { NodeChildFinish(false) }
+                return
+            }
+            url: Vec(u8)
+            BuilderPrint(*url, "%/api/v2/packages/%/%.zx", NodeChildOrigin(child.root),
+                PackageID(NodeAppIndex(child.root)), TextUntilNul(child.digest[:]))
+            address := BuilderFinish(url)
+            temporary := PackageText(child.path, ".download")
+            node_child_transfer = FileDownload.{}
+            node_child_transfer.maximum_bytes = cast(u64)PackageMaximumBytes
+            started := FileDownloadStart(*node_child_transfer, address, temporary)
+            PackageFree(address)
+            PackageFree(temporary)
+            if !started { NodeChildFinish(false) }
+            return
+        }
+        return
+    }
+    child := *node_children[node_child_active]
+    if !child.retired && TextUntilNul(child.account[:]) != NodeTreeAccount() {
+        NodeChildClose(child.root)
+        return
+    }
+    if node_child_work != null {
+        if !PackageWorkReady(node_child_work) { return }
+        ok := !child.retired && node_child_work.ok &&
+        TextUntilNul(node_child_work.digest[:]) == TextUntilNul(child.digest[:]) && node_child_work.bytes.count > 0 &&
+        node_child_work.bytes.count <= NODE_CHILD_MEMORY_LIMIT - node_child_memory
+        if ok && node_child_work.path != child.path {
+            ok = RenamePath(node_child_work.path, child.path)
+        }
+        if ok {
+            child.bytes = node_child_work.bytes
+            node_child_work.bytes = ""
+            child.size = child.bytes.count
+            node_child_memory += child.bytes.count
+        }
+        if !ok && !child.retired { unused RemoveFile(node_child_work.path) }
+        PackageWorkFree(node_child_work)
+        node_child_work = null
+        NodeChildFinish(ok)
+        return
+    }
+    status := FileDownloadPoll(*node_child_transfer)
+    if status == cast(FileDownloadStatus)Error { NodeChildFinish(false); return }
+    if status != cast(FileDownloadStatus)Ready { return }
+    child.size = cast(s64)node_child_transfer.bytes
+    temporary := PackageText(child.path, ".download")
+    node_child_work = PackageWorkCreate(temporary, "", TextUntilNul(child.account[:]),
+        PackageID(NodeAppIndex(child.root)), PackageRelease.{}, false)
+    PackageFree(temporary)
+    if node_child_work == null { NodeChildFinish(false) }
+}
