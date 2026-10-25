@@ -126,6 +126,7 @@ with contextlib.ExitStack() as stack:
                                                 env=env, text=True, timeout=5)
                 window = found.splitlines()[0]
                 subprocess.run(['xdotool', 'windowsize', window, '411', '900'], env=env, check=True, timeout=5)
+                subprocess.run(['xdotool', 'windowmove', window, '0', '0'], env=env, check=True, timeout=5)
                 yield process
                 assert process.poll() is None, log_path.read_text()[-3000:]
             finally:
