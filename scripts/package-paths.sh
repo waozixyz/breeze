@@ -8,11 +8,19 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 python3 - "$root" <<'PY'
 from pathlib import Path
 import sys
-import tomllib
 
 root = Path(sys.argv[1])
-manifest = tomllib.loads((root / "ziran.toml").read_text())
-for directory in manifest["package"]["module_roots"]:
+text = (root / "ziran.toml").read_text()
+try:
+    import tomllib
+    roots = tomllib.loads(text)["package"]["module_roots"]
+except ModuleNotFoundError:
+    # Python before 3.11, as on the Ubuntu 22.04 package builders: the
+    # manifest keeps module_roots as one list of strings on one line.
+    import ast
+    import re
+    roots = ast.literal_eval(re.search(r"^module_roots\s*=\s*(\[[^\]]*\])", text, re.M).group(1))
+for directory in roots:
     print("--module-path")
     print(root / directory)
 PY
