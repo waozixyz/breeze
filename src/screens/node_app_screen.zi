@@ -65,6 +65,7 @@
 #import "file_picker"
 #import "file_linux"
 #import "android_picker"
+#import, file "node_app_loading.zi";
 
 using HostValueKind;
 using TextWrap;
@@ -268,13 +269,7 @@ node_app_screen_opens :: (slot: s32) -> bool {
     return NodeAppInstalled(slot)
 }
 
-// The apps and games, by identity, shown whole once. Until then their first
-// frame, and every frame while Kryon still decodes pictures, shows the
-// loading screen instead of drawing gaps where the pictures will be.
-// Pictures already decoded keep the cover to that first frame.
-node_screen_shown: [16]u64;
-node_screen_shown_next: s32;
-node_screen_opening: u64;
+node_screen_loading: NodeScreenLoadingState;
 
 NodeScreenIdentity :: (slot: s32) -> u64 {
     identity := (cast(u64)(slot + 1) << cast(u64)48)
@@ -283,13 +278,6 @@ NodeScreenIdentity :: (slot: s32) -> u64 {
         identity = identity ^ KeyHash(TextUntilNul(runtime.node.identity.id[:]))
     }
     return identity
-}
-
-NodeScreenShown :: (identity: u64) -> bool {
-    for shown: node_screen_shown {
-        if shown == identity { return true }
-    }
-    return false
 }
 
 // Count only this app's requested pictures. Images queued by a background
@@ -448,16 +436,8 @@ node_app_screen_draw :: (app: *InnerBreeze) {
     NodeAppUiEnd()
     identity := NodeScreenIdentity(slot)
     pictures := NodeScreenPictureProgress(slot)
-    if !NodeScreenShown(identity) || pictures.ready < pictures.total {
-        if node_screen_opening != identity {
-            node_screen_opening = identity
-            NodeScreenCover(app, area, pictures)
-        } else if pictures.ready < pictures.total {
-            NodeScreenCover(app, area, pictures)
-        } else if !NodeScreenShown(identity) {
-            node_screen_shown[node_screen_shown_next] = identity
-            node_screen_shown_next = (node_screen_shown_next + 1) % 16
-        }
+    if NodeScreenNeedsCover(*node_screen_loading, identity, pictures.ready >= pictures.total) {
+        NodeScreenCover(app, area, pictures)
     }
     if clip.opened { unused End(app.ui.session) }
     WidgetHostEnd()

@@ -27,6 +27,10 @@ portable-apps-ui-test: $(TARGET) apps
 
 .PHONY: node-app-records-test
 
+.PHONY: node-app-loading-test
+node-app-loading-test: $(ZIRAN_BIN)
+	sh tests/node_app_loading_test.sh $(ZIRAN_BIN)
+
 # Apps location and node snapshot checks against the locked Apps and Crypto packages.
 .PHONY: app-locations-test node-app-snapshot-test
 app-locations-test: $(ZIRAN_BIN)

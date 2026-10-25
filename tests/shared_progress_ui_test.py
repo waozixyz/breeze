@@ -71,4 +71,21 @@ with tempfile.TemporaryDirectory(prefix='breeze-account-progress-') as directory
                 assert 'state' not in record, record
                 assert db.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'entity.game-progress.%'").fetchone()[0] == 1
                 assert db.execute("SELECT COUNT(*) FROM settings WHERE key LIKE 'local.%.campaign' AND value<>''").fetchone()[0] == 1
-print('Breeze nested Shovey resumes level 40 and completion marks after a cold restart, with unlock-only account progress and a device-only campaign')
+
+    # Account hydration can finish after the child has opened its first board.
+    # Start with no campaign, then deliver exactly the same account record.
+    with sqlite3.connect(profile / 'inbe.db') as db:
+        db.execute("DELETE FROM settings WHERE key=? OR key LIKE 'local.%.campaign'", (key,))
+    for attempt in ('late-progress', 'late-restart'):
+        with application(attempt):
+            driver.wait(label='Apps', role='button')
+            open_arcade(driver)
+            driver.press(label='Play', role='button')
+            if attempt == 'late-progress':
+                driver.wait(contains='Level 1 / ', role='text', timeout=40)
+                with sqlite3.connect(profile / 'inbe.db') as db:
+                    db.execute('INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1)',
+                               (user, key, json.dumps(dict(game='shovey.classic', unlocked=40, completed='1' * 39))))
+            driver.wait(contains='Level 40 / ', role='text', timeout=40)
+print('Breeze nested Shovey restores level 40 before and after late account hydration and cold restart; '
+      'only unlocks sync and the campaign stays on-device')
