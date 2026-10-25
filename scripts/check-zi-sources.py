@@ -13,7 +13,7 @@ compiler = Path(sys.argv[1]).resolve()
 ui = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else root / "build/packages/kryon/src/ui"
 standard = Path(sys.argv[3]).resolve() if len(sys.argv) > 3 else root / "build/packages/ziran/std"
 kss = Path(sys.argv[4]).resolve() if len(sys.argv) > 4 else root / "build/packages/kss/src"
-client = root / "build/packages/daochi-client"
+client = Path(os.environ.get("DAOCHI_CLIENT_DIR", root / "build/packages/daochi-client"))
 game2d = root / "build/packages/game2d/src"
 sources = sorted((root / "src").rglob("*.zi"))
 sources.append(root / "apps/practice/hold_reminder.zi")

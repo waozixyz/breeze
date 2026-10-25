@@ -54,7 +54,8 @@ def main():
                                             str(root / 'build/packages')], text=True).splitlines()
     module_paths = [item for path in ('src', 'build/packages/kryon/src/ui', 'build/packages/kryon/src/backend',
                                     'build/packages/kss/src', 'build/packages/game2d/src',
-                                    'build/packages/ziran/std', 'build/packages/daochi-client')
+                                    'build/packages/ziran/std',
+                                    os.environ.get('DAOCHI_CLIENT_DIR', 'build/packages/daochi-client'))
                     for item in ('--module-path', str(root / path))]
     guest = fixture / 'fixture_app.zi'
     guest.write_text('''#import "kryon/app_context"

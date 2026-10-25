@@ -28,14 +28,24 @@ OUTPUT.mkdir(parents=True, exist_ok=True)
 DESKTOP = ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS',
            'GDK_DISPLAY', 'SESSION_MANAGER')
 assert all(not os.environ.get(key) for key in DESKTOP), 'Inherited desktop environment'
-catalog = json.loads(bundle_assets(CATALOG.read_bytes())['assets/apps/catalog.json'])
+catalog_assets = bundle_assets(CATALOG.read_bytes())
+catalog = json.loads(catalog_assets['assets/apps/catalog.json'])
 assert catalog['id'] == 'inbe.arcade'
-assert all(entry['bundle'] not in bundle_assets(CATALOG.read_bytes()) for entry in catalog['children'])
+assert all(entry['bundle'] not in catalog_assets for entry in catalog['children'])
+controller_digest = hashlib.sha256(catalog_assets[catalog['harness']]).hexdigest()
+host_controller = bundle_assets(BUNDLE.read_bytes())['assets/apps/apps.zx']
+assert controller_digest == hashlib.sha256(host_controller).hexdigest(), 'Catalog uses another controller'
 classic = next(entry for entry in catalog['children'] if entry['expected_id'] == 'shovey')
 payloads = CATALOG.with_suffix('.games')
 game = (payloads / (classic['sha256'] + '.zx')).read_bytes()
 assert hashlib.sha256(game).hexdigest() == classic['sha256']
 requests = []
+identities = dict(binary=str(BINARY), runtime_bundle=str(BUNDLE), catalog=str(CATALOG),
+                  binary_sha256=hashlib.sha256(BINARY.read_bytes()).hexdigest(),
+                  runtime_bundle_sha256=hashlib.sha256(BUNDLE.read_bytes()).hexdigest(),
+                  catalog_sha256=hashlib.sha256(CATALOG.read_bytes()).hexdigest(),
+                  controller_sha256=controller_digest, child_sha256=classic['sha256'])
+(OUTPUT / 'result.json').write_text(json.dumps(dict(passed=False, **identities), indent=2) + '\n')
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -161,6 +171,10 @@ with contextlib.ExitStack() as stack:
         open_arcade(driver)
         driver.wait_idle(frames=4)
         assert not requests, 'Opening the catalog downloaded a game'
+        # Discovery continues after the first painted frame. The catalog must
+        # stay open while its declared games are still absent.
+        time.sleep(1)
+        assert driver.find(label='Play', role='button', visible=True), driver.text()
         driver.press(label='Play', role='button')
         driver.wait(role='modal')
         assert not requests, 'Opening the dialog downloaded before consent'
@@ -181,7 +195,7 @@ with contextlib.ExitStack() as stack:
         assert len(requests) == count, 'Restart downloaded the cached game again'
 
     (OUTPUT / 'result.json').write_text(json.dumps(dict(
-        passed=True, requests=requests, percentages=percentages,
+        passed=True, **identities, requests=requests, percentages=percentages,
         corrupt_payload_rejected=True, automatic_open=True, offline_restart=True), indent=2) + '\n')
 
 print('Separate game download: visible progress, corruption rejection, retry, automatic open and offline restart passed')

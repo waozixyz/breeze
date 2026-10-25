@@ -26,6 +26,7 @@
 snapshot_opened: s32;
 snapshot_fail_open: bool;
 snapshot_fail_save: bool;
+snapshot_remote_downloading: bool;
 
 snapshot_c :: #system_library "c";
 SnapshotNow :: () -> float64 #foreign snapshot_c "IconsNow";
@@ -48,6 +49,13 @@ SnapshotSave :: (context: *void, node: *AppNode) -> bool { return !snapshot_fail
 SnapshotEffect :: (context: *void, account: string, locator: *AppLocator,
     operation: s32, reply: *AppsReply) -> bool { return false }
 
+SnapshotDownload :: (context: *void, parent: *AppNode, entry: *AppEntry,
+    download: *AppDownload) -> bool {
+    if TextUntilNul(entry.id[:]) != "fixture.remote" { return false }
+    download.downloading = snapshot_remote_downloading
+    return true
+}
+
 // Discovery yields after opening each child. Its private traversal never
 // drops the active child opened by navigation, even when discovery cancels.
 SnapshotDiscoveryCheck :: () -> s32 {
@@ -56,7 +64,7 @@ SnapshotDiscoveryCheck :: () -> s32 {
     defer { PackageFree(bytes) }
     if !AppHostStart(*host, bytes, "publisher", "fixture.root", "fixture",
         IconsEnvironmentPath("NODE_OPEN_ROOT_SHA256"), NodeTreeAccount(),
-        AppPlatform.{.save = SnapshotSave}) { return 10 }
+        AppPlatform.{.save = SnapshotSave, .download = SnapshotDownload}) { return 10 }
     root := AppTreeNode(*host.tree, AppHandle.{0, 1})
     root.collection = true
     ids: [2]string = .["fixture.one", "fixture.two"]
@@ -69,9 +77,27 @@ SnapshotDiscoveryCheck :: () -> s32 {
         entry.protocol = APPS_CONTEXT_PROTOCOL
         if !AppCatalogAppend(*root.catalog, entry) { return 11 }
     }
+    missing: AppEntry
+    unused CopyCString("fixture.remote", missing.id[:])
+    unused CopyCString("fixture", missing.expected_id[:])
+    unused CopyCString("assets/fixture/missing.zx", missing.bundle[:])
+    unused CopyCString(IconsEnvironmentPath("NODE_OPEN_LEAF_SHA256"), missing.sha256[:])
+    missing.protocol = APPS_CONTEXT_PROTOCOL
+    if !AppCatalogAppend(*root.catalog, missing) { return 12 }
     host.tree.provider.open = SnapshotOpen
     slot := cast(s32)(NodeAppSlots - 1)
     node_runners[slot].nested = *host
+    // A transfer already requested may finish; an untouched missing game
+    // is skipped without attempting to open it or closing its catalog.
+    if !NodeInstalledScanStart(slot) { return 21 }
+    node_snapshot_scans[slot].stack[0].next = 2
+    snapshot_remote_downloading = true
+    if !NodeInstalledScanStep(slot) || node_snapshot_scans[slot].stack[0].next != 2 ||
+    snapshot_opened != 0 || AppTreeNode(*host.tree, AppHandle.{0, 1}) == null { return 22 }
+    snapshot_remote_downloading = false
+    if !NodeInstalledScanStep(slot) || node_snapshot_scans[slot].stack[0].next != 3 ||
+    snapshot_opened != 0 { return 23 }
+    NodeInstalledScanCancel(slot)
     if !NodeInstalledScanStart(slot) || snapshot_opened != 0 { return 13 }
     deadline := SnapshotNow() + 10.0
     while node_snapshot_scans[slot].stack.count > 0 && SnapshotNow() < deadline {

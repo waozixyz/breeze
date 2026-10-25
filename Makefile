@@ -403,7 +403,8 @@ ZI_PACKAGE_PATHS := $(shell sh scripts/package-paths.sh)
 ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort) apps/practice/hold_reminder.zi $(wildcard apps/practice/astral_projection*.zi) $(wildcard apps/practice/workout*.zi) $(wildcard apps/practice/sun_salutation*.zi)
 GAME2D_DIR := build/packages/game2d
 GAME2D_MODULES := $(wildcard $(GAME2D_DIR)/src/*/*.zi)
-DAOCHI_CLIENT_MODULES := $(wildcard build/packages/daochi-client/*.zi)
+DAOCHI_CLIENT_DIR ?= build/packages/daochi-client
+DAOCHI_CLIENT_MODULES := $(wildcard $(DAOCHI_CLIENT_DIR)/*.zi)
 ZIRAN_STD_MODULES := $(wildcard $(ZIRAN_DIR)/std/*.zi)
 KRYON_ZI_MODULES := $(shell find $(KRYON_DIR)/src -type f -name '*.zi' | LC_ALL=C sort)
 KRY_GEN_SRCS := $(patsubst %.zi,$(KRY_GEN_DIR)/%.c,$(ZI_SRCS))
@@ -670,7 +671,7 @@ $(KRY_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES)
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
-		--module-path build/packages/daochi-client $(ZI_PACKAGE_PATHS) \
+		--module-path $(DAOCHI_CLIENT_DIR) $(ZI_PACKAGE_PATHS) \
 		-o $(KRY_GEN_DIR) $(ZI_SRCS)
 	touch $@
 
