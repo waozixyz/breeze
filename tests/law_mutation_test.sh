@@ -6,7 +6,16 @@ set -eu
 ziran=${1:?pass the ziran command}
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT HUP INT TERM
+cleanup() {
+    result=$?
+    trap - EXIT HUP INT TERM
+    if [ "$result" -ne 0 ] && [ -f "$work/out.err" ]; then
+        cat "$work/out.err" >&2
+    fi
+    rm -rf "$work"
+    exit "$result"
+}
+trap cleanup EXIT HUP INT TERM
 
 fresh() {
     rm -rf "$work/src"
@@ -26,7 +35,7 @@ fresh() {
     cp "$root"/src/app/modal_rules.zi "$root"/src/app/modal_rules_laws.zi \
         "$work/src/app/"
     cp "$root"/src/storage/sync_result.zi "$root"/src/storage/storage_layout.zi \
-        "$root"/src/storage/storage_layout_laws.zi "$work/src/storage/"
+        "$root"/src/storage/storage_layout_laws.zi "$root"/src/storage/app_records.zi "$work/src/storage/"
     cp "$root"/src/guide.zi "$root"/src/guide_pager.zi \
         "$root"/src/guide_laws.zi "$work/src/"
 }
