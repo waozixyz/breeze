@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from animation_inventory import inventory
 from practice_content import NAMES
+from practice_media import media_path, packaged_path
 
 def assets(data):
     assert data[:8] == b'ZX\0\0\x1a\0\0\0'
@@ -82,7 +83,7 @@ assert paths
 for path in paths:
     path = path if path.startswith('assets/') else 'assets/' + path
     assert path in combined, f'image is absent from package: {path}'
-    assert combined[path] == (ROOT / path).read_bytes(), path
+    assert combined[path] == media_path(path).read_bytes(), path
 for path in ('icons/ui.png', 'icons/pfp.png'):
     assert root[path] == (ROOT / 'build/packages/kryon' / path).read_bytes()
 for file in (ROOT / 'locales').glob('*.txt'):
@@ -105,7 +106,7 @@ assert not any(name.endswith('.png') and not banner.fullmatch(name) for name in 
 for name in NAMES:
     for theme in ('light', 'dark'):
         path = f'assets/practices/{name}/banner-{theme}.png'
-        assert practices[path] == (ROOT / path).read_bytes(), path
+        assert practices[path] == media_path(path).read_bytes(), path
 # The small practices ship installed with Practices, each its pack's exact
 # bytes; Sun Salutation and Tai Chi download.
 for name in ('whm', 'meditation', 'patterns', 'astral_projection', 'workout'):
@@ -118,9 +119,9 @@ assert {name for name in practices if name.startswith('assets/practices/default/
 assert not any(name.startswith('assets/practices/shipped/') for name in practices)
 paths, sources, unique_animation = inventory()
 packaged_animation = {name for name in content if '/characters/' in name}
-assert packaged_animation == {path.relative_to(ROOT).as_posix() for path in unique_animation}
+assert packaged_animation == {packaged_path(path) for path in unique_animation}
 for index, original in enumerate(paths):
-    stored = paths[sources[index]].relative_to(ROOT).as_posix()
+    stored = packaged_path(paths[sources[index]])
     assert content[stored] == original.read_bytes(), f'animation frame changed: {original}'
 assert not any('/characters/' in name or name.endswith('/course.zip') for name in practices)
 native = (ROOT / 'build/obj/inbe_embedded_assets.c').read_text()
