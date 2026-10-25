@@ -93,9 +93,57 @@ AssetUnbindProvider :: () {
 
 AssetGeneration :: () -> u64 { return asset_generation }
 
+// Decoded images go stale only when the bytes at their path change. The
+// frame loop takes what changed since it last looked: everything, or the
+// folders listed here, and forgets just those images.
+ASSET_CHANGED_FOLDERS :: 8
+asset_changed_all: bool;
+asset_changed_folders: [ASSET_CHANGED_FOLDERS]string;
+asset_changed_folder_count: s32;
+
 // Mounted content changes invalidate borrowed resource views and decoders.
 AssetNotifyChanged :: () {
     asset_generation += 1
+    asset_changed_all = true
+}
+
+// Content under one folder was replaced, such as a practice pack's images:
+// readers look again, and only images under the folder load again.
+AssetNotifyChangedUnder :: (folder: string) {
+    asset_generation += 1
+    for index: cast(s32)0..asset_changed_folder_count - 1 {
+        if asset_changed_folders[index] == folder {
+            return
+        }
+    }
+    if asset_changed_folder_count >= ASSET_CHANGED_FOLDERS {
+        asset_changed_all = true
+        return
+    }
+    asset_changed_folders[asset_changed_folder_count] = folder
+    asset_changed_folder_count += 1
+}
+
+// Assets that were missing became readable, or ones nothing reads went
+// away (an app finished opening, a pack opened or was put away): readers
+// look again, and every image already on screen stays. An image that
+// could not load yet is read again on its own.
+AssetNotifyAvailable :: () {
+    asset_generation += 1
+}
+
+AssetChanges :: struct {
+    all: bool
+    folders: []string
+}
+
+// What changed since the last call; the frame loop forgets those images.
+AssetTakeChanges :: () -> AssetChanges {
+    changes := AssetChanges.{.all = asset_changed_all,
+        .folders = asset_changed_folders[0:asset_changed_folder_count]}
+    asset_changed_all = false
+    asset_changed_folder_count = 0
+    return changes
 }
 
 AssetViewFor :: (path: string) -> AssetView {
