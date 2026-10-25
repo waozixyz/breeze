@@ -253,3 +253,10 @@ dew-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | buil
 .PHONY: lists-sharing-test
 lists-sharing-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
 	@sh tests/lists_sharing_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+.PHONY: local-game-records-test
+local-game-records-test:
+	mkdir -p build/local-game-records-test
+	$(ZIRAN_BIN) build --root . --target=c --entry local_game_records_behavior:main -o build/local-game-records-test tests/local_game_records_behavior.zi
+	$(CC) -O1 -I$(ZIRAN_DIR)/include -Ibuild/local-game-records-test $$(find build/local-game-records-test -name '*.c') -o build/local-game-records-test/test
+	build/local-game-records-test/test

@@ -18,6 +18,8 @@
 #import "kryon/app_context_host"
 #import "layout_props"
 #import "loading_indicator"
+#import "progress_widget"
+#import "progress_props"
 #import "drawing_props"
 #import "box_widget"
 #import "box_props"
@@ -32,6 +34,7 @@
 }
 #import, file "../apps/node_apps.zi";
 #import, file "../apps/node_app_runner.zi";
+#import, file "../apps/node_app_open.zi";
 #import, file "../apps/node_app_tree.zi";
 #import, file "../app/smooth_frames.zi";
 #import, file "../apps/node_app_input.zi";
@@ -65,6 +68,7 @@
 
 using HostValueKind;
 using TextWrap;
+using TextAlign;
 using AndroidImportKind;
 
 c :: #system_library "c";
@@ -288,32 +292,69 @@ NodeScreenShown :: (identity: u64) -> bool {
     return false
 }
 
-// Pictures the backend still reads or decodes; the browser draws each one
-// itself when it is ready.
-NodeScreenImagesPending :: () -> s32 {
-    #if #defined(PLATFORM_WEB) {
-        return 0
-    } else {
-        return ImagesPending()
+// Count only this app's requested pictures. Images queued by a background
+// app cannot hold the visible app behind its loading cover.
+NodeScreenPictures :: struct { ready: s32; total: s32 }
+NodeScreenPictureProgress :: (slot: s32) -> NodeScreenPictures {
+    result: NodeScreenPictures
+    #if #defined(PLATFORM_WEB) == false {
+        runtime := NodeTreeRuntime(slot)
+        if runtime == null || runtime.node == null { return result }
+        digest := TextUntilNul(runtime.node.entry.sha256[:])
+        for image: node_tree_images {
+            if TextUntilNul(image.digest[:]) != digest { continue }
+            result.total += 1
+            if ImageWidth(image.path) >= 0 { result.ready += 1 }
+        }
     }
+    return result
 }
 
-NodeScreenCover :: (app: *InnerBreeze, area: Rectangle) {
+NodeScreenProgress :: (app: *InnerBreeze, area: Rectangle, title: string,
+    stage: string, done: s32, total: s32) {
+    scale := MetricsScale()
+    width := area.width - 48.0 * scale
+    if width > 320.0 * scale { width = 320.0 * scale }
+    left := area.x + (area.width - width) / 2.0
+    middle := area.y + area.height / 2.0
+    Text(app.ui.session, TextProps.{.key = KeyHash("inbe/node-app/loading-title"),
+            .text = title, .font = AppFontSize(),
+            .bounds = Rectangle.{left, middle - 56.0 * scale, width, 28.0 * scale},
+            .align = cast(TextAlign)TextAlignCenter})
+    Text(app.ui.session, TextProps.{.key = KeyHash("inbe/node-app/loading-stage"),
+            .text = stage, .font = AppFontSize(),
+            .bounds = Rectangle.{left, middle - 24.0 * scale, width, 28.0 * scale},
+            .align = cast(TextAlign)TextAlignCenter})
+    counts: Vec(u8)
+    BuilderPrint(*counts, "% / %", done, total)
+    Progress(app.ui.session, ProgressProps.{.key = KeyHash("inbe/node-app/loading-progress"),
+            .bounds = Rectangle.{left, middle + 16.0 * scale, width, 24.0 * scale},
+            .min = 0, .max = total, .value = done, .label = TextView(VecSlice(counts, 0, counts.count))})
+    VecFree(counts)
+    AppRequestSmoothFrames(2)
+}
+
+NodeScreenCover :: (app: *InnerBreeze, area: Rectangle, pictures: NodeScreenPictures) {
     Box(app.ui.session, BoxProps.{.key = KeyHash("inbe/node-app/cover"), .bounds = area,
             .fill = StyleTokenColor("canvas")})
-    LoadingIndicator(app.ui.session, LoadingIndicatorProps.{.key = KeyHash("inbe/node-app/cover-loading"),
-            .bounds = area, .now = GetTime(), .scale = MetricsScale()})
-    AppRequestSmoothFrames(2)
+    NodeScreenProgress(app, area, NodeAppName(app.node_app_slot),
+        LocaleText("app_loading_pictures"), pictures.ready, ifx pictures.total > 0 then pictures.total else 1)
 }
 
-// While an app opens: Kryon's loading dots, the same everywhere, in the
-// middle of the app's area.
 NodeScreenLoading :: (app: *InnerBreeze) {
-    LoadingIndicator(app.ui.session, LoadingIndicatorProps.{.key = KeyHash("inbe/node-app/loading"),
-            .bounds = Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
-                cast(float32)(app.ui.view_height - app_content_bottom_reserved(app))},
-            .now = GetTime(), .scale = MetricsScale()})
-    AppRequestSmoothFrames(2)
+    area := Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
+        cast(float32)(app.ui.view_height - app_content_bottom_reserved(app))}
+    slot := AppScreenSlot(app)
+    if slot >= 0 {
+        done := AppsFeaturesReadyCount()
+        total := cast(s32)PackageCount - 1
+        NodeScreenProgress(app, area, LocaleText("app_loading_apps"),
+            LocaleText("app_loading_open"), done, total)
+        return
+    }
+    step := NodeOpenStep(app.node_app_slot)
+    stages: [4]string = .["app_loading_wait", "app_loading_read", "app_loading_open", "app_loading_ready"]
+    NodeScreenProgress(app, area, NodeAppName(app.node_app_slot), LocaleText(stages[step]), step, 3)
 }
 
 // The bundled app that draws the current screen, by module slot, or -1 for
@@ -403,13 +444,14 @@ node_app_screen_draw :: (app: *InnerBreeze) {
     unused NodeAppRunMessage(slot, message)
     NodeAppUiEnd()
     identity := NodeScreenIdentity(slot)
-    if !NodeScreenShown(identity) {
+    pictures := NodeScreenPictureProgress(slot)
+    if !NodeScreenShown(identity) || pictures.ready < pictures.total {
         if node_screen_opening != identity {
             node_screen_opening = identity
-            NodeScreenCover(app, area)
-        } else if NodeScreenImagesPending() > 0 {
-            NodeScreenCover(app, area)
-        } else {
+            NodeScreenCover(app, area, pictures)
+        } else if pictures.ready < pictures.total {
+            NodeScreenCover(app, area, pictures)
+        } else if !NodeScreenShown(identity) {
             node_screen_shown[node_screen_shown_next] = identity
             node_screen_shown_next = (node_screen_shown_next + 1) % 16
         }

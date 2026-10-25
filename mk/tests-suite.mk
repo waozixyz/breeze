@@ -162,3 +162,5 @@ test: android-sdk-install-test
 ## Run before pushing to catch web-only breakage -- e.g. code under
 ## #if defined(PLATFORM_WEB) -- that `make test` (desktop-native) misses.
 ci: test web
+
+test: local-game-records-test
