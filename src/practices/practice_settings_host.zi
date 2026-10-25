@@ -1,0 +1,309 @@
+// The Customize pages of Meditation and Astral Projection, which Practices
+// draws (apps/practice/settings_view.zi). The host gives the settings, the
+// music tracks with the chosen track's download, and the languages narration
+// is recorded in, and saves each change the page asks for.
+c3 :: #system_library "c";
+app_content_top_reserved :: (app: *InnerBreeze) -> s32 #foreign c3;
+app_content_bottom_reserved :: (app: *InnerBreeze) -> s32 #foreign c3;
+save_settings :: (app: *InnerBreeze) #foreign c3 "save_settings";
+#import "session"
+#import "geometry"
+#import "drawing_props"
+#import "byte_text_linux"
+#import "bundle_host"
+#import "hosted_values"
+#import "widget_host"
+#import "file_download"
+#import, file "../app/app_types.zi";
+#import, file "../app/modal_rules.zi";
+#import, file "../app/app_settings.zi";
+#import, file "../app/audio_selection.zi";
+#import, file "../app/color.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/music_library.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../core/types.zi";
+#import, file "../screens/practice_screen_calls.zi";
+#import, file "../screens/practice_subscreen_layout.zi";
+#import, file "meditation/meditation_music.zi";
+#import, file "practice_downloads.zi";
+#import, file "practice_voice_settings.zi";
+#import, file "../cells/practice_types.zi";
+#import, file "../cells/practice_ui_types.zi";
+#import, file "../cells/app_codec.zi";
+#import, file "../cells/hosted_assets.zi";
+#import, file "../cells/module_host.zi";
+
+using ExerciseType;
+using HostValueKind;
+using ModalType;
+
+PRACTICE_SETTINGS_LANGUAGE_MAX :: 32
+MEDITATION_DURATION_PRESETS :: 5
+
+practice_settings_frame: PracticeSettingsFrame;
+practice_settings_frame_codec: WidgetPracticeSettingsFrameCodec;
+practice_settings_track_codec: WidgetPracticeMusicTrackCodec;
+practice_settings_language_codec: WidgetPracticeNarrationChoiceCodec;
+// The languages narration is listed in this frame: each one's pack, code,
+// name, state and place among the app's languages.
+practice_settings_packs: [PRACTICE_SETTINGS_LANGUAGE_MAX]s32;
+practice_settings_codes: [PRACTICE_SETTINGS_LANGUAGE_MAX]string;
+practice_settings_labels: [PRACTICE_SETTINGS_LANGUAGE_MAX]string;
+practice_settings_ranks: [PRACTICE_SETTINGS_LANGUAGE_MAX]s32;
+
+PracticeSettingsCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    app := cast(*InnerBreeze)context
+    if TextFromCString(module) != "settings_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadPracticeSettingsHost" && count == 0 {
+        result.* = WidgetEncodePracticeSettingsFrame(practice_settings_frame,
+            *practice_settings_frame_codec)
+        return 1
+    }
+    if name == "WritePracticeSettingsHost" && count == 1 &&
+    WidgetValidPracticeSettingsFrame(arguments[0]) {
+        observed := WidgetDecodePracticeSettingsFrame(arguments[0], *practice_settings_frame_codec)
+        practice_settings_frame.scroll = observed.scroll
+        practice_settings_frame.action = observed.action
+        practice_settings_frame.value = observed.value
+        return 1
+    }
+    if name == "ReadPracticeMusicTrackHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        track: PracticeMusicTrack
+        if index >= 0 && index < practice_settings_frame.music_count {
+            track.label = app_audio_music_label(app, index)
+        }
+        result.* = WidgetEncodePracticeMusicTrack(track, *practice_settings_track_codec)
+        return 1
+    }
+    if name == "ReadPracticeNarrationHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        choice: PracticeNarrationChoice
+        if index >= 0 && index < practice_settings_frame.narration_count {
+            choice = PracticeNarrationChoice.{.label = practice_settings_labels[index],
+                .state = PracticeNarrationState(practice_settings_packs[index]),
+                .rank = practice_settings_ranks[index]}
+        }
+        result.* = WidgetEncodePracticeNarrationChoice(choice, *practice_settings_language_codec)
+        return 1
+    }
+    if name == "SettingsLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
+}
+
+// The practice's track, with the mask of practices that play music kept in
+// step with it.
+practice_settings_track :: (app: *InnerBreeze, practice: s32) -> s32 {
+    sanitize_practice_music(app)
+    track := app.meditation.music_practice_tracks[practice]
+    if track < 0 {
+        track = AUDIO_MUSIC_NONE
+        app.meditation.music_practice_tracks[practice] = AUDIO_MUSIC_NONE
+        app.meditation.music_practice_mask &= ~(1 << practice)
+    } else {
+        app.meditation.music_practice_mask |= 1 << practice
+    }
+    return track
+}
+
+practice_settings_music :: (app: *InnerBreeze, practice: s32, frame: *PracticeSettingsFrame) {
+    track := practice_settings_track(app, practice)
+    count := app_audio_music_count(app)
+    if count > AUDIO_MUSIC_COUNT_MAX {
+        count = AUDIO_MUSIC_COUNT_MAX
+    }
+    frame.music = true
+    frame.music_count = count
+    frame.music_selection = ifx track == AUDIO_MUSIC_NONE then 0 else track + 1
+    if frame.music_selection < 0 || frame.music_selection > count {
+        frame.music_selection = 0
+    }
+    if track == AUDIO_MUSIC_NONE {
+        return
+    }
+    download := *app.meditation.music_download
+    frame.music_installed = meditation_music_track_installed(app, track) != 0
+    frame.music_built_in = track < AUDIO_BUILTIN_MUSIC_COUNT
+    frame.music_playing = app.meditation.music_playing != 0
+    frame.music_show_status = !frame.music_installed || download.status != FileDownloadStatus.Idle
+    frame.music_downloading = download.status == FileDownloadStatus.Downloading
+    if frame.music_downloading {
+        status: [96]u8
+        meditation_music_format_download_status(*status[0], size_of(type_of(status)), download)
+        frame.music_status = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*status[0], 96))
+        frame.music_bytes = cast(s64)download.bytes
+        frame.music_total = cast(s64)download.total_bytes
+    } else {
+        frame.music_status = FrameTextHold(*app.ui.frame_text,
+            AppTextFromCString(*app.meditation.music_status[0],
+                size_of(type_of(app.meditation.music_status))))
+    }
+}
+
+// The line under the language list while a language downloads, after one
+// failed, or while none is on this device.
+practice_settings_narration :: (app: *InnerBreeze, practice: s32, frame: *PracticeSettingsFrame) {
+    voice := ""
+    frame.narration = true
+    frame.narration_enabled = app.voice_narration_enabled != 0
+    frame.narration_voices = PracticeVoiceRecorded(practice, "male")
+    if !frame.narration_enabled {
+        return
+    }
+    PracticeContentReviewNext()
+    count: s32 = 0
+    spoken := PracticeNarrationLanguage(practice, voice)
+    shown := ifx spoken.count > 0 then spoken else PracticeNarrationPreferred(practice)
+    frame.narration_selected = -1
+    for rank: cast(s32)0..LocaleLanguageCount() - 1 {
+        language := LocaleLanguageAt(rank)
+        index := PracticeNarrationPack(practice, language.code, voice)
+        if index < 0 || count >= PRACTICE_SETTINGS_LANGUAGE_MAX {
+            continue
+        }
+        practice_settings_packs[count] = index
+        practice_settings_codes[count] = language.code
+        practice_settings_labels[count] = language.label
+        practice_settings_ranks[count] = rank
+        if language.code == shown {
+            frame.narration_selected = count
+        }
+        count += 1
+    }
+    frame.narration_count = count
+    frame.narration_status = PracticeNarrationStatus(app, practice, voice)
+}
+
+practice_settings_frame_for :: (app: *InnerBreeze, practice: s32) -> PracticeSettingsFrame {
+    integrated := PracticeConfigIntegrated(app, cast(s32)ModalPracticeConfig) != 0
+    layout := PracticeSubscreenLayout.{}
+    top_gap := ifx practice == EXERCISE_ASTRAL_PROJECTION then AppScale(14) else AppScale(18)
+    PracticeConfigLayout(app, cast(s32)ModalPracticeConfig, top_gap, *layout)
+    frame := PracticeSettingsFrame.{.session = app.ui.session, .scale = MetricsScale(),
+        .view_width = app.ui.view_width, .view_height = app.ui.view_height,
+        .font = AppFontSize(), .small_font = AppSmallFontSize(), .title_height = layout.title_h,
+        .scroll_y = layout.scroll_y, .scroll_height = layout.scroll_h,
+        .bottom = ifx integrated then app_content_bottom_reserved(app) else 0,
+        .canvas_color = StyleTokenColor("canvas"), .accent_color = StyleTokenColor("accent"),
+        .practice = practice, .scroll = app.settings_scroll}
+    if practice == EXERCISE_MEDITATION {
+        if app.meditation.duration_mode < 0 || app.meditation.duration_mode > MEDITATION_DURATION_PRESETS {
+            app.meditation.duration_mode = ifx app.meditation.duration_mode < 0 then 0 else MEDITATION_DURATION_PRESETS
+        }
+        if app.meditation.custom_minutes < 1 {
+            app.meditation.custom_minutes = 1
+        } else if app.meditation.custom_minutes > 240 {
+            app.meditation.custom_minutes = 240
+        }
+        frame.duration_mode = app.meditation.duration_mode
+        frame.custom_minutes = app.meditation.custom_minutes
+        frame.extend_controls = app.meditation.show_extend_controls != 0
+        frame.bell_minutes = app.meditation.interval_bell_minutes
+    }
+    practice_settings_music(app, practice, *frame)
+    if practice == EXERCISE_ASTRAL_PROJECTION {
+        practice_settings_narration(app, practice, *frame)
+    }
+    return frame
+}
+
+practice_settings_save :: (app: *InnerBreeze) {
+    app.settings_dirty = 1
+    save_settings(app)
+}
+
+practice_settings_apply :: (app: *InnerBreeze, practice: s32, frame: PracticeSettingsFrame) {
+    action := frame.action
+    value := frame.value
+    if action == PRACTICE_SETTINGS_DURATION && value >= 0 && value <= MEDITATION_DURATION_PRESETS {
+        app.meditation.duration_mode = value
+        practice_settings_save(app)
+    } else if action == PRACTICE_SETTINGS_CUSTOM {
+        minutes := app.meditation.custom_minutes + value
+        app.meditation.custom_minutes = ifx minutes < 1 then 1 else ifx minutes > 240 then 240 else minutes
+        app.meditation.duration_mode = MEDITATION_DURATION_PRESETS
+        practice_settings_save(app)
+    } else if action == PRACTICE_SETTINGS_EXTEND {
+        app.meditation.show_extend_controls = ifx value != 0 then 1 else 0
+        practice_settings_save(app)
+    } else if action == PRACTICE_SETTINGS_BELL && value >= 0 && value <= 30 {
+        app.meditation.interval_bell_minutes = value
+        practice_settings_save(app)
+    } else if action == PRACTICE_SETTINGS_MUSIC && value >= 0 && value <= frame.music_count {
+        if value == 0 {
+            app.meditation.music_practice_tracks[practice] = AUDIO_MUSIC_NONE
+            app.meditation.music_practice_mask &= ~(1 << practice)
+        } else {
+            app.meditation.music_practice_tracks[practice] = value - 1
+            app.meditation.music_practice_mask |= 1 << practice
+            app.meditation.music_track = app.meditation.music_practice_tracks[practice]
+        }
+        app.settings_dirty = 1
+        meditation_music_unload(app)
+        save_settings(app)
+    } else if action == PRACTICE_SETTINGS_MUSIC_TEST && frame.music_installed {
+        app.meditation.music_track = app.meditation.music_practice_tracks[practice]
+        test_track(app)
+    } else if action == PRACTICE_SETTINGS_MUSIC_DOWNLOAD && frame.music_built_in {
+        meditation_music_start_download(app)
+    } else if action == PRACTICE_SETTINGS_NARRATION {
+        app.voice_narration_enabled = ifx value != 0 then 1 else 0
+        practice_settings_save(app)
+    } else if action == PRACTICE_SETTINGS_LANGUAGE && value >= 0 && value < frame.narration_count {
+        if practice == EXERCISE_ASTRAL_PROJECTION {
+            unused AppCopyText(practice_settings_codes[value], app.astral_projection_narration_language[:])
+        }
+        PracticeNarrationPrefer(practice, practice_settings_codes[value])
+        PracticeNarrationDownload(practice_settings_packs[value])
+        practice_settings_save(app)
+    } else if action == PRACTICE_SETTINGS_LANGUAGE_ACTION && value >= 0 && value < frame.narration_count {
+        pack := practice_settings_packs[value]
+        state := PracticeNarrationState(pack)
+        if state == 1 || state == 2 {
+            PracticeNarrationDecline(pack)
+        } else {
+            PracticeNarrationDownload(pack)
+        }
+    }
+}
+
+// Has Practices draw the practice's Customize page and saves what changed
+// there. Returns 1 when Back was pressed.
+PracticeSettingsDraw :: (app: *InnerBreeze, practice: s32) -> s32 {
+    if app == null || !SessionValid(app.ui.session) {
+        return 0
+    }
+    app.practice_config_tab = 0
+    practice_settings_frame = practice_settings_frame_for(app, practice)
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    CellsUiBegin(PracticeSettingsCall, cast(*void)app)
+    drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_SETTINGS_VIEW})
+    CellsUiEnd()
+    WidgetHostEnd()
+    frame := practice_settings_frame
+    if !drawn.succeeded {
+        return 0
+    }
+    app.settings_scroll = frame.scroll
+    if frame.action == PRACTICE_SETTINGS_BACK {
+        return 1
+    }
+    practice_settings_apply(app, practice, frame)
+    return 0
+}

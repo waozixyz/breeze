@@ -1,0 +1,615 @@
+// A finished practice's results: its name over a soft glow, Wim Hof's
+// rounds with the best and average hold and a chart of every round, or the
+// time, pattern and cycles of the other practices, whether the session was
+// saved, a mood to pick, and Discard and Done. The host keeps the session's
+// results and saves the mood.
+#import "session"
+#import "geometry"
+#import "vec"
+#import "dpi"
+#import "layout"
+#import "drawing_props"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "text_measure"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "box_props"
+#import "box_widget"
+#import "shape_props"
+#import "shape_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "tree"
+#import, file "../../src/cells/practice_ui_types.zi";
+#import, file "../../src/cells/practice_types.zi";
+#import, file "../../src/app/exercise_types.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using ExerciseType;
+using TextAlign;
+using TextWrap;
+host_api :: #system_library "host_api";
+ReadPracticeResultsHost :: () -> PracticeResultsFrame #foreign host_api;
+WritePracticeResultsHost :: (frame: PracticeResultsFrame) #foreign host_api;
+ReadPracticeResultRoundHost :: (index: s32) -> PracticeResultRound #foreign host_api;
+ResultsLocaleHost :: (key: string) -> string #foreign host_api;
+results: PracticeResultsFrame;
+
+RESULTS_MOODS :: 5
+RESULTS_ROUND_MAX :: 64
+results_rounds: [RESULTS_ROUND_MAX]s32;
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, results.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+Locale :: (key: string) -> string {
+    return ResultsLocaleHost(key)
+}
+
+Width :: (text: string, font: s32) -> s32 {
+    return TextWidth(results.session, TextProps.{.text = text, .font = font})
+}
+
+FitFont :: (text: string, max_width: s32, preferred: s32, minimum: s32) -> s32 {
+    font := preferred
+    if max_width <= 0 {
+        return font
+    }
+    while font > minimum && Width(text, font) > max_width {
+        font -= 1
+    }
+    return font
+}
+
+Alpha :: (color: Color, opacity: float32) -> Color {
+    color.a = cast(u8)(cast(float32)color.a * opacity)
+    return color
+}
+
+Padded :: (out: *Vec(u8), value: s32) {
+    if value < 10 {
+        BuilderPrint(out, "0")
+    }
+    BuilderPrint(out, "%", value)
+}
+
+// The template with each %d replaced by the next number, %s by the text and
+// %% by a percent.
+Filled :: (template: string, first: s32, second: s32, text: string) -> string {
+    out: Vec(u8)
+    values: [2]s32 = .[first, second]
+    used: s32 = 0
+    at: s64 = 0
+    while at < template.count {
+        if at + 1 < template.count && template[at] == cast(u8)37 {
+            next := template[at + 1]
+            if next == cast(u8)100 && used < 2 {
+                BuilderPrint(*out, "%", values[used])
+                used += 1
+                at += 2
+                continue
+            }
+            if next == cast(u8)115 {
+                BuilderPrint(*out, "%", text)
+                at += 2
+                continue
+            }
+            if next == cast(u8)37 {
+                BuilderPrint(*out, "%%")
+                at += 2
+                continue
+            }
+        }
+        BuilderPrint(*out, "%", template[at:at + 1])
+        at += 1
+    }
+    return BuilderFinish(out)
+}
+
+Number :: (key: string, value: s32) -> string {
+    return Filled(Locale(key), value, 0, "")
+}
+
+// "1h 05m", "4m 02s" or "35s".
+Duration :: (seconds: s32) -> string {
+    if seconds < 0 {
+        seconds = 0
+    }
+    out: Vec(u8)
+    if seconds >= 3600 {
+        BuilderPrint(*out, "%h ", seconds / 3600)
+        Padded(*out, (seconds % 3600) / 60)
+        BuilderPrint(*out, "m")
+    } else if seconds >= 60 {
+        BuilderPrint(*out, "%m ", seconds / 60)
+        Padded(*out, seconds % 60)
+        BuilderPrint(*out, "s")
+    } else {
+        BuilderPrint(*out, "%s", seconds)
+    }
+    return BuilderFinish(out)
+}
+
+Label :: (text: string, x: s32, y: s32, width: s32, height: s32, font: s32, align: TextAlign) {
+    Text(results.session, TextProps.{.bounds = Bounds(x, y, width, height), .text = text,
+            .font = font, .align = align, .vertical_align = cast(TextAlign)TextAlignCenter,
+            .wrap = cast(TextWrap)TextWrapNone})
+}
+
+// The corner radius that rounds off `roundness` of a box's shorter side.
+Corner :: (roundness: float32, width: s32, height: s32) -> float32 {
+    shorter := ifx height < width then height else width
+    return roundness * cast(float32)shorter * 0.5
+}
+
+Card :: (x: s32, y: s32, width: s32, height: s32) {
+    Box(results.session, BoxProps.{.bounds = Bounds(x, y, width, height),
+            .fill = results.surface_color, .border = results.border_color,
+            .radius = Corner(0.12, width, height)})
+}
+
+// A deep blue on light themes and a soft violet on dark ones.
+Accent :: () -> Color {
+    background := results.canvas_color
+    luma := cast(s32)background.r * 299 + cast(s32)background.g * 587 + cast(s32)background.b * 114
+    if luma >= 128000 {
+        return Color.{.r = 82, .g = 119, .b = 193, .a = 255}
+    }
+    return Color.{.r = 190, .g = 163, .b = 250, .a = 255}
+}
+
+Rounds :: () {
+    count := results.round_count
+    if count > RESULTS_ROUND_MAX {
+        count = RESULTS_ROUND_MAX
+        results.round_count = count
+    }
+    for index: cast(s32)0..count - 1 {
+        results_rounds[index] = ReadPracticeResultRoundHost(index).seconds
+    }
+}
+
+// The best and the average hold.
+RoundStats :: (best: *s32, average: *s32) {
+    total: s32 = 0
+    best.* = 0
+    average.* = 0
+    for index: cast(s32)0..results.round_count - 1 {
+        seconds := results_rounds[index]
+        if seconds < 0 {
+            seconds = 0
+        }
+        total += seconds
+        if seconds > best.* {
+            best.* = seconds
+        }
+    }
+    if results.round_count > 0 {
+        average.* = total / results.round_count
+    }
+}
+
+// ---- Moods -----------------------------------------------------------------------------
+
+MoodColor :: (mood: s32) -> Color {
+    if mood <= 1 { return Color.{.r = 226, .g = 83, .b = 78, .a = 255} }
+    if mood == 2 { return Color.{.r = 238, .g = 139, .b = 70, .a = 255} }
+    if mood == 3 { return Color.{.r = 235, .g = 202, .b = 77, .a = 255} }
+    if mood == 4 { return Color.{.r = 108, .g = 199, .b = 104, .a = 255} }
+    return Color.{.r = 73, .g = 194, .b = 192, .a = 255}
+}
+
+Pixel :: (x: s32, y: s32, width: s32, height: s32, color: Color) {
+    Box(results.session, BoxProps.{.bounds = Bounds(x, y, width, height), .fill = color})
+}
+
+// A pixel face, from frowning red at 1 to grinning teal at 5.
+MoodFace :: (mood: s32, center_x: s32, center_y: s32, size: s32) {
+    u := size / 12
+    if u < 2 {
+        u = 2
+    }
+    face := u * 12
+    x := center_x - face / 2
+    y := center_y - face / 2
+    fill := MoodColor(mood)
+    stroke := DarkenColor(fill, 45)
+    detail := Color.{.r = 38, .g = 40, .b = 48, .a = 255}
+    shine := Color.{.r = 255, .g = 255, .b = 255, .a = 170}
+    Pixel(x + u * 3, y, u * 6, u, stroke)
+    Pixel(x + u * 2, y + u, u * 8, u, stroke)
+    Pixel(x + u, y + u * 2, u * 10, u, stroke)
+    Pixel(x, y + u * 3, u * 12, u * 6, stroke)
+    Pixel(x + u, y + u * 9, u * 10, u, stroke)
+    Pixel(x + u * 2, y + u * 10, u * 8, u, stroke)
+    Pixel(x + u * 3, y + u * 11, u * 6, u, stroke)
+    Pixel(x + u * 3, y + u, u * 6, u, fill)
+    Pixel(x + u * 2, y + u * 2, u * 8, u, fill)
+    Pixel(x + u, y + u * 3, u * 10, u * 6, fill)
+    Pixel(x + u * 2, y + u * 9, u * 8, u, fill)
+    Pixel(x + u * 3, y + u * 10, u * 6, u, fill)
+    Pixel(x + u * 3, y + u * 2, u * 2, u, shine)
+    if mood <= 1 {
+        Pixel(x + u * 2, y + u * 3, u * 3, u, detail)
+        Pixel(x + u * 7, y + u * 3, u * 3, u, detail)
+        Pixel(x + u * 3, y + u * 4, u, u, detail)
+        Pixel(x + u * 8, y + u * 4, u, u, detail)
+        Pixel(x + u * 3, y + u * 8, u, u, detail)
+        Pixel(x + u * 4, y + u * 7, u * 4, u, detail)
+        Pixel(x + u * 8, y + u * 8, u, u, detail)
+        return
+    }
+    Pixel(x + u * 3, y + u * 4, u * 2, u * 2, detail)
+    Pixel(x + u * 7, y + u * 4, u * 2, u * 2, detail)
+    if mood == 2 {
+        Pixel(x + u * 3, y + u * 8, u, u, detail)
+        Pixel(x + u * 4, y + u * 7, u * 4, u, detail)
+        Pixel(x + u * 8, y + u * 8, u, u, detail)
+    } else if mood == 3 {
+        Pixel(x + u * 3, y + u * 8, u * 6, u, detail)
+    } else if mood == 4 {
+        Pixel(x + u * 2, y + u * 7, u, u, detail)
+        Pixel(x + u * 3, y + u * 8, u * 6, u, detail)
+        Pixel(x + u * 9, y + u * 7, u, u, detail)
+    } else {
+        Pixel(x + u * 3, y + u * 7, u * 6, u * 3, detail)
+        Pixel(x + u * 4, y + u * 7, u * 4, u, Color.{.r = 255, .g = 255, .b = 255, .a = 255})
+        Pixel(x + u * 4, y + u * 9, u * 4, u, Color.{.r = 236, .g = 108, .b = 128, .a = 255})
+    }
+}
+
+MoodPicker :: (x: s32, y: s32, width: s32) {
+    padding := Scale(14)
+    gap := Scale(7)
+    item_width := (width - padding * 2 - gap * (RESULTS_MOODS - 1)) / RESULTS_MOODS
+    button_y := y + Scale(49)
+    button_height := Scale(60)
+    Card(x, y, width, Scale(124))
+    Label(Locale("results_mood_title"), x + padding, y + Scale(10), width - padding * 2, Scale(30),
+        Scale(18), cast(TextAlign)TextAlignStart)
+    for index: cast(s32)0..RESULTS_MOODS - 1 {
+        button_x := x + padding + index * (item_width + gap)
+        button_width := ifx index == RESULTS_MOODS - 1 then x + width - padding - button_x else item_width
+        selected := results.mood == index + 1
+        if Button(results.session, ButtonProps.{
+                .bounds = Bounds(button_x, button_y, button_width, button_height),
+                .id = 24800 + index,
+                .tone = cast(ButtonTone)(ifx selected then ButtonToneAccent else ButtonToneNeutral),
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .selected = selected}) != 0 {
+            results.action = PRACTICE_RESULTS_MOOD
+            results.value = index + 1
+        }
+        MoodFace(index + 1, button_x + button_width / 2, button_y + button_height / 2, Scale(28))
+    }
+}
+
+// ---- Wim Hof's rounds -------------------------------------------------------------------
+
+Metrics :: (x: s32, y: s32, width: s32, best: s32, average: s32) {
+    titles: [3]string = .[Locale("results_metric_rounds"), Locale("results_metric_best"),
+        Locale("results_metric_average")]
+    out: Vec(u8)
+    BuilderPrint(*out, "%", results.round_count)
+    values: [3]string = .[BuilderFinish(out), Number("results_metric_seconds", best),
+        Number("results_metric_seconds", average)]
+    count: s32 = ifx results.round_count <= 1 then 2 else 3
+    gap := Scale(8)
+    cell_width := (width - gap * (count - 1)) / count
+    for index: cast(s32)0..count - 1 {
+        cell_x := x + index * (cell_width + gap)
+        actual := ifx index == count - 1 then x + width - cell_x else cell_width
+        Card(cell_x, y, actual, Scale(78))
+        Line(results.session, LineProps.{
+                .start = Vector2.{cast(float32)(cell_x + Scale(14)), cast(float32)(y + Scale(12))},
+                .end = Vector2.{cast(float32)(cell_x + actual - Scale(14)), cast(float32)(y + Scale(12))},
+                .color = Alpha(Accent(), ifx index == 1 then 0.72 else 0.34)})
+        Label(titles[index], cell_x + Scale(5), y + Scale(18), actual - Scale(10), Scale(22),
+            FitFont(titles[index], actual - Scale(12), Scale(17), Scale(12)), cast(TextAlign)TextAlignCenter)
+        Label(values[index], cell_x + Scale(5), y + Scale(38), actual - Scale(10), Scale(34),
+            FitFont(values[index], actual - Scale(12), Scale(28), Scale(20)), cast(TextAlign)TextAlignCenter)
+    }
+}
+
+ChartHeight :: () -> s32 {
+    return ifx results.round_count <= 1 then Scale(165) else Scale(220)
+}
+
+ChartX :: (index: s32, chart_x: s32, chart_width: s32) -> s32 {
+    if results.round_count > 1 {
+        return chart_x + index * chart_width / (results.round_count - 1)
+    }
+    return chart_x + chart_width / 2
+}
+
+ChartY :: (index: s32, baseline: s32, chart_height: s32, top: s32) -> s32 {
+    value := results_rounds[index]
+    if value < 0 {
+        value = 0
+    }
+    return baseline - value * chart_height / top
+}
+
+// Each round's hold as a point on a line, with guides and labels; a single
+// round shows its hold large in a glowing ring.
+Chart :: (x: s32, y: s32, width: s32, best: s32) {
+    chart_x := x + Scale(34)
+    chart_y := y + Scale(72)
+    chart_width := width - Scale(68)
+    chart_height := Scale(112)
+    baseline := chart_y + chart_height
+    top := ((best + 19) / 20) * 20
+    if top < 20 {
+        top = 20
+    }
+    step := (results.round_count + 5) / 6
+    if step < 1 {
+        step = 1
+    }
+    accent := Accent()
+    Card(x, y, width, ChartHeight())
+    // A single round's glow reaches under the title, so it comes first.
+    if results.round_count <= 1 {
+        glow := Vector2.{cast(float32)(x + width / 2), cast(float32)(y + Scale(91))}
+        Circle(results.session, CircleProps.{.center = glow, .radius = cast(float32)Scale(62),
+                .fill = Alpha(accent, 0.18), .edge = Alpha(results.surface_color, 0.0), .has_edge = true})
+        Ring(results.session, RingProps.{.center = glow, .inner_radius = cast(float32)Scale(46),
+                .outer_radius = cast(float32)Scale(48), .end_angle = 360.0, .color = Alpha(accent, 0.70)})
+    }
+    Label(Locale("round_times_title"), x + Scale(18), y + Scale(10), width - Scale(36), Scale(32),
+        Scale(18), cast(TextAlign)TextAlignStart)
+    if results.round_count <= 1 {
+        value := ifx results.round_count == 1 then results_rounds[0] else 0
+        if value < 0 {
+            value = 0
+        }
+        detail := Number("results_rounds", 0)
+        if results.round_count == 1 {
+            detail = Filled(Locale("round_result_label"), 1, value, "")
+        }
+        Label(Number("results_metric_seconds", value), x + Scale(45), y + Scale(57), width - Scale(90),
+            Scale(55), Scale(38), cast(TextAlign)TextAlignCenter)
+        Label(detail, x + Scale(20), y + Scale(127), width - Scale(40), Scale(25), Scale(14),
+            cast(TextAlign)TextAlignCenter)
+        return
+    }
+    for row: cast(s32)0..2 {
+        guide := cast(float32)(chart_y + row * chart_height / 2)
+        Line(results.session, LineProps.{.start = Vector2.{cast(float32)chart_x, guide},
+                .end = Vector2.{cast(float32)(chart_x + chart_width), guide},
+                .color = Alpha(results.border_color, 0.55)})
+    }
+    // The lines and points come before every label, so the labels stay
+    // above the lines that reach them.
+    for index: cast(s32)0..results.round_count - 1 {
+        point_x := ChartX(index, chart_x, chart_width)
+        point := Vector2.{cast(float32)point_x, cast(float32)ChartY(index, baseline, chart_height, top)}
+        Line(results.session, LineProps.{.start = point,
+                .end = Vector2.{cast(float32)point_x, cast(float32)baseline}, .color = Alpha(accent, 0.18)})
+        if index > 0 {
+            Line(results.session, LineProps.{
+                    .start = Vector2.{cast(float32)ChartX(index - 1, chart_x, chart_width),
+                        cast(float32)ChartY(index - 1, baseline, chart_height, top)},
+                    .end = point, .thickness = cast(float32)Scale(3), .color = accent})
+        }
+        Circle(results.session, CircleProps.{.center = point, .radius = cast(float32)Scale(5),
+                .fill = results.text_color})
+    }
+    for index: cast(s32)0..results.round_count - 1 {
+        if index % step == 0 || index == results.round_count - 1 {
+            value := results_rounds[index]
+            if value < 0 {
+                value = 0
+            }
+            point_x := ChartX(index, chart_x, chart_width)
+            point_y := ChartY(index, baseline, chart_height, top)
+            out: Vec(u8)
+            BuilderPrint(*out, "%", index + 1)
+            Label(Number("results_metric_seconds", value), point_x - Scale(25), point_y - Scale(29),
+                Scale(50), Scale(22), Scale(14), cast(TextAlign)TextAlignCenter)
+            Label(BuilderFinish(out), point_x - Scale(15), baseline + Scale(7), Scale(30), Scale(20),
+                Scale(12), cast(TextAlign)TextAlignCenter)
+        }
+    }
+}
+
+RoundList :: (x: s32, y: s32, width: s32) {
+    rows := (results.round_count + 1) / 2
+    gap := Scale(8)
+    padding := Scale(14)
+    cell_width := (width - padding * 2 - gap) / 2
+    Card(x, y, width, Scale(50) + rows * Scale(40))
+    Label(Locale("round_times_title"), x + padding, y + Scale(8), width - padding * 2, Scale(30),
+        Scale(18), cast(TextAlign)TextAlignStart)
+    for index: cast(s32)0..results.round_count - 1 {
+        cell_x := x + padding + (index % 2) * (cell_width + gap)
+        cell_y := y + Scale(42) + (index / 2) * Scale(40)
+        label := Filled(Locale("round_result_label"), index + 1, results_rounds[index], "")
+        Box(results.session, BoxProps.{.bounds = Bounds(cell_x, cell_y, cell_width, Scale(32)),
+                .fill = Alpha(results.link_color, 0.08), .radius = Corner(0.16, cell_width, Scale(32))})
+        Label(label, cell_x + Scale(7), cell_y, cell_width - Scale(14), Scale(32),
+            FitFont(label, cell_width - Scale(14), Scale(14), Scale(10)), cast(TextAlign)TextAlignStart)
+    }
+}
+
+// ---- The other practices ---------------------------------------------------------------
+
+OtherCount :: () -> s32 {
+    if results.activity == EXERCISE_PATTERNS {
+        return 1 + (ifx results.detail.count > 0 then 1 else 0) + (ifx results.secondary > 0 then 1 else 0)
+    }
+    return 1
+}
+
+OtherSummary :: (x: s32, y: s32, width: s32) {
+    lines: [3]string
+    count: s32 = 0
+    activity := results.activity
+    if activity == EXERCISE_MEDITATION || activity == EXERCISE_PATTERNS ||
+    activity == EXERCISE_TAI_CHI || activity == EXERCISE_ASTRAL_PROJECTION ||
+    activity == EXERCISE_WORKOUT {
+        lines[count] = Filled(Locale("results_duration"), 0, 0, Duration(results.primary))
+        count += 1
+        if activity == EXERCISE_PATTERNS && results.detail.count > 0 {
+            lines[count] = Filled(Locale("results_pattern"), 0, 0, results.detail)
+            count += 1
+        }
+        if activity == EXERCISE_PATTERNS && results.secondary > 0 {
+            lines[count] = Number("results_cycles", results.secondary)
+            count += 1
+        }
+    } else {
+        lines[count] = Number("results_repetitions", results.primary)
+        count += 1
+    }
+    Card(x, y, width, Scale(50) + count * Scale(38))
+    for index: cast(s32)0..count - 1 {
+        if index > 0 {
+            rule := cast(float32)(y + Scale(30 + index * 38))
+            Line(results.session, LineProps.{.start = Vector2.{cast(float32)(x + Scale(16)), rule},
+                    .end = Vector2.{cast(float32)(x + width - Scale(16)), rule},
+                    .color = Alpha(results.border_color, 0.70)})
+        }
+        Label(lines[index], x + Scale(18), y + Scale(30) + index * Scale(38), width - Scale(36), Scale(38),
+            Scale(17), cast(TextAlign)TextAlignStart)
+    }
+}
+
+// Saved, not saved, or failed to save.
+Status :: (x: s32, y: s32, width: s32) {
+    key := "results_unsaved_status"
+    icon := results.link_color
+    if results.write_failed {
+        key = "results_write_failed"
+        icon = Color.{.r = 226, .g = 83, .b = 78, .a = 255}
+    } else if results.saved {
+        key = "results_saved_status"
+        icon = Color.{.r = 108, .g = 199, .b = 145, .a = 255}
+    }
+    status := Locale(key)
+    Card(x, y, width, Scale(50))
+    Box(results.session, BoxProps.{.bounds = Bounds(x, y, width, Scale(50)), .fill = Alpha(icon, 0.07),
+            .border = Alpha(icon, 0.34), .radius = Corner(0.12, width, Scale(50))})
+    center := Vector2.{cast(float32)(x + Scale(29)), cast(float32)(y + Scale(25))}
+    Circle(results.session, CircleProps.{.center = center, .radius = cast(float32)Scale(12),
+            .fill = Alpha(icon, 0.25)})
+    Circle(results.session, CircleProps.{.center = center, .radius = cast(float32)Scale(5), .fill = icon})
+    Label(status, x + Scale(52), y + Scale(7), width - Scale(68), Scale(36),
+        FitFont(status, width - Scale(68), Scale(16), Scale(12)), cast(TextAlign)TextAlignStart)
+}
+
+// ---- The page ---------------------------------------------------------------------------
+
+ContentHeight :: () -> s32 {
+    height := Scale(20 + 86 + 14)
+    if results.activity == EXERCISE_WIM_HOF {
+        height += Scale(78 + 14 + 14) + ChartHeight()
+    } else {
+        height += Scale(50 + OtherCount() * 38 + 14)
+    }
+    if !results.temporary {
+        height += Scale(50 + 14 + 124 + 14)
+    }
+    if results.activity == EXERCISE_WIM_HOF && results.round_count > 1 {
+        height += Scale(50 + ((results.round_count + 1) / 2) * 40 + 14)
+    }
+    return height + Scale(20)
+}
+
+Content :: (x: s32, width: s32, top: s32, best: s32, average: s32) {
+    y := top + Scale(20)
+    Circle(results.session, CircleProps.{
+            .center = Vector2.{cast(float32)results.center_x, cast(float32)(y + Scale(20))},
+            .radius = cast(float32)Scale(170), .fill = Alpha(Accent(), 0.17),
+            .edge = Alpha(results.canvas_color, 0.0), .has_edge = true})
+    Label(Locale("results_title"), x, y, width, Scale(25), Scale(14), cast(TextAlign)TextAlignStart)
+    Label(results.name, x, y + Scale(30), width, Scale(50), FitFont(results.name, width, Scale(34), Scale(20)),
+        cast(TextAlign)TextAlignStart)
+    y += Scale(86 + 14)
+    if results.activity == EXERCISE_WIM_HOF {
+        Metrics(x, y, width, best, average)
+        y += Scale(78 + 14)
+        Chart(x, y, width, best)
+        y += ChartHeight() + Scale(14)
+    } else {
+        OtherSummary(x, y, width)
+        y += Scale(50 + OtherCount() * 38 + 14)
+    }
+    // Temporary results are not kept, so there is no save status and no
+    // mood to record.
+    if !results.temporary {
+        Status(x, y, width)
+        y += Scale(50 + 14)
+        MoodPicker(x, y, width)
+        y += Scale(124 + 14)
+    }
+    if results.activity == EXERCISE_WIM_HOF && results.round_count > 1 {
+        RoundList(x, y, width)
+    }
+}
+
+Results :: () {
+    Rounds()
+    x := Scale(16)
+    width := results.view_width - Scale(16) * 2
+    if width > Scale(600) {
+        x += (width - Scale(600)) / 2
+        width = Scale(600)
+    }
+    button_height := Scale(48)
+    gap := Scale(12)
+    button_y := results.view_height - Scale(20) - button_height
+    if button_y < Scale(200) {
+        button_y = results.view_height - button_height
+    }
+    best: s32 = 0
+    average: s32 = 0
+    if results.activity == EXERCISE_WIM_HOF {
+        RoundStats(*best, *average)
+    }
+    scrolled := Scroll(results.session, ScrollProps.{.key = KeyHash("inbe/screens/session_results/scroll/1"),
+            .bounds = Bounds(0, 0, results.view_width, button_y - Scale(12)),
+            .content_height = ContentHeight(), .scroll_offset = results.scroll})
+    results.scroll = scrolled.scroll_offset
+    if scrolled.opened {
+        Content(x, width, cast(s32)scrolled.content.y, best, average)
+        unused End(results.session)
+    }
+    if results.saved {
+        button_width := (width - gap) / 2
+        if Button(results.session, ButtonProps.{.bounds = Bounds(x, button_y, button_width, button_height),
+                .label = Locale("discard_button"), .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            results.action = PRACTICE_RESULTS_DISCARD
+        }
+        if Button(results.session, ButtonProps.{
+                .bounds = Bounds(x + button_width + gap, button_y, width - button_width - gap, button_height),
+                .label = Locale("done_button"), .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+            results.action = PRACTICE_RESULTS_DONE
+        }
+    } else if Button(results.session, ButtonProps.{.bounds = Bounds(x, button_y, width, button_height),
+            .label = Locale("done_button"), .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+        results.action = PRACTICE_RESULTS_DONE
+    }
+}
+
+PracticeResultsView :: (message: PracticeMessage) -> PracticeMessage {
+    results = ReadPracticeResultsHost()
+    results.action = PRACTICE_RESULTS_NONE
+    results.value = 0
+    Results()
+    WritePracticeResultsHost(results)
+    message.succeeded = true
+    return message
+}

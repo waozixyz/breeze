@@ -1,5 +1,7 @@
-// A habit day's entries: the dialog that writes one, and the list on the
-// day's screen. Both habit screens show them.
+// A habit day's entries: the dialog that writes one, which Habits draws
+// (apps/habits/habit_day_view.zi) over both habit screens, and the entries
+// the day's screen lists. The host keeps the dialog's entry and saves,
+// skips or deletes it when the dialog asks.
 #import, file "../../habits/habit_types.zi";
 #import, file "../../habits/habit_model.zi";
 #import, file "../../habits/habit_questions.zi";
@@ -17,38 +19,23 @@
 #import, file "../../app/text_buffers.zi";
 #import, file "../../app/cards.zi";
 #import, file "../../platform/raylib_text_input.zi";
+#import, file "../../cells/habits_ui_types.zi";
+#import, file "../../cells/habits_types.zi";
+#import, file "../../cells/app_codec.zi";
+#import, file "../../cells/hosted_assets.zi";
+#import, file "../../cells/module_host.zi";
 #import "date_time"
 #import "geometry"
 #import "drawing_props"
 #import "session"
-#import "tree"
-#import "modal_frame_widget"
-#import "modal_props"
-#import "scroll_props"
-#import "scroll_widget"
-#import "button_props"
-#import "button_widget"
-#import "image_props"
-#import "text_props"
-#import "text_widget"
-#import "text_align"
-#import "semantic"
-#import "box_props"
-#import "box_widget"
-#import "control_props"
-#import "text_field_widget"
-#import "time_picker_props"
-#import "time_picker_widget"
 #import "text_input_props"
-#import "style_sheet"
-#import "layout"
+#import "byte_text_linux"
+#import "bundle_host"
+#import "hosted_values"
+#import "widget_host"
 
 using ModalType;
-using ButtonTone;
-using ButtonEmphasis;
-using TextWrap;
-using TextAlign;
-using SemanticKind;
+using HostValueKind;
 
 HabitScreenRect :: (x: s32, y: s32, width: s32,
     height: s32) -> Rectangle {
@@ -56,38 +43,7 @@ HabitScreenRect :: (x: s32, y: s32, width: s32,
         cast(float32)width, cast(float32)height}
 }
 
-HabitScreenDate :: (app: *InnerBreeze, day_index: s32) -> string {
-    buffer: [24]u8
-    args: [3]FormatArg
-    args[0].number = day_index / 10000
-    args[1].number = (day_index / 100) % 100
-    args[2].number = day_index % 100
-    if !FormatTemplate("%04d-%02d-%02d", args[:], buffer[:]) { return "" }
-    return FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*buffer[0], cast(s32)buffer.count))
-}
-
-habit_session_delete_image :: () -> ImageProps {
-    return ImageProps.{
-        .asset_path = "icons/ui.png",
-        .alt_text = LocaleText("delete_button"),
-        .source = Rectangle.{0.0, 384.0, 64.0, 64.0}
-    }
-}
-
-habit_session_edit_image :: () -> ImageProps {
-    return ImageProps.{
-        .asset_path = "icons/ui.png",
-        .alt_text = LocaleText("habit_edit_title"),
-        .source = Rectangle.{384.0, 0.0, 64.0, 64.0}
-    }
-}
-
 // ---- A day's entries ------------------------------------------------------
-
-HABIT_ANSWER_ROW_HEIGHT :: 84
-// Where an answer's input starts below its question.
-HABIT_ANSWER_INPUT_Y :: 30
 
 // Opens the entry dialog for entry, or for a new entry of the day: now, or
 // on another day at this time of day.
@@ -212,111 +168,6 @@ HabitScreenSkipEntry :: (app: *InnerBreeze) -> bool {
     return HabitScreenSaveEntry(app)
 }
 
-// One typed field of the dialog. Fields share one cursor: only the
-// focused one has it.
-HabitScreenAnswerTextField :: (app: *InnerBreeze, field: s32,
-    bounds: Rectangle, buffer: []u8, numeric: bool, max_bytes: s32) {
-    dialog := *app.habits.answer_dialog
-    focused := dialog.focus == field
-    typed: [64]u8
-    props: TextFieldProps
-    props.key = KeyHash("habits/answers/field") + cast(u64)field
-    props.bounds = bounds
-    props.value = FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*buffer[0], cast(s32)buffer.count))
-    if focused {
-        props.cursor = dialog.cursor
-        props.anchor = dialog.anchor
-        props.scroll_x = dialog.scroll_x
-    }
-    props.focused = focused
-    props.focus_id = 7800 + field
-    props.numeric = numeric
-    props.max_bytes = max_bytes
-    props.max_codepoints = max_bytes
-    props.input = SampleTextFieldInput(focused, typed[:])
-    result := TextField(app.ui.session, props)
-    if result.edit.changed {
-        unused AppReplaceText(buffer, result.edit.start, result.edit.end,
-            result.edit.replacement)
-    }
-    if result.focused {
-        dialog.focus = field
-        dialog.cursor = result.cursor
-        dialog.anchor = result.anchor
-        dialog.scroll_x = result.scroll_x
-    } else if dialog.focus == field {
-        dialog.focus = -1
-    }
-    if result.clipboard_write {
-        unused TextInputWriteClipboard(result.clipboard_text)
-    }
-}
-
-// A labelled time, picked in the time picker: minutes after midnight, or -1
-// while none is chosen.
-// A time in the dialog. Clear takes it away: a time answer is then
-// unanswered, and a span's end empty, so the span keeps running.
-HabitScreenTimePicker :: (app: *InnerBreeze, key: s32, label: string, x: s32,
-    y: s32, width: s32, value: *s32, clearable: bool, placeholder: string) {
-    if label.count > 0 {
-        caption: TextProps
-        caption.bounds = HabitScreenRect(x, y, width, AppScale(24))
-        caption.text = label
-        caption.font = AppFontSize()
-        caption.wrap = cast(TextWrap)TextWrapEllipsis
-        Text(app.ui.session, caption)
-    }
-    picker_w := AppScale(160)
-    if picker_w > width {
-        picker_w = width
-    }
-    picked := TimePicker(app.ui.session, TimePickerProps.{
-            .key = KeyHash("habits/answers/time") + cast(u64)key,
-            .id = 7960 + key,
-            .bounds = HabitScreenRect(x, y + AppScale(HABIT_ANSWER_INPUT_Y),
-                picker_w, AppScale(44)),
-            .label = label,
-            .value = value.*,
-            .now = storage_local_minutes_of(UnixNow()),
-            .now_label = LocaleText("statistics_now_label"),
-            .done_label = LocaleText("done_button"),
-            .clear_label = ifx clearable then LocaleText("clear_button") else "",
-            .placeholder = placeholder,
-            .scale = MetricsScale()})
-    if picked.changed {
-        value.* = picked.value
-    }
-}
-
-// A yes or no answer: tapping the chosen one again leaves it unanswered.
-HabitScreenYesNo :: (app: *InnerBreeze, answer: *HabitAnswer, id: s32,
-    x: s32, y: s32, width: s32) {
-    gap := AppScale(8)
-    half := (width - gap) / 2
-    values: [2]string = .["yes", "no"]
-    labels: [2]string = .[LocaleText("habit_answer_yes"),
-    LocaleText("habit_answer_no")]
-    option: s32 = 0
-    while option < 2 {
-        chosen := HabitAnswerValue(answer) == values[option]
-        props: ButtonProps
-        props.id = id + option
-        props.bounds = HabitScreenRect(x + option * (half + gap), y, half,
-            AppScale(44))
-        props.label = labels[option]
-        props.tone = cast(ButtonTone)(ifx chosen then ButtonToneAccent
-            else ButtonToneNeutral)
-        props.emphasis = cast(ButtonEmphasis)(ifx chosen then
-            ButtonEmphasisFilled else ButtonEmphasisSoft)
-        if Button(app.ui.session, props) != 0 {
-            unused AppCopyText(ifx chosen then "" else values[option],
-                answer.value[:])
-        }
-        option += 1
-    }
-}
-
 // The time rows: a span's start and end. Other entries ask no time; they
 // keep the time they were recorded.
 HabitScreenEntryTimeRows :: (app: *InnerBreeze) -> s32 {
@@ -347,231 +198,6 @@ HabitScreenSpanTimeAnswer :: (app: *InnerBreeze, which: s32) -> s32 {
         index += 1
     }
     return -1
-}
-
-HabitScreenAnswersHeight :: (app: *InnerBreeze) -> s32 {
-    rows := HabitScreenEntryTimeRows(app) + app.habits.answer_dialog.count
-    if HabitScreenSpanTimeAnswer(app, 0) >= 0 {
-        rows -= 1
-    }
-    if HabitScreenSpanTimeAnswer(app, 1) >= 0 {
-        rows -= 1
-    }
-    return rows * AppScale(HABIT_ANSWER_ROW_HEIGHT)
-}
-
-// The entry's time or start and end, then each question above its answer
-// in the input its answer type takes.
-HabitScreenAnswerFields :: (app: *InnerBreeze, x: s32, y: s32,
-    width: s32) {
-    dialog := *app.habits.answer_dialog
-    start_answer := HabitScreenSpanTimeAnswer(app, 0)
-    end_answer := HabitScreenSpanTimeAnswer(app, 1)
-    if HabitScreenEntryTimeRows(app) == 2 {
-        start_label := LocaleText("habit_span_start")
-        if start_answer >= 0 {
-            start_label = FrameTextHold(*app.ui.frame_text,
-                HabitAnswerQuestion(*dialog.answers[start_answer]))
-        }
-        HabitScreenTimePicker(app, 0, start_label, x, y, width, *dialog.start,
-            false, "")
-        y += AppScale(HABIT_ANSWER_ROW_HEIGHT)
-        // Without an end the span keeps running; the end is only ever set
-        // here, by picking it or by Now.
-        end_label := LocaleText("habit_span_end")
-        if end_answer >= 0 {
-            end_label = FrameTextHold(*app.ui.frame_text,
-                HabitAnswerQuestion(*dialog.answers[end_answer]))
-        }
-        HabitScreenTimePicker(app, 1, end_label, x, y, width, *dialog.end,
-            true, LocaleText("habit_span_running"))
-        picker_w := AppScale(160)
-        now_w := AppScale(96)
-        if picker_w + AppScale(8) + now_w <= width {
-            now: ButtonProps
-            now.id = 5730005
-            now.bounds = HabitScreenRect(x + picker_w + AppScale(8),
-                y + AppScale(HABIT_ANSWER_INPUT_Y), now_w, AppScale(44))
-            now.label = LocaleText("statistics_now_label")
-            now.tone = cast(ButtonTone)ButtonToneAccent
-            now.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-            if Button(app.ui.session, now) != 0 {
-                dialog.end = storage_local_minutes_of(UnixNow())
-            }
-        }
-        y += AppScale(HABIT_ANSWER_ROW_HEIGHT)
-    }
-    index: s32 = 0
-    while index < dialog.count {
-        if index == start_answer || index == end_answer {
-            index += 1
-            continue
-        }
-        answer := *dialog.answers[index]
-        field := index
-        label: TextProps
-        label.bounds = HabitScreenRect(x, y, width, AppScale(24))
-        label.text = FrameTextHold(*app.ui.frame_text,
-            HabitAnswerQuestion(answer))
-        label.font = AppFontSize()
-        label.wrap = cast(TextWrap)TextWrapEllipsis
-        Text(app.ui.session, label)
-        input_y := y + AppScale(HABIT_ANSWER_INPUT_Y)
-        if answer.answer_type == HABIT_ANSWER_TIME {
-            HabitScreenTimePicker(app, 2 + index, "", x, y, width,
-                *dialog.times[index], true, "")
-        } else if answer.answer_type == HABIT_ANSWER_YES_NO {
-            HabitScreenYesNo(app, answer, 7900 + index * 2, x, input_y, width)
-        } else if answer.answer_type == HABIT_ANSWER_NUMBER {
-            HabitScreenAnswerTextField(app, field,
-                HabitScreenRect(x, input_y, width, AppScale(44)),
-                answer.value[:], true, 9)
-        } else {
-            HabitScreenAnswerTextField(app, field,
-                HabitScreenRect(x, input_y, width, AppScale(44)),
-                answer.value[:], false, HABIT_ANSWER_SIZE - 1)
-        }
-        y += AppScale(HABIT_ANSWER_ROW_HEIGHT)
-        index += 1
-    }
-}
-
-// The fields in a scrolling area, for entries that do not all fit.
-HabitScreenAnswerArea :: (app: *InnerBreeze, bounds: Rectangle) {
-    dialog := *app.habits.answer_dialog
-    scroll := Scroll(app.ui.session, ScrollProps.{
-            .key = KeyHash("habits/answers/scroll"),
-            .bounds = bounds,
-            .content_height = HabitScreenAnswersHeight(app),
-            .scroll_offset = dialog.scroll,
-            .scale = MetricsScale()})
-    dialog.scroll = scroll.scroll_offset
-    if scroll.opened {
-        HabitScreenAnswerFields(app, cast(s32)scroll.content.x,
-            cast(s32)scroll.content.y, cast(s32)scroll.content.width)
-        unused End(app.ui.session)
-    }
-}
-
-// The area's height in a dialog: all fields, or what fits.
-HabitScreenAnswerAreaHeight :: (app: *InnerBreeze, other: s32) -> s32 {
-    room := app.ui.view_height - AppScale(32) - AppScale(74) - other
-    height := HabitScreenAnswersHeight(app)
-    if height > room {
-        height = room
-    }
-    if height < AppScale(HABIT_ANSWER_ROW_HEIGHT) {
-        height = AppScale(HABIT_ANSWER_ROW_HEIGHT)
-    }
-    return height
-}
-
-// The entry dialog. Done records a new entry; an entry that exists is
-// saved again or deleted.
-#program_export
-HabitScreenEntryDialog :: (app: *InnerBreeze) {
-    if app.modal.active == 0 ||
-    app.modal.type != cast(ModalType)ModalHabitEntry { return }
-    dialog := *app.habits.answer_dialog
-    index := dialog.habit
-    day_index := dialog.day
-    if index < 0 || index >= app.habits.count || day_index <= 0 {
-        app_close_modal(app)
-        return
-    }
-    habit := *app.habits.items[index]
-    existing := dialog.entry[0] != cast(u8)0
-    gap := AppScale(12)
-    // The day sits under the name, in the frame's gap above the content.
-    date_lift := AppScale(16)
-    date_h := AppScale(22)
-    button_h := AppScale(44)
-    date_room := date_h - date_lift + AppScale(10)
-    area_h := HabitScreenAnswerAreaHeight(app, date_room + gap + button_h)
-    content_h := date_room + area_h + gap + button_h
-    frame := ModalFrame(app.ui.session, ModalFrameProps.{
-            .key = KeyHash("habits/entry-dialog"),
-            .title = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE),
-            .strong_title = true, .title_at_start = true,
-            .width = AppScale(380), .height = content_h + AppScale(74),
-            .scale = MetricsScale(),
-            .has_right_action = true,
-            .right_label = LocaleText("cancel_button")})
-    if frame.dismissed || frame.right_clicked {
-        app_close_modal(app)
-        return
-    }
-    if !frame.opened {
-        return
-    }
-    content := frame.layout.content
-    x := cast(s32)content.x
-    y := cast(s32)content.y
-    width := cast(s32)content.width
-    day_text := HabitScreenDate(app, day_index)
-    if day_index == habits_today_index() {
-        day_text = LocaleText("habits_today")
-    }
-    Text(app.ui.session, TextProps.{
-            .bounds = HabitScreenRect(x, y - date_lift, width, date_h),
-            .text = day_text, .font = AppSmallFontSize(),
-            .class_name = MutedTextClass(),
-            .wrap = cast(TextWrap)TextWrapNone})
-    y += date_room
-    HabitScreenAnswerArea(app, HabitScreenRect(x, y, width, area_h))
-    y += area_h + gap
-    if existing {
-        half := (width - gap) / 2
-        remove: ButtonProps
-        remove.id = 5730001
-        remove.bounds = HabitScreenRect(x, y, half, button_h)
-        remove.label = LocaleText("delete_button")
-        remove.tone = cast(ButtonTone)ButtonToneDanger
-        remove.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-        if Button(app.ui.session, remove) != 0 &&
-        habit_delete_entry(app, index, day_index,
-            AppTextFromCString(*dialog.entry[0], HABIT_ENTRY_ID_SIZE)) {
-            app_close_modal(app)
-        }
-        save: ButtonProps
-        save.id = 5730002
-        save.bounds = HabitScreenRect(x + half + gap, y, width - half - gap,
-            button_h)
-        save.label = LocaleText("save_button")
-        save.tone = cast(ButtonTone)ButtonToneAccent
-        save.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-        if Button(app.ui.session, save) != 0 && HabitScreenSaveEntry(app) {
-            app_close_modal(app)
-        }
-    } else {
-        // Questions can be skipped: the day is done without answers.
-        done_x := x
-        if dialog.count > 0 {
-            half := (width - gap) / 2
-            skip: ButtonProps
-            skip.id = 5730004
-            skip.bounds = HabitScreenRect(x, y, half, button_h)
-            skip.label = LocaleText("skip_button")
-            skip.tone = cast(ButtonTone)ButtonToneNeutral
-            skip.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-            if Button(app.ui.session, skip) != 0 && HabitScreenSkipEntry(app) {
-                app_close_modal(app)
-                unused End(app.ui.session)
-                return
-            }
-            done_x = x + half + gap
-        }
-        complete: ButtonProps
-        complete.id = 5730003
-        complete.bounds = HabitScreenRect(done_x, y, x + width - done_x, button_h)
-        complete.label = LocaleText("done_button")
-        complete.tone = cast(ButtonTone)ButtonToneAccent
-        complete.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-        if Button(app.ui.session, complete) != 0 && HabitScreenSaveEntry(app) {
-            app_close_modal(app)
-        }
-    }
-    unused End(app.ui.session)
 }
 
 // Reads a habit day's entries again when the stored data or the day
@@ -670,212 +296,166 @@ HabitEntryDescribe :: (habit: *Habit, entry: *HabitEntrySummary) {
     }
 }
 
-// An entry's answers: each question muted, its value under it in bold.
-// Returns their height; draws them when draw is set.
-HabitEntryAnswers :: (app: *InnerBreeze, summary: string, x: s32, y: s32,
-    width: s32, draw: bool) -> s32 {
-    height: s32 = 0
-    start: s64 = 0
-    line: s32 = 0
-    while start < summary.count {
-        end := start
-        while end < summary.count && summary[end] != cast(u8)10 {
-            end += 1
-        }
-        line_bytes: [HABIT_ENTRY_SUMMARY_SIZE]u8
-        copied: s64 = 0
-        while start + copied < end && copied < HABIT_ENTRY_SUMMARY_SIZE - 1 {
-            line_bytes[copied] = summary[start + copied]
-            copied += 1
-        }
-        line_bytes[copied] = cast(u8)0
-        text := AppTextFromCString(*line_bytes[0], HABIT_ENTRY_SUMMARY_SIZE)
-        value := line % 2 == 1
-        font := AppSmallFontSize()
-        if value {
-            font = AppFontSize() + AppScale(2)
-        }
-        text_h := AppParagraphHeight(text, width, font, AppScale(4))
-        if draw {
-            props: TextProps
-            props.bounds = HabitScreenRect(x, y + height, width, text_h)
-            props.text = FrameTextHold(*app.ui.frame_text, text)
-            props.font = font
-            props.wrap = cast(TextWrap)TextWrapAuto
-            strong := StrongWhole(props.text)
-            if value {
-                props.strong = strong[:]
-            } else {
-                props.class_name = MutedTextClass()
-            }
-            Text(app.ui.session, props)
-        }
-        height += text_h
-        if value {
-            height += AppScale(10)
-        } else {
-            height += AppScale(2)
-        }
-        start = end + 1
-        line += 1
-    }
-    if height > AppScale(10) {
-        height -= AppScale(10)
-    }
-    return height
+// ---- The entry dialog, which Habits draws ------------------------------------
+
+habit_entry_frame: HabitsEntryFrame;
+habit_entry_frame_codec: WidgetHabitsEntryFrameCodec;
+habit_entry_answer_codec: WidgetHabitsAnswerCodec;
+
+HabitEntryAnswer :: (app: *InnerBreeze, index: s32) -> HabitsAnswer {
+    dialog := *app.habits.answer_dialog
+    answer := *dialog.answers[index]
+    return HabitsAnswer.{.question = HabitAnswerQuestion(answer),
+        .answer_type = answer.answer_type, .value = HabitAnswerValue(answer),
+        .time = dialog.times[index]}
 }
 
-HABIT_ENTRY_BUTTON :: 44
-
-// An entry's card: a span's times with the buttons that change or delete
-// it and its answers below, and End now while it runs. Other entries ask
-// no time, so their answers sit beside the buttons, and a skipped one shows
-// when it was recorded.
-HabitEntryCardHeight :: (app: *InnerBreeze, item: *HabitEntrySummary,
-    span: bool, running: bool, width: s32) -> s32 {
-    pad := AppScale(CARD_PADDING)
-    buttons := AppScale(HABIT_ENTRY_BUTTON)
-    summary := AppTextFromCString(*item.summary[0], HABIT_ENTRY_SUMMARY_SIZE)
-    if !span && summary.count > 0 {
-        answers := HabitEntryAnswers(app, summary, 0, 0,
-            width - pad * 2 - buttons * 2 - AppScale(18), false)
-        if answers < buttons {
-            answers = buttons
+// Keeps an answer the dialog changed, as its question's type allows it.
+HabitEntryKeepAnswer :: (app: *InnerBreeze, index: s32, changed: HabitsAnswer) -> bool {
+    dialog := *app.habits.answer_dialog
+    if index < 0 || index >= dialog.count {
+        return false
+    }
+    answer := *dialog.answers[index]
+    if answer.answer_type == HABIT_ANSWER_TIME {
+        if changed.time < -1 || changed.time >= HABIT_MINUTES_PER_DAY {
+            return false
         }
-        return pad + answers + pad
+        dialog.times[index] = changed.time
+        return true
     }
-    height := pad + buttons + pad
-    if summary.count > 0 {
-        height += HabitEntryAnswers(app, summary, 0, 0, width - pad * 2,
-            false) + AppScale(8)
+    if answer.answer_type == HABIT_ANSWER_YES_NO && changed.value != "" &&
+    changed.value != "yes" && changed.value != "no" {
+        return false
     }
-    if running {
-        height += AppScale(44) + AppScale(12)
+    if changed.value.count >= cast(s64)HABIT_ANSWER_SIZE {
+        return false
     }
-    return height
+    // VM strings are borrowed only during this call.
+    return AppCopyText(changed.value, answer.value[:])
 }
 
-// The day screen's entries: a card for each entry, then a button that
-// adds one. Returns the y below them.
-HabitDayEntriesDraw :: (app: *InnerBreeze, index: s32, day_index: s32,
-    x: s32, width: s32, y: s32, draw: bool) -> s32 {
-    HabitDayEntriesRefresh(app, index, day_index)
-    cache := *app.habits.day_entries
+HabitEntryCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "habit_day_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    app := cast(*InnerBreeze)context
+    dialog := *app.habits.answer_dialog
+    name := TextFromCString(function)
+    if name == "ReadHabitsEntryHost" && count == 0 {
+        result.* = WidgetEncodeHabitsEntryFrame(habit_entry_frame, *habit_entry_frame_codec)
+        return 1
+    }
+    if name == "WriteHabitsEntryHost" && count == 1 && WidgetValidHabitsEntryFrame(arguments[0]) {
+        observed := WidgetDecodeHabitsEntryFrame(arguments[0], *habit_entry_frame_codec)
+        if observed.clipboard_write {
+            unused TextInputWriteClipboard(observed.clipboard_text)
+        }
+        observed.clipboard_text = ""
+        habit_entry_frame = observed
+        return 1
+    }
+    if name == "ReadHabitsAnswerHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        answer := HabitsAnswer.{.time = -1}
+        if index >= 0 && index < dialog.count {
+            answer = HabitEntryAnswer(app, index)
+        }
+        result.* = WidgetEncodeHabitsAnswer(answer, *habit_entry_answer_codec)
+        return 1
+    }
+    if name == "WriteHabitsAnswerHost" && count == 2 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) &&
+    WidgetValidHabitsAnswer(arguments[1]) {
+        kept := HabitEntryKeepAnswer(app, cast(s32)arguments[0].integer,
+            WidgetDecodeHabitsAnswer(arguments[1], *habit_entry_answer_codec))
+        result.* = HostScalar("bool", ifx kept then 1 else 0)
+        return 1
+    }
+    if name == "HabitsLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
+}
+
+// A time of the dialog as it may be kept: minutes after midnight, or -1.
+HabitEntryMinutes :: (minutes: s32) -> s32 {
+    if minutes < -1 || minutes >= HABIT_MINUTES_PER_DAY {
+        return -1
+    }
+    return minutes
+}
+
+// The entry dialog. Done records a new entry; an entry that exists is
+// saved again or deleted.
+#program_export
+HabitScreenEntryDialog :: (app: *InnerBreeze) {
+    if app.modal.active == 0 ||
+    app.modal.type != cast(ModalType)ModalHabitEntry { return }
+    dialog := *app.habits.answer_dialog
+    index := dialog.habit
+    day_index := dialog.day
+    if index < 0 || index >= app.habits.count || day_index <= 0 {
+        app_close_modal(app)
+        return
+    }
     habit := *app.habits.items[index]
-    icon_w := AppScale(HABIT_ENTRY_BUTTON)
-    pad := AppScale(CARD_PADDING)
-    heading_h := AppScale(34)
-    if draw {
-        heading: TextProps
-        heading.bounds = HabitScreenRect(x, y, width, heading_h)
-        heading.text = LocaleText("habit_day_entries")
-        heading.font = AppTitleFontSize(heading.text, width)
-        heading_strong := StrongWhole(heading.text)
-        heading.strong = heading_strong[:]
-        heading.semantic_kind = cast(SemanticKind)SemanticHeading
-        heading.heading_level = 2
-        heading.wrap = cast(TextWrap)TextWrapNone
-        Text(app.ui.session, heading)
+    typed: [64]u8
+    habit_entry_frame = HabitsEntryFrame.{
+        .session = app.ui.session, .scale = MetricsScale(), .view_height = app.ui.view_height,
+        .font = AppFontSize(), .small_font = AppSmallFontSize(),
+        .muted_class = MutedTextClass(),
+        .name = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE),
+        .day = day_index, .today = habits_today_index(),
+        .existing = dialog.entry[0] != cast(u8)0, .span = habit.span != 0,
+        .start = dialog.start, .end = dialog.end,
+        .start_answer = HabitScreenSpanTimeAnswer(app, 0),
+        .end_answer = HabitScreenSpanTimeAnswer(app, 1),
+        .answer_count = dialog.count, .now = storage_local_minutes_of(UnixNow()),
+        .focus = dialog.focus, .cursor = dialog.cursor, .anchor = dialog.anchor,
+        .scroll_x = dialog.scroll_x, .scroll = dialog.scroll,
+        .input = SampleTextFieldInput(dialog.focus >= 0, typed[:])}
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    CellsUiBegin(HabitEntryCall, cast(*void)app)
+    drawn := HabitsRun(HabitsMessage.{.action = HABITS_ENTRY_VIEW})
+    CellsUiEnd()
+    WidgetHostEnd()
+    if !drawn.succeeded {
+        habit_entry_frame = HabitsEntryFrame.{}
+        app_close_modal(app)
+        return
     }
-    y += heading_h + AppScale(8)
-    entry: s32 = 0
-    while entry < cache.count {
-        item := *cache.entries[entry]
-        running := habit.span != 0 && item.ended_at <= 0
-        span := habit.span != 0
-        summary := AppTextFromCString(*item.summary[0], HABIT_ENTRY_SUMMARY_SIZE)
-        card_h := HabitEntryCardHeight(app, item, span, running, width)
-        if draw {
-            Box(app.ui.session, CardProps(HabitScreenRect(x, y, width, card_h)))
-            inner_x := x + pad
-            inner_w := width - pad * 2
-            buttons_w := icon_w * 2 + AppScale(10)
-            if span || summary.count == 0 {
-                when_text := AppTextFromCString(*item.when[0], 64)
-                when_strong := StrongWhole(when_text)
-                when: TextProps
-                when.bounds = HabitScreenRect(inner_x, y + pad,
-                    inner_w - buttons_w - AppScale(8), icon_w)
-                when.text = FrameTextHold(*app.ui.frame_text, when_text)
-                when.font = AppFontSize()
-                if span {
-                    when.font = AppFontSize() + AppScale(4)
-                    when.strong = when_strong[:]
-                } else {
-                    when.class_name = MutedTextClass()
-                }
-                when.vertical_align = cast(TextAlign)TextAlignCenter
-                when.wrap = cast(TextWrap)TextWrapEllipsis
-                Text(app.ui.session, when)
-            } else {
-                unused HabitEntryAnswers(app, summary, inner_x, y + pad,
-                    inner_w - buttons_w - AppScale(8), true)
-            }
-            edit: ButtonProps
-            edit.id = 5740000 + entry * 2
-            edit.bounds = HabitScreenRect(inner_x + inner_w - buttons_w,
-                y + pad, icon_w, icon_w)
-            edit.label = LocaleText("habit_edit_title")
-            edit.image = habit_session_edit_image()
-            edit.icon_only = true
-            edit.tone = cast(ButtonTone)ButtonToneNeutral
-            edit.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-            if Button(app.ui.session, edit) != 0 {
-                HabitScreenOpenEntry(app, index, day_index,
-                    AppTextFromCString(*item.id[0], HABIT_ENTRY_ID_SIZE))
-            }
-            remove: ButtonProps
-            remove.id = 5740001 + entry * 2
-            remove.bounds = HabitScreenRect(inner_x + inner_w - icon_w,
-                y + pad, icon_w, icon_w)
-            remove.label = LocaleText("delete_button")
-            remove.image = habit_session_delete_image()
-            remove.icon_only = true
-            remove.tone = cast(ButtonTone)ButtonToneNeutral
-            remove.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-            if Button(app.ui.session, remove) != 0 {
-                unused habit_delete_entry(app, index, day_index,
-                    AppTextFromCString(*item.id[0], HABIT_ENTRY_ID_SIZE))
-                return y
-            }
-            line_y := y + pad + icon_w + AppScale(8)
-            if span && summary.count > 0 {
-                line_y += HabitEntryAnswers(app, summary, inner_x, line_y,
-                    inner_w, true) + AppScale(8)
-            }
-            if running {
-                stop: ButtonProps
-                stop.id = 5739990
-                stop.bounds = HabitScreenRect(inner_x, line_y + AppScale(4),
-                    inner_w, AppScale(44))
-                stop.label = LocaleText("habit_span_end_now")
-                stop.tone = cast(ButtonTone)ButtonToneAccent
-                stop.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-                if Button(app.ui.session, stop) != 0 {
-                    ended: [HABIT_ENTRY_ID_SIZE]u8
-                    unused AppCopyText(AppTextFromCString(*item.id[0],
-                        HABIT_ENTRY_ID_SIZE), ended[:])
-                    if habit_end_span(app, index) && habit.question_count > 0 {
-                        HabitScreenOpenEntry(app, index, day_index,
-                            AppTextFromCString(*ended[0], HABIT_ENTRY_ID_SIZE))
-                    }
-                    return y
-                }
-            }
+    observed := *habit_entry_frame
+    dialog.start = HabitEntryMinutes(observed.start)
+    dialog.end = HabitEntryMinutes(observed.end)
+    dialog.focus = ifx observed.focus >= 0 && observed.focus < dialog.count then observed.focus else -1
+    dialog.cursor = observed.cursor
+    dialog.anchor = observed.anchor
+    dialog.scroll_x = observed.scroll_x
+    dialog.scroll = observed.scroll
+    action := observed.action
+    habit_entry_frame = HabitsEntryFrame.{}
+    if action == HABITS_ENTRY_CANCEL {
+        app_close_modal(app)
+    } else if action == HABITS_ENTRY_SAVE {
+        if HabitScreenSaveEntry(app) {
+            app_close_modal(app)
         }
-        y += card_h + AppScale(12)
-        entry += 1
-    }
-    if draw {
-        add: ButtonProps
-        add.id = 5739991
-        add.bounds = HabitScreenRect(x, y, width, AppScale(48))
-        add.label = LocaleText("habit_entry_add")
-        add.tone = cast(ButtonTone)ButtonToneNeutral
-        add.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-        if Button(app.ui.session, add) != 0 {
-            HabitScreenOpenEntry(app, index, day_index, "")
+    } else if action == HABITS_ENTRY_SKIP {
+        if HabitScreenSkipEntry(app) {
+            app_close_modal(app)
+        }
+    } else if action == HABITS_ENTRY_DELETE {
+        if habit_delete_entry(app, index, day_index,
+            AppTextFromCString(*dialog.entry[0], HABIT_ENTRY_ID_SIZE)) {
+            app_close_modal(app)
         }
     }
-    return y + AppScale(48)
 }

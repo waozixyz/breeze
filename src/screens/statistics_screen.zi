@@ -2,6 +2,10 @@ c3 :: #system_library "c";
 app_content_bottom_reserved :: (app: *InnerBreeze) -> s32 #foreign c3;
 habit_cached_linked_entries :: (app: *InnerBreeze,
     habit_index: s32, day_filter: s32) -> *HabitLinkedContext #foreign c3;
+// A habit's statistics. Habits draws them (apps/habits/habit_stats_view.zi);
+// this host counts the figures from the habit's days, its linked sessions,
+// their moods and its entries, keeps them cached until the stored data
+// changes, and gives them to the page on request.
 #import, file "../habits/habit_linked_rules.zi";
 #import, file "../habits/habit_calendar.zi";
 #import, file "statistics_date_rules.zi";
@@ -19,60 +23,31 @@ habit_cached_linked_entries :: (app: *InnerBreeze,
 #import, file "../app/locale.zi";
 #import "geometry"
 #import "layout"
-#import "scroll"
-#import "scroll_props"
-#import "scroll_widget"
-#import "tree"
+#import "session"
+#import "drawing_props"
+#import "byte_text_linux"
+#import "bundle_host"
+#import "hosted_values"
+#import "widget_host"
+#import "plot/band_chart_host"
 #import, file "../habits/habit_model.zi";
-
-
-
-
-
-
-using ExerciseType;
-using HabitSyncMode;
-#import "text_props"
-#import "text_align"
 #import, file "../app/exercise_types.zi";
 #import, file "../app/text_buffers.zi";
-using TextWrap;
-using TextAlign;
-#import "control_props"
 #import, file "../app/metrics.zi";
 #import, file "../app/color.zi";
 #import, file "../app/current_app.zi";
-#import "button_widget"
-#import "text_widget"
-#import "drawing_props"
-#import "session"
-#import "button_props"
-#import "box_props"
-#import "box_widget"
-#import "paint_queue"
 #import, file "../app/cards.zi";
 #import, file "habit_change_text.zi";
 #import, file "../habits/habit_changes.zi";
-#import "plot/Plot"
-using ButtonTone;
-using ButtonEmphasis;
+#import, file "../cells/habits_ui_types.zi";
+#import, file "../cells/habits_types.zi";
+#import, file "../cells/app_codec.zi";
+#import, file "../cells/hosted_assets.zi";
+#import, file "../cells/module_host.zi";
 
-STATISTICS_MAX_GRAPH_DAYS :: 31
-STATISTICS_MAX_GRAPH_POINTS :: 256
-
-StatisticsGraphPoint :: struct {
-    time_key: s32
-    round_index: s32
-    day_slot: s32
-    hold_seconds: s32
-    x: s32
-    y: s32
-}
-
-StatisticsScrollPageContext :: struct {
-    linked_count: s32
-    mood_count: s32
-}
+using ExerciseType;
+using HabitSyncMode;
+using HostValueKind;
 
 statistics_mood_cache: StorageMoodStats = StorageMoodStats.{};
 statistics_mood_cache_clock: s64 = 0;
@@ -116,424 +91,6 @@ statistics_day_of_week :: (day_index: s32) -> s32 {
     weekday := habit_weekday_bit(day_index)
     if weekday < 0 { return -1 }
     return (weekday + 1) % 7
-}
-
-statistics_format_day_count :: (out: *u8, out_size: s64, count: s32) {
-    FormatLocaleCount(out, out_size, ifx (count == 1) then ("habit_stats_day_singular") else ("habit_stats_day_plural"), count)
-}
-
-statistics_entry_matches_filter :: (entry: *HabitLinkedEntry, filter: s32) -> s32 {
-    if entry == null {
-        return 0
-    }
-    return ifx (entry.activity == filter) then (1) else (0)
-}
-
-statistics_has_wim_hof_rounds :: (linked_ctx: *HabitLinkedContext) -> s32 {
-    if linked_ctx == null {
-        return 0
-    }
-    {
-        i: s32 = 0
-        while i < linked_ctx.count {
-            if linked_ctx.entries[i].activity == EXERCISE_WIM_HOF && linked_ctx.entries[i].round_count > 0 {
-                return 1
-            }
-            i += 1
-        }
-
-    }
-    return 0
-}
-
-// A line of a chart, from its start by its width and height.
-statistics_line :: (x1: s32, y1: s32, x2: s32, y2: s32, color: Color) {
-    PaintLine(CurrentApp().ui.session, -1, Rectangle.{cast(float32)x1,
-            cast(float32)y1, cast(float32)(x2 - x1), cast(float32)(y2 - y1)},
-        color)
-}
-
-// A bar of a chart, its top a little rounded.
-statistics_bar :: (x: s32, y: s32, width: s32, height: s32, color: Color) {
-    radius := AppScale(3)
-    if radius * 2 > width { radius = width / 2 }
-    PaintRoundedFill(CurrentApp().ui.session, -1, Rectangle.{cast(float32)x,
-            cast(float32)y, cast(float32)width, cast(float32)height},
-        cast(float32)radius, 6, color)
-}
-
-// A chart's card: the card face the figures use.
-statistics_chart_card :: (x: s32, y: s32, width: s32, height: s32) {
-    Box(CurrentApp().ui.session, CardProps(Rectangle.{cast(float32)x,
-            cast(float32)y, cast(float32)width, cast(float32)height}))
-}
-
-statistics_figure :: (x: s32, y: s32, width: s32, label: string,
-    value: string, accent: Color) {
-    FigureCard(CurrentApp().ui.session, Rectangle.{cast(float32)x,
-            cast(float32)y, cast(float32)width,
-            cast(float32)AppScale(FIGURE_CARD_HEIGHT)}, label,
-        FrameTextHold(*CurrentApp().ui.frame_text, value), accent)
-}
-
-statistics_mood_color :: (mood: s32) -> Color {
-    if mood <= 1 {
-        return Color.{.r = 226, .g = 83, .b = 78, .a = 255}
-    } else if mood == 2 {
-        return Color.{.r = 238, .g = 139, .b = 70, .a = 255}
-    } else if mood == 3 {
-        return Color.{.r = 235, .g = 202, .b = 77, .a = 255}
-    } else if mood == 4 {
-        return Color.{.r = 108, .g = 199, .b = 104, .a = 255}
-    }
-    return Color.{.r = 73, .g = 194, .b = 192, .a = 255}
-}
-
-statistics_format_average :: (out: []u8, value_x100: s32,
-    suffix: string) -> bool {
-    sign: string = ""
-    value := value_x100
-
-    if value < 0 {
-        sign = "-"
-        value = -value
-    }
-    args: [4]FormatArg = .[
-        FormatArg.{.text = sign, .is_text = true},
-        FormatArg.{.number = value / 100},
-        FormatArg.{.number = value % 100},
-        FormatArg.{.text = suffix, .is_text = true}
-    ]
-    return FormatTemplate("%s%d.%02d%s", args[:], out)
-}
-
-STATISTICS_MOOD_BARS_HEIGHT :: 64
-
-// The mood check-ins: their average and count, and a bar for each mood.
-// Returns its height.
-statistics_mood_panel_height :: (content_w: s32) -> s32 {
-    return SectionTitleHeight(LocaleText("habit_stats_mood_title"),
-        content_w) + AppScale(10) + AppScale(FIGURE_CARD_HEIGHT) +
-    AppScale(STATISTICS_CARD_GAP) + AppScale(STATISTICS_MOOD_BARS_HEIGHT)
-}
-
-statistics_draw_mood_panel :: (content_x: s32, y: s32, content_w: s32,
-    stats: *StorageMoodStats,
-    accent: Color) -> s32 {
-    metrics_gap := AppScale(STATISTICS_CARD_GAP)
-    metric_w := (content_w - metrics_gap) / 2
-    bars_h := AppScale(STATISTICS_MOOD_BARS_HEIGHT)
-    slot_w := content_w / 5
-    value: [32] u8
-
-    if stats == null || stats.total <= 0 {
-        return 0
-    }
-
-    y += SectionTitle(CurrentApp().ui.session,
-        LocaleText("habit_stats_mood_title"), content_x, y, content_w) +
-    AppScale(10)
-    statistics_format_average(value[:], cast(s32)(stats.average * 100.0f),
-        "/5")
-    statistics_figure(content_x, y, metric_w,
-        LocaleText("habit_stats_mood_average"),
-        AppTextFromCString(*value[0], 32), accent)
-    AppFormatS32(stats.total, value[:])
-    statistics_figure(content_x + metric_w + metrics_gap, y,
-        content_w - metric_w - metrics_gap,
-        LocaleText("habit_stats_mood_checkins"),
-        AppTextFromCString(*value[0], 32), accent)
-    bars_y := y + AppScale(FIGURE_CARD_HEIGHT) + metrics_gap
-
-    statistics_chart_card(content_x, bars_y, content_w, bars_h)
-    {
-        i: s32 = 0
-        while i < 5 {
-            count := stats.counts[i]
-            bar_h := AppScale(3)
-            if count > 0 {
-                bar_h = (count * (bars_h - AppScale(30))) / stats.total
-            }
-            x := content_x + i * slot_w + AppScale(10)
-            w := slot_w - AppScale(20)
-            bar_y := bars_y + bars_h - bar_h - AppScale(22)
-            label: [4]u8
-
-            if w < AppScale(4) {
-                w = AppScale(4)
-            }
-            bar_color := statistics_mood_color(i + 1)
-            if count <= 0 {
-                bar_color = color_with_alpha(StyleTokenColor("text"), 0.16)
-            }
-            statistics_bar(x, bar_y, w, bar_h, bar_color)
-            AppFormatS32(i + 1, label[:])
-            label_text := AppTextFromCString(*label[0], 4)
-            Text(CurrentApp().ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)x,
-                    cast(float32)(bars_y + bars_h - AppScale(20)),
-                    cast(float32)w, cast(float32)AppScale(16)},
-                .text = label_text,
-                .font = Text12,
-                .class_name = MutedTextClass(),
-                .align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(TextWrap)TextWrapNone
-            })
-            i += 1
-        }
-
-    }
-
-    return statistics_mood_panel_height(content_w)
-}
-
-statistics_draw_hold_range_selector :: (app: *InnerBreeze, x: s32, y: s32, w: s32) -> s32 {
-    labels: [2] string = .["1W", "1M"]
-    values: [2] s32 = .[7, 31]
-    selected: s32 = ifx (app.habits.hold_stats_range_days == 31) then (1) else (0)
-    h := AppScale(34)
-    segment_w := w / 2
-    clicked: s32 = 0
-
-    {
-        i: s32 = 0
-        while i < 2 {
-
-            segment_x := x + i * segment_w
-            current_w := ifx (i == 1) then (x + w - segment_x) else (segment_w)
-            if Button(CurrentApp().ui.session, ButtonProps.{
-                    .bounds = Rectangle.{cast(float32)segment_x, cast(float32)y, cast(float32)current_w, cast(float32)h},
-                    .id = cast(s32)24700 + i, .label = labels[i],
-                    .tone = cast(ButtonTone)(ifx (i == selected) then (ButtonToneAccent) else (ButtonToneNeutral)),
-                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .selected = i == selected,
-                    .disabled = app.modal.active != 0
-                }) != 0 && selected != i {
-                app.habits.hold_stats_range_days = values[i]
-                clicked = 1
-            }
-
-            i += 1
-        }
-    }
-    return clicked
-}
-
-statistics_draw_hold_graph :: (app: *InnerBreeze, linked_ctx: *HabitLinkedContext,
-    content_x: s32, y: s32, content_w: s32, today_index: s32,
-    filter: s32, accent: Color) {
-    points: [STATISTICS_MAX_GRAPH_POINTS] StatisticsGraphPoint
-    point_count: s32 = 0
-    graph_days: s32 = ifx (app.habits.hold_stats_range_days == 31) then (31) else (7)
-    day_points: [STATISTICS_MAX_GRAPH_DAYS]s32
-    day_totals: [STATISTICS_MAX_GRAPH_DAYS]s32
-    max_hold: s32 = 1
-    graph_h := AppScale(STATISTICS_HOLD_GRAPH_HEIGHT)
-    axis_w := AppScale(48)
-    plot_x := content_x + axis_w
-    plot_y := y + AppScale(8)
-    plot_w := content_w - axis_w - AppScale(10)
-    plot_h := graph_h - AppScale(36)
-    axis_label: [32] u8
-
-    statistics_chart_card(content_x, y, content_w, graph_h)
-    {
-        i: s32 = 0
-        while linked_ctx != null && i < linked_ctx.count {
-            entry: *HabitLinkedEntry = *linked_ctx.entries[i]
-            day_index: s32 = 0
-            day_offset: s32 = 0
-
-            if statistics_entry_matches_filter(entry, filter) == 0 {
-                i += 1; continue
-            }
-            day_index = entry.year * 10000 + entry.month * 100 + entry.day
-            day_offset = statistics_day_offset_from_today(day_index,
-                today_index)
-            if day_offset < 0 || day_offset >= graph_days {
-                i += 1; continue
-            }
-            {
-                r: s32 = 0
-                while r < entry.round_count && point_count < STATISTICS_MAX_GRAPH_POINTS {
-                    day_slot := graph_days - 1 - day_offset
-                    if entry.rounds[r] > max_hold {
-                        max_hold = entry.rounds[r]
-                    }
-                    day_points[day_slot] += 1
-                    day_totals[day_slot] += entry.rounds[r]
-                    points[point_count] = StatisticsGraphPoint.{day_index * 86400 + entry.hour * 3600 + entry.minute * 60 + entry.second, r, day_slot, entry.rounds[r], 0, 0 }
-                    point_count += 1
-                    r += 1
-                }
-            }
-            i += 1
-        }
-
-    }
-
-    {
-        i: s32 = 1
-        while i < point_count {
-            point: StatisticsGraphPoint = points[i]
-            j := i - 1
-            while j >= 0 && (points[j].time_key > point.time_key || (points[j].time_key == point.time_key && points[j].round_index > point.round_index)) {
-                points[j + 1] = points[j]
-                j -= 1
-            }
-            points[j + 1] = point
-            i += 1
-        }
-
-    }
-
-    {
-        i: s32 = 1
-        while i < graph_days {
-            if graph_days == 7 || i % 5 == 0 {
-                x := plot_x + (plot_w * i) / graph_days
-                statistics_line(x, plot_y, x, plot_y + plot_h,
-                    color_with_alpha(StyleTokenColor("text"), 0.1))
-            }
-            i += 1
-        }
-
-    }
-    {
-        i: s32 = 0
-        while i <= 2 {
-            line_y := plot_y + (plot_h * i) / 2
-            seconds := max_hold - (max_hold * i) / 2
-            axis_args: [1]FormatArg = .[FormatArg.{.number = seconds}]
-            FormatTemplate("%ds", axis_args[:], axis_label[:])
-            statistics_line(plot_x, line_y, plot_x + plot_w, line_y,
-                color_with_alpha(StyleTokenColor("text"), 0.1))
-            Text(CurrentApp().ui.session, TextProps.{
-                    .bounds = Rectangle.{cast(float32)(content_x + AppScale(4)), cast(float32)(line_y - AppScale(8)), 0, 0},
-                    .text = AppTextFromCString(*axis_label[0], 32),
-                    .wrap = cast(TextWrap)TextWrapNone
-                })
-            i += 1
-        }
-
-    }
-    statistics_line(plot_x, plot_y + plot_h, plot_x + plot_w, plot_y + plot_h,
-        color_with_alpha(StyleTokenColor("text"), 0.4))
-    {
-        day_seen: [STATISTICS_MAX_GRAPH_DAYS] s32
-        day_first_x: [STATISTICS_MAX_GRAPH_DAYS] s32
-        day_last_x: [STATISTICS_MAX_GRAPH_DAYS] s32
-
-        {
-            i: s32 = 0
-            while i < graph_days {
-                day_first_x[i] = -1
-                day_last_x[i] = -1
-                i += 1
-            }
-
-        }
-        {
-            i: s32 = 0
-            while i < point_count {
-                day_slot := points[i].day_slot
-                count := ifx (day_points[day_slot] > 0) then (day_points[day_slot]) else (1)
-                ordinal := day_seen[day_slot]
-                day_seen[day_slot] += 1
-                x0 := plot_x + (plot_w * day_slot) / graph_days
-                x1 := plot_x + (plot_w * (day_slot + 1)) / graph_days
-                points[i].x = x0 + ((ordinal + 1) * (x1 - x0)) / (count + 1)
-                points[i].y = plot_y + plot_h - (points[i].hold_seconds * (plot_h - AppScale(10))) / max_hold
-                if day_first_x[day_slot] < 0 || points[i].x < day_first_x[day_slot] {
-                    day_first_x[day_slot] = points[i].x
-                }
-                if day_last_x[day_slot] < 0 || points[i].x > day_last_x[day_slot] {
-                    day_last_x[day_slot] = points[i].x
-                }
-                i += 1
-            }
-
-        }
-
-        {
-            prev_x: s32 = 0
-            prev_y: s32 = 0
-            has_prev: bool = false
-
-            {
-                i: s32 = 0
-                while i < graph_days {
-                    avg_seconds: s32 = 0
-                    avg_y: s32 = 0
-
-                    if day_points[i] <= 0 {
-                        i += 1; continue
-                    }
-                    avg_seconds = day_totals[i] / day_points[i]
-                    avg_y = plot_y + plot_h - (avg_seconds * (plot_h - AppScale(10))) / max_hold
-                    if has_prev {
-                        statistics_line(prev_x, prev_y, day_first_x[i], avg_y,
-                            accent)
-                    }
-                    statistics_line(day_first_x[i], avg_y, day_last_x[i],
-                        avg_y, accent)
-                    prev_x = day_last_x[i]
-                    prev_y = avg_y
-                    has_prev = true
-                    i += 1
-                }
-
-            }
-        }
-    }
-
-    {
-        i: s32 = 0
-        while i < point_count {
-            dot := AppScale(3)
-            PaintRoundedFill(CurrentApp().ui.session, -1, Rectangle.{
-                    cast(float32)(points[i].x - dot),
-                    cast(float32)(points[i].y - dot), cast(float32)(dot * 2),
-                    cast(float32)(dot * 2)}, cast(float32)dot, 8, accent)
-            i += 1
-        }
-
-    }
-    if point_count <= 0 {
-        empty := LocaleText(ifx (graph_days == 31) then ("habit_stats_no_rounds_month") else ("habit_stats_no_rounds_week"))
-        text_w := AppTextWidth(empty, Text12)
-        Text(CurrentApp().ui.session, TextProps.{
-                .bounds = Rectangle.{cast(float32)(content_x + (content_w - text_w) / 2), cast(float32)(y + graph_h / 2 - AppScale(8)), 0, 0},
-                .text = (empty),
-                .wrap = cast(TextWrap)TextWrapNone
-            })
-    }
-    {
-        i: s32 = 0
-        while i < graph_days {
-            day_offset := graph_days - 1 - i
-            show_label := graph_days == 7 || day_offset == 0 || day_offset % 5 == 0
-            label: [8] u8
-            day_x: s32 = 0
-
-            if !show_label {
-                i += 1; continue
-            }
-            if day_offset == 0 {
-                AppCopyText(LocaleText("statistics_now_label"), label[:])
-            } else {
-                FormatLocaleCount(*label[0], size_of(type_of(label)),
-                    "statistics_day_offset_label", day_offset)
-            }
-            day_x = plot_x + (plot_w * i) / graph_days
-            Text(CurrentApp().ui.session, TextProps.{
-                    .bounds = Rectangle.{cast(float32)(day_x + AppScale(2)), cast(float32)(y + graph_h - AppScale(20)), 0, 0},
-                    .text = AppTextFromCString(*label[0], 8),
-                    .wrap = cast(TextWrap)TextWrapNone
-                })
-            i += 1
-        }
-
-    }
 }
 
 // ---- What a habit's entries add up to ------------------------------------
@@ -665,37 +222,6 @@ statistics_label_points :: (stats: *HabitAnswerStats, days: []s32,
     }
 }
 
-STATISTICS_CARD_GAP :: 10
-STATISTICS_SECTION_GAP :: 28
-STATISTICS_CHART_HEIGHT :: 128
-STATISTICS_ANSWER_ROW :: 40
-
-// One question's statistics below its title: two figures, then its
-// numbers or times as a chart, or how often it was answered with the
-// latest written answers on the same card.
-statistics_answer_height :: (stats: *HabitAnswerStats, title: string,
-    width: s32) -> s32 {
-    height := SectionTitleHeight(title, width) + AppScale(10) +
-    AppScale(FIGURE_CARD_HEIGHT)
-    if stats.answer_type == HABIT_ANSWER_TIME ||
-    stats.answer_type == HABIT_ANSWER_NUMBER {
-        height += AppScale(STATISTICS_CARD_GAP) +
-        AppScale(STATISTICS_CHART_HEIGHT)
-    } else if stats.answer_type == HABIT_ANSWER_TEXT {
-        height += stats.recent_count * AppScale(STATISTICS_ANSWER_ROW)
-    }
-    return height + AppScale(STATISTICS_SECTION_GAP)
-}
-
-// A span habit's statistics: their average and longest length, a chart of
-// the lengths, and when they started and ended on average.
-statistics_span_height :: (width: s32) -> s32 {
-    return SectionTitleHeight(LocaleText("habit_stats_spans_title"), width) +
-    AppScale(10) + AppScale(FIGURE_CARD_HEIGHT) * 2 +
-    AppScale(STATISTICS_CHART_HEIGHT) + AppScale(STATISTICS_CARD_GAP) * 2 +
-    AppScale(STATISTICS_SECTION_GAP)
-}
-
 // A span habit's start and end questions are its span's times: its
 // statistics are about the span's length, so they get no charts of their own.
 statistics_answer_shown :: (active: *Habit, index: s32) -> bool {
@@ -703,751 +229,327 @@ statistics_answer_shown :: (active: *Habit, index: s32) -> bool {
         active.span != 0, index) == 0
 }
 
-statistics_shown_answers :: (active: *Habit, count: s32) -> s32 {
-    shown: s32 = 0
+// ---- The page, which Habits draws ---------------------------------------------
+
+STATISTICS_HOLD_MAX :: 256
+STATISTICS_HOLD_DAYS :: 31
+
+habit_stats_frame: HabitsStatsFrame;
+habit_stats_frame_codec: WidgetHabitsStatsFrameCodec;
+habit_stats_chart_codec: WidgetHabitsStatsChartCodec;
+habit_stats_point_codec: WidgetHabitsStatsPointCodec;
+habit_stats_recent_codec: WidgetHabitsStatsRecentCodec;
+habit_stats_hold_codec: WidgetHabitsStatsHoldCodec;
+habit_stats_change_codec: WidgetHabitsStatsChangeCodec;
+// The habit the page shows while it draws.
+habit_stats_habit: *Habit;
+habit_stats_holds: [STATISTICS_HOLD_MAX]HabitsStatsHold;
+habit_stats_hold_count: s32;
+
+// Each Wim Hof round of the last 31 days, and whether the habit has any at
+// all.
+habit_stats_collect_holds :: (linked: *HabitLinkedContext, today: s32) -> bool {
+    habit_stats_hold_count = 0
+    any := false
+    if linked == null {
+        return false
+    }
     index: s32 = 0
-    while index < count {
-        if statistics_answer_shown(active, index) {
-            shown += 1
-        }
-        index += 1
-    }
-    return shown
-}
-
-statistics_answers_height :: (active: *Habit, width: s32) -> s32 {
-    if active == null || (active.question_count <= 0 && active.span == 0) {
-        return 0
-    }
-    count := statistics_answer_stats(active)
-    height: s32 = 0
-    if statistics_shown_answers(active, count) > 0 {
-        height += SectionTitleHeight(LocaleText("habit_stats_answers_title"),
-            width) + AppScale(10)
-    }
-    index: s32 = 0
-    while index < count {
-        if statistics_answer_shown(active, index) {
-            height += statistics_answer_height(*statistics_answers[index],
-                HabitQuestionText(*active.questions[index]), width)
-        }
-        index += 1
-    }
-    return height
-}
-
-statistics_answer_value_text :: (stats: *HabitAnswerStats, value: s32,
-    output: []u8) -> string {
-    if stats.answer_type == HABIT_ANSWER_TIME {
-        return HabitAnswerTimeText(value, output)
-    }
-    if stats.answer_type == HABIT_ANSWER_SPAN {
-        return HabitSpanText(value, output)
-    }
-    unused AppFormatS32(value, output)
-    return AppTextFromCString(*output[0], cast(s32)output.count)
-}
-
-// Entries the goal found good of those it judged, as "12/15".
-statistics_on_target_text :: (stats: *HabitAnswerStats, output: []u8) -> string {
-    args: [2]FormatArg
-    args[0].number = stats.good
-    args[1].number = stats.judged
-    unused FormatTemplate("%d/%d", args[:], output)
-    return AppTextFromCString(*output[0], cast(s32)output.count)
-}
-
-// A goal's bound on the chart: times move a day later when that puts them
-// nearer the times shown, which may run past midnight.
-statistics_chart_bound :: (stats: *HabitAnswerStats, bound: s32) -> float32 {
-    if stats.answer_type != HABIT_ANSWER_TIME {
-        return cast(float32)bound
-    }
-    middle := (stats.lowest + stats.highest) / 2
-    later := bound + HABIT_MINUTES_PER_DAY
-    if later - middle < middle - bound {
-        return cast(float32)later
-    }
-    return cast(float32)bound
-}
-
-// The good values of a point's goal, from the point's day on.
-statistics_point_band :: (stats: *HabitAnswerStats, point: *HabitAnswerPoint) -> BandChartBand {
-    band: BandChartBand
-    band.from = point.slot
-    goal := point.goal
-    if HabitGoalIsAverage(goal.kind) {
-        if point.benchmark >= 0 {
-            average := cast(float32)point.benchmark / 100.0
-            band.has_low = goal.kind == HABIT_GOAL_ABOVE_AVERAGE
-            band.has_high = goal.kind == HABIT_GOAL_BELOW_AVERAGE
-            band.low = average
-            band.high = average
-        }
-        return band
-    }
-    if goal.kind == HABIT_GOAL_AT_LEAST || goal.kind == HABIT_GOAL_BETWEEN {
-        band.has_low = true
-        band.low = statistics_chart_bound(stats, goal.low)
-    }
-    if goal.kind == HABIT_GOAL_AT_MOST || goal.kind == HABIT_GOAL_BETWEEN {
-        band.has_high = true
-        band.high = statistics_chart_bound(stats, goal.high)
-    }
-    band.wraps = goal.kind == HABIT_GOAL_BETWEEN && band.low > band.high
-    return band
-}
-
-statistics_same_band :: (first: BandChartBand, second: BandChartBand) -> bool {
-    return first.has_low == second.has_low && first.has_high == second.has_high &&
-    first.wraps == second.wraps && (!first.has_low || first.low == second.low) &&
-    (!first.has_high || first.high == second.high)
-}
-
-// The days oldest to newest: bars from zero for numbers and lengths, dots
-// for times. Values that met their goal are in the habit's color and the
-// rest are muted; the good range is shaded as it was each day, so a
-// changed goal or a moving average steps. Hovering or tapping a value
-// shows its day, value and goal.
-statistics_draw_answer_chart :: (stats: *HabitAnswerStats, chart: s32, x: s32,
-    y: s32, width: s32, accent: Color) {
-    app := CurrentApp()
-    chart_h := AppScale(STATISTICS_CHART_HEIGHT)
-    statistics_chart_card(x, y, width, chart_h)
-    if stats.point_count <= 0 {
-        return
-    }
-    points: [HABIT_ANSWER_POINT_MAX]BandChartPoint
-    bands: [HABIT_ANSWER_POINT_MAX]BandChartBand
-    band_count: s32 = 0
-    is_time := stats.answer_type == HABIT_ANSWER_TIME
-    low: float32 = 0.0
-    if is_time {
-        low = cast(float32)stats.lowest
-    }
-    high := cast(float32)stats.highest
-    index: s32 = 0
-    while index < stats.point_count {
-        point := *stats.points[index]
-        points[index].slot = point.slot
-        points[index].value = cast(float32)point.value
-        points[index].good = point.good
-        points[index].label = AppTextFromCString(*statistics_labels[chart][index][0],
-            STATISTICS_LABEL_SIZE)
-        band := statistics_point_band(stats, point)
-        // Keep the good range in view.
-        if band.has_low && band.low > high { high = band.low }
-        if band.has_high && band.high > high { high = band.high }
-        if is_time && band.has_low && band.low < low { low = band.low }
-        if is_time && band.has_high && band.high < low { low = band.high }
-        if band_count == 0 {
-            band.from = 0
-            bands[0] = band
-            band_count = 1
-        } else if !statistics_same_band(bands[band_count - 1], band) {
-            if bands[band_count - 1].from == band.from {
-                bands[band_count - 1] = band
-            } else {
-                bands[band_count] = band
-                band_count += 1
+    while index < linked.count {
+        entry := *linked.entries[index]
+        if entry.activity == EXERCISE_WIM_HOF && entry.round_count > 0 {
+            any = true
+            days_ago := statistics_day_offset_from_today(
+                entry.year * 10000 + entry.month * 100 + entry.day, today)
+            round: s32 = 0
+            while days_ago >= 0 && days_ago < STATISTICS_HOLD_DAYS && round < entry.round_count &&
+            habit_stats_hold_count < STATISTICS_HOLD_MAX {
+                habit_stats_holds[habit_stats_hold_count] = HabitsStatsHold.{
+                    .days_ago = days_ago,
+                    .time = entry.hour * 3600 + entry.minute * 60 + entry.second,
+                    .round = round, .seconds = entry.rounds[round]}
+                habit_stats_hold_count += 1
+                round += 1
             }
         }
         index += 1
     }
-    if is_time && high - low < 60.0 {
-        low -= 30.0
-        high += 30.0
-    }
-    if high <= low {
-        high = low + 1.0
-    }
-    top: [24]u8
-    bottom: [24]u8
-    inset := AppScale(10)
-    text := StyleTokenColor("text")
-    BandChart(app.ui.session, BandChartProps.{
-            .key = KeyHash("statistics/answer-chart") + cast(u64)chart,
-            .bounds = Rectangle.{cast(float32)(x + inset), cast(float32)(y + inset),
-                cast(float32)(width - inset * 2), cast(float32)(chart_h - inset * 2)},
-            .semantic_label = LocaleText("habit_stats_answers_title"),
-            .slots = HABIT_ANSWER_STATS_DAYS,
-            .min_value = low, .max_value = high,
-            .bars = !is_time,
-            .top_label = FrameTextHold(*app.ui.frame_text, HabitStatsValueText(
-                stats.answer_type, cast(s32)high, top[:])),
-            .bottom_label = FrameTextHold(*app.ui.frame_text, HabitStatsValueText(
-                stats.answer_type, cast(s32)low, bottom[:])),
-            .font = AppSmallFontSize(),
-            .good_color = accent,
-            .other_color = color_with_alpha(text, 0.35),
-            .band_color = color_with_alpha(accent, 0.14),
-            .grid_color = color_with_alpha(text, 0.15),
-            .text_color = text,
-            .label_fill = LightenColor(StyleTokenColor("canvas"), 6)},
-        points[:stats.point_count], bands[:band_count])
+    return any
 }
 
-statistics_draw_figure_pair :: (x: s32, y: s32, width: s32,
-    first_label: string, first: string, second_label: string, second: string,
-    accent: Color) {
-    gap := AppScale(STATISTICS_CARD_GAP)
-    half := (width - gap) / 2
-    statistics_figure(x, y, half, first_label, first, accent)
-    statistics_figure(x + half + gap, y, width - half - gap, second_label,
-        second, accent)
-}
-
-// How often a written question was answered, with its latest answers
-// below on the same card: each answer's day muted beside it.
-statistics_draw_text_answers :: (stats: *HabitAnswerStats, answered: string,
-    x: s32, y: s32, width: s32, accent: Color) {
-    session := CurrentApp().ui.session
-    row_h := AppScale(STATISTICS_ANSWER_ROW)
-    height := AppScale(FIGURE_CARD_HEIGHT) + stats.recent_count * row_h
-    FigureCard(session, Rectangle.{cast(float32)x, cast(float32)y,
-            cast(float32)width, cast(float32)height},
-        LocaleText("habit_stats_answered"),
-        FrameTextHold(*CurrentApp().ui.frame_text, answered), accent)
-    inset := AppScale(5) + AppScale(CARD_PADDING)
-    row_x := x + inset
-    row_w := width - inset - AppScale(CARD_PADDING)
-    date_w := AppTextWidth("0000-00-00", AppSmallFontSize()) + AppScale(20)
-    row_y := y + AppScale(FIGURE_CARD_HEIGHT)
-    index: s32 = 0
-    while index < stats.recent_count {
-        PaintRoundedFill(session, -1, Rectangle.{cast(float32)row_x,
-                cast(float32)row_y, cast(float32)row_w,
-                cast(float32)AppScale(1)}, 0.0, 1,
-            color_with_alpha(StyleTokenColor("text"), 0.1))
-        day := stats.recent_days[index]
-        date: [16]u8
-        args: [3]FormatArg
-        args[0].number = day / 10000
-        args[1].number = (day / 100) % 100
-        args[2].number = day % 100
-        unused FormatTemplate("%04d-%02d-%02d", args[:], date[:])
-        Text(session, TextProps.{
-                .bounds = Rectangle.{cast(float32)row_x, cast(float32)row_y,
-                    cast(float32)date_w, cast(float32)row_h},
-                .text = FrameTextHold(*CurrentApp().ui.frame_text,
-                AppTextFromCString(*date[0], 16)),
-                .font = AppSmallFontSize(), .class_name = MutedTextClass(),
-                .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(TextWrap)TextWrapNone})
-        Text(session, TextProps.{
-                .bounds = Rectangle.{cast(float32)(row_x + date_w),
-                    cast(float32)row_y, cast(float32)(row_w - date_w),
-                    cast(float32)row_h},
-                .text = FrameTextHold(*CurrentApp().ui.frame_text,
-                AppTextFromCString(*stats.recent[index][0],
-                HABIT_ANSWER_SIZE)),
-                .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(TextWrap)TextWrapEllipsis})
-        row_y += row_h
-        index += 1
-    }
-}
-
-statistics_draw_answer :: (stats: *HabitAnswerStats, chart: s32, title: string,
-    x: s32, y: s32, width: s32, accent: Color) {
-    y += SectionTitle(CurrentApp().ui.session, title, x, y, width) +
-    AppScale(10)
-    first: [48]u8
-    second: [48]u8
-    first_label := LocaleText("habit_stats_average")
-    second_label := LocaleText("habit_stats_total")
-    first_text := "-"
-    second_text := "-"
-    answered: [24]u8
-    answered_args: [2]FormatArg
-    answered_args[0].number = stats.days
-    answered_args[1].number = HABIT_ANSWER_STATS_DAYS
-    unused FormatTemplate("%d/%d", answered_args[:], answered[:])
-    if stats.answer_type == HABIT_ANSWER_TEXT {
-        statistics_draw_text_answers(stats,
-            AppTextFromCString(*answered[0], 24), x, y, width, accent)
-        return
-    }
-    if stats.answer_type == HABIT_ANSWER_YES_NO {
-        first_label = LocaleText("habit_answer_yes")
-        second_label = LocaleText("habit_stats_answered")
-        second_text = AppTextFromCString(*answered[0], 24)
-        if stats.answered > 0 {
-            args: [1]FormatArg
-            args[0].number = (stats.yes * 100 + stats.answered / 2) / stats.answered
-            unused FormatTemplate("%d%%", args[:], first[:])
-            first_text = AppTextFromCString(*first[0], 48)
-        }
-    } else if stats.point_count > 0 {
-        average := HabitAnswerStatsAverage100(stats)
-        if stats.answer_type == HABIT_ANSWER_TIME {
-            first_text = HabitAnswerTimeText(cast(s32)((average + 50) / 100), first[:])
-            low: [16]u8
-            high: [16]u8
-            args: [2]FormatArg
-            args[0].text = HabitAnswerTimeText(stats.lowest, low[:])
-            args[0].is_text = true
-            args[1].text = HabitAnswerTimeText(stats.highest, high[:])
-            args[1].is_text = true
-            unused FormatTemplate("%s - %s", args[:], second[:])
-            second_text = AppTextFromCString(*second[0], 48)
-            second_label = LocaleText("habit_stats_time_range")
-        } else {
-            first_text = HabitAnswerDecimalText(average, first[:])
-            unused AppFormatS64(stats.sum, second[:])
-            second_text = AppTextFromCString(*second[0], 48)
-        }
-    }
-    // With a goal, the second figure is how many were on target.
-    if stats.judged > 0 {
-        second_label = LocaleText("habit_stats_on_target")
-        second_text = statistics_on_target_text(stats, second[:])
-    }
-    statistics_draw_figure_pair(x, y, width, first_label, first_text,
-        second_label, second_text, accent)
-    y += AppScale(FIGURE_CARD_HEIGHT) + AppScale(STATISTICS_CARD_GAP)
-    if stats.answer_type == HABIT_ANSWER_TIME ||
-    stats.answer_type == HABIT_ANSWER_NUMBER {
-        statistics_draw_answer_chart(stats, chart, x, y, width, accent)
-    }
-}
-
-// A span habit's average and longest length, or how many were on target
-// when its spans are judged, and when they started and ended on average.
-statistics_draw_spans :: (x: s32, y: s32, width: s32, accent: Color) {
-    lengths := *statistics_spans[0]
-    y += SectionTitle(CurrentApp().ui.session,
-        LocaleText("habit_stats_spans_title"), x, y, width) + AppScale(10)
-    first: [48]u8
-    second: [48]u8
-    first_text := "-"
-    second_text := "-"
-    second_label := LocaleText("habit_stats_longest")
-    if lengths.point_count > 0 {
-        first_text = HabitSpanText(cast(s32)((HabitAnswerStatsAverage100(lengths) +
-            50) / 100), first[:])
-        second_text = HabitSpanText(lengths.highest, second[:])
-    }
-    // With a goal, the second figure is how many were on target.
-    if lengths.judged > 0 {
-        second_label = LocaleText("habit_stats_on_target")
-        second_text = statistics_on_target_text(lengths, second[:])
-    }
-    statistics_draw_figure_pair(x, y, width, LocaleText("habit_stats_average"),
-        first_text, second_label, second_text, accent)
-    y += AppScale(FIGURE_CARD_HEIGHT) + AppScale(STATISTICS_CARD_GAP)
-    statistics_draw_answer_chart(lengths, 0, x, y, width, accent)
-    y += AppScale(STATISTICS_CHART_HEIGHT) + AppScale(STATISTICS_CARD_GAP)
-    starts := *statistics_spans[1]
-    ends := *statistics_spans[2]
-    start_text := "-"
-    end_text := "-"
-    if starts.point_count > 0 {
-        start_text = HabitAnswerTimeText(cast(s32)((HabitAnswerStatsAverage100(starts) +
-            50) / 100), first[:])
-        end_text = HabitAnswerTimeText(cast(s32)((HabitAnswerStatsAverage100(ends) +
-            50) / 100), second[:])
-    }
-    statistics_draw_figure_pair(x, y, width, LocaleText("habit_stats_started"),
-        start_text, LocaleText("habit_stats_ended"), end_text, accent)
-}
-
-// Every question with what its entries add up to; a span habit's spans
-// come first in the view.
-statistics_draw_answers :: (active: *Habit, x: s32, y: s32, width: s32) {
-    if active == null || (active.question_count <= 0 && active.span == 0) {
-        return
-    }
-    count := statistics_answer_stats(active)
-    if statistics_shown_answers(active, count) <= 0 {
-        return
-    }
-    y += SectionTitle(CurrentApp().ui.session,
-        LocaleText("habit_stats_answers_title"), x, y, width) + AppScale(10)
-    index: s32 = 0
-    while index < count {
-        if !statistics_answer_shown(active, index) {
-            index += 1
-            continue
-        }
-        title := HabitQuestionText(*active.questions[index])
-        statistics_draw_answer(*statistics_answers[index], index + 1,
-            FrameTextHold(*CurrentApp().ui.frame_text, title), x, y, width,
-            active.color)
-        y += statistics_answer_height(*statistics_answers[index], title, width)
-        index += 1
-    }
-}
-
-// The habit's latest changes on one card, newest first: each change's day
-// and time muted above its line, which wraps.
-statistics_change_line :: (index: s32) -> string {
-    return AppTextFromCString(*statistics_change_lines[index][0],
-        STATISTICS_CHANGE_LINE_SIZE)
-}
-
-statistics_change_row_height :: (index: s32, width: s32) -> s32 {
-    return AppScale(30) + AppParagraphHeight(statistics_change_line(index),
-        width, AppFontSize(), AppScale(6)) + AppScale(12)
-}
-
-statistics_changes_rows_height :: (width: s32) -> s32 {
-    row_w := width - AppScale(CARD_PADDING) * 2
-    height: s32 = 0
-    index: s32 = 0
-    while index < statistics_changes_count {
-        height += statistics_change_row_height(index, row_w)
-        index += 1
-    }
-    return height
-}
-
-statistics_changes_height :: (active: *Habit, width: s32) -> s32 {
-    if active == null {
-        return 0
-    }
-    unused statistics_answer_stats(active)
-    if statistics_changes_count <= 0 {
-        return 0
-    }
-    return SectionTitleHeight(LocaleText("habit_changes_title"), width) +
-    AppScale(10) + statistics_changes_rows_height(width) +
-    AppScale(CARD_PADDING) * 2 + AppScale(STATISTICS_SECTION_GAP)
-}
-
-statistics_draw_changes :: (active: *Habit, x: s32, y: s32, width: s32) {
-    if statistics_changes_height(active, width) <= 0 {
-        return
-    }
-    app := CurrentApp()
-    session := app.ui.session
-    y += SectionTitle(session, LocaleText("habit_changes_title"), x, y, width) +
-    AppScale(10)
-    padding := AppScale(CARD_PADDING)
-    statistics_chart_card(x, y, width,
-        statistics_changes_rows_height(width) + padding * 2)
-    row_x := x + padding
-    row_w := width - padding * 2
-    row_y := y + padding
-    index: s32 = 0
-    while index < statistics_changes_count {
-        record := *statistics_changes[index]
-        if index > 0 {
-            PaintRoundedFill(session, -1, Rectangle.{cast(float32)row_x,
-                    cast(float32)row_y, cast(float32)row_w,
-                    cast(float32)AppScale(1)}, 0.0, 1,
-                color_with_alpha(StyleTokenColor("text"), 0.1))
-        }
-        day := storage_local_date_of(record.at)
-        minutes := storage_local_minutes_of(record.at)
-        date: [24]u8
-        args: [5]FormatArg
-        args[0].number = day / 10000
-        args[1].number = (day / 100) % 100
-        args[2].number = day % 100
-        args[3].number = minutes / 60
-        args[4].number = minutes % 60
-        unused FormatTemplate("%04d-%02d-%02d %02d:%02d", args[:], date[:])
-        Text(session, TextProps.{
-                .bounds = Rectangle.{cast(float32)row_x,
-                    cast(float32)(row_y + AppScale(6)), cast(float32)row_w,
-                    cast(float32)AppScale(18)},
-                .text = FrameTextHold(*app.ui.frame_text,
-                AppTextFromCString(*date[0], 24)),
-                .font = AppSmallFontSize(), .class_name = MutedTextClass(),
-                .wrap = cast(TextWrap)TextWrapNone})
-        row_h := statistics_change_row_height(index, row_w)
-        Text(session, TextProps.{
-                .bounds = Rectangle.{cast(float32)row_x,
-                    cast(float32)(row_y + AppScale(28)), cast(float32)row_w,
-                    cast(float32)(row_h - AppScale(36))},
-                .text = statistics_change_line(index),
-                .font = AppFontSize(),
-                .wrap = cast(TextWrap)TextWrapAuto})
-        row_y += row_h
-        index += 1
-    }
-}
-
-statistics_draw_view :: (app: *InnerBreeze, active: *Habit, linked_ctx: *HabitLinkedContext, content_x: s32, content_w: s32, y: s32) {
+// The page's frame: the figures counted over the habit's last year.
+habit_stats_frame_for :: (app: *InnerBreeze, index: s32) -> HabitsStatsFrame {
+    active := *app.habits.items[index]
+    linked := habit_cached_linked_entries(app, index, 0)
+    card := CardProps(Rectangle.{})
+    frame := HabitsStatsFrame.{
+        .session = app.ui.session, .scale = MetricsScale(), .view_width = app.ui.view_width,
+        .view_height = app.ui.view_height, .bottom = app_content_bottom_reserved(app),
+        .font = AppFontSize(), .small_font = AppSmallFontSize(),
+        .text_color = StyleTokenColor("text"), .canvas_color = StyleTokenColor("canvas"),
+        .card_fill = card.fill, .card_border = card.border, .muted_class = MutedTextClass(),
+        .modal_active = app.modal.active != 0,
+        .name = AppTextFromCString(*active.name[0], HABIT_NAME_SIZE), .color = active.color,
+        .scroll = app.habits.scroll, .span = active.span != 0,
+        .question_count = active.question_count, .span_start_average = -1,
+        .span_end_average = -1}
     local := LocalNow()
-    current_streak: s32 = 0
-    best_streak: s32 = 0
-    running_streak: s32 = 0
-    last_30_done: s32 = 0
-    last_30_total: s32 = 30
-    weekday_counts: [7] s32
-    max_weekday: s32 = 1
-    chart_h := AppScale(STATISTICS_CHART_HEIGHT)
-    metrics_gap := AppScale(STATISTICS_CARD_GAP)
-    metric_h := AppScale(FIGURE_CARD_HEIGHT)
-    section_gap := AppScale(STATISTICS_SECTION_GAP)
-    metric_w: s32 = 0
-    value: [64] u8
-    has_wim_hof_rounds := statistics_has_wim_hof_rounds(linked_ctx)
-    mood_stats: StorageMoodStats = .{}
-    mood_count: s32 = 0
-
-    if active != null && active.sync_mode == HABIT_SYNC_ACTIVITIES  && active.sync_activity != 0 {
-        mood_count = statistics_cached_mood_stats(active.sync_activity, 0,
-            *mood_stats)
+    if !local.valid {
+        return frame
     }
-
-    if !local.valid { return }
     year := local.year
     month := local.month
     day := local.day
-    today_index := year * 10000 + month * 100 + day
-    {
-        i: s32 = 0
-        while i < 365 {
-            day_index := year * 10000 + month * 100 + day
-            count: s32 = 0
-
-            count = statistics_day_count(active, linked_ctx, day_index)
-            scheduled := active == null ||
-                habit_scheduled_day(active, day_index) != 0
-            if i < 30 && count > 0 {
-                last_30_done += 1
-            }
-            if i < 56 && count > 0 {
-                weekday := statistics_day_of_week(day_index)
-                if weekday >= 0 && weekday < 7 {
-                    weekday_counts[weekday] += 1
-                    if weekday_counts[weekday] > max_weekday {
-                        max_weekday = weekday_counts[weekday]
-                    }
-                }
-            }
-            if count > 0 {
-                running_streak += 1
-                if running_streak > best_streak {
-                    best_streak = running_streak
-                }
-                if i == current_streak {
-                    current_streak += 1
-                }
-            } else if !scheduled {
-                // off-schedule days neither extend nor break a streak
-                if i == current_streak {
-                    current_streak += 1
-                }
-            } else {
-                running_streak = 0
-            }
-            day -= 1
-            if day == 0 {
-                month -= 1
-                if month == 0 {
-                    year -= 1
-                    month = 12
-                }
-                day = habit_days_in_month(year, month)
-            }
-            i += 1
+    today := year * 10000 + month * 100 + day
+    weekdays: [7]s32
+    running: s32 = 0
+    current: s32 = 0
+    day_number: s32 = 0
+    while day_number < 365 {
+        day_index := year * 10000 + month * 100 + day
+        count := statistics_day_count(active, linked, day_index)
+        scheduled := habit_scheduled_day(active, day_index) != 0
+        if day_number < 30 && count > 0 {
+            frame.last_30_done += 1
         }
-
-    }
-
-    metric_w = (content_w - metrics_gap) / 2
-    statistics_format_day_count(*value[0], size_of(type_of(value)), current_streak)
-    statistics_figure(content_x, y, metric_w,
-        LocaleText("habit_stats_current_streak"),
-        AppTextFromCString(*value[0], 64), active.color)
-    days_args: [2]FormatArg = .[
-        FormatArg.{.number = last_30_done},
-        FormatArg.{.number = last_30_total}
-    ]
-    FormatTemplate("%d/%d", days_args[:], value[:])
-    statistics_figure(content_x + metric_w + metrics_gap, y,
-        content_w - metric_w - metrics_gap,
-        LocaleText("habit_stats_last_30_days"),
-        AppTextFromCString(*value[0], 64), active.color)
-    y += metric_h + section_gap
-
-    // A habit that measures spans is about their length: it comes first.
-    if active.span != 0 {
-        unused statistics_answer_stats(active)
-        statistics_draw_spans(content_x, y, content_w, active.color)
-        y += statistics_span_height(content_w)
-    }
-
-    if mood_count > 0 {
-        y += statistics_draw_mood_panel(content_x, y, content_w, *mood_stats,
-            active.color) + section_gap
-    }
-
-    if has_wim_hof_rounds != 0 {
-        y += SectionTitle(app.ui.session,
-            LocaleText("habit_stats_wim_hof_hold_rounds"), content_x, y,
-            content_w) + AppScale(10)
-        statistics_draw_hold_range_selector(app, content_x, y, AppScale(118))
-        y += AppScale(42)
-        statistics_draw_hold_graph(app, linked_ctx, content_x, y,
-            content_w, today_index, EXERCISE_WIM_HOF, active.color)
-        y += AppScale(STATISTICS_HOLD_GRAPH_HEIGHT) + section_gap
-    }
-
-    y += SectionTitle(app.ui.session,
-        LocaleText("habit_stats_weekday_pattern"), content_x, y, content_w) +
-    AppScale(10)
-    statistics_chart_card(content_x, y, content_w, chart_h)
-    {
-        labels: [7] string = .["S", "M", "T", "W", "T", "F", "S"]
-        inner_x := content_x + AppScale(8)
-        slot_w := (content_w - AppScale(16)) / 7
-        {
-            i: s32 = 0
-            while i < 7 {
-
-                h := AppScale(3)
-                if weekday_counts[i] > 0 {
-                    h = (weekday_counts[i] * (chart_h - AppScale(44))) /
-                        max_weekday
-                }
-                x := inner_x + i * slot_w + AppScale(5)
-                w := slot_w - AppScale(10)
-                bar_y := y + chart_h - h - AppScale(28)
-
-                if w < AppScale(4) { w = AppScale(4) }
-                statistics_bar(x, bar_y, w, h,
-                    ifx (weekday_counts[i] > 0) then
-                    (LightenColor(active.color, 12)) else
-                    (color_with_alpha(StyleTokenColor("text"), 0.16)))
-                Text(app.ui.session, TextProps.{
-                    .bounds = Rectangle.{cast(float32)x,
-                        cast(float32)(y + chart_h - AppScale(24)),
-                        cast(float32)w, cast(float32)AppScale(18)},
-                    .text = labels[i],
-                    .font = Text12,
-                    .class_name = MutedTextClass(),
-                    .align = cast(TextAlign)TextAlignCenter,
-                    .wrap = cast(TextWrap)TextWrapNone
-                })
-
-                i += 1
+        if day_number < 56 && count > 0 {
+            weekday := statistics_day_of_week(day_index)
+            if weekday >= 0 && weekday < 7 {
+                weekdays[weekday] += 1
             }
         }
+        if count > 0 {
+            running += 1
+            if running > frame.best_streak {
+                frame.best_streak = running
+            }
+            if day_number == current {
+                current += 1
+            }
+        } else if !scheduled {
+            // Days off the schedule neither extend nor break a streak.
+            if day_number == current {
+                current += 1
+            }
+        } else {
+            running = 0
+        }
+        day -= 1
+        if day == 0 {
+            month -= 1
+            if month == 0 {
+                year -= 1
+                month = 12
+            }
+            day = habit_days_in_month(year, month)
+        }
+        day_number += 1
     }
-    y += chart_h + section_gap
-
-    if linked_ctx != null && linked_ctx.count > 0 {
-        best: [32] u8
-        total: [32] u8
-        y += SectionTitle(app.ui.session,
-            LocaleText("habit_stats_practice_time"), content_x, y,
-            content_w) + AppScale(10)
-        habit_format_duration(linked_ctx.best_seconds, *best[0], size_of(type_of(best)))
-        habit_format_duration(linked_ctx.total_seconds, *total[0], size_of(type_of(total)))
-        statistics_figure(content_x, y, metric_w,
-            LocaleText("habit_stats_best_hold"),
-            AppTextFromCString(*best[0], 32), active.color)
-        statistics_figure(content_x + metric_w + metrics_gap, y,
-            content_w - metric_w - metrics_gap,
-            LocaleText("habit_stats_total_hold"),
-            AppTextFromCString(*total[0], 32), active.color)
-    } else {
-        statistics_format_day_count(*value[0], size_of(type_of(value)), best_streak)
-        statistics_figure(content_x, y, content_w,
-            LocaleText("habit_stats_best_streak"),
-            AppTextFromCString(*value[0], 64), active.color)
+    frame.current_streak = current
+    frame.sunday = weekdays[0]
+    frame.monday = weekdays[1]
+    frame.tuesday = weekdays[2]
+    frame.wednesday = weekdays[3]
+    frame.thursday = weekdays[4]
+    frame.friday = weekdays[5]
+    frame.saturday = weekdays[6]
+    if linked != null && linked.count > 0 {
+        best: [32]u8
+        total: [32]u8
+        habit_format_duration(linked.best_seconds, *best[0], size_of(type_of(best)))
+        habit_format_duration(linked.total_seconds, *total[0], size_of(type_of(total)))
+        frame.linked = true
+        frame.best_time = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*best[0], 32))
+        frame.total_time = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*total[0], 32))
     }
-    y += metric_h + section_gap
-    statistics_draw_answers(active, content_x, y, content_w)
-    y += statistics_answers_height(active, content_w)
-    statistics_draw_changes(active, content_x, y, content_w)
+    if active.sync_mode == HABIT_SYNC_ACTIVITIES && active.sync_activity != 0 {
+        mood: StorageMoodStats = .{}
+        if statistics_cached_mood_stats(active.sync_activity, 0, *mood) > 0 && mood.total > 0 {
+            frame.mood_total = mood.total
+            frame.mood_average = mood.average
+            frame.mood_1 = mood.counts[0]
+            frame.mood_2 = mood.counts[1]
+            frame.mood_3 = mood.counts[2]
+            frame.mood_4 = mood.counts[3]
+            frame.mood_5 = mood.counts[4]
+        }
+    }
+    if habit_stats_collect_holds(linked, today) {
+        frame.hold_count = habit_stats_hold_count
+        frame.hold_days = ifx app.habits.hold_stats_range_days == 31 then 31 else 7
+    }
+    unused statistics_answer_stats(active)
+    frame.change_count = statistics_changes_count
+    if active.span != 0 && statistics_spans[1].point_count > 0 {
+        frame.span_start_average = HabitAnswerStatsAverage100(*statistics_spans[1])
+        frame.span_end_average = HabitAnswerStatsAverage100(*statistics_spans[2])
+    }
+    return frame
 }
 
-STATISTICS_HOLD_GRAPH_HEIGHT :: 170
-
-// The page's height as statistics_draw_view lays it out.
-statistics_view_height :: (active: *Habit, linked_ctx: *HabitLinkedContext,
-    mood_count: s32, content_w: s32) -> s32 {
-    section_gap := AppScale(STATISTICS_SECTION_GAP)
-    height := AppScale(8) + AppScale(FIGURE_CARD_HEIGHT) + section_gap
-    if active != null && active.span != 0 {
-        unused statistics_answer_stats(active)
-        height += statistics_span_height(content_w)
+// A chart's figures: the span's lengths for chart 0, a question's for the
+// question's index + 1.
+habit_stats_chart_of :: (chart: s32) -> *HabitAnswerStats {
+    active := habit_stats_habit
+    if active == null || chart < 0 || chart > statistics_answers_count {
+        return null
     }
-    if mood_count > 0 {
-        height += statistics_mood_panel_height(content_w) + section_gap
+    if chart == 0 {
+        return ifx active.span != 0 then *statistics_spans[0] else null
     }
-    if statistics_has_wim_hof_rounds(linked_ctx) != 0 {
-        height += SectionTitleHeight(
-            LocaleText("habit_stats_wim_hof_hold_rounds"), content_w) +
-        AppScale(10) + AppScale(42) + AppScale(STATISTICS_HOLD_GRAPH_HEIGHT) +
-        section_gap
-    }
-    height += SectionTitleHeight(LocaleText("habit_stats_weekday_pattern"),
-        content_w) + AppScale(10) + AppScale(STATISTICS_CHART_HEIGHT) +
-    section_gap
-    if linked_ctx != null && linked_ctx.count > 0 {
-        height += SectionTitleHeight(LocaleText("habit_stats_practice_time"),
-            content_w) + AppScale(10)
-    }
-    height += AppScale(FIGURE_CARD_HEIGHT) + section_gap
-    return height + statistics_answers_height(active, content_w) +
-    statistics_changes_height(active, content_w)
+    return *statistics_answers[chart - 1]
 }
 
-draw_statistics_content :: (app: *InnerBreeze, content_top: s32) {
-    if app == null {
-        return
+habit_stats_chart :: (chart: s32) -> HabitsStatsChart {
+    stats := habit_stats_chart_of(chart)
+    if stats == null {
+        return HabitsStatsChart.{}
     }
+    active := habit_stats_habit
+    value := HabitsStatsChart.{.answer_type = stats.answer_type, .shown = true,
+        .point_count = stats.point_count, .lowest = stats.lowest, .highest = stats.highest,
+        .sum = stats.sum, .average = HabitAnswerStatsAverage100(stats), .days = stats.days,
+        .answered = stats.answered, .yes = stats.yes, .judged = stats.judged,
+        .good = stats.good, .recent_count = stats.recent_count}
+    if chart > 0 {
+        value.title = HabitQuestionText(*active.questions[chart - 1])
+        value.shown = statistics_answer_shown(active, chart - 1)
+    }
+    return value
+}
 
-    content_bottom := app_content_bottom_reserved(app)
-    viewport_h := app.ui.view_height - content_top - content_bottom
-    scroll_y := content_top + AppScale(4)
-    scroll_h := viewport_h - AppScale(4)
-    max_w := AppScale(CONTENT_MAX_W)
-    active: *Habit = null
-    linked_ctx: *HabitLinkedContext = null
-    stats_index := app.habits.selected
-    page_ctx := StatisticsScrollPageContext.{}
-    page_mood_stats: StorageMoodStats = .{}
-    page_mood_count: s32 = 0
-    content_x: s32 = 0
-    content_w: s32 = 0
-    content_h: s32 = 0
+HabitStatsCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    app := cast(*InnerBreeze)context
+    if BandChartHostSupports(TextFromCString(module), TextFromCString(function)) {
+        return BandChartHostCall(app.ui.session, module, function, arguments, count, result)
+    }
+    if TextFromCString(module) != "habit_stats_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadHabitsStatsHost" && count == 0 {
+        result.* = WidgetEncodeHabitsStatsFrame(habit_stats_frame, *habit_stats_frame_codec)
+        return 1
+    }
+    if name == "WriteHabitsStatsHost" && count == 1 && WidgetValidHabitsStatsFrame(arguments[0]) {
+        observed := WidgetDecodeHabitsStatsFrame(arguments[0], *habit_stats_frame_codec)
+        habit_stats_frame.scroll = observed.scroll
+        habit_stats_frame.hold_days = observed.hold_days
+        habit_stats_frame.action = observed.action
+        return 1
+    }
+    if name == "ReadHabitsStatsChartHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        result.* = WidgetEncodeHabitsStatsChart(habit_stats_chart(cast(s32)arguments[0].integer),
+            *habit_stats_chart_codec)
+        return 1
+    }
+    if name == "ReadHabitsStatsPointHost" && count == 2 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) &&
+    HostScalarValid(arguments[1], "s32", cast(s32)HostInteger) {
+        chart := cast(s32)arguments[0].integer
+        index := cast(s32)arguments[1].integer
+        stats := habit_stats_chart_of(chart)
+        point: HabitsStatsPoint
+        if stats != null && index >= 0 && index < stats.point_count {
+            source := *stats.points[index]
+            point = HabitsStatsPoint.{.slot = source.slot, .value = source.value,
+                .good = source.good,
+                .label = AppTextFromCString(*statistics_labels[chart][index][0], STATISTICS_LABEL_SIZE),
+                .goal_kind = source.goal.kind, .goal_low = source.goal.low,
+                .goal_high = source.goal.high, .benchmark = source.benchmark}
+        }
+        result.* = WidgetEncodeHabitsStatsPoint(point, *habit_stats_point_codec)
+        return 1
+    }
+    if name == "ReadHabitsStatsRecentHost" && count == 2 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) &&
+    HostScalarValid(arguments[1], "s32", cast(s32)HostInteger) {
+        stats := habit_stats_chart_of(cast(s32)arguments[0].integer)
+        index := cast(s32)arguments[1].integer
+        recent: HabitsStatsRecent
+        if stats != null && index >= 0 && index < stats.recent_count {
+            recent = HabitsStatsRecent.{.day = stats.recent_days[index],
+                .text = AppTextFromCString(*stats.recent[index][0], HABIT_ANSWER_SIZE)}
+        }
+        result.* = WidgetEncodeHabitsStatsRecent(recent, *habit_stats_recent_codec)
+        return 1
+    }
+    if name == "ReadHabitsStatsHoldHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        hold := HabitsStatsHold.{.days_ago = -1}
+        if index >= 0 && index < habit_stats_hold_count {
+            hold = habit_stats_holds[index]
+        }
+        result.* = WidgetEncodeHabitsStatsHold(hold, *habit_stats_hold_codec)
+        return 1
+    }
+    if name == "ReadHabitsStatsChangeHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        change: HabitsStatsChange
+        if index >= 0 && index < statistics_changes_count {
+            record := *statistics_changes[index]
+            day := storage_local_date_of(record.at)
+            minutes := storage_local_minutes_of(record.at)
+            date: [24]u8
+            args: [5]FormatArg
+            args[0].number = day / 10000
+            args[1].number = (day / 100) % 100
+            args[2].number = day % 100
+            args[3].number = minutes / 60
+            args[4].number = minutes % 60
+            unused FormatTemplate("%04d-%02d-%02d %02d:%02d", args[:], date[:])
+            change = HabitsStatsChange.{
+                .when = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*date[0], 24)),
+                .line = AppTextFromCString(*statistics_change_lines[index][0],
+                    STATISTICS_CHANGE_LINE_SIZE)}
+        }
+        result.* = WidgetEncodeHabitsStatsChange(change, *habit_stats_change_codec)
+        return 1
+    }
+    if name == "HabitsLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
+}
 
-    if app.habits.count <= 0 {
-        return
+// Has Habits draw the selected habit's statistics. Returns false when Back
+// was pressed.
+draw_statistics_page :: (app: *InnerBreeze) -> bool {
+    if app == null || app.habits.count <= 0 {
+        return true
     }
-    if stats_index < 0 || stats_index >= app.habits.count {
-        stats_index = 0
+    index := app.habits.selected
+    if index < 0 || index >= app.habits.count {
+        index = 0
     }
-
-    active = *app.habits.items[stats_index]
-    linked_ctx = habit_cached_linked_entries(app, stats_index, 0)
-
-    if scroll_h < 0 {
-        scroll_h = 0
+    habit_stats_habit = *app.habits.items[index]
+    habit_stats_frame = habit_stats_frame_for(app, index)
+    habit_stats_frame.action = HABITS_STATS_NONE
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    CellsUiBegin(HabitStatsCall, cast(*void)app)
+    drawn := HabitsRun(HabitsMessage.{.action = HABITS_STATS_VIEW})
+    CellsUiEnd()
+    WidgetHostEnd()
+    scroll := habit_stats_frame.scroll
+    hold_days := habit_stats_frame.hold_days
+    action := habit_stats_frame.action
+    habit_stats_frame = HabitsStatsFrame.{}
+    habit_stats_habit = null
+    if !drawn.succeeded {
+        return true
     }
-    if active != null && active.sync_mode == HABIT_SYNC_ACTIVITIES  && active.sync_activity != 0 {
-        page_mood_count = statistics_cached_mood_stats(active.sync_activity, 0,
-            *page_mood_stats)
+    app.habits.scroll = scroll
+    if hold_days == 7 || hold_days == 31 {
+        app.habits.hold_stats_range_days = hold_days
     }
-    page_ctx.linked_count = ifx (linked_ctx != null) then (linked_ctx.count) else (0)
-    page_ctx.mood_count = page_mood_count
-    GetCenteredColumn(max_w, GetPageSidePadding(), *content_x, *content_w)
-    content_h = statistics_view_height(active, linked_ctx,
-        page_ctx.mood_count, content_w)
-    {
-        scroll_1_bounds: Rectangle = Rectangle.{cast(float32)0,
-            cast(float32)scroll_y, cast(float32)app.ui.view_width,
-            cast(float32)scroll_h }
-        scroll_1_key: u64 = KeyHash("inbe/screens/statistics_screen/scroll/1")
-        scroll_1_props: ScrollProps
-        scroll_1_props.key = scroll_1_key
-        scroll_1_props.bounds = scroll_1_bounds
-        scroll_1_props.content_height = content_h
-        scroll_1_props.scroll_offset = app.habits.scroll
-        scroll_1_result: ScrollResult = Scroll(CurrentApp().ui.session, scroll_1_props)
-        app.habits.scroll = scroll_1_result.scroll_offset
-        page: Rectangle = scroll_1_result.content
-
-        statistics_draw_view(app, active, linked_ctx, content_x, content_w,
-            cast(s32)page.y + AppScale(8))
-        unused End(app.ui.session)
-    }
+    return action != HABITS_STATS_BACK
 }

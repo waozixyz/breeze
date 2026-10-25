@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.4.0] - 2026-10-24
+
+- Practice's home, the Wim Hof, Meditation, Patterns and Astral Projection manuals, Meditation's and Astral Projection's Customize pages, and the results after a practice now come with Practices, so they can change without an app update.
+
 ## [1.3.11] - 2026-10-24
 
 - Maintenance release for Inner Breeze 2.1.46.

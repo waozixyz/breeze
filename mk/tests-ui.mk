@@ -73,7 +73,7 @@ native-text-pixels-test: $(TARGET)
 
 # Run every visual suite and retain a receipt even when an earlier suite fails.
 # The longest suites come first so the gate does not end waiting on one.
-VISUAL_TEST_TARGETS := $(NATIVE_VISUAL_TARGETS) launcher-ui-test lumi-ui-test practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-history-ui-test habits-table-ui-test habits-count-ui-test habit-schedule-tool-test habit-tracking-tool-test lists-ui-test sync-review-ui-test data-back-ui-test lumi-selection-ui-test lumi-harness-ui-test lumi-guide-ui-test lumi-emphasis-ui-test customize-nav-ui-test
+VISUAL_TEST_TARGETS := $(NATIVE_VISUAL_TARGETS) launcher-ui-test lumi-ui-test practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-history-ui-test habits-table-ui-test habits-count-ui-test habit-day-ui-test habit-schedule-tool-test habit-tracking-tool-test lists-ui-test sync-review-ui-test data-back-ui-test lumi-selection-ui-test lumi-harness-ui-test lumi-guide-ui-test lumi-emphasis-ui-test customize-nav-ui-test
 VISUAL_TEST_TARGETS += audio-setup-ui-test cells-onboarding-test practice-downloads-ui-test tab-switch-performance-test habit-unsaved-ui-test
 VISUAL_TEST_TARGETS += entity-profile-ui-test
 VISUAL_TEST_TARGETS += music-navigation-test
@@ -110,6 +110,10 @@ habits-table-ui-test: $(TARGET)
 .PHONY: habits-count-ui-test
 habits-count-ui-test: $(TARGET)
 	bash tests/habits_count_ui_test.sh "$(abspath $(TARGET))"
+
+.PHONY: habit-day-ui-test
+habit-day-ui-test: $(TARGET)
+	bash tests/habit_day_ui_test.sh "$(abspath $(TARGET))"
 
 .PHONY: lists-ui-test
 lists-ui-test: $(TARGET)

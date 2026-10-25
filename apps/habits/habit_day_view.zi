@@ -1,0 +1,1073 @@
+// A habit's day and the dialog that writes its entries. The day's screen
+// lists the day's entries, each with buttons that change or delete it and,
+// while a span runs, one that ends it, then the practice sessions linked to
+// the day on a card for each practice: each session's time and what it did,
+// and a breathing session's rounds, each changed with the number pad or
+// deleted. A counting habit's count steps below them. The entry dialog asks
+// for an entry's time, or a span's start and end, and its questions. The
+// host keeps the habits, their entries and sessions and does what the page
+// asks once it is drawn.
+#import "session"
+#import "geometry"
+#import "vec"
+#import "dpi"
+#import "layout"
+#import "drawing_props"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "text_measure"
+#import "text_input_props"
+#import "text_field_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "box_props"
+#import "box_widget"
+#import "image_props"
+#import "scroll_props"
+#import "scroll_widget"
+#import "modal_props"
+#import "modal_frame_widget"
+#import "time_picker_props"
+#import "time_picker_widget"
+#import "title_bar_props"
+#import "title_bar_widget"
+#import "dropdown_props"
+#import "semantic"
+#import "tree"
+#import, file "../../src/cells/habits_ui_types.zi";
+#import, file "../../src/cells/habits_types.zi";
+#import, file "../../src/habits/habit_types.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using SemanticKind;
+using TextAlign;
+using TextWrap;
+host_api :: #system_library "host_api";
+ReadHabitsDayHost :: () -> HabitsDayFrame #foreign host_api;
+WriteHabitsDayHost :: (frame: HabitsDayFrame) #foreign host_api;
+ReadHabitsDayEntryHost :: (index: s32) -> HabitsDayEntry #foreign host_api;
+ReadHabitsDaySessionHost :: (index: s32) -> HabitsDaySession #foreign host_api;
+ReadHabitsDayRoundHost :: (session: s32, round: s32) -> s32 #foreign host_api;
+ReadHabitsEntryHost :: () -> HabitsEntryFrame #foreign host_api;
+WriteHabitsEntryHost :: (frame: HabitsEntryFrame) #foreign host_api;
+ReadHabitsAnswerHost :: (index: s32) -> HabitsAnswer #foreign host_api;
+WriteHabitsAnswerHost :: (index: s32, answer: HabitsAnswer) -> bool #foreign host_api;
+HabitsLocaleHost :: (key: string) -> string #foreign host_api;
+day: HabitsDayFrame;
+entry: HabitsEntryFrame;
+// The page's look: the session and scale of the frame being drawn.
+look_session: Session;
+look_scale: float32;
+look_font: s32;
+look_small_font: s32;
+look_muted: s32;
+
+DAY_ENTRY_BUTTON :: 44
+DAY_CARD_RADIUS :: 12
+DAY_CARD_PADDING :: 16
+DAY_ANSWER_ROW_HEIGHT :: 84
+// Where an answer's input starts below its question.
+DAY_ANSWER_INPUT_Y :: 30
+DAY_ROUND_DIGITS :: 3
+// The rounds of a session read once a frame, for its card's measure and
+// drawing.
+DAY_ROUND_MAX :: 32
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, look_scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+Locale :: (key: string) -> string {
+    return HabitsLocaleHost(key)
+}
+
+Width :: (text: string, font: s32) -> s32 {
+    return TextWidth(look_session, TextProps.{.text = text, .font = font})
+}
+
+// The height Text takes for a paragraph wrapped in width.
+ParagraphHeight :: (text: string, width: s32, font: s32) -> s32 {
+    return TextHeight(look_session, TextProps.{.text = text, .font = font,
+            .bounds = Bounds(0, 0, width, 0), .wrap = cast(TextWrap)TextWrapAuto})
+}
+
+Number :: (value: s64) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value)
+    return BuilderFinish(out)
+}
+
+// The template with its %d replaced by value.
+Filled :: (template: string, value: s32) -> string {
+    out: Vec(u8)
+    used := false
+    at: s64 = 0
+    while at < template.count {
+        if !used && at + 1 < template.count && template[at] == cast(u8)37 &&
+        template[at + 1] == cast(u8)100 {
+            BuilderPrint(*out, "%", value)
+            used = true
+            at += 2
+        } else {
+            BuilderPrint(*out, "%", template[at:at + 1])
+            at += 1
+        }
+    }
+    return BuilderFinish(out)
+}
+
+// The value with start to end replaced, or the value unchanged when the
+// result would pass limit bytes.
+Replaced :: (value: string, start: s32, end: s32, replacement: string,
+    limit: s64) -> string {
+    if start < 0 || end < start || cast(s64)end > value.count ||
+    value.count - cast(s64)(end - start) + replacement.count > limit {
+        return value
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value[:start])
+    BuilderPrint(*out, "%", replacement)
+    BuilderPrint(*out, "%", value[end:])
+    return BuilderFinish(out)
+}
+
+Strong :: (text: string) -> [1]TextRange {
+    ranges: [1]TextRange
+    ranges[0] = TextRange.{.start = 0, .end = cast(s32)text.count}
+    return ranges
+}
+
+// The title as large as it fits.
+TitleFont :: (title: string, max_width: s32) -> s32 {
+    large := Scale(Text24)
+    if max_width <= 0 || Width(title, large) <= max_width {
+        return large
+    }
+    medium := Scale(Text16)
+    if Width(title, medium) <= max_width {
+        return medium
+    }
+    return Scale(Text14)
+}
+
+Alpha :: (color: Color, opacity: float32) -> Color {
+    color.a = cast(u8)(255.0 * opacity)
+    return color
+}
+
+UiImage :: (label: string, x: float32, y: float32) -> ImageProps {
+    return ImageProps.{.asset_path = "icons/ui.png", .alt_text = label,
+        .source = Rectangle.{x, y, 64.0, 64.0}}
+}
+
+EditImage :: () -> ImageProps {
+    return UiImage(Locale("habit_edit_title"), 384.0, 0.0)
+}
+
+DeleteImage :: () -> ImageProps {
+    return UiImage(Locale("delete_button"), 0.0, 384.0)
+}
+
+IconButton :: (key: u64, id: s32, bounds: Rectangle, image: ImageProps, disabled: bool) -> bool {
+    return Button(look_session, ButtonProps.{.key = key, .id = id, .bounds = bounds,
+            .label = image.alt_text, .image = image, .icon_only = true,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .disabled = disabled}) != 0
+}
+
+// ---- A day's screen -----------------------------------------------------------
+
+DayAsk :: (action: s32, index: s32, round: s32) {
+    if day.action != HABITS_DAY_SCREEN_NONE {
+        return
+    }
+    day.action = action
+    day.action_index = index
+    day.action_round = round
+}
+
+Card :: (bounds: Rectangle) {
+    unused Box(look_session, BoxProps.{.bounds = bounds, .fill = day.card_fill,
+            .border = day.card_border, .radius = cast(float32)Scale(DAY_CARD_RADIUS)})
+}
+
+// An entry's answers: each question muted, its value under it in bold.
+// Returns their height; draws them when draw is set.
+EntryAnswers :: (summary: string, x: s32, y: s32, width: s32, draw: bool) -> s32 {
+    height: s32 = 0
+    start: s64 = 0
+    line: s32 = 0
+    while start < summary.count {
+        end := start
+        while end < summary.count && summary[end] != cast(u8)10 {
+            end += 1
+        }
+        text := summary[start:end]
+        value := line % 2 == 1
+        font := ifx value then look_font + Scale(2) else look_small_font
+        text_height := ParagraphHeight(text, width, font)
+        if draw {
+            strong := Strong(text)
+            props := TextProps.{.bounds = Bounds(x, y + height, width, text_height),
+                .text = text, .font = font, .wrap = cast(TextWrap)TextWrapAuto}
+            if value {
+                props.strong = strong[:]
+            } else {
+                props.class_name = look_muted
+            }
+            Text(look_session, props)
+        }
+        height += text_height
+        height += ifx value then Scale(10) else Scale(2)
+        start = end + 1
+        line += 1
+    }
+    if height > Scale(10) {
+        height -= Scale(10)
+    }
+    return height
+}
+
+// An entry's card: a span's times with the buttons that change or delete
+// it and its answers below, and End now while it runs. Other entries ask
+// no time, so their answers sit beside the buttons, and a skipped one shows
+// when it was recorded.
+EntryCardHeight :: (item: HabitsDayEntry, width: s32) -> s32 {
+    pad := Scale(DAY_CARD_PADDING)
+    buttons := Scale(DAY_ENTRY_BUTTON)
+    if !day.span && item.summary.count > 0 {
+        answers := EntryAnswers(item.summary, 0, 0, width - pad * 2 - buttons * 2 - Scale(18), false)
+        if answers < buttons {
+            answers = buttons
+        }
+        return pad + answers + pad
+    }
+    height := pad + buttons + pad
+    if item.summary.count > 0 {
+        height += EntryAnswers(item.summary, 0, 0, width - pad * 2, false) + Scale(8)
+    }
+    if item.running {
+        height += Scale(44) + Scale(12)
+    }
+    return height
+}
+
+// The day's entries: a card for each entry, then a button that adds one.
+// Returns the y below them.
+DayEntries :: (x: s32, width: s32, y: s32, draw: bool) -> s32 {
+    icon_width := Scale(DAY_ENTRY_BUTTON)
+    pad := Scale(DAY_CARD_PADDING)
+    heading_height := Scale(34)
+    if draw {
+        heading := Locale("habit_day_entries")
+        strong := Strong(heading)
+        Text(look_session, TextProps.{.bounds = Bounds(x, y, width, heading_height),
+                .text = heading, .font = TitleFont(heading, width), .strong = strong[:],
+                .semantic_kind = cast(SemanticKind)SemanticHeading, .heading_level = 2,
+                .wrap = cast(TextWrap)TextWrapNone})
+    }
+    y += heading_height + Scale(8)
+    for index: cast(s32)0..day.entry_count - 1 {
+        item := ReadHabitsDayEntryHost(index)
+        card_height := EntryCardHeight(item, width)
+        if draw {
+            Card(Bounds(x, y, width, card_height))
+            inner_x := x + pad
+            inner_width := width - pad * 2
+            buttons_width := icon_width * 2 + Scale(10)
+            if day.span || item.summary.count == 0 {
+                strong := Strong(item.when)
+                when := TextProps.{.bounds = Bounds(inner_x, y + pad,
+                        inner_width - buttons_width - Scale(8), icon_width),
+                    .text = item.when, .font = look_font,
+                    .vertical_align = cast(TextAlign)TextAlignCenter,
+                    .wrap = cast(TextWrap)TextWrapEllipsis}
+                if day.span {
+                    when.font = look_font + Scale(4)
+                    when.strong = strong[:]
+                } else {
+                    when.class_name = look_muted
+                }
+                Text(look_session, when)
+            } else {
+                unused EntryAnswers(item.summary, inner_x, y + pad,
+                    inner_width - buttons_width - Scale(8), true)
+            }
+            if IconButton(cast(u64)(5740000 + index * 2), 5740000 + index * 2,
+                Bounds(inner_x + inner_width - buttons_width, y + pad, icon_width, icon_width),
+                EditImage(), day.modal_active) {
+                DayAsk(HABITS_DAY_SCREEN_EDIT_ENTRY, index, 0)
+            }
+            if IconButton(cast(u64)(5740001 + index * 2), 5740001 + index * 2,
+                Bounds(inner_x + inner_width - icon_width, y + pad, icon_width, icon_width),
+                DeleteImage(), day.modal_active) {
+                DayAsk(HABITS_DAY_SCREEN_DELETE_ENTRY, index, 0)
+            }
+            line_y := y + pad + icon_width + Scale(8)
+            if day.span && item.summary.count > 0 {
+                line_y += EntryAnswers(item.summary, inner_x, line_y, inner_width, true) + Scale(8)
+            }
+            if item.running {
+                if Button(look_session, ButtonProps.{.id = 5739990,
+                        .bounds = Bounds(inner_x, line_y + Scale(4), inner_width, Scale(44)),
+                        .label = Locale("habit_span_end_now"),
+                        .tone = cast(ButtonTone)ButtonToneAccent,
+                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+                        .disabled = day.modal_active}) != 0 {
+                    DayAsk(HABITS_DAY_SCREEN_END_SPAN, index, 0)
+                }
+            }
+        }
+        y += card_height + Scale(12)
+    }
+    if draw {
+        if Button(look_session, ButtonProps.{.id = 5739991, .bounds = Bounds(x, y, width, Scale(48)),
+                .label = Locale("habit_entry_add"), .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                .disabled = day.modal_active}) != 0 {
+            DayAsk(HABITS_DAY_SCREEN_ADD_ENTRY, -1, 0)
+        }
+    }
+    return y + Scale(48)
+}
+
+// A line between the rows of a practice's card.
+Divider :: (x: s32, y: s32, width: s32) {
+    unused Box(look_session, BoxProps.{.bounds = Bounds(x, y, width, Scale(1)),
+            .fill = Alpha(day.text_color, 0.1)})
+}
+
+// One practice's sessions of the day on its card: the practice's name, each
+// session's time and summary with a button that deletes it, and a breathing
+// session's rounds below it, each with buttons that change or delete it.
+// Returns the y below the card.
+PracticeCard :: (first_session: s32, last_session: s32, content_x: s32, content_width: s32,
+    y: s32, draw: bool) -> s32 {
+    pad := Scale(DAY_CARD_PADDING)
+    x := content_x + pad
+    width := content_width - pad * 2
+    row_height := Scale(48)
+    summary_height := Scale(44)
+    icon_width := Scale(DAY_ENTRY_BUTTON)
+    font := look_font
+    title := ReadHabitsDaySessionHost(first_session).title
+    y += pad
+    if draw {
+        strong := Strong(title)
+        Text(look_session, TextProps.{.bounds = Bounds(x, y, width - icon_width - Scale(8), Scale(34)),
+                .text = title, .font = TitleFont(title, width - icon_width - Scale(8)),
+                .strong = strong[:], .vertical_align = cast(TextAlign)TextAlignCenter,
+                .wrap = cast(TextWrap)TextWrapEllipsis})
+    }
+    y += Scale(34)
+    for index: first_session..last_session {
+        session := ReadHabitsDaySessionHost(index)
+        trash_x := x + width - icon_width
+        summary_x := x + Scale(100)
+        if index > first_session {
+            if draw {
+                Divider(x, y + Scale(6), width)
+            }
+            y += Scale(12)
+        }
+        if summary_x + Width(session.summary, font) > trash_x - Scale(8) {
+            summary_x = x + Scale(68)
+        }
+        if draw {
+            Text(look_session, TextProps.{.bounds = Bounds(x, y, summary_x - x - Scale(8), summary_height),
+                    .text = session.time, .font = font, .wrap = cast(TextWrap)TextWrapNone,
+                    .vertical_align = cast(TextAlign)TextAlignCenter})
+            Text(look_session, TextProps.{.bounds = Bounds(summary_x, y, trash_x - summary_x - Scale(8),
+                        summary_height),
+                    .text = session.summary, .font = font, .wrap = cast(TextWrap)TextWrapNone,
+                    .vertical_align = cast(TextAlign)TextAlignCenter})
+            if !day.editing && IconButton(cast(u64)(5750000 + index), 0,
+                Bounds(trash_x, y + (summary_height - icon_width) / 2, icon_width, icon_width),
+                DeleteImage(), day.modal_active) {
+                DayAsk(HABITS_DAY_SCREEN_DELETE_SESSION, index, 0)
+            }
+        }
+        y += summary_height
+        if session.details.count > 0 {
+            if draw {
+                Text(look_session, TextProps.{.bounds = Bounds(x, y, width, Scale(32)),
+                        .text = session.details, .font = look_small_font,
+                        .wrap = cast(TextWrap)TextWrapEllipsis})
+            }
+            y += Scale(32)
+        }
+        rounds := session.rounds
+        if rounds > DAY_ROUND_MAX {
+            rounds = DAY_ROUND_MAX
+        }
+        if rounds > 0 {
+            y += Scale(8)
+        }
+        for round: cast(s32)0..rounds - 1 {
+            round_trash_x := x + width - icon_width
+            round_edit_x := round_trash_x - icon_width - Scale(10)
+            value_x := x + width / 3
+            value_width := round_edit_x - value_x - Scale(8)
+            editing_round := day.editing && day.edit_session == index && day.edit_round == round
+            value_text_x := ifx editing_round then value_x - Scale(8) else value_x
+            value_text_width := ifx editing_round then Scale(78) else value_width
+            if draw {
+                value := day.edit_text
+                if !editing_round {
+                    value = Filled(Locale("results_metric_seconds"), ReadHabitsDayRoundHost(index, round))
+                }
+                Divider(x, y, width)
+                if editing_round {
+                    unused Box(look_session, BoxProps.{.bounds = Bounds(x, y + Scale(2), width,
+                                row_height - Scale(4)),
+                            .fill = Alpha(day.surface_color, 0.75),
+                            .border = Alpha(day.text_color, 0.55), .radius = cast(float32)Scale(8)})
+                    unused Box(look_session, BoxProps.{.bounds = Bounds(value_x - Scale(8), y + Scale(6),
+                                Scale(78), row_height - Scale(12)),
+                            .border = day.text_color, .radius = cast(float32)Scale(6)})
+                }
+                Text(look_session, TextProps.{.bounds = Bounds(x, y, value_x - x - Scale(8), row_height),
+                        .text = Filled(Locale("round_number_label"), round + 1), .font = font,
+                        .wrap = cast(TextWrap)TextWrapNone,
+                        .vertical_align = cast(TextAlign)TextAlignCenter})
+                Text(look_session, TextProps.{.bounds = Bounds(value_text_x, y, value_text_width, row_height),
+                        .text = value, .font = Scale(19), .wrap = cast(TextWrap)TextWrapNone,
+                        .align = ifx editing_round then cast(TextAlign)TextAlignCenter
+                        else cast(TextAlign)TextAlignStart,
+                        .vertical_align = cast(TextAlign)TextAlignCenter})
+                key := cast(u64)(5760000 + index * 64 + round * 2)
+                if !day.editing && IconButton(key, 0,
+                    Bounds(round_edit_x, y + (row_height - icon_width) / 2, icon_width, icon_width),
+                    EditImage(), day.modal_active) {
+                    day.editing = true
+                    day.edit_session = index
+                    day.edit_round = round
+                    day.edit_text = Number(cast(s64)ReadHabitsDayRoundHost(index, round))
+                    day.edit_cursor = cast(s32)day.edit_text.count
+                }
+                if !day.editing && IconButton(key + cast(u64)1, 0,
+                    Bounds(round_trash_x, y + (row_height - icon_width) / 2, icon_width, icon_width),
+                    DeleteImage(), day.modal_active) {
+                    DayAsk(HABITS_DAY_SCREEN_DELETE_ROUND, index, round)
+                }
+            }
+            y += row_height
+        }
+    }
+    return y + pad
+}
+
+// The day's entries, its sessions by practice and a counting habit's count.
+// Returns the y below them.
+DayContent :: (content_x: s32, content_width: s32, y: s32, draw: bool) -> s32 {
+    section_gap := Scale(16)
+    if day.keeps_entries {
+        y = DayEntries(content_x, content_width, y, draw)
+        if day.session_count <= 0 {
+            return y
+        }
+        y += section_gap
+    }
+    if day.session_count <= 0 {
+        if draw {
+            Text(look_session, TextProps.{.bounds = Bounds(content_x, y, content_width, Scale(40)),
+                    .text = Locale("no_sessions"), .wrap = cast(TextWrap)TextWrapNone})
+        }
+        return y + Scale(40)
+    }
+    // The host lists the sessions by practice; each practice has a card.
+    first: s32 = 0
+    while first < day.session_count {
+        activity := ReadHabitsDaySessionHost(first).activity
+        last := first
+        while last + 1 < day.session_count &&
+        ReadHabitsDaySessionHost(last + 1).activity == activity {
+            last += 1
+        }
+        card_height := PracticeCard(first, last, content_x, content_width, y, false) - y
+        if draw {
+            Card(Bounds(content_x, y, content_width, card_height))
+            unused PracticeCard(first, last, content_x, content_width, y, true)
+        }
+        y += card_height + section_gap
+        first = last + 1
+    }
+    if day.counting {
+        button_height := Scale(34)
+        step_width := Scale(42)
+        gap := Scale(8)
+        minus_x := content_x
+        plus_x := content_x + content_width - step_width
+        label_x := minus_x + step_width + gap
+        label_width := plus_x - label_x - gap
+        y += Scale(6)
+        if draw {
+            if Button(look_session, ButtonProps.{.id = 5739992,
+                    .bounds = Bounds(minus_x, y, step_width, button_height), .label = "-",
+                    .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                    .disabled = day.modal_active || day.count <= day.minimum_count}) != 0 {
+                DayAsk(HABITS_DAY_SCREEN_STEP_COUNT, -1, 0)
+                day.action_step = -1
+            }
+            unused Box(look_session, BoxProps.{.bounds = Bounds(label_x, y, label_width, button_height),
+                    .fill = DarkenColor(day.canvas_color, 5), .radius = cast(float32)Scale(8)})
+            Text(look_session, TextProps.{.bounds = Bounds(label_x + Scale(8), y,
+                        label_width - Scale(8), button_height),
+                    .text = Filled(Locale("habit_session_total_count"), day.count),
+                    .vertical_align = cast(TextAlign)TextAlignCenter,
+                    .wrap = cast(TextWrap)TextWrapNone})
+            if Button(look_session, ButtonProps.{.id = 5739993,
+                    .bounds = Bounds(plus_x, y, step_width, button_height), .label = "+",
+                    .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                    .disabled = day.modal_active}) != 0 {
+                DayAsk(HABITS_DAY_SCREEN_STEP_COUNT, -1, 0)
+                day.action_step = 1
+            }
+        }
+        y += button_height + Scale(8)
+    }
+    return y
+}
+
+CancelRound :: () {
+    day.editing = false
+    day.edit_session = -1
+    day.edit_round = -1
+    day.edit_text = ""
+    day.edit_cursor = 0
+}
+
+// Seconds are typed with at most three digits; past three, a digit
+// replaces the one after the cursor.
+InsertDigit :: (digit: string) {
+    if digit.count != 1 || digit[0] < cast(u8)48 || digit[0] > cast(u8)57 {
+        return
+    }
+    length := cast(s32)day.edit_text.count
+    cursor := day.edit_cursor
+    if cursor < 0 {
+        cursor = 0
+    }
+    if cursor > length {
+        cursor = length
+    }
+    if length < DAY_ROUND_DIGITS {
+        day.edit_text = Replaced(day.edit_text, cursor, cursor, digit, DAY_ROUND_DIGITS)
+        day.edit_cursor = cursor + 1
+    } else if cursor < length {
+        day.edit_text = Replaced(day.edit_text, cursor, cursor + 1, digit, DAY_ROUND_DIGITS)
+        day.edit_cursor = cursor + 1
+    }
+}
+
+DeleteBeforeCursor :: () {
+    cursor := day.edit_cursor
+    if cursor > cast(s32)day.edit_text.count {
+        cursor = cast(s32)day.edit_text.count
+    }
+    if cursor <= 0 {
+        return
+    }
+    day.edit_text = Replaced(day.edit_text, cursor - 1, cursor, "", DAY_ROUND_DIGITS)
+    day.edit_cursor = cursor - 1
+}
+
+SaveRound :: () {
+    DayAsk(HABITS_DAY_SCREEN_SAVE_ROUND, day.edit_session, day.edit_round)
+}
+
+// The keys typed while a round is changed: digits, moving and deleting
+// before the cursor, a pasted number, Enter that saves and Escape that
+// cancels.
+RoundKeys :: () {
+    input := day.input
+    if input.escape {
+        CancelRound()
+        return
+    }
+    length := cast(s32)day.edit_text.count
+    if day.edit_cursor > length {
+        day.edit_cursor = length
+    }
+    if day.edit_cursor < 0 {
+        day.edit_cursor = 0
+    }
+    if input.left && day.edit_cursor > 0 {
+        day.edit_cursor -= 1
+    }
+    if input.right && day.edit_cursor < length {
+        day.edit_cursor += 1
+    }
+    if input.home {
+        day.edit_cursor = 0
+    }
+    if input.end {
+        day.edit_cursor = length
+    }
+    if input.backspace {
+        DeleteBeforeCursor()
+    }
+    if input.paste && input.paste_text.count > 0 && input.paste_text.count <= DAY_ROUND_DIGITS {
+        digits := true
+        for at: cast(s64)0..input.paste_text.count - 1 {
+            if input.paste_text[at] < cast(u8)48 || input.paste_text[at] > cast(u8)57 {
+                digits = false
+            }
+        }
+        if digits {
+            day.edit_text = input.paste_text
+            day.edit_cursor = cast(s32)input.paste_text.count
+        }
+    }
+    for at: cast(s64)0..input.text.count - 1 {
+        InsertDigit(input.text[at:at + 1])
+    }
+    if input.commit {
+        SaveRound()
+    }
+}
+
+KeyboardHeight :: () -> s32 {
+    if !day.editing || !day.keyboard {
+        return 0
+    }
+    return Scale(10) * 2 + Scale(54) + Scale(48) * 4 + Scale(6) * 4 + Scale(44)
+}
+
+// The number pad under the page while a round is changed: the round and its
+// seconds, the digits and Delete, then Cancel and Save.
+NumberPad :: () {
+    height := KeyboardHeight()
+    if height <= 0 {
+        return
+    }
+    key_height := Scale(48)
+    gap := Scale(6)
+    pad := Scale(10)
+    header_height := Scale(54)
+    action_height := Scale(44)
+    x := Scale(16)
+    y := day.view_height - height
+    width := day.view_width - x * 2
+    key_width := (width - gap * 2) / 3
+    unused Box(look_session, BoxProps.{.bounds = Bounds(0, y, day.view_width, height),
+            .fill = DarkenColor(day.canvas_color, 10)})
+    unused Box(look_session, BoxProps.{.bounds = Bounds(0, y, day.view_width, Scale(1)),
+            .fill = DarkenColor(day.canvas_color, 42)})
+    Text(look_session, TextProps.{.bounds = Bounds(x, y + pad, width, Scale(22)),
+            .text = Filled(Locale("round_number_label"), day.edit_round + 1), .font = look_font,
+            .wrap = cast(TextWrap)TextWrapNone, .align = cast(TextAlign)TextAlignCenter})
+    Text(look_session, TextProps.{.bounds = Bounds(x, y + pad + Scale(24), width, Scale(28)),
+            .text = day.edit_text, .font = Scale(24), .wrap = cast(TextWrap)TextWrapNone,
+            .align = cast(TextAlign)TextAlignCenter})
+    labels: [11]string = .["1", "2", "3", "4", "5", "6", "7", "8", "9", "DEL", "0"]
+    for key: cast(s32)0..10 {
+        column := key % 3
+        row := key / 3
+        if Button(look_session, ButtonProps.{.key = cast(u64)(5770000 + key),
+                .bounds = Bounds(x + column * (key_width + gap),
+                    y + pad + header_height + row * (key_height + gap), key_width, key_height),
+                .label = labels[key], .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            if key == 9 {
+                DeleteBeforeCursor()
+            } else {
+                InsertDigit(labels[key])
+            }
+        }
+    }
+    action_y := y + pad + header_height + key_height * 4 + gap * 4
+    action_width := (width - gap) / 2
+    if Button(look_session, ButtonProps.{.key = cast(u64)5770011,
+            .bounds = Bounds(x, action_y, action_width, action_height),
+            .label = Locale("cancel_button"), .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        CancelRound()
+        return
+    }
+    if Button(look_session, ButtonProps.{.key = cast(u64)5770012,
+            .bounds = Bounds(x + action_width + gap, action_y, action_width, action_height),
+            .label = Locale("save_button")}) != 0 {
+        SaveRound()
+    }
+}
+
+// The day's screen: its title bar with Close, then its content scrolling
+// in a centred column, and the number pad while a round is changed.
+DayScreen :: () {
+    top_height := Scale(58)
+    max_width := Scale(400)
+    y := top_height + Scale(14)
+    viewport_height := day.view_height - top_height - day.bottom - KeyboardHeight()
+    if viewport_height < Scale(80) {
+        viewport_height = Scale(80)
+    }
+    options: [1]DropdownOption
+    unused TitleBar(look_session, TitleBarProps.{.title = day.title, .height = top_height,
+            .bounds = Bounds(0, 0, day.view_width, top_height)}, options[0:0])
+    button_total := Scale(22) + Scale(11) * 2
+    close_y := (top_height - button_total) / 2
+    if close_y < 0 {
+        close_y = 0
+    }
+    close_label := Locale("close_button")
+    if !day.modal_active && Button(look_session, ButtonProps.{.id = 9101,
+            .bounds = Bounds(day.view_width - button_total - Scale(8), close_y,
+                button_total, button_total),
+            .label = close_label, .image = UiImage(close_label, 448.0, 384.0),
+            .icon_only = true, .circle = true, .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        CancelRound()
+        DayAsk(HABITS_DAY_SCREEN_CLOSE, -1, 0)
+        return
+    }
+    side := Scale(16)
+    content_x := side
+    content_width := day.view_width - side * 2
+    if content_width > max_width {
+        content_x += (content_width - max_width) / 2
+        content_width = max_width
+    }
+    content_height := DayContent(content_x, content_width, y, false) - y
+    scroll := Scroll(look_session, ScrollProps.{
+            .key = KeyHash("inbe/screens/habits/session/scroll/1"),
+            .bounds = Bounds(0, y, day.view_width, viewport_height),
+            .content_height = content_height, .scroll_offset = day.scroll})
+    day.scroll = scroll.scroll_offset
+    if scroll.opened {
+        unused DayContent(content_x, content_width, cast(s32)scroll.content.y, true)
+        unused End(look_session)
+    }
+    if day.editing {
+        RoundKeys()
+        NumberPad()
+    }
+}
+
+HabitsDayView :: (message: HabitsMessage) -> HabitsMessage {
+    day = ReadHabitsDayHost()
+    look_session = day.session
+    look_scale = day.scale
+    look_font = day.font
+    look_small_font = day.small_font
+    look_muted = day.muted_class
+    day.action = HABITS_DAY_SCREEN_NONE
+    day.action_index = -1
+    day.action_round = -1
+    day.action_step = 0
+    if day.editing && (day.edit_session < 0 || day.edit_session >= day.session_count) {
+        CancelRound()
+    }
+    DayScreen()
+    WriteHabitsDayHost(day)
+    message.succeeded = true
+    return message
+}
+
+// ---- The entry dialog ---------------------------------------------------------
+
+EntryAsk :: (action: s32) {
+    if entry.action == HABITS_ENTRY_NONE {
+        entry.action = action
+    }
+}
+
+// The date as YYYY-MM-DD.
+DateText :: (value: s32) -> string {
+    out: Vec(u8)
+    year := value / 10000
+    month := (value / 100) % 100
+    date := value % 100
+    BuilderPrint(*out, "%-", year)
+    if month < 10 {
+        BuilderPrint(*out, "0")
+    }
+    BuilderPrint(*out, "%-", month)
+    if date < 10 {
+        BuilderPrint(*out, "0")
+    }
+    BuilderPrint(*out, "%", date)
+    return BuilderFinish(out)
+}
+
+// A time in the dialog, picked in the time picker: minutes after midnight,
+// or -1 while none is chosen. Clear takes it away: a time answer is then
+// unanswered, and a span's end empty, so the span keeps running.
+TimeField :: (key: s32, label: string, x: s32, y: s32, width: s32, value: s32,
+    clearable: bool, placeholder: string) -> s32 {
+    if label.count > 0 {
+        Text(look_session, TextProps.{.bounds = Bounds(x, y, width, Scale(24)), .text = label,
+                .font = look_font, .wrap = cast(TextWrap)TextWrapEllipsis})
+    }
+    picker_width := Scale(160)
+    if picker_width > width {
+        picker_width = width
+    }
+    picked := TimePicker(look_session, TimePickerProps.{
+            .key = KeyHash("habits/answers/time") + cast(u64)key, .id = 7960 + key,
+            .bounds = Bounds(x, y + Scale(DAY_ANSWER_INPUT_Y), picker_width, Scale(44)),
+            .label = label, .value = value, .now = entry.now,
+            .now_label = Locale("statistics_now_label"), .done_label = Locale("done_button"),
+            .clear_label = ifx clearable then Locale("clear_button") else "",
+            .placeholder = placeholder, .scale = look_scale})
+    if picked.changed {
+        return picked.value
+    }
+    return value
+}
+
+// A typed answer. Fields share one cursor: only the focused one has it.
+AnswerField :: (index: s32, answer: *HabitsAnswer, bounds: Rectangle, numeric: bool,
+    max_bytes: s32) -> bool {
+    focused := entry.focus == index
+    props := TextFieldProps.{.key = KeyHash("habits/answers/field") + cast(u64)index,
+        .bounds = bounds, .value = answer.value, .focused = focused,
+        .focus_id = 7800 + index, .numeric = numeric, .max_bytes = max_bytes,
+        .max_codepoints = max_bytes, .disabled = entry.modal_active}
+    if focused {
+        props.cursor = entry.cursor
+        props.anchor = entry.anchor
+        props.scroll_x = entry.scroll_x
+        props.input = entry.input
+    }
+    result := TextField(look_session, props)
+    changed := false
+    if result.edit.changed {
+        answer.value = Replaced(answer.value, result.edit.start, result.edit.end,
+            result.edit.replacement, max_bytes)
+        changed = true
+    }
+    if result.focused {
+        entry.focus = index
+        entry.cursor = result.cursor
+        entry.anchor = result.anchor
+        entry.scroll_x = result.scroll_x
+    } else if focused {
+        entry.focus = -1
+    }
+    if result.clipboard_write {
+        entry.clipboard_write = true
+        entry.clipboard_text = result.clipboard_text
+    }
+    return changed
+}
+
+// A yes or no answer: tapping the chosen one again leaves it unanswered.
+YesNo :: (answer: *HabitsAnswer, id: s32, x: s32, y: s32, width: s32) -> bool {
+    gap := Scale(8)
+    half := (width - gap) / 2
+    values: [2]string = .["yes", "no"]
+    labels: [2]string = .[Locale("habit_answer_yes"), Locale("habit_answer_no")]
+    changed := false
+    for option: cast(s32)0..1 {
+        chosen := answer.value == values[option]
+        if Button(look_session, ButtonProps.{.id = id + option,
+                .bounds = Bounds(x + option * (half + gap), y, half, Scale(44)),
+                .label = labels[option],
+                .tone = cast(ButtonTone)(ifx chosen then ButtonToneAccent else ButtonToneNeutral),
+                .emphasis = cast(ButtonEmphasis)(ifx chosen then ButtonEmphasisFilled
+                    else ButtonEmphasisSoft),
+                .disabled = entry.modal_active}) != 0 {
+            answer.value = ifx chosen then "" else values[option]
+            changed = true
+        }
+    }
+    return changed
+}
+
+AnswersHeight :: () -> s32 {
+    rows := entry.answer_count
+    if entry.span {
+        rows += 2
+    }
+    if entry.start_answer >= 0 {
+        rows -= 1
+    }
+    if entry.end_answer >= 0 {
+        rows -= 1
+    }
+    return rows * Scale(DAY_ANSWER_ROW_HEIGHT)
+}
+
+// The entry's span start and end, then each question above its answer in
+// the input its answer type takes.
+AnswerFields :: (x: s32, y: s32, width: s32) {
+    if entry.span {
+        start_label := Locale("habit_span_start")
+        if entry.start_answer >= 0 {
+            start_label = ReadHabitsAnswerHost(entry.start_answer).question
+        }
+        entry.start = TimeField(0, start_label, x, y, width, entry.start, false, "")
+        y += Scale(DAY_ANSWER_ROW_HEIGHT)
+        // Without an end the span keeps running; the end is only ever set
+        // here, by picking it or by Now.
+        end_label := Locale("habit_span_end")
+        if entry.end_answer >= 0 {
+            end_label = ReadHabitsAnswerHost(entry.end_answer).question
+        }
+        entry.end = TimeField(1, end_label, x, y, width, entry.end, true,
+            Locale("habit_span_running"))
+        picker_width := Scale(160)
+        now_width := Scale(96)
+        if picker_width + Scale(8) + now_width <= width {
+            if Button(look_session, ButtonProps.{.id = 5730005,
+                    .bounds = Bounds(x + picker_width + Scale(8), y + Scale(DAY_ANSWER_INPUT_Y),
+                        now_width, Scale(44)),
+                    .label = Locale("statistics_now_label"), .tone = cast(ButtonTone)ButtonToneAccent,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
+                    .disabled = entry.modal_active}) != 0 {
+                entry.end = entry.now
+            }
+        }
+        y += Scale(DAY_ANSWER_ROW_HEIGHT)
+    }
+    for index: cast(s32)0..entry.answer_count - 1 {
+        if index == entry.start_answer || index == entry.end_answer {
+            continue
+        }
+        answer := ReadHabitsAnswerHost(index)
+        Text(look_session, TextProps.{.bounds = Bounds(x, y, width, Scale(24)),
+                .text = answer.question, .font = look_font,
+                .wrap = cast(TextWrap)TextWrapEllipsis})
+        input_y := y + Scale(DAY_ANSWER_INPUT_Y)
+        changed := false
+        if answer.answer_type == HABIT_ANSWER_TIME {
+            picked := TimeField(2 + index, "", x, y, width, answer.time, true, "")
+            changed = picked != answer.time
+            answer.time = picked
+        } else if answer.answer_type == HABIT_ANSWER_YES_NO {
+            changed = YesNo(*answer, 7900 + index * 2, x, input_y, width)
+        } else if answer.answer_type == HABIT_ANSWER_NUMBER {
+            changed = AnswerField(index, *answer, Bounds(x, input_y, width, Scale(44)), true, 9)
+        } else {
+            changed = AnswerField(index, *answer, Bounds(x, input_y, width, Scale(44)), false,
+                HABIT_ANSWER_SIZE - 1)
+        }
+        if changed {
+            unused WriteHabitsAnswerHost(index, answer)
+        }
+        y += Scale(DAY_ANSWER_ROW_HEIGHT)
+    }
+}
+
+// The fields in a scrolling area, for entries that do not all fit.
+AnswerArea :: (bounds: Rectangle) {
+    scroll := Scroll(look_session, ScrollProps.{.key = KeyHash("habits/answers/scroll"),
+            .bounds = bounds, .content_height = AnswersHeight(),
+            .scroll_offset = entry.scroll, .scale = look_scale})
+    entry.scroll = scroll.scroll_offset
+    if scroll.opened {
+        AnswerFields(cast(s32)scroll.content.x, cast(s32)scroll.content.y,
+            cast(s32)scroll.content.width)
+        unused End(look_session)
+    }
+}
+
+// The area's height in a dialog: all fields, or what fits.
+AnswerAreaHeight :: (other: s32) -> s32 {
+    room := entry.view_height - Scale(32) - Scale(74) - other
+    height := AnswersHeight()
+    if height > room {
+        height = room
+    }
+    if height < Scale(DAY_ANSWER_ROW_HEIGHT) {
+        height = Scale(DAY_ANSWER_ROW_HEIGHT)
+    }
+    return height
+}
+
+// The entry dialog. Done records a new entry and Skip records it without
+// answers; an entry that exists is saved again or deleted.
+EntryDialog :: () {
+    gap := Scale(12)
+    // The day sits under the name, in the frame's gap above the content.
+    date_lift := Scale(16)
+    date_height := Scale(22)
+    button_height := Scale(44)
+    date_room := date_height - date_lift + Scale(10)
+    area_height := AnswerAreaHeight(date_room + gap + button_height)
+    content_height := date_room + area_height + gap + button_height
+    frame := ModalFrame(look_session, ModalFrameProps.{.key = KeyHash("habits/entry-dialog"),
+            .title = entry.name, .strong_title = true, .title_at_start = true,
+            .width = Scale(380), .height = content_height + Scale(74), .scale = look_scale,
+            .has_right_action = true, .right_label = Locale("cancel_button")})
+    if frame.dismissed || frame.right_clicked {
+        EntryAsk(HABITS_ENTRY_CANCEL)
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    content := frame.layout.content
+    x := cast(s32)content.x
+    y := cast(s32)content.y
+    width := cast(s32)content.width
+    day_text := ifx entry.day == entry.today then Locale("habits_today") else DateText(entry.day)
+    Text(look_session, TextProps.{.bounds = Bounds(x, y - date_lift, width, date_height),
+            .text = day_text, .font = look_small_font, .class_name = look_muted,
+            .wrap = cast(TextWrap)TextWrapNone})
+    y += date_room
+    AnswerArea(Bounds(x, y, width, area_height))
+    y += area_height + gap
+    if entry.existing {
+        half := (width - gap) / 2
+        if Button(look_session, ButtonProps.{.id = 5730001,
+                .bounds = Bounds(x, y, half, button_height), .label = Locale("delete_button"),
+                .tone = cast(ButtonTone)ButtonToneDanger,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            EntryAsk(HABITS_ENTRY_DELETE)
+        }
+        if Button(look_session, ButtonProps.{.id = 5730002,
+                .bounds = Bounds(x + half + gap, y, width - half - gap, button_height),
+                .label = Locale("save_button"), .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+            EntryAsk(HABITS_ENTRY_SAVE)
+        }
+    } else {
+        // Questions can be skipped: the day is done without answers.
+        done_x := x
+        if entry.answer_count > 0 {
+            half := (width - gap) / 2
+            if Button(look_session, ButtonProps.{.id = 5730004,
+                    .bounds = Bounds(x, y, half, button_height), .label = Locale("skip_button"),
+                    .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+                EntryAsk(HABITS_ENTRY_SKIP)
+            }
+            done_x = x + half + gap
+        }
+        if Button(look_session, ButtonProps.{.id = 5730003,
+                .bounds = Bounds(done_x, y, x + width - done_x, button_height),
+                .label = Locale("done_button"), .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+            EntryAsk(HABITS_ENTRY_SAVE)
+        }
+    }
+    unused End(look_session)
+}
+
+HabitsEntryView :: (message: HabitsMessage) -> HabitsMessage {
+    entry = ReadHabitsEntryHost()
+    look_session = entry.session
+    look_scale = entry.scale
+    look_font = entry.font
+    look_small_font = entry.small_font
+    look_muted = entry.muted_class
+    entry.action = HABITS_ENTRY_NONE
+    entry.clipboard_write = false
+    entry.clipboard_text = ""
+    EntryDialog()
+    WriteHabitsEntryHost(entry)
+    message.succeeded = true
+    return message
+}

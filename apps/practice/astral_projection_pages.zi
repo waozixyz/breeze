@@ -1,6 +1,5 @@
-// Astral Projection's How to and Customize pages, laid out as the other
-// meditation practices' are: a two-page guide, and the music and voice
-// narration it plays with.
+// Astral Projection's How to and Customize pages: the two-page guide, which
+// Practices draws, and the music and voice narration it plays with.
 manual_host :: #system_library "c";
 app_start_practice_from_ui :: (app: *InnerBreeze, id: s32) -> bool #foreign manual_host "practice_actions_app_start_practice_from_ui";
 #import "geometry"
@@ -41,6 +40,9 @@ app_start_practice_from_ui :: (app: *InnerBreeze, id: s32) -> bool #foreign manu
 #import, file "../../src/screens/practice_manual_layout.zi";
 #import, file "../../src/screens/practice_screen_calls.zi";
 #import, file "../../src/screens/practice_subscreen_layout.zi";
+#import, file "../../src/practices/practice_manual_host.zi";
+#import, file "../../src/practices/practice_settings_host.zi";
+#import, file "../../src/cells/practice_types.zi";
 
 using AppThemeMode;
 using ImageFit;
@@ -74,151 +76,20 @@ AstralManualClose :: (app: *InnerBreeze, mark_seen: s32) {
     app_switch_screen(app, ScreenStart)
 }
 
-AstralManualParagraph :: (step: s32, content_w: s32) -> ManualParagraphSpec {
-    key := ifx step == 0 then "astral_manual_intro_text" else "astral_manual_customize_text"
-    return manual_screen_tutorial_paragraph(LocaleText(key), content_w)
-}
-
-AstralManualContentHeight :: (step: s32, content_w: s32) -> s32 {
-    paragraph := AstralManualParagraph(step, content_w)
-    return content_w * 222 / 394 + AppScale(24) + manual_screen_guide_header_height() +
-    AppParagraphHeight(paragraph.text, paragraph.width, paragraph.font, paragraph.line_gap)
-}
-
-// The first page shows the practice's own picture; the second the ring the
-// other meditation guides draw for Customize.
-AstralManualDrawPage :: (app: *InnerBreeze, content_x: s32, content_w: s32, step: s32, y: *s32) {
-    hero_h := content_w * 222 / 394
-    hero := manual_screen_hero_bounds(content_x, content_w, y.*, hero_h)
-    if step == 0 {
-        dark := app.theme_mode == APP_THEME_DARK || (app.theme_mode != APP_THEME_LIGHT && app.dark_mode != 0)
-        picture: ImageProps
-        picture.asset_path = "assets/practices/astral_projection/banner-light.png"
-        if dark {
-            picture.asset_path = "assets/practices/astral_projection/banner-dark.png"
-        }
-        picture.alt_text = LocaleText("exercise_astral_projection")
-        picture.bounds = hero
-        picture.fit = cast(ImageFit)ImageFitCover
-        Image(app.ui.session, picture)
-    } else {
-        center_x := content_x + content_w / 2
-        center_y := y.* + hero_h / 2
-        face := GuideFace(2)
-        PaintRoundedFill(app.ui.session, -1, hero, cast(float32)AppScale(14), 10,
-            ColorFromPacked(face.value.background))
-        outer_radius := AppScale(68)
-        inner_radius := AppScale(48)
-        outer := Rectangle.{cast(float32)(center_x - outer_radius), cast(float32)(center_y - outer_radius),
-            cast(float32)(outer_radius * 2), cast(float32)(outer_radius * 2)}
-        inner := Rectangle.{cast(float32)(center_x - inner_radius), cast(float32)(center_y - inner_radius),
-            cast(float32)(inner_radius * 2), cast(float32)(inner_radius * 2)}
-        PaintRoundedFill(app.ui.session, -1, outer, cast(float32)outer_radius, 16,
-            ColorFromPacked(Opacity(face.value.foreground, 0.24)))
-        PaintRoundedFill(app.ui.session, -1, inner, cast(float32)inner_radius, 16,
-            ColorFromPacked(face.value.background))
-        title: TextProps
-        title.bounds = inner
-        title.text = LocaleText("practice_configure_button")
-        title.wrap = cast(TextWrap)TextWrapNone
-        title.align = cast(TextAlign)TextAlignCenter
-        title.vertical_align = cast(TextAlign)TextAlignCenter
-        Text(app.ui.session, title)
-    }
-    manual_screen_draw_hero_progress(hero, step, ASTRAL_MANUAL_PAGES)
-    y.* += hero_h + AppScale(24)
-    manual_screen_draw_guide_header(LocaleText(ifx step == 0 then "exercise_astral_projection" else
-        "practice_configure_button"), step, ASTRAL_MANUAL_PAGES, content_x, y, content_w)
-    ManualParagraph(app, AstralManualParagraph(step, content_w), content_x, y)
-}
-
+// Practices draws the manual (practice_manual_host.zi).
 AstralManualDraw :: (app: *InnerBreeze) {
-    if app == null || !SessionValid(app.ui.session) { return }
-    step := app.tutorial_step
-    if step < 0 { step = 0 }
-    if step >= ASTRAL_MANUAL_PAGES {
-        step = ASTRAL_MANUAL_PAGES - 1
-    }
-    app.tutorial_step = step
-    responsive_max_w := cast(s32)(cast(float32)app.ui.view_width * 0.96)
-    if responsive_max_w > manual_screen_tutorial_max_width() {
-        responsive_max_w = manual_screen_tutorial_max_width()
-    }
-    if responsive_max_w < AppScale(200) {
-        responsive_max_w = AppScale(200)
-    }
-    layout := practice_screen_manual_layout(app, cast(ModalType)ModalPracticeManual,
-        ASTRAL_MANUAL_PAGES, manual_screen_tutorial_top_gap(), 0, AppScale(120))
-    if manual_screen_draw_title_bar(app, LocaleText("exercise_astral_projection"), layout.title_h) != 0 {
+    action := PracticeManualDraw(app)
+    if action == PRACTICE_MANUAL_CLOSE {
         AstralManualClose(app, 0)
-        return
-    }
-    column := CenteredColumnFor(app.ui.view_width, responsive_max_w, manual_screen_tutorial_side_padding())
-    props: ScrollProps
-    props.key = KeyHash("astral/manual/scroll")
-    props.bounds = Rectangle.{0.0, cast(float32)layout.content_y, cast(float32)app.ui.view_width,
-        cast(float32)layout.content_h}
-    props.content_height = AstralManualContentHeight(step, column.width)
-    props.scroll_offset = app.manual_scroll
-    props.scale = MetricsScale()
-    result := Scroll(app.ui.session, props)
-    app.manual_scroll = result.scroll_offset
-    if result.opened {
-        y := cast(s32)result.content.y
-        AstralManualDrawPage(app, column.x, column.width, step, *y)
-        unused End(app.ui.session)
-    }
-    nav: ManualGuideNav
-    nav.page = step
-    nav.page_count = ASTRAL_MANUAL_PAGES
-    nav.y = layout.nav_y
-    nav.h = layout.nav_h
-    nav.content_y = layout.content_y
-    nav.content_h = layout.content_h
-    nav.focus_id = 425
-    decision := manual_screen_guide_controls(app, nav)
-    if decision.closed {
-        AstralManualClose(app, 0)
-    } else if decision.finished {
+    } else if action == PRACTICE_MANUAL_START {
         AstralManualStart(app)
     }
 }
 
-// Customize: the music that plays, and the voice narration with its language.
+// Customize: the music that plays, and the voice narration with its
+// language, which Practices draws (practice_settings_host.zi).
 AstralConfigDraw :: (app: *InnerBreeze) {
-    if app == null {
-        return
+    if PracticeSettingsDraw(app, EXERCISE_ASTRAL_PROJECTION) != 0 {
+        PracticeConfigLeave(app, cast(s32)ModalPracticeConfig)
     }
-    layout := PracticeSubscreenLayout.{0}
-    app.practice_config_tab = 0
-    PracticeConfigLayout(app, ModalPracticeConfig, AppScale(14), *layout)
-    if PracticeConfigTitle(app, LocaleText("practice_configure_button"), cast(s32)ModalPracticeConfig, 0) != 0 {
-        return
-    }
-    side_padding := GetPageSidePadding()
-    max_content_w := AppScale(CONTENT_MAX_W)
-    if max_content_w > app.ui.view_width - side_padding * 2 {
-        max_content_w = app.ui.view_width - side_padding * 2
-    }
-    if max_content_w < AppScale(320) {
-        max_content_w = AppScale(320)
-    }
-    content_x: s32 = 0
-    content_w: s32 = 0
-    GetCenteredColumn(max_content_w, side_padding, *content_x, *content_w)
-    content_h := AppScale(320) + PracticeNarrationSettingsHeight(app, EXERCISE_ASTRAL_PROJECTION, false, content_w)
-    props: ScrollProps
-    props.key = KeyHash("astral/customize/scroll")
-    props.bounds = Rectangle.{0.0, cast(float32)layout.scroll_y, cast(float32)app.ui.view_width,
-        cast(float32)layout.scroll_h}
-    props.content_height = content_h
-    props.scroll_offset = app.settings_scroll
-    result := Scroll(CurrentApp().ui.session, props)
-    app.settings_scroll = result.scroll_offset
-    y := cast(s32)result.content.y
-    meditation_music_draw_practice_settings(app, EXERCISE_ASTRAL_PROJECTION, content_x, content_w, *y, 0, 1)
-    y += AppScale(12)
-    unused PracticeNarrationSettings(app, EXERCISE_ASTRAL_PROJECTION, false,
-        app.astral_projection_narration_language[:], content_x, content_w, *y)
-    End(CurrentApp().ui.session)
 }

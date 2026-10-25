@@ -9,10 +9,11 @@
 #import "bundle_host"
 #import "byte_text_linux"
 #import, file "../cells/module_host.zi";
-// Habit navigation and presentation. Habit persistence and counting rules live
-// in the habit modules; this screen composes them with Kryon's current widgets.
+// Habit navigation. Habits draws the habit list and each habit's page
+// (apps/habits/habit_list_view.zi); this screen gives it the habits and
+// their days and does what it asks. Habit persistence and counting rules
+// live in the habit modules.
 raylib_input :: #system_library "raylib";
-IsMouseButtonReleased :: (button: s32) -> bool #foreign raylib_input;
 GetTime :: () -> float64 #foreign raylib_input;
 
 #import, file "../app/app.zi";
@@ -43,9 +44,6 @@ GetTime :: () -> float64 #foreign raylib_input;
 #import, file "../platform/web_storage.zi";
 #import, file "habits/edit.zi";
 #import, file "habits/habit_entries.zi";
-#import, file "habits/table_layout.zi";
-#import, file "habits/page_header.zi";
-#import, file "habits/coins_view.zi";
 #import, file "habits/shop.zi";
 #import, file "../habits/habit_icons.zi";
 #import, file "../cells/habit_icon_choice.zi";
@@ -58,78 +56,17 @@ GetTime :: () -> float64 #foreign raylib_input;
 #import "drawing_props"
 #import "session"
 #import "layout"
-#import "tree"
-#import "modal_frame_widget"
-#import "modal_props"
-#import "scroll_props"
-#import "scroll_widget"
-#import "layout_widget"
-#import "grid"
-#import "grid_props"
-#import "box_props"
-#import "box_widget"
-#import "style_sheet"
-#import "button_props"
-#import "button_widget"
-#import "text_props"
-#import "text_widget"
-#import "control_props"
-#import "paint_queue"
-#import "checkbox_widget"
-#import "text_align"
-#import "segmented_control_props"
-#import "segmented_control_widget"
-#import "icon"
-#import "svg_icon"
-#import "tree_input"
-#import "widget_kind"
-#import "text_field_widget"
-#import "text_input_props"
-#import, file "../platform/raylib_text_input.zi";
-#import, file "../app/smooth_frames.zi";
+#import "kss_parser"
 #import, file "../app/settings_store.zi";
 
 using ModalType;
 using HostValueKind;
-using ButtonTone;
-using ArrowDirection;
-using ButtonEmphasis;
-using IconType;
-using TextWrap;
-using TextAlign;
-using WidgetKind;
-using ContentAlignment;
 using ExerciseType;
 
 HABITS_GUIDE_STEPS :: 7;
-HABITS_MOUSE_RIGHT :: 1;
-// The habit table: day names over the rows, each row a habit's icon and
-// name and then a circle for each of the last seven days.
-HABITS_TABLE_HEADER_HEIGHT :: 40;
-HABITS_ROW_HEIGHT :: 60;
-HABITS_ROW_ICON_SIZE :: 34;
-// Without room for names, rows show a smaller icon alone.
-HABITS_ROW_SMALL_ICON_SIZE :: 28;
-HABITS_ICON_COLUMN_WIDTH :: 36;
-HABITS_NAME_PREFERRED_WIDTH :: 150;
+// The name column's width in design units, as Habits clamps it.
 HABITS_NAME_MIN_WIDTH :: 72;
 HABITS_NAME_MAXIMUM_WIDTH :: 320;
-HABITS_NAME_RESIZE_HANDLE_WIDTH :: 24;
-HABITS_DAY_MIN_WIDTH :: 30;
-HABITS_DAY_MAX_WIDTH :: 72;
-HABITS_DEACTIVATED_ROW_HEIGHT :: 52;
-HABITS_INACTIVE_HEADER_HEIGHT :: 52;
-HABITS_DEACTIVATED_HINT_HEIGHT :: 40;
-// A dragged habit within this distance of the list's top or bottom edge, or
-// past it, scrolls the list after a short wait, so passing the edge on the
-// way in does not. It scrolls this many units a second at the edge, and up
-// to twice as fast further past it.
-HABITS_DRAG_EDGE_MARGIN :: 48;
-HABITS_DRAG_EDGE_WAIT_SECONDS :: 0.15;
-HABITS_DRAG_EDGE_SPEED :: 700;
-// On a touch screen a row is lifted to move after this long a hold. A
-// shorter hold lifted rows when a finger rested before scrolling.
-HABITS_CARD_HOLD_SECONDS :: 0.6;
 // The first habit's today marker from the last drawn frame; the web smoke
 // test clicks it.
 habits_first_day_bounds: Rectangle;
@@ -139,47 +76,6 @@ HabitScreenGeometry :: struct {
     y: s32
     width: s32
     height: s32
-}
-
-HabitScreenButtonProps :: (app: *InnerBreeze, label: string, id: s32,
-    x: s32, y: s32, width: s32, height: s32,
-    selected: bool, disabled: bool) -> ButtonProps {
-    props: ButtonProps
-    props.bounds = HabitScreenRect(x, y, width, height)
-    props.id = id
-    props.label = label
-    props.tone = cast(ButtonTone)(ifx (selected) then
-        (ButtonToneAccent) else (ButtonToneNeutral))
-    props.emphasis = cast(ButtonEmphasis)(ifx (selected) then
-        (ButtonEmphasisFilled) else (ButtonEmphasisSoft))
-    props.selected = selected
-    props.disabled = disabled || app.modal.active != 0
-    return props
-}
-
-HabitScreenNumber :: (app: *InnerBreeze, value: s32) -> string {
-    buffer: [24]u8
-    if !FormatNumberTemplate("%d", value, buffer[:]) { return "" }
-    return FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*buffer[0], cast(s32)buffer.count))
-}
-
-HabitScreenMonthKeys: [12]string = .["habit_month_1", "habit_month_2",
-"habit_month_3", "habit_month_4", "habit_month_5", "habit_month_6",
-"habit_month_7", "habit_month_8", "habit_month_9", "habit_month_10",
-"habit_month_11", "habit_month_12"];
-
-// The month and year in the language's own order, such as "September 2026"
-// or "2026年9月".
-HabitScreenMonth :: (app: *InnerBreeze, year: s32, month: s32) -> string {
-    if month < 1 || month > 12 { return "" }
-    buffer: [64]u8
-    args: [1]FormatArg
-    args[0].number = year
-    if !FormatTemplate(LocaleText(HabitScreenMonthKeys[month - 1]), args[:],
-        buffer[:]) { return "" }
-    return FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*buffer[0], cast(s32)buffer.count))
 }
 
 HabitScreenLayout :: (app: *InnerBreeze) -> HabitScreenGeometry {
@@ -194,20 +90,6 @@ HabitScreenLayout :: (app: *InnerBreeze) -> HabitScreenGeometry {
     app_content_bottom_reserved(app) - AppScale(12)
     if layout.height < 0 { layout.height = 0 }
     return layout
-}
-
-HabitScreenScroll :: (app: *InnerBreeze, key: string,
-    bounds: Rectangle, content_height: s32, keep_scrollbar: bool) -> ScrollResult {
-    scroll_key := KeyHash(key)
-    props: ScrollProps
-    props.key = scroll_key
-    props.bounds = bounds
-    props.content_height = content_height
-    props.keep_scrollbar = keep_scrollbar
-    props.scroll_offset = app.habits.scroll
-    result := Scroll(app.ui.session, props)
-    app.habits.scroll = result.scroll_offset
-    return result
 }
 
 HabitScreenSave :: (app: *InnerBreeze) {
@@ -363,31 +245,6 @@ HabitScreenCompletion :: (app: *InnerBreeze, index: s32,
     return HabitEffectiveDayComplete(habit, day_index, linked)
 }
 
-HabitScreenDueToday :: (app: *InnerBreeze) -> s32 {
-    due: s32 = 0
-    today := habits_today_index()
-    index: s32 = 0
-    while index < app.habits.count {
-        if habit_scheduled_day(*app.habits.items[index], today) != 0 {
-            due += 1
-        }
-        index += 1
-    }
-    return due
-}
-
-HabitScreenDoneToday :: (app: *InnerBreeze) -> s32 {
-    done: s32 = 0
-    today := habits_today_index()
-    index: s32 = 0
-    while index < app.habits.count {
-        if habit_scheduled_day(*app.habits.items[index], today) != 0 &&
-        HabitScreenCompletion(app, index, today) { done += 1 }
-        index += 1
-    }
-    return done
-}
-
 // Linked practice sessions set the lowest count a day can have.
 HabitScreenLinkedCount :: (app: *InnerBreeze, index: s32,
     day_index: s32) -> s32 {
@@ -454,212 +311,11 @@ HabitScreenDayAction :: (app: *InnerBreeze, index: s32,
     }
 }
 
-// A day off the habit's schedule shows what was recorded on it in the
-// habit's color faded toward the surface.
-HabitScreenOffDayColor :: (accent: Color) -> Color {
-    surface := StyleTokenColor("surface")
-    return Color.{
-        cast(u8)((cast(s32)accent.r * 45 + cast(s32)surface.r * 55) / 100),
-        cast(u8)((cast(s32)accent.g * 45 + cast(s32)surface.g * 55) / 100),
-        cast(u8)((cast(s32)accent.b * 45 + cast(s32)surface.b * 55) / 100),
-        255}
-}
-
-// A day button. With a dot, as for a counting habit's calendar day, the
-// label sits at the top and the day's dot with its count below it, and the
-// dot rather than the button shows that the day is complete. A day off the
-// habit's schedule has no background and a faded label, and opens only when
-// something was recorded on it.
-HabitScreenDayButton :: (app: *InnerBreeze, index: s32,
-    day_index: s32, label: string, id: s32, bounds: Rectangle, dot: bool) {
-    habit := *app.habits.items[index]
-    scheduled := habit_scheduled_day(habit, day_index) != 0
-    complete := HabitScreenCompletion(app, index, day_index)
-    recorded := complete || HabitScreenDayCount(app, index, day_index) > 0 ||
-    HabitScreenSpanRunning(habit, day_index)
-    disabled := app.modal.active != 0 || (!scheduled && !recorded)
-    filled := complete && !dot
-    faded_label := !scheduled && !filled
-    props: ButtonProps
-    props.bounds = bounds
-    props.id = id
-    props.label = ifx (dot || faded_label) then ("") else (label)
-    props.tone = cast(ButtonTone)(ifx (filled) then
-        (ButtonToneAccent) else (ButtonToneNeutral))
-    props.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    if filled && scheduled {
-        props.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    } else if !scheduled && !filled {
-        props.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    }
-    // A running span's day is lit softly until the span ends.
-    if !filled && HabitScreenSpanRunning(habit, day_index) {
-        props.tone = cast(ButtonTone)ButtonToneAccent
-        props.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    }
-    props.selected = filled
-    props.disabled = disabled
-    clicked := Button(app.ui.session, props) != 0
-    if faded_label && !dot {
-        off_label: TextProps
-        off_label.bounds = bounds
-        off_label.text = label
-        off_label.align = cast(TextAlign)TextAlignCenter
-        off_label.vertical_align = cast(TextAlign)TextAlignCenter
-        off_label.wrap = cast(TextWrap)TextWrapNone
-        off_label.disabled = true
-        Text(app.ui.session, off_label)
-    }
-    if dot {
-        top := cast(s32)bounds.y + AppScale(3)
-        number: TextProps
-        number.bounds = HabitScreenRect(cast(s32)bounds.x, top,
-            cast(s32)bounds.width, AppScale(18))
-        number.text = label
-        number.font = AppSmallFontSize()
-        number.align = cast(TextAlign)TextAlignCenter
-        number.vertical_align = cast(TextAlign)TextAlignCenter
-        number.wrap = cast(TextWrap)TextWrapNone
-        number.disabled = props.disabled || !scheduled
-        Text(app.ui.session, number)
-        count := HabitScreenDayCount(app, index, day_index)
-        if count > 0 || complete {
-            radius := AppScale(12)
-            accent := habit.color
-            if !scheduled {
-                accent = HabitScreenOffDayColor(habit.color)
-            }
-            HabitScreenDayDot(app,
-                cast(s32)(bounds.x + bounds.width / 2),
-                cast(s32)(bounds.y + bounds.height) - AppScale(4) - radius,
-                radius, accent, complete, false, true, count)
-        }
-    }
-    if clicked {
-        HabitScreenDayAction(app, index, day_index, false)
-    }
-    if !disabled && IsMouseButtonReleased(HABITS_MOUSE_RIGHT) &&
-    app.ui.mouse_x >= cast(s32)bounds.x &&
-    app.ui.mouse_y >= cast(s32)bounds.y &&
-    app.ui.mouse_x < cast(s32)(bounds.x + bounds.width) &&
-    app.ui.mouse_y < cast(s32)(bounds.y + bounds.height) {
-        HabitScreenDayAction(app, index, day_index, true)
-    }
-}
-
-HabitScreenWeekdayLabel :: (day_index: s32, column: s32) -> string {
-    if column == 0 {
-        return LocaleText("habits_today")
-    }
-    weekday := habit_weekday_bit(day_index)
-    if weekday == 0 {
-        return LocaleText("habit_day_mon")
-    }
-    if weekday == 1 {
-        return LocaleText("habit_day_tue")
-    }
-    if weekday == 2 {
-        return LocaleText("habit_day_wed")
-    }
-    if weekday == 3 {
-        return LocaleText("habit_day_thu")
-    }
-    if weekday == 4 {
-        return LocaleText("habit_day_fri")
-    }
-    if weekday == 5 {
-        return LocaleText("habit_day_sat")
-    }
-    return LocaleText("habit_day_sun")
-}
-
-HabitScreenTextColor :: (background: Color) -> Color {
-    luma := cast(s32)background.r * 299 + cast(s32)background.g * 587 +
-    cast(s32)background.b * 114
-    if luma >= 128000 {
-        return Color.{0, 0, 0, 255}
-    }
-    return Color.{255, 255, 255, 255}
-}
-
-HabitScreenCircle :: (app: *InnerBreeze, x: s32, y: s32,
-    radius: s32, color: Color) {
-    bounds := HabitScreenRect(x - radius, y - radius, radius * 2,
-        radius * 2)
-    PaintRoundedFill(app.ui.session, -1, bounds,
-        cast(float32)radius, 12, color)
-}
-
-HabitScreenLine :: (app: *InnerBreeze, x1: s32, y1: s32,
-    x2: s32, y2: s32, color: Color) {
-    PaintLine(app.ui.session, -1, Rectangle.{
-            cast(float32)x1, cast(float32)y1,
-            cast(float32)(x2 - x1), cast(float32)(y2 - y1)
-        }, color)
-}
-
-
-// A day's dot: filled once the day is complete, showing the day's count
-// when the habit counts and a clean check when it does not. The flat fill
-// and thin rim stay legible in tight rows and at small touch targets.
-// The left half of a dot, for a day whose span has started and not ended.
-HABIT_HALF_DOT_SHAPE :: "F:M12 1C5.93 1 1 5.93 1 12C1 18.07 5.93 23 12 23Z"
-
 // Whether a day of a habit holds its running span.
 HabitScreenSpanRunning :: (habit: *Habit, day_index: s32) -> bool {
     return habit.span != 0 && habit.running_entry[0] != cast(u8)0 &&
     habit.running_day == day_index
 }
-
-HabitScreenDayDot :: (app: *InnerBreeze, center_x: s32, center_y: s32,
-    radius: s32, accent: Color, complete: bool, half: bool, counting: bool,
-    count: s32) {
-    surface := StyleTokenColor("surface")
-    foreground := StyleTokenColor("text")
-    show_count := counting && count > 0
-    if complete {
-        HabitScreenCircle(app, center_x, center_y, radius,
-            DarkenColor(accent, 12))
-        HabitScreenCircle(app, center_x, center_y,
-            radius - AppScale(1), accent)
-        if !show_count {
-            // A clean flat check keeps the completed dot legible at any scale.
-            face_x := cast(float32)center_x
-            face_y := cast(float32)center_y
-            reach := cast(float32)(radius - AppScale(4))
-            check: [3]Vector2 = .[
-            Vector2.{face_x - reach * 0.38, face_y + reach * 0.02},
-            Vector2.{face_x - reach * 0.10, face_y + reach * 0.30},
-            Vector2.{face_x + reach * 0.42, face_y - reach * 0.28}]
-            PaintStroke(app.ui.session, -1, check[:], reach * 0.18,
-                HabitScreenTextColor(accent))
-        }
-    } else {
-        HabitScreenCircle(app, center_x, center_y, radius,
-            color_with_alpha(foreground, 0.26))
-        HabitScreenCircle(app, center_x, center_y,
-            radius - AppScale(1), surface)
-        if half {
-            face := radius - AppScale(1)
-            PaintSvgIcon(app.ui.session, -1, HABIT_HALF_DOT_SHAPE,
-                HabitScreenRect(center_x - face, center_y - face, face * 2,
-                face * 2), accent)
-        }
-    }
-
-    if show_count {
-        count_text := HabitScreenNumber(app, count)
-        count_font := AppFitFontSize(count_text, radius * 2 - AppScale(2),
-            radius + AppScale(4), AppScale(8))
-        count_color := foreground
-        if complete { count_color = HabitScreenTextColor(accent) }
-        PaintLabel(app.ui.session, -1, count_text,
-            center_x - AppTextWidth(count_text, count_font) / 2,
-            center_y - AppTextLineHeight(count_font) / 2, count_font,
-            count_color)
-    }
-}
-
 
 HabitScreenStreak :: (app: *InnerBreeze, index: s32) -> s32 {
     streak: s32 = 0
@@ -721,1211 +377,6 @@ HabitScreenIconFor :: (app: *InnerBreeze, index: s32) -> s32 {
         return HABIT_ICON_LUNGS
     }
     return 0
-}
-
-// Where a row in the table reacts to the pointer: a little inside the row,
-// so its hover and press highlight stays clear of the table's border and
-// the lines between rows.
-HabitScreenRowTouch :: (bounds: Rectangle) -> Rectangle {
-    x := cast(float32)AppScale(4)
-    y := cast(float32)AppScale(2)
-    return Rectangle.{bounds.x + x, bounds.y + y, bounds.width - x * 2.0,
-        bounds.height - y * 2.0}
-}
-
-// The table's lines: one pixel high, or more on a dense screen.
-HabitScreenHairline :: () -> s32 {
-    height := AppScale(1)
-    if height < 1 {
-        height = 1
-    }
-    return height
-}
-
-// The first character of a name, whole even when it takes several bytes.
-HabitScreenFirstLetter :: (name: string) -> string {
-    if name.count == 0 {
-        return ""
-    }
-    end: s64 = 1
-    while end < name.count && (name[end] & cast(u8)192) == cast(u8)128 {
-        end += 1
-    }
-    return name[0:end]
-}
-
-// A habit's icon: a circle in its colour with the icon, or the first letter
-// of its name, in the colour that reads on it.
-HabitScreenHabitIcon :: (app: *InnerBreeze, index: s32, bounds: Rectangle) {
-    habit := *app.habits.items[index]
-    radius := cast(s32)(bounds.width * 0.5)
-    center_x := cast(s32)bounds.x + radius
-    center_y := cast(s32)bounds.y + radius
-    HabitScreenCircle(app, center_x, center_y, radius,
-        DarkenColor(habit.color, 10))
-    HabitScreenCircle(app, center_x, center_y,
-        radius - AppScale(1), habit.color)
-    color := HabitScreenTextColor(habit.color)
-    shape := HabitIconShape(HabitScreenIconFor(app, index))
-    if shape.count > 0 {
-        inset := bounds.width * 0.22
-        PaintSvgIcon(app.ui.session, -1, shape, Rectangle.{bounds.x + inset,
-                bounds.y + inset, bounds.width - inset * 2.0,
-                bounds.height - inset * 2.0}, color)
-        return
-    }
-    letter := HabitScreenFirstLetter(AppTextFromCString(*habit.name[0],
-        HABIT_NAME_SIZE))
-    font := AppFontSize()
-    PaintLabel(app.ui.session, -1, letter,
-        center_x - AppTextWidth(letter, font) / 2,
-        center_y - AppTextLineHeight(font) / 2, font, color)
-}
-
-// One of the last seven days in a habit's row: a planned day has a circle
-// that marks it. A day off the schedule has none and cannot be tapped,
-// unless something was recorded on it, which shows faded and opens like
-// any other day.
-HabitScreenDayCell :: (app: *InnerBreeze, habit_index: s32, day_index: s32,
-    column: s32, bounds: Rectangle) {
-    habit := *app.habits.items[habit_index]
-    linked := habit_cached_linked_entries(app, habit_index, day_index)
-    count := HabitEffectiveDayCount(habit, day_index, linked)
-    complete := HabitScreenCompletion(app, habit_index, day_index)
-    scheduled := habit_scheduled_day(habit, day_index) != 0
-    half := HabitScreenSpanRunning(habit, day_index)
-    shown := scheduled || complete || count > 0 || half
-    marker: ButtonProps
-    marker.id = cast(s32)5200000 + habit_index * 16 + column
-    marker.bounds = bounds
-    marker.invisible = true
-    marker.disabled = app.modal.active != 0 || !shown
-    clicked := Button(app.ui.session, marker) != 0
-    if habit_index == habits_active_at(*app.habits, 0) && column == 0 {
-        habits_first_day_bounds = bounds
-    }
-    center_x := cast(s32)(bounds.x + bounds.width * 0.5)
-    center_y := cast(s32)(bounds.y + bounds.height * 0.5)
-    radius := cast(s32)(bounds.width * 0.3)
-    if radius > AppScale(14) {
-        radius = AppScale(14)
-    }
-    if radius < AppScale(9) {
-        radius = AppScale(9)
-    }
-    mouse_over := !marker.disabled &&
-    app.ui.mouse_x >= cast(s32)bounds.x &&
-    app.ui.mouse_x < cast(s32)(bounds.x + bounds.width) &&
-    app.ui.mouse_y >= cast(s32)bounds.y &&
-    app.ui.mouse_y < cast(s32)(bounds.y + bounds.height)
-    if mouse_over {
-        HabitScreenCircle(app, center_x, center_y, radius + AppScale(5),
-            color_with_alpha(habit.color, 0.24))
-    }
-    if scheduled {
-        HabitScreenDayDot(app, center_x, center_y, radius, habit.color,
-            complete, half, habit_counting_enabled(habit) != 0, count)
-    } else if complete || count > 0 || half {
-        HabitScreenDayDot(app, center_x, center_y, radius,
-            HabitScreenOffDayColor(habit.color), complete, half,
-            habit_counting_enabled(habit) != 0, count)
-    }
-    if clicked {
-        HabitScreenDayAction(app, habit_index, day_index, false)
-    }
-}
-
-// The day names over the table's day columns, today first.
-HabitScreenTableHeader :: (app: *InnerBreeze, x: s32, y: s32,
-    layout: HabitTableLayout, height: s32) {
-    day_w := layout.day_width
-    column: s32 = 0
-    while column < layout.days {
-        label := HabitScreenWeekdayLabel(habits_day_index(column), column)
-        props: TextProps
-        props.bounds = HabitScreenRect(x + column * day_w, y, day_w, height)
-        props.text = label
-        props.font = AppFitFontSize(label, day_w - AppScale(4),
-            AppSmallFontSize(), AppScale(10))
-        props.align = cast(TextAlign)TextAlignCenter
-        props.vertical_align = cast(TextAlign)TextAlignCenter
-        props.wrap = cast(TextWrap)TextWrapNone
-        Text(app.ui.session, props)
-        column += 1
-    }
-}
-
-// The border between names and days resizes the name column. Its saved width
-// is in design units, so it follows the window and device scale.
-HabitScreenNameResize :: (app: *InnerBreeze, x: s32, y: s32, height: s32,
-    name_width: s32) {
-    handle_w := AppScale(HABITS_NAME_RESIZE_HANDLE_WIDTH)
-    handle: ButtonProps
-    handle.id = 4100000
-    // It sits left of the border, so it never covers today's day name.
-    handle.bounds = HabitScreenRect(x - handle_w - AppScale(2), y, handle_w, height)
-    handle.label = LocaleText("session_resize_button")
-    handle.icon_only = true
-    handle.icon_shape = "S2rr:M9 7L5 12L9 17M15 7L19 12L15 17"
-    handle.tone = cast(ButtonTone)ButtonToneNeutral
-    handle.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    handle.disabled = app.modal.active != 0
-    key := cast(u64)handle.id
-    previous := TreePrevious(app.ui.session,
-        TreeCurrentParent(app.ui.session), key, WidgetKindButton)
-    drag := TreeTakeDragAt(app.ui.session, previous)
-    if drag.started && !handle.disabled {
-        app.habits.name_resizing = 1
-        app.habits.name_resize_origin = drag.x
-        app.habits.name_resize_start = cast(float32)name_width /
-        cast(float32)AppScale(1)
-    }
-    if app.habits.name_resizing != 0 && (drag.active || drag.ended) {
-        width := app.habits.name_resize_start +
-        (drag.x - app.habits.name_resize_origin) / cast(float32)AppScale(1)
-        minimum := cast(float32)HABITS_NAME_MIN_WIDTH
-        maximum := cast(float32)HABITS_NAME_MAXIMUM_WIDTH
-        if width < minimum {
-            width = minimum
-        }
-        if width > maximum {
-            width = maximum
-        }
-        app.habits.name_width = cast(s32)(width + 0.5)
-        if drag.ended {
-            app.habits.name_resizing = 0
-            SettingsBeginWrite()
-            unused SettingsStoreInt("habits_name_width", app.habits.name_width)
-            SettingsEndWrite()
-        }
-    }
-    unused Button(app.ui.session, handle)
-    node := TreeSubmitted(app.ui.session, TreeCurrentParent(app.ui.session),
-        key, WidgetKindButton)
-    TreeSetDragCapture(app.ui.session, node, true)
-}
-
-// A habit's row: its icon and name, which open its details and drag it to
-// another place, and then a circle for each of the last seven days.
-// Returns true when the row was tapped.
-HabitScreenRow :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
-    layout: HabitTableLayout, pad: s32, open: bool) -> bool {
-    habit := *app.habits.items[index]
-    row: ButtonProps
-    row.id = 4200 + index
-    row.bounds = HabitScreenRowTouch(bounds)
-    row.tone = cast(ButtonTone)ButtonToneNeutral
-    row.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    row.selected = open
-    row.disabled = app.modal.active != 0
-    tapped := HabitScreenRowDrag(app, index, row)
-    clicked := Button(app.ui.session, row) != 0 || tapped
-    node := TreeSubmitted(app.ui.session, TreeCurrentParent(app.ui.session),
-        cast(u64)row.id, WidgetKindButton)
-    TreeSetDragCapture(app.ui.session, node, HabitScreenRowDragAtOnce())
-    HabitScreenRowFace(app, index, bounds, layout, pad)
-    x := cast(s32)bounds.x + pad + layout.name_width
-    column: s32 = 0
-    while column < layout.days {
-        HabitScreenDayCell(app, index, habits_day_index(column), column,
-            HabitScreenRect(x + column * layout.day_width, cast(s32)bounds.y,
-            layout.day_width, cast(s32)bounds.height))
-        column += 1
-    }
-    return clicked
-}
-
-// A habit's icon and name at the start of its row; without room for the
-// name, a smaller icon alone.
-HabitScreenRowFace :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
-    layout: HabitTableLayout, pad: s32) {
-    habit := *app.habits.items[index]
-    icon_size := AppScale(ifx layout.names then HABITS_ROW_ICON_SIZE else HABITS_ROW_SMALL_ICON_SIZE)
-    HabitScreenHabitIcon(app, index, HabitScreenRect(cast(s32)bounds.x + pad,
-        cast(s32)(bounds.y + (bounds.height - cast(float32)icon_size) * 0.5),
-        icon_size, icon_size))
-    if !layout.names {
-        return
-    }
-    name: TextProps
-    name.bounds = HabitScreenRect(cast(s32)bounds.x + pad + icon_size +
-        AppScale(10), cast(s32)bounds.y,
-        layout.name_width - icon_size - AppScale(14), cast(s32)bounds.height)
-    name.text = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE)
-    name.font = AppFontSize()
-    name.vertical_align = cast(TextAlign)TextAlignCenter
-    name.wrap = cast(TextWrap)TextWrapEllipsis
-    Text(app.ui.session, name)
-}
-
-// An open habit's details below its row, together on a tinted panel: its
-// description, its history, statistics and editor, and its current streak
-// and this week's days.
-HABITS_DETAIL_ACTION_SIZE :: 52
-HABITS_DETAIL_PADDING :: 12
-HABITS_DETAIL_TITLE_HEIGHT :: 24
-HABITS_DETAIL_TITLE_GAP :: 8
-
-HabitScreenRowDetailHeight :: (app: *InnerBreeze, index: s32) -> s32 {
-    height := AppScale(4) + AppScale(HABITS_DETAIL_PADDING) * 2 +
-    AppScale(HABITS_DETAIL_ACTION_SIZE) + AppScale(12) +
-    AppScale(FIGURE_CARD_HEIGHT) + AppScale(12)
-    height += AppScale(HABITS_DETAIL_TITLE_HEIGHT + HABITS_DETAIL_TITLE_GAP)
-    if app.habits.items[index].description[0] != cast(u8)0 {
-        height += AppScale(30)
-    }
-    return height
-}
-
-HabitScreenRowDetail :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
-    pad: s32) {
-    habit := *app.habits.items[index]
-    panel_x := cast(s32)bounds.x + pad
-    panel_w := cast(s32)bounds.width - pad * 2
-    panel_y := cast(s32)bounds.y + AppScale(4)
-    panel_h := cast(s32)bounds.height - AppScale(4) - AppScale(12)
-    panel: BoxProps
-    panel.bounds = HabitScreenRect(panel_x, panel_y, panel_w, panel_h)
-    panel.fill = color_with_alpha(StyleTokenColor("text"), 0.04)
-    panel.radius = cast(float32)AppScale(CARD_RADIUS)
-    Box(app.ui.session, panel)
-    inner := AppScale(HABITS_DETAIL_PADDING)
-    x := panel_x + inner
-    width := panel_w - inner * 2
-    y := panel_y + inner
-    title: TextProps
-    title.bounds = HabitScreenRect(x, y, width,
-        AppScale(HABITS_DETAIL_TITLE_HEIGHT))
-    title.text = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE)
-    title.font = AppFontSize()
-    title.vertical_align = cast(TextAlign)TextAlignCenter
-    title.wrap = cast(TextWrap)TextWrapEllipsis
-    Text(app.ui.session, title)
-    y += AppScale(HABITS_DETAIL_TITLE_HEIGHT + HABITS_DETAIL_TITLE_GAP)
-    description := AppTextFromCString(*habit.description[0],
-        HABIT_DESCRIPTION_SIZE)
-    if description.count > 0 {
-        text: TextProps
-        text.bounds = HabitScreenRect(x, y, width, AppScale(22))
-        text.text = description
-        text.font = AppSmallFontSize()
-        text.wrap = cast(TextWrap)TextWrapEllipsis
-        Text(app.ui.session, text)
-        y += AppScale(30)
-    }
-    action_size := AppScale(HABITS_DETAIL_ACTION_SIZE)
-    action_gap := (width - action_size * 3) / 2
-    action_icons: [3]s32 = .[cast(s32)IconCalendar, cast(s32)IconStat, cast(s32)IconEdit]
-    column: s32 = 0
-    while column < 3 {
-        action: ButtonProps
-        action.id = 5600000 + index * 3 + column
-        action.bounds = HabitScreenRect(x + column * (action_size + action_gap),
-            y, action_size, action_size)
-        action.icon_type = action_icons[column]
-        action.icon_only = true
-        action.tone = cast(ButtonTone)ButtonToneNeutral
-        action.emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline
-        action.disabled = app.modal.active != 0
-        if Button(app.ui.session, action) != 0 {
-            if column == 0 {
-                habits_open_history(app)
-            } else if column == 1 {
-                habits_open_statistics(app)
-            } else {
-                habit_edit_begin(app, index)
-            }
-        }
-        if index == habits_active_at(*app.habits, 0) {
-            app.habits_guide_anchors[2 + column] = action.bounds
-        }
-        column += 1
-    }
-    if index == habits_active_at(*app.habits, 0) {
-        app.habits_guide_anchors[5] = app.habits_guide_anchors[1]
-    }
-    scheduled: s32 = 0
-    done := HabitScreenWeekProgress(app, index, *scheduled)
-    streak := HabitScreenStreak(app, index)
-    streak_value: [64]u8
-    statistics_format_day_count(*streak_value[0], 64, streak)
-    streak_text := FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*streak_value[0], 64))
-    week_value: [32]u8
-    week_args: [2]FormatArg
-    week_args[0].number = done
-    week_args[1].number = scheduled
-    unused FormatTemplate("%d / %d", week_args[:], week_value[:])
-    week_text := FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*week_value[0], 32))
-    metric_y := y + action_size + AppScale(12)
-    metric_gap := AppScale(10)
-    metric_width := (width - metric_gap) / 2
-    FigureCard(app.ui.session, HabitScreenRect(x, metric_y, metric_width,
-        AppScale(FIGURE_CARD_HEIGHT)),
-        LocaleText("habit_stats_current_streak"), streak_text, habit.color)
-    FigureCard(app.ui.session, HabitScreenRect(x + metric_width + metric_gap,
-        metric_y, width - metric_width - metric_gap,
-        AppScale(FIGURE_CARD_HEIGHT)),
-        LocaleText("profile_progress_title"), week_text, habit.color)
-}
-
-// The habit list shows active habits in their order; deactivated habits
-// wait in their own list below it.
-HabitScreenActiveIndices :: (app: *InnerBreeze, out: []s32) -> s32 {
-    count: s32 = 0
-    index: s32 = 0
-    while index < app.habits.count && count < cast(s32)out.count {
-        if app.habits.items[index].deactivated == 0 {
-            out[count] = index
-            count += 1
-        }
-        index += 1
-    }
-    return count
-}
-
-// The habit rows' height with the tallest habit details and the inactive
-// habits open.
-HabitScreenOpenHeight :: (app: *InnerBreeze, active: []s32,
-    active_count: s32, deactivated_count: s32) -> s32 {
-    height := AppScale(80)
-    if active_count > 0 {
-        tallest: s32 = 0
-        position: s32 = 0
-        while position < active_count {
-            detail := HabitScreenRowDetailHeight(app, active[position])
-            if detail > tallest {
-                tallest = detail
-            }
-            position += 1
-        }
-        height = active_count * AppScale(HABITS_ROW_HEIGHT) + tallest
-    }
-    if app.habits.count > 0 {
-        height += AppScale(HABITS_INACTIVE_HEADER_HEIGHT) +
-        AppScale(HABITS_DEACTIVATED_HINT_HEIGHT) +
-        deactivated_count * AppScale(HABITS_DEACTIVATED_ROW_HEIGHT)
-    }
-    return height
-}
-
-
-HabitScreenUpdateDrag :: (app: *InnerBreeze, point: Vector2) {
-    app.habits.drag_pointer = point
-    dx := point.x - app.habits.drag_origin.x
-    dy := point.y - app.habits.drag_origin.y
-    threshold := cast(float32)AppScale(6)
-    if dx * dx + dy * dy >= threshold * threshold {
-        app.habits.drag_moving = 1
-    }
-}
-
-// A mouse drags a habit row as soon as it moves. On a touch screen a swipe
-// over the rows scrolls them, so a row is lifted only once held.
-HabitScreenRowDragAtOnce :: () -> bool {
-    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) {
-        return false
-    }
-    return true
-}
-
-HabitScreenBeginDrag :: (app: *InnerBreeze, index: s32, bounds: Rectangle,
-    drag: PointerDrag, lifted: bool) {
-    app.habits.dragging = 1
-    app.habits.drag_habit = index
-    app.habits.drag_lifted = ifx lifted then 1 else 0
-    app.habits.drag_pressed_at = GetTime()
-    app.habits.drag_moving = 0
-    app.habits.drag_released = 0
-    app.habits.drag_at_edge = 0
-    app.habits.drag_scroll_carry = 0.0
-    app.habits.drag_bounds = bounds
-    app.habits.drag_origin = Vector2.{drag.x, drag.y}
-    app.habits.drag_grab = Vector2.{drag.grab_x, drag.grab_y}
-}
-
-HabitScreenEndDrag :: (app: *InnerBreeze) {
-    app.habits.dragging = 0
-    app.habits.drag_habit = -1
-    app.habits.drag_lifted = 0
-    app.habits.drag_moving = 0
-    app.habits.drag_released = 0
-    app.habits.drag_at_edge = 0
-    app.habits.drag_scroll_carry = 0.0
-}
-
-// The drop place and the dragged copy are outlined in the text colour,
-// which stands out on every theme.
-HabitScreenDragOutline :: (app: *InnerBreeze, bounds: Rectangle) {
-    PaintRoundedOutline(app.ui.session, -1, bounds,
-        cast(float32)AppScale(12), 12, cast(float32)AppScale(2),
-        color_with_alpha(StyleTokenColor("text"), 0.8))
-}
-
-// Three short bars at a row's end show that the row can be dragged.
-HabitScreenGrip :: (app: *InnerBreeze, bounds: Rectangle) {
-    width := cast(float32)AppScale(18)
-    thickness := cast(float32)AppScale(2)
-    spacing := cast(float32)AppScale(5)
-    x := bounds.x + bounds.width - cast(float32)AppScale(16) - width
-    y := bounds.y + bounds.height * 0.5 - spacing - thickness * 0.5
-    color := color_with_alpha(StyleTokenColor("text"), 0.45)
-    bar: s32 = 0
-    while bar < 3 {
-        PaintRoundedFill(app.ui.session, -1, Rectangle.{x,
-                y + cast(float32)bar * spacing, width, thickness},
-            thickness * 0.5, 6, color)
-        bar += 1
-    }
-}
-
-// A habit's icon, name and grip, in a deactivated habit's row or in the
-// copy that follows the pointer while a habit is dragged.
-HabitScreenDragFace :: (app: *InnerBreeze, index: s32,
-    bounds: Rectangle) {
-    habit := *app.habits.items[index]
-    icon_size := AppScale(32)
-    HabitScreenHabitIcon(app, index, HabitScreenRect(
-        cast(s32)bounds.x + AppScale(12),
-        cast(s32)(bounds.y + (bounds.height - cast(float32)icon_size) * 0.5),
-        icon_size, icon_size))
-    name: TextProps
-    name.bounds = HabitScreenRect(cast(s32)bounds.x + AppScale(54),
-        cast(s32)bounds.y, cast(s32)bounds.width - AppScale(104),
-        cast(s32)bounds.height)
-    name.text = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE)
-    name.font = AppFontSize()
-    name.vertical_align = cast(TextAlign)TextAlignCenter
-    name.wrap = cast(TextWrap)TextWrapEllipsis
-    Text(app.ui.session, name)
-    HabitScreenGrip(app, bounds)
-}
-
-// An inactive habit's row below the inactive habits' header. It drags like
-// a habit's row: back into the habits above makes it active again.
-HabitScreenDeactivatedRow :: (app: *InnerBreeze, index: s32,
-    bounds: Rectangle) {
-    row: ButtonProps
-    row.id = 4900 + index
-    row.bounds = HabitScreenRowTouch(bounds)
-    row.tone = cast(ButtonTone)ButtonToneNeutral
-    row.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    row.disabled = app.modal.active != 0
-    unused HabitScreenRowDrag(app, index, row)
-    unused Button(app.ui.session, row)
-    node := TreeSubmitted(app.ui.session, TreeCurrentParent(app.ui.session),
-        cast(u64)row.id, WidgetKindButton)
-    TreeSetDragCapture(app.ui.session, node, HabitScreenRowDragAtOnce())
-    HabitScreenDragFace(app, index, bounds)
-}
-
-// The inactive habits' header row after the habits: their count and a
-// chevron. A tap shows or hides their rows below it.
-HabitScreenInactiveHeader :: (app: *InnerBreeze, bounds: Rectangle,
-    count: s32, pad: s32) {
-    text: [96]u8
-    args: [1]FormatArg
-    args[0].number = count
-    unused FormatTemplate(LocaleText("habits_inactive_section"), args[:],
-        text[:])
-    header: ButtonProps
-    header.id = 4110
-    header.bounds = HabitScreenRowTouch(bounds)
-    header.label = FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*text[0], cast(s32)text.count))
-    header.content_alignment = cast(ContentAlignment)ContentAlignmentStart
-    header.tone = cast(ButtonTone)ButtonToneNeutral
-    header.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    header.disabled = app.modal.active != 0
-    open := app.habits.show_deactivated != 0
-    clicked := Button(app.ui.session, header) != 0
-    // The chevron at the row's end points down while the rows are hidden.
-    chevron_x := cast(s32)(bounds.x + bounds.width) - pad - AppScale(12)
-    chevron_y := cast(s32)(bounds.y + bounds.height * 0.5)
-    span := AppScale(5)
-    tip := ifx open then (chevron_y - span / 2) else (chevron_y + span / 2)
-    ends := ifx open then (chevron_y + span / 2) else (chevron_y - span / 2)
-    chevron_color := color_with_alpha(StyleTokenColor("text"), 0.7)
-    HabitScreenLine(app, chevron_x - span, ends, chevron_x, tip, chevron_color)
-    HabitScreenLine(app, chevron_x, tip, chevron_x + span, ends, chevron_color)
-    if clicked {
-        app.habits.show_deactivated = ifx open then 0 else 1
-    }
-}
-
-// A press on a habit row that moves drags the row to another place in
-// the list; the list keeps scrolling with a swipe until a touch is held.
-// Returns true when the row was tapped without being dragged.
-HabitScreenRowDrag :: (app: *InnerBreeze, index: s32,
-    card: ButtonProps) -> bool {
-    key := cast(u64)card.id
-    previous := TreePrevious(app.ui.session,
-        TreeCurrentParent(app.ui.session), key, WidgetKindButton)
-    drag := TreeTakeDragAt(app.ui.session, previous)
-    if drag.started && !card.disabled {
-        HabitScreenBeginDrag(app, index, card.bounds, drag,
-            HabitScreenRowDragAtOnce())
-    }
-    if app.habits.dragging == 0 || app.habits.drag_habit != index {
-        return false
-    }
-    point := Vector2.{drag.x, drag.y}
-    if drag.active && app.habits.drag_lifted == 0 {
-        dx := point.x - app.habits.drag_origin.x
-        dy := point.y - app.habits.drag_origin.y
-        threshold := cast(float32)AppScale(6)
-        if dx * dx + dy * dy >= threshold * threshold {
-            // A swipe before the hold scrolls the list instead.
-            HabitScreenEndDrag(app)
-            return false
-        }
-        if GetTime() - app.habits.drag_pressed_at >= HABITS_CARD_HOLD_SECONDS {
-            app.habits.drag_lifted = 1
-            app.habits.drag_moving = 1
-            TreeCapturePressAt(app.ui.session, previous)
-        } else {
-            // A finger at rest sends no input, and without frames the hold
-            // was never noticed: the first move then scrolled instead.
-            AppRequestSmoothFrames(2)
-        }
-        return false
-    }
-    if drag.active {
-        HabitScreenUpdateDrag(app, point)
-        return false
-    }
-    if !drag.ended {
-        return false
-    }
-    if app.habits.drag_lifted == 0 {
-        // Only a short press that stays in place opens the habit: a touch
-        // the list took over to scroll ends here too.
-        dx := point.x - app.habits.drag_origin.x
-        dy := point.y - app.habits.drag_origin.y
-        threshold := cast(float32)AppScale(6)
-        tapped := dx * dx + dy * dy < threshold * threshold &&
-        GetTime() - app.habits.drag_pressed_at < HABITS_CARD_HOLD_SECONDS
-        HabitScreenEndDrag(app)
-        return tapped
-    }
-    HabitScreenUpdateDrag(app, point)
-    if app.habits.drag_moving == 0 {
-        HabitScreenEndDrag(app)
-        return TreeHoveredAt(app.ui.session, previous)
-    }
-    app.habits.drag_released = 1
-    return false
-}
-
-
-// Scrolls the habit table while a dragged habit is near its top or bottom
-// edge or past it, faster the further it goes.
-HabitScreenEdgeScroll :: (app: *InnerBreeze, list: ScrollResult,
-    point: Vector2) {
-    now := GetTime()
-    elapsed := cast(float32)(now - app.habits.drag_scroll_at)
-    app.habits.drag_scroll_at = now
-    if elapsed > 0.1 {
-        elapsed = 0.1
-    }
-    margin := cast(float32)AppScale(HABITS_DRAG_EDGE_MARGIN)
-    top := list.viewport.y + margin
-    bottom := list.viewport.y + list.viewport.height - margin
-    depth: float32 = 0.0
-    if point.y < top {
-        depth = (point.y - top) / margin
-    } else if point.y > bottom {
-        depth = (point.y - bottom) / margin
-    }
-    if depth > 2.0 {
-        depth = 2.0
-    }
-    if depth < -2.0 {
-        depth = -2.0
-    }
-    if depth == 0.0 {
-        app.habits.drag_at_edge = 0
-        app.habits.drag_scroll_carry = 0.0
-        return
-    }
-    if app.habits.drag_at_edge == 0 {
-        app.habits.drag_at_edge = 1
-        app.habits.drag_edge_since = now
-    }
-    if now - app.habits.drag_edge_since < HABITS_DRAG_EDGE_WAIT_SECONDS {
-        return
-    }
-    speed := cast(float32)AppScale(HABITS_DRAG_EDGE_SPEED)
-    app.habits.drag_scroll_carry += speed * depth * elapsed
-    step := cast(s32)app.habits.drag_scroll_carry
-    app.habits.drag_scroll_carry -= cast(float32)step
-    app.habits.scroll += step
-    if app.habits.scroll < 0 {
-        app.habits.scroll = 0
-    }
-    if app.habits.scroll > list.max_scroll {
-        app.habits.scroll = list.max_scroll
-    }
-}
-
-// While a habit is dragged over the habit list, the row it would take the
-// place of is outlined, or the whole list when it would go last. Releasing
-// it there moves a row to that place or reactivates a deactivated habit.
-// A row dragged onto the inactive habits below the list becomes inactive.
-HabitScreenDrop :: (app: *InnerBreeze, list: ScrollResult,
-    cards: []Rectangle, count: s32, gap: s32, section: Rectangle) {
-    if app.habits.dragging == 0 {
-        return
-    }
-    dragged := app.habits.drag_habit
-    if dragged < 0 || dragged >= app.habits.count {
-        HabitScreenEndDrag(app)
-        return
-    }
-    reactivating := app.habits.items[dragged].deactivated != 0
-    point := app.habits.drag_pointer
-    // Over the inactive habits, a habit is dropped among them.
-    in_section := app.habits.drag_moving != 0 && section.height > 0.0 &&
-    PointInBounds(point.x, point.y, section)
-    target: s32 = -1
-    if app.habits.drag_moving != 0 && !in_section &&
-    PointInBounds(point.x, point.y, list.viewport) {
-        target = count
-        highlight := list.viewport
-        half := cast(float32)(gap / 2)
-        position: s32 = 0
-        while position < count {
-            area := cards[position]
-            area.x -= half
-            area.y -= half
-            area.width += half * 2.0
-            area.height += half * 2.0
-            if PointInBounds(point.x, point.y, area) {
-                target = position
-                highlight = RectangleIntersection(cards[position],
-                    list.viewport)
-                break
-            }
-            position += 1
-        }
-        HabitScreenDragOutline(app, highlight)
-    }
-    over_section := !reactivating && in_section
-    if over_section {
-        HabitScreenDragOutline(app, section)
-    }
-    if app.habits.drag_released != 0 {
-        if over_section {
-            habits_deactivate(*app.habits, dragged)
-            unused app_auto_sync(app)
-            HabitScreenSave(app)
-        } else if target >= 0 {
-            if reactivating {
-                unused habits_reactivate(*app.habits, dragged, target)
-            } else {
-                unused habits_move_active(*app.habits, dragged, target)
-            }
-            unused app_auto_sync(app)
-            HabitScreenSave(app)
-        }
-        HabitScreenEndDrag(app)
-        app_block_current_click(app)
-        return
-    }
-    if app.habits.drag_moving == 0 {
-        return
-    }
-    HabitScreenEdgeScroll(app, list, point)
-    lifted := app.habits.drag_bounds
-    lifted.x = point.x - app.habits.drag_grab.x
-    lifted.y = point.y - app.habits.drag_grab.y
-    radius := cast(float32)AppScale(12)
-    PaintRoundedFill(app.ui.session, -1, lifted, radius, 12,
-        StyleTokenColor("surface"))
-    HabitScreenDragOutline(app, lifted)
-    HabitScreenDragFace(app, dragged, lifted)
-}
-
-HabitScreenOverview :: (app: *InnerBreeze,
-    geometry: HabitScreenGeometry) {
-    heading_h := AppScale(34)
-    button_h := AppScale(42)
-    gap := AppScale(12)
-    add_label := LocaleText("habit_new_button")
-    add_width := AppTextWidth(add_label, AppFontSize()) + AppScale(40)
-    if add_width < AppScale(120) {
-        add_width = AppScale(120)
-    }
-    if add_width > geometry.width * 2 / 3 {
-        add_width = geometry.width * 2 / 3
-    }
-    heading: TextProps
-    heading.bounds = HabitScreenRect(geometry.x, geometry.y,
-        geometry.width - add_width - gap, heading_h)
-    heading.text = LocaleText("tab_habits")
-    heading.font = AppTitleFontSize(heading.text,
-        cast(s32)heading.bounds.width)
-    heading_strong := StrongWhole(heading.text)
-    heading.strong = heading_strong[:]
-    heading.wrap = cast(TextWrap)TextWrapNone
-    Text(app.ui.session, heading)
-    add_button := HabitScreenButtonProps(app, add_label, 4100,
-        geometry.x + geometry.width - add_width, geometry.y,
-        add_width, button_h, false, app.habits.count >= HABIT_MAX)
-    add_button.tone = cast(ButtonTone)ButtonToneAccent
-    add_button.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    add_button.pill = true
-    if Button(app.ui.session, add_button) != 0 {
-        habit_edit_begin_new(app)
-        return
-    }
-    summary_y := geometry.y + heading_h + gap
-    progress_y := summary_y + AppScale(28)
-    progress_h := AppScale(6)
-    // The coins to spend and the shop's mark end today's count, both the
-    // size of its text, centred on the count and its progress bar together;
-    // a tap on either opens the shop.
-    icon := AppTextLineHeight(AppFontSize())
-    coins := HabitShopCoins(app, HabitShopBalance(app))
-    coins_w := HabitCoinAmountWidth(coins, AppFontSize())
-    cluster_w := coins_w + AppScale(12) + icon
-    cluster_x := geometry.x + geometry.width - cluster_w
-    cluster_h := AppScale(32)
-    cluster_y := summary_y + (progress_y + progress_h - summary_y - cluster_h) / 2
-    shop := HabitScreenButtonProps(app, LocaleText("habits_shop_button"), 4120,
-        cluster_x - AppScale(6), cluster_y, cluster_w + AppScale(6), cluster_h,
-        false, false)
-    shop.invisible = true
-    if Button(app.ui.session, shop) != 0 {
-        HabitShopOpen(app)
-        HabitScreenSave(app)
-        return
-    }
-    HabitCoinAmount(app.ui.session, coins, HabitScreenRect(cluster_x, cluster_y,
-        coins_w, cluster_h), AppFontSize(), true)
-    PaintSvgIcon(app.ui.session, -1, HabitShopShape(), HabitScreenRect(
-        cluster_x + cluster_w - icon, cluster_y + (cluster_h - icon) / 2,
-        icon, icon), StyleTokenColor("text"))
-    app.habits_guide_anchors[6] = HabitScreenRect(cluster_x, cluster_y,
-        cluster_w, cluster_h)
-    due := HabitScreenDueToday(app)
-    done := HabitScreenDoneToday(app)
-    summary_text: [96]u8
-    summary_args: [2]FormatArg
-    summary_args[0].number = done
-    summary_args[1].number = due
-    unused FormatTemplate(LocaleText("habits_done_count_label"),
-        summary_args[:], summary_text[:])
-    formatted_summary := FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*summary_text[0],
-        size_of(type_of(summary_text))))
-    summary: TextProps
-    summary.bounds = HabitScreenRect(geometry.x, summary_y,
-        cluster_x - geometry.x - AppScale(12), AppScale(24))
-    summary.text = formatted_summary
-    summary.font = AppFontSize()
-    summary.wrap = cast(TextWrap)TextWrapNone
-    Text(app.ui.session, summary)
-    app.habits_guide_anchors[0] = HabitScreenRect(geometry.x, summary_y,
-        cluster_x - geometry.x - AppScale(12), AppScale(24))
-    progress_w := cluster_x - geometry.x - AppScale(12)
-    if progress_w > AppScale(420) {
-        progress_w = AppScale(420)
-    }
-    progress_bounds := HabitScreenRect(geometry.x, progress_y,
-        progress_w, progress_h)
-    PaintRoundedFill(app.ui.session, -1, progress_bounds,
-        cast(float32)AppScale(3), 8,
-        color_with_alpha(StyleTokenColor("text"), 0.12f))
-    if due > 0 && done > 0 {
-        progress_fill := progress_w * done / due
-        if progress_fill > progress_w {
-            progress_fill = progress_w
-        }
-        PaintRoundedFill(app.ui.session, -1,
-            HabitScreenRect(geometry.x, progress_y,
-            progress_fill, progress_h),
-            cast(float32)AppScale(3), 8,
-            StyleTokenColor("accent"))
-    }
-    // Habits without an icon get one the node's GLM service chooses.
-    if HabitIconChoicePoll(*app.habits) {
-        habits_save(*app.habits)
-        unused app_auto_sync(app)
-        HabitScreenSave(app)
-    }
-    unused HabitIconChoiceStart(*app.habits)
-    if app.habits.dragging != 0 {
-        pointer := PointerSample(app.ui.session)
-        if !pointer.down && !pointer.released {
-            HabitScreenEndDrag(app)
-        } else if app.habits.drag_lifted != 0 {
-            HabitScreenUpdateDrag(app, Vector2.{pointer.x, pointer.y})
-            if pointer.released {
-                app.habits.drag_released = 1
-            }
-        }
-    }
-    active: [HABIT_MAX]s32
-    active_count := HabitScreenActiveIndices(app, active[:])
-    selected_position: s32 = -1
-    position: s32 = 0
-    while position < active_count {
-        if active[position] == app.habits.selected {
-            selected_position = position
-        }
-        position += 1
-    }
-    deactivated_count := app.habits.count - active_count
-    show_section := app.habits.count > 0
-    list_y := summary_y + AppScale(54)
-    list_bottom := geometry.y + geometry.height
-    header_h := AppScale(HABITS_TABLE_HEADER_HEIGHT)
-    rows_y := list_y + header_h
-    if list_bottom < rows_y {
-        list_bottom = rows_y
-    }
-    viewport := HabitScreenRect(geometry.x, rows_y, geometry.width,
-        list_bottom - rows_y)
-    row_h := AppScale(HABITS_ROW_HEIGHT)
-    detail_h: s32 = 0
-    if selected_position >= 0 {
-        detail_h = HabitScreenRowDetailHeight(app, active[selected_position])
-    }
-    active_h := active_count * row_h + detail_h
-    if active_count == 0 {
-        active_h = AppScale(80)
-    }
-    // After the habits, the inactive habits' header, and their rows when it
-    // is open.
-    section_h: s32 = 0
-    inactive_row_h := AppScale(HABITS_DEACTIVATED_ROW_HEIGHT)
-    if show_section {
-        section_h = AppScale(HABITS_INACTIVE_HEADER_HEIGHT)
-        if app.habits.show_deactivated != 0 {
-            section_h += AppScale(HABITS_DEACTIVATED_HINT_HEIGHT) +
-            deactivated_count * inactive_row_h
-        }
-    }
-    content_h := active_h + section_h
-    // When the rows would scroll with a habit's details and the inactive
-    // habits open, the scrollbar shows from the start: opening them then
-    // leaves the table's width, and so its day columns, as they are.
-    keep_scrollbar := HabitScreenOpenHeight(app, active[:], active_count,
-        deactivated_count) > cast(s32)viewport.height
-    // The table's panel holds the day names and the rows, as tall as the
-    // rows need up to the space there is; the rows scroll within it, so a
-    // scrollbar shown before they fill the space ends with the panel.
-    panel_rows_h := content_h
-    if panel_rows_h > cast(s32)viewport.height {
-        panel_rows_h = cast(s32)viewport.height
-    }
-    panel: BoxProps
-    panel.bounds = HabitScreenRect(geometry.x, list_y, geometry.width,
-        header_h + panel_rows_h)
-    panel.fill = StyleTokenColor("surface")
-    panel.border = color_with_alpha(StyleTokenColor("text"), 0.12)
-    panel.radius = cast(float32)AppScale(14)
-    Box(app.ui.session, panel)
-    // A card that just opened scrolls into view: all of it when it fits,
-    // otherwise from its top.
-    if app.habits.reveal_selected != 0 {
-        app.habits.reveal_selected = 0
-        if selected_position >= 0 {
-            card_top := HabitRowOffset(selected_position, selected_position,
-                row_h, detail_h)
-            card_bottom := card_top + row_h + detail_h
-            view_h := cast(s32)viewport.height
-            if card_bottom - app.habits.scroll > view_h {
-                app.habits.scroll = card_bottom - view_h
-            }
-            if card_top < app.habits.scroll {
-                app.habits.scroll = card_top
-            }
-            if app.habits.scroll > content_h - view_h {
-                app.habits.scroll = content_h - view_h
-            }
-            if app.habits.scroll < 0 {
-                app.habits.scroll = 0
-            }
-        }
-    }
-    scrolled := HabitScreenScroll(app, "inbe/habits/overview",
-        HabitScreenRect(geometry.x, rows_y, geometry.width, panel_rows_h),
-        content_h, keep_scrollbar)
-    if !scrolled.opened { return }
-    pad := AppScale(12)
-    table_x := cast(s32)scrolled.content.x
-    table_w := cast(s32)scrolled.content.width
-    name_preferred := cast(s32)HABITS_NAME_PREFERRED_WIDTH
-    if app.habits.name_width > 0 {
-        name_preferred = app.habits.name_width
-    }
-    if name_preferred < HABITS_NAME_MIN_WIDTH {
-        name_preferred = HABITS_NAME_MIN_WIDTH
-    }
-    if name_preferred > HABITS_NAME_MAXIMUM_WIDTH {
-        name_preferred = HABITS_NAME_MAXIMUM_WIDTH
-    }
-    layout := HabitTableLayoutFor(table_w - pad * 2,
-        AppScale(name_preferred), AppScale(HABITS_NAME_MIN_WIDTH),
-        AppScale(HABITS_ICON_COLUMN_WIDTH), AppScale(HABITS_DAY_MIN_WIDTH),
-        AppScale(HABITS_DAY_MAX_WIDTH))
-    if active_count == 0 {
-        empty: TextProps
-        empty.bounds = HabitScreenRect(table_x + pad,
-            cast(s32)scrolled.content.y + AppScale(10),
-            table_w - pad * 2, AppScale(48))
-        empty.text = LocaleText("habit_empty_title")
-        empty.font = AppFontSize()
-        empty.wrap = cast(TextWrap)TextWrapNone
-        Text(app.ui.session, empty)
-    }
-    rows: [HABIT_MAX]Rectangle
-    position = 0
-    while position < active_count {
-        index := active[position]
-        open := position == selected_position
-        row := HabitScreenRect(table_x,
-            cast(s32)scrolled.content.y + HabitRowOffset(position,
-            selected_position, row_h, detail_h), table_w, row_h)
-        rows[position] = row
-        if position > 0 {
-            PaintRoundedFill(app.ui.session, -1, HabitScreenRect(table_x + pad,
-                cast(s32)row.y, table_w - pad * 2, HabitScreenHairline()), 0.0,
-                1, color_with_alpha(StyleTokenColor("text"), 0.08))
-        }
-        if position == 0 {
-            app.habits_guide_anchors[1] = row
-        }
-        if HabitScreenRow(app, index, row, layout, pad, open) {
-            End(app.ui.session)
-            if open {
-                habits_collapse_card(app)
-            } else {
-                habits_expand_card(app, index)
-            }
-            return
-        }
-        if open {
-            HabitScreenRowDetail(app, index, HabitScreenRect(table_x,
-                cast(s32)(row.y + row.height), table_w, detail_h), pad)
-        }
-        position += 1
-    }
-    section := HabitScreenRect(table_x,
-        cast(s32)scrolled.content.y + active_h, table_w, section_h)
-    if show_section {
-        PaintRoundedFill(app.ui.session, -1, HabitScreenRect(table_x,
-            cast(s32)section.y, table_w, HabitScreenHairline()), 0.0, 1,
-            color_with_alpha(StyleTokenColor("text"), 0.12))
-        HabitScreenInactiveHeader(app, HabitScreenRect(table_x,
-            cast(s32)section.y, table_w,
-            AppScale(HABITS_INACTIVE_HEADER_HEIGHT)),
-            deactivated_count, pad)
-    }
-    if show_section && app.habits.show_deactivated != 0 {
-        y := cast(s32)section.y + AppScale(HABITS_INACTIVE_HEADER_HEIGHT)
-        hint: TextProps
-        hint.bounds = HabitScreenRect(table_x + pad, y, table_w - pad * 2,
-            AppScale(HABITS_DEACTIVATED_HINT_HEIGHT))
-        hint.text = LocaleText("habits_deactivated_hint")
-        hint.font = AppSmallFontSize()
-        hint.vertical_align = cast(TextAlign)TextAlignCenter
-        hint.wrap = cast(TextWrap)TextWrapAuto
-        Text(app.ui.session, hint)
-        y += AppScale(HABITS_DEACTIVATED_HINT_HEIGHT)
-        index: s32 = 0
-        while index < app.habits.count {
-            if app.habits.items[index].deactivated != 0 {
-                HabitScreenDeactivatedRow(app, index, HabitScreenRect(table_x,
-                    y, table_w, inactive_row_h))
-                y += inactive_row_h
-            }
-            index += 1
-        }
-    }
-    End(app.ui.session)
-    HabitScreenTableHeader(app, table_x + pad + layout.name_width, list_y,
-        layout, header_h)
-    HabitScreenNameResize(app, table_x + pad + layout.name_width, list_y,
-        header_h, layout.name_width)
-    PaintRoundedFill(app.ui.session, -1, HabitScreenRect(geometry.x, rows_y,
-        geometry.width, HabitScreenHairline()), 0.0, 1,
-        color_with_alpha(StyleTokenColor("text"), 0.12))
-    // A row dropped below the panel, while the rows do not fill the space,
-    // still goes last.
-    drop_list := scrolled
-    drop_list.viewport = viewport
-    HabitScreenDrop(app, drop_list, rows[:], active_count, 0,
-        RectangleIntersection(section, scrolled.viewport))
-}
-// A habit's pages are separate: its view (week or calendar), its
-// statistics, and its editor. Each has only Back and its own title here,
-// strong, with its subtitle muted below it; none of them links sideways
-// into the others.
-HabitScreenPageHeader :: (app: *InnerBreeze,
-    geometry: HabitScreenGeometry, index: s32, subtitle: string) -> s32 {
-    habit := *app.habits.items[index]
-    top := HabitPageHeader(app, geometry.x, geometry.y, geometry.width,
-        AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE), subtitle, 4300)
-    if top < 0 {
-        habits_return_to_overview(app)
-    }
-    return top
-}
-
-// The habit view switches only between its week list and its calendar.
-HabitScreenViewSwitch :: (app: *InnerBreeze,
-    geometry: HabitScreenGeometry, top: s32) -> s32 {
-    options: [2]SegmentOption = .[
-    SegmentOption.{.label = LocaleText("habit_focus_week")},
-    SegmentOption.{.label = LocaleText("habit_focus_calendar")}
-    ]
-    props: SegmentedControlProps
-    props.id = 4301
-    props.bounds = HabitScreenRect(geometry.x, top, geometry.width, AppScale(42))
-    props.height = AppScale(42)
-    props.selected_index = ifx (app.habits.view_mode == HABIT_VIEW_CALENDAR) then (1) else (0)
-    props.has_selection = true
-    props.disabled = app.modal.active != 0
-    switch := SegmentedControl(app.ui.session, props, options[:])
-    if switch.changed {
-        app.habits.view_mode = ifx (switch.selected_index == 1) then (HABIT_VIEW_CALENDAR) else (HABIT_VIEW_WEEKLY)
-        app.habits.scroll = 0
-        HabitScreenSave(app)
-    }
-    return top + AppScale(54)
-}
-
-HabitScreenWeekly :: (app: *InnerBreeze,
-    geometry: HabitScreenGeometry, index: s32, top: s32) {
-    row_h := AppScale(46)
-    gap := AppScale(8)
-    count := app.habits.weekly_days
-    if count < HABIT_WEEKLY_INITIAL_DAYS { count = HABIT_WEEKLY_INITIAL_DAYS }
-    if count > HABIT_WEEKLY_MAX_DAYS { count = HABIT_WEEKLY_MAX_DAYS }
-    app.habits.weekly_days = count
-    content_h := count * (row_h + gap) + AppScale(52)
-    viewport := HabitScreenRect(geometry.x, top, geometry.width,
-        geometry.height - (top - geometry.y))
-    scrolled := HabitScreenScroll(app, "inbe/habits/week", viewport,
-        content_h, false)
-    if !scrolled.opened { return }
-    first_row := (scrolled.scroll_offset - row_h) / (row_h + gap)
-    if first_row < 0 { first_row = 0 }
-    last_row := (scrolled.scroll_offset + cast(s32)viewport.height +
-        row_h) / (row_h + gap)
-    if last_row >= count { last_row = count - 1 }
-    row := first_row
-    while row <= last_row {
-        row_y := cast(s32)scrolled.content.y + row * (row_h + gap)
-        day := habits_day_index(row)
-        label := HabitScreenDate(app, day)
-        habit := *app.habits.items[index]
-        if habit_counting_enabled(habit) != 0 {
-            linked := habit_cached_linked_entries(app, index, day)
-            count_today := HabitEffectiveDayCount(habit, day, linked)
-            count_text: [64]u8
-            count_args: [5]FormatArg
-            count_args[0].number = day / 10000
-            count_args[1].number = (day / 100) % 100
-            count_args[2].number = day % 100
-            count_args[3].number = count_today
-            count_args[4].number = habit_counter_target(habit)
-            unused FormatTemplate("%04d-%02d-%02d  %d/%d",
-                count_args[:], count_text[:])
-            label = FrameTextHold(*app.ui.frame_text,
-                AppTextFromCString(*count_text[0], cast(s32)count_text.count))
-        }
-        HabitScreenDayButton(app, index, day, label, 4400 + row,
-            HabitScreenRect(geometry.x, row_y, geometry.width, row_h), false)
-        row += 1
-    }
-    if count < HABIT_WEEKLY_MAX_DAYS {
-        button_y := cast(s32)scrolled.content.y + count * (row_h + gap)
-        if Button(app.ui.session, HabitScreenButtonProps(app, LocaleText("habit_load_more_button"),
-            4500, geometry.x, button_y, geometry.width,
-            AppScale(42), false, false)) != 0 {
-            app.habits.weekly_days += HABIT_WEEKLY_LOAD_DAYS
-            if app.habits.weekly_days > HABIT_WEEKLY_MAX_DAYS {
-                app.habits.weekly_days = HABIT_WEEKLY_MAX_DAYS
-            }
-        }
-    }
-    app.habits_guide_anchors[5] = HabitScreenRect(
-        geometry.x, top, geometry.width, row_h)
-    End(app.ui.session)
-}
-
-HabitScreenMonthParts :: (app: *InnerBreeze, year: *s32,
-    month: *s32) {
-    local := LocalNow()
-    year.* = local.year
-    month.* = local.month + app.habits.month_offset
-    while month.* < 1 {
-        month.* += 12
-        year.* -= 1
-    }
-    while month.* > 12 {
-        month.* -= 12
-        year.* += 1
-    }
-}
-
-HabitScreenCalendar :: (app: *InnerBreeze,
-    geometry: HabitScreenGeometry, index: s32, top: s32) {
-    year: s32
-    month: s32
-    HabitScreenMonthParts(app, *year, *month)
-    if !DateValid(year, month, 1) { return }
-    header_h := AppScale(42)
-    gap := AppScale(6)
-    arrow_w := AppScale(48)
-    if Button(app.ui.session, HabitScreenButtonProps(app, "<", 4600, geometry.x, top,
-        arrow_w, header_h, false, false)) != 0 {
-        app.habits.month_offset -= 1
-    }
-    if Button(app.ui.session, HabitScreenButtonProps(app, ">", 4601,
-        geometry.x + geometry.width - arrow_w, top,
-        arrow_w, header_h, false,
-        app.habits.month_offset >= 0)) != 0 {
-        app.habits.month_offset += 1
-    }
-    title := HabitScreenMonth(app, year, month)
-    month_title: TextProps
-    month_title.bounds = HabitScreenRect(geometry.x + arrow_w + gap,
-        top, geometry.width - (arrow_w + gap) * 2, header_h)
-    month_title.text = title
-    month_title.font = AppFontSize()
-    month_title.align = cast(TextAlign)TextAlignCenter
-    month_title.vertical_align = cast(TextAlign)TextAlignCenter
-    month_title.wrap = cast(TextWrap)TextWrapNone
-    Text(app.ui.session, month_title)
-    first := DaysFromCivil(year, month, 1)
-    weekday := cast(s32)((first + 3) % 7)
-    cell_w := (geometry.width - gap * 6) / 7
-    counting := habit_counting_enabled(*app.habits.items[index]) != 0
-    // A counting habit's day holds its date above its count.
-    cell_h := AppScale(ifx counting then 56 else 50)
-    today := habits_today_index()
-    day: s32 = 1
-    while DateValid(year, month, day) {
-        slot := weekday + day - 1
-        column := slot % 7
-        row := slot / 7
-        x := geometry.x + column * (cell_w + gap)
-        y := top + header_h + gap + row * (cell_h + gap)
-        day_index := year * 10000 + month * 100 + day
-        if day_index <= today {
-            label := HabitScreenNumber(app, day)
-            HabitScreenDayButton(app, index, day_index, label,
-                4700 + slot, HabitScreenRect(x, y, cell_w, cell_h),
-                counting)
-        }
-        day += 1
-    }
 }
 
 // A tap on a day of a habit that asks questions: an open day takes a new
@@ -2014,6 +465,254 @@ HabitScreenCountDialog :: (app: *InnerBreeze) {
     }
 }
 
+// ---- The habit list, which Habits draws -------------------------------------
+
+habit_list_frame: HabitsListFrame;
+habit_list_frame_codec: WidgetHabitsListFrameCodec;
+habit_list_row_codec: WidgetHabitsListRowCodec;
+habit_list_day_codec: WidgetHabitsListDayCodec;
+
+// A mouse drags a habit row as soon as it moves. On a touch screen a swipe
+// over the rows scrolls them, so a row is lifted only once held.
+HabitScreenTouch :: () -> bool {
+    #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) {
+        return true
+    }
+    return false
+}
+
+// A habit as the list shows it. Its streak and this week's days only show
+// in its details, so they are counted for the open habit alone.
+HabitScreenListRow :: (app: *InnerBreeze, index: s32) -> HabitsListRow {
+    habit := *app.habits.items[index]
+    row := HabitsListRow.{
+        .name = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE),
+        .description = AppTextFromCString(*habit.description[0], HABIT_DESCRIPTION_SIZE),
+        .color = habit.color, .icon = HabitScreenIconFor(app, index),
+        .deactivated = habit.deactivated != 0,
+        .counting = habit_counting_enabled(habit) != 0,
+        .target = habit_counter_target(habit)}
+    if index == app.habits.selected {
+        planned: s32 = 0
+        row.week_done = HabitScreenWeekProgress(app, index, *planned)
+        row.week_planned = planned
+        row.streak = HabitScreenStreak(app, index)
+    }
+    return row
+}
+
+HabitScreenListDay :: (app: *InnerBreeze, index: s32, day: s32) -> HabitsListDay {
+    habit := *app.habits.items[index]
+    linked := habit_cached_linked_entries(app, index, day)
+    return HabitsListDay.{.day = day,
+        .planned = habit_scheduled_day(habit, day) != 0,
+        .complete = HabitEffectiveDayComplete(habit, day, linked),
+        .count = HabitEffectiveDayCount(habit, day, linked),
+        .running = HabitScreenSpanRunning(habit, day)}
+}
+
+HabitScreenListCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "habit_list_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    app := cast(*InnerBreeze)context
+    name := TextFromCString(function)
+    if name == "ReadHabitsListHost" && count == 0 {
+        result.* = WidgetEncodeHabitsListFrame(habit_list_frame, *habit_list_frame_codec)
+        return 1
+    }
+    if name == "WriteHabitsListHost" && count == 1 && WidgetValidHabitsListFrame(arguments[0]) {
+        habit_list_frame = WidgetDecodeHabitsListFrame(arguments[0], *habit_list_frame_codec)
+        return 1
+    }
+    if name == "ReadHabitsListRowHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        row: HabitsListRow
+        if index >= 0 && index < app.habits.count {
+            row = HabitScreenListRow(app, index)
+        }
+        result.* = WidgetEncodeHabitsListRow(row, *habit_list_row_codec)
+        return 1
+    }
+    if name == "ReadHabitsListDayHost" && count == 2 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) &&
+    HostScalarValid(arguments[1], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        day := cast(s32)arguments[1].integer
+        state := HabitsListDay.{.day = day}
+        if index >= 0 && index < app.habits.count &&
+        DateValid(day / 10000, (day / 100) % 100, day % 100) {
+            state = HabitScreenListDay(app, index, day)
+        }
+        result.* = WidgetEncodeHabitsListDay(state, *habit_list_day_codec)
+        return 1
+    }
+    if name == "HabitsLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
+}
+
+// The list's frame: the page's look and bounds, and the state the host
+// keeps for it.
+HabitScreenListFrame :: (app: *InnerBreeze, geometry: HabitScreenGeometry) -> HabitsListFrame {
+    habits := *app.habits
+    bounds := HabitScreenRect(geometry.x, geometry.y, geometry.width, geometry.height)
+    card := CardProps(bounds)
+    return HabitsListFrame.{
+        .session = app.ui.session, .scale = MetricsScale(), .bounds = bounds,
+        .font = AppFontSize(), .small_font = AppSmallFontSize(),
+        .text_color = StyleTokenColor("text"), .surface_color = StyleTokenColor("surface"),
+        .accent_color = StyleTokenColor("accent"), .card_fill = card.fill,
+        .card_border = card.border, .muted_class = MutedTextClass(),
+        .ink_dark_class = KssClassId(KssMakeName("ink-dark")),
+        .ink_light_class = KssClassId(KssMakeName("ink-light")),
+        .modal_active = app.modal.active != 0, .touch = HabitScreenTouch(),
+        .now = GetTime(), .today = habits_today_index(), .habit_count = habits.count,
+        .habit_limit = HABIT_MAX, .halves = HabitShopBalance(app),
+        .screen_mode = habits.screen_mode, .view_mode = habits.view_mode,
+        .selected = habits.selected, .scroll = habits.scroll,
+        .name_width = habits.name_width, .show_deactivated = habits.show_deactivated != 0,
+        .reveal_selected = habits.reveal_selected != 0, .weekly_days = habits.weekly_days,
+        .month_offset = habits.month_offset, .dragging = habits.dragging != 0,
+        .drag_habit = habits.drag_habit, .drag_lifted = habits.drag_lifted != 0,
+        .drag_moving = habits.drag_moving != 0, .drag_origin = habits.drag_origin,
+        .drag_at_edge = habits.drag_at_edge != 0, .drag_edge_since = habits.drag_edge_since,
+        .drag_scroll_at = habits.drag_scroll_at, .drag_scroll_carry = habits.drag_scroll_carry,
+        .drag_pointer = habits.drag_pointer, .drag_grab = habits.drag_grab,
+        .drag_bounds = habits.drag_bounds, .name_resizing = habits.name_resizing != 0,
+        .name_resize_origin = habits.name_resize_origin,
+        .name_resize_start = habits.name_resize_start}
+}
+
+// A guide anchor the page drew this frame; one it did not draw keeps the
+// last place it had.
+HabitScreenAnchor :: (app: *InnerBreeze, slot: s32, bounds: Rectangle) {
+    if bounds.width > 0.0 && bounds.height > 0.0 {
+        app.habits_guide_anchors[slot] = bounds
+    }
+}
+
+// Keeps the state the page changed.
+HabitScreenListKeep :: (app: *InnerBreeze, observed: HabitsListFrame) {
+    habits := *app.habits
+    habits.scroll = observed.scroll
+    if observed.name_width >= HABITS_NAME_MIN_WIDTH &&
+    observed.name_width <= HABITS_NAME_MAXIMUM_WIDTH {
+        habits.name_width = observed.name_width
+    }
+    // The column's width is saved once its border is let go.
+    if habits.name_resizing != 0 && !observed.name_resizing {
+        SettingsBeginWrite()
+        unused SettingsStoreInt("habits_name_width", habits.name_width)
+        SettingsEndWrite()
+    }
+    habits.name_resizing = ifx observed.name_resizing then 1 else 0
+    habits.name_resize_origin = observed.name_resize_origin
+    habits.name_resize_start = observed.name_resize_start
+    habits.show_deactivated = ifx observed.show_deactivated then 1 else 0
+    habits.reveal_selected = ifx observed.reveal_selected then 1 else 0
+    if observed.weekly_days >= HABIT_WEEKLY_INITIAL_DAYS &&
+    observed.weekly_days <= HABIT_WEEKLY_MAX_DAYS {
+        habits.weekly_days = observed.weekly_days
+    }
+    if observed.month_offset <= 0 {
+        habits.month_offset = observed.month_offset
+    }
+    if observed.view_mode == HABIT_VIEW_CALENDAR || observed.view_mode == HABIT_VIEW_WEEKLY {
+        habits.view_mode = observed.view_mode
+    }
+    habits.dragging = ifx observed.dragging then 1 else 0
+    habits.drag_habit = observed.drag_habit
+    habits.drag_lifted = ifx observed.drag_lifted then 1 else 0
+    habits.drag_moving = ifx observed.drag_moving then 1 else 0
+    habits.drag_origin = observed.drag_origin
+    habits.drag_at_edge = ifx observed.drag_at_edge then 1 else 0
+    habits.drag_edge_since = observed.drag_edge_since
+    habits.drag_scroll_at = observed.drag_scroll_at
+    habits.drag_scroll_carry = observed.drag_scroll_carry
+    habits.drag_pointer = observed.drag_pointer
+    habits.drag_grab = observed.drag_grab
+    habits.drag_bounds = observed.drag_bounds
+    habits_first_day_bounds = observed.first_day
+    HabitScreenAnchor(app, 0, observed.anchor_progress)
+    HabitScreenAnchor(app, 1, observed.anchor_table)
+    HabitScreenAnchor(app, 2, observed.anchor_history)
+    HabitScreenAnchor(app, 3, observed.anchor_statistics)
+    HabitScreenAnchor(app, 4, observed.anchor_edit)
+    HabitScreenAnchor(app, 5, observed.anchor_day)
+    HabitScreenAnchor(app, 6, observed.anchor_coins)
+    if observed.save {
+        HabitScreenSave(app)
+    }
+}
+
+// Does what the page asked for once it is drawn.
+HabitScreenListApply :: (app: *InnerBreeze, observed: HabitsListFrame) {
+    action := observed.action
+    index := observed.action_habit
+    valid := index >= 0 && index < app.habits.count
+    if action == HABITS_LIST_ADD {
+        habit_edit_begin_new(app)
+    } else if action == HABITS_LIST_SHOP {
+        HabitShopOpen(app)
+        HabitScreenSave(app)
+    } else if action == HABITS_LIST_OPEN && valid {
+        habits_expand_card(app, index)
+    } else if action == HABITS_LIST_CLOSE {
+        habits_collapse_card(app)
+    } else if action == HABITS_LIST_DAY && valid && observed.action_day > 0 {
+        HabitScreenDayAction(app, index, observed.action_day, observed.action_decrement)
+    } else if (action == HABITS_LIST_HISTORY || action == HABITS_LIST_STATISTICS) && valid {
+        app.habits.selected = index
+        if action == HABITS_LIST_HISTORY {
+            habits_open_history(app)
+        } else {
+            habits_open_statistics(app)
+        }
+    } else if action == HABITS_LIST_EDIT && valid {
+        habit_edit_begin(app, index)
+    } else if (action == HABITS_LIST_MOVE || action == HABITS_LIST_DEACTIVATE ||
+        action == HABITS_LIST_REACTIVATE) && valid {
+        if action == HABITS_LIST_DEACTIVATE {
+            habits_deactivate(*app.habits, index)
+        } else if action == HABITS_LIST_REACTIVATE {
+            unused habits_reactivate(*app.habits, index, observed.action_target)
+        } else {
+            unused habits_move_active(*app.habits, index, observed.action_target)
+        }
+        unused app_auto_sync(app)
+        HabitScreenSave(app)
+        app_block_current_click(app)
+    } else if action == HABITS_LIST_BACK {
+        habits_return_to_overview(app)
+    }
+}
+
+// Has Habits draw the habit list or the selected habit's page.
+HabitScreenList :: (app: *InnerBreeze, geometry: HabitScreenGeometry) {
+    habit_list_frame = HabitScreenListFrame(app, geometry)
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    CellsUiBegin(HabitScreenListCall, cast(*void)app)
+    drawn := HabitsRun(HabitsMessage.{.action = HABITS_LIST_VIEW})
+    CellsUiEnd()
+    WidgetHostEnd()
+    observed := habit_list_frame
+    habit_list_frame = HabitsListFrame.{}
+    if !drawn.succeeded {
+        return
+    }
+    HabitScreenListKeep(app, observed)
+    HabitScreenListApply(app, observed)
+}
+
 #program_export
 draw_habits_screen :: (app: *InnerBreeze) {
     if app == null { return }
@@ -2034,32 +733,25 @@ HabitScreenDrawPage :: (app: *InnerBreeze) {
         }
         return
     }
-    if app.habits.screen_mode == HABITS_SCREEN_OVERVIEW || app.habits.count <= 0 ||
+    overview := app.habits.screen_mode == HABITS_SCREEN_OVERVIEW || app.habits.count <= 0 ||
     app.habits.selected < 0 || app.habits.selected >= app.habits.count ||
-    app.habits.items[app.habits.selected].deactivated != 0 {
-        HabitScreenOverview(app, geometry)
+    app.habits.items[app.habits.selected].deactivated != 0
+    if !overview && app.habits.screen_mode == HABITS_SCREEN_STATISTICS {
+        if !draw_statistics_page(app) {
+            habits_return_to_overview(app)
+        }
         return
     }
-    selected := app.habits.selected
-    if app.habits.screen_mode == HABITS_SCREEN_STATISTICS {
-        // The header lines up with the statistics' column below it.
-        column := geometry
-        GetCenteredColumn(AppScale(CONTENT_MAX_W), GetPageSidePadding(),
-            *column.x, *column.width)
-        top := HabitScreenPageHeader(app, column, selected,
-            LocaleText("habit_statistics_title"))
-        if top < 0 { return }
-        draw_statistics_content(app, top)
-        return
+    if overview {
+        // Habits without an icon get one the node's GLM service chooses.
+        if HabitIconChoicePoll(*app.habits) {
+            habits_save(*app.habits)
+            unused app_auto_sync(app)
+            HabitScreenSave(app)
+        }
+        unused HabitIconChoiceStart(*app.habits)
     }
-    top := HabitScreenPageHeader(app, geometry, selected, "")
-    if top < 0 { return }
-    top = HabitScreenViewSwitch(app, geometry, top)
-    if app.habits.view_mode == HABIT_VIEW_CALENDAR {
-        HabitScreenCalendar(app, geometry, selected, top)
-    } else {
-        HabitScreenWeekly(app, geometry, selected, top)
-    }
+    HabitScreenList(app, geometry)
 }
 
 #program_export

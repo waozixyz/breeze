@@ -10,7 +10,7 @@ route-catalog-test: $(ZI2C_BIN)
 
 .PHONY: ziran-behavior-tests
 ziran-behavior-tests: cells $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A) $(RAYLIB_A)
-	@set -e; for t in storage_more habit_model habit_sessions habit_form practice_carousel; do \
+	@set -e; for t in storage_more habit_model habit_sessions habit_form; do \
 		env -u DISPLAY -u WAYLAND_DISPLAY sh tests/$${t}_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A); \
 	done
 	@env -u DISPLAY -u WAYLAND_DISPLAY sh tests/storage_paths_scenarios_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran

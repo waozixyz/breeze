@@ -1,0 +1,494 @@
+// A practice's Customize page: Meditation's duration, extend controls and
+// interval bell, the background music with its test and download, and
+// Astral Projection's voice narration with its voice and language. The host
+// keeps the settings, the music and the narration downloads, and saves each
+// change the page asks for.
+#import "session"
+#import "geometry"
+#import "vec"
+#import "dpi"
+#import "layout"
+#import "drawing_props"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "text_measure"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "box_props"
+#import "box_widget"
+#import "shape_props"
+#import "shape_widget"
+#import "toggle_props"
+#import "toggle_widget"
+#import "toggle_measure"
+#import "dropdown_props"
+#import "dropdown_widget"
+#import "segmented_control_props"
+#import "segmented_control_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "title_bar_props"
+#import "title_bar_widget"
+#import "tree"
+#import, file "../../src/cells/practice_ui_types.zi";
+#import, file "../../src/cells/practice_types.zi";
+#import, file "../../src/app/exercise_types.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using ExerciseType;
+using TextWrap;
+host_api :: #system_library "host_api";
+ReadPracticeSettingsHost :: () -> PracticeSettingsFrame #foreign host_api;
+WritePracticeSettingsHost :: (frame: PracticeSettingsFrame) #foreign host_api;
+ReadPracticeMusicTrackHost :: (index: s32) -> PracticeMusicTrack #foreign host_api;
+ReadPracticeNarrationHost :: (index: s32) -> PracticeNarrationChoice #foreign host_api;
+SettingsLocaleHost :: (key: string) -> string #foreign host_api;
+settings: PracticeSettingsFrame;
+
+SETTINGS_CONTENT_MAX_WIDTH :: 440
+SETTINGS_MUSIC_TRACK_MAX :: 64
+SETTINGS_LANGUAGE_MAX :: 32
+SETTINGS_TEXT_12 :: 12
+// MingCute's regular download_2, delete_2 and close icons (Apache-2.0),
+// copied from kryonlabs/mingcute's generated shapes.
+NARRATION_DOWNLOAD_ICON :: "S2rr:M20 16V20C20 20.5523 19.5523 21 19 21H5C4.44772 21 4 20.5523 4 20V16M12 3V15M7.75736 11.4143L12 15.6569L16.2426 11.4143"
+NARRATION_REMOVE_ICON :: "S2rm:M5 6L5.87554 19.133C5.94558 20.1836 6.81818 21 7.87111 21H16.1289C17.1818 21 18.0544 20.1836 18.1245 19.133L19 6M8 6L8.77208 3.68377C8.90819 3.27543 9.29033 3 9.72076 3H14.2792C14.7097 3 15.0918 3.27543 15.2279 3.68377L16 6M10 11V16M14 11V16M4 6H20"
+NARRATION_CANCEL_ICON :: "S2rm:M5.63599 5.63672L18.3639 18.3646M5.63599 18.3647L18.3639 5.63682"
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, settings.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+Locale :: (key: string) -> string {
+    return SettingsLocaleHost(key)
+}
+
+Width :: (text: string, font: s32) -> s32 {
+    return TextWidth(settings.session, TextProps.{.text = text, .font = font})
+}
+
+ParagraphHeight :: (text: string, width: s32, font: s32, line_gap: s32) -> s32 {
+    return TextHeight(settings.session, TextProps.{.text = text, .font = font,
+            .bounds = Bounds(0, 0, width, 0), .wrap = cast(TextWrap)TextWrapAuto,
+            .line_gap = line_gap})
+}
+
+// A label at its natural size from x, y.
+Label :: (text: string, x: s32, y: s32) {
+    Text(settings.session, TextProps.{.bounds = Bounds(x, y, 0, 0), .text = text,
+            .wrap = cast(TextWrap)TextWrapNone})
+}
+
+Choice :: (bounds: Rectangle, label: string, chosen: bool) -> bool {
+    return Button(settings.session, ButtonProps.{.bounds = bounds, .label = label,
+            .tone = cast(ButtonTone)(ifx chosen then ButtonToneAccent else ButtonToneNeutral),
+            .emphasis = cast(ButtonEmphasis)(ifx chosen then ButtonEmphasisFilled else ButtonEmphasisSoft)}) != 0
+}
+
+Ask :: (action: s32, value: s32) {
+    settings.action = action
+    settings.value = value
+}
+
+// ---- Meditation -----------------------------------------------------------------------
+
+MEDITATION_PRESETS :: 5
+
+DurationHeight :: (width: s32) -> s32 {
+    columns: s32 = ifx width >= Scale(520) then 3 else 2
+    rows := (MEDITATION_PRESETS + 1 + columns - 1) / columns
+    return Scale(30) + rows * Scale(56) + (rows - 1) * Scale(8) + Scale(108) + Scale(84) +
+    Scale(18) + Scale(112)
+}
+
+// The duration presets and custom minutes, the extend controls, and the
+// interval bell.
+Duration :: (x: s32, width: s32, y: *s32) {
+    labels: [6]string = .[Locale("duration_5m"), Locale("duration_15m"), Locale("duration_30m"),
+        Locale("duration_1h"), Locale("duration_2h"), Locale("meditation_duration_custom")]
+    gap := Scale(8)
+    button_height := Scale(48)
+    Label(Locale("meditation_duration_setting"), x, y.*)
+    y.* += Scale(30)
+    columns: s32 = ifx width >= Scale(520) then 3 else 2
+    button_width := (width - gap * (columns - 1)) / columns
+    for index: cast(s32)0..MEDITATION_PRESETS {
+        if Choice(Bounds(x + (index % columns) * (button_width + gap),
+                y.* + (index / columns) * (button_height + gap), button_width, button_height),
+            labels[index], index == settings.duration_mode) {
+            Ask(PRACTICE_SETTINGS_DURATION, index)
+        }
+    }
+    y.* += ((MEDITATION_PRESETS + 1 + columns - 1) / columns) * (button_height + gap) + Scale(8)
+
+    custom_y := y.*
+    custom: Vec(u8)
+    BuilderPrint(*custom, "%: % min", Locale("meditation_custom_minutes"), settings.custom_minutes)
+    Label(BuilderFinish(custom), x, custom_y)
+    adjust_labels: [4]string = .["-5", "-1", "+1", "+5"]
+    adjust_values: [4]s32 = .[-5, -1, 1, 5]
+    adjust_width := Scale(50)
+    adjust_x := x + (width - (adjust_width * 4 + gap * 3)) / 2
+    for index: cast(s32)0..3 {
+        if Button(settings.session, ButtonProps.{
+                .bounds = Bounds(adjust_x + index * (adjust_width + gap), custom_y + Scale(34),
+                    adjust_width, button_height),
+                .label = adjust_labels[index], .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            Ask(PRACTICE_SETTINGS_CUSTOM, adjust_values[index])
+        }
+    }
+    y.* += Scale(108)
+
+    Label(Locale("meditation_extend_controls_label"), x, y.*)
+    extend := ToggleProps.{.value = settings.extend_controls, .off_label = Locale("toggle_off"),
+        .on_label = Locale("toggle_on")}
+    // The toggle takes the room its labels need.
+    size := ToggleSize(settings.session, extend)
+    extend.bounds = Rectangle.{cast(float32)x, cast(float32)(y.* + Scale(26)), size.x,
+        ifx size.y > cast(float32)Scale(30) then size.y else cast(float32)Scale(30)}
+    toggled := Toggle(settings.session, extend)
+    if toggled.changed {
+        Ask(PRACTICE_SETTINGS_EXTEND, ifx toggled.value then 1 else 0)
+    }
+    y.* += Scale(84)
+
+    // The interval bell: a soft bell every n minutes.
+    Label(Locale("meditation_interval_bell_label"), x, y.*)
+    bell_labels: [7]string = .[Locale("meditation_interval_bell_off"), "1", "2", "5", "10", "15", "30"]
+    bell_values: [7]s32 = .[0, 1, 2, 5, 10, 15, 30]
+    // Minutes that are not offered show Off as chosen.
+    bell_chosen: s32 = 0
+    for index: cast(s32)0..6 {
+        if settings.bell_minutes == bell_values[index] {
+            bell_chosen = index
+        }
+    }
+    bell_columns: s32 = ifx width >= Scale(460) then 7 else 4
+    bell_width := (width - gap * (bell_columns - 1)) / bell_columns
+    if bell_width > Scale(72) {
+        bell_width = Scale(72)
+    }
+    for index: cast(s32)0..6 {
+        if Choice(Bounds(x + (index % bell_columns) * (bell_width + gap),
+                y.* + Scale(26) + (index / bell_columns) * (button_height + gap), bell_width,
+                button_height), bell_labels[index], index == bell_chosen) {
+            Ask(PRACTICE_SETTINGS_BELL, bell_values[index])
+        }
+    }
+    bell_rows := (7 + bell_columns - 1) / bell_columns
+    y.* += Scale(26) + bell_rows * button_height + (bell_rows - 1) * gap + Scale(12)
+}
+
+// ---- Background music ----------------------------------------------------------------
+
+AttributionHeight :: (width: s32) -> s32 {
+    if width <= 0 {
+        return 0
+    }
+    return ParagraphHeight(Locale("meditation_music_attribution"), width, SETTINGS_TEXT_12, 0)
+}
+
+MusicHeight :: (width: s32) -> s32 {
+    height := Scale(90)
+    if settings.music_selection == 0 {
+        return height
+    }
+    if settings.music_installed {
+        height += Scale(60)
+    }
+    if settings.music_built_in && (!settings.music_installed || settings.music_redownload) {
+        height += Scale(60)
+    }
+    if settings.music_show_status {
+        height += ifx settings.music_downloading then Scale(50) else Scale(34)
+    }
+    return height + AttributionHeight(width) + Scale(10)
+}
+
+// The download's bar, bevelled like a well with the accent filling it.
+MusicProgress :: (x: s32, y: s32, width: s32) {
+    if width <= 0 {
+        return
+    }
+    bar_height := Scale(10)
+    fill: s32 = 0
+    if settings.music_total > 0 {
+        fill = cast(s32)(settings.music_bytes * cast(s64)width / settings.music_total)
+    }
+    if fill < 0 {
+        fill = 0
+    }
+    if fill > width {
+        fill = width
+    }
+    background := settings.canvas_color
+    Box(settings.session, BoxProps.{.bounds = Bounds(x, y, width, bar_height),
+            .fill = DarkenColor(background, 28)})
+    dark := DarkenColor(background, 55)
+    light := LightenColor(background, 35)
+    left := cast(float32)x
+    top := cast(float32)y
+    right := cast(float32)(x + width - 1)
+    bottom := cast(float32)(y + bar_height - 1)
+    Line(settings.session, LineProps.{.start = Vector2.{left, top}, .end = Vector2.{right, top},
+            .color = light})
+    Line(settings.session, LineProps.{.start = Vector2.{left, top}, .end = Vector2.{left, bottom},
+            .color = light})
+    Line(settings.session, LineProps.{.start = Vector2.{left, bottom}, .end = Vector2.{right, bottom},
+            .color = dark})
+    Line(settings.session, LineProps.{.start = Vector2.{right, top}, .end = Vector2.{right, bottom},
+            .color = dark})
+    if fill > 0 {
+        inner := fill - Scale(4)
+        if inner < Scale(2) {
+            inner = Scale(2)
+        }
+        Box(settings.session, BoxProps.{.bounds = Bounds(x + Scale(2), y + Scale(2), inner,
+                    bar_height - Scale(4)), .fill = settings.accent_color})
+    }
+}
+
+FittedButton :: (label: string, x: s32, y: s32, width: s32, accent: bool) -> bool {
+    button_width := Width(label, settings.font) + Scale(24)
+    if button_width > width {
+        button_width = width
+    }
+    return Button(settings.session, ButtonProps.{.bounds = Bounds(x, y, button_width, Scale(48)),
+            .label = label,
+            .tone = cast(ButtonTone)(ifx accent then ButtonToneAccent else ButtonToneNeutral),
+            .emphasis = cast(ButtonEmphasis)(ifx accent then ButtonEmphasisFilled else ButtonEmphasisSoft)}) != 0
+}
+
+// The track that plays during the practice, with Test once it is on this
+// device, Download for a built-in track that is not, and how a download goes.
+Music :: (x: s32, width: s32, y: *s32) {
+    Label(Locale(ifx settings.practice == EXERCISE_SUN_SALUTATION then
+            "sun_salutation_music_track_label" else "practice_background_music_label"), x, y.*)
+    count := settings.music_count
+    if count > SETTINGS_MUSIC_TRACK_MAX {
+        count = SETTINGS_MUSIC_TRACK_MAX
+    }
+    options: [SETTINGS_MUSIC_TRACK_MAX + 1]DropdownOption
+    options[0] = DropdownOption.{.label = Locale("audio_music_none_option")}
+    for index: cast(s32)0..count - 1 {
+        options[index + 1] = DropdownOption.{.label = ReadPracticeMusicTrackHost(index).label}
+    }
+    selection := settings.music_selection
+    if selection < 0 || selection > count {
+        selection = 0
+    }
+    picked := Dropdown(settings.session, DropdownProps.{.id = 451 + settings.practice,
+            .bounds = Bounds(x, y.* + Scale(26), width, Scale(48)), .selected_index = selection},
+        options[:count + 1])
+    if picked.changed {
+        Ask(PRACTICE_SETTINGS_MUSIC, picked.selected_index)
+    }
+    y.* += Scale(90)
+    if selection == 0 {
+        return
+    }
+    if settings.music_installed {
+        if FittedButton(Locale(ifx settings.music_playing then "meditation_music_stop_test_button"
+                    else "meditation_music_test_button"), x, y.*, width, false) {
+            Ask(PRACTICE_SETTINGS_MUSIC_TEST, 0)
+        }
+        y.* += Scale(60)
+    }
+    // The download only brings the built-in tracks.
+    if settings.music_built_in && (!settings.music_installed || settings.music_redownload) {
+        if FittedButton(Locale(ifx settings.music_installed then "meditation_music_redownload_button"
+                    else "meditation_music_download_button"), x, y.*, width, true) {
+            Ask(PRACTICE_SETTINGS_MUSIC_DOWNLOAD, 0)
+        }
+        y.* += Scale(60)
+    }
+    if settings.music_show_status {
+        Label(settings.music_status, x, y.*)
+        if settings.music_downloading {
+            y.* += Scale(28)
+            MusicProgress(x, y.*, width)
+            y.* += Scale(22)
+        } else {
+            y.* += Scale(34)
+        }
+    }
+    height := AttributionHeight(width)
+    Text(settings.session, TextProps.{.bounds = Bounds(x, y.*, width, height),
+            .text = Locale("meditation_music_attribution"), .font = SETTINGS_TEXT_12,
+            .wrap = cast(TextWrap)TextWrapAuto})
+    y.* += height + Scale(10)
+}
+
+// ---- Voice narration ------------------------------------------------------------------
+
+NarrationStatusHeight :: (width: s32) -> s32 {
+    if settings.narration_status.count == 0 {
+        return 0
+    }
+    return ParagraphHeight(settings.narration_status, width, settings.font, Scale(3)) + Scale(12)
+}
+
+NarrationHeight :: (width: s32) -> s32 {
+    height := Scale(36 + 56)
+    if settings.narration_enabled {
+        height += Scale(44 + 16) + NarrationStatusHeight(width)
+        if settings.narration_voices {
+            height += Scale(42 + 12)
+        }
+    }
+    return height
+}
+
+// The languages the voice is recorded in. Choosing one makes narration speak
+// it, downloading it if needed; a row's icon downloads, stops or removes it.
+NarrationLanguages :: (x: s32, width: s32, y: *s32) {
+    count := settings.narration_count
+    if count > SETTINGS_LANGUAGE_MAX {
+        count = SETTINGS_LANGUAGE_MAX
+    }
+    if count <= 0 {
+        return
+    }
+    options: [SETTINGS_LANGUAGE_MAX]DropdownOption
+    for index: cast(s32)0..count - 1 {
+        language := ReadPracticeNarrationHost(index)
+        state := language.state
+        options[index] = DropdownOption.{.key = cast(u64)(language.rank + 1), .label = language.label,
+            .action_shape = ifx state == 2 then NARRATION_REMOVE_ICON else
+            ifx state == 1 then NARRATION_CANCEL_ICON else NARRATION_DOWNLOAD_ICON,
+            .action_label = Locale(ifx state == 2 then "practice_download_remove" else
+                ifx state == 1 then "cancel_button" else "practice_narration_download")}
+    }
+    picked := Dropdown(settings.session, DropdownProps.{
+            .key = KeyHash("inbe/practice/customize/narration-language") + cast(u64)settings.practice,
+            .bounds = Bounds(x, y.*, width, Scale(44)), .selected_index = settings.narration_selected,
+            .placeholder = Locale("language_label")}, options[0:count])
+    if picked.action_index >= 0 && picked.action_index < count {
+        Ask(PRACTICE_SETTINGS_LANGUAGE_ACTION, picked.action_index)
+    }
+    if picked.changed && picked.selected_index >= 0 && picked.selected_index < count {
+        Ask(PRACTICE_SETTINGS_LANGUAGE, picked.selected_index)
+    }
+    y.* += Scale(44 + 16)
+    if settings.narration_status.count > 0 {
+        height := ParagraphHeight(settings.narration_status, width, settings.font, Scale(3))
+        Text(settings.session, TextProps.{.bounds = Bounds(x, y.*, width, height),
+                .text = settings.narration_status, .font = settings.font,
+                .wrap = cast(TextWrap)TextWrapAuto})
+        y.* += height + Scale(12)
+    }
+}
+
+// Narration on or off, with the voice when it is recorded in two, and its
+// language.
+Narration :: (x: s32, width: s32, y: *s32) {
+    Text(settings.session, TextProps.{.bounds = Bounds(x, y.*, width, Scale(28)),
+            .text = Locale("voice_narration_label")})
+    y.* += Scale(36)
+    toggled := Toggle(settings.session, ToggleProps.{.id = 15422, .bounds = Bounds(x, y.*, width, Scale(44)),
+            .value = settings.narration_enabled, .off_label = Locale("toggle_off"),
+            .on_label = Locale("toggle_on")})
+    if toggled.changed {
+        Ask(PRACTICE_SETTINGS_NARRATION, ifx toggled.value then 1 else 0)
+    }
+    y.* += Scale(56)
+    if !settings.narration_enabled {
+        return
+    }
+    if settings.narration_voices {
+        voices: [2]SegmentOption = .[SegmentOption.{.label = Locale("practice_voice_female")},
+            SegmentOption.{.label = Locale("practice_voice_male")}]
+        voice := SegmentedControl(settings.session, SegmentedControlProps.{
+                .key = KeyHash("inbe/practice/customize/voice") + cast(u64)settings.practice,
+                .bounds = Bounds(x, y.*, width, Scale(42)), .height = Scale(42),
+                .selected_index = ifx settings.narration_male then 1 else 0, .has_selection = true},
+            voices[:])
+        if voice.changed {
+            Ask(PRACTICE_SETTINGS_VOICE, voice.selected_index)
+        }
+        y.* += Scale(42 + 12)
+    }
+    NarrationLanguages(x, width, y)
+}
+
+// ---- The page ---------------------------------------------------------------------------
+
+ContentHeight :: (width: s32) -> s32 {
+    if settings.practice == EXERCISE_ASTRAL_PROJECTION {
+        return Scale(320) + NarrationHeight(width)
+    }
+    return DurationHeight(width) + MusicHeight(width) + settings.bottom + Scale(24)
+}
+
+ScrollKey :: () -> u64 {
+    if settings.practice == EXERCISE_ASTRAL_PROJECTION {
+        return KeyHash("astral/customize/scroll")
+    }
+    return KeyHash("inbe/practices/meditation/meditation_config/scroll/1")
+}
+
+Page :: (x: s32, width: s32, y: s32) {
+    if settings.practice == EXERCISE_ASTRAL_PROJECTION {
+        Music(x, width, *y)
+        y += Scale(12)
+        Narration(x, width, *y)
+        return
+    }
+    Duration(x, width, *y)
+    Music(x, width, *y)
+}
+
+Settings :: () {
+    options: [1]DropdownOption
+    bar := TitleBar(settings.session, TitleBarProps.{.title = Locale("practice_configure_button"),
+            .height = settings.title_height, .has_leading_action = true,
+            .leading_label = Locale("back_button")}, options[0:0])
+    if bar.clicked_leading {
+        Ask(PRACTICE_SETTINGS_BACK, 0)
+        return
+    }
+    padding := PageSidePaddingFor(settings.view_width)
+    if settings.practice == EXERCISE_ASTRAL_PROJECTION {
+        padding = Scale(16)
+    }
+    max_width := Scale(SETTINGS_CONTENT_MAX_WIDTH)
+    if max_width > settings.view_width - padding * 2 {
+        max_width = settings.view_width - padding * 2
+    }
+    if max_width < Scale(320) {
+        max_width = Scale(320)
+    }
+    x := padding
+    width := settings.view_width - padding * 2
+    if width > max_width {
+        x += (width - max_width) / 2
+        width = max_width
+    }
+    scrolled := Scroll(settings.session, ScrollProps.{.key = ScrollKey(),
+            .bounds = Bounds(0, settings.scroll_y, settings.view_width, settings.scroll_height),
+            .content_height = ContentHeight(width), .scroll_offset = settings.scroll})
+    settings.scroll = scrolled.scroll_offset
+    if scrolled.opened {
+        Page(x, width, cast(s32)scrolled.content.y)
+        unused End(settings.session)
+    }
+}
+
+PracticeSettingsView :: (message: PracticeMessage) -> PracticeMessage {
+    settings = ReadPracticeSettingsHost()
+    settings.action = PRACTICE_SETTINGS_NONE
+    settings.value = 0
+    Settings()
+    WritePracticeSettingsHost(settings)
+    message.succeeded = true
+    return message
+}

@@ -1,0 +1,181 @@
+// The manuals of Wim Hof, Meditation, Patterns and Astral Projection, which
+// Practices draws (apps/practice/manual_view.zi). The host gives the page,
+// the theme's guide colours and the settings the pages show, keeps the Wim
+// Hof breathing preview running, and saves a speed changed on the page; each
+// practice's manual closes or starts its practice from what the page asked.
+c3 :: #system_library "c";
+IsKeyPressed :: (key: s32) -> bool #foreign c3;
+app_content_top_reserved :: (app: *InnerBreeze) -> s32 #foreign c3;
+app_content_bottom_reserved :: (app: *InnerBreeze) -> s32 #foreign c3;
+app_block_current_click :: (app: *InnerBreeze) #foreign c3;
+#import "session"
+#import "geometry"
+#import "drawing_props"
+#import "style"
+#import "surface"
+#import "byte_text_linux"
+#import "bundle_host"
+#import "hosted_values"
+#import "widget_host"
+#import, file "../app/app_types.zi";
+#import, file "../app/app_settings.zi";
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/modal_rules.zi";
+#import, file "../app/route_types.zi";
+#import, file "../app/widgets.zi";
+#import, file "../core/breath_timing.zi";
+#import, file "../core/types.zi";
+#import, file "../cells/practice_types.zi";
+#import, file "../cells/practice_ui_types.zi";
+#import, file "../cells/app_codec.zi";
+#import, file "../cells/hosted_assets.zi";
+#import, file "../cells/module_host.zi";
+
+using AppThemeMode;
+using ExerciseType;
+using HostValueKind;
+using ModalType;
+
+practice_manual_frame: PracticeManualFrame;
+practice_manual_frame_codec: WidgetPracticeManualFrameCodec;
+
+PracticeManualCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "manual_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadPracticeManualHost" && count == 0 {
+        result.* = WidgetEncodePracticeManualFrame(practice_manual_frame, *practice_manual_frame_codec)
+        return 1
+    }
+    if name == "WritePracticeManualHost" && count == 1 && WidgetValidPracticeManualFrame(arguments[0]) {
+        observed := WidgetDecodePracticeManualFrame(arguments[0], *practice_manual_frame_codec)
+        practice_manual_frame.page = observed.page
+        practice_manual_frame.scroll = observed.scroll
+        practice_manual_frame.swipe = observed.swipe
+        practice_manual_frame.action = observed.action
+        practice_manual_frame.speed = observed.speed
+        practice_manual_frame.speed_changed = observed.speed_changed
+        practice_manual_frame.claim_pointer = observed.claim_pointer
+        practice_manual_frame.release_pointer = observed.release_pointer
+        practice_manual_frame.block_click = observed.block_click
+        return 1
+    }
+    if name == "ManualLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
+}
+
+// The Wim Hof breathing page's preview: a breath in the page's settings,
+// stepped each frame and started again whenever it leaves the breathing
+// phase. Returns the radius its circle has now.
+practice_manual_breath_radius :: (app: *InnerBreeze, width: s32) -> s32 {
+    height := AppScale(238)
+    speed := app.breathing.speed_level
+    max_breaths := BreathDigitsRead(app.breathing.maxbreaths[:])
+    apply_settings(*app.settings_preview, speed, app.breathing.max_rounds, max_breaths,
+        app.breathing.pause_seconds)
+    app.settings_preview = BreathPreviewBounds(app.settings_preview, width, height,
+        AppScale(60), AppScale(120), AppScale(24), AppScale(10))
+    app.settings_preview.progressive_speed = 0
+    app.settings_preview = BreathSessionStep(app.settings_preview)
+    if app.settings_preview.phase != BreathPhaseBreathe {
+        reset_settings_preview(app)
+        apply_settings(*app.settings_preview, speed, app.breathing.max_rounds, max_breaths,
+            app.breathing.pause_seconds)
+        app.settings_preview = BreathPreviewBounds(app.settings_preview, width, height,
+            AppScale(60), AppScale(120), AppScale(24), AppScale(10))
+        app.settings_preview.progressive_speed = 0
+    }
+    radius := cast(s32)(BreathDrawRadius(app.settings_preview) * 0.72)
+    if radius < AppScale(24) {
+        radius = AppScale(24)
+    }
+    return radius
+}
+
+practice_manual_frame_for :: (app: *InnerBreeze) -> PracticeManualFrame {
+    integrated := app.breathing.screen == ScreenStart && app.modal.type != cast(ModalType)ModalPracticeManual
+    title_height := ifx integrated then app_content_top_reserved(app) else AppTitleBarHeight()
+    if app_nav_desktop_rail_enabled(app) != 0 {
+        title_height = 0
+    }
+    face := GuideFace(2)
+    frame := PracticeManualFrame.{.session = app.ui.session, .scale = MetricsScale(),
+        .view_width = app.ui.view_width, .view_height = app.ui.view_height,
+        .font = AppFontSize(), .small_font = AppSmallFontSize(), .title_height = title_height,
+        .bottom = ifx integrated then app_content_bottom_reserved(app) else 0,
+        .guide_background = ColorFromPacked(face.value.background),
+        .guide_foreground = ColorFromPacked(face.value.foreground),
+        .guide_border = ColorFromPacked(face.value.border),
+        .practice = app.exercise_type,
+        .dark = app.theme_mode == APP_THEME_DARK ||
+        (app.theme_mode != APP_THEME_LIGHT && app.dark_mode != 0),
+        .page = app.tutorial_step, .scroll = app.manual_scroll, .swipe = app.manual_swipe,
+        .swipe_frame = app.ui.manual_swipe_frame, .previous = app.ui.manual_previous,
+        .next = app.ui.manual_next, .finish = app.ui.manual_finish, .close = app.ui.manual_close,
+        .speed = app.breathing.speed_level, .speed_min = SETTINGS_SPEED_MIN,
+        .speed_max = SETTINGS_SPEED_MAX, .hold_progress = app.breathing.frame % 60,
+        .preset = app.patterns.preset, .inhale = app.patterns.custom[0],
+        .hold_in = app.patterns.custom[1], .exhale = app.patterns.custom[2],
+        .hold_out = app.patterns.custom[3], .duration_minutes = app.patterns.duration_minutes}
+    if app.exercise_type == EXERCISE_WIM_HOF && app.tutorial_step == 1 {
+        max_width := cast(s32)(cast(float32)app.ui.view_width * 0.96)
+        if max_width > AppScale(640) {
+            max_width = AppScale(640)
+        }
+        if max_width < AppScale(280) {
+            max_width = AppScale(280)
+        }
+        available := app.ui.view_width - AppScale(24) * 2
+        frame.breath_radius = practice_manual_breath_radius(app,
+            ifx max_width > available then available else max_width)
+    }
+    return frame
+}
+
+// Has Practices draw the chosen practice's manual. Returns what the manual
+// asked for, PRACTICE_MANUAL_*, for the practice to close it or start.
+PracticeManualDraw :: (app: *InnerBreeze) -> s32 {
+    if app == null || !SessionValid(app.ui.session) {
+        return PRACTICE_MANUAL_NONE
+    }
+    practice_manual_frame = practice_manual_frame_for(app)
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    CellsUiBegin(PracticeManualCall, cast(*void)app)
+    drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_MANUAL_VIEW})
+    CellsUiEnd()
+    WidgetHostEnd()
+    frame := practice_manual_frame
+    if !drawn.succeeded {
+        return PRACTICE_MANUAL_NONE
+    }
+    app.manual_swipe = frame.swipe
+    if frame.claim_pointer { app.ui.manual_swipe_owner = true }
+    if frame.release_pointer { app.ui.manual_swipe_owner = false }
+    if frame.block_click {
+        app_block_current_click(app)
+    }
+    app.tutorial_step = frame.page
+    app.manual_scroll = frame.scroll
+    if frame.speed_changed && frame.speed >= SETTINGS_SPEED_MIN && frame.speed <= SETTINGS_SPEED_MAX {
+        max_breaths := BreathDigitsRead(app.breathing.maxbreaths[:])
+        apply_settings(*app.breathing, frame.speed, app.breathing.max_rounds, max_breaths,
+            app.breathing.pause_seconds)
+        apply_settings(*app.settings_preview, frame.speed, app.breathing.max_rounds, max_breaths,
+            app.breathing.pause_seconds)
+        app.settings_preview.progressive_speed = 0
+        app.settings_dirty = 1
+    }
+    return frame.action
+}

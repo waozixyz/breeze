@@ -7,11 +7,6 @@ KEY_RIGHT :: 262;
 KEY_ENTER :: 257;
 KEY_BACK :: 259;
 KEY_ESCAPE :: 256;
-clampi :: (value: s32, min_value: s32, max_value: s32) -> s32 {
-    if value < min_value { return min_value }
-    if value > max_value { return max_value }
-    return value
-}
 app_close_modal :: (app: *InnerBreeze) #foreign c3;
 app_switch_screen :: (app: *InnerBreeze, screen: s32) #foreign c3;
 app_switch_route :: (app: *InnerBreeze, route: AppRoute) #foreign c3;
@@ -35,13 +30,12 @@ storage_has_sync_account :: () -> s32 #foreign c3;
 #import, file "../app/app_types.zi";
 #import, file "../app/app_nav_state.zi";
 #import, file "../app/app_settings.zi";
-#import, file "practice_carousel.zi";
 #import, file "manual_screen.zi";
 #import, file "manual_dispatch.zi";
 #import, file "practice_manual_layout.zi";
 #import, file "../practices/practice_registry.zi";
 #import, file "../practices/practice_downloads.zi";
-#import, file "../../apps/practice/downloads_view.zi";
+#import, file "../practices/practice_offer.zi";
 #import, file "../practices/patterns/patterns_session_rules.zi";
 #import, file "practice_subscreen_layout.zi";
 #import "box_props"
@@ -82,6 +76,16 @@ storage_has_sync_account :: () -> s32 #foreign c3;
 #import, file "../app/widgets.zi";
 #import, file "../app/account_activity_view.zi";
 #import, file "../app/account_activity.zi";
+#import "bundle_host"
+#import "hosted_values"
+#import "widget_host"
+#import, file "../cells/practice_types.zi";
+#import, file "../cells/practice_ui_types.zi";
+#import, file "../cells/app_codec.zi";
+#import, file "../cells/hosted_assets.zi";
+#import, file "../cells/module_host.zi";
+
+using HostValueKind;
 
 
 using AppThemeMode;
@@ -98,24 +102,10 @@ using ButtonTone;
 using ControlSize;
 using ButtonEmphasis;
 
-PracticeScreenConstants :: enum {
-    PRACTICE_CATEGORY_TAB_H :: 40
-    PRACTICE_CATEGORY_TOAST_TICKS :: 120
-    PRACTICE_CONFIG_TAB_LIST :: -1
-}
-
-PracticeLeaveConfigFn :: #type (app: *InnerBreeze) -> ();
-
-
 empty_options_storage: [1] DropdownOption;
-empty_toolbar_actions_storage: [1] ToolbarAction;
 
 empty_title_options :: () -> []DropdownOption {
     return empty_options_storage[:0]
-}
-
-no_toolbar_actions :: () -> []ToolbarAction {
-    return empty_toolbar_actions_storage[:0]
 }
 
 #program_export
@@ -165,6 +155,14 @@ practice_screen_handle_config_title :: (app: *InnerBreeze, title: string, modal_
     if !title_result.clicked_leading {
         return 0
     }
+    unused has_leave_config
+    practice_screen_leave_config(app, modal_type)
+    return 1
+}
+
+// Back on a practice's Customize: the page closes, saving what changed.
+#program_export
+practice_screen_leave_config :: (app: *InnerBreeze, modal_type: s32) {
     app_block_current_click(app)
     if app.modal.active != 0 && cast(s32)app.modal.type == modal_type {
         app_close_modal(app)
@@ -176,12 +174,10 @@ practice_screen_handle_config_title :: (app: *InnerBreeze, title: string, modal_
         if active != null && active.leave_config != null {
             active.leave_config(app)
         }
-        unused has_leave_config
         app.settings_scroll = 0
         app.practice_tab = PRACTICE_TAB_PLAY
         app_switch_screen(app, ScreenStart)
     }
-    return 1
 }
 
 practice_card_banner_asset_path :: (app: *InnerBreeze, exercise: s32) -> string {
@@ -210,10 +206,6 @@ practice_card_banner_asset_path :: (app: *InnerBreeze, exercise: s32) -> string 
         return ifx dark then "assets/practices/workout/banner-dark.png" else "assets/practices/workout/banner-light.png"
     }
     return ""
-}
-
-sun_salutation_default_repetitions :: () -> s32 {
-    return 6
 }
 
 practice_banner_probe_count: s32;
@@ -289,14 +281,12 @@ practice_kind_label :: (kind: s32) -> string {
 }
 
 // One tab for each kind with a practice to list, such as Martial arts only
-// where Tai Chi can be bought. Choosing a tab shows the practice it last
-// showed, or its first.
-practice_screen_draw_home_tabs :: (app: *InnerBreeze, bounds: Rectangle) {
-    tabs: [PRACTICE_HOME_KIND_COUNT]Tab
-    tab_kinds: [PRACTICE_HOME_KIND_COUNT]s32
-    tab_slots: [PRACTICE_HOME_KIND_COUNT]s32
-    tab_count: s32 = 0
-    selected_index: s32 = 0
+// where Tai Chi can be bought: each tab's kind, and its kind's place.
+practice_home_tab_kinds: [PRACTICE_HOME_KIND_COUNT]s32;
+practice_home_tab_slots: [PRACTICE_HOME_KIND_COUNT]s32;
+
+practice_home_tabs :: (app: *InnerBreeze, selected: *s32) -> s32 {
+    count: s32 = 0
     current := practice_home_kind_of(app.exercise_type)
     for slot: cast(s32)0..PRACTICE_HOME_KIND_COUNT - 1 {
         kind := practice_home_kinds[slot]
@@ -305,34 +295,23 @@ practice_screen_draw_home_tabs :: (app: *InnerBreeze, bounds: Rectangle) {
             continue
         }
         if kind == current {
-            selected_index = tab_count
+            selected.* = count
             practice_home_kind_choice[slot] = practice_clamp_id(app.exercise_type)
         }
-        tab_kinds[tab_count] = kind
-        tab_slots[tab_count] = slot
-        tabs[tab_count] = Tab.{.key = cast(u64)(17480 + slot), .label = practice_kind_label(kind),
-            .disabled = app.modal.active != 0}
-        tab_count += 1
+        practice_home_tab_kinds[count] = kind
+        practice_home_tab_slots[count] = slot
+        count += 1
     }
-    if tab_count == 0 {
+    return count
+}
+
+// Choosing a tab shows the practice it last showed, or its first.
+practice_home_choose_tab :: (app: *InnerBreeze, tab: s32, count: s32) {
+    if tab < 0 || tab >= count {
         return
     }
-    Box(app.ui.session, BoxProps.{.bounds = bounds, .fill = StyleTokenColor("canvas")})
-    bar := TabBar(app.ui.session, TabBarProps.{.id = 17470,
-            .bounds = Rectangle.{bounds.x + cast(float32)AppScale(12), bounds.y + cast(float32)AppScale(4),
-                bounds.width - cast(float32)AppScale(24), bounds.height - cast(float32)AppScale(8)},
-            .selected_index = selected_index, .min_tab_width = AppScale(72),
-            .max_tab_width = AppScale(220), .content_sized = true,
-            .scroll_offset = practice_home_tab_scroll, .scale = MetricsScale(),
-            .focus_selected = current != practice_home_tab_shown}, tabs[:tab_count])
-    practice_home_tab_scroll = bar.scroll_offset
-    practice_home_tab_shown = current
-    if app.modal.active != 0 || bar.selected_index < 0 || bar.selected_index >= tab_count ||
-    bar.selected_index == selected_index {
-        return
-    }
-    kind := tab_kinds[bar.selected_index]
-    choice := practice_home_kind_choice[tab_slots[bar.selected_index]]
+    kind := practice_home_tab_kinds[tab]
+    choice := practice_home_kind_choice[practice_home_tab_slots[tab]]
     if choice < 0 || practice_home_kind_of(choice) != kind || !practice_home_listed(choice) {
         ids: [EXERCISE_COUNT]s32
         unused practice_kind_ids(kind, ids[:])
@@ -366,26 +345,10 @@ practice_next_ordered :: (app: *InnerBreeze, dir: s32) -> s32 {
     return ids[(at + dir + total * 2) % total]
 }
 
-practice_home_count :: (app: *InnerBreeze) -> s32 {
-    unused app
-    ids: [EXERCISE_COUNT]s32
-    return practice_home_ids(ids[:])
-}
-
-practice_ordered_index :: (app: *InnerBreeze, exercise: s32) -> s32 {
-    unused app
-    ids: [EXERCISE_COUNT]s32
-    total := practice_home_ids(ids[:])
-    for index: cast(s32)0..total - 1 {
-        if ids[index] == exercise {
-            return index
-        }
-    }
-    return 0
-}
-
 practice_home_carousel_controls_height :: (app: *InnerBreeze) -> s32 {
-    return ifx (practice_home_count(app) > 1) then (AppScale(48)) else (0)
+    unused app
+    ids: [EXERCISE_COUNT]s32
+    return ifx practice_home_ids(ids[:]) > 1 then AppScale(48) else 0
 }
 
 practice_select_home_card :: (app: *InnerBreeze, exercise: s32) {
@@ -407,10 +370,6 @@ practice_select_home_card :: (app: *InnerBreeze, exercise: s32) {
     app.practice_home_scroll = 0
     app.tutorial_step = 0
     app_switch_route(app, route)
-}
-
-practice_home_action_gap :: (content_w: s32) -> s32 {
-    return ifx (content_w < AppScale(340)) then (AppScale(8)) else (AppScale(12))
 }
 
 practice_home_title :: (exercise: s32) -> string {
@@ -459,132 +418,98 @@ practice_home_subtitle :: (exercise: s32) -> string {
     return ""
 }
 
-practice_home_meditation_minutes :: (app: *InnerBreeze) -> s32 {
-    mode := ifx (app != null) then (app.meditation.duration_mode) else (1)
-
-    if mode == 0 {
-        return 5
-    }
-    if mode == 1 {
-        return 15
-    }
-    if mode == 2 {
-        return 30
-    }
-    if mode == 3 {
-        return 60
-    }
-    if mode == 4 {
-        return 120
-    }
-    return ifx (app != null) then (clampi(app.meditation.custom_minutes, 1, 240)) else (15)
-}
-
-PracticeHomeTitleLayout :: struct {
-    title: TextProps
-    subtitle: TextProps
-    height: s32
-}
-
-practice_home_title_layout :: (app: *InnerBreeze, x: s32, w: s32) -> PracticeHomeTitleLayout {
-    layout: PracticeHomeTitleLayout
-    title := practice_home_title(app.exercise_type)
-    subtitle := practice_home_subtitle(app.exercise_type)
-    preferred_font := ifx w >= AppScale(600) then AppScale(42) else AppScale(34)
-    max_text_w := w - AppScale(36)
-    if max_text_w < AppScale(220) {
-        max_text_w = w
-    }
-    padding := AppScale(4)
-    title_font := AppFitFontSize(title, max_text_w, preferred_font, AppFontSize() + AppScale(4))
-    layout.title = TextProps.{
-        .text = title,
-        .bounds = Rectangle.{cast(float32)x, 0, cast(float32)w, 0},
-        .font = title_font,
-        .align = cast(TextAlign)TextAlignCenter,
-        .vertical_align = cast(TextAlign)TextAlignCenter,
-        .wrap = cast(TextWrap)TextWrapAuto
-    }
-    // Keep the original centered heading, but measure its actual glyph height
-    // and give accents and descenders room inside explicit padded bounds.
-    title_plan := PrepareText(layout.title, TextFaceFor(layout.title, DefaultTextFace()))
-    title_h := cast(s32)title_plan.bounds.height + padding * 2
-    layout.title.bounds.height = cast(float32)title_h
-    layout.height = title_h
-    if subtitle.count > 0 {
-        subtitle_font := AppFitFontSize(subtitle, max_text_w,
-            AppFontSize() + AppScale(1), AppScale(Text14))
-        layout.subtitle = TextProps.{
-            .text = subtitle,
-            .bounds = Rectangle.{cast(float32)x, cast(float32)(title_h + AppScale(6)), cast(float32)w, 0},
-            .font = subtitle_font,
-            .align = cast(TextAlign)TextAlignCenter,
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(TextWrap)TextWrapAuto
-        }
-        subtitle_plan := PrepareText(layout.subtitle, TextFaceFor(layout.subtitle, DefaultTextFace()))
-        subtitle_h := cast(s32)subtitle_plan.bounds.height + padding * 2
-        layout.subtitle.bounds.height = cast(float32)subtitle_h
-        layout.height += AppScale(6) + subtitle_h
-    }
-    return layout
-}
-
-practice_home_action_row_widths :: (content_w: s32, manual_w: *s32, config_w: *s32) -> s32 {
-    font := AppFontSize()
-    pad := AppScale(20)
-    gap := practice_home_action_gap(content_w)
-    manual_min: s32 = AppTextWidth(LocaleText("practice_manual_button"), font) + pad * 2
-    config_min: s32 = AppTextWidth(LocaleText("practice_configure_button"), font) + pad * 2
-    half_w: s32 = 0
-    available_w: s32 = 0
-
-    if content_w < manual_min + config_min + gap {
-        return 0
-    }
-    available_w = content_w - gap
-    half_w = available_w / 2
-    if half_w >= manual_min && available_w - half_w >= config_min {
-        manual_w.* = half_w
-        config_w.* = available_w - half_w
-        return 1
-    }
-    manual_w.* = manual_min
-    config_w.* = available_w - manual_w.*
-    if config_w.* < config_min {
-        config_w.* = config_min
-        manual_w.* = available_w - config_w.*
-    }
-    return ifx (manual_w.* >= manual_min && config_w.* >= config_min) then (1) else (0)
-}
-
 // Whether the practice home has a settings button: a practice whose Start
 // opens its settings has none.
 practice_home_has_config :: (practice: *PracticeDefinition) -> bool {
     return practice != null && practice.draw_config != null && !practice.config_on_start
 }
 
-practice_home_actions_share_row :: (practice: *PracticeDefinition, content_w: s32) -> s32 {
-    manual_w: s32 = 0
-    config_w: s32 = 0
-    return ifx (practice != null && practice.draw_manual != null && practice_home_has_config(practice) && practice_home_action_row_widths(content_w, *manual_w, *config_w) != 0) then (1) else (0)
+// ---- Practice's home, which Practice draws -------------------------------------
+
+practice_home_frame: PracticeHomeFrame;
+practice_home_frame_codec: WidgetPracticeHomeFrameCodec;
+practice_home_tab_codec: WidgetPracticeHomeTabCodec;
+
+PracticeHomeCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    if TextFromCString(module) != "practice_home_view" {
+        return WidgetHostCall(context, module, function, arguments, count, result)
+    }
+    name := TextFromCString(function)
+    if name == "ReadPracticeHomeHost" && count == 0 {
+        result.* = WidgetEncodePracticeHomeFrame(practice_home_frame, *practice_home_frame_codec)
+        return 1
+    }
+    if name == "WritePracticeHomeHost" && count == 1 && WidgetValidPracticeHomeFrame(arguments[0]) {
+        observed := WidgetDecodePracticeHomeFrame(arguments[0], *practice_home_frame_codec)
+        practice_home_frame.swipe = observed.swipe
+        practice_home_frame.tab_scroll = observed.tab_scroll
+        practice_home_frame.action = observed.action
+        practice_home_frame.value = observed.value
+        practice_home_frame.card = observed.card
+        practice_home_frame.start = observed.start
+        practice_home_frame.manual = observed.manual
+        practice_home_frame.config = observed.config
+        practice_home_frame.claim_pointer = observed.claim_pointer
+        practice_home_frame.release_pointer = observed.release_pointer
+        practice_home_frame.block_click = observed.block_click
+        return 1
+    }
+    if name == "ReadPracticeHomeTabHost" && count == 1 &&
+    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
+        index := cast(s32)arguments[0].integer
+        tab: PracticeHomeTab
+        if index >= 0 && index < practice_home_frame.tab_count {
+            tab = PracticeHomeTab.{.label = practice_kind_label(practice_home_tab_kinds[index]),
+                .slot = practice_home_tab_slots[index]}
+        }
+        result.* = WidgetEncodePracticeHomeTab(tab, *practice_home_tab_codec)
+        return 1
+    }
+    if name == "PracticeLocaleHost" && count == 1 &&
+    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        text := LocaleText(key)
+        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+            .data = HostTextData(text), .length = cast(usize)text.count}
+        return 1
+    }
+    return 0
 }
 
-practice_draw_home_title :: (app: *InnerBreeze, x: s32, y: s32, w: s32) {
-    if app == null {
-        return
+practice_home_frame_for :: (app: *InnerBreeze, ids: []s32, listed: s32) -> PracticeHomeFrame {
+    practice := practice_get(app.exercise_type)
+    frame := PracticeHomeFrame.{.session = app.ui.session, .scale = MetricsScale(),
+        .view_width = app.ui.view_width, .view_height = app.ui.view_height,
+        .top = app_content_top_reserved(app), .bottom = app_content_bottom_reserved(app),
+        .left = app_content_left_reserved(app), .font = AppFontSize(),
+        .small_font = AppSmallFontSize(), .canvas_color = StyleTokenColor("canvas"),
+        .surface_color = StyleTokenColor("surface"), .accent_color = StyleTokenColor("accent"),
+        .modal_active = app.modal.active != 0,
+        // While Lumi's guide is open, the arrow keys and swipes are the
+        // guide's: choosing another practice under it would start it over.
+        .choosing = app.modal.active == 0 && practice_screen_first_run_guide_active(app) == 0,
+        .key_left = IsKeyPressed(KEY_LEFT), .key_right = IsKeyPressed(KEY_RIGHT),
+        .swipe = app.practice_home_swipe, .swipe_frame = app.ui.manual_swipe_frame,
+        .practice = app.exercise_type, .title = practice_home_title(app.exercise_type),
+        .subtitle = practice_home_subtitle(app.exercise_type),
+        .banner = practice_card_banner_asset_path(app, app.exercise_type),
+        .tab_scroll = practice_home_tab_scroll, .listed = listed,
+        .has_manual = practice != null && practice.draw_manual != null,
+        .has_config = practice_home_has_config(practice)}
+    for index: cast(s32)0..listed - 1 {
+        if ids[index] == app.exercise_type {
+            frame.index = index
+        }
     }
-    layout := practice_home_title_layout(app, x, w)
-    layout.title.bounds.y += cast(float32)y
-    title_props: TextProps = layout.title
-    Text(app.ui.session, title_props)
-    if layout.subtitle.text.count > 0 {
-        layout.subtitle.bounds.y += cast(float32)y
-        subtitle_props: TextProps = layout.subtitle
-        Text(app.ui.session, subtitle_props)
-    }
+    frame.tab_count = practice_home_tabs(app, *frame.tab_selected)
+    frame.tab_focus = practice_home_kind_of(app.exercise_type) != practice_home_tab_shown
+    PracticeOfferFill(app, app.exercise_type, *frame)
+    return frame
 }
 
+// Has Practice draw its home and does what was asked there. Returns 1 when
+// the home was drawn.
 practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
     if app == null {
         return 0
@@ -599,224 +524,58 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
             }
         }
     }
-    listed_ids: [EXERCISE_COUNT]s32
-    listed := practice_home_ids(listed_ids[:])
+    ids: [EXERCISE_COUNT]s32
+    listed := practice_home_ids(ids[:])
     if listed == 0 {
         return 0
     }
-
-    practice := practice_get(app.exercise_type)
-    ready := PracticeDownloadReady(app.exercise_type)
-    action := PracticeDownloadAction(app.exercise_type)
-    bottom_reserved := app_content_bottom_reserved(app)
-    left_reserved := app_content_left_reserved(app)
-    content_view_x := left_reserved
-    content_view_w := app.ui.view_width - left_reserved
-    if content_view_w < AppScale(320) {
-        content_view_x = 0
-        content_view_w = app.ui.view_width
-    }
-    content_w := content_view_w - AppScale(80)
-    if content_w > AppScale(940) {
-        content_w = AppScale(940)
-    }
-    if content_w < AppScale(520) {
-        content_w = content_view_w - AppScale(32)
-    }
-    x := content_view_x + (content_view_w - content_w) / 2
-    hero_h := app.ui.view_height - bottom_reserved
-    tabs_h := app_content_top_reserved(app)
-    if hero_h <= tabs_h {
+    practice_home_frame = practice_home_frame_for(app, ids[:], listed)
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    CellsUiBegin(PracticeHomeCall, cast(*void)app)
+    drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_HOME_VIEW})
+    CellsUiEnd()
+    WidgetHostEnd()
+    // The frame's text lives in this frame's buffers; the next frame
+    // replaces it.
+    frame := practice_home_frame
+    if !drawn.succeeded {
         return 0
     }
-    hero := Rectangle.{cast(float32)content_view_x, cast(float32)tabs_h,
-        cast(float32)content_view_w, cast(float32)(hero_h - tabs_h)}
-    button_h := AppScale(48)
-    action_gap := AppScale(14)
-    total_w := content_w
-    if total_w > AppScale(700) {
-        total_w = AppScale(700)
-    }
-    if total_w > content_view_w - AppScale(32) {
-        total_w = content_view_w - AppScale(32)
-    }
-    if total_w < AppScale(360) {
-        total_w = content_view_w - AppScale(24)
-    }
-    secondary_count: s32 = 0
-    if ready && practice != null && practice.draw_manual != null {
-        secondary_count += 1
-    }
-    if ready && practice_home_has_config(practice) {
-        secondary_count += 1
-    }
-    button_count := 1 + secondary_count
-    wide_actions: s32 = ifx (total_w >= AppScale(600)) then (1) else (0)
-    secondary_row: s32 = ifx (secondary_count < 2 || practice_home_actions_share_row(practice, total_w) != 0) then (1) else (0)
-    rows := ifx (wide_actions != 0) then (1) else (1 + (ifx (secondary_row != 0) then ((ifx (secondary_count > 0) then (1) else (0))) else (secondary_count)))
-    bottom_gap: s32 = ifx (bottom_reserved > 0) then (AppScale(28)) else (AppScale(20))
-    actions_h := rows * button_h + (rows - 1) * action_gap
-    button_y := hero_h - bottom_gap - actions_h
-    pager_h := practice_home_carousel_controls_height(app)
-    pager_y := button_y - AppScale(10) - pager_h
-    title_layout := practice_home_title_layout(app, x, content_w)
-    status_h := PracticeCardStatusHeight(app, app.exercise_type, content_w)
-    title_block_h := title_layout.height + status_h + AppScale(28)
-    if title_block_h < AppScale(100) {
-        title_block_h = AppScale(100)
-    }
-    title_y := pager_y - title_block_h
-    if title_y < tabs_h + AppScale(8) {
-        title_y = tabs_h + AppScale(8)
-    }
-    primary_w: s32 = ifx (wide_actions != 0) then ((total_w - action_gap * (button_count - 1)) / button_count) else (total_w)
-    secondary_w: s32 = ifx (wide_actions != 0) then (primary_w) else ((ifx (secondary_row != 0 && secondary_count > 0) then ((total_w - action_gap * (secondary_count - 1)) / secondary_count) else (total_w)))
-    action_x := content_view_x + (content_view_w - total_w) / 2
-    pager_w := ifx (total_w < AppScale(480)) then (total_w) else (AppScale(480))
-    pager_x := content_view_x + (content_view_w - pager_w) / 2
-
-    app.practice_home_bounds_valid = 1
-    app.practice_home_bounds_card = hero
-    app.practice_home_bounds_start = Rectangle.{0 }
-    app.practice_home_bounds_manual = Rectangle.{0 }
-    app.practice_home_bounds_config = Rectangle.{0 }
-
-    swipe_spec := SwipeSpec.{
-        .bounds = hero,
-        .directions = 3,
-        .min_distance = cast(float32)AppScale(48),
-        .axis_bias = 1.4f,
-        .max_duration = 1.2f
-    }
-    swipe := Swipe(swipe_spec, app.practice_home_swipe,
-        app.ui.manual_swipe_frame)
-    app.practice_home_swipe = swipe.gesture
-    if swipe.claim_pointer { app.ui.manual_swipe_owner = true }
-    if swipe.release_pointer { app.ui.manual_swipe_owner = false }
-    if swipe.capture_input || swipe.consume_release {
+    app.practice_home_swipe = frame.swipe
+    if frame.claim_pointer { app.ui.manual_swipe_owner = true }
+    if frame.release_pointer { app.ui.manual_swipe_owner = false }
+    if frame.block_click {
         app_block_current_click(app)
     }
-    // While Lumi's guide is open, the arrow keys and swipes are the guide's:
-    // choosing another practice under it would start the guide over.
-    choosing := app.modal.active == 0 &&
-    practice_screen_first_run_guide_active(app) == 0
-    if choosing && (swipe.direction == cast(SwipeDirection)SwipeLeft || IsKeyPressed(KEY_RIGHT)) {
-        practice_select_home_card(app, practice_next_ordered(app, 1))
-    } else if choosing && (swipe.direction == cast(SwipeDirection)SwipeRight || IsKeyPressed(KEY_LEFT)) {
-        practice_select_home_card(app, practice_next_ordered(app, -1))
-    }
-
-    banner_path := practice_card_banner_asset_path(app, app.exercise_type)
-    if banner_path.count > 0 {
-        practice_draw_card_banner(banner_path, Rectangle.{hero.x, hero.y, hero.width,
-                cast(float32)(title_y + AppScale(8)) - hero.y})
-    } else {
-        Box(app.ui.session, BoxProps.{.bounds = hero,
-                .fill = StyleTokenColor("surface")})
-    }
-
-    if practice_banner_probe_count == 1 {
-        TraceLog(3, "APP PROBE: banner block complete")
-    }
-
-    // The banner Image is queued paint, so the fade must be queued after it
-    // to cover its bottom edge.
-    fade_h := AppScale(120)
-    fade_y := title_y - fade_h
-    PaintVerticalGradient(app.ui.session, -1,
-        Rectangle.{cast(float32)content_view_x, cast(float32)fade_y,
-            cast(float32)content_view_w, cast(float32)fade_h},
-        color_with_alpha(StyleTokenColor("canvas"), 0.0f), StyleTokenColor("canvas"))
-    PaintRoundedFill(app.ui.session, -1,
-        Rectangle.{cast(float32)content_view_x, cast(float32)title_y,
-            cast(float32)content_view_w,
-            cast(float32)(hero_h - title_y)},
-        0.0, 4, StyleTokenColor("canvas"))
-
-    practice_draw_home_title(app, x, title_y, content_w)
-    PracticeCardStatus(app, app.exercise_type, x, title_y + title_layout.height, content_w)
-
-    if practice_banner_probe_count == 1 {
-        TraceLog(3, "APP PROBE: home title complete")
-    }
-
-    practice_screen_draw_home_tabs(app, Rectangle.{cast(float32)content_view_x, 0,
-            cast(float32)content_view_w, cast(float32)tabs_h})
-
-    current_index := practice_ordered_index(app, app.exercise_type)
-    selected_index := practice_carousel_controls(Rectangle.{cast(float32)pager_x, cast(float32)pager_y, cast(float32)pager_w, cast(float32)pager_h}, listed, current_index, app.modal.active, 7090)
-    if selected_index >= 0 && selected_index < listed && selected_index != current_index {
-        practice_select_home_card(app, listed_ids[selected_index])
-    }
-
-    app.practice_home_bounds_start = Rectangle.{cast(float32)action_x, cast(float32)button_y,
-        cast(float32)primary_w, cast(float32)button_h
-    }
-    if action != PRACTICE_ACTION_NONE {
-        PracticeCardAction(app, app.exercise_type, app.practice_home_bounds_start)
-    } else if Button(CurrentApp().ui.session, ButtonProps.{
-            .bounds = app.practice_home_bounds_start,
-            .label = LocaleText("practice_start_button"),
-            .disabled = app.modal.active != 0,
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .size = cast(ControlSize)ControlSizeLarge,
-            .pill = true
-        }) != 0 {
+    practice_home_tab_scroll = frame.tab_scroll
+    practice_home_tab_shown = practice_home_kind_of(app.exercise_type)
+    app.practice_home_bounds_valid = 1
+    app.practice_home_bounds_card = frame.card
+    app.practice_home_bounds_start = frame.start
+    app.practice_home_bounds_manual = frame.manual
+    app.practice_home_bounds_config = frame.config
+    if frame.action == PRACTICE_HOME_START {
         // One practice runs at a time: Start brings back the practice that
         // runs in its small window instead of starting another over it.
         if app_session_window_restore(app) {
             return 1
         }
+        practice := practice_get(app.exercise_type)
         if practice != null && practice.start != null {
             practice.start(app)
         }
-    }
-    if wide_actions != 0 {
-        action_x += primary_w + action_gap
-    } else {
-        button_y += button_h + action_gap
-    }
-
-    if ready && practice != null && practice.draw_manual != null {
-        app.practice_home_bounds_manual = Rectangle.{cast(float32)action_x, cast(float32)button_y,
-            cast(float32)secondary_w, cast(float32)button_h
-        }
-        if Button(CurrentApp().ui.session, ButtonProps.{
-                .bounds = app.practice_home_bounds_manual,
-                .label = LocaleText("practice_manual_button"),
-                .disabled = app != null && app.modal.active != 0,
-                .tone = cast(ButtonTone)ButtonToneNeutral,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-                .pill = true
-            }) != 0 {
-            practice_screen_open_tab(app, PRACTICE_TAB_MANUAL)
-        }
-        if wide_actions != 0 || secondary_row != 0 {
-            action_x += secondary_w + action_gap
-        } else {
-            button_y += button_h + action_gap
-        }
-    }
-
-    if ready && practice_home_has_config(practice) {
-        app.practice_home_bounds_config = Rectangle.{cast(float32)action_x, cast(float32)button_y,
-            cast(float32)secondary_w, cast(float32)button_h
-        }
-        if Button(CurrentApp().ui.session, ButtonProps.{
-                .bounds = app.practice_home_bounds_config,
-                .label = LocaleText("practice_configure_button"),
-                .disabled = app != null && app.modal.active != 0,
-                .tone = cast(ButtonTone)ButtonToneNeutral,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-                .pill = true
-            }) != 0 {
-            practice_screen_open_tab(app, PRACTICE_TAB_CONFIG)
-        }
-    }
-
-    if practice_banner_probe_count == 1 {
-        TraceLog(3, "APP PROBE: home hero complete")
+    } else if frame.action == PRACTICE_HOME_MANUAL {
+        practice_screen_open_tab(app, PRACTICE_TAB_MANUAL)
+    } else if frame.action == PRACTICE_HOME_CONFIG {
+        practice_screen_open_tab(app, PRACTICE_TAB_CONFIG)
+    } else if frame.action == PRACTICE_HOME_OFFER && !frame.offer_disabled {
+        PracticeDownloadAct(app, app.exercise_type, frame.offer)
+    } else if frame.action == PRACTICE_HOME_STEP {
+        practice_select_home_card(app, practice_next_ordered(app, frame.value))
+    } else if frame.action == PRACTICE_HOME_PICK && frame.value >= 0 && frame.value < listed {
+        practice_select_home_card(app, ids[frame.value])
+    } else if frame.action == PRACTICE_HOME_TAB {
+        practice_home_choose_tab(app, frame.value, frame.tab_count)
     }
     return 1
 }
@@ -826,10 +585,6 @@ practice_screen_draw_home :: (app: *InnerBreeze) {
         return
     }
     start(app)
-}
-
-practice_activity_label :: (exercise: s32) -> string {
-    return practice_label(exercise)
 }
 
 practice_clamp_activity_to_tab :: (app: *InnerBreeze) {
@@ -889,40 +644,6 @@ practice_screen_open_tab :: (app: *InnerBreeze, tab: s32) {
         route.screen = ScreenStart
         app_switch_route(app, route)
     }
-}
-
-practice_screen_draw_desktop_tab_bar :: (app: *InnerBreeze, y: s32) -> s32 {
-    tabs: [EXERCISE_COUNT] Tab
-    values: [EXERCISE_COUNT] s32
-    tab_count: s32 = 0
-    selected_index: s32 = 0
-    clicked: s32 = 0
-
-    if app == null {
-        return -1
-    }
-    {
-        i: s32 = 0
-        while i < practice_count() {
-            id := practice_ordered_id(i)
-            i += 1
-            if !PracticeInstalled(id) {
-                continue
-            }
-            if id == app.exercise_type {
-                selected_index = tab_count
-            }
-            values[tab_count] = id
-            tabs[tab_count] = Tab.{.label = practice_activity_label(id), .disabled = app.modal.active != 0 }
-            tab_count += 1
-        }
-
-    }
-    if tab_count <= 0 {
-        return -1
-    }
-    bar_result := TabBar(CurrentApp().ui.session, TabBarProps.{.bounds = Rectangle.{0, cast(float32)y, cast(float32)app.ui.view_width, cast(float32)GetTabBarHeight()}, .selected_index = selected_index}, tabs[:tab_count])
-    return ifx (bar_result.node >= 0 && bar_result.node < tab_count) then (values[bar_result.node]) else (-1)
 }
 
 practice_screen_draw_modal :: (app: *InnerBreeze) {

@@ -16,7 +16,6 @@ args = parser.parse_args()
 root = args.root.resolve()
 kryon = args.kryon.resolve()
 sources = sorted((root / "src").rglob("*.zi"))
-sources.append(root / "apps/practice/downloads_view.zi")
 sources.append(root / "apps/practice/hold_reminder.zi")
 if list((root / "src").rglob("*.c")) or list((root / "src").rglob("*.kry")):
     raise SystemExit("Android application implementation must be current Zi")

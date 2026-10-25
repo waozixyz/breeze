@@ -15,12 +15,62 @@ or `assets/leaderboard/`.
 The cell picker, Lists and Diary editor/calendar compose the
 standard Kryon widgets inside their ZX bundles. Raylib, Android and canvas bind the
 same typed render effects to their normal widgets. File dialogs, persistence,
-account sync and native input stay in the wrapper. Habits draws its count
-dialog and editor save/discard/delete confirmations in its package
-(`apps/habits/habits_view.zi` and `editor_dialogs.zi`); its
-table, editor, entries, history and statistics, and Practices' screens,
-still use compiled screen compositions; migrating those screens is required
-before every visual change can ship without rebuilding the wrapper.
+account sync and native input stay in the wrapper. Habits draws all of its
+screens in its package: the habit list and each habit's week and calendar
+(`apps/habits/habit_list_view.zi`), a day's screen and the entry dialog
+(`habit_day_view.zi`), the editor with its practice picker
+(`habit_edit_view.zi`), the statistics (`habit_stats_view.zi`), the count
+dialog and the editor's save/discard/delete confirmations (`habits_view.zi`
+and `editor_dialogs.zi`). Practices draws its home in its package
+(`apps/practice/practice_home_view.zi`): the host gives the chosen
+practice's banner, title, tabs and what its card offers (Start, or Install,
+Unlock or Cancel with the download's status and price, from
+`src/practices/practice_offer.zi`), and does what the page asks: start,
+open the manual or settings, press the offer, or choose another practice by
+swipe, arrow key, arrow button or tab. The manuals of Wim Hof, Meditation,
+Patterns and Astral Projection are the package's too
+(`apps/practice/manual_view.zi`): the host gives the page, the guide's
+colours and the settings the pages show, runs the Wim Hof breathing preview
+and saves a speed changed on its page (`src/practices/practice_manual_host.zi`),
+and each practice closes its manual or starts from what the page asks.
+Meditation's and Astral Projection's Customize pages come from the package
+as well (`apps/practice/settings_view.zi`): the host gives the settings, the
+music tracks with the chosen track's download, and the languages narration
+is recorded in, and saves the one change the page asks for
+(`src/practices/practice_settings_host.zi`). A finished practice's results
+are drawn there too (`apps/practice/results_view.zi`): the host gives the
+session's numbers and reads out each Wim Hof round, and keeps the mood
+picked, discards the session or closes the results as asked. Practices' Sun
+Salutation manual, the other practices' Customize pages and the sessions
+still use compiled screen compositions; migrating them is required before every visual
+change can ship without rebuilding the wrapper.
+The list's frame (`HabitsListFrame`) carries the page's bounds, the theme
+and the state the host keeps: the open habit, scrolling, the name column's
+width, a dragged row. The package reads each habit with
+`ReadHabitsListRowHost` and each of its days with `ReadHabitsListDayHost`
+(planned, done, counted, a span running), lays out and draws the table,
+and returns what the person asked for: open a habit, tap a day, move a
+habit or make it inactive, open its history, statistics or editor, the
+shop or a new habit (host interface 30). The host applies each through the
+same habit rules as before. A day's screen reads the day's entries
+(`ReadHabitsDayEntryHost`), its linked sessions ordered by practice
+(`ReadHabitsDaySessionHost`) and a breathing session's rounds
+(`ReadHabitsDayRoundHost`); the package keeps the round being typed, with
+the number pad or the keyboard, and asks the host to add, change or delete
+an entry, end a span, delete a session or a round, save a round's seconds
+or step the count. The entry dialog reads each answer with
+`ReadHabitsAnswerHost` and gives back a changed one with
+`WriteHabitsAnswerHost`, which keeps only values its question's type
+allows; Done, Skip, Delete and Cancel go through the host's entry rules.
+The editor reads the habit being edited (`ReadHabitsEditHost`), each of its
+questions and each practice it may link, keeps what is typed and gives the
+draft back; the host validates and saves it with the same habit rules as
+before. The statistics read the figures the host counted over the habit's
+last year (`ReadHabitsStatsHost`): streaks, weekdays, linked time, moods,
+Wim Hof rounds and span times, then each answer chart, its points, each
+hold and each change. Their answer charts are plot's band chart, which the
+host draws for the package (`BandChartHostSupports` and `BandChartHostCall`
+from `plot/band_chart_host`).
 The habit shop is Habits' own page as well (`apps/habits/shop_view.zi`): the
 package draws the coins, the rewards and the form and asks the wrapper to
 save, delete or buy a reward; the wrapper checks each request against what
@@ -803,9 +853,10 @@ way, through `ReadHabitsUiHost`, `WriteHabitsUiHost` and `HabitsLocaleHost`
 (host interface 14, so Habits 1.1.0 needs Inner Breeze 2.1.35): the host
 supplies the day's count, target, linked sessions and the theme's text
 colour, and applies the step, the opened day or the closing the dialog asks
-for. Habits' other screens and Practices still contain compiled screen
-compositions; moving those compositions into their bundles is required to
-finish the entirely portable architecture. Changes to their compiled UI or
+for. Every other Habits screen follows since Habits 1.3.0 (host interface
+30), and Practice's home since Practices 1.4.0. Practices' other screens
+still contain compiled screen compositions; moving those into its bundle is
+required to finish the entirely portable architecture. Changes to their compiled UI or
 to native host capabilities still require a wrapper release.
 
 ## Device launcher entries

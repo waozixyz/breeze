@@ -1,0 +1,1760 @@
+// The habit editor: a habit's details (its name, description, colour and
+// icon), its routine (how it repeats, its days and when it reminds), and how
+// it is tracked (how hard it is and the coins a done day earns, counting or
+// measuring spans, linked practices, and the questions it asks when a day is
+// done). The host keeps the habit being edited; the editor changes it and
+// asks the host to save it, delete it, open the practice picker, or add or
+// remove a question.
+#import "session"
+#import "geometry"
+#import "vec"
+#import "dpi"
+#import "layout"
+#import "drawing_props"
+#import "semantic"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "text_measure"
+#import "text_input_props"
+#import "text_field_widget"
+#import "text_area_widget"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "box_props"
+#import "box_widget"
+#import "checkbox_props"
+#import "checkbox_widget"
+#import "dropdown_props"
+#import "dropdown_widget"
+#import "fieldset_props"
+#import "fieldset_widget"
+#import "modal_props"
+#import "modal_frame_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "segmented_control_props"
+#import "segmented_control_widget"
+#import "spinbox_props"
+#import "spinbox_widget"
+#import "svg_icon_props"
+#import "svg_icon_widget"
+#import "time_picker_props"
+#import "time_picker_widget"
+#import "title_bar_props"
+#import "title_bar_widget"
+#import "toggle_props"
+#import "toggle_widget"
+#import "toggle_measure"
+#import "tree"
+#import, file "../../src/cells/habits_ui_types.zi";
+#import, file "../../src/cells/habits_types.zi";
+#import, file "../../src/habits/habit_types.zi";
+#import, file "../../src/habits/habit_icons.zi";
+#import, file "../../src/habits/habit_coins.zi";
+#import, file "../../src/habits/habit_schedule.zi";
+#import, file "../../src/habits/habit_questions.zi";
+CoinIcon :: #import "mingcute/mingcute_filled_copper_coin";
+
+using ButtonTone;
+using ButtonEmphasis;
+using SemanticKind;
+using TextAlign;
+using TextWrap;
+host_api :: #system_library "host_api";
+ReadHabitsEditHost :: () -> HabitsEditFrame #foreign host_api;
+WriteHabitsEditHost :: (frame: HabitsEditFrame) #foreign host_api;
+ReadHabitsEditQuestionHost :: (index: s32) -> HabitsEditQuestion #foreign host_api;
+WriteHabitsEditQuestionHost :: (index: s32, question: HabitsEditQuestion) -> bool #foreign host_api;
+ReadHabitsEditPracticeHost :: (index: s32) -> HabitsEditPractice #foreign host_api;
+HabitsLocaleHost :: (key: string) -> string #foreign host_api;
+edit: HabitsEditFrame;
+// The questions as read this frame, and each one's place in a span: 1 for
+// the start, 2 for the end, 0 for any other.
+questions: [HABIT_QUESTION_MAX]HabitsEditQuestion;
+question_roles: [HABIT_QUESTION_MAX]s32;
+// The scrolling form's viewport and content, for scrolling a focused field
+// into view.
+form_top: s32;
+form_height: s32;
+form_content: s32;
+
+EDIT_CONTENT_MAX_WIDTH :: 440
+EDIT_QUESTION_PADDING :: 12
+EDIT_QUESTION_GAP :: 10
+EDIT_GOAL_OPTIONS :: 6
+// A span goal's typed lengths follow the questions' goal fields.
+EDIT_SPAN_FIELD_CODE :: HABIT_QUESTION_MAX * 2
+
+// The colours a habit can take: seven first, five more behind "...".
+EditColor :: (index: s32) -> Color {
+    colors: [12]Color = .[
+    Color.{99, 196, 165, 255},
+    Color.{94, 166, 232, 255},
+    Color.{180, 132, 220, 255},
+    Color.{216, 116, 164, 255},
+    Color.{232, 150, 74, 255},
+    Color.{160, 196, 82, 255},
+    Color.{224, 92, 92, 255},
+    Color.{224, 124, 104, 255},
+    Color.{210, 180, 72, 255},
+    Color.{74, 186, 198, 255},
+    Color.{116, 132, 224, 255},
+    Color.{198, 96, 118, 255}]
+    return colors[index]
+}
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, edit.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+Locale :: (key: string) -> string {
+    return HabitsLocaleHost(key)
+}
+
+Width :: (text: string, font: s32) -> s32 {
+    return TextWidth(edit.session, TextProps.{.text = text, .font = font})
+}
+
+Number :: (value: s64) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value)
+    return BuilderFinish(out)
+}
+
+// The template with its first %d replaced by value and its first %s by text.
+Filled :: (template: string, value: s32, text: string) -> string {
+    out: Vec(u8)
+    number_used := false
+    text_used := false
+    at: s64 = 0
+    while at < template.count {
+        if at + 1 < template.count && template[at] == cast(u8)37 &&
+        template[at + 1] == cast(u8)100 && !number_used {
+            BuilderPrint(*out, "%", value)
+            number_used = true
+            at += 2
+        } else if at + 1 < template.count && template[at] == cast(u8)37 &&
+        template[at + 1] == cast(u8)115 && !text_used {
+            BuilderPrint(*out, "%", text)
+            text_used = true
+            at += 2
+        } else {
+            BuilderPrint(*out, "%", template[at:at + 1])
+            at += 1
+        }
+    }
+    return BuilderFinish(out)
+}
+
+// The value with start to end replaced, or the value unchanged when the
+// result would pass limit bytes.
+Replaced :: (value: string, start: s32, end: s32, replacement: string,
+    limit: s64) -> string {
+    if start < 0 || end < start || cast(s64)end > value.count ||
+    value.count - cast(s64)(end - start) + replacement.count > limit {
+        return value
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value[:start])
+    BuilderPrint(*out, "%", replacement)
+    BuilderPrint(*out, "%", value[end:])
+    return BuilderFinish(out)
+}
+
+// A copy that outlives the buffer it was read from.
+Copied :: (value: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value)
+    return BuilderFinish(out)
+}
+
+// The largest font from preferred down to minimum that fits the width.
+FitFont :: (text: string, max_width: s32, preferred: s32, minimum: s32) -> s32 {
+    font := preferred
+    while font > minimum && Width(text, font) > max_width {
+        font -= 1
+    }
+    return font
+}
+
+Label :: (text: string, x: s32, y: s32, width: s32, height: s32) {
+    Text(edit.session, TextProps.{.bounds = Bounds(x, y, width, height), .text = text})
+}
+
+// A label beside a row's 44-unit control, centred on it.
+RowLabel :: (text: string, x: s32, y: s32, width: s32) {
+    Text(edit.session, TextProps.{.bounds = Bounds(x, y + Scale(4), width, Scale(44)),
+            .text = text, .vertical_align = cast(TextAlign)TextAlignCenter})
+}
+
+Step :: (id: s32, label: string, bounds: Rectangle, disabled: bool) -> bool {
+    return Button(edit.session, ButtonProps.{.id = id, .bounds = bounds, .label = label,
+            .disabled = disabled, .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
+}
+
+Ask :: (action: s32, index: s32) {
+    if edit.action == HABITS_EDIT_NONE {
+        edit.action = action
+        edit.action_index = index
+    }
+}
+
+Clipboard :: (result: TextFieldResult) {
+    if result.clipboard_write {
+        edit.clipboard_write = true
+        edit.clipboard_text = result.clipboard_text
+    }
+}
+
+// Only one field holds the focus: 1 the name, 2 the description, 3 the
+// daily target, 4 the formula, 5 a question, 6 a goal and 7 the coins.
+FocusOnly :: (field: s32) {
+    edit.name_focused = field == 1
+    edit.description_focused = field == 2
+    edit.counter_focused = field == 3
+    edit.formula_focused = field == 4
+    edit.coin_focused = field == 7
+    if field != 5 {
+        edit.question_focused = 0
+    }
+    if field != 6 {
+        edit.goal_focused = 0
+    }
+}
+
+// Scrolls the form so a field that just took the focus shows whole.
+EnsureVisible :: (rect: Rectangle) {
+    maximum := form_content - form_height
+    if maximum < 0 {
+        maximum = 0
+    }
+    margin := Scale(12)
+    next := edit.scroll
+    if cast(s32)rect.y + cast(s32)rect.height > form_top + form_height - margin {
+        next += cast(s32)rect.y + cast(s32)rect.height - (form_top + form_height - margin)
+    }
+    if cast(s32)rect.y < form_top + margin {
+        next -= form_top + margin - cast(s32)rect.y
+    }
+    if next < 0 {
+        next = 0
+    }
+    if next > maximum {
+        next = maximum
+    }
+    edit.scroll = next
+}
+
+// ---- The schedule -----------------------------------------------------------
+
+Schedule :: () -> HabitSchedule {
+    rule := HabitSchedule.{.repeat = edit.repeat, .every = edit.every, .start = edit.start,
+        .weekdays = edit.weekdays, .month_days = edit.month_days,
+        .last_day = ifx edit.last_day then 1 else 0, .week_of_month = edit.week_of_month}
+    unused HabitScheduleSetFormula(*rule, edit.formula)
+    return rule
+}
+
+// Keeps a schedule's days; its formula stays the text the editor holds.
+KeepSchedule :: (rule: *HabitSchedule) {
+    edit.repeat = rule.repeat
+    edit.every = rule.every
+    edit.start = rule.start
+    edit.weekdays = rule.weekdays
+    edit.month_days = rule.month_days
+    edit.last_day = rule.last_day != 0
+    edit.week_of_month = rule.week_of_month
+}
+
+Normalize :: () {
+    rule := Schedule()
+    HabitScheduleNormalize(*rule, edit.today)
+    KeepSchedule(*rule)
+}
+
+FormulaValid :: () -> bool {
+    return HabitFormulaValid(edit.formula)
+}
+
+Columns :: (width: s32) -> s32 {
+    columns := width / Scale(48)
+    if columns < 1 {
+        columns = 1
+    }
+    return columns
+}
+
+// The height of a grid of round 40-unit buttons.
+GridHeight :: (count: s32, width: s32) -> s32 {
+    columns := Columns(width)
+    return (count + columns - 1) / columns * Scale(44) + Scale(8)
+}
+
+GridBounds :: (x: s32, y: s32, width: s32, index: s32) -> Rectangle {
+    columns := Columns(width)
+    return Bounds(x + (index % columns) * Scale(48) + Scale(4),
+        y + (index / columns) * Scale(44) + Scale(4), Scale(40), Scale(40))
+}
+
+// A row of round buttons spread evenly across the width when they fit on
+// one line, as the week's days are; otherwise the grid.
+SpreadBounds :: (x: s32, y: s32, width: s32, count: s32, index: s32) -> Rectangle {
+    if count < 2 || Columns(width) < count {
+        return GridBounds(x, y, width, index)
+    }
+    step := (width - Scale(48)) / (count - 1)
+    return Bounds(x + index * step + Scale(4), y + Scale(4), Scale(40), Scale(40))
+}
+
+HintHeight :: (width: s32) -> s32 {
+    return TextHeight(edit.session, TextProps.{.text = Locale("habit_formula_hint"),
+            .font = edit.small_font, .bounds = Bounds(0, 0, width, 0),
+            .wrap = cast(TextWrap)TextWrapAuto})
+}
+
+ScheduleHeight :: (width: s32) -> s32 {
+    row := Scale(52)
+    height := row
+    if edit.repeat == HABIT_REPEAT_WEEKLY {
+        height += GridHeight(7, width)
+    } else if edit.repeat == HABIT_REPEAT_MONTHLY {
+        height += row
+        if edit.week_of_month != 0 {
+            height += row + GridHeight(7, width)
+        } else {
+            height += GridHeight(31, width) + Scale(48)
+        }
+    } else if edit.repeat == HABIT_REPEAT_YEARLY {
+        height += row
+    } else if edit.repeat == HABIT_REPEAT_FORMULA {
+        height += row + HintHeight(width) + Scale(8)
+        if !FormulaValid() {
+            height += Scale(28)
+        }
+    }
+    if edit.repeat != HABIT_REPEAT_NONE {
+        height += row
+    }
+    return height
+}
+
+// Chooses how the schedule repeats. Weekdays start with every day chosen,
+// the days of the month and the yearly date with today's.
+SetRepeat :: (repeat: s32) {
+    rule := Schedule()
+    if repeat == HABIT_REPEAT_WEEKLY && rule.repeat != HABIT_REPEAT_WEEKLY {
+        rule.weekdays = 127
+    }
+    if repeat == HABIT_REPEAT_MONTHLY && rule.repeat != HABIT_REPEAT_MONTHLY {
+        rule.week_of_month = 0
+        rule.weekdays = 0
+    }
+    rule.repeat = repeat
+    if repeat == HABIT_REPEAT_FORMULA && edit.formula.count == 0 {
+        edit.formula = "days % 2 = 0"
+        unused HabitScheduleSetFormula(*rule, edit.formula)
+    }
+    HabitScheduleNormalize(*rule, edit.today)
+    KeepSchedule(*rule)
+}
+
+// How a schedule repeats in words, such as "Every 2 weeks".
+RepeatPhrase :: (repeat: s32, every: s32) -> string {
+    if repeat == HABIT_REPEAT_FORMULA {
+        return Locale("habit_repeat_formula")
+    }
+    if repeat == HABIT_REPEAT_NONE {
+        return Locale("habit_repeat_none")
+    }
+    one: [4]string = .["habit_every_day", "habit_every_week", "habit_every_month",
+    "habit_every_year"]
+    other: [4]string = .["habit_every_n_days", "habit_every_n_weeks",
+    "habit_every_n_months", "habit_every_n_years"]
+    index := repeat - HABIT_REPEAT_DAILY
+    if every <= 1 {
+        return Locale(one[index])
+    }
+    return Filled(Locale(other[index]), every, "")
+}
+
+// A planned day's button lights up in the habit's colour, as its circles do
+// in the habit table, with its label in black or white on it.
+LitDay :: (bounds: Rectangle, label: string) {
+    color := edit.color
+    color.a = 255
+    unused Box(edit.session, BoxProps.{.bounds = bounds, .fill = color,
+            .radius = bounds.width * 0.5})
+    luma := cast(s32)color.r * 299 + cast(s32)color.g * 587 + cast(s32)color.b * 114
+    Text(edit.session, TextProps.{.bounds = bounds, .text = label,
+            .font = FitFont(label, cast(s32)bounds.width - Scale(6), edit.small_font, Scale(9)),
+            .class_name = ifx luma >= 128000 then edit.ink_dark_class else edit.ink_light_class,
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter,
+            .wrap = cast(TextWrap)TextWrapNone})
+}
+
+// Round day buttons from Monday to Sunday: a lit day is planned, and a tap
+// turns it on or off. The last lit day stays.
+WeekdayButtons :: (x: s32, y: s32, width: s32) -> s32 {
+    days: [7]string = .[Locale("habit_day_mon"), Locale("habit_day_tue"),
+    Locale("habit_day_wed"), Locale("habit_day_thu"), Locale("habit_day_fri"),
+    Locale("habit_day_sat"), Locale("habit_day_sun")]
+    for day: cast(s32)0..6 {
+        selected := (edit.weekdays & (1 << day)) != 0
+        bounds := SpreadBounds(x, y, width, 7, day)
+        clicked := Button(edit.session, ButtonProps.{.id = 7710 + day, .bounds = bounds,
+                .label = days[day], .circle = true, .fit_content = true, .selected = selected,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
+        if selected {
+            LitDay(bounds, days[day])
+        }
+        if clicked {
+            mask := edit.weekdays ^ (1 << day)
+            if mask != 0 {
+                edit.weekdays = mask
+            }
+        }
+    }
+    return y + GridHeight(7, width)
+}
+
+// The days of the month from the 1st to the 31st, and the last day.
+MonthDayButtons :: (x: s32, y: s32, width: s32) -> s32 {
+    for day: cast(s32)1..31 {
+        bit := 1 << (day - 1)
+        selected := (edit.month_days & bit) != 0
+        label := Number(cast(s64)day)
+        bounds := GridBounds(x, y, width, day - 1)
+        clicked := Button(edit.session, ButtonProps.{.id = 7730 + day, .bounds = bounds,
+                .label = label, .circle = true, .selected = selected,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
+        if selected {
+            LitDay(bounds, label)
+        }
+        if clicked {
+            mask := edit.month_days ^ bit
+            if mask != 0 || edit.last_day {
+                edit.month_days = mask
+            }
+        }
+    }
+    y += GridHeight(31, width)
+    last := edit.last_day
+    if Button(edit.session, ButtonProps.{.id = 7729, .bounds = Bounds(x, y, width, Scale(40)),
+            .label = Locale("habit_month_last_day"), .selected = last,
+            .tone = cast(ButtonTone)(ifx last then ButtonToneAccent else ButtonToneNeutral),
+            .emphasis = cast(ButtonEmphasis)(ifx last then ButtonEmphasisFilled
+                else ButtonEmphasisSoft)}) != 0 {
+        if !last || edit.month_days != 0 {
+            edit.last_day = !last
+        }
+    }
+    return y + Scale(48)
+}
+
+// A monthly schedule plans days of the month, or a weekday in a week of the
+// month such as the last Friday.
+Monthly :: (x: s32, y: s32, width: s32) -> s32 {
+    options: [2]SegmentOption = .[
+    SegmentOption.{.label = Locale("habit_month_by_day")},
+    SegmentOption.{.label = Locale("habit_month_by_weekday")}]
+    switch := SegmentedControl(edit.session, SegmentedControlProps.{.id = 7720,
+            .bounds = Bounds(x, y + Scale(4), width, Scale(42)), .height = Scale(42),
+            .selected_index = ifx edit.week_of_month != 0 then 1 else 0,
+            .has_selection = true}, options[:])
+    if switch.changed {
+        anchor_day := edit.start
+        if anchor_day == 0 {
+            anchor_day = edit.today
+        }
+        anchor := HabitScheduleDateOf(anchor_day)
+        if switch.selected_index == 1 {
+            edit.week_of_month = (anchor.day - 1) / 7 + 1
+            if anchor.day + 7 > anchor.month_length {
+                edit.week_of_month = -1
+            }
+            edit.weekdays = 1 << anchor.weekday
+        } else {
+            edit.week_of_month = 0
+        }
+        Normalize()
+    }
+    y += Scale(52)
+    if edit.week_of_month == 0 {
+        return MonthDayButtons(x, y, width)
+    }
+    control_width := Scale(168)
+    RowLabel(Locale("habit_week_of_month_label"), x, y, width - control_width - Scale(8))
+    week_keys: [6]string = .["habit_week_first", "habit_week_second", "habit_week_third",
+    "habit_week_fourth", "habit_week_fifth", "habit_week_last"]
+    weeks: [6]DropdownOption
+    for index: cast(s32)0..5 {
+        weeks[index].label = Locale(week_keys[index])
+    }
+    week_menu := Dropdown(edit.session, DropdownProps.{.id = 7721,
+            .bounds = Bounds(x + width - control_width, y + Scale(4), control_width, Scale(44)),
+            .selected_index = ifx edit.week_of_month > 0 then edit.week_of_month - 1 else 5},
+        weeks[:])
+    if week_menu.changed {
+        edit.week_of_month = week_menu.selected_index + 1
+        if week_menu.selected_index == 5 {
+            edit.week_of_month = -1
+        }
+    }
+    y += Scale(52)
+    return WeekdayButtons(x, y, width)
+}
+
+// A yearly schedule's month and day.
+Yearly :: (x: s32, y: s32, width: s32) {
+    date := HabitScheduleDateOf(edit.start)
+    if !date.valid {
+        date = HabitScheduleDateOf(edit.today)
+    }
+    gap := Scale(8)
+    month_width := (width - gap) / 2
+    keys: [12]string = .["habit_month_name_1", "habit_month_name_2", "habit_month_name_3",
+    "habit_month_name_4", "habit_month_name_5", "habit_month_name_6", "habit_month_name_7",
+    "habit_month_name_8", "habit_month_name_9", "habit_month_name_10",
+    "habit_month_name_11", "habit_month_name_12"]
+    months: [12]DropdownOption
+    for month: cast(s32)0..11 {
+        months[month].label = Locale(keys[month])
+    }
+    month_menu := Dropdown(edit.session, DropdownProps.{.id = 7724,
+            .bounds = Bounds(x, y + Scale(4), month_width, Scale(44)),
+            .selected_index = date.month - 1}, months[:])
+    chosen_month := date.month
+    if month_menu.changed {
+        chosen_month = month_menu.selected_index + 1
+    }
+    stepped := Spinbox(edit.session, SpinboxProps.{.id = 7725,
+            .bounds = Bounds(x + month_width + gap, y + Scale(4), width - month_width - gap, Scale(44)),
+            .label = Locale("habit_every_year"), .min = 1, .max = 31, .step = 1,
+            .value = date.day, .wrap = true, .value_text = Number(cast(s64)date.day)})
+    chosen_day := date.day
+    if stepped.changed {
+        chosen_day = stepped.value
+    }
+    if chosen_month != date.month || chosen_day != date.day {
+        length := HabitScheduleMonthLength(date.year, chosen_month)
+        if chosen_day > length {
+            chosen_day = length
+        }
+        edit.start = date.year * 10000 + chosen_month * 100 + chosen_day
+    }
+}
+
+FormulaField :: (bounds: Rectangle) -> bool {
+    focused := edit.formula_focused
+    result := TextField(edit.session, TextFieldProps.{.key = KeyHash("habit/edit/formula"),
+            .bounds = bounds, .value = edit.formula, .cursor = edit.formula_cursor,
+            .anchor = edit.formula_anchor, .scroll_x = edit.formula_scroll_x,
+            .focused = focused, .focus_id = 7770, .max_bytes = HABIT_FORMULA_SIZE - 1,
+            .max_codepoints = HABIT_FORMULA_SIZE - 1,
+            .input = ifx focused then edit.input else TextFieldInput.{}})
+    if result.edit.changed {
+        edit.formula = Replaced(edit.formula, result.edit.start, result.edit.end,
+            result.edit.replacement, HABIT_FORMULA_SIZE - 1)
+    }
+    edit.formula_cursor = result.cursor
+    edit.formula_anchor = result.anchor
+    edit.formula_scroll_x = result.scroll_x
+    if result.focused {
+        FocusOnly(4)
+    } else {
+        edit.formula_focused = false
+    }
+    Clipboard(result)
+    return result.focused
+}
+
+// The schedule reads as a sentence: how it repeats, with buttons for how
+// often, then its days and when it reminds.
+Routine :: (x: s32, y: s32, width: s32) {
+    row := Scale(52)
+    step_width := Scale(44)
+    counted := edit.repeat >= HABIT_REPEAT_DAILY && edit.repeat <= HABIT_REPEAT_YEARLY
+    menu_width := width
+    if counted {
+        menu_width = width - step_width * 2 - Scale(8)
+    }
+    repeats: [6]DropdownOption
+    for index: cast(s32)0..5 {
+        repeats[index].label = RepeatPhrase(index + 1, edit.every)
+    }
+    repeat_menu := Dropdown(edit.session, DropdownProps.{.id = 7700,
+            .bounds = Bounds(x, y + Scale(4), menu_width, Scale(44)),
+            .selected_index = edit.repeat - 1}, repeats[:])
+    if repeat_menu.changed {
+        SetRepeat(repeat_menu.selected_index + 1)
+    }
+    if counted {
+        if Step(7702, "-", Bounds(x + menu_width + Scale(4), y + Scale(4), step_width, Scale(44)),
+            edit.every <= 1) {
+            edit.every -= 1
+            Normalize()
+        }
+        if Step(7703, "+", Bounds(x + width - step_width, y + Scale(4), step_width, Scale(44)),
+            edit.every >= HABIT_SCHEDULE_EVERY_MAX) {
+            edit.every += 1
+            Normalize()
+        }
+    }
+    y += row
+    if edit.repeat == HABIT_REPEAT_WEEKLY {
+        y = WeekdayButtons(x, y, width)
+    } else if edit.repeat == HABIT_REPEAT_MONTHLY {
+        y = Monthly(x, y, width)
+    } else if edit.repeat == HABIT_REPEAT_YEARLY {
+        Yearly(x, y, width)
+        y += row
+    } else if edit.repeat == HABIT_REPEAT_FORMULA {
+        formula_bounds := Bounds(x, y + Scale(4), width, Scale(44))
+        was_focused := edit.formula_focused
+        if FormulaField(formula_bounds) && !was_focused {
+            EnsureVisible(formula_bounds)
+        }
+        y += row
+        hint_height := HintHeight(width)
+        Text(edit.session, TextProps.{.bounds = Bounds(x, y, width, hint_height),
+                .text = Locale("habit_formula_hint"), .font = edit.small_font,
+                .wrap = cast(TextWrap)TextWrapAuto})
+        y += hint_height + Scale(8)
+        if !FormulaValid() {
+            Label(Locale("habit_formula_invalid"), x, y, width, Scale(24))
+            y += Scale(28)
+        }
+    }
+    if edit.repeat == HABIT_REPEAT_NONE {
+        return
+    }
+    RowLabel(Locale("habit_reminder_label"), x, y, width - Scale(144))
+    hours: [25]DropdownOption
+    hours[0].label = Locale("habit_reminder_off")
+    for hour: cast(s32)0..23 {
+        out: Vec(u8)
+        if hour < 10 {
+            BuilderPrint(*out, "0")
+        }
+        BuilderPrint(*out, "%:00", hour)
+        hours[hour + 1].label = BuilderFinish(out)
+    }
+    hour_menu := Dropdown(edit.session, DropdownProps.{.id = 7400,
+            .bounds = Bounds(x + width - Scale(136), y + Scale(4), Scale(136), Scale(44)),
+            .selected_index = edit.reminder_hour + 1}, hours[:])
+    if hour_menu.changed {
+        edit.reminder_hour = hour_menu.selected_index - 1
+    }
+}
+
+// ---- The details ------------------------------------------------------------
+
+NameField :: (bounds: Rectangle) -> bool {
+    focused := edit.name_focused
+    result := TextField(edit.session, TextFieldProps.{.key = KeyHash("habit/edit/name"),
+            .bounds = bounds, .value = edit.name, .cursor = edit.name_cursor,
+            .anchor = edit.name_anchor, .scroll_x = edit.name_scroll_x, .focused = focused,
+            .focus_id = 7511, .max_bytes = HABIT_NAME_SIZE - 1,
+            .max_codepoints = HABIT_NAME_SIZE - 1,
+            .input = ifx focused then edit.input else TextFieldInput.{}})
+    if result.edit.changed {
+        changed := Replaced(edit.name, result.edit.start, result.edit.end,
+            result.edit.replacement, HABIT_NAME_SIZE - 1)
+        if changed != edit.name {
+            edit.name_error = 0
+        }
+        edit.name = changed
+    }
+    edit.name_cursor = result.cursor
+    edit.name_anchor = result.anchor
+    edit.name_scroll_x = result.scroll_x
+    edit.name_focused = result.focused
+    if result.focused {
+        FocusOnly(1)
+    }
+    Clipboard(result)
+    return result.focused
+}
+
+DescriptionField :: (bounds: Rectangle) -> bool {
+    focused := edit.description_focused
+    result := TextArea(edit.session, TextAreaProps.{.key = KeyHash("habit/edit/description"),
+            .bounds = bounds, .value = edit.description, .cursor = edit.description_cursor,
+            .anchor = edit.description_anchor, .scroll_y = edit.description_scroll_y,
+            .focused = focused, .focus_id = 7512, .max_bytes = HABIT_DESCRIPTION_SIZE - 1,
+            .max_codepoints = HABIT_DESCRIPTION_SIZE - 1, .wrap = true,
+            .input = ifx focused then edit.area_input else TextAreaInput.{}})
+    if result.edit.changed {
+        edit.description = Replaced(edit.description, result.edit.start, result.edit.end,
+            result.edit.replacement, HABIT_DESCRIPTION_SIZE - 1)
+    }
+    edit.description_cursor = result.cursor
+    edit.description_anchor = result.anchor
+    edit.description_scroll_y = result.scroll_y
+    edit.description_focused = result.focused
+    if result.focused {
+        FocusOnly(2)
+    }
+    if result.clipboard_write {
+        edit.clipboard_write = true
+        edit.clipboard_text = result.clipboard_text
+    }
+    return result.focused
+}
+
+Colors :: (x: s32, y: s32, width: s32) {
+    columns := Columns(width)
+    count: s32 = ifx edit.more_colors then 12 else 7
+    for index: cast(s32)0..count - 1 {
+        more := index == 6 && !edit.more_colors
+        swatch := EditColor(index)
+        chosen := !more && edit.color.r == swatch.r && edit.color.g == swatch.g &&
+        edit.color.b == swatch.b
+        if Button(edit.session, ButtonProps.{.id = 7530 + index,
+                .bounds = Bounds(x + (index % columns) * Scale(48) + Scale(4),
+                    y + (index / columns) * Scale(44) + Scale(2), Scale(40), Scale(40)),
+                .label = ifx more then "..." else "", .circle = true, .selected = chosen,
+                .swatch = !more, .swatch_color = swatch,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+            if more {
+                edit.more_colors = true
+            } else {
+                edit.color = swatch
+            }
+        }
+    }
+}
+
+// The icons shown: all of them, or one row ending in a button for the rest.
+IconSlots :: (width: s32) -> s32 {
+    if edit.more_icons {
+        return HABIT_ICON_COUNT + 1
+    }
+    return Columns(width)
+}
+
+// The icons a habit can show in the habit list. The first is the first
+// letter of its name. Until all are shown, one row holds the first icons,
+// the chosen one, and a button that shows the rest.
+Icons :: (x: s32, y: s32, width: s32) {
+    name := edit.name
+    first: s64 = 1
+    while first < name.count && (name[first] & cast(u8)192) == cast(u8)128 {
+        first += 1
+    }
+    chosen_icon := edit.icon
+    if chosen_icon == HABIT_ICON_LETTER {
+        chosen_icon = 0
+    }
+    slots := IconSlots(width)
+    collapsed := !edit.more_icons
+    shown := ifx collapsed then slots - 1 else slots
+    for slot: cast(s32)0..shown - 1 {
+        icon := slot
+        if collapsed && slot == shown - 1 && chosen_icon >= shown {
+            icon = chosen_icon
+        }
+        chosen: s32 = icon
+        if icon == 0 {
+            chosen = HABIT_ICON_LETTER
+        }
+        selected := edit.icon == chosen
+        button := ButtonProps.{.id = 7560 + icon, .bounds = GridBounds(x, y - Scale(2), width, slot),
+            .circle = true, .selected = selected,
+            .tone = cast(ButtonTone)(ifx selected then ButtonToneAccent else ButtonToneNeutral),
+            .emphasis = cast(ButtonEmphasis)(ifx selected then ButtonEmphasisFilled
+                else ButtonEmphasisSoft)}
+        if icon == 0 {
+            button.label = ifx name.count > 0 then name[0:first] else "-"
+        } else {
+            button.icon_shape = HabitIconShape(icon)
+            button.icon_only = true
+        }
+        if Button(edit.session, button) != 0 {
+            edit.icon = chosen
+        }
+    }
+    if collapsed {
+        if Button(edit.session, ButtonProps.{.id = 7559,
+                .bounds = GridBounds(x, y - Scale(2), width, shown), .circle = true,
+                .label = "...", .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            edit.more_icons = true
+        }
+    }
+}
+
+Details :: (x: s32, y: s32, width: s32) {
+    label_height := Scale(24)
+    Label(Locale("habit_name_label"), x, y, width, label_height)
+    y += label_height + Scale(4)
+    name_bounds := Bounds(x, y, width, Scale(44))
+    was_focused := edit.name_focused
+    if NameField(name_bounds) && !was_focused {
+        EnsureVisible(name_bounds)
+    }
+    y += Scale(54)
+    Label(Locale("habit_description_label"), x, y, width, label_height)
+    y += label_height + Scale(4)
+    description_bounds := Bounds(x, y, width, Scale(80))
+    was_focused = edit.description_focused
+    if DescriptionField(description_bounds) && !was_focused {
+        EnsureVisible(description_bounds)
+    }
+    y += Scale(90)
+    Label(Locale("habit_color_label"), x, y, width, label_height)
+    y += label_height + Scale(4)
+    Colors(x, y, width)
+    columns := Columns(width)
+    colors: s32 = ifx edit.more_colors then 12 else 7
+    y += (colors + columns - 1) / columns * Scale(44) + Scale(10)
+    Label(Locale("habit_icon_label"), x, y, width, label_height)
+    y += label_height + Scale(4)
+    Icons(x, y, width)
+}
+
+// ---- Tracking -----------------------------------------------------------------
+
+DifficultyHeight :: () -> s32 {
+    return 164 + ifx edit.custom_coins then 52 else 0
+}
+
+DifficultyLabel :: (difficulty: s32) -> string {
+    if difficulty == HABIT_DIFFICULTY_EASY {
+        return Locale("habit_difficulty_easy")
+    }
+    if difficulty == HABIT_DIFFICULTY_HARD {
+        return Locale("habit_difficulty_hard")
+    }
+    if difficulty == HABIT_DIFFICULTY_VERY_HARD {
+        return Locale("habit_difficulty_very_hard")
+    }
+    return Locale("habit_difficulty_medium")
+}
+
+// What a done day of a habit this hard earns, in words.
+DifficultyEarns :: (difficulty: s32) -> string {
+    if difficulty == HABIT_DIFFICULTY_EASY {
+        return Locale("habit_difficulty_earns_easy")
+    }
+    if difficulty == HABIT_DIFFICULTY_HARD {
+        return Locale("habit_difficulty_earns_hard")
+    }
+    if difficulty == HABIT_DIFFICULTY_VERY_HARD {
+        return Locale("habit_difficulty_earns_very_hard")
+    }
+    return Locale("habit_difficulty_earns_medium")
+}
+
+// Signed coins as the editor types them: 2, -1.5 or 0.5.
+CoinText :: (halves: s32) -> string {
+    absolute := ifx halves < 0 then -halves else halves
+    out: Vec(u8)
+    if halves < 0 {
+        BuilderPrint(*out, "-")
+    }
+    BuilderPrint(*out, "%", absolute / 2)
+    if absolute % 2 != 0 {
+        BuilderPrint(*out, ".5")
+    }
+    return BuilderFinish(out)
+}
+
+CoinField :: (bounds: Rectangle) {
+    if !edit.coin_focused {
+        edit.coin_text = CoinText(edit.coin_halves)
+        edit.coin_cursor = cast(s32)edit.coin_text.count
+        edit.coin_anchor = edit.coin_cursor
+    }
+    focused := edit.coin_focused
+    result := TextField(edit.session, TextFieldProps.{.key = KeyHash("habit/edit/coins"),
+            .bounds = bounds, .value = edit.coin_text, .cursor = edit.coin_cursor,
+            .anchor = edit.coin_anchor, .scroll_x = edit.coin_scroll_x, .focused = focused,
+            .focus_id = 7607, .max_bytes = 7, .max_codepoints = 7,
+            .input = ifx focused then edit.input else TextFieldInput.{}})
+    if result.edit.changed {
+        edit.coin_text = Replaced(edit.coin_text, result.edit.start, result.edit.end,
+            result.edit.replacement, 7)
+        halves := edit.coin_halves
+        if HabitCoinParse(edit.coin_text, *halves) {
+            edit.coin_halves = halves
+        }
+    }
+    edit.coin_cursor = result.cursor
+    edit.coin_anchor = result.anchor
+    edit.coin_scroll_x = result.scroll_x
+    edit.coin_focused = result.focused
+    if result.focused {
+        FocusOnly(7)
+    }
+    Clipboard(result)
+}
+
+Difficulty :: (x: s32, y: s32, width: s32) {
+    Label(Locale("habit_difficulty_label"), x, y, width, Scale(26))
+    options: [HABIT_DIFFICULTY_COUNT]SegmentOption = .[
+    SegmentOption.{.label = DifficultyLabel(HABIT_DIFFICULTY_EASY)},
+    SegmentOption.{.label = DifficultyLabel(HABIT_DIFFICULTY_MEDIUM)},
+    SegmentOption.{.label = DifficultyLabel(HABIT_DIFFICULTY_HARD)},
+    SegmentOption.{.label = DifficultyLabel(HABIT_DIFFICULTY_VERY_HARD)}]
+    switch := SegmentedControl(edit.session, SegmentedControlProps.{.id = 7605,
+            .bounds = Bounds(x, y + Scale(30), width, Scale(42)), .height = Scale(42),
+            .selected_index = HabitDifficultyIndex(edit.difficulty),
+            .has_selection = !edit.custom_coins}, options[:])
+    if switch.changed {
+        edit.difficulty = HabitDifficultyAt(switch.selected_index)
+        edit.custom_coins = false
+    }
+    hint_y := y + Scale(80)
+    coin := Scale(18)
+    unused SvgIcon(edit.session, SvgIconProps.{.bounds = Bounds(x, hint_y + (Scale(22) - coin) / 2,
+                coin, coin),
+            .shape = CoinIcon.Shape, .color = Color.{.r = 226, .g = 168, .b = 48, .a = 255}})
+    Text(edit.session, TextProps.{.bounds = Bounds(x + coin + Scale(8), hint_y,
+                width - coin - Scale(8), Scale(30)),
+            .text = ifx edit.custom_coins then Locale("habit_coins_signed_hint")
+            else DifficultyEarns(edit.difficulty),
+            .font = edit.small_font, .class_name = edit.muted_class,
+            .vertical_align = cast(TextAlign)TextAlignCenter,
+            .wrap = cast(TextWrap)TextWrapAuto})
+    y += Scale(112)
+    Label(Locale("habit_custom_coins"), x, y + Scale(10), width - Scale(110), Scale(36))
+    custom := Toggle(edit.session, ToggleProps.{.id = 7606,
+            .bounds = Bounds(x + width - Scale(100), y, Scale(100), Scale(36)),
+            .value = edit.custom_coins, .off_label = Locale("toggle_off"),
+            .on_label = Locale("toggle_on")})
+    if custom.changed {
+        edit.custom_coins = custom.value
+        if custom.value {
+            edit.coin_halves = HabitDifficultyHalfCoins(edit.difficulty)
+        }
+    }
+    if edit.custom_coins {
+        y += Scale(52)
+        Label(Locale("habit_coins_per_occurrence"), x, y + Scale(10), width - Scale(128), Scale(36))
+        CoinField(Bounds(x + width - Scale(120), y, Scale(120), Scale(44)))
+    }
+}
+
+CounterText :: () {
+    edit.counter_text = Number(cast(s64)edit.counter_target)
+    edit.counter_cursor = cast(s32)edit.counter_text.count
+    edit.counter_anchor = edit.counter_cursor
+}
+
+CounterField :: (bounds: Rectangle) -> bool {
+    if !edit.counter_focused {
+        CounterText()
+    }
+    focused := edit.counter_focused
+    result := TextField(edit.session, TextFieldProps.{.key = KeyHash("habit/edit/counter"),
+            .bounds = bounds, .value = edit.counter_text, .cursor = edit.counter_cursor,
+            .anchor = edit.counter_anchor, .scroll_x = edit.counter_scroll_x, .focused = focused,
+            .focus_id = 7622, .numeric = true, .max_bytes = 4, .max_codepoints = 4,
+            .input = ifx focused then edit.input else TextFieldInput.{}})
+    if result.edit.changed {
+        edit.counter_text = Replaced(edit.counter_text, result.edit.start, result.edit.end,
+            result.edit.replacement, 4)
+        value: s32 = 0
+        for at: cast(s64)0..edit.counter_text.count - 1 {
+            value = value * 10 + cast(s32)edit.counter_text[at] - 48
+        }
+        if value > HABIT_COUNTER_TARGET_MAX {
+            value = HABIT_COUNTER_TARGET_MAX
+        }
+        if edit.counter_text.count > 0 {
+            edit.counter_target = value
+        }
+    }
+    edit.counter_cursor = result.cursor
+    edit.counter_anchor = result.anchor
+    edit.counter_scroll_x = result.scroll_x
+    edit.counter_focused = result.focused
+    if result.focused {
+        FocusOnly(3)
+    }
+    Clipboard(result)
+    return result.focused
+}
+
+// A toggle at the row's end, as wide as its labels need, with its label
+// before it.
+RowToggle :: (id: s32, label: string, value: bool, x: s32, y: s32, width: s32) -> ToggleValueResult {
+    props := ToggleProps.{.id = id, .value = value, .off_label = Locale("toggle_off"),
+        .on_label = Locale("toggle_on")}
+    size := ToggleSize(edit.session, props)
+    toggle_width := cast(s32)size.x
+    toggle_height := cast(s32)size.y
+    if toggle_height < Scale(30) {
+        toggle_height = Scale(30)
+    }
+    props.bounds = Bounds(x + width - toggle_width, y + (Scale(44) - toggle_height) / 2,
+        toggle_width, toggle_height)
+    Label(label, x, y + Scale(10), width - toggle_width - Scale(8), Scale(36))
+    return Toggle(edit.session, props)
+}
+
+// A number goal's bounds as typed, from its goal.
+GoalTexts :: (question: *HabitsEditQuestion) {
+    question.low_text = ""
+    question.high_text = ""
+    if question.answer_type != HABIT_ANSWER_NUMBER {
+        return
+    }
+    if question.goal_low >= 0 {
+        question.low_text = Number(cast(s64)question.goal_low)
+    }
+    if question.goal_high >= 0 {
+        question.high_text = Number(cast(s64)question.goal_high)
+    }
+}
+
+// One typed goal value. Goal fields share one cursor: only the focused one
+// has it. Returns the typed text.
+GoalField :: (code: s32, bounds: Rectangle, value: string, max_bytes: s32) -> string {
+    focused := edit.goal_focused == code + 1
+    props := TextFieldProps.{.key = KeyHash("habit/edit/goal") + cast(u64)code,
+        .bounds = bounds, .value = value, .focused = focused, .focus_id = 7800 + code,
+        .numeric = true, .max_bytes = max_bytes, .max_codepoints = max_bytes}
+    if focused {
+        props.cursor = edit.goal_cursor
+        props.anchor = edit.goal_anchor
+        props.scroll_x = edit.goal_scroll_x
+        props.input = edit.input
+    }
+    result := TextField(edit.session, props)
+    typed := value
+    if result.edit.changed {
+        typed = Replaced(value, result.edit.start, result.edit.end, result.edit.replacement,
+            max_bytes)
+    }
+    if result.focused {
+        edit.goal_focused = code + 1
+        edit.goal_cursor = result.cursor
+        edit.goal_anchor = result.anchor
+        edit.goal_scroll_x = result.scroll_x
+        FocusOnly(6)
+    } else if focused {
+        edit.goal_focused = 0
+    }
+    Clipboard(result)
+    return typed
+}
+
+// One bound at x: a number typed in its field, or a time picked in the time
+// picker. Returns its width.
+GoalBound :: (slot: s32, high: bool, question: *HabitsEditQuestion, x: s32, y: s32) -> s32 {
+    if question.answer_type == HABIT_ANSWER_NUMBER {
+        code := slot * 2 + ifx high then 1 else 0
+        typed := GoalField(code, Bounds(x, y, Scale(120), Scale(44)),
+            ifx high then question.high_text else question.low_text, 9)
+        number := HabitTimeTypedNumber(typed)
+        if high {
+            question.high_text = typed
+            if number >= 0 {
+                question.goal_high = number
+            }
+        } else {
+            question.low_text = typed
+            if number >= 0 {
+                question.goal_low = number
+            }
+        }
+        return Scale(120)
+    }
+    picker_width := Scale(132)
+    code := slot * 2 + ifx high then 1 else 0
+    picked := TimePicker(edit.session, TimePickerProps.{
+            .key = KeyHash("habit/edit/goal-time") + cast(u64)code, .id = 7940 + code,
+            .bounds = Bounds(x, y, picker_width, Scale(44)),
+            .label = Locale(ifx high then "habit_goal_before" else "habit_goal_after"),
+            .value = ifx high then question.goal_high else question.goal_low, .now = edit.now,
+            .now_label = Locale("statistics_now_label"), .done_label = Locale("done_button"),
+            .scale = edit.scale})
+    if picked.changed && picked.value >= 0 {
+        if high {
+            question.goal_high = picked.value
+        } else {
+            question.goal_low = picked.value
+        }
+    }
+    return picker_width
+}
+
+// The goals an answer type offers, as options with their kinds: none for
+// text, yes or no, and otherwise above or below the average, then at least,
+// at most or between; a time reads them as later, earlier, after and before.
+GoalOptions :: (answer_type: s32, options: []DropdownOption, kinds: []s32) -> s32 {
+    if answer_type == HABIT_ANSWER_TEXT {
+        return 0
+    }
+    options[0].label = Locale("habit_goal_any")
+    kinds[0] = HABIT_GOAL_NONE
+    if answer_type == HABIT_ANSWER_YES_NO {
+        options[1].label = Locale("habit_answer_yes")
+        kinds[1] = HABIT_GOAL_YES
+        options[2].label = Locale("habit_answer_no")
+        kinds[2] = HABIT_GOAL_NO
+        return 3
+    }
+    time := answer_type == HABIT_ANSWER_TIME
+    options[1].label = Locale(ifx time then "habit_goal_later_than_average"
+        else "habit_goal_above_average")
+    kinds[1] = HABIT_GOAL_ABOVE_AVERAGE
+    options[2].label = Locale(ifx time then "habit_goal_earlier_than_average"
+        else "habit_goal_below_average")
+    kinds[2] = HABIT_GOAL_BELOW_AVERAGE
+    options[3].label = Locale(ifx time then "habit_goal_after" else "habit_goal_at_least")
+    kinds[3] = HABIT_GOAL_AT_LEAST
+    options[4].label = Locale(ifx time then "habit_goal_before" else "habit_goal_at_most")
+    kinds[4] = HABIT_GOAL_AT_MOST
+    options[5].label = Locale("habit_goal_between")
+    kinds[5] = HABIT_GOAL_BETWEEN
+    return 6
+}
+
+GoalHasValues :: (kind: s32) -> bool {
+    return kind == HABIT_GOAL_AT_LEAST || kind == HABIT_GOAL_AT_MOST ||
+    kind == HABIT_GOAL_BETWEEN
+}
+
+// A goal's rows: "Good when" with its options, then its values.
+GoalHeight :: (answer_type: s32, kind: s32) -> s32 {
+    if answer_type == HABIT_ANSWER_TEXT {
+        return 0
+    }
+    height := Scale(52)
+    if GoalHasValues(kind) {
+        height += Scale(52)
+    }
+    return height
+}
+
+// The goal menu's width: wide enough for "Earlier than my average", and
+// leaving its label room on a narrow card.
+GoalMenuWidth :: (width: s32) -> s32 {
+    menu_width := Scale(220)
+    if menu_width > width * 3 / 5 {
+        menu_width = width * 3 / 5
+    }
+    return menu_width
+}
+
+// "Good when" and the goal's options, then its values: from, up to, or
+// from and to. Changes the question; returns the y below them.
+Goal :: (slot: s32, question: *HabitsEditQuestion, x: s32, y: s32, width: s32) -> s32 {
+    options: [EDIT_GOAL_OPTIONS]DropdownOption
+    kinds: [EDIT_GOAL_OPTIONS]s32
+    count := GoalOptions(question.answer_type, options[:], kinds[:])
+    if count == 0 {
+        return y
+    }
+    menu_width := GoalMenuWidth(width)
+    RowLabel(Locale("habit_goal_label"), x, y, width - menu_width - Scale(8))
+    selected: s32 = 0
+    for option: cast(s32)0..count - 1 {
+        if kinds[option] == question.goal_kind {
+            selected = option
+        }
+    }
+    chosen := Dropdown(edit.session, DropdownProps.{.id = 7770 + slot,
+            .bounds = Bounds(x + width - menu_width, y + Scale(4), menu_width, Scale(44)),
+            .selected_index = selected}, options[:count])
+    if chosen.changed {
+        question.goal_kind = kinds[chosen.selected_index]
+        GoalTexts(question)
+    }
+    y += Scale(52)
+    if !GoalHasValues(question.goal_kind) {
+        return y
+    }
+    bound_x := x
+    if question.goal_kind != HABIT_GOAL_AT_MOST {
+        bound_x += GoalBound(slot, false, question, bound_x, y + Scale(4))
+    }
+    if question.goal_kind == HABIT_GOAL_BETWEEN {
+        Text(edit.session, TextProps.{.bounds = Bounds(bound_x, y + Scale(4), Scale(40), Scale(44)),
+                .text = Locale("habit_goal_and"), .align = cast(TextAlign)TextAlignCenter,
+                .vertical_align = cast(TextAlign)TextAlignCenter})
+        bound_x += Scale(40)
+    }
+    if question.goal_kind != HABIT_GOAL_AT_LEAST {
+        unused GoalBound(slot, true, question, bound_x, y + Scale(4))
+    }
+    return y + Scale(52)
+}
+
+// A span goal's lengths as typed, in hours and minutes.
+SpanTexts :: () {
+    values: [2]s32 = .[edit.span_low, edit.span_high]
+    hours: [2]string
+    minutes: [2]string
+    for bound: cast(s32)0..1 {
+        hours[bound] = Number(cast(s64)(values[bound] / 60))
+        out: Vec(u8)
+        if values[bound] % 60 < 10 {
+            BuilderPrint(*out, "0")
+        }
+        BuilderPrint(*out, "%", values[bound] % 60)
+        minutes[bound] = BuilderFinish(out)
+    }
+    edit.span_low_hours = hours[0]
+    edit.span_low_minutes = minutes[0]
+    edit.span_high_hours = hours[1]
+    edit.span_high_minutes = minutes[1]
+}
+
+SpanGoalHeight :: () -> s32 {
+    height := Scale(52)
+    if edit.span_kind == HABIT_GOAL_AT_LEAST || edit.span_kind == HABIT_GOAL_AT_MOST {
+        height += Scale(52)
+    } else if edit.span_kind == HABIT_GOAL_BETWEEN {
+        height += Scale(104)
+    }
+    return height
+}
+
+// One length of a span goal, typed as hours and minutes at the row's end,
+// after its label. Returns the length in minutes, or -1 while either part
+// is empty.
+SpanLength :: (bound: s32, label: string, x: s32, y: s32, width: s32) -> s32 {
+    unit_width := Width(Locale("habit_unit_hours"), edit.font)
+    minutes_unit := Width(Locale("habit_unit_minutes"), edit.font)
+    if minutes_unit > unit_width {
+        unit_width = minutes_unit
+    }
+    unit_width += Scale(12)
+    hours_width := Scale(64)
+    minutes_width := Scale(56)
+    fields_width := hours_width + unit_width + minutes_width + unit_width
+    RowLabel(label, x, y, width - fields_width - Scale(8))
+    field_x := x + width - fields_width
+    units: [2]string = .["habit_unit_hours", "habit_unit_minutes"]
+    parts: [2]s32
+    for part: cast(s32)0..1 {
+        part_width := ifx part == 0 then hours_width else minutes_width
+        typed := ""
+        if bound == 0 {
+            typed = ifx part == 0 then edit.span_low_hours else edit.span_low_minutes
+        } else {
+            typed = ifx part == 0 then edit.span_high_hours else edit.span_high_minutes
+        }
+        typed = GoalField(EDIT_SPAN_FIELD_CODE + bound * 2 + part,
+            Bounds(field_x, y + Scale(4), part_width, Scale(44)), typed,
+            ifx part == 0 then 3 else 2)
+        if bound == 0 && part == 0 {
+            edit.span_low_hours = typed
+        } else if bound == 0 {
+            edit.span_low_minutes = typed
+        } else if part == 0 {
+            edit.span_high_hours = typed
+        } else {
+            edit.span_high_minutes = typed
+        }
+        parts[part] = HabitTimeTypedNumber(typed)
+        Text(edit.session, TextProps.{.bounds = Bounds(field_x + part_width, y + Scale(4),
+                    unit_width, Scale(44)),
+                .text = Locale(units[part]), .align = cast(TextAlign)TextAlignCenter,
+                .vertical_align = cast(TextAlign)TextAlignCenter})
+        field_x += part_width + unit_width
+    }
+    if parts[0] < 0 || parts[1] < 0 || parts[1] > 59 {
+        return -1
+    }
+    return parts[0] * 60 + parts[1]
+}
+
+// Which spans are good: any, shorter or longer than the average of the
+// spans before them, or at least, at most or between lengths typed in hours
+// and minutes, such as at most 8 hours for an eating window.
+SpanGoal :: (x: s32, y: s32, width: s32) {
+    options: [6]DropdownOption
+    kinds: [6]s32 = .[HABIT_GOAL_NONE, HABIT_GOAL_BELOW_AVERAGE, HABIT_GOAL_ABOVE_AVERAGE,
+    HABIT_GOAL_AT_LEAST, HABIT_GOAL_AT_MOST, HABIT_GOAL_BETWEEN]
+    options[0].label = Locale("habit_span_goal_any")
+    options[1].label = Locale("habit_span_goal_shorter")
+    options[2].label = Locale("habit_span_goal_longer")
+    options[3].label = Locale("habit_goal_at_least")
+    options[4].label = Locale("habit_goal_at_most")
+    options[5].label = Locale("habit_goal_between")
+    menu_width := GoalMenuWidth(width)
+    RowLabel(Locale("habit_goal_label"), x, y, width - menu_width - Scale(8))
+    selected: s32 = 0
+    for option: cast(s32)0..5 {
+        if kinds[option] == edit.span_kind {
+            selected = option
+        }
+    }
+    chosen := Dropdown(edit.session, DropdownProps.{.id = 7615,
+            .bounds = Bounds(x + width - menu_width, y + Scale(4), menu_width, Scale(44)),
+            .selected_index = selected}, options[:])
+    if chosen.changed {
+        edit.span_kind = kinds[chosen.selected_index]
+        // A length starts at 8 hours, or keeps the one typed.
+        if edit.span_low <= 0 && edit.span_high <= 0 {
+            edit.span_low = 8 * 60
+            edit.span_high = 8 * 60
+            SpanTexts()
+        }
+    }
+    y += Scale(52)
+    kind := edit.span_kind
+    if kind == HABIT_GOAL_AT_LEAST || kind == HABIT_GOAL_BETWEEN {
+        low := SpanLength(0, Locale(ifx kind == HABIT_GOAL_BETWEEN then "habit_goal_between"
+            else "habit_goal_at_least"), x, y, width)
+        if low >= 0 {
+            edit.span_low = low
+        }
+        y += Scale(52)
+    }
+    if kind == HABIT_GOAL_AT_MOST || kind == HABIT_GOAL_BETWEEN {
+        high := SpanLength(1, Locale(ifx kind == HABIT_GOAL_BETWEEN then "habit_goal_and"
+            else "habit_goal_at_most"), x, y, width)
+        if high >= 0 {
+            edit.span_high = high
+        }
+    }
+}
+
+// Whether a question asks the span's start, so its card holds the span's
+// goal and the tracking options don't.
+HasSpanStart :: () -> bool {
+    for index: cast(s32)0..edit.question_count - 1 {
+        if question_roles[index] == 1 {
+            return true
+        }
+    }
+    return false
+}
+
+ReadQuestions :: () {
+    count := edit.question_count
+    if count > HABIT_QUESTION_MAX {
+        count = HABIT_QUESTION_MAX
+    }
+    edit.question_count = count
+    seen: s32 = 0
+    for index: cast(s32)0..count - 1 {
+        questions[index] = ReadHabitsEditQuestionHost(index)
+        question_roles[index] = 0
+        if edit.span && questions[index].answer_type == HABIT_ANSWER_TIME {
+            seen += 1
+            if seen <= 2 {
+                question_roles[index] = seen
+            }
+        }
+    }
+}
+
+// A question's card: its words, its answer type and its goal's rows. A
+// span's start question holds the span's one goal, its length; its end
+// question has none.
+QuestionCardHeight :: (index: s32) -> s32 {
+    height := Scale(EDIT_QUESTION_PADDING) * 2 + Scale(96)
+    goal := GoalHeight(questions[index].answer_type, questions[index].goal_kind)
+    if question_roles[index] == 1 {
+        goal = SpanGoalHeight()
+    } else if question_roles[index] == 2 {
+        goal = 0
+    }
+    if goal > 0 {
+        // The goal's rows leave 4 units below their last control.
+        height += Scale(8) + goal - Scale(4)
+    }
+    return height
+}
+
+QuestionsHeight :: () -> s32 {
+    height := Scale(48) + Scale(44)
+    for index: cast(s32)0..edit.question_count - 1 {
+        height += QuestionCardHeight(index) + Scale(EDIT_QUESTION_GAP)
+    }
+    return height
+}
+
+AnswerLabel :: (answer_type: s32) -> string {
+    if answer_type == HABIT_ANSWER_NUMBER {
+        return Locale("habit_answer_number")
+    }
+    if answer_type == HABIT_ANSWER_TIME {
+        return Locale("habit_answer_time")
+    }
+    if answer_type == HABIT_ANSWER_YES_NO {
+        return Locale("habit_answer_yes_no")
+    }
+    return Locale("habit_answer_text")
+}
+
+QuestionField :: (index: s32, question: *HabitsEditQuestion, bounds: Rectangle) -> bool {
+    focused := edit.question_focused == index + 1
+    props := TextFieldProps.{.key = KeyHash("habit/edit/question") + cast(u64)index,
+        .bounds = bounds, .value = question.text,
+        .placeholder = Locale("habit_question_placeholder"), .focused = focused,
+        .focus_id = 7720 + index, .max_bytes = HABIT_QUESTION_TEXT_SIZE - 1,
+        .max_codepoints = HABIT_QUESTION_TEXT_SIZE - 1}
+    if focused {
+        props.cursor = edit.question_cursor
+        props.anchor = edit.question_anchor
+        props.scroll_x = edit.question_scroll_x
+        props.input = edit.input
+    }
+    result := TextField(edit.session, props)
+    if result.edit.changed {
+        question.text = Replaced(question.text, result.edit.start, result.edit.end,
+            result.edit.replacement, HABIT_QUESTION_TEXT_SIZE - 1)
+    }
+    if result.focused {
+        edit.question_focused = index + 1
+        edit.question_cursor = result.cursor
+        edit.question_anchor = result.anchor
+        edit.question_scroll_x = result.scroll_x
+        FocusOnly(5)
+    } else if focused {
+        edit.question_focused = 0
+    }
+    Clipboard(result)
+    return result.focused
+}
+
+// "Ask when done": each question's words with a button that removes it,
+// "Answer as" its type under them, its goal, and a button that adds a
+// question.
+Questions :: (x: s32, y: s32, width: s32) {
+    Label(Locale("habit_questions_label"), x, y + Scale(12), width, Scale(28))
+    y += Scale(48)
+    remove_width := Scale(44)
+    type_width := Scale(160)
+    types: [HABIT_ANSWER_TYPE_COUNT]DropdownOption
+    for answer_type: cast(s32)0..HABIT_ANSWER_TYPE_COUNT - 1 {
+        types[answer_type].label = AnswerLabel(answer_type + 1)
+    }
+    // Each question's card spans the options' width; its rows sit inside.
+    pad := Scale(EDIT_QUESTION_PADDING)
+    inner_x := x + pad
+    inner_width := width - pad * 2
+    for index: cast(s32)0..edit.question_count - 1 {
+        question := questions[index]
+        before := question
+        card_height := QuestionCardHeight(index)
+        unused Box(edit.session, BoxProps.{.bounds = Bounds(x, y, width, card_height),
+                .fill = edit.card_fill, .border = edit.card_border,
+                .radius = cast(float32)Scale(12)})
+        card_bottom := y + card_height
+        y += pad
+        text_bounds := Bounds(inner_x, y, inner_width - remove_width - Scale(8), Scale(44))
+        was_focused := edit.question_focused == index + 1
+        if QuestionField(index, *question, text_bounds) && !was_focused {
+            EnsureVisible(text_bounds)
+        }
+        if Step(7740 + index, "-", Bounds(inner_x + inner_width - remove_width, y, remove_width,
+                Scale(44)), false) {
+            Ask(HABITS_EDIT_REMOVE_QUESTION, index)
+        }
+        RowLabel(Locale("habit_answer_as"), inner_x, y + Scale(48), inner_width - type_width - Scale(8))
+        chosen := Dropdown(edit.session, DropdownProps.{.id = 7750 + index,
+                .bounds = Bounds(inner_x + inner_width - type_width, y + Scale(52), type_width,
+                    Scale(44)),
+                .selected_index = question.answer_type - 1}, types[:])
+        if chosen.changed {
+            // Another answer type starts with its own goal.
+            question.answer_type = chosen.selected_index + 1
+            goal := HabitGoalDefault(question.answer_type)
+            question.goal_kind = goal.kind
+            question.goal_low = goal.low
+            question.goal_high = goal.high
+            GoalTexts(*question)
+        }
+        y += Scale(104)
+        if question_roles[index] == 1 {
+            SpanGoal(inner_x, y, inner_width)
+        } else if question_roles[index] == 0 {
+            unused Goal(index, *question, inner_x, y, inner_width)
+        }
+        if question.text != before.text || question.answer_type != before.answer_type ||
+        question.goal_kind != before.goal_kind || question.goal_low != before.goal_low ||
+        question.goal_high != before.goal_high || question.low_text != before.low_text ||
+        question.high_text != before.high_text {
+            unused WriteHabitsEditQuestionHost(index, question)
+            questions[index] = question
+        }
+        y = card_bottom + Scale(EDIT_QUESTION_GAP)
+    }
+    if Button(edit.session, ButtonProps.{.id = 7760, .bounds = Bounds(x, y, width, Scale(44)),
+            .label = Filled("+  %s", 0, Locale("habit_question_add")),
+            .disabled = edit.question_count >= HABIT_QUESTION_MAX,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        Ask(HABITS_EDIT_ADD_QUESTION, -1)
+    }
+}
+
+Tracking :: (x: s32, y: s32, width: s32) {
+    Difficulty(x, y, width)
+    y += Scale(DifficultyHeight())
+    counter := RowToggle(7610, Locale("habit_counter_mode"), edit.counter_enabled, x, y, width)
+    if counter.changed {
+        edit.counter_enabled = counter.value
+        // A habit counts or measures spans, not both.
+        if counter.value {
+            edit.span = false
+        }
+    }
+    y += Scale(52)
+    if edit.counter_enabled {
+        Label(Locale("habit_counter_target"), x, y + Scale(10), width - Scale(164), Scale(36))
+        control_x := x + width - Scale(160)
+        if Step(7620, "-", Bounds(control_x, y, Scale(44), Scale(44)), edit.counter_target <= 0) {
+            edit.counter_target -= 1
+            CounterText()
+        }
+        counter_bounds := Bounds(control_x + Scale(50), y, Scale(60), Scale(44))
+        was_focused := edit.counter_focused
+        if CounterField(counter_bounds) && !was_focused {
+            EnsureVisible(counter_bounds)
+        }
+        if Step(7621, "+", Bounds(control_x + Scale(116), y, Scale(44), Scale(44)),
+            edit.counter_target >= HABIT_COUNTER_TARGET_MAX) {
+            edit.counter_target += 1
+            CounterText()
+        }
+        y += Scale(52)
+    }
+    span := RowToggle(7612, Locale("habit_span_mode"), edit.span, x, y, width)
+    if span.changed {
+        edit.span = span.value
+        if span.value {
+            edit.counter_enabled = false
+            goal := HabitSpanGoalDefault()
+            edit.span_kind = goal.kind
+            edit.span_low = goal.low
+            edit.span_high = goal.high
+            SpanTexts()
+        }
+        ReadQuestions()
+    }
+    y += Scale(52)
+    // Without a start question the span's goal sits under its switch.
+    if edit.span && !HasSpanStart() {
+        SpanGoal(x, y, width)
+        y += SpanGoalHeight()
+    }
+    linked: s32 = 0
+    for index: cast(s32)0..edit.practice_count - 1 {
+        if (edit.sync_activity & ReadHabitsEditPracticeHost(index).mask) != 0 {
+            linked += 1
+        }
+    }
+    if Button(edit.session, ButtonProps.{.id = 7630, .bounds = Bounds(x, y, width, Scale(44)),
+            .label = Filled("%s · %d", linked, Locale("habit_link_practices")),
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        Ask(HABITS_EDIT_PRACTICES, -1)
+    }
+    Questions(x, y + Scale(44), width)
+}
+
+// ---- The form -------------------------------------------------------------------
+
+// A section's body height below its heading.
+SectionBody :: (section: s32, width: s32) -> s32 {
+    if section == 0 {
+        columns := Columns(width)
+        colors: s32 = ifx edit.more_colors then 12 else 7
+        icons := IconSlots(width)
+        return Scale(266) + (colors + columns - 1) / columns * Scale(44) +
+        (icons + columns - 1) / columns * Scale(44)
+    }
+    if section == 1 {
+        return ScheduleHeight(width)
+    }
+    // The difficulty, counter mode, the span toggle and practice links, with
+    // the target or which spans are good under their toggle, then the
+    // questions.
+    height := Scale(DifficultyHeight() + 52 + 52 + 44) + QuestionsHeight()
+    if edit.counter_enabled {
+        height += Scale(52)
+    }
+    if edit.span && !HasSpanStart() {
+        height += SpanGoalHeight()
+    }
+    return height
+}
+
+// A section is a heading above a framed card holding its body.
+SectionHeight :: (section: s32, width: s32) -> s32 {
+    return Scale(30) + Scale(24) + SectionBody(section, width)
+}
+
+ContentHeight :: (width: s32) -> s32 {
+    height := Scale(16)
+    for section: cast(s32)0..2 {
+        height += SectionHeight(section, width - Scale(24)) + Scale(12)
+    }
+    return height
+}
+
+Form :: () {
+    top := Scale(56)
+    footer := Scale(ifx edit.name_error != 0 then 92 else 64)
+    options: [1]DropdownOption
+    title := TitleBar(edit.session, TitleBarProps.{
+            .title = Locale(ifx edit.is_new then "habit_new_title" else "habit_edit_title"),
+            .height = top, .strong_title = true, .bounds = Bounds(0, 0, edit.view_width, top),
+            .has_leading_action = true, .leading_label = Locale("back_button")}, options[0:0])
+    if title.clicked_leading {
+        Ask(HABITS_EDIT_BACK, -1)
+        return
+    }
+    viewport_height := edit.view_height - top - footer
+    if viewport_height < 1 {
+        viewport_height = 1
+    }
+    side := Scale(16)
+    x := side
+    width := edit.view_width - side * 2
+    if width > Scale(EDIT_CONTENT_MAX_WIDTH) {
+        x += (width - Scale(EDIT_CONTENT_MAX_WIDTH)) / 2
+        width = Scale(EDIT_CONTENT_MAX_WIDTH)
+    }
+    content_height := ContentHeight(width)
+    form_top = top
+    form_height = viewport_height
+    form_content = content_height
+    scrolled := Scroll(edit.session, ScrollProps.{.key = KeyHash("habit/edit/scroll"),
+            .bounds = Bounds(0, top, edit.view_width, viewport_height),
+            .content_height = content_height, .scroll_offset = edit.scroll})
+    edit.scroll = scrolled.scroll_offset
+    if scrolled.opened {
+        y := cast(s32)scrolled.content.y + Scale(8)
+        titles: [3]string = .[Locale("habit_details_title"), Locale("habit_routine_title"),
+        Locale("habit_tracking_title")]
+        for section: cast(s32)0..2 {
+            body_width := width - Scale(24)
+            body_height := SectionBody(section, body_width)
+            Text(edit.session, TextProps.{.bounds = Bounds(x + Scale(4), y, width - Scale(4), Scale(26)),
+                    .text = titles[section], .font = edit.font, .wrap = cast(TextWrap)TextWrapNone,
+                    .semantic_kind = cast(SemanticKind)SemanticHeading, .heading_level = 2})
+            Fieldset(edit.session, FieldsetProps.{.bounds = Bounds(x, y + Scale(30), width,
+                        body_height + Scale(24))})
+            body_x := x + Scale(12)
+            body_y := y + Scale(42)
+            if section == 0 {
+                Details(body_x, body_y, body_width)
+            } else if section == 1 {
+                Routine(body_x, body_y, body_width)
+            } else {
+                Tracking(body_x, body_y, body_width)
+            }
+            y += SectionHeight(section, body_width) + Scale(12)
+        }
+        unused End(edit.session)
+    }
+    // The footer keeps Save and Delete apart from the scrolling form.
+    unused Box(edit.session, BoxProps.{.bounds = Bounds(0, edit.view_height - footer,
+                edit.view_width, footer),
+            .fill = edit.canvas_color})
+    rule := edit.text_color
+    rule.a = cast(u8)(255.0 * 0.12)
+    unused Box(edit.session, BoxProps.{.bounds = Bounds(0, edit.view_height - footer,
+                edit.view_width, Scale(1)),
+            .fill = rule})
+    if edit.name_error != 0 {
+        Label(Locale(ifx edit.name_error == 1 then "habit_name_required" else "habit_name_duplicate"),
+            x, edit.view_height - footer + Scale(8), width, Scale(28))
+    }
+    action_x := x
+    action_width := width
+    if !edit.is_new {
+        delete_width := Scale(104)
+        if Button(edit.session, ButtonProps.{.id = 7650,
+                .bounds = Bounds(x, edit.view_height - Scale(54), delete_width, Scale(44)),
+                .label = Locale("habit_delete_button"), .tone = cast(ButtonTone)ButtonToneDanger,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            Ask(HABITS_EDIT_DELETE, -1)
+        }
+        action_x += delete_width + Scale(8)
+        action_width -= delete_width + Scale(8)
+    }
+    if Button(edit.session, ButtonProps.{.id = 7651,
+            .bounds = Bounds(action_x, edit.view_height - Scale(54), action_width, Scale(44)),
+            .label = Locale(ifx edit.is_new then "habit_create_button" else "save_button"),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+        Ask(HABITS_EDIT_SAVE, -1)
+    }
+}
+
+// The practices a habit's sessions come from, each with its checkbox.
+PracticePicker :: () {
+    width := edit.view_width - Scale(32)
+    if width > Scale(400) {
+        width = Scale(400)
+    }
+    frame := ModalFrame(edit.session, ModalFrameProps.{.key = KeyHash("habit/edit/practices"),
+            .title = Locale("habit_link_practices"), .width = width,
+            .height = Scale(344 + 42)})
+    if frame.dismissed {
+        Ask(HABITS_EDIT_PRACTICES_DONE, -1)
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    content := frame.layout.content
+    x := cast(s32)content.x
+    y := cast(s32)content.y
+    width = cast(s32)content.width
+    Label(Locale("habit_link_practices_hint"), x, y, width, Scale(28))
+    y += Scale(34)
+    for index: cast(s32)0..edit.practice_count - 1 {
+        practice := ReadHabitsEditPracticeHost(index)
+        checkbox := Checkbox(edit.session, CheckboxProps.{.id = 9120 + index,
+                .bounds = Bounds(x, y, width, Scale(38)), .label = practice.label,
+                .checked = (edit.sync_activity & practice.mask) != 0})
+        if checkbox.changed {
+            if checkbox.checked {
+                edit.sync_activity |= practice.mask
+            } else {
+                edit.sync_activity &= ~practice.mask
+            }
+        }
+        y += Scale(42)
+    }
+    if Button(edit.session, ButtonProps.{
+            .bounds = Rectangle.{cast(float32)x, content.y + content.height - cast(float32)Scale(44),
+                cast(float32)width, cast(float32)Scale(40)},
+            .label = Locale("done_button"), .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+        Ask(HABITS_EDIT_PRACTICES_DONE, -1)
+    }
+    unused End(edit.session)
+}
+
+HabitsEditView :: (message: HabitsMessage) -> HabitsMessage {
+    edit = ReadHabitsEditHost()
+    edit.action = HABITS_EDIT_NONE
+    edit.action_index = -1
+    edit.clipboard_write = false
+    edit.clipboard_text = ""
+    ReadQuestions()
+    if edit.picking_practices {
+        PracticePicker()
+    } else {
+        Form()
+    }
+    WriteHabitsEditHost(edit)
+    message.succeeded = true
+    return message
+}

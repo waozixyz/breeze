@@ -1,0 +1,215 @@
+// What a practice's card on Practice offers when the practice is not ready:
+// Install with its size, Unlock with its price for a paid practice, or
+// Cancel while it downloads; practices that come with the app are always
+// ready. Practice's home draws the card (apps/practice/practice_home_view.zi)
+// from what these say, and the host does what its button asks.
+#import "entity/dew_model"
+#import, file "../app/app_types.zi";
+#import, file "../app/app_modal_state.zi";
+#import, file "../app/app_settings.zi";
+#import, file "../app/exercise_types.zi";
+#import, file "../app/color.zi";
+#import, file "../app/locale.zi";
+#import, file "../app/metrics.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "practice_registry.zi";
+#import, file "practice_downloads.zi";
+#import, file "../storage/temporary_data.zi";
+#import, file "../storage/dew.zi";
+#import, file "../storage/practice_unlocks.zi";
+#import, file "../screens/dew_worth.zi";
+#import, file "../cells/practice_types.zi";
+#import, file "../cells/practice_ui_types.zi";
+#import "text_buffer"
+#import "geometry"
+
+// A paid practice this account has not unlocked offers its unlock instead of
+// a download, even when its pack is on this device.
+PracticeDownloadLocked :: (practice: s32) -> bool {
+    product := PracticeProduct(practice)
+    return product.count > 0 && !UnlockOwned(product)
+}
+
+PracticeDownloadPriceText :: (app: *InnerBreeze, key: string) -> string {
+    price: [32]u8
+    unused DewFormat(unlock_price, DewUnits, price[:])
+    args: [1]FormatArg = .[FormatArg.{.text = TextUntilNul(price[:]), .is_text = true}]
+    buffer: [256]u8
+    unused FormatTemplate(LocaleText(key), args[:], buffer[:])
+    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
+}
+
+// Narration follows its practice in the language it speaks, so it counts in
+// the size.
+PracticeDownloadBytes :: (app: *InnerBreeze, practice: s32) -> s64 {
+    bytes := PracticeContentBytes(practice)
+    if app.voice_narration_enabled != 0 {
+        bytes += PracticeNarrationFollowingBytes(practice)
+    }
+    return bytes
+}
+
+// Small packs show kilobytes instead of a rounded-up megabyte.
+PracticeDownloadSmall :: (bytes: s64) -> bool {
+    return bytes < 1024 * 1024
+}
+
+PracticeDownloadAmount :: (bytes: s64) -> s32 {
+    if PracticeDownloadSmall(bytes) {
+        return cast(s32)((bytes + 1023) / 1024)
+    }
+    return cast(s32)((bytes + 512 * 1024) / (1024 * 1024))
+}
+
+// A practice's size, such as "12 MB" or "596 KB".
+PracticeDownloadSize :: (app: *InnerBreeze, practice: s32, output: []u8) {
+    bytes := PracticeDownloadBytes(app, practice)
+    args: [1]FormatArg = .[FormatArg.{.number = PracticeDownloadAmount(bytes)}]
+    unused FormatTemplate(LocaleText(ifx PracticeDownloadSmall(bytes) then "practice_size_kb" else "practice_size_mb"),
+        args[:], output)
+}
+
+// Content from an older app package, without a pack of its own: on Practice,
+// with nothing to manage.
+PracticeDownloadIncluded :: (practice: s32) -> bool {
+    return PracticePackFind(practice, "") < 0 && PracticeContentReady(practice)
+}
+
+// Ready to start: on this device, unlocked when it is paid.
+PracticeDownloadReady :: (practice: s32) -> bool {
+    if PracticeDownloadLocked(practice) {
+        return false
+    }
+    return PracticeDownloadIncluded(practice) || (PracticeInstalled(practice) && PracticeContentReady(practice))
+}
+
+// What the card offers in place of Start: Unlock for a paid practice not
+// unlocked yet, Cancel while it downloads, Install otherwise, and nothing
+// once it is ready.
+PracticeDownloadAction :: (practice: s32) -> s32 {
+    if PracticeDownloadLocked(practice) {
+        return PRACTICE_OFFER_BUY
+    }
+    if PracticeDownloadReady(practice) {
+        return PRACTICE_OFFER_NONE
+    }
+    if PracticeContentStatus(practice) == 1 {
+        return PRACTICE_OFFER_CANCEL
+    }
+    return PRACTICE_OFFER_INSTALL
+}
+
+// The line under a practice's description: how its download is going.
+PracticeDownloadLine :: (app: *InnerBreeze, practice: s32) -> string {
+    unused app
+    status := PracticeContentStatus(practice)
+    if status == 1 {
+        return LocaleText("practice_download_busy")
+    }
+    if status == 3 {
+        return LocaleText("practice_download_failed")
+    }
+    return ""
+}
+
+// Why a paid practice cannot be unlocked yet, or nothing.
+PracticeDownloadNote :: (practice: s32) -> string {
+    if !PracticeDownloadLocked(practice) {
+        return ""
+    }
+    if !DewReady() {
+        return LocaleText("practice_unlock_account")
+    }
+    if UnlockBuying() {
+        return LocaleText("practice_unlock_busy")
+    }
+    if unlock_notice.count > 0 {
+        return LocaleText(unlock_notice)
+    }
+    return ""
+}
+
+PracticeDownloadActionLabel :: (app: *InnerBreeze, practice: s32, action: s32) -> string {
+    if action == PRACTICE_OFFER_BUY {
+        return PracticeDownloadPriceText(app, "practice_unlock_button")
+    }
+    if action == PRACTICE_OFFER_CANCEL {
+        return LocaleText("cancel_button")
+    }
+    // The size rides on the button, so the row's text stays short.
+    size: [32]u8
+    PracticeDownloadSize(app, practice, size[:])
+    label: [128]u8
+    unused AppCopyText(LocaleText("practice_install"), label[:])
+    unused AppAppendText(" · ", label[:])
+    unused AppAppendText(TextUntilNul(size[:]), label[:])
+    return FrameTextHold(*app.ui.frame_text, TextUntilNul(label[:]))
+}
+
+// Does what a card's download button says.
+PracticeDownloadAct :: (app: *InnerBreeze, practice: s32, action: s32) {
+    if action == PRACTICE_OFFER_BUY {
+        UnlockStart()
+    } else if action == PRACTICE_OFFER_CANCEL {
+        PracticeContentCancel(practice)
+    } else if action == PRACTICE_OFFER_INSTALL {
+        if DataTemporary() {
+            app.exercise_type = practice
+        }
+        PracticeContentRequest(practice)
+    }
+}
+
+// Each frame Practice shows: one stored copy checked, unlocks kept current,
+// and a finished unlock downloads what it unlocked.
+PracticeDownloadsTick :: () {
+    PracticeContentReviewNext()
+    UnlockRefresh()
+    if UnlockTakeBought() {
+        for practice: cast(s32)0..practice_count() - 1 {
+            if PracticeProduct(practice) == UnlockTaiChi {
+                PracticeContentRequest(practice)
+            }
+        }
+    }
+}
+
+// What Practice's home shows for a practice: the button in place of Start
+// and the lines under its title.
+PracticeOfferFill :: (app: *InnerBreeze, practice: s32, frame: *PracticeHomeFrame) {
+    offer := PracticeDownloadAction(practice)
+    frame.ready = PracticeDownloadReady(practice)
+    frame.offer = offer
+    frame.status = PracticeDownloadLine(app, practice)
+    frame.note = PracticeDownloadNote(practice)
+    if offer != PRACTICE_OFFER_NONE {
+        disabled := app.modal.active != 0 || practice_active(app) != null
+        if offer == PRACTICE_OFFER_BUY {
+            disabled = disabled || !DewReady() || UnlockBuying()
+        } else if offer == PRACTICE_OFFER_INSTALL {
+            disabled = disabled || !PracticePackReviewed(practice, "")
+        }
+        frame.offer_label = PracticeDownloadActionLabel(app, practice, offer)
+        frame.offer_disabled = disabled
+    }
+    frame.priced = PracticeDownloadLocked(practice)
+    if !frame.priced {
+        return
+    }
+    DewRatesRefresh()
+    if UnlockOffer() && unlock_regular_price > 0 {
+        regular: [32]u8
+        unused DewFormat(unlock_regular_price, DewUnits, regular[:])
+        unused AppAppendText(" Dew", regular[:])
+        frame.regular_price = FrameTextHold(*app.ui.frame_text, TextUntilNul(regular[:]))
+        percent := ((unlock_regular_price - unlock_price) * 100 + unlock_regular_price / 2) /
+        unlock_regular_price
+        badge: [16]u8
+        unused AppCopyText("-", badge[:])
+        number: [8]u8
+        unused AppFormatS64(percent, number[:])
+        unused AppAppendText(TextUntilNul(number[:]), badge[:])
+        unused AppAppendText("%", badge[:])
+        frame.discount = FrameTextHold(*app.ui.frame_text, TextUntilNul(badge[:]))
+    }
+}

@@ -6,9 +6,8 @@ release workflow and changelog.
 
 ## App packages
 
-- Move the remaining host-drawn Habits screens into `apps/habits/`, followed
-  by Practices, so those screens can update without a new APK. The hosted
-  editor, table, statistics and typed data calls are still needed.
+- Move the remaining host-drawn Practices screens into `apps/practice/`, so
+  they can update without a new APK, as Habits' screens already do.
 
 ## Media sources
 

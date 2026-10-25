@@ -88,18 +88,31 @@ def overlaps(node, other):
     return node["x"] < other["x"] + other["width"] and other["x"] < node["x"] + node["width"]
 
 
+def in_dialog(tree, node):
+    """Whether a widget belongs to the open dialog, not to the habit list
+    behind it, whose day circles show counts too."""
+    nodes = {other["index"]: other for other in tree}
+    while node["parent"] in nodes:
+        node = nodes[node["parent"]]
+        if node["kind"] == "modal":
+            return True
+    return False
+
+
 def shown_count(driver):
     """The large count between the dialog's day and its target."""
     target = driver.wait(contains="Daily target")
     tree = driver.tree()
     days = [node for node in tree if node["visible"] and node["kind"] == "text"
-            and node["label"] == "Today" and node["y"] < target["y"] and overlaps(node, target)]
+            and node["label"] == "Today" and node["y"] < target["y"] and overlaps(node, target)
+            and in_dialog(tree, node)]
     if not days:
         raise Failure(f"FAIL the dialog shows no day ({TEST_DIR})")
     day = max(days, key=lambda node: node["y"])
     numbers = [node for node in tree
                if node["visible"] and node["kind"] == "text" and node["label"].isdigit()
-               and day["y"] < node["y"] < target["y"] and overlaps(node, target)]
+               and day["y"] < node["y"] < target["y"] and overlaps(node, target)
+               and in_dialog(tree, node)]
     if len(numbers) != 1:
         raise Failure(f"FAIL the dialog shows {len(numbers)} counts ({TEST_DIR})")
     return int(numbers[0]["label"])

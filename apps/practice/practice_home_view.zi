@@ -1,0 +1,512 @@
+// Practice's home: the chosen practice's banner fading into the page, its
+// title and what its card says, the tabs for each kind of practice, arrows
+// through the practices under the tab, and Start with the manual and the
+// settings, or the button that installs, unlocks or cancels a practice that
+// is not ready. Swipes and the arrow keys go to the next or previous
+// practice. The host keeps the practices, their downloads and the route.
+#import "session"
+#import "geometry"
+#import "vec"
+#import "dpi"
+#import "drawing_props"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "text_measure"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "box_props"
+#import "box_widget"
+#import "image_props"
+#import "image_widget"
+#import "tab_bar_props"
+#import "tab_bar_widget"
+#import "swipe_props"
+#import "swipe"
+#import, file "../../src/cells/practice_ui_types.zi";
+#import, file "../../src/cells/practice_types.zi";
+
+using ArrowDirection;
+using ButtonTone;
+using ButtonEmphasis;
+using ControlSize;
+using ImageFit;
+using SwipeDirection;
+using TextAlign;
+using TextWrap;
+host_api :: #system_library "host_api";
+ReadPracticeHomeHost :: () -> PracticeHomeFrame #foreign host_api;
+WritePracticeHomeHost :: (frame: PracticeHomeFrame) #foreign host_api;
+ReadPracticeHomeTabHost :: (index: s32) -> PracticeHomeTab #foreign host_api;
+PracticeLocaleHost :: (key: string) -> string #foreign host_api;
+home: PracticeHomeFrame;
+
+HOME_TAB_MAX :: 8
+HOME_CAROUSEL_ID :: 7090
+HOME_TABS_ID :: 17470
+HOME_TAB_KEY :: 17480
+HOME_OFFER_ID :: 17410
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, home.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+Locale :: (key: string) -> string {
+    return PracticeLocaleHost(key)
+}
+
+Width :: (text: string, font: s32) -> s32 {
+    return TextWidth(home.session, TextProps.{.text = text, .font = font})
+}
+
+FitFont :: (text: string, max_width: s32, preferred: s32, minimum: s32) -> s32 {
+    font := preferred
+    if max_width <= 0 {
+        return font
+    }
+    while font > minimum && Width(text, font) > max_width {
+        font -= 1
+    }
+    return font
+}
+
+// The height of text wrapped in width, with a small gap between its lines.
+ParagraphHeight :: (text: string, width: s32, font: s32) -> s32 {
+    return TextHeight(home.session, TextProps.{.text = text, .font = font,
+            .bounds = Bounds(0, 0, width, 0), .wrap = cast(TextWrap)TextWrapAuto,
+            .line_gap = Scale(3)})
+}
+
+Alpha :: (color: Color, opacity: float32) -> Color {
+    color.a = cast(u8)(255.0 * opacity)
+    return color
+}
+
+// ---- The title and the lines under it -----------------------------------------
+
+TitleLayout :: struct {
+    title: TextProps
+    subtitle: TextProps
+    height: s32
+}
+
+// The centred heading, measured with room for accents and descenders, and
+// the practice's description under it.
+Title :: (x: s32, width: s32) -> TitleLayout {
+    layout: TitleLayout
+    preferred := ifx width >= Scale(600) then Scale(42) else Scale(34)
+    max_width := width - Scale(36)
+    if max_width < Scale(220) {
+        max_width = width
+    }
+    padding := Scale(4)
+    layout.title = TextProps.{.text = home.title, .bounds = Bounds(x, 0, width, 0),
+        .font = FitFont(home.title, max_width, preferred, home.font + Scale(4)),
+        .align = cast(TextAlign)TextAlignCenter,
+        .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapAuto}
+    title_height := TextHeight(home.session, layout.title) + padding * 2
+    layout.title.bounds.height = cast(float32)title_height
+    layout.height = title_height
+    if home.subtitle.count > 0 {
+        layout.subtitle = TextProps.{.text = home.subtitle,
+            .bounds = Bounds(x, title_height + Scale(6), width, 0),
+            .font = FitFont(home.subtitle, max_width, home.font + Scale(1), Scale(14)),
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapAuto}
+        subtitle_height := TextHeight(home.session, layout.subtitle) + padding * 2
+        layout.subtitle.bounds.height = cast(float32)subtitle_height
+        layout.height += Scale(6) + subtitle_height
+    }
+    return layout
+}
+
+PriceRowHeight :: () -> s32 {
+    return home.small_font + Scale(12)
+}
+
+// The offer row, with what the price is worth under it once the node's
+// rates are known.
+PriceHeight :: () -> s32 {
+    height: s32 = 0
+    if home.regular_price.count > 0 {
+        height = PriceRowHeight()
+    }
+    if home.worth.count > 0 {
+        height += home.small_font + Scale(6)
+    }
+    return height
+}
+
+StatusHeight :: (width: s32) -> s32 {
+    height: s32 = 0
+    if home.status.count > 0 {
+        height += ParagraphHeight(home.status, width, home.small_font) + Scale(4)
+    }
+    if home.priced && PriceHeight() > 0 {
+        height += PriceHeight() + Scale(4)
+    }
+    if home.note.count > 0 {
+        height += ParagraphHeight(home.note, width, home.small_font) + Scale(4)
+    }
+    return height
+}
+
+CentredLine :: (text: string, x: s32, y: s32, width: s32) -> s32 {
+    height := ParagraphHeight(text, width, home.small_font)
+    Text(home.session, TextProps.{.bounds = Bounds(x, y + Scale(4), width, height),
+            .text = text, .font = home.small_font, .align = cast(TextAlign)TextAlignCenter,
+            .wrap = cast(TextWrap)TextWrapAuto})
+    return height + Scale(4)
+}
+
+// During an offer the regular price is struck through beside its discount
+// badge, such as -90%; what the price is worth follows under it.
+Price :: (x: s32, y: s32, width: s32) {
+    font := home.small_font
+    height: s32 = 0
+    if home.regular_price.count > 0 {
+        height = PriceRowHeight()
+        regular_width := Width(home.regular_price, font)
+        Text(home.session, TextProps.{.bounds = Bounds(x, y, regular_width, height),
+                .text = home.regular_price, .font = font,
+                .vertical_align = cast(TextAlign)TextAlignCenter,
+                .wrap = cast(TextWrap)TextWrapNone, .disabled = true, .strikethrough = true})
+        badge_height := font + Scale(8)
+        badge_width := Width(home.discount, font) + Scale(14)
+        badge := Bounds(x + regular_width + Scale(10), y + (height - badge_height) / 2,
+            badge_width, badge_height)
+        Box(home.session, BoxProps.{.bounds = badge, .fill = Alpha(home.accent_color, 64.0 / 255.0),
+                .radius = cast(float32)badge_height / 2.0})
+        Text(home.session, TextProps.{.bounds = badge, .text = home.discount, .font = font,
+                .align = cast(TextAlign)TextAlignCenter,
+                .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapNone})
+    }
+    if home.worth.count > 0 {
+        Text(home.session, TextProps.{.bounds = Bounds(x, y + height, width, font + Scale(6)),
+                .text = home.worth, .font = font, .vertical_align = cast(TextAlign)TextAlignCenter,
+                .wrap = cast(TextWrap)TextWrapNone})
+    }
+}
+
+// The download's progress or failure, a paid practice's price and why it
+// cannot be unlocked yet.
+Status :: (x: s32, y: s32, width: s32) {
+    if home.status.count > 0 {
+        y += CentredLine(home.status, x, y, width)
+    }
+    if home.priced && PriceHeight() > 0 {
+        price_width := width
+        if price_width > Scale(300) {
+            price_width = Scale(300)
+        }
+        Price(x + (width - price_width) / 2, y + Scale(4), price_width)
+        y += PriceHeight() + Scale(4)
+    }
+    if home.note.count > 0 {
+        unused CentredLine(home.note, x, y, width)
+    }
+}
+
+// ---- Tabs, arrows and buttons -------------------------------------------------------
+
+// One tab for each kind with a practice to list. Choosing one asks the host
+// for the practice that tab last showed.
+Tabs :: (bounds: Rectangle) {
+    if home.tab_count <= 0 {
+        return
+    }
+    tabs: [HOME_TAB_MAX]Tab
+    count := home.tab_count
+    if count > HOME_TAB_MAX {
+        count = HOME_TAB_MAX
+    }
+    for index: cast(s32)0..count - 1 {
+        tab := ReadPracticeHomeTabHost(index)
+        tabs[index] = Tab.{.key = cast(u64)(HOME_TAB_KEY + tab.slot), .label = tab.label,
+            .disabled = home.modal_active}
+    }
+    Box(home.session, BoxProps.{.bounds = bounds, .fill = home.canvas_color})
+    bar := TabBar(home.session, TabBarProps.{.id = HOME_TABS_ID,
+            .bounds = Rectangle.{bounds.x + cast(float32)Scale(12), bounds.y + cast(float32)Scale(4),
+                bounds.width - cast(float32)Scale(24), bounds.height - cast(float32)Scale(8)},
+            .selected_index = home.tab_selected, .min_tab_width = Scale(72),
+            .max_tab_width = Scale(220), .content_sized = true,
+            .scroll_offset = home.tab_scroll, .scale = home.scale,
+            .focus_selected = home.tab_focus}, tabs[:count])
+    home.tab_scroll = bar.scroll_offset
+    if !home.modal_active && bar.selected_index >= 0 && bar.selected_index < count &&
+    bar.selected_index != home.tab_selected {
+        home.action = PRACTICE_HOME_TAB
+        home.value = bar.selected_index
+    }
+}
+
+// Arrows round the practices under the tab, with "2 / 5" between them.
+Carousel :: (bounds: Rectangle) {
+    count := home.listed
+    selected := home.index
+    if count <= 1 || bounds.width <= 0 || bounds.height <= 0 {
+        return
+    }
+    button_size := cast(float32)Scale(48)
+    inset := bounds.width * 0.08
+    button_y := bounds.y + (bounds.height - button_size) / 2
+    picked: s32 = -1
+    if Button(home.session, ButtonProps.{
+            .bounds = Rectangle.{bounds.x + inset, button_y, button_size, button_size},
+            .id = HOME_CAROUSEL_ID + 1, .disabled = home.modal_active,
+            .arrow = true, .direction = cast(ArrowDirection)ArrowLeft,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+        picked = ifx selected > 0 then selected - 1 else count - 1
+    }
+    if Button(home.session, ButtonProps.{
+            .bounds = Rectangle.{bounds.x + bounds.width - button_size - inset, button_y,
+                button_size, button_size},
+            .id = HOME_CAROUSEL_ID + 2, .disabled = home.modal_active,
+            .arrow = true, .direction = cast(ArrowDirection)ArrowRight,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+        picked = ifx selected < count - 1 then selected + 1 else 0
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "% / %", selected + 1, count)
+    Text(home.session, TextProps.{.text = BuilderFinish(out), .bounds = bounds,
+            .font = Scale(18), .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapNone})
+    if picked >= 0 && picked != selected {
+        home.action = PRACTICE_HOME_PICK
+        home.value = picked
+    }
+}
+
+ActionGap :: (width: s32) -> s32 {
+    return ifx width < Scale(340) then Scale(8) else Scale(12)
+}
+
+// Whether Manual and Settings fit side by side in width, each wide enough
+// for its label.
+ActionsShareRow :: (width: s32) -> bool {
+    if !home.has_manual || !home.has_config {
+        return false
+    }
+    padding := Scale(20)
+    gap := ActionGap(width)
+    manual_min := Width(Locale("practice_manual_button"), home.font) + padding * 2
+    config_min := Width(Locale("practice_configure_button"), home.font) + padding * 2
+    if width < manual_min + config_min + gap {
+        return false
+    }
+    available := width - gap
+    half := available / 2
+    if half >= manual_min && available - half >= config_min {
+        return true
+    }
+    manual := manual_min
+    config := available - manual
+    if config < config_min {
+        config = config_min
+        manual = available - config
+    }
+    return manual >= manual_min && config >= config_min
+}
+
+// The button in place of Start for a practice that is not ready.
+Offer :: (bounds: Rectangle) {
+    cancel := home.offer == PRACTICE_OFFER_CANCEL
+    if Button(home.session, ButtonProps.{.id = HOME_OFFER_ID + home.practice * 2,
+            .bounds = bounds, .pill = true, .label = home.offer_label,
+            .disabled = home.offer_disabled,
+            .tone = cast(ButtonTone)(ifx cancel then ButtonToneNeutral else ButtonToneAccent),
+            .emphasis = cast(ButtonEmphasis)(ifx cancel then ButtonEmphasisSoft else ButtonEmphasisFilled),
+            .size = cast(ControlSize)ControlSizeLarge}) != 0 {
+        home.action = PRACTICE_HOME_OFFER
+    }
+}
+
+SecondaryButton :: (bounds: Rectangle, label: string) -> bool {
+    return Button(home.session, ButtonProps.{.bounds = bounds, .label = label,
+            .disabled = home.modal_active, .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .pill = true}) != 0
+}
+
+// ---- The page ---------------------------------------------------------------------------
+
+Page :: () {
+    view_x := home.left
+    view_width := home.view_width - home.left
+    if view_width < Scale(320) {
+        view_x = 0
+        view_width = home.view_width
+    }
+    content_width := view_width - Scale(80)
+    if content_width > Scale(940) {
+        content_width = Scale(940)
+    }
+    if content_width < Scale(520) {
+        content_width = view_width - Scale(32)
+    }
+    x := view_x + (view_width - content_width) / 2
+    hero_height := home.view_height - home.bottom
+    tabs_height := home.top
+    if hero_height <= tabs_height {
+        return
+    }
+    hero := Bounds(view_x, tabs_height, view_width, hero_height - tabs_height)
+    button_height := Scale(48)
+    action_gap := Scale(14)
+    total_width := content_width
+    if total_width > Scale(700) {
+        total_width = Scale(700)
+    }
+    if total_width > view_width - Scale(32) {
+        total_width = view_width - Scale(32)
+    }
+    if total_width < Scale(360) {
+        total_width = view_width - Scale(24)
+    }
+    secondary_count: s32 = 0
+    manual := home.ready && home.has_manual
+    config := home.ready && home.has_config
+    if manual {
+        secondary_count += 1
+    }
+    if config {
+        secondary_count += 1
+    }
+    button_count := 1 + secondary_count
+    wide := total_width >= Scale(600)
+    secondary_row := secondary_count < 2 || ActionsShareRow(total_width)
+    rows: s32 = 1
+    if !wide {
+        if secondary_row {
+            rows += ifx secondary_count > 0 then 1 else 0
+        } else {
+            rows += secondary_count
+        }
+    }
+    bottom_gap := ifx home.bottom > 0 then Scale(28) else Scale(20)
+    actions_height := rows * button_height + (rows - 1) * action_gap
+    button_y := hero_height - bottom_gap - actions_height
+    pager_height := ifx home.listed > 1 then Scale(48) else 0
+    pager_y := button_y - Scale(10) - pager_height
+    title := Title(x, content_width)
+    title_block := title.height + StatusHeight(content_width) + Scale(28)
+    if title_block < Scale(100) {
+        title_block = Scale(100)
+    }
+    title_y := pager_y - title_block
+    if title_y < tabs_height + Scale(8) {
+        title_y = tabs_height + Scale(8)
+    }
+    primary_width := total_width
+    if wide {
+        primary_width = (total_width - action_gap * (button_count - 1)) / button_count
+    }
+    secondary_width := total_width
+    if wide {
+        secondary_width = primary_width
+    } else if secondary_row && secondary_count > 0 {
+        secondary_width = (total_width - action_gap * (secondary_count - 1)) / secondary_count
+    }
+    action_x := view_x + (view_width - total_width) / 2
+    pager_width := ifx total_width < Scale(480) then total_width else Scale(480)
+    pager_x := view_x + (view_width - pager_width) / 2
+    home.card = hero
+
+    swipe := Swipe(SwipeSpec.{.bounds = hero, .directions = 3,
+            .min_distance = cast(float32)Scale(48), .axis_bias = 1.4, .max_duration = 1.2},
+        home.swipe, home.swipe_frame)
+    home.swipe = swipe.gesture
+    home.claim_pointer = swipe.claim_pointer
+    home.release_pointer = swipe.release_pointer
+    home.block_click = swipe.capture_input || swipe.consume_release
+    if home.choosing && (swipe.direction == cast(SwipeDirection)SwipeLeft || home.key_right) {
+        home.action = PRACTICE_HOME_STEP
+        home.value = 1
+    } else if home.choosing && (swipe.direction == cast(SwipeDirection)SwipeRight || home.key_left) {
+        home.action = PRACTICE_HOME_STEP
+        home.value = -1
+    }
+
+    if home.banner.count > 0 {
+        Image(home.session, ImageProps.{.asset_path = home.banner,
+                .bounds = Rectangle.{hero.x, hero.y, hero.width,
+                    cast(float32)(title_y + Scale(8)) - hero.y},
+                .fit = cast(ImageFit)ImageFitCover})
+    } else {
+        Box(home.session, BoxProps.{.bounds = hero, .fill = home.surface_color})
+    }
+    // The banner fades into the page above the title.
+    fade_height := Scale(120)
+    Box(home.session, BoxProps.{
+            .bounds = Bounds(view_x, title_y - fade_height, view_width, fade_height),
+            .fill = Alpha(home.canvas_color, 0.0), .fill_bottom = home.canvas_color,
+            .has_fill_bottom = true})
+    Box(home.session, BoxProps.{.bounds = Bounds(view_x, title_y, view_width, hero_height - title_y),
+            .fill = home.canvas_color})
+
+    title.title.bounds.y += cast(float32)title_y
+    Text(home.session, title.title)
+    if title.subtitle.text.count > 0 {
+        title.subtitle.bounds.y += cast(float32)title_y
+        Text(home.session, title.subtitle)
+    }
+    Status(x, title_y + title.height, content_width)
+
+    Tabs(Bounds(view_x, 0, view_width, tabs_height))
+    Carousel(Bounds(pager_x, pager_y, pager_width, pager_height))
+
+    home.start = Bounds(action_x, button_y, primary_width, button_height)
+    if home.offer != PRACTICE_OFFER_NONE {
+        Offer(home.start)
+    } else if Button(home.session, ButtonProps.{.bounds = home.start,
+            .label = Locale("practice_start_button"), .disabled = home.modal_active,
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .size = cast(ControlSize)ControlSizeLarge, .pill = true}) != 0 {
+        home.action = PRACTICE_HOME_START
+    }
+    if wide {
+        action_x += primary_width + action_gap
+    } else {
+        button_y += button_height + action_gap
+    }
+    if manual {
+        home.manual = Bounds(action_x, button_y, secondary_width, button_height)
+        if SecondaryButton(home.manual, Locale("practice_manual_button")) {
+            home.action = PRACTICE_HOME_MANUAL
+        }
+        if wide || secondary_row {
+            action_x += secondary_width + action_gap
+        } else {
+            button_y += button_height + action_gap
+        }
+    }
+    if config {
+        home.config = Bounds(action_x, button_y, secondary_width, button_height)
+        if SecondaryButton(home.config, Locale("practice_configure_button")) {
+            home.action = PRACTICE_HOME_CONFIG
+        }
+    }
+}
+
+PracticeHomeView :: (message: PracticeMessage) -> PracticeMessage {
+    home = ReadPracticeHomeHost()
+    home.action = PRACTICE_HOME_NONE
+    home.value = 0
+    home.card = Rectangle.{}
+    home.start = Rectangle.{}
+    home.manual = Rectangle.{}
+    home.config = Rectangle.{}
+    Page()
+    WritePracticeHomeHost(home)
+    message.succeeded = true
+    return message
+}

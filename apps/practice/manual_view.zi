@@ -1,0 +1,755 @@
+// A practice's manual: a few pages, each with a picture or a small preview,
+// its title with "Step 1 of 4", and what to know, turned with Back and Next,
+// a swipe or the arrow keys; the last page's Next starts the practice. The
+// Wim Hof manual changes the breathing speed on its breathing page. The host
+// keeps the page, the settings and what closing or starting does.
+#import "session"
+#import "geometry"
+#import "vec"
+#import "dpi"
+#import "layout"
+#import "drawing_props"
+#import "text_props"
+#import "text_align"
+#import "text_widget"
+#import "text_measure"
+#import "button_props"
+#import "button_widget"
+#import "control_props"
+#import "box_props"
+#import "box_widget"
+#import "image_props"
+#import "image_widget"
+#import "scroll_props"
+#import "scroll_widget"
+#import "shape_props"
+#import "shape_widget"
+#import "slider_props"
+#import "slider_widget"
+#import "progress_props"
+#import "progress_widget"
+#import "title_bar_props"
+#import "title_bar_widget"
+#import "dropdown_props"
+#import "swipe_props"
+#import "swipe"
+#import "tree"
+#import, file "../../src/cells/practice_ui_types.zi";
+#import, file "../../src/cells/practice_types.zi";
+#import, file "../../src/app/exercise_types.zi";
+#import, file "../../src/practices/patterns/patterns_rules.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using ExerciseType;
+using ImageFit;
+using SwipeDirection;
+using TextAlign;
+using TextWrap;
+host_api :: #system_library "host_api";
+ReadPracticeManualHost :: () -> PracticeManualFrame #foreign host_api;
+WritePracticeManualHost :: (frame: PracticeManualFrame) #foreign host_api;
+ManualLocaleHost :: (key: string) -> string #foreign host_api;
+manual: PracticeManualFrame;
+
+MANUAL_MAX_WIDTH :: 640
+MANUAL_SIDE_PADDING :: 24
+MANUAL_TOP_GAP :: 24
+MANUAL_LINE_GAP :: 6
+MANUAL_NAV_HEIGHT :: 68
+MANUAL_SPEED_ID :: 490
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, manual.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+Locale :: (key: string) -> string {
+    return ManualLocaleHost(key)
+}
+
+Width :: (text: string, font: s32) -> s32 {
+    return TextWidth(manual.session, TextProps.{.text = text, .font = font})
+}
+
+FitFont :: (text: string, max_width: s32, preferred: s32, minimum: s32) -> s32 {
+    font := preferred
+    if max_width <= 0 {
+        return font
+    }
+    while font > minimum && Width(text, font) > max_width {
+        font -= 1
+    }
+    return font
+}
+
+Alpha :: (color: Color, opacity: float32) -> Color {
+    color.a = cast(u8)(cast(float32)color.a * opacity)
+    return color
+}
+
+// The template with each %d replaced by the next value.
+Filled :: (template: string, first: s32, second: s32) -> string {
+    out: Vec(u8)
+    values: [2]s32 = .[first, second]
+    used: s32 = 0
+    at: s64 = 0
+    while at < template.count {
+        if at + 1 < template.count && template[at] == cast(u8)37 &&
+        template[at + 1] == cast(u8)100 && used < 2 {
+            BuilderPrint(*out, "%", values[used])
+            used += 1
+            at += 2
+        } else {
+            BuilderPrint(*out, "%", template[at:at + 1])
+            at += 1
+        }
+    }
+    return BuilderFinish(out)
+}
+
+Number :: (value: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value)
+    return BuilderFinish(out)
+}
+
+// ---- What every manual shares ---------------------------------------------------
+
+PageCount :: () -> s32 {
+    if manual.practice == EXERCISE_WIM_HOF { return 4 }
+    if manual.practice == EXERCISE_PATTERNS { return 3 }
+    return 2
+}
+
+ParagraphHeight :: (text: string, width: s32) -> s32 {
+    return TextHeight(manual.session, TextProps.{.text = text, .font = manual.font,
+            .bounds = Bounds(0, 0, width, 0), .wrap = cast(TextWrap)TextWrapAuto,
+            .line_gap = Scale(MANUAL_LINE_GAP)})
+}
+
+// A paragraph, measured with the manual's line gap; y moves below it.
+Paragraph :: (text: string, x: s32, y: *s32, width: s32, align: TextAlign) {
+    if width <= 0 {
+        return
+    }
+    height := ParagraphHeight(text, width)
+    Text(manual.session, TextProps.{.bounds = Bounds(x, y.*, width, height), .text = text,
+            .font = manual.font, .wrap = cast(TextWrap)TextWrapAuto, .align = align})
+    y.* += height
+}
+
+// One line, centred on its height and, when asked, across it.
+Label :: (text: string, bounds: Rectangle, font: s32, centred: bool) {
+    Text(manual.session, TextProps.{.text = text, .bounds = bounds, .font = font,
+            .wrap = cast(TextWrap)TextWrapNone, .vertical_align = cast(TextAlign)TextAlignCenter,
+            .align = cast(TextAlign)(ifx centred then TextAlignCenter else TextAlignStart)})
+}
+
+// A rounded card in the guide's colours, outlined when it stands out.
+Panel :: (bounds: Rectangle, radius: s32, outline: bool) {
+    Box(manual.session, BoxProps.{.bounds = bounds, .fill = manual.guide_background,
+            .border = ifx outline then manual.guide_foreground else Color.{},
+            .radius = cast(float32)radius})
+}
+
+Disc :: (center_x: s32, center_y: s32, radius: s32, color: Color) {
+    Box(manual.session, BoxProps.{.bounds = Bounds(center_x - radius, center_y - radius,
+                radius * 2, radius * 2), .fill = color, .radius = cast(float32)radius})
+}
+
+HeaderHeight :: () -> s32 {
+    return Scale(42) + Scale(10) + Scale(24) + Scale(16)
+}
+
+// The page's title, with "Step 2 of 4" under it.
+Header :: (title: string, x: s32, y: *s32, width: s32) {
+    page := manual.page
+    Text(manual.session, TextProps.{.bounds = Bounds(x, y.*, width, Scale(42)), .text = title,
+            .wrap = cast(TextWrap)TextWrapNone, .vertical_align = cast(TextAlign)TextAlignCenter})
+    Text(manual.session, TextProps.{.bounds = Bounds(x, y.* + Scale(52), width, Scale(24)),
+            .text = Filled(Locale("tutorial_step_progress"), page + 1, PageCount()),
+            .wrap = cast(TextWrap)TextWrapNone})
+    y.* += HeaderHeight()
+}
+
+// The page dots along the bottom of a page's picture.
+HeroDots :: (bounds: Rectangle) {
+    count := PageCount()
+    if bounds.width <= 0.0 || bounds.height <= 0.0 {
+        return
+    }
+    gap := Scale(18)
+    dots_width := (count - 1) * gap
+    center_x := cast(s32)(bounds.x + bounds.width / 2.0)
+    dots_y := cast(s32)(bounds.y + bounds.height - cast(float32)Scale(15))
+    for index: cast(s32)0..count - 1 {
+        active := index == manual.page
+        radius := ifx active then Scale(4) else Scale(3)
+        Disc(center_x - dots_width / 2 + index * gap, dots_y, radius,
+            ifx active then manual.guide_foreground else manual.guide_border)
+    }
+}
+
+// A page's picture keeps to the screen.
+Hero :: (x: s32, width: s32, y: s32, height: s32) -> Rectangle {
+    if x < 0 {
+        width += x
+        x = 0
+    }
+    if x + width > manual.view_width {
+        width = manual.view_width - x
+    }
+    if width < 0 {
+        width = 0
+    }
+    return Bounds(x, y, width, height)
+}
+
+Picture :: (asset: string, alt: string, bounds: Rectangle, fit: ImageFit) {
+    Image(manual.session, ImageProps.{.asset_path = asset, .alt_text = alt, .bounds = bounds,
+            .fit = fit})
+}
+
+// The ring Meditation and Astral Projection show for Customize.
+CustomizeRing :: (hero: Rectangle, label: string) {
+    Box(manual.session, BoxProps.{.bounds = hero, .fill = manual.guide_background,
+            .radius = cast(float32)Scale(14)})
+    center_x := cast(s32)(hero.x + hero.width / 2.0)
+    center_y := cast(s32)(hero.y + hero.height / 2.0)
+    Disc(center_x, center_y, Scale(68), Alpha(manual.guide_foreground, 0.24))
+    Disc(center_x, center_y, Scale(48), manual.guide_background)
+    inner := Scale(48)
+    Text(manual.session, TextProps.{.bounds = Bounds(center_x - inner, center_y - inner,
+                inner * 2, inner * 2), .text = label, .wrap = cast(TextWrap)TextWrapNone,
+            .align = cast(TextAlign)TextAlignCenter, .vertical_align = cast(TextAlign)TextAlignCenter})
+}
+
+// ---- Meditation and Astral Projection ---------------------------------------------
+
+PictureHeight :: (width: s32) -> s32 {
+    return width * 222 / 394
+}
+
+PictureBodyKey :: () -> string {
+    if manual.practice == EXERCISE_ASTRAL_PROJECTION {
+        return ifx manual.page == 0 then "astral_manual_intro_text" else "astral_manual_customize_text"
+    }
+    return ifx manual.page == 0 then "meditation_manual_intro_text" else "meditation_manual_customize_text"
+}
+
+PicturePageHeight :: (width: s32) -> s32 {
+    return PictureHeight(width) + Scale(24) + HeaderHeight() +
+    ParagraphHeight(Locale(PictureBodyKey()), width)
+}
+
+PicturePage :: (x: s32, width: s32, y: *s32) {
+    astral := manual.practice == EXERCISE_ASTRAL_PROJECTION
+    height := PictureHeight(width)
+    hero := Hero(x, width, y.*, height)
+    title := Locale("practice_configure_button")
+    if manual.page == 0 {
+        if astral {
+            title = Locale("exercise_astral_projection")
+            Picture(ifx manual.dark then "assets/practices/astral_projection/banner-dark.png"
+                else "assets/practices/astral_projection/banner-light.png", title, hero,
+                cast(ImageFit)ImageFitCover)
+        } else {
+            title = Locale("meditation_title")
+            Picture("assets/practices/meditation/1.png", title, hero, cast(ImageFit)ImageFitContain)
+        }
+    } else {
+        CustomizeRing(hero, ifx astral then title else Locale("meditation_title"))
+    }
+    HeroDots(hero)
+    y.* += height + Scale(24)
+    Header(title, x, y, width)
+    Paragraph(Locale(PictureBodyKey()), x, y, width, cast(TextAlign)TextAlignStart)
+}
+
+// ---- Wim Hof ----------------------------------------------------------------------------
+
+WhmBodyKey :: (page: s32) -> string {
+    if page == 0 { return "tutorial_step_intro" }
+    if page == 1 { return "tutorial_step_breathe" }
+    if page == 2 { return "tutorial_step_exhale_hold" }
+    return "tutorial_step_inhale_hold"
+}
+
+WhmTitleKey :: (page: s32) -> string {
+    if page == 0 { return "tutorial_title_before_begin" }
+    if page == 1 { return "tutorial_title_breathe" }
+    if page == 2 { return "tutorial_title_exhale_hold" }
+    return "tutorial_title_recovery_breath"
+}
+
+WhmHintKey :: (page: s32) -> string {
+    return ifx page == 3 then "tutorial_step_inhale_hold_hint" else "tutorial_step_exhale_hold_hint"
+}
+
+WhmVisualHeight :: (page: s32) -> s32 {
+    return ifx page == 1 || page == 2 then Scale(238) else Scale(242)
+}
+
+WhmHintHeight :: (text: string, width: s32) -> s32 {
+    text_width := width - Scale(72)
+    if text_width < Scale(160) {
+        text_width = width - Scale(32)
+    }
+    height := ParagraphHeight(text, text_width) + Scale(42)
+    if height < Scale(112) {
+        height = Scale(112)
+    }
+    return height
+}
+
+WhmPageHeight :: (width: s32) -> s32 {
+    page := manual.page
+    height := HeaderHeight() + WhmVisualHeight(page) + ParagraphHeight(Locale(WhmBodyKey(page)), width)
+    if page == 0 {
+        height += Scale(16 + 34 + 36 + 6) +
+        ParagraphHeight(Locale("tutorial_safety_warning"), width - Scale(84))
+    } else if page == 1 {
+        height += Scale(18 + 24 + 86)
+    } else {
+        height += Scale(24) + ifx page == 2 then Scale(18) else Scale(16)
+        height += WhmHintHeight(Locale(WhmHintKey(page)), width)
+    }
+    return height
+}
+
+// The breath, or the held breath with its time, in a soft ring.
+WhmCircle :: (center_x: s32, center_y: s32, radius: s32, label: string) {
+    Disc(center_x, center_y, radius + Scale(18), Alpha(manual.guide_foreground, 0.20))
+    Disc(center_x, center_y, radius, manual.guide_background)
+    Ring(manual.session, RingProps.{
+            .center = Vector2.{cast(float32)center_x, cast(float32)center_y},
+            .inner_radius = cast(float32)(radius - Scale(2)), .outer_radius = cast(float32)radius,
+            .end_angle = 360.0, .color = manual.guide_foreground})
+    if label.count > 0 {
+        Label(label, Bounds(center_x - radius, center_y - radius, radius * 2, radius * 2),
+            manual.font, true)
+    }
+}
+
+WhmSafety :: (x: s32, width: s32, y: *s32) {
+    text := Locale("tutorial_safety_warning")
+    text_width := width - Scale(84)
+    height := ParagraphHeight(text, text_width) + Scale(36)
+    Panel(Bounds(x, y.*, width, height), Scale(16), true)
+    badge := Scale(30)
+    Label("!", Bounds(x + Scale(19), y.* + (height - badge) / 2, badge, badge), manual.font, true)
+    text_y := y.* + Scale(18)
+    Paragraph(text, x + Scale(64), *text_y, text_width, cast(TextAlign)TextAlignStart)
+    y.* += height + Scale(6)
+}
+
+WhmHint :: (x: s32, width: s32, y: *s32) {
+    text := Locale(WhmHintKey(manual.page))
+    height := WhmHintHeight(text, width)
+    Panel(Bounds(x, y.*, width, height), Scale(16), true)
+    padding := Scale(36)
+    text_width := width - padding * 2
+    if text_width < Scale(160) {
+        padding = Scale(16)
+        text_width = width - padding * 2
+    }
+    text_y := y.* + (height - ParagraphHeight(text, text_width)) / 2
+    Paragraph(text, x + padding, *text_y, text_width, cast(TextAlign)TextAlignCenter)
+    y.* += height
+}
+
+// The breathing speed, changed right on the page.
+WhmSpeed :: (x: s32, width: s32, y: *s32) {
+    height := Scale(86)
+    Panel(Bounds(x, y.*, width, height), Scale(14), false)
+    row_x := x + Scale(18)
+    row_width := width - Scale(36)
+    row_y := y.* + Scale(9)
+    label := Locale("speed_label")
+    Text(manual.session, TextProps.{.text = label, .font = manual.small_font,
+            .wrap = cast(TextWrap)TextWrapNone, .bounds = Bounds(row_x, row_y, row_width - Scale(64), Scale(20))})
+    Text(manual.session, TextProps.{.text = Number(manual.speed), .font = manual.small_font,
+            .wrap = cast(TextWrap)TextWrapNone, .align = cast(TextAlign)TextAlignEnd,
+            .bounds = Bounds(row_x + row_width - Scale(64), row_y, Scale(64), Scale(20))})
+    step := DiscreteSlider(manual.session, DiscreteSliderProps.{.id = MANUAL_SPEED_ID,
+            .bounds = Bounds(row_x, row_y + Scale(20), row_width, Scale(36)),
+            .semantic_label = label, .value = manual.speed, .min = manual.speed_min,
+            .max = manual.speed_max})
+    if step.changed && step.value != manual.speed {
+        manual.speed = step.value
+        manual.speed_changed = true
+    }
+    y.* += height
+}
+
+WhmPage :: (x: s32, width: s32, y: *s32) {
+    page := manual.page
+    height := WhmVisualHeight(page)
+    hero := Hero(x, width, y.*, height)
+    if page == 0 || page == 3 {
+        Picture(ifx page == 3 then "assets/practices/whm/2.png" else "assets/practices/whm/1.png",
+            Locale(WhmTitleKey(page)), hero, cast(ImageFit)ImageFitContain)
+        HeroDots(hero)
+        y.* += height + Scale(16)
+    } else {
+        Panel(hero, Scale(16), false)
+        center_x := x + width / 2
+        center_y := y.* + height / 2 - Scale(8)
+        if page == 1 {
+            WhmCircle(center_x, center_y, manual.breath_radius, "")
+        } else {
+            WhmCircle(center_x, center_y, Scale(68), "0:00")
+            Progress(manual.session, ProgressProps.{
+                    .bounds = Bounds(x + Scale(36), y.* + height - Scale(34), width - Scale(72), Scale(5)),
+                    .min = 0, .max = 60, .value = manual.hold_progress})
+        }
+        HeroDots(hero)
+        y.* += height + Scale(18)
+    }
+    Header(Locale(WhmTitleKey(page)), x, y, width)
+    Paragraph(Locale(WhmBodyKey(page)), x, y, width, cast(TextAlign)TextAlignStart)
+    if page == 0 {
+        y.* += Scale(34)
+        WhmSafety(x, width, y)
+    } else if page == 1 {
+        y.* += Scale(24)
+        WhmSpeed(x, width, y)
+    } else {
+        y.* += Scale(24)
+        WhmHint(x, width, y)
+    }
+}
+
+// ---- Breathing patterns -------------------------------------------------------------
+
+PatternsBodyKey :: (page: s32) -> string {
+    if page == 0 { return "patterns_manual_choose_text" }
+    if page == 1 { return "patterns_manual_phases_text" }
+    return "patterns_manual_customize_text"
+}
+
+PatternsTitleKey :: (page: s32) -> string {
+    if page == 0 { return "patterns_preset_label" }
+    if page == 1 { return "patterns_cycle_label" }
+    return "patterns_ready_label"
+}
+
+PatternsVisualHeight :: (page: s32) -> s32 {
+    if page == 0 { return Scale(330) }
+    if page == 1 { return Scale(300) }
+    return Scale(248)
+}
+
+PatternsPageHeight :: (width: s32) -> s32 {
+    return PatternsVisualHeight(manual.page) + Scale(18) + HeaderHeight() +
+    ParagraphHeight(Locale(PatternsBodyKey(manual.page)), width)
+}
+
+PatternsCustom :: (phase: s32) -> s32 {
+    if phase == 0 { return manual.inhale }
+    if phase == 1 { return manual.hold_in }
+    if phase == 2 { return manual.exhale }
+    return manual.hold_out
+}
+
+PatternsPhase :: (preset: s32, phase: s32) -> s32 {
+    if preset == PATTERNS_PRESET_CUSTOM {
+        return PatternsCustom(phase)
+    }
+    return patterns_preset_ratio(preset, phase)
+}
+
+// A pattern's seconds, as "4-7-8-0".
+PatternsRatio :: (preset: s32) -> string {
+    out: Vec(u8)
+    for phase: cast(s32)0..3 {
+        BuilderPrint(*out, "%", PatternsPhase(preset, phase))
+        if phase < 3 {
+            BuilderPrint(*out, "-")
+        }
+    }
+    return BuilderFinish(out)
+}
+
+// A card in the guide's colours, its border marking the chosen one.
+PatternsPanel :: (bounds: Rectangle, radius: s32, selected: bool) {
+    Box(manual.session, BoxProps.{.bounds = bounds, .fill = manual.guide_background,
+            .border = ifx selected then manual.guide_foreground else manual.guide_border,
+            .radius = cast(float32)radius})
+}
+
+PatternsPresetCard :: (preset: s32, bounds: Rectangle) {
+    PatternsPanel(bounds, Scale(12), manual.preset == preset)
+    label := Locale(patterns_preset_label_key(preset))
+    Label(label, Rectangle.{bounds.x + cast(float32)Scale(8), bounds.y + cast(float32)Scale(5),
+            bounds.width - cast(float32)Scale(16), cast(float32)Scale(24)},
+        FitFont(label, cast(s32)bounds.width - Scale(22), manual.font, manual.small_font), true)
+    Label(PatternsRatio(preset), Rectangle.{bounds.x + cast(float32)Scale(8),
+            bounds.y + cast(float32)Scale(30), bounds.width - cast(float32)Scale(16),
+            cast(float32)Scale(22)}, manual.small_font, true)
+}
+
+PatternsPresets :: (x: s32, width: s32, y: *s32) {
+    height := PatternsVisualHeight(0)
+    PatternsPanel(Bounds(x, y.*, width, height), Scale(16), false)
+    padding := Scale(16)
+    gap := Scale(12)
+    card_height := Scale(58)
+    card_width := (width - padding * 2 - gap) / 2
+    Label(Locale("patterns_preset_label"), Bounds(x + padding, y.* + Scale(18), width - padding * 2,
+            Scale(24)), manual.font, false)
+    Label(PatternsRatio(manual.preset), Bounds(x + padding, y.* + Scale(44), width - padding * 2,
+            Scale(22)), manual.small_font, false)
+    count := patterns_preset_count()
+    for index: cast(s32)0..count - 1 {
+        card_x := x + padding + (index % 2) * (card_width + gap)
+        card_y := y.* + Scale(74) + (index / 2) * (card_height + gap)
+        card_w := card_width
+        if index == count - 1 {
+            card_x = x + padding
+            card_w = width - padding * 2
+        }
+        PatternsPresetCard(index, Bounds(card_x, card_y, card_w, card_height))
+    }
+    y.* += height + Scale(18)
+}
+
+PatternsPhaseCard :: (phase: s32, bounds: Rectangle) {
+    PatternsPanel(bounds, Scale(11), phase == 0)
+    key := "patterns_phase_inhale"
+    if phase == 1 { key = "patterns_phase_hold_in" }
+    if phase == 2 { key = "patterns_phase_exhale" }
+    if phase == 3 { key = "patterns_phase_hold_out" }
+    Label(Locale(key), Rectangle.{bounds.x + cast(float32)Scale(54), bounds.y,
+            bounds.width - cast(float32)Scale(120), bounds.height}, manual.font, false)
+    badge := Scale(28)
+    badge_x := cast(s32)bounds.x + Scale(12)
+    badge_y := cast(s32)(bounds.y + (bounds.height - cast(float32)badge) / 2.0)
+    Disc(badge_x + badge / 2, badge_y + badge / 2, badge / 2, manual.guide_background)
+    Label(Number(phase + 1), Bounds(badge_x, badge_y, badge, badge), manual.small_font, true)
+    Label(Number(PatternsPhase(manual.preset, phase)), Rectangle.{bounds.x + bounds.width -
+            cast(float32)Scale(62), bounds.y, cast(float32)Scale(48), bounds.height}, manual.font, true)
+}
+
+PatternsVisual :: (x: s32, width: s32, y: *s32) {
+    if manual.page == 0 {
+        PatternsPresets(x, width, y)
+        return
+    }
+    height := PatternsVisualHeight(manual.page)
+    PatternsPanel(Bounds(x, y.*, width, height), Scale(16), false)
+    card_x := x + Scale(16)
+    card_width := width - Scale(32)
+    if manual.page == 1 {
+        card_y := y.* + Scale(18)
+        for phase: cast(s32)0..3 {
+            PatternsPhaseCard(phase, Bounds(card_x, card_y, card_width, Scale(54)))
+            card_y += Scale(64)
+        }
+    } else {
+        card_y := y.* + Scale(24)
+        PatternsPanel(Bounds(card_x, card_y, card_width, Scale(76)), Scale(12), false)
+        label := Bounds(card_x + Scale(18), card_y + Scale(10), card_width - Scale(36), Scale(24))
+        Label(Locale("patterns_preset_label"), label, manual.font, false)
+        label.y += cast(float32)Scale(28)
+        Label(PatternsRatio(manual.preset), label, manual.small_font, false)
+        card_y += Scale(88)
+        PatternsPanel(Bounds(card_x, card_y, card_width, Scale(76)), Scale(12), false)
+        label.y = cast(float32)(card_y + Scale(10))
+        Label(Locale("patterns_duration_label"), label, manual.font, false)
+        duration := Locale("patterns_duration_open")
+        if manual.duration_minutes != 0 {
+            out: Vec(u8)
+            BuilderPrint(*out, "% min", manual.duration_minutes)
+            duration = BuilderFinish(out)
+        }
+        label.y += cast(float32)Scale(28)
+        Label(duration, label, manual.small_font, false)
+    }
+    y.* += height + Scale(18)
+}
+
+PatternsPage :: (x: s32, width: s32, y: *s32) {
+    hero := Hero(x, width, y.*, PatternsVisualHeight(manual.page))
+    PatternsVisual(cast(s32)hero.x, cast(s32)hero.width, y)
+    HeroDots(hero)
+    Header(Locale(PatternsTitleKey(manual.page)), x, y, width)
+    Paragraph(Locale(PatternsBodyKey(manual.page)), x, y, width, cast(TextAlign)TextAlignStart)
+}
+
+// ---- The manual ------------------------------------------------------------------------
+
+Title :: () -> string {
+    if manual.practice == EXERCISE_WIM_HOF { return Locale("practice_manual_button") }
+    if manual.practice == EXERCISE_PATTERNS { return Locale("patterns_title") }
+    if manual.practice == EXERCISE_ASTRAL_PROJECTION { return Locale("exercise_astral_projection") }
+    return Locale("meditation_manual_title")
+}
+
+PageHeight :: (width: s32) -> s32 {
+    if manual.practice == EXERCISE_WIM_HOF { return WhmPageHeight(width) }
+    if manual.practice == EXERCISE_PATTERNS { return PatternsPageHeight(width) }
+    return PicturePageHeight(width)
+}
+
+Page :: (x: s32, width: s32, y: s32) {
+    if manual.practice == EXERCISE_WIM_HOF {
+        WhmPage(x, width, *y)
+    } else if manual.practice == EXERCISE_PATTERNS {
+        PatternsPage(x, width, *y)
+    } else {
+        PicturePage(x, width, *y)
+    }
+}
+
+// Each manual keeps its own scroll position, as before.
+ScrollKey :: () -> u64 {
+    if manual.practice == EXERCISE_WIM_HOF { return KeyHash("whm/manual/scroll") }
+    if manual.practice == EXERCISE_PATTERNS { return KeyHash("patterns/manual/scroll") }
+    if manual.practice == EXERCISE_ASTRAL_PROJECTION { return KeyHash("astral/manual/scroll") }
+    return KeyHash("meditation/manual/scroll")
+}
+
+FocusId :: () -> s32 {
+    if manual.practice == EXERCISE_WIM_HOF { return 400 }
+    if manual.practice == EXERCISE_PATTERNS { return 460 }
+    if manual.practice == EXERCISE_ASTRAL_PROJECTION { return 425 }
+    return 420
+}
+
+// Back and Next at the bottom, a swipe or the keys turn the page; Back on
+// the first page closes the manual and Next on the last starts the practice.
+Pager :: (nav_y: s32, nav_height: s32, content_y: s32, content_height: s32) {
+    count := PageCount()
+    swipe := Swipe(SwipeSpec.{.bounds = Bounds(0, content_y, manual.view_width, content_height),
+            .directions = cast(u32)SwipeHorizontal, .min_distance = cast(float32)Scale(48),
+            .axis_bias = 1.25, .max_duration = 0.8}, manual.swipe, manual.swipe_frame)
+    manual.swipe = swipe.gesture
+    manual.claim_pointer = swipe.claim_pointer
+    manual.release_pointer = swipe.release_pointer
+    manual.block_click = swipe.capture_input || swipe.consume_release
+    previous := manual.previous || swipe.direction == cast(SwipeDirection)SwipeRight
+    next := manual.next || swipe.direction == cast(SwipeDirection)SwipeLeft
+    finish := manual.finish
+    close := manual.close
+    padding := Scale(12)
+    content_width := manual.view_width - Scale(MANUAL_SIDE_PADDING) * 2
+    if content_width > Scale(MANUAL_MAX_WIDTH) {
+        content_width = Scale(MANUAL_MAX_WIDTH)
+    }
+    content_x := (manual.view_width - content_width) / 2
+    width := (content_width - padding) / 2
+    height := nav_height - padding * 2
+    if height > Scale(48) {
+        height = Scale(48)
+    }
+    if !close && width > 0 && height > 0 {
+        Box(manual.session, BoxProps.{.bounds = Bounds(0, nav_y, manual.view_width, nav_height),
+                .fill = manual.guide_background})
+        button_y := nav_y + (nav_height - height) / 2
+        if Button(manual.session, ButtonProps.{.id = FocusId(),
+                .bounds = Bounds(content_x, button_y, width, height), .label = Locale("back_button"),
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            if manual.page == 0 {
+                close = true
+            } else {
+                previous = true
+            }
+        }
+        if Button(manual.session, ButtonProps.{.id = FocusId() + 1,
+                .bounds = Bounds(content_x + padding + width, button_y, width, height),
+                .label = Locale(ifx manual.page == count - 1 then "practice_start_button" else "next_button"),
+                .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+            finish = true
+        }
+    }
+    if finish && manual.page < count - 1 {
+        next = true
+        finish = false
+    }
+    if close {
+        manual.action = PRACTICE_MANUAL_CLOSE
+        manual.block_click = true
+    } else if finish {
+        manual.action = PRACTICE_MANUAL_START
+        manual.block_click = true
+    } else if previous && manual.page > 0 {
+        manual.page -= 1
+        manual.scroll = 0
+    } else if next && manual.page < count - 1 {
+        manual.page += 1
+        manual.scroll = 0
+    } else if next && manual.page == count - 1 {
+        manual.action = PRACTICE_MANUAL_START
+        manual.block_click = true
+    }
+}
+
+Manual :: () {
+    count := PageCount()
+    if manual.page < 0 {
+        manual.page = 0
+    }
+    if manual.page >= count {
+        manual.page = count - 1
+    }
+    if manual.title_height > 0 {
+        options: [1]DropdownOption
+        bar := TitleBar(manual.session, TitleBarProps.{.title = Title(),
+                .height = manual.title_height,
+                .bounds = Bounds(0, 0, manual.view_width, manual.title_height),
+                .has_leading_action = true, .leading_label = Locale("back_button")}, options[0:0])
+        if bar.clicked_leading {
+            manual.action = PRACTICE_MANUAL_CLOSE
+            manual.block_click = true
+            return
+        }
+    }
+    nav_height := ifx count > 1 then Scale(MANUAL_NAV_HEIGHT) else 0
+    content_y := manual.title_height + Scale(MANUAL_TOP_GAP)
+    nav_y := manual.view_height - manual.bottom - nav_height
+    content_height := nav_y - content_y
+    minimum := ifx manual.practice == EXERCISE_WIM_HOF then 0 else Scale(120)
+    if content_height < minimum {
+        content_height = minimum
+    }
+    max_width := cast(s32)(cast(float32)manual.view_width * 0.96)
+    if max_width > Scale(MANUAL_MAX_WIDTH) {
+        max_width = Scale(MANUAL_MAX_WIDTH)
+    }
+    least := ifx manual.practice == EXERCISE_WIM_HOF then Scale(280) else Scale(200)
+    if max_width < least {
+        max_width = least
+    }
+    column := CenteredColumnFor(manual.view_width, max_width, Scale(MANUAL_SIDE_PADDING))
+    scrolled := Scroll(manual.session, ScrollProps.{.key = ScrollKey(),
+            .bounds = Bounds(0, content_y, manual.view_width, content_height),
+            .content_height = PageHeight(column.width), .scroll_offset = manual.scroll,
+            .scale = manual.scale})
+    manual.scroll = scrolled.scroll_offset
+    if scrolled.opened {
+        Page(column.x, column.width, cast(s32)scrolled.content.y)
+        unused End(manual.session)
+    }
+    Pager(nav_y, nav_height, content_y, content_height)
+}
+
+PracticeManualView :: (message: PracticeMessage) -> PracticeMessage {
+    manual = ReadPracticeManualHost()
+    manual.action = PRACTICE_MANUAL_NONE
+    manual.speed_changed = false
+    manual.claim_pointer = false
+    manual.release_pointer = false
+    manual.block_click = false
+    Manual()
+    WritePracticeManualHost(manual)
+    message.succeeded = true
+    return message
+}
