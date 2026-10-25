@@ -129,9 +129,10 @@ def forward(binary, origin, ledger, output):
                 print(f"forward {app_id}: the node has no release this build can run")
                 continue
             raise
-        if not oldest <= metadata["host_api"] <= current or metadata["module_api"] != ledger["module_api"]:
+        floor = ledger["apps"][name].get("oldest_host_api", oldest)
+        if not floor <= metadata["host_api"] <= current or metadata["module_api"] != ledger["module_api"]:
             print(f"forward {app_id}: skipped {metadata['version']}, built for host "
-                  f"{metadata['host_api']} outside {oldest}..{current}")
+                  f"{metadata['host_api']} outside {floor}..{current}")
             continue
         artifact = metadata["artifacts"][0]
         data = fetch(f"{route}/{artifact['sha256']}.zx", artifact["size"])

@@ -236,8 +236,14 @@ def main():
         # The host runs releases built for any interface it still supports.
         ledger = json.loads((ROOT / "apps/versions.json").read_text())
         altered("wrong-api", lambda value: value.update(host_api=ledger["host_api"] + 1))
-        altered("old-api", lambda value: value.update(host_api=ledger["oldest_host_api"] - 1))
-        altered("oldest-api", lambda value: value.update(host_api=ledger["oldest_host_api"]))
+        # Habits runs no package built before its screens moved into it.
+        habits_oldest = ledger["apps"]["habits"].get("oldest_host_api", ledger["oldest_host_api"])
+        altered("old-api", lambda value: value.update(host_api=habits_oldest - 1))
+        altered("oldest-api", lambda value: value.update(host_api=habits_oldest))
+        lists_oldest = json.loads(json.dumps(values["lists"]))
+        lists_oldest["host_api"] = ledger["apps"]["lists"].get("oldest_host_api", ledger["oldest_host_api"])
+        lists_oldest["signature"] = key.sign(release_tool.signing_message(lists_oldest)).hex()
+        (fixtures / "lists-oldest-api").write_text(json.dumps(lists_oldest))
         altered("current-api", lambda value: value.update(host_api=ledger["host_api"]))
         altered("wrong-module", lambda value: value.update(module_api=ledger["module_api"] + 1))
         altered("bad-signature", lambda value: value.update(version="9.0.0"), False)

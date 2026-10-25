@@ -43,6 +43,11 @@ def validate(root):
         host = component.get("host_api", ledger["host_api"])
         if type(host) is not int or not ledger["oldest_host_api"] <= host <= ledger["host_api"]:
             raise ValueError(f"{name}: host_api must be between oldest_host_api and host_api")
+        # This host runs no package of the app built for an older interface:
+        # its screens moved into the package, so the bundled copy runs instead.
+        oldest = component.get("oldest_host_api", ledger["oldest_host_api"])
+        if type(oldest) is not int or not ledger["oldest_host_api"] <= oldest <= host:
+            raise ValueError(f"{name}: oldest_host_api must be between the ledger's and its host_api")
         changelog = root / "apps" / source / "CHANGELOG.md"
         headings = re.findall(r"^## \[([^\]]+)\] - ([^\n]+)$", changelog.read_text(), re.M)
         if not headings or not re.fullmatch(VERSION, headings[0][0]):

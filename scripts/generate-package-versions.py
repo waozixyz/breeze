@@ -36,7 +36,14 @@ lines = ["// Generated from apps/versions.json; module releases are independent.
          "PackageBundledSequence :: (index: s32) -> s32 {",
          f"    if index < 0 || index >= {len(names)} {{", "        return 0", "    }",
          f"    sequences: [{len(names)}]s32 = .[" + ", ".join(str(apps[n]["sequence"] if apps[n]["bundled"] else 0) for n in names) + "]",
-         "    return sequences[index]", "}", ""]
+         "    return sequences[index]", "}", "",
+         "// The oldest host interface a package of each app may be built for. An",
+         "// app whose screens moved into its package needs a package that draws",
+         "// them; an older one gives way to the bundled copy.",
+         "PackageHostAPIOldestFor :: (index: s32) -> s32 {",
+         f"    if index < 0 || index >= {len(names)} {{", f"        return {ledger['oldest_host_api']}", "    }",
+         f"    oldest: [{len(names)}]s32 = .[" + ", ".join(str(apps[n].get("oldest_host_api", ledger["oldest_host_api"])) for n in names) + "]",
+         "    return oldest[index]", "}", ""]
 path = root / "src/apps/versions.zi"
 content = "\n".join(lines)
 if not path.exists() or path.read_text() != content:
