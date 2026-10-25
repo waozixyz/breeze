@@ -34,6 +34,7 @@
     timer_running: bool;
     timer_stopping: bool;
     timer_active: bool;
+    timer_frame_active: bool;
     timer_app: *void;
 
     TimerSleep :: (nanoseconds: isize) {
@@ -56,7 +57,7 @@
         while true {
             AndroidMutexLock(*timer_mutex)
             running := timer_running
-            active := timer_active
+            active := timer_active && !timer_frame_active
             app := timer_app
             AndroidMutexUnlock(*timer_mutex)
             if !running {
@@ -70,7 +71,7 @@
                 AndroidMutexLock(*app_state_mutex)
                 AndroidMutexLock(*timer_mutex)
                 app = null
-                if timer_running && timer_active {
+                if timer_running && timer_active && !timer_frame_active {
                     app = timer_app
                 }
                 AndroidMutexUnlock(*timer_mutex)
@@ -90,6 +91,30 @@
         TimerConditionBroadcast(cast(*void)*timer_stopped[0])
         AndroidMutexUnlock(*timer_mutex)
         return null
+    }
+}
+
+// Frames and background ticks share practice VMs and their host codecs. A
+// lifecycle callback may request ticking during a frame, but that request
+// takes effect only after the frame returns. Wait for a tick already in
+// flight without holding the state mutex throughout UI/start/stop effects.
+#program_export
+android_timer_frame_begin :: () {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*timer_mutex)
+        timer_frame_active = true
+        AndroidMutexUnlock(*timer_mutex)
+        AndroidMutexLock(*app_state_mutex)
+        AndroidMutexUnlock(*app_state_mutex)
+    }
+}
+
+#program_export
+android_timer_frame_end :: () {
+    #if #defined(ANDROID_BUILD) {
+        AndroidMutexLock(*timer_mutex)
+        timer_frame_active = false
+        AndroidMutexUnlock(*timer_mutex)
     }
 }
 

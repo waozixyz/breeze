@@ -113,6 +113,14 @@ main(void)
     android_timer_start();
     android_timer_activate();
     wait_for_callbacks(2);
+    /* A lifecycle callback cannot re-enter the practice VM during a frame. */
+    android_timer_frame_begin();
+    count = count_callbacks();
+    android_timer_activate();
+    nanosleep(&quiet, NULL);
+    assert(count_callbacks() == count);
+    android_timer_frame_end();
+    wait_for_callbacks(count + 1);
     /* No tick runs after the frame quiesces the timer. */
     android_timer_quiesce();
     count = count_callbacks();
