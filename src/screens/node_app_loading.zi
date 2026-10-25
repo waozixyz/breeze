@@ -4,6 +4,7 @@ NodeScreenLoadingState :: struct {
     shown: [16]u64
     next: s32
     opening: u64
+    ready_frame: bool
 }
 
 NodeScreenWasShown :: (state: *NodeScreenLoadingState, identity: u64) -> bool {
@@ -18,16 +19,29 @@ NodeScreenWasShown :: (state: *NodeScreenLoadingState, identity: u64) -> bool {
 NodeScreenNeedsCover :: (state: *NodeScreenLoadingState, identity: u64, pictures_ready: bool) -> bool {
     // Later sprites belong to gameplay, not to the app's opening stage.
     if NodeScreenWasShown(state, identity) {
+        state.opening = 0
+        state.ready_frame = false
         return false
     }
     if state.opening != identity {
         state.opening = identity
+        state.ready_frame = false
         return true
     }
     if !pictures_ready {
+        state.ready_frame = false
+        return true
+    }
+    // The opening frame can be ready before the board has requested its
+    // pictures. Keep one fully ready frame covered so its image requests
+    // and completed painting are observed before revealing the app.
+    if !state.ready_frame {
+        state.ready_frame = true
         return true
     }
     state.shown[state.next] = identity
     state.next = (state.next + 1) % cast(s32)state.shown.count
+    state.opening = 0
+    state.ready_frame = false
     return false
 }
