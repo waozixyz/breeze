@@ -6,6 +6,7 @@
 - Dew works in every version of the app; the Play version doesn't offer top-ups yet.
 - Prices show in Dew; the dollar value appears only when you top up.
 - Games can reward you with Dew, such as Shovey's secret chest.
+- 1 XMR now buys 10,000 Dew: your balance and every price are ten times larger and worth the same.
 - Sending Dew to friends is paused for now.
 
 ## [2.1.45] - 2026-10-24
