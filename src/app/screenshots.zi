@@ -115,6 +115,23 @@ ScreenshotOwned :: (product: string) -> bool {
     return true
 }
 
+screenshot_clock :: #system_library "raylib";
+ScreenshotClockNow :: () -> float64 #foreign screenshot_clock "GetTime";
+ScreenshotClockWait :: (seconds: float64) #foreign screenshot_clock "WaitTime";
+
+// Cached practice content opens asynchronously. Screenshot fixtures must
+// finish that read before they select a course or start a session.
+ScreenshotPracticeReady :: (app: *InnerBreeze, practice: s32) {
+    deadline := ScreenshotClockNow() + 10.0
+    PracticeDownloadsPump(practice, app.voice_narration_enabled != 0,
+        app.guide_narration_enabled != 0, true)
+    while !PracticeContentReady(practice) && ScreenshotClockNow() < deadline {
+        ScreenshotClockWait(0.01)
+        PracticeDownloadsPump(practice, app.voice_narration_enabled != 0,
+            app.guide_narration_enabled != 0, true)
+    }
+}
+
 screenshot_day_index_offset :: (offset_days: s32) -> s32 {
     local := LocalNow()
     date := BreakDateFromLocal(local)
@@ -508,10 +525,10 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
         practice_owned = ScreenshotOwned
         // Their cache holds the default recording; screenshots never download.
         app.tai_chi.voice = 0
-        PracticeDownloadsPump(EXERCISE_TAI_CHI, app.voice_narration_enabled != 0, app.guide_narration_enabled != 0, true)
+        ScreenshotPracticeReady(app, EXERCISE_TAI_CHI)
     }
     if scene_text == "astral_projection_session" {
-        PracticeDownloadsPump(EXERCISE_ASTRAL_PROJECTION, false, false, true)
+        ScreenshotPracticeReady(app, EXERCISE_ASTRAL_PROJECTION)
     }
     if scene_text == "lumi_chat" || scene_text == "lumi_customize" ||
     scene_text == "lumi_customize_light" || scene_text == "diary" ||

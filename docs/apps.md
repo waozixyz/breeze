@@ -594,6 +594,11 @@ its time) in `private.inbe.v1.app-installs`, its private records as
 cannot read changes nothing and never stops the sync. Removing the app keeps
 its records and its downloaded package.
 
+Host interface 31 keeps records whose names start with `local.` on the
+device, for both legacy app records and identity-scoped app trees. They are
+never queued for account sync. A package using this storage boundary must
+require host interface 31 or newer; older hosts may sync those names.
+
 Records shared with friends use the shared-list service (`/api/v1/lists`)
 under ids `<name>-...`, which are never shaped like Lists' UUIDs: Lists shows
 neither these records nor their invitations. Invitations, answers, saves

@@ -37,7 +37,8 @@
   in `apps/<app>/`, not in the host under `src/`. Practices draws its
   screen layouts in `apps/practice/`; its native figure painters and
   platform effects remain host capabilities (see [docs/apps.md](docs/apps.md)).
-  Keep the host interface small and generic (storage, network, locale, platform effects), because
+  Keep the host interface small and generic (storage, network, locale,
+  platform effects), because
   each new host call needs an APK before a package can use it. Apps share
   data only through the host interface, never another app's internals.
 - Translate changed strings in every affected locale; no English placeholders.

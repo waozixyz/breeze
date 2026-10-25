@@ -15,7 +15,8 @@ from ui_driver import UiDriver
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'build/tai-chi-ui-test'
 OUTPUT.mkdir(parents=True, exist_ok=True)
-DESKTOP_KEYS = ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')
+DESKTOP_KEYS = ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS',
+                'GDK_DISPLAY', 'SESSION_MANAGER')
 assert all(not os.environ.get(key) for key in DESKTOP_KEYS), 'Inherited desktop environment'
 BINARY = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / 'build/bin/linux/breeze-linux-x86_64')
 BUNDLE = Path(sys.argv[2] if len(sys.argv) > 2 else ROOT / 'build/inbe-full.zx')
@@ -35,6 +36,10 @@ def contains(outer, inner):
 
 
 with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, contextlib.ExitStack() as stack:
+    # Raylib uses ALSA directly rather than SDL's dummy audio driver. Keep
+    # the real preview player on a private null sink, away from desktop audio.
+    audio_config = Path(profile) / 'alsa.conf'
+    audio_config.write_text('pcm.!default {\n    type null\n}\n')
     cache = Path(profile) / 'packages'
     cache.mkdir()
     for name in ('taichi', 'taichi.en'):
@@ -43,9 +48,10 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
     driver = UiDriver(OUTPUT / 'driver')
     env = {key: value for key, value in os.environ.items() if key not in DESKTOP_KEYS}
     env.update(driver.environment())
-    env.update(INBE_SCREENSHOT_DATA_ROOT=profile, YUE_DESKTOP_RECOVERY='0',
+    env.update(INBE_SCREENSHOT_DATA_ROOT=profile, APP_DATA_ROOT=profile, YUE_DESKTOP_RECOVERY='0',
                APP_NO_TRAY='1', SDL_AUDIODRIVER='dummy', SDL_VIDEODRIVER='x11',
-               LIBGL_ALWAYS_SOFTWARE='1', APP_SHOT_WINDOW='1')
+               LIBGL_ALWAYS_SOFTWARE='1', LP_NUM_THREADS='2', APP_SHOT_WINDOW='1',
+               ALSA_CONFIG_PATH=str(audio_config))
     display_log = stack.enter_context((OUTPUT / 'display.log').open('w'))
     display = subprocess.Popen(['Xvfb', '-noreset', ':951', '-displayfd', '1', '-screen', '0', '1280x900x24',
                                 '-nolisten', 'tcp'], env=env, stdout=subprocess.PIPE, stderr=display_log)
@@ -109,6 +115,8 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
     def application(scene, width=1280, height=900):
         log_path = OUTPUT / (scene + '.log')
         with log_path.open('w') as log:
+            # A restarted app must not replay the previous process's input.
+            driver.reset()
             app = subprocess.Popen([str(BINARY), '--bundle', str(BUNDLE),
                                     '--screenshot', str(OUTPUT / 'unused.png'),
                                     '--screenshot-scene', scene, '--screenshot-width', str(width),
@@ -135,6 +143,19 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
                 assert 'frame rejected' not in log_path.read_text(), log_path.read_text()
             finally:
                 stop(app)
+
+    # Complete setup in this disposable profile before selecting a scene.
+    # The scene must not race first-run language/audio/app-selection routing.
+    with application('tai_chi_customize'):
+        pass
+    with sqlite3.connect(Path(profile) / 'inbe.db') as db:
+        user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
+        for key, value in {'language': 'en', 'language_system': '0', 'language_setup_done': '1',
+                           'apps_setup_done': '1', 'tutorial_seen': '1', 'habits_guide_seen': '1',
+                           'lumi_guides_seen': '127', 'launcher_guide_seen': '1',
+                           'package_updates_allowed': '0'}.items():
+            db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
+                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, value))
 
     with application('tai_chi_customize'):
         for label in ('Jade woman', 'Indigo man'):
@@ -169,7 +190,8 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         driver.press(label='Close')
         driver.wait_gone(label='Background music')
         driver.wait(label='Tai Chi')
-        driver.wait(label='Start Practice', role='button')
+        # This disposable profile has no paid-course entitlement; the home
+        # can show Unlock. The chooser itself is exercised by its scene below.
         # The full app's sidebar shows beside the practice. Diary is no
         # longer pinned on a new install; Apps opens it with the rest.
         nodes = driver.tree()
@@ -177,7 +199,8 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         navigation = [node['label'] for node in nodes if node['visible'] and node['parent'] in bars]
         assert 'Habits' in navigation and 'Apps' in navigation, navigation
         assert not driver.find(contains='Indigo man', visible=True), driver.text()
-        driver.press(label='Start Practice', role='button')
+
+    with application('tai_chi_choose'):
         # The Course dialog: its progress line and lessons. Kryon's dialog
         # title ("Course") is not in the widget tree.
         driver.wait(contains='practised')
@@ -195,10 +218,7 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         driver.pointer(*outside, down=False)
         driver.release_pointer()
         driver.wait_gone(contains='practised')
-        driver.wait(label='Start Practice', role='button')
-        driver.press(label='Customize', role='button')
-        for label in ('Jade woman', 'Indigo man'):
-            driver.wait(label=label, role='text')
+        driver.wait(label='Tai Chi')
 
     # Use an existing custom-track slot with a disposable WAV. Previewing it
     # exercises the real music player without a download or desktop audio.
@@ -236,7 +256,12 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         driver.press(label='Test music', role='button')
         driver.wait(contains='Stop', role='button')
         driver.press(label='Close')
-        driver.press(label='Customize', role='button')
+        driver.wait_gone(contains='Stop', role='button')
+
+    # Reopen the buyer's fixture after a cold restart: this profile has no
+    # paid entitlement, and the saved choice must survive the process.
+    with application('tai_chi_customize'):
+        driver.wait(label='Background music')
         assert dropdown_below('Background music')['label'] == 'Test music', driver.text()
         assert not driver.find(contains='Stop', visible=True), driver.text()
         # None is the music off option, independent of narration and cues.
