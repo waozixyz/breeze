@@ -928,6 +928,61 @@ synced_changes :: (entity_type: string, entity_id: string, array: string,
     return AppTextFromCString(*output[0], cast(s32)output.count)
 }
 
+// Recording an earlier day earns coins without crediting untouched history.
+test_habit_backdated_coins :: () {
+    root := make_root("habit-backdated-coins")
+    check_true("init backdated coins db", storage_init(root) != 0)
+    exec_db_sql("INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,counter_target,sort_order,deleted_at,updated_at,difficulty,coins_from) VALUES('walk',(SELECT id FROM users LIMIT 1),'Walk',1,2,3,0,0,0,1,0,0,1,0,CAST(strftime('%Y%m%d','now','localtime') AS INTEGER));INSERT INTO habit_days(habit_id,local_date,completed,count,session_count,updated_at) VALUES('walk',CAST(strftime('%Y%m%d','now','localtime','-2 days') AS INTEGER),1,1,0,1);")
+    today := read_db_count("SELECT CAST(strftime('%Y%m%d','now','localtime') AS INTEGER)")
+    yesterday := read_db_count("SELECT CAST(strftime('%Y%m%d','now','localtime','-1 day') AS INTEGER)")
+    check_int("untouched history before coins started stays excluded", cast(s32)storage_habit_wallet_halves(), 0)
+    check_true("mark today", storage_habit_day_save("walk", today, 1, 1) != 0)
+    check_int("today earns a coin", cast(s32)storage_habit_wallet_halves(), 2)
+    check_true("undo today", storage_habit_day_save("walk", today, 0, 0) != 0)
+    check_int("undo removes today's coin", cast(s32)storage_habit_wallet_halves(), 0)
+    check_true("mark yesterday", storage_habit_day_save("walk", yesterday, 1, 1) != 0)
+    check_int("yesterday earns a coin", cast(s32)storage_habit_wallet_halves(), 2)
+    activity: [4]HabitCoinActivity
+    check_int("yesterday appears in coin activity", storage_habit_activity_load(activity[:]), 1)
+    check_true("activity names the recorded day", activity[0].local_date == yesterday &&
+        activity[0].halves == 2)
+    storage_close()
+    check_true("reopen backdated coins db", storage_init(root) != 0)
+    check_int("yesterday's coin survives reopening", cast(s32)storage_habit_wallet_halves(), 2)
+    check_true("undo yesterday", storage_habit_day_save("walk", yesterday, 0, 0) != 0)
+    check_int("undo removes yesterday's coin", cast(s32)storage_habit_wallet_halves(), 0)
+    storage_close()
+}
+
+// A newly created habit uses the same queued day saves as the habit list.
+test_new_habit_recent_coins :: () {
+    root := make_root("habit-new-recent-coins")
+    check_true("init new habit coins db", storage_init(root) != 0)
+    habits_a = Habits.{}
+    check_int("create walking habit", habits_add_custom(*habits_a, "Walking", Blue(), 0, 0), 0)
+    today := read_db_count("SELECT CAST(strftime('%Y%m%d','now','localtime') AS INTEGER)")
+    yesterday := read_db_count("SELECT CAST(strftime('%Y%m%d','now','localtime','-1 day') AS INTEGER)")
+    week_start := read_db_count("SELECT CAST(strftime('%Y%m%d','now','localtime','-6 days') AS INTEGER)")
+    older := read_db_count("SELECT CAST(strftime('%Y%m%d','now','localtime','-7 days') AS INTEGER)")
+    habit_toggle_day(*habits_a, 0, today)
+    habits_flush_day_saves(*habits_a)
+    check_int("new habit earns today", cast(s32)storage_habit_wallet_halves(), 2)
+    habit_toggle_day(*habits_a, 0, today)
+    habits_flush_day_saves(*habits_a)
+    check_int("undo today removes the coin", cast(s32)storage_habit_wallet_halves(), 0)
+    habit_toggle_day(*habits_a, 0, yesterday)
+    habits_flush_day_saves(*habits_a)
+    check_int("new habit earns yesterday", cast(s32)storage_habit_wallet_halves(), 2)
+    habit_toggle_day(*habits_a, 0, week_start)
+    habits_flush_day_saves(*habits_a)
+    check_int("the seventh day earns", cast(s32)storage_habit_wallet_halves(), 4)
+    habit_toggle_day(*habits_a, 0, older)
+    habits_flush_day_saves(*habits_a)
+    check_int("older history does not earn", cast(s32)storage_habit_wallet_halves(), 4)
+    habits_free(*habits_a)
+    storage_close()
+}
+
 // Done days earn coins by their habit's difficulty from its coins_from day
 // on, counted in half coins; a difficulty change pays from the day it was
 // made, so earlier days keep what they earned. Rewards spend coins, a
@@ -1074,6 +1129,8 @@ Check :: () -> s32 {
     test_average_goals_and_changes()
     test_stale_copy_keeps_synced_values()
     test_habit_wallet()
+    test_habit_backdated_coins()
+    test_new_habit_recent_coins()
     test_habit_shop_order_and_borrow_sync()
     test_zero_target_and_custom_coins()
     return failures

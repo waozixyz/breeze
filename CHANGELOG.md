@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.50] - 2026-10-26
+
+- Habits award coins when you record a recent day before you created the habit.
+
 ## [2.1.49] - 2026-10-25
 
 - Download Arcade in under one megabyte; its games and their covers arrive separately.

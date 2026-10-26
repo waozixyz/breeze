@@ -17,7 +17,10 @@ sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3
 // The half coins the done days of the user's habits earned, or of the
 // habit ?2 alone: easy one, medium two, hard four, very hard six
 // (HabitDifficultyHalfCoins). A day earns from its habit's coins_from day
-// on, at the difficulty the habit had that day: a difficulty change applies
+// on, as well as earlier days within the seven days ending when recorded.
+// Existing untouched history before the cutoff does not earn retroactively.
+// A day uses the difficulty
+// the habit had that day: a difficulty change applies
 // from the day it was made, so the days before keep the value the change
 // replaced. A day is done as the habit list shows it: counted to its
 // target, with linked practice sessions as the floor, or marked.
@@ -41,7 +44,11 @@ WHEN h.counter_enabled<>0 THEN
 MAX(d.count,d.session_count,CASE WHEN d.completed<>0 THEN 1 ELSE 0 END)>=MAX(h.counter_target,1)
 ELSE d.completed<>0 OR d.count>0 OR d.session_count>0 END AS done
 FROM habit_days d JOIN habits h ON h.id=d.habit_id
-WHERE h.user_id=?1 AND h.deleted_at=0 AND h.coins_from>0 AND d.local_date>=h.coins_from
+WHERE h.user_id=?1 AND h.deleted_at=0 AND h.coins_from>0 AND
+(d.local_date>=h.coins_from OR (
+CAST(strftime('%Y%m%d',d.updated_at,'unixepoch','localtime') AS INTEGER)>=h.coins_from AND
+d.local_date BETWEEN CAST(strftime('%Y%m%d',d.updated_at,'unixepoch','localtime','-6 days') AS INTEGER)
+AND CAST(strftime('%Y%m%d',d.updated_at,'unixepoch','localtime') AS INTEGER)))
 ), valued AS (
 SELECT *,CASE WHEN substr(old_coins,1,1)='1' THEN old_coins
 WHEN old_coins='' AND custom_coins<>0 THEN
@@ -76,7 +83,11 @@ WHEN h.counter_enabled<>0 THEN
 MAX(d.count,d.session_count,CASE WHEN d.completed<>0 THEN 1 ELSE 0 END)>=MAX(h.counter_target,1)
 ELSE d.completed<>0 OR d.count>0 OR d.session_count>0 END AS done
 FROM habit_days d JOIN habits h ON h.id=d.habit_id
-WHERE h.user_id=?1 AND h.deleted_at=0 AND h.coins_from>0 AND d.local_date>=h.coins_from
+WHERE h.user_id=?1 AND h.deleted_at=0 AND h.coins_from>0 AND
+(d.local_date>=h.coins_from OR (
+CAST(strftime('%Y%m%d',d.updated_at,'unixepoch','localtime') AS INTEGER)>=h.coins_from AND
+d.local_date BETWEEN CAST(strftime('%Y%m%d',d.updated_at,'unixepoch','localtime','-6 days') AS INTEGER)
+AND CAST(strftime('%Y%m%d',d.updated_at,'unixepoch','localtime') AS INTEGER)))
 ), valued AS (
 SELECT *,CASE WHEN substr(old_coins,1,1)='1' THEN old_coins
 WHEN old_coins='' AND custom_coins<>0 THEN
