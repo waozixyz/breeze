@@ -635,43 +635,6 @@ test_large_outbox_batches :: () {
     check_int("later rows stay queued", raw_count(root, "SELECT COUNT(*) FROM sync_outbox"), 5)
 }
 
-// Optional packed variants must not overflow a batch whose identity form fits.
-test_packed_batch_keeps_request_limit :: () {
-    root := make_root("sync-packed-budget")
-    check_true("init packed budget db", storage_init(root) != 0)
-    set_account()
-    value: [24001]u8
-    random: u32 = 1729
-    alphabet := "0123456789abcdef"
-    for index: 0..23999 {
-        random ^= random << 13
-        random ^= random >> 17
-        random ^= random << 5
-        value[index] = alphabet[cast(s64)(random & 15)]
-    }
-    for index: 0..15 {
-        key: Vec(u8)
-        BuilderPrint(*key, "cell.diary.file.large-%.json", index)
-        name := BuilderFinish(key)
-        check_true("queue packed budget record", BundledAppRecordWrite(name, TextView(value[:24000])))
-        PackageFree(name)
-    }
-    one := BuildStoredSyncPayload("test-public-id", "test-public-key", 1)
-    check_true("single record keeps optional packed representation", one != null && contains(TextFromCString(one), "packed_ciphertext"))
-    if one != null { storage_free_sync_payload_json(one) }
-    batch := BuildStoredSyncPayload("test-public-id", "test-public-key", 400)
-    check_true("identity fallback batch builds", batch != null)
-    if batch != null {
-        text := TextFromCString(batch)
-        check_true("packed batch respects request limit", text.count <= 1044480)
-        check_true("oversized optional representations are omitted", !contains(text, "packed_ciphertext"))
-        check_int("identity fallback retains every queued record", storage_json_array_count_path(text, "$.encrypted_records"), 16)
-        storage_free_sync_payload_json(batch)
-    }
-    check_int("building never acknowledges the queue", read_db_count("SELECT COUNT(*) FROM sync_outbox"), 16)
-    storage_close()
-}
-
 test_outbox_keeps_edits_after_snapshot :: () {
     root := make_root("sync-snapshot")
     check_true("init db", storage_init(root) != 0)
@@ -2508,7 +2471,6 @@ Check :: () -> s32 {
     test_v6_encrypted_records()
     test_plaintext_private_response_ignored()
     test_large_outbox_batches()
-    test_packed_batch_keeps_request_limit()
     test_outbox_keeps_edits_after_snapshot()
     test_orphan_habit_days_reset_cursor()
     test_habit_name_repair_runs_once()

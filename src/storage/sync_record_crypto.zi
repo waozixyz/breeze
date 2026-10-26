@@ -19,7 +19,6 @@
 #import, file "../apps/package_files.zi";
 #import, file "entity_record_crypto.zi";
 Entity :: #import "daochi_client/entity";
-RecordCodec :: #import "daochi_client/record_codec";
 c :: #system_library "c";
 sqlite3_column_int :: (statement: *void, column: s32) -> s32 #foreign c "sqlite3_column_int";
 malloc :: (size: usize) -> *void #foreign c;
@@ -208,7 +207,7 @@ storage_sync_record_merge :: (plain: *StorageJsonBuilder, collection: string, re
         AppTextFromCString(plain.data, cast(s32)(plain.len + 1)))
 }
 
-storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, collection: string, key_id: string, record_id: string, entity_type: string, entity_id: string, local_date: s32, queued_at: s64, deleted: s32, include_packed: bool = false) -> s32 {
+storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, collection: string, key_id: string, record_id: string, entity_type: string, entity_id: string, local_date: s32, queued_at: s64, deleted: s32) -> s32 {
     plain: StorageJsonBuilder
     aad: StorageJsonBuilder
     nonce: [12] u8
@@ -276,64 +275,9 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "content_hash", AppTextFromCString(*content_hash[0], ACCOUNT_PUBLIC_ID_HEX_SIZE))
     storage_json_builder_append_text(json, ",\"schema_version\":1")
-    if deleted == 0 && include_packed {
-        storage_append_packed_private_record(json, key, plain.data, plain.len, aad.data, aad.len)
-    }
     storage_json_builder_append_text(json, "}")
     ok = json.ok
     return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
-}
-
-storage_append_packed_private_record :: (json: *StorageJsonBuilder, key: *u8,
-    plain: *u8, count: s64, aad: *u8, aad_count: s64) {
-    if count < 512 || count > RecordCodec.RecordPayloadMaximum { return }
-    frame := cast(*u8)malloc(cast(usize)count)
-    if frame == null { return }
-    defer {
-        SecureWipe(frame, count)
-        free(cast(*void)frame)
-    }
-    packed := RecordCodec.PackRecord(BytesFromPointer(plain, cast(u64)count), BytesFromPointer(frame, cast(u64)count))
-    if packed <= 0 { return }
-    sealed_count := packed + 16
-    sealed := cast(*u8)malloc(cast(usize)sealed_count)
-    text := cast(*u8)malloc(cast(usize)(sealed_count * 2 + 1))
-    defer {
-        free(cast(*void)sealed)
-        free(cast(*void)text)
-    }
-    if sealed == null || text == null { return }
-    nonce: [12]u8
-    nonce_text: [25]u8
-    if SecureRandom(*nonce[0], nonce.count) == 0 ||
-        ChaCha20Poly1305Seal(key, *nonce[0], frame, packed, aad, aad_count, sealed, sealed_count) == 0 ||
-        BytesToHex(*nonce[0], nonce.count, *nonce_text[0], nonce_text.count) == 0 ||
-        BytesToHex(sealed, sealed_count, text, sealed_count * 2 + 1) == 0 {
-        return
-    }
-    storage_json_builder_append_text(json, ",")
-    storage_json_builder_key_value_text(json, "packed_nonce", AppTextFromCString(*nonce_text[0], cast(s32)nonce_text.count))
-    storage_json_builder_append_text(json, ",")
-    storage_json_builder_key_value_text(json, "packed_ciphertext", AppTextFromCString(text, cast(s32)(sealed_count * 2 + 1)))
-}
-
-storage_unpack_record_payload :: (plain: **u8, count: s64, maximum: s64) -> s64 {
-    input := BytesFromPointer(plain.*, cast(u64)count)
-    if !RecordCodec.RecordIsPacked(input) { return count }
-    size := RecordCodec.PackedRecordSize(input, maximum)
-    if size < 0 { return -1 }
-    decoded := cast(*u8)malloc(cast(usize)(size + 1))
-    if decoded == null { return -1 }
-    if RecordCodec.UnpackRecord(input, BytesFromPointer(decoded, cast(u64)size), maximum) != size {
-        SecureWipe(decoded, size)
-        free(cast(*void)decoded)
-        return -1
-    }
-    decoded[size] = 0
-    SecureWipe(plain.*, count)
-    free(cast(*void)plain.*)
-    plain.* = decoded
-    return size
 }
 
 // The account's public ID, the user_id_hash every app's associated data
@@ -350,7 +294,7 @@ storage_entity_account_id :: (output: []u8) -> string {
 // own document, merged over its kept copy like every record, so fields
 // another app added stay. A record no longer on this device sends nothing.
 storage_append_entity_record_json :: (json: *StorageJsonBuilder, key: *u8, collection: string,
-    record_id: string, entity_id: string, queued_at: s64, include_packed: bool = false) -> s32 {
+    record_id: string, entity_id: string, queued_at: s64) -> s32 {
     plain: StorageJsonBuilder
     plain.ok = 1
     defer { storage_json_builder_free(*plain) }
@@ -399,30 +343,7 @@ storage_append_entity_record_json :: (json: *StorageJsonBuilder, key: *u8, colle
     storage_json_builder_key_value_text(json, "ciphertext", TextFromBytes(VecSlice(ciphertext, 0, ciphertext.count)))
     storage_json_builder_append_text(json, ",\"updated_at\":")
     storage_json_builder_append_epoch(json, queued_at)
-    storage_json_builder_append_text(json, ",\"schema_version\":1")
-    if include_packed && plain.len >= 512 {
-        frame := cast(*u8)malloc(cast(usize)plain.len)
-        if frame != null {
-            defer {
-                SecureWipe(frame, plain.len)
-                free(cast(*void)frame)
-            }
-            packed := RecordCodec.PackRecord(BytesFromPointer(plain.data, cast(u64)plain.len), BytesFromPointer(frame, cast(u64)plain.len))
-            if packed > 0 {
-                VecFree(ciphertext)
-                VecFree(nonce)
-                ciphertext = .{}
-                nonce = .{}
-                if EntitySealRecord(key, metadata, BytesFromPointer(frame, cast(u64)packed), *ciphertext, *nonce) {
-                    storage_json_builder_append_text(json, ",")
-                    storage_json_builder_key_value_text(json, "packed_nonce", TextFromBytes(VecSlice(nonce, 0, nonce.count)))
-                    storage_json_builder_append_text(json, ",")
-                    storage_json_builder_key_value_text(json, "packed_ciphertext", TextFromBytes(VecSlice(ciphertext, 0, ciphertext.count)))
-                }
-            }
-        }
-    }
-    storage_json_builder_append_text(json, "}")
+    storage_json_builder_append_text(json, ",\"schema_version\":1}")
     return json.ok
 }
 
@@ -440,19 +361,14 @@ storage_open_entity_record :: (collection: string, record_id: string, key_id: st
     metadata := EntityRecordMetadata.{.account_id = storage_entity_account_id(account[:]),
         .collection = collection, .id = record_id, .schema = EntityCollectionSchema(collection)}
     plain: *u8 = null
-    count := EntityOpenRecord(*key[0], metadata, key_id, nonce, ciphertext, *plain)
-    if count < 0 {
-        return 0
-    }
-    if storage_unpack_record_payload(*plain, count, ENTITY_RECORD_PLAIN_MAX) < 0 {
-        free(cast(*void)plain)
+    if EntityOpenRecord(*key[0], metadata, key_id, nonce, ciphertext, *plain) < 0 {
         return 0
     }
     plaintext_out.* = plain
     return 1
 }
 
-storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq: s64, include_packed: bool = true) {
+storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq: s64) {
     stmt: *void = null
     key: [32] u8
     first: s32 = 1
@@ -491,7 +407,7 @@ storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq
                     record: StorageJsonBuilder
                     record.ok = 1
                     appended := storage_append_entity_record_json(*record, *key[0], collection,
-                        AppTextFromCString(*record_id[0], 180), entity_id, queued_at, include_packed)
+                        AppTextFromCString(*record_id[0], 180), entity_id, queued_at)
                     if appended == 1 && record.data != null {
                         if first == 0 {
                             storage_json_builder_append_text(json, ",")
@@ -513,7 +429,7 @@ storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq
                 first = 0
                 if storage_append_encrypted_record_json(json, *key[0], collection, key_id, AppTextFromCString(*record_id[0], 180),
                     entity_type, entity_id, local_date,
-                    queued_at, is_delete, include_packed) == 0 {
+                    queued_at, is_delete) == 0 {
                     SecureWipe(*key[0], 32)
                     json.ok = 0
                     break
@@ -582,13 +498,8 @@ storage_decrypt_record :: (collection: string, record_id: string, key_id: string
         return 0
     }
     plaintext[sealed_len - 16] = cast(u8)0
-    plain_count := storage_unpack_record_payload(*plaintext, sealed_len - 16, 131056)
-    if plain_count < 0 {
-        storage_decrypted_record_cleanup(*aad, sealed, plaintext, *key[0])
-        return 0
-    }
     if content_hash.count > 0 && content_hash[0] != #char "\0" {
-        storage_sha256_hex(plaintext, plain_count, *actual_hash[0])
+        storage_sha256_hex(plaintext, sealed_len - 16, *actual_hash[0])
         if storage_compare_text(AppTextFromCString(*actual_hash[0], ACCOUNT_PUBLIC_ID_HEX_SIZE), content_hash) != 0 {
             storage_decrypted_record_cleanup(*aad, sealed, plaintext, *key[0])
             return 0
