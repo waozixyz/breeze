@@ -87,8 +87,9 @@ arguments = [str(compiler), 'build', '--target=c', '--no-main', '--root', str(RO
 for path in ('src', 'build/packages/ziran/std', 'build/packages/kryon/src/ui',
              'build/packages/kryon/src/backend', 'build/packages/daochi-client'):
     arguments += ['--module-path', str(ROOT / path)]
-arguments += ['--module-path', 'oqs=' + str(ROOT / 'build/packages/oqs/src'),
-              '--module-path', 'kryon=' + str(ROOT / 'build/packages/kryon/src/ui')]
+arguments += subprocess.check_output([
+    'sh', str(ROOT / 'scripts/package-paths.sh'), str(ROOT / 'build/packages')
+], text=True).split()
 subprocess.run([*arguments, '-o', str(generated), str(ROOT / 'tests/practice_downloads_behavior.zi')], check=True)
 monocypher = ROOT / 'build/packages/monocypher/src'
 subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-D_GNU_SOURCE', '-O1',
