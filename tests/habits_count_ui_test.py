@@ -1,10 +1,12 @@
-"""A counting habit's count dialog, drawn by the Habits package.
+"""Habit creation and a counting habit's dialog, drawn by Habits.
 
 Run by habits_count_ui_test.sh on its own Xvfb display. Screenshot mode
 seeds a temporary database with a habit counted three times today out of a
 target of three and opens its count dialog; the test drives it through
 Kryon's test driver: the steps count the day down and up, Close and Done
 close it, and a habit that asks questions opens its day from Entries.
+The ordinary New Habit flow also edits and saves details, schedules and
+tracking options before a habit exists, at phone and desktop widths.
 """
 
 import contextlib
@@ -39,18 +41,19 @@ def expect(actual, expected, message):
 
 
 @contextlib.contextmanager
-def scene(name):
+def scene(name, width=411):
     """The app showing one screenshot scene, with its driver and database."""
-    driver = UiDriver(TEST_DIR / ("driver-" + name))
+    label = name + "-" + str(width)
+    driver = UiDriver(TEST_DIR / ("driver-" + label))
     with contextlib.ExitStack() as stack:
         temporary = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="inbe-habits-count-")))
-        log_path = TEST_DIR / (name + ".log")
+        log_path = TEST_DIR / (label + ".log")
         log = stack.enter_context(log_path.open("w"))
         # The scene's own capture goes to the temporary folder and is removed
         # with it; the window stays open for the test.
         app = subprocess.Popen(
             [BINARY, "--screenshot", str(temporary / "start.png"),
-             "--screenshot-scene", name, "--screenshot-width", "411",
+             "--screenshot-scene", name, "--screenshot-width", str(width),
              "--screenshot-height", "760"],
             env=os.environ | {"APP_SHOT_WINDOW": "1"} | driver.environment(),
             stdout=log, stderr=subprocess.STDOUT)
@@ -135,6 +138,113 @@ def scroll_to(driver, **selector):
         driver.release_pointer()
         driver.wait_idle(frames=4)
     return driver.wait(**selector)
+
+
+def reveal(driver, width, **selector):
+    """Find a form control after scrolling in either direction."""
+    for _ in range(40):
+        matches = driver.find(**selector)
+        if matches:
+            node = matches[0]
+            if node["visible"] and 60 <= node["y"] and node["y"] + node["height"] <= 690:
+                return node
+            direction = 2 if node["y"] < 60 else -2
+        else:
+            direction = -2
+        driver.pointer(width // 2, 450, wheel=direction)
+        driver.release_pointer()
+        driver.wait_idle(frames=2)
+    return driver.wait(**selector)
+
+
+def wait_selected(driver, selected, **selector):
+    deadline = time.monotonic() + 10
+    while True:
+        nodes = driver.find(**selector)
+        if nodes and nodes[0]["selected"] == selected:
+            return
+        if time.monotonic() >= deadline:
+            raise Failure(f"FAIL selection {selector}: expected {selected}, got {nodes}")
+        driver.wait_idle(frames=2)
+
+
+for width in (411, 1100):
+    with scene("habits_overview", width) as (driver, database):
+        driver.press(label="+ New Habit", role="button")
+        driver.wait(label="Create habit", role="button")
+        # Change tracking before entering a name, through the ordinary New
+        # Habit action rather than a scene that opens the editor directly.
+        for difficulty in ("Easy", "Medium", "Hard", "Very hard"):
+            reveal(driver, width, label=difficulty, role="button")
+            driver.press(label=difficulty, role="button")
+            wait_selected(driver, True, label=difficulty, role="button")
+        reveal(driver, width, key=7606)
+        driver.press(key=7606)
+        wait_selected(driver, True, key=7606)
+        reveal(driver, width, focus_id=7607, role="text_field")
+        driver.press(focus_id=7607, role="text_field")
+        driver.key("a", control=True)
+        driver.type("-2.5")
+        driver.wait(focus_id=7607, value="-2.5")
+        reveal(driver, width, key=7610)
+        driver.press(key=7610)
+        wait_selected(driver, True, key=7610)
+        reveal(driver, width, key=7630)
+        driver.press(key=7630)
+        driver.press(key=9120)
+        driver.press(label="Done", role="button")
+        driver.wait_gone(key=9120)
+        reveal(driver, width, key=7760)
+        driver.press(key=7760)
+        reveal(driver, width, focus_id=7720, role="text_field")
+        driver.press(focus_id=7720, role="text_field")
+        driver.type("How did it go?")
+        driver.wait(focus_id=7720, value="How did it go?")
+        reveal(driver, width, key=7710)
+        driver.press(key=7710)
+        wait_selected(driver, False, key=7710)
+        reveal(driver, width, key=7562)
+        driver.press(key=7562)
+        wait_selected(driver, True, key=7562)
+        reveal(driver, width, key=7531)
+        driver.press(key=7531)
+        wait_selected(driver, True, key=7531)
+        reveal(driver, width, focus_id=7512, role="text_area")
+        driver.press(focus_id=7512, role="text_area")
+        driver.type("Set every option before creating")
+        driver.wait(focus_id=7512, value="Set every option before creating")
+        reveal(driver, width, focus_id=7622, role="text_field")
+        driver.press(focus_id=7622, role="text_field")
+        driver.key("a", control=True)
+        driver.type("250")
+        driver.wait(focus_id=7622, value="250")
+        reveal(driver, width, key=7612)
+        driver.press(key=7612)
+        wait_selected(driver, True, key=7612)
+        wait_selected(driver, False, key=7610)
+        driver.press(key=7612)
+        wait_selected(driver, False, key=7612)
+        reveal(driver, width, key=7610)
+        driver.press(key=7610)
+        wait_selected(driver, True, key=7610)
+        # Returning to the top and typing the name must keep the draft's
+        # tracking choices, and Create must store those same choices.
+        reveal(driver, width, focus_id=7511, role="text_field")
+        driver.press(focus_id=7511, role="text_field")
+        name = "New habit options " + str(width)
+        driver.type(name)
+        driver.press(label="Create habit", role="button")
+        expect(sql(database, "SELECT difficulty||':'||custom_coins||':'||coin_halves||':'||"
+                   "counter_enabled||':'||counter_target||':'||span FROM habits "
+                   "WHERE name='" + name + "' AND deleted_at=0"),
+               "2:1:-5:1:250:0", "new habit keeps all tracking options")
+        expect(sql(database, "SELECT description||':'||icon||':'||weekdays||':'||"
+                   "(sync_activity!=0)||':'||json_extract(questions,'$[0].text') FROM habits "
+                   "WHERE name='" + name + "' AND deleted_at=0"),
+               "Set every option before creating:2:126:1:How did it go?",
+               "new habit keeps details, schedule, practices and questions")
+    print("PASS new-habit details, schedule, difficulty, coins, counter, span, "
+          f"practices and questions at {width}px")
 
 
 with scene("habit_count_dialog") as (driver, database):
