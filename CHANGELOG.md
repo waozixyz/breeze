@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.49] - 2026-10-25
+
+- Download Arcade in under one megabyte; its games and their covers arrive separately.
+- Arcade’s covers show only the game art; the download dialog shows the size.
+- Install game editors with their required games and review the complete download size.
+- Reuse Shovey’s downloaded artwork and sounds in its editor.
+
 ## [2.1.48] - 2026-10-25
 
 - Arcade uses large rounded game covers in the same dark library on every device.
