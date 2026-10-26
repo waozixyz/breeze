@@ -400,7 +400,7 @@ EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) $(APPS_BUNDLE) asset
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 # Dependencies are imported as PACKAGE/Module through their linked packages.
 ZI_PACKAGE_PATHS := $(shell sh scripts/package-paths.sh)
-ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort) apps/practice/hold_reminder.zi $(wildcard apps/practice/astral_projection*.zi) $(wildcard apps/practice/workout*.zi) $(wildcard apps/practice/sun_salutation*.zi)
+ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort) apps/practice/hold_reminder.zi apps/practice/whm_controls.zi $(wildcard apps/practice/astral_projection*.zi) $(wildcard apps/practice/workout*.zi) $(wildcard apps/practice/sun_salutation*.zi)
 GAME2D_DIR := build/packages/game2d
 GAME2D_MODULES := $(wildcard $(GAME2D_DIR)/src/*/*.zi)
 DAOCHI_CLIENT_DIR ?= build/packages/daochi-client

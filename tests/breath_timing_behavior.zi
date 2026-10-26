@@ -1,8 +1,52 @@
 #import, file "../src/core/types.zi";
 #import, file "../src/core/breath_timing.zi";
 #import "hold_reminder"
+#import "whm_controls"
 
 using BreathAnimation;
+
+CheckBackRestarts :: () -> bool {
+    phases: [4]s32 = .[BreathPhaseStarting, BreathPhaseBreathe,
+    BreathPhaseHold, BreathPhaseRecover]
+    for index: 0..3 {
+        session := BreathSessionInit()
+        session.phase = phases[index]
+        session.round = 2
+        unused BreathDigitsWrite(session.results[0][:], 78)
+        unused BreathDigitsWrite(session.results[2][:], 92)
+        if WhmBackRestartsPhase(session) {
+            return false
+        }
+        session.sectick = 120
+        session.breath_frame = 37
+        session.breathtick = 18
+        session.halftick = 1
+        session.dir = 1
+        session.r = session.rmax
+        unused BreathDigitsWrite(session.count[:], 8)
+        if !WhmBackRestartsPhase(session) {
+            return false
+        }
+        reset := WhmRestartPhase(session)
+        if reset.phase != session.phase || reset.round != 2 ||
+        BreathCountValue(reset) != 0 || reset.sectick != 0 ||
+        reset.breath_frame != 0 || reset.breathtick != 0 ||
+        reset.halftick != 0 || reset.dir != 0 || reset.r != reset.rmin ||
+        BreathDigitsRead(reset.results[0][:]) != 78 ||
+        BreathDigitsRead(reset.results[2][:]) != 92 ||
+        reset.speed_level != session.speed_level ||
+        reset.max_rounds != session.max_rounds {
+            return false
+        }
+        // A running timer must not prevent the next press going backward.
+        reset.sectick = 12
+        reset.breath_frame = 12
+        if WhmBackRestartsPhase(reset) {
+            return false
+        }
+    }
+    return true
+}
 
 CheckHoldReminders :: () -> bool {
     intervals: [2]s32 = .[30, 60]
@@ -52,6 +96,9 @@ CheckHoldReminders :: () -> bool {
 
 #program_export
 Answer :: () -> s32 {
+    if !CheckBackRestarts() {
+        return -38
+    }
     if !CheckHoldReminders() {
         return -30
     }

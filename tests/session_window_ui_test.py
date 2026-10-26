@@ -24,6 +24,8 @@ DISPLAY_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_AD
 assert all(not os.environ.get(key) for key in DISPLAY_KEYS), "Inherited desktop environment"
 BINARY = Path(sys.argv[1]).resolve()
 DESKTOP_ONLY = "--desktop-only" in sys.argv[2:]
+BACK_ONLY = "--back-only" in sys.argv[2:]
+EMBEDDED = "--embedded" in sys.argv[2:]
 SCREEN_START, SCREEN_SESSION, SCREEN_HABITS, SCREEN_LUMI = 0, 1, 11, 23
 SCREEN_SETTINGS, SCREEN_LISTS, SCREEN_DIARY = 6, 16, 22
 PRACTICES = {"whm": 1, "meditation": 2, "sun_salutation": 3, "patterns": 4}
@@ -78,7 +80,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
     def application(label, width, height):
         log_path = OUTPUT / (label + ".log")
         with log_path.open("w") as log:
-            app = subprocess.Popen([str(BINARY), "--bundle", str(ROOT / "build/inbe-full.zx")],
+            arguments = [str(BINARY)] if EMBEDDED else \
+                [str(BINARY), "--bundle", str(ROOT / "build/inbe-full.zx")]
+            app = subprocess.Popen(arguments,
                                    cwd=ROOT, env=env, stdout=log, stderr=log)
             driver.attach(app, log_path)
             try:
@@ -263,6 +267,67 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
                   picture_in_picture="0")
     values.update({"app_used_" + name: "1" for name in ("lumi", "habits", "lists", "diary", "practices")})
     save_settings(values)
+
+    if BACK_ONLY:
+        save_settings(dict(advanced_session_controls="1", double_tap_to_breathe="0",
+                           pause_seconds="0", speed="8", progressive_speed="0"))
+        for width in (390, 900):
+            with application("back-controls-" + str(width), width, 720) as window:
+                action(window, "practice.whm.start", "back-start-" + str(width))
+                driver.press(label="Pause", role="button")
+                driver.press(label="Next", role="button")
+
+                def advance_counter():
+                    driver.press(label="PLAY", role="button")
+                    deadline = time.monotonic() + 10
+                    while state(window)["breath"] < 2:
+                        assert time.monotonic() < deadline, ("Counter did not advance", state(window))
+                        time.sleep(.1)
+                    driver.press(label="Pause", role="button")
+
+                def back_to_zero(expected_round, holding):
+                    driver.press(label="Back", role="button",
+                                 index=len(shown(label="Back", role="button")) - 1)
+                    driver.wait_idle(frames=2)
+                    observed = state(window)
+                    assert observed["breath"] == 0 and observed["round"] == expected_round, observed
+                    assert observed["paused"], "Back changed the pause state"
+                    assert bool(shown(label="BREATH", role="button")) == holding, \
+                        "Back left the current phase instead of resetting it"
+
+                # Breathing and holding restart in place, including when paused.
+                advance_counter()
+                back_to_zero(0, False)
+                driver.press(label="Next", role="button")
+                driver.wait(label="BREATH", role="button")
+                advance_counter()
+                back_to_zero(0, True)
+                back_to_zero(0, False)
+
+                # Without a between-round countdown, the second press at zero
+                # still reaches the previous round, rather than trapping Back.
+                for step in range(4):
+                    driver.press(label="Next", role="button")
+                assert state(window)["round"] == 1, state(window)
+                advance_counter()
+                back_to_zero(1, False)
+                back_to_zero(0, False)
+
+                # A running session stays running when its counter is reset.
+                driver.press(label="Next", role="button")
+                driver.press(label="Next", role="button")
+                driver.press(label="PLAY", role="button")
+                deadline = time.monotonic() + 10
+                while state(window)["breath"] < 1:
+                    assert time.monotonic() < deadline, "Running counter did not advance"
+                    time.sleep(.1)
+                driver.press(label="Back", role="button",
+                             index=len(shown(label="Back", role="button")) - 1)
+                observed = state(window)
+                assert observed["round"] == 1 and observed["breath"] == 0, observed
+                assert not observed["paused"], "Back paused the running session"
+                print(f"PASS Back resets breathing and hold counters before moving backward at {width}px")
+        sys.exit(0)
 
     # Every practice minimizes to Practice, where it was started, and keeps
     # its live picture moving in the window until maximize returns to it.

@@ -57,6 +57,11 @@ whm-frame-performance-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
 		python3 tests/whm_frame_performance_test.py $(abspath $(TARGET))
 
+.PHONY: whm-controls-ui-test
+whm-controls-ui-test: $(TARGET)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		python3 tests/session_window_ui_test.py $(abspath $(TARGET)) --back-only
+
 .PHONY: lumi-narration-test
 lumi-narration-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
