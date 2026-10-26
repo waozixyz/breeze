@@ -1,0 +1,77 @@
+name: Node app follower
+
+# Arcade releases reach Waozi's node by themselves. Arcade's Game updates
+# workflow attaches each new release (node-arcade-VERSION) when a game
+# publishes an update; this checks every fifteen minutes for a release newer
+# than the version the node serves and publishes it through the Node app
+# release job, which signs exactly those bytes with the package key.
+on:
+  schedule:
+    - cron: '12,27,42,57 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-app-follower
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Find an Arcade release the node does not serve
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      publish: ${{ steps.release.outputs.publish }}
+      commit: ${{ steps.release.outputs.commit }}
+      tag: ${{ steps.release.outputs.tag }}
+      sha256: ${{ steps.release.outputs.sha256 }}
+    steps:
+      - name: Compare Arcade's newest release with the node
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, re, subprocess, urllib.request
+          def gh(*args):
+              return subprocess.check_output(['gh', *args], text=True).strip()
+          def number(version):
+              return tuple(map(int, version.split('.')))
+          releases = json.loads(gh('release', 'list', '--repo', 'waozixyz/arcade', '--limit', '50',
+                                   '--json', 'tagName,isDraft'))
+          tags = [item['tagName'] for item in releases if not item['isDraft'] and
+                  re.fullmatch(r'node-arcade-\d+\.\d+\.\d+', item['tagName'])]
+          tag = max(tags, key=lambda name: number(name.removeprefix('node-arcade-')))
+          request = urllib.request.Request(
+              'https://api.waozi.xyz/api/v2/packages/inbe.arcade/latest?bucket=0&format=zx',
+              headers={'User-Agent': 'Inbe-Publisher/1.0', 'Cache-Control': 'no-cache'})
+          with urllib.request.urlopen(request, timeout=60) as response:
+              live = json.load(response)['version']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              if number(tag.removeprefix('node-arcade-')) <= number(live):
+                  print(f'The node already serves Arcade {live}; newest release is {tag}.')
+                  output.write('publish=false\n')
+                  raise SystemExit(0)
+              commit = gh('api', f'repos/waozixyz/arcade/commits/{tag}', '--jq', '.sha')
+              subprocess.run(['gh', 'release', 'download', tag, '--repo', 'waozixyz/arcade',
+                              '--pattern', 'arcade.zx', '--dir', 'bundle'], check=True)
+              with open('bundle/arcade.zx', 'rb') as bundle:
+                  digest = hashlib.sha256(bundle.read()).hexdigest()
+              print(f'Publishing {tag} ({commit}, arcade.zx {digest}); the node serves {live}.')
+              output.write(f'publish=true\ncommit={commit}\ntag={tag}\nsha256={digest}\n')
+          PY
+
+  publish:
+    name: Publish it to Waozi's node
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    uses: ./.github/workflows/node-app-release.yml
+    with:
+      app: arcade
+      repository: waozixyz/arcade
+      commit: ${{ needs.check.outputs.commit }}
+      tag: ${{ needs.check.outputs.tag }}
+      sha256: ${{ needs.check.outputs.sha256 }}
+    secrets: inherit
