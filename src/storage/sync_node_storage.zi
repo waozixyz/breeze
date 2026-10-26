@@ -172,6 +172,32 @@ SyncRecordPackageSequence :: (response: string) {
 // A successful sync replaces the node's report and clears a full state.
 SyncNodeStorageRecordResponse :: (address: string, response: string) {
     SyncRecordPackageSequence(response)
+    capabilities := FieldAt(response, 0, "server_capabilities")
+    complete := FieldAt(response, 0, "changes_complete")
+    terminal := complete < 0 || MatchLiteral(response, complete, "true")
+    if capabilities >= 0 || terminal {
+        positions: [64]s32
+        count := ArrayPositions(response, capabilities, positions[:])
+        supported := false
+        for index: cast(s32)0..count - 1 {
+            if index >= positions.count { break }
+            value: [80]u8
+            length := ReadStringText(response, positions[index], value[:])
+            if length >= 0 && TextFromBytes(value[:length]) == "record-pages-metadata-v1" {
+                supported = true
+            }
+        }
+        feature := SyncNodeStorageKey(address, "record_metadata")
+        pages := SyncNodeStorageKey(address, "record_pages")
+        defer {
+            PackageFree(feature)
+            PackageFree(pages)
+        }
+        storage_set_setting_int(feature, ifx supported then 1 else 0)
+        if !supported && terminal {
+            storage_set_setting_int(pages, 0)
+        }
+    }
     storage: SyncNodeStorage
     if !SyncNodeStorageFromJson(response, *storage) {
         return

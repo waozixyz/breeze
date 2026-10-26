@@ -35,7 +35,7 @@ storage_build_sync_payload_json :: (user_id_hash: string, public_key_hex: string
     return BuildStoredSyncPayload(user_id_hash, public_key_hex, STORAGE_SYNC_OP_BATCH_LIMIT)
 }
 
-BuildStoredSyncPayload :: (user_id_hash: string, public_key_hex: string, maximum_records: s32) -> *u8 {
+BuildStoredSyncPayload :: (user_id_hash: string, public_key_hex: string, maximum_records: s32, include_packed: bool = true) -> *u8 {
     json: StorageJsonBuilder
     since_server_version: s64
     through_seq: s64
@@ -103,6 +103,8 @@ BuildStoredSyncPayload :: (user_id_hash: string, public_key_hex: string, maximum
     storage_json_builder_append_text(*json, AppTextFromCString(*protocol_text[0], 32))
     storage_json_builder_append_text(*json, ",")
     storage_json_builder_append_text(*json, "\"app_id\":\"inbe\",")
+    storage_json_builder_append_text(*json, "\"include_metadata\":true,")
+    storage_json_builder_append_text(*json, "\"record_encoding\":\"gzip-v1\",")
     storage_json_builder_append_text(*json, "\"client_capabilities\":[\"v6-device-transactions\",\"encrypted-primary\"],")
     storage_json_builder_key_value_text(*json, "user_id_hash", user_id_hash)
     storage_json_builder_append_text(*json, ",")
@@ -133,11 +135,18 @@ BuildStoredSyncPayload :: (user_id_hash: string, public_key_hex: string, maximum
         storage_json_builder_key_value_text(*json, "public_key", public_key_hex)
     }
     storage_json_builder_append_text(*json, ",")
-    storage_append_encrypted_records_json(*json, through_seq)
+    storage_append_encrypted_records_json(*json, through_seq, include_packed)
     storage_json_builder_append_text(*json, "}")
     if json.ok == 0 || json.data == null {
         free(cast(*void)json.data)
         return null
+    }
+    // Leave room for SDK page selectors within the node's 1 MiB JSON limit.
+    // Optional variants cannot turn an otherwise valid identity batch into an
+    // oversized request. Rebuilding preserves the complete outbox snapshot.
+    if include_packed && json.len > 1044480 {
+        storage_json_builder_free(*json)
+        return BuildStoredSyncPayload(user_id_hash, public_key_hex, maximum_records, false)
     }
     LogStorage(LOG_INFO, "SYNC: payload built")
     return json.data
