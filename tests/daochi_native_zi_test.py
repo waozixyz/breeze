@@ -135,7 +135,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-daochi-native-") as temporary:
     sources = [
         "storage/daochi_native.c", "daochi_account.c", "delegate_store.c",
         "client.c", "auth.c", "url.c", "wire.c",
-        "sync.c", "transaction.c", "keys.c", "crypto.c", "Oqs.c",
+        "sync.c", "transaction.c", "keys.c", "crypto.c", "sha256.c", "Oqs.c",
         "net_http_curl_linux.c", "json_scan.c", "text.c", "text_buffer.c",
         "byte_text_linux.c", "c_string.c",
     ]

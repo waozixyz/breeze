@@ -108,3 +108,9 @@ android-geometry-probe-test:
 .PHONY: android-launcher-device-test
 android-launcher-device-test:
 	@python3 tests/android_launcher_device.py $(ANDROID_LAUNCHER_ARGS)
+
+.PHONY: android-arcade-device-test
+android-arcade-device-test:
+	@test -n "$(APK)" || { echo "Set APK to the separate verification APK for the USB Moto"; exit 1; }
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		YUE_DESKTOP_RECOVERY=0 python3 tests/android_arcade_device.py run --apk "$(APK)"

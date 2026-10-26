@@ -90,14 +90,13 @@ def build_probe(work, compiler, env):
     curl_name = ctypes.util.find_library("curl")
     assert curl_name, "libcurl is required"
     executable = work / "probe"
-    sources = [
-        output / "update_flow_probe.c", output / "update_check.c",
-        output / "update_policy.c",
-        output / "json_scan.c", output / "update.c",
-        output / "text_buffer.c", output / "crypto.c",
-        output / "current_app.c", output / "update_transport.c",
-        output / "c_string.c", output / "byte_text_linux.c",
-    ]
+    names = {
+        "update_flow_probe.c", "update_check.c", "update_policy.c",
+        "json_scan.c", "update.c", "text_buffer.c", "crypto.c", "sha256.c",
+        "current_app.c", "update_transport.c", "c_string.c", "byte_text_linux.c",
+    }
+    sources = sorted(path for path in output.rglob("*.c")
+                     if re.sub(r"^p[0-9a-f]{16}_", "", path.name) in names)
     subprocess.run([
         "cc", "-std=c11", "-D_GNU_SOURCE", "-DNATIVE_WINDOW_HAVE_SDL",
         "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
