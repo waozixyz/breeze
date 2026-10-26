@@ -68,6 +68,7 @@ package-release-test: apps $(ZIRAN_BUILD_DIR)/libziran.a
 # each new package that declares a host interface it has.
 .PHONY: package-compat-test
 package-compat-test: $(TARGET) $(APP_BUNDLES) $(INBE_BUNDLE)
+	python3 tests/package_compat_fetch_test.py
 	python3 tests/package_compat_test.py $(abspath $(TARGET))
 
 .PHONY: package-version-test

@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import socket
 import stat
 import subprocess
 import sys
@@ -57,11 +58,27 @@ def fetch(url, limit):
         headers["Authorization"] = f"Bearer {token}"
         headers["Accept"] = "application/vnd.github+json"
     request = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(request, timeout=60) as response:
-        data = response.read(limit + 1)
-    if len(data) > limit:
-        raise ValueError(f"{url} exceeds {limit} bytes")
-    return data
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(request, timeout=60) as response:
+                data = response.read(limit + 1)
+            if len(data) > limit:
+                raise ValueError(f"{url} exceeds {limit} bytes")
+            return data
+        except urllib.error.HTTPError as error:
+            if error.code not in (408, 429, 500, 502, 503, 504) or attempt == 3:
+                raise
+        except urllib.error.URLError as error:
+            reason = error.reason
+            temporary_dns = isinstance(reason, socket.gaierror) and reason.errno == socket.EAI_AGAIN
+            if not (temporary_dns or isinstance(reason, (TimeoutError, ConnectionError))) or attempt == 3:
+                raise
+        except (TimeoutError, ConnectionError):
+            if attempt == 3:
+                raise
+        destination = urllib.parse.urlsplit(url)
+        print(f"Temporary package transport failure for {destination.hostname}{destination.path}; retrying")
+        time.sleep(2 ** attempt)
 
 
 def host_range(ledger):
