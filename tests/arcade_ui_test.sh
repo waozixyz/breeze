@@ -2,7 +2,7 @@
 # Arcade on a private Xvfb display with disposable profiles: no inherited
 # desktop, session bus or desktop recovery reaches the app. Where user
 # namespaces allow it, the test also runs without a network, so the node is
-# never contacted; its own loopback still serves local game downloads.
+# never contacted; the test brings up its loopback for local game downloads.
 # Further options pass to arcade_ui_test.py.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
@@ -12,7 +12,7 @@ shift 2
 isolate=
 offline=
 if unshare -rn true 2>/dev/null; then
-    isolate="unshare -rn sh -c 'ip link set lo up 2>/dev/null; exec \"\$@\"' sh"
+    isolate="unshare -rn"
     offline=--offline
 fi
 eval "env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \

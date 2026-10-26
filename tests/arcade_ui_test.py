@@ -36,6 +36,14 @@ parser.add_argument("--offline", action="store_true", help="the node cannot be r
 parser.add_argument("--downloads-only", action="store_true",
                     help="Check the rounded library, add-on downloads and offline games")
 args = parser.parse_args()
+if args.offline:
+    # A new network namespace starts with loopback down; the download check
+    # serves its games on it.
+    import fcntl, socket, struct
+    try:
+        fcntl.ioctl(socket.socket(), 0x8914, struct.pack("16sH14s", b"lo", 0x49, b""))
+    except OSError:
+        pass
 BINARY = args.binary.resolve(strict=True)
 PACKAGE = args.package.resolve(strict=True)
 assert PACKAGE.name == "arcade.zx", "INBE_NODE_APP_FILE names the app by its file: arcade.zx"

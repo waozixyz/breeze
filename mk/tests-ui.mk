@@ -228,6 +228,14 @@ chess-ui-test: $(TARGET)
 	@test -n "$(CHESS_BUNDLE)" || { echo "Set CHESS_BUNDLE to the Chess package built by Arcade"; exit 2; }
 	@sh tests/chess_ui_test.sh $(abspath $(TARGET)) $(abspath $(CHESS_BUNDLE))
 
+# One game a collection downloads separately: refused when corrupt, then
+# reopened from the offline cache. Needs Shovey's checkout beside this one.
+.PHONY: node-child-download-ui-test
+NODE_CHILD_CATALOG ?=
+node-child-download-ui-test: $(TARGET)
+	@test -n "$(NODE_CHILD_CATALOG)" || { echo "Set NODE_CHILD_CATALOG to an arcade.zx with its arcade.games beside it"; exit 2; }
+	@python3 tests/node_child_download_ui_test.py $(abspath $(TARGET)) $(abspath $(NODE_CHILD_CATALOG))
+
 # Arcade carries Chess: its collection in More apps, and Chess's replacement.
 .PHONY: arcade-ui-test
 ARCADE_BUNDLE ?=
