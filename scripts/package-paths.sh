@@ -3,6 +3,10 @@
 # paths. scripts/packages.sh links dependencies under build/packages.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+if [ -n "${DAOCHI_CLIENT_DIR:-}" ]; then
+    # Standalone storage tests also retain unqualified protocol imports.
+    printf '%s\n' --module-path "$DAOCHI_CLIENT_DIR"
+fi
 # Read the app's source roots from its manifest so every platform resolves
 # the same named modules without file-relative imports.
 python3 - "$root" <<'PY'
@@ -28,5 +32,9 @@ packages=${1:-build/packages}
 for path in kryon=kryon/src/ui kryon=kryon/src/backend apps=apps/src \
     crypto=crypto/src entity=entity/src plot=plot/src qrcode=qrcode/src \
     oqs=oqs/src mingcute=mingcute/src daochi_client=daochi-client; do
-    printf '%s\n' --module-path "${path%%=*}=$packages/${path#*=}"
+    directory="$packages/${path#*=}"
+    if [ "${path%%=*}" = daochi_client ] && [ -n "${DAOCHI_CLIENT_DIR:-}" ]; then
+        directory=$DAOCHI_CLIENT_DIR
+    fi
+    printf '%s\n' --module-path "${path%%=*}=$directory"
 done

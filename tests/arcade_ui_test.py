@@ -14,12 +14,15 @@ and loses only the Chess install once a signed Arcade runs and carries it.
 Nothing is published; with --offline the wrapper runs without a network.
 """
 import argparse
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
 import os
 from pathlib import Path
 import re
 import sqlite3
 import subprocess
 import tempfile
+import threading
 import time
 
 from ui_driver import UiDriver
@@ -30,6 +33,8 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("binary", type=Path)
 parser.add_argument("package", type=Path, help="an Arcade package, arcade.zx")
 parser.add_argument("--offline", action="store_true", help="the node cannot be reached")
+parser.add_argument("--downloads-only", action="store_true",
+                    help="Check the rounded library, add-on downloads and offline games")
 args = parser.parse_args()
 BINARY = args.binary.resolve(strict=True)
 PACKAGE = args.package.resolve(strict=True)
@@ -42,6 +47,7 @@ WIDTH, HEIGHT = 390, 844
 STEPS = ((-1, 0), (0, -1), (1, 0), (0, 1))
 SAVED_CHESS = "v=1;level=0;color=w;moves=e2e4 e7e5"
 driver = UiDriver(OUTPUT / "driver")
+local_game_origin = ""
 
 
 def wait_for(predicate, message, timeout=30):
@@ -84,6 +90,8 @@ def launch(profile, name, local_package=True):
     environment = os.environ | {"APP_DATA_ROOT": str(profile)} | driver.environment()
     if local_package:
         environment["INBE_NODE_APP_FILE"] = str(PACKAGE)
+        if local_game_origin:
+            environment["INBE_LOCAL_PACKAGE_ORIGIN"] = local_game_origin
     app = subprocess.Popen([str(BINARY)], cwd=ROOT, env=environment, stdout=log, stderr=subprocess.STDOUT)
     driver.attach(app, log_path)
     deadline = time.monotonic() + 60
@@ -127,7 +135,7 @@ def prepare(profile, extra):
 def arcade_records(profile, user):
     """Shovey's records inside Arcade, keyed to its verified nested identity."""
     return {key: value for key, value in settings(profile, user).items()
-            if re.fullmatch(r"nested\.[0-9a-f]{64}\.[a-z0-9._-]+", key)}
+            if re.fullmatch(r"(?:local\.)?nested\.[0-9a-f]{64}\.[a-z0-9._-]+", key)}
 
 
 def queued_entity(profile, key):
@@ -198,6 +206,122 @@ def move_shovey():
         if now and now != start:
             return now
     raise AssertionError("Shovey did not move from " + str(start))
+
+
+def check_download_library():
+    global local_game_origin
+    metadata = json.loads(PACKAGE.with_suffix('.json').read_text())
+    entries = {entry['sha256']: entry for entry in metadata['children']}
+    requested = []
+    offline = False
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            digest = self.path.removeprefix('/api/v2/packages/inbe.arcade/').removesuffix('.zx')
+            requested.append(digest)
+            if offline or digest not in entries:
+                self.send_error(503)
+                return
+            data = (PACKAGE.parent / 'arcade.games' / (digest + '.zx')).read_bytes()
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+    def reveal(label):
+        driver.pointer(WIDTH / 2, HEIGHT / 2, wheel=80)
+        driver.wait_idle(frames=3)
+        for _ in range(15):
+            if node := button(label):
+                return node
+            driver.pointer(WIDTH / 2, HEIGHT / 2, wheel=-8)
+            driver.wait_idle(frames=3)
+        raise driver._failure('Cover is not reachable: ' + label)
+
+    def download():
+        actions = driver.find(label='Download', role='button', visible=True)
+        action = max(actions, key=lambda node: node['width'])
+        driver.press(key=action['key'])
+
+    server = HTTPServer(('127.0.0.1', 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    local_game_origin = 'http://127.0.0.1:' + str(server.server_port)
+    try:
+        with tempfile.TemporaryDirectory(prefix='inbe-arcade-downloads-', dir=OUTPUT) as directory:
+            profile = Path(directory)
+            user = prepare(profile, {})
+            app = launch(profile, 'downloads')
+            try:
+                open_arcade()
+                reveal('Shovey')
+                assert not button('Play') and not button('Next'), 'Arcade must use clickable covers'
+                assert not driver.find(label='Monkey') and not driver.find(label='Chess')
+                assert not requested, 'The library must not predownload games'
+                driver.press(key=reveal('Shovey Editor')['key'])
+                driver.wait(contains='Shovey (required)', role='text')
+                driver.press(label='Cancel', role='button')
+                assert not requested, 'Cancel must not download games'
+                driver.press(key=reveal('Shovey Editor')['key'])
+                driver.wait(label='Download', role='button')
+                download()
+                driver.wait(label='New level', role='text', timeout=60)
+                assert len(requested) == 2, 'The editor must download itself and its required game'
+                driver.press(label='Back', role='button')
+                driver.press(key=reveal('Shovey')['key'])
+                deadline = time.monotonic() + 30
+                while True:
+                    assert time.monotonic() < deadline, driver.text()
+                    if driver.find(label='Not now', role='button', visible=True):
+                        driver.press(label='Not now', role='button')
+                    elif driver.find(label='How do you want to move?', role='text', visible=True):
+                        driver.press(contains='Swipe')
+                    elif driver.find(label='Restart', role='button', visible=True):
+                        break
+                    time.sleep(.05)
+                saved_cell = move_shovey()
+                record = wait_for(lambda: next(((key, value) for key, value in
+                    arcade_records(profile, user).items() if key.endswith('.local.campaign')), None),
+                    'Shovey did not keep its local campaign')
+                assert record[0].startswith('local.nested.')
+                assert not queued_entity(profile, record[0]), 'Local play must stay on the device'
+                backs = driver.find(label='Back', role='button', visible=True)
+                driver.press(key=backs[-1]['key'])
+                driver.press(key=reveal('Apfelwurm')['key'])
+                driver.wait(label='Download', role='button')
+                download()
+                driver.wait(label='Play', role='button', timeout=60)
+                driver.press(label='Play', role='button')
+                driver.wait(label='Pause', role='button')
+                assert len(requested) == 3, 'Each game must download once'
+            finally:
+                stop(app)
+            offline = True
+            before = list(requested)
+            app = launch(profile, 'downloads-offline')
+            try:
+                open_arcade()
+                driver.press(key=reveal('Shovey')['key'])
+                driver.wait(label='Restart', role='button')
+                wait_for(lambda: shovey_cell() == saved_cell, 'Shovey did not restore its saved position')
+                assert arcade_records(profile, user)[record[0]] == record[1]
+                assert requested == before, 'Cached games must open without a download'
+            finally:
+                stop(app)
+    finally:
+        server.shutdown()
+        worker.join(timeout=5)
+        server.server_close()
+        local_game_origin = ''
+    print('Inbe Arcade: rounded covers, add-on consent/cancel, shared assets, all game downloads, private saves and offline reopen passed')
+
+
+if args.downloads_only:
+    check_download_library()
+    raise SystemExit(0)
 
 
 with tempfile.TemporaryDirectory(prefix="inbe-arcade-") as directory:
