@@ -6,6 +6,8 @@
 
 static int account_present;
 static const char *account_alias;
+static const char *public_key;
+static int public_key_reads;
 static const char public_id[] =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -20,6 +22,10 @@ String storage_get_setting_text(String key)
 {
     if (StringEqual(key, StringView("sync_public_id", 14)))
         return StringView(public_id, account_present ? sizeof(public_id) - 1 : 0);
+    if (StringEqual(key, StringView("sync_public_key", 15))) {
+        public_key_reads++;
+        return StringView(public_key, strlen(public_key));
+    }
     assert(StringEqual(key, StringView("sync_account_alias", 18)));
     return StringView(account_alias, strlen(account_alias));
 }
@@ -56,6 +62,7 @@ int main(void)
     assert(app.bottom_nav_routes[3] == AppNavRoute_APP_NAV_ROUTE_SETTINGS);
     account_present = 0;
     account_alias = "";
+    public_key = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876549876";
     app_nav_profile_identity(&app, out, sizeof(name), sub, sizeof(subtitle));
     assert(strcmp((char *)name, "Profile") == 0);
     assert(subtitle[0] == 0);
@@ -63,22 +70,30 @@ int main(void)
     account_present = 1;
     account_alias = "nara";
     app_nav_profile_identity(&app, out, sizeof(name), sub, sizeof(subtitle));
-    assert(strcmp((char *)name, "Nara") == 0);
+    assert(strcmp((char *)name, "nara") == 0);
     assert(strcmp((char *)subtitle, "@nara") == 0);
 
     memcpy(app.profile_display_name, "Breeze", 7);
     app_nav_profile_identity(&app, out, sizeof(name), sub, sizeof(subtitle));
-    assert(strcmp((char *)name, "Breeze") == 0);
+    assert(strcmp((char *)name, "nara") == 0);
     assert(strcmp((char *)subtitle, "@nara") == 0);
+    assert(public_key_reads == 0);
 
-    app.profile_display_name[0] = 0;
     account_alias = "";
     app_nav_profile_identity(&app, out, sizeof(name), sub, sizeof(subtitle));
-    assert(strcmp((char *)name, "0123...cdef") == 0);
+    assert(strcmp((char *)name, "fedc...9876") == 0);
     assert(strcmp((char *)subtitle, "Profile") == 0);
 
     app_nav_profile_identity(&app, (Slice){small, sizeof(small)}, 5,
                              sub, sizeof(subtitle));
-    assert(strcmp((char *)small, "0123") == 0);
+    assert(strcmp((char *)small, "fedc") == 0);
+
+    /* Delegated/older profiles may retain only the public account ID. */
+    public_key = "";
+    app_nav_profile_identity(&app, out, sizeof(name), sub, sizeof(subtitle));
+    assert(strcmp((char *)name, "0123...cdef") == 0);
+    account_present = 0;
+    app_nav_profile_identity(&app, out, sizeof(name), sub, sizeof(subtitle));
+    assert(strcmp((char *)name, "Profile") == 0);
     return 0;
 }

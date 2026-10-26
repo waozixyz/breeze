@@ -35,6 +35,8 @@ parser.add_argument("--properties-only", action="store_true",
                     help="Rename an app and change its icon in Apps › Properties")
 parser.add_argument("--profile-navigation-only", action="store_true",
                     help="Check Profile's own Back stack with saved navigation placements")
+parser.add_argument("--profile-identity-only", action="store_true",
+                    help="Check alias and compact public-key labels in the Apps header")
 parser.add_argument("--with-tray", action="store_true",
                     help="Enable the desktop tray using the caller's locale settings")
 arguments = parser.parse_args()
@@ -416,6 +418,35 @@ with contextlib.ExitStack() as stack:
                         assert not driver.find(role="title_bar", visible=True)
                         print(f"{name}: one header and complete Back stack passed", flush=True)
         print("Profile: one header, Account/Data Back stack, inline Activity, pinned/unpinned, saved top/bottom/side navigation passed")
+
+    if arguments.profile_identity_only:
+        with tempfile.TemporaryDirectory(prefix="inbe-profile-identity-") as temporary:
+            profile = Path(temporary)
+            with application(profile, "profile-identity-initialize"):
+                with database(profile) as db:
+                    user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
+            common = {"language": "en", "language_system": 0, "language_setup_done": 1,
+                      "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
+                      "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1,
+                      "lumi_guides_seen": 127, "sync_enabled": 0,
+                      "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
+                      "profile_display_name": "Old display name",
+                      "sync_public_id": "0123456789abcdef" * 4,
+                      "sync_public_key": "fedc" + "0123456789abcdef" * 160 + "9876"}
+            for width, height in ((320, 640), (900, 720)):
+                for alias, expected in (("nara", "nara"), ("", "fedc...9876")):
+                    seed(profile, common | {"sync_account_alias": alias})
+                    name = f"profile-identity-{width}-{'alias' if alias else 'key'}"
+                    with application(profile, name, width, height) as (window, log):
+                        open_apps()
+                        control = driver.wait(focus_id=6792, role="button")
+                        assert control["label"] == expected, control
+                        assert control["visible_width"] >= control["width"] - 1
+                        assert control["height"] >= 44
+                        capture(window, name)
+                        open_profile(log)
+        print("Apps profile: exact alias overrides old display name; first/last public-key characters and Profile navigation pass in phone and desktop layouts")
+        raise SystemExit(0)
 
     if arguments.profile_navigation_only:
         check_profile_navigation()
