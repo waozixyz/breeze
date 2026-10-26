@@ -185,6 +185,28 @@ def published_release_retried(origin, ledger, app_id, output, attempts=6, delay=
     return None
 
 
+def published_companions(origin, bundle):
+    """The art and games a published collection downloads, fetched from the
+    node beside it as Arcade's build lays them out."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from node_app_games import required_games
+    from practice_content import bundle_assets
+    catalog = json.loads(bundle_assets(bundle.read_bytes())["assets/apps/catalog.json"])
+    sizes = {child["sha256"]: child["bytes"] for child in catalog["children"]}
+    if catalog.get("art"):
+        sizes[catalog["art"]["sha256"]] = catalog["art"]["bytes"]
+    games = bundle.parent / "arcade.games"
+    games.mkdir(exist_ok=True)
+    for name in sorted(required_games(bundle)):
+        digest = name.removesuffix(".zx")
+        data = fetch(f"{origin}/api/v2/packages/inbe.arcade/{name}", sizes[digest])
+        if len(data) != sizes[digest] or hashlib.sha256(data).hexdigest() != digest:
+            raise AssertionError(f"The node's Arcade download {digest} differs from its catalog")
+        (games / name).write_bytes(data)
+    metadata = {"children": catalog["children"], "art": catalog.get("art")}
+    bundle.with_suffix(".json").write_text(json.dumps(metadata, indent=2) + "\n")
+
+
 def published_games(binary, origin, ledger, output):
     """Install and play the node's games, independently of Arcade's checkout.
 
@@ -200,7 +222,12 @@ def published_games(binary, origin, ledger, output):
             print(f"forward {app_id}: the node serves no release")
             continue
         bundle, metadata = published
-        subprocess.run(["sh", str(ROOT / test), str(binary), str(bundle)],
+        extra = []
+        if app_id == "inbe.arcade":
+            # Arcade packs no games: its covers, downloads and offline reopen.
+            published_companions(origin, bundle)
+            extra = ["--downloads-only"]
+        subprocess.run(["sh", str(ROOT / test), str(binary), str(bundle), *extra],
                        env=environment, check=True, timeout=600)
         print(f"forward {app_id} {metadata['version']}: install, play, board and saved restart passed")
         checked += 1

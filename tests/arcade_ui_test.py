@@ -212,6 +212,8 @@ def check_download_library():
     global local_game_origin
     metadata = json.loads(PACKAGE.with_suffix('.json').read_text())
     entries = {entry['sha256']: entry for entry in metadata['children']}
+    # The library art downloads with Arcade; only games wait for consent.
+    art = (metadata.get('art') or {}).get('sha256', '')
     requested = []
     offline = False
 
@@ -221,8 +223,9 @@ def check_download_library():
 
         def do_GET(self):
             digest = self.path.removeprefix('/api/v2/packages/inbe.arcade/').removesuffix('.zx')
-            requested.append(digest)
-            if offline or digest not in entries:
+            if digest != art:
+                requested.append(digest)
+            if offline or (digest not in entries and digest != art):
                 self.send_error(503)
                 return
             data = (PACKAGE.parent / 'arcade.games' / (digest + '.zx')).read_bytes()
@@ -293,8 +296,9 @@ def check_download_library():
                 driver.press(key=reveal('Apfelwurm')['key'])
                 driver.wait(label='Download', role='button')
                 download()
-                driver.wait(label='Play', role='button', timeout=60)
-                driver.press(label='Play', role='button')
+                # Its cover is the title: Apfelwurm asks once how to move, then plays.
+                driver.wait(label='How do you want to move?', role='text', timeout=60)
+                driver.press(label='Swipe', role='button')
                 driver.wait(label='Pause', role='button')
                 assert len(requested) == 3, 'Each game must download once'
             finally:

@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-device-key-") as temporary:
         "-o", str(generated), str(ROOT / "src/storage/device_key_store.zi"),
         str(ROOT / "src/app/update_transport.zi"),
     ], check=True)
-    names = {"device_key_store.c", "device_key.c", "crypto.c",
+    names = {"device_key_store.c", "device_key.c", "crypto.c", "sha256.c",
              "keys.c", "byte_text_linux.c", "Oqs.c", "update_transport.c"}
     # Package modules are generated under their package's prefix,
     # such as p0123456789abcdef_Oqs.c.
