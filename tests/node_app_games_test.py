@@ -54,6 +54,20 @@ class GameArchiveTests(unittest.TestCase):
         self.bundle.write_bytes(fixture_bundle({}))
         self.assertEqual(required_games(self.bundle), set())
 
+    def test_unpacked_art_downloads_like_a_game(self):
+        art = b'ZX\0\0library art'
+        name = sha256(art).hexdigest() + '.zx'
+        catalog = {'children': [self.child], 'art': {'sha256': name[:-3], 'bytes': len(art)}}
+        self.bundle.write_bytes(fixture_bundle({'assets/apps/catalog.json': json.dumps(catalog).encode()}))
+        self.assertEqual(required_games(self.bundle), {self.name, name})
+        self.archive_games([(self.name, self.game), (name, art)])
+        stage_games(self.bundle, self.archive, self.output)
+        self.assertEqual(sorted(path.name for path in self.output.iterdir()), sorted([self.name, name]))
+        catalog['art']['sha256'] = 'not a digest'
+        self.bundle.write_bytes(fixture_bundle({'assets/apps/catalog.json': json.dumps(catalog).encode()}))
+        with self.assertRaisesRegex(ValueError, 'invalid art digest'):
+            required_games(self.bundle)
+
     def test_exact_download_is_staged_without_stale_games(self):
         self.output.mkdir()
         (self.output / 'old.zx').write_bytes(b'old')

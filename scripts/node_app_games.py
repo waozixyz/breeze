@@ -20,7 +20,8 @@ def required_games(bundle):
     catalog = assets.get('assets/apps/catalog.json')
     if catalog is None:
         return set()
-    children = json.loads(catalog)['children']
+    catalog = json.loads(catalog)
+    children = catalog['children']
     if len(children) > GAME_LIMIT:
         raise ValueError('collection has too many games')
     names = set()
@@ -31,6 +32,12 @@ def required_games(bundle):
         if not re.fullmatch(r'[0-9a-f]{64}', digest):
             raise ValueError('invalid game digest in catalog')
         names.add(digest + '.zx')
+    # The library art a collection does not pack downloads like a game.
+    art = catalog.get('art')
+    if art is not None and 'assets/apps/art.zx' not in assets:
+        if not re.fullmatch(r'[0-9a-f]{64}', art.get('sha256', '')):
+            raise ValueError('invalid art digest in catalog')
+        names.add(art['sha256'] + '.zx')
     return names
 
 
