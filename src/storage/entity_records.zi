@@ -1,6 +1,7 @@
 // Names of the account's entity data (Daochi docs/entity-data.md): what the
 // account owns, kept once for the account and shared by every app it uses,
-// whichever app added it. This version keeps one kind, photos. Each photo is
+// whichever app added it. This version keeps photos, game progress and level
+// collections. Each photo is
 // one record, entity.photos.<sha256> on this device, that syncs as record
 // <sha256> of private.entity.v1.photos in the account's own signed sync,
 // sealed with the account's entity key for photos (entity_record_crypto.zi).
@@ -20,6 +21,16 @@ ENTITY_PHOTO_PREFIX :: "entity.photos."
 ENTITY_PHOTO_KEY_BYTES :: 78
 EntityGameProgressCollection :: "private.entity.v1.game-progress"
 ENTITY_GAME_PROGRESS_PREFIX :: "entity.game-progress."
+EntityLevelsCollection :: "private.entity.v1.levels"
+ENTITY_LEVELS_PREFIX :: "entity.levels."
+ENTITY_LEVELS_SCHEMA :: "entity.levels.v1"
+ENTITY_LEVELS_DOCUMENT_MAX :: 143360
+
+EntityLevelKeyAccepted :: (key: string) -> bool {
+    return key.count == ENTITY_LEVELS_PREFIX.count + 32 &&
+    key[:ENTITY_LEVELS_PREFIX.count] == ENTITY_LEVELS_PREFIX &&
+    EntityProgressIDValid(key[ENTITY_LEVELS_PREFIX.count:])
+}
 
 EntityProgressIDValid :: (id: string) -> bool {
     if id.count != 32 { return false }
@@ -31,6 +42,7 @@ EntityProgressIDValid :: (id: string) -> bool {
 
 EntityRecordID :: (key: string) -> string {
     if EntityPhotoKeyAccepted(key) { return EntityPhotoKeyHash(key) }
+    if EntityLevelKeyAccepted(key) { return key[ENTITY_LEVELS_PREFIX.count:] }
     prefix := ENTITY_GAME_PROGRESS_PREFIX
     if key.count > prefix.count && key[:prefix.count] == prefix && EntityProgressIDValid(key[prefix.count:]) {
         return key[prefix.count:]
@@ -79,14 +91,16 @@ EntityRecordCollection :: (key: string) -> string {
     if EntityPhotoKeyAccepted(key) {
         return EntityPhotosCollection
     }
+    if EntityLevelKeyAccepted(key) { return EntityLevelsCollection }
     if EntityRecordID(key) != "" { return EntityGameProgressCollection }
     return ""
 }
 
-// Entity collections this version reads; records of other kinds, such as
-// another app's levels, arrive in the same replies and are left alone.
+// Entity collections this version reads. Unknown kinds arrive in the same
+// replies and are left alone.
 EntityCollectionKnown :: (collection: string) -> bool {
-    return collection == EntityPhotosCollection || collection == EntityGameProgressCollection
+    return collection == EntityPhotosCollection || collection == EntityGameProgressCollection ||
+    collection == EntityLevelsCollection
 }
 
 EntityCollectionKind :: (collection: string) -> string {
@@ -94,6 +108,7 @@ EntityCollectionKind :: (collection: string) -> string {
         return ENTITY_PHOTOS_KIND
     }
     if collection == EntityGameProgressCollection { return Progress.GAME_PROGRESS_KIND }
+    if collection == EntityLevelsCollection { return "levels" }
     return ""
 }
 
@@ -102,5 +117,6 @@ EntityCollectionSchema :: (collection: string) -> string {
         return ENTITY_PHOTO_SCHEMA
     }
     if collection == EntityGameProgressCollection { return Progress.GAME_PROGRESS_SCHEMA }
+    if collection == EntityLevelsCollection { return ENTITY_LEVELS_SCHEMA }
     return ""
 }

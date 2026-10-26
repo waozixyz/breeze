@@ -7,6 +7,7 @@ Progress :: #import "entity/game_progress";
 ProgressID :: #import "entity/game_progress_id";
 Model :: #import "entity/model";
 #import, file "entity_records.zi";
+#import, file "entity_levels.zi";
 #import, file "storage_settings.zi";
 #import, file "state.zi";
 #import, file "storage_core.zi";
@@ -60,14 +61,19 @@ EntityServiceBuild :: (request: string, out: *Vec(u8)) {
         if storage_has_sync_account() != 0 {
             status = "synced"
             if storage_sync_records_outdated() { status = "syncing" }
-            else if db_select_int64_text("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='entity_record' AND entity_id LIKE 'entity.game-progress.%'", 0) > 0 { status = "pending" }
+            else if db_select_int64_text("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='entity_record'", 0) > 0 { status = "pending" }
         }
         BuilderPrint(out, "{\"status\":\"done\",\"account\":")
         Model.EntityQuote(out, storage_get_setting_text(STORAGE_SYNC_PUBLIC_ID_KEY))
-        BuilderPrint(out, ",\"sync\":\"%\",\"revision\":%,\"game_progress\":\"account-v1\"}", status, entity_progress_revision)
+        BuilderPrint(out, ",\"sync\":\"%\",\"revision\":%,\"game_progress\":\"account-v1\"}",
+            status, entity_progress_revision + entity_levels_revision)
         return
     }
     kind: [49]u8
+    if ReadStringText(request, FieldAt(request, 0, "kind"), kind[:]) >= 0 && TextUntilNul(kind[:]) == "levels" {
+        EntityLevelsBuild(request, operation, out)
+        return
+    }
     if ReadStringText(request, FieldAt(request, 0, "kind"), kind[:]) < 0 || TextUntilNul(kind[:]) != Progress.GAME_PROGRESS_KIND {
         BuilderPrint(out, "{\"status\":\"unavailable\"}")
         return

@@ -17,6 +17,8 @@ Scan :: #import "json_scan"
 #import, file "media_records.zi";
 #import, file "entity_records.zi";
 #import, file "entity_service.zi";
+#import, file "entity_levels.zi";
+DaochiEntity :: #import "daochi_client/entity";
 #import, file "../apps/package_files.zi";
 #import, file "entity_record_crypto.zi";
 #import, file "storage_layout.zi";
@@ -296,7 +298,7 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
     return ok
 }
 
-storage_apply_encrypted_records_query: string = "SELECT json_extract(value,'$.collection'),json_extract(value,'$.id'),json_extract(value,'$.key_id'),json_extract(value,'$.nonce'),json_extract(value,'$.ciphertext'),COALESCE(json_extract(value,'$.content_hash'),''),COALESCE(json_extract(value,'$.updated_at'),'')FROM json_each(?1,?2)";
+storage_apply_encrypted_records_query: string = "SELECT json_extract(value,'$.collection'),json_extract(value,'$.id'),json_extract(value,'$.key_id'),json_extract(value,'$.nonce'),json_extract(value,'$.ciphertext'),COALESCE(json_extract(value,'$.content_hash'),''),COALESCE(json_extract(value,'$.updated_at'),''),CAST(COALESCE(json_extract(value,'$.deleted_at'),0) AS TEXT) FROM json_each(?1,?2)";
 
 // A photo of the account's entity data, as another app or device wrote it:
 // one JSON object naming the photo it is the record of.
@@ -318,6 +320,27 @@ storage_entity_photo_valid :: (record_id: string, plaintext: string) -> bool {
 // That change goes out merged over the record that arrived.
 storage_apply_entity_record :: (collection: string, record_id: string, plaintext: string,
     updated_at: string) -> s32 {
+    if collection == EntityLevelsCollection {
+        if !EntityProgressIDValid(record_id) || (plaintext != "" && !EntityLevelDocumentValid(plaintext)) {
+            return 1
+        }
+        key := PackageText(ENTITY_LEVELS_PREFIX, record_id)
+        defer { PackageFree(key) }
+        statement: *void
+        if SqlitePrepareText(storage_db_handle(),
+            "INSERT INTO settings(user_id,key,value,updated_at) SELECT ?1,?2,?3,CAST(strftime('%s',?4) AS INTEGER) WHERE strftime('%s',?4) IS NOT NULL ON CONFLICT(user_id,key) DO UPDATE SET value=CASE WHEN excluded.value='' THEN '' WHEN json_valid(settings.value) THEN json_patch(settings.value,excluded.value) ELSE excluded.value END,updated_at=excluded.updated_at WHERE NOT EXISTS(SELECT 1 FROM sync_outbox WHERE entity_type='entity_record' AND entity_id=settings.key AND local_date=0) AND excluded.updated_at>=settings.updated_at",
+            -1, *statement, null) != SQLITE_OK {
+            return 0
+        }
+        defer { SqliteFinalize(statement) }
+        bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        bind_text(statement, 2, key)
+        bind_text(statement, 3, plaintext)
+        bind_text(statement, 4, updated_at)
+        if SqliteStep(statement) != SQLITE_DONE { return 0 }
+        if sqlite3_changes(storage_db_handle()) > 0 { entity_levels_revision += 1 }
+        return 1
+    }
     if collection == EntityGameProgressCollection {
         if !EntityGameProgressValid(record_id, plaintext) { return 1 }
         key := PackageText(ENTITY_GAME_PROGRESS_PREFIX, record_id)
@@ -385,7 +408,7 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
     if count <= 0 {
         return 1
     }
-    fields = cast(**u8)calloc(cast(usize)count * 7,
+    fields = cast(**u8)calloc(cast(usize)count * 8,
         cast(usize)size_of(type_of(<<fields)))
     if fields == null {
         return 0
@@ -399,14 +422,14 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
     while loaded < count && SqliteStep(statement) == SQLITE_ROW {
         {
             column: s32 = 0
-            while column < 7 {
+            while column < 8 {
                 value: *u8 = SqliteColumnText(statement, column)
                 if value == null {
-                    fields[loaded * 7 + column] = cast(*u8)calloc(1, 1)
+                    fields[loaded * 8 + column] = cast(*u8)calloc(1, 1)
                 } else {
-                    fields[loaded * 7 + column] = storage_duplicate_cstring(value)
+                    fields[loaded * 8 + column] = storage_duplicate_cstring(value)
                 }
-                if fields[loaded * 7 + column] == null {
+                if fields[loaded * 8 + column] == null {
                     ok = 0
                     break
                 }
@@ -425,18 +448,25 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
     {
         index: s32 = 0
         while ok != 0 && index < loaded {
-            collection: string = AppTextFromCString(fields[index * 7], 2147483647)
-            record_id: string = AppTextFromCString(fields[index * 7 + 1], 2147483647)
-            key_id: string = AppTextFromCString(fields[index * 7 + 2], 2147483647)
-            nonce: string = AppTextFromCString(fields[index * 7 + 3], 2147483647)
-            ciphertext: string = AppTextFromCString(fields[index * 7 + 4], 2147483647)
-            content_hash: string = AppTextFromCString(fields[index * 7 + 5], 2147483647)
-            updated_at: string = AppTextFromCString(fields[index * 7 + 6], 2147483647)
+            collection: string = AppTextFromCString(fields[index * 8], 2147483647)
+            record_id: string = AppTextFromCString(fields[index * 8 + 1], 2147483647)
+            key_id: string = AppTextFromCString(fields[index * 8 + 2], 2147483647)
+            nonce: string = AppTextFromCString(fields[index * 8 + 3], 2147483647)
+            ciphertext: string = AppTextFromCString(fields[index * 8 + 4], 2147483647)
+            content_hash: string = AppTextFromCString(fields[index * 8 + 5], 2147483647)
+            updated_at: string = AppTextFromCString(fields[index * 8 + 6], 2147483647)
+            deleted := Scan.ReadNumber(AppTextFromCString(fields[index * 8 + 7], 32), 0)
             plaintext: *u8 = null
             if collection.count == 0 || storage_decrypted_array_name(collection).count == 0 {
                 index += 1; continue
             }
             if EntityCollectionKnown(collection) {
+                if collection == EntityLevelsCollection && deleted.valid && deleted.value > 0.0 &&
+                key_id == DaochiEntity.ENTITY_RECORD_KEY_ID {
+                    ok = storage_apply_entity_record(collection, record_id, "", updated_at)
+                    index += 1
+                    continue
+                }
                 // An entity record another app wrote and this one cannot
                 // open changes nothing here and doesn't stop the sync.
                 if storage_open_entity_record(collection, record_id, key_id, nonce, ciphertext, *plaintext) == 0 {
@@ -492,7 +522,7 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
     }
     {
         index: s32 = 0
-        while index < count * 7 {
+        while index < count * 8 {
             free(cast(*void)fields[index])
             index += 1
         }

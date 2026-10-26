@@ -1,0 +1,207 @@
+// Private level collections use Breeze's existing account database and sync.
+// The service owns storage; games own and validate their document contents.
+#import "std/json_scan"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/byte_text_linux"
+Model :: #import "entity/model";
+#import, file "entity_records.zi";
+#import, file "sqlite.zi";
+#import, file "storage_core.zi";
+#import, file "storage_settings.zi";
+#import, file "state.zi";
+#import, file "sync_state.zi";
+#import, file "json.zi";
+#import, file "storage_json_sql.zi";
+#import, file "db.zi";
+#import, file "../app/text_buffers.zi";
+#import, file "../apps/package_files.zi";
+
+entity_levels_revision: s64;
+
+EntityLevelDocumentValid :: (document: string) -> bool {
+    return document.count >= 2 && document.count <= ENTITY_LEVELS_DOCUMENT_MAX &&
+    document[0] == #char "{" && ValueEnd(document, 0, 0) == document.count &&
+    storage_json_valid(document) != 0
+}
+
+EntityLevelRead :: (id: string) -> string {
+    key := PackageText(ENTITY_LEVELS_PREFIX, id)
+    defer { PackageFree(key) }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT value FROM settings WHERE user_id=?1 AND key=?2", -1, *statement, null) != SQLITE_OK {
+        return ""
+    }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, key)
+    if SqliteStep(statement) != SQLITE_ROW {
+        return ""
+    }
+    return PackageText(AppTextFromCString(SqliteColumnText(statement, 0), ENTITY_LEVELS_DOCUMENT_MAX + 1), "")
+}
+
+EntityLevelStore :: (id: string, document: string) -> bool {
+    key := PackageText(ENTITY_LEVELS_PREFIX, id)
+    defer { PackageFree(key) }
+    storage_set_setting_text(key, document)
+    if storage_setting_text_equals(key, document) == 0 {
+        return false
+    }
+    entity_levels_revision += 1
+    return true
+}
+
+EntityLevelHasCapacity :: (id: string) -> bool {
+    key := PackageText(ENTITY_LEVELS_PREFIX, id)
+    defer { PackageFree(key) }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT EXISTS(SELECT 1 FROM settings WHERE user_id=?1 AND key=?2) OR (SELECT COUNT(*) FROM settings WHERE user_id=?1 AND key GLOB 'entity.levels.*')<4096",
+        -1, *statement, null) != SQLITE_OK {
+        return false
+    }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, key)
+    return SqliteStep(statement) == SQLITE_ROW && SqliteColumnInt64(statement, 0) != 0
+}
+
+EntityLevelsList :: (request: string, out: *Vec(u8)) {
+    fields: [16]s32
+    fields_at := FieldAt(request, 0, "fields")
+    count := ifx fields_at >= 0 && request[fields_at] == #char "[" then ArrayPositions(request, fields_at, fields[:]) else 0
+    if count < 0 || count > 16 {
+        BuilderPrint(out, "{\"status\":\"rejected\"}")
+        return
+    }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT key,value FROM settings WHERE user_id=?1 AND key GLOB 'entity.levels.*' AND json_valid(value) ORDER BY key LIMIT 4096",
+        -1, *statement, null) != SQLITE_OK {
+        BuilderPrint(out, "{\"status\":\"failed\"}")
+        return
+    }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    items: Vec(u8)
+    defer { VecFree(items) }
+    first := true
+    while SqliteStep(statement) == SQLITE_ROW {
+        key := AppTextFromCString(SqliteColumnText(statement, 0), 64)
+        document := AppTextFromCString(SqliteColumnText(statement, 1), ENTITY_LEVELS_DOCUMENT_MAX + 1)
+        if !EntityLevelKeyAccepted(key) || !EntityLevelDocumentValid(document) {
+            continue
+        }
+        updated := ReadNumber(document, FieldAt(document, 0, "updated_at"))
+        BuilderPrint(*items, "%{\"id\":\"%\",\"schema\":\"%\",\"updated_at\":%",
+            ifx first then "" else ",", key[ENTITY_LEVELS_PREFIX.count:], ENTITY_LEVELS_SCHEMA,
+            ifx updated.valid then cast(s64)updated.value else cast(s64)0)
+        first = false
+        for field: cast(s32)0..count - 1 {
+            name: [65]u8
+            length := ReadStringText(request, fields[field], name[:])
+            if length <= 0 {
+                continue
+            }
+            text := TextView(name[0:length])
+            if text == "id" || text == "schema" || text == "updated_at" {
+                continue
+            }
+            at := FieldAt(document, 0, text)
+            end := ifx at < 0 then -1 else ValueEnd(document, at, 0)
+            if end < 0 || document[at] == #char "{" || document[at] == #char "[" {
+                continue
+            }
+            BuilderPrint(*items, ",")
+            Model.EntityQuote(*items, text)
+            BuilderPrint(*items, ":%", document[at:end])
+        }
+        BuilderPrint(*items, "}")
+        if items.count > 5242880 {
+            BuilderPrint(out, "{\"status\":\"rejected\"}")
+            return
+        }
+    }
+    BuilderPrint(out, "{\"status\":\"done\",\"account\":")
+    Model.EntityQuote(out, storage_get_setting_text(STORAGE_SYNC_PUBLIC_ID_KEY))
+    BuilderPrint(out, ",\"records\":[%]}", TextView(VecSlice(items, 0, items.count)))
+}
+
+EntityLevelsBuild :: (request: string, operation: string, out: *Vec(u8)) {
+    if operation == "list" {
+        EntityLevelsList(request, out)
+        return
+    }
+    id_bytes: [33]u8
+    id_at := FieldAt(request, 0, "id")
+    id_count := ReadStringText(request, id_at, id_bytes[:])
+    if operation == "put" && id_at < 0 {
+        random: [16]u8
+        alphabet := "0123456789abcdef"
+        if fill_random_bytes(*random[0], 16) == 0 {
+            BuilderPrint(out, "{\"status\":\"failed\"}")
+            return
+        }
+        for at: cast(s32)0..15 {
+            id_bytes[at * 2] = alphabet[cast(s32)random[at] >> 4]
+            id_bytes[at * 2 + 1] = alphabet[cast(s32)random[at] & 15]
+        }
+        id_count = 32
+    }
+    id := TextUntilNul(id_bytes[:])
+    if id_count != 32 || !EntityProgressIDValid(id) {
+        BuilderPrint(out, "{\"status\":\"rejected\"}")
+        return
+    }
+    if operation == "put" {
+        schema: [32]u8
+        length := ReadStringText(request, FieldAt(request, 0, "schema"), schema[:])
+        at := FieldAt(request, 0, "document")
+        end := ifx at < 0 then -1 else ValueEnd(request, at, 0)
+        if length < 0 || TextUntilNul(schema[:]) != ENTITY_LEVELS_SCHEMA || end < 0 ||
+        !EntityLevelDocumentValid(request[at:end]) || !EntityLevelHasCapacity(id) {
+            BuilderPrint(out, "{\"status\":\"rejected\"}")
+            return
+        }
+        statement: *void
+        if SqlitePrepareText(storage_db_handle(), "SELECT json_set(?1,'$.updated_at',?2)",
+            -1, *statement, null) != SQLITE_OK {
+            BuilderPrint(out, "{\"status\":\"failed\"}")
+            return
+        }
+        bind_text(statement, 1, request[at:end])
+        updated := now_seconds()
+        SqliteBindInt64(statement, 2, updated)
+        document: string
+        if SqliteStep(statement) == SQLITE_ROW {
+            document = PackageText(AppTextFromCString(SqliteColumnText(statement, 0), ENTITY_LEVELS_DOCUMENT_MAX + 1), "")
+        }
+        SqliteFinalize(statement)
+        defer { PackageFree(document) }
+        saved := EntityLevelDocumentValid(document) && EntityLevelStore(id, document)
+        BuilderPrint(out, "{\"status\":\"%\",\"id\":\"%\",\"updated_at\":%}",
+            ifx saved then "done" else "failed", id, updated)
+        return
+    }
+    document := EntityLevelRead(id)
+    defer { PackageFree(document) }
+    if operation == "get" {
+        if !EntityLevelDocumentValid(document) {
+            BuilderPrint(out, "{\"status\":\"missing\"}")
+            return
+        }
+        updated := ReadNumber(document, FieldAt(document, 0, "updated_at"))
+        BuilderPrint(out, "{\"status\":\"done\",\"id\":\"%\",\"schema\":\"%\",\"updated_at\":%,\"document\":%}",
+            id, ENTITY_LEVELS_SCHEMA, ifx updated.valid then cast(s64)updated.value else cast(s64)0, document)
+        return
+    }
+    if operation == "delete" {
+        // An empty row retains the tombstone and its sync identity.
+        saved := document == "" || EntityLevelStore(id, "")
+        BuilderPrint(out, "{\"status\":\"%\"}", ifx saved then "done" else "failed")
+        return
+    }
+    BuilderPrint(out, "{\"status\":\"rejected\"}")
+}

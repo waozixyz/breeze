@@ -41,7 +41,7 @@ def restore_statements():
     assert enqueue, "storage_enqueue_all_sync_state"
     inserts = re.findall(r'exec_sql\("(INSERT INTO sync_outbox[^"]*)"\)',
                          enqueue.group(1))
-    assert len(inserts) == 19, inserts
+    assert len(inserts) == 20, inserts
     return clear + inserts
 
 
@@ -73,6 +73,8 @@ ENTITIES = [
 # check stays small.
 NESTED = "nested." + "ab" * 32 + ".position"
 GAME_PROGRESS = "entity.game-progress." + "ab" * 16
+LEVEL = "entity.levels." + "ab" * 16
+DELETED_LEVEL = "entity.levels." + "cd" * 16
 EXTRA = [
     ("app_record", NESTED, 0),
     ("app_install", "app_used_chess", 0),
@@ -84,6 +86,8 @@ EXTRA = [
     ("habit_setting", "habit_shop_borrow_limit", 0),
     ("entity_record", GAME_PROGRESS, 0),
     ("entity_record", "entity.photos." + "ab" * 32, 0),
+    ("entity_record", LEVEL, 0),
+    ("entity_record", DELETED_LEVEL, 0),
 ]
 
 
@@ -130,12 +134,19 @@ def open_database():
                        ("entity.game-progress." + "ab" * 15, "{}"),
                        ("entity.game-progress." + "cd" * 16, "not json")):
         insert_row(database, "settings", {"user_id": "u1", "key": key, "value": value, "updated_at": 2})
+    # Both saved levels and durable deletion markers follow this account.
+    for key, value in ((LEVEL, '{"title":"Garden"}'), (DELETED_LEVEL, ""),
+                       ("entity.levels." + "ag" * 16, "{}"),
+                       ("entity.levels." + "ab" * 15, "{}"),
+                       ("entity.levels." + "ef" * 16, "not json")):
+        insert_row(database, "settings", {"user_id": "u1", "key": key, "value": value, "updated_at": 2})
     # A photo kept once in the account's entity data, by its 64-hex digest;
     # other names and unreadable values are never queued.
     insert_row(database, "settings", {"user_id": "u1", "key": "entity.photos." + "ab" * 32, "value": "{}", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "entity.photos." + "ag" * 32, "value": "{}", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u1", "key": "entity.photos." + "cd" * 32, "value": "not json", "updated_at": 2})
     insert_row(database, "users", {"id": "u2"})
+    insert_row(database, "settings", {"user_id": "u2", "key": "entity.levels." + "ef" * 16, "value": "{}", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u2", "key": "entity.game-progress." + "ef" * 16, "value": "{}", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u2", "key": "entity.photos." + "ef" * 32, "value": "{}", "updated_at": 2})
     insert_row(database, "settings", {"user_id": "u2", "key": "habit_shop_borrow_limit", "value": "999", "updated_at": 2})

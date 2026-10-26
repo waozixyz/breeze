@@ -2454,6 +2454,74 @@ test_practice_session_details :: () {
     storage_close()
 }
 
+test_entity_level_service :: () {
+    first := make_root("entity-levels-a")
+    second := make_root("entity-levels-b")
+    id := "0123456789abcdef0123456789abcdef"
+    key := "entity.levels.0123456789abcdef0123456789abcdef"
+    put := "{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"entity.levels.v1\",\"id\":\"0123456789abcdef0123456789abcdef\",\"document\":{\"format\":\"shovey-levels-1\",\"title\":\"Kept garden\",\"edition\":\"classic\",\"levels\":[]}}"
+    get := "{\"operation\":\"get\",\"kind\":\"levels\",\"id\":\"0123456789abcdef0123456789abcdef\"}"
+    list := "{\"operation\":\"list\",\"kind\":\"levels\",\"fields\":[\"title\",\"edition\",\"levels\"]}"
+    remove := "{\"operation\":\"delete\",\"kind\":\"levels\",\"id\":\"0123456789abcdef0123456789abcdef\"}"
+    check_true("initialize local level store", storage_init(first) != 0)
+    check_true("custom level saves before connecting an account", contains(EntityServiceAnswer(put), "\"status\":\"done\""))
+    check_true("custom level is readable", contains(EntityServiceAnswer(get), "Kept garden"))
+    listed := PackageText(EntityServiceAnswer(list), "")
+    check_true("list includes requested metadata", contains(listed, "Kept garden") && contains(listed, "classic"))
+    check_true("list omits array documents", !contains(listed, "\"levels\""))
+    PackageFree(listed)
+    check_true("path-like record IDs are rejected", contains(EntityServiceAnswer(
+        "{\"operation\":\"delete\",\"kind\":\"levels\",\"id\":\"../other\"}"), "rejected"))
+    check_true("unregistered schemas are rejected", contains(EntityServiceAnswer(
+        "{\"operation\":\"put\",\"kind\":\"levels\",\"schema\":\"wrong\",\"document\":{}}"), "rejected"))
+    storage_close()
+    check_true("reopen local levels", storage_init(first) != 0)
+    check_true("level survives a cold database reopen", contains(EntityServiceAnswer(get), "Kept garden"))
+    set_account()
+    storage_set_setting_text("sync_public_id", ENTITY_VECTOR_ACCOUNT)
+    storage_enqueue_all_sync_state()
+    check_int("existing levels join the account outbox once", read_db_count(
+        "SELECT COUNT(*) FROM sync_outbox WHERE entity_type='entity_record' AND entity_id GLOB 'entity.levels.*'"), 1)
+    check_true("level payload builds", build_payload())
+    check_true("level uses the shared account collection", contains(payload(), EntityLevelsCollection))
+    check_true("level documents are sealed", !contains(payload(), "Kept garden"))
+    copy: TextBuffer
+    append(*copy, records_array())
+    storage_close()
+    check_true("initialize another device", storage_init(second) != 0)
+    set_account()
+    storage_set_setting_text("sync_public_id", ENTITY_VECTOR_ACCOUNT)
+    check_true("other device receives the sealed level", storage_apply_sync_response_json(
+        response_with(4, TextFromCString(*copy.bytes[0]))) != 0)
+    check_true("other device can open the level", contains(EntityServiceAnswer(get), "Kept garden"))
+    check_true("other device can list the level", contains(EntityServiceAnswer(list), "Kept garden"))
+    check_true("unsent local changes survive an older record", contains(EntityServiceAnswer(put), "done") &&
+        storage_apply_entity_record(EntityLevelsCollection, id, "{\"title\":\"Old garden\"}", "2020-01-01T00:00:00Z") != 0 &&
+        contains(EntityServiceAnswer(get), "Kept garden"))
+    check_true("delete saves a tombstone", contains(EntityServiceAnswer(remove), "done"))
+    check_true("deleted levels disappear from reads and lists", contains(EntityServiceAnswer(get), "missing") &&
+        !contains(EntityServiceAnswer(list), "Kept garden"))
+    check_true("level deletion payload builds", build_payload())
+    check_true("deletion uses the shared record protocol", contains(payload(), "\"deleted_at\":") &&
+        contains(payload(), EntityLevelsCollection))
+    deleted: TextBuffer
+    append(*deleted, records_array())
+    storage_close()
+    check_true("reopen first device", storage_init(first) != 0)
+    set_account()
+    storage_set_setting_text("sync_public_id", ENTITY_VECTOR_ACCOUNT)
+    exec_db_sql("DELETE FROM sync_outbox")
+    check_true("remote level deletion applies", storage_apply_sync_response_json(
+        response_with(5, TextFromCString(*deleted.bytes[0]))) != 0)
+    check_true("deleted level stays absent on another device", contains(EntityServiceAnswer(get), "missing"))
+    check_true("older contents cannot revive a newer deletion", storage_apply_entity_record(
+        EntityLevelsCollection, id, "{\"title\":\"Old garden\"}", "2020-01-01T00:00:00Z") != 0 &&
+        contains(EntityServiceAnswer(get), "missing"))
+    check_true("tombstone retains its account record identity", EntityRecordID(key) == id &&
+        EntityRecordCollection(key) == EntityLevelsCollection)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
@@ -2518,6 +2586,7 @@ Check :: () -> s32 {
     test_app_order_syncs_between_devices()
     test_media_records_sync_between_devices()
     test_entity_records_sync_between_devices()
+    test_entity_level_service()
     test_shared_game_progress()
     test_node_media_sessions()
     test_shop_rewards_stay_private()

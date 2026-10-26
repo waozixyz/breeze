@@ -299,18 +299,30 @@ storage_append_entity_record_json :: (json: *StorageJsonBuilder, key: *u8, colle
     plain.ok = 1
     defer { storage_json_builder_free(*plain) }
     statement: *void = null
-    if SqlitePrepareText(storage_db_handle(), "SELECT value FROM settings WHERE user_id=?1 AND key=?2 AND json_valid(value)",
+    if SqlitePrepareText(storage_db_handle(), "SELECT value FROM settings WHERE user_id=?1 AND key=?2 AND (json_valid(value) OR value='')",
         -1, *statement, null) != SQLITE_OK {
         return 0
     }
     bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
     bind_text(statement, 2, entity_id)
-    if SqliteStep(statement) == SQLITE_ROW {
+    found := SqliteStep(statement) == SQLITE_ROW
+    if found {
         storage_json_builder_append_text(*plain, AppTextFromCString(SqliteColumnText(statement, 0), ENTITY_RECORD_PLAIN_MAX))
     }
     SqliteFinalize(statement)
     if plain.ok == 0 {
         return 0
+    }
+    if found && collection == EntityLevelsCollection && plain.len == 0 {
+        storage_json_builder_append_text(json, "{")
+        storage_json_builder_key_value_text(json, "collection", collection)
+        storage_json_builder_append_text(json, ",")
+        storage_json_builder_key_value_text(json, "id", record_id)
+        storage_json_builder_append_text(json, ",\"key_id\":\"entity-v1\",\"updated_at\":")
+        storage_json_builder_append_epoch(json, queued_at)
+        storage_json_append_int_field(json, "deleted_at", queued_at * 1000)
+        storage_json_builder_append_text(json, "}")
+        return json.ok
     }
     if plain.data == null || plain.len == 0 {
         return 2

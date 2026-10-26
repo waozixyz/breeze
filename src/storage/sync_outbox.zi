@@ -7,6 +7,7 @@
 #import, file "sql_query.zi";
 #import, file "storage_core.zi";
 #import, file "sync_state.zi";
+#import, file "entity_records.zi";
 c :: #system_library "c";
 sqlite3_bind_int :: (statement: *void, index: s32, value: s32) -> s32 #foreign c "sqlite3_bind_int";
 sqlite3_get_autocommit :: (database: *void) -> s32 #foreign c "sqlite3_get_autocommit";
@@ -19,7 +20,8 @@ storage_enqueue_sync_entity :: (entity_type: string, entity_id: string, local_da
         return 0
     }
     query := "INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) VALUES(?1,?2,?3,?4) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at"
-    if entity_type == "cell_record" || entity_type == "habit_setting" {
+    if entity_type == "cell_record" || entity_type == "habit_setting" ||
+    (entity_type == "entity_record" && EntityLevelKeyAccepted(entity_id)) {
         // These receipts name the exact submitted sequence. Replacing a
         // setting allocates a fresh sequence even within the same second.
         // Owner habit/session saves retain their existing queue behaviour.
@@ -115,6 +117,7 @@ storage_enqueue_all_sync_state :: () {
     // The account's media library, in its own collection.
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'media_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'cell.media.?*' AND length(key)<=180 AND key NOT GLOB '*[^a-z0-9.-]*' ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     // The account's entity data, shared by its apps.
+    exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'entity_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'entity.levels.*' AND length(key)=46 AND substr(key,15) NOT GLOB '*[^0-9a-f]*' AND (value='' OR json_valid(value)) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'entity_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'entity.game-progress.*' AND length(key)=53 AND substr(key,22) NOT GLOB '*[^0-9a-f]*' AND json_valid(value) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'entity_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'entity.photos.*' AND length(key)=78 AND substr(key,15) NOT GLOB '*[^0-9a-f]*' AND json_valid(value) ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
     exec_sql("INSERT INTO sync_outbox(entity_type,entity_id,local_date,queued_at) SELECT 'cell_record',key,0,updated_at FROM settings WHERE user_id=(SELECT id FROM users LIMIT 1) AND (key LIKE 'cell.lumi.%' OR key LIKE 'cell.diary.%' OR key LIKE 'cell.feedback.%' OR key LIKE 'cell.achievement.%' OR key='notification_achievements') ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.queued_at")
