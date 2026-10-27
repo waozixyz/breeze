@@ -35,7 +35,12 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-READY_STAMP = ROOT / "build/release-ready/stamp.json"
+# RELEASE_READY_OUTPUT names a separate release-ready run's outputs, as in
+# scripts/release-ready.sh.
+READY_OUTPUT = os.environ.get("RELEASE_READY_OUTPUT", "build/release-ready")
+if not re.fullmatch(r"build/release-ready(-[a-z0-9][a-z0-9-]*)?", READY_OUTPUT):
+    raise SystemExit("RELEASE_READY_OUTPUT must be build/release-ready-NAME")
+READY_STAMP = ROOT / READY_OUTPUT / "stamp.json"
 SUBJECT = "Release Inner Breeze {version}"
 # What ./update_version.sh writes; only these may join the release commit.
 VERSION_FILES = ("droid/app/build.gradle", "src/core/version.h", "src/core/version.zi", "windows/inbe.rc",
