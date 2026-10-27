@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.6.1] - 2026-10-27
+
+- Maintenance release for Inner Breeze 2.1.52.
+
 ## [1.6.0] - 2026-10-27
 
 - Offer a linked habit after the first saved session of a practice.
