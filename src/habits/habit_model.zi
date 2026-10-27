@@ -274,32 +274,78 @@ HabitTaiChiColor :: () -> Color {
     return Color.{.r = 112, .g = 186, .b = 150, .a = 255}
 }
 
-// The Tai Chi habit is made the first time a profile finishes a Tai Chi
-// session, unless a habit already counts Tai Chi.
+// The colour a practice's own habit starts with: the default habits' blue
+// for the sitting and breathing practices, Yoga's orange for Sun
+// Salutation, Exercise's green for the workout.
+HabitPracticeColor :: (exercise: s32) -> Color {
+    if exercise == EXERCISE_SUN_SALUTATION {
+        return Color.{.r = 239, .g = 178, .b = 102, .a = 255}
+    }
+    if exercise == EXERCISE_TAI_CHI {
+        return HabitTaiChiColor()
+    }
+    if exercise == EXERCISE_WORKOUT {
+        return Color.{.r = 99, .g = 196, .b = 165, .a = 255}
+    }
+    if exercise == EXERCISE_ASTRAL_PROJECTION {
+        return Color.{.r = 156, .g = 140, .b = 214, .a = 255}
+    }
+    return Color.{.r = 126, .g = 183, .b = 230, .a = 255}
+}
+
+// A habit for one practice, asked for on its first session's results, with
+// today checked for that session. Returns its index, or -1.
 #program_export
-habits_ensure_tai_chi :: (habits: *Habits) {
+habits_add_for_practice :: (habits: *Habits, exercise: s32, name: string) -> s32 {
     if habits == null || DataTemporary() {
-        return
+        return -1
     }
-    mask := habit_activity_mask_for(EXERCISE_TAI_CHI)
-    {
-        i: s32 = 0
-        while i < habits.count {
-            habit: *Habit = *habits.items[i]
-            if habit.sync_mode == HABIT_SYNC_ACTIVITIES && (habit.sync_activity & mask) != 0 {
-                return
-            }
-            i += 1
-        }
-    }
-    index := habits_add_custom(habits, LocaleText("habit_default_tai_chi_name"), HabitTaiChiColor(),
-        HABIT_SYNC_ACTIVITIES, mask)
+    mask := habit_activity_mask_for(exercise)
+    index := habits_add_custom(habits, name, HabitPracticeColor(exercise), HABIT_SYNC_ACTIVITIES, mask)
     if index < 0 {
+        return -1
+    }
+    if exercise == EXERCISE_WORKOUT {
+        habits.items[index].icon = HABIT_ICON_RUN
+    }
+    habits_mark_link_day(habits, mask, habits_today_index())
+    habits_save(habits)
+    return index
+}
+
+// A new profile starts with Meditation, linked to the sitting and breathing
+// practices, so Habits is not empty. Other practices offer their own habit
+// on their first session's results.
+habits_add_meditation_default :: (habits: *Habits) {
+    if habits == null {
         return
     }
-    habit_model_copy_text_boundary(*habits.items[index].description[0], 128,
-        LocaleText("habit_default_tai_chi_description"))
+    habits_free(habits)
+    habit_model_clear_bytes(cast(*void)habits,
+        size_of(type_of(<<habits)))
+    habits_add_seed(habits,
+        "meditation",
+        LocaleText("habit_default_meditation_name"),
+        LocaleText("habit_default_meditation_description"),
+        Color.{.r = 126, .g = 183, .b = 230, .a = 255},
+        habit_activity_mask_for(EXERCISE_WIM_HOF) |
+        habit_activity_mask_for(EXERCISE_MEDITATION) |
+        habit_activity_mask_for(EXERCISE_PATTERNS))
+    habits.selected = -1
+    habits.loaded = 1
     habits_save(habits)
+}
+
+#program_export
+habits_seed_default_set_if_needed :: (habits: *Habits) -> s32 {
+    if habits == null || habits.count > 0 {
+        return 0
+    }
+    habits_add_meditation_default(habits)
+    if habits.count > 0 {
+        return 1
+    }
+    return 0
 }
 
 habits_add_default_set :: (habits: *Habits) {
@@ -334,37 +380,6 @@ habits_add_default_set :: (habits: *Habits) {
     habits.selected = -1
     habits.loaded = 1
     habits_save(habits)
-    storage_set_meta_int64("workout_habit_seeded_v1", 1)
-}
-
-// Older profiles already have Meditation and Yoga, so the empty-profile
-// defaults never give them Exercise. Add it once without changing their
-// habits, recorded days, or a workout habit they already renamed or deleted.
-habits_seed_workout_if_needed :: (habits: *Habits) {
-    if habits == null || DataTemporary() ||
-    storage_meta_int64("workout_habit_seeded_v1", 0) != 0 {
-        habits_seed_workout_icons(habits)
-        return
-    }
-    mask := habit_activity_mask_for(EXERCISE_WORKOUT)
-    if storage_habit_activity_exists(mask) {
-        storage_set_meta_int64("workout_habit_seeded_v1", 1)
-        habits_seed_workout_icons(habits)
-        return
-    }
-    index := habits_add_custom(habits, LocaleText("habit_default_exercise_name"),
-        Color.{.r = 99, .g = 196, .b = 165, .a = 255}, HABIT_SYNC_ACTIVITIES, mask)
-    if index < 0 {
-        habits_seed_workout_icons(habits)
-        return
-    }
-    habits.items[index].icon = HABIT_ICON_RUN
-    habit_model_copy_text_boundary(*habits.items[index].description[0], 128,
-        LocaleText("habit_default_exercise_description"))
-    habits_save(habits)
-    if storage_habit_activity_exists(mask) {
-        storage_set_meta_int64("workout_habit_seeded_v1", 1)
-    }
 }
 
 // A workout habit that never chose an icon shows the run symbol, including
@@ -390,18 +405,6 @@ habits_seed_workout_icons :: (habits: *Habits) {
     if changed != 0 {
         habits_save(habits)
     }
-}
-
-#program_export
-habits_seed_default_set_if_needed :: (habits: *Habits) -> s32 {
-    if habits == null || habits.count > 0 {
-        return 0
-    }
-    habits_add_default_set(habits)
-    if habits.count > 0 {
-        return 1
-    }
-    return 0
 }
 
 habits_delete :: (habits: *Habits, index: s32) {
@@ -668,7 +671,7 @@ habits_init_with_defaults :: (habits: *Habits, seed_defaults: s32) {
         }
         if habits.count <= 0 {
             if seed_defaults != 0 {
-                habits_seed_default_set_if_needed(habits)
+                unused habits_seed_default_set_if_needed(habits)
             }
             habits.loaded = 1
             return
@@ -689,13 +692,11 @@ habits_init_with_defaults :: (habits: *Habits, seed_defaults: s32) {
             habits.selected = -1
         }
         habits.loaded = 1
-        if seed_defaults != 0 {
-            habits_seed_workout_if_needed(habits)
-        }
+        habits_seed_workout_icons(habits)
         return
     }
     if seed_defaults != 0 {
-        habits_add_default_set(habits)
+        habits_add_meditation_default(habits)
     } else {
         habits_free(habits)
         habit_model_clear_bytes(cast(*void)habits,
@@ -802,46 +803,51 @@ habit_increment_day :: (habits: *Habits, index: s32, day_index: s32, delta: s32)
     habit_set_day_count(habits, index, day_index, count)
 }
 
+// Whether the habit is linked to any of `mask`'s links (habit_links.zi).
+habit_matches_link :: (habit: *Habit, mask: s32) -> bool {
+    return habit != null && habit.sync_mode == HABIT_SYNC_ACTIVITIES && (habit.sync_activity & mask) != 0
+}
+
 habit_matches_activity :: (habit: *Habit, exercise_type: s32) -> s32 {
-    if habit == null {
-        return 0
+    return ifx habit_matches_link(habit, habit_activity_mask_for(exercise_type)) then 1 else 0
+}
+
+// Checks one habit's day unless it is already done; true when it changed.
+// The caller saves the habits.
+habit_mark_day_done :: (habits: *Habits, index: s32, day_index: s32) -> bool {
+    if habit_completed_day(*habits.items[index], day_index) != 0 {
+        return false
     }
-    if habit.sync_mode == HABIT_SYNC_ACTIVITIES {
-        if (habit.sync_activity & habit_activity_mask_for(exercise_type)) != 0 {
-            return 1
+    habit_set_day(habits, index, day_index, 1)
+    return true
+}
+
+// Something linked was done on the day, such as a practice's session or a
+// Diary entry: every habit linked to it has that day checked.
+#program_export
+habits_mark_link_day :: (habits: *Habits, mask: s32, day_index: s32) {
+    if habits == null || day_index <= 0 || DataTemporary() {
+        return
+    }
+    changed := false
+    selected := habits.selected
+    for index: cast(s32)0..habits.count - 1 {
+        if habit_matches_link(*habits.items[index], mask) && habit_mark_day_done(habits, index, day_index) {
+            changed = true
         }
-        return 0
     }
-    return 0
+    if changed {
+        habits.selected = selected
+        habits_save(habits)
+    }
 }
 
 #program_export
 sync_habits_for_activity :: (app: *InnerBreeze, exercise_type: s32) {
-    changed: s32 = 0
-
-    if app == null || DataTemporary() {
+    if app == null {
         return
     }
-
-    today := habits_today_index()
-    selected := app.habits.selected
-    {
-        i: s32 = 0
-        while i < app.habits.count {
-            habit: *Habit = *app.habits.items[i]
-            if habit_matches_activity(habit, exercise_type) != 0 {
-                if habit_completed_day(habit, today) == 0 {
-                    habit_set_day(*app.habits, i, today, 1)
-                    changed = 1
-                }
-            }
-            i += 1
-        }
-    }
-    if changed != 0 {
-        app.habits.selected = selected
-        habits_save(*app.habits)
-    }
+    habits_mark_link_day(*app.habits, habit_activity_mask_for(exercise_type), habits_today_index())
 }
 
 habit_is_linked :: (habit: *Habit) -> s32 {

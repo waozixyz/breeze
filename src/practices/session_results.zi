@@ -5,9 +5,35 @@ c :: #system_library "c";
 #import, file "../app/exercise_types.zi";
 #import, file "../storage/session_mood.zi";
 #import, file "../app/text_buffers.zi";
+#import, file "../apps/practice_types.zi";
+#import, file "../apps/inbe_types.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../storage/temporary_data.zi";
 
 // The storage implementation is a separate Ziran translation unit.
 data_discard_session :: (path: string) -> s32 #foreign c;
+storage_activity_session_count :: (activity: s32) -> s32 #foreign c;
+AppsInstalledMask :: () -> s32 #foreign c;
+
+using HabitSyncMode;
+
+// A practice's first saved session offers a habit for it when Habits is
+// installed, unless a habit is already linked to it. Saying no is never
+// asked again: the next session is not the first.
+SessionResultHabitOffer :: (app: *InnerBreeze, activity: s32) -> s32 {
+    if DataTemporary() || (app.enabled_apps & AppsInstalledMask() & APP_HABITS) == 0 ||
+    storage_activity_session_count(activity) != 1 {
+        return PRACTICE_HABIT_OFFER_NONE
+    }
+    mask := habit_activity_mask_for(activity)
+    for index: cast(s32)0..app.habits.count - 1 {
+        habit := *app.habits.items[index]
+        if habit.sync_mode == HABIT_SYNC_ACTIVITIES && (habit.sync_activity & mask) != 0 {
+            return PRACTICE_HABIT_OFFER_NONE
+        }
+    }
+    return PRACTICE_HABIT_OFFER_ASK
+}
 
 SessionResultCopyText :: (destination: []u8, source: *u8) {
     if destination.count == 0 {
@@ -51,6 +77,7 @@ app_prepare_session_results :: (app: *InnerBreeze, activity: s32,
     if saved_path != null && saved_path[0] != 0 {
         result.saved = 1
         SessionResultCopyText(result.path[:], saved_path)
+        result.habit_offer = SessionResultHabitOffer(app, result.activity)
     }
     app.session_result = result
     app.results_scroll = 0

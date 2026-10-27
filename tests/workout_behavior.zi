@@ -1,6 +1,8 @@
 #import, file "../apps/practice/workout_rules.zi";
 #import, file "../apps/practice/workout_moves.zi";
 #import, file "figure_test_support.zi";
+#import, file "../src/practices/tai_chi/tai_chi_math.zi";
+#import, file "../src/practices/tai_chi/tai_chi_solve.zi";
 #import "math"
 #import "file_linux"
 #import "locale_parser"
@@ -62,14 +64,41 @@ TextComplete :: (code: string, english: string) -> bool {
             lines += 1
         }
     }
-    others: [2]string = .["workout_say_start", "workout_say_switch"]
-    for which: cast(s32)0..1 {
-        if LocaleFindText(catalog, others[which]).text.count == 0 {
+    others: [6]string = .["workout_say_start", "workout_say_switch", "workout_say_count_3",
+    "workout_say_count_2", "workout_say_count_1", "workout_say_go"]
+    for which: cast(s32)0..5 {
+        value := LocaleFindText(catalog, others[which])
+        if value.text.count == 0 {
+            return false
+        }
+        if code != "en" && value.text == LocaleFindText(english, others[which]).text {
             return false
         }
         lines += 1
     }
-    return lines == 49
+    return lines == 53
+}
+
+// A squat's arms reach straight ahead at shoulder height, standing and at
+// the bottom.
+SquatArmsLevel :: (rig: *TaiChiRig) -> bool {
+    for index: cast(s32)0..1 {
+        pose := WorkoutKeyframe(WORKOUT_SQUATS, index).pose
+        solved := WorkoutSolve(*pose, rig)
+        for side: cast(s32)0..1 {
+            upper := TaiChiNormalize3(TaiChiSub3(solved.shoulders[side], solved.elbows[side]))
+            lower := TaiChiNormalize3(TaiChiSub3(solved.wrists[side], solved.elbows[side]))
+            // At least 165 degrees at the elbow.
+            if TaiChiDot3(upper, lower) > -0.966 {
+                return false
+            }
+            if !Near(solved.wrists[side].y, solved.shoulders[side].y, 0.06) ||
+            solved.wrists[side].z - solved.shoulders[side].z < 0.4 {
+                return false
+            }
+        }
+    }
+    return true
 }
 
 #program_export
@@ -99,12 +128,29 @@ Answer :: () -> s32 {
     }
     key: [64]u8
     if WorkoutCueKey(WorkoutStepAt(0), key[:]) != "workout_say_start" ||
-    WorkoutCueKey(WorkoutStepAt(10000), key[:]) != "workout_say_jumping_jacks" ||
+    WorkoutCueKey(WorkoutStepAt(6999), key[:]) != "workout_say_start" ||
+    WorkoutCueKey(WorkoutStepAt(7000), key[:]) != "workout_say_count_3" ||
+    WorkoutCueKey(WorkoutStepAt(8500), key[:]) != "workout_say_count_2" ||
+    WorkoutCueKey(WorkoutStepAt(9999), key[:]) != "workout_say_count_1" ||
+    WorkoutCueKey(WorkoutStepAt(10000), key[:]) != "workout_say_go" ||
     WorkoutCueKey(WorkoutStepAt(40000), key[:]) != "workout_say_next_wall_sit" ||
-    WorkoutCueKey(WorkoutStepAt(450000), key[:]) != "workout_say_side_plank" ||
+    WorkoutCueKey(WorkoutStepAt(47000), key[:]) != "workout_say_count_3" ||
+    WorkoutCueKey(WorkoutStepAt(49500), key[:]) != "workout_say_count_1" ||
+    WorkoutCueKey(WorkoutStepAt(50000), key[:]) != "workout_say_go" ||
+    WorkoutCueKey(WorkoutStepAt(450000), key[:]) != "workout_say_go" ||
     WorkoutCueKey(WorkoutStepAt(465000), key[:]) != "workout_say_switch" ||
     WorkoutCueKey(WorkoutStepAt(480000), key[:]) != "" {
         return 6
+    }
+    // The countdown shows every second of getting ready and of each rest,
+    // then Go as the exercise starts, and nothing while it runs.
+    if WorkoutCountdownAt(WorkoutStepAt(0)) != 10 || WorkoutCountdownAt(WorkoutStepAt(9001)) != 1 ||
+    WorkoutCountdownAt(WorkoutStepAt(10000)) != WORKOUT_COUNT_GO ||
+    WorkoutCountdownAt(WorkoutStepAt(10799)) != WORKOUT_COUNT_GO ||
+    WorkoutCountdownAt(WorkoutStepAt(10800)) != WORKOUT_COUNT_NONE ||
+    WorkoutCountdownAt(WorkoutStepAt(40000)) != 10 || WorkoutCountdownAt(WorkoutStepAt(47500)) != 3 ||
+    WorkoutCountdownAt(WorkoutStepAt(480000)) != WORKOUT_COUNT_NONE {
+        return 12
     }
     if WorkoutKeyFor("workout_name_", 12, key[:]) != "" || WorkoutKeyFor("workout_name_", -1, key[:]) != "" ||
     WorkoutKeyFor("workout_name_", 7, key[:]) != "workout_name_plank" {
@@ -128,6 +174,9 @@ Answer :: () -> s32 {
             }
             time += 70
         }
+    }
+    if !SquatArmsLevel(*rig) {
+        return 10
     }
     // Props stand only where they belong.
     if !WorkoutPropsSound() {

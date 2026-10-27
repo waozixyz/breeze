@@ -31,6 +31,7 @@ c :: #system_library "c";
 #import, file "../../habits/habit_model.zi";
 #import, file "../../habits/habit_sessions.zi";
 #import, file "../../app/exercise_types.zi";
+#import, file "../../habits/habit_links.zi";
 #import, file "../../habits/habit_icons.zi";
 #import, file "../../habits/habit_coins.zi";
 #import, file "../../habits/habit_calendar.zi";
@@ -59,6 +60,19 @@ using HostValueKind;
 save_settings :: (app: *InnerBreeze) #foreign c "save_settings";
 app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c "app_auto_sync";
 app_apply_nav_route :: (app: *InnerBreeze, route: s32) #foreign c;
+
+// A link's name in the picker: a practice's, or the app's.
+habit_edit_link_label :: (mask: s32) -> string {
+    if mask == HABIT_LINK_DIARY {
+        return LocaleText("habit_link_diary")
+    }
+    for id: cast(s32)0..EXERCISE_COUNT - 1 {
+        if mask == habit_activity_mask_for(id) {
+            return habit_edit_practice_label(id)
+        }
+    }
+    return ""
+}
 
 habit_edit_practice_label :: (id: s32) -> string {
     if id == EXERCISE_MEDITATION { return LocaleText("exercise_meditation") }
@@ -473,10 +487,9 @@ HabitEditCall :: (context: *void, module: *u8, function: *u8,
     HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
         index := cast(s32)arguments[0].integer
         practice: HabitsEditPractice
-        if index >= 0 && index < EXERCISE_COUNT {
-            id := practice_ordered_id(index)
-            practice = HabitsEditPractice.{.label = habit_edit_practice_label(id),
-                .mask = habit_activity_mask_for(id)}
+        mask := HabitLinkMaskAt(index)
+        if mask != 0 {
+            practice = HabitsEditPractice.{.label = habit_edit_link_label(mask), .mask = mask}
         }
         result.* = WidgetEncodeHabitsEditPractice(practice, *habit_edit_practice_codec)
         return 1
@@ -541,7 +554,7 @@ habit_edit_frame_for :: (app: *InnerBreeze, picking: bool, field: []u8,
         .span_low_minutes = HabitEditText(edit.span_typed[1][:]),
         .span_high_hours = HabitEditText(edit.span_typed[2][:]),
         .span_high_minutes = HabitEditText(edit.span_typed[3][:]),
-        .sync_activity = edit.sync_activity, .practice_count = EXERCISE_COUNT,
+        .sync_activity = edit.sync_activity, .practice_count = HABIT_LINK_COUNT,
         .question_count = edit.question_count, .question_focused = edit.question_focused,
         .question_cursor = edit.question_cursor, .question_anchor = edit.question_anchor,
         .question_scroll_x = edit.question_scroll_x, .goal_focused = edit.goal_focused,
@@ -625,7 +638,7 @@ habit_edit_keep :: (app: *InnerBreeze, observed: HabitsEditFrame) {
     edit.span_goal = HabitGoal.{
         .kind = habit_edit_clamp(observed.span_kind, HABIT_GOAL_NONE, HABIT_GOAL_BELOW_AVERAGE),
         .low = observed.span_low, .high = observed.span_high}
-    edit.sync_activity = observed.sync_activity & ((cast(s32)1 << EXERCISE_COUNT) - 1)
+    edit.sync_activity = observed.sync_activity & HabitLinkMaskAll()
     edit.question_focused = habit_edit_clamp(observed.question_focused, 0, edit.question_count)
     edit.question_cursor = observed.question_cursor
     edit.question_anchor = observed.question_anchor

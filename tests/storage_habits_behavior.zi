@@ -20,6 +20,7 @@
 #import, file "../src/storage/storage_habits.zi";
 #import, file "../src/storage/storage_core.zi";
 #import, file "../src/habits/habit_model.zi";
+#import, file "../src/habits/habit_links.zi";
 #import, file "../src/habits/habit_questions.zi";
 #import, file "../src/habits/habit_answer_stats.zi";
 #import, file "../src/habits/habit_changes.zi";
@@ -55,6 +56,8 @@ equal_ignoring_case :: (left: string, right: string) -> bool {
     }
     return true
 }
+
+using HabitSyncMode;
 
 find_habit :: (habits: *Habits, name: string) -> *Habit {
     index: s32 = 0
@@ -200,7 +203,9 @@ test_delete_all_resets :: () {
     storage_close()
 }
 
-test_empty_initialized_seeds_meditation :: () {
+// A new profile starts with Meditation alone, linked to the sitting and
+// breathing practices; the other practices offer their own habit.
+test_empty_profile_starts_with_meditation :: () {
     root := make_root("empty-initialized")
     check_true("init db", storage_init(root) != 0)
     storage_mark_habits_initialized()
@@ -209,36 +214,17 @@ test_empty_initialized_seeds_meditation :: () {
     check_true("reopen db", storage_init(root) != 0)
     habits_a = Habits.{}
     habits_init(*habits_a)
-    check_int("startup seeds default habits", habits_a.count, 3)
+    check_int("startup seeds meditation alone", habits_a.count, 1)
     meditation := find_habit(*habits_a, "Meditation")
-    yoga := find_habit(*habits_a, "Yoga")
-    exercise := find_habit(*habits_a, "Exercise")
-    check_true("seeds exercise", exercise != null)
-    if exercise != null {
-        check_int("exercise linked mode", exercise.sync_mode, 1)
-        check_int("exercise linked to workout", exercise.sync_activity, habit_activity_mask_for(EXERCISE_WORKOUT))
-        check_int("exercise excludes yoga", habit_matches_activity(exercise, EXERCISE_SUN_SALUTATION), 0)
-        check_int("exercise counts workout", habit_matches_activity(exercise, EXERCISE_WORKOUT), 1)
-    }
     check_true("seeds meditation", meditation != null)
-    check_true("seeds yoga", yoga != null)
     if meditation != null {
         check_int("meditation linked mode", meditation.sync_mode, 1)
         check_int("meditation linked activities", meditation.sync_activity, 1 | 2 | 8)
     }
-    if yoga != null {
-        check_int("yoga linked mode", yoga.sync_mode, 1)
-        check_int("yoga linked activities", yoga.sync_activity, 4)
-    }
     habits_free(*habits_a)
     habits_b = Habits.{}
-    check_true("load seeded defaults", storage_habits_load(cast(*void)*habits_b) != 0)
-    check_int("seeded defaults persisted", habits_b.count, 3)
-    persisted := find_habit(*habits_b, "Meditation")
-    check_true("persisted meditation", persisted != null)
-    if persisted != null {
-        check_int("persisted meditation linked activities", persisted.sync_activity, 1 | 2 | 8)
-    }
+    check_true("load seeded meditation", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("seeded meditation persisted", habits_b.count, 1)
     habits_free(*habits_b)
     storage_close()
 }
@@ -252,15 +238,14 @@ test_defaults_wait_for_language :: () {
     check_int("deferred startup does not initialize habits", storage_habits_initialized(), 0)
     habits_free(*habits_a)
     habits_a = Habits.{}
-    check_true("seed defaults after language setup", habits_seed_default_set_if_needed(*habits_a) != 0)
-    check_int("deferred defaults seeded", habits_a.count, 3)
+    check_true("seed meditation after language setup", habits_seed_default_set_if_needed(*habits_a) != 0)
+    check_int("deferred meditation seeded alone", habits_a.count, 1)
     check_true("deferred meditation", find_habit(*habits_a, "Meditation") != null)
-    check_true("deferred yoga", find_habit(*habits_a, "Yoga") != null)
     check_int("deferred habits initialized", storage_habits_initialized(), 1)
     habits_free(*habits_a)
     habits_b = Habits.{}
-    check_true("load deferred seeded defaults", storage_habits_load(cast(*void)*habits_b) != 0)
-    check_int("deferred persisted count", habits_b.count, 3)
+    check_true("load deferred meditation", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("deferred persisted count", habits_b.count, 1)
     habits_free(*habits_b)
     storage_close()
 }
@@ -273,7 +258,7 @@ test_default_meditation_not_repaired :: () {
     habits_free(*habits_a)
     habits_a = Habits.{}
     habits_init(*habits_a)
-    check_int("meditation retained with new workout preset", habits_a.count, 2)
+    check_int("meditation retained alone", habits_a.count, 1)
     meditation := find_habit(*habits_a, "Meditation")
     check_true("no repair exists", meditation != null)
     if meditation != null {
@@ -294,7 +279,9 @@ test_default_meditation_not_repaired :: () {
     storage_close()
 }
 
-test_workout_preset_upgrade :: () {
+// An older profile without Exercise is not given one; a workout habit
+// without an icon still shows the run symbol.
+test_workout_preset_not_added :: () {
     root := make_root("workout-preset-upgrade")
     check_true("upgrade database opens", storage_init(root) != 0)
     habits_a = Habits.{}
@@ -302,31 +289,95 @@ test_workout_preset_upgrade :: () {
     habits_delete(*habits_a, 2)
     habit_set_day(*habits_a, 0, 20260618, 1)
     habits_save(*habits_a)
-    // An older profile predates Exercise rather than deliberately removing it.
-    raw_exec(root, "DELETE FROM habits WHERE (sync_activity & 64)<>0; DELETE FROM meta WHERE key='workout_habit_seeded_v1';")
+    raw_exec(root, "DELETE FROM habits WHERE (sync_activity & 64)<>0;")
     habits_free(*habits_a)
     habits_a = Habits.{}
     habits_init(*habits_a)
-    check_int("upgrade adds one workout preset", habits_a.count, 3)
-    exercise := find_habit(*habits_a, "Exercise")
-    check_true("upgrade workout exists", exercise != null)
-    if exercise != null {
-        check_int("upgrade workout links workout", habit_matches_activity(exercise, EXERCISE_WORKOUT), 1)
-        check_int("upgrade workout excludes yoga", habit_matches_activity(exercise, EXERCISE_SUN_SALUTATION), 0)
-    }
+    check_int("upgrade adds no workout preset", habits_a.count, 2)
     check_true("upgrade preserves meditation history", has_day(find_habit(*habits_a, "Meditation"), 20260618))
+    check_int("own workout habit", habits_add_custom(*habits_a, "Runs", Blue(), HABIT_SYNC_ACTIVITIES,
+        habit_activity_mask_for(EXERCISE_WORKOUT)), 2)
     habits_free(*habits_a)
     habits_a = Habits.{}
     habits_init(*habits_a)
-    check_int("restart keeps one workout preset", habits_a.count, 3)
-    habits_delete(*habits_a, 2)
-    // Even an older installation without the marker respects a deleted preset.
-    storage_set_meta_int64("workout_habit_seeded_v1", 0)
+    runs := find_habit(*habits_a, "Runs")
+    check_true("own workout habit kept", runs != null)
+    if runs != null {
+        check_int("workout habit shows the run symbol", runs.icon, HABIT_ICON_RUN)
+    }
     habits_free(*habits_a)
+    storage_close()
+}
+
+// The first session of a practice is counted per practice, and the habit it
+// offers links that practice with today checked.
+test_practice_habit_offer :: () {
+    root := make_root("practice-habit-offer")
+    // A session is known by its time and rounds, so each differs.
+    first: [1]s32 = .[60]
+    second: [1]s32 = .[61]
+    third: [1]s32 = .[62]
+    check_true("offer database opens", storage_init(root) != 0)
+    check_int("no tai chi sessions yet", storage_activity_session_count(EXERCISE_TAI_CHI), 0)
+    check_true("first tai chi session",
+        storage_save_session_for_activity(*first[0], 1, 0, EXERCISE_TAI_CHI, null, 0) != 0)
+    check_true("a meditation session",
+        storage_save_session_for_activity(*second[0], 1, 0, EXERCISE_MEDITATION, null, 0) != 0)
+    check_int("one tai chi session", storage_activity_session_count(EXERCISE_TAI_CHI), 1)
+    check_true("second tai chi session",
+        storage_save_session_for_activity(*third[0], 1, 0, EXERCISE_TAI_CHI, null, 0) != 0)
+    check_int("two tai chi sessions", storage_activity_session_count(EXERCISE_TAI_CHI), 2)
+    check_int("one meditation session", storage_activity_session_count(EXERCISE_MEDITATION), 1)
     habits_a = Habits.{}
-    habits_init(*habits_a)
-    check_int("deleted workout preset stays deleted", habits_a.count, 2)
+    check_int("tai chi habit added", habits_add_for_practice(*habits_a, EXERCISE_TAI_CHI, "Tai Chi"), 0)
+    check_int("tai chi habit links tai chi", habit_matches_activity(*habits_a.items[0], EXERCISE_TAI_CHI), 1)
+    check_int("tai chi habit links nothing else", habits_a.items[0].sync_activity,
+        habit_activity_mask_for(EXERCISE_TAI_CHI))
+    check_true("today checked", has_day(*habits_a.items[0], habits_today_index()))
+    check_int("workout habit gets the run symbol",
+        habits_add_for_practice(*habits_a, EXERCISE_WORKOUT, "7-Minute Workout"), 1)
+    check_int("workout habit icon", habits_a.items[1].icon, HABIT_ICON_RUN)
     habits_free(*habits_a)
+    habits_b = Habits.{}
+    check_true("reload offered habits", storage_habits_load(cast(*void)*habits_b) != 0)
+    check_int("offered habits persisted", habits_b.count, 2)
+    tai_chi := find_habit(*habits_b, "Tai Chi")
+    check_true("tai chi persisted", tai_chi != null)
+    if tai_chi != null {
+        check_true("tai chi day persisted", has_day(tai_chi, habits_today_index()))
+    }
+    habits_free(*habits_b)
+    storage_close()
+}
+
+// A day with a Diary entry checks only the habits linked to Diary, as a
+// plain done day that reloading and session counting keep.
+test_diary_link_marks_days :: () {
+    root := make_root("diary-link")
+    check_true("diary link database opens", storage_init(root) != 0)
+    habits_a = Habits.{}
+    check_int("diary habit", habits_add_custom(*habits_a, "Journal", Blue(), HABIT_SYNC_ACTIVITIES,
+        HABIT_LINK_DIARY), 0)
+    check_int("both habit", habits_add_custom(*habits_a, "Reflect", Blue(), HABIT_SYNC_ACTIVITIES,
+        HABIT_LINK_DIARY | habit_activity_mask_for(EXERCISE_MEDITATION)), 1)
+    check_int("meditation habit", habits_add_custom(*habits_a, "Sit", Blue(), HABIT_SYNC_ACTIVITIES,
+        habit_activity_mask_for(EXERCISE_MEDITATION)), 2)
+    check_int("plain habit", habits_add_custom(*habits_a, "Walk", Blue(), HABIT_SYNC_NONE, 0), 3)
+    habits_mark_link_day(*habits_a, HABIT_LINK_DIARY, 20261020)
+    check_true("diary habit checked", has_day(*habits_a.items[0], 20261020))
+    check_true("diary and meditation habit checked", has_day(*habits_a.items[1], 20261020))
+    check_true("meditation habit not checked", !has_day(*habits_a.items[2], 20261020))
+    check_true("plain habit not checked", !has_day(*habits_a.items[3], 20261020))
+    habits_free(*habits_a)
+    habits_b = Habits.{}
+    check_true("reload diary habits", storage_habits_load(cast(*void)*habits_b) != 0)
+    journal := find_habit(*habits_b, "Journal")
+    check_true("journal persisted", journal != null)
+    if journal != null {
+        check_int("diary link persisted", journal.sync_activity, HABIT_LINK_DIARY)
+        check_true("diary day survives session counting", has_day(journal, 20261020))
+    }
+    habits_free(*habits_b)
     storage_close()
 }
 
@@ -1113,10 +1164,12 @@ Check :: () -> s32 {
     test_habit_name_merge_import()
     test_import_conflict_prefers_data()
     test_delete_all_resets()
-    test_empty_initialized_seeds_meditation()
+    test_empty_profile_starts_with_meditation()
     test_defaults_wait_for_language()
     test_default_meditation_not_repaired()
-    test_workout_preset_upgrade()
+    test_workout_preset_not_added()
+    test_practice_habit_offer()
+    test_diary_link_marks_days()
     test_import_modes()
     test_session_metadata()
     test_profile_week_stats()

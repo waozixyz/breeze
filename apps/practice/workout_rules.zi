@@ -143,21 +143,45 @@ WorkoutKeyFor :: (prefix: string, exercise: s32, output: []u8) -> string {
     return TextFromBytes(output[:count])
 }
 
-// The narrated line for the step: what is coming while getting ready or
-// resting, the exercise as it starts, and the switch halfway through the
-// side plank.
-WorkoutCueKey :: (step: WorkoutStep, output: []u8) -> string {
-    if step.phase == WORKOUT_PHASE_PREPARE {
-        return "workout_say_start"
+// The countdown into each exercise: the seconds left while getting ready or
+// resting, then "Go" for a moment as the exercise starts.
+WORKOUT_COUNT_NONE :: -1
+WORKOUT_COUNT_GO :: 0
+WORKOUT_GO_MS :: 800
+// The last seconds before an exercise are spoken one by one.
+WORKOUT_SPOKEN_COUNT :: 3
+
+WorkoutCountdownAt :: (step: WorkoutStep) -> s32 {
+    if step.phase == WORKOUT_PHASE_PREPARE || step.phase == WORKOUT_PHASE_REST {
+        return WorkoutStepSecondsLeft(step)
     }
-    if step.phase == WORKOUT_PHASE_REST {
+    if step.phase == WORKOUT_PHASE_WORK && step.elapsed_ms < WORKOUT_GO_MS {
+        return WORKOUT_COUNT_GO
+    }
+    return WORKOUT_COUNT_NONE
+}
+
+// The narrated line for the step: what is coming while getting ready or
+// resting, three, two, one as it ends, "Go" as the exercise starts, and
+// the switch halfway through the side plank.
+WorkoutCueKey :: (step: WorkoutStep, output: []u8) -> string {
+    if step.phase == WORKOUT_PHASE_PREPARE || step.phase == WORKOUT_PHASE_REST {
+        left := WorkoutStepSecondsLeft(step)
+        if left >= 1 && left <= WORKOUT_SPOKEN_COUNT {
+            counts: [WORKOUT_SPOKEN_COUNT]string = .["workout_say_count_1", "workout_say_count_2",
+            "workout_say_count_3"]
+            return counts[left - 1]
+        }
+        if step.phase == WORKOUT_PHASE_PREPARE {
+            return "workout_say_start"
+        }
         return WorkoutKeyFor("workout_say_next_", step.exercise, output)
     }
     if step.phase == WORKOUT_PHASE_WORK {
         if step.exercise == WORKOUT_SIDE_PLANK && step.elapsed_ms >= WORKOUT_SIDE_SWITCH_MS {
             return "workout_say_switch"
         }
-        return WorkoutKeyFor("workout_say_", step.exercise, output)
+        return "workout_say_go"
     }
     return ""
 }

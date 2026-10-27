@@ -20,9 +20,11 @@
 #import, file "../src/storage/import_types.zi";
 #import, file "../src/app/text_buffers.zi";
 #import "std/c_string"
+#import "std/vec"
 #import "drawing_props"
 #import, file "../apps/radio/radio_achievements.zi";
 #import, file "../apps/diary/diary_achievements.zi";
+#import, file "../src/apps/diary_records.zi";
 #import, file "../apps/lists/lists_achievements.zi";
 #import, file "../src/storage/storage_elist.zi";
 #import, file "../src/storage/storage_sessions.zi";
@@ -331,18 +333,29 @@ Check :: () -> s32 {
     }
     AchievementRadioSample(0, "station", false, 50, true, 417.0, 1317, 20261018)
     check_int("verified audible playback earns actual minutes", metric_value("radio.playback", "minutes"), 1)
-    AchievementDiarySaved("2026-10-18.json", "{\"version\":1,\"date\":\"2026-10-18\",\"text\":\"# A real entry\"}")
+    check_true("authored diary text is a real entry", AchievementDiarySaved("2026-10-18.json", "{\"version\":1,\"date\":\"2026-10-18\",\"text\":\"# A real entry\"}"))
     check_int("authored diary text qualifies", metric_value("diary", "days"), 1)
-    AchievementDiarySaved("2026-10-18.json", "{\"version\":1,\"date\":\"2026-10-18\",\"text\":\"  ** _ # > ` ~ --- \\n\"}")
+    check_true("formatting alone is no entry", !AchievementDiarySaved("2026-10-18.json", "{\"version\":1,\"date\":\"2026-10-18\",\"text\":\"  ** _ # > ` ~ --- \\n\"}"))
     check_int("formatting-only edit retracts diary progress", metric_value("diary", "days"), 0)
-    AchievementDiarySaved("2026-10-18.json", "{\"version\":1,\"date\":\"2026-10-18\",\"text\":\"![missing](diary:missing.jpg)\"}")
+    check_true("a broken photo is no entry", !AchievementDiarySaved("2026-10-18.json", "{\"version\":1,\"date\":\"2026-10-18\",\"text\":\"![missing](diary:missing.jpg)\"}"))
     check_int("broken photo cannot qualify a diary day", metric_value("diary", "days"), 0)
     check_true("legacy photo metadata saves", BundledAppRecordWrite("cell.diary.file.real.jpg", "{\"hash\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size\":100}"))
-    AchievementDiarySaved("2026-10-18.json", "{\"version\":1,\"date\":\"2026-10-18\",\"text\":\"![photo](diary:real.jpg)\"}")
+    check_true("a verified photo is an entry", AchievementDiarySaved("2026-10-18.json", "{\"version\":1,\"date\":\"2026-10-18\",\"text\":\"![photo](diary:real.jpg)\"}"))
     check_int("verified photo-only diary day qualifies", metric_value("diary", "days"), 1)
     check_int("verified photo gets its own diary metric", metric_value("diary", "days", "photo"), 1)
-    AchievementDiarySaved("2026-10-18.json", "")
+    check_true("a removed document is no entry", !AchievementDiarySaved("2026-10-18.json", ""))
     check_int("removed diary document retracts progress", metric_value("diary", "days"), 0)
+    // The days a Diary-linked habit brings along: only saved real entries.
+    check_true("written diary day saves", DiaryRecordSave("2026-10-16.json",
+        "{\"version\":1,\"date\":\"2026-10-16\",\"text\":\"Walked by the river\"}"))
+    check_true("empty diary day saves", DiaryRecordSave("2026-10-17.json",
+        "{\"version\":1,\"date\":\"2026-10-17\",\"text\":\"  \"}"))
+    written := DiaryWrittenDays()
+    check_int("one written diary day", cast(s32)written.count, 1)
+    if written.count == 1 {
+        check_int("the written diary day", written[0], 20261016)
+    }
+    VecFree(written)
     check_true("whitespace is not a saved task comment", !AchievementListComment("  \t\n"))
     check_true("authored task comments qualify", AchievementListComment("A useful detail"))
     storage_close()

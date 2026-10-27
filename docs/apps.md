@@ -77,9 +77,16 @@ or step the count. The entry dialog reads each answer with
 `WriteHabitsAnswerHost`, which keeps only values its question's type
 allows; Done, Skip, Delete and Cancel go through the host's entry rules.
 The editor reads the habit being edited (`ReadHabitsEditHost`), each of its
-questions and each practice it may link, keeps what is typed and gives the
+questions and each practice or app it may link, keeps what is typed and gives the
 draft back; the host validates and saves it with the same habit rules as
-before. The statistics read the figures the host counted over the habit's
+before. A link is one bit of the habit's `sync_activity`
+(`src/habits/habit_links.zi`): a practice checks the day of a saved session,
+and Diary checks a day with a real entry (`DiaryStoreSave` reports it, and
+linking a habit brings its earlier entry days along). Another app links by
+adding its bit and label there and reporting its days through
+`habits_mark_link_day`. A new profile starts with Meditation alone; with
+Habits installed, any other practice's first saved session, when no habit
+links it, offers one on its results (host interface 37). The statistics read the figures the host counted over the habit's
 last year (`ReadHabitsStatsHost`): streaks, weekdays, linked time, moods,
 Wim Hof rounds and span times, then each answer chart, its points, each
 hold and each change. Their answer charts are plot's band chart, which the

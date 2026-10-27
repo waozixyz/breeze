@@ -9,6 +9,11 @@ ModuleHost :: #import, file "module_host.zi";
 #import, file "../app/text_buffers.zi";
 #import, file "../storage/storage_elist.zi";
 #import, file "../habits/habit_model.zi";
+#import, file "../habits/habit_links.zi";
+#import, file "diary_store.zi";
+#import, file "../../apps/diary/diary_achievements.zi";
+#import, file "../storage/temporary_data.zi";
+#import "vec"
 #import, file "../habits/habit_types.zi";
 #import, file "../habits/habit_questions.zi";
 #import, file "../habits/habit_schedule.zi";
@@ -48,11 +53,39 @@ NameExists :: (name: string, excluding: s32) -> bool {
         name, excluding) != 0
 }
 
+// A day with a Diary entry checks every habit linked to Diary.
+DiaryDayWrittenForHabits :: (day: s32) {
+    if shared_app != null {
+        habits_mark_link_day(*shared_app.habits, HABIT_LINK_DIARY, day)
+    }
+}
+
+// A habit newly linked to Diary has every earlier day with an entry checked.
+HabitBackfillDiary :: (habits: *Habits, index: s32) {
+    days := DiaryWrittenDays()
+    defer {
+        VecFree(days)
+    }
+    changed := false
+    for day: cast(s64)0..days.count - 1 {
+        if habit_mark_day_done(habits, index, days[day]) {
+            changed = true
+        }
+    }
+    if changed {
+        habits_save(habits)
+    }
+}
+
 SaveHabit :: (message: HabitsMessage) -> bool {
     if shared_app == null {
         return false
     }
     index := message.index
+    linked_diary := false
+    if !message.is_new && index >= 0 && index < shared_app.habits.count {
+        linked_diary = habit_matches_link(*shared_app.habits.items[index], HABIT_LINK_DIARY)
+    }
     if message.is_new {
         index = habits_add_custom(*shared_app.habits, message.name,
             message.color, message.sync_mode, message.sync_activity)
@@ -114,6 +147,9 @@ SaveHabit :: (message: HabitsMessage) -> bool {
             habits_today_index(), message.is_new)
     }
     habits_save(*shared_app.habits)
+    if !linked_diary && habit_matches_link(habit, HABIT_LINK_DIARY) && !DataTemporary() {
+        HabitBackfillDiary(*shared_app.habits, index)
+    }
     return true
 }
 
@@ -122,6 +158,7 @@ SaveHabit :: (message: HabitsMessage) -> bool {
 AppsStart :: (app: *InnerBreeze) -> bool {
     shared_app = app
     ModuleHost.AppsBindPersistence(PersistLists, NameExists, SaveHabit)
+    DiaryBindDayWritten(DiaryDayWrittenForHabits)
     return AppsOpen()
 }
 

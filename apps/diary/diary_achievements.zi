@@ -31,24 +31,30 @@ AchievementDiaryPhoto :: (target: string, library: bool) -> bool {
     return DiaryMediaParse(record).valid
 }
 
-AchievementDiarySaved :: (name: string, document: string, live: bool = true) {
-    if name.count != 15 || name[10:] != ".json" { return }
+// A saved document's day, whether it shows a photo, and whether it is a
+// real entry: authored text or a valid photo. `day` is 0 when the name is
+// not a day's document.
+DiaryEntry :: struct {
+    day: s32
+    photo: bool
+    qualified: bool
+}
+
+DiaryEntryOf :: (name: string, document: string) -> DiaryEntry {
+    entry: DiaryEntry
+    if name.count != 15 || name[10:] != ".json" { return entry }
     day := AchievementParseDay(name[:10])
-    if day == 0 || document.count > 16777216 { return }
-    photo := false
-    qualified := false
-    defer {
-        unused AchievementRecord("diary", name, day, 1, ifx photo then "photo" else "", "", true, live, !qualified)
-    }
+    if day == 0 || document.count > 16777216 { return entry }
+    entry.day = day
     end := ValueEnd(document, Space(document, 0), 0)
-    if end < 0 || Space(document, end) != document.count { return }
+    if end < 0 || Space(document, end) != document.count { return entry }
     version := ReadNumber(document, FieldAt(document, 0, "version"))
     date: [11]u8
     if !version.valid || version.value != 1 ||
     ReadStringText(document, FieldAt(document, 0, "date"), date[:]) != 10 ||
-    TextUntilNul(date[:]) != name[:10] { return }
+    TextUntilNul(date[:]) != name[:10] { return entry }
     decoded := ReadStringValue(document, FieldAt(document, 0, "text"), 16777216)
-    if !decoded.valid { return }
+    if !decoded.valid { return entry }
     text := BuilderFinish(decoded.value)
     defer { PackageFree(text) }
     authored := false
@@ -56,7 +62,7 @@ AchievementDiarySaved :: (name: string, document: string, live: bool = true) {
     while offset < text.count {
         embed := DiaryEmbedAt(text, offset)
         if embed.valid {
-            if AchievementDiaryPhoto(DiaryEmbedTarget(text, embed), embed.library) { photo = true }
+            if AchievementDiaryPhoto(DiaryEmbedTarget(text, embed), embed.library) { entry.photo = true }
             offset = embed.end
             continue
         }
@@ -75,9 +81,19 @@ AchievementDiarySaved :: (name: string, document: string, live: bool = true) {
         row := ElementAt(document, old_photos, index)
         file: [201]u8
         if ReadStringText(document, FieldAt(document, row, "file"), file[:]) > 0 &&
-        AchievementDiaryPhoto(TextUntilNul(file[:]), false) { photo = true }
+        AchievementDiaryPhoto(TextUntilNul(file[:]), false) { entry.photo = true }
     }
-    qualified = authored || photo
+    entry.qualified = authored || entry.photo
+    return entry
+}
+
+// Records the day's fact and answers whether the day has a real entry.
+AchievementDiarySaved :: (name: string, document: string, live: bool = true) -> bool {
+    entry := DiaryEntryOf(name, document)
+    if entry.day == 0 { return false }
+    unused AchievementRecord("diary", name, entry.day, 1, ifx entry.photo then "photo" else "", "", true, live,
+        !entry.qualified)
+    return entry.qualified
 }
 
 AchievementDiaryBackfill :: (offset: s32) -> s32 {
@@ -92,9 +108,43 @@ AchievementDiaryBackfill :: (offset: s32) -> s32 {
     while SqliteStep(statement) == SQLITE_ROW {
         name := AppTextFromCString(SqliteColumnText(statement, 0), 96)
         document := DiaryRecordRead(name)
-        AchievementDiarySaved(name, document, false)
+        unused AchievementDiarySaved(name, document, false)
         PackageFree(document)
         rows += 1
     }
     return rows
+}
+
+// Every day of the account with a real entry, oldest first, from the synced
+// documents, so a newly linked habit brings its earlier days along. The
+// caller frees the list.
+DiaryWrittenDays :: () -> Vec(s32) {
+    days: Vec(s32)
+    offset: s32 = 0
+    more := true
+    while more {
+        statement: *void
+        if SqlitePrepareText(storage_db_handle(),
+            "SELECT substr(key,17) FROM settings WHERE user_id=?1 AND key GLOB 'cell.diary.file.????-??-??.json' ORDER BY key LIMIT 128 OFFSET ?2",
+            -1, *statement, null) != SQLITE_OK {
+            break
+        }
+        bind_text(statement, 1, AchievementOwner())
+        SqliteBindInt(statement, 2, offset)
+        rows: s32 = 0
+        while SqliteStep(statement) == SQLITE_ROW {
+            name := AppTextFromCString(SqliteColumnText(statement, 0), 96)
+            document := DiaryRecordRead(name)
+            entry := DiaryEntryOf(name, document)
+            PackageFree(document)
+            if entry.qualified {
+                unused VecPush(days, entry.day)
+            }
+            rows += 1
+        }
+        SqliteFinalize(statement)
+        more = rows == 128
+        offset += rows
+    }
+    return days
 }

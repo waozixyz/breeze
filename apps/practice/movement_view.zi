@@ -221,6 +221,10 @@ WorkoutProgress :: (x: s32, y: s32, width: s32) {
             share = 1.0
         } else if index == movement.exercise && movement.phase == WORKOUT_PHASE_WORK && movement.length_ms > 0 {
             share = cast(float32)movement.elapsed_ms / cast(float32)movement.length_ms
+        } else if index == movement.exercise {
+            // The exercise being got ready for is tinted.
+            Box(movement.session, BoxProps.{.bounds = bar, .fill = Alpha(movement.accent_color, 0.35),
+                    .radius = cast(float32)bar_h / 2.0})
         }
         if share > 0.0 {
             bar.width *= share
@@ -233,7 +237,31 @@ WorkoutProgress :: (x: s32, y: s32, width: s32) {
     }
 }
 
+// While getting ready or resting, the seconds left as a large plain number,
+// then "Go!" as the exercise starts.
+WorkoutCountdownNumber :: (center: Vector2, radius: float32, count: s32) {
+    text := Locale("workout_go")
+    if count != WORKOUT_COUNT_GO {
+        number: Vec(u8)
+        BuilderPrint(*number, "%", count)
+        text = BuilderFinish(number)
+    }
+    emphasis: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)text.count}]
+    Text(movement.session, TextProps.{.text = text,
+            .bounds = Rectangle.{center.x - radius * 2.0, center.y - radius, radius * 4.0, radius * 2.0},
+            .font = Scale(64), .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapNone,
+            .strong = emphasis[:1]})
+}
+
+// The exercise's seconds left in a ring.
 WorkoutCountdown :: (center: Vector2, radius: float32) {
+    count := WorkoutCountdownAt(WorkoutStep.{.phase = movement.phase, .exercise = movement.exercise,
+            .elapsed_ms = movement.elapsed_ms, .length_ms = movement.length_ms})
+    if count != WORKOUT_COUNT_NONE {
+        WorkoutCountdownNumber(center, radius, count)
+        return
+    }
     thickness := cast(float32)Scale(6)
     Ring(movement.session, RingProps.{.center = center, .inner_radius = radius - thickness,
             .outer_radius = radius, .start_angle = 0.0, .end_angle = 360.0,
@@ -245,7 +273,7 @@ WorkoutCountdown :: (center: Vector2, radius: float32) {
     if left > 0.0 {
         Ring(movement.session, RingProps.{.center = center, .inner_radius = radius - thickness,
                 .outer_radius = radius, .start_angle = -90.0, .end_angle = -90.0 + 360.0 * left,
-                .color = ifx movement.phase == WORKOUT_PHASE_WORK then movement.accent_color else Alpha(movement.text_color, 0.55)})
+                .color = movement.accent_color})
     }
     number: Vec(u8)
     BuilderPrint(*number, "%", movement.seconds_left)
