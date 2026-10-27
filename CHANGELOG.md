@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.52] - 2026-10-27
+
+- Set an account alias with capitals, an @ or spaces; a taken alias now says so.
+
 ## [2.1.51] - 2026-10-27
 
 - Open Link to reliably while choosing a new habit's icon.
