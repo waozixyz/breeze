@@ -184,12 +184,15 @@ def play_classic():
     deadline = time.monotonic() + 30
     while not driver.find(contains="Level 1 / ", role="text", visible=True) or \
             driver.find(label="Not now", role="button", visible=True) or \
-            driver.find(label="How do you want to move?", role="text", visible=True):
+            driver.find(label="How do you want to move?", role="text", visible=True) or \
+            driver.find(label="Got it", role="button", visible=True):
         assert time.monotonic() < deadline, "Shovey's level did not open: " + ", ".join(driver.labels())
         if driver.find(label="Not now", role="button", visible=True):
             driver.press(label="Not now", role="button")
         elif driver.find(label="How do you want to move?", role="text", visible=True):
-            driver.press(contains="Swipe")
+            driver.press(label="Swipe and tap", role="button")
+        elif driver.find(label="Got it", role="button", visible=True):
+            driver.press(label="Got it", role="button")
         time.sleep(0.1)
 
 
@@ -289,7 +292,9 @@ def check_download_library():
                     if driver.find(label='Not now', role='button', visible=True):
                         driver.press(label='Not now', role='button')
                     elif driver.find(label='How do you want to move?', role='text', visible=True):
-                        driver.press(contains='Swipe')
+                        driver.press(label='Swipe and tap', role='button')
+                    elif driver.find(label='Got it', role='button', visible=True):
+                        driver.press(label='Got it', role='button')
                     elif driver.find(label='Restart', role='button', visible=True):
                         break
                     time.sleep(.05)
