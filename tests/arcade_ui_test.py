@@ -53,6 +53,7 @@ WIDTH, HEIGHT = 390, 844
 # A tap on the cell beside Shovey moves him there; portrait steps are left,
 # up, right and down on the screen.
 STEPS = ((-1, 0), (0, -1), (1, 0), (0, 1))
+SHOVEY_CONTROLS = "Arrow keys / WASD · R restart · H help · Space throw"
 SAVED_CHESS = "v=1;level=0;color=w;moves=e2e4 e7e5"
 driver = UiDriver(OUTPUT / "driver")
 local_game_origin = ""
@@ -183,6 +184,7 @@ def play_classic():
     press_button("Play")
     deadline = time.monotonic() + 30
     while not driver.find(contains="Level 1 / ", role="text", visible=True) or \
+            not driver.find(label=SHOVEY_CONTROLS, visible=True) or \
             driver.find(label="Not now", role="button", visible=True) or \
             driver.find(label="How do you want to move?", role="text", visible=True) or \
             driver.find(label="Got it", role="button", visible=True):
@@ -216,7 +218,7 @@ def move_shovey():
         now = shovey_cell()
         if now and now != start:
             return now
-    raise AssertionError("Shovey did not move from " + str(start))
+    raise driver._failure("Shovey did not move from " + str(start))
 
 
 def check_download_library():
@@ -295,7 +297,9 @@ def check_download_library():
                         driver.press(label='Swipe and tap', role='button')
                     elif driver.find(label='Got it', role='button', visible=True):
                         driver.press(label='Got it', role='button')
-                    elif driver.find(label='Restart', role='button', visible=True):
+                    # Restart is drawn behind Pip's tutorial; the board's
+                    # input area appears only after every question is closed.
+                    elif driver.find(label=SHOVEY_CONTROLS, visible=True):
                         break
                     time.sleep(.05)
                 saved_cell = move_shovey()
