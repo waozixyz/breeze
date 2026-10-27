@@ -21,7 +21,7 @@ mkdir -p "$work/generated"
     --module-path "$root/build/packages/daochi-client" \
     --entry session_results_behavior:Check \
     -o "$work/generated" "$root/tests/session_results_behavior.zi" \
-    "$root/tests/app_hooks_host.zi" "$root/tests/clock_host.zi"
+    "$root/tests/app_hooks_host.zi" "$root/tests/habit_edit_hooks_host.zi" "$root/tests/clock_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "session_results_behavior.h"
 #include <stdio.h>
