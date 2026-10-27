@@ -65,6 +65,8 @@ jobs:
             libsqlite3-0 libssl-dev \
             libdrm-dev:arm64 libegl1-mesa-dev:arm64 libgbm-dev:arm64 \
             libgles2-mesa-dev:arm64 libsdl2-dev:arm64 libssl-dev:arm64 zlib1g-dev:arm64
+          apt-get install -y --no-install-recommends libwayland-bin \
+            libwayland-dev:arm64 libxkbcommon-dev:arm64 libpulse-dev:arm64 libdbus-1-dev:arm64
 
       - name: Set up build Python for Focal
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
@@ -97,6 +99,33 @@ jobs:
             --prefix=/opt/inbe-openssl --libdir=lib --openssldir=/etc/ssl shared no-tests
           make -j2 build_sw
           make install_sw
+
+      - name: Build Focal SDL with Wayland
+        run: |
+          set -euo pipefail
+          sdl_source="$RUNNER_TEMP/inbe-sdl2"
+          mkdir -p "$sdl_source"
+          curl --fail --location --retry 3 \
+            https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz \
+            --output "$sdl_source/source.tar.gz"
+          printf '%s  %s\n' \
+            5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165 \
+            "$sdl_source/source.tar.gz" | sha256sum --check -
+          tar -xzf "$sdl_source/source.tar.gz" -C "$sdl_source"
+          unset PKG_CONFIG_PATH
+          export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          cmake_bin="$(python3 -c 'import cmake; print(cmake.CMAKE_BIN_DIR + "/cmake")')"
+          "$cmake_bin" -S "$sdl_source/SDL2-2.32.10" -B "$sdl_source/build" \
+            -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=/usr/bin/aarch64-linux-gnu-gcc \
+            -DCMAKE_INSTALL_PREFIX=/opt/inbe-sdl2 -DCMAKE_INSTALL_LIBDIR=lib \
+            -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TEST=OFF \
+            -DSDL_WAYLAND=ON -DSDL_WAYLAND_SHARED=ON -DSDL_WAYLAND_LIBDECOR=OFF \
+            -DSDL_X11=OFF -DSDL_KMSDRM=OFF -DSDL_OPENGL=OFF -DSDL_OPENGLES=ON \
+            -DSDL_PULSEAUDIO=ON -DSDL_ALSA=OFF
+          grep -q '^#define SDL_VIDEO_DRIVER_WAYLAND 1' "$sdl_source/build/include/SDL_config.h"
+          "$cmake_bin" --build "$sdl_source/build" --parallel 2
+          "$cmake_bin" --install "$sdl_source/build"
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -137,14 +166,16 @@ jobs:
           set(CURL_CA_BUNDLE /etc/ssl/certs/ca-certificates.crt CACHE FILEPATH "Device CA bundle")
           set(CURL_CA_PATH /etc/ssl/certs CACHE PATH "Device CA directory")
           CMAKE
-          export AARCH64_PKG_CONFIG_PATH=/opt/inbe-openssl/lib/pkgconfig:/opt/sdl/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          unset PKG_CONFIG_PATH
+          export AARCH64_PKG_CONFIG_PATH=/opt/inbe-openssl/lib/pkgconfig:/opt/inbe-sdl2/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
           export PKG_CONFIG_LIBDIR="$AARCH64_PKG_CONFIG_PATH"
           export AARCH64_RAY_SDL_CFLAGS="$(pkg-config --cflags sdl2)"
           export AARCH64_RAY_SDL_LDLIBS="$(pkg-config --libs sdl2)"
           export AARCH64_RAY_GL_CFLAGS="$(pkg-config --cflags libdrm gbm egl glesv2)"
           export AARCH64_RAY_GL_LDLIBS="$(pkg-config --libs libdrm gbm egl glesv2)"
           export AARCH64_RAY_CFLAGS="$AARCH64_RAY_SDL_CFLAGS $AARCH64_RAY_GL_CFLAGS"
-          export AARCH64_RAY_LDLIBS="$AARCH64_RAY_SDL_LDLIBS $AARCH64_RAY_GL_LDLIBS"
+          # Search bundled TLS and SDL before the SDK's older system copies.
+          export AARCH64_RAY_LDLIBS="-L/opt/inbe-openssl/lib $AARCH64_RAY_SDL_LDLIBS $AARCH64_RAY_GL_LDLIBS"
           export AARCH64_RAY_SDL_INCLUDE_DIR="$(pkg-config --variable=includedir sdl2)/SDL2"
           click_curl_dir="$PWD/vendor-builds/click/arm64/curl"
           export AARCH64_KRYON_CURL_CFLAGS="-DCURL_STATICLIB -I$click_curl_dir/include"
