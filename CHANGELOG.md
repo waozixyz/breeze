@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.53] - 2026-10-27
+
+- Top up Dew with Bitcoin, USDT and other coins through dew.waozi.xyz.
+- The Google Play version uses current Android components.
+
 ## [2.1.52] - 2026-10-27
 
 - Set an account alias with capitals, an @ or spaces; a taken alias now says so.
