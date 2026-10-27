@@ -177,7 +177,7 @@ for width in (411, 1100):
         reveal(driver, width, contains="Link", role="button")
         driver.press(contains="Link", role="button")
         driver.wait(key=9120)
-        driver.press(label="Diary", role="checkbox")
+        driver.press(label="Diary entry", role="checkbox")
         driver.press(label="Done", role="button")
         driver.wait_gone(key=9120)
         # Change tracking before entering a name, through the ordinary New
@@ -259,6 +259,9 @@ for width in (411, 1100):
                    "WHERE name='" + name + "' AND deleted_at=0"),
                "Set every option before creating:77:126:1:How did it go?",
                "new habit keeps details, schedule, practices and questions")
+        expect(sql(database, "SELECT (sync_activity & 16777216)!=0 FROM habits "
+                   "WHERE name='" + name + "' AND deleted_at=0"),
+               "1", "new habit keeps its Diary link")
     print("PASS new-habit details, schedule, difficulty, coins, counter, span, "
           f"practices and questions at {width}px")
 
