@@ -175,6 +175,12 @@ android-install: android-copy-assets android-local-properties
 		"$(ANDROID_DEBUG_APP_ID)" "$(ANDROID_ACTIVITY)" \
 		droid/app/build/outputs/apk debug
 
+# A committed revision on the Pixel (DEVICE=moto or a serial for another
+# phone), built from that commit alone and signed to keep the app's data.
+.PHONY: phone-install
+phone-install:
+	sh scripts/phone-install.sh $(if $(DEVICE),--device "$(DEVICE)") $(if $(REVISION),--revision "$(REVISION)") $(if $(APK),--apk "$(APK)")
+
 android-install-release: android-release
 	ADB='$(ADB)' sh scripts/android-install-apk.sh \
 		"$(ANDROID_APP_ID)" "$(ANDROID_ACTIVITY)" \

@@ -201,6 +201,16 @@ def exercise(phone, driver):
     driver.press(key=cover[0]["key"])
     driver.wait(label="Download", role="button")
     download(driver)
+    # New Apfelwurm versions first show the title screen; older versions
+    # enter the movement chooser directly. Follow either real first start.
+    deadline = time.monotonic() + 120
+    while not driver.find(label="How do you want to move?", role="text", visible=True):
+        if driver.find(label="Play", role="button", visible=True):
+            driver.press(label="Play", role="button")
+            break
+        if time.monotonic() >= deadline:
+            raise AssertionError("Apfelwurm did not reach its title or movement chooser: " + driver.text())
+        driver.wait_idle(frames=3)
     driver.wait(label="How do you want to move?", role="text", timeout=120)
     driver.press(label="Swipe", role="button")
     driver.wait(label="Pause", role="button", timeout=60)

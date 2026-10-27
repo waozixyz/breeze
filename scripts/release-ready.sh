@@ -10,7 +10,8 @@
 # edits and new files in the canonical checkout cannot enter the tests. Peers
 # keep working on master; nothing this container writes reaches their checkout.
 # Packages use the fixed lock without local overrides or untracked secrets.
-# Build outputs stay in build/release-ready/; a run takes about 90 minutes.
+# Build outputs stay in build/release-ready/ (or RELEASE_READY_OUTPUT); a run
+# takes about 90 minutes.
 #
 # Covered: ci.yml Secret Scan, Package URLs, large-file guard, all three test
 # shards, Chrome/Firefox add-ons and smoke, the real pinned Daochi
@@ -26,7 +27,16 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
-output=build/release-ready
+# RELEASE_READY_OUTPUT gives a second run its own build/release-ready-NAME
+# outputs, so a fixed-commit build can run beside an active check.
+output=${RELEASE_READY_OUTPUT:-build/release-ready}
+case "$output" in
+    build/release-ready|build/release-ready-[a-z0-9]*) ;;
+    *) echo "release-ready: RELEASE_READY_OUTPUT must be build/release-ready-NAME" >&2; exit 2 ;;
+esac
+case "$output" in
+    *[!a-z0-9/-]*) echo "release-ready: RELEASE_READY_OUTPUT must be build/release-ready-NAME" >&2; exit 2 ;;
+esac
 commit=$(git rev-parse "${RELEASE_READY_REVISION:-HEAD}^{commit}")
 image_tag=$({
     git show "$commit:.github/local-ci/Containerfile"
