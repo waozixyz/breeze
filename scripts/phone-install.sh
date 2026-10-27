@@ -90,7 +90,7 @@ mkdir -p build/phone-install
     --ks-key-alias androiddebugkey --key-pass pass:android \
     --out "$signed" "$signed.aligned"
 rm -f "$signed.aligned" "$signed.idsig"
-"$build_tools/apksigner" verify "$signed"
+"$build_tools/apksigner" verify "$signed" >/dev/null 2>&1 || fail "the signed APK does not verify"
 
 phone install -r "$signed" || fail "install failed; the app was left as it was (never uninstall: that deletes its data)"
 installed=$(phone shell pm path "$app_id" | tr -d '\r' | sed -n 's/^package://p' | grep base.apk | head -n 1)
