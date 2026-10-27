@@ -3,6 +3,14 @@ name: Publish OpenStore
 on:
   workflow_dispatch:
     inputs:
+      revision:
+        description: Exact committed source to build (defaults to the selected ref)
+        required: false
+        type: string
+      build_only:
+        description: Verify and archive the package without publishing it
+        type: boolean
+        default: false
       changelog:
         description: Changelog text for the OpenStore revision
         required: false
@@ -32,9 +40,16 @@ jobs:
       CHANGELOG: ${{ github.event.inputs.changelog || github.event.release.name || github.event.release.tag_name || '' }}
 
     steps:
+      - name: Require an immutable source
+        env:
+          CANDIDATE: ${{ inputs.revision || github.sha }}
+        run: |
+          [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] || { echo 'An exact commit is required'; exit 1; }
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.revision || github.sha }}
           fetch-depth: 0
           lfs: true
 
@@ -111,7 +126,23 @@ jobs:
           echo "Built $click_file"
           dpkg-deb --contents "$click_file" | grep -E 'manifest.json|inbe.png|metainfo|inbe.desktop'
 
+      - name: Archive the verified package source and digest
+        run: |
+          mkdir -p build/release/openstore
+          cp build/dist/click/*.click build/release/openstore/
+          git rev-parse HEAD > build/release/openstore/source-commit.txt
+          cd build/release/openstore
+          sha256sum *.click > SHA256SUMS
+
+      - name: Preserve Click artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openstore-click
+          path: build/release/openstore/*
+          if-no-files-found: error
+
       - name: Publish to OpenStore
+        if: ${{ !inputs.build_only }}
         run: |
           set -euo pipefail
           click_file="$(ls -t build/dist/click/*.click | head -1)"
