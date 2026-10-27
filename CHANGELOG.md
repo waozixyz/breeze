@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.54] - 2026-10-27
+
+- Buy Dew through Google Play in the Google Play version.
+
 ## [2.1.53] - 2026-10-27
 
 - Top up Dew with Bitcoin, USDT and other coins through dew.waozi.xyz.
