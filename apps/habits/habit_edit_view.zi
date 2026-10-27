@@ -86,6 +86,7 @@ EDIT_QUESTION_GAP :: 10
 EDIT_GOAL_OPTIONS :: 6
 // Icon choices must not share IDs with the tracking controls at 7600–7800.
 EDIT_ICON_BUTTON_BASE :: 90000
+practice_scroll: s32;
 // A span goal's typed lengths follow the questions' goal fields.
 EDIT_SPAN_FIELD_CODE :: HABIT_QUESTION_MAX * 2
 
@@ -1707,7 +1708,7 @@ PracticePicker :: () {
     }
     frame := ModalFrame(edit.session, ModalFrameProps.{.key = KeyHash("habit/edit/practices"),
             .title = Locale("habit_link_practices"), .width = width,
-            .height = Scale(92 + edit.practice_count * 42)})
+            .height = Scale(160 + edit.practice_count * 42), .scale = edit.scale})
     if frame.dismissed {
         Ask(HABITS_EDIT_PRACTICES_DONE, -1)
         return
@@ -1719,23 +1720,39 @@ PracticePicker :: () {
     x := cast(s32)content.x
     y := cast(s32)content.y
     width = cast(s32)content.width
-    Label(Locale("habit_link_practices_hint"), x, y, width, Scale(28))
-    y += Scale(34)
-    for index: cast(s32)0..edit.practice_count - 1 {
-        practice := ReadHabitsEditPracticeHost(index)
-        checkbox := Checkbox(edit.session, CheckboxProps.{.id = 9120 + index,
-                .bounds = Bounds(x, y, width, Scale(38)), .label = practice.label,
-                .checked = (edit.sync_activity & practice.mask) != 0})
-        if checkbox.changed {
-            if checkbox.checked {
-                edit.sync_activity |= practice.mask
-            } else {
-                edit.sync_activity &= ~practice.mask
+    hint := Locale("habit_link_practices_hint")
+    hint_height := TextHeight(edit.session, TextProps.{.text = hint, .font = edit.font,
+            .bounds = Bounds(0, 0, width, 0), .wrap = cast(TextWrap)TextWrapAuto})
+    Label(hint, x, y, width, hint_height)
+    y += hint_height + Scale(8)
+    choices_height := cast(s32)(content.y + content.height) - y - Scale(52)
+    if choices_height < Scale(40) {
+        choices_height = Scale(40)
+    }
+    choices := Scroll(edit.session, ScrollProps.{.key = KeyHash("habit/edit/practice-list"),
+            .bounds = Bounds(x, y, width, choices_height), .scale = edit.scale,
+            .content_height = edit.practice_count * Scale(42), .scroll_offset = practice_scroll})
+    practice_scroll = choices.scroll_offset
+    if choices.opened {
+        y = cast(s32)choices.content.y
+        for index: cast(s32)0..edit.practice_count - 1 {
+            practice := ReadHabitsEditPracticeHost(index)
+            checkbox := Checkbox(edit.session, CheckboxProps.{.id = 9120 + index,
+                    .bounds = Bounds(x, y, cast(s32)choices.content.width, Scale(38)),
+                    .label = practice.label, .checked = (edit.sync_activity & practice.mask) != 0})
+            if checkbox.changed {
+                if checkbox.checked {
+                    edit.sync_activity |= practice.mask
+                } else {
+                    edit.sync_activity &= ~practice.mask
+                }
             }
+            y += Scale(42)
         }
-        y += Scale(42)
+        unused End(edit.session)
     }
     if Button(edit.session, ButtonProps.{
+            .id = 9160,
             .bounds = Rectangle.{cast(float32)x, content.y + content.height - cast(float32)Scale(44),
                 cast(float32)width, cast(float32)Scale(40)},
             .label = Locale("done_button"), .tone = cast(ButtonTone)ButtonToneAccent,
@@ -1755,6 +1772,7 @@ HabitsEditView :: (message: HabitsMessage) -> HabitsMessage {
     if edit.picking_practices {
         PracticePicker()
     } else {
+        practice_scroll = 0
         Form()
     }
     WriteHabitsEditHost(edit)
