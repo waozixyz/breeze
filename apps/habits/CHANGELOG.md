@@ -1,9 +1,5 @@
 # Changelog
 
-## [1.3.5] - 2026-10-26
-
-- Habits can be linked to Diary: a day you write in it is checked.
-
 ## [1.3.4] - 2026-10-26
 
 - Maintenance release for Inner Breeze 2.1.50.

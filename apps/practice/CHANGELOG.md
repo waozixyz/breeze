@@ -1,11 +1,5 @@
 # Changelog
 
-## [1.6.0] - 2026-10-26
-
-- The 7-Minute Workout shows the next exercise to get into position for and counts down in plain numbers, then Go, spoken as three, two, one, go.
-- Squats keep the arms straight out at shoulder height.
-- A practice's first session offers to make it a habit.
-
 ## [1.5.4] - 2026-10-26
 
 - Maintenance release for Inner Breeze 2.1.50.
