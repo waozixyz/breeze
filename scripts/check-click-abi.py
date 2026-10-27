@@ -17,6 +17,13 @@ def verify(package):
         manifest = json.loads((root / "DEBIAN/manifest").read_text())
         if manifest["framework"] != "ubuntu-sdk-20.04" or manifest["architecture"] != "arm64":
             raise ValueError("expected the ARM64 ubuntu-sdk-20.04 package")
+        policy_file = manifest["hooks"]["inbe"]["apparmor"]
+        policy = json.loads((root / policy_file).read_text())
+        if not {"audio", "networking"}.issubset(policy.get("policy_groups", [])):
+            raise ValueError("Ubuntu Touch audio and account sync require audio/networking policies")
+        for name in ("libEGL.so.1", "libGLESv2.so.2", "libGLdispatch.so.0"):
+            if (root / "usr/lib" / name).exists():
+                raise ValueError(f"{name}: use the framework's device graphics driver")
         checked = 0
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.is_symlink():
