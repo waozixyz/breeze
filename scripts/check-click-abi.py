@@ -24,6 +24,8 @@ def verify(package):
         for name in ("libEGL.so.1", "libGLESv2.so.2", "libGLdispatch.so.0"):
             if (root / "usr/lib" / name).exists():
                 raise ValueError(f"{name}: use the framework's device graphics driver")
+        if not (root / "usr/lib/libatomic.so.1").is_file():
+            raise ValueError("package must include the target compiler's libatomic runtime")
         checked = 0
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.is_symlink():
