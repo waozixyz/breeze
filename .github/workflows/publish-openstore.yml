@@ -31,9 +31,15 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-24.04
+    # The published focal channel must use Focal's ARM64 libc and libraries.
+    container: ubuntu:20.04
+    defaults:
+      run:
+        shell: bash
     timeout-minutes: 90
 
     env:
+      DEBIAN_FRONTEND: noninteractive
       OPENSTORE_API_KEY: ${{ secrets.OPENSTORE_API_KEY }}
       OPENSTORE_APP_ID: inbe
       OPENSTORE_CHANNEL: ${{ github.event.inputs.channel || 'focal' }}
@@ -45,6 +51,30 @@ jobs:
           CANDIDATE: ${{ inputs.revision || github.sha }}
         run: |
           [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] || { echo 'An exact commit is required'; exit 1; }
+
+      - name: Install the Focal build environment
+        run: |
+          set -euo pipefail
+          dpkg --add-architecture arm64
+          sed -i 's/^deb /deb [arch=amd64] /' /etc/apt/sources.list
+          printf 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal main universe\ndeb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-updates main universe\ndeb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports focal-security main universe\n' > /etc/apt/sources.list.d/ports-arm64.list
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential binutils-aarch64-linux-gnu ca-certificates ccache \
+            click curl gcc-aarch64-linux-gnu git git-lfs jq make patchelf \
+            pkg-config tcl xz-utils zlib1g-dev libbz2-1.0 libffi7 liblzma5 \
+            libsqlite3-0 libssl1.1 \
+            libdrm-dev:arm64 libegl1-mesa-dev:arm64 libgbm-dev:arm64 \
+            libgles2-mesa-dev:arm64 libsdl2-dev:arm64 libssl-dev:arm64 zlib1g-dev:arm64
+
+      - name: Set up build Python for Focal
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          # Last upstream Actions build that supports Ubuntu 20.04.
+          python-version: '3.12.10'
+
+      - name: Install current build tools
+        run: python3 -m pip install cmake==3.28.4 fonttools==4.58.5
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -61,40 +91,6 @@ jobs:
           set -euo pipefail
           python3 scripts/check-secrets.py --working-tree
           python3 scripts/check-secrets.py --history
-
-      - name: Install build dependencies
-        run: |
-          sudo dpkg --add-architecture arm64
-          # Ubuntu's archive/security mirrors only carry amd64/i386; arm64
-          # lives on ports.ubuntu.com. Pin the stock deb822 sources to amd64
-          # and add a ports source, otherwise apt-get update 404s on
-          # binary-arm64 and the install step fails.
-          sudo sed -i 's/^Types: deb$/Types: deb\nArchitectures: amd64 i386/' /etc/apt/sources.list.d/ubuntu.sources
-          printf 'Types: deb\nURIs: http://ports.ubuntu.com/ubuntu-ports\nSuites: noble noble-updates noble-backports noble-security\nComponents: main universe restricted multiverse\nArchitectures: arm64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' | sudo tee /etc/apt/sources.list.d/ports-arm64.sources >/dev/null
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential \
-            binutils-aarch64-linux-gnu \
-            ccache \
-            click \
-            cmake \
-            curl \
-            gcc-aarch64-linux-gnu \
-            jq \
-            make \
-            patchelf \
-            pkg-config \
-            python3-fonttools \
-            tcl \
-            zlib1g-dev \
-            libcurl4-openssl-dev:arm64 \
-            libdrm-dev:arm64 \
-            libegl-dev:arm64 \
-            libgbm-dev:arm64 \
-            libgles-dev:arm64 \
-            libsdl2-dev:arm64 \
-            libssl-dev:arm64 \
-            zlib1g-dev:arm64
 
       - name: Build Click package
         run: |
@@ -114,10 +110,9 @@ jobs:
           export AARCH64_RAY_CFLAGS="$AARCH64_RAY_SDL_CFLAGS $AARCH64_RAY_GL_CFLAGS"
           export AARCH64_RAY_LDLIBS="$AARCH64_RAY_SDL_LDLIBS $AARCH64_RAY_GL_LDLIBS"
           export AARCH64_RAY_SDL_INCLUDE_DIR=/usr/include/SDL2
-          export AARCH64_KRYON_CURL_CFLAGS="$(pkg-config --cflags libcurl)"
-          export AARCH64_KRYON_CURL_LDLIBS="$(pkg-config --libs libcurl)"
-          export AARCH64_CLICK_RUNTIME_LIBS="/usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0 /usr/lib/aarch64-linux-gnu/libcurl.so.4 /usr/lib/aarch64-linux-gnu/libssl.so.3 /usr/lib/aarch64-linux-gnu/libcrypto.so.3 /usr/lib/aarch64-linux-gnu/libdrm.so.2 /usr/lib/aarch64-linux-gnu/libgbm.so.1 /usr/lib/aarch64-linux-gnu/libEGL.so.1 /usr/lib/aarch64-linux-gnu/libGLESv2.so.2 /usr/lib/aarch64-linux-gnu/libz.so.1"
+          export AARCH64_CLICK_RUNTIME_LIBS="/usr/lib/aarch64-linux-gnu/libSDL2-2.0.so.0 /usr/lib/aarch64-linux-gnu/libssl.so.1.1 /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 /usr/lib/aarch64-linux-gnu/libdrm.so.2 /usr/lib/aarch64-linux-gnu/libgbm.so.1 /usr/lib/aarch64-linux-gnu/libEGL.so.1 /usr/lib/aarch64-linux-gnu/libGLESv2.so.2 /usr/lib/aarch64-linux-gnu/libz.so.1"
           make CLICK_ARCH=arm64 click
+          python3 scripts/check-click-abi.py build/dist/click/*.click
 
       - name: Show package contents
         run: |
