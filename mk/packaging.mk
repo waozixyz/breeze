@@ -98,7 +98,7 @@ $(CLICK_BIN): Makefile mk/packaging.mk $(APP_SRCS) $(CLICK_GEN_STAMP) $(SQLITE_S
 		$(CLICK_LIBOQS_A) \
 		$(AARCH64_RAY_LDLIBS) \
 		$(AARCH64_KRYON_CURL_LDLIBS) \
-		-lm -lpthread -ldl -lrt -latomic \
+		-lm -lpthread -ldl -lrt -latomic -lz \
 		$(LDFLAGS)
 	@if command -v patchelf >/dev/null; then \
 		patchelf --set-interpreter "$(CLICK_PATCHELF_INTERPRETER)" --set-rpath '$$ORIGIN/../lib' $@; \
