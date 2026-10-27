@@ -313,7 +313,12 @@ def check_download_library():
                 driver.press(key=reveal('Apfelwurm')['key'])
                 driver.wait(label='Download', role='button')
                 download()
-                # Its cover is the title: Apfelwurm asks once how to move, then plays.
+                # Recent Apfelwurm versions show their own title before the
+                # first movement choice. Older versions open that choice directly.
+                wait_for(lambda: driver.find(label='How do you want to move?', role='text', visible=True)
+                         or button('Play'), 'Apfelwurm did not reach its first start', timeout=60)
+                if button('Play'):
+                    driver.press(label='Play', role='button')
                 driver.wait(label='How do you want to move?', role='text', timeout=60)
                 driver.press(label='Swipe', role='button')
                 driver.wait(label='Pause', role='button')
