@@ -782,7 +782,8 @@ with contextlib.ExitStack() as stack:
                 wait_setting(profile, "package_updates_allowed", 0)
                 driver.wait_gone(label="Don't allow", role="button")
                 assert not driver.find(label="More apps"), "The old section heading remains"
-                for label in ("Lists", "Diary", "Leaderboard"):
+                assert not any(card["label"] == "Leaderboard" for card in cards()[1]), "Leaderboard still has its own app card"
+                for label in ("Lists", "Diary"):
                     card = next(node for node in cards()[1] if node["label"] == label)
                     assert corner(card, driver.tree())["label"] == "App options", f"{label} is not preinstalled"
                 # Practice is the third pinned card in the same grid as the rest.

@@ -34,6 +34,8 @@ account to sync across devices.
   changing your app. Offline commands work without an AI connection.
 - **Your apps:** arrange Apps as a list or grid, choose colours and icons,
   listen to ambient Radio, and explore Arcade games and achievements.
+- **Profile:** compare practice and game rankings with friends in Leaderboard.
+  Only installed apps, ranked practices and installed games appear there.
 
 ## A look inside
 

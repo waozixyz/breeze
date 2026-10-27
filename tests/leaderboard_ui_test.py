@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Leaderboard opens as its own unpinned app, offers every installed practice
-and ranks saved friend results."""
+"""Profile owns the leaderboard, offers installed ranked boards and preserves friend results."""
 import json
 import os
 from pathlib import Path
@@ -94,6 +93,20 @@ def choose(label):
     driver.wait_idle(frames=2, timeout=2)
 
 
+def open_leaderboard():
+    driver.press(label="Apps", role="button")
+    driver.wait(label="Pinned")
+    driver.press(focus_id=6792, role="button")
+    driver.wait(label="Change picture", role="button")
+    for _ in range(12):
+        if driver.find(label="Leaderboard", role="button", visible=True):
+            break
+        driver.pointer(WIDTH // 2, HEIGHT // 2, wheel=-3)
+        driver.wait_idle(frames=2, timeout=2)
+    driver.press(label="Leaderboard", role="button")
+    driver.wait(label="Leaderboard", role="text")
+
+
 def stop(process):
     if process.poll() is None:
         process.terminate()
@@ -151,11 +164,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
                     "apps_setup_done": 1, "app_used_leaderboard": 1, "main_tab": 5, "tutorial_seen": 1,
                     "habits_guide_seen": 1, "lumi_guides_seen": 127, "launcher_guide_seen": 1, "package_updates_allowed": 0,
                     "apps_last_update_check": 1900000000,
-                    # Pinned here, so the page has no "back to Apps" bar and
-                    # the controls keep fixed positions.
-                    "launcher_favorite_count": 4, "launcher_favorite_0": 12,
+                    # Profile remains a permanent control; Leaderboard has no app pin.
+                    "launcher_favorite_count": 3, "launcher_favorite_0": 12,
                     "launcher_favorite_1": 1, "launcher_favorite_2": 2,
-                    "launcher_favorite_3": LEADERBOARD_ROUTE,
                     # Astral Projection first in the saved Practice order.
                     "practice_order": 1503124}
         for key, value in settings.items():
@@ -196,6 +207,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
     shutil.copyfile(root / "build/practice-content/taichi.zx", packages / "practice-taichi.zx")
     app, window = launch(profile, "board")
     try:
+        open_leaderboard()
         # Only Wim Hof and Meditation are ranked, in Practice's order, side by side on phones.
         expected = [["Wim Hof Breathing", "Meditation"]]
         grid = practice_grid(expected)
@@ -227,6 +239,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
     shutil.copyfile(root / "build/practice-content/sunsalutation.zx", packages / "practice-sunsalutation.zx")
     app, window = launch(profile, "with-sun-salutation")
     try:
+        open_leaderboard()
         expected = [["Wim Hof Breathing", "Meditation"]]
         grid = practice_grid(expected)
         assert grid == expected, f"after download: {grid}"
@@ -252,5 +265,5 @@ with tempfile.TemporaryDirectory(prefix="inbe-about-") as directory:
     assert about.returncode == 0 and shot.exists(), stdout[-4000:] + stderr[-2000:]
     assert "out of bounds" not in stdout + stderr, stdout[-4000:]
 driver_directory.cleanup()
-print("Leaderboard: preinstalled and unpinned, only Wim Hof and Meditation ranked, saved ranks, average hold, "
+print("Leaderboard: shared Profile route, only Wim Hof and Meditation ranked, saved ranks, average hold, "
       "meditation time, only ranked apps offered, a downloaded practice staying unranked and About passed")

@@ -2,6 +2,8 @@
 // keys and specialized screens behind its native host services.
 Entity :: #import "entity/model";
 #import "entity/dew_model"
+#import "entity/leaderboard_model"
+#import, file "../screens/leaderboard_screen.zi";
 Provider :: #import "entity/native_management";
 #import "kryon/app_context_host"
 Portable :: #import "kryon/app_protocol";
@@ -51,6 +53,7 @@ entity_inner_breeze: bool;
 entity_reload_after_route: bool;
 entity_account_route: bool;
 entity_snapshot: string;
+entity_leaderboard_route: bool;
 
 InbeEntityRead :: (app: *InnerBreeze) -> string {
     Entity.EntityFree(entity_document)
@@ -138,7 +141,7 @@ EntityHostAllows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" ||
     name == "AppLocaleHost" || name == "ClipboardCopyHost" ||
     name == "AppServiceHost" || name == "entity.management" || name == "entity.text_height" ||
-    name == "entity.achievements" || name == "entity.activity" || (name == "entity.dew" && DewAvailable())
+    name == "entity.achievements" || name == "entity.activity" || name == LEADERBOARD_SERVICE || (name == "entity.dew" && DewAvailable())
 }
 
 // The node-confirmed Dew account and Inner Breeze's own summaries for the
@@ -245,6 +248,10 @@ EntityHostText :: (text: string) -> HostValue {
 }
 
 EntityHostLocale :: (key: string) -> string {
+    if key == "leaderboard_title" || key == "leaderboard_refresh_failed" || key == "profile_friends_title" ||
+    key == "profile_no_leaderboard_data" || key == "profile_updating_status" {
+        return LocaleText(key)
+    }
     if key == "achievements_title" || (key.count >= 12 && key[:12] == "achievement_") {
         return LocaleText(key)
     }
@@ -310,6 +317,10 @@ EntityHostCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     app := cast(*InnerBreeze)context
     name := TextFromCString(function)
+    if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == LEADERBOARD_SERVICE {
+        result.* = EntityHostText(InbeLeaderboardSnapshot(app, AppArgumentText(arguments[1])))
+        return 1
+    }
     if AchievementEntityCall(cast(*void)app, name, arguments, count, result) {
         return 1
     }
@@ -396,6 +407,11 @@ EntityHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
         unused AppContextRun(*entity_context, Portable.APP_COMMAND)
     }
     entity_account_route = account_route
+    if entity_leaderboard_route {
+        entity_context.command = "leaderboard"
+        unused AppContextRun(*entity_context, Portable.APP_COMMAND)
+        entity_leaderboard_route = false
+    }
     entity_context.session = app.ui.session
     entity_context.bounds = bounds
     entity_context.dark = app.dark_mode != 0
@@ -457,4 +473,10 @@ EntityHostReset :: () {
     entity_inner_breeze = false
     entity_account_route = false
     entity_reload_after_route = true
+    entity_leaderboard_route = false
+}
+
+#program_export
+EntityHostOpenLeaderboard :: () {
+    entity_leaderboard_route = true
 }

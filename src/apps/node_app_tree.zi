@@ -59,6 +59,8 @@ using HostValueKind;
 // its own instance and never overwrites a live slot or persists its handles.
 node_tree_hosts: [NodeAppSlots * 2]AppHost;
 node_tree_validating: bool;
+node_tree_profile_requested: bool;
+node_tree_profile_account: [65]u8;
 node_tree_widget_node: *AppNode;
 NodeTreeImage :: struct {
     path: string
@@ -164,7 +166,7 @@ NodeTreeAllows :: (context: *void, node: *AppNode, name: string) -> bool {
         return false
     }
     if name == "AppServiceHost" || name == "entity.records" || name == "entity.dew" || name == PublicationsService || name == "leaderboard" ||
-    name == "arcade.navigation" || name == "tile_map.sampling" { return true }
+    name == "arcade.navigation" || name == "entity.profile" || name == "tile_map.sampling" { return true }
     if name == "AppRecordHost" || name == "SaveAppRecordHost" || name == "AppLocaleHost" ||
     name == "SmoothFramesHost" || name == "ClipboardCopyHost" || name == "ReadStoreHost" ||
     name == "WriteStoreHost" || name == "AppNowHost" || name == "AppLocalOffsetHost" ||
@@ -193,6 +195,12 @@ NodeTreeCall :: (context: *void, node: *AppNode, module: *u8, function: *u8,
     }
     if name == "AppServiceHost" && count == 2 && HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "string", cast(s32)HostString) {
+        if AppArgumentText(arguments[0]) == "entity.profile" && AppArgumentText(arguments[1]) == "open" &&
+        !node_tree_validating && !node_snapshot_scanning {
+            node_tree_profile_requested = CopyCString(NodeTreeAccount(), node_tree_profile_account[:])
+            result.* = NodeAppString(ifx node_tree_profile_requested then "queued" else "unavailable")
+            return 1
+        }
         if AppArgumentText(arguments[0]) == "arcade.navigation" && AppArgumentText(arguments[1]) == "back" &&
         !node_tree_validating && !node_snapshot_scanning && runner.nested != null {
             // Queue the parent transition until the guest frame returns.
@@ -517,6 +525,13 @@ NodeTreeRuntime :: (slot: s32) -> *AppRuntime {
         return null
     }
     return AppHostActiveRuntime(node_runners[slot].nested)
+}
+
+// Consume only after the guest VM returns; Profile must never re-enter it.
+NodeTreeTakeProfile :: () -> bool {
+    requested := node_tree_profile_requested && TextUntilNul(node_tree_profile_account[:]) == NodeTreeAccount()
+    node_tree_profile_requested = false
+    return requested
 }
 
 NodeTreeRunMessage :: (slot: s32, message: Legacy.AppMessage) -> Legacy.AppMessage {
