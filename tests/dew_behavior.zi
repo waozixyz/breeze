@@ -1,4 +1,5 @@
 #import "entity/dew_model"
+#import "entity/dew_play"
 // Real account keys, authentication and persistence; only HTTP is synthetic.
 #import, file "../src/storage/dew.zi";
 #import, file "../src/storage/practice_unlocks.zi";
@@ -21,6 +22,7 @@
 #import, file "../src/storage/sync_state.zi";
 #import, file "../src/storage/storage_settings.zi";
 #import, file "../src/app/text_buffers.zi";
+#import, file "../src/platform/dew_payment.zi";
 
 owner: AccountKeys;
 response_status: s32 = 200;
@@ -40,6 +42,9 @@ gift_balance: s64;
 // Answers a gift as if for another request, which settles nothing.
 gift_reply_foreign: bool;
 last_gift_body: [256]u8;
+play_requests: s32;
+last_play_body: [512]u8;
+TestPlayPurchase :: "{\"ready\":true,\"package\":\"xyz.waozi.inbe\",\"error\":\"\",\"products\":[],\"purchases\":[{\"product\":\"dew_500\",\"token\":\"abcdefghijklmnop.Token-1_2\",\"order\":\"GPA.1\"}]}"
 TestFriend :: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 TestAddress :: "8aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
@@ -124,6 +129,12 @@ FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
         unlock_requests += 1
         check_true("unlocks are read with an authenticated GET", request.method == "GET" && request.body.count == 0)
         return AppCopyText("{\"unlocks\":[{\"product\":\"inbe.practice.taichi\",\"receipt_id\":\"r1\",\"created_at\":1}],\"products\":[{\"product\":\"inbe.practice.taichi\",\"price_units\":1000000,\"regular_price_units\":10000000,\"trial_until\":1807801200}]}", output)
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/tokens/purchases/google/verify" {
+        play_requests += 1
+        check_true("Google Play purchases are sent with an authenticated POST", request.method == "POST")
+        unused AppCopyText(request.body, last_play_body[:])
+        return AppCopyText("{\"credited\":true}", output)
     }
     if request.url == "https://api.waozi.xyz/api/v1/tokens/gifts" {
         gift_requests += 1
@@ -422,6 +433,32 @@ Check :: () -> s32 {
     Finish()
     check_true("a refused request is not repeated", dew_gift_notice == "dew_gift_failed" && dew_gift_attempt[0] == cast(u8)0)
     response_status = 200
+
+    // The Google Play edition sends each purchase Play lists to the node, and
+    // Play forgets it only once the node has credited its Dew.
+    check_true("other editions sell no Dew through Google Play", !dew_play.enabled && DewTopUpAvailable())
+    dew_play.enabled = true
+    check_true("the Play edition tops up once Google Play answers", !DewTopUpAvailable())
+    unused AppCopyText(TestPlayPurchase, dew_play.state[:])
+    response_status = 503
+    DewTick(false, 200.0)
+    check_true("a Google Play purchase goes to the node", dew_operation.active && dew_action == DewPlayCredit)
+    Finish()
+    check_int("one Google Play verify request", play_requests, 1)
+    check_true("the verify request names the package, pack and token", TextUntilNul(last_play_body[:]) ==
+        "{\"app_id\":\"entity\",\"package_name\":\"xyz.waozi.inbe\",\"product_id\":\"dew_500\",\"purchase_token\":\"abcdefghijklmnop.Token-1_2\"}")
+    check_true("an uncredited purchase stays with Play and waits", TextUntilNul(dew_play.status[:]) == "failed" &&
+        dew_play.wait > 0 && dew_play.state[0] == #char "{" && !dew_operation.active)
+    DewTick(false, 201.0)
+    check_true("the waiting purchase is not sent at once", !dew_operation.active && play_requests == 1)
+    response_status = 200
+    dew_play.wait = 1
+    DewTick(false, 202.0)
+    Finish()
+    check_int("the purchase is sent again", play_requests, 2)
+    check_true("a credited purchase is done", TextUntilNul(dew_play.status[:]) == "credited" &&
+        dew_play.state[0] == cast(u8)0 && !dew_operation.active)
+    dew_play = .{}
     storage_set_setting_text("sync_public_id", "another-account")
     DewContext()
     check_true("account change clears the old balance", !dew_account.known && dew_address[0] == cast(u8)0)

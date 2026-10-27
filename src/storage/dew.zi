@@ -2,6 +2,7 @@
 // payment confirmations and expiry; a device never grants itself credit.
 #import "auth"
 #import "entity/dew_model"
+#import "entity/dew_play"
 #import "json_scan"
 #import "text_buffer"
 #import "byte_text_linux"
@@ -15,6 +16,7 @@ Clock :: #import "date_time";
 #import, file "sync_nodes.zi";
 #import, file "sync_node_storage.zi";
 #import, file "../platform/network_transport.zi";
+#import, file "../platform/dew_payment.zi";
 #import, file "../app/text_buffers.zi";
 
 DewNow :: () -> s64 {
@@ -25,6 +27,7 @@ DewRead :: 1
 DewUpgrade :: 2
 DewAddress :: 3
 DewGift :: 4
+DewPlayCredit :: 5
 
 // Where a gift to a friend stands, for the window that sends it.
 DewGiftNone :: 0
@@ -156,7 +159,7 @@ DewBegin :: (action: s32, path: string, body: string) -> bool {
     dew_response = .{}
     dew_action = action
     method := "GET"
-    if action == DewUpgrade || action == DewGift {
+    if action == DewUpgrade || action == DewGift || action == DewPlayCredit {
         method = "POST"
     }
     if !BeginStoredRequest(*dew_operation, DewNode, NetworkTransport(*dew_transfer),
@@ -330,6 +333,8 @@ DewTick :: (visible: bool, now: float64) {
                 if !DewParseAddress(json) {
                     dew_notice = "profile_dew_error"
                 }
+            } else if dew_action == DewPlayCredit {
+                refresh_soon = DewPlayVerified(*dew_play, true, dew_operation.request.status, json)
             } else {
                 received: DewAccount
                 if DewParseAccount(json, TextUntilNul(dew_identity[:]), *received) {
@@ -358,6 +363,9 @@ DewTick :: (visible: bool, now: float64) {
                     dew_notice = "profile_dew_error"
                 }
             }
+        } else if dew_action == DewPlayCredit {
+            refresh_soon = DewPlayVerified(*dew_play, false, dew_operation.request.status,
+                TextUntilNul(dew_response[:]))
         } else if dew_action == DewGift {
             status := dew_operation.request.status
             if status == 402 {
@@ -393,6 +401,15 @@ DewTick :: (visible: bool, now: float64) {
         attempt := dew_gift_attempt
         unused DewBegin(DewGift, "/api/v1/tokens/gifts", TextUntilNul(attempt[:]))
         dew_gift_retry_at = now + 15.0
+        return
+    }
+    // A Google Play purchase goes to the node next; Play keeps it until the
+    // node has credited its Dew.
+    if DewPlayTick(*dew_play, DewReady() && !dew_operation.active) {
+        if !DewBegin(DewPlayCredit, DEW_PLAY_VERIFY_PATH, TextUntilNul(dew_play.body[:])) {
+            // Offline: the purchase waits and goes again later.
+            unused DewPlayVerified(*dew_play, false, 0, "")
+        }
         return
     }
     // One read soon after launch keeps the balance current before Profile

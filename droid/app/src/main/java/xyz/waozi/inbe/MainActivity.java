@@ -1079,18 +1079,6 @@ public class MainActivity extends NativeActivity {
         PushBridge.disable(this);
     }
 
-    public String paymentChannel() {
-        return PaymentBridge.channel();
-    }
-
-    public boolean dewAvailable() {
-        return !BuildConfig.GPLAY;
-    }
-
-    public void purchaseTokens(final String productId, final String accountId, final String authToken) {
-        PaymentBridge.purchaseTokens(this, productId, accountId, authToken);
-    }
-
     private RadioPlayer radioPlayer;
     private volatile boolean radioBackgroundActive;
     private volatile boolean sessionWakeLockRequested;

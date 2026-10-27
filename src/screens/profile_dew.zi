@@ -19,6 +19,8 @@
 #import "segmented_control_widget"
 #import "layout"
 #import "tree"
+#import "kryon/play_billing"
+#import "entity/dew_play"
 #import, file "../storage/dew.zi";
 #import, file "../storage/sync_async.zi";
 #import, file "../storage/sync_node_storage.zi";
@@ -169,7 +171,8 @@ ProfileDewContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32,
         unused AppCopyText("—", value[:])
     }
     busy := dew_operation.active
-    // Top-ups belong to the balance they fill; the Play build sells no Dew.
+    // Top-ups belong to the balance they fill; the Google Play edition
+    // shows its button once Google Play answers.
     if dew_account.known && DewReady() && DewTopUpAvailable() {
         label := LocaleText("profile_dew_topup")
         button_w := AppTextWidth(label, AppFontSize()) + AppScale(32)
@@ -494,11 +497,76 @@ ProfileTopUpAddressText :: (output: []u8) {
     }
 }
 
+// What the Google Play window says under its Dew packs, or "".
+ProfileTopUpPlayNotice :: (billing: *PlayBillingState, shown: s32) -> string {
+    status := TextUntilNul(dew_play.status[:])
+    if status == "verifying" {
+        return LocaleText("profile_dew_play_verifying")
+    }
+    if status == "credited" {
+        return LocaleText("profile_dew_play_credited")
+    }
+    if status == "failed" {
+        return LocaleText("profile_dew_play_failed")
+    }
+    if shown > 0 {
+        return ""
+    }
+    error := TextUntilNul(billing.error[:])
+    if error != "" && error != "cancelled" {
+        return LocaleText("profile_dew_play_unavailable")
+    }
+    return LocaleText("profile_dew_play_loading")
+}
+
+// The Google Play edition sells Dew packs at Google Play's price in the
+// buyer's currency. Play's own sheet takes the payment, and the Dew arrives
+// once the node has credited the purchase (entity/dew_play).
+ProfileTopUpPlayContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bool) {
+    billing: PlayBillingState
+    unused PlayBillingRead(TextUntilNul(dew_play.state[:]), *billing)
+    busy := dew_operation.active || TextUntilNul(dew_play.status[:]) == "verifying"
+    packs: [4]string = .["dew_100", "dew_500", "dew_1000", "dew_5000"]
+    shown: s32 = 0
+    for pack: packs {
+        product: *PlayBillingProduct = null
+        for index: cast(s32)0..7 {
+            if index >= billing.product_count {
+                break
+            }
+            candidate := *billing.products[index]
+            if TextUntilNul(candidate.id[:]) == pack {
+                product = candidate
+            }
+        }
+        if product == null {
+            continue
+        }
+        label: [96]u8
+        arguments: [1]FormatArg = .[FormatArg.{.text = pack[4:], .is_text = true}]
+        unused FormatTemplate(LocaleText("profile_dew_play_pack"), arguments[:], label[:])
+        price := TextUntilNul(product.price[:])
+        if ProfileDewButton(app, TextUntilNul(label[:]), x, y, width, busy, draw, price) {
+            unused DewPlayBuy(*dew_play, pack)
+        }
+        shown += 1
+    }
+    notice := ProfileTopUpPlayNotice(*billing, shown)
+    if notice != "" {
+        ProfileDewText(app, notice, x, y, width, AppSmallFontSize(), draw)
+    }
+}
+
 // Topping up is the one place Dew shows its money value: the balance's
-// worth and the node's exchange rate.
+// worth and the node's exchange rate, or Google Play's prices.
 ProfileTopUpContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bool) {
     line: [384]u8
     ProfileDewFormatDew(dew_account.balance, LocaleText("profile_dew_balance_line"), line[:])
+    if dew_play.enabled {
+        ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
+        ProfileTopUpPlayContent(app, x, y, width, draw)
+        return
+    }
     DewAppendWorth(dew_account.balance, line[:])
     ProfileDewText(app, TextUntilNul(line[:]), x, y, width, AppSmallFontSize(), draw)
     if ProfileDewExchangeText(line[:]) {
@@ -590,8 +658,12 @@ ProfileTopUpContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw: bo
 }
 
 ProfileTopUpModalDraw :: (app: *InnerBreeze) {
-    ProfileTopUpPump()
-    DewRatesRefresh()
+    // Monero needs this account's address and the node's rates; Google Play
+    // has its own prices.
+    if !dew_play.enabled {
+        ProfileTopUpPump()
+        DewRatesRefresh()
+    }
     width := app.ui.view_width - AppScale(32)
     if width > AppScale(480) {
         width = AppScale(480)

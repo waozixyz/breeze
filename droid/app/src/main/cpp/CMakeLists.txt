@@ -98,6 +98,12 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     list(APPEND APP_ZIRAN_DEFINES --define ANDROID_DEBUG)
     string(APPEND APP_ZIRAN_CHECK_DEFINES " ANDROID_DEBUG")
 endif()
+# The Google Play edition (build.gradle's gplay type) buys Dew through Play
+# Billing (entity/dew_play).
+if(APP_EDITION STREQUAL "gplay")
+    list(APPEND APP_ZIRAN_DEFINES --define GOOGLE_PLAY)
+    string(APPEND APP_ZIRAN_CHECK_DEFINES " GOOGLE_PLAY")
+endif()
 if(ANDROID_ABI STREQUAL "arm64-v8a")
     set(APP_ZIRAN_ARCH __aarch64__)
 elseif(ANDROID_ABI STREQUAL "armeabi-v7a")

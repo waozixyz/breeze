@@ -22,6 +22,8 @@ if (verificationInstance && gradle.startParameter.taskNames.any {
 }
 def buildingAndroidBundle = gradle.startParameter.taskNames.any { it.toLowerCase().contains("bundle") }
 def kryonDirOverride = (project.findProperty('kryon.dir') ?: System.getenv("KRYON_DIR") ?: '').toString()
+// The same Kryon checkout CMake builds with; a relative path starts at the repository.
+def kryonDir = rootProject.file('..').toPath().resolve(kryonDirOverride ?: 'build/packages/kryon').toFile()
 
 android {
     useLibrary 'android.test.runner', false
@@ -106,6 +108,12 @@ android {
             initWith release
             signingConfig releaseSigning
             matchingFallbacks = ['release']
+            // Native code sees GOOGLE_PLAY and sells Dew through Play Billing.
+            externalNativeBuild {
+                cmake {
+                    arguments '-DAPP_EDITION=gplay'
+                }
+            }
             buildConfigField "boolean", "GPLAY", "true"
             buildConfigField "boolean", "SELF_UPDATE", "false"
             buildConfigField "String", "UPDATE_FEED", '""'
@@ -142,6 +150,10 @@ android {
             }
         }
     }
+
+    // Kryon's Play Billing (kryon/play_billing finds it through the
+    // activity's class loader); other editions carry no Google billing.
+    sourceSets.gplay.java.srcDir new File(kryonDir, 'templates/droid/droid/app/src/gplay/java')
 
     dependenciesInfo {
         includeInApk = false
@@ -267,6 +279,10 @@ dependencies {
     implementation 'com.google.zxing:core:3.3.0'
     gplayImplementation platform('com.google.firebase:firebase-bom:34.18.0')
     gplayImplementation 'com.google.firebase:firebase-messaging'
+    gplayImplementation 'com.android.billingclient:billing:9.1.0'
+    // Billing's AndroidX libraries mix Kotlin 1.6 and 1.8 standard
+    // libraries; one Kotlin version keeps their classes from colliding.
+    gplayImplementation platform('org.jetbrains.kotlin:kotlin-bom:1.8.22')
     // Play services still request Fragment 1.1.0, which Google Play reports
     // as an outdated SDK; resolve it to a current release instead.
     constraints {
