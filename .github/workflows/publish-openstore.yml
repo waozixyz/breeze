@@ -61,7 +61,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             build-essential binutils-aarch64-linux-gnu ca-certificates ccache \
             click curl gcc-aarch64-linux-gnu git git-lfs jq make patchelf \
-            pkg-config tcl xz-utils zlib1g-dev libbz2-1.0 libffi7 liblzma5 \
+            perl pkg-config tcl xz-utils zlib1g-dev libbz2-1.0 libffi7 liblzma5 \
             libsqlite3-0 libssl-dev \
             libdrm-dev:arm64 libegl1-mesa-dev:arm64 libgbm-dev:arm64 \
             libgles2-mesa-dev:arm64 libsdl2-dev:arm64 libssl-dev:arm64 zlib1g-dev:arm64
@@ -77,6 +77,26 @@ jobs:
           # The project uses GNU Make 4.3+ function/comment parsing.
           python3 -m pip install cmake==3.28.4 fonttools==4.58.5 gnumake==4.4.1
           make --version
+
+      - name: Build Focal TLS libraries
+        run: |
+          set -euo pipefail
+          # The locked Curl requires OpenSSL 3. Build its current LTS for
+          # Focal instead of importing a newer distribution's libc.
+          tls_source="$RUNNER_TEMP/inbe-openssl"
+          mkdir -p "$tls_source"
+          curl --fail --location --retry 3 \
+            https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz \
+            --output "$tls_source/source.tar.gz"
+          printf '%s  %s\n' \
+            603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a \
+            "$tls_source/source.tar.gz" | sha256sum --check -
+          tar -xzf "$tls_source/source.tar.gz" -C "$tls_source"
+          cd "$tls_source/openssl-3.5.9"
+          ./Configure linux-aarch64 --cross-compile-prefix=aarch64-linux-gnu- \
+            --prefix=/opt/inbe-openssl --libdir=lib --openssldir=/etc/ssl shared no-tests
+          make -j2 build_sw
+          make install_sw
 
       - name: Checkout
         uses: actions/checkout@v4
@@ -106,7 +126,18 @@ jobs:
           export AARCH64_CC="$(command -v aarch64-linux-gnu-gcc)"
           export AARCH64_AR="$(command -v aarch64-linux-gnu-ar)"
           export AARCH64_RANLIB="$(command -v aarch64-linux-gnu-ranlib)"
-          export AARCH64_PKG_CONFIG_PATH=/opt/sdl/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          export OPENSSL_ROOT_DIR=/opt/inbe-openssl
+          # Cross builds cannot autodetect the device's CA store.
+          export CMAKE_TOOLCHAIN_FILE="$RUNNER_TEMP/inbe-focal-arm64.cmake"
+          cat > "$CMAKE_TOOLCHAIN_FILE" <<'CMAKE'
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR aarch64)
+          set(CMAKE_C_COMPILER /usr/bin/aarch64-linux-gnu-gcc)
+          set(OPENSSL_ROOT_DIR /opt/inbe-openssl CACHE PATH "Focal-built TLS")
+          set(CURL_CA_BUNDLE /etc/ssl/certs/ca-certificates.crt CACHE FILEPATH "Device CA bundle")
+          set(CURL_CA_PATH /etc/ssl/certs CACHE PATH "Device CA directory")
+          CMAKE
+          export AARCH64_PKG_CONFIG_PATH=/opt/inbe-openssl/lib/pkgconfig:/opt/sdl/lib/pkgconfig:/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
           export PKG_CONFIG_LIBDIR="$AARCH64_PKG_CONFIG_PATH"
           export AARCH64_RAY_SDL_CFLAGS="$(pkg-config --cflags sdl2)"
           export AARCH64_RAY_SDL_LDLIBS="$(pkg-config --libs sdl2)"
@@ -117,12 +148,12 @@ jobs:
           export AARCH64_RAY_SDL_INCLUDE_DIR="$(pkg-config --variable=includedir sdl2)/SDL2"
           click_curl_dir="$PWD/vendor-builds/click/arm64/curl"
           export AARCH64_KRYON_CURL_CFLAGS="-DCURL_STATICLIB -I$click_curl_dir/include"
-          export AARCH64_KRYON_CURL_LDLIBS="$click_curl_dir/lib/libcurl.a -lssl -lcrypto -lz -lpthread"
-          export AARCH64_CLICK_RUNTIME_LIBS="$(pkg-config --variable=libdir sdl2)/libSDL2-2.0.so.0 /usr/lib/aarch64-linux-gnu/libssl.so.1.1 /usr/lib/aarch64-linux-gnu/libcrypto.so.1.1 /usr/lib/aarch64-linux-gnu/libdrm.so.2 /usr/lib/aarch64-linux-gnu/libgbm.so.1 /usr/lib/aarch64-linux-gnu/libEGL.so.1 /usr/lib/aarch64-linux-gnu/libGLESv2.so.2 /usr/lib/aarch64-linux-gnu/libz.so.1"
+          export AARCH64_KRYON_CURL_LDLIBS="$click_curl_dir/lib/libcurl.a -L/opt/inbe-openssl/lib -lssl -lcrypto -lz -lpthread"
+          export AARCH64_CLICK_RUNTIME_LIBS="$(pkg-config --variable=libdir sdl2)/libSDL2-2.0.so.0 /opt/inbe-openssl/lib/libssl.so.3 /opt/inbe-openssl/lib/libcrypto.so.3 /usr/lib/aarch64-linux-gnu/libdrm.so.2 /usr/lib/aarch64-linux-gnu/libgbm.so.1 /usr/lib/aarch64-linux-gnu/libEGL.so.1 /usr/lib/aarch64-linux-gnu/libGLESv2.so.2 /usr/lib/aarch64-linux-gnu/libz.so.1"
           # Make otherwise prefers the SDK's older /usr/bin/cmake.
           export CMAKE="$(python3 -c 'import cmake; print(cmake.CMAKE_BIN_DIR + "/cmake")')"
           "$CMAKE" --version
-          make CMAKE="$CMAKE" CLICK_ARCH=arm64 click
+          make CMAKE="$CMAKE" LDFLAGS="-Wl,--gc-sections -s -L/opt/inbe-openssl/lib" CLICK_ARCH=arm64 click
           python3 scripts/check-click-abi.py build/dist/click/*.click
 
       - name: Show package contents
