@@ -279,7 +279,8 @@ def fixed_release_commit(base, version, details):
             output = ROOT / "build/release-candidate.json"
             output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(json.dumps(dict(version=version, source_commit=base,
-                                             release_commit=release, master_commit=target), indent=2) + "\n")
+                                             release_commit=release, master_commit=target,
+                                             release_ref=f"refs/heads/release-candidates/{version}"), indent=2) + "\n")
             return release
     raise Refused("master advanced repeatedly; the immutable release object is saved and no peer work was changed")
 
@@ -320,6 +321,8 @@ def release_fixed(args):
     release = fixed_release_commit(revision, version, details)
     gate.validate(ROOT, version, release)
     print("Fixed release commit prepared; master and peer working files are preserved. Nothing was pushed.")
+    print(f"Before dispatching Release, publish its immutable candidate reference: "
+          f"git push origin {release}:refs/heads/release-candidates/{version}")
     return 0
 
 

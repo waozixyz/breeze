@@ -964,6 +964,16 @@ A release names one fixed commit while peers keep working on master:
    Subsequent master commits cannot cancel its release. Only the workflow
    creates the release tag after all required gates pass.
 
+For a fixed release, publish the `release_commit` from
+`build/release-candidate.json` at its `release_ref` before dispatching the
+workflow: `git push origin RELEASE_COMMIT:refs/heads/release-candidates/X.Y.Z`.
+Keep that reference on the tested commit; do not move an existing candidate
+to different content. The checkout stays on master. GitHub requires a branch
+head or tag reference when its release token targets an older commit with
+different workflow files, so the candidate reference lets the workflow publish
+that exact tested snapshot with its existing permissions. It does not create
+a release tag or grant new credentials.
+
 When an earlier Release run already passed every test, platform and
 F-Droid reproducibility job for the source, supply its run ID as `reuse_run`.
 The identical source must also pass CI, including browser add-on smoke tests.
