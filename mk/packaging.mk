@@ -23,6 +23,30 @@ GENERATED_CLICK_C = $(shell find $(CLICK_GEN_DIR) -type f -name '*.c' 2>/dev/nul
 CLICK_APP_INCLUDE = $(filter-out -iquote$(KRY_GEN_DIR)%,$(APP_INCLUDE)) \
 	-iquote$(CLICK_GEN_DIR) \
 	$(foreach dir,$(sort $(dir $(ZI_SRCS))),-iquote$(CLICK_GEN_DIR)/$(dir))
+CLICK_CURL_BUILD_DIR := $(VENDOR_BUILD_DIR)/click/$(CLICK_ARCH)/curl
+CLICK_CURL_A := $(CLICK_CURL_BUILD_DIR)/lib/libcurl.a
+
+# Focal's system curl predates WebSocket support. Build the locked curl for
+# the same target as the app rather than borrowing a newer distribution's ABI.
+$(CLICK_CURL_A): $(KRYON_CURL_DIR)/CMakeLists.txt mk/packaging.mk
+	$(CMAKE) -S $(KRYON_CURL_DIR) -B $(CLICK_CURL_BUILD_DIR) \
+		-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+		-DCMAKE_C_COMPILER=$(AARCH64_CC) \
+		-DCMAKE_AR=$(AARCH64_AR) -DCMAKE_RANLIB=$(AARCH64_RANLIB) \
+		-DCMAKE_BUILD_TYPE=MinSizeRel \
+		-DCMAKE_INSTALL_PREFIX=$(abspath $(CLICK_CURL_BUILD_DIR)) \
+		-DCMAKE_INSTALL_LIBDIR=lib \
+		-DBUILD_CURL_EXE=OFF -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON \
+		-DCURL_USE_OPENSSL=ON -DCURL_USE_LIBPSL=OFF -DCURL_USE_LIBSSH2=OFF \
+		-DCURL_USE_GSSAPI=OFF -DUSE_NGHTTP2=OFF -DUSE_LIBIDN2=OFF \
+		-DCURL_DISABLE_LDAP=ON -DCURL_DISABLE_LDAPS=ON -DCURL_DISABLE_SMB=ON \
+		-DENABLE_CURL_MANUAL=OFF -DBUILD_EXAMPLES=OFF \
+		-DBUILD_LIBCURL_DOCS=OFF -DBUILD_MISC_DOCS=OFF -DBUILD_TESTING=OFF \
+		$(KRYON_CURL_EXTRA_CMAKE_FLAGS)
+	$(CMAKE) --build $(CLICK_CURL_BUILD_DIR) --target libcurl_static --parallel 2
+	$(CMAKE) --install $(CLICK_CURL_BUILD_DIR)
+	@sh $(CLICK_CURL_BUILD_DIR)/bin/curl-config --protocols | grep -Eq '(^|[[:space:]])WS([[:space:]]|$$)'
+	@sh $(CLICK_CURL_BUILD_DIR)/bin/curl-config --protocols | grep -Eq '(^|[[:space:]])WSS([[:space:]]|$$)'
 
 $(CLICK_GEN_STAMP): Makefile mk/packaging.mk ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(CLICK_GEN_DIR)
@@ -78,8 +102,9 @@ $(CLICK_LIBOQS_A): $(LIBOQS_DIR)/CMakeLists.txt mk/sync.mk Makefile
 		-DOQS_MINIMAL_BUILD="$(KRYON_LIBOQS_MINIMAL_BUILD)"
 	$(CMAKE) --build $(CLICK_LIBOQS_BUILD_DIR) --target oqs
 
-$(CLICK_BIN): Makefile mk/packaging.mk $(APP_SRCS) $(CLICK_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(CLICK_RAYLIB_A) $(CLICK_LIBOQS_A) | $(CLICK_BIN_DIR)
+$(CLICK_BIN): Makefile mk/packaging.mk $(APP_SRCS) $(CLICK_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(CLICK_RAYLIB_A) $(CLICK_LIBOQS_A) $(CLICK_CURL_A) | $(CLICK_BIN_DIR)
 	$(AARCH64_CC) $(CLICK_CFLAGS) \
+		-DCURL_STATICLIB -I$(CLICK_CURL_BUILD_DIR)/include \
 		$(CLICK_APP_INCLUDE) \
 		$(KRYON_INCLUDE) \
 		$(SQLITE_INCLUDE) \
@@ -97,7 +122,7 @@ $(CLICK_BIN): Makefile mk/packaging.mk $(APP_SRCS) $(CLICK_GEN_STAMP) $(SQLITE_S
 		$(CLICK_RAYLIB_A) \
 		$(CLICK_LIBOQS_A) \
 		$(AARCH64_RAY_LDLIBS) \
-		$(AARCH64_KRYON_CURL_LDLIBS) \
+		$(CLICK_CURL_A) -lssl -lcrypto \
 		-lm -lpthread -ldl -lrt -latomic -lz \
 		$(LDFLAGS)
 	@if command -v patchelf >/dev/null; then \
