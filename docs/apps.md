@@ -79,7 +79,9 @@ allows; Done, Skip, Delete and Cancel go through the host's entry rules.
 The editor reads the habit being edited (`ReadHabitsEditHost`), each of its
 questions and each practice or app it may link, keeps what is typed and gives the
 draft back; the host validates and saves it with the same habit rules as
-before. A link is one bit of the habit's `sync_activity`
+before. The eight writing icons added in host interface 38 keep stable numbers
+77–84; Habits packages offering these choices require that host so the editor
+preserves them when saving. A link is one bit of the habit's `sync_activity`
 (`src/habits/habit_links.zi`): a practice checks the day of a saved session,
 and Diary checks a day with a real entry (`DiaryStoreSave` reports it, and
 linking a habit brings its earlier entry days along). Another app links by

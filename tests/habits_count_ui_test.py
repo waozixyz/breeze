@@ -172,6 +172,14 @@ for width in (411, 1100):
     with scene("habits_overview", width) as (driver, database):
         driver.press(label="+ New Habit", role="button")
         driver.wait(label="Create habit", role="button")
+        # Expanding the icon grid must not steal the Link to button's input.
+        driver.press(key=7559)
+        reveal(driver, width, contains="Link", role="button")
+        driver.press(contains="Link", role="button")
+        driver.wait(key=9120)
+        driver.press(label="Diary", role="checkbox")
+        driver.press(label="Done", role="button")
+        driver.wait_gone(key=9120)
         # Change tracking before entering a name, through the ordinary New
         # Habit action rather than a scene that opens the editor directly.
         for difficulty in ("Easy", "Medium", "Hard", "Very hard"):
@@ -203,9 +211,17 @@ for width in (411, 1100):
         reveal(driver, width, key=7710)
         driver.press(key=7710)
         wait_selected(driver, False, key=7710)
-        reveal(driver, width, key=7562)
-        driver.press(key=7562)
-        wait_selected(driver, True, key=7562)
+        reveal(driver, width, key=90002)
+        driver.press(key=90002)
+        wait_selected(driver, True, key=90002)
+        # New writing symbols are selectable even at the end of the grid.
+        for icon in range(77, 85):
+            reveal(driver, width, key=90000 + icon)
+            driver.press(key=90000 + icon)
+            wait_selected(driver, True, key=90000 + icon)
+        reveal(driver, width, key=90077)
+        driver.press(key=90077)
+        wait_selected(driver, True, key=90077)
         reveal(driver, width, key=7531)
         driver.press(key=7531)
         wait_selected(driver, True, key=7531)
@@ -241,7 +257,7 @@ for width in (411, 1100):
         expect(sql(database, "SELECT description||':'||icon||':'||weekdays||':'||"
                    "(sync_activity!=0)||':'||json_extract(questions,'$[0].text') FROM habits "
                    "WHERE name='" + name + "' AND deleted_at=0"),
-               "Set every option before creating:2:126:1:How did it go?",
+               "Set every option before creating:77:126:1:How did it go?",
                "new habit keeps details, schedule, practices and questions")
     print("PASS new-habit details, schedule, difficulty, coins, counter, span, "
           f"practices and questions at {width}px")

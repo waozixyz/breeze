@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.51] - 2026-10-27
+
+- Open Link to reliably while choosing a new habit's icon.
+- Choose diary, notebook, pen, pencil, writing, notes, keyboard and idea icons for habits and rewards.
+- Link habits to Diary entries and add a linked habit after a practice's first session.
+- Get a short count-in before each workout exercise.
+
 ## [2.1.50] - 2026-10-26
 
 - Habits award coins when you record a recent day before you created the habit.

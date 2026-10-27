@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.6] - 2026-10-27
+
+- Open Link to reliably with the expanded icon picker.
+- Choose eight more diary and writing symbols for habits and rewards.
+- Link habits to Diary entries.
+- Requires Breeze 2.1.51 or later.
+
 ## [1.3.4] - 2026-10-26
 
 - Maintenance release for Inner Breeze 2.1.50.

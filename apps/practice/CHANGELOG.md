@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.6.0] - 2026-10-27
+
+- Offer a linked habit after the first saved session of a practice.
+- Give each workout exercise a short count-in.
+
 ## [1.5.4] - 2026-10-26
 
 - Maintenance release for Inner Breeze 2.1.50.
