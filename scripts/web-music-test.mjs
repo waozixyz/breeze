@@ -103,7 +103,10 @@ export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, c
     await settle();
     const scrollableAction = action === 0 || action === 1 || (action >= 2 && action <= 5) || action === 8;
     let point;
-    for (let attempt = 0; attempt < 4; attempt++) {
+    // The last attempt never scrolls: a click must use a position read after
+    // the list's last move. Apps the node offers can lengthen the list.
+    const attempts = 6;
+    for (let attempt = 0; attempt < attempts; attempt++) {
       // Entering Audio can suspend the first draw while cue files decode.
       // Wait for that draw and its actual control before choosing a position.
       const deadline = Date.now() + 10000;
@@ -136,7 +139,7 @@ export async function verifyMusicAcrossTabs({ evaluate, click, scroll, resize, c
         await delay(600);
         continue;
       }
-      if (point.rawX < 0 || point.rawY < 0 ||
+      if (point.rawX < 0 || point.rawY < 0 || attempt === attempts - 1 ||
           (!scrollableAction || point.y <= point.bottom * 0.75)) break;
       await scroll(point.x, point.bottom * 0.6, point.y - point.bottom * 0.65 + 100);
       await delay(600);
