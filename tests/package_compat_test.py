@@ -17,6 +17,7 @@ the computer and restarted to check the saved game.
 """
 import argparse
 import hashlib
+import http.client
 import json
 import os
 from pathlib import Path
@@ -73,7 +74,7 @@ def fetch(url, limit):
             temporary_dns = isinstance(reason, socket.gaierror) and reason.errno == socket.EAI_AGAIN
             if not (temporary_dns or isinstance(reason, (TimeoutError, ConnectionError))) or attempt == 3:
                 raise
-        except (TimeoutError, ConnectionError):
+        except (TimeoutError, ConnectionError, http.client.IncompleteRead):
             if attempt == 3:
                 raise
         destination = urllib.parse.urlsplit(url)

@@ -1,14 +1,38 @@
 """Compatibility downloads tolerate transport outages without hiding bad data."""
 import io
+import http.client
 import socket
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import urllib.error
 
 from package_compat_test import fetch
 
 
 class FetchTest(unittest.TestCase):
+    def test_interrupted_body_is_discarded_and_download_restarts(self):
+        interrupted = MagicMock()
+        interrupted.__enter__.return_value.read.side_effect = http.client.IncompleteRead(b"partial")
+        with (
+            patch("package_compat_test.urllib.request.urlopen",
+                  side_effect=[interrupted, io.BytesIO(b"package")]) as request,
+            patch("package_compat_test.time.sleep"),
+        ):
+            self.assertEqual(fetch("https://api.waozi.xyz/package.zx", 7), b"package")
+            self.assertEqual(request.call_count, 2)
+            interrupted.__exit__.assert_called_once()
+
+    def test_repeated_interrupted_bodies_remain_a_failure(self):
+        interrupted = MagicMock()
+        interrupted.__enter__.return_value.read.side_effect = http.client.IncompleteRead(b"partial")
+        with (
+            patch("package_compat_test.urllib.request.urlopen", return_value=interrupted) as request,
+            patch("package_compat_test.time.sleep"),
+        ):
+            with self.assertRaises(http.client.IncompleteRead):
+                fetch("https://api.waozi.xyz/package.zx", 7)
+            self.assertEqual(request.call_count, 4)
+
     def test_temporary_dns_recovers_and_payload_is_returned(self):
         outage = urllib.error.URLError(socket.gaierror(socket.EAI_AGAIN, "temporary DNS outage"))
         with (
