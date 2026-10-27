@@ -19,17 +19,82 @@ on:
         description: OpenStore channel
         required: false
         default: focal
-  release:
-    types: [published]
-  push:
-    tags:
-      - "v*"
+  # Release-created tags/events do not start another workflow with GITHUB_TOKEN.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+    branches: [master]
 
 permissions:
   contents: read
 
+concurrency:
+  group: openstore-${{ inputs.channel || 'focal' }}
+  cancel-in-progress: false
+
 jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    outputs:
+      revision: ${{ steps.select.outputs.revision }}
+      run: ${{ steps.select.outputs.run }}
+    steps:
+      - name: Select the immutable release source
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_REVISION: ${{ inputs.revision || github.sha }}
+          OPENSTORE_CHANNEL: ${{ inputs.channel || 'focal' }}
+        run: |
+          python3 - <<'PY'
+          import datetime
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import subprocess
+
+          def api(path):
+              return json.loads(subprocess.check_output(["gh", "api", path]))
+
+          def timestamp(value):
+              return datetime.datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+          def finish(revision=""):
+              with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+                  output.write(f"revision={revision}\nrun={'true' if revision else 'false'}\n")
+              raise SystemExit(0)
+
+          revision = os.environ["REQUESTED_REVISION"]
+          if os.environ["GITHUB_EVENT_NAME"] == "workflow_run":
+              event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
+              repo = os.environ["GITHUB_REPOSITORY"]
+              release = api(f"repos/{repo}/releases/latest")
+              if release["draft"] or release["prerelease"] or timestamp(release["published_at"]) < timestamp(event["workflow_run"]["created_at"]):
+                  print("This run did not publish a new stable release; no OpenStore update.")
+                  finish()
+              match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", release["tag_name"])
+              assert match, "Expected a numeric published release"
+              version = tuple(map(int, match.groups()))
+              store = json.loads(subprocess.check_output([
+                  "curl", "--fail", "--silent", "--show-error", "--retry", "3",
+                  "https://open-store.io/api/v4/apps/inbe"]))
+              assert store.get("success"), "OpenStore metadata lookup failed"
+              for item in store["data"].get("revisions", []):
+                  existing = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", item.get("version", ""))
+                  if item.get("channel") == os.environ["OPENSTORE_CHANNEL"] and item.get("architecture") == "arm64" and existing and tuple(map(int, existing.groups())) >= version:
+                      print("OpenStore already has this release or a newer one.")
+                      finish()
+              revision = api(f"repos/{repo}/commits/{release['tag_name']}")["sha"]
+          assert re.fullmatch(r"[0-9a-f]{40}", revision), "An exact commit is required"
+          finish(revision)
+          PY
+
   publish:
+    needs: source
+    if: needs.source.outputs.run == 'true'
     runs-on: ubuntu-24.04
     # The published focal channel must use Focal's ARM64 libc and libraries.
     container: clickable/ci-20.04-arm64@sha256:c6227ffcdb2abb50101a8469dd2a8df3ffd9208e04a3e07e351db63d36bec5d6
@@ -50,7 +115,7 @@ jobs:
     steps:
       - name: Require an immutable source
         env:
-          CANDIDATE: ${{ inputs.revision || github.sha }}
+          CANDIDATE: ${{ needs.source.outputs.revision }}
         run: |
           [[ "$CANDIDATE" =~ ^[0-9a-f]{40}$ ]] || { echo 'An exact commit is required'; exit 1; }
 
@@ -133,7 +198,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.revision || github.sha }}
+          ref: ${{ needs.source.outputs.revision }}
           fetch-depth: 0
           lfs: true
 
