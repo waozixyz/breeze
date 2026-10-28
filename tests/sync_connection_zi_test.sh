@@ -28,6 +28,9 @@ static int requests;
 int32_t ConnectionRequests(void) { return requests; }
 int32_t app_request_sync(void *app) { (void)app; requests++; return 1; }
 void app_reload_after_import(void *app, int32_t settings) { (void)app; (void)settings; }
+int32_t app_web_storage_flush_critical(int32_t timeout_ms, int32_t log_success) {
+    (void)timeout_ms; (void)log_success; return 1;
+}
 int main(void) {
     int result = Check();
     if (result) fprintf(stderr, "Sync connection checks failed: %d\n", result);
