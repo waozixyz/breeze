@@ -66,6 +66,9 @@
 #import "file_linux"
 #import "android_picker"
 #import, file "node_app_loading.zi";
+#import "kryon/loading_screen"
+#import, file "../widgets/bottom_nav.zi";
+#import, file "../app/navigation_routes.zi";
 
 using HostValueKind;
 using TextWrap;
@@ -301,37 +304,27 @@ NodeScreenPictureProgress :: (slot: s32) -> NodeScreenPictures {
 }
 
 NodeScreenProgress :: (app: *InnerBreeze, area: Rectangle, title: string,
-    stage: string, done: s32, total: s32) {
-    scale := MetricsScale()
-    width := area.width - 48.0 * scale
-    if width > 320.0 * scale { width = 320.0 * scale }
-    left := area.x + (area.width - width) / 2.0
-    middle := area.y + area.height / 2.0
-    Text(app.ui.session, TextProps.{.key = KeyHash("inbe/node-app/loading-title"),
-            .text = title, .font = AppFontSize(),
-            .bounds = Rectangle.{left, middle - 56.0 * scale, width, 28.0 * scale},
-            .align = cast(TextAlign)TextAlignCenter})
-    Text(app.ui.session, TextProps.{.key = KeyHash("inbe/node-app/loading-stage"),
-            .text = stage, .font = AppFontSize(),
-            .bounds = Rectangle.{left, middle - 24.0 * scale, width, 28.0 * scale},
-            .align = cast(TextAlign)TextAlignCenter})
-    counts: Vec(u8)
-    BuilderPrint(*counts, "% / %", done, total)
-    Progress(app.ui.session, ProgressProps.{.key = KeyHash("inbe/node-app/loading-progress"),
-            .bounds = Rectangle.{left, middle + 16.0 * scale, width, 24.0 * scale},
-            .min = 0, .max = total, .value = done, .label = TextView(VecSlice(counts, 0, counts.count))})
-    VecFree(counts)
-    LoadingIndicator(app.ui.session, LoadingIndicatorProps.{.key = KeyHash("inbe/node-app/loading-animation"),
-            .bounds = Rectangle.{left, middle + 56.0 * scale, width, 24.0 * scale},
-            .now = GetTime(), .scale = scale})
+    stage: string, done: s32, total: s32, known_progress: bool = false) {
+    route := app_main_tab_route(app.main_tab)
+    shape := app_nav_route_shape(route)
+    if app.breathing.screen == ScreenNodeApp {
+        shape = NodeAppIconShape(app.node_app_slot)
+    }
+    if shape.count == 0 {
+        shape = NODE_APP_GENERIC_ICON
+    }
+    LoadingScreen(app.ui.session, LoadingScreenProps.{.key = KeyHash("inbe/app/loading"),
+            .bounds = area, .title = title, .detail = stage, .icon_shape = shape,
+            .now = GetTime(), .scale = MetricsScale(), .has_progress = known_progress && total > 0,
+            .completed = done, .total = total})
     AppRequestSmoothFrames(2)
 }
 
 NodeScreenCover :: (app: *InnerBreeze, area: Rectangle, pictures: NodeScreenPictures) {
     Box(app.ui.session, BoxProps.{.key = KeyHash("inbe/node-app/cover"), .bounds = area,
             .fill = StyleTokenColor("canvas")})
-    NodeScreenProgress(app, area, NodeAppName(app.node_app_slot),
-        LocaleText("app_loading_pictures"), pictures.ready, ifx pictures.total > 0 then pictures.total else 1)
+    NodeScreenProgress(app, area, NodeAppTitle(NodeAppName(app.node_app_slot)),
+        LocaleText("app_loading_pictures"), pictures.ready, pictures.total, true)
 }
 
 NodeScreenLoading :: (app: *InnerBreeze) {
@@ -341,13 +334,18 @@ NodeScreenLoading :: (app: *InnerBreeze) {
     if slot >= 0 {
         done := AppsFeaturesReadyCount()
         total := cast(s32)PackageCount - 1
-        NodeScreenProgress(app, area, LocaleText("app_loading_apps"),
+        route := app_main_tab_route(app.main_tab)
+        title := app_nav_route_label(route)
+        if title.count == 0 {
+            title = LocaleText("app_loading_apps")
+        }
+        NodeScreenProgress(app, area, title,
             LocaleText("app_loading_open"), done, total)
         return
     }
     step := NodeOpenStep(app.node_app_slot)
     stages: [4]string = .["app_loading_wait", "app_loading_read", "app_loading_open", "app_loading_ready"]
-    NodeScreenProgress(app, area, NodeAppName(app.node_app_slot), LocaleText(stages[step]), step, 3)
+    NodeScreenProgress(app, area, NodeAppTitle(NodeAppName(app.node_app_slot)), LocaleText(stages[step]), step, 3)
 }
 
 // The bundled app that draws the current screen, by module slot, or -1 for

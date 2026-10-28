@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.55] - 2026-10-27
+
+- Retry Google Play prices when the store cannot load Dew packs.
+- Open apps with a calmer, themed loading screen and their own icon.
+- Learn Apps in one short guide, with current app options.
+
 ## [2.1.54] - 2026-10-27
 
 - Buy Dew through Google Play in the Google Play version.

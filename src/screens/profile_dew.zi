@@ -21,6 +21,7 @@
 #import "tree"
 #import "kryon/play_billing"
 #import "entity/dew_play"
+#import "loading_indicator"
 #import, file "../storage/dew.zi";
 #import, file "../storage/sync_async.zi";
 #import, file "../storage/sync_node_storage.zi";
@@ -32,6 +33,7 @@
 #import, file "../app/text_buffers.zi";
 #import, file "../app/modal_rules.zi";
 #import, file "../app/app_modal_state.zi";
+#import, file "../app/smooth_frames.zi";
 #import, file "qr_code_view.zi";
 #import, file "dew_worth.zi";
 
@@ -50,6 +52,9 @@ profile_topup_scroll: s32;
 profile_topup_started: bool;
 profile_topup_failed: bool;
 profile_topup_copied: bool;
+profile_play_prices_deadline: float64;
+c :: #system_library "c";
+GetTime :: () -> float64 #foreign c;
 // Top-up minimums under 0.001 XMR are not worth naming.
 TopUpMinimumShown :: 1000000000
 
@@ -449,6 +454,11 @@ ProfileTopUpOpen :: (app: *InnerBreeze) {
     profile_topup_started = false
     profile_topup_failed = false
     profile_topup_copied = false
+    profile_play_prices_deadline = GetTime() + 15.0
+    if dew_play.enabled {
+        // Ask on opening, even when the idle app has drawn very few frames.
+        unused PlayBillingProducts(DEW_PLAY_PRODUCTS, dew_play.state[:])
+    }
     // Reopening asks for a fresh quote, even if this account has deposited
     // before. Never keep an old address rate for the lifetime of the app.
     dew_address = .{}
@@ -516,6 +526,9 @@ ProfileTopUpPlayNotice :: (billing: *PlayBillingState, shown: s32) -> string {
     if error != "" && error != "cancelled" {
         return LocaleText("profile_dew_play_unavailable")
     }
+    if GetTime() >= profile_play_prices_deadline {
+        return LocaleText("profile_dew_play_unavailable")
+    }
     return LocaleText("profile_dew_play_loading")
 }
 
@@ -554,6 +567,22 @@ ProfileTopUpPlayContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw
     notice := ProfileTopUpPlayNotice(*billing, shown)
     if notice != "" {
         ProfileDewText(app, notice, x, y, width, AppSmallFontSize(), draw)
+    }
+    if shown == 0 && notice == LocaleText("profile_dew_play_unavailable") {
+        if ProfileDewButton(app, LocaleText("retry_button"), x, y, width, busy, draw) {
+            profile_play_prices_deadline = GetTime() + 15.0
+            unused PlayBillingProducts(DEW_PLAY_PRODUCTS, dew_play.state[:])
+        }
+    } else if shown == 0 && notice == LocaleText("profile_dew_play_loading") {
+        if draw {
+            LoadingIndicator(app.ui.session, LoadingIndicatorProps.{
+                    .key = KeyHash("profile/dew/play/loading"),
+                    .bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+                        cast(float32)width, cast(float32)AppScale(28)},
+                    .now = GetTime(), .scale = MetricsScale() * 0.7})
+            AppRequestSmoothFrames(2)
+        }
+        y.* += AppScale(36)
     }
 }
 

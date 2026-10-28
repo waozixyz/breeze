@@ -771,9 +771,9 @@ with contextlib.ExitStack() as stack:
                 wait_setting(profile, "language_setup_done", 1, log.read_text())
                 driver.wait(label="Pinned")
                 assert settings(profile).get("launcher_guide_seen", "0") == "0"
-                for step in range(1, 4):
-                    driver.wait(label=f"Step {step} of 3")
-                    key(window, "Right", lambda: not driver.find(label=f"Step {step} of 3", visible=True))
+                driver.wait(contains="This is Apps.", role="text")
+                assert not driver.find(contains="trash icon", role="text")
+                key(window, "Right", lambda: settings(profile).get("launcher_guide_seen") == "1")
                 wait_setting(profile, "launcher_guide_seen", 1, "Apps guide did not finish")
                 # The existing update question appears after the guide and
                 # remembers its answer, without another connection dialog.

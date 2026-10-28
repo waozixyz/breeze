@@ -65,5 +65,31 @@ with contextlib.ExitStack() as stack:
     assert driver.find(label="Wallet", role="button", visible=False)
     assert "frame rejected" not in log_path.read_text()
     assert process.poll() is None, "Top-up test app exited unexpectedly"
+    stop(process)
 
-print("Dew top-up: one quote, consistent balance conversion, and deposit controls passed")
+    for scene in ("dew_play_wait", "dew_play_packs"):
+        case = Path(stack.enter_context(tempfile.TemporaryDirectory(dir=OUTPUT, prefix=scene + "-")))
+        driver = UiDriver(case / "driver")
+        environment.update(driver.environment())
+        environment.update(APP_DATA_ROOT=str(case), INBE_SCREENSHOT_DATA_ROOT=str(case))
+        case_log_path = OUTPUT / (scene + ".log")
+        case_log = stack.enter_context(case_log_path.open("w"))
+        process = subprocess.Popen([str(BINARY), "--screenshot", str(OUTPUT / (scene + ".png")),
+                                    "--screenshot-scene", scene, "--screenshot-width", "480",
+                                    "--screenshot-height", "900"], cwd=ROOT, env=environment,
+                                   stdout=case_log, stderr=subprocess.STDOUT)
+        stack.callback(stop, process)
+        driver.attach(process, case_log_path)
+        if scene == "dew_play_wait":
+            driver.wait(contains="Google Play purchases are not available", role="text")
+            driver.press(label="Retry", role="button")
+            driver.wait(contains="Loading Google Play prices", role="text")
+        else:
+            for amount in (100, 500, 1000, 5000):
+                driver.wait(contains=str(amount) + " Dew", role="button", visible=False)
+            assert not driver.find(contains="Loading Google Play prices", role="text")
+        (OUTPUT / (scene + "-tree.json")).write_text(json.dumps(driver.tree(), indent=2) + "\n")
+        assert "frame rejected" not in case_log_path.read_text()
+        stop(process)
+
+print("Dew top-up: quote, deposit controls, Play packs, loading timeout and Retry passed")
