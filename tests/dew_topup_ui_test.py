@@ -87,8 +87,12 @@ with contextlib.ExitStack() as stack:
         else:
             for amount in (10, 100, 500, 1000, 5000):
                 driver.wait(contains=str(amount) + " Dew", role="button", visible=False)
-            for percent in (4, 8, 12, 16):
-                driver.wait(contains="−" + str(percent) + "%", role="button", visible=False)
+            small = driver.wait(contains="10 Dew", role="button", visible=False)
+            assert small["detail"] == "$0.72", small
+            for amount, price, percent in ((100, "$6.90", 4), (500, "$33.00", 8),
+                                           (1000, "$63.00", 12), (5000, "$300.00", 16)):
+                button = driver.wait(contains=f"{amount} Dew", role="button", visible=False)
+                assert button["detail"] == f"{price} · −{percent}%", button
             driver.wait(contains="Savings per Dew compared with the 10 Dew pack.", role="text", visible=False)
             assert not driver.find(contains="Loading Google Play prices", role="text")
         (OUTPUT / (scene + "-tree.json")).write_text(json.dumps(driver.tree(), indent=2) + "\n")
