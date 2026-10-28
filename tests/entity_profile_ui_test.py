@@ -103,8 +103,12 @@ with contextlib.ExitStack() as stack:
     with sqlite3.connect(profile / "inbe.db") as database:
         user = database.execute("SELECT user_id FROM settings WHERE key='sync_public_id' "
                                 "AND value=? LIMIT 1", (owner,)).fetchone()[0]
+        # The navigation preview disables sync. Enable its fixture account so
+        # the shared Profile can show Dew; the proxy above keeps it offline.
         for key, value in (("profile_display_name", "Existing desktop name"),
-                           ("profile_intention", "Existing private intention")):
+                           ("profile_intention", "Existing private intention"),
+                           ("sync_enabled", "1"),
+                           ("sync_server_url", "https://api.waozi.xyz")):
             database.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,2) "
                              "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value,"
                              "updated_at=excluded.updated_at", (user, key, value))
