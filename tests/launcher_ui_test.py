@@ -26,6 +26,8 @@ OUTPUT.mkdir(parents=True, exist_ok=True)
 parser = argparse.ArgumentParser()
 parser.add_argument("binary")
 parser.add_argument("--layout", choices=("all", "desktop", "mobile"), default="all")
+parser.add_argument("--guide-only", action="store_true",
+                    help="Check the single Apps guide step with a fresh profile")
 parser.add_argument("--drag-only", action="store_true")
 parser.add_argument("--views-only", action="store_true")
 parser.add_argument("--root-bundle", type=Path, help="Exercise an older root with the native launcher")
@@ -775,6 +777,9 @@ with contextlib.ExitStack() as stack:
                 assert not driver.find(contains="trash icon", role="text")
                 key(window, "Right", lambda: settings(profile).get("launcher_guide_seen") == "1")
                 wait_setting(profile, "launcher_guide_seen", 1, "Apps guide did not finish")
+                if arguments.guide_only:
+                    print("Apps guide: one screen, one step, no obsolete trash instructions, completion saved")
+                    raise SystemExit(0)
                 # The existing update question appears after the guide and
                 # remembers its answer, without another connection dialog.
                 driver.wait(label="Don't allow", role="button")
