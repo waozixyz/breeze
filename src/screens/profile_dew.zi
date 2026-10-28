@@ -21,6 +21,7 @@
 #import "tree"
 #import "kryon/play_billing"
 #import "entity/dew_play"
+#import "entity/dew_play_pricing"
 #import "loading_indicator"
 #import, file "../storage/dew.zi";
 #import, file "../storage/sync_async.zi";
@@ -541,6 +542,7 @@ ProfileTopUpPlayContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw
     busy := dew_operation.active || TextUntilNul(dew_play.status[:]) == "verifying"
     packs: [5]string = .["dew_10", "dew_100", "dew_500", "dew_1000", "dew_5000"]
     shown: s32 = 0
+    savings_shown := false
     for pack: packs {
         product: *PlayBillingProduct = null
         for index: cast(s32)0..7 {
@@ -559,10 +561,23 @@ ProfileTopUpPlayContent :: (app: *InnerBreeze, x: s32, y: *s32, width: s32, draw
         arguments: [1]FormatArg = .[FormatArg.{.text = pack[4:], .is_text = true}]
         unused FormatTemplate(LocaleText("profile_dew_play_pack"), arguments[:], label[:])
         price := TextUntilNul(product.price[:])
-        if ProfileDewButton(app, TextUntilNul(label[:]), x, y, width, busy, draw, price) {
+        detail: [128]u8
+        unused AppCopyText(price, detail[:])
+        savings := DewPlaySavings(TextUntilNul(dew_play.state[:]), pack)
+        if savings > 0 {
+            detail_args: [2]FormatArg = .[
+            FormatArg.{.text = price, .is_text = true},
+            FormatArg.{.number = savings}]
+            unused FormatTemplate("%s · −%d%%", detail_args[:], detail[:])
+            savings_shown = true
+        }
+        if ProfileDewButton(app, TextUntilNul(label[:]), x, y, width, busy, draw, TextUntilNul(detail[:])) {
             unused DewPlayBuy(*dew_play, pack)
         }
         shown += 1
+    }
+    if savings_shown {
+        ProfileDewText(app, LocaleText("profile_dew_play_comparison"), x, y, width, AppSmallFontSize(), draw)
     }
     notice := ProfileTopUpPlayNotice(*billing, shown)
     if notice != "" {

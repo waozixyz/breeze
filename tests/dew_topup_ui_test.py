@@ -87,6 +87,9 @@ with contextlib.ExitStack() as stack:
         else:
             for amount in (10, 100, 500, 1000, 5000):
                 driver.wait(contains=str(amount) + " Dew", role="button", visible=False)
+            for percent in (4, 8, 12, 16):
+                driver.wait(contains="−" + str(percent) + "%", role="button", visible=False)
+            driver.wait(contains="Savings per Dew compared with the 10 Dew pack.", role="text", visible=False)
             assert not driver.find(contains="Loading Google Play prices", role="text")
         (OUTPUT / (scene + "-tree.json")).write_text(json.dumps(driver.tree(), indent=2) + "\n")
         assert "frame rejected" not in case_log_path.read_text()
