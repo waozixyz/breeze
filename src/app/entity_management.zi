@@ -30,6 +30,7 @@ PairingTypes :: #import "entity/pairing";
 #import, file "../storage/daochi_account.zi";
 #import, file "../storage/data.zi";
 #import, file "../platform/environment.zi";
+#import, file "../platform/web_storage.zi";
 #import, file "../platform/android/android_import.zi";
 
 using SyncAccountSaveResult;
@@ -302,6 +303,33 @@ InbeManagementAction :: (context: *void, request: *Manage.ManagementRequest) -> 
     }
     if operation == "alias_saved" {
         storage_set_setting_text("sync_account_alias", TextUntilNul(request.value[:]))
+        return 1
+    }
+    if operation == "alias_purchase_load" || operation == "alias_purchase_save" || operation == "alias_purchase_clear" {
+        owner_buffer: [65]u8
+        if !InbeEntityOwner(owner_buffer[:]) ||
+        TextUntilNul(owner_buffer[:]) != TextUntilNul(request.owner_id[:]) {
+            return 0
+        }
+        name: Vec(u8)
+        BuilderPrint(*name, "username.%.purchase.json", TextUntilNul(owner_buffer[:]))
+        file := BuilderFinish(name)
+        defer {
+            Entity.EntityFree(file)
+        }
+        path_buffer: [4096]u8
+        path := Native.NativeJoin(path_buffer[:], data_root(), file)
+        if operation == "alias_purchase_load" {
+            count := Native.NativeRead(path, request.value[:])
+            if count < 0 {
+                return ifx PathExists(path) then 0 else 2
+            }
+            return ifx count > 2 then 1 else 2
+        }
+        document := ifx operation == "alias_purchase_clear" then "{}" else TextUntilNul(request.value[:])
+        if !Native.NativeWrite(path, document) || sync_web_storage_critical() == 0 {
+            return 0
+        }
         return 1
     }
     if operation == "link_show" {

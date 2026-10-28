@@ -6,7 +6,9 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import sqlite3
+import struct
 import subprocess
 import sys
 import tempfile
@@ -18,8 +20,24 @@ from ui_driver import UiDriver
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from practice_content import bundle_assets
-sys.path.insert(0, str(ROOT.parent / 'shovey/tests'))
-from inbe_apps import open_arcade
+
+def open_arcade(driver):
+    driver.press(label='Apps', role='button')
+    if not driver.find(label='Arcade', role='button', visible=True):
+        driver.press(label='Find an app', role='text_field')
+        driver.type('Arcade')
+    driver.press(label='Arcade', role='button')
+    deadline = time.monotonic() + 60
+    while driver.find(label='Find an app', role='text_field', visible=True):
+        assert time.monotonic() < deadline, 'Arcade did not open: ' + driver.text()
+        cancel = driver.find(label='Cancel', role='button', visible=True)
+        if cancel:
+            downloads = driver.find(label='Download', role='button', visible=True)
+            nearest = min(range(len(downloads)), key=lambda at: abs(downloads[at]['y'] - cancel[0]['y']))
+            driver.press(label='Download', role='button', index=nearest)
+        elif driver.find(label='Ready to open', role='text', visible=True):
+            driver.press(label='Open', role='button')
+        time.sleep(.1)
 
 BINARY, CATALOG = (Path(value).resolve() for value in sys.argv[1:3])
 BUNDLE = Path(sys.argv[3]).resolve() if len(sys.argv) > 3 else ROOT / 'build/inbe-full.zx'
@@ -32,14 +50,74 @@ catalog_assets = bundle_assets(CATALOG.read_bytes())
 catalog = json.loads(catalog_assets['assets/apps/catalog.json'])
 assert catalog['id'] == 'inbe.arcade'
 assert all(entry['bundle'] not in catalog_assets for entry in catalog['children'])
-controller_digest = hashlib.sha256(catalog_assets[catalog['harness']]).hexdigest()
 host_controller = bundle_assets(BUNDLE.read_bytes())['assets/apps/apps.zx']
-assert controller_digest == hashlib.sha256(host_controller).hexdigest(), 'Catalog uses another controller'
+controller_digest = hashlib.sha256(host_controller).hexdigest()
+if catalog['harness'] in catalog_assets:
+    assert controller_digest == hashlib.sha256(catalog_assets[catalog['harness']]).hexdigest(), 'Catalog uses another controller'
 classic = next(entry for entry in catalog['children'] if entry['expected_id'] == 'shovey')
 payloads = CATALOG.with_suffix('.games')
 game = (payloads / (classic['sha256'] + '.zx')).read_bytes()
 assert hashlib.sha256(game).hexdigest() == classic['sha256']
 requests = []
+updated_game = None
+updated_digest = None
+
+
+def rewrite_assets(source, destination, replacements=None, additions=None):
+    """Keep executable sections intact while streaming fixture resource changes."""
+    replacements = replacements or {}
+    additions = additions or {}
+    with source.open('rb') as incoming, destination.open('wb') as outgoing:
+        def number():
+            return struct.unpack('<I', incoming.read(4))[0]
+
+        def skip_text():
+            incoming.seek(number(), 1)
+
+        assert incoming.read(8) == b'ZX\0\0\x1a\0\0\0'
+        skip_text(); skip_text()
+        for _ in range(number()):
+            skip_text(); skip_text()
+        for _ in range(number()):
+            for _ in range(7):
+                skip_text()
+            incoming.seek(8, 1); skip_text(); incoming.seek(4, 1)
+        for _ in range(number()):
+            for _ in range(3):
+                skip_text()
+        incoming.seek(number(), 1)
+        count_at = incoming.tell()
+        count = number()
+        incoming.seek(0)
+        outgoing.write(incoming.read(count_at))
+        incoming.seek(4, 1)
+        outgoing.write(struct.pack('<I', count + len(additions)))
+        for _ in range(count):
+            name = incoming.read(number())
+            length = number()
+            outgoing.write(struct.pack('<I', len(name)) + name)
+            replacement = replacements.get(name.decode())
+            if replacement is not None:
+                outgoing.write(struct.pack('<I', len(replacement)) + replacement)
+                incoming.seek(length, 1)
+            else:
+                outgoing.write(struct.pack('<I', length))
+                remaining = length
+                while remaining:
+                    block = incoming.read(min(remaining, 65536))
+                    assert block, 'Truncated fixture bundle'
+                    outgoing.write(block)
+                    remaining -= len(block)
+        assert incoming.read(1) == b''
+        for name, content in additions.items():
+            encoded = name.encode()
+            outgoing.write(struct.pack('<I', len(encoded)) + encoded)
+            outgoing.write(struct.pack('<I', len(content)) + content)
+
+
+def digest_file(path):
+    with path.open('rb') as source:
+        return hashlib.file_digest(source, 'sha256').hexdigest()
 identities = dict(binary=str(BINARY), runtime_bundle=str(BUNDLE), catalog=str(CATALOG),
                   binary_sha256=hashlib.sha256(BINARY.read_bytes()).hexdigest(),
                   runtime_bundle_sha256=hashlib.sha256(BUNDLE.read_bytes()).hexdigest(),
@@ -52,19 +130,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         requests.append(self.path)
         wanted = '/api/v2/packages/inbe.arcade/' + classic['sha256'] + '.zx'
-        if self.path != wanted:
+        upgrade = updated_digest and self.path == '/api/v2/packages/inbe.arcade/' + updated_digest + '.zx'
+        if self.path != wanted and not upgrade:
             self.send_error(404)
             return
         # The first response has the correct length and a deliberately bad hash.
-        body = game if len(requests) > 1 else game[:-1] + bytes([game[-1] ^ 1])
         self.send_response(200)
-        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Content-Length', str(updated_game.stat().st_size if upgrade else len(game)))
         self.end_headers()
         try:
-            for start in range(0, len(body), 65536):
-                self.wfile.write(body[start:start + 65536])
-                self.wfile.flush()
-                time.sleep(.02)
+            if upgrade:
+                with updated_game.open('rb') as source:
+                    shutil.copyfileobj(source, self.wfile, 65536)
+            else:
+                body = game if len(requests) > 1 else game[:-1] + bytes([game[-1] ^ 1])
+                for start in range(0, len(body), 65536):
+                    self.wfile.write(body[start:start + 65536])
+                    self.wfile.flush()
+                    time.sleep(.02)
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -84,6 +167,14 @@ def stop(process):
 
 with contextlib.ExitStack() as stack:
     profile = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix='child-download-', dir=OUTPUT)))
+    active_catalog = profile / 'arcade.zx'
+    rewrite_assets(CATALOG, active_catalog,
+                   replacements={'assets/apps/catalog.json': json.dumps(catalog).encode()})
+    if 'art' in catalog:
+        cache = profile / 'packages'
+        cache.mkdir()
+        art_digest = catalog['art']['sha256']
+        shutil.copyfile(payloads / (art_digest + '.zx'), cache / ('child-inbe.arcade-' + art_digest + '.zx'))
     audio = profile / 'alsa.conf'
     audio.write_text('pcm.!default { type null }\n')
     server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -98,9 +189,10 @@ with contextlib.ExitStack() as stack:
         env.pop(key, None)
     env.update(driver.environment())
     env.update(APP_DATA_ROOT=str(profile), APP_NO_TRAY='1', YUE_DESKTOP_RECOVERY='0',
-               INBE_NODE_APP_FILE=str(CATALOG),
+               INBE_NODE_APP_FILE=str(active_catalog),
                INBE_LOCAL_PACKAGE_ORIGIN='http://127.0.0.1:' + str(server.server_port),
-               NO_PROXY='127.0.0.1', SDL_VIDEODRIVER='x11', LIBGL_ALWAYS_SOFTWARE='1',
+               NO_PROXY='127.0.0.1', http_proxy='http://127.0.0.1:9', https_proxy='http://127.0.0.1:9',
+               SDL_VIDEODRIVER='x11', LIBGL_ALWAYS_SOFTWARE='1',
                LP_NUM_THREADS='2', ALSA_CONFIG_PATH=str(audio))
     display_log = stack.enter_context((OUTPUT / 'display.log').open('w'))
     display = subprocess.Popen(['Xvfb', ':975', '-noreset', '-displayfd', '1',
@@ -175,11 +267,11 @@ with contextlib.ExitStack() as stack:
         # Discovery continues after the first painted frame. The catalog must
         # stay open while its declared games are still absent.
         time.sleep(1)
-        assert driver.find(label='Play', role='button', visible=True), driver.text()
-        driver.press(label='Play', role='button')
+        assert driver.find(label='Download', role='button', visible=True), driver.text()
+        driver.press(label='Download', role='button', index=0)
         driver.wait(role='modal')
         assert not requests, 'Opening the dialog downloaded before consent'
-        driver.press(label='Download', role='button')
+        driver.press(label='Download', role='button', index=len(driver.find(label='Download', role='button', visible=True)) - 1)
         wait_for_download('Download failed')
         assert not driver.find(contains='Level 1 / ', visible=True), 'Corrupt bytes opened'
         driver.press(label='Try again', role='button')
@@ -191,12 +283,52 @@ with contextlib.ExitStack() as stack:
     with application('offline-restart'):
         open_arcade(driver)
         driver.wait_idle(frames=4)
-        driver.press(label='Play', role='button')
+        driver.press(label=classic['title'], role='button', index=0)
         wait_for_download('Level 1 / ')
         assert len(requests) == count, 'Restart downloaded the cached game again'
 
+    # An updated root catalog retains the installed identity, even when the
+    # game has a new exact digest. Only that game's update may be downloaded.
+    updated_game = profile / 'updated-game.zx'
+    rewrite_assets(payloads / (classic['sha256'] + '.zx'), updated_game,
+                   additions={'assets/' + classic['expected_id'] + '/test-update.txt': b'updated game fixture'})
+    updated_digest = digest_file(updated_game)
+    updated_catalog = json.loads(json.dumps(catalog))
+    updated_child = next(entry for entry in updated_catalog['children'] if entry['id'] == classic['id'])
+    updated_child.update(sha256=updated_digest, bytes=updated_game.stat().st_size, version='999.0.1')
+    rewrite_assets(CATALOG, active_catalog,
+                   replacements={'assets/apps/catalog.json': json.dumps(updated_catalog).encode()})
+    with sqlite3.connect(profile / 'inbe.db') as db:
+        db.execute("UPDATE settings SET value='1' WHERE user_id=? AND key='package_updates_allowed'", (user,))
+        save_identity = hashlib.sha256(('local-development\n' + classic['id']).encode()).hexdigest()
+        save_key = 'nested.' + save_identity + '.test_progress'
+        save_value = '{"level":7,"score":420}'
+        db.execute('INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1)',
+                   (user, save_key, save_value))
+    with application('catalog-update'):
+        open_arcade(driver)
+        deadline = time.monotonic() + 60
+        while len(requests) == count and time.monotonic() < deadline:
+            driver.wait_idle(frames=2)
+            time.sleep(.05)
+        assert requests[count:] == ['/api/v2/packages/inbe.arcade/' + updated_digest + '.zx'], requests
+        driver.wait(label='App options', role='button', timeout=60)
+        driver.press(label=classic['title'], role='button', index=0)
+        wait_for_download('Level 1 / ')
+        assert not driver.find(role='modal', visible=True), 'Installed game required installation again'
+    count = len(requests)
+    with application('updated-offline-restart'):
+        open_arcade(driver)
+        driver.press(label=classic['title'], role='button', index=0)
+        wait_for_download('Level 1 / ')
+        assert len(requests) == count, 'Updated cached game downloaded on restart'
+    with sqlite3.connect(profile / 'inbe.db') as db:
+        assert db.execute('SELECT value FROM settings WHERE user_id=? AND key=?',
+                          (user, save_key)).fetchone() == (save_value,), 'Saved game record changed during update'
+
     (OUTPUT / 'result.json').write_text(json.dumps(dict(
         passed=True, **identities, requests=requests, percentages=percentages,
-        corrupt_payload_rejected=True, automatic_open=True, offline_restart=True), indent=2) + '\n')
+        corrupt_payload_rejected=True, automatic_open=True, offline_restart=True,
+        installed_game_update=True, updated_offline_restart=True), indent=2) + '\n')
 
-print('Separate game download: visible progress, corruption rejection, retry, automatic open and offline restart passed')
+print('Arcade local tests passed: download consent, corruption rejection, retry, installed catalog update, saved progress and offline restarts.')

@@ -109,6 +109,33 @@ NodeChildBundle :: (context: *void, parent: *AppNode, entry: *AppEntry) -> Hoste
     return HostedAsset.{.found = true, .data = node_children[index].bytes}
 }
 
+NodeChildDependsOn :: (catalog: *AppCatalog, entry: *AppEntry, wanted: *AppEntry, depth: s32) -> bool {
+    if entry == wanted { return true }
+    if entry == null || depth >= 32 { return false }
+    for index: cast(s32)0..entry.dependency_count - 1 {
+        dependency := AppCatalogAt(catalog, AppCatalogFind(catalog, TextUntilNul(entry.dependencies[index][:])))
+        if NodeChildDependsOn(catalog, dependency, wanted, depth + 1) { return true }
+    }
+    return false
+}
+
+// Installation belongs to a publisher and app ID, not one release digest.
+// A new catalog may update an installed game and its libraries, while games
+// the account has never installed still require the download dialog.
+NodeChildInstalled :: (parent: *AppNode, entry: *AppEntry) -> bool {
+    if parent == null { return false }
+    item := parent.catalog.children
+    while item != null {
+        if NodeChildDependsOn(*parent.catalog, *item.entry, entry, 0) {
+            identity := AppIdentity.{.authority = parent.identity.authority, .id = item.entry.id}
+            state: AppState
+            if NodeTreeState(null, NodeTreeAccount(), *identity, *state) && state.installed { return true }
+        }
+        item = item.next
+    }
+    return false
+}
+
 NodeChildDownload :: (context: *void, parent: *AppNode, entry: *AppEntry,
     download: *AppDownload) -> bool {
     runner := cast(*NodeAppRunner)context
@@ -122,6 +149,10 @@ NodeChildDownload :: (context: *void, parent: *AppNode, entry: *AppEntry,
     }
     child := *node_children[index]
     if child.status == 2 { return false }
+    if child.status == 0 && PackageAutomaticEnabled() && NodeChildInstalled(parent, entry) {
+        child.requested = true
+        child.status = 1
+    }
     download.downloading = child.status == 1
     download.failed = child.status == 3
     download.bytes = child.size
@@ -223,19 +254,23 @@ NodeChildPump :: () {
     }
     if node_child_work != null {
         if !PackageWorkReady(node_child_work) { return }
-        ok := !child.retired && node_child_work.ok &&
-        TextUntilNul(node_child_work.digest[:]) == TextUntilNul(child.digest[:]) && node_child_work.bytes.count > 0 &&
-        node_child_work.bytes.count <= NODE_CHILD_MEMORY_LIMIT - node_child_memory
-        if ok && node_child_work.path != child.path {
-            ok = RenamePath(node_child_work.path, child.path)
+        verified := node_child_work.ok &&
+        TextUntilNul(node_child_work.digest[:]) == TextUntilNul(child.digest[:]) && node_child_work.bytes.count > 0
+        stored := verified
+        if stored && node_child_work.path != child.path {
+            stored = RenamePath(node_child_work.path, child.path)
         }
+        ok := !child.retired && stored &&
+        node_child_work.bytes.count <= NODE_CHILD_MEMORY_LIMIT - node_child_memory
         if ok {
             child.bytes = node_child_work.bytes
             node_child_work.bytes = ""
             child.size = child.bytes.count
             node_child_memory += child.bytes.count
         }
-        if !ok && !child.retired { unused RemoveFile(node_child_work.path) }
+        // Memory pressure or a closed collection must not uninstall a valid
+        // download. Only an invalid payload is removed from persistent storage.
+        if !verified && !child.retired { unused RemoveFile(node_child_work.path) }
         PackageWorkFree(node_child_work)
         node_child_work = null
         NodeChildFinish(ok)
