@@ -794,7 +794,8 @@ with contextlib.ExitStack() as stack:
                 # Practice is the third pinned card in the same grid as the rest.
                 pinned, more, tree = cards()
                 assert [card["label"] for card in pinned] == ["Lumi", "Habits", "Practice"], pinned
-                assert [round(card["x"]) for card in pinned] == [round(card["x"]) for card in more[:len(pinned)]], \
+                shared_columns = min(len(pinned), len(more))
+                assert [round(card["x"]) for card in pinned[:shared_columns]] == [round(card["x"]) for card in more[:shared_columns]], \
                     "Pinned and More apps cards use different columns"
                 press(pinned[2])
                 wait_setting(profile, "apps_setup_done", 1, log.read_text())

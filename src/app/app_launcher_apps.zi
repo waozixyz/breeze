@@ -206,7 +206,7 @@ LauncherAppWidgets :: (context: *void, module: *u8, function: *u8,
     card := WidgetDecodeButtonProps(arguments[1], *launcher_app_button_codec)
     for index: cast(s32)0..group.count - 1 {
         entry := group.entries[index]
-        // While editing, the whole card is the handle that drags it.
+        // Editing exposes an explicit handle; the card keeps its own gestures.
         handle := group.owner.launcher_editing && card.key == Rules.AppCardKey(TextUntilNul(entry.id[:]))
         if !handle { continue }
         item := entry.route
@@ -219,9 +219,6 @@ LauncherAppWidgets :: (context: *void, module: *u8, function: *u8,
             }
         }
         app_launcher_drag_handle(group.owner, card, item, group.owner.launcher_grid_view)
-        node := TreeSubmitted(group.owner.ui.session, TreeCurrentParent(group.owner.ui.session),
-            card.key, WidgetKindButton)
-        TreeSetDragCapture(group.owner.ui.session, node, !card.disabled)
         break
     }
     return called
@@ -503,8 +500,10 @@ app_launcher_shared_group :: (app: *InnerBreeze, section: s32, routes: []s32,
     document: Vec(u8)
     BuilderPrint(*document, "\"title\":\"\",\"locale\":")
     Rules.AppsWriteQuoted(*document, LocaleActiveCode())
-    BuilderPrint(*document, ",\"presentation\":{\"mode\":\"%\",\"hide_sizes\":true,\"section_break\":%,\"columns\":%,\"tile_class\":%,\"action_class\":%,\"muted_class\":%",
-        ifx grid then "icon" else "list", section_break, columns, KssClassId(KssMakeName("launcher-tile")), KssClassId(KssMakeName("launcher-action")), KssClassId(KssMakeName("launcher-muted")))
+    // Editing changes the native controls attached to each shared card.
+    // Include it in the revision so a quiet frame cannot replay the old tree.
+    BuilderPrint(*document, ",\"presentation\":{\"mode\":\"%\",\"editing\":%,\"hide_sizes\":true,\"section_break\":%,\"columns\":%,\"tile_class\":%,\"action_class\":%,\"muted_class\":%",
+        ifx grid then "icon" else "list", app.launcher_editing, section_break, columns, KssClassId(KssMakeName("launcher-tile")), KssClassId(KssMakeName("launcher-action")), KssClassId(KssMakeName("launcher-muted")))
     if app.launcher_pending_node > 0 {
         LauncherAppQuoted(*document, "download_id", TextUntilNul(app.launcher_download_id[:]))
         BuilderPrint(*document, ",\"download_request\":%", app.launcher_download_request)

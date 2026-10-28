@@ -39,7 +39,9 @@ mkdir -p build/entity
     --module-path kryon=build/packages/kryon/src/ui --module-path build/packages/kryon/src/ui \
     --module-path build/packages/ziran/std --module-path qrcode=build/packages/qrcode/src \
     --define KRYON_HOSTED_UI \
-    --asset-dir "assets=$entity_dir/assets" --entry entity:Main -o build/entity/entity.zx "$entity_dir/src/entity.zi"
+    --entry entity:Main -o build/entity/entity.zx "$entity_dir/src/entity.zi"
+# Entity's images are supplied once by the root package below. Its hosted
+# child uses those same asset paths; embedding a second copy bloats every APK.
 for feature in lists habits practices diary lumi leaderboard; do
     source=$feature
     entry=$feature

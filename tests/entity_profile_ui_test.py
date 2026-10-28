@@ -142,8 +142,8 @@ with contextlib.ExitStack() as stack:
                 driver.wait(label=label, role="text", visible=False)
             assert not driver.find(label="Progress", role="button"), "Activity still uses a separate row"
             driver.press(label="Change picture", role="button")
-            driver.wait(label="Profile picture", role="button")
-            driver.press(label="Profile picture", role="button", index=1)
+            driver.wait(focus_id=76401, role="button")
+            driver.press(focus_id=76401, role="button")
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
                 if shared.exists() and json.loads(shared.read_text()).get("picture") == 1:
@@ -156,13 +156,12 @@ with contextlib.ExitStack() as stack:
             assert document["owner_id"] == owner, "Entity used a different account"
             assert credentials() == before, "Editing Entity changed Inbe account keys"
             assert not (Path(environment["ENTITY_DATA"]) / "account.key").exists(), "Entity made another account"
-            driver.press(label="Done", role="button")
             driver.wait(label="Dew balance", role="text")
         with application("restart"):
             open_profile()
             driver.press(label="Change picture", role="button")
-            pictures = driver.find(label="Profile picture", role="button", visible=True)
-            assert len(pictures) > 1 and pictures[1].get("selected"), "Picture edit was lost after restart"
+            selected = driver.wait(focus_id=76401, role="button")
+            assert selected.get("selected"), "Picture edit was lost after restart"
             assert credentials() == before, "Restart changed Inbe account keys"
             assert json.loads(shared.read_text())["owner_id"] == owner
 
@@ -178,6 +177,14 @@ with contextlib.ExitStack() as stack:
     with application("friends") as process:
         open_profile()
         driver.press(label="Friends", role="button")
+        field = driver.wait(focus_id=810, role="text_field")
+        driver.press(focus_id=810, role="text_field")
+        driver.type("@soft_keyboard_friend")
+        assert driver.wait(focus_id=810, role="text_field")["value"] == "@soft_keyboard_friend", "Friends discarded typed text"
+        driver.key("backspace")
+        assert driver.wait(focus_id=810, role="text_field")["value"] == "@soft_keyboard_frien", "Friends discarded edits"
+        assert not [node for node in driver.find(label="Friends", role="text", visible=True)
+                    if node["y"] > 80], "Duplicate Friends heading remains in the page"
         rows = [driver.wait(label="@" + name, role="button") for name in ("willow", "river", "fern")]
         for row in rows:
             picture = driver.wait(label=row["label"], role="image")

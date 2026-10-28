@@ -32,6 +32,7 @@ using TextWrap;
 #import "button_props"
 #import "dropdown_props"
 #import "text_input_props"
+#import, file "../platform/raylib_text_input.zi";
 #import, file "settings/settings_status.zi";
 #import, file "../storage/account_types.zi";
 #import "url"
@@ -393,28 +394,36 @@ draw_friends :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
     y.* += AppScale(16)
     Text(CurrentApp().ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
-            .text = (LocaleText("profile_friends_title")),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    y.* += AppScale(30)
-
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
             .text = (LocaleText("profile_friend_input_label")),
             .wrap = cast(TextWrap)TextWrapNone
         })
     y.* += AppScale(28)
 
+    typed: [128]u8
     field_result := TextField(CurrentApp().ui.session, TextFieldProps.{
+            .key = 810,
             .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)w, cast(float32)AppScale(44)},
-            .value = AppTextFromCString(*app.profile_friend_input[0], 80),
+            .value = FrameTextHold(*app.ui.frame_text, AppTextFromCString(*app.profile_friend_input[0], 80)),
             .cursor = app.profile_friend_input_cursor,
+            .anchor = app.profile_friend_input_anchor,
+            .scroll_x = app.profile_friend_input_scroll_x,
             .focused = app.profile_friend_input_focused != 0,
+            .input = SampleTextFieldInput(app.profile_friend_input_focused != 0, typed[:]),
+            .max_bytes = 79,
             .max_codepoints = 79,
             .focus_id = 810
         })
+    if field_result.edit.changed {
+        unused AppReplaceText(app.profile_friend_input[:], field_result.edit.start,
+            field_result.edit.end, field_result.edit.replacement)
+    }
     app.profile_friend_input_cursor = field_result.cursor
+    app.profile_friend_input_anchor = field_result.anchor
+    app.profile_friend_input_scroll_x = field_result.scroll_x
     app.profile_friend_input_focused = ifx (field_result.focused) then (1) else (0)
+    if field_result.clipboard_write {
+        unused TextInputWriteClipboard(field_result.clipboard_text)
+    }
     if field_result.committed {
         commit = 1
     }
@@ -437,6 +446,8 @@ draw_friends :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
                 load_friends_cache(app)
                 app.profile_friend_input[0] = cast(u8)0
                 app.profile_friend_input_cursor = 0
+                app.profile_friend_input_anchor = 0
+                app.profile_friend_input_scroll_x = 0
             } else {
                 settings_screen_set_status_error(
                     LocaleText("profile_friend_invalid"))
@@ -460,12 +471,6 @@ draw_friends :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
         y.* += AppScale(16)
     }
 
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, 0, 0},
-            .text = (LocaleText("profile_friends_title")),
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    y.* += AppScale(28)
     draw_json_people(AppTextFromCString(*app.profile_friends_json[0], 8192), "friends", x, w, y, 0, app)
 
     if outgoing_count > 0 {
@@ -482,7 +487,7 @@ draw_friends :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
 }
 
 friends_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
-    h := AppScale(16) + AppScale(30) + AppScale(28) + AppScale(56) + AppScale(44) + AppScale(24)
+    h := AppScale(16) + AppScale(28) + AppScale(56) + AppScale(44) + AppScale(24)
     incoming_count: s32 = 0
     outgoing_count: s32 = 0
     friends: s32 = 0
@@ -501,7 +506,7 @@ friends_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
     if incoming_count > 0 {
         h += AppScale(28) +              incoming_count * AppScale(108) +              AppScale(16)
     }
-    h += AppScale(28) +          (ifx (friends > 0) then (friends * AppScale(64)) else (AppScale(24)))
+    h += ifx friends > 0 then friends * AppScale(64) else AppScale(24)
     if outgoing_count > 0 {
         h += AppScale(16) + AppScale(28) +              outgoing_count * AppScale(64)
     }
