@@ -85,7 +85,7 @@ with contextlib.ExitStack() as stack:
             driver.press(label="Retry", role="button")
             driver.wait(contains="Loading Google Play prices", role="text")
         else:
-            for amount in (100, 500, 1000, 5000):
+            for amount in (10, 100, 500, 1000, 5000):
                 driver.wait(contains=str(amount) + " Dew", role="button", visible=False)
             assert not driver.find(contains="Loading Google Play prices", role="text")
         (OUTPUT / (scene + "-tree.json")).write_text(json.dumps(driver.tree(), indent=2) + "\n")
