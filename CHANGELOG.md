@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.56] - 2026-10-28
+
+- Open the keyboard when editing an account alias and copy the complete public ID from Profile.
+- Show a full public ID where it fits; tap it for a scannable QR code and the full ID to copy.
+- Use one shared Profile leaderboard, including Apfelwurm’s score and level alongside puzzle and practice rankings.
+
 ## [2.1.55] - 2026-10-27
 
 - Retry Google Play prices when the store cannot load Dew packs.

@@ -4,6 +4,7 @@
 #import "text"
 #import "vec"
 #import "text_buffer"
+#import "entity/leaderboard_model"
 #import, file "storage_settings.zi";
 #import, file "../app/text_buffers.zi";
 #import, file "../apps/package_files.zi";
@@ -12,6 +13,7 @@ GAME_SCORES_MAX :: 16
 GAME_SCORES_SETTING :: "leaderboard_game_scores"
 // The one ranked measure so far: levels a puzzle game has solved.
 GAME_SCORE_LEVELS :: "levels"
+GAME_SCORE_SCORE :: "score"
 
 GameScore :: struct {
     // The installed app the game runs in, such as arcade.
@@ -22,6 +24,8 @@ GameScore :: struct {
     title: [65]u8
     metric: [17]u8
     value: s64
+    level: s64
+    run: bool
 }
 
 game_scores: [GAME_SCORES_MAX]GameScore;
@@ -55,27 +59,27 @@ GameScoresLoad :: () {
         while end < text.count && text[end] != #char "\n" { end += 1 }
         line := text[at:end]
         at = end + 1
-        fields: [5]string
+        fields: [6]string
         field: s32 = 0
         start: s64 = 0
         for index: cast(s64)0..line.count {
             if index == line.count || line[index] == #char "\t" {
-                if field < 5 { fields[field] = line[start:index] }
+                if field < 6 { fields[field] = line[start:index] }
                 field += 1
                 start = index + 1
             }
         }
-        if field != 5 || !GameScoreName(fields[0], 24) || !GameScoreName(fields[1], 31) {
+        if (field != 5 && field != 6) || !GameScoreName(fields[0], 24) || !GameScoreName(fields[1], 31) {
             continue
         }
-        value: s64 = 0
-        for byte: fields[4] {
-            if byte < cast(u8)48 || byte > cast(u8)57 || value > 100000 { value = -1; break }
-            value = value * 10 + cast(s64)(byte - cast(u8)48)
-        }
-        if value < 0 || value > 100000 || fields[3] != GAME_SCORE_LEVELS { continue }
+        value: s64
+        level: s64
+        run := field == 6 && fields[3] == GAME_SCORE_SCORE
+        if !ProfileScoreNumber(fields[4], *value) ||
+        (run && !ProfileScoreNumber(fields[5], *level)) ||
+        (!run && (field != 5 || fields[3] != GAME_SCORE_LEVELS)) { continue }
         score := *game_scores[game_score_count]
-        score.* = GameScore.{.value = value}
+        score.* = GameScore.{.value = value, .level = level, .run = run}
         unused AppCopyText(fields[0], score.app[:])
         unused AppCopyText(fields[1], score.game[:])
         unused AppCopyText(fields[2], score.title[:])
@@ -88,8 +92,10 @@ GameScoresSave :: () {
     out: Vec(u8)
     for index: cast(s32)0..game_score_count - 1 {
         score := *game_scores[index]
-        BuilderPrint(*out, "%\t%\t%\t%\t%\n", TextUntilNul(score.app[:]), TextUntilNul(score.game[:]),
+        BuilderPrint(*out, "%\t%\t%\t%\t%", TextUntilNul(score.app[:]), TextUntilNul(score.game[:]),
             TextUntilNul(score.title[:]), TextUntilNul(score.metric[:]), score.value)
+        if score.run { BuilderPrint(*out, "\t%", score.level) }
+        BuilderPrint(*out, "\n")
     }
     text := BuilderFinish(out)
     storage_set_setting_text(GAME_SCORES_SETTING, text)
@@ -99,19 +105,13 @@ GameScoresSave :: () {
 // A game's report, such as "levels 12". Saved only when it changes.
 #program_export
 GameScoreReport :: (app: string, game: string, title: string, request: string) -> bool {
-    space: s64 = 0
-    while space < request.count && request[space] != #char " " { space += 1 }
-    metric := request[:space]
-    digits := ifx space < request.count then request[space + 1:] else ""
-    value: s64 = 0
-    for byte: digits {
-        if byte < cast(u8)48 || byte > cast(u8)57 || value > 100000 { return false }
-        value = value * 10 + cast(s64)(byte - cast(u8)48)
-    }
-    if metric != GAME_SCORE_LEVELS || digits.count == 0 || value > 100000 ||
+    report: ProfileScore
+    if !ProfileScoreReport(request, *report) ||
     !GameScoreName(app, 24) || !GameScoreName(game, 31) {
         return false
     }
+    metric := ifx report.run then GAME_SCORE_SCORE else GAME_SCORE_LEVELS
+    value := report.value
     // A title is shown as text only; tabs and line breaks would split it.
     shown: [65]u8
     unused AppCopyText(title, shown[:])
@@ -128,15 +128,19 @@ GameScoreReport :: (app: string, game: string, title: string, request: string) -
     }
     if found >= 0 {
         score := *game_scores[found]
-        if score.value == value && TextUntilNul(score.title[:]) == TextUntilNul(shown[:]) { return true }
+        if score.value == value && score.level == report.level && score.run == report.run &&
+        TextUntilNul(score.title[:]) == TextUntilNul(shown[:]) { return true }
         score.value = value
+        score.level = report.level
+        score.run = report.run
+        unused AppCopyText(metric, score.metric[:])
         score.title = shown
         GameScoresSave()
         return true
     }
     if game_score_count >= GAME_SCORES_MAX { return false }
     score := *game_scores[game_score_count]
-    score.* = GameScore.{.value = value}
+    score.* = GameScore.{.value = value, .level = report.level, .run = report.run}
     unused AppCopyText(app, score.app[:])
     unused AppCopyText(game, score.game[:])
     score.title = shown
@@ -144,6 +148,22 @@ GameScoreReport :: (app: string, game: string, title: string, request: string) -
     game_score_count += 1
     GameScoresSave()
     return true
+}
+
+#program_export
+GameScoreMetric :: (game: string, metric: s32) -> string {
+    GameScoresLoad()
+    for index: cast(s32)0..game_score_count - 1 {
+        score := *game_scores[index]
+        if TextUntilNul(score.game[:]) == game {
+            return ifx score.run then (ifx metric == 1 then "level" else GAME_SCORE_SCORE) else GAME_SCORE_LEVELS
+        }
+    }
+    return GAME_SCORE_LEVELS
+}
+
+GameScoreRun :: (game: string) -> bool {
+    return GameScoreMetric(game, 0) == GAME_SCORE_SCORE
 }
 
 // The games of an installed app that reported a score, in report order.

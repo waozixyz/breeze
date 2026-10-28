@@ -7,6 +7,7 @@
 c :: #system_library "c";
 LeaderboardBoardName :: (app: *InnerBreeze) -> string #foreign c;
 LeaderboardStatsBody :: (app: *InnerBreeze) -> string #foreign c;
+GameScoreMetric :: (game: string, metric: s32) -> string #foreign c;
 #import, file "../apps/package_files.zi";
 LOG_INFO :: 3
 LOG_WARNING :: 4
@@ -402,7 +403,8 @@ app_social_leaderboard_key :: (out: *u8, out_size: s64,
     if board != "" {
         SyncCopyText(out, out_size, "leaderboard.games.")
         SyncAppendText(out, out_size, board)
-        SyncAppendText(out, out_size, ".levels")
+        SyncAppendText(out, out_size, ".")
+        SyncAppendText(out, out_size, GameScoreMetric(board, metric))
         return
     }
     SyncCopyText(out, out_size, "leaderboard.breathing.")
@@ -432,7 +434,7 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
             current_key: [96] u8
             app_social_leaderboard_key(*current_key[0], 96,
                 app.leaderboard_practice,
-                app.leaderboard_metric, LeaderboardBoardName(app))
+                PROFILE_LEADERBOARD_STREAK, LeaderboardBoardName(app))
             if AppTextFromCString(*current_key[0], 96) == leaderboard_key {
                 AppCopyText(ifx (leaderboard_json.count > 0) then (leaderboard_json) else ("{\"rows\":[]}"), app.leaderboard_json[:])
             }
@@ -498,9 +500,14 @@ app_social_apply_result :: (app: *InnerBreeze, requests_json: string,
                 *leaderboard_json[0], size_of(type_of(leaderboard_json)))
             SyncCopyText(*leaderboard_avg_json[0], size_of(type_of(leaderboard_avg_json)), "{\"rows\":[]}")
             // Wim Hof ranks average holds and meditation average time as well.
-            if result == cast(SyncResult)SYNC_OK && (AppTextFromCString(*args.practice[0], 32) == "whm" ||
+            if result == cast(SyncResult)SYNC_OK && (AppTextFromCString(*args.metric[0], 32) == "score" || AppTextFromCString(*args.practice[0], 32) == "whm" ||
                 AppTextFromCString(*args.practice[0], 32) == "meditation") {
-                avg_metric: string = ifx (AppTextFromCString(*args.practice[0], 32) == "meditation") then ("avg_time") else ("avg_hold")
+                avg_metric := "avg_hold"
+                if AppTextFromCString(*args.metric[0], 32) == "score" {
+                    avg_metric = "level"
+                } else if AppTextFromCString(*args.practice[0], 32) == "meditation" {
+                    avg_metric = "avg_time"
+                }
                 leaderboard_avg_result = cast(SyncResult)FetchFriendStats(
                     AppTextFromCString(*args.url[0], 256),
                     AppTextFromCString(*args.practice[0], 32), avg_metric,
@@ -878,10 +885,10 @@ app_apply_pending_social_refresh :: (app: *InnerBreeze) {
             size_of(type_of(args.leaderboard_avg_key)),
             app.leaderboard_practice,
             PROFILE_LEADERBOARD_AVG_HOLD, board)
-        if board != "" {
+        if board != "" && GameScoreMetric(board, 0) != "score" {
             args.leaderboard_avg_key[0] = cast(u8)0
         }
-        SyncCopyText(*args.metric[0], 32, ifx board == "" then "streak" else "levels")
+        SyncCopyText(*args.metric[0], 32, ifx board == "" then "streak" else GameScoreMetric(board, 0))
         statistics := LeaderboardStatsBody(app)
         SyncCopyText(*args.statistics[0], 2048, statistics)
         PackageFree(statistics)
@@ -918,14 +925,14 @@ app_apply_pending_social_refresh :: (app: *InnerBreeze) {
         board := LeaderboardBoardName(app)
         statistics := LeaderboardStatsBody(app)
         defer { PackageFree(statistics) }
-        if board != "" {
+        if board != "" && GameScoreMetric(board, 0) != "score" {
             g_social_average_key[0] = cast(u8)0
         }
         if !BeginSocialRefresh(*g_social_async, AppTextFromCString(*url[0], 256),
             NetworkTransport(*g_social_transfer),
             ifx board == "" then app_social_practice_id(app.leaderboard_practice) else board,
             AppTextFromCString(*action[0], 16), AppTextFromCString(*action_value[0], 96),
-            ifx board == "" then "streak" else "levels", statistics) {
+            ifx board == "" then "streak" else GameScoreMetric(board, 0), statistics) {
             app_social_record_result(g_social_async.result)
             return
         }

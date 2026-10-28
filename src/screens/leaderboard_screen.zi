@@ -11,7 +11,6 @@ EntityProfile :: #import "entity/model";
 #import "json_scan"
 #import "text_buffer"
 #import, file "../apps/leaderboard_types.zi";
-#import, file "../apps/leaderboard_ui_types.zi";
 #import "widget_host"
 #import "hosted_values"
 #import, file "../apps/hosted_assets.zi";
@@ -68,10 +67,6 @@ leaderboard_signed_in: bool;
 leaderboard_built_revision: s32 = -1;
 leaderboard_built_practice: s32 = -1;
 leaderboard_built_metric: s32 = -1;
-leaderboard_ui: LeaderboardUiFrame;
-leaderboard_ui_codec: WidgetLeaderboardUiFrameCodec;
-leaderboard_row_codec: WidgetLeaderboardUiRowCodec;
-leaderboard_app_codec: WidgetLeaderboardUiAppCodec;
 leaderboard_app_names: [16][25]u8;
 leaderboard_app_titles: [16][128]u8;
 leaderboard_app_count: s32;
@@ -158,6 +153,14 @@ LeaderboardGameValue :: (app: *InnerBreeze) -> float64 {
     return 0.0
 }
 
+LeaderboardGameLevel :: (app: *InnerBreeze) -> float64 {
+    for index: cast(s32)0..leaderboard_board_count - 1 {
+        score := *game_scores[leaderboard_boards[index]]
+        if TextUntilNul(score.game[:]) == LeaderboardBoardName(app) { return cast(float64)score.level }
+    }
+    return 0.0
+}
+
 // The Wim Hof and meditation figures from this device's own records, which
 // the node cannot read once sessions sync encrypted, and every game score,
 // published with the next refresh. Only these numbers leave the device.
@@ -187,6 +190,11 @@ LeaderboardStatsBody :: (app: *InnerBreeze) -> string {
             ifx count > 0 then "," else "", TextUntilNul(score.game[:]), TextUntilNul(score.metric[:]),
             score.value, score.value, today)
         count += 1
+        if score.run {
+            BuilderPrint(*out, ",{\"practice\":\"%\",\"metric\":\"level\",\"value\":%,\"label\":\"%\",\"local_date\":%}",
+                TextUntilNul(score.game[:]), score.level, score.level, today)
+            count += 1
+        }
     }
     BuilderPrint(*out, "]}")
     if count == 0 {
@@ -238,7 +246,6 @@ LeaderboardKeepInstalled :: (app: *InnerBreeze, installed: LeaderboardMessage) -
     }
     app.leaderboard_practice = installed.practices[0]
     app.leaderboard_metric = LEADERBOARD_STREAK
-    leaderboard_ui.scroll = 0
     return true
 }
 
@@ -268,13 +275,23 @@ LeaderboardLoadBoard :: (practice: s32, metric: s32, output: []u8) {
 LeaderboardLoadCache :: (app: *InnerBreeze) {
     if LeaderboardAppName(app) != "practices" {
         out: Vec(u8)
-        BuilderPrint(*out, "leaderboard.games.%.%", LeaderboardBoardName(app), GAME_SCORE_LEVELS)
+        BuilderPrint(*out, "leaderboard.games.%.%", LeaderboardBoardName(app), GameScoreMetric(LeaderboardBoardName(app), 0))
         key := BuilderFinish(out)
         defer { PackageFree(key) }
         if storage_get_social_cache_json(key, *app.leaderboard_json[0], 8192) == 0 {
             unused AppCopyText("{\"rows\":[]}", app.leaderboard_json[:])
         }
-        unused AppCopyText("{\"rows\":[]}", app.leaderboard_avg_json[:])
+        if GameScoreRun(LeaderboardBoardName(app)) {
+            second: Vec(u8)
+            BuilderPrint(*second, "leaderboard.games.%.level", LeaderboardBoardName(app))
+            second_key := BuilderFinish(second)
+            if storage_get_social_cache_json(second_key, *app.leaderboard_avg_json[0], 8192) == 0 {
+                unused AppCopyText("{\"rows\":[]}", app.leaderboard_avg_json[:])
+            }
+            PackageFree(second_key)
+        } else {
+            unused AppCopyText("{\"rows\":[]}", app.leaderboard_avg_json[:])
+        }
         app.leaderboard_loaded = 1
         app.leaderboard_revision += 1
         return
@@ -381,7 +398,8 @@ LeaderboardRebuild :: (app: *InnerBreeze) {
         load_friends_cache(app)
     }
     practice_app := LeaderboardAppName(app) == "practices"
-    has_average := practice_app && LeaderboardHasAverage(practice)
+    run := !practice_app && GameScoreRun(LeaderboardBoardName(app))
+    has_average := (practice_app && LeaderboardHasAverage(practice)) || run
     account: AccountKeys
     own_id: string = ""
     if sync_account_load(*account) != 0 && account.public_id[0] != cast(u8)0 {
@@ -427,7 +445,9 @@ LeaderboardRebuild :: (app: *InnerBreeze) {
             if TextUntilNul(leaderboard_averages[item].user_id[:]) == user_id {
                 entry.average_value = leaderboard_averages[item].value
                 label := TextUntilNul(leaderboard_averages[item].label[:])
-                if practice == EXERCISE_MEDITATION && label.count > 0 {
+                if run {
+                    LeaderboardFormatRounded(entry.average_value, entry.average[:])
+                } else if practice == EXERCISE_MEDITATION && label.count > 0 {
                     unused AppCopyText(label, entry.average[:])
                 } else {
                     LeaderboardFormatAverage(practice, entry.average_value, entry.average[:])
@@ -441,6 +461,10 @@ LeaderboardRebuild :: (app: *InnerBreeze) {
                 entry.own = true
                 entry.streak_value = LeaderboardGameValue(app)
                 LeaderboardFormatRounded(entry.streak_value, entry.streak[:])
+                if run {
+                    entry.average_value = LeaderboardGameLevel(app)
+                    LeaderboardFormatRounded(entry.average_value, entry.average[:])
+                }
             }
         }
         leaderboard_count += 1
@@ -463,7 +487,8 @@ LeaderboardRebuild :: (app: *InnerBreeze) {
         display_name(*entry.name[0], cast(s64)entry.name.count,
             LeaderboardText(friends, positions[index], "alias", alias[:]), user_id)
         LeaderboardFormatRounded(0.0, entry.streak[:])
-        LeaderboardFormatAverage(practice, 0.0, entry.average[:])
+        if run { LeaderboardFormatRounded(0.0, entry.average[:]) }
+        else { LeaderboardFormatAverage(practice, 0.0, entry.average[:]) }
         leaderboard_count += 1
     }
 
@@ -479,6 +504,10 @@ LeaderboardRebuild :: (app: *InnerBreeze) {
             entry.own = true
             entry.streak_value = LeaderboardGameValue(app)
             LeaderboardFormatRounded(entry.streak_value, entry.streak[:])
+            if run {
+                entry.average_value = LeaderboardGameLevel(app)
+                LeaderboardFormatRounded(entry.average_value, entry.average[:])
+            }
         }
         leaderboard_count += 1
     }
@@ -498,75 +527,6 @@ LeaderboardRebuild :: (app: *InnerBreeze) {
     leaderboard_built_metric = metric
     unused AppCopyText(LeaderboardAppName(app), leaderboard_built_app[:])
     unused AppCopyText(LeaderboardBoardName(app), leaderboard_built_board[:])
-}
-
-LeaderboardUiCall :: (context: *void, module: *u8, function: *u8,
-    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
-    if TextFromCString(module) != "leaderboard_view" {
-        return WidgetHostCall(context, module, function, arguments, count, result)
-    }
-    name := TextFromCString(function)
-    if name == "ReadLeaderboardAppHost" && count == 1 &&
-    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
-        index := cast(s32)arguments[0].integer
-        item: LeaderboardUiApp
-        if index >= 0 && index < leaderboard_app_count {
-            item.name = TextUntilNul(leaderboard_app_names[index][:])
-            item.title = TextUntilNul(leaderboard_app_titles[index][:])
-        }
-        result.* = WidgetEncodeLeaderboardUiApp(item, *leaderboard_app_codec)
-        return 1
-    }
-    if name == "ReadLeaderboardBoardHost" && count == 1 &&
-    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
-        index := cast(s32)arguments[0].integer
-        item: LeaderboardUiApp
-        if index >= 0 && index < leaderboard_board_count {
-            item.name = TextUntilNul(game_scores[leaderboard_boards[index]].game[:])
-            item.title = TextUntilNul(game_scores[leaderboard_boards[index]].title[:])
-        }
-        result.* = WidgetEncodeLeaderboardUiApp(item, *leaderboard_app_codec)
-        return 1
-    }
-    if name == "ReadLeaderboardUiHost" && count == 0 {
-        result.* = WidgetEncodeLeaderboardUiFrame(leaderboard_ui, *leaderboard_ui_codec)
-        return 1
-    }
-    if name == "WriteLeaderboardUiHost" && count == 1 && WidgetValidLeaderboardUiFrame(arguments[0]) {
-        observed := WidgetDecodeLeaderboardUiFrame(arguments[0], *leaderboard_ui_codec)
-        leaderboard_ui.scroll = observed.scroll
-        return 1
-    }
-    if name == "ReadLeaderboardRowHost" && count == 1 &&
-    HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
-        index := cast(s32)arguments[0].integer
-        row: LeaderboardUiRow
-        if index >= 0 && index < leaderboard_count {
-            entry := *leaderboard_entries[index]
-            row.rank = index + 1
-            row.name = TextUntilNul(entry.name[:])
-            row.streak = TextUntilNul(entry.streak[:])
-            row.average = TextUntilNul(entry.average[:])
-            row.own = entry.own
-            if row.own && context != null {
-                app := cast(*InnerBreeze)context
-                if LeaderboardAppName(app) == "practices" {
-                    AchievementLeaderboardViewed(LeaderboardPracticeId(app.leaderboard_practice))
-                }
-            }
-        }
-        result.* = WidgetEncodeLeaderboardUiRow(row, *leaderboard_row_codec)
-        return 1
-    }
-    if name == "LeaderboardLocaleHost" && count == 1 &&
-    HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
-        return 1
-    }
-    return 0
 }
 
 // The old route remains a redirect for saved navigation and older packages.
@@ -614,7 +574,8 @@ InbeLeaderboardSnapshot :: (app: *InnerBreeze, request: string) -> string {
                 unused AppCopyText(title, board.app_title[:])
                 unused AppCopyText(game, board.id[:])
                 unused AppCopyText(TextUntilNul(score.title[:]), board.title[:])
-                unused AppCopyText(LocaleText("leaderboard_levels"), board.primary[:])
+                unused AppCopyText(LocaleText(ifx score.run then "leaderboard_score" else "leaderboard_levels"), board.primary[:])
+                if score.run { unused AppCopyText(LocaleText("leaderboard_level"), board.average[:]) }
                 page.board_count += 1
             }
         }

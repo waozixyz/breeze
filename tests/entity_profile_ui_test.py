@@ -16,6 +16,7 @@ OUTPUT = ROOT / "build/entity-profile-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 BINARY = Path(sys.argv[1]).resolve()
 FRIENDS_ONLY = "--friends-only" in sys.argv[2:]
+IDENTITY_ONLY = "--identity-only" in sys.argv[2:]
 DESKTOP_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
                "SESSION_MANAGER", "GDK_DISPLAY")
 assert all(not os.environ.get(key) for key in DESKTOP_ENV), "Inherited desktop environment"
@@ -87,7 +88,7 @@ with contextlib.ExitStack() as stack:
         assert account["x"] + account["width"] <= settings["x"], "Profile is not left of Settings"
         driver.press(focus_id=6792, role="button")
         driver.wait(label="Change picture", role="button")
-        if not FRIENDS_ONLY:
+        if not FRIENDS_ONLY and not IDENTITY_ONLY:
             driver.wait(label="Dew balance", role="text")
             assert not driver.find(label="Dew balance", role="button"), "Dew is still a separate shortcut"
         assert not driver.find(label="Name", role="text_field"), "Removed Name field is visible"
@@ -115,6 +116,23 @@ with contextlib.ExitStack() as stack:
     if not FRIENDS_ONLY:
         with application("edit"):
             open_profile()
+            driver.press(label="Public ID", role="button")
+            driver.wait(label=owner, role="text")
+            driver.press(label=owner, role="button")
+            copied = subprocess.check_output(["xclip", "-o", "-selection", "clipboard"],
+                                             env=environment, text=True, timeout=5)
+            assert copied == owner, "Entity's public ID did not reach the system clipboard"
+            assert display.poll() is None and Path(f"/proc/{display.pid}/exe").resolve().name == "Xvfb"
+            window = subprocess.check_output(["xdotool", "search", "--onlyvisible", "--pid", str(driver.process.pid)],
+                                             env=environment, text=True, timeout=5).splitlines()[0]
+            assert subprocess.check_output(["xdotool", "getwindowpid", window],
+                                           env=environment, text=True, timeout=5).strip() == str(driver.process.pid)
+            subprocess.run(["import", "-window", window, str(OUTPUT / "public-id.png")], env=environment, check=True)
+            driver.press(label="Done", role="button")
+            if IDENTITY_ONLY:
+                assert credentials() == before, "Showing and copying an ID changed account keys"
+                print("Entity public ID: full dialog, QR composition, native clipboard and account preservation passed")
+                sys.exit(0)
             driver.wait(label="Manage data", role="button")
             for label in ("Today", "Active days", "Sessions"):
                 driver.wait(label=label, role="text", visible=False)

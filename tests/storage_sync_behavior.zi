@@ -14,6 +14,7 @@
 #import, file "../src/storage/sync_state.zi";
 #import, file "../src/storage/storage_settings.zi";
 #import, file "../src/storage/entity_service.zi";
+#import, file "../src/storage/game_scores.zi";
 #import, file "../src/storage/sync_collections.zi";
 #import, file "../src/storage/sync_record_crypto.zi";
 #import, file "../src/storage/sync_exchange.zi";
@@ -2522,10 +2523,31 @@ test_entity_level_service :: () {
     storage_close()
 }
 
+test_game_score_upgrade :: () {
+    root := make_root("game-score-upgrade")
+    check_true("open older game-score fixture", storage_init(root) != 0)
+    storage_set_setting_text(GAME_SCORES_SETTING, "arcade\tarcade.shovey\tShovey\tlevels\t28\n")
+    game_scores_loaded = false
+    GameScoresLoad()
+    check_int("older five-field score survives", game_score_count, 1)
+    check_true("older puzzle score retains its levels", game_scores[0].value == 28 && !game_scores[0].run)
+    check_true("Wurm best run is accepted", GameScoreReport("arcade", "xyz.waozi.wurm", "Apfelwurm", "run 58 1234"))
+    check_true("invalid Wurm best run is rejected", !GameScoreReport("arcade", "xyz.waozi.wurm", "Apfelwurm", "run -1 1234"))
+    game_scores_loaded = false
+    GameScoresLoad()
+    check_int("upgraded scores preserve both games", game_score_count, 2)
+    check_true("old puzzle score survives new run serialization", game_scores[0].value == 28 && !game_scores[0].run)
+    check_true("Wurm level and score survive reload", game_scores[1].run && game_scores[1].level == 58 && game_scores[1].value == 1234)
+    check_true("Wurm uses the shared two-column metrics", GameScoreMetric("xyz.waozi.wurm", 0) == "score" && GameScoreMetric("xyz.waozi.wurm", 1) == "level")
+    game_scores_loaded = false
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
     if guard != 0 { return guard }
+    test_game_score_upgrade()
     test_practice_session_details()
     test_node_cursors()
     test_record_page_storage()
