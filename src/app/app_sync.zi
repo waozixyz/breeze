@@ -110,6 +110,7 @@ SyncCoordinator :: struct {
     social_refresh_running: s32
     remote_sync_due: s32
     retry_requested: bool
+    storage_recovery_attempted: bool
 }
 
 SyncWorkerArgs :: struct {
@@ -186,6 +187,14 @@ sync_unlock :: () {
 
 app_sync_record_result :: (result: s32) {
     SettingsStoreInt("sync_last_result", result)
+    // A refused mixed upload gets one fresh attempt with the node's full
+    // state, which selects free tracking ahead of pending custom content.
+    if result == SYNC_STORAGE_FULL && !g_sync.storage_recovery_attempted {
+        g_sync.storage_recovery_attempted = true
+        g_sync.retry_requested = true
+    } else if result == SYNC_OK {
+        g_sync.storage_recovery_attempted = false
+    }
     if retry_is_temporary(result) && AppSyncNodeFailover() {
         g_sync.dirty_sync_at = GetTime() + 1.0
     }
@@ -255,6 +264,7 @@ app_clear_disconnected_sync_work :: () {
     g_sync.remote_sync_due = 0
     g_sync.retry_requested = false
     g_sync.social_retry_at = 0.0
+    g_sync.storage_recovery_attempted = false
     g_sync.social_retry_attempt = 0
     g_sync.social_refresh_pending = 0
     SocialQueueClear()
@@ -1173,6 +1183,12 @@ app_auto_sync :: (app: *InnerBreeze) -> s32 {
     }
     now = GetTime()
     g_sync.last_input_at = now
+    // New local work must get an attempt even while old charged content
+    // waits for space. Repeated refusals without new work still stop.
+    if SettingsReadInt("sync_last_result", SYNC_OK) == SYNC_STORAGE_FULL {
+        g_sync.storage_recovery_attempted = false
+        g_sync.retry_requested = true
+    }
     due = now + sync_input_quiet_seconds
     if g_sync.dirty_sync_at <= 0.0 || due < g_sync.dirty_sync_at {
         g_sync.dirty_sync_at = due

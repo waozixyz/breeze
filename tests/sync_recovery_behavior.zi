@@ -4,6 +4,8 @@
 #import, file "../src/app/sync_retry.zi";
 #import, file "../src/app/app_types.zi";
 #import, file "../src/storage/sync_status.zi";
+#import, file "../src/storage/sync_result.zi";
+using SyncResult;
 #import, file "background_audio_stub.zi";
 
 // Host state the C side provides: the clock, the account switch, and the
@@ -115,6 +117,17 @@ Answer :: () -> s32 {
     // A payload that could not be built retries on its schedule, Sync now
     // tries at once, and the old failure is not reported as a success.
     app: InnerBreeze
+    app_sync_record_result(SYNC_STORAGE_FULL)
+    if !g_sync.retry_requested || !app_sync_retry_ready(SYNC_STORAGE_FULL, now) { return 60 }
+    g_sync.retry_requested = false
+    app_sync_record_result(SYNC_STORAGE_FULL)
+    if g_sync.retry_requested || app_sync_retry_ready(SYNC_STORAGE_FULL, now) { return 61 }
+    if app_auto_sync(*app) == 0 || !g_sync.retry_requested { return 62 }
+    g_sync.retry_requested = false
+    app_sync_record_result(SYNC_STORAGE_FULL)
+    if !g_sync.retry_requested { return 63 }
+    g_sync.retry_requested = false
+    app_sync_record_result(SYNC_OK)
     app_sync_record_result(3)
     if app_sync_retry_ready(3, now) { return 30 }
     if app_auto_sync(*app) == 0 || g_sync.retry_requested { return 31 }

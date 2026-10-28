@@ -7,6 +7,7 @@
 #import, file "../src/storage/data.zi";
 #import, file "../src/storage/state.zi";
 #import, file "../src/storage/db.zi";
+#import, file "../src/storage/sql_query.zi";
 #import, file "../src/storage/session_mood.zi";
 #import, file "../src/storage/storage_core.zi";
 #import, file "../src/storage/sync_outbox.zi";
@@ -45,6 +46,7 @@
 #import, file "../src/apps/catalog.zi";
 #import, file "../src/storage/sync_nodes.zi";
 #import, file "../src/storage/sync_node_storage.zi";
+#import, file "../src/storage/sync_storage_usage.zi";
 #import, file "../src/storage/media_records.zi";
 #import, file "../src/storage/entity_records.zi";
 #import, file "../src/storage/entity_record_crypto.zi";
@@ -2543,10 +2545,50 @@ test_game_score_upgrade :: () {
     storage_close()
 }
 
+test_storage_note_accounting :: () {
+    root := make_root("sync-note-accounting")
+    check_true("init quota accounting db", storage_init(root) != 0)
+    set_account()
+    storage_set_setting_text("sync_server_url", "https://api.waozi.xyz")
+    check_true("session numbers have no charge", storage_sync_note_bytes(
+        "private.inbe.v1.sessions", "{\"note\":\"\",\"tags\":\"\",\"rounds\":[{\"seconds\":999}]}") == 0)
+    check_true("notes count UTF-8 bytes", storage_sync_note_bytes(
+        "private.inbe.v1.sessions", "{\"note\":\"é日\",\"tags\":\"x\"}") == 6)
+    check_true("numeric habit answers remain free", storage_sync_note_bytes(
+        "private.inbe.v1.habit-entries", "{\"answers\":\"[{\\\"type\\\":\\\"number\\\",\\\"value\\\":\\\"12345\\\"}]\"}") == 0)
+    check_true("only custom habit answers count", storage_sync_note_bytes(
+        "private.inbe.v1.habit-entries", "{\"answers\":\"[{\\\"type\\\":\\\"number\\\",\\\"value\\\":\\\"12345\\\"},{\\\"type\\\":\\\"text\\\",\\\"value\\\":\\\"é日\\\"}]\"}") == 5)
+    check_true("Diary keeps its full charge", storage_sync_note_bytes(
+        LegacyPrivateAppsCollection, "{}") == -1)
+    storage_set_meta_int64(STORAGE_SYNC_BACKFILL_KEY, 1)
+    storage_set_meta_int64("sync_storage_notes_v1", 1)
+    check_true("prepare tracking fixture", exec_sql("INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,sync_mode,sync_activity,counter_enabled,sort_order,deleted_at,updated_at) VALUES('free-habit',(SELECT id FROM users LIMIT 1),'Basic tracking',10,20,30,0,0,1,1,0,1782300000)") != 0)
+    exec_sql("DELETE FROM sync_outbox")
+    check_true("queue charged Diary first", BundledAppRecordWrite("cell.diary.file.pending", "keep this pending"))
+    unused storage_enqueue_sync_habit("free-habit")
+    check_true("mark node full", SyncNodeStorageRecordFull("https://api.waozi.xyz",
+        "{\"code\":\"storage_full\",\"account_storage\":{\"used_bytes\":100,\"limit_bytes\":1}}"))
+    check_true("build free progress above quota", build_payload())
+    check_true("later progress bypasses Diary", contains(payload(), "private.inbe.v1.habits") && !contains(payload(), "cell.diary.file.pending"))
+    check_true("acknowledge free upload", storage_apply_sync_response_json(
+        "{\"protocol_version\":6,\"server_version\":1,\"server_clock\":1,\"changes\":{\"encrypted_records\":[]}}") != 0)
+    check_true("charged Diary remains queued", db_select_int64_text("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='cell.diary.file.pending'", 0) == 1)
+    check_true("only submitted tracking is acknowledged", db_select_int64_text("SELECT COUNT(*) FROM sync_outbox WHERE entity_id='free-habit'", 0) == 0)
+    SyncNodeStorageRecordResponse("https://api.waozi.xyz",
+        "{\"server_capabilities\":[\"basic-storage-free-v1\"]}")
+    check_true("a newly upgraded node refreshes existing notes", storage_meta_int64("sync_storage_notes_v1", 1) == 0)
+    storage_set_meta_int64("sync_storage_notes_v1", 1)
+    SyncNodeStorageRecordResponse("https://api.waozi.xyz",
+        "{\"server_capabilities\":[\"basic-storage-free-v1\"]}")
+    check_true("node policy refresh only runs once", storage_meta_int64("sync_storage_notes_v1", 0) == 1)
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
     if guard != 0 { return guard }
+    test_storage_note_accounting()
     test_game_score_upgrade()
     test_practice_session_details()
     test_node_cursors()

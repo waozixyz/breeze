@@ -1,0 +1,92 @@
+// Storage charges custom notes, not the structured fields around them.
+#import, file "sqlite.zi";
+#import, file "db.zi";
+#import, file "state.zi";
+#import, file "sql_query.zi";
+#import "text_buffer"
+#import, file "storage_settings.zi";
+#import, file "sync_node_storage.zi";
+#import, file "storage_core.zi";
+#import, file "../app/text_buffers.zi";
+
+// -1 means this is ordinary content, whose complete encrypted record counts.
+storage_sync_note_bytes :: (collection: string, plain: string) -> s64 {
+    query: string
+    if collection == "private.inbe.v1.sessions" {
+        query = "SELECT LENGTH(CAST(COALESCE(json_extract(?1,'$.note'),'') AS BLOB))+LENGTH(CAST(COALESCE(json_extract(?1,'$.tags'),'') AS BLOB))"
+    } else if collection == "private.inbe.v1.habit-entries" {
+        query = "SELECT COALESCE(SUM(LENGTH(CAST(json_extract(value,'$.value') AS BLOB))),0) FROM json_each(COALESCE(NULLIF(json_extract(?1,'$.answers'),''),'[]')) WHERE json_extract(value,'$.type')='text'"
+    } else {
+        return -1
+    }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), query, -1, *statement, null) != SQLITE_OK {
+        return -1
+    }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, plain)
+    if SqliteStep(statement) != SQLITE_ROW {
+        return -1
+    }
+    return SqliteColumnInt64(statement, 0)
+}
+
+// Select free tracking before charged uploads. Receipts name only records
+// actually submitted, so a full Diary cannot hold later progress behind it.
+StorageFreeOutboxSQL :: #string SQL_END
+SELECT o.seq FROM sync_outbox o WHERE
+ o.entity_type IN ('habit','habit_day','habit_setting','habit_change','habit_reward','habit_coin','app_preference','app_order','app_install')
+ OR (o.entity_type='entity_record' AND (o.entity_id GLOB 'entity.game-progress.*' OR o.entity_id GLOB 'entity.profile.*'))
+ OR (o.entity_type='cell_record' AND o.entity_id GLOB 'cell.achievement.*')
+ OR (o.entity_type='session' AND EXISTS(SELECT 1 FROM sessions s WHERE s.id=o.entity_id AND s.user_id=(SELECT id FROM users LIMIT 1) AND (s.deleted_at>0 OR (s.note='' AND s.tags=''))))
+ OR (o.entity_type='habit_entry' AND EXISTS(SELECT 1 FROM habit_entries e WHERE e.id=o.entity_id AND e.user_id=(SELECT id FROM users LIMIT 1) AND (e.deleted_at>0 OR NOT EXISTS(SELECT 1 FROM json_each(CASE WHEN json_valid(e.answers) THEN e.answers ELSE '[]' END) a WHERE json_extract(a.value,'$.type')='text' AND COALESCE(json_extract(a.value,'$.value'),'')<>''))))
+SQL_END;
+
+storage_prepare_upload_receipts :: (limit: s32) -> s64 {
+    if exec_sql("CREATE TEMP TABLE IF NOT EXISTS sync_upload_receipts(seq INTEGER PRIMARY KEY)") == 0 ||
+    exec_sql("DELETE FROM sync_upload_receipts") == 0 {
+        return -1
+    }
+    if limit <= 0 {
+        return 0
+    }
+    query: [4096]u8
+    unused AppCopyText("INSERT INTO sync_upload_receipts SELECT seq FROM (", query[:])
+    storage := SyncNodeStorageRead(storage_get_setting_text("sync_server_url"))
+    if storage.full {
+        unused AppAppendText(StorageFreeOutboxSQL, query[:])
+    } else {
+        unused AppAppendText("SELECT seq FROM sync_outbox", query[:])
+    }
+    unused AppAppendText(") ORDER BY seq LIMIT ?1", query[:])
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), TextUntilNul(query[:]), -1, *statement, null) != SQLITE_OK {
+        return -1
+    }
+    unused SqliteBindInt64(statement, 1, cast(s64)limit)
+    step := SqliteStep(statement)
+    SqliteFinalize(statement)
+    if step != SQLITE_DONE {
+        return -1
+    }
+    if db_select_int64_text("SELECT COUNT(*) FROM sync_upload_receipts", 0) == 0 {
+        // A numeric edit to an entry with an unchanged note can still fit.
+        // Try mixed tracking separately so a queued photo cannot reject it.
+        fallback := "INSERT INTO sync_upload_receipts SELECT seq FROM sync_outbox ORDER BY seq LIMIT ?1"
+        if storage.full {
+            fallback = "INSERT INTO sync_upload_receipts SELECT seq FROM sync_outbox ORDER BY CASE WHEN entity_type IN ('session','habit_entry') THEN 0 ELSE 1 END,queued_at DESC,seq DESC LIMIT ?1"
+            limit = 1
+        }
+        if SqlitePrepareText(storage_db_handle(), fallback,
+            -1, *statement, null) != SQLITE_OK {
+            return -1
+        }
+        unused SqliteBindInt64(statement, 1, cast(s64)limit)
+        step = SqliteStep(statement)
+        SqliteFinalize(statement)
+        if step != SQLITE_DONE {
+            return -1
+        }
+    }
+    return db_select_int64_text("SELECT COALESCE(MAX(seq),0) FROM sync_upload_receipts", 0)
+}

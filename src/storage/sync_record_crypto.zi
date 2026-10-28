@@ -14,6 +14,7 @@
 #import, file "storage_core.zi";
 #import, file "storage_settings.zi";
 #import, file "sync_record_codec.zi";
+#import, file "sync_storage_usage.zi";
 #import, file "sync_collections.zi";
 #import, file "entity_records.zi";
 #import, file "../apps/package_files.zi";
@@ -274,6 +275,13 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
     }
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "content_hash", AppTextFromCString(*content_hash[0], ACCOUNT_PUBLIC_ID_HEX_SIZE))
+    note_bytes := storage_sync_note_bytes(collection,
+        AppTextFromCString(plain.data, cast(s32)(plain.len + 1)))
+    if note_bytes >= 0 {
+        // Charge UTF-8 note bytes, excluding encryption and structural fields.
+        record_bytes := collection.count + record_id.count + key_id.count + 24 + sealed_len * 2 + 64
+        storage_json_append_int_field(json, "free_bytes", record_bytes - note_bytes)
+    }
     storage_json_builder_append_text(json, ",\"schema_version\":1")
     storage_json_builder_append_text(json, "}")
     ok = json.ok
@@ -389,8 +397,8 @@ storage_append_encrypted_records_json :: (json: *StorageJsonBuilder, through_seq
     if storage_db_handle() == null {
         json.ok = 0
     } else {
-        sql_cx13: [98] u8
-        AppCopyText("SELECT seq,entity_type,entity_id,local_date,queued_at FROM sync_outbox WHERE seq<=?1 ORDER BY seq", sql_cx13[:])
+        sql_cx13: [256] u8
+        AppCopyText("SELECT seq,entity_type,entity_id,local_date,queued_at FROM sync_outbox WHERE seq<=?1 AND seq IN (SELECT seq FROM sync_upload_receipts) ORDER BY seq", sql_cx13[:])
         if SqlitePrepare(storage_db_handle(), *sql_cx13[0], -1, *stmt, null) == SQLITE_OK {
             SqliteBindInt64(stmt, 1, through_seq)
             while true {

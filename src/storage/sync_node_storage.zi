@@ -9,6 +9,7 @@
 #import "text"
 #import "vec"
 #import, file "storage_settings.zi";
+#import, file "storage_core.zi";
 #import, file "sync_nodes.zi";
 #import, file "db.zi";
 #import, file "sql_query.zi";
@@ -172,6 +173,23 @@ SyncRecordPackageSequence :: (response: string) {
 // A successful sync replaces the node's report and clears a full state.
 SyncNodeStorageRecordResponse :: (address: string, response: string) {
     SyncRecordPackageSequence(response)
+    // A node may upgrade after this device. Refresh mixed records once it
+    // advertises note accounting, including records just downloaded there.
+    capabilities := FieldAt(response, 0, "server_capabilities")
+    count := ArrayCount(response, capabilities)
+    for index: cast(s32)0..count - 1 {
+        capability: [64]u8
+        length := ReadStringText(response, ElementAt(response, capabilities, index), capability[:])
+        if length > 0 && TextFromBytes(capability[:length]) == "basic-storage-free-v1" {
+            key := SyncNodeStorageKey(address, "basic_storage_v1")
+            defer { PackageFree(key) }
+            if key.count > 0 && storage_get_setting_text(key) != "1" {
+                storage_set_meta_int64("sync_storage_notes_v1", 0)
+                storage_set_setting_text(key, "1")
+            }
+            break
+        }
+    }
     storage: SyncNodeStorage
     if !SyncNodeStorageFromJson(response, *storage) {
         return

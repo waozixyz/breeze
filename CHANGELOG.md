@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.59] - 2026-10-28
+
+- Keep habits, practices, session counts and game progress free of storage charges, even when account storage is full.
+- Count custom notes, Diary and media toward storage, and keep progress syncing past queued uploads that need more space.
+
 ## [2.1.58] - 2026-10-28
 
 - Keep downloaded Arcade games and saved progress across updates.
