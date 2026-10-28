@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.0.26] - 2026-10-28
+
+- Maintenance release for Inner Breeze 2.1.58.
+
 ## [1.0.25] - 2026-10-28
 
 - Open the shared Profile leaderboard with practice, puzzle and Apfelwurm score and level rankings.

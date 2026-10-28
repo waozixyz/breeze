@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.58] - 2026-10-28
+
+- Keep downloaded Arcade games and saved progress across updates.
+- Show premium username prices, confirm Dew purchases and open top-up when needed. Existing usernames stay free to keep.
+- Align Profile leaderboard columns and improve Friends input, profile pictures and app rearranging.
+
 ## [2.1.56] - 2026-10-28
 
 - Open the keyboard when editing an account alias and copy the complete public ID from Profile.

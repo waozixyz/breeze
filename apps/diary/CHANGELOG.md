@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.22] - 2026-10-28
+
+- Maintenance release for Inner Breeze 2.1.58.
+
 ## [1.3.21] - 2026-10-28
 
 - Open each day’s photos from a gallery icon, attach photos with the paperclip, and keep the entry’s layout steady while browsing its gallery.
