@@ -133,7 +133,7 @@ test: media-metadata-test media-store-test entity-photos-test photos-app-test
 test: node-app-records-test node-app-snapshot-test
 test: app-click-block-zi-test
 test: phone-check-gate-test
-test: release-tooling-test
+test: release-tooling-test desktop-update-test
 test: package-release-test
 test: app-preferences-sync-test
 test: package-version-test

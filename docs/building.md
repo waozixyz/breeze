@@ -20,6 +20,18 @@ make native
 make run
 ```
 
+Install the latest published Linux desktop release and keep it current:
+
+```bash
+python3 scripts/update-desktop.py --enable-automatic
+```
+
+This verifies the release download, installs it under `~/.local`, and checks
+for new releases every 30 minutes and after login. Updates preserve running
+app processes and user data; a running app uses the new version when it is
+next opened. Previous installed files are saved under `backup/desktop-updates/`.
+The user service and timer are named `inner-breeze-update`.
+
 Build Android artifacts:
 
 ```bash

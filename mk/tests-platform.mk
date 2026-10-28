@@ -113,6 +113,10 @@ update-transport-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
 		python3 tests/update_flow_zi_test.py
 
+.PHONY: desktop-update-test
+desktop-update-test:
+	python3 tests/desktop_update_test.py
+
 .PHONY: update-policy-zi-test
 update-policy-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
