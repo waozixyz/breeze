@@ -93,6 +93,10 @@ jobs:
         timeout-minutes: 20
         run: python3 .github/scripts/install-android-sdk.py
 
+      - name: Install Android build dependencies
+        timeout-minutes: 15
+        run: .github/scripts/install-apt-packages.sh .github/apt/android-packages.txt
+
       - name: Prepare Android signing key
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
@@ -117,6 +121,18 @@ jobs:
           SOURCE_COMMIT: ${{ inputs.source_commit }}
         run: |
           set -euo pipefail
+          python3 - <<'PY'
+          import importlib.util
+          import os
+          import subprocess
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('phone_check', 'scripts/phone-check.py')
+          check = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(check)
+          revision = os.environ['SOURCE_COMMIT']
+          assert subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip() == revision
+          assert check.app_tree(Path.cwd()) == check.app_tree(Path.cwd(), revision), 'App source differs from candidate'
+          PY
           ./droid/gradlew -p droid assembleRelease \
             -Papp.onlyAbi=armeabi-v7a \
             -Pkeystore.path="$HOME/.android/inbe-release.keystore" \
@@ -132,6 +148,26 @@ jobs:
             cd build/release/moto
             sha256sum "inbe-$VERSION-moto.apk" > "inbe-$VERSION-moto.apk.sha256"
           )
+          python3 - <<'PY'
+          import hashlib
+          import importlib.util
+          import json
+          import os
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('phone_check', 'scripts/phone-check.py')
+          check = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(check)
+          root = Path.cwd()
+          revision = os.environ['SOURCE_COMMIT']
+          content = check.app_tree(root, revision)
+          assert check.app_tree(root) == content, 'App source changed during build'
+          apk = next(Path('build/release/moto').glob('inbe-*-moto.apk'))
+          receipt = dict(schema=1, status='passed', source_commit=revision, app_tree=content,
+                         apk=dict(sha256=hashlib.sha256(apk.read_bytes()).hexdigest(), **check.apk_identity(apk)),
+                         workflow_run=os.environ['GITHUB_SERVER_URL'] + '/' + os.environ['GITHUB_REPOSITORY'] +
+                         '/actions/runs/' + os.environ['GITHUB_RUN_ID'])
+          (apk.parent / 'build-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
+          PY
 
       - name: Remove signing key
         if: always()
