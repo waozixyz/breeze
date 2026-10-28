@@ -32,7 +32,14 @@ capture() {
     adb_run logcat -b crash -d > "$logs/android-smoke-crash.txt" 2>&1 || true
     adb_run shell dumpsys activity exit-info "$app_id" > "$logs/android-smoke-exit-info.txt" 2>&1 || true
 }
-trap capture EXIT
+started=0
+cleanup() {
+    capture
+    if [ "$started" = 1 ]; then
+        adb_run shell am force-stop "$app_id" || true
+    fi
+}
+trap cleanup EXIT
 
 if [ "${ANDROID_SMOKE_SKIP_EMULATOR:-0}" != 1 ]; then
     env -u DISPLAY -u WAYLAND_DISPLAY ANDROID_EMULATOR_HEADLESS=1 bash scripts/emulator.sh
@@ -77,6 +84,7 @@ foreground() {
 }
 
 adb_run shell am force-stop "$app_id"
+started=1
 start
 pid=$(process || true)
 [ -n "$pid" ] || fail 'app exited during startup'

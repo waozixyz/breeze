@@ -100,6 +100,19 @@ class PhoneCheckGateTest(unittest.TestCase):
         self.assertEqual(phone.adb.call_args_list, [mock.call("get-state")])
         phone.shell.assert_not_called()
 
+    def test_practice_failure_still_closes_the_owned_app(self):
+        phone = mock.Mock()
+        phone.host = "local"
+        phone.adb.side_effect = [b"device\n", b"Success\n"]
+        phone.pid.side_effect = ["", "4321", ""]
+        phone.screenshot.side_effect = RuntimeError("fixture screenshot failed")
+        with mock.patch.object(phone_check, "apk_identity", return_value={"package": "fixture.debug"}), \
+             mock.patch.object(phone_check.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "fixture screenshot failed"):
+                phone_check.check(phone, self.root / "candidate.apk", 60, self.root)
+        self.assertEqual(phone.shell.call_args, mock.call("am", "force-stop", "fixture.debug"))
+        self.assertEqual(phone.pid.call_args, mock.call("fixture.debug"))
+
     def test_missing_process_is_empty_but_adb_failure_is_not_ignored(self):
         phone = phone_check.Phone("local", "Fixture")
         with mock.patch.object(phone, "shell", side_effect=subprocess.CalledProcessError(

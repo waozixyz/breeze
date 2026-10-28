@@ -326,30 +326,37 @@ def check(phone, apk, seconds, evidence):
     phone.shell("input", "keyevent", "KEYCODE_WAKEUP")
     phone.shell("wm", "dismiss-keyguard")
     phone.shell("am", "force-stop", package)
-    phone.start(package)
-    time.sleep(4)
-    pid = phone.pid(package)
-    if not pid:
-        raise ValueError("Inner Breeze did not stay running after launch")
-    phone.screenshot(package, evidence / "launch.png")
-    phone.start(package, "-a", START_PRACTICE, "--ei", "practice_id", str(WIM_HOF))
-    time.sleep(3)
-    phone.screenshot(package, evidence / "practice-start.png")
-    timing = frame_timing(phone, package, seconds)
-    phone.screenshot(package, evidence / "practice-end.png")
-    if phone.pid(package) != pid:
-        raise ValueError("Inner Breeze restarted during the practice")
-    phone.shell("input", "keyevent", "KEYCODE_HOME")
-    time.sleep(2)
-    phone.start(package)
-    time.sleep(2)
-    if phone.pid(package) != pid:
-        raise ValueError("Inner Breeze restarted when it returned from the background")
-    phone.screenshot(package, evidence / "resume.png")
-    timing["resume_layout_shift"] = layout_shift(evidence / "practice-end.png", evidence / "resume.png")
-    model = phone.shell("getprop", "ro.product.model").strip()
-    android = phone.shell("getprop", "ro.build.version.release").strip()
-    return identity, timing, dict(model=model, android=android)
+    try:
+        phone.start(package)
+        time.sleep(4)
+        pid = phone.pid(package)
+        if not pid:
+            raise ValueError("Inner Breeze did not stay running after launch")
+        phone.screenshot(package, evidence / "launch.png")
+        phone.start(package, "-a", START_PRACTICE, "--ei", "practice_id", str(WIM_HOF))
+        time.sleep(3)
+        phone.screenshot(package, evidence / "practice-start.png")
+        timing = frame_timing(phone, package, seconds)
+        phone.screenshot(package, evidence / "practice-end.png")
+        if phone.pid(package) != pid:
+            raise ValueError("Inner Breeze restarted during the practice")
+        phone.shell("input", "keyevent", "KEYCODE_HOME")
+        time.sleep(2)
+        phone.start(package)
+        time.sleep(2)
+        if phone.pid(package) != pid:
+            raise ValueError("Inner Breeze restarted when it returned from the background")
+        phone.screenshot(package, evidence / "resume.png")
+        timing["resume_layout_shift"] = layout_shift(evidence / "practice-end.png", evidence / "resume.png")
+        model = phone.shell("getprop", "ro.product.model").strip()
+        android = phone.shell("getprop", "ro.build.version.release").strip()
+        return identity, timing, dict(model=model, android=android)
+    finally:
+        # This check refused a pre-existing process before installation. Stop
+        # only its own app, including any practice/audio still running.
+        phone.shell("am", "force-stop", package)
+        if phone.pid(package):
+            raise ValueError("the test app did not close after the phone check")
 
 
 def resolve_host(host, serial):
