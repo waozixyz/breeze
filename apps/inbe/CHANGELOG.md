@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.56] - 2026-10-28
+
+- Keep Apps guide translations available to older installed wrappers after automatic package updates.
+
 ## [2.1.55] - 2026-10-27
 
 - Bring Lumi 1.5.22, Habits 1.3.10, Practices 1.6.4, Lists 1.1.23, Diary 1.3.19 and Leaderboard 1.0.24 for Inner Breeze 2.1.55.
