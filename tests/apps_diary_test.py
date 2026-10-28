@@ -120,8 +120,9 @@ def application(profile, label, import_source=None, size=(900, 720)):
             command("xdotool", "windowsize", window, str(size[0]), str(size[1]))
             command("xdotool", "windowfocus", window)
             time.sleep(1.5)
-            # Fresh profiles can show the first-run Lumi guide over the editor.
-            tap(window, size[0] // 2 + 112, 114)
+            if driver.find(label="Close", role="button", visible=True):
+                driver.press(label="Close", role="button")
+                driver.wait_gone(label="Close", role="button")
             yield window
             assert app.poll() is None, "Diary crashed"
         finally:
@@ -159,21 +160,22 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
         capture(window, "saved")
         # Typing within a moment of another change joins its undo step.
         time.sleep(1.2)
-        tap(window, 700, 86)  # Insert current time.
+        driver.wait_gone(contains="Achievement unlocked", timeout=20)
+        driver.press(label="Insert time", role="button")
         wait_for_text(entry, lambda text: "**" in text, "Time insertion was not saved")
         with_time = json.loads(entry.read_text())["text"]
-        tap(window, 556, 86)  # Undo.
+        driver.press(label="Undo")
         wait_for_text(entry, lambda text: text == "A saved Diary entry", "Undo did not restore the entry")
-        tap(window, 604, 86)  # Redo.
+        driver.press(label="Redo")
         wait_for_text(entry, lambda text: text == with_time, "Redo did not restore the time")
-        tap(window, 652, 86)  # Spelling needs a signed-in account.
+        driver.press(label="Correct spelling")
         time.sleep(0.5)
         capture(window, "spelling-without-account")
         assert json.loads(entry.read_text())["text"] == with_time, "Spelling changed the entry without an account"
         # The photo button adds the picked photo to the account's photo
         # library, under the day it was added, and embeds its place there on
         # its own line at the caret, which is at the entry's end.
-        tap(window, 748, 86)
+        driver.press(label="Attach photo")
         wait_for_text(entry, lambda text: "](photos/" in text, "A picked photo was not embedded")
         digest = hashlib.sha256(picked.read_bytes()).hexdigest()
         place = time.strftime("photos/%Y/%m/%d/") + digest + ".jpg"
@@ -223,12 +225,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
         settled = ink_bottom(OUTPUT / "typed.png", box)
         assert max(typed_rows) <= settled + 2, f"A second caret showed under the typed line: {typed_rows} > {settled}"
         saved = json.loads(entry.read_text())
-        tap(window, 288, 86)  # Calendar.
+        driver.press(label="Calendar")
         capture(window, "calendar")
     with application(profile, "restart") as window:
         capture(window, "restored")
         assert json.loads(entry.read_text()) == saved
-        tap(window, 748, 34)  # Next day saves before changing selection.
+        driver.press(label="›")
         capture(window, "today-limit")
         assert list((profile / "diary").glob("*/????-??-??.json")) == [entry]
         assert json.loads(entry.read_text()) == saved
@@ -305,12 +307,13 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
             red = red_pixels(OUTPUT / f"sage-{dark}-inline.png")
             assert len(red) > 20000, "Photo not drawn inside the entry at phone scale"
             assert phone_entry.read_text() == stored, "Viewing the day rewrote its entry"
-            # The day's gallery opens from its row, closed when the day opens.
+            # The icon opens a separate day gallery without resizing the entry.
             driver.wait(label="Show gallery")
             assert not driver.find(label="A photo", role="image"), "The gallery was open when the day opened"
             driver.press(label="Show gallery")
             driver.wait(label="Hide gallery")
             driver.wait(label="A photo", role="image")
+            capture(window, f"sage-{dark}-day-gallery")
             # The entry's Diary file and its library photo are one picture,
             # listed once; a tap embeds the library's.
             assert len(driver.find(label="A photo", role="image")) == 1, "The gallery listed a photo twice"
@@ -330,7 +333,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
             wait_for_text(phone_entry, lambda text: text == saved_photo["text"], "Redo did not restore the tapped photo")
             # Another day opens with its gallery closed, and so does this one
             # when it opens again.
-            driver.press(label="Hide gallery")
             driver.wait(label="Show gallery")
             driver.press(label="Show gallery")
             driver.press(label="‹")
@@ -343,16 +345,15 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
     # A day with more photos than the gallery shows at once and an entry
     # longer than its box, with large photos between its lines. The wheel
     # over the entry scrolls it, over its photos too, and the page around it
-    # stays, and a sideways swipe leaves it; the gallery's photos show whole
-    # above its scrollbar; the wheel, a sideways swipe and a drag move the
-    # gallery sideways, a drag does not embed the photo it starts on, and a
+    # stays, and a sideways swipe leaves it. The separate gallery scrolls
+    # vertically; a drag does not embed the photo it starts on, and a
     # tap on a photo scrolled into view embeds it.
     many_source = profile / "many-source"
     many_source.mkdir()
-    many_names = [f"many-{index:02d}.png" for index in range(12)]
+    many_names = [f"many-{index:02d}.png" for index in range(24)]
     lines = []
     for index, name in enumerate(many_names):
-        Image.new("RGB", (400, 300), (20 * index, 140, 220 - 15 * index)).save(many_source / name)
+        Image.new("RGB", (400, 300), ((29 * index) % 256, 40 + (7 * index) % 180, 220 - (5 * index) % 200)).save(many_source / name)
         lines += [f"Line {index} of a long day" for _ in range(3)]
         if index < 4:
             lines.append(f"![Photo {index}](diary:{name})")
@@ -360,7 +361,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
     (many_source / entry.name).write_text(json.dumps(dict(original, text=many_text, photos=[
         dict(file=name, name=f"Photo {index}") for index, name in enumerate(many_names)])))
     many = profile / "many-photos"
-    with application(many, "many-photos", many_source) as window:
+    with application(many, "many-photos", many_source, size=(390, 640)) as window:
         many_entry = next((many / "diary").glob("*/" + entry.name))
         deadline = time.monotonic() + 20
         while not all(library_has(many, hashlib.sha256((many_source / name).read_bytes()).hexdigest())
@@ -414,35 +415,30 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
 
         def tiles():
             return sorted((node for node in driver.find(role="image") if node["label"].startswith("Photo ")),
-                          key=lambda node: node["x"])
+                          key=lambda node: (node["y"], node["x"]))
 
+        assert not driver.find(role="text_area"), "The gallery still shares the entry's viewport"
         strip = [node for node in driver.tree() if node["kind"] == "scroll" and node["key"] == 290302][0]
         shown = tiles()
-        assert len(shown) == 12, [node["label"] for node in shown]
-        assert shown[-1]["x"] + shown[-1]["width"] > strip["x"] + strip["width"], "The gallery fits its row"
-        # The gallery's scrollbar sits under its photos, not over them.
-        assert shown[0]["visible_height"] == shown[0]["height"], \
-            f"The scrollbar covers the photos: {shown[0]['visible_height']} of {shown[0]['height']} show"
-        first_x = shown[0]["x"]
+        capture(window, "day-gallery-grid")
+        assert len(shown) == len(many_names), [node["label"] for node in shown]
+        assert shown[-1]["y"] + shown[-1]["height"] > strip["y"] + strip["height"], "The grid has no scrollable rows"
+        assert shown[0]["visible_height"] == shown[0]["height"], "The first grid row is clipped"
+        first_y = shown[0]["y"]
         over_strip = (strip["x"] + strip["width"] / 2, strip["y"] + strip["height"] / 2)
         wheel(over_strip, -1.0, 2)
-        assert tiles()[0]["x"] < first_x, "The wheel did not move the gallery sideways"
+        assert tiles()[0]["y"] < first_y, "The wheel did not move the gallery down"
         wheel(over_strip, 1.0, 4)
-        assert tiles()[0]["x"] == first_x, "The wheel did not move the gallery back"
-        # A sideways swipe to the right shows the photos further right.
-        wheel(over_strip, 1.0, 2, sideways=True)
-        assert tiles()[0]["x"] < first_x, "A sideways swipe did not move the gallery toward its end"
-        wheel(over_strip, -1.0, 4, sideways=True)
-        assert tiles()[0]["x"] == first_x, "A sideways swipe did not move the gallery back"
+        assert tiles()[0]["y"] == first_y, "The wheel did not move the gallery back"
         before_drag = json.loads(many_entry.read_text())["text"]
-        driver.drag((over_strip[0] + 150, over_strip[1]), (over_strip[0] - 150, over_strip[1]))
+        driver.drag((over_strip[0], over_strip[1] + 150), (over_strip[0], over_strip[1] - 150))
         driver.wait_idle(frames=3, timeout=3)
-        assert tiles()[0]["x"] < first_x - 100, "A drag did not move the gallery"
+        assert tiles()[0]["y"] < first_y - 100, "A drag did not move the gallery"
         time.sleep(0.5)
         assert json.loads(many_entry.read_text())["text"] == before_drag, "A drag embedded a photo"
         wheel(over_strip, -3.0, 20)
         last = tiles()[-1]
-        assert last["visible"] and last["visible_x"] + last["visible_width"] <= strip["x"] + strip["width"], \
+        assert last["visible"] and last["visible_y"] + last["visible_height"] <= strip["y"] + strip["height"], \
             "The wheel did not reach the gallery's end"
         driver.press(label=last["label"])
         number = int(last["label"].split()[-1])
@@ -451,5 +447,5 @@ with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:
 
     print("Standalone Diary: native editing, delayed save, time insertion, undo, redo, spelling without an account, a picked photo in the photo library and inside the entry, text typed right after the photo, one caret while typing, calendar, restart and day navigation passed")
     print("Harmony import: text and photo bytes copied, originals preserved, symlinks skipped and existing entries retained")
-    print("Diary photos: older photo lists inside the entry and in the photo library, a missing file, no writes on viewing, the gallery dropdown closed on every day it opens, each picture listed once, a tapped photo embedded and undone, and restart at phone width in light/dark sage passed")
-    print("Diary scrolling: the wheel scrolls a long entry through its photos and back without moving the page, a sideways swipe leaves it, and the wheel, a sideways swipe and a drag move a full gallery, whose photos show whole above its scrollbar, where a drag embeds nothing and a tap on a photo scrolled into view embeds it")
+    print("Diary photos: older photo lists inside the entry and in the photo library, a missing file, no writes on viewing, the separate day gallery closed on every day it opens, each picture listed once, a tapped photo embedded and undone, and restart at phone width in light/dark sage passed")
+    print("Diary scrolling: the wheel scrolls a long entry through its photos and back without moving the page, a sideways swipe leaves it, and the wheel and a vertical drag move the separate gallery grid, where a drag embeds nothing and a tap on a photo scrolled into view embeds it")

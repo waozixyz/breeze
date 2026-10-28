@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.58] - 2026-10-28
+
+- Bring Diary’s separate day gallery and attachment toolbar.
+
 ## [2.1.57] - 2026-10-28
 
 - Bring Lumi 1.5.23, Habits 1.3.11, Practices 1.6.5, Lists 1.1.24, Diary 1.3.20 and Leaderboard 1.0.25 for Inner Breeze 2.1.56.

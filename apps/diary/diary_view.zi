@@ -71,12 +71,10 @@ DIARY_NEXT_ICON :: "S1.8rr:M9 5L16 12L9 19"
 DIARY_CALENDAR_ICON :: "S1.6rr:M4 5H20V20H4ZM4 10H20M8 3V7M16 3V7"
 DIARY_TIME_ICON :: "S1.6rr:M21 12C21 16.97 16.97 21 12 21C7.03 21 3 16.97 3 12C3 7.03 7.03 3 12 3C16.97 3 21 7.03 21 12ZM12 7V12L15.5 14"
 DIARY_PHOTO_ICON :: "S1.6rr:M3 5H21V19H3ZM3 16L8 11L13 16L16 13L21 18M17.5 8.5C17.5 9.33 16.83 10 16 10C15.17 10 14.5 9.33 14.5 8.5C14.5 7.67 15.17 7 16 7C16.83 7 17.5 7.67 17.5 8.5Z"
+DIARY_ATTACHMENT_ICON :: "S1.8rr:M21 11L12 20C9.8 22.2 6.2 22.2 4 20C1.8 17.8 1.8 14.2 4 12L14 2C15.66 0.34 18.34 0.34 20 2C21.66 3.66 21.66 6.34 20 8L10 18C8.9 19.1 7.1 19.1 6 18C4.9 16.9 4.9 15.1 6 14L15 5"
 DIARY_UNDO_ICON :: "S1.8rr:M9 14L4 9L9 4M4 9H14C17.31 9 20 11.69 20 15C20 18.31 17.31 21 14 21H11"
 DIARY_REDO_ICON :: "S1.8rr:M15 14L20 9L15 4M20 9H10C6.69 9 4 11.69 4 15C4 18.31 6.69 21 10 21H13"
 DIARY_SPELLING_ICON :: "S2rr:M3 14L7.5 3L12 14M4.8 10H10.2M12 17L15.5 20.5L21.5 13"
-// The gallery row's chevron points down while the photos are hidden.
-DIARY_SHOW_ICON :: "S1.8rr:M6 9L12 15L18 9"
-DIARY_HIDE_ICON :: "S1.8rr:M6 15L12 9L18 15"
 
 DiaryObservedFrame :: () -> DiaryUiFrame {
     return frame
@@ -153,16 +151,10 @@ DiaryEditorStyle :: (area: *TextAreaProps, text: string, editing: bool) {
     area.blocks = editor_blocks[:editor_preview.photo_count]
 }
 
-// Under the entry, a Show gallery row opens every photo of the day in one
-// row that scrolls sideways: the media library's photos of that day, newest
-// first, then the entry's other photos in its order. A tap puts a photo's
-// embed at the caret. The gallery starts closed whenever a day opens.
+// The day's gallery is a separate view, opened by its toolbar icon. It
+// lists the library's photos of that day, then the entry's other photos.
+// Choosing one inserts it at the saved caret and returns to the entry.
 DIARY_DAY_PHOTOS :: 64
-DIARY_TILE :: 88
-DIARY_GALLERY_ROW :: 44
-// Room under the photos for the gallery's scrollbar, so it does not cover
-// them.
-DIARY_GALLERY_BAR :: 12
 
 DiaryDayPhoto :: struct {
     // What an embed of the photo links to.
@@ -231,18 +223,6 @@ DiaryGalleryOpen :: () -> bool {
     return frame.photos_open_day != 0 && frame.photos_open_day == DiaryDayKey()
 }
 
-// The room the gallery takes under the entry, or 0 on a day without photos.
-DiaryDayPhotosHeight :: () -> s32 {
-    if day_photo_count == 0 {
-        return 0
-    }
-    height := Scale(12) + Scale(DIARY_GALLERY_ROW)
-    if DiaryGalleryOpen() {
-        height += Scale(8) + Scale(DIARY_TILE) + Scale(DIARY_GALLERY_BAR)
-    }
-    return height
-}
-
 // Puts a photo's embed on its own line at the caret: one edit, saved at once.
 DiaryInsertPhoto :: (destination: string, name: string) {
     line := DiaryEmbedLine(destination, name)
@@ -255,45 +235,27 @@ DiaryInsertPhoto :: (destination: string, name: string) {
     frame.save_at = frame.now
 }
 
-// The gallery row, a dropdown as Habits' inactive habits are, and under it
-// the open gallery.
-DiaryDayGallery :: (left: float32, top: float32, width: float32, editable: bool) {
-    open := DiaryGalleryOpen()
-    row := cast(float32)Scale(DIARY_GALLERY_ROW)
-    label := AppLocale("diary_show_gallery")
-    if open {
-        label = AppLocale("diary_hide_gallery")
-    }
-    if Button(frame.session, ButtonProps.{.id = 29017, .bounds = Rectangle.{left, top, width, row},
-            .label = label, .icon_shape = ifx open then DIARY_HIDE_ICON else DIARY_SHOW_ICON,
-            .icon_placement = cast(IconPlacement)IconPlacementTrailing,
-            .content_alignment = cast(ContentAlignment)ContentAlignmentStart,
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
-        frame.photos_open_day = ifx open then 0 else DiaryDayKey()
-        frame.photos_scroll = 0
-    }
-    if open {
-        DiaryDayPhotoStrip(left, top + row + cast(float32)Scale(8), width, editable)
-    }
-}
-
-DiaryDayPhotoStrip :: (left: float32, top: float32, width: float32, editable: bool) {
-    tile := cast(float32)Scale(DIARY_TILE)
+DiaryDayGallery :: (left: float32, top: float32, width: float32, height: float32, editable: bool) {
     gap := cast(float32)Scale(8)
-    content := cast(s32)(cast(float32)day_photo_count * (tile + gap) - gap)
-    bar := cast(float32)Scale(DIARY_GALLERY_BAR)
-    strip := Scroll(frame.session, ScrollProps.{.key = cast(u64)290302, .horizontal = true,
-            .bounds = Rectangle.{left, top, width, tile + bar}, .content_width = content,
-            .content_height = cast(s32)tile, .scroll_offset = frame.photos_scroll})
+    inner := width - cast(float32)Scale(14)
+    columns := cast(s32)((inner + gap) / cast(float32)Scale(112))
+    if columns < 1 {
+        columns = 1
+    }
+    tile := (inner - cast(float32)(columns - 1) * gap) / cast(float32)columns
+    rows := (day_photo_count + columns - 1) / columns
+    strip := Scroll(frame.session, ScrollProps.{.key = cast(u64)290302,
+            .bounds = Rectangle.{left, top, width, height}, .scale = frame.scale,
+            .content_height = cast(s32)(cast(float32)rows * (tile + gap)),
+            .scroll_offset = frame.photos_scroll})
     frame.photos_scroll = strip.scroll_offset
     if !strip.opened {
         return
     }
     for index: cast(s32)0..day_photo_count - 1 {
         photo := day_photos[index]
-        bounds := Rectangle.{strip.content.x + cast(float32)index * (tile + gap),
-            strip.content.y, tile, tile}
+        bounds := Rectangle.{strip.content.x + cast(float32)(index % columns) * (tile + gap),
+            strip.content.y + cast(float32)(index / columns) * (tile + gap), tile, tile}
         Box(frame.session, BoxProps.{.key = cast(u64)(292000 + index), .bounds = bounds,
                 .fill = Color.{156, 156, 156, 36}, .radius = cast(float32)Scale(6)})
         if photo.asset.count > 0 {
@@ -306,6 +268,7 @@ DiaryDayPhotoStrip :: (left: float32, top: float32, width: float32, editable: bo
                 .disabled = !editable})
         if press.clicked && !pending {
             DiaryInsertPhoto(photo.destination, photo.name)
+            frame.photos_open_day = 0
         }
     }
     End(frame.session)
@@ -382,6 +345,11 @@ DiaryAction :: ( id: s32, label: string, bounds: Rectangle, enabled: bool = true
             frame.spelling_requested = true
             return
         }
+        if id == 29017 {
+            frame.photos_open_day = ifx DiaryGalleryOpen() then 0 else DiaryDayKey()
+            frame.photos_scroll = 0
+            return
+        }
         state.action = DIARY_CONTROL
         state.control = id
         pending = true
@@ -394,6 +362,7 @@ DiaryAction :: ( id: s32, label: string, bounds: Rectangle, enabled: bool = true
 DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> DiaryMessage {
     state = message
     frame = observed
+    pending = false
     column := CenteredColumnFor(frame.width, Scale(640), Scale(16))
     left := cast(float32)(column.x + frame.origin_x)
     width := cast(float32)column.width
@@ -424,20 +393,16 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
             .align = cast(TextAlign)TextAlignCenter, .vertical_align = cast(TextAlign)TextAlignCenter,
             .wrap = cast(TextWrap)TextWrapEllipsis})
 
-    // Tools: Today and the calendar move between days; undo, redo, spelling,
-    // the time and photos change the entry. Today narrows on phones so every
-    // icon keeps its target.
+    // On phones the editing tools get their own row, keeping every target
+    // at 44 units instead of squeezing the icons beside Today.
     tools := top + control + gap
     tool_gap := cast(float32)Scale(4)
     tool := control
-    today_width := width - 6.0 * tool - 5.0 * tool_gap - gap
-    if today_width < cast(float32)Scale(64) {
-        // The narrowest phones keep Today readable with smaller icon targets.
-        today_width = cast(float32)Scale(64)
-        tool = (width - today_width - gap - 5.0 * tool_gap) / 6.0
-    }
-    if today_width > cast(float32)Scale(128) {
-        today_width = cast(float32)Scale(128)
+    today_width := cast(float32)Scale(96)
+    stacked := width < today_width + gap + 7.0 * tool + 6.0 * tool_gap
+    edit_tools := tools
+    if stacked && !state.calendar {
+        edit_tools += control + tool_gap
     }
     DiaryAction(29004, AppLocale("diary_today"), Rectangle.{left, tools, today_width, control})
     DiaryAction(29003, AppLocale("tab_diary_calendar"),
@@ -447,23 +412,36 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
     if !state.calendar {
         idle := editable && !frame.spelling_busy
         DiaryAction(29014, AppLocale("diary_undo"),
-            Rectangle.{left + width - 5.0 * tool - 4.0 * tool_gap, tools, tool, control},
+            Rectangle.{left + width - 6.0 * tool - 5.0 * tool_gap, edit_tools, tool, control},
             idle && frame.can_undo, DIARY_UNDO_ICON)
         DiaryAction(29015, AppLocale("diary_redo"),
-            Rectangle.{left + width - 4.0 * tool - 3.0 * tool_gap, tools, tool, control},
+            Rectangle.{left + width - 5.0 * tool - 4.0 * tool_gap, edit_tools, tool, control},
             idle && frame.can_redo, DIARY_REDO_ICON)
         DiaryAction(29016, AppLocale("diary_check_spelling"),
-            Rectangle.{left + width - 3.0 * tool - 2.0 * tool_gap, tools, tool, control},
+            Rectangle.{left + width - 4.0 * tool - 3.0 * tool_gap, edit_tools, tool, control},
             idle && HasWords(state.text) && AppSupports("text.correct.start"), DIARY_SPELLING_ICON, false, frame.spelling_busy)
         DiaryAction(29013, AppLocale("diary_insert_time"),
-            Rectangle.{left + width - 2.0 * tool - tool_gap, tools, tool, control},
+            Rectangle.{left + width - 3.0 * tool - 2.0 * tool_gap, edit_tools, tool, control},
             !frame.spelling_busy, DIARY_TIME_ICON)
         DiaryAction(29005, AppLocale("diary_attach_photo"),
-            Rectangle.{left + width - tool, tools, tool, control},
-            AppSupports("media.pick"), DIARY_PHOTO_ICON)
+            Rectangle.{left + width - 2.0 * tool - tool_gap, edit_tools, tool, control},
+            AppSupports("media.pick"), DIARY_ATTACHMENT_ICON)
+        DiaryDayPhotos(state.text)
+        gallery_label := AppLocale("diary_show_gallery")
+        if DiaryGalleryOpen() {
+            gallery_label = AppLocale("diary_hide_gallery")
+        }
+        DiaryAction(29017, gallery_label,
+            Rectangle.{left + width - tool, edit_tools, tool, control},
+            editable && day_photo_count > 0, DIARY_PHOTO_ICON, DiaryGalleryOpen())
     }
-    content := tools + control + cast(float32)Scale(12)
+    content := edit_tools + control + cast(float32)Scale(12)
     content_height := cast(float32)(frame.height - frame.bottom) - content - cast(float32)Scale(16)
+
+    if !state.calendar && DiaryGalleryOpen() {
+        DiaryDayGallery(left, content, width, content_height, editable && !frame.spelling_busy)
+        return FinishView()
+    }
 
     if state.calendar {
         scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)290300,
@@ -505,20 +483,17 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
         End(frame.session)
         return FinishView()
     }
-    // The editor reaches the bottom; a notice and the day's photos take room
-    // below it only while they are shown.
+    // The gallery never changes the entry's viewport or line positions.
     notice := frame.photo_error || state.load_error || frame.spelling_notice != ""
     notice_room := ifx notice then Scale(60) else 0
-    DiaryDayPhotos(state.text)
-    photos_room := DiaryDayPhotosHeight()
-    editor_height := cast(s32)content_height - notice_room - photos_room
+    editor_height := cast(s32)content_height - notice_room
     if editor_height < Scale(120) {
         editor_height = Scale(120)
     }
     page := Scroll(frame.session, ScrollProps.{.key = cast(u64)290301,
             .bounds = Rectangle.{left, content, width, content_height},
-            .content_height = editor_height + notice_room + photos_room,
-            .scroll_offset = frame.page_scroll})
+            .content_height = editor_height + notice_room,
+            .scroll_offset = frame.page_scroll, .scale = frame.scale})
     frame.page_scroll = page.scroll_offset
     if !page.opened {
         return FinishView()
@@ -530,6 +505,7 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
     area.value = state.text
     area.label = AppLocale("tab_diary")
     area.wrap = true
+    area.scale = frame.scale
     area.cursor = state.cursor
     area.anchor = state.anchor
     area.scroll_y = frame.scroll
@@ -548,7 +524,7 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
     frame.scroll = edited.scroll_y
     frame.focused = edited.focused
     frame.selecting = edited.selecting
-    if edited.edit.changed {
+    if edited.edit.changed && !pending {
         state.action = DIARY_EDIT
         state.edit_start = edited.edit.start
         state.edit_end = edited.edit.end
@@ -572,10 +548,6 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
         Text(frame.session, TextProps.{.bounds = Rectangle.{left,
                     area.bounds.y + area.bounds.height + cast(float32)Scale(12), width, cast(float32)Scale(40)},
                 .text = AppLocale(status), .font = frame.font})
-    }
-    if photos_room > 0 {
-        DiaryDayGallery(left, area.bounds.y + area.bounds.height +
-            cast(float32)(notice_room + Scale(12)), width, editable && !frame.spelling_busy)
     }
     End(frame.session)
     return FinishView()
