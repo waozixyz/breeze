@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { basename, extname } from "node:path";
 
 const baseUrl = "https://developer.amazon.com/api/appstore";
+const listingLanguage = "en-US";
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -171,6 +172,35 @@ async function replaceBundleSlotWithApk(editId, bundleSlots, releaseBytes) {
   await uploadNewApk(editId, releaseBytes);
 }
 
+// Amazon requires release notes for every update. They are the same per
+// version notes that F-Droid and Google Play show.
+async function setRecentChanges(editId, versionCode) {
+  const notesFile = new URL(`../fastlane/metadata/android/${listingLanguage}/changelogs/${versionCode}.txt`, import.meta.url);
+  const recentChanges = (await readFile(notesFile, "utf8")).trim();
+  if (recentChanges.length === 0) {
+    throw new Error(`Release notes for version code ${versionCode} are empty`);
+  }
+
+  const listingUrl = `${baseUrl}/v1/applications/${appId}/edits/${editId}/listings/${listingLanguage}`;
+  const { data: listing, response: listingResponse } = await requestJsonWithResponse(listingUrl, {
+    headers: jsonHeaders,
+  });
+  const etag = listingResponse.headers.get("etag");
+  if (!etag) {
+    throw new Error(`Amazon did not return an ETag for the ${listingLanguage} listing`);
+  }
+
+  console.log(`Setting ${listingLanguage} recent changes for version code ${versionCode}`);
+  await requestOk(listingUrl, {
+    method: "PUT",
+    headers: {
+      ...jsonHeaders,
+      "If-Match": etag,
+    },
+    body: JSON.stringify({ ...listing, recentChanges }),
+  });
+}
+
 // Validation lists every problem before anything is submitted; the commit
 // sends the edit to Amazon's review, after which it goes live.
 async function submitEdit(editId) {
@@ -225,30 +255,26 @@ const jsonHeaders = {
   "Content-Type": "application/json",
 };
 
+// Amazon keeps one open edit per app. A draft left by an earlier run, or
+// changed by hand in the Developer Console (such as the DRM choice the API
+// cannot set), is reused so those settings are not lost.
 console.log("Checking for an open Amazon edit");
-const { data: activeEdit, response: activeEditResponse } = await requestJsonWithResponse(`${baseUrl}/v1/applications/${appId}/edits`, {
+const openEdit = await requestJson(`${baseUrl}/v1/applications/${appId}/edits`, {
   headers: jsonHeaders,
 });
-if (activeEdit.id) {
-  const activeEditEtag = activeEditResponse.headers.get("etag");
-  if (!activeEditEtag) {
-    throw new Error(`Amazon did not return an ETag for open edit ${activeEdit.id}`);
-  }
-  console.log(`Deleting stale open edit ${activeEdit.id} (status ${activeEdit.status ?? "unknown"})`);
-  await requestOk(`${baseUrl}/v1/applications/${appId}/edits/${activeEdit.id}`, {
-    method: "DELETE",
-    headers: {
-      ...jsonHeaders,
-      "If-Match": activeEditEtag,
-    },
+let edit = openEdit;
+if (openEdit.id && openEdit.status !== "IN_PROGRESS") {
+  throw new Error(`Amazon edit ${openEdit.id} is ${openEdit.status ?? "in an unknown state"}; rerun publish-amazon.yml once Amazon finishes with it`);
+}
+if (openEdit.id) {
+  console.log(`Reusing open edit ${openEdit.id}`);
+} else {
+  console.log("Creating a fresh Amazon edit");
+  edit = await requestJson(`${baseUrl}/v1/applications/${appId}/edits`, {
+    method: "POST",
+    headers: jsonHeaders,
   });
 }
-
-console.log("Creating a fresh Amazon edit");
-const edit = await requestJson(`${baseUrl}/v1/applications/${appId}/edits`, {
-  method: "POST",
-  headers: jsonHeaders,
-});
 if (!edit.id) {
   throw new Error("Amazon did not return an edit id");
 }
@@ -276,4 +302,6 @@ const uploadedAssets = await listEditAssets(edit.id, "apks");
 console.log(`Amazon edit ${edit.id} now holds: ${uploadedAssets.map(describeAsset).join(", ") || "(none)"}`);
 console.log(`Amazon ${releaseKind.label} upload completed`);
 
+const releaseVersionCode = Math.max(...uploadedAssets.map((asset) => asset.versionCode ?? 0));
+await setRecentChanges(edit.id, releaseVersionCode);
 await submitEdit(edit.id);
