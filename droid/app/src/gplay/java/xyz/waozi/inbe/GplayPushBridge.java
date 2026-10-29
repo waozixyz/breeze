@@ -17,7 +17,7 @@ final class GplayPushBridge {
     }
 
     static String[] getDistributorLabels(MainActivity activity) {
-        return new String[] {"Google notifications"};
+        return new String[] {activity.getString(R.string.push_google_name)};
     }
 
     static String[] getDistributorIcons(MainActivity activity) {
@@ -41,12 +41,12 @@ final class GplayPushBridge {
             FirebaseMessaging.getInstance().getToken()
                     .addOnSuccessListener(token -> {
                         lastToken = token;
-                        Toast.makeText(activity, "Google notifications enabled", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(activity, activity.getString(R.string.push_google_enabled), Toast.LENGTH_SHORT).show();
                     })
                     .addOnFailureListener(error ->
-                        Toast.makeText(activity, "Google notifications unavailable", Toast.LENGTH_LONG).show());
+                        Toast.makeText(activity, activity.getString(R.string.push_google_unavailable), Toast.LENGTH_LONG).show());
         } catch (IllegalStateException e) {
-            Toast.makeText(activity, "Google notifications unavailable", Toast.LENGTH_LONG).show();
+            Toast.makeText(activity, activity.getString(R.string.push_google_unavailable), Toast.LENGTH_LONG).show();
         }
     }
 }

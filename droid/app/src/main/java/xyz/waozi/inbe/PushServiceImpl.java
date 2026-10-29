@@ -81,8 +81,10 @@ public class PushServiceImpl extends PushService {
     private void showNotification(String title, String body) {
         NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
         if (nm == null) return;
-        if (Build.VERSION.SDK_INT >= 26 && nm.getNotificationChannel(CHANNEL_ID) == null) {
-            nm.createNotificationChannel(new NotificationChannel(CHANNEL_ID, "Push messages", NotificationManager.IMPORTANCE_DEFAULT));
+        if (Build.VERSION.SDK_INT >= 26) {
+            // Creating the channel again renames it after a language change.
+            nm.createNotificationChannel(new NotificationChannel(CHANNEL_ID,
+                    getString(R.string.notification_channel_push), NotificationManager.IMPORTANCE_DEFAULT));
         }
         PendingIntent pi = PendingIntent.getActivity(this, 0,
                 getPackageManager().getLaunchIntentForPackage(getPackageName()),

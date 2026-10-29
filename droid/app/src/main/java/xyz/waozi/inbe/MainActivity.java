@@ -409,7 +409,7 @@ public class MainActivity extends NativeActivity {
         if (manager != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
                 DOWNLOAD_CHANNEL_ID,
-                "Downloads",
+                getString(R.string.notification_channel_downloads),
                 NotificationManager.IMPORTANCE_LOW
             );
             manager.createNotificationChannel(channel);
@@ -424,7 +424,7 @@ public class MainActivity extends NativeActivity {
             ? new Notification.Builder(this, DOWNLOAD_CHANNEL_ID)
             : new Notification.Builder(this);
         builder.setSmallIcon(android.R.drawable.stat_sys_download)
-            .setContentTitle("Downloading audio")
+            .setContentTitle(getString(R.string.notification_downloading_audio))
             .setOngoing(true)
             .setOnlyAlertOnce(true);
         if (total > 0) {
@@ -1163,7 +1163,7 @@ public class MainActivity extends NativeActivity {
                     clipboard.setPrimaryClip(ClipData.newPlainText("Inner Breeze", text == null ? "" : text));
                 }
                 String message = toastText == null || toastText.isEmpty()
-                    ? "Copied"
+                    ? getString(R.string.toast_copied)
                     : toastText;
                 Toast.makeText(MainActivity.this, message, Toast.LENGTH_SHORT).show();
             }

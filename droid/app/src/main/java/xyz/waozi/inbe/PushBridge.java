@@ -100,7 +100,7 @@ final class PushBridge {
             public void run() {
                 UnifiedPush.saveDistributor(activity, pkg);
                 UnifiedPush.register(activity, "inbe", "Inner Breeze", null);
-                Toast.makeText(activity, "Push: registering with " + pkg, Toast.LENGTH_SHORT).show();
+                Toast.makeText(activity, activity.getString(R.string.push_registering, pkg), Toast.LENGTH_SHORT).show();
             }
         });
     }
@@ -116,7 +116,7 @@ final class PushBridge {
                 if (!UnifiedPush.getDistributors(activity).isEmpty()) {
                     return;
                 }
-                Toast.makeText(activity, "Install a UnifiedPush distributor (e.g. Sunup)", Toast.LENGTH_LONG).show();
+                Toast.makeText(activity, activity.getString(R.string.push_install_distributor), Toast.LENGTH_LONG).show();
                 try {
                     activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(
                             "https://f-droid.org/en/packages/org.unifiedpush.distributor.sunup/")));
