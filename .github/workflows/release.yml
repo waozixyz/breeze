@@ -981,7 +981,13 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x droid/gradlew
-          ./droid/gradlew -p droid assembleRelease assembleGplay \
+          ./droid/gradlew -p droid assembleRelease \
+            -Pkeystore.path="$HOME/.android/inbe-release.keystore" \
+            -Pkeystore.alias="$KEY_ALIAS" \
+            -Pkeystore.password="$KEYSTORE_PASSWORD" \
+            --stacktrace
+          # Only the Google Play edition's own Gradle run reads its Google plugin.
+          ./droid/gradlew -p droid assembleGplay \
             -Pkeystore.path="$HOME/.android/inbe-release.keystore" \
             -Pkeystore.alias="$KEY_ALIAS" \
             -Pkeystore.password="$KEYSTORE_PASSWORD" \
@@ -1033,6 +1039,24 @@ jobs:
             cp "$apk" build/release/android/
           done
           cp "build/android/inbe-$VERSION-gplay.aab" build/release/android/
+
+      # Only the Google Play edition may hold a Google library, in its build
+      # files as in its APK. The universal and both x86 APK names end in a digit.
+      - name: Keep Google libraries out of the normal and F-Droid APKs
+        uses: kryonlabs/kryon/.github/actions/google-free@7217475dfa7f462939e47e3f0bc918aef248b179
+        with:
+          packages: >-
+            build/release/android/inbe-*[0-9].apk
+            build/release/android/inbe-*-arm*.apk
+            build/release/android/inbe-*-fdroid.apk
+      # The Google check must still recognise Play Billing, or its passes on
+      # the other editions prove nothing.
+      - name: Find Play Billing in the Google Play APK
+        uses: kryonlabs/kryon/.github/actions/google-free@7217475dfa7f462939e47e3f0bc918aef248b179
+        with:
+          packages: build/release/android/inbe-*-gplay.apk
+          source: ''
+          expect-google: 'true'
 
       - name: Upload Android Artifacts
         uses: actions/upload-artifact@v4

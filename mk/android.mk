@@ -47,7 +47,8 @@ android-release:
 	$(MAKE) android-copy-assets
 	$(MAKE) android-local-properties
 	@if [ -n "$(PASSWORD)" ]; then \
-		$(ANDROID_GRADLE_ENV) $(GRADLE) -p droid assembleRelease assembleGplay -Pkeystore.path="$(ANDROID_KEYSTORE)" -Pkeystore.alias="$(ANDROID_KEY_ALIAS)" -Pkeystore.password="$(PASSWORD)" $(ANDROID_GRADLE_ARGS) || exit $$?; \
+		$(ANDROID_GRADLE_ENV) $(GRADLE) -p droid assembleRelease -Pkeystore.path="$(ANDROID_KEYSTORE)" -Pkeystore.alias="$(ANDROID_KEY_ALIAS)" -Pkeystore.password="$(PASSWORD)" $(ANDROID_GRADLE_ARGS) || exit $$?; \
+		$(ANDROID_GRADLE_ENV) $(GRADLE) -p droid assembleGplay -Pkeystore.path="$(ANDROID_KEYSTORE)" -Pkeystore.alias="$(ANDROID_KEY_ALIAS)" -Pkeystore.password="$(PASSWORD)" $(ANDROID_GRADLE_ARGS) || exit $$?; \
 	else \
 		echo "Set PASSWORD=your-keystore-password for release builds"; \
 		exit 1; \
