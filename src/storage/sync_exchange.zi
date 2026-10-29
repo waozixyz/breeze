@@ -225,26 +225,38 @@ ApplyStoredSyncResponse :: (response_json: string, page: *SyncPageState) -> s32 
             LogStorage(LOG_INFO, "SYNC: merging full snapshot with pending local edits")
         } else if storage_sync_review_json_should_auto_apply_remote(response_json) != 0 {
             return storage_apply_remote_full_snapshot(response_json)
-        } else if storage_sync_review_json_has_visible_diff(response_json) == 0 {
-            // The same merge preview shown to the user has no changes. Apply
-            // its bookkeeping without replacing or removing local records.
-            LogStorage(LOG_INFO, "SYNC: full snapshot has no visible merge changes")
         } else {
-            if storage_sync_review_write_json(response_json) == 0 {
-                LogStorage(LOG_WARNING, "SYNC: response review save failed")
+            merge_changes := storage_sync_review_json_change_count(response_json)
+            if merge_changes < 0 {
+                // A snapshot whose merge cannot be rehearsed cannot be merged
+                // or replaced either. Saving it for review would offer no
+                // preview and no working choice, so the sync fails and local
+                // data stays as it is.
+                LogStorage(LOG_WARNING, "SYNC: full snapshot cannot be applied")
                 return 0
             }
-            {
-                meta_key_buffer: [64] u8
-                meta_val_buffer: [4] u8
-                AppCopyText(STORAGE_SYNC_PENDING_REVIEW_KEY, meta_key_buffer[:])
-                AppCopyText("1", meta_val_buffer[:])
-                set_meta(*meta_key_buffer[0], *meta_val_buffer[0])
+            if merge_changes == 0 {
+                // The same merge preview shown to the user has no changes.
+                // Apply its bookkeeping without replacing or removing local
+                // records.
+                LogStorage(LOG_INFO, "SYNC: full snapshot has no visible merge changes")
+            } else {
+                if storage_sync_review_write_json(response_json) == 0 {
+                    LogStorage(LOG_WARNING, "SYNC: response review save failed")
+                    return 0
+                }
+                {
+                    meta_key_buffer: [64] u8
+                    meta_val_buffer: [4] u8
+                    AppCopyText(STORAGE_SYNC_PENDING_REVIEW_KEY, meta_key_buffer[:])
+                    AppCopyText("1", meta_val_buffer[:])
+                    set_meta(*meta_key_buffer[0], *meta_val_buffer[0])
+                }
+                storage_state_handle().pending_sync_outbox_seq = 0
+                storage_schedule_persist()
+                LogStorage(LOG_WARNING, "SYNC: full snapshot review required")
+                return 1
             }
-            storage_state_handle().pending_sync_outbox_seq = 0
-            storage_schedule_persist()
-            LogStorage(LOG_WARNING, "SYNC: full snapshot review required")
-            return 1
         }
     }
     old_server_version = storage_meta_int64("sync_last_server_version", 0)

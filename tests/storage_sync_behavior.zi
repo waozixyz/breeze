@@ -1561,6 +1561,108 @@ test_waiting_review_merges :: () {
     storage_close()
 }
 
+// The node keeps no content for a deleted record, only its times, the
+// shape a node sent the owner's Pixel on 2026-10-29. Such a deletion
+// reaches this device unless this device changed the record later; a kind
+// not kept as a marked row here changes nothing and stops nothing.
+TOMBSTONE_LOCAL_SQL :: "INSERT INTO elist_lists VALUES('gone-list',(SELECT id FROM users LIMIT 1),'Gone list',0,0,1782200000);INSERT INTO elist_items VALUES('gone-item',(SELECT id FROM users LIMIT 1),'gone-list','Gone item','',0,0,0,1782200000);INSERT INTO elist_items VALUES('tie-item',(SELECT id FROM users LIMIT 1),'gone-list','Tie item','',0,1,0,1782300000);INSERT INTO elist_items VALUES('kept-item',(SELECT id FROM users LIMIT 1),'gone-list','Kept item','',0,2,0,1782400000);INSERT INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,deleted_at,updated_at) VALUES('gone-session',(SELECT id FROM users LIMIT 1),1782200000,20260623,1,1,'test',1782200000,'303',0,1782200000);"
+
+TOMBSTONE_RECORDS :: "{\"collection\":\"private.inbe.v1.elist-items\",\"id\":\"gone-item\",\"key_id\":\"breathing-main-1\",\"updated_at\":\"2026-06-24T11:20:00.000000000Z\",\"deleted_at\":1782300000,\"content_hash\":\"gone\",\"schema_version\":1},{\"collection\":\"private.inbe.v1.elist-items\",\"id\":\"tie-item\",\"key_id\":\"breathing-main-1\",\"updated_at\":\"2026-06-24T11:20:00.000000000Z\",\"deleted_at\":1782300000,\"content_hash\":\"tie\",\"schema_version\":1},{\"collection\":\"private.inbe.v1.elist-items\",\"id\":\"kept-item\",\"key_id\":\"breathing-main-1\",\"updated_at\":\"2026-06-24T11:20:00.000000000Z\",\"deleted_at\":1782300000,\"content_hash\":\"kept\",\"schema_version\":1},{\"collection\":\"private.inbe.v1.elist-items\",\"id\":\"never-here\",\"key_id\":\"breathing-main-1\",\"updated_at\":\"2026-06-24T11:20:00.000000000Z\",\"deleted_at\":1782300000,\"content_hash\":\"never\",\"schema_version\":1},{\"collection\":\"private.inbe.v1.elist-lists\",\"id\":\"gone-list\",\"key_id\":\"breathing-main-1\",\"updated_at\":\"2026-06-24T11:20:00.000000000Z\",\"deleted_at\":1782300000,\"content_hash\":\"list\",\"schema_version\":1},{\"collection\":\"private.inbe.v1.sessions\",\"id\":\"gone-session\",\"key_id\":\"breathing-main-1\",\"updated_at\":\"2026-06-24T11:20:00.000000000Z\",\"deleted_at\":1782300000,\"content_hash\":\"session\",\"schema_version\":1},{\"collection\":\"private.inbe.v1.habit-days\",\"id\":\"remote-habit:20260101\",\"key_id\":\"breathing-main-1\",\"updated_at\":\"2026-06-24T11:20:00.000000000Z\",\"deleted_at\":1782300000,\"content_hash\":\"day\",\"schema_version\":1}"
+
+// Puts the content-free deletions before the remote device's records, as
+// the node sent them, so every record after them must still apply.
+add_tombstone_records :: () {
+    records := TextFromCString(*remote_records_text.bytes[0])
+    combined: TextBuffer
+    append(*combined, "[")
+    append(*combined, TOMBSTONE_RECORDS)
+    if records.count > 2 {
+        append(*combined, ",")
+        append(*combined, records[1:records.count])
+    } else {
+        append(*combined, "]")
+    }
+    remote_records_text = combined
+}
+
+check_tombstones_applied :: (root: string) {
+    check_int("an older item is deleted", count_of(root,
+        "SELECT COUNT(*) FROM elist_items WHERE id='gone-item' AND deleted_at=1782300000 AND updated_at=1782300000 AND title='Gone item'"), 1)
+    check_int("a deletion wins an equal-time tie", count_of(root,
+        "SELECT COUNT(*) FROM elist_items WHERE id='tie-item' AND deleted_at=1782300000"), 1)
+    check_int("an item changed after the deletion stays", count_of(root,
+        "SELECT COUNT(*) FROM elist_items WHERE id='kept-item' AND deleted_at=0 AND updated_at=1782400000"), 1)
+    check_int("a deletion adds no row", count_of(root,
+        "SELECT COUNT(*) FROM elist_items WHERE id='never-here'"), 0)
+    check_int("the list is deleted", count_of(root,
+        "SELECT COUNT(*) FROM elist_lists WHERE id='gone-list' AND deleted_at=1782300000"), 1)
+    check_int("the session is deleted", count_of(root,
+        "SELECT COUNT(*) FROM sessions WHERE id='gone-session' AND deleted_at=1782300000"), 1)
+    check_int("records after the deletions apply", count_of(root,
+        "SELECT COUNT(*) FROM habits WHERE id='remote-habit' AND deleted_at=0"), 1)
+}
+
+test_snapshot_applies_content_free_deletions :: () {
+    remote_records("tombstone-remote", REMOTE_SQL)
+    add_tombstone_records()
+    seed: TextBuffer
+    append(*seed, LOCAL_SQL)
+    append(*seed, TOMBSTONE_LOCAL_SQL)
+    root := local_device("tombstone-merge", TextFromCString(*seed.bytes[0]), LOCAL_PENDING_SQL)
+    mark_pending_payload_in_flight()
+    check_true("snapshot with deletions applies", storage_apply_sync_response_json(
+        snapshot_response(70, "tombstone-receipt")) != 0)
+    check_tombstones_applied(root)
+    check_true("snapshot records its receipt", storage_meta_text("sync_last_server_state_hash") == "tombstone-receipt")
+    check_true("no review waits", storage_sync_review_pending() == 0)
+    storage_close()
+}
+
+// A waiting review of such a snapshot previews the deletions and merges.
+test_review_with_content_free_deletions :: () {
+    remote_records("tombstone-review-remote", REMOTE_SQL)
+    add_tombstone_records()
+    seed: TextBuffer
+    append(*seed, LOCAL_SQL)
+    append(*seed, TOMBSTONE_LOCAL_SQL)
+    append(*seed, "UPDATE sessions SET activity=3;")
+    root := local_device("tombstone-review", TextFromCString(*seed.bytes[0]), "DELETE FROM sync_outbox;")
+    snapshot := snapshot_response(71, "tombstone-review-receipt")
+    check_true("snapshot with deletions is received", storage_apply_sync_response_json(snapshot) != 0)
+    check_true("snapshot waits for review", storage_sync_review_pending() != 0)
+    plan: *u8 = null
+    check_true("deletions preview", storage_sync_review_plan(2, *plan) != 0)
+    check_true("preview names a deleted item", contains(TextFromCString(plan), "Gone item"))
+    check_true("preview keeps a later item", !contains(TextFromCString(plan), "Kept item"))
+    sqlite_free(cast(*void)plan)
+    check_true("waiting review is showable", storage_sync_review_showable() != 0)
+    check_true("waiting review merges", storage_sync_review_merge_pending() != 0)
+    check_tombstones_applied(root)
+    check_true("merged review is cleared", storage_sync_review_pending() == 0)
+    storage_close()
+}
+
+// A snapshot that cannot be merged at all is a sync error, never a review
+// with no preview and no working choice. One already waiting is set aside.
+test_unmergeable_snapshot_never_waits :: () {
+    remote_records("unmergeable-remote", REMOTE_SQL)
+    seed: TextBuffer
+    append(*seed, LOCAL_SQL)
+    append(*seed, "UPDATE sessions SET activity=3;")
+    root := local_device("unmergeable-local", TextFromCString(*seed.bytes[0]), "DELETE FROM sync_outbox;")
+    unmergeable := "{\"protocol_version\":6,\"server_version\":72,\"server_state_hash\":\"unmergeable\",\"full_snapshot_required\":true,\"changes_complete\":false,\"changes\":{\"encrypted_records\":[{\"collection\":\"private.inbe.v1.sessions\",\"id\":\"bad\",\"key_id\":\"breathing-main-1\",\"nonce\":\"bad\",\"ciphertext\":\"bad\",\"updated_at\":\"2026-06-24T11:20:00Z\"}]}}"
+    check_true("unmergeable snapshot fails the sync", storage_apply_sync_response_json(unmergeable) == 0)
+    check_true("no review waits", storage_sync_review_pending() == 0)
+    check_int("local session kept", count_of(root, "SELECT COUNT(*) FROM sessions WHERE id='local-session' AND deleted_at=0"), 1)
+    check_true("save an unmergeable review", storage_sync_review_write_json(unmergeable) != 0)
+    storage_set_meta_int64(STORAGE_SYNC_PENDING_REVIEW_KEY, 1)
+    check_true("unmergeable review does not merge", storage_sync_review_merge_pending() == 0)
+    check_true("unmergeable review is not shown", storage_sync_review_showable() == 0)
+    check_true("unmergeable review is set aside", storage_sync_review_pending() == 0)
+    check_int("setting it aside keeps local data", count_of(root, "SELECT COUNT(*) FROM habits WHERE id='local-habit' AND deleted_at=0"), 1)
+    storage_close()
+}
+
 // A habit's questions and its entries reach another device. A habit
 // record from an app before questions keeps them; an older entry does not
 // replace a newer one, and a deletion reaches the other device.
@@ -2643,6 +2745,9 @@ Check :: () -> s32 {
     test_review_completion_changes()
     test_review_no_changes_resolves_automatically()
     test_waiting_review_merges()
+    test_snapshot_applies_content_free_deletions()
+    test_review_with_content_free_deletions()
+    test_unmergeable_snapshot_never_waits()
     test_questions_and_entries_sync()
     test_kept_records_upload_kept()
     test_app_choices_sync_between_devices()

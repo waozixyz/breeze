@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Sync no longer gets stuck on a review with no preview after something was deleted.
+
 ## [2.1.61] - 2026-10-29
 
 - The download is about 16 MB smaller: apps are stored more compactly, and shared pictures are included only once.

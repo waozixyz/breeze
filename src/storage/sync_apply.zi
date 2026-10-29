@@ -389,6 +389,37 @@ storage_apply_entity_record :: (collection: string, record_id: string, plaintext
     return 1
 }
 
+// The node keeps no content for a deleted record, only when it was deleted
+// and changed. The local row is marked deleted unless this device changed it
+// later; a deletion wins an equal-time tie, as on the node. A record kind
+// that is not kept as a marked row here changes nothing.
+storage_apply_record_tombstone :: (collection: string, record_id: string,
+    deleted_at: string, updated_at: string) -> s32 {
+    table := storage_decrypted_array_name(collection)
+    if table != "habits" && table != "sessions" && table != "elist_lists" &&
+    table != "elist_items" && table != "habit_entries" && table != "habit_changes" &&
+    table != "habit_rewards" && table != "habit_coins" {
+        return 1
+    }
+    if record_id.count == 0 {
+        return 1
+    }
+    sql: [768]u8
+    unused AppCopyText("WITH tombstone(deleted,at) AS (SELECT CAST(?3 AS INTEGER),COALESCE(NULLIF(CASE WHEN ?4 GLOB '*[^0-9]*' THEN CAST(strftime('%s',?4) AS INTEGER) ELSE CAST(?4 AS INTEGER) END,0),CAST(?3 AS INTEGER))) UPDATE ", sql[:])
+    unused AppAppendText(table, sql[:])
+    unused AppAppendText(" SET deleted_at=(SELECT deleted FROM tombstone),updated_at=(SELECT at FROM tombstone) WHERE user_id=?1 AND id=?2 AND deleted_at=0 AND updated_at<=(SELECT at FROM tombstone)", sql[:])
+    statement: *void = null
+    if SqlitePrepareText(storage_db_handle(), TextUntilNul(sql[:]), -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(statement, 2, record_id)
+    bind_text(statement, 3, deleted_at)
+    bind_text(statement, 4, updated_at)
+    return ifx SqliteStep(statement) == SQLITE_DONE then 1 else 0
+}
+
 storage_apply_encrypted_records :: (response_json: string) -> s32 {
     habit_batch_storage: StorageJsonBuilder = StorageJsonBuilder.{}
     habit_batch: *StorageJsonBuilder = *habit_batch_storage
@@ -476,6 +507,16 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
                     storage_sync_record_copy_store(collection, record_id, entity_plain)
                     ok = storage_apply_entity_record(collection, record_id, entity_plain, updated_at)
                     free(cast(*void)plaintext)
+                }
+                index += 1
+                continue
+            }
+            if deleted.valid && deleted.value > 0.0 && ciphertext.count == 0 {
+                ok = storage_apply_record_tombstone(collection, record_id,
+                    AppTextFromCString(fields[index * 8 + 7], 32), updated_at)
+                if ok == 0 {
+                    LogStorageText(LOG_WARNING, "SYNC: record deletion apply failed: ",
+                        collection)
                 }
                 index += 1
                 continue

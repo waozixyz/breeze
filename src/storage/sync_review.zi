@@ -195,7 +195,9 @@ storage_sync_review_read_json :: () -> *u8 {
     file := OpenRead(AppTextFromCString(*path[0], STORAGE_PATH_SIZE))
     if !file.valid { return null }
     size = FileSize(file)
-    if size < 0 || size > 8 * 1024 * 1024 {
+    // A saved review is a whole sync response, up to the largest one a sync
+    // accepts (AsyncResponseCapacity in sync_async.zi).
+    if size < 0 || size > 16 * 1024 * 1024 {
         CloseFile(file)
         return null
     }
@@ -671,11 +673,48 @@ storage_sync_review_apply_remote_if_local_empty :: () -> s32 {
 }
 
 storage_sync_review_json_has_visible_diff :: (json: string) -> s32 {
+    return ifx storage_sync_review_json_change_count(json) != 0 then 1 else 0
+}
+
+// The visible changes a merge of this snapshot makes, or -1 when its merge
+// cannot be rehearsed: a snapshot that cannot be merged at all.
+storage_sync_review_json_change_count :: (json: string) -> s32 {
     changes: s32 = -1
     if review_plan_for_json(json, 2, null, *changes) == 0 {
+        return -1
+    }
+    return changes
+}
+
+// Whether the waiting review has a choice besides keeping local data: a
+// merge or a replacement that can be rehearsed and therefore previewed.
+storage_sync_review_choice_available :: () -> s32 {
+    json := storage_sync_review_read_json()
+    if json == null {
+        return 0
+    }
+    text := AppTextFromCString(json, 2147483647)
+    changes: s32 = -1
+    available := review_plan_for_json(text, 2, null, *changes) != 0 ||
+    review_plan_for_json(text, 1, null, *changes) != 0
+    free(cast(*void)json)
+    return ifx available then 1 else 0
+}
+
+// Whether a review whose merge failed can be shown. One with no preview and
+// no working choice is set aside instead, keeping local data, so it never
+// traps the person; the next sync fetches the account again.
+#program_export
+storage_sync_review_showable :: () -> s32 {
+    if storage_sync_review_pending() == 0 {
+        return 0
+    }
+    if storage_sync_review_choice_available() != 0 {
         return 1
     }
-    return ifx changes > 0 then 1 else 0
+    LogStorage(LOG_WARNING, "SYNC: review set aside: its snapshot cannot be applied")
+    unused storage_apply_pending_sync_review(0)
+    return 0
 }
 
 storage_sync_review_json_should_auto_apply_remote :: (json: string) -> s32 {
