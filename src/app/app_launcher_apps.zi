@@ -1,3 +1,5 @@
+#import "button_widget"
+#import "control_props"
 // Native launcher policy around the shared Apps cards and menus. Routes,
 // account preferences and deferred mutations remain owned by Inbe.
 Controller :: #import "apps/controller";
@@ -219,6 +221,25 @@ LauncherAppWidgets :: (context: *void, module: *u8, function: *u8,
             }
         }
         app_launcher_drag_handle(group.owner, card, item, group.owner.launcher_grid_view)
+        name := LauncherLibraryName(item)
+        hidden := AppPropertiesHidden(name)
+        visibility: ButtonProps
+        visibility.key = card.key + cast(u64)30
+        visibility.label = LocaleText(ifx hidden then "launcher_show_app" else "launcher_hide_app")
+        visibility.icon_only = true
+        visibility.icon_shape = ifx hidden then "S1.8rr:M3 12Q12 1 21 12Q12 23 3 12ZM15 12A3 3 0 1 1 9 12A3 3 0 1 1 15 12" else "S1.8rr:M3 12Q12 1 21 12Q12 23 3 12ZM3 3L21 21"
+        visibility.selected = hidden
+        visibility.emphasis = cast(ButtonEmphasis)ButtonEmphasis.ButtonEmphasisSoft
+        visibility.bounds = Rectangle.{card.bounds.x + card.bounds.width - cast(float32)AppScale(44),
+            card.bounds.y, cast(float32)AppScale(44), cast(float32)AppScale(44)}
+        if Button(group.owner.ui.session, visibility) != 0 && AppPropertiesSetHidden(name, !hidden) {
+            if !hidden && item >= 0 && app_launcher_is_favorite(group.owner, item) {
+                group.owner.launcher_favorite_count = LauncherToggleFavorite(
+                    group.owner.launcher_favorites[:], group.owner.launcher_favorite_count, item)
+                app_launcher_pins_changed(group.owner)
+            }
+            app_block_current_click(group.owner)
+        }
         break
     }
     return called
@@ -406,6 +427,8 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
         LauncherAppQuoted(bytes, "icon_choice", AppPropertiesIcon(app_name))
     }
     favorite := route >= 0 && app_launcher_is_favorite(group.owner, route)
+    BuilderPrint(bytes, ",\"hidden\":%", AppPropertiesHidden(
+        ifx route >= 0 then LauncherRouteName(route) else NodeAppOfferName(offer)))
     // A blocked frame's actions are rejected in LauncherAppDrain. Marking the
     // cards disabled for that one frame changed the catalog twice whenever
     // Apps opened, and each change re-parses it in the Apps controller:

@@ -340,7 +340,11 @@ saved data and bundled package; the plus button adds it back immediately.
 Settings is fixed last and is absent
 from the editable list. Existing
 profiles retain their selection and saved sidebar order.
-Each app appears once, with active shortcuts in sidebar order and hidden apps
+The Apps library normally omits apps hidden with Edit → Hide app. Edit shows
+all hidden apps again with Show app so they can be restored. Hiding removes
+the app's pinned shortcut but keeps its package and saved data. Visibility is
+saved per app in the current account's device settings, including node offers.
+Each app appears once, with pinned apps in sidebar order and the remaining apps
 after them. The list shows icons, names and controls without status paragraphs.
 
 ## Practice content and narration

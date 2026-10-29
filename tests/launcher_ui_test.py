@@ -33,6 +33,7 @@ parser.add_argument("--views-only", action="store_true")
 parser.add_argument("--root-bundle", type=Path, help="Exercise an older root with the native launcher")
 parser.add_argument("--measure", action="store_true", help="Measure cold Apps opens in disposable profiles")
 parser.add_argument("--dock-only", action="store_true")
+parser.add_argument("--visibility-only", action="store_true")
 parser.add_argument("--properties-only", action="store_true",
                     help="Rename an app and change its icon in Apps › Properties")
 parser.add_argument("--profile-navigation-only", action="store_true",
@@ -189,7 +190,7 @@ with contextlib.ExitStack() as stack:
         # Each section's shared Apps group sits inside the page's scroll.
         grid = [node for node in tree if node["kind"] == "button"
                 and under(tree, node, "scroll") and not under(tree, node, "navigation_bar")
-                and node["label"] not in ("Install", "Download", "App options", "Move app")]
+                and node["label"] not in ("Install", "Download", "App options", "Move app", "Hide app", "Show app")]
         divider = [node for node in tree if node["kind"] == "separator" and under(tree, node, "scroll")]
         more_top = divider[0]["y"] if divider else float("inf")
         pinned = [node for node in grid if node["y"] < more_top]
@@ -676,7 +677,7 @@ with contextlib.ExitStack() as stack:
             print("Fitted dock: 3–5 pins, narrow windows, zoom, top/bottom and both rails passed")
         raise SystemExit(0)
 
-    if arguments.properties_only:
+    if arguments.properties_only or arguments.visibility_only:
         with tempfile.TemporaryDirectory(prefix="inbe-properties-") as temporary:
             profile = Path(temporary)
             user = None
@@ -692,6 +693,46 @@ with contextlib.ExitStack() as stack:
 
             def labels():
                 return [item["label"] for item in navigation()]
+
+            if arguments.visibility_only:
+                def card_names():
+                    pinned, more, _ = cards()
+                    return [node["label"] for node in pinned + more]
+
+                def visibility_action(label, action):
+                    pinned, more, tree = cards()
+                    card = next(node for node in pinned + more if node["label"] == label)
+                    buttons = [node for node in tree if node["label"] == action
+                               and card["x"] <= node["x"] < card["x"] + card["width"]
+                               and card["y"] <= node["y"] < card["y"] + card["height"]]
+                    assert len(buttons) == 1, (card, buttons)
+                    press(buttons[0])
+
+                with application(profile, "visibility", width=390, height=844):
+                    open_apps()
+                    installed_before = {key: value for key, value in settings(profile).items()
+                                        if key.startswith("app_used_")}
+                    driver.press(label="Edit apps", role="button")
+                    driver.wait(label="Done", role="button")
+                    visibility_action("Habits", "Hide app")
+                    wait_setting(profile, "app_hidden_habits", "1")
+                    assert "Habits" in card_names(), "Edit must keep hidden apps reachable"
+                    driver.press(label="Done", role="button")
+                    wait_for(lambda: "Habits" not in card_names(), "Hidden app remains in Apps")
+                    assert "Habits" not in labels(), "Hidden app remains pinned"
+                with application(profile, "visibility-restart", width=390, height=844):
+                    open_apps()
+                    assert "Habits" not in card_names(), "Restart lost hidden state"
+                    driver.press(label="Edit apps", role="button")
+                    driver.wait(label="Done", role="button")
+                    visibility_action("Habits", "Show app")
+                    wait_setting(profile, "app_hidden_habits", "0")
+                    driver.press(label="Done", role="button")
+                    wait_for(lambda: "Habits" in card_names(), "Restored app is missing")
+                    assert {key: value for key, value in settings(profile).items()
+                            if key.startswith("app_used_")} == installed_before, "Hiding changed app installation"
+                print("Launcher visibility: Edit, hide, restart and restore passed")
+                raise SystemExit(0)
 
             def open_properties(label):
                 pinned, more, tree = cards()
