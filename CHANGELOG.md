@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.1.60] - 2026-10-29
+
+- Hide apps from the library and restore them through Edit.
+- Use one simple reorder grip to the left of app icons in list and grid views.
+- Unify Profile rows and put sent friend requests beside names with a cancel action.
+
 ## [2.1.59] - 2026-10-28
 
 - Keep habits, practices, session counts and game progress free of storage charges, even when account storage is full.
