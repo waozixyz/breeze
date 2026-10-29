@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Catalog games can award their own achievements, with the usual top-right notification.
+
 ## [2.1.61] - 2026-10-29
 
 - Sync no longer gets stuck after something is deleted.

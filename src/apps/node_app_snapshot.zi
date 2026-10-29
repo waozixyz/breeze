@@ -20,6 +20,7 @@
 #import "std/byte_text_linux"
 #import, file "../app/assets.zi";
 #import, file "../storage/achievements.zi";
+#import, file "../storage/achievement_records.zi";
 
 NodeInstalledLeaf :: struct {
     identity: AppIdentity
@@ -70,6 +71,25 @@ NodeInstalledPath :: (owner: string, index: s32) -> string {
     return BuilderFinish(out)
 }
 
+// Any other package keeps its assets under "assets/<expected_id>/" and its
+// achievements under its own verified id. It never takes an Inbe app's id.
+NodeInstalledPackageOwner :: (node: *AppNode, output: []u8) -> bool {
+    id := TextUntilNul(node.identity.id[:])
+    name := TextUntilNul(node.entry.expected_id[:])
+    if id == "inbe" || (id.count > 5 && id[:5] == "inbe.") || !AchievementNameValid(id) ||
+    name.count < 1 || name.count > 24 {
+        return false
+    }
+    for byte: name {
+        letter := byte >= #char "a" && byte <= #char "z"
+        digit := byte >= #char "0" && byte <= #char "9"
+        if !letter && !digit && byte != #char "-" {
+            return false
+        }
+    }
+    return CopyCString(name, output)
+}
+
 NodeInstalledCapture :: (slot: s32, node: *AppNode) -> bool {
     account := NodeTreeAccount()
     if account != TextUntilNul(node_installed_account[:]) {
@@ -78,6 +98,12 @@ NodeInstalledCapture :: (slot: s32, node: *AppNode) -> bool {
     }
     runner := *node_runners[slot]
     owner := ifx node != null then NodeTreeLegacyOwner(runner, node) else NodeAppVerifiedLeafName(slot)
+    other_package := false
+    package_owner: [25]u8
+    if owner == "" && node != null && NodeInstalledPackageOwner(node, package_owner[:]) {
+        owner = TextUntilNul(package_owner[:])
+        other_package = true
+    }
     if owner == "" { return true }
     entry: NodeInstalledLeaf
     unused CopyCString(owner, entry.owner[:])
@@ -95,6 +121,8 @@ NodeInstalledCapture :: (slot: s32, node: *AppNode) -> bool {
         PackageFree(path)
         if !asset.found { continue }
         if asset.data.count > 262144 || (index == 0 && !AchievementCatalog(asset.data, canonical, false)) {
+            // A package's faulty catalog only loses its own achievements.
+            if other_package { continue }
             for text: entry.assets { PackageFree(text) }
             return false
         }
@@ -234,7 +262,8 @@ NodeInstalledScanStep :: (slot: s32) -> bool {
 // release and account, so a launch knows an installed collection's games
 // and their achievements without opening it: opening Arcade's five bundles
 // before anything else froze a phone for seconds.
-NODE_SNAPSHOT_FORMAT :: "inbe-leaves-1"
+// Format 2 also holds other packages' leaves, so older files rescan once.
+NODE_SNAPSHOT_FORMAT :: "inbe-leaves-2"
 
 NodeSnapshotCursor :: struct {
     at: s64
@@ -418,6 +447,16 @@ NodeAppInstalledLeafName :: (index: s32) -> string {
         entry := *node_installed_leaves[at]
         if !NodeInstalledRepresentative(at) { continue }
         if index == 0 { return TextUntilNul(entry.owner[:]) }
+        index -= 1
+    }
+    return ""
+}
+
+NodeAppInstalledLeafID :: (index: s32) -> string {
+    for at: cast(s64)0..node_installed_leaves.count - 1 {
+        entry := *node_installed_leaves[at]
+        if !NodeInstalledRepresentative(at) { continue }
+        if index == 0 { return TextUntilNul(entry.identity.id[:]) }
         index -= 1
     }
     return ""

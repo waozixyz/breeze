@@ -53,12 +53,7 @@ AchievementInstalled :: (id: string) -> bool {
     count := NodeAppInstalledLeafCount()
     if count > 64 { count = 64 }
     for slot: cast(s32)0..count - 1 {
-        owner := NodeAppInstalledLeafName(slot)
-        if owner == "" { continue }
-        canonical := PackageText("inbe.", owner)
-        installed := canonical == id
-        PackageFree(canonical)
-        if installed { return true }
+        if NodeAppInstalledLeafName(slot) != "" && NodeAppInstalledLeafID(slot) == id { return true }
     }
     return false
 }
@@ -78,10 +73,9 @@ AchievementNodeCatalogs :: () {
         owner := NodeAppInstalledLeafName(slot)
         if owner == "" { continue }
         path := NodeAppAssetPath(owner, "achievements.json")
-        app := PackageText("inbe.", owner)
-        defer { PackageFree(path); PackageFree(app) }
+        defer { PackageFree(path) }
         asset := NodeAppInstalledLeafAsset(slot, owner, path)
-        if asset.found { unused AchievementCatalog(asset.data, app) }
+        if asset.found { unused AchievementCatalog(asset.data, NodeAppInstalledLeafID(slot)) }
     }
 }
 
@@ -91,12 +85,19 @@ AchievementLocaleAsset :: (app: string, path: string) -> AssetView {
     for slot: cast(s32)0..count - 1 {
         owner := NodeAppInstalledLeafName(slot)
         if owner == "" { continue }
-        id := PackageText("inbe.", owner)
-        match := app == id
-        PackageFree(id)
-        if match { return NodeAppInstalledLeafAsset(slot, owner, path) }
+        if NodeAppInstalledLeafID(slot) == app { return NodeAppInstalledLeafAsset(slot, owner, path) }
     }
     return AssetRead(path)
+}
+
+// An installed package's asset directory, by its canonical id.
+AchievementLocaleDirectory :: (app: string) -> string {
+    count := NodeAppInstalledLeafCount()
+    if count > 64 { count = 64 }
+    for slot: cast(s32)0..count - 1 {
+        if NodeAppInstalledLeafID(slot) == app { return NodeAppInstalledLeafName(slot) }
+    }
+    return ""
 }
 
 AchievementLumiPracticeSaved :: (id: string, activity: s32, day: s32) {
@@ -143,6 +144,7 @@ AchievementFrame :: (app: *InnerBreeze) {
         achievement_dirty = true
     }
     achievement_locale_asset = AchievementLocaleAsset
+    achievement_locale_directory = AchievementLocaleDirectory
     AchievementLocaleFrame()
     AchievementVisibility()
     revision := AchievementSourceRevision()

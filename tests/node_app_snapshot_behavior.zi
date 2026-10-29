@@ -251,6 +251,24 @@ SnapshotRootOpenCheck :: () -> s32 {
     return 0
 }
 
+snapshot_package_node: AppNode;
+
+// Other packages keep their own asset folder and canonical id, but can
+// never stand in for an Inbe app.
+SnapshotPackageOwnerCheck :: () -> s32 {
+    node := *snapshot_package_node
+    owner: [25]u8
+    unused CopyCString("xyz.waozi.choano", node.identity.id[:])
+    unused CopyCString("choano", node.entry.expected_id[:])
+    if !NodeInstalledPackageOwner(node, owner[:]) || TextUntilNul(owner[:]) != "choano" { return 110 }
+    unused CopyCString("inbe.photos", node.identity.id[:])
+    if NodeInstalledPackageOwner(node, owner[:]) { return 111 }
+    unused CopyCString("xyz.waozi.choano", node.identity.id[:])
+    unused CopyCString("../photos", node.entry.expected_id[:])
+    if NodeInstalledPackageOwner(node, owner[:]) { return 112 }
+    return 0
+}
+
 #program_export
 Check :: () -> s32 {
     root: [14]u8
@@ -277,7 +295,8 @@ Check :: () -> s32 {
     NodeAppSetMark("photos", true)
     NodeAppSetMark("arcade", true)
     before := NodeAppInstalledLeafRevision()
-    if NodeAppInstalledLeafCount() != 1 || NodeAppInstalledLeafName(0) != "photos" { return 3 }
+    if NodeAppInstalledLeafCount() != 1 || NodeAppInstalledLeafName(0) != "photos" ||
+    NodeAppInstalledLeafID(0) != "inbe.photos" { return 3 }
     NodeAppSetMark("arcade", false)
     if NodeAppInstalledLeafCount() != 1 || NodeAppInstalledLeafRevision() == before { return 4 }
     asset := NodeAppInstalledLeafAsset(0, "photos", "assets/photos/achievements.json")
@@ -300,6 +319,8 @@ Check :: () -> s32 {
     if icons != 0 { return icons }
     images := NodeTreeImagesCheck()
     if images != 0 { return images }
+    packages := SnapshotPackageOwnerCheck()
+    if packages != 0 { return packages }
     storage_close()
     return 0
 }

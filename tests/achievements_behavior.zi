@@ -197,6 +197,36 @@ Check :: () -> s32 {
     check_int("radio day needs a minute", metric_value("radio.playback", "days"), 1)
     check_int("count each sufficiently heard station once", metric_value("radio.playback", "station_minutes"), 1)
     check_true("reject fabricated radio duration", !AchievementRecord("radio.playback", "invalid-radio", 20261001, 100, started = 1000, ended = 1001))
+    // A hosted package awards only its own metric, under its verified id.
+    package_catalog := "{\"schema\":1,\"app\":\"xyz.waozi.choano\",\"achievements\":[{\"id\":\"xyz.waozi.choano.full_size\",\"group\":\"choano\",\"metric\":\"xyz.waozi.choano.full_size\",\"rule\":\"count\",\"target\":1,\"variant\":\"\",\"pack\":\"\",\"needs\":\"\",\"title_key\":\"achievement_choano_full_size_title\",\"description_key\":\"achievement_choano_full_size_description\",\"title\":\"Full size\",\"description\":\"Grow to full size in the amoeba dish and unlock Fish mode.\",\"icon\":\"assets/choano/icons/xyz.waozi.choano.full_size.shape\",\"icon_source\":\"mingcute_regular_trophy\"}]}"
+    check_true("reject a package catalog under another id", !AchievementCatalog(package_catalog, "xyz.waozi.other", false))
+    check_true("reject a package catalog under an Inbe id", !AchievementCatalog(package_catalog, "inbe.lists", false))
+    check_true("accept a package catalog under its own id", AchievementCatalog(package_catalog, "xyz.waozi.choano"))
+    package_index := achievement_count - 1
+    achievement_definitions[package_index].visible = true
+    full_size := "{\"metric\":\"xyz.waozi.choano.full_size\",\"source\":\"full-size\",\"amount\":1}"
+    check_true("reject another package's metric", !AchievementPackageReport("xyz.waozi.other", full_size))
+    check_true("reject an Inbe identity", !AchievementPackageReport("inbe.lists", "{\"metric\":\"inbe.lists.done\",\"source\":\"a\",\"amount\":1}"))
+    check_true("reject a metric with a longer prefix", !AchievementPackageReport("xyz.waozi.choano",
+        "{\"metric\":\"xyz.waozi.choanox.full_size\",\"source\":\"full-size\",\"amount\":1}"))
+    check_true("reject the bare package id", !AchievementPackageReport("xyz.waozi.choano",
+        "{\"metric\":\"xyz.waozi.choano\",\"source\":\"full-size\",\"amount\":1}"))
+    check_true("reject a zero amount", !AchievementPackageReport("xyz.waozi.choano",
+        "{\"metric\":\"xyz.waozi.choano.full_size\",\"source\":\"full-size\",\"amount\":0}"))
+    check_true("reject an amount above 1000", !AchievementPackageReport("xyz.waozi.choano",
+        "{\"metric\":\"xyz.waozi.choano.full_size\",\"source\":\"full-size\",\"amount\":1001}"))
+    check_true("reject a fractional amount", !AchievementPackageReport("xyz.waozi.choano",
+        "{\"metric\":\"xyz.waozi.choano.full_size\",\"source\":\"full-size\",\"amount\":1.5}"))
+    check_true("reject a missing source", !AchievementPackageReport("xyz.waozi.choano",
+        "{\"metric\":\"xyz.waozi.choano.full_size\",\"amount\":1}"))
+    check_true("reject trailing request data", !AchievementPackageReport("xyz.waozi.choano", "{\"metric\":\"x\"} {}"))
+    check_int("rejected reports record nothing", metric_value("xyz.waozi.choano.full_size", "count"), 0)
+    check_true("accept the package's own metric", AchievementPackageReport("xyz.waozi.choano", full_size))
+    check_true("a repeated report is idempotent", AchievementPackageReport("xyz.waozi.choano", full_size))
+    check_int("count the package fact once", metric_value("xyz.waozi.choano.full_size", "count"), 1)
+    AchievementEvaluate()
+    check_true("award the package achievement", achievement_definitions[package_index].awarded)
+    check_int("present the package award once", AchievementConsumeAlerts(), 1)
     AchievementReset()
     check_true("reload durable catalog", AchievementCatalog(catalog, "inbe"))
     achievement_definitions[0].visible = true

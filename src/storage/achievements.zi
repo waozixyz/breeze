@@ -256,6 +256,35 @@ AchievementRecord :: (metric: string, source: string, day: s32, amount: s64 = 1,
     return true
 }
 
+// A hosted package's own fact, from {"metric","source","amount"}. The app is
+// the package's verified identity, never a name the package reports.
+AchievementPackageReport :: (app: string, request: string) -> bool {
+    if app == "inbe" || (app.count > 5 && app[:5] == "inbe.") || !AchievementNameValid(app) ||
+    request.count < 2 || request.count > 1024 {
+        return false
+    }
+    end := ValueEnd(request, Space(request, 0), 0)
+    if end < 0 || Space(request, end) != request.count {
+        return false
+    }
+    metric: [97]u8
+    source: [129]u8
+    amount := ReadNumber(request, FieldAt(request, 0, "amount"))
+    if ReadStringText(request, FieldAt(request, 0, "metric"), metric[:]) < 1 ||
+    ReadStringText(request, FieldAt(request, 0, "source"), source[:]) < 1 {
+        return false
+    }
+    if !amount.valid || amount.value < 1 || amount.value > 1000 ||
+    amount.value != cast(float64)cast(s64)amount.value {
+        return false
+    }
+    name := TextUntilNul(metric[:])
+    if !AchievementAppMetricAllowed(app, name) {
+        return false
+    }
+    return AchievementRecord(name, TextUntilNul(source[:]), AchievementToday(), cast(s64)amount.value)
+}
+
 AchievementToday :: () -> s32 {
     day := LocalNow()
     if !day.valid { return 0 }
