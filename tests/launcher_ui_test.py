@@ -400,9 +400,9 @@ with contextlib.ExitStack() as stack:
                         assert 0 not in active_pins, "Legacy Profile pin was not removed"
                         if width == 390 and placement == 4 and not pinned:
                             capture(window, name)
-                        reveal_action("Connect Account")
-                        driver.press(label="Connect Account", role="button")
-                        driver.wait(contains="Create", role="button")
+                        reveal_action("Import Account Key")
+                        driver.press(label="Import Account Key", role="button")
+                        driver.wait(label="Choose key file", role="button")
                         one_header("Profile")
                         driver.press(label="Back", role="button")
                         driver.wait(label="Change picture", role="button", visible=False)
@@ -410,9 +410,9 @@ with contextlib.ExitStack() as stack:
                         for label in ("Today", "Active days", "Sessions"):
                             driver.wait(label=label, role="text", visible=False)
                         assert not driver.find(label="Activity", role="button"), "Inline Activity still has a route"
-                        reveal_action("Manage data")
-                        driver.press(label="Manage data", role="button")
-                        one_header("Data")
+                        reveal_action("Friends")
+                        driver.press(label="Friends", role="button")
+                        one_header("Friends")
                         driver.press(label="Back", role="button")
                         driver.wait(label="Change picture", role="button", visible=False)
                         one_header("Profile")
@@ -420,7 +420,7 @@ with contextlib.ExitStack() as stack:
                         driver.wait(label="Pinned")
                         assert not driver.find(role="title_bar", visible=True)
                         print(f"{name}: one header and complete Back stack passed", flush=True)
-        print("Profile: one header, Account/Data Back stack, inline Activity, pinned/unpinned, saved top/bottom/side navigation passed")
+        print("Profile: one header, account import/Friends Back stack, inline Activity, pinned/unpinned, saved top/bottom/side navigation passed")
 
     if arguments.profile_identity_only:
         with tempfile.TemporaryDirectory(prefix="inbe-profile-identity-") as temporary:
@@ -516,6 +516,12 @@ with contextlib.ExitStack() as stack:
                     wait_setting(profile, "launcher_grid_view", 1)
                     pinned, more, tree = cards()
                     assert all(abs(card["height"] - 88) <= 1 for card in pinned + more), cards()
+                    handles = driver.find(label="Move app", role="button", visible=True)
+                    for card in pinned + more:
+                        matches = [node for node in handles
+                                   if abs(node["y"] - card["y"]) < 2
+                                   and abs(node["x"] + node["width"] - card["x"]) < 2]
+                        assert len(matches) == 1, (card, matches)
                     if width > 500:
                         assert abs(pinned[0]["y"] - pinned[1]["y"]) < 1 and pinned[1]["x"] > pinned[0]["x"], pinned
                     capture(window, f"views-{width}-grid")
@@ -954,6 +960,8 @@ with contextlib.ExitStack() as stack:
                 assert favorites(profile) == [11, 1, 2], "Restart changed personal pins"
                 assert settings(profile)["language_setup_done"] == "1"
                 assert [item["label"] for item in navigation()] == ["Diary", "Habits", "Practice", "Apps"]
+            if arguments.drag_only:
+                continue
             with application(profile, name + "-manage", width, height) as (window, log):
                 open_apps()
                 with database(profile) as db:
@@ -1002,4 +1010,7 @@ with contextlib.ExitStack() as stack:
                     open_profile(log)
                     assert favorites(profile) == []
     check_profile_navigation()
-    print("Launcher: first-run voice question, desktop defaults, clean sections, click/hold/drag, profile and persistence passed")
+    if arguments.drag_only:
+        print("Launcher: click/hold/scroll, edit-only reorder, saved order and Profile navigation passed")
+    else:
+        print("Launcher: first-run voice question, desktop defaults, clean sections, click/hold/drag, profile and persistence passed")

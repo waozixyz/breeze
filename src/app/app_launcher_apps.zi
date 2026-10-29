@@ -209,8 +209,11 @@ LauncherAppWidgets :: (context: *void, module: *u8, function: *u8,
     for index: cast(s32)0..group.count - 1 {
         entry := group.entries[index]
         // Editing exposes an explicit handle; the card keeps its own gestures.
-        handle := group.owner.launcher_editing && card.key == Rules.AppCardKey(TextUntilNul(entry.id[:]))
-        if !handle { continue }
+        tile_key := Rules.AppCardKey(TextUntilNul(entry.id[:]))
+        reorder_key := Rules.AppReorderKey(TextUntilNul(entry.id[:]))
+        tile_button := card.key == tile_key
+        reorder_button := card.key == reorder_key
+        if !group.owner.launcher_editing || (!tile_button && !reorder_button) { continue }
         item := entry.route
         if item < 0 {
             for offer: cast(s32)0..NodeAppOfferCount() - 1 {
@@ -220,7 +223,16 @@ LauncherAppWidgets :: (context: *void, module: *u8, function: *u8,
                 }
             }
         }
-        app_launcher_drag_handle(group.owner, card, item, group.owner.launcher_grid_view)
+        if reorder_button {
+            tile := TreeSubmitted(group.owner.ui.session, TreeCurrentParent(group.owner.ui.session), tile_key, WidgetKindButton)
+            if tile >= 0 {
+                tile_card := card
+                tile_card.key = tile_key
+                tile_card.bounds = TreeNodeAt(group.owner.ui.session, tile).bounds
+                app_launcher_drag_handle(group.owner, tile_card, item, group.owner.launcher_grid_view, reorder_key)
+            }
+            break
+        }
         name := LauncherLibraryName(item)
         hidden := AppPropertiesHidden(name)
         visibility: ButtonProps
@@ -433,9 +445,9 @@ LauncherAppCatalogEntry :: (group: *LauncherAppGroup, bytes: *Vec(u8), route: s3
     // cards disabled for that one frame changed the catalog twice whenever
     // Apps opened, and each change re-parses it in the Apps controller:
     // about 0.4 s on a slow phone.
-    BuilderPrint(bytes, ",\"installed\":%,\"favorite\":%,\"bytes\":%,\"actions\":[\"open\"",
+    BuilderPrint(bytes, ",\"installed\":%,\"favorite\":%,\"reorderable\":%,\"bytes\":%,\"actions\":[\"open\"",
         ifx installed then "true" else "false", ifx favorite then "true" else "false",
-        size)
+        group.owner.launcher_editing, size)
     if installed {
         if !builtin { BuilderPrint(bytes, ",\"uninstall\"") }
         BuilderPrint(bytes, ",\"%\"", ifx favorite then "unpin" else "pin")
