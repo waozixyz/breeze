@@ -1,0 +1,60 @@
+name: Publish Amazon Appstore
+
+# Retries the Amazon Appstore upload for an already published release. The
+# Release workflow runs the same script for every new version.
+"on":
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published release version, such as 2.1.60
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Upload release APK to Amazon Appstore
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AMAZON_CLIENT_ID: ${{ secrets.AMAZON_CLIENT_ID }}
+      AMAZON_CLIENT_SECRET: ${{ secrets.AMAZON_CLIENT_SECRET }}
+      AMAZON_APP_ID: ${{ secrets.AMAZON_APP_ID }}
+      VERSION: ${{ inputs.version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download the published release APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::version must be numeric, such as 2.1.60"
+            exit 1
+          fi
+          apk="inbe-$VERSION.apk"
+          mkdir -p build/release/android
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "$apk" --dir build/release/android
+          expected=$(gh release view "v$VERSION" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq ".assets[] | select(.name == \"$apk\") | .digest")
+          actual="sha256:$(sha256sum "build/release/android/$apk" | cut -d' ' -f1)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::$apk digest $actual does not match the release asset $expected"
+            exit 1
+          fi
+          echo "Verified $apk $actual"
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Upload APK to Amazon Appstore
+        env:
+          AMAZON_RELEASE_FILE: build/release/android/inbe-${{ inputs.version }}.apk
+        run: node scripts/upload-amazon-appstore.mjs

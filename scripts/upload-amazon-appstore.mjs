@@ -1,5 +1,5 @@
 import { readFile } from "node:fs/promises";
-import { extname } from "node:path";
+import { basename, extname } from "node:path";
 
 const baseUrl = "https://developer.amazon.com/api/appstore";
 
@@ -89,20 +89,86 @@ function assetMatchesReleaseKind(asset, releaseKind) {
   return !searchableValues.some((value) => value.includes("apk"));
 }
 
-async function findBinaryCollection(editId, releaseKind) {
-  const resource = releaseKind.resource;
+async function listEditAssets(editId, resource) {
   const assets = await requestJson(`${baseUrl}/v1/applications/${appId}/edits/${editId}/${resource}`, {
     headers: jsonHeaders,
   });
   if (!Array.isArray(assets)) {
     throw new Error(`Amazon edit returned an unexpected ${resource} response: ${JSON.stringify(assets)}`);
   }
-  const matchingAssets = assets.filter((asset) => assetMatchesReleaseKind(asset, releaseKind));
-  if (matchingAssets.length === 0) {
-    const assetDescriptions = assets.map(describeAsset).join(", ") || "(none)";
-    throw new Error(`Amazon edit has no ${releaseKind.label} asset to replace in ${resource}. Found: ${assetDescriptions}`);
+  return assets;
+}
+
+async function getAssetEtag(editId, resource, asset) {
+  const response = await requestOk(`${baseUrl}/v1/applications/${appId}/edits/${editId}/${resource}/${asset.id}`, {
+    headers: jsonHeaders,
+  });
+  const etag = response.headers.get("etag");
+  if (!etag) {
+    throw new Error(`Amazon did not return an ETag for ${describeAsset(asset)}`);
   }
-  return { resource, assets: matchingAssets };
+  return etag;
+}
+
+async function replaceAsset(editId, resource, asset, releaseBytes) {
+  const etag = await getAssetEtag(editId, resource, asset);
+  await requestOk(`${baseUrl}/v1/applications/${appId}/edits/${editId}/${resource}/${asset.id}/replace`, {
+    method: "PUT",
+    headers: {
+      ...authHeaders,
+      "Content-Type": releaseKind.contentType,
+      "If-Match": etag,
+      fileName: basename(releaseFile),
+    },
+    body: releaseBytes,
+  });
+}
+
+async function deleteAsset(editId, resource, asset) {
+  const etag = await getAssetEtag(editId, resource, asset);
+  await requestOk(`${baseUrl}/v1/applications/${appId}/edits/${editId}/${resource}/${asset.id}`, {
+    method: "DELETE",
+    headers: {
+      ...jsonHeaders,
+      "If-Match": etag,
+    },
+  });
+}
+
+async function uploadNewApk(editId, releaseBytes) {
+  await requestOk(`${baseUrl}/v1/applications/${appId}/edits/${editId}/apks/upload`, {
+    method: "POST",
+    headers: {
+      ...authHeaders,
+      "Content-Type": releaseKind.contentType,
+      fileName: basename(releaseFile),
+    },
+    body: releaseBytes,
+  });
+}
+
+// A binary uploaded in the Developer Console as an app bundle occupies the
+// edit's only APK slot. The API cannot upload bundles, so the release APK
+// takes that slot: replace it, or delete it and upload when Amazon refuses.
+async function replaceBundleSlotWithApk(editId, bundleSlots, releaseBytes) {
+  if (bundleSlots.length !== 1 || !bundleSlots[0].id) {
+    const slotDescriptions = bundleSlots.map(describeAsset).join(", ") || "(none)";
+    throw new Error(`Expected exactly one app bundle slot for the APK to take over. Found: ${slotDescriptions}`);
+  }
+  const bundleSlot = bundleSlots[0];
+
+  console.log(`Replacing app bundle ${describeAsset(bundleSlot)} with the APK`);
+  try {
+    await replaceAsset(editId, "apks", bundleSlot, releaseBytes);
+    return;
+  } catch (error) {
+    console.log(`Amazon refused to replace the app bundle in place: ${error.message}`);
+  }
+
+  console.log(`Deleting app bundle ${describeAsset(bundleSlot)} from the edit`);
+  await deleteAsset(editId, "apks", bundleSlot);
+  console.log("Uploading the APK as the edit's new binary");
+  await uploadNewApk(editId, releaseBytes);
 }
 
 const clientId = requireEnv("AMAZON_CLIENT_ID");
@@ -159,31 +225,25 @@ if (!edit.id) {
   throw new Error("Amazon did not return an edit id");
 }
 
-console.log(`Finding ${releaseKind.label} slot to replace`);
-const { resource, assets } = await findBinaryCollection(edit.id, releaseKind);
-const asset = assets[0];
-if (!asset.id) {
-  throw new Error(`Amazon ${releaseKind.label} asset did not include an id: ${JSON.stringify(asset)}`);
-}
-console.log(`Replacing ${releaseKind.label} ${describeAsset(asset)} via ${resource}`);
-
-const assetResponse = await requestOk(`${baseUrl}/v1/applications/${appId}/edits/${edit.id}/${resource}/${asset.id}`, {
-  headers: jsonHeaders,
-});
-const etag = assetResponse.headers.get("etag");
-if (!etag) {
-  throw new Error(`Amazon did not return an ETag for ${releaseKind.label} ${asset.id}`);
-}
-
 const releaseBytes = await readFile(releaseFile);
-await requestOk(`${baseUrl}/v1/applications/${appId}/edits/${edit.id}/${resource}/${asset.id}/replace`, {
-  method: "PUT",
-  headers: {
-    ...authHeaders,
-    "Content-Type": releaseKind.contentType,
-    "If-Match": etag,
-  },
-  body: releaseBytes,
-});
 
+console.log(`Finding ${releaseKind.label} slot to replace`);
+const editAssets = await listEditAssets(edit.id, releaseKind.resource);
+const matchingAssets = editAssets.filter((asset) => assetMatchesReleaseKind(asset, releaseKind));
+if (matchingAssets.length > 0) {
+  const asset = matchingAssets[0];
+  if (!asset.id) {
+    throw new Error(`Amazon ${releaseKind.label} asset did not include an id: ${JSON.stringify(asset)}`);
+  }
+  console.log(`Replacing ${releaseKind.label} ${describeAsset(asset)} via ${releaseKind.resource}`);
+  await replaceAsset(edit.id, releaseKind.resource, asset, releaseBytes);
+} else if (releaseKind.label === "APK") {
+  await replaceBundleSlotWithApk(edit.id, editAssets, releaseBytes);
+} else {
+  const assetDescriptions = editAssets.map(describeAsset).join(", ") || "(none)";
+  throw new Error(`Amazon edit has no ${releaseKind.label} asset to replace in ${releaseKind.resource}. Found: ${assetDescriptions}`);
+}
+
+const uploadedAssets = await listEditAssets(edit.id, "apks");
+console.log(`Amazon edit ${edit.id} now holds: ${uploadedAssets.map(describeAsset).join(", ") || "(none)"}`);
 console.log(`Amazon ${releaseKind.label} upload completed`);
