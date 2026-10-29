@@ -509,9 +509,25 @@ declares the oldest host interface it needs (`host_api` in its ledger entry),
 and the host runs packages from `oldest_host_api` to its own `host_api`.
 A host loads only programs in its own Ziran program format, so a toolchain whose
 format changed is a new interface too: `oldest_host_api` and every package's
-`host_api` rise above the last released host. Host 41 is the first with
-format 59; released apps up to 2.1.61 (host 40) cannot load packages built
-since, and are not offered them.
+`host_api` rise above the last released host. Host 41 (2.1.61) is the
+first with format 59; released apps up to 2.1.60 (host 40) cannot load
+packages built since, and are not offered them.
+
+A format bump publishes in this order, because a host only finds what the
+node already serves for its interface and `make package-compat-test` needs
+it:
+
+1. Ziran, then the Apps package with its own lock; record the rebuilt
+   controller's digest in `AppsControllerSha256`.
+2. Here: the toolchain and Apps pins, and `host_api`, `oldest_host_api` and
+   every package's `host_api` in `apps/versions.json`. The Apps node host
+   takes its limit from `PackageHostAPI`.
+3. Arcade: its toolchain and Apps pins, the game contract
+   (`standards/game-v1.json`, `src/game_contract.zi`, every game's
+   `catalog.json`) and a new version of every game, then its node release.
+   Released hosts keep the Arcade built for them.
+4. The release here; App packages publishes the bundled apps, practice
+   packs and node apps for the new interface on the release push.
 Records between them match fields by name, so a field one side lacks keeps its
 zero value and an unknown field is ignored. Update checks send the host's
 interfaces and a stable device bucket; the node answers with the newest
