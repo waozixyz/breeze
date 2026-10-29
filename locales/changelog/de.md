@@ -1,10 +1,7 @@
 # Changelog
 
-## [Unreleased]
-
-- Der Download ist etwa 16 MB kleiner: Apps werden kompakter gespeichert und gemeinsame Bilder nur einmal mitgeliefert.
-
 ## [2.1.61] - 2026-10-29
 
+- Der Download ist etwa 16 MB kleiner: Apps werden kompakter gespeichert und gemeinsame Bilder nur einmal mitgeliefert.
 - Chinesischer, japanischer und koreanischer Text wird richtig angezeigt.
 - Mehr von der App spricht deine Sprache, auch das Profil und die Update-Hinweise.

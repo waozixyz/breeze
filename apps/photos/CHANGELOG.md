@@ -1,5 +1,9 @@
 # Photos changelog
 
+## [1.0.5] - 2026-10-29
+
+- Download on Inner Breeze 2.1.61, which runs apps in a smaller format.
+
 ## [1.0.4] - 2026-10-24
 
 - Download on the current Inner Breeze, which only runs the new app format.
