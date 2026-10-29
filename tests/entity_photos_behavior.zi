@@ -77,6 +77,8 @@ FakeBlob :: struct {
     node: [64]u8
     address: [65]u8
     bytes: string
+    // In the node's trash: kept, but free.
+    trashed: bool
 }
 
 FakeNode :: struct {
@@ -109,6 +111,11 @@ FakeFind :: (node: string, address: string) -> s32 {
 
 FakeHas :: (node: string, address: string) -> bool {
     return FakeFind(node, address) >= 0
+}
+
+FakeTrashed :: (node: string, address: string) -> bool {
+    at := FakeFind(node, address)
+    return at >= 0 && fake_blobs[at].trashed
 }
 
 FakeStore :: (node: string, address: string, bytes: string) {
@@ -167,6 +174,14 @@ RunPass :: (limit: s32) -> s32 {
         node := TextUntilNul(request.node[:])
         fake := FakeNodeOf(node)
         path := TextUntilNul(request.path[:])
+        action := ""
+        if request.method == "POST" && path.count > 6 && path[path.count - 6:] == "/trash" {
+            action = "trash"
+            path = path[:path.count - 6]
+        } else if request.method == "POST" && path.count > 8 && path[path.count - 8:] == "/restore" {
+            action = "restore"
+            path = path[:path.count - 8]
+        }
         address := path[path.count - 64:]
         if fake.offline {
             DiaryBlobFailed(*pass, *request)
@@ -180,6 +195,13 @@ RunPass :: (limit: s32) -> s32 {
             if !fake.full {
                 FakeStore(node, address, request.body)
                 fake_puts += 1
+            }
+        } else if request.method == "POST" {
+            // Moving a blob in or out of the trash; an unknown blob is 404.
+            at := FakeFind(node, address)
+            if action.count > 0 && at >= 0 {
+                fake_blobs[at].trashed = action == "trash"
+                status = 204
             }
         } else if request.method == "DELETE" {
             status = ifx fake.no_deletes then cast(s32)405 else cast(s32)204
@@ -479,6 +501,12 @@ Check :: () -> s32 {
     GoodSync()
     RunPasses()
     MoveSteps()
+    // A photo a released version put in Trash starts its 30 days now, a
+    // change of its record that goes out first.
+    check_true("its time in Trash starts", EntityField(harbor_hash, "trash_changed") != "")
+    GoodSync()
+    RunPasses()
+    MoveSteps()
     check_true("then it names the photo", FieldAt(Setting(PackageText("cell.media.", harbor_hash)), 0, "photo") >= 0)
     PackageFree(harbor_old)
 
@@ -513,9 +541,73 @@ Check :: () -> s32 {
     RunPasses()
     check_true("an original opened here comes", PackageRead(MediaPath(lake_hash, false), DIARY_FILE_LIMIT) == lake)
     check_true("the large photo comes in its two chunks", PackageRead(MediaPath(big_hash, false), DIARY_FILE_LIMIT) == big)
+    CheckTrash(lake_hash, walk_hash, tea_hash)
     storage_close()
     PackageFree(old_records)
     return failures
+}
+
+// Whether the content's chunks are all in, or all out of, both nodes' trash.
+FixtureChunksTrashed :: (hash: string, field: string, trashed: bool) -> bool {
+    address := EntityField(hash, field)
+    defer { PackageFree(address) }
+    if address.count != 64 {
+        return false
+    }
+    nodes: [2]string = .[FIXTURE_SYNC_NODE, FIXTURE_OTHER_NODE]
+    for node: nodes {
+        if !FakeHas(node, address) || FakeTrashed(node, address) != trashed {
+            return false
+        }
+    }
+    return true
+}
+
+// A photo in Trash stops counting on the nodes at once, comes back whole,
+// and goes for good after 30 days, unless Diary still shows it.
+CheckTrash :: (lake_hash: string, walk_hash: string, tea_hash: string) {
+    check_true("this device knows the account's other node", SyncNodeAdd(FIXTURE_OTHER_NODE))
+    check_true("a photo in Trash is in both nodes' trash", FixtureChunksTrashed(lake_hash, "preview.blobs[0].address", true))
+    check_true("taking it out of Trash", MediaSetTrashed(lake_hash, false))
+    RunPasses()
+    check_true("takes its chunks out of the nodes' trash", FixtureChunksTrashed(lake_hash, "preview.blobs[0].address", false))
+    check_int("and it lists again", MediaQuery("", true), 0)
+
+    // A Diary entry that shows walk keeps its chunks out of the trash.
+    entry := PackageText(PackageText("{\"text\":\"![](photos/2024/04/05/", walk_hash), ".png)\"}")
+    storage_set_setting_text("cell.diary.file.2024-04-05.json", entry)
+    PackageFree(entry)
+    check_true("trash walk", MediaSetTrashed(walk_hash, true))
+    RunPasses()
+    check_true("a photo Diary shows keeps its chunks", FixtureChunksTrashed(walk_hash, "blobs[0].address", false))
+
+    // 30 days in Trash: the photo goes for good, here and as a deletion.
+    check_true("trash lake again", MediaSetTrashed(lake_hash, true))
+    RunPasses()
+    check_true("its chunks are in the trash again", FixtureChunksTrashed(lake_hash, "preview.blobs[0].address", true))
+    GoodSync()
+    lake_key := EntityPhotoKey(lake_hash)
+    expired := PackageText(PackageText("UPDATE settings SET value=json_set(value,'$.trash_changed',strftime('%s','now')-2592001) WHERE key='", lake_key), "'")
+    unused exec_sql(expired)
+    PackageFree(expired)
+    RunPasses()
+    check_true("after 30 days its record is empty", Setting(lake_key) == "")
+    check_true("its files leave this device", !PathExists(MediaPath(lake_hash, true)) && !PathExists(MediaPath(lake_hash, false)))
+    check_true("it no longer shows", !MediaRead(lake_hash).valid)
+    check_int("only walk, which Diary shows, stays in Trash", MediaQuery("", true), 1)
+    payload := storage_build_sync_payload_json(FIXTURE_ACCOUNT, "fixture-public-key")
+    check_true("its deletion goes out", payload != null && ContainsFoldASCII(TextFromCString(payload), "deleted_at"))
+    storage_free_sync_payload_json(payload)
+    GoodSync()
+    PackageFree(lake_key)
+    check_true("walk, still in Diary, is kept", Setting(EntityPhotoKey(walk_hash)) != "")
+
+    // A deletion another device sent removes the photo and its files here.
+    check_true("tea's preview is here", PathExists(MediaPath(tea_hash, true)) || PathExists(MediaPath(tea_hash, false)))
+    check_int("a deletion arrives", storage_apply_entity_record(EntityPhotosCollection, tea_hash, "", "2030-01-01T00:00:00Z"), 1)
+    check_true("tea no longer shows", !MediaRead(tea_hash).valid)
+    RunPasses()
+    check_true("and its files leave", !PathExists(MediaPath(tea_hash, true)) && !PathExists(MediaPath(tea_hash, false)))
 }
 
 // How many of these photos have their preview, or when they have none their

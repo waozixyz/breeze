@@ -364,6 +364,31 @@ storage_apply_entity_record :: (collection: string, record_id: string, plaintext
         if merged != plaintext { unused storage_enqueue_sync_entity("entity_record", key, 0) }
         return 1
     }
+    // A photo deleted for good from Trash on another device is deleted here
+    // too: its empty record hides it, and the media pass removes its files.
+    if collection == EntityPhotosCollection && plaintext == "" {
+        if !MediaHashValid(record_id) {
+            return 1
+        }
+        deleted_key: [ENTITY_PHOTO_KEY_BYTES + 1]u8
+        unused AppCopyText(ENTITY_PHOTO_PREFIX, deleted_key[:])
+        unused AppAppendText(record_id, deleted_key[:])
+        statement: *void = null
+        if SqlitePrepareText(storage_db_handle(), SyncEntityPhotoDeletedSQL, -1, *statement, null) != SQLITE_OK {
+            return 0
+        }
+        defer { SqliteFinalize(statement) }
+        bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        bind_text(statement, 2, TextUntilNul(deleted_key[:]))
+        bind_text(statement, 3, updated_at)
+        if SqliteStep(statement) != SQLITE_DONE {
+            return 0
+        }
+        if sqlite3_changes(storage_db_handle()) > 0 {
+            storage_media_changes += 1
+        }
+        return 1
+    }
     if collection != EntityPhotosCollection || !storage_entity_photo_valid(record_id, plaintext) {
         LogStorageText(LOG_WARNING, "SYNC: entity record skipped: ", collection)
         return 1
@@ -492,8 +517,8 @@ storage_apply_encrypted_records :: (response_json: string) -> s32 {
                 index += 1; continue
             }
             if EntityCollectionKnown(collection) {
-                if collection == EntityLevelsCollection && deleted.valid && deleted.value > 0.0 &&
-                key_id == DaochiEntity.ENTITY_RECORD_KEY_ID {
+                if (collection == EntityLevelsCollection || collection == EntityPhotosCollection) &&
+                deleted.valid && deleted.value > 0.0 && key_id == DaochiEntity.ENTITY_RECORD_KEY_ID {
                     ok = storage_apply_entity_record(collection, record_id, "", updated_at)
                     index += 1
                     continue

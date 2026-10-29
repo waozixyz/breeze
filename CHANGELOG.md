@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 - Sync no longer gets stuck on a review with no preview after something was deleted.
+- Photos in Trash stop counting toward your storage right away and are deleted after 30 days, unless Diary still shows them.
+- Cleared remote data stays on the server for 30 days; importing the same key again before then brings it back.
 
 ## [2.1.61] - 2026-10-29
 

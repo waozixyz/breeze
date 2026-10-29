@@ -333,6 +333,11 @@ MediaRead :: (hash: string) -> MediaItem {
         }
         return item
     }
+    // A photo deleted for good from Trash keeps an empty entity record, and
+    // its released version's record no longer stands in for it.
+    if MediaEntityDeleted(hash) {
+        return MediaItem.{}
+    }
     key := MediaRecordKey(hash)
     record := MediaRecordRead(key)
     defer {
@@ -344,6 +349,23 @@ MediaRead :: (hash: string) -> MediaItem {
         return MediaItem.{}
     }
     return item
+}
+
+// Whether the photo was deleted for good: its entity record is empty.
+MediaEntityDeleted :: (hash: string) -> bool {
+    if storage_db_handle() == null {
+        return false
+    }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT 1 FROM settings WHERE user_id=?1 AND key='entity.photos.'||?2 AND value=''", -1,
+        *statement, null) != SQLITE_OK {
+        return false
+    }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    unused bind_text(statement, 2, hash)
+    return SqliteStep(statement) == SQLITE_ROW
 }
 
 // The photo's entity record, or empty.
@@ -668,7 +690,7 @@ MediaAddBytes :: (data: string, addition: MediaAddition) -> MediaImport {
     if existing.valid {
         result.existed = true
         if existing.trashed && addition.restore {
-            restored := MediaRecordWith(record, "trashed", "false")
+            restored := MediaTrashRecord(record, false)
             written := restored.count > 0 && MediaRecordWrite(key, restored)
             PackageFree(restored)
             if !written {
@@ -1206,9 +1228,42 @@ MediaSetField :: (hash: string, field: string, entity_value: string, legacy_valu
     return written
 }
 
-// Moves a photo to Trash or back. Trash keeps the photo and its copies.
+// An entity record moved to Trash or back. trash_changed tells every device
+// of the account when, so each moves the photo's copies on the nodes the
+// same way (diary_blobs.zi), and a photo in Trash goes for good 30 days on.
+MediaTrashRecord :: (record: string, trashed: bool) -> string {
+    marked := MediaRecordWith(record, "trashed", ifx trashed then "true" else "false")
+    if marked.count == 0 {
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", now_seconds())
+    changed := BuilderFinish(out)
+    stamped := MediaRecordWith(marked, "trash_changed", changed)
+    PackageFree(changed)
+    PackageFree(marked)
+    return stamped
+}
+
+// Moves a photo to Trash or back. A photo in Trash stops counting toward
+// the account's storage at once and is deleted after 30 days.
 MediaSetTrashed :: (hash: string, trashed: bool) -> bool {
-    return MediaSetField(hash, "trashed", ifx trashed then "true" else "false", ifx trashed then "1" else "0")
+    if !MediaRead(hash).valid {
+        return false
+    }
+    entity_key := EntityPhotoKey(hash)
+    entity_record := MediaRecordRead(entity_key)
+    defer {
+        PackageFree(entity_key)
+        PackageFree(entity_record)
+    }
+    if entity_record.count == 0 {
+        return MediaSetField(hash, "trashed", ifx trashed then "true" else "false", ifx trashed then "1" else "0")
+    }
+    changed := MediaTrashRecord(entity_record, trashed)
+    written := changed.count > 0 && MediaRecordWrite(entity_key, changed)
+    PackageFree(changed)
+    return written
 }
 
 // Renames a photo: one line of at most MEDIA_NAME_MAX bytes.

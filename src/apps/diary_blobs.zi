@@ -32,6 +32,7 @@
 // sends each request on the node's own media session and passes the answer
 // back, and ends the pass with DiaryBlobPassEnd.
 #import "byte_text_linux"
+#import "file_linux"
 #import "vec"
 #import "text"
 #import "json_scan"
@@ -64,7 +65,14 @@ DaochiEntity :: #import "daochi_client/entity";
 DIARY_BLOB_PASS_FILES :: 8
 DIARY_BLOB_PASS_BYTES :: 33554432
 DIARY_BLOB_PASS_DELETES :: 32
-DIARY_BLOB_PASS_JOBS :: DIARY_BLOB_PASS_FILES + DIARY_BLOB_PASS_DELETES
+// Moves of photo chunks in and out of a node's trash carry no bytes either.
+DIARY_BLOB_PASS_TRASHES :: 32
+DIARY_BLOB_PASS_JOBS :: DIARY_BLOB_PASS_FILES + DIARY_BLOB_PASS_DELETES + DIARY_BLOB_PASS_TRASHES
+// A photo stays this long in Trash, in seconds, then it is deleted for
+// good; a node deletes its trashed chunks after the same time.
+DIARY_BLOB_TRASH_SECONDS :: 2592000
+// Photos one pass starts the clock of, or deletes for good.
+DIARY_BLOB_TRASH_BATCH :: 32
 DIARY_BLOB_RECORD_KEY :: 181
 DIARY_BLOB_NODE_ADDRESS :: 256
 DIARY_BLOB_PRIVATE_KEY :: (ACCOUNT_PRIVATE_KEY_HEX_SIZE - 1) / 2
@@ -80,6 +88,11 @@ DIARY_BLOB_OLD_DELETE :: 4
 // A moved photo's chunks, or its preview's, downloaded back from the sync
 // node and checked, before its old copy goes.
 DIARY_BLOB_VERIFY :: 5
+// A chunk of a photo in Trash, or of its preview, moved to a node's trash,
+// where it stops counting toward the account's storage.
+DIARY_BLOB_TRASH :: 6
+// A chunk of a photo taken out of Trash, moved out of a node's trash.
+DIARY_BLOB_RESTORE :: 7
 
 diary_blobs_c :: #system_library "c";
 DiaryAllocate :: (size: usize) -> *void #foreign diary_blobs_c "malloc";
@@ -101,8 +114,10 @@ DiaryBlobJob :: struct {
     node: s32
     // The next chunk to move.
     chunk: s32
-    // The old copy a delete removes.
+    // The old copy a delete removes, or the chunk a trash move moves.
     blob: [65]u8
+    // The photo record's trash_changed a trash move answers.
+    changed: s64
 }
 
 DiaryBlobPass :: struct {
@@ -147,6 +162,8 @@ DiaryBlobRequest :: struct {
     sealed_size: s64
     // An old copy's own key.
     key_hex: [65]u8
+    // The photo record's trash_changed a trash move answers.
+    changed: s64
 }
 
 DiaryBlobEntriesSQL :: #string SQL_END
@@ -175,6 +192,52 @@ WHERE user_id=(SELECT id FROM users LIMIT 1)
   AND length(json_extract(value,'$.blob'))=64
 ORDER BY updated_at DESC
 SQL_END;
+
+// Photos whose chunks on the nodes follow their Trash: those in Trash, and
+// those taken out of it again.
+DiaryBlobTrashSQL :: #string SQL_END
+SELECT key,value FROM settings
+WHERE user_id=(SELECT id FROM users LIMIT 1)
+  AND key GLOB 'entity.photos.*' AND length(key)=78 AND json_valid(value)
+  AND (json_extract(value,'$.trashed')=1 OR COALESCE(json_extract(value,'$.trash_changed'),0)>0)
+ORDER BY updated_at DESC
+SQL_END;
+
+// Photos a released version moved to Trash, without the time it did.
+DiaryBlobUntimedTrashSQL :: #string SQL_END
+SELECT key FROM settings
+WHERE user_id=(SELECT id FROM users LIMIT 1)
+  AND key GLOB 'entity.photos.*' AND length(key)=78 AND json_valid(value)
+  AND json_extract(value,'$.trashed')=1 AND json_type(value,'$.trash_changed') IS NULL
+LIMIT 32
+SQL_END;
+
+// Photos in Trash since the cutoff or longer.
+DiaryBlobExpiredTrashSQL :: #string SQL_END
+SELECT key FROM settings
+WHERE user_id=(SELECT id FROM users LIMIT 1)
+  AND key GLOB 'entity.photos.*' AND length(key)=78 AND json_valid(value)
+  AND json_extract(value,'$.trashed')=1 AND json_extract(value,'$.trash_changed')<=?1
+LIMIT 32
+SQL_END;
+
+// Photos deleted for good, here or on another device.
+DiaryBlobDeletedPhotosSQL :: #string SQL_END
+SELECT key FROM settings
+WHERE user_id=(SELECT id FROM users LIMIT 1)
+  AND key GLOB 'entity.photos.*' AND length(key)=78 AND value=''
+SQL_END;
+
+// A Diary entry or Diary file that still shows the photo, by its hash.
+DiaryBlobInDiarySQL :: #string SQL_END
+SELECT 1 FROM settings
+WHERE user_id=(SELECT id FROM users LIMIT 1)
+  AND key GLOB 'cell.diary.file.*' AND instr(value,?1)>0
+LIMIT 1
+SQL_END;
+
+DiaryBlobTrashKnownSQL :: "SELECT 1 FROM blob_trash WHERE node=?1 AND blob=?2 AND trashed=?3 AND changed=?4"
+DiaryBlobTrashSaveSQL :: "INSERT INTO blob_trash(node,blob,trashed,changed) VALUES(?1,?2,?3,?4) ON CONFLICT(node,blob) DO UPDATE SET trashed=excluded.trashed,changed=excluded.changed"
 
 DiaryBlobKnown :: (table_sql: string, node: string, blob: string) -> bool {
     statement: *void
@@ -214,6 +277,140 @@ DiaryBlobRemember :: (node: string, blob: string) {
 DiaryBlobDeleted :: (node: string, blob: string) {
     DiaryBlobRun("INSERT OR IGNORE INTO old_copies_deleted(node,blob) VALUES(?1,?2)", node, blob)
     DiaryBlobRun("DELETE FROM diary_blobs WHERE node=?1 AND blob=?2", node, blob)
+}
+
+// Whether Diary still shows the photo: its chunks then stay whole on the
+// nodes, and it is never deleted for good from Trash.
+DiaryBlobInDiary :: (hash: string) -> bool {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), DiaryBlobInDiarySQL, -1, *statement, null) != SQLITE_OK {
+        return true
+    }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, hash)
+    return SqliteStep(statement) == SQLITE_ROW
+}
+
+// Whether the record puts the photo in Trash: true, or 1 as a released
+// version's record left it.
+DiaryBlobRecordTrashed :: (record: string) -> bool {
+    at := FieldAt(record, 0, "trashed")
+    if at < 0 {
+        return false
+    }
+    if MatchLiteral(record, at, "true") {
+        return true
+    }
+    number := ReadNumber(record, at)
+    return number.valid && number.value != 0.0
+}
+
+// Whether the node confirmed the chunk's trash state for this change.
+DiaryBlobTrashKnown :: (node: string, blob: string, trashed: bool, changed: s64) -> bool {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), DiaryBlobTrashKnownSQL, -1, *statement, null) != SQLITE_OK {
+        return false
+    }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, node)
+    unused bind_text(statement, 2, blob)
+    unused SqliteBindInt64(statement, 3, ifx trashed then 1 else 0)
+    unused SqliteBindInt64(statement, 4, changed)
+    return SqliteStep(statement) == SQLITE_ROW
+}
+
+DiaryBlobTrashSave :: (node: string, blob: string, trashed: bool, changed: s64) {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), DiaryBlobTrashSaveSQL, -1, *statement, null) != SQLITE_OK {
+        return
+    }
+    unused bind_text(statement, 1, node)
+    unused bind_text(statement, 2, blob)
+    unused SqliteBindInt64(statement, 3, ifx trashed then 1 else 0)
+    unused SqliteBindInt64(statement, 4, changed)
+    unused SqliteStep(statement)
+    SqliteFinalize(statement)
+}
+
+// Record keys a query answers, read before any of them changes.
+DiaryBlobTrashBatch :: struct {
+    keys: [DIARY_BLOB_TRASH_BATCH][DIARY_BLOB_RECORD_KEY]u8
+    count: s32
+}
+
+DiaryBlobTrashKeys :: (sql: string, cutoff: s64, batch: *DiaryBlobTrashBatch) {
+    batch.count = 0
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *statement, null) != SQLITE_OK {
+        return
+    }
+    defer { SqliteFinalize(statement) }
+    if cutoff > 0 {
+        unused SqliteBindInt64(statement, 1, cutoff)
+    }
+    while batch.count < DIARY_BLOB_TRASH_BATCH && SqliteStep(statement) == SQLITE_ROW {
+        unused AppCopyText(AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY),
+            batch.keys[batch.count][:])
+        batch.count += 1
+    }
+}
+
+// A photo a released version moved to Trash starts its 30 days now.
+DiaryBlobTrashTimes :: () {
+    batch: DiaryBlobTrashBatch
+    DiaryBlobTrashKeys(DiaryBlobUntimedTrashSQL, 0, *batch)
+    for index: cast(s32)0..batch.count - 1 {
+        key := TextUntilNul(batch.keys[index][:])
+        record := MediaRecordRead(key)
+        stamped := MediaTrashRecord(record, true)
+        if stamped.count > 0 {
+            unused MediaRecordWrite(key, stamped)
+        }
+        PackageFree(stamped)
+        PackageFree(record)
+    }
+}
+
+// Removes a photo's files from this device, original and preview.
+DiaryBlobRemoveFile :: (path: string) {
+    if path.count > 0 && PackageFileSize(path) >= 0 {
+        unused RemoveFile(path)
+    }
+    PackageFree(path)
+}
+
+DiaryBlobRemovePhotoFiles :: (hash: string) {
+    DiaryBlobRemoveFile(MediaPath(hash, false))
+    DiaryBlobRemoveFile(MediaPath(hash, true))
+}
+
+// Photos 30 days in Trash are deleted for good: their files leave this
+// device and their record goes from every device and node. A photo a Diary
+// entry still shows stays. Photos deleted on another device leave their
+// files here too.
+DiaryBlobTrashPurge :: () {
+    batch: DiaryBlobTrashBatch
+    DiaryBlobTrashKeys(DiaryBlobExpiredTrashSQL, now_seconds() - DIARY_BLOB_TRASH_SECONDS, *batch)
+    for index: cast(s32)0..batch.count - 1 {
+        key := TextUntilNul(batch.keys[index][:])
+        hash := EntityPhotoKeyHash(key)
+        if hash.count != 64 || DiaryBlobInDiary(hash) {
+            continue
+        }
+        DiaryBlobRemovePhotoFiles(hash)
+        // An empty record is the photo's deletion, sent like any change.
+        storage_set_setting_text(key, "")
+        MediaAssetsChanged()
+    }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), DiaryBlobDeletedPhotosSQL, -1, *statement, null) != SQLITE_OK {
+        return
+    }
+    defer { SqliteFinalize(statement) }
+    while SqliteStep(statement) == SQLITE_ROW {
+        key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
+        DiaryBlobRemovePhotoFiles(EntityPhotoKeyHash(key))
+    }
 }
 
 // The Diary file a cell.diary.file.<name> key names, or empty.
@@ -276,7 +473,7 @@ DiaryBlobAdd :: (pass: *DiaryBlobPass, kind: s32, key: string, preview: bool, no
     job.node = node
     unused AppCopyText(key, job.key[:])
     pass.count += 1
-    if kind != DIARY_BLOB_OLD_DELETE {
+    if kind != DIARY_BLOB_OLD_DELETE && kind != DIARY_BLOB_TRASH && kind != DIARY_BLOB_RESTORE {
         pass.files += 1
     }
 }
@@ -525,6 +722,53 @@ DiaryBlobPlanUploads :: (pass: *DiaryBlobPass, bytes: *s64) {
     }
 }
 
+// Photos in Trash leave the account's storage on every node at once: each
+// chunk, and its preview's, moves to the node's trash, and back out when the
+// photo leaves Trash. A photo a Diary entry still shows keeps its chunks.
+// Each device asks once per change, so one that missed a change asks later.
+DiaryBlobPlanTrash :: (pass: *DiaryBlobPass) {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), DiaryBlobTrashSQL, -1, *statement, null) != SQLITE_OK {
+        return
+    }
+    defer { SqliteFinalize(statement) }
+    planned: s32 = 0
+    while planned < DIARY_BLOB_PASS_TRASHES && SqliteStep(statement) == SQLITE_ROW {
+        record_key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
+        record := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
+        hash := EntityPhotoKeyHash(record_key)
+        changed := ReadNumber(record, FieldAt(record, 0, "trash_changed"))
+        if hash.count != 64 || !changed.valid || changed.value <= 0.0 {
+            continue
+        }
+        trashed := DiaryBlobRecordTrashed(record) && !DiaryBlobInDiary(hash)
+        parts: [2]EntityContent = .[EntityPhotoContent(record), EntityPreviewContent(record)]
+        for part: cast(s32)0..1 {
+            content := parts[part]
+            if !content.valid {
+                continue
+            }
+            for chunk: cast(s32)0..content.chunk_count - 1 {
+                blob := TextUntilNul(content.chunks[chunk].address[:])
+                for node: cast(s32)0..pass.node_count - 1 {
+                    if planned >= DIARY_BLOB_PASS_TRASHES {
+                        break
+                    }
+                    address := TextUntilNul(pass.nodes[node][:])
+                    if DiaryBlobTrashKnown(address, blob, trashed, cast(s64)changed.value) {
+                        continue
+                    }
+                    DiaryBlobAdd(pass, ifx trashed then DIARY_BLOB_TRASH else DIARY_BLOB_RESTORE, record_key, part == 1, node)
+                    job := *pass.jobs[pass.count - 1]
+                    unused AppCopyText(blob, job.blob[:])
+                    job.changed = cast(s64)changed.value
+                    planned += 1
+                }
+            }
+        }
+    }
+}
+
 // Chooses this pass's requests: deletes of old copies first, so a node has
 // room for what moves, then downloads, so a photo shows on this device
 // soon, then uploads to each node that takes photos and lacks them.
@@ -545,7 +789,10 @@ DiaryBlobPlan :: (pass: *DiaryBlobPass, active: string) -> bool {
     wanted: [MEDIA_WANTED_MAX * 65 + 1]u8
     MediaWantedRead(wanted[:])
     bytes: s64 = 0
+    DiaryBlobTrashTimes()
+    DiaryBlobTrashPurge()
     DiaryBlobPlanDeletes(pass)
+    DiaryBlobPlanTrash(pass)
     if sealing {
         DiaryBlobPlanVerifies(pass, *bytes)
     }
@@ -746,6 +993,14 @@ DiaryBlobNext :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest) -> bool {
                 DiaryBlobPath(request, "inbe")
                 ready = true
             }
+        } else if job.kind == DIARY_BLOB_TRASH || job.kind == DIARY_BLOB_RESTORE {
+            unused DiaryBlobNode(pass, job.node, request.node[:])
+            request.method = "POST"
+            request.blob = job.blob
+            request.changed = job.changed
+            DiaryBlobPath(request, "entity")
+            unused AppAppendText(ifx job.kind == DIARY_BLOB_TRASH then "/trash" else "/restore", request.path[:])
+            ready = true
         } else if job.kind == DIARY_BLOB_OLD_DOWNLOAD {
             ready = DiaryBlobOldDownloadNext(pass, job, request)
         } else if job.kind == DIARY_BLOB_DOWNLOAD || job.kind == DIARY_BLOB_VERIFY {
@@ -877,6 +1132,9 @@ DiaryBlobFinish :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, status: s3
             return true
         }
         DiaryBlobRemember(node, TextFromBytes(request.blob[:64]))
+        // A chunk the node lacked when its photo went to Trash is new there:
+        // the next pass moves it to the trash too.
+        DiaryBlobRun("DELETE FROM blob_trash WHERE node=?1 AND blob=?2", node, TextFromBytes(request.blob[:64]))
         if pass.next >= pass.count {
             return true
         }
@@ -888,6 +1146,17 @@ DiaryBlobFinish :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, status: s3
             DiaryBlobChunksNamed(pass, job, content)
             DiaryBlobJobDone(pass)
         }
+        return true
+    }
+    if request.kind == DIARY_BLOB_TRASH || request.kind == DIARY_BLOB_RESTORE {
+        // A node without the chunk has nothing to count either. A full
+        // account waits to take a chunk out of the trash until it has room.
+        if status == 204 || status == 200 || status == 404 {
+            DiaryBlobTrashSave(node, TextFromBytes(request.blob[:64]), request.kind == DIARY_BLOB_TRASH, request.changed)
+        } else if status == 413 {
+            unused SyncNodeStorageRecordFull(node, TextFromBytes(answer))
+        }
+        DiaryBlobJobDone(pass)
         return true
     }
     if request.kind == DIARY_BLOB_OLD_DELETE {
@@ -942,6 +1211,11 @@ DiaryBlobFailed :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest) {
     }
     if request.kind == DIARY_BLOB_OLD_DELETE {
         pass.deletes_stopped[index] = true
+        DiaryBlobJobDone(pass)
+        return
+    }
+    // A later pass asks again.
+    if request.kind == DIARY_BLOB_TRASH || request.kind == DIARY_BLOB_RESTORE {
         DiaryBlobJobDone(pass)
         return
     }

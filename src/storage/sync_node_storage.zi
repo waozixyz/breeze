@@ -51,7 +51,8 @@ ON CONFLICT(entity_type,entity_id,local_date) DO UPDATE SET queued_at=excluded.q
 SQL_END;
 
 // Each sealed chunk is its plain bytes plus a 16-byte tag. A photo of the
-// account's entity data costs its chunks and its preview's; a Diary photo
+// account's entity data costs its chunks and its preview's, except in
+// Trash, where its chunks cost nothing on the nodes; a Diary photo
 // that has not moved costs its old copy, and one from before copies its
 // hex chunks.
 SyncMediaLocalBytesSQL :: #string SQL_END
@@ -59,7 +60,8 @@ SELECT COALESCE((SELECT SUM(json_extract(value,'$.size')+16*((json_extract(value
     +COALESCE(json_extract(value,'$.preview.size')+16*((json_extract(value,'$.preview.size')+8388607)/8388608),0))
   FROM settings
   WHERE user_id=(SELECT id FROM users LIMIT 1) AND key GLOB 'entity.photos.*' AND length(key)=78
-    AND json_valid(value) AND json_type(value,'$.size')='integer'),0)
+    AND json_valid(value) AND json_type(value,'$.size')='integer'
+    AND COALESCE(json_extract(value,'$.trashed'),0)=0),0)
 +COALESCE((SELECT SUM(json_extract(d.value,'$.size')+16) FROM settings d
   WHERE d.user_id=(SELECT id FROM users LIMIT 1) AND d.key GLOB 'cell.diary.file.*'
     AND d.key NOT GLOB '*.json' AND json_valid(d.value) AND json_type(d.value,'$.count') IS NULL

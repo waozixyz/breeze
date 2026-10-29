@@ -1,4 +1,5 @@
 #import "keys"
+#import "auth"
 #import "byte_text_linux"
 #import, file "storage_test_support.zi";
 #import, file "../src/app/text_buffers.zi";
@@ -16,6 +17,7 @@
 #import, file "../src/storage/storage_habits.zi";
 #import, file "../src/habits/habit_model.zi";
 #import, file "../src/storage/sync_account.zi";
+#import, file "../src/storage/sync_session.zi";
 #import, file "../src/storage/account_types.zi";
 #import, file "../src/storage/sync_account_host.zi";
 
@@ -156,6 +158,13 @@ test_import_export_clear :: () {
         SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
     check_true("import public id", account_text(*account.public_id[0]) == id)
     check_true("import clears stale alias", storage_get_setting_text("sync_account_alias").count == 0)
+    // The first login with an imported key asks the node to bring back the
+    // account Clear Remote Data left on hold; a good login asks no more.
+    check_true("import asks to restore a held account", storage_get_setting_text(STORAGE_SYNC_RESTORE_HELD_KEY) == "1")
+    session: Session
+    session.token[0] = cast(u8)84
+    SaveSession(*session)
+    check_true("a good login stops asking", storage_get_setting_text(STORAGE_SYNC_RESTORE_HELD_KEY).count == 0)
     check_true("load imported key", sync_account_load(*account) != 0)
     check_true("load public key",
         account_text(*account.public_key_hex[0]) == TextFromCString(*values.public_key[0]))
@@ -173,6 +182,7 @@ test_import_export_clear :: () {
     }
 
     check_true("clear key", sync_account_clear() != 0)
+    check_true("clearing asks no restore", storage_get_setting_text(STORAGE_SYNC_RESTORE_HELD_KEY).count == 0)
     check_true("load after clear", sync_account_load(*account) == 0)
     check_true("import exported key", import_key_and_save(*account, *export_path[0],
         SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK) ==
