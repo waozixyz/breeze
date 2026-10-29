@@ -105,7 +105,7 @@ sync_server=""
 sync_mount_source="$root/$output/sync-unused"
 mkdir -p "$sync_mount_source"
 if [ "$#" -eq 0 ]; then
-    sync_server=${RELEASE_READY_DAOCHI_SOURCE:-"$root/../../kryonlabs/daochi"}
+    sync_server=${RELEASE_READY_DAOCHI_SOURCE:-"$root/../../../kryonlabs/daochi"}
     sync_server=$(CDPATH= cd -- "$sync_server" && pwd)
     sync_commit=$(git show "$commit:.github/sync-test-server-commit")
     git -C "$sync_server" cat-file -e "$sync_commit^{commit}"
