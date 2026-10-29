@@ -54,6 +54,26 @@ LumiUpdateAppend :: (document: string, introduction: string) -> bool {
     return saved
 }
 
+// The release notes in the given language when they describe the same
+// release; the English notes otherwise.
+LumiReleaseNotes :: (english: string, version: string, language: string) -> string {
+    name := PackageText(language, ".json")
+    path := PackageText("assets/app/release-notes-", name)
+    defer {
+        PackageFree(name)
+        PackageFree(path)
+    }
+    resource := AssetRead(path)
+    if !resource.found {
+        return english
+    }
+    version_bytes: [32]u8
+    if LumiUpdateVersion(resource.data, version_bytes[:]) != version {
+        return english
+    }
+    return resource.data
+}
+
 LumiAnnounceUpdate :: () {
     owner := AppTextFromCString(storage_user_id_buffer(), 64)
     assets := AssetGeneration()
@@ -84,7 +104,8 @@ LumiAnnounceUpdate :: () {
     args[0].is_text = true
     introduction: [256]u8
     unused FormatTemplate(LocaleText("lumi_update_intro"), args[:], introduction[:])
-    if LumiUpdateAppend(resource.data, TextUntilNul(introduction[:])) {
+    notes := LumiReleaseNotes(resource.data, version, LocaleActiveCode())
+    if LumiUpdateAppend(notes, TextUntilNul(introduction[:])) {
         storage_set_setting_text("lumi_release_announced", version)
         unused AppCopyText(owner, lumi_update_owner[:])
         lumi_update_assets = assets

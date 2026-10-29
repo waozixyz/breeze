@@ -200,6 +200,9 @@ CHANGELOG_CONTENT=$(awk -v ver="$LATEST_VERSION" '
 
 echo "$CHANGELOG_CONTENT" > "$OUTPUT_FILE"
 echo "✓ Updated $OUTPUT_FILE"
+# Each listing that has a translation of this release shows it in Play.
+python3 scripts/release_notes.py --play "$VERSION_CODE" "$CHANGELOG_FILE"
+echo "✓ Updated translated Play release notes"
 
 python3 scripts/check-version.py
 

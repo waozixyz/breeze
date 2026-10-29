@@ -64,6 +64,7 @@ if cmaps["latin"] is None:
 latin_needed = codepoints(
     root / "assets/fonts/input_common.txt", root / "locales/index.txt",
     *[root / f"locales/{name}.txt" for name in LATIN_LOCALES],
+    *[root / f"locales/changelog/{name}.md" for name in LATIN_LOCALES if name != "en"],
     *[GUIDANCE / f"{name}.txt" for name in LATIN_LOCALES])
 for cp in sorted(latin_needed):
     if not is_cjk(cp) and cp not in cmaps["latin"]:
@@ -96,7 +97,8 @@ print(f"CJK/picker: {len(cjk_needed)} required codepoints checked against "
 # A locale's selected face must cover its own text. Another bundled font
 # cannot hide a stale primary subset, especially on mobile hosts.
 for locale, face in (("ja", "jp"), ("ko", "kr"), ("zh", "sc")):
-    needed = codepoints(root / f"locales/{locale}.txt", GUIDANCE / f"{locale}.txt")
+    needed = codepoints(root / f"locales/{locale}.txt", root / f"locales/changelog/{locale}.md",
+                        GUIDANCE / f"{locale}.txt")
     cmap = cmaps[face] or {}
     before = failures
     for cp in sorted(needed):

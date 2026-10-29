@@ -18,7 +18,7 @@ $(BUILD_DIR)/apps-ui/apps.zx: ziran.lock scripts/build-apps.py $(wildcard $(APPS
 .PHONY: apps
 apps: $(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE)
 
-$(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE): CHANGELOG.md scripts/release_notes.py $(APPS_BUNDLE) src/apps/apps_controller.zi
+$(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE): CHANGELOG.md $(wildcard locales/changelog/*.md) scripts/release_notes.py $(APPS_BUNDLE) src/apps/apps_controller.zi
 
 $(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(ENTITY_SOURCES) $(APP_SOURCES) $(APP_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/achievement_icons.py scripts/animation_inventory.py scripts/build-apps.sh src/practices/sun_salutation/sun_salutation_assets.zi src/practices/sun_salutation/sun_salutation_inventory.zi $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
 	sh scripts/build-apps.sh $(ZIRAN_BIN) $(BUILD_DIR)/apps $(APPS_BUNDLE)
