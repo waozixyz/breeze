@@ -12,7 +12,10 @@
 - Practice media (pictures, course data, recordings) lives in the
   `practices` package (waozixyz/practices), not under
   `assets/`. Commit media there, then update the lock here.
-- Add the numeric release to `CHANGELOG.md`, then run `./update_version.sh`.
+- Bump versions only for a release actually being made. Until then, note
+  every change under one `## [Unreleased]` section of `CHANGELOG.md` (and of
+  `apps/<app>/CHANGELOG.md`); App packages waits for the next version. At
+  release, number that section, then run `./update_version.sh`.
   The canonical macros are `APP_VERSION_STRING`, `APP_VERSION_MAJOR`,
   `APP_VERSION_MINOR`, and `APP_VERSION_PATCH`; do not create aliases.
   Only the GitHub Actions release workflow creates or pushes release tags.

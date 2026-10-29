@@ -32,6 +32,9 @@ def validate(root, structure_only=False):
         return (root / path).read_text(encoding="utf-8")
 
     headings = re.findall(r"^## \[(.*?)\].*$", read("CHANGELOG.md"), re.MULTILINE)
+    # Changes collect under one Unreleased section until a release numbers it.
+    if headings[:1] == ["Unreleased"]:
+        headings = headings[1:]
     if not headings or not re.fullmatch(VERSION_PATTERN, headings[0]):
         raise ValueError("CHANGELOG.md: first release must have a numeric X.Y.Z version")
     version = headings[0]

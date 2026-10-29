@@ -26,6 +26,7 @@ class VersionTest(unittest.TestCase):
             "apps/lumi/CHANGELOG.md", "apps/leaderboard/CHANGELOG.md",
             "src/apps/versions.zi",
             "scripts/update-package-version.py", "scripts/generate-package-versions.py",
+            "scripts/release_notes.py",
             "src/core/version.h", "src/core/version.zi",
             "src/storage/sync_result.zi",
             "droid/app/build.gradle", "windows/inbe.rc",
@@ -176,6 +177,16 @@ class VersionTest(unittest.TestCase):
             with self.subTest(version=invalid):
                 result = subprocess.run(["sh", str(script), invalid], capture_output=True, check=False)
                 self.assertNotEqual(result.returncode, 0)
+
+    def test_unreleased_changes_keep_the_released_version(self):
+        code = re.search(r"versionCode (\d+)", self.read("droid/app/build.gradle"))[1]
+        name = "CHANGELOG.md"
+        self.write(name, self.read(name).replace(
+            "# Changelog\n", "# Changelog\n\n## [Unreleased]\n\n- A change waiting for the next release.\n", 1))
+        self.assertEqual(self.check("--print-version").stdout, f"{self.version}\n")
+        subprocess.run(["bash", str(self.root / "update_version.sh")], capture_output=True, text=True, check=True)
+        self.assertEqual(self.check("--print-version").stdout, f"{self.version}\n")
+        self.assertIn(f"versionCode {code}", self.read("droid/app/build.gradle"))
 
     def test_updater_bumps_once_and_is_idempotent(self):
         initial_code = int(re.search(r"versionCode (\d+)", self.read("droid/app/build.gradle"))[1])
