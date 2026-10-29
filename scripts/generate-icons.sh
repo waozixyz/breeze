@@ -112,20 +112,17 @@ for variant in sky air; do
         density=${density_size%:*}
         size=${density_size#*:}
         generate_transparent "$size" "$PROJECT_ROOT/droid/app/src/main/res/mipmap-$density/$name.png"
-        generate_transparent "$size" "$PROJECT_ROOT/droid/app/src/main/res/mipmap-$density/${name}_round.png"
     done
     generate_transparent 432 "$PROJECT_ROOT/droid/app/src/main/res/drawable/${name}_foreground.png" 240
-    generate_transparent 108 "$PROJECT_ROOT/droid/app/src/main/res/mipmap-anydpi-v26/${name}_foreground.png" 60
-    generate_transparent 108 "$PROJECT_ROOT/droid/app/src/main/res/mipmap-anydpi-v26/${name}_round_foreground.png" 60
-    for suffix in "" _round; do
-        cat > "$PROJECT_ROOT/droid/app/src/main/res/mipmap-anydpi-v26/${name}${suffix}.xml" <<EOF
+    # Round icons are the same pictures: res/values/launcher_round.xml names
+    # them as aliases of these, so the APK carries one copy.
+    cat > "$PROJECT_ROOT/droid/app/src/main/res/mipmap-anydpi-v26/${name}.xml" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@drawable/ic_launcher_background" />
     <foreground android:drawable="@drawable/${name}_foreground" />
 </adaptive-icon>
 EOF
-    done
     # Settings previews contain only the person and cloud.
     generate_transparent 192 "$PROJECT_ROOT/assets/app/icon-$preview.png"
 done
