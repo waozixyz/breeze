@@ -2,6 +2,7 @@
 
 ## [2.1.61] - 2026-10-29
 
+- Show Chinese, Japanese and Korean text on Android 9 and older instead of question marks.
 - Show Profile accounts, device linking, nodes, Dew and friends in your language instead of English, including Chinese.
 - Translate app shortcuts, the Breathe widget and tile, and download, push and Health Connect messages.
 
