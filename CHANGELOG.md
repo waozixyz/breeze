@@ -1,16 +1,13 @@
 # Changelog
 
-## [Unreleased]
-
-- Sync no longer gets stuck on a review with no preview after something was deleted.
-- Photos in Trash stop counting toward your storage right away and are deleted after 30 days, unless Diary still shows them.
-- Cleared remote data stays on the server for 30 days; importing the same key again before then brings it back.
-
 ## [2.1.61] - 2026-10-29
 
-- The download is about 16 MB smaller: apps are stored more compactly, and shared pictures are included only once.
+- Sync no longer gets stuck after something is deleted.
+- Photos in Trash stop using storage and are deleted after 30 days unless Diary shows them.
+- Cleared remote data stays 30 days; importing the same key brings it back.
+- The download is about 16 MB smaller.
 - Chinese, Japanese and Korean text displays correctly.
-- More of the app speaks your language, including Profile and update notes.
+- More of the app is translated, including Profile and update notes.
 
 ## [2.1.60] - 2026-10-29
 
