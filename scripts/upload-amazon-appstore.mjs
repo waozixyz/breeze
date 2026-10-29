@@ -171,6 +171,34 @@ async function replaceBundleSlotWithApk(editId, bundleSlots, releaseBytes) {
   await uploadNewApk(editId, releaseBytes);
 }
 
+// Validation lists every problem before anything is submitted; the commit
+// sends the edit to Amazon's review, after which it goes live.
+async function submitEdit(editId) {
+  console.log(`Validating Amazon edit ${editId}`);
+  await requestOk(`${baseUrl}/v1/applications/${appId}/edits/${editId}/validate`, {
+    method: "POST",
+    headers: jsonHeaders,
+  });
+
+  const editResponse = await requestOk(`${baseUrl}/v1/applications/${appId}/edits/${editId}`, {
+    headers: jsonHeaders,
+  });
+  const etag = editResponse.headers.get("etag");
+  if (!etag) {
+    throw new Error(`Amazon did not return an ETag for edit ${editId}`);
+  }
+
+  console.log(`Submitting Amazon edit ${editId}`);
+  const committedEdit = await requestJson(`${baseUrl}/v1/applications/${appId}/edits/${editId}/commit`, {
+    method: "POST",
+    headers: {
+      ...jsonHeaders,
+      "If-Match": etag,
+    },
+  });
+  console.log(`Amazon edit ${editId} submitted with status ${committedEdit.status ?? "(unknown)"}`);
+}
+
 const clientId = requireEnv("AMAZON_CLIENT_ID");
 const clientSecret = requireEnv("AMAZON_CLIENT_SECRET");
 const appId = requireEnv("AMAZON_APP_ID");
@@ -206,7 +234,7 @@ if (activeEdit.id) {
   if (!activeEditEtag) {
     throw new Error(`Amazon did not return an ETag for open edit ${activeEdit.id}`);
   }
-  console.log(`Deleting stale open edit ${activeEdit.id}`);
+  console.log(`Deleting stale open edit ${activeEdit.id} (status ${activeEdit.status ?? "unknown"})`);
   await requestOk(`${baseUrl}/v1/applications/${appId}/edits/${activeEdit.id}`, {
     method: "DELETE",
     headers: {
@@ -247,3 +275,5 @@ if (matchingAssets.length > 0) {
 const uploadedAssets = await listEditAssets(edit.id, "apks");
 console.log(`Amazon edit ${edit.id} now holds: ${uploadedAssets.map(describeAsset).join(", ") || "(none)"}`);
 console.log(`Amazon ${releaseKind.label} upload completed`);
+
+await submitEdit(edit.id);
