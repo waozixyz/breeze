@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.1.61] - 2026-10-29
+
+- Show Profile accounts, device linking, nodes, Dew and friends in your language instead of English, including Chinese.
+- Translate app shortcuts, the Breathe widget and tile, and download, push and Health Connect messages.
+
 ## [2.1.60] - 2026-10-29
 
 - Hide apps from the library and restore them through Edit.
