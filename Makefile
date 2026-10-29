@@ -384,7 +384,6 @@ STYLE_FILES := $(wildcard $(KSS_DIR)/styles/*.kss) \
 	$(wildcard themes/catalog_*.kss)
 IMAGE_FILES += assets/app/icon-sky-cradle.png assets/app/icon-ink-and-air.png
 IMAGE_FILES += $(wildcard assets/social/*.png)
-IMAGE_FILES += $(wildcard assets/profile-pictures/*.png)
 IMAGE_FILES += $(KRYON_DIR)/icons/ui.png $(KRYON_DIR)/icons/pfp.png
 APP_BUNDLES := $(addprefix $(BUILD_DIR)/apps/,lists.zx habits.zx practices.zx diary.zx lumi.zx leaderboard.zx)
 INBE_BUNDLE := $(BUILD_DIR)/inbe.zx

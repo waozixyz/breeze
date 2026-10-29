@@ -509,8 +509,8 @@ declares the oldest host interface it needs (`host_api` in its ledger entry),
 and the host runs packages from `oldest_host_api` to its own `host_api`.
 A host loads only programs in its own Ziran program format, so a toolchain whose
 format changed is a new interface too: `oldest_host_api` and every package's
-`host_api` rise above the last released host. Host 12 is the first with
-format 58; released apps up to 2.1.34 (host 11) cannot load packages built
+`host_api` rise above the last released host. Host 41 is the first with
+format 59; released apps up to 2.1.61 (host 40) cannot load packages built
 since, and are not offered them.
 Records between them match fields by name, so a field one side lacks keeps its
 zero value and an unknown field is ignored. Update checks send the host's

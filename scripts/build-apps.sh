@@ -20,7 +20,7 @@ python3 tests/lumi_guide_narration_test.py "$ziran"
 python3 scripts/generate-package-versions.py
 python3 scripts/animation_inventory.py --check
 python3 scripts/prepare-package-assets.py --apps-controller "$controller"
-if [ ! -s build/package-assets/inbe/assets/apps/apps.zx ]; then
+if [ ! -s "$controller" ]; then
     echo 'Root Apps requires the reviewed Apps controller bundle; run make apps' >&2
     exit 1
 fi

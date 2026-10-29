@@ -50,7 +50,7 @@ catalog_assets = bundle_assets(CATALOG.read_bytes())
 catalog = json.loads(catalog_assets['assets/apps/catalog.json'])
 assert catalog['id'] == 'inbe.arcade'
 assert all(entry['bundle'] not in catalog_assets for entry in catalog['children'])
-host_controller = bundle_assets(BUNDLE.read_bytes())['assets/apps/apps.zx']
+host_controller = (ROOT / 'build/apps-ui/apps.zx').read_bytes()
 controller_digest = hashlib.sha256(host_controller).hexdigest()
 if catalog['harness'] in catalog_assets:
     assert controller_digest == hashlib.sha256(catalog_assets[catalog['harness']]).hexdigest(), 'Catalog uses another controller'

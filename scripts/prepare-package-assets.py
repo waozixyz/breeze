@@ -37,7 +37,7 @@ patterns = (
     'assets/mcp/*.json', 'assets/app/icon.png', 'assets/app/icon-sky-cradle.png',
     'assets/app/icon-ink-and-air.png', 'assets/easteregg/*.png', 'assets/pet/*.png',
     'assets/apps/icons/*.png',
-    'assets/social/*.png', 'assets/profile-pictures/*.png',
+    'assets/social/*.png',
     'assets/sounds/*.ogg',
     'assets/habits/**/*', 'assets/lists/**/*', 'assets/diary/**/*', 'assets/lumi/**/*',
     'assets/fonts/subset/*-App-Regular.*', 'assets/styles/*.kss',
@@ -108,8 +108,9 @@ for name in NODE_APPS:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
 
-# Root launcher cards share the reviewed Apps controller. A node-only build
-# can omit it; the root bundle build below requires this asset explicitly.
+# Root launcher cards share the reviewed Apps controller. The host reads it
+# from its own apps.zx asset beside the root package, so the root package
+# does not carry a second copy. A node-only build can omit it.
 apps_bundle = options.apps_controller.resolve()
 if apps_bundle.is_file():
     controller = apps_bundle.read_bytes()
@@ -117,9 +118,6 @@ if apps_bundle.is_file():
     expected = re.search(r'AppsControllerSha256\s*::\s*"([0-9a-f]{64})"', source)
     if not expected or hashlib.sha256(controller).hexdigest() != expected[1]:
         raise SystemExit('Apps controller differs from the reviewed native digest')
-    destination = OUTPUT / 'inbe/assets/apps/apps.zx'
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(controller)
 
 # Each app owns its bounded achievement catalog and translations, including
 # optional node apps. Source presence never determines device visibility.

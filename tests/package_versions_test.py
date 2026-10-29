@@ -76,6 +76,8 @@ class PackageVersionsTest(unittest.TestCase):
 
     def test_root_package_needs_the_newest_bundled_host(self):
         value = copy.deepcopy(self.ledger)
+        # The host range spans two interfaces, so only the root's pin is wrong.
+        value["host_api"] = value["oldest_host_api"] + 1
         value["apps"]["inbe"]["host_api"] = value["oldest_host_api"]
         value["apps"]["lumi"]["host_api"] = value["oldest_host_api"] + 1
         self.write(value)

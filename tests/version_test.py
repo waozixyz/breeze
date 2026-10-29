@@ -181,8 +181,11 @@ class VersionTest(unittest.TestCase):
     def test_unreleased_changes_keep_the_released_version(self):
         code = re.search(r"versionCode (\d+)", self.read("droid/app/build.gradle"))[1]
         name = "CHANGELOG.md"
-        self.write(name, self.read(name).replace(
-            "# Changelog\n", "# Changelog\n\n## [Unreleased]\n\n- A change waiting for the next release.\n", 1))
+        changelog = self.read(name)
+        if "## [Unreleased]" not in changelog:
+            changelog = changelog.replace(
+                "# Changelog\n", "# Changelog\n\n## [Unreleased]\n\n- A change waiting for the next release.\n", 1)
+        self.write(name, changelog)
         self.assertEqual(self.check("--print-version").stdout, f"{self.version}\n")
         subprocess.run(["bash", str(self.root / "update_version.sh")], capture_output=True, text=True, check=True)
         self.assertEqual(self.check("--print-version").stdout, f"{self.version}\n")
