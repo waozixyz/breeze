@@ -48,12 +48,15 @@
 #import "button_widget"
 #import "control_props"
 #import "text_props"
+#import "text_align"
 #import "text_widget"
 #import "text_input_props"
 #import "text_field_widget"
 #import "modal_props"
 #import "modal"
 #import "modal_frame_widget"
+#import "fieldset_props"
+#import "fieldset_widget"
 
 using SyncAccountSaveResult;
 using SyncAccountLocalDataChoice;
@@ -923,6 +926,36 @@ settings_sync_account_draw_alias_modal :: (app: *InnerBreeze) -> s32 {
 }
 
 #program_export
+PublicIdDisplayGroups :: (id: string, out: []u8) -> string {
+    if id.count != 64 || out.count < 72 {
+        if out.count == 0 || !AppCopyText(id, out) {
+            if out.count != 0 { out[0] = cast(u8)0 }
+            return TextFromCString(*out[0])
+        }
+        return TextFromCString(*out[0])
+    }
+
+    group: s32 = 0
+    while group < 8 {
+        start := group * 8
+        destination := group * 9
+        index: s32 = 0
+        while index < 8 {
+            out[destination + index] = id[start + index]
+            index += 1
+        }
+        if group == 3 {
+            out[35] = cast(u8)10
+        } else if group != 7 {
+            out[destination + 8] = cast(u8)32
+        }
+        group += 1
+    }
+    out[71] = cast(u8)0
+    return TextFromCString(*out[0])
+}
+
+#program_export
 settings_sync_account_draw_public_id_modal :: (app: *InnerBreeze, public_id: string = "") -> s32 {
     account: AccountKeys
     if app == null || (public_id.count == 0 && sync_account_load(*account) == 0) {
@@ -942,21 +975,22 @@ settings_sync_account_draw_public_id_modal :: (app: *InnerBreeze, public_id: str
     width := cast(s32)content.width
     Text(app.ui.session, SettingsSyncTextProps(
         LocaleText("sync_public_id_full_message"),
-        x, y, width, AppScale(48), false))
-    y += AppScale(55)
+        x, y, width, AppScale(30), false))
+    y += AppScale(38)
     account_id := ifx public_id.count > 0 then public_id else SettingsSyncAccountId(*account)
-    // Show the two halves on separate lines; copying keeps the raw ID.
+    // Copy keeps the raw ID while the field presents grouped hexadecimal.
     displayed_id: [80]u8
-    unused AppCopyText(account_id, displayed_id[:])
-    if account_id.count == 64 {
-        unused AppCopyText(account_id[:32], displayed_id[:])
-        displayed_id[32] = cast(u8)10
-        unused AppCopyText(account_id[32:], displayed_id[33:])
-    }
-    id_props: TextProps = SettingsSyncTextProps(AppTextFromCString(*displayed_id[0], 80), x, y, width, AppScale(50), true)
+    id := PublicIdDisplayGroups(account_id, displayed_id[:])
+    field: FieldsetProps
+    field.bounds = SettingsSyncRect(x, y, width, AppScale(70))
+    Fieldset(app.ui.session, field)
+    id_props: TextProps = SettingsSyncTextProps(id,
+        x + AppScale(10), y + AppScale(15),
+        width - AppScale(20), AppScale(40), true)
+    id_props.align = cast(TextAlign)TextAlign.TextAlignCenter
     id_props.wrap = cast(TextWrap)TextWrapAuto
     Text(app.ui.session, id_props)
-    y += AppScale(60)
+    y += AppScale(86)
     copy := SettingsSyncButtonProps(LocaleText("sync_copy_id_button"),
         x, y, width, AppScale(38), 5250, false)
     if Button(app.ui.session, copy) != 0 {
