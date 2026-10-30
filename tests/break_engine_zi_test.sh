@@ -7,10 +7,11 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/ziran-toolchain/bin"}
 work=$root/build/break-engine-zi-test
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
+kryon_ui=${KRYON_UI_DIR:-"$root/build/packages/kryon/src/ui"}
 
 rm -rf "$work"
 mkdir -p "$work/c"
-"$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" --module-path "$root/build/packages/ziran/std" \
+"$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" --module-path "$kryon_ui" --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$root/tests/break_engine_behavior.zi"
 cat > "$work/c/main.c" <<'C'
 #include <stdio.h>

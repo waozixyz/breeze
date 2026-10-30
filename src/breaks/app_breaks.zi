@@ -19,6 +19,7 @@ WEB :: #defined(PLATFORM_WEB)
 #import, file "../app/route_types.zi";
 #import, file "../app/app.zi";
 #import, file "break_rules.zi";
+#import, file "break_reminder_layout.zi";
 #import, file "break_calendar.zi";
 #import, file "break_types.zi";
 #import "date_time"
@@ -34,6 +35,7 @@ using DesktopTrayAction;
 using AppMainTab;
 using ExerciseType;
 using TextWrap;
+using TextAlign;
 using NativeWindowFlags;
 #import, file "../screens/break_overlay.zi";
 #import "text_props"
@@ -50,6 +52,8 @@ using NativeWindowFlags;
 #import "raylib_secondary_window"
 #import "idle_time"
 #import "text_widget"
+#import "text_measure"
+#import "text_align"
 #import "box_widget"
 #import "box_props"
 #import "drawing_props"
@@ -134,6 +138,65 @@ close_break_hud :: () {
         CloseSecondarySession(break_hud_session)
         break_hud_session = Session.{}
     }
+}
+
+break_hud_time_reserve :: (timer: *BreakTimer) -> s32 {
+    font: s32 = AppScale(Text12)
+    reserve: s32 = AppTextWidth("off", font)
+    longest_s: s32 = timer.limit_s
+    if timer.state == BreakStateBreaking {
+        longest_s = timer.duration_s
+    }
+    if longest_s > 0 {
+        duration := BreakFormatDuration(longest_s)
+        duration_text := AppTextFromCString(*duration.bytes[0],
+            duration.count + 1)
+        duration_w := AppTextWidth(duration_text, font)
+        if duration_w > reserve {
+            reserve = duration_w
+        }
+    }
+    due_w := AppTextWidth(LocaleText("settings_breaks_due_now"), font)
+    if due_w > reserve {
+        reserve = due_w
+    }
+    return reserve
+}
+
+break_hud_label :: (break_type: s32) -> string {
+    if break_type == BREAK_REST {
+        return LocaleText("break_hud_rest")
+    }
+    if break_type == BREAK_DAILY {
+        return LocaleText("break_hud_daily")
+    }
+    return LocaleText("break_hud_micro")
+}
+
+break_hud_row_height :: (app: *InnerBreeze, label: string,
+    label_width: s32, scale: float32) -> s32 {
+    props: TextProps
+    props.bounds = Rectangle.{0.0, 0.0, cast(float32)label_width, 0.0}
+    props.text = label
+    props.font = AppScale(Text12)
+    props.wrap = cast(TextWrap)TextWrapAuto
+    text_height := TextHeight(app.ui.session, props)
+    if text_height <= 0 {
+        text_height = AppScale(Text12)
+    }
+    return BreakReminderLayout(props.bounds, text_height, scale).height
+}
+
+break_hud_draw_time :: (session: Session, text: string, right_x: s32,
+    layout: BreakReminderLayoutResult, width: s32, font: s32) {
+    props: TextProps
+    props.bounds = Rectangle.{cast(float32)(right_x - AppTextWidth(text, font)),
+        layout.text.y, cast(float32)width, layout.text.height}
+    props.text = text
+    props.font = font
+    props.vertical_align = cast(TextAlign)TextAlignCenter
+    props.wrap = cast(TextWrap)TextWrapNone
+    Text(session, props)
 }
 
 #program_export
@@ -730,7 +793,7 @@ app_breaks_open_habits :: (app: *InnerBreeze, t: s32) {
 
 app_breaks_hud_update :: (app: *InnerBreeze) {
     #if DESKTOP {
-        if app == null {
+        if app == null || !SessionValid(app.ui.session) {
             return
         }
         if app.breaks_enabled == 0 {
@@ -743,16 +806,21 @@ app_breaks_hud_update :: (app: *InnerBreeze) {
             scale = 1
         }
         hud_w := cast(s32)(150 * scale + 0.5)
-        row_h := cast(s32)(17 * scale + 0.5)
         pad := cast(s32)(7 * scale + 0.5)
         // disabled timers are not shown at all: the hud only has rows for the
         // enabled ones
         visible: s32 = 0
+        row_h: s32 = 0
+        time_reserve: s32 = 0
         {
             t: s32 = 0
             while t < BREAK_TYPE_COUNT {
                 if app.breaks.timers[t].enabled != 0 {
                     visible += 1
+                    reserve := break_hud_time_reserve(*app.breaks.timers[t])
+                    if reserve > time_reserve {
+                        time_reserve = reserve
+                    }
                 }
                 t += 1
             }
@@ -761,6 +829,30 @@ app_breaks_hud_update :: (app: *InnerBreeze) {
         if visible == 0 {
             close_break_hud()
             return
+        }
+        minimum_w := pad * 2 + time_reserve + AppScale(48)
+        if hud_w < minimum_w {
+            hud_w = minimum_w
+        }
+        label_width := hud_w - pad * 2 - time_reserve - AppScale(8)
+        if label_width < 1 {
+            label_width = 1
+        }
+        {
+            t: s32 = 0
+            while t < BREAK_TYPE_COUNT {
+                if app.breaks.timers[t].enabled != 0 {
+                    height := break_hud_row_height(app, break_hud_label(t),
+                        label_width, scale)
+                    if height > row_h {
+                        row_h = height
+                    }
+                }
+                t += 1
+            }
+        }
+        if row_h <= 0 {
+            row_h = cast(s32)(17 * scale + 0.5)
         }
         hud_h := pad * 2 + row_h * visible
 
@@ -802,7 +894,7 @@ app_breaks_hud_update :: (app: *InnerBreeze) {
                 main_session := app.ui.session
                 app.ui.session = break_hud_session
                 if BeginSecondaryFrame(break_hud_session, hud_w, hud_h) {
-                    app_breaks_hud_draw(app, hud_w, hud_h, row_h, pad)
+                    app_breaks_hud_draw(app, hud_w, hud_h, row_h, pad, scale)
                     EndSecondaryFrame(break_hud_session)
                 }
                 app.ui.session = main_session
@@ -832,13 +924,13 @@ app_breaks_hud_update :: (app: *InnerBreeze) {
     }
 }
 
-app_breaks_hud_draw :: (app: *InnerBreeze, hud_w: s32, hud_h: s32, row_h: s32, pad: s32) {
+app_breaks_hud_draw :: (app: *InnerBreeze, hud_w: s32, hud_h: s32,
+    row_h: s32, pad: s32, scale: float32) {
     track := DarkenColor(StyleTokenColor("canvas"), 18)
     border: Color = DarkenColor(StyleTokenColor("text"), 62)
     fill := Color.{.r = 74, .g = 178, .b = 102, .a = 255}
     overdue := Color.{.r = 222, .g = 140, .b = 44, .a = 255}
     idle_col := Color.{.r = 240, .g = 200, .b = 60, .a = 255}
-    labels: [BREAK_TYPE_COUNT] string = .[LocaleText("break_hud_micro"), LocaleText("break_hud_rest"), LocaleText("break_hud_daily")]
 
     Box(app.ui.session, BoxProps.{
             .bounds = Rectangle.{0.0, 0.0, cast(float32)hud_w, cast(float32)hud_h},
@@ -859,20 +951,32 @@ app_breaks_hud_draw :: (app: *InnerBreeze, hud_w: s32, hud_h: s32, row_h: s32, p
             bar_w := hud_w - pad * 2
             time_x := hud_w - pad
             next := BreakNextDueSeconds(app.breaks, t)
+            font: s32 = AppScale(Text12)
+            time_reserve := break_hud_time_reserve(timer)
+            label_width := bar_w - time_reserve - AppScale(8)
+            if label_width < 1 {
+                label_width = 1
+            }
+            label_props: TextProps
+            label_props.bounds = Rectangle.{cast(float32)bar_x,
+                cast(float32)row_y, cast(float32)label_width, 0.0}
+            label_props.text = break_hud_label(t)
+            label_props.font = font
+            label_props.wrap = cast(TextWrap)TextWrapAuto
+            label_height := TextHeight(app.ui.session, label_props)
+            if label_height <= 0 {
+                label_height = font
+            }
+            row_layout := BreakReminderLayout(label_props.bounds,
+                label_height, scale)
 
-            Text(CurrentApp().ui.session, TextProps.{
-                    .bounds = Rectangle.{cast(float32)(bar_x), cast(float32)(row_y + AppScale(2)), 0, 0},
-                    .text = (labels[t]),
-                    .wrap = cast(TextWrap)TextWrapNone
-                })
+            label_props.bounds = row_layout.text
+            Text(CurrentApp().ui.session, label_props)
 
             if next < 0 {
-                line := "off"
-                Text(CurrentApp().ui.session, TextProps.{
-                        .bounds = Rectangle.{cast(float32)(time_x - AppTextWidth(line, Text12)), cast(float32)(row_y + AppScale(2)), 0, 0},
-                        .text = (line),
-                        .wrap = cast(TextWrap)TextWrapNone
-                    })
+                line_text := "off"
+                break_hud_draw_time(app.ui.session, line_text, time_x,
+                    row_layout, time_reserve, font)
             } else if timer.state == BreakStateBreaking {
                 // active break: count down the remaining rest time (this is the
                 // wait that resets the timer once it completes)
@@ -882,24 +986,22 @@ app_breaks_hud_draw :: (app: *InnerBreeze, hud_w: s32, hud_h: s32, row_h: s32, p
                 }
                 line := BreakFormatDuration(left)
                 line_text := AppTextFromCString(*line.bytes[0], 16)
-                Text(CurrentApp().ui.session, TextProps.{
-                        .bounds = Rectangle.{cast(float32)(time_x - AppTextWidth(line_text, Text12)), cast(float32)(row_y + AppScale(2)), 0, 0},
-                        .text = line_text,
-                        .wrap = cast(TextWrap)TextWrapNone
-                    })
+                break_hud_draw_time(app.ui.session, line_text, time_x,
+                    row_layout, time_reserve, font)
                 if timer.duration_s > 0 {
                     fraction := timer.idle_s * (bar_w - 2) / timer.duration_s
                     if fraction > bar_w - 2 {
                         fraction = bar_w - 2
                     }
+                    bar_bounds: Rectangle = Rectangle.{row_layout.bar.x, row_layout.bar.y, cast(float32)bar_w, row_layout.bar.height}
                     Box(app.ui.session, BoxProps.{
-                            .bounds = Rectangle.{cast(float32)bar_x, cast(float32)(row_y + row_h - AppScale(4)), cast(float32)bar_w, cast(float32)AppScale(3)},
+                            .bounds = bar_bounds,
                             .fill = DarkenColor(StyleTokenColor("canvas"), 30),
                             .border = DarkenColor(StyleTokenColor("canvas"), 30)
                         })
                     if fraction > 0 {
                         Box(app.ui.session, BoxProps.{
-                                .bounds = Rectangle.{cast(float32)(bar_x + 1), cast(float32)(row_y + row_h - AppScale(4)), cast(float32)fraction, cast(float32)AppScale(3)},
+                                .bounds = Rectangle.{bar_bounds.x + 1.0, bar_bounds.y, cast(float32)fraction, bar_bounds.height},
                                 .fill = fill, .border = fill
                             })
                     }
@@ -913,26 +1015,24 @@ app_breaks_hud_draw :: (app: *InnerBreeze, hud_w: s32, hud_h: s32, row_h: s32, p
                     AppCopyText(AppTextFromCString(*duration.bytes[0], 16), line[:])
                 }
                 line_text := AppTextFromCString(*line[0], 64)
-                Text(CurrentApp().ui.session, TextProps.{
-                        .bounds = Rectangle.{cast(float32)(time_x - AppTextWidth(line_text, Text12)), cast(float32)(row_y + AppScale(2)), 0, 0},
-                        .text = line_text,
-                        .wrap = cast(TextWrap)TextWrapNone
-                    })
+                break_hud_draw_time(app.ui.session, line_text, time_x,
+                    row_layout, time_reserve, font)
 
                 if timer.limit_s > 0 {
                     fraction := timer.active_s * (bar_w - 2) / timer.limit_s
                     if fraction > bar_w - 2 {
                         fraction = bar_w - 2
                     }
+                    bar_bounds: Rectangle = Rectangle.{row_layout.bar.x, row_layout.bar.y, cast(float32)bar_w, row_layout.bar.height}
                     Box(app.ui.session, BoxProps.{
-                            .bounds = Rectangle.{cast(float32)bar_x, cast(float32)(row_y + row_h - AppScale(4)), cast(float32)bar_w, cast(float32)AppScale(3)},
+                            .bounds = bar_bounds,
                             .fill = DarkenColor(StyleTokenColor("canvas"), 30),
                             .border = DarkenColor(StyleTokenColor("canvas"), 30)
                         })
                     if fraction > 0 {
                         bar_color := ifx (next == 0) then (overdue) else (fill)
                         Box(app.ui.session, BoxProps.{
-                                .bounds = Rectangle.{cast(float32)(bar_x + 1), cast(float32)(row_y + row_h - AppScale(4)), cast(float32)fraction, cast(float32)AppScale(3)},
+                                .bounds = Rectangle.{bar_bounds.x + 1.0, bar_bounds.y, cast(float32)fraction, bar_bounds.height},
                                 .fill = bar_color, .border = bar_color
                             })
                     }
@@ -944,7 +1044,7 @@ app_breaks_hud_draw :: (app: *InnerBreeze, hud_w: s32, hud_h: s32, row_h: s32, p
                         tip := (bar_w - 2 - fraction) * timer.idle_s / timer.duration_s
                         if tip > 0 {
                             Box(app.ui.session, BoxProps.{
-                                    .bounds = Rectangle.{cast(float32)(bar_x + 1 + fraction), cast(float32)(row_y + row_h - AppScale(4)), cast(float32)tip, cast(float32)AppScale(3)},
+                                    .bounds = Rectangle.{bar_bounds.x + 1.0 + cast(float32)fraction, bar_bounds.y, cast(float32)tip, bar_bounds.height},
                                     .fill = idle_col, .border = idle_col
                                 })
                         }

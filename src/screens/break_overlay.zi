@@ -8,6 +8,7 @@ raylib :: #system_library "raylib";
 IsMouseButtonPressed :: (button: s32) -> bool #foreign raylib;
 GetMousePosition :: () -> Vector2 #foreign raylib;
 #import, file "../breaks/break_rules.zi";
+#import, file "../breaks/break_reminder_layout.zi";
 
 using TextAlign;
 using TextWrap;
@@ -16,6 +17,7 @@ using ButtonEmphasis;
 #import "control_props"
 #import "text_align"
 #import "text_props"
+#import "text_measure"
 #import, file "../app/metrics.zi";
 #import, file "../app/current_app.zi";
 #import "button_widget"
@@ -276,17 +278,23 @@ break_overlay_draw_sized :: (app: *InnerBreeze, w: s32, h: s32) {
     } else {
         body = LocaleText("break_micro_body")
     }
-    Text(CurrentApp().ui.session, TextProps.{
-        .bounds = Rectangle.{cast(float32)panel_x, cast(float32)(panel_y + AppScale(20)),
-            cast(float32)panel_w, cast(float32)AppScale(36)},
-        .text = title,
-        .font = title_font,
-        .align = cast(TextAlign)TextAlignCenter,
-        .vertical_align = cast(TextAlign)TextAlignCenter,
-        .wrap=cast(TextWrap)TextWrapNone
-    })
+    title_bounds: Rectangle = Rectangle.{cast(float32)panel_x,
+        cast(float32)(panel_y + AppScale(20)), cast(float32)panel_w, 0.0}
+    title_props: TextProps
+    title_props.bounds = title_bounds
+    title_props.text = title
+    title_props.font = title_font
+    title_props.align = cast(TextAlign)TextAlignCenter
+    title_props.vertical_align = cast(TextAlign)TextAlignCenter
+    title_props.wrap = cast(TextWrap)TextWrapAuto
+    title_bounds.height = cast(float32)TextHeight(CurrentApp().ui.session,
+        title_props)
+    title_props.bounds = title_bounds
+    Text(CurrentApp().ui.session, title_props)
 
     remaining := break_overlay_remaining_s(app, t)
+    reminder_bottom: s32 = cast(s32)title_bounds.y +
+    cast(s32)title_bounds.height
     if timer.duration_s > 0 {
         time_text := BreakFormatDuration(remaining)
         time_label: [96]u8
@@ -302,39 +310,48 @@ break_overlay_draw_sized :: (app: *InnerBreeze, w: s32, h: s32) {
         remaining_label := FrameTextHold(*app.ui.frame_text,
             AppTextFromCString(*time_label[0],
                 size_of(type_of(time_label))))
-        Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)panel_x, cast(float32)(panel_y + AppScale(60)),
-                cast(float32)panel_w, cast(float32)AppScale(26)},
-            .text = remaining_label,
-            .font = body_font,
-            .align = cast(TextAlign)TextAlignCenter,
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap=cast(TextWrap)TextWrapNone
-        })
-    }
+        reminder_bounds: Rectangle = Rectangle.{cast(float32)(panel_x + AppScale(24)),
+            title_bounds.y + cast(float32)(cast(s32)title_bounds.height + AppScale(4)),
+            cast(float32)(panel_w - AppScale(48)), 0.0}
+        reminder_props: TextProps
+        reminder_props.bounds = reminder_bounds
+        reminder_props.text = remaining_label
+        reminder_props.font = body_font
+        reminder_props.align = cast(TextAlign)TextAlignCenter
+        reminder_props.vertical_align = cast(TextAlign)TextAlignCenter
+        reminder_props.wrap = cast(TextWrap)TextWrapAuto
+        reminder_layout := BreakReminderLayout(reminder_bounds,
+            TextHeight(CurrentApp().ui.session, reminder_props), MetricsScale())
+        reminder_layout.bar.height = cast(float32)AppScale(16)
+        reminder_props.bounds = reminder_layout.text
+        Text(CurrentApp().ui.session, reminder_props)
 
-    if timer.duration_s > 0 {
         fraction := timer.idle_s * 100 / timer.duration_s
         if fraction > 100 {
             fraction = 100
         }
-        bar_w := panel_w - AppScale(48)
-        break_overlay_draw_bar(app, panel_x + AppScale(24),
-                               panel_y + AppScale(96),
-                               bar_w, AppScale(16), fraction)
+        break_overlay_draw_bar(app, cast(s32)reminder_layout.bar.x,
+            cast(s32)reminder_layout.bar.y, cast(s32)reminder_layout.bar.width,
+            AppScale(16), fraction)
+        reminder_bottom = cast(s32)reminder_layout.bar.y + AppScale(16)
     }
-
-    body_y: s32 = panel_y + AppScale(132)
+    body_y: s32 = ifx (timer.duration_s > 0) then (reminder_bottom + AppScale(16)) else (cast(s32)title_bounds.y + cast(s32)title_bounds.height + AppScale(16))
     body_w := panel_w - AppScale(48)
-    body_h := AppParagraphHeight(body, body_w, body_font, AppScale(3))
+    body_props: TextProps
+    body_props.bounds = Rectangle.{cast(float32)(panel_x + AppScale(24)),
+        cast(float32)body_y, cast(float32)body_w, 0.0}
+    body_props.text = body
+    body_props.font = body_font
+    body_props.align = cast(TextAlign)TextAlignCenter
+    body_props.wrap = cast(TextWrap)TextWrapAuto
+    body_h := TextHeight(CurrentApp().ui.session, body_props)
+    body_props.bounds.height = cast(float32)body_h
     Text(app.ui.session, TextProps.{
-        .bounds = Rectangle.{cast(float32)(panel_x + AppScale(24)),
-            cast(float32)body_y, cast(float32)body_w,
-            cast(float32)body_h},
-        .text = body,
-        .font = body_font,
-        .align = cast(TextAlign)TextAlignCenter,
-        .wrap = cast(TextWrap)TextWrapAuto
+            .bounds = body_props.bounds,
+            .text = body_props.text,
+            .font = body_props.font,
+            .align = body_props.align,
+            .wrap = body_props.wrap
     })
 
     if activity_flash {
