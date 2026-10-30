@@ -64,6 +64,10 @@ entity_picture: Publish.EntityPicturePublisher;
 entity_picture_chosen: s32;
 entity_picture_published: s32;
 entity_picture_checked: s64;
+// A picture chosen in another app comes back from the node; a choice made
+// here meanwhile counts up the sequence and wins.
+entity_picture_reader: Publish.EntityPictureReader;
+entity_picture_sequence: s32;
 
 // The picture a new account starts with, before anyone chooses one.
 InbeStartingPicture :: (owner: string) -> s32 {
@@ -76,6 +80,18 @@ InbeStartingPicture :: (owner: string) -> s32 {
 InbeProfilePictureChosen :: (icon: s32) {
     storage_set_setting_int("profile_picture_chosen", icon)
     entity_picture_checked = 0
+    entity_picture_sequence += 1
+}
+
+// The node's picture becomes this profile's, already published.
+InbeProfilePictureAdopt :: (app: *InnerBreeze, icon: s32) {
+    app.profile_picture_icon = icon
+    storage_set_setting_int("profile_picture_icon", icon)
+    storage_set_setting_int("profile_picture_chosen", icon)
+    storage_set_setting_int("profile_icon_published", icon)
+    storage_set_setting_text("profile_icon_published_owner", TextUntilNul(entity_picture_reader.owner[:]))
+    entity_picture_chosen = icon
+    entity_picture_published = icon
 }
 
 InbeChosenPicture :: () -> s32 {
@@ -91,16 +107,32 @@ InbeChosenPicture :: () -> s32 {
     return chosen
 }
 
-InbePicturePump :: () {
+InbePictureRefresh :: (now: s64) {
+    entity_picture_checked = now + 5
+    entity_picture_chosen = InbeChosenPicture()
+    owner: [65]u8
+    unused CopyCString(storage_get_setting_text("sync_public_id"), owner[:])
+    entity_picture_published = 0
+    if storage_get_setting_text("profile_icon_published_owner") == TextUntilNul(owner[:]) {
+        entity_picture_published = storage_get_setting_int("profile_icon_published", 0)
+    }
+}
+
+InbePicturePump :: (app: *InnerBreeze) {
     now := UnixNow()
     if !entity_picture.active && now >= entity_picture_checked {
-        entity_picture_checked = now + 5
-        entity_picture_chosen = InbeChosenPicture()
-        owner: [65]u8
-        unused CopyCString(storage_get_setting_text("sync_public_id"), owner[:])
-        entity_picture_published = 0
-        if storage_get_setting_text("profile_icon_published_owner") == TextUntilNul(owner[:]) {
-            entity_picture_published = storage_get_setting_int("profile_icon_published", 0)
+        InbePictureRefresh(now)
+    }
+    node := Publish.EntityPictureReadPump(*entity_picture_reader, *entity_management, entity_picture_sequence, now)
+    if node != 0 {
+        if !entity_picture.active {
+            InbePictureRefresh(now)
+        }
+        pending := entity_picture.active ||
+        Publish.EntityPictureShouldPublish(entity_picture_chosen, entity_picture_published)
+        icon := ProfilePictureFromNode(node, app.profile_picture_icon, pending)
+        if icon != 0 {
+            InbeProfilePictureAdopt(app, icon)
         }
     }
     accepted := Publish.EntityPicturePublishPump(*entity_picture, *entity_management,
@@ -462,7 +494,7 @@ InbeManagementPump :: (app: *InnerBreeze) {
         entity_management.delegated = false
     }
     Provider.ProviderPump(*entity_management)
-    InbePicturePump()
+    InbePicturePump(app)
     InbeManagementDiscardPicker()
     if !entity_management.queue.pending && entity_management_selected[0] != cast(u8)0 {
         unused RemoveFile(TextUntilNul(entity_management_selected[:]))
