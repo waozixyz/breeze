@@ -114,6 +114,9 @@ if [ -n "$failed" ]; then
     exit 1
 fi
 git diff --exit-code "$RELEASE_READY_COMMIT" -- .
+if [ -n "$RELEASE_READY_INCREMENTAL" ]; then
+    python3 -c "$RELEASE_READY_SNAPSHOT" --record-times /src build/incremental/source-times.json
+fi
 if [ "$#" -gt 0 ]; then
     printf "\nrelease-ready: make %s passed\n" "$*"
 else
