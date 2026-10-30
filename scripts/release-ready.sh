@@ -76,6 +76,9 @@ if [ -n "$RELEASE_READY_INCREMENTAL" ]; then
         ln -s "/src/build/incremental/$directory" "$directory"
     done
 else
+    # Outputs this run builds from fresh times must not be trusted later
+    # against the times recorded for another commit.
+    rm -f build/incremental/source-times.json
     python3 -c "$RELEASE_READY_SNAPSHOT" /src "$RELEASE_READY_COMMIT"
 fi
 failed=""
