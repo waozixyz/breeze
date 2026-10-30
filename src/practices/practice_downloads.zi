@@ -1060,6 +1060,7 @@ PracticePackRemove :: (index: s32) {
         return
     }
     PracticePackCancel(index)
+    images := PracticePackServesImages(practice_packs[index], practice_packs[index].bundle)
     CloseBundle(practice_packs[index].bundle)
     practice_packs[index].bundle = null
     practice_packs[index].status = 0
@@ -1074,7 +1075,7 @@ PracticePackRemove :: (index: s32) {
         PackageFree(path)
         sync_web_storage()
     }
-    AssetNotifyChangedUnder(PRACTICE_ASSET_FOLDER)
+    PracticePackContentChanged(images)
 }
 
 PracticeContentReady :: (practice: s32) -> bool {
@@ -1318,6 +1319,46 @@ PracticeContentRemove :: (practice: s32) {
         sync_web_storage()
     }
     AssetNotifyChangedUnder(PRACTICE_ASSET_FOLDER)
+}
+
+// Whether a path names a picture rather than a recording or course data.
+PracticeImagePath :: (path: string) -> bool {
+    extensions: [6]string = .[".png", ".jpg", ".jpeg", ".webp", ".bmp", ".qoi"]
+    for extension: extensions {
+        if path.count > extension.count && path[path.count - extension.count:] == extension {
+            return true
+        }
+    }
+    return false
+}
+
+// Whether a pack's bundle serves any picture. A narration pack serves only
+// its recordings.
+PracticePackServesImages :: (pack: PracticePack, bundle: *void) -> bool {
+    if bundle == null {
+        return false
+    }
+    count := BundleAssets(bundle)
+    at: u64 = 0
+    while at < count {
+        path := TextFromCString(BundleAssetPath(bundle, at))
+        if PracticeImagePath(path) && PracticePackAcceptsPath(pack, path) {
+            return true
+        }
+        at += 1
+    }
+    return false
+}
+
+// Readers look again once a pack's content changed. Pictures load again
+// only when the old or new content had some: installing or removing a
+// narration pack leaves every image on screen as it is.
+PracticePackContentChanged :: (images: bool) {
+    if images {
+        AssetNotifyChangedUnder(PRACTICE_ASSET_FOLDER)
+    } else {
+        AssetNotifyAvailable()
+    }
 }
 
 PracticeDownloadsAsset :: (path: string) -> AssetView {
@@ -1574,11 +1615,13 @@ PracticeTransfersPump :: (narration_only: bool) {
         practice_transfer_work = null
     }
     if bundle != null && (DataTemporary() || RenamePath(temporary, destination)) {
+        images := PracticePackServesImages(practice_packs[index], practice_packs[index].bundle) ||
+        PracticePackServesImages(practice_packs[index], bundle)
         CloseBundle(practice_packs[index].bundle)
         practice_packs[index].bundle = bundle
         practice_content_clock += 1
         practice_content_used[index] = practice_content_clock
-        AssetNotifyChangedUnder(PRACTICE_ASSET_FOLDER)
+        PracticePackContentChanged(images)
         practice_packs[index].status = 2
         practice_packs[index].cache_checked = true
         practice_packs[index].present = true
