@@ -522,8 +522,30 @@ with contextlib.ExitStack() as stack:
                                    if abs(node["y"] - card["y"]) < 2
                                    and abs(node["x"] + node["width"] - card["x"]) < 2]
                         assert len(matches) == 1, (card, matches)
+                    first_options = next(node for node in tree if node["kind"] == "button"
+                                         and node["label"] == "App options" and node["visible"]
+                                         and node["y"] >= pinned[0]["y"]
+                                         and node["y"] < pinned[0]["y"] + pinned[0]["height"])
+                    first_visibility = next(node for node in tree if node["kind"] == "button"
+                                            and node["label"] in ("Hide app", "Show app")
+                                            and node["visible"] and node["y"] >= pinned[0]["y"]
+                                            and node["y"] < pinned[0]["y"] + pinned[0]["height"])
+                    assert first_visibility["x"] + first_visibility["width"] <= first_options["x"], \
+                        (first_visibility, first_options)
+                    driver.press(label="Done", role="button")
+                    driver.wait(label="Edit apps", role="button")
+                    normal_tree = driver.tree()
+                    normal_options = next(node for node in normal_tree if node["kind"] == "button"
+                                          and node["label"] == "App options" and node["visible"]
+                                          and abs(node["x"] - first_options["x"]) <= 1
+                                          and abs(node["y"] - first_options["y"]) <= 1)
+                    assert (normal_options["x"], normal_options["y"],
+                            normal_options["width"], normal_options["height"]) == \
+                        (first_options["x"], first_options["y"],
+                         first_options["width"], first_options["height"]), (normal_options, first_options)
                     if width > 500:
-                        assert abs(pinned[0]["y"] - pinned[1]["y"]) < 1 and pinned[1]["x"] > pinned[0]["x"], pinned
+                        normal_cards = cards()[0]
+                        assert abs(normal_cards[0]["y"] - normal_cards[1]["y"]) < 1 and normal_cards[1]["x"] > normal_cards[0]["x"], normal_cards
                     capture(window, f"views-{width}-grid")
                 friend_id = "b" * 64
                 with contextlib.closing(sqlite3.connect(profile / "inbe.db", timeout=3)) as db, db:

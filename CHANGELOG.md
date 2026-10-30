@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Apps keeps each grid card's ⋮ control unchanged while editing.
 - Mark Telegram-relayed Lumi messages with their source.
 - Collapse each break kind in settings and expand it on click.
 - Keep Linux break reminder text and progress bars in separate rows.
