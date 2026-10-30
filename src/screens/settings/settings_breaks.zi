@@ -26,6 +26,8 @@
 using TextAlign;
 using ButtonTone;
 using ButtonEmphasis;
+using ContentAlignment;
+using ArrowDirection;
 
 settings_breaks_slider_height :: () -> s32 {
     return AppScale(66)
@@ -45,6 +47,25 @@ settings_breaks_button_row_height :: () -> s32 {
 
 settings_breaks_week_row_height :: () -> s32 {
     return AppScale(28)
+}
+
+SETTINGS_BREAKS_TIMER_ROW :: 64
+
+settings_breaks_expanded: u32 = 0;
+
+settings_breaks_timer_expanded :: (index: s32) -> bool {
+    if index < 0 || index >= BREAK_TYPE_COUNT {
+        return false
+    }
+    return (settings_breaks_expanded & (cast(u32)1 << cast(u32)index)) != 0
+}
+
+#program_export
+settings_breaks_expanded_toggle :: (expanded: u32, index: s32) -> u32 {
+    if index < 0 || index >= BREAK_TYPE_COUNT {
+        return expanded
+    }
+    return expanded ^ (cast(u32)1 << cast(u32)index)
 }
 
 settings_breaks_timer_header :: (index: s32) -> string {
@@ -70,7 +91,7 @@ settings_breaks_general_body :: (width: s32) -> s32 {
         toggle_row_height(LocaleText("settings_breaks_micro_counts"), width)
 }
 
-settings_breaks_timer_body :: (index: s32, width: s32) -> s32 {
+settings_breaks_timer_options_body :: (index: s32, width: s32) -> s32 {
     sliders: s32 = 4
     if index == BREAK_DAILY {
         sliders = 3
@@ -79,6 +100,14 @@ settings_breaks_timer_body :: (index: s32, width: s32) -> s32 {
         settings_breaks_slider_row_height() * sliders + AppScale(10) +
         toggle_row_height(LocaleText("settings_breaks_show_skip"), width) +
         toggle_row_height(LocaleText("settings_breaks_show_postpone"), width)
+}
+
+settings_breaks_timer_body :: (index: s32, width: s32) -> s32 {
+    body := AppScale(SETTINGS_BREAKS_TIMER_ROW)
+    if settings_breaks_timer_expanded(index) {
+        body += settings_breaks_timer_options_body(index, width)
+    }
+    return body
 }
 
 settings_breaks_week_body :: (has_data: bool) -> s32 {
@@ -197,6 +226,55 @@ settings_breaks_slider :: (app: *InnerBreeze, id: s32, x: s32, width: s32,
         "", 0) != 0
 }
 
+settings_breaks_timer_summary :: (app: *InnerBreeze, index: s32,
+    output: []u8) -> string {
+    timer := *app.breaks.timers[index]
+    state := LocaleText(ifx timer.enabled != 0 then "toggle_on" else "toggle_off")
+    interval := BreakFormatDuration(timer.limit_s)
+    interval_text := AppTextFromCString(*interval.bytes[0], 16)
+    if index == BREAK_DAILY {
+        args: [2]FormatArg = .[
+            FormatArg.{.text = state, .is_text = true},
+            FormatArg.{.text = interval_text, .is_text = true}
+        ]
+        unused FormatTemplate("%s · %s", args[:], output[:])
+    } else {
+        duration := BreakFormatDuration(timer.duration_s)
+        duration_text := AppTextFromCString(*duration.bytes[0], 16)
+        args: [3]FormatArg = .[
+            FormatArg.{.text = state, .is_text = true},
+            FormatArg.{.text = interval_text, .is_text = true},
+            FormatArg.{.text = duration_text, .is_text = true}
+        ]
+        unused FormatTemplate("%s · %s · %s", args[:], output[:])
+    }
+    return FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*output[0], cast(s32)output.count))
+}
+
+settings_breaks_draw_timer_row :: (app: *InnerBreeze, index: s32,
+    x: s32, width: s32, y: *s32) {
+    summary: [96]u8
+    expanded := settings_breaks_timer_expanded(index)
+    row: ButtonProps
+    row.id = 546 + index
+    row.key = cast(u64)(546 + index)
+    row.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
+        cast(float32)width, cast(float32)AppScale(SETTINGS_BREAKS_TIMER_ROW)}
+    row.label = settings_breaks_timer_header(index)
+    row.detail = settings_breaks_timer_summary(app, index, summary[:])
+    row.content_alignment = cast(ContentAlignment)ContentAlignmentStart
+    row.tone = cast(ButtonTone)ButtonToneNeutral
+    row.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
+    row.arrow = true
+    row.direction = cast(ArrowDirection)ifx expanded then ArrowDown else ArrowRight
+    if Button(app.ui.session, row) != 0 {
+        settings_breaks_expanded = settings_breaks_expanded_toggle(
+            settings_breaks_expanded, index)
+    }
+    y.* += AppScale(SETTINGS_BREAKS_TIMER_ROW)
+}
+
 settings_breaks_draw_timer :: (app: *InnerBreeze, index: s32,
     x: s32, width: s32, y: *s32) {
     timer := *app.breaks.timers[index]
@@ -214,6 +292,13 @@ settings_breaks_draw_timer :: (app: *InnerBreeze, index: s32,
         settings_breaks_timer_body(index, inner))
     ix := section.inner_x
     iw := section.inner_width
+
+    settings_breaks_draw_timer_row(app, index, ix, iw, y)
+    if !settings_breaks_timer_expanded(index) {
+        settings_section_end(y)
+        return
+    }
+    settings_row_divider(app, section, y.*)
 
     if commit_toggle_row(app, ix, iw, y,
         LocaleText("settings_breaks_timer_enabled"), *enabled, 0) != 0 {

@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Collapse each break kind in settings and expand it on click.
 - Keep Linux break reminder text and progress bars in separate rows.
 - Catalog games can award their own achievements, with the usual top-right notification.
 - Friends, Lists and requests show the profile picture each friend chose in any app, abstract pictures included.
