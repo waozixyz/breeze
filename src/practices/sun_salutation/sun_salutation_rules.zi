@@ -28,6 +28,26 @@ SUN_SALUTATION_BREATH_IN :: 1
 SUN_SALUTATION_PLANK_STEP :: 4
 SUN_SALUTATION_REPEAT_STEP :: 1
 
+// The guide around the rounds: settling in before the first round, the
+// rounds, a rest after the last one, and then the results.
+SUN_SALUTATION_PHASE_INTRO :: 0
+SUN_SALUTATION_PHASE_ROUNDS :: 1
+SUN_SALUTATION_PHASE_CLOSING :: 2
+SUN_SALUTATION_PHASE_DONE :: 3
+// Settling in takes three breaths, in, out and in, so Mountain pose's
+// out-breath follows; the rest after the last round takes two, in and out.
+SUN_SALUTATION_INTRO_BREATHS :: 3
+SUN_SALUTATION_CLOSING_BREATHS :: 2
+// The first round never breathes faster than this, so every pose's spoken
+// line plays in full while the movements are new.
+SUN_SALUTATION_FIRST_ROUND_SECONDS :: 6
+// Which leg is back in a lunge.
+SUN_SALUTATION_SIDE_NONE :: 0
+SUN_SALUTATION_SIDE_RIGHT :: 1
+SUN_SALUTATION_SIDE_LEFT :: 2
+SUN_SALUTATION_LUNGE_STEP :: 3
+SUN_SALUTATION_RETURN_LUNGE_STEP :: 8
+
 SalutationBreath :: struct {
     // SUN_SALUTATION_BREATH_IN or SUN_SALUTATION_BREATH_OUT.
     direction: s32
@@ -185,12 +205,12 @@ SalutationStepBreaths :: (step: s32) -> s32 {
 #program_export
 SalutationBreathDirection :: (step: s32, breath: s32) -> s32 {
     directions: [12]s32 = .[
-        SUN_SALUTATION_BREATH_OUT, SUN_SALUTATION_BREATH_IN,
-        SUN_SALUTATION_BREATH_OUT, SUN_SALUTATION_BREATH_IN,
-        SUN_SALUTATION_BREATH_OUT, SUN_SALUTATION_BREATH_OUT,
-        SUN_SALUTATION_BREATH_IN, SUN_SALUTATION_BREATH_OUT,
-        SUN_SALUTATION_BREATH_IN, SUN_SALUTATION_BREATH_OUT,
-        SUN_SALUTATION_BREATH_IN, SUN_SALUTATION_BREATH_OUT
+    SUN_SALUTATION_BREATH_OUT, SUN_SALUTATION_BREATH_IN,
+    SUN_SALUTATION_BREATH_OUT, SUN_SALUTATION_BREATH_IN,
+    SUN_SALUTATION_BREATH_OUT, SUN_SALUTATION_BREATH_OUT,
+    SUN_SALUTATION_BREATH_IN, SUN_SALUTATION_BREATH_OUT,
+    SUN_SALUTATION_BREATH_IN, SUN_SALUTATION_BREATH_OUT,
+    SUN_SALUTATION_BREATH_IN, SUN_SALUTATION_BREATH_OUT
     ]
     step = SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
     if step == SUN_SALUTATION_PLANK_STEP && breath >= 1 {
@@ -209,7 +229,8 @@ SalutationMaleVoice :: (voice: s32, character: s32) -> bool {
 }
 
 // The length of one breath in the current round: the start tempo in the
-// first round, moving evenly to the end tempo in the last.
+// first round, moving evenly to the end tempo in the last. The first round
+// is never quicker than SUN_SALUTATION_FIRST_ROUND_SECONDS.
 #program_export
 SalutationBreathSeconds :: (state: SunSalutationPracticeState) -> s32 {
     start_seconds: s32 = state.start_seconds
@@ -224,6 +245,9 @@ SalutationBreathSeconds :: (state: SunSalutationPracticeState) -> s32 {
     }
     if start_seconds < end_seconds {
         end_seconds = start_seconds
+    }
+    if repetition <= 0 && start_seconds < SUN_SALUTATION_FIRST_ROUND_SECONDS {
+        return SUN_SALUTATION_FIRST_ROUND_SECONDS
     }
     if repetitions < 2 {
         return start_seconds
@@ -389,4 +413,235 @@ SalutationFrameAt :: (step_ticks: s32, breath_ticks: s32,
         frame = frame_count - 1
     }
     return frame
+}
+
+SalutationGuide :: struct {
+    // SUN_SALUTATION_PHASE_INTRO to SUN_SALUTATION_PHASE_DONE.
+    phase: s32
+    // Time into the intro or the rest.
+    ticks: s32
+    tick_fraction: float64
+}
+
+SalutationGuideStep :: struct {
+    guide: SalutationGuide
+    // Seconds left over after the intro ends, for the first round.
+    remaining: float64
+}
+
+// The intro and the rest breathe at the first round's gentle tempo.
+#program_export
+SalutationGuideBreathSeconds :: (state: SunSalutationPracticeState) -> s32 {
+    state.repetition = 0
+    return SalutationBreathSeconds(state)
+}
+
+#program_export
+SalutationGuideBreaths :: (phase: s32) -> s32 {
+    if phase == SUN_SALUTATION_PHASE_INTRO {
+        return SUN_SALUTATION_INTRO_BREATHS
+    }
+    if phase == SUN_SALUTATION_PHASE_CLOSING {
+        return SUN_SALUTATION_CLOSING_BREATHS
+    }
+    return 0
+}
+
+// Which breath of the intro or the rest is taken now, from 0.
+#program_export
+SalutationGuideBreathIndex :: (guide: SalutationGuide,
+    state: SunSalutationPracticeState) -> s32 {
+    breath_ticks := SalutationGuideBreathSeconds(state) * 60
+    if breath_ticks < 1 {
+        breath_ticks = 1
+    }
+    ticks := guide.ticks
+    if ticks < 0 {
+        ticks = 0
+    }
+    breath := ticks / breath_ticks
+    last := SalutationGuideBreaths(guide.phase) - 1
+    if last < 0 {
+        last = 0
+    }
+    if breath > last {
+        breath = last
+    }
+    return breath
+}
+
+// The breath taken now in the intro or the rest: both start with a breath
+// in and turn on every breath.
+#program_export
+SalutationGuideBreathAt :: (guide: SalutationGuide,
+    state: SunSalutationPracticeState) -> SalutationBreath {
+    result: SalutationBreath
+    breath_ticks := SalutationGuideBreathSeconds(state) * 60
+    if breath_ticks < 1 {
+        breath_ticks = 1
+    }
+    ticks := guide.ticks
+    if ticks < 0 {
+        ticks = 0
+    }
+    breath := SalutationGuideBreathIndex(guide, state)
+    result.direction = SUN_SALUTATION_BREATH_IN
+    if breath % 2 == 1 {
+        result.direction = SUN_SALUTATION_BREATH_OUT
+    }
+    result.progress = ((ticks - breath * breath_ticks) * 1000) / breath_ticks
+    if result.progress > 1000 {
+        result.progress = 1000
+    }
+    return result
+}
+
+// Keeps the guide in step with the rounds: only a session at its very
+// start settles in, and the rest follows only the last round's Mountain
+// pose, so a session entered any other way goes on with its rounds.
+#program_export
+SalutationGuideFor :: (guide: SalutationGuide,
+    state: SunSalutationPracticeState) -> SalutationGuide {
+    fresh := state.step == 0 && state.repetition == 0 && state.step_ticks == 0
+    last := state.step == SUN_SALUTATION_STEP_COUNT - 1 &&
+    state.repetition >= state.repetitions - 1
+    if guide.phase == SUN_SALUTATION_PHASE_INTRO && !fresh {
+        return SalutationGuide.{.phase = SUN_SALUTATION_PHASE_ROUNDS}
+    }
+    if (guide.phase == SUN_SALUTATION_PHASE_CLOSING ||
+        guide.phase == SUN_SALUTATION_PHASE_DONE) && !last {
+        return SalutationGuide.{.phase = SUN_SALUTATION_PHASE_ROUNDS}
+    }
+    if guide.phase < SUN_SALUTATION_PHASE_INTRO || guide.phase > SUN_SALUTATION_PHASE_DONE {
+        return SalutationGuide.{.phase = SUN_SALUTATION_PHASE_ROUNDS}
+    }
+    return guide
+}
+
+// The phase after this one: the intro gives way to the rounds, the rounds
+// to the rest and the rest to the results.
+#program_export
+SalutationGuideNext :: (guide: SalutationGuide) -> SalutationGuide {
+    next: SalutationGuide
+    next.phase = SUN_SALUTATION_PHASE_DONE
+    if guide.phase == SUN_SALUTATION_PHASE_INTRO {
+        next.phase = SUN_SALUTATION_PHASE_ROUNDS
+    } else if guide.phase == SUN_SALUTATION_PHASE_ROUNDS {
+        next.phase = SUN_SALUTATION_PHASE_CLOSING
+    }
+    return next
+}
+
+// Moves the intro or the rest on by `elapsed_seconds`. Time past the end of
+// the intro is handed on to the first round; during the rounds all of it is.
+#program_export
+SalutationGuideAdvance :: (guide: SalutationGuide,
+    state: SunSalutationPracticeState, elapsed_seconds: float64) -> SalutationGuideStep {
+    result: SalutationGuideStep
+    result.guide = guide
+    if guide.phase != SUN_SALUTATION_PHASE_INTRO &&
+    guide.phase != SUN_SALUTATION_PHASE_CLOSING {
+        if guide.phase == SUN_SALUTATION_PHASE_ROUNDS && elapsed_seconds > 0.0 {
+            result.remaining = elapsed_seconds
+        }
+        return result
+    }
+    if !(elapsed_seconds > 0.0) {
+        return result
+    }
+    maximum_seconds := SUN_SALUTATION_SECONDS_MAX * SUN_SALUTATION_STEP_COUNT * 12
+    if elapsed_seconds > cast(float64)maximum_seconds {
+        elapsed_seconds = cast(float64)maximum_seconds
+    }
+    total := SalutationGuideBreaths(guide.phase) * SalutationGuideBreathSeconds(state) * 60
+    ticks := guide.tick_fraction + elapsed_seconds * 60.0
+    whole := cast(s32)(ticks + 0.000000001)
+    fraction := ticks - cast(float64)whole
+    if fraction < 0.0 {
+        fraction = 0.0
+    }
+    if guide.ticks + whole < total {
+        result.guide.ticks += whole
+        result.guide.tick_fraction = fraction
+        return result
+    }
+    result.guide = SalutationGuideNext(guide)
+    if guide.phase == SUN_SALUTATION_PHASE_INTRO {
+        result.remaining = (cast(float64)(guide.ticks + whole - total) + fraction) / 60.0
+    }
+    return result
+}
+
+// Which leg is back in this step: the first lunge steps one leg back and
+// the return lunge brings that foot forward, leaving the other one back.
+// The legs switch every other round, as the figure does.
+#program_export
+SalutationBackLeg :: (state: SunSalutationPracticeState) -> s32 {
+    first_side := !SalutationOtherSide(state)
+    if state.step == SUN_SALUTATION_LUNGE_STEP {
+        return ifx first_side then SUN_SALUTATION_SIDE_RIGHT else SUN_SALUTATION_SIDE_LEFT
+    }
+    if state.step == SUN_SALUTATION_RETURN_LUNGE_STEP {
+        return ifx first_side then SUN_SALUTATION_SIDE_LEFT else SUN_SALUTATION_SIDE_RIGHT
+    }
+    return SUN_SALUTATION_SIDE_NONE
+}
+
+// The step that comes after this moment, or -1 when the rest and the
+// results follow: Mountain pose after the intro, the upward salute after a
+// round that is not the last.
+#program_export
+SalutationGuideNextStep :: (guide: SalutationGuide,
+    state: SunSalutationPracticeState) -> s32 {
+    if guide.phase == SUN_SALUTATION_PHASE_INTRO {
+        return 0
+    }
+    if guide.phase != SUN_SALUTATION_PHASE_ROUNDS {
+        return -1
+    }
+    step := SalutationClamp(state.step, 0, SUN_SALUTATION_STEP_COUNT - 1)
+    if step < SUN_SALUTATION_STEP_COUNT - 1 {
+        return step + 1
+    }
+    if state.repetition < state.repetitions - 1 {
+        return SUN_SALUTATION_REPEAT_STEP
+    }
+    return -1
+}
+
+// Locale keys for each step's name and form cue, and for the leg that is
+// back.
+#assert SUN_SALUTATION_STEP_COUNT == 12
+SalutationStepKey :: (step: s32) -> string {
+    keys: [12]string = string.[
+    "sun_salutation_step_1", "sun_salutation_step_2",
+    "sun_salutation_step_3", "sun_salutation_step_4",
+    "sun_salutation_step_5", "sun_salutation_step_6",
+    "sun_salutation_step_7", "sun_salutation_step_8",
+    "sun_salutation_step_9", "sun_salutation_step_10",
+    "sun_salutation_step_11", "sun_salutation_step_12"
+    ]
+    return keys[SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)]
+}
+
+SalutationCueKey :: (step: s32) -> string {
+    keys: [12]string = string.[
+    "sun_salutation_cue_1", "sun_salutation_cue_2",
+    "sun_salutation_cue_3", "sun_salutation_cue_4",
+    "sun_salutation_cue_5", "sun_salutation_cue_6",
+    "sun_salutation_cue_7", "sun_salutation_cue_8",
+    "sun_salutation_cue_9", "sun_salutation_cue_10",
+    "sun_salutation_cue_11", "sun_salutation_cue_12"
+    ]
+    return keys[SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)]
+}
+
+SalutationSideKey :: (side: s32) -> string {
+    if side == SUN_SALUTATION_SIDE_RIGHT {
+        return "sun_salutation_side_right"
+    }
+    if side == SUN_SALUTATION_SIDE_LEFT {
+        return "sun_salutation_side_left"
+    }
+    return ""
 }

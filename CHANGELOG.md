@@ -10,6 +10,7 @@
 - A profile picture chosen in another app now shows in your own profile too.
 - Pictures in a practice no longer flicker while its narration downloads.
 - Sun Salutation narration speaks every pose and names the leg in each lunge.
+- Sun Salutation guides each pose with a form cue, the leg that steps back and the next pose, settles in before the first round and rests after the last.
 
 ## [2.1.61] - 2026-10-29
 

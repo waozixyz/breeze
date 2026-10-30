@@ -296,5 +296,131 @@ Answer :: () -> s32 {
     SalutationMigrateTempo(gentle, 1).end_seconds != 5 {
         return 41
     }
+
+    // A fresh session settles in for three breaths, in, out and in, so
+    // Mountain pose's out-breath follows; Mountain pose comes next.
+    guided := SalutationStart(SunSalutationPracticeState.{})
+    guide: SalutationGuide
+    seconds := SalutationGuideBreathSeconds(guided)
+    if SalutationGuideFor(guide, guided).phase != SUN_SALUTATION_PHASE_INTRO ||
+    SalutationGuideNextStep(guide, guided) != 0 || seconds != 8 {
+        return 43
+    }
+    for breath_index: cast(s32)0..SUN_SALUTATION_INTRO_BREATHS - 1 {
+        guide.ticks = breath_index * seconds * 60 + seconds * 30
+        expected_breath := ifx breath_index % 2 == 0 then SUN_SALUTATION_BREATH_IN else SUN_SALUTATION_BREATH_OUT
+        if SalutationGuideBreathAt(guide, guided).direction != expected_breath ||
+        SalutationGuideBreathAt(guide, guided).progress != 500 ||
+        SalutationGuideBreathIndex(guide, guided) != breath_index {
+            return 44
+        }
+    }
+    guide.ticks = 0
+    settling := SalutationGuideAdvance(guide, guided, cast(float64)(seconds * 3) - 0.5)
+    if settling.guide.phase != SUN_SALUTATION_PHASE_INTRO || settling.remaining != 0.0 {
+        return 45
+    }
+    // Time past the intro's end goes on to the first round.
+    settling = SalutationGuideAdvance(settling.guide, guided, 1.5)
+    if settling.guide.phase != SUN_SALUTATION_PHASE_ROUNDS ||
+    settling.remaining < 0.99 || settling.remaining > 1.01 {
+        return 46
+    }
+    settling = SalutationGuideAdvance(settling.guide, guided, 2.0)
+    if settling.guide.phase != SUN_SALUTATION_PHASE_ROUNDS || settling.remaining != 2.0 {
+        return 47
+    }
+    // A session already under way never settles in again, and the rest
+    // follows only the last round's Mountain pose.
+    under_way := guided
+    under_way.step = 2
+    closing := SalutationGuide.{.phase = SUN_SALUTATION_PHASE_CLOSING}
+    if SalutationGuideFor(SalutationGuide.{}, under_way).phase != SUN_SALUTATION_PHASE_ROUNDS ||
+    SalutationGuideFor(closing, under_way).phase != SUN_SALUTATION_PHASE_ROUNDS {
+        return 48
+    }
+    under_way.step = SUN_SALUTATION_STEP_COUNT - 1
+    under_way.repetition = under_way.repetitions - 1
+    if SalutationGuideFor(closing, under_way).phase != SUN_SALUTATION_PHASE_CLOSING ||
+    SalutationGuideNextStep(closing, under_way) != -1 {
+        return 49
+    }
+    // The rest breathes in, then out, then the results follow.
+    closing.ticks = seconds * 60 + 1
+    if SalutationGuideBreathAt(closing, under_way).direction != SUN_SALUTATION_BREATH_OUT {
+        return 50
+    }
+    closing.ticks = 0
+    rest := SalutationGuideAdvance(closing, under_way, cast(float64)(seconds * 2) + 1.0)
+    if rest.guide.phase != SUN_SALUTATION_PHASE_DONE || rest.remaining != 0.0 {
+        return 51
+    }
+    // The next step runs through a round, then into the next round's
+    // upward salute, and there is none after the last round.
+    rounds_guide := SalutationGuide.{.phase = SUN_SALUTATION_PHASE_ROUNDS}
+    under_way.repetition = 0
+    under_way.step = SUN_SALUTATION_PLANK_STEP
+    if SalutationGuideNextStep(rounds_guide, under_way) != SUN_SALUTATION_PLANK_STEP + 1 {
+        return 52
+    }
+    under_way.step = SUN_SALUTATION_STEP_COUNT - 1
+    if SalutationGuideNextStep(rounds_guide, under_way) != SUN_SALUTATION_REPEAT_STEP {
+        return 53
+    }
+    under_way.repetition = under_way.repetitions - 1
+    if SalutationGuideNextStep(rounds_guide, under_way) != -1 {
+        return 54
+    }
+    // The first round steps the right leg back and brings the right foot
+    // forward, leaving the left back; the next round mirrors it.
+    under_way.repetition = 0
+    sides: [12]s32
+    for step: cast(s32)0..SUN_SALUTATION_STEP_COUNT - 1 {
+        under_way.step = step
+        sides[step] = SalutationBackLeg(under_way)
+    }
+    for step: cast(s32)0..SUN_SALUTATION_STEP_COUNT - 1 {
+        expected_side := SUN_SALUTATION_SIDE_NONE
+        if step == SUN_SALUTATION_LUNGE_STEP {
+            expected_side = SUN_SALUTATION_SIDE_RIGHT
+        } else if step == SUN_SALUTATION_RETURN_LUNGE_STEP {
+            expected_side = SUN_SALUTATION_SIDE_LEFT
+        }
+        if sides[step] != expected_side {
+            return 55
+        }
+    }
+    under_way.repetition = 1
+    under_way.step = SUN_SALUTATION_LUNGE_STEP
+    if SalutationBackLeg(under_way) != SUN_SALUTATION_SIDE_LEFT {
+        return 56
+    }
+    under_way.step = SUN_SALUTATION_RETURN_LUNGE_STEP
+    if SalutationBackLeg(under_way) != SUN_SALUTATION_SIDE_RIGHT ||
+    SalutationSideKey(SUN_SALUTATION_SIDE_RIGHT) != "sun_salutation_side_right" ||
+    SalutationSideKey(SUN_SALUTATION_SIDE_NONE) != "" {
+        return 57
+    }
+    // The first round is never quicker than the guided pace, so every line
+    // plays in full; later rounds keep the chosen tempo.
+    quick := SalutationStart(SunSalutationPracticeState.{.repetitions = 3,
+            .start_seconds = 4, .end_seconds = 3})
+    if SalutationBreathSeconds(quick) != SUN_SALUTATION_FIRST_ROUND_SECONDS ||
+    SalutationGuideBreathSeconds(quick) != SUN_SALUTATION_FIRST_ROUND_SECONDS {
+        return 58
+    }
+    quick.repetition = 1
+    if SalutationBreathSeconds(quick) != 4 {
+        return 59
+    }
+    quick.repetition = 2
+    if SalutationBreathSeconds(quick) != 3 {
+        return 60
+    }
+    if SalutationCueKey(6) != "sun_salutation_cue_7" ||
+    SalutationStepKey(-1) != "sun_salutation_step_1" ||
+    SalutationStepKey(99) != "sun_salutation_step_12" {
+        return 61
+    }
     return 42
 }

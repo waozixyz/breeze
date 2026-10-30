@@ -37,6 +37,8 @@ sync_habits_for_activity :: (app: *InnerBreeze, activity: s32) #foreign c3;
 #import, file "sun_salutation_rules.zi";
 #import, file "sun_salutation_assets.zi";
 #import, file "sun_salutation_draw.zi";
+#import, file "sun_salutation_pose.zi";
+#import, file "../../../apps/practice/sun_salutation_artwork.zi";
 #import, file "sun_salutation_frames.zi";
 #import, file "sun_salutation_entry.zi";
 #import "control_props"
@@ -65,6 +67,10 @@ using ImageFit;
 using ButtonTone;
 using ButtonEmphasis;
 
+// Settling in before the first round and resting after the last; the
+// rounds themselves advance in app.sun_salutation.
+sun_salutation_guide: SalutationGuide;
+
 exit_to_start :: (app: *InnerBreeze) {
     if app == null {
         return
@@ -72,6 +78,7 @@ exit_to_start :: (app: *InnerBreeze) {
 
     PracticeNarrationStop()
     app.sun_salutation = SalutationReset(app.sun_salutation)
+    sun_salutation_guide = SalutationGuide.{}
     app.session_paused = 0
     meditation_music_stop(app)
     app_close_modal(app)
@@ -105,6 +112,7 @@ finish :: (app: *InnerBreeze) {
         app_auto_sync(app)
     }
     app.sun_salutation = SalutationReset(app.sun_salutation)
+    sun_salutation_guide = SalutationGuide.{}
     app.session_paused = 0
     meditation_music_stop(app)
     app_close_modal(app)
@@ -144,18 +152,57 @@ sun_salutation_request_exit :: (app: *InnerBreeze) {
     app_open_modal(app, cast(ModalType)ModalConfirmExitSession)
 }
 
+// After the last round she stays in Mountain pose for the rest.
+begin_closing :: (app: *InnerBreeze) {
+    app.sun_salutation.step = SUN_SALUTATION_STEP_COUNT - 1
+    app.sun_salutation.repetition = app.sun_salutation.repetitions - 1
+    app.sun_salutation.step_ticks = SalutationStepSeconds(app.sun_salutation) * 60
+    app.sun_salutation.tick_fraction = 0.0
+    sun_salutation_guide = SalutationGuide.{.phase = SUN_SALUTATION_PHASE_CLOSING}
+}
+
 step_forward :: (app: *InnerBreeze) {
     if app == null {
+        return
+    }
+    if sun_salutation_guide.phase == SUN_SALUTATION_PHASE_INTRO {
+        sun_salutation_guide = SalutationGuideNext(sun_salutation_guide)
+        return
+    }
+    if sun_salutation_guide.phase != SUN_SALUTATION_PHASE_ROUNDS {
+        finish(app)
         return
     }
     next := SalutationForward(app.sun_salutation)
     app.sun_salutation = next.state
     if next.completed != 0 {
-        finish(app)
+        begin_closing(app)
     }
 }
 
+step_back :: (app: *InnerBreeze) {
+    if sun_salutation_guide.phase == SUN_SALUTATION_PHASE_CLOSING {
+        sun_salutation_guide = SalutationGuide.{.phase = SUN_SALUTATION_PHASE_ROUNDS}
+        app.sun_salutation.step_ticks = 0
+        return
+    }
+    app.sun_salutation = SalutationBack(app.sun_salutation)
+}
+
 advance_seconds :: (app: *InnerBreeze, seconds: float64) {
+    sun_salutation_guide = SalutationGuideFor(sun_salutation_guide, app.sun_salutation)
+    if sun_salutation_guide.phase != SUN_SALUTATION_PHASE_ROUNDS {
+        guided := SalutationGuideAdvance(sun_salutation_guide, app.sun_salutation, seconds)
+        sun_salutation_guide = guided.guide
+        if sun_salutation_guide.phase == SUN_SALUTATION_PHASE_DONE {
+            finish(app)
+            return
+        }
+        if sun_salutation_guide.phase != SUN_SALUTATION_PHASE_ROUNDS || !(guided.remaining > 0.0) {
+            return
+        }
+        seconds = guided.remaining
+    }
     message := PracticeStepFor(app, PRACTICE_SALUTATION_STEP)
     message.elapsed = seconds
     next := PracticeRun(message)
@@ -165,7 +212,7 @@ advance_seconds :: (app: *InnerBreeze, seconds: float64) {
     }
     app.sun_salutation = next.salutation
     if next.completed {
-        finish(app)
+        begin_closing(app)
     }
 }
 
@@ -177,11 +224,18 @@ update_timer :: (app: *InnerBreeze) {
     advance_seconds(app, cast(float64)GetFrameTime())
 }
 
-// Speaks the line for the breath taken now, or only the breath when the
-// line would run past it at this tempo.
+// Speaks the line for the breath taken now. After the first round, whose
+// breaths are long enough for every line, a line that would run past its
+// breath gives way to only the breath.
 sun_salutation_narrate :: (app: *InnerBreeze) {
+    sun_salutation_guide = SalutationGuideFor(sun_salutation_guide, app.sun_salutation)
+    if sun_salutation_guide.phase != SUN_SALUTATION_PHASE_ROUNDS {
+        PracticeNarrationUpdate(app, "sunsalutation", guide_voice_key(app))
+        return
+    }
     key := SunSalutationVoiceKey(app.sun_salutation)
-    if PracticeNarrationSeconds("sunsalutation", key) >
+    if app.sun_salutation.repetition > 0 &&
+    PracticeNarrationSeconds("sunsalutation", key) >
     cast(float64)SalutationBreathSeconds(app.sun_salutation) {
         key = SunSalutationBreathVoiceKey(app.sun_salutation)
     }
@@ -206,6 +260,46 @@ breath_ticks :: (app: *InnerBreeze) -> s32 {
     return ticks
 }
 
+// One settling-in line for each breath of the intro, and the closing line
+// for the rest.
+guide_voice_key :: (app: *InnerBreeze) -> string {
+    if sun_salutation_guide.phase == SUN_SALUTATION_PHASE_INTRO {
+        return SunSalutationIntroVoiceKey(
+            SalutationGuideBreathIndex(sun_salutation_guide, app.sun_salutation))
+    }
+    return SunSalutationClosingVoiceKey()
+}
+
+// The breath being taken now, in the intro, the rounds or the rest.
+current_breath :: (app: *InnerBreeze) -> SalutationBreath {
+    if sun_salutation_guide.phase == SUN_SALUTATION_PHASE_ROUNDS {
+        return SalutationBreathAt(app.sun_salutation)
+    }
+    return SalutationGuideBreathAt(sun_salutation_guide, app.sun_salutation)
+}
+
+// The pose's name, or what the intro and the rest are called.
+guide_heading :: (app: *InnerBreeze) -> string {
+    if sun_salutation_guide.phase == SUN_SALUTATION_PHASE_INTRO {
+        return LocaleText("sun_salutation_intro_title")
+    }
+    if sun_salutation_guide.phase == SUN_SALUTATION_PHASE_CLOSING {
+        return LocaleText("sun_salutation_closing_title")
+    }
+    return SunSalutationPoseName(app.sun_salutation.step)
+}
+
+// One short line on how to hold the body now.
+form_cue :: (app: *InnerBreeze) -> string {
+    if sun_salutation_guide.phase == SUN_SALUTATION_PHASE_INTRO {
+        return LocaleText("sun_salutation_intro_cue")
+    }
+    if sun_salutation_guide.phase == SUN_SALUTATION_PHASE_CLOSING {
+        return LocaleText("sun_salutation_closing_cue")
+    }
+    return LocaleText(SalutationCueKey(app.sun_salutation.step))
+}
+
 // The selected character moving into the current step's pose, then
 // holding it, fitted into the area, on the round's side.
 draw_pose :: (app: *InnerBreeze, area: Rectangle) {
@@ -225,7 +319,7 @@ sun_salutation_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []
     status[0] = 0
     parts: [2]FormatArg = .[
     FormatArg.{.text = breath_label(app), .is_text = true},
-    FormatArg.{.text = SunSalutationPoseName(app.sun_salutation.step), .is_text = true}
+    FormatArg.{.text = guide_heading(app), .is_text = true}
     ]
     FormatTemplate("%s · %s", parts[:], status)
     return AppTextFromCString(*status[0], cast(s32)status.count)
@@ -233,15 +327,19 @@ sun_salutation_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []
 
 // The words for the breath being taken now.
 breath_label :: (app: *InnerBreeze) -> string {
-    breath := SalutationBreathAt(app.sun_salutation)
+    breath := current_breath(app)
     if breath.direction == SUN_SALUTATION_BREATH_IN {
         return LocaleText("sun_salutation_breathe_in")
     }
     return LocaleText("sun_salutation_breathe_out")
 }
 
-// "Step 1" and so on, for the title bar.
+// "Step 1" and so on, for the title bar; the practice's name while
+// settling in and resting.
 step_number :: (app: *InnerBreeze) -> string {
+    if sun_salutation_guide.phase != SUN_SALUTATION_PHASE_ROUNDS {
+        return LocaleText("exercise_sun_salutation")
+    }
     buffer: [48]u8
     if !FormatNumberTemplate(LocaleText("sun_salutation_step_number"),
         app.sun_salutation.step + 1, buffer[:]) {
@@ -250,8 +348,17 @@ step_number :: (app: *InnerBreeze) -> string {
     return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 48))
 }
 
+// The moving figure, or the next step's pose held, on the side that step
+// takes in this round.
 SunSalutationFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
-    draw_pose(app, request.bounds)
+    if !request.preview {
+        draw_pose(app, request.bounds)
+        return
+    }
+    step := SalutationClamp(request.index, 0, SUN_SALUTATION_STEP_COUNT - 1)
+    SunSalutationDrawPose(app.ui.session, app.sun_salutation.character,
+        SunSalutationPose(step, SalutationOtherSide(app.sun_salutation)),
+        SunSalutationStepView(step), request.bounds, request.key, request.alt_text)
 }
 
 sun_salutation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
@@ -259,22 +366,30 @@ sun_salutation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) 
         return
     }
     app.sun_salutation = SalutationNormalizeDraw(app.sun_salutation)
+    sun_salutation_guide = SalutationGuideFor(sun_salutation_guide, app.sun_salutation)
     title_h := PracticeTitleBarHeight()
     if PracticeTitleBar(app, step_number(app), title_h) {
         sun_salutation_request_exit(app)
         return
     }
     practice_draw_audio_controls(app)
-    breath := SalutationBreathAt(app.sun_salutation)
+    breath := current_breath(app)
+    rounds := sun_salutation_guide.phase == SUN_SALUTATION_PHASE_ROUNDS
     frame := PracticeMovementFrameFor(app, EXERCISE_SUN_SALUTATION, title_h)
-    frame.heading = SunSalutationPoseName(app.sun_salutation.step)
+    frame.heading = guide_heading(app)
+    frame.subtitle = form_cue(app)
     frame.cue = breath_label(app)
     frame.progress = ifx breath.direction == SUN_SALUTATION_BREATH_OUT then 1000 - breath.progress else breath.progress
-    frame.can_back = app.sun_salutation.step > 0 || app.sun_salutation.repetition > 0
+    // Sun Salutation's view reads the leg that is back from `phase` and the
+    // next step, counted from 1 (0 for none), from `exercise`.
+    frame.phase = ifx rounds then SalutationBackLeg(app.sun_salutation) else SUN_SALUTATION_SIDE_NONE
+    frame.exercise = SalutationGuideNextStep(sun_salutation_guide, app.sun_salutation) + 1
+    frame.can_back = sun_salutation_guide.phase == SUN_SALUTATION_PHASE_CLOSING ||
+    (rounds && (app.sun_salutation.step > 0 || app.sun_salutation.repetition > 0))
     frame = PracticeMovementRun(app, frame, SunSalutationFigure)
     if frame.action == PRACTICE_MOVEMENT_BACK && frame.can_back {
         PracticeNarrationStop()
-        app.sun_salutation = SalutationBack(app.sun_salutation)
+        step_back(app)
         return
     }
     if frame.action == PRACTICE_MOVEMENT_PAUSE {

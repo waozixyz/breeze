@@ -29,6 +29,7 @@
 #import, file "../../src/apps/practice_types.zi";
 #import, file "../../src/app/exercise_types.zi";
 #import, file "workout_rules.zi";
+#import, file "../../src/practices/sun_salutation/sun_salutation_rules.zi";
 #import, file "figure_view.zi";
 
 using ExerciseType;
@@ -104,10 +105,71 @@ CenteredLine :: (text: string, y: s32, preferred: s32, minimum: s32, strong: boo
     return y + TextHeight(movement.session, TextProps.{.text = "M", .font = font})
 }
 
+// The step that follows, held small beside its name, in a row across the
+// bottom of the stage; returns the stage left for the moving figure.
+SunSalutationNext :: (stage: Rectangle, step: s32) -> Rectangle {
+    row_h := cast(s32)stage.height / 5
+    if row_h > Scale(96) {
+        row_h = Scale(96)
+    }
+    if row_h < Scale(56) || cast(s32)stage.height - row_h < Scale(160) {
+        return stage
+    }
+    label := Locale("sun_salutation_next")
+    name := Locale(SalutationStepKey(step))
+    font := Scale(14)
+    emphasis: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)name.count}]
+    text_w := TextWidth(movement.session, TextProps.{.text = name, .font = font, .strong = emphasis[:1]})
+    label_w := TextWidth(movement.session, TextProps.{.text = label, .font = font})
+    if label_w > text_w {
+        text_w = label_w
+    }
+    if text_w > cast(s32)stage.width - row_h - Scale(32) {
+        text_w = cast(s32)stage.width - row_h - Scale(32)
+    }
+    card_w := row_h + Scale(12) + text_w + Scale(16)
+    card := Bounds(cast(s32)stage.x + (cast(s32)stage.width - card_w) / 2,
+        cast(s32)(stage.y + stage.height) - row_h, card_w, row_h)
+    Box(movement.session, BoxProps.{.bounds = card, .fill = Alpha(movement.text_color, 0.06),
+            .radius = cast(float32)Scale(12)})
+    inset := Scale(4)
+    PracticeFigure(PracticeFigureRequest.{.practice = movement.practice, .preview = true,
+            .index = step, .bounds = Bounds(cast(s32)card.x + inset, cast(s32)card.y + inset,
+            row_h - inset * 2, row_h - inset * 2),
+            .key = KeyHash("sun-salutation/next"), .alt_text = name})
+    line_h := TextHeight(movement.session, TextProps.{.text = "M", .font = font})
+    text_x := cast(s32)card.x + row_h + Scale(12)
+    text_y := cast(s32)card.y + (row_h - line_h * 2) / 2
+    Text(movement.session, TextProps.{.text = label, .bounds = Bounds(text_x, text_y, text_w, line_h),
+            .font = font, .class_name = movement.muted_class, .wrap = cast(TextWrap)TextWrapEllipsis})
+    Text(movement.session, TextProps.{.text = name, .bounds = Bounds(text_x, text_y + line_h, text_w, line_h),
+            .font = font, .strong = emphasis[:1], .wrap = cast(TextWrap)TextWrapEllipsis})
+    stage.height -= cast(float32)(row_h + Scale(8))
+    return stage
+}
+
+// The pose and how to hold it, the leg that is back in a lunge, the breath
+// with its bar, the moving figure and the pose that comes next.
 SunSalutation :: () {
     bottom := Controls() - Scale(18)
     y := CenteredLine(movement.heading, movement.top + Scale(18), Scale(24), Scale(20), true)
-    y = CenteredLine(movement.cue, y + Scale(2), Scale(20), Scale(18), false)
+    text_w := movement.view_width - Scale(48)
+    if text_w > Scale(560) {
+        text_w = Scale(560)
+    }
+    if movement.subtitle.count > 0 {
+        cue_h := ParagraphHeight(movement.subtitle, text_w, Scale(16))
+        Text(movement.session, TextProps.{.text = movement.subtitle,
+                .bounds = Bounds((movement.view_width - text_w) / 2, y + Scale(2), text_w, cue_h),
+                .font = Scale(16), .class_name = movement.muted_class,
+                .align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapAuto})
+        y += Scale(2) + cue_h
+    }
+    side := SalutationSideKey(movement.phase)
+    if side.count > 0 {
+        y = CenteredLine(Locale(side), y + Scale(4), Scale(18), Scale(16), true)
+    }
+    y = CenteredLine(movement.cue, y + Scale(6), Scale(20), Scale(18), false)
     width := movement.view_width - Scale(96)
     if width > Scale(280) {
         width = Scale(280)
@@ -116,8 +178,11 @@ SunSalutation :: () {
     Progress(movement.session, ProgressProps.{.bounds = Bounds((movement.view_width - width) / 2,
             y, width, Scale(10)), .min = 0, .max = 1000, .value = movement.progress})
     y += Scale(22)
-    Figure(Bounds(Scale(24), y, movement.view_width - Scale(48), bottom - y),
-        "sun-salutation/figure", Locale("exercise_sun_salutation"))
+    stage := Bounds(Scale(24), y, movement.view_width - Scale(48), bottom - y)
+    if movement.exercise > 0 {
+        stage = SunSalutationNext(stage, movement.exercise - 1)
+    }
+    Figure(stage, "sun-salutation/figure", Locale("exercise_sun_salutation"))
 }
 
 TaiChi :: () {
