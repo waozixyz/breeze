@@ -14,6 +14,7 @@
 - Pictures in a practice no longer flicker while its narration downloads.
 - Sun Salutation narration speaks every pose and names the leg in each lunge.
 - Sun Salutation guides each pose with a form cue, the leg that steps back and the next pose, settles in before the first round and rests after the last.
+- Sun Salutation names the next pose in one quiet centered line.
 - Breath and bell cues play even when Practices is still loading at startup.
 - Sync recovers when an earlier full download stopped partway.
 

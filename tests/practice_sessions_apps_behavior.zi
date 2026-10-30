@@ -14,6 +14,7 @@
 #import "tree"
 #import "tree_draw"
 #import "paint_queue"
+#import "widget_kind"
 #import "bundle_host"
 #import "byte_text_linux"
 #import "hosted_values"
@@ -26,6 +27,7 @@
 
 using HostValueKind;
 using ExerciseType;
+using WidgetKind;
 
 sessions_test_meditation: PracticeMeditationFrame;
 sessions_test_meditation_codec: WidgetPracticeMeditationFrameCodec;
@@ -39,6 +41,9 @@ sessions_test_movement_codec: WidgetPracticeMovementFrameCodec;
 sessions_test_figure_codec: WidgetPracticeFigureRequestCodec;
 sessions_test_figures: s32;
 sessions_test_figure: PracticeFigureRequest;
+sessions_test_next_label: bool;
+sessions_test_next_name: bool;
+sessions_test_next_card: bool;
 sessions_test_native_app: InnerBreeze;
 sessions_test_native_paints: s32;
 sessions_test_course: PracticeCourseFrame;
@@ -70,7 +75,13 @@ SessionsTestCall :: (context: *void, module: *u8, function: *u8,
             return 1
         }
         if name == "MovementLocaleHost" && count == 1 {
+            key := HostValueText(arguments[0])
             text := "Practice"
+            if key == "sun_salutation_next" {
+                text = "Next"
+            } else if key == "sun_salutation_step_3" {
+                text = "Upward salute"
+            }
             result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
                 .data = HostTextData(text), .length = cast(usize)text.count}
             return 1
@@ -160,6 +171,9 @@ SessionsTestDraw :: (action: s32, frame_id: u64) -> s32 {
     sessions_test_course.session = session
     sessions_test_writes = 0
     sessions_test_figures = 0
+    sessions_test_next_label = false
+    sessions_test_next_name = false
+    sessions_test_next_card = false
     WidgetHostBegin(session, SessionsTestAssets)
     AppsUiBegin(SessionsTestCall, null)
     drawn := PracticeRun(PracticeMessage.{.action = action})
@@ -167,6 +181,27 @@ SessionsTestDraw :: (action: s32, frame_id: u64) -> s32 {
     WidgetHostEnd()
     painted := PendingPaintCount(session)
     unused EndFrame(session)
+    next_bounds: Rectangle
+    for index: cast(s32)0..TreeCount(session) - 1 {
+        node := TreeNodeAt(session, index)
+        if node.semantic_label == "Next ·" {
+            sessions_test_next_label = true
+            next_bounds = node.bounds
+        }
+        if node.semantic_label == "Upward salute" {
+            sessions_test_next_name = true
+        }
+    }
+    center_x := next_bounds.x + next_bounds.width / 2.0
+    center_y := next_bounds.y + next_bounds.height / 2.0
+    for index: cast(s32)0..TreeCount(session) - 1 {
+        node := TreeNodeAt(session, index)
+        if node.kind == WidgetKindBox && node.bounds.x <= center_x &&
+        node.bounds.x + node.bounds.width >= center_x && node.bounds.y <= center_y &&
+        node.bounds.y + node.bounds.height >= center_y {
+            sessions_test_next_card = true
+        }
+    }
     unused SessionClose(session)
     if !drawn.succeeded {
         return 1
@@ -341,11 +376,12 @@ CheckPracticeSessions :: () -> s32 {
             if tested != 0 {
                 return 20 + tested
             }
-            // Sun Salutation also holds the next pose (`exercise`, from 1)
-            // small before its moving figure.
-            figures := ifx practices[index] == EXERCISE_SUN_SALUTATION then 2 else 1
+            // Sun Salutation names the next pose in one quiet text line,
+            // without a preview card or a second figure.
+            figures := 1
             if sessions_test_movement.action != PRACTICE_MOVEMENT_NONE || sessions_test_figures != figures ||
-            sessions_test_figure.preview {
+            sessions_test_figure.preview || (practices[index] == EXERCISE_SUN_SALUTATION &&
+            (!sessions_test_next_label || !sessions_test_next_name || sessions_test_next_card)) {
                 return 24
             }
             area := sessions_test_figure.bounds

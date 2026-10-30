@@ -24,6 +24,7 @@
 #import "scroll_widget"
 #import "segmented_control_props"
 #import "segmented_control_widget"
+#import "std/text_tools"
 #import "tree"
 #import, file "../../src/apps/practice_ui_types.zi";
 #import, file "../../src/apps/practice_types.zi";
@@ -105,46 +106,45 @@ CenteredLine :: (text: string, y: s32, preferred: s32, minimum: s32, strong: boo
     return y + TextHeight(movement.session, TextProps.{.text = "M", .font = font})
 }
 
-// The step that follows, held small beside its name, in a row across the
-// bottom of the stage; returns the stage left for the moving figure.
+// The name of the step that follows, as one quiet line across the bottom of
+// the stage; returns the stage left for the moving figure.
 SunSalutationNext :: (stage: Rectangle, step: s32) -> Rectangle {
-    row_h := cast(s32)stage.height / 5
-    if row_h > Scale(96) {
-        row_h = Scale(96)
-    }
-    if row_h < Scale(56) || cast(s32)stage.height - row_h < Scale(160) {
+    label_parts: [2]string = .[Locale("sun_salutation_next"), ""]
+    label := TextJoin(label_parts[:], " ·")
+    name := Locale(SalutationStepKey(step))
+    font := Scale(16)
+    emphasis: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)name.count}]
+    line_h := TextHeight(movement.session, TextProps.{.text = "M", .font = font})
+    if cast(s32)stage.height - line_h < Scale(160) {
         return stage
     }
-    label := Locale("sun_salutation_next")
-    name := Locale(SalutationStepKey(step))
-    font := Scale(14)
-    emphasis: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)name.count}]
-    text_w := TextWidth(movement.session, TextProps.{.text = name, .font = font, .strong = emphasis[:1]})
+    // A word space between "Next ·" and the pose name.
+    space := Scale(5)
+    available := cast(s32)stage.width - Scale(32) - space
     label_w := TextWidth(movement.session, TextProps.{.text = label, .font = font})
-    if label_w > text_w {
-        text_w = label_w
+    name_w := TextWidth(movement.session,
+        TextProps.{.text = name, .font = font, .strong = emphasis[:1]})
+    if label_w + name_w > available {
+        font = Scale(14)
+        line_h = TextHeight(movement.session, TextProps.{.text = "M", .font = font})
+        label_w = TextWidth(movement.session, TextProps.{.text = label, .font = font})
+        name_w = TextWidth(movement.session,
+            TextProps.{.text = name, .font = font, .strong = emphasis[:1]})
     }
-    if text_w > cast(s32)stage.width - row_h - Scale(32) {
-        text_w = cast(s32)stage.width - row_h - Scale(32)
+    if label_w + name_w > available && name_w > available - label_w {
+        if label_w > available {
+            label_w = available
+        }
+        name_w = available - label_w
     }
-    card_w := row_h + Scale(12) + text_w + Scale(16)
-    card := Bounds(cast(s32)stage.x + (cast(s32)stage.width - card_w) / 2,
-        cast(s32)(stage.y + stage.height) - row_h, card_w, row_h)
-    Box(movement.session, BoxProps.{.bounds = card, .fill = Alpha(movement.text_color, 0.06),
-            .radius = cast(float32)Scale(12)})
-    inset := Scale(4)
-    PracticeFigure(PracticeFigureRequest.{.practice = movement.practice, .preview = true,
-            .index = step, .bounds = Bounds(cast(s32)card.x + inset, cast(s32)card.y + inset,
-            row_h - inset * 2, row_h - inset * 2),
-            .key = KeyHash("sun-salutation/next"), .alt_text = name})
-    line_h := TextHeight(movement.session, TextProps.{.text = "M", .font = font})
-    text_x := cast(s32)card.x + row_h + Scale(12)
-    text_y := cast(s32)card.y + (row_h - line_h * 2) / 2
-    Text(movement.session, TextProps.{.text = label, .bounds = Bounds(text_x, text_y, text_w, line_h),
+    line_w := label_w + space + name_w
+    line_x := cast(s32)stage.x + (cast(s32)stage.width - line_w) / 2
+    line_y := cast(s32)(stage.y + stage.height) - line_h
+    Text(movement.session, TextProps.{.text = label, .bounds = Bounds(line_x, line_y, label_w, line_h),
             .font = font, .class_name = movement.muted_class, .wrap = cast(TextWrap)TextWrapEllipsis})
-    Text(movement.session, TextProps.{.text = name, .bounds = Bounds(text_x, text_y + line_h, text_w, line_h),
+    Text(movement.session, TextProps.{.text = name, .bounds = Bounds(line_x + label_w + space, line_y, name_w, line_h),
             .font = font, .strong = emphasis[:1], .wrap = cast(TextWrap)TextWrapEllipsis})
-    stage.height -= cast(float32)(row_h + Scale(8))
+    stage.height -= cast(float32)(line_h + Scale(8))
     return stage
 }
 
