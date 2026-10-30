@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Mark Telegram-relayed Lumi messages with their source.
 - Collapse each break kind in settings and expand it on click.
 - Keep Linux break reminder text and progress bars in separate rows.
 - Catalog games can award their own achievements, with the usual top-right notification.

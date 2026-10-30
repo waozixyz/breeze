@@ -255,6 +255,14 @@ LumiStoreLoad :: () {
                     payload = TextFromBytes(payload_bytes[:payload_length])
                     rich_valid = ifx kind == LUMI_CHAT_PROGRESS then LumiChartRead(payload).valid else payload.count == 32
                 }
+            } else if kind == LUMI_CHAT_TEXT && user.value == 1.0 {
+                source_bytes: [16]u8
+                payload_length := ReadStringText(document, FieldAt(document, element, "payload"), source_bytes[:])
+                if payload_length > 0 {
+                    source := TextFromBytes(source_bytes[:payload_length])
+                    rich_valid = source == "telegram"
+                    if rich_valid { payload = "telegram" }
+                }
             }
             rich_valid = rich_valid && (kind == LUMI_CHAT_TEXT || user.value == 0.0)
         }
@@ -355,7 +363,8 @@ LumiStoreSave :: () -> bool {
 }
 
 LumiStoreAppend :: (text: string, user: bool) {
-    unused LumiStoreAppendCard(text, user, LUMI_CHAT_TEXT, "")
+    source := LumiTelegramMessageSource(lumi_next_message_id)
+    unused LumiStoreAppendCard(text, user, LUMI_CHAT_TEXT, source)
 }
 
 LumiStoreAppendCard :: (text: string, user: bool, kind: s32, payload: string) -> bool {
@@ -371,11 +380,12 @@ LumiStoreAppendRow :: (message: LumiChatRow) -> bool {
     if text.count == 0 || text.count >= LUMI_INPUT_MAX {
         return false
     }
+    telegram_source := user && kind == LUMI_CHAT_TEXT && payload == "telegram"
     if kind < LUMI_CHAT_TEXT || kind > LUMI_CHAT_FEEDBACK || kind == LUMI_CHAT_RETIRED ||
     (kind != LUMI_CHAT_TEXT && user) ||
     (kind == LUMI_CHAT_PROGRESS && !LumiChartRead(payload).valid) ||
     (kind == LUMI_CHAT_FEEDBACK && payload.count != 32) ||
-    (kind != LUMI_CHAT_PROGRESS && kind != LUMI_CHAT_FEEDBACK && payload.count != 0) {
+    (!telegram_source && kind != LUMI_CHAT_PROGRESS && kind != LUMI_CHAT_FEEDBACK && payload.count != 0) {
         return false
     }
     if (message.developer && (user || kind != LUMI_CHAT_TEXT)) ||

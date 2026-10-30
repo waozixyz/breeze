@@ -3,6 +3,7 @@
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/app/app_types.zi";
 #import, file "../src/apps/inbe_types.zi";
+#import, file "../src/apps/lumi_types.zi";
 #import, file "../src/apps/lumi_online.zi";
 #import, file "../src/apps/lumi_connection.zi";
 #import, file "../src/storage/storage_settings.zi";
@@ -77,6 +78,9 @@ InputTestTransport :: () -> AsyncTransport {
 Check :: () -> s32 {
     transport := InputTestTransport()
     check_true("fixture transport available", transport.start != null)
+    check_true("telegram update ids choose the Telegram source",
+        LumiTelegramMessageSource("telegram-17") == "telegram")
+    check_true("local message ids stay local", LumiTelegramMessageSource("local-17") == "")
     guard := support_begin("/tmp/inbe-lumi-telegram-input-test/")
     if guard != 0 {
         return guard
@@ -113,7 +117,11 @@ Check :: () -> s32 {
     check_int("app history never posts to Telegram", mirrors, 0)
     check_true("input polling retained", polls > 0)
     check_true("input acknowledged", acks > 0)
-    check_true("incoming message archived", contains(storage_get_setting_text("cell.lumi.message.telegram-17"), "/habits"))
+    incoming_record := storage_get_setting_text("cell.lumi.message.telegram-17")
+    check_true("incoming message archived", contains(incoming_record, "/habits"))
+    check_true("incoming message records Telegram as its source", contains(incoming_record, "\"payload\":\"telegram\""))
+    check_true("incoming message exposes Telegram in the chat row", LumiStoreRow(142).payload == "telegram")
+    check_true("local app message stays unlabelled", LumiStoreRow(140).payload == "")
     check_true("incoming execution claim retained", storage_get_setting_int("telegram.update.17", 0) == 1)
     check_true("input schedules regular account sync", app.ui.sync_requested)
     check_int("input and its response appended once", LumiStoreCount(), expected)
@@ -129,6 +137,7 @@ Check :: () -> s32 {
     check_true("oldest history stays visible", LumiStoreRow(0).text == "1")
     check_true("app conversation stays visible", LumiStoreRow(140).text == "App message" && LumiStoreRow(141).text == "App response")
     check_true("incoming history stays visible", LumiStoreRow(142).text == "/habits" && LumiStoreRow(143).text == "No habits yet.")
+    check_true("Telegram source survives reopening", LumiStoreRow(142).payload == "telegram")
     check_int("complete account outbox survives reopening", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='cell_record' AND entity_id LIKE 'cell.lumi.message.%'"), expected)
     SecureWipe(*owner.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
     storage_close()
