@@ -21,6 +21,9 @@
 #
 #   sh scripts/release-ready.sh             every covered job; writes the stamp
 #   sh scripts/release-ready.sh TARGET...   only these make targets; no stamp
+# RELEASE_READY_INCREMENTAL=1 (targets only) keeps the times of files the
+# commit did not change and the Gradle and CMake build directories between
+# runs, so a rebuild compiles only what changed (scripts/phone-install.sh).
 # RELEASE_READY_DNS optionally supplies a resolver when rootless DNS is broken.
 set -eu
 
@@ -57,11 +60,24 @@ print(module.release_content(module.ROOT, sys.argv[1]))
 PY_CONTENT
 )
 snapshot=$(cat scripts/check-release-overlay.py)
+incremental=""
+if [ -n "${RELEASE_READY_INCREMENTAL:-}" ]; then
+    [ "$#" -gt 0 ] || { echo "release-ready: RELEASE_READY_INCREMENTAL needs make targets; full runs start clean" >&2; exit 2; }
+    incremental=1
+fi
 
 # Runs inside the container, from this variable rather than the script file,
 # because resetting the overlay to HEAD may rewrite this script.
 inside='set -eu
-python3 -c "$RELEASE_READY_SNAPSHOT" /src "$RELEASE_READY_COMMIT"
+if [ -n "$RELEASE_READY_INCREMENTAL" ]; then
+    python3 -c "$RELEASE_READY_SNAPSHOT" /src "$RELEASE_READY_COMMIT" build/incremental/source-times.json
+    for directory in droid/.gradle droid/.kotlin droid/build droid/app/build droid/app/.cxx; do
+        mkdir -p "build/incremental/$directory"
+        ln -s "/src/build/incremental/$directory" "$directory"
+    done
+else
+    python3 -c "$RELEASE_READY_SNAPSHOT" /src "$RELEASE_READY_COMMIT"
+fi
 failed=""
 job() {
     name=$1
@@ -98,7 +114,11 @@ if [ -n "$failed" ]; then
     exit 1
 fi
 git diff --exit-code "$RELEASE_READY_COMMIT" -- .
-printf "\nrelease-ready: every covered local CI job passed\n"'
+if [ "$#" -gt 0 ]; then
+    printf "\nrelease-ready: make %s passed\n" "$*"
+else
+    printf "\nrelease-ready: every covered local CI job passed\n"
+fi'
 
 mkdir -p "$output/build" "$output/home"
 sync_server=""
@@ -161,6 +181,7 @@ podman run --rm --pull=never --userns=keep-id \
     -v "$sync_mount_source:/sync-server:O" \
     $android_mount \
     -e HOME=/home/ubuntu -e CI=true -e RELEASE_READY_COMMIT="$commit" \
+    -e RELEASE_READY_INCREMENTAL="$incremental" \
     -e RELEASE_READY_SNAPSHOT="$snapshot" \
     -w /src "$image" sh -c "$inside" release-ready "$@" || status=$?
 

@@ -4,7 +4,10 @@
 # the locked packages and none of the uncommitted work in the checkout or its
 # local package overrides), sign it with this machine's Android debug key so
 # it updates the installed app with its data kept, install it, check that the
-# phone holds exactly that APK, and open it from the launcher.
+# phone holds exactly that APK, and open it from the launcher. Builds are
+# incremental: files the commit left unchanged keep their earlier times, and
+# the Gradle and CMake build directories stay in build/release-ready-phone/,
+# so after a small change only that change rebuilds.
 #
 #   sh scripts/phone-install.sh                     HEAD on the Pixel 3a
 #   sh scripts/phone-install.sh --device moto       HEAD on the Moto e6 play
@@ -72,7 +75,9 @@ fi
 if [ -z "$apk" ]; then
     commit=$(git rev-parse "$revision^{commit}")
     echo "phone-install: building $(git log -1 --format='%h %s' "$commit")"
-    RELEASE_READY_REVISION=$commit RELEASE_READY_OUTPUT=$output \
+    # A failed build must not leave an earlier APK to install.
+    find "$output/build/android" -name "app*-$abi-debug.apk" -delete 2>/dev/null || true
+    RELEASE_READY_REVISION=$commit RELEASE_READY_OUTPUT=$output RELEASE_READY_INCREMENTAL=1 \
         sh scripts/release-ready.sh ANDROID_ABI="$abi" android-debug
     apk=$(find "$output/build/android" -name "app*-$abi-debug.apk" | head -n 1)
     [ -f "$apk" ] || fail "the build left no app-$abi-debug.apk in $output/build/android"

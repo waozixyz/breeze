@@ -20,8 +20,13 @@ sources = sorted((root / "src").rglob("*.zi"))
 sources.append(root / "apps/practice/hold_reminder.zi")
 if list((root / "src").rglob("*.c")) or list((root / "src").rglob("*.kry")):
     raise SystemExit("Android application implementation must be current Zi")
+# The compiler writes every file anew. Outputs with the same bytes as before
+# get their earlier times back, so the native build recompiles only changes.
+previous = args.output.with_name(args.output.name + ".previous")
+if previous.exists():
+    shutil.rmtree(previous)
 if args.output.exists():
-    shutil.rmtree(args.output)
+    args.output.rename(previous)
 args.output.mkdir(parents=True)
 command = ["sh", str(root / "scripts/run-ziran.sh"), str(args.compiler),
            "--no-main", "--root", str(root)]
@@ -43,6 +48,13 @@ if completed.returncode != 0:
     # The compiler already printed precise diagnostics; avoid repeating the
     # entire application source list inside a Python exception traceback.
     raise SystemExit(completed.returncode)
+for output in args.output.rglob("*"):
+    earlier = previous / output.relative_to(args.output)
+    if output.is_file() and earlier.is_file() and output.read_bytes() == earlier.read_bytes():
+        times = earlier.stat()
+        os.utime(output, ns=(times.st_atime_ns, times.st_mtime_ns))
+if previous.exists():
+    shutil.rmtree(previous)
 outputs = sorted(args.output.rglob("*.c"))
 if not outputs:
     raise SystemExit("Zi compiler emitted no Android native sources")
