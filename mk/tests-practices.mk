@@ -110,6 +110,12 @@ sun-salutation-artwork-test: $(ZI2C_BIN)
 
 test: sun-salutation-artwork-test
 
+.PHONY: sun-salutation-voice-test
+sun-salutation-voice-test: $(ZI2C_BIN)
+	sh tests/practice_figure_test.sh $(ZIRAN_BUILD_DIR)/bin tests/sun_salutation_voice_behavior.zi
+
+test: sun-salutation-voice-test
+
 practice-narration-keys-test:
 	python3 tests/practice_narration_keys_test.py
 

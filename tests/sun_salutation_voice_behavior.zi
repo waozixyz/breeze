@@ -1,0 +1,132 @@
+// Every breath of Sun Salutation speaks a line, and the lunges name the leg
+// that actually moves. tests/practice_narration_keys_test.py checks that each
+// of these lines is recorded in every language and fits the breath.
+#import, file "../src/practices/sun_salutation/sun_salutation_labels.zi";
+#import, file "../src/practices/sun_salutation/sun_salutation_pose.zi";
+#import, file "../src/practices/sun_salutation/sun_salutation_rules.zi";
+
+// The labels' locale lookup links against the embedded assets; this test
+// reads no locale text.
+#program_export "asset_entry_at"
+asset_entry_at :: (index: usize) -> *void {
+    return null
+}
+#program_export "asset_entry_total"
+asset_entry_total :: () -> usize {
+    return 0
+}
+
+// The state `breath` breaths into `step` of the `round`th round, from 0.
+VoiceStateAt :: (round: s32, step: s32, breath: s32) -> SunSalutationPracticeState {
+    state := SalutationInit(SunSalutationPracticeState.{})
+    state.repetition = round
+    state.step = step
+    state.step_ticks = breath * SalutationBreathSeconds(state) * 60 + 1
+    return state
+}
+
+// The line expected for a breath, written out pose by pose.
+ExpectedVoiceKey :: (round: s32, step: s32, breath: s32) -> string {
+    other := round % 2 == 1
+    if step == 0 {
+        return "sun_salutation_voice_mountain_start"
+    }
+    if step == 1 {
+        return "sun_salutation_voice_salute"
+    }
+    if step == 2 || step == 9 {
+        return "sun_salutation_voice_fold"
+    }
+    if step == 3 {
+        return ifx other then "sun_salutation_voice_lunge_left" else "sun_salutation_voice_lunge_right"
+    }
+    if step == 4 {
+        return ifx breath == 0 then "sun_salutation_voice_plank" else "sun_salutation_voice_plank_hold"
+    }
+    if step == 5 {
+        return "sun_salutation_voice_knees_chest_chin"
+    }
+    if step == 6 {
+        return "sun_salutation_voice_cobra"
+    }
+    if step == 7 {
+        return "sun_salutation_voice_downward_dog"
+    }
+    if step == 8 {
+        return ifx other then "sun_salutation_voice_step_forward_left" else "sun_salutation_voice_step_forward_right"
+    }
+    if step == 10 {
+        return "sun_salutation_voice_rise"
+    }
+    return "sun_salutation_voice_mountain_end"
+}
+
+CheckBreathLines :: () -> s32 {
+    for round: cast(s32)0..3 {
+        for step: cast(s32)0..SUN_SALUTATION_STEP_COUNT - 1 {
+            for breath: cast(s32)0..SalutationStepBreaths(step) - 1 {
+                key := SunSalutationVoiceKey(VoiceStateAt(round, step, breath))
+                if key.count == 0 || key != ExpectedVoiceKey(round, step, breath) {
+                    return 100 + round * 100 + step * 2 + breath
+                }
+            }
+        }
+    }
+    return 0
+}
+
+// Side 1 of the rig is the right: the first round's lunge has the right
+// foot back, and the next round's has the left.
+CheckLungeSides :: () -> s32 {
+    first := SunSalutationPose(SUN_SALUTATION_LUNGE_BACK_STEP, false)
+    if first.feet[1].z >= first.feet[0].z {
+        return 501
+    }
+    other := SunSalutationPose(SUN_SALUTATION_LUNGE_BACK_STEP, true)
+    if other.feet[0].z >= other.feet[1].z {
+        return 502
+    }
+    // Stepping forward from downward dog brings that same foot forward:
+    // the other knee is the one left down.
+    forward := SunSalutationPose(SUN_SALUTATION_LUNGE_FORWARD_STEP, false)
+    if forward.feet[1].z <= forward.feet[0].z {
+        return 503
+    }
+    return 0
+}
+
+CheckIntroAndClosing :: () -> s32 {
+    if SUN_SALUTATION_INTRO_LINE_COUNT < 2 {
+        return 601
+    }
+    for index: cast(s32)0..SUN_SALUTATION_INTRO_LINE_COUNT - 1 {
+        if SunSalutationIntroVoiceKey(index).count == 0 {
+            return 602
+        }
+    }
+    if SunSalutationIntroVoiceKey(-1).count != 0 ||
+    SunSalutationIntroVoiceKey(SUN_SALUTATION_INTRO_LINE_COUNT).count != 0 {
+        return 603
+    }
+    if SunSalutationClosingVoiceKey() != "sun_salutation_voice_closing" {
+        return 604
+    }
+    return 0
+}
+
+#program_export
+Answer :: () -> s32 {
+    failure := CheckBreathLines()
+    if failure != 0 {
+        return failure
+    }
+    failure = CheckLungeSides()
+    if failure != 0 {
+        return failure
+    }
+    failure = CheckIntroAndClosing()
+    if failure != 0 {
+        return failure
+    }
+    return 42
+}
