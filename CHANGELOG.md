@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 - Catalog games can award their own achievements, with the usual top-right notification.
+- Friends, Lists and requests show the profile picture each friend chose in any app, abstract pictures included.
+- Your profile picture reaches friends the same way as from every other app, and only once you choose one.
 
 ## [2.1.61] - 2026-10-29
 

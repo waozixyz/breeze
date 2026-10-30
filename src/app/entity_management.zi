@@ -6,6 +6,7 @@ Recovery :: #import "entity/recovery";
 Native :: #import "entity/native_files";
 Entity :: #import "entity/model";
 Pairing :: #import "entity/pairing_client";
+Publish :: #import "entity/picture_publish";
 PairingTypes :: #import "entity/pairing";
 #import "daochi_client/keys"
 #import "daochi_client/crypto"
@@ -14,10 +15,12 @@ PairingTypes :: #import "entity/pairing";
 #import "std/text_buffer"
 #import "std/vec"
 #import "std/file"
+#import "std/date_time_linux"
 #import "file_picker"
 #import "file_export"
 #import "kryon/android_picker"
 #import, file "app_types.zi";
+#import, file "profile_picture_policy.zi";
 #import, file "locale.zi";
 #import, file "../storage/account_types.zi";
 #import, file "../storage/sync_account.zi";
@@ -55,6 +58,60 @@ entity_management_selected: [4096]u8;
 entity_management_signing: AccountKeys;
 entity_management_server: [256]u8;
 entity_management_client: [64]u8;
+// The chosen profile picture reaches the node through Entity's publisher,
+// as it does from every other app.
+entity_picture: Publish.EntityPicturePublisher;
+entity_picture_chosen: s32;
+entity_picture_published: s32;
+entity_picture_checked: s64;
+
+// The picture a new account starts with, before anyone chooses one.
+InbeStartingPicture :: (owner: string) -> s32 {
+    state := Entity.EntityDefault()
+    state.pictures &= ~((1 << 21) | (1 << 22) | (1 << 23))
+    return Entity.EntityPictureIcon(0, Entity.EntityInitialPicture(owner, state.pictures), 0)
+}
+
+// A picture the person picked, kept apart from the starting picture.
+InbeProfilePictureChosen :: (icon: s32) {
+    storage_set_setting_int("profile_picture_chosen", icon)
+    entity_picture_checked = 0
+}
+
+InbeChosenPicture :: () -> s32 {
+    chosen := storage_get_setting_int("profile_picture_chosen", -1)
+    if chosen >= 0 {
+        return chosen
+    }
+    saved := storage_get_setting_int("profile_picture_icon", -1)
+    owner: [65]u8
+    unused CopyCString(storage_get_setting_text("sync_public_id"), owner[:])
+    chosen = ProfilePictureEarlierChoice(saved, InbeStartingPicture(TextUntilNul(owner[:])))
+    storage_set_setting_int("profile_picture_chosen", chosen)
+    return chosen
+}
+
+InbePicturePump :: () {
+    now := UnixNow()
+    if !entity_picture.active && now >= entity_picture_checked {
+        entity_picture_checked = now + 5
+        entity_picture_chosen = InbeChosenPicture()
+        owner: [65]u8
+        unused CopyCString(storage_get_setting_text("sync_public_id"), owner[:])
+        entity_picture_published = 0
+        if storage_get_setting_text("profile_icon_published_owner") == TextUntilNul(owner[:]) {
+            entity_picture_published = storage_get_setting_int("profile_icon_published", 0)
+        }
+    }
+    accepted := Publish.EntityPicturePublishPump(*entity_picture, *entity_management,
+        entity_picture_chosen, entity_picture_published, now)
+    if accepted == 0 {
+        return
+    }
+    storage_set_setting_int("profile_icon_published", accepted)
+    storage_set_setting_text("profile_icon_published_owner", TextUntilNul(entity_picture.owner[:]))
+    entity_picture_published = accepted
+}
 
 InbeEntityOwner :: (output: []u8) -> bool {
     account: AccountKeys
@@ -128,8 +185,7 @@ InbeRecoveryApply :: (context: *void, incoming: *Recovery.Recovery, choice: s32)
         state := Entity.EntityDefault()
         state.pictures &= ~((1 << 21) | (1 << 22) | (1 << 23))
         state.picture = Entity.EntityInitialPicture(TextUntilNul(incoming.keys.public_id[:]), state.pictures)
-        icon := ifx state.picture >= 25 then 124 + state.picture - 25 else 41 + state.picture
-        storage_set_setting_int("profile_picture_icon", icon)
+        storage_set_setting_int("profile_picture_icon", InbeStartingPicture(TextUntilNul(incoming.keys.public_id[:])))
         state.owner_id = incoming.keys.public_id
         unused Native.SharedProfileSave(TextUntilNul(state.owner_id[:]), state)
     }
@@ -406,6 +462,7 @@ InbeManagementPump :: (app: *InnerBreeze) {
         entity_management.delegated = false
     }
     Provider.ProviderPump(*entity_management)
+    InbePicturePump()
     InbeManagementDiscardPicker()
     if !entity_management.queue.pending && entity_management_selected[0] != cast(u8)0 {
         unused RemoveFile(TextUntilNul(entity_management_selected[:]))

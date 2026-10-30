@@ -7,9 +7,9 @@ work=$root/build/profile-picture-policy-test
 source=$root/tests/profile_picture_policy_behavior.zi
 
 mkdir -p "$work/ir" "$work/c"
-"$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
+"$bin/zi2zir" --root "$root/tests" --module-path "$root/src" --module-path entity="$root/build/packages/entity/src" --module-path "$root/build/packages/ziran/std" \
     -o "$work/ir" "$source"
-"$bin/zi2zx" bundle --root "$root/tests" --module-path "$root/src" \
+"$bin/zi2zx" bundle --root "$root/tests" --module-path "$root/src" --module-path entity="$root/build/packages/entity/src" --module-path "$root/build/packages/ziran/std" \
     --entry profile_picture_policy_behavior:Answer \
     -o "$work/source.zx" "$source"
 "$bin/zi2zx" bundle --root "$work/ir" --module-path "$work/ir" \
@@ -19,7 +19,7 @@ mkdir -p "$work/ir" "$work/c"
 [ "$(env -u DISPLAY -u WAYLAND_DISPLAY "$bin/zi2zx" run "$work/saved.zx")" = 42 ]
 cmp "$work/source.zx" "$work/saved.zx"
 
-"$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
+"$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" --module-path entity="$root/build/packages/entity/src" --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$source"
 cat > "$work/c/main.c" <<'C'
 #include "profile_picture_policy_behavior.h"

@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Show the profile pictures friends chose in any app, abstract pictures included.
+
 ## [1.1.28] - 2026-10-29
 
 - Maintenance release for Inner Breeze 2.1.61.
