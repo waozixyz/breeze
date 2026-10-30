@@ -151,10 +151,11 @@ app_play_breath_cue :: (app: *InnerBreeze, dir: s32) {
         return
     }
     app_audio_ensure_ready(app)
-    sound = app.breath_out_sound
+    cue: s32 = AUDIO_CUE_BREATH_OUT
     if dir == 0 {
-        sound = app.breath_in_sound
+        cue = AUDIO_CUE_BREATH_IN
     }
+    sound = app_audio_cue_sound(app, cue)
     app_play_sound_pitch(app, sound, scale, app_breath_cue_pitch(app))
 }
 
@@ -164,7 +165,7 @@ app_play_bell_cue :: (app: *InnerBreeze, scale: float32) {
         return
     }
     app_audio_ensure_ready(app)
-    app_play_sound(app, app.bell_sound, scale)
+    app_play_sound(app, app_audio_cue_sound(app, AUDIO_CUE_BELL), scale)
 }
 
 #program_export
@@ -189,6 +190,9 @@ app_audio_output_level :: (app: *InnerBreeze) -> float32 {
     return app.audio_meter_level
 }
 
+// The asset generation, plus one, of each cue's last load; zero when none.
+cue_sound_attempts: [AUDIO_CUE_COUNT]u64;
+
 #program_export
 unload_cue_sounds :: (app: *InnerBreeze) {
     empty: SoundHandle
@@ -202,6 +206,9 @@ unload_cue_sounds :: (app: *InnerBreeze) {
     app.breath_in_sound = empty
     app.breath_out_sound = empty
     app.bell_sound = empty
+    for cue: cast(s32)0..AUDIO_CUE_COUNT - 1 {
+        cue_sound_attempts[cue] = 0
+    }
 }
 
 load_cue_sound :: (app: *InnerBreeze, cue: s32) -> SoundHandle {
@@ -219,15 +226,50 @@ load_cue_sound :: (app: *InnerBreeze, cue: s32) -> SoundHandle {
     return load_sound_asset(app_audio_cue_default_asset(cue))
 }
 
+cue_sound_slot :: (app: *InnerBreeze, cue: s32) -> *SoundHandle {
+    if cue == AUDIO_CUE_BREATH_IN {
+        return *app.breath_in_sound
+    }
+    if cue == AUDIO_CUE_BREATH_OUT {
+        return *app.breath_out_sound
+    }
+    if cue == AUDIO_CUE_BELL {
+        return *app.bell_sound
+    }
+    return null
+}
+
+// A cue's sound, loaded the first time it is wanted. The default cues are
+// Practices' assets, and Practices is still opening on its own thread when
+// audio starts. A cue that could not be read is read again only after the
+// assets change, as when Practices finishes opening.
+#program_export
+app_audio_cue_sound :: (app: *InnerBreeze, cue: s32) -> SoundHandle {
+    empty: SoundHandle
+    if app == null || app.audio_ready == 0 || cue < 0 || cue >= AUDIO_CUE_COUNT {
+        return empty
+    }
+    slot := cue_sound_slot(app, cue)
+    if slot == null {
+        return empty
+    }
+    if slot.frame_count == 0 {
+        attempt := AssetGeneration() + 1
+        if cue_sound_attempts[cue] != attempt {
+            cue_sound_attempts[cue] = attempt
+            slot.* = load_cue_sound(app, cue)
+        }
+    }
+    return slot.*
+}
+
+// A changed cue choice loads when the cue is next wanted.
 #program_export
 app_audio_reload_cue_sounds :: (app: *InnerBreeze) {
     if app == null || app.audio_ready == 0 {
         return
     }
     unload_cue_sounds(app)
-    app.breath_in_sound = load_cue_sound(app, AUDIO_CUE_BREATH_IN)
-    app.breath_out_sound = load_cue_sound(app, AUDIO_CUE_BREATH_OUT)
-    app.bell_sound = load_cue_sound(app, AUDIO_CUE_BELL)
 }
 
 #program_export
@@ -243,7 +285,6 @@ init_audio :: (app: *InnerBreeze) {
         return
     }
     AudioTrace(LOG_INFO, "AUDIO: Audio device initialized")
-    app_audio_reload_cue_sounds(app)
     audio_attach_mixed_processor(audio_mixed_meter)
     app.audio_meter_attached = 1
 }

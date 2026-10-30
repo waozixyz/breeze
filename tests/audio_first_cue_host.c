@@ -5,6 +5,7 @@
 #include <string.h>
 
 static bool ready;
+static int errors;
 static int initialized;
 static int played;
 static unsigned int played_frames;
@@ -123,8 +124,13 @@ void app_audio_trace(int level, String message)
 {
     if(level >= 5) {
         fprintf(stderr, "%.*s\n", (int)message.length, message.data);
+        errors++;
     }
-    assert(level < 5);
+}
+
+int AudioErrorCount(void)
+{
+    return errors;
 }
 
 void app_audio_trace_frames(int level, String message, int frames)
@@ -162,5 +168,11 @@ bool app_audio_file_readable(Slice path)
 
 int CheckSound(SoundHandle sound)
 {
-    return sound.frame_count > 0 && played == initialized && played_frames == sound.frame_count;
+    return errors == 0 && sound.frame_count > 0 && played == initialized &&
+        played_frames == sound.frame_count;
+}
+
+int PlayedCount(void)
+{
+    return played;
 }

@@ -48,6 +48,7 @@
 #import, file "../src/storage/sync_session.zi";
 #import, file "../src/storage/sync_page_store.zi";
 #import "sync_flow"
+#import "c_string"
 #import "auth"
 #import "file_linux"
 
@@ -516,6 +517,16 @@ Check :: () -> s32 {
         unused idle
         check_int("unchanged paged sync succeeds", SyncStoredAccount(url), 0)
     }
+    // A download that began at a lower position, as a repair from version
+    // zero does, can leave its cursor behind this device's position. The
+    // node refuses such a cursor; the next sync starts the download again.
+    stale_page := SyncPageState.{.enabled = true, .pending = true}
+    check_true("save a cursor behind the position",
+        CopyCString("{\"version\":1,\"collection\":\"private.inbe.v1.habits\",\"id\":\"stale\"}",
+        stale_page.cursor[:]) && SaveStoredSyncPage(url, *stale_page))
+    check_int("a cursor behind the position restarts the download", SyncStoredAccount(url), 0)
+    check_true("the restarted download completes",
+        LoadStoredSyncPage(url, *stale_page) && !stale_page.pending && stale_page.cursor[0] == cast(u8)0)
     storage_set_setting_text("sync_server_url", url)
     storage_set_sync_enabled(1)
     check_int("register alias", RegisterAliasStored(url, alias), 0)

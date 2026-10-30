@@ -1,0 +1,56 @@
+#import, file "../src/app/audio.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/app/assets.zi";
+#import, file "../src/platform/media_types.zi";
+#import, file "../src/core/breath_timing.zi";
+c :: #system_library "c";
+AudioErrorCount :: () -> s32 #foreign c;
+PlayedCount :: () -> s32 #foreign c;
+
+// Practices supplies the cue sounds; it is still opening when audio starts.
+practices_open: bool;
+cue_reads: s32;
+
+PracticesAsset :: (path: string) -> AssetView {
+    if path.count < 14 || path[:14] != "assets/sounds/" {
+        return AssetView.{}
+    }
+    cue_reads += 1
+    if !practices_open {
+        return AssetView.{}
+    }
+    return AssetView.{.data = "OggS cue", .mime = "audio/ogg", .found = true}
+}
+
+#program_export
+main :: () -> s32 {
+    AssetBindProvider(PracticesAsset)
+    app: InnerBreeze
+    app.sound_volume = 100
+    app.breathing.speed_level = 1
+    init_audio(*app)
+    if app.audio_ready == 0 { return 1 }
+    // Starting audio reads no cue, so nothing is missing at startup.
+    if cue_reads != 0 || AudioErrorCount() != 0 { return 2 }
+    if app.bell_sound.frame_count != 0 { return 3 }
+    // A cue wanted before Practices opens is read once per asset change.
+    if app_audio_cue_sound(*app, AUDIO_CUE_BELL).frame_count != 0 { return 4 }
+    if app_audio_cue_sound(*app, AUDIO_CUE_BELL).frame_count != 0 { return 5 }
+    if cue_reads != 1 || AudioErrorCount() != 1 { return 6 }
+    // Practices opened: the next request reads it again and plays.
+    practices_open = true
+    AssetNotifyAvailable()
+    app_play_bell_cue(*app, 1.0)
+    if cue_reads != 2 || app.bell_sound.frame_count == 0 || PlayedCount() != 1 { return 7 }
+    // A loaded cue is not read again.
+    app_play_bell_cue(*app, 1.0)
+    if cue_reads != 2 || PlayedCount() != 2 { return 8 }
+    // A changed cue choice loads when next wanted.
+    app_audio_reload_cue_sounds(*app)
+    if app.bell_sound.frame_count != 0 || cue_reads != 2 { return 9 }
+    app_play_breath_cue(*app, 0)
+    if cue_reads != 3 || app.breath_in_sound.frame_count == 0 || PlayedCount() != 3 { return 10 }
+    if AudioErrorCount() != 1 { return 11 }
+    app_audio_shutdown(*app)
+    return 0
+}
