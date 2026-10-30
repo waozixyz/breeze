@@ -5,6 +5,8 @@
 #import "geometry"
 #import "tree"
 #import "tree_draw"
+#import "tree_input"
+#import "input_protocol"
 #import "paint_queue"
 #import "bundle_host"
 #import "byte_text_linux"
@@ -83,6 +85,88 @@ ResultsTestDraw :: (frame: PracticeResultsFrame, frame_id: u64) -> s32 {
     return 0
 }
 
+// Draws the results with `mood` picked (0 for none) and, when `tap` is 0 or
+// more, taps that face's button on a second frame. Returns 0 when all five
+// faces and their labels are there and the tap asks for its mood.
+ResultsTestMood :: (mood: s32, tap: s32) -> s32 {
+    session := SessionOpen()
+    frame := PracticeResultsFrame.{.scale = 1.0, .view_width = 360, .view_height = 800,
+        .canvas_color = Color.{.r = 245, .g = 248, .b = 246, .a = 255},
+        .surface_color = Color.{.r = 255, .g = 255, .b = 255, .a = 255},
+        .border_color = Color.{.r = 210, .g = 215, .b = 212, .a = 255},
+        .link_color = Color.{.r = 60, .g = 120, .b = 200, .a = 255},
+        .text_color = Color.{.r = 30, .g = 30, .b = 30, .a = 255}, .center_x = 180,
+        .activity = EXERCISE_PATTERNS, .name = "Breathing Patterns", .saved = true, .mood = mood,
+        .primary = 300, .secondary = 12, .detail = "Box"}
+    results_test_frame = frame
+    clicked: Rectangle
+    for pass: cast(s32)0..1 {
+        if pass == 1 && tap < 0 { break }
+        if pass == 1 {
+            unused TreePointerUpdate(session, PointerFrame.{.x = clicked.x + clicked.width / 2.0,
+                    .y = clicked.y + clicked.height / 2.0, .down = true, .pressed = true})
+            unused TreePointerUpdate(session, PointerFrame.{.x = clicked.x + clicked.width / 2.0,
+                    .y = clicked.y + clicked.height / 2.0, .released = true})
+        }
+        // One screen key across both frames, as in the app: a new key is a
+        // new screen, which drops the tap.
+        BeginFrame(session, cast(u64)200, Rectangle.{0.0, 0.0, 360.0, 800.0})
+        results_test_frame.session = session
+        WidgetHostBegin(session, ResultsTestAssets)
+        AppsUiBegin(ResultsTestCall, null)
+        drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_RESULTS_VIEW})
+        AppsUiEnd()
+        WidgetHostEnd()
+        unused EndFrame(session)
+        if !drawn.succeeded {
+            unused SessionClose(session)
+            return 1
+        }
+        if pass == 0 {
+            buttons: s32 = 0
+            labels: s32 = 0
+            for index: cast(s32)0..TreeCount(session) - 1 {
+                node := TreeNodeAt(session, index)
+                if node.focus_id >= 24800 && node.focus_id <= 24804 {
+                    buttons += 1
+                    if node.focus_id == 24800 + tap {
+                        clicked = node.bounds
+                    }
+                }
+                if node.semantic_label == "Round %d: %ds" && node.bounds.height <= 20.0 && node.bounds.width > 0.0 && node.bounds.width < 80.0 {
+                    labels += 1
+                }
+            }
+            if buttons != 5 {
+                unused SessionClose(session)
+                return 2
+            }
+            if labels < 5 {
+                unused SessionClose(session)
+                return 3
+            }
+        }
+    }
+    unused SessionClose(session)
+    if tap >= 0 && (results_test_frame.action != PRACTICE_RESULTS_MOOD || results_test_frame.value != tap + 1) {
+        return 4
+    }
+    return 0
+}
+
+// Draws the picker with no mood and each mood picked, then taps three faces.
+CheckPracticeResultsMood :: () -> s32 {
+    for mood: cast(s32)0..5 {
+        failed := ResultsTestMood(mood, -1)
+        if failed != 0 { return 10 * (mood + 1) + failed }
+    }
+    for tap: cast(s32)0..4 {
+        failed := ResultsTestMood(ifx tap == 2 then 0 else 3, tap)
+        if failed != 0 { return 100 + 10 * tap + failed }
+    }
+    return 0
+}
+
 // Draws four Wim Hof rounds, one round, and a breathing pattern's time;
 // returns 0 when each went through the host and asked for nothing.
 CheckPracticeResults :: () -> s32 {
@@ -110,5 +194,7 @@ CheckPracticeResults :: () -> s32 {
     pattern := ResultsTestDraw(frame, cast(u64)3)
     if pattern != 0 { return 8 + pattern }
     if results_test_frame.action != PRACTICE_RESULTS_NONE { return 12 }
+    mood := CheckPracticeResultsMood()
+    if mood != 0 { return 20 + mood }
     return 0
 }

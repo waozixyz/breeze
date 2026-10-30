@@ -202,80 +202,107 @@ RoundStats :: (best: *s32, average: *s32) {
 
 // ---- Moods -----------------------------------------------------------------------------
 
+// Soft hues from red at 1 to teal at 5, in step with the app's palette.
 MoodColor :: (mood: s32) -> Color {
-    if mood <= 1 { return Color.{.r = 226, .g = 83, .b = 78, .a = 255} }
-    if mood == 2 { return Color.{.r = 238, .g = 139, .b = 70, .a = 255} }
-    if mood == 3 { return Color.{.r = 235, .g = 202, .b = 77, .a = 255} }
-    if mood == 4 { return Color.{.r = 108, .g = 199, .b = 104, .a = 255} }
-    return Color.{.r = 73, .g = 194, .b = 192, .a = 255}
+    if mood <= 1 { return Color.{.r = 214, .g = 104, .b = 100, .a = 255} }
+    if mood == 2 { return Color.{.r = 226, .g = 152, .b = 92, .a = 255} }
+    if mood == 3 { return Color.{.r = 230, .g = 200, .b = 98, .a = 255} }
+    if mood == 4 { return Color.{.r = 128, .g = 196, .b = 120, .a = 255} }
+    return Color.{.r = 88, .g = 184, .b = 182, .a = 255}
 }
 
-Pixel :: (x: s32, y: s32, width: s32, height: s32, color: Color) {
-    Box(results.session, BoxProps.{.bounds = Bounds(x, y, width, height), .fill = color})
+// Half-way to grey and mostly see-through, for the faces that were not picked.
+MoodMuted :: (color: Color) -> Color {
+    grey := (cast(s32)color.r + cast(s32)color.g + cast(s32)color.b) / 3
+    color.r = cast(u8)((cast(s32)color.r + grey) / 2)
+    color.g = cast(u8)((cast(s32)color.g + grey) / 2)
+    color.b = cast(u8)((cast(s32)color.b + grey) / 2)
+    return Alpha(color, 0.55)
 }
 
-// A pixel face, from frowning red at 1 to grinning teal at 5.
+MoodPoint :: (x: float32, y: float32) -> Vector2 {
+    return Vector2.{x, y}
+}
+
+// A round face from frowning red at 1 to grinning teal at 5. Once a mood is
+// picked the others fade; the picked one gets an accent ring.
 MoodFace :: (mood: s32, center_x: s32, center_y: s32, size: s32) {
-    u := size / 12
-    if u < 2 {
-        u = 2
-    }
-    face := u * 12
-    x := center_x - face / 2
-    y := center_y - face / 2
+    radius := cast(float32)size * 0.5
+    cx := cast(float32)center_x
+    cy := cast(float32)center_y
+    centre := MoodPoint(cx, cy)
+    selected := results.mood == mood
+    faded := results.mood > 0 && !selected
     fill := MoodColor(mood)
-    stroke := DarkenColor(fill, 45)
-    detail := Color.{.r = 38, .g = 40, .b = 48, .a = 255}
-    shine := Color.{.r = 255, .g = 255, .b = 255, .a = 170}
-    Pixel(x + u * 3, y, u * 6, u, stroke)
-    Pixel(x + u * 2, y + u, u * 8, u, stroke)
-    Pixel(x + u, y + u * 2, u * 10, u, stroke)
-    Pixel(x, y + u * 3, u * 12, u * 6, stroke)
-    Pixel(x + u, y + u * 9, u * 10, u, stroke)
-    Pixel(x + u * 2, y + u * 10, u * 8, u, stroke)
-    Pixel(x + u * 3, y + u * 11, u * 6, u, stroke)
-    Pixel(x + u * 3, y + u, u * 6, u, fill)
-    Pixel(x + u * 2, y + u * 2, u * 8, u, fill)
-    Pixel(x + u, y + u * 3, u * 10, u * 6, fill)
-    Pixel(x + u * 2, y + u * 9, u * 8, u, fill)
-    Pixel(x + u * 3, y + u * 10, u * 6, u, fill)
-    Pixel(x + u * 3, y + u * 2, u * 2, u, shine)
+    detail := Color.{.r = 52, .g = 44, .b = 54, .a = 255}
+    if faded {
+        fill = MoodMuted(fill)
+        detail = Alpha(detail, 0.45)
+    }
+    stroke := cast(float32)Scale(2)
+    if selected {
+        Ring(results.session, RingProps.{.center = centre, .inner_radius = radius + cast(float32)Scale(2),
+                .outer_radius = radius + cast(float32)Scale(4), .end_angle = 360.0, .color = Accent()})
+    }
+    Circle(results.session, CircleProps.{.center = centre, .radius = radius, .fill = fill})
+    Ring(results.session, RingProps.{.center = centre, .inner_radius = radius - 1.5, .outer_radius = radius,
+            .end_angle = 360.0, .color = Alpha(DarkenColor(fill, 40), 0.55)})
+    eye := radius * 0.11
+    if eye < 1.5 {
+        eye = 1.5
+    }
+    Circle(results.session, CircleProps.{.center = MoodPoint(cx - radius * 0.36, cy - radius * 0.2),
+            .radius = eye, .fill = detail})
+    Circle(results.session, CircleProps.{.center = MoodPoint(cx + radius * 0.36, cy - radius * 0.2),
+            .radius = eye, .fill = detail})
     if mood <= 1 {
-        Pixel(x + u * 2, y + u * 3, u * 3, u, detail)
-        Pixel(x + u * 7, y + u * 3, u * 3, u, detail)
-        Pixel(x + u * 3, y + u * 4, u, u, detail)
-        Pixel(x + u * 8, y + u * 4, u, u, detail)
-        Pixel(x + u * 3, y + u * 8, u, u, detail)
-        Pixel(x + u * 4, y + u * 7, u * 4, u, detail)
-        Pixel(x + u * 8, y + u * 8, u, u, detail)
-        return
-    }
-    Pixel(x + u * 3, y + u * 4, u * 2, u * 2, detail)
-    Pixel(x + u * 7, y + u * 4, u * 2, u * 2, detail)
-    if mood == 2 {
-        Pixel(x + u * 3, y + u * 8, u, u, detail)
-        Pixel(x + u * 4, y + u * 7, u * 4, u, detail)
-        Pixel(x + u * 8, y + u * 8, u, u, detail)
+        Line(results.session, LineProps.{.start = MoodPoint(cx - radius * 0.56, cy - radius * 0.52),
+                .end = MoodPoint(cx - radius * 0.2, cy - radius * 0.38), .thickness = stroke, .color = detail})
+        Line(results.session, LineProps.{.start = MoodPoint(cx + radius * 0.56, cy - radius * 0.52),
+                .end = MoodPoint(cx + radius * 0.2, cy - radius * 0.38), .thickness = stroke, .color = detail})
+        Ring(results.session, RingProps.{.center = MoodPoint(cx, cy + radius * 0.74),
+                .inner_radius = radius * 0.34 - stroke * 0.5, .outer_radius = radius * 0.34 + stroke * 0.5,
+                .start_angle = 205.0, .end_angle = 335.0, .color = detail})
+    } else if mood == 2 {
+        Ring(results.session, RingProps.{.center = MoodPoint(cx, cy + radius * 0.7),
+                .inner_radius = radius * 0.34 - stroke * 0.5, .outer_radius = radius * 0.34 + stroke * 0.5,
+                .start_angle = 215.0, .end_angle = 325.0, .color = detail})
     } else if mood == 3 {
-        Pixel(x + u * 3, y + u * 8, u * 6, u, detail)
+        Line(results.session, LineProps.{.start = MoodPoint(cx - radius * 0.3, cy + radius * 0.42),
+                .end = MoodPoint(cx + radius * 0.3, cy + radius * 0.42), .thickness = stroke, .color = detail})
     } else if mood == 4 {
-        Pixel(x + u * 2, y + u * 7, u, u, detail)
-        Pixel(x + u * 3, y + u * 8, u * 6, u, detail)
-        Pixel(x + u * 9, y + u * 7, u, u, detail)
+        Ring(results.session, RingProps.{.center = MoodPoint(cx, cy + radius * 0.06),
+                .inner_radius = radius * 0.4 - stroke * 0.5, .outer_radius = radius * 0.4 + stroke * 0.5,
+                .start_angle = 25.0, .end_angle = 155.0, .color = detail})
     } else {
-        Pixel(x + u * 3, y + u * 7, u * 6, u * 3, detail)
-        Pixel(x + u * 4, y + u * 7, u * 4, u, Color.{.r = 255, .g = 255, .b = 255, .a = 255})
-        Pixel(x + u * 4, y + u * 9, u * 4, u, Color.{.r = 236, .g = 108, .b = 128, .a = 255})
+        // A wide open smile: a half disc with a pink tongue at its bottom.
+        Ring(results.session, RingProps.{.center = MoodPoint(cx, cy + radius * 0.12),
+                .inner_radius = 0.0, .outer_radius = radius * 0.5, .start_angle = 0.0, .end_angle = 180.0,
+                .color = detail})
+        Circle(results.session, CircleProps.{.center = MoodPoint(cx, cy + radius * 0.5),
+                .radius = radius * 0.16,
+                .fill = ifx faded then Alpha(Color.{.r = 236, .g = 108, .b = 128, .a = 255}, 0.45)
+                    else Color.{.r = 236, .g = 108, .b = 128, .a = 255}})
     }
+}
+
+MOOD_CARD_HEIGHT :: 132
+
+MoodLabelKey :: (mood: s32) -> string {
+    if mood <= 1 { return "results_mood_1" }
+    if mood == 2 { return "results_mood_2" }
+    if mood == 3 { return "results_mood_3" }
+    if mood == 4 { return "results_mood_4" }
+    return "results_mood_5"
 }
 
 MoodPicker :: (x: s32, y: s32, width: s32) {
     padding := Scale(14)
     gap := Scale(7)
     item_width := (width - padding * 2 - gap * (RESULTS_MOODS - 1)) / RESULTS_MOODS
-    button_y := y + Scale(49)
-    button_height := Scale(60)
-    Card(x, y, width, Scale(124))
+    button_y := y + Scale(46)
+    button_height := Scale(56)
+    Card(x, y, width, Scale(MOOD_CARD_HEIGHT))
     Label(Locale("results_mood_title"), x + padding, y + Scale(10), width - padding * 2, Scale(30),
         Scale(18), cast(TextAlign)TextAlignStart)
     for index: cast(s32)0..RESULTS_MOODS - 1 {
@@ -285,12 +312,23 @@ MoodPicker :: (x: s32, y: s32, width: s32) {
         if Button(results.session, ButtonProps.{
                 .bounds = Bounds(button_x, button_y, button_width, button_height),
                 .id = 24800 + index,
-                .tone = cast(ButtonTone)(ifx selected then ButtonToneAccent else ButtonToneNeutral),
+                .tone = cast(ButtonTone)ButtonToneNeutral,
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .selected = selected}) != 0 {
             results.action = PRACTICE_RESULTS_MOOD
             results.value = index + 1
         }
-        MoodFace(index + 1, button_x + button_width / 2, button_y + button_height / 2, Scale(28))
+        MoodFace(index + 1, button_x + button_width / 2, button_y + button_height / 2,
+            Scale(ifx selected then 36 else 30))
+        // The label may spill into the gaps beside it on narrow phones.
+        name := Locale(MoodLabelKey(index + 1))
+        label_x := button_x - gap / 2
+        label_width := button_width + gap
+        strong: [1]TextRange = .[TextRange.{.start = 0, .end = cast(s32)name.count}]
+        Text(results.session, TextProps.{.bounds = Bounds(label_x, button_y + button_height + Scale(2),
+                label_width, Scale(20)), .text = name,
+                .font = FitFont(name, label_width, Scale(12), Scale(8)), .align = cast(TextAlign)TextAlignCenter,
+                .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapNone,
+                .disabled = !selected, .strong = strong[:ifx selected then 1 else 0]})
     }
 }
 
@@ -612,7 +650,7 @@ Content :: (x: s32, width: s32, top: s32, best: s32, average: s32) {
     }
     if !results.temporary {
         MoodPicker(x, y, width)
-        y += Scale(124 + 14)
+        y += Scale(MOOD_CARD_HEIGHT + 14)
     }
     if results.activity == EXERCISE_WIM_HOF && results.round_count > 1 {
         RoundList(x, y, width)

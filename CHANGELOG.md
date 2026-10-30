@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Practice results show smooth, labeled mood faces with a clear selection.
 - Apps keeps each grid card's ⋮ control unchanged while editing.
 - Mark Telegram-relayed Lumi messages with their source.
 - Collapse each break kind in settings and expand it on click.
