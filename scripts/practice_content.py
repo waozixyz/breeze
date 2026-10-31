@@ -98,8 +98,8 @@ def course_narration_keys(data):
 
 
 def bundle_assets(data):
-    """Read the bounded ZX v26 resource table; never execute a bundle."""
-    if data[:8] != b'ZX\0\0\x1a\0\0\0' or len(data) > MAXIMUM:
+    """Read the bounded ZX v26/v27 resource envelope; never execute its IR."""
+    if data[:8] not in (b'ZX\0\0\x1a\0\0\0', b'ZX\0\0\x1b\0\0\0') or len(data) > MAXIMUM:
         raise ValueError('unsupported resource bundle')
     at = 8
 

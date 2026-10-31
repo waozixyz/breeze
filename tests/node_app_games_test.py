@@ -13,11 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from node_app_games import required_games, stage_games
 
 
-def fixture_bundle(assets):
+def fixture_bundle(assets, version=26):
     def text(value):
         data = value.encode()
         return struct.pack('<I', len(data)) + data
-    data = b'ZX\0\0\x1a\0\0\0' + text('collection') + text('Main')
+    data = b'ZX\0\0' + struct.pack('<I', version) + text('collection') + text('Main')
     data += struct.pack('<IIIII', 0, 0, 0, 0, len(assets))
     for name, content in assets.items():
         data += text(name) + struct.pack('<I', len(content)) + content
@@ -54,6 +54,22 @@ class GameArchiveTests(unittest.TestCase):
         self.bundle.write_bytes(fixture_bundle({}))
         self.assertEqual(required_games(self.bundle), set())
 
+    def test_current_bundle_format_keeps_archive_validation(self):
+        catalog = json.dumps({'children': [self.child]}).encode()
+        self.bundle.write_bytes(fixture_bundle({'assets/apps/catalog.json': catalog}, version=27))
+        self.assertEqual(required_games(self.bundle), {self.name})
+        self.archive_games([(self.name, self.game)])
+        stage_games(self.bundle, self.archive, self.output)
+        self.assertEqual((self.output / self.name).read_bytes(), self.game)
+        self.archive_games([(self.name, b'ZX\0\0wrong bytes')])
+        with self.assertRaises(ValueError):
+            stage_games(self.bundle, self.archive, self.output)
+        self.assertEqual((self.output / self.name).read_bytes(), self.game)
+        for data in (fixture_bundle({}, version=28), self.bundle.read_bytes()[:-1],
+                     self.bundle.read_bytes() + b'extra'):
+            self.bundle.write_bytes(data)
+            with self.assertRaises(ValueError):
+                required_games(self.bundle)
     def test_unpacked_art_downloads_like_a_game(self):
         art = b'ZX\0\0library art'
         name = sha256(art).hexdigest() + '.zx'
