@@ -125,6 +125,7 @@ test: modal-rules-test
 test: elist-screen-test
 test: theme-catalog-bundle-check
 test: site-assets-test
+test: apt-repo-test
 test: android-smoke-script-test
 test: sync-recovery-test
 test: sync-connection-test

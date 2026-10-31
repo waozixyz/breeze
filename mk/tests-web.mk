@@ -22,6 +22,10 @@ web-window-zi-test: $(ZI2C_BIN)
 site-assets-test:
 	node tests/site_assets_test.mjs
 
+.PHONY: apt-repo-test
+apt-repo-test:
+	sh tests/apt_repo_test.sh
+
 web-canvas-smoke-test: $(WEB_SMOKE_TEST)
 	WEB_SMOKE_RENDERER=canvas WEB_SMOKE_BROWSER="$(WEB_SMOKE_BROWSER)" node $(WEB_SMOKE_TEST) $(WEB_DIST_DIR)
 

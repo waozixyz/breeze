@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Linux: install from the signed APT repository and get updates with apt.
 - Filter Android account-key imports to key files and related backup types.
 - Practice results show smooth, labeled mood faces with a clear selection.
 - Apps keeps each grid card's ⋮ control unchanged while editing.

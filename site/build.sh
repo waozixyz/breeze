@@ -243,6 +243,7 @@ python3 "$root_dir/scripts/prepare-site-assets.py" "$out_dir"
 for path in \
 	index.html \
 	privacy.html \
+	install-apt.html \
 	delete-account.html \
 	delete-account/index.html \
 	legacy-converter.html \
