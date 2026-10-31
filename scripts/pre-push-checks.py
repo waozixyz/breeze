@@ -53,8 +53,10 @@ def plan(files):
     def any_suffix(*suffixes):
         return any(path.endswith(suffixes) for path in files)
 
+    # These metadata checks need no compiler or fetched package graph.
     checks = [("version files agree", ["python3", "scripts/check-version.py"]),
-              ("package versions", ["make", "-s", "package-version-test"])]
+              ("package versions", ["python3", "scripts/check-package-versions.py"]),
+              ("package version tests", ["python3", "tests/package_versions_test.py"])]
     if any_of("locales/", "assets/fonts/") or any_suffix(".zi"):
         checks.append(("translations and fonts", ["make", "-s", "locale-check"]))
     if any_suffix(".zi"):
