@@ -498,7 +498,11 @@ BINARY_NAME := $(APP_EXECUTABLE)-$(NATIVE_PLATFORM)-$(ARCH)
 TARGET := $(NATIVE_BIN_DIR)/$(BINARY_NAME)
 # Native sources compile to per-file objects through mk/native-objects.mk.
 NATIVE_OBJ_DIR := $(abspath $(BUILD_OBJ_DIR)/native)
-NATIVE_JOBS ?= $(shell nproc 2>/dev/null || echo 4)
+# Native objects build on half of the CPUs at low priority, so the desktop
+# and other work keep the machine. `NATIVE_JOBS=N` and `NATIVE_NICE=` override.
+NATIVE_JOBS ?= $(shell n=$$(nproc 2>/dev/null || echo 4); n=$$((n / 2)); \
+	[ $$n -lt 1 ] && n=1; echo $$n)
+NATIVE_NICE ?= nice -n 10
 NATIVE_COMPILE_FLAGS = $(KRYON_NATIVE_CFLAGS) $(APP_INCLUDE) $(KRYON_INCLUDE) \
 	-iquote$(KRYON_LIBRARY_BUILD_DIR)/c $(SQLITE_INCLUDE) $(LIBOQS_INCLUDE) \
 	$(KRYON_NATIVE_BACKEND_CFLAGS) -DHAS_LIBOQS=1 -DSUPPORT_MODULE_RAUDIO=1 \
@@ -660,8 +664,9 @@ $(KRYON_KSS_C) $(KRYON_KSS_H): $(KRYON_KSS_STAMP)
 	@test -f $@
 
 $(KRY_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
-	# Imports can change emitted paths; never retain an obsolete header/code pair.
-	rm -rf $(KRY_GEN_DIR)
+	# --prune-stale removes generated files this run no longer writes, so an
+	# obsolete header/code pair never survives. Unchanged files keep their
+	# timestamps, so only C that actually changed recompiles.
 	mkdir -p $(KRY_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --prune-stale --root . \
 		$(foreach define,$(ZI_NATIVE_DEFINES),--define $(define)) \
@@ -722,7 +727,7 @@ $(TARGET): | zi-check
 	$(shell mkdir -p $(NATIVE_OBJ_DIR))
 	$(file >$(NATIVE_OBJ_DIR)/inputs.mk,NATIVE_SOURCES := $(APP_SRCS) $(GENERATED_NATIVE_C) $(EMBEDDED_ASSETS_C) $(SQLITE_SRC))
 	$(file >>$(NATIVE_OBJ_DIR)/inputs.mk,NATIVE_CFLAGS := $(NATIVE_COMPILE_FLAGS))
-	+@$(MAKE) --no-print-directory -f mk/native-objects.mk \
+	+@$(NATIVE_NICE) $(MAKE) --no-print-directory -f mk/native-objects.mk \
 		$(if $(filter -j%,$(MAKEFLAGS)),,-j$(NATIVE_JOBS)) \
 		CC='$(CC)' OBJ_DIR=$(NATIVE_OBJ_DIR)
 	$(CC) $(KRYON_NATIVE_CFLAGS) \
