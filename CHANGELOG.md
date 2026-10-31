@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Filter Android account-key imports to key files and related backup types.
 - Practice results show smooth, labeled mood faces with a clear selection.
 - Apps keeps each grid card's ⋮ control unchanged while editing.
 - Mark Telegram-relayed Lumi messages with their source.

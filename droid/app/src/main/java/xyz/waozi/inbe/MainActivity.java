@@ -52,7 +52,6 @@ import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.net.UnknownHostException;
 import java.net.URL;
-import java.util.Arrays;
 
 public class MainActivity extends NativeActivity {
     private final HttpTransport httpTransport = new HttpTransport();
@@ -711,13 +710,9 @@ public class MainActivity extends NativeActivity {
                     if (Intent.ACTION_OPEN_DOCUMENT.equals(intent.getAction())) {
                         intent.addCategory(Intent.CATEGORY_OPENABLE);
                     }
-                    String[] mimeTypes = parseMimeTypes(mimeTypesCsv);
-                    intent.setType(primaryMimeType(mimeTypes));
-                    if (mimeTypes.length > 0) {
-                        intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
-                    }
+                    org.kryonlabs.platform.DocumentTypes.apply(intent, mimeTypesCsv);
                     pendingImportKind = kind;
-                    Log.d(TAG, "Opening import picker - kind=" + kind + ", mimeTypes=" + mimeTypesCsv + ", parsed=" + Arrays.toString(mimeTypes));
+                    Log.d(TAG, "Opening import picker - kind=" + kind + ", mimeTypes=" + mimeTypesCsv);
                     try {
                         startActivityForResult(intent, REQUEST_IMPORT_ZIP);
                     } catch (android.content.ActivityNotFoundException unavailable) {
@@ -753,36 +748,6 @@ public class MainActivity extends NativeActivity {
 
     public boolean savePickedFile(String path) {
         return documentExport.commit(getContentResolver(), path);
-    }
-
-    private static String[] parseMimeTypes(String mimeTypesCsv) {
-        if (mimeTypesCsv == null || mimeTypesCsv.trim().isEmpty()) {
-            return new String[0];
-        }
-
-        String[] raw = mimeTypesCsv.split(",");
-        java.util.ArrayList<String> result = new java.util.ArrayList<>();
-        for (String mimeType : raw) {
-            String trimmed = mimeType.trim();
-            if (!trimmed.isEmpty()) {
-                result.add(trimmed);
-            }
-        }
-        return result.toArray(new String[0]);
-    }
-
-    private static String primaryMimeType(String[] mimeTypes) {
-        if (mimeTypes == null || mimeTypes.length == 0) {
-            return "*/*";
-        }
-        for (String mimeType : mimeTypes) {
-            if (mimeType != null && mimeType.endsWith("/*")) {
-                return mimeType;
-            }
-        }
-        return mimeTypes[0] != null && !mimeTypes[0].isEmpty()
-            ? mimeTypes[0]
-            : "*/*";
     }
 
     private String extensionForUri(Uri uri) {
