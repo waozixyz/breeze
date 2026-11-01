@@ -174,24 +174,34 @@ with contextlib.ExitStack() as stack:
         database.execute("INSERT INTO social_snapshots(user_id,kind,json,updated_at) VALUES(?,?,?,2) "
                          "ON CONFLICT(user_id,kind) DO UPDATE SET json=excluded.json",
                          (user, "friends.list", json.dumps(friends)))
+        public_id = database.execute("SELECT value FROM settings WHERE key='sync_public_id' "
+                                     "AND length(value)=64 LIMIT 1").fetchone()[0]
+        requests = {"incoming": [{"id": "request-aster", "status": "pending", "requester_alias": "aster",
+                                  "requester_user_id_hash": "d" * 64, "target_user_id_hash": public_id}],
+                    "outgoing": []}
+        database.execute("INSERT INTO social_snapshots(user_id,kind,json,updated_at) VALUES(?,?,?,2) "
+                         "ON CONFLICT(user_id,kind) DO UPDATE SET json=excluded.json",
+                         (user, "friends.requests", json.dumps(requests)))
     with application("friends") as process:
         open_profile()
         driver.press(label="Friends", role="button")
-        field = driver.wait(focus_id=810, role="text_field")
-        driver.press(focus_id=810, role="text_field")
+        field = driver.wait(focus_id=102, role="text_field")
+        driver.press(focus_id=102, role="text_field")
         driver.type("@soft_keyboard_friend")
-        assert driver.wait(focus_id=810, role="text_field")["value"] == "@soft_keyboard_friend", "Friends discarded typed text"
+        assert driver.wait(focus_id=102, role="text_field")["value"] == "@soft_keyboard_friend", "Friends discarded typed text"
         driver.key("backspace")
-        assert driver.wait(focus_id=810, role="text_field")["value"] == "@soft_keyboard_frien", "Friends discarded edits"
+        assert driver.wait(focus_id=102, role="text_field")["value"] == "@soft_keyboard_frien", "Friends discarded edits"
         assert not [node for node in driver.find(label="Friends", role="text", visible=True)
                     if node["y"] > 80], "Duplicate Friends heading remains in the page"
-        rows = [driver.wait(label="@" + name, role="button") for name in ("willow", "river", "fern")]
-        for row in rows:
-            picture = driver.wait(label=row["label"], role="image")
-            assert picture["width"] >= 40 and picture["height"] >= 40, picture
-            assert picture["x"] + picture["width"] < row["x"], "Picture overlaps friend name"
+        rows = [driver.wait(label="@" + name) for name in ("willow", "river", "fern")]
         for first, second in zip(rows, rows[1:]):
-            assert second["y"] - first["y"] >= 64, "Friend rows lack spacing"
+            assert second["y"] - first["y"] >= 56, "Friend rows lack spacing"
+        # Entity's shared page draws Inner Breeze's saved requests and asks before removing.
+        driver.wait(label="@aster")
+        driver.wait(label="Accept", role="button")
+        driver.wait(label="Decline", role="button")
+        driver.press(label="Remove", role="button", index=0)
+        driver.wait(label="Confirm", role="button")
         assert credentials() == before, "Friends changed account keys"
         destination = os.environ.get("BREEZE_FRIENDS_CAPTURE")
         if destination:

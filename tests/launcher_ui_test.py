@@ -400,9 +400,9 @@ with contextlib.ExitStack() as stack:
                         assert 0 not in active_pins, "Legacy Profile pin was not removed"
                         if width == 390 and placement == 4 and not pinned:
                             capture(window, name)
-                        reveal_action("Import Account Key")
-                        driver.press(label="Import Account Key", role="button")
-                        driver.wait(label="Choose key file", role="button")
+                        reveal_action("Sign in to another account")
+                        driver.press(label="Sign in to another account", role="button")
+                        driver.wait(label="Choose backup file", role="button")
                         one_header("Profile")
                         driver.press(label="Back", role="button")
                         driver.wait(label="Change picture", role="button", visible=False)

@@ -1,0 +1,61 @@
+// Entity draws Friends. This answers its service from Inner Breeze's saved
+// friends and sends its actions through the same sync queue, so offline reads
+// and queued changes keep working.
+Entity :: #import "entity/model";
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/format"
+#import "social"
+#import, file "app_types.zi";
+#import, file "../screens/profile_social.zi";
+#import, file "../storage/storage_settings.zi";
+c_friends :: #system_library "c";
+app_request_social_refresh :: (app: *InnerBreeze) #foreign c_friends;
+app_request_friend_send :: (app: *InnerBreeze, target: string) #foreign c_friends;
+app_request_friend_accept :: (app: *InnerBreeze, request_id: string) #foreign c_friends;
+app_request_friend_decline :: (app: *InnerBreeze, request_id: string) #foreign c_friends;
+app_request_friend_remove :: (app: *InnerBreeze, friend_user_id: string) #foreign c_friends;
+
+entity_friends_answer: string;
+
+EntityFriendsAction :: (app: *InnerBreeze, request: string) -> string {
+    owner: [65]u8
+    operation: [16]u8
+    target: [129]u8
+    url: [256]u8
+    if ReadStringText(request, FieldAt(request, 0, "owner"), owner[:]) != 64 ||
+    TextUntilNul(owner[:]) != storage_get_setting_text("sync_public_id") ||
+    ReadStringText(request, FieldAt(request, 0, "operation"), operation[:]) <= 0 ||
+    ReadStringText(request, FieldAt(request, 0, "target"), target[:]) <= 0 ||
+    sync_url(*url[0], cast(s64)url.count) == 0 { return "rejected" }
+    op := TextUntilNul(operation[:])
+    value := TextUntilNul(target[:])
+    if op == "add" {
+        normalized: [80]u8
+        if !NormalizeFriendTarget(value, normalized[:]) { return "rejected" }
+        app_request_friend_send(app, TextUntilNul(normalized[:]))
+    }
+    else if op == "accept" { app_request_friend_accept(app, value) }
+    else if op == "decline" { app_request_friend_decline(app, value) }
+    else if op == "remove" { app_request_friend_remove(app, value) }
+    else { return "rejected" }
+    return "queued"
+}
+
+EntityFriendsAnswer :: (app: *InnerBreeze, request: string) -> string {
+    if request != "" && request != "refresh" { return EntityFriendsAction(app, request) }
+    if request == "refresh" { app_request_social_refresh(app) }
+    if app.profile_friends_loaded == 0 { load_friends_cache(app) }
+    // Changes wait in the sync queue, so a refresh or an offline node never
+    // hides the page's actions.
+    Entity.EntityFree(entity_friends_answer)
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"owner\":")
+    Entity.EntityQuote(*out, storage_get_setting_text("sync_public_id"))
+    BuilderPrint(*out, ",\"game\":\"\",\"game_icons\":{\"rows\":[]},\"ready\":true,\"busy\":false,\"error\":false,\"list\":%,\"requests\":%}",
+        TextUntilNul(app.profile_friends_json[:]), TextUntilNul(app.profile_friend_requests_json[:]))
+    entity_friends_answer = BuilderFinish(out)
+    return entity_friends_answer
+}

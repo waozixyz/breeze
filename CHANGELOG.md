@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Sign in with your backup file and its password, name backups after your username, and always protect new backups with a password.
+- Friends now opens the shared Profile page, and Dew gifts between friends are gone.
 - Your account follows you between waozi.xyz sites here too, including signing out everywhere.
 
 - The Google Play edition can optionally save and open encrypted account backups with Google Drive after Google Cloud setup.
