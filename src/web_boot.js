@@ -26,10 +26,21 @@ window.__inbeLoadApp = function(src) {
 
   Module.__inbeRenderer = renderer;
 
-  script = document.createElement('script');
-  script.async = true;
-  script.src = src;
-  document.body.appendChild(script);
+  function start() {
+    if (script) return;
+    script = document.createElement('script');
+    script.async = true;
+    script.src = src;
+    document.body.appendChild(script);
+  }
+  // One sign-in for every waozi.xyz site; other hosts and extensions have none.
+  if (!/^(inbe|breeze)\.waozi\.xyz$/.test(location.hostname)) { start(); return; }
+  var shared = document.createElement('script');
+  shared.src = 'https://account.waozi.xyz/share.js';
+  shared.onload = function () { WaoziAccount.attach(Module, 2500).then(start, start); };
+  shared.onerror = start;
+  setTimeout(start, 4000);
+  document.head.appendChild(shared);
 };
 
 function routineRuntimeLog(text) {

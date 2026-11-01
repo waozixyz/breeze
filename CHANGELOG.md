@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Your account follows you between waozi.xyz sites here too, including signing out everywhere.
+
 - The Google Play edition can optionally save and open encrypted account backups with Google Drive after Google Cloud setup.
 
 - Repeated local builds reuse storage instead of keeping a new copy for each run.
