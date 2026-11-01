@@ -964,7 +964,9 @@ A release names one fixed commit while peers keep working on master:
    Daochi sync server. Platform release builds remain separate. The existing
    repository overlay materializes every candidate file and recreates source
    directories, so later edits, new files and commits cannot enter the run.
-   Outputs stay in `build/release-ready/`.
+   Outputs stay in `build/release-ready/`. Custom `RELEASE_READY_OUTPUT` names
+   reuse that folder; only `build/release-ready-phone/` has a separate purpose.
+   Both use the shared, leased cache described in [building](building.md).
 3. Build the Moto APK in the same fixed-source overlay and save its content
    identity and SHA-256 build receipt. Use `ANDROID_VERIFY_INSTANCE=1` for
    the separate `xyz.waozi.inbe.verification` debug instance when the owner's

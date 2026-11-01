@@ -27,6 +27,15 @@ keystore=${ANDROID_DEBUG_KEYSTORE:-$HOME/.config/.android/debug.keystore}
 android_sdk=${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}
 output=build/release-ready-phone
 
+# Serialize the complete build/sign/install operation, including --apk calls.
+# This lock lives outside reusable output, so no run can replace its inode.
+mkdir -p .cache/release-ready
+exec 7>.cache/release-ready/phone-install.lock
+if ! flock -n 7; then
+    echo "phone-install: another phone install is running" >&2
+    exit 1
+fi
+
 device=pixel
 revision=HEAD
 apk=""
@@ -62,6 +71,10 @@ phone() {
 }
 abi=$(phone shell getprop ro.product.cpu.abi | tr -d '\r')
 [ -n "$abi" ] || fail "could not read the phone's ABI"
+case "$abi" in
+    arm64-v8a|armeabi-v7a|x86|x86_64) ;;
+    *) fail "unsupported Android ABI: $abi" ;;
+esac
 echo "phone-install: $(phone shell getprop ro.product.model | tr -d '\r') ($serial, $abi)"
 
 if [ "$device" = moto ]; then
@@ -75,11 +88,13 @@ fi
 if [ -z "$apk" ]; then
     commit=$(git rev-parse "$revision^{commit}")
     echo "phone-install: building $(git log -1 --format='%h %s' "$commit")"
-    # A failed build must not leave an earlier APK to install.
-    find "$output/build/android" -name "app*-$abi-debug.apk" -delete 2>/dev/null || true
+    # set -e stops a failed build before any earlier APK can be installed.
+    # Select only APKs copied by this run; do not delete another build's files.
+    started=.cache/release-ready/phone-build-start
+    touch "$started"
     RELEASE_READY_REVISION=$commit RELEASE_READY_OUTPUT=$output RELEASE_READY_INCREMENTAL=1 \
         sh scripts/release-ready.sh ANDROID_ABI="$abi" android-debug
-    apk=$(find "$output/build/android" -name "app*-$abi-debug.apk" | head -n 1)
+    apk=$(find "$output/build/android" -name "app*-$abi-debug.apk" -newer "$started" | head -n 1)
     [ -f "$apk" ] || fail "the build left no app-$abi-debug.apk in $output/build/android"
 fi
 [ -f "$apk" ] || fail "no APK at $apk"
@@ -88,7 +103,7 @@ fi
 # with this machine's.
 [ -f "$keystore" ] || fail "no debug keystore at $keystore"
 build_tools=$(ls -d "$android_sdk"/build-tools/* | sort -V | tail -n 1)
-signed=build/phone-install/$(basename "$apk" .apk)-signed.apk
+signed=build/phone-install/app-$abi-debug-signed.apk
 mkdir -p build/phone-install
 "$build_tools/zipalign" -f -p 4 "$apk" "$signed.aligned"
 "$build_tools/apksigner" sign --ks "$keystore" --ks-pass pass:android \

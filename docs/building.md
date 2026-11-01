@@ -112,6 +112,31 @@ publisher setup are described in [app packages](apps.md).
 Native binaries are written to `build/bin/<platform>/`. Release artifacts are
 written under `build/dist/`.
 
+Fixed-commit container builds (`make release-ready` and
+`scripts/phone-install.sh`) reuse `build/release-ready/` and
+`build/release-ready-phone/`, respectively. `RELEASE_READY_OUTPUT` still accepts
+`build/release-ready-NAME`, but names other than `phone` map to
+`build/release-ready/`; read artifacts and stamps from that canonical path.
+The release command uses the same mapping. Task names and versions never
+allocate more output folders. An active output is locked and a second run
+for it stops before changing its files.
+
+Both purposes share the existing `build/release-ready/home/`, rather than
+creating a home per output. Keeping this regenerable cache under `build/` also
+keeps the fixed-source overlay from traversing it while recreating source
+directories.
+Ziran keeps sources by repository URL and exact commit under its `.cache/ziran/`,
+so different locks reuse identical dependencies while retaining distinct
+commits. Gradle downloads also reuse this home. Runs hold an exclusive cache
+lease through container exit, including failed builds; different purposes wait
+for that lease. Incremental source-time records and compilation outputs stay
+per purpose. No script prunes existing output or caches, including
+`promo-video` and `package-releases`. Other old per-output homes are not migrated
+or deleted automatically. Normal builds and CI keep their existing cache and
+`build/dist/` paths. Phone signing reuses
+`build/phone-install/app-ABI-debug-signed.apk` (one of the four supported Android
+ABIs) even with a versioned `--apk` input, preserving the default signed path.
+
 Dependencies, including Kryon and the Ziran toolchain, are pinned in
 `ziran.lock`. `make` fetches them into the Ziran package cache and links them
 under `build/packages/`; `sh scripts/packages.sh` does the same by hand.

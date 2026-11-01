@@ -84,6 +84,7 @@ phone-check-gate-test:
 .PHONY: release-tooling-test
 release-tooling-test:
 	python3 tests/release_test.py
+	python3 tests/build_layout_test.py
 	python3 tests/file_size_test.py
 
 .PHONY: play-screenshots-test

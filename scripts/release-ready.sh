@@ -10,7 +10,7 @@
 # edits and new files in the canonical checkout cannot enter the tests. Peers
 # keep working on master; nothing this container writes reaches their checkout.
 # Packages use the fixed lock without local overrides or untracked secrets.
-# Build outputs stay in build/release-ready/ (or RELEASE_READY_OUTPUT); a run
+# Build outputs reuse build/release-ready/ or build/release-ready-phone/; a run
 # takes about 90 minutes.
 #
 # Covered: ci.yml Secret Scan, Package URLs, large-file guard, all three test
@@ -30,16 +30,46 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 
-# RELEASE_READY_OUTPUT gives a second run its own build/release-ready-NAME
-# outputs, so a fixed-commit build can run beside an active check.
-output=${RELEASE_READY_OUTPUT:-build/release-ready}
-case "$output" in
-    build/release-ready|build/release-ready-[a-z0-9]*) ;;
-    *) echo "release-ready: RELEASE_READY_OUTPUT must be build/release-ready-NAME" >&2; exit 2 ;;
-esac
-case "$output" in
-    *[!a-z0-9/-]*) echo "release-ready: RELEASE_READY_OUTPUT must be build/release-ready-NAME" >&2; exit 2 ;;
-esac
+# Legacy task/version names are aliases, never additional permanent outputs.
+requested_output=${RELEASE_READY_OUTPUT:-build/release-ready}
+output=$(python3 scripts/check-build-layout.py "$requested_output") || exit 2
+if [ "$output" != "$requested_output" ]; then
+    echo "release-ready: $requested_output reuses $output"
+fi
+
+# Lock before writing any output. Never follow an output symlink into another
+# purpose's files. There is deliberately no scan or cleanup of old folders.
+for directory in build "$output" "$output/build" build/release-ready build/release-ready/home; do
+    if [ -L "$directory" ]; then
+        echo "release-ready: refusing symlink $directory" >&2
+        exit 2
+    fi
+done
+mkdir -p "$output"
+if [ -L "$output/lock" ]; then
+    echo "release-ready: refusing symlink $output/lock" >&2
+    exit 2
+fi
+exec 9>"$output/lock"
+if ! flock -n 9; then
+    echo "release-ready: another run is using $output" >&2
+    exit 1
+fi
+
+# Every fixed-commit run uses the same home, including Ziran's URL+commit
+# source cache and Gradle's downloads. Hold this lease until Podman exits:
+# package tools may repair sources and build inside their cached checkouts.
+# Different output purposes can queue, but cannot mutate this cache together.
+cache="$root/build/release-ready"
+mkdir -p "$cache"
+if [ -L "$cache/cache.lock" ]; then
+    echo "release-ready: refusing symlink $cache/cache.lock" >&2
+    exit 2
+fi
+exec 8>"$cache/cache.lock"
+echo "release-ready: waiting for the shared build cache"
+flock 8
+mkdir -p "$cache/home" "$output/build"
 commit=$(git rev-parse "${RELEASE_READY_REVISION:-HEAD}^{commit}")
 image_tag=$({
     git show "$commit:.github/local-ci/Containerfile"
@@ -126,7 +156,6 @@ else
     printf "\nrelease-ready: every covered local CI job passed\n"
 fi'
 
-mkdir -p "$output/build" "$output/home"
 sync_server=""
 sync_mount_source="$root/$output/sync-unused"
 mkdir -p "$sync_mount_source"
@@ -137,13 +166,6 @@ if [ "$#" -eq 0 ]; then
     git -C "$sync_server" cat-file -e "$sync_commit^{commit}"
     sync_mount_source=$sync_server
 fi
-# One run at a time: runs share build/release-ready/.
-exec 9>"$output/lock"
-if ! flock -n 9; then
-    echo "release-ready: another run is using $output" >&2
-    exit 1
-fi
-
 # Containers here need no session keyring. Creating one counts against the
 # account's kernel key quota (200 keys), which long-lived sessions fill, and
 # a full quota stops every container from starting.
@@ -183,10 +205,12 @@ podman run --rm --pull=never --userns=keep-id \
     $dns_option \
     -v "$root:/src:O" \
     -v "$root/$output/build:/src/build" \
-    -v "$root/$output/home:/home/ubuntu" \
+    -v "$cache/home:/home/ubuntu" \
     -v "$sync_mount_source:/sync-server:O" \
     $android_mount \
-    -e HOME=/home/ubuntu -e CI=true -e RELEASE_READY_COMMIT="$commit" \
+    -e HOME=/home/ubuntu -e XDG_CACHE_HOME=/home/ubuntu/.cache \
+    -e GRADLE_USER_HOME=/home/ubuntu/.gradle \
+    -e CI=true -e RELEASE_READY_COMMIT="$commit" \
     -e RELEASE_READY_INCREMENTAL="$incremental" \
     -e RELEASE_READY_SNAPSHOT="$snapshot" \
     -w /src "$image" sh -c "$inside" release-ready "$@" || status=$?

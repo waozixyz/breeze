@@ -35,12 +35,6 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
-# RELEASE_READY_OUTPUT names a separate release-ready run's outputs, as in
-# scripts/release-ready.sh.
-READY_OUTPUT = os.environ.get("RELEASE_READY_OUTPUT", "build/release-ready")
-if not re.fullmatch(r"build/release-ready(-[a-z0-9][a-z0-9-]*)?", READY_OUTPUT):
-    raise SystemExit("RELEASE_READY_OUTPUT must be build/release-ready-NAME")
-READY_STAMP = ROOT / READY_OUTPUT / "stamp.json"
 SUBJECT = "Release Inner Breeze {version}"
 # What ./update_version.sh writes; only these may join the release commit.
 VERSION_FILES = ("droid/app/build.gradle", "src/core/version.h", "src/core/version.zi", "windows/inbe.rc",
@@ -57,6 +51,13 @@ def load(name, path):
 
 phone_check = load("phone_check", "scripts/phone-check.py")
 gate = load("check_phone_check", "scripts/check-phone-check.py")
+build_layout = load("build_layout", "scripts/check-build-layout.py")
+try:
+    READY_OUTPUT = build_layout.release_ready_output(
+        os.environ.get("RELEASE_READY_OUTPUT", "build/release-ready"))
+except ValueError as error:
+    raise SystemExit(str(error)) from error
+READY_STAMP = ROOT / READY_OUTPUT / "stamp.json"
 
 
 class Refused(Exception):
