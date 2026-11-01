@@ -5,7 +5,7 @@ buildscript {
     ext.buildingGplay = gradle.startParameter.taskNames.any { it.toLowerCase().contains('gplay') }
     if (buildingGplay && gradle.startParameter.taskNames.any {
         def name = it.toLowerCase()
-        name.contains('release') || name.contains('debug')
+        name.contains('release') || (name.contains('debug') && !name.contains('gplay'))
     }) {
         throw new GradleException('Build the gplay edition in its own Gradle run')
     }
@@ -128,6 +128,16 @@ android {
             buildConfigField "boolean", "SELF_UPDATE", "false"
             buildConfigField "String", "UPDATE_FEED", '""'
         }
+        gplayDebug {
+            initWith gplay
+            applicationIdSuffix '.gplay.debug'
+            signingConfig signingConfigs.debug
+            debuggable true
+            minifyEnabled false
+            shrinkResources false
+            matchingFallbacks = ['gplay', 'debug']
+            manifestPlaceholders.inbeAppLabel = "Inner Breeze Play Debug"
+        }
         debug {
             // Device verification must not replace or restart the owner's debug app.
             applicationIdSuffix verificationInstance ? ".verification" : ".debug"
@@ -164,6 +174,8 @@ android {
     // Kryon's Play Billing (kryon/play_billing finds it through the
     // activity's class loader); other editions carry no Google billing.
     sourceSets.gplay.java.srcDir new File(kryonDir, 'templates/droid/droid/app/src/gplay/java')
+    sourceSets.gplayDebug.java.srcDirs += sourceSets.gplay.java.srcDirs
+    sourceSets.gplayDebug.manifest.srcFile 'src/gplay/AndroidManifest.xml'
     sourceSets.main.java.srcDir new File(kryonDir, 'templates/droid/droid/app/src/main/java/org/kryonlabs/platform')
 
     dependenciesInfo {
@@ -196,6 +208,15 @@ androidComponents {
     beforeVariants(selector().withBuildType("gplay")) { variantBuilder ->
         variantBuilder.minSdk = 23
     }
+    beforeVariants(selector().withBuildType("gplayDebug")) { variantBuilder ->
+        variantBuilder.minSdk = 23
+    }
+}
+
+// Entity owns the Play-only Drive adapter; other editions never read its Gradle file.
+if (buildingGplay) {
+    ext.waoziEntityDir = rootProject.file('../build/packages/entity')
+    apply from: new File(waoziEntityDir, 'android/gplay.gradle')
 }
 
 // Always run, including Java-only incremental builds. CMake independently
@@ -279,6 +300,10 @@ gradle.taskGraph.whenReady { taskGraph ->
         && !project.hasProperty('fDroidBuild')) {
         throw new GradleException("Use: make android-release PASSWORD=your-password")
     }
+}
+
+configurations {
+    gplayDebugImplementation.extendsFrom gplayImplementation
 }
 
 dependencies {

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The Google Play edition can optionally save and open encrypted account backups with Google Drive after Google Cloud setup.
+
 - Repeated local builds reuse storage instead of keeping a new copy for each run.
 - Linux: install from the signed APT repository and get updates with apt.
 - Filter Android account-key imports to key files and related backup types.
