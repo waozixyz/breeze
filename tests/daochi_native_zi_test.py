@@ -6,6 +6,7 @@ from pathlib import Path
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,33 @@ def GeneratedSource(generated, name):
         return path
     prefixed = sorted(path.parent.glob("p" + "[0-9a-f]" * 16 + "_" + path.name))
     return prefixed[0] if len(prefixed) == 1 else path
+
+
+def ResolveGeneratedAuthSessionType(header_text):
+    """Resolve the common Session pointer in the generated account API."""
+    signatures = {
+        "LoginAccount": r"String base_url, AccountKeys\* account, String client_id, {session}\* session",
+        "RequestAccount": r"String base_url, AccountKeys\* account, String client_id, {session}\* session, int64_t now, String method, String path, String body, Slice output, int32_t\* status",
+        "SyncAccountPayload": r"String base_url, AccountKeys\* account, String client_id, {session}\* session, Device device, int64_t now, String body, Slice output, int32_t\* status",
+    }
+    types = set()
+    for name, parameters in signatures.items():
+        declarations = re.findall(r"\b" + name + r"\s*\([^;{}]*\)\s*;", header_text)
+        pattern = r"AuthResult\s+" + name + r"\s*\(\s*" + parameters.format(
+            session=r"(?P<session>[A-Za-z_]\w*)"
+        ) + r"\s*\)\s*;"
+        matches = list(re.finditer(pattern, header_text))
+        if len(declarations) != 1 or len(matches) != 1:
+            raise ValueError(f"generated auth contract: missing, ambiguous or malformed {name} declaration")
+        types.add(matches[0].group("session"))
+    if len(types) != 1:
+        raise ValueError("generated auth contract: account functions use different Session types")
+    session_type = types.pop()
+    typedef = rf"\btypedef\s+struct\s+{re.escape(session_type)}\s+{re.escape(session_type)}\s*;"
+    if len(re.findall(typedef, header_text)) != 1:
+        raise ValueError(f"generated auth contract: missing or ambiguous typedef for {session_type}")
+    return session_type
+
 
 class Handler(BaseHTTPRequestHandler):
     friends_requests = 0
@@ -131,6 +159,10 @@ with tempfile.TemporaryDirectory(prefix="inbe-daochi-native-") as temporary:
         "--module-path", str(ROOT / "build/packages/game2d/src"),
         "-o", str(generated), str(ROOT / "src/storage/daochi_native.zi"),
     ], check=True)
+    session_type = ResolveGeneratedAuthSessionType(
+        (generated / "storage/daochi_native.h").read_text()
+        + "\n" + (generated / "auth.h").read_text()
+    )
     # Only the account path is linked; unused storage code is dropped.
     sources = [
         "storage/daochi_native.c", "daochi_account.c", "delegate_store.c",
@@ -143,6 +175,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-daochi-native-") as temporary:
         os.environ.get("CC", "cc"), "-std=c11", "-O0", "-Wall", "-Wextra",
         "-Werror", "-Wno-unused-function", "-Wno-unused-variable",
         "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
+        f"-DDAOCHI_FIXTURE_SESSION_TYPE={session_type}",
         f"-I{ROOT / 'build/packages/ziran/include'}", f"-I{generated}",
         f"-I{generated / 'storage'}",
         str(ROOT / "tests/daochi_native_zi_test.c"),
