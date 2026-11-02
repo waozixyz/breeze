@@ -370,7 +370,7 @@ LOCALE_FILES := $(wildcard locales/*.txt)
 # The practice media is the practices package, packaged under
 # assets/practices/ (scripts/practice_media.py).
 PRACTICE_MEDIA := build/packages/practices
-IMAGE_FILES := assets/app/icon.png assets/easteregg/art.png assets/easteregg/waozi.png $(PRACTICE_MEDIA)/whm/1.png $(PRACTICE_MEDIA)/whm/2.png $(PRACTICE_MEDIA)/meditation/1.png assets/pet/egg1.png $(wildcard $(PRACTICE_MEDIA)/*/banner*.png) $(wildcard $(PRACTICE_MEDIA)/sunsalutation/characters/*/*.png) $(wildcard $(PRACTICE_MEDIA)/taichi/*.png $(PRACTICE_MEDIA)/taichi/*/*.png) $(PRACTICE_MEDIA)/taichi/course.tch
+IMAGE_FILES := assets/app/icon.webp assets/easteregg/art.webp assets/easteregg/waozi.png $(PRACTICE_MEDIA)/whm/1.png $(PRACTICE_MEDIA)/whm/2.png $(PRACTICE_MEDIA)/meditation/1.png assets/pet/egg1.png $(wildcard $(PRACTICE_MEDIA)/*/banner*.png) $(wildcard $(PRACTICE_MEDIA)/sunsalutation/characters/*/*.png) $(wildcard $(PRACTICE_MEDIA)/taichi/*.png $(PRACTICE_MEDIA)/taichi/*/*.png) $(PRACTICE_MEDIA)/taichi/course.tch
 SOUND_FILES := $(wildcard assets/sounds/*.ogg)
 FONT_SUBSET_DIR := assets/fonts/subset
 FONT_SUBSET_CORPUS := locales assets/fonts/input_common.txt assets/fonts/ui_symbols.txt $(PRACTICE_MEDIA)/astral_projection/text $(PRACTICE_MEDIA)/workout/text
@@ -384,8 +384,8 @@ EMBEDDED_ASSETS_C := $(BUILD_OBJ_DIR)/$(APP_NAME)_embedded_assets.c
 STYLE_FILES := $(wildcard $(KSS_DIR)/styles/*.kss) \
 	$(wildcard assets/styles/*.kss) \
 	$(wildcard themes/catalog_*.kss)
-IMAGE_FILES += assets/app/icon-sky-cradle.png assets/app/icon-ink-and-air.png
-IMAGE_FILES += $(wildcard assets/social/*.png)
+IMAGE_FILES += assets/app/icon-sky-cradle.webp assets/app/icon-ink-and-air.webp
+IMAGE_FILES += $(wildcard assets/social/*.png assets/social/*.webp)
 IMAGE_FILES += $(KRYON_DIR)/icons/ui.png $(KRYON_DIR)/icons/pfp.png
 APP_BUNDLES := $(addprefix $(BUILD_DIR)/apps/,lists.zx habits.zx practices.zx diary.zx lumi.zx leaderboard.zx)
 INBE_BUNDLE := $(BUILD_DIR)/inbe.zx
@@ -397,7 +397,7 @@ APP_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievem
 APP_RESOURCES += $(wildcard assets/*/sidebar.shape)
 
 APPS_BUNDLE ?= build/apps-ui/apps.zx
-EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) $(APPS_BUNDLE) assets/app/icon.png
+EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) $(APPS_BUNDLE) assets/app/icon.webp
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 # Dependencies are imported as PACKAGE/Module through their linked packages.
 ZI_PACKAGE_PATHS := $(shell sh scripts/package-paths.sh)

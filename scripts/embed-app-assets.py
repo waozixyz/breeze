@@ -9,6 +9,7 @@ import json
 
 MIME_TYPES = {
     ".png": "image/png",
+    ".webp": "image/webp",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".ogg": "audio/ogg",

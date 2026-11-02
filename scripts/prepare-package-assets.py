@@ -34,10 +34,10 @@ for name in ('inbe', 'lists', 'habits', 'practices', 'diary', 'lumi', 'leaderboa
              'practice-workout') + NODE_APPS:
     (OUTPUT / name / 'assets').mkdir(parents=True)
 patterns = (
-    'assets/mcp/*.json', 'assets/app/icon.png', 'assets/app/icon-sky-cradle.png',
-    'assets/app/icon-ink-and-air.png', 'assets/easteregg/*.png', 'assets/pet/*.png',
+    'assets/mcp/*.json', 'assets/app/icon.webp', 'assets/app/icon-sky-cradle.webp',
+    'assets/app/icon-ink-and-air.webp', 'assets/easteregg/*.png', 'assets/easteregg/*.webp', 'assets/pet/*.png',
     'assets/apps/icons/*.png',
-    'assets/social/*.png',
+    'assets/social/*.png', 'assets/social/*.webp',
     'assets/sounds/*.ogg',
     'assets/habits/**/*', 'assets/lists/**/*', 'assets/diary/**/*', 'assets/lumi/**/*',
     'assets/fonts/subset/*-App-Regular.*', 'assets/styles/*.kss',
