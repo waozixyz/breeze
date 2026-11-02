@@ -37,7 +37,7 @@ patterns = (
     'assets/mcp/*.json', 'assets/app/icon.webp', 'assets/app/icon-sky-cradle.webp',
     'assets/app/icon-ink-and-air.webp', 'assets/easteregg/*.png', 'assets/easteregg/*.webp', 'assets/pet/*.png',
     'assets/apps/icons/*.png',
-    'assets/social/*.png', 'assets/social/*.webp',
+    'assets/social/*.png', 'assets/social/*.webp', 'assets/social/telegram.svg',
     'assets/sounds/*.ogg',
     'assets/habits/**/*', 'assets/lists/**/*', 'assets/diary/**/*', 'assets/lumi/**/*',
     'assets/fonts/subset/*-App-Regular.*', 'assets/styles/*.kss',
