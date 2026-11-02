@@ -1005,9 +1005,26 @@ with contextlib.ExitStack() as stack:
                 action = corner(habit, driver.tree())
                 assert action["label"] == "Download"
                 press(action)
+                driver.wait(role="modal")
+                driver.wait(label="Cancel", role="button")
+                assert settings(profile)["app_used_habits"] == "0", "Opening the download dialog installed Habits"
+                driver.press(label="Cancel", role="button")
+                driver.wait_gone(role="modal")
+                assert settings(profile)["app_used_habits"] == "0", "Cancelling installed Habits"
+                assert settings(profile)["main_tab"] == selected_tab, "Cancelling opened another app"
+                habit = reveal_card("Habits")
+                press(corner(habit, driver.tree()))
+                driver.wait(role="modal")
+                # The row's symbol opens consent; the dialog's Download
+                # actually restores the app, then opens it when ready.
+                download = driver.find(label="Download", role="button", visible=True)[-1]
+                press(download)
                 wait_setting(profile, "app_used_habits", 1, "Install did not restore Habits")
                 assert favorites(profile) == [11, 2], "Installing unexpectedly changed pins"
-                assert settings(profile)["main_tab"] == selected_tab, "Install opened another app"
+                wait_setting(profile, "main_tab", 0, "Restored Habits did not open")
+                driver.wait_gone(label="Find an app", role="text_field")
+                with database(profile) as db:
+                    assert db.execute("SELECT COUNT(*) FROM habits").fetchone()[0] == habit_count
             if not mobile:
                 # Overflow must leave Apps reachable on either side.
                 all_favorites = [12, 1, 2, 3, 11]
