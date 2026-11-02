@@ -457,6 +457,16 @@ export async function verifySunSalutationCanvas({ evaluate, click, scroll, resiz
       if (label === 'phone') await save(`${label}-pose-${String(step + 1).padStart(2, '0')}`);
       evidence.push({ viewport: label, step: step + 1, ...held });
     }
+    // Finish through the real Next controls before starting another viewport.
+    // Jumping straight home leaves the session's guide in its rounds phase.
+    // Settings permit up to twelve rounds, each with twelve poses, plus rest.
+    let screen = await evaluate('Module._app_web_test_screen()');
+    for (let next = 0; next < 12 * 12 + 2 && screen === 3; next++) {
+      await control(2);
+      screen = await evaluate('Module._app_web_test_screen()');
+    }
+    if (screen !== 5)
+      throw new Error(`Sun Salutation did not finish at its results: screen=${screen}`);
     console.log(`web Sun Salutation: ${poseCount} poses, previews, controls and pause passed (${browser}, ${label})`);
   }
   const performance = await evaluate(`(() => {
