@@ -493,8 +493,9 @@ with contextlib.ExitStack() as stack:
                         driver.press(label="Edit apps", role="button")
                         driver.wait(label="Done", role="button")
                         assert driver.find(label="Move app", role="button", visible=True)
-                        # Pointer activation does not promise keyboard focus.
-                        # Reach Done through the real Tab order before Enter.
+                        # A pointer-focused button does not show keyboard
+                        # focus. Enter only activates after keyboard navigation.
+                        driver.key("tab")
                         for _ in range(40):
                             if driver.wait(label="Done", role="button")["focused"]:
                                 break
