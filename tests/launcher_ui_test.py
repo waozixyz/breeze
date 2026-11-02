@@ -1009,7 +1009,7 @@ with contextlib.ExitStack() as stack:
                 driver.wait(label="Cancel", role="button")
                 assert settings(profile)["app_used_habits"] == "0", "Opening the download dialog installed Habits"
                 driver.press(label="Cancel", role="button")
-                driver.wait_gone(role="modal")
+                driver.wait_gone(label="Cancel", role="button")
                 assert settings(profile)["app_used_habits"] == "0", "Cancelling installed Habits"
                 assert settings(profile)["main_tab"] == selected_tab, "Cancelling opened another app"
                 habit = reveal_card("Habits")
