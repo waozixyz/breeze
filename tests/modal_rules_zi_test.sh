@@ -28,7 +28,11 @@ for input in source saved; do
         --module-path "$module_path" \
         --entry modal_rules_behavior:Answer \
         -o "$output/modal_rules.zx" "$file"
-    [ "$("$bin/zi2zx" run "$output/modal_rules.zx")" = 42 ]
+    actual=$("$bin/zi2zx" run "$output/modal_rules.zx")
+    if [ "$actual" != 42 ]; then
+        echo "modal rules $input bundle returned $actual; expected 42" >&2
+        exit 1
+    fi
 
     "$bin/zi2c" --no-main --root "$module_root" \
         --module-path "$module_path" -o "$output/c" "$file"
