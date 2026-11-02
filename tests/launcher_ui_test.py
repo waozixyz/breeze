@@ -209,7 +209,8 @@ with contextlib.ExitStack() as stack:
                 return card
             page = next(node for node in tree if node["kind"] == "scroll" and node["visible"])
             driver.pointer(page["visible_x"] + page["visible_width"] / 2,
-                           page["visible_y"] + page["visible_height"] / 2, wheel=-12)
+                           page["visible_y"] + page["visible_height"] / 2,
+                           wheel=12 if card["y"] < page["visible_y"] else -12)
             driver.wait_idle(frames=3)
         raise AssertionError(f"Could not reach {label} above the navigation")
 
@@ -573,12 +574,18 @@ with contextlib.ExitStack() as stack:
                     wait_setting(profile, "launcher_grid_view", 1)
                     pinned, more, tree = cards()
                     assert all(abs(card["height"] - 88) <= 1 for card in pinned + more), cards()
-                    handles = driver.find(label="Move app", role="button", visible=True)
-                    for card in pinned + more:
+                    # Embedded baselines can add rows below the viewport.
+                    # Verify every handle with its card scrolled into view.
+                    first_label = pinned[0]["label"]
+                    for label in [card["label"] for card in pinned + more]:
+                        card = reveal_card(label)
+                        handles = driver.find(label="Move app", role="button", visible=True)
                         matches = [node for node in handles
                                    if abs(node["y"] - card["y"]) < 2
                                    and abs(node["x"] + node["width"] - card["x"]) < 2]
                         assert len(matches) == 1, (card, matches)
+                    reveal_card(first_label)
+                    pinned, more, tree = cards()
                     first_options = next(node for node in tree if node["kind"] == "button"
                                          and node["label"] == "App options" and node["visible"]
                                          and node["y"] >= pinned[0]["y"]

@@ -21,8 +21,9 @@ String ProbeFullRoot(void)
     return StringView((char *)full_payload, full_payload_size);
 }
 
-/* This loader probe has no publisher or persisted settings. Network-package
- * authentication always fails; bundled identity checks still execute. */
+/* The narrow Android probe has no storage runtime. Native probes link the
+ * production SQLite/crypto host with the shared isolated test support. */
+#ifndef APPS_PLATFORM_STORAGE
 int crypto_ed25519_check(const uint8_t *signature, const uint8_t *public_key,
                         const uint8_t *message, size_t length)
 {
@@ -38,6 +39,7 @@ int32_t storage_get_setting_int(String key)
     (void)key;
     return 0;
 }
+#endif
 
 void app_web_storage_flush(void) {}
 
@@ -67,6 +69,7 @@ static unsigned char *read_payload(const char *path, size_t *size)
     return bytes;
 }
 
+#ifndef APPS_PLATFORM_STORAGE
 void *asset_entry_at(size_t index)
 {
     (void)index;
@@ -77,6 +80,7 @@ size_t asset_entry_total(void)
 {
     return 0;
 }
+#endif
 
 FILE *__wrap_tmpfile(void)
 {
@@ -86,6 +90,14 @@ FILE *__wrap_tmpfile(void)
 int main(int argc, char **argv)
 {
     setbuf(stdout, NULL);
+#ifdef APPS_PLATFORM_STORAGE
+    /* Fail closed if invoked outside the isolated test script. */
+    const char *data_root = getenv("APP_DATA_ROOT");
+    if(data_root == NULL || data_root[0] == '\0') {
+        fprintf(stderr, "Native platform probe requires APP_DATA_ROOT\n");
+        return 12;
+    }
+#endif
     if(argc != 3) {
         return 10;
     }

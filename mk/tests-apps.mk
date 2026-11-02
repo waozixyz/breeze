@@ -9,8 +9,8 @@ apps-test: library-reader-test apps $(ZIRAN_BUILD_DIR)/libziran.a $(LIBOQS_A) $(
 	sh tests/apps_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 .PHONY: apps-platform-test apps-android-probe
-apps-platform-test: apps $(ZIRAN_BUILD_DIR)/libziran.a
-	sh tests/apps_platform_test.sh $(ZIRAN_BIN) native
+apps-platform-test: apps $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
+	sh tests/apps_platform_test.sh $(ZIRAN_BIN) native $(LIBOQS_A) $(SQLITE_SRC)
 
 apps-android-probe: apps
 	sh tests/apps_platform_test.sh $(ZIRAN_BIN) android
@@ -38,7 +38,7 @@ app-locations-test: $(ZIRAN_BIN)
 		--toolchain '$(abspath $(ZIRAN_DIR))' --apps '$(abspath build/packages/apps)' \
 		--daochi-client '$(abspath build/packages/daochi-client)'
 
-node-app-snapshot-test: $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
+node-app-snapshot-test: apps $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
 	python3 tests/node_app_snapshot_test.py --ziran '$(abspath $(ZIRAN_BIN))' \
 		--runtime '$(abspath $(ZIRAN_BUILD_DIR)/libziran.a)'
 .PHONY: photos-app-test media-store-test media-metadata-test entity-photos-test
