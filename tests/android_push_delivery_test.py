@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Test the production app adapter with OS/provider doubles, then real API compilation.
 
-No phone, window, network, credentials or provider registration is used.
+No phone, window, credentials or provider registration is used. Gradle resolves
+the pinned production API dependencies from their public Maven repositories.
 Kryon's own JNI tests cover transport persistence and envelope verification.
 """
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 from zipfile import ZipFile
@@ -165,8 +167,8 @@ public class PushDeliveryTest {
 }
 
 
-def run(*args):
-    subprocess.run([str(a) for a in args], check=True, timeout=60)
+def run(*args, timeout=60):
+    subprocess.run([str(a) for a in args], check=True, timeout=timeout)
 
 
 shutil.rmtree(WORK, ignore_errors=True)
@@ -182,20 +184,34 @@ production = [JAVA / f"{edition}/java/xyz/waozi/inbe/{name}.java" for edition, n
 run("javac", "-d", WORK / "classes", *source.rglob("*.java"), *production)
 run("java", "-cp", WORK / "classes", "xyz.waozi.inbe.PushDeliveryTest")
 
-# Compile the actual app and shared Java against installed APIs. This must
-# succeed; missing libraries are a failure, never an unreported skip.
+# Compile against the actual production APIs, including on a clean runner.
+# Resolve the versions declared by the locked Kryon package rather than
+# selecting arbitrary versions from a pre-populated Gradle cache.
 sdk = Path(os.environ.get("ANDROID_HOME", Path.home() / "Android/Sdk"))
 jars = [sorted(sdk.glob("platforms/*/android.jar"))[-1]]
-for group, artifact in [("org.unifiedpush.android", "connector"),
-                        ("com.google.firebase", "firebase-messaging"),
-                        ("com.google.android.gms", "play-services-tasks"),
-                        ("com.google.android.gms", "play-services-basement")]:
-    base = Path.home() / ".gradle/caches/modules-2/files-2.1" / group / artifact
-    aar = sorted(base.glob("*/*/*.aar"))[-1]
-    target = WORK / (artifact + ".jar")
-    with ZipFile(aar) as archive:
-        target.write_bytes(archive.read("classes.jar"))
-    jars.append(target)
+coordinates = []
+for template, dependency in [
+    ("android-notifications-push.gradle", "org.unifiedpush.android:connector"),
+    ("android-notifications-push-gplay.gradle", "com.google.firebase:firebase-messaging"),
+]:
+    declaration = (KRYON / "templates" / template).read_text()
+    matches = re.findall(r"implementation\s+'(" + re.escape(dependency) + r":[^']+)'", declaration)
+    if len(matches) != 1:
+        raise RuntimeError(f"Expected one pinned {dependency} declaration in {template}")
+    coordinates.append(matches[0])
+dependencies = WORK / "dependencies"
+run(ROOT / "droid/gradlew", "-p", ROOT / "tests/android-push-delivery",
+    "--no-daemon", "--project-cache-dir", WORK / "gradle-cache",
+    f"-PpushApiOutput={dependencies}", f"-PunifiedPush={coordinates[0]}",
+    f"-PfirebaseMessaging={coordinates[1]}", "resolvePushApis", timeout=300)
+for artifact in sorted(dependencies.iterdir()):
+    if artifact.suffix == ".aar":
+        target = WORK / (artifact.name + ".jar")
+        with ZipFile(artifact) as archive:
+            target.write_bytes(archive.read("classes.jar"))
+        jars.append(target)
+    elif artifact.suffix == ".jar":
+        jars.append(artifact)
 (source / "xyz/waozi/inbe/MainActivity.java").write_text(
     "package xyz.waozi.inbe; public class MainActivity extends android.app.Activity {}")
 shared = sorted((KRYON / "templates/android-notifications-push").glob("*/java/**/*.java"))
