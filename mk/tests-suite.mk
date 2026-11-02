@@ -170,3 +170,5 @@ ci: test web
 test: local-game-records-test
 
 test: android-push-delivery-test
+
+test: telegram-svg-test

@@ -7,19 +7,57 @@ PngDimension :: (path: string, offset: s32) -> s32 {
     }
 
     value := (cast(u32)asset.data[offset] << 24) |
-        (cast(u32)asset.data[offset + 1] << 16) |
-        (cast(u32)asset.data[offset + 2] << 8) |
-        cast(u32)asset.data[offset + 3]
+    (cast(u32)asset.data[offset + 1] << 16) |
+    (cast(u32)asset.data[offset + 2] << 8) |
+    cast(u32)asset.data[offset + 3]
     if value == 0 || value > 2147483647 {
         return 0
     }
     return cast(s32)value
 }
 
+// WebP stores dimensions in its first image or extended header.
+WebpDimension :: (path: string, height: bool) -> s32 {
+    asset := AssetRead(path)
+    data := asset.data
+    if !asset.found || asset.mime != "image/webp" || data.count < 25 ||
+    data[0:4] != "RIFF" || data[8:12] != "WEBP" {
+        return 0
+    }
+    if data[12:16] == "VP8L" && data[20] == 47 {
+        if height {
+            return 1 + cast(s32)((cast(u32)data[22] >> 6) |
+                (cast(u32)data[23] << 2) | ((cast(u32)data[24] & 15) << 10))
+        }
+        return 1 + cast(s32)(cast(u32)data[21] | ((cast(u32)data[22] & 63) << 8))
+    }
+    if data.count < 30 {
+        return 0
+    }
+    if data[12:16] == "VP8X" {
+        offset: s32 = ifx height then 27 else 24
+        return 1 + cast(s32)(cast(u32)data[offset] |
+            (cast(u32)data[offset + 1] << 8) | (cast(u32)data[offset + 2] << 16))
+    }
+    if data[12:16] == "VP8 " && data[23] == 157 && data[24] == 1 && data[25] == 42 {
+        offset: s32 = ifx height then 28 else 26
+        return cast(s32)((cast(u32)data[offset] | (cast(u32)data[offset + 1] << 8)) & 16383)
+    }
+    return 0
+}
+
 ImageWidth :: (path: string) -> s32 {
+    width := WebpDimension(path, false)
+    if width != 0 {
+        return width
+    }
     return PngDimension(path, 16)
 }
 
 ImageHeight :: (path: string) -> s32 {
+    height := WebpDimension(path, true)
+    if height != 0 {
+        return height
+    }
     return PngDimension(path, 20)
 }

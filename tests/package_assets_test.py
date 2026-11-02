@@ -78,13 +78,13 @@ lumi = assets(root['cells/lumi.zx'])
 assert not any(name.endswith('.ogg') for name in lumi), [name for name in lumi if name.endswith('.ogg')][:3]
 combined = root | practices | content
 source = '\n'.join(path.read_text(errors='replace') for path in (ROOT / 'src').rglob('*.zi'))
-paths = set(re.findall(r'"((?:assets/)?(?:practices|easteregg|pet)/[^"\n]+\.(?:png|jpg|jpeg))"', source))
+paths = set(re.findall(r'"((?:assets/)?(?:practices|easteregg|pet)/[^"\n]+\.(?:png|jpg|jpeg|webp))"', source))
 assert paths
 for path in paths:
     path = path if path.startswith('assets/') else 'assets/' + path
     assert path in combined, f'image is absent from package: {path}'
     assert combined[path] == media_path(path).read_bytes(), path
-for path in ('icons/ui.png', 'icons/pfp.png'):
+for path in ('icons/ui.webp', 'icons/pfp.webp'):
     assert root[path] == (ROOT / 'build/packages/kryon' / path).read_bytes()
 for file in (ROOT / 'locales').glob('*.txt'):
     assert root['locales/' + file.name] == file.read_bytes()
@@ -100,12 +100,12 @@ for name in root:
 assert not any(name.endswith('/banner.png') for name in practices)
 # Practice pictures ship only in their packs, apart from every practice's
 # banners: Practice's tabs show each practice before it is downloaded.
-banner = re.compile(r'assets/practices/[a-z_]+/banner-(?:light|dark)\.png')
-assert not any(name.endswith('.png') and not banner.fullmatch(name) for name in practices), \
-    [name for name in practices if name.endswith('.png') and not banner.fullmatch(name)]
+banner = re.compile(r'assets/practices/[a-z_]+/banner-(?:light|dark)\.webp')
+assert not any(name.endswith(('.png', '.webp')) and not banner.fullmatch(name) for name in practices), \
+    [name for name in practices if name.endswith(('.png', '.webp')) and not banner.fullmatch(name)]
 for name in NAMES:
     for theme in ('light', 'dark'):
-        path = f'assets/practices/{name}/banner-{theme}.png'
+        path = f'assets/practices/{name}/banner-{theme}.webp'
         assert practices[path] == media_path(path).read_bytes(), path
 # The small practices ship installed with Practices, each its pack's exact
 # bytes; Sun Salutation and Tai Chi download.

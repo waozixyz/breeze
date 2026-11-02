@@ -1,6 +1,6 @@
 """Every Kryon icon Inbe draws comes from an icon sheet Inbe ships.
 
-Kryon's ImageForIcon maps each IconType to a sheet such as icons/ui.png.
+Kryon's ImageForIcon maps each IconType to a sheet such as icons/ui.webp.
 A sheet that is missing from the desktop embed or the app packages shows
 "Missing image" instead of the icon, so this fails the build first."""
 from pathlib import Path
@@ -42,8 +42,8 @@ def shipped_sheets():
     """Sheets embedded in the desktop app and in the app packages."""
     makefile = (ROOT / "Makefile").read_text()
     packages = (ROOT / "scripts/prepare-package-assets.py").read_text()
-    desktop = set(re.findall(r"\$\(KRYON_DIR\)/(icons/[\w.-]+\.png)", makefile))
-    packaged = set(re.findall(r"build/packages/kryon/(icons/[\w.-]+\.png)", packages))
+    desktop = set(re.findall(r"\$\(KRYON_DIR\)/(icons/[\w.-]+\.webp)", makefile))
+    packaged = set(re.findall(r"build/packages/kryon/(icons/[\w.-]+\.webp)", packages))
     return desktop, packaged
 
 
@@ -62,7 +62,7 @@ source = ICON_SOURCE.read_text()
 values = icon_values(source)
 sheets = icon_sheets(source)
 desktop, packaged = shipped_sheets()
-assert values and sheets and "icons/ui.png" in desktop and "icons/ui.png" in packaged, \
+assert values and sheets and "icons/ui.webp" in desktop and "icons/ui.webp" in packaged, \
     "Could not read Kryon's icon sheets or Inbe's shipped assets"
 failures = []
 for name, place in sorted(used_icons(values).items()):

@@ -71,8 +71,8 @@ main(void)
     assert(SessionValid(app.ui.session));
     app.ui.view_width = 400;
     AppMetricsConfigure(1.0f);
-    assert(ImageWidth(StringView("icons/ui.png", 12)) == 512);
-    assert(ImageHeight(StringView("icons/ui.png", 12)) == 512);
+    assert(ImageWidth(StringView("icons/ui.webp", 13)) == 512);
+    assert(ImageHeight(StringView("icons/ui.webp", 13)) == 512);
     assert(app_toolbar_height() == 58);
     assert(app_content_top_reserved(&app) == GetTabBarHeight());
     app.breathing.screen = ScreenSettings;
@@ -85,7 +85,7 @@ main(void)
     for(int32_t index = 0; index < count; index++) {
         PaintCommand command = PendingPaintAt(app.ui.session, index);
         if(command.kind == PaintKindImage &&
-           StringEqual(command.asset_path, StringView("icons/ui.png", 12))) {
+           StringEqual(command.asset_path, StringView("icons/ui.webp", 13))) {
             assert(command.source.x == 448.0f);
             assert(command.source.y == 384.0f);
             assert(command.source.width == 64.0f);
@@ -106,7 +106,7 @@ main(void)
     for(int32_t index = 0; index < count; index++) {
         PaintCommand command = PendingPaintAt(app.ui.session, index);
         if(command.kind == PaintKindImage &&
-           StringEqual(command.asset_path, StringView("icons/ui.png", 12))) {
+           StringEqual(command.asset_path, StringView("icons/ui.webp", 13))) {
             assert(command.source.x == 448.0f);
             assert(command.source.y == 384.0f);
             found_icon = true;

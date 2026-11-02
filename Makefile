@@ -210,7 +210,7 @@ WIN64_RESOURCE := $(BUILD_OBJ_DIR)/windows/$(WIN64_ARCH)/$(APP_NAME).res
 RAYLIB_SOURCES := $(if $(wildcard $(RAYLIB_DIR)),$(shell find $(RAYLIB_DIR) -type f \( -name '*.c' -o -name '*.h' \)))
 
 KRYON_ICON_DIR := icons
-KRYON_ICON_FILES := $(shell find $(KRYON_DIR)/$(KRYON_ICON_DIR) -path '*/review/*' -prune -o -type f \( -name '*.png' -o -name '*.json' \) -print 2>/dev/null | LC_ALL=C sort)
+KRYON_ICON_FILES := $(shell find $(KRYON_DIR)/$(KRYON_ICON_DIR) -path '*/review/*' -prune -o -type f \( -name '*.webp' -o -name '*.png' -o -name '*.json' \) -print 2>/dev/null | LC_ALL=C sort)
 KRYON_GENERATED_INCLUDE_DIR := $(BUILD_OBJ_DIR)/kryon/generated/include
 KRYON_GENERATED_SRC_DIR := $(BUILD_OBJ_DIR)/kryon/generated/src
 KRYON_UI_ZI := $(addprefix $(KRYON_DIR)/src/ui/,$(shell cat $(KRYON_DIR)/src/ui/modules.txt))
@@ -370,7 +370,7 @@ LOCALE_FILES := $(wildcard locales/*.txt)
 # The practice media is the practices package, packaged under
 # assets/practices/ (scripts/practice_media.py).
 PRACTICE_MEDIA := build/packages/practices
-IMAGE_FILES := assets/app/icon.webp assets/easteregg/art.webp assets/easteregg/waozi.png $(PRACTICE_MEDIA)/whm/1.png $(PRACTICE_MEDIA)/whm/2.png $(PRACTICE_MEDIA)/meditation/1.png assets/pet/egg1.png $(wildcard $(PRACTICE_MEDIA)/*/banner*.png) $(wildcard $(PRACTICE_MEDIA)/sunsalutation/characters/*/*.png) $(wildcard $(PRACTICE_MEDIA)/taichi/*.png $(PRACTICE_MEDIA)/taichi/*/*.png) $(PRACTICE_MEDIA)/taichi/course.tch
+IMAGE_FILES := assets/app/icon.webp assets/easteregg/art.webp assets/easteregg/waozi.png $(PRACTICE_MEDIA)/whm/1.webp $(PRACTICE_MEDIA)/whm/2.webp $(PRACTICE_MEDIA)/meditation/1.webp assets/pet/egg1.png $(wildcard $(PRACTICE_MEDIA)/*/banner*.webp) $(wildcard $(PRACTICE_MEDIA)/sunsalutation/characters/*/*.png) $(wildcard $(PRACTICE_MEDIA)/taichi/*.png $(PRACTICE_MEDIA)/taichi/*/*.png) $(PRACTICE_MEDIA)/taichi/course.tch
 SOUND_FILES := $(wildcard assets/sounds/*.ogg)
 FONT_SUBSET_DIR := assets/fonts/subset
 FONT_SUBSET_CORPUS := locales assets/fonts/input_common.txt assets/fonts/ui_symbols.txt $(PRACTICE_MEDIA)/astral_projection/text $(PRACTICE_MEDIA)/workout/text
@@ -386,7 +386,7 @@ STYLE_FILES := $(wildcard $(KSS_DIR)/styles/*.kss) \
 	$(wildcard themes/catalog_*.kss)
 IMAGE_FILES += assets/app/icon-sky-cradle.webp assets/app/icon-ink-and-air.webp
 IMAGE_FILES += assets/social/telegram.svg $(wildcard assets/social/*.png assets/social/*.webp)
-IMAGE_FILES += $(KRYON_DIR)/icons/ui.png $(KRYON_DIR)/icons/pfp.png
+IMAGE_FILES += $(KRYON_DIR)/icons/ui.webp $(KRYON_DIR)/icons/pfp.webp
 APP_BUNDLES := $(addprefix $(BUILD_DIR)/apps/,lists.zx habits.zx practices.zx diary.zx lumi.zx leaderboard.zx)
 INBE_BUNDLE := $(BUILD_DIR)/inbe.zx
 INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zx

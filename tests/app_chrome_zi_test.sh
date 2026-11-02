@@ -37,7 +37,7 @@ mkdir -p "$work/c"
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     -o "$work/c" "$root/src/app/image_dimensions.zi"
 python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
-    "$root/build/packages/kryon/icons/ui.png"
+    "$root/build/packages/kryon/icons/ui.webp"
 set -- "$root/tests/app_chrome_link_test.c" \
     "$work/assets.c"
 for generated in "$work/c"/*.c "$work/c/app"/*.c; do

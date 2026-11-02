@@ -124,7 +124,7 @@ for variant in sky air; do
 </adaptive-icon>
 EOF
     # Settings previews contain only the person and cloud.
-    generate_transparent 192 "$PROJECT_ROOT/assets/app/icon-$preview.png"
+    generate_transparent 192 "$PROJECT_ROOT/assets/app/icon-$preview.webp"
 done
 ARTWORK="$WORK_DIR/sky.png"
 

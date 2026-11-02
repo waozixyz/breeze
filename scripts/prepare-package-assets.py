@@ -42,13 +42,13 @@ patterns = (
     'assets/habits/**/*', 'assets/lists/**/*', 'assets/diary/**/*', 'assets/lumi/**/*',
     'assets/fonts/subset/*-App-Regular.*', 'assets/styles/*.kss',
     'locales/*.txt', 'themes/catalog_*.kss',
-    'build/packages/kss/styles/*.kss', 'build/packages/kryon/icons/ui.png',
-    'build/packages/kryon/icons/pfp.png',
+    'build/packages/kss/styles/*.kss', 'build/packages/kryon/icons/ui.webp',
+    'build/packages/kryon/icons/pfp.webp',
 ) + tuple(f'assets/{name}/**/*' for name in NODE_APPS)
 # The practice media comes from the practices package and is packaged
 # under assets/practices/.
 practice_patterns = (
-    'whm/1.png', 'whm/2.png', 'meditation/1.png', '*/banner-light.png', '*/banner-dark.png',
+    'whm/1.webp', 'whm/2.webp', 'meditation/1.webp', '*/banner-light.webp', '*/banner-dark.webp',
     'sunsalutation/characters/*/*.png', 'sunsalutation/flat-edge.png',
     'sunsalutation/voice/**/*', 'sunsalutation/voice-male/**/*',
     'astral_projection/**/*', 'workout/**/*', 'taichi/**/*', 'guide/voice/**/*',

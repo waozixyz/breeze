@@ -189,3 +189,7 @@ launcher-entry-test: $(ZI2C_BIN)
 .PHONY: entity-picker-test
 entity-picker-test: $(ZI2C_BIN)
 	ZI2C="$(ZI2C_BIN)" ZIRAN_STD_ROOT="$(ZIRAN_DIR)" python3 tests/entity_picker_test.py
+
+.PHONY: telegram-svg-test
+telegram-svg-test: $(ZI2C_BIN)
+	sh tests/telegram_svg_test.sh $(ZIRAN_BUILD_DIR)/bin
