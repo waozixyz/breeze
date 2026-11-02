@@ -145,7 +145,8 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url || '/', 'http://127.0.0.1');
   const practiceFixture = url.pathname.replace('/__test_practice_content__/', '');
   if (url.pathname.startsWith('/__test_practice_content__/') &&
-      ['whm.zx', 'meditation.zx', 'sunsalutation.zx', 'patterns.zx', 'taichi.zx', 'taichi.en.zx', 'taichi.es.zx'].includes(practiceFixture)) {
+      ['whm.zx', 'meditation.zx', 'sunsalutation.zx', 'sunsalutation.es.zx', 'sunsalutation.es.male.zx',
+       'patterns.zx', 'taichi.zx', 'taichi.en.zx', 'taichi.es.zx'].includes(practiceFixture)) {
     const fixture = new URL('../build/practice-content/' + practiceFixture, import.meta.url);
     if (!existsSync(fixture)) {
       res.writeHead(404);
@@ -1728,7 +1729,10 @@ async function verifyRenderingLiveBidi(client, context) {
 async function installPracticeContentFixtures(client) {
   await pageJson(client, `(async () => {
     FS.mkdirTree('/home/inbe/packages');
-    for (const name of ['whm', 'meditation', 'sunsalutation', 'patterns', 'taichi', 'taichi.en', 'taichi.es']) {
+    // Sun Salutation's spoken cues are their own narration packs, like Tai Chi's;
+    // the Spanish run plays both voices without downloading them.
+    for (const name of ['whm', 'meditation', 'sunsalutation', 'sunsalutation.es', 'sunsalutation.es.male',
+                        'patterns', 'taichi', 'taichi.en', 'taichi.es']) {
       const response = await fetch('/__test_practice_content__/' + name + '.zx');
       if (!response.ok) throw new Error('Missing practice fixture: ' + name);
       FS.writeFile('/home/inbe/packages/practice-' + name + '.zx', new Uint8Array(await response.arrayBuffer()));
