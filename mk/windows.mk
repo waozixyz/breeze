@@ -20,6 +20,20 @@ $(1): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
 endef
 $(eval $(call WINDOWS_RAYLIB_RULE,$(WIN64_RAYLIB_A),$(WIN64_RAYLIB_BUILD_DIR),$(WIN64_CC),$(WIN64_AR),$(WIN64_RANLIB)))
 
+WIN64_WEBP_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/kryon-webp
+WIN64_WEBP_A := $(WIN64_WEBP_BUILD_DIR)/libkryonwebp.a
+
+$(WIN64_WEBP_A): Makefile mk/windows.mk ziran.lock $(KRYON_DIR)/cmake/WebP.cmake $(KRYON_DIR)/cmake/webp/CMakeLists.txt build/packages/libwebp/CMakeLists.txt $(wildcard build/packages/libwebp/src/*/*.c build/packages/libwebp/src/*/*.h)
+	$(CMAKE) -S $(KRYON_DIR)/cmake/webp -B $(WIN64_WEBP_BUILD_DIR) \
+		-DCMAKE_SYSTEM_NAME=Windows \
+		-DCMAKE_SYSTEM_PROCESSOR=$(WIN64_CMAKE_SYSTEM_PROCESSOR) \
+		-DCMAKE_C_COMPILER=$(WIN64_CC_PATH) \
+		-DCMAKE_AR=$(WIN64_AR_PATH) \
+		-DCMAKE_RANLIB=$(WIN64_RANLIB_PATH) \
+		-DWEBP_DIR="$(abspath build/packages/libwebp)" \
+		-DCMAKE_BUILD_TYPE=Release
+	$(CMAKE) --build $(WIN64_WEBP_BUILD_DIR) --target kryonwebp --parallel 2
+
 $(WINDOWS_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WINDOWS_GEN_DIR)
 	mkdir -p $(WINDOWS_GEN_DIR)
@@ -96,7 +110,7 @@ $(WIN64_RESOURCE): windows/$(APP_NAME).rc windows/$(APP_NAME).ico
 	mkdir -p $(dir $@)
 	$(WIN64_WINDRES) -Iwindows -O coff $< $@
 
-$(WIN64_TARGET): Makefile $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WIN64_RAYLIB_A) $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(WIN64_RESOURCE) | $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)
+$(WIN64_TARGET): Makefile mk/windows.mk $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WIN64_RAYLIB_A) $(WIN64_WEBP_A) $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(WIN64_RESOURCE) | $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)
 	$(WIN64_CC) $(WINDOWS_CFLAGS) \
 		-iquote$(WINDOWS_GEN_DIR) -iquote$(WINDOWS_GEN_DIR)/src $(WINDOWS_APP_INCLUDE) \
 		$(KRYON_INCLUDE) \
@@ -110,6 +124,7 @@ $(WIN64_TARGET): Makefile $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQ
 		$(WINDOWS_SRC) $(GENERATED_WINDOWS_C) $(WINDOWS_BUNDLE_RUNTIME) \
 		$(SQLITE_SRC) \
 		$(WIN64_RAYLIB_A) \
+		$(WIN64_WEBP_A) \
 		$(WIN64_CURL_A) \
 		$(WIN64_LIBOQS_A) \
 		$(WIN64_RESOURCE) $(WINDOWS_LDLIBS) \
