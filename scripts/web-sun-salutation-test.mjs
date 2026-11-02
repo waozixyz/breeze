@@ -393,6 +393,12 @@ export async function verifySunSalutationCanvas({ evaluate, click, scroll, resiz
     const frozen = await state();
     if (paused.paused !== 1 || paused.ticks !== frozen.ticks || paused.hash !== frozen.hash)
       throw new Error(`Sun Salutation pause did not freeze timer and artwork: ${JSON.stringify({ paused, frozen })}`);
+    // The introduction leads into Mountain pose before Next advances poses.
+    // Both transitions must preserve the explicit pause.
+    await control(2);
+    const mountain = await state();
+    if (mountain.step !== 0 || mountain.paused !== 1 || mountain.ticks !== 0)
+      throw new Error(`Sun Salutation introduction did not enter Mountain pose: ${JSON.stringify(mountain)}`);
     await control(2);
     if ((await state()).step !== 1) throw new Error('Sun Salutation Next did not advance');
     await control(0);
