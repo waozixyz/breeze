@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.29] - 2026-11-02
+
+- Maintenance release for Inner Breeze 2.1.62.
+
 ## [Unreleased]
 
 - Close List settings after a successful save and keep edits open if saving fails.

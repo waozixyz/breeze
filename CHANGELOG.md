@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.1.62] - 2026-11-02
 
 - Edit app order with a single move grip and no extra Hide or Show overlay.
 - Close List settings after saving a list successfully.

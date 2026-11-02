@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.6.10] - 2026-11-02
+
+- Maintenance release for Inner Breeze 2.1.62.
+
 ## [Unreleased]
 
 - Sun Salutation shows each pose's form cue, the leg that steps back and names the next pose in one quiet line.
