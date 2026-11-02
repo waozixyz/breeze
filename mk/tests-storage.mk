@@ -150,7 +150,7 @@ daochi-client-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		ZI2C_BIN=$(abspath $(ZI2C_BIN)) ZIRAN_DIR=$(abspath $(ZIRAN_DIR)) \
 		ZIRAN_BIN=$(abspath $(ZIRAN_BIN)) OQS_DIR=$(abspath build/packages/oqs) \
-		LIBOQS_A=$(abspath $(LIBOQS_A)) \
+		CRYPTO_DIR=$(abspath build/packages/crypto) LIBOQS_A=$(abspath $(LIBOQS_A)) \
 		sh build/packages/daochi-client/tests/run.sh
 
 .PHONY: daochi-native-zi-test device-link-zi-test
