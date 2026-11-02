@@ -37,22 +37,22 @@ android-library-device-test:
 		--bundle "$(abspath $(BUILD_DIR)/node-apps/library.zx)"
 
 .PHONY: android-jni-zi-test
-android-jni-zi-test: $(ZI2C_BIN)
-	@python3 tests/android_jni_zi_test.py $(abspath $(dir $(ZI2C_BIN)))
+android-jni-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
+	@LIBOQS_A=$(abspath $(LIBOQS_A)) python3 tests/android_jni_zi_test.py $(abspath $(dir $(ZI2C_BIN)))
 
 .PHONY: android-health-zi-test
-android-health-zi-test: $(ZI2C_BIN)
-	@env -u DISPLAY -u WAYLAND_DISPLAY \
+android-health-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY LIBOQS_A=$(abspath $(LIBOQS_A)) \
 		sh tests/android_health_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: android-push-zi-test
-android-push-zi-test: $(ZI2C_BIN)
-	@env -u DISPLAY -u WAYLAND_DISPLAY \
+android-push-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY LIBOQS_A=$(abspath $(LIBOQS_A)) \
 		sh tests/android_push_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: android-wakelock-zi-test
-android-wakelock-zi-test: $(ZI2C_BIN)
-	@env -u DISPLAY -u WAYLAND_DISPLAY \
+android-wakelock-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY LIBOQS_A=$(abspath $(LIBOQS_A)) \
 		sh tests/android_wakelock_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: android-timer-zi-test
@@ -61,8 +61,8 @@ android-timer-zi-test: $(ZI2C_BIN)
 		sh tests/android_timer_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: android-import-zi-test
-android-import-zi-test: $(ZI2C_BIN)
-	@env -u DISPLAY -u WAYLAND_DISPLAY \
+android-import-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY LIBOQS_A=$(abspath $(LIBOQS_A)) \
 		sh tests/android_import_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: android-lifecycle-zi-test

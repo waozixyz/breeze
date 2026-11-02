@@ -2,6 +2,7 @@
 """Exercise the owned Android bridge as Zi and verify its ABI against the NDK."""
 import os
 from pathlib import Path
+import platform
 import shutil
 import subprocess
 import sys
@@ -28,7 +29,11 @@ def generate(output, architecture=None):
         "sh", str(ROOT / "scripts/run-ziran.sh"), str(BIN / "zi2c"), "--no-main", "--root", str(ROOT),
         "--module-path", str(ROOT / "build/packages/ziran/std"),
         "--module-path", str(ROOT / "build/packages/daochi-client"),
-        "--module-path", str(UI), "--module-path", str(BACKEND), "--define", "ANDROID_BUILD", "--define", "KRYON_ANDROID_HOST",
+        "--module-path", str(UI), "--module-path", str(BACKEND),
+        # Named package imports such as entity/account_handoff.
+        *subprocess.check_output(["sh", str(ROOT / "scripts/package-paths.sh"), str(ROOT / "build/packages")],
+                                 text=True).split(),
+        "--define", "ANDROID_BUILD", "--define", "KRYON_ANDROID_HOST",
         "-o", str(output), str(ROOT / "tests/android_jni_behavior.zi"),
         *map(str, SOURCES), str(ROOT / "build/packages/ziran/std/c_string.zi"),
     ]
@@ -43,13 +48,19 @@ def generated_includes(output):
         "-I" + str(path) for path in sorted({p.parent for p in output.rglob("*.h")})]
 
 
-generate(GEN)
-files = sorted(GEN.rglob("*.c"))
+# The host run needs its own architecture too: Android-only std code, such as
+# file_linux's renameat2 system call number, is chosen per architecture.
+HOST_ARCHITECTURE = {"x86_64": "__x86_64__", "amd64": "__x86_64__", "aarch64": "__aarch64__",
+                     "arm64": "__aarch64__"}[platform.machine().lower()]
+generate(GEN, HOST_ARCHITECTURE)
+files =sorted(GEN.rglob("*.c"))
 includes = generated_includes(GEN)
 subprocess.run([
     os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
     "-Wno-unused-function", "-ffunction-sections", "-fdata-sections",
     "-Wl,--gc-sections", "-Wl,--wrap=write", "-pthread", *includes, *map(str, files),
+    # Entity's account handoff links its locked Monocypher and liboqs.
+    str(ROOT / "build/packages/monocypher/src/monocypher.c"), os.environ["LIBOQS_A"],
     "-o", str(WORK / "test"),
 ], check=True)
 environment = dict(os.environ)

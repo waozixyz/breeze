@@ -48,6 +48,9 @@ java_handle: s64;
 java_asset_maximum: s64;
 java_asset_cancelled: s64;
 registered_methods: s32;
+// Entity's shared account handoff registers on its own Kryon class.
+handoff_class: u8;
+handoff_methods: s32;
 native_dark: NativeIntegerFn;
 native_practice: NativePracticeFn;
 resolve_available: bool = true;
@@ -150,7 +153,9 @@ FakeFindClass :: (env: *JniEnv, name: *u8) -> *void {
     unused env
     Require(CStringEquals(name, "xyz/waozi/inbe/MainActivity") ||
         CStringEquals(name, "android/net/Uri") ||
-        CStringEquals(name, "android/content/Intent"), 14)
+        CStringEquals(name, "android/content/Intent") ||
+        CStringEquals(name, "org/kryonlabs/platform/AccountHandoff"), 14)
+    if CStringEquals(name, "org/kryonlabs/platform/AccountHandoff") { return cast(*void)*handoff_class }
     return cast(*void)*activity
 }
 FakeMethod :: (env: *JniEnv, klass: *void, name: *u8,
@@ -335,9 +340,14 @@ FakeArrayLength :: (env: *JniEnv, array: *void) -> s32 {
 FakeRegister :: (env: *JniEnv, klass: *void,
     raw_methods: *void, count: s32) -> s32 {
     unused env
-    unused klass
-    registered_methods = count
     methods := cast(*NativeMethod)raw_methods
+    if klass == cast(*void)*handoff_class {
+        handoff_methods = count
+        Require(count == 4 && CStringEquals(methods[0].name, "nativeAllowed") &&
+            CStringEquals(methods[3].name, "nativeSeal"), 117)
+        return 0
+    }
+    registered_methods = count
     Require(count == 21, 22)
     Require(CStringEquals(methods[4].name, "nativeSetSystemDark"), 23)
     Require(CStringEquals(methods[19].name, "nativeSetWindowSize") &&
@@ -528,7 +538,7 @@ main :: () -> s32 {
     api.GetArrayLength = FakeArrayLength
     api.RegisterNatives = FakeRegister
 
-    Require(JNI_OnLoad(*vm, null) == JniVersion && registered_methods == 21, 30)
+    Require(JNI_OnLoad(*vm, null) == JniVersion && registered_methods == 21 && handoff_methods == 4, 30)
     native_dark(*environment, cast(*void)*activity, 1)
     Require(AndroidSystemDark() == 1, 31)
     native_dark(*environment, cast(*void)*activity, 0)
