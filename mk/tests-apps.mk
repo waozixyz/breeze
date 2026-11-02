@@ -84,6 +84,10 @@ package-workflow-test:
 node-app-games-test:
 	python3 tests/node_app_games_test.py
 
+.PHONY: small-app-bundling-test
+small-app-bundling-test:
+	python3 tests/small_app_bundling_test.py
+
 .PHONY: package-manifest-test
 package-manifest-test:
 	python3 tests/package_manifests_test.py

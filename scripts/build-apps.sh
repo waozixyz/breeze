@@ -57,10 +57,9 @@ for feature in lists habits practices diary lumi leaderboard; do
         --entry "$entry:Main" -o "$output/$feature.zx" \
         "apps/$source/$source.zi"
 done
-# Removing a sidebar shortcut never removes its bundled package.
-for feature in lists habits practices diary lumi leaderboard; do
-    cp "$output/$feature.zx" build/bundled-apps/
-done
+# Keep the historical shipped set and add complete packages below 1 decimal MB.
+# Optional apps remain outside cells/ and never change saved app selections.
+python3 scripts/small_app_bundling.py --bundles "$output"
 # The package folder keeps its historical name cells/ for released hosts.
 # shellcheck disable=SC2086
 "$ziran" bundle --root . --module-path src $packages \

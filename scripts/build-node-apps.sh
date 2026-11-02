@@ -1,7 +1,6 @@
 #!/bin/sh
-# Apps the node offers (node_apps in apps/versions.json) are built on their
-# own into build/node-apps. They never go into the root package or its
-# apps: released hosts reject a root that carries an app they don't know.
+# Apps the node offers build independently into build/node-apps. Complete
+# small apps also ship as optional baselines, outside the root's cells/ IDs.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"

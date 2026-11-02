@@ -1,0 +1,187 @@
+// Trusted-root baselines use the same digest, API, publisher and identity
+// boundaries as the loader, while stale signed metadata keeps its own key.
+#import, file "../src/apps/node_app_embedded.zi";
+#import, file "../src/apps/node_app_open.zi";
+#import, file "../src/apps/node_app_tree.zi";
+#import, file "../src/apps/node_app_runner.zi";
+#import, file "../src/apps/node_apps.zi";
+#import, file "../src/apps/package_work.zi";
+#import, file "../src/apps/package_manager.zi";
+#import, file "../src/apps/package_release.zi";
+#import, file "../src/apps/package_files.zi";
+#import, file "../src/apps/package_history.zi";
+#import, file "../src/app/assets.zi";
+#import, file "../src/apps/catalog.zi";
+#import, file "node_app_icons_behavior.zi";
+#import "std/text_buffer"
+#import "std/vec"
+#import "std/c_string"
+#import "std/file_linux"
+#import "apps/tree"
+#import "apps/host"
+#import, file "../src/apps/node_child_packages.zi";
+
+embedded_c :: #system_library "c";
+EmbeddedNow :: () -> float64 #foreign embedded_c "IconsNow";
+EmbeddedYield :: () #foreign embedded_c "IconsYield";
+
+embedded_test_bytes: string;
+embedded_test_metadata: string;
+embedded_test_publishers: string;
+embedded_test_arcade: string;
+embedded_test_art: string;
+embedded_test_controller: string;
+
+EmbeddedTestAsset :: (path: string) -> AssetView {
+    data := ""
+    if path == "assets/apps/bundled/fixture.zx" { data = embedded_test_bytes }
+    if path == "assets/apps/bundled/arcade.zx" { data = embedded_test_arcade }
+    if path == "assets/apps/bundled/arcade/bd0a779ce62c2324812926f1579a64881db309430cff839565b28d1bc5b6420f.zx" {
+        data = embedded_test_art
+    }
+    if path == "apps.zx" { data = embedded_test_controller }
+    if path == "assets/apps/bundled/releases.json" { data = embedded_test_metadata }
+    if path == "apps/publishers.json" {
+        data = embedded_test_publishers
+    }
+    return AssetView.{.found = data.count > 0, .data = data}
+}
+
+EmbeddedTestMetadata :: (id: string, key: string, api: s32, size: s64, hash: string) {
+    PackageFree(embedded_test_metadata)
+    text: Vec(u8)
+    BuilderPrint(*text, "{\"fixture\":{\"id\":\"%\",\"key_id\":\"%\",\"host_api\":%,\"bytes\":%,\"sequence\":1,\"version\":\"1.0.0\",\"sha256\":\"%\",\"complete_bytes\":%}}",
+        id, key, api, size, hash, size)
+    embedded_test_metadata = BuilderFinish(text)
+}
+
+NodeAppEmbeddedCheck :: () -> s32 {
+    slot := cast(s32)(NodeAppSlots - 2)
+    embedded_test_bytes = PackageRead(IconsEnvironmentPath("NODE_OPEN_LEAF_BUNDLE"), PackageMaximumBytes)
+    embedded_test_publishers = PackageRead(IconsEnvironmentPath("NODE_EMBEDDED_PUBLISHERS"), 16384)
+    hash := IconsEnvironmentPath("NODE_OPEN_LEAF_SHA256")
+    if embedded_test_bytes.count < 8 { return 160 }
+    AssetBindProvider(EmbeddedTestAsset)
+    defer {
+        AssetUnbindProvider()
+        PackageFree(embedded_test_bytes)
+        PackageFree(embedded_test_metadata)
+        PackageFree(embedded_test_publishers)
+        PackageFree(embedded_test_arcade)
+        PackageFree(embedded_test_art)
+        PackageFree(embedded_test_controller)
+        embedded_test_bytes = ""
+        embedded_test_metadata = ""
+        node_runners[slot].embedded_release = PackageRelease.{}
+        package_cached_releases[NodeAppIndex(slot)] = PackageRelease.{}
+        NodeAppAssign(slot, "")
+    }
+    NodeAppAssign(slot, "fixture")
+    EmbeddedTestMetadata("inbe.fixture", "baseline", 41, embedded_test_bytes.count, hash)
+    if !NodeAppEmbeddedRelease("fixture").valid || !NodeAppEmbedded("fixture").found ||
+    !NodeAppInstalled(slot) { return 161 }
+    keys: [2]string = .["unknown", "outside"]
+    for key: keys {
+        EmbeddedTestMetadata("inbe.fixture", key, 41, embedded_test_bytes.count, hash)
+        if NodeAppEmbeddedRelease("fixture").valid { return 162 }
+    }
+    apis: [2]s32 = .[40, 65535]
+    for api: apis {
+        EmbeddedTestMetadata("inbe.fixture", "baseline", api, embedded_test_bytes.count, hash)
+        if NodeAppEmbeddedRelease("fixture").valid { return 163 }
+    }
+    EmbeddedTestMetadata("inbe.someone-else", "baseline", 41, embedded_test_bytes.count, hash)
+    if NodeAppEmbeddedRelease("fixture").valid { return 164 }
+    EmbeddedTestMetadata("inbe.fixture", "baseline", 41, PackageMaximumBytes + 1, hash)
+    if NodeAppEmbeddedRelease("fixture").valid { return 165 }
+    EmbeddedTestMetadata("inbe.fixture", "baseline", 41, embedded_test_bytes.count,
+        "0000000000000000000000000000000000000000000000000000000000000000")
+    if !NodeOpenBegin(slot) || node_open_work.ok { return 166 }
+    if !NodeOpenDiscard() { return 167 }
+
+    // Invalid/missing current descriptors cannot make fallback bytes borrow
+    // a different cached publisher. Pending work cannot relabel a live app.
+    EmbeddedTestMetadata("inbe.fixture", "baseline", 41, embedded_test_bytes.count, hash)
+    previous: PackageRelease
+    previous.valid = true
+    unused CopyCString("other", previous.key_id[:])
+    package_cached_releases[NodeAppIndex(slot)] = previous
+    node_runners[slot].embedded_release = previous
+    if !NodeOpenBegin(slot) || !node_open_work.ok ||
+    TextUntilNul(node_open_work.release.key_id[:]) != "baseline" { return 168 }
+    bound := NodeTreeRelease(slot)
+    if TextUntilNul(bound.key_id[:]) != "other" { return 168 }
+    if !NodeOpenDiscard() { return 169 }
+    node_runners[slot].embedded_release = PackageRelease.{}
+    // Open the exact portable identity through production preparation and
+    // activation, then verify the publisher remains bound after job disposal.
+    if !NodeAppOpen(slot) { return 170 }
+    deadline := EmbeddedNow() + 10.0
+    while !NodeAppRunning(slot) && EmbeddedNow() < deadline {
+        unused NodeOpenPump(true)
+        EmbeddedYield()
+    }
+    bound = NodeTreeRelease(slot)
+    if !NodeAppRunning(slot) || TextUntilNul(bound.key_id[:]) != "baseline" {
+        return 171
+    }
+    if !NodeAppClose(slot) { return 172 }
+
+    // A genuine newer signed installation wins over the root baseline.
+    metadata := PackageRead(IconsEnvironmentPath("NODE_EMBEDDED_UPDATE"), 65536)
+    defer { PackageFree(metadata) }
+    release := PackageTrustedRelease(metadata, NodeAppIndex(slot))
+    if !release.valid || TextUntilNul(release.version[:]) != "2.0.0" { return 173 }
+    current := PackagePath(NodeAppIndex(slot), ".current.json")
+    payload := PackagePayloadPath(NodeAppIndex(slot), TextUntilNul(release.hash[:]))
+    updated := PackageRead(IconsEnvironmentPath("NODE_OPEN_ROOT_BUNDLE"), PackageMaximumBytes)
+    defer {
+        unused RemoveFile(current)
+        unused RemoveFile(payload)
+        PackageFree(current)
+        PackageFree(payload)
+        PackageFree(updated)
+    }
+    if !PackageWrite(current, metadata) || !PackageWrite(payload, updated) { return 174 }
+    if !NodeOpenBegin(slot) || node_open_embedded ||
+    TextUntilNul(node_open_work.release.version[:]) != "2.0.0" ||
+    TextUntilNul(node_open_work.release.key_id[:]) != "other" { return 175 }
+    deadline = EmbeddedNow() + 10.0
+    while !PackageWorkReady(node_open_work) && EmbeddedNow() < deadline { EmbeddedYield() }
+    if !node_open_work.ok { return 176 }
+    if !NodeOpenDiscard() { return 177 }
+    // The actual Arcade collection opens using this host's existing trusted
+    // controller. Its complete library art resolves offline; games stay absent.
+    PackageFree(embedded_test_metadata)
+    embedded_test_metadata = PackageRead(IconsEnvironmentPath("NODE_EMBEDDED_REAL_METADATA"), 16384)
+    embedded_test_arcade = PackageRead(IconsEnvironmentPath("NODE_EMBEDDED_ARCADE"), PackageMaximumBytes)
+    embedded_test_art = PackageRead(IconsEnvironmentPath("NODE_EMBEDDED_ART"), PackageMaximumBytes)
+    embedded_test_controller = PackageRead(IconsEnvironmentPath("NODE_EMBEDDED_CONTROLLER"), PackageMaximumBytes)
+    NodeAppAssign(slot, "arcade")
+    package_cached_releases[NodeAppIndex(slot)] = PackageRelease.{}
+    if !NodeAppOpen(slot) { return 178 }
+    deadline = EmbeddedNow() + 10.0
+    while !NodeAppRunning(slot) && EmbeddedNow() < deadline {
+        unused NodeOpenPump(true)
+        EmbeddedYield()
+    }
+    host := node_runners[slot].nested
+    if host == null { return 179 }
+    root := AppTreeNode(*host.tree, AppHandle.{0, 1})
+    if root == null || root.catalog.count != 5 || NodeAppPackageSize(slot) != 1519758 { return 180 }
+    path := "assets/arcade/covers/shovey-portrait.jpg"
+    deadline = EmbeddedNow() + 10.0
+    while !AppHostAsset(root, path).found && EmbeddedNow() < deadline {
+        NodeChildPump()
+        EmbeddedYield()
+    }
+    if !AppHostAsset(root, path).found || node_child_memory != 1512084 { return 181 }
+    child := root.catalog.children
+    while child != null {
+        if AppHostAsset(root, TextUntilNul(child.entry.bundle[:])).found { return 182 }
+        if !AppHostAsset(root, TextUntilNul(child.entry.cover.portrait[:])).found { return 183 }
+        child = child.next
+    }
+    if !NodeAppClose(slot) { return 184 }
+    return 0
+}

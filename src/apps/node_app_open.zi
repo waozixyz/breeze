@@ -13,12 +13,14 @@
 #import, file "package_files.zi";
 #import, file "package_release.zi";
 #import, file "catalog.zi";
+#import, file "node_app_embedded.zi";
 
 node_open_work: *PackageWork;
 node_open_preparation: *AppPreparation;
 node_open_slot: s32 = -1;
 node_open_revision: s32;
 node_open_local: bool;
+node_open_embedded: bool;
 node_open_canceled: bool;
 node_open_rejected: bool;
 node_open_requested: [NodeAppSlots]bool;
@@ -74,7 +76,8 @@ NodeOpenQueue :: (slot: s32, replacement: bool = false) -> bool {
         node_open_failed[slot] = false
     }
     if node_open_failed[slot] ||
-    (!replacement && !NodeAppLocal(NodeAppName(slot)) && !PackageAvailable(NodeAppIndex(slot))) {
+    (!replacement && !NodeAppLocal(NodeAppName(slot)) && !PackageAvailable(NodeAppIndex(slot)) &&
+    !NodeAppEmbedded(NodeAppName(slot)).found) {
         return false
     }
     node_open_requested[slot] = true
@@ -106,8 +109,23 @@ NodeOpenBegin :: (slot: s32) -> bool {
     if !local {
         release = PackageInstalledRelease(index)
     }
+    node_open_embedded = false
     if !local && !release.valid {
-        return false
+        asset := NodeAppEmbedded(NodeAppName(slot))
+        if !asset.found {
+            return false
+        }
+        node_open_work = PackageWorkEmbedded(asset.data, NodeTreeAccount(), NodeAppName(slot))
+        if node_open_work == null {
+            return false
+        }
+        node_open_work.release = NodeAppEmbeddedRelease(NodeAppName(slot))
+        node_open_work.ok = PackageVerifyBytes(node_open_work.bytes, node_open_work.release)
+        node_open_slot = slot
+        node_open_revision = PackageRevisionFor(index)
+        node_open_local = false
+        node_open_embedded = true
+        return true
     }
     path := ""
     if local {
@@ -148,6 +166,7 @@ NodeOpenActivate :: () -> bool {
     slot := node_open_slot
     digest := TextUntilNul(node_open_work.digest[:])
     runner := *node_runners[slot]
+    runner.embedded_release = ifx node_open_embedded then node_open_work.release else PackageRelease.{}
     if !NodeAppStart(runner, node_open_work.bytes, digest, node_open_preparation) ||
     (runner.nested == null && !NodeAppAssetsValid(runner.app.bundle, NodeAppName(slot))) ||
     (!NodeInstalledCurrent(slot, digest) && !NodeInstalledScanStart(slot)) {
@@ -222,14 +241,14 @@ NodeOpenPump :: (activate: bool) -> bool {
         NodeOpenFail()
         return true
     }
-    if !node_open_local && !PackageReleaseTrialAllows(index, node_open_work.release) {
+    if !node_open_local && !node_open_embedded && !PackageReleaseTrialAllows(index, node_open_work.release) {
         NodeOpenFail()
         return true
     }
     if !NodeAppCloseRuntime(slot) {
         return true
     }
-    if !node_open_local {
+    if !node_open_local && !node_open_embedded {
         package_cached_releases[index] = node_open_work.release
         unused CopyCString(TextUntilNul(node_open_work.release.version[:]), package_versions[index][:])
     }

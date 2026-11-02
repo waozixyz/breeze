@@ -315,6 +315,26 @@ publishing an immutable payload and atomically replacing its current pointer.
 Root packages must contain exactly the three signed recommended dependencies.
 Malformed packages cannot apply writes through a mismatched host protocol.
 
+Bundling is additive: the existing six packages always ship regardless of
+size, and complete locally built node apps smaller than **1,000,000 bytes**
+also ship as offline baselines. Required app artwork counts toward that limit;
+the shared Apps controller already supplied by the host counts once. A tiny
+collection catalog is not the size of its downloadable games. Arcade is
+explicitly included in `apps/bundled.json`, independently of the automatic
+limit: its 7,674-byte catalog plus 1,512,084-byte library artwork ship together.
+Its five games (65,639,505 bytes) remain separate, consented downloads. The
+reviewed local artifacts are digest-pinned; builds never fetch or execute an
+unsigned remote app to qualify it. `scripts/small_app_bundling.py` writes the
+selection and sizes to `build/small-app-bundling.json`.
+
+Optional baselines live under `assets/apps/bundled/`, preserving the historical
+`cells/` IDs and dependency validation. They appear in Apps even without a
+network and take a device-local slot only when added. Existing selections,
+hidden apps and sidebar order are unchanged. Signed installed updates take
+precedence; the embedded fallback retains publisher scope, host API, digest,
+resource, capability and identity validation. App size includes library art;
+downloadable games retain their own sizes and installation state.
+
 Runtime resources are selected in `scripts/prepare-package-assets.py`; source
 icons, store banners, prompts and test images are excluded. Sun Salutation
 keeps its full four-character, 30 fps timeline while storing identical PNGs
@@ -606,8 +626,9 @@ so an app added to the node appears without an app update. The publisher pin
 Installing one assigns one of eight device-local slots (package indexes
 after the bundled seven, setting `node_app_slot_<n>`) and downloads it through
 the package manager with the same signature, hash, size, interface, trial
-and cache rules as the bundled apps. Such an app is never part of the root
-package or its dependencies. It runs in its own VM through one generic
+and cache rules as the bundled apps. Small local apps and explicitly declared
+apps can also have a root-embedded baseline, outside its dependencies. Each
+runs in its own VM through one generic
 interface (`apps/node_types` from the Apps package, host interface 12, and 13 for the
 media library, which Diary also reads from 14): frame and
 route messages, hosted Kryon widgets, `AppLocaleHost`, private records,

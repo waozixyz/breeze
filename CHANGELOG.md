@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- Include Arcade and its library artwork offline, while games download separately.
+- Keep every shipped app and also include complete apps below 1 MB without changing app selections.
+
 ## [2.1.62] - 2026-11-02
 
 - Edit app order with a single move grip and no extra Hide or Show overlay.

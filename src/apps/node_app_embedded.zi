@@ -1,0 +1,112 @@
+// Optional baselines belong to the trusted root package, outside its stable
+// cells/ dependency set. They occupy a node slot only when the user adds one.
+#import, file "node_apps.zi";
+#import, file "../app/assets.zi";
+#import, file "package_files.zi";
+#import, file "package_release.zi";
+#import, file "package_manager.zi";
+#import, file "host_api.zi";
+#import, file "versions.zi";
+#import "json_scan"
+#import "std/text_buffer"
+#import, file "catalog.zi";
+#import, file "../storage/app_records.zi";
+#import, file "../app/text_buffers.zi";
+
+NodeAppEmbeddedRelease :: (name: string) -> PackageRelease {
+    if !NodeAppNameValid(name) {
+        return PackageRelease.{}
+    }
+    metadata := AssetRead("assets/apps/bundled/releases.json")
+    if !metadata.found || metadata.data.count > 16384 {
+        return PackageRelease.{}
+    }
+    at := FieldAt(metadata.data, 0, name)
+    api := PackageNumber(metadata.data, at, "host_api")
+    index := NodeAppSlotFor(name)
+    oldest := PackageHostAPIOldestFor(ifx index >= 0 then NodeAppIndex(index) else -1)
+    if at < 0 || api < oldest || api > PackageHostAPI {
+        return PackageRelease.{}
+    }
+    release: PackageRelease
+    unused PackageField(metadata.data, at, "version", release.version[:])
+    unused PackageField(metadata.data, at, "sha256", release.hash[:])
+    unused PackageField(metadata.data, at, "key_id", release.key_id[:])
+    release.size = PackageNumber(metadata.data, at, "bytes")
+    release.sequence = cast(s32)PackageNumber(metadata.data, at, "sequence")
+    id: [32]u8
+    expected := PackageText("inbe.", name)
+    defer {
+        PackageFree(expected)
+    }
+    if PackageField(metadata.data, at, "id", id[:]) != expected ||
+    release.size <= 0 || release.size > PackageMaximumBytes || release.sequence < 1 ||
+    release.version[0] == 0 {
+        return PackageRelease.{}
+    }
+    // Metadata is authenticated by the root package. Keep the same publisher
+    // scope check as downloaded releases; an embedded app gains no new key.
+    key: [65]u8
+    key_json := PackageText("{\"key_id\":\"", TextUntilNul(release.key_id[:]))
+    text := PackageText(key_json, "\"}")
+    trusted := PackageTrustedKeyFor(text, expected, key[:])
+    PackageFree(key_json)
+    PackageFree(text)
+    release.valid = trusted
+    return release
+}
+
+NodeAppEmbedded :: (name: string) -> AssetView {
+    if !NodeAppNameValid(name) {
+        return AssetView.{}
+    }
+    prefix := PackageText("assets/apps/bundled/", name)
+    path := PackageText(prefix, ".zx")
+    defer {
+        PackageFree(prefix)
+        PackageFree(path)
+    }
+    release := NodeAppEmbeddedRelease(name)
+    asset := AssetRead(path)
+    if !release.valid || !asset.found || asset.data.count != release.size {
+        return AssetView.{}
+    }
+    return asset
+}
+
+NodeAppEmbeddedOffers :: () {
+    catalog := AssetRead("assets/apps/bundled/catalog.txt")
+    if !catalog.found || catalog.data.count > 4096 {
+        return
+    }
+    at: s64 = 0
+    while at < catalog.data.count && node_offer_count < NODE_APP_OFFERS {
+        end := at
+        while end < catalog.data.count && catalog.data[end] != #char "\n" {
+            end += 1
+        }
+        name := catalog.data[at:end]
+        asset := NodeAppEmbedded(name)
+        if asset.found && !NodeAppOffered(name) {
+            offer := *node_offers[node_offer_count]
+            offer.* = NodeAppOffer.{}
+            unused AppCopyText(name, offer.name[:])
+            unused AppCopyText(NodeAppTitle(name), offer.title[:])
+            offer.size = NodeAppEmbeddedSize(name)
+            node_offer_count += 1
+        }
+        at = end + 1
+    }
+}
+
+NodeAppEmbeddedSize :: (name: string) -> s64 {
+    metadata := AssetRead("assets/apps/bundled/releases.json")
+    if !metadata.found || metadata.data.count > 16384 {
+        return 0
+    }
+    at := FieldAt(metadata.data, 0, name)
+    if at < 0 {
+        return 0
+    }
+    return PackageNumber(metadata.data, at, "complete_bytes")
+}

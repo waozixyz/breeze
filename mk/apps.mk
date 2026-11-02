@@ -12,6 +12,8 @@ ENTITY_SOURCES = $(wildcard $(ENTITY_DIR)/src/*.zi $(ENTITY_DIR)/assets/entity/*
 # own pinned graph, so its digest identifies the reviewed Apps release.
 APPS_DIR := build/packages/apps
 APPS_BUNDLE ?= build/apps-ui/apps.zx
+NODE_APP_NAMES := $(shell python3 -c 'import json; print(" ".join(json.load(open("apps/versions.json")).get("node_apps", {})))')
+NODE_APP_BUNDLES := $(addprefix $(BUILD_DIR)/node-apps/,$(addsuffix .zx,$(NODE_APP_NAMES)))
 $(BUILD_DIR)/apps-ui/apps.zx: ziran.lock scripts/build-apps.py $(wildcard $(APPS_DIR)/ziran.lock $(APPS_DIR)/src/*.zi $(APPS_DIR)/ui/*.zi $(APPS_DIR)/ui/locales/*.json)
 	env -u DISPLAY -u WAYLAND_DISPLAY PATH="$(abspath $(dir $(ZIRAN_BIN))):$$PATH" \
         python3 scripts/build-apps.py --ziran $(abspath $(ZIRAN_BIN)) --output $(abspath $(dir $@))
@@ -19,13 +21,12 @@ $(BUILD_DIR)/apps-ui/apps.zx: ziran.lock scripts/build-apps.py $(wildcard $(APPS
 apps: $(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE)
 
 $(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE): CHANGELOG.md $(wildcard locales/changelog/*.md) scripts/release_notes.py $(APPS_BUNDLE) src/apps/apps_controller.zi
+$(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE): $(NODE_APP_BUNDLES) scripts/small_app_bundling.py apps/bundled.json $(wildcard apps/bundled/*.zx apps/bundled/*.games/*.zx)
 
 $(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(ENTITY_SOURCES) $(APP_SOURCES) $(APP_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/achievement_icons.py scripts/animation_inventory.py scripts/build-apps.sh src/practices/sun_salutation/sun_salutation_assets.zi src/practices/sun_salutation/sun_salutation_inventory.zi $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
 	sh scripts/build-apps.sh $(ZIRAN_BIN) $(BUILD_DIR)/apps $(APPS_BUNDLE)
 
-# Apps the node offers build on their own, never into the root package.
-NODE_APP_NAMES := $(shell python3 -c 'import json; print(" ".join(json.load(open("apps/versions.json")).get("node_apps", {})))')
-NODE_APP_BUNDLES := $(addprefix $(BUILD_DIR)/node-apps/,$(addsuffix .zx,$(NODE_APP_NAMES)))
+# Build node apps independently before selecting the small offline baselines.
 $(NODE_APP_BUNDLES) &: $(APP_SOURCES) $(shell rg --files $(addprefix assets/,$(NODE_APP_NAMES)) 2>/dev/null) apps/versions.json scripts/build-node-apps.sh scripts/prepare-package-assets.py scripts/achievement_icons.py $(ZIRAN_BIN)
 	sh scripts/build-node-apps.sh $(ZIRAN_BIN)
 

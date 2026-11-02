@@ -2,6 +2,7 @@
 import argparse
 import ctypes.util
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -10,6 +11,10 @@ import struct
 import subprocess
 import tempfile
 import zlib
+import sys
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 def main():
@@ -83,6 +88,25 @@ Main :: () -> s32 {
             command += ['--asset-dir', f'assets/fixture={assets}']
         command.append(str(guest))
         subprocess.run(command, cwd=root, env=environment, check=True)
+    sys.path.insert(0, str(root / 'build/packages/apps/scripts'))
+    from node_release import signing_message
+    key = Ed25519PrivateKey.generate()
+    public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+    publishers = [dict(key_id='baseline', public_key='1' * 64, app_ids=['inbe.fixture']),
+                  dict(key_id='other', public_key=public, app_ids=['inbe.fixture']),
+                  dict(key_id='outside', public_key='3' * 64, app_ids=['inbe.someone-else'])]
+    publishers += json.loads((root / 'apps/publishers.json').read_text())
+    (fixture / 'publishers.json').write_text(json.dumps(publishers))
+    sys.path.insert(0, str(root / 'scripts'))
+    from practice_content import bundle_assets
+    root_assets = bundle_assets((root / 'build/inbe.zx').read_bytes())
+    (fixture / 'embedded-releases.json').write_bytes(root_assets['assets/apps/bundled/releases.json'])
+    release = dict(app_id='inbe.fixture', sequence=2, version='2.0.0', runtime='kryon-app-v1',
+                   host_api=41, module_api=2, data_schema=0, key_id='other', dependencies=[],
+                   artifacts=[dict(variant='module', sha256=hashlib.sha256(packed_root.read_bytes()).hexdigest(),
+                                   size=packed_root.stat().st_size)])
+    release['signature'] = key.sign(signing_message(release)).hex()
+    (fixture / 'update.json').write_text(json.dumps(release))
     subprocess.run([str(args.ziran.resolve()), 'build', '--target=c', '--define', 'PLATFORM_DESKTOP',
                     '--no-main', '--root', str(root / 'tests'), *module_paths, *package_paths,
                     '-o', str(generated), str(root / 'tests/node_app_snapshot_behavior.zi'),
@@ -115,6 +139,7 @@ Main :: () -> s32 {
     if result.returncode:
         raise SystemExit('Snapshot native link failed; see compiler diagnostics above')
     with tempfile.TemporaryDirectory(prefix='profile-', dir=work) as profile:
+        (Path(profile) / 'packages').mkdir()
         subprocess.run([str(work / 'test')], env=environment | {
             'APP_DATA_ROOT': profile,
             'ICON_CACHE_PATH': str(Path(profile) / 'fixture.icon'),
@@ -122,10 +147,18 @@ Main :: () -> s32 {
             'NODE_OPEN_ROOT_BUNDLE': str(packed_root),
             'NODE_OPEN_ROOT_SHA256': hashlib.sha256(packed_root.read_bytes()).hexdigest(),
             'NODE_OPEN_LEAF_SHA256': hashlib.sha256(leaf.read_bytes()).hexdigest(),
+            'NODE_OPEN_LEAF_BUNDLE': str(leaf),
+            'NODE_EMBEDDED_PUBLISHERS': str(fixture / 'publishers.json'),
+            'NODE_EMBEDDED_UPDATE': str(fixture / 'update.json'),
+            'NODE_EMBEDDED_REAL_METADATA': str(fixture / 'embedded-releases.json'),
+            'NODE_EMBEDDED_ARCADE': str(root / 'apps/bundled/arcade.zx'),
+            'NODE_EMBEDDED_ART': str(root / 'apps/bundled/arcade.games/bd0a779ce62c2324812926f1579a64881db309430cff839565b28d1bc5b6420f.zx'),
+            'NODE_EMBEDDED_CONTROLLER': str(root / 'build/apps-ui/apps.zx'),
             **{f'ICON_{name.upper()}_BUNDLE': str(fixture / f'{name}.zx')
                for name in ('valid', 'invalid', 'empty', 'corrupt')},
         }, check=True)
     print('Installed apps: leaf discovery, background icons, stale-job isolation, deferred images and shared mappings passed')
+    print('Embedded apps: identity, publisher scope, API, size and digest rejection; fallback publisher binding; newer signed update precedence; actual Arcade with complete art and no games opened offline')
 
 
 if __name__ == '__main__':

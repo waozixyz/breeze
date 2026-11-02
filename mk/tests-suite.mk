@@ -97,6 +97,7 @@ test: audio-runtime-test
 test: audio-meter-zi-test
 test: profile-picture-policy-test
 test: assets-zi-test
+test: small-app-bundling-test
 test: android-package-assets-test package-size-test
 test: asset-files-zi-test
 test: settings-status-zi-test

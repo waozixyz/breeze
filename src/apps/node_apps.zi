@@ -6,6 +6,7 @@
 // no host code. Whether an app is installed syncs with the account.
 #import "bundle_host"
 #import "apps/preparation"
+#import "apps/tree"
 // Radio's background playback (app/background_audio.zi), declared here so
 // apps do not import Radio's streaming, music and achievements.
 node_audio_c :: #system_library "c";
@@ -40,6 +41,7 @@ Time :: #import "date_time_linux";
 #import, file "node_app_snapshot.zi";
 #import, file "node_app_replacements.zi";
 #import, file "node_app_open.zi";
+#import, file "node_app_embedded.zi";
 #import, file "node_child_packages.zi";
 #import, file "node_icon_work.zi";
 #import, file "achievement_media.zi";
@@ -245,6 +247,7 @@ NodeAppInstalled :: (slot: s32) -> bool {
         return false
     }
     return NodeAppRunning(slot) || NodeAppOpening(slot) || PackageAvailable(NodeAppIndex(slot)) ||
+    NodeAppEmbedded(NodeAppName(slot)).found ||
     node_installed_releases[slot][0] != cast(u8)0
 }
 
@@ -253,7 +256,15 @@ NodeAppPackageSize :: (slot: s32) -> s64 {
         return 0
     }
     if NodeAppRunning(slot) {
-        return node_runners[slot].bundle_bytes
+        bytes := node_runners[slot].bundle_bytes
+        host := node_runners[slot].nested
+        if host != null {
+            root := AppTreeNode(*host.tree, AppHandle.{0, 1})
+            if root != null {
+                bytes += root.catalog.art_bytes
+            }
+        }
+        return bytes
     }
     release := package_cached_releases[NodeAppIndex(slot)]
     if release.valid {
@@ -442,7 +453,8 @@ NodeAppOfferSize :: (index: s32) -> s64 {
     if index < 0 || index >= node_offer_count {
         return 0
     }
-    return node_offers[index].size
+    embedded := NodeAppEmbeddedSize(NodeAppOfferName(index))
+    return ifx embedded > 0 then embedded else node_offers[index].size
 }
 
 // Every published offer is visible unless another app replaced it.
@@ -572,6 +584,7 @@ NodeAppsInitialize :: () {
     }
     node_initialized = true
     NodeAppLoadOffers()
+    NodeAppEmbeddedOffers()
     NodeAppLocalLoad()
     slot: s32 = 0
     while slot < NodeAppSlots {
@@ -1715,6 +1728,7 @@ NodeAppCatalogFinish :: () {
         if target == node_offer_count { node_offer_count += 1 }
     }
     NodeAppSaveOffers()
+    NodeAppEmbeddedOffers()
     NodeAppLocalOffer()
     node_catalog_phase = 0
 }
