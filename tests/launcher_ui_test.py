@@ -464,17 +464,37 @@ with contextlib.ExitStack() as stack:
                       "profile_display_name": "Old display name",
                       "sync_public_id": "0123456789abcdef" * 4,
                       "sync_public_key": "fedc" + "0123456789abcdef" * 160 + "9876"}
-            for width, height in ((320, 640), (900, 720)):
-                for alias, expected in (("nara", "nara"), ("", "fedc...9876")):
+            for width, height in ((320, 640), (390, 844), (900, 720)):
+                for alias, expected in (("nara", "nara"),
+                                        ("alexandria_long_username", "alexandria_long_username"),
+                                        ("w" * 32, "w" * 32), ("", "fedc...9876")):
                     seed(profile, common | {"sync_account_alias": alias})
-                    name = f"profile-identity-{width}-{'alias' if alias else 'key'}"
+                    name = f"profile-identity-{width}-{alias or 'key'}"
                     with application(profile, name, width, height) as (window, log):
                         open_apps()
                         control = driver.wait(focus_id=6792, role="button")
                         assert control["label"] == expected, control
                         assert control["visible_width"] >= control["width"] - 1
                         assert control["height"] >= 44
+                        assert control["width"] >= 44
+                        edit = driver.wait(label="Edit apps", role="button")
+                        assert edit["width"] >= 44 and edit["height"] >= 44
+                        assert edit["x"] >= control["x"] + control["width"] + 7, (control, edit)
+                        assert edit["y"] == control["y"], (control, edit)
+                        assert edit["visible_width"] >= edit["width"] - 1
+                        assert control["visible_height"] >= control["height"] - 1
+                        if alias == "w" * 32 and width < 400:
+                            # The maximum-width alias really wraps rather than
+                            # merely keeping an unclipped accessibility name.
+                            label = driver.wait(label=alias, role="text")
+                            assert label["height"] > 44, label
+                            assert label["visible_height"] >= label["height"] - 1
                         capture(window, name)
+                        driver.press(label="Edit apps", role="button")
+                        driver.wait(label="Done", role="button")
+                        assert driver.find(label="Move app", role="button", visible=True)
+                        driver.key("enter")
+                        driver.wait(label="Edit apps", role="button")
                         open_profile(log)
         print("Apps profile: exact alias overrides old display name; first/last public-key characters and Profile navigation pass in phone and desktop layouts")
         raise SystemExit(0)
