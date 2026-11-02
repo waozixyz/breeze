@@ -2,7 +2,6 @@
 c :: #system_library "c";
 #import "keys"
 #import "crypto"
-Recovery :: #import "entity/recovery";
 #import, file "../../app/app.zi";
 #import, file "../../app/app_types.zi";
 #import, file "../../app/modal_rules.zi";
@@ -144,8 +143,7 @@ SettingsDataDeliverExport :: (path: string, filename: string,
 }
 
 SettingsDataBeginAndroidImport :: (kind: s32) -> bool {
-    mime := ifx kind == cast(s32)ANDROID_IMPORT_KIND_SYNC_KEY then Recovery.RecoveryFileMimeTypes else "*/*"
-    if !AndroidPickerOpen(kind, mime) {
+    if !AndroidPickerOpen(kind, "*/*") {
         return false
     }
     pending_android_import_kind = kind
@@ -198,57 +196,11 @@ SettingsDataInspectImport :: (app: *InnerBreeze, path: string) {
     SettingsDataReleaseWebImport(path)
 }
 
-SettingsDataImportKeyPath :: (app: *InnerBreeze, path: string) -> s32 {
-    account: AccountKeys
-    path_bytes: [4096]u8
-    if path.count == 0 || !AppCopyText(path, path_bytes[:]) ||
-    sync_account_import_private_key_preview(*account, *path_bytes[0]) == 0 {
-        SettingsDataReleaseWebImport(path)
-        settings_screen_set_status_error(LocaleText("sync_private_key_import_failed"))
-        return 0
-    }
-    saved := settings_sync_account_save_prepared(app, *account,
-        cast(PendingSyncAccountAction)PendingSyncAccountImport,
-        cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_ASK)
-    SettingsDataReleaseWebImport(path)
-    if saved == 0 && app.modal.type != cast(ModalType)ModalConfirmSyncAccountSwitch {
-        settings_screen_set_status_error(LocaleText("sync_private_key_import_failed"))
-        return 0
-    }
-    return 1
-}
-
-SettingsDataImportKey :: (app: *InnerBreeze) -> s32 {
-    if AndroidPlatform() != 0 {
-        return ifx SettingsDataBeginAndroidImport(
-            cast(s32)ANDROID_IMPORT_KIND_SYNC_KEY) then 1 else 0
-    }
-    path: [4096]u8
-    choice := SettingsDataPick(LocaleText("sync_import_key_dialog_title"),
-        "Key files | *.key", "", false, path[:])
-    if choice == 0 {
-        settings_screen_set_status_error(
-            LocaleText("sync_private_key_import_cancelled"))
-        return 1
-    }
-    if choice < 0 {
-        return 0
-    }
-    return SettingsDataImportKeyPath(app,
-        AppTextFromCString(*path[0], 4096))
-}
-
-#program_export
-settings_data_register_sync_key_dialogs :: () {
-    settings_sync_account_set_import_dialog(SettingsDataImportKey)
-}
-
 #program_export
 settings_data_open_sync_account_config :: (app: *InnerBreeze) {
     if app == null {
         return
     }
-    settings_data_register_sync_key_dialogs()
     saved := storage_get_setting_text("sync_server_url")
     if saved.count == 0 {
         saved = "https://api.waozi.xyz"
@@ -357,7 +309,6 @@ settings_data_draw_actions :: (app: *InnerBreeze,
     if app == null || y == null {
         return
     }
-    settings_data_register_sync_key_dialogs()
     y.* += AppScale(8)
     import_button := SettingsDataButtonProps(LocaleText("import_data_button"),
         x, y.*, width, 5301, true)
@@ -435,19 +386,10 @@ settings_data_handle_import :: (app: *InnerBreeze) {
     }
     pending_android_import_kind = -1
     if result == .AndroidPickerCancelled {
-        key := "import_cancelled"
-        if kind == cast(s32)ANDROID_IMPORT_KIND_SYNC_KEY {
-            key = "sync_private_key_import_cancelled"
-        }
-        settings_screen_set_status_error(LocaleText(key))
+        settings_screen_set_status_error(LocaleText("import_cancelled"))
         return
     }
-    selected := AppTextFromCString(*path[0], 4096)
-    if kind == cast(s32)ANDROID_IMPORT_KIND_SYNC_KEY {
-        unused SettingsDataImportKeyPath(app, selected)
-    } else {
-        SettingsDataInspectImport(app, selected)
-    }
+    SettingsDataInspectImport(app, AppTextFromCString(*path[0], 4096))
 }
 
 SettingsDataPrompt :: (app: *InnerBreeze, key: string,

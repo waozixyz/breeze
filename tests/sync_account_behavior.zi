@@ -85,8 +85,18 @@ account_text :: (field: *u8) -> string {
     return TextFromCString(field)
 }
 
+// Older key files, opened the way Entity's import reads them.
+read_key_file :: (account: *AccountKeys, path: *u8) -> s32 {
+    account.* = AccountKeys.{}
+    body := host_load_file_text(path)
+    if body == null { return 0 }
+    result := ParseAccountKeys(TextFromCString(body), account)
+    host_unload_file_text(body)
+    return result
+}
+
 import_key_and_save :: (account: *AccountKeys, path: *u8, clear_local_data: SyncAccountLocalDataChoice) -> SyncAccountSaveResult {
-    if sync_account_import_private_key_preview(account, path) == 0 {
+    if read_key_file(account, path) == 0 {
         return SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_FAILED
     }
     return sync_account_save(account, clear_local_data)
@@ -262,7 +272,7 @@ test_reject_invalid :: () {
     if values.public_id[0] == cast(u8)48 { values.public_id[0] = cast(u8)49 } else { values.public_id[0] = cast(u8)48 }
     write_key_file(*key_path[0], *values, TextFromCString(*values.public_id[0]))
     check_true("reject mismatched public id",
-        sync_account_import_private_key_preview(*account, *key_path[0]) == 0)
+        read_key_file(*account, *key_path[0]) == 0)
 
     text: TextBuffer
     append(*text, "breathing-sync-key-v1\nalgorithm=ML-DSA-44\npublic_id=")
@@ -272,7 +282,7 @@ test_reject_invalid :: () {
     append(*text, "\n")
     check_true("write missing public key file", write_text_file(*key_path[0], *text))
     check_true("reject missing public key",
-        sync_account_import_private_key_preview(*account, *key_path[0]) == 0)
+        read_key_file(*account, *key_path[0]) == 0)
     check_true("no account after rejected imports", sync_account_load(*account) == 0)
     storage_close()
     remove_tree(root)
