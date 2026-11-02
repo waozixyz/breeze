@@ -73,7 +73,7 @@ generate_transparent() {
     magick "$ARTWORK" -filter Lanczos -resize "${logo_size}x${logo_size}" \
         -background none -gravity center -extent "${size}x${size}" \
         -strip +set date:create +set date:modify +set date:timestamp \
-        -define png:exclude-chunk=time "$output"
+        -define png:exclude-chunk=time -define webp:lossless=true "$output"
 }
 
 generate_maskable() {
@@ -82,7 +82,7 @@ generate_maskable() {
     generate_transparent "$size" "$WORK_DIR/maskable.png" "$logo_size"
     magick "$WORK_DIR/maskable.png" -background "$ICON_BACKGROUND" \
         -alpha remove -alpha off -strip \
-        -define png:exclude-chunk=time "$output"
+        -define png:exclude-chunk=time -define webp:lossless=true "$output"
 }
 
 write_android_background() {
@@ -145,7 +145,7 @@ echo "✅ Windows icon generated"
 echo "🖥️ Generating app runtime icon..."
 
 # Runtime desktop window icon embedded into the native app binary.
-generate_transparent 64 "$PROJECT_ROOT/assets/app/icon.png"
+generate_transparent 64 "$PROJECT_ROOT/assets/app/icon.webp"
 
 echo "✅ App runtime icon generated"
 
@@ -195,7 +195,7 @@ echo
 echo "Generated icons:"
 echo "  📱 Android: mipmap PNGs + adaptive drawable foreground/background"
 echo "  🪟 Windows: windows/inbe.ico (256, 192, 48, 32, 16 resolutions)"
-echo "  🖥️ App:     assets/app/icon.png (64x64 transparent runtime icon)"
+echo "  🖥️ App:     assets/app/icon.webp (64x64 transparent runtime icon)"
 echo "  🐧 Linux:   packaging/linux/appimage/inbe.png + snap/gui/inbe.png (256x256)"
 echo "  🏪 Store:   fastlane/metadata/android/en-US/images/icon.png (512x512)"
 echo "  🌐 Chrome:  packaging/chrome-web-store/icons/ (16, 32, 48, 128)"

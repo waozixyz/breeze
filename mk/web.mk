@@ -36,7 +36,7 @@ web-tools-check:
 
 sync-web-icons: $(KRYON_SYNC_ICONS)
 	sh $(KRYON_SYNC_ICONS) web-assets/icons $(WEB_SHARED_ICON_SHEETS)
-	cp assets/app/icon.png web-assets/icons/$(APP_NAME).png
+	magick assets/app/icon.webp web-assets/icons/$(APP_NAME).png
 
 $(WEB_JS_TARGET): Makefile $(WEB_SRC) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WEB_GEN_STAMP) $(WEB_LIBOQS_A) $(WEB_HOST_JS) web-tools-check | $(WEB_DIST_DIR)
 $(WEB_JS_TARGET): | zi-check

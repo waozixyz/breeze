@@ -239,7 +239,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 
 set(APP_EMBEDDED_INPUTS
     apps/publishers.json
-    assets/app/icon.png
+    assets/app/icon.webp
 )
 set(APP_EMBEDDED_DEPS)
 foreach(asset ${APP_EMBEDDED_INPUTS})
