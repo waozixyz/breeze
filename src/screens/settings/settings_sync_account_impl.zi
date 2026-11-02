@@ -69,14 +69,11 @@ using TextWrap;
 using DeviceLinkStage;
 using AndroidImportKind;
 
-SettingsSyncKeySaveDialog :: #type (app: *InnerBreeze, value: string) -> s32;
 SettingsSyncKeyImportDialog :: #type (app: *InnerBreeze) -> s32;
 
 sync_server_url_key: string = "sync_server_url";
 sync_server_url_default: string = "https://api.waozi.xyz";
 sync_account_alias_key: string = "sync_account_alias";
-save_dialog_callback: SettingsSyncKeySaveDialog;
-backup_save_pending: bool;
 import_dialog_callback: SettingsSyncKeyImportDialog;
 server_anchor: s32;
 server_scroll_x: s32;
@@ -189,11 +186,6 @@ SettingsSyncButtonProps :: (label: string, x: s32, y: s32,
 }
 
 #program_export
-settings_sync_account_set_save_dialog :: (callback: SettingsSyncKeySaveDialog) {
-    save_dialog_callback = callback
-}
-
-#program_export
 settings_sync_account_set_import_dialog :: (callback: SettingsSyncKeyImportDialog) {
     import_dialog_callback = callback
 }
@@ -278,12 +270,11 @@ SettingsSyncServerSave :: (app: *InnerBreeze) {
     settings_screen_set_status_success(LocaleText("sync_server_saved"), "")
 }
 
-SettingsSyncOpenAlias :: (app: *InnerBreeze, then_backup: s32) {
+SettingsSyncOpenAlias :: (app: *InnerBreeze) {
     alias := storage_get_setting_text(sync_account_alias_key)
     unused AppCopyText(alias, app.sync_alias_input[:])
     SettingsSyncNormalizeAlias(app)
     app.sync_alias_focused = 1
-    app.sync_alias_then_backup = then_backup
     app_open_modal(app, cast(ModalType)ModalSyncAlias)
 }
 
@@ -738,12 +729,6 @@ settings_sync_account_draw_config :: (app: *InnerBreeze,
         settings_screen_draw_status_reserved(x, y, AppScale(42))
         return
     }
-    backup := SettingsSyncButtonProps(LocaleText("sync_backup_key_button"),
-        x, y.*, width, button_h, 5203, false)
-    if Button(app.ui.session, backup) != 0 {
-        app_open_modal(app, cast(ModalType)ModalSyncAccountBackup)
-    }
-    y.* += button_h + gap
     copy_id := SettingsSyncButtonProps(LocaleText("sync_copy_id_button"),
         x, y.*, width, button_h, 5205, false)
     if Button(app.ui.session, copy_id) != 0 {
@@ -754,7 +739,7 @@ settings_sync_account_draw_config :: (app: *InnerBreeze,
     alias_button := SettingsSyncButtonProps(LocaleText("sync_alias_button"),
         x, y.*, width, button_h, 5206, false)
     if Button(app.ui.session, alias_button) != 0 {
-        SettingsSyncOpenAlias(app, 0)
+        SettingsSyncOpenAlias(app)
     }
     y.* += button_h + gap
     logout := SettingsSyncButtonProps(LocaleText("sync_logout_button"),
@@ -784,54 +769,6 @@ SettingsSyncModal :: (app: *InnerBreeze,
     return ModalFrame(app.ui.session, ModalFrameProps.{
             .key = KeyHash(key), .title = title,
             .width = width, .height = height})
-}
-
-#program_export
-settings_sync_account_draw_backup_modal :: (app: *InnerBreeze) -> s32 {
-    account: AccountKeys
-    if app == null || sync_account_load(*account) == 0 {
-        return 1
-    }
-    frame := SettingsSyncModal(app, "inbe/account/backup",
-        LocaleText("sync_backup_title"), AppScale(260))
-    if frame.dismissed {
-        return 1
-    }
-    if !frame.opened {
-        return 0
-    }
-    content := frame.layout.content
-    x := cast(s32)content.x
-    y := cast(s32)content.y
-    width := cast(s32)content.width
-    Text(app.ui.session, SettingsSyncTextProps(
-        LocaleText("sync_backup_warning"),
-        x, y, width, AppScale(96), false))
-    y += AppScale(112)
-    save := SettingsSyncButtonProps(LocaleText("sync_save_key_file_button"),
-        x, y, width, AppScale(38), 5230, true)
-    result: s32 = 0
-    if backup_save_pending && save_dialog_callback != null {
-        result = save_dialog_callback(app, "account.key")
-        backup_save_pending = result == 0
-    }
-    save.disabled = backup_save_pending
-    if Button(app.ui.session, save) != 0 {
-        if save_dialog_callback != null {
-            result = save_dialog_callback(app, "account.key")
-            backup_save_pending = result == 0
-        } else {
-            result = 3
-        }
-    }
-    y += AppScale(48)
-    close := SettingsSyncButtonProps(LocaleText("close_button"),
-        x, y, width, AppScale(38), 5231, false)
-    if Button(app.ui.session, close) != 0 {
-        result = 1
-    }
-    unused End(app.ui.session)
-    return result
 }
 
 #program_export
@@ -880,11 +817,7 @@ settings_sync_account_draw_alias_modal :: (app: *InnerBreeze) -> s32 {
         LocaleText("sync_alias_rule"),
         x, y, width, AppScale(36), true))
     y += AppScale(46)
-    close_label := LocaleText("close_button")
-    if app.sync_alias_then_backup != 0 {
-        close_label = LocaleText("skip_button")
-    }
-    close := SettingsSyncButtonProps(close_label,
+    close := SettingsSyncButtonProps(LocaleText("close_button"),
         x, y, width, AppScale(38), 5241, false)
     result: s32 = 0
     if Button(app.ui.session, close) != 0 {

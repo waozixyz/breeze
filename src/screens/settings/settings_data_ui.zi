@@ -75,8 +75,6 @@ free :: (value: *void) #foreign c;
 pending_import_path: [4096]u8;
 pending_import_info: DataImportInfo;
 pending_android_import_kind: s32 = -1;
-key_backup_picker_pending: bool;
-key_backup_owner: [65]u8;
 
 SettingsDataRect :: (x: s32, y: s32, width: s32,
     height: s32) -> Rectangle {
@@ -220,76 +218,6 @@ SettingsDataImportKeyPath :: (app: *InnerBreeze, path: string) -> s32 {
     return 1
 }
 
-SettingsDataSaveKey :: (app: *InnerBreeze, fallback: string) -> s32 {
-    account: AccountKeys
-    defer { SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE) }
-    path: [4096]u8
-    // A pending Android picker is polled every frame and already has its name.
-    suggested: [128]u8
-    filename := fallback
-    if !key_backup_picker_pending && sync_account_load(*account) != 0 {
-        filename = Recovery.RecoveryFileName(storage_get_setting_text("sync_account_alias"),
-            AppTextFromCString(*account.public_id[0], 65), suggested[:])
-    }
-    if AndroidPlatform() != 0 {
-        kind := cast(s32)ANDROID_EXPORT_KIND_DATA_KEY
-        if !key_backup_picker_pending {
-            if sync_account_load(*account) == 0 ||
-            !AndroidSavePickerOpen(kind, filename, "application/octet-stream") {
-                return 3
-            }
-            key_backup_owner = account.public_id
-            key_backup_picker_pending = true
-            return 0
-        }
-        picked := AndroidPickerPoll(kind, path[:])
-        if picked == .AndroidPickerNone {
-            return 0
-        }
-        key_backup_picker_pending = false
-        if picked == .AndroidPickerCancelled {
-            return 4
-        }
-        if path[0] == cast(u8)0 || sync_account_load(*account) == 0 ||
-        AppTextFromCString(*account.public_id[0], 65) != AppTextFromCString(*key_backup_owner[0], 65) {
-            SettingsDataReleaseExportPath(AppTextFromCString(*path[0], 4096))
-            return 3
-        }
-    } else {
-        if sync_account_load(*account) == 0 {
-            return 3
-        }
-        choice := SettingsDataPick(LocaleText("sync_save_key_dialog_title"),
-            "Key files | *.key", filename, true, path[:])
-        if choice == 0 {
-            return 4
-        }
-        if choice < 0 {
-            return 3
-        }
-    }
-    if sync_account_export_private_key(*account, *path[0]) == 0 {
-        SettingsDataReleaseExportPath(AppTextFromCString(*path[0], 4096))
-        return 3
-    }
-    delivered: bool
-    if AndroidPlatform() != 0 {
-        delivered = AndroidSavePickerCommit(AppTextFromCString(*path[0], 4096))
-        SettingsDataReleaseExportPath(AppTextFromCString(*path[0], 4096))
-    } else {
-        delivered = SettingsDataDeliverExport(
-            AppTextFromCString(*path[0], 4096), filename, "application/octet-stream")
-    }
-    if !delivered {
-        SettingsDataReleaseExportPath(AppTextFromCString(*path[0], 4096))
-        return 3
-    }
-    settings_screen_set_status_success(
-        LocaleText("sync_private_key_backup_saved"), "")
-    unused app
-    return 2
-}
-
 SettingsDataImportKey :: (app: *InnerBreeze) -> s32 {
     if AndroidPlatform() != 0 {
         return ifx SettingsDataBeginAndroidImport(
@@ -312,7 +240,6 @@ SettingsDataImportKey :: (app: *InnerBreeze) -> s32 {
 
 #program_export
 settings_data_register_sync_key_dialogs :: () {
-    settings_sync_account_set_save_dialog(SettingsDataSaveKey)
     settings_sync_account_set_import_dialog(SettingsDataImportKey)
 }
 
@@ -874,17 +801,6 @@ settings_data_draw_modals :: (app: *InnerBreeze) -> s32 {
                 } else if action != cast(PendingSyncAccountAction)PendingSyncAccountImport {
                     app_reload_after_import(app, 0)
                 }
-            }
-        }
-        return 1
-    }
-    if modal == cast(ModalType)ModalSyncAccountBackup {
-        result := settings_sync_account_draw_backup_modal(app)
-        if result != 0 {
-            app_close_modal(app)
-            if result == 3 {
-                settings_screen_set_status_error(
-                    LocaleText("sync_private_key_backup_failed"))
             }
         }
         return 1

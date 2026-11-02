@@ -142,6 +142,36 @@ test_parallel :: () {
     remove_tree(root)
 }
 
+// A key file as older versions saved it, unprotected. New saves are always
+// sealed by Entity, but these files must keep opening.
+write_legacy_key_file :: (account: *AccountKeys, path: *u8) -> bool {
+    body: [ACCOUNT_EXPORT_TEXT_SIZE]u8
+    if AccountKeysText(account, *body[0], ACCOUNT_EXPORT_TEXT_SIZE) == 0 { return false }
+    return host_save_file_data(path, *body[0],
+        cast(s32)TextFromCString(*body[0]).count)
+}
+
+test_sync_url_survives_shared_setting_text :: () {
+    root := make_root("sync-url")
+    values: AccountValues
+    account: AccountKeys
+    make_account(*values, 0)
+    path_in(key_path[:], root, "url.key")
+    write_key_file(*key_path[0], *values, TextFromCString(*values.public_id[0]))
+    check_true("init storage for the url check", storage_init(root) != 0)
+    check_true("save the account for the url check", import_key_and_save(*account, *key_path[0],
+        SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK) ==
+        SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    storage_set_setting_text("sync_server_url", "https://node.example")
+    storage_set_sync_enabled(1)
+    url: [256]u8
+    check_true("friends find the node once sync is on", storage_sync_server_url(url[:]) != 0)
+    check_true("friends get the saved node", TextFromCString(*url[0]) == "https://node.example")
+    storage_set_sync_enabled(0)
+    check_true("no node while sync is off", storage_sync_server_url(url[:]) == 0)
+    check_true("clear the url check account", sync_account_clear() != 0)
+}
+
 test_import_export_clear :: () {
     root := make_root("account")
     values: AccountValues
@@ -172,7 +202,7 @@ test_import_export_clear :: () {
     check_true("load private key",
         account_text(*account.private_key_hex[0]) == TextFromCString(*values.private_key[0]))
 
-    check_true("export key", sync_account_export_private_key(*account, *export_path[0]) != 0)
+    check_true("write an older unprotected key file", write_legacy_key_file(*account, *export_path[0]))
     exported := host_load_file_text(*export_path[0])
     check_true("read exported key", exported != null)
     if exported != null {
@@ -478,6 +508,7 @@ Check :: () -> s32 {
     if guard != 0 { return guard }
     test_parallel()
     test_import_export_clear()
+    test_sync_url_survives_shared_setting_text()
     test_reject_invalid()
     test_legacy_connected()
     test_unsynced_not_migrated()

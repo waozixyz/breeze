@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Backups always need a password: the old unprotected key save is gone, and Android device backups no longer copy your account.
+- Fix Add friend failing with "Could not start this action".
 - Sign in with your backup file and its password, name backups after your username, and always protect new backups with a password.
 - Friends now opens the shared Profile page, and Dew gifts between friends are gone.
 - Your account follows you between waozi.xyz sites here too, including signing out everywhere.
