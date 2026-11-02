@@ -75,7 +75,8 @@ with contextlib.ExitStack() as stack:
     driver = UiDriver(OUTPUT / "driver")
     env = {key: value for key, value in os.environ.items() if key not in DESKTOP_ENV}
     env.update(YUE_DESKTOP_RECOVERY="0", APP_NO_TRAY="1", SDL_AUDIODRIVER="dummy",
-               INBE_DEBUG_ROUTE="1")
+               INBE_DEBUG_ROUTE="1", https_proxy="http://127.0.0.1:9",
+               http_proxy="http://127.0.0.1:9", NO_PROXY="")
     env.update(driver.environment())
     if arguments.with_tray:
         env.pop("APP_NO_TRAY", None)
@@ -296,11 +297,19 @@ with contextlib.ExitStack() as stack:
     window_size = [0, 0]
 
     @contextlib.contextmanager
-    def application(profile, name, width=900, height=720, scale=1.0):
-        app_env = env | {"APP_DATA_ROOT": str(profile)}
+    def application(profile, name, width=900, height=720, scale=1.0, seed_account=False):
+        app_env = env | {"APP_DATA_ROOT": str(profile), "ENTITY_DATA": str(profile / "entity")}
         log_path = OUTPUT / (name + ".log")
         with log_path.open("w") as log:
             command_line = [str(BINARY)]
+            if seed_account:
+                app_env.update(APP_SHOT_WINDOW="1", INBE_SCREENSHOT_DATA_ROOT=str(profile))
+                # Generate real disposable keys through the host's existing
+                # offline preview, rather than faking an authenticated account.
+                command_line += ["--screenshot", str(OUTPUT / "account-seed.png"),
+                                 "--screenshot-scene", "navigation_profile",
+                                 "--screenshot-width", str(width),
+                                 "--screenshot-height", str(height)]
             if arguments.root_bundle:
                 command_line += ["--bundle", str(arguments.root_bundle.resolve())]
             app = subprocess.Popen(command_line, cwd=ROOT, env=app_env,
@@ -335,14 +344,30 @@ with contextlib.ExitStack() as stack:
             finally:
                 stop(app)
 
+    def account_keys(profile, owner_user):
+        with database(profile) as db:
+            keys = dict(db.execute("SELECT key,value FROM settings WHERE user_id=? AND key IN "
+                                   "('sync_public_id','sync_public_key','sync_private_key')",
+                                   (owner_user,)))
+        assert set(keys) == {"sync_public_id", "sync_public_key", "sync_private_key"}, "Fixture keys missing"
+        assert len(keys["sync_public_id"]) == 64 and all(keys.values()), "Fixture account incomplete"
+        return keys
+
+    def retained_profile(profile, owner_user, expected):
+        assert account_keys(profile, owner_user) == expected, "Retained account keys changed"
+        driver.wait(label="Public ID", role="button", visible=False)
+        assert not driver.find(label="Sign in", role="button"), "Retained account shown as guest"
+
     def check_profile_navigation():
         """Old Profile pins migrate to the permanent header and preserve Back."""
         with tempfile.TemporaryDirectory(prefix="inbe-profile-navigation-") as temporary:
             profile = Path(temporary)
             user = None
-            with application(profile, "profile-navigation-initialize"):
+            with application(profile, "profile-navigation-initialize", seed_account=True):
                 with database(profile) as db:
                     user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
+
+            retained_keys = account_keys(profile, user)
 
             def profile_settings(values):
                 # seed() closes over the launcher's outer user variable.
@@ -392,6 +417,7 @@ with contextlib.ExitStack() as stack:
                         open_profile(log)
                         driver.wait(label="Change picture", role="button")
                         one_header("Profile")
+                        retained_profile(profile, user, retained_keys)
                         assert [node["label"] for node in navigation()] == ["Habits", "Practice", "Apps"]
                         with database(profile) as db:
                             saved = dict(db.execute("SELECT key,value FROM settings WHERE user_id=?", (user,)))
@@ -403,13 +429,14 @@ with contextlib.ExitStack() as stack:
                         reveal_action("Sign in to another account")
                         driver.press(label="Sign in to another account", role="button")
                         driver.wait(label="Choose backup file", role="button")
-                        one_header("Profile")
+                        one_header("Sign in")
                         driver.press(label="Back", role="button")
                         driver.wait(label="Change picture", role="button", visible=False)
                         one_header("Profile")
                         for label in ("Today", "Active days", "Sessions"):
                             driver.wait(label=label, role="text", visible=False)
                         assert not driver.find(label="Activity", role="button"), "Inline Activity still has a route"
+                        retained_profile(profile, user, retained_keys)
                         reveal_action("Friends")
                         driver.press(label="Friends", role="button")
                         one_header("Friends")
@@ -419,6 +446,7 @@ with contextlib.ExitStack() as stack:
                         driver.press(label="Back", role="button")
                         driver.wait(label="Pinned")
                         assert not driver.find(role="title_bar", visible=True)
+                        assert account_keys(profile, user) == retained_keys, "Back changed account keys"
                         print(f"{name}: one header and complete Back stack passed", flush=True)
         print("Profile: one header, account import/Friends Back stack, inline Activity, pinned/unpinned, saved top/bottom/side navigation passed")
 
@@ -460,9 +488,10 @@ with contextlib.ExitStack() as stack:
             with tempfile.TemporaryDirectory(prefix="inbe-launcher-views-") as temporary:
                 profile = Path(temporary)
                 user = None
-                with application(profile, f"views-{width}-prepare", width, height):
+                with application(profile, f"views-{width}-prepare", width, height, seed_account=True):
                     with database(profile) as db:
                         user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
+                retained_keys = account_keys(profile, user)
                 seed(profile, {"language": "en", "language_system": 0, "language_setup_done": 1,
                                "apps_setup_done": 1, "enabled_apps": 31, "lumi_introduced": 1,
                                "main_tab": 1, "tutorial_seen": 1, "habits_guide_seen": 1,
@@ -573,20 +602,30 @@ with contextlib.ExitStack() as stack:
                     driver.key("backspace")
                     capture(window, f"views-{width}-list")
                     open_profile(log)
+                    retained_profile(profile, user, retained_keys)
+                    with database(profile) as db:
+                        saved_friends = json.loads(db.execute(
+                            "SELECT json FROM social_snapshots WHERE user_id=? AND kind=?",
+                            (user, "friends.list")).fetchone()[0])
+                    assert saved_friends["friends"][0]["user_id_hash"] == friend_id
+                    assert saved_friends["friends"][0]["alias"] == "river"
                     for _ in range(16):
                         if driver.find(label="Friends", role="button", visible=True):
                             break
                         driver.pointer(width / 2, height / 2, wheel=-4)
                         driver.wait_idle(frames=2)
                     driver.press(label="Friends", role="button")
+                    driver.wait(label="@river", role="button")
+                    assert account_keys(profile, user) == retained_keys, "Friends changed account keys"
                     driver.press(label="@river", role="button")
                     driver.wait(role="modal")
-                    driver.wait(label=friend_id[:32] + "\n" + friend_id[32:])
+                    full_id = driver.wait(contains=friend_id[:16], role="text")
+                    assert full_id["label"].replace("\n", "") == friend_id, "Friend ID truncated"
                     driver.press(label="Copy ID", role="button")
                     assert command("xclip", "-selection", "clipboard", "-o") == friend_id
                     capture(window, f"friend-public-id-{width}")
                     driver.key("escape")
-                    driver.wait_gone(label=friend_id[:32] + "\n" + friend_id[32:])
+                    driver.wait_gone(contains=friend_id[:16], role="text")
                     driver.wait(label="@river", role="button")
         print("Launcher views: edit-only handles, grid/list, saved view/order, permanent Profile and Settings passed")
         raise SystemExit(0)
