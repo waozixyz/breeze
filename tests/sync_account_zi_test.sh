@@ -12,6 +12,13 @@ apps=${APPS_DIR:-"$root/build/packages/apps"}
 work=$root/build/sync-account-zi-test
 include=$root/build/packages/ziran/include
 
+# Refuse unsafe fixture storage before compiling or creating any account data.
+cd "$root"
+if ! git check-ignore -q work/sync-account-zi-test/data; then
+    echo "sync-account-zi-test: fixture data must be ignored by Git: work/sync-account-zi-test/data" >&2
+    exit 1
+fi
+
 rm -rf "$work"
 mkdir -p "$work/generated"
 "$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
@@ -44,8 +51,6 @@ C
     "$root/build/packages/monocypher/src/monocypher.c" "$liboqs" \
     -Wl,--wrap=PushSyncAccount -Wl,--gc-sections -ldl -lpthread -lm -o "$work/test"
 # Storage must never open the real data directory.
-cd "$root"
-git check-ignore -q work/sync-account-zi-test/data
 APP_DATA_ROOT=work/sync-account-zi-test/data
 export APP_DATA_ROOT
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY "$work/test"
