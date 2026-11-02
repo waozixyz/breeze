@@ -25,6 +25,11 @@ static int32_t package_revisions[15];
 static atomic_bool track_metadata_reads;
 static atomic_int metadata_reads;
 
+bool IsWindowFocused(void)
+{
+    return false;
+}
+
 void ModuleTestTrackMetadataReads(bool enabled)
 {
     if (enabled) atomic_store(&metadata_reads, 0);

@@ -186,6 +186,8 @@ OQS_DIR ?= build/packages/oqs
 RAYLIB_DIR = build/packages/raylib/src
 RAYLIB_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/raylib
 RAYLIB_A := $(RAYLIB_BUILD_DIR)/libraylib.a
+WEBP_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/kryon-webp
+WEBP_A := $(WEBP_BUILD_DIR)/libkryonwebp.a
 WIN64_ARCH := x86_64
 WIN64_CC ?= $(or $(WIN_CC),x86_64-w64-mingw32-gcc)
 WIN64_AR ?= $(or $(WIN_AR),x86_64-w64-mingw32-ar)
@@ -540,8 +542,12 @@ $(RAYLIB_A): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
 
 KRYON_NATIVE_CFLAGS := $(CFLAGS)
 KRYON_SRCS += $(KRYON_RAYLIB_WRAPPERS_C)
-KRYON_NATIVE_BACKEND_DEPS := $(RAYLIB_A)
-KRYON_NATIVE_BACKEND_LIBS := $(RAYLIB_A)
+$(WEBP_A): $(KRYON_DIR)/cmake/WebP.cmake $(KRYON_DIR)/cmake/webp/CMakeLists.txt $(wildcard build/packages/libwebp/src/*/*.c build/packages/libwebp/src/*/*.h)
+	cmake -S $(KRYON_DIR)/cmake/webp -B $(WEBP_BUILD_DIR) -DWEBP_DIR="$(abspath build/packages/libwebp)" -DCMAKE_BUILD_TYPE=Release
+	cmake --build $(WEBP_BUILD_DIR) --target kryonwebp --parallel 2
+
+KRYON_NATIVE_BACKEND_DEPS := $(RAYLIB_A) $(WEBP_A)
+KRYON_NATIVE_BACKEND_LIBS := $(RAYLIB_A) $(WEBP_A)
 KRYON_NATIVE_BACKEND_CFLAGS := -DKRYON_BACKEND_RAYLIB=1 $(RAY_CFLAGS)
 KRYON_NATIVE_BACKEND_LDLIBS := $(RAY_LDLIBS)
 ifneq ($(strip $(APP_GIO_LDLIBS)),)
