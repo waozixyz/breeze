@@ -25,6 +25,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-device-key-") as temporary:
         *subprocess.check_output(["sh", str(ROOT / "scripts/package-paths.sh"), str(ROOT / "build/packages")], text=True).split(),
         "--module-path", str(ROOT / "build/packages/daochi-client"),
         "--module-path", str(ROOT / "build/packages/kryon/src/ui"),
+        "--module-path", str(ROOT / "build/packages/kryon/src/backend"),
         "-o", str(generated), str(ROOT / "src/storage/device_key_store.zi"),
         str(ROOT / "src/app/update_transport.zi"),
     ], check=True)
