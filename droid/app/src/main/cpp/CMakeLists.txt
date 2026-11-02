@@ -318,7 +318,8 @@ target_compile_definitions(main PRIVATE
 # The VM locates this exported entry before native methods are registered.
 foreach(source ${APP_ZIRAN_GENERATED_SOURCES})
     get_filename_component(source_name "${source}" NAME)
-    if(source_name STREQUAL "android_insets.c")
+    if(source_name STREQUAL "android_insets.c" OR
+       source_name MATCHES "(^|_)(android_notifications|notification_push)\\.c$")
         set_source_files_properties("${source}"
             PROPERTIES COMPILE_OPTIONS "-fvisibility=default")
     elseif(source_name STREQUAL "main.c")
@@ -333,7 +334,7 @@ target_link_libraries(main oqs z "${APP_BUNDLE_RUNTIME}")
 
 # Keep the Android entry points public and let the linker discard unreachable
 # functions from the statically linked runtime and graphics dependencies.
-set(APP_EXPORT_MAP "${CMAKE_CURRENT_SOURCE_DIR}/libmain.map.txt")
+set(APP_EXPORT_MAP "${KRYON_DIR}/cmake/libmain.map.txt")
 target_link_options(main PRIVATE
     "$<$<NOT:$<CONFIG:Debug>>:-Wl,-O2,--icf=safe>"
     "-Wl,--version-script,${APP_EXPORT_MAP}"

@@ -543,8 +543,8 @@ $(RAYLIB_A): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
 KRYON_NATIVE_CFLAGS := $(CFLAGS)
 KRYON_SRCS += $(KRYON_RAYLIB_WRAPPERS_C)
 $(WEBP_A): $(KRYON_DIR)/cmake/WebP.cmake $(KRYON_DIR)/cmake/webp/CMakeLists.txt $(wildcard build/packages/libwebp/src/*/*.c build/packages/libwebp/src/*/*.h)
-	cmake -S $(KRYON_DIR)/cmake/webp -B $(WEBP_BUILD_DIR) -DWEBP_DIR="$(abspath build/packages/libwebp)" -DCMAKE_BUILD_TYPE=Release
-	cmake --build $(WEBP_BUILD_DIR) --target kryonwebp --parallel 2
+	$(CMAKE) -S $(KRYON_DIR)/cmake/webp -B $(WEBP_BUILD_DIR) -DWEBP_DIR="$(abspath build/packages/libwebp)" -DCMAKE_BUILD_TYPE=Release
+	$(CMAKE) --build $(WEBP_BUILD_DIR) --target kryonwebp --parallel 2
 
 KRYON_NATIVE_BACKEND_DEPS := $(RAYLIB_A) $(WEBP_A)
 KRYON_NATIVE_BACKEND_LIBS := $(RAYLIB_A) $(WEBP_A)
