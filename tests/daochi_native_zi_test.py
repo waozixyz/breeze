@@ -180,7 +180,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-daochi-native-") as temporary:
         f"-I{generated / 'storage'}",
         str(ROOT / "tests/daochi_native_zi_test.c"),
         *(str(GeneratedSource(generated, source)) for source in sources),
-        "-l:libcurl.so.4", "-o", str(executable),
+        "-l:libcurl.so.4", "-lz", "-o", str(executable),
     ], check=True)
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
