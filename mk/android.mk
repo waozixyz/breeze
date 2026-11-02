@@ -42,6 +42,23 @@ android-debug: android-copy-assets android-local-properties
 	$(ANDROID_GRADLE_ENV) $(GRADLE) -p droid assembleDebug $(if $(ANDROID_ABI),-Papp.onlyAbi="$(ANDROID_ABI)") $(if $(ANDROID_VERIFY_INSTANCE),-Papp.verificationInstance=true) $(ANDROID_GRADLE_ARGS)
 	$(MAKE) android-copy-debug-apks
 
+.PHONY: android-gplay-debug android-copy-gplay-debug-apks
+android-gplay-debug: android-copy-assets android-local-properties
+	$(ANDROID_GRADLE_ENV) $(GRADLE) -p droid :app:assembleGplayDebug :app:assembleGplayDebugAndroidTest $(if $(ANDROID_ABI),-Papp.onlyAbi="$(ANDROID_ABI)") --no-daemon -Dorg.gradle.jvmargs= --max-workers=2 $(ANDROID_GRADLE_ARGS)
+	$(MAKE) android-copy-gplay-debug-apks
+
+android-copy-gplay-debug-apks: | $(ANDROID_BUILD_DIR)
+	@for edition in gplayDebug androidTest/gplayDebug; do \
+		found=0; \
+		for apk in droid/app/build/outputs/apk/$$edition/*.apk; do \
+			if [ -f "$$apk" ]; then \
+				cp "$$apk" "$(ANDROID_BUILD_DIR)/$$(basename "$$apk")" || exit 1; \
+				found=1; \
+			fi; \
+		done; \
+		if [ "$$found" -eq 0 ]; then echo "No $$edition APKs were produced"; exit 1; fi; \
+	done
+
 android-release:
 	$(MAKE) android-check-keystore PASSWORD="$(PASSWORD)"
 	$(MAKE) android-copy-assets
