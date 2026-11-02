@@ -246,13 +246,16 @@ with contextlib.ExitStack() as stack:
     driver.press(label="Travel", role="button")
     driver.wait(label="Pack bag", role="button")
     # A successful list save persists the name and leaves settings.
+    renamed_list_id = sql("SELECT id FROM elist_lists WHERE title='Travel' AND deleted_at=0")
     open_settings("Travel")
     driver.press(role="text_field")
     driver.type(" renamed")
     driver.wait(role="text_field", value="Travel renamed")
+    # The startup achievement toast can cover Save while the name is edited.
+    driver.wait_gone(contains="Achievement unlocked", timeout=20)
     driver.press(label="Save", role="button")
-    wait_for(lambda: sql("SELECT title FROM elist_lists WHERE title='Travel renamed'") == "Travel renamed",
-             "the list save did not persist")
+    wait_for(lambda: sql("SELECT title FROM elist_lists WHERE id=?", (renamed_list_id,)) == "Travel renamed",
+             lambda: f"the list save did not persist: {sql('SELECT title FROM elist_lists WHERE id=?', (renamed_list_id,))!r}")
     driver.wait_gone(label="List settings", timeout=3)
     driver.wait(label="Travel renamed", role="button")
     driver.wait(label="Add", role="button")
