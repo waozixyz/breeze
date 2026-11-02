@@ -18,7 +18,7 @@ practice-movement-ui-test: $(TARGET)
 		python3 tests/practice_movement_ui_test.py $(abspath $(TARGET))
 
 .PHONY: launcher-ui-test
-launcher-ui-test: $(TARGET)
+launcher-ui-test: $(TARGET) launcher-header-ui-test
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
 		python3 tests/launcher_ui_test.py $(abspath $(TARGET))
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
@@ -28,6 +28,12 @@ launcher-ui-test: $(TARGET)
 
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
 		python3 tests/launcher_ui_test.py $(abspath $(TARGET)) --views-only
+
+.PHONY: launcher-header-ui-test
+launcher-header-ui-test: $(TARGET)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		-u SESSION_MANAGER -u GDK_DISPLAY YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/launcher_ui_test.py $(abspath $(TARGET)) --profile-identity-only
 
 .PHONY: native-screenshot-test
 native-screenshot-test: $(TARGET)
