@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Shrink Arcade library artwork to 256-pixel WebP thumbnails while retaining every game and shipped app.
 - Include Arcade and its library artwork offline, while games download separately.
 - Keep every shipped app and also include complete apps below 1 MB without changing app selections.
 

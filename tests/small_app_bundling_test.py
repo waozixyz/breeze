@@ -82,9 +82,9 @@ class BundlingTests(unittest.TestCase):
         item = declarations['arcade']
         path = ROOT / item['path']
         info = inspect_bundle(path)
-        self.assertEqual(info['bundle_bytes'], 7674)
+        self.assertEqual(info['bundle_bytes'], 7695)
         self.assertEqual(info['sha256'], item['sha256'])
-        self.assertEqual(info['complete_bytes'], 1_519_758)
+        self.assertEqual(info['complete_bytes'], 349_082)
         info = stage({}, declarations, self.bundles, self.optional, self.mandatory)['optional']['arcade']
         self.assertTrue(info['included'])
         self.assertEqual(len(list((self.optional / 'arcade').glob('*.zx'))), 1)

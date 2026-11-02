@@ -152,7 +152,7 @@ Main :: () -> s32 {
             'NODE_EMBEDDED_UPDATE': str(fixture / 'update.json'),
             'NODE_EMBEDDED_REAL_METADATA': str(fixture / 'embedded-releases.json'),
             'NODE_EMBEDDED_ARCADE': str(root / 'apps/bundled/arcade.zx'),
-            'NODE_EMBEDDED_ART': str(root / 'apps/bundled/arcade.games/bd0a779ce62c2324812926f1579a64881db309430cff839565b28d1bc5b6420f.zx'),
+            'NODE_EMBEDDED_ART': str(root / 'apps/bundled/arcade.games/d7ab495066a69e7c09d490fdcc51f48e8e032dd2112372df800d8b2fe9c7df0b.zx'),
             'NODE_EMBEDDED_CONTROLLER': str(root / 'build/apps-ui/apps.zx'),
             **{f'ICON_{name.upper()}_BUNDLE': str(fixture / f'{name}.zx')
                for name in ('valid', 'invalid', 'empty', 'corrupt')},
