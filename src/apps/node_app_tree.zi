@@ -52,6 +52,11 @@ Legacy :: #import "apps/node_types";
 #import, file "../storage/db.zi";
 #import, file "../app/locale.zi";
 #import, file "../app/text_buffers.zi";
+#import, file "../app/current_app.zi";
+#import, file "../app/app_types.zi";
+#import, file "../core/types.zi";
+notification_raylib :: #system_library "raylib";
+NodeNotificationWindowFocused :: () -> bool #foreign notification_raylib "IsWindowFocused";
 
 using HostValueKind;
 
@@ -162,10 +167,53 @@ NodeTreeRecordKey :: (runner: *NodeAppRunner, node: *AppNode, record: string) ->
     return local_key
 }
 
+// The Apps host verifies these node identities before guest code runs.
+// Only the actual selected game under its trusted installed root may own
+// reminder rules. Local fixtures and collection/editor screens get no grant.
+NodeTreeNotificationAllowed :: (runner: *NodeAppRunner, node: *AppNode) -> bool {
+    if runner == null || node == null || runner.nested == null ||
+    node_tree_validating || node_snapshot_scanning {
+        return false
+    }
+    tree := *runner.nested.tree
+    if AppTreeNode(tree, tree.active) != node {
+        return false
+    }
+    root := AppTreeNode(tree, AppHandle.{0, 1})
+    if root == null {
+        return false
+    }
+    authority := TextUntilNul(root.identity.authority[:])
+    if authority == "" || authority == "local-development" ||
+    TextUntilNul(node.identity.authority[:]) != authority {
+        return false
+    }
+    id := TextUntilNul(node.identity.id[:])
+    return id == "xyz.waozi.wurm" || id == "arcade.shovey"
+}
+
+NodeTreeNotificationFocused :: (context: *void, node: *AppNode) -> bool {
+    runner := cast(*NodeAppRunner)context
+    if !NodeTreeNotificationAllowed(runner, node) {
+        return false
+    }
+    app := CurrentApp()
+    if app == null || app.breathing.screen != ScreenNodeApp ||
+    app.node_app_slot != NodeAppSlotOf(runner) || app.backgrounded != 0 ||
+    app.modal.active != 0 || app.launcher_open {
+        return false
+    }
+    return NodeNotificationWindowFocused()
+}
+
 NodeTreeAllows :: (context: *void, node: *AppNode, name: string) -> bool {
     runner := cast(*NodeAppRunner)context
-    if runner.nested == null || NodeTreeAccount() != TextUntilNul(runner.nested.tree.account[:]) {
+    if runner == null || node == null || runner.nested == null ||
+    NodeTreeAccount() != TextUntilNul(runner.nested.tree.account[:]) {
         return false
+    }
+    if name == "kryon.notification.schedule" {
+        return NodeTreeNotificationAllowed(runner, node)
     }
     if name == "AppServiceHost" || name == "entity.records" || name == "entity.dew" || name == PublicationsService || name == "leaderboard" ||
     name == "arcade.navigation" || name == "entity.profile" || name == "tile_map.sampling" ||
@@ -501,6 +549,7 @@ NodeTreeStart :: (runner: *NodeAppRunner, bytes: string, verified: string,
         Sha256Hex(payload.data, bytes.count, *digest[0])
     }
     platform := AppPlatform.{.context = cast(*void)runner, .allows = NodeTreeAllows, .call = NodeTreeCall,
+        .focused = NodeTreeNotificationFocused,
         .widgets = NodeTreeWidgets, .save = NodeTreeSave, .state = NodeTreeState,
         .effect = NodeTreeEffect, .bundle = NodeChildBundle,
         .download = NodeChildDownload, .fetch = NodeChildFetch, .controller = NodeTreeController,

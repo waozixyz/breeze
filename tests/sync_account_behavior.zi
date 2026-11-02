@@ -29,6 +29,32 @@ TestThreadCreate :: (thread: *u64, attributes: *void, function: WorkerFunction,
     argument: *void) -> s32 #foreign c "pthread_create";
 TestThreadJoin :: (thread: u64, result: **void) -> s32 #foreign c "pthread_join";
 
+// The first cancellation must still observe the former account and owner.
+// The linker wraps the app's effect boundary; the real SQLite operations run.
+push_cancel_armed: bool;
+push_cancel_observed: bool;
+push_previous_account: [65]u8;
+push_previous_owner: [65]u8;
+
+#program_export "__wrap_PushSyncAccount"
+ObservePushAccount :: (scope: string) {
+    if !push_cancel_armed { return }
+    push_cancel_armed = false
+    push_cancel_observed = true
+    check_true("account transition revokes push", scope.count == 0)
+    check_true("push revoked before account publication",
+        storage_get_setting_text("sync_public_id") == TextFromCString(*push_previous_account[0]))
+    check_true("push revoked before owner publication",
+        storage_sync_data_owner_public_id() == TextFromCString(*push_previous_owner[0]))
+}
+
+arm_push_cancel :: () {
+    AppCopyText(storage_get_setting_text("sync_public_id"), push_previous_account[:])
+    AppCopyText(storage_sync_data_owner_public_id(), push_previous_owner[:])
+    push_cancel_observed = false
+    push_cancel_armed = true
+}
+
 key_path_one: [600]u8;
 key_path_two: [600]u8;
 key_path: [600]u8;
@@ -498,6 +524,26 @@ test_social_cache :: () {
     remove_tree(root)
 }
 
+test_push_account_revocation :: () {
+    root := make_root("push-account")
+    first: AccountValues
+    second: AccountValues
+    account: AccountKeys
+    prepare_account(root, *first, *account)
+    make_account(*second, 9)
+    path_in(key_path_two[:], root, "second.key")
+    write_key_file(*key_path_two[0], *second, TextFromCString(*second.public_id[0]))
+    arm_push_cancel()
+    check_true("replace account with push enabled", import_key_and_save(*account, *key_path_two[0],
+        SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_ASK) == SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    check_true("replacement synchronously cancelled former push", push_cancel_observed)
+    arm_push_cancel()
+    check_true("clear account with push enabled", sync_account_clear() != 0)
+    check_true("clear synchronously cancelled former push", push_cancel_observed)
+    storage_close()
+    remove_tree(root)
+}
+
 test_public_id_display_groups :: () {
     id := "87a614b7c30fee948541a1885104ce2987a614b7c30fee948541a1885104ce29"
     displayed: [80]u8
@@ -513,9 +559,11 @@ test_public_id_display_groups :: () {
 
 #program_export
 Check :: () -> s32 {
+    ObservePushAccount("")
     // Never run against a real data directory.
-    guard := support_begin("/tmp/inbe-sync-account-zi-test/")
+    guard := support_begin("work/sync-account-zi-test/")
     if guard != 0 { return guard }
+    test_push_account_revocation()
     test_parallel()
     test_import_export_clear()
     test_sync_url_survives_shared_setting_text()

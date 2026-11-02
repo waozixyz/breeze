@@ -526,12 +526,10 @@ with contextlib.ExitStack() as stack:
                                          and node["label"] == "App options" and node["visible"]
                                          and node["y"] >= pinned[0]["y"]
                                          and node["y"] < pinned[0]["y"] + pinned[0]["height"])
-                    first_visibility = next(node for node in tree if node["kind"] == "button"
-                                            and node["label"] in ("Hide app", "Show app")
-                                            and node["visible"] and node["y"] >= pinned[0]["y"]
-                                            and node["y"] < pinned[0]["y"] + pinned[0]["height"])
-                    assert first_visibility["x"] + first_visibility["width"] <= first_options["x"], \
-                        (first_visibility, first_options)
+                    assert not any(node["kind"] == "button" and node["label"] in ("Hide app", "Show app")
+                                   and node["visible"] and node["y"] >= pinned[0]["y"]
+                                   and node["y"] < pinned[0]["y"] + pinned[0]["height"] for node in tree), \
+                        "Edit mode shows the hide/show rectangle"
                     driver.press(label="Done", role="button")
                     driver.wait(label="Edit apps", role="button")
                     normal_tree = driver.tree()

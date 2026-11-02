@@ -1,5 +1,13 @@
 # Tests of the app's screens, settings, habits, diary, navigation and locale rules.
 
+.PHONY: android-push-delivery-test
+android-push-delivery-test:
+	@python3 tests/android_push_delivery_test.py
+
+.PHONY: notification-lifecycle-test
+notification-lifecycle-test: $(ZI2C_BIN)
+	@sh tests/notification_lifecycle_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
+
 .PHONY: habits-table-layout-test
 habits-table-layout-test: $(ZI2C_BIN)
 	@sh tests/habits_table_layout_test.sh $(ZIRAN_BUILD_DIR)/bin

@@ -10,8 +10,12 @@
 }
 
 # Manifest and platform callback entrypoints must keep their public shape.
+-keep class org.kryonlabs.notifications.NotificationReceiver { *; }
 -keep class xyz.waozi.inbe.FcmPushService { *; }
 -keep class xyz.waozi.inbe.PushServiceImpl { *; }
 -keep class xyz.waozi.inbe.SessionForegroundService { *; }
 -keep class xyz.waozi.inbe.StartPracticeTile { *; }
 -keep class xyz.waozi.inbe.StartPracticeWidget { *; }
+
+-keep class xyz.waozi.inbe.UnifiedPushBridge { *; }
+-keep class org.kryonlabs.notifications.push.** { *; }

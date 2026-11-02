@@ -93,6 +93,7 @@ link kryon kryon
 link kss kss
 link oqs oqs
 link raylib raylib
+link libwebp libwebp
 link game2d game2d
 link qrcode qrcode
 link plot plot

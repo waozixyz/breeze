@@ -372,6 +372,16 @@ public class MainActivity extends NativeActivity {
     private native boolean nativeDebugImportMusicForPractice(String path, int practiceId);
     private native boolean nativeDebugStartMusicDownload();
 
+    // Kryon's native notification host calls this on the app thread.
+    public void requestKryonNotifications() {
+        runOnUiThread(new Runnable() {
+            @Override
+            public void run() {
+                org.kryonlabs.notifications.NotificationReceiver.requestPermission(MainActivity.this);
+            }
+        });
+    }
+
     private void requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED &&
@@ -1016,6 +1026,10 @@ public class MainActivity extends NativeActivity {
 
     public boolean isUnifiedPushRegistered() {
         return PushBridge.isRegistered(this);
+    }
+
+    public void syncKryonPush(String scope) {
+        PushBridge.syncScope(this, scope);
     }
 
     public String[] getUnifiedPushDistributors() {

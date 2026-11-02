@@ -30,6 +30,9 @@ def generate(output, architecture=None):
         "--module-path", str(ROOT / "build/packages/ziran/std"),
         "--module-path", str(ROOT / "build/packages/daochi-client"),
         "--module-path", str(UI), "--module-path", str(BACKEND),
+        "--module-path", "kryon=" + str(UI), "--module-path", "kryon=" + str(BACKEND),
+        "--module-path", "entity=" + str(Path(os.environ.get("ENTITY_DIR", ROOT / "build/packages/entity")) / "src"),
+        "--module-path", "apps=" + str(Path(os.environ.get("APPS_DIR", ROOT / "build/packages/apps")) / "src"),
         # Named package imports such as entity/account_handoff.
         *subprocess.check_output(["sh", str(ROOT / "scripts/package-paths.sh"), str(ROOT / "build/packages")],
                                  text=True).split(),

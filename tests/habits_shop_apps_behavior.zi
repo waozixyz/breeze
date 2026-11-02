@@ -11,11 +11,15 @@
 #import "hosted_values"
 #import "widget_host"
 #import, file "../src/apps/module_host.zi";
+#import, file "../src/habits/reward_icons.zi";
 #import, file "../src/apps/habits_types.zi";
 #import, file "../src/apps/habits_ui_types.zi";
 #import, file "../src/apps/app_codec.zi";
 // Text, shapes and the clipboard as a host that draws nothing.
 #import, file "android_text_input_host.zi";
+
+c_shop_test :: #system_library "c";
+ModuleTestText :: (name: string) -> string #foreign c_shop_test;
 
 using HostValueKind;
 
@@ -29,7 +33,7 @@ shop_test_activity_seen: u32;
 shop_test_written: bool;
 
 ShopTestAssets :: (path: string) -> bool {
-    return path.count == 0
+    return path.count == 0 || AppsAsset(path).found
 }
 
 ShopTestCall :: (context: *void, module: *u8, function: *u8,
@@ -53,7 +57,8 @@ ShopTestCall :: (context: *void, module: *u8, function: *u8,
         if index < 0 || index >= shop_test_frame.reward_count { return 0 }
         shop_test_rewards_seen |= cast(u32)1 << cast(u32)index
         result.* = WidgetEncodeHabitsShopReward(HabitsShopReward.{.id = "reward-1",
-                .name = "Joint", .price = 5, .icon = 48}, *shop_test_reward_codec)
+                .name = "Reward", .price = 5,
+                .icon = ifx index == 0 then 48 else REWARD_ICON_COFFEE}, *shop_test_reward_codec)
         return 1
     }
     if name == "ReadHabitActivityHost" && count == 1 {
@@ -77,8 +82,11 @@ ShopTestCall :: (context: *void, module: *u8, function: *u8,
 // Draws the shop with two rewards and the grid of symbols open, then the
 // dialog Buy opens; returns 0 when the package drew both through the host.
 CheckHabitShop :: () -> s32 {
+    // Use the candidate Habits package rather than an older copy in the root fixture.
+    if !AppsOpenBytes(ModuleTestText("lists"), ModuleTestText("habits"),
+            ModuleTestText("practice")) { return 8 }
     session := SessionOpen()
-    bounds := Rectangle.{0.0, 0.0, 400.0, 900.0}
+    bounds := Rectangle.{0.0, 0.0, 400.0, 1800.0}
     BeginFrame(session, cast(u64)1, bounds)
     shop_test_frame = HabitsShopFrame.{.session = session, .scale = 1.0,
         .bounds = bounds, .view_width = 400, .font = 16, .small_font = 13,
@@ -90,8 +98,25 @@ CheckHabitShop :: () -> s32 {
     AppsUiEnd()
     WidgetHostEnd()
     painted := PendingPaintCount(session)
+    generated: u32 = 0
+    legacy: s32 = 0
+    for index: cast(s32)0..painted - 1 {
+        command := PendingPaintAt(session, index)
+        if command.kind >= 8 { legacy += 1 }
+        icons: [5]s32 = .[76, REWARD_ICON_COFFEE, REWARD_ICON_BUBBLE_TEA,
+            REWARD_ICON_CHOCOLATE, REWARD_ICON_CANDLE]
+        for choice: cast(s32)0..4 {
+            if command.kind == 5 && command.asset_path == RewardIconAsset(icons[choice]) {
+                generated |= cast(u32)1 << cast(u32)choice
+            }
+        }
+    }
     unused EndFrame(session)
     unused SessionClose(session)
+    if generated != cast(u32)31 || legacy == 0 {
+        print("Reward paint coverage: % bitmap mask, % legacy shapes\n", generated, legacy)
+        return 7
+    }
     if !drawn.succeeded { return 1 }
     if shop_test_reads != 1 || !shop_test_written { return 2 }
     // Layout measures wrapped rows before drawing them; every row must be
@@ -104,7 +129,7 @@ CheckHabitShop :: () -> s32 {
     BeginFrame(dialog, cast(u64)2, bounds)
     shop_test_frame.session = dialog
     shop_test_frame.buying = HabitsShopReward.{.id = "reward-1", .name = "Joint",
-        .price = 5, .icon = 48}
+        .price = 5, .icon = REWARD_ICON_COFFEE}
     shop_test_written = false
     WidgetHostBegin(dialog, ShopTestAssets)
     AppsUiBegin(ShopTestCall, null)
@@ -115,18 +140,32 @@ CheckHabitShop :: () -> s32 {
     unused EndFrame(dialog)
     unused SessionClose(dialog)
     if !asked.succeeded || !shop_test_written || dialog_painted == 0 { return 6 }
+    if !AppsOpenPackage(ModuleTestText("inbe")) { return 9 }
+    print("Habits reward picker: five packaged bitmap choices and legacy shapes passed\n")
     return 0
 }
 
-// The shop's coins and symbols ask an image's size; this run draws none.
+// Generated rewards expose their packaged PNG size to the headless painter.
 #program_export
 ImageWidth :: (path: string) -> s32 {
-    unused path
+    if RewardTestImage(path) { return 128 }
     return 0
 }
 
 #program_export
 ImageHeight :: (path: string) -> s32 {
-    unused path
+    if RewardTestImage(path) { return 128 }
     return 0
+}
+
+RewardTestImage :: (path: string) -> bool {
+    icons: [5]s32 = .[76, REWARD_ICON_COFFEE, REWARD_ICON_BUBBLE_TEA,
+        REWARD_ICON_CHOCOLATE, REWARD_ICON_CANDLE]
+    for icon: icons {
+        if path == RewardIconAsset(icon) {
+            asset := AppsAsset(path)
+            return asset.found && asset.data.count > 8 && asset.data[1:4] == "PNG"
+        }
+    }
+    return false
 }

@@ -1,0 +1,293 @@
+#import, file "../src/app/app_notifications.zi";
+#import, file "../src/app/notification_presentation.zi";
+#import, file "../src/app/notification_reminder_rules.zi";
+#import, file "../src/app/notification_reminders.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/habits/habit_types.zi";
+#import, file "../src/habits/habit_schedule.zi";
+#import, file "notification_game_host_behavior.zi";
+#import "notification"
+#import "date_time"
+#import "session"
+#import "geometry"
+#import "drawing_props"
+#import "tree"
+#import "toast_props"
+#import "toast_widget"
+
+c :: #system_library "c";
+Fail :: (code: s32) #foreign c "exit";
+
+test_app: InnerBreeze;
+test_allowed: bool;
+test_window_focused: bool;
+test_send_ok: bool = true;
+test_requests: s32;
+test_sends: s32;
+test_clock: LocalDateTime;
+test_last_id: s32;
+test_second: s64;
+test_persistent: bool;
+test_practice_schedules: s32;
+test_habit_schedules: s32;
+test_date_schedules: s32;
+test_cancels: s32;
+test_skip: s32;
+test_weekdays: u32;
+test_dates: [NotificationHabitDateLimit]s32;
+test_date_count: s32;
+test_days: [1]HabitDay;
+
+Require :: (condition: bool, code: s32) {
+    if !condition {
+        Fail(code)
+    }
+}
+
+#program_export "__wrap_LocaleText"
+TestLocaleText :: (key: string) -> string { return key }
+
+#program_export "app_web_platform"
+TestWebPlatform :: () -> s32 { return 0 }
+
+#program_export
+NotificationAllowedHost :: () -> bool { return test_allowed }
+
+#program_export
+NotificationRequestHost :: () -> bool {
+    test_requests += 1
+    return test_allowed
+}
+
+#program_export
+NotificationWindowFocusedHost :: () -> bool { return test_window_focused }
+
+#program_export "IsWindowFocused"
+TestWindowFocused :: () -> bool { return test_window_focused }
+
+#program_export
+NotificationSendHost :: (props: NotificationProps) -> bool {
+    test_sends += 1
+    test_last_id = props.id
+    return test_send_ok
+}
+
+#program_export
+LocalNowHost :: () -> LocalDateTime { return test_clock }
+
+#program_export
+UnixNowHost :: () -> s64 { return test_second }
+
+#program_export "__wrap_DailyNotificationsSupported"
+TestPersistentSupported :: () -> bool { return test_persistent }
+
+#program_export "__wrap_ScheduleDailyNotification"
+TestScheduleDaily :: (props: NotificationProps, hour: s32, minute: s32,
+    suppress: bool, not_before: s64, weekdays: u32, skip: s32) -> bool {
+    Require(hour >= 0 && hour <= 23 && minute == 0 && !suppress && not_before == 0, 90)
+    if props.id == 100 {
+        test_practice_schedules += 1
+    } else if props.id == 200 {
+        test_habit_schedules += 1
+        test_skip = skip
+        test_weekdays = weekdays
+    } else {
+        Fail(91)
+    }
+    return true
+}
+
+#program_export "__wrap_ScheduleNotificationDates"
+TestScheduleDates :: (props: NotificationProps, dates: []s32,
+    hour: s32, minute: s32) -> bool {
+    Require(props.id == 200 && hour == 9 && minute == 0, 92)
+    test_date_schedules += 1
+    test_date_count = cast(s32)dates.count
+    Require(test_date_count > 0 && test_date_count <= NotificationHabitDateLimit, 93)
+    for i: 0..test_date_count - 1 {
+        test_dates[i] = dates[i]
+    }
+    return true
+}
+
+#program_export "__wrap_CancelDailyNotification"
+TestCancelDaily :: (tag: string, id: s32) -> bool {
+    Require(tag == "inbe.reminder" || tag == "inbe.habit_reminder", 94)
+    Require(id >= 100 && id < 232, 95)
+    test_cancels += 1
+    return true
+}
+
+#program_export
+MeasureGlyphWidth :: (value: string, font: s32, typeface: string) -> s32 {
+    unused typeface
+    return cast(s32)value.count * font / 2
+}
+
+#program_export
+MeasureGlyphLineHeight :: (font: s32, typeface: string) -> s32 {
+    unused typeface
+    return font
+}
+
+// Toast paint stays inside Kryon's queue; these mocks must never reach a
+// desktop or silently accept an unexpected immediate raster operation.
+#program_export
+RasterText :: (value: string, x: s32, y: s32, font: s32, color: Color) {
+    Fail(80)
+}
+
+#program_export
+RasterTextClipped :: (value: string, x: s32, y: s32, font: s32,
+    color: Color, clip: Rectangle) {
+    Fail(81)
+}
+
+#program_export
+RasterRoundedRectangle :: (bounds: Rectangle, radius: float32,
+    segments: s32, color: Color) {
+    Fail(82)
+}
+
+#program_export
+RasterRoundedRectangleOutline :: (bounds: Rectangle, radius: float32,
+    segments: s32, width: float32, color: Color) {
+    Fail(83)
+}
+
+#program_export
+main :: () -> s32 {
+    // The explicit test action requests native permission and waits for its
+    // asynchronous result without changing any notification preference.
+    test_app.notification_friend_request = 0
+    test_app.notification_habit_reminders = 0
+    Require(!send_test_notification(null), 1)
+    Require(test_requests == 0, 2)
+    Require(!send_test_notification(*test_app), 3)
+    Require(test_requests == 1 && test_sends == 0, 4)
+    unused app_notifications_tick(*test_app)
+    Require(test_requests == 1 && test_sends == 0, 5)
+    test_allowed = true
+    unused app_notifications_tick(*test_app)
+    Require(test_sends == 1 && test_last_id == 2, 6)
+    unused app_notifications_tick(*test_app)
+    Require(test_sends == 1 && test_requests == 1, 7)
+    Require(test_app.notification_friend_request == 0 &&
+        test_app.notification_habit_reminders == 0, 8)
+
+    test_clock = LocalDateTime.{.valid = true, .year = 2026,
+        .month = 11, .day = 2, .day_of_year = 305, .hour = 7}
+    test_app.reminder_count = 2
+    test_app.reminders[0] = AppReminder.{.enabled = 1, .hour = 8}
+    test_app.reminders[1] = AppReminder.{.enabled = 0, .hour = 8}
+    Require(!app_notifications_tick(*test_app) && test_sends == 1, 10)
+    // Resuming after the hour catches up exactly once; disabled entries stay off.
+    test_clock.hour = 10
+    Require(app_notifications_tick(*test_app) && test_sends == 2, 11)
+    Require(test_app.reminders[0].last_day == 2026305 &&
+        test_app.reminders[1].last_day == 0 &&
+        test_app.reminders[1].enabled == 0, 12)
+    Require(!app_notifications_tick(*test_app) && test_sends == 2, 13)
+    // A failed platform send is retryable and never recorded as delivery.
+    test_clock.day_of_year += 1
+    test_send_ok = false
+    Require(!app_notifications_tick(*test_app), 14)
+    Require(test_app.reminders[0].last_day == 2026305, 15)
+    test_send_ok = true
+    Require(app_notifications_tick(*test_app), 16)
+    Require(test_app.reminders[0].last_day == 2026306, 17)
+    Require(!ReminderDue(true, -1, 0, 2026306, 10), 18)
+    Require(!ReminderDue(true, 24, 0, 2026306, 10), 19)
+    Require(!ReminderDue(true, 8, 0, 0, 10), 20)
+    Require(!ReminderDue(true, 8, 0, 2026306, 24), 21)
+
+    // A supported persistent host owns delivery. Permission denial never
+    // discards enabled offline rules or enables disabled preferences.
+    test_persistent = true
+    test_allowed = false
+    test_second = 1
+    test_app.reminder_count = 1
+    test_app.reminders[0].enabled = 1
+    test_app.notification_habit_reminders = 1
+    test_app.habits.count = 1
+    habit := *test_app.habits.items[0]
+    habit.name[0] = #char "H"
+    habit.reminder_hour = 9
+    habit.days = *test_days[0]
+    habit.day_count = 1
+    habit.day_capacity = 1
+    test_days[0] = HabitDay.{.day_index = 20261102, .completed = 1}
+    previous_sends := test_sends
+    Require(!app_notifications_tick(*test_app), 40)
+    Require(test_practice_schedules == 1 && test_habit_schedules == 1 &&
+        test_weekdays == 127 && test_skip == 20261102, 41)
+    Require(test_requests == 1 && test_sends == previous_sends, 42)
+    test_second += 1
+    unused app_notifications_tick(*test_app)
+    Require(test_practice_schedules == 1 && test_habit_schedules == 1, 43)
+    test_allowed = true
+    test_days[0].completed = 0
+    test_second += 1
+    unused app_notifications_tick(*test_app)
+    Require(test_habit_schedules == 2 && test_skip == 0, 44)
+    Require(test_practice_schedules == 1 && test_sends == previous_sends, 45)
+    // Monthly rules keep the app's actual recurrence and exclude completion.
+    test_days[0].completed = 1
+    habit.schedule_count = 1
+    habit.schedules[0] = HabitSchedule.{.from = 20261102,
+        .repeat = HABIT_REPEAT_MONTHLY, .every = 1, .month_days = 2}
+    test_second += 1
+    unused app_notifications_tick(*test_app)
+    Require(test_date_schedules == 1 && test_date_count == 119, 46)
+    Require(test_dates[0] == 20261202 && test_dates[test_date_count - 1] == 20361002, 47)
+    for i: 0..test_date_count - 1 {
+        Require(test_dates[i] % 100 == 2, 48)
+        if i > 0 {
+            Require(test_dates[i] > test_dates[i - 1], 49)
+        }
+    }
+    // Disabled and deleted reminders cancel once; later scans do no writes.
+    test_app.reminders[0].enabled = 0
+    test_app.notification_habit_reminders = 0
+    previous_cancels := test_cancels
+    test_second += 1
+    unused app_notifications_tick(*test_app)
+    Require(test_cancels == previous_cancels + 2, 50)
+    test_app.reminder_count = 0
+    test_app.habits.count = 0
+    test_second += 1
+    unused app_notifications_tick(*test_app)
+    Require(test_cancels == previous_cancels + 2, 51)
+    Require(test_app.reminders[0].enabled == 0 &&
+        test_app.notification_habit_reminders == 0, 52)
+    Require(NotificationWeekdays(1) == 2 && NotificationWeekdays(64) == 1, 53)
+    Require(NotificationDateAfter(20260228, 1) == 20260301 &&
+        NotificationDateAfter(20280228, 1) == 20280229, 54)
+
+    // Exercise the real plain-text Toast state machine without a display.
+    props: ToastProps
+    props.viewport.width = 480.0
+    props.viewport.height = 800.0
+    props.message = "Time for a break"
+    props.now_seconds = 100.0
+    props.seconds = AppNotificationToastSeconds
+    toast_session := SessionOpen()
+    Require(SessionValid(toast_session), 33)
+    TreeStart(toast_session, cast(u64)1, props.viewport)
+    shown := Toast(toast_session, props)
+    Require(shown.visible && shown.display == props.message &&
+        !shown.ellipsis && shown.state.until_seconds == 110.0, 30)
+    props.state = shown.state
+    props.message = ""
+    props.now_seconds = 109.9
+    TreeStart(toast_session, cast(u64)2, props.viewport)
+    Require(Toast(toast_session, props).visible, 31)
+    props.now_seconds = 110.0
+    TreeStart(toast_session, cast(u64)3, props.viewport)
+    Require(!Toast(toast_session, props).visible, 32)
+    SessionClose(toast_session)
+    Require(NotificationGameHostBehavior(*test_app) == 0, 60)
+    test_window_focused = true
+    Require(NotificationGameHostBehavior(*test_app) == 1, 61)
+    return 0
+}

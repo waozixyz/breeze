@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Choose soda, coffee, bubble tea, chocolate and candle pictures for custom rewards.
+
 ## [1.3.15] - 2026-10-29
 
 - Maintenance release for Inner Breeze 2.1.61.

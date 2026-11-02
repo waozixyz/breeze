@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- Edit app order with a single move grip and no extra Hide or Show overlay.
+- Close List settings after saving a list successfully.
+- Choose soda, coffee, bubble tea, chocolate and candle pictures for habit rewards.
+- Keep notifications visible longer and make habit reminders work when the app is closed, with notification permission and provider settings respected.
+
 - Backups always need a password: the old unprotected key save is gone, and Android device backups no longer copy your account.
 - Fix Add friend failing with "Could not start this action".
 - Sign in with your backup file and its password, name backups after your username, and always protect new backups with a password.

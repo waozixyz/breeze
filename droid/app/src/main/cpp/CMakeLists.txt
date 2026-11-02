@@ -20,6 +20,7 @@ if(NOT DEFINED KRYON_DIR)
 endif()
 get_filename_component(KRYON_DIR "${KRYON_DIR}" ABSOLUTE BASE_DIR "${REPO_ROOT}")
 set(RAYLIB_DIR "${REPO_ROOT}/build/packages/raylib/src")
+set(WEBP_DIR "${REPO_ROOT}/build/packages/libwebp")
 set(SQLITE_DIR "${REPO_ROOT}/build/packages/sqlite")
 set(SQLITE_BUILD_DIR "${CMAKE_BINARY_DIR}/sqlite")
 set(SQLITE_AMALGAMATION_C "${SQLITE_BUILD_DIR}/sqlite3.c")
@@ -264,7 +265,7 @@ add_custom_command(
     VERBATIM
 )
 
-kryon_android_raylib("${RAYLIB_DIR}")
+kryon_android_raylib("${RAYLIB_DIR}" "${WEBP_DIR}")
 
 add_library(main SHARED
     "${MONOCYPHER_DIR}/monocypher.c"

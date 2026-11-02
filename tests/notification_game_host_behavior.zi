@@ -1,0 +1,105 @@
+// Exercise the app's real permission and foreground callbacks with an
+// in-memory verified tree. No bundle, database or window is opened here.
+#import, file "../src/apps/node_app_tree.zi";
+#import, file "../src/apps/node_app_runner.zi";
+#import, file "../src/apps/node_apps.zi";
+#import, file "../src/app/current_app.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/core/types.zi";
+#import "apps/tree"
+#import "apps/host"
+#import "std/c_string"
+#import "std/vec"
+
+NotificationGameHostBehavior :: (app: *InnerBreeze) -> s32 {
+    host: AppHost
+    root: AppNode
+    game: AppNode
+    other: AppNode
+    root.generation = 1
+    game.generation = 2
+    other.generation = 3
+    unused CopyCString("reviewed-publisher", root.identity.authority[:])
+    unused CopyCString("reviewed-publisher", game.identity.authority[:])
+    unused CopyCString("xyz.waozi.wurm", game.identity.id[:])
+    VecPush(host.tree.nodes, AppSlot.{.node = *root})
+    VecPush(host.tree.nodes, AppSlot.{.node = *game})
+    VecPush(host.tree.nodes, AppSlot.{.node = *other})
+    host.tree.active = AppHandle.{1, 2}
+    runner := *node_runners[0]
+    runner.nested = *host
+    if NodeTreeNotificationAllowed(null, *game) ||
+    NodeTreeNotificationAllowed(runner, null) ||
+    !NodeTreeNotificationAllowed(runner, *game) {
+        return 100
+    }
+    unused CopyCString("xyz.waozi.wurm-editor", game.identity.id[:])
+    if NodeTreeNotificationAllowed(runner, *game) {
+        return 101
+    }
+    unused CopyCString("xyz.waozi.wurm-player", game.identity.id[:])
+    if NodeTreeNotificationAllowed(runner, *game) {
+        return 102
+    }
+    unused CopyCString("arcade.shovey", game.identity.id[:])
+    if !NodeTreeNotificationAllowed(runner, *game) {
+        return 103
+    }
+    unused CopyCString("other-publisher", game.identity.authority[:])
+    if NodeTreeNotificationAllowed(runner, *game) {
+        return 104
+    }
+    unused CopyCString("local-development", root.identity.authority[:])
+    unused CopyCString("local-development", game.identity.authority[:])
+    if NodeTreeNotificationAllowed(runner, *game) {
+        return 105
+    }
+    unused CopyCString("reviewed-publisher", root.identity.authority[:])
+    unused CopyCString("reviewed-publisher", game.identity.authority[:])
+    host.tree.active = AppHandle.{2, 3}
+    if NodeTreeNotificationAllowed(runner, *game) {
+        return 106
+    }
+    host.tree.active = AppHandle.{1, 99}
+    if NodeTreeNotificationAllowed(runner, *game) {
+        return 107
+    }
+    host.tree.active = AppHandle.{1, 2}
+    SetCurrentApp(app)
+    app.breathing.screen = ScreenNodeApp
+    app.node_app_slot = 0
+    app.backgrounded = 0
+    app.modal.active = 0
+    app.launcher_open = false
+    // The parent test supplies the native focus observation. Its true/false
+    // cases call this callback directly after this fixture is set up.
+    visible := NodeTreeNotificationFocused(cast(*void)runner, *game)
+    app.modal.active = 1
+    if NodeTreeNotificationFocused(cast(*void)runner, *game) {
+        return 108
+    }
+    app.modal.active = 0
+    app.launcher_open = true
+    if NodeTreeNotificationFocused(cast(*void)runner, *game) {
+        return 109
+    }
+    app.launcher_open = false
+    app.backgrounded = 1
+    if NodeTreeNotificationFocused(cast(*void)runner, *game) {
+        return 110
+    }
+    app.backgrounded = 0
+    app.node_app_slot = 1
+    if NodeTreeNotificationFocused(cast(*void)runner, *game) {
+        return 111
+    }
+    app.node_app_slot = 0
+    app.breathing.screen = ScreenStart
+    if NodeTreeNotificationFocused(cast(*void)runner, *game) {
+        return 112
+    }
+    runner.nested = null
+    SetCurrentApp(null)
+    VecFree(host.tree.nodes)
+    return ifx visible then 1 else 0
+}

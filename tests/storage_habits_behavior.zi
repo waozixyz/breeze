@@ -15,6 +15,7 @@
 #import, file "../src/habits/habit_types.zi";
 #import, file "../src/habits/habit_days.zi";
 #import, file "../src/habits/habit_coins.zi";
+#import, file "../src/habits/reward_icons.zi";
 #import, file "../src/habits/habit_icons.zi";
 #import, file "../src/habits/habit_memory.zi";
 #import, file "../src/storage/storage_habits.zi";
@@ -1183,10 +1184,35 @@ test_habit_writing_icons :: () {
     storage_close()
 }
 
+test_reward_catalog :: () {
+    check_int("legacy soda ID stays stable", HABIT_ICON_SODA, 76)
+    check_int("invalid reward uses gift", HabitRewardIconClamp(0), HABIT_ICON_GIFT)
+    check_int("unknown reward uses gift", HabitRewardIconClamp(REWARD_ICON_COUNT + 1), HABIT_ICON_GIFT)
+    root := make_root("reward-icon-catalog")
+    check_true("open reward catalog db", storage_init(root) != 0)
+    icon: s32 = REWARD_ICON_COFFEE
+    while icon <= REWARD_ICON_COUNT {
+        check_int("new reward keeps its saved ID", HabitRewardIconClamp(icon), icon)
+        check_true("new reward has artwork", RewardIconAsset(icon).count > 0)
+        saved: [HABIT_REWARD_ID_SIZE]u8
+        check_true("save generated reward", storage_habit_reward_save("", "Reward", icon, icon, saved[:]) != 0)
+        icon += 1
+    }
+    storage_close()
+    check_true("reopen reward catalog db", storage_init(root) != 0)
+    rewards: [4]HabitReward
+    check_int("all generated rewards reload", storage_habit_rewards_load(rewards[:]), 4)
+    for index: cast(s32)0..3 {
+        check_int("reload preserves generated choice", rewards[index].icon, REWARD_ICON_COFFEE + index)
+    }
+    storage_close()
+}
+
 #program_export
 Check :: () -> s32 {
     guard := support_begin("/tmp/inbe-storage-habits-zi-test/")
     if guard != 0 { return guard }
+    test_reward_catalog()
     test_habit_name_merge_import()
     test_import_conflict_prefers_data()
     test_delete_all_resets()

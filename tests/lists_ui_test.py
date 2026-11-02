@@ -245,6 +245,17 @@ with contextlib.ExitStack() as stack:
     driver.wait(label="Fresh fruit", role="button")
     driver.press(label="Travel", role="button")
     driver.wait(label="Pack bag", role="button")
+    # A successful list save persists the name and leaves settings.
+    open_settings("Travel")
+    driver.press(role="text_field")
+    driver.type(" renamed")
+    driver.wait(role="text_field", value="Travel renamed")
+    driver.press(label="Save", role="button")
+    wait_for(lambda: sql("SELECT title FROM elist_lists WHERE title='Travel renamed'") == "Travel renamed",
+             "the list save did not persist")
+    driver.wait_gone(label="List settings", timeout=3)
+    driver.wait(label="Travel renamed", role="button")
+    driver.wait(label="Add", role="button")
     # List settings holds the name, the people and Delete, which asks first.
     for name in extra:
         open_settings(name)
@@ -253,14 +264,14 @@ with contextlib.ExitStack() as stack:
         driver.press(label="Delete list", role="button")
         driver.wait_gone(label=name, role="button", visible=False)
         driver.wait(label="Add", role="button")
-    driver.press(label="Travel", role="button")
+    driver.press(label="Travel renamed", role="button")
     # Sharing lives in List settings, opened from the selected chip's gear.
     # Offline, it asks to connect an account first. A private list shows no
     # line about access, and Invitations appears only while one waits.
     assert not driver.find(label="Share", role="button"), "a Share button is still on the list screen"
     assert not driver.find(label="Rename", role="button"), "a Rename button is still on the list screen"
     assert not driver.find(contains="Invitations", role="button"), "Invitations shown with none waiting"
-    open_settings("Travel")
+    open_settings("Travel renamed")
     assert re.search(r"connect|account|sharing", page(), re.IGNORECASE), page()
     assert not driver.find(label="Delete this list?", visible=True), "Delete did not wait to be asked"
     back()

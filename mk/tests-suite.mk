@@ -101,6 +101,7 @@ test: android-package-assets-test package-size-test
 test: asset-files-zi-test
 test: settings-status-zi-test
 test: settings-mutation-zi-test
+test: notification-lifecycle-test
 test: theme-catalog-zi-test
 test: style-apply-zi-test
 test: audio-settings-test
@@ -167,3 +168,5 @@ test: android-sdk-install-test
 ci: test web
 
 test: local-game-records-test
+
+test: android-push-delivery-test

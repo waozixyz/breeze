@@ -1,0 +1,175 @@
+// App policy for local reminder dates; Kryon owns durable OS delivery.
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_calendar.zi";
+#import, file "../habits/habit_schedule.zi";
+#import, file "../habits/habit_days.zi";
+#import "date_parse"
+
+NotificationHabitDateLimit :: 3660
+
+NotificationDateAfter :: (date: s32, offset: s32) -> s32 {
+    source := HabitScheduleDateOf(date)
+    if !source.valid || offset < 0 {
+        return 0
+    }
+    next := CivilFromUnix((source.ordinal + offset) * 86400)
+    return next.year * 10000 + next.month * 100 + next.day
+}
+
+NotificationHabitPlanned :: (enabled: bool, habit: *Habit, date: s32) -> bool {
+    if !enabled || habit == null || habit.reminder_hour < 0 ||
+    habit.reminder_hour > 23 || !HabitScheduleDateOf(date).valid {
+        return false
+    }
+    return habit_scheduled_day(habit, date) != 0 && !HabitCompletedFor(habit, date)
+}
+
+// Monday-first habit masks become the scheduler's Sunday-first masks.
+NotificationWeekdays :: (mask: s32) -> u32 {
+    return cast(u32)(((mask << 1) & 127) | ((mask >> 6) & 1))
+}
+
+NotificationHabitDayCount :: (habit: *Habit) -> s32 {
+    if habit == null || habit.days == null {
+        return 0
+    }
+    count := habit.day_count
+    if count > habit.day_capacity {
+        count = habit.day_capacity
+    }
+    if count > HABIT_WEEKLY_MAX_DAYS {
+        count = HABIT_WEEKLY_MAX_DAYS
+    }
+    return count
+}
+
+// A lossless daily/weekly rule can run indefinitely. Future schedule changes
+// and completed future dates need the exact-date queue instead.
+NotificationHabitRecurringWeekdays :: (habit: *Habit, today: s32) -> u32 {
+    if habit == null || habit.deactivated != 0 {
+        return 0
+    }
+    for i: 0..NotificationHabitDayCount(habit) - 1 {
+        if habit.days[i].day_index > today && HabitDayComplete(habit.days[i],
+            habit.counter_enabled != 0, habit.counter_target) {
+            return 0
+        }
+    }
+    count := habit.schedule_count
+    if count > HABIT_SCHEDULE_MAX {
+        count = HABIT_SCHEDULE_MAX
+    }
+    for i: 0..count - 1 {
+        if habit.schedules[i].from > today {
+            return 0
+        }
+    }
+    rule := HabitScheduleFromWeekdays(habit.weekdays)
+    selected := HabitScheduleFor(habit, today)
+    if selected != null {
+        rule = selected.*
+    }
+    if rule.every > 1 || rule.start > today {
+        return 0
+    }
+    if rule.repeat == HABIT_REPEAT_DAILY {
+        return 127
+    }
+    if rule.repeat == HABIT_REPEAT_WEEKLY {
+        return NotificationWeekdays(rule.weekdays)
+    }
+    return 0
+}
+
+NotificationHabitDates :: (habit: *Habit, today: s32, output: []s32) -> s32 {
+    first := HabitScheduleDateOf(today)
+    if habit == null || habit.deactivated != 0 || !first.valid {
+        return 0
+    }
+    end_year := first.year + 10
+    if end_year > 9999 {
+        end_year = 9999
+    }
+    end_day := first.day
+    while !DateValid(end_year, first.month, end_day) && end_day > 1 {
+        end_day -= 1
+    }
+    end := DaysFromCivil(end_year, first.month, end_day)
+    // Build completion bits once, rather than scanning a habit's entire
+    // recorded history for every candidate day.
+    completed: [NotificationHabitDateLimit]bool
+    for i: 0..NotificationHabitDayCount(habit) - 1 {
+        record := habit.days[i]
+        date := HabitScheduleDateOf(record.day_index)
+        offset := date.ordinal - first.ordinal
+        if date.valid && offset >= 0 && offset < NotificationHabitDateLimit &&
+        HabitDayComplete(record, habit.counter_enabled != 0, habit.counter_target) {
+            completed[offset] = true
+        }
+    }
+    count: s32 = 0
+    ordinal := first.ordinal
+    while ordinal < end {
+        date := CivilFromUnix(ordinal * 86400)
+        key := date.year * 10000 + date.month * 100 + date.day
+        offset := ordinal - first.ordinal
+        if offset < NotificationHabitDateLimit && !completed[offset] &&
+        habit_scheduled_day(habit, key) != 0 {
+            if count >= output.count {
+                break
+            }
+            output[count] = key
+            count += 1
+        }
+        ordinal += 1
+    }
+    return count
+}
+
+NotificationTextFingerprint :: (text: string) -> u64 {
+    result: u64 = cast(u64)14695981039346656037
+    for byte: text {
+        result = (result ^ cast(u64)byte) * cast(u64)1099511628211
+    }
+    return result
+}
+
+NotificationNumberFingerprint :: (hash: u64, value: s64) -> u64 {
+    return (hash ^ cast(u64)value) * cast(u64)1099511628211
+}
+
+NotificationHabitFingerprint :: (habit: *Habit, today: s32) -> u64 {
+    hash := NotificationNumberFingerprint(NotificationTextFingerprint("habit"), today)
+    hash = NotificationNumberFingerprint(hash, habit.reminder_hour)
+    hash = NotificationNumberFingerprint(hash, habit.deactivated)
+    hash = NotificationNumberFingerprint(hash, habit.weekdays)
+    hash = NotificationNumberFingerprint(hash, habit.counter_enabled)
+    hash = NotificationNumberFingerprint(hash, habit.counter_target)
+    count := habit.schedule_count
+    if count > HABIT_SCHEDULE_MAX {
+        count = HABIT_SCHEDULE_MAX
+    }
+    hash = NotificationNumberFingerprint(hash, count)
+    for i: 0..count - 1 {
+        rule := habit.schedules[i]
+        hash = NotificationNumberFingerprint(hash, rule.from)
+        hash = NotificationNumberFingerprint(hash, rule.repeat)
+        hash = NotificationNumberFingerprint(hash, rule.every)
+        hash = NotificationNumberFingerprint(hash, rule.start)
+        hash = NotificationNumberFingerprint(hash, rule.weekdays)
+        hash = NotificationNumberFingerprint(hash, rule.month_days)
+        hash = NotificationNumberFingerprint(hash, rule.last_day)
+        hash = NotificationNumberFingerprint(hash, rule.week_of_month)
+        hash = hash ^ NotificationTextFingerprint(HabitScheduleFormulaText(*rule))
+    }
+    for i: 0..NotificationHabitDayCount(habit) - 1 {
+        record := habit.days[i]
+        if record.day_index >= today {
+            hash = NotificationNumberFingerprint(hash, record.day_index)
+            hash = NotificationNumberFingerprint(hash, record.completed)
+            hash = NotificationNumberFingerprint(hash, record.count)
+            hash = NotificationNumberFingerprint(hash, record.session_count)
+        }
+    }
+    return hash
+}

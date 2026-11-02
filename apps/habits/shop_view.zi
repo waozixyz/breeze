@@ -26,6 +26,8 @@
 #import "modal_frame_widget"
 #import "scroll_props"
 #import "scroll_widget"
+#import "image_props"
+#import "image_widget"
 #import "svg_icon_props"
 #import "svg_icon_widget"
 #import "tree"
@@ -33,7 +35,25 @@
 #import, file "../../src/apps/habits_types.zi";
 #import, file "../../src/habits/habit_types.zi";
 #import, file "../../src/habits/habit_icons.zi";
+#import, file "../../src/habits/reward_icons.zi";
 #import, file "../../src/habits/habit_coins.zi";
+// Generated reward artwork shares the regular image surface with other app media.
+RewardImage :: (icon: s32) -> ImageProps {
+    return ImageProps.{.asset_path = RewardIconAsset(icon),
+        .alt_text = Locale(RewardIconLabelKey(icon)), .smooth = true}
+}
+
+RewardSymbol :: (icon: s32, bounds: Rectangle) {
+    if RewardIconAsset(icon).count > 0 {
+        picture := RewardImage(icon)
+        picture.bounds = bounds
+        Image(shop.session, picture)
+    } else {
+        SvgIcon(shop.session, SvgIconProps.{.bounds = bounds,
+            .shape = HabitIconShape(icon), .color = shop.text_color})
+    }
+}
+
 CoinIcon :: #import "mingcute/mingcute_filled_copper_coin";
 
 using ButtonTone;
@@ -535,11 +555,13 @@ ActivityRow :: (index: s32, x: s32, y: s32, width: s32) -> s32 {
     first_height := ifx stacked then height - Scale(32) else height
     symbol := Scale(20)
     icon_height := ifx stacked then Scale(24) else height
-    shape := ifx line.icon > 0 then HabitIconShape(line.icon) else ""
-    SvgIcon(shop.session, SvgIconProps.{
-            .bounds = Bounds(x, y + (icon_height - symbol) / 2, symbol, symbol),
-            .shape = ifx shape.count > 0 then shape else SHOP_DONE_SHAPE,
-            .color = shop.text_color})
+    symbol_bounds := Bounds(x, y + (icon_height - symbol) / 2, symbol, symbol)
+    if line.icon > 0 {
+        RewardSymbol(HabitRewardIconClamp(line.icon), symbol_bounds)
+    } else {
+        SvgIcon(shop.session, SvgIconProps.{.bounds = symbol_bounds,
+            .shape = SHOP_DONE_SHAPE, .color = shop.text_color})
+    }
     amount := ActivityAmount(line)
     amount_w := CoinAmountWidth(amount, shop.font)
     day_w := Width(line.day, shop.small_font) + Scale(12)
@@ -627,10 +649,8 @@ RewardRow :: (index: s32, x: s32, y: s32, width: s32) -> s32 {
             .disabled = shop.modal_active}) != 0 {
         FormEdit(reward)
     }
-    SvgIcon(shop.session, SvgIconProps.{
-            .bounds = Bounds(x + pad, name_y + (name_h - symbol) / 2, symbol, symbol),
-            .shape = HabitIconShape(HabitRewardIconClamp(reward.icon)),
-            .color = shop.text_color})
+    RewardSymbol(HabitRewardIconClamp(reward.icon),
+        Bounds(x + pad, name_y + (name_h - symbol) / 2, symbol, symbol))
     Text(shop.session, TextProps.{
             .bounds = Bounds(name_x, name_y, name_w, name_h), .text = reward.name,
             .vertical_align = cast(TextAlign)TextAlignCenter,
@@ -663,7 +683,7 @@ IconColumns :: (width: s32) -> s32 {
 // The height of the open grid of symbols, one for each habit icon.
 IconGridHeight :: (width: s32) -> s32 {
     columns := IconColumns(width)
-    rows := (HABIT_ICON_COUNT + columns - 1) / columns
+    rows := (REWARD_ICON_COUNT + columns - 1) / columns
     return rows * Scale(SHOP_ICON_STEP_Y)
 }
 
@@ -672,7 +692,8 @@ IconGridHeight :: (width: s32) -> s32 {
 IconButton :: (bounds: Rectangle) {
     if Button(shop.session, ButtonProps.{
             .id = 8425, .bounds = bounds, .label = Locale("habit_icon_label"),
-            .icon_shape = HabitIconShape(shop.icon), .icon_only = true,
+            .icon_shape = ifx RewardIconAsset(shop.icon).count > 0 then "" else HabitIconShape(shop.icon),
+            .image = RewardImage(shop.icon), .icon_only = true,
             .selected = shop.icon_open, .tone = cast(ButtonTone)ButtonToneNeutral,
             .emphasis = cast(ButtonEmphasis)(ifx shop.icon_open then
             ButtonEmphasisOutline else ButtonEmphasisSoft),
@@ -688,7 +709,7 @@ IconButton :: (bounds: Rectangle) {
 IconGrid :: (x: s32, y: s32, width: s32) {
     columns := IconColumns(width)
     icon: s32 = 1
-    while icon <= HABIT_ICON_COUNT {
+    while icon <= REWARD_ICON_COUNT {
         index := icon - 1
         selected := shop.icon == icon
         if Button(shop.session, ButtonProps.{
@@ -697,7 +718,9 @@ IconGrid :: (x: s32, y: s32, width: s32) {
                 y + (index / columns) * Scale(SHOP_ICON_STEP_Y) + Scale(2),
                 Scale(SHOP_ICON_SIZE), Scale(SHOP_ICON_SIZE)),
                 .circle = true,
-                .icon_shape = HabitIconShape(icon), .icon_only = true, .selected = selected,
+                .label = Locale(RewardIconLabelKey(icon)),
+                .icon_shape = ifx RewardIconAsset(icon).count > 0 then "" else HabitIconShape(icon),
+                .image = RewardImage(icon), .icon_only = true, .selected = selected,
                 .tone = cast(ButtonTone)(ifx selected then ButtonToneAccent else ButtonToneNeutral),
                 .emphasis = cast(ButtonEmphasis)(ifx selected then
                 ButtonEmphasisFilled else ButtonEmphasisSoft),
@@ -937,9 +960,7 @@ BuyDialog :: () {
     y := cast(s32)content.y
     inner_w := cast(s32)content.width
     symbol := Scale(30)
-    SvgIcon(shop.session, SvgIconProps.{.bounds = Bounds(x, y, symbol, symbol),
-            .shape = HabitIconShape(HabitRewardIconClamp(reward.icon)),
-            .color = shop.text_color})
+    RewardSymbol(HabitRewardIconClamp(reward.icon), Bounds(x, y, symbol, symbol))
     strong: [1]TextRange
     strong[0] = TextRange.{.start = 0, .end = cast(s32)reward.name.count}
     Text(shop.session, TextProps.{

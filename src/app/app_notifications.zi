@@ -1,26 +1,66 @@
 #import, file "../habits/habit_types.zi";
 #import, file "../habits/habit_calendar.zi";
 #import, file "app_types.zi";
-#import, file "notification_schedule.zi";
+#import, file "notification_reminder_rules.zi";
+#import, file "notification_reminders.zi";
 #import, file "locale.zi";
 #import, file "text_buffers.zi";
 #import, file "../habits/habit_days.zi";
 #import "date_time"
 #import, file "../social/friend_requests.zi";
 #import, file "../platform/environment.zi";
+#import, file "../platform/android/android_push.zi";
+#if #defined(ANDROID_BUILD) {
+    #import, file "../storage/sync_state.zi";
+    #import, file "../storage/storage_settings.zi";
+}
 
 #import, file "app.zi";
 #import "notification"
+PersistentNotifications :: #import "kryon/notification_schedule";
 
 using NotificationPriority;
 
+notification_test_pending: bool;
+
+NotificationReminderState :: struct {
+    initialized: bool
+    active: bool
+    date: s32
+    hour: s32
+    title: u64
+    body: u64
+    source: u64
+}
+
+notification_reminder_state: [APP_REMINDER_MAX]NotificationReminderState;
+notification_habit_state: [HABIT_MAX]NotificationReminderState;
+notification_reminder_last_second: s64 = -1;
+notification_push_last_second: s64 = -1;
+
+app_notifications_sync_push :: (app: *InnerBreeze) {
+    #if #defined(ANDROID_BUILD) {
+        if app != null && app.notification_friend_request != 0 && storage_sync_enabled() != 0 {
+            PushSyncAccount(storage_get_setting_text("sync_public_id"))
+        } else {
+            PushSyncAccount("")
+        }
+    }
+}
+
 app_notifications_init :: (app: *InnerBreeze) {
     SetNotificationAppName("xyz.waozi.inbe")
+    notification_test_pending = false
+    notification_reminder_state = .{}
+    notification_habit_state = .{}
+    notification_reminder_last_second = -1
+    notification_push_last_second = -1
     if WebPlatform() == 0 {
         RequestNotifications()
     }
     if app != null {
         app.friend_request_last_count = -1
+        app_notifications_sync_push(app)
     }
 }
 
@@ -32,12 +72,19 @@ allowed :: (app: *InnerBreeze) -> bool {
 }
 
 send_test_notification :: (app: *InnerBreeze) -> bool {
-    if WebPlatform() != 0 {
+    if app == null {
+        return false
+    }
+    // This is an explicit user action, including on Android after a denial.
+    // The platform permission request may finish asynchronously.
+    if !NotificationsAllowed() {
+        notification_test_pending = true
         RequestNotifications()
     }
     if !allowed(app) {
         return false
     }
+    notification_test_pending = false
     props: NotificationProps
     props.title = LocaleText("notification_test_title")
     props.body = LocaleText("notification_test_body")
@@ -83,6 +130,107 @@ practice_label :: (practice: s32) -> string {
     return LocaleText("exercise_wim_hof")
 }
 
+app_notification_reconcile_entry :: (state: *NotificationReminderState,
+    props: NotificationProps, active: bool, hour: s32, skip_local_date: s32) {
+    title := NotificationTextFingerprint(props.title)
+    body := NotificationTextFingerprint(props.body)
+    if state.initialized && state.active == active {
+        if !active || (state.hour == hour && state.date == skip_local_date &&
+            state.title == title && state.body == body) {
+            return
+        }
+    }
+    accepted: bool
+    if !active {
+        accepted = PersistentNotifications.CancelDailyNotification(props.tag, props.id)
+    } else {
+        accepted = PersistentNotifications.ScheduleDailyNotification(props,
+            hour, 0, false, 0, 127, skip_local_date)
+    }
+    // Failed persistence remains retryable on the next scan. It never marks
+    // a reminder as delivered or changes the user's saved preferences.
+    if accepted {
+        state.* = NotificationReminderState.{.initialized = true,
+            .active = active, .hour = hour, .date = skip_local_date,
+            .title = title, .body = body}
+    }
+}
+
+app_notification_reconcile_habit :: (state: *NotificationReminderState,
+    props: NotificationProps, habit: *Habit, enabled: bool, today: s32) {
+    active := enabled && habit.reminder_hour >= 0 && habit.reminder_hour <= 23 &&
+    habit.deactivated == 0
+    source := NotificationHabitFingerprint(habit, today)
+    title := NotificationTextFingerprint(props.title)
+    body := NotificationTextFingerprint(props.body)
+    if state.initialized && state.active == active {
+        if !active || (state.source == source && state.title == title && state.body == body) {
+            return
+        }
+    }
+    accepted: bool
+    if !active {
+        accepted = PersistentNotifications.CancelDailyNotification(props.tag, props.id)
+    } else {
+        weekdays := NotificationHabitRecurringWeekdays(habit, today)
+        if weekdays != 0 {
+            skip: s32 = 0
+            if HabitCompletedFor(habit, today) {
+                skip = today
+            }
+            accepted = PersistentNotifications.ScheduleDailyNotification(props,
+                habit.reminder_hour, 0, false, 0, weekdays, skip)
+        } else {
+            dates: [NotificationHabitDateLimit]s32
+            count := NotificationHabitDates(habit, today, dates[:])
+            if count > 0 {
+                accepted = PersistentNotifications.ScheduleNotificationDates(props,
+                    dates[0:count], habit.reminder_hour)
+            } else {
+                accepted = PersistentNotifications.CancelDailyNotification(props.tag, props.id)
+            }
+        }
+    }
+    if accepted {
+        state.* = NotificationReminderState.{.initialized = true,
+            .active = active, .source = source, .title = title, .body = body}
+    }
+}
+
+app_notifications_reconcile :: (app: *InnerBreeze, local: LocalDateTime) {
+    second := UnixNow()
+    if second == notification_reminder_last_second {
+        return
+    }
+    notification_reminder_last_second = second
+    today := local.year * 10000 + local.month * 100 + local.day
+    day := local.year * 1000 + local.day_of_year
+    for i: 0..APP_REMINDER_MAX - 1 {
+        reminder := *app.reminders[i]
+        active := i < app.reminder_count && reminder.enabled != 0 &&
+        reminder.hour >= 0 && reminder.hour <= 23
+        props := NotificationProps.{.title = LocaleText("reminder_title"),
+            .body = practice_label(reminder.practice), .tag = "inbe.reminder",
+            .id = cast(s32)(100 + i),
+            .priority = cast(NotificationPriority)NotificationPriorityDefault}
+        skip: s32 = 0
+        if reminder.last_day == day {
+            skip = today
+        }
+        app_notification_reconcile_entry(*notification_reminder_state[i],
+            props, active, reminder.hour, skip)
+    }
+    for i: 0..HABIT_MAX - 1 {
+        habit := *app.habits.items[i]
+        props := NotificationProps.{.title = LocaleText("habit_reminder_title"),
+            .body = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE),
+            .tag = "inbe.habit_reminder", .id = cast(s32)(200 + i),
+            .priority = cast(NotificationPriority)NotificationPriorityDefault}
+        app_notification_reconcile_habit(*notification_habit_state[i], props, habit,
+            i < app.habits.count && app.notification_habit_reminders != 0, today)
+    }
+}
+
 app_notifications_tick :: (app: *InnerBreeze) -> bool {
     day: s32 = 0
     hour: s32 = 0
@@ -91,11 +239,25 @@ app_notifications_tick :: (app: *InnerBreeze) -> bool {
     if app == null {
         return false
     }
-    if !allowed(app) {
-        return false
+    second := UnixNow()
+    if second != notification_push_last_second {
+        notification_push_last_second = second
+        app_notifications_sync_push(app)
+    }
+    if notification_test_pending && allowed(app) {
+        unused send_test_notification(app)
     }
     local: LocalDateTime = LocalNow()
     if !local.valid {
+        return false
+    }
+    if PersistentNotifications.DailyNotificationsSupported() {
+        // Persist enabled rules even while OS permission is denied. The
+        // scheduler never enables preferences or prompts on this path.
+        app_notifications_reconcile(app, local)
+        return false
+    }
+    if !allowed(app) {
         return false
     }
     day = local.year * 1000 + local.day_of_year
@@ -128,7 +290,7 @@ app_notifications_tick :: (app: *InnerBreeze) -> bool {
         for i: 0..cast(int)app.habits.count {
             if i >= HABIT_MAX { break }
             habit: *Habit = *app.habits.items[i]
-            if habit.reminder_hour < 0 || habit.reminder_hour != hour {
+            if !ReminderDue(true, habit.reminder_hour, 0, day, hour) {
                 continue
             }
             bit: u32 = cast(u32)(1 << i)
