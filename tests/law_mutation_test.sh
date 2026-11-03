@@ -65,6 +65,9 @@ mutate_guide() {
         cat "$work/out.err" >&2
         exit 1
     fi
+    # This counterexample is expected. Do not report it as the cause if a
+    # later independent SQL fixture fails during cleanup.
+    : > "$work/out.err"
 }
 
 check() {

@@ -249,6 +249,10 @@ arcade-ui-test: $(TARGET)
 	@test -n "$(ARCADE_BUNDLE)" || { echo "Set ARCADE_BUNDLE to the arcade.zx collection built by Arcade"; exit 2; }
 	@sh tests/arcade_ui_test.sh $(abspath $(TARGET)) $(abspath $(ARCADE_BUNDLE))
 
+.PHONY: arcade-package-smoke-test
+arcade-package-smoke-test: $(TARGET) apps
+	@sh tests/arcade_ui_test.sh $(abspath $(TARGET)) $(abspath apps/bundled/arcade.zx) --smoke-only
+
 .PHONY: shared-progress-ui-test
 shared-progress-ui-test: $(TARGET)
 	@test -n "$(ARCADE_BUNDLE)" || { echo "Set ARCADE_BUNDLE to the arcade.zx collection built by Arcade"; exit 2; }

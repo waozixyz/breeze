@@ -1,0 +1,622 @@
+// The account's media library: each photo kept once per account by the
+// SHA-256 of its bytes, with a small preview for galleries. Photos is its
+// interface; Diary embeds its photos and shows a day's photos under the
+// entry. The library belongs to the account, so embeds keep working when an
+// app that added a photo is removed.
+//
+// Records sync in their own collection, private.inbe.v1.media, which older
+// apps skip:
+//
+//   cell.media.<sha256>          {"hash","size","type","name","day","taken",
+//                                 "added","trashed"[,"blob","key"]}
+//   cell.media.preview.<sha256>  {"hash","size","type"[,"blob","key"]}
+//
+// "day" is the capture day on the camera's clock (or the day the photo was
+// added), "taken" the capture time with its offset when the camera wrote one.
+// The bytes travel as the same sealed copies as Diary photos
+// (diary_records.zi): a key made from the account key and the file's hash,
+// so the same picture in Diary and in the library is one copy on the node.
+#import "file_linux"
+#import "byte_text_linux"
+#import "vec"
+#import "text"
+#import "json_scan"
+#import "image_preview"
+#import, file "diary_records.zi";
+#import, file "diary_store.zi";
+#import, file "media_metadata.zi";
+#import, file "package_files.zi";
+#import, file "../storage/cell_records.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/sqlite.zi";
+#import, file "../storage/db.zi";
+#import, file "../storage/state.zi";
+#import, file "../storage/paths.zi";
+#import, file "../storage/temporary_data.zi";
+#import, file "../platform/web_storage.zi";
+#import, file "../app/assets.zi";
+#import, file "../app/text_buffers.zi";
+
+MEDIA_RECORD_PREFIX :: "cell.media."
+MEDIA_PREVIEW_PREFIX :: "cell.media.preview."
+// Galleries and Diary draw previews at most this many pixels on their
+// longest side, upright and as JPEG of this quality.
+MEDIA_PREVIEW_EDGE :: 512
+MEDIA_PREVIEW_QUALITY :: 80
+MEDIA_NAME_MAX :: 200
+// Originals asked for on this device, downloaded by the next media pass.
+MEDIA_WANTED_MAX :: 32
+// Asset paths answered without reading files again, until a copy arrives.
+MEDIA_ASSET_CACHE :: 64
+
+MediaItem :: struct {
+    valid: bool
+    hash: [65]u8
+    size: s64
+    format: [8]u8
+    name: [MEDIA_NAME_MAX + 1]u8
+    day: [11]u8
+    taken: [26]u8
+    added: s64
+    trashed: bool
+}
+
+MediaImport :: struct {
+    succeeded: bool
+    // The library already had this photo; nothing new was stored.
+    existed: bool
+    hash: [65]u8
+}
+
+MediaAssetEntry :: struct {
+    hash: [65]u8
+    original: bool
+    generation: s64
+    path: [96]u8
+}
+
+media_wanted: [MEDIA_WANTED_MAX][65]u8;
+media_wanted_count: s32;
+media_wanted_next: s32;
+media_assets: [MEDIA_ASSET_CACHE]MediaAssetEntry;
+media_assets_next: s32;
+media_asset_bytes: string;
+
+MediaKeyValid :: (hash: string) -> bool {
+    return DiaryHex64(hash)
+}
+
+MediaRecordKey :: (hash: string) -> string {
+    return PackageText(MEDIA_RECORD_PREFIX, hash)
+}
+
+MediaPreviewKey :: (hash: string) -> string {
+    return PackageText(MEDIA_PREVIEW_PREFIX, hash)
+}
+
+// The library's folder for the signed-in account, beside the Diary's.
+MediaDirectory :: () -> string {
+    owner := AppTextFromCString(storage_user_id_buffer(), 64)
+    if owner.count == 0 {
+        return ""
+    }
+    for byte: owner {
+        digit := byte >= cast(u8)48 && byte <= cast(u8)57
+        letter := byte >= cast(u8)97 && byte <= cast(u8)122
+        if !digit && !letter && byte != cast(u8)45 {
+            return ""
+        }
+    }
+    database := storage_db_path()
+    at := database.count - 1
+    while at >= 0 && database[at] != cast(u8)47 && database[at] != cast(u8)92 {
+        at -= 1
+    }
+    if at < 0 {
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%media/%", database[:at + 1], owner)
+    return BuilderFinish(out)
+}
+
+MediaPath :: (hash: string, preview: bool) -> string {
+    if !MediaKeyValid(hash) {
+        return ""
+    }
+    directory := MediaDirectory()
+    defer { PackageFree(directory) }
+    if directory.count == 0 {
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%/%", directory, hash)
+    if preview {
+        BuilderPrint(*out, ".preview")
+    }
+    return BuilderFinish(out)
+}
+
+MediaJson :: (out: *Vec(u8), value: string) {
+    BuilderPrint(out, "\"")
+    for index: 0..value.count - 1 {
+        byte := value[index]
+        if byte == cast(u8)34 {
+            BuilderPrint(out, "\\\"")
+        } else if byte == cast(u8)92 {
+            BuilderPrint(out, "\\\\")
+        } else if byte < cast(u8)32 {
+            BuilderPrint(out, " ")
+        } else {
+            BuilderPrint(out, "%", value[index:index + 1])
+        }
+    }
+    BuilderPrint(out, "\"")
+}
+
+MediaParse :: (record: string) -> MediaItem {
+    item: MediaItem
+    media := DiaryMediaParse(record)
+    if !media.valid {
+        return item
+    }
+    item.hash = media.hash
+    item.size = media.size
+    if ReadStringText(record, FieldAt(record, 0, "type"), item.format[:]) <= 0 ||
+    ReadStringText(record, FieldAt(record, 0, "day"), item.day[:]) != 10 {
+        return MediaItem.{}
+    }
+    unused ReadStringText(record, FieldAt(record, 0, "name"), item.name[:])
+    unused ReadStringText(record, FieldAt(record, 0, "taken"), item.taken[:])
+    added := ReadNumber(record, FieldAt(record, 0, "added"))
+    if added.valid {
+        item.added = cast(s64)added.value
+    }
+    trashed := ReadNumber(record, FieldAt(record, 0, "trashed"))
+    item.trashed = trashed.valid && trashed.value != 0.0
+    item.valid = true
+    return item
+}
+
+MediaRead :: (hash: string) -> MediaItem {
+    if !MediaKeyValid(hash) {
+        return MediaItem.{}
+    }
+    key := MediaRecordKey(hash)
+    record := CellRecordRead(key)
+    defer { PackageFree(key); PackageFree(record) }
+    item := MediaParse(record)
+    if item.valid && TextFromBytes(item.hash[:64]) != hash {
+        return MediaItem.{}
+    }
+    return item
+}
+
+// The capture day and time for a new photo: the camera's own when the file
+// has them, otherwise this device's clock.
+MediaWhen :: (data: string, format: string, day: []u8, taken: []u8) -> bool {
+    capture := MediaCaptureOf(data, format)
+    out: Vec(u8)
+    // A four-digit camera year; anything earlier is a camera's unset clock.
+    if capture.valid && capture.year >= 1000 {
+        BuilderPrint(*out, "%-", capture.year)
+        BuilderPrint(*out, "%-", MediaTwo(capture.month))
+        BuilderPrint(*out, "%T", MediaTwo(capture.day))
+        BuilderPrint(*out, "%:", MediaTwo(capture.hour))
+        BuilderPrint(*out, "%:", MediaTwo(capture.minute))
+        BuilderPrint(*out, "%", MediaTwo(capture.second))
+        if capture.has_offset {
+            minutes := capture.offset
+            if minutes < 0 {
+                BuilderPrint(*out, "-")
+                minutes = -minutes
+            } else {
+                BuilderPrint(*out, "+")
+            }
+            BuilderPrint(*out, "%:", MediaTwo(minutes / 60))
+            BuilderPrint(*out, "%", MediaTwo(minutes % 60))
+        }
+    } else {
+        clock := DiaryStoreClock()
+        if clock.count < 19 {
+            VecFree(out)
+            return false
+        }
+        BuilderPrint(*out, "%T", clock[:10])
+        BuilderPrint(*out, "%", clock[11:19])
+    }
+    value := BuilderFinish(out)
+    defer { PackageFree(value) }
+    if value.count < 19 {
+        return false
+    }
+    return AppCopyText(value[:10], day) && AppCopyText(value, taken)
+}
+
+media_two: [3]u8;
+
+MediaTwo :: (value: s32) -> string {
+    media_two[0] = cast(u8)(48 + (value / 10) % 10)
+    media_two[1] = cast(u8)(48 + value % 10)
+    return TextFromBytes(media_two[:2])
+}
+
+// The file name a photo came with, without its folders, for its alt text.
+MediaName :: (path: string) -> string {
+    at := path.count - 1
+    while at >= 0 && path[at] != cast(u8)47 && path[at] != cast(u8)92 {
+        at -= 1
+    }
+    name := path[at + 1:]
+    if name.count > MEDIA_NAME_MAX {
+        name = name[:MEDIA_NAME_MAX]
+        // Never end inside a character.
+        while name.count > 0 && (path[at + 1 + name.count] & cast(u8)192) == cast(u8)128 {
+            name = name[:name.count - 1]
+        }
+    }
+    return name
+}
+
+MediaWriteFile :: (path: string, data: string) -> bool {
+    existing := PackageFileSize(path)
+    if existing == data.count {
+        current := PackageRead(path, DIARY_FILE_LIMIT)
+        same := current == data
+        PackageFree(current)
+        if same {
+            return true
+        }
+    }
+    return PackageWrite(path, data)
+}
+
+// A record with one numeric field set, keeping every other field, including
+// ones a newer version added.
+MediaRecordWith :: (record: string, field: string, value: string) -> string {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT json_set(?1, '$.' || ?2, json(?3))", -1,
+        *statement, null) != SQLITE_OK {
+        return ""
+    }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, record)
+    unused bind_text(statement, 2, field)
+    unused bind_text(statement, 3, value)
+    if SqliteStep(statement) != SQLITE_ROW {
+        return ""
+    }
+    return PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 65536), "")
+}
+
+// Adds the photo's bytes to the library once: a photo it already has keeps
+// its record, and one in Trash comes back.
+MediaImportBytes :: (data: string, name: string) -> MediaImport {
+    result: MediaImport
+    if DataTemporary() || data.count <= 0 || data.count > DIARY_FILE_LIMIT {
+        return result
+    }
+    format := DiaryImageFormat(data)
+    if format.count == 0 {
+        return result
+    }
+    descriptor := cast(*TextDescriptor)(*data)
+    storage_sha256_hex(descriptor.data, data.count, *result.hash[0])
+    hash := TextFromBytes(result.hash[:64])
+    directory := MediaDirectory()
+    path := MediaPath(hash, false)
+    defer { PackageFree(directory); PackageFree(path) }
+    if directory.count == 0 || storage_ensure_dir(directory) == 0 || !MediaWriteFile(path, data) {
+        return result
+    }
+    key := MediaRecordKey(hash)
+    record := CellRecordRead(key)
+    defer { PackageFree(key); PackageFree(record) }
+    existing := MediaParse(record)
+    if existing.valid {
+        result.existed = true
+        if existing.trashed {
+            restored := MediaRecordWith(record, "trashed", "0")
+            written := restored.count > 0 && CellRecordWrite(key, restored)
+            PackageFree(restored)
+            if !written {
+                return result
+            }
+        }
+        MediaAssetsChanged()
+        sync_web_storage()
+        result.succeeded = true
+        return result
+    }
+    day: [11]u8
+    taken: [26]u8
+    if !MediaWhen(data, format, day[:], taken[:]) {
+        return result
+    }
+    MediaWritePreview(hash, data, format)
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"hash\":\"%\",\"size\":%,\"type\":\"%\",\"name\":", hash, data.count, format)
+    MediaJson(*out, MediaName(name))
+    BuilderPrint(*out, ",\"day\":\"%\",\"taken\":\"%\",\"added\":%,\"trashed\":0}",
+        TextUntilNul(day[:]), TextUntilNul(taken[:]), CellRecordClock() / 1000000)
+    entry := BuilderFinish(out)
+    defer { PackageFree(entry) }
+    if !CellRecordWrite(key, entry) {
+        return result
+    }
+    MediaAssetsChanged()
+    sync_web_storage()
+    result.succeeded = true
+    return result
+}
+
+// A preview turns the photo upright and makes it small. A small upright
+// photo is its own preview.
+MediaWritePreview :: (hash: string, data: string, source_format: string) {
+    orientation := MediaOrientationOf(data, source_format)
+    file_type := PackageText(".", source_format)
+    preview := ImagePreview(data, file_type, MEDIA_PREVIEW_EDGE, orientation, MEDIA_PREVIEW_QUALITY)
+    defer { PackageFree(file_type); PackageFree(preview) }
+    format := DiaryImageFormat(preview)
+    if format.count == 0 || (orientation == 1 && preview.count >= data.count) {
+        return
+    }
+    path := MediaPath(hash, true)
+    defer { PackageFree(path) }
+    if !MediaWriteFile(path, preview) {
+        return
+    }
+    descriptor := cast(*TextDescriptor)(*preview)
+    preview_hash: [65]u8
+    storage_sha256_hex(descriptor.data, preview.count, *preview_hash[0])
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"hash\":\"%\",\"size\":%,\"type\":\"%\"}",
+        TextFromCString(*preview_hash[0]), preview.count, format)
+    entry := BuilderFinish(out)
+    key := MediaPreviewKey(hash)
+    unused CellRecordWrite(key, entry)
+    PackageFree(entry)
+    PackageFree(key)
+}
+
+MediaImportFile :: (path: string) -> MediaImport {
+    data := PackageRead(path, DIARY_FILE_LIMIT)
+    defer { PackageFree(data) }
+    return MediaImportBytes(data, path)
+}
+
+MediaDaySQL :: #string SQL_END
+SELECT value FROM settings
+WHERE user_id=?1 AND key GLOB 'cell.media.*' AND length(key)=75 AND json_valid(value)
+  AND json_extract(value,'$.day')=?2 AND COALESCE(json_extract(value,'$.trashed'),0)=0
+ORDER BY json_extract(value,'$.taken'),key
+LIMIT ?3
+SQL_END;
+
+// Up to items.count photos of one capture day, in the order they were taken.
+MediaDay :: (day: string, items: []MediaItem) -> s32 {
+    if day.count != 10 || items.count == 0 || storage_db_handle() == null {
+        return 0
+    }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), MediaDaySQL, -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    unused bind_text(statement, 2, day)
+    unused SqliteBindInt(statement, 3, cast(s32)items.count)
+    count: s32 = 0
+    while count < cast(s32)items.count && SqliteStep(statement) == SQLITE_ROW {
+        item := MediaParse(AppTextFromCString(SqliteColumnText(statement, 0), 65536))
+        if item.valid {
+            items[count] = item
+            count += 1
+        }
+    }
+    return count
+}
+
+MediaWant :: (hash: string) {
+    for index: cast(s32)0..media_wanted_count - 1 {
+        if TextUntilNul(media_wanted[index][:]) == hash {
+            return
+        }
+    }
+    unused AppCopyText(hash, media_wanted[media_wanted_next][:])
+    media_wanted_next = (media_wanted_next + 1) % MEDIA_WANTED_MAX
+    if media_wanted_count < MEDIA_WANTED_MAX {
+        media_wanted_count += 1
+    }
+}
+
+MediaWanted :: (hash: string) -> bool {
+    for index: cast(s32)0..media_wanted_count - 1 {
+        if TextUntilNul(media_wanted[index][:]) == hash {
+            return true
+        }
+    }
+    return false
+}
+
+// Forgets answered asset paths, for example when a copy arrives.
+MediaAssetsChanged :: () {
+    diary_blob_generation += 1
+}
+
+// The local file's format when it holds the bytes its record names.
+MediaLocalFormat :: (hash: string, preview: bool) -> string {
+    key := ifx preview then MediaPreviewKey(hash) else MediaRecordKey(hash)
+    record := CellRecordRead(key)
+    defer { PackageFree(key); PackageFree(record) }
+    media := DiaryMediaParse(record)
+    format: [8]u8
+    if !media.valid || ReadStringText(record, FieldAt(record, 0, "type"), format[:]) <= 0 {
+        return ""
+    }
+    path := MediaPath(hash, preview)
+    defer { PackageFree(path) }
+    if PackageFileSize(path) != media.size {
+        return ""
+    }
+    value := TextUntilNul(format[:])
+    if value == "png" {
+        return "png"
+    }
+    if value == "jpg" {
+        return "jpg"
+    }
+    if value == "gif" {
+        return "gif"
+    }
+    if value == "webp" {
+        return "webp"
+    }
+    return ""
+}
+
+MediaAssetLookup :: (hash: string, original: bool) -> string {
+    out: Vec(u8)
+    if original {
+        format := MediaLocalFormat(hash, false)
+        if format.count > 0 {
+            BuilderPrint(*out, "media/%.%", hash, format)
+            return BuilderFinish(out)
+        }
+        MediaWant(hash)
+    }
+    preview := MediaLocalFormat(hash, true)
+    if preview.count > 0 {
+        BuilderPrint(*out, "media/preview/%.%", hash, preview)
+        return BuilderFinish(out)
+    }
+    // A small photo is its own preview.
+    format := MediaLocalFormat(hash, false)
+    if format.count > 0 {
+        BuilderPrint(*out, "media/%.%", hash, format)
+        return BuilderFinish(out)
+    }
+    VecFree(out)
+    return ""
+}
+
+// The asset path that draws a library photo, or "" while it is not on this
+// device. Asking for the original also asks for its download.
+MediaAsset :: (hash: string, original: bool) -> string {
+    if !MediaKeyValid(hash) || !MediaRead(hash).valid {
+        return ""
+    }
+    for index: cast(s32)0..MEDIA_ASSET_CACHE - 1 {
+        entry := *media_assets[index]
+        if entry.original == original && entry.generation == diary_blob_generation &&
+        TextUntilNul(entry.hash[:]) == hash {
+            return TextUntilNul(entry.path[:])
+        }
+    }
+    path := MediaAssetLookup(hash, original)
+    defer { PackageFree(path) }
+    slot := *media_assets[media_assets_next]
+    media_assets_next = (media_assets_next + 1) % MEDIA_ASSET_CACHE
+    slot.* = MediaAssetEntry.{}
+    unused AppCopyText(hash, slot.hash[:])
+    slot.original = original
+    slot.generation = diary_blob_generation
+    if !AppCopyText(path, slot.path[:]) {
+        slot.path[0] = cast(u8)0
+    }
+    return TextUntilNul(slot.path[:])
+}
+
+// Whether a hosted app may draw this path: a library photo of the account.
+MediaAssetAllowed :: (path: string) -> bool {
+    hash := MediaAssetHash(path)
+    return hash.count == 64
+}
+
+// The hash in "media/<hash>.<fmt>" or "media/preview/<hash>.<fmt>", or "".
+MediaAssetHash :: (path: string) -> string {
+    start: s64 = 6
+    if path.count < 6 || path[:6] != "media/" {
+        return ""
+    }
+    if path.count > 14 && path[6:14] == "preview/" {
+        start = 14
+    }
+    if path.count < start + 66 || path[start + 64] != cast(u8)46 {
+        return ""
+    }
+    extension := path[start + 65:]
+    if extension != "png" && extension != "jpg" && extension != "gif" && extension != "webp" {
+        return ""
+    }
+    hash := path[start:start + 64]
+    if !MediaKeyValid(hash) {
+        return ""
+    }
+    return hash
+}
+
+MediaAssetMime :: (format: string) -> string {
+    if format == "jpg" {
+        return "image/jpeg"
+    }
+    if format == "gif" {
+        return "image/gif"
+    }
+    if format == "webp" {
+        return "image/webp"
+    }
+    return "image/png"
+}
+
+// The bytes behind a media asset path, checked against their record.
+MediaAssetView :: (path: string) -> AssetView {
+    hash := MediaAssetHash(path)
+    if hash.count != 64 {
+        return AssetView.{}
+    }
+    preview := path[6:14] == "preview/"
+    key := ifx preview then MediaPreviewKey(hash) else MediaRecordKey(hash)
+    record := CellRecordRead(key)
+    file := MediaPath(hash, preview)
+    defer { PackageFree(key); PackageFree(record); PackageFree(file) }
+    media := DiaryMediaParse(record)
+    PackageFree(media_asset_bytes)
+    media_asset_bytes = PackageRead(file, DIARY_FILE_LIMIT)
+    format := DiaryImageFormat(media_asset_bytes)
+    at := path.count - 1
+    while at > 0 && path[at] != cast(u8)46 {
+        at -= 1
+    }
+    if !DiaryMediaMatches(media, media_asset_bytes) || format != path[at + 1:] {
+        PackageFree(media_asset_bytes)
+        media_asset_bytes = ""
+        return AssetView.{}
+    }
+    return AssetView.{.data = media_asset_bytes, .mime = MediaAssetMime(format), .found = true}
+}
+
+// Moves a photo to Trash or back. Trash keeps the photo and its copies.
+MediaSetTrashed :: (hash: string, trashed: bool) -> bool {
+    if !MediaRead(hash).valid {
+        return false
+    }
+    key := MediaRecordKey(hash)
+    record := CellRecordRead(key)
+    changed := MediaRecordWith(record, "trashed", ifx trashed then "1" else "0")
+    written := changed.count > 0 && CellRecordWrite(key, changed)
+    PackageFree(key)
+    PackageFree(record)
+    PackageFree(changed)
+    return written
+}
+
+MediaStoreClose :: () {
+    PackageFree(media_asset_bytes)
+    media_asset_bytes = ""
+    media_wanted_count = 0
+    media_wanted_next = 0
+    for index: cast(s32)0..MEDIA_ASSET_CACHE - 1 {
+        media_assets[index] = MediaAssetEntry.{}
+    }
+}

@@ -1511,6 +1511,7 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        PushBridge.autoConnect(this);
         NotificationPresence.setActivityVisible(true);
         activityPaused = false;
         pictureWindowEntering = false;

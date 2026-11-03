@@ -4,6 +4,7 @@
 #import "std/text_buffer"
 #import "std/vec"
 #import "std/byte_text_linux"
+#import "std/bundle_host"
 #import "apps/tree"
 #import "apps/host"
 #import "apps/catalog"
@@ -254,6 +255,40 @@ SnapshotRootOpenCheck :: () -> s32 {
 
 snapshot_package_node: AppNode;
 
+SnapshotPublicationsHostCheck :: () -> s32 {
+    identities: [2]string = .["arcade.shovey-editor", "xyz.waozi.wurm-editor"]
+    for identity: identities {
+        runner: NodeAppRunner
+        nested: AppHost
+        node: AppNode
+        if !CopyCString("publisher", node.identity.authority[:]) ||
+        !CopyCString(identity, node.identity.id[:]) { return 120 }
+
+        function: [32]u8
+        if !CopyCString("AppServiceHost", function[:]) { return 123 }
+        arguments: [2]bundle_host.HostValue
+        arguments[0] = NodeAppString("publications")
+        arguments[1] = NodeAppString("{\"operation\":\"fetch\",\"id\":\"fixture\"}")
+
+        runner.nested = *nested
+        if !CopyCString("other-account", nested.tree.account[:]) ||
+        NodeTreeAllows(cast(*void)*runner, *node, "publications") ||
+        NodeTreeAllows(cast(*void)*runner, *node, "AppServiceHost") { return 121 }
+        mismatched: bundle_host.HostValue
+        if NodeTreeCall(cast(*void)*runner, *node, null, *function[0], *arguments[0], 2, *mismatched) != 0 { return 125 }
+
+        if !CopyCString(NodeTreeAccount(), nested.tree.account[:]) ||
+        !NodeTreeAllows(cast(*void)*runner, *node, "publications") ||
+        !NodeTreeAllows(cast(*void)*runner, *node, "AppServiceHost") { return 122 }
+
+        result: HostValue
+        if NodeTreeCall(cast(*void)*runner, *node, null, *function[0], *arguments[0], 2, *result) != 1 ||
+        result.kind != cast(s32)HostValueKind.HostString ||
+        NodeAppText(result) != "{\"status\":\"rejected\",\"error\":\"signed-out\"}" { return 124 }
+    }
+    return 0
+}
+
 // Other packages keep their own asset folder and canonical id, but can
 // never stand in for an Inbe app.
 SnapshotPackageOwnerCheck :: () -> s32 {
@@ -322,6 +357,8 @@ Check :: () -> s32 {
     if images != 0 { return images }
     packages := SnapshotPackageOwnerCheck()
     if packages != 0 { return packages }
+    publications := SnapshotPublicationsHostCheck()
+    if publications != 0 { return publications }
     embedded := NodeAppEmbeddedCheck()
     if embedded != 0 { return embedded }
     storage_close()

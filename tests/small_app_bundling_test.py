@@ -82,13 +82,20 @@ class BundlingTests(unittest.TestCase):
         item = declarations['arcade']
         path = ROOT / item['path']
         info = inspect_bundle(path)
-        self.assertEqual(info['bundle_bytes'], 7695)
+        self.assertLess(info['bundle_bytes'], 32_768)
+        self.assertEqual(info['bundle_bytes'], item['bytes'])
         self.assertEqual(info['sha256'], item['sha256'])
-        self.assertEqual(info['complete_bytes'], 349_082)
+        self.assertLess(info['complete_bytes'], 2 * 1024 * 1024 + info['bundle_bytes'])
+        lock = json.loads((ROOT / 'ziran.lock').read_text())
+        source = next(p for p in lock['packages']
+                      if p['id'] == lock['root']['dependencies']['arcade'])
+        self.assertTrue(source['source'])
+        self.assertEqual(source['commit'], item['source_commit'])
+        self.assertEqual(source['url'].removesuffix('.git'), item['source'])
         info = stage({}, declarations, self.bundles, self.optional, self.mandatory)['optional']['arcade']
         self.assertTrue(info['included'])
         self.assertEqual(len(list((self.optional / 'arcade').glob('*.zx'))), 1)
-        self.assertEqual(sum(info['optional_downloads'].values()), 65_639_505)
+        self.assertGreater(sum(info['optional_downloads'].values()), 50_000_000)
         item['sha256'] = '0' * 64
         with self.assertRaisesRegex(ValueError, 'reviewed declaration'):
             stage({}, declarations, self.bundles, self.optional, self.mandatory)

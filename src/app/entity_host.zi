@@ -6,7 +6,12 @@ ReferralLocale :: #import "entity/referral_locales";
 ReferralModel :: #import "entity/referral_model";
 ReferralPayment :: #import "entity/dew_play";
 #import "entity/dew_model"
+#import "std/json_scan"
+#import, file "../storage/entity_records.zi";
+#import "entity/profile_appearance"
+#import, file "entity_telegram.zi";
 #import, file "entity_friends.zi";
+#import, file "../storage/entity_service.zi";
 #import "entity/leaderboard_model"
 #import, file "../screens/leaderboard_screen.zi";
 Provider :: #import "entity/native_management";
@@ -96,6 +101,7 @@ InbeEntityRead :: (app: *InnerBreeze) -> string {
     if StoredAccountMode() != AccountModeDelegate {
         unused Shared.SharedProfileLoad(TextUntilNul(owner[:]), *state)
     }
+    unused ProfileAppearanceApplyReply(EntityServiceAnswer(PROFILE_APPEARANCE_GET), *state)
     state.host_navigation = true
     Entity.EntityAddExtension(*state, "account", LocaleText("sync_account_title"))
     // The Dew card holds the balance, storage plans and data management;
@@ -140,6 +146,16 @@ InbeEntityWrite :: (app: *InnerBreeze, document: string) -> bool {
     if StoredAccountMode() != AccountModeDelegate && !Shared.SharedProfileSave(TextUntilNul(owner[:]), state) {
         return false
     }
+    appearance := ProfileAppearanceWrite(state)
+    defer { Entity.EntityFree(appearance) }
+    existing := EntityServiceRead(ENTITY_PROFILE_APPEARANCE_KEY)
+    defer { Entity.EntityFree(existing) }
+    if existing != appearance {
+        request := ProfileAppearancePut(state)
+        reply := EntityServiceAnswer(request)
+        Entity.EntityFree(request)
+        if !MatchLiteral(reply, FieldAt(reply, 0, "status"), "\"done\"") { return false }
+    }
     app.profile_display_name = state.name
     app.profile_intention = state.intention
     chosen := picture != app.profile_picture_icon
@@ -153,7 +169,7 @@ EntityHostAllows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" ||
     name == "AppLocaleHost" || name == "ClipboardCopyHost" ||
     name == "AppServiceHost" || name == "entity.management" || name == "entity.text_height" ||
-    name == "entity.referrals" || name == "entity.friends" || name == "entity.achievements" || name == "entity.activity" || name == LEADERBOARD_SERVICE || (name == "entity.dew" && DewAvailable())
+    name == "entity.referrals" || name == "entity.telegram" || name == "entity.friends" || name == "entity.achievements" || name == "entity.activity" || name == LEADERBOARD_SERVICE || (name == "entity.dew" && DewAvailable())
 }
 
 // The node-confirmed Dew account and Inner Breeze's own summaries for the
@@ -169,7 +185,6 @@ InbeEntityDew :: () -> string {
     Entity.EntityQuote(*out, storage_get_setting_text("sync_public_id"))
     account := TextUntilNul(dew_account_json[:])
     if dew_account.known && account != "" {
-        DewRatesRefresh()
         BuilderPrint(*out, ",\"account\":%", account)
         // Dew alone: money values show only where Dew is topped up.
         line: [256]u8
@@ -228,15 +243,10 @@ InbeEntityActivity :: () -> string {
     active_days: s32
     sessions: s32
     unused storage_profile_week_stats(today, *active_days, *sessions)
-    loading := EntitySyncLoading() != 0
     values: [3][24]u8
-    if loading {
-        for index: 0..2 { unused AppCopyText("…", values[index][:]) }
-    } else {
-        unused FormatTwoNumberTemplate("%d/%d", done, due, values[0][:])
-        unused AppFormatS32(active_days, values[1][:])
-        unused AppFormatS32(sessions, values[2][:])
-    }
+    unused FormatTwoNumberTemplate("%d/%d", done, due, values[0][:])
+    unused AppFormatS32(active_days, values[1][:])
+    unused AppFormatS32(sessions, values[2][:])
     labels: [3]string = .["profile_today_short", "profile_active_days_short", "profile_sessions_short"]
     icons: [3]string = .["today", "days", "sessions"]
     Entity.EntityFree(entity_snapshot)
@@ -280,6 +290,11 @@ EntityHostLocale :: (key: string) -> string {
     if key == "entity.picture" { return LocaleText("profile_picture_title") }
     if key == "entity.abstract" { return LocaleText("profile_picture_abstract") }
     if key == "entity.classic" { return LocaleText("profile_picture_classic") }
+    if key == "entity.avatar" { return LocaleText("profile_avatar") }
+    if key == "entity.reset_view" { return LocaleText("profile_avatar_reset") }
+    if key == "entity.use_avatar" { return LocaleText("profile_avatar_use") }
+    if key == "entity.avatar_help" { return LocaleText("profile_avatar_help") }
+
     if key == "entity.change_picture" { return LocaleText("profile_change_picture") }
     if key == "entity.done" { return LocaleText("done_button") }
     if key == "entity.node_invalid" { return LocaleText("sync_server_url_invalid") }
@@ -439,6 +454,10 @@ EntityHostCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.friends" {
         result.* = EntityHostText(EntityFriendsAnswer(app, AppArgumentText(arguments[1])))
+        return 1
+    }
+    if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.telegram" {
+        result.* = EntityHostText(EntityTelegramAnswer(AppArgumentText(arguments[1])))
         return 1
     }
     if AchievementEntityCall(cast(*void)app, name, arguments, count, result) {

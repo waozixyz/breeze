@@ -345,7 +345,7 @@ int main(void)
 {
     InnerBreeze app = {0};
     app.ui.session = SessionOpen();
-    lumi_telegram_linked = true;
+    lumi_telegram_connection.linked = true;
     lumi_authorization_ready = true;
     lumi_authorization_state = 2;
     memcpy(lumi_authorization_pending.app_id, "inbe", 5);

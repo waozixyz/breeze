@@ -87,6 +87,8 @@ for key in sorted(imported):
         failures.append(f"importable setting [{key}] is never saved")
 
 print(f"saved={len(saved)} loaded={len(loaded)} imported={len(imported)}")
+if '"notification_habit_reminders", 1)' not in settings:
+    failures.append("habit reminders must default on for settings without a saved choice")
 if failures:
     print("\n".join(failures), file=sys.stderr)
     print(f"{len(failures)} settings key test failure(s)", file=sys.stderr)

@@ -100,6 +100,8 @@ Main :: () -> s32 {
     sys.path.insert(0, str(root / 'scripts'))
     from practice_content import bundle_assets
     root_assets = bundle_assets((root / 'build/inbe.zx').read_bytes())
+    arcade_assets = bundle_assets((root / 'apps/bundled/arcade.zx').read_bytes())
+    arcade_art = json.loads(arcade_assets['assets/apps/catalog.json'])['art']['sha256'] + '.zx'
     (fixture / 'embedded-releases.json').write_bytes(root_assets['assets/apps/bundled/releases.json'])
     release = dict(app_id='inbe.fixture', sequence=2, version='2.0.0', runtime='kryon-app-v1',
                    host_api=41, module_api=2, data_schema=0, key_id='other', dependencies=[],
@@ -152,7 +154,8 @@ Main :: () -> s32 {
             'NODE_EMBEDDED_UPDATE': str(fixture / 'update.json'),
             'NODE_EMBEDDED_REAL_METADATA': str(fixture / 'embedded-releases.json'),
             'NODE_EMBEDDED_ARCADE': str(root / 'apps/bundled/arcade.zx'),
-            'NODE_EMBEDDED_ART': str(root / 'apps/bundled/arcade.games/d7ab495066a69e7c09d490fdcc51f48e8e032dd2112372df800d8b2fe9c7df0b.zx'),
+            'NODE_EMBEDDED_ART': str(root / 'apps/bundled/arcade.games' / arcade_art),
+            'NODE_EMBEDDED_ART_PATH': 'assets/apps/bundled/arcade/' + arcade_art,
             'NODE_EMBEDDED_CONTROLLER': str(root / 'build/apps-ui/apps.zx'),
             **{f'ICON_{name.upper()}_BUNDLE': str(fixture / f'{name}.zx')
                for name in ('valid', 'invalid', 'empty', 'corrupt')},

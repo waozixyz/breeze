@@ -1,0 +1,96 @@
+// Photo embeds never go to the spelling service: their lines are sent empty
+// and put back into the corrected entry. A correction that moved lines
+// cannot be matched to the photos, so it is refused.
+#import "vec"
+#import "text"
+#import "byte_text_linux"
+
+DiarySpellingBlank :: (byte: u8) -> bool {
+    return byte == cast(u8)32 || byte == cast(u8)9 || byte == cast(u8)13
+}
+
+DiarySpellingLineEnd :: (text: string, start: s64) -> s64 {
+    end := start
+    while end < text.count && text[end] != cast(u8)10 {
+        end += 1
+    }
+    return end
+}
+
+// A line holding only an image, `![...](...)`, as Diary photos are written.
+DiarySpellingImageLine :: (line: string) -> bool {
+    first: s64 = 0
+    last := line.count
+    while first < last && DiarySpellingBlank(line[first]) {
+        first += 1
+    }
+    while last > first && DiarySpellingBlank(line[last - 1]) {
+        last -= 1
+    }
+    if last - first < 5 || line[first] != cast(u8)33 || line[first + 1] != cast(u8)91 ||
+    line[last - 1] != cast(u8)41 {
+        return false
+    }
+    for index: first + 2..last - 2 {
+        if line[index] == cast(u8)93 && line[index + 1] == cast(u8)40 {
+            return true
+        }
+    }
+    return false
+}
+
+// The entry as the spelling service sees it: image lines empty.
+DiarySpellingMasked :: (text: string) -> string {
+    out: Vec(u8)
+    start: s64 = 0
+    while start <= text.count {
+        end := DiarySpellingLineEnd(text, start)
+        if !DiarySpellingImageLine(text[start:end]) {
+            BuilderPrint(*out, "%", text[start:end])
+        }
+        if end < text.count {
+            BuilderPrint(*out, "\n")
+        }
+        start = end + 1
+    }
+    return BuilderFinish(out)
+}
+
+// The correction with the original image lines back, or "" when its lines
+// no longer line up with the entry's.
+DiarySpellingRestored :: (original: string, corrected: string) -> string {
+    out: Vec(u8)
+    start: s64 = 0
+    at: s64 = 0
+    while start <= original.count {
+        if at > corrected.count {
+            VecFree(out)
+            return ""
+        }
+        end := DiarySpellingLineEnd(original, start)
+        corrected_end := DiarySpellingLineEnd(corrected, at)
+        if DiarySpellingImageLine(original[start:end]) {
+            for byte: corrected[at:corrected_end] {
+                if !DiarySpellingBlank(byte) {
+                    VecFree(out)
+                    return ""
+                }
+            }
+            BuilderPrint(*out, "%", original[start:end])
+        } else {
+            BuilderPrint(*out, "%", corrected[at:corrected_end])
+        }
+        original_more := end < original.count
+        corrected_more := corrected_end < corrected.count
+        if original_more != corrected_more {
+            VecFree(out)
+            return ""
+        }
+        if original_more {
+            BuilderPrint(*out, "\n")
+        }
+        start = end + 1
+        at = corrected_end + 1
+    }
+    return BuilderFinish(out)
+}

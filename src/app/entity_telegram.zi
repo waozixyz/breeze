@@ -1,0 +1,90 @@
+#import "entity/telegram_connection"
+// Account and transport adapter for Entity's bot-agnostic Telegram page.
+#import "entity/model"
+#import "authorization"
+#import, file "../storage/sync_state.zi";
+#import "std/json_scan"
+#import "std/c_string"
+#import "std/text_buffer"
+#import "std/vec"
+#import, file "../apps/lumi_telegram.zi";
+#import, file "../apps/lumi_authorization.zi";
+#import, file "../apps/lumi_connection.zi";
+#import, file "../apps/package_files.zi";
+#import, file "../storage/storage_settings.zi";
+#import, file "locale.zi";
+#import, file "entity_management.zi";
+#import, file "../screens/settings/settings_telegram.zi";
+
+entity_telegram_document: string;
+EntityTelegramAnswer :: (request: string) -> string {
+    owner: [65]u8
+    unused InbeEntityOwner(owner[:])
+    if request != "" {
+        requested_owner: [65]u8
+        requested_id: [33]u8
+        operation: [32]u8
+        if ValueEnd(request, 0, 0) != request.count ||
+        ReadStringText(request, FieldAt(request, 0, "owner"), requested_owner[:]) < 0 ||
+        TextUntilNul(requested_owner[:]) != TextUntilNul(owner[:]) ||
+        ReadStringText(request, FieldAt(request, 0, "operation"), operation[:]) < 1 { return "rejected" }
+        action := TextUntilNul(operation[:])
+        if action == "connect" {
+            if storage_has_sync_account() == 0 || storage_get_setting_text("sync_private_key").count == 0 { return "account" }
+            if LumiTelegramBusy() { return "rejected" }
+            if lumi_telegram_connection.linked { unused LumiTelegramOpen() }
+            else if LumiNodeTrafficAllowed() { LumiTelegramLink() }
+            else { return "rejected" }
+        } else if action == "disconnect" {
+            if LumiTelegramBusy() || !lumi_telegram_connection.linked { return "rejected" }
+            LumiTelegramDisconnect()
+        } else if action == "approve" || action == "cancel" {
+            if LumiAuthorizationBusy() ||
+            ReadStringText(request, FieldAt(request, 0, "request_id"), requested_id[:]) != 32 ||
+            TextUntilNul(requested_id[:]) != TextUntilNul(lumi_authorization_pending.request_id[:]) { return "rejected" }
+            if action == "approve" {
+                if !lumi_authorization_ready { return "rejected" }
+                LumiAuthorizationApprove()
+            } else { LumiAuthorizationCancel() }
+        } else { return "rejected" }
+        return "queued"
+    }
+    PackageFree(entity_telegram_document)
+    has_account := storage_has_sync_account() != 0 && storage_get_setting_text("sync_private_key").count > 0
+    linked := has_account && lumi_telegram_connection.linked
+    primary := ifx !has_account then "sync_connect_account_button" else ifx linked then "lumi_telegram_open" else "lumi_telegram_connect"
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"version\":1,\"owner\":")
+    EntityQuote(*out, TextUntilNul(owner[:]))
+    BuilderPrint(*out, ",\"busy\":%,\"enabled\":%,\"status\":", LumiTelegramBusy(), !has_account || linked || LumiNodeTrafficAllowed())
+    EntityQuote(*out, LocaleText(LumiTelegramStatusKey()))
+    BuilderPrint(*out, ",\"primary\":")
+    EntityQuote(*out, LocaleText(primary))
+    BuilderPrint(*out, ",\"request_id\":")
+    EntityQuote(*out, TextUntilNul(lumi_authorization_pending.request_id[:]))
+    if linked && settings_telegram_authorization_active() {
+        BuilderPrint(*out, ",\"authorization\":")
+        EntityQuote(*out, LocaleText(LumiAuthorizationStatusKey()))
+        review := settings_telegram_review_text(560)
+        if review != "" {
+            BuilderPrint(*out, ",\"review\":")
+            EntityQuote(*out, review)
+            PackageFree(review)
+            if lumi_authorization_ready {
+                BuilderPrint(*out, ",\"approve\":")
+                EntityQuote(*out, LocaleText("lumi_authorization_approve"))
+            }
+        }
+        if lumi_authorization_pending.request_id[0] != 0 {
+            BuilderPrint(*out, ",\"cancel\":")
+            EntityQuote(*out, LocaleText("cancel_button"))
+        }
+    }
+    if linked {
+        BuilderPrint(*out, ",\"disconnect\":")
+        EntityQuote(*out, LocaleText("lumi_telegram_disconnect"))
+    }
+    BuilderPrint(*out, "}")
+    entity_telegram_document = BuilderFinish(out)
+    return entity_telegram_document
+}

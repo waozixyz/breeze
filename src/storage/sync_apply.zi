@@ -1,3 +1,5 @@
+AppearanceRecord :: #import "entity/profile_appearance";
+AppearanceProfile :: #import "entity/model";
 #import, file "achievements.zi";
 // Applying received records: each decrypted record to its local table,
 // after checking that it is a record this version can read.
@@ -320,6 +322,18 @@ storage_entity_photo_valid :: (record_id: string, plaintext: string) -> bool {
 // That change goes out merged over the record that arrived.
 storage_apply_entity_record :: (collection: string, record_id: string, plaintext: string,
     updated_at: string) -> s32 {
+    if collection == EntityProfileCollection {
+        state := AppearanceProfile.EntityDefault()
+        if record_id != AppearanceRecord.PROFILE_APPEARANCE_ID || !AppearanceRecord.ProfileAppearanceRead(plaintext, *state) { return 1 }
+        statement: *void
+        if SqlitePrepareText(storage_db_handle(), SyncEntityRecordSQL, -1, *statement, null) != SQLITE_OK { return 0 }
+        defer { SqliteFinalize(statement) }
+        bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+        bind_text(statement, 2, ENTITY_PROFILE_APPEARANCE_KEY)
+        bind_text(statement, 3, plaintext)
+        bind_text(statement, 4, updated_at)
+        return ifx SqliteStep(statement) == SQLITE_DONE then 1 else 0
+    }
     if collection == EntityLevelsCollection {
         if !EntityProgressIDValid(record_id) || (plaintext != "" && !EntityLevelDocumentValid(plaintext)) {
             return 1

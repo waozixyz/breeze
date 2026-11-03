@@ -3,6 +3,7 @@
 #import "std/json_scan"
 #import "std/text_buffer"
 #import "std/vec"
+Appearance :: #import "entity/profile_appearance";
 Progress :: #import "entity/game_progress";
 ProgressID :: #import "entity/game_progress_id";
 Model :: #import "entity/model";
@@ -70,6 +71,37 @@ EntityServiceBuild :: (request: string, out: *Vec(u8)) {
         return
     }
     kind: [49]u8
+    if ReadStringText(request, FieldAt(request, 0, "kind"), kind[:]) >= 0 && TextUntilNul(kind[:]) == Appearance.PROFILE_APPEARANCE_KIND {
+        id: [33]u8
+        if ReadStringText(request, FieldAt(request, 0, "id"), id[:]) != 32 || TextUntilNul(id[:]) != Appearance.PROFILE_APPEARANCE_ID {
+            BuilderPrint(out, "{\"status\":\"rejected\"}")
+            return
+        }
+        if operation == "get" {
+            document := EntityServiceRead(ENTITY_PROFILE_APPEARANCE_KEY)
+            defer { PackageFree(document) }
+            value := Model.EntityDefault()
+            if !Appearance.ProfileAppearanceRead(document, *value) { BuilderPrint(out, "{\"status\":\"missing\"}"); return }
+            BuilderPrint(out, "{\"status\":\"done\",\"document\":%}", document)
+            return
+        }
+        if operation == "put" {
+            schema: [128]u8
+            at := FieldAt(request, 0, "document")
+            end := ValueEnd(request, at, 0)
+            value := Model.EntityDefault()
+            if ReadStringText(request, FieldAt(request, 0, "schema"), schema[:]) < 1 ||
+            TextUntilNul(schema[:]) != Appearance.PROFILE_APPEARANCE_SCHEMA || at < 0 || end <= at ||
+            !Appearance.ProfileAppearanceRead(request[at:end], *value) { BuilderPrint(out, "{\"status\":\"rejected\"}"); return }
+            document := Appearance.ProfileAppearanceWrite(value)
+            defer { PackageFree(document) }
+            storage_set_setting_text(ENTITY_PROFILE_APPEARANCE_KEY, document)
+            BuilderPrint(out, "{\"status\":\"%\"}", ifx storage_setting_text_equals(ENTITY_PROFILE_APPEARANCE_KEY, document) != 0 then "done" else "failed")
+            return
+        }
+        BuilderPrint(out, "{\"status\":\"rejected\"}")
+        return
+    }
     if ReadStringText(request, FieldAt(request, 0, "kind"), kind[:]) >= 0 && TextUntilNul(kind[:]) == "levels" {
         EntityLevelsBuild(request, operation, out)
         return

@@ -35,6 +35,8 @@ parser.add_argument("package", type=Path, help="an Arcade package, arcade.zx")
 parser.add_argument("--offline", action="store_true", help="the node cannot be reached")
 parser.add_argument("--downloads-only", action="store_true",
                     help="Check the rounded library, add-on downloads and offline games")
+parser.add_argument("--smoke-only", action="store_true",
+                    help="Open the bundled Arcade library with a disposable profile")
 args = parser.parse_args()
 if args.offline:
     # A new network namespace starts with loopback down; the download check
@@ -344,6 +346,23 @@ def check_download_library():
         local_game_origin = ''
     print('Inbe Arcade: rounded covers, add-on consent/cancel, shared assets, all game downloads, private saves and offline reopen passed')
 
+
+if args.smoke_only:
+    with tempfile.TemporaryDirectory(prefix="inbe-arcade-smoke-", dir=OUTPUT) as directory:
+        profile = Path(directory)
+        user = prepare(profile, {})
+        app = launch(profile, "smoke", local_package=False)
+        try:
+            open_arcade()
+            driver.wait(label="Shovey", role="button", timeout=45)
+            assert not driver.find(label="Chess", visible=True)
+            assert app.poll() is None, "Breeze exited while opening Arcade"
+            with (OUTPUT / "smoke.log").open() as log:
+                assert not any("frame rejected" in line or "unsupported bundle" in line for line in log)
+            print("Bundled Arcade opens from Apps with its Shovey cover on a private display")
+        finally:
+            stop(app)
+    raise SystemExit(0)
 
 if args.downloads_only:
     check_download_library()

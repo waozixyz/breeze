@@ -1,0 +1,214 @@
+// The entry's editor and the day's gallery under it, part of diary_view.zi:
+// it draws with the view's frame and changes the view's state.
+//
+// The editor previews the entry's Markdown (diary_markdown.zi) through
+// Kryon's TextArea: hidden markers, bold and slanted text, link and muted
+// colors, larger headings, and photos drawn in place of their embed lines.
+// The gallery shows the day's photos of the account's media library while
+// Photos is installed. Holding a photo and dragging it onto the entry adds
+// its embed where it is dropped; a tap adds it at the caret.
+#import, file "diary_markdown.zi";
+
+DIARY_GALLERY_TILE :: 88
+DIARY_GALLERY_GAP :: 8
+// A hold this long picks a photo up; a quicker swipe scrolls the gallery.
+DIARY_GALLERY_HOLD :: 0.25
+// Headings 1 to 6 are drawn this many times the entry's size.
+DIARY_HEADING_SCALES: [6]float32 = .[1.6, 1.4, 1.25, 1.1, 1.0, 1.0];
+
+editor_preview: DiaryPreview;
+editor_blocks: [DIARY_PREVIEW_PHOTOS]TextAreaBlock;
+editor_lines: [DIARY_PREVIEW_HEADINGS]TextAreaLine;
+editor_colors: [DIARY_PREVIEW_TONES]TextAreaColorSpan;
+gallery_scroll: s32;
+// The photo being dragged from the gallery, kept across frames.
+drag_active: bool;
+drag_index: s32 = -1;
+drag_hash: [65]u8;
+drag_name: [DIARY_EMBED_ALT_MAX + 1]u8;
+drag_x: float32;
+drag_y: float32;
+drag_seen: bool;
+// Where the entry would take the dragged photo this frame, or -1.
+drop_cursor: s32 = -1;
+
+// The photo's height in the entry: three quarters of its width, within
+// limits that keep a few lines of text in view on a phone.
+DiaryPhotoHeight :: (width: float32) -> s32 {
+    height := cast(s32)(width * 0.75)
+    if height > Scale(360) {
+        height = Scale(360)
+    }
+    if height < Scale(120) {
+        height = Scale(120)
+    }
+    return height
+}
+
+// Sets the area's preview of text: what to hide, emphasize, color, enlarge
+// and draw as photos for the caret and selection at cursor and anchor.
+DiaryEditorStyle :: (area: *TextAreaProps, text: string, editing: bool) {
+    DiaryPreviewScan(*editor_preview, text, area.cursor, area.anchor, editing)
+    area.hidden = editor_preview.hidden[:editor_preview.hidden_count]
+    area.strong = editor_preview.strong[:editor_preview.strong_count]
+    area.italic = editor_preview.italic[:editor_preview.italic_count]
+    colors: s32 = 0
+    for index: cast(s32)0..editor_preview.tone_count - 1 {
+        tone := editor_preview.tones[index]
+        color := ifx tone.tone == DIARY_TONE_LINK then frame.link_color else frame.muted_color
+        if color == cast(u32)0 {
+            continue
+        }
+        editor_colors[colors] = TextAreaColorSpan.{.start = tone.start, .end = tone.end, .color = color}
+        colors += 1
+    }
+    area.colors = editor_colors[:colors]
+    lines: s32 = 0
+    for index: cast(s32)0..editor_preview.heading_count - 1 {
+        heading := editor_preview.headings[index]
+        scale := DIARY_HEADING_SCALES[heading.level - 1]
+        if scale <= 1.0 {
+            continue
+        }
+        editor_lines[lines] = TextAreaLine.{.start = heading.start,
+            .font = cast(s32)(cast(float32)frame.font * scale)}
+        lines += 1
+    }
+    area.lines = editor_lines[:lines]
+    height := DiaryPhotoHeight(area.bounds.width)
+    unavailable := DiaryLocaleHost("diary_photo_unavailable")
+    for index: cast(s32)0..editor_preview.photo_count - 1 {
+        block := editor_preview.photos[index]
+        embed := block.embed
+        editor_blocks[index] = TextAreaBlock.{.start = embed.line_start, .height = height,
+            .cover = block.cover, .image = DiaryPhotoHost(DiaryEmbedTarget(text, embed), embed.library),
+            .label = unavailable}
+    }
+    area.blocks = editor_blocks[:editor_preview.photo_count]
+    area.drop = drag_active
+    area.drop_x = drag_x
+    area.drop_y = drag_y
+}
+
+// Applies an inserted photo as one edit, saved at once.
+DiaryInsertPhoto :: (at: s32, hash: string, name: string, snap: bool) {
+    line := DiaryEmbedLine(true, hash, name)
+    edit := DiaryEmbedInsertion(state.text, at, line, snap)
+    state.action = DIARY_EDIT
+    state.edit_start = edit.start
+    state.edit_end = edit.end
+    state.replacement = edit.replacement
+    pending = true
+    frame.save_at = frame.now
+}
+
+DiaryDragEnd :: () {
+    drag_active = false
+    drag_index = -1
+    drag_seen = false
+}
+
+// The height the gallery takes under the entry, or 0 without photos.
+DiaryGalleryHeight :: () -> s32 {
+    if !frame.photos_installed || frame.gallery.count == 0 {
+        return 0
+    }
+    return Scale(DIARY_GALLERY_TILE) + Scale(12)
+}
+
+// The day's library photos as one row of previews that scrolls sideways.
+DiaryGallery :: (left: float32, top: float32, width: float32) {
+    tile := cast(float32)Scale(DIARY_GALLERY_TILE)
+    gap := cast(float32)Scale(DIARY_GALLERY_GAP)
+    count := cast(s32)frame.gallery.count
+    content := cast(s32)(cast(float32)count * (tile + gap) - gap)
+    strip := Scroll(frame.session, ScrollProps.{.key = cast(u64)290302, .horizontal = true,
+            .bounds = Rectangle.{left, top, width, tile}, .content_width = content,
+            .content_height = cast(s32)tile, .scroll_offset = gallery_scroll})
+    gallery_scroll = strip.scroll_offset
+    drag_seen = false
+    if strip.opened {
+        for index: cast(s32)0..count - 1 {
+            DiaryGalleryTile(index, Rectangle.{strip.content.x + cast(float32)index * (tile + gap),
+                    strip.content.y, tile, tile})
+        }
+        End(frame.session)
+    }
+    if drag_active && !drag_seen {
+        // The photo left the gallery, as when the day changed meanwhile.
+        DiaryDragEnd()
+    }
+}
+
+DiaryGalleryTile :: (index: s32, bounds: Rectangle) {
+    photo := frame.gallery[index]
+    dragging := drag_active && drag_index == index
+    Image(frame.session, ImageProps.{.key = cast(u64)(291000 + index), .asset_path = photo.asset,
+            .alt_text = photo.name, .bounds = bounds, .fit = cast(ImageFit)ImageFitCover,
+            .tint = ifx dragging then cast(u32)0xffffff66 else cast(u32)0, .smooth = true})
+    press := Press(frame.session, PressProps.{.key = cast(u64)(292000 + index), .bounds = bounds,
+            .label = photo.name, .now = frame.now, .hold_seconds = DIARY_GALLERY_HOLD,
+            .capture = dragging})
+    if press.held && !drag_active && photo.hash.count == 64 {
+        drag_active = true
+        drag_index = index
+        unused DiaryCopyText(photo.hash, drag_hash[:])
+        if !DiaryCopyText(photo.name, drag_name[:]) {
+            drag_name[0] = cast(u8)0
+        }
+        drag_x = press.x
+        drag_y = press.y
+        dragging = true
+    }
+    if !dragging {
+        if press.clicked && photo.hash.count == 64 {
+            // Without a pointer, or with a tap, the photo goes to the caret.
+            at := ifx frame.focused then state.cursor else cast(s32)state.text.count
+            DiaryInsertPhoto(at, photo.hash, photo.name, false)
+        }
+        return
+    }
+    drag_seen = true
+    if press.down {
+        drag_x = press.x
+        drag_y = press.y
+    }
+    if press.released {
+        if drop_cursor >= 0 {
+            DiaryInsertPhoto(drop_cursor, DiaryUntilNul(drag_hash[:]), DiaryUntilNul(drag_name[:]), true)
+        }
+        DiaryDragEnd()
+    }
+}
+
+// The picked-up photo follows the pointer, over everything else.
+DiaryDragCopy :: () {
+    if !drag_active || drag_index < 0 || drag_index >= cast(s32)frame.gallery.count {
+        return
+    }
+    size := cast(float32)Scale(DIARY_GALLERY_TILE)
+    photo := frame.gallery[drag_index]
+    Image(frame.session, ImageProps.{.key = cast(u64)291900, .asset_path = photo.asset,
+            .alt_text = photo.name,
+            .bounds = Rectangle.{drag_x - size * 0.5, drag_y - size * 0.5, size, size},
+            .fit = cast(ImageFit)ImageFitCover, .smooth = true})
+}
+
+DiaryCopyText :: (value: string, output: []u8) -> bool {
+    if value.count >= output.count {
+        return false
+    }
+    for index: 0..value.count - 1 {
+        output[index] = value[index]
+    }
+    output[value.count] = cast(u8)0
+    return true
+}
+
+DiaryUntilNul :: (buffer: []u8) -> string {
+    count: s64 = 0
+    while count < buffer.count && buffer[count] != cast(u8)0 {
+        count += 1
+    }
+    return TextFromBytes(buffer[:count])
+}
