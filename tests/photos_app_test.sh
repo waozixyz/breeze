@@ -10,7 +10,8 @@ packages=${INBE_PACKAGES:-"$root/build/packages"}
 work=${PHOTOS_APP_TEST_DIR:-"$root/build/photos-app-test"}
 include=$packages/ziran/include
 curl=${CURL_LIBRARY:-$(ls /usr/lib/x86_64-linux-gnu/libcurl.so.4 2>/dev/null || echo -lcurl)}
-unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
+unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS SESSION_MANAGER
+export YUE_DESKTOP_RECOVERY=0
 
 mkdir -p "$(dirname "$work")"
 exec 9>"$work.lock"
@@ -31,7 +32,7 @@ mkdir -p "$work/generated"
     --module-path "$packages/daochi-client" \
     --entry photos_app_behavior:Check \
     -o "$work/generated" "$root/tests/photos_app_behavior.zi" \
-    "$root/tests/sync_test_host.zi"
+    "$root/tests/sync_test_host.zi" "$root/tests/photos_app_raster_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "photos_app_behavior.h"
 #include <stdio.h>
