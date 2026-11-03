@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Open the full web app directly from a website styled to match Waozi Studio, without the mini preview.
 - Open Arcade with its console artwork, framed player HUD and game Home navigation.
 
 ## [2.1.62] - 2026-11-03
