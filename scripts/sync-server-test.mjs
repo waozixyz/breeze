@@ -46,7 +46,9 @@ const proxy = http.createServer((request, response) => {
     if (!dropped && request.method === 'POST' && request.url === '/api/v1/sync') {
       dropped = true;
       result.resume();
-      result.on('end', () => response.destroy());
+      // Close the actual connection after commit. Bun's response.destroy()
+      // can otherwise synthesize an empty HTTP 200 for this async callback.
+      result.on('end', () => response.socket.destroy());
     } else {
       response.writeHead(result.statusCode, result.headers);
       result.pipe(response);

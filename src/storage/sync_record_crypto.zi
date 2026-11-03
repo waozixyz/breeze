@@ -208,6 +208,25 @@ storage_sync_record_merge :: (plain: *StorageJsonBuilder, collection: string, re
         AppTextFromCString(plain.data, cast(s32)(plain.len + 1)))
 }
 
+// The record's monotonic revision must also order its encrypted envelope.
+// Queue wall time can precede rapid edits or a revision received from a peer.
+storage_encrypted_record_updated_at :: (plain: string, queued_at: s64) -> s64 {
+    statement: *void = null
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT COALESCE(CAST(strftime('%s',json_extract(?1,'$.updated_at')) AS INTEGER),?2)",
+        -1, *statement, null) != SQLITE_OK {
+        return queued_at
+    }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, plain)
+    SqliteBindInt64(statement, 2, queued_at)
+    if SqliteStep(statement) != SQLITE_ROW {
+        return queued_at
+    }
+    updated_at := SqliteColumnInt64(statement, 0)
+    return ifx updated_at > 0 then updated_at else queued_at
+}
+
 storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, collection: string, key_id: string, record_id: string, entity_type: string, entity_id: string, local_date: s32, queued_at: s64, deleted: s32) -> s32 {
     plain: StorageJsonBuilder
     aad: StorageJsonBuilder
@@ -230,6 +249,8 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
     if plain.ok == 0 || plain.data == null {
         return storage_encrypted_record_cleanup(*plain, *aad, sealed, sealed_hex, ok)
     }
+    updated_at := storage_encrypted_record_updated_at(
+        AppTextFromCString(plain.data, cast(s32)(plain.len + 1)), queued_at)
     storage_sha256_hex(plain.data, plain.len, *content_hash[0])
     sealed_len = plain.len + 16
     sealed = cast(*u8)malloc(cast(usize)sealed_len)
@@ -268,10 +289,10 @@ storage_append_encrypted_record_json :: (json: *StorageJsonBuilder, key: *u8, co
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "ciphertext", AppTextFromCString(sealed_hex, cast(s32)(sealed_len * 2 + 1)))
     storage_json_builder_append_text(json, ",\"updated_at\":")
-    storage_json_builder_append_epoch(json, queued_at)
+    storage_json_builder_append_epoch(json, updated_at)
     if deleted != 0 {
         storage_json_append_int_field(json, "deleted_at",
-            ifx (queued_at > 0) then (queued_at) else (now_seconds()))
+            ifx (updated_at > 0) then (updated_at) else (now_seconds()))
     }
     storage_json_builder_append_text(json, ",")
     storage_json_builder_key_value_text(json, "content_hash", AppTextFromCString(*content_hash[0], ACCOUNT_PUBLIC_ID_HEX_SIZE))
