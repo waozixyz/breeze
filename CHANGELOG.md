@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Open Arcade with its console artwork, framed player HUD and game Home navigation.
+
 ## [2.1.62] - 2026-11-03
 
 - Invite friends with a referral code: receive 20 Dew immediately after accepting a valid code, without a purchase. Earn 5% Dew when invited friends buy Dew, and see everyone who accepted with their acceptance dates.
