@@ -7,6 +7,7 @@
 #import, file "../src/breaks/break_types.zi";
 #import, file "../src/breaks/break_rules.zi";
 #import, file "../src/breaks/break_reminder_layout.zi";
+#import, file "../src/breaks/break_activity.zi";
 
 c :: #system_library "c";
 write_out :: (descriptor: s32, data: *void, count: usize) -> s64 #foreign c "write";
@@ -507,8 +508,47 @@ test_break_reminder_layout_separates_long_text :: () {
         "long reminder text keeps the progress bar on its own row")
 }
 
+test_typing_is_activity :: () {
+    e := BreakInit()
+    input: BreakActivityInput
+    input.idle_ms = -1
+    input.focused = true
+    last_input: s32 = -10000
+    // Longer than both rest durations, with keys and no pointer movement.
+    for frame: 0..60 * 700 - 1 {
+        input.frame = cast(s32)frame
+        input.key_pressed = frame % 15 == 0
+        sample := BreakSampleActivity(input, last_input)
+        last_input = sample.last_input_frame
+        expect(sample.active == 1, "continuous keys count as activity")
+        e = BreakTick(e, sample.active)
+    }
+    for timer: 0..1 {
+        expect(e.timers[timer].idle_s == 0,
+            "typing does not fill either rest meter")
+        expect(e.stats[timer].natural == 0,
+            "typing never completes a natural break")
+    }
+    input.key_pressed = false
+    input.frame += BreakFallbackInputTicks
+    expect(BreakSampleActivity(input, last_input).active == 0,
+        "rest resumes after typing stops")
+    input.pointer_active = true
+    expect(BreakSampleActivity(input, last_input).active == 1,
+        "pointer and keyboard activity use the same decision")
+    input.pointer_active = false
+    input.focused = false
+    input.idle_ms = 20
+    expect(BreakSampleActivity(input, last_input).active == 1,
+        "session-wide typing counts while Breeze is unfocused")
+    input.idle_ms = BreakActivityThresholdMs
+    expect(BreakSampleActivity(input, last_input).active == 0,
+        "session idle threshold starts rest")
+}
+
 #program_export
 Check :: () -> s32 {
+    test_typing_is_activity()
     test_defaults_match_workrave()
     test_active_time_prompts_at_limit()
     test_input_resets_idle_and_natural_take()

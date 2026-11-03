@@ -22,6 +22,7 @@ WEB :: #defined(PLATFORM_WEB)
 #import, file "break_reminder_layout.zi";
 #import, file "break_calendar.zi";
 #import, file "break_types.zi";
+#import, file "break_activity.zi";
 #import "date_time"
 #import "std/vec"
 
@@ -76,10 +77,8 @@ WIN32 :: #defined(_WIN32)
     app_web_extension_break_now :: (break_type: s32) -> void #foreign c;
 }
 
-BreakActivityThresholdMs :: 1000
 BreakEventQueueMax :: 8
 BreakStatsFlushS :: 60
-BreakFallbackInputTicks :: 90
 BreakCatchupMaxS :: 300
 
 last_window_fail_frame: s32 = -10000;
@@ -216,27 +215,28 @@ break_persist_daily_state :: (app: *InnerBreeze) {
     app.settings_dirty = 1
 }
 
-break_fallback_input_seen :: () -> s32 {
+break_fallback_pointer_seen :: () -> bool {
     wheel := cast(s32)(GetMouseWheelMove() * 1000.0f)
     if wheel != 0 {
-        return 1
+        return true
     }
     dx: float32 = GetMouseDelta().x
     dy: float32 = GetMouseDelta().y
     if dx != 0.0f || dy != 0.0f {
-        return 1
+        return true
     }
-    {
-        k: s32 = KEY_SPACE
-        while k <= KEY_KB_MENU {
-            if IsKeyPressed(k) {
-                return 1
-            }
-            k += 1
-        }
+    return false
+}
 
+break_fallback_key_seen :: () -> bool {
+    k: s32 = KEY_SPACE
+    while k <= KEY_KB_MENU {
+        if IsKeyPressed(k) {
+            return true
+        }
+        k += 1
     }
-    return 0
+    return false
 }
 
 break_sample_activity :: (app: *InnerBreeze, idle_ms_out: *s32) -> s32 {
@@ -245,17 +245,19 @@ break_sample_activity :: (app: *InnerBreeze, idle_ms_out: *s32) -> s32 {
         idle_ms_out.* = cast(s32)idle_ms
     }
 
-    if idle_ms >= 0 {
-        return ifx (idle_ms < BreakActivityThresholdMs) then (1) else (0)
+    input: BreakActivityInput
+    input.idle_ms = idle_ms
+    input.frame = app.breathing.frame
+    if idle_ms < 0 {
+        input.focused = IsWindowFocused()
+        if input.focused {
+            input.key_pressed = break_fallback_key_seen()
+            input.pointer_active = break_fallback_pointer_seen()
+        }
     }
-
-    if !IsWindowFocused() {
-        return 0
-    }
-    if break_fallback_input_seen() != 0 {
-        app.break_fallback_last_input = app.breathing.frame
-    }
-    return ifx (app.breathing.frame - app.break_fallback_last_input < BreakFallbackInputTicks) then (1) else (0)
+    sample := BreakSampleActivity(input, app.break_fallback_last_input)
+    app.break_fallback_last_input = sample.last_input_frame
+    return sample.active
 }
 
 break_play_cue :: (app: *InnerBreeze, scale: float32) {

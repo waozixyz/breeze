@@ -23,6 +23,10 @@ sun-salutation-assets-test:
 break-engine-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY sh tests/break_engine_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
+.PHONY: break-activity-x11-test
+break-activity-x11-test: $(ZI2C_BIN)
+	@sh tests/break_activity_x11_test.sh $(ZIRAN_BUILD_DIR)/bin
+
 .PHONY: breath-engine-test
 breath-engine-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY sh tests/breath_rounds_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
