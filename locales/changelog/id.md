@@ -1,6 +1,11 @@
 # Changelog
 
-## [2.1.62] - 2026-11-02
+## [2.1.62] - 2026-11-03
+
+- Undang teman dengan kode rujukan: terima 20 Dew langsung setelah menerima kode yang valid, tanpa pembelian. Dapatkan 5% Dew saat teman yang diundang membeli Dew, dan lihat semua yang menerima beserta tanggalnya.
+- Gambar pustaka Arcade memakai gambar mini WebP 256 piksel, dengan semua game dan aplikasi bawaan tetap tersedia.
+- Arcade dan gambar pustakanya tersedia secara offline; game diunduh secara terpisah.
+- Semua aplikasi bawaan tetap disertakan, ditambah aplikasi lengkap di bawah 1 MB tanpa mengubah pilihan aplikasi.
 
 - Ubah urutan aplikasi dengan satu pegangan pemindah tanpa lapisan Sembunyikan atau Tampilkan tambahan.
 - Pengaturan Daftar ditutup setelah daftar berhasil disimpan.

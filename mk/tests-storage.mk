@@ -76,7 +76,7 @@ sync-restore-sql-test:
 .PHONY: sync-server-test
 sync-server-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 	@sh tests/sync_server_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
-	node scripts/sync-server-test.mjs
+	$(JS_RUNTIME) scripts/sync-server-test.mjs
 
 .PHONY: schema-zi-test
 schema-zi-test: $(ZI2C_BIN) $(SQLITE_SRC)

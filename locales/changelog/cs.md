@@ -1,6 +1,11 @@
 # Changelog
 
-## [2.1.62] - 2026-11-02
+## [2.1.62] - 2026-11-03
+
+- Pozvěte přátele doporučovacím kódem: po přijetí platného kódu získáte okamžitě 20 Dew bez nákupu. Za nákupy Dew pozvaných přátel získáte 5 % Dew a uvidíte všechny, kdo pozvání přijali, včetně data přijetí.
+- Obrázky v knihovně Arcade používají miniatury WebP o velikosti 256 pixelů; všechny hry a dodávané aplikace zůstávají zachovány.
+- Arcade a obrázky jeho knihovny jsou dostupné offline; hry se stahují samostatně.
+- Všechny dodávané aplikace zůstávají a přibývají úplné aplikace menší než 1 MB, aniž by se změnil výběr aplikací.
 
 - Upravujte pořadí aplikací jediným úchytem bez další překryvné nabídky Skrýt nebo Zobrazit.
 - Po úspěšném uložení seznamu se jeho nastavení zavře.

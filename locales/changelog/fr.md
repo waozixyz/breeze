@@ -1,6 +1,11 @@
 # Changelog
 
-## [2.1.62] - 2026-11-02
+## [2.1.62] - 2026-11-03
+
+- Invitez vos amis avec un code de parrainage : recevez immédiatement 20 Dew en acceptant un code valide, sans achat. Gagnez 5 % de Dew sur les achats de Dew de vos amis invités et consultez les personnes ayant accepté avec leur date d’acceptation.
+- Les images de la bibliothèque Arcade utilisent des miniatures WebP de 256 pixels, en conservant tous les jeux et applications fournis.
+- Arcade et les images de sa bibliothèque sont disponibles hors ligne ; les jeux se téléchargent séparément.
+- Toutes les applications fournies sont conservées et les applications complètes de moins de 1 Mo sont ajoutées sans modifier votre sélection.
 
 - Modifiez l’ordre des apps avec une seule poignée, sans superposition supplémentaire Masquer ou Afficher.
 - Les réglages de Liste se ferment après l’enregistrement réussi d’une liste.

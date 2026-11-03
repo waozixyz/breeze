@@ -36,8 +36,9 @@ done
 # Every other module the screen reaches links as generated, so a new import in
 # the app or Kryon needs no change here; --gc-sections drops what the test never
 # calls. The modules whose storage, sharing, Diary, node app, media library and
-# scale functions the test host replaces stay out.
-"${CC:-cc}" -std=c11 -w -ffunction-sections -fdata-sections -Wl,--gc-sections \
+# scale functions the test host replaces stay out. Observe the sync scheduling
+# boundary through a linker wrapper, leaving its production export intact.
+"${CC:-cc}" -std=c11 -w -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--wrap=app_auto_sync \
     $includes "$work/elist_screen_link_test.o" "$work/elist_screen.o" \
     $(find "$work/c" -name '*.c' | grep -v -e '/screens/elist_screen\.c$' \
         -e '/db\.c$' -e '/storage_elist\.c$' -e '/lists_network\.c$' \

@@ -125,7 +125,7 @@ AppScale(int32_t pixels)
 }
 
 int32_t
-app_auto_sync(InnerBreeze *app)
+__wrap_app_auto_sync(InnerBreeze *app)
 {
     (void)app;
     sync_calls++;

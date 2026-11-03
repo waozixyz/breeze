@@ -471,10 +471,28 @@ function clearLaunchCommand(params) {
 
 function runLaunchCommand() {
   var params = new URLSearchParams(window.location.search || '');
+  var referral = params.get('referral');
   var launch = params.get('launch');
   var practice = params.get('practice');
   var practiceId;
 
+  if (referral !== null) {
+    params.delete('referral');
+    window.history.replaceState(window.history.state, '', window.location.pathname +
+      (params.toString() ? '?' + params.toString() : '') + window.location.hash);
+    var bytes = new TextEncoder().encode(referral);
+    if (bytes.length > 0 && bytes.length <= 4096 && typeof Module._app_web_open_referral === 'function') {
+      var pointer = Module._malloc(bytes.length + 1);
+      if (pointer) {
+        try {
+          Module.HEAPU8.set(bytes, pointer);
+          Module.HEAPU8[pointer + bytes.length] = 0;
+          Module._app_web_open_referral(pointer);
+        } finally { Module._free(pointer); }
+      }
+    }
+    return;
+  }
   if (launch) clearLaunchCommand(params);
   if (launch === 'break-settings') {
     extensionCallExport('app_web_extension_open_break_settings');

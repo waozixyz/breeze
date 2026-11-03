@@ -127,6 +127,16 @@ class PhoneCheckGateTest(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 phone.pid("fixture.debug")
 
+    def test_default_launch_uses_the_selected_serial_and_launcher_intent(self):
+        phone = phone_check.Phone("local", "ZE2223BQZT")
+        with mock.patch.object(phone, "remote", return_value=b"Status: ok\n") as remote:
+            phone.start("fixture.debug")
+        remote.assert_called_once_with(
+            "adb", "-s", "ZE2223BQZT", "shell", "am", "start", "-W",
+            "-a", "android.intent.action.MAIN",
+            "-c", "android.intent.category.LAUNCHER",
+            "-n", "fixture.debug/xyz.waozi.inbe.MainActivity")
+
     def test_docs_tests_and_tooling_may_change_after_the_check(self):
         self.record()
         later = {"docs/notes.md": "later documentation\n", "tests/extra.py": "\n",

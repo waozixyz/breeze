@@ -43,7 +43,12 @@ int __wrap_sqlite3_prepare_v2(sqlite3 *db, const char *sql, int length,
     return __real_sqlite3_prepare_v2(db, sql, length, statement, tail);
 }
 int32_t FixtureSchedules(void) { return schedules; }
-int32_t app_auto_sync(void *app) { (void)app; schedules++; return 1; }
+/* Observe the activity boundary without replacing the production export. */
+int32_t __wrap_app_auto_sync(void *app) {
+    (void)app;
+    schedules++;
+    return 1;
+}
 int main(void) {
     int result = Check();
     if (result) fprintf(stderr, "Account activity checks failed: %d\n", result);
@@ -57,7 +62,7 @@ monocypher=$root/build/packages/monocypher/src
     -I"$monocypher" -I"$monocypher/optional" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
     "$monocypher/monocypher.c" "$monocypher/optional/monocypher-ed25519.c" "$liboqs" \
-    -Wl,--gc-sections -Wl,--wrap=time -Wl,--wrap=sqlite3_prepare_v2 \
+    -Wl,--gc-sections -Wl,--wrap=time -Wl,--wrap=sqlite3_prepare_v2 -Wl,--wrap=app_auto_sync \
     -ldl -lpthread -lz -lm -o "$work/test"
 APP_DATA_ROOT="$data" "$work/test"
 printf '%s\n' 'Account activity, private outbox, controls, freshness and account switching passed'

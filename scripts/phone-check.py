@@ -28,6 +28,8 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 ACTIVITY = "xyz.waozi.inbe.MainActivity"
+MAIN_ACTION = "android.intent.action.MAIN"
+LAUNCHER_CATEGORY = "android.intent.category.LAUNCHER"
 START_PRACTICE = "xyz.waozi.inbe.action.START_PRACTICE"
 WIM_HOF = 0
 # Paths whose content makes the shipped app: sources, build rules, the
@@ -117,7 +119,10 @@ class Phone:
         path.write_bytes(data)
 
     def start(self, package, *extra):
-        output = self.shell("am", "start", "-W", "-n", f"{package}/{ACTIVITY}", *extra)
+        intent = []
+        if "-a" not in extra:
+            intent = ["-a", MAIN_ACTION, "-c", LAUNCHER_CATEGORY]
+        output = self.shell("am", "start", "-W", *intent, "-n", f"{package}/{ACTIVITY}", *extra)
         if "Status: ok" not in output and "Warning: Activity not started" not in output:
             raise ValueError("Inner Breeze did not start: " + output.strip())
 

@@ -332,6 +332,27 @@ public class MainActivity extends NativeActivity {
     private int pendingQrScanKind = 5;
     String lastHealthConnectPath = null;
     private final AppShortcuts appShortcuts = new AppShortcuts(this);
+    private static final int MAX_LAUNCH_URI_LENGTH = 4096;
+    private static String pendingLaunchUri = "";
+
+    // Untrusted launch data only. Entity validates before opening review.
+    private static synchronized void captureLaunchUri(Intent intent) {
+        if (intent == null) return;
+        try {
+            String uri = intent.getDataString();
+            if (uri != null && !uri.isEmpty() && uri.length() <= MAX_LAUNCH_URI_LENGTH) {
+                pendingLaunchUri = uri;
+            }
+        } catch (RuntimeException ignored) {
+            // A malformed intent must not prevent activity startup.
+        }
+    }
+
+    public static synchronized String takeLaunchUri() {
+        String uri = pendingLaunchUri;
+        pendingLaunchUri = "";
+        return uri;
+    }
 
     public boolean launcherPinSupported() {
         return appShortcuts.supported();
@@ -1186,6 +1207,7 @@ public class MainActivity extends NativeActivity {
         configureSystemBars();
         // Set or clear the local override before the native app starts.
         offerLocalNodeApp();
+        if (savedInstanceState == null) captureLaunchUri(getIntent());
         super.onCreate(savedInstanceState);
         configureSystemBars();
         textInputView = new TextInputView(this, new TextInputView.Listener() {
@@ -1507,6 +1529,7 @@ public class MainActivity extends NativeActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        captureLaunchUri(intent);
         appShortcuts.accept(intent);
         configureSystemBars();
         requestInsetRefresh();

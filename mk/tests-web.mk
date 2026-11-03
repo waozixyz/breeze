@@ -1,8 +1,15 @@
 # Web tests: browser smoke runs, extensions, web hosts and site assets.
 
+JS_TEST_FLAGS ?= --test
+
+# The signed fixture must already be built in canonical Daochi/work.
+.PHONY: referral-browser-ui-test
+referral-browser-ui-test:
+	$(JS_RUNTIME) tests/referral_browser_test.mjs
+
 .PHONY: firefox-startup-test
 firefox-startup-test:
-	node --test tests/firefox_startup_test.mjs
+	$(JS_RUNTIME) $(JS_TEST_FLAGS) ./tests/firefox_startup_test.mjs
 
 .PHONY: web-storage-bridge-test
 web-storage-bridge-test: $(ZI2C_BIN)
@@ -20,14 +27,14 @@ web-window-zi-test: $(ZI2C_BIN)
 
 .PHONY: site-assets-test
 site-assets-test:
-	node tests/site_assets_test.mjs
+	$(JS_RUNTIME) tests/site_assets_test.mjs
 
 .PHONY: apt-repo-test
 apt-repo-test:
 	sh tests/apt_repo_test.sh
 
 web-canvas-smoke-test: $(WEB_SMOKE_TEST)
-	WEB_SMOKE_RENDERER=canvas WEB_SMOKE_BROWSER="$(WEB_SMOKE_BROWSER)" node $(WEB_SMOKE_TEST) $(WEB_DIST_DIR)
+	WEB_SMOKE_RENDERER=canvas WEB_SMOKE_BROWSER="$(WEB_SMOKE_BROWSER)" $(JS_RUNTIME) $(WEB_SMOKE_TEST) $(WEB_DIST_DIR)
 
 web-compare-test:
 	$(MAKE) $(WEB_TARGET)
@@ -37,14 +44,14 @@ web-side-by-side-test: $(WEB_SIDE_BY_SIDE_TEST)
 	bash $(WEB_SIDE_BY_SIDE_TEST)
 
 web-smoke-test-firefox: $(WEB_SMOKE_TEST)
-	WEB_SMOKE_RENDERER=canvas WEB_SMOKE_BROWSER="firefox" node $(WEB_SMOKE_TEST) $(WEB_DIST_DIR)
+	WEB_SMOKE_RENDERER=canvas WEB_SMOKE_BROWSER="firefox" $(JS_RUNTIME) $(WEB_SMOKE_TEST) $(WEB_DIST_DIR)
 
 web-smoke-test-librewolf: $(WEB_SMOKE_TEST)
-	WEB_SMOKE_RENDERER=canvas WEB_SMOKE_BROWSER="librewolf" node $(WEB_SMOKE_TEST) $(WEB_DIST_DIR)
+	WEB_SMOKE_RENDERER=canvas WEB_SMOKE_BROWSER="librewolf" $(JS_RUNTIME) $(WEB_SMOKE_TEST) $(WEB_DIST_DIR)
 
 chrome-web-store-test: chrome-web-store
-	node scripts/chrome-extension-breaks-test.mjs
-	node scripts/chrome-extension-live-test.mjs $(CHROME_WEB_STORE_DIR)
+	$(JS_RUNTIME) scripts/chrome-extension-breaks-test.mjs
+	$(JS_RUNTIME) scripts/chrome-extension-live-test.mjs $(CHROME_WEB_STORE_DIR)
 	unzip -t $(CHROME_WEB_STORE_ZIP) >/dev/null
 	test -f $(CHROME_WEB_STORE_DIR)/web-assets/icons/chromewebstore.png
 	test -f $(CHROME_WEB_STORE_DIR)/extension_boot.js

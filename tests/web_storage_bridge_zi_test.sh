@@ -27,5 +27,5 @@ for platform in desktop android; do
         -o "$work/$platform-test" {} +
     env -u DISPLAY -u WAYLAND_DISPLAY "$work/$platform-test"
 done
-node "$root/tests/web_storage_test.mjs"
-node "$root/tests/web_host_test.mjs"
+"${JS_RUNTIME:-node}" "$root/tests/web_storage_test.mjs"
+"${JS_RUNTIME:-node}" "$root/tests/web_host_test.mjs"

@@ -111,7 +111,7 @@ radio-native-test: $(ZI2C_BIN) $(RAYLIB_A)
 	@nm -g $(RAYLIB_A) | rg -q ' T drmp3dec_decode_frame$$'
 
 radio-web-test:
-	node tests/radio_web_test.mjs
+	$(JS_RUNTIME) tests/radio_web_test.mjs
 
 radio-android-test:
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \

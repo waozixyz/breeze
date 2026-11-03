@@ -1,6 +1,11 @@
 # Changelog
 
-## [2.1.62] - 2026-11-02
+## [2.1.62] - 2026-11-03
+
+- Lade Freunde mit einem Empfehlungscode ein: Nach Annahme eines gültigen Codes erhältst du sofort 20 Dew, ohne Kauf. Verdiene 5 % Dew bei Dew-Käufen eingeladener Freunde und sieh alle, die angenommen haben, mit ihrem Annahmedatum.
+- Die Bilder der Arcade-Bibliothek werden als WebP-Vorschaubilder mit 256 Pixeln gespeichert. Alle Spiele und mitgelieferten Apps bleiben erhalten.
+- Arcade und die Bilder seiner Bibliothek sind offline verfügbar; Spiele werden separat heruntergeladen.
+- Alle mitgelieferten Apps bleiben enthalten. Vollständige Apps unter 1 MB kommen hinzu, ohne die App-Auswahl zu ändern.
 
 - Die App-Reihenfolge mit einem einzigen Griff ändern, ohne zusätzliche Ein- oder Ausblenden-Überlagerung.
 - Die Listeneinstellungen schließen sich nach erfolgreichem Speichern.

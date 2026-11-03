@@ -1,12 +1,11 @@
 # Changelog
 
-## [Unreleased]
+## [2.1.62] - 2026-11-03
 
+- Invite friends with a referral code: receive 20 Dew immediately after accepting a valid code, without a purchase. Earn 5% Dew when invited friends buy Dew, and see everyone who accepted with their acceptance dates.
 - Shrink Arcade library artwork to 256-pixel WebP thumbnails while retaining every game and shipped app.
 - Include Arcade and its library artwork offline, while games download separately.
 - Keep every shipped app and also include complete apps below 1 MB without changing app selections.
-
-## [2.1.62] - 2026-11-02
 
 - Edit app order with a single move grip and no extra Hide or Show overlay.
 - Close List settings after saving a list successfully.

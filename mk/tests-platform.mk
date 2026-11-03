@@ -1,5 +1,21 @@
 # Desktop and shared host tests: frames, fonts, assets, audio, graphics, updates.
 
+# Explicit test-linked host; production artifacts never include the fixture.
+.PHONY: referral-host-test-binary referral-host-ui-test
+referral-host-test-binary: $(CURL_SO)
+	@mkdir -p $(BUILD_DIR)/referral-host-test
+	$(CC) -O2 -fPIC -DREFERRAL_STATIC_CURL \
+		-Ivendor-builds/linux/x86_64/inbe-curl/include \
+		-c tests/referral_http_fixture.c -o $(BUILD_DIR)/referral-host-test/referral_http_fixture.o
+	$(MAKE) native TARGET=$(BUILD_DIR)/referral-host-test/breeze \
+		LDFLAGS="$(abspath $(BUILD_DIR)/referral-host-test/referral_http_fixture.o) -Wl,--wrap=curl_easy_setopt"
+
+referral-host-ui-test: referral-host-test-binary
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		-u SESSION_MANAGER -u GDK_DISPLAY YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/referral_hosts_ui_test.py --app breeze \
+		--binary $(BUILD_DIR)/referral-host-test/breeze --static-curl
+
 FONT_ASSETS_GEN_DIR := $(BUILD_DIR)/font-assets-test/generated
 
 .PHONY: frame-activity-test

@@ -19,6 +19,9 @@ c :: #system_library "c";
 #import, file "../apps/module_host.zi";
 #import, file "../apps/package_manager.zi";
 #import, file "../apps/inbe_types.zi";
+ReferralLink :: #import "entity/referral_model";
+#import "std/byte_text_linux"
+#import "std/text_buffer"
 
 app_close_modal :: (app: *InnerBreeze) #foreign c;
 app_switch_screen :: (app: *InnerBreeze, screen: s32) #foreign c;
@@ -27,6 +30,7 @@ app_current_route :: (app: *InnerBreeze) -> AppRoute #foreign c;
 // here; otherwise the next frame's URL sync would switch the screen back.
 app_observe_direct_route_change :: (app: *InnerBreeze, before: AppRoute) #foreign c;
 app_update_app_navigation :: (app: *InnerBreeze, add_apps: s32) #foreign c;
+EntityHostOpenReferrals :: (app: *InnerBreeze, invitation: string) -> bool #foreign c;
 
 // A page opened from outside, by a launch link, the browser add-on or a
 // test, shows above everything: a dialog or the Apps overlay left open
@@ -214,6 +218,19 @@ using AppThemeSource;
         }
         web_open_page(app)
         unused app_start_practice_from_ui(app, practice_id)
+    }
+    #program_export
+    app_web_open_referral :: (value: *u8) -> s32 {
+        app := CurrentApp()
+        if app == null || value == null { return 0 }
+        code: [129]u8
+        if !ReferralLink.ReferralCodeFromLink(AppTextFromCString(value, 4097), code[:]) { return 0 }
+        before := app_current_route(app)
+        web_open_page(app)
+        app_switch_screen(app, ScreenProfile)
+        if !EntityHostOpenReferrals(app, TextUntilNul(code[:])) { return 0 }
+        app_observe_direct_route_change(app, before)
+        return 1
     }
     #program_export
     app_web_extension_host :: () -> s32 {

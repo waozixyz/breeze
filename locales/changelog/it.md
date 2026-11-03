@@ -1,6 +1,11 @@
 # Changelog
 
-## [2.1.62] - 2026-11-02
+## [2.1.62] - 2026-11-03
+
+- Invita gli amici con un codice: ricevi subito 20 Dew accettando un codice valido, senza acquisti. Guadagna il 5% di Dew sugli acquisti di Dew degli amici invitati e visualizza chi ha accettato con la relativa data.
+- Le immagini della libreria Arcade usano miniature WebP da 256 pixel, mantenendo tutti i giochi e le app incluse.
+- Arcade e le immagini della sua libreria sono disponibili offline; i giochi si scaricano separatamente.
+- Tutte le app incluse rimangono disponibili e si aggiungono app complete sotto 1 MB senza cambiare la selezione.
 
 - Modifica l’ordine delle app con un’unica maniglia, senza un ulteriore livello Nascondi o Mostra.
 - Le impostazioni di Lista si chiudono dopo il salvataggio riuscito di un elenco.

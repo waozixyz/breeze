@@ -1,6 +1,10 @@
 // Entity owns the common profile UI. Inner Breeze keeps its database, account
 // keys and specialized screens behind its native host services.
 Entity :: #import "entity/model";
+Referrals :: #import "entity/referral_native";
+ReferralLocale :: #import "entity/referral_locales";
+ReferralModel :: #import "entity/referral_model";
+ReferralPayment :: #import "entity/dew_play";
 #import "entity/dew_model"
 #import, file "entity_friends.zi";
 #import "entity/leaderboard_model"
@@ -33,6 +37,7 @@ Shared :: #import "entity/native_files";
 #import, file "../storage/storage_profile_stats.zi";
 #import, file "../platform/dew_payment.zi";
 #import, file "../storage/dew.zi";
+#import, file "../storage/data.zi";
 #import, file "../screens/profile_dew.zi";
 #import "std/vec"
 #import "std/format"
@@ -148,7 +153,7 @@ EntityHostAllows :: (context: *void, name: string) -> bool {
     return name == "ReadStoreHost" || name == "WriteStoreHost" ||
     name == "AppLocaleHost" || name == "ClipboardCopyHost" ||
     name == "AppServiceHost" || name == "entity.management" || name == "entity.text_height" ||
-    name == "entity.friends" || name == "entity.achievements" || name == "entity.activity" || name == LEADERBOARD_SERVICE || (name == "entity.dew" && DewAvailable())
+    name == "entity.referrals" || name == "entity.friends" || name == "entity.achievements" || name == "entity.activity" || name == LEADERBOARD_SERVICE || (name == "entity.dew" && DewAvailable())
 }
 
 // The node-confirmed Dew account and Inner Breeze's own summaries for the
@@ -255,6 +260,7 @@ EntityHostText :: (text: string) -> HostValue {
 }
 
 EntityHostLocale :: (key: string) -> string {
+    if key.count > 9 && key[:9] == "referral." { return ReferralLocale.ReferralLabel(LocaleActiveCode(), key) }
     if key == "leaderboard_refresh_failed" || key == "profile_friends_title" || key == "profile_friends_error" ||
     key == "profile_no_friends" || key == "profile_request_sent" ||
     key == "profile_no_leaderboard_data" || key == "profile_updating_status" {
@@ -426,6 +432,11 @@ EntityHostCall :: (context: *void, module: *u8, function: *u8,
         result.* = EntityHostText(InbeLeaderboardSnapshot(app, AppArgumentText(arguments[1])))
         return 1
     }
+    if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.referrals" {
+        Referrals.EntityReferralsConnect(InbeReferralClient, context)
+        result.* = EntityHostText(Referrals.EntityReferralsAnswer(AppArgumentText(arguments[1])))
+        return 1
+    }
     if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.friends" {
         result.* = EntityHostText(EntityFriendsAnswer(app, AppArgumentText(arguments[1])))
         return 1
@@ -461,6 +472,29 @@ EntityHostCall :: (context: *void, module: *u8, function: *u8,
         result.* = HostScalar("bool", ifx TextInputWriteClipboard(AppArgumentText(arguments[0])) then 1 else 0)
         return 1
     }
+    if (name == "ReadStoreHost" || name == "WriteStoreHost") && count == 2 &&
+    (AppArgumentText(arguments[0]) == "referral-pending.txt" || AppArgumentText(arguments[0]) == "referral-suggestion.txt") {
+        path: [4096]u8
+        file := Shared.NativeJoin(path[:], data_root(), AppArgumentText(arguments[0]))
+        if name == "WriteStoreHost" {
+            value := AppArgumentText(arguments[1])
+            saved := (value == "-" || ReferralModel.ReferralToken(value)) && Shared.NativeWrite(file, value)
+            result.* = HostScalar("bool", ifx saved then 1 else 0)
+        } else {
+            bytes: [129]u8
+            read := Shared.NativeRead(file, bytes[:])
+            if read < 0 { read = 0 }
+            output := arguments[1]
+            if output.kind != cast(s32)HostValueKind.HostSlice || output.elements == null || output.length <= cast(usize)read { return 0 }
+            for index: 0..read {
+                byte := ifx index < read then bytes[index] else cast(u8)0
+                output.elements[index].bits = cast(u64)byte
+                output.elements[index].integer = cast(s64)byte
+            }
+            result.* = HostScalar("s32", read)
+        }
+        return 1
+    }
     if name == "ReadStoreHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.json" {
         document := InbeEntityRead(app)
         output := arguments[1]
@@ -491,6 +525,13 @@ EntityHostRoute :: (app: *InnerBreeze) -> bool {
         (app.profile_tab == PROFILE_TAB_OVERVIEW || app.profile_tab == PROFILE_TAB_SYNC))
 }
 
+// Keep owner checks and cancellation running even after Profile is closed.
+EntityHostReferralPump :: (app: *InnerBreeze) {
+    unused Referrals.EntityReferralsSource(ifx ReferralPayment.DewPlayEdition() then "play" else "direct", "breeze")
+    Referrals.EntityReferralsConnect(InbeReferralClient, cast(*void)app)
+    Referrals.EntityReferralsPump()
+}
+
 EntityHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
     if entity_inner_breeze { return false }
     if !entity_opened {
@@ -505,6 +546,7 @@ EntityHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
         entity_opened = true
     }
     InbeManagementPump(app)
+    EntityHostReferralPump(app)
     typed: [1024]u8
     if entity_reload_after_route {
         entity_context.command = "reload"
@@ -522,6 +564,19 @@ EntityHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
         unused AppContextRun(*entity_context, Portable.APP_COMMAND)
         entity_leaderboard_route = false
     }
+    if entity_referral_route {
+        out: Vec(u8)
+        BuilderPrint(*out, "referrals:%", TextUntilNul(entity_referral_code[:]))
+        next := BuilderFinish(out)
+        entity_context.command = ""
+        Entity.EntityFree(entity_referral_command)
+        entity_referral_command = next
+        entity_context.command = entity_referral_command
+        unused AppContextRun(*entity_context, Portable.APP_COMMAND)
+        entity_context.command = ""
+        entity_referral_route = false
+        entity_referral_code = .{}
+    }
     entity_context.session = app.ui.session
     entity_context.bounds = bounds
     entity_context.dark = app.dark_mode != 0
@@ -533,6 +588,7 @@ EntityHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
     WidgetHostEnd()
     entity_context.input = .{}
     InbeManagementPump(app)
+    EntityHostReferralPump(app)
     if !ran { return false }
     route := entity_context.reply
     // The Dew card's buttons open Inner Breeze's own windows over Profile.
@@ -592,10 +648,32 @@ EntityHostSave :: (app: *InnerBreeze) -> bool {
 }
 
 EntityHostReset :: () {
+    Referrals.EntityReferralsReset()
     entity_inner_breeze = false
     entity_account_route = false
     entity_reload_after_route = true
     entity_leaderboard_route = false
+    entity_referral_route = false
+    entity_referral_code = .{}
+}
+
+entity_referral_route: bool;
+entity_referral_code: [129]u8;
+entity_referral_command: string;
+
+// A handoff only opens Entity's review UI. Entity owns acceptance and policy.
+#program_export
+EntityHostOpenReferrals :: (app: *InnerBreeze, invitation: string) -> bool {
+    code: [129]u8
+    if invitation.count > 0 && !ReferralModel.ReferralCodeFromLink(invitation, code[:]) { return false }
+    entity_inner_breeze = false
+    entity_account_route = false
+    entity_referral_code = code
+    entity_referral_route = true
+    app.profile_view = PROFILE_VIEW_MAIN
+    app.profile_tab = PROFILE_TAB_OVERVIEW
+    app.profile_scroll = 0
+    return true
 }
 
 #program_export

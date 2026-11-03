@@ -5,6 +5,7 @@ from pathlib import Path
 import argparse
 import os
 import re
+import shlex
 import subprocess
 import tempfile
 
@@ -55,4 +56,5 @@ with tempfile.TemporaryDirectory(prefix="inbe-device-key-") as temporary:
     environment.pop("WAYLAND_DISPLAY", None)
     environment.pop("XAUTHORITY", None)
     environment.pop("DBUS_SESSION_BUS_ADDRESS", None)
-    subprocess.run([*(["node"] if args.wasm else []), str(executable)], check=True, env=environment)
+    runtime = shlex.split(environment.get("JS_RUNTIME", "node")) if args.wasm else []
+    subprocess.run([*runtime, str(executable)], check=True, env=environment)

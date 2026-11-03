@@ -68,6 +68,7 @@ node_tree_hosts: [NodeAppSlots * 2]AppHost;
 node_tree_validating: bool;
 node_tree_profile_requested: bool;
 node_tree_profile_account: [65]u8;
+node_tree_profile_page: [768]u8;
 node_tree_widget_node: *AppNode;
 NodeTreeImage :: struct {
     path: string
@@ -249,9 +250,13 @@ NodeTreeCall :: (context: *void, node: *AppNode, module: *u8, function: *u8,
     }
     if name == "AppServiceHost" && count == 2 && HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "string", cast(s32)HostString) {
-        if AppArgumentText(arguments[0]) == "entity.profile" && AppArgumentText(arguments[1]) == "open" &&
+        profile_request := AppArgumentText(arguments[1])
+        if AppArgumentText(arguments[0]) == "entity.profile" &&
+        (profile_request == "open" || profile_request == "referrals" ||
+            (profile_request.count > 10 && profile_request[:10] == "referrals:")) &&
         !node_tree_validating && !node_snapshot_scanning {
-            node_tree_profile_requested = CopyCString(NodeTreeAccount(), node_tree_profile_account[:])
+            node_tree_profile_requested = CopyCString(NodeTreeAccount(), node_tree_profile_account[:]) &&
+                CopyCString(profile_request, node_tree_profile_page[:])
             result.* = NodeAppString(ifx node_tree_profile_requested then "queued" else "unavailable")
             return 1
         }
@@ -585,10 +590,10 @@ NodeTreeRuntime :: (slot: s32) -> *AppRuntime {
 }
 
 // Consume only after the guest VM returns; Profile must never re-enter it.
-NodeTreeTakeProfile :: () -> bool {
+NodeTreeTakeProfile :: (page: []u8) -> bool {
     requested := node_tree_profile_requested && TextUntilNul(node_tree_profile_account[:]) == NodeTreeAccount()
     node_tree_profile_requested = false
-    return requested
+    return requested && CopyCString(TextUntilNul(node_tree_profile_page[:]), page)
 }
 
 NodeTreeRunMessage :: (slot: s32, message: Legacy.AppMessage) -> Legacy.AppMessage {

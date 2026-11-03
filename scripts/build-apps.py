@@ -14,6 +14,14 @@ def main():
     parser.add_argument('--ziran', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
+    # Development hosts use the same canonical overrides as every other
+    # package in this build. Release builds retain the reviewed locked graph.
+    if (ROOT / 'ziran.local.toml').exists():
+        package = Path(subprocess.check_output(
+            [str(args.ziran.resolve()), 'pkg', 'path', 'apps'], cwd=ROOT, text=True).strip())
+        subprocess.run(['python3', str(package / 'scripts/build-ui.py'),
+                        '--output', str(args.output.resolve())], cwd=ROOT, check=True)
+        return
     # Only package metadata lives here. Source remains in the package cache;
     # the owner's local development overrides are never changed.
     with tempfile.TemporaryDirectory(prefix='apps-lock-', dir=ROOT / 'build') as directory:

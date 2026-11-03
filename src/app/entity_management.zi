@@ -2,6 +2,7 @@
 // local-data choices, sync state and platform file/device operations.
 Manage :: #import "entity/management";
 Provider :: #import "entity/native_management";
+Referrals :: #import "entity/referral_native";
 Recovery :: #import "entity/recovery";
 Native :: #import "entity/native_files";
 Shared :: #import "entity/shared_account";
@@ -209,6 +210,7 @@ InbeRecoveryApply :: (context: *void, incoming: *Recovery.Recovery, choice: s32)
     if saved != cast(SyncAccountSaveResult)SYNC_ACCOUNT_SAVE_OK {
         return 0
     }
+    Referrals.EntityReferralsReset()
     // Connecting the account is the person's consent to synchronize it.
     // Persist the node shown by Entity before scheduling the first request.
     if !InbeManagementConnect(context) {
@@ -377,6 +379,15 @@ InbeManagementClient :: (context: *void, output: *Client) -> bool {
         TextUntilNul(entity_management_client[:]), output)
 }
 
+// Referrals use the current owner key, never a delegated storage identity.
+InbeReferralClient :: (context: *void, output: *Client) -> bool {
+    if StoredAccountMode() != AccountModeOwner || !InbeManagementClient(context, output) {
+        return false
+    }
+    owner: [65]u8
+    return InbeEntityOwner(owner[:]) && TextUntilNul(owner[:]) == output.identity.account_id
+}
+
 InbeManagementAction :: (context: *void, request: *Manage.ManagementRequest) -> s32 {
     app := cast(*InnerBreeze)context
     operation := TextUntilNul(request.operation[:])
@@ -402,6 +413,7 @@ InbeManagementAction :: (context: *void, request: *Manage.ManagementRequest) -> 
         return ifx Shared.AccountBackedUpWrite(data_root(), TextUntilNul(request.owner_id[:]), operation == "backup_mark") then 1 else 0
     }
     if operation == "logout" || operation == "remote_cleared" {
+        Referrals.EntityReferralsReset()
         storage_set_sync_enabled(0)
         Pairing.DeviceLinkCancel()
         return sync_account_clear()

@@ -69,6 +69,11 @@ SetTargetFPS :: (fps: s32) #foreign raylib;
 #import "touch_replay"
 // A UI test drives the app through KRYON_TEST_DRIVER; otherwise inactive.
 #import "test_driver"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import, file "../app/app_nav_state.zi";
+#import, file "../app/entity_host.zi";
+ReferralAndroid :: #import "entity/referral_android";
 #if #defined(ANDROID_BUILD) {
     AndroidTouch :: #import "android_touch";
 }
@@ -296,6 +301,7 @@ DrawFrame :: (app: *InnerBreeze) {
 }
 
 app_frame_probe_count: s32;
+pending_referral_invitation: [129]u8;
 
 // Kryon moves the focus with Tab and Shift+Tab and, after Tab, presses the
 // focused control with Enter or Space. Escape dismisses the top overlay.
@@ -350,6 +356,16 @@ app_frame :: (argument: *void) {
         }
     }
     app_launcher_pump_request(app)
+    EntityHostReferralPump(app)
+    invitation: [129]u8
+    if ReferralAndroid.EntityTakeReferralInvitation(invitation[:]) {
+        pending_referral_invitation = invitation
+        app_open_profile_tab(app, PROFILE_TAB_OVERVIEW)
+    }
+    if pending_referral_invitation[0] != 0 && app.breathing.screen == ScreenProfile && app.modal.active == 0 {
+        unused EntityHostOpenReferrals(app, TextUntilNul(pending_referral_invitation[:]))
+        pending_referral_invitation = .{}
+    }
     PollHostActions(app)
     ReportHostState(app)
     first_frame := app_frame_probe_count == 0

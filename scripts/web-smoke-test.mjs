@@ -851,7 +851,7 @@ async function verifyAppSettingsReloadPersistenceBidi(client, context) {
     resultOwnership: 'none',
     expression: `(async () => JSON.stringify(await (async () => { ${wasmHookEvalHelper()} try { await callWasmHook('app_web_test_save_onboarding_state'); } catch (error) { return { ok: false, reason: String(error && error.message || error) }; } await Module.__inbeFlushStorageSync(true); return { ok: Module._app_web_test_onboarding_state && Module._app_web_test_onboarding_state() === 1 }; })()))()`
   });
-  const state = JSON.parse(result.result?.value || '{}');
+  let state = JSON.parse(result.result?.value || '{}');
   if (!state.ok)
     throw new Error(state.reason || 'failed to invoke Firefox app settings save test hook or immediate readback failed');
   await waitForStorageIdleBidi(client, context);
