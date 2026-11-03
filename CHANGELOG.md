@@ -2,47 +2,15 @@
 
 ## [Unreleased]
 
-- Open the full web app directly from a website styled to match Waozi Studio, without the mini preview.
-- Open Arcade with its console artwork, framed player HUD and game Home navigation.
+- Open the full web app directly from the Breeze website.
+- The Breeze website now follows Waozi Studio’s design.
+- Typing now counts as activity in the break meter.
 
 ## [2.1.62] - 2026-11-03
 
-- Invite friends with a referral code: receive 20 Dew immediately after accepting a valid code, without a purchase. Earn 5% Dew when invited friends buy Dew, and see everyone who accepted with their acceptance dates.
-- Shrink Arcade library artwork to 256-pixel WebP thumbnails while retaining every game and shipped app.
-- Include Arcade and its library artwork offline, while games download separately.
-- Keep every shipped app and also include complete apps below 1 MB without changing app selections.
-
-- Edit app order with a single move grip and no extra Hide or Show overlay.
-- Close List settings after saving a list successfully.
-- Choose soda, coffee, bubble tea, chocolate and candle pictures for habit rewards.
-- Keep notifications visible longer and make habit reminders work when the app is closed, with notification permission and provider settings respected.
-
-- Backups always need a password: the old unprotected key save is gone, and Android device backups no longer copy your account.
-- Fix Add friend failing with "Could not start this action".
-- Sign in with your backup file and its password, name backups after your username, and always protect new backups with a password.
-- Friends now opens the shared Profile page, and Dew gifts between friends are gone.
-- Your account follows you between waozi.xyz sites here too, including signing out everywhere.
-
-- The Google Play edition can optionally save and open encrypted account backups with Google Drive after Google Cloud setup.
-
-- Repeated local builds reuse storage instead of keeping a new copy for each run.
-- Linux: install from the signed APT repository and get updates with apt.
-- Filter Android account-key imports to key files and related backup types.
-- Practice results show smooth, labeled mood faces with a clear selection.
-- Apps keeps each grid card's ⋮ control unchanged while editing.
-- Mark Telegram-relayed Lumi messages with their source.
-- Collapse each break kind in settings and expand it on click.
-- Keep Linux break reminder text and progress bars in separate rows.
-- Catalog games can award their own achievements, with the usual top-right notification.
-- Friends, Lists and requests show the profile picture each friend chose in any app, abstract pictures included.
-- Your profile picture reaches friends the same way as from every other app, and only once you choose one.
-- A profile picture chosen in another app now shows in your own profile too.
-- Pictures in a practice no longer flicker while its narration downloads.
-- Sun Salutation narration speaks every pose and names the leg in each lunge.
-- Sun Salutation guides each pose with a form cue, the leg that steps back and the next pose, settles in before the first round and rests after the last.
-- Sun Salutation names the next pose in one quiet centered line.
-- Breath and bell cues play even when Practices is still loading at startup.
-- Sync recovers when an earlier full download stopped partway.
+- Clearer Sun Salutation guidance and steadier practice audio.
+- More reliable habit reminders and new reward pictures.
+- Safer account backups and more reliable sync.
 
 ## [2.1.61] - 2026-10-29
 
@@ -64,6 +32,8 @@
 - Keep habits, practices, session counts and game progress free of storage charges, even when account storage is full.
 - Count custom notes, Diary and media toward storage, and keep progress syncing past queued uploads that need more space.
 - Show full public IDs in centered, grouped fields.
+- Connect automatically to Sunup when it is installed, while keeping an explicit push-off choice off.
+- Turn habit reminders on by default for setups without a saved choice.
 
 ## [2.1.58] - 2026-10-28
 

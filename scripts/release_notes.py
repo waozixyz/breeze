@@ -1,14 +1,27 @@
 #!/usr/bin/env python3
-"""Package the latest changelog text for Lumi's offline update message.
+"""Package Breeze's latest core changes for Lumi, F-Droid and Play.
 
 Translations of each release live in locales/changelog/LANGUAGE.md, written
 like CHANGELOG.md. They become release-notes-LANGUAGE.json beside the English
-notes, and with --play CODE the Play release notes of their listings.
+notes, and with --play CODE the F-Droid/Play notes of every listing.
+Game changes belong in their package changelogs. Legacy game sections and
+bullets are excluded here before any output is written.
 """
 import argparse
 import json
 from pathlib import Path
 import re
+
+
+MAX_NOTES = 3
+# Brands can adjoin Japanese/Chinese/Korean text without a word boundary.
+# Generic game terms cover every language in locales/changelog.
+GAME_NOTES = re.compile(
+    r"arcade|shovey|(?:apfel)?wurm|"
+    r"\b(?:games?|gaming|gameplay|hry|her|hru|spiel\w*|juegos?|jeu|jeux|"
+    r"permainan|giochi|gioco|jogos?|игр\w*)\b|游戏|遊戲|ゲーム|게임",
+    re.I,
+)
 
 
 def release_notes(changelog):
@@ -18,14 +31,25 @@ def release_notes(changelog):
         raise ValueError("changelog needs a numeric release")
     body = changelog[heading.end():].split("\n## [", 1)[0]
     notes = []
+    game_section = None
     for line in body.splitlines():
-        if line.startswith("- "):
-            notes.append(line[2:].strip())
+        section = re.match(r"^(#{3,6})\s+(.+)$", line)
+        if section:
+            depth = len(section[1])
+            if game_section is not None and depth <= game_section:
+                game_section = None
+            if game_section is None and GAME_NOTES.search(section[2]):
+                game_section = depth
+        elif line.startswith("- "):
+            # Keep section ownership until the whole entry (including wrapped
+            # lines) is assembled, so continuations cannot leak into core notes.
+            notes.append([line[2:].strip(), game_section is not None])
         elif line.startswith("  ") and notes:
-            notes[-1] += " " + line.strip()
+            notes[-1][0] += " " + line.strip()
+    notes = [text for text, game in notes if not game and not GAME_NOTES.search(text)]
     if not notes:
-        raise ValueError("release needs changelog notes")
-    return {"version": heading[1], "notes": notes}
+        raise ValueError("release needs core Breeze changelog notes")
+    return {"version": heading[1], "notes": notes[:MAX_NOTES]}
 
 
 # Play listing folder of each translated language.
@@ -58,8 +82,10 @@ def main():
     root = args.changelog.resolve().parent
     translated = translations(root / "locales/changelog", result)
     if args.play:
-        for language, notes in translated.items():
-            listing = root / "fastlane/metadata/android" / PLAY_LISTINGS[language] / "changelogs"
+        listings = {"en-US": result}
+        listings.update({PLAY_LISTINGS[language]: notes for language, notes in translated.items()})
+        for locale, notes in listings.items():
+            listing = root / "fastlane/metadata/android" / locale / "changelogs"
             listing.mkdir(parents=True, exist_ok=True)
             text = "".join(f"- {note}\n" for note in notes["notes"])
             (listing / f"{args.play}.txt").write_text(text, encoding="utf-8")

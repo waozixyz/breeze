@@ -7,7 +7,6 @@
 ## [Unreleased]
 
 - Close List settings after a successful save and keep edits open if saving fails.
-
 - Show the profile pictures friends chose in any app, abstract pictures included.
 
 ## [1.1.28] - 2026-10-29

@@ -15,7 +15,6 @@ fi
 CHANGELOG_FILE="CHANGELOG.md"
 GRADLE_FILE="droid/app/build.gradle"
 WINDOWS_RC_FILE="windows/inbe.rc"
-CHANGELOG_DIR="fastlane/metadata/android/en-US/changelogs"
 CLICK_MANIFEST_FILE="packaging/click/manifest.json"
 CLICK_CONTROL_FILE="packaging/click/control"
 CLICK_METAINFO_FILE="packaging/click/inbe.metainfo.xml"
@@ -172,37 +171,10 @@ fi
 
 replace_in_file "s/^version: .*/version: '$LATEST_VERSION'/" "$SNAPCRAFT_FILE"
 
-# Create changelog directory
-mkdir -p "$CHANGELOG_DIR"
-
-# Generate the Fastlane changelog for the Android versionCode being built.
+# Lumi, F-Droid and every Play listing share the core Breeze filter.
 # Fastlane file names are versionCode values, not changelog positions.
-OUTPUT_FILE="$CHANGELOG_DIR/$VERSION_CODE.txt"
-CHANGELOG_CONTENT=$(awk -v ver="$LATEST_VERSION" '
-    BEGIN { in_section=0 }
-    /^## \[/ {
-        if (in_section) exit
-        if (index($0, ver) > 0) {
-            in_section=1
-            next
-        }
-    }
-    in_section {
-        if (/^### /) {
-            sub(/^### /, "")
-            print
-            print "---"
-        } else if (/^- /) {
-            print
-        }
-    }
-' "$CHANGELOG_FILE")
-
-echo "$CHANGELOG_CONTENT" > "$OUTPUT_FILE"
-echo "✓ Updated $OUTPUT_FILE"
-# Each listing that has a translation of this release shows it in Play.
 python3 scripts/release_notes.py --play "$VERSION_CODE" "$CHANGELOG_FILE"
-echo "✓ Updated translated Play release notes"
+echo "✓ Updated F-Droid and Play release notes"
 
 python3 scripts/check-version.py
 

@@ -45,6 +45,7 @@
   each new host call needs an APK before a package can use it. Apps share
   data only through the host interface, never another app's internals.
 - Translate changed strings in every affected locale; no English placeholders.
+- Keep Breeze/Lumi/store notes to 2–3 short core, Practices or Habits lines, without links or Android versions; game changes belong only in their package changelogs.
 - `make locale-translated-test` fails on any locale string that still equals
   its English text. Translate it; add it to `tests/locale_same_as_english.txt`
   only when it is a real brand name, loanword, or format string.
