@@ -36,6 +36,84 @@ String LocaleText(String key)
     return StringView("Profile", 7);
 }
 
+bool AppMiniMode(void)
+{
+    return false;
+}
+
+bool node_apps_NodeAppImmersive(int32_t slot)
+{
+    (void)slot;
+    return false;
+}
+
+String node_apps_NodeAppName(int32_t slot)
+{
+    (void)slot;
+    return StringView("", 0);
+}
+
+String app_records_NodeAppReplacement(String name)
+{
+    (void)name;
+    return StringView("", 0);
+}
+
+int32_t route_types_AppNavNodeSlot(int32_t route)
+{
+    (void)route;
+    return -1;
+}
+
+int32_t route_types_AppNavNodeRoute(int32_t slot)
+{
+    (void)slot;
+    return 0;
+}
+
+int32_t AppsInstalledMask(void)
+{
+    return 0;
+}
+
+int32_t DesktopPlatform(void)
+{
+    return 1;
+}
+
+bool IsDesktopWidth(int32_t view_width, float scale)
+{
+    (void)view_width;
+    (void)scale;
+    return true;
+}
+
+int32_t AppScale(int32_t pixels)
+{
+    return pixels;
+}
+
+/* A Practice tab switch keeps the left rail and Practice highlighted, so the
+ * page beside it never moves sideways. */
+static void check_practice_tabs_keep_rail(void)
+{
+    static InnerBreeze app;
+    const int32_t tabs[] = {PRACTICE_TAB_PLAY, PRACTICE_TAB_MANUAL,
+                            PRACTICE_TAB_CONFIG, PRACTICE_TAB_PLAY};
+    memset(&app, 0, sizeof(app));
+    app.navigation_placement = NavigationPlacement_NAVIGATION_LEFT;
+    app.ui.navigation_height = 720;
+    app.ui.view_width = 900;
+    app.breathing.screen = ScreenStart;
+    app.main_tab = AppMainTab_APP_MAIN_TAB_PRACTICE;
+    for (size_t i = 0; i < sizeof(tabs) / sizeof(tabs[0]); i++) {
+        app.practice_tab = tabs[i];
+        assert(app_nav_desktop_rail_enabled(&app) == 1);
+        assert(app_navigation_height(&app) == 0);
+        assert(app_current_nav_route(&app) == AppNavRoute_APP_NAV_ROUTE_PRACTICE);
+    }
+}
+
 String AppTextFromCString(uint8_t *data, int32_t capacity)
 {
     int32_t length = 0;
@@ -54,6 +132,7 @@ int main(void)
     Slice sub = {subtitle, sizeof(subtitle)};
     memset(&app, 0, sizeof(app));
 
+    check_practice_tabs_keep_rail();
     app_reset_bottom_nav_routes(&app);
     assert(app.bottom_nav_route_count == 4);
     assert(app.bottom_nav_routes[0] == AppNavRoute_APP_NAV_ROUTE_LUMI);

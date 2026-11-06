@@ -5,6 +5,7 @@
 - Open the full web app directly from the Breeze website.
 - The Breeze website now follows Waozi Studio’s design.
 - Typing now counts as activity in the break meter.
+- Switching Practice tabs with the side navigation no longer shifts the screen.
 
 ## [2.1.62] - 2026-11-03
 
