@@ -34,7 +34,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
-          import hashlib, json, os, re, subprocess, urllib.request
+          import hashlib, json, os, re, subprocess, time, urllib.error, urllib.request
           def gh(*args):
               return subprocess.check_output(['gh', *args], text=True).strip()
           def number(version):
@@ -44,11 +44,25 @@ jobs:
           tags = [item['tagName'] for item in releases if not item['isDraft'] and
                   re.fullmatch(r'node-arcade-\d+\.\d+\.\d+', item['tagName'])]
           tag = max(tags, key=lambda name: number(name.removeprefix('node-arcade-')))
-          request = urllib.request.Request(
-              'https://api.waozi.xyz/api/v2/packages/inbe.arcade/latest?bucket=0&format=zx',
-              headers={'User-Agent': 'Inbe-Publisher/1.0', 'Cache-Control': 'no-cache'})
-          with urllib.request.urlopen(request, timeout=60) as response:
-              live = json.load(response)['version']
+          def latest():
+              # Cloudflare answers 52x while it briefly cannot reach the node;
+              # retry those for a few minutes before calling the node down.
+              request = urllib.request.Request(
+                  os.environ.get('NODE_LATEST_URL', 'https://api.waozi.xyz/api/v2/packages/inbe.arcade/latest?bucket=0&format=zx'),
+                  headers={'User-Agent': 'Inbe-Publisher/1.0', 'Cache-Control': 'no-cache'})
+              waits = [int(wait) for wait in os.environ.get('NODE_RETRY_WAITS', '15 30 60 90').split()]
+              for attempt in range(len(waits) + 1):
+                  try:
+                      with urllib.request.urlopen(request, timeout=30) as response:
+                          return json.load(response)['version']
+                  except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+                      if isinstance(error, urllib.error.HTTPError) and error.code < 500:
+                          raise
+                      if attempt == len(waits):
+                          raise
+                      print(f'The node did not answer ({error}); retrying in {waits[attempt]}s.')
+                      time.sleep(waits[attempt])
+          live = latest()
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               if number(tag.removeprefix('node-arcade-')) <= number(live):
                   print(f'The node already serves Arcade {live}; newest release is {tag}.')
