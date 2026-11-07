@@ -60,7 +60,8 @@ cp "$bundles/apps/habits.zx" "$bundles/apps/practices.zx" "$work/invalid-nested/
     --module-path "$root/build/packages/kryon/src/backend" --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" \
     -o "$work/generated" "$root/tests/apps_behavior.zi" "$root/tests/sync_test_host.zi"
-"${CC:-cc}" -D_GNU_SOURCE -std=c11 -O0 -ffunction-sections -fdata-sections \
+# The --wrap fakes below must see every call, not header inline copies.
+"${CC:-cc}" -D_GNU_SOURCE -DZIRAN_NO_HEADER_INLINE -std=c11 -O0 -ffunction-sections -fdata-sections \
     -I"$root/build/packages/ziran/include" -iquote "$work/generated" -iquote "$work/generated/apps" \
     -I"$root/build/packages/monocypher/src" -I"$root/build/packages/monocypher/src/optional" \
     -I"$root/vendor-builds/sqlite" -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
