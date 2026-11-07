@@ -58,6 +58,8 @@ ShopTestCall :: (context: *void, module: *u8, function: *u8,
         shop_test_rewards_seen |= cast(u32)1 << cast(u32)index
         result.* = WidgetEncodeHabitsShopReward(HabitsShopReward.{.id = "reward-1",
                 .name = "Reward", .price = 5,
+                .statistics = HabitsShopStatistics.{.purchase_count = 2,
+                    .spent_coins = 10, .month_count = 2, .last_date = 20260315},
                 .icon = ifx index == 0 then 48 else REWARD_ICON_COFFEE}, *shop_test_reward_codec)
         return 1
     }
@@ -72,6 +74,28 @@ ShopTestCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "HabitsLocaleHost" && count == 1 {
         text := "Shop"
+        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+        if key == "habit_shop_stats_title" {
+            text = "Purchase statistics"
+        }
+        if key == "habit_shop_stats_empty" {
+            text = "Buy a reward to start your purchase history."
+        }
+        if key == "habit_shop_stats_purchases" {
+            text = "Purchases"
+        }
+        if key == "habit_shop_stats_spent" {
+            text = "Coins spent"
+        }
+        if key == "habit_shop_stats_week" {
+            text = "Last 7 days"
+        }
+        if key == "habit_shop_stats_month" {
+            text = "Last 30 days"
+        }
+        if key == "habit_shop_stats_last" {
+            text = "Last bought: %s"
+        }
         result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
             .data = HostTextData(text), .length = cast(usize)text.count}
         return 1
@@ -84,13 +108,15 @@ ShopTestCall :: (context: *void, module: *u8, function: *u8,
 CheckHabitShop :: () -> s32 {
     // Use the candidate Habits package rather than an older copy in the root fixture.
     if !AppsOpenBytes(ModuleTestText("lists"), ModuleTestText("habits"),
-            ModuleTestText("practice")) { return 8 }
+        ModuleTestText("practice")) { return 8 }
     session := SessionOpen()
     bounds := Rectangle.{0.0, 0.0, 400.0, 1800.0}
     BeginFrame(session, cast(u64)1, bounds)
     shop_test_frame = HabitsShopFrame.{.session = session, .scale = 1.0,
         .bounds = bounds, .view_width = 400, .font = 16, .small_font = 13,
         .halves = 20, .reward_count = 2, .activity_count = 2, .price = 5, .price_text = "5",
+        .statistics = HabitsShopStatistics.{.purchase_count = 12, .spent_coins = 150,
+            .week_count = 4, .month_count = 9, .last_date = 20260315},
         .icon = 38, .icon_open = true}
     WidgetHostBegin(session, ShopTestAssets)
     AppsUiBegin(ShopTestCall, null)
@@ -100,12 +126,33 @@ CheckHabitShop :: () -> s32 {
     painted := PendingPaintCount(session)
     generated: u32 = 0
     legacy: s32 = 0
+    statistics_colors: u32 = 0
+    spending_seen := false
+    date_seen := false
     for index: cast(s32)0..painted - 1 {
         command := PendingPaintAt(session, index)
+        if command.value == "150" {
+            spending_seen = true
+        }
+        if command.value == "Last bought: 2026-03-15" {
+            date_seen = true
+        }
+        if command.color.r == 63 && command.color.g == 137 && command.color.b == 216 {
+            statistics_colors |= cast(u32)1
+        }
+        if command.color.r == 196 && command.color.g == 141 && command.color.b == 39 {
+            statistics_colors |= cast(u32)2
+        }
+        if command.color.r == 48 && command.color.g == 159 && command.color.b == 128 {
+            statistics_colors |= cast(u32)4
+        }
+        if command.color.r == 155 && command.color.g == 104 && command.color.b == 207 {
+            statistics_colors |= cast(u32)8
+        }
         // SVG icon rasterization queues small filled rectangles, not shape primitives.
         if command.kind == 2 && command.bounds.width <= 16.0 && command.bounds.height <= 16.0 { legacy += 1 }
         icons: [5]s32 = .[76, REWARD_ICON_COFFEE, REWARD_ICON_BUBBLE_TEA,
-            REWARD_ICON_CHOCOLATE, REWARD_ICON_CANDLE]
+        REWARD_ICON_CHOCOLATE, REWARD_ICON_CANDLE]
         for choice: cast(s32)0..4 {
             if command.kind == 5 && command.asset_path == RewardIconAsset(icons[choice]) {
                 generated |= cast(u32)1 << cast(u32)choice
@@ -125,6 +172,31 @@ CheckHabitShop :: () -> s32 {
     if shop_test_rewards_seen != cast(u32)3 || shop_test_activity_seen != cast(u32)3 { return 3 }
     if painted == 0 { return 4 }
     if shop_test_frame.action != HABITS_SHOP_NONE { return 5 }
+    if statistics_colors != cast(u32)15 || !spending_seen || !date_seen {
+        print("Purchase statistics: color mask %, spending %, date %\n", statistics_colors, spending_seen, date_seen)
+        return 10
+    }
+    empty := SessionOpen()
+    BeginFrame(empty, cast(u64)3, bounds)
+    shop_test_frame.session = empty
+    shop_test_frame.statistics = HabitsShopStatistics.{}
+    shop_test_frame.reward_count = 0
+    shop_test_frame.activity_count = 0
+    shop_test_frame.icon_open = false
+    WidgetHostBegin(empty, ShopTestAssets)
+    AppsUiBegin(ShopTestCall, null)
+    empty_drawn := HabitsRun(HabitsMessage.{.action = HABITS_SHOP_VIEW})
+    AppsUiEnd()
+    WidgetHostEnd()
+    empty_seen := false
+    for index: cast(s32)0..PendingPaintCount(empty) - 1 {
+        if PendingPaintAt(empty, index).value == "Buy a reward to start your purchase history." {
+            empty_seen = true
+        }
+    }
+    unused EndFrame(empty)
+    unused SessionClose(empty)
+    if !empty_drawn.succeeded || !empty_seen { return 11 }
     // Buy's dialog draws the reward it asks about.
     dialog := SessionOpen()
     BeginFrame(dialog, cast(u64)2, bounds)
@@ -161,7 +233,7 @@ ImageHeight :: (path: string) -> s32 {
 
 RewardTestImage :: (path: string) -> bool {
     icons: [5]s32 = .[76, REWARD_ICON_COFFEE, REWARD_ICON_BUBBLE_TEA,
-        REWARD_ICON_CHOCOLATE, REWARD_ICON_CANDLE]
+    REWARD_ICON_CHOCOLATE, REWARD_ICON_CANDLE]
     for icon: icons {
         if path == RewardIconAsset(icon) {
             asset := AppsAsset(path)

@@ -10,7 +10,7 @@ from achievement_icons import icon_shape
 
 ROOT = Path(__file__).resolve().parents[1]
 EXPECTED = {"inbe": 10, "practice": 60, "diary": 20, "habits": 20,
-            "lists": 15, "lumi": 10, "photos": 10, "radio": 10, "leaderboard": 5}
+            "lists": 15, "lumi": 10, "radio": 10, "leaderboard": 5}
 
 
 def entries(path):
@@ -55,7 +55,7 @@ class AchievementCatalogs(unittest.TestCase):
                 for key, value in translations.items():
                     self.assertTrue(value.strip())
                     self.assertEqual(root_text[key], value)
-        self.assertEqual(len(all_ids), 160)
+        self.assertEqual(len(all_ids), 150)
         reference = (ROOT / "docs/achievements.md").read_text()
         listed = set(re.findall(r"\*\* — `([a-z0-9_.-]+)`:", reference))
         self.assertEqual(all_ids, listed)

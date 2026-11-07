@@ -18,8 +18,10 @@ mkdir -p "$work/c"
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/daochi-client" \
     -o "$work/c" "$root/src/app/language_selection.zi"
+# The link test stands in for settings_store, so its header declares those
+# procedures instead of defining inline copies.
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
-    -Wno-unused-function -Wno-unused-variable \
+    -Wno-unused-function -Wno-unused-variable -DZIRAN_SETTINGS_STORE_H_SOURCE \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$work/c/app" \
     "$root/tests/language_selection_link_test.c" \

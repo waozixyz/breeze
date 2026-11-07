@@ -188,6 +188,11 @@ RAYLIB_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/raylib
 RAYLIB_A := $(RAYLIB_BUILD_DIR)/libraylib.a
 WEBP_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/kryon-webp
 WEBP_A := $(WEBP_BUILD_DIR)/libkryonwebp.a
+AVIF_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/kryon-avif
+AVIF_A := $(AVIF_BUILD_DIR)/avif/libavif.a
+AOM_A := $(AVIF_BUILD_DIR)/aom/libaom.a
+# Kryon's codec recipes come from the codec packages in this app's lock.
+IMAGE_PACKAGE_DIRS := -DKRYON_WEBP_PACKAGE_DIR="$(abspath build/packages/webp)" -DKRYON_AVIF_PACKAGE_DIR="$(abspath build/packages/avif)"
 WIN64_ARCH := x86_64
 WIN64_CC ?= $(or $(WIN_CC),x86_64-w64-mingw32-gcc)
 WIN64_AR ?= $(or $(WIN_AR),x86_64-w64-mingw32-ar)
@@ -274,6 +279,7 @@ KRYON_CURL_EXTRA_CMAKE_FLAGS := \
 # to keep the kryon physics .c files (which need box2d.h) out of every build.
 KRYON_WITH_PHYSICS := 0
 include mk/sync.mk
+include mk/audio-codecs.mk
 KRYON_INCLUDE += $(KRYON_PHYSICS_CPPFLAGS)
 KRYON_SRCS := $(filter-out $(KRYON_PHYSICS_SRCS),$(KRYON_SRCS))
 KRYON_WEB_SRCS := $(filter-out $(KRYON_PHYSICS_SRCS),$(KRYON_WEB_SRCS))
@@ -542,17 +548,31 @@ $(RAYLIB_A): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
 
 KRYON_NATIVE_CFLAGS := $(CFLAGS)
 KRYON_SRCS += $(KRYON_RAYLIB_WRAPPERS_C)
-$(WEBP_A): $(KRYON_DIR)/cmake/WebP.cmake $(KRYON_DIR)/cmake/webp/CMakeLists.txt $(wildcard build/packages/libwebp/src/*/*.c build/packages/libwebp/src/*/*.h)
-	$(CMAKE) -S $(KRYON_DIR)/cmake/webp -B $(WEBP_BUILD_DIR) -DWEBP_DIR="$(abspath build/packages/libwebp)" -DCMAKE_BUILD_TYPE=Release
+$(WEBP_A): ziran.lock $(KRYON_DIR)/cmake/WebP.cmake $(KRYON_DIR)/cmake/ImagePackages.cmake $(KRYON_DIR)/cmake/webp/CMakeLists.txt $(wildcard build/packages/webp/native/*.cmake build/packages/libwebp/src/*/*.c build/packages/libwebp/src/*/*.h)
+	$(CMAKE) -S $(KRYON_DIR)/cmake/webp -B $(WEBP_BUILD_DIR) -DWEBP_DIR="$(abspath build/packages/libwebp)" $(IMAGE_PACKAGE_DIRS) -DCMAKE_BUILD_TYPE=Release
 	$(CMAKE) --build $(WEBP_BUILD_DIR) --target kryonwebp --parallel 2
 
-KRYON_NATIVE_BACKEND_DEPS := $(RAYLIB_A) $(WEBP_A)
-KRYON_NATIVE_BACKEND_LIBS := $(RAYLIB_A) $(WEBP_A)
+$(AVIF_A): ziran.lock $(KRYON_DIR)/cmake/AVIF.cmake $(KRYON_DIR)/cmake/ImagePackages.cmake $(KRYON_DIR)/cmake/avif/CMakeLists.txt $(wildcard build/packages/avif/native/*.cmake)
+	$(CMAKE) -S $(KRYON_DIR)/cmake/avif -B $(AVIF_BUILD_DIR) -DAVIF_DIR="$(abspath build/packages/libavif)" -DAOM_DIR="$(abspath build/packages/libaom)" $(IMAGE_PACKAGE_DIRS) -DCMAKE_BUILD_TYPE=Release
+	$(CMAKE) --build $(AVIF_BUILD_DIR) --target avif_static aom --parallel 2
+	@test -f $@
+
+$(AOM_A): $(AVIF_A)
+	@test -f $@
+
+KRYON_NATIVE_BACKEND_DEPS := $(RAYLIB_A) $(WEBP_A) $(AVIF_A) $(AOM_A)
+KRYON_NATIVE_BACKEND_LIBS := $(RAYLIB_A) $(WEBP_A) $(AVIF_A) $(AOM_A)
 KRYON_NATIVE_BACKEND_CFLAGS := -DKRYON_BACKEND_RAYLIB=1 $(RAY_CFLAGS)
 KRYON_NATIVE_BACKEND_LDLIBS := $(RAY_LDLIBS)
 ifneq ($(strip $(APP_GIO_LDLIBS)),)
 KRYON_NATIVE_BACKEND_CFLAGS += -DAPP_HAVE_GIO $(APP_GIO_CFLAGS)
 NATIVE_SYSTEM_LDLIBS += $(APP_GIO_LDLIBS)
+endif
+# Kryon decodes Ogg Opus narration with static libopus; Windows links its own
+# MinGW build (mk/windows.mk) and Apple has no native Opus provider yet.
+ifneq ($(NATIVE_PLATFORM),darwin)
+KRYON_NATIVE_BACKEND_DEPS += $(AUDIO_OPUS_A)
+NATIVE_SYSTEM_LDLIBS := $(AUDIO_OPUS_A) $(NATIVE_SYSTEM_LDLIBS)
 endif
 KRYON_WINDOWS_SRCS += $(KRYON_RAYLIB_WRAPPERS_C)
 KRYON_CLICK_SRCS += $(KRYON_RAYLIB_WRAPPERS_C)

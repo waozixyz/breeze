@@ -1,8 +1,12 @@
-// The length of an Ogg Vorbis clip, read from its headers without decoding
-// it, so a guide can pace its text to a clip that is not playing.
+// The length of an Ogg Opus or Ogg Vorbis clip, read from its headers without
+// decoding it, so a guide can pace its text to a clip that is not playing.
 
 OggByte :: (data: string, at: s64) -> s64 {
     return cast(s64)data[at]
+}
+
+OggUnsigned16 :: (data: string, at: s64) -> s64 {
+    return OggByte(data, at) | (OggByte(data, at + 1) << 8)
 }
 
 OggUnsigned32 :: (data: string, at: s64) -> s64 {
@@ -10,21 +14,28 @@ OggUnsigned32 :: (data: string, at: s64) -> s64 {
         (OggByte(data, at + 2) << 16) | (OggByte(data, at + 3) << 24)
 }
 
-// Milliseconds an Ogg Vorbis clip lasts: the granule position of its last
-// page over the sample rate in its identification header. 0 when data is
-// not such a clip.
+// Milliseconds a clip lasts: the granule position of its last page over the
+// sample rate in its identification header. Opus counts at 48 kHz and starts
+// after its pre-skip (RFC 7845). 0 when data is not such a clip.
 #program_export
-OggVorbisMilliseconds :: (data: string) -> s32 {
+OggClipMilliseconds :: (data: string) -> s32 {
     count: s64 = data.count
-    if count < 58 || data[0:4] != "OggS" {
+    if count < 74 || data[0:4] != "OggS" {
         return 0
     }
     header: s64 = 27 + OggByte(data, 26)
-    if header + 16 > count || data[header] != cast(u8)1 ||
-    data[header + 1:header + 7] != "vorbis" {
-        return 0
+    rate: s64 = 0
+    skip: s64 = 0
+    opus := header + 19 <= count && data[header:header + 8] == "OpusHead"
+    vorbis := header + 16 <= count && data[header] == cast(u8)1 &&
+        data[header + 1:header + 7] == "vorbis"
+    if opus {
+        rate = 48000
+        skip = OggUnsigned16(data, header + 10)
     }
-    rate: s64 = OggUnsigned32(data, header + 12)
+    if vorbis {
+        rate = OggUnsigned32(data, header + 12)
+    }
     if rate <= 0 {
         return 0
     }
@@ -44,7 +55,7 @@ OggVorbisMilliseconds :: (data: string) -> s32 {
     if high != 0 {
         return 0
     }
-    milliseconds: s64 = OggUnsigned32(data, at + 6) * 1000 / rate
+    milliseconds: s64 = (OggUnsigned32(data, at + 6) - skip) * 1000 / rate
     if milliseconds <= 0 || milliseconds > 600000 {
         return 0
     }

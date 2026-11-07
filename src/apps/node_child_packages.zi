@@ -25,6 +25,7 @@
 using FileDownloadStatus;
 NODE_CHILD_LIMIT :: 32
 NODE_CHILD_MEMORY_LIMIT :: 64 * 1024 * 1024
+NODE_CHILD_CACHED :: 4
 
 NodeChildPackage :: struct {
     used: bool
@@ -38,6 +39,8 @@ NodeChildPackage :: struct {
     requested: bool
     retired: bool
     size: s64
+    verified: bool
+    touched: u64
 }
 
 node_children: [NODE_CHILD_LIMIT]NodeChildPackage;
@@ -45,6 +48,8 @@ node_child_active: s32 = -1;
 node_child_transfer: FileDownload;
 node_child_work: *PackageWork;
 node_child_memory: s64;
+node_child_clock: u64;
+node_child_stored: bool;
 
 NodeChildOrigin :: (root: s32) -> string {
     value := DataEnvironment("INBE_LOCAL_PACKAGE_ORIGIN")
@@ -102,10 +107,55 @@ NodeChildFind :: (runner: *NodeAppRunner, entry: *AppEntry) -> s32 {
     return empty
 }
 
+// Eviction runs between frames. Provider-owned image borrows finish at
+// NodeTreeCollect, alongside Apps' retired runtime and worker leases.
+NodeChildBorrowed :: (index: s32) -> bool {
+    if node_tree_images.count > 0 { return true }
+    bytes := node_children[index].bytes
+    for slot: cast(s32)0..NodeAppSlots - 1 {
+        host := node_runners[slot].nested
+        if host != null && AppHostBorrowsBundle(host, bytes) { return true }
+    }
+    return false
+}
+
+NodeChildRoom :: (size: s64) -> bool {
+    if size <= 0 || size > NODE_CHILD_MEMORY_LIMIT { return false }
+    available := NODE_CHILD_MEMORY_LIMIT - node_child_memory
+    if size <= available { return true }
+    // Preflight avoids evicting anything when retained users still leave
+    // insufficient room. An active or canceled borrow is never a candidate.
+    for index: cast(s32)0..NODE_CHILD_LIMIT - 1 {
+        child := *node_children[index]
+        if child.status == 2 && !child.retired && index != node_child_active &&
+        !NodeChildBorrowed(index) { available += child.bytes.count }
+    }
+    if size > available { return false }
+    while size > NODE_CHILD_MEMORY_LIMIT - node_child_memory {
+        oldest: s32 = -1
+        for index: cast(s32)0..NODE_CHILD_LIMIT - 1 {
+            child := *node_children[index]
+            if child.status != 2 || child.retired || index == node_child_active || NodeChildBorrowed(index) { continue }
+            if oldest < 0 || child.touched < node_children[oldest].touched { oldest = index }
+        }
+        if oldest < 0 { return false }
+        child := *node_children[oldest]
+        node_child_memory -= child.bytes.count
+        PackageFree(child.bytes)
+        child.bytes = ""
+        child.status = NODE_CHILD_CACHED
+        // Keep exact identity, verified file, size and install state. Only an
+        // actual open/dependency fetch restores resident bytes from this path.
+    }
+    return true
+}
+
 NodeChildBundle :: (context: *void, parent: *AppNode, entry: *AppEntry) -> HostedAsset {
     unused parent
     index := NodeChildFind(cast(*NodeAppRunner)context, entry)
     if index < 0 || node_children[index].status != 2 { return HostedAsset.{} }
+    node_child_clock += cast(u64)1
+    node_children[index].touched = node_child_clock
     return HostedAsset.{.found = true, .data = node_children[index].bytes}
 }
 
@@ -153,6 +203,7 @@ NodeChildDownload :: (context: *void, parent: *AppNode, entry: *AppEntry,
         child.requested = true
         child.status = 1
     }
+    download.cached = child.verified && child.status != 3
     download.downloading = child.status == 1
     download.failed = child.status == 3
     download.bytes = child.size
@@ -178,8 +229,10 @@ NodeChildFetch :: (context: *void, account: string, parent: *AppNode, entry: *Ap
     }
     child := *node_children[index]
     if child.status == 2 { return false }
-    child.requested = true
-    child.status = 1
+    if child.status != 1 {
+        child.requested = true
+        child.status = 1
+    }
     reply.status = APPS_QUEUED
     return true
 }
@@ -216,15 +269,25 @@ NodeChildFinish :: (ok: bool) {
     child.requested = false
     if child.retired { NodeChildClear(node_child_active) }
     node_child_active = -1
+    node_child_stored = false
     AssetNotifyAvailable()
 }
 
-NodeChildPump :: () {
+// Normal update work can precede image submission/painting. Pressure
+// admission retries after NodeTreeCollect has consumed those borrowed views.
+NodeChildCollect :: () {
+    if node_child_active >= 0 && node_child_work != null && PackageWorkReady(node_child_work) {
+        NodeChildPump(true)
+    }
+}
+
+NodeChildPump :: (collected: bool = false) {
     if node_child_active < 0 {
         for index: cast(s32)0..NODE_CHILD_LIMIT - 1 {
             child := *node_children[index]
             if !child.used || !child.requested || child.retired { continue }
             node_child_active = index
+            node_child_stored = false
             child.requested = false
             if PackageFileSize(child.path) > 0 {
                 node_child_work = PackageWorkCreate(child.path, "", TextUntilNul(child.account[:]),
@@ -275,21 +338,35 @@ NodeChildPump :: () {
         if !PackageWorkReady(node_child_work) { return }
         verified := node_child_work.ok &&
         TextUntilNul(node_child_work.digest[:]) == TextUntilNul(child.digest[:]) && node_child_work.bytes.count > 0
-        stored := verified
-        if stored && node_child_work.path != child.path {
-            stored = RenamePath(node_child_work.path, child.path)
+        if verified && !node_child_stored {
+            node_child_stored = node_child_work.path == child.path ||
+                RenamePath(node_child_work.path, child.path)
+            child.verified = node_child_stored
         }
-        ok := !child.retired && stored &&
-        node_child_work.bytes.count <= NODE_CHILD_MEMORY_LIMIT - node_child_memory
+        size := node_child_work.bytes.count
+        // One bounded verifier keeps a valid result pending while paint or a
+        // live/retired/prepared user still borrows the necessary cache space.
+        // It remains on disk and never becomes a false network failure.
+        if !child.retired && node_child_stored && size <= NODE_CHILD_MEMORY_LIMIT {
+            pressure := size > NODE_CHILD_MEMORY_LIMIT - node_child_memory
+            if pressure && !collected { return }
+            if !NodeChildRoom(size) { return }
+        }
+        ok := !child.retired && node_child_stored && size <= NODE_CHILD_MEMORY_LIMIT
         if ok {
             child.bytes = node_child_work.bytes
             node_child_work.bytes = ""
             child.size = child.bytes.count
             node_child_memory += child.bytes.count
+            node_child_clock += cast(u64)1
+            child.touched = node_child_clock
         }
         // Memory pressure or a closed collection must not uninstall a valid
         // download. Only an invalid payload is removed from persistent storage.
-        if !verified && !child.retired { unused RemoveFile(node_child_work.path) }
+        if !verified && !child.retired {
+            child.verified = false
+            unused RemoveFile(node_child_work.path)
+        }
         PackageWorkFree(node_child_work)
         node_child_work = null
         NodeChildFinish(ok)

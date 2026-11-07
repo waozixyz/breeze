@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
-- La saisie compte désormais comme une activité dans l’indicateur de pauses.
+- Photos se télécharge désormais depuis Applications, sans être inclus ; vos photos restent dans votre compte et Journal.
 - Changer d’onglet dans Pratique avec la navigation latérale ne décale plus l’écran.
+- Les packs de voix des pratiques sont environ un tiers plus légers.
+
+## [2.1.63] - 2026-11-05
+
+- Corrigez le texte des listes et de Lumi sans que le curseur saute.
+- Écrivez dans Lumi pendant ses réponses et utilisez Envoyer et Annuler pour les rapports au développeur.
+- Consultez les totaux des achats et la fréquence des récompenses en couleur dans la boutique.
 
 ## [2.1.62] - 2026-11-03
 

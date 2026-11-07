@@ -8,7 +8,6 @@
 static int reads;
 static int plays;
 static int stops;
-static int unloads;
 static bool available = true;
 static float volume;
 
@@ -21,30 +20,24 @@ String practice_downloads_PracticeNarrationLanguage(int32_t content, String voic
 double GetTime(void) { return 1.0; }
 void app_audio_ensure_ready(InnerBreeze *app) { app->audio_ready = 1; }
 
-AssetView AssetReadBytes(Slice path)
+AssetView AssetRead(String path)
 {
     reads++;
     assert(path.length > 0);
     return (AssetView){.data = StringView("clip", 4), .found = available};
 }
 
-MusicHandle audio_runtime_audio_load_music_memory(String extension, uint8_t *data,
-    int32_t size, bool looping)
+bool voice_audio_VoiceAudioStart(InnerBreeze *app, int32_t voice, String path, float gain)
 {
-    assert(extension.length == 4 && memcmp(extension.data, ".ogg", 4) == 0);
-    assert(size == 4 && memcmp(data, "clip", 4) == 0 && !looping);
-    return (MusicHandle){.id = 1};
+    static const char want[] = "assets/practices/guide/voice/en/practice_guide_start.ogg";
+    assert(app && voice == VoiceAudioGuide);
+    assert(path.length == strlen(want) && memcmp(path.data, want, strlen(want)) == 0);
+    volume = gain;
+    plays++;
+    return true;
 }
-
-bool audio_runtime_audio_music_valid(MusicHandle handle) { return handle.id != 0; }
-void audio_runtime_audio_set_music_volume(MusicHandle handle, float value)
-{
-    assert(handle.id == 1);
-    volume = value;
-}
-void audio_runtime_audio_play_music(MusicHandle handle) { assert(handle.id == 1); plays++; }
-void audio_runtime_audio_stop_music(MusicHandle handle) { assert(handle.id == 1); stops++; }
-void audio_runtime_audio_unload_music(MusicHandle handle) { assert(handle.id == 1); unloads++; }
+void voice_audio_VoiceAudioStop(int32_t voice) { assert(voice == VoiceAudioGuide); stops++; }
+bool voice_audio_VoiceAudioActive(int32_t voice) { assert(voice == VoiceAudioGuide); return true; }
 
 int main(void)
 {
@@ -66,7 +59,7 @@ int main(void)
     lumi_guide.drawn_frame = app.breathing.frame;
     app.guide_narration_muted = 1;
     LumiGuideFrameEnd(&app);
-    assert(stops == 1 && unloads == 1 && !lumi_guide.voice_playing);
+    assert(stops == 1 && !lumi_guide.voice_playing);
     assert(lumi_guide.shown); /* Muting voice keeps the written guide. */
     lumi_guide_LumiGuideSpeak(&app, key);
     assert(plays == 1);
@@ -79,6 +72,6 @@ int main(void)
     lumi_guide_LumiGuideSpeak(&app, key);
     assert(plays == 2);
     LumiGuideStop();
-    assert(stops == 2 && unloads == 2);
+    assert(stops == 2);
     return 0;
 }

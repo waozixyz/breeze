@@ -2,6 +2,7 @@
 #import, file "../src/apps/lumi_online.zi";
 #import, file "../src/apps/lumi_connection.zi";
 #import, file "../src/apps/feedback_store.zi";
+#import, file "../src/apps/lumi_types.zi";
 #import, file "../src/apps/lumi_store.zi";
 #import, file "../src/apps/package_files.zi";
 #import, file "../src/app/app_types.zi";
@@ -253,6 +254,35 @@ DeveloperReplyChecks :: () {
     check_true("a repeated copy is deleted for the other devices", contains(duplicate, "\"deleted\":true"))
 }
 
+ProposalChecks :: () {
+    out: Vec(u8)
+    for index: cast(s32)0..1364 {
+        BuilderPrint(*out, "茶")
+    }
+    report := BuilderFinish(out)
+    defer { PackageFree(report) }
+    id := FeedbackDraft("Text correction", report, "view=lumi")
+    defer { PackageFree(id) }
+    before := LumiStoreCount()
+    prompt := "Send this feedback to the developer?"
+    check_true("long report has a reviewable proposal", LumiStoreFeedbackProposal(report, prompt, id))
+    restored: Vec(u8)
+    for index: before..LumiStoreCount() - 2 {
+        row := LumiStoreRow(index)
+        check_true("long report parts remain plain messages", row.kind == LUMI_CHAT_TEXT)
+        BuilderPrint(*restored, "%", row.text)
+    }
+    text := BuilderFinish(restored)
+    defer { PackageFree(text) }
+    check_true("proposal preserves the entire UTF-8 report", text == report)
+    card := LumiStoreRow(LumiStoreCount() - 1)
+    check_true("long report retains its actionable card", card.kind == LUMI_CHAT_FEEDBACK &&
+        card.text == prompt && card.payload == id && FeedbackChoice(id, 0))
+    check_true("review never queues a report", !Pending())
+    check_true("cancel dismisses the proposal", FeedbackChoice(id, 2) && !FeedbackChoice(id, 0))
+    check_true("cancel never queues a report", !Pending())
+}
+
 #program_export
 Check :: () -> s32 {
     transport := FeedbackTestTransport()
@@ -353,6 +383,7 @@ Check :: () -> s32 {
     LumiOnlineCancel()
     DeveloperReplyChecks()
     LegacyOutboxChecks(root, report_id)
+    ProposalChecks()
     SecureWipe(*owner.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
     storage_close()
     remove_tree("/tmp/inbe-lumi-feedback-test/")

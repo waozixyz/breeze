@@ -128,11 +128,15 @@ class ReleaseNotesTest(unittest.TestCase):
         for path in [ROOT / "CHANGELOG.md", *sorted((ROOT / "locales/changelog").glob("*.md"))]:
             document = path.read_text()
             latest = release_notes(document)["version"]
-            for version in ("Unreleased", latest):
+            # Unreleased notes collect toward the next release, which ships 2 or 3.
+            versions = [latest]
+            if "## [Unreleased]" in document:
+                versions.insert(0, "Unreleased")
+            for version in versions:
                 with self.subTest(path=path.name, version=version):
                     section = document.split(f"## [{version}]", 1)[1].split("\n## [", 1)[0]
                     entries = [line[2:] for line in section.splitlines() if line.startswith("- ")]
-                    self.assertGreaterEqual(len(entries), 2)
+                    self.assertGreaterEqual(len(entries), 1 if version == "Unreleased" else 2)
                     self.assertLessEqual(len(entries), 3)
                     for entry in entries:
                         self.assertLessEqual(len(entry), 120)

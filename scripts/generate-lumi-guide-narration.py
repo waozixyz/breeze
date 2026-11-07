@@ -31,6 +31,7 @@ import unicodedata
 import urllib.error
 import urllib.request
 
+import ogg_opus
 from practice_media import media_path, packaged_path, writable_media
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -105,6 +106,9 @@ def narration_keys(config):
 
 
 def text_hash(config, text):
+    # A recording's identity: its spoken text and speech settings. The clip is
+    # Ogg Opus now; "vorbis_bitrate" stays in this identity only so the 2026
+    # re-encode of existing recordings did not mark every line to be spoken again.
     settings = {name: config[name] for name in (
         "model", "voice", "pcm_sample_rate", "sample_rate", "vorbis_bitrate")}
     settings["text"] = text
@@ -191,26 +195,35 @@ def speak(config, key, text):
 
 
 def encode(config, pcm, work):
-    """Raw speech to a small mono Ogg Vorbis clip without its silences."""
+    """Raw speech to a small mono Ogg Opus clip without its silences."""
     raw = work / "speech.pcm"
     raw.write_bytes(pcm)
+    speech = work / "speech-clip-rate.pcm"
     clip = work / "clip.ogg"
     trim = ("silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.05,"
             "areverse,"
             "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.15,"
             "areverse")
+    # The trimmed speech at the clip's rate first, so its exact length is known.
+    rate = int(config["sample_rate"])
     subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "s16le",
         "-ar", str(config["pcm_sample_rate"]), "-ac", "1", "-i", str(raw),
-        "-af", trim, "-ar", str(config["sample_rate"]), "-ac", "1",
-        "-c:a", "libvorbis", "-b:a", config["vorbis_bitrate"], str(clip)],
+        "-af", trim, "-ar", str(rate), "-ac", "1", "-c:a", "pcm_s16le",
+        "-f", "s16le", str(speech)], check=True, capture_output=True)
+    frames = speech.stat().st_size // 2 * (ogg_opus.OPUS_RATE // rate)
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-f", "s16le",
+        "-ar", str(rate), "-ac", "1", "-i", str(speech),
+        "-c:a", "libopus", "-b:a", config.get("opus_bitrate", "16k"),
+        "-application", "voip", "-vbr", "on", "-map_metadata", "-1", "-f", "ogg", str(clip)],
         check=True, capture_output=True)
+    # ffmpeg writes its padded last frame's length; end at the speech's own.
+    clip.write_bytes(ogg_opus.end_trim(clip.read_bytes(), frames))
     return clip
 
 
 def seconds(path):
-    return float(subprocess.check_output(["ffprobe", "-v", "error",
-        "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
-        text=True))
+    """How long the Ogg Opus clip plays, from its own trimmed timing."""
+    return ogg_opus.opus_seconds(path.read_bytes())
 
 
 def transcribe(config, key, clip, code, work):

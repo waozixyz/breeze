@@ -1234,12 +1234,87 @@ Check :: () -> s32 {
     test_average_goals_and_changes()
     test_stale_copy_keeps_synced_values()
     test_habit_wallet()
+    test_habit_purchase_statistics()
     test_habit_backdated_coins()
     test_habit_writing_icons()
     test_new_habit_recent_coins()
     test_habit_shop_order_and_borrow_sync()
     test_zero_target_and_custom_coins()
     return failures
+}
+
+test_habit_purchase_statistics :: () {
+    root := make_root("habit-purchase-statistics")
+    check_true("open purchase statistics fixture", storage_init(root) != 0)
+    as_of := cast(s64)read_db_count("SELECT CAST(strftime('%s','2026-03-15 12:00:00','utc') AS INTEGER)")
+    empty := storage_habit_purchase_statistics("", as_of)
+    check_true("no purchases has no fabricated dates or frequency",
+        empty.purchase_count == 0 && empty.spent_coins == 0 &&
+        empty.week_count == 0 && empty.month_count == 0 && empty.last_date == 0)
+    sql := #string SQL
+INSERT INTO habit_rewards(id,user_id,name,price,icon,deleted_at,updated_at)
+VALUES('coffee',(SELECT id FROM users LIMIT 1),'Renamed coffee',99,1,0,1),
+('book',(SELECT id FROM users LIMIT 1),'Deleted book',12,1,1,1);
+INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at)
+SELECT 'today',id,1,'coffee','Original coffee',5,
+CAST(strftime('%s','2026-03-15 11:00:00','utc') AS INTEGER),0,1 FROM users LIMIT 1;
+INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at)
+SELECT 'week-edge',id,1,'coffee','Original coffee',7,
+CAST(strftime('%s','2026-03-09 00:00:00','utc') AS INTEGER),0,1 FROM users LIMIT 1;
+INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at)
+SELECT 'outside-week',id,1,'coffee','Original coffee',9,
+CAST(strftime('%s','2026-03-08 23:59:59','utc') AS INTEGER),0,1 FROM users LIMIT 1;
+INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at)
+SELECT 'month-edge',id,1,'book','Deleted book',12,
+CAST(strftime('%s','2026-02-14 00:00:00','utc') AS INTEGER),0,1 FROM users LIMIT 1;
+INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at)
+SELECT 'outside-month',id,1,'book','Deleted book',15,
+CAST(strftime('%s','2026-02-13 23:59:59','utc') AS INTEGER),0,1 FROM users LIMIT 1;
+INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at)
+SELECT 'future',id,1,'coffee','Coffee',50,
+CAST(strftime('%s','2026-03-15 12:00:01','utc') AS INTEGER),0,1 FROM users LIMIT 1;
+INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at)
+SELECT 'removed',id,1,'coffee','Coffee',100,
+CAST(strftime('%s','2026-03-15 10:00:00','utc') AS INTEGER),1,1 FROM users LIMIT 1;
+INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at)
+SELECT 'kept',id,2,'','Deleted habit',200,
+CAST(strftime('%s','2026-03-15 10:00:00','utc') AS INTEGER),0,1 FROM users LIMIT 1;
+INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at)
+VALUES('other-user','another-account',1,'coffee','Coffee',300,1,0,1);
+SQL
+    exec_db_sql(sql)
+    all := storage_habit_purchase_statistics("", as_of)
+    check_true("purchase totals include deleted rewards and original prices only",
+        all.purchase_count == 5 && all.spent_coins == 48)
+    check_true("frequency uses inclusive local calendar boundaries",
+        all.week_count == 2 && all.month_count == 4 && all.last_date == 20260315)
+    check_true("future timestamps expose the next cache refresh time", all.next_at == as_of + 1)
+    later := storage_habit_purchase_statistics("", as_of + 1)
+    check_true("future purchase becomes counted at its actual timestamp",
+        later.purchase_count == 6 && later.spent_coins == 98 && later.next_at == 0)
+    coffee := storage_habit_purchase_statistics("coffee", as_of)
+    check_true("renamed reward retains repeated purchase history by id",
+        coffee.purchase_count == 3 && coffee.spent_coins == 21 &&
+        coffee.week_count == 2 && coffee.month_count == 3 && coffee.last_date == 20260315)
+    book := storage_habit_purchase_statistics("book", as_of)
+    check_true("deleted reward history remains available",
+        book.purchase_count == 2 && book.spent_coins == 27 && book.last_date == 20260214)
+    missing := storage_habit_purchase_statistics("never-bought", as_of)
+    check_true("unbought reward has empty statistics", missing.purchase_count == 0 &&
+        missing.spent_coins == 0 && missing.last_date == 0)
+    // More than ten purchases must remain counted even when Activity is full.
+    exec_db_sql("WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<12) INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at) SELECT 'old-'||i,(SELECT id FROM users LIMIT 1),1,'coffee','Coffee',2,1,0,1 FROM n")
+    activity: [HABIT_ACTIVITY_MAX]HabitCoinActivity
+    check_int("activity remains capped", storage_habit_activity_load(activity[:]), HABIT_ACTIVITY_MAX)
+    all = storage_habit_purchase_statistics("", as_of)
+    check_true("full history exceeds capped feed without changing recent frequency",
+        all.purchase_count == 17 && all.spent_coins == 72 && all.week_count == 2 && all.month_count == 4)
+    storage_close()
+    check_true("reopen purchase history", storage_init(root) != 0)
+    reopened := storage_habit_purchase_statistics("", as_of)
+    check_true("statistics come from persisted history after reopening",
+        reopened.purchase_count == all.purchase_count && reopened.spent_coins == all.spent_coins)
+    storage_close()
 }
 
 test_habit_shop_order_and_borrow_sync :: () {

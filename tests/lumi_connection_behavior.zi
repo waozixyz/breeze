@@ -3,6 +3,8 @@
 // Telegram pumps; only the HTTP transport is synthetic and records every
 // request. Offline, or without the agreement, nothing reaches it at all.
 #import, file "../src/apps/lumi_online.zi";
+#import, file "../src/screens/lumi_screen.zi";
+#import, file "../src/apps/lumi_ui_types.zi";
 #import, file "../src/apps/lumi_connection.zi";
 #import, file "../src/apps/lumi_telegram.zi";
 #import, file "../src/apps/feedback_store.zi";
@@ -58,6 +60,10 @@ continuation_test: bool;
 continuation_round: s32;
 tool_executions: s32;
 provider_reply: string;
+provider_hold: bool;
+provider_status: s32 = 200;
+provider_start_fail: bool;
+provider_switch_account: bool;
 TEST_KEY :: "sk-test-lumi-provider-0123456789"
 
 ContinuationReply :: (request: HttpRequest, output: []u8) -> bool {
@@ -147,6 +153,9 @@ ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool 
         unused AppCopyText(request.url, provider_url[:])
         unused AppCopyText(request.token, provider_token[:])
         unused AppCopyText(request.body, provider_body[:])
+        if provider_start_fail {
+            return false
+        }
         if provider_reply.count > 0 {
             out: Vec(u8)
             BuilderPrint(*out, "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":")
@@ -164,6 +173,14 @@ ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool 
 
 ConnectionPoll :: (context: *void, status: *s32) -> s32 {
     unused context
+    if lumi_online_stage == LUMI_STAGE_PROVIDER {
+        if provider_switch_account {
+            provider_switch_account = false
+            unused AppCopyText("another-account", g_storage.user_id[:])
+        }
+        status.* = provider_status
+        return ifx provider_hold then -1 else 1
+    }
     status.* = 200
     return 1
 }
@@ -192,6 +209,136 @@ Pump :: (app: *InnerBreeze) {
 Ask :: (text: string) -> bool {
     LumiStoreAppend(text, true)
     return LumiOnlineStart(text)
+}
+
+ProviderTail :: (expected: []string) {
+    body := TextUntilNul(provider_body[:])
+    messages := FieldAt(body, 0, "messages")
+    count := ArrayCount(body, messages)
+    check_true("queued request has preceding conversation", count >= expected.count)
+    for index: cast(s32)0..cast(s32)expected.count - 1 {
+        at := ElementAt(body, messages, count - cast(s32)expected.count + index)
+        content: [4096]u8
+        check_true("queued messages and preceding answers stay in order",
+            at >= 0 && ToolString(body[at:ValueEnd(body, at, 0)], "content", content[:]) == expected[index])
+    }
+}
+
+QueuedTurns :: (app: *InnerBreeze) {
+    before := provider_requests
+    history := LumiStoreCount()
+    provider_hold = true
+    check_true("first rapid message starts", Ask("queued-first"))
+    lumi_online_fresh = false
+    app_lumi_pump(app)
+    check_true("first rapid request is in flight", lumi_online_stage == LUMI_STAGE_PROVIDER)
+    check_true("second rapid message is accepted", Ask("queued-second"))
+    check_true("third rapid message is accepted", Ask("queued-third"))
+    check_int("waiting messages are immediately recorded", LumiStoreCount(), history + 3)
+    check_true("recorded user order is preserved", LumiStoreRow(history).text == "queued-first" &&
+        LumiStoreRow(history + 1).text == "queued-second" && LumiStoreRow(history + 2).text == "queued-third")
+    check_true("first request never sees later messages", !contains(TextUntilNul(provider_body[:]), "queued-second"))
+    unused AppCopyText("unfinished draft 茶", lumi_input[:])
+    lumi_ui.cursor = 4
+    lumi_ui.anchor = 2
+    app_lumi_pump(app)
+    check_int("pending responses never start concurrently", provider_requests, before + 1)
+    provider_hold = false
+    for step: cast(s32)0..9 {
+        if provider_requests == before + 2 {
+            break
+        }
+        app_lumi_pump(app)
+    }
+    second: [3]string = .["queued-first", "Hello from the provider", "queued-second"]
+    ProviderTail(second[:])
+    check_true("second request never sees third input", !contains(TextUntilNul(provider_body[:]), "queued-third"))
+    Pump(app)
+    third: [5]string = .["queued-first", "Hello from the provider", "queued-second",
+    "Hello from the provider", "queued-third"]
+    ProviderTail(third[:])
+    check_int("each rapid input gets one request", provider_requests, before + 3)
+    check_true("all rapid turns finish", !LumiOnlineWaiting() && lumi_online_inputs.count == 0)
+    check_true("late answers preserve the current draft and selection",
+        TextUntilNul(lumi_input[:]) == "unfinished draft 茶" && lumi_ui.cursor == 4 && lumi_ui.anchor == 2)
+
+    check_true("failing turn starts", Ask("failed-first"))
+    lumi_online_fresh = false
+    app_lumi_pump(app)
+    check_true("follow-up queues behind failure", Ask("after-failure"))
+    provider_status = 503
+    app_lumi_pump(app)
+    provider_status = 200
+    Pump(app)
+    failed: [3]string = .["failed-first", "UNAVAILABLE", "after-failure"]
+    ProviderTail(failed[:])
+    check_true("failure does not discard follow-up", LastRow() == "Hello from the provider" && !LumiOnlineWaiting())
+
+    check_true("start failure turn is accepted", Ask("start-failure"))
+    check_true("start failure follow-up is accepted", Ask("after-start-failure"))
+    lumi_online_fresh = false
+    provider_start_fail = true
+    app_lumi_pump(app)
+    provider_start_fail = false
+    Pump(app)
+    start_failed: [3]string = .["start-failure", "UNAVAILABLE", "after-start-failure"]
+    ProviderTail(start_failed[:])
+    check_true("start failure does not discard follow-up", !LumiOnlineWaiting())
+
+    check_true("offline cancellation turn starts", Ask("cancel-active"))
+    lumi_online_fresh = false
+    provider_hold = true
+    app_lumi_pump(app)
+    check_true("offline cancellation has queued input", Ask("cancel-queued"))
+    history = LumiStoreCount()
+    before = provider_requests
+    storage_set_setting_int(LumiOnlineSetting, 0)
+    Pump(app)
+    check_true("offline cancels both active and queued turns", !LumiOnlineWaiting() && lumi_online_inputs.count == 0)
+    check_int("offline cancellation preserves recorded messages", LumiStoreCount(), history)
+    storage_set_setting_int(LumiOnlineSetting, 1)
+    Pump(app)
+    check_int("going online never resubmits canceled input", provider_requests, before)
+    provider_hold = false
+
+    check_true("provider change turn starts", Ask("old-provider-active"))
+    lumi_online_fresh = false
+    provider_hold = true
+    app_lumi_pump(app)
+    check_true("provider change has queued input", Ask("old-provider-queued"))
+    before = provider_requests
+    storage_set_setting_text(LumiProviderUrlSetting, "http://127.0.0.1:10/v1")
+    check_true("replacement provider can be agreed", LumiAgree())
+    Pump(app)
+    check_true("changing provider cancels previous turns", !LumiOnlineWaiting() && lumi_online_inputs.count == 0)
+    check_int("old queued inputs never reach replacement provider", provider_requests, before)
+    storage_set_setting_text(LumiProviderUrlSetting, "http://127.0.0.1:9/v1")
+    check_true("original provider can be agreed again", LumiAgree())
+    provider_hold = false
+
+    check_true("account cancellation turn starts", Ask("old-account-active"))
+    check_true("account cancellation has queued input", Ask("old-account-queued"))
+    saved_owner: [64]u8
+    unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), saved_owner[:])
+    unused AppCopyText("another-account", g_storage.user_id[:])
+    app_lumi_pump(app)
+    check_true("account switch clears old pending requests", !LumiOnlineWaiting() && lumi_online_inputs.count == 0)
+    check_int("old responses never enter the new account", LumiStoreCount(), 0)
+    unused AppCopyText(TextUntilNul(saved_owner[:]), g_storage.user_id[:])
+    check_true("old account retains its submitted message order",
+        LumiStoreRow(LumiStoreCount() - 2).text == "old-account-active" &&
+        LastRow() == "old-account-queued")
+    check_true("polling account change turn starts", Ask("poll-account-active"))
+    lumi_online_fresh = false
+    app_lumi_pump(app)
+    check_true("polling account change has queued input", Ask("poll-account-queued"))
+    provider_switch_account = true
+    app_lumi_pump(app)
+    check_true("account change during provider polling cancels the queue",
+        !LumiOnlineWaiting() && lumi_online_inputs.count == 0)
+    check_int("late old-account answer never reaches another account", LumiStoreCount(), 0)
+    unused AppCopyText(TextUntilNul(saved_owner[:]), g_storage.user_id[:])
+    check_true("poll cancellation preserves old account's message", LastRow() == "poll-account-queued")
 }
 
 LastRow :: () -> string {
@@ -349,6 +496,7 @@ Check :: () -> s32 {
     check_true("the user's message is sent", contains(body, "hello"))
     check_true("the key is never in the body", !contains(body, TEST_KEY))
     check_true("the provider's answer arrives", LastRow() == "Hello from the provider")
+    QueuedTurns(*app)
     long_reply: Vec(u8)
     for index: cast(s32)0..1799 {
         BuilderPrint(*long_reply, "茶")

@@ -46,15 +46,28 @@ habit_shop_activity_codec: WidgetHabitsShopActivityCodec;
 HabitShopRefresh :: (app: *InnerBreeze) {
     shop := *app.habit_shop
     revision := storage_data_revision()
-    if shop.loaded && shop.revision == revision {
+    local := LocalNow()
+    day := local.year * 10000 + local.month * 100 + local.day
+    as_of := now_seconds()
+    future_waiting := shop.statistics.next_at > 0 && as_of >= shop.statistics.next_at
+    if shop.loaded && shop.revision == revision && shop.statistics_day == day &&
+    as_of >= shop.statistics_as_of && !future_waiting {
         return
     }
     shop.loaded = true
     shop.revision = revision
+    shop.statistics_day = day
+    shop.statistics_as_of = as_of
     shop.halves = storage_habit_wallet_halves()
     shop.borrow_limit = storage_get_setting_int("habit_shop_borrow_limit", 0)
     shop.reward_count = storage_habit_rewards_load(shop.rewards[:])
     shop.activity_count = storage_habit_activity_load(shop.activity[:])
+    shop.statistics = storage_habit_purchase_statistics("", as_of)
+    for index: cast(s32)0..shop.reward_count - 1 {
+        reward := *shop.rewards[index]
+        reward.statistics = storage_habit_purchase_statistics(
+            AppTextFromCString(*reward.id[0], HABIT_REWARD_ID_SIZE), as_of)
+    }
 }
 
 // An Activity line's day, short: Today, or the weekday and the day of the
@@ -147,7 +160,14 @@ HabitShopRewardValue :: (reward: *HabitReward) -> HabitsShopReward {
     return HabitsShopReward.{
         .id = AppTextFromCString(*reward.id[0], HABIT_REWARD_ID_SIZE),
         .name = AppTextFromCString(*reward.name[0], HABIT_REWARD_NAME_SIZE),
-        .price = reward.price, .icon = reward.icon}
+        .price = reward.price, .icon = reward.icon,
+        .statistics = HabitShopStatisticsValue(reward.statistics)}
+}
+
+HabitShopStatisticsValue :: (statistics: HabitPurchaseStatistics) -> HabitsShopStatistics {
+    return HabitsShopStatistics.{.purchase_count = statistics.purchase_count,
+        .spent_coins = statistics.spent_coins, .week_count = statistics.week_count,
+        .month_count = statistics.month_count, .last_date = statistics.last_date}
 }
 
 // The name without spaces around it.
@@ -324,6 +344,7 @@ HabitShopFrameFor :: (app: *InnerBreeze, bounds: Rectangle, typed: []u8) -> Habi
             typed),
         .halves = shop.halves, .borrow_limit = shop.borrow_limit,
         .reward_count = shop.reward_count,
+        .statistics = HabitShopStatisticsValue(shop.statistics),
         .activity_count = shop.activity_count, .scroll = app.habits.scroll,
         .editing = AppTextFromCString(*shop.editing[0], HABIT_REWARD_ID_SIZE),
         .name = AppTextFromCString(*shop.name[0], HABIT_REWARD_NAME_SIZE),

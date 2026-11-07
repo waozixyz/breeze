@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
-- Tippen zählt jetzt in der Pausenanzeige als Aktivität.
+- Fotos lädst du jetzt unter Apps herunter, statt es mit Breeze zu erhalten; deine Fotos bleiben im Konto und Tagebuch.
 - Beim Wechseln der Praxis-Tabs in der Seitennavigation verschiebt sich der Bildschirm nicht mehr.
+- Sprachpakete für Übungen sind etwa ein Drittel kleiner.
+
+## [2.1.63] - 2026-11-05
+
+- Korrigiere Text in Listen und Lumi ohne springenden Cursor.
+- Schreibe in Lumi auch während einer Antwort und nutze Senden und Abbrechen für Entwicklerberichte.
+- Sieh farbige Kaufübersichten und die Häufigkeit deiner Belohnungen im Shop.
 
 ## [2.1.62] - 2026-11-03
 

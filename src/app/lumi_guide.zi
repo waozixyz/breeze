@@ -17,7 +17,7 @@
 #import, file "locale.zi";
 #import, file "metrics.zi";
 #import, file "ogg_length.zi";
-#import, file "../platform/audio_runtime.zi";
+#import, file "../platform/voice_audio.zi";
 #import, file "../platform/media_types.zi";
 #import, file "../practices/practice_downloads.zi";
 Grapheme :: #import "std/grapheme";
@@ -35,8 +35,6 @@ LUMI_SHEET_PITCH_X :: 200
 LUMI_SHEET_PITCH_Y :: 165
 LUMI_SHEET_INSET :: 4
 LUMI_SHEET_COLUMNS :: 4
-// The largest voice clip she plays; her lines are a few dozen kilobytes.
-LUMI_VOICE_CAPACITY :: 131072
 // A voice that reports it stopped this soon after starting may still be
 // loading, as in a browser decoding it.
 LUMI_VOICE_SETTLE_MS :: 400
@@ -80,7 +78,6 @@ LumiGuideState :: struct {
     position: Vector2
     has_position: bool
     flight_faces_left: bool
-    voice: MusicHandle
     voice_started: bool
     voice_playing: bool
     voice_began: float64
@@ -88,27 +85,25 @@ LumiGuideState :: struct {
 
 lumi_guide: LumiGuideState;
 lumi_guide_moment: s32;
-// The clip being played. Its stream reads these bytes while it plays.
-lumi_voice_bytes: [LUMI_VOICE_CAPACITY]u8;
 
 #program_export
 LumiGuidePin :: (moment: s32) {
     lumi_guide_moment = moment
 }
 
-// The voice clip for key in the downloaded language her guide speaks.
-LumiGuideClip :: (key: string) -> AssetView {
+// The packed path of key's clip in path; empty without a downloaded
+// language. Recordings are Ogg Opus, or Ogg Vorbis in older packs.
+LumiGuidePath :: (key: string, path: []u8) -> string {
     language := PracticeNarrationLanguage(PracticeGuide, "")
     if language.count == 0 {
-        return AssetView.{}
+        return ""
     }
-    path: [192]u8
     parts: [5]string = .["assets/practices/guide/voice/", language, "/", key,
     ".ogg"]
     length: s32 = 0
     for part: parts[:] {
         if length + cast(s32)part.count >= cast(s32)path.count {
-            return AssetView.{}
+            return ""
         }
         index: s32 = 0
         while index < cast(s32)part.count {
@@ -117,7 +112,17 @@ LumiGuideClip :: (key: string) -> AssetView {
             index += 1
         }
     }
-    return AssetReadBytes(path[0:length])
+    return TextFromBytes(path[0:length])
+}
+
+// The voice clip for key in the downloaded language her guide speaks.
+LumiGuideClip :: (key: string) -> AssetView {
+    path: [192]u8
+    found := LumiGuidePath(key, path[:])
+    if found.count == 0 {
+        return AssetView.{}
+    }
+    return AssetRead(found)
 }
 
 LumiGuideSameVoice :: (key: string) -> bool {
@@ -154,11 +159,9 @@ LumiGuideElapsed :: (now: float64) -> s32 {
 
 // Stops her voice. The clip's bytes are free again afterwards.
 LumiGuideSilence :: () {
-    if lumi_guide.voice.id != cast(u64)0 {
-        audio_stop_music(lumi_guide.voice)
-        audio_unload_music(lumi_guide.voice)
+    if lumi_guide.voice_playing {
+        VoiceAudioStop(VoiceAudioGuide)
     }
-    lumi_guide.voice = MusicHandle.{}
     lumi_guide.voice_playing = false
 }
 
@@ -188,28 +191,18 @@ LumiGuideSpeak :: (app: *InnerBreeze, key: string) {
     if volume <= 0.0 {
         return
     }
-    clip := LumiGuideClip(key)
-    if !clip.found || clip.data.count == 0 ||
-    clip.data.count > LUMI_VOICE_CAPACITY {
+    path: [192]u8
+    found := LumiGuidePath(key, path[:])
+    if found.count == 0 || !AssetRead(found).found {
         return
     }
     app_audio_ensure_ready(app)
     if app.audio_ready == 0 {
         return
     }
-    index: s64 = 0
-    while index < clip.data.count {
-        lumi_voice_bytes[index] = clip.data[index]
-        index += 1
-    }
-    voice := audio_load_music_memory(".ogg", *lumi_voice_bytes[0],
-        cast(s32)clip.data.count, false)
-    if !audio_music_valid(voice) {
+    if !VoiceAudioStart(app, VoiceAudioGuide, found, volume) {
         return
     }
-    audio_set_music_volume(voice, volume)
-    audio_play_music(voice)
-    lumi_guide.voice = voice
     lumi_guide.voice_playing = true
     lumi_guide.voice_began = LumiGuideNow()
 }
@@ -219,15 +212,10 @@ LumiGuideVoiceUpdate :: () {
     if !lumi_guide.voice_playing {
         return
     }
-    if !audio_music_valid(lumi_guide.voice) {
-        lumi_guide.voice = MusicHandle.{}
-        lumi_guide.voice_playing = false
-        return
-    }
-    audio_update_music(lumi_guide.voice)
+    speaking := VoiceAudioActive(VoiceAudioGuide)
     settled := (LumiGuideNow() - lumi_guide.voice_began) * 1000.0 >=
     cast(float64)LUMI_VOICE_SETTLE_MS
-    if settled && !audio_music_playing(lumi_guide.voice) {
+    if settled && !speaking {
         LumiGuideSilence()
     }
 }
@@ -261,7 +249,7 @@ LumiGuideStartStep :: (request: LumiGuideRequest, now: float64) {
     clip := LumiGuideClip(request.voice)
     clip_ms: s32 = 0
     if clip.found {
-        clip_ms = OggVorbisMilliseconds(clip.data)
+        clip_ms = OggClipMilliseconds(clip.data)
     }
     lumi_guide.typing_ms = GuideTypingMs(lumi_guide.characters, clip_ms)
     lumi_guide.from = request.origin

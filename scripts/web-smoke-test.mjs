@@ -2,7 +2,6 @@
 
 import { createServer } from 'node:http';
 import { createReadStream, mkdirSync, mkdtempSync, rmSync, existsSync, accessSync, constants, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join, normalize, resolve, sep } from 'node:path';
 import { spawn } from 'node:child_process';
 import { Readable } from 'node:stream';
@@ -11,6 +10,7 @@ import { verifyAppearanceCanvas, verifySunSalutationCanvas } from './web-sun-sal
 import { verifyCanvasTextResolution } from './web-canvas-text-test.mjs';
 import { waitForFirefoxBidi } from './firefox-startup.mjs';
 import { musicAudioInstrumentation, verifyMusicAcrossTabs } from './web-music-test.mjs';
+import { connectProtocol, fetchWithDeadline, withDeadline, validateChromiumSocketPath } from './web-smoke-protocol.mjs';
 
 if (typeof WebSocket === 'undefined') {
   console.error('web smoke: FAIL: this script needs the global WebSocket API. Use Node >= 21, or pass --experimental-websocket on Node 20.');
@@ -38,13 +38,17 @@ const allowWebglDisabled = process.env.WEB_SMOKE_ALLOW_WEBGL_DISABLED
 const useNoSandbox = process.env.WEB_SMOKE_NO_SANDBOX
   ? !/^(0|false|no)$/i.test(process.env.WEB_SMOKE_NO_SANDBOX)
   : !!process.env.CI || (typeof process.getuid === 'function' && process.getuid() === 0);
-const userDataDir = mkdtempSync(join(tmpdir(), 'inbe-web-smoke-'));
+const profileRoot = resolve(process.env.WEB_SMOKE_PROFILE_ROOT || 'build/scratch');
+mkdirSync(profileRoot, { recursive: true });
+const userDataDir = mkdtempSync(join(profileRoot, 'profile-'));
+let smokeSignal;
 const browserEnvironment = { ...process.env };
 delete browserEnvironment.DISPLAY;
 delete browserEnvironment.WAYLAND_DISPLAY;
 delete browserEnvironment.XAUTHORITY;
 delete browserEnvironment.DBUS_SESSION_BUS_ADDRESS;
 browserEnvironment.YUE_DESKTOP_RECOVERY = '0';
+browserEnvironment.TMPDIR = profileRoot;
 const mime = new Map([
   ['.html', 'text/html; charset=utf-8'],
   ['.js', 'text/javascript; charset=utf-8'],
@@ -259,13 +263,14 @@ async function waitForDevtools(chrome, stderrLines) {
 
   try {
     while (Date.now() - start < timeoutMs) {
+      smokeSignal?.throwIfAborted();
       if (exited)
         throw formatChromeLaunchError(stderrLines);
 
       const port = readDevtoolsPort();
       if (port > 0) {
         try {
-          const response = await fetch(`http://127.0.0.1:${port}/json/version`);
+          const response = await fetchWithDeadline(`http://127.0.0.1:${port}/json/version`, {}, timeoutMs, smokeSignal);
           if (response.ok)
             return port;
         } catch {}
@@ -283,99 +288,19 @@ async function waitForDevtools(chrome, stderrLines) {
 }
 
 async function jsonRequest(url, options = {}) {
-  const response = await fetch(url, options);
-  if (!response.ok)
-    throw new Error(`${options.method || 'GET'} ${url} failed: ${response.status}`);
-  return response.json();
+  return fetchWithDeadline(url, options, timeoutMs, smokeSignal, async response => {
+    if (!response.ok)
+      throw new Error(`${options.method || 'GET'} ${url} failed: ${response.status}`);
+    return response.json();
+  });
 }
 
 function connect(wsUrl) {
-  return new Promise((resolveConnect, reject) => {
-    const ws = new WebSocket(wsUrl);
-    const pending = new Map();
-    const events = [];
-    let nextId = 1;
-
-    ws.addEventListener('open', () => {
-      resolveConnect({
-        events,
-        send(method, params = {}) {
-          const id = nextId++;
-          ws.send(JSON.stringify({ id, method, params }));
-          return new Promise((resolveSend, rejectSend) => {
-            pending.set(id, { resolve: resolveSend, reject: rejectSend, method });
-          });
-        },
-        close() {
-          ws.close();
-        }
-      });
-    });
-    ws.addEventListener('message', event => {
-      const message = JSON.parse(event.data);
-      if (message.id && pending.has(message.id)) {
-        const item = pending.get(message.id);
-        pending.delete(message.id);
-        if (message.error)
-          item.reject(new Error(`${item.method}: ${message.error.message}`));
-        else
-          item.resolve(message.result || {});
-      } else if (message.method) {
-        events.push(message);
-      }
-    });
-    ws.addEventListener('error', reject);
-  });
+  return connectProtocol(wsUrl, 'Chrome CDP', timeoutMs, smokeSignal);
 }
 
 function connectBidi(wsUrl) {
-  return new Promise((resolveConnect, reject) => {
-    const ws = new WebSocket(wsUrl);
-    const pending = new Map();
-    const events = [];
-    let nextId = 1;
-    let closed = '';
-
-    ws.addEventListener('open', () => {
-      resolveConnect({
-        events,
-        send(method, params = {}) {
-          if (closed)
-            return Promise.reject(new Error(`${method}: ${closed}`));
-          const id = nextId++;
-          ws.send(JSON.stringify({ id, method, params }));
-          return new Promise((resolveSend, rejectSend) => {
-            pending.set(id, { resolve: resolveSend, reject: rejectSend, method });
-          });
-        },
-        close() {
-          ws.close();
-        }
-      });
-    });
-    ws.addEventListener('message', event => {
-      const message = JSON.parse(event.data);
-      if (message.id && pending.has(message.id)) {
-        const item = pending.get(message.id);
-        pending.delete(message.id);
-        if (message.error)
-          item.reject(new Error(`${item.method}: ${message.message || message.error || JSON.stringify(message)}`));
-        else
-          item.resolve(message.result || {});
-      } else if (message.method) {
-        events.push(message);
-      }
-    });
-    ws.addEventListener('error', event => reject(new Error(event.message || `WebSocket error for ${wsUrl}`)));
-    // A dropped connection fails waiting and later commands instead of
-    // leaving them unanswered.
-    ws.addEventListener('close', event => {
-      closed = `Firefox closed the BiDi connection (${event.code})`;
-      for (const item of pending.values())
-        item.reject(new Error(`${item.method}: ${closed}`));
-      pending.clear();
-    });
-  });
+  return connectProtocol(wsUrl, 'Firefox BiDi', timeoutMs, smokeSignal);
 }
 
 function eventText(event) {
@@ -1646,6 +1571,7 @@ async function verifyHabitsClickDoesNotReload(client) {
 }
 
 let chrome;
+const browserStderr = [];
 let client;
 let failure;
 
@@ -1897,8 +1823,14 @@ function firefoxPageClient(bidi, context) {
 }
 
 try {
+  const totalTimeoutMs = Number(process.env.WEB_SMOKE_TOTAL_TIMEOUT_MS || 15 * 60 * 1000);
+  await withDeadline(async signal => {
+  smokeSignal = signal;
   const port = await listen();
+  smokeSignal.throwIfAborted();
   const browser = resolveBrowser();
+  if (process.platform === 'linux' && /(?:chromium(?:-browser)?|google-chrome|chrome)(?:-stable)?$/.test(browser))
+    validateChromiumSocketPath(profileRoot);
   if (isFirefoxBrowser(browser)) {
     writeFirefoxPrefs();
     const args = [
@@ -1979,7 +1911,7 @@ try {
     if (useNoSandbox)
       args.splice(1, 0, '--no-sandbox');
 
-    const chromeStderr = [];
+    const chromeStderr = browserStderr;
     chrome = spawn(browser, args, { stdio: ['ignore', 'ignore', 'pipe'], detached: true, env: browserEnvironment });
     chrome.stderr.setEncoding('utf8');
     chrome.stderr.on('data', chunk => {
@@ -2051,8 +1983,11 @@ try {
   if (rejected.length)
     throw new Error(`Application rejected ${rejected.length} UI frames: ${rejected.join(' | ')}`);
   console.log(`web smoke: PASS (${renderer})`);
+  }, totalTimeoutMs, `web smoke exceeded its ${totalTimeoutMs}ms fixture deadline`);
 } catch (error) {
   failure = error;
+  if (browserStderr.length)
+    console.error(`web smoke browser stderr (exit ${chrome?.exitCode}, signal ${chrome?.signalCode}):\n${browserStderr.join('').slice(-4000)}`);
   const recent = (client?.events || []).map(eventText).filter(Boolean).slice(-30);
   if (recent.length)
     console.error(`web smoke browser logs:\n${recent.join('\n').slice(-12000)}`);

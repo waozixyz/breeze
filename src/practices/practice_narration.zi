@@ -6,23 +6,22 @@
 #import, file "../app/app_types.zi";
 #import, file "../app/ogg_length.zi";
 #import, file "../app/text_buffers.zi";
-#import, file "../platform/audio_runtime.zi";
-#import, file "../platform/media_types.zi";
+#import, file "../platform/voice_audio.zi";
 #import, file "../apps/package_files.zi";
 #import, file "practice_downloads.zi";
 
-PracticeVoiceCapacity :: 262144
-practice_voice: MusicHandle;
-practice_voice_bytes: [PracticeVoiceCapacity]u8;
+practice_voice: bool;
 practice_voice_key: [128]u8;
 practice_voice_language: [16]u8;
 practice_voice_choice_playing: [8]u8;
 practice_voice_paused: bool;
 
-PracticeNarrationClip :: (practice: string, key: string) -> AssetView {
+// The clip's packed path; empty without a downloaded language. Files keep
+// their .ogg name: recordings are Ogg Opus, or Ogg Vorbis in older packs.
+PracticeNarrationPath :: (practice: string, key: string, path: []u8) -> string {
     language := PracticeNarrationLanguage(PracticeContentIndex(practice), PracticeVoiceChoice())
     if language.count == 0 {
-        return AssetView.{}
+        return ""
     }
     base := PackageText("assets/practices/", practice)
     // The voice chosen in Customize has its own folder in its own pack.
@@ -30,24 +29,35 @@ PracticeNarrationClip :: (practice: string, key: string) -> AssetView {
     localized := PackageText(voice, language)
     directory := PackageText(localized, "/")
     line := PackageText(directory, key)
-    path := PackageText(line, ".ogg")
+    full := PackageText(line, ".ogg")
     defer {
         PackageFree(base)
         PackageFree(voice)
         PackageFree(localized)
         PackageFree(directory)
         PackageFree(line)
-        PackageFree(path)
+        PackageFree(full)
     }
-    return AssetRead(path)
+    if !AppCopyText(full, path) {
+        return ""
+    }
+    return TextFromBytes(path[0:full.count])
+}
+
+PracticeNarrationClip :: (practice: string, key: string) -> AssetView {
+    path: [256]u8
+    found := PracticeNarrationPath(practice, key, path[:])
+    if found.count == 0 {
+        return AssetView.{}
+    }
+    return AssetRead(found)
 }
 
 PracticeNarrationStop :: () {
-    if practice_voice.id != cast(u64)0 {
-        audio_stop_music(practice_voice)
-        audio_unload_music(practice_voice)
+    if practice_voice {
+        VoiceAudioStop(VoiceAudioPractice)
     }
-    practice_voice = MusicHandle.{}
+    practice_voice = false
     practice_voice_key[0] = cast(u8)0
     practice_voice_paused = false
 }
@@ -58,7 +68,7 @@ PracticeNarrationSeconds :: (practice: string, key: string) -> float64 {
     if !clip.found {
         return 0.0
     }
-    return cast(float64)OggVorbisMilliseconds(clip.data) / 1000.0 + 0.2
+    return cast(float64)OggClipMilliseconds(clip.data) / 1000.0 + 0.2
 }
 
 PracticeTaiChiReadingSeconds :: (key: string) -> float64 {
@@ -71,7 +81,7 @@ PracticeNarrationUpdate :: (app: *InnerBreeze, practice: string, key: string) {
         return
     }
     language := PracticeNarrationLanguage(PracticeContentIndex(practice), PracticeVoiceChoice())
-    changed := practice_voice.id == cast(u64)0 || TextFromCString(*practice_voice_key[0]) != key ||
+    changed := !practice_voice || TextFromCString(*practice_voice_key[0]) != key ||
     TextFromCString(*practice_voice_language[0]) != language ||
     TextFromCString(*practice_voice_choice_playing[0]) != PracticeVoiceChoice()
     if changed {
@@ -79,38 +89,32 @@ PracticeNarrationUpdate :: (app: *InnerBreeze, practice: string, key: string) {
         unused AppCopyText(key, practice_voice_key[:])
         unused AppCopyText(language, practice_voice_language[:])
         unused AppCopyText(PracticeVoiceChoice(), practice_voice_choice_playing[:])
-        clip := PracticeNarrationClip(practice, key)
-        if clip.found && clip.data.count > 0 && clip.data.count <= PracticeVoiceCapacity &&
-        OggVorbisMilliseconds(clip.data) > 0 {
+        path: [256]u8
+        found := PracticeNarrationPath(practice, key, path[:])
+        clip := ifx found.count > 0 then AssetRead(found) else AssetView.{}
+        if clip.found && OggClipMilliseconds(clip.data) > 0 {
             app_audio_ensure_ready(app)
             if app.audio_ready != 0 {
-                for index: cast(s64)0..clip.data.count - 1 {
-                    practice_voice_bytes[index] = clip.data[index]
-                }
-                practice_voice = audio_load_music_memory(".ogg", *practice_voice_bytes[0],
-                    cast(s32)clip.data.count, false)
-                if audio_music_valid(practice_voice) {
-                    audio_play_music(practice_voice)
-                }
+                practice_voice = VoiceAudioStart(app, VoiceAudioPractice, found,
+                    SoundVolumeFor(app.sound_volume, 1.0))
             }
         }
     }
-    if practice_voice.id == cast(u64)0 {
+    if !practice_voice {
         return
     }
-    volume := SoundVolumeFor(app.sound_volume, 1.0)
-    audio_set_music_volume(practice_voice, volume)
+    VoiceAudioGain(VoiceAudioPractice, SoundVolumeFor(app.sound_volume, 1.0))
     paused := app.session_paused != 0
     if paused != practice_voice_paused {
         if paused {
-            audio_pause_music(practice_voice)
+            VoiceAudioPause(VoiceAudioPractice)
         }
         else {
-            audio_resume_music(practice_voice)
+            VoiceAudioResume(VoiceAudioPractice)
         }
         practice_voice_paused = paused
     }
     if !paused {
-        audio_update_music(practice_voice)
+        unused VoiceAudioActive(VoiceAudioPractice)
     }
 }

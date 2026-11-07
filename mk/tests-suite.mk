@@ -39,6 +39,7 @@ test: session-results-zi-test
 test: settings-cache-test
 test: web-storage-bridge-test
 test: firefox-startup-test
+test: web-smoke-protocol-test
 test: device-policy-test
 test: device-preferences-zi-test device-host-sdl-test
 test: fonts-zi-test
@@ -132,7 +133,7 @@ test: android-smoke-script-test
 test: sync-recovery-test
 test: sync-connection-test
 test: sync-record-fields-test
-test: media-metadata-test media-store-test entity-photos-test photos-app-test
+test: media-metadata-test media-store-test entity-photos-test
 test: node-app-records-test node-app-snapshot-test
 test: app-click-block-zi-test
 test: phone-check-gate-test
@@ -159,6 +160,7 @@ test: dew-test
 test: lists-sharing-test
 test: practice-downloads-test
 test: practice-narration-test
+test: voice-audio-play-test
 test: practice-narration-keys-test
 test: practice-narration-snapshot-test
 test: android-sdk-install-test

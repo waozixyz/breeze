@@ -1,6 +1,7 @@
 """Exercise the real build wrappers with a fake container, without a checkout or device."""
 import importlib.util
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -34,16 +35,18 @@ class BuildLayoutTest(unittest.TestCase):
             "ROOT = None\ndef release_content(root, commit):\n    return commit\n")
         (self.root / "scripts/check-release-overlay.py").write_text("# snapshot fixture\n")
         self.executable("git", '''#!/usr/bin/env python3
-import sys
+import os, pathlib, sys
 args = sys.argv[1:]
 if args[0] == '-C':
     args = args[2:]
 if args[0] == 'rev-parse':
     print(args[1].split('^')[0])
 elif args[0] == 'show':
-    print('fixed image inputs')
+    print(os.environ.get('FIXTURE_WINDOWS_INPUT', 'windows-v1') if args[1].endswith('.github/apt/windows-packages.txt') else 'fixed image inputs')
 elif args[0] == 'log':
     print('fixture revision')
+elif args[0] == 'archive':
+    pathlib.Path(args[args.index('-o') + 1]).write_text('fixture image context')
 elif args[0] != 'cat-file':
     raise SystemExit('unexpected git: ' + repr(args))
 ''')
@@ -51,6 +54,10 @@ elif args[0] != 'cat-file':
 import hashlib, json, os, pathlib, sys, time
 args = sys.argv[1:]
 if args[:2] == ['image', 'exists']:
+    sys.exit(int(os.environ.get('FIXTURE_IMAGE_STATUS', '0')))
+if args[0] in ('pull', 'provision'):
+    with open('image-builds.jsonl', 'a') as stream:
+        stream.write(json.dumps(args) + '\\n')
     sys.exit(0)
 assert args[0] == 'run', args
 mounts = [args[i+1] for i, value in enumerate(args) if value == '-v']
@@ -69,7 +76,7 @@ shared.write_text('same dependency')
 identity = hashlib.sha256(('https://example.invalid/package\\n' + commit).encode()).hexdigest()
 (cache / identity).write_text(commit)
 record = dict(home=str(home), output=str(output), commit=commit, reuse=reuse,
-              mounts=mounts, environment=environment)
+              mounts=mounts, environment=environment, image=next(value for value in args if value.startswith('localhost/inbe-ci:')))
 with open('runs.jsonl', 'a') as stream:
     stream.write(json.dumps(record) + '\\n')
 if os.environ.get('FIXTURE_BLOCK'):
@@ -83,11 +90,14 @@ if not os.environ.get('FIXTURE_NO_APK'):
     (output / 'android/app-arm64-v8a-debug.apk').write_bytes(b'fixture apk')
 sys.exit(int(os.environ.get('FIXTURE_STATUS', '0')))
 ''')
+        # The CI image runs JavaScript with Bun; tests may replace this one.
+        self.executable("bun", "#!/bin/sh\nexit 0\n")
         self.environment = dict(os.environ, PATH=str(self.root / "bin") + ":" + os.environ["PATH"],
                                 RELEASE_READY_REVISION="1" * 40,
                                 RELEASE_READY_DAOCHI_SOURCE=str(self.root / "server"),
                                 PYTHONDONTWRITEBYTECODE="1")
-        for name in ("RELEASE_READY_OUTPUT", "RELEASE_READY_INCREMENTAL", "RELEASE_READY_DNS"):
+        for name in ("RELEASE_READY_OUTPUT", "RELEASE_READY_INCREMENTAL", "RELEASE_READY_DNS",
+                     "JS_RUNTIME", "JS_TEST_FLAGS", "ADDONS_LINTER"):
             self.environment.pop(name, None)
 
     def executable(self, name, text):
@@ -105,6 +115,79 @@ sys.exit(int(os.environ.get('FIXTURE_STATUS', '0')))
     def records(self):
         path = self.root / "runs.jsonl"
         return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def test_bun_runtime_reaches_all_container_jobs(self):
+        self.executable("bun", "#!/bin/sh\nprintf 'fixture Bun\\n'\n")
+        self.environment["JS_RUNTIME"] = str(self.root / "bin/bun")
+        result = self.run_build()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        record = self.records()[0]
+        environment = record["environment"]
+        self.assertEqual(environment["JS_RUNTIME"], "/opt/js-runtime/bun")
+        self.assertEqual(environment["JS_TEST_FLAGS"], "test")
+        self.assertEqual(environment["ADDONS_LINTER"], "/opt/js-runtime/bun x --bun addons-linter")
+        self.assertEqual(environment["EM_NODE_JS"], "/opt/js-runtime/bun")
+        self.assertEqual(environment["EMSDK_NODE"], "/opt/js-runtime/bun")
+        runtime = self.root / "build/release-ready/js-runtime/bun"
+        self.assertEqual(runtime.read_bytes(), (self.root / "bin/bun").read_bytes())
+        self.assertIn(str(runtime.parent) + ":/opt/js-runtime:ro", record["mounts"])
+
+    def test_bun_preserves_explicit_test_flags_and_linter(self):
+        self.executable("bun", "#!/bin/sh\nexit 0\n")
+        self.environment.update(JS_RUNTIME=str(self.root / "bin/bun"),
+                                JS_TEST_FLAGS="test --timeout 120000", ADDONS_LINTER="reviewed-linter")
+        result = self.run_build()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        environment = self.records()[0]["environment"]
+        self.assertEqual(environment["JS_TEST_FLAGS"], "test --timeout 120000")
+        self.assertEqual(environment["ADDONS_LINTER"], "reviewed-linter")
+
+    def test_missing_image_is_provisioned_from_hashed_candidate_inputs(self):
+        self.environment["FIXTURE_IMAGE_STATUS"] = "1"
+        result = self.run_build()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        pull, provision = [json.loads(line) for line in
+                           (self.root / "image-builds.jsonl").read_text().splitlines()]
+        # The fixture's git show prints the same text for the base and the recipe.
+        self.assertEqual(pull, ["pull", "fixed image inputs"])
+        self.assertEqual(provision[:3], ["provision", "fixed image inputs", self.records()[0]["image"]])
+        self.assertTrue(provision[2].endswith("-bun"), provision[2])
+        folder = self.root / "build/release-ready/provision"
+        self.assertEqual(provision[3], str(folder / "context.tar"))
+        self.assertEqual(provision[4], hashlib.sha256(b"fixture image context").hexdigest())
+        self.assertEqual(provision[5], str(folder / "provision.sh"))
+        self.assertEqual(provision[6], hashlib.sha256(b"fixed image inputs\n").hexdigest())
+        self.assertEqual(provision[7:], [
+            "--env", "EM_NODE_JS=/usr/local/bin/bun", "--env", "EMSDK_NODE=/usr/local/bin/bun",
+            "--env", "EM_CONFIG=/opt/emsdk/.emscripten",
+            "--env", "PATH=/opt/emsdk/upstream/emscripten:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin"])
+        self.assertEqual(self.records()[0]["environment"]["JS_RUNTIME"], "/opt/js-runtime/bun")
+
+    def test_release_ready_refuses_without_bun(self):
+        (self.root / "bin/bun").unlink()
+        (self.root / "empty-home").mkdir()
+        self.environment.update(PATH=str(self.root / "bin") + ":/usr/bin:/bin",
+                                HOME=str(self.root / "empty-home"))
+        result = self.run_build()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("Bun", result.stderr)
+        self.assertFalse(self.records())
+
+    def test_windows_package_list_is_part_of_the_image_fingerprint(self):
+        first = self.run_build()
+        self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+        self.environment["FIXTURE_WINDOWS_INPUT"] = "windows-v2"
+        second = self.run_build()
+        self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+        records = self.records()
+        self.assertNotEqual(records[0]["image"], records[1]["image"])
+
+    def test_container_query_failure_does_not_claim_a_missing_image(self):
+        self.environment["FIXTURE_IMAGE_STATUS"] = "125"
+        result = self.run_build()
+        self.assertEqual(result.returncode, 125, result.stdout + result.stderr)
+        self.assertIn("container engine could not inspect", result.stderr)
+        self.assertFalse(self.records())
 
     def test_two_names_and_commits_share_cache_and_one_output(self):
         for name, revision in (("build/release-ready-61-apk", "1" * 40),

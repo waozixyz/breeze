@@ -325,6 +325,14 @@ def main():
                 header = next(generated.glob('*file_download.h')).read_text()
                 symbol = re.search(r'(\w*file_download_FileDownload' + name + r')\(', header)[1]
             wrappers.extend(('-D__wrap_' + legacy + '=__wrap_' + symbol, '-Wl,--wrap=' + symbol))
+        # A header that gives other modules inline copies of a wrapped
+        # procedure would bypass the wrap, so it only declares those.
+        wrapped = [flag.split('=', 1)[1] for flag in wrappers if flag.startswith('-Wl,')]
+        wrapped += ['storage_db_path', 'storage_user_id_buffer', 'SecureRandom', 'Sha256Hex']
+        for header in generated.rglob('*.h'):
+            text = header.read_text()
+            if any(re.search(r'(?<![A-Za-z0-9])' + name + r'_ziran_inline\b', text) for name in wrapped):
+                wrappers += ['-D' + guard for guard in set(re.findall(r'defined\((ZIRAN_\w+_H_SOURCE)\)', text))]
         subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-D_GNU_SOURCE", "-O1",
                         "-ffunction-sections", "-fdata-sections", "-I" + str(generated),
                         "-I" + str(toolchain / "include"),

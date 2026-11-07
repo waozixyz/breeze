@@ -4,7 +4,8 @@
 # exact content it commits.
 #
 # The container is the Test job's machine: Ubuntu 24.04 with
-# .github/apt/test-packages.txt and Node 22 (.github/local-ci/Containerfile).
+# .github/apt/test-packages.txt and Bun (.github/local-ci/provision.sh), which
+# Harmony's container service provisions from the pinned base image.
 # It materializes one fixed commit in this checkout’s private overlay, including
 # every tracked file. Source directories are recreated in the overlay so later
 # edits and new files in the canonical checkout cannot enter the tests. Peers
@@ -70,13 +71,34 @@ exec 8>"$cache/cache.lock"
 echo "release-ready: waiting for the shared build cache"
 flock 8
 mkdir -p "$cache/home" "$output/build"
+
+# The image runs JavaScript with Bun only; nothing in it executes Node. The
+# tests use this machine's Bun (JS_RUNTIME, as for make), kept separate from
+# the immutable source overlay.
+runtime_directory="$cache/js-runtime"
+mkdir -p "$runtime_directory"
+runtime=$(command -v "${JS_RUNTIME:-bun}" 2>/dev/null || true)
+if [ -z "$runtime" ] && [ -z "${JS_RUNTIME:-}" ] && [ -x "$HOME/.bun/bin/bun" ]; then
+    runtime=$HOME/.bun/bin/bun
+fi
+if [ -z "$runtime" ] || [ "$(basename "$runtime")" != bun ]; then
+    echo "release-ready: set JS_RUNTIME to an installed Bun executable; the CI image has no Node" >&2
+    exit 2
+fi
+cp "$runtime" "$runtime_directory/bun"
+chmod 755 "$runtime_directory/bun"
+container_runtime=/opt/js-runtime/bun
+container_test_flags=${JS_TEST_FLAGS:-test}
+container_linter=${ADDONS_LINTER:-"/opt/js-runtime/bun x --bun addons-linter"}
 commit=$(git rev-parse "${RELEASE_READY_REVISION:-HEAD}^{commit}")
 image_tag=$({
-    git show "$commit:.github/local-ci/Containerfile"
+    git show "$commit:.github/local-ci/base-image"
+    git show "$commit:.github/local-ci/provision.sh"
     git show "$commit:.github/apt/test-packages.txt"
     git show "$commit:.github/apt/web-packages.txt"
+    git show "$commit:.github/apt/windows-packages.txt"
     git show "$commit:.github/emscripten-version"
-} | sha256sum | cut -c1-12)
+} | sha256sum | cut -c1-12)-bun
 image=localhost/inbe-ci:$image_tag
 
 # Read the candidate from Git objects, never the changing files on disk.
@@ -173,12 +195,31 @@ printf '[containers]\nkeyring = false\n' > "$output/containers.conf"
 CONTAINERS_CONF_OVERRIDE="$root/$output/containers.conf"
 export CONTAINERS_CONF_OVERRIDE
 
-if ! podman image exists "$image"; then
-    echo "release-ready: building $image"
-    git archive "$commit:.github" | podman build -t "$image" -f local-ci/Containerfile -
-    # Replace the images of older package lists; one still in use stays.
-    podman images --format '{{.Repository}}:{{.Tag}}' localhost/inbe-ci \
-        | grep -v ":$image_tag\$" | xargs -r podman rmi >/dev/null 2>&1 || true
+if podman image exists "$image"; then
+    :
+else
+    image_status=$?
+    if [ "$image_status" -gt 1 ]; then
+        echo "release-ready: the container engine could not inspect the CI image" >&2
+        exit "$image_status"
+    fi
+    # The service runs the candidate's recipe on the pinned base image and
+    # commits the result with its provenance. Both inputs are hashed files
+    # under build/, never the changing checkout.
+    echo "release-ready: provisioning $image"
+    base=$(git show "$commit:.github/local-ci/base-image")
+    provision=$root/$output/provision
+    rm -rf "$provision"
+    mkdir -p "$provision"
+    git archive --format=tar -o "$provision/context.tar" "$commit:.github"
+    git show "$commit:.github/local-ci/provision.sh" > "$provision/provision.sh"
+    podman pull "$base"
+    podman provision "$base" "$image" \
+        "$provision/context.tar" "$(sha256sum < "$provision/context.tar" | cut -c1-64)" \
+        "$provision/provision.sh" "$(sha256sum < "$provision/provision.sh" | cut -c1-64)" \
+        --env EM_NODE_JS=/usr/local/bin/bun --env EMSDK_NODE=/usr/local/bin/bun \
+        --env EM_CONFIG=/opt/emsdk/.emscripten \
+        --env PATH=/opt/emsdk/upstream/emscripten:/usr/local/go/bin:/usr/local/bin:/usr/bin:/bin
 fi
 
 rm -f "$output/stamp.json"
@@ -206,10 +247,14 @@ podman run --rm --pull=never --userns=keep-id \
     -v "$root:/src:O" \
     -v "$root/$output/build:/src/build" \
     -v "$cache/home:/home/ubuntu" \
+    -v "$runtime_directory:/opt/js-runtime:ro" \
     -v "$sync_mount_source:/sync-server:O" \
     $android_mount \
     -e HOME=/home/ubuntu -e XDG_CACHE_HOME=/home/ubuntu/.cache \
     -e GRADLE_USER_HOME=/home/ubuntu/.gradle \
+    -e JS_RUNTIME="$container_runtime" -e JS_TEST_FLAGS="$container_test_flags" \
+    -e ADDONS_LINTER="$container_linter" \
+    -e EM_NODE_JS="$container_runtime" -e EMSDK_NODE="$container_runtime" \
     -e CI=true -e RELEASE_READY_COMMIT="$commit" \
     -e RELEASE_READY_INCREMENTAL="$incremental" \
     -e RELEASE_READY_SNAPSHOT="$snapshot" \

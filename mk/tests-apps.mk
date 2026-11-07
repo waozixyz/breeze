@@ -28,8 +28,8 @@ portable-apps-ui-test: $(TARGET) apps
 .PHONY: node-app-records-test
 
 .PHONY: node-app-loading-test
-node-app-loading-test: $(ZIRAN_BIN)
-	sh tests/node_app_loading_test.sh $(ZIRAN_BIN)
+node-app-loading-test: $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
+	sh tests/node_app_loading_test.sh $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
 
 # Apps location and node snapshot checks against the locked Apps and Crypto packages.
 .PHONY: app-locations-test node-app-snapshot-test
@@ -41,8 +41,8 @@ app-locations-test: $(ZIRAN_BIN)
 node-app-snapshot-test: apps $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
 	python3 tests/node_app_snapshot_test.py --ziran '$(abspath $(ZIRAN_BIN))' \
 		--runtime '$(abspath $(ZIRAN_BUILD_DIR)/libziran.a)'
-.PHONY: photos-app-test media-store-test media-metadata-test entity-photos-test
-# Photos and the account's media library it shows.
+.PHONY: media-store-test media-metadata-test entity-photos-test
+# The account's media library, which Diary and the node's Photos share.
 media-metadata-test: $(ZI2C_BIN)
 	sh tests/media_metadata_test.sh $(ZIRAN_BUILD_DIR)/bin
 
@@ -53,9 +53,6 @@ media-store-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 # data, and old copies go only once the node has the new ones whole.
 entity-photos-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 	sh tests/entity_photos_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
-
-photos-app-test: $(ZIRAN_BIN) $(SQLITE_SRC) $(LIBOQS_A)
-	sh tests/photos_app_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 node-app-records-test: $(ZI2C_BIN)
 	sh tests/node_app_records_zi_test.sh $(ZIRAN_BUILD_DIR)/bin

@@ -5,9 +5,10 @@ practice content. Each row has its own icon, earning condition, progress and
 permanent earned date. Uninstalled apps do not contribute visible rows or totals;
 reinstalling an app restores its saved awards without replaying alerts.
 
-The built-in catalogs contain 160 entries. Their machine-readable definitions
+The built-in catalogs contain 150 entries. Their machine-readable definitions
 live in `apps/*/achievements.json`, with translations in each app's
-`achievement-locales/`. Stable IDs, including the historical `self.*` IDs, are
+`achievement-locales/`. Apps built elsewhere, such as Photos, carry their own
+catalog in their package. Stable IDs, including the historical `self.*` IDs, are
 persisted data and must not be renamed when changing a display name.
 
 ## Ownership and storage
@@ -72,10 +73,10 @@ These rules make each requirement below implementable and consistent:
   A practice-start action counts only when its correlated session qualifies.
   The first-offline-action award requires the action's recorded mode to be
   offline; all other Lumi awards work with either connection mode.
-- **Photo:** a successfully imported, nontrashed original with a unique hash.
-  A photo-open fact requires deliberately opening a successfully decoded
-  photo, not merely scrolling past a thumbnail. Days-of-photos thresholds
-  use valid capture dates, not guessed dates for files with no date metadata.
+- **Photo:** older versions recorded facts for Photos' catalog: a
+  successfully imported, nontrashed original with a unique hash, and a
+  deliberate open of a successfully decoded photo. Those facts keep counting
+  for its awards and active days; this version records no new ones.
 - **Radio day:** at least 60 nonoverlapping seconds of active audible playback
   on a date. Minute totals are cumulative across listening sessions. The
   two-station award requires 60 active seconds for each of two distinct stable
@@ -299,48 +300,32 @@ achievement requires online AI, message volume or a paid provider.
 134. **A practice with Lumi** — `lumi.practice.1`: finish 1 qualifying practice started through Lumi; requires Practices and at least 1 installed practice pack.
 135. **A page with Lumi** — `lumi.diary.1`: successfully save 1 nonempty diary addition through Lumi; requires Diary.
 
-### Photos — 10 achievements
-
-Owned by `inbe.photos`; visible only while Photos is installed. No cloud
-upload, public sharing, album feature or new editing tool is required.
-
-136. **First memory kept** — `photos.originals.1`: import 1 distinct original photo.
-137. **Ten memories kept** — `photos.originals.10`: import 10 distinct original photos.
-138. **Fifty memories kept** — `photos.originals.50`: import 50 distinct original photos.
-139. **One hundred memories kept** — `photos.originals.100`: import 100 distinct original photos.
-140. **Three days remembered** — `photos.capture_days.3`: keep photos from 3 distinct valid capture dates.
-141. **Seven days remembered** — `photos.capture_days.7`: keep photos from 7 distinct valid capture dates.
-142. **Thirty days remembered** — `photos.capture_days.30`: keep photos from 30 distinct valid capture dates.
-143. **A closer look** — `photos.opened.1`: deliberately open 1 successfully decoded photo.
-144. **Ten closer looks** — `photos.opened.10`: deliberately open 10 distinct successfully decoded photos.
-145. **Returning to your memories** — `photos.view_days.7`: deliberately open photos on 7 distinct days.
-
 ### Radio — 10 achievements
 
 Owned by `inbe.radio`; visible only while Radio is installed. Listening time
 is cumulative, audible playback time, not continuous-session length.
 
-146. **A minute of atmosphere** — `radio.minutes.1`: listen for 1 active minute in total.
-147. **Ten minutes of atmosphere** — `radio.minutes.10`: listen for 10 active minutes in total.
-148. **Half an hour of atmosphere** — `radio.minutes.30`: listen for 30 active minutes in total.
-149. **An hour of atmosphere** — `radio.minutes.60`: listen for 60 active minutes in total.
-150. **Two hours of atmosphere** — `radio.minutes.120`: listen for 120 active minutes in total.
-151. **Five hours of atmosphere** — `radio.minutes.300`: listen for 300 active minutes in total.
-152. **Three listening days** — `radio.days.3`: listen on 3 qualifying Radio days.
-153. **Seven listening days** — `radio.days.7`: listen on 7 qualifying Radio days.
-154. **Thirty listening days** — `radio.days.30`: listen on 30 qualifying Radio days.
-155. **Two atmospheres** — `radio.stations.2`: listen for at least 1 active minute to each of 2 distinct stations.
+136. **A minute of atmosphere** — `radio.minutes.1`: listen for 1 active minute in total.
+137. **Ten minutes of atmosphere** — `radio.minutes.10`: listen for 10 active minutes in total.
+138. **Half an hour of atmosphere** — `radio.minutes.30`: listen for 30 active minutes in total.
+139. **An hour of atmosphere** — `radio.minutes.60`: listen for 60 active minutes in total.
+140. **Two hours of atmosphere** — `radio.minutes.120`: listen for 120 active minutes in total.
+141. **Five hours of atmosphere** — `radio.minutes.300`: listen for 300 active minutes in total.
+142. **Three listening days** — `radio.days.3`: listen on 3 qualifying Radio days.
+143. **Seven listening days** — `radio.days.7`: listen on 7 qualifying Radio days.
+144. **Thirty listening days** — `radio.days.30`: listen on 30 qualifying Radio days.
+145. **Two atmospheres** — `radio.stations.2`: listen for at least 1 active minute to each of 2 distinct stations.
 
 ### Leaderboard — 5 achievements
 
 Owned by `inbe.leaderboard`. These recognize checking personal progress,
 without creating a competition to increase retention or beat another person.
 
-156. **A look at your progress** — `leaderboard.check_days.1`: complete 1 own-row check-in.
-157. **Three progress check-ins** — `leaderboard.check_days.3`: check your own row on 3 distinct days.
-158. **Seven progress check-ins** — `leaderboard.check_days.7`: check your own row on 7 distinct days.
-159. **Thirty progress check-ins** — `leaderboard.check_days.30`: check your own row on 30 distinct days.
-160. **Two perspectives** — `leaderboard.practices.2`: check your own row for 2 distinct installed practices; requires at least 2 installed practice packs.
+146. **A look at your progress** — `leaderboard.check_days.1`: complete 1 own-row check-in.
+147. **Three progress check-ins** — `leaderboard.check_days.3`: check your own row on 3 distinct days.
+148. **Seven progress check-ins** — `leaderboard.check_days.7`: check your own row on 7 distinct days.
+149. **Thirty progress check-ins** — `leaderboard.check_days.30`: check your own row on 30 distinct days.
+150. **Two perspectives** — `leaderboard.practices.2`: check your own row for 2 distinct installed practices; requires at least 2 installed practice packs.
 
 ## Verification
 

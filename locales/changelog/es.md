@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
-- Escribir ahora cuenta como actividad en el indicador de descansos.
+- Fotos ahora se descarga desde Aplicaciones en lugar de venir con Breeze; tus fotos siguen en tu cuenta y en Diario.
 - Cambiar de pestaña en Práctica con la navegación lateral ya no desplaza la pantalla.
+- Los paquetes de voz de las prácticas pesan un tercio menos.
+
+## [2.1.63] - 2026-11-05
+
+- Corrige texto en listas y Lumi sin saltos del cursor.
+- Escribe en Lumi mientras responde y usa Enviar y Cancelar para los informes al desarrollador.
+- Consulta los totales de compras y la frecuencia de recompensas con colores en la tienda.
 
 ## [2.1.62] - 2026-11-03
 

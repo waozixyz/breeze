@@ -6,6 +6,7 @@ through the app's own input path.
 """
 import ast
 import contextlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
 import re
@@ -15,6 +16,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 from ui_driver import UiDriver
@@ -147,7 +149,7 @@ def send(window, profile, text, *, button=False):
         driver.type(line)
     assert draft() == text, f"The draft is {draft()!r}, not {text!r}"
     if button:
-        driver.press(label="Send", role="button", enabled=True)
+        driver.press(key=30011, role="button", enabled=True)
     else:
         driver.key("enter")
     confirm_exchange(profile, before, text)
@@ -226,6 +228,17 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
                    "sync_activity,counter_enabled,sort_order,deleted_at,updated_at) "
                    "VALUES('lumi-ambiguous-habit',?,'Read poetry',100,150,100,0,0,0,21,0,1)", (user,))
     with application(profile, "rich-cards") as window:
+        report = "Bug: correcting text moves the caret to the beginning"
+        send(window, profile, report)
+        proposal = chat(profile)[-1]
+        assert proposal["kind"] == 3 and report in proposal["text"]
+        assert not query(profile, "SELECT key FROM settings WHERE key LIKE 'cell.feedback.pending.%'")
+        driver.press(key=351001 + len(chat(profile)) * 2, role="button", label="Cancel", enabled=True)
+        assert re.fullmatch(r"[0-9a-f]{32}", proposal["payload"])
+        canceled = query(profile, "SELECT value FROM settings WHERE key="
+                         f"'cell.feedback.draft.{proposal['payload']}'")
+        assert json.loads(canceled[0][0]) == {"sent": False}
+        assert not query(profile, "SELECT key FROM settings WHERE key LIKE 'cell.feedback.pending.%'")
         send(window, profile, "/progress sessions 7")
         chart_row = chat(profile)[-1]
         assert chart_row["kind"] == 1
@@ -466,7 +479,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         send(window, profile, "complete habit Read poetry")
         assert "unavailable" in chat(profile)[-1]["text"]
         assert query(profile, "SELECT habit_id,local_date,completed,count FROM habit_days ORDER BY habit_id,local_date") == before_habits
-    (OUTPUT / "result.json").write_text(json.dumps({
+    result = {
         "passed": True, "exchanges": len(transcript) // 2,
         "checked": ["standalone app", "default Lumi home", "add todo", "unique completion",
                     "reopen", "ambiguous completion", "suggestions do not execute", "restart persistence",
@@ -479,5 +492,109 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
                     "large tool catalog", "command button and list", "Enter picks a command",
                     "command waits for its text", "tapped command", "no todo suggestions without Lists",
                     "narrow chat fits"],
-    }, indent=2) + "\n")
-print("Lumi UI: chat, installed-app tools, habit targets, WHM start, autocomplete and persistence passed")
+    }
+
+def online_composer_test():
+    requests = []
+    started = threading.Event()
+    release = threading.Event()
+    report = "When I correct text, the caret jumps back"
+
+    class Provider(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            requests.append(body)
+            current = [message["content"] for message in body["messages"]
+                       if message["role"] == "user"][-1]
+            if len(requests) == 1:
+                started.set()
+                assert release.wait(30), "Timed out waiting for rapid UI sends"
+            if current == report:
+                message = {"role": "assistant", "content": "This is clearly a bug.", "tool_calls": [{
+                    "id": "report-typing", "type": "function", "function": {
+                        "name": "report_feedback", "arguments": json.dumps({
+                            "title": "Text correction moves the caret", "message": report})}}]}
+            else:
+                message = {"role": "assistant", "content": f"Answer to {current}"}
+            result = json.dumps({"choices": [{"message": message}]}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(result)))
+            self.end_headers()
+            self.wfile.write(result)
+
+    with ThreadingHTTPServer(("127.0.0.1", 0), Provider) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with tempfile.TemporaryDirectory(prefix="online-", dir=OUTPUT) as directory:
+                profile = Path(directory)
+                with application(profile, "online-bootstrap", standalone=True):
+                    pass
+                url = f"http://127.0.0.1:{server.server_port}/v1"
+                with sqlite3.connect(profile / "inbe.db") as db:
+                    user = db.execute("SELECT id FROM users LIMIT 1").fetchone()[0]
+                    for key, value in {
+                        "main_tab": "4", "enabled_apps": "16", "language": "en",
+                        "language_setup_done": "1", "apps_setup_done": "1", "tutorial_seen": "1",
+                        "app_used_lumi": "1", "lumi_introduced": "1", "lumi_guides_seen": "127",
+                        "package_updates_allowed": "0", "lumi_online": "1", "lumi_provider": "own",
+                        "lumi_provider_url": url, "lumi_provider_model": "local-ui-test",
+                        "lumi_provider_agreement": f"1 {url}",
+                    }.items():
+                        db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
+                                   "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, value))
+                with application(profile, "online-composer", standalone=True) as window:
+                    baseline = len(chat(profile))
+                    start_draft("first-online-question")
+                    driver.key("enter")
+                    wait_for(started.is_set, "The delayed provider did not receive the first question")
+                    start_draft("second-online-question")
+                    driver.press(key=30011, role="button", enabled=True)
+                    driver.wait(role="text_area", value="")
+                    driver.type("third-online-question")
+                    driver.wait(role="text_area", value="third-online-question")
+                    driver.key("enter")
+                    start_draft("Keep this unfinished draft 茶")
+                    wait_for(lambda: len(chat(profile)) == baseline + 3, "Rapid inputs were not saved immediately")
+                    assert len(requests) == 1, "Lumi started overlapping requests"
+                    release.set()
+                    wait_for(lambda: len(chat(profile)) == baseline + 6, "Queued questions did not receive replies")
+                    assert draft() == "Keep this unfinished draft 茶", "A late reply overwrote the current draft"
+                    assert [row["text"] for row in chat(profile)[baseline:baseline + 3]] == [
+                        "first-online-question", "second-online-question", "third-online-question"]
+                    expected = []
+                    assert len(requests) == 3
+                    for index, body in enumerate(requests):
+                        question = ["first-online-question", "second-online-question", "third-online-question"][index]
+                        expected.append({"role": "user", "content": question})
+                        actual = [message for message in body["messages"] if message["role"] != "system"]
+                        assert actual[-len(expected):] == expected
+                        expected.append({"role": "assistant", "content": f"Answer to {question}"})
+                    send(window, profile, report)
+                    proposal = chat(profile)[-1]
+                    assert proposal["kind"] == 3 and report in proposal["text"]
+                    assert "clearly a bug" not in proposal["text"]
+                    assert not query(profile, "SELECT key FROM settings WHERE key LIKE 'cell.feedback.pending.%'")
+                    driver.press(key=351000 + len(chat(profile)) * 2, role="button", label="Send", enabled=True)
+                    wait_for(lambda: query(profile, "SELECT value FROM settings WHERE key LIKE 'cell.feedback.pending.%'"),
+                             "Send did not queue the developer report")
+                    pending = query(profile, "SELECT value FROM settings WHERE key LIKE 'cell.feedback.pending.%'")
+                    assert len(pending) == 1 and json.loads(pending[0][0])["message"] == report
+                    assert "delivered" not in chat(profile)[-1]["text"].lower()
+                with application(profile, "online-restart", standalone=True):
+                    assert len(chat(profile)) == baseline + 8, "Restart lost rapid messages or the report proposal"
+        finally:
+            release.set()
+            server.shutdown()
+            thread.join(timeout=5)
+
+
+online_composer_test()
+result["checked"].extend(["rapid online sends", "preceding conversation context", "draft survives late replies",
+                          "report Send and Cancel", "queued chat restart persistence"])
+(OUTPUT / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+print("Lumi UI: chat, tools, autocomplete, rapid online sends, draft preservation, report Send/Cancel and persistence passed")

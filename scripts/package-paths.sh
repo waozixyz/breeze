@@ -31,7 +31,9 @@ PY
 packages=${1:-build/packages}
 for path in kryon=kryon/src/ui kryon=kryon/src/backend apps=apps/src \
     crypto=crypto/src entity=entity/src plot=plot/src qrcode=qrcode/src \
-    oqs=oqs/src mingcute=mingcute/src daochi_client=daochi-client; do
+    oqs=oqs/src mingcute=mingcute/src daochi_client=daochi-client \
+    webp=webp/src image_codec=image-codec/src avif=avif/src \
+    avif=avif/src/bridge audio=audio/src; do
     directory="$packages/${path#*=}"
     if [ "${path%%=*}" = daochi_client ] && [ -n "${DAOCHI_CLIENT_DIR:-}" ]; then
         directory=$DAOCHI_CLIENT_DIR

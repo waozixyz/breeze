@@ -209,21 +209,30 @@ def locale_values(language):
     return values
 
 
-def ziran_text(value):
-    assert 'LUMI_TEXT_END' not in value
-    return '#string LUMI_TEXT_END\n' + value + '\nLUMI_TEXT_END'
-
-
 def program(languages):
     lines = ['#import, file "../../apps/lumi/habit_intent.zi";',
-             '#import, file "../../apps/lumi/habit_patterns.zi";', '']
+             '#import, file "../../apps/lumi/habit_patterns.zi";',
+             '#import "text"', '#import "vec"', '']
     for language in languages:
         values = locale_values(language)
         for key in KEYS:
-            lines.append(f'{language.upper()}_{key.upper()} :: {ziran_text(values[key])}')
+            name = f'{language.upper()}_{key.upper()}'
+            lines.append(f'Read_{name} :: () -> string {{')
+            lines.append('    out: Vec(u8)')
+            # The VM limits a single decoded literal. Build the complete,
+            # unchanged catalog as owned text, like the production host does.
+            for start in range(0, len(values[key]), 100):
+                chunk = json.dumps(values[key][start:start + 100], ensure_ascii=False)
+                lines.append(f'    BuilderPrint(*out, "%", {chunk})')
+            lines.append('    return BuilderFinish(out)')
+            lines.append('}')
         lines.append('')
     lines.append('#program_export')
     lines.append('Answer :: () -> s32 {')
+    for language in languages:
+        for key in KEYS:
+            name = f'{language.upper()}_{key.upper()}'
+            lines.append(f'    {name} := Read_{name}()')
     lines.append(f'    habits: [{len(HABITS)}]LumiHabitRef')
     for index, (identifier, title, paused) in enumerate(HABITS):
         lines.append(f'    habits[{index}] = LumiHabitRef.{{.id = "{identifier}", .title = "{title}", '

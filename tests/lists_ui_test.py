@@ -245,6 +245,48 @@ with contextlib.ExitStack() as stack:
     driver.wait(label="Fresh fruit", role="button")
     driver.press(label="Travel", role="button")
     driver.wait(label="Pack bag", role="button")
+    # Correction in an item remains at the chosen byte after pointer release
+    # and redraw, including accented input. Put its row below the viewport so
+    # the test first follows the same scrolled-list path as an ordinary edit.
+    for number in range(12):
+        add(f"Travel item {number:02}")
+    correction = "Please pack a red bag tomorrow"
+    add(correction)
+    assert not driver.find(label=correction, role="button", visible=True), \
+        "correction fixture did not require scrolling"
+    for _ in range(20):
+        if driver.find(label=correction, role="button", visible=True):
+            break
+        driver.pointer(450, 600, wheel=-4)
+        driver.wait_idle(frames=3)
+    driver.wait(label=correction, role="button")
+    swipe(correction, .6)
+    field = driver.wait(role="text_field", value=correction)
+    x = field["visible_x"] + 100
+    y = field["visible_y"] + field["visible_height"] / 2
+    driver.pointer(x, y)
+    driver.pointer(x, y, down=True)
+    driver.pointer(x, y, down=False)
+    driver.release_pointer()
+    driver.wait_idle(frames=6)
+    cursor = driver.wait(role="text_field", value=correction)["cursor"]
+    assert 0 < cursor < len(correction), f"middle press moved the caret to {cursor}"
+    driver.type("é")
+    expected = correction[:cursor] + "é" + correction[cursor:]
+    field = driver.wait(role="text_field", value=expected)
+    assert field["cursor"] == cursor + len("é".encode()), field
+    driver.wait_idle(frames=6)
+    field = driver.wait(role="text_field", value=expected)
+    assert field["cursor"] == cursor + len("é".encode()), field
+    driver.type("x")
+    expected = correction[:cursor] + "éx" + correction[cursor:]
+    driver.wait(role="text_field", value=expected)
+    driver.press(label="Save", role="button")
+    wait_for(lambda: sql("SELECT COUNT(*) FROM elist_items WHERE title=? AND deleted_at=0",
+                         (expected,)) == 1, "middle correction was not saved exactly")
+    # Return to the list chips for the remaining settings tests.
+    driver.pointer(450, 350, wheel=80)
+    driver.wait_idle(frames=6)
     # A successful list save persists the name and leaves settings.
     renamed_list_id = sql("SELECT id FROM elist_lists WHERE title='Travel' AND deleted_at=0")
     open_settings("Travel")
@@ -464,4 +506,4 @@ with contextlib.ExitStack() as stack:
     command = json.loads(sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:11'"))
     assert command["action"] == "accept" and command["invitation_id"] == "invitation-fixture", command
     assert sql(f"SELECT COUNT(*) FROM elist_lists WHERE id='{SHARED_LIST}'") == 0
-    print(f"PASS item deletion and identity-preserving undo, list tabs, private task destination, friend invitation, inbox acceptance and durable delivery ({TEST_DIR})")
+    print(f"PASS scrolled middle correction with accents, item deletion and identity-preserving undo, list tabs, private task destination, friend invitation, inbox acceptance and durable delivery ({TEST_DIR})")

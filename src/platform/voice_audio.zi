@@ -1,0 +1,89 @@
+// Spoken clips (practice narration and Lumi's guide) through Kryon's asset
+// audio. Its provider reads each clip's content, so Ogg Opus and the older
+// Ogg Vorbis recordings play alike, whatever the file is called.
+#import "session"
+#import "media_audio"
+#import "media_audio_host"
+#import "media_audio_raylib"
+#import, file "../app/assets.zi";
+#import, file "../app/app_types.zi";
+
+// Kryon voice IDs, one per speaker; a new line replaces that speaker's last.
+VoiceAudioPractice :: 1
+VoiceAudioGuide :: 2
+
+voice_audio_owner: MediaAudioOwner;
+voice_audio_session: Session;
+voice_audio_provider: bool;
+
+// Only downloaded or shipped practice recordings are spoken.
+VoiceAudioAllowed :: (path: string) -> bool {
+    return path.count > 17 && path[:17] == "assets/practices/"
+}
+
+VoiceAudioRead :: (context: *void, path: string) -> string {
+    clip := AssetRead(path)
+    if !clip.found {
+        return ""
+    }
+    return clip.data
+}
+
+VoiceAudioCall :: (command: MediaAudioCommand) -> MediaAudioResult {
+    if !SessionValid(voice_audio_session) {
+        return MediaAudioResult.{.code = .Unavailable}
+    }
+    MediaAudioBegin(*voice_audio_owner, voice_audio_session, VoiceAudioAllowed,
+        VoiceAudioRead, null)
+    result := MediaAudio(voice_audio_session, command)
+    MediaAudioEnd()
+    return result
+}
+
+// Starts path from its beginning at gain in the app's window; false when it
+// cannot play.
+VoiceAudioStart :: (app: *InnerBreeze, voice: s32, path: string, gain: float32) -> bool {
+    session := app.ui.session
+    if !SessionValid(session) {
+        return false
+    }
+    if !voice_audio_provider {
+        MediaAudioUseRaylib()
+        voice_audio_provider = true
+    }
+    voice_audio_session = session
+    unused VoiceAudioCall(MediaAudioCommand.{.operation = .Unload, .voice = voice})
+    loaded := VoiceAudioCall(MediaAudioCommand.{.operation = .Load, .voice = voice,
+        .asset = path, .music = true, .gain = gain})
+    if loaded.code != .Ok {
+        return false
+    }
+    played := VoiceAudioCall(MediaAudioCommand.{.operation = .Play, .voice = voice})
+    if played.code != .Ok {
+        unused VoiceAudioCall(MediaAudioCommand.{.operation = .Unload, .voice = voice})
+        return false
+    }
+    return true
+}
+
+VoiceAudioStop :: (voice: s32) {
+    unused VoiceAudioCall(MediaAudioCommand.{.operation = .Unload, .voice = voice})
+}
+
+VoiceAudioGain :: (voice: s32, gain: float32) {
+    unused VoiceAudioCall(MediaAudioCommand.{.operation = .Gain, .voice = voice, .gain = gain})
+}
+
+VoiceAudioPause :: (voice: s32) {
+    unused VoiceAudioCall(MediaAudioCommand.{.operation = .Pause, .voice = voice})
+}
+
+VoiceAudioResume :: (voice: s32) {
+    unused VoiceAudioCall(MediaAudioCommand.{.operation = .Resume, .voice = voice})
+}
+
+// Keeps the clip streaming; true while it is still speaking or paused.
+VoiceAudioActive :: (voice: s32) -> bool {
+    status := VoiceAudioCall(MediaAudioCommand.{.operation = .Status, .voice = voice})
+    return status.code == .Ok && (status.state == .Playing || status.state == .Paused)
+}

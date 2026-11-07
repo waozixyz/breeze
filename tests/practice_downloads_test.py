@@ -92,8 +92,12 @@ arguments += subprocess.check_output([
 ], text=True).split()
 subprocess.run([*arguments, '-o', str(generated), str(ROOT / 'tests/practice_downloads_behavior.zi')], check=True)
 monocypher = ROOT / 'build/packages/monocypher/src'
+# The linker wraps these modules' procedures, so their headers declare them
+# rather than giving other modules inline copies that would bypass the wraps.
+wrapped = ['-DZIRAN_' + header.stem.upper() + '_H_SOURCE'
+           for header in [generated / 'file_download.h', *generated.glob('p*_sha256.h')]]
 subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-D_GNU_SOURCE', '-O1',
-    '-ffunction-sections', '-fdata-sections', '-I' + str(generated),
+    '-ffunction-sections', '-fdata-sections', *wrapped, '-I' + str(generated),
     '-I' + str(ROOT / 'build/packages/ziran/include'), '-I' + str(monocypher),
     '-I' + str(monocypher / 'optional'), str(ROOT / 'tests/practice_downloads_host.c'),
     *map(str, generated.rglob('*.c')), str(monocypher / 'monocypher.c'),

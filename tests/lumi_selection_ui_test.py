@@ -148,6 +148,40 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-selection-") as temporary:
         pass
     keep_offline(profile)
     with application(profile, "select") as window:
+        # The draft is a multiline TextArea at a nonzero screen position.
+        # Overflow it, click a visible middle line, release and redraw, then
+        # insert an accent and another character at that exact byte.
+        draft = "\n".join(f"Draft line {number:02} with words to correct" for number in range(18))
+        driver.press(role="text_area")
+        subprocess.run(["xclip", "-selection", "clipboard"], input=draft, text=True,
+                       env=ENV, check=True, timeout=5)
+        driver.key("v", control=True)
+        area = driver.wait(role="text_area", value=draft)
+        assert area["height"] <= 144, f"draft did not reach its scrollable height: {area}"
+        x, y = UiDriver.center(area)
+        driver.pointer(x, y, wheel=3)
+        driver.wait_idle(frames=6)
+        driver.pointer(x, y)
+        driver.pointer(x, y, down=True)
+        driver.pointer(x, y, down=False)
+        driver.release_pointer()
+        driver.wait_idle(frames=6)
+        area = driver.wait(role="text_area", value=draft)
+        cursor = area["cursor"]
+        assert 0 < draft[:cursor].count("\n") < 17, f"middle press moved the caret to {cursor}"
+        driver.type("é")
+        corrected = draft[:cursor] + "é" + draft[cursor:]
+        area = driver.wait(role="text_area", value=corrected)
+        assert area["cursor"] == cursor + len("é".encode()), area
+        driver.wait_idle(frames=6)
+        area = driver.wait(role="text_area", value=corrected)
+        assert area["cursor"] == cursor + len("é".encode()), area
+        driver.type("x")
+        corrected = draft[:cursor] + "éx" + draft[cursor:]
+        driver.wait(role="text_area", value=corrected)
+        driver.key("a", control=True)
+        driver.key("backspace")
+        driver.wait(role="text_area", value="")
         send(profile, "alpha note")
         send(profile, "omega note")
         texts = [record["text"] for record in records(profile)]
@@ -219,4 +253,4 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-selection-scroll-") as tempor
         copied = clipboard(lambda text: "History message 001" in text)
         assert "History message 045" in copied and "History message 001" in copied, copied[:200]
         assert copied.count("History message") == 45, copied.count("History message")
-print("Lumi selection: hold, sweep, edge scrolling through older pages, copy, delete with confirmation, synced deletion and restart passed")
+print("Lumi selection: scrolled multiline middle correction with accents, hold, sweep, edge scrolling through older pages, copy, delete with confirmation, synced deletion and restart passed")

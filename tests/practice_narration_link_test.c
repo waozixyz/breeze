@@ -9,11 +9,10 @@
 
 static uint8_t *clip;
 static size_t clip_size;
-static uint8_t *playing_bytes;
 static String language;
 static String voice_choice;
 static const char *prefix = "assets/practices/taichi/voice/en/";
-static int plays, stops, unloads, pauses, resumes, updates;
+static int plays, stops, pauses, resumes, updates;
 static float volume;
 static bool clip_available = true;
 
@@ -35,26 +34,25 @@ AssetView AssetRead(String path)
     return (AssetView){.data = StringView((char *)clip, clip_size), .found = found};
 }
 
-MusicHandle audio_runtime_audio_load_music_memory(String extension, uint8_t *data,
-    int32_t size, bool looping)
-{
-    assert(StringEqual(extension, StringLiteral(".ogg")));
-    assert((size_t)size == clip_size && !looping);
-    assert(data != clip && memcmp(data, clip, clip_size) == 0);
-    playing_bytes = data;
-    return (MusicHandle){.id = 1};
-}
+static int active;
 
-bool audio_runtime_audio_music_valid(MusicHandle value) { return value.id == 1; }
-void audio_runtime_audio_play_music(MusicHandle value) { assert(value.id == 1); plays++; }
-void audio_runtime_audio_stop_music(MusicHandle value) { assert(value.id == 1); stops++; }
-void audio_runtime_audio_unload_music(MusicHandle value) { assert(value.id == 1); unloads++; }
-void audio_runtime_audio_pause_music(MusicHandle value) { assert(value.id == 1); pauses++; }
-void audio_runtime_audio_resume_music(MusicHandle value) { assert(value.id == 1); resumes++; }
-void audio_runtime_audio_update_music(MusicHandle value) { assert(value.id == 1); updates++; }
-void audio_runtime_audio_set_music_volume(MusicHandle value, float amount)
+bool voice_audio_VoiceAudioStart(InnerBreeze *app, int32_t voice, String path, float gain)
 {
-    assert(value.id == 1);
+    assert(app && voice == VoiceAudioPractice && gain >= 0.0f && gain <= 1.0f);
+    /* Kryon reads and copies the packed clip itself, by its packed path. */
+    assert(path.length > strlen(prefix) + 4 && memcmp(path.data, prefix, strlen(prefix)) == 0);
+    assert(memcmp(path.data + path.length - 4, ".ogg", 4) == 0);
+    volume = gain;
+    plays++;
+    return true;
+}
+void voice_audio_VoiceAudioStop(int32_t voice) { assert(voice == VoiceAudioPractice); stops++; }
+void voice_audio_VoiceAudioPause(int32_t voice) { assert(voice == VoiceAudioPractice); pauses++; }
+void voice_audio_VoiceAudioResume(int32_t voice) { assert(voice == VoiceAudioPractice); resumes++; }
+bool voice_audio_VoiceAudioActive(int32_t voice) { assert(voice == VoiceAudioPractice); updates++; return true; }
+void voice_audio_VoiceAudioGain(int32_t voice, float amount)
+{
+    assert(voice == VoiceAudioPractice);
     volume = amount;
 }
 
@@ -79,10 +77,6 @@ int main(int argc, char **argv)
     practice_narration_PracticeNarrationUpdate(&app, practice, cue);
     assert(plays == 1 && updates == 1 && volume > .599f && volume < .601f);
     assert(practice_narration_PracticeTaiChiReadingSeconds(cue) > .2);
-    uint8_t first = clip[0];
-    clip[0] ^= 1;
-    assert(playing_bytes[0] == first); /* The decoder owns a copy of borrowed assets. */
-    clip[0] = first;
     practice_narration_PracticeNarrationUpdate(&app, practice, cue);
     assert(plays == 1 && updates == 2);
 
@@ -93,11 +87,11 @@ int main(int argc, char **argv)
     practice_narration_PracticeNarrationUpdate(&app, practice, cue);
     assert(resumes == 1 && updates == 3);
     practice_narration_PracticeNarrationUpdate(&app, practice, StringLiteral("next"));
-    assert(plays == 2 && stops == 1 && unloads == 1);
+    assert(plays == 2 && stops == 1);
 
     language = StringLiteral("es");
     practice_narration_PracticeNarrationUpdate(&app, practice, cue);
-    assert(plays == 2 && stops == 2 && unloads == 2); /* Only the spoken language's clip plays. */
+    assert(plays == 2 && stops == 2); /* Only the spoken language's clip plays. */
     language = StringLiteral("");
     practice_narration_PracticeNarrationUpdate(&app, practice, cue);
     assert(plays == 2); /* Without downloaded narration the practice is silent. */
@@ -107,7 +101,7 @@ int main(int argc, char **argv)
     assert(plays == 3);
     app.voice_narration_enabled = 0;
     practice_narration_PracticeNarrationUpdate(&app, practice, cue);
-    assert(stops == 3 && unloads == 3);
+    assert(stops == 3);
     app.voice_narration_enabled = 1;
     app.sound_volume = 0;
     practice_narration_PracticeNarrationUpdate(&app, practice, cue);
@@ -140,6 +134,6 @@ int main(int argc, char **argv)
     practice_narration_PracticeNarrationUpdate(&app, practice, cue);
     assert(plays == before + 1);
     free(clip);
-    puts("Practice narration: language, voice, owned audio, volume, pause/resume and mute passed");
+    puts("Practice narration: language, voice, packed clip path, volume, pause/resume and mute passed");
     return 0;
 }

@@ -304,8 +304,8 @@ The hosted asset policy allows `media/<sha256>.<fmt>` and
 
 ### The Photos app package
 
-`inbe.photos` (`apps/photos/`) is not part of the APK's bundled cells. It is
-listed under More apps and installed from the node's signed package store,
+`inbe.photos`, now built and released in `waozixyz/photos`, is not part of
+the APK's bundled cells. It is listed under More apps and installed from the node's signed package store,
 through the node-app mechanism the Chess app introduces (a registry entry,
 `app_used_photos` in `private.inbe.v1.app-installs`, a device-local node-app
 slot). Its first version:
@@ -359,7 +359,8 @@ New: `apps/diary/diary_markdown.zi` (embed grammar, Markdown preview
 ranges, migration, mirror, insertion; no host access),
 `src/cells/media_store.zi` and `src/cells/media_types.zi` (the host media
 library and its calls), `src/storage/media_node_session.zi` (a media
-session per node), `apps/photos/{photos.zi,photos_view.zi,CHANGELOG.md}`,
+session per node), `apps/photos/{photos.zi,photos_view.zi,CHANGELOG.md}`
+(since moved to `waozixyz/photos`),
 `tests/diary_markdown_behavior.zi` and its runner, and Kryon
 `tests/ziran_text_area_blocks_test.{zi,sh}`.
 

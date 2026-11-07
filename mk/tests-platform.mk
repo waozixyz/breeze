@@ -165,10 +165,13 @@ dpi-state-zi-test: $(ZI2C_BIN)
 	@sh tests/dpi_state_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: raylib-graphics-test
-raylib-graphics-test: $(ZI2C_BIN)
-	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-		ZIRAN_ROOT="$(ZIRAN_DIR)" ZIRAN_BIN="$(ZIRAN_BUILD_DIR)/bin/ziran" \
-		sh "$(KRYON_DIR)/tests/ziran_raylib_graphics_test.sh"
+# Kryon's script builds as the Kryon project, which Ziran finds from the
+# working directory, and links the image codecs Breeze builds.
+raylib-graphics-test: $(ZI2C_BIN) $(AVIF_A) $(AOM_A)
+	@cd "$(KRYON_DIR)" && env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		ZIRAN_ROOT="$(abspath $(ZIRAN_DIR))" ZIRAN_BIN="$(ZIRAN_BUILD_DIR)/bin/ziran" \
+		AVIF_A="$(abspath $(AVIF_A))" AOM_A="$(abspath $(AOM_A))" \
+		sh tests/ziran_raylib_graphics_test.sh
 
 .PHONY: graphics-transition-test
 graphics-transition-test: $(ZI2C_BIN)

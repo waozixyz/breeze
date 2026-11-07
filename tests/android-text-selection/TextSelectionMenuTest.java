@@ -142,6 +142,55 @@ public class TextSelectionMenuTest {
         assertTrue(revision[0] > 0);
     }
 
+    @Test public void midTextCorrectionsKeepSelectionAcrossNativeAcknowledgements() {
+        final String[] latest = {"alpha 水😀 omega"};
+        final long[] revision = {0};
+        final int[] cursor = {6};
+        final int[] anchor = {6};
+        TextInputView editor = new TextInputView(RuntimeEnvironment.getApplication(), new TextInputView.Listener() {
+            @Override public void changed(long target, long next, byte[] text, int end, int start) {
+                latest[0] = new String(text, StandardCharsets.UTF_8);
+                revision[0] = next;
+                cursor[0] = end;
+                anchor[0] = start;
+            }
+            @Override public void enter() {}
+        });
+        editor.update(1, 0, latest[0].getBytes(StandardCharsets.UTF_8), 6, 6, false, false, true);
+        InputConnection connection = editor.onCreateInputConnection(new EditorInfo());
+        assertNotNull(connection);
+        assertTrue(connection.commitText("é", 1));
+        assertEquals("alpha é水😀 omega", latest[0]);
+        assertEquals(8, cursor[0]);
+        for (int frame = 0; frame < 3; frame++) {
+            editor.update(1, revision[0], latest[0].getBytes(StandardCharsets.UTF_8),
+                cursor[0], anchor[0], false, false, true);
+            assertEquals(7, editor.getSelectionStart());
+            assertEquals(7, editor.getSelectionEnd());
+        }
+        assertTrue(connection.deleteSurroundingTextInCodePoints(1, 0));
+        assertEquals("alpha 水😀 omega", latest[0]);
+        assertEquals(6, cursor[0]);
+        editor.update(1, revision[0], latest[0].getBytes(StandardCharsets.UTF_8),
+            cursor[0], anchor[0], false, false, true);
+        assertTrue(connection.setSelection(6, 9));
+        assertEquals(6, anchor[0]);
+        assertEquals(13, cursor[0]);
+        editor.update(1, revision[0], latest[0].getBytes(StandardCharsets.UTF_8),
+            cursor[0], anchor[0], false, false, true);
+        assertEquals(6, editor.getSelectionStart());
+        assertEquals(9, editor.getSelectionEnd());
+        assertTrue(connection.commitText("calm", 1));
+        assertEquals("alpha calm omega", latest[0]);
+        assertEquals(10, cursor[0]);
+        assertTrue(connection.setSelection(3, 3));
+        editor.update(1, revision[0], latest[0].getBytes(StandardCharsets.UTF_8),
+            cursor[0], anchor[0], false, false, true);
+        assertTrue(connection.commitText("X", 1));
+        assertEquals("alpXha calm omega", latest[0]);
+        assertEquals(4, cursor[0]);
+    }
+
     @Test public void systemClipboardPreservesUnicodeAndIgnoresNonTextClips() {
         Context context = RuntimeEnvironment.getApplication();
         byte[] text = "Diary\n水😀 é".getBytes(StandardCharsets.UTF_8);

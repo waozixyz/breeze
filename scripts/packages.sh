@@ -94,6 +94,18 @@ link kss kss
 link oqs oqs
 link raylib raylib
 link libwebp libwebp
+# Kryon's image decoders: codec packages and the pinned native sources they
+# bridge. Kryon's CMake recipes receive these paths instead of resolving them
+# against Kryon's own lock.
+link webp webp
+link image-codec image-codec
+link avif avif
+link libavif libavif
+link libaom libaom
+# Kryon's Ogg Opus decoder: the audio package and its pinned native sources.
+link audio audio
+link libopus libopus
+link libsamplerate libsamplerate
 link game2d game2d
 link qrcode qrcode
 link plot plot

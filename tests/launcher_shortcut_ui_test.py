@@ -208,35 +208,35 @@ with contextlib.ExitStack() as stack:
                 subprocess.run(["import", "-window", window, str(OUTPUT / "diary.png")],
                                env=env, check=True, capture_output=True)
 
-    # Use an app owned by this repository; Chess is built and released by
-    # Arcade, and its published package is checked by the release suite.
-    node_bundle = ROOT / "build/node-apps/photos.zx"
+    # Use an app owned by this repository; Chess and Photos are built and
+    # released in their own repositories.
+    node_bundle = ROOT / "build/node-apps/library.zx"
     assert node_bundle.is_file(), "Run make node-apps before this check"
     env["INBE_NODE_APP_FILE"] = str(node_bundle)
     with application("install-node-app"):
         driver.press(label="Apps", role="button")
-        def photos_card():
+        def library_card():
             return next((node for node in driver.find(role="button")
-                         if node["label"].lower() == "photos" and node["width"] > 100), None)
-        card = wait(photos_card, "The locally offered Photos package did not appear")
+                         if node["label"].lower() == "library" and node["width"] > 100), None)
+        card = wait(library_card, "The locally offered Library package did not appear")
         driver.press(key=card["key"], label=card["label"])
         driver.wait(label="Apps", role="button")
         driver.press(label="Apps", role="button")
-        card = wait(photos_card, "The installed Photos package did not appear")
+        card = wait(library_card, "The installed Library package did not appear")
         node_title = card["label"]
         action = options(card)
         driver.press(key=action["key"], label="App options")
         driver.press(label="Install to launcher", role="selectable")
         driver.wait(label="Added to your launcher.", role="text")
-        entry = data / "applications/xyz.waozi.inbe.photos.desktop"
-        assert "--app photos\n" in entry.read_text()
+        entry = data / "applications/xyz.waozi.inbe.library.desktop"
+        assert "--app library\n" in entry.read_text()
 
     # A shortcut names the package, rather than its transient slot number.
     with sqlite3.connect(profile / "inbe.db") as db:
         db.execute("UPDATE settings SET value='' WHERE user_id=? AND key='node_app_slot_0'", (user,))
-        db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?, 'node_app_slot_3', 'photos',1) "
+        db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?, 'node_app_slot_3', 'library',1) "
                    "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user,))
-    with application("launch-node-after-slot-change", "--app", "photos") as window:
+    with application("launch-node-after-slot-change", "--app", "library") as window:
         def node_opened():
             result = subprocess.run(["xdotool", "getwindowname", window], env=env,
                                     capture_output=True, text=True, timeout=5)
@@ -247,7 +247,7 @@ with contextlib.ExitStack() as stack:
     # Shortcuts follow the program to a new place, such as after an update
     # renamed it. A shortcut the person removed is not created again.
     diary_entry = data / "applications/xyz.waozi.inbe.diary.desktop"
-    (data / "applications/xyz.waozi.inbe.photos.desktop").unlink()
+    (data / "applications/xyz.waozi.inbe.library.desktop").unlink()
     moved = temporary / "renamed" / "breeze"
     moved.parent.mkdir()
     shutil.copy2(BINARY, moved)
@@ -256,7 +256,7 @@ with contextlib.ExitStack() as stack:
         wait(lambda: exec_path in diary_entry.read_text(), "The shortcut did not follow the moved program")
     text = diary_entry.read_text()
     assert "Name=Diary\n" in text and str(BINARY) not in text, text
-    assert not (data / "applications/xyz.waozi.inbe.photos.desktop").exists(), "A removed shortcut came back"
+    assert not (data / "applications/xyz.waozi.inbe.library.desktop").exists(), "A removed shortcut came back"
     assert (profile / "packages/launcher/executable").read_text() == str(moved)
     written = diary_entry.stat().st_mtime_ns
     with application("same-executable", binary=moved):

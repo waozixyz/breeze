@@ -367,6 +367,33 @@ LumiStoreAppend :: (text: string, user: bool) {
     unused LumiStoreAppendCard(text, user, LUMI_CHAT_TEXT, source)
 }
 
+// The proposal includes exactly the text the person can send. Long reports
+// use preceding bubbles so neither the report nor its action is truncated.
+LumiStoreFeedbackProposal :: (report: string, prompt: string, id: string) -> bool {
+    out: Vec(u8)
+    BuilderPrint(*out, "%\n\n%", report, prompt)
+    text := BuilderFinish(out)
+    defer { PackageFree(text) }
+    if text.count < LUMI_INPUT_MAX {
+        return LumiStoreAppendCard(text, false, LUMI_CHAT_FEEDBACK, id)
+    }
+    start: s64 = 0
+    while start < report.count {
+        end := start + LUMI_INPUT_MAX - 1
+        if end > report.count {
+            end = report.count
+        }
+        while end < report.count && (report[end] & cast(u8)192) == cast(u8)128 {
+            end -= 1
+        }
+        if !LumiStoreAppendCard(report[start:end], false, LUMI_CHAT_TEXT, "") {
+            return false
+        }
+        start = end
+    }
+    return LumiStoreAppendCard(prompt, false, LUMI_CHAT_FEEDBACK, id)
+}
+
 LumiStoreAppendCard :: (text: string, user: bool, kind: s32, payload: string) -> bool {
     return LumiStoreAppendRow(LumiChatRow.{.text = text, .user = user, .kind = kind, .payload = payload})
 }

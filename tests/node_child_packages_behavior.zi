@@ -1,0 +1,89 @@
+// The production cache keeps its 64 MiB bound and all borrowed sources.
+#import, file "../src/apps/node_child_packages.zi";
+#import "std/file"
+#import "std/file_linux"
+#import "std/byte_text_linux"
+#import "std/vec"
+#import "std/option"
+#import "apps/host"
+#import "apps/tree"
+#import, file "../src/apps/package_files.zi";
+#import, file "../src/platform/web_bridge.zi";
+#import, file "../src/apps/node_app_runner.zi";
+#import, file "../src/apps/node_app_tree.zi";
+#import, file "../src/apps/node_apps.zi";
+
+cache_c :: #system_library "c";
+CacheAllocate :: (size: usize) -> *u8 #foreign cache_c "malloc";
+
+CacheCleanup :: () {
+    for slot: cast(s32)0..NODE_CHILD_LIMIT - 1 {
+        if node_children[slot].used { NodeChildClear(slot) }
+    }
+    VecFree(node_tree_images)
+}
+
+CacheFixture :: (index: s32, size: s64) -> bool {
+    data := CacheAllocate(cast(usize)size)
+    if data == null { return false }
+    data[0] = cast(u8)(65 + index)
+    child := *node_children[index]
+    child.used = true
+    child.status = 2
+    child.verified = true
+    child.bytes = TextFromBytes(BytesFromPointer(data, cast(u64)size))
+    child.size = size
+    child.touched = cast(u64)(index + 1)
+    node_child_memory += size
+    return true
+}
+
+#program_export
+main :: () -> s32 {
+    mib: s64 = 1024 * 1024
+    path := "build/node-app-loading-test/cache.zx"
+    if !PackageWrite(path, "verified disk fixture") { return 1 }
+    defer { unused RemoveFile(path) }
+    if !CacheFixture(0, 28 * mib) || !CacheFixture(1, mib) || !CacheFixture(2, mib) { return 2 }
+    node_children[0].path = PackageText(path, "")
+    defer { CacheCleanup() }
+    host: AppHost
+    node: AppNode
+    runtime := New(AppRuntime)
+    if runtime == null { return 3 }
+    source := cast(*TextDescriptor)(*node_children[0].bytes)
+    runtime.source_data = source.data
+    runtime.source_bytes = node_children[0].bytes.count
+    runtime.host = *host
+    runtime.node = *node
+    node.runtime = cast(*void)runtime
+    if !VecPush(host.tree.nodes, AppSlot.{*node}) { return 4 }
+    node_runners[0].nested = *host
+    defer { node_runners[0].nested = null; VecFree(host.tree.nodes) }
+    // Pressure frees the two inactive packages rather than the older borrowed
+    // program. Their slots survive, and the verified file is never removed.
+    if !NodeChildRoom(36 * mib) || node_children[0].status != 2 ||
+    node_children[1].status != NODE_CHILD_CACHED || node_children[2].status != NODE_CHILD_CACHED ||
+    node_child_memory != 28 * mib || node_children[0].bytes[0] != cast(u8)65 { return 5 }
+    if !CacheFixture(3, 36 * mib) { return 6 }
+    // An impossible retained set and an oversized request make no partial
+    // eviction, do not exceed the limit and leave the active bytes intact.
+    if NodeChildRoom(40 * mib) || NodeChildRoom(NODE_CHILD_MEMORY_LIMIT + 1) ||
+    node_children[3].status != 2 || node_child_memory != NODE_CHILD_MEMORY_LIMIT { return 7 }
+    // A node that just closed is still borrowed by paint until collection.
+    AppHostClose(cast(*void)*host, *node)
+    if NodeChildRoom(40 * mib) || !NodeChildBorrowed(0) { return 8 }
+    AppHostCollect(*host)
+    if NodeChildBorrowed(0) || !NodeChildRoom(40 * mib) ||
+    node_children[0].status != NODE_CHILD_CACHED || node_child_memory != 0 { return 9 }
+    disk, found := ReadEntireFile(path)
+    defer { PackageFree(disk) }
+    if !found || disk != "verified disk fixture" || !node_children[0].verified ||
+    node_children[0].path != path || !node_children[0].used || node_children[0].size != 28 * mib { return 10 }
+    // A provider-owned frame image is an independent borrow even with no VM.
+    if !CacheFixture(4, mib) || !VecPush(node_tree_images, NodeTreeImage.{.data = node_children[4].bytes}) { return 11 }
+    if NodeChildRoom(NODE_CHILD_MEMORY_LIMIT) || node_children[4].status != 2 { return 12 }
+    unused VecPop(node_tree_images)
+    if !NodeChildRoom(NODE_CHILD_MEMORY_LIMIT) || node_child_memory != 0 { return 13 }
+    return 0
+}

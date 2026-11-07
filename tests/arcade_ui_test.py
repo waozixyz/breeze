@@ -181,12 +181,11 @@ def open_arcade():
 
 
 def play_classic():
-    """Play on the cover opens the level; Shovey's first questions are
+    """Open the title and selected world-map level; Shovey's first questions are
     answered as a player would: no level downloads, swipe and tap."""
     press_button("Play")
     deadline = time.monotonic() + 30
-    while not driver.find(contains="Level 1 / ", role="text", visible=True) or \
-            not driver.find(label=SHOVEY_CONTROLS, visible=True) or \
+    while not shovey_cell() or not button("Restart") or \
             driver.find(label="Not now", role="button", visible=True) or \
             driver.find(label="How do you want to move?", role="text", visible=True) or \
             driver.find(label="Got it", role="button", visible=True):
@@ -197,6 +196,8 @@ def play_classic():
             driver.press(label="Swipe and tap", role="button")
         elif driver.find(label="Got it", role="button", visible=True):
             driver.press(label="Got it", role="button")
+        elif button("Play"):
+            driver.press(label="Play", role="button")
         time.sleep(0.1)
 
 
@@ -254,6 +255,12 @@ def check_download_library():
         driver.wait_idle(frames=3)
         for _ in range(15):
             if node := button(label):
+                # A visible neighbouring cover selects on its first press.
+                # Centre it before returning the activation target.
+                if abs(node['x'] + node['width'] / 2 - WIDTH / 2) > node['width'] * .35:
+                    driver.press(key=node['key'])
+                    driver.wait_idle(frames=18)
+                    continue
                 return node
             driver.pointer(WIDTH / 2, HEIGHT / 2, wheel=-8)
             driver.wait_idle(frames=3)
@@ -278,43 +285,52 @@ def check_download_library():
                 reveal('Shovey')
                 assert not button('Play') and not button('Next'), 'Arcade must use clickable covers'
                 assert not driver.find(label='Monkey') and not driver.find(label='Chess')
+                assert not button('Shovey Editor'), 'Editors must open from inside their game'
                 assert not requested, 'The library must not predownload games'
-                driver.press(key=reveal('Shovey Editor')['key'])
-                driver.wait(contains='Shovey (required)', role='text')
+                # Editors open from the game's own title, not Arcade's shelf.
+                # Installing the game first must leave its editor undownloaded.
+                shovey = next(item for item in entries.values() if item['id'] == 'arcade.shovey')
+                editor = next(item for item in entries.values() if item['id'] == 'arcade.shovey-editor')
+                driver.press(key=reveal('Shovey')['key'])
+                wait_for(lambda: requested == [shovey['sha256']],
+                         'The selected game did not download', timeout=60)
+                wait_for(lambda: not button('Download') and not button('Install') and
+                                     not driver.find(contains='Downloading', visible=True),
+                         'Shovey did not finish downloading', timeout=60)
+                driver.press(key=reveal('Shovey')['key'])
+                driver.wait(label='Play', role='button', timeout=60)
+                driver.press(label='Next', role='button')
+                driver.wait(label='Open', role='button')
+                driver.press(label='Open', role='button')
+                driver.wait(label='Download', role='button')
                 driver.press(label='Cancel', role='button')
-                assert not requested, 'Cancel must not download games'
-                driver.press(key=reveal('Shovey Editor')['key'])
+                assert requested == [shovey['sha256']], 'Cancel must not download the editor'
+                driver.press(key=reveal('Shovey')['key'])
+                driver.wait(label='Play', role='button')
+                driver.press(label='Next', role='button')
+                driver.press(label='Open', role='button')
                 driver.wait(label='Download', role='button')
                 download()
                 driver.wait(label='New level', role='text', timeout=60)
-                assert len(requested) == 2, 'The editor must download itself and its required game'
-                driver.press(label='Back', role='button')
+                assert requested == [shovey['sha256'], editor['sha256']], \
+                    'The editor must reuse its downloaded dependency'
+                driver.press(label='Arcade', role='button')
                 driver.press(key=reveal('Shovey')['key'])
-                deadline = time.monotonic() + 30
-                while True:
-                    assert time.monotonic() < deadline, driver.text()
-                    if driver.find(label='Not now', role='button', visible=True):
-                        driver.press(label='Not now', role='button')
-                    elif driver.find(label='How do you want to move?', role='text', visible=True):
-                        driver.press(label='Swipe and tap', role='button')
-                    elif driver.find(label='Got it', role='button', visible=True):
-                        driver.press(label='Got it', role='button')
-                    # Restart is drawn behind Pip's tutorial; the board's
-                    # input area appears only after every question is closed.
-                    elif driver.find(label=SHOVEY_CONTROLS, visible=True):
-                        break
-                    time.sleep(.05)
+                driver.wait(label='Play', role='button')
+                play_classic()
                 saved_cell = move_shovey()
                 record = wait_for(lambda: next(((key, value) for key, value in
                     arcade_records(profile, user).items() if key.endswith('.local.campaign')), None),
                     'Shovey did not keep its local campaign')
                 assert record[0].startswith('local.nested.')
                 assert not queued_entity(profile, record[0]), 'Local play must stay on the device'
-                backs = driver.find(label='Back', role='button', visible=True)
-                driver.press(key=backs[-1]['key'])
+                driver.press(label='Arcade', role='button')
                 driver.press(key=reveal('Apfelwurm')['key'])
-                driver.wait(label='Download', role='button')
-                download()
+                wait_for(lambda: len(requested) == 3, 'Apfelwurm did not download', timeout=60)
+                wait_for(lambda: not button('Download') and not button('Install') and
+                                     not driver.find(contains='Downloading', visible=True),
+                         'Apfelwurm did not finish downloading', timeout=60)
+                driver.press(key=reveal('Apfelwurm')['key'])
                 # Recent Apfelwurm versions show their own title before the
                 # first movement choice. Older versions open that choice directly.
                 wait_for(lambda: driver.find(label='How do you want to move?', role='text', visible=True)
@@ -325,6 +341,24 @@ def check_download_library():
                 driver.press(label='Swipe', role='button')
                 driver.wait(label='Pause', role='button')
                 assert len(requested) == 3, 'Each game must download once'
+                # The installed set exceeds the host's resident cache. Return
+                # to the shelf in this same process, then restore the evicted
+                # game from disk while the server refuses every transfer.
+                offline = True
+                before = list(requested)
+                driver.press(label='Arcade', role='button')
+                reveal('Shovey')
+                driver.wait_idle(frames=24)
+                assert requested == before, 'Shelf probes reloaded evicted games'
+                assert not button('Download') and not driver.find(label='Download failed', visible=True), \
+                    'A verified disk-cached game was shown as a failed download'
+                driver.press(key=reveal('Shovey')['key'])
+                driver.wait(label='Play', role='button')
+                play_classic()
+                wait_for(lambda: shovey_cell() == saved_cell,
+                         'Same-process disk restore lost the saved position')
+                assert arcade_records(profile, user)[record[0]] == record[1]
+                assert requested == before, 'Restoring a disk-cached game used the network'
             finally:
                 stop(app)
             offline = True
@@ -333,6 +367,8 @@ def check_download_library():
             try:
                 open_arcade()
                 driver.press(key=reveal('Shovey')['key'])
+                driver.wait(label='Play', role='button')
+                play_classic()
                 driver.wait(label='Restart', role='button')
                 wait_for(lambda: shovey_cell() == saved_cell, 'Shovey did not restore its saved position')
                 assert arcade_records(profile, user)[record[0]] == record[1]

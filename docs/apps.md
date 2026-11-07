@@ -675,17 +675,24 @@ Ordinary launches ignore these files and keep using signed node packages.
 
 ## Photos and the account's media library
 
-Photos (`apps/photos/`, `inbe.photos`, host interface 13) is the second app
-the node offers: a newest-first grid of the library's photos under the day
-each was taken, a viewer with previous, next and Move to Trash, and Trash,
-where a photo can be restored. Install it from the normal app catalog.
+Photos (`inbe.photos`, host interface 13) is built, tested and released in
+its own repository, waozixyz/photos, like Chess in Arcade. Inbe neither
+builds, bundles nor versions it: the normal app catalog offers the node's
+signed package, whose icon comes from that release, and installing it
+downloads it. Existing installations and their records stay. Released
+packages still read their text from Inbe's `app_name_photos`, `photos_*`
+and `achievement_group_photos` translations, kept for them in
+`tests/locale_unused_keys.txt`. A Photos release reaches the node through
+the Node app release workflow, which signs the checked bundle attached to a
+GitHub release there.
 
 Diary and Photos use the same host import and account storage, even when
-Photos is not installed. New opaque still images larger than 256 KiB are
-stored as upright JPEG copies at quality 88 and at most 2048 pixels on the
-longest edge, only when this saves more than 10%. Source files stay untouched;
-capture dates remain in the shared record. Small, transparent and animated
-images retain their bytes, as do photos already in the library.
+Photos is not installed; Diary needs nothing from Photos. New opaque still
+images larger than 256 KiB are stored as upright JPEG copies at quality 88
+and at most 2048 pixels on the longest edge, only when this saves more than
+10%. Source files stay untouched; capture dates remain in the shared record.
+Small, transparent and animated images retain their bytes, as do photos
+already in the library.
 
 The library belongs to the account, not to Photos, so its photos stay when
 Photos is removed. Each photo is a record of the account's entity data
@@ -796,23 +803,23 @@ sync:
   Removing a node forgets its session and its `diary_blobs` rows. Delegate
   (Telegram) accounts never move copies.
 
-Photos is available in the normal app catalog.
-The App packages workflow builds every app the node offers and
+The App packages workflow builds every app the node offers that Inbe owns and
 publishes each one whose ledger names a newer release than the node serves
 (`package-release.py --node-apps`). An app the node does not list yet is
 reported and skipped: registering it takes the node operator's key. With each
 publication the node's importer writes `history-v2.json`, the app's newest
 three releases, which the node offers for going back to an earlier version;
 `--write-history` rewrites every app's history. `make
-media-store-test media-metadata-test photos-app-test` check the library, the
-Exif reader and the app through the real host; `make entity-photos-test`
+media-store-test media-metadata-test` check the library and the Exif reader
+through the real host; `make entity-photos-test`
 upgrades a 2.1.43 profile (`tests/fixtures/photos-2.1.43.sql`) against nodes
 answered from memory, with interrupted passes, a full node, an unreachable
 node, a node that cannot delete and a damaged chunk; `make sync-server-test`
 (`DAOCHI_BIN=...`, Daochi 17bfd12 or later) adds a photo on one device and
 opens it on another through two real Daochi nodes and moves an old copy
-there; and `make photos-ui-test` adds a camera photo through the desktop
-picker on a private Xvfb display.
+there. The achievement check still loads the catalog the node's Photos
+carries (`tests/fixtures/photos-achievements.json`); this host records no
+new Photos facts and keeps the ones older versions recorded.
 
 ## Account app choices
 

@@ -21,6 +21,15 @@ endif()
 get_filename_component(KRYON_DIR "${KRYON_DIR}" ABSOLUTE BASE_DIR "${REPO_ROOT}")
 set(RAYLIB_DIR "${REPO_ROOT}/build/packages/raylib/src")
 set(WEBP_DIR "${REPO_ROOT}/build/packages/libwebp")
+set(AVIF_DIR "${REPO_ROOT}/build/packages/libavif")
+set(AOM_DIR "${REPO_ROOT}/build/packages/libaom")
+# Ogg Opus narration: Kryon links static libopus from the audio package's source.
+set(AUDIO_DIR "${REPO_ROOT}/build/packages/audio")
+set(OPUS_DIR "${REPO_ROOT}/build/packages/libopus")
+set(SAMPLERATE_DIR "${REPO_ROOT}/build/packages/libsamplerate")
+# Kryon's codec recipes come from the codec packages in this app's lock.
+set(KRYON_WEBP_PACKAGE_DIR "${REPO_ROOT}/build/packages/webp")
+set(KRYON_AVIF_PACKAGE_DIR "${REPO_ROOT}/build/packages/avif")
 set(SQLITE_DIR "${REPO_ROOT}/build/packages/sqlite")
 set(SQLITE_BUILD_DIR "${CMAKE_BINARY_DIR}/sqlite")
 set(SQLITE_AMALGAMATION_C "${SQLITE_BUILD_DIR}/sqlite3.c")
@@ -92,6 +101,10 @@ file(GLOB_RECURSE APP_LIBRARY_ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${REPO_ROOT}/build/packages/kss/src/*.zi" "${REPO_ROOT}/build/packages/oqs/src/*.zi" "${REPO_ROOT}/build/packages/game2d/src/*.zi"
     "${REPO_ROOT}/build/packages/qrcode/src/*.zi"
     "${REPO_ROOT}/build/packages/entity/src/*.zi"
+    "${REPO_ROOT}/build/packages/webp/src/*.zi"
+    "${REPO_ROOT}/build/packages/image-codec/src/*.zi"
+    "${REPO_ROOT}/build/packages/avif/src/*.zi"
+    "${REPO_ROOT}/build/packages/audio/src/*.zi"
     "${ZIRAN_DIR}/std/*.zi" "${REPO_ROOT}/build/packages/daochi-client/*.zi")
 set(APP_ZIRAN_DEFINES --define ANDROID_BUILD --define KRYON_ANDROID_HOST)
 set(APP_ZIRAN_CHECK_DEFINES "ANDROID_BUILD KRYON_ANDROID_HOST")
@@ -265,7 +278,8 @@ add_custom_command(
     VERBATIM
 )
 
-kryon_android_raylib("${RAYLIB_DIR}" "${WEBP_DIR}")
+kryon_android_raylib("${RAYLIB_DIR}" "${WEBP_DIR}" "${AVIF_DIR}" "${AOM_DIR}"
+    "${AUDIO_DIR}" "${OPUS_DIR}" "${SAMPLERATE_DIR}")
 
 add_library(main SHARED
     "${MONOCYPHER_DIR}/monocypher.c"

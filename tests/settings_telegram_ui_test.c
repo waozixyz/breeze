@@ -136,6 +136,22 @@ void RasterTextClipped(String value, int32_t x, int32_t y, int32_t font, Color c
     (void)clip;
     assert(0);
 }
+void RasterTextRotated(String value, int32_t x, int32_t y, int32_t font,
+    Color color, Rectangle clip, Vector2 origin, float rotation,
+    Rectangle outer_clip, bool outer_clipped, bool emphasis, bool italic)
+{
+    (void)value; (void)x; (void)y; (void)font; (void)color; (void)clip;
+    (void)origin; (void)rotation; (void)outer_clip; (void)outer_clipped;
+    (void)emphasis; (void)italic;
+    assert(0);
+}
+
+void RasterTriangles(Slice points, Color color)
+{
+    (void)points;
+    (void)color;
+    assert(0);
+}
 int32_t ImageWidth(String path)
 {
     (void)path;

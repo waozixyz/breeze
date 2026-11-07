@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
-- Digitar agora conta como atividade no indicador de pausas.
+- Fotos agora é baixado em Aplicativos em vez de vir com o Breeze; suas fotos continuam na conta e no Diário.
 - Trocar de aba em Prática pela navegação lateral não desloca mais a tela.
+- Os pacotes de voz das práticas ficaram cerca de um terço menores.
+
+## [2.1.63] - 2026-11-05
+
+- Corrija textos nas listas e no Lumi sem saltos do cursor.
+- Escreva no Lumi enquanto ele responde e use Enviar e Cancelar nos relatos ao desenvolvedor.
+- Veja os totais de compras e a frequência das recompensas com cores na loja.
 
 ## [2.1.62] - 2026-11-03
 

@@ -47,10 +47,13 @@ root = assets((ROOT / 'build/inbe.zx').read_bytes())
 for name in ('diary', 'lists', 'habits', 'practices', 'leaderboard'):
     path = 'assets/apps/icons/' + name + '.png'
     assert root[path] == (ROOT / path).read_bytes(), f'missing or stale launcher icon: {name}'
-for name in ('photos', 'radio', 'library'):
+for name in ('radio', 'library'):
     shape = (ROOT / 'assets' / name / 'sidebar.shape').read_bytes()
     assert root['assets/apps/icons/' + name + '.shape'] == shape
     assert shape.startswith(b'S') and len(shape) < 4096
+# Photos comes from the node; the root package carries neither its baseline nor its icon.
+assert not any(name.startswith('assets/apps/bundled/photos') or name == 'assets/apps/icons/photos.shape'
+               for name in root), 'the root package still bundles Photos'
 assert set(name for name in root if name.startswith('cells/')) == {
     'cells/lumi.zx', 'cells/habits.zx', 'cells/practices.zx',
     'cells/lists.zx', 'cells/diary.zx', 'cells/leaderboard.zx'}

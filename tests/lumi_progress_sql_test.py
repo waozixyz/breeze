@@ -15,8 +15,9 @@ with sqlite3.connect(':memory:') as db:
                    "VALUES(?,?,?,?,?,'test',1,?)",
                    (str(index), 'owner', index, 20261007, index % 2, index))
         db.execute('INSERT INTO session_rounds VALUES(?,0,?)', (str(index), 120 if index % 2 else 75))
-    db.execute("INSERT INTO sessions VALUES('foreign','other',100,20261007,0,0,'test',1,100,0,0,0,0,'','',0,1)")
-    db.execute("INSERT INTO sessions VALUES('deleted','owner',101,20261007,0,0,'test',1,101,0,0,0,0,'','',1,1)")
+    for session_id, user, started, deleted in (("foreign", "other", 100, 0), ("deleted", "owner", 101, 1)):
+        db.execute("INSERT INTO sessions(id,user_id,started_at,local_date,source,imported_at,rounds_hash,deleted_at,updated_at) "
+                   "VALUES(?,?,?,20261007,'test',1,?,?,1)", (session_id, user, started, started, deleted))
     db.execute("INSERT INTO session_rounds VALUES('foreign',0,900)")
     db.execute("INSERT INTO session_rounds VALUES('deleted',0,999)")
     query = sql['LumiProgressSessionsSql']

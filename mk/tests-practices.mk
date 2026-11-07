@@ -93,6 +93,13 @@ practice-downloads-test: apps $(ZIRAN_BUILD_DIR)/libziran.a
 practice-narration-test: $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
 	sh tests/practice_narration_test.sh $(ZIRAN_BUILD_DIR)/bin
 
+# Real Ogg Opus narration and Lumi guide lines play to completion through
+# Kryon's MediaAudio provider and libopus on a null audio device.
+.PHONY: voice-audio-play-test
+voice-audio-play-test: $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(RAYLIB_A) $(AUDIO_OPUS_A)
+	sh tests/voice_audio_play_test.sh $(ZIRAN_BUILD_DIR)/bin $(RAYLIB_DIR) \
+		$(RAYLIB_A) $(AUDIO_OPUS_A)
+
 .PHONY: practice-narration-keys-test
 .PHONY: astral-projection-test
 astral-projection-test: $(ZI2C_BIN)

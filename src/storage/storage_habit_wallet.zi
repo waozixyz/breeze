@@ -132,6 +132,45 @@ storage_habit_activity_load :: (output: []HabitCoinActivity) -> s32 {
     return count
 }
 
+// Aggregate purchases directly, rather than counting the capped Activity
+// feed. The empty reward id means all rewards, including deleted ones.
+// Stored prices and stable ids preserve totals after a rename or price edit.
+StorageHabitPurchaseStatisticsSQL :: #string SQL
+SELECT COUNT(*),COALESCE(SUM(coins),0),
+COALESCE(SUM(CASE WHEN date(at,'unixepoch','localtime') >=
+date(?3,'unixepoch','localtime','-6 days') THEN 1 ELSE 0 END),0),
+COALESCE(SUM(CASE WHEN date(at,'unixepoch','localtime') >=
+date(?3,'unixepoch','localtime','-29 days') THEN 1 ELSE 0 END),0),
+COALESCE(CAST(strftime('%Y%m%d',MAX(at),'unixepoch','localtime') AS INTEGER),0),
+COALESCE((SELECT MIN(f.at) FROM habit_coins f WHERE f.user_id=?1 AND f.kind=1
+AND f.deleted_at=0 AND (?2='' OR f.reward_id=?2) AND f.at>?3),0)
+FROM habit_coins WHERE user_id=?1 AND kind=1 AND deleted_at=0
+AND (?2='' OR reward_id=?2) AND at<=?3
+SQL
+
+storage_habit_purchase_statistics :: (reward_id: string,
+    as_of: s64) -> HabitPurchaseStatistics {
+    statistics: HabitPurchaseStatistics
+    stmt: *void = null
+    if storage_db_handle() == null || SqlitePrepareText(storage_db_handle(),
+        StorageHabitPurchaseStatisticsSQL, -1, *stmt, null) != SQLITE_OK {
+        return statistics
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    bind_text(stmt, 2, reward_id)
+    SqliteBindInt64(stmt, 3, as_of)
+    if SqliteStep(stmt) == SQLITE_ROW {
+        statistics.purchase_count = SqliteColumnInt64(stmt, 0)
+        statistics.spent_coins = SqliteColumnInt64(stmt, 1)
+        statistics.week_count = SqliteColumnInt64(stmt, 2)
+        statistics.month_count = SqliteColumnInt64(stmt, 3)
+        statistics.last_date = sqlite3_column_int(stmt, 4)
+        statistics.next_at = SqliteColumnInt64(stmt, 5)
+    }
+    SqliteFinalize(stmt)
+    return statistics
+}
+
 // Coins kept from deleted habits less the coins rewards cost.
 StorageHabitCoinRecordsSQL :: "SELECT COALESCE(SUM(CASE WHEN kind=2 THEN coins ELSE -coins END),0) FROM habit_coins WHERE user_id=?1 AND deleted_at=0"
 

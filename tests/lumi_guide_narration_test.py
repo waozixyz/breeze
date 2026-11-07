@@ -5,7 +5,7 @@ Every key the guides name with GuideOverlayStepFor is a narrated line in
 design/lumi-guide/narration.json and the other way round, and each line has
 a clip generated from its current text in every locale. After changing a
 guide line, run scripts/generate-lumi-guide-narration.py to speak it again.
-The app reads each clip's length from its Ogg headers to pace the typing;
+The app reads each Ogg Opus or Vorbis clip's length from its headers to pace the typing;
 tests/ogg_length_behavior.zi checks that reader with the given ziran.
 
 Usage: lumi_guide_narration_test.py [ZIRAN]

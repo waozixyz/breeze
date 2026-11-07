@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
-- Mengetik kini dihitung sebagai aktivitas pada indikator istirahat.
+- Foto kini diunduh dari Aplikasi, tidak lagi bawaan Breeze; foto Anda tetap ada di akun dan Buku Harian.
 - Berpindah tab Latihan lewat navigasi samping tidak lagi menggeser layar.
+- Paket suara latihan kini sekitar sepertiga lebih kecil.
+
+## [2.1.63] - 2026-11-05
+
+- Perbaiki teks di daftar dan Lumi tanpa kursor melompat.
+- Tetap kirim pesan saat Lumi menjawab, dengan Kirim dan Batal untuk laporan kepada pengembang.
+- Lihat total pembelian dan frekuensi hadiah berwarna di toko.
 
 ## [2.1.62] - 2026-11-03
 

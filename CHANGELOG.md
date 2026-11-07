@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
-- Typing now counts as activity in the break meter.
+- Photos now downloads from Apps instead of coming with Breeze; your photos stay in your account and Diary.
 - Switching Practice tabs with the side navigation no longer shifts the screen.
+- Practice voice packs are about a third smaller.
+
+## [2.1.63] - 2026-11-05
+
+- Correct text in lists and Lumi without cursor jumps.
+- Keep Lumi chat ready while replies arrive, with Send and Cancel for developer reports.
+- See color purchase totals and reward frequency in the shop.
 
 ## [2.1.62] - 2026-11-03
 

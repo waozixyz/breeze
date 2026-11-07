@@ -31,8 +31,54 @@ $(WIN64_WEBP_A): Makefile mk/windows.mk ziran.lock $(KRYON_DIR)/cmake/WebP.cmake
 		-DCMAKE_AR=$(WIN64_AR_PATH) \
 		-DCMAKE_RANLIB=$(WIN64_RANLIB_PATH) \
 		-DWEBP_DIR="$(abspath build/packages/libwebp)" \
+		$(IMAGE_PACKAGE_DIRS) \
 		-DCMAKE_BUILD_TYPE=Release
 	$(CMAKE) --build $(WIN64_WEBP_BUILD_DIR) --target kryonwebp --parallel 2
+
+# Kryon's Raylib image decoder links AVIF. libaom's CMake project also needs
+# the C++ cross compiler and, for x86-64 SIMD, nasm.
+WIN64_CXX ?= $(patsubst %gcc,%g++,$(patsubst %gcc-win32,%g++-win32,$(patsubst %gcc-posix,%g++-posix,$(WIN64_CC))))
+WIN64_CXX_PATH := $(shell command -v $(WIN64_CXX) 2>/dev/null || printf '%s' $(WIN64_CXX))
+WIN64_AVIF_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/kryon-avif
+WIN64_AVIF_A := $(WIN64_AVIF_BUILD_DIR)/avif/libavif.a
+WIN64_AOM_A := $(WIN64_AVIF_BUILD_DIR)/aom/libaom.a
+
+$(WIN64_AVIF_A): Makefile mk/windows.mk ziran.lock $(KRYON_DIR)/cmake/AVIF.cmake $(KRYON_DIR)/cmake/ImagePackages.cmake $(KRYON_DIR)/cmake/avif/CMakeLists.txt $(wildcard build/packages/avif/native/*.cmake)
+	$(CMAKE) -S $(KRYON_DIR)/cmake/avif -B $(WIN64_AVIF_BUILD_DIR) \
+		-DCMAKE_SYSTEM_NAME=Windows \
+		-DCMAKE_SYSTEM_PROCESSOR=$(WIN64_CMAKE_SYSTEM_PROCESSOR) \
+		-DCMAKE_C_COMPILER=$(WIN64_CC_PATH) \
+		-DCMAKE_CXX_COMPILER=$(WIN64_CXX_PATH) \
+		-DCMAKE_AR=$(WIN64_AR_PATH) \
+		-DCMAKE_RANLIB=$(WIN64_RANLIB_PATH) \
+		-DAVIF_DIR="$(abspath build/packages/libavif)" \
+		-DAOM_DIR="$(abspath build/packages/libaom)" \
+		$(IMAGE_PACKAGE_DIRS) \
+		-DCMAKE_BUILD_TYPE=Release
+	$(CMAKE) --build $(WIN64_AVIF_BUILD_DIR) --target avif_static aom --parallel 2
+	@test -f $@
+
+$(WIN64_AOM_A): $(WIN64_AVIF_A)
+	@test -f $@
+
+# Kryon decodes Ogg Opus narration with the audio package's static libopus,
+# which keeps libopus's stack protector, so the app also links libssp.
+WIN64_OPUS_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/audio-codecs
+WIN64_OPUS_A := $(WIN64_OPUS_BUILD_DIR)/libopus/libopus.a
+
+$(WIN64_OPUS_A): mk/windows.mk ziran.lock $(AUDIO_PACKAGE_DIR)/native/AudioCodecs.cmake $(AUDIO_OPUS_DIR)/CMakeLists.txt
+	$(CMAKE) -S $(AUDIO_PACKAGE_DIR)/native -B $(WIN64_OPUS_BUILD_DIR) \
+		-DCMAKE_SYSTEM_NAME=Windows \
+		-DCMAKE_SYSTEM_PROCESSOR=$(WIN64_CMAKE_SYSTEM_PROCESSOR) \
+		-DCMAKE_C_COMPILER=$(WIN64_CC_PATH) \
+		-DCMAKE_AR=$(WIN64_AR_PATH) \
+		-DCMAKE_RANLIB=$(WIN64_RANLIB_PATH) \
+		-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+		-DOPUS_DIR=$(abspath $(AUDIO_OPUS_DIR)) \
+		-DSAMPLERATE_DIR=$(abspath $(AUDIO_SAMPLERATE_DIR)) \
+		-DCMAKE_BUILD_TYPE=Release
+	$(CMAKE) --build $(WIN64_OPUS_BUILD_DIR) --target opus --parallel 2
+	@test -f $@
 
 $(WINDOWS_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WINDOWS_GEN_DIR)
@@ -110,7 +156,7 @@ $(WIN64_RESOURCE): windows/$(APP_NAME).rc windows/$(APP_NAME).ico
 	mkdir -p $(dir $@)
 	$(WIN64_WINDRES) -Iwindows -O coff $< $@
 
-$(WIN64_TARGET): Makefile mk/windows.mk $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WIN64_RAYLIB_A) $(WIN64_WEBP_A) $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(WIN64_RESOURCE) | $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)
+$(WIN64_TARGET): Makefile mk/windows.mk $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WIN64_RAYLIB_A) $(WIN64_WEBP_A) $(WIN64_AVIF_A) $(WIN64_AOM_A) $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(WIN64_OPUS_A) $(WIN64_RESOURCE) | $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)
 	$(WIN64_CC) $(WINDOWS_CFLAGS) \
 		-iquote$(WINDOWS_GEN_DIR) -iquote$(WINDOWS_GEN_DIR)/src $(WINDOWS_APP_INCLUDE) \
 		$(KRYON_INCLUDE) \
@@ -125,8 +171,11 @@ $(WIN64_TARGET): Makefile mk/windows.mk $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQ
 		$(SQLITE_SRC) \
 		$(WIN64_RAYLIB_A) \
 		$(WIN64_WEBP_A) \
+		$(WIN64_AVIF_A) \
+		$(WIN64_AOM_A) \
 		$(WIN64_CURL_A) \
 		$(WIN64_LIBOQS_A) \
+		$(WIN64_OPUS_A) -lssp \
 		$(WIN64_RESOURCE) $(WINDOWS_LDLIBS) \
 		$(WIN64_THREAD_LDFLAGS) \
 		$(WINDOWS_LDFLAGS)

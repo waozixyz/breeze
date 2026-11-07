@@ -2,8 +2,15 @@
 
 ## [Unreleased]
 
-- Psaní se nyní v ukazateli přestávek počítá jako aktivita.
+- Fotky se nyní stahují v Aplikacích a nejsou součástí Breeze; vaše fotky zůstávají v účtu a v Deníku.
 - Přepínání karet Cvičení v postranní navigaci už neposouvá obrazovku.
+- Hlasové balíčky cvičení jsou asi o třetinu menší.
+
+## [2.1.63] - 2026-11-05
+
+- Opravujte text v seznamech a Lumi bez přeskakování kurzoru.
+- Pište do Lumi i během odpovědi a odesílejte hlášení vývojáři pomocí tlačítek Odeslat a Zrušit.
+- V obchodě uvidíte barevné souhrny nákupů a četnost odměn.
 
 ## [2.1.62] - 2026-11-03
 

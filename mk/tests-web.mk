@@ -7,6 +7,10 @@ JS_TEST_FLAGS ?= --test
 referral-browser-ui-test:
 	$(JS_RUNTIME) tests/referral_browser_test.mjs
 
+.PHONY: web-smoke-protocol-test
+web-smoke-protocol-test:
+	$(JS_RUNTIME) $(JS_TEST_FLAGS) ./tests/web_smoke_protocol_test.mjs
+
 .PHONY: firefox-startup-test
 firefox-startup-test:
 	$(JS_RUNTIME) $(JS_TEST_FLAGS) ./tests/firefox_startup_test.mjs

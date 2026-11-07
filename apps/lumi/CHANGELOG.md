@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.5.29] - 2026-11-05
+
+- Keep chat ready while replies arrive, show Send and Cancel for developer reports, and retain the cursor when correcting text.
+
 ## [1.5.28] - 2026-11-02
 
 - Maintenance release for Inner Breeze 2.1.62.
