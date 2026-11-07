@@ -529,9 +529,9 @@ declares the oldest host interface it needs (`host_api` in its ledger entry),
 and the host runs packages from `oldest_host_api` to its own `host_api`.
 A host loads only programs in its own Ziran program format, so a toolchain whose
 format changed is a new interface too: `oldest_host_api` and every package's
-`host_api` rise above the last released host. Host 41 (2.1.61) is the
-first with format 59; released apps up to 2.1.60 (host 40) cannot load
-packages built since, and are not offered them.
+`host_api` rise above the last released host. Host 43 is the first with
+format 62; released apps up to 2.1.62 (host 42) cannot load packages built
+since, and are not offered them.
 
 A format bump publishes in this order, because a host only finds what the
 node already serves for its interface and `make package-compat-test` needs

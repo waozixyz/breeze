@@ -104,7 +104,7 @@ Main :: () -> s32 {
     arcade_art = json.loads(arcade_assets['assets/apps/catalog.json'])['art']['sha256'] + '.zx'
     (fixture / 'embedded-releases.json').write_bytes(root_assets['assets/apps/bundled/releases.json'])
     release = dict(app_id='inbe.fixture', sequence=2, version='2.0.0', runtime='kryon-app-v1',
-                   host_api=41, module_api=2, data_schema=0, key_id='other', dependencies=[],
+                   host_api=43, module_api=2, data_schema=0, key_id='other', dependencies=[],
                    artifacts=[dict(variant='module', sha256=hashlib.sha256(packed_root.read_bytes()).hexdigest(),
                                    size=packed_root.stat().st_size)])
     release['signature'] = key.sign(signing_message(release)).hex()
