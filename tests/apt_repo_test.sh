@@ -3,6 +3,11 @@
 # that differs from the published keyring or a deb that differs from its name.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# gpg-agent listens on sockets inside each GnuPG home, here and in
+# build-apt-repo.sh, and Unix socket paths end at 107 bytes. A long TMPDIR
+# (such as an agent sandbox's) would stop the agent, so use /tmp instead.
+tmp=${TMPDIR:-/tmp}
+[ "${#tmp}" -le 48 ] || { TMPDIR=/tmp && export TMPDIR; }
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 version=9.8.7
@@ -25,7 +30,8 @@ make_deb() {
 new_key() {
 	GNUPGHOME=$work/gpg-$1 && export GNUPGHOME
 	mkdir -m 700 "$GNUPGHOME"
-	gpg --batch --quiet --passphrase '' --quick-gen-key "test $1 <t@example.invalid>" rsa2048 sign never 2>/dev/null
+	gpg --batch --quiet --passphrase '' --quick-gen-key "test $1 <t@example.invalid>" rsa2048 sign never 2>"$work/gpg-$1.log" ||
+		{ cat "$work/gpg-$1.log" >&2; fail "could not create the $1 test key"; }
 	gpg --export > "$work/$1.gpg"
 	gpg --armor --export-secret-keys
 	unset GNUPGHOME
