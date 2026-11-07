@@ -192,7 +192,9 @@ AVIF_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/kryon-avif
 AVIF_A := $(AVIF_BUILD_DIR)/avif/libavif.a
 AOM_A := $(AVIF_BUILD_DIR)/aom/libaom.a
 # Kryon's codec recipes come from the codec packages in this app's lock.
-IMAGE_PACKAGE_DIRS := -DKRYON_WEBP_PACKAGE_DIR="$(abspath build/packages/webp)" -DKRYON_AVIF_PACKAGE_DIR="$(abspath build/packages/avif)"
+# Kryon resolves the rest (dav1d) with this build's ziran, which CI runners
+# do not have on PATH.
+IMAGE_PACKAGE_DIRS := -DKRYON_WEBP_PACKAGE_DIR="$(abspath build/packages/webp)" -DKRYON_AVIF_PACKAGE_DIR="$(abspath build/packages/avif)" -DZIRAN_BIN="$(ZIRAN_BIN)"
 WIN64_ARCH := x86_64
 WIN64_CC ?= $(or $(WIN_CC),x86_64-w64-mingw32-gcc)
 WIN64_AR ?= $(or $(WIN_AR),x86_64-w64-mingw32-ar)
@@ -548,11 +550,11 @@ $(RAYLIB_A): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
 
 KRYON_NATIVE_CFLAGS := $(CFLAGS)
 KRYON_SRCS += $(KRYON_RAYLIB_WRAPPERS_C)
-$(WEBP_A): ziran.lock $(KRYON_DIR)/cmake/WebP.cmake $(KRYON_DIR)/cmake/ImagePackages.cmake $(KRYON_DIR)/cmake/webp/CMakeLists.txt $(wildcard build/packages/webp/native/*.cmake build/packages/libwebp/src/*/*.c build/packages/libwebp/src/*/*.h)
+$(WEBP_A): ziran.lock $(KRYON_DIR)/cmake/WebP.cmake $(KRYON_DIR)/cmake/ImagePackages.cmake $(KRYON_DIR)/cmake/webp/CMakeLists.txt $(wildcard build/packages/webp/native/*.cmake build/packages/libwebp/src/*/*.c build/packages/libwebp/src/*/*.h) | $(ZIRAN_BIN)
 	$(CMAKE) -S $(KRYON_DIR)/cmake/webp -B $(WEBP_BUILD_DIR) -DWEBP_DIR="$(abspath build/packages/libwebp)" $(IMAGE_PACKAGE_DIRS) -DCMAKE_BUILD_TYPE=Release
 	$(CMAKE) --build $(WEBP_BUILD_DIR) --target kryonwebp --parallel 2
 
-$(AVIF_A): ziran.lock $(KRYON_DIR)/cmake/AVIF.cmake $(KRYON_DIR)/cmake/ImagePackages.cmake $(KRYON_DIR)/cmake/avif/CMakeLists.txt $(wildcard build/packages/avif/native/*.cmake)
+$(AVIF_A): ziran.lock $(KRYON_DIR)/cmake/AVIF.cmake $(KRYON_DIR)/cmake/ImagePackages.cmake $(KRYON_DIR)/cmake/avif/CMakeLists.txt $(wildcard build/packages/avif/native/*.cmake) | $(ZIRAN_BIN)
 	$(CMAKE) -S $(KRYON_DIR)/cmake/avif -B $(AVIF_BUILD_DIR) -DAVIF_DIR="$(abspath build/packages/libavif)" -DAOM_DIR="$(abspath build/packages/libaom)" $(IMAGE_PACKAGE_DIRS) -DCMAKE_BUILD_TYPE=Release
 	$(CMAKE) --build $(AVIF_BUILD_DIR) --target avif_static aom --parallel 2
 	@test -f $@

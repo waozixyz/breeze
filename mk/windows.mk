@@ -43,7 +43,7 @@ WIN64_AVIF_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/kryon-avif
 WIN64_AVIF_A := $(WIN64_AVIF_BUILD_DIR)/avif/libavif.a
 WIN64_AOM_A := $(WIN64_AVIF_BUILD_DIR)/aom/libaom.a
 
-$(WIN64_AVIF_A): Makefile mk/windows.mk ziran.lock $(KRYON_DIR)/cmake/AVIF.cmake $(KRYON_DIR)/cmake/ImagePackages.cmake $(KRYON_DIR)/cmake/avif/CMakeLists.txt $(wildcard build/packages/avif/native/*.cmake)
+$(WIN64_AVIF_A): Makefile mk/windows.mk ziran.lock $(KRYON_DIR)/cmake/AVIF.cmake $(KRYON_DIR)/cmake/ImagePackages.cmake $(KRYON_DIR)/cmake/avif/CMakeLists.txt $(wildcard build/packages/avif/native/*.cmake) | $(ZIRAN_BIN)
 	$(CMAKE) -S $(KRYON_DIR)/cmake/avif -B $(WIN64_AVIF_BUILD_DIR) \
 		-DCMAKE_SYSTEM_NAME=Windows \
 		-DCMAKE_SYSTEM_PROCESSOR=$(WIN64_CMAKE_SYSTEM_PROCESSOR) \
