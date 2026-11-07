@@ -8,13 +8,13 @@ mkdir -p "$work/c"
 
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/daochi-client" \
     "$root/src/app/language_selection.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/daochi-client" \
     -o "$work/c" "$root/src/app/language_selection.zi"

@@ -77,7 +77,7 @@ def check_locked_sources():
     result = subprocess.run(
         ["make", "--no-print-directory", "screenshot-source-check",
          "PACKAGE_FLAGS=--locked", "KRYON_DIR=build/packages/kryon",
-         "KSS_DIR=build/packages/kss", "ZIRAN_DIR=build/packages/ziran"],
+         "CSS_DIR=build/packages/css", "ZIRAN_DIR=build/packages/ziran"],
         cwd=ROOT, env=env, capture_output=True,
         text=True, timeout=120)
     require(result.returncode == 0,

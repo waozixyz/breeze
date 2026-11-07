@@ -313,7 +313,7 @@ def main():
         generate(generated, 'package_manager_behavior.zi',
                  [ROOT / 'src', toolchain / 'std', ROOT / 'build/packages/kryon/src/ui',
                   ROOT / 'build/packages/kryon/src/backend', ROOT / 'build/packages/daochi-client',
-                  ROOT / 'build/packages/kss/src', ROOT / 'build/packages/game2d/src',
+                  ROOT / 'build/packages/css/src', ROOT / 'build/packages/game2d/src',
                   *package_paths])
         # Package scoping changes generated C names, not the download API.
         # Bind this fixture's wrappers to the actual declared symbols.

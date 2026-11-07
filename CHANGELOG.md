@@ -3,8 +3,8 @@
 ## [Unreleased]
 
 - Photos now downloads from Apps instead of coming with Breeze; your photos stay in your account and Diary.
-- Switching Practice tabs with the side navigation no longer shifts the screen.
-- Practice voice packs are about a third smaller.
+- Practice voice packs are about a third smaller, and switching Practice tabs no longer shifts the screen.
+- Custom appearance sheets are now written in CSS; sheets you saved before convert automatically.
 
 ## [2.1.63] - 2026-11-05
 

@@ -1,10 +1,9 @@
 // The Appearance editor, Lumi and external app tools share these operations.
 #import "vec"
 #import "std/json_scan"
-#import "kss_formatter"
+#import "css_format"
 #import "byte_text_linux"
-#import "kss_parser"
-#import "style_parse"
+#import "css_parser"
 #import "style_sheet"
 #import "style"
 #import "control_props"
@@ -25,7 +24,6 @@ using ButtonState;
 using ButtonTone;
 using ButtonEmphasis;
 using ControlSize;
-using KssStatus;
 storage_get_setting_text :: (key: string) -> string #foreign c;
 storage_set_setting_text :: (key: string, value: string) #foreign c;
 
@@ -60,7 +58,7 @@ AppearancePreview :: (app: *InnerBreeze, scope: s32) -> bool {
 
 AppearanceEdit :: (app: *InnerBreeze, scope: s32, source: string) -> bool {
     if !StyleSetDraft(scope, source) {
-        unused AppCopyText("KSS must contain fewer than 8192 bytes and no NUL characters.", style_error[:])
+        unused AppCopyText("CSS must contain fewer than 8192 bytes and no NUL characters.", style_error[:])
         return false
     }
     return AppearancePreview(app, scope)
@@ -74,7 +72,7 @@ AppearanceSave :: (app: *InnerBreeze, scope: s32) -> bool {
     if !DataTemporary() {
         storage_set_setting_text(StyleSettingKey(scope), source)
         if storage_get_setting_text(StyleSettingKey(scope)) != source {
-            unused AppCopyText("Could not save custom KSS. The preview remains available.", style_error[:])
+            unused AppCopyText("Could not save custom CSS. The preview remains available.", style_error[:])
             return false
         }
     }
@@ -100,31 +98,20 @@ AppearanceUndo :: (app: *InnerBreeze, scope: s32) -> bool {
     return AppearancePreview(app, scope)
 }
 
+// Formatting adds indentation; a result over the source limit is refused
+// by AppearanceEdit like any other oversize draft.
+appearance_format_output: [StyleSourceCapacity * 2]u8;
+
 AppearanceFormat :: (app: *InnerBreeze, scope: s32) -> bool {
     source := StyleDraftSource(scope)
-    formatted := KssFormat(source)
+    formatted := CssFormat(source, appearance_format_output[:])
     if !formatted.ok {
+        StyleClearError()
         unused AppCopyText(TextFromBytes(formatted.diagnostic[:formatted.diagnostic_length]),
             style_error[:])
         return false
     }
-    output: Vec(u8)
-    for index: cast(s32)0..formatted.count - 1 {
-        segment := formatted.segments[index]
-        if segment.kind == 0 {
-            unused BuilderAppend(output, source[segment.start:segment.start + segment.length])
-        } else if segment.kind == 1 {
-            unused VecPush(output, segment.atom)
-        } else {
-            unused VecPush(output, cast(u8)10)
-            for space: cast(s32)0..segment.length - 1 {
-                unused VecPush(output, cast(u8)32)
-            }
-        }
-    }
-    text := BuilderFinish(output)
-    defer { PackageFree(text) }
-    return AppearanceEdit(app, scope, text)
+    return AppearanceEdit(app, scope, TextFromBytes(appearance_format_output[:formatted.count]))
 }
 
 AppearanceJsonString :: (output: *Vec(u8), source: string) {
@@ -205,7 +192,7 @@ AppearanceState :: (name: string) -> s32 {
 AppearanceFacts :: (widget: string, class_name: string, state: s32) -> StyleFacts {
     facts := StyleDefaultFacts(AppearanceWidgetKind(widget))
     if class_name.count > 0 {
-        facts.class_name = KssClassId(KssMakeName(class_name))
+        facts.class_name = CssClass(class_name)
     }
     facts.tone = cast(s32)ButtonToneNeutral
     facts.emphasis = cast(s32)ButtonEmphasisSoft
@@ -300,10 +287,10 @@ AppearanceRead :: (app: *InnerBreeze, scope: s32) -> string {
     BuilderPrint(*output, ",\"preview_source\":")
     AppearanceJsonString(*output, StyleAppliedSource(scope))
     BuilderPrint(*output, ",\"app_defaults\":")
-    defaults := AssetRead("assets/styles/inbe.kss")
+    defaults := StyleImport("inbe")
     AppearanceJsonString(*output, defaults.data)
     BuilderPrint(*output, ",\"pack_defaults\":")
-    pack := StyleImport(KssMakeName(style_pack_id(app.style_index)))
+    pack := StyleImport(style_pack_id(app.style_index))
     AppearanceJsonString(*output, pack.data)
     BuilderPrint(*output, ",\"precedence\":[\"shared pack and app defaults\",\"all apps customization\",\"selected app customization\"],\"source_limit\":8191,\"rule_limit\":512,\"error\":")
     AppearanceJsonString(*output, AppTextFromCString(*style_error[0], 256))
@@ -335,7 +322,7 @@ AppearanceTool :: (app: *InnerBreeze, name: string, arguments: string) -> string
         source_count := ReadStringText(arguments, field, source_bytes[:])
         if field < 0 || field >= arguments.count || arguments[field] != cast(u8)34 ||
         source_count < 0 || source_count >= StyleSourceCapacity {
-            return PackageText("{\"ok\":false,\"error\":\"source must be a KSS string of at most 8191 bytes\"}", "")
+            return PackageText("{\"ok\":false,\"error\":\"source must be a CSS string of at most 8191 bytes\"}", "")
         }
         ok = AppearanceEdit(app, scope, TextFromBytes(source_bytes[:source_count]))
     } else if name == "save_style" {

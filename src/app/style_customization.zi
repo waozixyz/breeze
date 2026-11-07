@@ -1,5 +1,7 @@
-// Account-owned custom KSS. Drafts and previews never overwrite shipped assets.
+// Account-owned custom CSS. Drafts and previews never overwrite shipped assets.
 #import "style_sheet"
+#import "css_migrate"
+#import "byte_text_linux"
 #import, file "text_buffers.zi";
 #import, file "settings_store.zi";
 #import, file "../storage/storage_settings.zi";
@@ -58,6 +60,17 @@ StyleScopeIndex :: (name: string) -> s32 {
 }
 
 StyleSettingKey :: (scope: s32) -> string {
+    keys: [StyleScopeCount]string = .["appearance.css.all", "appearance.css.lists",
+    "appearance.css.habits", "appearance.css.practices",
+    "appearance.css.diary", "appearance.css.lumi"]
+    if scope < 0 || scope >= StyleScopeCount {
+        return ""
+    }
+    return keys[scope]
+}
+
+// Where Breeze kept each scope's sheet while sheets were KSS.
+StyleLegacySettingKey :: (scope: s32) -> string {
     keys: [StyleScopeCount]string = .["appearance.kss.all", "appearance.kss.lists",
     "appearance.kss.habits", "appearance.kss.practices",
     "appearance.kss.diary", "appearance.kss.lumi"]
@@ -88,6 +101,12 @@ StyleAppliedSource :: (scope: s32) -> string {
     return AppTextFromCString(*style_documents[scope].applied[0], StyleSourceCapacity)
 }
 
+// A scope whose CSS setting was read, and one whose sheet was converted from
+// its KSS setting and is not saved as CSS yet.
+style_loaded: [StyleScopeCount]bool;
+style_converted: [StyleScopeCount]bool;
+style_convert_output: [StyleSourceCapacity * 2]u8;
+
 StyleCustomizationCollect :: (key: string, value: string, user: s64) {
     unused user
     for scope: cast(s32)0..StyleScopeCount - 1 {
@@ -95,15 +114,62 @@ StyleCustomizationCollect :: (key: string, value: string, user: s64) {
             // Oversize or embedded-NUL data remains unapplied rather than truncated.
             buffer: [StyleSourceCapacity]u8
             if !AppCopyText(value, buffer[:]) {
-                unused AppCopyText("Saved KSS exceeds the source limit.", style_error[:])
+                unused AppCopyText("Saved CSS exceeds the source limit.", style_error[:])
                 return
             }
             style_documents[scope].saved = buffer
             style_documents[scope].draft = buffer
             style_documents[scope].applied = buffer
+            style_loaded[scope] = true
+            style_converted[scope] = false
+            return
+        }
+        if key == StyleLegacySettingKey(scope) {
+            // Settings arrive in no order; a CSS setting always wins.
+            if !style_loaded[scope] {
+                StyleConvertLegacy(scope, value)
+            }
             return
         }
     }
+}
+
+// A sheet saved as KSS converts to CSS once. The KSS setting stays as it
+// was. A sheet that has no CSS form opens as an unapplied draft to fix.
+StyleConvertLegacy :: (scope: s32, value: string) {
+    result := CssMigrateKss(value, style_convert_output[:])
+    if result.ok && result.count < StyleSourceCapacity {
+        converted := TextFromBytes(style_convert_output[:result.count])
+        unused AppCopyText(converted, style_documents[scope].saved[:])
+        unused AppCopyText(converted, style_documents[scope].draft[:])
+        unused AppCopyText(converted, style_documents[scope].applied[:])
+        style_converted[scope] = true
+        return
+    }
+    style_documents[scope].saved[0] = cast(u8)0
+    style_documents[scope].applied[0] = cast(u8)0
+    unused AppCopyText(value, style_documents[scope].draft[:])
+    style_converted[scope] = false
+    prefix := ifx result.ok then "The saved KSS sheet is too long once converted to CSS." else "The saved KSS sheet could not be converted to CSS: "
+    count: s32 = 0
+    for byte: prefix {
+        if count < 255 {
+            style_error[count] = byte
+            count += 1
+        }
+    }
+    if !result.ok {
+        for index: cast(s32)0..result.error_length - 1 {
+            if count < 255 {
+                style_error[count] = result.error[index]
+                count += 1
+            }
+        }
+    }
+    style_error[count] = cast(u8)0
+    CopyTextToBuffer(*style_error_path[0], 64, StyleLegacySettingKey(scope))
+    style_error_line = result.line
+    style_error_column = 0
 }
 
 StyleCustomizationLoad :: () {
@@ -118,8 +184,18 @@ StyleCustomizationLoad :: () {
     style_error_line = 0
     style_error_column = 0
     style_revision += 1
+    for scope: cast(s32)0..StyleScopeCount - 1 {
+        style_loaded[scope] = false
+        style_converted[scope] = false
+    }
     if !DataTemporary() {
         unused storage_list_settings(StyleCustomizationCollect, null)
+        for scope: cast(s32)0..StyleScopeCount - 1 {
+            if style_converted[scope] {
+                storage_set_setting_text(StyleSettingKey(scope), StyleSavedSource(scope))
+                style_converted[scope] = false
+            }
+        }
     }
 }
 

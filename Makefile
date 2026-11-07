@@ -181,7 +181,7 @@ VERSION_FILE := src/core/version.h
 APP_VERSION := $(shell awk '/APP_VERSION_STRING/ { print $$3; exit }' $(VERSION_FILE) 2>/dev/null | tr -d '"')
 
 KRYON_DIR ?= build/packages/kryon
-KSS_DIR ?= build/packages/kss
+CSS_DIR ?= build/packages/css
 OQS_DIR ?= build/packages/oqs
 RAYLIB_DIR = build/packages/raylib/src
 RAYLIB_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/raylib
@@ -224,14 +224,14 @@ KRYON_UI_ZI := $(addprefix $(KRYON_DIR)/src/ui/,$(shell cat $(KRYON_DIR)/src/ui/
 KRYON_UI_C := $(patsubst $(KRYON_DIR)/src/ui/%.zi,$(KRYON_GENERATED_SRC_DIR)/ui/%.c,$(KRYON_UI_ZI))
 KRYON_UI_H := $(KRYON_UI_C:.c=.h)
 KRYON_UI_STAMP := $(KRYON_GENERATED_SRC_DIR)/ui/.fresh
-KRYON_KSS_ZI := $(wildcard $(KSS_DIR)/src/*.zi)
-KRYON_KSS_C := $(patsubst $(KSS_DIR)/src/%.zi,$(KRYON_GENERATED_SRC_DIR)/kss/%.c,$(KRYON_KSS_ZI))
-KRYON_KSS_H := $(KRYON_KSS_C:.c=.h)
-KRYON_KSS_STAMP := $(KRYON_GENERATED_SRC_DIR)/kss/.fresh
+KRYON_CSS_ZI := $(wildcard $(CSS_DIR)/src/*.zi)
+KRYON_CSS_C := $(patsubst $(CSS_DIR)/src/%.zi,$(KRYON_GENERATED_SRC_DIR)/css/%.c,$(KRYON_CSS_ZI))
+KRYON_CSS_H := $(KRYON_CSS_C:.c=.h)
+KRYON_CSS_STAMP := $(KRYON_GENERATED_SRC_DIR)/css/.fresh
 KRYON_ICON_ASSETS_C := $(KRYON_GENERATED_SRC_DIR)/ui/ui_icon_assets.c
 KRYON_ICON_NAMES_C := $(KRYON_GENERATED_SRC_DIR)/ui/ui_icon_names.c
 KRYON_ICON_TYPES_H := $(KRYON_GENERATED_INCLUDE_DIR)/ui_icon_types.h
-KRYON_SRCS := $(filter-out $(KRYON_DIR)/src/ui/ui_icon_assets.c $(KRYON_DIR)/src/ui/ui_icon_names.c,$(shell find $(KRYON_DIR)/src -type f -name '*.c' | LC_ALL=C sort)) $(KRYON_ICON_ASSETS_C) $(KRYON_ICON_NAMES_C) $(KRYON_UI_C) $(KRYON_KSS_C)
+KRYON_SRCS := $(filter-out $(KRYON_DIR)/src/ui/ui_icon_assets.c $(KRYON_DIR)/src/ui/ui_icon_names.c,$(shell find $(KRYON_DIR)/src -type f -name '*.c' | LC_ALL=C sort)) $(KRYON_ICON_ASSETS_C) $(KRYON_ICON_NAMES_C) $(KRYON_UI_C) $(KRYON_CSS_C)
 KRYON_SYNC_ICONS := $(KRYON_DIR)/scripts/sync-icons.sh
 WEB_SHARED_ICON_SHEETS := platforms language tiles
 # Inbe's desktop uses Kryon's raylib backend, not its libdraw, terminal or
@@ -389,9 +389,9 @@ FONT_FILES := \
 	$(FONT_SUBSET_DIR)/NotoSansKR-App-Regular.otf \
 	$(FONT_SUBSET_DIR)/NotoSansTC-App-Regular.otf
 EMBEDDED_ASSETS_C := $(BUILD_OBJ_DIR)/$(APP_NAME)_embedded_assets.c
-STYLE_FILES := $(wildcard $(KSS_DIR)/styles/*.kss) \
-	$(wildcard assets/styles/*.kss) \
-	$(wildcard themes/catalog_*.kss)
+STYLE_FILES := $(wildcard $(CSS_DIR)/styles/*.css) \
+	$(wildcard assets/styles/*.css) \
+	$(wildcard themes/catalog_*.css)
 IMAGE_FILES += assets/app/icon-sky-cradle.webp assets/app/icon-ink-and-air.webp
 IMAGE_FILES += assets/social/telegram.svg $(wildcard assets/social/*.png assets/social/*.webp)
 IMAGE_FILES += $(KRYON_DIR)/icons/ui.webp $(KRYON_DIR)/icons/pfp.webp
@@ -654,8 +654,8 @@ zi-check: $(ZI_CHECK_STAMP) | build-laws
 
 $(ZI_CHECK_STAMP): Makefile scripts/check-zi-sources.py $(ZI2C_BIN) \
 	$(ZI_SRCS) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) \
-	$(KRYON_UI_ZI) $(KRYON_KSS_ZI) $(GAME2D_MODULES) | build-laws
-	@ZI_CHECK_DEFINES="$(ZI_NATIVE_DEFINES)" python3 scripts/check-zi-sources.py $(ZI2ZIR_BIN) $(KRYON_DIR)/src/ui $(ZIRAN_DIR)/std $(KSS_DIR)/src
+	$(KRYON_UI_ZI) $(KRYON_CSS_ZI) $(GAME2D_MODULES) | build-laws
+	@ZI_CHECK_DEFINES="$(ZI_NATIVE_DEFINES)" python3 scripts/check-zi-sources.py $(ZI2ZIR_BIN) $(KRYON_DIR)/src/ui $(ZIRAN_DIR)/std $(CSS_DIR)/src
 	@mkdir -p $(dir $@)
 	@touch $@
 
@@ -681,14 +681,14 @@ $(KRYON_UI_STAMP): Makefile $(ZI2C_BIN) $(KRYON_UI_ZI) $(KRYON_DIR)/src/ui/modul
 $(KRYON_UI_C) $(KRYON_UI_H): $(KRYON_UI_STAMP)
 	@test -f $@
 
-$(KRYON_KSS_STAMP): Makefile $(ZI2C_BIN) $(KRYON_KSS_ZI) $(KRYON_DIR)/src/ui/modules.txt
+$(KRYON_CSS_STAMP): Makefile $(ZI2C_BIN) $(KRYON_CSS_ZI) $(KRYON_DIR)/src/ui/modules.txt
 	mkdir -p $(dir $@)
-	$(ZI2C_BIN) --no-main --root $(KSS_DIR)/src \
+	$(ZI2C_BIN) --no-main --root $(CSS_DIR)/src \
 		--module-path $(KRYON_DIR)/src/ui --module-path kryon=$(KRYON_DIR)/src/ui --module-path kryon=$(KRYON_DIR)/src/backend \
-		-o $(dir $@) $(KRYON_KSS_ZI)
+		-o $(dir $@) $(KRYON_CSS_ZI)
 	touch $@
 
-$(KRYON_KSS_C) $(KRYON_KSS_H): $(KRYON_KSS_STAMP)
+$(KRYON_CSS_C) $(KRYON_CSS_H): $(KRYON_CSS_STAMP)
 	@test -f $@
 
 $(KRY_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
@@ -699,7 +699,7 @@ $(KRY_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --prune-stale --root . \
 		$(foreach define,$(ZI_NATIVE_DEFINES),--define $(define)) \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KSS_DIR)/src \
+		--module-path $(CSS_DIR)/src \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
@@ -733,8 +733,8 @@ FORCE:
 
 .PHONY: theme-catalog-bundle-check
 theme-catalog-bundle-check:
-	@cmp themes/catalog_light.kss $(KRYON_DIR)/themes/catalog_light.kss
-	@cmp themes/catalog_dark.kss $(KRYON_DIR)/themes/catalog_dark.kss
+	@cmp themes/catalog_light.css $(KRYON_DIR)/themes/catalog_light.css
+	@cmp themes/catalog_dark.css $(KRYON_DIR)/themes/catalog_dark.css
 
 $(EMBEDDED_ASSETS_C): Makefile $(EMBEDDED_ASSET_FILES) scripts/embed-app-assets.py src/app/assets_host.h | $(BUILD_OBJ_DIR) theme-catalog-bundle-check
 	python3 scripts/embed-app-assets.py $@ $(EMBEDDED_ASSET_FILES)

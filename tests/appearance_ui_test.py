@@ -1,4 +1,4 @@
-"""KSS editor and app-owned Lumi tools on an owned private Xvfb window.
+"""CSS editor and app-owned Lumi tools on an owned private Xvfb window.
 
 The app runs with Kryon's test driver: the editor's controls are found in
 its widget tree, pressed and typed into through its own input path.
@@ -150,16 +150,16 @@ with tempfile.TemporaryDirectory(prefix='inbe-appearance-') as directory:
                 'discard_style', 'undo_style', 'format_style'} <= published
         assert read(window)['rule_limit'] == 512
         original = read(window)['revision']
-        assert change(window, 'preview_style', source='Button { radius: 24; }')['ok']
+        assert change(window, 'preview_style', source='Button { border-radius: 24px; }')['ok']
         assert not tool(window, 'reset_style', dict(scope='all', revision=original))['ok']
         inspected = tool(window, 'inspect_style', dict(scope='all', widget='Button', state='normal'))
         assert inspected['ok'] and 'radius: 24' in inspected['inspection'], inspected
-        assert not change(window, 'preview_style', source='Button { radius: unknown; }')['ok']
-        assert read(window)['preview_source'] == 'Button { radius: 24; }'
+        assert not change(window, 'preview_style', source='Button { border-radius: unknown; }')['ok']
+        assert read(window)['preview_source'] == 'Button { border-radius: 24px; }'
         assert not change(window, 'save_style')['ok']
         assert change(window, 'undo_style')['ok']
         assert change(window, 'save_style')['ok']
-        assert change(window, 'preview_style', scope='habits', source='Button { radius: 7; }')['ok']
+        assert change(window, 'preview_style', scope='habits', source='Button { border-radius: 7px; }')['ok']
         assert change(window, 'save_style', scope='habits')['ok']
         inspected = tool(window, 'inspect_style', dict(scope='habits', widget='Button', state='normal'))
         assert 'radius: 7' in inspected['inspection'], inspected
@@ -168,36 +168,36 @@ with tempfile.TemporaryDirectory(prefix='inbe-appearance-') as directory:
         assert change(window, 'reset_style', scope='habits')['ok']
         assert change(window, 'reset_style')['ok']
         tool(window, 'open_view', dict(view='appearance'))
-        press(label='Advanced appearance (KSS)', role='button')
+        press(label='Advanced appearance (CSS)', role='button')
         wait_for(lambda: state(window)['appearance']['open'], 'Advanced editor did not open')
-        press(label='Custom KSS', role='text_area')
-        wait_for(lambda: driver.find(label='Custom KSS', role='text_area')[0]['focused'],
-                 'The KSS editor did not take focus')
+        press(label='Custom CSS', role='text_area')
+        wait_for(lambda: driver.find(label='Custom CSS', role='text_area')[0]['focused'],
+                 'The CSS editor did not take focus')
         driver.key('a', control=True)
-        driver.type('Button { radius: 19; }')
-        wait_for(lambda: state(window)['appearance']['source'] == 'Button { radius: 19; }',
-                 'Manual typing did not update KSS draft')
-        driver.wait(label='Custom KSS', role='text_area', value='Button { radius: 19; }')
+        driver.type('Button { border-radius: 19px; }')
+        wait_for(lambda: state(window)['appearance']['source'] == 'Button { border-radius: 19px; }',
+                 'Manual typing did not update the CSS draft')
+        driver.wait(label='Custom CSS', role='text_area', value='Button { border-radius: 19px; }')
         # The typed draft previews live once the editor pauses.
-        inspected = wait_for(lambda: previewed_radius(window, 19), 'Typed KSS did not preview')
+        inspected = wait_for(lambda: previewed_radius(window, 19), 'Typed CSS did not preview')
         assert inspected['ok'] and 'radius: 19' in inspected['inspection'], inspected
         press(label='Save', role='button')
-        wait_for(lambda: read(window)['saved_source'] == 'Button { radius: 19; }', 'UI save did not persist')
+        wait_for(lambda: read(window)['saved_source'] == 'Button { border-radius: 19px; }', 'UI save did not persist')
     with application(profile, 'restart') as window:
-        assert read(window)['saved_source'] == 'Button { radius: 19; }'
+        assert read(window)['saved_source'] == 'Button { border-radius: 19px; }'
         assert change(window, 'reset_style')['ok']
         assert read(window)['saved_source'] == ''
         tool(window, 'open_view', dict(view='appearance'))
-        press(label='Advanced appearance (KSS)', role='button')
+        press(label='Advanced appearance (CSS)', role='button')
         press(label='Ask Lumi', role='button')
         wait_for(lambda: state(window)['feature'] == 16, 'Ask Lumi did not hand off to Lumi')
     with application(profile, 'phone', width=390, height=844) as window:
         assert read(window)['saved_source'] == ''
         tool(window, 'open_view', dict(view='appearance'))
-        press(label='Advanced appearance (KSS)', role='button')
-        reveal(label='Custom KSS', role='text_area')
+        press(label='Advanced appearance (CSS)', role='button')
+        reveal(label='Custom CSS', role='text_area')
     with sqlite3.connect(profile / 'inbe.db') as db:
-        assert db.execute("SELECT value FROM settings WHERE key='appearance.kss.all'").fetchone()[0] == ''
+        assert db.execute("SELECT value FROM settings WHERE key='appearance.css.all'").fetchone()[0] == ''
 
 (OUTPUT / 'results.json').write_text(json.dumps(receipts, indent=2) + '\n')
 print('Appearance: real editor, live validation, scopes, save/restart, reset and Lumi handoff passed')

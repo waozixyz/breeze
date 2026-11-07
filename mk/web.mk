@@ -6,7 +6,7 @@ $(WEB_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --root . \
 		--define PLATFORM_WEB --define __EMSCRIPTEN__ \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KSS_DIR)/src \
+		--module-path $(CSS_DIR)/src \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \

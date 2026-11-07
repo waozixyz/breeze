@@ -17,7 +17,7 @@ mkdir -p "$work/cache-c"
 "$ziran" build --root "$root" --target=c --define PLATFORM_DESKTOP --entry node_child_packages_behavior:main \
     --module-path "$root/src/platform" \
     --module-path "$root/build/packages/daochi-client" \
-    --module-path "$root/build/packages/kss/src" \
+    --module-path "$root/build/packages/css/src" \
     --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/kryon/src/ui" \

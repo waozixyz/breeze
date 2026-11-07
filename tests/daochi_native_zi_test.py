@@ -155,7 +155,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-daochi-native-") as temporary:
         "--module-path", str(ROOT / "build/packages/kryon/src/ui"),
         *subprocess.check_output(["sh", str(ROOT / "scripts/package-paths.sh"), str(ROOT / "build/packages")], text=True).split(),
         "--module-path", str(ROOT / "build/packages/kryon/src/backend"),
-        "--module-path", str(ROOT / "build/packages/kss/src"),
+        "--module-path", str(ROOT / "build/packages/css/src"),
         "--module-path", str(ROOT / "build/packages/game2d/src"),
         "-o", str(generated), str(ROOT / "src/storage/daochi_native.zi"),
     ], check=True)

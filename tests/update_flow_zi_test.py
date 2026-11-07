@@ -77,7 +77,7 @@ def build_probe(work, compiler, env):
         str(compiler), "--no-main", *definitions,
         "--root", "tests", "--module-path", "src",
         "--module-path", "build/packages/kryon/src/ui",
-        "--module-path", "build/packages/kss/src",
+        "--module-path", "build/packages/css/src",
         *subprocess.check_output(["sh", "scripts/package-paths.sh"], cwd=ROOT, text=True).split(),
         "--module-path", "build/packages/kryon/src/backend",
         "--module-path", "build/packages/ziran/std",

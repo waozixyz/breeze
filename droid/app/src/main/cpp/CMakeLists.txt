@@ -98,7 +98,7 @@ file(GLOB_RECURSE APP_ZIRAN_SOURCES CONFIGURE_DEPENDS "${SRC_DIR}/*.zi")
 list(APPEND APP_ZIRAN_SOURCES "${REPO_ROOT}/apps/practice/hold_reminder.zi")
 file(GLOB_RECURSE APP_LIBRARY_ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${KRYON_DIR}/src/ui/*.zi" "${KRYON_DIR}/src/backend/*.zi"
-    "${REPO_ROOT}/build/packages/kss/src/*.zi" "${REPO_ROOT}/build/packages/oqs/src/*.zi" "${REPO_ROOT}/build/packages/game2d/src/*.zi"
+    "${REPO_ROOT}/build/packages/css/src/*.zi" "${REPO_ROOT}/build/packages/oqs/src/*.zi" "${REPO_ROOT}/build/packages/game2d/src/*.zi"
     "${REPO_ROOT}/build/packages/qrcode/src/*.zi"
     "${REPO_ROOT}/build/packages/entity/src/*.zi"
     "${REPO_ROOT}/build/packages/webp/src/*.zi"
@@ -231,8 +231,8 @@ add_dependencies(app_zi_check app_build_laws)
 add_dependencies(app_ziran_generated app_build_laws app_clean_runtime_api app_zi_check)
 
 foreach(mode light dark)
-    file(SHA256 "${REPO_ROOT}/themes/catalog_${mode}.kss" APP_CATALOG_HASH)
-    file(SHA256 "${KRYON_DIR}/themes/catalog_${mode}.kss" KRYON_CATALOG_HASH)
+    file(SHA256 "${REPO_ROOT}/themes/catalog_${mode}.css" APP_CATALOG_HASH)
+    file(SHA256 "${KRYON_DIR}/themes/catalog_${mode}.css" KRYON_CATALOG_HASH)
     if(NOT APP_CATALOG_HASH STREQUAL KRYON_CATALOG_HASH)
         message(FATAL_ERROR "Packaged ${mode} theme catalog differs from Kryon")
     endif()

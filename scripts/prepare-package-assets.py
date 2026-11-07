@@ -40,9 +40,9 @@ patterns = (
     'assets/social/*.png', 'assets/social/*.webp', 'assets/social/telegram.svg',
     'assets/sounds/*.ogg',
     'assets/habits/**/*', 'assets/lists/**/*', 'assets/diary/**/*', 'assets/lumi/**/*',
-    'assets/fonts/subset/*-App-Regular.*', 'assets/styles/*.kss',
-    'locales/*.txt', 'themes/catalog_*.kss',
-    'build/packages/kss/styles/*.kss', 'build/packages/kryon/icons/ui.webp',
+    'assets/fonts/subset/*-App-Regular.*', 'assets/styles/*.css',
+    'locales/*.txt', 'themes/catalog_*.css',
+    'build/packages/css/styles/*.css', 'build/packages/kryon/icons/ui.webp',
     'build/packages/kryon/icons/pfp.webp',
 ) + tuple(f'assets/{name}/**/*' for name in NODE_APPS)
 # The practice media comes from the practices package and is packaged
@@ -82,7 +82,7 @@ for file, path in sorted(sources.items(), key=lambda source: source[1]):
     for feature in ('habits', 'lists', 'diary', 'lumi') + NODE_APPS:
         if path.startswith('assets/' + feature + '/'):
             owner = feature
-    for prefix in ('build/packages/kss/', 'build/packages/kryon/'):
+    for prefix in ('build/packages/css/', 'build/packages/kryon/'):
         if path.startswith(prefix):
             path = path.removeprefix(prefix)
     target = OUTPUT / owner / path

@@ -51,34 +51,60 @@ AccountStylesCheck :: (all_source: string, lumi_source: string) -> s32 {
     return 42
 }
 
+TextHas :: (text: string, part: string) -> bool {
+    if part.count > text.count { return false }
+    for index: cast(s32)0..cast(s32)(text.count - part.count) {
+        if text[index:index + cast(s32)part.count] == part { return true }
+    }
+    return false
+}
+
+// The KSS settings the C side lists: all apps converts and applies; lists
+// has no CSS form and opens as its unapplied draft with the error.
+#program_export
+LegacyStylesCheck :: (failing: string) -> s32 {
+    StyleCustomizationLoad()
+    saved := StyleSavedSource(0)
+    if StyleDraftSource(0) != saved || StyleAppliedSource(0) != saved { return 1 }
+    if !TextHas(saved, "border-radius: 24px") || TextHas(saved, "radius: 24;") { return 2 }
+    if StyleSavedSource(1).count != 0 || StyleAppliedSource(1).count != 0 { return 3 }
+    if StyleDraftSource(1) != failing { return 4 }
+    if !TextHas(AppTextFromCString(*style_error[0], 256), "@variant") { return 5 }
+    app: InnerBreeze
+    app.style_index = 1
+    app.theme_id = 0
+    if !app_apply_style(*app) || CustomButtonRadius() != 24.0 { return 6 }
+    return 42
+}
+
 #program_export
 CustomizationCheck :: () -> s32 {
     StyleCustomizationLoad()
     app: InnerBreeze
     app.style_index = 1
     app.theme_id = 0
-    if !AppearanceEdit(*app, 0, "Button { radius: 24; }") || CustomButtonRadius() != 24.0 {
+    if !AppearanceEdit(*app, 0, "Button { border-radius: 24px; }") || CustomButtonRadius() != 24.0 {
         return 1
     }
     if StyleSavedSource(0).count != 0 {
         return 2
     }
     color := StyleTokenColor("canvas")
-    if AppearanceEdit(*app, 0, "Button { radius: unknown; }") || CustomButtonRadius() != 24.0 ||
+    if AppearanceEdit(*app, 0, "Button { border-radius: unknown; }") || CustomButtonRadius() != 24.0 ||
     StyleTokenColor("canvas").r != color.r || AppearanceSave(*app, 0) {
         return 3
     }
     if !AppearanceUndo(*app, 0) || CustomButtonRadius() != 24.0 {
         return 4
     }
-    if !AppearanceSave(*app, 0) || StyleSavedSource(0) != "Button { radius: 24; }" {
+    if !AppearanceSave(*app, 0) || StyleSavedSource(0) != "Button { border-radius: 24px; }" {
         return 5
     }
     StyleCustomizationLoad()
-    if StyleDraftSource(0) != "Button { radius: 24; }" || !app_apply_style(*app) {
+    if StyleDraftSource(0) != "Button { border-radius: 24px; }" || !app_apply_style(*app) {
         return 6
     }
-    if !AppearanceEdit(*app, 5, "Button { radius: 7; }") {
+    if !AppearanceEdit(*app, 5, "Button { border-radius: 7px; }") {
         return 7
     }
     app.breathing.screen = ScreenLumi
@@ -102,7 +128,7 @@ CustomizationCheck :: () -> s32 {
         return 10
     }
     if !AppearanceEdit(*app, 0,
-        "tokens { length { radius: 22; } color { canvas: #102030; } }") {
+        ":root { --radius: 22px; --canvas: #102030; }") {
         return 11
     }
     color = StyleTokenColor("canvas")
@@ -117,7 +143,7 @@ CustomizationCheck :: () -> s32 {
     if !AppearanceDiscard(*app, 0) || CustomButtonRadius() != 24.0 {
         return 14
     }
-    if AppearanceEdit(*app, 0, "@import <outside>;") || CustomButtonRadius() != 24.0 {
+    if AppearanceEdit(*app, 0, "@import \"outside.css\";") || CustomButtonRadius() != 24.0 {
         return 15
     }
     if !AppearanceDiscard(*app, 0) || !AppearanceFormat(*app, 0) || CustomButtonRadius() != 24.0 {
@@ -145,7 +171,7 @@ CustomizationCheck :: () -> s32 {
     PackageFree(result)
     overflow: Vec(u8)
     for index: cast(s32)0..cast(s32)StyleRuleCapacity {
-        unused BuilderAppend(overflow, "Button{radius:1;}")
+        unused BuilderAppend(overflow, "Button{border-radius:1px;}")
     }
     source := BuilderFinish(overflow)
     if AppearanceEdit(*app, 0, source) || CustomButtonRadius() != 24.0 {

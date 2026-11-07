@@ -12,7 +12,7 @@ root = Path(__file__).resolve().parent.parent
 compiler = Path(sys.argv[1]).resolve()
 ui = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else root / "build/packages/kryon/src/ui"
 standard = Path(sys.argv[3]).resolve() if len(sys.argv) > 3 else root / "build/packages/ziran/std"
-kss = Path(sys.argv[4]).resolve() if len(sys.argv) > 4 else root / "build/packages/kss/src"
+css = Path(sys.argv[4]).resolve() if len(sys.argv) > 4 else root / "build/packages/css/src"
 client = Path(os.environ.get("DAOCHI_CLIENT_DIR", root / "build/packages/daochi-client"))
 game2d = root / "build/packages/game2d/src"
 sources = sorted((root / "src").rglob("*.zi"))
@@ -46,7 +46,7 @@ result = subprocess.run(
         "--module-path",
         str(ui),
         "--module-path",
-        str(kss),
+        str(css),
         "--module-path",
         str(ui.parent / "backend"),
         "--module-path",

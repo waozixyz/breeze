@@ -14,7 +14,7 @@ mkdir -p "$work/c"
     --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_ui.zi"
@@ -22,7 +22,7 @@ mkdir -p "$work/c"
     --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$root/src/screens/settings/settings_ui.zi"
@@ -39,7 +39,7 @@ mkdir -p "$work/device"
     --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_device.zi"
@@ -47,7 +47,7 @@ mkdir -p "$work/device"
     --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/device" "$root/src/screens/settings/settings_device.zi"
@@ -60,7 +60,7 @@ mkdir -p "$work/breaks"
     --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_breaks.zi"
@@ -68,7 +68,7 @@ mkdir -p "$work/breaks"
     --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/breaks" "$root/src/screens/settings/settings_breaks.zi"
@@ -81,7 +81,7 @@ mkdir -p "$work/notifications"
     --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_notifications.zi"
@@ -89,7 +89,7 @@ mkdir -p "$work/notifications"
     --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/notifications" \

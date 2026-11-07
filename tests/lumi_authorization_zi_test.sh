@@ -7,7 +7,7 @@ work=${LUMI_AUTHORIZATION_TEST_OUTPUT:-"$root/build/lumi-authorization-test"}
 mkdir -p "$work/generated"
 "$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/ziran/std" \

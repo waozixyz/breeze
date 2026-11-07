@@ -33,7 +33,7 @@ command = ["sh", str(root / "scripts/run-ziran.sh"), str(args.compiler),
 for name in args.define:
     command.extend(["--define", name])
 for directory in (
-    root / "src", kryon / "src/ui", kryon / "src/backend", root / "build/packages/kss/src",
+    root / "src", kryon / "src/ui", kryon / "src/backend", root / "build/packages/css/src",
     root / "build/packages/game2d/src", root / "build/packages/ziran/std",
     Path(os.environ.get("DAOCHI_CLIENT_DIR", root / "build/packages/daochi-client")),
 ):

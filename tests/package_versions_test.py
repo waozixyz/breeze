@@ -123,7 +123,7 @@ class PackageVersionsTest(unittest.TestCase):
             return included
 
         for path in ("apps/diary/diary_view.zi", "assets/practices/breath.png",
-                     "locales/en.txt", "themes/catalog_dark.kss",
+                     "locales/en.txt", "themes/catalog_dark.css",
                      "scripts/prepare-package-assets.py", "src/apps/versions.zi"):
             with self.subTest(path=path):
                 self.assertTrue(triggered("packages.yml", path))

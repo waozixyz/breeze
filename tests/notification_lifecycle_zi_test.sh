@@ -16,7 +16,7 @@ sh "$root/scripts/run-ziran.sh" "$bin/zi2c" --no-main --root "$root" \
     --module-path "kryon=$kryon/src/backend" \
     --module-path "entity=$entity/src" \
     --module-path "apps=$apps/src" \
-    --module-path "$root/build/packages/kss/src" \
+    --module-path "$root/build/packages/css/src" \
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/daochi-client" \

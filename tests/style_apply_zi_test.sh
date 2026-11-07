@@ -10,16 +10,16 @@ mkdir -p "$work/c"
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     -o "$work/c" "$root/tests/style_apply_link_behavior.zi"
 mkdir -p "$work/c/app"
 cp "$work/c/assets.h" "$work/c/app/assets.h"
 python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
-    "$root/themes/catalog_light.kss" "$root/themes/catalog_dark.kss" \
-    "$root/build/packages/kss/styles/material.kss" \
-    "$root/build/packages/kss/styles/classic.kss" \
-    "$root/build/packages/kss/styles/lightfield.kss" \
-    "$root/assets/styles/inbe.kss"
+    "$root/themes/catalog_light.css" "$root/themes/catalog_dark.css" \
+    "$root/build/packages/css/styles/material.css" \
+    "$root/build/packages/css/styles/classic.css" \
+    "$root/build/packages/css/styles/lightfield.css" \
+    "$root/assets/styles/inbe.css"
 "${CC:-cc}" -std=c11 -Os -pthread -DZIRAN_BOUNDS_CHECK -ffunction-sections \
     -fdata-sections -Wl,--gc-sections \
     -Wl,--wrap=storage_set_setting_text -Wl,--wrap=storage_get_setting_text \

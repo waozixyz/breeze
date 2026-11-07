@@ -17,7 +17,7 @@ MIME_TYPES = {
     ".mp3": "audio/mpeg",
     ".ttf": "font/ttf",
     ".otf": "font/otf",
-    ".kss": "text/plain",
+    ".css": "text/css",
     ".txt": "text/plain",
     ".dat": "application/octet-stream",
 }
@@ -37,8 +37,8 @@ def emit(output: Path, files: list[Path], root: Path) -> None:
             path = "cells/" + path.removeprefix("build/apps/")
         if path == "build/inbe.zx":
             path = "inbe.zx"
-        if path.startswith("build/packages/kss/styles/"):
-            path = path.removeprefix("build/packages/kss/")
+        if path.startswith("build/packages/css/styles/"):
+            path = path.removeprefix("build/packages/css/")
         if path.startswith("build/packages/kryon/icons/"):
             path = path.removeprefix("build/packages/kryon/")
         if path in entries:

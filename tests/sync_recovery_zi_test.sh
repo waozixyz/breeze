@@ -15,7 +15,7 @@ mkdir -p "$work/c"
     --module-path "$root/build/packages/ziran/std" \
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" \
+    --module-path "$root/build/packages/css/src" \
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/daochi-client" \

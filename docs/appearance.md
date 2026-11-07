@@ -1,6 +1,6 @@
 # Custom appearance
 
-Open **Settings → Appearance → Advanced appearance (KSS)**. Choose **All apps**
+Open **Settings → Appearance → Advanced appearance (CSS)**. Choose **All apps**
 or Lists, Habits, Practices, Diary, or Lumi. Each scope has its own custom sheet.
 The shared style pack and Inbe defaults remain readable in the Source menu.
 
@@ -8,33 +8,34 @@ Valid edits render after a short typing pause. An invalid draft stays editable;
 the last complete preview remains installed. The status shows the source file,
 line, and column of an error. **Save** persists the selected sheet for the current
 account. **Discard** restores its saved sheet. **Undo edit** restores a previous
-draft. **Format KSS** formats the draft without saving it. **Reset to defaults**
+draft. **Format CSS** formats the draft without saving it. **Reset to defaults**
 clears and saves only the selected customization. Resetting one app still keeps
 the All apps customization; reset All apps as well to return to shipped styling.
 
-```kss
+```css
 Button {
-    radius: 24;
+  border-radius: 24px;
 }
 
 Button.profile-header:hover {
-    border-width: 2;
+  border-width: 2px;
 }
 
-tokens {
-    color {
-        canvas: #14202b;
-    }
+:root {
+  --canvas: #14202b;
 }
 ```
 
-KSS is Kryon's stylesheet language. Use the component names, classes, tokens,
-and properties shown in the shipped sheets; unsupported CSS properties produce
-errors. Styles resolve in this order: shared pack and app defaults, All apps,
+Sheets are written in Kryon CSS, the subset of CSS every Kryon platform
+draws (see the `css` package's README). Use the component names, classes,
+custom properties and properties shown in the shipped sheets; anything outside
+the subset is an error naming its line. Styles resolve in this order: shared pack and app defaults, All apps,
 then the selected app. The inspector displays resolved properties and matching
 source rules for a component and interaction state. Sheets may contain up to
-8,191 UTF-8 bytes; the complete cascade allows 512 rules. Custom imports cannot
-load files. Saved preferences never modify shipped assets or other accounts.
+8,191 UTF-8 bytes; the complete cascade allows 512 rules. Custom sheets cannot
+import files. Saved preferences never modify shipped assets or other accounts. Sheets
+saved while Breeze used KSS convert to CSS the first time Breeze starts; one
+that has no CSS form opens as a draft with the error.
 
 **Ask Lumi** opens the conversation with the selected scope in a draft. Describe
 the look you want and send it. Online Lumi and Harmony use the same app-owned

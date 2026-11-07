@@ -10,8 +10,8 @@ int
 main(int argc, char **argv)
 {
     assert(argc == 2);
-    AssetBlob style = asset_lookup((uint8_t *)"assets/styles/inbe.kss");
-    AssetBlob missing = asset_lookup((uint8_t *)"assets/styles/missing.kss");
+    AssetBlob style = asset_lookup((uint8_t *)"assets/styles/inbe.css");
+    AssetBlob missing = asset_lookup((uint8_t *)"assets/styles/missing.css");
 
     assert(style.found && style.size > 4);
     /* Verify the complete payload, including declarations before selectors. */
@@ -24,7 +24,7 @@ main(int argc, char **argv)
     fclose(file);
     assert(memcmp(style.data, expected, style.size) == 0);
     free(expected);
-    assert(strcmp((const char *)style.mime, "text/plain") == 0);
+    assert(strcmp((const char *)style.mime, "text/css") == 0);
     assert(!missing.found);
     assert(Answer() == 42);
     return 0;

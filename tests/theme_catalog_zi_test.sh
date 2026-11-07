@@ -9,12 +9,12 @@ mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     -o "$work/c" "$root/tests/theme_catalog_link_behavior.zi"
 mkdir -p "$work/c/app"
 cp "$work/c/assets.h" "$work/c/app/assets.h"
 python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
-    "$root/themes/catalog_light.kss" "$root/themes/catalog_dark.kss"
+    "$root/themes/catalog_light.css" "$root/themes/catalog_dark.css"
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK -ffunction-sections \
     -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$root/src/app" \

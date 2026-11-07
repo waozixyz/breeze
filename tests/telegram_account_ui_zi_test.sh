@@ -8,7 +8,7 @@ mkdir -p "$work/c"
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kss/src" \
+    --module-path "$root/build/packages/css/src" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$root/src/screens/telegram_account.zi"

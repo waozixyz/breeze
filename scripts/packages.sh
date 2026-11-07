@@ -90,7 +90,7 @@ link() {
 
 link ziran ziran
 link kryon kryon
-link kss kss
+link css css
 link oqs oqs
 link raylib raylib
 link libwebp libwebp

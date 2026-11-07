@@ -55,7 +55,7 @@ $(CLICK_GEN_STAMP): Makefile mk/packaging.mk ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $
 		--define PLATFORM_DESKTOP --define __GLIBC__ --define __aarch64__ \
 		--define NATIVE_WINDOW_HAVE_SDL \
 		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(KSS_DIR)/src \
+		--module-path $(CSS_DIR)/src \
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \

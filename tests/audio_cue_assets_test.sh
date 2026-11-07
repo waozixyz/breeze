@@ -8,7 +8,7 @@ mkdir -p "$generated"
 "$bin/ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" --module-path "$root/build/packages/kss/src" \
+    --module-path "$root/build/packages/daochi-client" --module-path "$root/build/packages/css/src" \
     --module-path "$root/build/packages/game2d/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     -o "$generated" "$root/tests/audio_cue_assets_test.zi"
 # No embedded sounds: the cues come only from the Practices package.

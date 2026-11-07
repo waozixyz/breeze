@@ -10,15 +10,15 @@ mkdir -p "$work/c"
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/daochi-client" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kss/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     -o "$work/c" "$root/tests/device_preferences_link_behavior.zi"
 mv "$work/c/device_host.c" "$work/c/device_host.c.skip"
 mkdir -p "$work/c/app"
 cp "$work/c/assets.h" "$work/c/app/assets.h"
 python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
-    "$root/themes/catalog_light.kss" "$root/themes/catalog_dark.kss" \
-    "$root/build/packages/kss/styles/material.kss" \
-    "$root/assets/styles/inbe.kss"
+    "$root/themes/catalog_light.css" "$root/themes/catalog_dark.css" \
+    "$root/build/packages/css/styles/material.css" \
+    "$root/assets/styles/inbe.css"
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK -ffunction-sections \
     -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$root/src/app" \
