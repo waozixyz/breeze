@@ -2,9 +2,8 @@
 
 ## [Unreleased]
 
-- Buka aplikasi web lengkap langsung dari situs Breeze.
-- Situs Breeze kini mengikuti desain Waozi Studio.
 - Mengetik kini dihitung sebagai aktivitas pada indikator istirahat.
+- Berpindah tab Latihan lewat navigasi samping tidak lagi menggeser layar.
 
 ## [2.1.62] - 2026-11-03
 

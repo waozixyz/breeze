@@ -2,9 +2,8 @@
 
 ## [Unreleased]
 
-- Abra o aplicativo web completo diretamente pelo site do Breeze.
-- O site do Breeze agora segue o visual do Waozi Studio.
 - Digitar agora conta como atividade no indicador de pausas.
+- Trocar de aba em Prática pela navegação lateral não desloca mais a tela.
 
 ## [2.1.62] - 2026-11-03
 

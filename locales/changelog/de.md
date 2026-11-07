@@ -2,9 +2,8 @@
 
 ## [Unreleased]
 
-- Öffne die vollständige Web-App direkt über die Breeze-Website.
-- Die Breeze-Website nutzt jetzt das Design von Waozi Studio.
 - Tippen zählt jetzt in der Pausenanzeige als Aktivität.
+- Beim Wechseln der Praxis-Tabs in der Seitennavigation verschiebt sich der Bildschirm nicht mehr.
 
 ## [2.1.62] - 2026-11-03
 

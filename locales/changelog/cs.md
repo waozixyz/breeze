@@ -2,9 +2,8 @@
 
 ## [Unreleased]
 
-- Otevřete celou webovou aplikaci přímo z webu Breeze.
-- Web Breeze nyní používá vzhled Waozi Studio.
 - Psaní se nyní v ukazateli přestávek počítá jako aktivita.
+- Přepínání karet Cvičení v postranní navigaci už neposouvá obrazovku.
 
 ## [2.1.62] - 2026-11-03
 

@@ -2,9 +2,8 @@
 
 ## [Unreleased]
 
-- Ouvrez l’application web complète depuis le site de Breeze.
-- Le site de Breeze reprend désormais le style de Waozi Studio.
 - La saisie compte désormais comme une activité dans l’indicateur de pauses.
+- Changer d’onglet dans Pratique avec la navigation latérale ne décale plus l’écran.
 
 ## [2.1.62] - 2026-11-03
 

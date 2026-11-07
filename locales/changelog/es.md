@@ -2,9 +2,8 @@
 
 ## [Unreleased]
 
-- Abre la aplicación web completa desde el sitio de Breeze.
-- El sitio de Breeze ahora sigue el diseño de Waozi Studio.
 - Escribir ahora cuenta como actividad en el indicador de descansos.
+- Cambiar de pestaña en Práctica con la navegación lateral ya no desplaza la pantalla.
 
 ## [2.1.62] - 2026-11-03
 

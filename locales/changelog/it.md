@@ -2,9 +2,8 @@
 
 ## [Unreleased]
 
-- Apri l’app web completa direttamente dal sito di Breeze.
-- Il sito di Breeze ora segue lo stile di Waozi Studio.
 - La digitazione ora conta come attività nell’indicatore delle pause.
+- Cambiare scheda in Pratica con la navigazione laterale non sposta più lo schermo.
 
 ## [2.1.62] - 2026-11-03
 
