@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Fotos agora é baixado em Aplicativos em vez de vir com o Breeze; suas fotos continuam na conta e no Diário.
+- Fotos é descarregado a partir de Aplicações; Lumi mostra uma única proposta completa de comentários da lista, e Listas permite tarefas mais longas e concluí-las deslizando.
 - Trocar de aba em Prática pela navegação lateral não desloca mais a tela.
 - Os pacotes de voz das práticas ficaram cerca de um terço menores.
 

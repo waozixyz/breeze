@@ -57,10 +57,10 @@ lumi_next_message_id: string;
 // translations change. Returns the length of the line, or 0.
 LumiLegacyReplyLabel :: (text: string) -> s64 {
     labels: [12]string = .["Developer reply:\n\n", "Odpověď vývojáře:\n\n",
-        "Antwort vom Entwickler:\n\n", "Respuesta del desarrollador:\n\n",
-        "Réponse du développeur :\n\n", "Balasan pengembang:\n\n",
-        "Risposta dello sviluppatore:\n\n", "開発者からの返信：\n\n", "개발자 답변:\n\n",
-        "Resposta do desenvolvedor:\n\n", "Ответ разработчика:\n\n", "开发者回复：\n\n"]
+    "Antwort vom Entwickler:\n\n", "Respuesta del desarrollador:\n\n",
+    "Réponse du développeur :\n\n", "Balasan pengembang:\n\n",
+    "Risposta dello sviluppatore:\n\n", "開発者からの返信：\n\n", "개발자 답변:\n\n",
+    "Resposta do desenvolvedor:\n\n", "Ответ разработчика:\n\n", "开发者回复：\n\n"]
     for label: labels {
         if text.count > label.count && text[:label.count] == label {
             return label.count
@@ -367,17 +367,49 @@ LumiStoreAppend :: (text: string, user: bool) {
     unused LumiStoreAppendCard(text, user, LUMI_CHAT_TEXT, source)
 }
 
-// The proposal includes exactly the text the person can send. Long reports
-// use preceding bubbles so neither the report nor its action is truncated.
-LumiStoreFeedbackProposal :: (report: string, prompt: string, id: string) -> bool {
-    out: Vec(u8)
-    BuilderPrint(*out, "%\n\n%", report, prompt)
-    text := BuilderFinish(out)
-    defer { PackageFree(text) }
-    if text.count < LUMI_INPUT_MAX {
-        return LumiStoreAppendCard(text, false, LUMI_CHAT_FEEDBACK, id)
+// The archive key identifies a submitted turn even when its wording repeats.
+// Callers copy it before later appends or history reloads can change storage.
+LumiStoreLatestUserKey :: () -> string {
+    LumiStoreLoad()
+    if lumi_store_error {
+        return ""
     }
+    index := lumi_count - 1
+    while index >= 0 {
+        if lumi_rows[index].user {
+            return lumi_keys[index]
+        }
+        index -= 1
+    }
+    return ""
+}
+
+// Stable archive keys let retries resume a partially saved preview and prevent
+// repeated cards even after reopening or loading older history.
+LumiStoreProposalPart :: (text: string, kind: s32, id: string, part: s32) -> bool {
+    name: Vec(u8)
+    BuilderPrint(*name, "feedback-preview-%-%", id, part)
+    message_id := BuilderFinish(name)
+    defer { PackageFree(message_id) }
+    key := PackageText("cell.lumi.message.", message_id)
+    existing := BundledAppRecordRead(key)
+    defer { PackageFree(key); PackageFree(existing) }
+    if existing.count > 0 {
+        return true
+    }
+    if lumi_next_message_id.count > 0 {
+        return false
+    }
+    lumi_next_message_id = message_id
+    saved := LumiStoreAppendCard(text, false, kind, ifx kind == LUMI_CHAT_FEEDBACK then id else "")
+    lumi_next_message_id = ""
+    return saved
+}
+
+// Show the entire report before the one consent card. Never truncate a point.
+LumiStoreFeedbackProposal :: (report: string, prompt: string, id: string) -> bool {
     start: s64 = 0
+    part: s32 = 0
     while start < report.count {
         end := start + LUMI_INPUT_MAX - 1
         if end > report.count {
@@ -386,12 +418,13 @@ LumiStoreFeedbackProposal :: (report: string, prompt: string, id: string) -> boo
         while end < report.count && (report[end] & cast(u8)192) == cast(u8)128 {
             end -= 1
         }
-        if !LumiStoreAppendCard(report[start:end], false, LUMI_CHAT_TEXT, "") {
+        if !LumiStoreProposalPart(report[start:end], LUMI_CHAT_TEXT, id, part) {
             return false
         }
         start = end
+        part += 1
     }
-    return LumiStoreAppendCard(prompt, false, LUMI_CHAT_FEEDBACK, id)
+    return LumiStoreProposalPart(prompt, LUMI_CHAT_FEEDBACK, id, part)
 }
 
 LumiStoreAppendCard :: (text: string, user: bool, kind: s32, payload: string) -> bool {

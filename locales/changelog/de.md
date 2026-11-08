@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Fotos lädst du jetzt unter Apps herunter, statt es mit Breeze zu erhalten; deine Fotos bleiben im Konto und Tagebuch.
+- Fotos wird über Apps heruntergeladen; Lumi zeigt vollständiges Listenfeedback einmal zur Prüfung, und Listen unterstützt längere Aufgaben und das Erledigen per Wischgeste.
 - Beim Wechseln der Praxis-Tabs in der Seitennavigation verschiebt sich der Bildschirm nicht mehr.
 - Sprachpakete für Übungen sind etwa ein Drittel kleiner.
 

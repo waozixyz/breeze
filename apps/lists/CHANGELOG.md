@@ -10,6 +10,8 @@
 
 ## [Unreleased]
 
+- Write longer todos; swipe a little to complete or reopen an item and farther to edit it.
+
 - Close List settings after a successful save and keep edits open if saving fails.
 - Show the profile pictures friends chose in any app, abstract pictures included.
 

@@ -1,6 +1,7 @@
 // Account-scoped durable feedback outbox. Delivery is separate from chat.
 #import "json_scan"
 #import "text"
+#import "text_buffer"
 #import "vec"
 #import "byte_text_linux"
 #import, file "lumi_store.zi";
@@ -13,9 +14,80 @@
 #import, file "../storage/db.zi";
 #import, file "../app/text_buffers.zi";
 
-FeedbackDraft :: (title: string, message: string, context: string) -> string {
-    if title.count == 0 || title.count > 160 || message.count == 0 || message.count > 4096 || context.count > 2048 {
+FeedbackMessageMax :: 32768
+
+// Older hosts did not record which of their cards was active. Keep only
+// their newest pending draft actionable without approving any of them.
+FeedbackActiveDraft :: () -> string {
+    active := BundledAppRecordRead("cell.feedback.active")
+    if active.count > 0 {
+        return active
+    }
+    PackageFree(active)
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT substr(key,21) FROM settings WHERE user_id=?1 AND key LIKE 'cell.feedback.draft.%' AND json_extract(value,'$.message') IS NOT NULL AND json_extract(value,'$.sent') IS NULL ORDER BY updated_at DESC,key DESC LIMIT 1",
+        -1, *statement, null) != SQLITE_OK {
         return ""
+    }
+    defer { SqliteFinalize(statement) }
+    bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    if SqliteStep(statement) != SQLITE_ROW {
+        return ""
+    }
+    id := PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 33), "")
+    if id.count == 32 {
+        unused BundledAppRecordWrite("cell.feedback.active", id)
+    }
+    return id
+}
+
+FeedbackDraft :: (title: string, message: string, context: string, request: string = "") -> string {
+    if title.count == 0 || title.count > 160 || message.count == 0 || message.count > FeedbackMessageMax || context.count > 2048 || request.count > 128 {
+        return ""
+    }
+    // Admission uses the exact eventual outbox encoding without writing it.
+    // Even a quote-heavy report must fit before its preview can ask to send.
+    pending := FeedbackPendingDocument(title, message, context,
+        "0000000000000000000000000000000000000000000000000000000000000000")
+    pending_fits := pending.count < 65536
+    PackageFree(pending)
+    if !pending_fits {
+        return ""
+    }
+    // Bind retries to the archived user turn, including after a decision or
+    // a later turn. Identical wording in a new message has a different key.
+    request_key := ifx request.count > 0 then PackageText("cell.feedback.request.", request) else ""
+    defer { PackageFree(request_key) }
+    if request.count > 0 && !BundledAppRecordValid(request_key) {
+        return ""
+    }
+    known := BundledAppRecordRead(request_key)
+    defer { PackageFree(known) }
+    active := FeedbackActiveDraft()
+    defer { PackageFree(active) }
+    candidate := ifx known.count == 32 then known else active
+    if candidate.count == 32 {
+        active_key := PackageText("cell.feedback.draft.", candidate)
+        saved := BundledAppRecordRead(active_key)
+        defer { PackageFree(active_key); PackageFree(saved) }
+        saved_title: [161]u8
+        saved_message: [FeedbackMessageMax + 1]u8
+        saved_request: [129]u8
+        unused ReadStringText(saved, FieldAt(saved, 0, "request"), saved_request[:])
+        same_request := known.count == 32 || (TextUntilNul(saved_request[:]) == request &&
+            (request.count > 0 || FieldAt(saved, 0, "sent") < 0))
+        if same_request {
+            if ReadStringText(saved, FieldAt(saved, 0, "title"), saved_title[:]) > 0 &&
+            ReadStringText(saved, FieldAt(saved, 0, "message"), saved_message[:]) > 0 &&
+            TextUntilNul(saved_title[:]) == title && TextUntilNul(saved_message[:]) == message {
+                if request.count > 0 && known.count == 0 && !BundledAppRecordWrite(request_key, candidate) {
+                    return ""
+                }
+                return PackageText(candidate, "")
+            }
+            return ""
+        }
     }
     nonce: [65]u8
     if !NativeNonce(null, nonce[:]) { return "" }
@@ -28,22 +100,36 @@ FeedbackDraft :: (title: string, message: string, context: string) -> string {
     LumiJsonString(*out, message)
     BuilderPrint(*out, ",\"context\":")
     LumiJsonString(*out, context)
+    BuilderPrint(*out, ",\"request\":")
+    LumiJsonString(*out, request)
     BuilderPrint(*out, "}")
     value := BuilderFinish(out)
-    written := BundledAppRecordWrite(key, value)
+    // Reserve space for the decision so a valid preview can always resolve.
+    written := value.count < 65520 && BundledAppRecordWrite(key, value)
     PackageFree(key)
     PackageFree(value)
-    if !written { return "" }
+    if !written || !BundledAppRecordWrite("cell.feedback.active", id) ||
+    (request.count > 0 && !BundledAppRecordWrite(request_key, id)) {
+        return ""
+    }
     return PackageText(id, "")
 }
 
 FeedbackChoice :: (id: string, action: s32) -> bool {
     if id.count != 32 { return false }
+    active := FeedbackActiveDraft()
+    defer { PackageFree(active) }
+    if active.count == 32 && active != id {
+        return false
+    }
     key := PackageText("cell.feedback.draft.", id)
     value := BundledAppRecordRead(key)
     defer { PackageFree(key); PackageFree(value) }
+    if FieldAt(value, 0, "sent") >= 0 {
+        return false
+    }
     title: [161]u8
-    message: [4097]u8
+    message: [FeedbackMessageMax + 1]u8
     context: [2049]u8
     title_count := ReadStringText(value, FieldAt(value, 0, "title"), title[:])
     message_count := ReadStringText(value, FieldAt(value, 0, "message"), message[:])
@@ -58,16 +144,27 @@ FeedbackChoice :: (id: string, action: s32) -> bool {
         PackageFree(report_id)
         if !queued { return false }
     }
-    return BundledAppRecordWrite(key, ifx action == 1 then "{\"sent\":true}" else "{\"sent\":false}")
+    // Keep the immutable preview and turn binding alongside its decision.
+    resolved: Vec(u8)
+    BuilderPrint(*resolved, "%,\"sent\":%}", value[:value.count - 1], ifx action == 1 then "true" else "false")
+    decision := BuilderFinish(resolved)
+    defer { PackageFree(decision) }
+    return BundledAppRecordWrite(key, decision)
 }
 
 FeedbackEnqueueID :: (title: string, message: string, context: string, id: string) -> bool {
     if id.count != 64 || title.count == 0 || title.count > 160 ||
-    message.count == 0 || message.count > 4096 || context.count > 2048 {
+    message.count == 0 || message.count > FeedbackMessageMax || context.count > 2048 {
         return false
     }
     key := PackageText("cell.feedback.pending.", id)
     defer { PackageFree(key) }
+    value := FeedbackPendingDocument(title, message, context, id)
+    defer { PackageFree(value) }
+    return BundledAppRecordWrite(key, value)
+}
+
+FeedbackPendingDocument :: (title: string, message: string, context: string, id: string) -> string {
     out: Vec(u8)
     BuilderPrint(*out, "{\"id\":\"%\",\"app_id\":\"inbe\",\"title\":", id)
     LumiJsonString(*out, title)
@@ -76,9 +173,7 @@ FeedbackEnqueueID :: (title: string, message: string, context: string, id: strin
     BuilderPrint(*out, ",\"context\":")
     LumiJsonString(*out, context)
     BuilderPrint(*out, "}")
-    value := BuilderFinish(out)
-    defer { PackageFree(value) }
-    return BundledAppRecordWrite(key, value)
+    return BuilderFinish(out)
 }
 
 // Kept for already-approved callers; chat/tool proposals use FeedbackDraft.
@@ -149,14 +244,14 @@ FeedbackMigratePending :: () -> bool {
             continue
         }
         title: [161]u8
-        message: [4097]u8
+        message: [FeedbackMessageMax + 1]u8
         context: [2049]u8
         title_count := ReadStringText(document, FieldAt(document, at, "title"), title[:])
         message_count := ReadStringText(document, FieldAt(document, at, "message"), message[:])
         context_count := ReadStringText(document, FieldAt(document, at, "context"), context[:])
         if title_count <= 0 || message_count <= 0 || context_count < 0 ||
-            !FeedbackEnqueueID(TextFromBytes(title[:title_count]),
-                TextFromBytes(message[:message_count]), TextFromBytes(context[:context_count]), id) {
+        !FeedbackEnqueueID(TextFromBytes(title[:title_count]),
+            TextFromBytes(message[:message_count]), TextFromBytes(context[:context_count]), id) {
             return false
         }
     }

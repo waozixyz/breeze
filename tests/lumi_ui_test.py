@@ -158,14 +158,14 @@ def send(window, profile, text, *, button=False):
 def confirm_exchange(profile, before, text):
     def exchange_saved():
         rows = chat(profile)
-        return (rows != before and len(rows) >= 2 and
-                rows[-2]["user"] == 1 and rows[-2]["text"] == text.strip() and
-                rows[-1]["user"] == 0)
+        added = rows[len(before):]
+        return (len(added) >= 2 and added[0]["user"] == 1 and
+                added[0]["text"] == text.strip() and all(not row["user"] for row in added[1:]))
 
     try:
         wait_for(exchange_saved, "Chat exchange was not saved")
         rows = chat(profile)
-        assert rows[:-2] == before, "Chat lost earlier conversation"
+        assert rows[:len(before)] == before, "Chat lost earlier conversation"
     except AssertionError:
         save_tree("exchange")
         (OUTPUT / "failure-exchange.json").write_text(json.dumps({
@@ -231,13 +231,13 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         report = "Bug: correcting text moves the caret to the beginning"
         send(window, profile, report)
         proposal = chat(profile)[-1]
-        assert proposal["kind"] == 3 and report in proposal["text"]
+        assert proposal["kind"] == 3 and report in chat(profile)[-2]["text"]
         assert not query(profile, "SELECT key FROM settings WHERE key LIKE 'cell.feedback.pending.%'")
-        driver.press(key=351001 + len(chat(profile)) * 2, role="button", label="Cancel", enabled=True)
+        driver.press(role="button", label="Cancel", enabled=True)
         assert re.fullmatch(r"[0-9a-f]{32}", proposal["payload"])
         canceled = query(profile, "SELECT value FROM settings WHERE key="
                          f"'cell.feedback.draft.{proposal['payload']}'")
-        assert json.loads(canceled[0][0]) == {"sent": False}
+        assert json.loads(canceled[0][0])["sent"] is False
         assert not query(profile, "SELECT key FROM settings WHERE key LIKE 'cell.feedback.pending.%'")
         send(window, profile, "/progress sessions 7")
         chart_row = chat(profile)[-1]
@@ -576,17 +576,15 @@ def online_composer_test():
                         expected.append({"role": "assistant", "content": f"Answer to {question}"})
                     send(window, profile, report)
                     proposal = chat(profile)[-1]
-                    assert proposal["kind"] == 3 and report in proposal["text"]
+                    assert proposal["kind"] == 3
+                    assert report in chat(profile)[-2]["text"]
                     assert "clearly a bug" not in proposal["text"]
                     assert not query(profile, "SELECT key FROM settings WHERE key LIKE 'cell.feedback.pending.%'")
-                    driver.press(key=351000 + len(chat(profile)) * 2, role="button", label="Send", enabled=True)
-                    wait_for(lambda: query(profile, "SELECT value FROM settings WHERE key LIKE 'cell.feedback.pending.%'"),
-                             "Send did not queue the developer report")
-                    pending = query(profile, "SELECT value FROM settings WHERE key LIKE 'cell.feedback.pending.%'")
-                    assert len(pending) == 1 and json.loads(pending[0][0])["message"] == report
+                    driver.press(role="button", label="Cancel", enabled=True)
+                    assert not query(profile, "SELECT key FROM settings WHERE key LIKE 'cell.feedback.pending.%'")
                     assert "delivered" not in chat(profile)[-1]["text"].lower()
                 with application(profile, "online-restart", standalone=True):
-                    assert len(chat(profile)) == baseline + 8, "Restart lost rapid messages or the report proposal"
+                    assert len(chat(profile)) == baseline + 9, "Restart lost rapid messages or the full report preview"
         finally:
             release.set()
             server.shutdown()

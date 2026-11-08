@@ -13,6 +13,8 @@
 #import, file "../src/storage/storage_settings.zi";
 #import, file "../src/storage/bundled_app_records.zi";
 #import, file "../src/storage/sync_async.zi";
+#import, file "../src/apps/app_tools.zi";
+#import, file "../src/storage/storage_elist.zi";
 #import "keys"
 #import "crypto"
 #import, file "../src/storage/sync_account.zi";
@@ -20,6 +22,7 @@
 #import "async_client"
 #import "net_http"
 #import "text_buffer"
+#import "json_scan"
 #import "wire"
 #import "transaction"
 #import "vec"
@@ -254,9 +257,191 @@ DeveloperReplyChecks :: () {
     check_true("a repeated copy is deleted for the other devices", contains(duplicate, "\"deleted\":true"))
 }
 
+ListReportChecks :: (app: *InnerBreeze) {
+    app.enabled_apps = 31
+    storage_set_setting_int("elist_initialized", 1)
+    unrelated: [37]u8
+    list_id: [37]u8
+    check_true("other list created", storage_elist_create_list("Scores", *unrelated[0]) != 0)
+    for number: cast(s32)0..9 {
+        check_true("unrelated items created", storage_elist_create_item(TextUntilNul(unrelated[:]),
+            "Leaderboard score is stale", "", null) != 0)
+    }
+    check_true("Apps list created", storage_elist_create_list("Apps", *list_id[0]) != 0)
+    originals: [6]string = .["Wurm dying after all apples changed level fix that",
+    "Bug in Textarea. When correcting it jumps back to the end",
+    "In arcade I have issues exciting profile. Profil Icon using shovey icon not correct",
+    "Increase word length in lists like why limit so hard I have long todos somtimes",
+    "In arcade I noticed it asking to backup password but I already did thst",
+    "Click t complete task is wrong moved in lists it's meant to be sweio to complete, swipe a bit is complete, swipe alot is edit"]
+    expansions: [6]string = .["Wurm: after all apples are collected and the level changes, the player dies. Please fix the level transition so collecting the last apple does not cause death.",
+    "Text editing: correcting text in the middle moves the caret to the end. Please keep the caret at the correction so editing can continue there.",
+    "Arcade profile: the profile interaction has problems, and the profile icon incorrectly uses the Shovey icon. Please investigate the profile flow and show the correct Arcade profile icon.",
+    "Lists: the entry length limit prevents saving long todos. Please allow longer entries and preserve the complete text while editing and saving.",
+    "Arcade backup: the app asks for a password backup even though it has already been completed. Please retain the completed backup state and avoid repeated reminders.",
+    "Lists gestures: tapping an item should not complete it. A short swipe should complete or reopen it; a longer swipe should edit it. Please restore these distinct gestures."]
+    ids: [6][37]u8
+    for index: cast(s32)0..5 {
+        check_true("screenshot item saved", storage_elist_create_item(TextUntilNul(list_id[:]),
+            originals[index], "", *ids[index][0]) != 0)
+    }
+    LumiStoreAppend("The leaderboard score is wrong", false)
+    AppToolBeginTurn("Based on my lists apps can you send a full report t developer for ever point mentioned clear and expanded")
+    AppToolListScope(app)
+    check_true("context resolves named list beyond eight unrelated tasks",
+        TextUntilNul(feedback_list_id[:]) == TextUntilNul(list_id[:]))
+    args: Vec(u8)
+    BuilderPrint(*args, "{\"list_id\":")
+    LumiJsonString(*args, TextUntilNul(list_id[:]))
+    BuilderPrint(*args, "}")
+    read_args := BuilderFinish(args)
+    read := AppToolReadList(app, read_args)
+    defer { PackageFree(read_args); PackageFree(read) }
+    for original: originals {
+        check_true("read returns actual screenshot item", contains(read, original))
+    }
+    before := LumiStoreCount()
+    wrong := AppToolReportFeedback(app, "{\"title\":\"Scores\",\"message\":\"Please fix leaderboard scores\"}")
+    defer { PackageFree(wrong) }
+    check_true("stale unrelated report rejected", contains(wrong, "\"ok\":false") && LumiStoreCount() == before)
+    args = .{}
+    BuilderPrint(*args, "{\"title\":\"Apps feedback\",\"source_list_id\":")
+    LumiJsonString(*args, TextUntilNul(list_id[:]))
+    BuilderPrint(*args, ",\"points\":[")
+    for index: cast(s32)0..5 {
+        BuilderPrint(*args, "%{\"item_id\":", ifx index == 0 then "" else ",")
+        LumiJsonString(*args, TextUntilNul(ids[index][:]))
+        BuilderPrint(*args, ",\"message\":")
+        LumiJsonString(*args, expansions[index])
+        BuilderPrint(*args, "}")
+    }
+    BuilderPrint(*args, "]}")
+    report_args := BuilderFinish(args)
+    defer { PackageFree(report_args) }
+    result := AppToolReportFeedback(app, report_args)
+    defer { PackageFree(result) }
+    check_true("source-backed proposal saved", contains(result, "\"ok\":true"))
+    shown: Vec(u8)
+    cards: s32 = 0
+    id: string
+    for index: before..LumiStoreCount() - 1 {
+        row := LumiStoreRow(index)
+        if row.kind == LUMI_CHAT_FEEDBACK {
+            cards += 1
+            id = PackageText(row.payload, "")
+            check_int("confirmation follows full report", index, LumiStoreCount() - 1)
+        } else {
+            BuilderPrint(*shown, "%", row.text)
+        }
+    }
+    defer { PackageFree(id) }
+    preview := BuilderFinish(shown)
+    defer { PackageFree(preview) }
+    for index: cast(s32)0..5 {
+        check_true("preview preserves every original and expansion", contains(preview, originals[index]) &&
+            contains(preview, expansions[index]))
+    }
+    check_true("preview excludes unrelated leaderboard context", !contains(preview, "Leaderboard"))
+    check_int("one confirmation", cards, 1)
+    changed := FeedbackDraft("Changed retry", "Unrelated retry body", "", feedback_turn_id)
+    defer { PackageFree(changed) }
+    check_true("changed retry cannot replace previewed consent", changed.count == 0 && FeedbackChoice(id, 0))
+    snapshot := PackageText(feedback_list_snapshot, "")
+    defer { PackageFree(snapshot) }
+    PackageFree(feedback_list_snapshot)
+    feedback_list_snapshot = ""
+    unread := AppToolListReport(app, report_args)
+    defer { PackageFree(unread) }
+    check_true("source must be read in this turn before reporting", unread.count == 0)
+    feedback_list_snapshot = PackageText(snapshot, "")
+    check_true("source changed after read", storage_elist_update_item(TextUntilNul(ids[0][:]),
+        "Changed while the proposal was being prepared", "", 0, 0) != 0)
+    stale := AppToolListReport(app, report_args)
+    defer { PackageFree(stale) }
+    check_true("stale list expansion cannot replace preview", stale.count == 0 && FeedbackChoice(id, 0))
+    check_true("fixture restores source text", storage_elist_update_item(TextUntilNul(ids[0][:]),
+        originals[0], "", 0, 0) != 0)
+    app.enabled_apps &= ~cast(s32)1
+    hidden := AppToolReadList(app, read_args)
+    hidden_report := AppToolListReport(app, report_args)
+    defer { PackageFree(hidden); PackageFree(hidden_report) }
+    check_true("disabled Lists exposes no saved content", contains(hidden, "\"ok\":false") && hidden_report.count == 0)
+    app.enabled_apps |= cast(s32)1
+    after := LumiStoreCount()
+    retry := AppToolReportFeedback(app, report_args)
+    defer { PackageFree(retry) }
+    check_true("retry reuses exact proposal", retry == result && LumiStoreCount() == after)
+    LumiStoreReset()
+    reopened := AppToolReportFeedback(app, report_args)
+    defer { PackageFree(reopened) }
+    check_true("reopen keeps one proposal", LumiStoreCount() <= after && reopened == result)
+    check_true("no list report sent without consent", FeedbackChoice(id, 0) && !Pending())
+    check_true("cancel binds to that proposal", FeedbackChoice(id, 2) && !FeedbackChoice(id, 0))
+    resolved_count := LumiStoreCount()
+    canceled_retry := AppToolReportFeedback(app, report_args)
+    defer { PackageFree(canceled_retry) }
+    check_true("delayed list retry after Cancel cannot prompt again", contains(canceled_retry,
+        "confirmation already handled") && LumiStoreCount() == resolved_count && !Pending())
+    AppToolBeginTurn("")
+}
+
+ResolvedProposalChecks :: (app: *InnerBreeze) {
+    wording := "Please report this feedback to the developer"
+    arguments := "{\"title\":\"Text correction\",\"message\":\"Keep the caret at the correction\"}"
+    changed_arguments := "{\"title\":\"Changed retry\",\"message\":\"Unrelated leaderboard scores\"}"
+    for action: cast(s32)1..2 {
+        LumiStoreAppend(wording, true)
+        turn := PackageText(LumiStoreLatestUserKey(), "")
+        defer { PackageFree(turn) }
+        AppToolBeginTurn(wording, turn)
+        proposal := AppToolReportFeedback(app, arguments)
+        defer { PackageFree(proposal) }
+        card := LumiStoreRow(LumiStoreCount() - 1)
+        id := PackageText(card.payload, "")
+        defer { PackageFree(id) }
+        check_true("new turn proposes once", contains(proposal, "\"ok\":true") && FeedbackChoice(id, 0))
+        check_true("fixture resolves exact report", FeedbackChoice(id, action))
+        if action == 1 {
+            report_id := PackageText(id, id)
+            check_true("fixture clears approved synthetic report without HTTP", FeedbackDelivered(report_id))
+            PackageFree(report_id)
+        }
+        before := LumiStoreCount()
+        LumiStoreReset()
+        AppToolBeginTurn(wording, turn)
+        retry := AppToolReportFeedback(app, arguments)
+        changed := AppToolReportFeedback(app, changed_arguments)
+        defer { PackageFree(retry); PackageFree(changed) }
+        check_true("resolved turn never prompts again after reopen", contains(retry,
+            "confirmation already handled") && LumiStoreCount() == before)
+        check_true("changed report cannot replace resolved consent", contains(changed,
+            "\"ok\":false") && !FeedbackChoice(id, 0) && !FeedbackChoice(id, 1) && !Pending())
+
+        LumiStoreAppend(wording, true)
+        next_turn := PackageText(LumiStoreLatestUserKey(), "")
+        defer { PackageFree(next_turn) }
+        check_true("identical wording has a distinct durable turn", next_turn != turn)
+        AppToolBeginTurn(wording, next_turn)
+        fresh := AppToolReportFeedback(app, arguments)
+        defer { PackageFree(fresh) }
+        fresh_id := PackageText(LumiStoreRow(LumiStoreCount() - 1).payload, "")
+        defer { PackageFree(fresh_id) }
+        check_true("new identical user message may propose once", contains(fresh,
+            "\"ok\":true") && fresh_id != id && FeedbackChoice(fresh_id, 0))
+        after := LumiStoreCount()
+        AppToolBeginTurn(wording, turn)
+        late := AppToolReportFeedback(app, arguments)
+        defer { PackageFree(late) }
+        check_true("old-turn retry cannot reactivate after later proposal", contains(late,
+            "confirmation already handled") && LumiStoreCount() == after && FeedbackChoice(fresh_id, 0))
+        check_true("new proposal remains cancelable without sending", FeedbackChoice(fresh_id, 2) && !Pending())
+    }
+    AppToolBeginTurn("")
+}
+
 ProposalChecks :: () {
     out: Vec(u8)
-    for index: cast(s32)0..1364 {
+    for index: cast(s32)0..3999 {
         BuilderPrint(*out, "茶")
     }
     report := BuilderFinish(out)
@@ -279,8 +464,59 @@ ProposalChecks :: () {
     check_true("long report retains its actionable card", card.kind == LUMI_CHAT_FEEDBACK &&
         card.text == prompt && card.payload == id && FeedbackChoice(id, 0))
     check_true("review never queues a report", !Pending())
-    check_true("cancel dismisses the proposal", FeedbackChoice(id, 2) && !FeedbackChoice(id, 0))
-    check_true("cancel never queues a report", !Pending())
+    check_true("long preview only queues after consent", FeedbackChoice(id, 1))
+    queued := FeedbackFirst()
+    decoded := ReadStringValue(queued, FieldAt(queued, 0, "message"), FeedbackMessageMax)
+    delivered_text := BuilderFinish(decoded.value)
+    defer { PackageFree(queued); PackageFree(delivered_text) }
+    check_true("full queued message equals preview without truncation", decoded.valid && delivered_text == report)
+    report_id := PackageText(id, id)
+    defer { PackageFree(report_id) }
+    check_true("fixture clears synthetic queued report without sending", FeedbackDelivered(report_id))
+}
+
+OlderProposalChecks :: () {
+    first := "11111111111111111111111111111111"
+    second := "22222222222222222222222222222222"
+    check_true("legacy draft one saved", BundledAppRecordWrite("cell.feedback.draft.11111111111111111111111111111111",
+        "{\"title\":\"Old one\",\"message\":\"Old one\",\"context\":\"\"}"))
+    check_true("legacy draft two saved", BundledAppRecordWrite("cell.feedback.draft.22222222222222222222222222222222",
+        "{\"title\":\"Old two\",\"message\":\"Old two\",\"context\":\"\"}"))
+    storage_set_setting_text("cell.feedback.active", "")
+    check_true("older cards retain only one actionable consent", !FeedbackChoice(first, 0) && FeedbackChoice(second, 0))
+    check_true("dismissing latest never reactivates older card", FeedbackChoice(second, 2) && !FeedbackChoice(first, 0))
+    check_true("old draft migration never sends", !Pending())
+}
+
+EscapedBoundaryChecks :: () {
+    title := "Escaped feedback"
+    empty := FeedbackPendingDocument(title, "", "",
+        "0000000000000000000000000000000000000000000000000000000000000000")
+    maximum := (65535 - empty.count) / 2
+    PackageFree(empty)
+    out: Vec(u8)
+    for index: cast(s64)0..maximum {
+        BuilderPrint(*out, "\"")
+    }
+    quotes := BuilderFinish(out)
+    defer { PackageFree(quotes) }
+    report := quotes[:maximum]
+    id := FeedbackDraft(title, report, "", "boundary")
+    defer { PackageFree(id) }
+    check_true("near-cell-limit escaped draft admitted before any queue write", id.count == 32 && !Pending())
+    oversized := FeedbackDraft(title, quotes, "", "boundary-overflow")
+    defer { PackageFree(oversized) }
+    check_true("encoded outbox overflow rejected before consent", oversized.count == 0 && FeedbackChoice(id, 0) && !Pending())
+    check_true("every admitted escaped draft can enqueue", FeedbackChoice(id, 1) && !FeedbackChoice(id, 0))
+    queued := FeedbackFirst()
+    decoded := ReadStringValue(queued, FieldAt(queued, 0, "message"), FeedbackMessageMax)
+    exact := BuilderFinish(decoded.value)
+    defer { PackageFree(queued); PackageFree(exact) }
+    check_true("near-cell-limit outbox preserves exact report", queued.count >= 65534 && queued.count < 65536 &&
+        decoded.valid && exact == report)
+    report_id := PackageText(id, id)
+    defer { PackageFree(report_id) }
+    check_true("boundary fixture clears approved report without HTTP", FeedbackDelivered(report_id))
 }
 
 #program_export
@@ -383,7 +619,11 @@ Check :: () -> s32 {
     LumiOnlineCancel()
     DeveloperReplyChecks()
     LegacyOutboxChecks(root, report_id)
+    ListReportChecks(*app)
+    ResolvedProposalChecks(*app)
     ProposalChecks()
+    EscapedBoundaryChecks()
+    OlderProposalChecks()
     SecureWipe(*owner.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
     storage_close()
     remove_tree("/tmp/inbe-lumi-feedback-test/")

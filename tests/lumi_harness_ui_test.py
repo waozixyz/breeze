@@ -272,12 +272,13 @@ def run(name, size, port):
             driver.wait(label='Withdraw agreement', role='button')
 
 
-server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Provider)
-threading.Thread(target=server.serve_forever, daemon=True).start()
-try:
-    for name, size in SIZES.items():
-        run(name, size, server.server_address[1])
-finally:
-    server.shutdown()
-print('Lumi harness UI: terms on opening once a run, offline until agreed, connection button, '
-      "own provider request, and the wrench to Lumi's settings and Back passed")
+if __name__ == "__main__":
+    server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Provider)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        for name, size in SIZES.items():
+            run(name, size, server.server_address[1])
+    finally:
+        server.shutdown()
+    print('Lumi harness UI: terms on opening once a run, offline until agreed, connection button, '
+          "own provider request, and the wrench to Lumi's settings and Back passed")

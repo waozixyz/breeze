@@ -39,10 +39,14 @@
 lumi_online_operation: StoredOperation;
 lumi_online_session: Session;
 lumi_online_transfer: NetworkTransfer;
-lumi_online_response: [65536]u8;
+lumi_online_response: [524288]u8;
 lumi_online_owner: [64]u8;
 lumi_online_messages: string;
-lumi_online_inputs: Vec(string);
+LumiOnlineInput :: struct {
+    text: string
+    turn_id: string
+}
+lumi_online_inputs: Vec(LumiOnlineInput);
 lumi_online_queued: bool;
 // A message sent this frame is drawn, with Lumi's typing dots, before its
 // request is prepared, so Enter shows it at once.
@@ -103,7 +107,8 @@ LumiOnlineClearTurn :: () {
 
 LumiOnlineClearInputs :: () {
     for input: lumi_online_inputs {
-        PackageFree(input)
+        PackageFree(input.text)
+        PackageFree(input.turn_id)
     }
     VecFree(lumi_online_inputs)
 }
@@ -123,13 +128,16 @@ LumiOnlineRemember :: (role: string, text: string) {
 LumiOnlineNextTurn :: () {
     LumiOnlineClearTools()
     if lumi_online_inputs.count == 0 {
+        AppToolBeginTurn("")
         LumiOnlineClearTurn()
         lumi_online_provider_turn = false
         return
     }
     input := lumi_online_inputs[0]
-    LumiOnlineRemember("user", input)
-    PackageFree(input)
+    AppToolBeginTurn(input.text, input.turn_id)
+    LumiOnlineRemember("user", input.text)
+    PackageFree(input.text)
+    PackageFree(input.turn_id)
     for index: cast(s32)1..cast(s32)lumi_online_inputs.count - 1 {
         lumi_online_inputs[index - 1] = lumi_online_inputs[index]
     }
@@ -148,6 +156,7 @@ LumiProviderCancel :: () {
 }
 
 LumiOnlineCancel :: () {
+    AppToolBeginTurn("")
     CancelStoredOperation(*lumi_online_operation)
     LumiProviderCancel()
     LumiOnlineClearTurn()
@@ -175,9 +184,11 @@ LumiOnlineStart :: (input: string) -> bool {
     }
     LumiOnlineEnforce()
     if LumiOnlineWaiting() {
-        saved := PackageText(input, "")
+        saved := LumiOnlineInput.{.text = PackageText(input, ""),
+            .turn_id = PackageText(LumiStoreLatestUserKey(), "")}
         if !VecPush(lumi_online_inputs, saved) {
-            PackageFree(saved)
+            PackageFree(saved.text)
+            PackageFree(saved.turn_id)
             return false
         }
         return true
@@ -189,6 +200,7 @@ LumiOnlineStart :: (input: string) -> bool {
             "lumi_offline_unknown" else "lumi_online_setup"))
         return true
     }
+    AppToolBeginTurn(input, LumiStoreLatestUserKey())
     lumi_online_provider_turn = route == LUMI_AI_OWN
     lumi_online_provider_address = .{}
     if lumi_online_provider_turn {
@@ -274,6 +286,12 @@ LumiProviderMessages :: (out: *Vec(u8), context: string) {
 
 // Sends the turn to the person's own provider. Its key goes only into this
 // request's Authorization header; it is never printed or kept elsewhere.
+LumiOnlineResponseBuffer :: () -> []u8 {
+    // Tool arguments are JSON inside JSON; a complete report needs room
+    // for both escaping layers. Ordinary conversation keeps its prior cap.
+    return lumi_online_response[:(ifx feedback_list_required then 524288 else 65536)]
+}
+
 LumiProviderRequest :: (context: string) -> bool {
     url: [LUMI_PROVIDER_URL_MAX]u8
     model: [LUMI_PROVIDER_MODEL_MAX]u8
@@ -296,6 +314,9 @@ LumiProviderRequest :: (context: string) -> bool {
     LumiProviderMessages(*out, context)
     BuilderPrint(*out, ",\"tools\":")
     OnlineToolSchemas(*out)
+    if feedback_list_required {
+        BuilderPrint(*out, ",\"max_tokens\":32768")
+    }
     BuilderPrint(*out, "}")
     body := BuilderFinish(out)
     defer { PackageFree(body) }
@@ -308,7 +329,7 @@ LumiProviderRequest :: (context: string) -> bool {
     transport := NetworkTransport(*lumi_provider_transfer)
     request := HttpRequest.{.method = "POST", .url = target, .token = TextUntilNul(key[:]),
         .accept = "application/json", .content_type = "application/json", .body = body}
-    if target.count == 0 || !transport.start(transport.context, request, lumi_online_response[:]) {
+    if target.count == 0 || !transport.start(transport.context, request, LumiOnlineResponseBuffer()) {
         return false
     }
     lumi_online_stage = LUMI_STAGE_PROVIDER
@@ -356,7 +377,7 @@ LumiOnlineRequest :: (app: *InnerBreeze) -> bool {
     defer { PackageFree(body) }
     if !BeginStoredRequest(*lumi_online_operation, "https://api.waozi.xyz",
         NetworkTransport(*lumi_online_transfer), "POST", "/api/v1/chat/completions",
-        body, lumi_online_response[:], false, *lumi_online_session) {
+        body, LumiOnlineResponseBuffer(), false, *lumi_online_session) {
         #if #defined(PLATFORM_WEB) == false && #defined(ANDROID_BUILD) == false {
             if NetworkTracing() {
                 print("LUMI: request_start_failed result=% body_bytes=%\n", lumi_online_operation.result, body.count)
@@ -442,6 +463,7 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
         return false
     }
     feedback_card := false
+    feedback_result: string
     out: Vec(u8)
     if lumi_online_provider_turn {
         // Only the fields every OpenAI-compatible provider accepts back.
@@ -463,7 +485,7 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
         }
         name_bytes: [65]u8
         id_bytes: [129]u8
-        arguments_bytes: [65536]u8
+        arguments_bytes: [65537]u8
         name := ToolString(document[function_at:ValueEnd(document, function_at, 0)], "name", name_bytes[:])
         arguments := ToolString(document[function_at:ValueEnd(document, function_at, 0)], "arguments", arguments_bytes[:])
         id := ToolString(document[call_at:ValueEnd(document, call_at, 0)], "id", id_bytes[:])
@@ -478,7 +500,11 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
             }
         }
         if result.count == 0 {
-            result = AppToolExecute(app, name, arguments)
+            if name == "report_feedback" && feedback_result.count > 0 {
+                result = PackageText(feedback_result, "")
+            } else {
+                result = AppToolExecute(app, name, arguments)
+            }
             unused AppCopyText(id, lumi_tool_ids[lumi_tool_count][:])
             lumi_tool_results[lumi_tool_count] = result
             lumi_tool_count += 1
@@ -491,6 +517,9 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
         if (name == "report_feedback" || name == "delete_habit") &&
         ContainsFoldASCII(result, "\"ok\":true") {
             feedback_card = true
+            if name == "report_feedback" {
+                feedback_result = result
+            }
         }
     }
     if feedback_card {

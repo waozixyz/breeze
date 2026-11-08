@@ -20,10 +20,9 @@ def main():
     generated = work / "c"
     generated.mkdir(parents=True, exist_ok=True)
     subprocess.run([
-        args.ziran, "build", "--target=c", "--no-main", "--root", str(ROOT / "tests"),
-        "--module-path", "apps=" + str(args.apps / "src"),
-        "--module-path", str(args.daochi_client),
-        "--module-path", str(args.toolchain / "std"), "--entry", "app_locations_behavior:Check",
+        args.ziran, "build", "--project", "--locked", "--target=c", "--no-main",
+        "--root", str(ROOT / "tests"), "--module-path", str(ROOT / "tests"),
+        "--entry", "app_locations_behavior:Check",
         "-o", str(generated), str(ROOT / "tests/app_locations_behavior.zi")
     ], cwd=ROOT, env=env, check=True)
     (work / "main.c").write_text(

@@ -143,7 +143,7 @@ with contextlib.ExitStack() as stack:
         shown = [label for label in driver.labels() if ALARMING.search(label)]
         assert not shown, f"FAIL {message}: {shown} ({TEST_DIR})"
 
-    # As in 1List, a tap on an item finishes it, a swipe right edits it and
+    # A short swipe right finishes an item, a long swipe edits it, and
     # a swipe left deletes it. Undo follows the real bundle and typed
     # persistence bridge, preserving the original completed item and its
     # comment rather than creating a copy.
@@ -159,8 +159,11 @@ with contextlib.ExitStack() as stack:
     assert not [node for node in driver.tree() if node["visible"] and node["label"] == "Rename" and node["y"] > 160], \
         "items still have edit buttons"
     driver.press(label="Fresh fruit", role="button")
+    driver.wait_idle(frames=4)
+    assert sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 0, "a tap completed the item"
+    swipe("Fresh fruit", 0.2)
     wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 1,
-             "a tap did not finish the item")
+             "a short swipe did not finish the item")
     # As in 1List, finished items leave the list; a pull down on the items
     # shows them above the open ones.
     driver.wait_gone(label="Fresh fruit", role="button")
@@ -173,7 +176,7 @@ with contextlib.ExitStack() as stack:
     assert not driver.find(contains="Finished", visible=True), "a heading names the finished items"
     # A short swipe slides back and changes nothing.
     swipe("Fresh fruit", -0.2)
-    swipe("Fresh fruit", 0.2)
+    swipe("Fresh fruit", 0.05)
     assert driver.find(role="text_field", value="", visible=True), "a short swipe right began editing"
     assert sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) == 0, "a short swipe left deleted"
     # A swipe right turns the item's own row into its field, with a check.
@@ -205,11 +208,21 @@ with contextlib.ExitStack() as stack:
     restored = sql("SELECT id,comment,sort_order,done FROM elist_items WHERE title='Fresh fruit' AND deleted_at=0")
     assert restored == (*original, 1), ("Undo changed the item", original, restored)
     assert sql("SELECT COUNT(*) FROM elist_items WHERE title='Fresh fruit'") == 1, "Undo made a duplicate"
-    driver.press(label="Fresh fruit", role="button")
+    swipe("Fresh fruit", 0.2)
     wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 0,
-             "a second tap did not reopen the item")
+             "a short swipe did not reopen the item")
 
     driver.press(label="Weekend", role="button")
+    long_task = "Prepare documentation and review the remaining details. " * 9 + "茶é"
+    add(long_task)
+    wait_for(lambda: sql("SELECT COUNT(*) FROM elist_items WHERE title=?", (long_task,)) == 1,
+             "long UTF-8 todo was truncated or rejected")
+    swipe(long_task, .6)
+    driver.wait(role="text_field", value=long_task)
+    driver.type("!")
+    driver.press(label="Save", role="button")
+    wait_for(lambda: sql("SELECT COUNT(*) FROM elist_items WHERE title=?", (long_task + "!",)) == 1,
+             "long UTF-8 todo did not retain its complete edit")
     add("Weekend task")
     wait_for(lambda: item_list("Weekend task"), "the task was not added")
     assert item_list("Weekend task") == "Weekend", f"FAIL tab selects destination list: got {item_list('Weekend task')!r}"

@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Foto kini diunduh dari Aplikasi, tidak lagi bawaan Breeze; foto Anda tetap ada di akun dan Buku Harian.
+- Foto diunduh dari Aplikasi; Lumi menampilkan pratinjau lengkap masukan dari daftar satu kali, dan Daftar mendukung tugas lebih panjang serta penyelesaian dengan geseran.
 - Berpindah tab Latihan lewat navigasi samping tidak lagi menggeser layar.
 - Paket suara latihan kini sekitar sepertiga lebih kecil.
 

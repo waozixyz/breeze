@@ -79,6 +79,7 @@ bool __wrap_practice_actions_app_start_practice(InnerBreeze *app, int32_t practi
     (void)practice;
     abort();
 }
+int32_t __wrap_AppsInstalledMask(void) { return 31; }
 int main(void)
 {
     int result = Check();
@@ -92,7 +93,7 @@ monocypher="$root/build/packages/monocypher/src"
     -I"$monocypher" -I"$monocypher/optional" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
     "$monocypher/monocypher.c" "$monocypher/optional/monocypher-ed25519.c" \
-    "$liboqs" -Wl,--gc-sections -Wl,--wrap=network_transport_NetworkTransport \
+    "$liboqs" -Wl,--gc-sections -Wl,--wrap=AppsInstalledMask -Wl,--wrap=network_transport_NetworkTransport \
     -Wl,--wrap=lumi_telegram_LumiTelegramPump -Wl,--wrap=lumi_online_LumiOnlineAnswer \
     -Wl,--wrap=app_apply_nav_route -Wl,--wrap=practice_actions_app_start_practice \
     -ldl -lpthread -lz -lm -o "$work/test"

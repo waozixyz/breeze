@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Fotky se nyní stahují v Aplikacích a nejsou součástí Breeze; vaše fotky zůstávají v účtu a v Deníku.
+- Fotky se stahují z Aplikací; Lumi jednou zobrazí úplný návrh zpětné vazby ze seznamu a Seznamy podporují delší úkoly a dokončení přejetím.
 - Přepínání karet Cvičení v postranní navigaci už neposouvá obrazovku.
 - Hlasové balíčky cvičení jsou asi o třetinu menší.
 

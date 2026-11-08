@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Photos now downloads from Apps instead of coming with Breeze; your photos stay in your account and Diary.
+- Photos downloads from Apps; Lumi previews complete list feedback once, and Lists supports longer todos and swipe completion.
 - Practice voice packs are about a third smaller, and switching Practice tabs no longer shifts the screen.
 - Custom appearance sheets are now written in CSS; sheets you saved before convert automatically.
 

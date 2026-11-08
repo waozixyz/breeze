@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Photos se télécharge désormais depuis Applications, sans être inclus ; vos photos restent dans votre compte et Journal.
+- Photos se télécharge depuis Applications ; Lumi présente une seule fois les retours complets de la liste, et Listes accepte des tâches plus longues et leur validation par balayage.
 - Changer d’onglet dans Pratique avec la navigation latérale ne décale plus l’écran.
 - Les packs de voix des pratiques sont environ un tiers plus légers.
 

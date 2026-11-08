@@ -37,6 +37,7 @@
 #import "icon"
 #import "image_props"
 #import "image_widget"
+CompleteIcon :: #import "mingcute/mingcute_regular_check";
 EditIcon :: #import "mingcute/mingcute_regular_edit_2";
 SettingsIcon :: #import "mingcute/mingcute_regular_settings_3";
 BackIcon :: #import "mingcute/mingcute_regular_arrow_left";
@@ -93,9 +94,14 @@ settings_menu_open: bool;
 invite_role: s32 = 1;
 // The same trash can as Photos and Lumi.
 TRASH_ICON :: "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
-// As in 1List, a tap on an item finishes it, a swipe right edits it and a
-// swipe left deletes it; Undo brings a deleted item back.
+// A short swipe right completes or reopens an item; a long one edits it.
+// Swiping left deletes it; Undo brings a deleted item back.
 row_swipe: SwipeRowState;
+
+CompleteSwipe :: () -> SwipeRowAction {
+    return SwipeRowAction.{.fill = Color.{46, 139, 120, 255},
+        .icon_shape = CompleteIcon.Shape, .icon_color = Color.{255, 255, 255, 255}}
+}
 
 EditSwipe :: () -> SwipeRowAction {
     return SwipeRowAction.{.fill = Color.{58, 110, 165, 255},
@@ -232,7 +238,7 @@ Field :: (bounds: Rectangle, placeholder: string, read_only: bool = false) -> bo
             .bounds = bounds, .value = frame.value, .placeholder = placeholder, .cursor = frame.cursor,
             .anchor = frame.anchor, .scroll_x = frame.scroll_x,
             .focused = frame.focused, .focus_id = 6501,
-            .max_bytes = 127, .max_codepoints = 127, .input = input,
+            .max_bytes = 4095, .max_codepoints = 4095, .input = input,
             .disabled = frame.sharing_busy || frame.sharing_pending || read_only})
     if edited.edit.changed {
         start := edited.edit.start
@@ -243,7 +249,7 @@ Field :: (bounds: Rectangle, placeholder: string, read_only: bool = false) -> bo
             BuilderPrint(*value, "%", edited.edit.replacement)
             BuilderPrint(*value, "%", frame.value[end:])
             replacement := BuilderFinish(value)
-            if replacement.count <= 127 {
+            if replacement.count <= 4095 {
                 frame.value = replacement
             }
         }
@@ -1313,7 +1319,9 @@ ListsPage :: () {
                 swiped := SwipeRow(frame.session, SwipeRowProps.{.key = cast(u64)(7000 + index * 4),
                         .bounds = Bounds(x, row_y, row_right - x, Scale(64)),
                         .label = row.title, .now = state.now, .scale = frame.scale,
-                        .start = EditSwipe(), .end = DeleteSwipe(), .disabled = blocked},
+                        .start = CompleteSwipe(), .end = DeleteSwipe(),
+                        .threshold = 0.15, .end_threshold = 0.35, .long_threshold = 0.5, .long_start = EditSwipe(),
+                        .disabled = blocked},
                     row_swipe)
                 row_swipe = swiped.state
                 text_x := x + Scale(12) + cast(s32)swiped.offset
@@ -1326,13 +1334,13 @@ ListsPage :: () {
                     Text(frame.session, TextProps.{.bounds = Bounds(text_x, row_y + Scale(34),
                             text_width, Scale(24)), .text = row.comment})
                 }
-                if swiped.clicked {
+                if swiped.swiped_start {
                     state.done = ifx row.done != 0 then 0 else 1
                     Mutation(LISTS_SET_DONE, index)
                     End(frame.session)
                     return
                 }
-                if swiped.swiped_start {
+                if swiped.swiped_long_start {
                     BeginInput(index, row.title)
                     field_focus_request = true
                 }

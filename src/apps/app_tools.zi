@@ -15,6 +15,7 @@
 #import, file "lumi_types.zi";
 #import, file "lumi_ui_types.zi";
 #import, file "../storage/storage_elist.zi";
+#import, file "../storage/daochi_account.zi";
 #import, file "lumi_store.zi";
 #import, file "lumi_progress.zi";
 #import, file "lumi_chart.zi";
@@ -43,8 +44,175 @@
 #import "date_time"
 using AppNavRoute;
 
+// A list-backed report must come from this turn's referenced list, rather
+// than unrelated conversation history. The input remains data.
+feedback_request: string;
+feedback_turn_id: string;
+feedback_list_required: bool;
+feedback_list_id: [37]u8;
+feedback_list_snapshot: string;
+
+AppToolBeginTurn :: (input: string, turn_id: string = "") {
+    PackageFree(feedback_request)
+    feedback_request = PackageText(input, "")
+    PackageFree(feedback_turn_id)
+    feedback_turn_id = ""
+    if input.count > 0 {
+        if turn_id.count > 0 {
+            feedback_turn_id = PackageText(turn_id, "")
+        } else {
+            nonce: [65]u8
+            if NativeNonce(null, nonce[:]) {
+                feedback_turn_id = PackageText(TextFromCString(*nonce[0]), "")
+            }
+        }
+    }
+    feedback_list_required = ContainsFoldASCII(input, "list") &&
+    (ContainsFoldASCII(input, "report") || ContainsFoldASCII(input, "developer") ||
+        ContainsFoldASCII(input, "feedback"))
+    feedback_list_id = .{}
+    PackageFree(feedback_list_snapshot)
+    feedback_list_snapshot = ""
+}
+
+AppToolListScope :: (app: *InnerBreeze) {
+    if !app_nav_route_available(app, APP_NAV_ROUTE_ELIST) {
+        return
+    }
+    unused storage_elist_load(cast(*void)*lumi_tasks)
+    if !feedback_list_required || feedback_list_id[0] != cast(u8)0 {
+        return
+    }
+    matches: s32 = 0
+    for index: cast(s32)0..lumi_tasks.list_count - 1 {
+        list := lumi_tasks.lists[index]
+        title := TextUntilNul(list.title[:])
+        if title.count > 0 && ContainsFoldASCII(feedback_request, title) {
+            feedback_list_id = list.id
+            matches += 1
+        }
+    }
+    if matches > 1 {
+        feedback_list_id = .{}
+    } else if matches == 0 && app.elist.selected_list >= 0 &&
+    app.elist.selected_list < app.elist.list_count {
+        feedback_list_id = app.elist.lists[app.elist.selected_list].id
+    }
+}
+
+AppToolListIndex :: (id: string) -> s32 {
+    for index: cast(s32)0..lumi_tasks.list_count - 1 {
+        if TextUntilNul(lumi_tasks.lists[index].id[:]) == id {
+            return index
+        }
+    }
+    return -1
+}
+
+AppToolReadList :: (app: *InnerBreeze, arguments: string) -> string {
+    if !app_nav_route_available(app, APP_NAV_ROUTE_ELIST) {
+        return ToolFailure("lists unavailable")
+    }
+    AppToolListScope(app)
+    bytes: [37]u8
+    id := ToolString(arguments, "list_id", bytes[:])
+    index := AppToolListIndex(id)
+    if index < 0 || lumi_tasks.lists[index].incomplete {
+        return ToolFailure("list unavailable or incomplete; do not propose a partial report")
+    }
+    document := AppToolListDocument(index, id)
+    PackageFree(feedback_list_snapshot)
+    feedback_list_snapshot = PackageText(document, "")
+    return document
+}
+
+AppToolListDocument :: (index: s32, id: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"ok\":true,\"list_id\":")
+    LumiJsonString(*out, id)
+    BuilderPrint(*out, ",\"title\":")
+    LumiJsonString(*out, TextUntilNul(lumi_tasks.lists[index].title[:]))
+    BuilderPrint(*out, ",\"items\":[")
+    count: s32 = 0
+    for item: lumi_tasks.items[:lumi_tasks.item_count] {
+        if TextUntilNul(item.list_id[:]) != id {
+            continue
+        }
+        BuilderPrint(*out, "%{\"item_id\":", ifx count == 0 then "" else ",")
+        LumiJsonString(*out, TextUntilNul(item.id[:]))
+        BuilderPrint(*out, ",\"title\":")
+        LumiJsonString(*out, TextUntilNul(item.title[:]))
+        BuilderPrint(*out, ",\"comment\":")
+        LumiJsonString(*out, TextUntilNul(item.comment[:]))
+        BuilderPrint(*out, ",\"done\":%}", item.done != 0)
+        count += 1
+    }
+    BuilderPrint(*out, "]}")
+    return BuilderFinish(out)
+}
+
+// Each expansion identifies exactly one saved item. The displayed and sent
+// report keeps its original words beside the expansion, in saved list order.
+AppToolListReport :: (app: *InnerBreeze, arguments: string) -> string {
+    if !app_nav_route_available(app, APP_NAV_ROUTE_ELIST) {
+        return ""
+    }
+    AppToolListScope(app)
+    bytes: [37]u8
+    id := ToolString(arguments, "source_list_id", bytes[:])
+    index := AppToolListIndex(id)
+    points := FieldAt(arguments, 0, "points")
+    count := ArrayCount(arguments, points)
+    if index < 0 || lumi_tasks.lists[index].incomplete || count <= 0 ||
+    count != lumi_tasks.lists[index].item_total ||
+    (feedback_list_required && id != TextUntilNul(feedback_list_id[:])) {
+        return ""
+    }
+    current := AppToolListDocument(index, id)
+    defer { PackageFree(current) }
+    if feedback_list_snapshot.count == 0 || current != feedback_list_snapshot {
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%\n", TextUntilNul(lumi_tasks.lists[index].title[:]))
+    number: s32 = 0
+    for item: lumi_tasks.items[:lumi_tasks.item_count] {
+        if TextUntilNul(item.list_id[:]) != id {
+            continue
+        }
+        matches: s32 = 0
+        expansion: [4097]u8
+        for point: cast(s32)0..count - 1 {
+            at := ElementAt(arguments, points, point)
+            item_bytes: [37]u8
+            source := ReadStringText(arguments, FieldAt(arguments, at, "item_id"), item_bytes[:])
+            if source > 0 && TextUntilNul(item_bytes[:]) == TextUntilNul(item.id[:]) {
+                matches += 1
+                if ReadStringText(arguments, FieldAt(arguments, at, "message"), expansion[:]) <= 0 {
+                    matches = -1
+                    break
+                }
+            }
+        }
+        if matches != 1 {
+            PackageFree(BuilderFinish(out))
+            return ""
+        }
+        number += 1
+        BuilderPrint(*out, "\n%. %\n%\n%\n", number, TextUntilNul(item.title[:]),
+            TextUntilNul(item.comment[:]), TextUntilNul(expansion[:]))
+    }
+    report := BuilderFinish(out)
+    if report.count > FeedbackMessageMax || number != count {
+        PackageFree(report)
+        return ""
+    }
+    return report
+}
+
 AppToolContext :: (app: *InnerBreeze) -> string {
     out: Vec(u8)
+    AppToolListScope(app)
     active := practice_active(app)
     BuilderPrint(*out, "{\"app\":\"inbe\",\"locale\":\"%\",\"screen\":%,\"available_apps\":%,\"settings\":{\"theme\":\"%\",\"mode\":%,\"scale\":%,\"navigation\":%,\"style\":%},\"practice\":{\"id\":%,\"paused\":%},\"habits\":[",
         LocaleActiveCode(), app.breathing.screen, app.enabled_apps & AppsInstalledMask(),
@@ -87,7 +255,18 @@ AppToolContext :: (app: *InnerBreeze) -> string {
             paused += 1
         }
     }
-    BuilderPrint(*out, "],\"tasks\":[")
+    BuilderPrint(*out, "],\"lists\":[")
+    for index: cast(s32)0..(ifx app_nav_route_available(app, APP_NAV_ROUTE_ELIST) then lumi_tasks.list_count else 0) - 1 {
+        list := lumi_tasks.lists[index]
+        BuilderPrint(*out, "%{\"id\":", ifx index == 0 then "" else ",")
+        LumiJsonString(*out, TextUntilNul(list.id[:]))
+        BuilderPrint(*out, ",\"title\":")
+        LumiJsonString(*out, TextUntilNul(list.title[:]))
+        BuilderPrint(*out, ",\"item_count\":%}", list.item_total)
+    }
+    BuilderPrint(*out, "],\"feedback_list_required\":%,\"feedback_list_id\":", feedback_list_required)
+    LumiJsonString(*out, TextUntilNul(feedback_list_id[:]))
+    BuilderPrint(*out, ",\"tasks\":[")
     if app_nav_route_available(app, APP_NAV_ROUTE_ELIST) {
         unused storage_elist_load(cast(*void)*lumi_tasks)
         count = lumi_tasks.item_count
@@ -97,8 +276,16 @@ AppToolContext :: (app: *InnerBreeze) -> string {
             BuilderPrint(*out, "%{\"id\":", ifx index == 0 then "" else ",")
             LumiJsonString(*out, task.id)
             BuilderPrint(*out, ",\"title\":")
-            LumiJsonString(*out, task.title)
-            BuilderPrint(*out, ",\"done\":%}", task.done)
+            title := task.title
+            if title.count > 256 {
+                end: s64 = 256
+                while end > 0 && (title[end] & cast(u8)192) == cast(u8)128 {
+                    end -= 1
+                }
+                title = title[:end]
+            }
+            LumiJsonString(*out, title)
+            BuilderPrint(*out, ",\"title_truncated\":%,\"done\":%}", title.count != task.title.count, task.done)
         }
     }
     activity: [2048]u8
@@ -642,6 +829,41 @@ ToolString :: (document: string, name: string, output: []u8) -> string {
     return TextFromBytes(output[:count])
 }
 
+AppToolReportFeedback :: (app: *InnerBreeze, arguments: string) -> string {
+    title: [161]u8
+    message: [FeedbackMessageMax + 1]u8
+    summary := ToolString(arguments, "title", title[:])
+    source_bytes: [37]u8
+    source := ToolString(arguments, "source_list_id", source_bytes[:])
+    list_report: string
+    if feedback_list_required || source.count > 0 {
+        list_report = AppToolListReport(app, arguments)
+        if list_report.count == 0 {
+            return ToolFailure("read the referenced list and expand every saved item in points with source_list_id; no unrelated or partial report")
+        }
+    }
+    defer { PackageFree(list_report) }
+    report := ifx list_report.count > 0 then list_report else ToolString(arguments, "message", message[:])
+    context := AppFeedbackContext(app)
+    defer { PackageFree(context) }
+    if feedback_request.count > 0 && feedback_turn_id.count == 0 {
+        return ToolFailure("feedback request could not be identified")
+    }
+    id := FeedbackDraft(summary, report, context, feedback_turn_id)
+    defer { PackageFree(id) }
+    preview_out: Vec(u8)
+    BuilderPrint(*preview_out, "%\n\n%", summary, report)
+    preview := BuilderFinish(preview_out)
+    defer { PackageFree(preview) }
+    if id.count != 32 || !LumiStoreFeedbackProposal(preview, LocaleText("lumi_feedback_confirm"), id) {
+        return PackageText("{\"ok\":false,\"error\":\"feedback could not be saved; review or cancel any pending proposal before changing it\"}", "")
+    }
+    result: Vec(u8)
+    BuilderPrint(*result, "{\"ok\":true,\"id\":\"%\",\"delivery\":\"%\"}", id,
+        ifx FeedbackChoice(id, 0) then "awaiting user confirmation" else "confirmation already handled")
+    return BuilderFinish(result)
+}
+
 AppToolExecute :: (app: *InnerBreeze, name: string, arguments: string) -> string {
     if ValueEnd(arguments, 0, 0) != arguments.count || arguments.count == 0 || arguments[0] != cast(u8)123 {
         return PackageText("{\"ok\":false,\"error\":\"invalid arguments\"}", "")
@@ -695,21 +917,11 @@ AppToolExecute :: (app: *InnerBreeze, name: string, arguments: string) -> string
         BuilderPrint(*out, "{\"ok\":true,\"displayed\":true,\"chart\":%}", payload)
         return BuilderFinish(out)
     }
+    if name == "read_list" {
+        return AppToolReadList(app, arguments)
+    }
     if name == "report_feedback" {
-        title: [161]u8
-        message: [4097]u8
-        summary := ToolString(arguments, "title", title[:])
-        report := ToolString(arguments, "message", message[:])
-        context := AppFeedbackContext(app)
-        defer { PackageFree(context) }
-        id := FeedbackDraft(summary, report, context)
-        defer { PackageFree(id) }
-        if id.count != 32 || !LumiStoreFeedbackProposal(report, LocaleText("lumi_feedback_confirm"), id) {
-            return PackageText("{\"ok\":false,\"error\":\"feedback could not be saved\"}", "")
-        }
-        result: Vec(u8)
-        BuilderPrint(*result, "{\"ok\":true,\"id\":\"%\",\"delivery\":\"awaiting user confirmation\"}", id)
-        return BuilderFinish(result)
+        return AppToolReportFeedback(app, arguments)
     }
     if name == "read_diary" {
         if !app_nav_route_available(app, APP_NAV_ROUTE_DIARY) {

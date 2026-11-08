@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Foto ora si scarica da App invece di essere incluso in Breeze; le tue foto restano nell’account e nel Diario personale.
+- Foto si scarica da App; Lumi mostra una sola anteprima completa dei commenti dell’elenco, ed Elenchi supporta attività più lunghe e il completamento con uno scorrimento.
 - Cambiare scheda in Pratica con la navigazione laterale non sposta più lo schermo.
 - I pacchetti vocali delle pratiche sono circa un terzo più leggeri.
 

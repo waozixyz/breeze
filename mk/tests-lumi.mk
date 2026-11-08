@@ -80,3 +80,10 @@ lumi-feedback-delivery-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMA
 .PHONY: lumi-connection-test
 lumi-connection-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
 	@sh tests/lumi_connection_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+.PHONY: lumi-feedback-list-ui-test
+lumi-feedback-list-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		-u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 APP_NO_TRAY=1 SDL_VIDEODRIVER=x11 \
+		LIBGL_ALWAYS_SOFTWARE=1 xvfb-run -a -n 300 -s '-noreset -screen 0 1280x1024x24' \
+		dbus-run-session -- python3 tests/lumi_feedback_list_ui_test.py $(abspath $(TARGET))

@@ -56,6 +56,7 @@ icon_habits: Habits;
 provider_url: [256]u8;
 provider_token: [128]u8;
 provider_body: [65536]u8;
+provider_response_capacity: s64;
 continuation_test: bool;
 continuation_round: s32;
 tool_executions: s32;
@@ -150,6 +151,7 @@ ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool 
     }
     if request.url.count > 17 && request.url[:17] == "http://127.0.0.1:" {
         provider_requests += 1
+        provider_response_capacity = output.count
         unused AppCopyText(request.url, provider_url[:])
         unused AppCopyText(request.token, provider_token[:])
         unused AppCopyText(request.body, provider_body[:])
@@ -233,7 +235,14 @@ QueuedTurns :: (app: *InnerBreeze) {
     app_lumi_pump(app)
     check_true("first rapid request is in flight", lumi_online_stage == LUMI_STAGE_PROVIDER)
     check_true("second rapid message is accepted", Ask("queued-second"))
+    second_turn := PackageText(LumiStoreLatestUserKey(), "")
+    defer { PackageFree(second_turn) }
     check_true("third rapid message is accepted", Ask("queued-third"))
+    third_turn := PackageText(LumiStoreLatestUserKey(), "")
+    defer { PackageFree(third_turn) }
+    check_true("queued inputs retain distinct archived turn identities", lumi_online_inputs.count == 2 &&
+        lumi_online_inputs[0].turn_id == second_turn && lumi_online_inputs[1].turn_id == third_turn &&
+        second_turn != third_turn && feedback_turn_id != second_turn)
     check_int("waiting messages are immediately recorded", LumiStoreCount(), history + 3)
     check_true("recorded user order is preserved", LumiStoreRow(history).text == "queued-first" &&
         LumiStoreRow(history + 1).text == "queued-second" && LumiStoreRow(history + 2).text == "queued-third")
@@ -252,6 +261,7 @@ QueuedTurns :: (app: *InnerBreeze) {
     }
     second: [3]string = .["queued-first", "Hello from the provider", "queued-second"]
     ProviderTail(second[:])
+    check_true("starting queued turn uses its own message identity", feedback_turn_id == second_turn)
     check_true("second request never sees third input", !contains(TextUntilNul(provider_body[:]), "queued-third"))
     Pump(app)
     third: [5]string = .["queued-first", "Hello from the provider", "queued-second",
@@ -496,6 +506,14 @@ Check :: () -> s32 {
     check_true("the user's message is sent", contains(body, "hello"))
     check_true("the key is never in the body", !contains(body, TEST_KEY))
     check_true("the provider's answer arrives", LastRow() == "Hello from the provider")
+    check_true("ordinary chat keeps provider budget and response bound", !contains(body, "max_tokens") &&
+        provider_response_capacity == 65536)
+    check_true("requested list report starts", Ask("Based on my lists apps can you send a full report t developer for ever point mentioned clear and expanded"))
+    Pump(*app)
+    body = TextUntilNul(provider_body[:])
+    check_true("requested report has a complete output budget", contains(body, "\"max_tokens\":32768") &&
+        provider_response_capacity == 524288)
+
     QueuedTurns(*app)
     long_reply: Vec(u8)
     for index: cast(s32)0..1799 {
