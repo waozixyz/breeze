@@ -5,6 +5,9 @@
 #import "std/vec"
 #import "std/byte_text_linux"
 #import "std/bundle_host"
+#import "hosted_values"
+#import, file "../src/app/assets.zi";
+#import, file "../src/apps/package_release.zi";
 #import "apps/tree"
 #import "apps/host"
 #import "apps/catalog"
@@ -18,6 +21,7 @@
 #import, file "../src/apps/node_app_snapshot.zi";
 #import, file "../src/apps/node_app_tree.zi";
 #import, file "../src/apps/node_apps.zi";
+#import, file "../src/apps/media_compression_request.zi";
 #import, file "../src/apps/catalog.zi";
 #import, file "../src/apps/node_app_runner.zi";
 #import, file "../src/apps/node_app_open.zi";
@@ -266,7 +270,7 @@ SnapshotPublicationsHostCheck :: () -> s32 {
 
         function: [32]u8
         if !CopyCString("AppServiceHost", function[:]) { return 123 }
-        arguments: [2]bundle_host.HostValue
+        arguments: [2]HostValue
         arguments[0] = NodeAppString("publications")
         arguments[1] = NodeAppString("{\"operation\":\"fetch\",\"id\":\"fixture\"}")
 
@@ -274,7 +278,7 @@ SnapshotPublicationsHostCheck :: () -> s32 {
         if !CopyCString("other-account", nested.tree.account[:]) ||
         NodeTreeAllows(cast(*void)*runner, *node, "publications") ||
         NodeTreeAllows(cast(*void)*runner, *node, "AppServiceHost") { return 121 }
-        mismatched: bundle_host.HostValue
+        mismatched: HostValue
         if NodeTreeCall(cast(*void)*runner, *node, null, *function[0], *arguments[0], 2, *mismatched) != 0 { return 125 }
 
         if !CopyCString(NodeTreeAccount(), nested.tree.account[:]) ||
@@ -286,6 +290,90 @@ SnapshotPublicationsHostCheck :: () -> s32 {
         result.kind != cast(s32)HostValueKind.HostString ||
         NodeAppText(result) != "{\"status\":\"rejected\",\"error\":\"signed-out\"}" { return 124 }
     }
+    return 0
+}
+
+snapshot_media_publishers: string;
+SnapshotMediaAsset :: (path: string) -> AssetView {
+    if path == "apps/publishers.json" {
+        return AssetView.{.found = true, .data = snapshot_media_publishers}
+    }
+    return AssetView.{}
+}
+
+// Exercise actual nested host dispatch and publisher/account binding.
+SnapshotMediaCompressionCheck :: () -> s32 {
+    slot := cast(s32)(NodeAppSlots - 3)
+    runner := *node_runners[slot]
+    nested: AppHost
+    node: AppNode
+    function: [32]u8
+    arguments: [2]HostValue
+    result: HostValue
+    NodeAppAssign(slot, "photos")
+    runner.nested = *nested
+    runner.embedded_release.valid = true
+    unused CopyCString("baseline", runner.embedded_release.key_id[:])
+    snapshot_media_publishers = PackageRead(IconsEnvironmentPath("NODE_EMBEDDED_PUBLISHERS"), 16384)
+    AssetBindProvider(SnapshotMediaAsset)
+    defer {
+        node_tree_validating = false
+        node_snapshot_scanning = false
+        unused MediaCompressionTakeRequest()
+        runner.nested = null
+        runner.embedded_release = PackageRelease.{}
+        NodeAppAssign(slot, "")
+        AssetUnbindProvider()
+        PackageFree(snapshot_media_publishers)
+        snapshot_media_publishers = ""
+    }
+    unused CopyCString(NodeTreeAccount(), nested.tree.account[:])
+    unused CopyCString("photos", node.entry.expected_id[:])
+    unused CopyCString("inbe.photos", node.identity.id[:])
+    unused CopyCString("1111111111111111111111111111111111111111111111111111111111111111", node.identity.authority[:])
+    unused CopyCString("AppServiceHost", function[:])
+    arguments[0] = NodeAppString("media.compression.open")
+    arguments[1] = NodeAppString("")
+    if NodeAppCapability("AppServiceHost") ||
+    !NodeTreeAllows(cast(*void)runner, *node, "media.compression.open") { return 130 }
+    if NodeTreeCall(cast(*void)runner, *node, null, *function[0], *arguments[0], 2, *result) != 1 ||
+    NodeAppText(result) != "queued" || !MediaCompressionTakeRequest() ||
+    MediaCompressionTakeRequest() { return 131 }
+    if NodeAppCallFor(runner, "diary", null, *function[0], *arguments[0], 2, *result) != 0 ||
+    MediaCompressionTakeRequest() { return 132 }
+    unused CopyCString("diary", node.entry.expected_id[:])
+    unused CopyCString("inbe.diary", node.identity.id[:])
+    if NodeTreeAllows(cast(*void)runner, *node, "media.compression.open") ||
+    NodeTreeCall(cast(*void)runner, *node, null, *function[0], *arguments[0], 2, *result) != 0 ||
+    MediaCompressionTakeRequest() { return 133 }
+    unused CopyCString("photos", node.entry.expected_id[:])
+    unused CopyCString("inbe.photos", node.identity.id[:])
+    // A Photos-shaped name without the trusted publisher gains nothing.
+    unused CopyCString("untrusted", node.identity.authority[:])
+    if NodeTreeAllows(cast(*void)runner, *node, "media.compression.open") ||
+    NodeTreeCall(cast(*void)runner, *node, null, *function[0], *arguments[0], 2, *result) != 0 ||
+    MediaCompressionTakeRequest() { return 134 }
+    unused CopyCString("1111111111111111111111111111111111111111111111111111111111111111", node.identity.authority[:])
+    unused CopyCString("other-account", nested.tree.account[:])
+    if NodeTreeCall(cast(*void)runner, *node, null, *function[0], *arguments[0], 2, *result) != 0 ||
+    MediaCompressionTakeRequest() { return 135 }
+    unused CopyCString(NodeTreeAccount(), nested.tree.account[:])
+    for phase: cast(s32)0..1 {
+        node_tree_validating = phase == 0
+        node_snapshot_scanning = phase == 1
+        if NodeTreeAllows(cast(*void)runner, *node, "media.compression.open") ||
+        NodeTreeCall(cast(*void)runner, *node, null, *function[0], *arguments[0], 2, *result) != 0 ||
+        NodeAppCallFor(runner, "photos", null, *function[0], *arguments[0], 2, *result) != 0 ||
+        MediaCompressionTakeRequest() { return 136 }
+    }
+    node_tree_validating = false
+    node_snapshot_scanning = false
+    arguments[1] = NodeAppString("unexpected")
+    if NodeTreeCall(cast(*void)runner, *node, null, *function[0], *arguments[0], 2, *result) != 0 ||
+    MediaCompressionTakeRequest() { return 137 }
+    arguments[1] = HostScalar("s32", 1)
+    unused NodeTreeCall(cast(*void)runner, *node, null, *function[0], *arguments[0], 2, *result)
+    if MediaCompressionTakeRequest() { return 138 }
     return 0
 }
 
@@ -359,6 +447,8 @@ Check :: () -> s32 {
     if packages != 0 { return packages }
     publications := SnapshotPublicationsHostCheck()
     if publications != 0 { return publications }
+    compression := SnapshotMediaCompressionCheck()
+    if compression != 0 { return compression }
     embedded := NodeAppEmbeddedCheck()
     if embedded != 0 { return embedded }
     storage_close()

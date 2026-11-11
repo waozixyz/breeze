@@ -1,0 +1,288 @@
+// Real image bytes + SQLite/outbox + authenticated chunk lifecycle.
+#import "byte_text_linux"
+#import "text"
+#import "json_scan"
+#import "vec"
+#import "file_linux"
+#import "kryon/image_preview"
+#import, file "storage_test_support.zi";
+#import, file "../src/apps/media_compression_store.zi";
+#import, file "../src/apps/media_compression_work.zi";
+#import, file "../src/apps/diary_blobs.zi";
+#import, file "../src/apps/package_files.zi";
+#import, file "../src/storage/storage_settings.zi";
+#import, file "../src/storage/sync_node_storage.zi";
+#import, file "../src/storage/entity_records.zi";
+
+compression_test_c :: #system_library "c";
+CompressionFailSourceWrite :: (key: *u8) #foreign compression_test_c;
+CompressionPause :: (microseconds: u32) -> s32 #foreign compression_test_c "usleep";
+
+CompressionWaitJob :: (work: *MediaCompressionWork) -> bool {
+    for attempt: cast(s32)0..9999 {
+        if MediaCompressionWorkReady(work) {
+            return true
+        }
+        unused CompressionPause(1000)
+    }
+    return false
+}
+
+CompressionPreviewJobs :: (owner: string, hash: string, fixture: string) {
+    check_true("no result can be used without a job", !MediaCompressionWorkReady(null) &&
+        !MediaCompressionWorkSuccessful(null) && !MediaCompressionWorkCurrent(null, owner, hash, 7))
+    work := MediaCompressionWorkStart(owner, hash, fixture, 52, 7)
+    check_true("background comparison starts", work != null)
+    if work != null {
+        check_true("new request identifies its account and image", MediaCompressionWorkCurrent(work, owner, hash, 7))
+        check_true("quality change cancels the old generation", !MediaCompressionWorkCurrent(work, owner, hash, 8))
+        check_true("account switch cannot use old preview", !MediaCompressionWorkCurrent(work, "another-account", hash, 7))
+        check_true("next image cannot use old preview", !MediaCompressionWorkCurrent(work, owner, "another-image", 7))
+        joined := CompressionWaitJob(work)
+        check_true("real background codec completes", joined)
+        check_true("finished job supplies both previews and encoded bytes", MediaCompressionWorkSuccessful(work))
+        check_true("job keeps full dimensions and selected quality", joined && work.quality == 52 &&
+            work.encoded.width == 128 && work.encoded.height == 96 && work.source == fixture)
+        MediaCompressionWorkFree(work)
+    }
+    failed := MediaCompressionWorkStart(owner, hash, "bad", 35, 8)
+    check_true("failed preview job starts safely", failed != null)
+    if failed != null {
+        check_true("failed preview job completes", CompressionWaitJob(failed))
+        check_true("corrupt image never becomes an applicable result", !MediaCompressionWorkSuccessful(failed))
+        MediaCompressionWorkFree(failed)
+    }
+}
+
+CompressionBytes :: (value: string) -> []u8 {
+    descriptor := cast(*TextDescriptor)(*value)
+    return BytesFromPointer(descriptor.data, cast(u64)value.count)
+}
+
+CompressionAccount :: () {
+    key: [5121]u8
+    for index: cast(s32)0..5119 { key[index] = ifx index % 2 == 0 then cast(u8)52 else cast(u8)50 }
+    storage_set_setting_text("sync_public_id", "test-public-id")
+    storage_set_setting_text("sync_public_key", "test-public-key")
+    storage_set_setting_text("sync_private_key", TextFromCString(*key[0]))
+}
+
+// The simulated node acknowledges exactly the records that it received.
+CompressionAck :: (hash: string) {
+    record := MediaEntityRecord(hash)
+    key := EntityPhotoKey(hash)
+    defer { PackageFree(record); PackageFree(key) }
+    statement: *void
+    check_true("prepare record acknowledgement", SqlitePrepareText(storage_db_handle(),
+        "INSERT OR REPLACE INTO sync_record_copies(collection,id,json) VALUES(?1,?2,?3)",
+        -1, *statement, null) == SQLITE_OK)
+    unused bind_text(statement, 1, EntityPhotosCollection)
+    unused bind_text(statement, 2, hash)
+    unused bind_text(statement, 3, record)
+    check_true("save acknowledgement", SqliteStep(statement) == SQLITE_DONE)
+    SqliteFinalize(statement)
+    check_true("prepare acknowledged outbox removal", SqlitePrepareText(storage_db_handle(),
+        "DELETE FROM sync_outbox WHERE entity_type='entity_record' AND entity_id=?1", -1, *statement, null) == SQLITE_OK)
+    unused bind_text(statement, 1, key)
+    check_true("acknowledge uploaded record", SqliteStep(statement) == SQLITE_DONE)
+    SqliteFinalize(statement)
+}
+
+CompressionUploads :: (node: string, capture: string) -> string {
+    pass: DiaryBlobPass
+    unused DiaryBlobPlan(*pass, node)
+    request: DiaryBlobRequest
+    sealed: string
+    empty: []u8
+    while DiaryBlobNext(*pass, *request) {
+        check_true("only chunk uploads before acknowledgement", request.kind == DIARY_BLOB_UPLOAD)
+        if request.kind == DIARY_BLOB_UPLOAD && !request.preview &&
+        EntityPhotoKeyHash(TextUntilNul(request.key[:])) == capture {
+            PackageFree(sealed)
+            sealed = PackageText(request.body, "")
+        }
+        unused DiaryBlobFinish(*pass, *request, 204, empty)
+        DiaryBlobAbandon(*request)
+    }
+    DiaryBlobPassEnd(*pass)
+    return sealed
+}
+
+#program_export
+Check :: () -> s32 {
+    test_root := data_root()
+    suffix: string = "/build/media-compression-zi-test/data"
+    if test_root.count < suffix.count || test_root[test_root.count - suffix.count:] != suffix { return 100 }
+    guard := support_begin(test_root)
+    if guard != 0 { return guard }
+    root := make_root("first")
+    check_true("open synthetic account", storage_init(root) != 0)
+    CompressionAccount()
+    fixture_path := PackageText(test_root[:test_root.count - 5], "/input.png")
+    fixture := PackageRead(fixture_path, DIARY_FILE_LIMIT)
+    PackageFree(fixture_path)
+    check_true("real PNG fixture loaded", fixture.count > 1000 && DiaryImageFormat(fixture) == "png")
+    added := MediaAddBytes(fixture, MediaAddition.{.name = "fixture.png"})
+    hash := PackageText(TextUntilNul(added.hash[:]), "")
+    key := EntityPhotoKey(hash)
+    path := MediaPath(hash, false)
+    check_true("original imported without resizing", added.succeeded && PackageRead(path, DIARY_FILE_LIMIT) == fixture)
+    original_metadata := MediaEntityRecord(hash)
+    unused RemoveFile(path)
+    check_true("absent full original waits for a download", PackageFileSize(path) < 0 &&
+        MediaCompressionSourcePending(hash) && MediaOriginalWanted(hash) && MediaCompressionSource(hash).count == 0)
+    check_true("waiting for bytes preserves photo metadata", MediaEntityRecord(hash) == original_metadata)
+    check_true("downloaded original resumes comparison", MediaWriteFile(path, fixture) &&
+        !MediaCompressionSourcePending(hash))
+    resumed_source := MediaCompressionSource(hash)
+    check_true("resumed comparison uses authenticated full bytes", resumed_source == fixture)
+    PackageFree(resumed_source)
+    PackageFree(original_metadata)
+    node := "https://compression.example"
+    storage_set_setting_text("sync_server_url", node)
+    check_true("node accepts media", SyncNodeAdd(node) && SyncNodeSetMediaUpload(node, true))
+    PackageFree(CompressionUploads(node, ""))
+    CompressionAck(hash)
+    original_record := MediaEntityRecord(hash)
+    original_content := EntityPhotoContent(original_record)
+    check_true("original chunks exist before conversion", original_content.chunk_count > 0)
+    before_stats := MediaCompressionStats()
+    cached_asset := PackageText(MediaAsset(hash, true), "")
+    encoded := ImageCompressAVIF(fixture, ".png", 1, 35)
+    adjusted := ImageCompressAVIF(fixture, ".png", 1, 85)
+    check_true("q35 encodes real smaller AVIF", encoded.is_ok && encoded.data.count > 0 && encoded.data.count < fixture.count)
+    check_true("quality adjusts actual encoded bytes", adjusted.is_ok && adjusted.data != encoded.data)
+    before := ImagePreviewRGBA(fixture, ".png", 32, 1)
+    after := ImagePreviewRGBA(encoded.data, ".avif", 32, 1)
+    check_true("Lanczos comparison preserves aspect ratio", before.is_ok && after.is_ok &&
+        before.width == 32 && before.height == 24 && after.width == 32 && after.height == 24)
+    check_true("full encoded dimensions stay unchanged", encoded.width == 128 && encoded.height == 96)
+    check_true("transparent preview remains transparent", before.pixels != null && after.pixels != null &&
+        before.pixels[3] == cast(u8)0 && after.pixels[3] == cast(u8)0)
+    ImagePreviewRGBAFree(*before); ImagePreviewRGBAFree(*after); ImageAVIFFree(*adjusted)
+    check_true("cancel leaves source and record intact", PackageRead(path, DIARY_FILE_LIMIT) == fixture &&
+        MediaEntityRecord(hash) == original_record)
+    owner := PackageText(AppTextFromCString(storage_user_id_buffer(), 64), "")
+    CompressionPreviewJobs(owner, hash, fixture)
+    check_true("cancelled and failed jobs leave source and record unchanged",
+        PackageRead(path, DIARY_FILE_LIMIT) == fixture && MediaEntityRecord(hash) == original_record)
+    queued := read_db_count("SELECT COUNT(*) FROM sync_outbox")
+    check_true("account switch invalidates Apply", !MediaCompressionCommit("other-account", hash, fixture, encoded.data, 35))
+    check_true("bad output keeps source", !MediaCompressionCommit(owner, hash, fixture, "bad", 35))
+    fault_key: [79]u8
+    encoded_hash: [65]u8
+    encoded_bytes := CompressionBytes(encoded.data)
+    storage_sha256_hex(*encoded_bytes[0], cast(s64)encoded_bytes.count, *encoded_hash[0])
+    failed_path := MediaPath(TextFromBytes(encoded_hash[:64]), false)
+    unused AppCopyText(key, fault_key[:])
+    CompressionFailSourceWrite(*fault_key[0])
+    check_true("source-record failure rolls back target/outbox", !MediaCompressionCommit(owner, hash, fixture, encoded.data, 35))
+    CompressionFailSourceWrite(null)
+    check_true("rollback preserves source bytes and references", PackageRead(path, DIARY_FILE_LIMIT) == fixture &&
+        MediaEntityRecord(hash) == original_record)
+    check_int("rollback preserves outbox", read_db_count("SELECT COUNT(*) FROM sync_outbox"), queued)
+    check_true("rollback removes only the uncommitted target file", PackageFileSize(failed_path) < 0)
+    PackageFree(failed_path)
+    check_true("explicit Apply commits", MediaCompressionCommit(owner, hash, fixture, encoded.data, 35))
+    target := MediaReplacementRecord(hash)
+    check_true("validated target resolves through stable identity", target.count == 64 && MediaAssetView(MediaAsset(hash, true)).data == encoded.data)
+    check_true("cached original asset paths resolve after reclamation", MediaAssetView(cached_asset).data == encoded.data)
+    check_true("original bytes actually leave local storage", PackageFileSize(path) < 0)
+    after_stats := MediaCompressionStats()
+    check_true("actual local bytes decrease", after_stats.local_bytes < before_stats.local_bytes && after_stats.retained_bytes == 0)
+    check_int("conversion keeps one gallery identity", MediaQuery("", false), 1)
+    sealed := CompressionUploads(node, target)
+    check_true("target uploads as authenticated sealed bytes", sealed.count == encoded.data.count + 16)
+    CompressionAck(hash); CompressionAck(target)
+    pass: DiaryBlobPass
+    request: DiaryBlobRequest
+    empty: []u8
+    unused DiaryBlobPlan(*pass, node)
+    check_true("verify target before retiring originals", DiaryBlobNext(*pass, *request) && request.kind == DIARY_BLOB_VERIFY)
+    unused DiaryBlobFinish(*pass, *request, 500, empty)
+    DiaryBlobPassEnd(*pass)
+    old_blob := TextUntilNul(original_content.chunks[0].address[:])
+    unverified := MediaEntityRecord(target)
+    check_true("failed verification never authorizes reclamation", !EntityContentVerified(EntityPhotoContent(unverified), node))
+    PackageFree(unverified)
+    unused DiaryBlobPlan(*pass, node)
+    check_true("failed verification retries", DiaryBlobNext(*pass, *request) && request.kind == DIARY_BLOB_VERIFY)
+    unused DiaryBlobFinish(*pass, *request, 200, CompressionBytes(sealed))
+    DiaryBlobPassEnd(*pass)
+    target_record := MediaEntityRecord(target)
+    check_true("target decrypts and verifies against its hash", EntityContentVerified(EntityPhotoContent(target_record), node))
+    PackageFree(target_record)
+    unused DiaryBlobPlan(*pass, node)
+    // An intervening reference must also prevent an already-planned delete.
+    storage_set_setting_text("compression_test_shared_chunk", old_blob)
+    check_true("cross-record reference protects shared chunks", DiaryBlobChunkShared(key, old_blob))
+    while DiaryBlobNext(*pass, *request) {
+        check_true("shared original chunk is never trashed", TextUntilNul(request.blob[:]) != old_blob)
+        unused DiaryBlobFinish(*pass, *request, 204, empty)
+    }
+    DiaryBlobPassEnd(*pass)
+    storage_set_setting_text("compression_test_shared_chunk", "")
+    unused DiaryBlobPlan(*pass, node)
+    check_true("unreferenced original retires through node Trash", DiaryBlobNext(*pass, *request) &&
+        request.kind == DIARY_BLOB_TRASH && TextUntilNul(request.blob[:]) == old_blob)
+    changed := request.changed
+    unused DiaryBlobFinish(*pass, *request, 503, empty)
+    DiaryBlobPassEnd(*pass)
+    check_true("failed Trash is not recorded as reclaimed", !DiaryBlobTrashKnown(node, old_blob, true, changed))
+    unused DiaryBlobPlan(*pass, node)
+    check_true("node Trash failure retries", DiaryBlobNext(*pass, *request) && request.kind == DIARY_BLOB_TRASH)
+    unused DiaryBlobFinish(*pass, *request, 204, empty)
+    DiaryBlobPassEnd(*pass)
+    check_true("successful Trash records remote quota reclamation", DiaryBlobTrashKnown(node, old_blob, true, changed))
+    unused DiaryBlobPlan(*pass, node)
+    check_true("reclaimed original is not uploaded or downloaded again", !DiaryBlobNext(*pass, *request))
+    DiaryBlobPassEnd(*pass)
+    storage_close()
+    check_true("reload after reclamation", storage_init(root) != 0)
+    check_true("reload resolves stable reference to saved AVIF", MediaAssetView(MediaAsset(hash, true)).data == encoded.data)
+    storage_set_setting_text("cell.diary.file.2026-11-10.json", hash)
+    check_true("Diary alias protects generated target", DiaryBlobInDiary(target))
+    check_true("Trash propagates to generated content", MediaSetTrashed(hash, true) && MediaRead(target).trashed)
+    check_int("Trash keeps one stable photo", MediaQuery("", true), 1)
+    check_true("Diary can still resolve a trashed embedded image", MediaAssetView(MediaAsset(hash, true)).data == encoded.data)
+    check_true("restore propagates to generated content", MediaSetTrashed(hash, false) && !MediaRead(target).trashed)
+    records := CompressionEncryptedRecords()
+    check_true("encrypted media records are available", records.count > 2)
+    storage_close()
+    second := make_root("second")
+    check_true("second device opens same synthetic account", storage_init(second) != 0)
+    CompressionAccount()
+    response_out: Vec(u8)
+    BuilderPrint(*response_out, "{\"protocol_version\":6,\"status\":\"ok\",\"server_version\":9,\"server_clock\":9,\"changes\":{\"encrypted_records\":%}}", records)
+    response := BuilderFinish(response_out)
+    check_true("second device applies encrypted replacement records", storage_apply_sync_response_json(response) != 0)
+    storage_set_setting_text("sync_server_url", node)
+    unused SyncNodeAdd(node)
+    check_true("second device starts without owner image files", MediaAsset(hash, true).count == 0)
+    unused DiaryBlobPlan(*pass, node)
+    check_true("second device fetches replacement instead of original", DiaryBlobNext(*pass, *request) &&
+        request.kind == DIARY_BLOB_DOWNLOAD && EntityPhotoKeyHash(TextUntilNul(request.key[:])) == target)
+    unused DiaryBlobFinish(*pass, *request, 200, CompressionBytes(sealed))
+    DiaryBlobPassEnd(*pass)
+    check_true("second device resolves Diary identity to authenticated AVIF", MediaAssetView(MediaAsset(hash, true)).data == encoded.data)
+    check_int("second device keeps one gallery row", MediaQuery("", false), 1)
+    PackageFree(response); PackageFree(records); PackageFree(sealed)
+    PackageFree(cached_asset); PackageFree(original_record); PackageFree(owner); PackageFree(path); PackageFree(key); PackageFree(hash); PackageFree(target)
+    ImageAVIFFree(*encoded); PackageFree(fixture)
+    storage_close()
+    return failures
+}
+
+CompressionEncryptedRecords :: () -> string {
+    storage_enqueue_all_sync_state()
+    payload := storage_build_sync_payload_json("test-public-id", "test-public-key")
+    if payload == null { return "" }
+    defer { storage_free_sync_payload_json(payload) }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), "SELECT json_extract(?1,'$.encrypted_records')",
+        -1, *statement, null) != SQLITE_OK { return "" }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, TextFromCString(payload))
+    if SqliteStep(statement) != SQLITE_ROW { return "" }
+    return PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 1048576), "")
+}

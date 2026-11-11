@@ -21,6 +21,18 @@ class LibraryReaderCases:
             self.driver.press(label="Open", role="button")
         self.driver.wait(label="Tao Te Ching", role="button", timeout=60)
 
+    def open_book(self, mode):
+        self.driver.press(label="Tao Te Ching", role="button")
+        self.driver.wait(label="Reading mode", role="text")
+        self.driver.press(label=mode, role="button")
+        self.driver.wait_gone(label="Reading mode", role="text")
+
+    def cancel_book(self):
+        self.driver.press(label="Tao Te Ching", role="button")
+        self.driver.wait(label="Reading mode", role="text")
+        self.driver.press(label="Close", role="button")
+        self.driver.wait_gone(label="Reading mode", role="text")
+
     def page_label(self):
         self.driver.wait(key=27511)
         labels = [label for label in self.driver.labels() if re.fullmatch(r"\d+ / \d+", label)]
@@ -76,7 +88,16 @@ class LibraryReaderCases:
         self.driver.press(label="Tao Te Ching", role="button")
         self.capture("opening")
         self.driver.wait_gone(key=27800)
+        self.driver.wait(label="Reading mode", role="text")
+        self.driver.press(label="Close", role="button")
+        self.driver.wait_gone(label="Reading mode", role="text")
+        cancelled_text = self.page_text()
+        assert not self.driver.find(key=27503), self.driver.text()
+        self.driver.press(label="Back", role="button")
+        self.driver.wait(label="Tao Te Ching", role="button")
+        self.open_book("Text only")
         first = self.page_text()
+        assert first == cancelled_text, (first, cancelled_text)
         assert self.chapter_text(1).startswith(first), first
         self.driver.wait(key=27501, label="1 · The Nameless Tao")
         initial_total = int(self.page_label().split(" / ")[1])
@@ -139,7 +160,7 @@ class LibraryReaderCases:
         self.capture("annotated-reader")
         self.driver.press(label="Back", role="button")
         self.driver.wait(label="Tao Te Ching", role="button")
-        self.driver.press(label="Tao Te Ching", role="button")
+        self.open_book("Text only")
         assert self.page_label() == saved_page and self.page_text() == saved_text
         self.open_tools("Annotations")
         self.driver.wait(value="A quiet passage.\nRemember the water.", role="text_area")
@@ -189,7 +210,7 @@ class LibraryReaderCases:
     def resume(self, saved):
         self.driver.press(label="Apps", role="button")
         self.open_library()
-        self.driver.press(label="Tao Te Ching", role="button")
+        self.open_book("Text only")
         assert self.page_label() == saved["page"] and self.page_text() == saved["text"]
         assert self.driver.wait(key=27704)["label"] == saved["theme"], "Book theme was lost after restart"
         self.open_tools("Annotations")
@@ -198,5 +219,13 @@ class LibraryReaderCases:
         self.close_tools()
         self.driver.press(label="Back", role="button")
         self.driver.wait(label="Tao Te Ching", role="button")
+        self.open_book("Picture book")
+        assert not self.driver.find(key=27503), self.driver.text()
+        assert self.chapter_text(1).startswith(self.page_text()), self.page_text()
+        self.driver.press(label="Back", role="button")
+        self.driver.wait(label="Tao Te Ching", role="button")
+        self.cancel_book()
+        assert not self.driver.find(key=27503), self.driver.text()
+        assert self.chapter_text(1).startswith(self.page_text()), self.page_text()
         self.driver.press(label="Back", role="button")
         self.driver.wait(label="Library", role="button")

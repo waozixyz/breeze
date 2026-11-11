@@ -124,7 +124,7 @@ String AppTextFromCString(uint8_t *data, int32_t capacity)
 
 int main(void)
 {
-    InnerBreeze app;
+    static InnerBreeze app;
     uint8_t name[64];
     uint8_t subtitle[64];
     uint8_t small[5];

@@ -33,8 +33,10 @@ command = [sys.executable, str(KRYON / 'scripts/generate-widget-codecs.py'),
            '--output', str(ROOT / 'src/apps/app_codec.zi'),
            '--uses', str(KRYON / 'src/backend/widget_codec.zi'),
            '--generated-by', 'scripts/generate-app-codec.py']
+kryon_sources = {path.stem: path for path in (KRYON / 'src/ui').rglob('*.zi')
+                 if path.name != 'module.zi'}
 for module in KRYON_MODULES:
-    command += ['--source', str(KRYON / 'src/ui' / (module + '.zi'))]
+    command += ['--source', str(kryon_sources[module])]
 for name in APP_TYPES:
     command += ['--source', str(ROOT / ('apps/diary' if name == 'diary_ui_types' else 'src/apps') / (name + '.zi'))]
 for root in ROOTS:

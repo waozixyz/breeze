@@ -12,6 +12,7 @@
 #import "widget_host"
 #import, file "../src/apps/module_host.zi";
 #import, file "../src/habits/reward_icons.zi";
+#import, file "../src/habits/habit_coins.zi";
 #import, file "../src/apps/habits_types.zi";
 #import, file "../src/apps/habits_ui_types.zi";
 #import, file "../src/apps/app_codec.zi";
@@ -38,7 +39,7 @@ ShopTestAssets :: (path: string) -> bool {
 
 ShopTestCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
-    if TextFromCString(module) != "shop_view" {
+    if TextFromCString(module) != "shop_view" && TextFromCString(module) != "shop_stats_view" {
         return WidgetHostCall(context, module, function, arguments, count, result)
     }
     name := TextFromCString(function)
@@ -172,6 +173,53 @@ CheckHabitShop :: () -> s32 {
     if shop_test_rewards_seen != cast(u32)3 || shop_test_activity_seen != cast(u32)3 { return 3 }
     if painted == 0 { return 4 }
     if shop_test_frame.action != HABITS_SHOP_NONE { return 5 }
+    if spending_seen || date_seen {
+        print("Purchase statistics leaked into rewards\n")
+        return 10
+    }
+    if RewardIconAsset(HABIT_ICON_SODA).count == 0 ||
+        RewardIconAsset(REWARD_ICON_ENERGY_DRINK).count != 0 ||
+        RewardIconShape(REWARD_ICON_ENERGY_DRINK).count == 0 ||
+        RewardIconShape(REWARD_ICON_ENERGY_DRINK) == RewardIconShape(HABIT_ICON_SODA) ||
+        HabitRewardIconClamp(REWARD_ICON_ENERGY_DRINK) != REWARD_ICON_ENERGY_DRINK {
+        return 12
+    }
+    statistics_session := SessionOpen()
+    BeginFrame(statistics_session, cast(u64)4, bounds)
+    shop_test_frame.session = statistics_session
+    shop_test_frame.icon_open = false
+    WidgetHostBegin(statistics_session, ShopTestAssets)
+    AppsUiBegin(ShopTestCall, null)
+    stats_drawn := HabitsRun(HabitsMessage.{.action = HABITS_SHOP_STATS_VIEW})
+    AppsUiEnd()
+    WidgetHostEnd()
+    statistics_colors = 0
+    spending_seen = false
+    date_seen = false
+    for index: cast(s32)0..PendingPaintCount(statistics_session) - 1 {
+        command := PendingPaintAt(statistics_session, index)
+        if command.value == "150" {
+            spending_seen = true
+        }
+        if command.value == "Last bought: 2026-03-15" {
+            date_seen = true
+        }
+        if command.color.r == 63 && command.color.g == 137 && command.color.b == 216 {
+            statistics_colors |= cast(u32)1
+        }
+        if command.color.r == 196 && command.color.g == 141 && command.color.b == 39 {
+            statistics_colors |= cast(u32)2
+        }
+        if command.color.r == 48 && command.color.g == 159 && command.color.b == 128 {
+            statistics_colors |= cast(u32)4
+        }
+        if command.color.r == 155 && command.color.g == 104 && command.color.b == 207 {
+            statistics_colors |= cast(u32)8
+        }
+    }
+    unused EndFrame(statistics_session)
+    unused SessionClose(statistics_session)
+    if !stats_drawn.succeeded { return 13 }
     if statistics_colors != cast(u32)15 || !spending_seen || !date_seen {
         print("Purchase statistics: color mask %, spending %, date %\n", statistics_colors, spending_seen, date_seen)
         return 10
@@ -185,7 +233,7 @@ CheckHabitShop :: () -> s32 {
     shop_test_frame.icon_open = false
     WidgetHostBegin(empty, ShopTestAssets)
     AppsUiBegin(ShopTestCall, null)
-    empty_drawn := HabitsRun(HabitsMessage.{.action = HABITS_SHOP_VIEW})
+    empty_drawn := HabitsRun(HabitsMessage.{.action = HABITS_SHOP_STATS_VIEW})
     AppsUiEnd()
     WidgetHostEnd()
     empty_seen := false
@@ -214,7 +262,7 @@ CheckHabitShop :: () -> s32 {
     unused SessionClose(dialog)
     if !asked.succeeded || !shop_test_written || dialog_painted == 0 { return 6 }
     if !AppsOpenPackage(ModuleTestText("inbe")) { return 9 }
-    print("Habits reward picker: five packaged bitmap choices and legacy shapes passed\n")
+    print("Habits reward picker: shop separation, drink icon mapping and purchase history passed\n")
     return 0
 }
 

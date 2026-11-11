@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Compare full-size AVIF copies with adjustable quality and storage totals; reopen image storage from the wrench in Diary or Photos.
+
 ## [1.3.27] - 2026-11-05
 
 - Maintenance release for Inner Breeze 2.1.63.

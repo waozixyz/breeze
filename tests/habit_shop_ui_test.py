@@ -1,4 +1,4 @@
-"""The real shop shows complete purchase totals and scrolls at phone/desktop sizes."""
+"""Shop statistics opens separately from Activity at phone and desktop sizes."""
 import os
 import hashlib
 import json
@@ -38,6 +38,21 @@ def capture(process, destination):
     subprocess.run(["import", "-window", window, str(destination)], check=True)
 
 
+def scroll_to(driver, label, kind):
+    for _ in range(40):
+        nodes = driver.tree()
+        node = next(n for n in nodes if n["label"] == label and n["kind"] == kind)
+        if node["visible"] and node["visible_height"] >= node["height"] - 1:
+            return
+        viewport = next(n for n in nodes if n["kind"] == "scroll" and n["visible"])
+        direction = 1 if node["y"] < viewport["visible_y"] else -1
+        driver.pointer(viewport["visible_x"] + viewport["visible_width"] / 2,
+                       viewport["visible_y"] + viewport["visible_height"] / 2, wheel=direction * 3)
+        driver.release_pointer()
+        driver.wait_idle(frames=3)
+    raise AssertionError(("control unreachable", label, driver.tree()))
+
+
 for width, height, scale in [(390, 844, 10), (900, 720, 10), (390, 844, 20)]:
     name = f"{width}-{height}-{scale}"
     driver = UiDriver(OUTPUT / name)
@@ -58,21 +73,8 @@ for width, height, scale in [(390, 844, 10), (900, 720, 10), (390, 844, 20)]:
             driver.wait(label="Activity", visible=False)
             driver.wait(label="Purchase statistics", visible=False)
             nodes = driver.tree()
-            statistics = next(node for node in nodes if node["label"] == "Purchase statistics")
-            rewards = next(node for node in nodes if node["label"] == "Your rewards")
-            metrics = [node for node in nodes if node["kind"] == "text" and
-                       statistics["y"] < node["y"] < rewards["y"]]
-            # Twelve persisted purchases exceed the ten-entry Activity limit.
-            # Original prices are 5,8,11,14,17,20, each bought twice: 150 coins.
-            assert sum(node["label"] == "12" for node in metrics) == 3, (name, metrics)
-            assert any(node["label"] == "150" for node in metrics), (name, metrics)
-            for label in ("Purchases", "Coins spent", "Last 7 days", "Last 30 days"):
-                metric = next(node for node in metrics if node["label"] == label)
-                assert metric["x"] >= 0 and metric["x"] + metric["width"] <= width, (name, metric)
-            per_reward = [node for node in nodes if node["kind"] == "text" and
-                          node["label"] == "Purchases: 2 · Last 30 days: 2"]
-            assert len(per_reward) == 6, (name, "each reward retains both purchases", per_reward)
-            capture(process, OUTPUT / f"{name}-statistics.png")
+            assert not any(node["kind"] == "text" and ("Last bought" in node["label"] or
+                           "Last 30 days" in node["label"]) for node in nodes), (name, nodes)
             viewport = next(node for node in driver.tree() if node["kind"] == "scroll" and node["visible"])
             driver.pointer(viewport["visible_x"] + viewport["visible_width"] / 2,
                            viewport["visible_y"] + viewport["visible_height"] / 2, wheel=-100)
@@ -100,6 +102,38 @@ for width, height, scale in [(390, 844, 10), (900, 720, 10), (390, 844, 20)]:
             for node in nodes:
                 if node["kind"] == "text" and node["label"] in names:
                     assert node["width"] > 20, (name, "reward name has no readable column", node)
+            scroll_to(driver, "Purchase statistics", kind="button")
+            driver.press(label="Purchase statistics", kind="button")
+            driver.wait(label="Coins spent", visible=False)
+            nodes = driver.tree()
+            assert not any(node["label"] == "Your rewards" for node in nodes), (name, nodes)
+            statistics = next(node for node in nodes if node["label"] == "Purchase statistics")
+            metrics = [node for node in nodes if node["kind"] == "text" and
+                       node["label"] != "Purchase statistics"]
+            # Twelve persisted purchases exceed the ten-entry Activity limit.
+            # Original prices are 5,8,11,14,17,20, each bought twice: 150 coins.
+            assert sum(node["label"] == "12" for node in metrics) == 3, (name, metrics)
+            assert any(node["label"] == "150" for node in metrics), (name, metrics)
+            for label in ("Purchases", "Coins spent", "Last 7 days", "Last 30 days"):
+                metric = next(node for node in metrics if node["label"] == label)
+                assert metric["x"] >= 0 and metric["x"] + metric["width"] <= width, (name, metric)
+            per_reward = [node for node in nodes if node["kind"] == "text" and
+                          node["label"] == "Purchases: 2 · Last 30 days: 2"]
+            assert len(per_reward) == 6, (name, "each reward retains both purchases", per_reward)
+            capture(process, OUTPUT / f"{name}-statistics.png")
+            driver.press(label="Back", kind="button")
+            driver.wait(label="Your rewards", visible=False)
+            assert not any("Last bought" in node["label"] for node in driver.tree())
+            scroll_to(driver, "Icon", kind="button")
+            driver.press(label="Icon", kind="button")
+            scroll_to(driver, "Energy drink", kind="button")
+            driver.press(label="Energy drink", kind="button")
+            driver.wait_gone(label="Energy drink", kind="button", visible=False)
+            scroll_to(driver, "Icon", kind="button")
+            driver.press(label="Icon", kind="button")
+            scroll_to(driver, "Soda", kind="button")
+            driver.press(label="Soda", kind="button")
+            driver.wait_gone(label="Energy drink", kind="button", visible=False)
             time.sleep(4.2)
             capture(process, OUTPUT / f"{name}.png")
         finally:

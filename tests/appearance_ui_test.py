@@ -138,7 +138,8 @@ with tempfile.TemporaryDirectory(prefix='inbe-appearance-') as directory:
         user = db.execute('SELECT id FROM users LIMIT 1').fetchone()[0]
         settings = dict(enabled_apps='31', language='en', language_setup_done='1',
                         apps_setup_done='1', tutorial_seen='1', habits_guide_seen='1', lumi_guides_seen='127',
-                        lumi_introduced='1', package_updates_allowed='0')
+                        lumi_introduced='1', package_updates_allowed='0',
+                        style_pack='3', style_lightfield_glow='1')
         for name in ('lists', 'habits', 'practices', 'diary', 'lumi'):
             settings['app_used_' + name] = '1'
         for key, value in settings.items():
@@ -168,6 +169,9 @@ with tempfile.TemporaryDirectory(prefix='inbe-appearance-') as directory:
         assert change(window, 'reset_style', scope='habits')['ok']
         assert change(window, 'reset_style')['ok']
         tool(window, 'open_view', dict(view='appearance'))
+        labels = [node['label'] for node in driver.tree() if node['visible']]
+        assert 'Style' not in labels and 'Glow effects' not in labels, labels
+        assert read(window)['pack'] == 'material'
         press(label='Advanced appearance (CSS)', role='button')
         wait_for(lambda: state(window)['appearance']['open'], 'Advanced editor did not open')
         press(label='Custom CSS', role='text_area')
@@ -188,12 +192,18 @@ with tempfile.TemporaryDirectory(prefix='inbe-appearance-') as directory:
         assert change(window, 'reset_style')['ok']
         assert read(window)['saved_source'] == ''
         tool(window, 'open_view', dict(view='appearance'))
+        labels = [node['label'] for node in driver.tree() if node['visible']]
+        assert 'Style' not in labels and 'Glow effects' not in labels, labels
+        assert read(window)['pack'] == 'material'
         press(label='Advanced appearance (CSS)', role='button')
         press(label='Ask Lumi', role='button')
         wait_for(lambda: state(window)['feature'] == 16, 'Ask Lumi did not hand off to Lumi')
     with application(profile, 'phone', width=390, height=844) as window:
         assert read(window)['saved_source'] == ''
         tool(window, 'open_view', dict(view='appearance'))
+        labels = [node['label'] for node in driver.tree() if node['visible']]
+        assert 'Style' not in labels and 'Glow effects' not in labels, labels
+        assert read(window)['pack'] == 'material'
         press(label='Advanced appearance (CSS)', role='button')
         reveal(label='Custom CSS', role='text_area')
     with sqlite3.connect(profile / 'inbe.db') as db:

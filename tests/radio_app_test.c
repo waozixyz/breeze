@@ -71,6 +71,12 @@ static int host(void *context, const char *module, const char *name,
         volume=args[0].integer; assert(volume>=0 && volume<=100);
         *out=integer("bool",1); return 1;
     }
+    if(!strcmp(name,"ImageHostedHost")) {
+        char asset[128]; copy(asset,sizeof(asset),field(args[1],"asset_path"));
+        assert(!strcmp(asset,"assets/radio/player.avif"));
+        assert(field(field(args[1],"bounds"),"height").real == 240);
+        return 1;
+    }
     if(!strcmp(name,"TextHostedHost")) {
         char label[512]; copy(label,sizeof(label),field(args[1],"text"));
         assert(strlen(drawn)+strlen(label)+2<sizeof(drawn));

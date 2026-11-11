@@ -33,9 +33,9 @@ breath = int(re.search(r'SUN_SALUTATION_DEFAULT_END_SECONDS :: (\d+)', rules)[1]
 speech_spec = importlib.util.spec_from_file_location('narration', ROOT / 'scripts/generate-lumi-guide-narration.py')
 narration = importlib.util.module_from_spec(speech_spec)
 speech_spec.loader.exec_module(narration)
-entries, text_hash = narration.entries, narration.text_hash
+entries = narration.entries
 codes = narration.locale_codes()
-assert len(codes) >= 12
+assert set(codes) == {'en', 'es', 'cs', 'de', 'fr', 'ru', 'ja', 'ko', 'zh', 'pt'}
 for name in ('sunsalutation', 'sunsalutation_male'):
     speech = json.loads((ROOT / content['narration'][name]['config']).read_text())
     lines = json.loads((ROOT / speech['keys_file']).read_text())
@@ -43,13 +43,15 @@ for name in ('sunsalutation', 'sunsalutation_male'):
     # Each line is written in every language, recorded from that text, and
     # fits the shortest default breath with the player's 0.2 s margin.
     receipt = json.loads((ROOT / content['narration'][name]['receipt']).read_text())['clips']
+    narration.VOICE = media_path(content['narration'][name]['output_directory'])
     for code in codes:
-        texts = entries(ROOT / content['narration'][name]['text_directory'] / f'{code}.txt')
+        narration.LOCALES = media_path(content['narration'][name]['text_directory'])
+        texts = {key: text for _, key, text in narration.wanted(speech, [code], spoken)}
         for key in spoken:
             text = texts.get(key, '').strip()
             assert text, f'{code}/{key}: no {name} narration text'
             clip = receipt.get(f'{code}/{key}')
-            assert clip and clip['text_sha256'] == text_hash(speech, text), f'{code}/{key}: {name} recording is missing or older than its text'
+            assert narration.current({'clips': receipt}, speech, code, key, text), f'{code}/{key}: {name} recording is missing, unverified or older than its text'
             assert media_path(clip['file']).is_file(), f'{code}/{key}: {name} clip file is missing'
             assert clip['seconds'] + 0.2 <= breath, f'{code}/{key}: {name} line is {clip["seconds"]} s, longer than a {breath} s breath'
 print(f'All {len(spoken)} Sun Salutation lines are recorded in {len(codes)} languages and both voices, each within a {breath} s breath')

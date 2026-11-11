@@ -295,6 +295,11 @@ Enable chat / Disable chat control preserves the agent and saved conversation.
 
 ## Build and installation
 
+The native executable, source checker and app bundles compile through Ziran's
+project graph. Public package aliases come from the manifests, and every stage
+uses the tools built in the selected Ziran checkout. Development builds use
+`ziran.local.toml`; `PACKAGE_FLAGS=--locked` retains the reviewed dependency graph.
+
 `make apps` produces:
 
 - `build/inbe.zx`, containing every app under `cells/`.
@@ -368,6 +373,16 @@ Each app appears once, with pinned apps in sidebar order and the remaining apps
 after them. The list shows icons, names and controls without status paragraphs.
 
 ## Practice content and narration
+
+Older guide Opus clips with codec overshoot can be repaired with
+`python3 scripts/repair-guide-headroom.py --apply`. This lowers only the Opus
+header's playback gain, preserving compressed speech packets and exact timing.
+The command validates the original text and audio identities, saves the source
+under the practices checkout's ignored `backup/guide-headroom/`, and records the
+transformation and measured output in the guide receipt. It refuses local
+speaker/context recordings, which retain their own QA workflow. The ordinary
+narration validator still runs before app packaging.
+
 
 `build/practice-content/*.zx` contains the separate practice data and language
 packs. Practice → Manage practices has four tabs and opens on the first,
@@ -1041,7 +1056,7 @@ launch and resume checks. Debug candidates stay labeled as candidates.
 Translation catalogs follow the current package asset provider. An early
 lookup before the root mounts retries when resources become available, and
 changing packages rebuilds the catalogs before reusing any borrowed text.
-`make locale-zi-test` checks every key in all 12 languages and exercises delayed
+`make locale-zi-test` checks every key in all ten supported languages and exercises delayed
 resource availability, provider replacement and fallback restoration.
 
 `make apps-test` exercises the root and all five actual feature bundles,

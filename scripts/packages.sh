@@ -79,47 +79,68 @@ staging="$links.tmp"
 rm -rf "$staging"
 mkdir -p "$staging"
 
-link() {
-    name=$1
-    shift
-    # shellcheck disable=SC2086
-    path=$("$ziran" pkg path "$@" $flags)
-    [ -d "$path" ] || { echo "packages: no checkout for $name" >&2; exit 1; }
-    ln -s "$path" "$staging/$name"
-}
+# Resolve the complete requested set in one validated graph. JSON keeps paths
+# containing spaces, quotes or newlines intact; validate every row before links.
+# shellcheck disable=SC2086
+python3 - "$ziran" "$staging" $flags <<'PY'
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 
-link ziran ziran
-link kryon kryon
-link css css
-link oqs oqs
-link raylib raylib
-link libwebp libwebp
-# Kryon's image decoders: codec packages and the pinned native sources they
-# bridge. Kryon's CMake recipes receive these paths instead of resolving them
-# against Kryon's own lock.
-link webp webp
-link image-codec image-codec
-link avif avif
-link libavif libavif
-link libaom libaom
-# Kryon's Ogg Opus decoder: the audio package and its pinned native sources.
-link audio audio
-link libopus libopus
-link libsamplerate libsamplerate
-link game2d game2d
-link qrcode qrcode
-link plot plot
-link mingcute mingcute
-link entity entity
-link apps apps
-link crypto crypto
-link daochi-client daochi_client
-link practices practices
-link sqlite sqlite
-link curl curl
-link liboqs liboqs
-link monocypher monocypher
-link rini rini
+packages = [
+    ("ziran", "ziran"),
+    ("kryon", "kryon"),
+    ("css", "css"),
+    ("oqs", "oqs"),
+    ("raylib", "raylib"),
+    ("libwebp", "libwebp"),
+    # Kryon's image decoders and their pinned native source packages.
+    ("webp", "webp"),
+    ("image-codec", "image-codec"),
+    ("avif", "avif"),
+    ("libavif", "libavif"),
+    ("libaom", "libaom"),
+    # Kryon's Ogg Opus decoder and its pinned native source packages.
+    ("audio", "audio"),
+    ("libopus", "libopus"),
+    ("libsamplerate", "libsamplerate"),
+    ("game2d", "game2d"),
+    ("qrcode", "qrcode"),
+    ("plot", "plot"),
+    ("mingcute", "mingcute"),
+    ("entity", "entity"),
+    ("apps", "apps"),
+    ("crypto", "crypto"),
+    ("daochi-client", "daochi_client"),
+    ("practices", "practices"),
+    ("sqlite", "sqlite"),
+    ("curl", "curl"),
+    ("liboqs", "liboqs"),
+    ("monocypher", "monocypher"),
+    ("rini", "rini"),
+]
+command = [sys.argv[1], "pkg", "paths", *(selector for _, selector in packages), *sys.argv[3:]]
+result = subprocess.run(command, stdout=subprocess.PIPE, text=True)
+if result.returncode != 0:
+    raise SystemExit(result.returncode)
+try:
+    rows = json.loads(result.stdout)
+except ValueError:
+    raise SystemExit("packages: invalid batch path response")
+if not isinstance(rows, list) or len(rows) != len(packages):
+    raise SystemExit("packages: incomplete batch path response")
+for (name, selector), row in zip(packages, rows):
+    if (not isinstance(row, dict) or set(row) != {"selector", "path"} or
+            row["selector"] != selector or not isinstance(row["path"], str) or
+            "\0" in row["path"] or not Path(row["path"]).is_absolute()):
+        raise SystemExit("packages: invalid batch path for " + name)
+    if not Path(row["path"]).is_dir():
+        raise SystemExit("packages: no checkout for " + name)
+for (name, _), row in zip(packages, rows):
+    os.symlink(row["path"], Path(sys.argv[2]) / name)
+PY
 
 rm -rf "$links"
 mv "$staging" "$links"

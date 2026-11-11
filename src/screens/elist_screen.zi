@@ -1,8 +1,9 @@
 #import "geometry"
+#import "kryon/layout"
 #import "layout"
 #import "layout_props"
-#import "layout_widget"
-#import "tree"
+#import "kryon/Widgets"
+#import "kryon/tree"
 #import "vec"
 #import, file "../apps/module_host.zi";
 #import, file "../apps/lists_types.zi";
@@ -101,10 +102,16 @@ elist_message_for :: (state: *EListState, action: s32, index: s32) -> ListsMessa
 
 elist_clear_input :: (state: *EListState) {
     state.input[0] = cast(u8)0
+    state.input_comment[0] = cast(u8)0
     state.input_cursor = 0
     state.input_anchor = 0
     state.input_scroll_x = 0
     state.input_focused = 0
+    state.comment_cursor = 0
+    state.comment_anchor = 0
+    state.comment_scroll_y = 0
+    state.comment_focused = 0
+    state.task_priority = 0
     state.input_error = 0
     state.input_committed = 0
 }
@@ -231,10 +238,18 @@ ListsUiCall :: (context: *void, module: *u8, function: *u8,
         if !AppCopyText(observed.value, app.elist.input[:]) {
             return 0
         }
+        if !AppCopyText(observed.comment_value, app.elist.input_comment[:]) {
+            return 0
+        }
         app.elist.input_cursor = observed.cursor
         app.elist.input_anchor = observed.anchor
         app.elist.input_scroll_x = observed.scroll_x
         app.elist.input_focused = ifx observed.focused then 1 else 0
+        app.elist.comment_cursor = observed.comment_cursor
+        app.elist.comment_anchor = observed.comment_anchor
+        app.elist.comment_scroll_y = observed.comment_scroll_y
+        app.elist.comment_focused = ifx observed.comment_focused then 1 else 0
+        app.elist.task_priority = observed.task_priority
         app.elist.scroll = observed.scroll
         app.elist.tab_scroll = observed.tab_scroll
         app.elist.panel = observed.panel
@@ -370,6 +385,7 @@ draw_elist_screen :: (app: *InnerBreeze) {
         elist_reload(app)
     }
     typed: [ELIST_TITLE_SIZE]u8
+    comment_typed: [ELIST_COMMENT_SIZE]u8
     next_id := ListsNetworkNextId()
     defer { PackageFree(next_id) }
     unused storage_get_social_cache_json("friends.list", *lists_friends[0], 8192)
@@ -402,6 +418,12 @@ draw_elist_screen :: (app: *InnerBreeze) {
         .value = AppTextFromCString(*app.elist.input[0], ELIST_TITLE_SIZE),
         .cursor = app.elist.input_cursor, .anchor = app.elist.input_anchor,
         .scroll_x = app.elist.input_scroll_x, .focused = app.elist.input_focused != 0,
+        .comment_input = SampleTextAreaInput(app.elist.comment_focused != 0, comment_typed[:]),
+        .comment_value = AppTextFromCString(*app.elist.input_comment[0], ELIST_COMMENT_SIZE),
+        .comment_cursor = app.elist.comment_cursor, .comment_anchor = app.elist.comment_anchor,
+        .comment_scroll_y = app.elist.comment_scroll_y,
+        .comment_focused = app.elist.comment_focused != 0,
+        .task_priority = app.elist.task_priority,
         .scroll = app.elist.scroll, .tab_scroll = app.elist.tab_scroll,
         .panel = app.elist.panel, .sharing_status = lists_status,
         .sharing_busy = ListsNetworkSaving(), .sharing_pending = ListsNetworkNeedsRetry(),

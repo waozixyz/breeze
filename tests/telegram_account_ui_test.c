@@ -348,7 +348,7 @@ int main(void)
     telegram_account_TelegramAccountClearPassword(&password);
     assert(password.value[0] == 0);
     memcpy(password.value, secret, sizeof(secret));
-    InnerBreeze app = {0};
+    static InnerBreeze app = {0};
     app.ui.session = SessionOpen();
     app.ui.view_width = 400;
     app.ui.view_height = 360;

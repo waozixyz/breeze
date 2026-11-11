@@ -236,7 +236,7 @@ main(int argc, char **argv)
                           (HabitNameExists){0}, (HabitSave){0});
     assert(AppsOpenPackage(StringView(bytes, (size_t)size)));
 
-    EListState state = {0};
+    static EListState state = {0};
     state.list_count = 1;
     state.item_count = 1;
     state.selected_list = 0;

@@ -38,7 +38,7 @@
 #import "json_scan"
 #import "text_buffer"
 #import "keys"
-#import "crypto"
+#import "daochi_client/crypto"
 DaochiEntity :: #import "daochi_client/entity";
 #import, file "diary_records.zi";
 #import, file "diary_store.zi";
@@ -118,6 +118,8 @@ DiaryBlobJob :: struct {
     blob: [65]u8
     // The photo record's trash_changed a trash move answers.
     changed: s64
+    // Superseded-content retirement rechecks its replacement at send time.
+    retiring: bool
 }
 
 DiaryBlobPass :: struct {
@@ -232,7 +234,11 @@ SQL_END;
 DiaryBlobInDiarySQL :: #string SQL_END
 SELECT 1 FROM settings
 WHERE user_id=(SELECT id FROM users LIMIT 1)
-  AND key GLOB 'cell.diary.file.*' AND instr(value,?1)>0
+  AND key GLOB 'cell.diary.file.*' AND (instr(value,?1)>0 OR EXISTS(
+    SELECT 1 FROM settings p WHERE p.user_id=settings.user_id
+      AND p.key GLOB 'entity.photos.*' AND json_valid(p.value)
+      AND json_extract(p.value,'$.compression.replacement')=?1
+      AND instr(settings.value,substr(p.key,15))>0))
 LIMIT 1
 SQL_END;
 
@@ -626,6 +632,10 @@ DiaryBlobPlanDownloads :: (pass: *DiaryBlobPass, wanted: string, opening: bool, 
             record_key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
             record := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
             hash := EntityPhotoKeyHash(record_key)
+            replacement := MediaReplacementRecord(hash)
+            superseded := replacement.count > 0
+            PackageFree(replacement)
+            if superseded { continue }
             photo := EntityPhotoContent(record)
             preview := EntityPreviewContent(record)
             if !photo.valid || TextFromBytes(photo.hash[:64]) != hash {
@@ -702,6 +712,10 @@ DiaryBlobPlanUploads :: (pass: *DiaryBlobPass, bytes: *s64) {
             record_key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
             record := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
             hash := EntityPhotoKeyHash(record_key)
+            replacement := MediaReplacementRecord(hash)
+            superseded := replacement.count > 0
+            PackageFree(replacement)
+            if superseded { continue }
             parts: [2]EntityContent = .[EntityPhotoContent(record), EntityPreviewContent(record)]
             for part: cast(s32)0..1 {
                 content := parts[part]
@@ -737,6 +751,10 @@ DiaryBlobPlanTrash :: (pass: *DiaryBlobPass) {
         record_key := AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY)
         record := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
         hash := EntityPhotoKeyHash(record_key)
+        replacement := MediaReplacementRecord(hash)
+        superseded := replacement.count > 0
+        PackageFree(replacement)
+        if superseded { continue }
         changed := ReadNumber(record, FieldAt(record, 0, "trash_changed"))
         if hash.count != 64 || !changed.valid || changed.value <= 0.0 {
             continue
@@ -769,6 +787,88 @@ DiaryBlobPlanTrash :: (pass: *DiaryBlobPass) {
     }
 }
 
+// A chunk used by any other record stays. Matching is conservative: an
+// unknown record mentioning the address also prevents retirement.
+DiaryBlobChunkShared :: (key: string, blob: string) -> bool {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT 1 FROM settings WHERE user_id=?1 AND key!=?2 AND instr(value,?3)>0 LIMIT 1",
+        -1, *statement, null) != SQLITE_OK { return true }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    unused bind_text(statement, 2, key)
+    unused bind_text(statement, 3, blob)
+    return SqliteStep(statement) == SQLITE_ROW
+}
+
+// Retire superseded content through the existing node Trash protocol.
+// The node must hold the acknowledged target, and a complete authenticated
+// download must verify it before any original chunk leaves account storage.
+DiaryBlobPlanCompression :: (pass: *DiaryBlobPass, bytes: *s64) {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(), DiaryBlobEntitySQL, -1, *statement, null) != SQLITE_OK { return }
+    defer { SqliteFinalize(statement) }
+    planned: s32 = 0
+    for index: cast(s32)0..pass.count - 1 {
+        kind := pass.jobs[index].kind
+        if kind == DIARY_BLOB_TRASH || kind == DIARY_BLOB_RESTORE { planned += 1 }
+    }
+    while SqliteStep(statement) == SQLITE_ROW {
+        // Nested reads use their own SQLite statements; copy this row before
+        // cleanup changes files or any helper invalidates borrowed buffers.
+        key := PackageText(AppTextFromCString(SqliteColumnText(statement, 0), DIARY_BLOB_RECORD_KEY), "")
+        record := PackageText(AppTextFromCString(SqliteColumnText(statement, 1), 65536), "")
+        hash := EntityPhotoKeyHash(key)
+        target := MediaReplacementRecord(hash)
+        if target.count > 0 {
+            unused MediaReclaimReplacement(hash)
+            target_record := MediaEntityRecord(target)
+            content := EntityPhotoContent(target_record)
+            changed := ReadNumber(record, FieldAt(record, FieldAt(record, 0, "compression"), "changed"))
+            if changed.valid && changed.value > 0.0 && EntityCompressionAcknowledged(hash, target) &&
+            EntityPhotoAcknowledged(target, target_record) && content.valid && content.chunk_count > 0 {
+                target_key := EntityPhotoKey(target)
+                parts: [2]EntityContent = .[EntityPhotoContent(record), EntityPreviewContent(record)]
+                for node: cast(s32)0..pass.node_count - 1 {
+                    address := TextUntilNul(pass.nodes[node][:])
+                    if !EntityContentOnNode(content, address) { continue }
+                    if !EntityContentVerified(content, address) {
+                        if !DiaryBlobFull(pass, bytes.*) &&
+                        !DiaryBlobPlanned(pass, DIARY_BLOB_VERIFY, target_key, false) {
+                            DiaryBlobAdd(pass, DIARY_BLOB_VERIFY, target_key, false, node)
+                            bytes.* += content.size
+                        }
+                        continue
+                    }
+                    for part: cast(s32)0..1 {
+                        old := parts[part]
+                        if !old.valid { continue }
+                        for chunk: cast(s32)0..old.chunk_count - 1 {
+                            blob := TextUntilNul(old.chunks[chunk].address[:])
+                            if planned >= DIARY_BLOB_PASS_TRASHES ||
+                            DiaryBlobChunkShared(key, blob) ||
+                            DiaryBlobTrashKnown(address, blob, true, cast(s64)changed.value) {
+                                continue
+                            }
+                            DiaryBlobAdd(pass, DIARY_BLOB_TRASH, key, part == 1, node)
+                            job := *pass.jobs[pass.count - 1]
+                            unused AppCopyText(blob, job.blob[:])
+                            job.changed = cast(s64)changed.value
+                            job.retiring = true
+                            planned += 1
+                        }
+                    }
+                }
+                PackageFree(target_key)
+            }
+            PackageFree(target_record)
+        }
+        PackageFree(target)
+        PackageFree(record)
+        PackageFree(key)
+    }
+}
+
 // Chooses this pass's requests: deletes of old copies first, so a node has
 // room for what moves, then downloads, so a photo shows on this device
 // soon, then uploads to each node that takes photos and lacks them.
@@ -795,6 +895,7 @@ DiaryBlobPlan :: (pass: *DiaryBlobPass, active: string) -> bool {
     DiaryBlobPlanTrash(pass)
     if sealing {
         DiaryBlobPlanVerifies(pass, *bytes)
+        DiaryBlobPlanCompression(pass, *bytes)
     }
     DiaryBlobPlanDownloads(pass, TextUntilNul(wanted[:]), sealing, *bytes)
     if sealing {
@@ -994,6 +1095,11 @@ DiaryBlobNext :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest) -> bool {
                 ready = true
             }
         } else if job.kind == DIARY_BLOB_TRASH || job.kind == DIARY_BLOB_RESTORE {
+            if job.retiring && !DiaryBlobCompressionSafe(TextUntilNul(job.key[:]),
+                TextUntilNul(pass.nodes[job.node][:]), TextUntilNul(job.blob[:]), job.changed) {
+                DiaryBlobJobDone(pass)
+                continue
+            }
             unused DiaryBlobNode(pass, job.node, request.node[:])
             request.method = "POST"
             request.blob = job.blob
@@ -1014,6 +1120,23 @@ DiaryBlobNext :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest) -> bool {
         DiaryBlobJobDone(pass)
     }
     return false
+}
+
+// A planned retirement is not authority to remove bytes after a sync or
+// another local action changed either record in the meantime.
+DiaryBlobCompressionSafe :: (key: string, node: string, blob: string, changed: s64) -> bool {
+    hash := EntityPhotoKeyHash(key)
+    record := MediaEntityRecord(hash)
+    target := MediaReplacementRecord(hash)
+    defer { PackageFree(record); PackageFree(target) }
+    clock := ReadNumber(record, FieldAt(record, FieldAt(record, 0, "compression"), "changed"))
+    if target.count == 0 || !clock.valid || cast(s64)clock.value != changed ||
+    !EntityCompressionAcknowledged(hash, target) || DiaryBlobChunkShared(key, blob) { return false }
+    target_record := MediaEntityRecord(target)
+    defer { PackageFree(target_record) }
+    content := EntityPhotoContent(target_record)
+    return EntityPhotoAcknowledged(target, target_record) &&
+        EntityContentOnNode(content, node) && EntityContentVerified(content, node)
 }
 
 // A download that found nothing on this node asks the next one for the

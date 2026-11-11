@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/sync-recovery-zi-test
 
 # Serialize concurrent checks before replacing the stable generated output.
@@ -11,14 +11,10 @@ flock 9
 
 rm -rf "$work"
 mkdir -p "$work/c"
-"$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
-    --module-path "$root/build/packages/ziran/std" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/daochi-client" \
+# Use the application's package graph so public UI imports retain their aliases.
+cd "$root"
+"$bin/ziran" build --target=c --project --offline --no-main \
+    --root "$root/tests" --module-path "$root/tests" \
     -o "$work/c" "$root/tests/sync_recovery_behavior.zi"
 # The app's SQLite amalgamation resolves the database calls that the kept
 # storage helpers reach; no database opens here, so they return early.
@@ -28,7 +24,7 @@ mkdir -p "$work/c"
     -I"$root/vendor-builds/sqlite" \
     "$root/tests/sync_recovery_link_test.c" \
     "$root/vendor-builds/sqlite/sqlite3.c" \
-    $(ls "$work/c"/*.c | grep -v -e '/storage_core.c$' -e '/sync_nodes.c$' \
+    $(find "$work/c" -name '*.c' -type f | grep -v -e '/storage_core.c$' -e '/sync_nodes.c$' \
         -e '/storage_settings.c$' -e '/storage_json_sql.c$' -e '/sync_outbox.c$' \
         -e '/sync_state.c$' -e '/sync_migrations.c$' -e '/sync_record_codec.c$' \
         -e '/sync_collections.c$' -e '/sync_record_crypto.c$' -e '/sync_apply.c$' \

@@ -10,6 +10,7 @@
 
 ## [Unreleased]
 
+- Choose an astral exercise before Start with its translated guide and narration; adjust session volume and background music together.
 - Sun Salutation shows each pose's form cue, the leg that steps back and names the next pose in one quiet line.
 
 ## [1.6.9] - 2026-10-29

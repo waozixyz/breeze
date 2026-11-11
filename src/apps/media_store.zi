@@ -831,7 +831,10 @@ SELECT hash,day FROM (
     COALESCE(json_extract(value,'$.trashed'),0) AS trashed
   FROM settings WHERE user_id=?1 AND key GLOB 'entity.photos.*' AND length(key)=78
     AND substr(key,15) NOT GLOB '*[^0-9a-f]*' AND json_valid(value)
-    AND json_extract(value,'$.type') IN ('image/png','image/jpeg','image/gif','image/webp')
+    AND json_extract(value,'$.type') IN ('image/png','image/jpeg','image/gif','image/webp','image/avif')
+    AND NOT (COALESCE(json_extract(value,'$.compression.version'),0)=1
+      AND COALESCE(length(json_extract(value,'$.compression.source')),0)=64
+      AND json_extract(value,'$.compression.source') NOT GLOB '*[^0-9a-f]*')
   UNION ALL
   SELECT substr(l.key,12),json_extract(l.value,'$.day'),json_extract(l.value,'$.taken'),
     COALESCE(json_extract(l.value,'$.trashed'),0)
@@ -1001,8 +1004,13 @@ MediaAssetsChanged :: () {
     diary_blob_generation += 1
 }
 
+MediaFilesRevision :: () -> s64 { return diary_blob_generation }
+
 // A format word as a constant, or empty.
 MediaFormatLiteral :: (value: string) -> string {
+    if value == "avif" {
+        return "avif"
+    }
     if value == "png" {
         return "png"
     }
@@ -1057,7 +1065,82 @@ MediaLocalFormat :: (hash: string, preview: bool) -> string {
     return MediaFormatLiteral(TextUntilNul(content.format[:]))
 }
 
+// Resolve one safe AVIF replacement only within this account. Keep the
+// original visible while the replacement is incomplete or unavailable.
+MediaReplacementRecord :: (hash: string) -> string {
+    record := MediaEntityRecord(hash)
+    replacement := EntityCompressionReplacement(record)
+    PackageFree(record)
+    if replacement.count == 0 || replacement == hash {
+        PackageFree(replacement)
+        return ""
+    }
+    target_record := MediaEntityRecord(replacement)
+    next := EntityCompressionReplacement(target_record)
+    item := MediaRead(replacement)
+    valid := item.valid && TextUntilNul(item.format[:]) == "avif" && next.count == 0
+    PackageFree(next)
+    if !valid {
+        PackageFree(target_record)
+        PackageFree(replacement)
+        return ""
+    }
+    PackageFree(target_record)
+    return replacement
+}
+
+MediaReplacement :: (hash: string) -> string {
+    replacement := MediaReplacementRecord(hash)
+    if replacement.count == 0 { return "" }
+    target_record := MediaEntityRecord(replacement)
+    path := MediaPath(replacement, false)
+    data := PackageRead(path, DIARY_FILE_LIMIT)
+    valid := EntityContentMatches(EntityPhotoContent(target_record), data)
+    PackageFree(data)
+    PackageFree(path)
+    PackageFree(target_record)
+    if !valid {
+        MediaWant(replacement)
+        PackageFree(replacement)
+        return ""
+    }
+    return replacement
+}
+
+// The durable replacement receipt is written only after output decode and
+// metadata/dimension validation. Recheck both record identities and the
+// replacement's actual bytes under the storage mutex before retiring files.
+// Failure to remove a file is retried by the media pass; it is never counted
+// as reclaimed merely because the record names smaller content.
+MediaReclaimReplacement :: (hash: string) -> bool {
+    if DataTemporary() { return false }
+    storage_settings_begin_write()
+    defer { storage_settings_end_write() }
+    replacement := MediaReplacement(hash)
+    defer { PackageFree(replacement) }
+    if replacement.count == 0 { return false }
+    source := MediaEntityRecord(hash)
+    current := EntityCompressionReplacement(source)
+    defer { PackageFree(source); PackageFree(current) }
+    if current != replacement { return false }
+    original := MediaPath(hash, false)
+    preview := MediaPath(hash, true)
+    defer { PackageFree(original); PackageFree(preview) }
+    removed := true
+    if PackageFileSize(original) >= 0 { removed = RemoveFile(original) && removed }
+    if PackageFileSize(preview) >= 0 { removed = RemoveFile(preview) && removed }
+    MediaAssetsChanged()
+    return removed
+}
+
 MediaAssetLookup :: (hash: string, original: bool) -> string {
+    replacement := MediaReplacement(hash)
+    if replacement.count > 0 {
+        result := MediaAssetLookup(replacement, original)
+        PackageFree(replacement)
+        return result
+    }
+    PackageFree(replacement)
     out: Vec(u8)
     if original {
         format := MediaLocalFormat(hash, false)
@@ -1128,7 +1211,8 @@ MediaAssetHash :: (path: string) -> string {
         return ""
     }
     extension := path[start + 65:]
-    if extension != "png" && extension != "jpg" && extension != "gif" && extension != "webp" {
+    if extension != "png" && extension != "jpg" && extension != "gif" &&
+    extension != "webp" && extension != "avif" {
         return ""
     }
     hash := path[start:start + 64]
@@ -1155,6 +1239,9 @@ MediaAssetAllowed :: (path: string) -> bool {
 }
 
 MediaAssetMime :: (format: string) -> string {
+    if format == "avif" {
+        return "image/avif"
+    }
     if format == "jpg" {
         return "image/jpeg"
     }
@@ -1175,6 +1262,21 @@ MediaAssetView :: (path: string) -> AssetView {
     }
     preview := path[6:14] == "preview/"
     content := MediaContentOf(hash, preview)
+    extension_at := path.count - 1
+    while extension_at > 0 && path[extension_at] != cast(u8)46 { extension_at -= 1 }
+    replacement := MediaReplacement(hash)
+    if replacement.count > 0 && path[extension_at + 1:] == TextUntilNul(content.format[:]) {
+        redirected := MediaAssetLookup(replacement, !preview)
+        PackageFree(replacement)
+        if redirected.count > 0 && redirected != path {
+            result := MediaAssetView(redirected)
+            PackageFree(redirected)
+            return result
+        }
+        PackageFree(redirected)
+    } else {
+        PackageFree(replacement)
+    }
     file := MediaPath(hash, preview)
     defer {
         PackageFree(file)
@@ -1257,7 +1359,30 @@ MediaSetTrashed :: (hash: string, trashed: bool) -> bool {
         return MediaSetField(hash, "trashed", ifx trashed then "true" else "false", ifx trashed then "1" else "0")
     }
     changed := MediaTrashRecord(entity_record, trashed)
-    written := changed.count > 0 && MediaRecordWrite(entity_key, changed)
+    replacement := MediaReplacementRecord(hash)
+    target_record := MediaEntityRecord(replacement)
+    target_source := EntityCompressionSource(target_record)
+    target_changed: string
+    target_key: string
+    generated := replacement.count > 0 && target_source == hash
+    if generated {
+        target_changed = MediaTrashRecord(target_record, trashed)
+        target_key = EntityPhotoKey(replacement)
+    }
+    storage_settings_begin_write()
+    begun := exec_sql("SAVEPOINT media_compression_trash") != 0
+    written := begun && changed.count > 0 && (!generated || target_changed.count > 0) &&
+        MediaRecordWrite(entity_key, changed) && (!generated || MediaRecordWrite(target_key, target_changed))
+    if begun {
+        if !written { unused exec_sql("ROLLBACK TO media_compression_trash") }
+        written = exec_sql("RELEASE media_compression_trash") != 0 && written
+    }
+    storage_settings_end_write()
+    PackageFree(target_key)
+    PackageFree(target_changed)
+    PackageFree(target_source)
+    PackageFree(target_record)
+    PackageFree(replacement)
     PackageFree(changed)
     return written
 }

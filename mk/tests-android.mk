@@ -5,9 +5,9 @@ android-sdk-install-test:
 	python3 tests/android_sdk_install_test.py
 
 .PHONY: android-source-test
-android-source-test: $(ZI2ZIR_BIN) | build-laws
+android-source-test: $(ZIRAN_BIN) | build-laws
 	ZI_CHECK_DEFINES="ANDROID_BUILD KRYON_ANDROID_HOST __aarch64__" \
-		python3 scripts/check-zi-sources.py $(ZI2ZIR_BIN) $(KRYON_DIR)/src/ui $(ZIRAN_DIR)/std $(CSS_DIR)/src
+		python3 scripts/check-zi-sources.py $(ZIRAN_BIN)
 
 .PHONY: accessibility-test
 accessibility-test: $(ZIRAN_BIN)

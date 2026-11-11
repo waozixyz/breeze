@@ -3,6 +3,7 @@
 
 import fcntl
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -10,11 +11,6 @@ import sys
 
 root = Path(__file__).resolve().parent.parent
 compiler = Path(sys.argv[1]).resolve()
-ui = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else root / "build/packages/kryon/src/ui"
-standard = Path(sys.argv[3]).resolve() if len(sys.argv) > 3 else root / "build/packages/ziran/std"
-css = Path(sys.argv[4]).resolve() if len(sys.argv) > 4 else root / "build/packages/css/src"
-client = Path(os.environ.get("DAOCHI_CLIENT_DIR", root / "build/packages/daochi-client"))
-game2d = root / "build/packages/game2d/src"
 sources = sorted((root / "src").rglob("*.zi"))
 sources.append(root / "apps/practice/hold_reminder.zi")
 legacy = sorted((root / "src").rglob("*.kry"))
@@ -30,33 +26,19 @@ if not sources:
 
 target_defines = os.environ.get("ZI_CHECK_DEFINES", "PLATFORM_DESKTOP").split()
 define_args = [part for name in target_defines for part in ("--define", name)]
-package_args = subprocess.check_output(
-    ["sh", str(root / "scripts/package-paths.sh"), str(root / "build/packages")], text=True).split()
 (root / "build").mkdir(exist_ok=True)
 compiler_lock = (root / "build/ziran-compiler.lock").open("a")
 fcntl.flock(compiler_lock, fcntl.LOCK_EX)
 result = subprocess.run(
     [
         str(compiler),
-        "--check-only",
+        "check",
+        "--project",
+        "--offline",
+        *shlex.split(os.environ.get("PACKAGE_FLAGS", "")),
         "--root",
         ".",
-        "--module-path",
-        "src",
-        "--module-path",
-        str(ui),
-        "--module-path",
-        str(css),
-        "--module-path",
-        str(ui.parent / "backend"),
-        "--module-path",
-        str(game2d),
-        "--module-path",
-        str(standard),
-        "--module-path",
-        str(client),
         *define_args,
-        *package_args,
         *(str(source.relative_to(root)) for source in sources),
     ],
     cwd=root,

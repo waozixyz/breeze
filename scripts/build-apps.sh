@@ -8,9 +8,13 @@ cd "$root"
 mkdir -p build
 exec 9>build/apps-build.lock
 flock 9
-ziran=${1:-build/ziran-toolchain/bin/ziran}
+ziran=${1:-build/packages/ziran/build/bin/ziran}
+# Package flags select the same development or locked graph as Make.
+bundle() {
+    # shellcheck disable=SC2086
+    "$ziran" bundle --project --offline ${PACKAGE_FLAGS:-} "$@"
+}
 controller=${3:-build/apps-ui/apps.zx}
-packages=$(sh scripts/package-paths.sh)
 output=${2:-build/apps}
 python3 scripts/check-package-versions.py
 python3 tests/font_glyph_coverage_test.py
@@ -34,12 +38,9 @@ rm -rf build/bundled-apps build/entity
 mkdir -p build/bundled-apps
 entity_dir="$root/build/packages/entity"
 mkdir -p build/entity
-"$ziran" bundle --root "$entity_dir" --module-path "$entity_dir/src" \
-    --module-path kryon=build/packages/kryon/src/backend \
-    --module-path kryon=build/packages/kryon/src/ui --module-path build/packages/kryon/src/ui \
-    --module-path build/packages/ziran/std --module-path qrcode=build/packages/qrcode/src \
-    --define KRYON_HOSTED_UI \
-    --entry entity:Main -o build/entity/entity.zx "$entity_dir/src/entity.zi"
+entity_id=$(python3 -c 'import json; print(json.load(open("ziran.lock"))["root"]["dependencies"]["entity"])')
+bundle --root . --define KRYON_HOSTED_UI \
+    --entry "${entity_id}_entity:Main" -o build/entity/entity.zx "$entity_dir/src/entity.zi"
 # Entity's images are supplied once by the root package below. Its hosted
 # child uses those same asset paths; embedding a second copy bloats every APK.
 for feature in lists habits practices diary lumi leaderboard; do
@@ -49,10 +50,8 @@ for feature in lists habits practices diary lumi leaderboard; do
     locale_args=
     if [ "$feature" = diary ]; then locale_args="--asset-dir locales=build/package-assets/diary/locales"; fi
     # shellcheck disable=SC2086
-    "$ziran" bundle --root . --module-path src $locale_args $packages \
-        --module-path build/packages/kryon/src/ui \
+    bundle --root . --module-path "apps/$source" $locale_args \
         --define KRYON_HOSTED_UI \
-        --module-path build/packages/ziran/std \
         --asset-dir "assets=build/package-assets/$feature/assets" \
         --entry "$entry:Main" -o "$output/$feature.zx" \
         "apps/$source/$source.zi"
@@ -62,8 +61,7 @@ done
 python3 scripts/small_app_bundling.py --bundles "$output"
 # The package folder keeps its historical name cells/ for released hosts.
 # shellcheck disable=SC2086
-"$ziran" bundle --root . --module-path src $packages \
-    --module-path build/packages/ziran/std --module-path build/packages/kryon/src/ui \
+bundle --root . --module-path apps/inbe \
     --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "assets=build/package-assets/inbe/assets" \
     --asset-dir "styles=build/package-assets/inbe/styles" \
@@ -73,8 +71,7 @@ python3 scripts/small_app_bundling.py --bundles "$output"
     --asset-dir "assets/entity=$entity_dir/assets/entity" --asset-dir "assets/entity/bundles=build/entity" \
     --asset-dir "cells=build/bundled-apps" -o build/inbe.zx apps/inbe/inbe.zi
 # shellcheck disable=SC2086
-"$ziran" bundle --root . --module-path src $packages \
-    --module-path build/packages/ziran/std --module-path build/packages/kryon/src/ui \
+bundle --root . --module-path apps/inbe \
     --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "assets=build/package-assets/inbe/assets" \
     --asset-dir "styles=build/package-assets/inbe/styles" \

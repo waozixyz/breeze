@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Use one modern appearance and a simpler About list with Core and app versions.
+
 ## [2.1.64] - 2026-11-05
 
 - Bring Lumi 1.5.29, Habits 1.3.17, Practices 1.6.11, Lists 1.1.30, Diary 1.3.27 and Leaderboard 1.0.31 for Inner Breeze 2.1.63.

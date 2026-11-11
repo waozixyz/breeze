@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=${NAVIGATION_ROUTES_TEST_BUILD_DIR:-"$root/build/navigation-routes-test"}
 source=$root/tests/navigation_routes_behavior.zi
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
@@ -44,11 +44,7 @@ for input in source saved; do
 int main(void) { return Answer() == 42 ? 0 : 1; }
 C
     "${CC:-cc}" -std=c11 -I"$include" -I"$output/c" \
-        "$output/c/route_types.c" \
-        "$output/c/navigation_routes.c" \
-        "$output/c/types.c" \
-        "$output/c/navigation_routes_behavior.c" \
-        "$output/c/main.c" -o "$output/c/test"
+        "$output/c/"*.c -o "$output/c/test"
     env -u DISPLAY -u WAYLAND_DISPLAY "$output/c/test"
 
     "$bin/zi2go" --no-main --root "$module_root" \

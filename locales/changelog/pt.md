@@ -2,8 +2,8 @@
 
 ## [Unreleased]
 
-- Fotos é descarregado a partir de Aplicações; Lumi mostra uma única proposta completa de comentários da lista, e Listas permite tarefas mais longas e concluí-las deslizando.
-- Trocar de aba em Prática pela navegação lateral não desloca mais a tela.
+- Fotos via Aplicações; Lumi: prévia única do retorno completo da lista; Listas: tarefas longas e conclusão ao deslizar.
+- Abas de Prática não deslocam a tela. Escolha entre seis exercícios astrais antes de começar. Interface em dez idiomas.
 - Os pacotes de voz das práticas ficaram cerca de um terço menores.
 
 ## [2.1.63] - 2026-11-05

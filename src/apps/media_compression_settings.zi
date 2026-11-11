@@ -1,0 +1,62 @@
+// Shared account media choices, carried by the encrypted media outbox.
+#import, file "../storage/state.zi";
+#import "std/json_scan"
+#import "std/text"
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/storage_settings.zi";
+
+MEDIA_COMPRESSION_SEEN_KEY :: "cell.media.compression.seen"
+MEDIA_COMPRESSION_QUALITY_KEY :: "cell.media.compression.quality"
+MEDIA_COMPRESSION_DEFAULT_QUALITY :: 35
+
+MediaCompressionQualityValid :: (quality: s32) -> bool {
+    return quality >= 1 && quality <= 100
+}
+
+MediaCompressionQuality :: () -> s32 {
+    record := storage_get_setting_text(MEDIA_COMPRESSION_QUALITY_KEY)
+    number := ReadNumber(record, 0)
+    if number.valid && number.value >= 1.0 && number.value <= 100.0 {
+        quality := cast(s32)number.value
+        if cast(float64)quality == number.value {
+            return quality
+        }
+    }
+    return MEDIA_COMPRESSION_DEFAULT_QUALITY
+}
+
+MediaCompressionSetQuality :: (quality: s32) -> bool {
+    if !MediaCompressionQualityValid(quality) {
+        return false
+    }
+    storage_set_setting_int(MEDIA_COMPRESSION_QUALITY_KEY, quality)
+    return MediaCompressionQuality() == quality
+}
+
+MediaCompressionSeen :: () -> bool {
+    record := storage_get_setting_text(MEDIA_COMPRESSION_SEEN_KEY)
+    return record == "true"
+}
+
+// Wait for the account's initial download and every known incoming page.
+// A completed snapshot cannot prove that an offline peer has not changed
+// meanwhile; normal sync convergence remains the guarantee.
+MediaCompressionOfferReady :: () -> bool {
+    return storage_db_handle() != null &&
+        storage_get_setting_text("sync_public_id").count > 0 &&
+        !storage_sync_records_download_first() &&
+        storage_meta_int64("sync_full_upload_done", 0) != 0 &&
+        storage_meta_int64("sync_last_server_version", 0) >=
+            storage_meta_int64(STORAGE_SYNC_SEEN_SERVER_VERSION_KEY, 0)
+}
+
+// Persist before presentation. Offline devices can offer before they sync;
+// this is a durable shared receipt, not a strict server claim.
+MediaCompressionOffer :: (eligible: bool) -> bool {
+    if !eligible || !MediaCompressionOfferReady() || MediaCompressionSeen() ||
+    (storage_delegate_mode != null && storage_delegate_mode() == 2) {
+        return false
+    }
+    storage_set_setting_text(MEDIA_COMPRESSION_SEEN_KEY, "true")
+    return MediaCompressionSeen()
+}

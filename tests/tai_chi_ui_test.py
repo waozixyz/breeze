@@ -227,7 +227,7 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         music.setnchannels(1)
         music.setsampwidth(2)
         music.setframerate(22050)
-        music.writeframes(b'\0\0' * (22050 * 30))
+        music.writeframes(bytes(22050 * 30 * 2))
     with sqlite3.connect(Path(profile) / 'inbe.db') as db:
         user = db.execute("SELECT user_id FROM settings LIMIT 1").fetchone()[0]
         for key, value in {'audio_custom_music_count': '1',
@@ -283,23 +283,92 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         for label in ('Jade woman', 'Indigo man'):
             driver.wait(label=label, role='text')
 
-    with application('tai_chi_choose'):
-        driver.wait(contains='practised')
-        driver.wait(label='Lesson 1', role='button')
-        # Navigate to a different lesson and start its first preview card.
-        driver.press(label='Lesson 4', role='button')
-        driver.wait(label='Lesson 4', role='heading')
-        heading = driver.find(label='Lesson 4', role='heading')[0]
-        cards = [node for node in driver.tree() if node['kind'] == 'image' and node['visible']
-                 and node['y'] > heading['y']]
+    def choose_lesson(label, width, height):
+        dropdowns = driver.find(role='dropdown', visible=True)
+        if dropdowns:
+            driver.press(key=dropdowns[0]['key'])
+            driver.press(label=label, role='option')
+        else:
+            for _ in range(35):
+                found = driver.find(label=label, role='button', visible=True)
+                if found and found[0]['visible_height'] >= found[0]['height'] - 1:
+                    driver.press(key=found[0]['key'])
+                    break
+                driver.pointer(180, height * .55, wheel=-2)
+                driver.release_pointer()
+                time.sleep(.1)
+            else:
+                raise AssertionError('Could not reveal ' + label)
+        driver.wait(label=label, role='heading')
+
+    def first_course_card(label):
+        heading = driver.wait(label=label, role='heading')
+        nodes = driver.tree()
+        cards = [node for node in nodes if node['kind'] == 'button' and node['visible']
+                 and node['interactive'] and not node['label'] and node['y'] > heading['y']
+                 and node['height'] > 150]
         assert cards, driver.text()
-        press_card(min(cards, key=lambda node: (node['y'], node['x']))['label'])
-        deadline = time.monotonic() + 20
-        while not (driver.find(label='Pause', role='button', visible=True) or
-                   driver.find(label='Single Whip', visible=True)):
-            assert time.monotonic() < deadline, driver.text()
-            time.sleep(.05)
-        value = saved(lambda values: int(values.get('tai_chi_item', '-1')) > 17).get('tai_chi_item')
-        assert value and int(value) > 17, value
+        driver.press(key=min(cards, key=lambda node: (node['y'], node['x']))['key'])
+
+    # A profile without an entitlement can start the shipped basics offline.
+    # A paid card offers an explicit unlock and never changes the saved item.
+    for width, height in ((1280, 900), (390, 844)):
+        for title in ("Posture and breathing", "Lesson 1", "Lesson 2", "Lesson 3"):
+            with application('tai_chi_home', width, height):
+                driver.press(label='Start Practice', role='button')
+                choose_lesson(title, width, height)
+                driver.wait(contains='Free · ', role='text')
+                first_course_card(title)
+                driver.wait(label='Pause', role='button')
+                driver.press(label='Pause', role='button')
+                driver.wait(label='Resume', role='button')
+                driver.press(label='Resume', role='button')
+                driver.wait(label='Pause', role='button')
+                driver.press(label='Close', role='button')
+                driver.press(label='Exit', role='button')
+                driver.wait(label='Start Practice', role='button')
+        for title in ("Lesson 4", "Full form"):
+            with application('tai_chi_home', width, height):
+                before = settings().get('tai_chi_item')
+                driver.press(label='Start Practice', role='button')
+                choose_lesson(title, width, height)
+                driver.wait(label='Unlock course', role='text')
+                first_course_card(title)
+                driver.wait(label='Unlock course', role='modal')
+                assert settings().get('tai_chi_item') == before
+                assert not driver.find(label='Pause', role='button', visible=True)
+                driver.press(label='Back', role='button')
+                driver.wait(label=title, role='heading')
+                driver.press(label='Close', role='button')
+                driver.wait_gone(role='modal')
+        print(f'{width}x{height}: free Foundations and lessons1–3 start/pause/resume; lesson4/full form require unlock; selection preserved')
+
+    # A remembered purchase uses the original full pack after a cold restart.
+    # This fixture stays offline and exercises the same stored ownership as a
+    # real account; no purchase request or currency mutation is made.
+    previous_item = settings().get('tai_chi_item')
+    account = 'a' * 64
+    with sqlite3.connect(Path(profile) / 'inbe.db') as db:
+        user = db.execute("SELECT user_id FROM settings LIMIT 1").fetchone()[0]
+        for key, value in {'sync_public_id': account, 'sync_public_key': 'fixture-public',
+                           'sync_private_key': 'fixture-private', 'sync_enabled': '0'}.items():
+            db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
+                       "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value",
+                       (user, key, value))
+        db.execute("INSERT OR REPLACE INTO social_snapshots(user_id,kind,json,updated_at) VALUES(?,?,?,1)",
+                   (user, 'practice.unlocks', '{"account_id":"' + account + '","taichi":true}'))
+    for width, height in ((1280, 900), (390, 844)):
+        with application('tai_chi_home', width, height):
+            assert settings().get('tai_chi_item') == previous_item
+            driver.press(label='Start Practice', role='button')
+            choose_lesson('Lesson 4', width, height)
+            assert not driver.find(label='Unlock course', role='text', visible=True)
+            first_course_card('Lesson 4')
+            driver.wait(label='Pause', role='button')
+            selected = saved(lambda values: values.get('tai_chi_item') != previous_item)['tai_chi_item']
+            driver.press(label='Close', role='button')
+            driver.press(label='Exit', role='button')
+            previous_item = selected
+        print(f'{width}x{height}: offline ownership loads the full paid course and preserves item indices')
 
 print('Tai Chi chooser interaction test passed')

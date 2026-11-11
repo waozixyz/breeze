@@ -72,7 +72,7 @@ void android_timer_deactivate(void)
 
 int main(void)
 {
-    InnerBreeze app;
+    static InnerBreeze app;
     uint8_t unterminated_path[512];
     memset(&app, 0, sizeof(app));
     memset(unterminated_path, 'x', sizeof(unterminated_path));

@@ -2,8 +2,8 @@
 
 ## [Unreleased]
 
-- Fotky se stahují z Aplikací; Lumi jednou zobrazí úplný návrh zpětné vazby ze seznamu a Seznamy podporují delší úkoly a dokončení přejetím.
-- Přepínání karet Cvičení v postranní navigaci už neposouvá obrazovku.
+- Fotky z Aplikací; Lumi jednou ukáže úplný návrh ohlasu ze seznamu; Seznamy: delší úkoly a dokončení přejetím.
+- Karty Cvičení už neposouvají obrazovku. Před startem vyber ze šesti astrálních cvičení. Rozhraní má deset jazyků.
 - Hlasové balíčky cvičení jsou asi o třetinu menší.
 
 ## [2.1.63] - 2026-11-05

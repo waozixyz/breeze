@@ -25,7 +25,7 @@ fonts = {
     "kr": root / "assets/fonts/subset/NotoSansKR-App-Regular.otf",
     "tc": root / "assets/fonts/subset/NotoSansTC-App-Regular.otf",
 }
-LATIN_LOCALES = ["en", "es", "cs", "de", "fr", "id", "it", "pt", "ru"]
+LATIN_LOCALES = ["en", "es", "cs", "de", "fr", "ru"]
 CJK_LOCALES = ["ja", "ko", "zh"]
 GUIDANCE = media_path("assets/practices/astral_projection/text")
 

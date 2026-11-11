@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Build the reviewed Apps controller with its locked dependency graph."""
 import argparse
+import os
+import shlex
 from pathlib import Path
 import shutil
 import subprocess
@@ -16,11 +18,13 @@ def main():
     args = parser.parse_args()
     # Development hosts use the same canonical overrides as every other
     # package in this build. Release builds retain the reviewed locked graph.
-    if (ROOT / 'ziran.local.toml').exists():
+    locked = '--locked' in shlex.split(os.environ.get('PACKAGE_FLAGS', ''))
+    if not locked and (ROOT / 'ziran.local.toml').exists():
         package = Path(subprocess.check_output(
             [str(args.ziran.resolve()), 'pkg', 'path', 'apps'], cwd=ROOT, text=True).strip())
         subprocess.run(['python3', str(package / 'scripts/build-ui.py'),
-                        '--output', str(args.output.resolve())], cwd=ROOT, check=True)
+                        '--output', str(args.output.resolve()), '--project', str(ROOT),
+                        '--compiler', str(args.ziran.resolve())], cwd=ROOT, check=True)
         return
     # Only package metadata lives here. Source remains in the package cache;
     # the owner's local development overrides are never changed.
@@ -32,7 +36,8 @@ def main():
             [str(args.ziran.resolve()), 'pkg', 'path', 'apps', '--locked'],
             cwd=context, text=True).strip())
         subprocess.run(['python3', str(package / 'scripts/build-ui.py'),
-                        '--output', str(args.output.resolve())], cwd=ROOT, check=True)
+                        '--output', str(args.output.resolve()), '--project', str(context),
+                        '--compiler', str(args.ziran.resolve())], cwd=ROOT, check=True)
 
 
 if __name__ == '__main__':

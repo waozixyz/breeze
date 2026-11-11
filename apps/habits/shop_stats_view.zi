@@ -1,0 +1,241 @@
+// A separate, read-only view of the persisted shop purchase history.
+#import, file "shop_view.zi";
+#import, file "../../src/apps/habits_types.zi";
+#import, file "../../src/apps/habits_ui_types.zi";
+#import "kryon/Kryon"
+#import "kryon/box_widget"
+#import "kryon/scroll_widget"
+#import "kryon/text_widget"
+#import "text_props"
+#import "text_measure"
+#import "kryon/layout"
+#import "text_align"
+#import "scroll_props"
+#import "kryon/tree"
+#import "vec"
+#import "box_props"
+using TextWrap;
+host_api :: #system_library "host_api";
+ReadHabitsShopHost :: () -> HabitsShopFrame #foreign host_api;
+WriteHabitsShopHost :: (frame: HabitsShopFrame) #foreign host_api;
+ReadHabitRewardHost :: (index: s32) -> HabitsShopReward #foreign host_api;
+
+
+PurchaseDate :: (date: s32) -> string {
+    month := (date / 100) % 100
+    day := date % 100
+    out: Vec(u8)
+    BuilderPrint(*out, "%-", date / 10000)
+    if month < 10 {
+        BuilderPrint(*out, "0")
+    }
+    BuilderPrint(*out, "%-", month)
+    if day < 10 {
+        BuilderPrint(*out, "0")
+    }
+    BuilderPrint(*out, "%", day)
+    return BuilderFinish(out)
+}
+
+RewardStatisticsText :: (reward: HabitsShopReward) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%: % · %: %", Locale("habit_shop_stats_purchases"),
+        reward.statistics.purchase_count, Locale("habit_shop_stats_month"),
+        reward.statistics.month_count)
+    return BuilderFinish(out)
+}
+
+RewardStatisticsHeight :: (reward: HabitsShopReward, width: s32) -> s32 {
+    inner := width - Scale(SHOP_CARD_PADDING * 2 + 10)
+    height := ParagraphHeight(RewardStatisticsText(reward), inner, shop.small_font)
+    if reward.statistics.purchase_count > 0 {
+        height += Scale(4) + ParagraphHeight(Filled(Locale("habit_shop_stats_last"),
+            PurchaseDate(reward.statistics.last_date)), inner, shop.small_font)
+    }
+    return height + Scale(14)
+}
+
+StatisticsColor :: (index: s32) -> Color {
+    colors: [4]Color = .[Color.{63, 137, 216, 255}, Color.{196, 141, 39, 255},
+    Color.{48, 159, 128, 255}, Color.{155, 104, 207, 255}]
+    return colors[index]
+}
+
+StatisticsLabel :: (index: s32) -> string {
+    keys: [4]string = .["habit_shop_stats_purchases", "habit_shop_stats_spent",
+    "habit_shop_stats_week", "habit_shop_stats_month"]
+    return Locale(keys[index])
+}
+
+StatisticsValue :: (index: s32) -> string {
+    values: [4]s64 = .[shop.statistics.purchase_count, shop.statistics.spent_coins,
+    shop.statistics.week_count, shop.statistics.month_count]
+    return Number(values[index])
+}
+
+StatisticsColumns :: (width: s32) -> s32 {
+    return ifx width >= Scale(280) then 2 else 1
+}
+
+StatisticsInnerWidth :: (width: s32) -> s32 {
+    return (width - Scale(8) * (StatisticsColumns(width) - 1)) /
+    StatisticsColumns(width) - Scale(32)
+}
+
+StatisticsNumberHeight :: (width: s32) -> s32 {
+    height := Scale(30)
+    for index: cast(s32)0..3 {
+        value_h := TextHeight(shop.session, TextProps.{.text = StatisticsValue(index),
+                .font = shop.font + Scale(6),
+                .bounds = Bounds(0, 0, StatisticsInnerWidth(width), 0),
+                .wrap = cast(TextWrap)TextWrapAnywhere})
+        if value_h > height {
+            height = value_h
+        }
+    }
+    return height
+}
+
+StatisticsCardHeight :: (width: s32) -> s32 {
+    inner := StatisticsInnerWidth(width)
+    height: s32 = 0
+    for index: cast(s32)0..3 {
+        label_h := ParagraphHeight(StatisticsLabel(index), inner, shop.small_font)
+        if label_h > height {
+            height = label_h
+        }
+    }
+    return height + StatisticsNumberHeight(width) + Scale(34)
+}
+
+StatisticsHeight :: (width: s32) -> s32 {
+    title_h := SectionTitleHeight(Locale("habit_shop_stats_title"), width) + Scale(10)
+    if shop.statistics.purchase_count == 0 {
+        return title_h + ParagraphHeight(Locale("habit_shop_stats_empty"), width,
+            shop.small_font)
+    }
+    rows := 4 / StatisticsColumns(width)
+    last := Filled(Locale("habit_shop_stats_last"), PurchaseDate(shop.statistics.last_date))
+    return title_h + rows * StatisticsCardHeight(width) + rows * Scale(8) +
+    ParagraphHeight(last, width, shop.small_font)
+}
+
+Statistics :: (x: s32, y: s32, width: s32) {
+    y += SectionTitle(Locale("habit_shop_stats_title"), x, y, width) + Scale(10)
+    if shop.statistics.purchase_count == 0 {
+        text := Locale("habit_shop_stats_empty")
+        Text(shop.session, TextProps.{.bounds = Bounds(x, y, width,
+                ParagraphHeight(text, width, shop.small_font)), .text = text,
+                .font = shop.small_font, .class_name = shop.muted_class,
+                .wrap = cast(TextWrap)TextWrapAuto})
+        return
+    }
+    columns := StatisticsColumns(width)
+    card_w := (width - Scale(8) * (columns - 1)) / columns
+    card_h := StatisticsCardHeight(width)
+    number_h := StatisticsNumberHeight(width)
+    for index: cast(s32)0..3 {
+        card_x := x + (index % columns) * (card_w + Scale(8))
+        card_y := y + (index / columns) * (card_h + Scale(8))
+        Card(Bounds(card_x, card_y, card_w, card_h), "")
+        Box(shop.session, BoxProps.{.bounds = Bounds(card_x, card_y + Scale(12),
+                Scale(4), card_h - Scale(24)), .fill = StatisticsColor(index)})
+        value := StatisticsValue(index)
+        strong: [1]TextRange
+        strong[0] = TextRange.{.start = 0, .end = cast(s32)value.count}
+        Text(shop.session, TextProps.{.bounds = Bounds(card_x + Scale(16),
+                card_y + Scale(12), card_w - Scale(32), number_h),
+                .text = value, .font = shop.font + Scale(6), .strong = strong[:],
+                .wrap = cast(TextWrap)TextWrapAnywhere})
+        Text(shop.session, TextProps.{.bounds = Bounds(card_x + Scale(16),
+                card_y + number_h + Scale(18), card_w - Scale(32), card_h - number_h - Scale(30)),
+                .text = StatisticsLabel(index), .font = shop.small_font,
+                .class_name = shop.muted_class, .wrap = cast(TextWrap)TextWrapAuto})
+    }
+    last := Filled(Locale("habit_shop_stats_last"), PurchaseDate(shop.statistics.last_date))
+    last_y := y + (4 / columns) * (card_h + Scale(8))
+    Text(shop.session, TextProps.{.bounds = Bounds(x, last_y, width,
+            ParagraphHeight(last, width, shop.small_font)), .text = last,
+            .font = shop.small_font, .class_name = shop.muted_class,
+            .wrap = cast(TextWrap)TextWrapAuto})
+}
+
+StatisticsRewardHeight :: (index: s32, width: s32) -> s32 {
+    reward := ReadHabitRewardHost(index)
+    return ParagraphHeight(reward.name, width - Scale(32), shop.font) +
+        RewardStatisticsHeight(reward, width) + Scale(32)
+}
+
+StatisticsReward :: (index: s32, x: s32, y: s32, width: s32) -> s32 {
+    reward := ReadHabitRewardHost(index)
+    height := StatisticsRewardHeight(index, width)
+    Card(Bounds(x, y, width, height), "")
+    pad := Scale(16)
+    inner := width - pad * 2
+    name_h := ParagraphHeight(reward.name, inner, shop.font)
+    Text(shop.session, TextProps.{.bounds = Bounds(x + pad, y + pad, inner, name_h),
+            .text = reward.name, .wrap = cast(TextWrap)TextWrapAuto})
+    text := RewardStatisticsText(reward)
+    text_h := ParagraphHeight(text, inner, shop.small_font)
+    line_y := y + pad + name_h + Scale(8)
+    Text(shop.session, TextProps.{.bounds = Bounds(x + pad, line_y, inner, text_h),
+            .text = text, .font = shop.small_font, .wrap = cast(TextWrap)TextWrapAuto})
+    if reward.statistics.purchase_count > 0 {
+        last := Filled(Locale("habit_shop_stats_last"),
+            PurchaseDate(reward.statistics.last_date))
+        Text(shop.session, TextProps.{.bounds = Bounds(x + pad,
+                line_y + text_h + Scale(4), inner,
+                ParagraphHeight(last, inner, shop.small_font)),
+                .text = last, .font = shop.small_font,
+                .class_name = shop.muted_class, .wrap = cast(TextWrap)TextWrapAuto})
+    }
+    return height
+}
+
+ShopStatisticsPage :: () {
+    bounds := shop.bounds
+    width := cast(s32)bounds.width
+    x := cast(s32)bounds.x
+    if width > Scale(SHOP_COLUMN_MAX) {
+        x += (width - Scale(SHOP_COLUMN_MAX)) / 2
+        width = Scale(SHOP_COLUMN_MAX)
+    }
+    top := PageHeader(x, cast(s32)bounds.y, width,
+        Locale("habit_shop_stats_title"), "")
+    if top < 0 {
+        shop.action = HABITS_SHOP_STATS_BACK
+        return
+    }
+    content_width := width - Scale(SHOP_SCROLLBAR_ROOM)
+    gap := Scale(SHOP_GAP)
+    content_h := StatisticsHeight(content_width) + gap
+    for index: cast(s32)0..shop.reward_count - 1 {
+        content_h += StatisticsRewardHeight(index, content_width) + gap
+    }
+    scrolled := Scroll(shop.session, ScrollProps.{
+            .key = KeyHash("inbe/habits/shop/statistics"),
+            .bounds = Bounds(x, top, width,
+                cast(s32)(bounds.y + bounds.height) - top),
+            .content_height = content_h, .scroll_offset = shop.scroll})
+    shop.scroll = scrolled.scroll_offset
+    if !scrolled.opened {
+        return
+    }
+    y := cast(s32)scrolled.content.y
+    Statistics(x, y, content_width)
+    y += StatisticsHeight(content_width) + gap
+    for index: cast(s32)0..shop.reward_count - 1 {
+        y += StatisticsReward(index, x, y, content_width) + gap
+    }
+    unused End(shop.session)
+}
+
+HabitsShopStatisticsView :: (message: HabitsMessage) -> HabitsMessage {
+    shop = ReadHabitsShopHost()
+    shop.action = HABITS_SHOP_NONE
+    shop.clipboard_write = false
+    ShopStatisticsPage()
+    WriteHabitsShopHost(shop)
+    message.succeeded = true
+    return message
+}

@@ -50,7 +50,7 @@ expect_file(const char *path, const char *bytes)
 int
 main(int argc, char **argv)
 {
-    InnerBreeze app = {0};
+    static InnerBreeze app = {0};
     char first[1024], second[1024], third[1024], missing[1024], invalid[1024];
     char retained[512];
     int32_t error = 0;

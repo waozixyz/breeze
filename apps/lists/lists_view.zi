@@ -8,41 +8,45 @@
 #import "vec"
 #import "c_string"
 #import "text_buffer"
+#import "kryon/layout"
 #import "layout"
 #import "dropdown_props"
-#import "dropdown_widget"
-#import "context_menu_widget"
+#import "kryon/Kryon"
+#import "kryon/swipe_row"
+#import "kryon/box_widget"
+#import "kryon/button_widget"
+#import "kryon/context_menu_widget"
+#import "kryon/dropdown_widget"
+#import "kryon/image_widget"
+#import "kryon/modal_frame_widget"
+#import "kryon/scroll_widget"
+#import "kryon/text_field_widget"
+#import "kryon/text_area_widget"
+#import "kryon/text_widget"
 #import "text_props"
 #import "text_align"
-#import "text_widget"
 #import "text_input_props"
-#import "text_field_widget"
 #import "button_props"
-#import "button_widget"
 #import "control_props"
 #import "swipe_row_props"
-#import "swipe_row"
 #import "text_measure"
 #import "pointer_input"
 #import "swipe"
 #import "swipe_props"
 #import "scroll_props"
-#import "scroll_widget"
 #import "modal_props"
-#import "modal_frame_widget"
 #import "box_props"
-#import "box_widget"
 #import "drawing_props"
-#import "tree"
+#import "kryon/tree"
 #import "icon"
 #import "image_props"
-#import "image_widget"
 CompleteIcon :: #import "mingcute/mingcute_regular_check";
 EditIcon :: #import "mingcute/mingcute_regular_edit_2";
 SettingsIcon :: #import "mingcute/mingcute_regular_settings_3";
 BackIcon :: #import "mingcute/mingcute_regular_arrow_left";
 #import, file "../../src/apps/lists_ui_types.zi";
 #import, file "../../src/apps/lists_types.zi";
+#import, file "task_title.zi";
 
 using ButtonTone;
 using ButtonEmphasis;
@@ -97,6 +101,14 @@ TRASH_ICON :: "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
 // A short swipe right completes or reopens an item; a long one edits it.
 // Swiping left deletes it; Undo brings a deleted item back.
 row_swipe: SwipeRowState;
+// A task row's context menu, opened where the pointer was released.
+LISTS_ROW_MENU_CHECK :: 1
+LISTS_ROW_MENU_EDIT :: 2
+row_menu_open: bool;
+row_menu_index: s32;
+row_menu_x: float32;
+row_menu_y: float32;
+custom_task_scroll: s32;
 
 CompleteSwipe :: () -> SwipeRowAction {
     return SwipeRowAction.{.fill = Color.{46, 139, 120, 255},
@@ -167,6 +179,42 @@ BeginInput :: (item: s32, value: string) {
     frame.focused = true
 }
 
+BeginCustomTask :: (item: s32, title: string, comment: string) {
+    row_menu_open = false
+    BeginInput(item, ListsTitleWithoutPriority(title))
+    frame.comment_value = comment
+    frame.comment_cursor = cast(s32)comment.count
+    frame.comment_anchor = frame.comment_cursor
+    frame.comment_scroll_y = 0
+    frame.comment_focused = false
+    frame.task_priority = ListsPriorityForTitle(title)
+    frame.panel = 3
+    custom_task_scroll = 0
+    field_focus_request = true
+}
+
+CloseCustomTask :: () {
+    frame.panel = 0
+    frame.value = ""
+    frame.comment_value = ""
+    frame.task_priority = 0
+    frame.focused = false
+    frame.comment_focused = false
+    state.editing_item = -1
+    state.reset_input = true
+    custom_task_scroll = 0
+}
+
+SaveCustomTask :: () -> bool {
+    if ListsTitleWithoutPriority(frame.value).count == 0 { return false }
+    if !ListsTitlePriorityFits(frame.value, frame.task_priority, LISTS_TEXT_LIMIT) {
+        return false
+    }
+    frame.value = ListsTitleForPriority(frame.value, frame.task_priority)
+    Mutation(LISTS_COMMIT, -1)
+    return true
+}
+
 // Remembers a deleted item's name for a few seconds so Undo can restore it.
 RememberDeleted :: (row: ListsUiRow) {
     undo_item = row
@@ -215,6 +263,11 @@ Mutation :: (action: s32, index: s32) {
     }
     if action == LISTS_COMMIT {
         state.title = frame.value
+        if frame.panel == 3 {
+            state.comment = frame.comment_value
+        } else {
+            state.comment = ""
+        }
     }
     if state.selected_list >= 0 && state.selected_list < state.list_count &&
     state.editing_item != -2 && ReadListsRowHost(state.selected_list, false).shared {
@@ -238,7 +291,8 @@ Field :: (bounds: Rectangle, placeholder: string, read_only: bool = false) -> bo
             .bounds = bounds, .value = frame.value, .placeholder = placeholder, .cursor = frame.cursor,
             .anchor = frame.anchor, .scroll_x = frame.scroll_x,
             .focused = frame.focused, .focus_id = 6501,
-            .max_bytes = 4095, .max_codepoints = 4095, .input = input,
+            .max_bytes = LISTS_TEXT_LIMIT, .max_codepoints = LISTS_TEXT_LIMIT,
+            .input = input,
             .disabled = frame.sharing_busy || frame.sharing_pending || read_only})
     if edited.edit.changed {
         start := edited.edit.start
@@ -249,7 +303,7 @@ Field :: (bounds: Rectangle, placeholder: string, read_only: bool = false) -> bo
             BuilderPrint(*value, "%", edited.edit.replacement)
             BuilderPrint(*value, "%", frame.value[end:])
             replacement := BuilderFinish(value)
-            if replacement.count <= 4095 {
+            if replacement.count <= LISTS_TEXT_LIMIT {
                 frame.value = replacement
             }
         }
@@ -258,10 +312,52 @@ Field :: (bounds: Rectangle, placeholder: string, read_only: bool = false) -> bo
     frame.anchor = edited.anchor
     frame.scroll_x = edited.scroll_x
     frame.focused = edited.focused
+    if edited.focused {
+        frame.comment_focused = false
+        frame.comment_input.blur = true
+    }
     frame.clipboard_write = edited.clipboard_write
     frame.clipboard_text = edited.clipboard_text
     field_escaped = edited.escaped
     return edited.committed
+}
+
+DescriptionField :: (bounds: Rectangle, placeholder: string, read_only: bool = false) -> bool {
+    input := frame.comment_input
+    edited := TextArea(frame.session, TextAreaProps.{.key = cast(u64)6552,
+            .bounds = bounds, .value = frame.comment_value, .placeholder = placeholder,
+            .cursor = frame.comment_cursor, .anchor = frame.comment_anchor,
+            .scroll_y = frame.comment_scroll_y, .focused = frame.comment_focused,
+            .focus_id = 6552, .max_bytes = LISTS_TEXT_LIMIT,
+            .max_codepoints = LISTS_TEXT_LIMIT, .wrap = true, .input = input,
+            .disabled = frame.sharing_busy || frame.sharing_pending || read_only})
+    if edited.edit.changed {
+        start := edited.edit.start
+        end := edited.edit.end
+        if start >= 0 && end >= start && end <= frame.comment_value.count {
+            value: Vec(u8)
+            BuilderPrint(*value, "%", frame.comment_value[:start])
+            BuilderPrint(*value, "%", edited.edit.replacement)
+            BuilderPrint(*value, "%", frame.comment_value[end:])
+            replacement := BuilderFinish(value)
+            if replacement.count <= LISTS_TEXT_LIMIT {
+                frame.comment_value = replacement
+            }
+        }
+    }
+    frame.comment_cursor = edited.cursor
+    frame.comment_anchor = edited.anchor
+    frame.comment_scroll_y = edited.scroll_y
+    frame.comment_focused = edited.focused
+    if edited.focused {
+        frame.focused = false
+        frame.input.blur = true
+    }
+    if edited.clipboard_write {
+        frame.clipboard_write = true
+        frame.clipboard_text = edited.clipboard_text
+    }
+    return edited.escaped
 }
 
 Remote :: (action: s32, target: string = "", invitation: string = "",
@@ -279,7 +375,8 @@ Remote :: (action: s32, target: string = "", invitation: string = "",
     state.request_body = PrepareListsCommandHost(ListsUiRequest.{
             .action = action, .index = state.index, .editing_item = state.editing_item,
             .selected_list = state.selected_list, .done = state.done,
-            .value = ifx action == LISTS_RESTORE_ITEM then state.title else frame.value,
+            .value = ifx action == LISTS_COMMIT || action == LISTS_RESTORE_ITEM
+                then state.title else frame.value,
             .next_id = frame.next_id, .item_id = state.id, .comment = state.comment,
             .target = target, .invitation = invitation, .list_id = list.id, .access = access})
 }
@@ -618,6 +715,99 @@ InvitationsDialog :: () {
     End(frame.session)
 }
 
+CustomTaskDialog :: () {
+    width := frame.width - Scale(32)
+    if width > Scale(440) {
+        width = Scale(440)
+    }
+    height := Scale(404)
+    available := frame.height - frame.bottom - Scale(32)
+    if available < height { height = available }
+    dialog := ModalFrame(frame.session, ModalFrameProps.{.key = cast(u64)6550,
+            .title = ListsLocaleHost("elist_custom_task"), .width = width,
+            .height = height, .scale = frame.scale})
+    if dialog.dismissed {
+        CloseCustomTask()
+        return
+    }
+    if !dialog.opened {
+        return
+    }
+    current: ListsUiRow
+    blocked := frame.sharing_busy || frame.sharing_pending
+    if state.selected_list >= 0 && state.selected_list < state.list_count {
+        current = ReadListsRowHost(state.selected_list, false)
+        blocked = blocked || current.read_only || current.incomplete
+    } else {
+        blocked = true
+    }
+    x := cast(s32)dialog.layout.content.x
+    y := cast(s32)dialog.layout.content.y
+    content_width := cast(s32)dialog.layout.content.width
+    scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)6555,
+            .bounds = Bounds(x, y, content_width, cast(s32)dialog.layout.content.height),
+            .content_height = Scale(350), .scroll_offset = custom_task_scroll,
+            .scale = frame.scale})
+    custom_task_scroll = scroll.scroll_offset
+    if !scroll.opened {
+        End(frame.session)
+        return
+    }
+    x = cast(s32)scroll.content.x
+    y = cast(s32)scroll.content.y
+    Text(frame.session, TextProps.{.bounds = Bounds(x, y, content_width, Scale(20)),
+            .text = ListsLocaleHost("elist_task_label")})
+    task_committed := Field(Bounds(x, y + Scale(24), content_width, Scale(44)),
+        ListsLocaleHost("elist_item_name_placeholder"), blocked)
+    task_escaped := field_escaped
+    y += Scale(76)
+    Text(frame.session, TextProps.{.bounds = Bounds(x, y, content_width, Scale(20)),
+            .text = ListsLocaleHost("habit_description_label")})
+    description_escaped := DescriptionField(Bounds(x, y + Scale(24), content_width, Scale(112)),
+        ListsLocaleHost("habit_description_label"), blocked)
+    y += Scale(144)
+    Text(frame.session, TextProps.{.bounds = Bounds(x, y, content_width - Scale(132), Scale(44)),
+            .text = ListsLocaleHost("elist_priority_label"),
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+    options: [27]DropdownOption
+    options[0].label = ListsLocaleHost("profile_none_label")
+    alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    for index: cast(s32)1..26 {
+        options[index].label = alphabet[index - 1:index]
+        options[index].key = cast(u64)index
+    }
+    chosen := Dropdown(frame.session, DropdownProps.{.key = cast(u64)6551,
+            .bounds = Bounds(x + content_width - Scale(124), y, Scale(124), Scale(44)),
+            .selected_index = frame.task_priority, .disabled = blocked,
+            .scale = frame.scale}, options[:27])
+    if chosen.changed {
+        frame.task_priority = chosen.selected_index
+    }
+    y += Scale(54)
+    Text(frame.session, TextProps.{.bounds = Bounds(x, y, content_width, Scale(24)),
+            .text = "+project @context due:YYYY-MM-DD", .disabled = true})
+    y += Scale(32)
+    button_width := (content_width - Scale(8)) / 2
+    save := Button(frame.session, ButtonProps.{.key = cast(u64)6553,
+            .bounds = Bounds(x, y, button_width, Scale(44)),
+            .label = ListsLocaleHost("save_button"),
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .disabled = ListsTitleWithoutPriority(frame.value).count == 0 || blocked ||
+                !ListsTitlePriorityFits(frame.value, frame.task_priority, LISTS_TEXT_LIMIT)}) != 0
+    cancel := Button(frame.session, ButtonProps.{.key = cast(u64)6554,
+            .bounds = Bounds(x + button_width + Scale(8), y, button_width, Scale(44)),
+            .label = ListsLocaleHost("cancel_button")}) != 0
+    if task_escaped || description_escaped || cancel {
+        CloseCustomTask()
+    } else if save || task_committed {
+        if SaveCustomTask() {
+            CloseCustomTask()
+        }
+    }
+    End(frame.session)
+}
+
 // An invitation to a list, who sent it, and Accept and Decline. True once
 // one is chosen.
 InvitationRow :: (row: ListsUiPerson, index: s32, x: s32, y: s32, width: s32, disabled: bool) -> bool {
@@ -657,6 +847,9 @@ InvitationRow :: (row: ListsUiPerson, index: s32, x: s32, y: s32, width: s32, di
 ListsView :: (message: ListsMessage) -> ListsMessage {
     frame = ReadListsUiHost()
     state = message
+    if frame.panel == 3 && state.succeeded && state.editing_item == -1 && state.reset_input {
+        CloseCustomTask()
+    }
     // Sharing lives in List settings; an older saved Share panel opens it.
     if frame.panel == 1 {
         frame.panel = 0
@@ -673,7 +866,7 @@ ListsView :: (message: ListsMessage) -> ListsMessage {
         CloseSettings()
     }
     input := frame.input
-    if frame.panel != 0 {
+    if frame.panel == 2 {
         frame.input = TextFieldInput.{}
         frame.focused = false
     }
@@ -686,12 +879,16 @@ ListsView :: (message: ListsMessage) -> ListsMessage {
     if frame.panel == 2 {
         InvitationsDialog()
     }
+    if frame.panel == 3 {
+        CustomTaskDialog()
+    }
     return Finish()
 }
 
 // List settings opens with its name ready to change but no keyboard.
 OpenSettings :: (title: string) {
     settings_open = true
+    row_menu_open = false
     settings_scroll = 0
     delete_confirm = false
     invite_role = 1
@@ -1162,7 +1359,9 @@ ListsPage :: () {
                 .wrap = cast(TextWrap)TextWrapAuto})
         return
     }
-    if state.editing_item >= 0 {
+    if frame.panel == 3 {
+        y += Scale(56)
+    } else if state.editing_item >= 0 {
         // The item's own row holds its field; Escape or Back leaves it.
         if frame.input.escape {
             state.editing_item = -1
@@ -1178,15 +1377,20 @@ ListsPage :: () {
                 .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
                 .disabled = true})
     } else {
-        committed := Field(Bounds(x, y, width - Scale(96), Scale(44)),
+        committed := Field(Bounds(x, y, width - Scale(180), Scale(44)),
             ListsLocaleHost("elist_add_item_placeholder"), blocked)
         if Button(frame.session, ButtonProps.{.key = cast(u64)6507,
                 .label = ListsLocaleHost("elist_add_item"),
-                .bounds = Bounds(x + width - Scale(88), y, Scale(88), Scale(44)),
+                .bounds = Bounds(x + width - Scale(176), y, Scale(84), Scale(44)),
                 .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
                 .disabled = frame.value.count == 0 || blocked}) != 0 || (committed && !blocked) {
             Mutation(LISTS_COMMIT, -1)
             return
+        }
+        if Button(frame.session, ButtonProps.{.key = cast(u64)6515,
+                .label = ListsLocaleHost("elist_custom_button"),
+                .bounds = Bounds(x + width - Scale(84), y, Scale(84), Scale(44))}) != 0 {
+            BeginCustomTask(-1, "", "")
         }
     }
     y += Scale(56)
@@ -1293,7 +1497,7 @@ ListsPage :: () {
             row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height)
             // An item being edited becomes a field in its own row, with a
             // check that saves it.
-            if visible_row && index == state.editing_item {
+            if visible_row && index == state.editing_item && frame.panel != 3 {
                 check_x := row_right - Scale(44)
                 committed := Field(Bounds(x, row_y + Scale(10), check_x - Scale(8) - x, Scale(44)),
                     ListsLocaleHost("elist_item_name_placeholder"), blocked)
@@ -1320,12 +1524,23 @@ ListsPage :: () {
                         .bounds = Bounds(x, row_y, row_right - x, Scale(64)),
                         .label = row.title, .now = state.now, .scale = frame.scale,
                         .start = CompleteSwipe(), .end = DeleteSwipe(),
-                        .threshold = 0.15, .end_threshold = 0.35, .long_threshold = 0.5, .long_start = EditSwipe(),
+                        .threshold = 0.5, .end_threshold = 0.35, .long_threshold = 1.0,
+                        .start_width = cast(float32)Scale(176), .long_start = EditSwipe(),
                         .disabled = blocked},
                     row_swipe)
                 row_swipe = swiped.state
+                if Button(frame.session, ButtonProps.{.key = cast(u64)(8200 + index),
+                        .bounds = Bounds(row_right - Scale(44), row_y + Scale(10), Scale(44), Scale(44)),
+                        .label = ListsLocaleHost("elist_edit_task"), .icon_type = cast(s32)IconEdit,
+                        .icon_only = true, .tone = cast(ButtonTone)ButtonToneNeutral,
+                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost,
+                        .disabled = blocked}) != 0 {
+                    BeginCustomTask(index, row.title, row.comment)
+                    End(frame.session)
+                    return
+                }
                 text_x := x + Scale(12) + cast(s32)swiped.offset
-                text_width := row_right - x - Scale(24)
+                text_width := row_right - x - Scale(68)
                 Text(frame.session, TextProps.{.bounds = Bounds(text_x, row_y,
                         text_width, ifx row.comment.count > 0 then Scale(30) else Scale(64)),
                         .text = row.title, .vertical_align = cast(TextAlign)TextAlignCenter,
@@ -1340,9 +1555,20 @@ ListsPage :: () {
                     End(frame.session)
                     return
                 }
+                if swiped.clicked {
+                    state.done = ifx row.done != 0 then 0 else 1
+                    Mutation(LISTS_SET_DONE, index)
+                    End(frame.session)
+                    return
+                }
+                if swiped.right_clicked {
+                    row_menu_open = true
+                    row_menu_index = index
+                    row_menu_x = swiped.pointer_x
+                    row_menu_y = swiped.pointer_y
+                }
                 if swiped.swiped_long_start {
-                    BeginInput(index, row.title)
-                    field_focus_request = true
+                    BeginCustomTask(index, row.title, row.comment)
                 }
                 if swiped.swiped_end {
                     // Deleting leaves Edit, since the items after it move up.
@@ -1358,6 +1584,36 @@ ListsPage :: () {
             }
             row_y += Scale(72)
         }
+        End(frame.session)
+    }
+    RowContextMenu(blocked)
+}
+
+// A row's alternative commands. Check is the row's own activation; Edit opens
+// the same modal as the long swipe.
+RowContextMenu :: (blocked: bool) {
+    if !row_menu_open || row_menu_index < 0 || row_menu_index >= state.item_count {
+        return
+    }
+    row := ReadListsRowHost(row_menu_index, true)
+    items: [2]ContextMenuItem = .[
+        ContextMenuItem.{.id = LISTS_ROW_MENU_CHECK, .label = ListsLocaleHost("elist_check_task"), .disabled = blocked},
+        ContextMenuItem.{.id = LISTS_ROW_MENU_EDIT, .label = ListsLocaleHost("elist_edit_task"), .disabled = blocked}
+    ]
+    menu := ContextMenu(frame.session, ContextMenuProps.{.key = cast(u64)8500,
+            .open = true, .x = row_menu_x, .y = row_menu_y,
+            .escape = frame.input.escape, .scale = frame.scale}, items[:])
+    if !menu.open {
+        row_menu_open = false
+    }
+    if menu.activated_id == LISTS_ROW_MENU_CHECK && !blocked {
+        state.done = ifx row.done != 0 then 0 else 1
+        Mutation(LISTS_SET_DONE, row_menu_index)
+        row_menu_open = false
+        End(frame.session)
+    } else if menu.activated_id == LISTS_ROW_MENU_EDIT && !blocked {
+        BeginCustomTask(row_menu_index, row.title, row.comment)
+        row_menu_open = false
         End(frame.session)
     }
 }

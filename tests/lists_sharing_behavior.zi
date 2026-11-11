@@ -17,6 +17,7 @@
 #import, file "../src/screens/elist_types.zi";
 #import, file "../src/apps/package_files.zi";
 #import, file "../apps/lists/sharing.zi";
+#import, file "../apps/lists/task_title.zi";
 #import, file "storage_test_support.zi";
 #import "keys"
 #import "async_client"
@@ -25,7 +26,6 @@
 #import "transaction"
 #import "text_buffer"
 #import "json_scan"
-#import "text"
 #import "vec"
 
 c :: #system_library "c";
@@ -37,6 +37,26 @@ accepted: bool;
 calls: s32;
 last_body: [262144]u8;
 sender :: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+ContainsBytes :: (value: string, needle: string) -> bool {
+    if needle.count == 0 { return true }
+    if needle.count > value.count { return false }
+    start := 0
+    while start <= value.count - needle.count {
+        index := 0
+        same := true
+        while index < needle.count {
+            if value[start + index] != needle[index] {
+                same = false
+                break
+            }
+            index += 1
+        }
+        if same { return true }
+        start += 1
+    }
+    return false
+}
 
 Reply :: (output: []u8) -> bool {
     writer := Writer.{output, 0, true}
@@ -107,6 +127,24 @@ Finish :: () {
 #program_export
 Check :: () -> s32 {
     check_true("fixture transport ready", ListsTestTransport().start != null)
+    check_int("todo.txt priority is recognized",
+        ListsPriorityForTitle("(B) Pack @home +trip due:2026-11-10"), 2)
+    check_true("todo.txt metadata stays in the task",
+        ListsTitleWithoutPriority("(B) Pack @home +trip due:2026-11-10") == "Pack @home +trip due:2026-11-10")
+    check_true("priority can be removed", ListsTitleForPriority("(A) Pack", 0) == "Pack")
+    check_true("priority is canonicalized", ListsTitleForPriority("Pack", 2) == "(B) Pack")
+    check_int("lowercase text is not a priority", ListsPriorityForTitle("(a) Pack"), 0)
+    long_title: [32765]u8
+    for index: cast(s32)0..32762 {
+        long_title[index] = cast(u8)#char "x"
+    }
+    long_title[32763] = cast(u8)0
+    check_true("a priority fits at the saved title limit",
+        ListsTitlePriorityFits(TextUntilNul(long_title[:]), 1, LISTS_TEXT_LIMIT))
+    long_title[32763] = cast(u8)#char "x"
+    long_title[32764] = cast(u8)0
+    check_true("a priority cannot exceed the saved title limit",
+        !ListsTitlePriorityFits(TextUntilNul(long_title[:]), 1, LISTS_TEXT_LIMIT))
     guard := support_begin("/tmp/inbe-lists-test/")
     if guard != 0 {
         return guard
@@ -161,6 +199,8 @@ Check :: () -> s32 {
     frame.value = "A \"quoted\" task\n二"
     message.action = LISTS_COMMIT
     message.editing_item = 0
+    message.title = frame.value
+    message.comment = "Bring snacks and chargers"
     message.request_body = ListsBuildCommand(message, frame, list, rows[:])
     json := message.request_body
     check_true("serializer produces complete JSON", ValueEnd(json, 0, 0) == cast(s32)json.count)
@@ -170,6 +210,8 @@ Check :: () -> s32 {
     value: [128]u8
     unused ReadStringText(json, FieldAt(json, ElementAt(json, items, 0), "title"), value[:])
     check_true("quoted Unicode text round trips", TextUntilNul(value[:]) == frame.value)
+    unused ReadStringText(json, FieldAt(json, ElementAt(json, items, 0), "comment"), value[:])
+    check_true("shared edits carry the description", TextUntilNul(value[:]) == message.comment)
     long_document: Vec(u8)
     BuilderPrint(*long_document, "{\"request_id\":\"large-request\",\"padding\":\"")
     for index: cast(s32)0..11999 {
@@ -303,19 +345,49 @@ Check :: () -> s32 {
     check_true("large document exceeds the screen projection", selected >= 0 && editing >= 0 && app.elist.lists[selected].incomplete)
     request := ListsUiRequest.{.action = LISTS_COMMIT, .editing_item = editing,
         .selected_list = selected, .value = "Updated first task", .next_id = "complete-save",
+        .comment = "Updated first description",
         .list_id = "5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6"}
     complete := ListsPrepareCommand(*app.elist, request)
     check_int("editing a partial screen preserves all 300 tasks", ArrayCount(complete, FieldAt(complete, FieldAt(complete, 0, "list"), "items")), 300)
-    check_true("the hidden final task and its comment survive", ContainsFoldASCII(complete, "task-299") && ContainsFoldASCII(complete, "Keep every comment"))
+    unused ReadStringText(complete, FieldAt(complete, FieldAt(complete, 0, "list"), "title"), value[:])
+    check_true("shared editing preserves the list title", TextUntilNul(value[:]) == "Weekend")
+    complete_items := FieldAt(complete, FieldAt(complete, 0, "list"), "items")
+    edited_item: s32 = -1
+    for item_index: cast(s32)0..ArrayCount(complete, complete_items) - 1 {
+        unused ReadStringText(complete, FieldAt(complete,
+            ElementAt(complete, complete_items, item_index), "id"), value[:])
+        if TextUntilNul(value[:]) == "task-0" { edited_item = item_index }
+    }
+    check_true("the edited full-document row is found", edited_item >= 0)
+    unused ReadStringText(complete, FieldAt(complete, ElementAt(complete,
+        FieldAt(complete, FieldAt(complete, 0, "list"), "items"), edited_item), "title"), value[:])
+    check_true("shared editing carries the task title", TextUntilNul(value[:]) == request.value)
+    unused ReadStringText(complete, FieldAt(complete, ElementAt(complete,
+        FieldAt(complete, FieldAt(complete, 0, "list"), "items"), edited_item), "comment"), value[:])
+    check_true("shared editing carries the description", TextUntilNul(value[:]) == request.comment)
+    check_true("the hidden final task and its comment survive", ContainsBytes(complete, "task-299") && ContainsBytes(complete, "Keep every comment"))
+    PackageFree(complete)
+    request.editing_item = -1
+    request.value = "New complete task"
+    request.comment = "New complete description"
+    complete = ListsPrepareCommand(*app.elist, request)
+    check_int("shared creation preserves all 300 tasks", ArrayCount(complete, FieldAt(complete, FieldAt(complete, 0, "list"), "items")), 301)
+    unused ReadStringText(complete, FieldAt(complete, ElementAt(complete,
+        FieldAt(complete, FieldAt(complete, 0, "list"), "items"), 300), "title"), value[:])
+    check_true("shared creation carries the task title", TextUntilNul(value[:]) == request.value)
+    unused ReadStringText(complete, FieldAt(complete, ElementAt(complete,
+        FieldAt(complete, FieldAt(complete, 0, "list"), "items"), 300), "comment"), value[:])
+    check_true("shared creation carries the description", TextUntilNul(value[:]) == request.comment)
     PackageFree(complete)
     request.action = LISTS_RESTORE_ITEM
+    request.editing_item = editing
     request.item_id = "deleted-task"
     request.value = "Restored task"
     request.comment = "Restored comment"
     request.done = 1
     complete = ListsPrepareCommand(*app.elist, request)
     check_int("shared undo keeps existing tasks", ArrayCount(complete, FieldAt(complete, FieldAt(complete, 0, "list"), "items")), 301)
-    check_true("shared undo preserves identity, comment and completion", ContainsFoldASCII(complete, "deleted-task") && ContainsFoldASCII(complete, "Restored comment") && ContainsFoldASCII(complete, "\"done\":1"))
+    check_true("shared undo preserves identity, title, comment and completion", ContainsBytes(complete, "deleted-task") && ContainsBytes(complete, "Restored task") && ContainsBytes(complete, "Restored comment") && ContainsBytes(complete, "\"done\":1"))
     PackageFree(complete)
     // Cached roles govern all outgoing edits, including stale editor input.
     app.elist.lists[selected].read_only = true
@@ -330,12 +402,12 @@ Check :: () -> s32 {
     app.elist.lists[selected].read_only = false
     app.elist.lists[selected].owner = true
     complete = ListsPrepareCommand(*app.elist, request)
-    check_true("an owner can grant full ownership", ContainsFoldASCII(complete, "\"access\":\"owner\""))
+    check_true("an owner can grant full ownership", ContainsBytes(complete, "\"access\":\"owner\""))
     check_true("permission changes never replace the list's tasks", FieldAt(complete, FieldAt(complete, 0, "list"), "items") < 0)
     PackageFree(complete)
     request.action = LISTS_REMOVE_ACCESS
     complete = ListsPrepareCommand(*app.elist, request)
-    check_true("an owner can remove access", ContainsFoldASCII(complete, "\"action\":\"remove\""))
+    check_true("an owner can remove access", ContainsBytes(complete, "\"action\":\"remove\""))
     PackageFree(complete)
     check_true("viewer snapshot saved", ListsCacheWrite("lists.shared",
         "{\"lists\":[{\"id\":\"5ad0e7f2-3b1c-4d6e-9f80-a1b2c3d4e5f6\",\"owner\":\"another-account\",\"alias\":\"Alice\",\"title\":\"Read me\",\"access\":\"viewer\",\"items\":[]}],\"invitations\":[]}") != 0)

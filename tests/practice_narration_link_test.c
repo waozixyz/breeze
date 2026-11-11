@@ -1,4 +1,4 @@
-#include "practices/practice_narration.h"
+#include "practice_narration.h"
 #include "zir_string.h"
 #include "assets.h"
 
@@ -15,6 +15,7 @@ static const char *prefix = "assets/practices/taichi/voice/en/";
 static int plays, stops, pauses, resumes, updates;
 static float volume;
 static bool clip_available = true;
+static char played_path[256];
 
 /* The downloaded language the practice speaks; empty when none is. */
 String practice_downloads_PracticeNarrationLanguage(int32_t content, String voice)
@@ -42,6 +43,9 @@ bool voice_audio_VoiceAudioStart(InnerBreeze *app, int32_t voice, String path, f
     /* Kryon reads and copies the packed clip itself, by its packed path. */
     assert(path.length > strlen(prefix) + 4 && memcmp(path.data, prefix, strlen(prefix)) == 0);
     assert(memcmp(path.data + path.length - 4, ".ogg", 4) == 0);
+    assert(path.length < sizeof played_path);
+    memcpy(played_path, path.data, path.length);
+    played_path[path.length] = '\0';
     volume = gain;
     plays++;
     return true;
@@ -67,7 +71,7 @@ int main(int argc, char **argv)
     assert(clip && fread(clip, 1, clip_size, file) == clip_size);
     fclose(file);
 
-    InnerBreeze app = {0};
+    static InnerBreeze app = {0};
     String practice = StringLiteral("taichi"), cue = StringLiteral("cue");
     language = StringLiteral("en");
     app.sound_volume = 60;
@@ -133,6 +137,24 @@ int main(int argc, char **argv)
     assert(plays == before + 1);
     practice_narration_PracticeNarrationUpdate(&app, practice, cue);
     assert(plays == before + 1);
+    /* Each selected course resolves its own key through the established
+       packed narration path. The fixture clip verifies routing only. */
+    const char *selected_cues[] = {
+        "astral_text_foundation_01", "astral_text_current_01",
+        "astral_text_elevator_01", "astral_text_spin_01",
+        "astral_text_rope_01", "astral_text_roll_out_01"
+    };
+    for (size_t i = 0; i < sizeof selected_cues / sizeof *selected_cues; i++) {
+        char expected[256];
+        snprintf(expected, sizeof expected, "%s%s.ogg", prefix, selected_cues[i]);
+        practice_narration_PracticeNarrationUpdate(&app, practice,
+            StringView(selected_cues[i], strlen(selected_cues[i])));
+        assert(strcmp(played_path, expected) == 0);
+    }
+    language = StringLiteral("de");
+    prefix = "assets/practices/astral_projection/voice/de/";
+    practice_narration_PracticeNarrationUpdate(&app, practice, StringLiteral("astral_text_rope_01"));
+    assert(strcmp(played_path, "assets/practices/astral_projection/voice/de/astral_text_rope_01.ogg") == 0);
     free(clip);
     puts("Practice narration: language, voice, packed clip path, volume, pause/resume and mute passed");
     return 0;

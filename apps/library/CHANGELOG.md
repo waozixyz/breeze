@@ -1,5 +1,9 @@
 # Library
 
+## [Unreleased]
+
+- Choose text-only or picture-book reading when opening the Tao Te Ching; chapter art uses transparent backgrounds for both themes.
+
 ## [1.0.5] - 2026-10-29
 
 - Download on Inner Breeze 2.1.61, which runs apps in a smaller format.

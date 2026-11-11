@@ -32,7 +32,7 @@ def main():
     environment = {key: value for key, value in os.environ.items()
                    if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS',
                                   'SESSION_MANAGER', 'ZIRAN_PACKAGE_MAP')}
-    environment.update(YUE_DESKTOP_RECOVERY='0')
+    environment.update(HARMONY_DESKTOP_RECOVERY='0', YUE_DESKTOP_RECOVERY='0')
     fixture = work / 'fixtures'
     fixture.mkdir(exist_ok=True)
     source = fixture / 'fixture.zi'
@@ -92,7 +92,7 @@ Main :: () -> s32 {
     from node_release import signing_message
     key = Ed25519PrivateKey.generate()
     public = key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
-    publishers = [dict(key_id='baseline', public_key='1' * 64, app_ids=['inbe.fixture']),
+    publishers = [dict(key_id='baseline', public_key='1' * 64, app_ids=['inbe.fixture', 'inbe.photos', 'inbe.diary']),
                   dict(key_id='other', public_key=public, app_ids=['inbe.fixture']),
                   dict(key_id='outside', public_key='3' * 64, app_ids=['inbe.someone-else'])]
     publishers += json.loads((root / 'apps/publishers.json').read_text())
@@ -109,8 +109,8 @@ Main :: () -> s32 {
                                    size=packed_root.stat().st_size)])
     release['signature'] = key.sign(signing_message(release)).hex()
     (fixture / 'update.json').write_text(json.dumps(release))
-    subprocess.run([str(args.ziran.resolve()), 'build', '--target=c', '--define', 'PLATFORM_DESKTOP',
-                    '--no-main', '--root', str(root / 'tests'), *module_paths, *package_paths,
+    subprocess.run([str(args.ziran.resolve()), 'build', '--target=c', '--project', '--offline',
+                    '--define', 'PLATFORM_DESKTOP', '--no-main', '--root', str(root / 'tests'),
                     '-o', str(generated), str(root / 'tests/node_app_snapshot_behavior.zi'),
                     str(root / 'tests/sync_test_host.zi')],
                    cwd=root, env=environment, check=True)
@@ -161,6 +161,7 @@ Main :: () -> s32 {
                for name in ('valid', 'invalid', 'empty', 'corrupt')},
         }, check=True)
     print('Installed apps: leaf discovery, background icons, stale-job isolation, deferred images and shared mappings passed')
+    print('Photos compression: grant queues once; wrong app, publisher, account, validation, scanning and malformed request rejected')
     print('Embedded apps: identity, publisher scope, API, size and digest rejection; fallback publisher binding; newer signed update precedence; actual Arcade with complete art and no games opened offline')
 
 

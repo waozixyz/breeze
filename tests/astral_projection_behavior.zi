@@ -62,13 +62,14 @@ Answer :: () -> s32 {
     if clock.elapsed_seconds != 2147483647 || clock.remainder_ms != 0 {
         return 10
     }
-    broken: [6]string = .[
+    broken: [7]string = .[
     "{\"schema\":2,\"duration\":900,\"cues\":[]}",
     "{\"schema\":1,\"duration\":0,\"cues\":[]}",
     "{\"schema\":1,\"duration\":900,\"cues\":[{\"second\":1,\"key\":\"astral_text_1\"},{\"second\":90,\"key\":\"astral_text_2\"}]}",
     "{\"schema\":1,\"duration\":900,\"cues\":[{\"second\":0,\"key\":\"astral_text_1\"},{\"second\":900,\"key\":\"astral_text_2\"}]}",
     "{\"schema\":1,\"duration\":900,\"cues\":[{\"second\":0,\"key\":\"astral_text_1\"},{\"second\":90,\"key\":\"astral_text_1\"}]}",
-    "{\"schema\":1,\"duration\":900,\"cues\":[{\"second\":0,\"key\":\"astral_text_1\"},{\"second\":90,\"key\":\"../wrong\"}]}"
+    "{\"schema\":1,\"duration\":900,\"cues\":[{\"second\":0,\"key\":\"astral_text_1\"},{\"second\":90,\"key\":\"../wrong\"}]}",
+    "{\"schema\":1,\"duration\":900,\"cues\":[{\"second\":0,\"key\":\"astral_text_1\\u0000hidden\"},{\"second\":90,\"key\":\"astral_text_2\"}]}"
     ]
     for value: broken {
         if AstralCourseParse(value, *course) || course.count != 0 {
@@ -77,6 +78,46 @@ Answer :: () -> s32 {
     }
     if AstralCourseParse("{\"schema\":1,\"duration\":900,\"cues\":[]}x", *course) {
         return 8
+    }
+    catalogue: AstralCatalogue
+    catalogue_data := "{\"schema\":1,\"practices\":[{\"id\":\"bruce_foundation_touch\",\"duration\":1200,\"title_key\":\"title_0\",\"description_key\":\"description_0\",\"guide_key\":\"guide_0\"},{\"id\":\"bruce_full_body_current\",\"duration\":1500,\"title_key\":\"title_1\",\"description_key\":\"description_1\",\"guide_key\":\"guide_1\"},{\"id\":\"bruce_elevator_trance\",\"duration\":1800,\"title_key\":\"title_2\",\"description_key\":\"description_2\",\"guide_key\":\"guide_2\"},{\"id\":\"bruce_spin_loosening\",\"duration\":1800,\"title_key\":\"title_3\",\"description_key\":\"description_3\",\"guide_key\":\"guide_3\"},{\"id\":\"bruce_rope_exit\",\"duration\":2400,\"title_key\":\"title_4\",\"description_key\":\"description_4\",\"guide_key\":\"guide_4\"},{\"id\":\"bruce_roll_out_exit\",\"duration\":1800,\"title_key\":\"title_5\",\"description_key\":\"description_5\",\"guide_key\":\"guide_5\"}]}"
+    if !AstralCatalogueParse(catalogue_data, *catalogue) || catalogue.count != 6 ||
+    AstralSelectedIndex(*catalogue, "bruce_rope_exit") != 4 ||
+    AstralSelectedIndex(*catalogue, "removed_practice") != 0 {
+        return 20
+    }
+    // Switching sessions resets the clock; pause never consumes the new
+    // practice's quiet time, and large ticks stop exactly at its ending.
+    for index: cast(s32)0..5 {
+        duration := catalogue.practices[index].duration
+        selected_clock := AstralAdvanceSession(AstralClock.{}, 60000, false, duration)
+        selected_clock = AstralAdvanceSession(selected_clock, 60000, true, duration)
+        if selected_clock.elapsed_seconds != 60 {
+            return 21
+        }
+        selected_clock = AstralAdvanceSession(selected_clock, 3600000, false, duration)
+        if selected_clock.elapsed_seconds != duration || selected_clock.remainder_ms != 0 {
+            return 22
+        }
+    }
+    broken_catalogues: [9]string = .[
+        "{\"schema\":1,\"practices\":[{\"id\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"duration\":1200,\"title_key\":\"title_0\",\"description_key\":\"description_0\",\"guide_key\":\"guide_0\"},{\"id\":\"bruce_full_body_current\",\"duration\":1500,\"title_key\":\"title_1\",\"description_key\":\"description_1\",\"guide_key\":\"guide_1\"},{\"id\":\"bruce_elevator_trance\",\"duration\":1800,\"title_key\":\"title_2\",\"description_key\":\"description_2\",\"guide_key\":\"guide_2\"},{\"id\":\"bruce_spin_loosening\",\"duration\":1800,\"title_key\":\"title_3\",\"description_key\":\"description_3\",\"guide_key\":\"guide_3\"},{\"id\":\"bruce_rope_exit\",\"duration\":2400,\"title_key\":\"title_4\",\"description_key\":\"description_4\",\"guide_key\":\"guide_4\"},{\"id\":\"bruce_roll_out_exit\",\"duration\":1800,\"title_key\":\"title_5\",\"description_key\":\"description_5\",\"guide_key\":\"guide_5\"}]}",
+        "{\"schema\":1,\"practices\":[{\"id\":\"../escape\",\"duration\":1200,\"title_key\":\"title_0\",\"description_key\":\"description_0\",\"guide_key\":\"guide_0\"},{\"id\":\"bruce_full_body_current\",\"duration\":1500,\"title_key\":\"title_1\",\"description_key\":\"description_1\",\"guide_key\":\"guide_1\"},{\"id\":\"bruce_elevator_trance\",\"duration\":1800,\"title_key\":\"title_2\",\"description_key\":\"description_2\",\"guide_key\":\"guide_2\"},{\"id\":\"bruce_spin_loosening\",\"duration\":1800,\"title_key\":\"title_3\",\"description_key\":\"description_3\",\"guide_key\":\"guide_3\"},{\"id\":\"bruce_rope_exit\",\"duration\":2400,\"title_key\":\"title_4\",\"description_key\":\"description_4\",\"guide_key\":\"guide_4\"},{\"id\":\"bruce_roll_out_exit\",\"duration\":1800,\"title_key\":\"title_5\",\"description_key\":\"description_5\",\"guide_key\":\"guide_5\"}]}",
+        "{\"schema\":1,\"practices\":[{\"id\":\"bruce_foundation_touch\",\"duration\":1200,\"title_key\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\",\"description_key\":\"description_0\",\"guide_key\":\"guide_0\"},{\"id\":\"bruce_full_body_current\",\"duration\":1500,\"title_key\":\"title_1\",\"description_key\":\"description_1\",\"guide_key\":\"guide_1\"},{\"id\":\"bruce_elevator_trance\",\"duration\":1800,\"title_key\":\"title_2\",\"description_key\":\"description_2\",\"guide_key\":\"guide_2\"},{\"id\":\"bruce_spin_loosening\",\"duration\":1800,\"title_key\":\"title_3\",\"description_key\":\"description_3\",\"guide_key\":\"guide_3\"},{\"id\":\"bruce_rope_exit\",\"duration\":2400,\"title_key\":\"title_4\",\"description_key\":\"description_4\",\"guide_key\":\"guide_4\"},{\"id\":\"bruce_roll_out_exit\",\"duration\":1800,\"title_key\":\"title_5\",\"description_key\":\"description_5\",\"guide_key\":\"guide_5\"}]}",
+        "{\"schema\":1,\"practices\":[{\"id\":\"bruce_foundation_touch\",\"duration\":1200,\"title_key\":\"title_0\",\"description_key\":\"\",\"guide_key\":\"guide_0\"},{\"id\":\"bruce_full_body_current\",\"duration\":1500,\"title_key\":\"title_1\",\"description_key\":\"description_1\",\"guide_key\":\"guide_1\"},{\"id\":\"bruce_elevator_trance\",\"duration\":1800,\"title_key\":\"title_2\",\"description_key\":\"description_2\",\"guide_key\":\"guide_2\"},{\"id\":\"bruce_spin_loosening\",\"duration\":1800,\"title_key\":\"title_3\",\"description_key\":\"description_3\",\"guide_key\":\"guide_3\"},{\"id\":\"bruce_rope_exit\",\"duration\":2400,\"title_key\":\"title_4\",\"description_key\":\"description_4\",\"guide_key\":\"guide_4\"},{\"id\":\"bruce_roll_out_exit\",\"duration\":1800,\"title_key\":\"title_5\",\"description_key\":\"description_5\",\"guide_key\":\"guide_5\"}]}",
+        "{\"schema\":1,\"practices\":[{\"id\":\"bruce_foundation_touch\",\"duration\":1200,\"title_key\":\"title_0\",\"description_key\":\"description_0\",\"guide_key\":\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"},{\"id\":\"bruce_full_body_current\",\"duration\":1500,\"title_key\":\"title_1\",\"description_key\":\"description_1\",\"guide_key\":\"guide_1\"},{\"id\":\"bruce_elevator_trance\",\"duration\":1800,\"title_key\":\"title_2\",\"description_key\":\"description_2\",\"guide_key\":\"guide_2\"},{\"id\":\"bruce_spin_loosening\",\"duration\":1800,\"title_key\":\"title_3\",\"description_key\":\"description_3\",\"guide_key\":\"guide_3\"},{\"id\":\"bruce_rope_exit\",\"duration\":2400,\"title_key\":\"title_4\",\"description_key\":\"description_4\",\"guide_key\":\"guide_4\"},{\"id\":\"bruce_roll_out_exit\",\"duration\":1800,\"title_key\":\"title_5\",\"description_key\":\"description_5\",\"guide_key\":\"guide_5\"}]}",
+        "{\"schema\":1,\"practices\":[{\"id\":\"bruce_foundation_touch\",\"duration\":0,\"title_key\":\"title_0\",\"description_key\":\"description_0\",\"guide_key\":\"guide_0\"},{\"id\":\"bruce_full_body_current\",\"duration\":1500,\"title_key\":\"title_1\",\"description_key\":\"description_1\",\"guide_key\":\"guide_1\"},{\"id\":\"bruce_elevator_trance\",\"duration\":1800,\"title_key\":\"title_2\",\"description_key\":\"description_2\",\"guide_key\":\"guide_2\"},{\"id\":\"bruce_spin_loosening\",\"duration\":1800,\"title_key\":\"title_3\",\"description_key\":\"description_3\",\"guide_key\":\"guide_3\"},{\"id\":\"bruce_rope_exit\",\"duration\":2400,\"title_key\":\"title_4\",\"description_key\":\"description_4\",\"guide_key\":\"guide_4\"},{\"id\":\"bruce_roll_out_exit\",\"duration\":1800,\"title_key\":\"title_5\",\"description_key\":\"description_5\",\"guide_key\":\"guide_5\"}]}",
+        "{\"schema\":1,\"practices\":[{\"id\":\"bruce_foundation_touch\",\"duration\":1200,\"title_key\":\"title_0\",\"description_key\":\"description_0\",\"guide_key\":\"guide_0\"},{\"id\":\"bruce_foundation_touch\",\"duration\":1500,\"title_key\":\"title_1\",\"description_key\":\"description_1\",\"guide_key\":\"guide_1\"},{\"id\":\"bruce_elevator_trance\",\"duration\":1800,\"title_key\":\"title_2\",\"description_key\":\"description_2\",\"guide_key\":\"guide_2\"},{\"id\":\"bruce_spin_loosening\",\"duration\":1800,\"title_key\":\"title_3\",\"description_key\":\"description_3\",\"guide_key\":\"guide_3\"},{\"id\":\"bruce_rope_exit\",\"duration\":2400,\"title_key\":\"title_4\",\"description_key\":\"description_4\",\"guide_key\":\"guide_4\"},{\"id\":\"bruce_roll_out_exit\",\"duration\":1800,\"title_key\":\"title_5\",\"description_key\":\"description_5\",\"guide_key\":\"guide_5\"}]}",
+        "{\"schema\":2,\"practices\":[{\"id\":\"bruce_foundation_touch\",\"duration\":1200,\"title_key\":\"title_0\",\"description_key\":\"description_0\",\"guide_key\":\"guide_0\"},{\"id\":\"bruce_full_body_current\",\"duration\":1500,\"title_key\":\"title_1\",\"description_key\":\"description_1\",\"guide_key\":\"guide_1\"},{\"id\":\"bruce_elevator_trance\",\"duration\":1800,\"title_key\":\"title_2\",\"description_key\":\"description_2\",\"guide_key\":\"guide_2\"},{\"id\":\"bruce_spin_loosening\",\"duration\":1800,\"title_key\":\"title_3\",\"description_key\":\"description_3\",\"guide_key\":\"guide_3\"},{\"id\":\"bruce_rope_exit\",\"duration\":2400,\"title_key\":\"title_4\",\"description_key\":\"description_4\",\"guide_key\":\"guide_4\"},{\"id\":\"bruce_roll_out_exit\",\"duration\":1800,\"title_key\":\"title_5\",\"description_key\":\"description_5\",\"guide_key\":\"guide_5\"}]}",
+        "{\"schema\":1,\"practices\":[{\"id\":\"bruce_foundation_touch\",\"duration\":1200,\"title_key\":\"title_0\",\"description_key\":\"description_0\",\"guide_key\":\"guide_0\"},{\"id\":\"bruce_full_body_current\",\"duration\":1500,\"title_key\":\"title_1\",\"description_key\":\"description_1\",\"guide_key\":\"guide_1\"},{\"id\":\"bruce_elevator_trance\",\"duration\":1800,\"title_key\":\"title_2\",\"description_key\":\"description_2\",\"guide_key\":\"guide_2\"},{\"id\":\"bruce_spin_loosening\",\"duration\":1800,\"title_key\":\"title_3\",\"description_key\":\"description_3\",\"guide_key\":\"guide_3\"},{\"id\":\"bruce_rope_exit\",\"duration\":2400,\"title_key\":\"title_4\",\"description_key\":\"description_4\",\"guide_key\":\"guide_4\"}]}"
+    ]
+    for invalid: broken_catalogues {
+        if AstralCatalogueParse(invalid, *catalogue) || catalogue.count != 0 {
+            return 23
+        }
+    }
+    if AstralCatalogueParse("", *catalogue) || AstralCourseParse("", *course) {
+        return 24
     }
     return 42
 }

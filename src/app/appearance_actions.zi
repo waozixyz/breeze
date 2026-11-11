@@ -1,9 +1,8 @@
 // The Appearance editor, Lumi and external app tools share these operations.
 #import "vec"
 #import "std/json_scan"
-#import "css_format"
+#import "css/Css"
 #import "byte_text_linux"
-#import "css_parser"
 #import "style_sheet"
 #import "style"
 #import "control_props"
@@ -31,7 +30,6 @@ StyleCachePublished :: (app: *InnerBreeze, scope: s32) {
     style_installed = true
     style_installed_theme = app.theme_id
     style_installed_dark = app.dark_mode != 0
-    style_installed_index = app.style_index
     style_installed_waozi = AppWaoziTheme()
     style_installed_revision = style_revision
     style_installed_scope = scope
@@ -45,7 +43,7 @@ AppearancePreview :: (app: *InnerBreeze, scope: s32) -> bool {
     scoped_source := ifx scope == 0 then "" else StyleDraftSource(scope)
     catalog := ThemeCatalogLoad(app.theme_id, app.dark_mode != 0)
     if !StyleCompileSources(catalog, app.dark_mode != 0,
-        app.style_index, all_source, scoped_source, true) {
+        all_source, scoped_source, true) {
         // Keep the prior complete preview while the draft is incomplete.
         style_installed_revision = style_revision
         return false
@@ -260,7 +258,7 @@ AppearanceInspectTool :: (app: *InnerBreeze, scope: s32, arguments: string) -> s
         return PackageText("{\"ok\":false,\"error\":\"Unknown widget or state.\"}", "")
     }
     catalog := ThemeCatalogLoad(app.theme_id, app.dark_mode != 0)
-    if !StyleCompileSources(catalog, app.dark_mode != 0, app.style_index,
+    if !StyleCompileSources(catalog, app.dark_mode != 0,
         StyleAppliedSource(0), ifx scope == 0 then "" else StyleAppliedSource(scope), false) {
         return PackageText("{\"ok\":false,\"error\":\"The selected scope cannot be inspected.\"}", "")
     }
@@ -274,12 +272,12 @@ AppearanceInspectTool :: (app: *InnerBreeze, scope: s32, arguments: string) -> s
     return BuilderFinish(output)
 }
 
-AppearanceRead :: (app: *InnerBreeze, scope: s32) -> string {
+AppearanceRead :: (scope: s32) -> string {
     output: Vec(u8)
     BuilderPrint(*output, "{\"ok\":true,\"revision\":%,\"scope\":", style_revision)
     AppearanceJsonString(*output, StyleScopeName(scope))
     BuilderPrint(*output, ",\"pack\":")
-    AppearanceJsonString(*output, style_pack_id(app.style_index))
+    AppearanceJsonString(*output, "material")
     BuilderPrint(*output, ",\"source\":")
     AppearanceJsonString(*output, StyleDraftSource(scope))
     BuilderPrint(*output, ",\"saved_source\":")
@@ -290,7 +288,7 @@ AppearanceRead :: (app: *InnerBreeze, scope: s32) -> string {
     defaults := StyleImport("inbe")
     AppearanceJsonString(*output, defaults.data)
     BuilderPrint(*output, ",\"pack_defaults\":")
-    pack := StyleImport(style_pack_id(app.style_index))
+    pack := StyleImport("material")
     AppearanceJsonString(*output, pack.data)
     BuilderPrint(*output, ",\"precedence\":[\"shared pack and app defaults\",\"all apps customization\",\"selected app customization\"],\"source_limit\":8191,\"rule_limit\":512,\"error\":")
     AppearanceJsonString(*output, AppTextFromCString(*style_error[0], 256))
@@ -306,7 +304,7 @@ AppearanceTool :: (app: *InnerBreeze, name: string, arguments: string) -> string
         return PackageText("{\"ok\":false,\"error\":\"scope must be all, lists, habits, practices, diary or lumi\"}", "")
     }
     if name == "read_style" {
-        return AppearanceRead(app, scope)
+        return AppearanceRead(scope)
     }
     if name == "inspect_style" {
         return AppearanceInspectTool(app, scope, arguments)

@@ -6,6 +6,7 @@
 #import, file "astral_projection_rules.zi";
 #import, file "astral_scene_view.zi";
 #import, file "../../src/app/app_types.zi";
+#import, file "../../src/app/app_settings.zi";
 #import, file "../../src/app/app_modal_state.zi";
 #import, file "../../src/app/app_nav_state.zi";
 #import, file "../../src/app/app_route_state.zi";
@@ -18,6 +19,7 @@
 #import, file "../../src/app/modal_rules.zi";
 #import, file "../../src/app/practice_title_bar.zi";
 #import, file "../../src/app/session_screen.zi";
+#import, file "../../src/app/session_details.zi";
 #import, file "../../src/app/text_buffers.zi";
 #import, file "../../src/app/app_notifications.zi";
 #import, file "../../src/core/types.zi";
@@ -31,18 +33,17 @@
 #import "locale_policy"
 #import "byte_text_linux"
 #import "text_buffer"
+#import "kryon/layout"
 #import "layout"
 #import "session"
 #import "button_props"
-#import "button_widget"
+#import "kryon/Kryon"
 #import "control_props"
 #import "geometry"
 #import "scroll_props"
-#import "scroll_widget"
 #import "text_align"
 #import "text_props"
-#import "text_widget"
-#import "tree"
+#import "kryon/tree"
 
 c :: #system_library "c";
 GetFrameTime :: () -> float32 #foreign c;
@@ -72,13 +73,84 @@ AstralActive :: (app: *InnerBreeze) -> s32 {
     return ifx app != null && app_session_screen(app) == ScreenAstralProjection then 1 else 0
 }
 
+astral_legacy: bool;
+astral_content_error: bool;
+astral_reveal_selection: bool;
+astral_catalogue: AstralCatalogue;
+
+AstralLegacyAvailable :: () -> bool {
+    return !AssetRead("assets/practices/astral_projection/catalogue.json").found
+}
+
+astral_catalogue_generation: u64;
+astral_session_practice: AstralPractice;
+
+AstralCatalogueLoad :: () -> bool {
+    generation := AssetGeneration()
+    if astral_catalogue.count == 6 && astral_catalogue_generation == generation {
+        return true
+    }
+    asset := AssetRead("assets/practices/astral_projection/catalogue.json")
+    if !asset.found || !AstralCatalogueParse(asset.data, *astral_catalogue) {
+        return false
+    }
+    astral_catalogue_generation = generation
+    astral_content_error = false
+    return true
+}
+
+AstralSelection :: (app: *InnerBreeze) -> s32 {
+    return AstralSelectedIndex(*astral_catalogue, TextFromCString(*app.astral_projection_exercise[0]))
+}
+
+// Start enters the same selection and guide page as How to. No session or
+// narration begins until the person presses Start on that page.
 AstralStart :: (app: *InnerBreeze) {
     if app == null || !ActivityStartAllowed() {
         return
     }
-    asset := AssetRead("assets/practices/astral_projection/session.json")
-    if !asset.found || !AstralCourseParse(asset.data, *astral_course) {
+    if AstralLegacyAvailable() {
+        AstralStartSelected(app)
         return
+    }
+    astral_content_error = !AstralCatalogueLoad()
+    astral_reveal_selection = true
+    app.manual_scroll = 0
+    app.tutorial_step = 0
+    app_switch_screen(app, ScreenStart)
+    app_open_modal(app, cast(ModalType)ModalPracticeManual)
+}
+
+AstralStartSelected :: (app: *InnerBreeze) {
+    if app == null || !ActivityStartAllowed() {
+        return
+    }
+    astral_legacy = AstralLegacyAvailable()
+    selected: AstralPractice
+    path: [192]u8
+    if astral_legacy {
+        unused AppCopyText("assets/practices/astral_projection/session.json", path[:])
+    } else {
+        if !AstralCatalogueLoad() {
+            astral_content_error = true
+            return
+        }
+        selected = astral_catalogue.practices[AstralSelection(app)]
+        unused AppCopyText("assets/practices/astral_projection/sessions/", path[:])
+        unused AppAppendText(TextFromCString(*selected.id[0]), path[:])
+        unused AppAppendText(".json", path[:])
+    }
+    asset := AssetRead(TextUntilNul(path[:]))
+    if !asset.found || !AstralCourseParse(asset.data, *astral_course) ||
+    (!astral_legacy && astral_course.duration != selected.duration) {
+        astral_content_error = true
+        return
+    }
+    astral_content_error = false
+    astral_session_practice = selected
+    if !astral_legacy {
+        unused AppCopyText(TextFromCString(*selected.id[0]), app.astral_projection_exercise[:])
+        save_settings(app)
     }
     mark_exercise_manual_seen(app, EXERCISE_ASTRAL_PROJECTION)
     astral_clock = AstralClock.{}
@@ -98,17 +170,32 @@ AstralElapsed :: () -> s32 {
 }
 
 AstralDuration :: () -> s32 {
-    return 0
+    return ifx astral_legacy then 0 else astral_course.duration
 }
 
 AstralRemaining :: () -> s32 {
-    return 0
+    return ifx AstralElapsed() < AstralDuration() then AstralDuration() - AstralElapsed() else 0
 }
 
 AstralSave :: (app: *InnerBreeze, output: *u8, capacity: s64) {
     seconds := AstralElapsed()
-    if seconds >= 60 && data_save_session_path_for_activity(*seconds, 1, 0,
-        EXERCISE_ASTRAL_PROJECTION, output, capacity) != 0 {
+    if seconds < 60 {
+        return
+    }
+    details := SessionDetails.{.version = SessionDetailsVersion, .duration_seconds = seconds}
+    if !astral_legacy {
+        unused AppCopyText(TextFromCString(*astral_session_practice.id[0]), details.item[:])
+        unused AppCopyText(AstralText(TextFromCString(*astral_session_practice.title_key[0])), details.title[:])
+    }
+    // Storage always returns an identity, including exits which do not show
+    // a results page. Keep that output alive for the duration of the save.
+    saved_path: [FS_PATH_MAX]u8
+    if output == null || capacity <= 0 {
+        output = *saved_path[0]
+        capacity = size_of(type_of(saved_path))
+    }
+    if data_save_session_path_with_details(*seconds, 1, 0, EXERCISE_ASTRAL_PROJECTION,
+        *details, output, capacity) != 0 {
         sync_habits_for_activity(app, EXERCISE_ASTRAL_PROJECTION)
         unused app_auto_sync(app)
     }
@@ -134,7 +221,17 @@ AstralAdvanceElapsed :: (app: *InnerBreeze, milliseconds: s32) {
     if AstralActive(app) == 0 {
         return
     }
-    astral_clock = AstralAdvance(astral_clock, milliseconds, app.session_paused != 0)
+    astral_clock = AstralAdvanceSession(astral_clock, milliseconds, app.session_paused != 0,
+        AstralDuration())
+    if AstralDuration() > 0 && AstralRemaining() == 0 {
+        result_path: [FS_PATH_MAX]u8
+        AstralSave(app, *result_path[0], size_of(type_of(result_path)))
+        send_session_complete(app)
+        AstralStop(app)
+        app_prepare_session_results(app, EXERCISE_ASTRAL_PROJECTION,
+            AstralElapsed(), 0, null, null, 0, *result_path[0])
+        app_switch_screen(app, ScreenResults)
+    }
 }
 
 AstralCueKey :: () -> string {
@@ -189,18 +286,22 @@ AstralTextAsset :: (code: string) -> AssetView {
     return AssetRead(TextUntilNul(path[:]))
 }
 
-AstralCueText :: () -> string {
+AstralText :: (key: string) -> string {
     localized := AstralTextAsset(LocaleActiveCode())
     english := AstralTextAsset("en")
-    return LocaleResolveCatalog(localized.data, english.data, AstralCueKey())
+    return LocaleResolveCatalog(localized.data, english.data, key)
+}
+
+AstralCueText :: () -> string {
+    return AstralText(AstralCueKey())
 }
 
 AstralTimeText :: (output: []u8) -> string {
     cursor: s32 = 0
     output[0] = cast(u8)0
-    unused TextBufferAppendNumber(output, *cursor, AstralElapsed() / 60)
+    unused TextBufferAppendNumber(output, *cursor, (ifx astral_legacy then AstralElapsed() else AstralRemaining()) / 60)
     unused TextBufferAppendByte(output, *cursor, cast(u8)58)
-    seconds := AstralElapsed() % 60
+    seconds := (ifx astral_legacy then AstralElapsed() else AstralRemaining()) % 60
     if seconds < 10 {
         unused TextBufferAppendByte(output, *cursor, cast(u8)48)
     }
@@ -223,7 +324,8 @@ AstralSessionFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
 
 AstralDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     top := PracticeTitleBarHeight()
-    if PracticeTitleBar(app, LocaleText("exercise_astral_projection"), top) {
+    if PracticeTitleBar(app, ifx astral_legacy then LocaleText("exercise_astral_projection") else
+        AstralText(TextFromCString(*astral_session_practice.title_key[0])), top) {
         AstralRequestExit(app)
     }
     if AstralExitPrompt(app) != 0 {
@@ -239,6 +341,7 @@ AstralDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     frame := PracticeMovementFrameFor(app, EXERCISE_ASTRAL_PROJECTION, top)
     frame.time = FrameTextHold(*app.ui.frame_text, AstralTimeText(time[:]))
     frame.cue = AstralCueText()
+    frame.progress = ifx AstralDuration() > 0 then AstralElapsed() * 1000 / AstralDuration() else 0
     frame.scroll = astral_scroll
     frame = PracticeMovementRun(app, frame, AstralSessionFigure)
     astral_scroll = frame.scroll

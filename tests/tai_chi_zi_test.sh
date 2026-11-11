@@ -15,6 +15,10 @@ from pathlib import Path
 import sys
 import zipfile
 root, work = map(Path, sys.argv[1:])
+sys.path.insert(0, str(root / 'scripts'))
+from tai_chi_preview import preview_course
+preview, _ = preview_course((root / 'build/packages/practices/taichi/course.tch').read_bytes())
+(work / 'course-preview.tch').write_bytes(preview)
 with zipfile.ZipFile(work / 'course.zip', 'w', zipfile.ZIP_DEFLATED,
                      compresslevel=9) as archive:
     archive.writestr('course.tch', (root / 'build/packages/practices/taichi/course.tch').read_bytes())

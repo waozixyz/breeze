@@ -100,10 +100,39 @@ voice-audio-play-test: $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(RAYLIB_A) $(A
 	sh tests/voice_audio_play_test.sh $(ZIRAN_BUILD_DIR)/bin $(RAYLIB_DIR) \
 		$(RAYLIB_A) $(AUDIO_OPUS_A)
 
+# Defaults to every supported locale; select a completed set for focused local
+# validation with ASTRAL_NARRATION_LOCALE=pt. Missing recordings fail explicitly.
+ASTRAL_NARRATION_LOCALE ?= all
+.PHONY: astral-voice-audio-play-test
+astral-voice-audio-play-test: $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(RAYLIB_A) $(AUDIO_OPUS_A)
+	sh tests/voice_audio_play_test.sh $(ZIRAN_BUILD_DIR)/bin $(RAYLIB_DIR) \
+		$(RAYLIB_A) $(AUDIO_OPUS_A) build/packages/practices astral $(ASTRAL_NARRATION_LOCALE)
+
 .PHONY: practice-narration-keys-test
+.PHONY: ming-narration-test
+ming-narration-test:
+	python3 tests/narration_segments_test.py
+	python3 tests/ming_narration_test.py
+	python3 tests/ming_verification_test.py
+	python3 tests/narration_attempts_test.py
+	python3 tests/narration_speaker_context_test.py
+	python3 tests/context_narration_migration_test.py
+	python3 tests/portuguese_count_context_test.py
+	python3 tests/narration_encoding_headroom_test.py
+	python3 tests/local_narration_pipeline_test.py
+	python3 tests/local_narration_retry_test.py
+	python3 tests/local_voice_adapters_test.py
+	python3 tests/retired_locales_test.py
+
+# Real waveform/cache/PCM fixtures need numpy and soundfile; no model is loaded.
+.PHONY: ming-segment-pipeline-test
+ming-segment-pipeline-test:
+	python3 tests/ming_segment_pipeline_test.py
+
 .PHONY: astral-projection-test
 astral-projection-test: $(ZI2C_BIN)
 	sh tests/astral_projection_test.sh $(ZIRAN_BUILD_DIR)/bin
+	python3 tests/astral_narration_test.py
 
 .PHONY: workout-test
 workout-test: $(ZI2C_BIN)
@@ -133,3 +162,15 @@ practice-narration-keys-test:
 .PHONY: practice-narration-snapshot-test
 practice-narration-snapshot-test:
 	python3 tests/practice_narration_snapshot_test.py
+
+.PHONY: astral-projection-ui-test
+astral-projection-ui-test: $(TARGET)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		-u GDK_DISPLAY -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/astral_projection_ui_test.py $(abspath $(TARGET))
+
+.PHONY: tai-chi-preview-test
+tai-chi-preview-test:
+	python3 tests/tai_chi_preview_test.py
+
+test: tai-chi-preview-test

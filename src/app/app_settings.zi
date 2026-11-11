@@ -37,6 +37,7 @@ ProfileEntity :: #import "entity/model";
 #import, file "../platform/environment.zi";
 #import, file "../platform/telegram_bridge.zi";
 #import, file "../platform/web_storage.zi";
+#import "kryon/layout"
 #import "layout"
 
 #import, file "audio_selection.zi";
@@ -274,12 +275,10 @@ save_settings :: (app: *InnerBreeze) {
     save_setting_int("launcher_grid_view", ifx app.launcher_grid_view then 1 else 0)
     save_setting_int("lumi_guides_seen", app.lumi_guides_seen)
     save_setting_int("exercise_manual_seen_mask", app.exercise_manual_seen_mask)
-    save_setting_int("style_pack", app.style_index)
     save_setting_int("theme", app.theme_id)
     save_setting_int("theme_source", app.theme_source)
     save_setting_int("dark_mode", app.dark_mode)
     save_setting_int("theme_mode", app.theme_mode)
-    save_setting_int("style_lightfield_glow", ifx app.lightfield_glow_enabled != 0 then 1 else 0)
     save_setting_int("orientation_mode", app.orientation_mode)
     save_setting_int("ui_scale", app.ui_scale_tenths)
     save_setting_int("navigation_mode", app.navigation_mode)
@@ -349,6 +348,7 @@ save_settings :: (app: *InnerBreeze) {
     save_setting_int("sun_salutation_breath_tempo", SUN_SALUTATION_TEMPO_VERSION)
     save_setting_int("sun_salutation_voice", app.sun_salutation_voice)
     unused SettingsStoreText("sun_salutation_narration_language", app.sun_salutation_narration_language[:])
+    unused SettingsStoreText("astral_projection_exercise", app.astral_projection_exercise[:])
     unused SettingsStoreText("astral_projection_narration_language", app.astral_projection_narration_language[:])
     unused SettingsStoreText("tai_chi_narration_language", app.tai_chi_narration_language[:])
     save_setting_int("tai_chi_character", app.tai_chi.character)
@@ -455,6 +455,11 @@ load_language_setting :: (app: *InnerBreeze, settings_missing: s32) {
     app.language_needs_save = 0
     if had_saved_code  && LocaleUse(AppTextFromCString(*app.language[0], 16)) {
         app.language_system = 0
+    } else if had_saved_code {
+        unused LocaleUse("en")
+        unused CopyCString("en", app.language[:])
+        app.language_system = 0
+        app.language_needs_save = 1
     } else {
         preferred := LocalePreferred(LocaleSystemPreferences())
         if !LocaleUse(preferred) {
@@ -465,6 +470,15 @@ load_language_setting :: (app: *InnerBreeze, settings_missing: s32) {
         app.language_needs_save = ifx had_saved_code then 1 else 0
     }
     app.language_index = LocaleActiveIndex()
+}
+
+migrate_narration_language_setting :: (choice: []u8) -> bool {
+    code := AppTextFromCString(*choice[0], cast(s32)choice.count)
+    if code.count > 0 && !LocaleSupports(code) {
+        unused CopyCString("en", choice)
+        return true
+    }
+    return false
 }
 
 load_bool_setting :: (dst: *s32, key: string, fallback: s32) {
@@ -655,7 +669,6 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
     if music_max < 0 {
         music_max = 0
     }
-    load_clamped_setting(*app.style_index, "style_pack", 1, 1, 3)
     load_clamped_setting(*app.theme_id, "theme", ThemeDefaultId, 0,
         ThemeCount - 1)
     theme_source_default := default_theme_source()
@@ -667,13 +680,6 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
         APP_THEME_SOURCE_SYSTEM)
     load_clamped_setting(*app.theme_mode, "theme_mode",
         APP_THEME_DARK, APP_THEME_SYSTEM, APP_THEME_DARK)
-    if SettingsCacheContains("style_lightfield_glow") {
-        load_bool_setting(*app.lightfield_glow_enabled,
-            "style_lightfield_glow", 0)
-    } else {
-        load_bool_setting(*app.lightfield_glow_enabled, "glow_effects", 0)
-        save_setting_int("style_lightfield_glow", app.lightfield_glow_enabled)
-    }
     load_clamped_setting(*app.orientation_mode,
         "orientation_mode", APP_ORIENTATION_SYSTEM,
         APP_ORIENTATION_SYSTEM, APP_ORIENTATION_SENSOR)
@@ -735,8 +741,16 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
     app.sun_salutation = SalutationMigrateTempo(app.sun_salutation, breath_tempo)
     load_clamped_setting(*app.sun_salutation_voice, "sun_salutation_voice", -1, -1, 1)
     unused SettingsCacheCopyText("sun_salutation_narration_language", app.sun_salutation_narration_language[:])
+    narration_language_migrated := migrate_narration_language_setting(app.sun_salutation_narration_language[:])
+    unused SettingsCacheCopyText("astral_projection_exercise", app.astral_projection_exercise[:])
     unused SettingsCacheCopyText("astral_projection_narration_language", app.astral_projection_narration_language[:])
+    if migrate_narration_language_setting(app.astral_projection_narration_language[:]) {
+        narration_language_migrated = true
+    }
     unused SettingsCacheCopyText("tai_chi_narration_language", app.tai_chi_narration_language[:])
+    if migrate_narration_language_setting(app.tai_chi_narration_language[:]) {
+        narration_language_migrated = true
+    }
     load_clamped_setting(*app.tai_chi.character,
         "tai_chi_character", 0, 0, TAI_CHI_CHARACTER_COUNT - 1)
     load_clamped_setting(*app.tai_chi.view,
@@ -826,6 +840,9 @@ app_load_settings :: (app: *InnerBreeze) -> s32 {
     app.exercise_manual_seen_mask =
     manual_seen_mask & ((1 << EXERCISE_COUNT) - 1)
     load_language_setting(app, settings_missing)
+    if narration_language_migrated {
+        app.language_needs_save = 1
+    }
     // Preselect audio for new profiles, preserving every saved choice.
     // Downloads still wait for confirmation in optional audio setup.
     load_bool_setting(*app.voice_narration_enabled, "voice_narration_enabled", 1)

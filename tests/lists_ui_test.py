@@ -53,7 +53,7 @@ with contextlib.ExitStack() as stack:
         [BINARY, "--screenshot", str(temporary / "start.png"),
          "--bundle", str(ROOT / "build/inbe-full.zx"), "--feature", "lists",
          "--screenshot-scene", "lists", "--screenshot-width", "900", "--screenshot-height", "720",
-         "--screenshot-ui-scale", "10", "--screenshot-theme", "0", "--screenshot-dark", "1"],
+         "--screenshot-ui-scale", "2", "--screenshot-theme", "0", "--screenshot-dark", "1"],
         env=os.environ | {"APP_SHOT_WINDOW": "1"} | driver.environment(),
         stdout=log, stderr=subprocess.STDOUT)
     database = Path(f"/tmp/inbe-screenshot-{app.pid}/inbe.db")
@@ -143,25 +143,56 @@ with contextlib.ExitStack() as stack:
         shown = [label for label in driver.labels() if ALARMING.search(label)]
         assert not shown, f"FAIL {message}: {shown} ({TEST_DIR})"
 
-    # A short swipe right finishes an item, a long swipe edits it, and
-    # a swipe left deletes it. Undo follows the real bundle and typed
-    # persistence bridge, preserving the original completed item and its
-    # comment rather than creating a copy.
-    def swipe(title, share):
-        """Drag the item's row sideways by this share of its width."""
+    # A short swipe right finishes an item, a long swipe edits it, and a swipe
+    # left deletes it. Distances are logical pixels scaled with the UI, never
+    # fractions of the row width.
+    def swipe(title, pixels, direction=1):
+        """Drag a row by a fixed logical-pixel distance."""
         row = driver.wait(label=title, role="button")
         x, y = UiDriver.center(row)
-        driver.drag((x, y), (x + row["visible_width"] * share, y), steps=10)
+        scale = row["visible_width"] / row["width"]
+        driver.drag((x, y), (x + direction * pixels * scale, y), steps=10)
         driver.wait_idle(frames=3, timeout=2)
+
+    def resize_window(width, height):
+        window = find_window()
+        add_button = driver.wait(label="Add", role="button")
+        ui_scale = add_button["visible_width"] / add_button["width"]
+        before = add_button["visible_width"]
+        subprocess.run(["xdotool", "windowsize", window,
+                        str(round(width * ui_scale)), str(round(height * ui_scale))], check=True)
+        wait_for(lambda: driver.wait(label="Add", role="button")["visible_width"] != before,
+                 "resizing the native window did not reach the UI")
+
+    def edit_task(title):
+        """Press the Edit button on this title's row."""
+        row = driver.wait(label=title, role="button")
+        row_y = row["visible_y"] + row["visible_height"] / 2
+        edit = min((button for button in driver.find(label="Edit", role="button", visible=True)),
+                   key=lambda button: abs(button["visible_y"] + button["visible_height"] / 2 - row_y))
+        driver.press(key=edit["key"])
+
+    def right_click(node):
+        x, y = UiDriver.center(node)
+        subprocess.run(["xdotool", "mousemove", "--window", find_window(),
+                        str(round(x)), str(round(y)), "click", "3"], check=True)
+
+    def clear_field(value):
+        for _ in range(len(value)):
+            driver.key("backspace")
 
     original = sql("SELECT id,comment,sort_order FROM elist_items WHERE title='Fresh fruit' AND deleted_at=0")
     assert not driver.find(role="checkbox", visible=True), "items still have checkboxes"
-    assert not [node for node in driver.tree() if node["visible"] and node["label"] == "Rename" and node["y"] > 160], \
-        "items still have edit buttons"
+    assert driver.wait(label="Edit", role="button"), "items have no accessible edit button"
+    right_click(driver.wait(label="Fresh fruit", role="button"))
+    driver.wait_idle(frames=3)
+    driver.wait(label="Check", role="selectable")
+    driver.press(label="Edit", role="selectable")
+    driver.wait(label="Task", role="text")
+    driver.press(label="Cancel", role="button")
+    driver.wait(label="Fresh fruit", role="button")
     driver.press(label="Fresh fruit", role="button")
     driver.wait_idle(frames=4)
-    assert sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 0, "a tap completed the item"
-    swipe("Fresh fruit", 0.2)
     wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 1,
              "a short swipe did not finish the item")
     # As in 1List, finished items leave the list; a pull down on the items
@@ -174,30 +205,31 @@ with contextlib.ExitStack() as stack:
     driver.drag((pull_x, pull_y), (pull_x, pull_y + 260), steps=12)
     driver.wait(label="Fresh fruit", role="button")
     assert not driver.find(contains="Finished", visible=True), "a heading names the finished items"
-    # A short swipe slides back and changes nothing.
-    swipe("Fresh fruit", -0.2)
-    swipe("Fresh fruit", 0.05)
-    assert driver.find(role="text_field", value="", visible=True), "a short swipe right began editing"
-    assert sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) == 0, "a short swipe left deleted"
-    # A swipe right turns the item's own row into its field, with a check.
-    swipe("Fresh fruit", 0.6)
-    in_row = driver.wait(role="text_field", value="Fresh fruit")
-    assert in_row["y"] > add_button["y"] + add_button["height"], "the item is edited in the top field, not its row"
-    wait_for(lambda: driver.find(role="text_field", value="Fresh fruit", visible=True)[0]["focused"],
-             "the item's field does not take the keyboard")
-    driver.wait(label="Save", role="button")
-    assert not driver.find(label="Delete item", role="button", visible=True), "Edit still shows a delete button"
-    # Escape leaves the row as it was.
-    subprocess.run(["xdotool", "windowfocus", find_window()], check=True)
-    subprocess.run(["xdotool", "keydown", "Escape"], check=True)
-    time.sleep(.12)
-    subprocess.run(["xdotool", "keyup", "Escape"], check=True)
+    # A fixed short distance reopens the item; a fixed long distance opens the
+    # custom-task modal, and Cancel leaves both fields unchanged.
+    swipe("Fresh fruit", 100)
+    wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 0,
+             "a fixed short swipe did not reopen the item")
+    swipe("Fresh fruit", 200)
+    driver.wait(label="Task", role="text")
+    driver.wait(role="text_area")
+    driver.press(label="Cancel", role="button")
     driver.wait(label="Fresh fruit", role="button")
-    assert sql("SELECT title FROM elist_items WHERE id=?", (original[0],)) == "Fresh fruit", "Escape changed the item"
-    swipe("Fresh fruit", -0.6)
+    assert sql("SELECT title,comment FROM elist_items WHERE id=?",
+               (original[0],)) == ("Fresh fruit", original[1]), "Cancel changed the task"
+    # Dragging past the combined action span still opens the same edit stage.
+    swipe("Fresh fruit", 600)
+    driver.press(role="text_area")
+    clear_field(sql("SELECT comment FROM elist_items WHERE id=?", (original[0],)))
+    driver.type("Pick organic fruit 茶é")
+    driver.press(label="Save", role="button")
+    wait_for(lambda: sql("SELECT comment FROM elist_items WHERE id=?",
+                         (original[0],)) == "Pick organic fruit 茶é",
+             "the custom-task description did not round-trip through the native modal")
+    swipe("Fresh fruit", -300)
     wait_for(lambda: sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) > 0,
              "a swipe left did not delete the item")
-    # Deleting leaves Edit: the field is empty again, ready to add.
+    # Deleting leaves the quick-add field empty again.
     driver.wait(label="Add", role="button")
     assert driver.find(role="text_field", value="", visible=True), \
         f"the deleted item's name stayed in the field: {driver.find(role='text_field')}"
@@ -206,23 +238,56 @@ with contextlib.ExitStack() as stack:
     wait_for(lambda: sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) == 0,
              "Undo did not restore the item")
     restored = sql("SELECT id,comment,sort_order,done FROM elist_items WHERE title='Fresh fruit' AND deleted_at=0")
-    assert restored == (*original, 1), ("Undo changed the item", original, restored)
+    assert restored == (*original, 0), ("Undo changed the item", original, restored)
     assert sql("SELECT COUNT(*) FROM elist_items WHERE title='Fresh fruit'") == 1, "Undo made a duplicate"
-    swipe("Fresh fruit", 0.2)
+    swipe("Fresh fruit", 100)
+    wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 1,
+             "a short swipe did not finish the item after undo")
+
+    # The same fixed distance acts after a native resize; the row's new width
+    # never changes the threshold or the long edit stage.
+    resize_window(700, 560)
+    swipe("Fresh fruit", 100)
     wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 0,
-             "a short swipe did not reopen the item")
+             "the short action changed after resizing")
+    swipe("Fresh fruit", 200)
+    driver.wait(label="Task", role="text")
+    driver.press(label="Cancel", role="button")
+    resize_window(900, 720)
 
     driver.press(label="Weekend", role="button")
     long_task = "Prepare documentation and review the remaining details. " * 9 + "茶é"
     add(long_task)
     wait_for(lambda: sql("SELECT COUNT(*) FROM elist_items WHERE title=?", (long_task,)) == 1,
              "long UTF-8 todo was truncated or rejected")
-    swipe(long_task, .6)
+    edit_task(long_task)
     driver.wait(role="text_field", value=long_task)
     driver.type("!")
     driver.press(label="Save", role="button")
     wait_for(lambda: sql("SELECT COUNT(*) FROM elist_items WHERE title=?", (long_task + "!",)) == 1,
              "long UTF-8 todo did not retain its complete edit")
+
+    # The modal also creates a prioritized task. At this short viewport its
+    # outer modal scroll must reveal Save without clipping either action.
+    resize_window(430, 360)
+    driver.press(label="Custom", role="button")
+    driver.wait(label="Task", role="text")
+    driver.press(role="text_field")
+    driver.type("Viewport plan 茶é")
+    driver.press(role="text_area")
+    driver.type("Save after scrolling")
+    driver.press(key=6551, role="dropdown")
+    driver.press(label="A", role="option")
+    modal = driver.wait(role="modal")
+    wheel_x = modal["visible_x"] + 8
+    wheel_y = modal["visible_y"] + modal["visible_height"] - 16
+    for _ in range(8):
+        driver.pointer(wheel_x, wheel_y, wheel=-4)
+        driver.wait_idle(frames=2)
+    driver.press(key=6553, role="button")
+    wait_for(lambda: sql("SELECT comment FROM elist_items WHERE title='(A) Viewport plan 茶é'") ==
+             "Save after scrolling", "a short viewport hid the modal's Save action")
+    resize_window(900, 720)
     add("Weekend task")
     wait_for(lambda: item_list("Weekend task"), "the task was not added")
     assert item_list("Weekend task") == "Weekend", f"FAIL tab selects destination list: got {item_list('Weekend task')!r}"
@@ -273,7 +338,7 @@ with contextlib.ExitStack() as stack:
         driver.pointer(450, 600, wheel=-4)
         driver.wait_idle(frames=3)
     driver.wait(label=correction, role="button")
-    swipe(correction, .6)
+    edit_task(correction)
     field = driver.wait(role="text_field", value=correction)
     x = field["visible_x"] + 100
     y = field["visible_y"] + field["visible_height"] / 2
@@ -519,4 +584,4 @@ with contextlib.ExitStack() as stack:
     command = json.loads(sql("SELECT json FROM social_snapshots WHERE kind LIKE 'lists.attempt/%/http://127.0.0.1:11'"))
     assert command["action"] == "accept" and command["invitation_id"] == "invitation-fixture", command
     assert sql(f"SELECT COUNT(*) FROM elist_lists WHERE id='{SHARED_LIST}'") == 0
-    print(f"PASS scrolled middle correction with accents, item deletion and identity-preserving undo, list tabs, private task destination, friend invitation, inbox acceptance and durable delivery ({TEST_DIR})")
+    print(f"PASS fixed-width task swipes, scrollable custom tasks, middle correction with accents, identity-preserving undo, list tabs, friend invitation and durable delivery ({TEST_DIR})")

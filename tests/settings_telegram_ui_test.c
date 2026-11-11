@@ -359,7 +359,7 @@ static void assert_complete_review(InnerBreeze *app, const char *expected, bool 
 }
 int main(void)
 {
-    InnerBreeze app = {0};
+    static InnerBreeze app = {0};
     app.ui.session = SessionOpen();
     lumi_telegram_connection.linked = true;
     lumi_authorization_ready = true;

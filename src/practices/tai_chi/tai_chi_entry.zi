@@ -11,6 +11,8 @@ c :: #system_library "c";
 #import, file "../../core/types.zi";
 #import, file "../../app/activity_start.zi";
 #import, file "tai_chi_course.zi";
+#import, file "../../../apps/practice/course_access.zi";
+#import, file "../../storage/practice_unlocks.zi";
 #import, file "tai_chi_rules.zi";
 #import, file "../practice_narration.zi";
 #import, file "tai_chi_timeline.zi";
@@ -22,6 +24,8 @@ using ModalType;
 meditation_music_start_session :: (app: *InnerBreeze) #foreign c;
 
 tai_chi_course_generation: u64;
+tai_chi_course_owned: bool;
+tai_chi_unlock_requested: bool;
 // Transient chooser state; character and course progress remain in settings.
 tai_chi_selected_lesson: s32;
 tai_chi_course_scroll: s32;
@@ -34,22 +38,47 @@ tai_chi_customize_scroll: s32;
 #program_export
 TaiChiCourseLoad :: () -> bool {
     generation := AssetGeneration()
-    if tai_chi_course.loaded && tai_chi_course_generation == generation {
+    owned := UnlockOwned(UnlockTaiChi)
+    if tai_chi_course.loaded && tai_chi_course_generation == generation && tai_chi_course_owned == owned {
         return true
     }
     tai_chi_course.loaded = false
-    asset := AssetRead(TAI_CHI_COURSE_PATH)
+    asset := AssetRead(ifx owned then TAI_CHI_COURSE_PATH else "assets/practices/taichi-preview/course.zip")
+    // A new owner can keep using the preview while the full pack downloads.
+    // Older installed packages can use their existing complete course; the
+    // same item guard still applies before a timeline starts.
+    if !asset.found {
+        asset = AssetRead(ifx owned then "assets/practices/taichi-preview/course.zip" else TAI_CHI_COURSE_PATH)
+    }
     if !asset.found {
         return false
     }
     tai_chi_course_generation = generation
+    tai_chi_course_owned = owned
     return TaiChiCourseParseArchive(*tai_chi_course, asset.data)
+}
+
+// Starting, previewing and resuming all use the same item boundary.
+TaiChiItemAllowed :: (item: s32) -> bool {
+    if item < 0 || item >= tai_chi_course.item_count {
+        return false
+    }
+    row := tai_chi_course.items[item]
+    return row.source != TAI_CHI_SOURCE_LOCKED &&
+        (TaiChiItemFree(TaiChiCourseString(row.id)) || UnlockOwned(UnlockTaiChi))
 }
 
 // Plays `item` of the course.
 #program_export
 tai_chi_practice_start_item :: (app: *InnerBreeze, item: s32) {
     if app == null || !ActivityStartAllowed() || !TaiChiCourseLoad() {
+        return
+    }
+    if !TaiChiItemAllowed(item) {
+        tai_chi_unlock_requested = true
+        if app.modal.type != cast(ModalType)ModalTaiChiCourse {
+            app_open_modal(app, cast(ModalType)ModalTaiChiCourse)
+        }
         return
     }
     mark_exercise_manual_seen(app, EXERCISE_TAI_CHI)
@@ -73,6 +102,7 @@ tai_chi_practice_start :: (app: *InnerBreeze) {
     if app == null || !TaiChiCourseLoad() {
         return
     }
+    tai_chi_unlock_requested = false
     next := TaiChiItemToPlay(app.tai_chi)
     tai_chi_selected_lesson = 0
     for index: cast(s32)0..tai_chi_course.lesson_count - 1 {

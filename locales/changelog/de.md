@@ -2,8 +2,8 @@
 
 ## [Unreleased]
 
-- Fotos wird über Apps heruntergeladen; Lumi zeigt vollständiges Listenfeedback einmal zur Prüfung, und Listen unterstützt längere Aufgaben und das Erledigen per Wischgeste.
-- Beim Wechseln der Praxis-Tabs in der Seitennavigation verschiebt sich der Bildschirm nicht mehr.
+- Fotos aus Apps; Lumi zeigt Listenfeedback einmal komplett; Listen: längere Aufgaben, Erledigen per Wischen.
+- Übungstabs verschieben den Bildschirm nicht mehr. Vor Start aus sechs Astralübungen wählen. Oberfläche in zehn Sprachen.
 - Sprachpakete für Übungen sind etwa ein Drittel kleiner.
 
 ## [2.1.63] - 2026-11-05

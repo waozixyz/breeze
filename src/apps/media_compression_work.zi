@@ -1,0 +1,119 @@
+// A single bounded job owns all codec input/output. The UI never reads
+// results before ThreadFinished joins it, and never starts a second job.
+#import "kryon/image_preview"
+#import "std/byte_text_linux"
+#import, file "package_files.zi";
+#import, file "media_metadata.zi";
+#import, file "diary_store.zi";
+
+MEDIA_COMPRESSION_THREADS :: !#defined(PLATFORM_WEB)
+#if MEDIA_COMPRESSION_THREADS {
+    #if #defined(_WIN32) {
+        #import "std/thread_windows"
+    } else {
+        #import "std/thread_linux"
+    }
+}
+
+MediaCompressionWork :: struct {
+    owner: string
+    hash: string
+    source: string
+    quality: s32
+    generation: s32
+    encoded: ImageAVIFResult
+    before: ImagePreviewRGBAResult
+    after: ImagePreviewRGBAResult
+    ready: bool
+    #if MEDIA_COMPRESSION_THREADS {
+        thread: Thread
+    }
+}
+
+media_compression_c :: #system_library "c";
+MediaCompressionAllocate :: (size: usize) -> *void #foreign media_compression_c "malloc";
+MediaCompressionRelease :: (memory: *void) #foreign media_compression_c "free";
+
+MediaCompressionWorkRun :: (argument: *void) {
+    work := cast(*MediaCompressionWork)argument
+    format := DiaryImageFormat(work.source)
+    extension := PackageText(".", format)
+    defer { PackageFree(extension) }
+    orientation := MediaOrientationOf(work.source, format)
+    work.before = ImagePreviewRGBA(work.source, extension, 512, orientation)
+    if !work.before.is_ok {
+        return
+    }
+    work.encoded = ImageCompressAVIF(work.source, extension, orientation, work.quality)
+    if work.encoded.is_ok {
+        work.after = ImagePreviewRGBA(work.encoded.data, ".avif", 512, orientation)
+    }
+}
+
+MediaCompressionWorkReady :: (work: *MediaCompressionWork) -> bool {
+    if work == null {
+        return false
+    }
+    #if MEDIA_COMPRESSION_THREADS {
+        if !work.ready {
+            work.ready = ThreadFinished(*work.thread)
+        }
+    }
+    return work.ready
+}
+
+// A quality change, closing the dialog or switching accounts invalidates
+// the generation before any completed pixels can be displayed or applied.
+MediaCompressionWorkCurrent :: (work: *MediaCompressionWork, owner: string,
+    hash: string, generation: s32) -> bool {
+    return work != null && owner.count > 0 && work.owner == owner &&
+        work.hash == hash && work.generation == generation
+}
+
+MediaCompressionWorkSuccessful :: (work: *MediaCompressionWork) -> bool {
+    return work != null && work.ready && work.before.is_ok &&
+        work.after.is_ok && work.encoded.is_ok
+}
+
+MediaCompressionWorkFree :: (work: *MediaCompressionWork) {
+    if work == null {
+        return
+    }
+    // Normal UI cleanup polls first. Joining here also makes shutdown and
+    // failed-start cleanup safe without ever freeing a running codec job.
+    #if MEDIA_COMPRESSION_THREADS {
+        ThreadWait(*work.thread)
+    }
+    ImageAVIFFree(*work.encoded)
+    ImagePreviewRGBAFree(*work.before)
+    ImagePreviewRGBAFree(*work.after)
+    PackageFree(work.owner)
+    PackageFree(work.hash)
+    PackageFree(work.source)
+    MediaCompressionRelease(cast(*void)work)
+}
+
+MediaCompressionWorkStart :: (owner: string, hash: string, source: string,
+    quality: s32, generation: s32) -> *MediaCompressionWork {
+    work := cast(*MediaCompressionWork)MediaCompressionAllocate(size_of(MediaCompressionWork))
+    if work == null {
+        return null
+    }
+    work.* = MediaCompressionWork.{}
+    work.owner = PackageText(owner, "")
+    work.hash = PackageText(hash, "")
+    work.source = PackageText(source, "")
+    work.quality = quality
+    work.generation = generation
+    #if MEDIA_COMPRESSION_THREADS {
+        procedure: ThreadProcedure = MediaCompressionWorkRun
+        if !ThreadStart(*work.thread, procedure, cast(*void)work) {
+            MediaCompressionWorkFree(work)
+            return null
+        }
+    } else {
+        MediaCompressionWorkRun(cast(*void)work)
+        work.ready = true
+    }
+    return work
+}

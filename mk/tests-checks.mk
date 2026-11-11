@@ -6,8 +6,12 @@ fdroid-build-test:
 
 .SILENT: package-check test font-bundle-check audio-test-fixture-check embedded-image-assets-check
 
-package-check:
+package-check: package-sources-test
 	sh scripts/check-packages.sh
+
+.PHONY: package-sources-test
+package-sources-test:
+	python3 tests/package_sources_test.py
 
 clean-text-api-check:
 	python3 scripts/check-clean-text-api.py src tests

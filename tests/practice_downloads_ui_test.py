@@ -148,7 +148,7 @@ def visible_label(contains):
     return driver.find(contains=contains, visible=True)
 
 
-with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
+with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
     profile = Path(temporary)
     # Lumi's guide narration downloads by itself in the app's language; its
     # copy is already here, so the test reaches no server.
@@ -191,7 +191,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
             # Every meditation practice has How to and Customize.
             assert buttons('How to') and buttons('Customize'), (name, screen_text())
         # Astral Projection's Customize offers its music and narration, in its
-        # one voice, and How to explains the session.
+        # one voice, and How to explains the selected foundation exercise.
         driver.press(label='Customize', role='button')
         driver.wait(label='Background music')
         assert driver.find(label='Voice narration'), screen_text()
@@ -199,9 +199,13 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         driver.press(label='Back', role='button')
         driver.wait(label='Start Practice', role='button')
         driver.press(label='How to', role='button')
-        driver.wait(contains='Lie down somewhere quiet')
+        driver.wait(contains='Practice small circular tactile imaging.')
         driver.press(label='Back', role='button')
+        # Back returns to the pre-start choices; Close returns to its home card.
+        driver.wait(label='Foundation Touch', role='button')
+        driver.press(label='Close', role='button')
         driver.wait(label='Start Practice', role='button')
+        driver.wait(label='Customize', role='button')
         # A swipe past a tab's last practice goes on to the next tab.
         title = driver.find(contains='Astral Projection', visible=True)[0]
         x, y = UiDriver.center(title)
@@ -222,10 +226,10 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
         # A tab shows the practice it showed last.
         select_tab('Meditation')
         driver.wait(contains='Astral Projection')
-        # Tai Chi is offered at its price where it can be bought.
+        # Tai Chi opens the public basics before an account buys the full course.
         select_tab('Martial arts')
         driver.wait(contains='Tai Chi')
-        assert buttons('Unlock') and not buttons('Start Practice'), screen_text()
+        assert buttons('Start Practice') and not buttons('Unlock'), screen_text()
     finally:
         stop(process)
     with sqlite3.connect(profile / 'inbe.db') as database:
@@ -257,14 +261,14 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
     shutil.copyfile(ROOT / 'build/practice-content/taichi.zx', cache / 'practice-taichi.zx')
     shutil.copyfile(ROOT / 'build/practice-content/taichi.en.zx', cache / 'practice-taichi.en.zx')
     shutil.copyfile(ROOT / 'build/practice-content/taichi.en.male.zx', cache / 'practice-taichi.en.male.zx')
-    # A Tai Chi pack on the device without an account that bought it stays
-    # locked: its card offers Unlock at its price.
+    # A cached paid pack grants no ownership. The home still opens the public
+    # preview, whose paid cards require an explicit unlock.
     process, window = launch(profile, 'taichi-unowned', 1280, 900)
     try:
         driver.wait(contains='Tai Chi')
         assert selected_tab() == 'Martial arts', home_tabs()
-        assert buttons('Unlock') and not buttons('Start Practice'), screen_text()
-        assert 'Dew' in buttons('Unlock')[0]['label'], screen_text()
+        assert buttons('Start Practice') and not buttons('Unlock'), screen_text()
+        assert 'Dew' not in screen_text(), screen_text()
         assert not buttons('Uninstall'), screen_text()
     finally:
         stop(process)
@@ -303,7 +307,9 @@ with tempfile.TemporaryDirectory(prefix='inbe-downloads-ui-') as temporary:
                 assert 'Plays in' not in text and 'Downloading' not in text, text
                 driver.press(label='English', role='dropdown')
                 driver.wait(label='Deutsch')
-                driver.wait(label='Italiano')
+                driver.wait(label='Português')
+                languages = driver.labels(visible=False)
+                assert 'Italiano' not in languages and 'Bahasa Indonesia' not in languages, languages
         finally:
             stop(process)
     # Sun Salutation speaks in its own free packs; a man speaks with the male voice.

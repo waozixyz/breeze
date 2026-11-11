@@ -1,25 +1,28 @@
-// Astral Projection's How to and Customize pages: the two-page guide, which
-// Practices draws, and the music and voice narration it plays with.
-manual_host :: #system_library "c";
-app_start_practice_from_ui :: (app: *InnerBreeze, id: s32) -> bool #foreign manual_host "practice_actions_app_start_practice_from_ui";
+// Astral Projection's pre-start exercise choices, selected guide and the
+// existing music and narration settings.
 #import "geometry"
+#import, file "astral_scene_view.zi";
+#import "modal_props"
+#import "kryon/modal_frame_widget"
 #import "guide_pager"
 #import "drawing_props"
 #import "image_props"
-#import "image_widget"
+#import "kryon/Kryon"
+#import "kryon/button_widget"
+#import "kryon/scroll_widget"
+#import "kryon/text_widget"
+#import "kryon/layout"
 #import "layout"
 #import "paint_queue"
 #import "scroll"
 #import "scroll_props"
-#import "scroll_widget"
 #import "session"
 #import "style"
 #import "style_sheet"
 #import "surface"
 #import "text_align"
 #import "text_props"
-#import "text_widget"
-#import "tree"
+#import "kryon/tree"
 #import, file "../../src/app/app.zi";
 #import, file "../../src/app/app_modal_state.zi";
 #import, file "../../src/app/app_route_state.zi";
@@ -51,14 +54,12 @@ using ModalType;
 using TextAlign;
 using TextWrap;
 
-ASTRAL_MANUAL_PAGES :: 2
-
 AstralManualStart :: (app: *InnerBreeze) {
     if app == null { return }
     app.tutorial_step = 0
     app.manual_scroll = 0
     app.practice_tab = PRACTICE_TAB_PLAY
-    unused app_start_practice_from_ui(app, EXERCISE_ASTRAL_PROJECTION)
+    AstralStartSelected(app)
 }
 
 AstralManualClose :: (app: *InnerBreeze, mark_seen: s32) {
@@ -76,14 +77,161 @@ AstralManualClose :: (app: *InnerBreeze, mark_seen: s32) {
     app_switch_screen(app, ScreenStart)
 }
 
-// Practices draws the manual (practice_manual_host.zi).
+// The selection and its guide are package-owned and use the existing native
+// storage/assets effects. The scroll body works on both desktop and portrait.
 AstralManualDraw :: (app: *InnerBreeze) {
-    action := PracticeManualDraw(app)
-    if action == PRACTICE_MANUAL_CLOSE {
+    if app == null {
+        return
+    }
+    if AstralLegacyAvailable() {
+        action := PracticeManualDraw(app)
+        if action == PRACTICE_MANUAL_CLOSE {
+            AstralManualClose(app, 0)
+        } else if action == PRACTICE_MANUAL_START {
+            AstralManualStart(app)
+        }
+        return
+    }
+    available := AstralCatalogueLoad()
+    frame_props: ModalFrameProps
+    frame_props.key = KeyHash("astral/start-modal")
+    frame_props.title = LocaleText("exercise_astral_projection")
+    frame_props.width = AppScale(760)
+    frame_props.height = app.ui.view_height - AppScale(32)
+    if frame_props.height > AppScale(840) {
+        frame_props.height = AppScale(840)
+    }
+    frame_props.scale = MetricsScale()
+    frame_props.has_right_action = true
+    frame_props.right_label = LocaleText("close_button")
+    frame_props.right_image.asset_path = "icons/ui.webp"
+    frame_props.right_image.alt_text = frame_props.right_label
+    frame_props.right_image.source = Rectangle.{448.0, 384.0, 64.0, 64.0}
+    frame := ModalFrame(app.ui.session, frame_props)
+    if frame.dismissed || frame.right_clicked {
         AstralManualClose(app, 0)
-    } else if action == PRACTICE_MANUAL_START {
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    defer {
+        unused End(app.ui.session)
+    }
+    content := frame.layout.content
+    left := cast(s32)content.x
+    width := cast(s32)content.width
+    top := cast(s32)content.y
+    bottom := cast(s32)(content.y + content.height) - AppScale(52)
+    if width <= 0 || bottom <= top {
+        return
+    }
+    if !available || astral_content_error {
+        Text(app.ui.session, TextProps.{.text = LocaleText("astral_content_unavailable"),
+            .bounds = Rectangle.{content.x, content.y, content.width, content.height},
+            .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+        return
+    }
+    pad := AppScale(16)
+    selected := AstralSelection(app)
+    preview_height := AppScale(112)
+    if bottom - top < AppScale(280) {
+        preview_height = AppScale(64)
+    }
+    AstralPreviewDraw(app.ui.session, selected,
+        Rectangle.{cast(float32)left, cast(float32)top,
+            cast(float32)width, cast(float32)preview_height},
+        app.dark_mode != 0, KeyHash("astral/preview"),
+        AstralText(TextFromCString(*astral_catalogue.practices[selected].title_key[0])))
+    top += preview_height
+    showing_guide := app.tutorial_step == 1
+    heights: [6]s32
+    durations: [6][64]u8
+    total: s32 = 0
+    for index: cast(s32)0..astral_catalogue.count - 1 {
+        row := astral_catalogue.practices[index]
+        title := AstralText(TextFromCString(*row.title_key[0]))
+        description := AstralText(TextFromCString(*row.description_key[0]))
+        heights[index] = AstralParagraphHeight(app, title, width - pad * 2) +
+            AstralParagraphHeight(app, description, width - pad * 2) + AppScale(72)
+        total += heights[index] + AppScale(12)
+    }
+    guide := AstralText(TextFromCString(*astral_catalogue.practices[selected].guide_key[0]))
+    guide_h := AstralParagraphHeight(app, guide, width)
+    if showing_guide {
+        total = guide_h + AppScale(24)
+    }
+    if !showing_guide && astral_reveal_selection {
+        app.manual_scroll = 0
+        for index: cast(s32)0..selected - 1 {
+            app.manual_scroll += heights[index] + AppScale(12)
+        }
+        astral_reveal_selection = false
+    }
+    scrolled := Scroll(app.ui.session, ScrollProps.{.key = KeyHash("astral/selection"),
+        .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(12)),
+            cast(float32)width, cast(float32)(bottom - top - AppScale(24))},
+        .content_height = total, .scroll_offset = app.manual_scroll})
+    app.manual_scroll = scrolled.scroll_offset
+    if scrolled.opened {
+        y := cast(s32)scrolled.content.y
+        if !showing_guide {
+            for index: cast(s32)0..astral_catalogue.count - 1 {
+                row := astral_catalogue.practices[index]
+                title := AstralText(TextFromCString(*row.title_key[0]))
+                description := AstralText(TextFromCString(*row.description_key[0]))
+                card := Rectangle.{cast(float32)left, cast(float32)y,
+                    cast(float32)width, cast(float32)(AstralParagraphHeight(app, title, width - pad * 2) + AppScale(24))}
+                if Button(app.ui.session, ButtonProps.{.key = KeyHash("astral/exercise") + cast(u64)index,
+                    .bounds = card, .selected = index == selected,
+                    .tone = ifx index == selected then cast(ButtonTone)ButtonToneAccent else cast(ButtonTone)ButtonToneNeutral,
+                    .label = title, .fit_content = true}) != 0 {
+                    unused AppCopyText(TextFromCString(*row.id[0]), app.astral_projection_exercise[:])
+                    save_settings(app)
+                    // Keep the selector in place while changing the selected guide.
+                }
+                // The labelled selection target occupies the heading; supporting
+                // copy and duration remain separate, readable text.
+                title_h := AstralParagraphHeight(app, title, width - pad * 2)
+                Text(app.ui.session, TextProps.{.text = description,
+                    .bounds = Rectangle.{cast(float32)(left + pad), cast(float32)(y + title_h + AppScale(24)),
+                        cast(float32)(width - pad * 2), cast(float32)AstralParagraphHeight(app, description, width - pad * 2)},
+                    .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+                unused FormatNumberTemplate(LocaleText("practice_home_minutes"), row.duration / 60, durations[index][:])
+                Text(app.ui.session, TextProps.{.text = TextUntilNul(durations[index][:]),
+                    .bounds = Rectangle.{cast(float32)(left + pad), cast(float32)(y + heights[index] - AppScale(32)),
+                        cast(float32)(width - pad * 2), cast(float32)AppScale(28)}, .font = AppSmallFontSize()})
+                y += heights[index] + AppScale(12)
+            }
+        } else {
+            Text(app.ui.session, TextProps.{.text = guide,
+                .bounds = Rectangle.{cast(float32)left, cast(float32)(y + AppScale(12)),
+                    cast(float32)width, cast(float32)guide_h},
+                .font = AppFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+        }
+        unused End(app.ui.session)
+    }
+    gap := AppScale(12)
+    button_w := (width - gap) / 2
+    if Button(app.ui.session, ButtonProps.{.key = KeyHash("astral/guide"),
+        .bounds = Rectangle.{cast(float32)left, cast(float32)bottom,
+            cast(float32)button_w, cast(float32)AppScale(52)},
+        .label = LocaleText(ifx showing_guide then "back_button" else "practice_manual_button")}) != 0 {
+        app.tutorial_step = ifx showing_guide then 0 else 1
+        app.manual_scroll = 0
+        astral_reveal_selection = showing_guide
+    }
+    if Button(app.ui.session, ButtonProps.{.key = KeyHash("astral/start-selected"),
+        .bounds = Rectangle.{cast(float32)(left + button_w + gap), cast(float32)bottom,
+            cast(float32)button_w, cast(float32)AppScale(52)},
+        .label = LocaleText("practice_start_button"), .fit_content = true}) != 0 {
         AstralManualStart(app)
     }
+}
+
+AstralParagraphHeight :: (app: *InnerBreeze, text: string, width: s32) -> s32 {
+    return TextHeight(app.ui.session, TextProps.{.text = text, .font = AppFontSize(),
+        .bounds = Rectangle.{0.0, 0.0, cast(float32)width, 0.0}, .wrap = cast(TextWrap)TextWrapAuto})
 }
 
 // Customize: the music that plays, and the voice narration with its
@@ -93,3 +241,14 @@ AstralConfigDraw :: (app: *InnerBreeze) {
         PracticeConfigLeave(app, cast(s32)ModalPracticeConfig)
     }
 }
+
+#import, file "astral_projection.zi";
+#import, file "astral_projection_rules.zi";
+#import, file "../../src/app/text_buffers.zi";
+#import, file "../../src/app/practice_title_bar.zi";
+#import "button_props"
+#import "text_measure"
+#import "text_buffer"
+#import "byte_text_linux"
+#import "control_props"
+using ButtonTone;

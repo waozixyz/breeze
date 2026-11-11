@@ -21,6 +21,21 @@ GUIDE = 'guide'
 MAXIMUM = 64 * 1024 * 1024
 
 
+def supported_languages():
+    return {line.split('|', 1)[0] for line in (ROOT / 'locales/index.txt').read_text().splitlines()
+            if '|' in line and not line.startswith('#')}
+
+
+def resource_language(path):
+    parts = path.split('/')
+    if len(parts) >= 5 and parts[:2] == ['assets', 'practices']:
+        if parts[3] in ('voice', 'voice-male'):
+            return parts[4]
+        if parts[3] == 'text' and Path(parts[4]).stem != 'index':
+            return Path(parts[4]).stem
+    return ''
+
+
 def course_narration_keys(data):
     """Read spoken cue references from the same bounded TCH2 data as the app."""
     if data[:4] != b'TCH2' or len(data) > MAXIMUM:
@@ -201,13 +216,24 @@ def prepare(compiler, assets_root=None, output=None):
     declared = json.loads((ROOT / speech['keys_file']).read_text())
     if course_narration_keys(media_path('assets/practices/taichi/course.tch').read_bytes()) != declared:
         raise ValueError('export Tai Chi again to update its narration inventory')
-    astral = json.loads(media_path('assets/practices/astral_projection/session.json').read_text())
-    astral_speech = json.loads((ROOT / configuration['narration']['astral_projection']['config']).read_text())
-    if [cue['key'] for cue in astral['cues']] != astral_speech['keys']:
-        raise ValueError('Astral Projection guidance and narration inventory differ')
+    astral_folder = media_path('assets/practices/astral_projection')
+    catalogue = astral_folder / 'catalogue.json'
+    if catalogue.exists():
+        selected = json.loads(catalogue.read_text())
+        astral_keys = [cue['key'] for row in selected['practices']
+                      for cue in json.loads((astral_folder / 'sessions' / (row['id'] + '.json')).read_text())['cues']]
+        settings = configuration['narration']['astral_projection_bruce']
+    else:
+        astral_keys = [cue['key'] for cue in json.loads((astral_folder / 'session.json').read_text())['cues']]
+        settings = configuration['narration']['astral_projection']
+    astral_speech = json.loads((ROOT / settings['config']).read_text())
+    declared = json.loads((ROOT / astral_speech['keys_file']).read_text()) if 'keys_file' in astral_speech else astral_speech['keys']
+    if astral_keys != declared:
+        raise ValueError('Astral Projection sessions and narration inventory differ')
     output.mkdir(parents=True, exist_ok=True)
     packs = []
     guide = []
+    languages = supported_languages()
     for practice in NAMES + (GUIDE,):
         # Lumi's guide has narration only, without a base pack.
         directories = [] if practice == GUIDE else [assets_root / ('practice-' + practice)]
@@ -216,6 +242,8 @@ def prepare(compiler, assets_root=None, output=None):
             language = directory.name.split('-voice-', 1)[1] if '-voice-' in directory.name else ''
             # practice-taichi-voice-en-male holds the male recording.
             language, _, voice = language.partition('-')
+            if language and language not in languages:
+                continue
             assets = directory / 'assets'
             if language and not narration_current(configuration, practice, language, assets, voice):
                 print(f'{practice}/{language}{"/" + voice if voice else ""}: incomplete narration excluded from the catalog')
@@ -268,8 +296,14 @@ def prepare(compiler, assets_root=None, output=None):
 
 def narration_current(configuration, practice, language, assets=None, voice=''):
     """Partial or stale recordings never become an advertised language pack."""
+    if language not in supported_languages():
+        return False
     import importlib.util
-    settings = configuration['narration'].get(practice + ('_' + voice if voice else ''))
+    inventory = practice + ('_' + voice if voice else '')
+    if practice == 'astral_projection' and not voice and media_path(
+            'assets/practices/astral_projection/catalogue.json').exists():
+        inventory = 'astral_projection_bruce'
+    settings = configuration['narration'].get(inventory)
     folder = 'voice-male' if voice else 'voice'
     if not settings:
         return False
@@ -294,7 +328,7 @@ def narration_current(configuration, practice, language, assets=None, voice=''):
     # Package only actual spoken cues, excluding unused labels and partial files.
     if assets is not None:
         recordings = assets / 'practices' / practice / folder / language
-        wanted = {key + '.ogg' for key in keys} | {'pack.json'}
+        wanted = {key + '.ogg' for key in keys + config.get('preserved_keys', [])} | {'pack.json'}
         for path in recordings.iterdir():
             if path.is_file() and path.name not in wanted:
                 path.unlink()

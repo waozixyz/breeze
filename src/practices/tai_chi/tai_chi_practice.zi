@@ -1,6 +1,7 @@
 #import "bundle_host"
 #import "hosted_values"
 #import "byte_text_linux"
+#import "std/text_buffer"
 #import "widget_host"
 #import, file "../../apps/app_codec.zi";
 #import, file "../../apps/practice_ui_types.zi";
@@ -22,35 +23,34 @@
 #import, file "../../app/metrics.zi";
 #import "geometry"
 #import "button_props"
-#import "button_widget"
 #import "control_props"
 #import "scroll"
 #import "scroll_props"
-#import "scroll_widget"
 #import "text_props"
-#import "text_widget"
 #import "text_align"
-#import "tree"
+#import "kryon/tree"
 #import, file "tai_chi_course.zi";
+#import, file "../../../apps/practice/course_access.zi";
 #import, file "tai_chi_rules.zi";
 #import, file "tai_chi_entry.zi";
 #import, file "tai_chi_draw.zi";
 #import, file "../../app/app_modal_state.zi";
 #import "modal_props"
-#import "modal_frame_widget"
 #import "dropdown_props"
-#import "dropdown_widget"
+#import "kryon/Widgets"
 #import "slider_props"
-#import "slider_widget"
 #import "toggle_props"
-#import "toggle_widget"
-#import "segmented_control_widget"
 #import "segmented_control_props"
 #import, file "../../app/lumi_guide.zi";
 #import, file "../meditation/meditation_music.zi";
 #import, file "../../app/exercise_types.zi";
 #import, file "../practice_downloads.zi";
 #import, file "../practice_voice_settings.zi";
+
+#import, file "../practice_offer.zi";
+#import, file "../../storage/practice_unlocks.zi";
+#import, file "../../storage/dew.zi";
+LockIcon :: #import "mingcute/mingcute_regular_lock";
 
 using ModalType;
 using ButtonTone;
@@ -71,6 +71,14 @@ TaiChiDurationText :: (app: *InnerBreeze, seconds: float64) -> string {
 
 TaiChiItemDetail :: (app: *InnerBreeze, item: TaiChiItem) -> string {
     duration := TaiChiDurationText(app, item.duration * 1.0)
+    if !UnlockOwned(UnlockTaiChi) && TaiChiItemFree(TaiChiCourseString(item.id)) {
+        free_text: [160]u8
+        values: [2]FormatArg = .[
+            FormatArg.{.text = LocaleText("tai_chi_free_item"), .is_text = true},
+            FormatArg.{.text = duration, .is_text = true}]
+        FormatTemplate("%s · %s", values[:], free_text[:])
+        return FrameTextHold(*app.ui.frame_text, TextUntilNul(free_text[:]))
+    }
     if item.version < 0 {
         return duration
     }
@@ -140,7 +148,11 @@ TaiChiCourseCall :: (context: *void, module: *u8, function: *u8,
         } else if index >= 0 && index < tai_chi_course.item_count {
             item := tai_chi_course.items[index]
             row.title = LocaleText(TaiChiCourseString(item.title))
-            row.detail = TaiChiItemDetail(app, item)
+            if TaiChiItemAllowed(index) {
+                row.detail = TaiChiItemDetail(app, item)
+            } else {
+                row.detail = LocaleText("tai_chi_unlock_title")
+            }
             row.done = app.tai_chi.done[index]
         }
         result.* = WidgetEncodePracticeCourseRow(row, *course_row_codec)
@@ -160,14 +172,75 @@ TaiChiCourseCall :: (context: *void, module: *u8, function: *u8,
 TaiChiCourseFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
     if request.preview && request.index >= 0 && request.index < tai_chi_course.item_count &&
     request.character >= 0 && request.character < tai_chi_course.character_count {
-        TaiChiDrawPreview(app.ui.session, request.index, request.character, app.tai_chi.view,
-            request.bounds, request.key, request.alt_text)
+        if TaiChiItemAllowed(request.index) {
+            TaiChiDrawPreview(app.ui.session, request.index, request.character, app.tai_chi.view,
+                request.bounds, request.key, request.alt_text)
+        } else {
+            unused Button(app.ui.session, ButtonProps.{.key = request.key,
+                .bounds = Rectangle.{request.bounds.x + (request.bounds.width - cast(float32)AppScale(48)) / 2.0,
+                    request.bounds.y + (request.bounds.height - cast(float32)AppScale(48)) / 2.0,
+                    cast(float32)AppScale(48), cast(float32)AppScale(48)},
+                .icon_shape = LockIcon.Shape,
+                .label = LocaleText("tai_chi_unlock_title"), .icon_only = true,
+                .disabled = true, .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost})
+        }
     }
+}
+
+// A locked card opens this explicit offer; selecting it never buys anything.
+TaiChiUnlockDraw :: (app: *InnerBreeze) -> bool {
+    owned := UnlockOwned(UnlockTaiChi)
+    full := TaiChiCourseItemIndex("full/normal")
+    if owned && full >= 0 && tai_chi_course.items[full].source != TAI_CHI_SOURCE_LOCKED {
+        tai_chi_unlock_requested = false
+        return false
+    }
+    busy := ifx owned then PracticeContentStatus(EXERCISE_TAI_CHI) == 1 else UnlockBuying()
+    note := LocaleText("tai_chi_unlock_message")
+    if busy {
+        note = LocaleText(ifx owned then "practice_download_busy" else "practice_unlock_busy")
+    } else if !owned && !DewReady() {
+        note = LocaleText("practice_unlock_account")
+    } else if !owned && unlock_notice.count > 0 {
+        note = LocaleText(unlock_notice)
+    } else if owned && PracticeContentStatus(EXERCISE_TAI_CHI) == 3 {
+        note = LocaleText("practice_download_failed")
+    }
+    label := LocaleText("practice_install")
+    if !owned {
+        label = PracticeDownloadPriceText(app, "practice_unlock_button")
+    }
+    actions: [2]ActionModalAction = .[
+        ActionModalAction.{.label = LocaleText("back_button"),
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft},
+        ActionModalAction.{.label = label,
+            .tone = cast(ButtonTone)ButtonToneAccent,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .disabled = busy || (!owned && (!DewReady() || !practice_paid_allowed))}]
+    result := ActionModal(app.ui.session,
+        ActionModalProps.{.key = KeyHash("tai-chi/unlock"),
+            .title = LocaleText("tai_chi_unlock_title"), .message = note,
+            .scale = MetricsScale()}, actions[:]).action
+    if result == -1 || result == 1 {
+        tai_chi_unlock_requested = false
+    } else if result == 2 {
+        if owned {
+            PracticeContentRequest(EXERCISE_TAI_CHI)
+        } else {
+            UnlockStart()
+        }
+    }
+    return true
 }
 
 #program_export
 tai_chi_modal_draw :: (app: *InnerBreeze) {
     if app == null || !TaiChiCourseLoad() {
+        return
+    }
+    if tai_chi_unlock_requested && TaiChiUnlockDraw(app) {
         return
     }
     app.tai_chi = TaiChiNormalizeSettings(app.tai_chi)
@@ -204,6 +277,10 @@ tai_chi_modal_draw :: (app: *InnerBreeze) {
         app_close_modal(app)
     } else if course_frame.action == PRACTICE_COURSE_PLAY && course_frame.value >= 0 &&
     course_frame.value < tai_chi_course.item_count {
+        if !TaiChiItemAllowed(course_frame.value) {
+            tai_chi_unlock_requested = true
+            return
+        }
         app.tai_chi.item = course_frame.value
         save_settings(app)
         tai_chi_practice_start_item(app, course_frame.value)

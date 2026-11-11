@@ -5,7 +5,7 @@
 #import "file_linux"
 #import "json_scan"
 #import "byte_text_linux"
-#import "crypto"
+#import "daochi_client/crypto"
 #import "vec"
 #import, file "../app/assets.zi";
 #import, file "../app/locale.zi";
@@ -878,6 +878,35 @@ PracticeNarrationState :: (index: s32) -> s32 {
     return ifx pack.bundle != null || pack.status == 2 || pack.present then 2 else 0
 }
 
+// Existing free Opus clips ship independently of paid narration packs.
+PracticePreviewNarrationLanguage :: (content: s32, voice: string) -> string {
+    if !PracticePreviewReady(content) {
+        return ""
+    }
+    preferred := PracticeNarrationPreferred(content)
+    active := LocaleActiveCode()
+    for index: cast(s32)0..LocaleLanguageCount() + 1 {
+        code := preferred
+        if index == 1 {
+            code = active
+        } else if index >= 2 {
+            code = LocaleLanguageAt(index - 2).code
+        }
+        base := PackageText("assets/practices/taichi-preview/",
+            ifx voice == "male" then "voice-male/" else "voice/")
+        localized := PackageText(base, code)
+        path := PackageText(localized, "/pack.json")
+        found := AssetRead(path).found
+        PackageFree(base)
+        PackageFree(localized)
+        PackageFree(path)
+        if found {
+            return code
+        }
+    }
+    return ""
+}
+
 // Narration speaks the language chosen for it when that one is on this
 // device, then the app's, then another downloaded language in the app's
 // language order; "" without any. Guides stay in the selected language.
@@ -894,6 +923,9 @@ PracticeNarrationLanguage :: (content: s32, voice: string) -> string {
             continue
         }
         language := TextFromCString(*pack.language[0])
+        if !LocaleSupports(language) {
+            continue
+        }
         if language == preferred {
             return language
         }
@@ -906,7 +938,10 @@ PracticeNarrationLanguage :: (content: s32, voice: string) -> string {
     if content == PracticeGuide {
         return ""
     }
-    return ifx best < 0 then "" else TextFromCString(*practice_packs[best].language[0])
+    if best < 0 {
+        return PracticePreviewNarrationLanguage(content, voice)
+    }
+    return TextFromCString(*practice_packs[best].language[0])
 }
 
 PracticeLanguageRank :: (code: string) -> s32 {
@@ -1079,6 +1114,12 @@ PracticePackRemove :: (index: s32) {
 }
 
 PracticeContentReady :: (practice: s32) -> bool {
+    if practice_catalog_invalid {
+        return false
+    }
+    if PracticePreviewReady(practice) {
+        return true
+    }
     index := PracticePackFind(practice, "")
     // Older signed packages remain usable with their bundled assets.
     return !practice_catalog_invalid && (practice_catalog.count == 0 ||
@@ -1092,8 +1133,16 @@ PracticeProduct :: (practice: s32) -> string {
     return ifx index < 0 then "" else TextFromCString(*practice_packs[index].product[0])
 }
 
+// Public basics ship under a separate path; paid pack state stays unchanged.
+PracticePreviewReady :: (practice: s32) -> bool {
+    return !practice_catalog_invalid && practice == PracticeContentIndex("taichi") &&
+        AssetRead("assets/practices/taichi-preview/course.zip").found &&
+        AssetRead("assets/practices/taichi-preview/flat-edge.png").found
+}
+
 PracticeHidden :: (practice: s32) -> bool {
-    return !practice_paid_allowed && PracticeProduct(practice).count > 0
+    return !PracticePreviewReady(practice) &&
+        !practice_paid_allowed && PracticeProduct(practice).count > 0
 }
 
 // Practice's home offers only installed practices.
@@ -1101,6 +1150,9 @@ PracticeInstalled :: (practice: s32) -> bool {
     PracticeCatalogLoad()
     if practice_catalog_invalid || PracticeHidden(practice) {
         return false
+    }
+    if PracticePreviewReady(practice) {
+        return true
     }
     // Older signed packages carry every practice's assets.
     if practice_catalog.count == 0 {

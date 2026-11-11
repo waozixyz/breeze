@@ -100,7 +100,7 @@ add(const char *key, const char *value)
 int
 main(void)
 {
-    InnerBreeze app = {0};
+    static InnerBreeze app = {0};
 
     add("audio_custom_sound_count", "1");
     add("audio_custom_sound_0_title", "");

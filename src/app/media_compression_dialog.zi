@@ -1,0 +1,367 @@
+// One account-owned comparison, shared by Diary and Photos.
+#import "kryon/layout"
+#import, file "modal_rules.zi";
+#import, file "../storage/state.zi";
+#import, file "../apps/media_compression_settings.zi";
+#import "kryon/Widgets"
+#import "kryon/bitmap_image"
+#import "kryon/image_props"
+#import "kryon/slider_props"
+#import "kryon/toast_props"
+#import "kryon/modal_props"
+#import "kryon/scroll_props"
+#import "kryon/tree"
+#import "std/byte_text_linux"
+#import "std/text_buffer"
+#import "std/vec"
+#import, file "app_types.zi";
+#import, file "../core/types.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../storage/db.zi";
+#import, file "../apps/media_store.zi";
+#import, file "../apps/package_files.zi";
+#import, file "text_buffers.zi";
+#import, file "app_modal_state.zi";
+#import, file "locale.zi";
+#import, file "metrics.zi";
+#import, file "smooth_frames.zi";
+#import, file "../apps/node_apps.zi";
+#import, file "../apps/media_compression_store.zi";
+#import, file "../apps/media_compression_work.zi";
+#import, file "../apps/media_compression_request.zi";
+
+using ImageFit;
+using ButtonTone;
+using ButtonEmphasis;
+using TextWrap;
+
+media_compression_owner: string;
+media_compression_hash: string;
+media_compression_quality: s32 = 35;
+media_compression_generation: s32;
+media_compression_revision: s64 = -1;
+media_compression_files_revision: s64 = -1;
+media_compression_statistics: MediaCompressionStatistics;
+media_compression_work: *MediaCompressionWork;
+media_compression_before: Texture2D;
+media_compression_after: Texture2D;
+media_compression_uploaded: bool;
+media_compression_notice: string;
+media_compression_due: float64;
+media_compression_scroll: s32;
+media_compression_toast: ToastState;
+media_compression_text: FrameTextStore;
+media_compression_clock_library :: #system_library "c";
+MediaCompressionClock :: () -> float64 #foreign media_compression_clock_library "GetTime";
+
+MediaCompressionScreen :: (app: *InnerBreeze) -> bool {
+    return app.breathing.screen == ScreenDiary ||
+        (app.breathing.screen == ScreenNodeApp && NodeAppName(app.node_app_slot) == "photos")
+}
+
+MediaCompressionDropPreview :: (app: *InnerBreeze) {
+    BitmapImageRelease(app.ui.session, media_compression_before)
+    BitmapImageRelease(app.ui.session, media_compression_after)
+    media_compression_before = Texture2D.{}
+    media_compression_after = Texture2D.{}
+    media_compression_uploaded = false
+}
+
+MediaCompressionInvalidate :: (app: *InnerBreeze) {
+    media_compression_generation += 1
+    MediaCompressionDropPreview(app)
+    media_compression_due = MediaCompressionClock() + 0.25
+}
+
+MediaCompressionRefresh :: () {
+    revision := storage_data_revision()
+    files_revision := MediaFilesRevision()
+    if revision != media_compression_revision || files_revision != media_compression_files_revision {
+        media_compression_statistics = MediaCompressionStats()
+        media_compression_revision = revision
+        media_compression_files_revision = files_revision
+    }
+}
+
+#program_export
+MediaCompressionOpen :: (app: *InnerBreeze) {
+    if app == null || !MediaCompressionScreen(app) || app.modal.active != 0 ||
+    app.file_dialog_active != 0 || app.host_feature != 0 {
+        return
+    }
+    MediaCompressionInvalidate(app)
+    PackageFree(media_compression_hash)
+    media_compression_hash = MediaCompressionNext("")
+    media_compression_quality = MediaCompressionQuality()
+    media_compression_notice = ""
+    media_compression_scroll = 0
+    media_compression_statistics = MediaCompressionStats()
+    app_open_modal(app, ModalType.ModalMediaCompression)
+}
+
+// Run even after dismissal to join and free cancelled jobs. Only one codec
+// job exists; quality changes invalidate its generation immediately.
+MediaCompressionPump :: (app: *InnerBreeze) {
+    owner := AppTextFromCString(storage_user_id_buffer(), 64)
+    if owner != media_compression_owner {
+        MediaCompressionInvalidate(app)
+        PackageFree(media_compression_owner)
+        media_compression_owner = PackageText(owner, "")
+        PackageFree(media_compression_hash)
+        media_compression_hash = ""
+        media_compression_revision = -1
+        media_compression_files_revision = -1
+        media_compression_toast = ToastState.{}
+        if app.modal.active != 0 && app.modal.type == ModalType.ModalMediaCompression {
+            app_close_modal(app)
+        }
+    }
+    // Consume host/guest actions after account isolation and before a
+    // running worker can yield this frame.
+    if MediaCompressionTakeRequest() {
+        MediaCompressionOpen(app)
+    }
+    opened := app.modal.active != 0 && app.modal.type == ModalType.ModalMediaCompression
+    if opened && (!MediaCompressionScreen(app) || app.launcher_open) {
+        app_close_modal(app)
+        opened = false
+    }
+    if !opened && media_compression_hash.count > 0 {
+        MediaCompressionInvalidate(app)
+        PackageFree(media_compression_hash)
+        media_compression_hash = ""
+    }
+    if opened {
+        MediaCompressionRefresh()
+    }
+    if media_compression_work != null {
+        work := media_compression_work
+        if !MediaCompressionWorkReady(work) {
+            AppRequestSmoothFrames(2)
+            return
+        }
+        if !opened || !MediaCompressionWorkCurrent(work, owner,
+        media_compression_hash, media_compression_generation) {
+            MediaCompressionWorkFree(work)
+            media_compression_work = null
+        } else if !media_compression_uploaded {
+            if MediaCompressionWorkSuccessful(work) {
+                before := work.before
+                after := work.after
+                media_compression_before = BitmapImageCreate(app.ui.session, before.width, before.height,
+                    BytesFromPointer(before.pixels, cast(u64)(before.stride * before.height)))
+                media_compression_after = BitmapImageCreate(app.ui.session, after.width, after.height,
+                    BytesFromPointer(after.pixels, cast(u64)(after.stride * after.height)))
+                if media_compression_before.id == 0 || media_compression_after.id == 0 {
+                    MediaCompressionDropPreview(app)
+                    media_compression_notice = "media_compression_failed"
+                } else if media_compression_notice == "app_loading_pictures" {
+                    media_compression_notice = ""
+                }
+            } else {
+                media_compression_notice = "media_compression_failed"
+            }
+            media_compression_uploaded = true
+        }
+    }
+    if opened && media_compression_work == null && media_compression_hash.count > 0 &&
+    media_compression_notice != "media_compression_failed" {
+        AppRequestSmoothFrames(2)
+        if MediaCompressionClock() < media_compression_due {
+            return
+        }
+        source := MediaCompressionSource(media_compression_hash)
+        if source.count == 0 {
+            if MediaCompressionSourcePending(media_compression_hash) {
+                media_compression_notice = "app_loading_pictures"
+                media_compression_due = MediaCompressionClock() + 1.0
+            } else {
+                media_compression_notice = "media_compression_failed"
+            }
+            return
+        }
+        media_compression_work = MediaCompressionWorkStart(owner, media_compression_hash, source,
+            media_compression_quality, media_compression_generation)
+        PackageFree(source)
+        if media_compression_work == null {
+            media_compression_notice = "media_compression_failed"
+        } else if media_compression_notice != "media_compression_applied" {
+            media_compression_notice = "app_loading_pictures"
+        }
+    }
+}
+
+// Sync is convergent: disconnected devices may offer before receiving the
+// account receipt. The wrench remains available independently of sync.
+MediaCompressionOfferDraw :: (app: *InnerBreeze) {
+    if !MediaCompressionScreen(app) || app.launcher_open || app.modal.active != 0 ||
+    app.file_dialog_active != 0 || app.host_feature != 0 {
+        return
+    }
+    MediaCompressionRefresh()
+    message: string
+    if media_compression_statistics.complete &&
+    MediaCompressionOffer(media_compression_statistics.review_count > 0) {
+        message = LocaleText("media_compression_offer")
+    }
+    result := Toast(app.ui.session, ToastProps.{.key = KeyHash("media/compression/offer"),
+        .viewport = Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
+            cast(float32)app.ui.view_height}, .state = media_compression_toast,
+        .message = message, .action_label = LocaleText("media_compression_review"),
+        .seconds = 12.0, .now_seconds = MediaCompressionClock(), .scale = MetricsScale()})
+    media_compression_toast = result.state
+    if result.visible {
+        AppRequestSmoothFrames(2)
+    }
+    if result.action_clicked {
+        media_compression_toast = ToastState.{}
+        MediaCompressionOpen(app)
+    }
+}
+
+MediaCompressionLine :: (app: *InnerBreeze, area: Rectangle, text: string) {
+    Text(app.ui.session, TextProps.{.bounds = area, .text = text,
+        .font = AppSmallFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+}
+
+MediaCompressionCountText :: (key: string, value: s64, bytes: bool = false) -> string {
+    out: Vec(u8)
+    if bytes {
+        BuilderPrint(*out, "%: % B", LocaleText(key), value)
+    } else {
+        BuilderPrint(*out, "%: %", LocaleText(key), value)
+    }
+    text := BuilderFinish(out)
+    result := FrameTextHold(*media_compression_text, text)
+    PackageFree(text)
+    return result
+}
+
+MediaCompressionDialogDraw :: (app: *InnerBreeze) {
+    FrameTextReset(*media_compression_text)
+    width := AppScale(760)
+    if width > app.ui.view_width - AppScale(24) {
+        width = app.ui.view_width - AppScale(24)
+    }
+    height := AppScale(680)
+    if height > app.ui.view_height - AppScale(24) {
+        height = app.ui.view_height - AppScale(24)
+    }
+    frame := ModalFrame(app.ui.session, ModalFrameProps.{
+        .key = KeyHash("media/compression/dialog"), .title = LocaleText("media_compression_title"),
+        .width = width, .height = height, .scale = MetricsScale(),
+        .has_right_action = true, .right_label = LocaleText("close_button")})
+    if frame.dismissed || frame.right_clicked {
+        MediaCompressionInvalidate(app)
+        app_close_modal(app)
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    scroll := Scroll(app.ui.session, ScrollProps.{.key = KeyHash("media/compression/scroll"),
+        .bounds = frame.layout.content, .content_height = AppScale(650),
+        .scroll_offset = media_compression_scroll})
+    media_compression_scroll = scroll.scroll_offset
+    if scroll.opened {
+        MediaCompressionContent(app, scroll.content)
+        unused End(app.ui.session)
+    }
+    unused End(app.ui.session)
+}
+
+MediaCompressionContent :: (app: *InnerBreeze, area: Rectangle) {
+    x := area.x
+    y := area.y
+    w := area.width - cast(float32)AppScale(10)
+    line := cast(float32)AppScale(32)
+    stats := media_compression_statistics
+    MediaCompressionLine(app, Rectangle.{x, y, w, line},
+        MediaCompressionCountText("media_compression_library", stats.library_bytes, true))
+    y += line
+    MediaCompressionLine(app, Rectangle.{x, y, w, line},
+        MediaCompressionCountText("media_compression_local", stats.local_bytes, true))
+    y += line
+    MediaCompressionLine(app, Rectangle.{x, y, w, line},
+        MediaCompressionCountText("media_compression_retained", stats.retained_bytes, true))
+    y += line
+    MediaCompressionLine(app, Rectangle.{x, y, w, line},
+        MediaCompressionCountText("media_compression_candidates", stats.review_count))
+    y += line
+    quality := DiscreteSlider(app.ui.session, DiscreteSliderProps.{
+        .key = KeyHash("media/compression/quality"), .bounds = Rectangle.{x, y, w, line * 2.0},
+        .label = LocaleText("media_compression_quality"),
+        .value_text = MediaCompressionCountText("media_compression_quality", media_compression_quality),
+        .value = media_compression_quality, .min = 1, .max = 100})
+    if quality.changed {
+        media_compression_quality = quality.value
+        unused MediaCompressionSetQuality(quality.value)
+        media_compression_notice = ""
+        MediaCompressionInvalidate(app)
+    }
+    y += line * 2.0
+    half := (w - cast(float32)AppScale(12)) / 2.0
+    work := media_compression_work
+    ready := MediaCompressionWorkCurrent(work, media_compression_owner,
+        media_compression_hash, media_compression_generation) &&
+        MediaCompressionWorkSuccessful(work) && media_compression_uploaded &&
+        media_compression_before.id != 0 && media_compression_after.id != 0
+    before_label := LocaleText("media_compression_before")
+    after_label := LocaleText("media_compression_after")
+    if ready {
+        before_label = MediaCompressionCountText("media_compression_before", work.source.count, true)
+        after_label = MediaCompressionCountText("media_compression_after", work.encoded.data.count, true)
+    }
+    MediaCompressionLine(app, Rectangle.{x, y, half, line}, before_label)
+    MediaCompressionLine(app, Rectangle.{x + half + cast(float32)AppScale(12), y, half, line}, after_label)
+    y += line
+    image_height := cast(float32)AppScale(180)
+    Image(app.ui.session, ImageProps.{.key = KeyHash("media/compression/original"),
+        .bounds = Rectangle.{x, y, half, image_height}, .texture = media_compression_before,
+        .alt_text = before_label, .fit = cast(ImageFit)ImageFitContain, .smooth = true})
+    Image(app.ui.session, ImageProps.{.key = KeyHash("media/compression/encoded"),
+        .bounds = Rectangle.{x + half + cast(float32)AppScale(12), y, half, image_height},
+        .texture = media_compression_after, .alt_text = after_label,
+        .fit = cast(ImageFit)ImageFitContain, .smooth = true})
+    y += image_height + cast(float32)AppScale(8)
+    if ready {
+        MediaCompressionLine(app, Rectangle.{x, y, w, line},
+            MediaCompressionCountText("media_compression_saving", work.source.count - work.encoded.data.count, true))
+    }
+    y += line
+    apply := Button(app.ui.session, ButtonProps.{.key = KeyHash("media/compression/apply"),
+        .bounds = Rectangle.{x, y, half, cast(float32)AppScale(44)},
+        .label = LocaleText("media_compression_apply"),
+        .disabled = !ready || work.encoded.data.count >= work.source.count,
+        .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled})
+    if apply != 0 && ready {
+        if MediaCompressionCommit(work.owner, work.hash, work.source, work.encoded.data, work.quality) {
+            next := MediaCompressionNext(media_compression_hash)
+            media_compression_notice = "media_compression_applied"
+            media_compression_statistics = MediaCompressionStats()
+            MediaCompressionInvalidate(app)
+            PackageFree(media_compression_hash)
+            media_compression_hash = next
+        } else {
+            media_compression_notice = "media_compression_failed"
+        }
+    }
+    if Button(app.ui.session, ButtonProps.{.key = KeyHash("media/compression/next"),
+        .bounds = Rectangle.{x + half + cast(float32)AppScale(12), y, half, cast(float32)AppScale(44)},
+        .label = LocaleText("media_compression_next"),
+        .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        next := MediaCompressionNext(media_compression_hash)
+        MediaCompressionInvalidate(app)
+        PackageFree(media_compression_hash)
+        media_compression_hash = next
+        media_compression_notice = ""
+    }
+    y += cast(float32)AppScale(52)
+    notice := media_compression_notice
+    if notice.count == 0 && media_compression_hash.count == 0 {
+        notice = "media_compression_empty"
+    }
+    if notice.count > 0 {
+        MediaCompressionLine(app, Rectangle.{x, y, w, line * 2.0}, LocaleText(notice))
+    }
+}

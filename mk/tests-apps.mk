@@ -49,6 +49,12 @@ media-metadata-test: $(ZI2C_BIN)
 media-store-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 	sh tests/media_store_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
+.PHONY: media-compression-test
+media-compression-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A) $(RAYLIB_A) $(WEBP_A) $(AVIF_A) $(AOM_A)
+	AVIF_A="$(abspath $(AVIF_A))" AOM_A="$(abspath $(AOM_A))" sh tests/media_compression_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+
+test: media-compression-test
+
 # A 2.1.43 profile's Diary and library photos move to the account's entity
 # data, and old copies go only once the node has the new ones whole.
 entity-photos-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)

@@ -1,5 +1,7 @@
 """Check ZX resource inventories and the small native bootstrap table."""
 from pathlib import Path
+import io
+import zipfile
 import re
 import struct
 import sys
@@ -9,6 +11,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 from animation_inventory import inventory
 from practice_content import NAMES
 from practice_media import media_path, packaged_path
+from tai_chi_preview import preview_course
 
 def assets(data):
     assert data[:8] == b'ZX\0\0\x1a\0\0\0'
@@ -47,17 +50,36 @@ root = assets((ROOT / 'build/inbe.zx').read_bytes())
 for name in ('diary', 'lists', 'habits', 'practices', 'leaderboard'):
     path = 'assets/apps/icons/' + name + '.png'
     assert root[path] == (ROOT / path).read_bytes(), f'missing or stale launcher icon: {name}'
+for name in ('habits', 'diary', 'practices', 'lists', 'radio', 'leaderboard',
+             'lumi', 'library', 'arcade', 'photos'):
+    path = 'assets/apps/icons/' + name + '.avif'
+    assert root[path] == (ROOT / path).read_bytes(), f'missing or stale generated launcher icon: {name}'
+path = 'assets/app/back-home.avif'
+assert root[path] == (ROOT / path).read_bytes(), 'missing or stale graphical Back control'
 for name in ('radio', 'library'):
     shape = (ROOT / 'assets' / name / 'sidebar.shape').read_bytes()
     assert root['assets/apps/icons/' + name + '.shape'] == shape
     assert shape.startswith(b'S') and len(shape) < 4096
-# Photos comes from the node; the root package carries neither its baseline nor its icon.
+# Photos comes from the node. Its launcher picture ships here; its baseline stays on the node.
 assert not any(name.startswith('assets/apps/bundled/photos') or name == 'assets/apps/icons/photos.shape'
                for name in root), 'the root package still bundles Photos'
 assert set(name for name in root if name.startswith('cells/')) == {
     'cells/lumi.zx', 'cells/habits.zx', 'cells/practices.zx',
     'cells/lists.zx', 'cells/diary.zx', 'cells/leaderboard.zx'}
 practices = assets(root['cells/practices.zx'])
+preview_prefix = 'assets/practices/taichi-preview/'
+preview, free_spoken = preview_course(media_path('assets/practices/taichi/course.tch').read_bytes())
+with zipfile.ZipFile(io.BytesIO(practices[preview_prefix + 'course.zip'])) as archive:
+    assert archive.namelist() == ['course.tch']
+    assert archive.read('course.tch') == preview, 'packaged preview has stale or paid motion'
+codes = [line.split('|', 1)[0] for line in (ROOT / 'locales/index.txt').read_text().splitlines() if '|' in line]
+expected_preview_clips = {preview_prefix + voice + '/' + code + '/' + key + '.ogg'
+                          for voice in ('voice', 'voice-male') for code in codes for key in free_spoken}
+actual_preview_clips = {name for name in practices if name.startswith(preview_prefix) and name.endswith('.ogg')}
+assert actual_preview_clips == expected_preview_clips, 'missing free speech or paid-only speech in shipped preview'
+for name in sorted(expected_preview_clips):
+    relative = name.removeprefix(preview_prefix)
+    assert practices[name] == media_path('assets/practices/taichi/' + relative).read_bytes(), name
 import json
 catalog = json.loads(practices['assets/practices/catalog.json'])
 content = {}
@@ -81,7 +103,7 @@ lumi = assets(root['cells/lumi.zx'])
 assert not any(name.endswith('.ogg') for name in lumi), [name for name in lumi if name.endswith('.ogg')][:3]
 combined = root | practices | content
 source = '\n'.join(path.read_text(errors='replace') for path in (ROOT / 'src').rglob('*.zi'))
-paths = set(re.findall(r'"((?:assets/)?(?:practices|easteregg|pet)/[^"\n]+\.(?:png|jpg|jpeg|webp))"', source))
+paths = set(re.findall(r'"((?:assets/)?(?:practices|pet)/[^"\n]+\.(?:png|jpg|jpeg|webp))"', source))
 assert paths
 for path in paths:
     path = path if path.startswith('assets/') else 'assets/' + path

@@ -2,8 +2,8 @@
 
 ## [Unreleased]
 
-- Fotos se descarga desde Aplicaciones; Lumi muestra una sola propuesta completa de comentarios de la lista, y Listas admite tareas más largas y completarlas deslizando.
-- Cambiar de pestaña en Práctica con la navegación lateral ya no desplaza la pantalla.
+- Fotos en Aplicaciones; Lumi: vista única de comentarios completos de listas; Listas: tareas largas, acabar deslizando.
+- Las pestañas de Práctica ya no desplazan la pantalla. Elige entre seis ejercicios astrales al empezar. Diez idiomas.
 - Los paquetes de voz de las prácticas pesan un tercio menos.
 
 ## [2.1.63] - 2026-11-05

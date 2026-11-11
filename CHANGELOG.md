@@ -2,9 +2,10 @@
 
 ## [Unreleased]
 
-- Photos downloads from Apps; Lumi previews complete list feedback once, and Lists supports longer todos and swipe completion.
-- Practice voice packs are about a third smaller, and switching Practice tabs no longer shifts the screen.
-- Custom appearance sheets are now written in CSS; sheets you saved before convert automatically.
+- The Library asks whether the Tao Te Ching should open as text or a picture book with transparent chapter art.
+- Photos installs from Apps; Lumi previews full list feedback once; Lists adds custom long tasks and steadier swipe actions.
+- Choose from six astral exercises before Start; smaller voice packs, steady tabs and ten interface languages.
+- One modern appearance with custom CSS; a simpler About list shows Core and app versions.
 
 ## [2.1.63] - 2026-11-05
 

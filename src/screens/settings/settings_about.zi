@@ -1,8 +1,7 @@
-#import "svg_icon_widget"
+#import "kryon/svg_icon_widget"
 #import "svg_icon_props"
 #import, file "../../app/telegram_icon.zi";
 #import, file "../../app/modal_rules.zi";
-#import "button_widget"
 #import, file "../../app/locale.zi";
 c :: #system_library "c";
 #import "drawing_props"
@@ -36,7 +35,7 @@ update_host_text :: (value: *u8) -> string {
 #import, file "../../app/app_nav_state.zi";
 #import, file "../../apps/versions.zi";
 #import "open_uri"
-#import "link_widget"
+#import "kryon/Widgets"
 
 
 
@@ -48,8 +47,6 @@ using TextWrap;
 using TextAlign;
 #import "control_props"
 #import, file "../../app/current_app.zi";
-#import "image_widget"
-#import "text_widget"
 #import "geometry"
 #import "session"
 #import "button_props"
@@ -108,7 +105,7 @@ about_route_installed :: (app: *InnerBreeze, route: s32) -> bool {
     PackageAvailable(LauncherAppPackage(route))
 }
 
-// The Inbe harness and each installed app.
+// Core and each installed app.
 about_package_count :: (app: *InnerBreeze) -> s32 {
     count: s32 = 1
     routes := LauncherRoutes()
@@ -141,9 +138,9 @@ settings_about_content_height :: (content_w: s32) -> s32 {
     update_row := ifx (update_available() != 0) then (AppScale(72)) else (0)
 
     pending_root := ifx PackageRootPending() then AppScale(28) else 0
-    // One version row for each package, the harness included.
+    // One version row for each package, Core included.
     package_rows := about_package_count(CurrentApp()) * AppScale(28)
-    return AppScale(252) + package_rows + update_row + pending_root + AppParagraphHeight(description.text, description.width,
+    return AppScale(188) + package_rows + update_row + pending_root + AppParagraphHeight(description.text, description.width,
         description.font, description.line_gap) + about_link_icons_height(content_w) +
     about_package_updates_height(content_w)
 }
@@ -254,8 +251,14 @@ about_draw_link_icons :: (app: *InnerBreeze, content_x: s32, content_w: s32, y: 
 }
 
 settings_about_draw :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
-    version_text: [32] u8
-    title_font := AppTitleFontSize(LocaleText("app_title"), w)
+    title_text: [160]u8
+    title_args: [2]FormatArg = .[
+        FormatArg.{.text = LocaleText("app_title"), .is_text = true},
+        FormatArg.{.text = VersionString, .is_text = true}]
+    FormatTemplate("%s · v%s", title_args[:], title_text[:])
+    title := FrameTextHold(*app.ui.frame_text,
+        AppTextFromCString(*title_text[0], size_of(type_of(title_text))))
+    title_font := AppTitleFontSize(title, w)
     font := AppFontSize()
     logo_size := AppScale(56)
     text_w: s32 = 0
@@ -269,29 +272,16 @@ settings_about_draw :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
         })
     y.* += logo_size + AppScale(12)
 
-    text_w = AppTextWidth(LocaleText("app_title"), title_font)
+    text_w = AppTextWidth(title, title_font)
     Text(CurrentApp().ui.session, TextProps.{
             .bounds = Rectangle.{cast(float32)(x + (w - text_w) / 2), cast(float32)y.*, 0, 0},
-            .text = (LocaleText("app_title")),
+            .text = title,
+            .font = title_font,
             .wrap = cast(TextWrap)TextWrapNone
         })
     y.* += AppScale(34)
 
-    version_args: [1]FormatArg = .[FormatArg.{.text = VersionString, .is_text = true}]
-    FormatTemplate("v%s", version_args[:], version_text[:])
-    version_label := AppTextFromCString(*version_text[0], size_of(type_of(version_text)))
-    text_w = AppTextWidth(version_label, font)
-    Text(CurrentApp().ui.session, TextProps.{
-            .bounds = Rectangle.{cast(float32)(x + (w - text_w) / 2), cast(float32)y.*, 0, 0},
-            .text = version_label,
-            .wrap = cast(TextWrap)TextWrapNone
-        })
-    y.* += AppScale(28)
-
-    Text(app.ui.session, TextProps.{.bounds = Rectangle.{cast(float32)x, cast(float32)y.*,
-                cast(float32)w, cast(float32)AppScale(32)}, .text = LocaleText("cells_versions"), .font = font})
-    y.* += AppScale(36)
-    // First the Inbe harness, the package that carries the apps and updates
+    // First Core, the package that carries the apps and updates
     // without a new APK, then every app this account has installed, named as
     // in Apps, the apps the node offers included. The APK's own version is
     // the one above; a downloaded harness waits for a restart.
@@ -300,7 +290,7 @@ settings_about_draw :: (app: *InnerBreeze, x: s32, w: s32, y: *s32) {
                     cast(float32)w, cast(float32)AppScale(28)}, .text = LocaleText("update_restart"), .font = font})
         y.* += AppScale(28)
     }
-    about_package_row(app, x, w, y, "Inbe harness", PackageVersion(0))
+    about_package_row(app, x, w, y, "Core", PackageVersion(0))
     routes := LauncherRoutes()
     for route: routes {
         if !about_route_installed(app, route) {

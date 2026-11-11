@@ -16,11 +16,13 @@ from PIL import Image
 from Xlib import X, display as xdisplay, protocol
 
 from ui_driver import UiDriver
+from practice_audio_ui import prepare_music_fixture, exercise_audio_modal
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/session-window-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
-DISPLAY_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS")
+DISPLAY_KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
+                "GDK_DISPLAY", "SESSION_MANAGER")
 assert all(not os.environ.get(key) for key in DISPLAY_KEYS), "Inherited desktop environment"
 BINARY = Path(sys.argv[1]).resolve()
 DESKTOP_ONLY = "--desktop-only" in sys.argv[2:]
@@ -55,14 +57,15 @@ def inside(outer, point):
             outer["y"] <= y <= outer["y"] + outer["height"])
 
 
-with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, contextlib.ExitStack() as stack:
+with tempfile.TemporaryDirectory(prefix="profile-", dir=OUTPUT) as directory, contextlib.ExitStack() as stack:
     profile = Path(directory)
+    prepare_music_fixture(profile)
     driver = UiDriver(OUTPUT / "driver")
     env = {key: value for key, value in os.environ.items() if key not in DISPLAY_KEYS}
     env.update(driver.environment())
     env.update(APP_DATA_ROOT=str(profile), HOME=directory, XDG_CONFIG_HOME=directory,
                APP_NO_TRAY="1", SDL_AUDIODRIVER="dummy", SDL_VIDEODRIVER="x11",
-               LIBGL_ALWAYS_SOFTWARE="1", YUE_DESKTOP_RECOVERY="0")
+               LIBGL_ALWAYS_SOFTWARE="1", HARMONY_DESKTOP_RECOVERY="0", YUE_DESKTOP_RECOVERY="0")
     display_log = stack.enter_context((OUTPUT / "display.log").open("w"))
     display = subprocess.Popen(["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0", "1280x900x24",
                                 "-nolisten", "tcp"], env=env, stdout=subprocess.PIPE, stderr=display_log)
@@ -71,6 +74,20 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
     assert number.isdecimal()
     display.stdout.close()
     env["DISPLAY"] = ":" + number
+    # A real private window manager is needed to reproduce clicks that focus
+    # a window; a bare Xvfb server does not reproduce SDL's focus filtering.
+    wm_log = stack.enter_context((OUTPUT / "window-manager.log").open("w"))
+    wm = subprocess.Popen(["xfwm4", "--compositor=off", "--replace"], env=env,
+                          stdout=wm_log, stderr=wm_log)
+    stack.callback(stop, wm)
+    connection = xdisplay.Display(env["DISPLAY"])
+    deadline = time.monotonic() + 10
+    while not connection.get_selection_owner(connection.intern_atom("WM_S0")):
+        assert wm.poll() is None, "Private window manager exited"
+        assert time.monotonic() < deadline, "Private window manager did not become ready"
+        time.sleep(.05)
+    connection.close()
+
 
     def command(*args):
         return subprocess.run(args, env=env, check=True, capture_output=True,
@@ -650,8 +667,10 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
             row = db.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
             return row[0] if row else None
 
-    for double_tap_mode in (False, True):
-        mode = "double-tap" if double_tap_mode else "button"
+    for mode, double_tap_mode, initially_focused in (
+            ("button-focused", False, True),
+            ("button-click-to-focus", False, False),
+            ("double-tap", True, True)):
         save_settings(dict(advanced_session_controls="1", picture_in_picture="1",
                            double_tap_to_breathe="1" if double_tap_mode else "0"))
 
@@ -680,6 +699,10 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
                 driver.press(label="Next")
             else:
                 assert False, "Next did not reach the held breath"
+            if not double_tap_mode and initially_focused:
+                exercise_audio_modal(driver, lambda: state(window), saved_setting,
+                                     'practice_music_track_wim_hof')
+                assert held(), "Audio modal consumed the underlying Breathe button"
             driver.press(label="Minimize")
             wait_screen(window, SCREEN_HABITS, "Minimize did not open the window during the held breath")
             detached = practice_window_id()
@@ -701,7 +724,13 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
                 # A tap outside the open slider only closes it.
                 window_tap(detached, 130, 140)
                 assert state(window)["screen"] == SCREEN_HABITS, "Closing the slider returned to the practice"
-                # Breath sits centered above the window's lines.
+                # The earlier volume clicks focused the window. Explicitly
+                # test both focus states before this one ordinary complete click.
+                focus_target = detached if initially_focused else window
+                command("xdotool", "windowfocus", focus_target)
+                assert int(command("xdotool", "getwindowfocus")) == int(focus_target)
+                before_breathe = state(window)
+                # Breath sits centered above the window's lines. Never retry it.
                 window_tap(detached, 130, 248)
             else:
                 # A single tap waits for the second; a double tap breathes.
@@ -716,7 +745,13 @@ with tempfile.TemporaryDirectory(prefix="inbe-session-window-") as directory, co
             wait_screen(window, SCREEN_SESSION, "Maximize in the window did not return to the practice")
             driver.wait(label="Minimize")
             driver.wait_idle(frames=2)
-            assert not held(), "The practice is still holding the breath after breathing from the window"
+            assert not held(), "The practice is still holding the breath after one window click"
+            if not double_tap_mode:
+                after_breathe = state(window)
+                assert after_breathe["breath_phase"] != before_breathe["breath_phase"], "One click did not end the hold"
+                assert after_breathe["practice"] == before_breathe["practice"]
+                assert after_breathe["round"] == before_breathe["round"], "Breathe advanced more than once"
+                assert after_breathe["practice_running"], "Breathe ended the session"
     save_settings(dict(advanced_session_controls="0", double_tap_to_breathe="0"))
 
 if DESKTOP_ONLY:

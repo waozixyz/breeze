@@ -14,6 +14,10 @@ that practices really download.
 
 Run after `make` or a phone build, from the repository root:
     python3 scripts/upload-practice-packs.py
+
+Limit staging, signing and transport to exact built pack filenames:
+    python3 scripts/upload-practice-packs.py --pack astral_projection.pt --pack guide.pt
+The existing --content option selects base content only.
 """
 import argparse
 from datetime import datetime
@@ -22,6 +26,8 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import shutil
+import shlex
 import subprocess
 import sys
 import tarfile
@@ -59,8 +65,72 @@ def served(digest, timeout=30):
 def matches(digest, size, timeout=120):
     request = urllib.request.Request(NODE + digest + ".zx", headers=HEADERS)
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        data = response.read(size + 1)
-    return len(data) == size and sha256(data).hexdigest() == digest
+        checksum = sha256()
+        count = 0
+        while block := response.read(65536):
+            count += len(block)
+            if count > size:
+                return False
+            checksum.update(block)
+    return count == size and checksum.hexdigest() == digest
+
+
+def pack_identifier(pack):
+    """The built filename without .zx, including its language and voice."""
+    return (pack['practice'] + ('.' + pack['language'] if pack['language'] else '') +
+            ('.' + pack['voice'] if pack.get('voice') else ''))
+
+
+def select_packs(catalog, identifiers=None, content=None):
+    if identifiers is not None:
+        known = {pack_identifier(pack) for pack in catalog}
+        unknown = set(identifiers) - known
+        if not identifiers or unknown or not all(identifiers):
+            raise ValueError('unknown or empty pack selection: ' + ', '.join(sorted(unknown)))
+        return [pack for pack in catalog if pack_identifier(pack) in set(identifiers)]
+    return [pack for pack in catalog if not content or
+            (pack['practice'] in content and not pack['language'])]
+
+
+def stage_selected_packs(store, packs):
+    """Sign only the selected immutable content; never stage app releases."""
+    key = package_release.serialization.load_pem_private_key(KEY.read_bytes(), password=None)
+    if not isinstance(key, package_release.Ed25519PrivateKey):
+        raise ValueError('publisher key must be Ed25519')
+    publishers = json.loads((ROOT / 'apps/publishers.json').read_text())
+    public_key = key.public_key().public_bytes(package_release.serialization.Encoding.Raw,
+        package_release.serialization.PublicFormat.Raw).hex()
+    trusted = package_release.node_release.trusted_pin(publishers, KEY_ID, 'inbe.practices')
+    if trusted is None or trusted['public_key'] != public_key:
+        raise ValueError('signing key must match the public key shipped in apps/publishers.json')
+    versions = json.loads((ROOT / 'apps/versions.json').read_text())
+    component = versions['apps']['practices']
+    if component['id'] != 'inbe.practices':
+        raise ValueError('invalid Practices package identity')
+    directory = store / 'inbe.practices'
+    directory.mkdir(parents=True, exist_ok=True)
+    for pack in packs:
+        digest = pack['sha256']
+        target = directory / (digest + '.zx')
+        shutil.copyfile(ROOT / 'build/practice-content' / (pack_identifier(pack) + '.zx'), target)
+        with target.open('rb') as stream:
+            checksum = sha256()
+            while block := stream.read(65536):
+                checksum.update(block)
+        if target.stat().st_size != pack['size'] or checksum.hexdigest() != digest:
+            raise ValueError('practice content differs from its signed catalog')
+        value = dict(app_id=component['id'], sequence=component['sequence'],
+                     version=component['version'], runtime='kryon-app-v1',
+                     host_api=component.get('host_api', versions['host_api']),
+                     module_api=versions['module_api'], data_schema=1, key_id=KEY_ID,
+                     artifacts=[dict(variant='module', sha256=digest, size=pack['size'])],
+                     dependencies=[])
+        value['signature'] = key.sign(package_release.signing_message(value)).hex()
+        package_release.validate_release(value, 'inbe.practices', publishers)
+        package_release.atomic_write(directory / (digest + '.zx.release-v2.json'),
+            (json.dumps(value, separators=(',', ':')) + chr(10)).encode())
+        if pack.get('product'):
+            package_release.atomic_write(directory / (digest + '.zx.product'), pack['product'].encode())
 
 
 def sun_salutation_downloads(packs):
@@ -78,22 +148,29 @@ def sun_salutation_downloads(packs):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--check", action="store_true", help="only report packs missing on the node")
-    parser.add_argument("--content", action="append",
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--content", action="append",
                         choices=json.loads((ROOT / "apps/practice/content.json").read_text())["practices"],
                         help="limit this attempt to the named practice's content pack; repeat for another practice")
+    selection.add_argument('--pack', action='append',
+                           help='exact catalog filename without .zx, e.g. astral_projection.pt, guide.pt or taichi.en.male; repeat for another pack')
     args = parser.parse_args()
+    practices = (ROOT / 'build/apps/practices.zx').read_bytes()
+    try:
+        listed = select_packs(package_release.catalog_from_bundle(practices), args.pack, args.content)
+    except ValueError as error:
+        parser.error(str(error))
+    sun_content = any(pack['practice'] == 'sunsalutation' and not pack['language'] for pack in listed)
     with tempfile.TemporaryDirectory(prefix="inbe-practice-packs-") as scratch:
         store = Path(scratch)
-        # Signs every app release into the scratch store; only the practice
-        # packs from it are ever uploaded.
-        package_release.stage(store, KEY, KEY_ID)
+        if args.pack is not None:
+            stage_selected_packs(store, listed)
+        else:
+            # Legacy callers stage the complete build locally. App releases
+            # and latest metadata never enter this uploader's transport.
+            package_release.stage(store, KEY, KEY_ID)
         directory = store / "inbe.practices"
-        # The store also holds the Practice app's own bundle under this app
-        # ID; only the content packs its catalog names are uploaded.
-        practices = (ROOT / "build/apps/practices.zx").read_bytes()
-        listed = package_release.catalog_from_bundle(practices)
-        if args.content:
-            listed = [pack for pack in listed if pack["practice"] in args.content and not pack["language"]]
+        # Only selected catalog content can reach the transport.
         catalog = {pack["sha256"] for pack in listed}
         packs = sorted(directory / (digest + ".zx") for digest in catalog)
         missing = []
@@ -109,8 +186,13 @@ def main():
         if args.check or not missing:
             if missing and args.check:
                 return 1
-            return 0 if not any(pack["practice"] == "sunsalutation" for pack in listed) or sun_salutation_downloads(listed) else 1
+            if args.pack is not None and not args.check:
+                for path in packs:
+                    if not (directory / (path.stem + '.zx.product')).exists() and not matches(path.stem, path.stat().st_size):
+                        raise SystemExit(f'pack {path.stem} is not served exactly')
+            return 0 if not sun_content or sun_salutation_downloads(listed) else 1
         archive = io.BytesIO()
+        members = []
         with tarfile.open(fileobj=archive, mode="w") as tar:
             for path in missing:
                 for suffix in (".zx.product", ".zx", ".zx.release-v2.json"):
@@ -122,14 +204,17 @@ def main():
                         info.mode = 0o600
                         with member.open("rb") as handle:
                             tar.addfile(info, handle)
+                        members.append(info.name)
         # Extract only into the practices folder, never over a file that is
         # already there: packs are immutable once served.
+        permissions = (' '.join(shlex.quote(name) for name in members)
+                       if args.pack is not None else 'inbe.practices/*.zx*')
         command = ("set -e; cd " + STORE + " && tar -x --keep-old-files --no-same-permissions "
-                   "--wildcards 'inbe.practices/*' -f - && chmod 600 inbe.practices/*.zx*")
+                   "--wildcards 'inbe.practices/*' -f - && chmod 600 " + permissions)
         subprocess.run(["ssh", "-o", "BatchMode=yes", TARGET, command],
                        input=archive.getvalue(), check=True)
         lines = []
-        for path in missing:
+        for path in (packs if args.pack is not None else missing):
             digest = path.stem
             gated = (directory / (digest + ".zx.product")).exists()
             if gated:
@@ -137,7 +222,8 @@ def main():
                     raise SystemExit(f"paid pack {digest} is not withheld by the node")
             elif not matches(digest, path.stat().st_size):
                 raise SystemExit(f"pack {digest} is not served exactly")
-            lines.append(f"{digest} {path.stat().st_size} {'paid' if gated else 'free'}")
+            if path in missing:
+                lines.append(f"{digest} {path.stat().st_size} {'paid' if gated else 'free'}")
         RECEIPT.parent.mkdir(parents=True, exist_ok=True)
         with RECEIPT.open("a") as receipt:
             receipt.write(datetime.now().astimezone().isoformat(timespec="seconds") +
@@ -145,7 +231,7 @@ def main():
             receipt.writelines(line + "\n" for line in lines)
         print("\n".join(lines))
         print(f"Uploaded {len(lines)} practice packs; each is served")
-        if any(pack["practice"] == "sunsalutation" for pack in listed) and not sun_salutation_downloads(listed):
+        if sun_content and not sun_salutation_downloads(listed):
             return 1
     return 0
 

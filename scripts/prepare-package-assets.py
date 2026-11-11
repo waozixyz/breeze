@@ -2,6 +2,7 @@
 """Stage deterministic package resources, keeping large practice art in Practices."""
 from pathlib import Path
 import argparse
+from practice_content import supported_languages, resource_language
 import json
 import shutil
 import zipfile
@@ -35,8 +36,8 @@ for name in ('inbe', 'lists', 'habits', 'practices', 'diary', 'lumi', 'leaderboa
     (OUTPUT / name / 'assets').mkdir(parents=True)
 patterns = (
     'assets/mcp/*.json', 'assets/app/icon.webp', 'assets/app/icon-sky-cradle.webp',
-    'assets/app/icon-ink-and-air.webp', 'assets/easteregg/*.png', 'assets/easteregg/*.webp', 'assets/pet/*.png',
-    'assets/apps/icons/*.png',
+    'assets/app/icon-ink-and-air.webp', 'assets/pet/*.png',
+    'assets/apps/icons/*.png', 'assets/apps/icons/*.avif', 'assets/app/back-home.avif',
     'assets/social/*.png', 'assets/social/*.webp', 'assets/social/telegram.svg',
     'assets/sounds/*.ogg',
     'assets/habits/**/*', 'assets/lists/**/*', 'assets/diary/**/*', 'assets/lumi/**/*',
@@ -59,8 +60,12 @@ sources.update({p: PREFIX + p.relative_to(MEDIA).as_posix()
                 for pattern in practice_patterns for p in MEDIA.glob(pattern) if p.is_file()})
 if not any(path.startswith(PREFIX) for path in sources.values()):
     raise SystemExit(f'no practice media in {MEDIA}; run make packages')
+supported = supported_languages()
 for file, path in sorted(sources.items(), key=lambda source: source[1]):
-    if '-prompt.' in file.name:
+    language = resource_language(path)
+    if language and language not in supported:
+        continue
+    if '-prompt.' in file.name or '/astral_projection/drafts/' in path:
         continue
     if '/sunsalutation/characters/' in path and file not in unique_animation:
         continue
@@ -98,6 +103,10 @@ for file, path in sorted(sources.items(), key=lambda source: source[1]):
             archive.writestr(member, file.read_bytes(), compresslevel=9)
         continue
     shutil.copyfile(file, target)
+
+# Public basics are separate from the unchanged grant-gated full course.
+from tai_chi_preview import stage_preview
+stage_preview(MEDIA, OUTPUT / 'practices/assets')
 
 # Catalog outlines are small metadata, available before an app is installed.
 # The app retains its own copy for standalone and embedded use.

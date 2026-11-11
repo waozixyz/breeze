@@ -1,0 +1,322 @@
+// Active library bytes and actual local bytes, including pending cleanup.
+#import, file "diary_records.zi";
+#import, file "../storage/state.zi";
+#import, file "../platform/web_storage.zi";
+#import "std/text"
+#import "std/byte_text_linux"
+#import "std/json_scan"
+#import "std/vec"
+#import "std/text_buffer"
+Preview :: #import "kryon/image_preview"
+#import "std/file_linux"
+#import, file "media_store.zi";
+#import, file "entity_photos.zi";
+#import, file "diary_store.zi";
+#import, file "media_metadata.zi";
+#import, file "media_compression_settings.zi";
+#import, file "../storage/storage_settings.zi";
+#import, file "../storage/temporary_data.zi";
+#import, file "package_files.zi";
+#import, file "../storage/sqlite.zi";
+#import, file "../storage/db.zi";
+#import, file "../storage/storage_core.zi";
+#import, file "../app/text_buffers.zi";
+
+MediaCompressionStatistics :: struct {
+    complete: bool
+    library_bytes: s64
+    local_bytes: s64
+    review_count: s32
+    retained_bytes: s64
+    first: [65]u8
+}
+
+MediaCompressionRecordsSQL :: #string SQL_END
+SELECT key,value FROM settings
+WHERE user_id=?1 AND json_valid(value) AND
+ ((key GLOB 'entity.photos.*' AND length(key)=78) OR
+  (key GLOB 'cell.media.*' AND length(key)=75 AND
+   NOT EXISTS(SELECT 1 FROM settings e WHERE e.user_id=?1
+     AND e.key='entity.photos.'||substr(settings.key,12))))
+ORDER BY key
+SQL_END;
+
+MediaCompressionReviewable :: (item: MediaItem, record: string) -> bool {
+    replacement := EntityCompressionReplacement(record)
+    defer { PackageFree(replacement) }
+    format := TextUntilNul(item.format[:])
+    return item.valid && item.entity && !item.trashed && replacement.count == 0 &&
+        item.size <= DIARY_FILE_LIMIT &&
+        (format == "jpg" || format == "png" || format == "webp")
+}
+
+MediaCompressionStats :: () -> MediaCompressionStatistics {
+    result: MediaCompressionStatistics
+    statement: *void
+    if storage_db_handle() == null || SqlitePrepareText(storage_db_handle(),
+    MediaCompressionRecordsSQL, -1, *statement, null) != SQLITE_OK {
+        return result
+    }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    status := SqliteStep(statement)
+    while status == SQLITE_ROW {
+        record := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
+        item := MediaParse(record)
+        if item.valid {
+            hash := TextUntilNul(item.hash[:])
+            replacement := MediaReplacementRecord(hash)
+            superseded := replacement.count > 0
+            PackageFree(replacement)
+            if !superseded { result.library_bytes += item.size }
+            original := MediaPath(hash, false)
+            size := PackageFileSize(original)
+            PackageFree(original)
+            if size > 0 {
+                result.local_bytes += size
+                if superseded { result.retained_bytes += size }
+            }
+            preview := EntityPreviewContent(record)
+            if preview.valid {
+                if !superseded { result.library_bytes += preview.size }
+                path := MediaPath(hash, true)
+                size = PackageFileSize(path)
+                PackageFree(path)
+                if size > 0 {
+                    result.local_bytes += size
+                    if superseded { result.retained_bytes += size }
+                }
+            }
+            if MediaCompressionReviewable(item, record) {
+                result.review_count += 1
+                if result.first[0] == cast(u8)0 {
+                    result.first = item.hash
+                }
+            }
+        }
+        status = SqliteStep(statement)
+    }
+    result.complete = status == SQLITE_DONE
+    return result
+}
+
+// A preview is never used as the source for a full-size conversion.
+MediaCompressionSourcePending :: (hash: string) -> bool {
+    record := MediaEntityRecord(hash)
+    defer { PackageFree(record) }
+    if !MediaCompressionReviewable(MediaRead(hash), record) {
+        return false
+    }
+    path := MediaPath(hash, false)
+    missing := PackageFileSize(path) < 0
+    PackageFree(path)
+    if missing {
+        MediaWant(hash)
+    }
+    return missing
+}
+
+MediaCompressionSource :: (hash: string) -> string {
+    item := MediaRead(hash)
+    record := MediaEntityRecord(hash)
+    defer { PackageFree(record) }
+    if !MediaCompressionReviewable(item, record) {
+        return ""
+    }
+    path := MediaPath(hash, false)
+    data := PackageRead(path, DIARY_FILE_LIMIT)
+    PackageFree(path)
+    format := DiaryImageFormat(data)
+    extension := PackageText(".", format)
+    defer { PackageFree(extension) }
+    if !EntityContentMatches(EntityPhotoContent(record), data) ||
+    format != TextUntilNul(item.format[:]) || Preview.ImageFileAnimated(data, extension) {
+        PackageFree(data)
+        return ""
+    }
+    return data
+}
+
+// Keep every non-content field of the source, including fields written by
+// other apps. New content starts without old chunk or preview references.
+MediaCompressionTargetRecord :: (source: string, hash: string, bytes: s64,
+    width: s32, height: s32) -> string {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT json_set(json_remove(?1,'$.blobs','$.preview','$.compression'),'$.hash',?2,'$.size',?3,'$.type','image/avif','$.width',?4,'$.height',?5,'$.compression.version',1,'$.compression.source',json_extract(?1,'$.hash'))",
+        -1, *statement, null) != SQLITE_OK {
+        return ""
+    }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, source)
+    unused bind_text(statement, 2, hash)
+    unused SqliteBindInt64(statement, 3, bytes)
+    unused SqliteBindInt(statement, 4, width)
+    unused SqliteBindInt(statement, 5, height)
+    if SqliteStep(statement) != SQLITE_ROW {
+        return ""
+    }
+    return PackageText(AppTextFromCString(SqliteColumnText(statement, 0), 65536), "")
+}
+
+// Called only by the explicit Apply action. No source file is overwritten.
+// Readback and a successful decode precede any record/reference change.
+MediaCompressionCommit :: (owner: string, hash: string, original: string,
+    encoded: string, quality: s32) -> bool {
+    if DataTemporary() || owner.count == 0 ||
+    owner != AppTextFromCString(storage_user_id_buffer(), 64) ||
+    !MediaCompressionQualityValid(quality) || encoded.count == 0 ||
+    encoded.count >= original.count || encoded.count > DIARY_FILE_LIMIT ||
+    DiaryImageFormat(encoded) != "avif" {
+        return false
+    }
+    source := MediaEntityRecord(hash)
+    defer { PackageFree(source) }
+    if !MediaCompressionReviewable(MediaRead(hash), source) ||
+    !EntityContentMatches(EntityPhotoContent(source), original) {
+        return false
+    }
+    descriptor := cast(*TextDescriptor)(*encoded)
+    target_hash: [65]u8
+    storage_sha256_hex(descriptor.data, encoded.count, *target_hash[0])
+    target := TextFromBytes(target_hash[:64])
+    if target == hash {
+        return false
+    }
+    if MediaEntityDeleted(target) {
+        return false
+    }
+    decoded := Preview.ImageReadInfo(encoded, ".avif")
+    if !decoded.is_ok {
+        return false
+    }
+    width := decoded.width
+    height := decoded.height
+    if !decoded.upright && MediaOrientationOf(original, DiaryImageFormat(original)) >= 5 {
+        stored_width := width
+        width = height
+        height = stored_width
+    }
+    dimensions := MediaSizeOf(original, DiaryImageFormat(original))
+    if !dimensions.valid || dimensions.width != width || dimensions.height != height {
+        return false
+    }
+    path := MediaPath(target, false)
+    defer { PackageFree(path) }
+    had_file := PackageFileSize(path) >= 0
+    committed := false
+    defer {
+        if !committed && !had_file {
+            MediaCompressionDiscardUncommitted(owner, target, path)
+        }
+    }
+    if !MediaWriteFile(path, encoded) {
+        return false
+    }
+    readback := PackageRead(path, DIARY_FILE_LIMIT)
+    defer { PackageFree(readback) }
+    if readback != encoded {
+        return false
+    }
+    target_key := EntityPhotoKey(target)
+    source_key := EntityPhotoKey(hash)
+    target_record := MediaCompressionTargetRecord(source, target, encoded.count, width, height)
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"version\":1,\"replacement\":\"%\",\"quality\":%,\"original_size\":%,\"encoded_size\":%,\"changed\":%}",
+        target, quality, original.count, encoded.count, now_seconds())
+    receipt := BuilderFinish(out)
+    changed := MediaRecordWith(source, "compression", receipt)
+    defer {
+        PackageFree(target_key)
+        PackageFree(source_key)
+        PackageFree(target_record)
+        PackageFree(receipt)
+        PackageFree(changed)
+    }
+    if target_record.count == 0 || changed.count == 0 {
+        return false
+    }
+    storage_settings_begin_write()
+    if exec_sql("SAVEPOINT media_compression_apply") == 0 {
+        storage_settings_end_write()
+        return false
+    }
+    // Check again under the connection's transaction mutex. A sync or an
+    // account switch during encoding must not overwrite newer state.
+    current := MediaEntityRecord(hash)
+    existing := MediaEntityRecord(target)
+    same := current == source && !MediaEntityDeleted(target) &&
+        owner == AppTextFromCString(storage_user_id_buffer(), 64)
+    target_item := MediaParseEntity(existing)
+    if existing.count > 0 {
+        same = same && target_item.valid && !target_item.trashed &&
+            EntityContentMatches(EntityPhotoContent(existing), readback)
+    }
+    PackageFree(current)
+    succeeded := same && (existing.count > 0 || MediaRecordWrite(target_key, target_record)) &&
+        MediaRecordWrite(source_key, changed)
+    PackageFree(existing)
+    if !succeeded {
+        unused exec_sql("ROLLBACK TO media_compression_apply")
+    }
+    released := exec_sql("RELEASE media_compression_apply") != 0
+    storage_settings_end_write()
+    succeeded = succeeded && released && storage_setting_text_equals(source_key, changed) != 0
+    committed = succeeded
+    if succeeded {
+        MediaAssetsChanged()
+        unused MediaReclaimReplacement(hash)
+        sync_web_storage()
+    }
+    return succeeded
+}
+
+// Failed Apply may have saved bytes before SQLite rejected the reference
+// transaction. Remove only this new file, under the account's write mutex,
+// after proving no record mentions its content hash.
+MediaCompressionDiscardUncommitted :: (owner: string, hash: string, path: string) {
+    storage_settings_begin_write()
+    defer { storage_settings_end_write() }
+    if owner != AppTextFromCString(storage_user_id_buffer(), 64) { return }
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT 1 FROM settings WHERE user_id=?1 AND (key='entity.photos.'||?2 OR instr(value,?2)>0) LIMIT 1",
+        -1, *statement, null) != SQLITE_OK { return }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, owner)
+    unused bind_text(statement, 2, hash)
+    if SqliteStep(statement) == SQLITE_DONE && PackageFileSize(path) >= 0 {
+        unused RemoveFile(path)
+    }
+}
+
+// Stable iteration wraps once, so unsupported/absent items can be skipped
+// without rewriting or discarding their original records.
+MediaCompressionNext :: (after: string) -> string {
+    statement: *void
+    if storage_db_handle() == null || SqlitePrepareText(storage_db_handle(),
+    MediaCompressionRecordsSQL, -1, *statement, null) != SQLITE_OK {
+        return ""
+    }
+    defer { SqliteFinalize(statement) }
+    unused bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    first: string
+    passed := after.count == 0
+    while SqliteStep(statement) == SQLITE_ROW {
+        record := AppTextFromCString(SqliteColumnText(statement, 1), 65536)
+        item := MediaParse(record)
+        if !MediaCompressionReviewable(item, record) {
+            continue
+        }
+        hash := TextUntilNul(item.hash[:])
+        if first.count == 0 {
+            first = PackageText(hash, "")
+        }
+        if passed {
+            PackageFree(first)
+            return PackageText(hash, "")
+        }
+        passed = hash == after
+    }
+    return first
+}

@@ -1,5 +1,9 @@
 # Radio
 
+## [Unreleased]
+
+- Add a painted radio player and simplify navigation text.
+
 ## [1.0.4] - 2026-10-29
 
 - Download on Inner Breeze 2.1.61, which runs apps in a smaller format.

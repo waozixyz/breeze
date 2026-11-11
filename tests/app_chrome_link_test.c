@@ -71,7 +71,7 @@ MeasureGlyphLineHeight(int32_t font, String typeface)
 int
 main(void)
 {
-    InnerBreeze app = {0};
+    static InnerBreeze app = {0};
     int32_t count;
     bool found_icon = false;
 

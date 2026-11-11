@@ -68,6 +68,31 @@ def opus_seconds(data):
     return opus_frames(data) / OPUS_RATE
 
 
+def attenuate(data, gain_q8):
+    """Lower OpusHead's Q8 dB output gain without changing speech packets."""
+    found = pages(data)
+    if not found:
+        raise ValueError('missing Opus header')
+    offset, length, flags, _ = found[0]
+    page = bytearray(data[offset:offset + length])
+    body = 27 + page[26]
+    if (flags != 2 or page[26] != 1 or page[27] != 19 or
+            page[body:body + 8] != b'OpusHead' or
+            page[body + 8] != 1 or page[body + 9] != 1 or
+            page[body + 18] != 0):
+        raise ValueError('expected a complete mono OpusHead page')
+    checksum = int.from_bytes(page[22:26], 'little')
+    page[22:26] = bytes(4)
+    if ogg_crc(page) != checksum:
+        raise ValueError('invalid Opus header checksum')
+    previous = int.from_bytes(page[body + 16:body + 18], 'little', signed=True)
+    if type(gain_q8) is not int or not -32768 <= gain_q8 <= previous:
+        raise ValueError('output gain must fit Q8 and may only decrease')
+    page[body + 16:body + 18] = gain_q8.to_bytes(2, 'little', signed=True)
+    page[22:26] = ogg_crc(page).to_bytes(4, 'little')
+    return bytes(page) + data[length:]
+
+
 def end_trim(data, frames):
     """data with its final granule at pre-skip + frames (48 kHz samples).
 

@@ -35,7 +35,7 @@ practice_music_track_tai_chi
 # Keys saved with formatted indices; their loaders use the same shape.
 DERIVED = set()
 # Older backups can still import these; loading migrates their values.
-LEGACY_IMPORTED = {"glow_effects"}
+LEGACY_IMPORTED = set()
 
 
 def first_literal_after_call(text, name):

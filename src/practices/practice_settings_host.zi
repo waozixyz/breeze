@@ -428,6 +428,43 @@ PracticeSettingsRun :: (app: *InnerBreeze, frame: PracticeSettingsFrame) -> Prac
     return practice_settings_frame
 }
 
+// Draws only audio settings; opening it does not enter Customize or change a clock.
+PracticeSessionAudioDraw :: (app: *InnerBreeze, practice: s32, scroll: *s32) -> bool {
+    frame := PracticeSettingsFrame.{.session = app.ui.session,
+        .scale = MetricsScale(), .view_width = app.ui.view_width,
+        .view_height = app.ui.view_height, .font = AppFontSize(),
+        .small_font = AppSmallFontSize(), .practice = practice, .scroll = scroll.*,
+        .music_volume = app.music_volume, .cue_volume = app.sound_volume,
+        .canvas_color = StyleTokenColor("canvas"), .accent_color = StyleTokenColor("accent")}
+    practice_settings_music(app, practice, *frame)
+    practice_settings_frame = frame
+    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+    AppsUiBegin(PracticeSettingsCall, cast(*void)app)
+    drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_AUDIO_VIEW})
+    AppsUiEnd()
+    WidgetHostEnd()
+    if !drawn.succeeded {
+        return true
+    }
+    frame = practice_settings_frame
+    scroll.* = frame.scroll
+    if frame.action == PRACTICE_SETTINGS_BACK {
+        return true
+    }
+    if frame.action == PRACTICE_SETTINGS_MUSIC ||
+    frame.action == PRACTICE_SETTINGS_MUSIC_VOLUME ||
+    frame.action == PRACTICE_SETTINGS_CUE_VOLUME ||
+    frame.action == PRACTICE_SETTINGS_MUSIC_DOWNLOAD {
+        practice_settings_apply(app, practice, frame)
+    }
+    // Start an installed choice immediately, including a download that just finished.
+    if frame.action == PRACTICE_SETTINGS_MUSIC ||
+    (frame.music_installed && app.meditation.music_playing == 0) {
+        meditation_music_start_practice(app, practice)
+    }
+    return false
+}
+
 // Has Practices draw the practice's Customize page and saves what changed
 // there. Returns 1 when Back was pressed.
 PracticeSettingsDraw :: (app: *InnerBreeze, practice: s32) -> s32 {

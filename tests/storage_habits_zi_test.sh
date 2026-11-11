@@ -9,7 +9,7 @@ liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=$root/build/storage-habits-zi-test
 include=$root/build/packages/ziran/include
 
-rm -rf "$work"
+rm -rf "$work/generated" "$work/data" "$work/test"
 mkdir -p "$work/generated"
 "$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/src" \
@@ -38,7 +38,7 @@ C
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
     -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
 # Storage must never open the real data directory.
-APP_DATA_ROOT=/tmp/inbe-storage-habits-zi-test/data
+APP_DATA_ROOT="$work/data"
 export APP_DATA_ROOT
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
-rm -rf /tmp/inbe-storage-habits-zi-test
+rm -rf "$APP_DATA_ROOT"

@@ -69,6 +69,9 @@ EntityChunkPlain :: (size: s64, index: s32) -> s64 {
 }
 
 EntityFormatOfType :: (type_name: string) -> string {
+    if type_name == "image/avif" {
+        return "avif"
+    }
     if type_name == "image/png" {
         return "png"
     }
@@ -85,6 +88,9 @@ EntityFormatOfType :: (type_name: string) -> string {
 }
 
 EntityTypeOfFormat :: (format: string) -> string {
+    if format == "avif" {
+        return "image/avif"
+    }
     if format == "jpg" {
         return "image/jpeg"
     }
@@ -146,8 +152,36 @@ EntityPhotoContent :: (record: string) -> EntityContent {
     return EntityContentAt(record, 0)
 }
 
+// Versioned, one-hop replacement. The original record and content remain
+// intact, so older Diary embeds retain a safe fallback during sync.
+EntityCompressionReplacement :: (record: string) -> string {
+    compression := FieldAt(record, 0, "compression")
+    if compression < 0 {
+        return ""
+    }
+    version := ReadNumber(record, FieldAt(record, compression, "version"))
+    hash: [65]u8
+    if !version.valid || version.value != 1.0 ||
+    ReadStringText(record, FieldAt(record, compression, "replacement"), hash[:]) != 64 ||
+    !MediaHashValid(TextFromBytes(hash[:64])) {
+        return ""
+    }
+    return PackageText(TextFromBytes(hash[:64]), "")
+}
+
 EntityPreviewContent :: (record: string) -> EntityContent {
     return EntityContentAt(record, FieldAt(record, 0, "preview"))
+}
+
+EntityCompressionSource :: (record: string) -> string {
+    compression := FieldAt(record, 0, "compression")
+    if compression < 0 { return "" }
+    version := ReadNumber(record, FieldAt(record, compression, "version"))
+    hash: [65]u8
+    if !version.valid || version.value != 1.0 ||
+    ReadStringText(record, FieldAt(record, compression, "source"), hash[:]) != 64 ||
+    !MediaHashValid(TextFromBytes(hash[:64])) { return "" }
+    return PackageText(TextFromBytes(hash[:64]), "")
 }
 
 // Whether the bytes are exactly this content.
@@ -265,4 +299,22 @@ EntityPhotoConfirmed :: (hash: string, record: string, node: string) -> bool {
         return false
     }
     return FieldAt(record, 0, "preview") < 0 || EntityContentOnNode(EntityPreviewContent(record), node)
+}
+
+// Retire old chunks only after the server has the exact stable-identity
+// replacement receipt, with no newer local receipt waiting in the outbox.
+EntityCompressionAcknowledged :: (hash: string, replacement: string) -> bool {
+    statement: *void
+    if SqlitePrepareText(storage_db_handle(),
+        "SELECT 1 FROM settings s JOIN sync_record_copies c ON c.collection=?3 AND c.id=?4 AND json_valid(c.json) WHERE s.user_id=?1 AND s.key=?2 AND json_valid(s.value) AND json_extract(s.value,'$.compression.replacement')=?5 AND json_extract(c.json,'$.compression')=json_extract(s.value,'$.compression') AND NOT EXISTS(SELECT 1 FROM sync_outbox WHERE entity_type='entity_record' AND entity_id=?2)",
+        -1, *statement, null) != SQLITE_OK { return false }
+    defer { SqliteFinalize(statement) }
+    key := EntityPhotoKey(hash)
+    defer { PackageFree(key) }
+    unused bind_text(statement, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    unused bind_text(statement, 2, key)
+    unused bind_text(statement, 3, EntityPhotosCollection)
+    unused bind_text(statement, 4, hash)
+    unused bind_text(statement, 5, replacement)
+    return SqliteStep(statement) == SQLITE_ROW
 }

@@ -1,4 +1,4 @@
-// Bounded downloadable guidance within an open-ended session.
+// Bounded downloadable sessions and their pre-start catalogue.
 #import "json_scan"
 #import "byte_text_linux"
 
@@ -10,7 +10,7 @@ AstralCue :: struct {
 }
 
 AstralCourse :: struct {
-    // Length of the narrated introduction, never a session limit.
+    // The selected practice ends after its final return and quiet period.
     duration: s32
     count: s32
     cues: [AstralCueCapacity]AstralCue
@@ -56,7 +56,7 @@ AstralCourseParse :: (data: string, course: *AstralCourse) -> bool {
         length := ReadStringText(data, FieldAt(data, at, "key"), parsed.cues[index].key[:])
         key := TextFromCString(*parsed.cues[index].key[0])
         if second <= previous || (index == 0 && second != 0) ||
-        length <= 12 || length >= 64 || key[:12] != "astral_text_" {
+        length <= 12 || length >= 64 || cast(s32)key.count != length || key[:12] != "astral_text_" {
             return false
         }
         for byte: key {
@@ -98,4 +98,94 @@ AstralAdvance :: (clock: AstralClock, elapsed_ms: s32, paused: bool) -> AstralCl
         return AstralClock.{2147483647, 0}
     }
     return AstralClock.{cast(s32)seconds, cast(s32)(total % 1000)}
+}
+
+AstralPractice :: struct {
+    id: [64]u8
+    duration: s32
+    title_key: [64]u8
+    description_key: [64]u8
+    guide_key: [64]u8
+}
+
+AstralCatalogue :: struct {
+    count: s32
+    practices: [6]AstralPractice
+}
+
+AstralIdentifier :: (value: string) -> bool {
+    if value.count == 0 || value.count >= 64 {
+        return false
+    }
+    for byte: value {
+        if !((byte >= cast(u8)97 && byte <= cast(u8)122) ||
+            (byte >= cast(u8)48 && byte <= cast(u8)57) || byte == cast(u8)95) {
+            return false
+        }
+    }
+    return true
+}
+
+AstralCatalogueParse :: (data: string, catalogue: *AstralCatalogue) -> bool {
+    catalogue.* = AstralCatalogue.{}
+    end := ValueEnd(data, 0, 0)
+    if data.count > 8192 || end < 0 || Space(data, end) != cast(s32)data.count ||
+    AstralInteger(data, FieldAt(data, 0, "schema"), 1) != 1 {
+        return false
+    }
+    rows := FieldAt(data, 0, "practices")
+    count := ArrayCount(data, rows)
+    if count != 6 {
+        return false
+    }
+    parsed: AstralCatalogue
+    parsed.count = count
+    for index: cast(s32)0..count - 1 {
+        at := ElementAt(data, rows, index)
+        practice: AstralPractice
+        id_length := ReadStringText(data, FieldAt(data, at, "id"), practice.id[:])
+        title_length := ReadStringText(data, FieldAt(data, at, "title_key"), practice.title_key[:])
+        description_length := ReadStringText(data, FieldAt(data, at, "description_key"), practice.description_key[:])
+        guide_length := ReadStringText(data, FieldAt(data, at, "guide_key"), practice.guide_key[:])
+        if id_length <= 0 || title_length <= 0 || description_length <= 0 || guide_length <= 0 {
+            return false
+        }
+        practice.duration = AstralInteger(data, FieldAt(data, at, "duration"), 3600)
+        id := TextFromCString(*practice.id[0])
+        if id.count != id_length ||
+        TextFromCString(*practice.title_key[0]).count != title_length ||
+        TextFromCString(*practice.description_key[0]).count != description_length ||
+        TextFromCString(*practice.guide_key[0]).count != guide_length || !AstralIdentifier(id) ||
+        !AstralIdentifier(TextFromCString(*practice.title_key[0])) ||
+        !AstralIdentifier(TextFromCString(*practice.description_key[0])) ||
+        !AstralIdentifier(TextFromCString(*practice.guide_key[0])) || practice.duration < 60 {
+            return false
+        }
+        for earlier: cast(s32)0..index - 1 {
+            if id == TextFromCString(*parsed.practices[earlier].id[0]) {
+                return false
+            }
+        }
+        parsed.practices[index] = practice
+    }
+    catalogue.* = parsed
+    return true
+}
+
+AstralSelectedIndex :: (catalogue: *AstralCatalogue, id: string) -> s32 {
+    for index: cast(s32)0..catalogue.count - 1 {
+        if TextFromCString(*catalogue.practices[index].id[0]) == id {
+            return index
+        }
+    }
+    return 0
+}
+
+AstralAdvanceSession :: (clock: AstralClock, milliseconds: s32, paused: bool,
+    duration: s32) -> AstralClock {
+    next := AstralAdvance(clock, milliseconds, paused)
+    if duration > 0 && next.elapsed_seconds >= duration {
+        return AstralClock.{duration, 0}
+    }
+    return next
 }

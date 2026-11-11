@@ -34,6 +34,7 @@ BUILD_DIR := build
 # of this file whenever the manifest or lock changes. PACKAGE_FLAGS=--locked
 # ignores ziran.local.toml overrides for release builds.
 PACKAGE_FLAGS ?=
+export PACKAGE_FLAGS
 PACKAGES_MK := $(BUILD_DIR)/packages.mk
 $(PACKAGES_MK): ziran.toml ziran.lock scripts/packages.sh
 	sh scripts/packages.sh $(PACKAGE_FLAGS)
@@ -46,13 +47,20 @@ endif
 packages: $(PACKAGES_MK)
 
 ZIRAN_DIR := build/packages/ziran
-ZIRAN_BUILD_DIR := $(abspath $(BUILD_DIR)/ziran-toolchain)
+# Project mode selects tools from the pinned checkout. Build that same stack
+# here so source checks and C generation cannot use different compiler builds.
+ZIRAN_BUILD_DIR := $(abspath $(ZIRAN_DIR)/build)
 KRYON_LIBRARY_BUILD_DIR := $(abspath $(BUILD_DIR)/kryon-library)
 ZI2C_BIN := $(ZIRAN_BUILD_DIR)/bin/zi2c
 ZIRAN_BIN := $(ZIRAN_BUILD_DIR)/bin/ziran
 ZI2ZIR_BIN := $(ZIRAN_BUILD_DIR)/bin/zi2zir
 ZI_CHECK_STAMP := $(BUILD_DIR)/zi-check/native.fresh
-ZIRAN_SOURCES := $(wildcard $(ZIRAN_DIR)/cmd/zir/*.[ch]) $(wildcard $(ZIRAN_DIR)/cmd/zir-c/*.[ch]) $(wildcard $(ZIRAN_DIR)/cmd/zir-ir/*.[ch]) $(ZIRAN_DIR)/Makefile
+# Package commands are Ziran sources too. Changes there must rebuild the same
+# toolchain as compiler and runtime changes, including local package overrides.
+ZIRAN_SOURCES := $(shell find $(ZIRAN_DIR)/cmd $(ZIRAN_DIR)/bootstrap \
+    $(ZIRAN_DIR)/include $(ZIRAN_DIR)/std -type f \
+    \( -name '*.zi' -o -name '*.c' -o -name '*.h' \) 2>/dev/null) \
+    $(ZIRAN_DIR)/Makefile $(ZIRAN_DIR)/native-zx.mk $(ZIRAN_DIR)/VERSION
 BUILD_OBJ_DIR := $(BUILD_DIR)/obj
 BUILD_BIN_DIR := $(BUILD_DIR)/bin
 BUILD_DIST_DIR := $(BUILD_DIR)/dist
@@ -378,7 +386,7 @@ LOCALE_FILES := $(wildcard locales/*.txt)
 # The practice media is the practices package, packaged under
 # assets/practices/ (scripts/practice_media.py).
 PRACTICE_MEDIA := build/packages/practices
-IMAGE_FILES := assets/app/icon.webp assets/easteregg/art.webp assets/easteregg/waozi.png $(PRACTICE_MEDIA)/whm/1.webp $(PRACTICE_MEDIA)/whm/2.webp $(PRACTICE_MEDIA)/meditation/1.webp assets/pet/egg1.png $(wildcard $(PRACTICE_MEDIA)/*/banner*.webp) $(wildcard $(PRACTICE_MEDIA)/sunsalutation/characters/*/*.png) $(wildcard $(PRACTICE_MEDIA)/taichi/*.png $(PRACTICE_MEDIA)/taichi/*/*.png) $(PRACTICE_MEDIA)/taichi/course.tch
+IMAGE_FILES := assets/app/icon.webp $(PRACTICE_MEDIA)/whm/1.webp $(PRACTICE_MEDIA)/whm/2.webp $(PRACTICE_MEDIA)/meditation/1.webp assets/pet/egg1.png $(wildcard $(PRACTICE_MEDIA)/*/banner*.webp) $(wildcard $(PRACTICE_MEDIA)/sunsalutation/characters/*/*.png) $(wildcard $(PRACTICE_MEDIA)/taichi/*.png $(PRACTICE_MEDIA)/taichi/*/*.png) $(PRACTICE_MEDIA)/taichi/course.tch
 SOUND_FILES := $(wildcard assets/sounds/*.ogg)
 FONT_SUBSET_DIR := assets/fonts/subset
 FONT_SUBSET_CORPUS := locales assets/fonts/input_common.txt assets/fonts/ui_symbols.txt $(PRACTICE_MEDIA)/astral_projection/text $(PRACTICE_MEDIA)/workout/text
@@ -400,7 +408,8 @@ INBE_BUNDLE := $(BUILD_DIR)/inbe.zx
 INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zx
 APP_SOURCES := $(shell find apps src/apps -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
 APP_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp 2>/dev/null)
-APP_RESOURCES += $(shell find -L $(PRACTICE_MEDIA) -type f -not -path '*/.git/*' 2>/dev/null) $(shell rg --files design/tai-chi/text 2>/dev/null) apps/practice/content.json design/tai-chi/narration.json design/tai-chi/narration-lines.json $(wildcard design/tai-chi/narration-receipt.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt) $(wildcard design/lumi-guide/*.json) scripts/practice_content.py scripts/generate-lumi-guide-narration.py
+APP_RESOURCES += $(shell find -L $(PRACTICE_MEDIA) -type f -not -path '*/.git/*' 2>/dev/null) $(shell rg --files design/tai-chi/text 2>/dev/null) apps/practice/content.json design/tai-chi/narration.json design/tai-chi/narration-lines.json $(wildcard design/tai-chi/narration-receipt.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt design/sun-salutation/narration/text-female/*.txt) $(wildcard design/lumi-guide/*.json) $(wildcard design/astral-projection/*.json) scripts/practice_content.py scripts/practice_media.py scripts/tai_chi_preview.py apps/practice/course_access.zi scripts/generate-lumi-guide-narration.py
+APP_RESOURCES += $(wildcard design/lumi-guide/text-female/*.txt)
 APP_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievement-locales/*.json)
 APP_RESOURCES += $(wildcard assets/*/sidebar.shape)
 
@@ -652,10 +661,10 @@ $(ZIRAN_BIN): $(ZI2C_BIN)
 
 zi-check: $(ZI_CHECK_STAMP) | build-laws
 
-$(ZI_CHECK_STAMP): Makefile scripts/check-zi-sources.py $(ZI2C_BIN) \
+$(ZI_CHECK_STAMP): ziran.lock $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile scripts/check-zi-sources.py scripts/package-paths.sh $(KRYON_DIR)/ziran.toml $(ZIRAN_BIN) \
 	$(ZI_SRCS) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) \
 	$(KRYON_UI_ZI) $(KRYON_CSS_ZI) $(GAME2D_MODULES) | build-laws
-	@ZI_CHECK_DEFINES="$(ZI_NATIVE_DEFINES)" python3 scripts/check-zi-sources.py $(ZI2ZIR_BIN) $(KRYON_DIR)/src/ui $(ZIRAN_DIR)/std $(CSS_DIR)/src
+	@ZI_CHECK_DEFINES="$(ZI_NATIVE_DEFINES)" python3 scripts/check-zi-sources.py $(ZIRAN_BIN)
 	@mkdir -p $(dir $@)
 	@touch $@
 
@@ -691,21 +700,15 @@ $(KRYON_CSS_STAMP): Makefile $(ZI2C_BIN) $(KRYON_CSS_ZI) $(KRYON_DIR)/src/ui/mod
 $(KRYON_CSS_C) $(KRYON_CSS_H): $(KRYON_CSS_STAMP)
 	@test -f $@
 
-$(KRY_GEN_STAMP): Makefile ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(KRY_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile ziran.lock scripts/package-paths.sh $(KRYON_DIR)/ziran.toml $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	# --prune-stale removes generated files this run no longer writes, so an
 	# obsolete header/code pair never survives. Unchanged files keep their
 	# timestamps, so only C that actually changed recompiles.
 	mkdir -p $(KRY_GEN_DIR)
-	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --prune-stale --root . \
+	sh scripts/run-ziran.sh $(ZIRAN_BIN) build --target=c --project --offline $(PACKAGE_FLAGS) \
+		--no-main --prune-stale --root . \
 		$(foreach define,$(ZI_NATIVE_DEFINES),--define $(define)) \
-		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(CSS_DIR)/src \
-		--module-path $(KRYON_DIR)/src/backend \
-		--module-path $(GAME2D_DIR)/src \
-		--module-path $(ZIRAN_DIR)/std \
-		--module-path $(DAOCHI_CLIENT_DIR) $(ZI_PACKAGE_PATHS) \
 		-o $(KRY_GEN_DIR) $(ZI_SRCS)
-	touch $@
 
 $(KRY_GEN_SRCS) $(KRY_GEN_HDRS) $(KRY_GEN_GAME_C): $(KRY_GEN_STAMP)
 
@@ -750,7 +753,7 @@ $(SQLITE_AMALGAMATION_C) $(SQLITE_AMALGAMATION_H): $(SQLITE_DIR)/configure $(SQL
 	cd $(SQLITE_BUILD_DIR) && $(abspath $(SQLITE_DIR))/configure
 	$(MAKE) -C $(SQLITE_BUILD_DIR) sqlite3.c sqlite3.h
 
-$(TARGET): $(ZIRAN_BUILD_DIR)/libziran.a Makefile $(SRC) $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(KRYON_NATIVE_BACKEND_DEPS) $(LIBOQS_A) $(CURL_PROTOCOL_CHECK) | $(NATIVE_BIN_DIR)
+$(TARGET): $(ZIRAN_BUILD_DIR)/libziran.a Makefile $(SRC) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(KRYON_NATIVE_BACKEND_DEPS) $(LIBOQS_A) $(CURL_PROTOCOL_CHECK) | $(NATIVE_BIN_DIR)
 $(TARGET): | zi-check
 	$(shell mkdir -p $(NATIVE_OBJ_DIR))
 	$(file >$(NATIVE_OBJ_DIR)/inputs.mk,NATIVE_SOURCES := $(APP_SRCS) $(GENERATED_NATIVE_C) $(EMBEDDED_ASSETS_C) $(SQLITE_SRC))
@@ -761,7 +764,7 @@ $(TARGET): | zi-check
 	$(CC) $(KRYON_NATIVE_CFLAGS) \
 		-o $@ \
 		@$(NATIVE_OBJ_DIR)/objects.rsp \
-		$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a $(ZIRAN_BUILD_DIR)/libziran.a \
+		$(ZIRAN_BUILD_DIR)/libziran.a \
 		$(KRYON_NATIVE_BACKEND_LIBS) \
 		$(LIBOQS_A) \
 		$(KRYON_NATIVE_BACKEND_LDLIBS) \

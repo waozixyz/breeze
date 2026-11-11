@@ -4,36 +4,38 @@
 #import "vec"
 #import "text_buffer"
 #import "text_props"
-#import "text_widget"
 #import "text_measure"
 #import "text_align"
 #import "image_props"
-#import "image_widget"
 #import "grid"
 #import "grid_props"
 #import "press_props"
-#import "press_widget"
 #import "button_props"
-#import "button_widget"
 #import "control_props"
 #import "scroll_props"
-#import "scroll_widget"
-#import "tree"
+#import "kryon/tree"
 #import "pointer_input"
 #import "swipe"
 #import "swipe_props"
 #import "input_protocol"
 #import "drawing_props"
 #import "box_props"
-#import "box_widget"
 #import "spinbox_props"
-#import "spinbox_widget"
+#import "kryon/Kryon"
+#import "kryon/spinbox"
+#import "kryon/transition"
+#import "kryon/box_widget"
+#import "kryon/button_widget"
+#import "kryon/dropdown_widget"
+#import "kryon/image_widget"
+#import "kryon/press_widget"
+#import "kryon/scroll_widget"
+#import "kryon/text_area_widget"
+#import "kryon/text_widget"
+#import "kryon/toggle_widget"
 #import "dropdown_props"
-#import "dropdown_widget"
 #import "toggle_props"
-#import "toggle_widget"
 #import "text_input_props"
-#import "text_area_widget"
 #import "widget_palette"
 #import "icon"
 #import "transition"
@@ -94,6 +96,8 @@ note_state: TextAreaResult;
 passage_state: TextAreaResult;
 reader_swipe: SwipeGesture;
 book_dark: bool;
+picture_book: bool;
+mode_choose_open: bool;
 opening_started: float64;
 opening: bool;
 opening_from: Rectangle;
@@ -124,6 +128,7 @@ SaveSettings :: () -> bool {
     BuilderPrint(*value, "% % % %", font_size, font_face, margin, line_gap)
     if !SaveAppRecordHost("reader.settings", BuilderFinish(value)) { return false }
     if !SaveAppRecordHost("tao-te-ching.theme", ifx book_dark then "1" else "0") { return false }
+    if !SaveAppRecordHost(BookModeRecord(book), ifx picture_book then "1" else "0") { return false }
     settings_dirty = false
     return true
 }
@@ -164,6 +169,7 @@ LoadSettings :: () {
     margin = 24
     line_gap = 8
     book_dark = RecordNumber("tao-te-ching.theme", ifx frame.dark then 1 else 0, 0, 1) == 1
+    picture_book = RecordNumber(BookModeRecord(0), 0, 0, 1) == 1
     text := AppRecordHost("reader.settings")
     at: s32
     size := ReadLibraryNumber(text, *at)
@@ -176,12 +182,30 @@ LoadSettings :: () {
     if gap >= 2 && gap <= 20 { line_gap = gap }
 }
 
-ReadingBounds :: () -> Rectangle {
+ReaderAreaBounds :: () -> Rectangle {
     width := frame.width - Scale(margin * 2)
     if width > Scale(680) { width = Scale(680) }
     top := frame.top + Scale(16)
     height := frame.height - frame.bottom - top - Scale(48)
     return Bounds((frame.width - width) / 2, top, width, height)
+}
+
+ChapterArtBounds :: () -> Rectangle {
+    area := ReaderAreaBounds()
+    side := cast(s32)(area.height * 38.0 / 100.0)
+    if cast(float32)side > area.width { side = cast(s32)area.width }
+    x := cast(s32)area.x + (cast(s32)area.width - side) / 2
+    return Bounds(x, cast(s32)area.y, side, side)
+}
+
+ReadingBounds :: () -> Rectangle {
+    bounds := ReaderAreaBounds()
+    if !picture_book || !BookChapterArtApproved(book) { return bounds }
+    art := ChapterArtBounds()
+    bounds.y = art.y + art.height + cast(float32)Scale(16)
+    bottom := cast(float32)frame.height - cast(float32)frame.bottom - cast(float32)Scale(48)
+    bounds.height = bottom - bounds.y
+    return bounds
 }
 
 ChapterHeadingProps :: (chapter: s32) -> TextProps {
@@ -271,12 +295,78 @@ OpenBook :: (index: s32) {
     annotation_chapter = 0
     panel_open = false
     reading = true
+    mode_choose_open = true
     opening = true
     opening_started = frame.now
     unused SmoothFramesHost(24)
     reader_swipe = SwipeGesture.{}
     Reflow()
     if page_count > 0 { LoadPageAnnotations() }
+}
+
+ChooseReadingMode :: (pictures: bool) {
+    picture_book = pictures
+    mode_choose_open = false
+    layout_width = 0
+    settings_dirty = true
+    unused SmoothFramesHost(2)
+    unused SaveReader()
+}
+
+CancelReadingModeChoice :: () {
+    mode_choose_open = false
+    layout_width = 0
+    unused SmoothFramesHost(2)
+}
+
+ReadingModeChooser :: () {
+    compact := frame.width < Scale(360)
+    width := frame.width - Scale(32)
+    if width > Scale(440) { width = Scale(440) }
+    height := ifx compact then Scale(344) else Scale(238)
+    x := (frame.width - width) / 2
+    y := frame.top + (frame.height - frame.top - frame.bottom - height) / 2
+    palette := ReaderPalette()
+    unused Box(frame.session, BoxProps.{.key = 27580,
+            .bounds = Bounds(0, 0, frame.width, frame.height), .fill = Color.{24, 20, 16, 208}})
+    unused Box(frame.session, BoxProps.{.key = 27581, .bounds = Bounds(x, y, width, height),
+            .fill = ColorFromPacked(palette.base), .border = ColorFromPacked(palette.border),
+            .radius = cast(float32)Scale(12)})
+    Text(frame.session, TextProps.{.key = 27582, .text = AppLocaleHost("library_mode_title"),
+            .font = frame.font, .align = cast(TextAlign)TextAlignCenter,
+            .bounds = Bounds(x + Scale(16), y + Scale(20), width - Scale(88), Scale(32))})
+    if Button(frame.session, ButtonProps.{.id = 27585,
+            .bounds = Bounds(x + width - Scale(52), y + Scale(12), Scale(40), Scale(40)),
+            .label = AppLocaleHost("close_button"), .icon_type = cast(s32)IconType.IconX,
+            .icon_only = true, .size = cast(ControlSize)ControlSize.ControlSizeLarge,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+        CancelReadingModeChoice()
+    }
+    choice_width := ifx compact then width - Scale(32) else (width - Scale(40)) / 2
+    choice_height := Scale(128)
+    text_x := ifx compact then x + Scale(16) else x + Scale(16)
+    picture_x := ifx compact then x + Scale(16) else text_x + choice_width + Scale(8)
+    text_y := y + Scale(68)
+    picture_y := ifx compact then text_y + choice_height + Scale(8) else text_y
+    if Button(frame.session, ButtonProps.{.id = 27583,
+            .bounds = Bounds(text_x, text_y, choice_width, choice_height),
+            .label = AppLocaleHost("library_mode_text"), .detail = AppLocaleHost("library_mode_text_detail"),
+            .icon_type = cast(s32)IconType.IconText, .size = cast(ControlSize)ControlSize.ControlSizeLarge,
+            .full_width = true, .selected = !picture_book,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        ChooseReadingMode(false)
+    }
+    if Button(frame.session, ButtonProps.{.id = 27584,
+            .bounds = Bounds(picture_x, picture_y, choice_width, choice_height),
+            .label = AppLocaleHost("library_mode_picture"), .detail = AppLocaleHost("library_mode_picture_detail"),
+            .icon_type = cast(s32)IconType.IconStack, .size = cast(ControlSize)ControlSize.ControlSizeLarge,
+            .full_width = true, .selected = picture_book,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        ChooseReadingMode(true)
+    }
 }
 
 TurnPage :: (index: s32) {
@@ -695,6 +785,10 @@ ReaderView :: () {
             layout_scale != previous_scale) { LoadPageAnnotations() }
     }
     if page_count <= 0 { return }
+    if mode_choose_open {
+        ReadingModeChooser()
+        return
+    }
     if !panel_open && !opening {
         pointer := SamplePointer()
         swipe := Swipe(SwipeSpec.{.bounds = ReadingBounds(),
@@ -709,6 +803,12 @@ ReaderView :: () {
         else if swipe.direction == SwipeDirection.SwipeRight || key == KeyLeft { TurnPage(page_index - 1) }
     }
     current := pages[page_index]
+    if picture_book && BookChapterArtApproved(book) {
+        Image(frame.session, ImageProps.{.key = 27503,
+                .asset_path = BookChapterArt(book, current.chapter),
+                .alt_text = BookChapterTitle(book, current.chapter),
+                .bounds = ChapterArtBounds(), .fit = ImageFit.ImageFitContain, .smooth = true})
+    }
     heading: TextProps = ChapterHeadingProps(current.chapter)
     props: TextProps = ReadingProps(current.chapter)
     props.text = BookChapter(book, current.chapter)[current.start:current.end]

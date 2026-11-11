@@ -22,9 +22,18 @@ def media_path(path):
     return ROOT / path
 
 
-def packaged_path(file):
+def narration_text_path(config, code, default_directory):
+    """Resolve the configured voice's locale text, retaining other defaults."""
+    selected = config.get('locale_text_files', {}).get(code)
+    if selected is not None:
+        return media_path(selected)
+    return Path(default_directory) / (code + '.txt')
+
+
+def packaged_path(file, media_root=None):
     """The packaged path of a file in the practice media."""
-    return PREFIX + Path(file).resolve().relative_to(MEDIA.resolve()).as_posix()
+    root = Path(media_root).resolve() if media_root is not None else MEDIA.resolve()
+    return PREFIX + Path(file).resolve().relative_to(root).as_posix()
 
 
 def writable_media():

@@ -234,8 +234,11 @@ with contextlib.ExitStack() as stack:
             driver.press(label="Apps", role="button")
             driver.press(label="Settings", role="button")
             driver.press(label="About", role="button")
-            driver.wait(label="App versions", role="text")
+            driver.wait(contains="Core · ", role="text")
             labels = [node["label"] for node in driver.tree() if node["visible"]]
+            assert "App versions" not in labels, labels
+            assert not any("Inbe harness" in label for label in labels), labels
+            assert any(label.startswith("Inner Breeze · v") for label in labels), labels
             versions = [label for label in labels if " · " in label]
             assert any(label.startswith("Habits · ") for label in versions), versions
             assert not any(label.startswith(("Photos · ", "Lists · ", "Practice · ",

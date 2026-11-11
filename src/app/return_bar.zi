@@ -1,12 +1,13 @@
-// An app opened from Apps without a pin has no navigation item to return
-// through, so a bar above it names the app and leads back to Apps. The bar
-// sits above the page's coordinates, like top navigation, so every app keeps
-// its own layout.
-#import "dropdown_props"
+// A compact graphical control returns an unpinned app to Apps. Reserve its
+// target above the page so it never covers the app's own controls.
 #import "geometry"
+#import "kryon/layout"
 #import "layout"
-#import "title_bar_props"
-#import "title_bar_widget"
+#import "button_props"
+#import "image_props"
+#import "control_props"
+#import "kryon/Widgets"
+CompressionIcon :: #import "mingcute/mingcute_regular_tool";
 #import, file "app_types.zi";
 #import, file "../core/types.zi";
 #import, file "route_types.zi";
@@ -21,9 +22,13 @@
 #import, file "mini_mode.zi";
 #import, file "../apps/module_host.zi";
 #import, file "../apps/node_apps.zi";
+#import, file "../apps/media_compression_request.zi";
 #import, file "../platform/environment.zi";
 
 using AppNavRoute;
+using ButtonTone;
+using ButtonEmphasis;
+using ImageFit;
 
 // The app on screen when Apps opened it and it has no visible pin.
 #program_export
@@ -36,6 +41,11 @@ app_return_bar_route :: (app: *InnerBreeze) -> s32 {
     // An unpinned Profile uses that same bar to return to Apps.
     if app.breathing.screen == ScreenProfile {
         return APP_NAV_ROUTE_NONE
+    }
+    // Photos keeps an account-storage entry in the reserved host bar,
+    // including when the app owns its own header or is pinned.
+    if app.breathing.screen == ScreenNodeApp && NodeAppName(app.node_app_slot) == "photos" {
+        return app_current_nav_route(app)
     }
     if app.breathing.screen == ScreenNodeApp && NodeAppOwnHeader(app.node_app_slot) {
         return APP_NAV_ROUTE_NONE
@@ -104,19 +114,31 @@ app_draw_return_bar :: (app: *InnerBreeze) {
     if route == APP_NAV_ROUTE_NONE || app.file_dialog_active != 0 {
         return
     }
-    height := app_return_bar_height(app)
-    bar: TitleBarProps
-    bar.key = KeyHash("inbe/return-bar")
-    bar.title = app_nav_route_label(route)
-    bar.height = height
-    bar.bounds = Rectangle.{0.0, -cast(float32)height,
-        cast(float32)app.ui.view_width, cast(float32)height}
-    bar.has_leading_action = app.modal.active == 0
-    bar.leading_label = LocaleText(ifx app.breathing.screen == ScreenNodeApp then "back_button"
+    height := cast(float32)app_return_bar_height(app)
+    control := cast(float32)AppScale(44)
+    inset := cast(float32)AppScale(8)
+    y := -height + (height - control) / 2.0
+    label := LocaleText(ifx app.breathing.screen == ScreenNodeApp then "back_button"
         else "return_to_apps")
-    options: [1]DropdownOption
-    result := TitleBar(app.ui.session, bar, options[0:0])
-    if result.clicked_leading && !app_node_app_back(app) {
+    if Button(app.ui.session, ButtonProps.{.key = KeyHash("inbe/return-to-apps"),
+        .bounds = Rectangle.{inset, y, control, control}, .label = label,
+        .image = ImageProps.{.asset_path = "assets/app/back-home.avif",
+            .alt_text = label, .fit = cast(ImageFit)ImageFitContain, .smooth = true},
+        .icon_only = true, .circle = true, .disabled = app.modal.active != 0,
+        .tone = cast(ButtonTone)ButtonToneNeutral,
+        .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 && !app_node_app_back(app) {
         app_return_to_apps(app)
+    }
+    photos := app.breathing.screen == ScreenNodeApp && NodeAppName(app.node_app_slot) == "photos"
+    if photos {
+        if Button(app.ui.session, ButtonProps.{.key = KeyHash("media/compression/settings"),
+            .bounds = Rectangle.{cast(float32)app.ui.view_width - inset - control, y, control, control},
+            .label = LocaleText("media_compression_title"), .icon_shape = CompressionIcon.Shape,
+            .icon_only = true, .disabled = app.modal.active != 0,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+            app_block_current_click(app)
+            MediaCompressionRequest()
+        }
     }
 }

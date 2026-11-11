@@ -27,6 +27,7 @@
 #import, file "../practices/sun_salutation/sun_salutation_entry.zi";
 #import, file "../practices/sun_salutation/sun_salutation_rules.zi";
 #import, file "../../apps/practice/astral_projection.zi";
+#import, file "assets.zi";
 #import, file "../practices/tai_chi/tai_chi_course.zi";
 #import, file "../practices/tai_chi/tai_chi_rules.zi";
 #import, file "../practices/tai_chi/tai_chi_entry.zi";
@@ -322,6 +323,22 @@ screenshot_seed_entry_habits :: (app: *InnerBreeze) {
 // The sun_salutation_pose scene: Upward salute, the second step, with the
 // man, after the longest transition has finished.
 screenshot_pose_step :: 1
+// Exercise missing/older downloaded data through the app's ordinary asset
+// effect in private screenshot fixtures, without changing real packages.
+screenshot_astral_asset_mode: s32;
+
+ScreenshotAstralAssets :: (path: string) -> AssetView {
+    if screenshot_astral_asset_mode == 1 &&
+    path == "assets/practices/astral_projection/catalogue.json" {
+        return AssetView.{}
+    }
+    prefix := "assets/practices/astral_projection/sessions/"
+    if screenshot_astral_asset_mode == 2 && path.count >= prefix.count && path[:prefix.count] == prefix {
+        return AssetView.{}
+    }
+    return AppsAsset(path)
+}
+
 screenshot_pose_ticks :: (SUN_SALUTATION_TRANSITION_SECONDS + 1) * 60
 
 // Realistic habit set for promotional captures. The fixtures above stay as
@@ -530,7 +547,8 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
         app.tai_chi.voice = 0
         ScreenshotPracticeReady(app, EXERCISE_TAI_CHI)
     }
-    if scene_text == "astral_projection_session" {
+    if scene_text == "astral_projection_session" || scene_text == "astral_projection_ending" ||
+    scene_text == "astral_projection_missing" || scene_text == "astral_projection_legacy" {
         ScreenshotPracticeReady(app, EXERCISE_ASTRAL_PROJECTION)
     }
     if scene_text == "lumi_chat" || scene_text == "lumi_customize" ||
@@ -791,11 +809,26 @@ setup_screenshot_scene :: (app: *InnerBreeze, request: *ScreenshotRequest) {
         }
         app.sun_salutation.step_ticks = screenshot_pose_ticks
         app.session_paused = 1
-    } else if scene_text == "astral_projection_session" {
+    } else if scene_text == "astral_projection_missing" || scene_text == "astral_projection_legacy" {
         app.main_tab = APP_MAIN_TAB_PRACTICE
         app.exercise_type = EXERCISE_ASTRAL_PROJECTION
         AstralStart(app)
-        AstralAdvanceElapsed(app, 2460000)
+        screenshot_astral_asset_mode = ifx scene_text == "astral_projection_legacy" then 1 else 2
+        AssetBindProvider(ScreenshotAstralAssets)
+        AstralStartSelected(app)
+        if scene_text == "astral_projection_legacy" {
+            AstralAdvanceElapsed(app, 60000)
+            app.session_paused = 1
+        }
+    } else if scene_text == "astral_projection_session" || scene_text == "astral_projection_ending" {
+        app.main_tab = APP_MAIN_TAB_PRACTICE
+        app.exercise_type = EXERCISE_ASTRAL_PROJECTION
+        AstralStartSelected(app)
+        if scene_text == "astral_projection_ending" && AstralDuration() > 0 {
+            AstralAdvanceElapsed(app, (AstralDuration() - 1) * 1000)
+        } else {
+            AstralAdvanceElapsed(app, 60000)
+        }
         app.session_paused = 1
     } else if scene_text == "tai_chi_session" {
         // Part the Wild Horse's Mane, paused in its first stride.

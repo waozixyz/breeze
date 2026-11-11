@@ -10,36 +10,37 @@
 #import "geometry"
 #import "vec"
 #import "dpi"
+#import "kryon/layout"
 #import "layout"
 #import "drawing_props"
 #import "text_props"
 #import "semantic"
 #import "text_align"
-#import "text_widget"
 #import "text_measure"
 #import "button_props"
-#import "button_widget"
 #import "control_props"
 #import "box_props"
-#import "box_widget"
 #import "shape_props"
-#import "shape_widget"
 #import "toggle_props"
-#import "toggle_widget"
+#import "kryon/Kryon"
+#import "kryon/slider"
+#import "kryon/box_widget"
+#import "kryon/button_widget"
+#import "kryon/dropdown_widget"
+#import "kryon/modal_frame_widget"
+#import "kryon/scroll_widget"
+#import "kryon/shape_widget"
+#import "kryon/text_widget"
+#import "kryon/title_bar_widget"
+#import "kryon/toggle_widget"
 #import "toggle_measure"
 #import "dropdown_props"
-#import "dropdown_widget"
 #import "segmented_control_props"
-#import "segmented_control_widget"
 #import "scroll_props"
-#import "scroll_widget"
 #import "slider_props"
-#import "slider_widget"
 #import "modal_props"
-#import "modal_frame_widget"
 #import "title_bar_props"
-#import "title_bar_widget"
-#import "tree"
+#import "kryon/tree"
 #import, file "../../src/apps/practice_ui_types.zi";
 #import, file "../../src/apps/practice_types.zi";
 #import, file "../../src/app/exercise_types.zi";
@@ -1108,6 +1109,123 @@ Settings :: () {
     if settings.practice == EXERCISE_WIM_HOF && settings.whm_editor {
         WhmStartSpeedEditor()
     }
+}
+
+// Session audio stays in one modal; choices apply without leaving the practice.
+SessionAudio :: () {
+    width := settings.view_width - Scale(32)
+    if width > Scale(560) {
+        width = Scale(560)
+    }
+    height := settings.view_height - Scale(32)
+    if height > Scale(680) {
+        height = Scale(680)
+    }
+    frame := ModalFrame(settings.session, ModalFrameProps.{
+            .key = KeyHash("inbe/practice/session-audio"),
+            .title = Locale("practice_background_music_label"),
+            .width = width, .height = height, .scale = settings.scale,
+            .title_at_start = true, .strong_title = true,
+            .has_right_action = true, .right_label = Locale("close_button")})
+    if frame.dismissed || frame.right_clicked {
+        Ask(PRACTICE_SETTINGS_BACK, 0)
+        return
+    }
+    if !frame.opened {
+        return
+    }
+    bounds := frame.layout.content
+    count := settings.music_count
+    if count < 0 {
+        count = 0
+    } else if count > SETTINGS_MUSIC_TRACK_MAX {
+        count = SETTINGS_MUSIC_TRACK_MAX
+    }
+    content_width := cast(s32)bounds.width
+    status_height: s32 = 0
+    if settings.music_show_status && settings.music_status.count > 0 {
+        status_height = ParagraphHeight(settings.music_status, content_width, settings.font, 0) + Scale(12)
+    }
+    attribution_height := AttributionHeight(content_width)
+    content_height := Scale(74 * 2 + 34 + 52 * (count + 1) + 16)
+    if settings.music_selection > 0 {
+        content_height += status_height + attribution_height + Scale(12)
+        if settings.music_built_in && !settings.music_installed {
+            content_height += Scale(56)
+        }
+        if settings.music_downloading {
+            content_height += Scale(28)
+        }
+    }
+    scrolled := Scroll(settings.session, ScrollProps.{
+            .key = KeyHash("inbe/practice/session-audio/scroll"),
+            .bounds = bounds, .content_height = content_height,
+            .scroll_offset = settings.scroll})
+    settings.scroll = scrolled.scroll_offset
+    if scrolled.opened {
+        x := cast(s32)scrolled.content.x
+        y := cast(s32)scrolled.content.y
+        MovementVolume(x, content_width, *y, true)
+        MovementVolume(x, content_width, *y, false)
+        Label(Locale("practice_background_music_label"), x, y)
+        y += Scale(34)
+        for index: cast(s32)0..count {
+            label := Locale("audio_music_none_option")
+            if index > 0 {
+                label = ReadPracticeMusicTrackHost(index - 1).label
+            }
+            selected := settings.music_selection == index
+            if Button(settings.session, ButtonProps.{
+                    .key = KeyHash("inbe/practice/session-audio/track") + cast(u64)index,
+                    .bounds = Bounds(x, y, content_width, Scale(44)),
+                    .label = label, .selected = selected, .fit_content = true,
+                    .tone = cast(ButtonTone)(ifx selected then ButtonToneAccent else ButtonToneNeutral),
+                    .emphasis = cast(ButtonEmphasis)(ifx selected then ButtonEmphasisFilled else ButtonEmphasisSoft)}) != 0 {
+                Ask(PRACTICE_SETTINGS_MUSIC, index)
+            }
+            y += Scale(52)
+        }
+        if settings.music_selection > 0 {
+            if settings.music_built_in && !settings.music_installed {
+                if Button(settings.session, ButtonProps.{
+                        .key = KeyHash("inbe/practice/session-audio/download"),
+                        .bounds = Bounds(x, y, content_width, Scale(44)),
+                        .label = Locale("meditation_music_download_button"),
+                        .disabled = settings.music_downloading,
+                        .tone = cast(ButtonTone)ButtonToneAccent,
+                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+                    Ask(PRACTICE_SETTINGS_MUSIC_DOWNLOAD, 0)
+                }
+                y += Scale(56)
+            }
+            if status_height > 0 {
+                Text(settings.session, TextProps.{
+                        .bounds = Bounds(x, y, content_width, status_height - Scale(12)),
+                        .text = settings.music_status, .wrap = cast(TextWrap)TextWrapAuto})
+                y += status_height
+            }
+            if settings.music_downloading {
+                MusicProgress(x, y, content_width)
+                y += Scale(28)
+            }
+            Text(settings.session, TextProps.{
+                    .bounds = Bounds(x, y, content_width, attribution_height),
+                    .text = Locale("meditation_music_attribution"),
+                    .font = SETTINGS_TEXT_12, .wrap = cast(TextWrap)TextWrapAuto})
+        }
+        unused End(settings.session)
+    }
+    unused End(settings.session)
+}
+
+PracticeSessionAudioView :: (message: PracticeMessage) -> PracticeMessage {
+    settings = ReadPracticeSettingsHost()
+    settings.action = PRACTICE_SETTINGS_NONE
+    settings.value = 0
+    SessionAudio()
+    WritePracticeSettingsHost(settings)
+    message.succeeded = true
+    return message
 }
 
 PracticeSettingsView :: (message: PracticeMessage) -> PracticeMessage {

@@ -3,11 +3,13 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
 standard=${2:-"$root/build/packages/ziran/std"}
-ui=${3:-"$root/build/packages/kryon/src/ui"}
 work="$root/build/radio-test"
 mkdir -p "$work"
-"$ziran" bundle --root "$root" --module-path "$root/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$ui" --define KRYON_HOSTED_UI --module-path "$standard" \
+# Match the app build's scoped package exports, including Kryon's widget aliases.
+cd "$root"
+# shellcheck disable=SC2086
+"$ziran" bundle --project --offline ${PACKAGE_FLAGS:-} --root "$root" \
+    --define KRYON_HOSTED_UI \
     --entry radio:Main -o "$work/radio.zx" "$root/apps/radio/radio.zi"
 library=${ZIRAN_LIB:-"$(dirname "$ziran")/../libziran.a"}
 "${CC:-cc}" -std=c11 -O1 -g -fsanitize=address,undefined \

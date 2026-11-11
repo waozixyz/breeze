@@ -7,29 +7,37 @@ if [ -n "${DAOCHI_CLIENT_DIR:-}" ]; then
     # Standalone storage tests also retain unqualified protocol imports.
     printf '%s\n' --module-path "$DAOCHI_CLIENT_DIR"
 fi
-# Read the app's source roots from its manifest so every platform resolves
+# Read the app and Kryon source roots so every platform resolves
 # the same named modules without file-relative imports.
-python3 - "$root" <<'PY'
+packages=${1:-build/packages}
+python3 - "$root" "$packages" <<'PY'
 from pathlib import Path
 import sys
 
 root = Path(sys.argv[1])
-text = (root / "ziran.toml").read_text()
-try:
-    import tomllib
-    roots = tomllib.loads(text)["package"]["module_roots"]
-except ModuleNotFoundError:
-    # Python before 3.11, as on the Ubuntu 22.04 package builders: the
-    # manifest keeps module_roots as one list of strings on one line.
-    import ast
-    import re
-    roots = ast.literal_eval(re.search(r"^module_roots\s*=\s*(\[[^\]]*\])", text, re.M).group(1))
-for directory in roots:
+def module_roots(manifest):
+    text = manifest.read_text()
+    try:
+        import tomllib
+        roots = tomllib.loads(text)["package"]["module_roots"]
+    except ModuleNotFoundError:
+        # Python before 3.11, as on the Ubuntu 22.04 package builders: the
+        # manifest keeps module_roots as one list of strings on one line.
+        import ast
+        import re
+        roots = ast.literal_eval(re.search(r"^module_roots\s*=\s*(\[[^\]]*\])", text, re.M).group(1))
+    return roots
+for directory in module_roots(root / "ziran.toml"):
     print("--module-path")
     print(root / directory)
+kryon = Path(sys.argv[2]) / "kryon"
+for directory in module_roots(kryon / "ziran.toml"):
+    print("--module-path")
+    print(kryon / directory)
+    print("--module-path")
+    print("kryon=" + str(kryon / directory))
 PY
-packages=${1:-build/packages}
-for path in kryon=kryon/src/ui kryon=kryon/src/backend apps=apps/src \
+for path in apps=apps/src \
     crypto=crypto/src entity=entity/src plot=plot/src qrcode=qrcode/src \
     oqs=oqs/src mingcute=mingcute/src daochi_client=daochi-client \
     webp=webp/src image_codec=image-codec/src avif=avif/src \

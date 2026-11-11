@@ -41,7 +41,7 @@ bool voice_audio_VoiceAudioActive(int32_t voice) { assert(voice == VoiceAudioGui
 
 int main(void)
 {
-    InnerBreeze app = {0};
+    static InnerBreeze app = {0};
     String key = StringView("practice_guide_start", 20);
     app.sound_volume = 60;
     lumi_guide_LumiGuideSpeak(&app, key);

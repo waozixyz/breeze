@@ -23,6 +23,7 @@
 #import, file "../src/apps/diary_records.zi";
 #import, file "../src/apps/media_store.zi";
 #import, file "../src/apps/media_metadata.zi";
+#import, file "../src/apps/media_compression_store.zi";
 
 Byte :: (out: *Vec(u8), value: s64) {
     unused VecPush(out.*, cast(u8)(value & 255))
@@ -301,6 +302,40 @@ Check :: () -> s32 {
     // Files that are not photos are refused.
     check_true("text is no photo", !MediaImportBytes("just some text", "notes.txt").succeeded)
     check_true("an empty file is no photo", !MediaImportBytes("", "empty.jpg").succeeded)
+
+    // Preparing/cancelling a comparison and rejected Apply actions leave
+    // the source bytes, records and references unchanged.
+    compression_source := MediaCompressionSource(morning_hash)
+    compression_record := MediaEntityRecord(morning_hash)
+    compression_queued := read_db_count("SELECT COUNT(*) FROM sync_outbox")
+    check_true("comparison reads the original", compression_source == morning)
+    PackageFree(compression_source)
+    check_true("a cancelled comparison keeps the record", MediaEntityRecord(morning_hash) == compression_record)
+    check_true("an empty encode is refused", !MediaCompressionCommit(
+        AppTextFromCString(storage_user_id_buffer(), 64), morning_hash, morning, "", 35))
+    check_true("invalid output is refused", !MediaCompressionCommit(
+        AppTextFromCString(storage_user_id_buffer(), 64), morning_hash, morning, "broken", 35))
+    check_true("another account cannot apply it", !MediaCompressionCommit(
+        "another-account", morning_hash, morning, preview, 35))
+    check_true("quality outside the control is refused", !MediaCompressionCommit(
+        AppTextFromCString(storage_user_id_buffer(), 64), morning_hash, morning, preview, 101))
+    check_true("failed Apply keeps original bytes and references", PackageRead(original_path, DIARY_FILE_LIMIT) == morning &&
+        MediaEntityRecord(morning_hash) == compression_record)
+    check_int("cancel and failures queue no mutations", read_db_count("SELECT COUNT(*) FROM sync_outbox"), compression_queued)
+    // A generated AVIF is content behind the stable original identity.
+    // It must not appear again as a gallery row, including in Trash.
+    target_hash := "abababababababababababababababababababababababababababababababab"
+    target_key := EntityPhotoKey(target_hash)
+    target_record := MediaCompressionTargetRecord(compression_record, target_hash, 100, 400, 600)
+    before_count := MediaQuery("", false)
+    check_true("a generated copy is recorded", MediaRecordWrite(target_key, target_record))
+    check_int("a generated copy adds no gallery row", MediaQuery("", false), before_count)
+    check_true("the generated copy has no inherited preview", !EntityPreviewContent(target_record).valid)
+    check_true("a generated copy can be trashed", MediaSetTrashed(target_hash, true))
+    check_int("a generated copy adds no Trash row", MediaQuery("", true), 0)
+    PackageFree(target_record)
+    PackageFree(target_key)
+    PackageFree(compression_record)
 
     // Another account on this device sees none of these.
     storage_close()

@@ -21,7 +21,7 @@ Portable :: #import "kryon/app_protocol";
 #import, file "app_locations.zi";
 
 #import "std/date_time_linux"
-#import "crypto"
+#import "daochi_client/crypto"
 #import "geometry"
 #import "session"
 #import "text_input_props"
@@ -236,6 +236,9 @@ NodeTreeAllows :: (context: *void, node: *AppNode, name: string) -> bool {
         return false
     }
     if NodeAppMediaCapability(name) {
+        if name == "media.compression.open" && (node_tree_validating || node_snapshot_scanning) {
+            return false
+        }
         return NodeAppMediaGranted(owner)
     }
     return NodeAppCapability(name)
@@ -250,6 +253,13 @@ NodeTreeCall :: (context: *void, node: *AppNode, module: *u8, function: *u8,
     }
     if name == "AppServiceHost" && count == 2 && HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "string", cast(s32)HostString) {
+        if AppArgumentText(arguments[0]) == "media.compression.open" {
+            // Only the verified legacy Photos identity receives this grant.
+            // Keep the request queued until its guest frame has returned.
+            owner := NodeTreeLegacyOwner(runner, node)
+            if owner == "" { return 0 }
+            return NodeAppCallFor(runner, owner, module, function, arguments, count, result)
+        }
         profile_request := AppArgumentText(arguments[1])
         if AppArgumentText(arguments[0]) == "entity.profile" &&
         (profile_request == "open" || profile_request == "referrals" ||

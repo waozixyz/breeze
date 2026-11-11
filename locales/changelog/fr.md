@@ -2,8 +2,8 @@
 
 ## [Unreleased]
 
-- Photos se télécharge depuis Applications ; Lumi présente une seule fois les retours complets de la liste, et Listes accepte des tâches plus longues et leur validation par balayage.
-- Changer d’onglet dans Pratique avec la navigation latérale ne décale plus l’écran.
+- Photos via Applications ; Lumi : retours de liste complets en un aperçu ; Listes : tâches longues, cochées par balayage.
+- Les onglets Pratique ne décalent plus l’écran. Choisis parmi six exercices astraux avant de commencer. Dix langues.
 - Les packs de voix des pratiques sont environ un tiers plus légers.
 
 ## [2.1.63] - 2026-11-05

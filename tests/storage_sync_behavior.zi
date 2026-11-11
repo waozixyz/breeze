@@ -48,6 +48,7 @@
 #import, file "../src/storage/sync_node_storage.zi";
 #import, file "../src/storage/sync_storage_usage.zi";
 #import, file "../src/storage/media_records.zi";
+#import, file "../src/apps/media_compression_settings.zi";
 #import, file "../src/storage/entity_records.zi";
 #import, file "../src/storage/entity_record_crypto.zi";
 DaochiEntity :: #import "daochi_client/entity";
@@ -2213,6 +2214,49 @@ MediaTestHash :: () -> string {
 // The media library syncs in its own collection, private.inbe.v1.media,
 // which released versions skip as an unknown collection. A record of a kind
 // or shape this version cannot read changes nothing and never stops a sync.
+test_media_compression_sync_between_devices :: () {
+    first := make_root("sync-compression-a")
+    second := make_root("sync-compression-b")
+    check_true("init compression device a", storage_init(first) != 0)
+    set_account()
+    check_int("compression starts at quality 35", MediaCompressionQuality(), 35)
+    check_true("initial download holds automatic compression offer", !MediaCompressionOffer(true))
+    storage_set_meta_int64("sync_full_upload_done", 1)
+    storage_set_meta_int64(STORAGE_SYNC_RECORD_FIELDS_KEY, STORAGE_SYNC_RECORD_FIELDS)
+    check_true("an empty library does not consume the offer", !MediaCompressionOffer(false) && !MediaCompressionSeen())
+    check_true("Photos consumes the shared offer", MediaCompressionOffer(true))
+    check_true("Diary cannot repeat the same offer", !MediaCompressionOffer(true))
+    check_true("quality is adjustable", MediaCompressionSetQuality(63) && MediaCompressionQuality() == 63)
+    check_true("invalid quality preserves the preference", !MediaCompressionSetQuality(0) &&
+        !MediaCompressionSetQuality(101) && MediaCompressionQuality() == 63)
+    check_int("receipt and quality queue as encrypted media records",
+        read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='media_record'"), 2)
+    check_true("compression payload builds", build_payload())
+    check_true("receipt uses the shared media collection", contains(payload(), MediaCollection))
+    check_true("compression keys are private", !contains(payload(), MEDIA_COMPRESSION_SEEN_KEY))
+    storage_close()
+    check_true("init compression device b", storage_init(second) != 0)
+    set_account()
+    storage_close()
+    check_true("encrypted compression records sync to device b", ship_to(first, second, 5))
+    check_true("reopen compression device b", storage_init(second) != 0)
+    storage_set_meta_int64("sync_full_upload_done", 1)
+    storage_set_meta_int64(STORAGE_SYNC_RECORD_FIELDS_KEY, STORAGE_SYNC_RECORD_FIELDS)
+    check_true("device b has a complete sync snapshot", MediaCompressionOfferReady())
+    check_true("device b suppresses both apps' offer", MediaCompressionSeen() && !MediaCompressionOffer(true))
+    check_int("device b receives selected quality", MediaCompressionQuality(), 63)
+    storage_close()
+    check_true("receipt survives reopening", storage_init(first) != 0 && MediaCompressionSeen())
+    storage_close()
+    other := make_root("sync-compression-other")
+    check_true("open another account", storage_init(other) != 0)
+    set_account()
+    storage_set_setting_text("sync_public_id", "compression-other-account")
+    check_true("another account has its own receipt", !MediaCompressionSeen())
+    check_int("another account has default quality", MediaCompressionQuality(), 35)
+    storage_close()
+}
+
 test_media_records_sync_between_devices :: () {
     first := make_root("sync-media-a")
     second := make_root("sync-media-b")
@@ -2754,6 +2798,7 @@ Check :: () -> s32 {
     test_nested_app_records_sync_between_devices()
     test_app_order_syncs_between_devices()
     test_media_records_sync_between_devices()
+    test_media_compression_sync_between_devices()
     test_entity_records_sync_between_devices()
     test_entity_level_service()
     test_shared_game_progress()
