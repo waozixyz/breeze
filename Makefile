@@ -375,6 +375,13 @@ endif
 ifeq ($(NATIVE_PLATFORM),darwin)
 ZI_NATIVE_DEFINES += __APPLE__
 endif
+# Kryon's test driver is test code, so the app is built without it. The UI
+# tests drive the app, so they need a build made with KRYON_TEST_DRIVER set,
+# for example `KRYON_TEST_DRIVER=1 make tai-chi-ui-test` from a clean build.
+# A build without it stops with that instruction when a test runs it.
+ifneq ($(KRYON_TEST_DRIVER),)
+ZI_NATIVE_DEFINES += KRYON_TEST_DRIVER
+endif
 
 # No in-process GTK anywhere else either: the system theme uses kryon's
 # built-in palettes, and native file dialogs prefer xdg-desktop-portal through
