@@ -15,6 +15,7 @@ MixedAudioCallback :: #type (buffer: *void, frames: u32) -> ();
     #import "audio_decode_mp3"
     #import "audio_decode_vorbis"
     #import "byte_text_linux"
+    #import, file "host_clock.zi";
 
     AUDIO_SOUND_SLOTS :: 64
     AUDIO_MUSIC_SLOTS :: 16
@@ -228,8 +229,22 @@ MixedAudioCallback :: #type (buffer: *void, frames: u32) -> ();
         }
     }
 
+    // A device that failed to open is tried again at most every
+    // AUDIO_RETRY_SECONDS: each failed open can hold a frame for a tenth of a
+    // second while SDL tries its audio servers.
+    AUDIO_RETRY_SECONDS :: 10.0
+    audio_retry_at: float64;
+
     audio_init :: () -> bool {
-        return Sink.AudioSinkOpen()
+        now := HostSeconds()
+        if now < audio_retry_at {
+            return false
+        }
+        if Sink.AudioSinkOpen() {
+            return true
+        }
+        audio_retry_at = now + AUDIO_RETRY_SECONDS
+        return false
     }
 
     audio_close :: () {

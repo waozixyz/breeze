@@ -120,8 +120,66 @@ host under the same load.
 CPU per frame above the frame interval means more than one core works per
 frame: llvmpipe rasterizes on its own threads.
 
-Not measured yet: clean and incremental build times and generated C for the
-raylib state; take them from the last raylib commit before the port lands.
+
+## After: raylib host and Kryon's desktop host, same source
+
+Measured 2026-11-16 19:18–19:44 on a private Xvfb (1280x1000x24, llvmpipe),
+load average 13–24 on 32 CPUs. Both executables were built from the same
+working tree on 307e3c05 with Ziran 0.6.0 (d17c7aa1), Kryon 1b290f19, the same
+embedded bundles and `KRYON_TEST_DRIVER`. Each run is one copy of the
+scripted session; the two builds alternated, five runs each, so both saw the
+same load. The desktop host build still links a throwaway stub file for
+K6–K8 (outside the repository).
+
+| Measurement | raylib host, median (range) | desktop host, median (range) | Change |
+|---|---|---|---|
+| Time to first frame (ms) | 415.8 (377.4–459) | 474.3 (371.1–749.3) | +14% |
+| Frame rate while interacting, 120-frame reports (fps) | 60.47 (60.44–60.48) | 60.43 (58.31–60.44) | 0% |
+| App frame time, 120-frame report median (ms) | 0.92 (0.83–0.96) | 2.19 (1.83–2.50) | +138% |
+| Longest app frame while interacting (ms) | 39.05 (37.43–40.79) | 101.5 (44.77–107.8) | +160% |
+| Frame interval p50 (ms) | 16.68 (16.67–16.68) | 16.81 (16.79–16.86) | +1% |
+| Frame interval p95 (ms) | 33.34 (33.34–33.34) | 67.06 (67.03–67.10) | +101% |
+| CPU per frame p50 (ms) | 26.17 (25.21–27.09) | 2.54 (2.25–2.90) | −90% |
+| CPU per frame p95 (ms) | 32.95 (31.55–34.58) | 4.30 (3.66–5.38) | −87% |
+| Frames during interaction | 1336 (1330–1342) | 1191 (1188–1191) | −11% |
+| Idle CPU over 30 s (%) | 61.72 (60.82–63.19) | 2.63 (1.90–3.86) | −96% |
+| Steady RSS, idle median (MiB) | 494.8 (489.8–495.8) | 361.3 (327.6–381.0) | −27% |
+| Peak RSS (MiB) | 494.7 (489.7–495.8) | 362.6 (329.1–380.5) | −27% |
+
+| Executable | raylib host | desktop host |
+|---|---|---|
+| Size (bytes, stripped) | 100,296,744 | 99,303,400 |
+| Generated C | 863 files, 432,234 lines | 873 files, 437,203 lines |
+| raylib markers | 3 of 4 | 0 of 4 |
+| Linked libraries | 10: SDL2, GLESv2, gio, glib, ssl, crypto, z, m, atomic, c | 15: SDL2, pangocairo, pango, cairo, fontconfig, freetype, gio, gobject, glib, ssl, crypto, z, m, atomic, c |
+
+Build time of the same two private builds (Ziran C generation, `cc` on 8
+jobs, link; embedded bundles and vendor libraries already built), alternating
+two rounds, load average 18–34:
+
+| Build | raylib host | desktop host |
+|---|---|---|
+| Clean (s) | 47.5, 45.6 | 51.0, 41.4 |
+| No change (s) | 10.5, 8.8 | 14.0, 9.2 |
+
+Within the noise of a shared machine, the two hosts build in the same time.
+
+Reading the numbers:
+- Xvfb has no GPU, so raylib draws through llvmpipe: about 26 ms of CPU per
+  frame spread over llvmpipe's threads, and it keeps drawing at 60 fps while
+  nothing changes. On a real GPU raylib's per-frame and idle CPU are far
+  lower; the desktop host draws with Cairo on the CPU either way. The idle
+  and memory results carry over best to real hardware: the desktop host
+  reuses an unchanged frame and drops to 15 fps.
+- App frame time on the desktop host includes Cairo's painting, which raylib
+  hands to the GPU (llvmpipe) outside the app's frame.
+- Frame interval p95 of 67 ms and fewer frames are the desktop frame clock
+  pacing unchanged frames at 15 fps, not dropped frames; the 120-frame fps
+  matches raylib.
+- The longest desktop frames: one 100 ms wait per run while SDL tries the
+  missing audio device (the benchmark has none; Breeze retries at most every
+  10 s on the desktop host) and one 115 ms frame where a screen first lays
+  out. Before the 10 s back-off every cue retried and stalled 100–200 ms.
 
 ## Port map: raylib call sites and their replacements
 
@@ -211,10 +269,8 @@ branch for the other platforms and a desktop branch:
 ## Per-platform checklist
 
 Linux desktop:
-- [x] Every raylib call site above ported; the desktop graph generates and
-  compiles. A private link (build/desktop-host/breeze, 96.3 MiB) has no
-  raylib markers and no GLES; it links SDL2, Pango, Cairo, fontconfig,
-  FreeType, GLib/GIO and X11.
+- [x] Every raylib call site above ported and committed (307e3c05); the
+  desktop graph generates, compiles and links with no raylib and no GLES.
 - [ ] Kryon K5–K8 (with the parent coordinator): Cairo picture-cache
   invalidation; `DisposeFrameTexture` and route-fade frames;
   `ImagePreviewDecode`/`ImagePreviewRelease`; `notification_desktop`'s
@@ -223,8 +279,7 @@ Linux desktop:
 - [ ] Switch the shared Makefile's native build to `DESKTOP_HOST`
   (desktop libraries from pkg-config, the audio package's MP3 and Vorbis
   archives) once the link needs no stubs.
-- [ ] Run the scenario on a private Xvfb; then the after benchmark,
-  alternating with the saved raylib build so both see the same load.
+- [x] The scripted session runs on a private Xvfb; after benchmark above.
 - [ ] Delete the Linux path's raylib build rules (`RAYLIB_A` for native,
   `KRYON_BACKEND_RAYLIB`, `AVIF_RAYLIB`, raylib `SUPPORT_*` flags).
 - [ ] Rename `raylib_text_input.zi` and move the key constants out of
@@ -252,9 +307,7 @@ sent to the parent coordinator on 2026-11-16:
 ## Steps
 
 1. Kryon K5–K8, routed by the parent coordinator, pushed, then pinned here.
-2. Remove the live-Kryon `ziran.local.toml` someone added on 2026-11-16 15:57
-   (its owner, via the coordinator) so builds use the pinned Kryon again.
-3. Finish the Linux checklist above, then the after benchmark and the
-   comparison here.
-4. Windows, web and Android, platform by platform, each with its raylib code
+2. Switch the shared Linux build to the desktop host and delete its raylib
+   rules (checklist above); rerun the after benchmark on that build.
+3. Windows, web and Android, platform by platform, each with its raylib code
    deleted as it moves.
