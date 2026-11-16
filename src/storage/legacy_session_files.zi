@@ -2,25 +2,65 @@
 // Directory enumeration and byte loading are native filesystem operations;
 // path recognition and session insertion are checked Ziran rules.
 #import "c_string"
+#import "byte_text_linux"
+#import "file"
+#import "file_linux"
+#import "vec"
 #import, file "legacy_session.zi";
 
 c :: #system_library "c";
-
-// The layout of raylib's FilePathList, which the host returns by value.
-LegacyPaths :: struct {
-    count: u32
-    paths: **u8
-}
-
-LegacyDirectoryFiles :: (root: *u8, filter: *u8,
-    recursive: bool) -> LegacyPaths #foreign c "LoadDirectoryFilesEx";
-LegacyUnloadDirectoryFiles :: (paths: LegacyPaths) #foreign c "UnloadDirectoryFiles";
-LegacyIsRegularFile :: (path: *u8) -> bool #foreign c "IsPathFile";
-LegacyLoadFileData :: (path: *u8, size: *s32) -> *u8 #foreign c "LoadFileData";
-LegacyUnloadFileData :: (bytes: *u8) #foreign c "UnloadFileData";
 LegacyMetaEquals :: (key: *u8, value: *u8) -> s32 #foreign c "meta_equals";
 LegacyDbExecText :: (sql: *u8, value: *u8) -> s32 #foreign c "db_exec_text";
 LegacyStoragePersist :: () #foreign c "storage_schedule_persist";
+
+// Imports every session file below DIRECTORY, in its subfolders too. False
+// when a session file could not be read or imported; a folder that cannot
+// be listed holds nothing to import.
+LegacyImportTree :: (directory: string, imported: *u32) -> bool {
+    cursor := OpenDirectory(directory)
+    if !cursor.valid {
+        return true
+    }
+    defer { unused CloseDirectory(*cursor) }
+    ok := true
+    while true {
+        entry := NextDirectoryEntry(*cursor)
+        if !entry.valid {
+            break
+        }
+        name := TextFromCString(*entry.name[0])
+        if name == "." || name == ".." {
+            continue
+        }
+        joined: Vec(u8)
+        BuilderPrint(*joined, "%/%", directory, name)
+        path := BuilderFinish(joined)
+        // A link or an unknown entry is followed, as stat would.
+        folder := entry.kind == .Directory
+        if entry.kind == .Link || entry.kind == .Unknown {
+            folder = DirectoryExists(path)
+        }
+        if folder {
+            if !LegacyImportTree(path, imported) {
+                ok = false
+            }
+            continue
+        }
+        c_path: [4096]u8
+        if entry.kind == .Other || !CopyCString(path, c_path[:]) || LegacyIsSessionPath(*c_path[0]) == 0 {
+            continue
+        }
+        bytes: Vec(u8)
+        if !ReadFileInto(path, *bytes) || bytes.count == 0 {
+            ok = false
+        } else if LegacyImportBytes(*c_path[0], *bytes[0], cast(u64)bytes.count) == 0 {
+            ok = false
+        } else {
+            imported.* += 1
+        }
+    }
+    return ok
+}
 
 #program_export
 migrate_legacy_file_sessions_once :: (root: *u8) -> s32 {
@@ -35,31 +75,8 @@ migrate_legacy_file_sessions_once :: (root: *u8) -> s32 {
     if LegacyMetaEquals(*marker[0], *completed[0]) != 0 {
         return 1
     }
-    paths := LegacyDirectoryFiles(root, null, true)
     imported: u32 = 0
-    ok := true
-    index: u32 = 0
-    while index < paths.count {
-        path := paths.paths[index]
-        if path != null && LegacyIsRegularFile(path)  && LegacyIsSessionPath(path) != 0 {
-            size: s32 = 0
-            bytes := LegacyLoadFileData(path, *size)
-            if bytes == null || size <= 0 {
-                ok = false
-            } else {
-                if LegacyImportBytes(path, bytes, cast(u64)size) == 0 {
-                    ok = false
-                } else {
-                    imported += 1
-                }
-            }
-            if bytes != null {
-                LegacyUnloadFileData(bytes)
-            }
-        }
-        index += 1
-    }
-    LegacyUnloadDirectoryFiles(paths)
+    ok := LegacyImportTree(TextFromCString(root), *imported)
     if !ok {
         return 0
     }

@@ -1,0 +1,48 @@
+// App icons as pixels and PNG files. RGBA pixels become a PNG with Ziran's
+// own encoder on every native host. On Kryon's desktop host an embedded
+// picture, such as the app icon, is decoded to RGBA by the desktop raster.
+#import "std/image"
+#import "std/png_linux"
+#import "vec"
+
+ICON_SIZE :: 128
+
+// Encodes WIDTH by HEIGHT RGBA pixels as a PNG into OUTPUT.
+IconPng :: (width: s32, height: s32, rgba: []u8, output: *Vec(u8)) -> bool {
+    count := cast(s64)width * cast(s64)height * 4
+    if width <= 0 || height <= 0 || rgba.count < count {
+        return false
+    }
+    picture: Image
+    picture.width = width
+    picture.height = height
+    if !VecResize(picture.pixels, count) {
+        return false
+    }
+    for index: cast(s64)0..count - 1 {
+        picture.pixels[index] = rgba[index]
+    }
+    return WritePNG(*picture, output)
+}
+
+#if #defined(DESKTOP_HOST) {
+    Cairo :: #import "Cairo";
+    icon_argb: [ICON_SIZE * ICON_SIZE]u32;
+
+    // The picture at PATH, embedded or on disk, scaled to ICON_SIZE square
+    // as RGBA into RGBA.
+    IconPixels :: (path: string, rgba: []u8) -> bool {
+        if rgba.count < ICON_SIZE * ICON_SIZE * 4 ||
+        !Cairo.CairoImagePixels(path, ICON_SIZE, ICON_SIZE, icon_argb[:], false) {
+            return false
+        }
+        for index: 0..ICON_SIZE * ICON_SIZE - 1 {
+            pixel := icon_argb[index]
+            rgba[index * 4] = cast(u8)((pixel >> 16) & 255)
+            rgba[index * 4 + 1] = cast(u8)((pixel >> 8) & 255)
+            rgba[index * 4 + 2] = cast(u8)(pixel & 255)
+            rgba[index * 4 + 3] = cast(u8)(pixel >> 24)
+        }
+        return true
+    }
+}

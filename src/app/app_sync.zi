@@ -1,3 +1,4 @@
+#import, file "../platform/host_clock.zi";
 #import "async_client"
 #import "auth"
 #import "text_buffer"
@@ -34,7 +35,6 @@ SyncWorkerFree :: (ptr: *void) #foreign c "free";
 FormatLocaleText :: (out: *u8, out_size: s64, key: string) {
     SyncCopyText(out, out_size, LocaleText(key))
 }
-GetTime :: () -> float64 #foreign c;
 #import, file "modal_rules.zi";
 #import, file "../core/types.zi";
 #import, file "app_types.zi";
@@ -196,7 +196,7 @@ app_sync_record_result :: (result: s32) {
         g_sync.storage_recovery_attempted = false
     }
     if retry_is_temporary(result) && AppSyncNodeFailover() {
-        g_sync.dirty_sync_at = GetTime() + 1.0
+        g_sync.dirty_sync_at = HostSeconds() + 1.0
     }
     decision := sync_retry_decision(result,
         SettingsReadInt("sync_retry_attempt", 0))
@@ -206,7 +206,7 @@ app_sync_record_result :: (result: s32) {
     }
     SettingsStoreInt("sync_retry_attempt", decision.attempt)
     if decision.delay > 0 {
-        g_sync.retry_at = GetTime() + cast(float64)decision.delay
+        g_sync.retry_at = HostSeconds() + cast(float64)decision.delay
     }
 }
 
@@ -219,7 +219,7 @@ app_social_record_result :: (result: s32) {
     }
     g_sync.social_retry_attempt = decision.attempt
     if decision.delay > 0 {
-        g_sync.social_retry_at = GetTime() + cast(float64)decision.delay
+        g_sync.social_retry_at = HostSeconds() + cast(float64)decision.delay
         g_sync.social_refresh_pending = 1
     }
 }
@@ -753,7 +753,7 @@ app_ensure_sync_events :: (url: string) {
         }
     }
     #if WEB {
-        now := GetTime()
+        now := HostSeconds()
         if AppTextFromCString(*g_sync_events_url[0], 512) != url {
             CloseRemoteEvents(*g_remote_events)
             g_sync_events_url[0] = cast(u8)0
@@ -778,7 +778,7 @@ app_ensure_sync_events :: (url: string) {
         }
     }
     #if #defined(ANDROID_BUILD) {
-        now := GetTime()
+        now := HostSeconds()
         if AppTextFromCString(*g_sync_events_url[0], 512) != url ||
         now >= g_sync_events_retry_at {
             unused AppCopyText(url, g_sync_events_url[:])
@@ -851,9 +851,9 @@ app_apply_pending_social_refresh :: (app: *InnerBreeze) {
     action: [16]u8
     action_value: [96]u8
 
-    now := GetTime()
+    now := HostSeconds()
 
-    if GetTime() < g_sync.social_retry_at {
+    if HostSeconds() < g_sync.social_retry_at {
         return
     }
     if g_sync.social_refresh_pending == 0 || app_background_sync_safe(app) == 0  || app_sync_user_idle(app, now) == 0 {
@@ -1181,7 +1181,7 @@ app_auto_sync :: (app: *InnerBreeze) -> s32 {
     app_sync_url(*url[0], size_of(type_of(url))) == 0 {
         return 0
     }
-    now = GetTime()
+    now = HostSeconds()
     g_sync.last_input_at = now
     // New local work must get an attempt even while old charged content
     // waits for space. Repeated refusals without new work still stop.
@@ -1297,7 +1297,7 @@ app_sync_pump :: (app: *InnerBreeze) {
     if SyncOnFrameThread() && app_practice_holds_frame_work(app) {
         return
     }
-    now = GetTime()
+    now = HostSeconds()
     app_sync_record_input(app, now)
     app_collect_finished_sync()
     app_collect_finished_social_refresh(app)

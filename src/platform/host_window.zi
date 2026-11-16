@@ -1,21 +1,20 @@
 // The app's main window on the host the build targets: raylib's window, or
 // on Kryon's desktop host the SDL window desktop_runtime opens and draws
-// with Cairo. A frame there polls the window's events, draws, presents and
-// then waits as the host's frame clock paces it: 60 frames a second while
-// pixels change and 15 once they stay the same.
+// with Cairo. host_frame.zi runs its frames.
 #import "geometry"
 
 #if #defined(DESKTOP_HOST) {
     Desktop :: #import "desktop_runtime";
     WindowState :: #import "desktop_window_state";
-    Raster :: #import "cairo_raster";
+    Raster :: #import "Cairo";
+    RenderScale :: #import "cairo_render_scale";
     host_window_closing: bool;
+    // The window shows once its first frame is painted; before that it is
+    // not yet a hidden window.
+    host_window_presented: bool;
 } else {
     WindowRuntime :: #import "kryon/window_runtime";
     WindowClose :: #import "window_close";
-    #if !#defined(PLATFORM_WEB) {
-        RaylibRuntime :: #import "kryon/raylib_runtime";
-    }
 }
 
 #if #defined(DESKTOP_HOST) {
@@ -47,34 +46,12 @@ HostWindowHeight :: () -> s32 {
     }
 }
 
-// Runs one frame of PROCEDURE. False when the frame could not run. On the
-// desktop host a window the window system ended runs no frame, and
-// HostWindowClosing then reports it.
 #if #defined(DESKTOP_HOST) {
-    HostFrameProcedure :: #type (argument: *void) #c_call;
-
-    HostRunFrame :: (procedure: HostFrameProcedure, argument: *void) -> bool {
-        if !Desktop.PollDesktop() {
-            host_window_closing = true
-            return true
-        }
-        Desktop.BeginDesktopFrame()
-        procedure(argument)
-        presented := Desktop.EndDesktopFrame()
-        Desktop.PauseDesktop()
-        return presented
-    }
-} else {
-    #if #defined(PLATFORM_WEB) {
-        HostFrameProcedure :: #type (argument: *void) #c_call;
-
-        HostRunFrame :: (procedure: HostFrameProcedure, argument: *void) -> bool {
-            procedure(argument)
-            return true
-        }
-    } else {
-        HostRunFrame :: (procedure: RaylibRuntime.RaylibFrameProcedure, argument: *void) -> bool {
-            return RaylibRuntime.RunRaylibAppFrame(procedure, argument)
+    // Draws the main window's frames at SCALE pixels per layout unit, as
+    // the camera zoom does on raylib hosts.
+    HostSetRenderScale :: (scale: float32) {
+        if scale > 0.0 {
+            unused RenderScale.RasterSetScale(scale)
         }
     }
 }
@@ -116,6 +93,18 @@ HostTakeCloseRequest :: () -> bool {
     }
 }
 
+#if #defined(DESKTOP_HOST) {
+    // The frame loop found the window or the session ended.
+    HostMarkWindowEnded :: () {
+        host_window_closing = true
+    }
+
+    // The frame loop presented a frame.
+    HostMarkWindowPresented :: () {
+        host_window_presented = true
+    }
+}
+
 // The window system ended the window or the session.
 HostWindowClosing :: () -> bool {
     #if #defined(DESKTOP_HOST) {
@@ -127,7 +116,7 @@ HostWindowClosing :: () -> bool {
 
 HostWindowHidden :: () -> bool {
     #if #defined(DESKTOP_HOST) {
-        return !Desktop.WindowVisibleHost()
+        return host_window_presented && !Desktop.WindowVisibleHost()
     } else {
         return WindowRuntime.WindowHidden()
     }

@@ -2,13 +2,13 @@
 #import "c_string"
 #import "drawing_props"
 #import "geometry"
-#import "window_visible"
 #if #defined(ANDROID_BUILD) {
     #import, file "android/android_startup.zi";
     AndroidSurface :: #import "kryon/AndroidSurface";
 }
-#if #defined(PLATFORM_WEB) == false {
+#if #defined(PLATFORM_WEB) == false && !#defined(DESKTOP_HOST) {
     #import "kryon/Raylib"
+    #import "window_visible"
 }
 #if #defined(PLATFORM_WEB) {
     CanvasWindow :: #import "canvas_window";
@@ -16,8 +16,6 @@
     CanvasInput :: #import "canvas_input";
     CanvasTexture :: #import "canvas_texture";
 }
-
-raylib :: #system_library "raylib";
 
 FLAG_WINDOW_RESIZABLE :: 4
 FLAG_WINDOW_ALWAYS_RUN :: 256
@@ -40,51 +38,55 @@ RaylibImage :: struct {
     format: s32
 }
 
-HostInitWindow :: (width: s32, height: s32, title: *u8) #foreign raylib "InitWindow";
-HostCloseWindow :: () #foreign raylib "CloseWindow";
-HostExportImage :: (image: RaylibImage, path: *u8) -> bool #foreign raylib "ExportImage";
+// raylib's window and image export; Kryon's desktop host opens its window
+// through host_window.zi and captures with the raster.
+#if !#defined(DESKTOP_HOST) {
+    raylib :: #system_library "raylib";
+    HostInitWindow :: (width: s32, height: s32, title: *u8) #foreign raylib "InitWindow";
+    HostCloseWindow :: () #foreign raylib "CloseWindow";
+    HostExportImage :: (image: RaylibImage, path: *u8) -> bool #foreign raylib "ExportImage";
 
-
-InitWindow :: (width: s32, height: s32, title: string) {
-    title_bytes: [256]u8
-    if !CopyCString(title, title_bytes[:]) {
-        return
-    }
-    #if #defined(ANDROID_BUILD) {
-        if !AndroidWaitForWindow() {
+    InitWindow :: (width: s32, height: s32, title: string) {
+        title_bytes: [256]u8
+        if !CopyCString(title, title_bytes[:]) {
             return
         }
-        if width <= 0 || height <= 0 {
-            surface_width: s32
-            surface_height: s32
-            if !AndroidSurface.GetAndroidPendingSurfaceSize(*surface_width, *surface_height) {
+        #if #defined(ANDROID_BUILD) {
+            if !AndroidWaitForWindow() {
                 return
             }
-            if width <= 0 {
-                width = surface_width
-            }
-            if height <= 0 {
-                height = surface_height
+            if width <= 0 || height <= 0 {
+                surface_width: s32
+                surface_height: s32
+                if !AndroidSurface.GetAndroidPendingSurfaceSize(*surface_width, *surface_height) {
+                    return
+                }
+                if width <= 0 {
+                    width = surface_width
+                }
+                if height <= 0 {
+                    height = surface_height
+                }
             }
         }
+        HostInitWindow(width, height, *title_bytes[0])
+        // A window nobody can see, as SDL opens without a reachable display,
+        // closes again so startup reports that it failed.
+        if !WindowVisible() {
+            HostCloseWindow()
+            return
+        }
+        #if #defined(PLATFORM_WEB) == false {
+            // Kryon then draws each icon as one texture, not its many rectangles.
+            RaylibUseIconTextures()
+        }
     }
-    HostInitWindow(width, height, *title_bytes[0])
-    // A window nobody can see, as SDL opens without a reachable display,
-    // closes again so startup reports that it failed.
-    if !WindowVisible() {
-        HostCloseWindow()
-        return
-    }
-    #if #defined(PLATFORM_WEB) == false {
-        // Kryon then draws each icon as one texture, not its many rectangles.
-        RaylibUseIconTextures()
-    }
-}
 
-ExportImage :: (image: RaylibImage, path: string) -> bool {
-    path_bytes: [4096]u8
-    if !CopyCString(path, path_bytes[:]) {
-        return false
+    ExportImage :: (image: RaylibImage, path: string) -> bool {
+        path_bytes: [4096]u8
+        if !CopyCString(path, path_bytes[:]) {
+            return false
+        }
+        return HostExportImage(image, *path_bytes[0])
     }
-    return HostExportImage(image, *path_bytes[0])
 }

@@ -1,17 +1,8 @@
 c :: #system_library "c";
+#import, file "../platform/host_clock.zi";
 #import, file "../platform/raylib_host.zi";
-raylib :: #system_library "raylib";
-GetTime :: () -> float64 #foreign raylib;
-GetMouseWheelMove :: () -> float32 #foreign raylib;
-GetMouseDelta :: () -> Vector2 #foreign raylib;
-IsKeyPressed :: (key: s32) -> bool #foreign raylib;
-IsWindowFocused :: () -> bool #foreign raylib;
-ClearWindowState :: (flags: u32) #foreign raylib;
-RestoreWindow :: () #foreign raylib;
-SetWindowFocused :: () #foreign raylib;
-GetCurrentMonitor :: () -> s32 #foreign raylib;
-GetMonitorWidth :: (monitor: s32) -> s32 #foreign raylib;
-GetMonitorHeight :: (monitor: s32) -> s32 #foreign raylib;
+#import, file "../platform/host_input.zi";
+#import, file "../platform/host_window_state.zi";
 #import, file "../habits/habit_types.zi";
 WEB :: #defined(PLATFORM_WEB)
 #import, file "../core/types.zi";
@@ -52,7 +43,11 @@ Toast :: #import "kryon/toast";
 #import, file "../app/locale.zi";
 #import, file "../app/app_route_state.zi";
 #import, file "../app/app_modal_state.zi";
-#import "raylib_secondary_window"
+#if #defined(DESKTOP_HOST) {
+    #import "desktop_secondary_window"
+} else {
+    #import "raylib_secondary_window"
+}
 #import "idle_time"
 #import "text_measure"
 #import "text_align"
@@ -108,7 +103,7 @@ app_breaks_draw_toast :: (app: *InnerBreeze, viewport: Rectangle) {
     props.state = break_toast_state
     props.message = break_toast_request
     props.seconds = AppNotificationToastSeconds
-    props.now_seconds = GetTime()
+    props.now_seconds = HostSeconds()
     props.scale = GetDPIScale()
     break_toast_state = Toast.Draw(app.ui.session, props).state
     break_toast_request = ""
@@ -213,22 +208,17 @@ break_persist_daily_state :: (app: *InnerBreeze) {
 }
 
 break_fallback_pointer_seen :: () -> bool {
-    wheel := cast(s32)(GetMouseWheelMove() * 1000.0f)
+    wheel := cast(s32)(HostWheel().y * 1000.0f)
     if wheel != 0 {
         return true
     }
-    dx: float32 = GetMouseDelta().x
-    dy: float32 = GetMouseDelta().y
-    if dx != 0.0f || dy != 0.0f {
-        return true
-    }
-    return false
+    return HostPointerMoved()
 }
 
 break_fallback_key_seen :: () -> bool {
     k: s32 = KEY_SPACE
     while k <= KEY_KB_MENU {
-        if IsKeyPressed(k) {
+        if HostKeyPressed(k) {
             return true
         }
         k += 1
@@ -246,7 +236,7 @@ break_sample_activity :: (app: *InnerBreeze, idle_ms_out: *s32) -> s32 {
     input.idle_ms = idle_ms
     input.frame = app.breathing.frame
     if idle_ms < 0 {
-        input.focused = IsWindowFocused()
+        input.focused = HostWindowFocused()
         if input.focused {
             input.key_pressed = break_fallback_key_seen()
             input.pointer_active = break_fallback_pointer_seen()
@@ -290,9 +280,7 @@ break_engine_open_window :: (app: *InnerBreeze, t: s32) {
         // The app-owned secondary window remains available on Wayland, where
         // a global keyboard grab is not available.
         if IsWaylandSession() {
-            ClearWindowState(cast(u32)128)
-            RestoreWindow()
-            SetWindowFocused()
+            HostRestoreAndFocusWindow()
         }
     }
     app.break_window_taken = 1
@@ -331,9 +319,9 @@ app_breaks_window_update :: (app: *InnerBreeze) {
         if scale <= 0 || scale > 8 {
             scale = 1
         }
-        monitor := GetCurrentMonitor()
-        win_w := GetMonitorWidth(monitor) * 60 / 100
-        win_h := GetMonitorHeight(monitor) * 66 / 100
+        monitor_width, monitor_height := HostMonitorSize()
+        win_w := monitor_width * 60 / 100
+        win_h := monitor_height * 66 / 100
         // The Windows RGFW/OpenGL 1.1 compatibility context can reject large
         // framebuffer objects (notably on VMs and high-DPI displays). Keep the
         // auxiliary render target inside the broadly supported 1024px range.
@@ -528,7 +516,7 @@ app_breaks_update :: (app: *InnerBreeze) {
     #if DESKTOP {
         idle_ms: s32 = 0
         active := break_sample_activity(app, *idle_ms)
-        now := GetTime()
+        now := HostSeconds()
         elapsed: float32 = 0.0f
         ticks: s32 = 0
 
@@ -783,9 +771,7 @@ app_breaks_open_habits :: (app: *InnerBreeze, t: s32) {
     app.habits.scroll = 0
     app.habits.focus_selected_tab = 1
     #if DESKTOP {
-        ClearWindowState(cast(u32)128)
-        RestoreWindow()
-        SetWindowFocused()
+        HostRestoreAndFocusWindow()
     }
     app_switch_screen(app, ScreenHabits)
 }
@@ -886,7 +872,7 @@ app_breaks_hud_update :: (app: *InnerBreeze) {
 
         // The HUD content changes on timer ticks, drags, and clicks. Present
         // at about 2 Hz to avoid unnecessary texture readback and window blits.
-        now := GetTime()
+        now := HostSeconds()
         if app.break_hud_last_present <= 0 || now - app.break_hud_last_present >= 0.45 {
             app.break_hud_last_present = now
             if BeginSecondaryWindow(break_hud) {

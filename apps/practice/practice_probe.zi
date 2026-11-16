@@ -1,5 +1,6 @@
 // Practice component probes live with the Practices screen implementation.
-WindowRuntime :: #import "kryon/window_runtime";
+#import, file "../../src/platform/host_window.zi";
+#import, file "../../src/platform/host_frame.zi";
 #import, file "../../src/platform/app_host.zi";
 #import, file "../../src/app/app_types.zi";
 #import, file "../../src/app/exercise_types.zi";
@@ -16,11 +17,16 @@ Layout :: #import "kryon/layout";
 #import "tree_draw"
 #import "geometry"
 #import "drawing_props"
-#import "raylib_trace"
+#import, file "../../src/platform/app_trace.zi";
 #if #defined(PLATFORM_WEB) {
     using CanvasHost :: #import "canvas_host";
 } else {
-    #import "kryon/Raylib"
+    #if #defined(DESKTOP_HOST) {
+        Cairo :: #import "Cairo";
+    } else {
+        WindowRuntime :: #import "kryon/window_runtime";
+        #import "kryon/Raylib"
+    }
 }
 using ExerciseType;
 using AppMainTab;
@@ -28,6 +34,9 @@ using NavigationPlacement;
 LOG_INFO :: 3
 
 practice_probe_frame_count: s32;
+practice_probe_app: *InnerBreeze;
+practice_probe_mode: s32;
+practice_probe_size: WindowSize;
 
 PracticeProbeMode :: (argc: s32, argv: **u8) -> s32 {
     if argc < 2 {
@@ -49,10 +58,57 @@ PracticeProbeMode :: (argc: s32, argv: **u8) -> s32 {
     return 0
 }
 
+// One probe frame's widgets: the component the mode names.
+PracticeProbeDraw :: (app: *InnerBreeze, mode: s32, size: WindowSize, first_probe_frame: bool) {
+    FrameTextReset(*app.ui.frame_text)
+    bounds := Rectangle.{0.0, 0.0,
+        cast(float32)size.width, cast(float32)size.height}
+    if cast(s32)BeginFrame(app.ui.session, Layout.KeyHash("practice/probe"),
+        bounds) == 0 {
+        if mode == 4 {
+            if first_probe_frame {
+                TraceLog(LOG_INFO, "APP PROBE: before navigation bar")
+            }
+            unused app_draw_bottom_nav(app)
+            if first_probe_frame {
+                TraceLog(LOG_INFO, "APP PROBE: after navigation bar")
+            }
+        } else if mode == 1 {
+            practice_draw_card_banner(
+                "assets/practices/meditation/banner-dark.png",
+                Rectangle.{0.0, 0.0,
+                    cast(float32)size.width, 360.0})
+        } else if mode == 2 {
+            unused practice_screen_draw_home_hero(app)
+        } else {
+            practice_screen_draw_home(app)
+        }
+        if first_probe_frame {
+            TraceLog(LOG_INFO, "APP PROBE: before EndFrame")
+        }
+        unused EndFrame(app.ui.session)
+        if first_probe_frame {
+            TraceLog(LOG_INFO, "APP PROBE: after EndFrame")
+        }
+    }
+}
+
+#if #defined(DESKTOP_HOST) {
+    // The desktop host polls, rasterizes and presents around this.
+    #program_export
+    practice_probe_frame :: (argument: *void) {
+        unused argument
+        first_probe_frame := practice_probe_frame_count == 0
+        practice_probe_frame_count += 1
+        PracticeProbeDraw(practice_probe_app, practice_probe_mode, practice_probe_size,
+            first_probe_frame)
+    }
+}
+
 RunPracticeProbe :: (app: *InnerBreeze, mode: s32, size: WindowSize) -> s32 {
     app.ui.session = SessionOpen()
     if !SessionValid(app.ui.session) {
-        WindowRuntime.CloseNativeWindow()
+        HostCloseWindow()
         return 1
     }
     app.ui.view_width = size.width
@@ -68,48 +124,33 @@ RunPracticeProbe :: (app: *InnerBreeze, mode: s32, size: WindowSize) -> s32 {
         app_reset_bottom_nav_routes(app)
     }
     SetCurrentApp(app)
-    while !WindowRuntime.WindowClosing() {
-        first_probe_frame := practice_probe_frame_count == 0
-        practice_probe_frame_count += 1
-        FrameTextReset(*app.ui.frame_text)
-        WindowRuntime.BeginWindowFrame()
-        WindowRuntime.ClearWindowFrame(Color.{30, 40, 50, 255})
-        bounds := Rectangle.{0.0, 0.0,
-            cast(float32)size.width, cast(float32)size.height}
-        if cast(s32)BeginFrame(app.ui.session, Layout.KeyHash("practice/probe"),
-            bounds) == 0 {
-            if mode == 4 {
-                if first_probe_frame {
-                    TraceLog(LOG_INFO, "APP PROBE: before navigation bar")
-                }
-                unused app_draw_bottom_nav(app)
-                if first_probe_frame {
-                    TraceLog(LOG_INFO, "APP PROBE: after navigation bar")
-                }
-            } else if mode == 1 {
-                practice_draw_card_banner(
-                    "assets/practices/meditation/banner-dark.png",
-                    Rectangle.{0.0, 0.0,
-                        cast(float32)size.width, 360.0})
-            } else if mode == 2 {
-                unused practice_screen_draw_home_hero(app)
-            } else {
-                practice_screen_draw_home(app)
+    #if #defined(DESKTOP_HOST) {
+        practice_probe_app = app
+        practice_probe_mode = mode
+        practice_probe_size = size
+        while !HostWindowClosing() && !HostTakeCloseRequest() {
+            first_probe_frame := practice_probe_frame_count == 0
+            if !HostRunFrame(practice_probe_frame, null) {
+                break
             }
-            if first_probe_frame {
-                TraceLog(LOG_INFO, "APP PROBE: before EndFrame")
-            }
-            unused EndFrame(app.ui.session)
-            if first_probe_frame {
-                TraceLog(LOG_INFO, "APP PROBE: after EndFrame")
+            if mode == 4 && first_probe_frame && Cairo.CaptureRequested() {
+                unused Cairo.CaptureConfigured()
             }
         }
-        WindowRuntime.EndWindowFrame()
-        if mode == 4 && first_probe_frame && CaptureRequested() {
-            unused CaptureConfigured()
+    } else {
+        while !WindowRuntime.WindowClosing() {
+            first_probe_frame := practice_probe_frame_count == 0
+            practice_probe_frame_count += 1
+            WindowRuntime.BeginWindowFrame()
+            WindowRuntime.ClearWindowFrame(Color.{30, 40, 50, 255})
+            PracticeProbeDraw(app, mode, size, first_probe_frame)
+            WindowRuntime.EndWindowFrame()
+            if mode == 4 && first_probe_frame && CaptureRequested() {
+                unused CaptureConfigured()
+            }
         }
     }
     SetCurrentApp(null)
-    WindowRuntime.CloseNativeWindow()
+    HostCloseWindow()
     return 0
 }

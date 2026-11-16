@@ -185,16 +185,76 @@ Android and web keep today's raylib or canvas modules under the same names.
 Unchanged: Android's `GetAndroidApp` and window-state calls, and the web
 canvas host (`src/platform/web_window.zi`).
 
+## Breeze's host modules
+
+The Linux desktop build defines `DESKTOP_HOST` (compile time; no run-time
+flag). Breeze reaches its host through these modules, each with a raylib
+branch for the other platforms and a desktop branch:
+
+- `src/platform/app_trace.zi`: the log (stderr or `inbe.log`, recent errors).
+- `src/platform/host_clock.zi`: `HostSeconds`, `HostFrameSeconds`, `HostWait`.
+- `src/platform/host_input.zi`: keys, repeats, pointer, right button, wheel
+  X/Y, pointer movement, modifiers, cursor.
+- `src/platform/host_window.zi`: open, size, retained pixels, PNG capture,
+  render scale, close request, hidden/minimized, close. Light: no runtime.
+- `src/platform/host_window_state.zi`: focus, title, tray hide/show,
+  minimize, restore, monitor size.
+- `src/platform/host_frame.zi`: the frame loop and picture invalidation; the
+  only module that imports `kryon/raylib_runtime` or `kryon/canvas_host`.
+- `src/platform/icon_png.zi`: RGBA to PNG (Ziran's encoder, every native
+  host) and, on the desktop host, pictures decoded to RGBA by the raster.
+- Desktop branches in `audio_runtime.zi` (Kryon's mixer, SDL sink, Opus,
+  WAV, MP3, Vorbis), `radio_native.zi` (dr_mp3 push decoding from the audio
+  package, mixer PCM stream), `raylib_text_input.zi` (desktop keyboard, the
+  window's text per frame, clipboard) and `asset_files.zi` (`cairo_assets`).
+
+## Per-platform checklist
+
+Linux desktop:
+- [x] Every raylib call site above ported; the desktop graph generates and
+  compiles. A private link (build/desktop-host/breeze, 96.3 MiB) has no
+  raylib markers and no GLES; it links SDL2, Pango, Cairo, fontconfig,
+  FreeType, GLib/GIO and X11.
+- [ ] Kryon K5–K8 (with the parent coordinator): Cairo picture-cache
+  invalidation; `DisposeFrameTexture` and route-fade frames;
+  `ImagePreviewDecode`/`ImagePreviewRelease`; `notification_desktop`'s
+  raylib `IsWindowFocused`. Until then the private link needs a throwaway
+  stub file outside the repository.
+- [ ] Switch the shared Makefile's native build to `DESKTOP_HOST`
+  (desktop libraries from pkg-config, the audio package's MP3 and Vorbis
+  archives) once the link needs no stubs.
+- [ ] Run the scenario on a private Xvfb; then the after benchmark,
+  alternating with the saved raylib build so both see the same load.
+- [ ] Delete the Linux path's raylib build rules (`RAYLIB_A` for native,
+  `KRYON_BACKEND_RAYLIB`, `AVIF_RAYLIB`, raylib `SUPPORT_*` flags).
+- [ ] Rename `raylib_text_input.zi` and move the key constants out of
+  `raylib_host.zi` once no platform uses raylib.
+- Known desktop gaps: no route fade (K6); updated pictures need a restart
+  (K5); window focus for notifications (K8).
+
+Windows, web, Android: every remaining raylib use and Kryon's replacement
+is mapped in `plans/2026-11-16-breeze-raylib-other-platforms.md`. Kryon gaps
+sent to the parent coordinator on 2026-11-16:
+- [ ] Web W1: the browser MediaAudio provider out of `media_audio_raylib`.
+- [ ] Web W2: Canvas-named clip and trace calls for `raylib_clip` and
+  `raylib_trace`.
+- [ ] Android A1: app ticks while paused or windowless (practices, audio,
+  timers, PiP) in `android_run`.
+- [ ] Android A2: a mixer sink (AAudio or OpenSL ES), or SDL2 on Android.
+- [ ] Android A3: picture registration for embedded, disk and practice
+  bytes, with orientation and invalidation.
+- [ ] Android A4: a non-raylib `window_runtime` branch.
+- [ ] Windows X1: platform-selected timer, image, video and accessibility
+  modules for the desktop host, and Windows SDL2/Cairo/Pango/FreeType builds.
+- [ ] Windows X2: a raylib-free picture-to-PNG path (`ImageExport`,
+  `window_icon`).
+
 ## Steps
 
-1. Get a Breeze build to benchmark. The checkout does not build right now
-   while its pins move to Kryon's namespaced widget API; the Breeze pin
-   sessions (breeze-entity-kryon-master, breeze-one-format-pins) own that
-   repair. Benchmark the first state that builds.
-2. Measure and record the before table; commit and push the plan, the
-   harness and the numbers.
-3. Port the Linux desktop layer file by file as K1–K4 land, following the
-   map above; delete the raylib code the Linux path no longer uses. Windows,
-   web and Android builds must still pass.
-4. Run the same benchmark after the port and add the after table and the
+1. Kryon K5–K8, routed by the parent coordinator, pushed, then pinned here.
+2. Remove the live-Kryon `ziran.local.toml` someone added on 2026-11-16 15:57
+   (its owner, via the coordinator) so builds use the pinned Kryon again.
+3. Finish the Linux checklist above, then the after benchmark and the
    comparison here.
+4. Windows, web and Android, platform by platform, each with its raylib code
+   deleted as it moves.

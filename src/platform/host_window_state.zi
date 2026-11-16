@@ -1,0 +1,107 @@
+// The app's main window among the desktop's windows: focus, title, hiding to
+// the tray, minimize, restore and the monitor it is on. Raylib's window on
+// raylib hosts; on Kryon's desktop host the window desktop_runtime opened.
+// Only focus is a question every host answers; the rest is for desktop
+// windows, which Android and the browser do not have.
+#if #defined(DESKTOP_HOST) {
+    Desktop :: #import "desktop_runtime";
+    WindowState :: #import "desktop_window_state";
+} else {
+    host_window_focus_raylib :: #system_library "raylib";
+    RaylibWindowFocused :: () -> bool #foreign host_window_focus_raylib "IsWindowFocused";
+}
+
+// Whether the window has the keyboard focus.
+HostWindowFocused :: () -> bool {
+    #if #defined(DESKTOP_HOST) {
+        return Desktop.WindowFocusedHost()
+    } else {
+        return RaylibWindowFocused()
+    }
+}
+
+// Raylib's window state on every other host. Android and the browser declare
+// it too, as the tray code they compile always did, though only desktop
+// windows act on it.
+HOST_WINDOW_RAYLIB :: !#defined(DESKTOP_HOST)
+#if HOST_WINDOW_RAYLIB {
+    #import "c_string"
+    host_window_raylib :: #system_library "raylib";
+    RaylibSetWindowTitle :: (title: *u8) #foreign host_window_raylib "SetWindowTitle";
+    RaylibSetWindowState :: (flags: u32) #foreign host_window_raylib "SetWindowState";
+    RaylibClearWindowState :: (flags: u32) #foreign host_window_raylib "ClearWindowState";
+    RaylibRestoreWindow :: () #foreign host_window_raylib "RestoreWindow";
+    RaylibMinimizeWindow :: () #foreign host_window_raylib "MinimizeWindow";
+    RaylibFocusWindow :: () #foreign host_window_raylib "SetWindowFocused";
+    RaylibCurrentMonitor :: () -> s32 #foreign host_window_raylib "GetCurrentMonitor";
+    RaylibMonitorWidth :: (monitor: s32) -> s32 #foreign host_window_raylib "GetMonitorWidth";
+    RaylibMonitorHeight :: (monitor: s32) -> s32 #foreign host_window_raylib "GetMonitorHeight";
+    // FLAG_WINDOW_HIDDEN, and with FLAG_WINDOW_MINIMIZED.
+    RAYLIB_WINDOW_HIDDEN :: 128
+    RAYLIB_WINDOW_HIDDEN_MINIMIZED :: 640
+}
+
+#if #defined(DESKTOP_HOST) || HOST_WINDOW_RAYLIB {
+    HostSetWindowTitle :: (title: string) {
+        #if #defined(DESKTOP_HOST) {
+            unused Desktop.DesktopSetTitle(title)
+        } else {
+            bytes: [256]u8
+            if CopyCString(title, bytes[:]) {
+                RaylibSetWindowTitle(*bytes[0])
+            }
+        }
+    }
+
+    // Shows a hidden window, as from the tray.
+    HostShowWindow :: () {
+        #if #defined(DESKTOP_HOST) {
+            Desktop.WindowSetVisibleHost(true)
+        } else {
+            RaylibClearWindowState(cast(u32)RAYLIB_WINDOW_HIDDEN)
+        }
+    }
+
+    // Hides the window while the app keeps running in the tray.
+    HostHideWindow :: () {
+        #if #defined(DESKTOP_HOST) {
+            Desktop.WindowSetVisibleHost(false)
+        } else {
+            RaylibSetWindowState(cast(u32)RAYLIB_WINDOW_HIDDEN)
+        }
+    }
+
+    HostMinimizeWindow :: () {
+        #if #defined(DESKTOP_HOST) {
+            unused WindowState.DesktopMinimize()
+        } else {
+            RaylibMinimizeWindow()
+        }
+    }
+
+    // Brings a minimized or hidden-behind window back and gives it focus.
+    HostRestoreAndFocusWindow :: () {
+        #if #defined(DESKTOP_HOST) {
+            Desktop.WindowSetVisibleHost(true)
+            unused WindowState.DesktopRestore()
+            unused WindowState.DesktopRaise()
+        } else {
+            // Clear the states at once; RestoreWindow alone waits for a later
+            // SDL event, after the no-tray loop has already checked them.
+            RaylibClearWindowState(cast(u32)RAYLIB_WINDOW_HIDDEN_MINIMIZED)
+            RaylibRestoreWindow()
+            RaylibFocusWindow()
+        }
+    }
+
+    // The monitor the window is on, in pixels.
+    HostMonitorSize :: () -> (width: s32, height: s32) {
+        #if #defined(DESKTOP_HOST) {
+            bounds := WindowState.DesktopMonitorBounds()
+            return cast(s32)bounds.width, cast(s32)bounds.height
+        } else {
+            monitor := RaylibCurrentMonitor()
+            return RaylibMonitorWidth(monitor), RaylibMonitorHeight(monitor)
+        }
+    }
+}

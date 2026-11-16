@@ -1,0 +1,77 @@
+// The app's frames on the host the build targets. A raylib host runs the
+// app's frame procedure in its own frame loop. On Kryon's desktop host a
+// frame polls the window's events, draws, presents and then waits as the
+// host's frame clock paces it: 60 frames a second while pixels change and
+// 15 once they stay the same.
+#import, file "host_clock.zi";
+#import, file "host_window.zi";
+
+#if #defined(DESKTOP_HOST) {
+    Desktop :: #import "desktop_runtime";
+} else {
+    #if #defined(PLATFORM_WEB) {
+        Canvas :: #import "kryon/canvas_host";
+    } else {
+        RaylibRuntime :: #import "kryon/raylib_runtime";
+    }
+}
+
+// Runs one frame of PROCEDURE. False when the frame could not run. On the
+// desktop host a window the window system ended runs no frame, and
+// HostWindowClosing then reports it.
+#if #defined(DESKTOP_HOST) {
+    HostFrameProcedure :: #type (argument: *void) #c_call;
+
+    HostRunFrame :: (procedure: HostFrameProcedure, argument: *void) -> bool {
+        if !Desktop.PollDesktop() {
+            HostMarkWindowEnded()
+            return true
+        }
+        HostFrameStarted()
+        Desktop.BeginDesktopFrame()
+        procedure(argument)
+        presented := Desktop.EndDesktopFrame()
+        if presented {
+            HostMarkWindowPresented()
+        }
+        Desktop.PauseDesktop()
+        return presented
+    }
+} else {
+    #if #defined(PLATFORM_WEB) {
+        HostFrameProcedure :: #type (argument: *void) #c_call;
+
+        HostRunFrame :: (procedure: HostFrameProcedure, argument: *void) -> bool {
+            procedure(argument)
+            return true
+        }
+    } else {
+        HostRunFrame :: (procedure: RaylibRuntime.RaylibFrameProcedure, argument: *void) -> bool {
+            return RaylibRuntime.RunRaylibAppFrame(procedure, argument)
+        }
+    }
+}
+
+// Pictures whose files changed load again. The desktop raster has no call to
+// drop its cached pictures yet, so there they stay until the app restarts.
+HostInvalidatePictures :: () {
+    #if #defined(PLATFORM_WEB) {
+        Canvas.InvalidateCanvasAssets()
+    } else {
+        #if !#defined(DESKTOP_HOST) {
+            RaylibRuntime.InvalidateRaylibAssets()
+        }
+    }
+}
+
+HostInvalidatePicturesUnder :: (folder: string) {
+    #if #defined(PLATFORM_WEB) {
+        Canvas.InvalidateCanvasAssetsUnder(folder)
+    } else {
+        #if #defined(DESKTOP_HOST) {
+            unused folder
+        } else {
+            RaylibRuntime.InvalidateRaylibAssetsUnder(folder)
+        }
+    }
+}

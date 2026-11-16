@@ -1,14 +1,9 @@
 c :: #system_library "c";
-raylib :: #system_library "raylib";
-GetTime :: () -> float64 #foreign raylib;
-IsWindowHidden :: () -> bool #foreign raylib;
-ClearWindowState :: (flags: u32) #foreign raylib;
-SetWindowState :: (flags: u32) #foreign raylib;
-RestoreWindow :: () #foreign raylib;
-MinimizeWindow :: () #foreign raylib;
-FLAG_WINDOW_HIDDEN :: 128;
-NativeTraceLog :: (level: s32, message: *u8, args: ..any) #foreign raylib "TraceLog";
 tray_memcmp :: (left: *void, right: *void, count: usize) -> s32 #foreign c "memcmp";
+#import, file "host_clock.zi";
+#import, file "host_window.zi";
+#import, file "host_window_state.zi";
+#import, file "app_trace.zi";
 #import, file "../habits/habit_types.zi";
 #import, file "../habits/habit_days.zi";
 #import, file "../core/types.zi";
@@ -28,7 +23,13 @@ tray_memcmp :: (left: *void, right: *void, count: usize) -> s32 #foreign c "memc
 #import, file "tray_status.zi";
 #import "tray"
 #import "tray_props"
-TrayImageExport :: #import "kryon/ImageExport";
+#if #defined(DESKTOP_HOST) {
+    #import, file "icon_png.zi";
+    #import "std/file"
+    #import "vec"
+} else {
+    TrayImageExport :: #import "kryon/ImageExport";
+}
 #import, file "../app/locale.zi";
 #import "c_string"
 #import, file "../app/assets.zi";
@@ -169,7 +170,7 @@ SeedTraySnapshot :: () {
     next: AppTraySnapshot
     app: *InnerBreeze = CurrentApp()
     next = AppTraySnapshot.{}
-    next.window_visible = ifx (IsWindowHidden()) then (0) else (1)
+    next.window_visible = ifx (HostWindowHidden()) then (0) else (1)
     if app != null {
         next.break_mode = app.breaks.mode
         next.break_reading_mode = app.breaks.reading_mode
@@ -263,7 +264,7 @@ ApplyTrayMenuSnapshot :: (snapshot: *AppTraySnapshot) {
     menu: TrayMenuStorage
     BuildTrayMenu(snapshot, *menu)
     TraySetMenu(menu.items[:])
-    visible := ifx (snapshot != null) then (snapshot.window_visible) else (ifx (IsWindowHidden()) then (0) else (1))
+    visible := ifx (snapshot != null) then (snapshot.window_visible) else (ifx (HostWindowHidden()) then (0) else (1))
     TraySetActivateAction(cast(s32)GetTrayWindowAction(visible))
 }
 #program_export
@@ -312,8 +313,19 @@ TrayIconFromAssets :: () -> string {
         return ""
     }
     path := AppTextFromCString(*TrayIconFile[0], cast(s32)TrayIconFile.count)
-    if !TrayImageExport.EncodedImageExport(asset.data, ".webp", path) {
-        return ""
+    #if #defined(DESKTOP_HOST) {
+        // The desktop raster decodes the WebP; Ziran writes the PNG.
+        rgba: [ICON_SIZE * ICON_SIZE * 4]u8
+        png: Vec(u8)
+        if !IconPixels("assets/app/icon.webp", rgba[:]) ||
+        !IconPng(ICON_SIZE, ICON_SIZE, rgba[:], *png) ||
+        !WriteEntireFile(path, TextView(png[:])) {
+            return ""
+        }
+    } else {
+        if !TrayImageExport.EncodedImageExport(asset.data, ".webp", path) {
+            return ""
+        }
     }
     return path
 }
@@ -332,8 +344,8 @@ desktop_tray_ready :: () -> s32 {
     return ifx (TrayReady != 0 && TrayVisible()) then (1) else (0)
 }
 RestoreTrayWindow :: () {
-    ClearWindowState(FLAG_WINDOW_HIDDEN)
-    RestoreWindow()
+    HostShowWindow()
+    HostRestoreAndFocusWindow()
 }
 HideTrayWindow :: () {
     if desktop_tray_ready() == 0 {
@@ -341,11 +353,8 @@ HideTrayWindow :: () {
     }
     // The window vanishing with the process still running is the single
     // most confusing failure mode this app has; always say why it hid.
-    message: [41]u8
-    if CopyCString("APP: hiding main window (tray action)", message[:]) {
-        NativeTraceLog(3, *message[0])
-    }
-    SetWindowState(FLAG_WINDOW_HIDDEN)
+    TraceLog(3, "APP: hiding main window (tray action)")
+    HostHideWindow()
 }
 #program_export
 desktop_tray_keep_running :: () -> s32 {
@@ -384,7 +393,7 @@ UpdateTrayMenuSnapshot :: (app: *InnerBreeze) {
         return
     }
     next = AppTraySnapshot.{}
-    next.window_visible = ifx (IsWindowHidden()) then (0) else (1)
+    next.window_visible = ifx (HostWindowHidden()) then (0) else (1)
     next.break_mode = app.breaks.mode
     next.break_reading_mode = app.breaks.reading_mode
     FillTraySnapshotLabels(*next)
@@ -427,7 +436,7 @@ desktop_tray_apply_action :: (app: *InnerBreeze, action: DesktopTrayAction, quit
         HideTrayWindow()
 
         case DesktopTrayAction.DESKTOP_TRAY_ACTION_MINIMIZE;
-        MinimizeWindow()
+        HostMinimizeWindow()
 
         case DesktopTrayAction.DESKTOP_TRAY_ACTION_CLOSE_REQUEST;
         app_request_desktop_close(app)
@@ -510,8 +519,8 @@ desktop_tray_update_status :: (app: *InnerBreeze) {
     if app == null || TrayReady == 0 {
         return
     }
-    now = GetTime()
-    window_visible = ifx (IsWindowHidden()) then (0) else (1)
+    now = HostSeconds()
+    window_visible = ifx (HostWindowHidden()) then (0) else (1)
     if TrayStatusUpdateInitialized != 0 && window_visible == TrayLastWindowVisible  && now < TrayNextStatusUpdateTime {
         return
     }

@@ -1,10 +1,7 @@
 // Logging and the shared peak sample for the app's audio meter.
+#import, file "../platform/app_trace.zi";
 #import "byte_text_linux"
 #import "c_string"
-
-raylib :: #system_library "raylib";
-HostAudioTrace :: (level: s32, format: *u8,
-    args: ..any) #foreign raylib "TraceLog";
 
 AUDIO_ATOMIC_METER :: #defined(PLATFORM_DESKTOP) || #defined(ANDROID_BUILD)
 #if AUDIO_ATOMIC_METER {
@@ -21,49 +18,17 @@ AUDIO_ATOMIC_METER :: #defined(PLATFORM_DESKTOP) || #defined(ANDROID_BUILD)
 
 audio_meter_peak_milli: s32;
 
-AudioTraceBytes :: (message: string) -> *u8 {
-    if message.count == 0 {
-        return null
-    }
-    descriptor: *TextDescriptor = cast(*TextDescriptor)(*message)
-    return descriptor.data
-}
-
-AudioTraceLength :: (message: string) -> s32 {
-    if message.count > 2147483647 {
-        return 2147483647
-    }
-    return cast(s32)message.count
-}
-
 #program_export
 app_audio_trace :: (level: s32, message: string) {
-    format: [8]u8
-    empty: [1]u8 = .[0]
-    if !CopyCString("%.*s", format[:]) {
-        return
-    }
-    data := AudioTraceBytes(message)
-    if data == null {
-        data = *empty[0]
-    }
-    HostAudioTrace(level, *format[0], AudioTraceLength(message), data)
+    TraceLog(level, message)
 }
 
 #program_export
 app_audio_trace_frames :: (level: s32, message: string,
     frames: s32) {
-    format: [24]u8
-    empty: [1]u8 = .[0]
-    if !CopyCString("%.*s (%d frames)", format[:]) {
-        return
-    }
-    data := AudioTraceBytes(message)
-    if data == null {
-        data = *empty[0]
-    }
-    HostAudioTrace(level, *format[0], AudioTraceLength(message),
-        data, frames)
+    line: Vec(u8)
+    BuilderPrint(*line, "% (% frames)", message, frames)
+    TraceLog(level, BuilderFinish(line))
 }
 
 #program_export

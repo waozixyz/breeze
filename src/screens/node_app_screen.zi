@@ -1,6 +1,8 @@
 // The screen of an app the node offers, such as Chess. The app draws itself
 // with hosted Kryon widgets; this screen supplies its frame, its text in the
 // person's language and the account's friends.
+#import, file "../platform/host_input.zi";
+#import, file "../platform/host_clock.zi";
 #import "byte_text_linux"
 #import "text_buffer"
 #import "json_scan"
@@ -23,9 +25,7 @@ Text :: #import "kryon/text";
 #import "tree_input"
 #import "test_driver"
 #import, file "../platform/raylib_text_input.zi";
-#if #defined(PLATFORM_WEB) == false {
-    #import "kryon/raylib_runtime"
-}
+#import "image_raster"
 #import, file "../apps/node_apps.zi";
 #import, file "../apps/node_app_runner.zi";
 #import, file "../apps/node_app_open.zi";
@@ -70,15 +70,11 @@ using TextAlign;
 using AndroidImportKind;
 
 c :: #system_library "c";
-GetTime :: () -> float64 #foreign c;
-NodePressedKey :: () -> s32 #foreign c "GetKeyPressed";
-NodeKeyRepeated :: (key: s32) -> bool #foreign c "IsKeyPressedRepeat";
-
 // A held key repeats as the system repeats typing, so a game keeps moving
-// while an arrow is held; GetKeyPressed reports only the first press.
+// while an arrow is held; a press reports only the first one.
 NodeRepeatedKey :: () -> s32 {
     for key: cast(s32)32..348 {
-        if NodeKeyRepeated(key) { return key }
+        if HostKeyRepeated(key) { return key }
     }
     return 0
 }
@@ -137,7 +133,7 @@ NodeScreenUiCall :: (context: *void, module: *u8, function: *u8,
         return 1
     }
     if name == "AppKeyHost" && count == 0 {
-        key := NodeAppKeyFor(NodePressedKey(), NodeRepeatedKey())
+        key := NodeAppKeyFor(HostKeyPressedThisFrame(), NodeRepeatedKey())
         if key == 0 && TestDriverActive() {
             for candidate: cast(s32)32..348 {
                 if TestDriverKeyPressed(candidate) {
@@ -292,7 +288,7 @@ NodeScreenPictureProgress :: (slot: s32) -> NodeScreenPictures {
         for image: node_tree_images {
             if TextUntilNul(image.digest[:]) != digest { continue }
             result.total += 1
-            if ImageWidth(image.path) >= 0 { result.ready += 1 }
+            if AssetWidth(image.path) >= 0 { result.ready += 1 }
         }
     }
     return result
@@ -310,7 +306,7 @@ NodeScreenProgress :: (app: *InnerBreeze, area: Rectangle, title: string,
     }
     LoadingScreen.Draw(app.ui.session, LoadingScreen.Props.{.key = Layout.KeyHash("inbe/app/loading"),
             .bounds = area, .title = title, .detail = stage, .icon_shape = shape,
-            .now = GetTime(), .scale = MetricsScale(), .has_progress = known_progress && total > 0,
+            .now = HostSeconds(), .scale = MetricsScale(), .has_progress = known_progress && total > 0,
             .completed = done, .total = total})
     AppRequestSmoothFrames(2)
 }
@@ -384,7 +380,7 @@ node_app_screen_draw :: (app: *InnerBreeze) {
     }
     node_screen_frame = AppUiFrame.{.session = app.ui.session, .width = app.ui.view_width,
         .height = app.ui.view_height, .bottom = app_content_bottom_reserved(app),
-        .scale = MetricsScale(), .font = AppFontSize(), .now = GetTime(), .dark = app.dark_mode != 0}
+        .scale = MetricsScale(), .font = AppFontSize(), .now = HostSeconds(), .dark = app.dark_mode != 0}
     unused AppCopyText(storage_get_setting_text("sync_public_id"), node_screen_account[:])
     message := AppMessage.{.action = APP_FRAME, .screen = ScreenNodeApp, .name = name,
         .locale = AppTextFromCString(*app.language[0], 16),
@@ -396,7 +392,7 @@ node_app_screen_draw :: (app: *InnerBreeze) {
     typed: [1024]u8
     if NodeAppPortable(slot) || node_runners[slot].nested != null {
         input := SampleTextFieldInput(true, typed[:])
-        key := NodeAppKeyFor(NodePressedKey(), NodeRepeatedKey())
+        key := NodeAppKeyFor(HostKeyPressedThisFrame(), NodeRepeatedKey())
         // Native and IME commands are sampled with the field input. Keep
         // them even when the raw key queue has already been drained.
         if input.commit { key = TextInputKeyEnter }

@@ -3,14 +3,9 @@
 #import "file_linux"
 #import "c_string"
 #import "byte_text_linux"
-#import, file "raylib_host.zi";
+#import "vec"
+#import, file "icon_png.zi";
 #import, file "../apps/package_files.zi";
-
-#if !#defined(PLATFORM_WEB) {
-    raylib :: #system_library "raylib";
-    IconPng :: (image: RaylibImage, extension: *u8, size: *s32) -> *u8 #foreign raylib "ExportImageToMemory";
-    IconFree :: (memory: *void) #foreign raylib "MemFree";
-}
 
 LauncherIconWrite :: (path: string, shape: string, windows: bool) -> bool {
     #if !#defined(PLATFORM_WEB) {
@@ -30,13 +25,9 @@ LauncherIconWrite :: (path: string, shape: string, windows: bool) -> bool {
                 pixels[at + 3] = 255
             }
         }
-        image: RaylibImage = .{cast(*void)*pixels[0], 128, 128, 1, 7}
-        extension: [8]u8
-        unused CopyCString(".png", extension[:])
-        size: s32
-        png := IconPng(image, *extension[0], *size)
-        if png == null || size <= 0 { return false }
-        defer { IconFree(cast(*void)png) }
+        png: Vec(u8)
+        if !IconPng(128, 128, pixels[:], *png) || png.count == 0 { return false }
+        size := cast(s32)png.count
         file := OpenReplace(path)
         if !file.valid { return false }
         offset: s64 = 0
@@ -52,7 +43,7 @@ LauncherIconWrite :: (path: string, shape: string, windows: bool) -> bool {
             ok = WriteAt(file, header[:], 0) == 22
             offset = 22
         }
-        ok = ok && WriteAt(file, BytesFromPointer(png, cast(u64)size), offset) == size && SyncFile(file)
+        ok = ok && WriteAt(file, png[:], offset) == size && SyncFile(file)
         closed := CloseFile(file)
         return ok && closed
     }

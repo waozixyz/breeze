@@ -4,9 +4,14 @@
 #if #defined(DESKTOP_HOST) {
     host_clock_c :: #system_library "c";
     HostMonotonicSeconds :: () -> float64 #foreign host_clock_c "app_monotonic_seconds";
+    host_frame_started: float64;
+    host_frame_seconds: float32;
+    HostSleepMicroseconds :: (microseconds: u32) -> s32 #foreign host_clock_c "usleep";
 } else {
     host_clock_raylib :: #system_library "raylib";
     HostRaylibSeconds :: () -> float64 #foreign host_clock_raylib "GetTime";
+    HostRaylibFrameSeconds :: () -> float32 #foreign host_clock_raylib "GetFrameTime";
+    HostRaylibWait :: (seconds: float64) #foreign host_clock_raylib "WaitTime";
 }
 
 HostSeconds :: () -> float64 {
@@ -14,5 +19,36 @@ HostSeconds :: () -> float64 {
         return HostMonotonicSeconds()
     } else {
         return HostRaylibSeconds()
+    }
+}
+
+// Waits SECONDS without drawing.
+HostWait :: (seconds: float64) {
+    #if #defined(DESKTOP_HOST) {
+        if seconds > 0.0 {
+            unused HostSleepMicroseconds(cast(u32)(seconds * 1000000.0))
+        }
+    } else {
+        HostRaylibWait(seconds)
+    }
+}
+
+// How long the last frame took, from its start to this one's, in seconds.
+HostFrameSeconds :: () -> float32 {
+    #if #defined(DESKTOP_HOST) {
+        return host_frame_seconds
+    } else {
+        return HostRaylibFrameSeconds()
+    }
+}
+
+#if #defined(DESKTOP_HOST) {
+    // The desktop frame loop calls this as each frame begins.
+    HostFrameStarted :: () {
+        now := HostMonotonicSeconds()
+        if host_frame_started > 0.0 {
+            host_frame_seconds = cast(float32)(now - host_frame_started)
+        }
+        host_frame_started = now
     }
 }

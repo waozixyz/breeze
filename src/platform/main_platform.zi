@@ -2,16 +2,28 @@
 #import "c_string"
 #import "byte_text_linux"
 #import, file "app_trace.zi";
+#import, file "host_clock.zi";
 #import "device_host"
-#import "window_close"
 #import "asset_files"
-WindowIcon :: #import "kryon/window_icon";
+#if #defined(DESKTOP_HOST) {
+    Desktop :: #import "desktop_runtime";
+    #import, file "icon_png.zi";
+    desktop_icon_rgba: [ICON_SIZE * ICON_SIZE * 4]u8;
+
+    // The window icon from an embedded picture, given to SDL as RGBA.
+    SetDesktopIconFromAsset :: (path: string) -> bool {
+        return IconPixels(path, desktop_icon_rgba[:]) &&
+        Desktop.DesktopSetIcon(ICON_SIZE, ICON_SIZE, desktop_icon_rgba[:])
+    }
+} else {
+    #import "window_close"
+    WindowIcon :: #import "kryon/window_icon";
+}
 #import, file "../app/assets.zi";
 
 c :: #system_library "c";
 ScreenshotEnvironmentBytes :: (name: *u8) -> *u8 #foreign c "getenv";
 raylib :: #system_library "raylib";
-HostTraceLog :: (level: s32, format: *u8, arguments: ..any) #foreign raylib "TraceLog";
 update_apply_at_exit :: () -> s32 #foreign c;
 WindowReady :: () -> bool #foreign raylib "IsWindowReady";
 WindowHandle :: () -> *void #foreign raylib "GetWindowHandle";
@@ -43,6 +55,7 @@ FindText :: (text: *u8, needle: *u8) -> *u8 #foreign c "strstr";
 }
 
 MAIN_SDL :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(PLATFORM_WEB) && !#defined(_WIN32) && !#defined(ANDROID_BUILD)
+DESKTOP_WINDOW :: #defined(DESKTOP_HOST)
 #if MAIN_SDL {
     sdl :: #system_library "SDL2";
     CurrentWindow :: () -> *void #foreign sdl "SDL_GL_GetCurrentWindow";
@@ -67,7 +80,6 @@ MAIN_SDL :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(PLATFORM_WEB) && !#def
         geometry_launch_width: s32;
         geometry_launch_height: s32;
         geometry_viewport: AndroidViewport;
-        GeometryTime :: () -> float64 #foreign raylib "GetTime";
     }
 }
 
@@ -150,7 +162,14 @@ SetDesktopWindowIcon :: (path: *u8) {
             return
         }
         encoded := TextFromBytes(BytesFromPointer(asset.data, cast(u64)asset.size))
-        if !WindowIcon.SetWindowIcon(encoded, TextFromCString(path)) {
+        applied := false
+        #if DESKTOP_WINDOW {
+            unused encoded
+            applied = SetDesktopIconFromAsset(TextFromCString(path))
+        } else {
+            applied = WindowIcon.SetWindowIcon(encoded, TextFromCString(path))
+        }
+        if !applied {
             TraceLog(4, "APP: Failed to decode or apply window icon asset")
         }
     }
@@ -286,25 +305,36 @@ native_before_window :: () {
 
 #program_export
 native_after_window :: (icon_path: *u8) -> s32 {
-    if !WindowReady() {
-        TraceLog(5, "APP: InitWindow failed")
-        #if #defined(_WIN32) && !#defined(ANDROID_BUILD) {
-            dialog: [3072]u8
-            title: [32]u8
-            if StartupErrorMessage(TraceRecentErrors(), dialog[:]) &&
-            CopyCString("Inner Breeze", title[:]) {
-                ErrorMessage(null, *dialog[0], *title[0], 0x10)
+    // The desktop host's window is open once HostOpenWindow returns.
+    #if !DESKTOP_WINDOW {
+        if !WindowReady() {
+            TraceLog(5, "APP: InitWindow failed")
+            #if #defined(_WIN32) && !#defined(ANDROID_BUILD) {
+                dialog: [3072]u8
+                title: [32]u8
+                if StartupErrorMessage(TraceRecentErrors(), dialog[:]) &&
+                CopyCString("Inner Breeze", title[:]) {
+                    ErrorMessage(null, *dialog[0], *title[0], 0x10)
+                }
+                TraceClose()
             }
-            TraceClose()
+            return 0
         }
-        return 0
     }
     #if MAIN_SDL {
-        window := CurrentWindow()
+        window: *void
+        #if DESKTOP_WINDOW {
+            window = Desktop.DesktopWindow()
+        } else {
+            window = CurrentWindow()
+        }
         if window != null {
             GrabWindow(window, 0)
             app_device_attach_window(window)
-            WindowCloseWatch(window)
+            // The desktop host intercepts its own window's close.
+            #if !DESKTOP_WINDOW {
+                WindowCloseWatch(window)
+            }
         }
     }
     #if #defined(_WIN32) && !#defined(ANDROID_BUILD) {
@@ -348,7 +378,9 @@ native_after_window :: (icon_path: *u8) -> s32 {
 
 #program_export
 native_platform_shutdown :: () {
-    WindowCloseStop()
+    #if !DESKTOP_WINDOW {
+        WindowCloseStop()
+    }
     TraceClose()
 }
 
@@ -371,7 +403,7 @@ native_update_apply_at_exit :: () -> s32 {
         native_android_report_geometry :: (viewport: AndroidViewport,
             layout_width: s32, layout_height: s32, render_scale: float32,
             practice: s32, paused: s32) {
-            now := GeometryTime()
+            now := HostSeconds()
             if ViewportEqual(viewport, geometry_viewport) &&
             geometry_time >= 0.0 && now - geometry_time < 1.0 {
                 return
@@ -424,11 +456,13 @@ native_update_apply_at_exit :: () -> s32 {
             height: s32
             GetAndroidSurfaceSize(*width, *height)
             format: [160]u8
-            if CopyCString("ANDROID_VIEWPORT: surface=%dx%d viewport=%d,%d %dx%d insets l=%d t=%d r=%d b=%d", format[:]) {
-                HostTraceLog(3, *format[0], width, height, viewport.x,
-                    viewport.y, viewport.width, viewport.height,
-                    viewport.insets.left, viewport.insets.top,
-                    viewport.insets.right, viewport.insets.bottom)
+            message: [256]u8
+            if CopyCString("ANDROID_VIEWPORT: surface=%dx%d viewport=%d,%d %dx%d insets l=%d t=%d r=%d b=%d", format[:]) &&
+            FormatText(*message[0], 256, *format[0], width, height, viewport.x,
+                viewport.y, viewport.width, viewport.height,
+                viewport.insets.left, viewport.insets.top,
+                viewport.insets.right, viewport.insets.bottom) > 0 {
+                TraceLog(3, TextFromCString(*message[0]))
             }
             last_viewport = viewport.*
         }

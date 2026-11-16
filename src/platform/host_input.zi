@@ -9,19 +9,21 @@
 #if #defined(DESKTOP_HOST) {
     Desktop :: #import "desktop_runtime";
     Keyboard :: #import "desktop_keyboard";
+    host_input_last_pointer: Vector2;
 } else {
     host_input_raylib :: #system_library "raylib";
     RaylibKeyPressed :: (key: s32) -> bool #foreign host_input_raylib "IsKeyPressed";
     RaylibKeyDown :: (key: s32) -> bool #foreign host_input_raylib "IsKeyDown";
+    RaylibKeyRepeated :: (key: s32) -> bool #foreign host_input_raylib "IsKeyPressedRepeat";
+    RaylibNextKeyPressed :: () -> s32 #foreign host_input_raylib "GetKeyPressed";
     RaylibMousePosition :: () -> Vector2 #foreign host_input_raylib "GetMousePosition";
     RaylibMousePressed :: (button: s32) -> bool #foreign host_input_raylib "IsMouseButtonPressed";
     RaylibMouseDown :: (button: s32) -> bool #foreign host_input_raylib "IsMouseButtonDown";
     RaylibMouseReleased :: (button: s32) -> bool #foreign host_input_raylib "IsMouseButtonReleased";
     RaylibWheel :: () -> Vector2 #foreign host_input_raylib "GetMouseWheelMoveV";
+    RaylibMouseDelta :: () -> Vector2 #foreign host_input_raylib "GetMouseDelta";
     RaylibSetCursor :: (cursor: s32) #foreign host_input_raylib "SetMouseCursor";
-    #if !#defined(PLATFORM_WEB) {
-        RaylibRuntime :: #import "kryon/raylib_runtime";
-    }
+    RaylibKeyReleased :: (key: s32) -> bool #foreign host_input_raylib "IsKeyReleased";
 }
 
 HOST_MOUSE_LEFT :: 0
@@ -40,6 +42,30 @@ HostKeyDown :: (key: s32) -> bool {
         return Keyboard.DesktopKeyDown(key)
     } else {
         return RaylibKeyDown(key)
+    }
+}
+
+// A held key's auto-repeat this frame.
+HostKeyRepeated :: (key: s32) -> bool {
+    #if #defined(DESKTOP_HOST) {
+        return Keyboard.DesktopKeyRepeated(key)
+    } else {
+        return RaylibKeyRepeated(key)
+    }
+}
+
+// A key first pressed this frame, or 0. Raylib reports them in order, one per
+// call; the desktop host reports the lowest key code pressed.
+HostKeyPressedThisFrame :: () -> s32 {
+    #if #defined(DESKTOP_HOST) {
+        for key: cast(s32)32..348 {
+            if Keyboard.DesktopKeyPressed(key) {
+                return key
+            }
+        }
+        return 0
+    } else {
+        return RaylibNextKeyPressed()
     }
 }
 
@@ -64,6 +90,20 @@ HostSecondaryPointer :: () -> SecondaryPointerFrame {
     }
 }
 
+// Whether the pointer moved over the window since the last call (raylib:
+// during the last frame).
+HostPointerMoved :: () -> bool {
+    #if #defined(DESKTOP_HOST) {
+        pointer := Desktop.PollPointer()
+        moved := pointer.x != host_input_last_pointer.x || pointer.y != host_input_last_pointer.y
+        host_input_last_pointer = Vector2.{pointer.x, pointer.y}
+        return moved
+    } else {
+        delta := RaylibMouseDelta()
+        return delta.x != 0.0 || delta.y != 0.0
+    }
+}
+
 // Wheel steps this frame: x sideways, positive to the right on desktop
 // hosts and to the left in browsers; y positive away from the person.
 HostWheel :: () -> Vector2 {
@@ -74,7 +114,8 @@ HostWheel :: () -> Vector2 {
     }
 }
 
-// The held modifier keys as KeyModifier bits; none in browsers.
+// The held modifier keys as KeyModifier bits; none in browsers. On raylib a
+// modifier released since the last frame still applies to a key pressed with it.
 HostModifiers :: () -> s32 {
     #if #defined(DESKTOP_HOST) {
         return Desktop.DesktopModifiers()
@@ -82,7 +123,21 @@ HostModifiers :: () -> s32 {
         #if #defined(PLATFORM_WEB) {
             return 0
         } else {
-            return RaylibRuntime.RaylibModifiers()
+            // Left and right Shift, Control and Alt are 340-342 and 344-346.
+            modifiers: s32 = 0
+            for key: cast(s32)340..346 {
+                if RaylibKeyDown(key) || RaylibKeyReleased(key) {
+                    side := ifx key >= 344 then key - 344 else key - 340
+                    if side == 0 {
+                        modifiers |= KeyModifierShift
+                    } else if side == 1 {
+                        modifiers |= KeyModifierControl
+                    } else if side == 2 {
+                        modifiers |= KeyModifierAlt
+                    }
+                }
+            }
+            return modifiers
         }
     }
 }

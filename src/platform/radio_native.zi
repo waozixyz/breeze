@@ -2,11 +2,11 @@
 // thread as the player; callbacks never touch app state or the audio thread.
 #import "c_string"
 #import, file "audio_runtime.zi";
+#import, file "host_clock.zi";
 
 #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) {
     #import "net_http_curl_linux"
     curl :: #system_library "curl";
-    raylib :: #system_library "raylib";
     c :: #system_library "c";
     EasyInit :: () -> *void #foreign curl "curl_easy_init";
     EasyCleanup :: (easy: *void) #foreign curl "curl_easy_cleanup";
@@ -18,16 +18,23 @@
     MultiCleanup :: (multi: *void) -> s32 #foreign curl "curl_multi_cleanup";
     EasyPause :: (easy: *void, mask: s32) -> s32 #foreign curl "curl_easy_pause";
     MoveBytes :: (to: *void, from: *void, length: usize) -> *void #foreign c "memmove";
-    Clock :: () -> float64 #foreign raylib "GetTime";
-    LoadStream :: (rate: u32, bits: u32, channels: u32) -> NativeAudioStream #foreign raylib "LoadAudioStream";
-    UnloadStream :: (stream: NativeAudioStream) #foreign raylib "UnloadAudioStream";
-    PlayStream :: (stream: NativeAudioStream) #foreign raylib "PlayAudioStream";
-    StreamProcessed :: (stream: NativeAudioStream) -> bool #foreign raylib "IsAudioStreamProcessed";
-    UpdateStream :: (stream: NativeAudioStream, data: *void, frames: s32) #foreign raylib "UpdateAudioStream";
-    StreamVolume :: (stream: NativeAudioStream, volume: float32) #foreign raylib "SetAudioStreamVolume";
-    StreamBufferSize :: (frames: s32) #foreign raylib "SetAudioStreamBufferSizeDefault";
+    // The PCM output: a raylib audio stream, or on Kryon's desktop host a
+    // stream voice of its mixer. Both take signed 16-bit blocks.
+    #if #defined(DESKTOP_HOST) {
+        Mixer :: #import "audio_mixer";
+    } else {
+        raylib :: #system_library "raylib";
+        LoadStream :: (rate: u32, bits: u32, channels: u32) -> NativeAudioStream #foreign raylib "LoadAudioStream";
+        UnloadStream :: (stream: NativeAudioStream) #foreign raylib "UnloadAudioStream";
+        PlayStream :: (stream: NativeAudioStream) #foreign raylib "PlayAudioStream";
+        StreamProcessed :: (stream: NativeAudioStream) -> bool #foreign raylib "IsAudioStreamProcessed";
+        UpdateStream :: (stream: NativeAudioStream, data: *void, frames: s32) #foreign raylib "UpdateAudioStream";
+        StreamVolume :: (stream: NativeAudioStream, volume: float32) #foreign raylib "SetAudioStreamVolume";
+        StreamBufferSize :: (frames: s32) #foreign raylib "SetAudioStreamBufferSizeDefault";
+    }
 
-    // Public dr_mp3 low-level push API, already compiled by raylib.
+    // dr_mp3's low-level push API: raylib's copy, or on the desktop host the
+    // audio package's libziran_mp3.a, which decodes to float samples.
     Mp3Bits :: struct {
         buffer: *u8
         position: s32
@@ -76,9 +83,16 @@
         layer: s32
         bitrate: s32
     }
-    Mp3Init :: (decoder: *Mp3Decoder) #foreign raylib "drmp3dec_init";
-    Mp3Decode :: (decoder: *Mp3Decoder, input: *u8, length: s32,
-        pcm: *s16, info: *Mp3Frame) -> s32 #foreign raylib "drmp3dec_decode_frame";
+    #if #defined(DESKTOP_HOST) {
+        radio_mp3 :: #system_library "ziran_mp3";
+        Mp3Init :: (decoder: *Mp3Decoder) #foreign radio_mp3 "drmp3dec_init";
+        Mp3DecodeFloat :: (decoder: *Mp3Decoder, input: *u8, length: s32,
+            pcm: *float32, info: *Mp3Frame) -> s32 #foreign radio_mp3 "drmp3dec_decode_frame";
+    } else {
+        Mp3Init :: (decoder: *Mp3Decoder) #foreign raylib "drmp3dec_init";
+        Mp3Decode :: (decoder: *Mp3Decoder, input: *u8, length: s32,
+            pcm: *s16, info: *Mp3Frame) -> s32 #foreign raylib "drmp3dec_decode_frame";
+    }
     WriteCallback :: #type (data: *u8, size: usize, count: usize, context: *void) -> usize #c_call;
 
     radio_multi: *void;
@@ -87,7 +101,11 @@
     radio_length: s32;
     radio_paused: bool;
     radio_decoder: Mp3Decoder;
-    radio_stream: NativeAudioStream;
+    #if #defined(DESKTOP_HOST) {
+        radio_voice: Mixer.AudioVoice = .{-1, 0};
+    } else {
+        radio_stream: NativeAudioStream;
+    }
     radio_pcm: [12288]s16;
     radio_samples: s32;
     radio_rate: s32;
@@ -100,6 +118,102 @@
     radio_last_audio: float64;
     radio_audible_until: float64;
     radio_url: [2048]u8;
+
+    // One MP3 frame into PCM as signed 16-bit samples; its frame count.
+    RadioDecodeFrame :: (input: *u8, length: s32, pcm: *s16, info: *Mp3Frame) -> s32 {
+        #if #defined(DESKTOP_HOST) {
+            samples: [2304]float32
+            frames := Mp3DecodeFloat(*radio_decoder, input, length, *samples[0], info)
+            count := frames * info.channels
+            if count > 2304 {
+                count = 2304
+            }
+            for index: cast(s32)0..count - 1 {
+                value := samples[index] * 32768.0
+                if value > 32767.0 {
+                    value = 32767.0
+                }
+                if value < -32768.0 {
+                    value = -32768.0
+                }
+                pcm[index] = cast(s16)value
+            }
+            return frames
+        } else {
+            return Mp3Decode(*radio_decoder, input, length, pcm, info)
+        }
+    }
+
+    RadioStreamOpen :: () -> bool {
+        #if #defined(DESKTOP_HOST) {
+            return radio_voice.slot >= 0
+        } else {
+            return radio_stream.buffer != null
+        }
+    }
+
+    RadioStreamClose :: () {
+        #if #defined(DESKTOP_HOST) {
+            if radio_voice.slot >= 0 {
+                Mixer.AudioUnload(radio_voice)
+                radio_voice = .{-1, 0}
+            }
+        } else {
+            if radio_stream.buffer != null {
+                UnloadStream(radio_stream)
+                radio_stream = NativeAudioStream.{}
+            }
+        }
+    }
+
+    // Opens a stream of 4096-frame blocks at RATE and plays it at the volume.
+    RadioStreamStart :: (rate: s32, channels: s32) -> bool {
+        #if #defined(DESKTOP_HOST) {
+            radio_voice = Mixer.AudioOpenStream(rate, channels, 4096)
+            if radio_voice.slot < 0 {
+                return false
+            }
+            Mixer.AudioSetGain(radio_voice, radio_volume)
+            unused Mixer.AudioPlay(radio_voice)
+            return true
+        } else {
+            StreamBufferSize(4096)
+            radio_stream = LoadStream(cast(u32)rate, 16, cast(u32)channels)
+            StreamBufferSize(0)
+            if radio_stream.buffer == null {
+                return false
+            }
+            StreamVolume(radio_stream, radio_volume)
+            PlayStream(radio_stream)
+            return true
+        }
+    }
+
+    RadioStreamWritable :: () -> bool {
+        #if #defined(DESKTOP_HOST) {
+            return Mixer.AudioStreamWritable(radio_voice)
+        } else {
+            return StreamProcessed(radio_stream)
+        }
+    }
+
+    // Submits the first 4096 frames of radio_pcm.
+    RadioStreamSubmit :: (samples: s32) {
+        #if #defined(DESKTOP_HOST) {
+            unused Mixer.AudioStreamSubmit(radio_voice, radio_pcm[0:samples])
+        } else {
+            unused samples
+            UpdateStream(radio_stream, cast(*void)*radio_pcm[0], 4096)
+        }
+    }
+
+    RadioStreamVolume :: (volume: float32) {
+        #if #defined(DESKTOP_HOST) {
+            Mixer.AudioSetGain(radio_voice, volume)
+        } else {
+            StreamVolume(radio_stream, volume)
+        }
+    }
 
     ReceiveRadio :: (data: *u8, size: usize, count: usize, context: *void) -> usize {
         unused context
@@ -130,10 +244,7 @@
             unused MultiCleanup(radio_multi)
             radio_multi = null
         }
-        if radio_stream.buffer != null {
-            UnloadStream(radio_stream)
-            radio_stream = NativeAudioStream.{}
-        }
+        RadioStreamClose()
         radio_length = 0
         radio_samples = 0
         radio_paused = false
@@ -146,7 +257,7 @@
     NativeRadioRetry :: () {
         NativeRadioDisconnect()
         radio_state = 3
-        radio_retry_at = Clock() + radio_retry_seconds
+        radio_retry_at = HostSeconds() + radio_retry_seconds
         radio_retry_seconds *= 2.0
         if radio_retry_seconds > 30.0 {
             radio_retry_seconds = 30.0
@@ -190,7 +301,7 @@
             return
         }
         radio_state = 1
-        radio_last_audio = Clock()
+        radio_last_audio = HostSeconds()
     }
 
     NativeRadioOpen :: (url: string) -> bool {
@@ -219,7 +330,7 @@
             return
         }
         if radio_multi == null {
-            if Clock() >= radio_retry_at {
+            if HostSeconds() >= radio_retry_at {
                 NativeRadioConnect()
             }
             return
@@ -230,7 +341,7 @@
         }
         running: s32
         result := MultiPerform(radio_multi, *running)
-        if result != 0 || running == 0 || Clock() - radio_last_audio > 20.0 {
+        if result != 0 || running == 0 || HostSeconds() - radio_last_audio > 20.0 {
             NativeRadioRetry()
             return
         }
@@ -244,7 +355,7 @@
         while radio_length >= 4096 && radio_samples < 8192 && attempts < 32 {
             info: Mp3Frame
             pcm: [2304]s16
-            frames := Mp3Decode(*radio_decoder, *radio_bytes[0], radio_length, *pcm[0], *info)
+            frames := RadioDecodeFrame(*radio_bytes[0], radio_length, *pcm[0], *info)
             if info.bytes <= 0 || info.bytes > radio_length {
                 break
             }
@@ -260,38 +371,31 @@
                 NativeRadioRetry()
                 return
             }
-            if radio_stream.buffer == null || info.rate != radio_rate || info.channels != radio_channels {
-                if radio_stream.buffer != null {
-                    UnloadStream(radio_stream)
-                }
-                StreamBufferSize(4096)
-                radio_stream = LoadStream(cast(u32)info.rate, 16, cast(u32)info.channels)
-                StreamBufferSize(0)
-                if radio_stream.buffer == null {
+            if !RadioStreamOpen() || info.rate != radio_rate || info.channels != radio_channels {
+                RadioStreamClose()
+                if !RadioStreamStart(info.rate, info.channels) {
                     NativeRadioRetry()
                     return
                 }
                 radio_rate = info.rate
                 radio_channels = info.channels
                 radio_samples = 0
-                StreamVolume(radio_stream, radio_volume)
-                PlayStream(radio_stream)
             }
             samples := frames * info.channels
             for index: cast(s32)0..samples - 1 {
                 radio_pcm[radio_samples + index] = pcm[index]
             }
             radio_samples += samples
-            radio_last_audio = Clock()
+            radio_last_audio = HostSeconds()
         }
         chunk := 4096 * radio_channels
-        if chunk > 0 && radio_samples >= chunk && StreamProcessed(radio_stream) {
-            UpdateStream(radio_stream, cast(*void)*radio_pcm[0], 4096)
+        if chunk > 0 && radio_samples >= chunk && RadioStreamWritable() {
+            RadioStreamSubmit(chunk)
             radio_samples -= chunk
             unused MoveBytes(cast(*void)*radio_pcm[0], cast(*void)*radio_pcm[chunk], cast(usize)(radio_samples * 2))
             // The two stream buffers cover only submitted PCM. A decoder
             // stall must report buffering as soon as that audio runs out.
-            now := Clock()
+            now := HostSeconds()
             if radio_audible_until < now { radio_audible_until = now }
             duration := 4096.0 / cast(float64)radio_rate
             radio_audible_until += duration
@@ -305,13 +409,13 @@
 
     NativeRadioVolume :: (volume: float32) {
         radio_volume = volume
-        if radio_stream.buffer != null {
-            StreamVolume(radio_stream, volume)
+        if RadioStreamOpen() {
+            RadioStreamVolume(volume)
         }
     }
 
     NativeRadioState :: () -> s32 {
-        if radio_state == 2 && Clock() >= radio_audible_until { return 1 }
+        if radio_state == 2 && HostSeconds() >= radio_audible_until { return 1 }
         return radio_state
     }
 }
