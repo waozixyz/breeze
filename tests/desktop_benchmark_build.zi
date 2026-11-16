@@ -1,0 +1,86 @@
+// Build timings for the desktop benchmark. A clean build removes what the
+// Linux desktop executable alone compiles: its generated C, objects,
+// source-check stamp, the executable and the raylib library built for it.
+// The Ziran toolchain, curl, liboqs, SQLite and the image and audio codecs
+// stay built, since both hosts use them unchanged. An incremental build
+// follows a touch of src/main.zi: checking, generating C and linking again.
+#import "file_tree_linux"
+#import "process_run_linux"
+#import "vec"
+#import, file "desktop_benchmark_session.zi";
+
+#scope_file
+build_libc :: #system_library "c";
+// utimensat with null times sets both to now; -100 is AT_FDCWD.
+TouchRaw :: (directory: s32, path: *u8, times: *void, flags: s32) -> s32 #foreign build_libc "utimensat";
+#scope_export
+
+NATIVE_EXECUTABLE :: "build/bin/linux/breeze-linux-x86_64"
+GENERATED_C_DIRECTORY :: "build/kryon/generated"
+
+CleanBuildOutputs :: (root: string) -> bool {
+    outputs: [5]string = .[GENERATED_C_DIRECTORY, "build/obj/native",
+        "build/bin/linux", "build/zi-check", "vendor-builds/linux/x86_64/raylib"]
+    for index: 0..4 {
+        path := JoinPath(root, outputs[index])
+        if PathStatus(path, false).kind != .Missing &&
+        !RemoveTree(path) {
+            return false
+        }
+    }
+    return true
+}
+
+TouchFile :: (path: string) -> bool {
+    bytes: Vec(u8)
+    for index: cast(s64)0..path.count - 1 {
+        VecPush(bytes, path[index])
+    }
+    VecPush(bytes, 0)
+    return TouchRaw(-100, *bytes[0], null, 0) == 0
+}
+
+// Wall seconds for `make native KRYON_TEST_DRIVER=1` in ROOT, its output in
+// LOG, or -1 when it failed.
+TimedNativeBuild :: (root: string, log: string) -> float64 {
+    arguments: [3]string = .["make", "native", "KRYON_TEST_DRIVER=1"]
+    options: ProcessOptions
+    options.arguments = arguments[:]
+    options.directory = root
+    options.output_path = log
+    options.merge_error = true
+    run: ProcessRun
+    started := NowSeconds()
+    if !RunProcess(options, *run) || run.code != 0 {
+        return -1.0
+    }
+    return NowSeconds() - started
+}
+
+BuildRun :: struct {
+    clean_seconds: float64
+    incremental_seconds: float64
+}
+
+MeasureBuild :: (root: string, directory: string, run_index: s32) -> BuildRun {
+    result: BuildRun
+    result.clean_seconds = -1.0
+    result.incremental_seconds = -1.0
+    clean_log: Vec(u8)
+    BuilderPrint(*clean_log, "%/build-%-clean.log", directory, run_index)
+    if !CleanBuildOutputs(root) {
+        return result
+    }
+    result.clean_seconds = TimedNativeBuild(root, BuilderFinish(clean_log))
+    if result.clean_seconds < 0.0 {
+        return result
+    }
+    main := JoinPath(root, "src/main.zi")
+    if !TouchFile(main) {
+        return result
+    }
+    incremental_log: Vec(u8)
+    BuilderPrint(*incremental_log, "%/build-%-incremental.log", directory, run_index)
+    result.incremental_seconds = TimedNativeBuild(root, BuilderFinish(incremental_log))
+    return result
+}

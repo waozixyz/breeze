@@ -6,6 +6,7 @@ c :: #system_library "c";
 #scope_file
 ProfileGetEnv :: (name: *u8) -> *u8 #foreign c "app_getenv_bytes";
 ProfileClock :: () -> float64 #foreign c "app_monotonic_seconds";
+ProfileProcessCpu :: () -> float64 #foreign c "app_process_cpu_seconds";
 ProfileLogInfo :: (line: *u8) #foreign c "app_log_line";
 #if #defined(ANDROID_DEBUG) {
     android_log :: #system_library "log";
@@ -199,6 +200,29 @@ app_profile_work_end :: (start: float64, stage: string) {
             unused ProfileLogAndroid(4, *tag[0], *line[0])
         }
     } else {
+        ProfileLogInfo(*line[0])
+    }
+}
+
+// One line as each host frame begins: when, on the monotonic clock, and the
+// process's CPU time so far, both in microseconds. The desktop benchmark
+// takes frame intervals and each frame's CPU cost from these lines.
+#program_export
+app_profile_frame_sample :: () {
+    if !enabled() { return }
+    wall := ProfileClock()
+    cpu := ProfileProcessCpu()
+    if wall <= 0.0 || cpu < 0.0 { return }
+    line: [96]u8
+    used: s32 = 0
+    if !ProfileAppend(line[:], *used, "PROFILE: sample wall_us=") ||
+    !ProfileAppendNumber(line[:], *used, cast(u64)(wall * 1000000.0)) ||
+    !ProfileAppend(line[:], *used, " cpu_us=") ||
+    !ProfileAppendNumber(line[:], *used, cast(u64)(cpu * 1000000.0)) {
+        return
+    }
+    line[used] = cast(u8)0
+    #if !#defined(ANDROID_DEBUG) {
         ProfileLogInfo(*line[0])
     }
 }

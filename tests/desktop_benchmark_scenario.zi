@@ -1,0 +1,171 @@
+// The benchmark's scripted session, driven through the Kryon test driver
+// with the app's own pointer and keys: switch between the main screens,
+// scroll a long list, open and close a modal, float a practice in its own
+// window and bring it back. It records when the interaction began and ended
+// so frame samples can be taken from just that span.
+#import "file_tree_linux"
+#import "test_driver_client"
+#import, file "desktop_benchmark_profile.zi";
+#import, file "desktop_benchmark_session.zi";
+
+// How long a step may wait for what it opens, and for the screen to settle.
+STEP_TIMEOUT_MS :: 10000
+SETTLE_FRAMES :: 5
+SETTLE_TIMEOUT_MS :: 3000
+SCREEN_CYCLES :: 2
+SCROLL_STEPS :: 40
+SCROLL_LINES :: 3.0
+FLOATING_MS :: 3000
+
+// When the interaction ran, and how long the app's log was then, so the
+// app's 120-frame profile reports can be taken from that span too.
+Interaction :: struct {
+    started: float64
+    ended: float64
+    log_started: s64
+    log_ended: s64
+}
+
+LogSize :: (log: string) -> s64 {
+    return PathStatus(log).size
+}
+
+// Waits for the screen to stop changing; a screen that keeps animating, such
+// as a running practice, simply ends the wait at its timeout.
+Settle :: (driver: *TestDriverClient) {
+    unused DriverWaitIdle(driver, SETTLE_FRAMES, SETTLE_TIMEOUT_MS)
+}
+
+Open :: (driver: *TestDriverClient, label: string) -> bool {
+    if !DriverWait(driver, .{label = label}, STEP_TIMEOUT_MS) {
+        return false
+    }
+    if !DriverPress(driver, .{label = label}) {
+        return false
+    }
+    Settle(driver)
+    return true
+}
+
+// The navigation rail's screens, then the Lists and Diary apps from Apps.
+SwitchScreens :: (driver: *TestDriverClient) -> bool {
+    rail: [4]string = .["Habits", "Lumi", "Practice", "Apps"]
+    for cycle: 1..SCREEN_CYCLES {
+        for index: 0..3 {
+            if !Open(driver, rail[index]) {
+                return false
+            }
+        }
+        if !Open(driver, "Lists") || !Open(driver, "Apps") ||
+        !Open(driver, "Diary") || !Open(driver, "Apps") {
+            return false
+        }
+    }
+    return true
+}
+
+// The seeded list: down by wheel to well past its first screen, then back.
+ScrollLongList :: (driver: *TestDriverClient) -> bool {
+    if !Open(driver, "Lists") {
+        return false
+    }
+    if !DriverWait(driver, .{label = "Benchmark item 1"}, STEP_TIMEOUT_MS) {
+        return false
+    }
+    list := driver.nodes[0]
+    x := list.x + list.width / 2.0
+    y := list.y + list.height * 4.0
+    for step: 1..SCROLL_STEPS {
+        if !DriverWheel(driver, x, y, 0.0 - SCROLL_LINES) {
+            return false
+        }
+    }
+    if DriverFind(driver, .{label = "Benchmark item 1"}) != 0 {
+        return DriverFail(driver, "the long list did not scroll")
+    }
+    for step: 1..SCROLL_STEPS {
+        if !DriverWheel(driver, x, y, SCROLL_LINES) {
+            return false
+        }
+    }
+    if !DriverReleasePointer(driver) {
+        return false
+    }
+    return DriverWait(driver, .{label = "Benchmark item 1"}, STEP_TIMEOUT_MS)
+}
+
+// An app's Properties dialog from its options menu, closed with Escape.
+OpenAndCloseModal :: (driver: *TestDriverClient) -> bool {
+    if !Open(driver, "Apps") || !Open(driver, "App options") ||
+    !Open(driver, "Properties") {
+        return false
+    }
+    if !DriverWait(driver, .{label = "Save"}, STEP_TIMEOUT_MS) {
+        return false
+    }
+    if !DriverKey(driver, DRIVER_KEY_ESCAPE, false, false) {
+        return false
+    }
+    if !DriverWaitGone(driver, .{label = "Save"}, STEP_TIMEOUT_MS) {
+        return false
+    }
+    Settle(driver)
+    return true
+}
+
+// Starts a practice, floats it in its own window for a few seconds, brings
+// it back to the app and exits it.
+FloatPractice :: (driver: *TestDriverClient) -> bool {
+    if !Open(driver, "Practice") || !Open(driver, "Start Practice") {
+        return false
+    }
+    if !Open(driver, "Minimize") {
+        return false
+    }
+    // The main window returns to the practice's start page while the
+    // practice runs in the floating window.
+    if !DriverWait(driver, .{label = "Start Practice"}, STEP_TIMEOUT_MS) {
+        return false
+    }
+    PauseMilliseconds(FLOATING_MS)
+    if !Open(driver, "Start Practice") {
+        return false
+    }
+    if !DriverWait(driver, .{label = "Minimize"}, STEP_TIMEOUT_MS) {
+        return false
+    }
+    if !Open(driver, "Close") || !Open(driver, "Exit") {
+        return false
+    }
+    return DriverWait(driver, .{label = "Start Practice"}, STEP_TIMEOUT_MS)
+}
+
+Step :: (name: string, done: bool) -> bool {
+    if done {
+        print("desktop-benchmark:   %\n", name)
+    } else {
+        print("desktop-benchmark:   % FAILED\n", name)
+    }
+    return done
+}
+
+RunInteraction :: (driver: *TestDriverClient, log: string, interaction: *Interaction) -> bool {
+    interaction.log_started = LogSize(log)
+    interaction.started = NowSeconds()
+    if !Step("switched screens", SwitchScreens(driver)) {
+        return false
+    }
+    if !Step("scrolled the long list", ScrollLongList(driver)) {
+        return false
+    }
+    if !Step("opened and closed a modal", OpenAndCloseModal(driver)) {
+        return false
+    }
+    if !Step("floated a practice window", FloatPractice(driver)) {
+        return false
+    }
+    interaction.ended = NowSeconds()
+    interaction.log_ended = LogSize(log)
+    // Idle on a still screen.
+    return Open(driver, "Habits")
+}

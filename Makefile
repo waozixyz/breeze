@@ -890,4 +890,5 @@ include mk/tests-android.mk
 include mk/tests-web.mk
 include mk/tests-apps.mk
 include mk/tests-ui.mk
+include mk/tests-benchmark.mk
 include mk/tests-suite.mk

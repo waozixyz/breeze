@@ -1,0 +1,80 @@
+// Medians, ranges and percentiles for the desktop benchmark. Every summary
+// is over a copy, so the caller's values keep their order.
+#import "sort"
+#import "vec"
+
+// One measurement over several runs.
+Summary :: struct {
+    count: s64
+    median: float64
+    minimum: float64
+    maximum: float64
+}
+
+SortedCopy :: (values: []float64) -> Vec(float64) {
+    sorted: Vec(float64)
+    for index: cast(s64)0..values.count - 1 {
+        VecPush(sorted, values[index])
+    }
+    Sort(sorted[:])
+    return sorted
+}
+
+// The median of VALUES; the mean of the middle two for an even count.
+Median :: (values: []float64) -> float64 {
+    if values.count == 0 {
+        return 0.0
+    }
+    sorted := SortedCopy(values)
+    middle := sorted.count / 2
+    if sorted.count % 2 == 1 {
+        return sorted[middle]
+    }
+    return (sorted[middle - 1] + sorted[middle]) / 2.0
+}
+
+// The nearest-rank percentile: FRACTION 0.95 is the smallest value that is
+// at least as large as 95% of VALUES.
+Percentile :: (values: []float64, fraction: float64) -> float64 {
+    if values.count == 0 {
+        return 0.0
+    }
+    sorted := SortedCopy(values)
+    rank := cast(s64)(fraction * cast(float64)sorted.count)
+    if cast(float64)rank < fraction * cast(float64)sorted.count {
+        rank += 1
+    }
+    if rank < 1 {
+        rank = 1
+    }
+    if rank > sorted.count {
+        rank = sorted.count
+    }
+    return sorted[rank - 1]
+}
+
+Summarize :: (values: []float64) -> Summary {
+    summary: Summary
+    summary.count = values.count
+    if values.count == 0 {
+        return summary
+    }
+    sorted := SortedCopy(values)
+    summary.minimum = sorted[0]
+    summary.maximum = sorted[sorted.count - 1]
+    summary.median = Median(values)
+    return summary
+}
+
+// Half the range as a percentage of the median: 4.0 means the runs fell
+// within about ±4% of it.
+SpreadPercent :: (summary: Summary) -> float64 {
+    if summary.count == 0 || summary.median == 0.0 {
+        return 0.0
+    }
+    half := (summary.maximum - summary.minimum) / 2.0
+    if summary.median < 0.0 {
+        return 100.0 * half / (0.0 - summary.median)
+    }
+    return 100.0 * half / summary.median
+}

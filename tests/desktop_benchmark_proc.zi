@@ -1,0 +1,203 @@
+// What the desktop benchmark reads from Linux about a process and a build:
+// CPU time and memory from /proc, an executable's dynamic libraries and
+// whether raylib is linked into it, and the generated C in a folder.
+#import "file"
+#import "file_tree_linux"
+#import "text_tools"
+#import "vec"
+
+#scope_file
+proc_libc :: #system_library "c";
+SystemConfiguration :: (name: s32) -> s64 #foreign proc_libc "sysconf";
+CLOCK_TICKS_NAME :: 2
+#scope_export
+
+ProcPath :: (pid: s32, name: string) -> Text {
+    path: Vec(u8)
+    BuilderPrint(*path, "/proc/%/%", pid, name)
+    return BuilderFinish(path)
+}
+
+// User plus system CPU time of PID in seconds, or -1 once it is gone.
+ProcessCpuSeconds :: (pid: s32) -> float64 {
+    path := ProcPath(pid, "stat")
+    bytes: Vec(u8)
+    if !ReadFileInto(path, *bytes) {
+        return -1.0
+    }
+    stat := TextView(bytes[:])
+    // The command name can hold spaces; the fields after it are fixed:
+    // state is field 3, utime field 14 and stime field 15.
+    close := TextFindLast(stat, ")")
+    if close < 0 {
+        return -1.0
+    }
+    fields := TextSplit(stat[close + 2:], " ")
+    if fields.count < 13 {
+        return -1.0
+    }
+    user, user_ok := TextInteger(fields[11])
+    system, system_ok := TextInteger(fields[12])
+    ticks := SystemConfiguration(CLOCK_TICKS_NAME)
+    if !user_ok || !system_ok || ticks <= 0 {
+        return -1.0
+    }
+    return cast(float64)(user + system) / cast(float64)ticks
+}
+
+// A kibibyte field of /proc/PID/status, such as "VmRSS:", or -1.
+StatusKib :: (pid: s32, field: string) -> s64 {
+    path := ProcPath(pid, "status")
+    bytes: Vec(u8)
+    if !ReadFileInto(path, *bytes) {
+        return -1
+    }
+    status := TextView(bytes[:])
+    lines := TextLines(status)
+    for index: cast(s64)0..lines.count - 1 {
+        line := lines[index]
+        if TextHasPrefix(line, field) {
+            value := TextTrim(line[field.count:])
+            space := TextFind(value, " ")
+            if space > 0 {
+                value = value[:space]
+            }
+            number, number_ok := TextInteger(value)
+            if number_ok {
+                return number
+            }
+        }
+    }
+    return -1
+}
+
+ResidentKib :: (pid: s32) -> s64 {
+    return StatusKib(pid, "VmRSS:")
+}
+
+PeakResidentKib :: (pid: s32) -> s64 {
+    return StatusKib(pid, "VmHWM:")
+}
+
+// The C files under DIRECTORY, counted with their bytes, recursively.
+GeneratedC :: struct {
+    files: s64
+    bytes: s64
+}
+
+CountGeneratedC :: (directory: string, total: *GeneratedC) -> bool {
+    names: Vec(string)
+    if !ListDirectory(directory, *names) {
+        return false
+    }
+    defer { FreeDirectoryNames(*names) }
+    for index: cast(s64)0..names.count - 1 {
+        path := JoinPath(directory, names[index])
+        info := PathStatus(path, false)
+        if info.kind == .Directory {
+            if !CountGeneratedC(path, total) {
+                return false
+            }
+        } else if info.kind == .File && TextHasSuffix(names[index], ".c") {
+            total.files += 1
+            total.bytes += info.size
+        }
+    }
+    return true
+}
+
+// An ELF executable's direct dynamic libraries (DT_NEEDED) and how many
+// raylib markers it holds. The release executable has no symbol table, so
+// the markers are text only raylib carries: rlgl's default shader names and
+// its bundled miniaudio and dr_mp3 libraries.
+Linkage :: struct {
+    valid: bool
+    needed: Vec(string)
+    raylib_markers: s32
+}
+
+RAYLIB_MARKER_COUNT :: 4
+
+#scope_file
+ReadU16 :: (bytes: string, at: s64) -> u64 {
+    if at < 0 || at + 2 > bytes.count {
+        return 0
+    }
+    return cast(u64)bytes[at] | (cast(u64)bytes[at + 1] << 8)
+}
+
+ReadU32 :: (bytes: string, at: s64) -> u64 {
+    return ReadU16(bytes, at) | (ReadU16(bytes, at + 2) << 16)
+}
+
+ReadU64 :: (bytes: string, at: s64) -> u64 {
+    return ReadU32(bytes, at) | (ReadU32(bytes, at + 4) << 32)
+}
+
+// The NUL-terminated name at OFFSET in the string table at TABLE.
+NameAt :: (bytes: string, table: s64, size: s64, offset: s64) -> string {
+    start := table + offset
+    if offset < 0 || offset >= size || start >= bytes.count {
+        return ""
+    }
+    end := start
+    while end < table + size && end < bytes.count && bytes[end] != 0 {
+        end += 1
+    }
+    return bytes[start:end]
+}
+
+SectionHeader :: struct {
+    kind: u64
+    offset: s64
+    size: s64
+    link: s64
+}
+
+Section :: (bytes: string, index: s64) -> SectionHeader {
+    table := cast(s64)ReadU64(bytes, 40)
+    entry := cast(s64)ReadU16(bytes, 58)
+    at := table + index * entry
+    header: SectionHeader
+    header.kind = ReadU32(bytes, at + 4)
+    header.offset = cast(s64)ReadU64(bytes, at + 24)
+    header.size = cast(s64)ReadU64(bytes, at + 32)
+    header.link = cast(s64)ReadU32(bytes, at + 40)
+    return header
+}
+#scope_export
+
+ReadLinkage :: (path: string) -> Linkage {
+    linkage: Linkage
+    markers: [RAYLIB_MARKER_COUNT]string = .["colDiffuse", "vertexTexCoord", "miniaudio", "drmp3"]
+    bytes, ok := ReadEntireFile(path)
+    // A 64-bit little-endian ELF file.
+    if !ok || bytes.count < 64 || bytes[0] != 127 || bytes[1] != 69 ||
+    bytes[4] != 2 || bytes[5] != 1 {
+        return .{}
+    }
+    sections := cast(s64)ReadU16(bytes, 60)
+    for index: cast(s64)0..sections - 1 {
+        section := Section(bytes, index)
+        strings := Section(bytes, section.link)
+        if section.kind == 6 {
+            // The dynamic section: 16-byte tag and value pairs.
+            entry: s64 = 0
+            while entry + 16 <= section.size {
+                tag := ReadU64(bytes, section.offset + entry)
+                if tag == 1 {
+                    offset := cast(s64)ReadU64(bytes, section.offset + entry + 8)
+                    VecPush(linkage.needed, NameAt(bytes, strings.offset, strings.size, offset))
+                }
+                entry += 16
+            }
+        }
+    }
+    for index: 0..RAYLIB_MARKER_COUNT - 1 {
+        if TextContains(bytes, markers[index]) {
+            linkage.raylib_markers += 1
+        }
+    }
+    linkage.valid = true
+    return linkage
+}

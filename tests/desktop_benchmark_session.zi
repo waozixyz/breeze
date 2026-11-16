@@ -1,0 +1,236 @@
+// One benchmark run's processes: a private Xvfb display at a fixed size and
+// the app on it, with a scrubbed environment, a disposable profile and the
+// Kryon test driver. Also reads the app's log: its first-frame probe and the
+// per-frame samples APP_PROFILE writes.
+#import "file"
+#import "float_text"
+#import "file_tree_linux"
+#import "process_run_linux"
+#import "text_tools"
+#import "timer_linux"
+#import "vec"
+
+DISPLAY_SCREEN :: "1280x1000x24"
+FIRST_FRAME_PROBE :: "APP PROBE: drawing ended"
+SAMPLE_PREFIX :: "PROFILE: sample wall_us="
+
+NowSeconds :: () -> float64 {
+    return cast(float64)MonotonicNanoseconds() / 1000000000.0
+}
+
+PauseMilliseconds :: (milliseconds: s64) {
+    unused SleepMilliseconds(milliseconds)
+}
+
+Display :: struct {
+    run: ProcessRun
+    name: string
+}
+
+// Starts Xvfb, which picks a free display and writes its number to
+// NUMBER_PATH. False when it did not come up within ten seconds.
+StartDisplay :: (directory: string, display: *Display) -> bool {
+    number_path := JoinPath(directory, "display-number")
+    log_path := JoinPath(directory, "display.log")
+    arguments: [9]string = .["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0",
+        DISPLAY_SCREEN, "-nolisten", "tcp"]
+    options: ProcessOptions
+    options.arguments = arguments[:]
+    options.output_path = number_path
+    options.error_path = log_path
+    options.new_session = true
+    if !StartProcess(options, *display.run) {
+        return false
+    }
+    deadline := NowSeconds() + 10.0
+    bytes: Vec(u8)
+    while NowSeconds() < deadline {
+        unused VecResize(bytes, 0)
+        ok := ReadFileInto(number_path, *bytes)
+        text := TextView(bytes[:])
+        if ok && TextHasSuffix(text, "\n") {
+            name: Vec(u8)
+            BuilderPrint(*name, ":%", TextTrim(text))
+            display.name = BuilderFinish(name)
+            return true
+        }
+        if PollProcess(*display.run) {
+            return false
+        }
+        PauseMilliseconds(20)
+    }
+    return false
+}
+
+StopProcess :: (run: *ProcessRun) {
+    if !run.started || run.finished {
+        return
+    }
+    unused SignalProcess(run, 15)
+    deadline := NowSeconds() + 5.0
+    while NowSeconds() < deadline {
+        if PollProcess(run) {
+            return
+        }
+        PauseMilliseconds(20)
+    }
+    unused SignalProcess(run, 9)
+    unused WaitProcess(run)
+}
+
+App :: struct {
+    run: ProcessRun
+    log: string
+    started_at: float64
+}
+
+// Starts BINARY from ROOT on DISPLAY with PROFILE as its data and DRIVER as
+// its test-driver environment entry. The desktop's display, session bus,
+// audio servers and recovery services are removed from its environment, and
+// ALSA reads an empty configuration, so the app reaches nothing but its own
+// display and every host alike finds no audio device.
+StartApp :: (binary: string, root: string, directory: string, profile: string,
+    display: string, driver: string, app: *App) -> bool {
+    app.log = JoinPath(directory, "app.log")
+    display_entry: Vec(u8)
+    BuilderPrint(*display_entry, "DISPLAY=%", display)
+    profile_entry: Vec(u8)
+    BuilderPrint(*profile_entry, "APP_DATA_ROOT=%", profile)
+    environment: [17]string = .[BuilderFinish(display_entry), driver,
+        BuilderFinish(profile_entry), "APP_PROFILE=1", "APP_NO_TRAY=1",
+        "YUE_DESKTOP_RECOVERY=0", "SDL_VIDEODRIVER=x11", "ALSA_CONFIG_PATH=/dev/null",
+        "LIBGL_ALWAYS_SOFTWARE=1", "WAYLAND_DISPLAY", "XAUTHORITY",
+        "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "PULSE_SERVER",
+        "PIPEWIRE_REMOTE", "SESSION_MANAGER", "GDK_DISPLAY"]
+    arguments: [1]string = .[binary]
+    options: ProcessOptions
+    options.arguments = arguments[:]
+    options.directory = root
+    options.environment = environment[:]
+    options.output_path = app.log
+    options.merge_error = true
+    options.new_session = true
+    app.started_at = NowSeconds()
+    return StartProcess(options, *app.run)
+}
+
+// The app's log so far, into BYTES.
+ReadAppLog :: (app: *App, bytes: *Vec(u8)) {
+    unused VecResize(<<bytes, 0)
+    unused ReadFileInto(app.log, bytes)
+}
+
+// Seconds from starting the app to its first finished frame, or -1 when
+// it exited or took longer than TIMEOUT seconds.
+WaitFirstFrame :: (app: *App, timeout: float64) -> float64 {
+    deadline := app.started_at + timeout
+    log: Vec(u8)
+    while NowSeconds() < deadline {
+        ReadAppLog(app, *log)
+        if TextContains(TextView(log[:]), FIRST_FRAME_PROBE) {
+            return NowSeconds() - app.started_at
+        }
+        if PollProcess(*app.run) {
+            return -1.0
+        }
+        PauseMilliseconds(2)
+    }
+    return -1.0
+}
+
+// When a frame began and the app's CPU time then, in seconds.
+FrameSample :: struct {
+    wall: float64
+    cpu: float64
+}
+
+FieldNumber :: (line: string, name: string) -> s64 {
+    at := TextFind(line, name)
+    if at < 0 {
+        return -1
+    }
+    value := line[at + name.count:]
+    end: s64 = 0
+    while end < value.count && value[end] >= 48 && value[end] <= 57 {
+        end += 1
+    }
+    number, ok := TextInteger(value[:end])
+    if !ok {
+        return -1
+    }
+    return number
+}
+
+ReadFrameSamples :: (app: *App) -> Vec(FrameSample) {
+    samples: Vec(FrameSample)
+    log: Vec(u8)
+    ReadAppLog(app, *log)
+    lines := TextLines(TextView(log[:]))
+    for index: cast(s64)0..lines.count - 1 {
+        line := lines[index]
+        if TextContains(line, SAMPLE_PREFIX) {
+            wall := FieldNumber(line, "wall_us=")
+            cpu := FieldNumber(line, "cpu_us=")
+            if wall >= 0 && cpu >= 0 {
+                VecPush(samples, FrameSample.{cast(float64)wall / 1000000.0,
+                        cast(float64)cpu / 1000000.0})
+            }
+        }
+    }
+    return samples
+}
+
+// One APP_PROFILE report: the app's own frame time over 120 frames, its
+// longest frame, and the frame rate of those frames. Every build writes
+// these, including ones from before the per-frame samples.
+ProfileReport :: struct {
+    frame_avg_ms: float64
+    frame_max_ms: float64
+    fps: float64
+}
+
+REPORT_PREFIX :: "PROFILE: frame avg="
+
+FieldDecimal :: (line: string, name: string, from: s64) -> float64 {
+    at := TextFind(line, name, from)
+    if at < 0 {
+        return -1.0
+    }
+    value := line[at + name.count:]
+    end: s64 = 0
+    while end < value.count && value[end] != 32 {
+        end += 1
+    }
+    number, ok := ParseFloat64(value[:end])
+    if !ok {
+        return -1.0
+    }
+    return number
+}
+
+// The reports whose lines begin at a byte offset in [FROM, TO).
+ReadProfileReports :: (app: *App, from: s64, to: s64) -> Vec(ProfileReport) {
+    reports: Vec(ProfileReport)
+    log: Vec(u8)
+    ReadAppLog(app, *log)
+    text := TextView(log[:])
+    start: s64 = 0
+    while start < text.count && start < to {
+        end := TextFind(text, "\n", start)
+        if end < 0 {
+            end = text.count
+        }
+        line := text[start:end]
+        if start >= from && TextContains(line, REPORT_PREFIX) {
+            report: ProfileReport
+            report.frame_avg_ms = FieldDecimal(line, "frame avg=", 0)
+            report.frame_max_ms = FieldDecimal(line, " max=", 0)
+            report.fps = FieldDecimal(line, "fps=", 0)
+            if report.frame_avg_ms >= 0.0 && report.frame_max_ms >= 0.0 && report.fps > 0.0 {
+                VecPush(reports, report)
+            }
+        }
+        start = end + 1
+    }
+    return reports
+}

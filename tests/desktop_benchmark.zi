@@ -1,0 +1,497 @@
+// Benchmarks Breeze's Linux desktop build, the same way before and after a
+// change of desktop host (plans/2026-11-15-breeze-desktop-without-raylib.md).
+//
+//     desktop-benchmark run BINARY ROOT OUT RUNS
+//         RUNS copies of one scripted session on a private Xvfb: time to the
+//         first frame, frame intervals and each frame's CPU cost while it
+//         interacts, CPU use over 30 idle seconds, and resident memory.
+//     desktop-benchmark build ROOT OUT RUNS
+//         RUNS clean and incremental `make native` builds, then `size`.
+//     desktop-benchmark size ROOT OUT [EXECUTABLE]
+//         Generated C, the executable's size and the libraries it links;
+//         EXECUTABLE defaults to the native build in ROOT.
+//
+// The executable must be built with KRYON_TEST_DRIVER=1. Every result is a
+// median over the runs with its range, written to OUT as Markdown and TSV.
+#import "c_string"
+#import "byte_text_linux"
+#import "file"
+#import "file_tree_linux"
+#import "number_text"
+#import "process_run_linux"
+#import "text_tools"
+#import "test_driver_client"
+#import "vec"
+#import, file "desktop_benchmark_build.zi";
+#import, file "desktop_benchmark_proc.zi";
+#import, file "desktop_benchmark_profile.zi";
+#import, file "desktop_benchmark_scenario.zi";
+#import, file "desktop_benchmark_session.zi";
+#import, file "desktop_benchmark_stats.zi";
+
+IDLE_SECONDS :: 30
+RSS_SAMPLE_MS :: 500
+FIRST_FRAME_TIMEOUT :: 60.0
+STARTUP_SETTLE_FRAMES :: 10
+STARTUP_SETTLE_MS :: 20000
+
+// Values below 0 were not measured: a build from before the per-frame
+// samples has only the 120-frame reports.
+RunMetrics :: struct {
+    first_frame_ms: float64
+    report_fps: float64
+    report_frame_avg_ms: float64
+    report_frame_max_ms: float64
+    frames: s64
+    frame_p50_ms: float64
+    frame_p95_ms: float64
+    frame_cpu_p50_ms: float64
+    frame_cpu_p95_ms: float64
+    idle_cpu_percent: float64
+    steady_rss_mib: float64
+    peak_rss_mib: float64
+}
+
+AppendFixed :: (builder: *Vec(u8), value: float64, places: s32) {
+    digits: [64]u8
+    Append(builder, FormatDecimal(value, places, digits[:]))
+}
+
+Report :: (message: string) -> s32 {
+    print("desktop-benchmark: %\n", message)
+    return 1
+}
+
+RunDirectory :: (out: string, name: string, index: s32) -> Text {
+    path: Vec(u8)
+    BuilderPrint(*path, "%/%-%", out, name, index)
+    return BuilderFinish(path)
+}
+
+// Frame intervals and per-frame CPU between STARTED and ENDED, in ms.
+FrameCosts :: (samples: []FrameSample, interaction: Interaction,
+    metrics: *RunMetrics) {
+    intervals: Vec(float64)
+    cpu: Vec(float64)
+    for index: cast(s64)1..samples.count - 1 {
+        before := samples[index - 1]
+        after := samples[index]
+        if before.wall >= interaction.started && after.wall <= interaction.ended {
+            VecPush(intervals, (after.wall - before.wall) * 1000.0)
+            VecPush(cpu, (after.cpu - before.cpu) * 1000.0)
+        }
+    }
+    metrics.frames = intervals.count
+    if intervals.count == 0 {
+        metrics.frame_p50_ms = -1.0
+        metrics.frame_p95_ms = -1.0
+        metrics.frame_cpu_p50_ms = -1.0
+        metrics.frame_cpu_p95_ms = -1.0
+        return
+    }
+    metrics.frame_p50_ms = Percentile(intervals[:], 0.5)
+    metrics.frame_p95_ms = Percentile(intervals[:], 0.95)
+    metrics.frame_cpu_p50_ms = Percentile(cpu[:], 0.5)
+    metrics.frame_cpu_p95_ms = Percentile(cpu[:], 0.95)
+}
+
+// The 120-frame reports written while the scenario ran: their median frame
+// rate and frame time, and the longest frame of all. False when none came.
+ReportCosts :: (reports: []ProfileReport, metrics: *RunMetrics) -> bool {
+    fps: Vec(float64)
+    average: Vec(float64)
+    metrics.report_fps = -1.0
+    metrics.report_frame_avg_ms = -1.0
+    metrics.report_frame_max_ms = -1.0
+    for index: cast(s64)0..reports.count - 1 {
+        VecPush(fps, reports[index].fps)
+        VecPush(average, reports[index].frame_avg_ms)
+        if reports[index].frame_max_ms > metrics.report_frame_max_ms {
+            metrics.report_frame_max_ms = reports[index].frame_max_ms
+        }
+    }
+    if reports.count == 0 {
+        return false
+    }
+    metrics.report_fps = Median(fps[:])
+    metrics.report_frame_avg_ms = Median(average[:])
+    return true
+}
+
+// Thirty seconds without input: the CPU share it used and its resident
+// memory, sampled twice a second.
+MeasureIdle :: (pid: s32, metrics: *RunMetrics) -> bool {
+    cpu_before := ProcessCpuSeconds(pid)
+    started := NowSeconds()
+    resident: Vec(float64)
+    ends := started + cast(float64)IDLE_SECONDS
+    while NowSeconds() < ends {
+        PauseMilliseconds(RSS_SAMPLE_MS)
+        kib := ResidentKib(pid)
+        if kib < 0 {
+            return false
+        }
+        VecPush(resident, cast(float64)kib / 1024.0)
+    }
+    cpu_after := ProcessCpuSeconds(pid)
+    elapsed := NowSeconds() - started
+    if cpu_before < 0.0 || cpu_after < 0.0 || elapsed <= 0.0 {
+        return false
+    }
+    metrics.idle_cpu_percent = 100.0 * (cpu_after - cpu_before) / elapsed
+    metrics.steady_rss_mib = Median(resident[:])
+    return true
+}
+
+Running :: struct {
+    display: Display
+    app: App
+}
+
+// Starts a display and the app with PROFILE in DIRECTORY, driven by DRIVER.
+Launch :: (binary: string, root: string, directory: string, profile: string,
+    driver: *TestDriverClient, running: *Running) -> bool {
+    if !CreateDirectories(directory) || !StartDisplay(directory, *running.display) {
+        return false
+    }
+    if !StartApp(binary, root, directory, profile, running.display.name,
+        DriverEnvironment(driver), *running.app) {
+        return false
+    }
+    DriverWatch(driver, running.app.run.pid, running.app.log)
+    return true
+}
+
+// A driver for the app that will run in DIRECTORY, which it creates.
+DriverIn :: (directory: string) -> TestDriverClient {
+    unused CreateDirectories(directory)
+    return DriverOpen(JoinPath(directory, "driver"))
+}
+
+Stop :: (running: *Running) {
+    StopProcess(*running.app.run)
+    StopProcess(*running.display.run)
+}
+
+// The profile the app creates on its first start, past its audio offer,
+// then seeded (desktop_benchmark_profile.zi). Its second start must open
+// with the navigation rail and nothing over it.
+PrepareProfile :: (binary: string, root: string, out: string) -> string {
+    directory := JoinPath(out, "prepare")
+    profile := JoinPath(directory, "profile")
+    if PathStatus(directory, false).kind != .Missing {
+        unused RemoveTree(directory)
+    }
+    first: Running
+    first_driver := DriverIn(directory)
+    if !Launch(binary, root, directory, profile, *first_driver, *first) {
+        Stop(*first)
+        return ""
+    }
+    ready := WaitFirstFrame(*first.app, FIRST_FRAME_TIMEOUT) >= 0.0
+    if ready {
+        unused DriverWaitIdle(*first_driver, STARTUP_SETTLE_FRAMES, STARTUP_SETTLE_MS)
+        if DriverFind(*first_driver, .{label = "Not now"}) > 0 {
+            ready = DriverPress(*first_driver, .{label = "Not now"})
+            unused DriverWaitIdle(*first_driver, STARTUP_SETTLE_FRAMES, STARTUP_SETTLE_MS)
+        }
+    }
+    Stop(*first)
+    if !ready || !SeedProfile(profile) {
+        return ""
+    }
+    check_directory := JoinPath(directory, "check")
+    second: Running
+    second_driver := DriverIn(check_directory)
+    if !Launch(binary, root, check_directory, profile, *second_driver, *second) {
+        Stop(*second)
+        return ""
+    }
+    ready = WaitFirstFrame(*second.app, FIRST_FRAME_TIMEOUT) >= 0.0 &&
+    DriverWait(*second_driver, .{label = "Habits"}, STARTUP_SETTLE_MS)
+    Stop(*second)
+    if !ready {
+        return ""
+    }
+    return profile
+}
+
+MeasureRun :: (binary: string, root: string, out: string, prepared: string,
+    index: s32, metrics: *RunMetrics) -> bool {
+    directory := RunDirectory(out, "run", index)
+    if PathStatus(directory, false).kind != .Missing {
+        unused RemoveTree(directory)
+    }
+    profile := JoinPath(directory, "profile")
+    if !CreateDirectories(directory) || !CopyTree(prepared, profile) {
+        return false
+    }
+    running: Running
+    defer { Stop(*running) }
+    driver := DriverIn(directory)
+    if !Launch(binary, root, directory, profile, *driver, *running) {
+        return false
+    }
+    first_frame := WaitFirstFrame(*running.app, FIRST_FRAME_TIMEOUT)
+    if first_frame < 0.0 {
+        return false
+    }
+    metrics.first_frame_ms = first_frame * 1000.0
+    unused DriverWaitIdle(*driver, STARTUP_SETTLE_FRAMES, STARTUP_SETTLE_MS)
+    interaction: Interaction
+    if !RunInteraction(*driver, running.app.log, *interaction) {
+        return false
+    }
+    if !MeasureIdle(running.app.run.pid, metrics) {
+        return false
+    }
+    peak := PeakResidentKib(running.app.run.pid)
+    metrics.peak_rss_mib = cast(float64)peak / 1024.0
+    Stop(*running)
+    samples := ReadFrameSamples(*running.app)
+    FrameCosts(samples[:], interaction, metrics)
+    reports := ReadProfileReports(*running.app, interaction.log_started, interaction.log_ended)
+    return ReportCosts(reports[:], metrics) || metrics.frames > 0
+}
+
+// One table row: the median, the range and the spread around the median.
+SummaryRow :: (out: *Vec(u8), name: string, values: []float64, places: s32) {
+    summary := Summarize(values)
+    BuilderPrint(out, "| % | ", name)
+    if summary.count == 0 {
+        Append(out, "n/a | n/a | n/a |\n")
+        return
+    }
+    AppendFixed(out, summary.median, places)
+    Append(out, " | ")
+    AppendFixed(out, summary.minimum, places)
+    Append(out, "–")
+    AppendFixed(out, summary.maximum, places)
+    Append(out, " | ±")
+    AppendFixed(out, SpreadPercent(summary), 1)
+    Append(out, "% |\n")
+}
+
+// One measurement of every run, by its row number in the report.
+Column :: (runs: []RunMetrics, which: s32) -> Vec(float64) {
+    values: Vec(float64)
+    for index: cast(s64)0..runs.count - 1 {
+        run := runs[index]
+        value := run.peak_rss_mib
+        if which == 0 {
+            value = run.first_frame_ms
+        } else if which == 9 {
+            value = run.report_fps
+        } else if which == 10 {
+            value = run.report_frame_avg_ms
+        } else if which == 11 {
+            value = run.report_frame_max_ms
+        } else if which == 1 {
+            value = run.frame_p50_ms
+        } else if which == 2 {
+            value = run.frame_p95_ms
+        } else if which == 3 {
+            value = run.frame_cpu_p50_ms
+        } else if which == 4 {
+            value = run.frame_cpu_p95_ms
+        } else if which == 5 {
+            value = cast(float64)run.frames
+        } else if which == 6 {
+            value = run.idle_cpu_percent
+        } else if which == 7 {
+            value = run.steady_rss_mib
+        }
+        if value >= 0.0 {
+            VecPush(values, value)
+        }
+    }
+    return values
+}
+
+RunReport :: (runs: []RunMetrics) -> Text {
+    names: [12]string = .["Time to first frame (ms)", "Frame interval p50 (ms)",
+        "Frame interval p95 (ms)", "CPU per frame p50 (ms)", "CPU per frame p95 (ms)",
+        "Frames during interaction", "Idle CPU over 30 s (%)",
+        "Steady RSS, idle median (MiB)", "Peak RSS (MiB)",
+        "Frame rate while interacting, 120-frame reports (fps)",
+        "App frame time, 120-frame report median (ms)",
+        "Longest app frame while interacting (ms)"]
+    places: [12]s32 = .[1, 2, 2, 2, 2, 0, 2, 1, 1, 1, 2, 1]
+    order: [12]s32 = .[0, 9, 10, 11, 1, 2, 3, 4, 5, 6, 7, 8]
+    out: Vec(u8)
+    BuilderPrint(*out, "Runs: %\n\n", runs.count)
+    Append(*out, "| Measurement | Median | Range | Spread |\n|---|---|---|---|\n")
+    for row: cast(s32)0..11 {
+        which := order[row]
+        values := Column(runs, which)
+        SummaryRow(*out, names[which], values[:], places[which])
+    }
+    return BuilderFinish(out)
+}
+
+RunTsv :: (runs: []RunMetrics) -> Text {
+    out: Vec(u8)
+    Append(*out, "run\tfirst_frame_ms\treport_fps\treport_frame_avg_ms\treport_frame_max_ms\tframes\tframe_p50_ms\tframe_p95_ms\tframe_cpu_p50_ms\tframe_cpu_p95_ms\tidle_cpu_percent\tsteady_rss_mib\tpeak_rss_mib\n")
+    for index: cast(s64)0..runs.count - 1 {
+        run := runs[index]
+        BuilderPrint(*out, "%\t", index + 1)
+        AppendFixed(*out, run.first_frame_ms, 2)
+        Append(*out, "\t")
+        AppendFixed(*out, run.report_fps, 2)
+        Append(*out, "\t")
+        AppendFixed(*out, run.report_frame_avg_ms, 3)
+        Append(*out, "\t")
+        AppendFixed(*out, run.report_frame_max_ms, 2)
+        BuilderPrint(*out, "\t%\t", run.frames)
+        AppendFixed(*out, run.frame_p50_ms, 3)
+        Append(*out, "\t")
+        AppendFixed(*out, run.frame_p95_ms, 3)
+        Append(*out, "\t")
+        AppendFixed(*out, run.frame_cpu_p50_ms, 3)
+        Append(*out, "\t")
+        AppendFixed(*out, run.frame_cpu_p95_ms, 3)
+        Append(*out, "\t")
+        AppendFixed(*out, run.idle_cpu_percent, 3)
+        Append(*out, "\t")
+        AppendFixed(*out, run.steady_rss_mib, 2)
+        Append(*out, "\t")
+        AppendFixed(*out, run.peak_rss_mib, 2)
+        Append(*out, "\n")
+    }
+    return BuilderFinish(out)
+}
+
+Save :: (out: string, name: string, text: string) -> bool {
+    path := JoinPath(out, name)
+    if !WriteEntireFile(path, text) {
+        return false
+    }
+    print("%", text)
+    return true
+}
+
+RunCommand :: (binary: string, root: string, out: string, count: s32) -> s32 {
+    if !CreateDirectories(out) {
+        return Report("cannot create the output folder")
+    }
+    prepared := PrepareProfile(binary, root, out)
+    if prepared.count == 0 {
+        return Report("the app did not prepare its profile; see prepare/app.log")
+    }
+    runs: Vec(RunMetrics)
+    for index: cast(s32)1..count {
+        metrics: RunMetrics
+        if !MeasureRun(binary, root, out, prepared, index, *metrics) {
+            print("desktop-benchmark: run % failed; see run-%/app.log\n", index, index)
+            return 1
+        }
+        VecPush(runs, metrics)
+        print("desktop-benchmark: run % of % done\n", index, count)
+    }
+    report := RunReport(runs[:])
+    tsv := RunTsv(runs[:])
+    if !Save(out, "runs.md", report) || !Save(out, "runs.tsv", tsv) {
+        return Report("cannot write the results")
+    }
+    return 0
+}
+
+SizeReport :: (root: string, executable: string) -> Text {
+    out: Vec(u8)
+    generated: GeneratedC
+    generated_path := JoinPath(root, GENERATED_C_DIRECTORY)
+    unused CountGeneratedC(generated_path, *generated)
+    info := PathStatus(executable)
+    linkage := ReadLinkage(executable)
+    Append(*out, "| Measurement | Value |\n|---|---|\n")
+    BuilderPrint(*out, "| Generated C files | % |\n", generated.files)
+    BuilderPrint(*out, "| Generated C (MiB) | ")
+    AppendFixed(*out, cast(float64)generated.bytes / 1048576.0, 2)
+    BuilderPrint(*out, " |\n| Executable (MiB) | ")
+    AppendFixed(*out, cast(float64)info.size / 1048576.0, 2)
+    BuilderPrint(*out, " |\n| raylib markers (rlgl shader names, miniaudio, dr_mp3) | % of % |\n",
+        linkage.raylib_markers, RAYLIB_MARKER_COUNT)
+    BuilderPrint(*out, "| Linked libraries (%) | ", linkage.needed.count)
+    for index: cast(s64)0..linkage.needed.count - 1 {
+        if index > 0 {
+            Append(*out, ", ")
+        }
+        Append(*out, linkage.needed[index])
+    }
+    Append(*out, " |\n")
+    return BuilderFinish(out)
+}
+
+SizeCommand :: (root: string, out: string, executable: string) -> s32 {
+    if !CreateDirectories(out) {
+        return Report("cannot create the output folder")
+    }
+    report := SizeReport(root, executable)
+    if !Save(out, "size.md", report) {
+        return Report("cannot write the results")
+    }
+    return 0
+}
+
+BuildCommand :: (root: string, out: string, count: s32) -> s32 {
+    if !CreateDirectories(out) {
+        return Report("cannot create the output folder")
+    }
+    clean: Vec(float64)
+    incremental: Vec(float64)
+    for index: cast(s32)1..count {
+        run := MeasureBuild(root, out, index)
+        if run.clean_seconds < 0.0 || run.incremental_seconds < 0.0 {
+            print("desktop-benchmark: build % failed; see build-%-*.log\n", index, index)
+            return 1
+        }
+        VecPush(clean, run.clean_seconds)
+        VecPush(incremental, run.incremental_seconds)
+        print("desktop-benchmark: build % of % done\n", index, count)
+    }
+    report: Vec(u8)
+    BuilderPrint(*report, "Builds: %\n\n", count)
+    Append(*report, "| Measurement | Median | Range | Spread |\n|---|---|---|---|\n")
+    SummaryRow(*report, "Clean build (s)", clean[:], 1)
+    SummaryRow(*report, "Incremental build (s)", incremental[:], 1)
+    if !Save(out, "build.md", BuilderFinish(report)) {
+        return Report("cannot write the results")
+    }
+    return SizeCommand(root, out, JoinPath(root, NATIVE_EXECUTABLE))
+}
+
+Argument :: (argv: **u8, index: s32) -> string {
+    return TextFromCString(argv[index])
+}
+
+Count :: (text: string) -> s32 {
+    value, ok := TextInteger(text)
+    if !ok || value < 1 || value > 100 {
+        return 0
+    }
+    return cast(s32)value
+}
+
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    usage := "usage: desktop-benchmark run BINARY ROOT OUT RUNS | build ROOT OUT RUNS | size ROOT OUT [EXECUTABLE]"
+    if argc < 2 {
+        return Report(usage)
+    }
+    command := Argument(argv, 1)
+    if command == "run" && argc == 6 && Count(Argument(argv, 5)) > 0 {
+        return RunCommand(Argument(argv, 2), Argument(argv, 3), Argument(argv, 4),
+            Count(Argument(argv, 5)))
+    }
+    if command == "build" && argc == 5 && Count(Argument(argv, 4)) > 0 {
+        return BuildCommand(Argument(argv, 2), Argument(argv, 3), Count(Argument(argv, 4)))
+    }
+    if command == "size" && argc == 4 {
+        return SizeCommand(Argument(argv, 2), Argument(argv, 3),
+            JoinPath(Argument(argv, 2), NATIVE_EXECUTABLE))
+    }
+    if command == "size" && argc == 5 {
+        return SizeCommand(Argument(argv, 2), Argument(argv, 3), Argument(argv, 4))
+    }
+    return Report(usage)
+}
