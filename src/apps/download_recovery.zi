@@ -1,0 +1,38 @@
+#import "std/timer_linux"
+
+DownloadRecovery :: struct {
+    attempts: s32
+    retry_at: s64
+}
+
+DownloadRetryDelay :: (attempt: s32) -> s64 {
+    if attempt == 0 { return 2 }
+    if attempt == 1 { return 8 }
+    if attempt == 2 { return 30 }
+    return 0
+}
+
+DownloadRetryable :: (http_status: s32) -> bool {
+    return http_status == 0 || http_status == 408 || http_status == 425 ||
+        http_status == 429 || http_status >= 500 && http_status <= 599
+}
+
+DownloadRecoveryNow :: () -> s64 {
+    value := MonotonicMilliseconds()
+    return ifx value < 0 then -1 else value / 1000
+}
+
+DownloadRecoverySchedule :: (recovery: *DownloadRecovery, now: s64) -> bool {
+    delay := DownloadRetryDelay(recovery.attempts)
+    if now < 0 || delay <= 0 || now > 9223372036854775807 - delay {
+        recovery.retry_at = 0
+        return false
+    }
+    recovery.attempts += 1
+    recovery.retry_at = now + delay
+    return true
+}
+
+DownloadRecoveryReady :: (recovery: DownloadRecovery, now: s64) -> bool {
+    return recovery.retry_at == 0 || now >= recovery.retry_at
+}

@@ -2,7 +2,8 @@
     #import "android_clipboard"
 }
 #import "text_input"
-#import "text_input_props"
+TextArea :: #import "kryon/text_area";
+TextField :: #import "kryon/text_field";
 // A UI test types through KRYON_TEST_DRIVER; otherwise inactive.
 #import "test_driver"
 #import, file "../app/text_buffers.zi";
@@ -10,14 +11,87 @@
     #import "android_device"
 }
 
-raylib :: #system_library "raylib";
+// The keys, typed text and clipboard text fields read: raylib's input, or
+// on Kryon's desktop host the main window's keyboard and the text it
+// received this frame (TextInputBeginFrame).
+#if #defined(DESKTOP_HOST) {
+    Desktop :: #import "desktop_runtime";
+    Keyboard :: #import "desktop_keyboard";
+    #import "input_delivery"
+    #import "byte_text_linux"
 
-TextInputGetCharPressed :: () -> s32 #foreign raylib "GetCharPressed";
-TextInputIsKeyPressed :: (key: s32) -> bool #foreign raylib "IsKeyPressed";
-TextInputIsKeyPressedRepeat :: (key: s32) -> bool #foreign raylib "IsKeyPressedRepeat";
-TextInputIsKeyDown :: (key: s32) -> bool #foreign raylib "IsKeyDown";
-TextInputGetClipboardText :: () -> *u8 #foreign raylib "GetClipboardText";
-TextInputSetClipboardText :: (value: *u8) #foreign raylib "SetClipboardText";
+    TEXT_INPUT_TYPED_LIMIT :: 64
+    text_input_typed: [TEXT_INPUT_TYPED_LIMIT]s32;
+    text_input_typed_count: s32;
+    text_input_typed_next: s32;
+    text_input_clipboard: [4097]u8;
+
+    // Takes the text the window received since the last frame, in order,
+    // and drops its key events, which the keyboard state already reports.
+    // Text typed while no field was focused is dropped with the frame.
+    TextInputBeginFrame :: () {
+        text_input_typed_count = 0
+        text_input_typed_next = 0
+        queue := Desktop.DesktopInputQueue()
+        while queue.count > 0 {
+            event := queue.events[queue.head]
+            queue.head = (queue.head + 1) % INPUT_DELIVERY_CAPACITY
+            queue.count -= 1
+            if event.text && text_input_typed_count < TEXT_INPUT_TYPED_LIMIT {
+                text_input_typed[text_input_typed_count] = event.code
+                text_input_typed_count += 1
+            }
+        }
+    }
+
+    TextInputGetCharPressed :: () -> s32 {
+        if text_input_typed_next >= text_input_typed_count {
+            return 0
+        }
+        codepoint := text_input_typed[text_input_typed_next]
+        text_input_typed_next += 1
+        return codepoint
+    }
+
+    TextInputIsKeyPressed :: (key: s32) -> bool {
+        return Keyboard.DesktopKeyPressed(key)
+    }
+
+    TextInputIsKeyPressedRepeat :: (key: s32) -> bool {
+        return Keyboard.DesktopKeyRepeated(key)
+    }
+
+    TextInputIsKeyDown :: (key: s32) -> bool {
+        return Keyboard.DesktopKeyDown(key)
+    }
+
+    TextInputGetClipboardText :: () -> *u8 {
+        length := Desktop.SystemClipboardOpenHost()
+        if length < 0 {
+            length = 0
+        }
+        if length > 4096 {
+            length = 4096
+        }
+        for index: cast(s32)0..length - 1 {
+            text_input_clipboard[index] = cast(u8)Desktop.SystemClipboardByteHost(index)
+        }
+        text_input_clipboard[length] = 0
+        return *text_input_clipboard[0]
+    }
+
+    TextInputSetClipboardText :: (value: *u8) {
+        unused Desktop.SystemClipboardWriteHost(TextFromCString(value))
+    }
+} else {
+    raylib :: #system_library "raylib";
+    TextInputGetCharPressed :: () -> s32 #foreign raylib "GetCharPressed";
+    TextInputIsKeyPressed :: (key: s32) -> bool #foreign raylib "IsKeyPressed";
+    TextInputIsKeyPressedRepeat :: (key: s32) -> bool #foreign raylib "IsKeyPressedRepeat";
+    TextInputIsKeyDown :: (key: s32) -> bool #foreign raylib "IsKeyDown";
+    TextInputGetClipboardText :: () -> *u8 #foreign raylib "GetClipboardText";
+    TextInputSetClipboardText :: (value: *u8) #foreign raylib "SetClipboardText";
+}
 
 TextInputKeyA :: 65;
 TextInputKeyC :: 67;
@@ -90,7 +164,7 @@ TextInputClipboardText :: () -> string {
     return AppTextFromCString(TextInputGetClipboardText(), 4096)
 }
 
-// Raylib returns Unicode codepoints. The field receives UTF-8 bytes and
+// Hosts report Unicode codepoints. The field receives UTF-8 bytes and
 // applies them to its own storage after Kryon returns an edit range.
 #program_export
 TextInputAppendCodepoint :: (bytes: []u8, used: s32,
@@ -134,8 +208,8 @@ TextInputAppendCodepoint :: (bytes: []u8, used: s32,
 }
 
 #program_export
-SampleTextFieldInput :: (focused: bool, typed: []u8) -> TextFieldInput {
-    input: TextFieldInput
+SampleTextFieldInput :: (focused: bool, typed: []u8) -> TextField.Input {
+    input: TextField.Input
     if typed.count == 0 { return input }
     typed[0] = cast(u8)0
     if !focused { return input }
@@ -173,8 +247,8 @@ SampleTextFieldInput :: (focused: bool, typed: []u8) -> TextFieldInput {
 }
 
 #program_export
-SampleTextAreaInput :: (focused: bool, typed: []u8) -> TextAreaInput {
-    input: TextAreaInput
+SampleTextAreaInput :: (focused: bool, typed: []u8) -> TextArea.Input {
+    input: TextArea.Input
     if typed.count == 0 { return input }
     typed[0] = cast(u8)0
     if !focused { return input }

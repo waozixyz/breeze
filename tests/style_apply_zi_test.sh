@@ -6,11 +6,7 @@ bin=${1:-"$root/build/ziran-toolchain/bin"}
 work=$root/build/style-apply-zi-test
 
 mkdir -p "$work/c"
-"$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/daochi-client" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+"$bin/ziran" build --target=c --no-main --project --offline --root "$root/tests" \
     -o "$work/c" "$root/tests/style_apply_link_behavior.zi"
 mkdir -p "$work/c/app"
 cp "$work/c/assets.h" "$work/c/app/assets.h"
@@ -26,6 +22,6 @@ python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
     -Wl,--wrap=storage_list_settings \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$root/src/app" \
     "$root/tests/style_apply_link_test.c" \
-    "$work/assets.c" "$work/c"/*.c -o "$work/test"
+    "$work/assets.c" "$work/c"/*.c "$bin/../libziran.a" -ldl -lm -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "Inbe style installation Ziran/native link test passed"

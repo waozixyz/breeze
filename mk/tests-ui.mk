@@ -116,6 +116,20 @@ startup-quit-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
 		python3 tests/startup_quit_ui_test.py $(abspath $(TARGET))
 
+# Reuse the product's exact generated objects and decoder selection. Wrapping
+# main gives this test its own entry without starting a window or user profile.
+.PHONY: native-image-decode-test
+native-image-decode-test: $(TARGET)
+	mkdir -p build/native-image-decode-test
+	$(CC) $(KRYON_NATIVE_CFLAGS) -I$(ZIRAN_DIR)/include \
+		-Wl,--wrap=main -o build/native-image-decode-test/test \
+		tests/native_image_decode_test.c @$(NATIVE_OBJ_DIR)/objects.rsp \
+		$(ZIRAN_BUILD_DIR)/libziran.a $(KRYON_NATIVE_BACKEND_LIBS) \
+		$(LIBOQS_A) $(KRYON_NATIVE_BACKEND_LDLIBS) $(RUNTIME_ASSET_LDLIBS) \
+		$(NATIVE_SYSTEM_LDLIBS) $(LDFLAGS)
+	build/native-image-decode-test/test assets/app/icon.webp assets/app/back-home.avif assets/apps/icons/*.png \
+		build/package-assets/practices/assets/practices/*/banner-*.webp
+
 ## End-to-end desktop window-mode tests on a private Xvfb display: window
 ## close across startup/keep-running/ask modes.
 ## Requires Xvfb, xfwm4, xdotool, x11-utils and sqlite3.

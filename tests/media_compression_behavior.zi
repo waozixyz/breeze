@@ -13,6 +13,23 @@
 #import, file "../src/storage/storage_settings.zi";
 #import, file "../src/storage/sync_node_storage.zi";
 #import, file "../src/storage/entity_records.zi";
+#import "std/text_buffer"
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/sqlite.zi";
+#import, file "../src/storage/sync_nodes.zi";
+#import, file "../src/storage/sync_outbox.zi";
+#import, file "../src/storage/sync_exchange.zi";
+#import, file "../src/storage/sync_apply.zi";
+#import, file "../src/apps/diary_records.zi";
+#import, file "../src/apps/diary_store.zi";
+#import, file "../src/apps/media_store.zi";
+#import, file "../src/apps/entity_photos.zi";
+
+COMPRESSION_ACCOUNT_ID :: "7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d7e1d"
 
 compression_test_c :: #system_library "c";
 CompressionFailSourceWrite :: (key: *u8) #foreign compression_test_c;
@@ -62,7 +79,7 @@ CompressionBytes :: (value: string) -> []u8 {
 CompressionAccount :: () {
     key: [5121]u8
     for index: cast(s32)0..5119 { key[index] = ifx index % 2 == 0 then cast(u8)52 else cast(u8)50 }
-    storage_set_setting_text("sync_public_id", "test-public-id")
+    storage_set_setting_text("sync_public_id", COMPRESSION_ACCOUNT_ID)
     storage_set_setting_text("sync_public_key", "test-public-key")
     storage_set_setting_text("sync_private_key", TextFromCString(*key[0]))
 }
@@ -260,9 +277,28 @@ Check :: () -> s32 {
     unused SyncNodeAdd(node)
     check_true("second device starts without owner image files", MediaAsset(hash, true).count == 0)
     unused DiaryBlobPlan(*pass, node)
-    check_true("second device fetches replacement instead of original", DiaryBlobNext(*pass, *request) &&
-        request.kind == DIARY_BLOB_DOWNLOAD && EntityPhotoKeyHash(TextUntilNul(request.key[:])) == target)
-    unused DiaryBlobFinish(*pass, *request, 200, CompressionBytes(sealed))
+    fetched_replacement: bool = false
+    for attempt: cast(s32)0..63 {
+        unused attempt
+        if !DiaryBlobNext(*pass, *request) { break }
+        requested := EntityPhotoKeyHash(TextUntilNul(request.key[:]))
+        if request.kind == DIARY_BLOB_DOWNLOAD || request.kind == DIARY_BLOB_VERIFY {
+            check_true("second device never fetches superseded original", requested != hash)
+            if requested == target && !request.preview {
+                fetched_replacement = true
+                unused DiaryBlobFinish(*pass, *request, 200, CompressionBytes(sealed))
+            } else {
+                // This node fixture serves only the full replacement; a
+                // missing preview must not stop its original from arriving.
+                unused DiaryBlobFinish(*pass, *request, 404, empty)
+            }
+        } else {
+            // Restores and other queued metadata actions can precede bytes.
+            unused DiaryBlobFinish(*pass, *request, 204, empty)
+        }
+        DiaryBlobAbandon(*request)
+    }
+    check_true("second device fetches replacement instead of original", fetched_replacement)
     DiaryBlobPassEnd(*pass)
     check_true("second device resolves Diary identity to authenticated AVIF", MediaAssetView(MediaAsset(hash, true)).data == encoded.data)
     check_int("second device keeps one gallery row", MediaQuery("", false), 1)
@@ -275,7 +311,8 @@ Check :: () -> s32 {
 
 CompressionEncryptedRecords :: () -> string {
     storage_enqueue_all_sync_state()
-    payload := storage_build_sync_payload_json("test-public-id", "test-public-key")
+    payload := storage_build_sync_payload_json(COMPRESSION_ACCOUNT_ID, "test-public-key")
+    check_true("replacement sync payload builds", payload != null)
     if payload == null { return "" }
     defer { storage_free_sync_payload_json(payload) }
     statement: *void

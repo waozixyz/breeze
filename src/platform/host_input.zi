@@ -1,0 +1,100 @@
+// The keyboard, pointer and wheel for the app's frame, from the host the
+// build targets: raylib's input on raylib hosts, or on Kryon's desktop host
+// what the main window received in its last poll. Key codes are the shared
+// ones: raylib's numbering, which Kryon's desktop keys use too.
+#import "geometry"
+#import "input_protocol"
+#import "session"
+
+#if #defined(DESKTOP_HOST) {
+    Desktop :: #import "desktop_runtime";
+    Keyboard :: #import "desktop_keyboard";
+} else {
+    host_input_raylib :: #system_library "raylib";
+    RaylibKeyPressed :: (key: s32) -> bool #foreign host_input_raylib "IsKeyPressed";
+    RaylibKeyDown :: (key: s32) -> bool #foreign host_input_raylib "IsKeyDown";
+    RaylibMousePosition :: () -> Vector2 #foreign host_input_raylib "GetMousePosition";
+    RaylibMousePressed :: (button: s32) -> bool #foreign host_input_raylib "IsMouseButtonPressed";
+    RaylibMouseDown :: (button: s32) -> bool #foreign host_input_raylib "IsMouseButtonDown";
+    RaylibMouseReleased :: (button: s32) -> bool #foreign host_input_raylib "IsMouseButtonReleased";
+    RaylibWheel :: () -> Vector2 #foreign host_input_raylib "GetMouseWheelMoveV";
+    RaylibSetCursor :: (cursor: s32) #foreign host_input_raylib "SetMouseCursor";
+    #if !#defined(PLATFORM_WEB) {
+        RaylibRuntime :: #import "kryon/raylib_runtime";
+    }
+}
+
+HOST_MOUSE_LEFT :: 0
+HOST_MOUSE_RIGHT :: 1
+
+HostKeyPressed :: (key: s32) -> bool {
+    #if #defined(DESKTOP_HOST) {
+        return Keyboard.DesktopKeyPressed(key)
+    } else {
+        return RaylibKeyPressed(key)
+    }
+}
+
+HostKeyDown :: (key: s32) -> bool {
+    #if #defined(DESKTOP_HOST) {
+        return Keyboard.DesktopKeyDown(key)
+    } else {
+        return RaylibKeyDown(key)
+    }
+}
+
+// The primary button at the pointer's window position this frame.
+HostPointer :: () -> PointerFrame {
+    #if #defined(DESKTOP_HOST) {
+        return Desktop.PollPointer()
+    } else {
+        position := RaylibMousePosition()
+        return PointerFrame.{position.x, position.y, RaylibMouseDown(HOST_MOUSE_LEFT),
+            RaylibMousePressed(HOST_MOUSE_LEFT), RaylibMouseReleased(HOST_MOUSE_LEFT)}
+    }
+}
+
+// The secondary (right) button this frame.
+HostSecondaryPointer :: () -> SecondaryPointerFrame {
+    #if #defined(DESKTOP_HOST) {
+        return Desktop.PollSecondaryPointer()
+    } else {
+        return SecondaryPointerFrame.{RaylibMouseDown(HOST_MOUSE_RIGHT),
+            RaylibMousePressed(HOST_MOUSE_RIGHT), RaylibMouseReleased(HOST_MOUSE_RIGHT)}
+    }
+}
+
+// Wheel steps this frame: x sideways, positive to the right on desktop
+// hosts and to the left in browsers; y positive away from the person.
+HostWheel :: () -> Vector2 {
+    #if #defined(DESKTOP_HOST) {
+        return Vector2.{Desktop.DesktopWheelMoveX(), Desktop.DesktopWheelMove()}
+    } else {
+        return RaylibWheel()
+    }
+}
+
+// The held modifier keys as KeyModifier bits; none in browsers.
+HostModifiers :: () -> s32 {
+    #if #defined(DESKTOP_HOST) {
+        return Desktop.DesktopModifiers()
+    } else {
+        #if #defined(PLATFORM_WEB) {
+            return 0
+        } else {
+            return RaylibRuntime.RaylibModifiers()
+        }
+    }
+}
+
+// Shows the cursor for what is under the pointer. Kryon's desktop host
+// resolves it from the widgets; raylib hosts show a hand over controls.
+HostShowCursor :: (session: Session, over_control: bool) {
+    #if #defined(DESKTOP_HOST) {
+        unused over_control
+        unused Desktop.DesktopCursor(session)
+    } else {
+        unused session
+        RaylibSetCursor(ifx over_control then 4 else 0)
+    }
+}

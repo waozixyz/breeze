@@ -9,65 +9,35 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
 from animation_inventory import inventory
-from practice_content import NAMES
+from practice_content import NAMES, bundle_assets
 from practice_media import media_path, packaged_path
 from tai_chi_preview import preview_course
 
 def assets(data):
-    assert data[:8] == b'ZX\0\0\x1a\0\0\0'
-    at = 8
-    def number():
-        nonlocal at
-        value = struct.unpack_from('<I', data, at)[0]
-        at += 4
-        return value
-    def take(count):
-        nonlocal at
-        value = data[at:at + count]
-        assert len(value) == count
-        at += count
-        return value
-    def text():
-        return take(number())
-    text(); text()
-    for _ in range(number()):
-        text(); text()
-    for _ in range(number()):
-        for _ in range(7): text()
-        take(8); text(); take(4)
-    for _ in range(number()):
-        for _ in range(3): text()
-    take(number())
-    result = {}
-    for _ in range(number()):
-        name = text().decode()
-        assert name not in result
-        result[name] = take(number())
-    assert at == len(data)
-    return result
+    return bundle_assets(data)
 
 root = assets((ROOT / 'build/inbe.zx').read_bytes())
-for name in ('diary', 'lists', 'habits', 'practices', 'leaderboard'):
+for name in ('apps', 'diary', 'lists', 'habits', 'practices', 'leaderboard'):
     path = 'assets/apps/icons/' + name + '.png'
     assert root[path] == (ROOT / path).read_bytes(), f'missing or stale launcher icon: {name}'
-for name in ('habits', 'diary', 'practices', 'lists', 'radio', 'leaderboard',
-             'lumi', 'library', 'arcade', 'photos'):
-    path = 'assets/apps/icons/' + name + '.avif'
-    assert root[path] == (ROOT / path).read_bytes(), f'missing or stale generated launcher icon: {name}'
 path = 'assets/app/back-home.avif'
 assert root[path] == (ROOT / path).read_bytes(), 'missing or stale graphical Back control'
 for name in ('radio', 'library'):
     shape = (ROOT / 'assets' / name / 'sidebar.shape').read_bytes()
     assert root['assets/apps/icons/' + name + '.shape'] == shape
     assert shape.startswith(b'S') and len(shape) < 4096
-# Photos comes from the node. Its launcher picture ships here; its baseline stays on the node.
+# Photos comes from the node; the root package carries neither its baseline nor its icon.
 assert not any(name.startswith('assets/apps/bundled/photos') or name == 'assets/apps/icons/photos.shape'
                for name in root), 'the root package still bundles Photos'
 assert set(name for name in root if name.startswith('cells/')) == {
     'cells/lumi.zx', 'cells/habits.zx', 'cells/practices.zx',
     'cells/lists.zx', 'cells/diary.zx', 'cells/leaderboard.zx'}
 practices = assets(root['cells/practices.zx'])
+assert not any(name.startswith('assets/practices/ui/') for name in practices), 'unused practice tab art'
+assert root['cells/practices.zx'] == (ROOT / 'build/apps/practices.zx').read_bytes(), 'stale embedded Practices'
 preview_prefix = 'assets/practices/taichi-preview/'
+preview_outline = preview_prefix + 'flat-edge.png'
+assert practices[preview_outline] == media_path('assets/practices/taichi/flat-edge.png').read_bytes()
 preview, free_spoken = preview_course(media_path('assets/practices/taichi/course.tch').read_bytes())
 with zipfile.ZipFile(io.BytesIO(practices[preview_prefix + 'course.zip'])) as archive:
     assert archive.namelist() == ['course.tch']
@@ -108,7 +78,8 @@ assert paths
 for path in paths:
     path = path if path.startswith('assets/') else 'assets/' + path
     assert path in combined, f'image is absent from package: {path}'
-    assert combined[path] == media_path(path).read_bytes(), path
+    original = path.replace(preview_prefix, 'assets/practices/taichi/', 1)
+    assert combined[path] == media_path(original).read_bytes(), path
 for path in ('icons/ui.webp', 'icons/pfp.webp'):
     assert root[path] == (ROOT / 'build/packages/kryon' / path).read_bytes()
 for file in (ROOT / 'locales').glob('*.txt'):
@@ -126,8 +97,9 @@ assert not any(name.endswith('/banner.png') for name in practices)
 # Practice pictures ship only in their packs, apart from every practice's
 # banners: Practice's tabs show each practice before it is downloaded.
 banner = re.compile(r'assets/practices/[a-z_]+/banner-(?:light|dark)\.webp')
-assert not any(name.endswith(('.png', '.webp')) and not banner.fullmatch(name) for name in practices), \
-    [name for name in practices if name.endswith(('.png', '.webp')) and not banner.fullmatch(name)]
+assert not any(name.endswith(('.png', '.webp')) and name != preview_outline and not banner.fullmatch(name)
+               for name in practices), \
+    [name for name in practices if name.endswith(('.png', '.webp')) and name != preview_outline and not banner.fullmatch(name)]
 for name in NAMES:
     for theme in ('light', 'dark'):
         path = f'assets/practices/{name}/banner-{theme}.webp'
@@ -148,7 +120,8 @@ assert packaged_animation == {packaged_path(path) for path in unique_animation}
 for index, original in enumerate(paths):
     stored = packaged_path(paths[sources[index]])
     assert content[stored] == original.read_bytes(), f'animation frame changed: {original}'
-assert not any('/characters/' in name or name.endswith('/course.zip') for name in practices)
+assert not any('/characters/' in name or
+               (name.endswith('/course.zip') and name != preview_prefix + 'course.zip') for name in practices)
 native = (ROOT / 'build/obj/inbe_embedded_assets.c').read_text()
 entries = set(re.findall(r'\{(?:\(uint8_t \*\))?"([^"\n]+)"', native))
 assert entries == {'assets/app/icon.webp', 'apps/publishers.json', 'inbe.zx', 'apps.zx'}, entries

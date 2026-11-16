@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 standard=${2:-"$root/build/packages/ziran/std"}
 work="$root/build/radio-test"
 mkdir -p "$work"

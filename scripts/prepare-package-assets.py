@@ -37,7 +37,7 @@ for name in ('inbe', 'lists', 'habits', 'practices', 'diary', 'lumi', 'leaderboa
 patterns = (
     'assets/mcp/*.json', 'assets/app/icon.webp', 'assets/app/icon-sky-cradle.webp',
     'assets/app/icon-ink-and-air.webp', 'assets/pet/*.png',
-    'assets/apps/icons/*.png', 'assets/apps/icons/*.avif', 'assets/app/back-home.avif',
+    'assets/apps/icons/*.png', 'assets/app/back-home.avif',
     'assets/social/*.png', 'assets/social/*.webp', 'assets/social/telegram.svg',
     'assets/sounds/*.ogg',
     'assets/habits/**/*', 'assets/lists/**/*', 'assets/diary/**/*', 'assets/lumi/**/*',

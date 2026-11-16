@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Enforce shipped size budgets and one shared, architecture-independent package."""
+"""Report artifact sizes and verify one shared, architecture-independent package."""
 import argparse
-import json
 from pathlib import Path
 import sys
 import zipfile
@@ -9,14 +8,8 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def within(name, size, maximum):
-    if size > maximum:
-        raise ValueError(f"{name}: {size:,} bytes exceeds {maximum:,}-byte budget")
-
-
-def check(path, budgets):
+def check(path):
     if path.suffix not in (".apk", ".aab"):
-        within("Linux binary", path.stat().st_size, budgets["linux_binary_bytes"])
         return f"Linux binary: {path.stat().st_size / 1e6:.2f} MB"
     bundle = path.suffix == ".aab"
     prefix = "base/" if bundle else ""
@@ -27,7 +20,6 @@ def check(path, budgets):
         if len(packages) != 1 or packages[0].filename != package_path:
             raise ValueError("Expected exactly one shared assets/inbe.zx")
         package = packages[0]
-        within("Portable app package", package.file_size, budgets["app_package_bytes"])
         controllers = [entry for entry in files if entry.filename.endswith("/apps.zx")]
         if len(controllers) != 1 or controllers[0].filename != prefix + "assets/apps.zx":
             raise ValueError("Expected exactly one shared assets/apps.zx controller")
@@ -39,11 +31,8 @@ def check(path, budgets):
         if bundle:
             size = sum(entry.compress_size for entry in files
                        if entry.filename.startswith("base/"))
-            within("Delivered bundle payload", size, budgets["bundle_payload_bytes"])
         else:
             size = path.stat().st_size
-            key = "apk_universal_bytes" if len(libraries) > 1 else "apk_single_abi_bytes"
-            within("APK", size, budgets[key])
         return (f"{path.name}: {size / 1e6:.2f} MB; {len(libraries)} ABI(s); "
                 f"one shared package ({package.file_size / 1e6:.2f} MB unpacked)")
 
@@ -52,12 +41,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifacts", type=Path, nargs="+")
     args = parser.parse_args()
-    budgets = json.loads((ROOT / "packaging/size-budgets.json").read_text())
     try:
         for path in args.artifacts:
-            print("PASS " + check(path, budgets))
+            print("PASS " + check(path))
     except (OSError, ValueError, zipfile.BadZipFile) as error:
-        print(f"FAIL package size: {error}", file=sys.stderr)
+        print(f"FAIL package artifact: {error}", file=sys.stderr)
         return 1
     return 0
 

@@ -14,6 +14,7 @@ import tempfile
 import time
 
 from ui_driver import UiDriver
+from window_icon_property import verify_window_icon
 from practice_audio_ui import prepare_music_fixture, exercise_audio_modal
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,8 @@ DESKTOP_KEYS = ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_AD
 assert all(not os.environ.get(key) for key in DESKTOP_KEYS), 'Inherited desktop environment'
 BINARY = Path(sys.argv[1]).resolve()
 BUNDLE = ROOT / 'build/inbe-full.zx'
+if '--bundle' in sys.argv[2:]:
+    BUNDLE = Path(sys.argv[sys.argv.index('--bundle') + 1]).resolve()
 sys.path.insert(0, str(ROOT / 'scripts'))
 from practice_media import media_path
 spec = importlib.util.spec_from_file_location('speech', ROOT / 'scripts/generate-lumi-guide-narration.py')
@@ -79,14 +82,16 @@ with contextlib.ExitStack() as stack:
     env.update(driver.environment())
 
     @contextlib.contextmanager
-    def application(scene='astral_projection_home', width=1280, height=900):
-        log_path = OUTPUT / (scene + '-' + str(width) + '.log')
+    def application(scene='astral_projection_home', width=1280, height=900, theme=0, dark=0):
+        log_path = OUTPUT / (scene + '-' + str(width) + '-theme-' + str(theme) + '.log')
         with log_path.open('w') as log:
             driver.reset()
-            app = subprocess.Popen([str(BINARY), '--bundle', str(BUNDLE), '--screenshot',
+            bundle_args = [] if '--embedded' in sys.argv[2:] else ['--bundle', str(BUNDLE)]
+            app = subprocess.Popen([str(BINARY), *bundle_args, '--screenshot',
                                     str(OUTPUT / 'unused.png'), '--screenshot-scene', scene,
                                     '--screenshot-width', str(width), '--screenshot-height', str(height),
-                                    '--screenshot-ui-scale', '10', '--screenshot-theme', '0'],
+                                    '--screenshot-ui-scale', '10', '--screenshot-theme', str(theme),
+                                    '--screenshot-dark', str(dark)],
                                    cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT)
             driver.attach(app, log_path)
             try:
@@ -101,6 +106,8 @@ with contextlib.ExitStack() as stack:
                         break
                     time.sleep(.05)
                 assert window, tail(log_path)
+                driver.tree()  # The first committed frame follows window/icon setup.
+                verify_window_icon(env['DISPLAY'], window, ROOT / 'assets/app/icon.webp')
                 yield window
                 assert app.poll() is None, tail(log_path)
                 assert 'frame rejected' not in tail(log_path)
@@ -145,7 +152,7 @@ with contextlib.ExitStack() as stack:
                            'apps_setup_done': '1', 'tutorial_seen': '1', 'habits_guide_seen': '1',
                            'lumi_guides_seen': '127', 'launcher_guide_seen': '1',
                            'package_updates_allowed': '0', 'voice_narration_enabled': '1',
-                           'guide_narration_enabled': '0'}.items():
+                           'guide_narration_enabled': '0', 'notification_achievements': '0'}.items():
             db.execute('INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) '
                        'ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value', (user, key, value))
 
@@ -195,12 +202,19 @@ with contextlib.ExitStack() as stack:
                 if json.loads(row[0]).get('item') == identifier and
                 json.loads(row[0]).get('duration_seconds') == seconds]
 
+    # Home buttons sit above a scroll gesture that must not move them.
+    # selects its own practice, and remembers Astral when returning to its tab.
+    def press_home(label):
+        driver.pointer(100, 200, wheel=-100)
+        driver.wait_idle(frames=20)
+        driver.press(label=label, role='button')
+
     for width, height in ((1280, 900), (390, 844)):
         for row in rows:
             title = text[row['title_key']]
             session = json.loads((folder / 'sessions' / (row['id'] + '.json')).read_text())
             with application(width=width, height=height) as window:
-                driver.press(label='Start Practice', role='button')
+                press_home('Start Practice')
                 assert not state(window)['practice_running'], 'Session started before selection'
                 modal = driver.wait(label='Astral Projection', role='modal')
                 assert modal['width'] <= width and modal['height'] <= height, modal
@@ -208,20 +222,20 @@ with contextlib.ExitStack() as stack:
                     driver.press(label='Close', role='button')
                     driver.wait_gone(role='modal')
                     assert not state(window)['practice_running']
-                    driver.press(label='Start Practice', role='button')
+                    press_home('Start Practice')
                     driver.wait(label='Astral Projection', role='modal')
                 reveal(title, text[row['description_key']], width, height)
                 driver.press(label=title, role='button')
                 assert setting('astral_projection_exercise') == row['id']
                 driver.wait(label=title, role='image')
                 assert not state(window)['practice_running']
-                driver.press(label='How to', role='button')
+                press_home('How to')
                 driver.wait(label=text[row['guide_key']], role='text')
                 driver.press(label='Back', role='button')
                 reveal(title, text[row['description_key']], width, height)
                 subprocess.run(['import', '-window', window, str(OUTPUT / (row['id'] + '-' + str(width) + '.png'))],
                                env=env, check=True, capture_output=True, timeout=10)
-                driver.press(label='Start Practice', role='button')
+                press_home('Start Practice')
                 driver.wait(label='Pause', role='button')
                 assert state(window)['practice_running']
                 driver.wait(label=text[session['cues'][0]['key']], role='text')
@@ -283,7 +297,7 @@ with contextlib.ExitStack() as stack:
             assert len(matches) == 1 and matches[0]['title'] == text[row['title_key']], matches
         with application('astral_projection_home', 390, 844) as window:
             assert len(recorded(row['id'], row['duration'])) == 1
-            driver.press(label='How to', role='button')
+            press_home('How to')
             driver.wait(label=text[row['guide_key']], role='text')
             driver.press(label='Back', role='button')
             driver.wait(label=text[row['title_key']], role='button')

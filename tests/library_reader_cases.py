@@ -11,27 +11,32 @@ class LibraryReaderCases:
         self.capture = capture
 
     def open_library(self):
+        if not self.driver.find(label="Library", role="button", visible=True):
+            self.driver.press(label="Find an app", role="text_field")
+            self.driver.type("Library")
         self.driver.press(label="Library", role="button")
         self.driver.wait_idle(frames=3)
         downloads = self.driver.find(label="Download", role="button", visible=True)
         if downloads:
             self.driver.press(key=downloads[-1]["key"], role="button")
-            self.driver.wait(label="Open", role="button", timeout=60)
+            deadline = time.monotonic() + 60
+            while not (self.driver.find(label="Open", role="button", visible=True) or
+                       self.driver.find(label="Tao Te Ching", role="button", visible=True)):
+                assert time.monotonic() < deadline, self.driver.text()
+                time.sleep(.05)
         if self.driver.find(label="Open", role="button", visible=True):
             self.driver.press(label="Open", role="button")
         self.driver.wait(label="Tao Te Ching", role="button", timeout=60)
 
     def open_book(self, mode):
         self.driver.press(label="Tao Te Ching", role="button")
-        self.driver.wait(label="Reading mode", role="text")
-        self.driver.press(label=mode, role="button")
-        self.driver.wait_gone(label="Reading mode", role="text")
-
-    def cancel_book(self):
-        self.driver.press(label="Tao Te Ching", role="button")
-        self.driver.wait(label="Reading mode", role="text")
-        self.driver.press(label="Close", role="button")
-        self.driver.wait_gone(label="Reading mode", role="text")
+        self.driver.wait_gone(key=27800)
+        self.driver.wait(key=27705, role="button")
+        assert not self.driver.find(label="Reading mode"), self.driver.text()
+        pictures = mode == "Picture book"
+        if self.driver.wait(key=27705)["selected"] != pictures:
+            self.driver.press(key=27705, role="button")
+        self.driver.wait_idle(frames=3)
 
     def page_label(self):
         self.driver.wait(key=27511)
@@ -48,6 +53,23 @@ class LibraryReaderCases:
         assert passage["hidden_lines"] == heading["hidden_lines"] == 0, (heading, passage)
         assert passage["y"] >= heading["y"] + heading["height"], (heading, passage)
         return passage["label"]
+
+    def picture_page(self, title):
+        """A picture page shows only the illustration and its title, centered as one group."""
+        image = self.driver.wait(key=27503, role="image")
+        heading = self.driver.wait(key=27501, label=title)
+        assert not self.driver.find(key=27502, visible=True), self.driver.text()
+        label = self.driver.wait(key=27511)
+        scale = self.driver.wait(key=27710)["height"] / 44
+        middle = label["x"] + label["width"] / 2
+        assert abs(image["width"] - image["height"]) <= 1, image
+        assert abs(image["x"] + image["width"] / 2 - middle) <= 2, (image, label)
+        assert abs(heading["x"] + heading["width"] / 2 - middle) <= 2, (heading, label)
+        assert heading["y"] >= image["y"] + image["height"], (image, heading)
+        # The reading area runs from below the toolbar to above the page number.
+        above = image["y"] - 72 * scale
+        below = label["y"] - 8 * scale - (heading["y"] + heading["height"])
+        assert above >= 0 and below >= 0 and abs(above - below) <= 3, (above, below, image, heading, label)
 
     def wait_page(self, number):
         deadline = time.monotonic() + 20
@@ -67,7 +89,7 @@ class LibraryReaderCases:
         for _ in range(82):
             matches = self.driver.find(key=27200 + number, role="button", visible=True)
             if matches:
-                assert matches[0]["label"].startswith(f"{number} · "), matches[0]
+                assert matches[0]["label"] and not re.match(r"^(Chapter\s+)?\d", matches[0]["label"]), matches[0]
                 self.driver.press(key=27200 + number, role="button")
                 return
             self.driver.pointer(*self.driver.center(self.driver.wait(key=27605)), wheel=-3)
@@ -88,18 +110,26 @@ class LibraryReaderCases:
         self.driver.press(label="Tao Te Ching", role="button")
         self.capture("opening")
         self.driver.wait_gone(key=27800)
-        self.driver.wait(label="Reading mode", role="text")
-        self.driver.press(label="Close", role="button")
-        self.driver.wait_gone(label="Reading mode", role="text")
-        cancelled_text = self.page_text()
-        assert not self.driver.find(key=27503), self.driver.text()
-        self.driver.press(label="Back", role="button")
-        self.driver.wait(label="Tao Te Ching", role="button")
-        self.open_book("Text only")
+        assert not self.driver.find(label="Reading mode"), self.driver.text()
+        self.picture_page("The Nameless Tao")
+        assert self.driver.wait(key=27705)["selected"], "Fresh reader did not enable artwork"
+        assert self.page_number() == 1
+        self.capture("reader-art-default")
+        # The chapter text follows its picture page, with the same title heading.
+        self.driver.key("right")
+        self.wait_page(2)
+        self.driver.wait_gone(key=27503)
+        assert self.chapter_text(1).startswith(self.page_text()), self.page_text()
+        self.driver.wait(key=27501, label="The Nameless Tao")
+        self.driver.key("left")
+        self.wait_page(1)
+        self.picture_page("The Nameless Tao")
+        self.driver.press(key=27705, role="button")
+        self.driver.wait_gone(key=27503)
+        assert not self.driver.wait(key=27705)["selected"]
         first = self.page_text()
-        assert first == cancelled_text, (first, cancelled_text)
         assert self.chapter_text(1).startswith(first), first
-        self.driver.wait(key=27501, label="1 · The Nameless Tao")
+        self.driver.wait(key=27501, label="The Nameless Tao")
         initial_total = int(self.page_label().split(" / ")[1])
         assert initial_total >= 81
         self.driver.wait_gone(label="Apps", role="button")
@@ -125,14 +155,14 @@ class LibraryReaderCases:
         self.capture("reader-light" if theme_after == "Dark" else "reader-dark")
         # Open contents inside the one reader panel; jump to a longer chapter.
         self.open_tools("Contents")
-        self.driver.wait(label="1 · The Nameless Tao", role="button")
+        self.driver.wait(label="The Nameless Tao", role="button")
         self.capture("contents")
         self.press_chapter(81)
-        self.driver.wait(key=27501, label="81 · Words That Are True")
+        self.driver.wait(key=27501, label="Words That Are True")
         assert self.chapter_text(81).startswith(self.page_text()), self.page_text()
         self.open_tools("Contents")
         self.press_chapter(39)
-        self.driver.wait(key=27501, label="39 · Holding to the One")
+        self.driver.wait(key=27501, label="Holding to the One")
         assert self.chapter_text(39).startswith(self.page_text()), self.page_text()
         before = self.page_number()
         self.driver.key("right")
@@ -220,12 +250,34 @@ class LibraryReaderCases:
         self.driver.press(label="Back", role="button")
         self.driver.wait(label="Tao Te Ching", role="button")
         self.open_book("Picture book")
-        assert not self.driver.find(key=27503), self.driver.text()
-        assert self.chapter_text(1).startswith(self.page_text()), self.page_text()
+        # Turning images on keeps a continuation page; text pages never change.
+        assert self.page_text() == saved["text"], self.page_text()
+        assert not self.driver.find(key=27503, visible=True), self.driver.text()
+        self.open_tools("Contents")
+        self.press_chapter(39)
+        self.picture_page("Holding to the One")
+        self.capture("reader-art-restored")
+        self.driver.key("right")
+        self.driver.wait_gone(key=27503)
+        assert self.chapter_text(39).startswith(self.page_text()), self.page_text()
+        # Artwork follows the actual chapter route, including the last chapter.
+        self.open_tools("Contents")
+        self.press_chapter(81)
+        self.picture_page("Words That Are True")
+        self.driver.key("right")
+        self.driver.wait_gone(key=27503)
+        assert self.chapter_text(81).startswith(self.page_text()), self.page_text()
+        self.driver.key("left")
+        self.picture_page("Words That Are True")
+        self.driver.press(key=27705, role="button")
+        self.driver.wait_gone(key=27503)
+        assert self.chapter_text(81).startswith(self.page_text()), self.page_text()
+        self.driver.press(key=27705, role="button")
+        self.picture_page("Words That Are True")
         self.driver.press(label="Back", role="button")
         self.driver.wait(label="Tao Te Ching", role="button")
-        self.cancel_book()
-        assert not self.driver.find(key=27503), self.driver.text()
-        assert self.chapter_text(1).startswith(self.page_text()), self.page_text()
+        self.driver.press(label="Tao Te Ching", role="button")
+        self.driver.wait_gone(key=27800)
+        self.picture_page("Words That Are True")
         self.driver.press(label="Back", role="button")
-        self.driver.wait(label="Library", role="button")
+        self.driver.wait(label="Tao Te Ching", role="button")

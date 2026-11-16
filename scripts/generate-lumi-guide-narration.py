@@ -534,7 +534,7 @@ def normalized(text):
 
 def match(text, transcript):
     return difflib.SequenceMatcher(None, normalized(text),
-                                   normalized(transcript)).ratio()
+                                   normalized(transcript), autojunk=False).ratio()
 
 
 def japanese_spelling(text):

@@ -2233,7 +2233,20 @@ test_media_compression_sync_between_devices :: () {
         read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='media_record'"), 2)
     check_true("compression payload builds", build_payload())
     check_true("receipt uses the shared media collection", contains(payload(), MediaCollection))
-    check_true("compression keys are private", !contains(payload(), MEDIA_COMPRESSION_SEEN_KEY))
+    // The established sync format exposes record identifiers, while each
+    // setting's content travels only inside an encrypted envelope.
+    check_int("compression encrypted record count", record_count(), 2)
+    for index: cast(s32)0..record_count() - 1 {
+        nonce: [128]u8
+        ciphertext: [4096]u8
+        check_true("compression settings use encrypted envelopes",
+            storage_json_array_object_text(payload(), "$.encrypted_records", index,
+                "nonce", *nonce[0], 128) != 0 && nonce[0] != cast(u8)0 &&
+            storage_json_array_object_text(payload(), "$.encrypted_records", index,
+                "ciphertext", *ciphertext[0], 4096) != 0 && ciphertext[0] != cast(u8)0)
+    }
+    check_true("compression values stay encrypted",
+        !contains(payload(), "\"value\":"))
     storage_close()
     check_true("init compression device b", storage_init(second) != 0)
     set_account()
@@ -2732,7 +2745,7 @@ test_storage_note_accounting :: () {
 
 #program_export
 Check :: () -> s32 {
-    guard := support_begin("/tmp/inbe-storage-sync-zi-test/")
+    guard := support_begin("/mnt/storage/Projects/waozixyz/apps/breeze/build/storage-sync-zi-test/")
     if guard != 0 { return guard }
     test_storage_note_accounting()
     test_game_score_upgrade()

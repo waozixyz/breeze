@@ -125,8 +125,10 @@ Dates :: #import, file "../apps/diary/diary_date.zi";
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/app/app_size.zi";
 #import "byte_text_linux"
+#import "bundle_host"
+#import "hosted_values"
 #import "text_buffer"
-#import "crypto"
+#import "daochi_client/crypto"
 #import, file "../src/app/assets.zi";
 #import, file "../src/app/locale.zi";
 #import, file "../src/storage/sync_node_storage.zi";
@@ -823,8 +825,8 @@ CheckDiaryPhotosInLibrary :: () {
 }
 
 CheckPackagedLocales :: () {
-    Expect(LocaleLanguageCount() == 9, 200)
-    Expect(!LocaleSupports("id") && !LocaleSupports("it") && !LocaleSupports("pt"), 202)
+    Expect(LocaleLanguageCount() == 10, 200)
+    Expect(!LocaleSupports("id") && !LocaleSupports("it") && LocaleSupports("pt"), 202)
     for index: cast(s32)0..LocaleLanguageCount() - 1 {
         Expect(PackagedLocaleMatches(LocaleLanguageAt(index).code), 201 + index)
     }
@@ -849,6 +851,29 @@ CheckModules :: () -> s32 {
     Expect(!AppsOpenBytes(habits, lists, practice), 3)
     // Bind the actual shared persistence effects without opening user data.
     unused AppsStart(*app)
+    // Exercise current package-qualified widget imports before opening the
+    // complete root. Unsupported effects must still be rejected.
+    diagnostic_bytes: [2]string = .[practice, ModuleTestText("inbe")]
+    diagnostic_kinds: [2]s32 = .[MODULE_PRACTICE, MODULE_INBE]
+    for diagnostic_index: cast(s32)0..1 {
+        bytes := diagnostic_bytes[diagnostic_index]
+        diagnostic_bundle := OpenBundleBytes(HostTextData(bytes), cast(u64)bytes.count)
+        Expect(diagnostic_bundle != null, 234)
+        if diagnostic_bundle != null {
+            diagnostic_slot := ModuleSlot.{.kind = diagnostic_kinds[diagnostic_index]}
+            for capability: cast(u64)0..BundleCapabilities(diagnostic_bundle) - cast(u64)1 {
+                module_name := TextFromCString(BundleCapabilityModuleName(diagnostic_bundle, capability))
+                function_name := TextFromCString(BundleCapabilityFunctionName(diagnostic_bundle, capability))
+                allowed := ModuleAllows(cast(*void)(*diagnostic_slot), module_name, function_name)
+                if !allowed {
+                    print("Unsupported package capability: %.%\n", module_name, function_name)
+                }
+                Expect(allowed, 235)
+            }
+            Expect(!ModuleAllows(cast(*void)(*diagnostic_slot), "untrusted", "WriteInbeHost"), 236)
+            CloseBundle(diagnostic_bundle)
+        }
+    }
     Expect(AppsOpenBytes(lists, habits, practice), 4)
     Expect(AppsFeaturePackageSize(1) == lists.count && AppsFeaturePackageSize(2) == habits.count &&
         AppsFeaturePackageSize(3) == practice.count && AppsFeaturePackageSize(4) == 0, 229)
@@ -940,9 +965,9 @@ CheckModules :: () -> s32 {
     Expect(ListsRefreshVisibility(*app.elist, 2.1) && app.elist.item_visibility[0] && app.elist.visibility_deadline == 2.45, 51)
     runs := ModuleTestRuns()
     Expect(ListsRefreshVisibility(*app.elist, 2.2) && ModuleTestRuns() == runs, 52)
-    Expect(ListsRefreshVisibility(*app.elist, 2.5) && !app.elist.item_visibility[0] && ModuleTestRuns() == runs + 1, 53)
+    Expect(ListsRefreshVisibility(*app.elist, 2.5) && !app.elist.item_visibility[0] && ModuleTestRuns() == runs + app.elist.item_count, 53)
     app.elist.show_completed = 1
-    Expect(ListsRefreshVisibility(*app.elist, 3.0) && app.elist.item_visibility[0] && ModuleTestRuns() == runs + 2, 54)
+    Expect(ListsRefreshVisibility(*app.elist, 3.0) && app.elist.item_visibility[0] && ModuleTestRuns() == runs + 2 * app.elist.item_count, 54)
     app.elist.show_completed = 0
     unused storage_elist_load(cast(*void)*app.elist)
     Expect(!app.elist.visibility_valid && ListsRefreshVisibility(*app.elist, 3.0) && !app.elist.item_visibility[0], 55)
@@ -1059,7 +1084,7 @@ CheckModules :: () -> s32 {
     Expect(AppTextFromCString(storage_user_id_buffer(), 128) == AppTextFromCString(*user_id[0], 128), 34)
     unused storage_elist_load(cast(*void)*app.elist)
     habits_init_with_defaults(*app.habits, 0)
-    Expect(app.elist.item_count == 1 && app.elist.items[0].done == 1 && app.habits.count >= 3, 35)
+    Expect(app.elist.item_count == 2 && app.elist.items[0].done == 1 && app.habits.count >= 3, 35)
     Expect(ModuleTestCount("SELECT COUNT(*) FROM sessions") == 2, 36)
     Expect(ModuleTestCount("SELECT COUNT(DISTINCT entity_type) FROM sync_outbox WHERE entity_type IN ('elist_list','elist_item','habit','session')") == 4, 37)
     Expect(ModuleTestCount("SELECT COUNT(*) FROM habits h JOIN habit_days d ON d.habit_id=h.id WHERE h.name='Old habit' AND h.user_id='module-user' AND length(h.id)=36 AND d.local_date=20260925 AND d.completed=1 AND d.count=1") == 1, 43)
@@ -1079,7 +1104,12 @@ CheckModules :: () -> s32 {
     Expect(!ListsRun(edit).succeeded, 42)
     app.elist.visibility_valid = false
     Expect(!ListsRefreshVisibility(*app.elist, 3.0), 56)
+    Expect(AppsOpenBytes(lists, habits, practice), 339)
+    home_result := CheckPracticeHome()
+    Expect(home_result == 0, 340 + home_result)
     Expect(AppsOpenPackage(ModuleTestText("inbe")), 100)
+    packaged_home_result := CheckPracticeHome()
+    Expect(packaged_home_result == 0, 1340 + packaged_home_result)
     lumi_result := CheckLumiConversation()
     Expect(lumi_result == 0, lumi_result)
     shop_result := CheckHabitShop()
@@ -1088,8 +1118,6 @@ CheckModules :: () -> s32 {
     Expect(list_result == 0, 300 + list_result)
     stats_result := CheckHabitStats()
     Expect(stats_result == 0, 320 + stats_result)
-    home_result := CheckPracticeHome()
-    Expect(home_result == 0, 340 + home_result)
     manual_result := CheckPracticeManual()
     Expect(manual_result == 0, 360 + manual_result)
     settings_result := CheckPracticeSettings()

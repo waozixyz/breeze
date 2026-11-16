@@ -1,10 +1,11 @@
 // Process setup and effects on the application's own window.
 #import "c_string"
 #import "byte_text_linux"
-#import "raylib_trace"
+#import, file "app_trace.zi";
 #import "device_host"
 #import "window_close"
 #import "asset_files"
+WindowIcon :: #import "kryon/window_icon";
 #import, file "../app/assets.zi";
 
 c :: #system_library "c";
@@ -14,19 +15,7 @@ HostTraceLog :: (level: s32, format: *u8, arguments: ..any) #foreign raylib "Tra
 update_apply_at_exit :: () -> s32 #foreign c;
 WindowReady :: () -> bool #foreign raylib "IsWindowReady";
 WindowHandle :: () -> *void #foreign raylib "GetWindowHandle";
-WindowIconImage :: struct {
-    data: *void
-    width: s32
-    height: s32
-    mipmaps: s32
-    format: s32
-}
-ReadWindowIcon :: (extension: *u8, bytes: *u8,
-    size: s32) -> WindowIconImage #foreign raylib "LoadImageFromMemory";
-FormatWindowIcon :: (image: *WindowIconImage, format: s32) #foreign raylib "ImageFormat";
-SetWindowIconImage :: (image: WindowIconImage) #foreign raylib "SetWindowIcon";
-FreeWindowIcon :: (image: WindowIconImage) #foreign raylib "UnloadImage";
-ChangeDirectory :: (path: *u8) -> bool #foreign raylib;
+ChangeDirectory :: (path: *u8) -> s32 #foreign raylib;
 FormatText :: (output: *u8, capacity: usize, format: *u8,
     arguments: ..any) -> s32 #foreign c "snprintf";
 FindText :: (text: *u8, needle: *u8) -> *u8 #foreign c "strstr";
@@ -58,10 +47,6 @@ MAIN_SDL :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(PLATFORM_WEB) && !#def
     sdl :: #system_library "SDL2";
     CurrentWindow :: () -> *void #foreign sdl "SDL_GL_GetCurrentWindow";
     GrabWindow :: (window: *void, grab: s32) #foreign sdl "SDL_SetWindowGrab";
-    IconSurface :: (pixels: *void, width: s32, height: s32, depth: s32,
-        pitch: s32, red: u32, green: u32, blue: u32, alpha: u32) -> *void #foreign sdl "SDL_CreateRGBSurfaceFrom";
-    ApplyIconSurface :: (window: *void, surface: *void) #foreign sdl "SDL_SetWindowIcon";
-    FreeIconSurface :: (surface: *void) #foreign sdl "SDL_FreeSurface";
     DisplaySleepOff :: () #foreign sdl "SDL_DisableScreenSaver";
     DisplaySleepOn :: () #foreign sdl "SDL_EnableScreenSaver";
 }
@@ -164,46 +149,10 @@ SetDesktopWindowIcon :: (path: *u8) {
             TraceLog(4, "APP: Missing window icon asset")
             return
         }
-        default_extension: [8]u8
-        if !CopyCString(".png", default_extension[:]) {
-            return
+        encoded := TextFromBytes(BytesFromPointer(asset.data, cast(u64)asset.size))
+        if !WindowIcon.SetWindowIcon(encoded, TextFromCString(path)) {
+            TraceLog(4, "APP: Failed to decode or apply window icon asset")
         }
-        extension := *default_extension[0]
-        index: usize = 0
-        while path[index] != 0 {
-            if path[index] == #char "." {
-                extension = *path[index]
-            }
-            index += 1
-        }
-        icon := ReadWindowIcon(extension, asset.data, cast(s32)asset.size)
-        if icon.data == null {
-            TraceLog(4, "APP: Failed to decode window icon asset")
-            return
-        }
-        FormatWindowIcon(*icon, 7)
-        #if MAIN_SDL {
-            // SDL masks describe native integer bits; raylib's masks reverse
-            // RGBA bytes on little-endian desktops, including the alpha byte.
-            endian: u32 = 1
-            little := cast(*u8)*endian
-            red: u32 = ifx little.* == 1 then 0x000000ff else 0xff000000
-            green: u32 = ifx little.* == 1 then 0x0000ff00 else 0x00ff0000
-            blue: u32 = ifx little.* == 1 then 0x00ff0000 else 0x0000ff00
-            alpha: u32 = ifx little.* == 1 then 0xff000000 else 0x000000ff
-            surface := IconSurface(icon.data, icon.width, icon.height, 32,
-                icon.width * 4, red, green, blue, alpha)
-            window := CurrentWindow()
-            if surface != null {
-                if window != null {
-                    ApplyIconSurface(window, surface)
-                }
-                FreeIconSurface(surface)
-            }
-        } else {
-            SetWindowIconImage(icon)
-        }
-        FreeWindowIcon(icon)
     }
     unused path
 }
@@ -310,7 +259,7 @@ native_window_environment :: () {
         // Preserve the desktop idle counter used by break reminders.
         SetProcessEnvironment("SDL_VIDEO_ALLOW_SCREENSAVER", "1")
         #if #defined(_WIN32) {
-            unused RaylibTraceToFile("inbe.log")
+            unused TraceToFile("inbe.log")
             TraceLog(3, "APP: Windows startup")
         }
     }
@@ -329,7 +278,7 @@ native_before_window :: () {
         // The package's own files directory: the debug and Play builds use
         // other application IDs than the release path.
         files := AndroidInternalDataPath()
-        if files == null || !ChangeDirectory(files) {
+        if files == null || ChangeDirectory(files) != 0 {
             TraceLog(4, "APP: failed to switch to Android files directory")
         }
     }
@@ -342,11 +291,11 @@ native_after_window :: (icon_path: *u8) -> s32 {
         #if #defined(_WIN32) && !#defined(ANDROID_BUILD) {
             dialog: [3072]u8
             title: [32]u8
-            if StartupErrorMessage(RaylibTraceRecentErrors(), dialog[:]) &&
+            if StartupErrorMessage(TraceRecentErrors(), dialog[:]) &&
             CopyCString("Inner Breeze", title[:]) {
                 ErrorMessage(null, *dialog[0], *title[0], 0x10)
             }
-            RaylibTraceClose()
+            TraceClose()
         }
         return 0
     }
@@ -400,7 +349,7 @@ native_after_window :: (icon_path: *u8) -> s32 {
 #program_export
 native_platform_shutdown :: () {
     WindowCloseStop()
-    RaylibTraceClose()
+    TraceClose()
 }
 
 #program_export

@@ -7,24 +7,7 @@ mkdir -p "$root/build"
 work=$(mktemp -d "$root/build/app-nav-state-zi-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
-"$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/css/src" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/daochi-client" \
-    --module-path "$root/build/packages/ziran/std" \
-    "$root/src/app/app_nav_state.zi"
-"$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/css/src" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/daochi-client" \
-    --module-path "$root/build/packages/ziran/std" \
-    -o "$work/gen" "$root/src/app/app_nav_state.zi"
+"$bin/ziran" build --target=c --no-main --project --offline --root "$root/src" -o "$work/gen" "$root/src/app/app_nav_state.zi"
 # The link test stands in for these modules, so their headers declare those
 # procedures instead of defining inline copies.
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
@@ -33,7 +16,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -I"$work/gen" -I"$work/gen/app" \
     "$root/tests/app_nav_state_link_test.c" \
-    "$work/gen/app/app_nav_state.c" \
+    "$work/gen/app_nav_state.c" \
     "$work/gen/bottom_nav_policy.c" "$work/gen/route_list.c" -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "Inbe navigation state source and generated C behavior passed"

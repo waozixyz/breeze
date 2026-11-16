@@ -10,6 +10,9 @@ the owning app, or switching accounts, cancels playback. Navigating away
 keeps it playing. Playback does not start automatically after a restart.
 
 The bundle owns the station catalogue, controls and saved station/volume.
+Its screen is a native Kryon control surface: the cabinet itself provides
+separate power, volume and tuning controls, three presets, an illuminated
+dial and live playback status without an extra form or embedded web view.
 Its three stations publish MP3 links for external players: Ambient Sleeping
 Pill, a.m. ambient and Ambient Modern. Audio goes directly from their HTTPS
 servers to the device. There are no website launchers or recording/relay

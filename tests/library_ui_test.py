@@ -24,6 +24,13 @@ WIDTH, HEIGHT = int(os.environ.get("INBE_LIBRARY_TEST_WIDTH", "390")), 844
 driver = UiDriver(OUTPUT / "driver")
 
 
+def log_tail(path):
+    with path.open("rb") as stream:
+        stream.seek(0, 2)
+        stream.seek(max(0, stream.tell() - 16000))
+        return stream.read(16000).decode(errors="replace")
+
+
 def command(*args):
     return subprocess.check_output(args, text=True, timeout=10).strip()
 
@@ -48,7 +55,7 @@ def launch(profile, name):
     driver.attach(app, log_path)
     deadline = time.monotonic() + 60
     while time.monotonic() < deadline:
-        assert app.poll() is None, log_path.read_text()
+        assert app.poll() is None, log_tail(log_path)
         found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)],
                                capture_output=True, text=True)
         if found.returncode == 0 and (profile / "inbe.db").exists():
@@ -94,7 +101,7 @@ def capture(name):
     subprocess.run(["import", "-window", window, str(output / (name + ".png"))], check=True)
 
 
-with tempfile.TemporaryDirectory(prefix="inbe-library-") as directory:
+with tempfile.TemporaryDirectory(prefix="profile-", dir=OUTPUT) as directory:
     profile = Path(directory)
     app, _ = launch(profile, "first-start")
     stop(app)
@@ -109,7 +116,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-library-") as directory:
             db.execute("INSERT INTO settings(user_id,key,value,updated_at) VALUES(?,?,?,1) "
                        "ON CONFLICT(user_id,key) DO UPDATE SET value=excluded.value", (user, key, str(value)))
     app, window = launch(profile, "reading")
-    cases = LibraryReaderCases(driver, chapter_text, lambda: (OUTPUT / "reading.log").read_text(), capture)
+    cases = LibraryReaderCases(driver, chapter_text, lambda: log_tail(OUTPUT / "reading.log"), capture)
     try:
         saved = cases.exercise()
     finally:

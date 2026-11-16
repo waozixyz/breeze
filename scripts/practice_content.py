@@ -112,9 +112,74 @@ def course_narration_keys(data):
     return sorted(spoken)
 
 
-def bundle_assets(data):
-    """Read the bounded ZX v26/v27 resource envelope; never execute its IR."""
-    if data[:8] not in (b'ZX\0\0\x1a\0\0\0', b'ZX\0\0\x1b\0\0\0') or len(data) > MAXIMUM:
+ZX28 = b'ZX\0\0\x1c\0\0\0'
+ZX28_ASSETS = 3
+
+
+def zx28_assets_section(data):
+    """The bounds of a revision-28 executable's asset section (kind 3).
+
+    Ziran's ASSEMBLY/zx-executable-format.md: a 64-byte header, then 32-byte
+    directory records in increasing kind order; the file length is exact."""
+    header_size, record_size = struct.unpack_from('<II', data, 8)
+    count = struct.unpack_from('<I', data, 32)[0]
+    length, directory = struct.unpack_from('<QQ', data, 40)
+    if (header_size != 64 or record_size != 32 or directory != 64 or
+            length != len(data) or not 3 <= count <= 1024 or
+            directory + count * record_size > len(data)):
+        raise ValueError('invalid ZX 28 container')
+    for index in range(count):
+        kind, flags, offset, size = struct.unpack_from('<IIQQ', data, directory + index * record_size)
+        if kind == ZX28_ASSETS:
+            if not flags & 1 or offset + size > len(data):
+                raise ValueError('invalid ZX 28 asset section')
+            return offset, offset + size
+    raise ValueError('ZX 28 container has no asset section')
+
+
+def zx28_bundle_assets(data, include_paths):
+    start, end = zx28_assets_section(data)
+    at = start
+
+    def take(size):
+        nonlocal at
+        if size < 0 or at + size > end:
+            raise ValueError('truncated resource bundle')
+        value = data[at:at + size]
+        at += size
+        return value
+
+    def number():
+        return struct.unpack('<I', take(4))[0]
+
+    count = number()
+    if count > 10000:
+        raise ValueError('too many resource assets')
+    result = {}
+    previous = None
+    for _ in range(count):
+        name = take(number())
+        if previous is not None and name <= previous:
+            raise ValueError('unsorted or duplicate resource path')
+        previous = name
+        size = number()
+        path = name.decode('utf-8')
+        if include_paths is None or path in include_paths:
+            result[path] = take(size)
+        else:
+            take(size)
+    if at != end:
+        raise ValueError('trailing resource section bytes')
+    return result
+
+
+def bundle_assets(data, *, maximum=MAXIMUM, include_paths=None):
+    """Read a bundle's resources (ZX 28, or released v26/v27); never run its code."""
+    if len(data) > maximum:
+        raise ValueError('unsupported resource bundle')
+    if data[:8] == ZX28:
+        return zx28_bundle_assets(data, include_paths)
+    if data[:8] not in (b'ZX\0\0\x1a\0\0\0', b'ZX\0\0\x1b\0\0\0'):
         raise ValueError('unsupported resource bundle')
     at = 8
 
@@ -147,11 +212,19 @@ def bundle_assets(data):
     if count > 10000:
         raise ValueError('too many resource assets')
     result = {}
+    seen = set()
     for _ in range(count):
         path = text().decode('utf-8')
-        if path in result:
+        if path in seen:
             raise ValueError('duplicate resource path')
-        result[path] = take(number())
+        seen.add(path)
+        size = number()
+        if include_paths is None or path in include_paths:
+            result[path] = take(size)
+        else:
+            if at + size > len(data):
+                raise ValueError('truncated resource bundle')
+            at += size
     if at != len(data):
         raise ValueError('trailing resource bundle bytes')
     return result
@@ -159,9 +232,9 @@ def bundle_assets(data):
 
 def catalog_from_bundle(data):
     # Older releases have no content catalog and remain installable.
-    if data[:8] != b'ZX\0\0\x1a\0\0\0':
+    if data[:8] not in (b'ZX\0\0\x1a\0\0\0', ZX28):
         return []
-    assets = bundle_assets(data)
+    assets = bundle_assets(data, maximum=len(data), include_paths={CATALOG})
     if CATALOG not in assets:
         return []
     catalog = json.loads(assets[CATALOG])

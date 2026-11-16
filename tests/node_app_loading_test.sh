@@ -5,6 +5,13 @@ ziran=${1:?Pass the Ziran compiler}
 runtime=${2:?Pass its exact runtime library}
 work="$root/build/node-app-loading-test"
 mkdir -p "$work/c"
+"$ziran" build --root "$root" --target=c --entry download_recovery_behavior:main \
+    -o "$work/recovery-c" "$root/tests/download_recovery_behavior.zi"
+"${CC:-cc}" -std=c11 -O1 -I"$root/build/packages/ziran/include" \
+    $(find "$work/recovery-c" -type d -printf ' -iquote %p') \
+    $(find "$work/recovery-c" -name '*.c') -o "$work/recovery-test"
+env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS "$work/recovery-test"
+echo 'Download recovery: bounded backoff, status classification, package resource boundaries'
 "$ziran" build --root "$root" --target=c --entry node_app_loading_behavior:main \
     -o "$work/c" "$root/tests/node_app_loading_behavior.zi"
 "${CC:-cc}" -std=c11 -O1 -I"$root/build/packages/ziran/include" \
@@ -14,15 +21,7 @@ env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS "$wo
 echo 'Node app loading: initial pictures, movement sprites, child changes and return'
 
 mkdir -p "$work/cache-c"
-"$ziran" build --root "$root" --target=c --define PLATFORM_DESKTOP --entry node_child_packages_behavior:main \
-    --module-path "$root/src/platform" \
-    --module-path "$root/build/packages/daochi-client" \
-    --module-path "$root/build/packages/css/src" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+"$ziran" build --root "$root" --project --offline --target=c --define PLATFORM_DESKTOP --entry node_child_packages_behavior:main \
     -o "$work/cache-c" "$root/tests/node_child_packages_behavior.zi"
 "${CC:-cc}" -std=c11 -O1 -ffunction-sections -fdata-sections \
     -I"$root/build/packages/ziran/include" \

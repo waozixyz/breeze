@@ -6,10 +6,13 @@ BOOK_COUNT :: 1
 LIBRARY_PAGE_LIMIT :: 4096
 LIBRARY_ANNOTATION_LIMIT :: 128
 
+// A picture page holds only the chapter illustration and title; its text
+// range is empty, so annotations never land on it.
 LibraryPage :: struct {
     chapter: s32
     start: s32
     end: s32
+    picture: bool
 }
 
 LibraryAnnotation :: struct {
@@ -73,24 +76,17 @@ BookChapterTitle :: (index: s32, number: s32) -> string {
 }
 
 BookChapterArt :: (index: s32, number: s32) -> string {
-    unused index
+    if !BookChapterArtApproved(index) || number < 1 || number > BookChapters(index) {
+        return ""
+    }
     value: Vec(u8)
     BuilderPrint(*value, "assets/library/tao-te-ching/chapter-%.avif", number)
     return BuilderFinish(value)
 }
 
 BookChapterArtApproved :: (index: s32) -> bool {
-    unused index
-    return false
-}
-
-LibraryChapterLabel :: (number: s32, title: string) -> string {
-    value: Vec(u8)
-    BuilderPrint(*value, "%", number)
-    if title != "" {
-        BuilderPrint(*value, " · %", title)
-    }
-    return BuilderFinish(value)
+    // The owner approved this complete 81-chapter selection.
+    return index == 0
 }
 
 // Decimal fields are bounded and separated by one non-digit byte.
@@ -108,10 +104,15 @@ ReadLibraryNumber :: (text: string, at: *s32) -> s32 {
     return value
 }
 
-LibraryPageFor :: (pages: []LibraryPage, chapter: s32, offset: s32) -> s32 {
+// A chapter's picture page and its first text page both start at offset 0.
+// The picture page is chosen only when asked for; otherwise the text page wins.
+LibraryPageFor :: (pages: []LibraryPage, chapter: s32, offset: s32, picture: bool) -> s32 {
     found: s32
     for index: cast(s32)0..cast(s32)pages.count - 1 {
         page := pages[index]
+        if picture && page.picture && page.chapter == chapter {
+            return index
+        }
         if page.chapter < chapter || (page.chapter == chapter && page.start <= offset) {
             found = index
         }

@@ -1,0 +1,115 @@
+// Practice component probes live with the Practices screen implementation.
+WindowRuntime :: #import "kryon/window_runtime";
+#import, file "../../src/platform/app_host.zi";
+#import, file "../../src/app/app_types.zi";
+#import, file "../../src/app/exercise_types.zi";
+#import, file "../../src/app/route_types.zi";
+#import, file "../../src/app/app_nav_state.zi";
+#import, file "../../src/core/types.zi";
+#import, file "../../src/app/current_app.zi";
+#import, file "../../src/app/text_buffers.zi";
+#import, file "../../src/screens/practice_screen.zi";
+#import, file "../../src/widgets/bottom_nav.zi";
+#import "session"
+#import "kryon/tree"
+Layout :: #import "kryon/layout";
+#import "tree_draw"
+#import "geometry"
+#import "drawing_props"
+#import "raylib_trace"
+#if #defined(PLATFORM_WEB) {
+    using CanvasHost :: #import "canvas_host";
+} else {
+    #import "kryon/Raylib"
+}
+using ExerciseType;
+using AppMainTab;
+using NavigationPlacement;
+LOG_INFO :: 3
+
+practice_probe_frame_count: s32;
+
+PracticeProbeMode :: (argc: s32, argv: **u8) -> s32 {
+    if argc < 2 {
+        return 0
+    }
+    argument := AppTextFromCString(argv[1], 32)
+    if argument == "--practice-banner" {
+        return 1
+    }
+    if argument == "--practice-hero" {
+        return 2
+    }
+    if argument == "--practice-screen" {
+        return 3
+    }
+    if argument == "--practice-nav" {
+        return 4
+    }
+    return 0
+}
+
+RunPracticeProbe :: (app: *InnerBreeze, mode: s32, size: WindowSize) -> s32 {
+    app.ui.session = SessionOpen()
+    if !SessionValid(app.ui.session) {
+        WindowRuntime.CloseNativeWindow()
+        return 1
+    }
+    app.ui.view_width = size.width
+    app.ui.view_height = size.height
+    app.ui.navigation_height = size.height
+    app.camera.zoom = 1.0
+    app.exercise_type = EXERCISE_MEDITATION
+    app.main_tab = APP_MAIN_TAB_PRACTICE
+    app.practice_tab = PRACTICE_TAB_PLAY
+    app.breathing.screen = ScreenStart
+    if mode == 4 {
+        app.navigation_placement = NAVIGATION_BOTTOM
+        app_reset_bottom_nav_routes(app)
+    }
+    SetCurrentApp(app)
+    while !WindowRuntime.WindowClosing() {
+        first_probe_frame := practice_probe_frame_count == 0
+        practice_probe_frame_count += 1
+        FrameTextReset(*app.ui.frame_text)
+        WindowRuntime.BeginWindowFrame()
+        WindowRuntime.ClearWindowFrame(Color.{30, 40, 50, 255})
+        bounds := Rectangle.{0.0, 0.0,
+            cast(float32)size.width, cast(float32)size.height}
+        if cast(s32)BeginFrame(app.ui.session, Layout.KeyHash("practice/probe"),
+            bounds) == 0 {
+            if mode == 4 {
+                if first_probe_frame {
+                    TraceLog(LOG_INFO, "APP PROBE: before navigation bar")
+                }
+                unused app_draw_bottom_nav(app)
+                if first_probe_frame {
+                    TraceLog(LOG_INFO, "APP PROBE: after navigation bar")
+                }
+            } else if mode == 1 {
+                practice_draw_card_banner(
+                    "assets/practices/meditation/banner-dark.png",
+                    Rectangle.{0.0, 0.0,
+                        cast(float32)size.width, 360.0})
+            } else if mode == 2 {
+                unused practice_screen_draw_home_hero(app)
+            } else {
+                practice_screen_draw_home(app)
+            }
+            if first_probe_frame {
+                TraceLog(LOG_INFO, "APP PROBE: before EndFrame")
+            }
+            unused EndFrame(app.ui.session)
+            if first_probe_frame {
+                TraceLog(LOG_INFO, "APP PROBE: after EndFrame")
+            }
+        }
+        WindowRuntime.EndWindowFrame()
+        if mode == 4 && first_probe_frame && CaptureRequested() {
+            unused CaptureConfigured()
+        }
+    }
+    SetCurrentApp(null)
+    WindowRuntime.CloseNativeWindow()
+    return 0
+}

@@ -49,8 +49,12 @@ for feature in lists habits practices diary lumi leaderboard; do
     if [ "$feature" = practices ]; then source=practice; entry=practice; fi
     locale_args=
     if [ "$feature" = diary ]; then locale_args="--asset-dir locales=build/package-assets/diary/locales"; fi
+    # Practices already belongs to the root manifest. Passing its source
+    # folder again would register the same modules as generated modules.
+    set -- --module-path "apps/$source"
+    if [ "$feature" = practices ]; then set --; fi
     # shellcheck disable=SC2086
-    bundle --root . --module-path "apps/$source" $locale_args \
+    bundle --root . "$@" $locale_args \
         --define KRYON_HOSTED_UI \
         --asset-dir "assets=build/package-assets/$feature/assets" \
         --entry "$entry:Main" -o "$output/$feature.zx" \

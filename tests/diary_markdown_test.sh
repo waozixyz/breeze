@@ -5,19 +5,19 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/diary-markdown-test
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
-modules="--module-path $root/src --module-path $root/build/packages/kryon/src/ui --module-path $root/build/packages/ziran/std"
+modules=""
 
 rm -rf "$work"
 mkdir -p "$work/c"
 # shellcheck disable=SC2086
-"$bin/zi2c" --no-main --root "$root/tests" $modules \
+"$bin/ziran" build --target=c --project --offline --no-main --root "$root" $modules \
     -o "$work/c" "$root/tests/diary_markdown_behavior.zi"
 cat > "$work/c/main.c" <<'C'
 #include <stdio.h>
-#include "diary_markdown_behavior.h"
+#include "tests/diary_markdown_behavior.h"
 int main(void)
 {
     int result = Answer();
@@ -29,12 +29,12 @@ int main(void)
 }
 C
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK -fsanitize=address,undefined \
-    -I"$include" -I"$work/c" "$work/c"/*.c -o "$work/test"
+    -I"$include" -I"$work/c" "$work/c"/*.c "$work/c/tests"/*.c -o "$work/test"
 # The package runs in the VM, which reclaims its temporary text; the native
 # build of this check keeps it, so only memory errors fail here.
 env -u DISPLAY -u WAYLAND_DISPLAY ASAN_OPTIONS=detect_leaks=0 "$work/test"
 # shellcheck disable=SC2086
-"$bin/ziran" bundle --root "$root/tests" $modules --define KRYON_HOSTED_UI \
+"$bin/ziran" bundle --project --offline --root "$root" $modules --define KRYON_HOSTED_UI \
     --entry diary_markdown_behavior:Answer -o "$work/check.zx" \
     "$root/tests/diary_markdown_behavior.zi"
 test "$("$bin/ziran" run "$work/check.zx")" = 42

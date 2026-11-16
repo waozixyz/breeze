@@ -52,6 +52,18 @@ class BundlingTests(unittest.TestCase):
         for name in MANDATORY:
             self.assertEqual((self.mandatory / (name + '.zx')).read_bytes(), self.old)
 
+    def test_download_only_app_never_becomes_an_embedded_baseline(self):
+        self.candidate('radio', LIMIT_BYTES - 1)
+        self.ledger['node_apps']['radio']['download_only'] = True
+        report = stage(self.ledger, {}, self.bundles, self.optional, self.mandatory)
+        info = report['optional']['radio']
+        self.assertTrue(info['complete'])
+        self.assertTrue(info['download_only'])
+        self.assertFalse(info['included'])
+        self.assertFalse((self.optional / 'radio.zx').exists())
+        self.assertNotIn('radio', (self.optional / 'catalog.txt').read_text().splitlines())
+        self.assertNotIn('radio', json.loads((self.optional / 'releases.json').read_text()))
+
     def test_external_art_counts_and_explicit_app_is_retained(self):
         path = self.candidate('collection', 100)
         art = fixture_bundle({'assets/collection/cover.png': b'x' * LIMIT_BYTES})

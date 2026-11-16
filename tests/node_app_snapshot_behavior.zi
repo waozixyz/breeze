@@ -1,3 +1,22 @@
+#import, file "../src/apps/module_host.zi";
+#import, file "android_text_input_host.zi";
+#import "kryon/session"
+#import "kryon/geometry"
+Ui :: #import "kryon/tree";
+#import "kryon/tree_input"
+#import "kryon/widget_host"
+TextField :: #import "kryon/text_field";
+PhotoLegacy :: #import "apps/node_types";
+#import "apps/tree"
+#import, file "../src/apps/package_manager.zi";
+#import, file "../src/apps/node_apps.zi";
+#import, file "../src/apps/node_app_tree.zi";
+#import, file "../src/apps/node_app_runner.zi";
+#import, file "../src/apps/media_compression_request.zi";
+#import, file "../src/app/assets.zi";
+
+#import "kryon/tree_draw"
+#import "kryon/input_protocol"
 // A canonical leaf can be installed through more than one verified root.
 // Removing one root must preserve the remaining copy and its owned metadata.
 #import "std/c_string"
@@ -451,6 +470,118 @@ Check :: () -> s32 {
     if compression != 0 { return compression }
     embedded := NodeAppEmbeddedCheck()
     if embedded != 0 { return embedded }
+    photos := PhotosClientCheck()
+    if photos != 0 { return photos }
     storage_close()
     return 0
 }
+
+photos_client_controller: string;
+PhotosClientAsset :: (path: string) -> AssetView {
+    if path == "apps/publishers.json" {
+        return AssetView.{.found = true, .data = snapshot_media_publishers}
+    }
+    if path == "apps.zx" {
+        return AssetView.{.found = true, .data = photos_client_controller}
+    }
+    return AssetView.{}
+}
+
+PhotosClientFrame :: (slot: s32, session: Session, tick: u64, width: s32) -> bool {
+    BeginFrame(session, tick, Rectangle.{0.0, 0.0, cast(float32)width, 844.0})
+    WidgetHostBegin(session, NodeTreeAssetAllowed, NodeTreeAssetPath)
+    NodeAppUiBegin(WidgetHostCall, null)
+    NodeTreeFrame(slot, PhotoLegacy.AppUiFrame.{.session = session, .width = width,
+        .height = 844, .scale = 1.0, .font = 16}, 0, 0, TextField.Input.{})
+    message := NodeAppRunMessage(slot, PhotoLegacy.AppMessage.{
+        .action = PhotoLegacy.APP_FRAME, .name = "photos", .locale = "en"})
+    NodeAppUiEnd()
+    WidgetHostEnd()
+    unused EndFrame(session)
+    return message.succeeded
+}
+
+PhotosClientWrench :: (slot: s32, width: s32) -> bool {
+    session := SessionOpen()
+    defer { unused SessionClose(session) }
+    if !PhotosClientFrame(slot, session, 1, width) { return false }
+    bounds: Rectangle
+    for index: cast(s32)0..Ui.TreeCount(session) - 1 {
+        node := Ui.TreeNodeAt(session, index)
+        if node.focus_id == 7004 { bounds = node.bounds }
+    }
+    if bounds.width <= 0.0 || bounds.height <= 0.0 || bounds.x < 0.0 ||
+    bounds.x + bounds.width > cast(float32)width || bounds.y < 0.0 ||
+    bounds.y + bounds.height > 844.0 { return false }
+    unused TreePointerUpdate(session, PointerFrame.{
+        .x = bounds.x + bounds.width / 2.0, .y = bounds.y + bounds.height / 2.0,
+        .down = true, .pressed = true})
+    unused TreePointerUpdate(session, PointerFrame.{
+        .x = bounds.x + bounds.width / 2.0, .y = bounds.y + bounds.height / 2.0,
+        .released = true})
+    if !PhotosClientFrame(slot, session, 2, width) ||
+    !MediaCompressionTakeRequest() || MediaCompressionTakeRequest() { return false }
+    if !PhotosClientFrame(slot, session, 3, width) || MediaCompressionTakeRequest() { return false }
+    return true
+}
+
+PhotosClientCheck :: () -> s32 {
+    origin := IconsEnvironmentPath("PHOTOS_CLIENT_ORIGIN")
+    if origin.count == 0 { return 0 }
+    slot := cast(s32)(NodeAppSlots - 4)
+    snapshot_media_publishers = PackageRead(IconsEnvironmentPath("NODE_EMBEDDED_PUBLISHERS"), 16384)
+    photos_client_controller = PackageRead(IconsEnvironmentPath("NODE_EMBEDDED_CONTROLLER"), PackageMaximumBytes)
+    AssetBindProvider(PhotosClientAsset)
+    PackageCancel()
+    PackageInitialize()
+    unused CopyCString(origin, package_origin[:])
+    NodeAppAssign(slot, "photos")
+    index := NodeAppIndex(slot)
+    defer {
+        SnapshotOtherAccount(false)
+        unused SnapshotWaitClose(slot)
+        PackageCancel()
+        NodeAppAssign(slot, "")
+        AssetUnbindProvider()
+        PackageFree(snapshot_media_publishers)
+        PackageFree(photos_client_controller)
+        snapshot_media_publishers = ""
+        photos_client_controller = ""
+        unused CopyCString("https://api.waozi.xyz", package_origin[:])
+    }
+    if NodeAppLocal("photos") || PackageAvailable(index) { return 200 }
+    if NodeAppInstall("photos") != slot { return 201 }
+    deadline := SnapshotNow() + 20.0
+    while PackageStatus(index) != 3 && SnapshotNow() < deadline {
+        PackagePump(0, 0, false)
+        SnapshotYield()
+    }
+    if PackageStatus(index) != 3 || PackageAvailable(index) || NodeAppRunning(slot) { return 202 }
+    if NodeAppInstall("photos") != slot { return 203 }
+    deadline = SnapshotNow() + 20.0
+    while PackageStatus(index) != 2 && SnapshotNow() < deadline {
+        PackagePump(0, 0, false)
+        SnapshotYield()
+    }
+    if PackageStatus(index) != 2 || !PackageAvailable(index) { return 204 }
+    bytes := PackageInstalledBytes(index)
+    valid := PackageVerifyBytes(bytes, package_cached_releases[index]) && TextUntilNul(package_cached_releases[index].hash[:]) == IconsEnvironmentPath("PHOTOS_CLIENT_SHA256")
+    PackageFree(bytes)
+    if !valid || TextUntilNul(package_cached_releases[index].key_id[:]) != "photos-fixture" { return 205 }
+    if !NodeAppOpen(slot) || !SnapshotWaitOpen(slot) || node_runners[slot].nested == null { return 206 }
+    if !PhotosClientWrench(slot, 390) { return 207 }
+    SnapshotOtherAccount(true)
+    session := SessionOpen()
+    rejected := !PhotosClientFrame(slot, session, 4, 390)
+    unused SessionClose(session)
+    SnapshotOtherAccount(false)
+    if !rejected || MediaCompressionTakeRequest() { return 208 }
+    if !SnapshotWaitClose(slot) || !NodeAppOpen(slot) || !SnapshotWaitOpen(slot) { return 209 }
+    if !PhotosClientWrench(slot, 1280) { return 210 }
+    return 0
+}
+
+#program_export
+ImageWidth :: (path: string) -> s32 { unused path; return 1 }
+#program_export
+ImageHeight :: (path: string) -> s32 { unused path; return 1 }

@@ -94,12 +94,34 @@ frames through llvmpipe while nothing changes.
 | raylib markers (rlgl shader names, miniaudio, dr_mp3) | 4 of 4 |
 | Linked libraries (10) | libSDL2-2.0.so.0, libGLESv2.so.2, libssl.so.3, libcrypto.so.3, libz.so.1, libm.so.6, libatomic.so.1, libgio-2.0.so.0, libglib-2.0.so.0, libc.so.6 |
 
-Not measured before: build times and generated C, which need a checkout
-that builds; per-frame intervals and CPU, which need the per-frame samples.
-The 2026-11-16 09:27 working-tree build has those samples but exits at
-startup (its embedded app bundle is in a ZX format the runtime rejects), so
-it cannot serve as the baseline. Measure both with the last raylib state of
-the checkout once it builds, before the port's commits land.
+Current checkout, raylib host, measured 2026-11-16 12:55–13:08 under heavy
+load from other lanes (load average 30–34 on 32 CPUs): built 12:50 by
+`make native KRYON_TEST_DRIVER=1` from the working tree on 0dc9ba90 (Ziran
+f9f92b46, Kryon b45cc524), 101.9 MB, build ID
+784ea9795d70ff437c8c7de9f593e433dbf597f6. A copy is kept outside the
+checkout so the after benchmark can run it again alternately with the new
+host under the same load.
+
+| Measurement | Median | Range | Spread |
+|---|---|---|---|
+| Time to first frame (ms) | 751.3 | 650.9–1928 | ±85% |
+| Frame rate while interacting, 120-frame reports (fps) | 55.9 | 38–60.4 | ±20.1% |
+| App frame time, 120-frame report median (ms) | 2.54 | 1.97–5.01 | ±59.8% |
+| Longest app frame while interacting (ms) | 314.6 | 209.5–1095.1 | ±140.7% |
+| Frame interval p50 (ms) | 16.72 | 16.68–20.01 | ±10% |
+| Frame interval p95 (ms) | 33.39 | 33.35–52.38 | ±28.5% |
+| CPU per frame p50 (ms) | 26.9 | 26.49–32.35 | ±10.9% |
+| CPU per frame p95 (ms) | 34.79 | 33.94–42.66 | ±12.5% |
+| Frames during interaction | 1297 | 1110–1334 | ±8.6% |
+| Idle CPU over 30 s (%) | 62.09 | 59.55–65.02 | ±4.4% |
+| Steady RSS, idle median (MiB) | 508.9 | 506.5–571.4 | ±6.4% |
+| Peak RSS (MiB) | 509.2 | 506.7–570.1 | ±6.2% |
+
+CPU per frame above the frame interval means more than one core works per
+frame: llvmpipe rasterizes on its own threads.
+
+Not measured yet: clean and incremental build times and generated C for the
+raylib state; take them from the last raylib commit before the port lands.
 
 ## Port map: raylib call sites and their replacements
 

@@ -28,6 +28,7 @@ tray_memcmp :: (left: *void, right: *void, count: usize) -> s32 #foreign c "memc
 #import, file "tray_status.zi";
 #import "tray"
 #import "tray_props"
+TrayImageExport :: #import "kryon/ImageExport";
 #import, file "../app/locale.zi";
 #import "c_string"
 #import, file "../app/assets.zi";
@@ -294,31 +295,27 @@ desktop_tray_init :: () -> s32 {
     TrayReady = ifx (TrayOpen(spec)) then (1) else (0)
     return TrayReady
 }
-// The tray shows Inbe's own logo: the app icon in its assets, saved as
-// tray-icon.png in the data folder. Without it the tray looks for an icon
+// The tray shows Inbe's own logo: the WebP app icon in its assets, decoded
+// and saved as a real PNG in the data folder. Without it the tray looks for an icon
 // named "inbe" in the desktop's theme, which an older install may have
 // left with an old logo.
 TrayIconFile: [1024]u8;
-SaveTrayIcon :: (path: *u8, data: *u8, size: s32) -> bool #foreign raylib "SaveFileData";
 
 TrayIconFromAssets :: () -> string {
-    asset_path: [32]u8
-    if !CopyCString("assets/app/icon.webp", asset_path[:]) {
-        return ""
-    }
-    asset := asset_lookup(*asset_path[0])
-    if !asset.found || asset.data == null || asset.size == 0 ||
-    asset.size > cast(usize)16777216 {
+    asset := AssetRead("assets/app/icon.webp")
+    if !asset.found || asset.data.count == 0 ||
+    asset.data.count > 16777216 {
         return ""
     }
     if !AppCopyText(data_root(), TrayIconFile[:]) ||
     !AppAppendText("/tray-icon.png", TrayIconFile[:]) {
         return ""
     }
-    if !SaveTrayIcon(*TrayIconFile[0], asset.data, cast(s32)asset.size) {
+    path := AppTextFromCString(*TrayIconFile[0], cast(s32)TrayIconFile.count)
+    if !TrayImageExport.EncodedImageExport(asset.data, ".webp", path) {
         return ""
     }
-    return AppTextFromCString(*TrayIconFile[0], cast(s32)TrayIconFile.count)
+    return path
 }
 
 #program_export

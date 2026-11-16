@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 vendor=$root/vendor-builds/linux/x86_64
 avif_a=${AVIF_A:-$vendor/kryon-avif/avif/libavif.a}
@@ -16,13 +16,13 @@ mkdir -p "$work/generated" "$work/data"
 python3 -B "$root/tests/make_media_compression_fixture.py" "$work/input.png"
 unset DISPLAY WAYLAND_DISPLAY WAYLAND_SOCKET XAUTHORITY DBUS_SESSION_BUS_ADDRESS DBUS_SYSTEM_BUS_ADDRESS SESSION_MANAGER XDG_RUNTIME_DIR
 export ZIRAN_DESKTOP_RECOVERY=0 HARMONY_DESKTOP_RECOVERY=0 YUE_DESKTOP_RECOVERY=0
-"$ziran" build --target=c --define PLATFORM_DESKTOP --define MEDIA_COMPRESSION_REAL_CODEC --root "$root/tests" \
+"$ziran" build --target=c --define PLATFORM_DESKTOP --define AVIF_RAYLIB --define MEDIA_COMPRESSION_REAL_CODEC --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/kryon/src/backend" --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" \
     --entry media_compression_behavior:Check -o "$work/generated" \
-    "$root/tests/media_compression_behavior.zi" "$root/tests/media_compression_test_host.zi" "$root/tests/sync_test_host.zi"
+    "$root/tests/media_compression_behavior.zi" "$root/tests/media_compression_test_host.zi" "$root/src/app/app_clock_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "media_compression_behavior.h"
 #include <stdio.h>

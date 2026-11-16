@@ -4,7 +4,7 @@ set -eu
 # The account's media library against a real SQLite database in a
 # temporary directory, with the test host's stand-in image decoder.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=$root/build/media-store-zi-test
 include=$root/build/packages/ziran/include
@@ -42,8 +42,8 @@ C
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
     -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
-APP_DATA_ROOT=/tmp/inbe-media-store-zi-test/data
+APP_DATA_ROOT=$work/data
 export APP_DATA_ROOT
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
-rm -rf /tmp/inbe-media-store-zi-test
+rm -rf "$work/data"
 echo "Media library: one copy per photo, capture days, previews, Trash, queries and asset access passed"

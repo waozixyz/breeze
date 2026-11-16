@@ -105,19 +105,6 @@ PracticeDownloadAction :: (practice: s32) -> s32 {
     return PRACTICE_OFFER_INSTALL
 }
 
-// The line under a practice's description: how its download is going.
-PracticeDownloadLine :: (app: *InnerBreeze, practice: s32) -> string {
-    unused app
-    status := PracticeContentStatus(practice)
-    if status == 1 {
-        return LocaleText("practice_download_busy")
-    }
-    if status == 3 {
-        return LocaleText("practice_download_failed")
-    }
-    return ""
-}
-
 // Why a paid practice cannot be unlocked yet, or nothing.
 PracticeDownloadNote :: (practice: s32) -> string {
     if PracticePreviewReady(practice) {
@@ -143,13 +130,18 @@ PracticeDownloadActionLabel :: (app: *InnerBreeze, practice: s32, action: s32) -
         return PracticeDownloadPriceText(app, "practice_unlock_button")
     }
     if action == PRACTICE_OFFER_CANCEL {
-        return LocaleText("cancel_button")
+        label: [256]u8
+        unused AppCopyText(LocaleText("practice_download_busy"), label[:])
+        unused AppAppendText(" · ", label[:])
+        unused AppAppendText(LocaleText("cancel_button"), label[:])
+        return FrameTextHold(*app.ui.frame_text, TextUntilNul(label[:]))
     }
     // The size rides on the button, so the row's text stays short.
     size: [32]u8
     PracticeDownloadSize(app, practice, size[:])
     label: [128]u8
-    unused AppCopyText(LocaleText("practice_install"), label[:])
+    caption := ifx PracticeContentStatus(practice) == 3 then LocaleText("retry_button") else LocaleText("practice_install")
+    unused AppCopyText(caption, label[:])
     unused AppAppendText(" · ", label[:])
     unused AppAppendText(TextUntilNul(size[:]), label[:])
     return FrameTextHold(*app.ui.frame_text, TextUntilNul(label[:]))
@@ -189,7 +181,7 @@ PracticeOfferFill :: (app: *InnerBreeze, practice: s32, frame: *PracticeHomeFram
     offer := PracticeDownloadAction(practice)
     frame.ready = PracticeDownloadReady(practice)
     frame.offer = offer
-    frame.status = PracticeDownloadLine(app, practice)
+    frame.status = ""
     frame.note = PracticeDownloadNote(practice)
     if offer != PRACTICE_OFFER_NONE {
         disabled := app.modal.active != 0 || practice_active(app) != null

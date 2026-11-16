@@ -6,11 +6,10 @@
 // app owns the chat layout, autocomplete and interpretation of requests.
 #import "bundle_host"
 #import "byte_text_linux"
-#import "text_props"
+Layout :: #import "kryon/layout";
+Text :: #import "kryon/text";
 #import "geometry"
 #import "drawing_props"
-#import "kryon/layout"
-#import "layout"
 #import "vec"
 #import, file "../apps/lumi_types.zi";
 #import, file "../apps/inbe_types.zi";
@@ -54,8 +53,6 @@
 #import, file "../storage/delegate_store.zi";
 #import, file "../platform/raylib_text_input.zi";
 #import, file "../habits/habit_actions.zi";
-#import "progress_props"
-#import "kryon/Widgets"
 #import "text_align"
 #import, file "../habits/habit_types.zi";
 #import, file "../habits/habit_model.zi";
@@ -66,10 +63,11 @@
 #import, file "elist_types.zi";
 #import, file "diary_screen.zi";
 #import, file "../../apps/lumi/message_text.zi";
+LoadingScreen :: #import "kryon/loading_screen";
 
 using HostValueKind;
 using AppNavRoute;
-using TextWrap;
+using Text.Wrap;
 using TextAlign;
 using ExerciseType;
 lumi_ui: LumiUiFrame;
@@ -140,7 +138,7 @@ lumi_agreement_text: string;
 lumi_agreement_key: u64;
 lumi_agreement_height: s32;
 lumi_agreement_bytes: [8192]u8;
-lumi_agreement_strong: [32]TextRange;
+lumi_agreement_strong: [32]Text.Range;
 
 c :: #system_library "c";
 GetTime :: () -> float64 #foreign c;
@@ -215,7 +213,7 @@ LumiAgreementPrepare :: (width: s32) {
         lumi_ui.agreement_height = 0
         return
     }
-    key := (KeyHash(lumi_ui.provider_host) ^ KeyHash(LocaleActiveCode()) ^ AssetGeneration()) *
+    key := (Layout.KeyHash(lumi_ui.provider_host) ^ Layout.KeyHash(LocaleActiveCode()) ^ AssetGeneration()) *
     cast(u64)1099511628211 + cast(u64)width * cast(u64)31 + cast(u64)lumi_ui.font
     if key != lumi_agreement_key || lumi_agreement_text.count == 0 {
         lumi_agreement_key = key
@@ -224,10 +222,10 @@ LumiAgreementPrepare :: (width: s32) {
         lumi_agreement_text = LumiAgreementCompose(lumi_ui.provider_host)
         counts := LumiFormatInto(lumi_agreement_text, true, lumi_agreement_bytes[:],
             lumi_agreement_strong[:])
-        prepared := PrepareText(TextProps.{.text = TextFromBytes(lumi_agreement_bytes[:counts.count]),
-                .font = lumi_ui.font, .wrap = cast(TextWrap)TextWrapAuto,
+        prepared := Text.PrepareText(Text.Props.{.text = TextFromBytes(lumi_agreement_bytes[:counts.count]),
+                .size = lumi_ui.font, .wrap = cast(Text.Wrap)TextWrapAuto,
                 .strong = lumi_agreement_strong[:counts.strong_count],
-                .bounds = Rectangle.{0.0, 0.0, cast(float32)width, 0.0}}, DefaultTextFace())
+                .bounds = Rectangle.{0.0, 0.0, cast(float32)width, 0.0}}, Text.DefaultTextFace())
         lumi_agreement_height = cast(s32)prepared.bounds.height + AppScale(16)
     }
     lumi_ui.agreement_text = lumi_agreement_text
@@ -919,9 +917,9 @@ LumiRowKey :: (index: s32, access: LumiRowAccess) -> u64 {
         marker += cast(u64)2
     }
     if row.developer {
-        marker ^= KeyHash(row.quote) * cast(u64)31 + cast(u64)1
+        marker ^= Layout.KeyHash(row.quote) * cast(u64)31 + cast(u64)1
     }
-    return (KeyHash(row.text) ^ marker) * cast(u64)1099511628211
+    return (Layout.KeyHash(row.text) ^ marker) * cast(u64)1099511628211
 }
 
 LumiMeasuredRow :: (index: s32, access: LumiRowAccess) -> LumiChatRow {
@@ -930,12 +928,12 @@ LumiMeasuredRow :: (index: s32, access: LumiRowAccess) -> LumiChatRow {
         return row
     }
     if lumi_row_heights[index] == 0 {
-        column_width := CenteredColumnFor(lumi_ui.width, AppScale(720), AppScale(16)).width
+        column_width := Layout.CenteredColumnFor(lumi_ui.width, AppScale(720), AppScale(16)).width
         formatted := LumiFormatMessage(row.text, !row.user)
-        prepared := PrepareText(TextProps.{.text = TextFromBytes(formatted.bytes[:formatted.count]),
-                .font = lumi_ui.font, .bounds = Rectangle.{0.0, 0.0,
+        prepared := Text.PrepareText(Text.Props.{.text = TextFromBytes(formatted.bytes[:formatted.count]),
+                .size = lumi_ui.font, .bounds = Rectangle.{0.0, 0.0,
                     cast(float32)(column_width - cast(s32)((ifx row.user then 88.0 else 108.0) * lumi_ui.scale)), 0.0}},
-            DefaultTextFace())
+            Text.DefaultTextFace())
         height := cast(s32)prepared.bounds.height + cast(s32)((ifx row.user then 38.0 else 58.0) * lumi_ui.scale)
         if row.user && row.kind == LUMI_CHAT_TEXT && row.payload == "telegram" {
             height += AppScale(18)
@@ -1025,7 +1023,7 @@ LumiRowsMeasure :: () -> bool {
 LumiDrawLoading :: (app: *InnerBreeze) {
     area := Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
         cast(float32)(app.ui.view_height - app_content_bottom_reserved(app))}
-    LoadingScreen(app.ui.session, LoadingScreenProps.{.key = KeyHash("inbe/lumi/loading"),
+    LoadingScreen.Draw(app.ui.session, LoadingScreen.Props.{.key = Layout.KeyHash("inbe/lumi/loading"),
             .bounds = area, .title = app_nav_route_label(APP_NAV_ROUTE_LUMI),
             .detail = LocaleText("lumi_loading"),
             .icon_shape = AssetRead("assets/lumi/sidebar.shape").data, .now = GetTime(),
@@ -1226,7 +1224,7 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     } else if lumi_ui.follow_end && history_measured {
         lumi_ui.scroll = 1000000
     }
-    column_width := CenteredColumnFor(lumi_ui.width, AppScale(720), AppScale(16)).width
+    column_width := Layout.CenteredColumnFor(lumi_ui.width, AppScale(720), AppScale(16)).width
     draft_width := column_width - AppScale(112)
     if lumi_ui.value != AppTextFromCString(*lumi_draft[0], LUMI_INPUT_MAX) ||
     draft_width != lumi_draft_width || lumi_ui.font != lumi_draft_font || assets != lumi_draft_assets ||
@@ -1236,10 +1234,10 @@ lumi_screen_draw :: (app: *InnerBreeze) {
         lumi_draft_font = lumi_ui.font
         lumi_draft_assets = assets
         unused AppCopyText(language, lumi_draft_language[:])
-        draft := PrepareText(TextProps.{.text = lumi_ui.value, .font = lumi_ui.font,
-                .wrap = cast(TextWrap)TextWrapAuto,
+        draft := Text.PrepareText(Text.Props.{.text = lumi_ui.value, .size = lumi_ui.font,
+                .wrap = cast(Text.Wrap)TextWrapAuto,
                 .bounds = Rectangle.{0.0, 0.0, cast(float32)draft_width, 0.0}},
-            DefaultTextFace())
+            Text.DefaultTextFace())
         lumi_draft_height = cast(s32)draft.bounds.height
     }
     lumi_ui.draft_height = lumi_draft_height

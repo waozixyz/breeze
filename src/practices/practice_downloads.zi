@@ -5,6 +5,7 @@
 #import "file_linux"
 #import "json_scan"
 #import "byte_text_linux"
+#import "std/c_string"
 #import "daochi_client/crypto"
 #import "vec"
 #import, file "../app/assets.zi";
@@ -12,6 +13,7 @@
 #import, file "../app/text_buffers.zi";
 #import, file "../apps/package_files.zi";
 #import, file "../apps/package_release.zi";
+#import, file "../apps/download_recovery.zi";
 #import, file "../apps/asset_paths.zi";
 #import, file "../apps/module_types.zi";
 #import, file "../apps/catalog.zi";
@@ -57,6 +59,9 @@ PracticePack :: struct {
     product: [48]u8
     // Automatic retries of this download since it was asked for.
     attempts: s32
+    retry_at: s64
+    failure_http: s32
+    failure_error: [256]u8
     // A narration language the person removed or stopped, so it does not
     // download by itself again.
     declined: bool
@@ -160,7 +165,7 @@ PracticeWorkRelease :: (memory: *void) #foreign practice_work_c "free";
 
 PracticeContentWorkRun :: (argument: *void) {
     work := cast(*PracticeContentWork)argument
-    bytes := PackageRead(work.path, PackageMaximumBytes)
+    bytes := PackageRead(work.path, work.pack.size)
     work.bundle = PracticePackValidate(work.pack, bytes)
     PackageFree(bytes)
     if work.bundle == null && work.fallback.count > 0 {
@@ -577,9 +582,17 @@ PracticeDownloadLog :: (index: s32, warning: bool, event: string, reason: string
 
 // A failed grant or transfer is asked for again, with a fresh grant for a
 // paid pack, before the manager shows the failure.
-PracticeDownloadFailed :: (index: s32, reason: string) {
-    if practice_packs[index].attempts < PracticeDownloadRetries {
-        practice_packs[index].attempts += 1
+PracticeDownloadFailed :: (index: s32, reason: string, http_status: s32 = 0) {
+    pack := *practice_packs[index]
+    pack.failure_http = http_status
+    unused CopyCString(reason, pack.failure_error[:])
+    recovery := DownloadRecovery.{.attempts = pack.attempts}
+    retryable := DownloadRetryable(http_status) ||
+        pack.product[0] != cast(u8)0 && (http_status == 401 || http_status == 403)
+    if pack.attempts < PracticeDownloadRetries && retryable &&
+        DownloadRecoverySchedule(*recovery, DownloadRecoveryNow()) {
+        pack.attempts = recovery.attempts
+        pack.retry_at = recovery.retry_at
         practice_packs[index].requested = true
         practice_packs[index].status = 1
         if practice_packs[index].product[0] != cast(u8)0 && practice_grant_forget != null {
@@ -589,6 +602,7 @@ PracticeDownloadFailed :: (index: s32, reason: string) {
         return
     }
     practice_packs[index].status = 3
+    practice_packs[index].requested = false
     PracticeDownloadLog(index, true, "failed", reason)
 }
 
@@ -1248,7 +1262,7 @@ PracticeContentHide :: (practice: s32) {
         // Older versions copied a practice that ships with the app when it
         // was added; the app's own copy is enough.
         path := PracticePackPath(base, false)
-        stored := PackageRead(path, PackageMaximumBytes)
+        stored := PackageRead(path, shipped.count)
         if stored.count > 0 && stored == shipped {
             unused RemoveFile(path)
         }
@@ -1581,6 +1595,9 @@ PracticeTransfersPump :: (narration_only: bool) {
             if !practice_packs[index].requested {
                 continue
             }
+            if practice_packs[index].attempts > 0 &&
+                !DownloadRecoveryReady(DownloadRecovery.{.retry_at = practice_packs[index].retry_at},
+                    DownloadRecoveryNow()) { continue }
             if narration_only && practice_packs[index].language[0] == cast(u8)0 {
                 continue
             }
@@ -1627,8 +1644,9 @@ PracticeTransfersPump :: (narration_only: bool) {
             if started {
                 PracticeDownloadLog(index, false, "downloading", "")
             } else {
+                PracticeDownloadFailed(index, TextFromCString(*practice_transfer.error[0]),
+                    practice_transfer.http_status)
                 PracticeDownloadsCancel()
-                PracticeDownloadFailed(index, "no transfer")
             }
             return
         }
@@ -1687,8 +1705,9 @@ PracticeTransfersPump :: (narration_only: bool) {
         CloseBundle(bundle)
         PackageFree(temporary)
         PackageFree(destination)
+        PracticeDownloadFailed(index, ifx state == FileDownloadStatus.Ready then
+            "an unverified file" else TextFromCString(*practice_transfer.error[0]), practice_transfer.http_status)
         PracticeDownloadsCancel()
-        PracticeDownloadFailed(index, ifx state == FileDownloadStatus.Ready then "an unverified file" else "a transfer error")
         return
     }
     PackageFree(temporary)

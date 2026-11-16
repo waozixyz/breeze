@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+- Changing practices keeps the page steady and fades from the previous practice.
+
+- Choose an astral exercise before Start with its translated guide and narration; adjust session volume and background music together.
+- Sun Salutation shows each pose's form cue, the leg that steps back and names the next pose in one quiet line.
+
 ## [1.6.11] - 2026-11-05
 
 - Maintenance release for Inner Breeze 2.1.63.
@@ -7,11 +14,6 @@
 ## [1.6.10] - 2026-11-02
 
 - Maintenance release for Inner Breeze 2.1.62.
-
-## [Unreleased]
-
-- Choose an astral exercise before Start with its translated guide and narration; adjust session volume and background music together.
-- Sun Salutation shows each pose's form cue, the leg that steps back and names the next pose in one quiet line.
 
 ## [1.6.9] - 2026-10-29
 

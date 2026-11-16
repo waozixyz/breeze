@@ -1,0 +1,150 @@
+// The app's main window on the host the build targets: raylib's window, or
+// on Kryon's desktop host the SDL window desktop_runtime opens and draws
+// with Cairo. A frame there polls the window's events, draws, presents and
+// then waits as the host's frame clock paces it: 60 frames a second while
+// pixels change and 15 once they stay the same.
+#import "geometry"
+
+#if #defined(DESKTOP_HOST) {
+    Desktop :: #import "desktop_runtime";
+    WindowState :: #import "desktop_window_state";
+    Raster :: #import "cairo_raster";
+    host_window_closing: bool;
+} else {
+    WindowRuntime :: #import "kryon/window_runtime";
+    WindowClose :: #import "window_close";
+    #if !#defined(PLATFORM_WEB) {
+        RaylibRuntime :: #import "kryon/raylib_runtime";
+    }
+}
+
+#if #defined(DESKTOP_HOST) {
+    // Opens the main window with a drawing area of WIDTH by HEIGHT pixels.
+    // Closing it asks the app first (TakeHostCloseRequest).
+    HostOpenWindow :: (width: s32, height: s32, title: string) -> bool {
+        if !Desktop.OpenDesktopTitled(width, height, title) {
+            return false
+        }
+        unused Desktop.WindowInterceptCloseHost(true)
+        return true
+    }
+}
+
+// The window's drawing area in pixels.
+HostWindowWidth :: () -> s32 {
+    #if #defined(DESKTOP_HOST) {
+        return cast(s32)Desktop.DesktopViewport().width
+    } else {
+        return WindowRuntime.WindowWidth()
+    }
+}
+
+HostWindowHeight :: () -> s32 {
+    #if #defined(DESKTOP_HOST) {
+        return cast(s32)Desktop.DesktopViewport().height
+    } else {
+        return WindowRuntime.WindowHeight()
+    }
+}
+
+// Runs one frame of PROCEDURE. False when the frame could not run. On the
+// desktop host a window the window system ended runs no frame, and
+// HostWindowClosing then reports it.
+#if #defined(DESKTOP_HOST) {
+    HostFrameProcedure :: #type (argument: *void) #c_call;
+
+    HostRunFrame :: (procedure: HostFrameProcedure, argument: *void) -> bool {
+        if !Desktop.PollDesktop() {
+            host_window_closing = true
+            return true
+        }
+        Desktop.BeginDesktopFrame()
+        procedure(argument)
+        presented := Desktop.EndDesktopFrame()
+        Desktop.PauseDesktop()
+        return presented
+    }
+} else {
+    #if #defined(PLATFORM_WEB) {
+        HostFrameProcedure :: #type (argument: *void) #c_call;
+
+        HostRunFrame :: (procedure: HostFrameProcedure, argument: *void) -> bool {
+            procedure(argument)
+            return true
+        }
+    } else {
+        HostRunFrame :: (procedure: RaylibRuntime.RaylibFrameProcedure, argument: *void) -> bool {
+            return RaylibRuntime.RunRaylibAppFrame(procedure, argument)
+        }
+    }
+}
+
+// Whether the desktop host still holds the last frame's pixels, so a frame
+// whose paint matches them need not draw again. Raylib hosts keep their own
+// retained targets.
+HostFramePixelsReusable :: () -> bool {
+    #if #defined(DESKTOP_HOST) {
+        return Desktop.DesktopFrameReusable()
+    } else {
+        return false
+    }
+}
+
+#if #defined(DESKTOP_HOST) {
+    // Writes the last finished frame to PATH as a PNG.
+    HostSaveFramePng :: (path: string) -> bool {
+        return Raster.RasterWritePNG(path)
+    }
+}
+
+// Whether this frame's paint matched the last one, so the window shows the
+// same pixels and the desktop host can slow its frame clock.
+HostFramePaintUnchanged :: (unchanged: bool) {
+    #if #defined(DESKTOP_HOST) {
+        Desktop.DesktopFrameUnchanged(unchanged)
+    } else {
+        unused unchanged
+    }
+}
+
+// The person closed the window and the app has not answered yet.
+HostTakeCloseRequest :: () -> bool {
+    #if #defined(DESKTOP_HOST) {
+        return Desktop.WindowTakeCloseRequestHost()
+    } else {
+        return WindowClose.WindowCloseTake()
+    }
+}
+
+// The window system ended the window or the session.
+HostWindowClosing :: () -> bool {
+    #if #defined(DESKTOP_HOST) {
+        return host_window_closing
+    } else {
+        return WindowRuntime.WindowClosing()
+    }
+}
+
+HostWindowHidden :: () -> bool {
+    #if #defined(DESKTOP_HOST) {
+        return !Desktop.WindowVisibleHost()
+    } else {
+        return WindowRuntime.WindowHidden()
+    }
+}
+
+HostWindowMinimized :: () -> bool {
+    #if #defined(DESKTOP_HOST) {
+        return WindowState.DesktopMinimized()
+    } else {
+        return WindowRuntime.WindowMinimized()
+    }
+}
+
+HostCloseWindow :: () {
+    #if #defined(DESKTOP_HOST) {
+        Desktop.CloseDesktop()
+    } else {
+        WindowRuntime.CloseNativeWindow()
+    }
+}

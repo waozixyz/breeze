@@ -4,7 +4,7 @@
 
 - Fotos en Aplicaciones; Lumi: vista única de comentarios completos de listas; Listas: tareas largas, acabar deslizando.
 - Las pestañas de Práctica ya no desplazan la pantalla. Elige entre seis ejercicios astrales al empezar. Diez idiomas.
-- Los paquetes de voz de las prácticas pesan un tercio menos.
+- Los paquetes de voz de las prácticas pesan un tercio menos. Reclama monedas cada día en la tienda de Hábitos.
 
 ## [2.1.63] - 2026-11-05
 

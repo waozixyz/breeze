@@ -11,6 +11,7 @@ test: liboqs-crypto-test
 test: sync-account-zi-test
 test: storage-import-zi-test
 test: storage-habits-zi-test
+test: storage-crash-zi-test
 test: achievements-test achievement-catalog-test
 test: storage-settings-threads-zi-test
 test: storage-sync-zi-test

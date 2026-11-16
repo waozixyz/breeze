@@ -58,7 +58,7 @@ def main():
         if options.module_map:
             command = [str(toolchain / 'build/bin/zi2c')]
         else:
-            command = [str(ROOT / 'build/ziran-toolchain/bin/ziran'), 'build', '--target=c']
+            command = [str(toolchain / 'build/bin/ziran'), 'build', '--target=c']
         subprocess.run([*command, '--no-main', '--root', str(ROOT / 'tests'),
                         *[argument for path in paths for argument in ('--module-path', str(path))],
                         '-o', str(target), str(ROOT / 'tests' / fixture)], env=environment, check=True)
@@ -320,10 +320,8 @@ def main():
         wrappers = []
         for name in ('Start', 'Poll', 'Release'):
             legacy = 'file_download_FileDownload' + name
-            symbol = legacy
-            if options.module_map:
-                header = next(generated.glob('*file_download.h')).read_text()
-                symbol = re.search(r'(\w*file_download_FileDownload' + name + r')\(', header)[1]
+            header = next(generated.glob('*file_download.h')).read_text()
+            symbol = re.search(r'(\w*file_download_FileDownload' + name + r')\(', header)[1]
             wrappers.extend(('-D__wrap_' + legacy + '=__wrap_' + symbol, '-Wl,--wrap=' + symbol))
         # A header that gives other modules inline copies of a wrapped
         # procedure would bypass the wrap, so it only declares those.

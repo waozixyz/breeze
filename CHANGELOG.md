@@ -2,10 +2,12 @@
 
 ## [Unreleased]
 
-- The Library asks whether the Tao Te Ching should open as text or a picture book with transparent chapter art.
+- The Library opens each Tao Te Ching chapter with its own picture page; hide images from the reader toolbar.
 - Photos installs from Apps; Lumi previews full list feedback once; Lists adds custom long tasks and steadier swipe actions.
-- Choose from six astral exercises before Start; smaller voice packs, steady tabs and ten interface languages.
+- Radio becomes a separate download with one tactile cabinet for power, volume, tuning and station presets.
+- Switch practices smoothly; choose from six astral exercises with smaller voice packs and ten interface languages.
 - One modern appearance with custom CSS; a simpler About list shows Core and app versions.
+- Claim coins in the Habits shop every day, with a bigger seventh day in a row.
 
 ## [2.1.63] - 2026-11-05
 

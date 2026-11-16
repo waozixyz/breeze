@@ -46,7 +46,8 @@ Archive checks require both shared packages.
 
 The former 5.50 MB per-native-library budget was an Inbe regression guard,
 not a F-Droid or Android requirement. It has been removed at the owner's
-request. Shared-package checks and overall delivered-size budgets still run.
+request. Overall artifact and DEX file-size ceilings have also been removed.
+Shared-package structure, native libraries and R8 optimization remain checked.
 Android release builds size-optimize static dependencies, discard unused
 runtime sections, optimize across app modules, and safely merge identical code
 and strings. All four architectures, artwork and scanner checks remain in place.

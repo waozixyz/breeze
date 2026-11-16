@@ -53,7 +53,7 @@ TOOLING = ("scripts/phone-check.py", "scripts/check-phone-check.py", "scripts/re
            "scripts/audio-envelope-match.py", "scripts/make_appcast.py",
            "scripts/list-expected-release-assets.sh", "scripts/install-git-hooks.sh",
            "scripts/pre-push-checks.py",
-           "packaging/size-budgets.json", "mk/tests-*.mk")
+           "mk/tests-*.mk")
 RECEIPTS = "releases/phone-checks"
 # The breathing circle animates for the whole measured window, so the app
 # must keep the display's refresh rate with only occasional late frames.
@@ -404,9 +404,13 @@ def main():
     if identity["version_name"] != version:
         raise SystemExit(f"the APK is {identity['version_name']}, but the source is {version}")
     passed = smooth(timing) and resumed_in_place(timing)
+    apk_hash = hashlib.sha256()
+    with apk.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            apk_hash.update(block)
     receipt = dict(schema=2, version=version, app_tree=checked_app, source_commit=commit,
                    uncommitted=sorted(changed),
-                   apk=dict(sha256=hashlib.sha256(apk.read_bytes()).hexdigest(), **identity),
+                   apk=dict(sha256=apk_hash.hexdigest(), **identity),
                    device=device, practice=dict(name="Wim Hof", **timing),
                    limits=dict(minimum_refresh_share=MINIMUM_REFRESH_SHARE, maximum_late_percent=MAXIMUM_LATE_PERCENT,
                                maximum_frame_ms=MAXIMUM_FRAME_MS,
@@ -433,4 +437,12 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except subprocess.CalledProcessError as error:
+        for output in (error.stdout, error.stderr):
+            if output:
+                if isinstance(output, bytes):
+                    output = output.decode("utf-8", errors="replace")
+                print(output[-4096:].rstrip(), file=sys.stderr)
+        sys.exit(error.returncode or 1)

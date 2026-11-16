@@ -34,6 +34,10 @@
   Raise `host_api` when the host interface changes and `oldest_host_api` only
   when it can no longer run older packages. `make package-compat-test` runs
   the node's packages in this build and new packages in the last release.
+  `zx_revision` there is the ZX executable revision the host runs; update
+  checks send it and the node offers only packages whose `.zx` header has
+  it, and the publisher refuses a payload of another revision. Change it
+  with the Ziran pin, together with `oldest_host_api` and `host_api`.
 - Goal (owner, 2026-10-11): every app updates through its own package
   without a new APK. Work toward it in small steps alongside requested work;
   discuss larger moves with the owner first. Put app screens, rules and text
@@ -67,11 +71,14 @@
 
 ## Public UI and sync boundaries
 
-- Use current Kryon calls `Text(session, TextProps)`,
-  `Image(session, ImageProps)`, and `Button(session, ButtonProps)` directly.
-  Semantic images use the same `Image` surface. No positional Text, legacy
-  drawing calls, alternate widgets, or thin local forwarding wrappers.
-  Keep meaningful compositions and gestures; use standard Checkbox and Toggle.
+- Use Kryon's namespaced widgets directly, each imported by package
+  (`Text :: #import "kryon/text";`): `Text.Draw(session, Text.Props)`,
+  `Image.Draw(session, Image.Props)` and `Button.Draw(session, Button.Props)`.
+  Semantic images use the same `Image` surface; file pictures come with
+  `kryon/image` and button icons with `kryon/icon`. No positional Text,
+  `Kryon`/`Widgets` facades, legacy drawing calls, alternate widgets, or thin
+  local forwarding wrappers. Keep meaningful compositions and gestures; use
+  standard `Checkbox.Draw` and `Toggle.Draw`.
   Run `make clean-text-api-check button-api-check` for UI changes.
 - If a required widget capability is missing, implement the reusable primitive
   upstream first. Do not work around it in Inbe or generated code.

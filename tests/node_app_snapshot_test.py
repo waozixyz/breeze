@@ -1,8 +1,11 @@
 """Check installed apps, background icons and queued images with production SQLite."""
 import argparse
+from contextlib import nullcontext
+from photos_client_fixture import photos_client_fixture
 import ctypes.util
 import hashlib
 import json
+import mmap
 import os
 from pathlib import Path
 import shutil
@@ -21,6 +24,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--ziran', type=Path, required=True)
     parser.add_argument('--runtime', type=Path, required=True)
+    parser.add_argument('--photos-module', type=Path, help='Test this actual current Photos module through signed local download')
     parser.add_argument('--output', type=Path, help='Separate output for a concurrent diagnostic run')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -55,13 +59,6 @@ def main():
                         '-o', str(fixture / f'{name}.zx'), str(source)],
                        cwd=root, env=environment, check=True)
     (fixture / 'corrupt.zx').write_bytes(b'ZX\0\0invalid envelope')
-    package_paths = subprocess.check_output(['sh', str(root / 'scripts/package-paths.sh'),
-                                            str(root / 'build/packages')], text=True).splitlines()
-    module_paths = [item for path in ('src', 'build/packages/kryon/src/ui', 'build/packages/kryon/src/backend',
-                                    'build/packages/css/src', 'build/packages/game2d/src',
-                                    'build/packages/ziran/std',
-                                    os.environ.get('DAOCHI_CLIENT_DIR', 'build/packages/daochi-client'))
-                    for item in ('--module-path', str(root / path))]
     guest = fixture / 'fixture_app.zi'
     guest.write_text('''#import "kryon/app_context"
 #import "kryon/app_protocol"
@@ -80,8 +77,9 @@ Main :: () -> s32 {
     packed_assets = fixture / 'root-assets'
     packed_assets.mkdir(exist_ok=True)
     for target, assets in ((leaf, None), (packed_root, packed_assets)):
-        command = [str(args.ziran.resolve()), 'bundle', '--root', str(fixture),
-                   '--entry', 'fixture_app:Main', *module_paths, *package_paths,
+        command = [str(args.ziran.resolve()), 'bundle', '--project', '--offline',
+                   '--root', str(root), '--module-path', str(fixture),
+                   '--entry', 'fixture_app:Main',
                    '-o', str(target)]
         if assets is not None:
             shutil.copyfile(leaf, packed_assets / 'leaf.zx')
@@ -95,11 +93,20 @@ Main :: () -> s32 {
     publishers = [dict(key_id='baseline', public_key='1' * 64, app_ids=['inbe.fixture', 'inbe.photos', 'inbe.diary']),
                   dict(key_id='other', public_key=public, app_ids=['inbe.fixture']),
                   dict(key_id='outside', public_key='3' * 64, app_ids=['inbe.someone-else'])]
+    photos_key = Ed25519PrivateKey.generate()
+    photos_public = photos_key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()
+    publishers.append(dict(key_id='photos-fixture', public_key=photos_public, app_ids=['inbe.photos']))
     publishers += json.loads((root / 'apps/publishers.json').read_text())
     (fixture / 'publishers.json').write_text(json.dumps(publishers))
     sys.path.insert(0, str(root / 'scripts'))
     from practice_content import bundle_assets
-    root_assets = bundle_assets((root / 'build/inbe.zx').read_bytes())
+    # Read only release metadata from the complete local root, keeping large
+    # embedded media out of the fixture's Python heap. Network packs retain
+    # the resource parser's default bound.
+    with (root / 'build/inbe.zx').open('rb') as stream:
+        with mmap.mmap(stream.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            root_assets = bundle_assets(data, maximum=128 * 1024 * 1024,
+                include_paths={'assets/apps/bundled/releases.json'})
     arcade_assets = bundle_assets((root / 'apps/bundled/arcade.zx').read_bytes())
     arcade_art = json.loads(arcade_assets['assets/apps/catalog.json'])['art']['sha256'] + '.zx'
     (fixture / 'embedded-releases.json').write_bytes(root_assets['assets/apps/bundled/releases.json'])
@@ -134,16 +141,19 @@ Main :: () -> s32 {
                     str(root / 'vendor-builds/sqlite/sqlite3.c'), str(args.runtime.resolve()),
                     str(root / 'vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a'),
                     '-Wl,--gc-sections', '-Wl,--wrap=BundleOpenBytes',
+                    '-Wl,--wrap=TraceLog',
                     '-Wl,--wrap=storage_user_id_buffer',
                     '-lm', '-ldl', '-lpthread', '-lz',
                     *shlex.split(curl_library),
                     '-o', str(work / 'test')])
     if result.returncode:
         raise SystemExit('Snapshot native link failed; see compiler diagnostics above')
-    with tempfile.TemporaryDirectory(prefix='profile-', dir=work) as profile:
+    server = photos_client_fixture(args.photos_module, photos_key, signing_message) if args.photos_module else nullcontext({})
+    with tempfile.TemporaryDirectory(prefix='profile-', dir=work) as profile, server as photos_env:
         (Path(profile) / 'packages').mkdir()
         subprocess.run([str(work / 'test')], env=environment | {
             'APP_DATA_ROOT': profile,
+            **photos_env,
             'ICON_CACHE_PATH': str(Path(profile) / 'fixture.icon'),
             'IMAGE_REPLACEMENT_BUNDLE': str(fixture / 'replacement.zx'),
             'NODE_OPEN_ROOT_BUNDLE': str(packed_root),
@@ -160,6 +170,8 @@ Main :: () -> s32 {
             **{f'ICON_{name.upper()}_BUNDLE': str(fixture / f'{name}.zx')
                for name in ('valid', 'invalid', 'empty', 'corrupt')},
         }, check=True)
+    if args.photos_module:
+        print('Actual Photos module: corrupt download rejected; signed install, portrait/desktop wrench grant, account isolation and offline reopen passed')
     print('Installed apps: leaf discovery, background icons, stale-job isolation, deferred images and shared mappings passed')
     print('Photos compression: grant queues once; wrong app, publisher, account, validation, scanning and malformed request rejected')
     print('Embedded apps: identity, publisher scope, API, size and digest rejection; fallback publisher binding; newer signed update precedence; actual Arcade with complete art and no games opened offline')

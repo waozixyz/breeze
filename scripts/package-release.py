@@ -60,8 +60,12 @@ def stage(store, key_path, key_id, publishers_path=None, *, build_directory=None
         if not VERSION.fullmatch(component["version"]) or not 0 < sequence <= 2**31 - 1:
             raise ValueError(f"invalid {name} version or sequence")
         path = build_directory / ("inbe.zx" if name == "inbe" else f"apps/{name}.zx")
-        data = path.read_bytes()
-        if not data.startswith(b"ZX\0\0") or not 8 <= len(data) <= 64 * 1024 * 1024:
+        length = path.stat().st_size
+        if not 8 <= length <= min(sys.maxsize - 1, 2**63 - 2):
+            raise ValueError(f"invalid {name} bundle size")
+        with path.open('rb') as source:
+            data = source.read(length + 1)
+        if len(data) != length or not data.startswith(b"ZX\0\0"):
             raise ValueError(f"invalid {name} bundle")
         artifact = dict(variant="module", sha256=sha256(data).hexdigest(), size=len(data))
         dependencies = []
@@ -305,7 +309,8 @@ def verify_origin(store, origin, open_url=open_public_url):
             raise ValueError(f"{app_id}: public release metadata differs from the signed publication")
         artifact = expected["artifacts"][0]
         digest = artifact["sha256"]
-        if not re.fullmatch(r"[0-9a-f]{64}", digest) or not 8 <= artifact["size"] <= 64 * 1024 * 1024:
+        if (not re.fullmatch(r"[0-9a-f]{64}", digest) or
+                type(artifact["size"]) is not int or not 8 <= artifact["size"] <= 2**63 - 2):
             raise ValueError(f"{app_id}: invalid staged artifact")
         checksum = sha256()
         size = 0
@@ -399,7 +404,7 @@ def import_archive(archive, store, publishers_path=None):
                 continue
             parts = Path(member.name).parts
             if len(parts) != 2 or (parts[0] not in ids and not node_app_id(parts[0])) or \
-                    not member.isfile() or member.size > 64 * 1024 * 1024:
+                    not member.isfile() or member.size < 0:
                 raise ValueError("invalid archive member")
             if member.name in entries:
                 raise ValueError("duplicate archive member")
@@ -408,7 +413,11 @@ def import_archive(archive, store, publishers_path=None):
             # release and, when paid, its product marker.
             if len(entries) >= 7 * 4 + 65 * 3 or total > 1024 * 1024 * 1024:
                 raise ValueError("archive exceeds the release size limit")
-            entries[member.name] = tar.extractfile(member).read()
+            with tar.extractfile(member) as source:
+                data = source.read(member.size + 1)
+            if len(data) != member.size:
+                raise ValueError("archive member differs from its declared size")
+            entries[member.name] = data
     # The node accepts archives built before and after Leaderboard became an
     # app, so the importer and the app can be updated in either order.
     present = {name.split("/")[0] for name in entries}

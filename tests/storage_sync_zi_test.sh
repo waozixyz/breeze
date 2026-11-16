@@ -4,7 +4,7 @@ set -eu
 # Storage import/export and migration behaviour, run against a real
 # SQLite database in a temporary directory.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=$root/build/storage-sync-zi-test
 include=$root/build/packages/ziran/include
@@ -60,7 +60,7 @@ monocypher=$root/build/packages/monocypher/src
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$monocypher/monocypher.c" "$liboqs" \
     -Wl,--wrap=sqlite3_prepare_v2 -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
 # Storage must never open the real data directory.
-APP_DATA_ROOT=/tmp/inbe-storage-sync-zi-test/data
+APP_DATA_ROOT=$work/data
 export APP_DATA_ROOT
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
-rm -rf /tmp/inbe-storage-sync-zi-test
+rm -rf "$work/data"

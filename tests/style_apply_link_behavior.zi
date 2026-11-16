@@ -14,6 +14,9 @@
 #import "style"
 using ButtonState;
 
+// App state outgrew the native main stack; the product also owns it globally.
+style_test_app: InnerBreeze;
+
 #program_export
 StartupStyleCheck :: () -> s32 {
     for theme: 0..ThemeCount - 1 {
@@ -68,62 +71,66 @@ LegacyStylesCheck :: (failing: string) -> s32 {
     if StyleSavedSource(1).count != 0 || StyleAppliedSource(1).count != 0 { return 3 }
     if StyleDraftSource(1) != failing { return 4 }
     if !TextHas(AppTextFromCString(*style_error[0], 256), "@variant") { return 5 }
-    app: InnerBreeze
+    app := *style_test_app
     app.theme_id = 0
-    if !app_apply_style(*app) || CustomButtonRadius() != 24.0 { return 6 }
+    app.dark_mode = 0
+    app.breathing.screen = ScreenStart
+    if !app_apply_style(app) || CustomButtonRadius() != 24.0 { return 6 }
     return 42
 }
 
 #program_export
 CustomizationCheck :: () -> s32 {
     StyleCustomizationLoad()
-    app: InnerBreeze
+    app := *style_test_app
     app.theme_id = 0
-    if !AppearanceEdit(*app, 0, "Button { border-radius: 24px; }") || CustomButtonRadius() != 24.0 {
+    app.dark_mode = 0
+    app.breathing.screen = ScreenStart
+    if !AppearanceEdit(app, 0, "Button { border-radius: 24px; }") || CustomButtonRadius() != 24.0 {
         return 1
     }
     if StyleSavedSource(0).count != 0 {
         return 2
     }
     color := StyleTokenColor("canvas")
-    if AppearanceEdit(*app, 0, "Button { border-radius: unknown; }") || CustomButtonRadius() != 24.0 ||
-    StyleTokenColor("canvas").r != color.r || AppearanceSave(*app, 0) {
+    if AppearanceEdit(app, 0, "Button { border-radius: unknown; }") || CustomButtonRadius() != 24.0 ||
+    StyleTokenColor("canvas").r != color.r || AppearanceSave(app, 0) {
         return 3
     }
-    if !AppearanceUndo(*app, 0) || CustomButtonRadius() != 24.0 {
+    if !AppearanceUndo(app, 0) || CustomButtonRadius() != 24.0 {
         return 4
     }
-    if !AppearanceSave(*app, 0) || StyleSavedSource(0) != "Button { border-radius: 24px; }" {
+    if !AppearanceSave(app, 0) || StyleSavedSource(0) != "Button { border-radius: 24px; }" {
         return 5
     }
     StyleCustomizationLoad()
-    if StyleDraftSource(0) != "Button { border-radius: 24px; }" || !app_apply_style(*app) {
+    if StyleDraftSource(0) != "Button { border-radius: 24px; }" || !app_apply_style(app) {
         return 6
     }
-    if !AppearanceEdit(*app, 5, "Button { border-radius: 7px; }") {
+    if !AppearanceEdit(app, 5, "Button { border-radius: 7px; }") {
         return 7
     }
     app.breathing.screen = ScreenLumi
-    if !app_apply_style(*app) || CustomButtonRadius() != 7.0 {
+    if !app_apply_style(app) || CustomButtonRadius() != 7.0 {
         return 8
     }
     app.breathing.screen = ScreenHabits
-    if !app_apply_style(*app) || CustomButtonRadius() != 24.0 {
+    if !app_apply_style(app) || CustomButtonRadius() != 24.0 {
         return 9
     }
     // Returning from an app that shares the rules restores Lumi's own sheet.
     app.breathing.screen = ScreenLumi
-    if !app_apply_style(*app) || CustomButtonRadius() != 7.0 {
+    if !app_apply_style(app) || CustomButtonRadius() != 7.0 {
         return 23
     }
     app.breathing.screen = ScreenHabits
-    if !app_apply_style(*app) || CustomButtonRadius() != 24.0 {
+    if !app_apply_style(app) || CustomButtonRadius() != 24.0 {
         return 9
     }
-    if !AppearanceReset(*app, 5) || StyleSavedSource(5).count != 0 || CustomButtonRadius() != 24.0 {
+    if !AppearanceReset(app, 5) || StyleSavedSource(5).count != 0 || CustomButtonRadius() != 24.0 {
         return 10
     }
-    if !AppearanceEdit(*app, 0,
+    if !AppearanceEdit(app, 0,
         ":root { --radius: 22px; --canvas: #102030; }") {
         return 11
     }
@@ -136,31 +143,31 @@ CustomizationCheck :: () -> s32 {
     if app_face.background != cast(u32)0x102030ff {
         return 13
     }
-    if !AppearanceDiscard(*app, 0) || CustomButtonRadius() != 24.0 {
+    if !AppearanceDiscard(app, 0) || CustomButtonRadius() != 24.0 {
         return 14
     }
-    if AppearanceEdit(*app, 0, "@import \"outside.css\";") || CustomButtonRadius() != 24.0 {
+    if AppearanceEdit(app, 0, "@import \"outside.css\";") || CustomButtonRadius() != 24.0 {
         return 15
     }
-    if !AppearanceDiscard(*app, 0) || !AppearanceFormat(*app, 0) || CustomButtonRadius() != 24.0 {
+    if !AppearanceDiscard(app, 0) || !AppearanceFormat(app, 0) || CustomButtonRadius() != 24.0 {
         return 16
     }
     current_revision := style_revision
     args: Vec(u8)
     BuilderPrint(*args, "{\"scope\":\"all\",\"revision\":%}", current_revision - 1)
     arguments := BuilderFinish(args)
-    result := AppearanceTool(*app, "reset_style", arguments)
+    result := AppearanceTool(app, "reset_style", arguments)
     if result == "" || StyleDraftSource(0).count == 0 || style_revision != current_revision {
         return 17
     }
     PackageFree(result)
     PackageFree(arguments)
-    result = AppearanceTool(*app, "inspect_style", "{\"scope\":\"all\",\"widget\":\"Button\",\"state\":\"normal\"}")
+    result = AppearanceTool(app, "inspect_style", "{\"scope\":\"all\",\"widget\":\"Button\",\"state\":\"normal\"}")
     if result.count < 80 {
         return 18
     }
     PackageFree(result)
-    result = AppearanceTool(*app, "read_style", "{\"scope\":\"all\"}")
+    result = AppearanceTool(app, "read_style", "{\"scope\":\"all\"}")
     if result.count < 1000 {
         return 19
     }
@@ -170,11 +177,11 @@ CustomizationCheck :: () -> s32 {
         unused BuilderAppend(overflow, "Button{border-radius:1px;}")
     }
     source := BuilderFinish(overflow)
-    if AppearanceEdit(*app, 0, source) || CustomButtonRadius() != 24.0 {
+    if AppearanceEdit(app, 0, source) || CustomButtonRadius() != 24.0 {
         return 20
     }
     PackageFree(source)
-    if !AppearanceReset(*app, 0) || StyleSavedSource(0).count != 0 ||
+    if !AppearanceReset(app, 0) || StyleSavedSource(0).count != 0 ||
     StyleDraftSource(0).count != 0 || CustomButtonRadius() == 24.0 {
         return 21
     }
@@ -187,9 +194,11 @@ CustomizationCheck :: () -> s32 {
 
 #program_export
 Answer :: () -> s32 {
-    app: InnerBreeze
+    app := *style_test_app
     app.theme_id = 0
-    if !app_apply_style(*app) { return 1 }
+    app.dark_mode = 0
+    app.breathing.screen = ScreenStart
+    if !app_apply_style(app) { return 1 }
     // Body text takes the theme's Text size.
     if AppFontSize() != 18 || AppSmallFontSize() != 16 { return 13 }
     rules := ActiveStyleRules()
@@ -206,7 +215,7 @@ Answer :: () -> s32 {
     if image_face.background != cast(u32)0 { return 7 }
 
     app.dark_mode = 1
-    if !app_apply_style(*app) { return 4 }
+    if !app_apply_style(app) { return 4 }
     rules = ActiveStyleRules()
     face = ResolveStyleRules(rules, base, facts, 1)
     if face.background != cast(u32)0x182838FF { return 5 }
@@ -215,10 +224,10 @@ Answer :: () -> s32 {
     canvas.b != 0x38 || canvas.a != 0xFF { return 9 }
 
     app.dark_mode = 0
-    if !app_apply_style(*app) { return 6 }
+    if !app_apply_style(app) { return 6 }
 
     // Unchanged inputs keep the installed style; changed ones replace it.
-    if !app_apply_style(*app) || !app_apply_style(*app) { return 10 }
+    if !app_apply_style(app) || !app_apply_style(app) { return 10 }
     canvas = StyleTokenColor("canvas")
     if canvas.r != 0xE2 || canvas.g != 0xEE ||
     canvas.b != 0xFC || canvas.a != 0xFF { return 11 }
@@ -227,14 +236,14 @@ Answer :: () -> s32 {
     // Apps without their own sheet keep the installed rules when they open.
     generation := style_generation
     app.breathing.screen = ScreenEList
-    if !app_apply_style(*app) || style_generation != generation { return 14 }
+    if !app_apply_style(app) || style_generation != generation { return 14 }
     app.breathing.screen = ScreenHabits
-    if !app_apply_style(*app) || style_generation != generation { return 15 }
+    if !app_apply_style(app) || style_generation != generation { return 15 }
     app.breathing.screen = ScreenDiary
-    if !app_apply_style(*app) || style_generation != generation { return 16 }
+    if !app_apply_style(app) || style_generation != generation { return 16 }
     app.breathing.screen = ScreenLumi
-    if !app_apply_style(*app) || style_generation != generation { return 17 }
+    if !app_apply_style(app) || style_generation != generation { return 17 }
     app.breathing.screen = ScreenStart
-    if !app_apply_style(*app) || style_generation != generation { return 18 }
+    if !app_apply_style(app) || style_generation != generation { return 18 }
     return 42
 }

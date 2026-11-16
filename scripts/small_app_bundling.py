@@ -126,11 +126,17 @@ def stage(ledger, declarations, bundles, optional, destination):
                 pictures = bundle_assets(resource.read_bytes())
                 packed = bundle_assets(path.read_bytes())
                 info['complete'] = all(p in pictures or p in packed for p in cover_paths(catalog))
-        forced = bool(declaration and declaration.get('bundled'))
+        source = declaration or ledger['node_apps'][name]
+        download_only = bool(source.get('download_only'))
+        forced = name == 'library' or bool(declaration and declaration.get('bundled'))
+        if forced and download_only:
+            raise ValueError('app cannot be both bundled and download-only')
         if forced and not info['complete']:
             raise ValueError('explicitly bundled app is missing required artwork')
-        info['included'] = info['complete'] and (forced or info['complete_bytes'] < LIMIT_BYTES)
+        info['included'] = (info['complete'] and not download_only
+                            and (forced or info['complete_bytes'] < LIMIT_BYTES))
         info['explicit'] = forced
+        info['download_only'] = download_only
         report['optional'][name] = info
         if info['included']:
             shutil.copyfile(path, optional / (name + '.zx'))
@@ -139,7 +145,6 @@ def stage(ledger, declarations, bundles, optional, destination):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(resource, target)
             selected.append(name)
-            source = declaration or ledger['node_apps'][name]
             releases[name] = dict(id='inbe.' + name, version=source['version'],
                                   sequence=source.get('sequence', 1), host_api=source['host_api'],
                                   key_id=source.get('key_id', 'inbe-2026-10'),

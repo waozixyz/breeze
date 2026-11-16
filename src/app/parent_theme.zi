@@ -1,0 +1,115 @@
+// Embedded in a supervising host, such as Harmony's Sessions window, Inbe
+// draws in that host's theme by default; started on its own it keeps its own
+// theme. Kryon's host palette reader checks that the host started Inbe and
+// reads the palette the host keeps on the window it embeds Inbe in, so a
+// theme change in the host reaches Inbe within a quarter of a second.
+
+PARENT_THEME_HOST :: #defined(NATIVE_WINDOW_HAVE_SDL) &&
+    !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) &&
+    !#defined(_WIN32) && !#defined(__APPLE__)
+
+PARENT_THEME_POLL_SECONDS :: 0.25
+
+// The host's colours packed 0xRRGGBBAA. active is false when no host
+// supplies a theme, and the other fields are then unset.
+ParentTheme :: struct {
+    active: bool
+    dark: bool
+    background: u32
+    surface: u32
+    text: u32
+    accent: u32
+    accent_hover: u32
+}
+
+parent_theme: ParentTheme;
+parent_theme_revision: s32;
+parent_theme_checked: bool;
+parent_theme_next_poll: float64;
+
+#if PARENT_THEME_HOST {
+    #import "c_string"
+    SystemHost :: #import "kryon/SystemThemeHostLinux";
+    parent_theme_c :: #system_library "c";
+    ParentThemeEnvironment :: (name: *u8) -> *u8 #foreign parent_theme_c "getenv";
+    ParentThemeNow :: () -> float64 #foreign parent_theme_c "GetTime";
+
+    // The host names the window it embeds Inbe in; a standalone start has none.
+    ParentThemeHosted :: () -> bool {
+        name: [32]u8
+        if !CopyCString("HARMONY_APP_CONTAINER", name[:]) {
+            return false
+        }
+        value := ParentThemeEnvironment(*name[0])
+        return value != null && value[0] != 0
+    }
+
+    ParentThemeRead :: () -> ParentTheme {
+        result: ParentTheme
+        if !ParentThemeHosted() {
+            return result
+        }
+        palette := SystemHost.SystemPaletteRead()
+        if !palette.found {
+            return result
+        }
+        result.active = true
+        result.dark = palette.dark
+        result.background = palette.background
+        result.surface = palette.base
+        result.text = palette.text
+        result.accent = palette.selected
+        result.accent_hover = ParentThemeMix(palette.selected, palette.text, 0.12)
+        return result
+    }
+}
+
+ParentThemeMixChannel :: (from: u32, to: u32, shift: u32, amount: float32) -> u32 {
+    start := cast(float32)((from >> shift) & cast(u32)255)
+    end := cast(float32)((to >> shift) & cast(u32)255)
+    value := start + (end - start) * amount
+    if value < 0.0 {
+        return 0
+    }
+    if value > 255.0 {
+        return cast(u32)255 << shift
+    }
+    return cast(u32)(value + 0.5) << shift
+}
+
+ParentThemeMix :: (from: u32, to: u32, amount: float32) -> u32 {
+    return ParentThemeMixChannel(from, to, 24, amount) |
+        ParentThemeMixChannel(from, to, 16, amount) |
+        ParentThemeMixChannel(from, to, 8, amount) |
+        (from & cast(u32)255)
+}
+
+ParentThemeSame :: (left: ParentTheme, right: ParentTheme) -> bool {
+    return left.active == right.active && left.dark == right.dark &&
+        left.background == right.background && left.surface == right.surface &&
+        left.text == right.text && left.accent == right.accent
+}
+
+// The host's current theme, read again at most every quarter second.
+ParentThemeCurrent :: () -> ParentTheme {
+    #if PARENT_THEME_HOST {
+        now := ParentThemeNow()
+        if parent_theme_checked && now < parent_theme_next_poll {
+            return parent_theme
+        }
+        parent_theme_next_poll = now + PARENT_THEME_POLL_SECONDS
+        fresh := ParentThemeRead()
+        if !parent_theme_checked || !ParentThemeSame(fresh, parent_theme) {
+            parent_theme = fresh
+            parent_theme_revision += 1
+        }
+        parent_theme_checked = true
+    }
+    return parent_theme
+}
+
+// Changes whenever the host's theme changes, for caches of theme colours.
+ParentThemeRevision :: () -> s32 {
+    unused ParentThemeCurrent()
+    return parent_theme_revision
+}

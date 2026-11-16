@@ -14,6 +14,8 @@ static char keys[64][128];
 static char values[64][512];
 static int setting_count;
 static int starts;
+static int transfer_failures;
+static int transfer_http;
 static int releases;
 static bool held;
 static bool deny_approval;
@@ -149,6 +151,13 @@ bool __wrap_file_download_FileDownloadStart(FileDownload *download, String url, 
     return true;
 }
 FileDownloadStatus __wrap_file_download_FileDownloadPoll(FileDownload *download) {
+    if (transfer_failures > 0) {
+        transfer_failures--;
+        download->http_status = transfer_http;
+        snprintf((char *)download->error, sizeof(download->error), "fixture interrupted transfer");
+        download->status = FileDownloadStatus_Error;
+        return download->status;
+    }
     if (held) {
         return FileDownloadStatus_Downloading;
     }
@@ -198,6 +207,33 @@ int32_t RunPackageManagerFixture(void) {
     package_manager_PackageSetAutomatic(false);
     pump();
     assert(starts == 0); /* Availability checks remain scheduled, not every frame. */
+    transfer_failures = 1;
+    transfer_http = 503;
+    request();
+    assert(package_manager_PackageStatus(4) == 1 && starts == 1);
+    assert(package_recovery.attempts == 1 && package_recovery.retry_at == 200002);
+    for (int frame = 0; frame < 100; frame++) package_manager_PackagePump(8, 200001, false);
+    assert(starts == 1);
+    package_manager_PackagePump(8, 200002, false);
+    pump();
+    assert(starts == 2 && package_manager_PackageStatus(4) == 2);
+    transfer_failures = 20;
+    request();
+    const int deadlines[] = {200002, 200010, 200040};
+    for (int attempt = 0; attempt < 3; attempt++) {
+        package_manager_PackagePump(8, deadlines[attempt], false);
+        package_manager_PackagePump(8, deadlines[attempt], false);
+    }
+    assert(package_manager_PackageStatus(4) == 3 && package_index == -1);
+    int exhausted_starts = starts;
+    package_manager_PackagePump(8, 200100, false);
+    assert(starts == exhausted_starts);
+    assert(StringEqual(package_manager_PackageFailureDetail(4), StringLiteral("fixture interrupted transfer")));
+    transfer_http = 403;
+    request();
+    assert(package_manager_PackageStatus(4) == 3 && starts == exhausted_starts + 1);
+    transfer_failures = 0;
+    starts = 0;
     int32_t baseline = FixtureHabitsSequence();
     assert(package_manager_PackageSequence(2) == baseline);
     storage_set_setting_int(StringLiteral("package_sequence_habits"), -10);
@@ -296,7 +332,8 @@ int32_t RunPackageManagerFixture(void) {
     assert(!package_history_PackageRollbackRequest(4, older_version, StringLiteral("wrong"), StringLiteral("fixture-account")));
     assert(!package_history_PackageRollbackRequest(4, older_version, older_digest, StringLiteral("another-account")));
     assert(package_history_PackageRollbackRequest(4, older_version, older_digest, StringLiteral("fixture-account")));
-    pump();
+    package_manager_PackagePump(8, 200000, false);
+    assert(package_phase == 2 || package_phase == 4);
     strcpy(account, "another-account");
     pump();
     assert(package_manager_PackageStatus(4) == 3);
@@ -305,8 +342,15 @@ int32_t RunPackageManagerFixture(void) {
     deny_approval = true;
     pump();
     pump();
+    for (int attempt = 0; package_index >= 0 && attempt < 5000; attempt++) {
+        usleep(1000);
+        pump();
+    }
     deny_approval = false;
     assert(package_manager_PackageStatus(4) == 3 && !package_history_PackageRollbackPinned(4));
+    String rollback_payload = package_manager_PackagePayloadPath(4, older_digest, StringLiteral(".zx"));
+    assert(unlink((const char *)rollback_payload.data) == 0);
+    free((void *)rollback_payload.data);
     assert(package_history_PackageRollbackRequest(4, older_version, older_digest, StringLiteral("fixture-account")));
     before_history = starts;
     pump();

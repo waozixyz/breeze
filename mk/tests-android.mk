@@ -6,7 +6,7 @@ android-sdk-install-test:
 
 .PHONY: android-source-test
 android-source-test: $(ZIRAN_BIN) | build-laws
-	ZI_CHECK_DEFINES="ANDROID_BUILD KRYON_ANDROID_HOST __aarch64__" \
+	ZI_CHECK_DEFINES="ANDROID_BUILD KRYON_ANDROID_HOST KRYON_RAYLIB_HOST AVIF_RAYLIB __aarch64__" \
 		python3 scripts/check-zi-sources.py $(ZIRAN_BIN)
 
 .PHONY: accessibility-test

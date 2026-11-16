@@ -22,6 +22,7 @@
 #import, file "../storage/temporary_data.zi";
 #import, file "../storage/paths.zi";
 #import, file "package_work.zi";
+#import, file "download_recovery.zi";
 
 using FileDownloadStatus;
 
@@ -32,6 +33,10 @@ PACKAGE_PHASE_HISTORY :: 3
 PACKAGE_PHASE_PREPARING :: 4
 
 package_download: FileDownload;
+package_recovery: DownloadRecovery;
+package_recovery_now: s64;
+package_failure_http: [PackageSlots]s32;
+package_failure_error: [PackageSlots][256]u8;
 package_index: s32 = -1;
 package_phase: s32;
 package_requested: [PackageSlots]bool;
@@ -118,15 +123,17 @@ PackageWorkCancel :: () {
     if package_work == null {
         return
     }
-    unused RemoveFile(package_work.path)
+    if package_work.path != package_work.immutable {
+        unused RemoveFile(package_work.path)
+    }
     package_work.next = package_retired_work
     package_retired_work = package_work
     package_work = null
 }
 
-PackageWorkStart :: () -> bool {
-    path := PackagePath(package_index, ".download.zx")
+PackageWorkStart :: (cached: bool = false) -> bool {
     immutable := PackagePayloadPath(package_index, TextUntilNul(package_release.hash[:]))
+    path := ifx cached then PackageText(immutable, "") else PackagePath(package_index, ".download.zx")
     defer {
         PackageFree(path)
         PackageFree(immutable)
@@ -312,7 +319,7 @@ PackageInstalledBytes :: (index: s32) -> string {
     defer {
         PackageFree(path)
     }
-    bytes := PackageRead(path, PackageMaximumBytes)
+    bytes := PackageRead(path, release.size)
     if !PackageVerifyBytes(bytes, release) {
         if bytes.count == 0 {
             PackageLegacyPayloadRemove(index, TextFromCString(*release.hash[0]))
@@ -517,6 +524,7 @@ PackageRequestAll :: (desired: s32) {
 }
 
 PackageCancel :: () {
+    package_recovery = DownloadRecovery.{}
     PackageWorkCancel()
     FileDownloadRelease(*package_download)
     PackageFree(package_metadata)
@@ -633,15 +641,17 @@ PackageBucket :: () -> s32 {
 }
 
 // The node answers with the newest release this host can run. Asking for
-// the ZX format keeps it from offering releases built for older hosts.
+// the ZX format and its revision, within its interfaces, keeps it from
+// offering releases built for older or newer hosts.
 PackageLatestQuery :: () -> string {
     return PackageReleaseQuery("/latest")
 }
 
 PackageReleaseQuery :: (route: string) -> string {
     out: Vec(u8)
-    BuilderPrint(*out, "%?host_api=%&module_api=%&bucket=%&format=zx", route, cast(s32)PackageHostAPI,
-        cast(s32)PackageModuleAPI, PackageBucket())
+    BuilderPrint(*out, "%?host_api=%&oldest_host_api=%&module_api=%&bucket=%&format=zx&zx=%", route,
+        cast(s32)PackageHostAPI, cast(s32)PackageHostAPIOldest, cast(s32)PackageModuleAPI, PackageBucket(),
+        cast(s32)PackageZxRevision)
     return BuilderFinish(out)
 }
 
@@ -666,6 +676,7 @@ PackageStartTransfer :: (suffix: string, destination: string) -> bool {
 }
 
 PackageFinish :: (ok: bool) {
+    package_recovery = DownloadRecovery.{}
     PackageWorkCancel()
     FileDownloadRelease(*package_download)
     if package_phase != PACKAGE_PHASE_HISTORY { package_status[package_index] = ifx ok then 2 else 3 }
@@ -675,6 +686,26 @@ PackageFinish :: (ok: bool) {
     package_phase = PACKAGE_PHASE_IDLE
     package_target = false
     package_rollback = false
+}
+
+PackageRecover :: (reason: string, transport: bool = false) {
+    index := package_index
+    package_failure_http[index] = package_download.http_status
+    unused CopyCString(reason, package_failure_error[index][:])
+    retryable := !transport || DownloadRetryable(package_download.http_status)
+    PackageWorkCancel()
+    FileDownloadRelease(*package_download)
+    if package_phase != PACKAGE_PHASE_HISTORY && retryable &&
+        DownloadRecoverySchedule(*package_recovery, package_recovery_now) {
+        package_status[index] = 1
+        return
+    }
+    PackageFinish(false)
+}
+
+PackageFailureDetail :: (index: s32) -> string {
+    if index < 0 || index >= PackageSlots { return "" }
+    return TextUntilNul(package_failure_error[index][:])
 }
 
 // Preparation polls the parser and checks one isolated instance per frame.
@@ -799,6 +830,7 @@ PackageCheckDue :: (now: s32) -> bool {
 // install transfers its release and payload. Automatic checks and heavy
 // verification wait until the practice ends or input becomes idle.
 PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
+    package_recovery_now = cast(s64)now
     PackageWorkCollect()
     if DataTemporary() {
         return
@@ -869,11 +901,11 @@ PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
                 defer {
                     PackageFree(destination)
                 }
+                package_phase = PACKAGE_PHASE_METADATA
                 if !PackageStartTransfer("/latest", destination) {
-                    PackageFinish(false)
+                    PackageRecover(TextUntilNul(package_download.error[:]), true)
                     return
                 }
-                package_phase = PACKAGE_PHASE_METADATA
                 return
             }
         }
@@ -893,6 +925,19 @@ PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
         PackageFinish(false)
         return
     }
+    if package_recovery.retry_at != 0 {
+        if !DownloadRecoveryReady(package_recovery, package_recovery_now) { return }
+        package_recovery.retry_at = 0
+        if package_phase == PACKAGE_PHASE_METADATA {
+            destination := PackagePath(package_index, ".download.json")
+            started := PackageStartTransfer("/latest", destination)
+            PackageFree(destination)
+            if !started { PackageRecover(TextUntilNul(package_download.error[:]), true) }
+        } else {
+            PackageBeginPayload()
+        }
+        return
+    }
     downloading := package_download.status == FileDownloadStatus.Downloading
     status := ifx package_phase == PACKAGE_PHASE_PREPARING then FileDownloadStatus.Ready else FileDownloadPoll(*package_download)
     #if #defined(PLATFORM_WEB) {
@@ -902,7 +947,7 @@ PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
     }
     if status == cast(FileDownloadStatus)Error {
         if package_phase == PACKAGE_PHASE_HISTORY { PackageHistoryComplete(package_index) }
-        PackageFinish(false);
+        PackageRecover(TextUntilNul(package_download.error[:]), true)
         return
     }
     if status != cast(FileDownloadStatus)Ready {
@@ -1022,7 +1067,11 @@ PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
         return
     }
     if !package_work.ok {
-        PackageFinish(false)
+        if package_work.path == package_work.immutable {
+            unused RemoveFile(package_work.path)
+        }
+        package_phase = PACKAGE_PHASE_PAYLOAD
+        PackageRecover("payload verification failed")
         return
     }
     if !package_work.writing {
@@ -1090,6 +1139,13 @@ PackageHighWaterMatches :: (index: s32, release: PackageRelease) -> bool {
 }
 
 PackageBeginPayload :: () {
+    immutable := PackagePayloadPath(package_index, TextUntilNul(package_release.hash[:]))
+    cached := PackageFileSize(immutable) == package_release.size
+    PackageFree(immutable)
+    if cached && package_work_count == 0 && PackageWorkStart(true) {
+        package_phase = PACKAGE_PHASE_PREPARING
+        return
+    }
     suffix := PackageText("/", TextUntilNul(package_release.hash[:]))
     full_suffix := PackageText(suffix, ".zx")
     destination := PackagePath(package_index, ".download.zx")
@@ -1098,11 +1154,11 @@ PackageBeginPayload :: () {
         PackageFree(full_suffix)
         PackageFree(destination)
     }
+    package_phase = PACKAGE_PHASE_PAYLOAD
     if !PackageStartTransfer(full_suffix, destination) {
-        PackageFinish(false)
+        PackageRecover(TextUntilNul(package_download.error[:]), true)
         return
     }
-    package_phase = PACKAGE_PHASE_PAYLOAD
 }
 
 PackageAvailableVersion :: (index: s32) -> string {

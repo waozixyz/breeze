@@ -19,11 +19,13 @@
 #import "std/file_linux"
 #import "apps/tree"
 #import "apps/host"
+#import "apps/preparation"
 #import, file "../src/apps/node_child_packages.zi";
 
 embedded_c :: #system_library "c";
 EmbeddedNow :: () -> float64 #foreign embedded_c "IconsNow";
 EmbeddedYield :: () #foreign embedded_c "IconsYield";
+EmbeddedWrite :: (fd: s32, data: *void, count: usize) -> s64 #foreign embedded_c "write";
 
 embedded_test_bytes: string;
 embedded_test_metadata: string;
@@ -166,7 +168,34 @@ NodeAppEmbeddedCheck :: () -> s32 {
     slot = arcade_slot
     if !NodeAppMarked("arcade") || PackagePending(NodeAppIndex(slot)) { return 178 }
     deadline = EmbeddedNow() + 10.0
+    previous_stage: s32 = -1
     while !NodeAppRunning(slot) && EmbeddedNow() < deadline {
+        stage: s32 = 0
+        if node_open_work != null {
+            stage = 1
+            if PackageWorkReady(node_open_work) {
+                stage = ifx node_open_work.ok then 2 else 3
+            }
+        }
+        if node_open_preparation != null {
+            stage = 4
+            if AppPreparationReady(node_open_preparation) {
+                stage = ifx node_open_preparation.valid then 5 else 6
+            }
+        }
+        if node_open_failed[slot] {
+            stage = 7
+        }
+        if stage != previous_stage {
+            message: Vec(u8)
+            BuilderPrint(*message, "Arcade open stage %\n", stage)
+            diagnostic := BuilderFinish(message)
+            buffer: [128]u8
+            unused CopyCString(diagnostic, buffer[:])
+            unused EmbeddedWrite(2, cast(*void)*buffer[0], cast(usize)diagnostic.count)
+            PackageFree(diagnostic)
+            previous_stage = stage
+        }
         unused NodeOpenPump(true)
         EmbeddedYield()
     }

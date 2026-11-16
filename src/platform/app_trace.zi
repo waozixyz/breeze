@@ -1,0 +1,151 @@
+// Inner Breeze's log on the host the build targets. On Kryon's desktop host
+// each line goes to standard error, or, once TraceToFile opens one, is
+// appended to a log file, and the warnings and errors since then are kept
+// for a startup error dialog. Other hosts log through raylib's trace
+// (raylib_trace). Levels are the ones the app passes: 3 info, 4 warning and
+// 5 error.
+#import "c_string"
+#import "byte_text_linux"
+
+#if #defined(DESKTOP_HOST) {
+    trace_libc :: #system_library "c";
+    TraceWrite :: (descriptor: s32, bytes: *u8, count: usize) -> isize #foreign trace_libc "write";
+    TraceOpen :: (path: *u8, flags: s32, mode: s32) -> s32 #foreign trace_libc "open";
+    TraceCloseDescriptor :: (descriptor: s32) -> s32 #foreign trace_libc "close";
+    // O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC.
+    #if #defined(__FreeBSD__) {
+        TRACE_APPEND_FLAGS :: 0x100209
+    } else {
+        TRACE_APPEND_FLAGS :: 0x80441
+    }
+    trace_file: s32 = -1;
+    trace_minimum: s32 = 3;
+    trace_errors: [2048]u8;
+    trace_errors_length: s32;
+} else {
+    RaylibTrace :: #import "raylib_trace";
+    trace_raylib :: #system_library "raylib";
+    TraceSetLevel :: (level: s32) #foreign trace_raylib "SetTraceLogLevel";
+}
+
+#if #defined(DESKTOP_HOST) {
+    TraceLevelName :: (level: s32) -> string {
+        if level <= 3 {
+            return "INFO: "
+        }
+        if level == 4 {
+            return "WARNING: "
+        }
+        return "ERROR: "
+    }
+
+    TraceWriteText :: (descriptor: s32, text: string) {
+        chunk: [512]u8
+        at: s64 = 0
+        while at < text.count {
+            count: s64 = 0
+            while count < 512 && at + count < text.count {
+                chunk[count] = text[at + count]
+                count += 1
+            }
+            unused TraceWrite(descriptor, *chunk[0], cast(usize)count)
+            at += count
+        }
+    }
+
+    // Keeps "[LEVEL] text" lines for TraceRecentErrors while room remains.
+    TraceRemember :: (level: s32, message: string) {
+        prefix := ifx level == 4 then "[WARNING] " else "[ERROR] "
+        needed := cast(s32)(prefix.count + message.count + 1)
+        if trace_errors_length + needed >= cast(s32)trace_errors.count {
+            return
+        }
+        parts: [2]string = .[prefix, message]
+        for part: 0..1 {
+            for index: cast(s64)0..parts[part].count - 1 {
+                trace_errors[trace_errors_length] = parts[part][index]
+                trace_errors_length += 1
+            }
+        }
+        trace_errors[trace_errors_length] = 10
+        trace_errors_length += 1
+        trace_errors[trace_errors_length] = 0
+    }
+}
+
+TraceLog :: (level: s32, message: string) {
+    #if #defined(DESKTOP_HOST) {
+        if level < trace_minimum {
+            return
+        }
+        descriptor := ifx trace_file >= 0 then trace_file else 2
+        TraceWriteText(descriptor, TraceLevelName(level))
+        TraceWriteText(descriptor, message)
+        TraceWriteText(descriptor, "\n")
+        if trace_file >= 0 && level >= 4 {
+            TraceRemember(level, message)
+        }
+    } else {
+        RaylibTrace.TraceLog(level, message)
+    }
+}
+
+// Logs to the console from startup: standard error on the desktop host, and
+// on raylib hosts standard error or Android's log, under Inner Breeze's tags.
+TraceToConsole :: () {
+    #if !#defined(DESKTOP_HOST) {
+        RaylibTrace.RaylibTraceToConsole(RaylibTrace.RaylibTraceProps.{.android_tag = "InnerBreeze",
+                .android_note_prefix = "APP PROBE:", .android_note_tag = "InbeStartup"})
+    }
+}
+
+// Drops lines below LEVEL, as a screenshot run does for info lines.
+TraceSetMinimumLevel :: (level: s32) {
+    #if #defined(DESKTOP_HOST) {
+        trace_minimum = level
+    } else {
+        TraceSetLevel(level)
+    }
+}
+
+// Appends the log to PATH from now on. False when it cannot be opened; the
+// log then stays where it was.
+TraceToFile :: (path: string) -> bool {
+    #if #defined(DESKTOP_HOST) {
+        name: [512]u8
+        if !CopyCString(path, name[:]) {
+            return false
+        }
+        descriptor := TraceOpen(*name[0], TRACE_APPEND_FLAGS, 420)
+        if descriptor < 0 {
+            return false
+        }
+        TraceClose()
+        trace_file = descriptor
+        trace_errors_length = 0
+        trace_errors[0] = 0
+        return true
+    } else {
+        return RaylibTrace.RaylibTraceToFile(path)
+    }
+}
+
+// Warnings and errors logged since TraceToFile, as "[LEVEL] text" lines.
+TraceRecentErrors :: () -> string {
+    #if #defined(DESKTOP_HOST) {
+        return TextFromCString(*trace_errors[0])
+    } else {
+        return RaylibTrace.RaylibTraceRecentErrors()
+    }
+}
+
+TraceClose :: () {
+    #if #defined(DESKTOP_HOST) {
+        if trace_file >= 0 {
+            unused TraceCloseDescriptor(trace_file)
+            trace_file = -1
+        }
+    } else {
+        RaylibTrace.RaylibTraceClose()
+    }
+}

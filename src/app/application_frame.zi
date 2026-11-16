@@ -7,7 +7,7 @@
 #import, file "../apps/lumi_online.zi";
 #import, file "../apps/module_host.zi";
 #import, file "../platform/trace_log.zi";
-#import "raylib_trace"
+#import, file "../platform/app_trace.zi";
 #import, file "modal_rules.zi";
 #import, file "../practices/tai_chi/tai_chi_rules.zi";
 #import, file "../practices/sun_salutation/sun_salutation_rules.zi";
@@ -18,8 +18,8 @@
 #import "text_context_menu"
 #import, file "../platform/android/graphics_context.zi";
 #import, file "../platform/android/android_accessibility.zi";
-#import "kryon/layout"
-#import "layout"
+Box :: #import "kryon/box";
+Layout :: #import "kryon/layout";
 #import, file "fonts.zi";
 #import, file "app_nav_state.zi";
 #import, file "return_bar.zi";
@@ -52,13 +52,12 @@
 #import, file "device_preferences.zi";
 #import, file "metrics.zi";
 #import, file "dpi_state.zi";
-#import "box_props"
-#import "kryon/Widgets"
 #import "drawing_props"
 #import "geometry"
 #import "tree_draw"
 #import "kryon/tree"
 #import "frame_pacing"
+#import "frame_transition"
 #import, file "application.zi";
 #import, file "application_update.zi";
 
@@ -77,8 +76,7 @@ using ExerciseType;
 
 GetTime :: () -> float64 #foreign c;
 #if #defined(ANDROID_BUILD) {
-    GetScreenWidth :: () -> s32 #foreign c;
-    GetScreenHeight :: () -> s32 #foreign c;
+    WindowRuntime :: #import "kryon/window_runtime";
 }
 PackageNow :: () -> s64 #foreign c "now_seconds";
 BeginMode2D :: (camera: Camera) #foreign raylib_log "BeginMode2D";
@@ -133,6 +131,21 @@ app_update_draw_last_content_w: s32 = -1;
 app_update_draw_last_log_time: float64 = -1.0;
 app_last_frame_status: s32;
 app_last_repeated_key: u64;
+app_capture_route_transition :: (app: *InnerBreeze) {
+    if !app.ui.route_transition_pending {
+        return
+    }
+    surface: FrameSurface
+    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+        if app.ui.retained_target_active {
+            surface = FrameSurfaceCopy(FrameSurface.{RetainedPreviousFrameTexture()})
+        }
+    }
+    // Input can change the route while updateapp builds the destination.
+    // Capture the last presented frame before app_finish_frame paints it.
+    app_route_transition_capture(app, surface.texture, GetTime(), true)
+}
+
 app_finish_frame :: (app: *InnerBreeze) {
     status: s32
     paint_unchanged: bool = false
@@ -165,7 +178,7 @@ app_finish_frame :: (app: *InnerBreeze) {
     #if #defined(ANDROID_BUILD) {
         if status == 0 {
             AndroidAccessibilityFrame(app.ui.session, app.camera,
-                GetScreenWidth(), GetScreenHeight(), GetTime())
+                WindowRuntime.WindowWidth(), WindowRuntime.WindowHeight(), GetTime())
         }
     }
 }
@@ -322,7 +335,7 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     logical_frame := Rectangle.{frame_origin.x, frame_origin.y,
         viewport.width / render_scale, viewport.height / render_scale}
     app.ui.retained_frame_unchanged = false
-    if cast(s32)BeginFrame(app.ui.session, KeyHash("inbe/frame"),
+    if cast(s32)BeginFrame(app.ui.session, Layout.KeyHash("inbe/frame"),
         logical_frame) != 0 {
         return
     }
@@ -338,17 +351,18 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
     if PreviewMode() != 0 {
         canvas_bounds = viewport
     }
-    Box(app.ui.session, BoxProps.{.bounds = canvas_bounds,
+    Box.Draw(app.ui.session, Box.Props.{.bounds = canvas_bounds,
             .fill = StyleTokenColor("canvas")})
-    content_canvas := BoxProps.{
+    content_canvas := Box.Props.{
         .bounds = Rectangle.{0.0, 0.0, cast(float32)view_width,
             cast(float32)view_height},
         .fill = StyleTokenColor("canvas")}
     if PreviewMode() != 0 {
-        Box(app.ui.session, content_canvas)
+        Box.Draw(app.ui.session, content_canvas)
         profile_update_start = app_profile_now()
         updateapp(app)
         app_profile_record_update(profile_update_start)
+        app_capture_route_transition(app)
         app_breaks_draw_toast(app,
             Rectangle.{0.0, 0.0, cast(float32)view_width, cast(float32)view_height})
         app_route_transition_draw(app, logical_frame, GetTime())
@@ -357,10 +371,11 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
         BeginScissorMode(cast(s32)viewport.x, cast(s32)viewport.y,
             full_width, full_height)
         BeginMode2D(app.camera)
-        Box(app.ui.session, content_canvas)
+        Box.Draw(app.ui.session, content_canvas)
         profile_update_start = app_profile_now()
         updateapp(app)
         app_profile_record_update(profile_update_start)
+        app_capture_route_transition(app)
         app_breaks_draw_toast(app,
             Rectangle.{0.0, 0.0, cast(float32)view_width, cast(float32)view_height})
         app_route_transition_draw(app, logical_frame, GetTime())
@@ -547,10 +562,10 @@ app_draw_android_picture_window :: (app: *InnerBreeze, viewport: Rectangle) {
             result = *waiting
             finished = true
         }
-        if cast(s32)BeginFrame(app.ui.session, KeyHash("inbe/picture-window"), bounds) == 0 {
+        if cast(s32)BeginFrame(app.ui.session, Layout.KeyHash("inbe/picture-window"), bounds) == 0 {
             BeginMode2D(camera)
             // The camera maps the bounds onto the whole window.
-            Box(app.ui.session, BoxProps.{.bounds = bounds,
+            Box.Draw(app.ui.session, Box.Props.{.bounds = bounds,
                     .fill = StyleTokenColor("surface")})
             if finished {
                 practice_draw_results_window(app, bounds, result)

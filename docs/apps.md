@@ -322,12 +322,14 @@ Malformed packages cannot apply writes through a mismatched host protocol.
 
 Bundling is additive: the existing six packages always ship regardless of
 size, and complete locally built node apps smaller than **1,000,000 bytes**
-also ship as offline baselines. Required app artwork counts toward that limit;
-the shared Apps controller already supplied by the host counts once. A tiny
-collection catalog is not the size of its downloadable games. Arcade is
+also ship as offline baselines unless their ledger entry sets `download_only`.
+Radio is download-only and never ships inside Inner Breeze. Required app
+artwork counts toward that limit; the shared Apps controller already supplied
+by the host counts once. A tiny collection catalog is not the size of its
+downloadable games. Arcade is
 explicitly included in `apps/bundled.json`, independently of the automatic
-limit: its 7,674-byte catalog plus 1,512,084-byte library artwork ship together.
-Its five games (65,639,505 bytes) remain separate, consented downloads. The
+limit: its 7,714-byte catalog plus 1,258,475-byte library artwork ship together.
+Its five games (74,615,750 bytes) remain separate, consented downloads. The
 reviewed local artifacts are digest-pinned; builds never fetch or execute an
 unsigned remote app to qualify it. `scripts/small_app_bundling.py` writes the
 selection and sizes to `build/small-app-bundling.json`.
@@ -346,9 +348,10 @@ keeps its full four-character, 30 fps timeline while storing identical PNGs
 once. Character regeneration losslessly compresses the PNGs and regenerates
 `sun_salutation_inventory.zi`; builds check that this table is current. The
 compression step requires Python `zopfli`, while ordinary builds use the
-committed PNGs. `packaging/size-budgets.json` bounds the app package,
-Linux binary and release APKs. Android releases include a smaller
-APK for each CPU architecture as well as the universal APK.
+committed PNGs. Artifact sizes are reported without an enforced file-size
+ceiling. Archive validation still requires one shared app package, one Apps
+controller and native application libraries. Android releases include an APK
+for each CPU architecture as well as the universal APK.
 The native library exports only the NativeActivity and JNI loading entries;
 registered JNI methods stay internal. This follows the Android NDK
 [symbol visibility guidance](https://developer.android.com/ndk/guides/symbol-visibility)
@@ -481,6 +484,13 @@ cache can be repaired with the same signed sequence and hash. Failed updates
 preserve the existing package. Local sequence floors include the bundled
 baseline. Feature updates activate between frames when editing and practice
 state can be preserved. Root updates activate on restart; About identifies a pending root update.
+Practice's module and baseline content open offline without a package cache.
+Invalid installed overrides fall back to the bundled module without removing
+user records. Transient transfer and corrupt-payload failures retry with
+bounded backoff while frames continue; exhaustion preserves the existing app.
+Payload transfers are bounded by their signed size, not a universal 64 MiB
+limit. Allocation sizes are checked before reading; nested games retain their
+separate memory budget and archives retain their aggregate resource budget.
 Recommended feature versions follow the active signed root dependencies, and
 newer independently cached apps remain selected after restart.
 
@@ -1014,7 +1024,10 @@ A release names one fixed commit while peers keep working on master:
    identity and SHA-256 build receipt. Use `ANDROID_VERIFY_INSTANCE=1` for
    the separate `xyz.waozi.inbe.verification` debug instance when the owner's
    regular app is running; it has its own process and private data. This
-   option is rejected for production packages. Run
+   option is rejected for production packages. If an older verification
+   install uses an unavailable signing key, `-Papp.verificationSuffix=.verification.NAME`
+   selects a separate debug-only test identity and preserves the older install.
+   Pass it through `ANDROID_GRADLE_ARGS` when using Make. Run
    `make release REVISION=COMMIT APK=PATH BUILD_RECEIPT=PATH`.
    The exact APK must pass the minute-long practice and resume check;
    physical-phone images use Harmony's owner-only review. The command checks

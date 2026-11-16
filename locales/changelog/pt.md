@@ -4,7 +4,7 @@
 
 - Fotos via Aplicações; Lumi: prévia única do retorno completo da lista; Listas: tarefas longas e conclusão ao deslizar.
 - Abas de Prática não deslocam a tela. Escolha entre seis exercícios astrais antes de começar. Interface em dez idiomas.
-- Os pacotes de voz das práticas ficaram cerca de um terço menores.
+- Pacotes de voz das práticas um terço menores. Resgate moedas todos os dias na loja de Hábitos.
 
 ## [2.1.63] - 2026-11-05
 

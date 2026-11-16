@@ -1,7 +1,7 @@
 c3 :: #system_library "c";
 #import "byte_text_linux"
 IsKeyPressed :: (key: s32) -> bool #foreign c3;
-#import "raylib_trace"
+#import, file "../platform/app_trace.zi";
 KEY_LEFT :: 263;
 KEY_RIGHT :: 262;
 KEY_ENTER :: 257;
@@ -21,15 +21,19 @@ storage_has_sync_account :: () -> s32 #foreign c3;
 #import, file "../core/breath_timing.zi";
 #import, file "../app/route_types.zi";
 #import, file "../platform/web_storage.zi";
-#import "kryon/layout"
-#import "layout"
-#import "layout_props"
-#import "kryon/Widgets"
+Box :: #import "kryon/box";
+Button :: #import "kryon/button";
+Dropdown :: #import "kryon/dropdown";
+Image :: #import "kryon/image";
+Layout :: #import "kryon/layout";
+Text :: #import "kryon/text";
+TitleBar :: #import "kryon/title_bar";
 #import "kryon/tree"
 #import "paint_queue"
 #import, file "../app/app.zi";
 #import, file "../app/app_types.zi";
 #import, file "../app/app_nav_state.zi";
+#import, file "../app/app_frame_transition.zi";
 #import, file "../app/app_settings.zi";
 #import, file "manual_screen.zi";
 #import, file "manual_dispatch.zi";
@@ -39,14 +43,10 @@ storage_has_sync_account :: () -> s32 #foreign c3;
 #import, file "../practices/practice_offer.zi";
 #import, file "../practices/patterns/patterns_session_rules.zi";
 #import, file "practice_subscreen_layout.zi";
-#import "box_props"
-#import "button_props"
 #import "control_props"
-#import "image_props"
 #import "swipe"
 #import "swipe_props"
 #import "text_align"
-#import "text_props"
 #import, file "../app/exercise_types.zi";
 #import, file "../app/metrics.zi";
 #import, file "../app/color.zi";
@@ -54,13 +54,9 @@ storage_has_sync_account :: () -> s32 #foreign c3;
 #import "drawing_props"
 #import "geometry"
 #import "session"
-#import "tab_bar_props"
-#import "title_bar_props"
-#import "toolbar_props"
 #import, file "../app/app_chrome.zi";
 #import, file "../app/mini_mode.zi";
 #import, file "../app/locale.zi";
-#import "dropdown_props"
 #import "icon"
 #import, file "../app/text_buffers.zi";
 #import, file "../practices/sun_salutation/sun_salutation_rules.zi";
@@ -87,18 +83,18 @@ using ModalType;
 using AppMainTab;
 using ExerciseType;
 using IconType;
-using ArrowDirection;
+using Button.ArrowDirection;
 using TextAlign;
-using TextWrap;
-using ImageFit;
+using Text.Wrap;
+using Image.ImageFit;
 using SwipeDirection;
 using ButtonTone;
 using ControlSize;
 using ButtonEmphasis;
 
-empty_options_storage: [1] DropdownOption;
+empty_options_storage: [1] Dropdown.Option;
 
-empty_title_options :: () -> []DropdownOption {
+empty_title_options :: () -> []Dropdown.Option {
     return empty_options_storage[:0]
 }
 
@@ -140,12 +136,12 @@ practice_screen_handle_config_title :: (app: *InnerBreeze, title: string, modal_
     }
     title_h = ifx (practice_screen_subscreen_integrated(app, modal_type) != 0) then (app_content_top_reserved(app)) else (AppTitleBarHeight())
     // The page closes only when its back action is pressed.
-    bar: TitleBarProps
+    bar: TitleBar.Props
     bar.title = title
     bar.height = title_h
     bar.has_leading_action = true
     bar.leading_label = LocaleText("back_button")
-    title_result := TitleBar(CurrentApp().ui.session, bar, empty_title_options())
+    title_result := TitleBar.Draw(CurrentApp().ui.session, bar, empty_title_options())
     if !title_result.clicked_leading {
         return 0
     }
@@ -213,10 +209,10 @@ practice_draw_card_banner :: (asset_path: string, dest: Rectangle) {
     if first_banner {
         TraceLog(3, "APP PROBE: before banner Image")
     }
-    Image(CurrentApp().ui.session, ImageProps.{
+    Image.Draw(CurrentApp().ui.session, Image.Props.{
             .asset_path = asset_path,
             .bounds = dest,
-            .fit = cast(ImageFit)ImageFitCover
+            .fit = cast(Image.ImageFit)ImageFitCover
         })
     if first_banner {
         TraceLog(3, "APP PROBE: after banner Image")
@@ -236,9 +232,13 @@ practice_home_kind_of :: (id: s32) -> s32 {
 // The listed practices of one kind, in their usual order.
 practice_kind_ids :: (kind: s32, ids: []s32) -> s32 {
     count: s32 = 0
+    if kind == PRACTICE_KIND_MEDITATION && ids.count > 0 && practice_home_listed(EXERCISE_WIM_HOF) {
+        ids[count] = EXERCISE_WIM_HOF
+        count += 1
+    }
     for index: cast(s32)0..practice_count() - 1 {
         id := practice_ordered_id(index)
-        if practice_home_listed(id) && practice_home_kind_of(id) == kind && count < ids.count {
+        if id != EXERCISE_WIM_HOF && practice_home_listed(id) && practice_home_kind_of(id) == kind && count < ids.count {
             ids[count] = id
             count += 1
         }
@@ -350,6 +350,11 @@ practice_select_home_card :: (app: *InnerBreeze, exercise: s32) {
 
     if app == null {
         return
+    }
+    // A practice change redraws the whole page at once. Keep the previous
+    // frame on screen and cross-fade it, so the swap never lands as a jolt.
+    if app.breathing.screen == ScreenStart {
+        app_route_transition_request(app)
     }
     if app.practice_tab == PRACTICE_TAB_CONFIG {
         app_leave_practice_config(app)
@@ -656,7 +661,7 @@ practice_screen_draw_modal :: (app: *InnerBreeze) {
     }
     // The page is drawn over the canvas. The dock, already drawn this frame
     // while a bottom dock shows, stays above it.
-    Box(app.ui.session, BoxProps.{
+    Box.Draw(app.ui.session, Box.Props.{
             .bounds = Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
                 cast(float32)(app.ui.view_height - app_content_bottom_reserved(app))},
             .fill = StyleTokenColor("canvas")})
@@ -810,9 +815,9 @@ practice_screen_draw_first_run_guide :: (app: *InnerBreeze) {
 }
 
 start :: (app: *InnerBreeze) {
-    root: ColumnProps
-    root.key = KeyHash("start/root")
-    Screen(CurrentApp().ui.session, root)
+    root: Layout.Props
+    root.key = Layout.KeyHash("start/root")
+    unused Layout.Screen(CurrentApp().ui.session, root)
     if app == null {
         return
     }

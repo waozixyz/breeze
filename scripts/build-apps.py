@@ -11,6 +11,19 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def module_roots(manifest):
+    text = manifest.read_text()
+    try:
+        import tomllib
+        return tomllib.loads(text)['package']['module_roots']
+    except ModuleNotFoundError:
+        # Python before 3.11, as on the Ubuntu 22.04 package builders: the
+        # manifest keeps module_roots as one list of strings on one line.
+        import ast
+        import re
+        return ast.literal_eval(re.search(r'^module_roots\s*=\s*(\[[^\]]*\])', text, re.M).group(1))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--ziran', type=Path, required=True)
@@ -32,6 +45,10 @@ def main():
         context = Path(directory)
         for name in ('ziran.toml', 'ziran.lock'):
             shutil.copyfile(ROOT / name, context / name)
+        # Ziran resolves a project only when its module roots exist; the
+        # controller needs none of this app's modules, so they stay empty.
+        for directory in module_roots(ROOT / 'ziran.toml'):
+            (context / directory).mkdir(parents=True, exist_ok=True)
         package = Path(subprocess.check_output(
             [str(args.ziran.resolve()), 'pkg', 'path', 'apps', '--locked'],
             cwd=context, text=True).strip())

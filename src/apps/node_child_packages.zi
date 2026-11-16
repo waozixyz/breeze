@@ -17,6 +17,7 @@
 #import, file "package_work.zi";
 #import, file "package_files.zi";
 #import, file "package_release.zi";
+#import, file "download_recovery.zi";
 #import, file "catalog.zi";
 #import, file "../app/assets.zi";
 #import, file "../storage/temporary_data.zi";
@@ -41,6 +42,9 @@ NodeChildPackage :: struct {
     size: s64
     verified: bool
     touched: u64
+    recovery: DownloadRecovery
+    failure_http: s32
+    failure_error: [256]u8
 }
 
 node_children: [NODE_CHILD_LIMIT]NodeChildPackage;
@@ -50,6 +54,7 @@ node_child_work: *PackageWork;
 node_child_memory: s64;
 node_child_clock: u64;
 node_child_stored: bool;
+node_child_now: s64;
 
 NodeChildOrigin :: (root: s32) -> string {
     value := DataEnvironment("INBE_LOCAL_PACKAGE_ORIGIN")
@@ -230,6 +235,7 @@ NodeChildFetch :: (context: *void, account: string, parent: *AppNode, entry: *Ap
     child := *node_children[index]
     if child.status == 2 { return false }
     if child.status != 1 {
+        child.recovery = DownloadRecovery.{}
         child.requested = true
         child.status = 1
     }
@@ -259,14 +265,25 @@ NodeChildClose :: (root: s32) {
     }
 }
 
-NodeChildFinish :: (ok: bool) {
+NodeChildFinish :: (ok: bool, retryable: bool = true) {
     child := *node_children[node_child_active]
+    if !ok {
+        child.failure_http = node_child_transfer.http_status
+        unused CopyCString(TextUntilNul(node_child_transfer.error[:]), child.failure_error[:])
+    }
     FileDownloadRelease(*node_child_transfer)
     temporary := PackageText(child.path, ".download")
     unused RemoveFile(temporary)
     PackageFree(temporary)
     child.status = ifx ok then 2 else 3
     child.requested = false
+    if ok {
+        child.recovery = DownloadRecovery.{}
+    } else if !child.retired && retryable &&
+        DownloadRecoverySchedule(*child.recovery, node_child_now) {
+        child.status = 1
+        child.requested = true
+    }
     if child.retired { NodeChildClear(node_child_active) }
     node_child_active = -1
     node_child_stored = false
@@ -281,11 +298,14 @@ NodeChildCollect :: () {
     }
 }
 
-NodeChildPump :: (collected: bool = false) {
+NodeChildPump :: (collected: bool = false, now: s64 = -1) {
+    node_child_now = ifx now >= 0 then now else DownloadRecoveryNow()
     if node_child_active < 0 {
         for index: cast(s32)0..NODE_CHILD_LIMIT - 1 {
             child := *node_children[index]
             if !child.used || !child.requested || child.retired { continue }
+            if !DownloadRecoveryReady(child.recovery, node_child_now) { continue }
+            child.recovery.retry_at = 0
             node_child_active = index
             node_child_stored = false
             child.requested = false
@@ -320,11 +340,11 @@ NodeChildPump :: (collected: bool = false) {
             address := BuilderFinish(url)
             temporary := PackageText(child.path, ".download")
             node_child_transfer = FileDownload.{}
-            node_child_transfer.maximum_bytes = cast(u64)PackageMaximumBytes
+            node_child_transfer.maximum_bytes = cast(u64)NODE_CHILD_MEMORY_LIMIT
             started := FileDownloadStart(*node_child_transfer, address, temporary)
             PackageFree(address)
             PackageFree(temporary)
-            if !started { NodeChildFinish(false) }
+            if !started { NodeChildFinish(false, DownloadRetryable(node_child_transfer.http_status)) }
             return
         }
         return
@@ -373,7 +393,10 @@ NodeChildPump :: (collected: bool = false) {
         return
     }
     status := FileDownloadPoll(*node_child_transfer)
-    if status == cast(FileDownloadStatus)Error { NodeChildFinish(false); return }
+    if status == cast(FileDownloadStatus)Error {
+        NodeChildFinish(false, DownloadRetryable(node_child_transfer.http_status))
+        return
+    }
     if status != cast(FileDownloadStatus)Ready { return }
     child.size = cast(s64)node_child_transfer.bytes
     temporary := PackageText(child.path, ".download")

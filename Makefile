@@ -60,7 +60,7 @@ ZI_CHECK_STAMP := $(BUILD_DIR)/zi-check/native.fresh
 ZIRAN_SOURCES := $(shell find $(ZIRAN_DIR)/cmd $(ZIRAN_DIR)/bootstrap \
     $(ZIRAN_DIR)/include $(ZIRAN_DIR)/std -type f \
     \( -name '*.zi' -o -name '*.c' -o -name '*.h' \) 2>/dev/null) \
-    $(ZIRAN_DIR)/Makefile $(ZIRAN_DIR)/native-zx.mk $(ZIRAN_DIR)/VERSION
+    $(ZIRAN_DIR)/Makefile $(wildcard $(ZIRAN_DIR)/*.mk) $(ZIRAN_DIR)/VERSION
 BUILD_OBJ_DIR := $(BUILD_DIR)/obj
 BUILD_BIN_DIR := $(BUILD_DIR)/bin
 BUILD_DIST_DIR := $(BUILD_DIR)/dist
@@ -88,6 +88,7 @@ APP_ID := $(ANDROID_APP_ID)
 APP_DESKTOP := $(LINUX_APPIMAGE_DESKTOP)
 APP_METAINFO := $(LINUX_APPIMAGE_APPDATA)
 APP_ICON := $(LINUX_APPIMAGE_ICON)
+APP_DESKTOP_EXEC := $(PREFIX)/bin/$(APP_EXECUTABLE)
 
 DEB_BUILD_DIR := $(BUILD_OBJ_DIR)/deb
 DEB_ROOT := $(DEB_BUILD_DIR)/root
@@ -356,7 +357,8 @@ APP_SRCS := \
 ifneq ($(filter linux freebsd,$(NATIVE_PLATFORM)),)
 DESKTOP_TRAY_DEFINE := DESKTOP_TRAY_ENABLED
 endif
-ZI_NATIVE_DEFINES := PLATFORM_DESKTOP $(DESKTOP_TRAY_DEFINE)
+# The native host links libavif/aom; select its decoder in the checked graph.
+ZI_NATIVE_DEFINES := PLATFORM_DESKTOP AVIF_RAYLIB $(DESKTOP_TRAY_DEFINE)
 # Ziran preprocessing must see the libc choice used by the native C compiler.
 NATIVE_GLIBC := $(shell printf '#include <stdlib.h>\n' | $(CC) -dM -E - 2>/dev/null | grep -q '^\#define __GLIBC__ ' && printf yes)
 ifeq ($(NATIVE_GLIBC),yes)
@@ -385,9 +387,10 @@ endif
 
 # No in-process GTK anywhere else either: the system theme uses kryon's
 # built-in palettes, and native file dialogs prefer xdg-desktop-portal through
-# GIO before falling back to zenity/kdialog/yad.
+# GIO before falling back to zenity/kdialog/yad. Embedded in a host such as
+# Harmony, the Linux build reads the host's theme from its X11 window.
 SYSTEM_THEME_CFLAGS :=
-SYSTEM_THEME_LDLIBS :=
+SYSTEM_THEME_LDLIBS := $(if $(filter linux,$(NATIVE_PLATFORM)),-lX11,)
 
 LOCALE_FILES := $(wildcard locales/*.txt)
 # The practice media is the practices package, packaged under
@@ -414,7 +417,7 @@ APP_BUNDLES := $(addprefix $(BUILD_DIR)/apps/,lists.zx habits.zx practices.zx di
 INBE_BUNDLE := $(BUILD_DIR)/inbe.zx
 INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zx
 APP_SOURCES := $(shell find apps src/apps -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
-APP_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp 2>/dev/null)
+APP_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp assets/navigation assets/apps/icons 2>/dev/null)
 APP_RESOURCES += $(shell find -L $(PRACTICE_MEDIA) -type f -not -path '*/.git/*' 2>/dev/null) $(shell rg --files design/tai-chi/text 2>/dev/null) apps/practice/content.json design/tai-chi/narration.json design/tai-chi/narration-lines.json $(wildcard design/tai-chi/narration-receipt.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt design/sun-salutation/narration/text-female/*.txt) $(wildcard design/lumi-guide/*.json) $(wildcard design/astral-projection/*.json) scripts/practice_content.py scripts/practice_media.py scripts/tai_chi_preview.py apps/practice/course_access.zi scripts/generate-lumi-guide-narration.py
 APP_RESOURCES += $(wildcard design/lumi-guide/text-female/*.txt)
 APP_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievement-locales/*.json)
@@ -716,6 +719,7 @@ $(KRY_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makef
 		--no-main --prune-stale --root . \
 		$(foreach define,$(ZI_NATIVE_DEFINES),--define $(define)) \
 		-o $(KRY_GEN_DIR) $(ZI_SRCS)
+	touch $@
 
 $(KRY_GEN_SRCS) $(KRY_GEN_HDRS) $(KRY_GEN_GAME_C): $(KRY_GEN_STAMP)
 
@@ -769,7 +773,7 @@ $(TARGET): | zi-check
 		$(if $(filter -j%,$(MAKEFLAGS)),,-j$(NATIVE_JOBS)) \
 		CC='$(CC)' OBJ_DIR=$(NATIVE_OBJ_DIR)
 	$(CC) $(KRYON_NATIVE_CFLAGS) \
-		-o $@ \
+		-o $@.next \
 		@$(NATIVE_OBJ_DIR)/objects.rsp \
 		$(ZIRAN_BUILD_DIR)/libziran.a \
 		$(KRYON_NATIVE_BACKEND_LIBS) \
@@ -778,6 +782,7 @@ $(TARGET): | zi-check
 		$(RUNTIME_ASSET_LDLIBS) \
 		$(NATIVE_SYSTEM_LDLIBS) \
 		$(LDFLAGS)
+	mv -f $@.next $@
 	$(if $(filter linux,$(NATIVE_PLATFORM)),python3 scripts/check-package-size.py $@,)
 
 $(KRYON_HOST_TARGET): $(ZIRAN_BUILD_DIR)/libziran.a Makefile $(KRYON_HOST_SRC) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) | $(BUILD_DIR)

@@ -3,39 +3,29 @@
 #import "geometry"
 #import "vec"
 #import "text_buffer"
-#import "text_props"
+Box :: #import "kryon/box";
+Button :: #import "kryon/button";
+Dropdown :: #import "kryon/dropdown";
+Image :: #import "kryon/image";
+Press :: #import "kryon/press";
+Scroll :: #import "kryon/scroll";
+Spinbox :: #import "kryon/spinbox";
+Text :: #import "kryon/text";
+TextArea :: #import "kryon/text_area";
+TextField :: #import "kryon/text_field";
+Toggle :: #import "kryon/toggle";
 #import "text_measure"
 #import "text_align"
-#import "image_props"
 #import "grid"
 #import "grid_props"
-#import "press_props"
-#import "button_props"
 #import "control_props"
-#import "scroll_props"
 #import "kryon/tree"
 #import "pointer_input"
 #import "swipe"
 #import "swipe_props"
 #import "input_protocol"
 #import "drawing_props"
-#import "box_props"
-#import "spinbox_props"
-#import "kryon/Kryon"
-#import "kryon/spinbox"
 #import "kryon/transition"
-#import "kryon/box_widget"
-#import "kryon/button_widget"
-#import "kryon/dropdown_widget"
-#import "kryon/image_widget"
-#import "kryon/press_widget"
-#import "kryon/scroll_widget"
-#import "kryon/text_area_widget"
-#import "kryon/text_widget"
-#import "kryon/toggle_widget"
-#import "dropdown_props"
-#import "toggle_props"
-#import "text_input_props"
 #import "widget_palette"
 #import "icon"
 #import "transition"
@@ -53,11 +43,11 @@ AppLocaleHost :: (key: string) -> string #foreign host_api;
 AppRecordHost :: (record: string) -> string #foreign host_api;
 SaveAppRecordHost :: (record: string, value: string) -> bool #foreign host_api;
 AppKeyHost :: () -> s32 #foreign host_api;
-AppFieldInputHost :: () -> TextFieldInput #foreign host_api;
+AppFieldInputHost :: () -> TextField.Input #foreign host_api;
 CloseAppHost :: () -> bool #foreign host_api;
 SmoothFramesHost :: (frames: s32) -> bool #foreign host_api;
 
-using TextWrap;
+using Text.Wrap;
 using ButtonTone;
 using ButtonEmphasis;
 using TextAlign;
@@ -73,6 +63,7 @@ page_count: s32;
 page_index: s32;
 anchor_chapter: s32 = 1;
 anchor_offset: s32;
+anchor_picture: bool;
 layout_width: s32;
 layout_height: s32;
 layout_scale: float32;
@@ -92,12 +83,11 @@ annotation_count: s32;
 annotation_index: s32 = -1;
 annotation_dirty: bool;
 note: [2049]u8;
-note_state: TextAreaResult;
-passage_state: TextAreaResult;
+note_state: TextArea.Result;
+passage_state: TextArea.Result;
 reader_swipe: SwipeGesture;
 book_dark: bool;
 picture_book: bool;
-mode_choose_open: bool;
 opening_started: float64;
 opening: bool;
 opening_from: Rectangle;
@@ -169,7 +159,7 @@ LoadSettings :: () {
     margin = 24
     line_gap = 8
     book_dark = RecordNumber("tao-te-ching.theme", ifx frame.dark then 1 else 0, 0, 1) == 1
-    picture_book = RecordNumber(BookModeRecord(0), 0, 0, 1) == 1
+    picture_book = RecordNumber(BookModeRecord(0), 1, 0, 1) == 1
     text := AppRecordHost("reader.settings")
     at: s32
     size := ReadLibraryNumber(text, *at)
@@ -190,47 +180,58 @@ ReaderAreaBounds :: () -> Rectangle {
     return Bounds((frame.width - width) / 2, top, width, height)
 }
 
-ChapterArtBounds :: () -> Rectangle {
-    area := ReaderAreaBounds()
-    side := cast(s32)(area.height * 38.0 / 100.0)
-    if cast(float32)side > area.width { side = cast(s32)area.width }
-    x := cast(s32)area.x + (cast(s32)area.width - side) / 2
-    return Bounds(x, cast(s32)area.y, side, side)
+ReaderTypeface :: () -> string {
+    return ifx font_face == 1 then "assets/library/noto-sans.ttf" else "ui"
 }
 
-ReadingBounds :: () -> Rectangle {
-    bounds := ReaderAreaBounds()
-    if !picture_book || !BookChapterArtApproved(book) { return bounds }
-    art := ChapterArtBounds()
-    bounds.y = art.y + art.height + cast(float32)Scale(16)
-    bottom := cast(float32)frame.height - cast(float32)frame.bottom - cast(float32)Scale(48)
-    bounds.height = bottom - bounds.y
-    return bounds
-}
-
-ChapterHeadingProps :: (chapter: s32) -> TextProps {
-    props := TextProps.{.key = 27501,
-        .text = LibraryChapterLabel(chapter, BookChapterTitle(book, chapter)),
-        .bounds = ReadingBounds(), .font = Scale(font_size),
-        .typeface = ifx font_face == 1 then "assets/library/noto-sans.ttf" else "ui",
-        .align = cast(TextAlign)TextAlignCenter, .wrap = cast(TextWrap)TextWrapAuto}
+ChapterHeadingProps :: (chapter: s32) -> Text.Props {
+    props := Text.Props.{.key = 27501,
+        .text = BookChapterTitle(book, chapter),
+        .bounds = ReaderAreaBounds(), .size = Scale(font_size), .typeface = ReaderTypeface(),
+        .align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapAuto}
     props.bounds.height = cast(float32)TextHeight(frame.session, props)
     return props
 }
 
-ReadingProps :: (chapter: s32) -> TextProps {
-    bounds := ReadingBounds()
+ReadingProps :: (chapter: s32) -> Text.Props {
+    bounds := ReaderAreaBounds()
     heading := ChapterHeadingProps(chapter)
     inset := heading.bounds.height + cast(float32)Scale(16)
     bounds.y += inset
     bounds.height -= inset
-    return TextProps.{.bounds = bounds, .font = Scale(font_size),
-        .typeface = ifx font_face == 1 then "assets/library/noto-sans.ttf" else "ui",
-        .line_gap = Scale(line_gap), .wrap = cast(TextWrap)TextWrapAuto}
+    return Text.Props.{.bounds = bounds, .size = Scale(font_size), .typeface = ReaderTypeface(),
+        .line_gap = Scale(line_gap), .wrap = cast(Text.Wrap)TextWrapAuto}
+}
+
+HasPicturePages :: () -> bool {
+    return picture_book && BookChapterArtApproved(book)
+}
+
+// The illustration and the title below it are centered together, as one
+// group, in the reading area of their own page.
+PicturePageView :: (chapter: s32) {
+    area := ReaderAreaBounds()
+    title := Text.Props.{.key = 27501,
+        .text = BookChapterTitle(book, chapter),
+        .bounds = area, .size = Scale(font_size + 4), .typeface = ReaderTypeface(),
+        .align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapAuto}
+    title_height := TextHeight(frame.session, title)
+    gap := Scale(24)
+    side := cast(s32)area.height - title_height - gap
+    if side > cast(s32)area.width { side = cast(s32)area.width }
+    if side < 0 { side = 0 }
+    top := cast(s32)area.y + (cast(s32)area.height - side - gap - title_height) / 2
+    left := cast(s32)area.x + (cast(s32)area.width - side) / 2
+    Image.Draw(frame.session, Image.Props.{.key = 27503,
+            .asset_path = BookChapterArt(book, chapter), .alt_text = title.text,
+            .bounds = Bounds(left, top, side, side), .fit = Image.ImageFit.ImageFitContain, .smooth = true})
+    title.bounds = Bounds(cast(s32)area.x, top + side + gap, cast(s32)area.width, title_height)
+    Text.Draw(frame.session, title)
 }
 
 Reflow :: () {
-    bounds := ReadingBounds()
+    // Cache the viewport, independent of whichever page is currently visible.
+    bounds := ReaderAreaBounds()
     if page_count > 0 && layout_width == cast(s32)bounds.width &&
     layout_height == cast(s32)bounds.height && layout_scale == frame.scale { return }
     // During a transient resize (for example a phone keyboard), keep the
@@ -238,19 +239,23 @@ Reflow :: () {
     if bounds.width < cast(float32)Scale(60) || bounds.height < cast(float32)Scale(font_size + line_gap) { return }
     count: s32
     for chapter: cast(s32)1..BookChapters(book) {
+        if HasPicturePages() && count < LIBRARY_PAGE_LIMIT {
+            pages[count] = LibraryPage.{.chapter = chapter, .picture = true}
+            count += 1
+        }
         props := ReadingProps(chapter)
         props.text = BookChapter(book, chapter)
         at: s32
         while at < props.text.count && count < LIBRARY_PAGE_LIMIT {
             part := TextPage(frame.session, props, at)
             if part.next <= at { return }
-            pages[count] = LibraryPage.{chapter, part.start, part.end}
+            pages[count] = LibraryPage.{chapter, part.start, part.end, false}
             count += 1
             at = part.next
         }
     }
     page_count = count
-    page_index = LibraryPageFor(pages[:page_count], anchor_chapter, anchor_offset)
+    page_index = LibraryPageFor(pages[:page_count], anchor_chapter, anchor_offset, anchor_picture)
     layout_width = cast(s32)bounds.width
     layout_height = cast(s32)bounds.height
     layout_scale = frame.scale
@@ -268,8 +273,8 @@ LoadPageAnnotations :: () {
     }
     note[0] = 0
     if annotation_index >= 0 { unused AppCopyText(annotations[annotation_index].note, note[:]) }
-    note_state = TextAreaResult.{}
-    passage_state = TextAreaResult.{}
+    note_state = TextArea.Result.{}
+    passage_state = TextArea.Result.{}
     if annotation_index >= 0 {
         saved := annotations[annotation_index]
         // Keep older page-wide notes, without selecting the entire page.
@@ -291,11 +296,12 @@ OpenBook :: (index: s32) {
         anchor_offset = 0
     }
     if anchor_offset < 0 || anchor_offset >= BookChapter(book, anchor_chapter).count { anchor_offset = 0 }
+    // A book opened at the start of a chapter shows that chapter's picture.
+    anchor_picture = anchor_offset == 0
     page_count = 0
     annotation_chapter = 0
     panel_open = false
     reading = true
-    mode_choose_open = true
     opening = true
     opening_started = frame.now
     unused SmoothFramesHost(24)
@@ -304,69 +310,14 @@ OpenBook :: (index: s32) {
     if page_count > 0 { LoadPageAnnotations() }
 }
 
-ChooseReadingMode :: (pictures: bool) {
+SetPictureMode :: (pictures: bool) {
+    if !SaveReader() { return }
     picture_book = pictures
-    mode_choose_open = false
     layout_width = 0
     settings_dirty = true
+    reader_swipe = SwipeGesture.{}
     unused SmoothFramesHost(2)
     unused SaveReader()
-}
-
-CancelReadingModeChoice :: () {
-    mode_choose_open = false
-    layout_width = 0
-    unused SmoothFramesHost(2)
-}
-
-ReadingModeChooser :: () {
-    compact := frame.width < Scale(360)
-    width := frame.width - Scale(32)
-    if width > Scale(440) { width = Scale(440) }
-    height := ifx compact then Scale(344) else Scale(238)
-    x := (frame.width - width) / 2
-    y := frame.top + (frame.height - frame.top - frame.bottom - height) / 2
-    palette := ReaderPalette()
-    unused Box(frame.session, BoxProps.{.key = 27580,
-            .bounds = Bounds(0, 0, frame.width, frame.height), .fill = Color.{24, 20, 16, 208}})
-    unused Box(frame.session, BoxProps.{.key = 27581, .bounds = Bounds(x, y, width, height),
-            .fill = ColorFromPacked(palette.base), .border = ColorFromPacked(palette.border),
-            .radius = cast(float32)Scale(12)})
-    Text(frame.session, TextProps.{.key = 27582, .text = AppLocaleHost("library_mode_title"),
-            .font = frame.font, .align = cast(TextAlign)TextAlignCenter,
-            .bounds = Bounds(x + Scale(16), y + Scale(20), width - Scale(88), Scale(32))})
-    if Button(frame.session, ButtonProps.{.id = 27585,
-            .bounds = Bounds(x + width - Scale(52), y + Scale(12), Scale(40), Scale(40)),
-            .label = AppLocaleHost("close_button"), .icon_type = cast(s32)IconType.IconX,
-            .icon_only = true, .size = cast(ControlSize)ControlSize.ControlSizeLarge,
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
-        CancelReadingModeChoice()
-    }
-    choice_width := ifx compact then width - Scale(32) else (width - Scale(40)) / 2
-    choice_height := Scale(128)
-    text_x := ifx compact then x + Scale(16) else x + Scale(16)
-    picture_x := ifx compact then x + Scale(16) else text_x + choice_width + Scale(8)
-    text_y := y + Scale(68)
-    picture_y := ifx compact then text_y + choice_height + Scale(8) else text_y
-    if Button(frame.session, ButtonProps.{.id = 27583,
-            .bounds = Bounds(text_x, text_y, choice_width, choice_height),
-            .label = AppLocaleHost("library_mode_text"), .detail = AppLocaleHost("library_mode_text_detail"),
-            .icon_type = cast(s32)IconType.IconText, .size = cast(ControlSize)ControlSize.ControlSizeLarge,
-            .full_width = true, .selected = !picture_book,
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        ChooseReadingMode(false)
-    }
-    if Button(frame.session, ButtonProps.{.id = 27584,
-            .bounds = Bounds(picture_x, picture_y, choice_width, choice_height),
-            .label = AppLocaleHost("library_mode_picture"), .detail = AppLocaleHost("library_mode_picture_detail"),
-            .icon_type = cast(s32)IconType.IconStack, .size = cast(ControlSize)ControlSize.ControlSizeLarge,
-            .full_width = true, .selected = picture_book,
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        ChooseReadingMode(true)
-    }
 }
 
 TurnPage :: (index: s32) {
@@ -374,6 +325,7 @@ TurnPage :: (index: s32) {
     page_index = index
     anchor_chapter = pages[index].chapter
     anchor_offset = pages[index].start
+    anchor_picture = pages[index].picture
     position_dirty = true
     unused SaveReader()
     LoadPageAnnotations()
@@ -388,12 +340,12 @@ LibraryBack :: () -> bool {
 }
 
 BookJacket :: (index: s32, cover: Rectangle, key: u64) {
-    Image(frame.session, ImageProps.{.key = key, .asset_path = BookCover(index),
+    Image.Draw(frame.session, Image.Props.{.key = key, .asset_path = BookCover(index),
             .alt_text = BookTitle(index), .bounds = cover,
-            .fit = ImageFit.ImageFitStretch, .smooth = true})
+            .fit = Image.ImageFit.ImageFitStretch, .smooth = true})
     if cover.width < cast(float32)Scale(80) { return }
     label_height := cast(s32)(cover.height * 0.30)
-    unused Box(frame.session, BoxProps.{.key = key + 1,
+    unused Box.Draw(frame.session, Box.Props.{.key = key + 1,
             .bounds = Bounds(cast(s32)cover.x + Scale(4), cast(s32)cover.y + Scale(4),
             cast(s32)cover.width - Scale(8), label_height),
             .fill = Color.{244, 233, 204, 245}, .fill_bottom = Color.{244, 233, 204, 0},
@@ -403,11 +355,11 @@ BookJacket :: (index: s32, cover: Rectangle, key: u64) {
     unused WidgetPaletteUse(frame.session, palette)
     title_font := cast(s32)(cover.width * 0.105)
     author_font := cast(s32)(cover.width * 0.075)
-    Text(frame.session, TextProps.{.key = key + 2, .text = BookTitle(index), .font = title_font,
+    Text.Draw(frame.session, Text.Props.{.key = key + 2, .text = BookTitle(index), .size = title_font,
             .align = cast(TextAlign)TextAlignCenter,
             .bounds = Bounds(cast(s32)cover.x + Scale(8), cast(s32)cover.y + Scale(12),
             cast(s32)cover.width - Scale(16), title_font + Scale(4))})
-    Text(frame.session, TextProps.{.key = key + 3, .text = BookAuthor(index), .font = author_font,
+    Text.Draw(frame.session, Text.Props.{.key = key + 3, .text = BookAuthor(index), .size = author_font,
             .align = cast(TextAlign)TextAlignCenter,
             .bounds = Bounds(cast(s32)cover.x + Scale(8), cast(s32)cover.y + Scale(18) + title_font,
             cast(s32)cover.width - Scale(16), author_font + Scale(4))})
@@ -421,7 +373,7 @@ OpeningView :: () {
         return
     }
     unused SmoothFramesHost(2)
-    width := ReadingBounds().width
+    width := ReaderAreaBounds().width
     if width > cast(float32)Scale(260) { width = cast(float32)Scale(260) }
     target := Rectangle.{(cast(float32)frame.width - width) / 2.0,
         cast(float32)frame.top + cast(float32)Scale(24), width, width * 1.5}
@@ -448,10 +400,10 @@ ShelfView :: () {
     visible_rows := (cast(s32)area.height + row_height - 1) / row_height
     if rows < visible_rows { rows = visible_rows }
     content_height := rows * row_height + Scale(20)
-    unused Box(frame.session, BoxProps.{.key = 27900, .bounds = area,
+    unused Box.Draw(frame.session, Box.Props.{.key = 27900, .bounds = area,
             .fill = Color.{73, 43, 28, 255}, .fill_bottom = Color.{111, 71, 44, 255},
             .has_fill_bottom = true})
-    scroll := Scroll(frame.session, ScrollProps.{.key = 27000, .bounds = area,
+    scroll := Scroll.Draw(frame.session, Scroll.Props.{.key = 27000, .bounds = area,
             .content_height = content_height,
             .scroll_offset = shelf_scroll, .scale = frame.scale})
     shelf_scroll = scroll.scroll_offset
@@ -466,26 +418,26 @@ ShelfView :: () {
         width := cast(s32)scroll.content.width
         board := y + height + Scale(20)
         key := cast(u64)(28000 + row * 32)
-        unused Box(frame.session, BoxProps.{.key = key,
+        unused Box.Draw(frame.session, Box.Props.{.key = key,
                 .bounds = Bounds(x + Scale(10), y, width - Scale(20), row_height),
                 .fill = Color.{57, 35, 25, 255}, .fill_bottom = Color.{126, 87, 55, 255},
                 .has_fill_bottom = true})
-        unused Box(frame.session, BoxProps.{.key = key + 1,
+        unused Box.Draw(frame.session, Box.Props.{.key = key + 1,
                 .bounds = Bounds(x + Scale(10), board - Scale(14), width - Scale(20), Scale(14)),
                 .fill = Color.{158, 110, 65, 255}, .fill_bottom = Color.{193, 143, 85, 255},
                 .has_fill_bottom = true})
-        unused Box(frame.session, BoxProps.{.key = key + 2,
+        unused Box.Draw(frame.session, Box.Props.{.key = key + 2,
                 .bounds = Bounds(x, board, width, Scale(22)),
                 .fill = Color.{163, 111, 63, 255}, .fill_bottom = Color.{108, 65, 36, 255},
                 .has_fill_bottom = true})
-        unused Box(frame.session, BoxProps.{.key = key + 3,
+        unused Box.Draw(frame.session, Box.Props.{.key = key + 3,
                 .bounds = Bounds(x, board, width, Scale(2)), .fill = Color.{217, 167, 104, 255}})
-        unused Box(frame.session, BoxProps.{.key = key + 4,
+        unused Box.Draw(frame.session, Box.Props.{.key = key + 4,
                 .bounds = Bounds(x + Scale(10), board + Scale(22), width - Scale(20), Scale(18)),
                 .fill = Color.{25, 15, 10, 120}, .fill_bottom = Color.{25, 15, 10, 0},
                 .has_fill_bottom = true})
         for grain: cast(s32)0..3 {
-            unused Box(frame.session, BoxProps.{.key = key + cast(u64)(5 + grain),
+            unused Box.Draw(frame.session, Box.Props.{.key = key + cast(u64)(5 + grain),
                     .bounds = Bounds(x + Scale(8 + grain * 13), board + Scale(5 + grain * 4),
                     width - Scale(40 + grain * 14), Scale(1)),
                     .fill = Color.{75, 43, 24, 65}})
@@ -498,18 +450,18 @@ ShelfView :: () {
         x := cast(s32)cover.x
         y := cast(s32)cover.y
         key := cast(u64)(29000 + index * 16)
-        unused Box(frame.session, BoxProps.{.key = key,
+        unused Box.Draw(frame.session, Box.Props.{.key = key,
                 .bounds = Bounds(x + Scale(6), y + Scale(8), cover_width + Scale(8), height),
                 .fill = Color.{20, 12, 8, 105}, .radius = cast(float32)Scale(3)})
-        unused Box(frame.session, BoxProps.{.key = key + 1,
+        unused Box.Draw(frame.session, Box.Props.{.key = key + 1,
                 .bounds = Bounds(x + Scale(5), y + Scale(3), cover_width, height - Scale(3)),
                 .fill = Color.{221, 208, 171, 255}, .border = Color.{121, 101, 66, 255}})
-        press := Press(frame.session, PressProps.{.key = cast(u64)(27010 + index),
+        press := Press.Draw(frame.session, Press.Props.{.key = cast(u64)(27010 + index),
                 .bounds = cover, .label = BookTitle(index), .now = frame.now})
         BookJacket(index, cover, key + 4)
-        unused Box(frame.session, BoxProps.{.key = key + 2,
+        unused Box.Draw(frame.session, Box.Props.{.key = key + 2,
                 .bounds = Bounds(x, y, Scale(5), height), .fill = Color.{18, 24, 17, 85}})
-        unused Box(frame.session, BoxProps.{.key = key + 3,
+        unused Box.Draw(frame.session, Box.Props.{.key = key + 3,
                 .bounds = Bounds(x + Scale(6), y, Scale(1), height), .fill = Color.{255, 243, 192, 75}})
         if press.clicked {
             opening_from = cover
@@ -536,19 +488,19 @@ AnnotationPanel :: (bounds: Rectangle) {
     width := cast(s32)bounds.width
     current := pages[page_index]
     input := AppFieldInputHost()
-    Text(frame.session, TextProps.{.text = AppLocaleHost("library_select_passage"), .font = frame.font,
+    Text.Draw(frame.session, Text.Props.{.text = AppLocaleHost("library_select_passage"), .size = frame.font,
             .bounds = Bounds(cast(s32)bounds.x, y, width, Scale(32))})
     y += Scale(40)
     previous_start := ifx passage_state.anchor < passage_state.cursor then passage_state.anchor else passage_state.cursor
     previous_end := ifx passage_state.anchor > passage_state.cursor then passage_state.anchor else passage_state.cursor
-    passage_state = TextArea(frame.session, TextAreaProps.{.key = 27619, .focus_id = 27619,
+    passage_state = TextArea.Draw(frame.session, TextArea.Props.{.key = 27619, .focus_id = 27619,
             .bounds = Bounds(cast(s32)bounds.x, y, width, Scale(168)),
             .value = BookChapter(book, current.chapter)[current.start:current.end],
             .label = AppLocaleHost("library_select_passage"), .read_only = true, .wrap = true,
             .cursor = passage_state.cursor, .anchor = passage_state.anchor,
             .focused = passage_state.focused, .scroll_y = passage_state.scroll_y,
             .selecting = passage_state.selecting, .scale = frame.scale,
-            .input = TextAreaInput.{.left = input.left, .right = input.right,
+            .input = TextArea.Input.{.left = input.left, .right = input.right,
                 .home = input.home, .end = input.end, .shift = input.shift,
                 .select_all = input.select_all, .copy = input.copy, .now_seconds = frame.now}})
     start := ifx passage_state.anchor < passage_state.cursor then passage_state.anchor else passage_state.cursor
@@ -562,14 +514,14 @@ AnnotationPanel :: (bounds: Rectangle) {
         }
         note[0] = 0
         if annotation_index >= 0 { unused AppCopyText(annotations[annotation_index].note, note[:]) }
-        note_state = TextAreaResult.{}
+        note_state = TextArea.Result.{}
     }
     y += Scale(184)
     selected := end > start || annotation_index >= 0
     highlighted := annotation_index >= 0 && annotations[annotation_index].highlighted
-    Text(frame.session, TextProps.{.text = AppLocaleHost("library_highlight"), .font = frame.font,
+    Text.Draw(frame.session, Text.Props.{.text = AppLocaleHost("library_highlight"), .size = frame.font,
             .bounds = Bounds(cast(s32)bounds.x, y, width - Scale(72), Scale(48))})
-    toggle := Toggle(frame.session, ToggleProps.{.key = 27620,
+    toggle := Toggle.Draw(frame.session, Toggle.Props.{.key = 27620,
             .bounds = Bounds(cast(s32)bounds.x + width - Scale(64), y, Scale(64), Scale(48)),
             .label = AppLocaleHost("library_highlight"), .value = highlighted, .disabled = !selected})
     if toggle.changed && EnsureAnnotation() {
@@ -578,14 +530,14 @@ AnnotationPanel :: (bounds: Rectangle) {
         unused SaveReader()
     }
     y += Scale(64)
-    edit := TextArea(frame.session, TextAreaProps.{.key = 27621, .focus_id = 27621,
+    edit := TextArea.Draw(frame.session, TextArea.Props.{.key = 27621, .focus_id = 27621,
             .bounds = Bounds(cast(s32)bounds.x, y, width, Scale(160)),
             .value = TextUntilNul(note[:]), .label = AppLocaleHost("library_note"),
             .placeholder = AppLocaleHost("library_note"), .max_bytes = 2048, .max_codepoints = 2048,
             .cursor = note_state.cursor, .anchor = note_state.anchor,
             .scroll_y = note_state.scroll_y, .focused = note_state.focused,
             .composition = note_state.composition, .wrap = true, .scale = frame.scale, .disabled = !selected,
-            .input = TextAreaInput.{.text = input.text, .paste_text = input.paste_text,
+            .input = TextArea.Input.{.text = input.text, .paste_text = input.paste_text,
                 .composition_event = input.composition_event, .left = input.left, .right = input.right,
                 .home = input.home, .end = input.end, .shift = input.shift,
                 .backspace = input.backspace, .delete_forward = input.delete_forward,
@@ -603,7 +555,7 @@ AnnotationPanel :: (bounds: Rectangle) {
     // their notes visible as well as the editable first annotation.
     for index: cast(s32)0..annotation_count - 1 {
         if index != annotation_index && LibraryOverlaps(current, annotations[index]) && annotations[index].note != "" {
-            Text(frame.session, TextProps.{.text = annotations[index].note, .font = frame.font,
+            Text.Draw(frame.session, Text.Props.{.text = annotations[index].note, .size = frame.font,
                     .bounds = Bounds(cast(s32)bounds.x, y, width, Scale(100))})
             y += Scale(112)
         }
@@ -614,9 +566,9 @@ FontPanel :: (bounds: Rectangle) {
     x := cast(s32)bounds.x
     y := cast(s32)bounds.y
     width := cast(s32)bounds.width
-    Text(frame.session, TextProps.{.text = AppLocaleHost("library_font_size"), .font = frame.font,
+    Text.Draw(frame.session, Text.Props.{.text = AppLocaleHost("library_font_size"), .size = frame.font,
             .bounds = Bounds(x, y, width, Scale(28))})
-    size := Spinbox(frame.session, SpinboxProps.{.key = 27630,
+    size := Spinbox.Draw(frame.session, Spinbox.Props.{.key = 27630,
             .bounds = Bounds(x, y + Scale(32), width, Scale(56)), .label = AppLocaleHost("library_font_size"),
             .min = 14, .max = 36, .step = 1, .value = font_size, .value_text = NumberText(font_size)})
     if size.changed {
@@ -624,12 +576,12 @@ FontPanel :: (bounds: Rectangle) {
         layout_width = 0
         settings_dirty = true
     }
-    options: [2]DropdownOption
+    options: [2]Dropdown.Option
     options[0].label = AppLocaleHost("library_font_system")
     options[1].label = "Noto Sans"
-    Text(frame.session, TextProps.{.text = AppLocaleHost("library_typeface"), .font = frame.font,
+    Text.Draw(frame.session, Text.Props.{.text = AppLocaleHost("library_typeface"), .size = frame.font,
             .bounds = Bounds(x, y + Scale(112), width, Scale(28))})
-    face := Dropdown(frame.session, DropdownProps.{.key = 27631,
+    face := Dropdown.Draw(frame.session, Dropdown.Props.{.key = 27631,
             .bounds = Bounds(x, y + Scale(144), width, Scale(48)),
             .placeholder = AppLocaleHost("library_typeface"), .selected_index = font_face,
             .scale = frame.scale}, options[:])
@@ -645,14 +597,14 @@ LayoutPanel :: (bounds: Rectangle) {
     x := cast(s32)bounds.x
     y := cast(s32)bounds.y
     width := cast(s32)bounds.width
-    Text(frame.session, TextProps.{.text = AppLocaleHost("library_margins"), .font = frame.font,
+    Text.Draw(frame.session, Text.Props.{.text = AppLocaleHost("library_margins"), .size = frame.font,
             .bounds = Bounds(x, y, width, Scale(28))})
-    Text(frame.session, TextProps.{.text = AppLocaleHost("library_line_spacing"), .font = frame.font,
+    Text.Draw(frame.session, Text.Props.{.text = AppLocaleHost("library_line_spacing"), .size = frame.font,
             .bounds = Bounds(x, y + Scale(112), width, Scale(28))})
-    inset := Spinbox(frame.session, SpinboxProps.{.key = 27640,
+    inset := Spinbox.Draw(frame.session, Spinbox.Props.{.key = 27640,
             .bounds = Bounds(x, y + Scale(32), width, Scale(56)), .label = AppLocaleHost("library_margins"),
             .min = 12, .max = 56, .step = 4, .value = margin, .value_text = NumberText(margin)})
-    gap := Spinbox(frame.session, SpinboxProps.{.key = 27641,
+    gap := Spinbox.Draw(frame.session, Spinbox.Props.{.key = 27641,
             .bounds = Bounds(x, y + Scale(144), width, Scale(56)), .label = AppLocaleHost("library_line_spacing"),
             .min = 2, .max = 20, .step = 2, .value = line_gap, .value_text = NumberText(line_gap)})
     if inset.changed || gap.changed {
@@ -666,16 +618,16 @@ LayoutPanel :: (bounds: Rectangle) {
 
 ContentsPanel :: (bounds: Rectangle) {
     for chapter: cast(s32)1..BookChapters(book) {
-        if Button(frame.session, ButtonProps.{.id = 27200 + chapter,
+        if Button.Draw(frame.session, Button.Props.{.id = 27200 + chapter,
                 .bounds = Bounds(cast(s32)bounds.x, cast(s32)bounds.y + (chapter - 1) * Scale(56),
                 cast(s32)bounds.width, Scale(48)),
-                .label = LibraryChapterLabel(chapter, BookChapterTitle(book, chapter)),
+                .label = BookChapterTitle(book, chapter),
                 .content_alignment = ContentAlignment.ContentAlignmentStart, .fit_content = true,
                 .size = ControlSize.ControlSizeLarge,
                 .selected = chapter == pages[page_index].chapter,
                 .tone = cast(ButtonTone)ButtonToneNeutral,
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-            TurnPage(LibraryPageFor(pages[:page_count], chapter, 0))
+            TurnPage(LibraryPageFor(pages[:page_count], chapter, 0, true))
             if !save_failed { panel_open = false }
         }
     }
@@ -697,11 +649,11 @@ ReaderToolbar :: () {
     icons: [4]s32 = .[cast(s32)IconType.IconPencil, cast(s32)IconType.IconText,
     cast(s32)IconType.IconGear, cast(s32)IconType.IconManual]
     labels: [4]string = .["library_annotations", "library_font", "library_layout", "library_contents"]
-    size := Scale(44)
-    gap := Scale(4)
-    left := frame.width - Scale(12) - size * 5 - gap * 4
+    size := ifx frame.width < Scale(360) then Scale(40) else Scale(44)
+    gap := Scale(2)
+    left := frame.width - Scale(12) - size * 6 - gap * 5
     for index: cast(s32)0..3 {
-        if Button(frame.session, ButtonProps.{.id = 27700 + index,
+        if Button.Draw(frame.session, Button.Props.{.id = 27700 + index,
                 .bounds = Bounds(left + index * (size + gap), Scale(6), size, size),
                 .label = AppLocaleHost(labels[index]), .icon_type = icons[index], .icon_only = true,
                 .size = cast(ControlSize)ControlSize.ControlSizeLarge,
@@ -715,7 +667,7 @@ ReaderToolbar :: () {
             LoadPageAnnotations()
         }
     }
-    if Button(frame.session, ButtonProps.{.id = 27704,
+    if Button.Draw(frame.session, Button.Props.{.id = 27704,
             .bounds = Bounds(left + 4 * (size + gap), Scale(6), size, size),
             .label = AppLocaleHost(ifx book_dark then "theme_light" else "theme_dark"),
             .icon_type = cast(s32)(ifx book_dark then IconType.IconSun else IconType.IconMoon),
@@ -726,17 +678,26 @@ ReaderToolbar :: () {
         settings_dirty = true
         unused SaveReader()
     }
+    if BookChapterArtApproved(book) && Button.Draw(frame.session, Button.Props.{.id = 27705,
+            .bounds = Bounds(left + 5 * (size + gap), Scale(6), size, size),
+            .label = AppLocaleHost(ifx picture_book then "library_hide_images" else "library_show_images"),
+            .icon_type = cast(s32)IconType.IconStack, .icon_only = true,
+            .selected = picture_book, .size = cast(ControlSize)ControlSize.ControlSizeLarge,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+        SetPictureMode(!picture_book)
+    }
 }
 
 ReaderPanel :: () {
-    bounds := ReadingBounds()
+    bounds := ReaderAreaBounds()
     bounds.y = cast(float32)(frame.top + Scale(16))
     bounds.height = cast(float32)(frame.height - frame.bottom - cast(s32)bounds.y - Scale(48))
-    Text(frame.session, TextProps.{.key = 27600, .text = AppLocaleHost(
+    Text.Draw(frame.session, Text.Props.{.key = 27600, .text = AppLocaleHost(
             ifx panel_tab == 0 then "library_annotations" else ifx panel_tab == 1 then "library_font"
             else ifx panel_tab == 2 then "library_layout" else "library_contents"),
-            .font = frame.font, .bounds = bounds})
-    if Button(frame.session, ButtonProps.{.id = 27601,
+            .size = frame.font, .bounds = bounds})
+    if Button.Draw(frame.session, Button.Props.{.id = 27601,
             .bounds = Bounds(cast(s32)(bounds.x + bounds.width) - Scale(44), cast(s32)bounds.y - Scale(8), Scale(44), Scale(44)),
             .label = AppLocaleHost("close_button"), .icon_type = cast(s32)IconType.IconCheck,
             .icon_only = true, .size = cast(ControlSize)ControlSize.ControlSizeLarge,
@@ -754,7 +715,7 @@ ReaderPanel :: () {
     if panel_tab == 3 {
         content_height = BookChapters(book) * Scale(56) - Scale(8)
     }
-    scroll := Scroll(frame.session, ScrollProps.{.key = cast(u64)(27602 + panel_tab), .bounds = bounds,
+    scroll := Scroll.Draw(frame.session, Scroll.Props.{.key = cast(u64)(27602 + panel_tab), .bounds = bounds,
             .content_height = content_height, .scroll_offset = panel_scroll, .scale = frame.scale})
     panel_scroll = scroll.scroll_offset
     if !scroll.opened { return }
@@ -765,10 +726,43 @@ ReaderPanel :: () {
     else { ContentsPanel(scroll.content) }
 }
 
+ChapterTextView :: (current: LibraryPage) {
+    props: Text.Props = ReadingProps(current.chapter)
+    props.text = BookChapter(book, current.chapter)[current.start:current.end]
+    props.key = 27502
+    // Emphasize only marked words; never paint a rectangle over the page.
+    marks: [LIBRARY_ANNOTATION_LIMIT]Text.Range
+    mark_count: s32
+    for annotation: annotations[:annotation_count] {
+        if !annotation.highlighted || !LibraryOverlaps(current, annotation) { continue }
+        start := ifx annotation.start > current.start then annotation.start - current.start else 0
+        end := ifx annotation.end < current.end then annotation.end - current.start else current.end - current.start
+        place := mark_count
+        while place > 0 && marks[place - 1].start > start {
+            marks[place] = marks[place - 1]
+            place -= 1
+        }
+        marks[place] = Text.Range.{start, end}
+        mark_count += 1
+    }
+    merged: s32
+    for index: cast(s32)0..mark_count - 1 {
+        if merged > 0 && marks[index].start <= marks[merged - 1].end {
+            if marks[index].end > marks[merged - 1].end { marks[merged - 1].end = marks[index].end }
+        } else {
+            marks[merged] = marks[index]
+            merged += 1
+        }
+    }
+    props.strong = marks[:merged]
+    Text.Draw(frame.session, ChapterHeadingProps(current.chapter))
+    Text.Draw(frame.session, props)
+}
+
 ReaderView :: () {
     unused WidgetPaletteUse(frame.session, ReaderPalette())
     paper := ifx book_dark then Color.{40, 35, 29, 255} else Color.{248, 241, 224, 255}
-    unused Box(frame.session, BoxProps.{.key = 27500,
+    unused Box.Draw(frame.session, Box.Props.{.key = 27500,
             .bounds = Bounds(0, 0, frame.width, frame.height), .fill = paper})
     if opening {
         OpeningView()
@@ -785,13 +779,9 @@ ReaderView :: () {
             layout_scale != previous_scale) { LoadPageAnnotations() }
     }
     if page_count <= 0 { return }
-    if mode_choose_open {
-        ReadingModeChooser()
-        return
-    }
     if !panel_open && !opening {
         pointer := SamplePointer()
-        swipe := Swipe(SwipeSpec.{.bounds = ReadingBounds(),
+        swipe := Swipe(SwipeSpec.{.bounds = ReaderAreaBounds(),
                 .directions = cast(u32)SwipeDirection.SwipeHorizontal,
                 .min_distance = cast(float32)Scale(48), .axis_bias = 1.5},
             reader_swipe, SwipeFrame.{.pointer = Vector2.{pointer.x, pointer.y},
@@ -803,55 +793,20 @@ ReaderView :: () {
         else if swipe.direction == SwipeDirection.SwipeRight || key == KeyLeft { TurnPage(page_index - 1) }
     }
     current := pages[page_index]
-    if picture_book && BookChapterArtApproved(book) {
-        Image(frame.session, ImageProps.{.key = 27503,
-                .asset_path = BookChapterArt(book, current.chapter),
-                .alt_text = BookChapterTitle(book, current.chapter),
-                .bounds = ChapterArtBounds(), .fit = ImageFit.ImageFitContain, .smooth = true})
-    }
-    heading: TextProps = ChapterHeadingProps(current.chapter)
-    props: TextProps = ReadingProps(current.chapter)
-    props.text = BookChapter(book, current.chapter)[current.start:current.end]
-    props.key = 27502
-    // Emphasize only marked words; never paint a rectangle over the page.
-    marks: [LIBRARY_ANNOTATION_LIMIT]TextRange
-    mark_count: s32
-    for annotation: annotations[:annotation_count] {
-        if !annotation.highlighted || !LibraryOverlaps(current, annotation) { continue }
-        start := ifx annotation.start > current.start then annotation.start - current.start else 0
-        end := ifx annotation.end < current.end then annotation.end - current.start else current.end - current.start
-        place := mark_count
-        while place > 0 && marks[place - 1].start > start {
-            marks[place] = marks[place - 1]
-            place -= 1
-        }
-        marks[place] = TextRange.{start, end}
-        mark_count += 1
-    }
-    merged: s32
-    for index: cast(s32)0..mark_count - 1 {
-        if merged > 0 && marks[index].start <= marks[merged - 1].end {
-            if marks[index].end > marks[merged - 1].end { marks[merged - 1].end = marks[index].end }
-        } else {
-            marks[merged] = marks[index]
-            merged += 1
-        }
-    }
-    props.strong = marks[:merged]
     if !panel_open {
-        Text(frame.session, heading)
-        Text(frame.session, props)
+        if current.picture { PicturePageView(current.chapter) }
+        else { ChapterTextView(current) }
     }
     ReaderToolbar()
     label: Vec(u8)
     BuilderPrint(*label, "% / %", page_index + 1, page_count)
-    Text(frame.session, TextProps.{.key = 27511, .text = BuilderFinish(label), .font = frame.font - Scale(2),
+    Text.Draw(frame.session, Text.Props.{.key = 27511, .text = BuilderFinish(label), .size = frame.font - Scale(2),
             .align = cast(TextAlign)TextAlignCenter,
             .bounds = Bounds(0, frame.height - frame.bottom - Scale(40), frame.width, Scale(32))})
     if panel_open { ReaderPanel() }
     unused WidgetPaletteUse(frame.session, ReaderPalette())
     if save_failed {
-        Text(frame.session, TextProps.{.text = AppLocaleHost("library_save_failed"), .font = frame.font,
+        Text.Draw(frame.session, Text.Props.{.text = AppLocaleHost("library_save_failed"), .size = frame.font,
                 .bounds = Bounds(Scale(16), frame.top + Scale(8), frame.width - Scale(216), Scale(48))})
     }
 }
@@ -872,7 +827,7 @@ LibraryView :: (message: AppMessage) -> AppMessage {
     }
     if reading { ReaderView() }
     else { ShelfView() }
-    if Button(frame.session, ButtonProps.{.id = 27710,
+    if Button.Draw(frame.session, Button.Props.{.id = 27710,
             .bounds = Bounds(Scale(8), Scale(6), Scale(44), Scale(44)),
             .label = AppLocaleHost("back_button"), .icon_type = cast(s32)IconType.IconLeft,
             .icon_only = true, .size = cast(ControlSize)ControlSize.ControlSizeLarge,

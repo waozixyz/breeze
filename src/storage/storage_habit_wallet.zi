@@ -62,7 +62,7 @@ CASE WHEN substr(policy,1,1)='1' THEN occurrences ELSE done END AS halves FROM v
 SELECT COALESCE(SUM(halves),0) FROM earned WHERE (?2='' OR id=?2)
 SQL
 
-// Each day's signed earnings and purchases, newest first.
+// Each day's signed earnings, daily rewards and purchases, newest first.
 StorageHabitActivitySQL :: #string SQL
 WITH days AS (
 SELECT h.id,h.name,h.icon,d.local_date AS day,d.updated_at AS at,
@@ -98,13 +98,13 @@ END AS policy FROM days
 SELECT id,name,icon,day,at,CAST(substr(policy,3) AS INTEGER)*
 CASE WHEN substr(policy,1,1)='1' THEN occurrences ELSE done END AS halves FROM valued
 )
-SELECT name,icon,halves,day,at FROM (
-SELECT name,icon,halves,day,at,id FROM earned WHERE halves<>0
+SELECT name,icon,halves,day,at,kind FROM (
+SELECT name,icon,halves,day,at,id,0 AS kind FROM earned WHERE halves<>0
 UNION ALL
-SELECT c.name,COALESCE(r.icon,0),-2*c.coins,
-CAST(strftime('%Y%m%d',c.at,'unixepoch','localtime') AS INTEGER),c.at,c.id
+SELECT c.name,COALESCE(r.icon,0),CASE WHEN c.kind=3 THEN 2*c.coins ELSE -2*c.coins END,
+CAST(strftime('%Y%m%d',c.at,'unixepoch','localtime') AS INTEGER),c.at,c.id,c.kind
 FROM habit_coins c LEFT JOIN habit_rewards r ON r.id=c.reward_id
-WHERE c.user_id=?1 AND c.deleted_at=0 AND c.kind=1)
+WHERE c.user_id=?1 AND c.deleted_at=0 AND c.kind IN (1,3))
 ORDER BY at DESC,day DESC,id DESC LIMIT ?2
 SQL
 
@@ -126,6 +126,7 @@ storage_habit_activity_load :: (output: []HabitCoinActivity) -> s32 {
         entry.halves = SqliteColumnInt64(stmt, 2)
         entry.local_date = sqlite3_column_int(stmt, 3)
         entry.at = SqliteColumnInt64(stmt, 4)
+        entry.kind = sqlite3_column_int(stmt, 5)
         count += 1
     }
     SqliteFinalize(stmt)
@@ -171,8 +172,9 @@ storage_habit_purchase_statistics :: (reward_id: string,
     return statistics
 }
 
-// Coins kept from deleted habits less the coins rewards cost.
-StorageHabitCoinRecordsSQL :: "SELECT COALESCE(SUM(CASE WHEN kind=2 THEN coins ELSE -coins END),0) FROM habit_coins WHERE user_id=?1 AND deleted_at=0"
+// Coins kept from deleted habits and given as daily rewards, less the
+// coins rewards cost.
+StorageHabitCoinRecordsSQL :: "SELECT COALESCE(SUM(CASE WHEN kind IN (2,3) THEN coins ELSE -coins END),0) FROM habit_coins WHERE user_id=?1 AND deleted_at=0"
 
 // A sum the wallet SQL selects for the user, and for one habit when the
 // statement takes one.
@@ -358,4 +360,89 @@ storage_habit_reward_buy :: (reward: *HabitReward) -> s32 {
     unused storage_enqueue_sync_habit_coin(stored_id)
     storage_schedule_persist()
     return 1
+}
+
+// The days in a row with a daily reward, ending on the local day at falls
+// on, or on the day before it when before is set.
+StorageHabitDailyRunSQL :: #string SQL
+WITH RECURSIVE run(day,n) AS (
+SELECT date(?2,'unixepoch','localtime',CASE WHEN ?3<>0 THEN '-1 day' ELSE '+0 days' END),0
+UNION ALL
+SELECT date(run.day,'-1 day'),run.n+1 FROM run WHERE run.n<100000 AND EXISTS(
+SELECT 1 FROM habit_coins c WHERE c.user_id=?1 AND c.kind=3 AND c.deleted_at=0 AND
+c.id='daily:'||strftime('%Y%m%d',run.day)))
+SELECT MAX(n) FROM run
+SQL
+
+storage_habit_daily_run :: (at: s64, before: bool) -> s32 {
+    stmt: *void = null
+    if storage_db_handle() == null || SqlitePrepareText(storage_db_handle(),
+        StorageHabitDailyRunSQL, -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    SqliteBindInt64(stmt, 2, at)
+    sqlite3_bind_int(stmt, 3, ifx before then 1 else 0)
+    run: s32 = 0
+    if SqliteStep(stmt) == SQLITE_ROW {
+        run = sqlite3_column_int(stmt, 0)
+    }
+    SqliteFinalize(stmt)
+    return run
+}
+
+// The day of the week of daily rewards that today reached, 1 to 7, or 0
+// until today's reward is given.
+storage_habit_daily_reward_day :: (at: s64) -> s32 {
+    run := storage_habit_daily_run(at, false)
+    if run < 1 {
+        return 0
+    }
+    return HabitDailyRewardDay(run)
+}
+
+// The day of the week of daily rewards that claiming today would give:
+// the day after an unbroken run of claimed days, or the first.
+storage_habit_daily_reward_next_day :: (at: s64) -> s32 {
+    return HabitDailyRewardDay(storage_habit_daily_run(at, true) + 1)
+}
+
+// Gives the daily reward for the local day at falls on, once: the coins
+// for that day's place in the days in a row. The record's id is the day,
+// so devices that both give it keep it once. Returns the day of the week
+// of rewards, whether given now or earlier, and sets given when it was
+// given now; 0 when it cannot be, as after all data was deleted today.
+storage_habit_daily_reward_claim :: (at: s64, given: *bool) -> s32 {
+    given.* = false
+    if storage_db_handle() == null {
+        return 0
+    }
+    today := storage_habit_daily_reward_day(at)
+    if today > 0 {
+        return today
+    }
+    day := storage_habit_daily_reward_next_day(at)
+    stmt: *void = null
+    sql := "INSERT INTO habit_coins(id,user_id,kind,reward_id,name,coins,at,deleted_at,updated_at) VALUES('daily:'||strftime('%Y%m%d',?3,'unixepoch','localtime'),?1,3,'','',?2,?3,0,?3) ON CONFLICT(id) DO NOTHING RETURNING id"
+    if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) != SQLITE_OK {
+        return 0
+    }
+    bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
+    sqlite3_bind_int(stmt, 2, HabitDailyRewardCoins(day))
+    SqliteBindInt64(stmt, 3, at)
+    id: [HABIT_REWARD_ID_SIZE]u8
+    inserted := SqliteStep(stmt) == SQLITE_ROW
+    if inserted {
+        unused AppCopyText(AppTextFromCString(SqliteColumnText(stmt, 0),
+            HABIT_REWARD_ID_SIZE), id[:])
+    }
+    SqliteFinalize(stmt)
+    if !inserted {
+        return 0
+    }
+    unused storage_enqueue_sync_habit_coin(AppTextFromCString(*id[0],
+        HABIT_REWARD_ID_SIZE))
+    storage_schedule_persist()
+    given.* = true
+    return day
 }

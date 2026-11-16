@@ -10,6 +10,7 @@
 
 ## [Unreleased]
 
+- Claim a daily reward in the shop: one coin a day, three on the seventh day in a row.
 - Choose soda, coffee, bubble tea, chocolate and candle pictures for custom rewards.
 
 ## [1.3.15] - 2026-10-29

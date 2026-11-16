@@ -14,7 +14,7 @@ package-sources-test:
 	python3 tests/package_sources_test.py
 
 clean-text-api-check:
-	python3 scripts/check-clean-text-api.py src tests
+	python3 scripts/check-clean-text-api.py src apps tests
 
 .PHONY: button-api-check
 button-api-check:

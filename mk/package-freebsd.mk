@@ -6,6 +6,7 @@ APP_TITLE ?= $(APP_NAME)
 APP_ID ?= $(APP_NAME)
 APP_DESKTOP_ID ?= $(APP_ID)
 APP_ICON_NAME ?= $(APP_DESKTOP_ID)
+APP_DESKTOP_EXEC ?= $(APP_EXECUTABLE)
 APP_VERSION ?= 0
 APP_COMMENT ?= $(APP_TITLE)
 APP_DESC ?= $(APP_COMMENT)
@@ -58,6 +59,7 @@ stage: $(TARGET)
 	if [ -n "$(strip $(APP_DESKTOP))" ]; then \
 		mkdir -p "$$app_dir"; \
 		sed -e 's/^Icon=.*/Icon=$(APP_ICON_NAME)/' \
+			-e 's#^Exec=.*#Exec="$(APP_DESKTOP_EXEC)"#' \
 			"$(APP_DESKTOP)" > "$$app_dir/$(APP_DESKTOP_ID).desktop"; \
 	fi; \
 	if [ -n "$(strip $(APP_ICON))" ]; then \

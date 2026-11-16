@@ -1158,6 +1158,77 @@ test_habit_wallet :: () {
     storage_close()
 }
 
+// The daily reward, claimed in the shop, gives coins once a day, climbing
+// through a week of days claimed in a row and starting again after the
+// seventh or a missed day; its records count toward the balance, show in
+// Activity and sync.
+test_habit_daily_reward :: () {
+    root := make_root("habit-daily-reward")
+    check_true("init daily reward db", storage_init(root) != 0)
+    exec_db_sql("DELETE FROM sync_outbox;")
+    // Noon UTC on 2026-10-10 is that day in every zone from -11 to +11.
+    noon := cast(s64)read_db_count("SELECT CAST(strftime('%s','2026-10-10 12:00:00') AS INTEGER)")
+    day_seconds: s64 = 86400
+    check_int("nothing is claimed at first", storage_habit_daily_reward_day(noon), 0)
+    check_int("the first claim would be day one", storage_habit_daily_reward_next_day(noon), 1)
+    check_int("nothing is given until it is claimed", cast(s32)storage_habit_wallet_halves(), 0)
+    given := false
+    check_int("the first claim is day one", storage_habit_daily_reward_claim(noon, *given), 1)
+    check_true("and gives the reward", given)
+    check_int("one coin", cast(s32)storage_habit_wallet_halves(), 2)
+    check_int("claiming again that day is still day one",
+        storage_habit_daily_reward_claim(noon + 3600, *given), 1)
+    check_true("and gives nothing more", !given)
+    check_int("the balance stays", cast(s32)storage_habit_wallet_halves(), 2)
+    check_int("one record for the day", read_db_count(
+        "SELECT COUNT(*) FROM habit_coins WHERE kind=3 AND id='daily:20261010' AND coins=1"), 1)
+    check_int("it waits to sync", read_db_count(
+        "SELECT COUNT(*) FROM sync_outbox WHERE entity_type='habit_coin' AND entity_id='daily:20261010'"), 1)
+    activity: [HABIT_ACTIVITY_MAX]HabitCoinActivity
+    check_int("activity shows the reward", storage_habit_activity_load(activity[:]), 1)
+    check_true("as a daily reward of one coin", activity[0].kind == HABIT_COIN_DAILY &&
+        activity[0].halves == 2 && activity[0].local_date == 20261010)
+    // Six more days in a row reach the seventh, which gives three.
+    at := noon
+    for step: cast(s32)2..HABIT_DAILY_REWARD_DAYS {
+        at += day_seconds
+        check_int("each next day climbs", storage_habit_daily_reward_claim(at, *given), step)
+    }
+    check_true("the seventh day was given", given)
+    check_int("six coins and three on the seventh", cast(s32)storage_habit_wallet_halves(), 18)
+    at += day_seconds
+    check_int("the eighth day in a row is a first again",
+        storage_habit_daily_reward_claim(at, *given), 1)
+    check_int("and gives one coin", cast(s32)storage_habit_wallet_halves(), 20)
+    at += day_seconds * 2
+    check_int("after a missed day the next claim is day one",
+        storage_habit_daily_reward_next_day(at), 1)
+    check_int("a missed day starts again", storage_habit_daily_reward_claim(at, *given), 1)
+    at += day_seconds
+    check_int("the next day would be day two", storage_habit_daily_reward_next_day(at), 2)
+    check_int("and climbs from there", storage_habit_daily_reward_claim(at, *given), 2)
+    check_int("the balance holds every reward", cast(s32)storage_habit_wallet_halves(), 24)
+    // Another device receives the records.
+    buffer: [8192]u8
+    coin_json := synced_changes("habit_coin", "daily:20261016", "habit_coins", buffer[:])
+    check_true("the record has its kind and coins",
+        contains(coin_json, "\"kind\":3") && contains(coin_json, "\"coins\":3"))
+    exec_db_sql("DELETE FROM habit_coins WHERE id='daily:20261016';")
+    check_int("without the seventh day", cast(s32)storage_habit_wallet_halves(), 18)
+    check_true("apply the seventh day", storage_apply_sync_habit_coins_json(coin_json) != 0)
+    check_int("it arrives", cast(s32)storage_habit_wallet_halves(), 24)
+    check_true("the week's rule",
+        HabitDailyRewardCoins(1) == 1 && HabitDailyRewardCoins(6) == 1 &&
+        HabitDailyRewardCoins(7) == 3 && HabitDailyRewardDay(7) == 7 &&
+        HabitDailyRewardDay(8) == 1 && HabitDailyRewardDay(15) == 1)
+    // After all data is deleted, today gives nothing again.
+    exec_db_sql("UPDATE habit_coins SET deleted_at=1,updated_at=updated_at+1;")
+    check_int("a deleted day is not given again",
+        storage_habit_daily_reward_claim(at, *given), 0)
+    check_true("nothing was given", !given)
+    storage_close()
+}
+
 // Saved icon numbers remain stable as the writing choices grow.
 test_habit_writing_icons :: () {
     root := make_root("habit-writing-icons")
@@ -1240,6 +1311,7 @@ Check :: () -> s32 {
     test_average_goals_and_changes()
     test_stale_copy_keeps_synced_values()
     test_habit_wallet()
+    test_habit_daily_reward()
     test_habit_purchase_statistics()
     test_habit_backdated_coins()
     test_habit_writing_icons()

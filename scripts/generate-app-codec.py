@@ -10,10 +10,10 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 KRYON = ROOT / 'build/packages/kryon'
-KRYON_MODULES = ['session', 'geometry', 'drawing_props', 'text_props', 'image_props',
-                 'button_props', 'control_props', 'text_input', 'text_input_props',
-                 'scroll', 'scroll_props', 'semantic', 'text_align', 'checkbox_props',
-                 'toggle_props', 'tab_bar_props', 'box_props', 'swipe_props']
+# Kryon's raw support modules. Widget package records (TextField.Input, ...)
+# come from each app source's own `Alias :: #import "kryon/..."` line.
+KRYON_MODULES = ['session', 'geometry', 'drawing_props', 'control_props', 'text_input',
+                 'semantic', 'text_align', 'swipe_props']
 APP_TYPES = ['diary_ui_types', 'inbe_ui_types', 'lists_ui_types', 'lumi_ui_types',
              'lumi_types', 'habits_ui_types', 'practice_ui_types']
 ROOTS = ['DiaryUiFrame', 'InbeUiFrame', 'ListsUiFrame', 'ListsUiRow', 'ListsUiPerson', 'ListsUiRequest', 'LumiUiFrame',

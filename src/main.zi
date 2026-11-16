@@ -1,3 +1,5 @@
+WindowRuntime :: #import "kryon/window_runtime";
+#import "kryon/application_entry"
 #import, file "apps/shared_state.zi";
 #import, file "apps/module_host.zi";
 #import, file "app/app_types.zi";
@@ -7,44 +9,11 @@
 #import, file "app/application_close.zi";
 #import, file "app/current_app.zi";
 #import, file "platform/raylib_host.zi";
-#import, file "screens/practice_screen.zi";
-#import, file "app/text_buffers.zi";
-#import, file "app/route_types.zi";
-#import, file "app/app_nav_state.zi";
-#import, file "widgets/bottom_nav.zi";
-#import, file "app/exercise_types.zi";
-#import, file "core/types.zi";
-#import "session"
-#import "kryon/layout"
-#import "layout"
-#import "kryon/tree"
-#import "tree_draw"
-#import "drawing_props"
-#import "geometry"
-#if #defined(PLATFORM_WEB) == false {
-    #import "kryon/Raylib"
-}
-#if #defined(PLATFORM_WEB) {
-    CanvasWindow :: #import "canvas_window";
-    CanvasDraw :: #import "canvas_draw";
-    CanvasInput :: #import "canvas_input";
-    CanvasTexture :: #import "canvas_texture";
-    using CanvasHost :: #import "canvas_host";
-}
-#import "raylib_trace"
+#import, file "platform/app_trace.zi";
 #import "android_jni"
 // The desktop notification host; Android and the browser have their own.
 #import "notification_desktop"
-raylib :: #system_library "raylib";
-BeginDrawing :: () #foreign raylib;
-EndDrawing :: () #foreign raylib;
-ClearBackground :: (color: Color) #foreign raylib;
-CloseWindow :: () #foreign raylib;
-IsWindowHidden :: () -> bool #foreign raylib;
-IsWindowMinimized :: () -> bool #foreign raylib;
-WindowShouldClose :: () -> bool #foreign raylib;
 
-raylib_log :: #system_library "raylib";
 LOG_INFO :: 3
 c :: #system_library "c";
 app_init :: (value: *void) #foreign c;
@@ -52,11 +21,8 @@ app_destroy :: (value: *void) #foreign c;
 
 using DesktopTrayAction;
 using AppClosePromptResult;
-using AppMainTab;
-using NavigationPlacement;
-using ExerciseType;
-using FrameStatus;
 #import, file "platform/app_host.zi";
+#import, file "platform/startup_tools.zi";
 #import, file "platform/desktop_tray.zi";
 #import, file "app/mini_mode.zi";
 
@@ -71,7 +37,7 @@ destroy_app_window :: () {
     }
     app_destroy(cast(*void)*app)
     SetCurrentApp(null)
-    CloseWindow()
+    WindowRuntime.CloseNativeWindow()
     Shutdown()
 }
 
@@ -96,92 +62,6 @@ run_screenshot_if_requested :: () -> s32 {
     return 1
 }
 
-practice_probe_frame_count: s32;
-
-practice_probe_mode :: (argc: s32, argv: **u8) -> s32 {
-    if argc < 2 {
-        return 0
-    }
-    argument := AppTextFromCString(argv[1], 32)
-    if argument == "--practice-banner" {
-        return 1
-    }
-    if argument == "--practice-hero" {
-        return 2
-    }
-    if argument == "--practice-screen" {
-        return 3
-    }
-    if argument == "--practice-nav" {
-        return 4
-    }
-    return 0
-}
-
-run_practice_probe :: (mode: s32, size: WindowSize) -> s32 {
-    app.ui.session = SessionOpen()
-    if !SessionValid(app.ui.session) {
-        CloseWindow()
-        return 1
-    }
-    app.ui.view_width = size.width
-    app.ui.view_height = size.height
-    app.ui.navigation_height = size.height
-    app.camera.zoom = 1.0
-    app.exercise_type = EXERCISE_MEDITATION
-    app.main_tab = APP_MAIN_TAB_PRACTICE
-    app.practice_tab = PRACTICE_TAB_PLAY
-    app.breathing.screen = ScreenStart
-    if mode == 4 {
-        app.navigation_placement = NAVIGATION_BOTTOM
-        app_reset_bottom_nav_routes(*app)
-    }
-    SetCurrentApp(*app)
-    while !WindowShouldClose() {
-        first_probe_frame := practice_probe_frame_count == 0
-        practice_probe_frame_count += 1
-        FrameTextReset(*app.ui.frame_text)
-        BeginDrawing()
-        ClearBackground(Color.{30, 40, 50, 255})
-        bounds := Rectangle.{0.0, 0.0,
-            cast(float32)size.width, cast(float32)size.height}
-        if cast(s32)BeginFrame(app.ui.session, KeyHash("practice/probe"),
-            bounds) == 0 {
-            if mode == 4 {
-                if first_probe_frame {
-                    TraceLog(LOG_INFO, "APP PROBE: before navigation bar")
-                }
-                unused app_draw_bottom_nav(*app)
-                if first_probe_frame {
-                    TraceLog(LOG_INFO, "APP PROBE: after navigation bar")
-                }
-            } else if mode == 1 {
-                practice_draw_card_banner(
-                    "assets/practices/meditation/banner-dark.webp",
-                    Rectangle.{0.0, 0.0,
-                        cast(float32)size.width, 360.0})
-            } else if mode == 2 {
-                unused practice_screen_draw_home_hero(*app)
-            } else {
-                practice_screen_draw_home(*app)
-            }
-            if first_probe_frame {
-                TraceLog(LOG_INFO, "APP PROBE: before EndFrame")
-            }
-            unused EndFrame(app.ui.session)
-            if first_probe_frame {
-                TraceLog(LOG_INFO, "APP PROBE: after EndFrame")
-            }
-        }
-        EndDrawing()
-        if mode == 4 && first_probe_frame && CaptureRequested() {
-            unused CaptureConfigured()
-        }
-    }
-    SetCurrentApp(null)
-    CloseWindow()
-    return 0
-}
 
 #if DESKTOP_TRAY_BUILD {
     run_desktop_tray_loop :: () {
@@ -197,7 +77,7 @@ run_practice_probe :: (mode: s32, size: WindowSize) -> s32 {
                 TraceLog(LOG_INFO, "APP: quit requested by shutdown signal")
                 quit = 1
             }
-            if (IsWindowHidden() || IsWindowMinimized()) && desktop_tray_ready() == 0 &&
+            if (WindowRuntime.WindowHidden() || WindowRuntime.WindowMinimized()) && desktop_tray_ready() == 0 &&
             !app.session_window.detached {
                 TraceLog(LOG_INFO, "APP: tray indicator unavailable; stopping background execution")
                 quit = 1
@@ -255,13 +135,13 @@ run_practice_probe :: (mode: s32, size: WindowSize) -> s32 {
 
         while ShutdownRequested() == 0 && !quit {
             #if #defined(PLATFORM_DESKTOP) {
-                if (IsWindowHidden() || IsWindowMinimized()) && !app.session_window.detached {
+                if (WindowRuntime.WindowHidden() || WindowRuntime.WindowMinimized()) && !app.session_window.detached {
                     TraceLog(LOG_INFO, "APP: no tray indicator; stopping background execution")
                     break
                 }
             }
             DrawFrame(*app)
-            if WindowShouldClose() || TakeWindowCloseRequest() != 0 ||
+            if WindowRuntime.WindowClosing() || TakeWindowCloseRequest() != 0 ||
             ShutdownRequested() != 0 || app.request_quit != 0 {
                 quit = true
             }
@@ -269,16 +149,13 @@ run_practice_probe :: (mode: s32, size: WindowSize) -> s32 {
     }
 }
 
+#program_export "KryonApplicationMain"
 run_application :: (argc: s32, argv: **u8) -> s32 {
     window_size: WindowSize
 
-    probe_mode := practice_probe_mode(argc, argv)
-    if probe_mode == 1 || probe_mode == 4 {
-        window_size = ifx probe_mode == 4 then WindowSize.{480, 780}
-        else WindowSize.{900, 720}
-        InitWindow(window_size.width, window_size.height,
-            "Practice component probe")
-        return run_practice_probe(probe_mode, window_size)
+    tool_result := TryRunStartupTool(*app, argc, argv)
+    if tool_result >= 0 {
+        return tool_result
     }
 
     Prepare(argc, argv)
@@ -288,10 +165,6 @@ run_application :: (argc: s32, argv: **u8) -> s32 {
     InitWindow(window_size.width, window_size.height, WindowTitle())
     if FinishWindowSetup() == 0 {
         return 1
-    }
-
-    if probe_mode != 0 {
-        return run_practice_probe(probe_mode, window_size)
     }
 
     app_init(cast(*void)*app)
@@ -334,16 +207,5 @@ run_application :: (argc: s32, argv: **u8) -> s32 {
 
         shutdown_application()
         return 0
-    }
-}
-
-// Emscripten's clang requires main(int, char **); the page passes no arguments.
-#if #defined(PLATFORM_WEB) {
-    main :: () -> s32 {
-        return run_application(0, null)
-    }
-} else {
-    main :: (argc: s32, argv: **u8) -> s32 {
-        return run_application(argc, argv)
     }
 }

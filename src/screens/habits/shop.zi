@@ -9,7 +9,6 @@
 #import "hosted_values"
 #import "widget_host"
 #import "drawing_props"
-#import "box_props"
 #import "date_time"
 #import, file "../../app/app_types.zi";
 #import, file "../../app/app_modal_state.zi";
@@ -60,6 +59,9 @@ HabitShopRefresh :: (app: *InnerBreeze) {
     shop.statistics_as_of = as_of
     shop.halves = storage_habit_wallet_halves()
     shop.borrow_limit = storage_get_setting_int("habit_shop_borrow_limit", 0)
+    claimed_day := storage_habit_daily_reward_day(as_of)
+    shop.daily_claimed = claimed_day > 0
+    shop.daily_day = ifx claimed_day > 0 then claimed_day else storage_habit_daily_reward_next_day(as_of)
     shop.reward_count = storage_habit_rewards_load(shop.rewards[:])
     shop.activity_count = storage_habit_activity_load(shop.activity[:])
     shop.statistics = storage_habit_purchase_statistics("", as_of)
@@ -296,6 +298,10 @@ HabitShopCall :: (context: *void, module: *u8, function: *u8,
                 .name = AppTextFromCString(*entry.name[0], HABIT_REWARD_NAME_SIZE),
                 .icon = entry.icon, .halves = entry.halves,
                 .day = HabitShopDay(app, entry.local_date)}
+            if entry.kind == HABIT_COIN_DAILY {
+                line.name = LocaleText("habit_shop_daily_title")
+                line.icon = HABIT_ICON_GIFT
+            }
         }
         result.* = WidgetEncodeHabitsShopActivity(line, *habit_shop_activity_codec)
         return 1
@@ -345,6 +351,7 @@ HabitShopFrameFor :: (app: *InnerBreeze, bounds: Rectangle, typed: []u8) -> Habi
             shop.borrow_focused != 0,
             typed),
         .halves = shop.halves, .borrow_limit = shop.borrow_limit,
+        .daily_day = shop.daily_day, .daily_claimed = shop.daily_claimed,
         .reward_count = shop.reward_count,
         .statistics = HabitShopStatisticsValue(shop.statistics),
         .activity_count = shop.activity_count, .scroll = app.habits.scroll,
@@ -399,6 +406,12 @@ HabitShopPage :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
         app.habit_shop.price_focused = 0
         app.habit_shop.borrow_focused = 0
         return false
+    }
+    if asked == HABITS_SHOP_DAILY_CLAIM {
+        // The reward the page claims is the host's own for today.
+        given := false
+        unused storage_habit_daily_reward_claim(now_seconds(), *given)
+        app.habit_shop.loaded = false
     }
     if asked == HABITS_SHOP_BUY {
         app.habit_shop.name_focused = 0

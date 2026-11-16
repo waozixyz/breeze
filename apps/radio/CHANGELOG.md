@@ -2,7 +2,8 @@
 
 ## [Unreleased]
 
-- Add a painted radio player and simplify navigation text.
+- Replace the form controls with one tactile radio: separate power, volume and tuning,
+  three station keys, an illuminated dial and an in-radio status display.
 
 ## [1.0.4] - 2026-10-29
 

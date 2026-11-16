@@ -41,24 +41,20 @@ Main :: () -> s32 {
     return PersistListsHost($argument)
 }
 ZIRAN
-    "$ziran" bundle --root "$work/$shape" --module-path "$root/build/packages/kryon/src/ui" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    "$ziran" bundle --project --offline --root "$root" --module-path "$work/$shape" \
         --define KRYON_HOSTED_UI --entry lists:Main -o "$work/$shape.zx" "$work/$shape/lists.zi"
 done
-"$ziran" bundle --root "$root" --module-path "$root/build/packages/kryon/src/ui" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+"$ziran" bundle --project --offline --root "$root" --module-path "$root/apps/inbe" \
     --define KRYON_HOSTED_UI --entry inbe:Main -o "$work/missing-assets.zx" \
     "$root/apps/inbe/inbe.zi"
 mkdir -p "$work/invalid-nested"
 printf 'ZX' > "$work/invalid-nested/lists.zx"
 cp "$bundles/apps/habits.zx" "$bundles/apps/practices.zx" "$work/invalid-nested/"
-"$ziran" bundle --root "$root" --module-path "$root/build/packages/kryon/src/ui" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+"$ziran" bundle --project --offline --root "$root" --module-path "$root/apps/inbe" \
     --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "cells=$work/invalid-nested" -o "$work/invalid-nested.zx" \
     "$root/apps/inbe/inbe.zi"
-"$ziran" build --target=c --no-main --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" \
+"$ziran" build --target=c --no-main --project --offline --define PLATFORM_DESKTOP --root "$root/tests" \
     -o "$work/generated" "$root/tests/apps_behavior.zi" "$root/tests/sync_test_host.zi"
 # The --wrap fakes below must see every call, not header inline copies.
 "${CC:-cc}" -D_GNU_SOURCE -DZIRAN_NO_HEADER_INLINE -std=c11 -O0 -ffunction-sections -fdata-sections \
@@ -77,7 +73,7 @@ cp "$bundles/apps/habits.zx" "$bundles/apps/practices.zx" "$work/invalid-nested/
     -Wl,--wrap=package_manager_PackageTrustedRelease \
     -Wl,--gc-sections -ldl -lpthread -lz -lm "$curl" -o "$work/test"
 # All data and fixture upgrade paths are disposable. No owner profile is used.
-data=$(mktemp -d)
+data=$(mktemp -d "$work/profile.XXXXXX")
 trap 'rm -rf "$data"' EXIT HUP INT TERM
 mkdir -p "$data/module-data"
 cp "$root/tests/fixtures/schema-1.8.9.sql" "$data/"

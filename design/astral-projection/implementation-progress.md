@@ -516,16 +516,16 @@ The owner also requested latest desktop installation and launch after completion
 
 ## Current narration recovery
 
-### Personal VM recovery, 2026-11-09
+### Narration recovery, 2026-11-09
 
-Latest resolved Personal results: the saved count attempt 15 completed QA and was
+Latest resolved results: the saved count attempt 15 completed QA and was
 rejected because the extracted word lasts 0.4355 seconds, below the unchanged
 0.5-second minimum. Its speaker similarity passed. This reservation has no
 unused candidates. The saved Go attempt 12 passed parent transcript and speaker
 gates but was rejected at the crop boundary: the next word starts at 0.48
 seconds. Both outcomes are recorded; neither source nor alignment is replayed.
 Go attempt 13 remains unused. All 24 source files, model files and profile pins
-match inside the Personal provider namespace; no synthesis ran in that audit.
+match inside the provider namespace; no synthesis ran in that audit.
 
 The accepted Portuguese Tai Chi recording `tai_chi_text_3d0ce619` and all four
 saved ordinary Tai Chi recordings are now copied into canonical practices
@@ -599,9 +599,8 @@ canonical repositories. This static inventory and namespace verification are
 not compiler passes. Full native app, package, decoder/mixer and private GUI
 validation remain incomplete. No commit, push or installation has occurred.
 
-The later Personal VM recovery supersedes the initial failures below. The fresh
-Personal native handoff and actual KVM identity are verified. The saved count
-recording passed the unchanged strict verifier on Personal with five tests
+The later recovery supersedes the initial failures below. The fresh native
+handoff is verified. The saved count recording passed the unchanged strict verifier with five tests
 for changed metadata, truncation, missing generation wait, valid preserved
 input and wrong job identity. The successor exited zero with its SSH worker
 waited; no synthesis or model work was repeated. Its raw metadata was
@@ -670,10 +669,8 @@ outcomes separately without replaying the finite batch.
 
 The original app source suite failed at the missing `fontTools` import.
 A fresh native-runner probe stopped before Python because its mount was absent.
-The coordinator verified that `alpha-vm-host` is physical Alpha; the requested
-target is the Alpha Personal VM (`alpha-personal`, hostname `personal`, KVM).
-Use only the verified Personal VM handoff for future workloads. Earlier host
-tests do not establish validation on the selected VM. Infrastructure repair,
+Future workloads run directly on the physical Alpha host. Fresh direct-host
+validation is still required. Infrastructure repair,
 full native app tests and private-display desktop/portrait tests remain pending.
 No feature commit, push, release or installation has occurred.
 
@@ -800,3 +797,33 @@ will record each gate separately, including actual Portuguese playback and
 both private UI suites, with source/tool audits afterward. It has not run.
 The coordinator has this exact continuation contract and will supply the
 replacement compiler cohort; no compiler was invoked during its rebuild hold.
+
+
+2026-11-10 Omega native integration continuation:
+
+- Six exercise selection source and translations remain implemented. Fresh native
+  product and private GUI validation are still pending the upstream hosted
+  Widgets `PaintClipper.node_geometry` bundle fix; the Nov 9 product is stale.
+- The owner-requested blank-home Easter egg source and packaging entries were
+  removed. Habits direct widget imports and its exact shop_stats_view host
+  allowlist were repaired, without changing unrelated active work.
+- The exact Photos module awaiting current client integration is 150663 bytes,
+  SHA256 180eef2ac7173f2b6dbc4eb6394fe2af0a167f6623e1da8ee1ca19e7d3cce720.
+  Parent owns opening the latest product once a fresh stable executable exists.
+- Real native AVIF/Lanczos/storage/reclamation/cross-device test passed, receipt
+  bd5b6411235b63579c6fbfc9b209f5bef356. Fixture fixes add direct imports, use the
+  actual image host instead of duplicate stubs, supply a valid synthetic account
+  ID, and handle queued restores before the download. It still asserts that
+  the superseded original is never fetched and the replacement authenticates.
+- Standalone native storage sync passed, receipt
+  ae0fd91b90f982f3bb07877029037d69cd7f. The compression preference assertion now
+  verifies encrypted nonce/ciphertext envelopes and absent plaintext values,
+  respecting established visible record IDs; real cross-device, one-off offer
+  and account isolation assertions remain. Test data moved under its own build
+  directory with an explicit guard.
+- Entity Photos migration passed in mixed receipt
+  f2fb473ba7b931b329c6255ec2f7492574dd; that command's overall exit2 was from the
+  subsequently repaired codec fixture, not the migration test.
+- Native Portuguese playback outcome from the truncated prior receipt remains
+  unknown; no narration generation or playback is replayed. New fixture edits
+  remain uncommitted. No product install, launch, release or deployment occurred.

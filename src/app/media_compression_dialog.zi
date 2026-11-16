@@ -1,15 +1,19 @@
+ImagePreview :: #import "kryon/image_preview";
 // One account-owned comparison, shared by Diary and Photos.
-#import "kryon/layout"
+Button :: #import "kryon/button";
+Image :: #import "kryon/image";
+Layout :: #import "kryon/layout";
+Modal :: #import "kryon/modal";
+Scroll :: #import "kryon/scroll";
+Slider :: #import "kryon/slider";
+Text :: #import "kryon/text";
+Toast :: #import "kryon/toast";
+#import "kryon/control_props"
 #import, file "modal_rules.zi";
 #import, file "../storage/state.zi";
 #import, file "../apps/media_compression_settings.zi";
-#import "kryon/Widgets"
 #import "kryon/bitmap_image"
-#import "kryon/image_props"
-#import "kryon/slider_props"
-#import "kryon/toast_props"
-#import "kryon/modal_props"
-#import "kryon/scroll_props"
+#import "drawing_props"
 #import "kryon/tree"
 #import "std/byte_text_linux"
 #import "std/text_buffer"
@@ -29,11 +33,12 @@
 #import, file "../apps/media_compression_store.zi";
 #import, file "../apps/media_compression_work.zi";
 #import, file "../apps/media_compression_request.zi";
+#import "geometry"
 
-using ImageFit;
+using Image.ImageFit;
 using ButtonTone;
 using ButtonEmphasis;
-using TextWrap;
+using Text.Wrap;
 
 media_compression_owner: string;
 media_compression_hash: string;
@@ -49,14 +54,15 @@ media_compression_uploaded: bool;
 media_compression_notice: string;
 media_compression_due: float64;
 media_compression_scroll: s32;
-media_compression_toast: ToastState;
+media_compression_toast: Toast.ToastState;
 media_compression_text: FrameTextStore;
 media_compression_clock_library :: #system_library "c";
 MediaCompressionClock :: () -> float64 #foreign media_compression_clock_library "GetTime";
 
 MediaCompressionScreen :: (app: *InnerBreeze) -> bool {
-    return app.breathing.screen == ScreenDiary ||
-        (app.breathing.screen == ScreenNodeApp && NodeAppName(app.node_app_slot) == "photos")
+    return ImagePreview.ImageAVIFEncodingAvailable() &&
+        (app.breathing.screen == ScreenDiary ||
+        (app.breathing.screen == ScreenNodeApp && NodeAppName(app.node_app_slot) == "photos"))
 }
 
 MediaCompressionDropPreview :: (app: *InnerBreeze) {
@@ -111,7 +117,7 @@ MediaCompressionPump :: (app: *InnerBreeze) {
         media_compression_hash = ""
         media_compression_revision = -1
         media_compression_files_revision = -1
-        media_compression_toast = ToastState.{}
+        media_compression_toast = Toast.ToastState.{}
         if app.modal.active != 0 && app.modal.type == ModalType.ModalMediaCompression {
             app_close_modal(app)
         }
@@ -204,7 +210,7 @@ MediaCompressionOfferDraw :: (app: *InnerBreeze) {
     MediaCompressionOffer(media_compression_statistics.review_count > 0) {
         message = LocaleText("media_compression_offer")
     }
-    result := Toast(app.ui.session, ToastProps.{.key = KeyHash("media/compression/offer"),
+    result := Toast.Draw(app.ui.session, Toast.Props.{.key = Layout.KeyHash("media/compression/offer"),
         .viewport = Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
             cast(float32)app.ui.view_height}, .state = media_compression_toast,
         .message = message, .action_label = LocaleText("media_compression_review"),
@@ -214,14 +220,14 @@ MediaCompressionOfferDraw :: (app: *InnerBreeze) {
         AppRequestSmoothFrames(2)
     }
     if result.action_clicked {
-        media_compression_toast = ToastState.{}
+        media_compression_toast = Toast.ToastState.{}
         MediaCompressionOpen(app)
     }
 }
 
 MediaCompressionLine :: (app: *InnerBreeze, area: Rectangle, text: string) {
-    Text(app.ui.session, TextProps.{.bounds = area, .text = text,
-        .font = AppSmallFontSize(), .wrap = cast(TextWrap)TextWrapAuto})
+    Text.Draw(app.ui.session, Text.Props.{.bounds = area, .text = text,
+        .size = AppSmallFontSize(), .wrap = cast(Text.Wrap)TextWrapAuto})
 }
 
 MediaCompressionCountText :: (key: string, value: s64, bytes: bool = false) -> string {
@@ -247,8 +253,8 @@ MediaCompressionDialogDraw :: (app: *InnerBreeze) {
     if height > app.ui.view_height - AppScale(24) {
         height = app.ui.view_height - AppScale(24)
     }
-    frame := ModalFrame(app.ui.session, ModalFrameProps.{
-        .key = KeyHash("media/compression/dialog"), .title = LocaleText("media_compression_title"),
+    frame := Modal.Draw(app.ui.session, Modal.Props.{
+        .key = Layout.KeyHash("media/compression/dialog"), .title = LocaleText("media_compression_title"),
         .width = width, .height = height, .scale = MetricsScale(),
         .has_right_action = true, .right_label = LocaleText("close_button")})
     if frame.dismissed || frame.right_clicked {
@@ -259,8 +265,8 @@ MediaCompressionDialogDraw :: (app: *InnerBreeze) {
     if !frame.opened {
         return
     }
-    scroll := Scroll(app.ui.session, ScrollProps.{.key = KeyHash("media/compression/scroll"),
-        .bounds = frame.layout.content, .content_height = AppScale(650),
+    scroll := Scroll.Draw(app.ui.session, Scroll.Props.{.key = Layout.KeyHash("media/compression/scroll"),
+        .bounds = frame.layout.content, .content_height = AppScale(520),
         .scroll_offset = media_compression_scroll})
     media_compression_scroll = scroll.scroll_offset
     if scroll.opened {
@@ -276,20 +282,8 @@ MediaCompressionContent :: (app: *InnerBreeze, area: Rectangle) {
     w := area.width - cast(float32)AppScale(10)
     line := cast(float32)AppScale(32)
     stats := media_compression_statistics
-    MediaCompressionLine(app, Rectangle.{x, y, w, line},
-        MediaCompressionCountText("media_compression_library", stats.library_bytes, true))
-    y += line
-    MediaCompressionLine(app, Rectangle.{x, y, w, line},
-        MediaCompressionCountText("media_compression_local", stats.local_bytes, true))
-    y += line
-    MediaCompressionLine(app, Rectangle.{x, y, w, line},
-        MediaCompressionCountText("media_compression_retained", stats.retained_bytes, true))
-    y += line
-    MediaCompressionLine(app, Rectangle.{x, y, w, line},
-        MediaCompressionCountText("media_compression_candidates", stats.review_count))
-    y += line
-    quality := DiscreteSlider(app.ui.session, DiscreteSliderProps.{
-        .key = KeyHash("media/compression/quality"), .bounds = Rectangle.{x, y, w, line * 2.0},
+    quality := Slider.DiscreteSlider(app.ui.session, Slider.DiscreteSliderProps.{
+        .key = Layout.KeyHash("media/compression/quality"), .bounds = Rectangle.{x, y, w, line * 2.0},
         .label = LocaleText("media_compression_quality"),
         .value_text = MediaCompressionCountText("media_compression_quality", media_compression_quality),
         .value = media_compression_quality, .min = 1, .max = 100})
@@ -316,20 +310,20 @@ MediaCompressionContent :: (app: *InnerBreeze, area: Rectangle) {
     MediaCompressionLine(app, Rectangle.{x + half + cast(float32)AppScale(12), y, half, line}, after_label)
     y += line
     image_height := cast(float32)AppScale(180)
-    Image(app.ui.session, ImageProps.{.key = KeyHash("media/compression/original"),
+    Image.Draw(app.ui.session, Image.Props.{.key = Layout.KeyHash("media/compression/original"),
         .bounds = Rectangle.{x, y, half, image_height}, .texture = media_compression_before,
-        .alt_text = before_label, .fit = cast(ImageFit)ImageFitContain, .smooth = true})
-    Image(app.ui.session, ImageProps.{.key = KeyHash("media/compression/encoded"),
+        .alt_text = before_label, .fit = cast(Image.ImageFit)ImageFitContain, .smooth = true})
+    Image.Draw(app.ui.session, Image.Props.{.key = Layout.KeyHash("media/compression/encoded"),
         .bounds = Rectangle.{x + half + cast(float32)AppScale(12), y, half, image_height},
         .texture = media_compression_after, .alt_text = after_label,
-        .fit = cast(ImageFit)ImageFitContain, .smooth = true})
+        .fit = cast(Image.ImageFit)ImageFitContain, .smooth = true})
     y += image_height + cast(float32)AppScale(8)
     if ready {
         MediaCompressionLine(app, Rectangle.{x, y, w, line},
             MediaCompressionCountText("media_compression_saving", work.source.count - work.encoded.data.count, true))
     }
     y += line
-    apply := Button(app.ui.session, ButtonProps.{.key = KeyHash("media/compression/apply"),
+    apply := Button.Draw(app.ui.session, Button.Props.{.key = Layout.KeyHash("media/compression/apply"),
         .bounds = Rectangle.{x, y, half, cast(float32)AppScale(44)},
         .label = LocaleText("media_compression_apply"),
         .disabled = !ready || work.encoded.data.count >= work.source.count,
@@ -346,7 +340,7 @@ MediaCompressionContent :: (app: *InnerBreeze, area: Rectangle) {
             media_compression_notice = "media_compression_failed"
         }
     }
-    if Button(app.ui.session, ButtonProps.{.key = KeyHash("media/compression/next"),
+    if Button.Draw(app.ui.session, Button.Props.{.key = Layout.KeyHash("media/compression/next"),
         .bounds = Rectangle.{x + half + cast(float32)AppScale(12), y, half, cast(float32)AppScale(44)},
         .label = LocaleText("media_compression_next"),
         .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {

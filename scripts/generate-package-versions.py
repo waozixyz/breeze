@@ -14,7 +14,7 @@ for name in names:
         raise SystemExit(f"invalid {name} version")
     if type(value["sequence"]) is not int or not 0 < value["sequence"] <= 2147483647:
         raise SystemExit(f"invalid {name} sequence")
-for api in ("host_api", "oldest_host_api", "module_api"):
+for api in ("host_api", "oldest_host_api", "module_api", "zx_revision"):
     if type(ledger.get(api)) is not int or not 0 < ledger[api] <= 65535:
         raise SystemExit(f"invalid {api}")
 # The interfaces are compiled host behavior, so they live apart from the
@@ -24,7 +24,9 @@ interfaces = "\n".join([
     "// interfaces from the oldest to the current one; module interfaces must match.",
     f"PackageHostAPI :: {ledger['host_api']}",
     f"PackageHostAPIOldest :: {ledger['oldest_host_api']}",
-    f"PackageModuleAPI :: {ledger['module_api']}", ""])
+    f"PackageModuleAPI :: {ledger['module_api']}",
+    "// The ZX executable revision this host runs; the node offers only packages of it.",
+    f"PackageZxRevision :: {ledger['zx_revision']}", ""])
 interface_path = root / "src/apps/host_api.zi"
 if not interface_path.exists() or interface_path.read_text() != interfaces:
     interface_path.write_text(interfaces)

@@ -29,18 +29,23 @@ if args.output.exists():
     args.output.rename(previous)
 args.output.mkdir(parents=True)
 command = ["sh", str(root / "scripts/run-ziran.sh"), str(args.compiler),
-           "--no-main", "--root", str(root)]
+           "build", "--target=c", "--no-main", "--project", "--offline",
+           "--root", str(root)]
 for name in args.define:
     command.extend(["--define", name])
-for directory in (
-    root / "src", kryon / "src/ui", kryon / "src/backend", root / "build/packages/css/src",
-    root / "build/packages/game2d/src", root / "build/packages/ziran/std",
-    Path(os.environ.get("DAOCHI_CLIENT_DIR", root / "build/packages/daochi-client")),
-):
-    command.extend(["--module-path", str(directory)])
-# Dependencies are imported as PACKAGE/Module through their linked packages.
-command.extend(subprocess.check_output(
-    ["sh", str(root / "scripts/package-paths.sh"), str(root / "build/packages")], text=True).split())
+# Ziran selects platform code by its target, not by C preprocessor defines:
+# name Android and the ABI's CPU so the standard library takes its Bionic
+# branches instead of the host's glibc ones, as Kryon's generator does.
+cpu_defines = {
+    "__aarch64__": "arm64",
+    "__x86_64__": "x64",
+    "__arm__": "none",
+    "__i386__": "none",
+}
+target_cpus = {cpu_defines[name] for name in args.define if name in cpu_defines}
+if len(target_cpus) != 1:
+    parser.error("select exactly one Android CPU define (__aarch64__, __arm__, __x86_64__ or __i386__)")
+command.extend(["--target-os", "android", "--target-cpu", target_cpus.pop()])
 command.extend(["-o", str(args.output)])
 command.extend(str(path.relative_to(root)) for path in sources)
 completed = subprocess.run(command, cwd=root)

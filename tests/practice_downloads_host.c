@@ -1,7 +1,7 @@
 #include "zir_string.h"
 #include "practice_downloads_behavior.h"
 #include "assets.h"
-#include "file_download.h"
+#include "practice_downloads.h"
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/startup-quit-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 BINARY = Path(sys.argv[1]).resolve()
-KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS")
+KEYS = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS",
+        "GDK_DISPLAY", "SESSION_MANAGER")
 assert all(not os.environ.get(key) for key in KEYS), "Inherited desktop environment"
 
 
@@ -30,21 +31,24 @@ def stop(process):
         process.wait(timeout=3)
 
 
-with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, contextlib.ExitStack() as stack:
+with tempfile.TemporaryDirectory(prefix="profile-", dir=OUTPUT) as temporary, contextlib.ExitStack() as stack:
     # A private command folder, so concurrent runs never answer each other.
     driver = UiDriver(Path(temporary) / "driver")
     env = {key: value for key, value in os.environ.items() if key not in KEYS}
     env.pop("INBE_DIARY_IMPORT", None)
     env.update(driver.environment())
-    env.update(YUE_DESKTOP_RECOVERY="0", APP_NO_TRAY="1", SDL_AUDIODRIVER="dummy",
-               INBE_DEBUG_ROUTE="1")
+    env.update(HARMONY_DESKTOP_RECOVERY="0", YUE_DESKTOP_RECOVERY="0", APP_NO_TRAY="1", SDL_AUDIODRIVER="dummy",
+               INBE_DEBUG_ROUTE="1", LIBGL_ALWAYS_SOFTWARE="1", LP_NUM_THREADS="2")
+    alsa = Path(temporary) / 'alsa.conf'
+    alsa.write_text('pcm.!default {\n    type null\n}\n')
+    env['ALSA_CONFIG_PATH'] = str(alsa)
     display_log = stack.enter_context((OUTPUT / "display.log").open("w"))
-    server = subprocess.Popen(["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0", "1280x900x24",
+    server = subprocess.Popen(["Xvfb", "-noreset", ":958", "-displayfd", "1", "-screen", "0", "1280x900x24",
                                "-nolisten", "tcp"], env=env, stdout=subprocess.PIPE, stderr=display_log)
     stack.callback(stop, server)
     number = server.stdout.readline().decode().strip()
     server.stdout.close()
-    assert number.isdecimal()
+    assert number.isdecimal() and int(number) >= 300 and server.poll() is None
     env["DISPLAY"] = ":" + number
 
     def command(*args):
@@ -58,7 +62,10 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
     def wait_log(log, text, message):
         deadline = time.monotonic() + 5
         while text not in log.read_text():
-            assert time.monotonic() < deadline, message + "\n" + log.read_text()
+            if time.monotonic() >= deadline:
+                (OUTPUT / (log.stem + '-tree.json')).write_text(json.dumps(driver.tree(), indent=2))
+                command('import', '-window', window, str(OUTPUT / (log.stem + '-failure.png')))
+                raise AssertionError(message + '\n' + driver.text() + '\n' + log.read_text()[-3000:])
             time.sleep(.05)
 
     def in_navigation(label):
@@ -72,9 +79,12 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
 
     @contextlib.contextmanager
     def application(profile, name, *args, preview=False):
+        cache = profile / 'packages'
+        cache.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / 'build/practice-content/guide.en.zx', cache / 'practice-guide.en.zx')
         log_path = OUTPUT / (name + ".log")
         with log_path.open("w") as log:
-            environment = env | {"APP_DATA_ROOT": str(profile)}
+            environment = env | {"APP_DATA_ROOT": str(profile), "INBE_SCREENSHOT_DATA_ROOT": str(profile)}
             if preview:
                 environment["APP_SHOT_WINDOW"] = "1"
             app = subprocess.Popen([str(BINARY), *args], cwd=ROOT, env=environment,
@@ -106,8 +116,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
                 assert "frame rejected" not in log_path.read_text(), log_path.read_text()
             finally:
                 stop(app)
-                # Preview windows keep their profile in a per-process folder.
-                shutil.rmtree(Path("/tmp") / f"inbe-screenshot-{app.pid}", ignore_errors=True)
 
     receipts = {}
     # Both root artifacts open the ready-to-use Apps library and migrate old
@@ -123,6 +131,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
                       "apps_setup_done": 0, "enabled_apps": 22, "lumi_introduced": 1,
                       "package_updates_allowed": 0, "apps_last_update_check": 1900000000,
                       "tutorial_seen": 1, "habits_guide_seen": 1, "lumi_guides_seen": 127, "launcher_guide_seen": 1,
+                      "notification_achievements": 0, "guide_narration_enabled": 0,
                       "ui_scale": 10,
                       "navigation_placement": 1, "navigation_collapsed": 0,
                       "bottom_nav_route_count": 2, "bottom_nav_route_0": 0,
@@ -151,16 +160,18 @@ with tempfile.TemporaryDirectory(prefix="inbe-startup-quit-") as temporary, cont
             order = [int(saved[f"launcher_favorite_{i}"]) for i in range(int(saved["launcher_favorite_count"]))]
             assert order == [12, 1, 2], "Defaults are not Lumi, Habits and Practice: " + str(order)
             wait_log(log, "->0", "Practices click was ignored")
-            # Diary is not installed; its card below the divider installs and
-            # opens it. Apps sits in the sidebar's bottom corner.
+            # Diary is bundled but hidden. Opening it enables the shortcut
+            # without requesting a network download or changing other choices.
             apps = in_navigation("Apps")
             screen = next(node for node in driver.tree() if node["kind"] == "screen")
             assert apps["y"] - screen["y"] > 720 - 120, f"Apps left the sidebar's bottom corner: {apps}"
             driver.press(key=apps["key"])
             driver.wait(label="Pinned")
-            driver.press(label="Diary", role="button")
-            wait_log(log, "screen=0->22", "Diary click was ignored")
-            driver.wait(label="Diary", role="title_bar")
+            diary = driver.wait(label="Diary", role="button")
+            pressed = driver.press(key=diary['key'], role='button')
+            assert pressed['hit'] == diary['index'], ('Diary card was covered', diary, pressed)
+            wait_log(log, "screen=0->22", "Bundled Diary did not open")
+            driver.wait(label="Diary", role="text_area")
             selected = settings(profile)
             assert selected["enabled_apps"] == "30", "Opening Diary changed unrelated app choices"
             receipts[profile.name] = dict(selection=int(selected["enabled_apps"]), order=order)

@@ -3,6 +3,8 @@
 #include <assert.h>
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -10,6 +12,17 @@ static atomic_bool parser_blocked;
 static atomic_bool parser_started;
 static atomic_int bundle_opens;
 static bool other_account;
+
+/* Snapshot integration uses the real variadic logger's calling convention. */
+void __wrap_TraceLog(int32_t level, const char *format, ...)
+{
+    (void)level;
+    va_list arguments;
+    va_start(arguments, format);
+    vfprintf(stderr, format, arguments);
+    va_end(arguments);
+    fputc('\n', stderr);
+}
 
 void IconsBlockParser(bool blocked)
 {

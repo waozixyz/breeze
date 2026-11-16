@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -17,7 +18,7 @@ if work.exists():
 work.mkdir(parents=True)
 fixtures = work / 'fixtures'
 (fixtures / 'cache/packages').mkdir(parents=True)
-compiler = ROOT / 'build/ziran-toolchain/bin/ziran'
+compiler = Path(os.environ.get('ZIRAN', str(ROOT / 'build/ziran-toolchain/bin/ziran')))
 packs = []
 for name in NAMES:
     data = (ROOT / 'build/practice-content' / (name + '.zx')).read_bytes()
@@ -47,7 +48,7 @@ voice = assets / 'practices/taichi/voice-male/en'
 voice.mkdir(parents=True)
 (voice / 'test.ogg').write_bytes(b'fixture male audio')
 bundle = work / 'en-male.zx'
-subprocess.run([str(compiler), 'bundle', '--root', str(ROOT), '--entry', 'content:Main',
+subprocess.run([str(compiler), 'bundle', '--project', '--offline', '--root', str(ROOT), '--entry', 'content:Main',
     '--asset-dir', 'assets=' + str(assets), '-o', str(bundle),
     str(ROOT / 'apps/practice/content.zi')], check=True)
 data = bundle.read_bytes()
@@ -82,29 +83,28 @@ preserved = {
 for name, data in preserved.items():
     (fixtures / 'cache/packages' / name).write_bytes(data)
 generated = work / 'generated'
-arguments = [str(compiler), 'build', '--target=c', '--no-main', '--root', str(ROOT / 'tests'),
+arguments = [str(compiler), 'build', '--target=c', '--no-main', '--project', '--offline', '--root', str(ROOT / 'tests'),
              '--define', 'PLATFORM_DESKTOP']
-for path in ('src', 'build/packages/ziran/std', 'build/packages/kryon/src/ui',
-             'build/packages/kryon/src/backend', 'build/packages/daochi-client'):
-    arguments += ['--module-path', str(ROOT / path)]
-arguments += subprocess.check_output([
-    'sh', str(ROOT / 'scripts/package-paths.sh'), str(ROOT / 'build/packages')
-], text=True).split()
 subprocess.run([*arguments, '-o', str(generated), str(ROOT / 'tests/practice_downloads_behavior.zi')], check=True)
 monocypher = ROOT / 'build/packages/monocypher/src'
 # The linker wraps these modules' procedures, so their headers declare them
 # rather than giving other modules inline copies that would bypass the wraps.
+download_header = next(generated.glob('*file_download.h'))
 wrapped = ['-DZIRAN_' + header.stem.upper() + '_H_SOURCE'
-           for header in [generated / 'file_download.h', *generated.glob('p*_sha256.h')]]
+           for header in [download_header, *generated.glob('p*_sha256.h')]]
+wrappers = []
+for name in ('Start', 'Poll', 'Release'):
+    legacy = 'file_download_FileDownload' + name
+    symbol = re.search(r'([a-z0-9_]*file_download_FileDownload' + name + ')', download_header.read_text())[1]
+    wrappers.extend(('-D__wrap_' + legacy + '=__wrap_' + symbol, '-Wl,--wrap=' + symbol))
 subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-D_GNU_SOURCE', '-O1',
-    '-ffunction-sections', '-fdata-sections', *wrapped, '-I' + str(generated),
+    '-ffunction-sections', '-fdata-sections', *wrapped, *wrappers, '-I' + str(generated),
     '-I' + str(ROOT / 'build/packages/ziran/include'), '-I' + str(monocypher),
     '-I' + str(monocypher / 'optional'), str(ROOT / 'tests/practice_downloads_host.c'),
     *map(str, generated.rglob('*.c')), str(monocypher / 'monocypher.c'),
     str(monocypher / 'optional/monocypher-ed25519.c'),
-    str(ROOT / 'build/ziran-toolchain/libziran.a'), '-Wl,--gc-sections',
-    '-Wl,--wrap=file_download_FileDownloadStart', '-Wl,--wrap=file_download_FileDownloadPoll',
-    '-Wl,--wrap=file_download_FileDownloadRelease', '-Wl,--wrap=storage_db_path',
+    os.environ.get('ZIRAN_RUNTIME', str(ROOT / 'build/ziran-toolchain/libziran.a')), '-Wl,--gc-sections',
+    '-Wl,--wrap=storage_db_path',
     '-Wl,--wrap=Sha256Hex',
     '-lm', '-pthread', '-o', str(work / 'test')], check=True)
 subprocess.run([str(work / 'test'), str(fixtures)], check=True, timeout=120,

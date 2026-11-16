@@ -23,7 +23,7 @@ set(RAYLIB_DIR "${REPO_ROOT}/build/packages/raylib/src")
 set(WEBP_DIR "${REPO_ROOT}/build/packages/libwebp")
 set(AVIF_DIR "${REPO_ROOT}/build/packages/libavif")
 set(AOM_DIR "${REPO_ROOT}/build/packages/libaom")
-# Ogg Opus narration: Kryon links static libopus from the audio package's source.
+# Ogg Opus narration is decoded through the audio package's static libopus.
 set(AUDIO_DIR "${REPO_ROOT}/build/packages/audio")
 set(OPUS_DIR "${REPO_ROOT}/build/packages/libopus")
 set(SAMPLERATE_DIR "${REPO_ROOT}/build/packages/libsamplerate")
@@ -106,8 +106,9 @@ file(GLOB_RECURSE APP_LIBRARY_ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${REPO_ROOT}/build/packages/avif/src/*.zi"
     "${REPO_ROOT}/build/packages/audio/src/*.zi"
     "${ZIRAN_DIR}/std/*.zi" "${REPO_ROOT}/build/packages/daochi-client/*.zi")
-set(APP_ZIRAN_DEFINES --define ANDROID_BUILD --define KRYON_ANDROID_HOST)
-set(APP_ZIRAN_CHECK_DEFINES "ANDROID_BUILD KRYON_ANDROID_HOST")
+set(APP_ZIRAN_DEFINES --define ANDROID_BUILD --define KRYON_ANDROID_HOST
+    --define KRYON_RAYLIB_HOST --define AVIF_RAYLIB)
+set(APP_ZIRAN_CHECK_DEFINES "ANDROID_BUILD KRYON_ANDROID_HOST KRYON_RAYLIB_HOST AVIF_RAYLIB")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     list(APPEND APP_ZIRAN_DEFINES --define ANDROID_DEBUG)
     string(APPEND APP_ZIRAN_CHECK_DEFINES " ANDROID_DEBUG")
@@ -172,7 +173,7 @@ execute_process(COMMAND "${ZIRAN_BIN}" check --root "${SRC_DIR}"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 set(APP_GENERATE_ZIRAN_COMMAND "${HOST_PYTHON}"
     "${REPO_ROOT}/scripts/generate-android-sources.py"
-    --compiler "${ZI2C_BIN}" --root "${REPO_ROOT}" --kryon "${KRYON_DIR}"
+    --compiler "${ZIRAN_BIN}" --root "${REPO_ROOT}" --kryon "${KRYON_DIR}"
     --output "${APP_ZIRAN_GEN_DIR}" --manifest "${APP_ZIRAN_MANIFEST}"
     ${APP_ZIRAN_DEFINES})
 set(APP_ZIRAN_STAMP "${CMAKE_BINARY_DIR}/ziran/generated.stamp")
@@ -186,7 +187,7 @@ if(EXISTS "${APP_ZIRAN_MANIFEST}" AND EXISTS "${APP_ZIRAN_STAMP}" AND
         set(APP_ZIRAN_GENERATE FALSE)
         include("${APP_ZIRAN_MANIFEST}")
         foreach(input ${APP_ZIRAN_SOURCES} ${APP_LIBRARY_ZIRAN_SOURCES}
-                "${ZI2C_BIN}" "${REPO_ROOT}/scripts/generate-android-sources.py")
+                "${ZIRAN_BIN}" "${REPO_ROOT}/scripts/generate-android-sources.py")
             if("${input}" IS_NEWER_THAN "${APP_ZIRAN_STAMP}")
                 set(APP_ZIRAN_GENERATE TRUE)
             endif()
@@ -210,7 +211,7 @@ add_custom_command(
     BYPRODUCTS ${APP_ZIRAN_GENERATED_SOURCES} ${APP_ZIRAN_GENERATED_HEADERS}
     COMMAND ${APP_GENERATE_ZIRAN_COMMAND}
     COMMAND ${CMAKE_COMMAND} -E touch "${APP_ZIRAN_STAMP}"
-    DEPENDS ${APP_ZIRAN_SOURCES} ${APP_LIBRARY_ZIRAN_SOURCES} "${ZI2C_BIN}"
+    DEPENDS ${APP_ZIRAN_SOURCES} ${APP_LIBRARY_ZIRAN_SOURCES} "${ZIRAN_BIN}"
         "${REPO_ROOT}/scripts/generate-android-sources.py"
         "${REPO_ROOT}/scripts/run-ziran.sh"
     WORKING_DIRECTORY "${REPO_ROOT}" VERBATIM)
@@ -225,8 +226,8 @@ add_custom_target(app_clean_runtime_api
     WORKING_DIRECTORY "${REPO_ROOT}" VERBATIM)
 add_custom_target(app_zi_check
     COMMAND ${CMAKE_COMMAND} -E env "ZI_CHECK_DEFINES=${APP_ZIRAN_CHECK_DEFINES}"
-        "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-zi-sources.py" "${ZI2ZIR_BIN}"
-    DEPENDS "${ZI2C_BIN}" WORKING_DIRECTORY "${REPO_ROOT}" VERBATIM)
+        "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-zi-sources.py" "${ZIRAN_BIN}"
+    DEPENDS "${ZIRAN_BIN}" WORKING_DIRECTORY "${REPO_ROOT}" VERBATIM)
 add_dependencies(app_zi_check app_build_laws)
 add_dependencies(app_ziran_generated app_build_laws app_clean_runtime_api app_zi_check)
 
@@ -278,8 +279,44 @@ add_custom_command(
     VERBATIM
 )
 
-kryon_android_raylib("${RAYLIB_DIR}" "${WEBP_DIR}" "${AVIF_DIR}" "${AOM_DIR}"
-    "${AUDIO_DIR}" "${OPUS_DIR}" "${SAMPLERATE_DIR}")
+kryon_android_codecs("${WEBP_DIR}" "${AVIF_DIR}" "${AOM_DIR}")
+# Breeze owns its raylib renderer and audio selection. Kryon's Android helper
+# supplies platform glue and codecs to every host, including software hosts.
+add_library(breeze_raylib STATIC
+    "${RAYLIB_DIR}/rcore.c"
+    "${RAYLIB_DIR}/rshapes.c"
+    "${RAYLIB_DIR}/rtextures.c"
+    "${RAYLIB_DIR}/rtext.c"
+    "${RAYLIB_DIR}/raudio.c")
+target_compile_definitions(breeze_raylib PRIVATE
+    PLATFORM_ANDROID
+    GRAPHICS_API_OPENGL_ES2
+    RL_DEFAULT_BATCH_BUFFER_ELEMENTS=8192
+    RL_DEFAULT_BATCH_BUFFERS=2
+    SUPPORT_SCREEN_CAPTURE=0
+    SUPPORT_CUSTOM_FRAME_CONTROL=1
+    SUPPORT_COMPRESSION_API=0
+    SUPPORT_AUTOMATION_EVENTS=0
+    SUPPORT_CLIPBOARD_IMAGE=0
+    SUPPORT_FILEFORMAT_BMP=0
+    SUPPORT_FILEFORMAT_GIF=0
+    SUPPORT_FILEFORMAT_QOI=0
+    SUPPORT_FILEFORMAT_DDS=0
+    SUPPORT_FILEFORMAT_TTF=1
+    SUPPORT_FILEFORMAT_JPG=1
+    SUPPORT_FILEFORMAT_PNG=1
+    SUPPORT_FILEFORMAT_OGG=1
+    SUPPORT_MODULE_RAUDIO=1
+    __wrap_fopen=KryonRaylibFopen)
+target_compile_options(breeze_raylib PRIVATE -O2 -ffunction-sections -fdata-sections
+    -fno-omit-frame-pointer $<$<NOT:$<CONFIG:Debug>>:-g1>)
+target_include_directories(breeze_raylib PUBLIC
+    "${RAYLIB_DIR}" "${KRYON_ANDROID_NATIVE_APP_GLUE_DIR}")
+include("${AUDIO_DIR}/native/AudioCodecs.cmake")
+ziran_audio_codecs("${OPUS_DIR}" "${SAMPLERATE_DIR}")
+target_compile_options(opus PRIVATE -O2)
+target_link_libraries(breeze_raylib PUBLIC
+    kryon_android_codecs opus EGL GLESv2 OpenSLES)
 
 add_library(main SHARED
     "${MONOCYPHER_DIR}/monocypher.c"
@@ -344,7 +381,15 @@ foreach(source ${APP_ZIRAN_GENERATED_SOURCES})
     endif()
 endforeach()
 
-target_link_libraries(main oqs z "${APP_BUNDLE_RUNTIME}")
+target_link_libraries(main PRIVATE breeze_raylib oqs z "${APP_BUNDLE_RUNTIME}")
+target_link_options(main PRIVATE
+    -Wl,--wrap=BeginDrawing -Wl,--wrap=EndDrawing
+    -Wl,--wrap=ClearBackground
+    -Wl,--wrap=BeginMode2D -Wl,--wrap=EndMode2D
+    -Wl,--wrap=BeginScissorMode -Wl,--wrap=EndScissorMode
+    -Wl,--wrap=eglGetCurrentContext
+    -Wl,--wrap=SetTargetFPS -Wl,--wrap=GetFrameTime
+    -Wl,--wrap=CloseWindow)
 
 # Keep the Android entry points public and let the linker discard unreachable
 # functions from the statically linked runtime and graphics dependencies.

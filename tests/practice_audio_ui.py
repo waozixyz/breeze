@@ -50,10 +50,23 @@ def exercise_audio_modal(driver, read_state, read_setting, track_key):
     for label, key, amount in (('Cue volume', 'sound_volume', 17),
                                ('Music volume', 'music_volume', 23)):
         slider = reveal(label, 'slider')
-        driver.press(key=slider['key'])
-        driver.key('home')
-        for _ in range(amount):
-            driver.key('right')
+        # Send pointer input only to the owned private-display test app.
+        left = slider['x']
+        right = left + slider['width']
+        y = slider['y'] + slider['height'] - 24
+        for _ in range(12):
+            x = (left + right) / 2
+            driver.pointer(x, y)
+            driver.pointer(x, y, down=True)
+            driver.pointer(x, y, down=False)
+            actual = int(read_setting(key))
+            if actual == amount:
+                break
+            if actual < amount:
+                left = x
+            else:
+                right = x
+        driver.release_pointer()
         wait_for(lambda: read_setting(key) == str(amount), 'Volume was not persisted: ' + key)
         live_key = 'cue_volume' if key == 'sound_volume' else key
         wait_for(lambda: read_state()[live_key] == amount, 'Live volume differs from settings')

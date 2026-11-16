@@ -1,5 +1,7 @@
 """Private-display regression of Practice's tabs and its download controls."""
 import os
+import json
+import mmap
 from pathlib import Path
 import re
 import shutil
@@ -17,6 +19,21 @@ binary = Path(sys.argv[1]).resolve()
 output = ROOT / 'build/practice-downloads-ui-test'
 output.mkdir(parents=True, exist_ok=True)
 driver = UiDriver(output / 'driver')
+sys.path.insert(0, str(ROOT / 'scripts'))
+from practice_content import bundle_assets, CATALOG
+
+# Assert the language choices carried by this exact root, including rejection
+# of stale cached recordings that the verified catalog no longer advertises.
+with (ROOT / 'build/inbe-full.zx').open('rb') as source, mmap.mmap(source.fileno(), 0, access=mmap.ACCESS_READ) as data:
+    practice_bundle = bundle_assets(data, maximum=len(data), include_paths={'cells/practices.zx'})['cells/practices.zx']
+catalog = json.loads(bundle_assets(practice_bundle, maximum=len(practice_bundle), include_paths={CATALOG})[CATALOG])
+del practice_bundle
+language_names = dict(line.split('|', 1) for line in (ROOT / 'locales/index.txt').read_text().splitlines() if '|' in line)
+
+
+def narration_languages(practice, voice=''):
+    return [language_names[pack['language']] for pack in catalog['packs']
+            if pack['practice'] == practice and pack.get('voice', '') == voice and pack['language']]
 
 
 def command(*arguments):
@@ -38,6 +55,7 @@ def launch(profile, name, width=390, height=844):
     log = log_path.open('w')
     process = subprocess.Popen([str(binary), '--bundle', str(ROOT / 'build/inbe-full.zx')],
         cwd=ROOT, env=os.environ | driver.environment() | {'APP_DATA_ROOT': str(profile),
+        'ALSA_CONFIG_PATH': str(profile / 'alsa.conf'),
         'APP_NO_TRAY': '1', 'SDL_AUDIODRIVER': 'dummy', 'YUE_DESKTOP_RECOVERY': '0'},
         stdout=log, stderr=subprocess.STDOUT)
     driver.attach(process, log_path)
@@ -70,7 +88,8 @@ RUSSIAN = ['Медитация', 'Йога', 'Боевые искусства', 
 
 
 def tab_nodes(labels=TABS):
-    return [node for node in driver.tree() if node['role'] == 'tab' and node['label'] in labels]
+    return [node for node in driver.tree() if node['kind'] == 'button'
+            and node['key'] in range(17480, 17484) and node['label'] in labels]
 
 
 def home_tabs(labels=TABS):
@@ -86,7 +105,9 @@ def selected_tab(labels=TABS):
 
 def visible_tab(label, labels=TABS):
     tabs = [node for node in tab_nodes(labels) if node['label'] == label
-            and node['visible'] and node['visible_width'] >= 24]
+            and node['visible'] and node['width'] >= 44 and node['height'] >= 44
+            and node['visible_width'] >= node['width'] - 1
+            and node['visible_height'] >= node['height'] - 1]
     return tabs[0] if tabs else None
 
 
@@ -99,21 +120,28 @@ def select_tab(label, labels=TABS):
     assert selected_tab(labels) == label, home_tabs(labels)
 
 
-def swipe_to_tab(label, labels=TABS):
-    """Swipe the tabs toward their end until a tab shows; the swipe selects
-    no tab."""
-    before = selected_tab(labels)
-    for _ in range(6):
-        if visible_tab(label, labels):
-            break
-        bar = next(node for node in driver.tree() if node['kind'] == 'tab_bar' and
-                   any(tab['parent'] == node['index'] for tab in tab_nodes(labels)))
-        y = bar['visible_y'] + bar['visible_height'] / 2
-        driver.drag((bar['visible_x'] + bar['visible_width'] - 8, y), (bar['visible_x'] + 8, y), steps=12)
-        driver.wait_idle(frames=4)
-    assert visible_tab(label, labels), (label, home_tabs(labels))
-    chosen = [name for name, selected in home_tabs(labels) if selected]
-    assert chosen in ([], [before]), ('A swipe selected a tab', home_tabs(labels))
+def category_art(labels=TABS):
+    """All four translated category buttons and their artwork fit at once."""
+    assert [node['label'] for node in tab_nodes(labels)] == labels, home_tabs(labels)
+    for slot, label in enumerate(labels):
+        button = visible_tab(label, labels)
+        assert button, ('Category target is clipped or too small', label, home_tabs(labels))
+        medallion = driver.wait(key=17510 + slot, role='image')
+        assert medallion['x'] >= button['x'] - 1, (button, medallion)
+        assert medallion['y'] >= button['y'] - 1, (button, medallion)
+        assert medallion['x'] + medallion['width'] <= button['x'] + button['width'] + 1, (button, medallion)
+        assert medallion['y'] + medallion['height'] <= button['y'] + button['height'] + 1, (button, medallion)
+        artwork = [medallion]
+        assert not driver.find(key=17520 + slot, role='text', visible=True)
+        for node in artwork:
+            assert node['width'] > 0 and node['height'] > 0, node
+            assert node['visible_width'] >= node['width'] - 1, node
+            assert node['visible_height'] >= node['height'] - 1, node
+    driver.wait(key=17470, role='image')
+    # The selected medallion replaces the old separate selection backplate.
+    chosen = labels.index(selected_tab(labels))
+    assert driver.wait(key=17480 + chosen, role='button')['selected']
+    assert 'Missing image' not in driver.labels(), screen_text()
 
 
 def buttons(prefix):
@@ -150,6 +178,7 @@ def visible_label(contains):
 
 with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
     profile = Path(temporary)
+    (profile / 'alsa.conf').write_text('pcm.!default {\n    type null\n}\n')
     # Lumi's guide narration downloads by itself in the app's language; its
     # copy is already here, so the test reaches no server.
     (profile / 'packages').mkdir()
@@ -179,7 +208,11 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
     try:
         # Practice opens on Wim Hof under Meditation; Manage practices is gone.
         driver.wait(label='Start Practice', role='button')
-        assert home_tabs() == [(label, label == 'Meditation') for label in TABS], home_tabs()
+        tabs = home_tabs()
+        if tabs != [(label, label == 'Meditation') for label in TABS]:
+            (output / 'tabs-failure-tree.json').write_text(json.dumps(driver.tree(), indent=2))
+        assert tabs == [(label, label == 'Meditation') for label in TABS], (tabs, screen_text())
+        category_art()
         assert not visible_label('Manage practices'), screen_text()
         assert visible_label('Wim Hof'), screen_text()
         # Meditation pages through its four practices, all ready to start.
@@ -236,20 +269,20 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
         value = database.execute('SELECT value FROM settings WHERE user_id=? AND key=?',
                                  (user, 'tai_chi_progress')).fetchone()[0]
         assert value.startswith('1'), 'Browsing practices changed saved practice progress'
-    # On a narrow phone the last tab lies past the edge in English and in
-    # Russian: a swipe across the tabs brings it into view without choosing
-    # a tab, and a tap chooses it.
+    # The compact layout keeps every category visible even with long Russian
+    # labels. Selecting a category also moves the jade selection artwork.
     for language, width in [('en', 320), ('en', 360), ('ru', 320), ('ru', 360)]:
         with sqlite3.connect(profile / 'inbe.db') as database:
             database.execute('UPDATE settings SET value=? WHERE user_id=? AND key=?', (language, user, 'language'))
             database.execute('UPDATE settings SET value=? WHERE user_id=? AND key=?', ('0', user, 'exercise_type'))
         labels = TABS if language == 'en' else RUSSIAN
-        process, window = launch(profile, 'swipe-' + language + '-' + str(width), width, 640)
+        process, window = launch(profile, 'tabs-' + language + '-' + str(width), width, 640)
         try:
             driver.wait(label=labels[0])
             assert selected_tab(labels) == labels[0], home_tabs(labels)
-            swipe_to_tab(labels[-1], labels)
+            category_art(labels)
             select_tab(labels[-1], labels)
+            category_art(labels)
             driver.wait(contains='7-Minute Workout' if language == 'en' else '7-минутная тренировка')
         finally:
             stop(process)
@@ -298,17 +331,27 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
             assert 'Dew' not in text and 'Unlock' not in text, text
             if name == 'taichi-desktop':
                 driver.press(label='Customize', role='button')
-                # Jade woman speaks with the female voice, in the language
-                # chosen in a list that downloads or removes each language.
-                driver.wait(label='Female voice', role='button')
-                driver.wait(label='Male voice', role='button')
-                driver.wait(label='English', role='dropdown')
+                # Offer only complete recordings. Cached files cannot add a
+                # voice or language absent from this package's catalog.
+                male = narration_languages('taichi', 'male')
+                if male:
+                    driver.wait(label='Female voice', role='button')
+                    driver.wait(label='Male voice', role='button')
+                else:
+                    assert not driver.find(label='Female voice', role='button'), screen_text()
+                    assert not driver.find(label='Male voice', role='button'), screen_text()
+                available = narration_languages('taichi')
+                assert available, 'Tai Chi has no verified narration language'
+                choices = [node for node in driver.find(role='dropdown')
+                           if node['label'] in ['Language'] + available]
+                assert len(choices) == 1, screen_text()
                 text = screen_text()
                 assert 'Plays in' not in text and 'Downloading' not in text, text
-                driver.press(label='English', role='dropdown')
-                driver.wait(label='Deutsch')
-                driver.wait(label='Português')
+                driver.press(key=choices[0]['key'], role='dropdown')
+                driver.wait(label=available[0])
                 languages = driver.labels(visible=False)
+                for label in language_names.values():
+                    assert (label in languages) == (label in available), (label, available, languages)
                 assert 'Italiano' not in languages and 'Bahasa Indonesia' not in languages, languages
         finally:
             stop(process)
