@@ -39,7 +39,7 @@ const browser = spawn('xvfb-run', ['-a', 'chromium', '--headless=new', '--use-an
 let diagnostics = ''
 browser.stderr.on('data', bytes => { diagnostics = (diagnostics + bytes).slice(-6000) })
 const delay = ms => new Promise(done => setTimeout(done, ms))
-const report = { source: 'canonical practices working tree', cueBoundaries: 0, frames: [], errors: [] }
+const report = { source: 'canonical practices working tree', cueBoundaries: 0, frames: [], sceneMetrics: {}, errors: [] }
 let socket
 let id = 0
 const pending = new Map()
@@ -91,6 +91,9 @@ try {
     await cdp('Page.enable')
     await cdp('Page.navigate', { url: `http://127.0.0.1:${port}/design/astral-projection/three/index.html` })
     await until('Boolean(window.astral)')
+    assert(await evaluate('document.querySelector("canvas").clientWidth > 800'), 'Stylesheet applied: full-width desktop stage')
+    assert.equal(await evaluate('getComputedStyle(document.documentElement).colorScheme'), 'dark')
+    assert.equal(await evaluate('document.querySelectorAll(".exercise-card").length'), 6)
     for (const [n, item] of items.entries()) {
         await evaluate(`document.querySelector('#exercise').value = ${n}; document.querySelector('#exercise').dispatchEvent(new Event('change'))`)
         for (const [i, cue] of item.cues.entries()) {
@@ -106,6 +109,7 @@ try {
             await evaluate(`window.astral.seek(${t})`)
             const pixels = await evaluate('window.astral.pixels()')
             assert(pixels.bright > 300, `Blank ${item.id} at ${t}: ${JSON.stringify(pixels)}`)
+            report.sceneMetrics[`${item.id}-${t}`] = pixels
             await frame(`${item.id}-${t}`)
         }
         await evaluate(`document.querySelector('#seek').value = ${item.duration}; document.querySelector('#seek').dispatchEvent(new Event('input')); document.querySelector('#play').click()`)
@@ -118,11 +122,56 @@ try {
         await evaluate('document.querySelector("#restart").click()')
         assert.equal(await evaluate('window.astral.state().time'), 0)
     }
+    const pose = async (n, t) => {
+        await evaluate(`window.astral.select(${n})`)
+        return evaluate(`window.astral.seek(${t})`)
+    }
+    const rope = await pose(4, 1610)
+    assert(rope.ropeVisible && rope.cordVisible)
+    assert(rope.astralPosition[1] > rope.physicalPosition[1] + 1)
+    const nextGrip = await evaluate('window.astral.seek(1610.5)')
+    assert.notDeepEqual(rope.handGrips, nextGrip.handGrips, 'Alternating rope grips')
+    const pixelsA = await evaluate('window.astral.pixels()')
+    await evaluate('window.astral.seek(1611.3)')
+    assert.notEqual((await evaluate('window.astral.pixels()')).checksum, pixelsA.checksum, 'Animation pixels change')
+    await frame('showcase-rope-ascent-1611')
+    const returned = await pose(4, 2279)
+    assert(!returned.cordVisible, 'Rope return rejoins the body')
+    assert.deepEqual(returned.physicalPosition, rope.physicalPosition)
+    const left = await pose(5, items[5].cues[7].second + 12)
+    const right = await pose(5, items[5].cues[8].second + 9.5)
+    assert(left.astralPosition[0] < 0 && right.astralPosition[0] > 0, 'Whole-body left/right roll')
+    await frame('showcase-roll-right')
+    assert(!(await pose(5, 1679)).cordVisible, 'Roll return rejoins the body')
+    const spin = await pose(3, 1012)
+    assert(spin.pointVisible && !spin.cordVisible, 'Room Spin is preparation, not an exit')
+    await frame('showcase-spin-1012')
+    assert((await pose(2, 912)).elevatorVisible)
+    await frame('showcase-elevator-912')
+    await pose(0, 169)
+    await frame('showcase-foundation-hand-169')
+    await pose(1, 912)
+    await frame('showcase-current-912')
+    await evaluate('document.querySelector("#highlights").click()')
+    assert((await evaluate('window.astral.state()')).montage)
+    await evaluate('document.querySelector("#play").click()')
+    const paused = (await evaluate('window.astral.state()')).time
+    await delay(100)
+    assert.equal((await evaluate('window.astral.state()')).time, paused, 'Highlights pause')
+    await evaluate('window.astral.seek(700)')
+    assert(!(await evaluate('window.astral.state()')).montage, 'Scrubbing leaves highlights')
     await cdp('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true })
     await evaluate('window.dispatchEvent(new Event("resize")); window.astral.select(4); window.astral.seek(1500)')
     await frame('portrait-rope-1500')
     assert(await evaluate('document.documentElement.scrollWidth <= innerWidth'), 'Portrait overflow')
+    await evaluate('document.querySelector("#quality").value="phone"; document.querySelector("#quality").dispatchEvent(new Event("change"))')
+    assert(await evaluate('document.querySelector("canvas").width <= 720'))
     await cdp('Emulation.clearDeviceMetricsOverride')
+    await cdp('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] })
+    await cdp('Page.navigate', { url: `http://127.0.0.1:${port}/design/astral-projection/three/index.html` })
+    await until('Boolean(window.astral)')
+    assert(!(await evaluate('window.astral.state()')).playing, 'Reduced motion disables autoplay')
+    await cdp('Emulation.setEmulatedMedia', { features: [] })
     // The real promo loads Lumi, the monk and Tibetan woman; shader compile
     // errors are collected from the WebGL console rather than inferred from source.
     await cdp('Page.navigate', { url: `http://127.0.0.1:${port}/design/promo-film/three/index.html?t=38&width=960&height=540` })
@@ -132,7 +181,7 @@ try {
     assert.deepEqual(errors, [], 'Browser/GLSL errors')
     report.result = 'PASS'
     writeFileSync(join(out, 'verification.json'), JSON.stringify(report, null, 2) + '\n')
-    console.log(`PASS: ${report.cueBoundaries} cue boundaries; ${report.frames.length} frames; controls, portrait and promo shaders. Report: build/astral-threejs/verification.json`)
+    console.log(`PASS: ${report.cueBoundaries} cue boundaries; ${report.frames.length} frames; animation/poses/returns, highlights, controls, portrait, reduced motion and promo shaders. Report: build/astral-threejs/verification.json`)
 } catch (error) {
     console.error(JSON.stringify(report.errors), diagnostics.slice(-1500))
     throw error

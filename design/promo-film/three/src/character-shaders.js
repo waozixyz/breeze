@@ -1,5 +1,5 @@
 // Shared warm physical / cool awareness palette. No textures or ray marching.
-import { Color, DoubleSide, ShaderMaterial } from 'three'
+import { Color, DoubleSide, FrontSide, ShaderMaterial } from 'three'
 
 export const characterLighting = /* glsl */ `
 vec3 characterLight(vec3 base, vec3 n, vec3 eye) {
@@ -11,10 +11,12 @@ vec3 characterLight(vec3 base, vec3 n, vec3 eye) {
 }
 `
 
-export function bodyMaterial({ astral = false, color = '#bf8973' } = {}) {
+export function bodyMaterial({ astral = false, color = '#c49881', accent = '#7cecff' } = {}) {
     return new ShaderMaterial({
         uniforms: {
             color: { value: new Color(color) },
+            accent: { value: new Color(accent) },
+            opacity: { value: 1 },
             time: { value: 0 },
             astral: { value: astral ? 1 : 0 },
         },
@@ -28,7 +30,7 @@ export function bodyMaterial({ astral = false, color = '#bf8973' } = {}) {
                 gl_Position = projectionMatrix * p;
             }`,
         fragmentShader: /* glsl */ `
-            uniform vec3 color; uniform float time; uniform float astral;
+            uniform vec3 color; uniform vec3 accent; uniform float time; uniform float astral; uniform float opacity;
             varying vec3 vNormal; varying vec3 vEye; varying vec3 vPosition;
             ${characterLighting}
             float hash(vec3 p) { return fract(sin(dot(p, vec3(127.1,311.7,74.7))) * 43758.5453); }
@@ -41,15 +43,24 @@ export function bodyMaterial({ astral = false, color = '#bf8973' } = {}) {
             }
             void main() {
                 vec3 n = normalize(vNormal), eye = normalize(vEye);
-                float rim = pow(1.0-abs(dot(n,eye)),2.0);
-                float flow = noise(vPosition*5.0-vec3(0.0,time*0.22,0.0));
-                vec3 physical = characterLight(color,n,eye) * (1.0 + 0.015*sin(time*1.047));
-                vec3 energy = vec3(0.18,0.8,1.0)*(0.65+flow*0.9+rim*1.8);
-                gl_FragColor = vec4(mix(physical,energy,astral),mix(1.0,0.23+rim*0.48+flow*0.15,astral));
+                float rim = pow(1.0-abs(dot(n,eye)),2.4);
+                if (astral < 0.5) {
+                    vec3 halfLight=normalize(eye+normalize(vec3(-0.5,0.8,1.0)));
+                    float spec=pow(max(0.0,dot(n,halfLight)),38.0)*0.16;
+                    float grain=noise(vPosition*180.0)*0.015;
+                    gl_FragColor=vec4(characterLight(color,n,eye)+spec*vec3(1.0,0.86,0.73)-grain,1.0);
+                    return;
+                }
+                vec3 p=vPosition*4.0-vec3(0.0,time*0.17,0.0);
+                float flow=noise(p)*0.72+noise(p*2.1+3.0)*0.28;
+                float ribbons=pow(0.5+0.5*sin(vPosition.y*22.0+flow*6.0-time*1.2),12.0);
+                float veins=pow(max(0.0,1.0-abs(flow-0.5)*9.0),4.0);
+                vec3 energy=accent*(0.32+rim*2.8+ribbons*0.65)+vec3(1.0,0.64,0.28)*veins*0.28;
+                gl_FragColor=vec4(energy,(0.10+rim*0.58+veins*0.12)*opacity);
             }`,
         transparent: astral,
         depthWrite: !astral,
-        side: DoubleSide,
+        side: astral ? FrontSide : DoubleSide,
     })
 }
 
