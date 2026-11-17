@@ -36,15 +36,22 @@ shows an exterior awareness point (not an exit); Rope shows reaching/climbing;
 Roll-Out shows left/right whole-body turns. Physical muscles stay still.
 Return/recall cues stop the technique. These are guided-imagery illustrations.
 
-The shared `design/promo-film/three/src/character-shaders.js` provides warm wrapped
-lighting, a cool Fresnel rim and lightweight subsurface approximation; astral
-figures use two flowing noise layers, translucent bands, veins and HDR bloom.
-Pathways and the silver cord reuse ribbon buffers; cord slack decreases with
-separation. Rope hands alternate two-bone reaches, the torso peels upward,
-then the double floats and rejoins the physical body on the return cue.
-Painted Lumi and
-both Tai Chi teachers use the same palette and alpha-gradient relief shading,
-preserving their source artwork and premultiplied edges. No new normal textures.
+The astral studies now use dedicated `src/surfaces.js` GLSL materials: warm
+wrapped skin lighting with a red backscatter approximation, cool moon rim,
+small specular highlights and procedural skin variation; the double has
+three-scale flowing noise, luminous contour bands, Fresnel transparency and
+an inner travelling pulse. A separate translucent energy field follows the
+technique: a localized touch sphere, longitudinal current, ascending elevator
+bands, orbital spin and a shell around the separating/returning double.
+Ribbons have a luminous core, soft halo, helical detail and travelling packets.
+The bedroom uses feathered moonlight shafts, drifting dust, woven linen and a
+soft floor pool. These are inexpensive scattering approximations, not ray-marched
+volumes. `src/finish.js` adds technique-specific colour separation, tint,
+vignette and deterministic grain; bloom strength is also tuned per exercise.
+Cameras, cue times, captions and the underlying technique poses are preserved.
+
+The earlier shared promo-film shaders still shade painted Lumi and both Tai Chi
+teachers; this upgrade leaves their source artwork and materials intact.
 The preview caps render width at 1280px (720px in **Phone** quality), pixel
 ratio at 1. Static sculpted pieces are merged per material while preserving
 the arm pivots. No shadow maps or external textures are added. Real phone GPU
@@ -61,3 +68,19 @@ boundary, tests controls and captures several cue times in all six exercises,
 plus exit/return poses, changing animation pixels, highlights pause/scrub,
 computed styles, portrait framing, reduced-motion autoplay and promo character
 shader compilation. No audio plays.
+
+For matching before/after review, preserve the previous six `showcase-*.png`
+frames and `portrait-rope-1500.png` in `build/astral-compare/before/`, then run:
+
+```sh
+ASTRAL_COMPARE=1 build-queue -- node design/astral-projection/three/tools/verify.mjs
+build-queue -- python3 design/astral-projection/three/tools/compare.py
+```
+
+The comparison option renders the same cue seconds and directed camera poses,
+matching each original's viewport width. It writes seven new captures to
+`build/astral-compare/after/`. The Pillow comparison tool labels before on the
+left and after on the right without resizing either source; a taller page is
+padded below, preserving the complete captions. Results are in
+`build/astral-compare/side-by-side/`; `comparison.json` records source hashes,
+cue times, camera names and stage differences. Before files are read only.

@@ -4,6 +4,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js'
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js'
 import { createExercise } from './scenes.js'
+import { createFinish } from './finish.js'
 
 // The existing film server has no CSS MIME entry. Install the stylesheet from
 // text so this static page works there without changing its shared server.
@@ -23,8 +24,11 @@ renderer.info.autoReset = false
 const composer = new EffectComposer(renderer)
 const renderPass = new RenderPass(new T.Scene(), new T.Camera())
 composer.addPass(renderPass)
-composer.addPass(new UnrealBloomPass(new T.Vector2(640, 360), 0.65, 0.6, 0.9))
+const bloom = new UnrealBloomPass(new T.Vector2(640, 360), 0.75, 0.55, 0.95)
+composer.addPass(bloom)
 composer.addPass(new OutputPass())
+const finish = createFinish()
+composer.addPass(finish)
 const scenes = items.map((item, index) => createExercise(item, index))
 const picker = document.querySelector('#exercise')
 const seek = document.querySelector('#seek')
@@ -67,6 +71,10 @@ function draw() {
     state = view.update(time, { directed: document.querySelector('#camera').value === 'directed' })
     renderPass.scene = view.scene
     renderPass.camera = view.camera
+    bloom.strength = [0.45, 0.67, 0.62, 0.60, 0.76, 0.68][selected]
+    finish.uniforms.time.value = time
+    finish.uniforms.tint.value.set(colors[selected])
+    finish.uniforms.strength.value = [0.22, 0.5, 0.7, 1.0, 0.65, 0.75][selected]
     renderer.info.reset()
     composer.render()
     seek.value = time

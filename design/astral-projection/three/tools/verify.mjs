@@ -172,6 +172,43 @@ try {
     await until('Boolean(window.astral)')
     assert(!(await evaluate('window.astral.state()')).playing, 'Reduced motion disables autoplay')
     await cdp('Emulation.setEmulatedMedia', { features: [] })
+    if (process.env.ASTRAL_COMPARE === '1') {
+        const comparison = join(root, 'build/astral-compare')
+        const after = join(comparison, 'after')
+        mkdirSync(after, { recursive: true })
+        const samples = [
+            ['showcase-foundation-hand-169', 0, 169],
+            ['showcase-current-912', 1, 912],
+            ['showcase-elevator-912', 2, 912],
+            ['showcase-spin-1012', 3, 1012],
+            ['showcase-rope-ascent-1611', 4, 1611.3],
+            ['showcase-roll-right', 5, items[5].cues[8].second + 9.5],
+            ['portrait-rope-1500', 4, 1500],
+        ]
+        const captures = []
+        await cdp('Emulation.setScrollbarsHidden', { hidden: true })
+        for (const [name, n, second] of samples) {
+            // Original screenshots include both scrollbar-width variants. Match
+            // their CSS viewport without stretching either comparison image.
+            const before = readFileSync(join(comparison, 'before', `${name}.png`))
+            const width = before.readUInt32BE(16)
+            await cdp('Emulation.setDeviceMetricsOverride', {
+                width, height: width < 650 ? 844 : 1000,
+                deviceScaleFactor: 1, mobile: width < 650,
+            })
+            await evaluate('window.dispatchEvent(new Event("resize"))')
+            const state = await pose(n, second)
+            assert.equal(state.cue, sample(items[n], second).cue.key)
+            const pixels = await evaluate('window.astral.pixels()')
+            assert(pixels.bright > 300)
+            const { data } = await cdp('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true })
+            writeFileSync(join(after, `${name}.png`), Buffer.from(data, 'base64'))
+            captures.push({ name, second, width, viewName: state.viewName, cue: state.cue, pixels })
+        }
+        writeFileSync(join(after, 'captures.json'), JSON.stringify(captures, null, 2) + '\n')
+        await cdp('Emulation.clearDeviceMetricsOverride')
+        await cdp('Emulation.setScrollbarsHidden', { hidden: false })
+    }
     // The real promo loads Lumi, the monk and Tibetan woman; shader compile
     // errors are collected from the WebGL console rather than inferred from source.
     await cdp('Page.navigate', { url: `http://127.0.0.1:${port}/design/promo-film/three/index.html?t=38&width=960&height=540` })
@@ -181,6 +218,7 @@ try {
     assert.deepEqual(errors, [], 'Browser/GLSL errors')
     report.result = 'PASS'
     writeFileSync(join(out, 'verification.json'), JSON.stringify(report, null, 2) + '\n')
+    if (process.env.ASTRAL_COMPARE === '1') writeFileSync(join(root, 'build/astral-compare/after/verification.json'), JSON.stringify(report, null, 2) + '\n')
     console.log(`PASS: ${report.cueBoundaries} cue boundaries; ${report.frames.length} frames; animation/poses/returns, highlights, controls, portrait, reduced motion and promo shaders. Report: build/astral-threejs/verification.json`)
 } catch (error) {
     console.error(JSON.stringify(report.errors), diagnostics.slice(-1500))

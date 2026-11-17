@@ -8,8 +8,8 @@ export function createRoom(scene, index) {
     const accent = palette(index)
     scene.background = new T.Color('#080d1b')
     scene.fog = new T.FogExp2('#0b1224', 0.027)
-    scene.add(new T.HemisphereLight('#b7c8ed', '#342e39', 1.25))
-    const moonlight = new T.DirectionalLight('#adc8ff', 2.4)
+    scene.add(new T.HemisphereLight('#91a8ce', '#231a25', 0.65))
+    const moonlight = new T.DirectionalLight('#adc8ff', 3.1)
     moonlight.position.set(-3, 5, -3)
     scene.add(moonlight)
     const lampLight = new T.PointLight('#ffd2a0', 17, 9, 2)
@@ -17,7 +17,15 @@ export function createRoom(scene, index) {
     scene.add(lampLight)
     const wood = new T.MeshStandardMaterial({ color: '#433743', roughness: 0.77 })
     const wall = new T.MeshStandardMaterial({ color: '#253047', roughness: 1 })
-    const linen = new T.MeshStandardMaterial({ color: '#a5a4b7', roughness: 1 })
+    const linen = new T.MeshStandardMaterial({ color: '#77869e', roughness: 1 })
+    linen.onBeforeCompile = shader => {
+        shader.vertexShader = 'varying vec3 fabricPosition;\n' + shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nfabricPosition = position;')
+        shader.fragmentShader = 'varying vec3 fabricPosition;\n' + shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+            float weave=sin(fabricPosition.x*600.0)*sin(fabricPosition.z*600.0);
+            float folds=sin(fabricPosition.z*14.0+sin(fabricPosition.x*9.0))*0.08;
+            diffuseColor.rgb*=0.93+weave*0.025+folds;
+        `)
+    }
     function box(size, position, material) {
         const mesh = new T.Mesh(new T.BoxGeometry(...size), material)
         mesh.position.set(...position)
@@ -66,16 +74,54 @@ export function createRoom(scene, index) {
         seed = (seed * 1664525 + 1013904223) >>> 0
         return seed / 4294967296
     }
-    const positions = new Float32Array(200 * 3)
-    for (let n = 0; n < 200; n += 1) positions.set([(random() - 0.5) * 6, 0.4 + random() * 3.6, (random() - 0.5) * 6], n * 3)
+    const positions = new Float32Array(420 * 3)
+    for (let n = 0; n < 420; n += 1) positions.set([(random() - 0.5) * 6, 0.4 + random() * 3.6, (random() - 0.5) * 6], n * 3)
     const geometry = new T.BufferGeometry()
     geometry.setAttribute('position', new T.BufferAttribute(positions, 3))
     const dust = new T.Points(geometry, new T.ShaderMaterial({
         uniforms: { time: { value: 0 }, color: { value: accent } },
-        vertexShader: `uniform float time;varying float alpha;void main(){vec3 p=position;p.y+=sin(time*0.15+p.x)*0.14;p.x+=sin(time*0.12+p.z)*0.08;vec4 mv=modelViewMatrix*vec4(p,1.0);gl_Position=projectionMatrix*mv;gl_PointSize=clamp(12.0/-mv.z,1.0,4.0);alpha=0.3+0.3*sin(time*0.6+position.y*4.0);}`,
+        vertexShader: `uniform float time;varying float alpha;void main(){vec3 p=position;p.y+=sin(time*0.15+p.x)*0.14;p.x+=sin(time*0.12+p.z)*0.08;vec4 mv=modelViewMatrix*vec4(p,1.0);gl_Position=projectionMatrix*mv;gl_PointSize=clamp(19.0/-mv.z,1.0,5.0);alpha=(0.25+0.25*sin(time*0.6+position.y*4.0))*smoothstep(-3.0,0.0,p.z);}`,
         fragmentShader: `uniform vec3 color;varying float alpha;void main(){float d=length(gl_PointCoord-0.5);gl_FragColor=vec4(color*1.5,pow(max(0.0,1.0-d*2.0),3.0)*alpha);}`,
         transparent: true, blending: T.AdditiveBlending, depthWrite: false,
     }))
     scene.add(dust)
-    return { update(t) { dust.material.uniforms.time.value = t } }
+    // Layered translucent shafts approximate light scattering without a volume
+    // texture or ray march. The window end and floor end both feather to zero.
+    const shafts = new T.Group()
+    const shaftMaterial = new T.ShaderMaterial({
+        uniforms: { time: { value: 0 } },
+        vertexShader: 'varying vec2 vUv;void main(){vUv=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
+        fragmentShader: `
+            uniform float time;varying vec2 vUv;
+            void main(){
+                float edge=pow(max(0.0,sin(vUv.x*3.14159265)),2.0);
+                float lengthFade=sin(vUv.y*3.14159265);
+                float haze=0.75+0.12*sin(vUv.y*21.0+vUv.x*7.0-time*0.14);
+                float bars=0.6+0.4*pow(0.5+0.5*sin(vUv.x*21.0),3.0);
+                gl_FragColor=vec4(vec3(0.32,0.54,1.0),edge*lengthFade*haze*bars*0.085);
+            }`,
+        transparent: true, depthWrite: false, side: T.DoubleSide, blending: T.AdditiveBlending,
+    })
+    for (let n = 0; n < 4; n += 1) {
+        const shaft = new T.Mesh(new T.PlaneGeometry(1.0, 6.2), shaftMaterial)
+        shaft.position.set(-1.5+n*0.64, 1.8, -1.5+n*0.11)
+        shaft.rotation.set(-0.71, 0, -0.24)
+        shafts.add(shaft)
+    }
+    scene.add(shafts)
+    // Soft moonlight pools ground the bed and contrast the warm skin.
+    const pool = new T.Mesh(new T.PlaneGeometry(4.3, 4.8), new T.ShaderMaterial({
+        vertexShader: 'varying vec2 p;void main(){p=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0);}',
+        fragmentShader: 'varying vec2 p;void main(){vec2 q=(p-0.5)*2.0;float a=exp(-dot(q,q)*3.0)*(1.0-smoothstep(0.5,1.0,length(q)));gl_FragColor=vec4(0.19,0.39,0.75,a*0.24);}',
+        transparent: true, depthWrite: false, blending: T.AdditiveBlending,
+    }))
+    pool.rotation.x = -Math.PI / 2
+    pool.position.set(0.3, -0.045, 0.7)
+    scene.add(pool)
+    return {
+        update(t) {
+            dust.material.uniforms.time.value = t
+            shaftMaterial.uniforms.time.value = t
+        },
+    }
 }

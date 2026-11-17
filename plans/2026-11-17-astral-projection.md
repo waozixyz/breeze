@@ -155,3 +155,44 @@ Private-display frames (local artifacts, not committed):
 - `build/astral-threejs/showcase-spin-1012.png`
 - `build/astral-threejs/showcase-rope-ascent-1611.png`
 - `build/astral-threejs/showcase-roll-right.png`
+
+## Shader upgrade and before/after review — owner follow-up
+
+- Implemented dedicated astral-study skin and spirit GLSL surfaces, with wrapped
+  lighting/backscatter, moon rim, restrained skin variation, layered flowing
+  noise, luminous contours and an inner travelling pulse. Added technique-shaped
+  translucent fields: local touch, longitudinal current, ascending descent bands,
+  orbital spin and a field that follows the separating/returning double.
+- Rebuilt ribbon shading with a bright core, soft halo, helical detail and flow
+  packets for both the current and silver cord. The bedroom now has layered
+  feathered moonlight shafts, more drifting motes, woven linen and a floor pool.
+  A dedicated finishing pass adds restrained chromatic shift, vignette, tint and
+  deterministic grain, with bloom and shift tuned per technique. These are
+  bounded procedural shader approximations; no volume ray march or textures.
+- Preserved cue timing, captions, original directed-camera poses, hand-over-hand
+  ascent, left/right roll, float and return. The shared promo material remains
+  unchanged by this follow-up. Native app integration and banners still wait.
+- Final local test: `ASTRAL_COMPARE=1 build-queue -- node
+  design/astral-projection/three/tools/verify.mjs` — PASS, all 88 cue boundaries,
+  32 standard frames and seven additional matched comparison captures. Controls,
+  pause/scrub, highlights, return poses, portrait layout, reduced motion and the
+  actual promo shaders passed; no JavaScript/GLSL errors (favicon 404 excluded).
+- Comparison local test: `build-queue -- python3
+  design/astral-projection/three/tools/compare.py` — PASS, seven labelled pairs,
+  matched viewport widths and visible stage differences. `before/` is read only;
+  `build/astral-compare/comparison.json` stores source hashes, cue seconds, camera
+  names and pixel differences. Images are joined without resizing; a longer
+  caption/page gets padding below. All seven pairs were visually inspected.
+- Before: `build/astral-compare/before/`; new captures and report:
+  `build/astral-compare/after/`. Comparison images:
+  - `build/astral-compare/side-by-side/showcase-foundation-hand-169.png`
+  - `build/astral-compare/side-by-side/showcase-current-912.png`
+  - `build/astral-compare/side-by-side/showcase-elevator-912.png`
+  - `build/astral-compare/side-by-side/showcase-spin-1012.png`
+  - `build/astral-compare/side-by-side/showcase-rope-ascent-1611.png`
+  - `build/astral-compare/side-by-side/showcase-roll-right.png`
+  - `build/astral-compare/side-by-side/portrait-rope-1500.png`
+- Opened the first comparison in native Gwenview; the launch result confirmed
+  `running: true`. The owner can page through all seven. No live desktop pixels
+  were captured and no mouse input was used. Owner acceptance and real phone GPU
+  frame rate remain unverified; the web preview is not installed in Breeze.

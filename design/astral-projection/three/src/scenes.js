@@ -1,5 +1,5 @@
 import * as T from 'three'
-import { bodyMaterial } from '../../../promo-film/three/src/character-shaders.js'
+import { studyBodyMaterial as bodyMaterial, energyShell } from './surfaces.js'
 import { sample } from './timeline.js'
 import { createFigure } from './figure.js'
 import { createRoom, palette } from './room.js'
@@ -33,6 +33,9 @@ export function createExercise(item, exerciseIndex = 0) {
     const energy = createFigure(energyMaterial, { astral: true })
     energy.root.scale.setScalar(1.025)
     scene.add(physical.root, energy.root)
+    const field = energyShell(accent)
+    field.position.set(0, 0.75, 0)
+    scene.add(field)
     const focus = aura(accent)
     focus.rotation.x = -Math.PI / 2
     scene.add(focus)
@@ -103,6 +106,19 @@ export function createExercise(item, exerciseIndex = 0) {
         const grounded = i === last || kind === 'current' && i >= 11 || kind === 'elevator' && i >= 13
         const activity = grounded ? 1 - smooth(elapsed / 8) : 1
         room.update(t)
+        field.visible = !grounded && i > 0 && (kind !== 'spin' || i >= 4) && (kind !== 'elevator' || i >= 6)
+        field.material.uniforms.time.value = t
+        field.material.uniforms.mode.value = kind === 'spin' ? 1 : kind === 'elevator' ? 2 : 0
+        field.material.uniforms.opacity.value = activity * (kind === 'foundation' ? 0.24 : 0.7)
+        field.scale.set(0.62, 0.30, 1.62)
+        field.rotation.y = 0
+        if (kind === 'spin') {
+            field.scale.set(2.55, 1.0, 2.55)
+            field.rotation.y = -t * 0.5
+        }
+        if (kind === 'elevator') {
+            field.scale.set(1.9, 2.6, 1.9)
+        }
         physical.breathe(t)
         physicalMaterial.uniforms.time.value = t
         energyMaterial.uniforms.time.value = t
@@ -312,6 +328,14 @@ export function createExercise(item, exerciseIndex = 0) {
                         energy.root.position.y + Math.sin(angle) * 0.33, 1.35 - v * 2.8)
                 }, t, 0.6)
             })
+        }
+        if (kind === 'foundation') {
+            field.position.copy(focus.position)
+            field.scale.setScalar(i <= 4 ? 0.10 : 0.25)
+        } else if (kind === 'rope' || kind === 'roll') {
+            field.position.copy(energy.root.position)
+            field.position.y += 0.12
+            field.visible = energy.root.visible
         }
         const now = cameraFrame(kind, i)
         const before = cameraFrame(kind, Math.max(0, i - 1))
