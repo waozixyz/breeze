@@ -6,6 +6,7 @@ import re
 
 root = Path(__file__).resolve().parent.parent
 schema = {}
+record_names = {}
 for file in [
     *sorted((root / "src/apps").glob("*_types.zi")),
     root / "apps/diary/diary_types.zi",
@@ -19,6 +20,7 @@ for file in [
     ):
         fields = re.findall(r"^\s*(\w+)\s*:\s*([^\n;]+)", body, re.M)
         schema[name] = [(n, re.sub(r"\s+", "", t.split("//")[0])) for n, t in fields]
+        record_names[name] = f"{file.stem}.{name}"
 constants = {"CountSize": 4, "MaxRounds": 12}
 roots = [
     "LumiMessage",
@@ -109,7 +111,7 @@ for t in needed:
         f"Encode{t} :: (data: {t}, codec: *{t}Codec) -> HostValue {{",
         "    value: HostValue",
         "    value.kind = cast(s32)HostRecord",
-        f'    value.type_name = "{t}".data',
+        f'    value.type_name = "{record_names[t]}".data',
         "    value.fields = *codec.fields[0]",
         f"    value.field_count = {len(schema[t])}",
     ]
@@ -226,9 +228,7 @@ for t in needed:
 for t in needed:
     lines += [
         f"Valid{t} :: (value: HostValue) -> bool {{",
-        f'    if value.kind != cast(s32)HostRecord || TextFromCString(value.type_name) != "{t}" ||',
-        "    value.field_count > cast(usize)HOST_FIELD_LIMIT ||",
-        "    (value.field_count > cast(usize)0 && value.fields == null) {",
+        f'    if !HostRecordValid(*value, "{record_names[t]}") {{',
         "        return false",
         "    }",
     ]

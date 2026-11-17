@@ -22,6 +22,7 @@ mktime :: (tm: *Tm) -> s64 #foreign c;
 #import, file "storage_habits.zi";
 #import, file "storage_habit_materialize.zi";
 #import, file "meta.zi";
+#import, file "database_backup.zi";
 DELETE_ROUNDS_SQL: [64] u8;
 StorageSessionRecordCallback :: #type (path: string, year: s32, month: s32, day: s32, hour: s32, minute: s32, second: s32, topic: s32, activity: s32, round_times: []s32, round_count: s32, user: s64) -> ();
 sqlite3_reset :: (statement: *void) -> s32 #foreign c "sqlite3_reset";
@@ -177,6 +178,13 @@ write_session_rounds :: (session_id: string, round_times: *s32,
     return 1
 }
 
+// Undoes a session save that failed part way.
+SessionSaveFailed :: () -> s32 {
+    unused exec_sql("ROLLBACK TO inbe_save_session")
+    unused exec_sql("RELEASE inbe_save_session")
+    return 0
+}
+
 insert_session_at_ex :: (started_at: s64, local_date: s32,
     round_times: *s32, round_count: s32,
     topic: s32, activity: s32, source: string,
@@ -198,10 +206,16 @@ insert_session_at_ex :: (started_at: s64, local_date: s32,
     rhash = hash_rounds(round_times, round_count)
     make_session_id(started_at, round_times, round_count, *id[0], 64)
 
+    // The session, its rounds and its sync entry commit together. Apart, a
+    // crash after the session row left it without rounds, and saving it
+    // again in the same second found the row and wrote none.
+    if exec_sql("SAVEPOINT inbe_save_session") == 0 {
+        return 0
+    }
     insert_sessions_sql: [512] u8
     AppCopyText("INSERT OR IGNORE INTO sessions(id,user_id,started_at,local_date,topic,activity,source,imported_at,rounds_hash,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", insert_sessions_sql[:])
     if SqlitePrepare(storage_db_handle(), *insert_sessions_sql[0], -1, *stmt, null) != SQLITE_OK {
-        return 0
+        return SessionSaveFailed()
     }
     bind_text(stmt, 1, AppTextFromCString(*id[0], STORAGE_ID_SIZE))
     bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
@@ -216,7 +230,7 @@ insert_session_at_ex :: (started_at: s64, local_date: s32,
     rc = SqliteStep(stmt)
     SqliteFinalize(stmt)
     if rc != SQLITE_DONE {
-        return 0
+        return SessionSaveFailed()
     }
 
     if sqlite3_changes(storage_db_handle()) > 0 {
@@ -226,9 +240,14 @@ insert_session_at_ex :: (started_at: s64, local_date: s32,
     }
     if inserted != 0 {
         if write_session_rounds(AppTextFromCString(*id[0], STORAGE_ID_SIZE), round_times, round_count, 1) == 0 {
-            return 0
+            return SessionSaveFailed()
         }
-        storage_enqueue_sync_session(AppTextFromCString(*id[0], STORAGE_ID_SIZE))
+        if storage_enqueue_sync_session(AppTextFromCString(*id[0], STORAGE_ID_SIZE)) == 0 {
+            return SessionSaveFailed()
+        }
+    }
+    if exec_sql("RELEASE inbe_save_session") == 0 {
+        return SessionSaveFailed()
     }
 
     if out_id_size > 0 {
@@ -779,6 +798,8 @@ storage_delete_all_sessions :: () -> s64 {
     habit_day_count =
     db_select_int_text("SELECT COUNT(*) FROM habit_days WHERE completed!=0 OR count>0", 0)
     if count <= 0 && habit_day_count <= 0 && habit_count <= 0 {
+        unused exec_sql("DELETE FROM practice_draft")
+        unused storage_refresh_last_good()
         return 0
     }
 
@@ -801,10 +822,12 @@ storage_delete_all_sessions :: () -> s64 {
         set_meta_int64(*meta_key_buffer[0], 0)
         AppCopyText("sync_habit_name_repair_v1_done", meta_key_buffer[:])
         set_meta_int64(*meta_key_buffer[0], 0)
+        unused exec_sql("DELETE FROM practice_draft")
         if exec_sql("COMMIT") == 0 {
             exec_sql("ROLLBACK")
             return 0
         }
+        unused storage_refresh_last_good()
         storage_schedule_persist()
         return cast(s64)count + cast(s64)habit_day_count + cast(s64)habit_count
     }
@@ -911,10 +934,12 @@ storage_delete_all_sessions :: () -> s64 {
     SqliteFinalize(stmt)
     stmt = null
 
+    unused exec_sql("DELETE FROM practice_draft")
     if exec_sql("COMMIT") == 0 {
         exec_sql("ROLLBACK")
         return 0
     }
+    unused storage_refresh_last_good()
     storage_schedule_persist()
     return ifx (changed > 0) then (cast(s64)count + cast(s64)habit_day_count + cast(s64)habit_count) else (0)
 

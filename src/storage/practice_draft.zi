@@ -1,0 +1,104 @@
+// The running practice's draft. A practice saves it while it runs and
+// clears it when it ends, so a start after a crash finds what was left
+// unfinished. Storage only keeps the text; the practice owns the JSON.
+#import, file "../app/text_buffers.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "db.zi";
+
+draft_sqlite :: #system_library "sqlite3";
+DraftColumnBytes :: (statement: *void, column: s32) -> s32 #foreign draft_sqlite "sqlite3_column_bytes";
+
+PracticeDraftMaximumBytes :: 65536
+
+// Replaces the draft. Returns 1 once it is committed.
+#program_export
+storage_practice_draft_save :: (json: string) -> s32 {
+    database := storage_db_handle()
+    if database == null || json.count == 0 || json.count > PracticeDraftMaximumBytes {
+        return 0
+    }
+    statement: *void = null
+    if SqlitePrepareText(database,
+        "INSERT INTO practice_draft(id,json,saved_at) VALUES(1,?1,?2) ON CONFLICT(id) DO UPDATE SET json=excluded.json,saved_at=excluded.saved_at",
+        -1, *statement, null) != SQLITE_OK {
+        return 0
+    }
+    saved := bind_text(statement, 1, json) != 0 &&
+    SqliteBindInt64(statement, 2, now_seconds()) == SQLITE_OK &&
+    SqliteStep(statement) == SQLITE_DONE
+    unused SqliteFinalize(statement)
+    return ifx (saved) then (1) else (0)
+}
+
+// Copies the draft into `output`, followed by a NUL byte, and returns its
+// length: 0 when there is no draft, -1 when it cannot be read or does not
+// fit.
+#program_export
+storage_practice_draft_load :: (output: []u8) -> s64 {
+    database := storage_db_handle()
+    if database == null || output.count == 0 {
+        return -1
+    }
+    statement: *void = null
+    if SqlitePrepareText(database, "SELECT json FROM practice_draft WHERE id=1", -1,
+        *statement, null) != SQLITE_OK {
+        return -1
+    }
+    length: s64 = 0
+    step := SqliteStep(statement)
+    if step == SQLITE_ROW {
+        text := SqliteColumnText(statement, 0)
+        count := cast(s64)DraftColumnBytes(statement, 0)
+        if text == null || count <= 0 || count >= output.count {
+            length = -1
+        } else {
+            index: s64 = 0
+            while index < count {
+                output[index] = text[index]
+                index += 1
+            }
+            output[count] = cast(u8)0
+            length = count
+        }
+    } else if step != SQLITE_DONE {
+        length = -1
+    }
+    unused SqliteFinalize(statement)
+    return length
+}
+
+// Removes the draft, if any. Returns 1 once that is committed.
+#program_export
+storage_practice_draft_clear :: () -> s32 {
+    if storage_db_handle() == null {
+        return 0
+    }
+    return exec_sql("DELETE FROM practice_draft")
+}
+
+#import, file "storage_sessions.zi";
+#import, file "time_parts.zi";
+draft_libc :: #system_library "c";
+DraftLocalTime :: (seconds: *s64) -> *Tm #foreign draft_libc "localtime";
+
+// Generic storage operation: one session and removal of its draft commit together.
+storage_practice_draft_commit :: (started_at: s64, activity: s32,
+    topic: s32, rounds: []s32) -> s32 {
+    civil := DraftLocalTime(*started_at)
+    if civil == null || rounds.count == 0 || exec_sql("SAVEPOINT recover_practice") == 0 {
+        return 0
+    }
+    date := (civil.tm_year + 1900) * 10000 + (civil.tm_mon + 1) * 100 + civil.tm_mday
+    // Keep the epoch itself: converting the repeated local hour at the end
+    // of daylight saving back through mktime can select a different start.
+    saved := insert_session_at_ex(started_at, date, *rounds[0], cast(s32)rounds.count,
+        topic, activity, "app", null, 0, null) != 0 &&
+    storage_practice_draft_clear() != 0
+    if !saved || exec_sql("RELEASE recover_practice") == 0 {
+        unused exec_sql("ROLLBACK TO recover_practice")
+        unused exec_sql("RELEASE recover_practice")
+        return 0
+    }
+    return 1
+}

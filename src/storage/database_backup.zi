@@ -1,0 +1,459 @@
+// The last good copy of the database, and recovery from a damaged one.
+//
+// Every start checks the database with PRAGMA quick_check, on a read-only
+// connection, before storage opens it to migrate or write. A healthy database is copied beside itself as
+// `inbe.db.last-good` at most once a day. A damaged one is left exactly as
+// it is: storage does not open, storage_database_damaged() reports it, and
+// storage_restore_last_good() puts the last good copy in its place while
+// keeping every damaged file under a `.damaged-<unixtime>` name.
+//
+// The names derive from the open database's path, so they stay next to it
+// and outside the storage layout contract.
+#import "byte_text_linux"
+#import "file_linux"
+#import "number_text"
+#import, file "../app/text_buffers.zi";
+#import, file "state.zi";
+#import, file "sqlite.zi";
+#import, file "meta.zi";
+#import, file "db.zi";
+
+LOG_INFO :: 3
+LOG_WARNING :: 4
+LOG_ERROR :: 5
+SQLITE_CORRUPT :: 11
+SQLITE_NOTADB :: 26
+SQLITE_OPEN_READONLY :: 0x1
+
+BackupPathCapacity :: 1024
+BackupCopyChunkBytes :: 16384
+LastGoodSuffix :: ".last-good"
+LastGoodTemporarySuffix :: ".last-good.tmp"
+RestoreTemporarySuffix :: ".restore.tmp"
+DamagedSuffix :: ".damaged-"
+EarlierCopySuffix :: ".before-"
+LastGoodCopyKey :: "last_good_copy_at"
+LastGoodCopyIntervalSeconds :: 86400
+
+DatabaseUnchecked :: 0
+DatabaseHealthy :: 1
+DatabaseDamaged :: 2
+
+// The result of the check of the database storage opened last.
+database_check_result: s32;
+
+// Whether that database was new: its file did not exist before the open.
+database_was_missing: bool;
+
+// The database found damaged in this run, empty when there is none. Opening
+// that path again returns at once instead of repeating a whole check.
+damaged_database_path: [BackupPathCapacity]u8;
+
+// `base` followed by `suffix`, with a NUL byte after it inside `output` so
+// SQLite can read the same bytes. Empty when it does not fit.
+BackupPath :: (base: string, suffix: string, output: []u8) -> string {
+    if base.count == 0 || base.count + suffix.count >= output.count {
+        return ""
+    }
+    index: s64 = 0
+    while index < base.count {
+        output[index] = base[index]
+        index += 1
+    }
+    offset: s64 = 0
+    while offset < suffix.count {
+        output[index] = suffix[offset]
+        index += 1
+        offset += 1
+    }
+    output[index] = cast(u8)0
+    return TextFromBytes(output[0:index])
+}
+
+// Makes a finished rename or new file in the folder of `path` durable.
+BackupSyncFolder :: (path: string) {
+    at := path.count - 1
+    while at >= 0 && path[at] != cast(u8)47 && path[at] != cast(u8)92 {
+        at -= 1
+    }
+    if at <= 0 {
+        return
+    }
+    folder := OpenRead(path[:at])
+    if folder.valid {
+        unused SyncFile(folder)
+        unused CloseFile(folder)
+    }
+}
+
+BackupSyncFile :: (path: string) -> bool {
+    file := OpenWrite(path)
+    if !file.valid {
+        return false
+    }
+    synced := SyncFile(file)
+    closed := CloseFile(file)
+    return synced && closed
+}
+
+// Copies the bytes of `source` to a new file at `destination` and syncs it.
+// Nothing is left at `destination` when the copy fails.
+BackupCopyFile :: (source: string, destination: string) -> bool {
+    input := OpenRead(source)
+    if !input.valid {
+        return false
+    }
+    output := OpenNew(destination)
+    if !output.valid {
+        unused CloseFile(input)
+        return false
+    }
+    buffer: [BackupCopyChunkBytes]u8
+    offset: s64 = 0
+    copied := true
+    while true {
+        count := ReadAt(input, buffer[:], offset)
+        if count < 0 {
+            copied = false
+            break
+        }
+        if count == 0 {
+            break
+        }
+        if WriteAt(output, buffer[0:count], offset) != count {
+            copied = false
+            break
+        }
+        offset += count
+    }
+    if copied {
+        copied = SyncFile(output)
+    }
+    output_closed := CloseFile(output)
+    unused CloseFile(input)
+    if !copied || !output_closed {
+        unused RemoveFile(destination)
+        return false
+    }
+    return true
+}
+
+// Moves a file to a name that must still be free.
+BackupMoveFile :: (source: string, destination: string) -> bool {
+    if PathExists(destination) {
+        return false
+    }
+    if RenameNoReplace(source, destination) {
+        return true
+    }
+    // Old Android kernels have no renameat2. The destination was free a
+    // moment ago, and only this app writes its private folder.
+    return RenamePath(source, destination)
+}
+
+DatabaseCheckOfError :: (code: s32) -> s32 {
+    primary := code & 255
+    if primary == SQLITE_CORRUPT || primary == SQLITE_NOTADB {
+        return DatabaseDamaged
+    }
+    return DatabaseUnchecked
+}
+
+// Healthy when quick_check answers exactly "ok"; damaged when it lists a
+// problem or SQLite calls the file corrupt or not a database. Any other
+// failure, such as a busy or unreadable file, leaves it unchecked.
+DatabaseQuickCheck :: (database: *void) -> s32 {
+    if database == null {
+        return DatabaseUnchecked
+    }
+    query: [32]u8
+    if !AppCopyText("PRAGMA quick_check", query[:]) {
+        return DatabaseUnchecked
+    }
+    statement: *void = null
+    // A tail pointer keeps this one-off statement out of the kept cache.
+    tail: *u8 = null
+    prepared := SqlitePrepare(database, *query[0], -1, *statement, *tail)
+    if prepared != SQLITE_OK {
+        if statement != null {
+            unused SqliteFinalize(statement)
+        }
+        return DatabaseCheckOfError(prepared)
+    }
+    result: s32 = DatabaseUnchecked
+    first := SqliteStep(statement)
+    if first == SQLITE_ROW {
+        answer := SqliteColumnText(statement, 0)
+        only_ok := answer != null && answer[0] == cast(u8)111 &&
+        answer[1] == cast(u8)107 && answer[2] == cast(u8)0
+        if only_ok && SqliteStep(statement) == SQLITE_DONE {
+            result = DatabaseHealthy
+        } else {
+            result = DatabaseDamaged
+        }
+    } else {
+        result = DatabaseCheckOfError(first)
+    }
+    unused SqliteFinalize(statement)
+    return result
+}
+
+// Checks a database file that storage does not have open, on a read-only
+// connection: it may rebuild the -shm index, but it never checkpoints the
+// -wal into the file or deletes the -wal, as closing a writer would.
+DatabaseFileCheck :: (path: *u8) -> s32 {
+    database: *void = null
+    if SqliteOpen(path, *database, SQLITE_OPEN_READONLY) != SQLITE_OK {
+        if database != null {
+            unused SqliteClose(database)
+        }
+        return DatabaseUnchecked
+    }
+    result := DatabaseQuickCheck(database)
+    if SqliteClose(database) != SQLITE_OK {
+        return DatabaseUnchecked
+    }
+    return result
+}
+
+// Writes a consistent copy of the open database to `copy_path`: VACUUM INTO
+// a temporary file, sync it, rename it into place and sync the folder. The
+// previous copy stays whole until the rename replaces it.
+DatabaseWriteCopy :: (database: *void, copy_path: string) -> bool {
+    temporary_bytes: [BackupPathCapacity]u8
+    temporary_path := BackupPath(copy_path, ".tmp", temporary_bytes[:])
+    if database == null || temporary_path.count == 0 {
+        return false
+    }
+    // VACUUM INTO refuses a file that already holds data, such as the
+    // remains of a copy interrupted by a crash.
+    unused RemoveFile(temporary_path)
+    query: [32]u8
+    if !AppCopyText("VACUUM INTO ?1", query[:]) {
+        return false
+    }
+    statement: *void = null
+    tail: *u8 = null
+    if SqlitePrepare(database, *query[0], -1, *statement, *tail) != SQLITE_OK {
+        if statement != null {
+            unused SqliteFinalize(statement)
+        }
+        return false
+    }
+    // The path is bound as a value, so no quoting can break the statement.
+    written := SqliteBindText(statement, 1, *temporary_bytes[0], -1, null) == SQLITE_OK &&
+    SqliteStep(statement) == SQLITE_DONE
+    unused SqliteFinalize(statement)
+    if !written || !BackupSyncFile(temporary_path) || !RenamePath(temporary_path, copy_path) {
+        unused RemoveFile(temporary_path)
+        return false
+    }
+    BackupSyncFolder(copy_path)
+    return true
+}
+
+// Whether `path` is the database found damaged in this run.
+StorageDatabaseKnownDamaged :: (path: *u8) -> bool {
+    if path == null || damaged_database_path[0] == cast(u8)0 {
+        return false
+    }
+    index: s32 = 0
+    while index < BackupPathCapacity {
+        if path[index] != damaged_database_path[index] {
+            return false
+        }
+        if path[index] == cast(u8)0 {
+            return true
+        }
+        index += 1
+    }
+    return false
+}
+
+// Checks the database at `path` before storage opens it to write. False
+// when it is damaged, or was found damaged earlier in this run; it is then
+// left exactly as it is. A missing file is a new database.
+StorageCheckDatabaseBeforeUse :: (path: *u8) -> bool {
+    if StorageDatabaseKnownDamaged(path) {
+        return false
+    }
+    database_was_missing = !PathExists(AppTextFromCString(path, BackupPathCapacity))
+    if database_was_missing {
+        database_check_result = DatabaseHealthy
+        damaged_database_path[0] = cast(u8)0
+        return true
+    }
+    database_check_result = DatabaseFileCheck(path)
+    if database_check_result == DatabaseDamaged {
+        unused AppCopyText(AppTextFromCString(path, BackupPathCapacity), damaged_database_path[:])
+        LogStorage(LOG_ERROR, "STORAGE: database failed its check; kept untouched and not opened")
+        return false
+    }
+    damaged_database_path[0] = cast(u8)0
+    if database_check_result == DatabaseUnchecked {
+        LogStorage(LOG_WARNING, "STORAGE: database check could not run; no last good copy this start")
+    }
+    return true
+}
+
+// Called once storage has opened and upgraded a database that passed its
+// check. Writes the last good copy when none exists or the last one is a
+// day old. A failed copy keeps the previous one.
+StorageKeepLastGoodCopy :: () {
+    if database_check_result != DatabaseHealthy {
+        return
+    }
+    state := storage_state_handle()
+    copy_bytes: [BackupPathCapacity]u8
+    copy_path := BackupPath(AppTextFromCString(*state.db_path[0], 512), LastGoodSuffix,
+        copy_bytes[:])
+    key: [32]u8
+    if copy_path.count == 0 || !AppCopyText(LastGoodCopyKey, key[:]) {
+        return
+    }
+    now := now_seconds()
+    last_copy_at := get_meta_int64(*key[0], 0)
+    copy_is_recent := last_copy_at > 0 && last_copy_at <= now &&
+    now - last_copy_at < LastGoodCopyIntervalSeconds
+    if copy_is_recent && PathExists(copy_path) {
+        return
+    }
+    // A new database beside a copy means the earlier database went missing.
+    // Its copy may be all that is left of it, so it is kept, not replaced.
+    if database_was_missing && PathExists(copy_path) {
+        earlier_bytes: [BackupPathCapacity]u8
+        earlier_path := StampedFreePath(copy_path, EarlierCopySuffix, earlier_bytes[:])
+        if earlier_path.count == 0 || !BackupMoveFile(copy_path, earlier_path) {
+            LogStorage(LOG_WARNING, "STORAGE: a new database left the earlier last good copy in place")
+            return
+        }
+        BackupSyncFolder(copy_path)
+        LogStorage(LOG_WARNING, "STORAGE: a new database; the earlier last good copy is kept beside it")
+    }
+    if !DatabaseWriteCopy(state.db, copy_path) {
+        LogStorage(LOG_WARNING, "STORAGE: last good copy failed; the previous copy is kept")
+        return
+    }
+    set_meta_int64(*key[0], now)
+}
+
+#program_export
+storage_database_damaged :: () -> s32 {
+    return ifx (damaged_database_path[0] != cast(u8)0) then (1) else (0)
+}
+
+// A name that is still free: `<base><marker><unixtime>`, counting up past
+// names already taken.
+StampedFreePath :: (base: string, marker: string, output: []u8) -> string {
+    stamp := now_seconds()
+    attempt: s64 = 0
+    while attempt < 100 {
+        digits: [24]u8
+        prefix_bytes: [BackupPathCapacity]u8
+        prefix := BackupPath(base, marker, prefix_bytes[:])
+        candidate := BackupPath(prefix, FormatInteger(stamp + attempt, digits[:]), output)
+        if candidate.count == 0 {
+            return ""
+        }
+        if !PathExists(candidate) {
+            return candidate
+        }
+        attempt += 1
+    }
+    return ""
+}
+
+// Keeps the database and its -wal and -shm files under the damaged name.
+// The database keeps its own name too, so it is never missing; the restore
+// then replaces it in one rename.
+KeepDamagedDatabase :: (database_path: string) -> bool {
+    damaged_bytes: [BackupPathCapacity]u8
+    damaged_path := StampedFreePath(database_path, DamagedSuffix, damaged_bytes[:])
+    if damaged_path.count == 0 {
+        return false
+    }
+    if PathExists(database_path) && !LinkFile(database_path, damaged_path) &&
+    !BackupCopyFile(database_path, damaged_path) {
+        return false
+    }
+    sidecars: [2]string = .["-wal", "-shm"]
+    index: s32 = 0
+    while index < 2 {
+        source_bytes: [BackupPathCapacity]u8
+        destination_bytes: [BackupPathCapacity]u8
+        source := BackupPath(database_path, sidecars[index], source_bytes[:])
+        destination := BackupPath(damaged_path, sidecars[index], destination_bytes[:])
+        if source.count == 0 || destination.count == 0 {
+            return false
+        }
+        // A -wal left beside the restored database would be replayed into it.
+        if PathExists(source) && !BackupMoveFile(source, destination) {
+            return false
+        }
+        index += 1
+    }
+    BackupSyncFolder(database_path)
+    return true
+}
+
+// Replaces the database with its last good copy and opens storage again.
+// Returns 0, with nothing changed, when there is no valid copy. The damaged
+// database, -wal and -shm are kept as `<database>.damaged-<unixtime>`.
+// Callers stop other storage users first: this closes the connection.
+#program_export
+storage_restore_last_good :: () -> s32 {
+    state := storage_state_handle()
+    root_bytes: [512]u8
+    database_bytes: [BackupPathCapacity]u8
+    copy_bytes: [BackupPathCapacity]u8
+    restore_bytes: [BackupPathCapacity]u8
+    root := BackupPath(AppTextFromCString(*state.root[0], 512), "", root_bytes[:])
+    database_path := BackupPath(AppTextFromCString(*state.db_path[0], 512), "",
+        database_bytes[:])
+    copy_path := BackupPath(database_path, LastGoodSuffix, copy_bytes[:])
+    restore_path := BackupPath(database_path, RestoreTemporarySuffix, restore_bytes[:])
+    if root.count == 0 || copy_path.count == 0 || restore_path.count == 0 ||
+    !PathExists(copy_path) {
+        return 0
+    }
+    // The copy itself is never changed: a separate file is checked and then
+    // renamed into place.
+    unused RemoveFile(restore_path)
+    if !BackupCopyFile(copy_path, restore_path) ||
+    DatabaseFileCheck(*restore_bytes[0]) != DatabaseHealthy {
+        unused RemoveFile(restore_path)
+        LogStorage(LOG_WARNING, "STORAGE: no valid last good copy; nothing was restored")
+        return 0
+    }
+    storage_close()
+    if !KeepDamagedDatabase(database_path) || !RenamePath(restore_path, database_path) {
+        unused RemoveFile(restore_path)
+        LogStorage(LOG_ERROR, "STORAGE: could not put the last good copy in place")
+        unused storage_init(root)
+        return 0
+    }
+    BackupSyncFolder(database_path)
+    damaged_database_path[0] = cast(u8)0
+    database_check_result = DatabaseUnchecked
+    LogStorage(LOG_INFO, "STORAGE: restored the last good copy; the damaged files are kept")
+    return storage_init(root)
+}
+
+// A deliberate deletion must also replace its recovery copy. If copying
+// fails, remove the stale copy so Restore cannot resurrect deleted records.
+storage_refresh_last_good :: () -> s32 {
+    state := storage_state_handle()
+    path_bytes: [BackupPathCapacity]u8
+    path := BackupPath(AppTextFromCString(*state.db_path[0], 512), LastGoodSuffix, path_bytes[:])
+    if path.count == 0 || state.db == null {
+        return 0
+    }
+    if DatabaseWriteCopy(state.db, path) {
+        return 1
+    }
+    if !PathExists(path) || RemoveFile(path) {
+        BackupSyncFolder(path)
+        return 1
+    }
+    return 0
+}

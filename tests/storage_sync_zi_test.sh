@@ -15,14 +15,10 @@ flock 9
 
 rm -rf "$work"
 mkdir -p "$work/generated"
-"$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
+# Project mode resolves package imports through their exports (such as
+# kryon/text_area for the Lumi frame), as the app build does.
+"$ziran" build --project --offline --target=c --define PLATFORM_DESKTOP --root "$root" \
+    --module-path "$root/tests" \
     --entry storage_sync_behavior:Check \
     -o "$work/generated" "$root/tests/storage_sync_behavior.zi" \
     "$root/tests/sync_test_host.zi"

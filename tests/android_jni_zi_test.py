@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -22,6 +23,10 @@ MODULES = [
 SOURCES = [ROOT / f"src/platform/android/{name}.zi" for name in MODULES]
 
 
+subprocess.run([sys.executable, str(ROOT / "tests/android_startup_contract_test.py"),
+                str(BIN / "ziran")], check=True)
+
+
 def generate(output, architecture=None):
     shutil.rmtree(output, ignore_errors=True)
     output.mkdir(parents=True, exist_ok=True)
@@ -37,6 +42,7 @@ def generate(output, architecture=None):
         *subprocess.check_output(["sh", str(ROOT / "scripts/package-paths.sh"), str(ROOT / "build/packages")],
                                  text=True).split(),
         "--define", "ANDROID_BUILD", "--define", "KRYON_ANDROID_HOST",
+        "--define", "KRYON_RAYLIB_HOST",
         "-o", str(output), str(ROOT / "tests/android_jni_behavior.zi"),
         *map(str, SOURCES), str(ROOT / "build/packages/ziran/std/c_string.zi"),
     ]
@@ -82,9 +88,8 @@ if ndks:
     assertions = [
         '#include <stddef.h>', '#include <pthread.h>', '#define JNI_OnLoad NdkJniOnLoad', '#include <jni.h>', '#undef JNI_OnLoad',
         '#include <android/native_activity.h>', '#include <android_native_app_glue.h>',
-        '#include "android_jni.h"', '#include "android_insets.h"', '#include "android_mutex.h"', '#include "android_startup.h"',
-        '_Static_assert(sizeof(AndroidPollSource) == sizeof(struct android_poll_source), "poll source size");',
-        '_Static_assert(offsetof(AndroidPollSource, process) == offsetof(struct android_poll_source, process), "poll source process");',
+        # The owned startup header imports the pinned package's JNI declarations.
+        '#include "android_insets.h"', '#include "android_mutex.h"', '#include "android_startup.h"',
         '_Static_assert(sizeof(AndroidMutex) >= sizeof(pthread_mutex_t), "mutex storage");',
         '_Static_assert(_Alignof(AndroidMutex) >= _Alignof(pthread_mutex_t), "mutex alignment");',
         '_Static_assert(sizeof(NativeMethod) == sizeof(JNINativeMethod), "JNI method size");',
@@ -95,10 +100,20 @@ if ndks:
                                  ("x86_64-linux-android24", "__x86_64__")):
         abi_output = WORK / architecture / "generated"
         generate(abi_output, architecture)
+        startup_header = abi_output / 'src/platform/android/android_startup.h'
+        poll_declaration = re.search(
+            r'typedef struct (\w*AndroidPollSource) \1;', startup_header.read_text())
+        if poll_declaration is None:
+            raise SystemExit('Generated startup header has no AndroidPollSource declaration')
+        poll_type = poll_declaration[1]
+        architecture_assertions = assertions + [
+            f'_Static_assert(sizeof({poll_type}) == sizeof(struct android_poll_source), "poll source size");',
+            f'_Static_assert(offsetof({poll_type}, process) == offsetof(struct android_poll_source, process), "poll source process");',
+        ]
         command = [str(toolchain / "bin/clang"), "--target=" + target,
                    "-std=c11", "-fsyntax-only", *generated_includes(abi_output),
                    "-I" + str(ndk / "sources/android/native_app_glue")]
-        subprocess.run([*command, "-x", "c", "-"], input="\n".join(assertions), text=True, check=True)
+        subprocess.run([*command, "-x", "c", "-"], input="\n".join(architecture_assertions), text=True, check=True)
         for source in sorted(abi_output.rglob("*.c")):
             subprocess.run([*command, str(source)], check=True)
 else:

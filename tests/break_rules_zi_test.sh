@@ -25,7 +25,7 @@ for input in source saved; do
     rm -rf "$output/c" "$output/go"
     mkdir -p "$output/c" "$output/go"
 
-    "$bin/zi2zx" bundle --root "$module_root" \
+    "$bin/zi2zx" --root "$module_root" \
         --module-path "$module_path" \
         --entry break_rules_behavior:Answer \
         -o "$output/break_rules.zx" "$file"

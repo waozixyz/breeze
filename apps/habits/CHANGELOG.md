@@ -1,5 +1,10 @@
 # Changelog
 
+## [Unreleased]
+
+- Claim the daily reward beside the coin balance: one coin a day, three on the seventh day in a row.
+- Choose soda, coffee, bubble tea, chocolate and candle pictures for custom rewards.
+
 ## [1.3.17] - 2026-11-05
 
 - Show color purchase totals, recent purchase frequency and the last purchase date for rewards.
@@ -7,11 +12,6 @@
 ## [1.3.16] - 2026-11-02
 
 - Maintenance release for Inner Breeze 2.1.62.
-
-## [Unreleased]
-
-- Claim a daily reward in the shop: one coin a day, three on the seventh day in a row.
-- Choose soda, coffee, bubble tea, chocolate and candle pictures for custom rewards.
 
 ## [1.3.15] - 2026-10-29
 

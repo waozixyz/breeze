@@ -40,6 +40,7 @@ TitleBar :: #import "kryon/title_bar";
 #import, file "../storage/storage_settings.zi";
 #import, file "../storage/storage_profile_stats.zi";
 #import, file "../storage/storage_sessions.zi";
+#import, file "../storage/database_backup.zi";
 #import, file "../storage/storage_habits.zi";
 #import, file "../platform/raylib_text_input.zi";
 #import, file "../app/app_nav_state.zi";
@@ -108,6 +109,10 @@ profile_habits_content_height :: (app: *InnerBreeze, content_w: s32) -> s32 {
 profile_content_height :: (content_w: s32, user_data: *void) -> s32 {
     app := cast(*InnerBreeze)user_data
 
+    if app != null && storage_database_damaged() != 0 &&
+    app.profile_view == PROFILE_VIEW_MAIN && app.profile_tab == PROFILE_TAB_OVERVIEW {
+        return AppScale(12) + profile_data_content_height(content_w)
+    }
     if app != null && app.profile_view == PROFILE_VIEW_DEW {
         return AppScale(12) + ProfileDewHeight(app, content_w)
     }
@@ -444,8 +449,10 @@ profile_screen_draw :: (app: *InnerBreeze) -> s32 {
     EntityHostFrame(app, Rectangle.{0.0, cast(float32)content_y, cast(float32)view_width, cast(float32)content_h})
     if shared { title = EntityHostTitle(title) }
     if !shared {
+        recovery := storage_database_damaged() != 0 &&
+        app.profile_view == PROFILE_VIEW_MAIN && app.profile_tab == PROFILE_TAB_OVERVIEW
         if app.profile_view == PROFILE_VIEW_MAIN && app.profile_tab == PROFILE_TAB_OVERVIEW {
-            title = LocaleText("profile_progress_title")
+            title = LocaleText(ifx recovery then "profile_data" else "profile_progress_title")
         }
         page_content_h = profile_content_height(content_w, cast(*void)app)
         scroll_1_bounds: Rectangle = Rectangle.{cast(float32)0, cast(float32)content_y, cast(float32)view_width, cast(float32)content_h }
@@ -461,7 +468,9 @@ profile_screen_draw :: (app: *InnerBreeze) -> s32 {
 
         y := cast(s32)page.y + AppScale(12)
 
-        if app.profile_view == PROFILE_VIEW_DEW {
+        if recovery {
+            profile_draw_data(app, content_x, content_w, *y)
+        } else if app.profile_view == PROFILE_VIEW_DEW {
             ProfileDewDraw(app, content_x, *y, content_w)
         } else if app.profile_view == PROFILE_VIEW_SYNC_ACCOUNT {
             settings_sync_account_draw_config(app, content_x, content_w, *y)

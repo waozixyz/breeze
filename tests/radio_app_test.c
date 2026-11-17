@@ -6,50 +6,50 @@
 
 static int action, click, audio_state, starts, stops, volume, selected;
 static char station[256], saved_station[256], saved_volume[8], drawn[4096];
-static VmHostField message[3], frame[6], scroll[2], rectangle[4], pointer[5];
+static HostField message[3], frame[6], scroll[2], rectangle[4], pointer[5];
 static int view_width=400, view_height=800, pointer_down, pointer_pressed, pointer_released;
 static double pointer_x, pointer_y;
 static double power_x, power_y, volume_x, volume_y, tuning_x, tuning_y;
 static char account[32]="radio-test-account";
 
-static VmHostValue integer(const char *type, int value) {
-    return (VmHostValue){.kind=VM_HOST_INTEGER, .type=type, .integer=value};
+static HostValue integer(const char *type, int value) {
+    return (HostValue){.kind=HOST_INTEGER, .type=type, .integer=value};
 }
-static VmHostValue text(const char *value) {
-    return (VmHostValue){.kind=VM_HOST_STRING, .type="string",
+static HostValue text(const char *value) {
+    return (HostValue){.kind=HOST_STRING, .type="string",
         .data=(const unsigned char *)value, .length=strlen(value)};
 }
-static VmHostValue record(const char *type, VmHostField *fields, int count) {
-    return (VmHostValue){.kind=VM_HOST_RECORD, .type=type, .fields=fields, .field_count=count};
+static HostValue record(const char *type, HostField *fields, int count) {
+    return (HostValue){.kind=HOST_RECORD, .type=type, .fields=fields, .field_count=count};
 }
-static VmHostValue field(VmHostValue record, const char *name) {
+static HostValue field(HostValue record, const char *name) {
     for(size_t i=0; i<record.field_count; i++)
         if(!strcmp(record.fields[i].name,name)) return record.fields[i].value;
-    return (VmHostValue){0};
+    return (HostValue){0};
 }
-static void copy(char *out, size_t capacity, VmHostValue value) {
-    assert(value.kind==VM_HOST_STRING && value.length<capacity);
+static void copy(char *out, size_t capacity, HostValue value) {
+    assert(value.kind==HOST_STRING && value.length<capacity);
     memcpy(out,value.data,value.length); out[value.length]=0;
 }
 static int host(void *context, const char *module, const char *name,
-    const VmHostValue *args, int count, VmHostValue *out) {
+    const HostValue *args, int count, HostValue *out) {
     (void)context; (void)module;
     if(!strcmp(name,"ReadAppHost")) {
-        message[0]=(VmHostField){"abi",integer("s32",2)};
-        message[1]=(VmHostField){"action",integer("s32",action)};
-        message[2]=(VmHostField){"account",text(account)};
+        message[0]=(HostField){"abi",integer("s32",2)};
+        message[1]=(HostField){"action",integer("s32",action)};
+        message[2]=(HostField){"account",text(account)};
         *out=record("AppMessage",message,3); return 1;
     }
     if(!strcmp(name,"WriteAppHost")) {
         assert(count==1 && field(args[0],"succeeded").integer); return 1;
     }
     if(!strcmp(name,"ReadAppUiHost")) {
-        frame[0]=(VmHostField){"width",integer("s32",view_width)};
-        frame[1]=(VmHostField){"height",integer("s32",view_height)};
-        frame[2]=(VmHostField){"font",integer("s32",18)};
-        frame[3]=(VmHostField){"scale",{.kind=VM_HOST_REAL,.type="float32",.real=1}};
-        frame[4]=(VmHostField){"top",integer("s32",32)};
-        frame[5]=(VmHostField){"bottom",integer("s32",0)};
+        frame[0]=(HostField){"width",integer("s32",view_width)};
+        frame[1]=(HostField){"height",integer("s32",view_height)};
+        frame[2]=(HostField){"font",integer("s32",18)};
+        frame[3]=(HostField){"scale",{.kind=HOST_REAL,.type="float32",.real=1}};
+        frame[4]=(HostField){"top",integer("s32",32)};
+        frame[5]=(HostField){"bottom",integer("s32",0)};
         *out=record("AppUiFrame",frame,6); return 1;
     }
     if(!strcmp(name,"AppLocaleHost")) { *out=args[0]; return 1; }
@@ -86,11 +86,11 @@ static int host(void *context, const char *module, const char *name,
     }
     if(!strcmp(name,"BoxHostedHost")) { *out=integer("s32",0); return 1; }
     if(!strcmp(name,"PollPointer")) {
-        pointer[0]=(VmHostField){"x",{.kind=VM_HOST_REAL,.type="float32",.real=pointer_x}};
-        pointer[1]=(VmHostField){"y",{.kind=VM_HOST_REAL,.type="float32",.real=pointer_y}};
-        pointer[2]=(VmHostField){"down",integer("bool",pointer_down)};
-        pointer[3]=(VmHostField){"pressed",integer("bool",pointer_pressed)};
-        pointer[4]=(VmHostField){"released",integer("bool",pointer_released)};
+        pointer[0]=(HostField){"x",{.kind=HOST_REAL,.type="float32",.real=pointer_x}};
+        pointer[1]=(HostField){"y",{.kind=HOST_REAL,.type="float32",.real=pointer_y}};
+        pointer[2]=(HostField){"down",integer("bool",pointer_down)};
+        pointer[3]=(HostField){"pressed",integer("bool",pointer_pressed)};
+        pointer[4]=(HostField){"released",integer("bool",pointer_released)};
         *out=record("PointerFrame",pointer,5); return 1;
     }
     if(!strcmp(name,"TextHostedHost")) {
@@ -100,7 +100,7 @@ static int host(void *context, const char *module, const char *name,
     }
     if(!strcmp(name,"ButtonHostedHost")) {
         int id=field(args[1],"id").integer;
-        VmHostValue bounds=field(args[1],"bounds");
+        HostValue bounds=field(args[1],"bounds");
         assert(field(bounds,"width").real>=44 && field(bounds,"height").real>=44);
         assert(field(bounds,"x").real>=0 && field(bounds,"x").real+field(bounds,"width").real<=view_width);
         if (id == 26002) {
@@ -121,12 +121,12 @@ static int host(void *context, const char *module, const char *name,
         *out=integer("s32",hit); return 1;
     }
     if(!strcmp(name,"ScrollHostedHost")) {
-        scroll[0]=(VmHostField){"opened",integer("bool",1)};
+        scroll[0]=(HostField){"opened",integer("bool",1)};
         const char *names[]={"x","y","width","height"};
-        VmHostValue bounds=field(args[1],"bounds");
-        for(int i=0;i<4;i++) rectangle[i]=(VmHostField){names[i],
-            {.kind=VM_HOST_REAL,.type="float32",.real=field(bounds,names[i]).real}};
-        scroll[1]=(VmHostField){"content",record("Rectangle",rectangle,4)};
+        HostValue bounds=field(args[1],"bounds");
+        for(int i=0;i<4;i++) rectangle[i]=(HostField){names[i],
+            {.kind=HOST_REAL,.type="float32",.real=field(bounds,names[i]).real}};
+        scroll[1]=(HostField){"content",record("Rectangle",rectangle,4)};
         *out=record("ScrollResult",scroll,2); return 1;
     }
     if(!strcmp(name,"EndHostedHost")) { *out=integer("bool",1); return 1; }

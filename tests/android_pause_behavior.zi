@@ -1,0 +1,58 @@
+#import, file "../src/platform/android/android_lifecycle.zi";
+#import, file "../src/app/app_types.zi";
+#import, file "../src/app/current_app.zi";
+#import, file "android_lifecycle_test_host.zi";
+
+c :: #system_library "c";
+Exit :: (code: s32) #foreign c "exit";
+app: InnerBreeze;
+
+Require :: (condition: bool, code: s32) {
+    if !condition {
+        Exit(code)
+    }
+}
+
+#program_export
+android_timer_activate :: () {
+}
+
+#program_export
+android_timer_deactivate :: () {
+}
+
+main :: () {
+    SetCurrentApp(*app)
+    android_lifecycle_reset()
+
+    // Ordinary pause checkpoints once and retains automatic pause ownership.
+    Require(android_sync_lifecycle(1, 1) == 0, 1)
+    Require(draft_pause_calls == 1 && app.session_paused == 1, 2)
+    unused android_sync_lifecycle(1, 1)
+    Require(draft_pause_calls == 1, 3)
+    unused android_sync_lifecycle(0, 0)
+    Require(app.session_paused == 0 && draft_pause_calls == 1, 4)
+
+    // Background playback checkpoints even though its timer never pauses.
+    app.breathing.play_in_background = 1
+    Require(android_sync_lifecycle(1, 1) == 1, 5)
+    Require(draft_pause_calls == 2 && app.session_paused == 0, 6)
+    unused android_sync_lifecycle(1, 1)
+    Require(draft_pause_calls == 2, 7)
+    unused android_sync_lifecycle(0, 0)
+
+    // Picture-in-picture reports a paused activity with a foreground timer.
+    Require(android_sync_lifecycle(0, 1) == 0, 8)
+    Require(draft_pause_calls == 3 && app.session_paused == 0, 9)
+    unused android_sync_lifecycle(0, 1)
+    Require(draft_pause_calls == 3, 10)
+    unused android_sync_lifecycle(0, 0)
+    unused android_sync_lifecycle(0, 1)
+    Require(draft_pause_calls == 4, 11)
+
+    // Resetting an activity starts a new pause lifecycle.
+    android_lifecycle_reset()
+    unused android_sync_lifecycle(0, 1)
+    Require(draft_pause_calls == 5, 12)
+    SetCurrentApp(null)
+}

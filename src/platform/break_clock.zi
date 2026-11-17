@@ -1,0 +1,41 @@
+// Breaks need elapsed time including sleep. Frame and animation clocks may
+// stop during suspend; civil-clock corrections must not change this clock.
+#if #defined(_WIN32) {
+    kernel :: #system_library "kernel32";
+    BreakUptimeMilliseconds :: () -> u64 #foreign kernel "GetTickCount64";
+} else #if #defined(__APPLE__) {
+    system :: #system_library "c";
+    BreakTimebase :: struct {
+        numerator: u32
+        denominator: u32
+    }
+    BreakContinuousTime :: () -> u64 #foreign system "mach_continuous_time";
+    BreakGetTimebase :: (value: *BreakTimebase) -> s32 #foreign system "mach_timebase_info";
+} else {
+    system :: #system_library "c";
+    BreakClockValue :: struct {
+        seconds: isize
+        nanoseconds: isize
+    }
+    BreakClockGet :: (clock: s32, value: *BreakClockValue) -> s32 #foreign system "clock_gettime";
+}
+
+BreakElapsedSeconds :: () -> float64 {
+    #if #defined(_WIN32) {
+        return cast(float64)BreakUptimeMilliseconds() / 1000.0
+    } else #if #defined(__APPLE__) {
+        scale: BreakTimebase
+        if BreakGetTimebase(*scale) != 0 || scale.denominator == 0 {
+            return -1.0
+        }
+        return cast(float64)BreakContinuousTime() * cast(float64)scale.numerator /
+        cast(float64)scale.denominator / 1000000000.0
+    } else {
+        value: BreakClockValue
+        // CLOCK_BOOTTIME includes suspend on Linux and Android.
+        if BreakClockGet(7, *value) != 0 {
+            return -1.0
+        }
+        return cast(float64)value.seconds + cast(float64)value.nanoseconds / 1000000000.0
+    }
+}

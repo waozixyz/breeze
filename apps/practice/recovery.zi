@@ -1,0 +1,179 @@
+// Practices owns draft contents, checkpoint timing and the Save/Discard decision.
+#import "json_scan"
+#import "byte_text_linux"
+#import "number_text"
+#import, file "../../src/core/types.zi";
+#import, file "../../src/app/text_buffers.zi";
+#import, file "../../src/storage/practice_draft.zi";
+#import, file "../../src/storage/db.zi";
+#import, file "../../src/storage/temporary_data.zi";
+
+PracticeRecoveryDraft :: struct {
+    started_at: s64
+    activity: s32
+    topic: s32
+    count: s32
+    rounds: [MaxRounds]s32
+}
+
+practice_draft_started_at: s64;
+practice_draft_saved_at: s64;
+practice_draft_boundary: s32 = -1;
+practice_draft_running: bool;
+practice_draft_current: PracticeRecoveryDraft;
+
+PracticeDraftNumber :: (json: string, at: s32, maximum: s64) -> s64 {
+    if at < 0 || at >= json.count || json[at] < #char "0" || json[at] > #char "9" {
+        return -1
+    }
+    number := ReadNumber(json, at)
+    if !number.valid || number.value < 0.0 || number.value > cast(float64)maximum ||
+    number.value != cast(float64)cast(s64)number.value {
+        return -1
+    }
+    return cast(s64)number.value
+}
+
+PracticeDraftParse :: (json: string, draft: *PracticeRecoveryDraft) -> bool {
+    draft.* = PracticeRecoveryDraft.{}
+    end := ValueEnd(json, 0, 0)
+    if json.count > 65536 || end < 0 || Space(json, end) != json.count ||
+    PracticeDraftNumber(json, FieldAt(json, 0, "schema"), 1) != 1 {
+        return false
+    }
+    started := PracticeDraftNumber(json, FieldAt(json, 0, "started_at"), 4102444800)
+    activity := PracticeDraftNumber(json, FieldAt(json, 0, "activity"), 6)
+    topic := PracticeDraftNumber(json, FieldAt(json, 0, "topic"), 2147483647)
+    rounds := FieldAt(json, 0, "rounds")
+    count := ArrayCount(json, rounds)
+    if started <= 0 || activity < 0 || topic < 0 || count < 0 || count > MaxRounds {
+        return false
+    }
+    draft.started_at = started
+    draft.activity = cast(s32)activity
+    draft.topic = cast(s32)topic
+    draft.count = count
+    for index: cast(s32)0..count - 1 {
+        value := PracticeDraftNumber(json, ElementAt(json, rounds, index), 2147483647)
+        if value <= 0 {
+            return false
+        }
+        draft.rounds[index] = cast(s32)value
+    }
+    return true
+}
+
+PracticeDraftEncode :: (draft: PracticeRecoveryDraft, output: []u8) -> bool {
+    digits: [24]u8
+    if !AppCopyText("{\"schema\":1,\"started_at\":", output) ||
+    !AppAppendText(FormatInteger(draft.started_at, digits[:]), output) ||
+    !AppAppendText(",\"activity\":", output) ||
+    !AppAppendText(FormatInteger(draft.activity, digits[:]), output) ||
+    !AppAppendText(",\"topic\":", output) ||
+    !AppAppendText(FormatInteger(draft.topic, digits[:]), output) ||
+    !AppAppendText(",\"rounds\":[", output) {
+        return false
+    }
+    for index: cast(s32)0..draft.count - 1 {
+        if index > 0 && !AppAppendText(",", output) {
+            return false
+        }
+        if !AppAppendText(FormatInteger(draft.rounds[index], digits[:]), output) {
+            return false
+        }
+    }
+    return AppAppendText("]}", output)
+}
+
+PracticeDraftPending :: () -> bool {
+    if practice_draft_running || DataTemporary() {
+        return false
+    }
+    buffer: [65537]u8
+    return storage_practice_draft_load(buffer[:]) > 0
+}
+
+PracticeDraftBegin :: (activity: s32) {
+    if DataTemporary() {
+        return
+    }
+    // A still-unresolved draft must never be overwritten by another practice.
+    if PracticeDraftPending() {
+        return
+    }
+    practice_draft_started_at = now_seconds()
+    practice_draft_saved_at = 0
+    practice_draft_boundary = -1
+    practice_draft_running = true
+    PracticeDraftCheckpoint(activity, null, 0, 0, true)
+}
+
+PracticeDraftCheckpoint :: (activity: s32, rounds: *s32, count: s32,
+    boundary: s32, force: bool) {
+    if !practice_draft_running || count < 0 || count > MaxRounds {
+        return
+    }
+    practice_draft_current = PracticeRecoveryDraft.{.started_at = practice_draft_started_at, .activity = activity, .count = count}
+    for index: cast(s32)0..count - 1 {
+        practice_draft_current.rounds[index] = rounds[index]
+    }
+    now := now_seconds()
+    if !force && boundary == practice_draft_boundary && now >= practice_draft_saved_at &&
+    now - practice_draft_saved_at < 30 {
+        return
+    }
+    draft := PracticeRecoveryDraft.{.started_at = practice_draft_started_at,
+        .activity = activity, .count = count}
+    for index: cast(s32)0..count - 1 {
+        draft.rounds[index] = rounds[index]
+    }
+    buffer: [1024]u8
+    if PracticeDraftEncode(draft, buffer[:]) &&
+    storage_practice_draft_save(AppTextFromCString(*buffer[0], 1024)) != 0 {
+        practice_draft_saved_at = now
+        practice_draft_boundary = boundary
+    }
+}
+
+PracticeDraftElapsed :: (activity: s32, seconds: s32, boundary: s32, force: bool) {
+    count: s32 = ifx seconds > 0 then 1 else 0
+    PracticeDraftCheckpoint(activity, *seconds, count, boundary, force)
+}
+
+PracticeDraftEnd :: () {
+    if practice_draft_running {
+        unused storage_practice_draft_clear()
+        practice_draft_running = false
+    }
+}
+
+// A failed Save leaves the draft for retry. Storage commits the session and
+// draft removal together, using the original start time as its stable identity.
+PracticeDraftDecide :: (save: bool) -> bool {
+    if !save {
+        return storage_practice_draft_clear() != 0
+    }
+    buffer: [65537]u8
+    length := storage_practice_draft_load(buffer[:])
+    draft: PracticeRecoveryDraft
+    if length <= 0 || !PracticeDraftParse(TextFromBytes(buffer[:length]), *draft) {
+        return false
+    }
+    if draft.count == 0 {
+        return storage_practice_draft_clear() != 0
+    }
+    return storage_practice_draft_commit(draft.started_at, draft.activity,
+        draft.topic, draft.rounds[:draft.count]) != 0
+}
+
+// Explicit controls may pause between two timer callbacks. The most recent
+// snapshot is updated on every callback, even when no disk write was due.
+#program_export
+PracticeDraftPause :: () {
+    if !practice_draft_running {
+        return
+    }
+    snapshot := practice_draft_current
+    PracticeDraftCheckpoint(snapshot.activity, *snapshot.rounds[0], snapshot.count,
+        practice_draft_boundary, true)
+}

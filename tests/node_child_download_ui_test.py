@@ -3,6 +3,7 @@ import contextlib
 import hashlib
 import http.server
 import json
+import mmap
 import os
 from pathlib import Path
 import re
@@ -19,7 +20,7 @@ from ui_driver import UiDriver
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from practice_content import bundle_assets
+from practice_content import bundle_assets, zx28_assets_section
 
 def open_arcade(driver):
     driver.press(label='Apps', role='button')
@@ -67,55 +68,99 @@ updated_digest = None
 
 
 def rewrite_assets(source, destination, replacements=None, additions=None):
-    """Keep executable sections intact while streaming fixture resource changes."""
+    """Rewrite ZX 28 resources and identities, streaming unchanged sections."""
     replacements = replacements or {}
     additions = additions or {}
+    assert source.resolve() != destination.resolve()
     with source.open('rb') as incoming, destination.open('wb') as outgoing:
+        with mmap.mmap(incoming.fileno(), 0, access=mmap.ACCESS_READ) as mapped:
+            assert mapped[:8] == b'ZX\0\0\x1c\0\0\0'
+            assets_start, assets_end = zx28_assets_section(mapped)
+            bundle_assets(mapped, maximum=len(mapped), include_paths=set())
+            header = bytearray(mapped[:64])
+            count = struct.unpack_from('<I', header, 32)[0]
+            sections = [list(struct.unpack_from('<IIQQII', mapped, 64 + index * 32))
+                        for index in range(count)]
+
+        incoming.seek(assets_start)
+
         def number():
             return struct.unpack('<I', incoming.read(4))[0]
 
-        def skip_text():
-            incoming.seek(number(), 1)
-
-        assert incoming.read(8) == b'ZX\0\0\x1a\0\0\0'
-        skip_text(); skip_text()
+        entries = {}
         for _ in range(number()):
-            skip_text(); skip_text()
-        for _ in range(number()):
-            for _ in range(7):
-                skip_text()
-            incoming.seek(8, 1); skip_text(); incoming.seek(4, 1)
-        for _ in range(number()):
-            for _ in range(3):
-                skip_text()
-        incoming.seek(number(), 1)
-        count_at = incoming.tell()
-        count = number()
-        incoming.seek(0)
-        outgoing.write(incoming.read(count_at))
-        incoming.seek(4, 1)
-        outgoing.write(struct.pack('<I', count + len(additions)))
-        for _ in range(count):
             name = incoming.read(number())
             length = number()
-            outgoing.write(struct.pack('<I', len(name)) + name)
-            replacement = replacements.get(name.decode())
-            if replacement is not None:
-                outgoing.write(struct.pack('<I', len(replacement)) + replacement)
-                incoming.seek(length, 1)
-            else:
-                outgoing.write(struct.pack('<I', length))
-                remaining = length
-                while remaining:
-                    block = incoming.read(min(remaining, 65536))
-                    assert block, 'Truncated fixture bundle'
-                    outgoing.write(block)
-                    remaining -= len(block)
-        assert incoming.read(1) == b''
+            entries[name.decode()] = (incoming.tell(), length, None)
+            incoming.seek(length, 1)
+        assert incoming.tell() == assets_end
+        assert replacements.keys() <= entries.keys()
+        assert not additions.keys() & entries.keys()
+        for name, content in replacements.items():
+            entries[name] = (0, len(content), content)
         for name, content in additions.items():
-            encoded = name.encode()
-            outgoing.write(struct.pack('<I', len(encoded)) + encoded)
-            outgoing.write(struct.pack('<I', len(content)) + content)
+            entries[name] = (0, len(content), content)
+        resources = sorted(entries.items(), key=lambda item: item[0].encode())
+        resource_size = 4 + sum(8 + len(name.encode()) + entry[1]
+                                for name, entry in resources)
+        position = 64 + count * 32
+        rewritten = []
+        for kind, flags, offset, size, alignment, reserved in sections:
+            position = (position + alignment - 1) & -alignment
+            new_size = resource_size if kind == 3 else size
+            rewritten.append((kind, flags, position, new_size, alignment, reserved))
+            position += new_size
+        struct.pack_into('<Q', header, 40, position)
+        outgoing.write(header)
+        for record in rewritten:
+            outgoing.write(struct.pack('<IIQQII', *record))
+
+        def copy_bytes(offset, length, digest=None):
+            incoming.seek(offset)
+            while length:
+                block = incoming.read(min(length, 65536))
+                assert block, 'Truncated fixture bundle'
+                outgoing.write(block)
+                if digest is not None:
+                    digest.update(block)
+                length -= len(block)
+
+        asset_digest = hashlib.sha256(b'ZX28-ASSETS\0')
+        manifest_at = None
+        manifest = None
+        for old, new in zip(sections, rewritten):
+            kind, _, old_offset, old_size, _, _ = old
+            outgoing.write(bytes(new[2] - outgoing.tell()))
+            if kind == 1:
+                assert old_size == 128
+                manifest_at = outgoing.tell()
+                incoming.seek(old_offset)
+                manifest = bytearray(incoming.read(old_size))
+                outgoing.write(manifest)
+            elif kind == 3:
+                asset_count = struct.pack('<I', len(resources))
+                outgoing.write(asset_count)
+                asset_digest.update(asset_count)
+                for name, (offset, length, content) in resources:
+                    encoded = name.encode()
+                    prefix = struct.pack('<I', len(encoded)) + encoded + struct.pack('<I', length)
+                    outgoing.write(prefix)
+                    asset_digest.update(prefix)
+                    if content is None:
+                        copy_bytes(offset, length, asset_digest)
+                    else:
+                        outgoing.write(content)
+                        asset_digest.update(content)
+            else:
+                copy_bytes(old_offset, old_size)
+        assert outgoing.tell() == position and manifest is not None
+        struct.pack_into('<I', manifest, 20, len(resources))
+        manifest[64:96] = asset_digest.digest()
+        identity = (b'ZX28-CONTENT\0' + manifest[8:12] + header[16:24]
+                    + manifest[32:64] + manifest[64:96])
+        manifest[96:128] = hashlib.sha256(identity).digest()
+        outgoing.seek(manifest_at)
+        outgoing.write(manifest)
 
 
 def digest_file(path):

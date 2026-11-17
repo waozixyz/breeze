@@ -24,6 +24,7 @@ c :: #system_library "c";
 #import, file "../../storage/sync_review.zi";
 #import, file "../../storage/data.zi";
 #import, file "../../storage/db.zi";
+#import, file "../../storage/database_backup.zi";
 #import, file "../../storage/import.zi";
 #import, file "../../storage/path_join.zi";
 #import, file "../../platform/android/android_import.zi";
@@ -68,6 +69,7 @@ free :: (value: *void) #foreign c;
 pending_import_path: [4096]u8;
 pending_import_info: DataImportInfo;
 pending_android_import_kind: s32 = -1;
+restore_last_good_requested: bool;
 
 SettingsDataRect :: (x: s32, y: s32, width: s32,
     height: s32) -> Rectangle {
@@ -294,7 +296,7 @@ SettingsDataExportCsv :: (app: *InnerBreeze) {
 #program_export
 settings_data_content_height :: (content_w: s32) -> s32 {
     unused content_w
-    return AppScale(326)
+    return AppScale(446)
 }
 
 #program_export
@@ -304,6 +306,30 @@ settings_data_draw_actions :: (app: *InnerBreeze,
         return
     }
     y.* += AppScale(8)
+    if storage_database_damaged() != 0 {
+        props := SettingsDataTextProps(LocaleText("database_damaged_message"), x, y.*, width, AppScale(70))
+        props.wrap = cast(Text.Wrap)TextWrapAuto
+        Text.Draw(app.ui.session, props)
+        y.* += AppScale(78)
+    }
+    restore_button := SettingsDataButtonProps(LocaleText("restore_last_good_button"), x, y.*, width, 5305, false)
+    restore_button.disabled = restore_last_good_requested
+    if Button.Draw(app.ui.session, restore_button) != 0 {
+        restore_last_good_requested = true
+    }
+    if restore_last_good_requested && app_sync_stop_for_restore(app) {
+        restore_last_good_requested = false
+        restored := storage_restore_last_good() != 0
+        app_sync_resume_after_restore()
+        if restored {
+            app_reload_after_import(app, 1)
+            unused app_request_sync(app)
+            settings_screen_set_status_success(LocaleText("restore_last_good_success"), "")
+        } else {
+            settings_screen_set_status_error(LocaleText("restore_last_good_failed"))
+        }
+    }
+    y.* += AppScale(50)
     import_button := SettingsDataButtonProps(LocaleText("import_data_button"),
         x, y.*, width, 5301, true)
     if Button.Draw(app.ui.session, import_button) != 0 {

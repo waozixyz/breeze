@@ -1,6 +1,7 @@
 #import, file "../../platform/host_input.zi";
 #import, file "../../platform/app_trace.zi";
 #import, file "../../platform/host_clock.zi";
+#import, file "../../../apps/practice/recovery.zi";
 Box :: #import "kryon/box";
 Button :: #import "kryon/button";
 Shape :: #import "kryon/shape";
@@ -411,6 +412,7 @@ session_advance_seconds :: (app: *InnerBreeze, seconds: float64) {
                 return
             }
             app.breathing = step.breathing
+            whm_checkpoint(app, false)
             if app.breathing.completed != 0 {
                 session_complete(app)
                 break
@@ -465,6 +467,7 @@ session_start :: (app: *InnerBreeze) {
     }
     whm_log(WHM_LOG_INFO, "APP: Starting session")
     meditation_music_start_session(app)
+    PracticeDraftBegin(app.exercise_type)
     practice_background_start(app, EXERCISE_WIM_HOF)
     #if ANDROID {
         whm_last_notification_text[0] = cast(u8)0
@@ -563,6 +566,7 @@ finish_hold :: (app: *InnerBreeze) {
 }
 
 finish_round :: (app: *InnerBreeze) {
+    whm_checkpoint(app, true)
     app.breathing.breathtick = 0
     app.breathing.sectick = 0
     app.breathing = BreathResetCount(app.breathing)
@@ -577,7 +581,9 @@ finish_round :: (app: *InnerBreeze) {
 }
 
 session_complete :: (app: *InnerBreeze) {
-    if session_ensure_results_saved(app) != 0 {
+    saved := session_ensure_results_saved(app)
+    PracticeDraftEnd()
+    if saved != 0 {
         round_times: [MaxRounds] s32
         rounds := collect_result_rounds(app, *round_times[0], MaxRounds)
         meditation_music_stop(app)
@@ -1049,6 +1055,7 @@ draw_breath_preview :: (breathing: *BreathSession, center_x: s32, center_y: s32,
 // needs reloading; reinitializing the whole app here froze phones for
 // seconds and opened a new UI session each time.
 whm_exit_to_start :: (app: *InnerBreeze) {
+    PracticeDraftEnd()
     meditation_music_stop(app)
     #if ANDROID {
         android_allow_screen_off()
@@ -1069,6 +1076,7 @@ session_request_exit :: (app: *InnerBreeze) {
         whm_exit_to_start(app)
         return
     }
+    PracticeDraftPause()
     app_open_modal(app, cast(ModalType)ModalConfirmExitSession)
 }
 
@@ -1149,6 +1157,7 @@ session_update_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32, hover
             session_step_back(app)
             case 1;
             app.session_paused = ifx (app.session_paused != 0) then (0) else (1)
+            whm_checkpoint(app, true)
             case 2;
             session_step_forward(app)
         }
@@ -1351,4 +1360,10 @@ session_draw_results_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32,
         }
     }
     unused hover
+}
+
+whm_checkpoint :: (app: *InnerBreeze, force: bool) {
+    rounds: [MaxRounds]s32
+    count := collect_result_rounds(app, *rounds[0], MaxRounds)
+    PracticeDraftCheckpoint(app.exercise_type, *rounds[0], count, count, force)
 }

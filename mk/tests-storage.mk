@@ -37,6 +37,13 @@ storage-habits-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		sh tests/storage_habits_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
 
+# SIGKILL a writer at random moments, then check that nothing acknowledged
+# was lost or half written, and that a damaged database is restored.
+.PHONY: storage-crash-zi-test
+storage-crash-zi-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
+	@env -u DISPLAY -u WAYLAND_DISPLAY \
+		sh tests/storage_crash_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
+
 .PHONY: achievements-test achievement-catalog-test
 achievements-test: build-laws $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \

@@ -151,12 +151,21 @@ with contextlib.ExitStack() as stack:
         receipt["captures"][path.name] = digest(path)
 
     def snapshot():
-        text = cases.page_text()
         heading = driver.wait(key=27501)
-        passage = driver.wait(key=27502)
+        art = bool(driver.find(key=27503, role="image", visible=True))
+        if art and not args.capture_baseline:
+            cases.picture_page(heading["label"])
+            text = ""
+            text_y = None
+            text_height = 0
+        else:
+            text = cases.page_text()
+            passage = driver.wait(key=27502)
+            text_y = passage["y"]
+            text_height = passage["height"]
         return {"heading": heading["label"], "text": text, "page": cases.page_label(),
-                "art": bool(driver.find(key=27503, role="image", visible=True)),
-                "heading_y": heading["y"], "text_y": passage["y"], "text_height": passage["height"]}
+                "art": art, "heading_y": heading["y"],
+                "text_y": text_y, "text_height": text_height}
 
     def turn(direction):
         before = cases.page_number()
@@ -236,4 +245,4 @@ with contextlib.ExitStack() as stack:
         assert snapshot() == saved, (snapshot(), saved)
     (CAPTURES / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
 print("Tao chapter pagination baseline captured" if args.capture_baseline else
-      "Tao first-page artwork, title-only headings, complete text, backward navigation, resize/font/theme reflow and resume: passed")
+      "Tao separate centered picture/title pages, complete text, backward navigation, resize/font/theme reflow and resume: passed")

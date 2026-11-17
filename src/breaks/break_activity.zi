@@ -14,6 +14,65 @@ BreakActivitySample :: struct {
     last_input_frame: s32
 }
 
+BreakAbsenceClock :: struct {
+    initialized: bool
+    elapsed_seconds: float64
+    frame_seconds: float64
+    idle_seconds: float64
+    ignore_os_idle: bool
+}
+
+BreakAbsenceSample :: struct {
+    clock: BreakAbsenceClock
+    idle_seconds: s32
+    known_away: bool
+}
+
+// Observe absence before consuming the returning input. A frame stall may
+// contain a whole break, even when the wake-up key reset the OS idle counter.
+// Keep fractional seconds so an unavailable OS counter also works at any FPS.
+BreakObserveAbsence :: (clock: BreakAbsenceClock, elapsed_seconds: float64,
+    frame_seconds: float64, idle_ms: s64, active: s32,
+    backgrounded: bool, reading: bool) -> BreakAbsenceSample {
+    result: BreakAbsenceSample
+    result.clock = clock
+    if reading {
+        result.clock.idle_seconds = 0.0
+        result.clock.ignore_os_idle = true
+    }
+    gap: float64 = 0.0
+    if clock.initialized && elapsed_seconds >= clock.elapsed_seconds {
+        gap = elapsed_seconds - clock.elapsed_seconds
+        frame_gap := frame_seconds - clock.frame_seconds
+        result.known_away = gap > frame_gap + 2.0
+    }
+    result.known_away = result.known_away || backgrounded
+    observed := result.clock.idle_seconds
+    if active == 0 || backgrounded {
+        observed += gap
+    } else if gap > 2.0 {
+        observed += gap
+    }
+    if idle_ms >= 0 && !result.clock.ignore_os_idle {
+        os_idle := cast(float64)idle_ms / 1000.0
+        if gap <= 2.0 || os_idle > observed {
+            observed = os_idle
+        }
+    }
+    if observed > 2147483647.0 {
+        observed = 2147483647.0
+    }
+    result.idle_seconds = cast(s32)observed
+    result.clock.idle_seconds = ifx active != 0 && !backgrounded then 0.0 else observed
+    if active != 0 {
+        result.clock.ignore_os_idle = false
+    }
+    result.clock.elapsed_seconds = elapsed_seconds
+    result.clock.frame_seconds = frame_seconds
+    result.clock.initialized = elapsed_seconds >= 0.0
+    return result
+}
+
 // One activity decision feeds the engine used by the floating bars and overlay.
 // Session idle time includes input in other applications, irrespective of focus.
 BreakSampleActivity :: (input: BreakActivityInput,

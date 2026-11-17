@@ -113,8 +113,8 @@ BundleInstance *__real_BundleInstantiate(const Bundle *bundle,
     const HostBinding *bindings, size_t count);
 
 static int unused_capability(void *context, const char *module,
-    const char *function, const VmHostValue *arguments, int count,
-    VmHostValue *result)
+    const char *function, const HostValue *arguments, int count,
+    HostValue *result)
 {
     (void)context;
     (void)module;

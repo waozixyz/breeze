@@ -1,0 +1,958 @@
+#import, file "../apps/practice/recovery.zi";
+// Crash behaviour of storage. A writer process saves through the real
+// storage code until tests/storage_crash_zi_test.sh kills it with SIGKILL
+// at a random moment. A checker process then opens the same data the way
+// the next start of the app would, and checks that nothing acknowledged was
+// lost and nothing is half written. The restore role checks recovery from a
+// damaged database with the last good copy.
+//
+// CRASH_ROLE is writer, checker or restore. CRASH_SCENARIO names the data
+// a writer and its checker share under APP_DATA_ROOT:
+//   sessions  storage_save_session in a loop
+//   payloads  PackageWrite of payload files, as a photo or media upload
+//   copies    the last good copy written at every start
+//   drafts    storage_practice_draft_save in a loop
+// The writer appends each number to <scenario>.acks only once the save
+// returned, so every acknowledged number must survive the kill.
+#import "byte_text_linux"
+#import "file_linux"
+#import "number_text"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/paths.zi";
+#import, file "../src/storage/database_backup.zi";
+#import, file "../src/storage/practice_draft.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_sessions.zi";
+#import, file "../src/apps/package_files.zi";
+
+crash_libc :: #system_library "c";
+CrashGetEnv :: (name: *u8) -> *u8 #foreign crash_libc "getenv";
+CrashTime :: (output: *s64) -> s64 #foreign crash_libc "time";
+CrashAllocate :: (size: usize) -> *u8 #foreign crash_libc "malloc";
+CrashSetEnvironment :: (name: *u8, value: *u8, overwrite: s32) -> s32 #foreign crash_libc "setenv";
+CrashUnsetEnvironment :: (name: *u8) -> s32 #foreign crash_libc "unsetenv";
+CrashTimezoneChanged :: () #foreign crash_libc "tzset";
+
+// A separate connection to any SQLite file, as an outside reader would open it.
+crash_sqlite :: #system_library "sqlite3";
+CrashSqliteOpen :: (path: *u8, database: **void) -> s32 #foreign crash_sqlite "sqlite3_open";
+CrashSqliteClose :: (database: *void) -> s32 #foreign crash_sqlite "sqlite3_close";
+CrashSqlitePrepare :: (database: *void, sql: *u8, length: s32, statement: **void,
+    tail: **u8) -> s32 #foreign crash_sqlite "sqlite3_prepare_v2";
+CrashSqliteStep :: (statement: *void) -> s32 #foreign crash_sqlite "sqlite3_step";
+CrashSqliteColumnInt :: (statement: *void, column: s32) -> s32 #foreign crash_sqlite "sqlite3_column_int";
+CrashSqliteColumnText :: (statement: *void, column: s32) -> *u8 #foreign crash_sqlite "sqlite3_column_text";
+CrashSqliteFinalize :: (statement: *void) -> s32 #foreign crash_sqlite "sqlite3_finalize";
+
+// PackageWrite flushes the browser's filesystem; a native test has none.
+#program_export "app_web_storage_flush"
+CrashWebStorageFlush :: (log_success: s32) {
+    unused log_success
+}
+
+// Storage must only ever see this test's own data folder.
+CrashDataFolder :: "/build/storage-crash-zi-test/data"
+PayloadFileCount :: 4
+// A writer that is never killed stops by itself, and the runner fails it.
+WriterSeconds :: 30
+CopyFillerRows :: 3000
+DayInSeconds :: 86400
+
+CrashText :: struct {
+    bytes: [4096]u8
+    length: s64
+}
+
+CrashTextAdd :: (text: *CrashText, part: string) {
+    index: s64 = 0
+    while index < part.count && text.length < 4095 {
+        text.bytes[text.length] = part[index]
+        text.length += 1
+        index += 1
+    }
+    text.bytes[text.length] = cast(u8)0
+}
+
+CrashTextNumber :: (text: *CrashText, value: s64) {
+    digits: [24]u8
+    CrashTextAdd(text, FormatInteger(value, digits[:]))
+}
+
+// The text in `bytes`, a CrashText's bytes with its length.
+CrashTextView :: (bytes: []u8, length: s64) -> string {
+    return TextFromBytes(bytes[0:length])
+}
+
+environment_name: [64]u8;
+
+EnvironmentText :: (name: string) -> string {
+    if !AppCopyText(name, environment_name[:]) {
+        return ""
+    }
+    value := CrashGetEnv(*environment_name[0])
+    if value == null {
+        return ""
+    }
+    return TextFromCString(value)
+}
+
+// `<data root>/<scenario>`, or a file inside it when `name` is not empty.
+CrashPath :: (output: *CrashText, scenario: string, name: string) {
+    output.length = 0
+    CrashTextAdd(output, data_root())
+    CrashTextAdd(output, "/")
+    CrashTextAdd(output, scenario)
+    if name.count > 0 {
+        CrashTextAdd(output, "/")
+        CrashTextAdd(output, name)
+    }
+}
+
+CrashAcksPath :: (output: *CrashText, scenario: string) {
+    CrashPath(output, scenario, "")
+    CrashTextAdd(output, ".acks")
+}
+
+CrashOpenStorage :: (scenario: string) -> bool {
+    root: CrashText
+    CrashPath(*root, scenario, "")
+    if storage_ensure_dir(CrashTextView(root.bytes[:], root.length)) == 0 {
+        return false
+    }
+    return storage_init(CrashTextView(root.bytes[:], root.length)) != 0
+}
+
+// The acknowledged numbers. They count up by one from 1, because a writer
+// continues after the last number acknowledged before it. Only lines that
+// end in a newline count; a writer writes after the last of them.
+CrashAcks :: struct {
+    last: s64
+    valid: bool
+    end: s64
+}
+
+CrashReadAcks :: (scenario: string) -> CrashAcks {
+    result: CrashAcks
+    result.valid = true
+    path: CrashText
+    CrashAcksPath(*path, scenario)
+    contents := PackageRead(CrashTextView(path.bytes[:], path.length), 1 << 26)
+    defer {
+        PackageFree(contents)
+    }
+    value: s64 = 0
+    digits: s64 = 0
+    index: s64 = 0
+    while index < contents.count {
+        byte := contents[index]
+        if byte == cast(u8)10 {
+            if digits == 0 || value != result.last + 1 {
+                result.valid = false
+            }
+            result.last = value
+            result.end = index + 1
+            value = 0
+            digits = 0
+        } else if byte >= cast(u8)48 && byte <= cast(u8)57 {
+            value = value * 10 + cast(s64)(byte - cast(u8)48)
+            digits += 1
+        } else {
+            result.valid = false
+        }
+        index += 1
+    }
+    return result
+}
+
+CrashAckFile :: struct {
+    file: FileHandle
+    offset: s64
+}
+
+CrashOpenAcks :: (scenario: string, acks: CrashAcks, output: *CrashAckFile) -> bool {
+    path: CrashText
+    CrashAcksPath(*path, scenario)
+    output.file = OpenUpdate(CrashTextView(path.bytes[:], path.length))
+    output.offset = acks.end
+    return output.file.valid
+}
+
+// One write per line, so a kill never leaves part of a number behind.
+CrashAcknowledge :: (acks: *CrashAckFile, value: s64) -> bool {
+    line: CrashText
+    CrashTextNumber(*line, value)
+    CrashTextAdd(*line, "\n")
+    written := WriteTextAt(acks.file, CrashTextView(line.bytes[:], line.length), acks.offset)
+    if written != line.length {
+        return false
+    }
+    acks.offset += written
+    return true
+}
+
+writer_started_at: s64;
+
+WriterHasTime :: () -> bool {
+    return CrashTime(null) - writer_started_at < WriterSeconds
+}
+
+// A whole SQLite file passes PRAGMA integrity_check.
+CrashIntegrityOk :: (path: *u8) -> bool {
+    database: *void = null
+    statement: *void = null
+    if CrashSqliteOpen(path, *database) != 0 || database == null {
+        if database != null {
+            unused CrashSqliteClose(database)
+        }
+        return false
+    }
+    query: CrashText
+    CrashTextAdd(*query, "PRAGMA integrity_check")
+    healthy := false
+    if CrashSqlitePrepare(database, *query.bytes[0], -1, *statement, null) == 0 &&
+    CrashSqliteStep(statement) == 100 {
+        answer := CrashSqliteColumnText(statement, 0)
+        healthy = answer != null && TextFromCString(answer) == "ok" &&
+        CrashSqliteStep(statement) == 101
+    }
+    if statement != null {
+        unused CrashSqliteFinalize(statement)
+    }
+    unused CrashSqliteClose(database)
+    return healthy
+}
+
+// The first column of the first row of `sql` in any SQLite file, or -1.
+CrashCount :: (path: *u8, sql: *CrashText) -> s64 {
+    database: *void = null
+    statement: *void = null
+    count: s64 = -1
+    if CrashSqliteOpen(path, *database) != 0 || database == null {
+        if database != null {
+            unused CrashSqliteClose(database)
+        }
+        return count
+    }
+    if CrashSqlitePrepare(database, *sql.bytes[0], -1, *statement, null) == 0 &&
+    CrashSqliteStep(statement) == 100 {
+        count = cast(s64)CrashSqliteColumnInt(statement, 0)
+    }
+    if statement != null {
+        unused CrashSqliteFinalize(statement)
+    }
+    unused CrashSqliteClose(database)
+    return count
+}
+
+// Live sessions whose single round lasts `first` to `last` seconds, counted
+// once per length.
+CrashSessionsQuery :: (output: *CrashText, first: s64, last: s64) {
+    output.length = 0
+    CrashTextAdd(output,
+        "SELECT COUNT(DISTINCT r.seconds) FROM session_rounds r JOIN sessions s ON s.id=r.session_id WHERE s.deleted_at=0 AND r.seconds BETWEEN ")
+    CrashTextNumber(output, first)
+    CrashTextAdd(output, " AND ")
+    CrashTextNumber(output, last)
+}
+
+CrashSaveSession :: (seconds: s64) -> bool {
+    rounds: [1]s32
+    rounds[0] = cast(s32)seconds
+    return storage_save_session(*rounds[0], 1, null, 0) != 0
+}
+
+// Payload `number` is written to file number % PayloadFileCount. Its size
+// and bytes depend on the number, so a mix of two versions never matches.
+PayloadPath :: (output: *CrashText, scenario: string, file_index: s64) {
+    CrashPath(output, scenario, "packages/payload-")
+    letter: [1]u8
+    letter[0] = cast(u8)(97 + file_index)
+    CrashTextAdd(output, TextFromBytes(letter[:]))
+    CrashTextAdd(output, ".bin")
+}
+
+PayloadMake :: (number: s64) -> string {
+    size := 98304 + (number % 5) * 49152
+    data := CrashAllocate(cast(usize)size)
+    if data == null {
+        return ""
+    }
+    header: CrashText
+    CrashTextAdd(*header, "payload ")
+    CrashTextNumber(*header, number)
+    CrashTextAdd(*header, "\n")
+    index: s64 = 0
+    while index < size {
+        if index < header.length {
+            data[index] = header.bytes[index]
+        } else {
+            data[index] = cast(u8)(33 + (number * 131 + index * 7) % 90)
+        }
+        index += 1
+    }
+    return TextFromBytes(BytesFromPointer(data, cast(u64)size))
+}
+
+PayloadMatches :: (contents: string, number: s64) -> bool {
+    if number <= 0 {
+        return false
+    }
+    expected := PayloadMake(number)
+    defer {
+        PackageFree(expected)
+    }
+    return expected.count > 0 && contents == expected
+}
+
+DraftMake :: (output: *CrashText, number: s64) {
+    output.length = 0
+    CrashTextAdd(output, "{\"practice\":\"breathing\",\"round\":")
+    CrashTextNumber(output, number)
+    CrashTextAdd(output, ",\"elapsed_seconds\":")
+    CrashTextNumber(output, number * 7)
+    CrashTextAdd(output, ",\"note\":\"")
+    index: s64 = 0
+    while index < 1500 {
+        letter: [1]u8
+        letter[0] = cast(u8)(97 + (number + index) % 26)
+        CrashTextAdd(output, TextFromBytes(letter[:]))
+        index += 1
+    }
+    CrashTextAdd(output, "\"}")
+}
+
+WriteSessions :: (acks: *CrashAckFile, first: s64) -> s32 {
+    number := first
+    while WriterHasTime() {
+        if !CrashSaveSession(number) {
+            return 21
+        }
+        if !CrashAcknowledge(acks, number) {
+            return 22
+        }
+        number += 1
+    }
+    return 23
+}
+
+WritePayloads :: (scenario: string, acks: *CrashAckFile, first: s64) -> s32 {
+    folder: CrashText
+    CrashPath(*folder, scenario, "packages")
+    if storage_ensure_dir(CrashTextView(folder.bytes[:], folder.length)) == 0 {
+        return 31
+    }
+    number := first
+    while WriterHasTime() {
+        path: CrashText
+        PayloadPath(*path, scenario, number % PayloadFileCount)
+        contents := PayloadMake(number)
+        if contents.count == 0 {
+            return 32
+        }
+        written := PackageWrite(CrashTextView(path.bytes[:], path.length), contents)
+        PackageFree(contents)
+        if !written {
+            return 33
+        }
+        if !CrashAcknowledge(acks, number) {
+            return 34
+        }
+        number += 1
+    }
+    return 35
+}
+
+// Every number saves a session, then starts storage again with the copy
+// due, so the kill can land anywhere in writing the copy.
+WriteCopies :: (scenario: string, acks: *CrashAckFile, first: s64) -> s32 {
+    // Some volume, so that writing a copy takes long enough to interrupt.
+    filler := exec_sql("WITH RECURSIVE filler(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM filler WHERE x<3000) INSERT OR IGNORE INTO meta(key,value) SELECT 'crash-test-filler-'||x,hex(randomblob(256)) FROM filler")
+    if filler == 0 {
+        return 41
+    }
+    root: CrashText
+    CrashPath(*root, scenario, "")
+    copy: CrashText
+    CrashPath(*copy, scenario, "inbe.db.last-good")
+    number := first
+    while WriterHasTime() {
+        if !CrashSaveSession(number) {
+            return 42
+        }
+        storage_set_meta_int64(LastGoodCopyKey, 0)
+        storage_close()
+        if storage_init(CrashTextView(root.bytes[:], root.length)) == 0 {
+            return 43
+        }
+        if !PathExists(CrashTextView(copy.bytes[:], copy.length)) {
+            return 44
+        }
+        if !CrashAcknowledge(acks, number) {
+            return 45
+        }
+        number += 1
+    }
+    return 46
+}
+
+WriteDrafts :: (acks: *CrashAckFile, first: s64) -> s32 {
+    number := first
+    while WriterHasTime() {
+        draft: CrashText
+        DraftMake(*draft, number)
+        if storage_practice_draft_save(CrashTextView(draft.bytes[:], draft.length)) == 0 {
+            return 51
+        }
+        if !CrashAcknowledge(acks, number) {
+            return 52
+        }
+        number += 1
+    }
+    return 53
+}
+
+CrashWriter :: (scenario: string) -> s32 {
+    writer_started_at = CrashTime(null)
+    acks := CrashReadAcks(scenario)
+    if !acks.valid {
+        return 11
+    }
+    if !CrashOpenStorage(scenario) {
+        return 12
+    }
+    acknowledgements: CrashAckFile
+    if !CrashOpenAcks(scenario, acks, *acknowledgements) {
+        return 13
+    }
+    first := acks.last + 1
+    if scenario == "sessions" {
+        return WriteSessions(*acknowledgements, first)
+    }
+    if scenario == "payloads" {
+        return WritePayloads(scenario, *acknowledgements, first)
+    }
+    if scenario == "copies" {
+        return WriteCopies(scenario, *acknowledgements, first)
+    }
+    if scenario == "drafts" {
+        return WriteDrafts(*acknowledgements, first)
+    }
+    return 14
+}
+
+CheckSessions :: (last: s64) {
+    query: CrashText
+    CrashSessionsQuery(*query, 1, last)
+    check_int("every acknowledged session is present",
+        read_db_count(CrashTextView(query.bytes[:], query.length)), cast(s32)last)
+    CrashSessionsQuery(*query, last + 1, last + 1000000)
+    check_true("only the session in flight may be saved without its acknowledgement",
+        read_db_count(CrashTextView(query.bytes[:], query.length)) <= 1)
+    check_int("no session is left without its rounds",
+        read_db_count("SELECT COUNT(*) FROM sessions s WHERE s.deleted_at=0 AND NOT EXISTS (SELECT 1 FROM session_rounds r WHERE r.session_id=s.id)"),
+        0)
+    // Nothing syncs in this test, so every saved session keeps its entry.
+    check_int("no session is left without its sync entry",
+        read_db_count("SELECT COUNT(*) FROM sessions s WHERE s.deleted_at=0 AND NOT EXISTS (SELECT 1 FROM sync_outbox o WHERE o.entity_type='session' AND o.entity_id=s.id)"),
+        0)
+}
+
+// Before storage starts, which may write a new copy: the copy on disk is
+// whole and holds everything acknowledged, since each acknowledgement
+// follows a copy.
+CheckCopyBeforeStart :: (scenario: string, last: s64) {
+    copy: CrashText
+    CrashPath(*copy, scenario, "inbe.db.last-good")
+    if !PathExists(CrashTextView(copy.bytes[:], copy.length)) {
+        check_true("a last good copy exists once one was acknowledged", last == 0)
+        return
+    }
+    check_true("the last good copy passes integrity_check", CrashIntegrityOk(*copy.bytes[0]))
+    if last > 0 {
+        query: CrashText
+        CrashSessionsQuery(*query, 1, last)
+        check_true("the last good copy holds every acknowledged session",
+            CrashCount(*copy.bytes[0], *query) == last)
+    }
+}
+
+CheckPayloads :: (scenario: string, last: s64) {
+    file_index: s64 = 0
+    while file_index < PayloadFileCount {
+        newest := last
+        while newest >= 1 && newest % PayloadFileCount != file_index {
+            newest -= 1
+        }
+        in_flight := last + 1
+        path: CrashText
+        PayloadPath(*path, scenario, file_index)
+        if !PathExists(CrashTextView(path.bytes[:], path.length)) {
+            check_true("a payload file is missing only before its first write", newest < 1)
+        } else {
+            contents := PackageRead(CrashTextView(path.bytes[:], path.length), 1 << 24)
+            whole := PayloadMatches(contents, newest)
+            if !whole && in_flight % PayloadFileCount == file_index {
+                whole = PayloadMatches(contents, in_flight)
+            }
+            check_true("a payload file holds a whole acknowledged or in-flight version", whole)
+            PackageFree(contents)
+        }
+        file_index += 1
+    }
+}
+
+draft_bytes: [8192]u8;
+
+// The draft is the last acknowledged one, or the next one when its save
+// committed just before the kill.
+CheckDraft :: (last: s64) {
+    length := storage_practice_draft_load(draft_bytes[:])
+    if length == 0 {
+        check_true("no draft only before the first save", last == 0)
+        return
+    }
+    check_true("the draft loads", length > 0)
+    if length <= 0 {
+        return
+    }
+    loaded := TextFromBytes(draft_bytes[0:length])
+    acknowledged: CrashText
+    DraftMake(*acknowledged, last)
+    next: CrashText
+    DraftMake(*next, last + 1)
+    whole := (last > 0 && loaded == CrashTextView(acknowledged.bytes[:], acknowledged.length)) || loaded == CrashTextView(next.bytes[:], next.length)
+    check_true("the draft is the acknowledged one or the one in flight", whole)
+}
+
+CrashChecker :: (scenario: string) -> s32 {
+    acks := CrashReadAcks(scenario)
+    check_true("acknowledgements count up by one", acks.valid)
+    database: CrashText
+    CrashPath(*database, scenario, "inbe.db")
+    if PathExists(CrashTextView(database.bytes[:], database.length)) {
+        check_true("the database passes integrity_check after the kill",
+            CrashIntegrityOk(*database.bytes[0]))
+    } else {
+        check_true("a database exists once a write was acknowledged", acks.last == 0)
+    }
+    if scenario == "copies" {
+        CheckCopyBeforeStart(scenario, acks.last)
+    }
+    if !CrashOpenStorage(scenario) {
+        check_true("storage opens after the kill", false)
+        return failures + 1
+    }
+    check_int("the database is not reported damaged", storage_database_damaged(), 0)
+    if scenario == "sessions" || scenario == "copies" {
+        CheckSessions(acks.last)
+    }
+    if scenario == "payloads" {
+        CheckPayloads(scenario, acks.last)
+    }
+    if scenario == "drafts" {
+        CheckDraft(acks.last)
+    }
+    storage_close()
+    return failures
+}
+
+// The whole file, released with PackageFree; empty when it is missing.
+FileContents :: (path: *CrashText) -> string {
+    return PackageRead(CrashTextView(path.bytes[:], path.length), 1 << 26)
+}
+
+WriteFileText :: (path: *CrashText, text: string) -> bool {
+    file := OpenReplace(CrashTextView(path.bytes[:], path.length))
+    if !file.valid {
+        return false
+    }
+    written := WriteTextAt(file, text, 0) == text.count
+    closed := CloseFile(file)
+    return written && closed
+}
+
+// Overwrites `count` bytes at `offset` with `byte`.
+DamageFile :: (path: *CrashText, offset: s64, count: s64, byte: u8) -> bool {
+    file := OpenUpdate(CrashTextView(path.bytes[:], path.length))
+    if !file.valid {
+        return false
+    }
+    bytes: [4096]u8
+    index: s64 = 0
+    while index < count && index < 4096 {
+        bytes[index] = byte
+        index += 1
+    }
+    written := WriteAt(file, bytes[0:index], offset) == index
+    closed := CloseFile(file)
+    return written && closed
+}
+
+CopySessionCount :: (scenario: string, first: s64, last: s64) -> s64 {
+    copy: CrashText
+    CrashPath(*copy, scenario, "inbe.db.last-good")
+    query: CrashText
+    CrashSessionsQuery(*query, first, last)
+    return CrashCount(*copy.bytes[0], *query)
+}
+
+LiveSessionCount :: (first: s64, last: s64) -> s32 {
+    query: CrashText
+    CrashSessionsQuery(*query, first, last)
+    return read_db_count(CrashTextView(query.bytes[:], query.length))
+}
+
+// The `<database>.damaged-<unixtime>` name a restore between `earliest` and
+// `latest` chose, or an empty path.
+FindDamagedPath :: (output: *CrashText, scenario: string, earliest: s64, latest: s64) {
+    stamp := earliest
+    while stamp <= latest + 1 {
+        CrashPath(output, scenario, "inbe.db.damaged-")
+        CrashTextNumber(output, stamp)
+        if PathExists(CrashTextView(output.bytes[:], output.length)) {
+            return
+        }
+        stamp += 1
+    }
+    output.length = 0
+}
+
+FileHolds :: (path: *CrashText, expected: string) -> bool {
+    contents := FileContents(path)
+    defer {
+        PackageFree(contents)
+    }
+    return contents.count > 0 && contents == expected
+}
+
+// A day passes, so the next start writes a new copy.
+AgeLastGoodCopy :: () {
+    storage_set_meta_int64(LastGoodCopyKey, CrashTime(null) - DayInSeconds - 10)
+}
+
+CheckCopyGate :: (scenario: string) {
+    root: CrashText
+    CrashPath(*root, scenario, "")
+    copy: CrashText
+    CrashPath(*copy, scenario, "inbe.db.last-good")
+    check_true("the first start writes a last good copy", PathExists(CrashTextView(copy.bytes[:], copy.length)))
+    check_true("the copy time is kept", storage_meta_int64(LastGoodCopyKey, 0) > 0)
+    check_true("save sessions before the copy", CrashSaveSession(1001) && CrashSaveSession(1002) &&
+        CrashSaveSession(1003))
+    storage_close()
+    check_int("start again within a day", storage_init(CrashTextView(root.bytes[:], root.length)), 1)
+    check_true("a copy less than a day old is kept as it was",
+        CopySessionCount(scenario, 1001, 1003) == 0)
+    AgeLastGoodCopy()
+    storage_close()
+    check_int("start again a day later", storage_init(CrashTextView(root.bytes[:], root.length)), 1)
+    check_true("a day-old copy is renewed", CopySessionCount(scenario, 1001, 1003) == 3)
+    storage_close()
+    // A missing copy is written again whatever its time says.
+    unused RemoveFile(CrashTextView(copy.bytes[:], copy.length))
+    check_int("start again without the copy", storage_init(CrashTextView(root.bytes[:], root.length)), 1)
+    check_true("a missing copy is written again", CopySessionCount(scenario, 1001, 1003) == 3)
+}
+
+// A damaged header beside a -wal of committed sessions, as a crash leaves
+// one: storage does not open and changes no byte of either file. The last
+// good copy then replaces the database, the damaged files are kept, and the
+// old -wal is not replayed into the restored database.
+CheckRestoreDamagedHeader :: (scenario: string) {
+    root: CrashText
+    CrashPath(*root, scenario, "")
+    database: CrashText
+    CrashPath(*database, scenario, "inbe.db")
+    wal: CrashText
+    CrashPath(*wal, scenario, "inbe.db-wal")
+    check_true("save sessions after the copy", CrashSaveSession(2004) && CrashSaveSession(2005))
+    committed_wal := FileContents(*wal)
+    check_true("the open database has a -wal", committed_wal.count > 0)
+    storage_close()
+    check_true("damage the database header", DamageFile(*database, 0, 16, cast(u8)88))
+    check_true("put the crash's -wal back", WriteFileText(*wal, committed_wal))
+    damaged := FileContents(*database)
+    check_true("read the damaged database", damaged.count > 0)
+
+    check_int("a damaged database does not open",
+        storage_init(CrashTextView(root.bytes[:], root.length)), 0)
+    check_int("the database is reported damaged", storage_database_damaged(), 1)
+    check_true("a failed open leaves the database byte for byte", FileHolds(*database, damaged))
+    check_true("a failed open leaves the -wal byte for byte", FileHolds(*wal, committed_wal))
+    check_int("opening it again fails the same way",
+        storage_init(CrashTextView(root.bytes[:], root.length)), 0)
+    check_true("the second open leaves it too", FileHolds(*database, damaged))
+
+    before := CrashTime(null)
+    check_int("restore the last good copy", storage_restore_last_good(), 1)
+    after := CrashTime(null)
+    check_int("a restored database is not reported damaged", storage_database_damaged(), 0)
+    check_int("the restored data matches the copy", LiveSessionCount(1001, 1003), 3)
+    check_int("the old -wal is not replayed into the restored database",
+        LiveSessionCount(2004, 2005), 0)
+
+    kept: CrashText
+    FindDamagedPath(*kept, scenario, before, after)
+    check_true("the damaged database is kept", kept.length > 0)
+    if kept.length > 0 {
+        check_true("the kept database is byte for byte the damaged one", FileHolds(*kept, damaged))
+        kept_wal: CrashText = kept
+        CrashTextAdd(*kept_wal, "-wal")
+        check_true("the damaged -wal is kept byte for byte", FileHolds(*kept_wal, committed_wal))
+    }
+    check_true("the damaged -wal is not beside the restored database",
+        !FileHolds(*wal, committed_wal))
+    check_true("the restored database passes integrity_check", CrashIntegrityOk(*database.bytes[0]))
+    PackageFree(damaged)
+    PackageFree(committed_wal)
+    storage_close()
+}
+
+// Damage inside the file that leaves the header readable is found too.
+CheckRestoreDamagedPage :: () {
+    scenario := "restore-page"
+    root: CrashText
+    CrashPath(*root, scenario, "")
+    remove_tree(CrashTextView(root.bytes[:], root.length))
+    database: CrashText
+    CrashPath(*database, scenario, "inbe.db")
+    check_true("open a database to damage inside", CrashOpenStorage(scenario))
+    number: s64 = 3001
+    while number <= 3200 {
+        unused CrashSaveSession(number)
+        number += 1
+    }
+    AgeLastGoodCopy()
+    storage_close()
+    check_true("copy the sessions", CrashOpenStorage(scenario))
+    storage_close()
+    check_true("damage a page inside the database", DamageFile(*database, 4096 * 3, 4096, cast(u8)255))
+    damaged := FileContents(*database)
+    check_int("a database with a damaged page does not open", storage_init(CrashTextView(root.bytes[:], root.length)), 0)
+    check_int("a damaged page is reported", storage_database_damaged(), 1)
+    check_true("a damaged page leaves the database byte for byte", FileHolds(*database, damaged))
+    check_int("restore after a damaged page", storage_restore_last_good(), 1)
+    check_int("all copied sessions are back", LiveSessionCount(3001, 3200), 200)
+    PackageFree(damaged)
+    storage_close()
+}
+
+// Without a valid copy, a restore changes nothing.
+CheckRestoreWithoutCopy :: () {
+    scenario := "restore-none"
+    root: CrashText
+    CrashPath(*root, scenario, "")
+    remove_tree(CrashTextView(root.bytes[:], root.length))
+    copy: CrashText
+    CrashPath(*copy, scenario, "inbe.db.last-good")
+    check_true("open a database without a copy", CrashOpenStorage(scenario))
+    check_true("save a session to keep", CrashSaveSession(4001))
+    unused RemoveFile(CrashTextView(copy.bytes[:], copy.length))
+    check_int("no copy: nothing to restore", storage_restore_last_good(), 0)
+    check_true("storage stays open without a copy", storage_db_handle() != null)
+    check_int("no copy: the data stays", LiveSessionCount(4001, 4001), 1)
+    check_true("write an invalid copy", WriteFileText(*copy, "not a database at all"))
+    check_int("an invalid copy is not restored", storage_restore_last_good(), 0)
+    check_int("an invalid copy: the data stays", LiveSessionCount(4001, 4001), 1)
+    check_true("an invalid copy is left as it was", FileHolds(*copy, "not a database at all"))
+    kept: CrashText
+    now := CrashTime(null)
+    FindDamagedPath(*kept, scenario, now - 60, now)
+    check_true("nothing is moved aside without a copy", kept.length == 0)
+    storage_close()
+}
+
+// A database that went missing: the new, empty one does not replace the
+// last good copy, which is kept beside it with everything it held.
+CheckMissingDatabaseKeepsCopy :: () {
+    scenario := "restore-missing"
+    root: CrashText
+    CrashPath(*root, scenario, "")
+    remove_tree(CrashTextView(root.bytes[:], root.length))
+    database: CrashText
+    CrashPath(*database, scenario, "inbe.db")
+    copy: CrashText
+    CrashPath(*copy, scenario, "inbe.db.last-good")
+    check_true("open a database that will go missing", CrashOpenStorage(scenario))
+    check_true("save a session before it goes missing", CrashSaveSession(5001))
+    AgeLastGoodCopy()
+    storage_close()
+    check_true("copy the session", CrashOpenStorage(scenario))
+    storage_close()
+    check_true("the database goes missing", RemoveFile(CrashTextView(database.bytes[:], database.length)))
+    before := CrashTime(null)
+    check_true("a new database opens", CrashOpenStorage(scenario))
+    after := CrashTime(null)
+    check_int("the new database is empty", LiveSessionCount(5001, 5001), 0)
+    check_true("the new database has its own copy", PathExists(CrashTextView(copy.bytes[:], copy.length)))
+    earlier: CrashText
+    stamp := before
+    while stamp <= after + 1 {
+        CrashPath(*earlier, scenario, "inbe.db.last-good.before-")
+        CrashTextNumber(*earlier, stamp)
+        if PathExists(CrashTextView(earlier.bytes[:], earlier.length)) {
+            break
+        }
+        earlier.length = 0
+        stamp += 1
+    }
+    check_true("the earlier copy is kept", earlier.length > 0)
+    if earlier.length > 0 {
+        query: CrashText
+        CrashSessionsQuery(*query, 5001, 5001)
+        check_true("the earlier copy still holds its session", CrashCount(*earlier.bytes[0], *query) == 1)
+    }
+    storage_close()
+}
+
+CrashRestore :: () -> s32 {
+    scenario := "restore"
+    root: CrashText
+    CrashPath(*root, scenario, "")
+    remove_tree(CrashTextView(root.bytes[:], root.length))
+    if !CrashOpenStorage(scenario) {
+        check_true("open storage for the restore checks", false)
+        return failures + 1
+    }
+    CheckCopyGate(scenario)
+    CheckRestoreDamagedHeader(scenario)
+    CheckRestoreDamagedPage()
+    CheckRestoreWithoutCopy()
+    CheckMissingDatabaseKeepsCopy()
+    CheckPracticeRecoveryDecision()
+    return failures
+}
+
+#program_export
+Check :: () -> s32 {
+    if !contains(data_root(), CrashDataFolder) {
+        return 100
+    }
+    install_english_catalog()
+    role := EnvironmentText("CRASH_ROLE")
+    scenario := EnvironmentText("CRASH_SCENARIO")
+    known := scenario == "sessions" || scenario == "payloads" || scenario == "copies" ||
+    scenario == "drafts"
+    if role == "restore" {
+        return CrashRestore()
+    }
+    if !known {
+        return 101
+    }
+    if role == "writer" {
+        return CrashWriter(scenario)
+    }
+    if role == "checker" {
+        return CrashChecker(scenario)
+    }
+    return 102
+}
+
+CheckPracticeRecoveryDecision :: () {
+    storage_close()
+    scenario := "recovery-decision"
+    root: CrashText
+    CrashPath(*root, scenario, "")
+    remove_tree(CrashTextView(root.bytes[:], root.length))
+    check_true("open recovery decision storage", CrashOpenStorage(scenario))
+    draft := PracticeRecoveryDraft.{.started_at = 1794800000, .activity = 0,
+        .topic = 2, .count = 2}
+    draft.rounds[0] = 24
+    draft.rounds[1] = 35
+    buffer: [1024]u8
+    check_true("encode unfinished rounds", PracticeDraftEncode(draft, buffer[:]))
+    json := AppTextFromCString(*buffer[0], 1024)
+    parsed: PracticeRecoveryDraft
+    check_true("parse a checkpoint", PracticeDraftParse(json, *parsed))
+    check_true("checkpoint keeps original start", parsed.started_at == draft.started_at)
+    check_int("checkpoint keeps completed rounds", parsed.rounds[1], 35)
+    before := storage_session_count()
+    check_int("write draft for Discard", storage_practice_draft_save(json), 1)
+    check_true("Discard succeeds", PracticeDraftDecide(false))
+    check_int("Discard stores no session", storage_session_count(), before)
+    check_true("Discard removes draft", storage_practice_draft_load(buffer[:]) == 0)
+    check_int("write draft for Save", storage_practice_draft_save(json), 1)
+    unused exec_sql("CREATE TEMP TRIGGER fail_practice_recovery BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT, 'test failure'); END")
+    check_true("failed Save reports failure", !PracticeDraftDecide(true))
+    check_true("failed Save retains draft", storage_practice_draft_load(buffer[:]) > 0)
+    check_int("failed Save stores no session", storage_session_count(), before)
+    unused exec_sql("DROP TRIGGER fail_practice_recovery")
+    check_true("Save succeeds", PracticeDraftDecide(true))
+    check_int("Save adds one session", storage_session_count(), before + 1)
+    check_int("Save keeps start, activity and topic", read_db_count("SELECT COUNT(*) FROM sessions WHERE started_at=1794800000 AND activity=0 AND topic=2"), 1)
+    check_int("Save keeps both completed rounds", read_db_count("SELECT COUNT(*) FROM session_rounds WHERE seconds IN (24,35)"), 2)
+    check_true("Save removes draft", storage_practice_draft_load(buffer[:]) == 0)
+    check_true("second Save cannot duplicate", !PracticeDraftDecide(true))
+    check_int("no duplicate session", storage_session_count(), before + 1)
+    check_true("malformed checkpoint rejected", !PracticeDraftParse("{\"schema\":1}", *parsed))
+    check_int("refresh copy after deliberate deletion", storage_refresh_last_good(), 1)
+    unused storage_delete_all_sessions()
+    check_int("restore refreshed copy", storage_restore_last_good(), 1)
+    check_int("restore cannot resurrect deleted sessions", storage_session_count(), 0)
+    CheckPracticeRecoveryRepeatedHour()
+    CheckPracticeCheckpointTriggers()
+}
+
+CheckPracticeRecoveryRepeatedHour :: () {
+    previous_timezone: [256]u8
+    name: [3]u8
+    timezone: [64]u8
+    previous := EnvironmentText("TZ")
+    had_timezone := CrashGetEnv(*environment_name[0]) != null
+    check_true("remember the test process timezone", AppCopyText(previous, previous_timezone[:]))
+    unused AppCopyText("TZ", name[:])
+    unused AppCopyText("EST5EDT,M3.2.0,M11.1.0", timezone[:])
+    check_int("select a repeated local hour", CrashSetEnvironment(*name[0], *timezone[0], 1), 0)
+    CrashTimezoneChanged()
+    defer {
+        if had_timezone {
+            unused CrashSetEnvironment(*name[0], *previous_timezone[0], 1)
+        } else {
+            unused CrashUnsetEnvironment(*name[0])
+        }
+        CrashTimezoneChanged()
+    }
+    before := storage_session_count()
+    draft := PracticeRecoveryDraft.{.started_at = 1793511000, .activity = 1, .count = 1}
+    draft.rounds[0] = 40
+    buffer: [1024]u8
+    for occurrence: 0..1 {
+        // Both starts read 01:30 locally on 2026-11-01, one hour apart.
+        draft.started_at = 1793511000 + occurrence * 3600
+        check_true("encode the repeated hour", PracticeDraftEncode(draft, buffer[:]))
+        check_int("checkpoint the repeated hour", storage_practice_draft_save(AppTextFromCString(*buffer[0], 1024)), 1)
+        check_true("save the repeated hour", PracticeDraftDecide(true))
+    }
+    check_int("both occurrences remain separate sessions", storage_session_count(), before + 2)
+    check_int("recovery preserves exact starts across the repeated hour",
+        read_db_count("SELECT COUNT(*) FROM sessions WHERE started_at IN (1793511000,1793514600) AND local_date=20261101"), 2)
+}
+
+CheckPracticeCheckpointTriggers :: () {
+    buffer: [1024]u8
+    parsed: PracticeRecoveryDraft
+    PracticeDraftBegin(1)
+    PracticeDraftElapsed(1, 10, 0, false)
+    length := storage_practice_draft_load(buffer[:])
+    check_true("start records an empty checkpoint", length > 0 &&
+        PracticeDraftParse(TextFromBytes(buffer[:length]), *parsed) && parsed.count == 0)
+    PracticeDraftPause()
+    length = storage_practice_draft_load(buffer[:])
+    check_true("pause keeps the latest elapsed time", length > 0 &&
+        PracticeDraftParse(TextFromBytes(buffer[:length]), *parsed) && parsed.rounds[0] == 10)
+    practice_draft_saved_at = now_seconds() - 30
+    PracticeDraftElapsed(1, 40, 0, false)
+    length = storage_practice_draft_load(buffer[:])
+    check_true("thirty seconds checkpoints elapsed time", length > 0 &&
+        PracticeDraftParse(TextFromBytes(buffer[:length]), *parsed) && parsed.rounds[0] == 40)
+    PracticeDraftElapsed(1, 41, 1, false)
+    length = storage_practice_draft_load(buffer[:])
+    check_true("round boundary checkpoints immediately", length > 0 &&
+        PracticeDraftParse(TextFromBytes(buffer[:length]), *parsed) && parsed.rounds[0] == 41)
+    PracticeDraftEnd()
+    check_true("normal completion clears the draft", storage_practice_draft_load(buffer[:]) == 0)
+}

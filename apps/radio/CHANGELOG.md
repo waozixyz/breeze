@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-11-16
+
+- Download and open on the current Inner Breeze.
 - Replace the form controls with one tactile radio: separate power, volume and tuning,
   three station keys, an illuminated dial and an in-radio status display.
 

@@ -1,4 +1,5 @@
 #import, file "break_types.zi";
+#import, file "break_activity.zi";
 
 // Break decisions operate on values, so native targets and portable bundles
 // can agree on the same state without a UI or operating-system host.
@@ -207,6 +208,7 @@ BreakTake :: (engine: BreakEngine, break_type: s32,
     engine.timers[break_type].idle_s = 0
     // A continuous idle period can take a break only once until input resumes.
     engine.timers[break_type].idle_latched = natural
+    engine.timers[break_type].snooze_s = 0
     engine.timers[break_type].prompt_s = 0
     engine.timers[break_type].prompt_count = 0
     engine.timers[break_type].lock_buttons_s = 0
@@ -450,13 +452,27 @@ BreakNoteIdle :: (engine: BreakEngine,
     }
     index: s32 = 0
     while index < BREAK_TYPE_COUNT {
-        if result.engine.timers[index].enabled != 0  && result.engine.timers[index].duration_s > 0  && result.engine.timers[index].idle_latched == 0  && (result.engine.timers[index].state == BreakStateRunning  || result.engine.timers[index].state == BreakStatePrompting)  && idle_s >= result.engine.timers[index].duration_s {
-            result.engine = BreakTake(result.engine, index, 1)
+        if result.engine.timers[index].enabled != 0  && result.engine.timers[index].duration_s > 0  && result.engine.timers[index].idle_latched == 0  && idle_s >= result.engine.timers[index].duration_s {
+            natural: s32 = ifx result.engine.timers[index].state == BreakStateBreaking then 0 else 1
+            result.engine = BreakTake(result.engine, index, natural)
+            // Explicit breaks use the taken statistic, but the same absence
+            // still must not complete them again on the next frame.
+            result.engine.timers[index].idle_latched = 1
             result.took = 1
         }
         index += 1
     }
     return result
+}
+
+BreakNoteAbsence :: (engine: BreakEngine,
+    observed: BreakAbsenceSample) -> BreakIdleSample {
+    updated := engine
+    if observed.known_away {
+        // A device asleep or an app in the background is not reading.
+        updated.reading_active = 0
+    }
+    return BreakNoteIdle(updated, observed.idle_seconds)
 }
 
 #program_export

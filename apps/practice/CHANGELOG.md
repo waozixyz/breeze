@@ -2,10 +2,9 @@
 
 ## [Unreleased]
 
+- Recover unfinished practices after an unexpected close; restore a last good data copy from Settings.
 - Changing practices keeps the page steady and fades from the previous practice.
-
-- Choose an astral exercise before Start with its translated guide and narration; adjust session volume and background music together.
-- Sun Salutation shows each pose's form cue, the leg that steps back and names the next pose in one quiet line.
+- Choose an astral exercise with its guide and narration; adjust audio together and follow clearer Sun Salutation cues.
 
 ## [1.6.11] - 2026-11-05
 

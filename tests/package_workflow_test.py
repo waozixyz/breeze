@@ -11,8 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/packages.yml"
 
 
-def script(name):
-    lines = WORKFLOW.read_text().splitlines()
+def script(name, workflow=WORKFLOW):
+    lines = workflow.read_text().splitlines()
     start = lines.index("      - name: " + name) + 1
     end = next((index for index in range(start, len(lines))
                 if lines[index].startswith("      - ")), len(lines))
@@ -22,6 +22,48 @@ def script(name):
 
 
 class PackageWorkflowTest(unittest.TestCase):
+    def test_node_app_package_paths_are_confined_to_the_release(self):
+        workflow = ROOT / ".github/workflows/node-app-release.yml"
+        environment = os.environ | {
+            "APP": "photos", "REPOSITORY": "waozixyz/photos",
+            "COMMIT": "1" * 40, "TAG": "node-photos-1.0.6", "SHA256": "2" * 64,
+            "PACKAGE_PATH": ".", "LEDGER_PATH": "apps/versions.json",
+        }
+        for package_path, ledger_path in ((".", "apps/versions.json"),
+                                          ("portable", "versions.json"),
+                                          ("modules/photos", "apps/versions.json")):
+            with self.subTest(package=package_path, ledger=ledger_path):
+                subprocess.run(["bash", "-eu"], input=script("Check the request", workflow),
+                               text=True, capture_output=True,
+                               env=environment | {"PACKAGE_PATH": package_path, "LEDGER_PATH": ledger_path},
+                               check=True)
+        for variable in ("PACKAGE_PATH", "LEDGER_PATH"):
+            for value in ("../photos", "/portable", "portable/../private", "", "$(false)", "portable\nprivate"):
+                with self.subTest(variable=variable, value=value):
+                    result = subprocess.run(
+                        ["bash", "-eu"], input=script("Check the request", workflow),
+                        text=True, capture_output=True, env=environment | {variable: value})
+                    self.assertNotEqual(result.returncode, 0)
+
+    def test_node_app_signing_uses_the_selected_package_ledger(self):
+        workflow = ROOT / ".github/workflows/node-app-release.yml"
+        for package_path, ledger_path in ((".", "apps/versions.json"), ("portable", "versions.json")):
+            with self.subTest(package=package_path), tempfile.TemporaryDirectory() as temporary:
+                log = Path(temporary) / "commands"
+                stub = "python3() { printf '%s\\n' \"$*\" >> " + shlex.quote(str(log)) + "; }\n"
+                environment = os.environ | {
+                    "RUNNER_TEMP": temporary, "APP": "photos", "KEY_ID": "test",
+                    "TARGET": "test@example.invalid", "STORE": "/test/packages",
+                    "PACKAGE_PATH": package_path, "LEDGER_PATH": ledger_path,
+                }
+                subprocess.run(["bash", "-eu"], input=stub + script(
+                    "Sign, publish to Waozi's Daochi node and verify", workflow),
+                    text=True, capture_output=True, env=environment, check=True)
+                command = log.read_text()
+                self.assertIn(f"--app-ledger {temporary}/node-app/source/{package_path}/{ledger_path}", command)
+                self.assertIn("--node-app photos", command)
+                self.assertIn("--verify-origin https://api.waozi.xyz", command)
+
     def test_package_runtime_fixture_repairs_start_the_workflow(self):
         trigger = WORKFLOW.read_text().split("  push:\n", 1)[1].split("  workflow_dispatch:\n", 1)[0]
         for path in ("tests/package_release_test.py", "tests/package_manager_host.c",

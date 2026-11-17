@@ -70,6 +70,7 @@ STORAGE_PATH_SIZE :: 1024
 #import, file "path_join.zi";
 #import, file "paths.zi";
 #import, file "database_upgrade.zi";
+#import, file "database_backup.zi";
 #import, file "schema.zi";
 storage_migrate_default_habit_ids :: () -> s32 #foreign c;
 storage_migrate_habit_ids_to_uuid :: () -> s32 #foreign c;
@@ -221,6 +222,11 @@ storage_init :: (root: string) -> s32 {
         LogStorage(LOG_ERROR, "STORAGE: database migration could not select a safe path")
         return 0
     }
+    // A damaged database is never opened for writing, migrated or changed;
+    // it stays as it is for storage_restore_last_good.
+    if !StorageCheckDatabaseBeforeUse(*storage_state_handle().db_path[0]) {
+        return 0
+    }
     if sqlite3_open_v2(*storage_state_handle().db_path[0], *storage_state_handle().db,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
         null) != SQLITE_OK {
@@ -249,6 +255,7 @@ storage_init :: (root: string) -> s32 {
     if migrate_legacy_file_sessions_once(*storage_state_handle().root[0]) == 0 {
         LogStorage(LOG_WARNING, "STORAGE: historical session import deferred; source files retained")
     }
+    StorageKeepLastGoodCopy()
     return 1
 }
 

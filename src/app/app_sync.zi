@@ -147,6 +147,7 @@ SocialWorkerResult :: struct {
 }
 
 g_sync: SyncCoordinator = SyncCoordinator.{};
+sync_paused_for_restore: bool;
 g_sync_events_url: [512]u8;
 g_sync_events_retry_at: float64;
 #if ASYNC {
@@ -1121,6 +1122,9 @@ app_request_friend_remove :: (app: *InnerBreeze, friend_user_id: string) {
 }
 
 app_sync_now :: (app: *InnerBreeze) -> s32 {
+    if sync_paused_for_restore {
+        return 0
+    }
     url: [256] u8
 
     if app == null || app_sync_url(*url[0], size_of(type_of(url))) == 0 {
@@ -1274,6 +1278,11 @@ app_add_diary_photos_to_library :: (app: *InnerBreeze, now: float64) {
 }
 
 app_sync_pump :: (app: *InnerBreeze) {
+    if sync_paused_for_restore {
+        app_collect_finished_sync()
+        app_collect_finished_social_refresh(app)
+        return
+    }
     now: float64
     should_sync: s32 = 0
     dirty_due: s32 = 0
@@ -1373,4 +1382,31 @@ app_sync_pump :: (app: *InnerBreeze) {
         g_sync.dirty_sync_at = now + sync_input_quiet_seconds
     }
     app_apply_pending_sync_refresh(app, now)
+}
+
+// The caller retries on the next frame while a native worker finishes.
+// Mobile operations run on this thread and can be cancelled immediately.
+app_sync_stop_for_restore :: (app: *InnerBreeze) -> bool {
+    sync_paused_for_restore = true
+    #if ASYNC {
+        app_clear_disconnected_sync_work()
+        app_diary_blobs_end()
+        g_diary_pass_due = false
+        return true
+    } else {
+        app_collect_finished_social_refresh(app)
+        app_collect_finished_sync()
+        sync_lock()
+        idle := g_sync.sync_running == 0 && g_sync.social_refresh_running == 0
+        sync_unlock()
+        if !idle {
+            return false
+        }
+        app_clear_disconnected_sync_work()
+        return true
+    }
+}
+
+app_sync_resume_after_restore :: () {
+    sync_paused_for_restore = false
 }

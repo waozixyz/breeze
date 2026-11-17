@@ -84,6 +84,11 @@ class GameArchiveTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'invalid art digest'):
             required_games(self.bundle)
 
+    def test_truncated_zx28_header_is_rejected(self):
+        self.bundle.write_bytes(fixture_bundle({}, version=28))
+        with self.assertRaisesRegex(ValueError, 'truncated ZX 28 container'):
+            required_games(self.bundle)
+
     def test_exact_download_is_staged_without_stale_games(self):
         self.output.mkdir()
         (self.output / 'old.zx').write_bytes(b'old')

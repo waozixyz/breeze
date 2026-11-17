@@ -31,6 +31,14 @@ on:
         description: SHA-256 of the checked bundle; any other bytes are refused
         required: true
         type: string
+      package_path:
+        description: Directory containing the app's Ziran package
+        default: '.'
+        type: string
+      ledger_path:
+        description: Release ledger relative to that package directory
+        default: apps/versions.json
+        type: string
   # The node app follower publishes each new release through this same job.
   workflow_call:
     inputs:
@@ -53,6 +61,14 @@ on:
       sha256:
         description: SHA-256 of the checked bundle; any other bytes are refused
         required: true
+        type: string
+      package_path:
+        description: Directory containing the app's Ziran package
+        default: '.'
+        type: string
+      ledger_path:
+        description: Release ledger relative to that package directory
+        default: apps/versions.json
         type: string
 
 permissions:
@@ -77,6 +93,8 @@ jobs:
           COMMIT: ${{ inputs.commit }}
           TAG: ${{ inputs.tag }}
           SHA256: ${{ inputs.sha256 }}
+          PACKAGE_PATH: ${{ inputs.package_path }}
+          LEDGER_PATH: ${{ inputs.ledger_path }}
         run: |
           python3 - <<'PY'
           import os, re
@@ -85,6 +103,13 @@ jobs:
           for name, pattern in checks.items():
               if not re.fullmatch(pattern, os.environ[name]):
                   raise SystemExit(f'{name} is not valid')
+          path_pattern = r'[A-Za-z0-9_-][A-Za-z0-9._-]*(?:/[A-Za-z0-9_-][A-Za-z0-9._-]*)*'
+          for name in ('PACKAGE_PATH', 'LEDGER_PATH'):
+              value = os.environ[name]
+              if name == 'PACKAGE_PATH' and value == '.':
+                  continue
+              if not re.fullmatch(path_pattern, value):
+                  raise SystemExit(f'{name} is not a relative package path')
           PY
       - name: Fetch the release record, the publisher and the checked bundle
         env:
@@ -94,6 +119,7 @@ jobs:
           COMMIT: ${{ inputs.commit }}
           TAG: ${{ inputs.tag }}
           SHA256: ${{ inputs.sha256 }}
+          PACKAGE_PATH: ${{ inputs.package_path }}
         run: |
           set -eu
           work="$RUNNER_TEMP/node-app"
@@ -102,7 +128,7 @@ jobs:
           git -C "$work/source" fetch -q --depth 1 "https://github.com/$REPOSITORY.git" "$COMMIT"
           git -C "$work/source" checkout -q FETCH_HEAD
           # The Apps publisher at the commit the release's own lock pins.
-          apps=$(python3 -c 'import json,sys; print(next(p["commit"] for p in json.load(open(sys.argv[1]))["packages"] if p["url"].rstrip("/").removesuffix(".git").endswith("waozixyz/apps")))' "$work/source/ziran.lock")
+          apps=$(python3 -c 'import json,sys; print(next(p["commit"] for p in json.load(open(sys.argv[1]))["packages"] if p["url"].rstrip("/").removesuffix(".git").endswith("waozixyz/apps")))' "$work/source/$PACKAGE_PATH/ziran.lock")
           git init -q "$work/apps"
           git -C "$work/apps" fetch -q --depth 1 https://github.com/waozixyz/apps.git "$apps"
           git -C "$work/apps" checkout -q FETCH_HEAD
@@ -140,6 +166,8 @@ jobs:
           KEY_ID: ${{ vars.INBE_PACKAGE_KEY_ID }}
           TARGET: ${{ secrets.INBE_NODE_SSH_TARGET }}
           STORE: ${{ secrets.INBE_NODE_PACKAGE_STORE }}
+          PACKAGE_PATH: ${{ inputs.package_path }}
+          LEDGER_PATH: ${{ inputs.ledger_path }}
         run: |
           set -eu
           work="$RUNNER_TEMP/node-app"
@@ -147,7 +175,7 @@ jobs:
           export INBE_SSH_KNOWN_HOSTS="$RUNNER_TEMP/inbe-publisher/known_hosts"
           python3 "$work/apps/scripts/node_release.py" --store "$work/releases" --node-app "$APP" \
             --key "$RUNNER_TEMP/inbe-publisher/publisher.pem" --key-id "$KEY_ID" \
-            --publishers apps/publishers.json --app-ledger "$work/source/apps/versions.json" \
+            --publishers apps/publishers.json --app-ledger "$work/source/$PACKAGE_PATH/$LEDGER_PATH" \
             --bundle-directory "$work/bundles" \
             --ssh-target "$TARGET" --remote-store "$STORE" --verify-origin https://api.waozi.xyz
       - name: Remove signing material

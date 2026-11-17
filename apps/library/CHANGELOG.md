@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-11-16
+
+- Reopen the exact picture or text page where you stopped reading.
+- Download and open on the current Inner Breeze.
 - Read all 81 Tao Te Ching chapters with artwork on by default; show or hide images from the top toolbar while keeping your reading position.
 - Show chapter titles without numbers; with images on, each chapter opens on a page of its own with the illustration and title centered.
 

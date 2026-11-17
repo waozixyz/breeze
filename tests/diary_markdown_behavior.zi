@@ -2,15 +2,16 @@
 // inserted photos, the editor's preview, and the spelling check's masking.
 #import, file "../apps/diary/diary_markdown.zi";
 #import, file "../apps/diary/diary_spelling_mask.zi";
-Text :: #import "kryon/text";
+Text :: #import "kryon/text_props";
+Markdown :: #import "kryon/markdown_preview";
 #import "vec"
-#import "text"
+#import "std/text"
 #import "byte_text_linux"
 
 HASH :: "9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd"
 PLACE :: "photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg"
 
-preview: DiaryPreview;
+preview: Markdown.Preview;
 
 Applied :: (text: string, edit: DiaryEmbedEdit) -> string {
     out: Vec(u8)
@@ -41,8 +42,12 @@ Tone :: (index: s32, start: s32, end: s32, tone: s32) -> bool {
     preview.tones[index].end == end && preview.tones[index].tone == tone
 }
 
+Scan :: (result: *Markdown.Preview, text: string, cursor: s32, anchor: s32, editing: bool) {
+    Markdown.Scan(result, text, cursor, anchor, editing, DiaryResolvedImages(text))
+}
+
 Preview :: (text: string) {
-    DiaryPreviewScan(*preview, text, 0, 0, false)
+    Scan(*preview, text, 0, 0, false)
 }
 
 // Every list must satisfy Kryon's sorted, disjoint, non-empty rule.
@@ -186,10 +191,10 @@ CheckInsertion :: () -> s32 {
 CheckPreview :: () -> s32 {
     Preview("**bold** end")
     if preview.hidden_count != 2 || !Hidden(0, 0, 2) || !Hidden(1, 6, 8) || !Strong(0, 2, 6) { return 80 }
-    DiaryPreviewScan(*preview, "**bold** end", 3, 3, true)
+    Scan(*preview, "**bold** end", 3, 3, true)
     if preview.hidden_count != 0 || !Strong(0, 2, 6) { return 81 }
     // Only the caret's line shows its markers.
-    DiaryPreviewScan(*preview, "**a**\n**b**", 1, 1, true)
+    Scan(*preview, "**a**\n**b**", 1, 1, true)
     if preview.hidden_count != 2 || !Hidden(0, 6, 8) || !Hidden(1, 9, 11) || preview.strong_count != 2 { return 82 }
     Preview("*it* and _it_")
     if preview.italic_count != 2 || !Italic(0, 1, 3) || !Italic(1, 10, 12) || preview.hidden_count != 4 { return 83 }
@@ -209,26 +214,26 @@ CheckPreview :: () -> s32 {
     if preview.headings[0].level != 2 || !Hidden(0, 0, 3) || !Hidden(1, 8, 11) || !Strong(0, 3, 8) { return 89 }
     Preview("#hashtag")
     if preview.heading_count != 0 || preview.hidden_count != 0 { return 90 }
-    DiaryPreviewScan(*preview, "### Kept", 4, 4, true)
+    Scan(*preview, "### Kept", 4, 4, true)
     if preview.heading_count != 1 || preview.headings[0].level != 3 || preview.hidden_count != 0 { return 91 }
     Preview("- item\n12. next\n* star\n-5 degrees")
-    if preview.tone_count != 3 || !Tone(0, 0, 1, DIARY_TONE_MUTED) || !Tone(1, 7, 10, DIARY_TONE_MUTED) ||
-    !Tone(2, 16, 17, DIARY_TONE_MUTED) || preview.italic_count != 0 { return 92 }
+    if preview.tone_count != 3 || !Tone(0, 0, 1, Markdown.TONE_MUTED) || !Tone(1, 7, 10, Markdown.TONE_MUTED) ||
+    !Tone(2, 16, 17, Markdown.TONE_MUTED) || preview.italic_count != 0 { return 92 }
     Preview("> quoted *words*")
-    if preview.tone_count != 1 || !Tone(0, 0, 16, DIARY_TONE_MUTED) || !Italic(0, 10, 15) { return 93 }
+    if preview.tone_count != 1 || !Tone(0, 0, 16, Markdown.TONE_MUTED) || !Italic(0, 10, 15) { return 93 }
     link := "see [site](https://x.y/a_b_c) now"
     Preview(link)
-    if !Hidden(0, 4, 5) || !Hidden(1, 9, 29) || !Tone(0, 5, 9, DIARY_TONE_LINK) || preview.italic_count != 0 { return 94 }
+    if !Hidden(0, 4, 5) || !Hidden(1, 9, 29) || !Tone(0, 5, 9, Markdown.TONE_LINK) || preview.italic_count != 0 { return 94 }
     Preview("*see [x](y)*")
-    if !Italic(0, 1, 11) || !Tone(0, 6, 7, DIARY_TONE_LINK) || preview.hidden_count != 4 { return 95 }
+    if !Italic(0, 1, 11) || !Tone(0, 6, 7, Markdown.TONE_LINK) || preview.hidden_count != 4 { return 95 }
     // Emphasis never pairs across a link's edge.
     Preview("*a [b*](c)")
     if preview.italic_count != 0 { return 96 }
     Preview("[**bold link**](u)")
-    if !Strong(0, 3, 12) || !Tone(0, 1, 14, DIARY_TONE_LINK) { return 97 }
+    if !Strong(0, 3, 12) || !Tone(0, 1, 14, Markdown.TONE_LINK) { return 97 }
     // A photo inside a line hides its Markdown and keeps the line's text.
     Preview("an ![inline](diary:x.bin) image *stays*")
-    if preview.photo_count != 1 || preview.photos[0].cover || !Hidden(0, 3, 25) ||
+    if preview.image_count != 1 || preview.images[0].cover || !Hidden(0, 3, 25) ||
     !Hidden(1, 32, 33) || !Hidden(2, 38, 39) || !Italic(0, 33, 38) { return 98 }
     if !PreviewOrdered() { return 99 }
     return 0
@@ -237,22 +242,22 @@ CheckPreview :: () -> s32 {
 CheckPreviewPhotos :: () -> s32 {
     text := "# Day\n![one](diary:a.bin)\n**bold**\n![two](photos/2026/10/17/9f2c4e1a7b3d5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcd.jpg)"
     Preview(text)
-    if preview.photo_count != 2 || !preview.photos[0].cover || !preview.photos[1].cover { return 110 }
+    if preview.image_count != 2 || !preview.images[0].cover || !preview.images[1].cover { return 110 }
     if !Hidden(0, 0, 2) || !Hidden(1, 6, 25) || !Hidden(2, 26, 28) || !Hidden(3, 32, 34) || !Hidden(4, 35, 129) { return 111 }
     if !PreviewOrdered() { return 112 }
     // On the caret's line a photo keeps its source above it.
-    DiaryPreviewScan(*preview, text, 10, 10, true)
-    if preview.photo_count != 2 || preview.photos[0].cover || !preview.photos[1].cover { return 113 }
-    if preview.photos[0].embed.line_start != 6 || preview.photos[0].embed.line_end != 25 { return 114 }
+    Scan(*preview, text, 10, 10, true)
+    if preview.image_count != 2 || preview.images[0].cover || !preview.images[1].cover { return 113 }
+    if preview.images[0].embed.line_start != 6 || preview.images[0].embed.line_end != 25 { return 114 }
     for index: cast(s32)0..preview.hidden_count - 1 {
         if preview.hidden[index].start == 6 { return 115 }
     }
     // A selection over several lines shows all of them as typed.
-    DiaryPreviewScan(*preview, text, 0, 30, true)
-    if preview.photos[0].cover || preview.hidden_count != 1 || !Hidden(0, 35, 129) { return 116 }
+    Scan(*preview, text, 0, 30, true)
+    if preview.images[0].cover || preview.hidden_count != 1 || !Hidden(0, 35, 129) { return 116 }
     // Not editing, every line is shown styled.
-    DiaryPreviewScan(*preview, text, 10, 10, false)
-    if !preview.photos[0].cover { return 117 }
+    Scan(*preview, text, 10, 10, false)
+    if !preview.images[0].cover { return 117 }
     return 0
 }
 
@@ -263,7 +268,7 @@ CheckLimits :: () -> s32 {
     }
     text := BuilderFinish(many)
     Preview(text)
-    if preview.photo_count != DIARY_PREVIEW_PHOTOS || !preview.truncated || !PreviewOrdered() { return 130 }
+    if preview.image_count != Markdown.PREVIEW_IMAGES || !preview.truncated || !PreviewOrdered() { return 130 }
     // A line with more emphasis than one line holds is shown as typed.
     busy: Vec(u8)
     for index: cast(s32)1..40 {
@@ -279,49 +284,49 @@ CheckLimits :: () -> s32 {
 // hides away from the caret, and the photos follow the line in order.
 CheckInlinePhotos :: () -> s32 {
     Preview("Walk ![p](diary:p.bin) home")
-    if preview.photo_count != 1 || preview.photos[0].cover || preview.hidden_count != 1 ||
+    if preview.image_count != 1 || preview.images[0].cover || preview.hidden_count != 1 ||
     !Hidden(0, 5, 22) { return 170 }
     // Typed right after a photo, as after a click on it: the photo stays,
     // and on the caret's line its source shows above it.
     after := "![a](diary:a.bin) and more"
-    DiaryPreviewScan(*preview, after, 26, 26, true)
-    if preview.photo_count != 1 || preview.photos[0].cover || preview.hidden_count != 0 { return 171 }
+    Scan(*preview, after, 26, 26, true)
+    if preview.image_count != 1 || preview.images[0].cover || preview.hidden_count != 0 { return 171 }
     Preview(after)
-    if preview.photo_count != 1 || preview.photos[0].cover || !Hidden(0, 0, 17) { return 172 }
+    if preview.image_count != 1 || preview.images[0].cover || !Hidden(0, 0, 17) { return 172 }
     // Before it too.
     Preview("Look: ![a](diary:a.bin)")
-    if preview.photo_count != 1 || !Hidden(0, 6, 23) { return 173 }
+    if preview.image_count != 1 || !Hidden(0, 6, 23) { return 173 }
     // Back to back on a line of their own: the first in the line's place.
     pair := "![a](diary:a.bin)![b](diary:b.bin)"
     Preview(pair)
-    if preview.photo_count != 2 || !preview.photos[0].cover || preview.photos[1].cover ||
-    preview.photos[1].embed.line_start != 0 || preview.hidden_count != 1 || !Hidden(0, 0, 34) { return 174 }
-    DiaryPreviewScan(*preview, pair, 34, 34, true)
-    if preview.photo_count != 2 || preview.photos[0].cover || preview.hidden_count != 0 { return 175 }
+    if preview.image_count != 2 || !preview.images[0].cover || preview.images[1].cover ||
+    preview.images[1].embed.line_start != 0 || preview.hidden_count != 1 || !Hidden(0, 0, 34) { return 174 }
+    Scan(*preview, pair, 34, 34, true)
+    if preview.image_count != 2 || preview.images[0].cover || preview.hidden_count != 0 { return 175 }
     // In a list item and a quote, with their marks.
     Preview("- ![a](diary:a.bin)")
-    if preview.photo_count != 1 || preview.photos[0].cover || !Hidden(0, 2, 19) ||
-    !Tone(0, 0, 1, DIARY_TONE_MUTED) { return 176 }
+    if preview.image_count != 1 || preview.images[0].cover || !Hidden(0, 2, 19) ||
+    !Tone(0, 0, 1, Markdown.TONE_MUTED) { return 176 }
     Preview("> ![a](diary:a.bin) nice")
-    if preview.photo_count != 1 || !Hidden(0, 2, 19) || !Tone(0, 0, 24, DIARY_TONE_MUTED) { return 177 }
+    if preview.image_count != 1 || !Hidden(0, 2, 19) || !Tone(0, 0, 24, Markdown.TONE_MUTED) { return 177 }
     Preview("# Day ![a](diary:a.bin)")
-    if preview.photo_count != 1 || preview.heading_count != 1 || !Hidden(0, 0, 2) || !Hidden(1, 6, 23) { return 178 }
+    if preview.image_count != 1 || preview.heading_count != 1 || !Hidden(0, 0, 2) || !Hidden(1, 6, 23) { return 178 }
     // Text on the next line without a blank line is its own line.
     Preview("![a](diary:a.bin)\nHello *you*")
-    if preview.photo_count != 1 || !preview.photos[0].cover || !Hidden(0, 0, 17) ||
+    if preview.image_count != 1 || !preview.images[0].cover || !Hidden(0, 0, 17) ||
     !Italic(0, 25, 28) { return 179 }
     // Emphasis pairs around a photo, never inside its Markdown.
     Preview("*a ![p_x](diary:p.bin) b*")
-    if preview.photo_count != 1 || preview.italic_count != 1 || !Italic(0, 1, 24) || !PreviewOrdered() { return 180 }
+    if preview.image_count != 1 || preview.italic_count != 1 || !Italic(0, 1, 24) || !PreviewOrdered() { return 180 }
     // Titles and angle brackets hide with the rest of the image.
     Preview("x ![a](<diary:a.bin> \"Title\") y")
-    if preview.photo_count != 1 || !Hidden(0, 2, 29) { return 181 }
+    if preview.image_count != 1 || !Hidden(0, 2, 29) { return 181 }
     // Markup cut short is plain text and shows as typed.
     Preview("![a](diary:a.bi and on")
-    if preview.photo_count != 0 || preview.hidden_count != 0 { return 182 }
+    if preview.image_count != 0 || preview.hidden_count != 0 { return 182 }
     // Other images are text; a link next to a photo keeps its color.
     Preview("![x](https://example.com/x.png) [site](https://x.y) ![p](diary:p.bin)")
-    if preview.photo_count != 1 || !Tone(0, 33, 37, DIARY_TONE_LINK) || !PreviewOrdered() { return 183 }
+    if preview.image_count != 1 || !Tone(0, 33, 37, Markdown.TONE_LINK) || !PreviewOrdered() { return 183 }
     return 0
 }
 

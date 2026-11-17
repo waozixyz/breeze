@@ -4,6 +4,8 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/sync-recovery-zi-test
+raylib="$root/vendor-builds/linux/x86_64/raylib/libraylib.a"
+native_libraries=$(pkg-config --libs sdl2 gl libwebp libwebpdemux opus)
 
 # Serialize concurrent checks before replacing the stable generated output.
 exec 9>"$work.lock"
@@ -18,7 +20,10 @@ cd "$root"
     -o "$work/c" "$root/tests/sync_recovery_behavior.zi"
 # The app's SQLite amalgamation resolves the database calls that the kept
 # storage helpers reach; no database opens here, so they return early.
-"${CC:-cc}" -std=gnu11 -w -DZIRAN_BOUNDS_CHECK -ffunction-sections \
+# Keep the deterministic clock and silent logger at the foreign-symbol
+# boundary even when raylib's image routines are linked into the harness.
+"${CC:-cc}" -std=gnu11 -w -DZIRAN_BOUNDS_CHECK \
+    -DGetTime=__wrap_GetTime -DTraceLog=__wrap_TraceLog -ffunction-sections \
     -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -iquote "$work/c" \
     -I"$root/vendor-builds/sqlite" \
@@ -30,6 +35,7 @@ cd "$root"
         -e '/sync_collections.c$' -e '/sync_record_crypto.c$' -e '/sync_apply.c$' \
         -e '/sync_exchange.c$' -e '/storage_profile_stats.c$' \
         -e '/storage_export_csv.c$') \
-    -ldl -lpthread -lm -o "$work/test"
-env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
+    "$raylib" $native_libraries -Wl,--wrap=GetTime -Wl,--wrap=TraceLog \
+    -ldl -lpthread -lz -lm -latomic -o "$work/test"
+env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS "$work/test"
 echo "sync recovery Ziran/native test passed"

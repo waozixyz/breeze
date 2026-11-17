@@ -1,5 +1,8 @@
 c :: #system_library "c";
 #import, file "../platform/host_clock.zi";
+#if !#defined(PLATFORM_WEB) {
+    #import, file "../platform/break_clock.zi";
+}
 #import, file "../platform/raylib_host.zi";
 #import, file "../platform/host_input.zi";
 #import, file "../platform/host_window_state.zi";
@@ -226,10 +229,10 @@ break_fallback_key_seen :: () -> bool {
     return false
 }
 
-break_sample_activity :: (app: *InnerBreeze, idle_ms_out: *s32) -> s32 {
+break_sample_activity :: (app: *InnerBreeze, idle_ms_out: *s64) -> s32 {
     idle_ms := IdleMilliseconds()
     if idle_ms_out != null {
-        idle_ms_out.* = cast(s32)idle_ms
+        idle_ms_out.* = idle_ms
     }
 
     input: BreakActivityInput
@@ -494,6 +497,37 @@ app_breaks_window_click :: (app: *InnerBreeze, t: s32, x: s32, y: s32,
     }
 }
 
+app_breaks_observe_absence :: (app: *InnerBreeze, idle_ms: s64, active: s32) {
+    #if !WEB {
+        observed := BreakObserveAbsence(app.break_absence_clock,
+            BreakElapsedSeconds(), HostSeconds(), idle_ms, active,
+            app.break_lifecycle_paused,
+            app.breaks.reading_mode != 0 && app.breaks.reading_active != 0)
+        app.break_absence_clock = observed.clock
+        result := BreakNoteAbsence(app.breaks, observed)
+        app.breaks = result.engine
+        if result.took != 0 {
+            break_engine_close_window(app)
+            break_persist_daily_state(app)
+        }
+    }
+}
+
+// Lifecycle transitions are sampled even when Android stops drawing frames.
+#program_export
+app_breaks_note_lifecycle :: (app: *InnerBreeze, paused: bool) {
+    if app == null || paused == app.break_lifecycle_paused {
+        return
+    }
+    if app.breaks_enabled != 0 && practice_active(app) == null {
+        app_breaks_observe_absence(app, -1, 0)
+    } else {
+        app.break_absence_clock.initialized = false
+        app.break_absence_clock.idle_seconds = 0.0
+    }
+    app.break_lifecycle_paused = paused
+}
+
 app_breaks_update :: (app: *InnerBreeze) {
     if app == null {
         return
@@ -507,14 +541,18 @@ app_breaks_update :: (app: *InnerBreeze) {
     // elapsed-time base is dropped so no catch-up burst runs afterwards.
     if practice_active(app) != null {
         app.break_last_update_time = 0.0f
+        app.break_absence_clock.initialized = false
+        app.break_absence_clock.idle_seconds = 0.0
         return
     }
     if app.breaks_enabled == 0 {
+        app.break_absence_clock.initialized = false
+        app.break_absence_clock.idle_seconds = 0.0
         return
     }
 
     #if DESKTOP {
-        idle_ms: s32 = 0
+        idle_ms: s64 = 0
         active := break_sample_activity(app, *idle_ms)
         now := HostSeconds()
         elapsed: float32 = 0.0f
@@ -522,13 +560,7 @@ app_breaks_update :: (app: *InnerBreeze) {
 
         app.break_input_active = active
 
-        // Natural breaks straight from the OS idle counter: covers absences the
-        // capped catch-up ticks cannot see (loop stalls, suspend). The engine's
-        // per-timer latch keeps one idle period from taking a break twice.
-        if idle_ms >= 0 {
-            idle_sample := BreakNoteIdle(app.breaks, idle_ms / 1000)
-            app.breaks = idle_sample.engine
-        }
+        app_breaks_observe_absence(app, idle_ms, active)
 
         if app.break_last_update_time <= 0.0f {
             app.break_last_update_time = now

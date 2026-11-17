@@ -1,4 +1,5 @@
 c3 :: #system_library "c";
+app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c3;
 #import, file "../platform/host_input.zi";
 #import "byte_text_linux"
 #import, file "../platform/app_trace.zi";
@@ -41,6 +42,7 @@ TitleBar :: #import "kryon/title_bar";
 #import, file "../practices/practice_registry.zi";
 #import, file "../practices/practice_downloads.zi";
 #import, file "../practices/practice_offer.zi";
+#import, file "../../apps/practice/recovery.zi";
 #import, file "../practices/patterns/patterns_session_rules.zi";
 #import, file "practice_subscreen_layout.zi";
 #import "control_props"
@@ -504,6 +506,10 @@ practice_home_frame_for :: (app: *InnerBreeze, ids: []s32, listed: s32) -> Pract
     frame.tab_count = practice_home_tabs(app, *frame.tab_selected)
     frame.tab_focus = practice_home_kind_of(app.exercise_type) != practice_home_tab_shown
     PracticeOfferFill(app, app.exercise_type, *frame)
+    frame.draft_pending = PracticeDraftPending()
+    if frame.draft_pending {
+        frame.status = ifx practice_recovery_save_failed then LocaleText("results_write_failed") else ""
+    }
     return frame
 }
 
@@ -553,7 +559,12 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
     app.practice_home_bounds_start = frame.start
     app.practice_home_bounds_manual = frame.manual
     app.practice_home_bounds_config = frame.config
-    if frame.action == PRACTICE_HOME_START {
+    if frame.action == PRACTICE_HOME_RECOVERY_SAVE || frame.action == PRACTICE_HOME_RECOVERY_DISCARD {
+        practice_recovery_save_failed = !PracticeDraftDecide(frame.action == PRACTICE_HOME_RECOVERY_SAVE)
+        if !practice_recovery_save_failed {
+            unused app_auto_sync(app)
+        }
+    } else if frame.action == PRACTICE_HOME_START {
         // One practice runs at a time: Start brings back the practice that
         // runs in its small window instead of starting another over it.
         if app_session_window_restore(app) {
@@ -826,3 +837,5 @@ start :: (app: *InnerBreeze) {
     unused practice_screen_draw_home_hero(app)
     End(CurrentApp().ui.session)
 }
+
+practice_recovery_save_failed: bool;

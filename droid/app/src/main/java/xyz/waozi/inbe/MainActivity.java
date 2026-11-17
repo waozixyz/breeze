@@ -67,6 +67,14 @@ public class MainActivity extends NativeActivity {
     private volatile int pictureWindowState;
     private volatile boolean pictureWindowEnabled;
     private boolean pictureWindowEntering;
+    // True from opening one of the app's own screens in this task (a photo
+    // or file picker, export, the QR scanner, a share sheet) until the app
+    // resumes. That is not the user leaving, so the practice must not float:
+    // the floating window would move into a task of its own, the picker would
+    // close into an empty task, and reopening the app from Recents would
+    // start a second activity on top of the running app. Native code may open
+    // a picker from the frame thread, hence volatile.
+    private volatile boolean openingOwnScreen;
     private boolean activityStopped;
     private int pictureWindowGeneration;
     // Flips each time the floating window opens back into the app, so native
@@ -111,7 +119,8 @@ public class MainActivity extends NativeActivity {
         PictureInPictureParams.Builder params = new PictureInPictureParams.Builder()
                 .setAspectRatio(new Rational(4, 5));
         if (Build.VERSION.SDK_INT >= 31) {
-            params.setAutoEnterEnabled(pictureWindowEnabled && allowsPictureWindow());
+            params.setAutoEnterEnabled(pictureWindowEnabled && !openingOwnScreen
+                    && allowsPictureWindow());
         }
         return params.build();
     }
@@ -133,7 +142,8 @@ public class MainActivity extends NativeActivity {
 
     private void enterPictureWindow(String reason) {
         if (!supportsPictureWindow() || !pictureWindowEnabled || pictureWindowEntering ||
-                isInPictureInPictureMode() || isFinishing() || !allowsPictureWindow()) {
+                openingOwnScreen || isInPictureInPictureMode() || isFinishing() ||
+                !allowsPictureWindow()) {
             return;
         }
         pictureWindowEntering = true;
@@ -156,6 +166,38 @@ public class MainActivity extends NativeActivity {
         // third-party launcher or another app comes here instead.
         if (Build.VERSION.SDK_INT >= 26) {
             enterPictureWindow("onUserLeaveHint");
+        }
+    }
+
+    // Every startActivity and startActivityForResult call ends here. A screen
+    // that opens in this task (no NEW_TASK or NEW_DOCUMENT flag) holds the
+    // floating window until the app resumes; other apps opened in their own
+    // tasks still let a running practice float.
+    @Override
+    public void startActivityForResult(Intent intent, int requestCode, Bundle options) {
+        boolean holding = opensInThisTask(intent);
+        if (holding) {
+            holdPictureWindow(true);
+        }
+        try {
+            super.startActivityForResult(intent, requestCode, options);
+        } catch (RuntimeException error) {
+            if (holding) {
+                holdPictureWindow(false);
+            }
+            throw error;
+        }
+    }
+
+    static boolean opensInThisTask(Intent intent) {
+        int ownTask = Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_NEW_DOCUMENT;
+        return intent != null && (intent.getFlags() & ownTask) == 0;
+    }
+
+    private void holdPictureWindow(boolean hold) {
+        openingOwnScreen = hold;
+        if (supportsPictureWindow() && !isFinishing() && !isDestroyed()) {
+            setPictureInPictureParams(pictureWindowParams());
         }
     }
 
@@ -377,7 +419,7 @@ public class MainActivity extends NativeActivity {
     private native void nativeSetSystemDark(int dark);
     private native void nativeSetOrientation(int orientation);
     private native void nativeWakeLockReady();
-    private native int nativeSyncLifecycleState(boolean paused, boolean indicatorVisible);
+    private native int nativeSyncLifecycleState(boolean timerBackgrounded, boolean activityPaused);
     private native void nativeImportSelectedFile(int kind, String path);
     private native void nativeImportCancelled(int kind);
     private native void nativeRuntimeAssetDownloadSucceeded(long handle, long bytes, int httpStatus);
@@ -1470,7 +1512,7 @@ public class MainActivity extends NativeActivity {
         boolean indicatorVisible = SessionForegroundService.hasVisibleIndicator(this);
         boolean pictureVisible = pictureWindowEntering || (pictureWindowState & 2) != 0;
         backgroundExecutionActive = nativeSyncLifecycleState(
-                activityPaused && !pictureVisible, indicatorVisible) != 0;
+                activityPaused && !pictureVisible, activityPaused) != 0;
 
         Log.d(TAG, reason + ": activityPaused=" + activityPaused
             + " indicatorVisible=" + indicatorVisible
@@ -1515,6 +1557,7 @@ public class MainActivity extends NativeActivity {
         NotificationPresence.setActivityVisible(true);
         activityPaused = false;
         pictureWindowEntering = false;
+        openingOwnScreen = false;
         refreshPictureWindowState();
         if (supportsPictureWindow()) {
             setPictureInPictureParams(pictureWindowParams());

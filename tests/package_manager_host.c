@@ -25,6 +25,7 @@ static EmbeddedAssetEntry publisher;
 static atomic_bool block_hash;
 static atomic_bool hash_started;
 extern int32_t FixtureHabitsSequence(void);
+extern bool FixtureRemovePayload(String digest);
 
 static double monotonic_seconds(void) {
     struct timespec now;
@@ -348,9 +349,7 @@ int32_t RunPackageManagerFixture(void) {
     }
     deny_approval = false;
     assert(package_manager_PackageStatus(4) == 3 && !package_history_PackageRollbackPinned(4));
-    String rollback_payload = package_manager_PackagePayloadPath(4, older_digest, StringLiteral(".zx"));
-    assert(unlink((const char *)rollback_payload.data) == 0);
-    free((void *)rollback_payload.data);
+    assert(FixtureRemovePayload(older_digest));
     assert(package_history_PackageRollbackRequest(4, older_version, older_digest, StringLiteral("fixture-account")));
     before_history = starts;
     pump();

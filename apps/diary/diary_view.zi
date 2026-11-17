@@ -8,6 +8,8 @@ Press :: #import "kryon/press";
 Scroll :: #import "kryon/scroll";
 Text :: #import "kryon/text";
 TextArea :: #import "kryon/text_area";
+MarkdownEditor :: #import "kryon/markdown_editor";
+Markdown :: #import "kryon/markdown_preview";
 #import "text_measure"
 #import "control_props"
 #import "drawing_props"
@@ -79,11 +81,7 @@ DiaryObservedFrame :: () -> DiaryUiFrame {
 // slanted, headings are larger, links and list and quote marks take their
 // colors, and a photo's embed line shows the photo in its place. On the
 // caret's line the Markdown shows as typed, with the photo under it.
-DIARY_HEADING_SCALES: [6]float32 = .[1.6, 1.4, 1.25, 1.1, 1.0, 1.0];
-editor_preview: DiaryPreview;
-editor_blocks: [DIARY_PREVIEW_PHOTOS]TextArea.Block;
-editor_lines: [DIARY_PREVIEW_HEADINGS]TextArea.Line;
-editor_colors: [DIARY_PREVIEW_TONES]TextArea.ColorSpan;
+editor_blocks: [Markdown.PREVIEW_IMAGES + 1]TextArea.Block;
 
 // A copy the view owns of text a host call answered. The host answers in its
 // own buffers, which its next call may overwrite.
@@ -106,43 +104,19 @@ DiaryPhotoHeight :: (width: float32) -> s32 {
     return height
 }
 
-DiaryEditorStyle :: (area: *TextArea.Props, text: string, editing: bool) {
-    DiaryPreviewScan(*editor_preview, text, area.cursor, area.anchor, editing)
-    area.hidden = editor_preview.hidden[:editor_preview.hidden_count]
-    area.strong = editor_preview.strong[:editor_preview.strong_count]
-    area.italic = editor_preview.italic[:editor_preview.italic_count]
-    colors: s32 = 0
-    for index: cast(s32)0..editor_preview.tone_count - 1 {
-        tone := editor_preview.tones[index]
-        color := ifx tone.tone == DIARY_TONE_LINK then frame.link_color else frame.muted_color
-        if color == cast(u32)0 {
-            continue
-        }
-        editor_colors[colors] = TextArea.ColorSpan.{.start = tone.start, .end = tone.end, .color = color}
-        colors += 1
-    }
-    area.colors = editor_colors[:colors]
-    lines: s32 = 0
-    for index: cast(s32)0..editor_preview.heading_count - 1 {
-        heading := editor_preview.headings[index]
-        scale := DIARY_HEADING_SCALES[heading.level - 1]
-        if scale <= 1.0 {
-            continue
-        }
-        editor_lines[lines] = TextArea.Line.{.start = heading.start, .scale = scale}
-        lines += 1
-    }
-    area.lines = editor_lines[:lines]
+DiaryEditorProps :: (area: TextArea.Props) -> MarkdownEditor.Props {
+    props: MarkdownEditor.Props = .{.area = area, .muted_color = frame.muted_color,
+        .link_color = frame.link_color, .images = DiaryResolvedImages(area.value)}
     height := DiaryPhotoHeight(area.bounds.width)
     unavailable := AppLocale("diary_photo_unavailable")
-    for index: cast(s32)0..editor_preview.photo_count - 1 {
-        block := editor_preview.photos[index]
-        embed := block.embed
+    for index: cast(s32)0..cast(s32)props.images.count - 1 {
+        embed := DiaryEmbedAt(area.value, props.images[index].start)
         editor_blocks[index] = TextArea.Block.{.start = embed.line_start, .height = height,
-            .cover = block.cover, .image = DiaryKept(DiaryPhoto(DiaryEmbedDestination(text, embed))),
+            .image = DiaryKept(DiaryPhoto(DiaryEmbedDestination(area.value, embed))),
             .label = unavailable}
     }
-    area.blocks = editor_blocks[:editor_preview.photo_count]
+    props.area.blocks = editor_blocks[:props.images.count]
+    return props
 }
 
 // The day's gallery is a separate view, opened by its toolbar icon. It
@@ -527,8 +501,7 @@ DiaryView :: (message: DiaryMessage, observed: DiaryUiFrame, today: Date) -> Dia
     area.max_bytes = 2147483646
     area.max_codepoints = 2147483646
     area.input = frame.input
-    DiaryEditorStyle(*area, state.text, frame.focused && !area.read_only)
-    edited := TextArea.Draw(frame.session, area)
+    edited := MarkdownEditor.Draw(frame.session, DiaryEditorProps(area))
     state.cursor = edited.cursor
     state.anchor = edited.anchor
     frame.scroll = edited.scroll_y

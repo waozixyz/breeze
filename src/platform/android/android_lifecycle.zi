@@ -14,14 +14,19 @@ android_timer_deactivate :: () #foreign c;
 app_audio_ensure_ready :: (app: *InnerBreeze) #foreign c;
 meditation_music_start_download :: (app: *InnerBreeze) #foreign c;
 save_settings :: (app: *InnerBreeze) #foreign c;
+LifecycleNoteBreaks :: (app: *InnerBreeze,
+    paused: bool) #foreign c "app_breaks_note_lifecycle";
+LifecycleCheckpointDraft :: () #foreign c "PracticeDraftPause";
 
 background_execution_active: s32 = 0;
 auto_paused_for_lifecycle: s32 = 0;
+activity_was_paused: bool;
 
 #program_export
 android_lifecycle_reset :: () {
     background_execution_active = 0
     auto_paused_for_lifecycle = 0
+    activity_was_paused = false
 }
 
 android_play_in_background :: () -> s32 {
@@ -66,19 +71,23 @@ android_resume_session :: () {
     app.backgrounded = 0
 }
 
-// The activity still reports whether the session notification is visible,
-// but it no longer decides anything: a hidden or dismissed notification
-// must never pause a practice.
+// Picture-in-picture keeps the timer in the foreground, but Android still
+// pauses the activity. Preserve its latest draft before either kind of pause.
 #program_export
-android_sync_lifecycle :: (activity_paused: s32,
-    indicator_visible: s32) -> s32 {
-    unused indicator_visible
+android_sync_lifecycle :: (timer_backgrounded: s32,
+    activity_paused: s32) -> s32 {
+    paused := activity_paused != 0 || timer_backgrounded != 0
+    if paused && !activity_was_paused {
+        LifecycleCheckpointDraft()
+    }
+    activity_was_paused = paused
     session_paused: s32 = 0
     app := CurrentApp()
     if app != null {
+        LifecycleNoteBreaks(app, timer_backgrounded != 0)
         session_paused = app.session_paused
     }
-    decision := practice_lifecycle_decision(1, activity_paused,
+    decision := practice_lifecycle_decision(1, timer_backgrounded,
         android_play_in_background(), background_execution_active,
         session_paused, auto_paused_for_lifecycle)
 

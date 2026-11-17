@@ -121,6 +121,8 @@ def zx28_assets_section(data):
 
     Ziran's ASSEMBLY/zx-executable-format.md: a 64-byte header, then 32-byte
     directory records in increasing kind order; the file length is exact."""
+    if len(data) < 64:
+        raise ValueError('truncated ZX 28 container')
     header_size, record_size = struct.unpack_from('<II', data, 8)
     count = struct.unpack_from('<I', data, 32)[0]
     length, directory = struct.unpack_from('<QQ', data, 40)

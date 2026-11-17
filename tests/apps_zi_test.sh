@@ -8,6 +8,7 @@ bundles=${APPS_TEST_BUNDLES:-$root/build}
 # Apps the node offers reach the shared-list service, which links curl; the
 # system library is linked by name where there is no development symlink.
 curl=${CURL_LIBRARY:-$(ls /usr/lib/x86_64-linux-gnu/libcurl.so.4 2>/dev/null || echo -lcurl)}
+webp=$(pkg-config --libs libwebp libwebpdemux)
 mkdir -p "$work/generated" "$work/wrong-record" "$work/wrong-scalar"
 if [ -z "${APPS_TEST_BUNDLES:-}" ]; then
     sh "$root/scripts/build-apps.sh" "$ziran"
@@ -71,7 +72,7 @@ cp "$bundles/apps/habits.zx" "$bundles/apps/practices.zx" "$work/invalid-nested/
     -Wl,--wrap=package_manager_PackageInstalledBytes -Wl,--wrap=package_manager_PackageRevisionFor \
     -Wl,--wrap=package_files_PackageRead \
     -Wl,--wrap=package_manager_PackageTrustedRelease \
-    -Wl,--gc-sections -ldl -lpthread -lz -lm "$curl" -o "$work/test"
+    -Wl,--gc-sections -ldl -lpthread -lz -lm "$curl" $webp -o "$work/test"
 # All data and fixture upgrade paths are disposable. No owner profile is used.
 data=$(mktemp -d "$work/profile.XXXXXX")
 trap 'rm -rf "$data"' EXIT HUP INT TERM

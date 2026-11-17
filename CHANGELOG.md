@@ -2,12 +2,9 @@
 
 ## [Unreleased]
 
-- The Library opens each Tao Te Ching chapter with its own picture page; hide images from the reader toolbar.
-- Photos installs from Apps; Lumi previews full list feedback once; Lists adds custom long tasks and steadier swipe actions.
-- Radio becomes a separate download with one tactile cabinet for power, volume, tuning and station presets.
-- Switch practices smoothly; choose from six astral exercises with smaller voice packs and ten interface languages.
-- One modern appearance with custom CSS; a simpler About list shows Core and app versions.
-- Claim coins in the Habits shop every day, with a bigger seventh day in a row.
+- Recover unfinished practices, restore a last good data copy and reset break timers after time away; adding a photo during practice keeps the app stable.
+- Switch practices smoothly, choose an astral exercise, and claim daily coins beside the Habits balance.
+- Read Tao Te Ching art on its own page; find Photos and Radio in Apps, with clearer lists, feedback and appearance controls.
 
 ## [2.1.63] - 2026-11-05
 

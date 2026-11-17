@@ -3,6 +3,7 @@
 #import, file "../src/app/sync_safety.zi";
 #import, file "../src/app/sync_retry.zi";
 #import, file "../src/app/app_types.zi";
+#import, file "../src/app/assets.zi";
 #import, file "../src/storage/sync_status.zi";
 #import, file "../src/storage/sync_result.zi";
 using SyncResult;
@@ -17,6 +18,60 @@ recovery_set_enabled :: (enabled: s32) #foreign recovery_c;
 recovery_set_queue :: (queued: s64, repair: s32, full_upload: s32) #foreign recovery_c;
 recovery_status_reads :: () -> s32 #foreign recovery_c;
 recovery_set_url :: (valid: bool) #foreign recovery_c;
+Notification :: #import "kryon/notification";
+
+// Worker collection must be callable without a desktop or a real profile.
+#program_export "NotificationAllowedHost"
+RecoveryNotificationsAllowed :: () -> bool {
+    return false
+}
+
+#program_export "NotificationWindowFocusedHost"
+RecoveryWindowFocused :: () -> bool {
+    return true
+}
+
+#program_export "NotificationSendHost"
+RecoverySendNotification :: (props: Notification.NotificationProps) -> bool {
+    unused props
+    return false
+}
+
+#program_export "app_web_platform"
+RecoveryWebPlatform :: () -> s32 {
+    return 0
+}
+
+#program_export "asset_entry_at"
+RecoveryAssetAt :: (index: usize) -> *EmbeddedAssetEntry {
+    unused index
+    return null
+}
+
+#program_export "asset_entry_total"
+RecoveryAssetCount :: () -> usize {
+    return 0
+}
+
+#program_export "storage_set_social_cache_json"
+RecoverySaveSocialCache :: (kind: string, json: string) -> s32 {
+    unused kind
+    unused json
+    return 0
+}
+
+#program_export "storage_get_social_cache_json"
+RecoveryLoadSocialCache :: (kind: string, output: *u8, capacity: s64) -> s32 {
+    unused kind
+    if output != null && capacity > 0 {
+        output[0] = cast(u8)0
+    }
+    return 0
+}
+
+// The UI's full state is larger than a native thread stack. Keep this
+// disposable test profile in static storage, as the application does.
+app: InnerBreeze;
 
 Retry :: (attempt: s32) -> bool {
     return SettingsStoreInt("sync_retry_attempt", attempt)
@@ -117,7 +172,6 @@ Answer :: () -> s32 {
 
     // A payload that could not be built retries on its schedule, Sync now
     // tries at once, and the old failure is not reported as a success.
-    app: InnerBreeze
     app_sync_record_result(SYNC_STORAGE_FULL)
     if !g_sync.retry_requested || !app_sync_retry_ready(SYNC_STORAGE_FULL, now) { return 60 }
     g_sync.retry_requested = false
@@ -187,5 +241,26 @@ Answer :: () -> s32 {
     recovery_set_url(false)
     if app_sync_status_key() != "sync_server_url_invalid" { return 51 }
     recovery_set_url(true)
+    // Restoring waits for both native workers before storage can close.
+    g_sync.sync_running = 1
+    if app_sync_stop_for_restore(*app) || !sync_paused_for_restore {
+        return 64
+    }
+    g_sync.sync_running = 0
+    g_sync.social_refresh_running = 1
+    if app_sync_stop_for_restore(*app) || !sync_paused_for_restore {
+        return 65
+    }
+    g_sync.social_refresh_running = 0
+    g_sync.retry_requested = true
+    g_sync.social_refresh_pending = 1
+    if !app_sync_stop_for_restore(*app) || !sync_paused_for_restore ||
+    g_sync.retry_requested || g_sync.social_refresh_pending != 0 {
+        return 66
+    }
+    app_sync_resume_after_restore()
+    if sync_paused_for_restore || app_request_sync(*app) == 0 || !g_sync.retry_requested {
+        return 67
+    }
     return 0
 }
