@@ -273,6 +273,10 @@ shared-progress-ui-test: $(TARGET)
 practice-images-ui-test: $(TARGET)
 	@sh tests/practice_images_ui_test.sh $(abspath $(TARGET))
 
+.PHONY: apps-diary-editing-test
+apps-diary-editing-test: $(TARGET)
+	sh tests/apps_diary_test.sh $(abspath $(TARGET)) --editing-only
+
 .PHONY: apps-diary-test
 apps-diary-test: $(TARGET)
 	sh tests/apps_diary_test.sh $(abspath $(TARGET))
