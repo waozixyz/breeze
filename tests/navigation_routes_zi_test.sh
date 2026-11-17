@@ -26,7 +26,7 @@ for input in source saved; do
     output=$work/$input
     rm -rf "$output/c" "$output/go"
     mkdir -p "$output/c" "$output/go"
-    "$bin/zi2zx" bundle --root "$module_root" \
+    "$bin/zi2zx" --root "$module_root" \
         --module-path "$module_path" \
         --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \

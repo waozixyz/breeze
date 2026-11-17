@@ -22,8 +22,8 @@ fi
 # Emscripten's PATH entry holds a cmake directory, which make's own command
 # lookup would try to run instead of the cmake program. The server generates
 # its Go with Ziran, Breeze's own toolchain.
-make /src/build/ziran-toolchain/bin/zi2c
+make /src/build/packages/ziran/build/bin/zi2c
 make -C "$server" BUILD_DIR="$server/build" CMAKE="$(command -v cmake)" \
-    ZIRAN=/src/build/ziran-toolchain/bin/ziran build
+    ZIRAN=/src/build/packages/ziran/build/bin/ziran build
 DAOCHI_BIN="$server/daochi" make sync-server-test
 git -c safe.directory="$server" -C "$server" diff --exit-code "$commit" -- .

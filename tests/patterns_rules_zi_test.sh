@@ -9,7 +9,7 @@ source=$root/tests/patterns_rules_behavior.zi
 
 "$bin/zi2zir" --check-only --root "$root/tests" \
     --module-path "$root/src" "$source"
-"$bin/zi2zx" bundle --root "$root/tests" \
+"$bin/zi2zx" --root "$root/tests" \
     --module-path "$root/src" \
     --entry patterns_rules_behavior:Answer \
     -o "$work/patterns.zx" "$source"

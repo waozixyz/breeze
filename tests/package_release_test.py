@@ -34,7 +34,7 @@ def main():
     work = Path(os.environ.get('INBE_PACKAGE_TEST_OUTPUT', str(ROOT / "build/package-release-test")))
     work.mkdir(parents=True, exist_ok=True)
     toolchain = options.toolchain or ROOT / 'build/packages/ziran'
-    runtime = options.runtime or ROOT / 'build/ziran-toolchain/libziran.a'
+    runtime = options.runtime or toolchain / 'build/libziran.a'
     def stage(*arguments):
         return release_tool.stage(*arguments, build_directory=options.bundle_build_dir)
     environment = {key: value for key, value in os.environ.items()

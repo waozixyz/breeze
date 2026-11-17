@@ -23,7 +23,7 @@ for input in source saved; do
     fi
     output=$work/$input
     mkdir -p "$output/c" "$output/go"
-    "$bin/zi2zx" bundle --root "$module_root" \
+    "$bin/zi2zx" --root "$module_root" \
         --module-path "$app_path" \
         --entry bottom_nav_policy_behavior:Answer \
         -o "$output/policy.zx" "$file"

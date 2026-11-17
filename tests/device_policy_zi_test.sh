@@ -12,12 +12,12 @@ mkdir -p "$work/ir" "$work/c"
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
     -o "$work/ir" "$source"
 
-"$bin/zi2zx" bundle --root "$root/tests" \
+"$bin/zi2zx" --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
     --entry device_policy_behavior:Answer \
     -o "$work/source.zx" "$source"
-"$bin/zi2zx" bundle --root "$work/ir" --module-path "$work/ir" \
+"$bin/zi2zx" --root "$work/ir" --module-path "$work/ir" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
     --entry device_policy_behavior:Answer \

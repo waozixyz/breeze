@@ -26,7 +26,7 @@ for input in source saved; do
     output=$work/$input
     rm -rf "$output/c" "$output/go"
     mkdir -p "$output/c" "$output/go"
-    "$bin/zi2zx" bundle --root "$module_root" \
+    "$bin/zi2zx" --root "$module_root" \
         --module-path "$library_path" --module-path "$practice_path" \
         --entry breath_timing_behavior:Answer \
         -o "$output/breath.zx" "$file"

@@ -79,7 +79,7 @@ def compile_renderer():
     generated.mkdir(parents=True, exist_ok=True)
     subprocess.run(["make", "build-laws"], cwd=ROOT, check=True)
     subprocess.run([
-        str(ROOT / "build/ziran-toolchain/bin/zi2c"), "--no-main", "--root", "scripts",
+        str(ROOT / "build/packages/ziran/build/bin/zi2c"), "--no-main", "--root", "scripts",
         "--module-path", "src", "--module-path", "build/packages/ziran/std",
         "-o", str(generated), "scripts/sun_salutation_preview.zi",
     ], cwd=ROOT, check=True)
@@ -88,7 +88,7 @@ def compile_renderer():
         os.environ.get("CC", "cc"), "-std=c11", "-O2", "-shared", "-fPIC",
         "-I" + str(ROOT / "build/packages/ziran/include"), "-I" + str(generated),
         *map(str, sorted(generated.glob("*.c"))),
-        str(ROOT / "build/ziran-toolchain/libziran.a"), "-lm", "-lz", "-o", str(library),
+        str(ROOT / "build/packages/ziran/build/libziran.a"), "-lm", "-lz", "-o", str(library),
     ], cwd=ROOT, check=True)
     return library
 

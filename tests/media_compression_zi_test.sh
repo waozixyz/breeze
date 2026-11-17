@@ -16,11 +16,11 @@ mkdir -p "$work/generated" "$work/data"
 python3 -B "$root/tests/make_media_compression_fixture.py" "$work/input.png"
 unset DISPLAY WAYLAND_DISPLAY WAYLAND_SOCKET XAUTHORITY DBUS_SESSION_BUS_ADDRESS DBUS_SYSTEM_BUS_ADDRESS SESSION_MANAGER XDG_RUNTIME_DIR
 export ZIRAN_DESKTOP_RECOVERY=0 HARMONY_DESKTOP_RECOVERY=0 YUE_DESKTOP_RECOVERY=0
-"$ziran" build --target=c --define PLATFORM_DESKTOP --define AVIF_RAYLIB --define MEDIA_COMPRESSION_REAL_CODEC --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" \
+# Project mode resolves package imports through their exports (such as
+# kryon/text_area for the Lumi frame), as the app build does.
+"$ziran" build --project --offline --target=c --define PLATFORM_DESKTOP --define AVIF_RAYLIB \
+    --define MEDIA_COMPRESSION_REAL_CODEC --root "$root" \
+    --module-path "$root/tests" \
     --entry media_compression_behavior:Check -o "$work/generated" \
     "$root/tests/media_compression_behavior.zi" "$root/tests/media_compression_test_host.zi" "$root/src/app/app_clock_host.zi"
 cat > "$work/generated/main.c" <<'C'

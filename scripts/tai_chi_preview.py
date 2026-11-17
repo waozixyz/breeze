@@ -208,8 +208,21 @@ def preview_course(data):
     return result.getvalue(), spoken
 
 
+def app_locale_codes():
+    """Language codes the app ships, from locales/index.txt."""
+    codes = set()
+    for line in (ROOT / 'locales/index.txt').read_text(encoding='utf-8').splitlines():
+        if '|' in line:
+            codes.add(line.split('|', 1)[0])
+    return codes
+
+
 def stage_preview(media, assets):
-    """Copy only existing free clips; never generate or publish narration."""
+    """Copy only existing free clips; never generate or publish narration.
+
+    Practice media can carry voices for languages the app does not ship;
+    only the app's own locales are staged.
+    """
     source = media / 'taichi'
     target = assets / 'practices/taichi-preview'
     target.mkdir(parents=True, exist_ok=True)
@@ -221,9 +234,12 @@ def stage_preview(media, assets):
     with zipfile.ZipFile(target / 'course.zip', 'w') as archive:
         archive.writestr(member, data, compresslevel=9)
     shutil.copyfile(source / 'flat-edge.png', target / 'flat-edge.png')
+    languages = app_locale_codes()
     for voice in ('voice', 'voice-male'):
         for language in sorted((source / voice).glob('*')):
             if not language.is_dir():
+                continue
+            if language.name not in languages:
                 continue
             copied = 0
             for key in sorted(spoken):
