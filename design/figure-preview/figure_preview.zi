@@ -1,0 +1,411 @@
+// A live preview of the shared practice figure: pick a practice and one of
+// its items, play, pause, scrub or slow it down, turn and zoom around her,
+// and switch the watercolor finish off to judge the bare surface. The poses
+// are the practices' own (preview_practices.zi); the character is the
+// practices package's figure.
+//
+//   figure_preview                  opens the window
+//   figure_preview --capture DIR    writes the review frames to DIR and exits
+//
+// FIGURE_PRACTICES names a practices checkout; otherwise the preview asks
+// `ziran pkg path practices --locked` beside its own manifest.
+#import "figure_math"
+#import "figure_joints"
+#import "figure_paint"
+#import "preview_practices"
+#import "preview_capture"
+#import "preview_flat"
+#import "kryon/scene"
+#import "kryon/session"
+#import "kryon/geometry"
+#import "kryon/frame_snapshot"
+#import "kryon/style_sheet"
+#import "kryon/bitmap_image"
+#import "kryon/desktop_runtime"
+#import "kryon/watercolor"
+#import "kryon/drawing_props"
+Desktop :: #import "kryon/desktop_loop";
+Box :: #import "kryon/box";
+Button :: #import "kryon/button";
+Dropdown :: #import "kryon/dropdown";
+Image :: #import "kryon/image";
+Segmented :: #import "kryon/segmented_control";
+Slider :: #import "kryon/slider";
+Text :: #import "kryon/text";
+Toggle :: #import "kryon/toggle";
+Raster :: #import "std/image";
+Timer :: #import "std/timer_linux";
+#import "std/c_string"
+#import "std/byte_text_linux"
+#import "std/math"
+#import "std/number_text"
+#import "std/process_capture_linux"
+#import "std/vec"
+
+libc :: #system_library "libc";
+PreviewGetEnvironment :: (name: *u8) -> *u8 #foreign libc "getenv";
+PreviewWorkingDirectory :: (output: *u8, size: usize) -> *u8 #foreign libc "getcwd";
+PreviewChangeDirectory :: (path: *u8) -> s32 #foreign libc "chdir";
+
+PreviewState :: struct {
+    practice: s32
+    item: s32
+    seconds: float64
+    playing: bool
+    speed: float64
+    watercolor: bool
+    // Shows Breeze's current flat figure instead, for comparison.
+    current: bool
+    turn: float64
+    lift: float64
+    zoom: float64
+    dragging: bool
+    drag_x: float32
+    drag_y: float32
+    pooling: float32
+    contour: float32
+    grain: float32
+}
+
+preview_state: PreviewState = .{playing = true, speed = 1.0, watercolor = true, zoom = 1.0,
+    pooling = 0.6, contour = 0.7, grain = 0.3};
+preview_media: FigureMedia;
+preview_library: PreviewLibrary;
+preview_body: FigurePainter;
+preview_twin: FigurePainter;
+preview_picture: Raster.Image;
+// Two textures, used in turn: Kryon redraws an image when its texture
+// changes, not when the same texture's pixels are updated.
+preview_textures: [2]Texture2D;
+preview_shown: s32;
+preview_owner: Session;
+preview_painted_key: u64;
+preview_failed: bool;
+preview_clock: s64;
+// Changing labels alternate between two buffers, so each frame's text is
+// its own and never an edit of the last frame's.
+preview_page: s32;
+preview_time_text: [2][32]u8;
+preview_status_text: [2][96]u8;
+preview_frame_ms: float64;
+preview_practices_path: [1024]u8;
+preview_practices_length: s64;
+
+main :: (argc: s32, argv: **u8) -> s32 {
+    practices := PreviewPracticesPath()
+    if practices.count == 0 {
+        print("figure preview: no practices checkout; set FIGURE_PRACTICES or lock the package\n")
+        return 1
+    }
+    media: [1100]u8
+    preview_media = FigureMediaLoad(PreviewJoin(media[:], practices, "/shared/watercolor"))
+    if !FigureMediaReady(*preview_media) || !PreviewLibraryLoad(*preview_library, practices) {
+        print("figure preview: could not read the figure media or the practices in %\n", practices)
+        return 1
+    }
+    preview_state.item = PreviewDefaultItem(*preview_library, preview_state.practice)
+    if argc >= 3 && TextFromCString(argv[1]) == "--capture" {
+        return PreviewCapture(*preview_media, *preview_library, TextFromCString(argv[2]))
+    }
+    return Desktop.RunTitled(PreviewDraw, 1360, 900, "Figure preview")
+}
+
+PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
+    input := CaptureFrameInput(session)
+    state := *preview_state
+    panel_width: float32 = 360.0
+    area := Rectangle.{viewport.x, viewport.y, viewport.width - panel_width, viewport.height}
+    panel := Rectangle.{viewport.x + area.width, viewport.y, panel_width, viewport.height}
+    Box.Draw(session, Box.Props.{.key = 1, .bounds = area, .fill = .{243, 237, 225, 255}})
+    Box.Draw(session, Box.Props.{.key = 2, .bounds = panel, .fill = .{232, 225, 211, 255}})
+
+    duration := PreviewDuration(*preview_library, state.practice, state.item)
+    now := Timer.MonotonicMilliseconds()
+    elapsed := ifx preview_clock == 0 then 0 else now - preview_clock
+    preview_clock = now
+    if elapsed > 0 {
+        preview_frame_ms = preview_frame_ms * 0.9 + cast(float64)elapsed * 0.1
+    }
+    if state.playing {
+        // A stalled frame never jumps the figure ahead by more than a moment.
+        state.seconds += cast(float64)FigureClamp(cast(float64)elapsed, 0.0, 250.0) / 1000.0 * state.speed
+        if state.seconds >= duration {
+            state.seconds -= duration * cast(float64)cast(s64)(state.seconds / duration)
+        }
+        DesktopRequestFrame()
+    }
+    // Turn and tilt by dragging over her; zoom with the wheel.
+    pointer := input.pointer
+    inside := pointer.x >= area.x && pointer.x < area.x + area.width && pointer.y >= area.y &&
+    pointer.y < area.y + area.height
+    if pointer.pressed && inside {
+        state.dragging = true
+        state.drag_x = pointer.x
+        state.drag_y = pointer.y
+    }
+    if state.dragging {
+        state.turn -= cast(float64)(pointer.x - state.drag_x) * 0.008
+        state.lift = FigureClamp(state.lift + cast(float64)(pointer.y - state.drag_y) * 0.006, -1.2, 1.45)
+        state.drag_x = pointer.x
+        state.drag_y = pointer.y
+        DesktopRequestFrame()
+        if !pointer.down {
+            state.dragging = false
+        }
+    }
+    if inside && input.wheel != 0.0 {
+        state.zoom = FigureClamp(state.zoom * Pow(0.88, cast(float64)input.wheel), 0.25, 3.0)
+    }
+
+    PreviewPaintFigure(session, area)
+
+    x := panel.x + 20.0
+    width := panel.width - 40.0
+    y := panel.y + 18.0
+    Text.Draw(session, Text.Props.{.key = 10, .bounds = .{x, y, width, 30.0}, .text = "Figure preview",
+        .size = 22})
+    y += 42.0
+    options: [4]Segmented.SegmentOption
+    options[0].label = "Tai Chi"
+    options[1].label = "Sun"
+    options[2].label = "Workout"
+    options[3].label = "Astral"
+    chosen := Segmented.Draw(session, Segmented.Props.{.key = 11, .bounds = .{x, y, width, 40.0},
+        .selected_index = state.practice, .has_selection = true}, options[:]).selected_index
+    if chosen != state.practice && chosen >= 0 && chosen <= 3 {
+        state.practice = chosen
+        state.item = PreviewDefaultItem(*preview_library, chosen)
+        state.seconds = 0.0
+    }
+    y += 52.0
+    items: [PREVIEW_ITEM_LIMIT]Dropdown.Option
+    count := PreviewItemCount(*preview_library, state.practice)
+    for index: cast(s32)0..count - 1 {
+        items[index].label = PreviewItemName(*preview_library, state.practice, index)
+    }
+    picked := Dropdown.Draw(session, Dropdown.Props.{.key = 12, .bounds = .{x, y, width, 40.0},
+        .selected_index = state.item}, items[0:count]).selected_index
+    if picked != state.item && picked >= 0 && picked < count {
+        state.item = picked
+        state.seconds = 0.0
+    }
+    y += 54.0
+    if Button.Draw(session, Button.Props.{.key = 13, .bounds = .{x, y, width * 0.48, 40.0},
+        .label = ifx state.playing then "Pause" else "Play"}) != 0 {
+        state.playing = !state.playing
+    }
+    if Button.Draw(session, Button.Props.{.key = 14, .bounds = .{x + width * 0.52, y, width * 0.48, 40.0},
+        .label = "Front view"}) != 0 {
+        state.turn = 0.0
+        state.lift = 0.0
+        state.zoom = 1.0
+    }
+    y += 54.0
+    preview_page = 1 - preview_page
+    at := Slider.Draw(session, Slider.Props.{.key = cast(u64)(15 + preview_page * 1000), .bounds = .{x, y, width, 64.0},
+        .label = "Time", .value_text = PreviewSeconds(state.seconds, duration, preview_time_text[preview_page][:]), .value = cast(float32)state.seconds,
+        .min = 0.0, .max = cast(float32)duration})
+    if at.changed {
+        state.seconds = cast(float64)at.value
+        state.playing = false
+    }
+    y += 72.0
+    speed_digits: [32]u8
+    speed := Slider.Draw(session, Slider.Props.{.key = 16, .bounds = .{x, y, width, 64.0}, .label = "Speed",
+        .value_text = FormatDecimal(state.speed, 2, speed_digits[:]), .value = cast(float32)state.speed,
+        .min = 0.05, .max = 2.0})
+    if speed.changed {
+        state.speed = cast(float64)speed.value
+    }
+    y += 72.0
+    state.watercolor = Toggle.Draw(session, Toggle.Props.{.key = 17, .bounds = .{x, y, width, 40.0},
+        .label = "Watercolor finish", .value = state.watercolor}).value
+    y += 46.0
+    state.current = Toggle.Draw(session, Toggle.Props.{.key = 23, .bounds = .{x, y, width, 40.0},
+        .label = "Current flat figure", .value = state.current}).value
+    y += 50.0
+    state.pooling = Slider.Draw(session, Slider.Props.{.key = 18, .bounds = .{x, y, width, 64.0},
+        .label = "Edge pooling", .value = state.pooling, .max = 1.0}).value
+    y += 70.0
+    state.contour = Slider.Draw(session, Slider.Props.{.key = 19, .bounds = .{x, y, width, 64.0},
+        .label = "Pencil contour", .value = state.contour, .max = 1.0}).value
+    y += 70.0
+    state.grain = Slider.Draw(session, Slider.Props.{.key = 20, .bounds = .{x, y, width, 64.0},
+        .label = "Paper grain", .value = state.grain, .max = 1.0}).value
+    y += 76.0
+    status := "CPU"
+    if preview_failed {
+        status = "The figure could not be painted"
+    } else if preview_body.accelerated {
+        status = "GPU"
+    }
+    rate: [16]u8
+    first_line: [96]u8
+    labelled := PreviewJoin(first_line[:], status, ", frame ms ")
+    status = PreviewJoin(preview_status_text[preview_page][:], labelled, FormatDecimal(preview_frame_ms, 0, rate[:]))
+    Text.Draw(session, Text.Props.{.key = 21, .bounds = .{x, y, width, 24.0}, .text = status, .size = 14})
+    y += 26.0
+    Text.Draw(session, Text.Props.{.key = 22, .bounds = .{x, y, width, 44.0},
+        .text = "Drag over her to turn around her; scroll to zoom.", .size = 14})
+    if state.practice == PREVIEW_ASTRAL && preview_library.astral_even {
+        y += 46.0
+        Text.Draw(session, Text.Props.{.key = 24, .bounds = .{x, y, width, 44.0},
+            .text = "These practices have no astral session timings yet; steps are 20 s apart.", .size = 14})
+    }
+    return 0
+}
+
+PreviewStyle :: () -> FigureStyle {
+    style := FigureStyleDefault()
+    style.watercolor = preview_state.watercolor
+    style.finish.pooling_strength = cast(float64)preview_state.pooling
+    style.finish.contour_strength = cast(float64)preview_state.contour
+    style.finish.grain_strength = cast(float64)preview_state.grain
+    return style
+}
+
+PreviewPaintFigure :: (session: Session, area: Rectangle) {
+    state := *preview_state
+    // Paint at most 760 pixels tall; the image scales smoothly to the area.
+    scale := FigureClamp(760.0 / cast(float64)area.height, 0.2, 1.0)
+    width := cast(s32)(cast(float64)area.width * scale)
+    height := cast(s32)(cast(float64)area.height * scale)
+    if width < 16 || height < 16 {
+        return
+    }
+    key := PreviewKey(width, height)
+    if key != preview_painted_key || preview_textures[preview_shown].id == 0 {
+        moment := PreviewSample(*preview_library, state.practice, state.item, state.seconds)
+        view := PreviewViewOf(*moment, state.turn, state.lift, state.zoom)
+        if state.current {
+            camera := PreviewFlatOf(*moment, view)
+            preview_failed = !PreviewFlatRender(camera, view, width, height, *preview_picture)
+        } else {
+            preview_failed = !PreviewCompose(*preview_body, *preview_twin, *preview_media, *moment, view,
+                PreviewStyle(), width, height, *preview_picture)
+        }
+        if !preview_failed {
+            next := 1 - preview_shown
+            texture := preview_textures[next]
+            if texture.id != 0 && (texture.width != width || texture.height != height ||
+            preview_owner.slot != session.slot || preview_owner.epoch != session.epoch) {
+                BitmapImageRelease(preview_owner, texture)
+                texture = .{}
+            }
+            if texture.id == 0 {
+                texture = BitmapImageCreate(session, width, height, preview_picture.pixels[:])
+                preview_owner = session
+            } else if !BitmapImageUpdate(session, texture, preview_picture.pixels[:]) {
+                preview_failed = true
+            }
+            preview_textures[next] = texture
+            if texture.id != 0 && !preview_failed {
+                preview_shown = next
+            }
+            preview_painted_key = key
+        }
+    }
+    shown := preview_textures[preview_shown]
+    if shown.id != 0 {
+        // A new key with each new picture: Kryon's retained frames compare
+        // an image by its node and texture, not by the pixels behind it.
+        Image.Draw(session, Image.Props.{.key = cast(u64)(3 + preview_shown * 1000), .bounds = area,
+            .texture = shown, .smooth = true, .alt_text = "The practice figure"})
+    }
+}
+
+// Everything the picture depends on.
+PreviewKey :: (width: s32, height: s32) -> u64 {
+    state := *preview_state
+    digest: u64 = 1469598103934665603
+    values: [13]float64 = .[cast(float64)state.practice, cast(float64)state.item, state.seconds,
+        state.turn, state.lift, state.zoom, ifx state.watercolor then 1.0 else 0.0,
+        ifx state.current then 1.0 else 0.0,
+        cast(float64)state.pooling, cast(float64)state.contour, cast(float64)state.grain,
+        cast(float64)width, cast(float64)height]
+    for value: values {
+        bits := cast(u64)(value * 1000003.0 + 0.5)
+        digest = digest * 1099511628211 + bits
+    }
+    return digest
+}
+
+PreviewSeconds :: (seconds: float64, duration: float64, output: []u8) -> string {
+    first: [16]u8
+    second: [16]u8
+    a := FormatDecimal(seconds, 1, first[:])
+    b := FormatDecimal(duration, 1, second[:])
+    length: s64
+    for byte: a {
+        if length < output.count {
+            output[length] = byte
+            length += 1
+        }
+    }
+    joiner := " / "
+    for byte: joiner {
+        if length < output.count {
+            output[length] = byte
+            length += 1
+        }
+    }
+    for byte: b {
+        if length < output.count {
+            output[length] = byte
+            length += 1
+        }
+    }
+    return TextView(output[0:length])
+}
+
+PreviewPracticesPath :: () -> string {
+    variable: [32]u8
+    unused CopyCString("FIGURE_PRACTICES", variable[:])
+    named := PreviewGetEnvironment(*variable[0])
+    if named != null {
+        text := TextFromCString(named)
+        if text.count > 0 && text.count < 1024 {
+            return PreviewKeepPath(text)
+        }
+    }
+    // Ask beside the manifest, so the lock names the pinned checkout, then
+    // come back: capture paths stay relative to where the preview started.
+    started: [4096]u8
+    here := PreviewWorkingDirectory(*started[0], 4096)
+    unused Desktop.DesktopStartBeside("preview_practices.zi")
+    output: [1100]u8
+    arguments: [5]string = .["ziran", "pkg", "path", "practices", "--locked"]
+    result := CaptureOutput(arguments[:], output[:])
+    // A desktop launcher's PATH may not include the user's own commands.
+    home_name: [8]u8
+    unused CopyCString("HOME", home_name[:])
+    home := PreviewGetEnvironment(*home_name[0])
+    installed: [1100]u8
+    if (result.error || result.code != 0) && home != null {
+        arguments[0] = PreviewJoin(installed[:], TextFromCString(home), "/.local/bin/ziran")
+        result = CaptureOutput(arguments[:], output[:])
+    }
+    if here != null {
+        unused PreviewChangeDirectory(*started[0])
+    }
+    if result.error || result.code != 0 || result.length <= 1 {
+        return ""
+    }
+    length := result.length
+    while length > 0 && (output[length - 1] == 10 || output[length - 1] == 13) {
+        length -= 1
+    }
+    return PreviewKeepPath(TextView(output[0:length]))
+}
+
+#scope_file
+PreviewKeepPath :: (text: string) -> string {
+    if text.count >= 1024 {
+        return ""
+    }
+    for index: 0..text.count - 1 {
+        preview_practices_path[index] = text[index]
+    }
+    preview_practices_length = text.count
+    return TextView(preview_practices_path[0:preview_practices_length])
+}

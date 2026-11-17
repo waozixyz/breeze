@@ -1,47 +1,53 @@
 # Open practice figure work — 2026-11-17
 
-The owner asked for the anatomical watercolor figures in the real Breeze app
-(Ziran + Kryon, no raylib) for Tai Chi, Workout and astral practice. The
-three.js studies in `design/astral-projection/three/` are the look reference
-only. The shared figure media is in practices `shared/watercolor/`:
-MakeHuman CC0 surface, MakeHuman CC0 default rig weights folded onto 46
-bones, clean plane-cut hems, and paper/pigment/wash textures.
+The owner wants one perfected character used everywhere: Tai Chi, Sun
+Salutation, Workout and astral projection, native on Ziran and Kryon
+without raylib. The character is the practices package's `figure/` (pinned
+practices b38054fc: female MakeHuman CC0 surface, dual-quaternion rig,
+watercolor painter, floor shadow, Ziran tests). The live tuning tool is
+`design/figure-preview/` (see its README). The three.js studies in
+`design/astral-projection/three/` are look references only.
 
-- Shared Kryon repin. Breeze pins Kryon 3f724419, which has no
-  `kryon/scene_skin` or `kryon/watercolor`. The repin must move plot, entity,
-  game2d, css and apps to the same Kryon, and move
-  `src/platform/audio_runtime.zi` and `radio_native.zi` from Kryon's removed
-  mixer/sink/decoders to Ziran std audio. It is coordinated with the
-  raylib-free desktop work (`plans/2026-11-15-breeze-desktop-without-raylib.md`).
-  The coordinator decides who owns that switch.
-- Connect the painters after the repin, all under `DESKTOP_HOST`:
-  - Tai Chi: `TaiChiPaintFlat` call sites in `tai_chi_draw.zi`, through
-    `PracticeWatercolorDraw`.
-  - Workout: its solved pose through the same painter.
-  - Astral: `AstralSceneDraw`/`AstralPreviewDraw` through
-    `AstralWatercolorDraw` (`apps/practice/astral_watercolor_view.zi`), which
-    composes the still physical body, translucent double, cord, rope and
-    attention marks from `astral_technique.zi`.
-  Keep existing timelines, cues, narration, pause/resume and history.
-- Native after frames on private Xvfb, matching `build/practice-compare/before/`
-  (Tai Chi 9 s, full form 131 s, astral 60 s, Workout ready). Then labelled
-  `side-by-side/` images, own inspection, and Gwenview for the owner. Retake
-  the full-form before frame, which shows the voice-guidance offer instead of
-  the figure.
-- Local suites on the integrated build: `make astral-projection-test` (now
-  includes `tests/astral_technique_test.sh`), Tai Chi and Workout tests,
-  `tests/practice_human_test.sh`, build laws, package/size checks, chooser
-  previews, captions and cue boundaries. Bundled delivery of
-  `assets/practices/shared/watercolor/` from the common Practices pack is
-  configured in `scripts/prepare-package-assets.py`; verify it in the
-  built app.
-- Performance: the painter re-renders and re-finishes the body on every pose
-  change. Measure on a real phone GPU; shell GL here is llvmpipe.
-- Owner review of the native characters, watercolor look, Tai Chi motion and
-  the six astral techniques.
-- Narration: the initial audit found all 88 cue texts in each of ten locales
-  but only 407/880 female clips (cs 6, de 86, en 86, es 78, fr 37, ja 5,
-  ko 6, pt 88, ru 10, zh 5). Complete and listen through the owning
+- Kryon desktop presentation: at Kryon 199b51c9 the desktop loop keeps
+  drawing requested frames, but stops showing them once there is no input
+  (a 24-line repro was sent to the coordinator for the Kryon lane). The
+  preview's hands-off playback freezes until the pointer moves. Repin the
+  preview once Kryon is fixed. The same Kryon compares images by texture id
+  only, so `BitmapImageUpdate` on one texture never repaints; the preview
+  alternates two textures.
+- Owner review of the live preview and of
+  `build/practice-compare/side-by-side/` (current flat figure beside the new
+  character, same moments and cameras), then tune from that feedback.
+- Character work still open:
+  - The top and trousers hug the body; the flat figure's loose tunic needs
+    cloth geometry (a skirted tunic shell over the hips).
+  - Relaxed and open hands still read as claws in some Tai Chi palms.
+  - The face is plain at practice sizes.
+  - Each practice's look colours come from its flat look; settle one
+    palette.
+- Astral session timings: practices' `astral_projection/sessions/*.json`
+  are another task's uncommitted files. Until they are pushed, a pinned
+  preview plays the six techniques with steps evenly 20 seconds apart.
+- Breeze adoption, after the shared Kryon repin (lane -7, plot, entity,
+  game2d, css and apps on one Kryon; Breeze audio on Ziran std audio):
+  - Make Breeze's `practices` dependency a package pinned at or after
+    b38054fc.
+  - Move `PreviewJoints` (solver joints to `FigureJoints`) beside the
+    solver.
+  - Paint Tai Chi, Sun Salutation, Workout and astral with `FigurePaint`
+    under `DESKTOP_HOST`, keeping timelines, cues, narration, pause/resume
+    and history. Bundle `assets/practices/shared/watercolor/` from the
+    common Practices pack (the `scripts/prepare-package-assets.py` hunk is
+    ready).
+- Native app after-frames for those painters, matching
+  `build/practice-compare/before/`. Retake the full-form before frame: it
+  shows the voice-guidance offer instead of the figure.
+- Performance: the painter re-skins and re-finishes on every pose change
+  (watercolor finish and shadow on the CPU). Measure on a real phone GPU;
+  shell GL here is llvmpipe.
+- Narration: the initial audit found all 88 cue texts in each of ten
+  locales but only 407/880 female clips (cs 6, de 86, en 86, es 78, fr 37,
+  ja 5, ko 6, pt 88, ru 10, zh 5). Complete and listen through the owning
   narration task; legacy cues do not fill the new exercise keys.
-- Refresh the three.js caption snapshot if the practices task changes session
-  cues or text. Keep `build/astral-compare/before/` as the baseline.
+- Refresh the three.js caption snapshot if the practices task changes
+  session cues or text. Keep `build/astral-compare/before/` as the baseline.

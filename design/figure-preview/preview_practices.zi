@@ -1,0 +1,384 @@
+// The four practices' own choreography, sampled at any second and turned
+// into the shared figure's joints. The pose code is Breeze's own: the build
+// adds src/practices/tai_chi, src/practices/sun_salutation and apps/practice
+// as module folders, so the preview shows exactly what the app plays.
+#import "figure_math"
+#import "figure_joints"
+#import "figure_paint"
+#import "kryon/scene"
+#import "tai_chi_math"
+#import "tai_chi_course"
+#import "tai_chi_timeline"
+#import "tai_chi_solve"
+#import "tai_chi_view"
+#import "tai_chi_flat"
+#import "tai_chi_rules"
+#import "workout_rules"
+#import "workout_moves"
+#import "sun_salutation_rules"
+#import "sun_salutation_pose"
+#import "astral_projection_rules"
+#import "astral_technique"
+#import "sun_salutation_artwork"
+#import "preview_flat"
+#import "std/file"
+#import "std/math"
+
+PREVIEW_TAI_CHI :: 0
+PREVIEW_SUN_SALUTATION :: 1
+PREVIEW_WORKOUT :: 2
+PREVIEW_ASTRAL :: 3
+
+PREVIEW_ITEM_LIMIT :: 64
+
+// What one moment of a practice shows: the figure, and for an astral exit
+// the translucent twin beside the still physical body.
+PreviewMoment :: struct {
+    body: FigureJoints
+    look: FigureLook
+    // The practice's own camera and framing, which the flat figure shares.
+    camera: TaiChiCamera
+    target: Vector3
+    height: float64
+    solved: TaiChiSolved
+    rig: TaiChiRig
+    flat_look: TaiChiFlatLook
+    twin_visible: bool
+    twin: FigureJoints
+    twin_effect: FigureEffect
+}
+
+PreviewLibrary :: struct {
+    ready: bool
+    tai_chi_items: [PREVIEW_ITEM_LIMIT]s32
+    tai_chi_count: s32
+    timeline_item: s32
+    timeline: TaiChiTimeline
+    astral: [6]AstralCourse
+    astral_ready: [6]bool
+    astral_even: bool
+}
+
+preview_astral_ids: [6]string = .["bruce_foundation_touch", "bruce_full_body_current",
+    "bruce_elevator_trance", "bruce_spin_loosening", "bruce_rope_exit", "bruce_roll_out_exit"];
+preview_astral_names: [6]string = .["Foundation touch", "Full-body current", "Elevator trance",
+    "Spin loosening", "Rope exit", "Roll-out exit"];
+preview_workout_names: [12]string = .["Jumping jacks", "Wall sit", "Push-ups", "Crunches",
+    "Step-ups", "Squats", "Triceps dips", "Plank", "High knees", "Lunges", "Push-up rotation",
+    "Side plank"];
+
+// PRACTICES is the practices package checkout (its taichi/ and
+// astral_projection/ folders).
+PreviewLibraryLoad :: (library: *PreviewLibrary, practices: string) -> bool {
+    path: [1024]u8
+    course, found := ReadEntireFile(PreviewJoin(path[:], practices, "/taichi/course.tch"))
+    if !found || !TaiChiCourseParse(*tai_chi_course, course) {
+        return false
+    }
+    library.tai_chi_count = 0
+    // Breakdown and follow-along items replay a demo's choreography slower.
+    for index: cast(s32)0..tai_chi_course.item_count - 1 {
+        id := TaiChiCourseString(tai_chi_course.items[index].id)
+        if PreviewEndsWith(id, "/breakdown") || PreviewEndsWith(id, "/follow") {
+            continue
+        }
+        if library.tai_chi_count < PREVIEW_ITEM_LIMIT {
+            library.tai_chi_items[library.tai_chi_count] = index
+            library.tai_chi_count += 1
+        }
+    }
+    library.timeline_item = -1
+    for technique: 0..5 {
+        name: [128]u8
+        file := PreviewJoin(name[:], "/astral_projection/sessions/", preview_astral_ids[technique])
+        full: [1024]u8
+        relative := PreviewJoin(full[:], practices, file)
+        tail: [1100]u8
+        data, ok := ReadEntireFile(PreviewJoin(tail[:], relative, ".json"))
+        library.astral_ready[technique] = ok && AstralCourseParse(data, *library.astral[technique])
+        if !library.astral_ready[technique] {
+            // A practices checkout without the session timings still plays
+            // each technique, with its steps evenly twenty seconds apart.
+            PreviewAstralEven(*library.astral[technique])
+            library.astral_ready[technique] = true
+            library.astral_even = true
+        }
+    }
+    library.ready = library.tai_chi_count > 0
+    return library.ready
+}
+
+PreviewItemCount :: (library: *PreviewLibrary, practice: s32) -> s32 {
+    if practice == PREVIEW_TAI_CHI {
+        return library.tai_chi_count
+    }
+    if practice == PREVIEW_SUN_SALUTATION {
+        return 1
+    }
+    if practice == PREVIEW_WORKOUT {
+        return WORKOUT_EXERCISE_COUNT
+    }
+    return 6
+}
+
+PreviewItemName :: (library: *PreviewLibrary, practice: s32, item: s32) -> string {
+    if practice == PREVIEW_TAI_CHI && item >= 0 && item < library.tai_chi_count {
+        return TaiChiCourseString(tai_chi_course.items[library.tai_chi_items[item]].id)
+    }
+    if practice == PREVIEW_SUN_SALUTATION {
+        return "Two rounds, both legs"
+    }
+    if practice == PREVIEW_WORKOUT && item >= 0 && item < 12 {
+        return preview_workout_names[item]
+    }
+    if practice == PREVIEW_ASTRAL && item >= 0 && item < 6 {
+        return preview_astral_names[item]
+    }
+    return ""
+}
+
+// The item the practice opens on: Tai Chi's full form, the Workout's squat.
+PreviewDefaultItem :: (library: *PreviewLibrary, practice: s32) -> s32 {
+    if practice == PREVIEW_TAI_CHI {
+        for index: cast(s32)0..library.tai_chi_count - 1 {
+            if PreviewItemName(library, practice, index) == "full/normal" {
+                return index
+            }
+        }
+    }
+    if practice == PREVIEW_WORKOUT {
+        return WORKOUT_SQUATS
+    }
+    return 0
+}
+
+// Seconds the item plays before it starts again.
+PreviewDuration :: (library: *PreviewLibrary, practice: s32, item: s32) -> float64 {
+    if practice == PREVIEW_TAI_CHI {
+        if !PreviewTimeline(library, item) {
+            return 1.0
+        }
+        return library.timeline.duration
+    }
+    if practice == PREVIEW_SUN_SALUTATION {
+        total: float64
+        for round: cast(s32)0..1 {
+            for step: cast(s32)0..SUN_SALUTATION_STEP_COUNT - 1 {
+                total += cast(float64)SalutationStepSeconds(PreviewSunState(round, step))
+            }
+        }
+        return total
+    }
+    if practice == PREVIEW_WORKOUT {
+        return cast(float64)WORKOUT_WORK_MS / 1000.0
+    }
+    if item >= 0 && item < 6 && library.astral_ready[item] {
+        return cast(float64)library.astral[item].duration
+    }
+    return 60.0
+}
+
+PreviewSample :: (library: *PreviewLibrary, practice: s32, item: s32, seconds: float64) -> PreviewMoment {
+    moment: PreviewMoment
+    if practice == PREVIEW_TAI_CHI {
+        moment.rig = TaiChiRigFor(0)
+        moment.flat_look = TaiChiFlatLookFor(0)
+        if PreviewTimeline(library, item) {
+            pose := TaiChiTimelineSample(*library.timeline, seconds)
+            moment.solved = TaiChiSolvePose(*pose, *moment.rig)
+        }
+        // The forms travel; the camera follows the pelvis over the floor.
+        moment.camera.yaw = 0.42
+        moment.camera.tilt = 0.12
+        moment.camera.center = TaiChiV3(moment.solved.pelvis.x, 0.0, moment.solved.pelvis.z)
+        PreviewAim(*moment, 2.3, moment.rig.height * 0.5)
+    } else if practice == PREVIEW_SUN_SALUTATION {
+        moment.rig = WorkoutRig()
+        state := PreviewSunAt(seconds)
+        pose := SunSalutationPoseAt(state, *moment.rig)
+        moment.solved = WorkoutSolve(*pose, *moment.rig)
+        moment.flat_look = SunSalutationWomanLook()
+        framing := SunSalutationPaintPose(*preview_flat_frame, 0, pose, SunSalutationViewAt(state), 600.0, 800.0)
+        moment.camera = framing.camera
+        PreviewAim(*moment, framing.view_height, framing.view_center)
+    } else if practice == PREVIEW_WORKOUT {
+        moment.rig = WorkoutRig()
+        pose := WorkoutPoseAt(item, cast(s64)(seconds * 1000.0), *moment.rig)
+        moment.solved = WorkoutSolve(*pose, *moment.rig)
+        moment.flat_look = TaiChiFlatLookNamed("jadeWoman")
+        framing := WorkoutFramingFor(item)
+        moment.camera = framing.camera
+        PreviewAim(*moment, framing.view_height, framing.view_center)
+    } else {
+        moment.rig = WorkoutRig()
+        moment.flat_look = TaiChiFlatLookNamed("jadeWoman")
+        moment.flat_look.top = 0x597888
+        moment.flat_look.pants = 0x384d65
+        if item >= 0 && item <= 5 && library.astral_ready[item] {
+            scene := AstralTechniqueAt(preview_astral_ids[item], *library.astral[item], cast(s64)(seconds * 1000.0))
+            moment.solved = WorkoutSolve(*scene.physical, *moment.rig)
+            moment.camera = scene.camera
+            PreviewAim(*moment, 2.15, 0.35)
+            moment.twin_visible = scene.double_visible
+            if scene.double_visible {
+                awareness := WorkoutSolve(*scene.awareness, *moment.rig)
+                moment.twin = PreviewJoints(*awareness, *moment.rig)
+                moment.twin_effect.offset = FigureV3(scene.double_offset.x, scene.double_offset.y,
+                    scene.double_offset.z)
+                moment.twin_effect.pivot = FigureV3(moment.solved.pelvis.x, moment.solved.pelvis.y,
+                    moment.solved.pelvis.z)
+                moment.twin_effect.roll = scene.double_roll
+            }
+        } else {
+            resting := AstralRestingPose()
+            moment.solved = WorkoutSolve(*resting, *moment.rig)
+        }
+    }
+    moment.body = PreviewJoints(*moment.solved, *moment.rig)
+    moment.look = .{skin = moment.flat_look.skin, top = moment.flat_look.top,
+        trousers = moment.flat_look.pants, hair = moment.flat_look.hair}
+    return moment
+}
+
+// The view of MOMENT turned TURN and lifted LIFT radians from the practice's
+// own camera and zoomed ZOOM times, and the flat figure's camera to match.
+PreviewViewOf :: (moment: *PreviewMoment, turn: float64, lift: float64, zoom: float64) -> FigureView {
+    view: FigureView
+    view.yaw = moment.camera.yaw + turn
+    view.pitch = FigureClamp(moment.camera.tilt + lift, -1.4, 1.5)
+    view.height = moment.height / zoom
+    view.center = moment.target
+    return view
+}
+
+PreviewFlatOf :: (moment: *PreviewMoment, view: FigureView) -> TaiChiCamera {
+    camera := moment.camera
+    camera.yaw = view.yaw
+    camera.tilt = view.pitch
+    TaiChiFlatPaintLook(*preview_flat_frame, *moment.solved, *moment.rig, moment.flat_look, camera)
+    return camera
+}
+
+PreviewLuminous :: () -> FigureLook {
+    return .{skin = 0xb2d8df, top = 0x7db7d5, trousers = 0x7a8fca, hair = 0x7ca1bc}
+}
+
+PreviewJoints :: (solved: *TaiChiSolved, rig: *TaiChiRig) -> FigureJoints {
+    joints: FigureJoints
+    joints.height = rig.height
+    joints.pelvis = PreviewVector(solved.pelvis)
+    joints.spine = PreviewVector(solved.spine1)
+    joints.chest = PreviewVector(solved.chest)
+    joints.neck = PreviewVector(solved.neck_base)
+    joints.pelvis_turn = PreviewQuat(solved.pelvis_quat)
+    joints.chest_turn = PreviewQuat(solved.chest_quat)
+    joints.head_turn = PreviewQuat(solved.head_quat)
+    for side: 0..1 {
+        joints.shoulders[side] = PreviewVector(solved.shoulders[side])
+        joints.elbows[side] = PreviewVector(solved.elbows[side])
+        joints.wrists[side] = PreviewVector(solved.wrists[side])
+        joints.hands[side] = PreviewQuat(solved.hand_quats[side])
+        joints.fist[side] = solved.hand_shapes[side][1]
+        joints.hook[side] = solved.hand_shapes[side][2]
+        joints.hips[side] = PreviewVector(solved.hips[side])
+        joints.knees[side] = PreviewVector(solved.knees[side])
+        joints.ankles[side] = PreviewVector(solved.ankles[side])
+        joints.toes[side] = PreviewVector(solved.toes[side])
+        joints.feet[side] = PreviewQuat(solved.foot_quats[side])
+    }
+    return joints
+}
+
+PreviewAstralEven :: (course: *AstralCourse) {
+    course.count = 16
+    course.duration = 330
+    stem := "astral_text_preview_"
+    for index: cast(s32)0..15 {
+        cue := *course.cues[index]
+        cue.second = index * 20
+        for at: 0..stem.count - 1 {
+            cue.key[at] = stem[at]
+        }
+        cue.key[stem.count] = cast(u8)(48 + index / 10)
+        cue.key[stem.count + 1] = cast(u8)(48 + index % 10)
+        cue.key[stem.count + 2] = 0
+    }
+}
+
+PreviewEndsWith :: (text: string, suffix: string) -> bool {
+    return text.count >= suffix.count && text[text.count - suffix.count:text.count] == suffix
+}
+
+PreviewJoin :: (buffer: []u8, a: string, b: string) -> string {
+    if a.count + b.count > buffer.count {
+        return ""
+    }
+    for index: 0..a.count - 1 {
+        buffer[index] = a[index]
+    }
+    for index: 0..b.count - 1 {
+        buffer[a.count + index] = b[index]
+    }
+    return TextView(buffer[0:a.count + b.count])
+}
+
+#scope_file
+PreviewVector :: (value: TaiChiVector3) -> Vector3 {
+    return .{value.x, value.y, value.z}
+}
+
+PreviewQuat :: (value: TaiChiQuaternion) -> FigureQuat {
+    return .{value.x, value.y, value.z, value.w}
+}
+
+// Frames the practice's camera as its painter does: VIEW_HEIGHT metres tall,
+// centred UP metres above the camera's floor point along its up direction.
+PreviewAim :: (moment: *PreviewMoment, view_height: float64, up: float64) {
+    flat: TaiChiFlatView
+    TaiChiFlatViewSet(*flat, moment.camera)
+    target := TaiChiAddScaled3(flat.center, flat.up, up)
+    moment.target = FigureV3(target.x, target.y, target.z)
+    moment.height = view_height
+}
+
+PreviewTimeline :: (library: *PreviewLibrary, item: s32) -> bool {
+    if item < 0 || item >= library.tai_chi_count {
+        return false
+    }
+    if library.timeline_item == item {
+        return true
+    }
+    if !TaiChiTimelineForItem(*library.timeline, tai_chi_course.items[library.tai_chi_items[item]]) {
+        library.timeline_item = -1
+        return false
+    }
+    library.timeline_item = item
+    return true
+}
+
+PreviewSunState :: (round: s32, step: s32) -> SunSalutationPracticeState {
+    state: SunSalutationPracticeState
+    state.repetitions = 2
+    state.repetition = round
+    state.step = step
+    state.start_seconds = SUN_SALUTATION_DEFAULT_START_SECONDS
+    state.end_seconds = SUN_SALUTATION_DEFAULT_END_SECONDS
+    return state
+}
+
+// Two full rounds, the second leading with the other leg.
+PreviewSunAt :: (seconds: float64) -> SunSalutationPracticeState {
+    left := seconds
+    for round: cast(s32)0..1 {
+        for step: cast(s32)0..SUN_SALUTATION_STEP_COUNT - 1 {
+            state := PreviewSunState(round, step)
+            length := cast(float64)SalutationStepSeconds(state)
+            if left < length || (round == 1 && step == SUN_SALUTATION_STEP_COUNT - 1) {
+                state.step_ticks = cast(s32)(FigureClamp(left, 0.0, length) * 60.0)
+                return state
+            }
+            left -= length
+        }
+    }
+    return PreviewSunState(0, 0)
+}

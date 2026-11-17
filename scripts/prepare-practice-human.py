@@ -23,6 +23,15 @@ for line in gzip.open(source_file, 'rt'):
     elif line.startswith('f '):
         groups[group].append([int(item.split('/')[0]) - 1 for item in line.split()[1:]])
 all_vertices = np.asarray(vertices, dtype=np.float64)
+# MakeHuman's base mesh is its gender-neutral average. Her body and face take
+# MakeHuman's own CC0 young-adult female macro shape: the three ethnic
+# female-young targets in equal shares, as MakeHuman mixes them by default.
+for race in ('african', 'asian', 'caucasian'):
+    target = ROOT / f'design/astral-projection/three/assets/makehuman-{race}-female-young.target.gz'
+    for line in gzip.open(target, 'rt'):
+        if line.strip() and not line.startswith('#'):
+            index, dx, dy, dz = line.split()
+            all_vertices[int(index)] += np.array([float(dx), float(dy), float(dz)])/3
 ids = sorted({index for face in groups['body'] for index in face})
 lookup = {old: index for index, old in enumerate(ids)}
 body = all_vertices[ids]
@@ -158,6 +167,56 @@ for index, influence in enumerate(gathered):
         joints[index, slot] = target
         weights[index, slot] = weight/total
 
+# MakeHuman hands the groin and buttock from pelvis to thigh within a few
+# millimetres, which tears the surface open in a forward fold or a deep
+# stance. Diffuse that hand-over across the surface around the hips, and the
+# shoulder's chest-to-arm hand-over the same way for arms raised overhead;
+# other bones' shares, the hands and the fingers stay as rigged.
+face_triangles = np.array([[lookup[face[0]], lookup[face[at]], lookup[face[at+1]]]
+                           for face in groups['body'] for at in range(1, len(face)-1)], dtype=np.int64)
+pairs = np.concatenate([face_triangles[:, [0, 1]], face_triangles[:, [1, 2]], face_triangles[:, [2, 0]]])
+pairs = np.unique(np.concatenate([pairs, pairs[:, ::-1]]), axis=0)
+degree = np.bincount(pairs[:, 0], minlength=len(ids)).astype(np.float64)
+dense = np.zeros((len(ids), len(bones)))
+for slot in range(4):
+    np.add.at(dense, (np.arange(len(ids)), joints[:, slot]), weights[:, slot])
+arm_share = dense[:, [at for at, item in enumerate(bones) if 5 <= item['role'] <= 7]].sum(axis=1)
+
+def diffuse(members, zone, steps):
+    shares = dense[:, members]
+    mass = shares.sum(axis=1)
+    active = zone & (mass > 0.02)
+    for _ in range(steps):
+        total = np.zeros_like(shares)
+        np.add.at(total, pairs[:, 0], shares[pairs[:, 1]])
+        mean = total/np.maximum(degree, 1)[:, None]
+        mixed = shares*0.5+mean*0.5
+        scale = mass/np.maximum(mixed.sum(axis=1), 1e-12)
+        shares[active] = mixed[active]*scale[active, None]
+    dense[:, members] = shares
+
+hips_y = (joint('l-upper-leg')[1]+joint('r-upper-leg')[1])/2
+hip_zone = (positions[:, 1] > hips_y-0.24) & (positions[:, 1] < hips_y+0.07) & (arm_share < 0.01)
+thighs = [4+18, 4+21+18]
+diffuse([0]+thighs, hip_zone, 120)
+# The thighs never reach above the hip crease: a lifted or spread leg must
+# not drag the waist out with it.
+fade = np.clip((hips_y+0.07-positions[:, 1])/0.09, 0, 1)
+for thigh in thighs:
+    removed = dense[:, thigh]*(1-fade)
+    dense[:, thigh] -= removed
+    dense[:, 0] += removed
+for side in (0, 1):
+    shoulder = joint(('l' if side == 0 else 'r')+'-shoulder')
+    near = np.linalg.norm(positions-shoulder, axis=1) < 0.16
+    diffuse([1, 2, 4+side*21], near & (arm_share < 0.01), 40)
+for index in range(len(ids)):
+    strongest = np.argsort(-dense[index])[:4]
+    shares = dense[index, strongest]
+    shares[shares < 0.004] = 0.0
+    joints[index] = strongest
+    weights[index] = shares/shares.sum()
+
 # The middle waist belongs to the trunk even when a hand passes near it.
 waist = (positions[:, 1] > joint('pelvis')[1]+0.06) & (positions[:, 1] < joint('spine-3')[1]) & (np.abs(positions[:, 0]) < 0.25)
 arm_roles = np.array([4 <= item['role'] <= 7 for item in bones])
@@ -186,6 +245,21 @@ head = joint('head')
 cuffs = [abs(joint(prefix+'-hand')[0])-0.025 for prefix in ('l', 'r')]
 ankles = [joint(prefix+'-ankle')[1]+0.02 for prefix in ('l', 'r')]
 
+eye_height = joint('l-eye')[1]
+
+def hairline(points):
+    """Positive on the hair: a hairline high on the forehead, lower over
+    the temples, behind the ears and down to the nape; the ears stay bare."""
+    points = np.atleast_2d(points)
+    x, y, z = points[:, 0], points[:, 1], points[:, 2]
+    turn = np.degrees(np.arctan2(np.abs(x), z-0.02))
+    height = eye_height+np.interp(turn, [0, 20, 45, 65, 85, 105, 125, 180],
+                                  [0.064, 0.062, 0.052, 0.034, 0.008, -0.014, -0.045, -0.080])
+    value = y-height
+    ears = (y < eye_height+0.002) & (np.abs(x) > 0.070)
+    value = np.where(ears, np.minimum(value, 0.070-np.abs(x)), value)
+    return np.where(y < 1.44, -1.0, value)
+
 def region_of(points):
     points = np.atleast_2d(points)
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
@@ -199,23 +273,26 @@ def region_of(points):
         # Hands hang below the hips in the bind pose; only arms reach this wide.
         regions[(np.abs(x) > cuff) & (y > 0.5)] = 0
         regions[y < ankle] = 0
-    regions[(y > head[1]+0.055) | ((y > head[1]-0.015) & (z < head[2]-0.015))] = 3
+    regions[hairline(points) > 0] = 3
     return regions
 
 # Clean painted hems: split each triangle that crosses a region boundary
 # exactly along the boundary's plane, then give every region its own copy
 # of the shared hem vertices. Surface and skin stay continuous.
-cuts = [(1, hip_height-0.04), (1, neck_height-0.04), (1, neck_height+0.025),
-        (0, 0.115), (0, -0.115), (1, head[1]+0.055), (1, head[1]-0.015), (2, head[2]-0.015)]
-cuts += [(0, cuff) for cuff in cuffs] + [(0, -cuff) for cuff in cuffs] + [(1, ankle) for ankle in ankles]
+def plane(axis, value):
+    return lambda points: np.atleast_2d(points)[:, axis]-value
+
+planes = [(1, hip_height-0.04), (1, neck_height-0.04), (1, neck_height+0.025), (0, 0.115), (0, -0.115)]
+planes += [(0, cuff) for cuff in cuffs] + [(0, -cuff) for cuff in cuffs] + [(1, ankle) for ankle in ankles]
+cuts = [(('plane',)+item, plane(*item)) for item in planes] + [(('hairline',), hairline)]
 points, skin_joints, skin_weights = list(positions), list(joints), list(weights)
 surface_normals = list(normals)
 edges = {}
 
-def hem_point(a, b, axis, value):
-    key = (min(a, b), max(a, b), axis, value)
+def hem_point(a, b, name, cut):
+    key = (min(a, b), max(a, b), name)
     if key not in edges:
-        da, db = points[a][axis]-value, points[b][axis]-value
+        da, db = float(cut(points[a])[0]), float(cut(points[b])[0])
         t = da/(da-db)
         points.append(points[a]+(points[b]-points[a])*t)
         normal = surface_normals[a]*(1-t)+surface_normals[b]*t
@@ -232,11 +309,11 @@ def hem_point(a, b, axis, value):
     return edges[key]
 
 faces = [list(face) for face in triangles]
-for axis, value in cuts:
+for name, cut in cuts:
     split = []
     for face in faces:
         corners = np.array([points[at] for at in face])
-        distance = corners[:, axis]-value
+        distance = cut(corners)
         if len(set(region_of(corners))) == 1 or not (np.any(distance > 1e-7) and np.any(distance < -1e-7)):
             split.append(face)
             continue
@@ -245,12 +322,12 @@ for axis, value in cuts:
             # One corner lies on the plane: cut the opposite edge once.
             on = int(np.where(side == 0)[0][0])
             a, b, c = face[on], face[(on+1) % 3], face[(on+2) % 3]
-            middle = hem_point(b, c, axis, value)
+            middle = hem_point(b, c, name, cut)
             split += [[a, b, middle], [a, middle, c]]
             continue
         lone = int([at for at in range(3) if list(side).count(side[at]) == 1][0])
         a, b, c = face[lone], face[(lone+1) % 3], face[(lone+2) % 3]
-        ab, ac = hem_point(a, b, axis, value), hem_point(a, c, axis, value)
+        ab, ac = hem_point(a, b, name, cut), hem_point(a, c, name, cut)
         split += [[a, ab, ac], [ab, b, c], [ab, c, ac]]
     faces = split
 points = np.array(points)
@@ -279,6 +356,89 @@ joints = np.array(skin_joints)[source]
 weights = np.array(skin_weights)[source]
 uvs = np.column_stack((positions[:, 0]*3+0.5, positions[:, 1]*3))
 triangles = np.array(faces, dtype=np.int64)
+# The head. MakeHuman's own eyeballs sit in the sockets; a hair shell rises
+# from nothing at the hairline to a centimetre over the crown; a low bun sits
+# at the back. All follow the head bone alone. Beyond the four washes the
+# regions are 4 iris, 5 eye white, 6 lips and 7 brows.
+def outward_faces(vertices, faces, center):
+    faces = np.array(faces, dtype=np.int64)
+    normal = np.cross(vertices[faces[:, 1]]-vertices[faces[:, 0]], vertices[faces[:, 2]]-vertices[faces[:, 0]])
+    flip = np.einsum('ij,ij->i', normal, vertices[faces].mean(axis=1)-center) < 0
+    faces[flip] = faces[flip][:, ::-1]
+    return faces
+
+def vertex_normals(vertices, faces):
+    result = np.zeros_like(vertices)
+    face = np.cross(vertices[faces[:, 1]]-vertices[faces[:, 0]], vertices[faces[:, 2]]-vertices[faces[:, 0]])
+    for corner in range(3):
+        np.add.at(result, faces[:, corner], face)
+    return result/np.maximum(np.linalg.norm(result, axis=1)[:, None], 1e-12)
+
+extras = []
+hair_faces = triangles[np.all(regions[triangles] == 3, axis=1)]
+used = np.unique(hair_faces)
+depth = hairline(positions[used])
+crown = np.clip((positions[used, 1]-eye_height-0.02)/0.08, 0, 1)
+sides = np.clip(np.abs(positions[used, 0])/0.07, 0, 1)
+thickness = (0.008+0.006*crown+0.005*sides)*np.clip(depth/0.025, 0, 1)**0.6
+shell = positions[used]+normals[used]*thickness[:, None]
+remap = np.full(len(positions), -1, dtype=np.int64)
+remap[used] = np.arange(len(used))
+shell_faces = remap[hair_faces]
+extras.append((shell, vertex_normals(shell, shell_faces), np.full(len(shell), 3), shell_faces))
+rings, segments = 10, 18
+bun_center = np.array([0.0, eye_height+0.078, -0.056])
+bun_radii = np.array([0.040, 0.036, 0.033])
+units = np.array([[np.sin(np.pi*ring/rings)*np.cos(2*np.pi*at/segments), np.cos(np.pi*ring/rings),
+                   np.sin(np.pi*ring/rings)*np.sin(2*np.pi*at/segments)]
+                  for ring in range(rings+1) for at in range(segments)])
+bun = bun_center+units*bun_radii
+bun_faces = []
+for ring in range(rings):
+    for at in range(segments):
+        a, b = ring*segments+at, ring*segments+(at+1) % segments
+        c, d = a+segments, b+segments
+        if ring > 0:
+            bun_faces.append([a, b, d])
+        if ring < rings-1:
+            bun_faces.append([a, d, c])
+bun_faces = outward_faces(bun, bun_faces, bun_center)
+extras.append((bun, vertex_normals(bun, bun_faces), np.full(len(bun), 3), bun_faces))
+for prefix in ('l', 'r'):
+    indices = sorted({index for face in groups[f'helper-{prefix}-eye'] for index in face})
+    eye_lookup = {old: at for at, old in enumerate(indices)}
+    eye = (all_vertices[indices]-origin)*scale
+    center = eye.mean(axis=0)
+    eye_faces = outward_faces(eye, [[eye_lookup[face[0]], eye_lookup[face[at]], eye_lookup[face[at+1]]]
+                                    for face in groups[f'helper-{prefix}-eye'] for at in range(1, len(face)-1)], center)
+    gaze = joint(f'{prefix}-eye-target')-joint(f'{prefix}-eye')
+    gaze /= np.linalg.norm(gaze)
+    facing = (eye-center)/np.linalg.norm(eye-center, axis=1)[:, None] @ gaze
+    extras.append((eye, vertex_normals(eye, eye_faces), np.where(facing > np.cos(np.radians(32)), 4, 5), eye_faces))
+# Brows arch over the eyes and the lips fill the mouth; both are painted on
+# the skin's own vertices, so their edges stay soft.
+x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
+for prefix in ('l', 'r'):
+    eye = joint(prefix+'-eye')
+    across = (x-eye[0])/0.023
+    middle = eye[1]+0.017+0.004*(1-across**2)-0.002*np.sign(eye[0])*across
+    brow = (np.abs(across) < 1) & (np.abs(y-middle) < 0.0024*(1.25-0.6*np.abs(across))) & (z > eye[2]-0.005)
+    regions[brow & (regions == 0)] = 7
+mouth = joint('mouth')
+# MakeHuman's mouth joint is the jaw's pivot, level with the nose tip.
+lip_height = mouth[1]-0.027
+lips = ((x/0.021)**2+((y-lip_height)/0.0088)**2 < 1) & (z > 0.145)
+regions[lips & (regions == 0)] = 6
+head_index = [at for at, item in enumerate(bones) if item['role'] == 3][0]
+for vertices, vertex_normal, vertex_region, faces_of in extras:
+    base = len(positions)
+    positions = np.vstack([positions, vertices])
+    normals = np.vstack([normals, vertex_normal])
+    joints = np.vstack([joints, np.tile(np.array([head_index, 0, 0, 0], dtype=np.uint8), (len(vertices), 1))])
+    weights = np.vstack([weights, np.tile(np.array([1.0, 0.0, 0.0, 0.0]), (len(vertices), 1))])
+    regions = np.concatenate([regions, np.asarray(vertex_region, dtype=np.uint8)])
+    triangles = np.vstack([triangles, np.asarray(faces_of, dtype=np.int64)+base])
+uvs = np.column_stack((positions[:, 0]*3+0.5, positions[:, 1]*3))
 quantized = np.rint(weights*65535).astype(np.int64)
 quantized[:, 0] += 65535-quantized.sum(axis=1)
 assert np.all(quantized >= 0) and np.all(quantized <= 65535)

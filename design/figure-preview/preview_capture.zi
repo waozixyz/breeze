@@ -1,0 +1,214 @@
+// Composing a moment's picture, and the fixed review frames the capture
+// mode writes: each practice's hardest poses for the figure, painted and
+// bare, on paper.
+#import "figure_math"
+#import "figure_joints"
+#import "figure_paint"
+#import "preview_practices"
+#import "preview_flat"
+#import "kryon/scene"
+#import "sun_salutation_rules"
+#import "workout_rules"
+#import "std/file"
+#import "std/png_linux"
+#import "std/vec"
+Raster :: #import "std/image";
+
+// The body, and an astral twin over it, into OUT.
+PreviewCompose :: (body: *FigurePainter, twin: *FigurePainter, media: *FigureMedia,
+    moment: *PreviewMoment, view: FigureView, style: FigureStyle, width: s32, height: s32,
+    out: *Raster.Image) -> bool {
+    still: FigureEffect
+    if !FigurePaint(body, media, *moment.body, moment.look, view, style, still, width, height) {
+        return false
+    }
+    if out.width != width || out.height != height || out.pixels.count != cast(s64)width * height * 4 {
+        if !VecResize(out.pixels, cast(s64)width * height * 4) {
+            return false
+        }
+        out.width = width
+        out.height = height
+    }
+    for index: 0..out.pixels.count - 1 {
+        out.pixels[index] = body.pixels.pixels[index]
+    }
+    if !moment.twin_visible {
+        return true
+    }
+    glow := style
+    glow.luminous = true
+    glow.opacity = 0.58
+    if !FigurePaint(twin, media, *moment.twin, PreviewLuminous(), view, glow, moment.twin_effect,
+        width, height) {
+        return false
+    }
+    for index: 0..cast(s64)width * height - 1 {
+        at := index * 4
+        a := cast(float64)twin.pixels.pixels[at + 3] / 255.0
+        if a <= 0.0 {
+            continue
+        }
+        under := cast(float64)out.pixels[at + 3] / 255.0
+        alpha := a + under * (1.0 - a)
+        for channel: 0..2 {
+            top := cast(float64)twin.pixels.pixels[at + channel]
+            bottom := cast(float64)out.pixels[at + channel]
+            out.pixels[at + channel] = cast(u8)((top * a + bottom * under * (1.0 - a)) / alpha + 0.5)
+        }
+        out.pixels[at + 3] = cast(u8)(alpha * 255.0 + 0.5)
+    }
+    return true
+}
+
+PreviewShot :: struct {
+    practice: s32
+    item: s32
+    seconds: float64
+    name: string
+}
+
+PreviewCapture :: (media: *FigureMedia, library: *PreviewLibrary, directory: string) -> s32 {
+    shots: [24]PreviewShot
+    count: s32
+    full := PreviewDefaultItem(library, PREVIEW_TAI_CHI)
+    shots[count] = .{PREVIEW_TAI_CHI, full, 9.0, "tai-chi-9s"}
+    count += 1
+    shots[count] = .{PREVIEW_TAI_CHI, full, 131.0, "tai-chi-131s"}
+    count += 1
+    shots[count] = .{PREVIEW_TAI_CHI, full, PreviewLowest(library, PREVIEW_TAI_CHI, full), "tai-chi-deepest-stance"}
+    count += 1
+    // The Sun Salutation's folds and floor poses, each once it is reached.
+    names: [5]string = .["sun-forward-fold", "sun-lunge", "sun-plank", "sun-cobra", "sun-downward-dog"]
+    steps: [5]s32 = .[2, 3, 4, 6, 7]
+    for index: 0..4 {
+        shots[count] = .{PREVIEW_SUN_SALUTATION, 0, PreviewSunHeld(steps[index]), names[index]}
+        count += 1
+    }
+    shots[count] = .{PREVIEW_WORKOUT, WORKOUT_SQUATS, PreviewLowest(library, PREVIEW_WORKOUT, WORKOUT_SQUATS),
+        "workout-squat"}
+    count += 1
+    shots[count] = .{PREVIEW_WORKOUT, WORKOUT_LUNGES, PreviewLowest(library, PREVIEW_WORKOUT, WORKOUT_LUNGES),
+        "workout-lunge"}
+    count += 1
+    shots[count] = .{PREVIEW_WORKOUT, WORKOUT_PUSH_UPS, 1.0, "workout-push-up"}
+    count += 1
+    shots[count] = .{PREVIEW_WORKOUT, WORKOUT_JUMPING_JACKS, 0.0, "workout-ready"}
+    count += 1
+    shots[count] = .{PREVIEW_ASTRAL, 0, 60.0, "astral-60s"}
+    count += 1
+    shots[count] = .{PREVIEW_ASTRAL, 4, PreviewDoubleTime(library, 4), "astral-rope-exit"}
+    count += 1
+    shots[count] = .{PREVIEW_ASTRAL, 5, PreviewDoubleTime(library, 5), "astral-roll-out"}
+    count += 1
+    body: FigurePainter
+    twin: FigurePainter
+    picture: Raster.Image
+    defer {
+        FigurePainterRelease(*body)
+        FigurePainterRelease(*twin)
+        VecFree(picture.pixels)
+    }
+    failed: s32
+    for index: 0..count - 1 {
+        shot := shots[index]
+        moment := PreviewSample(library, shot.practice, shot.item, shot.seconds)
+        // Lying figures need a landscape picture.
+        width: s32 = ifx shot.practice == PREVIEW_ASTRAL then 900 else 600
+        height: s32 = ifx shot.practice == PREVIEW_ASTRAL then 600 else 800
+        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
+        for variant: 0..2 {
+            style := FigureStyleDefault()
+            style.watercolor = variant == 0
+            suffix := ".png"
+            if variant == 1 {
+                suffix = "-bare.png"
+            } else if variant == 2 {
+                suffix = "-current.png"
+            }
+            stem: [1024]u8
+            named: [1024]u8
+            path: [1024]u8
+            name := PreviewJoin(stem[:], directory, "/")
+            name = PreviewJoin(named[:], name, shot.name)
+            final := PreviewJoin(path[:], name, suffix)
+            painted := false
+            if variant == 2 {
+                camera := PreviewFlatOf(*moment, view)
+                painted = PreviewFlatRender(camera, view, width, height, *picture)
+            } else {
+                painted = PreviewCompose(*body, *twin, media, *moment, view, style, width, height, *picture)
+            }
+            if !painted {
+                print("figure capture: % could not be painted\n", final)
+                failed += 1
+                continue
+            }
+            PreviewOnPaper(*picture)
+            if !WritePNGFile(final, *picture, false) {
+                print("figure capture: could not write %\n", final)
+                failed += 1
+            }
+        }
+    }
+    print("figure capture: % frames, gpu=% %\n", count * 3, body.accelerated, body.diagnostic)
+    return failed
+}
+
+#scope_file
+// Lays the picture on the preview's paper colour.
+PreviewOnPaper :: (picture: *Raster.Image) {
+    paper: [3]float64 = .[243.0, 237.0, 225.0]
+    for index: 0..cast(s64)picture.width * picture.height - 1 {
+        at := index * 4
+        a := cast(float64)picture.pixels[at + 3] / 255.0
+        for channel: 0..2 {
+            value := cast(float64)picture.pixels[at + channel] * a + paper[channel] * (1.0 - a)
+            picture.pixels[at + channel] = cast(u8)(value + 0.5)
+        }
+        picture.pixels[at + 3] = 255
+    }
+}
+
+// The second of the item where her pelvis is lowest: the deepest stance.
+PreviewLowest :: (library: *PreviewLibrary, practice: s32, item: s32) -> float64 {
+    duration := PreviewDuration(library, practice, item)
+    best: float64
+    lowest: float64 = 1000.0
+    seconds: float64
+    while seconds < duration {
+        moment := PreviewSample(library, practice, item, seconds)
+        if moment.body.pelvis.y < lowest {
+            lowest = moment.body.pelvis.y
+            best = seconds
+        }
+        seconds += 0.25
+    }
+    return best
+}
+
+// The first second the astral twin is out beside the body, a little on.
+PreviewDoubleTime :: (library: *PreviewLibrary, item: s32) -> float64 {
+    duration := PreviewDuration(library, PREVIEW_ASTRAL, item)
+    seconds: float64
+    while seconds < duration {
+        if PreviewSample(library, PREVIEW_ASTRAL, item, seconds).twin_visible {
+            return FigureClamp(seconds + 4.0, 0.0, duration)
+        }
+        seconds += 1.0
+    }
+    return duration * 0.5
+}
+
+// Half a second before the first round's STEP ends: its pose reached.
+PreviewSunHeld :: (step: s32) -> float64 {
+    total: float64
+    for at: cast(s32)0..step {
+        state: SunSalutationPracticeState
+        state.repetitions = 2
+        state.step = at
+        state.start_seconds = SUN_SALUTATION_DEFAULT_START_SECONDS
+        state.end_seconds = SUN_SALUTATION_DEFAULT_END_SECONDS
+        total += cast(float64)SalutationStepSeconds(state)
+    }
+    return total - 0.5
+}

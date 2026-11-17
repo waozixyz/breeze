@@ -1,0 +1,159 @@
+// Breeze's current flat figure (tai_chi_flat.zi) for the same moment, so the
+// preview can show it beside the new character. The flat painter emits
+// filled shapes and stroked lines in the picture plane; this lays them on
+// pixels with four rows of coverage per pixel row.
+#import "figure_math"
+#import "figure_paint"
+#import "kryon/scene"
+#import "tai_chi_math"
+#import "tai_chi_view"
+#import "tai_chi_flat"
+#import "std/math"
+#import "std/vec"
+Raster :: #import "std/image";
+
+preview_flat_frame: TaiChiFlatFrame;
+preview_flat_edges: [512]float64;
+preview_flat_shape: [256]TaiChiVector2;
+
+// Draws preview_flat_frame, painted for CAMERA, into OUT as VIEW frames the
+// scene.
+PreviewFlatRender :: (camera: TaiChiCamera, view: FigureView, width: s32, height: s32,
+    out: *Raster.Image) -> bool {
+    frame := *preview_flat_frame
+    if width < 1 || height < 1 || !VecResize(out.pixels, cast(s64)width * height * 4) {
+        return false
+    }
+    out.width = width
+    out.height = height
+    for index: 0..out.pixels.count - 1 {
+        out.pixels[index] = 0
+    }
+    flat: TaiChiFlatView
+    TaiChiFlatViewSet(*flat, camera)
+    target := TaiChiProject(*flat, TaiChiV3(view.center.x, view.center.y, view.center.z))
+    scale := cast(float64)height / view.height
+    for index: cast(s32)0..frame.op_count - 1 {
+        op := frame.ops[index]
+        if op.kind == TAI_CHI_FLAT_FILL {
+            count := TaiChiMin(cast(float64)op.count, 256.0)
+            for at: cast(s32)0..cast(s32)count - 1 {
+                preview_flat_shape[at] = PreviewFlatPixel(frame.points[op.first + at], target, scale, width, height)
+            }
+            PreviewFlatFill(out, preview_flat_shape[0:cast(s32)count], op.color, op.alpha)
+        } else {
+            half := op.width * scale * 0.5
+            if half < 0.5 {
+                half = 0.5
+            }
+            for at: cast(s32)0..op.count - 2 {
+                a := PreviewFlatPixel(frame.points[op.first + at], target, scale, width, height)
+                b := PreviewFlatPixel(frame.points[op.first + at + 1], target, scale, width, height)
+                along := TaiChiUnit2(TaiChiSub2(b, a), TaiChiV2(1.0, 0.0))
+                side := TaiChiScale2(TaiChiV2(-along.y, along.x), half)
+                preview_flat_shape[0] = TaiChiAdd2(a, side)
+                preview_flat_shape[1] = TaiChiAdd2(b, side)
+                preview_flat_shape[2] = TaiChiSub2(b, side)
+                preview_flat_shape[3] = TaiChiSub2(a, side)
+                PreviewFlatFill(out, preview_flat_shape[0:4], op.color, op.alpha)
+            }
+        }
+    }
+    return true
+}
+
+#scope_file
+PreviewFlatPixel :: (point: TaiChiVector2, target: TaiChiVector2, scale: float64, width: s32,
+    height: s32) -> TaiChiVector2 {
+    return TaiChiV2(cast(float64)width * 0.5 + (point.x - target.x) * scale,
+        cast(float64)height * 0.5 - (point.y - target.y) * scale)
+}
+
+// Even-odd fill with sixteen coverage samples per pixel: four rows, and
+// exact horizontal span ends within each.
+PreviewFlatFill :: (out: *Raster.Image, shape: []TaiChiVector2, color: u32, alpha: float64) {
+    if shape.count < 3 || alpha <= 0.0 {
+        return
+    }
+    top: float64 = 1000000.0
+    bottom: float64 = -1000000.0
+    for point: shape {
+        top = TaiChiMin(top, point.y)
+        bottom = TaiChiMax(bottom, point.y)
+    }
+    first := cast(s32)TaiChiMax(0.0, top)
+    last := cast(s32)TaiChiMin(cast(float64)out.height - 1.0, bottom)
+    red := cast(float64)((color >> 16) & 255)
+    green := cast(float64)((color >> 8) & 255)
+    blue := cast(float64)(color & 255)
+    coverage: [4096]float64
+    for row: first..last {
+        left: s32 = out.width
+        right: s32 = -1
+        for sample: 0..3 {
+            y := cast(float64)row + (cast(float64)sample + 0.5) / 4.0
+            crossings: s32
+            for at: 0..shape.count - 1 {
+                a := shape[at]
+                b := shape[(at + 1) % shape.count]
+                if (a.y <= y && b.y > y) || (b.y <= y && a.y > y) {
+                    if crossings < 512 {
+                        preview_flat_edges[crossings] = a.x + (y - a.y) * (b.x - a.x) / (b.y - a.y)
+                        crossings += 1
+                    }
+                }
+            }
+            // Sort the few crossings in place.
+            for i: 1..crossings - 1 {
+                value := preview_flat_edges[i]
+                j := i - 1
+                while j >= 0 && preview_flat_edges[j] > value {
+                    preview_flat_edges[j + 1] = preview_flat_edges[j]
+                    j -= 1
+                }
+                preview_flat_edges[j + 1] = value
+            }
+            pair: s32
+            while pair + 1 < crossings {
+                start := TaiChiMax(0.0, preview_flat_edges[pair])
+                end := TaiChiMin(cast(float64)out.width, preview_flat_edges[pair + 1])
+                pair += 2
+                if end <= start {
+                    continue
+                }
+                low := cast(s32)start
+                high := cast(s32)TaiChiMin(cast(float64)out.width - 1.0, end)
+                left = cast(s32)TaiChiMin(cast(float64)left, cast(float64)low)
+                right = cast(s32)TaiChiMax(cast(float64)right, cast(float64)high)
+                for x: low..high {
+                    if x >= 4096 {
+                        break
+                    }
+                    cell := TaiChiMin(end, cast(float64)x + 1.0) - TaiChiMax(start, cast(float64)x)
+                    if cell > 0.0 {
+                        coverage[x] += cell * 0.25
+                    }
+                }
+            }
+        }
+        for x: left..right {
+            if x < 0 || x >= 4096 {
+                continue
+            }
+            a := TaiChiMin(1.0, coverage[x]) * alpha
+            coverage[x] = 0.0
+            if a <= 0.0 {
+                continue
+            }
+            at := (cast(s64)row * out.width + x) * 4
+            under := cast(float64)out.pixels[at + 3] / 255.0
+            total := a + under * (1.0 - a)
+            source: [3]float64 = .[red, green, blue]
+            for channel: 0..2 {
+                value := (source[channel] * a + cast(float64)out.pixels[at + channel] * under * (1.0 - a)) / total
+                out.pixels[at + channel] = cast(u8)(value + 0.5)
+            }
+            out.pixels[at + 3] = cast(u8)(total * 255.0 + 0.5)
+        }
+    }
+}
