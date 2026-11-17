@@ -47,13 +47,27 @@ final class TextInputView extends EditText {
             @Override public void onTextChanged(CharSequence text, int start, int before, int count) {}
             @Override public void afterTextChanged(Editable text) { publish(); }
         });
-        setOnEditorActionListener((view, action, event) -> {
-            if (!multiline && action != EditorInfo.IME_NULL) {
-                listener.enter();
-                return true;
-            }
+        setOnEditorActionListener((view, action, event) -> editorAction(action, event));
+    }
+
+    private boolean editorAction(int action, KeyEvent event) {
+        if (multiline) {
             return false;
-        });
+        }
+        // An IME Enter key reaches this editor directly. Android 14 reports
+        // the field's action for both its key down and key up, so submit only
+        // on the first key down and consume the repeats and the key up.
+        if (event != null) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0) {
+                listener.enter();
+            }
+            return true;
+        }
+        if (action == EditorInfo.IME_NULL) {
+            return false;
+        }
+        listener.enter();
+        return true;
     }
 
     private static int byteOffset(String value, int characterOffset) {
@@ -198,8 +212,18 @@ final class TextInputView extends EditText {
             }
 
             @Override public boolean sendKeyEvent(KeyEvent event) {
-                // EditText owns text keys; Activity must not also queue them.
-                return current() && super.sendKeyEvent(event);
+                if (!current()) {
+                    return false;
+                }
+                // BaseInputConnection sends keys through the window's native
+                // input queue. Keep IME edits in this editor, like commitText
+                // and deleteSurroundingText, so Kryon receives one final state.
+                beginBatchEdit();
+                try {
+                    return TextInputView.this.dispatchKeyEvent(event);
+                } finally {
+                    endBatchEdit();
+                }
             }
 
             @Override public boolean commitText(CharSequence text, int cursor) {

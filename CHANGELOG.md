@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Recover unfinished practices and data backups; add photos reliably and reset break timers after time away.
+- Backspace and text corrections work again; recover unfinished practices and backups, add photos reliably and reset break timers after time away.
 - Switch practices smoothly, choose an astral exercise, and claim daily coins beside the Habits balance.
 - Read Tao Te Ching art on its own page; find Photos and Radio in Apps, with clearer feedback and appearance controls.
 
