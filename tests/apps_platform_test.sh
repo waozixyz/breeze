@@ -3,7 +3,7 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
-ziran=${1:-build/ziran-toolchain/bin/ziran}
+ziran=${1:-build/packages/ziran/build/bin/ziran}
 target=${2:-native}
 liboqs=${3:-}
 sqlite=${4:-}
@@ -38,7 +38,7 @@ if [ "$target" = android ]; then
     binary=$work/android-armv7
 elif [ "$target" = native ]; then
     cc=${CC:-cc}
-    runtime=$root/build/ziran-toolchain
+    runtime=$root/build/packages/ziran/build
     binary=$work/native
 else
     echo "usage: apps_platform_test.sh ZIRAN native|android" >&2

@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/music-library-zi-test
 mkdir -p "$work/c" "$work/stubs"
 "$bin/zi2zir" --check-only --root "$root/src" \

@@ -4,7 +4,7 @@ set -eu
 # The break engine scenarios as native
 # code. Thousands of ticks per scenario are too many for the portable interpreter.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/break-engine-zi-test
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 kryon_ui=${KRYON_UI_DIR:-"$root/build/packages/kryon/src/ui"}

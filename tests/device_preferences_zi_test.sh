@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/device-preferences-zi-test
 
 mkdir -p "$work/c"

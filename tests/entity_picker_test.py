@@ -6,7 +6,7 @@ import shutil
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
-COMPILER = os.environ.get('ZI2C', str(ROOT / 'build/ziran-toolchain/bin/zi2c'))
+COMPILER = os.environ.get('ZI2C', str(ROOT / 'build/packages/ziran/build/bin/zi2c'))
 STD = Path(os.environ.get('ZIRAN_STD_ROOT', str(ROOT / 'build/packages/ziran')))
 ENV = {key: value for key, value in os.environ.items()
        if key not in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS',

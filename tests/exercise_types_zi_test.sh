@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=${EXERCISE_TYPES_TEST_BUILD_DIR:-"$root/build/exercise-types-test"}
 source=$root/tests/exercise_types_behavior.zi
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}

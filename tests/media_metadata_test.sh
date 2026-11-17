@@ -4,7 +4,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/media-metadata-test
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 modules="--module-path $root/build/packages/ziran/std"

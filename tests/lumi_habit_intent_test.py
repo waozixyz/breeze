@@ -16,7 +16,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parent.parent
 WORK = ROOT / 'build/lumi-habit-intent-test'
-ZIRAN = ROOT / 'build/ziran-toolchain/bin/ziran'
+ZIRAN = ROOT / 'build/packages/ziran/build/bin/ziran'
 KEYS = ('lumi_habit_patterns', 'lumi_habit_clauses', 'lumi_habit_words')
 
 HABITS = [

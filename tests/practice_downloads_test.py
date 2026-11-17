@@ -18,7 +18,7 @@ if work.exists():
 work.mkdir(parents=True)
 fixtures = work / 'fixtures'
 (fixtures / 'cache/packages').mkdir(parents=True)
-compiler = Path(os.environ.get('ZIRAN', str(ROOT / 'build/ziran-toolchain/bin/ziran')))
+compiler = Path(os.environ.get('ZIRAN', str(ROOT / 'build/packages/ziran/build/bin/ziran')))
 packs = []
 for name in NAMES:
     data = (ROOT / 'build/practice-content' / (name + '.zx')).read_bytes()
@@ -103,7 +103,7 @@ subprocess.run([os.environ.get('CC', 'cc'), '-std=c11', '-D_GNU_SOURCE', '-O1',
     '-I' + str(monocypher / 'optional'), str(ROOT / 'tests/practice_downloads_host.c'),
     *map(str, generated.rglob('*.c')), str(monocypher / 'monocypher.c'),
     str(monocypher / 'optional/monocypher-ed25519.c'),
-    os.environ.get('ZIRAN_RUNTIME', str(ROOT / 'build/ziran-toolchain/libziran.a')), '-Wl,--gc-sections',
+    os.environ.get('ZIRAN_RUNTIME', str(ROOT / 'build/packages/ziran/build/libziran.a')), '-Wl,--gc-sections',
     '-Wl,--wrap=storage_db_path',
     '-Wl,--wrap=Sha256Hex',
     '-lm', '-pthread', '-o', str(work / 'test')], check=True)

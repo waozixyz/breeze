@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-compiler=${1:-"${ZIRAN_BIN:-"$root/build/ziran-toolchain/bin/ziran"}"}
+compiler=${1:-"${ZIRAN_BIN:-"$root/build/packages/ziran/build/bin/ziran"}"}
 launcher=$compiler
 ziran_dir=$(cd "$root" && "$launcher" pkg path ziran)
 monocypher=$(cd "$root" && "$launcher" pkg path monocypher)

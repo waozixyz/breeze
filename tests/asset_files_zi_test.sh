@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 raylib=${2:-"$root/vendor-builds/linux/x86_64/raylib/libraylib.a"}
 work=$(mktemp -d "$root/build/asset-files-zi.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM

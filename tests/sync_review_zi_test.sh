@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 work=$root/build/sync-review-zi-test
 include=$root/build/packages/ziran/include
 

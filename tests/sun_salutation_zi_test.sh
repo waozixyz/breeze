@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=${SUN_SALUTATION_TEST_BUILD_DIR:-"$root/build/sun-salutation-test"}
 source=$root/tests/sun_salutation_behavior.zi
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
@@ -25,7 +25,7 @@ for input in source saved; do
     rm -rf "$output/c" "$output/go"
     mkdir -p "$output/c" "$output/go"
 
-    "$bin/zi2zx" bundle --root "$module_root" \
+    "$bin/zi2zx" --root "$module_root" \
         --module-path "$module_path" \
         --entry sun_salutation_behavior:Answer \
         -o "$output/sun_salutation.zx" "$file"

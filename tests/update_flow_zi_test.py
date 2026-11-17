@@ -109,7 +109,7 @@ def build_probe(work, compiler, env):
 
 def main():
     compiler = (Path(sys.argv[1]) if len(sys.argv) > 1 else
-                ROOT / "build/ziran-toolchain/bin/zi2c")
+                ROOT / "build/packages/ziran/build/bin/zi2c")
     env = os.environ.copy()
     env.pop("DISPLAY", None)
     env.pop("WAYLAND_DISPLAY", None)

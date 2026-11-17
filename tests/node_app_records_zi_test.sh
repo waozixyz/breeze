@@ -4,7 +4,7 @@ set -eu
 # Names of the apps the node offers, their synced keys, collections and
 # shared ids, as native code.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/node-app-records-zi-test
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 

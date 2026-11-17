@@ -7,7 +7,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'build/ziran-toolchain/bin'
+BIN = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / 'build/packages/ziran/build/bin'
 ENV = dict(os.environ)
 for name in ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'GDK_DISPLAY'):
     ENV.pop(name, None)
@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix='settings-status-', dir=ROOT / 'build') 
     for source, root in ((ROOT / 'tests/settings_status_behavior.zi', ROOT / 'tests'),
                          (ir / 'settings_status_behavior.zir', ir)):
         bundle = work / ('source.zx' if source.suffix == '.zi' else 'saved.zx')
-        subprocess.run([BIN / 'zi2zx', 'bundle', '--root', root,
+        subprocess.run([BIN / 'zi2zx', '--root', root,
                         '--entry', 'settings_status_behavior:main', '-o', bundle,
                         source], env=ENV, check=True)
         result = subprocess.run([BIN / 'zi2zx', 'run', bundle], env=ENV,

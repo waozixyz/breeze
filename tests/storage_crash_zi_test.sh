@@ -7,7 +7,7 @@ set -eu
 # tests/storage_crash_behavior.zi for what each scenario writes and checks.
 # STORAGE_CRASH_ROUNDS sets the kills per scenario (default 30).
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 rounds=${STORAGE_CRASH_ROUNDS:-30}
 work=$root/build/storage-crash-zi-test

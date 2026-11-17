@@ -3,7 +3,7 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work=$root/build/device-host-sdl-test
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/src/platform" \
     --module-path "$root/src" --module-path "$root/build/packages/ziran/std" \

@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=${ROUTE_CATALOG_TEST_BUILD_DIR:-"$root/build/route-catalog-test"}
 source=$root/tests/route_catalog_behavior.zi
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
@@ -29,7 +29,7 @@ for input in source saved; do
     output=$work/$input
     rm -rf "$output/c" "$output/go"
     mkdir -p "$output/c" "$output/go"
-    "$bin/zi2zx" bundle --root "$module_root" \
+    "$bin/zi2zx" --root "$module_root" \
         --module-path "$app_path" --module-path "$ui_path" --module-path "$std_path" \
         --entry route_catalog_behavior:Answer \
         -o "$output/routes.zx" "$file"

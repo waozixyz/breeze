@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=${MODAL_RULES_TEST_BUILD_DIR:-"$root/build/modal-rules-test"}
 source=$root/tests/modal_rules_behavior.zi
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
@@ -24,7 +24,7 @@ for input in source saved; do
     output=$work/$input
     rm -rf "$output/c" "$output/go"
     mkdir -p "$output/c" "$output/go"
-    "$bin/zi2zx" bundle --root "$module_root" \
+    "$bin/zi2zx" --root "$module_root" \
         --module-path "$module_path" \
         --entry modal_rules_behavior:Answer \
         -o "$output/modal_rules.zx" "$file"
@@ -41,7 +41,7 @@ for input in source saved; do
 int main(void) { return Answer() == 42 ? 0 : 1; }
 C
     "${CC:-cc}" -std=c11 -I"$include" -I"$output/c" \
-        "$output/c/modal_rules.c" "$output/c/types.c" \
+        "$output/c/modal_rules.c" \
         "$output/c/modal_rules_behavior.c" "$output/c/main.c" \
         -o "$output/c/test"
     env -u DISPLAY -u WAYLAND_DISPLAY "$output/c/test"

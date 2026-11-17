@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work="$root/build/storage-thread-buffer-zi-test"
 source="$root/tests/storage_thread_buffer_behavior.zi"
 mkdir -p "$work/c"

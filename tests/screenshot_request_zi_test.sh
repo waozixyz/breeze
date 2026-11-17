@@ -2,13 +2,13 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/screenshot-request-zi-test
 source=$root/tests/screenshot_request_behavior.zi
 mkdir -p "$work/ir" "$work/c"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" -o "$work/ir" "$source"
-"$bin/zi2zx" bundle --root "$root/tests" --module-path "$root/src" \
+"$bin/zi2zx" --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" \
     --entry screenshot_request_behavior:Answer \
     -o "$work/request.zx" "$source"

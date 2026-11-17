@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-compiler=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+compiler=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=$(mktemp -d /tmp/inbe-telegram-entry-protocol.XXXXXX)
 trap 'rm -rf "$work"' EXIT HUP INT TERM

@@ -4,7 +4,7 @@ set -eu
 # Breathing round flow (countdowns, pauses, results, completion) as native
 # code. Too many steps for the portable interpreter, so this is native only.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/breath-rounds-zi-test
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 

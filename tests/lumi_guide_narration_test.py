@@ -17,7 +17,7 @@ import subprocess
 import sys
 
 root = Path(__file__).resolve().parent.parent
-ziran = sys.argv[1] if len(sys.argv) > 1 else str(root / "build/ziran-toolchain/bin/ziran")
+ziran = sys.argv[1] if len(sys.argv) > 1 else str(root / "build/packages/ziran/build/bin/ziran")
 config = json.loads((root / "design/lumi-guide/narration.json").read_text(encoding="utf-8"))
 narrated = set(config["keys"])
 named = set()

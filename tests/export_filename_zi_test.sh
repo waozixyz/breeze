@@ -2,15 +2,17 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/export-filename-zi-test
+rm -rf "$work/generated"
 mkdir -p "$work/generated"
 "$bin/zi2c" --no-main --root "$root/src" \
     -o "$work/generated" "$root/src/storage/export_filename.zi"
+generated_sources=$(find "$work/generated" -name '*.c' | sort)
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -I"$root/build/packages/ziran/include" -I"$work/generated" \
-    "$work/generated/storage/export_filename.c" \
-    "$work/generated/storage_layout.c" -x c - -o "$work/test" <<'EOF'
+    $generated_sources \
+ -x c - -o "$work/test" <<'EOF'
 #include "storage/export_filename.h"
 #include <assert.h>
 #include <stdint.h>

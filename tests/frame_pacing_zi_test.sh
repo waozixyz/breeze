@@ -2,8 +2,9 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/frame-pacing-zi-test
+rm -rf "$work/c"
 mkdir -p "$work/c"
 
 "$bin/zi2zir" --check-only --root "$root/src" \
@@ -21,6 +22,6 @@ mkdir -p "$work/c"
     "$root/tests/frame_pacing_link_test.c" \
     "$work/c/app/app_frame_pacing.c" "$work/c/session_screen.c" \
     "$work/c/frame_activity.c" "$work/c/smooth_frames.c" \
-    "$work/c/frame_pacing.c" -o "$work/test"
+    "$work/c"/p*_frame_pacing.c -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "Inbe frame pacing Ziran/native link test passed"

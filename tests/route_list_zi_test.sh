@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
@@ -10,9 +10,9 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 source=$root/tests/route_list_behavior.zi
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
     -o "$work/ir" "$source"
-"$bin/zi2zx" bundle --root "$root/tests" --module-path "$root/src" \
+"$bin/zi2zx" --root "$root/tests" --module-path "$root/src" \
     --entry route_list_behavior:Answer -o "$work/source.zx" "$source"
-"$bin/zi2zx" bundle --root "$work/ir" \
+"$bin/zi2zx" --root "$work/ir" \
     --entry route_list_behavior:Answer -o "$work/saved.zx" \
     "$work/ir/route_list_behavior.zir"
 cmp "$work/source.zx" "$work/saved.zx"

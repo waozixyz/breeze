@@ -8,7 +8,7 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
-ziran = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "build/ziran-toolchain/bin/ziran"
+ziran = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "build/packages/ziran/build/bin/ziran"
 liboqs = Path(sys.argv[2]) if len(sys.argv) > 2 else ROOT / "vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"
 
 with tempfile.TemporaryDirectory(prefix="inbe-device-link-") as temporary:

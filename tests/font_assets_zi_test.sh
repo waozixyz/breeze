@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=${FONT_ASSETS_TEST_BUILD_DIR:-"$root/build/font-assets-test"}
 source=$root/tests/font_assets_behavior.zi
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
@@ -24,7 +24,7 @@ for input in source saved; do
     output=$work/$input
     rm -rf "$output/c" "$output/go"
     mkdir -p "$output/c" "$output/go"
-    "$bin/zi2zx" bundle --root "$module_root" \
+    "$bin/zi2zx" --root "$module_root" \
         --module-path "$module_path" \
         --entry font_assets_behavior:Answer \
         -o "$output/font_assets.zx" "$file"

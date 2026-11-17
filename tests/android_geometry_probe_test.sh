@@ -3,7 +3,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 work=$root/build/scratch/android-geometry-probe
 mkdir -p "$work"
-ziran=${ZIRAN_BIN:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${ZIRAN_BIN:-"$root/build/packages/ziran/build/bin/ziran"}
 "$ziran" build --target=c --define ANDROID_BUILD --define ANDROID_DEBUG \
     --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \

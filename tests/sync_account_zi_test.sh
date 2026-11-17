@@ -4,7 +4,7 @@ set -eu
 # Account import/export/migration and storage behavior, run against a real
 # SQLite database in a temporary directory.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 kryon=${KRYON_DIR:-"$root/build/packages/kryon"}
 entity=${ENTITY_DIR:-"$root/build/packages/entity"}

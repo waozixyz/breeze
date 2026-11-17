@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work="$root/build/app-click-block-test"
 mkdir -p "$work/generated"
 "$bin/zi2c" --no-main --define PLATFORM_DESKTOP --root "$root/tests" \

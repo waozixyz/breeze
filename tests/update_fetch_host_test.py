@@ -114,7 +114,7 @@ def main():
         assert curl_name is not None, "libcurl is required for this test"
         library = Path(work) / "update_fetch.so"
         compiler = (Path(sys.argv[1]) if len(sys.argv) > 1 else
-                    ROOT / "build/ziran-toolchain/bin/zi2c")
+                    ROOT / "build/packages/ziran/build/bin/zi2c")
         generated = Path(work) / "transport"
         arch = platform.machine().lower()
         architecture = ("__aarch64__" if arch in ("aarch64", "arm64")

@@ -2,17 +2,17 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/sync-status-policy-test
 source=$root/tests/sync_status_policy_behavior.zi
 
 mkdir -p "$work/ir" "$work/c"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
     -o "$work/ir" "$source"
-"$bin/zi2zx" bundle --root "$root/tests" --module-path "$root/src" \
+"$bin/zi2zx" --root "$root/tests" --module-path "$root/src" \
     --entry sync_status_policy_behavior:Answer \
     -o "$work/source.zx" "$source"
-"$bin/zi2zx" bundle --root "$work/ir" --module-path "$work/ir" \
+"$bin/zi2zx" --root "$work/ir" --module-path "$work/ir" \
     --entry sync_status_policy_behavior:Answer \
     -o "$work/saved.zx" "$work/ir/sync_status_policy_behavior.zir"
 [ "$(env -u DISPLAY -u WAYLAND_DISPLAY "$bin/zi2zx" run "$work/source.zx")" = 42 ]

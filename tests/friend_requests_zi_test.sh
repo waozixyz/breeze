@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 standard=${2:-"$root/build/packages/ziran/std"}
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 work=$(mktemp -d)
@@ -11,10 +11,10 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 source=$root/tests/friend_requests_behavior.zi
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
     --module-path "$standard" -o "$work/ir" "$source"
-"$bin/zi2zx" bundle --root "$root/tests" --module-path "$root/src" \
+"$bin/zi2zx" --root "$root/tests" --module-path "$root/src" \
     --module-path "$standard" --entry friend_requests_behavior:Answer \
     -o "$work/source.zx" "$source"
-"$bin/zi2zx" bundle --root "$work/ir" --module-path "$work/ir" \
+"$bin/zi2zx" --root "$work/ir" --module-path "$work/ir" \
     --entry friend_requests_behavior:Answer -o "$work/saved.zx" \
     "$work/ir/friend_requests_behavior.zir"
 cmp "$work/source.zx" "$work/saved.zx"

@@ -14,7 +14,7 @@ import threading
 
 
 ROOT = Path(__file__).resolve().parent.parent
-COMPILER = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "build/ziran-toolchain/bin/zi2c"
+COMPILER = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "build/packages/ziran/build/bin/zi2c"
 USER_ID = "a" * 64
 NONCE = "c" * 64
 

@@ -5,7 +5,7 @@ set -eu
 # entity data against nodes the test answers from memory, on a real SQLite
 # database in this build's own directory.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=$root/build/entity-photos-zi-test
 include=$root/build/packages/ziran/include

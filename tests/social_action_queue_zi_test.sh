@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 include=${ZIRAN_INCLUDE:-"$root/build/packages/ziran/include"}
 work=$root/build/social-action-queue-test
 source=$root/tests/social_action_queue_behavior.zi
@@ -23,7 +23,7 @@ for input in source saved; do
     fi
     output=$work/$input
     mkdir -p "$output/c" "$output/go"
-    "$bin/zi2zx" bundle --root "$module_root" \
+    "$bin/zi2zx" --root "$module_root" \
         --module-path "$app_path" \
         --entry social_action_queue_behavior:Answer \
         -o "$output/queue.zx" "$file"

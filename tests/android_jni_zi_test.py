@@ -9,7 +9,7 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-BIN = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "build/ziran-toolchain/bin"
+BIN = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "build/packages/ziran/build/bin"
 UI = Path(os.environ.get("KRYON_UI", str(ROOT / "build/packages/kryon/src/ui")))
 WORK = ROOT / "build/android-jni-zi-test"
 GEN = WORK / "generated"

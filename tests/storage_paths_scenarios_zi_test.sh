@@ -5,7 +5,7 @@ set -eu
 # directory into place, and archiving a conflicting one. data_root() caches
 # its result, so each scenario is a fresh process with its own environment.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 work=$root/build/storage-paths-scenarios-zi-test
 include=$root/build/packages/ziran/include
 

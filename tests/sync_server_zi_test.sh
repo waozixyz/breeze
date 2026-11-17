@@ -5,7 +5,7 @@ set -eu
 # real Daochi server through scripts/sync-server-test.mjs, which needs
 # DAOCHI_BIN (a built Daochi server) and node.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=${SYNC_SERVER_TEST_WORK:-$root/build/sync-server-zi-test}
 include=$root/build/packages/ziran/include

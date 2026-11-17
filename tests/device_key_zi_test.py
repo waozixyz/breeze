@@ -11,7 +11,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parent.parent
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("compiler", nargs="?", type=Path, default=ROOT / "build/ziran-toolchain/bin/zi2c")
+parser.add_argument("compiler", nargs="?", type=Path, default=ROOT / "build/packages/ziran/build/bin/zi2c")
 parser.add_argument("--wasm", action="store_true")
 parser.add_argument("--emcc", default=os.environ.get("EMCC", "/home/wao/emsdk/upstream/emscripten/emcc"))
 args = parser.parse_args()

@@ -2,10 +2,10 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/update-policy-zi-test
 mkdir -p "$work/c"
-"$bin/zi2zx" bundle --root "$root/tests" \
+"$bin/zi2zx" --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/ziran/std" \
     --entry update_policy_behavior:Answer \
     -o "$work/update-policy.zx" \
