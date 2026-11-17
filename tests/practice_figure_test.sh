@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 source=${2:?practice behavior source required}
 name=$(basename "$source" .zi)
 case "$name" in
@@ -27,6 +27,6 @@ int main(void) {
 }
 C
 "${CC:-cc}" -std=c11 -I"$root/build/packages/ziran/include" -I"$work/c" \
-    "$work/c"/*.c "$root/build/ziran-toolchain/libziran.a" -lm -lz -o "$work/test"
+    "$work/c"/*.c "$bin/../libziran.a" -lm -lz -o "$work/test"
 (cd "$root/tests" && env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS "$work/test")
 echo "$name: practice behavior and figure passed"

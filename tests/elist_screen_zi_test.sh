@@ -2,7 +2,7 @@
 set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-bin=${1:-"$root/build/ziran-toolchain/bin"}
+bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/elist-screen-zi-test
 mkdir -p "$work/c"
 
@@ -10,23 +10,15 @@ mkdir -p "$work/c"
 exec 9>"$work.lock"
 flock 9
 
-"$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
+"$bin/ziran" check --project --locked --root "$root/src" \
     "$root/src/screens/elist_screen.zi"
-"$bin/zi2c" --no-main --prune-stale --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
+"$bin/ziran" build --project --locked --target=c --no-main --prune-stale --root "$root/src" \
     -o "$work/c" "$root/src/screens/elist_screen.zi"
 
-includes="-I$root/build/packages/ziran/include -I$work/c -I$work/c/screens"
+includes="-I$root/build/packages/ziran/include -I$work/c"
 
 # The test host and the screen under test compile warning-free.
-for source in "$root/tests/elist_screen_link_test.c" "$work/c/screens/elist_screen.c"; do
+for source in "$root/tests/elist_screen_link_test.c" "$work/c/elist_screen.c"; do
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
         -Wno-unused-function -Wno-unused-variable \
         -ffunction-sections -fdata-sections $includes \
@@ -40,11 +32,14 @@ done
 # boundary through a linker wrapper, leaving its production export intact.
 "${CC:-cc}" -std=c11 -w -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--wrap=app_auto_sync \
     $includes "$work/elist_screen_link_test.o" "$work/elist_screen.o" \
-    $(find "$work/c" -name '*.c' | grep -v -e '/screens/elist_screen\.c$' \
+    $(find "$work/c" -name '*.c' | grep -v -e '/elist_screen\.c$' \
         -e '/db\.c$' -e '/storage_elist\.c$' -e '/lists_network\.c$' \
         -e '/diary_store\.c$' -e '/node_apps\.c$' -e '/media_store\.c$' \
         -e '/metrics\.c$') \
-    "$root/build/ziran-toolchain/libziran.a" -lm -lpthread \
+    "$bin/../libziran.a" \
+    "$root/vendor-builds/linux/x86_64/raylib/libraylib.a" \
+    $(pkg-config --libs sdl2 gl libwebp libwebpdemux) \
+    -l:libopus.so.0 -l:libcurl.so.4 -lm -lpthread -ldl -lz -latomic \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test" "$root/build/inbe.zx"
 echo "Inbe elist screen Ziran/native test passed"

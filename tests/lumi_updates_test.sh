@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-compiler=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+compiler=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work="$root/build/lumi-updates-test"
 mkdir -p "$work"
@@ -10,14 +10,7 @@ flock 9
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 export YUE_DESKTOP_RECOVERY=0
 mkdir -p "$work/generated"
-"$compiler" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
+"$compiler" build --project --locked --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --entry lumi_updates_behavior:Check -o "$work/generated" \
     "$root/tests/lumi_updates_behavior.zi" "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'

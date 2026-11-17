@@ -2,12 +2,14 @@
 from hashlib import sha256
 import json
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 from small_app_bundling import inspect_bundle, stage, MANDATORY, LIMIT_BYTES
+from practice_content import bundle_assets
 from node_app_games_test import fixture_bundle
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -102,8 +104,18 @@ class BundlingTests(unittest.TestCase):
         source = next(p for p in lock['packages']
                       if p['id'] == lock['root']['dependencies']['arcade'])
         self.assertTrue(source['source'])
-        self.assertEqual(source['commit'], item['source_commit'])
+        # The baseline retains its independently reviewed source revision.
+        # Updating a source-only metadata dependency does not rebuild it.
+        self.assertRegex(item['source_commit'], r'^[0-9a-f]{40}$')
         self.assertEqual(source['url'].removesuffix('.git'), item['source'])
+        catalog = json.loads(bundle_assets(path.read_bytes())['assets/apps/catalog.json'])
+        artwork = path.parent / (path.stem + '.games') / (catalog['art']['sha256'] + '.zx')
+        required = {item['path'], str(artwork.relative_to(ROOT))}
+        tracked = subprocess.check_output(
+            ['git', '-C', str(ROOT), 'ls-files', '-z', '--', *sorted(required)]
+        ).decode().split('\0')
+        self.assertEqual(set(filter(None, tracked)), required,
+                         'reviewed baseline and artwork must be included in the commit')
         info = stage({}, declarations, self.bundles, self.optional, self.mandatory)['optional']['arcade']
         self.assertTrue(info['included'])
         self.assertEqual(len(list((self.optional / 'arcade').glob('*.zx'))), 1)

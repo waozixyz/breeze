@@ -4,7 +4,8 @@ set -eu
 # Storage import/export and migration behaviour, run against a real
 # SQLite database in a temporary directory.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
+runtime_library=$(dirname "$ziran")/../libziran.a
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=$root/build/session-results-zi-test
 include=$root/build/packages/ziran/include
@@ -33,6 +34,7 @@ imports = ['apps/shared_state', 'apps/module_host', 'apps/practice_types',
            'app/exercise_types', 'storage/data', 'practices/session_results']
 header = ''.join('#import, file "' + os.path.relpath(root / 'src' / (name + '.zi'), work) + '";\n'
                  for name in imports)
+header += '#import, file "' + os.path.relpath(root / 'apps/practice/recovery.zi', work) + '";\n'
 header += '''#import "byte_text_linux"
 c3 :: #system_library "c";
 using ExerciseType;
@@ -47,15 +49,8 @@ app_play_bell_cue :: (app: *InnerBreeze, volume: float32) #foreign c3;
 '''
 (work / 'meditation_session_behavior.zi').write_text(header + body)
 PY
-"$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
+"$ziran" build --project --locked --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$work" \
-    --module-path "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
     --entry session_results_behavior:Check \
     -o "$work/generated" "$root/tests/session_results_behavior.zi" \
     "$work/meditation_session_behavior.zi" \
@@ -72,14 +67,15 @@ int main(void)
     return result == 0 ? 0 : 1;
 }
 C
-"${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
+# Optimize the full application-state initializer, as the native app build does.
+"${CC:-cc}" -std=c11 -O1 -ffunction-sections -fdata-sections \
     -I"$include" -iquote"$work/generated" -I"$root/vendor-builds/sqlite" \
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
     -I"$root/build/packages/monocypher/src" -I"$root/build/packages/monocypher/src/optional" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
     "$root/build/packages/monocypher/src/monocypher.c" \
     "$root/build/packages/monocypher/src/optional/monocypher-ed25519.c" \
-    "$root/build/ziran-toolchain/libziran.a" \
+    "$runtime_library" \
     "$root/vendor-builds/linux/x86_64/raylib/libraylib.a" \
     -Wl,--wrap=meditation_music_stop -Wl,--gc-sections -l:libcurl.so.4 \
     $(pkg-config --libs sdl2 gl libwebp libwebpdemux) -ldl -lpthread -lz -lm -latomic -o "$work/test"

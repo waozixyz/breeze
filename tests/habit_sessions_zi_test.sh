@@ -4,21 +4,15 @@ set -eu
 # Storage import/export and migration behaviour, run against a real
 # SQLite database in a temporary directory.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-ziran=${1:-"$root/build/ziran-toolchain/bin/ziran"}
+ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
+runtime_library=$(dirname "$ziran")/../libziran.a
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=$root/build/habit-sessions-zi-test
 include=$root/build/packages/ziran/include
 
 rm -rf "$work"
 mkdir -p "$work/generated"
-"$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
+"$ziran" build --project --locked --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --entry habit_sessions_behavior:Check \
     -o "$work/generated" "$root/tests/habit_sessions_behavior.zi" \
     "$root/tests/sync_test_host.zi" \
@@ -33,11 +27,12 @@ int main(void)
     return result == 0 ? 0 : 1;
 }
 C
-"${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
+# Optimize the full application-state initializers, as the native app build does.
+"${CC:-cc}" -std=c11 -O1 -ffunction-sections -fdata-sections \
     -I"$include" -I"$work/generated" -I"$root/vendor-builds/sqlite" \
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
-    "$root/build/ziran-toolchain/libziran.a" \
+    "$runtime_library" \
     -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
 # Storage must never open the real data directory.
 APP_DATA_ROOT=/tmp/inbe-habit-sessions-zi-test/data

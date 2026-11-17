@@ -165,7 +165,7 @@ modal-rules-test: build-laws $(ZI2C_BIN)
 	@sh tests/modal_rules_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: elist-screen-test
-elist-screen-test: apps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
+elist-screen-test: apps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(RAYLIB_A)
 	@sh tests/elist_screen_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: app-click-block-zi-test

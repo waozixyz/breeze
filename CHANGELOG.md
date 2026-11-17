@@ -2,9 +2,9 @@
 
 ## [Unreleased]
 
-- Recover unfinished practices, restore a last good data copy and reset break timers after time away; adding a photo during practice keeps the app stable.
+- Recover unfinished practices and data backups; add photos reliably and reset break timers after time away.
 - Switch practices smoothly, choose an astral exercise, and claim daily coins beside the Habits balance.
-- Read Tao Te Ching art on its own page; find Photos and Radio in Apps, with clearer lists, feedback and appearance controls.
+- Read Tao Te Ching art on its own page; find Photos and Radio in Apps, with clearer feedback and appearance controls.
 
 ## [2.1.63] - 2026-11-05
 
