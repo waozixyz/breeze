@@ -1,0 +1,84 @@
+#import, file "../apps/practice/astral_technique.zi";
+#import, file "../apps/practice/astral_projection_rules.zi";
+#import, file "../apps/practice/workout_moves.zi";
+#import, file "../src/practices/tai_chi/tai_chi_math.zi";
+#import "std/file"
+#import "std/math"
+
+main :: () -> s32 {
+    ids: [6]string = .["bruce_foundation_touch", "bruce_full_body_current",
+    "bruce_elevator_trance", "bruce_spin_loosening", "bruce_rope_exit", "bruce_roll_out_exit"]
+    paths: [6]string = .[
+    "../../modules/practices/astral_projection/sessions/bruce_foundation_touch.json",
+    "../../modules/practices/astral_projection/sessions/bruce_full_body_current.json",
+    "../../modules/practices/astral_projection/sessions/bruce_elevator_trance.json",
+    "../../modules/practices/astral_projection/sessions/bruce_spin_loosening.json",
+    "../../modules/practices/astral_projection/sessions/bruce_rope_exit.json",
+    "../../modules/practices/astral_projection/sessions/bruce_roll_out_exit.json"]
+    boundaries: s32
+    rig := WorkoutRig()
+    for exercise: cast(s32)0..5 {
+        data, found := ReadEntireFile(paths[exercise])
+        course: AstralCourse
+        if !found || !AstralCourseParse(data, *course) {
+            return 1
+        }
+        first := AstralTechniqueAt(ids[exercise], *course, -1000)
+        digest := WorkoutPoseDigest(*first.physical, cast(u64)1)
+        for cue: cast(s32)0..course.count - 1 {
+            time := cast(s64)course.cues[cue].second * 1000
+            at := AstralTechniqueAt(ids[exercise], *course, time)
+            before := AstralTechniqueAt(ids[exercise], *course, time - 1)
+            if at.cue != cue || at.progress != 0.0 ||
+            (cue > 0 && before.cue != cue - 1) { return 2 }
+            boundaries += 1
+        }
+        for tick: cast(s32)0..course.duration * 2 {
+            time := cast(s64)tick * 500
+            scene := AstralTechniqueAt(ids[exercise], *course, time)
+            repeated := AstralTechniqueAt(ids[exercise], *course, time)
+            body := WorkoutSolve(*scene.physical, *rig)
+            awareness := WorkoutSolve(*scene.awareness, *rig)
+            if WorkoutPoseDigest(*scene.physical, cast(u64)1) != digest ||
+            !Finite64(body.head_center.y) || !Finite64(awareness.head_center.y) ||
+            !Finite64(scene.double_roll) || !Finite64(scene.marker.x) ||
+            scene.progress < 0.0 || scene.progress > 1.0 ||
+            scene.double_offset.y != repeated.double_offset.y { return 3 }
+            if exercise < 4 && scene.double_visible {
+                return 4
+            }
+        }
+        end := AstralTechniqueAt(ids[exercise], *course, cast(s64)course.duration * 1000)
+        if end.double_visible || end.marker_visible || end.rope || end.path != 0 {
+            return 5
+        }
+        // Changing an actual cue boundary must change the visual boundary too.
+        if exercise == 4 {
+            course.cues[11].second += 17
+            early := AstralTechniqueAt(ids[exercise], *course, 1320000)
+            start := AstralTechniqueAt(ids[exercise], *course, 1337000)
+            climb := AstralTechniqueAt(ids[exercise], *course, 1500500)
+            back := AstralTechniqueAt(ids[exercise], *course, 2279999)
+            if early.rope || !start.rope || !climb.double_visible ||
+            climb.double_offset.y < 0.4 || !back.returning ||
+            back.double_offset.y > 0.0001 { return 6 }
+            awareness := WorkoutSolve(*climb.awareness, *rig)
+            physical := WorkoutSolve(*climb.physical, *rig)
+            if awareness.wrists[0].y <= physical.wrists[0].y + 0.1 ||
+            awareness.wrists[1].y <= physical.wrists[1].y + 0.1 { return 7 }
+        }
+        if exercise == 5 {
+            left := AstralTechniqueAt(ids[exercise], *course, 843000)
+            right := AstralTechniqueAt(ids[exercise], *course, 963000)
+            back := AstralTechniqueAt(ids[exercise], *course, 1679999)
+            if left.double_roll <= 0.0 || right.double_roll >= 0.0 ||
+            left.double_offset.x <= 0.0 || right.double_offset.x >= 0.0 ||
+            !back.returning || TaiChiLength3(back.double_offset) > 0.0001 { return 8 }
+        }
+    }
+    if boundaries != 88 {
+        return 9
+    }
+    print("Six native astral technique models: % cue boundaries, fixed physical pose, rope, both roll directions and return passed\n", boundaries)
+    return 0
+}

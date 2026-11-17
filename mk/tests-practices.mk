@@ -132,6 +132,7 @@ ming-segment-pipeline-test:
 .PHONY: astral-projection-test
 astral-projection-test: $(ZI2C_BIN)
 	sh tests/astral_projection_test.sh $(ZIRAN_BUILD_DIR)/bin
+	sh tests/astral_technique_test.sh $(ZIRAN_BUILD_DIR)/bin $(ZIRAN_DIR)/std
 	python3 tests/astral_narration_test.py
 
 .PHONY: workout-test
