@@ -1,4 +1,5 @@
 import * as T from 'three'
+import { paintedMaterial } from './textures.js'
 
 const colors = ['#75d9e4', '#8eafff', '#b397f0', '#78d9cf', '#dfbd83', '#c0a4fa']
 export const palette = index => new T.Color(colors[index])
@@ -15,17 +16,9 @@ export function createRoom(scene, index) {
     const lampLight = new T.PointLight('#ffd2a0', 17, 9, 2)
     lampLight.position.set(1.35, 1.25, -1.30)
     scene.add(lampLight)
-    const wood = new T.MeshStandardMaterial({ color: '#433743', roughness: 0.77 })
-    const wall = new T.MeshStandardMaterial({ color: '#253047', roughness: 1 })
-    const linen = new T.MeshStandardMaterial({ color: '#77869e', roughness: 1 })
-    linen.onBeforeCompile = shader => {
-        shader.vertexShader = 'varying vec3 fabricPosition;\n' + shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nfabricPosition = position;')
-        shader.fragmentShader = 'varying vec3 fabricPosition;\n' + shader.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
-            float weave=sin(fabricPosition.x*600.0)*sin(fabricPosition.z*600.0);
-            float folds=sin(fabricPosition.z*14.0+sin(fabricPosition.x*9.0))*0.08;
-            diffuseColor.rgb*=0.93+weave*0.025+folds;
-        `)
-    }
+    const wood = paintedMaterial({ color: '#62546c', texture: 'wood' })
+    const wall = paintedMaterial({ color: '#71829b', texture: 'plaster' })
+    const linen = paintedMaterial({ color: '#c7cfdf', texture: 'linen' })
     function box(size, position, material) {
         const mesh = new T.Mesh(new T.BoxGeometry(...size), material)
         mesh.position.set(...position)
@@ -35,7 +28,7 @@ export function createRoom(scene, index) {
     box([15, 0.12, 15], [0, -0.15, 0], wood)
     box([10, 6, 0.16], [0, 2.85, -4.2], wall)
     box([0.16, 6, 9], [-4.2, 2.85, -0.1], wall)
-    const rug = box([3.8, 0.025, 4.7], [0, -0.07, 0], new T.MeshStandardMaterial({ color: '#303448', roughness: 1 }))
+    const rug = box([3.8, 0.025, 4.7], [0, -0.07, 0], paintedMaterial({ color: '#59627a', texture: 'linen' }))
     for (const x of [-1.75, 1.75]) box([0.018, 0.004, 4.3], [x, rug.position.y + 0.015, 0], linen)
     box([1.30, 0.18, 3.45], [0, 0.19, 0], wood)
     box([1.18, 0.14, 3.28], [0, 0.35, 0], linen)
@@ -45,11 +38,11 @@ export function createRoom(scene, index) {
     pillow.position.set(0, 0.44, -1.25)
     scene.add(pillow)
     for (const x of [-0.50, 0.50]) {
-        box([0.028, 0.01, 3.08], [x, 0.426, 0], new T.MeshStandardMaterial({ color: '#6d7188', roughness: 1 }))
+        box([0.028, 0.01, 3.08], [x, 0.426, 0], paintedMaterial({ color: '#8c9bae', texture: 'linen' }))
     }
     box([0.62, 0.12, 0.62], [1.38, 0.70, -1.30], wood)
     for (const x of [1.15, 1.61]) box([0.07, 0.64, 0.07], [x, 0.32, -1.30], wood)
-    const lamp = new T.Mesh(new T.ConeGeometry(0.21, 0.29, 24, 1, true), new T.MeshStandardMaterial({ color: '#eac4a0', emissive: '#d5985d', emissiveIntensity: 0.35, side: T.DoubleSide }))
+    const lamp = new T.Mesh(new T.ConeGeometry(0.21, 0.29, 24, 1, true), paintedMaterial({ texture: 'paper', color: '#eac4a0', emissive: '#d5985d', emissiveIntensity: 0.35, side: T.DoubleSide }))
     lamp.position.set(1.38, 1.22, -1.30)
     scene.add(lamp)
     box([0.025, 0.38, 0.025], [1.38, 0.91, -1.30], wood)
@@ -65,7 +58,7 @@ export function createRoom(scene, index) {
     box([0.045, 2.85, 0.07], [-0.5, 2.65, -4.0], wood)
     for (const side of [-1, 1]) {
         for (let fold = 0; fold < 5; fold += 1) {
-            box([0.09, 3.25, 0.06], [-0.5 + side * (1.96 + fold * 0.08), 2.48, -3.90 + Math.sin(fold * 2) * 0.05], new T.MeshStandardMaterial({ color: '#404b68', roughness: 1 }))
+            box([0.09, 3.25, 0.06], [-0.5 + side * (1.96 + fold * 0.08), 2.48, -3.90 + Math.sin(fold * 2) * 0.05], paintedMaterial({ color: '#7788a6', texture: 'linen' }))
         }
     }
     // A few drifting motes, one draw call and no CPU particle simulation.

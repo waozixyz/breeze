@@ -26,7 +26,7 @@ for capture in json.loads((BASE / 'after/captures.json').read_text()):
     comparison.paste(after, (width, 58))
     draw = ImageDraw.Draw(comparison)
     draw.text((22, 16), 'BEFORE', font=font, fill='#b5c1d0')
-    draw.text((width + 22, 16), 'AFTER · SHADER STUDY', font=font, fill='#a1ecdf')
+    draw.text((width + 22, 16), 'AFTER · WATERCOLOR', font=font, fill='#a1ecdf')
     comparison.save(OUTPUT / name)
     # Same stage crop, excluding the unchanged player and narration. This
     # detects accidental capture of the old page, not subjective visual quality.

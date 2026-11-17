@@ -71,8 +71,7 @@ function draw() {
     state = view.update(time, { directed: document.querySelector('#camera').value === 'directed' })
     renderPass.scene = view.scene
     renderPass.camera = view.camera
-    bloom.strength = [0.45, 0.67, 0.62, 0.60, 0.76, 0.68][selected]
-    finish.uniforms.time.value = time
+    bloom.strength = [0.30, 0.42, 0.40, 0.40, 0.44, 0.42][selected]
     finish.uniforms.tint.value.set(colors[selected])
     finish.uniforms.strength.value = [0.22, 0.5, 0.7, 1.0, 0.65, 0.75][selected]
     renderer.info.reset()
@@ -142,6 +141,7 @@ function resize() {
     const height = Math.round(width * canvas.clientHeight / canvas.clientWidth)
     renderer.setSize(width, height, false)
     composer.setSize(width, height)
+    finish.uniforms.resolution.value.set(width, height)
     scenes.forEach(view => {
         view.camera.aspect = width / height
         view.camera.updateProjectionMatrix()

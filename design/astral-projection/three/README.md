@@ -23,11 +23,19 @@ compares the snapshot against the current upstream files before rendering.
 Caption text remains present through the silence until the next cue.
 
 Each exercise owns a separate scene, sampled directly from session seconds.
-The characters are independently sculpted reclining humans, with closed eyes,
-individual fingers/toes, arm/elbow/palm pivots and sleep trousers. They share
-no rig, poses, artwork or geometry with the Tai Chi teachers or promo puppets.
+Both figures share the CC0 MakeHuman hm08 anatomical surface: a continuous
+13,380-vertex human with a shaped face, shoulders, torso, hips, limbs, hands,
+individual fingers and feet. A 37-bone skin rig supports shoulder/elbow reaches,
+wrist movement and real finger curls for alternating rope grips. The limbs
+are reposed into a supported resting shape; pigment regions provide blue
+sleep clothes. The foundation marker follows the actual thumb joint.
+No Tai Chi rig, teacher artwork or promo character geometry is used.
+Model source, licence, generation prompt and texture details are documented in
+[`assets/README.md`](assets/README.md). The reproducible converter rejects
+stretched edges and invalid weights before producing the compact mesh.
 The dim bedroom contains a bed, pillow, window, curtains and a warm bedside
-lamp. All geometry and effects are procedural; no generated bitmap is needed.
+lamp. Room geometry and energy effects are procedural; the human mesh and
+painted material maps are loaded from local assets.
 Directed cameras frame the hand, pathways and exit motion. **Steady** removes
 camera drift. Full canonical captions appear below the shorter action labels.
 Foundation shows thumb stirring and leg strokes; Current shows limb bounces and
@@ -36,26 +44,30 @@ shows an exterior awareness point (not an exit); Rope shows reaching/climbing;
 Roll-Out shows left/right whole-body turns. Physical muscles stay still.
 Return/recall cues stop the technique. These are guided-imagery illustrations.
 
-The astral studies now use dedicated `src/surfaces.js` GLSL materials: warm
-wrapped skin lighting with a red backscatter approximation, cool moon rim,
-small specular highlights and procedural skin variation; the double has
-three-scale flowing noise, luminous contour bands, Fresnel transparency and
-an inner travelling pulse. A separate translucent energy field follows the
-technique: a localized touch sphere, longitudinal current, ascending elevator
-bands, orbital spin and a shell around the separating/returning double.
-Ribbons have a luminous core, soft halo, helical detail and travelling packets.
-The bedroom uses feathered moonlight shafts, drifting dust, woven linen and a
-soft floor pool. These are inexpensive scattering approximations, not ray-marched
-volumes. `src/finish.js` adds technique-specific colour separation, tint,
-vignette and deterministic grain; bloom strength is also tuned per exercise.
-Cameras, cue times, captions and the underlying technique poses are preserved.
+The entire scene now follows one watercolor direction. `src/surfaces.js`
+combines soft shading bands, pigment pooling at edges, paper granulation,
+backscatter-style warmth and painted fabric on the sleeper. The translucent
+double uses a luminous wash, flowing noise, contour bands and a soft rim.
+The bedroom samples actual paper, linen, plaster and wood textures with
+pigment modulation and soft shade bands. Six generated 256px WebP textures
+add approximately 81 KB, with no remote texture fetches.
+
+`src/finish.js` uses a bounded four-quadrant minimum-variance brush filter,
+subpixel wet-edge disturbance, broken pencil contours and a textured paper
+finish. The effects pass covers the room, figures, cord, rays and energy, so
+they share the painted treatment. The translucent fields still distinguish
+local touch, longitudinal current, ascending elevator bands, orbital spin
+and the separating/returning double. Cameras, cue seconds and captions remain
+fixed for comparison against the original before frames. Bloom is restrained
+to preserve the painted character silhouette.
 
 The earlier shared promo-film shaders still shade painted Lumi and both Tai Chi
 teachers; this upgrade leaves their source artwork and materials intact.
 The preview caps render width at 1280px (720px in **Phone** quality), pixel
-ratio at 1. Static sculpted pieces are merged per material while preserving
-the arm pivots. No shadow maps or external textures are added. Real phone GPU
-performance still needs device review.
+ratio at 1. The anatomical surface is shared between six scenes; each figure owns
+its skin skeleton. The browser fetches an 803 KB mesh plus compact rig metadata.
+No shadow maps are used. Textures are local files. Real phone GPU performance
+still needs device review.
 
 Local test (owns a private Xvfb and headless Chromium; never the desktop):
 
@@ -67,7 +79,8 @@ Frames and the report go to `build/astral-threejs/`. The test compares every cue
 boundary, tests controls and captures several cue times in all six exercises,
 plus exit/return poses, changing animation pixels, highlights pause/scrub,
 computed styles, portrait framing, reduced-motion autoplay and promo character
-shader compilation. No audio plays.
+shader compilation, anatomical mesh/rig presence, real finger deformation and
+thumb-marker alignment. No audio plays.
 
 For matching before/after review, preserve the previous six `showcase-*.png`
 frames and `portrait-rope-1500.png` in `build/astral-compare/before/`, then run:

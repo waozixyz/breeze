@@ -196,3 +196,57 @@ Private-display frames (local artifacts, not committed):
   `running: true`. The owner can page through all seven. No live desktop pixels
   were captured and no mouse input was used. Owner acceptance and real phone GPU
   frame rate remain unverified; the web preview is not installed in Breeze.
+
+## Anatomical watercolor version — latest owner follow-up
+
+The owner rejected the primitive body and requested watercolor shaders and real
+textures. The final version replaces the sphere/lathe figure entirely:
+
+- Sleeper and double share the CC0 MakeHuman hm08 continuous anatomical mesh:
+  13,380 vertices, 26,756 triangles, shaped face/neck/shoulders/torso/hips,
+  actual hands/fingers/feet, reposed resting limbs and blue pigment sleep clothes.
+  A 37-bone skin rig supports shoulder/elbow reaches, wrist movement and curls
+  in individual finger segments. Rope gripping deforms the bound surface; it
+  no longer switches between separate primitive hands. The original whole-body
+  roll, lift, float and return timelines remain intact.
+- Source and licence: [MakeHuman base.obj](https://github.com/makehumancommunity/makehuman/blob/a8bc2d54ff0ac92e78ff71431b1023eda42bf482/makehuman/data/3dobjs/base.obj),
+  explicitly CC0 in the source header. See the
+  [asset licence](https://github.com/makehumancommunity/makehuman/blob/a8bc2d54ff0ac92e78ff71431b1023eda42bf482/LICENSE.md)
+  and local `design/astral-projection/three/assets/MAKEHUMAN-CC0.txt`.
+  The pinned source, unmodified compressed OBJ, derived binary and reproducible converter
+  are retained. Only the 803 KB binary and compact rig metadata load at runtime.
+- Watercolor materials apply pigment washes, soft shading bands, edge pooling,
+  granulation and paper modulation to the human and room. The double samples a
+  luminous watercolor wash while preserving transparency and flowing energy.
+  The final scene pass uses a four-quadrant minimum-variance brush filter,
+  subpixel wet-edge bleed, broken pencil contours and actual paper texture.
+  The room, figures, cord, rays and energy share the same painted finish.
+- Six generated 256×256 bitmap textures cover paper, pigment, linen bedding,
+  plaster wall, wood floor and luminous wash: 80,982 bytes total. Generated with
+  the built-in imagegen tool, inspected for watermark/text, and saved as WebP
+  files in `design/astral-projection/three/assets/`. The full prompt and texture
+  provenance are in `assets/README.md`; the full source atlas is preserved
+  locally in ignored `backup/astral-threejs/watercolor-source-atlas.png`.
+- Visual inspection caught and fixed excluded low hand vertices that produced
+  spikes. The converter now validates finite positions, normalized weights,
+  resting hand bounds and maximum anatomical edge length (0.1044 scene units).
+  The touch point now follows the actual thumb joint instead of the old rig's
+  hard-coded location. Local browser assertions verify thumb proximity, actual
+  finger curls, all cue captions/timings and the exit/return poses.
+- Local verification commands are unchanged: mesh preparation through
+  `build-queue -- python3 design/astral-projection/three/tools/prepare-human.py`,
+  then `ASTRAL_COMPARE=1 build-queue -- node
+  design/astral-projection/three/tools/verify.mjs`, then
+  `build-queue -- python3 design/astral-projection/three/tools/compare.py`.
+  The final after/comparison paths listed above now refer to this anatomical
+  watercolor version; the original before files remain unchanged.
+- No native app integration, banner replacement or phone GPU performance claim
+  is included. Owner visual acceptance remains open after showing the new set.
+
+Final watercolor local result: PASS for mesh preparation (maximum edge 0.1044),
+all 88 cue boundaries, 32 standard private-display frames and seven matched
+comparison captures. Anatomical thumb alignment, deforming finger grips,
+exit/return poses, controls and promo shader rendering passed. The seven
+comparison checks passed and all seven pairs were inspected. The final
+watercolor set was reopened in Gwenview with `running: true`. Pushed status is
+reported separately from these local results; no app installation is claimed.

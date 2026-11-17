@@ -9,7 +9,7 @@ const smooth = x => T.MathUtils.smoothstep(x, 0, 1)
 const cycle = (t, period) => (t % period) / period
 const wave = (t, period = 6) => 0.5 - 0.5 * Math.cos(t * Math.PI * 2 / period)
 const types = ['foundation', 'current', 'elevator', 'spin', 'rope', 'roll']
-const bodyHeight = 0.62
+const bodyHeight = 0.86
 
 function cameraFrame(kind, index) {
     if (kind === 'foundation' && index >= 1 && index <= 4) return { position: [1.05, 1.42, 1.0], target: [0.35, 0.57, -0.07], name: 'HAND STUDY' }
@@ -120,6 +120,7 @@ export function createExercise(item, exerciseIndex = 0) {
             field.scale.set(1.9, 2.6, 1.9)
         }
         physical.breathe(t)
+        const thumb = physical.touchPoint()
         physicalMaterial.uniforms.time.value = t
         energyMaterial.uniforms.time.value = t
         energyMaterial.uniforms.opacity.value = grounded ? 0 : 0.6
@@ -182,14 +183,14 @@ export function createExercise(item, exerciseIndex = 0) {
                 const angle = t * Math.PI * 2 * 1.2
                 const path = (v, p) => {
                     const a = angle - v * Math.PI * 1.6
-                    p.set(0.438 + Math.cos(a) * 0.025, bodyHeight + 0.025, -0.065 + Math.sin(a) * 0.025)
+                    p.set(thumb.x + Math.cos(a) * 0.025, thumb.y + 0.012, thumb.z + Math.sin(a) * 0.025)
                 }
                 path(0, point.position)
                 trail.mesh.visible = true
                 trail.update(path, t)
                 motion = i === 1 ? 'Touch the thumb joint. Follow the remembered sensation.' : 'Small clockwise circles · awareness alone'
             } else if (i === 4) {
-                point.position.set(0.438, bodyHeight + 0.025, -0.18 + wave(t, 3) * 0.3)
+                point.position.set(thumb.x, thumb.y + 0.012, thumb.z - 0.12 + wave(t, 3) * 0.24)
                 limbStroke(0, 1, true, true)
                 motion = 'Brush the thumb, then widen toward the wrist.'
             } else {
@@ -337,6 +338,7 @@ export function createExercise(item, exerciseIndex = 0) {
             field.position.y += 0.12
             field.visible = energy.root.visible
         }
+        energy.articulate()
         const now = cameraFrame(kind, i)
         const before = cameraFrame(kind, Math.max(0, i - 1))
         const transition = smooth(elapsed / 7)
@@ -363,6 +365,9 @@ export function createExercise(item, exerciseIndex = 0) {
                 astralRotation: energy.root.rotation.toArray().slice(0, 3), cordVisible: cord.mesh.visible,
                 pointVisible: point.visible, ropeVisible: rope.visible, elevatorVisible: elevator.visible, viewName,
                 handGrips: energy.grips.map(grip => grip.closed.visible),
+                human: physical.meshInfo,
+                touchPosition: physical.touchPoint().toArray(), pointPosition: point.position.toArray(),
+                fingerCurl: energy.fingerCurl(),
             }
         },
     }
