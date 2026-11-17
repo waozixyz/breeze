@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-11-17
+
+- Rebuilt on Apps with the Python 3.10 packaging fix; no user-visible change.
+
 ## [1.0.5] - 2026-11-16
 
 - Download and open on the current Inner Breeze.
