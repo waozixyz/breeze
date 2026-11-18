@@ -1,10 +1,11 @@
 // Composing a moment's picture, and the fixed review frames the capture
-// mode writes: each practice's hardest poses for the figure, painted on the
-// practice's backdrop, bare on paper, and Breeze's current flat figure.
+// mode writes: each practice's hardest poses for both figures, on the
+// practice's backdrop and on a plain studio grey, and Breeze's current flat
+// figure.
 #import "figure_math"
 #import "figure_joints"
 #import "figure_paint"
-#import "figure_wash"
+#import "figure_finish"
 #import "preview_practices"
 #import "preview_flat"
 #import "preview_profile"
@@ -17,7 +18,7 @@
 #import "std/vec"
 Raster :: #import "std/image";
 
-// Each practice's painted backdrop, and the last one scaled to a picture.
+// Each practice's backdrop, and the last one scaled to a picture.
 PreviewBackdrops :: struct {
     images: [4]Raster.Image
     covered: Raster.Image
@@ -30,7 +31,7 @@ PreviewBackdropsLoad :: (backdrops: *PreviewBackdrops, practices: string) -> boo
     for practice: cast(s32)0..3 {
         folder: [1100]u8
         path: [1200]u8
-        name := PreviewJoin(folder[:], practices, "/shared/watercolor/backdrops/")
+        name := PreviewJoin(folder[:], practices, "/shared/figure/backdrops/")
         name = PreviewJoin(path[:], name, PreviewBackdropName(practice))
         file: [1300]u8
         loaded := LoadImagePixels(PreviewJoin(file[:], name, ".webp"))
@@ -55,10 +56,10 @@ PreviewBackdropsRelease :: (backdrops: *PreviewBackdrops) {
 }
 
 // The body, and an astral twin over it, into OUT: on the practice's
-// painted backdrop with the watercolor finish, on plain paper without.
+// backdrop, or on a plain studio grey (STUDIO) for judging the figure.
 PreviewCompose :: (body: *FigurePainter, twin: *FigurePainter, media: *FigureMedia,
     backdrops: *PreviewBackdrops, practice: s32, moment: *PreviewMoment, view: FigureView,
-    style: FigureStyle, width: s32, height: s32, out: *Raster.Image) -> bool {
+    style: FigureStyle, studio: bool, width: s32, height: s32, out: *Raster.Image) -> bool {
     still: FigureEffect
     if !FigurePaint(body, media, *moment.body, view, style, still, width, height) {
         return false
@@ -75,8 +76,8 @@ PreviewCompose :: (body: *FigurePainter, twin: *FigurePainter, media: *FigureMed
     // strength, then the figure is laid over it.
     backdrop := *backdrops.images[practice]
     covered := *backdrops.covered
-    painted := style.watercolor && Raster.ImageValid(backdrop)
-    vivid := ifx painted then FigureVivid(style.wash) else -1.0
+    painted := !studio && Raster.ImageValid(backdrop)
+    vivid := ifx painted then FigureVivid(style) else -1.0
     if covered.width != width || covered.height != height || backdrops.covered_practice != practice ||
     backdrops.covered_vivid != vivid {
         if painted {
@@ -92,9 +93,9 @@ PreviewCompose :: (body: *FigurePainter, twin: *FigurePainter, media: *FigureMed
             }
             covered.width = width
             covered.height = height
-            paper: [4]u8 = .[243, 237, 225, 255]
+            grey: [4]u8 = .[218, 218, 221, 255]
             for index: 0..covered.pixels.count - 1 {
-                covered.pixels[index] = paper[index % 4]
+                covered.pixels[index] = grey[index % 4]
             }
         }
         backdrops.covered_practice = practice
@@ -140,8 +141,8 @@ PreviewProfileRun :: (media: *FigureMedia, backdrops: *PreviewBackdrops, library
         moment := PreviewSample(library, practice, item, seconds)
         PreviewRecord(PREVIEW_PHASE_SOLVE, PreviewLap(*clock))
         view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
-        if !PreviewCompose(*body, *twin, media, backdrops, practice, *moment, view, FigureStyleDefault(), width,
-            height, *picture) {
+        if !PreviewCompose(*body, *twin, media, backdrops, practice, *moment, view, FigureStyleDefault(), false,
+            width, height, *picture) {
             print("figure profile: frame % could not be painted\n", frame)
             return 1
         }
@@ -163,18 +164,40 @@ PreviewShot :: struct {
     item: s32
     seconds: float64
     name: string
+    // How far the camera turns about her, in radians.
+    turn: float64
+    // A close view of the head and shoulders.
+    portrait: bool
 }
 
-PreviewCapture :: (media: *FigureMedia, backdrops: *PreviewBackdrops, library: *PreviewLibrary,
+// Writes NAME.png (her on the backdrop), NAME-studio.png (her on grey), the
+// same with -male for him, and NAME-current.png (Breeze's flat figure).
+PreviewCapture :: (woman: *FigureMedia, man: *FigureMedia, backdrops: *PreviewBackdrops, library: *PreviewLibrary,
     directory: string) -> s32 {
     shots: [24]PreviewShot
     count: s32
     full := PreviewDefaultItem(library, PREVIEW_TAI_CHI)
     shots[count] = .{PREVIEW_TAI_CHI, full, 9.0, "tai-chi-9s"}
     count += 1
+    shots[count] = .{PREVIEW_TAI_CHI, full, 9.0, "portrait"}
+    shots[count].portrait = true
+    count += 1
+    shots[count] = .{PREVIEW_TAI_CHI, full, 9.0, "portrait-turned"}
+    shots[count].turn = -0.65
+    shots[count].portrait = true
+    count += 1
     shots[count] = .{PREVIEW_TAI_CHI, full, 131.0, "tai-chi-131s"}
     count += 1
-    shots[count] = .{PREVIEW_TAI_CHI, full, PreviewLowest(library, PREVIEW_TAI_CHI, full), "tai-chi-deepest-stance"}
+    lowest := PreviewLowest(library, PREVIEW_TAI_CHI, full)
+    shots[count] = .{PREVIEW_TAI_CHI, full, lowest, "tai-chi-deepest-stance"}
+    count += 1
+    // The owner's reference sculpts' angles (figure/design/reference):
+    // the woman from her front left, the man from behind on his left.
+    shots[count] = .{PREVIEW_TAI_CHI, full, lowest, "reference-female"}
+    shots[count].turn = -0.55
+    count += 1
+    shots[count] = .{PREVIEW_TAI_CHI, full, lowest, "reference-male"}
+    shots[count].turn = 2.45
     count += 1
     // The Sun Salutation's folds and floor poses, each once it is reached.
     names: [5]string = .["sun-forward-fold", "sun-lunge", "sun-plank", "sun-cobra", "sun-downward-dog"]
@@ -208,49 +231,59 @@ PreviewCapture :: (media: *FigureMedia, backdrops: *PreviewBackdrops, library: *
         VecFree(picture.pixels)
     }
     failed: s32
-    for index: 0..count - 1 {
-        shot := shots[index]
-        moment := PreviewSample(library, shot.practice, shot.item, shot.seconds)
-        // Lying figures need a landscape picture.
-        width: s32 = ifx shot.practice == PREVIEW_ASTRAL then 900 else 600
-        height: s32 = ifx shot.practice == PREVIEW_ASTRAL then 600 else 800
-        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
-        for variant: 0..2 {
-            style := FigureStyleDefault()
-            style.watercolor = variant == 0
-            suffix := ".png"
-            if variant == 1 {
-                suffix = "-bare.png"
-            } else if variant == 2 {
-                suffix = "-current.png"
+    written: s32
+    suffixes: [5]string = .[".png", "-studio.png", "-male.png", "-male-studio.png", "-current.png"]
+    for character: cast(s32)0..1 {
+        // Each character prepares its own painters.
+        FigurePainterRelease(*body)
+        FigurePainterRelease(*twin)
+        for index: 0..count - 1 {
+            shot := shots[index]
+            moment := PreviewSample(library, shot.practice, shot.item, shot.seconds)
+            // Lying figures need a landscape picture.
+            width: s32 = ifx shot.practice == PREVIEW_ASTRAL then 900 else 600
+            height: s32 = ifx shot.practice == PREVIEW_ASTRAL then 600 else 800
+            view := PreviewViewOf(*moment, shot.turn, 0.0, 1.0)
+            if shot.portrait {
+                view.center = FigureAdd(moment.body.neck, FigureV3(0.0, 0.10, 0.0))
+                view.height = 0.42
+                view.pitch = 0.05
             }
-            stem: [1024]u8
-            named: [1024]u8
-            path: [1024]u8
-            name := PreviewJoin(stem[:], directory, "/")
-            name = PreviewJoin(named[:], name, shot.name)
-            final := PreviewJoin(path[:], name, suffix)
-            painted := false
-            if variant == 2 {
-                camera := PreviewFlatOf(*moment, view)
-                painted = PreviewFlatRender(camera, view, width, height, *picture)
-                PreviewOnPaper(*picture)
-            } else {
-                painted = PreviewCompose(*body, *twin, media, backdrops, shot.practice, *moment, view, style,
-                    width, height, *picture)
-            }
-            if !painted {
-                print("figure capture: % could not be painted\n", final)
-                failed += 1
-                continue
-            }
-            if !WritePNGFile(final, *picture, false) {
-                print("figure capture: could not write %\n", final)
-                failed += 1
+            for variant: 0..2 {
+                if variant == 2 && (character != 0 || shot.portrait) {
+                    continue
+                }
+                suffix := suffixes[ifx variant == 2 then 4 else character * 2 + variant]
+                stem: [1024]u8
+                named: [1024]u8
+                path: [1024]u8
+                name := PreviewJoin(stem[:], directory, "/")
+                name = PreviewJoin(named[:], name, shot.name)
+                final := PreviewJoin(path[:], name, suffix)
+                painted := false
+                if variant == 2 {
+                    camera := PreviewFlatOf(*moment, view)
+                    painted = PreviewFlatRender(camera, view, width, height, *picture)
+                    PreviewOnPaper(*picture)
+                } else {
+                    media := ifx character == 0 then woman else man
+                    painted = PreviewCompose(*body, *twin, media, backdrops, shot.practice, *moment, view,
+                        FigureStyleDefault(), variant == 1, width, height, *picture)
+                }
+                if !painted {
+                    print("figure capture: % could not be painted\n", final)
+                    failed += 1
+                    continue
+                }
+                if !WritePNGFile(final, *picture, false) {
+                    print("figure capture: could not write %\n", final)
+                    failed += 1
+                }
+                written += 1
             }
         }
     }
-    print("figure capture: % frames, gpu=% %\n", count * 3, body.accelerated, body.diagnostic)
+    print("figure capture: % frames, gpu=% %\n", written, body.accelerated, body.diagnostic)
     return failed
 }
 
