@@ -1,6 +1,7 @@
 #import, file "../src/app/app_frame_transition.zi";
 #import, file "../src/app/app_types.zi";
 #import "drawing_props"
+#import "frame_transition"
 
 released: s32;
 wrong_texture: bool;
@@ -16,16 +17,22 @@ DisposeFrameTexture :: (texture: Texture2D) {
     }
 }
 
+Frame :: () -> FrameSurface {
+    surface: FrameSurface
+    surface.texture = Texture2D.{42, 20, 20, 1, 7}
+    return surface
+}
+
 Prepared :: (app: *InnerBreeze, owned: bool) {
-    app.ui.route_transition_texture = Texture2D.{42, 20, 20, 1, 7}
-    app.ui.route_transition_texture_owned = owned
+    app.ui.route_transition_surface = Frame()
+    app.ui.route_transition_surface_owned = owned
     app.ui.route_transition_active = true
     app.ui.route_transition_pending = true
 }
 
 Cleared :: (app: *InnerBreeze) -> bool {
-    return app.ui.route_transition_texture.id == 0 &&
-    !app.ui.route_transition_texture_owned &&
+    return app.ui.route_transition_surface.texture.id == 0 &&
+    !app.ui.route_transition_surface_owned &&
     !app.ui.route_transition_active && !app.ui.route_transition_pending
 }
 
@@ -54,10 +61,10 @@ main :: () -> s32 {
     Prepared(*app, true)
     app_route_transition_request(*app)
     if released != 2 || wrong_texture || app.ui.route_transition_active ||
-    !app.ui.route_transition_pending || app.ui.route_transition_texture.id != 0 {
+    !app.ui.route_transition_pending || app.ui.route_transition_surface.texture.id != 0 {
         return 5
     }
-    app_route_transition_capture(*app, Texture2D.{42, 20, 20, 1, 7}, 1.0, false)
+    app_route_transition_capture(*app, Frame(), 1.0, false)
     if !app.ui.route_transition_active || app.ui.route_transition_pending {
         return 6
     }
@@ -66,5 +73,14 @@ main :: () -> s32 {
     !app.ui.route_transition_pending {
         return 7
     }
+
+    // The fade keeps the captured surface itself, which carries the host's
+    // row orientation, and releases an owned one when it ends.
+    app_route_transition_capture(*app, Frame(), 2.0, true)
+    if !app.ui.route_transition_active || app.ui.route_transition_surface.texture.id != 42 {
+        return 9
+    }
+    app_route_transition_advance(*app, 2.0 + cast(float64)APP_ROUTE_TRANSITION_SECONDS)
+    if released != 3 || wrong_texture || !Cleared(*app) { return 11 }
     return 0
 }
