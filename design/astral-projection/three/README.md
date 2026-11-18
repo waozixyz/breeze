@@ -23,19 +23,14 @@ compares the snapshot against the current upstream files before rendering.
 Caption text remains present through the silence until the next cue.
 
 Each exercise owns a separate scene, sampled directly from session seconds.
-Both figures share the CC0 MakeHuman hm08 anatomical surface: a continuous
-13,380-vertex human with a shaped face, shoulders, torso, hips, limbs, hands,
-individual fingers and feet. A 37-bone skin rig supports shoulder/elbow reaches,
-wrist movement and real finger curls for alternating rope grips. The limbs
-are reposed into a supported resting shape; pigment regions provide blue
-sleep clothes. The foundation marker follows the actual thumb joint.
-No Tai Chi rig, teacher artwork or promo character geometry is used.
-Model source, licence, generation prompt and texture details are documented in
-[`assets/README.md`](assets/README.md). The reproducible converter rejects
-stretched edges and invalid weights before producing the compact mesh.
+The figure model is pending: the MakeHuman-based body was removed on
+2026-11-18, and the owner will choose a new, commercially licensed model.
+Until then both figures are invisible stand-in skeletons with the joints the
+scenes drive (shoulders, elbows, wrists and finger chains for the rope
+grips), so the rooms, energy effects, cords and cameras still play.
 The dim bedroom contains a bed, pillow, window, curtains and a warm bedside
-lamp. Room geometry and energy effects are procedural; the human mesh and
-painted material maps are loaded from local assets.
+lamp. Room geometry and energy effects are procedural; the painted material
+maps are loaded from local assets.
 Directed cameras frame the hand, pathways and exit motion. **Steady** removes
 camera drift. Full canonical captions appear below the shorter action labels.
 Foundation shows thumb stirring and leg strokes; Current shows limb bounces and
@@ -64,9 +59,8 @@ to preserve the painted character silhouette.
 The earlier shared promo-film shaders still shade painted Lumi and both Tai Chi
 teachers; this upgrade leaves their source artwork and materials intact.
 The preview caps render width at 1280px (720px in **Phone** quality), pixel
-ratio at 1. The anatomical surface is shared between six scenes; each figure owns
-its skin skeleton. The browser fetches an 803 KB mesh plus compact rig metadata.
-No shadow maps are used. Textures are local files. Real phone GPU performance
+ratio at 1. Each figure owns its stand-in skeleton until the new model is
+chosen. No shadow maps are used. Textures are local files. Real phone GPU performance
 still needs device review.
 
 Local test (owns a private Xvfb and headless Chromium; never the desktop):
@@ -79,8 +73,8 @@ Frames and the report go to `build/astral-threejs/`. The test compares every cue
 boundary, tests controls and captures several cue times in all six exercises,
 plus exit/return poses, changing animation pixels, highlights pause/scrub,
 computed styles, portrait framing, reduced-motion autoplay and promo character
-shader compilation, anatomical mesh/rig presence, real finger deformation and
-thumb-marker alignment. No audio plays.
+shader compilation, the stand-in skeleton, finger curls and thumb-marker
+alignment. No audio plays.
 
 For matching before/after review, preserve the previous six `showcase-*.png`
 frames and `portrait-rope-1500.png` in `build/astral-compare/before/`, then run:

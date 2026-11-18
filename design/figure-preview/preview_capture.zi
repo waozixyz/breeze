@@ -1,14 +1,11 @@
-// Composing a moment's picture, and the fixed review frames the capture
-// mode writes: each practice's hardest poses for both figures, on the
-// practice's backdrop and on a plain studio grey, and Breeze's current flat
-// figure.
+// The stage a moment shows, and the fixed review frames the capture mode
+// writes. The figure model is pending, so the stage is the practice's
+// backdrop, with Breeze's current flat figure on it when asked.
 #import "figure_math"
 #import "figure_joints"
-#import "figure_paint"
 #import "figure_finish"
 #import "preview_practices"
 #import "preview_flat"
-#import "preview_profile"
 #import "kryon/scene"
 #import "sun_salutation_rules"
 #import "workout_rules"
@@ -23,7 +20,6 @@ PreviewBackdrops :: struct {
     images: [4]Raster.Image
     covered: Raster.Image
     covered_practice: s32
-    covered_vivid: float64
 }
 
 PreviewBackdropsLoad :: (backdrops: *PreviewBackdrops, practices: string) -> bool {
@@ -55,108 +51,35 @@ PreviewBackdropsRelease :: (backdrops: *PreviewBackdrops) {
     VecFree(backdrops.covered.pixels)
 }
 
-// The body, and an astral twin over it, into OUT: on the practice's
-// backdrop, or on a plain studio grey (STUDIO) for judging the figure.
-PreviewCompose :: (body: *FigurePainter, twin: *FigurePainter, media: *FigureMedia,
-    backdrops: *PreviewBackdrops, practice: s32, moment: *PreviewMoment, view: FigureView,
-    style: FigureStyle, studio: bool, width: s32, height: s32, out: *Raster.Image) -> bool {
-    still: FigureEffect
-    if !FigurePaint(body, media, *moment.body, view, style, still, width, height) {
-        return false
-    }
-    times := body.times
-    PreviewRecord(PREVIEW_PHASE_POSE, times.pose)
-    PreviewRecord(PREVIEW_PHASE_SKIN, times.skin)
-    PreviewRecord(PREVIEW_PHASE_CLOTH, times.cloth)
-    PreviewRecord(PREVIEW_PHASE_RENDER, times.render)
-    PreviewRecord(PREVIEW_PHASE_FINISH, times.finish)
-    PreviewRecord(PREVIEW_PHASE_SHADOW, times.shadow)
-    clock := PreviewNow()
-    // The backdrop is scaled once for each size, practice and colour
-    // strength, then the figure is laid over it.
-    backdrop := *backdrops.images[practice]
+// The practice's backdrop covering a WIDTH by HEIGHT picture in OUT, and,
+// with FLAT, Breeze's current flat figure for MOMENT seen as VIEW over it.
+PreviewStage :: (backdrops: *PreviewBackdrops, practice: s32, moment: *PreviewMoment, view: PreviewView,
+    flat: bool, width: s32, height: s32, out: *Raster.Image) -> bool {
     covered := *backdrops.covered
-    painted := !studio && Raster.ImageValid(backdrop)
-    vivid := ifx painted then FigureVivid(style) else -1.0
-    if covered.width != width || covered.height != height || backdrops.covered_practice != practice ||
-    backdrops.covered_vivid != vivid {
-        if painted {
-            // The lying astral body needs the floor raised to her.
-            zoom := ifx practice == PREVIEW_ASTRAL then 1.7 else 1.0
-            focus := ifx practice == PREVIEW_ASTRAL then 1.0 else 0.62
-            if !FigureBackdropCover(covered, backdrop, width, height, zoom, focus, vivid) {
-                return false
-            }
-        } else {
-            if !VecResize(covered.pixels, cast(s64)width * height * 4) {
-                return false
-            }
-            covered.width = width
-            covered.height = height
-            grey: [4]u8 = .[218, 218, 221, 255]
-            for index: 0..covered.pixels.count - 1 {
-                covered.pixels[index] = grey[index % 4]
-            }
+    if covered.width != width || covered.height != height || backdrops.covered_practice != practice {
+        // The lying astral body needs the floor raised to her.
+        zoom := ifx practice == PREVIEW_ASTRAL then 1.7 else 1.0
+        focus := ifx practice == PREVIEW_ASTRAL then 1.0 else 0.62
+        if !FigureBackdropCover(covered, *backdrops.images[practice], width, height, zoom, focus, 1.2) {
+            return false
         }
         backdrops.covered_practice = practice
-        backdrops.covered_vivid = vivid
     }
-    PreviewRecord(PREVIEW_PHASE_BACKDROP, PreviewLap(*clock))
-    if !FigureOverOnto(out, covered, *body.pixels) {
-        return false
-    }
-    PreviewRecord(PREVIEW_PHASE_OVER, PreviewLap(*clock))
-    PreviewRecord(PREVIEW_PHASE_TWIN, 0.0)
-    if !moment.twin_visible {
+    if !flat {
+        if !VecResize(out.pixels, covered.pixels.count) {
+            return false
+        }
+        out.width = width
+        out.height = height
+        for index: 0..covered.pixels.count - 1 {
+            out.pixels[index] = covered.pixels[index]
+        }
         return true
     }
-    glow := style
-    glow.luminous = true
-    glow.opacity = 0.58
-    doubled := FigurePaint(twin, media, *moment.twin, view, glow, moment.twin_effect, width, height) &&
-        FigureOver(out, *twin.pixels, 1.0)
-    PreviewRecord(PREVIEW_PHASE_TWIN, PreviewLap(*clock))
-    return doubled
-}
-
-// Paints PRACTICE's default item for FRAMES frames a thirtieth of a second
-// apart (or all at its first moment, STILL) at WIDTH by HEIGHT, without a
-// window, and prints the timing.
-PreviewProfileRun :: (media: *FigureMedia, backdrops: *PreviewBackdrops, library: *PreviewLibrary,
-    practice: s32, frames: s32, width: s32, height: s32, still: bool) -> s32 {
-    body: FigurePainter
-    twin: FigurePainter
-    picture: Raster.Image
-    defer {
-        FigurePainterRelease(*body)
-        FigurePainterRelease(*twin)
-        VecFree(picture.pixels)
-    }
-    item := PreviewDefaultItem(library, practice)
-    duration := PreviewDuration(library, practice, item)
-    seconds: float64
-    for frame: 0..frames - 1 {
-        start := PreviewNow()
-        clock := start
-        moment := PreviewSample(library, practice, item, seconds)
-        PreviewRecord(PREVIEW_PHASE_SOLVE, PreviewLap(*clock))
-        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
-        if !PreviewCompose(*body, *twin, media, backdrops, practice, *moment, view, FigureStyleDefault(), false,
-            width, height, *picture) {
-            print("figure profile: frame % could not be painted\n", frame)
-            return 1
-        }
-        PreviewRecord(PREVIEW_PHASE_UPLOAD, 0.0)
-        PreviewRecord(PREVIEW_PHASE_CONTROLS, 0.0)
-        PreviewRecord(PREVIEW_PHASE_FRAME, PreviewLap(*start))
-        PreviewProfileFrame("headless")
-        seconds += ifx still then 0.0 else 1.0 / 30.0
-        if seconds >= duration {
-            seconds = 0.0
-        }
-    }
-    print("figure profile: gpu=% %\n", body.accelerated, body.diagnostic)
-    return 0
+    figure: Raster.Image
+    defer VecFree(figure.pixels)
+    camera := PreviewFlatOf(moment, view)
+    return PreviewFlatRender(camera, view, width, height, *figure) && FigureOverOnto(out, covered, *figure)
 }
 
 PreviewShot :: struct {
@@ -164,40 +87,17 @@ PreviewShot :: struct {
     item: s32
     seconds: float64
     name: string
-    // How far the camera turns about her, in radians.
-    turn: float64
-    // A close view of the head and shoulders.
-    portrait: bool
 }
 
-// Writes NAME.png (her on the backdrop), NAME-studio.png (her on grey), the
-// same with -male for him, and NAME-current.png (Breeze's flat figure).
-PreviewCapture :: (woman: *FigureMedia, man: *FigureMedia, backdrops: *PreviewBackdrops, library: *PreviewLibrary,
-    directory: string) -> s32 {
-    shots: [24]PreviewShot
+// Writes NAME.png (the empty stage) and NAME-current.png (Breeze's current
+// flat figure on it) for each practice's hardest poses.
+PreviewCapture :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directory: string) -> s32 {
+    shots: [16]PreviewShot
     count: s32
     full := PreviewDefaultItem(library, PREVIEW_TAI_CHI)
     shots[count] = .{PREVIEW_TAI_CHI, full, 9.0, "tai-chi-9s"}
     count += 1
-    shots[count] = .{PREVIEW_TAI_CHI, full, 9.0, "portrait"}
-    shots[count].portrait = true
-    count += 1
-    shots[count] = .{PREVIEW_TAI_CHI, full, 9.0, "portrait-turned"}
-    shots[count].turn = -0.65
-    shots[count].portrait = true
-    count += 1
-    shots[count] = .{PREVIEW_TAI_CHI, full, 131.0, "tai-chi-131s"}
-    count += 1
-    lowest := PreviewLowest(library, PREVIEW_TAI_CHI, full)
-    shots[count] = .{PREVIEW_TAI_CHI, full, lowest, "tai-chi-deepest-stance"}
-    count += 1
-    // The owner's reference sculpts' angles (figure/design/reference):
-    // the woman from her front left, the man from behind on his left.
-    shots[count] = .{PREVIEW_TAI_CHI, full, lowest, "reference-female"}
-    shots[count].turn = -0.55
-    count += 1
-    shots[count] = .{PREVIEW_TAI_CHI, full, lowest, "reference-male"}
-    shots[count].turn = 2.45
+    shots[count] = .{PREVIEW_TAI_CHI, full, PreviewLowest(library, PREVIEW_TAI_CHI, full), "tai-chi-deepest-stance"}
     count += 1
     // The Sun Salutation's folds and floor poses, each once it is reached.
     names: [5]string = .["sun-forward-fold", "sun-lunge", "sun-plank", "sun-cobra", "sun-downward-dog"]
@@ -212,96 +112,44 @@ PreviewCapture :: (woman: *FigureMedia, man: *FigureMedia, backdrops: *PreviewBa
     shots[count] = .{PREVIEW_WORKOUT, WORKOUT_LUNGES, PreviewLowest(library, PREVIEW_WORKOUT, WORKOUT_LUNGES),
         "workout-lunge"}
     count += 1
-    shots[count] = .{PREVIEW_WORKOUT, WORKOUT_PUSH_UPS, 1.0, "workout-push-up"}
-    count += 1
-    shots[count] = .{PREVIEW_WORKOUT, WORKOUT_JUMPING_JACKS, 0.0, "workout-ready"}
-    count += 1
     shots[count] = .{PREVIEW_ASTRAL, 0, 60.0, "astral-60s"}
     count += 1
-    shots[count] = .{PREVIEW_ASTRAL, 4, PreviewDoubleTime(library, 4), "astral-rope-exit"}
-    count += 1
-    shots[count] = .{PREVIEW_ASTRAL, 5, PreviewDoubleTime(library, 5), "astral-roll-out"}
-    count += 1
-    body: FigurePainter
-    twin: FigurePainter
     picture: Raster.Image
-    defer {
-        FigurePainterRelease(*body)
-        FigurePainterRelease(*twin)
-        VecFree(picture.pixels)
-    }
+    defer VecFree(picture.pixels)
     failed: s32
     written: s32
-    suffixes: [5]string = .[".png", "-studio.png", "-male.png", "-male-studio.png", "-current.png"]
-    for character: cast(s32)0..1 {
-        // Each character prepares its own painters.
-        FigurePainterRelease(*body)
-        FigurePainterRelease(*twin)
-        for index: 0..count - 1 {
-            shot := shots[index]
-            moment := PreviewSample(library, shot.practice, shot.item, shot.seconds)
-            // Lying figures need a landscape picture.
-            width: s32 = ifx shot.practice == PREVIEW_ASTRAL then 900 else 600
-            height: s32 = ifx shot.practice == PREVIEW_ASTRAL then 600 else 800
-            view := PreviewViewOf(*moment, shot.turn, 0.0, 1.0)
-            if shot.portrait {
-                view.center = FigureAdd(moment.body.neck, FigureV3(0.0, 0.10, 0.0))
-                view.height = 0.42
-                view.pitch = 0.05
+    for index: 0..count - 1 {
+        shot := shots[index]
+        moment := PreviewSample(library, shot.practice, shot.item, shot.seconds)
+        // Lying figures need a landscape picture.
+        width: s32 = ifx shot.practice == PREVIEW_ASTRAL then 900 else 600
+        height: s32 = ifx shot.practice == PREVIEW_ASTRAL then 600 else 800
+        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
+        for variant: 0..1 {
+            stem: [1024]u8
+            named: [1024]u8
+            path: [1024]u8
+            name := PreviewJoin(stem[:], directory, "/")
+            name = PreviewJoin(named[:], name, shot.name)
+            final := PreviewJoin(path[:], name, ifx variant == 0 then ".png" else "-current.png")
+            if !PreviewStage(backdrops, shot.practice, *moment, view, variant == 1, width, height, *picture) {
+                print("figure capture: % could not be painted\n", final)
+                failed += 1
+                continue
             }
-            for variant: 0..2 {
-                if variant == 2 && (character != 0 || shot.portrait) {
-                    continue
-                }
-                suffix := suffixes[ifx variant == 2 then 4 else character * 2 + variant]
-                stem: [1024]u8
-                named: [1024]u8
-                path: [1024]u8
-                name := PreviewJoin(stem[:], directory, "/")
-                name = PreviewJoin(named[:], name, shot.name)
-                final := PreviewJoin(path[:], name, suffix)
-                painted := false
-                if variant == 2 {
-                    camera := PreviewFlatOf(*moment, view)
-                    painted = PreviewFlatRender(camera, view, width, height, *picture)
-                    PreviewOnPaper(*picture)
-                } else {
-                    media := ifx character == 0 then woman else man
-                    painted = PreviewCompose(*body, *twin, media, backdrops, shot.practice, *moment, view,
-                        FigureStyleDefault(), variant == 1, width, height, *picture)
-                }
-                if !painted {
-                    print("figure capture: % could not be painted\n", final)
-                    failed += 1
-                    continue
-                }
-                if !WritePNGFile(final, *picture, false) {
-                    print("figure capture: could not write %\n", final)
-                    failed += 1
-                }
-                written += 1
+            if !WritePNGFile(final, *picture, false) {
+                print("figure capture: could not write %\n", final)
+                failed += 1
+                continue
             }
+            written += 1
         }
     }
-    print("figure capture: % frames, gpu=% %\n", written, body.accelerated, body.diagnostic)
+    print("figure capture: % frames\n", written)
     return failed
 }
 
 #scope_file
-// Lays the picture on the preview's paper colour.
-PreviewOnPaper :: (picture: *Raster.Image) {
-    paper: [3]float64 = .[243.0, 237.0, 225.0]
-    for index: 0..cast(s64)picture.width * picture.height - 1 {
-        at := index * 4
-        a := cast(float64)picture.pixels[at + 3] / 255.0
-        for channel: 0..2 {
-            value := cast(float64)picture.pixels[at + channel] * a + paper[channel] * (1.0 - a)
-            picture.pixels[at + channel] = cast(u8)(value + 0.5)
-        }
-        picture.pixels[at + 3] = 255
-    }
-}
-
 // The second of the item where her pelvis is lowest: the deepest stance.
 PreviewLowest :: (library: *PreviewLibrary, practice: s32, item: s32) -> float64 {
     duration := PreviewDuration(library, practice, item)
@@ -317,19 +165,6 @@ PreviewLowest :: (library: *PreviewLibrary, practice: s32, item: s32) -> float64
         seconds += 0.25
     }
     return best
-}
-
-// The first second the astral twin is out beside the body, a little on.
-PreviewDoubleTime :: (library: *PreviewLibrary, item: s32) -> float64 {
-    duration := PreviewDuration(library, PREVIEW_ASTRAL, item)
-    seconds: float64
-    while seconds < duration {
-        if PreviewSample(library, PREVIEW_ASTRAL, item, seconds).twin_visible {
-            return FigureClamp(seconds + 4.0, 0.0, duration)
-        }
-        seconds += 1.0
-    }
-    return duration * 0.5
 }
 
 // Half a second before the first round's STEP ends: its pose reached.

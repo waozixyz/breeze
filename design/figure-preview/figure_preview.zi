@@ -1,8 +1,8 @@
-// A live preview of the shared practice figures: pick the woman or the man,
-// a practice and one of its items, play, pause, scrub or slow it down, turn
-// and zoom around the figure, and set the colour strength. The poses are
-// the practices' own (preview_practices.zi); the characters are the
-// practices package's figures.
+// A live preview of the practices' stage for the shared practice figure:
+// pick a practice and one of its items, play, pause, scrub or slow it down,
+// turn and zoom. The poses are the practices' own (preview_practices.zi).
+// The figure model is pending, so the stage shows the practice's backdrop
+// with a note, and Breeze's current flat figure when asked.
 //
 //   figure_preview                  opens the window
 //   figure_preview --capture DIR    writes the review frames to DIR and exits
@@ -11,11 +11,9 @@
 // `ziran pkg path practices --locked` beside its own manifest.
 #import "figure_math"
 #import "figure_joints"
-#import "figure_paint"
 #import "preview_practices"
 #import "preview_capture"
 #import "preview_flat"
-#import "preview_profile"
 #import "kryon/scene"
 #import "kryon/session"
 #import "kryon/geometry"
@@ -53,9 +51,7 @@ PreviewState :: struct {
     seconds: float64
     playing: bool
     speed: float64
-    // FIGURE_FEMALE or FIGURE_MALE.
-    character: s32
-    // Shows Breeze's current flat figure instead, for comparison.
+    // Shows Breeze's current flat figure on the stage.
     current: bool
     turn: float64
     lift: float64
@@ -63,18 +59,11 @@ PreviewState :: struct {
     dragging: bool
     drag_x: float32
     drag_y: float32
-    colour: float32
 }
 
-preview_state: PreviewState = .{playing = true, speed = 1.0, zoom = 1.0, colour = 0.6};
-preview_woman: FigureMedia;
-preview_man: FigureMedia;
-// The character the painters were prepared for.
-preview_prepared: s32;
+preview_state: PreviewState = .{playing = true, speed = 1.0, zoom = 1.0};
 preview_backdrops: PreviewBackdrops;
 preview_library: PreviewLibrary;
-preview_body: FigurePainter;
-preview_twin: FigurePainter;
 preview_picture: Raster.Image;
 preview_texture: Texture2D;
 preview_owner: Session;
@@ -85,10 +74,6 @@ preview_clock: s64;
 // its own and never an edit of the last frame's.
 preview_page: s32;
 preview_time_text: [2][32]u8;
-preview_status_text: [2][96]u8;
-preview_frame_ms: float64;
-preview_last_draw: s64;
-preview_painted: bool;
 preview_practices_path: [1024]u8;
 preview_practices_length: s64;
 
@@ -98,43 +83,15 @@ main :: (argc: s32, argv: **u8) -> s32 {
         print("figure preview: no practices checkout; set FIGURE_PRACTICES or lock the package\n")
         return 1
     }
-    media: [1100]u8
-    folder := PreviewJoin(media[:], practices, "/shared/figure")
-    preview_woman = FigureMediaLoad(folder, FIGURE_FEMALE)
-    preview_man = FigureMediaLoad(folder, FIGURE_MALE)
-    if !FigureMediaReady(*preview_woman) || !FigureMediaReady(*preview_man) || !PreviewBackdropsLoad(*preview_backdrops, practices) ||
-    !PreviewLibraryLoad(*preview_library, practices) {
-        print("figure preview: could not read the figure media or the practices in %\n", practices)
+    if !PreviewBackdropsLoad(*preview_backdrops, practices) || !PreviewLibraryLoad(*preview_library, practices) {
+        print("figure preview: could not read the backdrops or the practices in %\n", practices)
         return 1
     }
     preview_state.item = PreviewDefaultItem(*preview_library, preview_state.practice)
-    if argc >= 3 && TextFromCString(argv[1]) == "--profile" {
-        practice: s32 = 0
-        names: [4]string = .["tai-chi", "sun-salutation", "workout", "astral"]
-        for index: cast(s32)0..3 {
-            if TextFromCString(argv[2]) == names[index] {
-                practice = index
-            }
-        }
-        // Further arguments: "still" holds one pose, to tell the renderer's
-        // own cost from rebuilding the moving surface; "male" profiles him.
-        still := false
-        character: s32 = FIGURE_FEMALE
-        for index: 3..argc - 1 {
-            still = still || TextFromCString(argv[index]) == "still"
-            if TextFromCString(argv[index]) == "male" {
-                character = FIGURE_MALE
-            }
-        }
-        return PreviewProfileRun(PreviewMedia(character), *preview_backdrops, *preview_library, practice, 240, 600,
-            760, still)
-    }
     if argc >= 3 && TextFromCString(argv[1]) == "--capture" {
-        return PreviewCapture(*preview_woman, *preview_man, *preview_backdrops, *preview_library, TextFromCString(argv[2]))
+        return PreviewCapture(*preview_backdrops, *preview_library, TextFromCString(argv[2]))
     }
-    status := Desktop.RunTitled(PreviewDraw, 1360, 900, "Figure preview")
-    PreviewProfileReport("live window, closing")
-    return status
+    return Desktop.RunTitled(PreviewDraw, 1360, 900, "Figure preview")
 }
 
 PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
@@ -150,9 +107,6 @@ PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
     now := Timer.MonotonicMilliseconds()
     elapsed := ifx preview_clock == 0 then 0 else now - preview_clock
     preview_clock = now
-    if elapsed > 0 {
-        preview_frame_ms = preview_frame_ms * 0.9 + cast(float64)elapsed * 0.1
-    }
     if state.playing {
         // A stalled frame never jumps the figure ahead by more than a moment.
         state.seconds += cast(float64)FigureClamp(cast(float64)elapsed, 0.0, 250.0) / 1000.0 * state.speed
@@ -184,14 +138,7 @@ PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
         state.zoom = FigureClamp(state.zoom * Pow(0.88, cast(float64)input.wheel), 0.25, 3.0)
     }
 
-    drawn := PreviewNow()
-    if preview_last_draw != 0 {
-        PreviewRecord(PREVIEW_PHASE_FRAME, cast(float64)(drawn - preview_last_draw) / 1000000.0)
-    }
-    preview_last_draw = drawn
-    preview_painted = false
-    PreviewPaintFigure(session, area)
-    controls := PreviewNow()
+    PreviewPaintStage(session, area)
 
     x := panel.x + 20.0
     width := panel.width - 40.0
@@ -199,15 +146,6 @@ PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
     Text.Draw(session, Text.Props.{.key = 10, .bounds = .{x, y, width, 30.0}, .text = "Figure preview",
         .size = 22})
     y += 42.0
-    people: [2]Segmented.SegmentOption
-    people[0].label = "Woman"
-    people[1].label = "Man"
-    person := Segmented.Draw(session, Segmented.Props.{.key = 27, .bounds = .{x, y, width, 40.0},
-        .selected_index = state.character, .has_selection = true}, people[:]).selected_index
-    if person != state.character && person >= 0 && person < FIGURE_CHARACTERS {
-        state.character = person
-    }
-    y += 52.0
     options: [4]Segmented.SegmentOption
     options[0].label = "Tai Chi"
     options[1].label = "Sun"
@@ -263,47 +201,24 @@ PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
     y += 62.0
     state.current = Toggle.Draw(session, Toggle.Props.{.key = 23, .bounds = .{x, y, width, 40.0},
         .label = "Current flat figure", .value = state.current}).value
-    y += 50.0
-    state.colour = Slider.Draw(session, Slider.Props.{.key = 26, .bounds = .{x, y, width, 56.0},
-        .label = "Colour strength", .value = state.colour, .max = 1.0}).value
-    y += 66.0
-    status := "CPU"
+    y += 56.0
+    note := "Model pending: the practice figure appears here once a new model is chosen."
     if preview_failed {
-        status = "The figure could not be painted"
-    } else if preview_body.accelerated {
-        status = "GPU"
+        note = "The stage could not be painted."
     }
-    rate: [16]u8
-    first_line: [96]u8
-    labelled := PreviewJoin(first_line[:], status, ", frame ms ")
-    status = PreviewJoin(preview_status_text[preview_page][:], labelled, FormatDecimal(preview_frame_ms, 0, rate[:]))
-    Text.Draw(session, Text.Props.{.key = 21, .bounds = .{x, y, width, 24.0}, .text = status, .size = 14})
-    y += 26.0
+    Text.Draw(session, Text.Props.{.key = 21, .bounds = .{x, y, width, 66.0}, .text = note, .size = 14})
+    y += 70.0
     Text.Draw(session, Text.Props.{.key = 22, .bounds = .{x, y, width, 44.0},
-        .text = "Drag over her to turn around her; scroll to zoom.", .size = 14})
+        .text = "Drag over the stage to turn around it; scroll to zoom.", .size = 14})
     if state.practice == PREVIEW_ASTRAL && preview_library.astral_even {
         y += 46.0
         Text.Draw(session, Text.Props.{.key = 24, .bounds = .{x, y, width, 44.0},
             .text = "These practices have no astral session timings yet; steps are 20 s apart.", .size = 14})
     }
-    if preview_painted {
-        PreviewRecord(PREVIEW_PHASE_CONTROLS, PreviewLap(*controls))
-        PreviewProfileFrame("live window")
-    }
     return 0
 }
 
-PreviewMedia :: (character: s32) -> *FigureMedia {
-    return ifx character == FIGURE_MALE then *preview_man else *preview_woman
-}
-
-PreviewStyle :: () -> FigureStyle {
-    style := FigureStyleDefault()
-    style.colour = cast(float64)preview_state.colour
-    return style
-}
-
-PreviewPaintFigure :: (session: Session, area: Rectangle) {
+PreviewPaintStage :: (session: Session, area: Rectangle) {
     state := *preview_state
     // Paint at most 760 pixels tall; the image scales smoothly to the area.
     scale := FigureClamp(760.0 / cast(float64)area.height, 0.2, 1.0)
@@ -314,25 +229,10 @@ PreviewPaintFigure :: (session: Session, area: Rectangle) {
     }
     key := PreviewKey(width, height)
     if key != preview_painted_key || preview_texture.id == 0 {
-        clock := PreviewNow()
         moment := PreviewSample(*preview_library, state.practice, state.item, state.seconds)
-        PreviewRecord(PREVIEW_PHASE_SOLVE, PreviewLap(*clock))
         view := PreviewViewOf(*moment, state.turn, state.lift, state.zoom)
-        if state.current {
-            camera := PreviewFlatOf(*moment, view)
-            preview_failed = !PreviewFlatRender(camera, view, width, height, *preview_picture)
-        } else {
-            // The painters are prepared for one character's surface.
-            if preview_prepared != state.character {
-                FigurePainterRelease(*preview_body)
-                FigurePainterRelease(*preview_twin)
-                preview_prepared = state.character
-            }
-            preview_failed = !PreviewCompose(*preview_body, *preview_twin, PreviewMedia(state.character),
-                *preview_backdrops, state.practice, *moment, view, PreviewStyle(), false, width, height,
-                *preview_picture)
-        }
-        unused PreviewLap(*clock)
+        preview_failed = !PreviewStage(*preview_backdrops, state.practice, *moment, view, state.current, width,
+            height, *preview_picture)
         if !preview_failed {
             texture := preview_texture
             if texture.id != 0 && (texture.width != width || texture.height != height ||
@@ -348,23 +248,22 @@ PreviewPaintFigure :: (session: Session, area: Rectangle) {
             }
             preview_texture = texture
             preview_painted_key = key
-            PreviewRecord(PREVIEW_PHASE_UPLOAD, PreviewLap(*clock))
-            preview_painted = true
         }
     }
     if preview_texture.id != 0 {
         Image.Draw(session, Image.Props.{.key = 3, .bounds = area, .texture = preview_texture, .smooth = true,
-            .alt_text = "The practice figure"})
+            .alt_text = "The practice stage"})
     }
 }
 
-// Everything the picture depends on.
+// Everything the picture depends on; the backdrop alone does not move.
 PreviewKey :: (width: s32, height: s32) -> u64 {
     state := *preview_state
     digest: u64 = 1469598103934665603
-    values: [10]float64 = .[cast(float64)state.practice, cast(float64)state.item, state.seconds,
-        state.turn, state.lift, state.zoom, cast(float64)state.character,
-        ifx state.current then 1.0 else 0.0, cast(float64)state.colour, cast(float64)width * 10000.0 + cast(float64)height]
+    moving := ifx state.current then 1.0 else 0.0
+    values: [7]float64 = .[cast(float64)state.practice, cast(float64)state.item, state.seconds * moving,
+        (state.turn + state.lift * 7.0 + state.zoom * 13.0) * moving, moving, cast(float64)width,
+        cast(float64)height]
     for value: values {
         bits := cast(u64)(value * 1000003.0 + 0.5)
         digest = digest * 1099511628211 + bits
