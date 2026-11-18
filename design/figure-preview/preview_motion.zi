@@ -7,6 +7,8 @@
 //             snap), or moving faster than one would
 //   knee      a knee bending backwards
 //   through   a hand passing through the trunk
+//   screen    a planted foot moving on screen (the camera moving under it)
+//   pinned    her head held at one place on screen while her body travels
 // `figure_preview --audit` prints them and exits non-zero when any is found.
 #import "figure_math"
 #import "figure_joints"
@@ -17,10 +19,13 @@
 #import "std/math"
 
 PREVIEW_AUDIT_RATE :: 30.0
-// A planted foot may creep this far (metres) before it counts as sliding.
-PREVIEW_AUDIT_SLIDE :: 0.02
+// A planted heel or ball may stray this far (metres) from where it was set
+// down before it counts as sliding.
+PREVIEW_AUDIT_SLIDE :: 0.005
 // Below the floor by more than this is through it.
 PREVIEW_AUDIT_FLOOR :: 0.01
+// A planted foot may move this far on screen (metres at her distance).
+PREVIEW_AUDIT_SCREEN :: 0.005
 // No joint of a calm practice speeds up or slows down faster than this
 // (m/s²), nor moves faster than the second bound (m/s); the Workout's
 // brisk moves have the higher bounds.
@@ -37,6 +42,8 @@ PreviewAuditTotals :: struct {
     jump: s32
     knee: s32
     through: s32
+    screen: s32
+    pinned: s32
 }
 
 // Audits every practice and item; returns how many awkward moments it found.
@@ -50,9 +57,9 @@ PreviewAudit :: (library: *PreviewLibrary) -> s32 {
             PreviewAuditItem(library, practice, item, names[practice], *totals)
         }
     }
-    found := totals.slide + totals.floor + totals.jump + totals.knee + totals.through
-    print("figure audit: % awkward moments: % slides, % through the floor, % jumps, % knees backwards, % hands through the body\n",
-        found, totals.slide, totals.floor, totals.jump, totals.knee, totals.through)
+    found := totals.slide + totals.floor + totals.jump + totals.knee + totals.through + totals.screen + totals.pinned
+    print("figure audit: % awkward moments: % slides, % through the floor, % jumps, % knees backwards, % hands through the body, % feet moving on screen, % heads pinned\n",
+        found, totals.slide, totals.floor, totals.jump, totals.knee, totals.through, totals.screen, totals.pinned)
     return found
 }
 
@@ -130,15 +137,37 @@ PreviewAuditItem :: (library: *PreviewLibrary, practice: s32, item: s32, practic
     previous_solved: TaiChiSolved
     // Per heel and ball of each foot: how far it has crept on the floor.
     crept: [4]float64
+    world_planted: [4]Vector3
     last_slide: [4]float64 = .[-10.0, -10.0, -10.0, -10.0]
     last_floor: float64 = -10.0
     last_jump: float64 = -10.0
     last_knee: float64 = -10.0
     last_through: float64 = -10.0
+    // On screen: each planted contact's place in the view when set down,
+    // and how far her head and pelvis range in the view and the world.
+    screen_planted: [4]Vector3
+    screen_crept: [4]float64
+    last_screen: float64 = -10.0
+    head_low: Vector3 = .{1000.0, 1000.0, 0.0}
+    head_high: Vector3 = .{-1000.0, -1000.0, 0.0}
+    pelvis_low: Vector3 = .{1000.0, 1000.0, 1000.0}
+    pelvis_high: Vector3 = .{-1000.0, -1000.0, -1000.0}
     seconds: float64
     while seconds < duration {
         moment := PreviewSample(library, practice, item, seconds)
         joints := moment.body
+        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
+        toward := FigureV3(Sin(view.yaw) * Cos(view.pitch), Sin(view.pitch), Cos(view.yaw) * Cos(view.pitch))
+        across := FigureNormalize(FigureCross(FigureScale(toward, -1.0), FigureV3(0.0, 1.0, 0.0)))
+        upward := FigureCross(across, FigureScale(toward, -1.0))
+        head := FigureSub(FigureAddScaled(joints.neck, FigureV3(0.0, 1.0, 0.0), 0.15), view.center)
+        head_on_screen := FigureV3(FigureDot(head, across), FigureDot(head, upward), 0.0)
+        head_low = .{FigureMin(head_low.x, head_on_screen.x), FigureMin(head_low.y, head_on_screen.y), 0.0}
+        head_high = .{FigureMax(head_high.x, head_on_screen.x), FigureMax(head_high.y, head_on_screen.y), 0.0}
+        pelvis_low = .{FigureMin(pelvis_low.x, joints.pelvis.x), FigureMin(pelvis_low.y, joints.pelvis.y),
+            FigureMin(pelvis_low.z, joints.pelvis.z)}
+        pelvis_high = .{FigureMax(pelvis_high.x, joints.pelvis.x), FigureMax(pelvis_high.y, joints.pelvis.y),
+            FigureMax(pelvis_high.z, joints.pelvis.z)}
         // Through the floor: any part of a foot below it.
         lowest: float64 = 1000.0
         part: s32
@@ -170,16 +199,31 @@ PreviewAuditItem :: (library: *PreviewLibrary, practice: s32, item: s32, practic
                 slot := side * 2 + point
                 here := contacts[point]
                 down := here.y < 0.02 && upright
-                if down && have_previous && before_contacts[point].y < 0.02 {
-                    crept[slot] += FigureLength(FigureV3(here.x - before_contacts[point].x, 0.0,
-                        here.z - before_contacts[point].z))
+                if down && have_previous && before_contacts[point].y < 0.02 && crept[slot] >= 0.0 {
+                    crept[slot] = FigureLength(FigureV3(here.x - world_planted[slot].x, 0.0, here.z - world_planted[slot].z))
                 } else {
                     crept[slot] = 0.0
+                    world_planted[slot] = here
                 }
                 if crept[slot] > PREVIEW_AUDIT_SLIDE && PreviewAuditReport(practice_name, name, seconds, "slide",
                     PreviewAuditContact(cast(s32)side, cast(s32)point), crept[slot], *last_slide[slot]) {
                     totals.slide += 1
-                    crept[slot] = 0.0
+                    crept[slot] = -1.0
+                }
+                // The same contact on screen must not move across it either
+                // (rising a little as the heel or ball peels is not sliding).
+                offset := FigureSub(here, view.center)
+                on_screen := FigureV3(FigureDot(offset, across), 0.0, 0.0)
+                if down && have_previous && before_contacts[point].y < 0.02 && screen_crept[slot] >= 0.0 {
+                    screen_crept[slot] = FigureDistance(on_screen, screen_planted[slot])
+                    if screen_crept[slot] > PREVIEW_AUDIT_SCREEN && PreviewAuditReport(practice_name, name, seconds, "screen",
+                        "a planted foot moved on screen by", screen_crept[slot], *last_screen) {
+                        totals.screen += 1
+                        screen_crept[slot] = -1.0
+                    }
+                } else {
+                    screen_crept[slot] = 0.0
+                    screen_planted[slot] = on_screen
                 }
             }
             // A knee bending backwards: it bends over the toes, so its
@@ -253,5 +297,14 @@ PreviewAuditItem :: (library: *PreviewLibrary, practice: s32, item: s32, practic
         previous_solved = moment.solved
         have_previous = true
         seconds += step
+    }
+    // Her body travels (her pelvis moves over 30 cm) yet her head stays
+    // within 2 cm on screen: the camera is following her head.
+    travel := FigureMax(FigureMax(pelvis_high.x - pelvis_low.x, pelvis_high.y - pelvis_low.y), pelvis_high.z - pelvis_low.z)
+    held := FigureMax(head_high.x - head_low.x, head_high.y - head_low.y)
+    last_pinned: float64 = -10.0
+    if travel > 0.3 && held < 0.02 && PreviewAuditReport(practice_name, name, 0.0, "pinned",
+        "her head stays put on screen while her pelvis travels m", travel, *last_pinned) {
+        totals.pinned += 1
     }
 }

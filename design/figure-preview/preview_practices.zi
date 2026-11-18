@@ -64,6 +64,14 @@ PreviewLibrary :: struct {
     astral: [6]AstralCourse
     astral_ready: [6]bool
     astral_even: bool
+    // The camera framing of the item last framed: where it looks, how tall
+    // a view and from which way, fixed for the whole item.
+    framed_practice: s32
+    framed_item: s32
+    framed_target: Vector3
+    framed_height: float64
+    framed_yaw: float64
+    framed_tilt: float64
 }
 
 preview_astral_ids: [6]string = .["bruce_foundation_touch", "bruce_full_body_current",
@@ -185,7 +193,23 @@ PreviewDuration :: (library: *PreviewLibrary, practice: s32, item: s32) -> float
     return 60.0
 }
 
+// The moment SECONDS into PRACTICE's ITEM, seen by a camera framed once for
+// the whole item: it never follows her head or recentres on her, so her
+// planted feet stay put on the stage. Astral techniques keep their own
+// designed cameras.
 PreviewSample :: (library: *PreviewLibrary, practice: s32, item: s32, seconds: float64) -> PreviewMoment {
+    moment := PreviewSampleRaw(library, practice, item, seconds)
+    if practice == PREVIEW_ASTRAL || !PreviewFrame(library, practice, item) {
+        return moment
+    }
+    moment.target = library.framed_target
+    moment.height = library.framed_height
+    moment.camera.yaw = library.framed_yaw
+    moment.camera.tilt = library.framed_tilt
+    return moment
+}
+
+PreviewSampleRaw :: (library: *PreviewLibrary, practice: s32, item: s32, seconds: float64) -> PreviewMoment {
     moment: PreviewMoment
     if practice == PREVIEW_TAI_CHI {
         moment.rig = TaiChiRigFor(0)
@@ -330,6 +354,57 @@ PreviewJoin :: (buffer: []u8, a: string, b: string) -> string {
 }
 
 #scope_file
+// Frames PRACTICE's ITEM once from the bounds of its whole motion, seen from
+// its own camera's direction, for a portrait view: the view's centre and
+// height fit every joint at every moment, so the camera never moves while
+// she does (a long form is framed whole; scroll to zoom in).
+PreviewFrame :: (library: *PreviewLibrary, practice: s32, item: s32) -> bool {
+    if library.framed_practice == practice && library.framed_item == item && library.framed_height > 0.0 {
+        return true
+    }
+    library.framed_practice = practice
+    library.framed_item = item
+    library.framed_height = 0.0
+    first := PreviewSampleRaw(library, practice, item, 0.0)
+    yaw := first.camera.yaw
+    tilt := first.camera.tilt
+    toward := FigureV3(Sin(yaw) * Cos(tilt), Sin(tilt), Cos(yaw) * Cos(tilt))
+    right := FigureNormalize(FigureCross(FigureScale(toward, -1.0), FigureV3(0.0, 1.0, 0.0)))
+    up := FigureCross(right, FigureScale(toward, -1.0))
+    low: [2]float64 = .[1000.0, 1000.0]
+    high: [2]float64 = .[-1000.0, -1000.0]
+    duration := PreviewDuration(library, practice, item)
+    seconds: float64
+    while seconds <= duration {
+        moment := PreviewSampleRaw(library, practice, item, seconds)
+        body := *moment.body
+        points: [11]Vector3 = .[body.pelvis, body.neck, FigureAddScaled(body.neck, FigureV3(0.0, 1.0, 0.0), 0.25),
+            body.wrists[0], body.wrists[1], body.toes[0], body.toes[1], body.ankles[0], body.ankles[1], body.knees[0],
+            body.knees[1]]
+        for point: points {
+            across := FigureDot(point, right)
+            along := FigureDot(point, up)
+            low[0] = FigureMin(low[0], across)
+            low[1] = FigureMin(low[1], along)
+            high[0] = FigureMax(high[0], across)
+            high[1] = FigureMax(high[1], along)
+        }
+        seconds += 0.25
+    }
+    if high[0] < low[0] {
+        return false
+    }
+    // Room round her, and her shadow under her feet.
+    width := high[0] - low[0] + 0.5
+    tall := high[1] - low[1] + 0.45
+    middle := (low[0] + high[0]) * 0.5
+    library.framed_height = FigureMax(tall, width / 0.75)
+    library.framed_target = FigureAdd(FigureScale(right, middle), FigureScale(up, (low[1] + high[1]) * 0.5 - 0.05))
+    library.framed_yaw = yaw
+    library.framed_tilt = tilt
+    return true
+}
+
 PreviewVector :: (value: TaiChiVector3) -> Vector3 {
     return .{value.x, value.y, value.z}
 }
