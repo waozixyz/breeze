@@ -14,8 +14,8 @@ ROOT = Path(__file__).resolve().parents[1]
 # originals kept in OUTPUT/source (provenance.json there): each swatch is
 # moved to the style target's palette, made to tile without a seam and
 # sized for phones.
-SWATCHES = {'skin': ('#e8c3a0', 0.45), 'tunic': ('#8fa483', 0.9), 'trousers': ('#6a6a8f', 0.85),
-            'hair': ('#76513a', 1.0), 'sash': ('#e3dabd', 0.6)}
+SWATCHES = {'skin': ('#efbe96', 0.45), 'tunic': ('#7aa46a', 0.9), 'trousers': ('#4e5090', 0.85),
+            'hair': ('#7a4a2a', 1.0), 'sash': ('#ecd6a2', 0.6)}
 BACKDROPS = ('tai-chi', 'sun-salutation', 'workout', 'astral')
 
 def prepare_textures(folder):
@@ -30,7 +30,7 @@ def prepare_textures(folder):
         # Keep the brushwork's light and dark, painted in the target colour,
         # with a little of the swatch's own colour variation.
         shade = (light-light.mean())*contrast
-        tinted = goal+shade[:, :, None]+(picture-mean-(light-light.mean())[:, :, None])*0.25
+        tinted = goal+shade[:, :, None]+(picture-mean-(light-light.mean())[:, :, None])*0.45
         # A copy offset by half covers the seam at the edges.
         shifted = np.roll(tinted, (256, 256), axis=(0, 1))
         ramp = 1-np.abs(np.arange(512)/511*2-1)
@@ -40,7 +40,7 @@ def prepare_textures(folder):
     # The face painting takes the skin swatch's colour on its cheeks and
     # brow, keeping its own eyes, brows, lips and blush.
     face = np.asarray(Image.open(source/'face.webp').convert('RGB').resize((512, 512), Image.LANCZOS), dtype=np.float64)
-    skin = face[106:155, 196:318].reshape(-1, 3).mean(axis=0)
+    skin = face[118:155, 230:285].reshape(-1, 3).mean(axis=0)
     goal = np.array([int(SWATCHES['skin'][0][at:at+2], 16) for at in (1, 3, 5)], dtype=np.float64)
     face = face*goal/skin
     # Outside the painted face (its paper, hair and ears) the painting
@@ -55,7 +55,11 @@ def prepare_textures(folder):
     for name in BACKDROPS:
         picture = Image.open(source/f'backdrop-{name}.webp').convert('RGB')
         picture.thumbnail((1280, 1280), Image.LANCZOS)
-        picture.save(folder/'backdrops'/f'{name}.webp', quality=85, method=6)
+        # Richer washes; the near-white paper barely moves.
+        pixels = np.asarray(picture, dtype=np.float64)
+        light = (pixels @ np.array([0.30, 0.59, 0.11]))[:, :, None]
+        pixels = np.clip(light+(pixels-light)*1.3, 0, 255)
+        Image.fromarray(pixels.astype(np.uint8)).save(folder/'backdrops'/f'{name}.webp', quality=85, method=6)
 
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path, required=True)
@@ -79,12 +83,68 @@ all_vertices = np.asarray(vertices, dtype=np.float64)
 # MakeHuman's base mesh is its gender-neutral average. Her body and face take
 # MakeHuman's own CC0 young-adult female macro shape: the three ethnic
 # female-young targets in equal shares, as MakeHuman mixes them by default.
-for race in ('african', 'asian', 'caucasian'):
-    target = ROOT / f'design/astral-projection/three/assets/makehuman-{race}-female-young.target.gz'
+# She is slender: MakeHuman's weight slider at 0.25, muscle at 0.35, height
+# at 0.85 and ideal proportions, mixed as MakeHuman mixes its macro targets
+# (each weight-and-muscle pair by the product of their shares).
+def apply_target(name, share):
+    target = ROOT / f'design/astral-projection/three/assets/makehuman-{name}.target.gz'
     for line in gzip.open(target, 'rt'):
         if line.strip() and not line.startswith('#'):
             index, dx, dy, dz = line.split()
-            all_vertices[int(index)] += np.array([float(dx), float(dy), float(dz)])/3
+            all_vertices[int(index)] += np.array([float(dx), float(dy), float(dz)])*share
+
+for race in ('african', 'asian', 'caucasian'):
+    apply_target(f'{race}-female-young', 1/3)
+BODY_WEIGHT, BODY_MUSCLE, BODY_HEIGHT, BODY_PROPORTIONS = 0.25, 0.35, 0.65, 1.0
+for muscle, muscle_share in (('minmuscle', 1-BODY_MUSCLE/0.5), ('averagemuscle', BODY_MUSCLE/0.5)):
+    for weight, weight_share in (('minweight', 1-BODY_WEIGHT/0.5), ('averageweight', BODY_WEIGHT/0.5)):
+        pair = muscle_share*weight_share
+        if (muscle, weight) != ('averagemuscle', 'averageweight'):
+            apply_target(f'universal-female-young-{muscle}-{weight}', pair)
+        apply_target(f'proportions-female-young-{muscle}-{weight}-idealproportions', pair*BODY_PROPORTIONS)
+# MakeHuman's four maxheight targets for these pairs are the same file.
+apply_target('height-female-young-maxheight', (BODY_HEIGHT-0.5)/0.5)
+
+# MakeHuman's own CC0 rig weights for this mesh (folded onto this figure's
+# bones further on).
+weights_file = ROOT / 'design/astral-projection/three/assets/makehuman-default-weights.mhw.gz'
+rig = json.loads(gzip.open(weights_file, 'rt').read())
+assert rig['license'] == 'CC0'
+
+def rig_share(accept):
+    share = np.zeros(len(all_vertices))
+    for name, entries in rig['weights'].items():
+        if accept(name):
+            for vertex, weight in entries:
+                share[vertex] += weight
+    return np.clip(share, 0, 1)
+
+def helpers(prefix):
+    return sorted({index for group, faces in groups.items() if group.startswith(prefix) for face in faces
+                   for index in face})
+
+def group_centre(name):
+    return all_vertices[sorted({index for face in groups['joint-'+name] for index in face})].mean(axis=0)
+
+# Graceful hands and feet: each a little smaller about the wrist or ankle,
+# with its finger and toe joints, so the rig still fits.
+metres = 1.7/np.ptp(all_vertices[sorted({i for f in groups['body'] for i in f})][:, 1])
+for side in ('L', 'R'):
+    prefix = 'l' if side == 'L' else 'r'
+    for pivot_name, stems, joint_prefix, factor in (
+            ('hand', ('wrist', 'metacarpal', 'finger'), f'joint-{prefix}-finger', 0.90),
+            ('ankle', ('foot', 'toe'), f'joint-{prefix}-toe', 0.92)):
+        pivot = group_centre(f'{prefix}-{pivot_name}')
+        share = rig_share(lambda name: name.endswith('.'+side) and name.split('.')[0].startswith(stems))
+        all_vertices += (pivot-all_vertices)*((1-factor)*share)[:, None]
+        tips = helpers(joint_prefix)
+        all_vertices[tips] = pivot+(all_vertices[tips]-pivot)*factor
+# A longer neck: everything the head carries rises a little, fading in up
+# the neck and away from the shoulders.
+neck_base, skull = group_centre('neck'), group_centre('head')
+rise = np.clip((all_vertices[:, 1]-neck_base[1])/(skull[1]-neck_base[1]), 0, 1)
+rise = rise*rise*(3-2*rise)*np.clip(1-(np.abs(all_vertices[:, 0])-0.05/metres)/(0.05/metres), 0, 1)
+all_vertices[:, 1] += rise*0.014/metres
 ids = sorted({index for face in groups['body'] for index in face})
 lookup = {old: index for index, old in enumerate(ids)}
 body = all_vertices[ids]
@@ -166,10 +226,6 @@ for index, point in enumerate(positions):
 
 # MakeHuman's own CC0 rig weights for this mesh, folded onto these 46 bones.
 # The procedural weights above remain only for vertices the rig leaves out.
-weights_file = ROOT / 'design/astral-projection/three/assets/makehuman-default-weights.mhw.gz'
-rig = json.loads(gzip.open(weights_file, 'rt').read())
-assert rig['license'] == 'CC0'
-
 def rig_bones(name):
     side = 0 if name.endswith('.L') else 1
     base = 4 + side*21
@@ -307,7 +363,7 @@ def hairline(points):
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
     turn = np.degrees(np.arctan2(np.abs(x), z-0.02))
     height = eye_height+np.interp(turn, [0, 20, 45, 65, 85, 105, 125, 180],
-                                  [0.064, 0.062, 0.052, 0.034, 0.008, -0.014, -0.045, -0.080])
+                                  [0.064, 0.062, 0.052, 0.034, 0.012, 0.002, -0.022, -0.045])
     value = y-height
     ears = (y < eye_height+0.002) & (np.abs(x) > 0.070)
     value = np.where(ears, np.minimum(value, 0.070-np.abs(x)), value)
@@ -437,17 +493,23 @@ extras = []
 hair_faces = triangles[np.all(regions[triangles] == 3, axis=1)]
 used = np.unique(hair_faces)
 depth = hairline(positions[used])
-crown = np.clip((positions[used, 1]-eye_height-0.02)/0.08, 0, 1)
+# Neat swept-back hair: close over the ears and at the hairline, fuller
+# towards the back of the crown where it gathers into the bun.
+top = np.clip((positions[used, 1]-eye_height-0.03)/0.07, 0, 1)
+back = np.clip((joint('head')[2]+0.01-positions[used, 2])/0.08, 0, 1)
 sides = np.clip(np.abs(positions[used, 0])/0.07, 0, 1)
-thickness = (0.010+0.016*crown+0.005*sides)*np.clip(depth/0.045, 0, 1)**1.1
+above = np.clip((positions[used, 1]-eye_height)/0.03, 0, 1)
+thickness = (0.005+0.008*top+0.010*top*back+0.008*sides*above)*np.clip(depth/0.04, 0, 1)**0.9
 shell = positions[used]+normals[used]*thickness[:, None]
 remap = np.full(len(positions), -1, dtype=np.int64)
 remap[used] = np.arange(len(used))
 shell_faces = remap[hair_faces]
 extras.append((shell, vertex_normals(shell, shell_faces), np.full(len(shell), 3), shell_faces))
 rings, segments = 10, 18
-bun_center = np.array([0.0, eye_height+0.078, -0.056])
-bun_radii = np.array([0.040, 0.036, 0.033])
+# A low, round bun at the back of the head.
+nape = positions[used][np.abs(positions[used, 1]-(eye_height+0.045)) < 0.01]
+bun_center = np.array([0.0, eye_height+0.045, nape[:, 2].min()-0.016])
+bun_radii = np.array([0.046, 0.040, 0.036])
 units = np.array([[np.sin(np.pi*ring/rings)*np.cos(2*np.pi*at/segments), np.cos(np.pi*ring/rings),
                    np.sin(np.pi*ring/rings)*np.sin(2*np.pi*at/segments)]
                   for ring in range(rings+1) for at in range(segments)])
@@ -525,6 +587,9 @@ for j, h in enumerate(grid_y):
 top = int(np.searchsorted(grid_y, armpit_y))
 for j in range(top-1, -1, -1):
     hang[j] = np.maximum(hang[j], hang[j+1])
+# Soft cloth settles part of the way back onto her below the widest place.
+hang = 0.65*hang+0.35*np.array([(np.column_stack((s[:, 0], s[:, 2]-trunk_z(h))) @ directions.T).max(axis=0)
+                                 for h, s in ((h, slab(h)) for h in grid_y)])
 for _ in range(3):
     hang = 0.5*hang+0.25*np.roll(hang, 1, axis=1)+0.25*np.roll(hang, -1, axis=1)
 hang[1:-1] = 0.5*hang[1:-1]+0.25*hang[:-2]+0.25*hang[2:]
@@ -608,8 +673,8 @@ used = np.unique(top_faces)
 p, n = positions[used], normals[used]
 bust_y = slab((waist_y+armpit_y)/2, half=0.06)[:, 1][np.argmax(slab((waist_y+armpit_y)/2, half=0.06)[:, 2])]
 sleeve = smooth((arm[used]-0.2)/0.6)
-lift = np.interp(p[:, 1], [waist_y, bust_y, neck_height-0.04], [0.022, 0.012, 0.005])*(1-sleeve)
-lift += (0.010+0.045*arm_progress(p)**1.4)*sleeve
+lift = np.interp(p[:, 1], [waist_y, bust_y, neck_height-0.04], [0.016, 0.010, 0.005])*(1-sleeve)
+lift += (0.008+0.040*arm_progress(p)**1.6)*sleeve
 q = p+n*lift[:, None]
 rel = np.column_stack((q[:, 0], q[:, 2]-trunk_z(p[:, 1])))
 theta = np.arctan2(rel[:, 0], rel[:, 1])
@@ -629,7 +694,7 @@ fall = (rows_y[0]-rows_y)/(rows_y[0]-rows_y[-1])
 skirt = []
 for y, f in zip(rows_y, fall):
     hem = 0.012*np.sin(3*angles+0.7)*f**4
-    r = hanging_radius(angles, np.full(K, y))+0.022+0.035*f**1.5
+    r = hanging_radius(angles, np.full(K, y))+0.016+0.028*f**1.5
     skirt.append(np.column_stack((np.sin(angles)*r, np.full(K, y)+hem, trunk_z(y)+np.cos(angles)*r)))
 skirt = np.vstack(skirt)
 faces_of = facing_out(skirt, grid_faces(len(rows_y), K, True), trunk_axis)
@@ -647,7 +712,7 @@ cloth.append((skirt, vertex_normals(skirt, faces_of), rows, shares, 1, faces_of,
 # The sash round the waist and its two tails hanging in front.
 band_y = waist_y+np.array([0.035, 0.012, -0.012, -0.035])
 band = np.vstack([np.column_stack((np.sin(angles)*r, np.full(K, y), trunk_z(y)+np.cos(angles)*r))
-                  for y, r in ((y, hanging_radius(angles, np.full(K, y))+0.022+bulge)
+                  for y, r in ((y, hanging_radius(angles, np.full(K, y))+0.016+bulge)
                                for y, bulge in zip(band_y, (0.005, 0.010, 0.010, 0.005)))])
 faces_of = facing_out(band, grid_faces(len(band_y), K, True), trunk_axis)
 rows, shares = strongest(nearest_weights(band))
@@ -659,7 +724,7 @@ for tail, (turn, length) in enumerate(((0.30, 0.30), (0.46, 0.25))):
         f = np.clip((rows_y[0]-y)/(rows_y[0]-rows_y[-1]), 0, 1)
         for side in (-1, 1):
             angle = turn+0.12*step+side*0.022/0.15
-            r = hanging_radius(np.array([angle]), np.array([y]))[0]+0.022+0.035*f**1.5+0.008+0.004*tail
+            r = hanging_radius(np.array([angle]), np.array([y]))[0]+0.016+0.028*f**1.5+0.008+0.004*tail
             strip.append([np.sin(angle)*r, y, trunk_z(y)+np.cos(angle)*r])
     strip = np.array(strip)
     faces_of = facing_out(strip, grid_faces(9, 2, False), trunk_axis)
@@ -673,7 +738,7 @@ leg_faces = triangles[np.all(regions[triangles] == 2, axis=1) & np.all(triangles
 used = np.unique(leg_faces)
 p, n = positions[used], normals[used]
 down = np.clip((hip_height-0.04-p[:, 1])/(hip_height-0.04-np.mean(ankles)), 0, 1)
-lift = 0.012+0.042*smooth(down/0.7)-0.028*smooth((down-0.86)/0.14)
+lift = 0.010+0.030*smooth(down/0.7)-0.018*smooth((down-0.86)/0.14)
 q = p+n*lift[:, None]
 remap = np.full(len(positions), -1, dtype=np.int64)
 remap[used] = np.arange(len(used))
@@ -743,7 +808,7 @@ for points, vertex_normal, rows, shares, region, faces_of, source, hanging in cl
 # The face is painted by face.webp, projected from the front onto the
 # head: its eyes, mouth and the mesh's own match exactly, and the painting
 # fades out towards the ears, the hairline and under the chin.
-FACE = dict(size=(1254, 1254), right_eye=(420, 586), left_eye=(840, 586), mouth=(630, 884))
+FACE = dict(size=(1254, 1254), right_eye=(430, 576), left_eye=(826, 576), mouth=(630, 858))
 face_ready = FACE['right_eye'] != (0, 0)
 mouth_point = np.array([0.0, joint('mouth')[1]-0.027])
 mesh_marks = np.array([joint('r-eye')[:2], joint('l-eye')[:2], mouth_point])
@@ -788,4 +853,7 @@ metadata = {'format':'PFIG0002', 'vertices':len(positions), 'triangles':len(tria
             'license':'CC0-1.0', 'bone_names':[f"{b['role']}/{b['side']}/{b['finger']}/{b['segment']}" for b in bones]}
 (output/'anatomy.json').write_text(json.dumps(metadata,indent=2)+'\n')
 print(f"Prepared {len(positions)} vertices, {len(triangles)} triangles, {len(bones)} bones; {len(blob)} bytes")
-print(f"waist {waist_y:.3f} bust {bust_y:.3f} armpit {armpit_y:.3f} hem {hem_y:.3f}")
+crown = positions[:body_count, 1].max()
+# The eyes sit halfway down the head.
+print(f"waist {waist_y:.3f} bust {bust_y:.3f} armpit {armpit_y:.3f} hem {hem_y:.3f}; "
+      f"{1.7/(2*(crown-eye_height)):.2f} heads tall")

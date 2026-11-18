@@ -3,8 +3,8 @@
 The owner wants one perfected character used everywhere: Tai Chi, Sun
 Salutation, Workout and astral projection, native on Ziran and Kryon
 without raylib, looking like a hand-painted watercolor illustration. The
-character is the practices package's `figure/` (pinned practices b0464fdd:
-female MakeHuman CC0 surface in loose cloth shells, dual-quaternion rig,
+character is the practices package's `figure/` (pinned practices 3e7c7bff:
+slender female MakeHuman CC0 surface in loose cloth shells, dual-quaternion rig,
 generated painted textures and face, three-wash shaders, painterly finish,
 painted backdrops, Ziran tests). The style target is practices
 `figure/design/reference/style-target.webp`. The live tuning tool is
@@ -24,8 +24,9 @@ painted backdrops, Ziran tests). The style target is practices
   `build/practice-compare/side-by-side/` (current flat figure beside the new
   character, same moments and cameras), then tune from that feedback.
 - Character work still open:
-  - The hair still reads close to a cap; give it looser volume and a few
-    strands at the temples, as in the style target.
+  - Seen from the front at practice sizes the hair still reads as a close
+    cap; the style target's loose volume and stray strands need cards or
+    painted strands that do not read as sideburns.
   - The skirt swings rigidly from the waist and only by the pelvis's tilt:
     in a deep squat and a forward fold it bulges. Secondary sway and a
     simple collision with the thighs would help.
@@ -41,7 +42,7 @@ painted backdrops, Ziran tests). The style target is practices
 - Breeze adoption, after the shared Kryon repin (lane -7, plot, entity,
   game2d, css and apps on one Kryon; Breeze audio on Ziran std audio):
   - Make Breeze's `practices` dependency a package pinned at or after
-    b0464fdd.
+    3e7c7bff.
   - Move `PreviewJoints` (solver joints to `FigureJoints`) beside the
     solver.
   - Paint Tai Chi, Sun Salutation, Workout and astral with `FigurePaint`
