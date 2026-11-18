@@ -1,0 +1,78 @@
+// Frame-time profiling for the figure preview: each phase of the last 240
+// frames, reported as median and 95th percentile milliseconds. The live
+// window prints a report every 240 frames; `--profile` measures without one.
+#import "std/math"
+Timer :: #import "std/timer_linux";
+
+PREVIEW_PHASE_FRAME :: 0
+PREVIEW_PHASE_SOLVE :: 1
+PREVIEW_PHASE_POSE :: 2
+PREVIEW_PHASE_SKIN :: 3
+PREVIEW_PHASE_CLOTH :: 4
+PREVIEW_PHASE_RENDER :: 5
+PREVIEW_PHASE_FINISH :: 6
+PREVIEW_PHASE_SHADOW :: 7
+PREVIEW_PHASE_BACKDROP :: 8
+PREVIEW_PHASE_OVER :: 9
+PREVIEW_PHASE_TWIN :: 10
+PREVIEW_PHASE_UPLOAD :: 11
+PREVIEW_PHASE_CONTROLS :: 12
+PREVIEW_PHASES :: 13
+PREVIEW_PROFILE_FRAMES :: 240
+
+PreviewProfile :: struct {
+    samples: [PREVIEW_PHASES][PREVIEW_PROFILE_FRAMES]float64
+    frames: s64
+}
+
+preview_profile: PreviewProfile;
+
+PreviewNow :: () -> s64 {
+    return Timer.MonotonicNanoseconds()
+}
+
+// Milliseconds since CLOCK, which moves on to now.
+PreviewLap :: (clock: *s64) -> float64 {
+    now := Timer.MonotonicNanoseconds()
+    spent := cast(float64)(now - clock.*) / 1000000.0
+    clock.* = now
+    return spent
+}
+
+PreviewRecord :: (phase: s32, milliseconds: float64) {
+    preview_profile.samples[phase][preview_profile.frames % PREVIEW_PROFILE_FRAMES] = milliseconds
+}
+
+// Ends a frame; LABEL names the run, and a full window of frames prints.
+PreviewProfileFrame :: (label: string) {
+    preview_profile.frames += 1
+    if preview_profile.frames % PREVIEW_PROFILE_FRAMES == 0 {
+        PreviewProfileReport(label)
+    }
+}
+
+PreviewProfileReport :: (label: string) {
+    count := ifx preview_profile.frames < PREVIEW_PROFILE_FRAMES then preview_profile.frames else PREVIEW_PROFILE_FRAMES
+    if count == 0 {
+        return
+    }
+    names: [PREVIEW_PHASES]string = .["frame", "solve", "pose", "skin", "cloth", "render+readback", "finish",
+        "shadow", "backdrop", "over", "twin", "upload", "controls"]
+    print("figure preview timing, %, % frames (median / p95 ms):", label, count)
+    for phase: 0..PREVIEW_PHASES - 1 {
+        sorted: [PREVIEW_PROFILE_FRAMES]float64
+        for at: 0..count - 1 {
+            value := preview_profile.samples[phase][at]
+            spot := at
+            while spot > 0 && sorted[spot - 1] > value {
+                sorted[spot] = sorted[spot - 1]
+                spot -= 1
+            }
+            sorted[spot] = value
+        }
+        median := sorted[count / 2]
+        tail := sorted[(count * 95) / 100]
+        print(" %=%/%", names[phase], cast(s64)(median * 10.0 + 0.5), cast(s64)(tail * 10.0 + 0.5))
+    }
+    print(" (tenths of a ms)\n")
+}

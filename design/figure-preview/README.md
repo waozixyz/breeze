@@ -6,14 +6,14 @@ package (`figure/`): Tai Chi forms, two rounds of Sun Salutation, the
 Workout's twelve exercises and the six astral techniques. It runs on Ziran
 and Kryon's SDL/Cairo desktop host, without raylib.
 
-Each practice plays on its own painted backdrop: a misty mountain garden
-for Tai Chi, a sunrise meadow for Sun Salutation, a light room for the
-Workout and the dim bedroom for astral projection. The panel picks the
-practice and item, plays, pauses, scrubs and slows the clock. It switches
-the watercolor finish off to show the bare surface on paper, and can show
-Breeze's current flat figure for the same moment. It also tunes the wet
-bleed, the dried edges, the ink line and the granulation. Drag over her to
-turn around her; scroll to zoom.
+Each practice plays on its own backdrop in Inner Breeze's illustration
+style: a lake terrace for Tai Chi, a sunrise hill for Sun Salutation, a
+woodland deck for the Workout and a moonlit veranda for astral projection.
+The panel picks the practice and item, plays, pauses, scrubs and slows the
+clock. It switches the finish off to show the bare surface on paper, and
+can show Breeze's current flat figure for the same moment. It also tunes the
+seam softening, the dried edges, the line, the texture and the colour
+strength. Drag over her to turn around her; scroll to zoom.
 
 This is its own small project so it can pin the Kryon that has
 `scene_skin` and portable shaders, and the practices commit that has the figure,
@@ -48,10 +48,18 @@ camera (`NAME-current.png`). The frames cover
 Tai Chi's deepest stance, Sun Salutation's fold, lunge, plank, cobra and
 downward dog, the Workout's lowest squat and lunge, and the astral exits.
 
+## Profiling
+
+The window prints a timing report to its standard output (the launcher's
+journal) every 240 painted frames: median and 95th percentile milliseconds
+for the whole frame and for each step (the practice's pose solve, the
+figure's pose, skinning, cloth, render and readback, finish and ground
+shadow, the backdrop, compositing, the astral double, the texture upload
+and the panel's controls). `./build/app/figure_preview --profile PRACTICE`
+(`tai-chi`, `sun-salutation`, `workout` or `astral`) paints 240 frames
+without a window and prints the same report; add `still` to hold one pose.
+
 ## Known limits
 
-- At the pinned Kryon, the desktop loop stops showing frames that arrive
-  with no input, so hands-off playback freezes until the pointer moves over
-  the window. The bug is reported to Kryon with a minimal repro.
 - Practices commits without `astral_projection/sessions/` play the astral
   techniques with steps evenly 20 seconds apart, and the panel says so.

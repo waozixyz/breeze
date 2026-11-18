@@ -15,6 +15,7 @@
 #import "preview_practices"
 #import "preview_capture"
 #import "preview_flat"
+#import "preview_profile"
 #import "kryon/scene"
 #import "kryon/session"
 #import "kryon/geometry"
@@ -69,7 +70,7 @@ PreviewState :: struct {
 }
 
 preview_state: PreviewState = .{playing = true, speed = 1.0, watercolor = true, zoom = 1.0,
-    bleed = 0.6, edge = 0.6, contour = 0.75, granulation = 0.55, colour = 0.6};
+    bleed = 0.15, edge = 0.25, contour = 0.6, granulation = 0.25, colour = 0.6};
 preview_media: FigureMedia;
 preview_backdrops: PreviewBackdrops;
 preview_library: PreviewLibrary;
@@ -90,6 +91,8 @@ preview_page: s32;
 preview_time_text: [2][32]u8;
 preview_status_text: [2][96]u8;
 preview_frame_ms: float64;
+preview_last_draw: s64;
+preview_painted: bool;
 preview_practices_path: [1024]u8;
 preview_practices_length: s64;
 
@@ -107,6 +110,19 @@ main :: (argc: s32, argv: **u8) -> s32 {
         return 1
     }
     preview_state.item = PreviewDefaultItem(*preview_library, preview_state.practice)
+    if argc >= 3 && TextFromCString(argv[1]) == "--profile" {
+        practice: s32 = 0
+        names: [4]string = .["tai-chi", "sun-salutation", "workout", "astral"]
+        for index: cast(s32)0..3 {
+            if TextFromCString(argv[2]) == names[index] {
+                practice = index
+            }
+        }
+        // A third argument "still" holds one pose, to tell the renderer's own
+        // cost from rebuilding the moving surface.
+        still := argc >= 4 && TextFromCString(argv[3]) == "still"
+        return PreviewProfileRun(*preview_media, *preview_backdrops, *preview_library, practice, 240, 600, 760, still)
+    }
     if argc >= 3 && TextFromCString(argv[1]) == "--capture" {
         return PreviewCapture(*preview_media, *preview_backdrops, *preview_library, TextFromCString(argv[2]))
     }
@@ -160,7 +176,14 @@ PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
         state.zoom = FigureClamp(state.zoom * Pow(0.88, cast(float64)input.wheel), 0.25, 3.0)
     }
 
+    drawn := PreviewNow()
+    if preview_last_draw != 0 {
+        PreviewRecord(PREVIEW_PHASE_FRAME, cast(float64)(drawn - preview_last_draw) / 1000000.0)
+    }
+    preview_last_draw = drawn
+    preview_painted = false
     PreviewPaintFigure(session, area)
+    controls := PreviewNow()
 
     x := panel.x + 20.0
     width := panel.width - 40.0
@@ -261,6 +284,10 @@ PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
         Text.Draw(session, Text.Props.{.key = 24, .bounds = .{x, y, width, 44.0},
             .text = "These practices have no astral session timings yet; steps are 20 s apart.", .size = 14})
     }
+    if preview_painted {
+        PreviewRecord(PREVIEW_PHASE_CONTROLS, PreviewLap(*controls))
+        PreviewProfileFrame("live window")
+    }
     return 0
 }
 
@@ -286,7 +313,9 @@ PreviewPaintFigure :: (session: Session, area: Rectangle) {
     }
     key := PreviewKey(width, height)
     if key != preview_painted_key || preview_textures[preview_shown].id == 0 {
+        clock := PreviewNow()
         moment := PreviewSample(*preview_library, state.practice, state.item, state.seconds)
+        PreviewRecord(PREVIEW_PHASE_SOLVE, PreviewLap(*clock))
         view := PreviewViewOf(*moment, state.turn, state.lift, state.zoom)
         if state.current {
             camera := PreviewFlatOf(*moment, view)
@@ -295,6 +324,7 @@ PreviewPaintFigure :: (session: Session, area: Rectangle) {
             preview_failed = !PreviewCompose(*preview_body, *preview_twin, *preview_media, *preview_backdrops,
                 state.practice, *moment, view, PreviewStyle(), width, height, *preview_picture)
         }
+        unused PreviewLap(*clock)
         if !preview_failed {
             next := 1 - preview_shown
             texture := preview_textures[next]
@@ -314,6 +344,8 @@ PreviewPaintFigure :: (session: Session, area: Rectangle) {
                 preview_shown = next
             }
             preview_painted_key = key
+            PreviewRecord(PREVIEW_PHASE_UPLOAD, PreviewLap(*clock))
+            preview_painted = true
         }
     }
     shown := preview_textures[preview_shown]

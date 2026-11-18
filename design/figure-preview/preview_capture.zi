@@ -7,6 +7,7 @@
 #import "figure_wash"
 #import "preview_practices"
 #import "preview_flat"
+#import "preview_profile"
 #import "kryon/scene"
 #import "sun_salutation_rules"
 #import "workout_rules"
@@ -16,9 +17,12 @@
 #import "std/vec"
 Raster :: #import "std/image";
 
-// Each practice's painted backdrop.
+// Each practice's painted backdrop, and the last one scaled to a picture.
 PreviewBackdrops :: struct {
     images: [4]Raster.Image
+    covered: Raster.Image
+    covered_practice: s32
+    covered_vivid: float64
 }
 
 PreviewBackdropsLoad :: (backdrops: *PreviewBackdrops, practices: string) -> bool {
@@ -47,6 +51,7 @@ PreviewBackdropsRelease :: (backdrops: *PreviewBackdrops) {
     for practice: 0..3 {
         VecFree(backdrops.images[practice].pixels)
     }
+    VecFree(backdrops.covered.pixels)
 }
 
 // The body, and an astral twin over it, into OUT: on the practice's
@@ -58,36 +63,99 @@ PreviewCompose :: (body: *FigurePainter, twin: *FigurePainter, media: *FigureMed
     if !FigurePaint(body, media, *moment.body, view, style, still, width, height) {
         return false
     }
+    times := body.times
+    PreviewRecord(PREVIEW_PHASE_POSE, times.pose)
+    PreviewRecord(PREVIEW_PHASE_SKIN, times.skin)
+    PreviewRecord(PREVIEW_PHASE_CLOTH, times.cloth)
+    PreviewRecord(PREVIEW_PHASE_RENDER, times.render)
+    PreviewRecord(PREVIEW_PHASE_FINISH, times.finish)
+    PreviewRecord(PREVIEW_PHASE_SHADOW, times.shadow)
+    clock := PreviewNow()
+    // The backdrop is scaled once for each size, practice and colour
+    // strength, then the figure is laid over it.
     backdrop := *backdrops.images[practice]
-    if style.watercolor && Raster.ImageValid(backdrop) {
-        // The lying astral body needs the bedroom floor raised to her.
-        zoom := ifx practice == PREVIEW_ASTRAL then 1.5 else 1.0
-        focus := ifx practice == PREVIEW_ASTRAL then 0.85 else 0.62
-        if !FigureBackdropCover(out, backdrop, width, height, zoom, focus, FigureVivid(style.wash)) {
-            return false
+    covered := *backdrops.covered
+    painted := style.watercolor && Raster.ImageValid(backdrop)
+    vivid := ifx painted then FigureVivid(style.wash) else -1.0
+    if covered.width != width || covered.height != height || backdrops.covered_practice != practice ||
+    backdrops.covered_vivid != vivid {
+        if painted {
+            // The lying astral body needs the floor raised to her.
+            zoom := ifx practice == PREVIEW_ASTRAL then 1.7 else 1.0
+            focus := ifx practice == PREVIEW_ASTRAL then 1.0 else 0.62
+            if !FigureBackdropCover(covered, backdrop, width, height, zoom, focus, vivid) {
+                return false
+            }
+        } else {
+            if !VecResize(covered.pixels, cast(s64)width * height * 4) {
+                return false
+            }
+            covered.width = width
+            covered.height = height
+            paper: [4]u8 = .[243, 237, 225, 255]
+            for index: 0..covered.pixels.count - 1 {
+                covered.pixels[index] = paper[index % 4]
+            }
         }
-    } else {
-        if !VecResize(out.pixels, cast(s64)width * height * 4) {
-            return false
-        }
-        out.width = width
-        out.height = height
-        paper: [4]u8 = .[243, 237, 225, 255]
-        for index: 0..out.pixels.count - 1 {
-            out.pixels[index] = paper[index % 4]
-        }
+        backdrops.covered_practice = practice
+        backdrops.covered_vivid = vivid
     }
-    if !FigureOver(out, *body.pixels, 1.0) {
+    PreviewRecord(PREVIEW_PHASE_BACKDROP, PreviewLap(*clock))
+    if !FigureOverOnto(out, covered, *body.pixels) {
         return false
     }
+    PreviewRecord(PREVIEW_PHASE_OVER, PreviewLap(*clock))
+    PreviewRecord(PREVIEW_PHASE_TWIN, 0.0)
     if !moment.twin_visible {
         return true
     }
     glow := style
     glow.luminous = true
     glow.opacity = 0.58
-    return FigurePaint(twin, media, *moment.twin, view, glow, moment.twin_effect, width, height) &&
+    doubled := FigurePaint(twin, media, *moment.twin, view, glow, moment.twin_effect, width, height) &&
         FigureOver(out, *twin.pixels, 1.0)
+    PreviewRecord(PREVIEW_PHASE_TWIN, PreviewLap(*clock))
+    return doubled
+}
+
+// Paints PRACTICE's default item for FRAMES frames a thirtieth of a second
+// apart (or all at its first moment, STILL) at WIDTH by HEIGHT, without a
+// window, and prints the timing.
+PreviewProfileRun :: (media: *FigureMedia, backdrops: *PreviewBackdrops, library: *PreviewLibrary,
+    practice: s32, frames: s32, width: s32, height: s32, still: bool) -> s32 {
+    body: FigurePainter
+    twin: FigurePainter
+    picture: Raster.Image
+    defer {
+        FigurePainterRelease(*body)
+        FigurePainterRelease(*twin)
+        VecFree(picture.pixels)
+    }
+    item := PreviewDefaultItem(library, practice)
+    duration := PreviewDuration(library, practice, item)
+    seconds: float64
+    for frame: 0..frames - 1 {
+        start := PreviewNow()
+        clock := start
+        moment := PreviewSample(library, practice, item, seconds)
+        PreviewRecord(PREVIEW_PHASE_SOLVE, PreviewLap(*clock))
+        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
+        if !PreviewCompose(*body, *twin, media, backdrops, practice, *moment, view, FigureStyleDefault(), width,
+            height, *picture) {
+            print("figure profile: frame % could not be painted\n", frame)
+            return 1
+        }
+        PreviewRecord(PREVIEW_PHASE_UPLOAD, 0.0)
+        PreviewRecord(PREVIEW_PHASE_CONTROLS, 0.0)
+        PreviewRecord(PREVIEW_PHASE_FRAME, PreviewLap(*start))
+        PreviewProfileFrame("headless")
+        seconds += ifx still then 0.0 else 1.0 / 30.0
+        if seconds >= duration {
+            seconds = 0.0
+        }
+    }
+    print("figure profile: gpu=% %\n", body.accelerated, body.diagnostic)
+    return 0
 }
 
 PreviewShot :: struct {

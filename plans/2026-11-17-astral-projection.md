@@ -2,37 +2,32 @@
 
 The owner wants one perfected character used everywhere: Tai Chi, Sun
 Salutation, Workout and astral projection, native on Ziran and Kryon
-without raylib, looking like a hand-painted watercolor illustration. The
-character is the practices package's `figure/` (pinned practices 3e7c7bff:
-slender female MakeHuman CC0 surface in loose cloth shells, dual-quaternion rig,
-generated painted textures and face, three-wash shaders, painterly finish,
-painted backdrops, Ziran tests). The style target is practices
-`figure/design/reference/style-target.webp`. The live tuning tool is
-`design/figure-preview/` (see its README). The three.js studies in
-`design/astral-projection/three/` are look references only.
+without raylib: a slim, cute young Chinese woman with sleek black hair, an
+attractive Chinese-style practice outfit, matched to Inner Breeze's own
+storybook illustrations with only a little texture, and vivid colour. The
+character is the practices package's `figure/`; its style target is
+practices `figure/design/reference/style-target.webp`, made from the Tai Chi
+banner. The live tuning tool is `design/figure-preview/` (see its README).
+The three.js studies in `design/astral-projection/three/` are look
+references only.
 
-- Kryon fixes, owned by the Kryon fix task, then repin the preview and the
-  figure's tests: the desktop loop stops showing frames that arrive without
-  input (hands-off playback freezes until the pointer moves); images
-  compare by texture id only, so `BitmapImageUpdate` never repaints (the
-  preview alternates two textures); `SceneIndexedMesh` stores scene-wide
-  indices that the renderers offset again (the figure keeps one surface as
-  the scene's first mesh); a sampler texture uploaded during a frame takes
-  another sampler's unit (the figure paints its first picture twice).
-  Remove the workarounds after the repin.
+- Kryon, owned by the Kryon lanes: the first-frame sampler-unit clobber in
+  `scene_gpu.zi` (the figure paints its first picture twice) and the
+  per-frame geometry rebuild (every moving frame re-expands all triangles
+  into a new vertex buffer and re-uploads it, about 5–6 ms on llvmpipe);
+  then repin and remove the workaround. Images still compare by texture id
+  only, so the preview alternates two textures.
 - Owner review of the live preview and of
   `build/practice-compare/side-by-side/` (current flat figure beside the new
   character, same moments and cameras), then tune from that feedback.
 - Character work still open:
-  - Seen from the front at practice sizes the hair still reads as a close
-    cap; the style target's loose volume and stray strands need cards or
-    painted strands that do not read as sideburns.
-  - The skirt swings rigidly from the waist and only by the pelvis's tilt:
-    in a deep squat and a forward fold it bulges. Secondary sway and a
-    simple collision with the thighs would help.
-  - The bell sleeves do not hang below the arm as in the style target.
+  - The top's lower part swings rigidly from the waist and only by the
+    pelvis's tilt; secondary sway and a simple collision with the thighs
+    would help in deep squats and folds.
   - The face painting is projected from the front; in profile its side
     fades to plain skin.
+  - The cream piping at the top's hem and cuffs in the style target is not
+    painted yet.
   - The asset bake (cloth shells, UVs, texture swatches) is Python in
     `scripts/prepare-practice-human.py`; port it to Ziran with the anatomy
     reader.
