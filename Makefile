@@ -389,8 +389,9 @@ ZI_NATIVE_DEFINES += __APPLE__
 endif
 # Kryon's test driver is test code, so the app is built without it. The UI
 # tests drive the app, so they need a build made with KRYON_TEST_DRIVER set,
-# for example `KRYON_TEST_DRIVER=1 make tai-chi-ui-test` from a clean build.
-# A build without it stops with that instruction when a test runs it.
+# for example `KRYON_TEST_DRIVER=1 make tai-chi-ui-test`; setting or clearing
+# it regenerates the app. A build without it stops with that instruction when
+# a test runs it.
 ifneq ($(KRYON_TEST_DRIVER),)
 ZI_NATIVE_DEFINES += KRYON_TEST_DRIVER
 endif
@@ -452,6 +453,8 @@ KRY_GEN_SRCS += $(addprefix $(KRY_GEN_DIR)/,account.c auth.c authorization.c aut
 	text.c text_buffer.c transaction.c update.c url.c wire.c)
 KRY_GEN_HDRS := $(patsubst %.zi,$(KRY_GEN_DIR)/%.h,$(ZI_SRCS))
 KRY_GEN_STAMP := $(KRY_GEN_DIR)/.fresh
+# The defines the C was generated with, outside the pruned output directory.
+KRY_GEN_DEFINES := $(BUILD_DIR)/kryon/generated-defines.txt
 WEB_GEN_DIR := $(BUILD_DIR)/kryon/generated-web
 WEB_GEN_SRCS := $(patsubst $(KRY_GEN_DIR)/%,$(WEB_GEN_DIR)/%,$(KRY_GEN_SRCS))
 WEB_GEN_STAMP := $(WEB_GEN_DIR)/.fresh
@@ -686,7 +689,14 @@ $(KRYON_CSS_STAMP): Makefile $(ZI2C_BIN) $(KRYON_CSS_ZI) $(KRYON_DIR)/src/ui/mod
 $(KRYON_CSS_C) $(KRYON_CSS_H): $(KRYON_CSS_STAMP)
 	@test -f $@
 
-$(KRY_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile ziran.lock scripts/package-paths.sh $(KRYON_DIR)/ziran.toml $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+# Rewritten only when the defines change, so setting or clearing one such as
+# KRYON_TEST_DRIVER regenerates the C and an unchanged build regenerates none.
+$(KRY_GEN_DEFINES): FORCE
+	@mkdir -p $(dir $@)
+	@printf '%s\n' '$(ZI_NATIVE_DEFINES)' > $@.new
+	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
+
+$(KRY_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile ziran.lock scripts/package-paths.sh $(KRYON_DIR)/ziran.toml $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) $(KRY_GEN_DEFINES) | build-laws zi-check
 	# --prune-stale removes generated files this run no longer writes, so an
 	# obsolete header/code pair never survives. Unchanged files keep their
 	# timestamps, so only C that actually changed recompiles.

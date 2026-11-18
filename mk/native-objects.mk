@@ -21,10 +21,13 @@ $(FLAGS_STAMP): FORCE
 	@printf '%s\n' '$(subst ','"'"',$(NATIVE_CFLAGS))' > $@.new
 	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
 
+# Each object is written beside its final name and moved into place, so a
+# compile that is killed part way leaves no empty object that looks current.
 $(OBJ_DIR)/%.o: /%.c $(FLAGS_STAMP) mk/native-objects.mk
 	@mkdir -p $(dir $@)
 	@printf '  CC %s\n' '$<'
-	@$(CC) $(NATIVE_CFLAGS) -MMD -MP -c '$<' -o '$@'
+	@$(CC) $(NATIVE_CFLAGS) -MMD -MP -MF '$(@:.o=.d)' -MT '$@' -c '$<' -o '$@.part'
+	@mv -f '$@.part' '$@'
 
 .PHONY: FORCE
 FORCE:
