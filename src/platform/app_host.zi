@@ -31,26 +31,15 @@ app_getenv_bytes :: (name: *u8) -> *u8 #foreign c;
 #import, file "../app/dpi_state.zi";
 #import, file "environment.zi";
 #import, file "android/android_startup.zi";
-#import, file "raylib_host.zi";
+#import, file "host_keys.zi";
 #import "text_input_platform"
 #import, file "host_clock.zi";
-#if #defined(PLATFORM_WEB) == false && !#defined(DESKTOP_HOST) {
-    #import "kryon/Raylib"
-}
-// Window setup, render size and frame rate on raylib hosts. Kryon's desktop
-// host sizes, paces and captures its window itself.
-#if !#defined(DESKTOP_HOST) {
-    raylib :: #system_library "raylib";
-    SetConfigFlags :: (flags: u32) #foreign raylib;
-    SetExitKey :: (key: s32) #foreign raylib;
-    GetRenderWidth :: () -> s32 #foreign raylib;
-    GetRenderHeight :: () -> s32 #foreign raylib;
-    SetTargetFPS :: (fps: s32) #foreign raylib;
-    // Screenshots are native only; the canvas backend declares its own image type.
-    #if #defined(PLATFORM_WEB) == false {
-        LoadImageFromScreen :: () -> RaylibImage #foreign raylib;
-        UnloadImage :: (image: RaylibImage) #foreign raylib;
-    }
+// The browser's canvas takes its window flags before it opens; the native
+// hosts size, pace and capture their windows themselves.
+#if #defined(PLATFORM_WEB) {
+    CanvasWindow :: #import "canvas_window";
+    // The canvas's FLAG_WINDOW_RESIZABLE.
+    CANVAS_WINDOW_RESIZABLE :: 4
 }
 #import "c_string"
 #import "geometry"
@@ -69,9 +58,6 @@ app_getenv_bytes :: (name: *u8) -> *u8 #foreign c;
 #import, file "../app/app_nav_state.zi";
 #import, file "../app/entity_host.zi";
 ReferralAndroid :: #import "entity/referral_android";
-#if #defined(ANDROID_BUILD) {
-    #import, file "android/android_touch_host.zi";
-}
 
 #import, file "../app/app.zi";
 #import, file "../app/app_zoom.zi";
@@ -94,10 +80,8 @@ ReferralAndroid :: #import "entity/referral_android";
 #import, file "../breaks/app_breaks.zi";
 #if #defined(DESKTOP_HOST) {
     #import "desktop_secondary_window"
-} else {
-    #import "raylib_secondary_window"
 }
-#import, file "raylib_text_input.zi";
+#import, file "text_input_host.zi";
 #import, file "practice_window_host.zi";
 #import, file "../app/session_window_view.zi";
 #import, file "android/android_picture_window.zi";
@@ -134,6 +118,7 @@ native_apply_desktop_identity :: (app_id: *u8, display_name: *u8) #foreign c;
 native_window_environment :: () #foreign c;
 native_before_window :: () #foreign c;
 native_after_window :: (icon_path: *u8) -> s32 #foreign c;
+native_window_open_failed :: () #foreign c;
 native_platform_shutdown :: () #foreign c;
 native_update_apply_at_exit :: () -> s32 #foreign c;
 
@@ -142,8 +127,6 @@ native_update_apply_at_exit :: () -> s32 #foreign c;
     #import "android_surface"
     #import "android_device"
     #import, file "../practices/practice_registry.zi";
-    SetWindowState :: (flags: u32) #foreign raylib;
-    ClearWindowState :: (flags: u32) #foreign raylib;
     native_android_frame_viewport :: (viewport: *AndroidViewport) -> s32 #foreign c;
     #if #defined(ANDROID_DEBUG) {
         native_android_report_geometry :: (viewport: AndroidViewport,
@@ -191,7 +174,6 @@ Prepare :: (argc: s32, argv: **u8) {
         config.width = MINI_WINDOW_WIDTH
         config.height = MINI_WINDOW_HEIGHT
     }
-    TraceToConsole()
     if screenshot.active == 0 {
         // A separate data root identifies a debug desktop profile.
         #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
@@ -261,13 +243,9 @@ InitialWindowSize :: () -> WindowSize {
 ConfigureWindow :: () {
     native_window_environment()
     // The desktop host's window is always resizable and keeps running
-    // unfocused; raylib's takes these flags before it opens.
+    // unfocused; the canvas takes this flag before it opens.
     #if #defined(PLATFORM_WEB) {
-        SetConfigFlags(FLAG_WINDOW_RESIZABLE)
-    } else {
-        #if !#defined(ANDROID_BUILD) && !#defined(DESKTOP_HOST) {
-            SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_WINDOW_ALWAYS_RUN)
-        }
+        CanvasWindow.SetConfigFlags(CANVAS_WINDOW_RESIZABLE)
     }
     native_before_window()
 }
@@ -278,12 +256,13 @@ FinishWindowSetup :: () -> s32 {
     native_after_window(*icon_path[0]) == 0 {
         return 0
     }
-    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) && !#defined(DESKTOP_HOST) {
-        // ESC belongs to Inbe's screen and close-prompt handling.
-        SetExitKey(0)
-    }
     InitDPI()
     return 1
+}
+
+// The window could not open; on Windows the person sees why.
+WindowOpenFailed :: () {
+    native_window_open_failed()
 }
 
 FinishAppSetup :: (app: *InnerBreeze, argc: s32, argv: **u8) {
@@ -339,13 +318,10 @@ app_frame :: (argument: *void) {
         }
         picture_ready := (picture_state & 1) != 0 &&
         practice_active(app) != null && app.session_paused == 0
-        // Keep processing callbacks throughout PiP entry. Waiting until the
-        // mode callback arrives can leave raylib blocked waiting for focus.
-        if picture_ready || (picture_state & 2) != 0 {
-            SetWindowState(FLAG_WINDOW_ALWAYS_RUN)
-        } else {
-            ClearWindowState(FLAG_WINDOW_ALWAYS_RUN)
-        }
+        // Keep frames going throughout PiP entry and while the practice
+        // floats; waiting for the mode callback would leave the loop blocked
+        // on the paused activity's next event.
+        HostKeepRunning(picture_ready || (picture_state & 2) != 0)
     }
     requested_feature := TakeHostFeatureRequest()
     if requested_feature >= 0 {
@@ -377,17 +353,6 @@ app_frame :: (argument: *void) {
     width := HostWindowWidth()
     height := HostWindowHeight()
 
-    #if !#defined(PLATFORM_WEB) && !#defined(ANDROID_BUILD) && !#defined(DESKTOP_HOST) {
-        render_width := GetRenderWidth()
-        render_height := GetRenderHeight()
-        if render_width > width {
-            width = render_width
-        }
-        if render_height > height {
-            height = render_height
-        }
-    }
-
     app_route_transition_advance(app, HostSeconds())
     #if #defined(DESKTOP_HOST) {
         TextInputBeginFrame()
@@ -401,18 +366,15 @@ app_frame :: (argument: *void) {
     touch.pressed = host_pointer.pressed
     touch.down = host_pointer.down
     touch.released = host_pointer.released
-    #if #defined(ANDROID_BUILD) {
-        sampled := TouchHostPointer()
-        touch.position = Vector2.{sampled.x, sampled.y}
-        touch.pressed = sampled.pressed
-        touch.down = sampled.down
-        touch.released = sampled.released
-        screen_mouse = touch.position
-        defer { TouchHostFrameEnd() }
-    }
     mouse: Vector2 = screen_mouse
-    if app.camera.zoom > 0.0 {
-        mouse = ScreenToWorld(screen_mouse, app.camera)
+    // The native rasters draw through the frame's camera transform and map
+    // the pointer back through it; the canvas keeps the app's camera.
+    #if #defined(PLATFORM_WEB) {
+        if app.camera.zoom > 0.0 {
+            mouse = ScreenToWorld(screen_mouse, app.camera)
+        }
+    } else {
+        mouse = HostPointFromPixels(screen_mouse)
     }
     driven := TestDriverPointer(app.ui.session, PointerFrame.{mouse.x, mouse.y,
             touch.down, touch.pressed, touch.released})
@@ -469,7 +431,7 @@ app_frame :: (argument: *void) {
     }
     TreePointerUpdate(app.ui.session, pointer)
     #if #defined(DESKTOP_HOST) {
-        // Right clicks open context menus; raylib's frame routes its own.
+        // Right clicks open context menus on desktop windows.
         TreeSecondaryPointerUpdate(app.ui.session, secondary)
     }
     #if !#defined(ANDROID_BUILD) {
@@ -496,9 +458,8 @@ app_frame :: (argument: *void) {
         }
     }
     // The wheel's two axes: a sideways swipe on a touchpad or a tilted wheel
-    // scrolls sideways scrolls, such as Diary's gallery, and nothing else.
-    // SDL's sideways wheel is positive to the right; the web canvas's, as
-    // raylib's other platforms, to the left.
+    // scrolls sideways, such as Diary's gallery, and nothing else. SDL's
+    // sideways wheel is positive to the right; the web canvas's to the left.
     wheel := HostWheel()
     wheel_y := TestDriverWheel(wheel.y)
     wheel_x := wheel.x
@@ -542,45 +503,34 @@ app_frame :: (argument: *void) {
     // rasterizing anything, so a still screen costs almost no drawing.
     retained := false
     app.ui.retained_target_active = false
-    #if #defined(DESKTOP_HOST) {
-        // The desktop host keeps the last frame's pixels and its own
-        // surface for each secondary window.
+    #if #defined(PLATFORM_WEB) {
+        WindowRuntime.BeginWindowFrame()
+    } else {
+        // The desktop host keeps the last frame's pixels and its own surface
+        // for each secondary window; Android keeps the pixels it last
+        // presented on the activity's surface.
+        #if #defined(ANDROID_BUILD) {
+            unused app_reload_graphics_resources(app)
+        }
         retained = HostFramePixelsReusable()
         app.ui.retained_target_active = retained
-    } else {
-        #if !#defined(PLATFORM_WEB) {
-            // Android may have replaced its GL context, which also discards the
-            // retained targets; reload before creating one. Without a surface
-            // the frame draws directly and app_update_draw skips it.
-            graphics_ready := true
-            #if #defined(ANDROID_BUILD) {
-                graphics_ready = app_reload_graphics_resources(app)
-            }
-            // The detached SDL surface has its own presentation state. Draw the
-            // main window directly while it is open, avoiding failed framebuffer
-            // allocations on each animation frame.
-            retained = graphics_ready && !app.session_window.detached &&
-            BeginRetainedFrame(width, height)
-            app.ui.retained_target_active = retained
-        }
-        if !retained {
-            WindowRuntime.BeginWindowFrame()
-        }
     }
     if first_frame {
         TraceLog(LOG_INFO, "APP PROBE: drawing begun")
     }
     #if #defined(ANDROID_BUILD) {
-        canvas := StyleTokenColor("canvas")
-        ClearAndroidFrame(AndroidViewport.{cast(s32)frame_bounds.x,
-                cast(s32)frame_bounds.y, cast(s32)frame_bounds.width,
-                cast(s32)frame_bounds.height, .{0, 0, 0, 0}, 1},
-            (cast(u32)canvas.r << 24) | (cast(u32)canvas.g << 16) |
-            (cast(u32)canvas.b << 8) | cast(u32)canvas.a)
-    } else {
-        #if !#defined(DESKTOP_HOST) {
-            WindowRuntime.ClearWindowFrame(StyleTokenColor("canvas"))
+        // The strips behind the system bars are black and the viewport takes
+        // the canvas color, given as 0xAARRGGBB, unless the last pixels stay.
+        if !retained {
+            canvas := StyleTokenColor("canvas")
+            ClearAndroidFrame(AndroidViewport.{cast(s32)frame_bounds.x,
+                    cast(s32)frame_bounds.y, cast(s32)frame_bounds.width,
+                    cast(s32)frame_bounds.height, .{0, 0, 0, 0}, 1},
+                (cast(u32)canvas.a << 24) | (cast(u32)canvas.r << 16) |
+                (cast(u32)canvas.g << 8) | cast(u32)canvas.b)
         }
+    } else #if #defined(PLATFORM_WEB) {
+        WindowRuntime.ClearWindowFrame(StyleTokenColor("canvas"))
     }
     app_update_draw(cast(*void)app, frame_bounds)
     if first_frame {
@@ -616,26 +566,10 @@ app_frame :: (argument: *void) {
     // A bundled app's screen holds its last pictures while new ones load.
     hold_pictures := app.breathing.screen == ScreenNodeApp && !app.launcher_open &&
     app.modal.active == 0 && node_screen_hold_pictures
-    #if #defined(DESKTOP_HOST) {
-        HostFramePaintUnchanged(retained && (app.ui.retained_frame_unchanged || hold_pictures))
+    #if #defined(PLATFORM_WEB) {
+        WindowRuntime.EndWindowFrame()
     } else {
-        #if !#defined(PLATFORM_WEB) {
-            if retained {
-                retained_ok := true
-                if app.ui.retained_frame_unchanged || hold_pictures {
-                    retained_ok = EndRetainedFrameReusePrevious()
-                } else {
-                    retained_ok = EndRetainedFrame()
-                }
-                if !retained_ok && first_frame {
-                    TraceLog(LOG_WARNING, "APP PROBE: retained frame failed")
-                }
-            } else {
-                WindowRuntime.EndWindowFrame()
-            }
-        } else {
-            WindowRuntime.EndWindowFrame()
-        }
+        HostFramePaintUnchanged(retained && (app.ui.retained_frame_unchanged || hold_pictures))
     }
     if first_frame {
         TraceLog(LOG_INFO, "APP PROBE: drawing ended")
@@ -645,13 +579,12 @@ app_frame :: (argument: *void) {
     }
     TestDriverFrame(app.ui.session)
     NodeTreeCollect()
-    PumpSecondaryWindows()
+    #if #defined(DESKTOP_HOST) {
+        PumpSecondaryWindows()
+    }
     UpdatePracticeWindow(app)
-    // The desktop host paces its own frames.
     if app.ui.frame_target_changed {
-        #if !#defined(DESKTOP_HOST) {
-            SetTargetFPS(app.ui.frame_target_fps)
-        }
+        HostSetFrameTarget(app.ui.frame_target_fps)
         app.ui.frame_target_changed = false
     }
     app_breaks_hud_update(app)
@@ -663,7 +596,8 @@ ScreenshotRequested :: () -> s32 {
 }
 
 CaptureScreenshot :: (app: *InnerBreeze) -> s32 {
-    #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+    // Only desktop windows take screenshot runs.
+    #if !#defined(DESKTOP_HOST) {
         unused app
         return 0
     } else {
@@ -704,29 +638,15 @@ CaptureScreenshot :: (app: *InnerBreeze) -> s32 {
 
         output := AppTextFromCString(*request.output[0], 512)
         saved := false
-        #if #defined(DESKTOP_HOST) {
-            saved = HostSaveFramePng(output)
-        } else {
-            capture: RaylibImage = LoadImageFromScreen()
-            if capture.data == null {
-                TraceLog(LOG_ERROR, "APP: screenshot readback failed")
-                return -1
-            }
-            saved = ExportImage(capture, output)
-            UnloadImage(capture)
-        }
+        saved = HostSaveFramePng(output)
         return ifx (saved) then (1) else (-1)
     }
 }
 
-// One frame of a screenshot run. Raylib hosts draw it directly; the desktop
-// host also polls, rasterizes and presents it, as every frame there does.
+// One frame of a screenshot run, polled, rasterized and presented as every
+// desktop frame is.
 ScreenshotFrame :: (app: *InnerBreeze) {
-    #if #defined(DESKTOP_HOST) {
-        DrawFrame(app)
-    } else {
-        app_frame(cast(*void)app)
-    }
+    DrawFrame(app)
 }
 
 ShouldStartHidden :: (app: *InnerBreeze) -> s32 {

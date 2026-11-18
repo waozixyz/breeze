@@ -102,6 +102,28 @@ def fields(driver):
                   key=lambda node: node["y"])
 
 
+def focused(driver):
+    return [node["focused"] for node in fields(driver)]
+
+
+with scene("habit_questions_dialog") as (driver, database):
+    driver.wait(key=DONE)
+    # Opening the dialog gives its first typed answer, the number, the
+    # keyboard once; the person then moves the focus and it stays there.
+    wait_for(driver, lambda: focused(driver) == [True, False], "the first typed answer focused on open")
+    driver.press(key=fields(driver)[1]["key"])
+    driver.wait_idle(frames=10)
+    expect(focused(driver), [False, True], "the focus the person moved")
+    # Escape cancels as Cancel does: the dialog closes, nothing is saved
+    # and no answer field keeps the keyboard.
+    before = entries(database, "First meal")
+    driver.key("escape")
+    driver.wait_gone(key=DONE)
+    driver.wait_idle(frames=5)
+    expect(entries(database, "First meal"), before, "the entries after Escape")
+    expect(fields(driver), [], "answer fields after Escape")
+print("PASS the entry dialog focuses its first answer once, and Escape cancels it")
+
 with scene("habit_questions_dialog") as (driver, database):
     driver.wait(key=DONE)
     driver.wait(label="First meal")

@@ -6,7 +6,7 @@ android-sdk-install-test:
 
 .PHONY: android-source-test
 android-source-test: $(ZIRAN_BIN) | build-laws
-	ZI_CHECK_DEFINES="ANDROID_BUILD KRYON_ANDROID_HOST KRYON_RAYLIB_HOST AVIF_RAYLIB __aarch64__" \
+	ZI_CHECK_DEFINES="ANDROID_BUILD KRYON_ANDROID_HOST __aarch64__" \
 		python3 scripts/check-zi-sources.py $(ZIRAN_BIN)
 
 .PHONY: accessibility-test
@@ -99,10 +99,6 @@ android-audio-e2e:
 .PHONY: android-diary-photo-test
 android-diary-photo-test:
 	sh tests/android_diary_photo_test.sh
-
-.PHONY: android-geometry-probe-test
-android-geometry-probe-test:
-	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS sh tests/android_geometry_probe_test.sh
 
 # Moto debug-profile isolation is explicit; this never runs in the CI suite.
 .PHONY: android-launcher-device-test

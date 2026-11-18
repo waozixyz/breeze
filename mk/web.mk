@@ -4,13 +4,13 @@ $(WEB_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makef
 	rm -rf $(WEB_GEN_DIR)
 	mkdir -p $(WEB_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZIRAN_BIN) build --target=c --project --offline $(PACKAGE_FLAGS) \
-		--no-main --root . \
+		--no-main --root . --target-os web --target-cpu wasm32 \
 		--define PLATFORM_WEB --define __EMSCRIPTEN__ \
 		-o $(WEB_GEN_DIR) $(ZI_SRCS) $(KRYON_DIR)/src/backend/canvas_raster.zi $(KRYON_DIR)/src/backend/canvas_audio.zi $(KRYON_DIR)/src/backend/page_route.zi
 	touch $@
 	find $(WEB_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +
 
-$(WEB_GEN_SRCS) $(WEB_GEN_GAME_C): $(WEB_GEN_STAMP)
+$(WEB_GEN_SRCS): $(WEB_GEN_STAMP)
 	@test -f $@
 
 web-tools-check:

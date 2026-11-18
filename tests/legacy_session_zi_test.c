@@ -5,7 +5,6 @@
 #include "storage/legacy_session_time.h"
 #include "storage/legacy_session_zip.h"
 #include <assert.h>
-#include <fts.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,66 +27,6 @@ static int last_rounds[LegacyMaxRounds];
 static int last_round_count;
 static int migration_marked;
 static int persist_calls;
-
-LegacyPaths LoadDirectoryFilesEx(uint8_t *root, uint8_t *filter,
-                                 bool recursive)
-{
-    (void)filter;
-    assert(recursive);
-    LegacyPaths result = {0};
-    char *roots[] = {(char *)root, NULL};
-    FTS *tree = fts_open(roots, FTS_PHYSICAL | FTS_NOCHDIR, NULL);
-    assert(tree != NULL);
-    FTSENT *entry;
-    while((entry = fts_read(tree)) != NULL) {
-        if(entry->fts_level == 0 || entry->fts_info == FTS_DP)
-            continue;
-        uint8_t **next = realloc(result.paths,
-            (result.count + 1) * sizeof(*result.paths));
-        assert(next != NULL);
-        result.paths = next;
-        result.paths[result.count] = (uint8_t *)strdup(entry->fts_path);
-        assert(result.paths[result.count] != NULL);
-        result.count++;
-    }
-    assert(fts_close(tree) == 0);
-    return result;
-}
-
-void UnloadDirectoryFiles(LegacyPaths paths)
-{
-    for(uint32_t index = 0; index < paths.count; index++)
-        free(paths.paths[index]);
-    free(paths.paths);
-}
-
-bool IsPathFile(uint8_t *path)
-{
-    struct stat info;
-    return stat((char *)path, &info) == 0 && S_ISREG(info.st_mode);
-}
-
-uint8_t *LoadFileData(uint8_t *path, int32_t *size)
-{
-    FILE *file = fopen((char *)path, "rb");
-    if(file == NULL)
-        return NULL;
-    assert(fseek(file, 0, SEEK_END) == 0);
-    long length = ftell(file);
-    assert(length >= 0 && length < INT32_MAX);
-    assert(fseek(file, 0, SEEK_SET) == 0);
-    uint8_t *bytes = malloc((size_t)length + 1);
-    assert(bytes != NULL);
-    assert(fread(bytes, 1, (size_t)length, file) == (size_t)length);
-    assert(fclose(file) == 0);
-    *size = (int32_t)length;
-    return bytes;
-}
-
-void UnloadFileData(uint8_t *bytes)
-{
-    free(bytes);
-}
 
 int32_t meta_equals(uint8_t *key, uint8_t *value)
 {

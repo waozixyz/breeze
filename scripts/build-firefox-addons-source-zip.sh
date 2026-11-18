@@ -81,9 +81,6 @@ rm -f "$OUT_ABS"
            '*/build/packages/kryon/fonts/noto/*' \
            '*/build/packages/liboqs/docs/*' \
            '*/build/packages/liboqs/tests/*' \
-           '*/build/packages/raylib/examples/*' \
-           '*/build/packages/raylib/logo/*' \
-           '*/build/packages/raylib/projects/*' \
            '*/tmp/*'
 )
 

@@ -10,9 +10,11 @@ mkdir -p "$work/c"
 exec 9>"$work.lock"
 flock 9
 
-"$bin/ziran" check --project --locked --root "$root/src" \
+# The screen as the Linux app builds it, on Kryon's desktop host.
+defines="--define PLATFORM_DESKTOP --define DESKTOP_HOST --define NATIVE_WINDOW_HAVE_SDL"
+"$bin/ziran" check --project --locked --root "$root/src" $defines \
     "$root/src/screens/elist_screen.zi"
-"$bin/ziran" build --project --locked --target=c --no-main --prune-stale --root "$root/src" \
+"$bin/ziran" build --project --locked --target=c --no-main --prune-stale --root "$root/src" $defines \
     -o "$work/c" "$root/src/screens/elist_screen.zi"
 
 includes="-I$root/build/packages/ziran/include -I$work/c"
@@ -37,8 +39,11 @@ done
         -e '/diary_store\.c$' -e '/node_apps\.c$' -e '/media_store\.c$' \
         -e '/metrics\.c$') \
     "$bin/../libziran.a" \
-    "$root/vendor-builds/linux/x86_64/raylib/libraylib.a" \
-    $(pkg-config --libs sdl2 gl libwebp libwebpdemux) \
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libziran_mp3.a" \
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libvorbisfile.a" \
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libvorbis.a" \
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libogg.a" \
+    $(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11 libwebp libwebpdemux) \
     -l:libopus.so.0 -l:libcurl.so.4 -lm -lpthread -ldl -lz -latomic \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test" "$root/build/inbe.zx"

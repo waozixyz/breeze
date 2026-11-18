@@ -2,21 +2,8 @@
 #import "drawing_props"
 #import "geometry"
 #import, file "../platform/environment.zi";
-#import, file "../platform/raylib_host.zi";
-#import, file "../platform/host_window.zi";
-#if #defined(PLATFORM_WEB) == false && !#defined(DESKTOP_HOST) {
-    #import "kryon/Raylib"
-    raylib :: #system_library "raylib";
-    IsWindowReady :: () -> bool #foreign raylib;
-    GetWindowScaleDPI :: () -> Vector2 #foreign raylib;
-}
 
 using DPIPlatform;
-
-// raylib's SDL2 backend has no window scale: GetWindowScaleDPI returns 1.0
-// and logs a warning on every call, once per frame here. The display
-// density of an SDL2 window comes from the device host instead.
-DPI_SDL2_WINDOW :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB)
 
 c :: #system_library "c";
 device_density :: () -> float32 #foreign c "app_device_density";
@@ -24,13 +11,11 @@ device_density :: () -> float32 #foreign c "app_device_density";
 dpi_state: DPIState;
 dpi_user_zoom: float32 = 1.0;
 last_density: float32;
-last_window_scale: Vector2;
 
 #program_export
 InitDPI :: () {
     dpi_state = InitialDPI()
     last_density = 0.0
-    last_window_scale = Vector2.{1.0, 1.0}
 }
 
 #program_export
@@ -47,37 +32,26 @@ CurrentDPIPlatform :: () -> DPIPlatform {
 #program_export
 UpdateDPI :: (view_width: s32, view_height: s32) {
     platform: DPIPlatform = CurrentDPIPlatform()
-    window_scale := Vector2.{1.0, 1.0}
-    #if !DPI_SDL2_WINDOW {
-        if platform == cast(DPIPlatform)DPIPlatformDesktop && IsWindowReady() {
-            window_scale = GetWindowScaleDPI()
-        }
-    }
     density := device_density()
     if dpi_state.base_height == 0 {
         dpi_state = InitialDPI()
     }
-    if density != last_density || window_scale.x != last_window_scale.x ||
-        window_scale.y != last_window_scale.y {
+    if density != last_density {
         dpi_state = InvalidateDPI(dpi_state)
     }
     last_density = density
-    last_window_scale = window_scale
     dpi_state = ResolveDPI(dpi_state, view_width, view_height, platform,
-        density, window_scale.x, window_scale.y)
+        // Every host takes its density from the device; no window reports
+        // a scale of its own.
+        density, 1.0, 1.0)
     // The user's zoom scales everything drawn and narrows or widens the
     // layout; the text is baked at the size it ends up on screen.
     dpi_state = ZoomDPI(dpi_state, dpi_user_zoom)
     // The camera draws at render_scale, so vector icons rasterize at it too
-    // (the web canvas adds its devicePixelRatio itself).
+    // (the web canvas adds its devicePixelRatio itself). The desktop and
+    // Android rasters take it with the frame's camera transform.
     #if #defined(PLATFORM_WEB) {
         SetPaintPixelScale(dpi_state.render_scale)
-    } else {
-        #if #defined(DESKTOP_HOST) {
-            HostSetRenderScale(dpi_state.render_scale)
-        } else {
-            RaylibSetZoom(dpi_state.render_scale)
-        }
     }
 }
 

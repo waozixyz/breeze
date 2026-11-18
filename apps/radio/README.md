@@ -19,8 +19,8 @@ servers to the device. There are no website launchers or recording/relay
 servers. SomaFM and Sleep Radio are excluded because their published app
 usage terms do not authorize this integration.
 
-The native player decodes a bounded MP3 buffer through raylib's existing
-decoder. Android uses MediaPlayer and the existing media-playback foreground
+The native player decodes a bounded MP3 buffer with Ziran's dr_mp3 decoder
+into a stream voice of Ziran's audio mixer. Android uses MediaPlayer and the existing media-playback foreground
 service; the browser uses an audio element and follows browser background
 policies. Radio keeps playing across Inner Breeze app navigation and takes
 precedence over a practice's preselected music while active. Stop cancels

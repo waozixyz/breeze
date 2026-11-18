@@ -17,7 +17,6 @@
 #import, file "exercise_types.zi";
 #import, file "../platform/environment.zi";
 #import "text_context_menu"
-#import, file "../platform/android/graphics_context.zi";
 #import, file "../platform/android/android_accessibility.zi";
 Box :: #import "kryon/box";
 Layout :: #import "kryon/layout";
@@ -66,10 +65,10 @@ c :: #system_library "c";
 native_keep_display_awake :: (awake: bool) #foreign c;
 #if #defined(PLATFORM_WEB) {
     #import "kryon/canvas_host"
-} else {
-    #if !#defined(DESKTOP_HOST) {
-        #import "kryon/raylib_runtime"
-    }
+    // The canvas draws the frame through the app's camera and a scissor;
+    // the native rasters take the same camera as a transform
+    // (HostSetFrameTransform).
+    CanvasDraw :: #import "canvas_draw";
 }
 #import, file "../platform/host_window.zi";
 #import, file "../platform/host_frame.zi";
@@ -82,15 +81,6 @@ using ExerciseType;
     WindowRuntime :: #import "kryon/window_runtime";
 }
 PackageNow :: () -> s64 #foreign c "now_seconds";
-// Raylib draws the frame through a camera and a scissor; Kryon's desktop
-// host scales its raster instead (HostSetRenderScale).
-#if !#defined(DESKTOP_HOST) {
-    raylib_log :: #system_library "raylib";
-    BeginMode2D :: (camera: Camera) #foreign raylib_log "BeginMode2D";
-    EndMode2D :: () #foreign raylib_log "EndMode2D";
-    BeginScissorMode :: (x: s32, y: s32, width: s32, height: s32) #foreign raylib_log "BeginScissorMode";
-    EndScissorMode :: () #foreign raylib_log "EndScissorMode";
-}
 
 LOG_INFO :: 3
 LOG_WARNING :: 4
@@ -99,19 +89,7 @@ app_reload_graphics_resources :: (app: *InnerBreeze) -> bool {
     if app == null {
         return false
     }
-    context_lost: bool = false
-    #if #defined(ANDROID_BUILD) {
-        context := AndroidGraphicsContext()
-        if context == null {
-            // EndDrawing continues polling Android events until the surface
-            // is rebound. Do not populate any GPU caches in the meantime.
-            return false
-        }
-        context_lost = app.graphics_context != null &&
-        app.graphics_context != context
-        app.graphics_context = context
-    }
-    if app.graphics_reload_requested == 0 && !context_lost {
+    if app.graphics_reload_requested == 0 {
         return true
     }
     app.graphics_reload_requested = 0
@@ -120,10 +98,9 @@ app_reload_graphics_resources :: (app: *InnerBreeze) -> bool {
     }
     TraceLog(LOG_INFO, "ANDROID: Reloading graphics resources")
     #if #defined(ANDROID_BUILD) {
-        ResetRaylibGraphics(context_lost)
-        // Retained frames are gone even when the context survived. A route
-        // fade must not keep a borrowed texture from the discarded frame.
-        app_route_transition_cancel(app, context_lost)
+        // The activity's surface came back: the retained frame is gone, and
+        // a route fade must not keep a snapshot from before it.
+        app_route_transition_cancel(app, false)
         app.ui.retained_target_active = false
         app.ui.retained_frame_unchanged = false
     }
@@ -144,10 +121,9 @@ app_capture_route_transition :: (app: *InnerBreeze) {
         return
     }
     surface: FrameSurface
-    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) && !#defined(DESKTOP_HOST) {
-        if app.ui.retained_target_active {
-            surface = FrameSurfaceCopy(FrameSurface.{RetainedPreviousFrameTexture()})
-        }
+    #if !#defined(PLATFORM_WEB) {
+        // The native host owns the presented pixels; this copy is the app's.
+        surface = FramePreviousSnapshot()
     }
     // Input can change the route while updateapp builds the destination.
     // Capture the last presented frame before app_finish_frame paints it.
@@ -366,22 +342,8 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
             cast(float32)view_height},
         .fill = StyleTokenColor("canvas")}
     if PreviewMode() != 0 {
-        Box.Draw(app.ui.session, content_canvas)
-        profile_update_start = app_profile_now()
-        updateapp(app)
-        app_profile_record_update(profile_update_start)
-        app_capture_route_transition(app)
-        app_breaks_draw_toast(app,
-            Rectangle.{0.0, 0.0, cast(float32)view_width, cast(float32)view_height})
-        app_route_transition_draw(app, logical_frame, HostSeconds())
-        app_finish_frame(app)
-    } else {
-        // Kryon's desktop host draws at the render scale UpdateDPI sets, and
-        // its window is the viewport, so nothing needs a camera or clipping.
-        #if !#defined(DESKTOP_HOST) {
-            BeginScissorMode(cast(s32)viewport.x, cast(s32)viewport.y,
-                full_width, full_height)
-            BeginMode2D(app.camera)
+        #if !#defined(PLATFORM_WEB) {
+            HostSetFrameTransform(1.0, 0.0, 0.0)
         }
         Box.Draw(app.ui.session, content_canvas)
         profile_update_start = app_profile_now()
@@ -392,9 +354,29 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
             Rectangle.{0.0, 0.0, cast(float32)view_width, cast(float32)view_height})
         app_route_transition_draw(app, logical_frame, HostSeconds())
         app_finish_frame(app)
-        #if !#defined(DESKTOP_HOST) {
-            EndMode2D()
-            EndScissorMode()
+    } else {
+        // A native window is the viewport, so its raster needs the camera's
+        // transform but no clipping; the canvas clips to the viewport.
+        #if #defined(PLATFORM_WEB) {
+            CanvasDraw.BeginScissorMode(cast(s32)viewport.x, cast(s32)viewport.y,
+                full_width, full_height)
+            CanvasDraw.BeginMode2D(app.camera)
+        } else {
+            HostSetFrameTransform(app.camera.zoom, app.camera.offset.x,
+                app.camera.offset.y)
+        }
+        Box.Draw(app.ui.session, content_canvas)
+        profile_update_start = app_profile_now()
+        updateapp(app)
+        app_profile_record_update(profile_update_start)
+        app_capture_route_transition(app)
+        app_breaks_draw_toast(app,
+            Rectangle.{0.0, 0.0, cast(float32)view_width, cast(float32)view_height})
+        app_route_transition_draw(app, logical_frame, HostSeconds())
+        app_finish_frame(app)
+        #if #defined(PLATFORM_WEB) {
+            CanvasDraw.EndMode2D()
+            CanvasDraw.EndScissorMode()
         }
     }
     // A game played full screen keeps the display on; see main_platform.
@@ -565,8 +547,8 @@ app_draw_android_picture_window :: (app: *InnerBreeze, viewport: Rectangle) {
             finished = true
         }
         if cast(s32)BeginFrame(app.ui.session, Layout.KeyHash("inbe/picture-window"), bounds) == 0 {
-            BeginMode2D(camera)
             // The camera maps the bounds onto the whole window.
+            HostSetFrameTransform(camera.zoom, camera.offset.x, camera.offset.y)
             Box.Draw(app.ui.session, Box.Props.{.bounds = bounds,
                     .fill = StyleTokenColor("surface")})
             if finished {
@@ -575,7 +557,6 @@ app_draw_android_picture_window :: (app: *InnerBreeze, viewport: Rectangle) {
                 app_session_window_picture(app, app.session_window.system_screen, bounds, 0.0)
             }
             app_finish_frame(app)
-            EndMode2D()
         }
         app_network_pump(app)
     }

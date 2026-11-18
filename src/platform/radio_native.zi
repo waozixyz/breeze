@@ -18,23 +18,12 @@
     MultiCleanup :: (multi: *void) -> s32 #foreign curl "curl_multi_cleanup";
     EasyPause :: (easy: *void, mask: s32) -> s32 #foreign curl "curl_easy_pause";
     MoveBytes :: (to: *void, from: *void, length: usize) -> *void #foreign c "memmove";
-    // The PCM output: a raylib audio stream, or on Kryon's desktop host a
-    // stream voice of its mixer. Both take signed 16-bit blocks.
-    #if #defined(DESKTOP_HOST) {
-        Mixer :: #import "audio_mixer";
-    } else {
-        raylib :: #system_library "raylib";
-        LoadStream :: (rate: u32, bits: u32, channels: u32) -> NativeAudioStream #foreign raylib "LoadAudioStream";
-        UnloadStream :: (stream: NativeAudioStream) #foreign raylib "UnloadAudioStream";
-        PlayStream :: (stream: NativeAudioStream) #foreign raylib "PlayAudioStream";
-        StreamProcessed :: (stream: NativeAudioStream) -> bool #foreign raylib "IsAudioStreamProcessed";
-        UpdateStream :: (stream: NativeAudioStream, data: *void, frames: s32) #foreign raylib "UpdateAudioStream";
-        StreamVolume :: (stream: NativeAudioStream, volume: float32) #foreign raylib "SetAudioStreamVolume";
-        StreamBufferSize :: (frames: s32) #foreign raylib "SetAudioStreamBufferSizeDefault";
-    }
+    // The PCM output: a stream voice of Ziran's mixer, fed signed 16-bit
+    // blocks.
+    Mixer :: #import "std/audio";
 
-    // dr_mp3's low-level push API: raylib's copy, or on the desktop host the
-    // audio package's libziran_mp3.a, which decodes to float samples.
+    // dr_mp3's low-level push API from Ziran's libziran_mp3.a, which decodes
+    // to float samples.
     Mp3Bits :: struct {
         buffer: *u8
         position: s32
@@ -83,16 +72,10 @@
         layer: s32
         bitrate: s32
     }
-    #if #defined(DESKTOP_HOST) {
-        radio_mp3 :: #system_library "ziran_mp3";
-        Mp3Init :: (decoder: *Mp3Decoder) #foreign radio_mp3 "drmp3dec_init";
-        Mp3DecodeFloat :: (decoder: *Mp3Decoder, input: *u8, length: s32,
-            pcm: *float32, info: *Mp3Frame) -> s32 #foreign radio_mp3 "drmp3dec_decode_frame";
-    } else {
-        Mp3Init :: (decoder: *Mp3Decoder) #foreign raylib "drmp3dec_init";
-        Mp3Decode :: (decoder: *Mp3Decoder, input: *u8, length: s32,
-            pcm: *s16, info: *Mp3Frame) -> s32 #foreign raylib "drmp3dec_decode_frame";
-    }
+    radio_mp3 :: #system_library "ziran_mp3";
+    Mp3Init :: (decoder: *Mp3Decoder) #foreign radio_mp3 "drmp3dec_init";
+    Mp3DecodeFloat :: (decoder: *Mp3Decoder, input: *u8, length: s32,
+        pcm: *float32, info: *Mp3Frame) -> s32 #foreign radio_mp3 "drmp3dec_decode_frame";
     WriteCallback :: #type (data: *u8, size: usize, count: usize, context: *void) -> usize #c_call;
 
     radio_multi: *void;
@@ -101,11 +84,7 @@
     radio_length: s32;
     radio_paused: bool;
     radio_decoder: Mp3Decoder;
-    #if #defined(DESKTOP_HOST) {
-        radio_voice: Mixer.AudioVoice = .{-1, 0};
-    } else {
-        radio_stream: NativeAudioStream;
-    }
+    radio_voice: Mixer.AudioVoice = .{-1, 0};
     radio_pcm: [12288]s16;
     radio_samples: s32;
     radio_rate: s32;
@@ -121,98 +100,58 @@
 
     // One MP3 frame into PCM as signed 16-bit samples; its frame count.
     RadioDecodeFrame :: (input: *u8, length: s32, pcm: *s16, info: *Mp3Frame) -> s32 {
-        #if #defined(DESKTOP_HOST) {
-            samples: [2304]float32
-            frames := Mp3DecodeFloat(*radio_decoder, input, length, *samples[0], info)
-            count := frames * info.channels
-            if count > 2304 {
-                count = 2304
-            }
-            for index: cast(s32)0..count - 1 {
-                value := samples[index] * 32768.0
-                if value > 32767.0 {
-                    value = 32767.0
-                }
-                if value < -32768.0 {
-                    value = -32768.0
-                }
-                pcm[index] = cast(s16)value
-            }
-            return frames
-        } else {
-            return Mp3Decode(*radio_decoder, input, length, pcm, info)
+        samples: [2304]float32
+        frames := Mp3DecodeFloat(*radio_decoder, input, length, *samples[0], info)
+        count := frames * info.channels
+        if count > 2304 {
+            count = 2304
         }
+        for index: cast(s32)0..count - 1 {
+            value := samples[index] * 32768.0
+            if value > 32767.0 {
+                value = 32767.0
+            }
+            if value < -32768.0 {
+                value = -32768.0
+            }
+            pcm[index] = cast(s16)value
+        }
+        return frames
     }
 
     RadioStreamOpen :: () -> bool {
-        #if #defined(DESKTOP_HOST) {
-            return radio_voice.slot >= 0
-        } else {
-            return radio_stream.buffer != null
-        }
+        return radio_voice.slot >= 0
     }
 
     RadioStreamClose :: () {
-        #if #defined(DESKTOP_HOST) {
-            if radio_voice.slot >= 0 {
-                Mixer.AudioUnload(radio_voice)
-                radio_voice = .{-1, 0}
-            }
-        } else {
-            if radio_stream.buffer != null {
-                UnloadStream(radio_stream)
-                radio_stream = NativeAudioStream.{}
-            }
+        if radio_voice.slot >= 0 {
+            Mixer.AudioUnload(radio_voice)
+            radio_voice = .{-1, 0}
         }
     }
 
     // Opens a stream of 4096-frame blocks at RATE and plays it at the volume.
     RadioStreamStart :: (rate: s32, channels: s32) -> bool {
-        #if #defined(DESKTOP_HOST) {
-            radio_voice = Mixer.AudioOpenStream(rate, channels, 4096)
-            if radio_voice.slot < 0 {
-                return false
-            }
-            Mixer.AudioSetGain(radio_voice, radio_volume)
-            unused Mixer.AudioPlay(radio_voice)
-            return true
-        } else {
-            StreamBufferSize(4096)
-            radio_stream = LoadStream(cast(u32)rate, 16, cast(u32)channels)
-            StreamBufferSize(0)
-            if radio_stream.buffer == null {
-                return false
-            }
-            StreamVolume(radio_stream, radio_volume)
-            PlayStream(radio_stream)
-            return true
+        radio_voice = Mixer.AudioOpenStream(rate, channels, 4096)
+        if radio_voice.slot < 0 {
+            return false
         }
+        Mixer.AudioSetGain(radio_voice, radio_volume)
+        unused Mixer.AudioPlay(radio_voice)
+        return true
     }
 
     RadioStreamWritable :: () -> bool {
-        #if #defined(DESKTOP_HOST) {
-            return Mixer.AudioStreamWritable(radio_voice)
-        } else {
-            return StreamProcessed(radio_stream)
-        }
+        return Mixer.AudioStreamWritable(radio_voice)
     }
 
     // Submits the first 4096 frames of radio_pcm.
     RadioStreamSubmit :: (samples: s32) {
-        #if #defined(DESKTOP_HOST) {
-            unused Mixer.AudioStreamSubmit(radio_voice, radio_pcm[0:samples])
-        } else {
-            unused samples
-            UpdateStream(radio_stream, cast(*void)*radio_pcm[0], 4096)
-        }
+        unused Mixer.AudioStreamSubmit(radio_voice, radio_pcm[0:samples])
     }
 
     RadioStreamVolume :: (volume: float32) {
-        #if #defined(DESKTOP_HOST) {
-            Mixer.AudioSetGain(radio_voice, volume)
-        } else {
-            StreamVolume(radio_stream, volume)
-        }
+        Mixer.AudioSetGain(radio_voice, volume)
     }
 
     ReceiveRadio :: (data: *u8, size: usize, count: usize, context: *void) -> usize {

@@ -1,284 +1,15 @@
 // The app keeps stable handles while the host owns the decoded sound and
-// music: raylib's audio, or on Kryon's desktop host its mixer and SDL sink.
-// Slots are used on the UI thread; the mixed audio callback never reads them.
+// music. Natively Ziran's mixer owns it and the target's sink plays it: SDL
+// on desktop, AAudio or OpenSL ES on Android. In a browser Kryon's canvas
+// audio decodes and plays it through Web Audio. Slots are used on the UI
+// thread; the mixed audio callback never reads them.
 #import, file "media_types.zi";
 #import "c_string"
 
 MixedAudioCallback :: #type (buffer: *void, frames: u32) -> ();
 
-#if #defined(DESKTOP_HOST) {
-    Mixer :: #import "audio_mixer";
-    Sink :: #import "audio_sink_sdl";
-    // Importing a decoder adds its format; each recognizes content, not names.
-    #import "audio_decode_opus"
-    #import "audio_decode_wav"
-    #import "audio_decode_mp3"
-    #import "audio_decode_vorbis"
-    #import "byte_text_linux"
-    #import, file "host_clock.zi";
-
-    AUDIO_SOUND_SLOTS :: 64
-    AUDIO_MUSIC_SLOTS :: 16
-    // A sound's length is reported in frames at raylib's 44.1 kHz, the rate
-    // the app's callers count in.
-    AUDIO_SOUND_FRAME_RATE :: 44100.0
-
-    VoiceSlot :: struct {
-        id: u64
-        voice: Mixer.AudioVoice
-    }
-
-    sound_slots: [AUDIO_SOUND_SLOTS]VoiceSlot;
-    music_slots: [AUDIO_MUSIC_SLOTS]VoiceSlot;
-    next_audio_id: u64 = 1;
-    mixed_audio_callback: MixedAudioCallback;
-
-    audio_next_id :: () -> u64 {
-        id := next_audio_id
-        next_audio_id += 1
-        if next_audio_id == 0 {
-            next_audio_id = 1
-        }
-        return id
-    }
-
-    audio_find_slot :: (slots: []VoiceSlot, id: u64) -> *VoiceSlot {
-        if id == 0 {
-            return null
-        }
-        for index: cast(s64)0..slots.count - 1 {
-            if slots[index].id == id {
-                return *slots[index]
-            }
-        }
-        return null
-    }
-
-    // Keeps VOICE in a free slot and returns its id, or 0 after unloading it.
-    audio_store_voice :: (slots: []VoiceSlot, voice: Mixer.AudioVoice) -> u64 {
-        if voice.slot < 0 {
-            return 0
-        }
-        for index: cast(s64)0..slots.count - 1 {
-            if slots[index].id == 0 {
-                id := audio_next_id()
-                slots[index].id = id
-                slots[index].voice = voice
-                return id
-            }
-        }
-        Mixer.AudioUnload(voice)
-        return 0
-    }
-
-    audio_store_sound :: (voice: Mixer.AudioVoice) -> SoundHandle {
-        id := audio_store_voice(sound_slots[:], voice)
-        if id == 0 {
-            return SoundHandle.{}
-        }
-        frames := cast(u64)(Mixer.AudioLength(voice) * AUDIO_SOUND_FRAME_RATE)
-        return SoundHandle.{.id = id, .frame_count = frames}
-    }
-
-    audio_sound_voice :: (handle: SoundHandle) -> *VoiceSlot {
-        return audio_find_slot(sound_slots[:], handle.id)
-    }
-
-    audio_music_voice :: (handle: MusicHandle) -> *VoiceSlot {
-        return audio_find_slot(music_slots[:], handle.id)
-    }
-
-    audio_load_sound_file :: (path: string) -> SoundHandle {
-        return audio_store_sound(Mixer.AudioLoadFile(path, false))
-    }
-
-    audio_load_sound_memory :: (extension: string, data: *u8, size: s32) -> SoundHandle {
-        unused extension
-        if data == null || size <= 0 {
-            return SoundHandle.{}
-        }
-        return audio_store_sound(Mixer.AudioLoad(TextFromBytes(BytesFromPointer(data,
-                    cast(u64)size)), false))
-    }
-
-    audio_load_sound :: (path: string) -> SoundHandle {
-        return audio_load_sound_file(path)
-    }
-
-    audio_unload_sound :: (handle: SoundHandle) {
-        slot := audio_sound_voice(handle)
-        if slot != null {
-            Mixer.AudioUnload(slot.voice)
-            slot.* = VoiceSlot.{}
-        }
-    }
-
-    audio_play_sound :: (handle: SoundHandle) {
-        slot := audio_sound_voice(handle)
-        if slot != null {
-            unused Mixer.AudioPlay(slot.voice)
-        }
-    }
-
-    audio_stop_sound :: (handle: SoundHandle) {
-        slot := audio_sound_voice(handle)
-        if slot != null {
-            Mixer.AudioStop(slot.voice)
-        }
-    }
-
-    audio_pause_sound :: (handle: SoundHandle) {
-        slot := audio_sound_voice(handle)
-        if slot != null {
-            Mixer.AudioPause(slot.voice)
-        }
-    }
-
-    audio_sound_playing :: (handle: SoundHandle) -> bool {
-        slot := audio_sound_voice(handle)
-        return slot != null && Mixer.AudioPlaying(slot.voice)
-    }
-
-    audio_set_sound_volume :: (handle: SoundHandle, volume: float32) {
-        slot := audio_sound_voice(handle)
-        if slot != null {
-            Mixer.AudioSetGain(slot.voice, volume)
-        }
-    }
-
-    audio_set_sound_pitch :: (handle: SoundHandle, pitch: float32) {
-        slot := audio_sound_voice(handle)
-        if slot != null {
-            Mixer.AudioSetPitch(slot.voice, pitch)
-        }
-    }
-
-    audio_load_music :: (path: string) -> MusicHandle {
-        return MusicHandle.{.id = audio_store_voice(music_slots[:], Mixer.AudioLoadFile(path, true))}
-    }
-
-    // A stream that decodes while it plays, so loading it never stalls a
-    // frame. The mixer keeps its own copy of the data.
-    audio_load_music_memory :: (extension: string, data: *u8, size: s32,
-        looping: bool) -> MusicHandle {
-        unused extension
-        if data == null || size <= 0 {
-            return MusicHandle.{}
-        }
-        voice := Mixer.AudioLoad(TextFromBytes(BytesFromPointer(data, cast(u64)size)), true)
-        if voice.slot >= 0 {
-            Mixer.AudioSetLooping(voice, looping)
-        }
-        return MusicHandle.{.id = audio_store_voice(music_slots[:], voice)}
-    }
-
-    audio_music_valid :: (handle: MusicHandle) -> bool {
-        return audio_music_voice(handle) != null
-    }
-
-    audio_unload_music :: (handle: MusicHandle) {
-        slot := audio_music_voice(handle)
-        if slot != null {
-            Mixer.AudioUnload(slot.voice)
-            slot.* = VoiceSlot.{}
-        }
-    }
-
-    audio_play_music :: (handle: MusicHandle) {
-        slot := audio_music_voice(handle)
-        if slot != null {
-            unused Mixer.AudioPlay(slot.voice)
-        }
-    }
-
-    audio_stop_music :: (handle: MusicHandle) {
-        slot := audio_music_voice(handle)
-        if slot != null {
-            Mixer.AudioStop(slot.voice)
-        }
-    }
-
-    audio_pause_music :: (handle: MusicHandle) {
-        slot := audio_music_voice(handle)
-        if slot != null {
-            Mixer.AudioPause(slot.voice)
-        }
-    }
-
-    audio_resume_music :: (handle: MusicHandle) {
-        slot := audio_music_voice(handle)
-        if slot != null {
-            Mixer.AudioResume(slot.voice)
-        }
-    }
-
-    audio_music_playing :: (handle: MusicHandle) -> bool {
-        slot := audio_music_voice(handle)
-        return slot != null && Mixer.AudioPlaying(slot.voice)
-    }
-
-    // The mixer decodes music on its audio thread; nothing to pump here.
-    audio_update_music :: (handle: MusicHandle) {
-        unused handle
-    }
-
-    audio_set_music_volume :: (handle: MusicHandle, volume: float32) {
-        slot := audio_music_voice(handle)
-        if slot != null {
-            Mixer.AudioSetGain(slot.voice, volume)
-        }
-    }
-
-    // A device that failed to open is tried again at most every
-    // AUDIO_RETRY_SECONDS: each failed open can hold a frame for a tenth of a
-    // second while SDL tries its audio servers.
-    AUDIO_RETRY_SECONDS :: 10.0
-    audio_retry_at: float64;
-
-    audio_init :: () -> bool {
-        now := HostSeconds()
-        if now < audio_retry_at {
-            return false
-        }
-        if Sink.AudioSinkOpen() {
-            return true
-        }
-        audio_retry_at = now + AUDIO_RETRY_SECONDS
-        return false
-    }
-
-    audio_close :: () {
-        Sink.AudioSinkClose()
-    }
-
-    // Each mixed block, interleaved float32 stereo, on the audio thread.
-    AudioMixedTap :: (samples: []float32, frames: s64) {
-        callback := mixed_audio_callback
-        if callback != null && samples.count > 0 && frames > 0 {
-            callback(cast(*void)*samples[0], cast(u32)frames)
-        }
-    }
-
-    audio_attach_mixed_processor :: (callback: MixedAudioCallback) {
-        mixed_audio_callback = callback
-        tap: Mixer.AudioTap = AudioMixedTap
-        Mixer.AudioUseTap(tap)
-    }
-
-    AudioMixedNoop :: (buffer: *void, frames: u32) {}
-    AudioTapNoop :: (samples: []float32, frames: s64) {}
-
-    audio_detach_mixed_processor :: (callback: MixedAudioCallback) {
-        if mixed_audio_callback != callback {
-            return
-        }
-        tap: Mixer.AudioTap = AudioTapNoop
-        Mixer.AudioUseTap(tap)
-        mixed_audio_callback = AudioMixedNoop
-    }
-} else {
-    raylib :: #system_library "raylib";
-    c :: #system_library "c";
+#if #defined(PLATFORM_WEB) {
+    canvas :: #system_library "c";
 
     NativeWave :: struct {
         frame_count: u32
@@ -309,40 +40,40 @@ MixedAudioCallback :: #type (buffer: *void, frames: u32) -> ();
         ctx_data: *void
     }
 
-    HostLoadWave :: (path: *u8) -> NativeWave #foreign raylib "LoadWave";
+    HostLoadWave :: (path: *u8) -> NativeWave #foreign canvas "LoadWave";
     HostLoadWaveFromMemory :: (extension: *u8, data: *u8,
-        size: s32) -> NativeWave #foreign raylib "LoadWaveFromMemory";
+        size: s32) -> NativeWave #foreign canvas "LoadWaveFromMemory";
     HostWaveFormat :: (wave: *NativeWave, sample_rate: s32,
-        sample_size: s32, channels: s32) #foreign raylib "WaveFormat";
-    HostUnloadWave :: (wave: NativeWave) #foreign raylib "UnloadWave";
-    HostLoadSoundFromWave :: (wave: NativeWave) -> NativeSound #foreign raylib "LoadSoundFromWave";
-    HostLoadSound :: (path: *u8) -> NativeSound #foreign raylib "LoadSound";
-    HostIsSoundValid :: (sound: NativeSound) -> bool #foreign raylib "IsSoundValid";
-    HostUnloadSound :: (sound: NativeSound) #foreign raylib "UnloadSound";
-    HostPlaySound :: (sound: NativeSound) #foreign raylib "PlaySound";
-    HostStopSound :: (sound: NativeSound) #foreign raylib "StopSound";
-    HostPauseSound :: (sound: NativeSound) #foreign raylib "PauseSound";
-    HostIsSoundPlaying :: (sound: NativeSound) -> bool #foreign raylib "IsSoundPlaying";
-    HostSetSoundVolume :: (sound: NativeSound, volume: float32) #foreign raylib "SetSoundVolume";
-    HostSetSoundPitch :: (sound: NativeSound, pitch: float32) #foreign raylib "SetSoundPitch";
-    HostLoadMusicStream :: (path: *u8) -> NativeMusic #foreign raylib "LoadMusicStream";
+        sample_size: s32, channels: s32) #foreign canvas "WaveFormat";
+    HostUnloadWave :: (wave: NativeWave) #foreign canvas "UnloadWave";
+    HostLoadSoundFromWave :: (wave: NativeWave) -> NativeSound #foreign canvas "LoadSoundFromWave";
+    HostLoadSound :: (path: *u8) -> NativeSound #foreign canvas "LoadSound";
+    HostIsSoundValid :: (sound: NativeSound) -> bool #foreign canvas "IsSoundValid";
+    HostUnloadSound :: (sound: NativeSound) #foreign canvas "UnloadSound";
+    HostPlaySound :: (sound: NativeSound) #foreign canvas "PlaySound";
+    HostStopSound :: (sound: NativeSound) #foreign canvas "StopSound";
+    HostPauseSound :: (sound: NativeSound) #foreign canvas "PauseSound";
+    HostIsSoundPlaying :: (sound: NativeSound) -> bool #foreign canvas "IsSoundPlaying";
+    HostSetSoundVolume :: (sound: NativeSound, volume: float32) #foreign canvas "SetSoundVolume";
+    HostSetSoundPitch :: (sound: NativeSound, pitch: float32) #foreign canvas "SetSoundPitch";
+    HostLoadMusicStream :: (path: *u8) -> NativeMusic #foreign canvas "LoadMusicStream";
     HostLoadMusicStreamFromMemory :: (extension: *u8, data: *u8,
-        size: s32) -> NativeMusic #foreign raylib "LoadMusicStreamFromMemory";
-    HostIsMusicValid :: (music: NativeMusic) -> bool #foreign raylib "IsMusicValid";
-    HostUnloadMusicStream :: (music: NativeMusic) #foreign raylib "UnloadMusicStream";
-    HostPlayMusicStream :: (music: NativeMusic) #foreign raylib "PlayMusicStream";
-    HostStopMusicStream :: (music: NativeMusic) #foreign raylib "StopMusicStream";
-    HostPauseMusicStream :: (music: NativeMusic) #foreign raylib "PauseMusicStream";
-    HostResumeMusicStream :: (music: NativeMusic) #foreign raylib "ResumeMusicStream";
-    HostIsMusicStreamPlaying :: (music: NativeMusic) -> bool #foreign raylib "IsMusicStreamPlaying";
-    HostUpdateMusicStream :: (music: NativeMusic) #foreign raylib "UpdateMusicStream";
-    HostSetMusicVolume :: (music: NativeMusic, volume: float32) #foreign raylib "SetMusicVolume";
-    HostInitAudioDevice :: () #foreign raylib "InitAudioDevice";
-    HostIsAudioDeviceReady :: () -> bool #foreign raylib "IsAudioDeviceReady";
-    HostCloseAudioDevice :: () #foreign raylib "CloseAudioDevice";
+        size: s32) -> NativeMusic #foreign canvas "LoadMusicStreamFromMemory";
+    HostIsMusicValid :: (music: NativeMusic) -> bool #foreign canvas "IsMusicValid";
+    HostUnloadMusicStream :: (music: NativeMusic) #foreign canvas "UnloadMusicStream";
+    HostPlayMusicStream :: (music: NativeMusic) #foreign canvas "PlayMusicStream";
+    HostStopMusicStream :: (music: NativeMusic) #foreign canvas "StopMusicStream";
+    HostPauseMusicStream :: (music: NativeMusic) #foreign canvas "PauseMusicStream";
+    HostResumeMusicStream :: (music: NativeMusic) #foreign canvas "ResumeMusicStream";
+    HostIsMusicStreamPlaying :: (music: NativeMusic) -> bool #foreign canvas "IsMusicStreamPlaying";
+    HostUpdateMusicStream :: (music: NativeMusic) #foreign canvas "UpdateMusicStream";
+    HostSetMusicVolume :: (music: NativeMusic, volume: float32) #foreign canvas "SetMusicVolume";
+    HostInitAudioDevice :: () #foreign canvas "InitAudioDevice";
+    HostIsAudioDeviceReady :: () -> bool #foreign canvas "IsAudioDeviceReady";
+    HostCloseAudioDevice :: () #foreign canvas "CloseAudioDevice";
     NativeMixedAudioCallback :: #type (buffer: *void, frames: u32) -> void #c_call;
-    HostAttachAudioMixedProcessor :: (callback: NativeMixedAudioCallback) #foreign raylib "AttachAudioMixedProcessor";
-    HostDetachAudioMixedProcessor :: (callback: NativeMixedAudioCallback) #foreign raylib "DetachAudioMixedProcessor";
+    HostAttachAudioMixedProcessor :: (callback: NativeMixedAudioCallback) #foreign canvas "AttachAudioMixedProcessor";
+    HostDetachAudioMixedProcessor :: (callback: NativeMixedAudioCallback) #foreign canvas "DetachAudioMixedProcessor";
 
     mixed_audio_callback: MixedAudioCallback;
     mixed_audio_attached: bool;
@@ -663,5 +394,276 @@ MixedAudioCallback :: #type (buffer: *void, frames: u32) -> ();
 
     audio_detach_mixed_processor :: (callback: MixedAudioCallback) {
         AudioMixDetachHost(callback)
+    }
+} else {
+    Mixer :: #import "std/audio";
+    // A build that selects no host, such as a native test, opens no device
+    // and decodes nothing.
+    AUDIO_DEVICE :: #defined(DESKTOP_HOST) || #defined(ANDROID_BUILD)
+    #if AUDIO_DEVICE {
+        Sink :: #import "std/audio_sink";
+        // Importing a decoder adds its format; each recognizes content, not
+        // names.
+        #import "std/audio_decode_wav"
+        #import "std/audio_decode_mp3"
+        #import "std/audio_decode_vorbis"
+        #import "audio/decode_opus"
+    }
+    #import "std/byte_text_linux"
+
+    AUDIO_SOUND_SLOTS :: 64
+    AUDIO_MUSIC_SLOTS :: 16
+    // A sound's length is reported in frames at 44.1 kHz, the rate the app's
+    // callers count in.
+    AUDIO_SOUND_FRAME_RATE :: 44100.0
+
+    VoiceSlot :: struct {
+        id: u64
+        voice: Mixer.AudioVoice
+    }
+
+    sound_slots: [AUDIO_SOUND_SLOTS]VoiceSlot;
+    music_slots: [AUDIO_MUSIC_SLOTS]VoiceSlot;
+    next_audio_id: u64 = 1;
+    mixed_audio_callback: MixedAudioCallback;
+
+    audio_next_id :: () -> u64 {
+        id := next_audio_id
+        next_audio_id += 1
+        if next_audio_id == 0 {
+            next_audio_id = 1
+        }
+        return id
+    }
+
+    audio_find_slot :: (slots: []VoiceSlot, id: u64) -> *VoiceSlot {
+        if id == 0 {
+            return null
+        }
+        for index: cast(s64)0..slots.count - 1 {
+            if slots[index].id == id {
+                return *slots[index]
+            }
+        }
+        return null
+    }
+
+    // Keeps VOICE in a free slot and returns its id, or 0 after unloading it.
+    audio_store_voice :: (slots: []VoiceSlot, voice: Mixer.AudioVoice) -> u64 {
+        if voice.slot < 0 {
+            return 0
+        }
+        for index: cast(s64)0..slots.count - 1 {
+            if slots[index].id == 0 {
+                id := audio_next_id()
+                slots[index].id = id
+                slots[index].voice = voice
+                return id
+            }
+        }
+        Mixer.AudioUnload(voice)
+        return 0
+    }
+
+    audio_store_sound :: (voice: Mixer.AudioVoice) -> SoundHandle {
+        id := audio_store_voice(sound_slots[:], voice)
+        if id == 0 {
+            return SoundHandle.{}
+        }
+        frames := cast(u64)(Mixer.AudioLength(voice) * AUDIO_SOUND_FRAME_RATE)
+        return SoundHandle.{.id = id, .frame_count = frames}
+    }
+
+    audio_sound_voice :: (handle: SoundHandle) -> *VoiceSlot {
+        return audio_find_slot(sound_slots[:], handle.id)
+    }
+
+    audio_music_voice :: (handle: MusicHandle) -> *VoiceSlot {
+        return audio_find_slot(music_slots[:], handle.id)
+    }
+
+    audio_load_sound_file :: (path: string) -> SoundHandle {
+        return audio_store_sound(Mixer.AudioLoadFile(path, false))
+    }
+
+    audio_load_sound_memory :: (extension: string, data: *u8, size: s32) -> SoundHandle {
+        unused extension
+        if data == null || size <= 0 {
+            return SoundHandle.{}
+        }
+        return audio_store_sound(Mixer.AudioLoad(TextFromBytes(BytesFromPointer(data,
+                    cast(u64)size)), false))
+    }
+
+    audio_load_sound :: (path: string) -> SoundHandle {
+        return audio_load_sound_file(path)
+    }
+
+    audio_unload_sound :: (handle: SoundHandle) {
+        slot := audio_sound_voice(handle)
+        if slot != null {
+            Mixer.AudioUnload(slot.voice)
+            slot.* = VoiceSlot.{}
+        }
+    }
+
+    audio_play_sound :: (handle: SoundHandle) {
+        slot := audio_sound_voice(handle)
+        if slot != null {
+            unused Mixer.AudioPlay(slot.voice)
+        }
+    }
+
+    audio_stop_sound :: (handle: SoundHandle) {
+        slot := audio_sound_voice(handle)
+        if slot != null {
+            Mixer.AudioStop(slot.voice)
+        }
+    }
+
+    audio_pause_sound :: (handle: SoundHandle) {
+        slot := audio_sound_voice(handle)
+        if slot != null {
+            Mixer.AudioPause(slot.voice)
+        }
+    }
+
+    audio_sound_playing :: (handle: SoundHandle) -> bool {
+        slot := audio_sound_voice(handle)
+        return slot != null && Mixer.AudioPlaying(slot.voice)
+    }
+
+    audio_set_sound_volume :: (handle: SoundHandle, volume: float32) {
+        slot := audio_sound_voice(handle)
+        if slot != null {
+            Mixer.AudioSetGain(slot.voice, volume)
+        }
+    }
+
+    audio_set_sound_pitch :: (handle: SoundHandle, pitch: float32) {
+        slot := audio_sound_voice(handle)
+        if slot != null {
+            Mixer.AudioSetPitch(slot.voice, pitch)
+        }
+    }
+
+    audio_load_music :: (path: string) -> MusicHandle {
+        return MusicHandle.{.id = audio_store_voice(music_slots[:], Mixer.AudioLoadFile(path, true))}
+    }
+
+    // A stream that decodes while it plays, so loading it never stalls a frame.
+    // The mixer keeps its own copy of the data.
+    audio_load_music_memory :: (extension: string, data: *u8, size: s32,
+        looping: bool) -> MusicHandle {
+        unused extension
+        if data == null || size <= 0 {
+            return MusicHandle.{}
+        }
+        voice := Mixer.AudioLoad(TextFromBytes(BytesFromPointer(data, cast(u64)size)), true)
+        if voice.slot >= 0 {
+            Mixer.AudioSetLooping(voice, looping)
+        }
+        return MusicHandle.{.id = audio_store_voice(music_slots[:], voice)}
+    }
+
+    audio_music_valid :: (handle: MusicHandle) -> bool {
+        return audio_music_voice(handle) != null
+    }
+
+    audio_unload_music :: (handle: MusicHandle) {
+        slot := audio_music_voice(handle)
+        if slot != null {
+            Mixer.AudioUnload(slot.voice)
+            slot.* = VoiceSlot.{}
+        }
+    }
+
+    audio_play_music :: (handle: MusicHandle) {
+        slot := audio_music_voice(handle)
+        if slot != null {
+            unused Mixer.AudioPlay(slot.voice)
+        }
+    }
+
+    audio_stop_music :: (handle: MusicHandle) {
+        slot := audio_music_voice(handle)
+        if slot != null {
+            Mixer.AudioStop(slot.voice)
+        }
+    }
+
+    audio_pause_music :: (handle: MusicHandle) {
+        slot := audio_music_voice(handle)
+        if slot != null {
+            Mixer.AudioPause(slot.voice)
+        }
+    }
+
+    audio_resume_music :: (handle: MusicHandle) {
+        slot := audio_music_voice(handle)
+        if slot != null {
+            Mixer.AudioResume(slot.voice)
+        }
+    }
+
+    audio_music_playing :: (handle: MusicHandle) -> bool {
+        slot := audio_music_voice(handle)
+        return slot != null && Mixer.AudioPlaying(slot.voice)
+    }
+
+    // The mixer decodes music on its audio thread; nothing to pump here.
+    audio_update_music :: (handle: MusicHandle) {
+        unused handle
+    }
+
+    audio_set_music_volume :: (handle: MusicHandle, volume: float32) {
+        slot := audio_music_voice(handle)
+        if slot != null {
+            Mixer.AudioSetGain(slot.voice, volume)
+        }
+    }
+
+    // The sink opens its device on a worker thread, so this never holds a frame.
+    // Voices play from the moment it opens; false only once an open has failed,
+    // and the sink tries again at most once a second.
+    audio_init :: () -> bool {
+        #if AUDIO_DEVICE {
+            unused Sink.AudioSinkOpen()
+            return !Sink.AudioSinkUnavailable()
+        } else {
+            return false
+        }
+    }
+
+    audio_close :: () {
+        #if AUDIO_DEVICE {
+            Sink.AudioSinkClose()
+        }
+    }
+
+    // Each mixed block, interleaved float32 stereo, on the audio thread.
+    AudioMixedTap :: (samples: []float32, frames: s64) {
+        callback := mixed_audio_callback
+        if callback != null && samples.count > 0 && frames > 0 {
+            callback(cast(*void)*samples[0], cast(u32)frames)
+        }
+    }
+
+    audio_attach_mixed_processor :: (callback: MixedAudioCallback) {
+        mixed_audio_callback = callback
+        tap: Mixer.AudioTap = AudioMixedTap
+        Mixer.AudioUseTap(tap)
+    }
+
+    AudioMixedNoop :: (buffer: *void, frames: u32) {}
+    AudioTapNoop :: (samples: []float32, frames: s64) {}
+
+    audio_detach_mixed_processor :: (callback: MixedAudioCallback) {
+        if mixed_audio_callback != callback {
+            return
+        }
+        tap: Mixer.AudioTap = AudioTapNoop
+        Mixer.AudioUseTap(tap)
+        mixed_audio_callback = AudioMixedNoop
     }
 }

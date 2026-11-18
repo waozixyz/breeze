@@ -17,7 +17,7 @@ mkdir -p "$work/c"
     -o "$work/c" "$root/src/screens/settings/settings_telegram.zi"
 # The fixture supplies the raster host; keep the real retained UI and protocol code.
 set -- "$root/tests/settings_telegram_ui_test.c"
-find "$work/c" -type f -name '*.c' ! -name 'raylib_runtime.c' -print > "$work/c-files"
+find "$work/c" -type f -name '*.c' -print > "$work/c-files"
 while IFS= read -r generated; do
     set -- "$@" "$generated"
 done < "$work/c-files"

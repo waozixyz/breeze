@@ -46,7 +46,7 @@ patterns-session-zi-test: $(ZI2C_BIN)
 	@sh tests/patterns_session_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: session-results-zi-test
-session-results-zi-test: apps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A) $(RAYLIB_A)
+session-results-zi-test: apps $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS)
 	@sh tests/session_results_zi_test.sh $(ZIRAN_BUILD_DIR)/bin/ziran $(LIBOQS_A)
 	@$(ZI2C_BIN) --no-main --root tests --module-path build/packages/ziran/std \
 		-o $(BUILD_DIR)/session-mood-generated tests/session_result_storage_behavior.zi
@@ -94,19 +94,18 @@ practice-narration-test: $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
 	sh tests/practice_narration_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 # Real Ogg Opus narration and Lumi guide lines play to completion through
-# Kryon's MediaAudio provider and libopus on a null audio device.
+# Ziran's mixer and the audio package's libopus.
 .PHONY: voice-audio-play-test
-voice-audio-play-test: $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(RAYLIB_A) $(AUDIO_OPUS_A)
-	sh tests/voice_audio_play_test.sh $(ZIRAN_BUILD_DIR)/bin $(RAYLIB_DIR) \
-		$(RAYLIB_A) $(AUDIO_OPUS_A)
+voice-audio-play-test: $(ZIRAN_BIN) $(AUDIO_OPUS_A)
+	sh tests/voice_audio_play_test.sh $(ZIRAN_BUILD_DIR)/bin $(abspath $(AUDIO_OPUS_A))
 
 # Defaults to every supported locale; select a completed set for focused local
 # validation with ASTRAL_NARRATION_LOCALE=pt. Missing recordings fail explicitly.
 ASTRAL_NARRATION_LOCALE ?= all
 .PHONY: astral-voice-audio-play-test
-astral-voice-audio-play-test: $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(RAYLIB_A) $(AUDIO_OPUS_A)
-	sh tests/voice_audio_play_test.sh $(ZIRAN_BUILD_DIR)/bin $(RAYLIB_DIR) \
-		$(RAYLIB_A) $(AUDIO_OPUS_A) build/packages/practices astral $(ASTRAL_NARRATION_LOCALE)
+astral-voice-audio-play-test: $(ZIRAN_BIN) $(AUDIO_OPUS_A)
+	sh tests/voice_audio_play_test.sh $(ZIRAN_BUILD_DIR)/bin $(abspath $(AUDIO_OPUS_A)) \
+		build/packages/practices astral $(ASTRAL_NARRATION_LOCALE)
 
 .PHONY: practice-narration-keys-test
 .PHONY: ming-narration-test

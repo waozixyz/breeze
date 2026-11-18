@@ -12,4 +12,4 @@ find "$work/c" -name "*.c" -print > "$work/c-files"
     -Wl,--gc-sections -I"$work/c" @"$work/c-files" \
     -lm -o "$work/c-test"
 "$work/c-test"
-echo 'Graphics recovery cancels borrowed, owned and lost-context route frames in C'
+echo 'Route fades release borrowed, owned and lost-context frames and keep each frame upright or flipped as captured, in C'

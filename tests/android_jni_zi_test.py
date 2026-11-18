@@ -3,7 +3,6 @@
 import os
 from pathlib import Path
 import platform
-import re
 import shutil
 import subprocess
 import sys
@@ -42,7 +41,6 @@ def generate(output, architecture=None):
         *subprocess.check_output(["sh", str(ROOT / "scripts/package-paths.sh"), str(ROOT / "build/packages")],
                                  text=True).split(),
         "--define", "ANDROID_BUILD", "--define", "KRYON_ANDROID_HOST",
-        "--define", "KRYON_RAYLIB_HOST",
         "-o", str(output), str(ROOT / "tests/android_jni_behavior.zi"),
         *map(str, SOURCES), str(ROOT / "build/packages/ziran/std/c_string.zi"),
     ]
@@ -67,10 +65,10 @@ includes = generated_includes(GEN)
 subprocess.run([
     os.environ.get("CC", "cc"), "-std=c11", "-Wall", "-Wextra", "-Werror",
     "-Wno-unused-function", "-ffunction-sections", "-fdata-sections",
-    "-Wl,--gc-sections", "-Wl,--wrap=write", "-pthread", *includes, *map(str, files),
+    "-Wl,--gc-sections", "-pthread", *includes, *map(str, files),
     # Entity's account handoff links its locked Monocypher and liboqs.
     str(ROOT / "build/packages/monocypher/src/monocypher.c"), os.environ["LIBOQS_A"],
-    "-o", str(WORK / "test"),
+    "-lm", "-o", str(WORK / "test"),
 ], check=True)
 environment = dict(os.environ)
 for name in ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "GDK_DISPLAY",
@@ -100,16 +98,9 @@ if ndks:
                                  ("x86_64-linux-android24", "__x86_64__")):
         abi_output = WORK / architecture / "generated"
         generate(abi_output, architecture)
-        startup_header = abi_output / 'src/platform/android/android_startup.h'
-        poll_declaration = re.search(
-            r'typedef struct (\w*AndroidPollSource) \1;', startup_header.read_text())
-        if poll_declaration is None:
-            raise SystemExit('Generated startup header has no AndroidPollSource declaration')
-        poll_type = poll_declaration[1]
-        architecture_assertions = assertions + [
-            f'_Static_assert(sizeof({poll_type}) == sizeof(struct android_poll_source), "poll source size");',
-            f'_Static_assert(offsetof({poll_type}, process) == offsetof(struct android_poll_source, process), "poll source process");',
-        ]
+        # Kryon's android_runtime owns the NativeActivity loop and its poll
+        # source; Kryon's own tests check that layout.
+        architecture_assertions = assertions
         command = [str(toolchain / "bin/clang"), "--target=" + target,
                    "-std=c11", "-fsyntax-only", *generated_includes(abi_output),
                    "-I" + str(ndk / "sources/android/native_app_glue")]

@@ -1,7 +1,9 @@
 // The keyboard, pointer and wheel for the app's frame, from the host the
-// build targets: raylib's input on raylib hosts, or on Kryon's desktop host
-// what the main window received in its last poll. Key codes are the shared
-// ones: raylib's numbering, which Kryon's desktop keys use too.
+// build targets: on Kryon's desktop host what the main window received in its
+// last poll, on Android what Kryon's NativeActivity input recorded, and in a
+// browser Kryon's canvas input; a build that selects no host reads none.
+// Key codes are the shared ones Kryon's desktop keys, Android's normalized
+// keys and the canvas all use.
 #import "geometry"
 #import "input_protocol"
 #import "session"
@@ -10,38 +12,58 @@
     Desktop :: #import "desktop_runtime";
     Keyboard :: #import "desktop_keyboard";
     host_input_last_pointer: Vector2;
-} else {
-    host_input_raylib :: #system_library "raylib";
-    RaylibKeyPressed :: (key: s32) -> bool #foreign host_input_raylib "IsKeyPressed";
-    RaylibKeyDown :: (key: s32) -> bool #foreign host_input_raylib "IsKeyDown";
-    RaylibKeyRepeated :: (key: s32) -> bool #foreign host_input_raylib "IsKeyPressedRepeat";
-    RaylibNextKeyPressed :: () -> s32 #foreign host_input_raylib "GetKeyPressed";
-    RaylibMousePosition :: () -> Vector2 #foreign host_input_raylib "GetMousePosition";
-    RaylibMousePressed :: (button: s32) -> bool #foreign host_input_raylib "IsMouseButtonPressed";
-    RaylibMouseDown :: (button: s32) -> bool #foreign host_input_raylib "IsMouseButtonDown";
-    RaylibMouseReleased :: (button: s32) -> bool #foreign host_input_raylib "IsMouseButtonReleased";
-    RaylibWheel :: () -> Vector2 #foreign host_input_raylib "GetMouseWheelMoveV";
-    RaylibMouseDelta :: () -> Vector2 #foreign host_input_raylib "GetMouseDelta";
-    RaylibSetCursor :: (cursor: s32) #foreign host_input_raylib "SetMouseCursor";
-    RaylibKeyReleased :: (key: s32) -> bool #foreign host_input_raylib "IsKeyReleased";
+} else #if #defined(ANDROID_BUILD) {
+    Touch :: #import "android_touch";
+    // The frame's one touch sample: taking it consumes the recorded span.
+    host_input_android_pointer: PointerFrame;
+    host_input_android_sampled: bool;
+} else #if #defined(PLATFORM_WEB) {
+    CanvasInput :: #import "canvas_input";
+    CanvasWindow :: #import "canvas_window";
 }
+HOST_INPUT_HEADLESS :: !#defined(DESKTOP_HOST) && !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB)
 
 HOST_MOUSE_LEFT :: 0
 HOST_MOUSE_RIGHT :: 1
 
+#if #defined(ANDROID_BUILD) {
+    HostAndroidKey :: (key: s32, flags: s32) -> bool {
+        if key < 1 || key > 511 {
+            return false
+        }
+        return (cast(s32)Touch.android_frame_input.keys[key] & flags) != 0
+    }
+
+    // The frame loop ends each frame's input; the next pointer query takes a
+    // new sample.
+    HostInputFrameEnd :: () {
+        host_input_android_sampled = false
+    }
+}
+
 HostKeyPressed :: (key: s32) -> bool {
     #if #defined(DESKTOP_HOST) {
         return Keyboard.DesktopKeyPressed(key)
+    } else #if #defined(ANDROID_BUILD) {
+        return HostAndroidKey(key, FrameKeyPressed)
+    } else #if HOST_INPUT_HEADLESS {
+        unused key
+        return false
     } else {
-        return RaylibKeyPressed(key)
+        return CanvasInput.IsKeyPressed(key)
     }
 }
 
 HostKeyDown :: (key: s32) -> bool {
     #if #defined(DESKTOP_HOST) {
         return Keyboard.DesktopKeyDown(key)
+    } else #if #defined(ANDROID_BUILD) {
+        return HostAndroidKey(key, FrameKeyHeld)
+    } else #if HOST_INPUT_HEADLESS {
+        unused key
+        return false
     } else {
-        return RaylibKeyDown(key)
+        return CanvasInput.IsKeyDown(key)
     }
 }
 
@@ -49,34 +71,52 @@ HostKeyDown :: (key: s32) -> bool {
 HostKeyRepeated :: (key: s32) -> bool {
     #if #defined(DESKTOP_HOST) {
         return Keyboard.DesktopKeyRepeated(key)
+    } else #if #defined(ANDROID_BUILD) {
+        return HostAndroidKey(key, FrameKeyRepeated)
+    } else #if HOST_INPUT_HEADLESS {
+        unused key
+        return false
     } else {
-        return RaylibKeyRepeated(key)
+        return CanvasInput.IsKeyPressedRepeat(key)
     }
 }
 
-// A key first pressed this frame, or 0. Raylib reports them in order, one per
-// call; the desktop host reports the lowest key code pressed.
+// A key first pressed this frame, or 0. The canvas reports them in order,
+// one per call; the native hosts report the lowest key code pressed.
 HostKeyPressedThisFrame :: () -> s32 {
-    #if #defined(DESKTOP_HOST) {
+    #if #defined(PLATFORM_WEB) {
+        return CanvasInput.GetKeyPressed()
+    } else {
         for key: cast(s32)32..348 {
-            if Keyboard.DesktopKeyPressed(key) {
+            if HostKeyPressed(key) {
                 return key
             }
         }
         return 0
-    } else {
-        return RaylibNextKeyPressed()
     }
 }
 
-// The primary button at the pointer's window position this frame.
+// The primary button at the pointer's window position this frame, in window
+// pixels.
 HostPointer :: () -> PointerFrame {
     #if #defined(DESKTOP_HOST) {
         return Desktop.PollPointer()
+    } else #if #defined(ANDROID_BUILD) {
+        if !host_input_android_sampled {
+            // Breeze maps the sample through its own camera transform.
+            Touch.AndroidTouchSetZoom(1.0)
+            host_input_android_pointer = Touch.AndroidPointerFrame()
+            host_input_android_sampled = true
+        }
+        return host_input_android_pointer
+    } else #if HOST_INPUT_HEADLESS {
+        return PointerFrame.{}
     } else {
-        position := RaylibMousePosition()
-        return PointerFrame.{position.x, position.y, RaylibMouseDown(HOST_MOUSE_LEFT),
-            RaylibMousePressed(HOST_MOUSE_LEFT), RaylibMouseReleased(HOST_MOUSE_LEFT)}
+        position := CanvasInput.GetMousePosition()
+        return PointerFrame.{position.x, position.y,
+            CanvasInput.IsMouseButtonDown(HOST_MOUSE_LEFT),
+            CanvasInput.IsMouseButtonPressed(HOST_MOUSE_LEFT),
+            CanvasInput.IsMouseButtonReleased(HOST_MOUSE_LEFT)}
     }
 }
 
@@ -84,72 +124,72 @@ HostPointer :: () -> PointerFrame {
 HostSecondaryPointer :: () -> SecondaryPointerFrame {
     #if #defined(DESKTOP_HOST) {
         return Desktop.PollSecondaryPointer()
+    } else #if #defined(ANDROID_BUILD) {
+        return Touch.AndroidSecondarySample()
+    } else #if HOST_INPUT_HEADLESS {
+        return SecondaryPointerFrame.{}
     } else {
-        return SecondaryPointerFrame.{RaylibMouseDown(HOST_MOUSE_RIGHT),
-            RaylibMousePressed(HOST_MOUSE_RIGHT), RaylibMouseReleased(HOST_MOUSE_RIGHT)}
+        return SecondaryPointerFrame.{CanvasInput.IsMouseButtonDown(HOST_MOUSE_RIGHT),
+            CanvasInput.IsMouseButtonPressed(HOST_MOUSE_RIGHT),
+            CanvasInput.IsMouseButtonReleased(HOST_MOUSE_RIGHT)}
     }
 }
 
-// Whether the pointer moved over the window since the last call (raylib:
-// during the last frame).
+// Whether the pointer moved over the window since the last call (the
+// canvas: during the last frame).
 HostPointerMoved :: () -> bool {
     #if #defined(DESKTOP_HOST) {
         pointer := Desktop.PollPointer()
         moved := pointer.x != host_input_last_pointer.x || pointer.y != host_input_last_pointer.y
         host_input_last_pointer = Vector2.{pointer.x, pointer.y}
         return moved
+    } else #if #defined(ANDROID_BUILD) {
+        pointer := HostPointer()
+        return pointer.down || pointer.pressed || pointer.released
+    } else #if HOST_INPUT_HEADLESS {
+        return false
     } else {
-        delta := RaylibMouseDelta()
+        delta := CanvasInput.GetMouseDelta()
         return delta.x != 0.0 || delta.y != 0.0
     }
 }
 
 // Wheel steps this frame: x sideways, positive to the right on desktop
 // hosts and to the left in browsers; y positive away from the person.
+// Touch screens have no wheel.
 HostWheel :: () -> Vector2 {
     #if #defined(DESKTOP_HOST) {
         return Vector2.{Desktop.DesktopWheelMoveX(), Desktop.DesktopWheelMove()}
+    } else #if #defined(ANDROID_BUILD) || HOST_INPUT_HEADLESS {
+        return Vector2.{0.0, 0.0}
     } else {
-        return RaylibWheel()
+        return CanvasInput.GetMouseWheelMoveV()
     }
 }
 
-// The held modifier keys as KeyModifier bits; none in browsers. On raylib a
-// modifier released since the last frame still applies to a key pressed with it.
+// The held modifier keys as KeyModifier bits; none in browsers.
 HostModifiers :: () -> s32 {
     #if #defined(DESKTOP_HOST) {
         return Desktop.DesktopModifiers()
+    } else #if #defined(ANDROID_BUILD) {
+        return Touch.android_frame_input.modifiers
     } else {
-        #if #defined(PLATFORM_WEB) {
-            return 0
-        } else {
-            // Left and right Shift, Control and Alt are 340-342 and 344-346.
-            modifiers: s32 = 0
-            for key: cast(s32)340..346 {
-                if RaylibKeyDown(key) || RaylibKeyReleased(key) {
-                    side := ifx key >= 344 then key - 344 else key - 340
-                    if side == 0 {
-                        modifiers |= KeyModifierShift
-                    } else if side == 1 {
-                        modifiers |= KeyModifierControl
-                    } else if side == 2 {
-                        modifiers |= KeyModifierAlt
-                    }
-                }
-            }
-            return modifiers
-        }
+        return 0
     }
 }
 
 // Shows the cursor for what is under the pointer. Kryon's desktop host
-// resolves it from the widgets; raylib hosts show a hand over controls.
+// resolves it from the widgets; the canvas shows a hand over controls, and a
+// touch screen has no cursor.
 HostShowCursor :: (session: Session, over_control: bool) {
     #if #defined(DESKTOP_HOST) {
         unused over_control
         unused Desktop.DesktopCursor(session)
+    } else #if #defined(ANDROID_BUILD) || HOST_INPUT_HEADLESS {
+        unused session
+        unused over_control
     } else {
         unused session
-        RaylibSetCursor(ifx over_control then 4 else 0)
+        CanvasWindow.SetMouseCursor(ifx over_control then 4 else 0)
     }
 }

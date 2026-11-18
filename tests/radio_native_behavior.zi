@@ -1,0 +1,106 @@
+// Live radio on Kryon's desktop host: MP3 bytes decode into the audio
+// mixer's stream with bounded buffering, the volume reaches it, a stalled
+// stream drops back to buffering, HTTPS is required, and reconnects and
+// cancellation hold. The test owns the host clock to step time forward.
+#import "radio_runtime"
+#import "radio_native"
+Mixer :: #import "std/audio";
+#import "std/file"
+#import "std/timer"
+#import "std/byte_text_linux"
+
+clock_offset: float64;
+
+#program_export "app_monotonic_seconds"
+TestMonotonicSeconds :: () -> float64 {
+    return cast(float64)MonotonicMilliseconds() / 1000.0 + clock_offset
+}
+
+libc :: #system_library "c";
+SleepMicroseconds :: (microseconds: u32) -> s32 #foreign libc "usleep";
+Allocate :: (count: usize, size: usize) -> *u8 #foreign libc "calloc";
+Free :: (pointer: *u8) #foreign libc "free";
+
+energy: float64;
+
+// Plays the mixer as a device would and adds up what it hears.
+Drain :: () {
+    output: [2048]float32
+    for round: 0..7 {
+        unused round
+        Mixer.AudioRender(output[:], 1024)
+        for sample: output {
+            energy += ifx sample < 0.0 then cast(float64)-sample else cast(float64)sample
+        }
+    }
+}
+
+// Streams the MP3 at PATH in 8 KiB writes, as curl delivers it.
+Feed :: (path: string, channels: s32) -> bool {
+    bytes, ok := ReadEntireFile(path)
+    if !ok || bytes.count == 0 { return false }
+    before := energy
+    chunk: [8192]u8
+    at: s64 = 0
+    while at < bytes.count {
+        count := bytes.count - at
+        if count > 8192 { count = 8192 }
+        for index: 0..count - 1 { chunk[index] = bytes[at + index] }
+        if ReceiveRadio(*chunk[0], 1, cast(usize)count, null) != cast(usize)count { return false }
+        for round: 0..7 {
+            unused round
+            DecodeNativeRadio()
+            Drain()
+        }
+        at += count
+    }
+    return radio_channels == channels && energy > before && radio_voice.slot >= 0 &&
+        radio_length <= 131072 && radio_samples < 12288
+}
+
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc < 3 { return 1 }
+    NativeRadioVolume(0.35)
+    if !Feed(TextFromCString(argv[1]), 1) { return 2 }
+    if radio_volume < 0.349 || radio_volume > 0.351 { return 3 }
+    mono_voice := radio_voice
+    if !Feed(TextFromCString(argv[2]), 2) { return 4 }
+    if Mixer.AudioState(mono_voice) != .Unloaded { return 5 }
+    if NativeRadioState() != 2 { return 6 }
+    clock_offset += 2.0
+    if NativeRadioState() != 1 { return 7 }
+    NativeRadioStop()
+    if radio_length != 0 || radio_samples != 0 || radio_wanted { return 8 }
+
+    burst := Allocate(131072, 1)
+    if burst == null { return 9 }
+    if ReceiveRadio(burst, 1, 131072, null) != 131072 { return 10 }
+    if ReceiveRadio(burst, 1, 1, null) != 268435457 { return 11 }
+    if !radio_paused || radio_length != 131072 { return 12 }
+    Free(burst)
+    DecodeNativeRadio()
+    if radio_length < 0 || radio_length > 131072 { return 13 }
+    NativeRadioStop()
+    if radio_paused { return 14 }
+
+    if RadioOpen("file:///etc/passwd") { return 15 }
+    if RadioOpen("http://localhost/stream") { return 16 }
+    if !RadioOpen("https://127.0.0.1:1/stream") { return 17 }
+    RadioPlay()
+    for attempt: 0..99 {
+        unused attempt
+        if RadioState() == 3 { break }
+        RadioUpdate()
+        unused SleepMicroseconds(10000)
+    }
+    if RadioState() != 3 || radio_easy != null { return 18 }
+    clock_offset += 60.0
+    RadioUpdate()
+    if radio_easy == null { return 19 }
+    RadioStop()
+    clock_offset += 60.0
+    RadioUpdate()
+    if RadioState() != 0 || radio_easy != null || radio_multi != null { return 20 }
+    return 0
+}

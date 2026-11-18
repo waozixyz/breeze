@@ -48,34 +48,34 @@ $(CLICK_CURL_A): $(KRYON_CURL_DIR)/CMakeLists.txt mk/packaging.mk
 	@sh $(CLICK_CURL_BUILD_DIR)/bin/curl-config --protocols | grep -Eq '(^|[[:space:]])WS([[:space:]]|$$)'
 	@sh $(CLICK_CURL_BUILD_DIR)/bin/curl-config --protocols | grep -Eq '(^|[[:space:]])WSS([[:space:]]|$$)'
 
-$(CLICK_GEN_STAMP): Makefile mk/packaging.mk ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(CLICK_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile mk/packaging.mk ziran.lock $(ZIRAN_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(CLICK_GEN_DIR)
 	mkdir -p $(CLICK_GEN_DIR)
-	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --prune-stale --root . \
-		--define PLATFORM_DESKTOP --define __GLIBC__ --define __aarch64__ \
-		--define NATIVE_WINDOW_HAVE_SDL \
-		--module-path src --module-path $(KRYON_DIR)/src/ui \
-		--module-path $(CSS_DIR)/src \
-		--module-path $(KRYON_DIR)/src/backend \
-		--module-path $(GAME2D_DIR)/src \
-		--module-path $(ZIRAN_DIR)/std \
-		--module-path $(MESH_CLIENT_DIR) $(ZI_PACKAGE_PATHS) \
+	sh scripts/run-ziran.sh $(ZIRAN_BIN) build --target=c --project --offline $(PACKAGE_FLAGS) \
+		--no-main --root . --target-os linux --target-cpu arm64 \
+		--define PLATFORM_DESKTOP --define DESKTOP_HOST --define NATIVE_WINDOW_HAVE_SDL \
+		--define __GLIBC__ --define __aarch64__ \
 		-o $(CLICK_GEN_DIR) $(ZI_SRCS)
 	touch $@
 
-$(CLICK_RAYLIB_A): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile mk/packaging.mk
-	rm -rf $(CLICK_RAYLIB_BUILD_DIR)/source
-	mkdir -p $(CLICK_RAYLIB_BUILD_DIR)/source
-	cp -R $(RAYLIB_DIR)/. $(CLICK_RAYLIB_BUILD_DIR)/source/
-	find $(CLICK_RAYLIB_BUILD_DIR)/source -type f \( -name '*.o' -o -name '*.a' \) -delete
-	$(MAKE) -j2 -C $(CLICK_RAYLIB_BUILD_DIR)/source \
-		RAYLIB_SRC_PATH=. RAYLIB_RELEASE_PATH=.. \
-		PLATFORM=PLATFORM_DESKTOP_SDL GRAPHICS=GRAPHICS_API_OPENGL_ES2 \
-		RAYLIB_LIBTYPE=STATIC RAYLIB_MODULE_AUDIO=TRUE RAYLIB_MODULE_MODELS=TRUE \
-		CC="$(AARCH64_CC)" AR="$(AARCH64_AR)" RANLIB="$(AARCH64_RANLIB)" \
-		SDL_INCLUDE_PATH=$(AARCH64_RAY_SDL_INCLUDE_DIR) \
-		CUSTOM_CFLAGS="-DUSING_SDL2_PROJECT $(AARCH64_RAY_CFLAGS) $(APP_RAYLIB_CONFIG) -O2 -ffunction-sections -fdata-sections"
-	@test -f $@
+$(CLICK_WEBP_A): ziran.lock $(KRYON_DIR)/cmake/WebP.cmake $(KRYON_DIR)/cmake/webp/CMakeLists.txt | $(ZIRAN_BIN)
+	$(CMAKE) -S $(KRYON_DIR)/cmake/webp -B $(dir $@) $(CLICK_CMAKE_CROSS) \
+		-DWEBP_DIR="$(abspath build/packages/libwebp)" $(IMAGE_PACKAGE_DIRS)
+	$(CMAKE) --build $(dir $@) --target kryonwebp --parallel 2
+
+$(CLICK_AVIF_A) $(CLICK_AOM_A) &: ziran.lock $(KRYON_DIR)/cmake/AVIF.cmake $(KRYON_DIR)/cmake/avif/CMakeLists.txt | $(ZIRAN_BIN)
+	$(CMAKE) -S $(KRYON_DIR)/cmake/avif -B $(CLICK_VENDOR_DIR)/kryon-avif $(CLICK_CMAKE_CROSS) \
+		-DAVIF_DIR="$(abspath build/packages/libavif)" -DAOM_DIR="$(abspath build/packages/libaom)" \
+		$(IMAGE_PACKAGE_DIRS)
+	$(CMAKE) --build $(CLICK_VENDOR_DIR)/kryon-avif --target avif_static aom --parallel 2
+	@test -f $(CLICK_AVIF_A) && test -f $(CLICK_AOM_A)
+
+$(CLICK_OPUS_A) $(CLICK_MP3_A) $(CLICK_VORBIS_LIBS) &: ziran.lock $(AUDIO_PACKAGE_DIR)/native/AudioCodecs.cmake $(AUDIO_PACKAGE_DIR)/native/CMakeLists.txt $(ZIRAN_DIR)/std/native/AudioCodecs.cmake
+	$(CMAKE) -S $(AUDIO_PACKAGE_DIR)/native -B $(CLICK_AUDIO_DIR) $(CLICK_CMAKE_CROSS) \
+		-DOPUS_DIR=$(abspath $(AUDIO_OPUS_DIR)) -DSAMPLERATE_DIR=$(abspath $(AUDIO_SAMPLERATE_DIR)) \
+		-DZIRAN_STDLIB=$(abspath $(ZIRAN_DIR))/std
+	$(CMAKE) --build $(CLICK_AUDIO_DIR) --target opus ziran_mp3 vorbisfile --parallel 2
+	@for archive in $(CLICK_OPUS_A) $(CLICK_MP3_A) $(CLICK_VORBIS_LIBS); do test -f $$archive || { echo "Missing $$archive" >&2; exit 1; }; done
 
 click-verify: $(CLICK_TARGET)
 	@command -v clickable >/dev/null || { \
@@ -102,26 +102,22 @@ $(CLICK_LIBOQS_A): $(LIBOQS_DIR)/CMakeLists.txt mk/sync.mk Makefile
 		-DOQS_MINIMAL_BUILD="$(KRYON_LIBOQS_MINIMAL_BUILD)"
 	$(CMAKE) --build $(CLICK_LIBOQS_BUILD_DIR) --target oqs
 
-$(CLICK_BIN): Makefile mk/packaging.mk $(APP_SRCS) $(CLICK_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(CLICK_RAYLIB_A) $(CLICK_LIBOQS_A) $(CLICK_CURL_A) | $(CLICK_BIN_DIR)
+$(CLICK_BIN): Makefile mk/packaging.mk $(APP_SRCS) $(CLICK_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(CLICK_CODEC_LIBS) $(CLICK_LIBOQS_A) $(CLICK_CURL_A) | $(CLICK_BIN_DIR)
 	$(AARCH64_CC) $(CLICK_CFLAGS) \
 		-DCURL_STATICLIB -I$(CLICK_CURL_BUILD_DIR)/include \
 		$(CLICK_APP_INCLUDE) \
 		$(KRYON_INCLUDE) \
 		$(SQLITE_INCLUDE) \
 		$(CLICK_LIBOQS_INCLUDE) \
-		$(AARCH64_RAY_CFLAGS) \
+		$(AARCH64_DESKTOP_HOST_CFLAGS) \
 		-DHAS_LIBOQS=1 \
-		-DKRYON_BACKEND_RAYLIB=1 \
 		-DPLATFORM_DESKTOP \
-		-DSUPPORT_MODULE_RAUDIO=1 \
-		-DSUPPORT_FILEFORMAT_OGG=1 \
-		-DSUPPORT_FILEFORMAT_MP3=0 \
 		-o $@ \
 		$(APP_SRCS) $(GENERATED_CLICK_C) $(EMBEDDED_ASSETS_C) $(CLICK_BUNDLE_RUNTIME) \
 		$(SQLITE_SRC) \
-		$(CLICK_RAYLIB_A) \
+		$(CLICK_CODEC_LIBS) \
 		$(CLICK_LIBOQS_A) \
-		$(AARCH64_RAY_LDLIBS) \
+		$(AARCH64_DESKTOP_HOST_LDLIBS) \
 		$(CLICK_CURL_A) -lssl -lcrypto \
 		-lm -lpthread -ldl -lrt -latomic -lz \
 		$(LDFLAGS)
@@ -398,14 +394,11 @@ endif
 ifeq ($(strip $(AARCH64_RANLIB)),)
 $(error AARCH64_RANLIB is not set. Install AArch64 binutils, set AARCH64_RANLIB, or pass CLICK_BIN_SOURCE=/path/to/breathing)
 endif
-ifeq ($(strip $(AARCH64_RAY_CFLAGS)),)
-$(error AARCH64_RAY_CFLAGS is not set. Set AARCH64_RAY_CFLAGS for your cross sysroot, or pass CLICK_BIN_SOURCE=/path/to/breathing)
+ifeq ($(strip $(AARCH64_DESKTOP_HOST_CFLAGS)),)
+$(error AARCH64_DESKTOP_HOST_CFLAGS is not set. Set it to pkg-config --cflags $(DESKTOP_HOST_PKGS) for your cross sysroot, or pass CLICK_BIN_SOURCE=/path/to/breathing)
 endif
-ifeq ($(strip $(AARCH64_RAY_LDLIBS)),)
-$(error AARCH64_RAY_LDLIBS is not set. Set AARCH64_RAY_LDLIBS for your cross sysroot, or pass CLICK_BIN_SOURCE=/path/to/breathing)
-endif
-ifeq ($(strip $(AARCH64_RAY_SDL_INCLUDE_DIR)),)
-$(error AARCH64_RAY_SDL_INCLUDE_DIR is not set. Set AARCH64_RAY_SDL_INCLUDE_DIR for your cross sysroot, or pass CLICK_BIN_SOURCE=/path/to/breathing)
+ifeq ($(strip $(AARCH64_DESKTOP_HOST_LDLIBS)),)
+$(error AARCH64_DESKTOP_HOST_LDLIBS is not set. Set it to pkg-config --libs $(DESKTOP_HOST_PKGS) for your cross sysroot, or pass CLICK_BIN_SOURCE=/path/to/breathing)
 endif
 ifeq ($(strip $(AARCH64_KRYON_CURL_LDLIBS)),)
 $(error AARCH64_KRYON_CURL_LDLIBS is not set. Set AARCH64_KRYON_CURL_LDLIBS for your cross sysroot, or pass CLICK_BIN_SOURCE=/path/to/breathing)

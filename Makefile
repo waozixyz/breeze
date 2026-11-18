@@ -169,8 +169,20 @@ CLICK_DIST_DIR := $(BUILD_DIST_DIR)/click
 CLICK_TARGET = $(CLICK_DIST_DIR)/$(CLICK_PACKAGE)_$(APP_VERSION)_$(CLICK_ARCH).click
 CLICK_BIN := $(CLICK_BIN_DIR)/$(APP_NAME)
 CLICK_BIN_INPUT := $(if $(strip $(CLICK_BIN_SOURCE)),$(CLICK_BIN_SOURCE),$(CLICK_BIN))
-CLICK_RAYLIB_BUILD_DIR := $(VENDOR_BUILD_DIR)/click/$(CLICK_ARCH)/raylib
-CLICK_RAYLIB_A := $(CLICK_RAYLIB_BUILD_DIR)/libraylib.a
+# Kryon's desktop host links the same picture and audio codecs on Ubuntu
+# Touch, built for its ARM64 target.
+CLICK_VENDOR_DIR := $(VENDOR_BUILD_DIR)/click/$(CLICK_ARCH)
+CLICK_WEBP_A := $(CLICK_VENDOR_DIR)/kryon-webp/libkryonwebp.a
+CLICK_AVIF_A := $(CLICK_VENDOR_DIR)/kryon-avif/avif/libavif.a
+CLICK_AOM_A := $(CLICK_VENDOR_DIR)/kryon-avif/aom/libaom.a
+CLICK_AUDIO_DIR := $(CLICK_VENDOR_DIR)/audio-codecs
+CLICK_OPUS_A := $(CLICK_AUDIO_DIR)/libopus/libopus.a
+CLICK_MP3_A := $(CLICK_AUDIO_DIR)/libziran_mp3.a
+CLICK_VORBIS_LIBS := $(CLICK_AUDIO_DIR)/libvorbisfile.a $(CLICK_AUDIO_DIR)/libvorbis.a $(CLICK_AUDIO_DIR)/libogg.a
+CLICK_CODEC_LIBS := $(CLICK_WEBP_A) $(CLICK_AVIF_A) $(CLICK_AOM_A) $(CLICK_MP3_A) $(CLICK_VORBIS_LIBS) $(CLICK_OPUS_A)
+CLICK_CMAKE_CROSS := -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+	-DCMAKE_C_COMPILER=$(AARCH64_CC) -DCMAKE_AR=$(AARCH64_AR) -DCMAKE_RANLIB=$(AARCH64_RANLIB) \
+	-DCMAKE_BUILD_TYPE=Release
 CLICK_LIBOQS_BUILD_DIR := $(VENDOR_BUILD_DIR)/click/$(CLICK_ARCH)/liboqs
 CLICK_LIBOQS_A := $(CLICK_LIBOQS_BUILD_DIR)/lib/liboqs.a
 CLICK_LIBOQS_INCLUDE := -I$(CLICK_LIBOQS_BUILD_DIR)/include
@@ -192,9 +204,6 @@ APP_VERSION := $(shell awk '/APP_VERSION_STRING/ { print $$3; exit }' $(VERSION_
 KRYON_DIR ?= build/packages/kryon
 CSS_DIR ?= build/packages/css
 OQS_DIR ?= build/packages/oqs
-RAYLIB_DIR = build/packages/raylib/src
-RAYLIB_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/raylib
-RAYLIB_A := $(RAYLIB_BUILD_DIR)/libraylib.a
 WEBP_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/kryon-webp
 WEBP_A := $(WEBP_BUILD_DIR)/libkryonwebp.a
 AVIF_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/kryon-avif
@@ -214,8 +223,6 @@ WIN64_CMAKE_SYSTEM_PROCESSOR ?= x86_64
 WIN64_CC_PATH := $(shell command -v $(WIN64_CC) 2>/dev/null || printf '%s' $(WIN64_CC))
 WIN64_AR_PATH := $(shell command -v $(WIN64_AR) 2>/dev/null || printf '%s' $(WIN64_AR))
 WIN64_RANLIB_PATH := $(shell command -v $(WIN64_RANLIB) 2>/dev/null || printf '%s' $(WIN64_RANLIB))
-WIN64_RAYLIB_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/raylib
-WIN64_RAYLIB_A := $(WIN64_RAYLIB_BUILD_DIR)/libraylib.a
 WIN64_CURL_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/curl
 WIN64_CURL_INCLUDE_DIR := $(WIN64_CURL_BUILD_DIR)/include
 WIN64_CURL_A := $(WIN64_CURL_BUILD_DIR)/lib/libcurl.a
@@ -223,7 +230,6 @@ WIN64_LIBOQS_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/liboqs
 WIN64_LIBOQS_A := $(WIN64_LIBOQS_BUILD_DIR)/lib/liboqs.a
 WIN64_LIBOQS_INCLUDE := -I$(WIN64_LIBOQS_BUILD_DIR)/include
 WIN64_RESOURCE := $(BUILD_OBJ_DIR)/windows/$(WIN64_ARCH)/$(APP_NAME).res
-RAYLIB_SOURCES := $(if $(wildcard $(RAYLIB_DIR)),$(shell find $(RAYLIB_DIR) -type f \( -name '*.c' -o -name '*.h' \)))
 
 KRYON_ICON_DIR := icons
 KRYON_ICON_FILES := $(shell find $(KRYON_DIR)/$(KRYON_ICON_DIR) -path '*/review/*' -prune -o -type f \( -name '*.webp' -o -name '*.png' -o -name '*.json' \) -print 2>/dev/null | LC_ALL=C sort)
@@ -243,11 +249,11 @@ KRYON_ICON_TYPES_H := $(KRYON_GENERATED_INCLUDE_DIR)/ui_icon_types.h
 KRYON_SRCS := $(filter-out $(KRYON_DIR)/src/ui/ui_icon_assets.c $(KRYON_DIR)/src/ui/ui_icon_names.c,$(shell find $(KRYON_DIR)/src -type f -name '*.c' | LC_ALL=C sort)) $(KRYON_ICON_ASSETS_C) $(KRYON_ICON_NAMES_C) $(KRYON_UI_C) $(KRYON_CSS_C)
 KRYON_SYNC_ICONS := $(KRYON_DIR)/scripts/sync-icons.sh
 WEB_SHARED_ICON_SHEETS := platforms language tiles
-# Inbe's desktop uses Kryon's raylib backend, not its libdraw, terminal or
-# Plan 9 hosts.
+# Inbe's desktop uses Kryon's SDL and Cairo desktop host, not its libdraw,
+# terminal or Plan 9 hosts.
 KRYON_SRCS := $(filter-out $(KRYON_DIR)/src/backend/libdraw_%.c $(KRYON_DIR)/src/backend/termi_%.c \
 	$(KRYON_DIR)/src/platform/plan9/%.c,$(KRYON_SRCS))
-# The web build uses kryon's Canvas2D backend directly: no raylib, no WebGL.
+# The web build uses kryon's Canvas2D backend directly, with no WebGL.
 KRYON_WEB_SRCS := $(KRYON_SRCS)
 KRYON_WEB_SRCS := $(filter-out $(KRYON_DIR)/src/backend/dom_%.c,$(KRYON_WEB_SRCS))
 KRYON_WINDOWS_SRCS := $(filter-out $(KRYON_DIR)/src/file_dialog/file_dialog.c,$(KRYON_SRCS))
@@ -357,8 +363,12 @@ APP_SRCS := \
 ifneq ($(filter linux freebsd,$(NATIVE_PLATFORM)),)
 DESKTOP_TRAY_DEFINE := DESKTOP_TRAY_ENABLED
 endif
-# The native host links libavif/aom; select its decoder in the checked graph.
-ZI_NATIVE_DEFINES := PLATFORM_DESKTOP AVIF_RAYLIB $(DESKTOP_TRAY_DEFINE)
+# The native desktop runs on Kryon's desktop host: SDL2 windows and input,
+# Cairo and Pango raster, Kryon's audio mixer.
+# Kryon's desktop raster decodes WebP with the libwebp archive this build
+# links (KRYON_WEBP_LINKED). Its linked AVIF path imports a module the pinned
+# avif package does not export yet, so AVIF still loads libkryonavif.so.
+ZI_NATIVE_DEFINES := PLATFORM_DESKTOP DESKTOP_HOST KRYON_WEBP_LINKED $(DESKTOP_TRAY_DEFINE)
 # Ziran preprocessing must see the libc choice used by the native C compiler.
 NATIVE_GLIBC := $(shell printf '#include <stdlib.h>\n' | $(CC) -dM -E - 2>/dev/null | grep -q '^\#define __GLIBC__ ' && printf yes)
 ifeq ($(NATIVE_GLIBC),yes)
@@ -441,15 +451,12 @@ KRY_GEN_SRCS += $(addprefix $(KRY_GEN_DIR)/,account.c auth.c authorization.c aut
 	net_ws_curl_linux.c social.c sync.c \
 	text.c text_buffer.c transaction.c update.c url.c wire.c)
 KRY_GEN_HDRS := $(patsubst %.zi,$(KRY_GEN_DIR)/%.h,$(ZI_SRCS))
-KRY_GEN_GAME_C := $(KRY_GEN_DIR)/Raylib.c
 KRY_GEN_STAMP := $(KRY_GEN_DIR)/.fresh
 WEB_GEN_DIR := $(BUILD_DIR)/kryon/generated-web
 WEB_GEN_SRCS := $(patsubst $(KRY_GEN_DIR)/%,$(WEB_GEN_DIR)/%,$(KRY_GEN_SRCS))
-WEB_GEN_GAME_C := $(WEB_GEN_DIR)/Raylib.c
 WEB_GEN_STAMP := $(WEB_GEN_DIR)/.fresh
 WINDOWS_GEN_DIR := $(BUILD_DIR)/kryon/generated-windows
 WINDOWS_GEN_SRCS := $(patsubst $(KRY_GEN_DIR)/%,$(WINDOWS_GEN_DIR)/%,$(KRY_GEN_SRCS))
-WINDOWS_GEN_GAME_C := $(WINDOWS_GEN_DIR)/Raylib.c
 WINDOWS_GEN_STAMP := $(WINDOWS_GEN_DIR)/.fresh
 # The Unix clock provider is generated only for the native app. Web and
 # Windows source lists above retain their platform clock implementations.
@@ -458,15 +465,12 @@ SRC := $(APP_SRCS) $(KRY_GEN_STAMP) $(EMBEDDED_ASSETS_C)
 GENERATED_NATIVE_C = $(shell find $(KRY_GEN_DIR) -type f -name '*.c' | LC_ALL=C sort)
 WINDOWS_SRC := $(APP_SRCS) $(EMBEDDED_ASSETS_C)
 GENERATED_WINDOWS_C = $(shell find $(WINDOWS_GEN_DIR) -type f -name '*.c' | LC_ALL=C sort)
-KRYON_HOST_APP_SRCS := $(APP_SRCS) $(KRY_GEN_SRCS) $(KRY_GEN_GAME_C)
-KRYON_HOST_SRC := $(KRYON_HOST_APP_SRCS) $(EMBEDDED_ASSETS_C)
 WEB_APP_SRCS := $(APP_SRCS)
 WEB_SRC := $(WEB_APP_SRCS) $(EMBEDDED_ASSETS_C)
 GENERATED_WEB_C = $(shell find $(WEB_GEN_DIR) -type f -name '*.c' | LC_ALL=C sort)
 
 APP_INCLUDE := -Isrc -Isrc/app -Isrc/core -Isrc/screens -Isrc/screens/settings -Isrc/practices -Isrc/practices/whm -Isrc/practices/meditation -Isrc/practices/sun_salutation -Isrc/practices/tai_chi -Isrc/storage -Isrc/platform -Isrc/platform/android -Isrc/third_party
 APP_INCLUDE += -iquote$(KRY_GEN_DIR)
-APP_INCLUDE += -I$(RAYLIB_DIR)
 APP_INCLUDE += $(foreach dir,$(sort $(dir $(ZI_SRCS))),-iquote$(KRY_GEN_DIR)/$(dir))
 APP_INCLUDE += $(KRYON_INCLUDE)
 APP_INCLUDE += -I$(MONOCYPHER_DIR) -I$(MONOCYPHER_DIR)/optional
@@ -483,30 +487,11 @@ LAW_MODULES := src/app/sync_retry_laws.zi src/app/practice_lifecycle_laws.zi \
 	src/app/sync_recovery_policy_laws.zi src/storage/habit_merge_laws.zi \
 	src/storage/sync_restore_laws.zi src/storage/storage_layout_laws.zi \
 	src/guide_laws.zi src/apps/node_app_input_laws.zi
-RAY_PKGS ?= sdl2 libdrm gbm egl glesv2
-RAY_SDL_CFLAGS ?= $(shell pkg-config --cflags sdl2 2>/dev/null)
-RAY_SDL_LDLIBS ?= $(shell pkg-config --libs sdl2 2>/dev/null)
-ZI_NATIVE_DEFINES += $(if $(strip $(RAY_SDL_LDLIBS)),NATIVE_WINDOW_HAVE_SDL,)
+# Kryon's desktop host windows through SDL.
+ZI_NATIVE_DEFINES += NATIVE_WINDOW_HAVE_SDL
 APP_GIO_CFLAGS ?= $(shell pkg-config --cflags gio-2.0 2>/dev/null)
 APP_GIO_LDLIBS ?= $(shell pkg-config --libs gio-2.0 2>/dev/null)
 ZI_NATIVE_DEFINES += $(if $(strip $(APP_GIO_LDLIBS)),APP_HAVE_GIO,)
-RAY_GL_CFLAGS ?= $(shell pkg-config --cflags libdrm gbm egl glesv2 2>/dev/null)
-RAY_GL_LDLIBS ?= $(shell pkg-config --libs libdrm gbm egl glesv2 2>/dev/null)
-RAY_CFLAGS ?= $(strip $(RAY_SDL_CFLAGS) $(RAY_GL_CFLAGS))
-RAY_LDLIBS ?= $(strip $(RAY_SDL_LDLIBS) $(RAY_GL_LDLIBS))
-RAY_SDL_INCLUDE_DIR ?= $(shell pkg-config --variable=includedir sdl2 2>/dev/null | sed 's,/SDL2$$,,')
-RAY_RAYLIB_CONFIG ?= -DSUPPORT_SCREEN_CAPTURE=0 -DSUPPORT_COMPRESSION_API=0 -DSUPPORT_AUTOMATION_EVENTS=0 -DSUPPORT_CLIPBOARD_IMAGE=0 -DSUPPORT_FILEFORMAT_BMP=0 -DSUPPORT_FILEFORMAT_GIF=0 -DSUPPORT_FILEFORMAT_QOI=0 -DSUPPORT_FILEFORMAT_DDS=0 -DSUPPORT_FILEFORMAT_TTF=1
-ifeq ($(NATIVE_PLATFORM),freebsd)
-KRYON_RAYLIB_AUDIO_PERIOD_FRAMES ?= 128
-KRYON_RAYLIB_AUDIO_PERIODS ?= 2
-endif
-KRYON_RAYLIB_AUDIO_PERIOD_CONFIG := $(if $(strip $(KRYON_RAYLIB_AUDIO_PERIOD_FRAMES)),-DAUDIO_DEVICE_PERIOD_SIZE_IN_FRAMES=$(KRYON_RAYLIB_AUDIO_PERIOD_FRAMES),)
-KRYON_RAYLIB_AUDIO_PERIODS_CONFIG := $(if $(strip $(KRYON_RAYLIB_AUDIO_PERIODS)),-DAUDIO_DEVICE_PERIODS=$(KRYON_RAYLIB_AUDIO_PERIODS),)
-# Inbe's fonts are TrueType and OpenType files, so every host keeps TTF
-# support; without it raylib draws its fallback pixel font.
-APP_RAYLIB_CONFIG := $(filter-out -DSUPPORT_MODULE_RAUDIO=0 -DSUPPORT_FILEFORMAT_PNG=0 -DSUPPORT_FILEFORMAT_JPG=0 -DSUPPORT_FILEFORMAT_OGG=0 -DSUPPORT_FILEFORMAT_MP3=% -DSUPPORT_FILEFORMAT_TTF=%,$(RAY_RAYLIB_CONFIG)) -DSUPPORT_MODULE_RAUDIO=1 -DSUPPORT_FILEFORMAT_JPG=1 -DSUPPORT_FILEFORMAT_OGG=1 -DSUPPORT_FILEFORMAT_MP3=1 -DSUPPORT_FILEFORMAT_TTF=1 $(KRYON_RAYLIB_AUDIO_PERIOD_CONFIG) $(KRYON_RAYLIB_AUDIO_PERIODS_CONFIG)
-# Live radio uses raylib's MP3 push decoder on desktop hosts.
-$(RAYLIB_A) $(WIN64_RAYLIB_A): Makefile
 
 COMMON_CFLAGS := -Wall -Wextra -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DNATIVE_WINDOW_HAVE_SDL -DKRYON_WITH_SYNC=1
 CFLAGS := $(COMMON_CFLAGS) -std=c99 $(RUNTIME_ASSET_CFLAGS) $(SYSTEM_THEME_CFLAGS) $(KRYON_NOTIFICATION_CPPFLAGS) $(KRYON_NOTIFICATION_CFLAGS)
@@ -516,7 +501,7 @@ WEB_CFLAGS := $(filter-out -Os -DNATIVE_WINDOW_HAVE_SDL,$(COMMON_CFLAGS)) -O2 -s
 CLICK_CFLAGS := -Wall -Wextra -std=c99 -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DDISABLE_KRYON_FILE_DIALOG -DHAS_LIBCURL=1 -DKRYON_WITH_SYNC=1 $(AARCH64_KRYON_CURL_CFLAGS)
 LDFLAGS := -Wl,--gc-sections -s
 WINDOWS_LDFLAGS := -Wl,--gc-sections -static -static-libgcc -mwindows
-WINDOWS_LDLIBS := -lgdi32 -lwinmm -lopengl32 -luser32 -lshell32 -lole32 -lcomdlg32 -lcomctl32 -luuid -lwininet -lws2_32 -liphlpapi -lcrypt32 -lsecur32 -lbcrypt -ladvapi32 -lz -lm -latomic -lpthread
+WINDOWS_LDLIBS := -lgdi32 -lwinmm -luser32 -lshell32 -lole32 -lcomdlg32 -lcomctl32 -luuid -lwininet -lws2_32 -liphlpapi -lcrypt32 -lsecur32 -lbcrypt -ladvapi32 -lz -lm -latomic -lpthread
 ifneq ($(strip $(MCFGTHREADS)),)
 WIN64_THREAD_LDFLAGS := -L$(MCFGTHREADS)/lib
 else
@@ -534,9 +519,7 @@ NATIVE_JOBS ?= $(shell n=$$(nproc 2>/dev/null || echo 4); n=$$((n / 2)); \
 NATIVE_NICE ?= nice -n 10
 NATIVE_COMPILE_FLAGS = $(KRYON_NATIVE_CFLAGS) $(APP_INCLUDE) $(KRYON_INCLUDE) \
 	-iquote$(KRYON_LIBRARY_BUILD_DIR)/c $(SQLITE_INCLUDE) $(LIBOQS_INCLUDE) \
-	$(KRYON_NATIVE_BACKEND_CFLAGS) -DHAS_LIBOQS=1 -DSUPPORT_MODULE_RAUDIO=1 \
-	-DSUPPORT_FILEFORMAT_OGG=1 -DSUPPORT_FILEFORMAT_MP3=1
-KRYON_HOST_TARGET := $(BUILD_DIR)/kryon/app_host.so
+	$(KRYON_NATIVE_BACKEND_CFLAGS) -DHAS_LIBOQS=1
 WIN64_BINARY_NAME := $(APP_EXECUTABLE)-windows-$(WIN64_ARCH).exe
 WIN64_TARGET := $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)/$(WIN64_BINARY_NAME)
 WINDOWS_DIST := $(WINDOWS_DIST_DIR)/$(APP_NAME)-windows.zip
@@ -552,23 +535,8 @@ WEB_EMCMAKE ?= $(if $(wildcard $(WEB_EMSDK_BIN)/emcmake),$(WEB_EMSDK_BIN)/emcmak
 ifneq ($(wildcard $(WEB_EMSDK_BIN)/emcc),)
 export PATH := $(WEB_EMSDK_BIN):$(PATH)
 endif
-$(RAYLIB_A): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
-	@test -f $(RAYLIB_DIR)/raylib.h || { echo "Initialize Kryon's raylib submodule" >&2; exit 1; }
-	mkdir -p $(RAYLIB_BUILD_DIR)
-	rm -rf $(RAYLIB_BUILD_DIR)/source
-	mkdir -p $(RAYLIB_BUILD_DIR)/source
-	cp -R $(RAYLIB_DIR)/. $(RAYLIB_BUILD_DIR)/source/
-	$(MAKE) -j4 -C $(RAYLIB_BUILD_DIR)/source \
-		RAYLIB_SRC_PATH=. RAYLIB_RELEASE_PATH=.. \
-		PLATFORM=PLATFORM_DESKTOP_SDL GRAPHICS=GRAPHICS_API_OPENGL_ES2 \
-		RAYLIB_LIBTYPE=STATIC RAYLIB_MODULE_AUDIO=TRUE \
-		RAYLIB_MODULE_MODELS=TRUE \
-		SDL_INCLUDE_PATH=$(shell pkg-config --variable=includedir sdl2) \
-		CUSTOM_CFLAGS="-DUSING_SDL2_PROJECT $(RAY_CFLAGS) $(APP_RAYLIB_CONFIG) -O2 -ffunction-sections -fdata-sections"
-	@test -f $@
 
 KRYON_NATIVE_CFLAGS := $(CFLAGS)
-KRYON_SRCS += $(KRYON_RAYLIB_WRAPPERS_C)
 $(WEBP_A): ziran.lock $(KRYON_DIR)/cmake/WebP.cmake $(KRYON_DIR)/cmake/ImagePackages.cmake $(KRYON_DIR)/cmake/webp/CMakeLists.txt $(wildcard build/packages/webp/native/*.cmake build/packages/libwebp/src/*/*.c build/packages/libwebp/src/*/*.h) | $(ZIRAN_BIN)
 	$(CMAKE) -S $(KRYON_DIR)/cmake/webp -B $(WEBP_BUILD_DIR) -DWEBP_DIR="$(abspath build/packages/libwebp)" $(IMAGE_PACKAGE_DIRS) -DCMAKE_BUILD_TYPE=Release
 	$(CMAKE) --build $(WEBP_BUILD_DIR) --target kryonwebp --parallel 2
@@ -581,10 +549,14 @@ $(AVIF_A): ziran.lock $(KRYON_DIR)/cmake/AVIF.cmake $(KRYON_DIR)/cmake/ImagePack
 $(AOM_A): $(AVIF_A)
 	@test -f $@
 
-KRYON_NATIVE_BACKEND_DEPS := $(RAYLIB_A) $(WEBP_A) $(AVIF_A) $(AOM_A)
-KRYON_NATIVE_BACKEND_LIBS := $(RAYLIB_A) $(WEBP_A) $(AVIF_A) $(AOM_A)
-KRYON_NATIVE_BACKEND_CFLAGS := -DKRYON_BACKEND_RAYLIB=1 $(RAY_CFLAGS)
-KRYON_NATIVE_BACKEND_LDLIBS := $(RAY_LDLIBS)
+# Kryon's desktop host and the codecs its raster and mixer link.
+DESKTOP_HOST_PKGS := sdl2 cairo freetype2 pangocairo fontconfig gio-2.0 x11
+DESKTOP_HOST_CFLAGS ?= $(shell pkg-config --cflags $(DESKTOP_HOST_PKGS) 2>/dev/null)
+DESKTOP_HOST_LDLIBS ?= $(shell pkg-config --libs $(DESKTOP_HOST_PKGS) 2>/dev/null)
+KRYON_NATIVE_BACKEND_DEPS := $(WEBP_A) $(AVIF_A) $(AOM_A) $(AUDIO_MP3_A) $(AUDIO_VORBIS_A)
+KRYON_NATIVE_BACKEND_LIBS := $(WEBP_A) $(AVIF_A) $(AOM_A) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS)
+KRYON_NATIVE_BACKEND_CFLAGS := $(DESKTOP_HOST_CFLAGS)
+KRYON_NATIVE_BACKEND_LDLIBS := $(DESKTOP_HOST_LDLIBS)
 ifneq ($(strip $(APP_GIO_LDLIBS)),)
 KRYON_NATIVE_BACKEND_CFLAGS += -DAPP_HAVE_GIO $(APP_GIO_CFLAGS)
 NATIVE_SYSTEM_LDLIBS += $(APP_GIO_LDLIBS)
@@ -595,8 +567,6 @@ ifneq ($(NATIVE_PLATFORM),darwin)
 KRYON_NATIVE_BACKEND_DEPS += $(AUDIO_OPUS_A)
 NATIVE_SYSTEM_LDLIBS := $(AUDIO_OPUS_A) $(NATIVE_SYSTEM_LDLIBS)
 endif
-KRYON_WINDOWS_SRCS += $(KRYON_RAYLIB_WRAPPERS_C)
-KRYON_CLICK_SRCS += $(KRYON_RAYLIB_WRAPPERS_C)
 WEB_CACHE_BUSTER ?= $(shell if git diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then git rev-parse --short HEAD 2>/dev/null; else date +%s; fi)
 WEB_CACHE_BUSTER := $(WEB_CACHE_BUSTER)
 WEB_TARGET := $(WEB_DIST_DIR)/index.html
@@ -613,7 +583,7 @@ WEB_HOST_JS += $(WEB_CANVAS_HOST_JS)
 WEB_CANVAS_DIR := $(BUILD_DIST_DIR)/web-canvas
 WEB_CANVAS_TARGET := $(WEB_CANVAS_DIR)/index.html
 WEB_CANVAS_APP_SCRIPT := <script>window.__inbeRenderer="canvas";window.__inbeLoadApp("index.js?v=$(WEB_CACHE_BUSTER)")</script>
-KRYON_CANVAS_SRCS := $(filter-out $(KRYON_DIR)/src/backend/dom_%.c,$(filter-out $(KRYON_RAYLIB_WRAPPERS_C),$(KRYON_SRCS)))
+KRYON_CANVAS_SRCS := $(filter-out $(KRYON_DIR)/src/backend/dom_%.c,$(KRYON_SRCS))
 WEB_DIST_ZIP := $(BUILD_DIST_DIR)/$(APP_NAME)-web.zip
 WEB_SMOKE_BROWSER ?= auto
 WEB_SMOKE_TEST := scripts/web-smoke-test.mjs
@@ -653,7 +623,7 @@ MEDITATION_AUDIO_TRACKS := \
 
 include mk/package-freebsd.mk
 
-.PHONY: web-canvas web-canvas-smoke-test web-compare-test web-side-by-side-test all native kryon-host install install-user uninstall stage package-freebsd deb package-deb deb-check rpm package-rpm rpm-check snap package-snap snap-cache-clean flatpak package-flatpak podman-check validate-desktop run run-fresh screenshot test ci dist appimage click click-verify vendor-prebuilds vendor-prebuilds-native vendor-prebuilds-web vendor-prebuilds-windows font-subsets font-bundle-check clean clean-linux clean-native clean-vendor-builds windows-setup windows-setup-check android-avd android-audio-e2e android-check-keystore android-copy-assets android-copy-debug-apks android-copy-release-apks android-copy-fdroid-apk android-copy-bundle android-smoke android-local-properties android-debug android-release android-bundle android-install android-install-release android-clean android-rebuild validate-meditation-audio package-unpackaged-assets windows-runtime-assets-check windows windows64 web web-tools-check web-smoke-test web-smoke-test-firefox web-smoke-test-librewolf site site-release-assets-check chrome-web-store chrome-web-store-test firefox-addons firefox-addons-lint firefox-addons-source-zip verify-firefox-addons sync-web-icons
+.PHONY: web-canvas web-canvas-smoke-test web-compare-test web-side-by-side-test all native install install-user uninstall stage package-freebsd deb package-deb deb-check rpm package-rpm rpm-check snap package-snap snap-cache-clean flatpak package-flatpak podman-check validate-desktop run run-fresh screenshot test ci dist appimage click click-verify vendor-prebuilds vendor-prebuilds-native vendor-prebuilds-web vendor-prebuilds-windows font-subsets font-bundle-check clean clean-linux clean-native clean-vendor-builds windows-setup windows-setup-check android-avd android-audio-e2e android-check-keystore android-copy-assets android-copy-debug-apks android-copy-release-apks android-copy-fdroid-apk android-copy-bundle android-smoke android-local-properties android-debug android-release android-bundle android-install android-install-release android-clean android-rebuild validate-meditation-audio package-unpackaged-assets windows-runtime-assets-check windows windows64 web web-tools-check web-smoke-test web-smoke-test-firefox web-smoke-test-librewolf site site-release-assets-check chrome-web-store chrome-web-store-test firefox-addons firefox-addons-lint firefox-addons-source-zip verify-firefox-addons sync-web-icons
 .PHONY: zi-check
 .PHONY: clean-text-api-check package-check secret-check secret-check-history hooks-install
 .NOTPARALLEL: all native test visual-test ci zi-check dist windows windows64 android-release android-bundle click deb package-deb rpm package-rpm snap package-snap flatpak package-flatpak
@@ -686,9 +656,15 @@ $(KRYON_LIBRARY_BUILD_DIR)/libkryon.a: $(KRYON_UI_ZI) $(KRYON_DIR)/src/ui/module
 		ZIRAN_DIR=$(abspath $(ZIRAN_DIR)) ZIRAN_BUILD_DIR=$(ZIRAN_BUILD_DIR) \
 		$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a
 
-native: $(TARGET)
+# Kryon's desktop decoder opens AVIF through libkryonavif.so beside the
+# program, from Kryon's pinned renderer-desktop artifact.
+NATIVE_AVIF_LIBRARY := $(NATIVE_BIN_DIR)/libkryonavif.so
+$(NATIVE_AVIF_LIBRARY): ziran.lock | $(ZIRAN_BIN)
+	mkdir -p $(dir $@)
+	@set -eu; descriptor=$$($(ZIRAN_BIN) pkg artifact kryon:renderer-desktop \
+		--platform linux-$(ARCH)-gnu); cp "$$(dirname "$$descriptor")/lib/libkryonavif.so" $@
 
-kryon-host: $(KRYON_HOST_TARGET)
+native: $(TARGET) $(NATIVE_AVIF_LIBRARY)
 
 # Generate Kryon's checked Ziran modules into Inbe's build tree.
 $(KRYON_UI_STAMP): Makefile $(ZI2C_BIN) $(KRYON_UI_ZI) $(KRYON_DIR)/src/ui/modules.txt
@@ -721,7 +697,7 @@ $(KRY_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makef
 		-o $(KRY_GEN_DIR) $(ZI_SRCS)
 	touch $@
 
-$(KRY_GEN_SRCS) $(KRY_GEN_HDRS) $(KRY_GEN_GAME_C): $(KRY_GEN_STAMP)
+$(KRY_GEN_SRCS) $(KRY_GEN_HDRS): $(KRY_GEN_STAMP)
 
 vendor-prebuilds: vendor-prebuilds-native vendor-prebuilds-web vendor-prebuilds-windows
 
@@ -729,7 +705,7 @@ vendor-prebuilds-native: $(KRYON_NATIVE_BACKEND_DEPS) $(SQLITE_AMALGAMATION_C) $
 
 vendor-prebuilds-web: web-tools-check $(SQLITE_AMALGAMATION_C) $(SQLITE_AMALGAMATION_H) $(WEB_LIBOQS_A)
 
-vendor-prebuilds-windows: $(WIN64_RAYLIB_A) $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(SQLITE_AMALGAMATION_C) $(SQLITE_AMALGAMATION_H)
+vendor-prebuilds-windows: $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(SQLITE_AMALGAMATION_C) $(SQLITE_AMALGAMATION_H)
 
 run: $(TARGET)
 	@root="$${XDG_DATA_HOME:-$$HOME/.local/share}/inbe-debug"; \
@@ -785,26 +761,6 @@ $(TARGET): | zi-check
 	mv -f $@.next $@
 	$(if $(filter linux,$(NATIVE_PLATFORM)),python3 scripts/check-package-size.py $@,)
 
-$(KRYON_HOST_TARGET): $(ZIRAN_BUILD_DIR)/libziran.a Makefile $(KRYON_HOST_SRC) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) | $(BUILD_DIR)
-	mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -fPIC -shared \
-		$(APP_INCLUDE) \
-		$(KRYON_INCLUDE) \
-		$(SQLITE_INCLUDE) \
-		$(LIBOQS_INCLUDE) \
-		$(RAY_CFLAGS) \
-		-DHAS_LIBOQS=1 \
-		-DSUPPORT_MODULE_RAUDIO=1 \
-		-DSUPPORT_FILEFORMAT_OGG=1 \
-		-DSUPPORT_FILEFORMAT_MP3=1 \
-		-o $@ \
-		$(KRYON_HOST_SRC) $(ZIRAN_BUILD_DIR)/libziran.a \
-		$(SQLITE_SRC) \
-		$(NATIVE_SYSTEM_LDLIBS) \
-		-Wl,-Bsymbolic \
-		-Wl,--allow-shlib-undefined \
-		$(LDFLAGS)
-
 clean:
 	rm -rf build
 
@@ -825,20 +781,8 @@ NEEDS_NATIVE_ENV := $(if $(MAKECMDGOALS),$(filter all native install install-use
 # Check the build environment on that second read, against real sources.
 ifeq ($(PACKAGES_READY),1)
 ifneq ($(strip $(NEEDS_NATIVE_ENV)),)
-ifeq ($(strip $(RAY_CFLAGS)),)
-$(error RAY_CFLAGS is not set. Install pkg-config metadata for $(RAY_PKGS), or set RAY_CFLAGS explicitly)
-endif
-ifeq ($(strip $(RAY_LDLIBS)),)
-$(error RAY_LDLIBS is not set. Install pkg-config metadata for $(RAY_PKGS), or set RAY_LDLIBS explicitly)
-endif
-ifeq ($(strip $(RAY_SDL_LDLIBS)),)
-$(error RAY_SDL_LDLIBS is not set. Install SDL2 development files or set RAY_SDL_LDLIBS explicitly)
-endif
-ifeq ($(strip $(RAY_SDL_INCLUDE_DIR)),)
-$(error RAY_SDL_INCLUDE_DIR is not set. Install SDL2 development files or set RAY_SDL_INCLUDE_DIR explicitly)
-endif
-ifeq ($(strip $(RAY_RAYLIB_CONFIG)),)
-$(error RAY_RAYLIB_CONFIG is not set. Set RAY_RAYLIB_CONFIG explicitly)
+ifeq ($(strip $(DESKTOP_HOST_LDLIBS)),)
+$(error DESKTOP_HOST_LDLIBS is not set. Install pkg-config metadata for $(DESKTOP_HOST_PKGS), or set DESKTOP_HOST_CFLAGS and DESKTOP_HOST_LDLIBS explicitly)
 endif
 ifeq ($(strip $(KRYON_CURL_LDLIBS)),)
 $(error libcurl metadata is missing. Install libcurl pkg-config metadata or set KRYON_CURL_CFLAGS/KRYON_CURL_LDLIBS explicitly)
@@ -864,7 +808,7 @@ $(APPIMAGE_TARGET) $(DEB_TARGET) $(RPM_TARGET) $(SNAP_TARGET) $(FLATPAK_TARGET) 
 android-release android-bundle android-copy-release-apks android-copy-fdroid-apk android-copy-bundle windows-setup site: version-check
 
 # Actual artifacts are gated too, including direct and incremental builds.
-$(TARGET) $(KRYON_HOST_TARGET) $(WIN64_TARGET) $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(SYNC_RETRY_SOURCE) | build-laws
+$(TARGET) $(WIN64_TARGET) $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(SYNC_RETRY_SOURCE) | build-laws
 
 BUNDLE_RUNTIME_INPUTS := $(wildcard $(ZIRAN_DIR)/cmd/zir/*.[ch]) $(ZIRAN_DIR)/Makefile scripts/build-bundle-runtime.py
 WEB_BUNDLE_RUNTIME := $(abspath $(BUILD_DIR)/bundle-runtime/web/libziran.a)
@@ -882,7 +826,7 @@ $(CLICK_BIN): $(CLICK_BUNDLE_RUNTIME)
 
 # Build fragments affect the artifacts even when Makefile itself is unchanged.
 BUILD_MAKEFILES := $(filter-out mk/tests-%.mk,$(MAKEFILE_LIST)) mk/native-objects.mk
-$(TARGET) $(KRYON_HOST_TARGET) $(KRY_GEN_STAMP) $(WINDOWS_GEN_STAMP) $(WEB_GEN_STAMP) $(WIN64_TARGET) $(WEB_JS_TARGET) $(WEB_TARGET) $(WEB_CANVAS_TARGET) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) $(APP_BUNDLES): $(BUILD_MAKEFILES)
+$(TARGET) $(KRY_GEN_STAMP) $(WINDOWS_GEN_STAMP) $(WEB_GEN_STAMP) $(WIN64_TARGET) $(WEB_JS_TARGET) $(WEB_TARGET) $(WEB_CANVAS_TARGET) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) $(APP_BUNDLES): $(BUILD_MAKEFILES)
 
 # UI prerequisites are expanded only after all artifact paths are defined.
 include mk/tests-lumi.mk

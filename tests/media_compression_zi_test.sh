@@ -18,8 +18,8 @@ unset DISPLAY WAYLAND_DISPLAY WAYLAND_SOCKET XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 export ZIRAN_DESKTOP_RECOVERY=0 HARMONY_DESKTOP_RECOVERY=0 YUE_DESKTOP_RECOVERY=0
 # Project mode resolves package imports through their exports (such as
 # kryon/text_area for the Lumi frame), as the app build does.
-"$ziran" build --project --offline --target=c --define PLATFORM_DESKTOP --define AVIF_RAYLIB \
-    --define MEDIA_COMPRESSION_REAL_CODEC --root "$root" \
+"$ziran" build --project --offline --target=c --define PLATFORM_DESKTOP --define DESKTOP_HOST \
+    --define KRYON_WEBP_LINKED --define NATIVE_WINDOW_HAVE_SDL --define MEDIA_COMPRESSION_REAL_CODEC --root "$root" \
     --module-path "$root/tests" \
     --entry media_compression_behavior:Check -o "$work/generated" \
     "$root/tests/media_compression_behavior.zi" "$root/tests/media_compression_test_host.zi" "$root/src/app/app_clock_host.zi"
@@ -39,8 +39,9 @@ sources=$(find "$work/generated" -type f -name '*.c')
     -I"$root/vendor-builds/sqlite" -I"$vendor/inbe-liboqs/include" \
     $sources "$root/tests/media_compression_faults.c" \
     "$root/vendor-builds/sqlite/sqlite3.c" "$root/build/packages/monocypher/src/monocypher.c" "$liboqs" \
-    "$vendor/raylib/libraylib.a" "$vendor/kryon-webp/libkryonwebp.a" \
-    "$avif_a" "$aom_a" \
-    $(pkg-config --libs sdl2) -Wl,--wrap=sqlite3_step -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
+    "$vendor/kryon-webp/libkryonwebp.a" "$avif_a" "$aom_a" \
+    "$vendor/audio-codecs/libziran_mp3.a" "$vendor/audio-codecs/libvorbisfile.a" "$vendor/audio-codecs/libvorbis.a" "$vendor/audio-codecs/libogg.a" \
+    $(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11) -l:libopus.so.0 \
+    -Wl,--wrap=sqlite3_step -Wl,--gc-sections -ldl -lpthread -lz -lm -o "$work/test"
 APP_DATA_ROOT="$work/data"; export APP_DATA_ROOT
 "$work/test"

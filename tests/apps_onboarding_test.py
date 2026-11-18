@@ -43,8 +43,8 @@ def wait_for(predicate, message, timeout=10):
 
 
 def key(window, name, changed):
-    """Press a key the app reads from raylib directly, not through the test
-    driver, until its effect shows; a dropped key is sent again."""
+    """Press a key the app reads from its window directly, not through the
+    test driver, until its effect shows; a dropped key is sent again."""
     for attempt in range(3):
         command("xdotool", "windowfocus", window)
         command("xdotool", "keydown", "--clearmodifiers", name)

@@ -36,8 +36,8 @@ def contains(outer, inner):
 
 
 with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, contextlib.ExitStack() as stack:
-    # Raylib uses ALSA directly rather than SDL's dummy audio driver. Keep
-    # the real preview player on a private null sink, away from desktop audio.
+    # Keep the real preview player on a private null ALSA sink, away from
+    # desktop audio.
     audio_config = Path(profile) / 'alsa.conf'
     audio_config.write_text('pcm.!default {\n    type null\n}\n')
     cache = Path(profile) / 'packages'

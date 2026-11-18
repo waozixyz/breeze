@@ -2,7 +2,9 @@
 
 // Embedded assets for the host's picture and font loaders. Kryon's desktop
 // raster reads an embedded asset's bytes from memory and any other path from
-// disk; raylib reads both through one load callback.
+// disk. On Android, Pixmap decodes a picture from the APK's assets or the
+// disk the first time it is drawn. The browser's canvas reads both through
+// one load callback.
 #if #defined(DESKTOP_HOST) {
     Assets :: #import "cairo_assets";
     #import "c_string"
@@ -26,23 +28,34 @@
         reader: Assets.RasterAssetRead = ReadEmbeddedAsset
         Assets.RasterUseAssets(reader)
     }
+} else #if #defined(ANDROID_BUILD) {
+    // Kryon's Android pictures read the APK's assets and the disk; a picture
+    // inside the app's bundles needs a Pixmap source hook Kryon does not
+    // export yet.
+    #import "pixmap_assets_android"
+
+    InstallAssetFiles :: () {}
+} else #if !#defined(PLATFORM_WEB) {
+    // A build that selects no host draws no pictures.
+    InstallAssetFiles :: () {}
 } else {
     asset_file_host :: #system_library "c";
-    asset_file_raylib :: #system_library "raylib";
 
+    // The canvas's file loader takes the callback and frees each result.
     AssetFileCallback :: #type (*u8, *s32) -> *u8 #c_call;
-    InstallAssetFileCallback :: (callback: AssetFileCallback) #foreign asset_file_raylib "SetLoadFileDataCallback";
-    AssetFileAllocate :: (size: u32) -> *u8 #foreign asset_file_raylib "MemAlloc";
-    AssetFileFree :: (bytes: *u8) #foreign asset_file_raylib "MemFree";
+    InstallAssetFileCallback :: (callback: AssetFileCallback) #foreign asset_file_host "SetLoadFileDataCallback";
+    AssetFileCalloc :: (count: usize, size: usize) -> *u8 #foreign asset_file_host "calloc";
+    AssetFileAllocate :: (size: u32) -> *u8 { return AssetFileCalloc(cast(usize)size, 1) }
+    AssetFileFree :: (bytes: *u8) #foreign asset_file_host "free";
     AssetFileCopy :: (output: *u8, source: *u8,
         count: usize) -> *u8 #foreign asset_file_host "memcpy";
     AssetFileOpen :: (path: *u8, mode: *u8) -> *void #foreign asset_file_host "fopen";
     AssetFileRead :: (output: *u8, size: usize, count: usize,
         file: *void) -> usize #foreign asset_file_host "fread";
     AssetFileClose :: (file: *void) -> s32 #foreign asset_file_host "fclose";
-    AssetFileLength :: (path: *u8) -> s32 #foreign asset_file_raylib "GetFileLength";
+    AssetFileLength :: (path: *u8) -> s32 #foreign asset_file_host "GetFileLength";
 
-    // raylib owns and frees the returned allocation. Embedded bytes remain
+    // The canvas owns and frees the returned allocation. Embedded bytes remain
     // immutable, so each successful read returns a separate owned copy.
     ReadAssetFile :: (path: *u8, size: *s32) -> *u8 {
         if size == null {

@@ -4,8 +4,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/sync-recovery-zi-test
-raylib="$root/vendor-builds/linux/x86_64/raylib/libraylib.a"
-native_libraries=$(pkg-config --libs sdl2 gl libwebp libwebpdemux opus)
+native_libraries=$(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11 libwebp libwebpdemux)
 
 # Serialize concurrent checks before replacing the stable generated output.
 exec 9>"$work.lock"
@@ -16,14 +15,15 @@ mkdir -p "$work/c"
 # Use the application's package graph so public UI imports retain their aliases.
 cd "$root"
 "$bin/ziran" build --target=c --project --offline --no-main \
+    --define PLATFORM_DESKTOP --define DESKTOP_HOST --define NATIVE_WINDOW_HAVE_SDL \
     --root "$root/tests" --module-path "$root/tests" \
     -o "$work/c" "$root/tests/sync_recovery_behavior.zi"
 # The app's SQLite amalgamation resolves the database calls that the kept
 # storage helpers reach; no database opens here, so they return early.
-# Keep the deterministic clock and silent logger at the foreign-symbol
-# boundary even when raylib's image routines are linked into the harness.
+# The harness's GetTime stands in for the host's monotonic clock, so the
+# retry deadlines follow the test's own time.
 "${CC:-cc}" -std=gnu11 -w -DZIRAN_BOUNDS_CHECK \
-    -DGetTime=__wrap_GetTime -DTraceLog=__wrap_TraceLog -ffunction-sections \
+    -DGetTime=__wrap_app_monotonic_seconds -ffunction-sections \
     -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -iquote "$work/c" \
     -I"$root/vendor-builds/sqlite" \
@@ -35,7 +35,12 @@ cd "$root"
         -e '/sync_collections.c$' -e '/sync_record_crypto.c$' -e '/sync_apply.c$' \
         -e '/sync_exchange.c$' -e '/storage_profile_stats.c$' \
         -e '/storage_export_csv.c$') \
-    "$raylib" $native_libraries -Wl,--wrap=GetTime -Wl,--wrap=TraceLog \
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libziran_mp3.a" \
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libvorbisfile.a" \
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libvorbis.a" \
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libogg.a" \
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libopus/libopus.a" \
+    $native_libraries -Wl,--wrap=app_monotonic_seconds \
     -ldl -lpthread -lz -lm -latomic -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS "$work/test"
 echo "sync recovery Ziran/native test passed"

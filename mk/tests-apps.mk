@@ -50,8 +50,10 @@ media-store-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A)
 	sh tests/media_store_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 .PHONY: media-compression-test
-media-compression-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A) $(RAYLIB_A) $(WEBP_A) $(AVIF_A) $(AOM_A)
-	AVIF_A="$(abspath $(AVIF_A))" AOM_A="$(abspath $(AOM_A))" sh tests/media_compression_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+media-compression-test: $(ZI2C_BIN) $(SQLITE_SRC) $(LIBOQS_A) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS) $(WEBP_A) $(AVIF_A) $(AOM_A) $(NATIVE_AVIF_LIBRARY)
+	AVIF_A="$(abspath $(AVIF_A))" AOM_A="$(abspath $(AOM_A))" \
+		KRYON_AVIF_LIBRARY="$(abspath $(NATIVE_AVIF_LIBRARY))" \
+		sh tests/media_compression_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 test: media-compression-test
 
@@ -109,9 +111,9 @@ package-receiver-test:
 radio-app-test: $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
 	sh tests/radio_app_test.sh $(ZIRAN_BIN) $(ZIRAN_DIR)/std $(KRYON_DIR)/src/ui
 
-radio-native-test: $(ZI2C_BIN) $(RAYLIB_A)
-	sh tests/radio_native_test.sh $(ZIRAN_BUILD_DIR)/bin $(ZIRAN_DIR)/std
-	@nm -g $(RAYLIB_A) | rg -q ' T drmp3dec_decode_frame$$'
+radio-native-test: $(ZI2C_BIN) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS) $(AUDIO_OPUS_A)
+	sh tests/radio_native_test.sh $(ZIRAN_BUILD_DIR)/bin $(abspath $(AUDIO_MP3_A))
+	@nm -g $(AUDIO_MP3_A) | rg -q ' T drmp3dec_decode_frame$$'
 
 radio-web-test:
 	$(JS_RUNTIME) tests/radio_web_test.mjs

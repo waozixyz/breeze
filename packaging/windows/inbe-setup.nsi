@@ -1,15 +1,16 @@
 ; inbe-setup.nsi — Inner Breeze Windows installer.
 ;
 ; Built by `make windows-setup` (see Makefile), which passes:
-;   -DVERSION=<x.y.z> -DWIN64_EXE=<path> -DOUT=<path>
-; Inner Breeze runs on 64-bit Windows only. /S silent installs work (winget
-; relies on them).
+;   -DVERSION=<x.y.z> -DPACKAGE_DIR=<path> -DOUT=<path>
+; PACKAGE_DIR holds bin/ (the program and the desktop libraries' DLLs), etc/
+; and share/. Inner Breeze runs on 64-bit Windows only. /S silent installs
+; work (winget relies on them).
 
 !ifndef VERSION
 !error "VERSION must be defined (-DVERSION=1.2.3)"
 !endif
-!ifndef WIN64_EXE
-!error "WIN64_EXE must be defined"
+!ifndef PACKAGE_DIR
+!error "PACKAGE_DIR must be defined"
 !endif
 !ifndef OUT
 !error "OUT must be defined"
@@ -43,12 +44,14 @@ FunctionEnd
 
 Section "Inner Breeze"
     SetOutPath "$INSTDIR"
-    File "${WIN64_EXE}"
-    ; Releases through 2.1.43 named the program inbe-windows-x86_64.exe.
+    File /r "${PACKAGE_DIR}\bin" "${PACKAGE_DIR}\etc" "${PACKAGE_DIR}\share"
+    ; Earlier releases kept the program beside uninstall.exe; through 2.1.43
+    ; it was named inbe-windows-x86_64.exe.
+    Delete "$INSTDIR\breeze-windows-x86_64.exe"
     Delete "$INSTDIR\inbe-windows-x86_64.exe"
 
     Var /GLOBAL ExeName
-    StrCpy $ExeName "breeze-windows-x86_64.exe"
+    StrCpy $ExeName "bin\breeze-windows-x86_64.exe"
 
     CreateDirectory "$SMPROGRAMS\Inner Breeze"
     CreateShortcut "$SMPROGRAMS\Inner Breeze\Inner Breeze.lnk" "$INSTDIR\$ExeName"
@@ -65,6 +68,9 @@ Section "Inner Breeze"
 SectionEnd
 
 Section "Uninstall"
+    RMDir /r "$INSTDIR\bin"
+    RMDir /r "$INSTDIR\etc"
+    RMDir /r "$INSTDIR\share"
     Delete "$INSTDIR\breeze-windows-x86_64.exe"
     ; Installs from before 64-bit only releases also carried this file.
     Delete "$INSTDIR\inbe-windows-i686.exe"

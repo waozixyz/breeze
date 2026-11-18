@@ -72,7 +72,6 @@ test: habit-days-memory-zi-test
 test: host-services-zi-test
 test: locale-zi-test
 test: text-buffers-zi-test
-test: raylib-text-input-zi-test
 test: android-text-input-zi-test
 test: android-text-selection-test
 test: accessibility-test
@@ -80,7 +79,7 @@ test: main-platform-zi-test
 test: web-window-zi-test
 test: android-jni-zi-test update-transport-zi-test
 test: update-policy-zi-test
-test: raylib-log-host-test
+test: app-log-test
 test: dpi-state-zi-test
 test: settings-ui-zi-test
 test: break-stats-zi-test
@@ -91,7 +90,6 @@ test: android-timer-zi-test
 test: android-import-zi-test
 test: android-lifecycle-zi-test
 test: android-http-transport-test
-test: raylib-graphics-test
 test: graphics-transition-test
 test: language-selection-zi-test
 test: audio-policy-test
@@ -151,7 +149,6 @@ test: package-receiver-test
 test: device-key-test
 test: lumi-telegram-input-test
 test: telegram-authorization-test
-test: android-geometry-probe-test
 test: lumi-feedback-delivery-test
 test: lumi-connection-test
 test: diary-spelling-test diary-history-test diary-markdown-test

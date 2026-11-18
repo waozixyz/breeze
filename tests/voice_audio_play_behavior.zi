@@ -1,0 +1,79 @@
+// Real Ogg Opus narration and Lumi guide lines play to their end through
+// Ziran's mixer and the audio package's Opus decoder, as voice_audio's
+// provider plays them: each clip renders its full encoded length with finite,
+// audible samples, and a pause holds its place until it resumes.
+//
+//     voice_audio_play_behavior CLIP.ogg...
+Mixer :: #import "std/audio";
+#import "audio/decode_opus"
+#import "std/file"
+#import "std/byte_text_linux"
+#import, file "../src/app/ogg_length.zi";
+
+// Ten milliseconds of mixed stereo at the mixer's rate.
+BLOCK_FRAMES :: 480
+
+// Renders blocks until VOICE stops playing; the frames it rendered while
+// playing, or -1 when a sample is not finite or out of range.
+PlayToEnd :: (voice: Mixer.AudioVoice, limit: s64, energy: *float64) -> s64 {
+    output: [BLOCK_FRAMES * 2]float32
+    frames: s64 = 0
+    while Mixer.AudioPlaying(voice) && frames < limit {
+        Mixer.AudioRender(output[:], BLOCK_FRAMES)
+        for sample: output {
+            if sample != sample || sample > 1.000001 || sample < -1.000001 {
+                return -1
+            }
+            energy.* += ifx sample < 0.0 then cast(float64)-sample else cast(float64)sample
+        }
+        frames += BLOCK_FRAMES
+    }
+    return frames
+}
+
+// The clip at PATH plays to its end with a pause in the middle; 0 when it
+// does, or the failed check.
+PlayClip :: (path: string) -> s32 {
+    bytes, ok := ReadEntireFile(path)
+    if !ok || bytes.count == 0 { return 2 }
+    expected := OggClipMilliseconds(bytes)
+    if expected < 200 { return 3 }
+    voice := Mixer.AudioLoad(bytes, true)
+    if voice.slot < 0 { return 4 }
+    defer { Mixer.AudioUnload(voice) }
+    if !Mixer.AudioPlay(voice) { return 5 }
+    limit := cast(s64)expected * cast(s64)Mixer.AUDIO_RATE / 1000 * 2
+    energy: float64 = 0.0
+    // A quarter of the clip, then a pause that renders nothing of it.
+    first := PlayToEnd(voice, cast(s64)expected * cast(s64)Mixer.AUDIO_RATE / 4000, *energy)
+    if first < 0 { return 6 }
+    Mixer.AudioPause(voice)
+    if Mixer.AudioState(voice) != .Paused { return 7 }
+    held := Mixer.AudioPosition(voice)
+    silence: [BLOCK_FRAMES * 2]float32
+    for round: 0..9 {
+        unused round
+        Mixer.AudioRender(silence[:], BLOCK_FRAMES)
+    }
+    if Mixer.AudioPosition(voice) != held { return 8 }
+    Mixer.AudioResume(voice)
+    rest := PlayToEnd(voice, limit, *energy)
+    if rest < 0 { return 9 }
+    if Mixer.AudioState(voice) != .Finished { return 10 }
+    played := (first + rest) * 1000 / cast(s64)Mixer.AUDIO_RATE
+    // The last block may run past the end; the decoder's pre-skip trims the
+    // start. Both stay within a few blocks of the encoded length.
+    if played < cast(s64)expected - 40 || played > cast(s64)expected + 40 { return 11 }
+    if energy / cast(float64)((first + rest) * 2) < 0.0005 { return 12 }
+    return 0
+}
+
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc < 2 { return 1 }
+    for index: cast(s32)1..argc - 1 {
+        failed := PlayClip(TextFromCString(argv[index]))
+        if failed != 0 { return failed * 100 + index }
+    }
+    return 0
+}

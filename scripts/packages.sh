@@ -94,7 +94,6 @@ packages = [
     ("kryon", "kryon"),
     ("css", "css"),
     ("oqs", "oqs"),
-    ("raylib", "raylib"),
     ("libwebp", "libwebp"),
     # Kryon's image decoders and their pinned native source packages.
     ("webp", "webp"),

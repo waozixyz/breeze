@@ -1,4 +1,4 @@
-#include "app/dpi_state.h"
+#include "dpi_state.h"
 
 #include <stdbool.h>
 #include <math.h>
@@ -6,14 +6,9 @@
 void SetDeviceDensity(float density);
 
 static int platform;
-static bool ready;
-static Vector2 window_scale = {1.0f, 1.0f};
 
 int32_t app_android_platform(void) { return platform == 1; }
 int32_t app_web_platform(void) { return platform == 2; }
-void RaylibSetZoom(float factor) { (void)factor; }
-bool IsWindowReady(void) { return ready; }
-Vector2 GetWindowScaleDPI(void) { return window_scale; }
 
 static bool
 near(float actual, float expected)
@@ -49,9 +44,9 @@ main(void)
        GetLayoutWidth() != 315 || GetLayoutHeight() != 560)
         return 4;
 
+    /* A desktop window takes its density from the device as well. */
     platform = 0;
-    ready = true;
-    window_scale = (Vector2){1.5f, 1.5f};
+    SetDeviceDensity(1.5f);
     UpdateDPI(900, 720);
     if(!near(GetDPIScale(), 1.5f) || GetLayoutWidth() != 600 ||
        GetLayoutHeight() != 480 || !near(GetRenderScale(), 1.5f))

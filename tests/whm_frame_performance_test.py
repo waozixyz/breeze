@@ -98,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-whm-frames-") as temporary, contex
             "_HARMONY_APP_ACTION", json.dumps({"control": "practice.pause", "request_id": "whm-pause"}))
     wait(state, lambda value: value.get("last_request_id") == "whm-pause" and value.get("paused"),
          "WHM pause")
-    # Held across frames: raylib misses a press and release in one frame.
+    # Held across frames, so the press and release land in different frames.
     command("xdotool", "keydown", "BackSpace")
     time.sleep(0.15)
     command("xdotool", "keyup", "BackSpace")

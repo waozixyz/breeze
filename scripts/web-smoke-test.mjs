@@ -510,7 +510,7 @@ async function waitForHealthyBidiPage(client, context) {
         const height = gl.drawingBufferHeight;
         return {
           ok: width > 0 && height > 0 && boot && !!(M && M.__inbeRuntimeReady) && asyncifyState === 0,
-          renderer: 'raylib',
+          renderer: 'canvas',
           width,
           height,
           asyncifyState,

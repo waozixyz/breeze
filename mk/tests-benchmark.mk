@@ -38,3 +38,33 @@ desktop-benchmark: $(DESKTOP_BENCHMARK)
 
 desktop-benchmark-build: $(DESKTOP_BENCHMARK)
 	$(DESKTOP_BENCHMARK) build $(CURDIR) $(BENCHMARK_OUT) $(BENCHMARK_RUNS)
+
+# The Linux desktop window as seen and pointed at (tests/desktop_window_test.zi):
+# the navigation rail drawn at the window's edge, the whole window painted at
+# its opening and maximized sizes, and a real pointer click landing on the
+# drawn rail button. Needs Xvfb, xdotool, xwd and ImageMagick's convert.
+#
+#   build-queue -- make desktop-window-test WINDOW_TEST_BINARY=path/to/breeze
+DESKTOP_WINDOW_TEST := $(DESKTOP_BENCHMARK_DIR)/desktop-window-test
+WINDOW_TEST_BINARY ?= $(TARGET)
+
+$(DESKTOP_WINDOW_TEST): tests/desktop_window_test.zi tests/desktop_benchmark_session.zi \
+	tests/desktop_benchmark_profile.zi $(KRYON_DIR)/src/backend/test_driver_client.zi \
+	$(ZIRAN_BIN) $(SQLITE_AMALGAMATION_C)
+	rm -rf $(DESKTOP_BENCHMARK_DIR)/window-c
+	mkdir -p $(DESKTOP_BENCHMARK_DIR)/window-c
+	$(ZIRAN_BIN) build --target=c --root tests --module-path $(KRYON_DIR)/src/backend \
+		--module-path $(ZIRAN_DIR)/std -o $(DESKTOP_BENCHMARK_DIR)/window-c tests/desktop_window_test.zi
+	$(CC) -O1 -w -c -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION \
+		$(SQLITE_AMALGAMATION_C) -o $(DESKTOP_BENCHMARK_DIR)/window-sqlite3.o
+	$(CC) -O2 -I$(ZIRAN_DIR)/include -I$(DESKTOP_BENCHMARK_DIR)/window-c \
+		$$(find $(DESKTOP_BENCHMARK_DIR)/window-c -name '*.c' | LC_ALL=C sort) \
+		$(DESKTOP_BENCHMARK_DIR)/window-sqlite3.o -lm -o $@
+
+.PHONY: desktop-window-test
+desktop-window-test: $(DESKTOP_WINDOW_TEST)
+	@test -x $(WINDOW_TEST_BINARY) || { echo "Build the app first: KRYON_TEST_DRIVER=1 make native" >&2; exit 1; }
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		-u SESSION_MANAGER -u GDK_DISPLAY YUE_DESKTOP_RECOVERY=0 \
+		$(DESKTOP_WINDOW_TEST) $(abspath $(WINDOW_TEST_BINARY)) $(CURDIR) \
+		$(abspath $(DESKTOP_BENCHMARK_DIR)/window-test)

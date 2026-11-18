@@ -19,7 +19,6 @@ if(NOT DEFINED KRYON_DIR)
     set(KRYON_DIR "${REPO_ROOT}/build/packages/kryon")
 endif()
 get_filename_component(KRYON_DIR "${KRYON_DIR}" ABSOLUTE BASE_DIR "${REPO_ROOT}")
-set(RAYLIB_DIR "${REPO_ROOT}/build/packages/raylib/src")
 set(WEBP_DIR "${REPO_ROOT}/build/packages/libwebp")
 set(AVIF_DIR "${REPO_ROOT}/build/packages/libavif")
 set(AOM_DIR "${REPO_ROOT}/build/packages/libaom")
@@ -36,8 +35,8 @@ set(SQLITE_AMALGAMATION_C "${SQLITE_BUILD_DIR}/sqlite3.c")
 set(SQLITE_AMALGAMATION_H "${SQLITE_BUILD_DIR}/sqlite3.h")
 include("${KRYON_DIR}/cmake/KryonAndroid.cmake")
 kryon_android_reproducible_paths("${REPO_ROOT}")
-# Size-optimize static dependencies in release builds. Kryon compiles the
-# host and raylib for speed, after this option, because they draw every frame.
+# Size-optimize static dependencies in release builds. Kryon compiles its
+# host for speed, after this option, because it draws every frame.
 add_compile_options("$<$<NOT:$<CONFIG:Debug>>:-Oz>")
 set(OQS_BUILD_ONLY_LIB ON CACHE BOOL "" FORCE)
 set(OQS_USE_OPENSSL OFF CACHE BOOL "" FORCE)
@@ -106,9 +105,8 @@ file(GLOB_RECURSE APP_LIBRARY_ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${REPO_ROOT}/build/packages/avif/src/*.zi"
     "${REPO_ROOT}/build/packages/audio/src/*.zi"
     "${ZIRAN_DIR}/std/*.zi" "${REPO_ROOT}/build/packages/mesh-client/*.zi")
-set(APP_ZIRAN_DEFINES --define ANDROID_BUILD --define KRYON_ANDROID_HOST
-    --define KRYON_RAYLIB_HOST --define AVIF_RAYLIB)
-set(APP_ZIRAN_CHECK_DEFINES "ANDROID_BUILD KRYON_ANDROID_HOST KRYON_RAYLIB_HOST AVIF_RAYLIB")
+set(APP_ZIRAN_DEFINES --define ANDROID_BUILD --define KRYON_ANDROID_HOST)
+set(APP_ZIRAN_CHECK_DEFINES "ANDROID_BUILD KRYON_ANDROID_HOST")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     list(APPEND APP_ZIRAN_DEFINES --define ANDROID_DEBUG)
     string(APPEND APP_ZIRAN_CHECK_DEFINES " ANDROID_DEBUG")
@@ -280,43 +278,16 @@ add_custom_command(
 )
 
 kryon_android_codecs("${WEBP_DIR}" "${AVIF_DIR}" "${AOM_DIR}")
-# Breeze owns its raylib renderer and audio selection. Kryon's Android helper
-# supplies platform glue and codecs to every host, including software hosts.
-add_library(breeze_raylib STATIC
-    "${RAYLIB_DIR}/rcore.c"
-    "${RAYLIB_DIR}/rshapes.c"
-    "${RAYLIB_DIR}/rtextures.c"
-    "${RAYLIB_DIR}/rtext.c"
-    "${RAYLIB_DIR}/raudio.c")
-target_compile_definitions(breeze_raylib PRIVATE
-    PLATFORM_ANDROID
-    GRAPHICS_API_OPENGL_ES2
-    RL_DEFAULT_BATCH_BUFFER_ELEMENTS=8192
-    RL_DEFAULT_BATCH_BUFFERS=2
-    SUPPORT_SCREEN_CAPTURE=0
-    SUPPORT_CUSTOM_FRAME_CONTROL=1
-    SUPPORT_COMPRESSION_API=0
-    SUPPORT_AUTOMATION_EVENTS=0
-    SUPPORT_CLIPBOARD_IMAGE=0
-    SUPPORT_FILEFORMAT_BMP=0
-    SUPPORT_FILEFORMAT_GIF=0
-    SUPPORT_FILEFORMAT_QOI=0
-    SUPPORT_FILEFORMAT_DDS=0
-    SUPPORT_FILEFORMAT_TTF=1
-    SUPPORT_FILEFORMAT_JPG=1
-    SUPPORT_FILEFORMAT_PNG=1
-    SUPPORT_FILEFORMAT_OGG=1
-    SUPPORT_MODULE_RAUDIO=1
-    __wrap_fopen=KryonRaylibFopen)
-target_compile_options(breeze_raylib PRIVATE -O2 -ffunction-sections -fdata-sections
-    -fno-omit-frame-pointer $<$<NOT:$<CONFIG:Debug>>:-g1>)
-target_include_directories(breeze_raylib PUBLIC
-    "${RAYLIB_DIR}" "${KRYON_ANDROID_NATIVE_APP_GLUE_DIR}")
+# Kryon's Android host draws with Pixmap on the activity's surface; its helper
+# supplies the platform glue and picture codecs. Ziran's mixer decodes Ogg
+# Opus with the audio package's libopus, MP3 with dr_mp3 and Ogg Vorbis with
+# libvorbisfile, and plays through AAudio or OpenSL ES, opened at run time.
 include("${AUDIO_DIR}/native/AudioCodecs.cmake")
 ziran_audio_codecs("${OPUS_DIR}" "${SAMPLERATE_DIR}")
 target_compile_options(opus PRIVATE -O2)
-target_link_libraries(breeze_raylib PUBLIC
-    kryon_android_codecs opus EGL GLESv2 OpenSLES)
+include("${ZIRAN_DIR}/std/native/AudioCodecs.cmake")
+ziran_audio_mp3()
+ziran_audio_vorbis()
 
 add_library(main SHARED
     "${MONOCYPHER_DIR}/monocypher.c"
@@ -358,8 +329,6 @@ target_compile_definitions(main PRIVATE
     MG_ENABLE_EPOLL=0
     MG_ENABLE_POLL=1
     MG_ENABLE_POSIX_FS=0
-    SUPPORT_MODULE_RAUDIO=1
-    SUPPORT_FILEFORMAT_OGG=1
     UI_EMBEDDED_ONLY=1
     HAS_LIBOQS=1
     KRYON_WITH_SYNC=1
@@ -374,22 +343,15 @@ foreach(source ${APP_ZIRAN_GENERATED_SOURCES})
         set_source_files_properties("${source}"
             PROPERTIES COMPILE_OPTIONS "-fvisibility=default")
     elseif(source_name STREQUAL "main.c")
-        # Raylib invokes this shared-library entry itself; its Zi argv is
+        # Kryon's NativeActivity host calls this entry itself; its Zi argv is
         # byte pointers, so hosted C's spelling rule for main does not apply.
         set_source_files_properties("${source}"
             PROPERTIES COMPILE_OPTIONS "-ffreestanding")
     endif()
 endforeach()
 
-target_link_libraries(main PRIVATE breeze_raylib oqs z "${APP_BUNDLE_RUNTIME}")
-target_link_options(main PRIVATE
-    -Wl,--wrap=BeginDrawing -Wl,--wrap=EndDrawing
-    -Wl,--wrap=ClearBackground
-    -Wl,--wrap=BeginMode2D -Wl,--wrap=EndMode2D
-    -Wl,--wrap=BeginScissorMode -Wl,--wrap=EndScissorMode
-    -Wl,--wrap=eglGetCurrentContext
-    -Wl,--wrap=SetTargetFPS -Wl,--wrap=GetFrameTime
-    -Wl,--wrap=CloseWindow)
+target_link_libraries(main PRIVATE kryon_android_codecs opus ziran_mp3 vorbisfile
+    jnigraphics oqs z "${APP_BUNDLE_RUNTIME}")
 
 # Keep the Android entry points public and let the linker discard unreachable
 # functions from the statically linked runtime and graphics dependencies.

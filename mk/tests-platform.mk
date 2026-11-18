@@ -112,14 +112,9 @@ text-buffers-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		sh tests/text_buffers_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
-.PHONY: raylib-text-input-zi-test
-raylib-text-input-zi-test: $(ZI2C_BIN)
-	@sh tests/raylib_text_input_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
-
 .PHONY: main-platform-zi-test
-main-platform-zi-test: $(ZI2C_BIN) $(RAYLIB_A)
-	@RAY_LDLIBS='$(RAY_LDLIBS)' sh tests/main_platform_zi_test.sh \
-		$(abspath $(dir $(ZI2C_BIN))) $(abspath $(RAYLIB_A))
+main-platform-zi-test: $(ZI2C_BIN)
+	@sh tests/main_platform_zi_test.sh $(abspath $(dir $(ZI2C_BIN)))
 
 .PHONY: update-transport-zi-test
 
@@ -138,40 +133,34 @@ update-policy-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		sh tests/update_policy_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
-.PHONY: raylib-log-host-test
-raylib-log-host-test: $(ZI2C_BIN) $(RAYLIB_A)
-	@mkdir -p $(BUILD_DIR)/raylib-log-host-test/c
-	@$(ZI2C_BIN) --define PLATFORM_DESKTOP \
-		--entry raylib_log_behavior:main --root tests \
-		--module-path src --module-path $(KRYON_DIR)/src/backend --module-path $(ZIRAN_DIR)/std \
-		-o $(BUILD_DIR)/raylib-log-host-test/c tests/raylib_log_behavior.zi
+.PHONY: app-log-test
+app-log-test: $(ZI2C_BIN)
+	@mkdir -p $(BUILD_DIR)/app-log-test/c
+	@$(ZI2C_BIN) --define PLATFORM_DESKTOP --define DESKTOP_HOST \
+		--entry app_log_behavior:main --root tests \
+		--module-path src --module-path $(ZIRAN_DIR)/std \
+		-o $(BUILD_DIR)/app-log-test/c tests/app_log_behavior.zi
 	@$(CC) -std=c11 -O2 -I$(ZIRAN_DIR)/include \
-		-iquote $(BUILD_DIR)/raylib-log-host-test/c \
-		$(BUILD_DIR)/raylib-log-host-test/c/*.c $(RAYLIB_A) \
-		$(RAY_LDLIBS) -lm -ldl -pthread \
-		-o $(BUILD_DIR)/raylib-log-host-test/test
+		-iquote $(BUILD_DIR)/app-log-test/c \
+		$(BUILD_DIR)/app-log-test/c/*.c -lm \
+		-o $(BUILD_DIR)/app-log-test/test
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
-		$(BUILD_DIR)/raylib-log-host-test/test \
-		> $(BUILD_DIR)/raylib-log-host-test/output 2>&1
-	@grep -qF 'width=320 height=560 embedded=1' \
-		$(BUILD_DIR)/raylib-log-host-test/output
-	@grep -qF 'scale=1.50 layout=320x560' \
-		$(BUILD_DIR)/raylib-log-host-test/output
-	@grep -qF 'track=2 practice=3' \
-		$(BUILD_DIR)/raylib-log-host-test/output
+		$(BUILD_DIR)/app-log-test/test \
+		> $(BUILD_DIR)/app-log-test/output 2>&1
+	@grep -qxF 'WARNING: trace text' $(BUILD_DIR)/app-log-test/output
+	@grep -qxF 'WARNING: width=320 height=560 embedded=1' \
+		$(BUILD_DIR)/app-log-test/output
+	@grep -qxF 'WARNING: scale=1.50 layout=320x560' \
+		$(BUILD_DIR)/app-log-test/output
+	@grep -qxF 'WARNING: viewport=320x560 layout=300x540 content_x=10 content=280x540 render_scale=1.50' \
+		$(BUILD_DIR)/app-log-test/output
+	@grep -qxF 'WARNING: result=7' $(BUILD_DIR)/app-log-test/output
+	@grep -qxF 'WARNING: track=2 practice=3' \
+		$(BUILD_DIR)/app-log-test/output
 
 .PHONY: dpi-state-zi-test
 dpi-state-zi-test: $(ZI2C_BIN)
 	@sh tests/dpi_state_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
-
-.PHONY: raylib-graphics-test
-# Kryon's script builds as the Kryon project, which Ziran finds from the
-# working directory, and links the image codecs Breeze builds.
-raylib-graphics-test: $(ZI2C_BIN) $(AVIF_A) $(AOM_A)
-	@cd "$(KRYON_DIR)" && env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-		ZIRAN_ROOT="$(abspath $(ZIRAN_DIR))" ZIRAN_BIN="$(ZIRAN_BUILD_DIR)/bin/ziran" \
-		AVIF_A="$(abspath $(AVIF_A))" AOM_A="$(abspath $(AOM_A))" \
-		sh tests/ziran_raylib_graphics_test.sh
 
 .PHONY: graphics-transition-test
 graphics-transition-test: $(ZI2C_BIN)
@@ -198,8 +187,8 @@ assets-zi-test: $(ZI2C_BIN)
 		sh tests/assets_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: asset-files-zi-test
-asset-files-zi-test: $(ZI2C_BIN) $(RAYLIB_A)
-	@sh tests/asset_files_zi_test.sh $(ZIRAN_BUILD_DIR)/bin $(RAYLIB_A)
+asset-files-zi-test: $(ZI2C_BIN)
+	@sh tests/asset_files_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: app-clock-test
 app-clock-test: $(ZI2C_BIN)

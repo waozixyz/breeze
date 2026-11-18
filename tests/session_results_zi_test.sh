@@ -49,7 +49,8 @@ app_play_bell_cue :: (app: *InnerBreeze, volume: float32) #foreign c3;
 '''
 (work / 'meditation_session_behavior.zi').write_text(header + body)
 PY
-"$ziran" build --project --locked --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
+"$ziran" build --project --locked --target=c --define PLATFORM_DESKTOP --define DESKTOP_HOST \
+    --define NATIVE_WINDOW_HAVE_SDL --root "$root/tests" \
     --module-path "$work" \
     --entry session_results_behavior:Check \
     -o "$work/generated" "$root/tests/session_results_behavior.zi" \
@@ -72,13 +73,18 @@ C
     -I"$include" -iquote"$work/generated" -I"$root/vendor-builds/sqlite" \
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
     -I"$root/build/packages/monocypher/src" -I"$root/build/packages/monocypher/src/optional" \
-    "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
+    $(find "$work/generated" -type d -printf ' -iquote %p') \
+    $(find "$work/generated" -type f -name '*.c') "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \
     "$root/build/packages/monocypher/src/monocypher.c" \
     "$root/build/packages/monocypher/src/optional/monocypher-ed25519.c" \
     "$runtime_library" \
-    "$root/vendor-builds/linux/x86_64/raylib/libraylib.a" \
-    -Wl,--wrap=meditation_music_stop -Wl,--gc-sections -l:libcurl.so.4 \
-    $(pkg-config --libs sdl2 gl libwebp libwebpdemux) -ldl -lpthread -lz -lm -latomic -o "$work/test"
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libziran_mp3.a" \
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libvorbisfile.a" \
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libvorbis.a" \
+    "$root/vendor-builds/linux/x86_64/audio-codecs/libogg.a" \
+    -Wl,--wrap=meditation_music_stop -Wl,--gc-sections -l:libcurl.so.4 -l:libopus.so.0 \
+    $(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11 libwebp libwebpdemux) \
+    -ldl -lpthread -lz -lm -latomic -o "$work/test"
 # Storage must never open the real data directory.
 APP_DATA_ROOT="$work/data"
 export APP_DATA_ROOT

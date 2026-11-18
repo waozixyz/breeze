@@ -1,49 +1,46 @@
-// Seconds on the host's frame clock: raylib's, counted from when its window
-// opened, or on Kryon's desktop host the monotonic clock. Callers compare
-// and subtract these values; neither clock is wall time.
-#if #defined(DESKTOP_HOST) {
+// Seconds on the host's frame clock: the monotonic clock natively, or in a
+// browser the canvas's clock from when its page opened. Callers compare and
+// subtract these values; neither clock is wall time.
+#if #defined(PLATFORM_WEB) {
+    CanvasWindow :: #import "canvas_window";
+} else {
     host_clock_c :: #system_library "c";
     HostMonotonicSeconds :: () -> float64 #foreign host_clock_c "app_monotonic_seconds";
     host_frame_started: float64;
     host_frame_seconds: float32;
     HostSleepMicroseconds :: (microseconds: u32) -> s32 #foreign host_clock_c "usleep";
-} else {
-    host_clock_raylib :: #system_library "raylib";
-    HostRaylibSeconds :: () -> float64 #foreign host_clock_raylib "GetTime";
-    HostRaylibFrameSeconds :: () -> float32 #foreign host_clock_raylib "GetFrameTime";
-    HostRaylibWait :: (seconds: float64) #foreign host_clock_raylib "WaitTime";
 }
 
 HostSeconds :: () -> float64 {
-    #if #defined(DESKTOP_HOST) {
-        return HostMonotonicSeconds()
+    #if #defined(PLATFORM_WEB) {
+        return CanvasWindow.GetTime()
     } else {
-        return HostRaylibSeconds()
+        return HostMonotonicSeconds()
     }
 }
 
 // Waits SECONDS without drawing.
 HostWait :: (seconds: float64) {
-    #if #defined(DESKTOP_HOST) {
+    #if #defined(PLATFORM_WEB) {
+        CanvasWindow.WaitTime(seconds)
+    } else {
         if seconds > 0.0 {
             unused HostSleepMicroseconds(cast(u32)(seconds * 1000000.0))
         }
-    } else {
-        HostRaylibWait(seconds)
     }
 }
 
 // How long the last frame took, from its start to this one's, in seconds.
 HostFrameSeconds :: () -> float32 {
-    #if #defined(DESKTOP_HOST) {
-        return host_frame_seconds
+    #if #defined(PLATFORM_WEB) {
+        return CanvasWindow.GetFrameTime()
     } else {
-        return HostRaylibFrameSeconds()
+        return host_frame_seconds
     }
 }
 
-#if #defined(DESKTOP_HOST) {
-    // The desktop frame loop calls this as each frame begins.
+#if !#defined(PLATFORM_WEB) {
+    // The frame loop calls this as each frame begins.
     HostFrameStarted :: () {
         now := HostMonotonicSeconds()
         if host_frame_started > 0.0 {

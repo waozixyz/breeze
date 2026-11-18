@@ -1,28 +1,35 @@
-// The app's frames on the host the build targets. A raylib host runs the
-// app's frame procedure in its own frame loop. On Kryon's desktop host a
+// The app's frames on the host the build targets. On Kryon's desktop host a
 // frame polls the window's events, draws, presents and then waits as the
-// host's frame clock paces it: 60 frames a second while pixels change and
-// 15 once they stay the same.
+// host's frame clock paces it: 60 frames a second while pixels change and 15
+// once they stay the same. On Android the app owns the NativeActivity loop:
+// a frame drains the activity's events, draws into Pixmap on the borrowed
+// surface and presents its damage, then waits for the next event or the
+// frame target. The browser calls the frame procedure itself, and a build
+// that selects no host runs it directly.
 #import, file "host_clock.zi";
 #import, file "host_window.zi";
+#import, file "host_input.zi";
 
 #if #defined(DESKTOP_HOST) {
     Desktop :: #import "desktop_runtime";
-} else {
-    #if #defined(PLATFORM_WEB) {
-        Canvas :: #import "kryon/canvas_host";
-    } else {
-        RaylibRuntime :: #import "kryon/raylib_runtime";
-    }
+    Raster :: #import "Cairo";
+} else #if #defined(ANDROID_BUILD) {
+    Runtime :: #import "android_runtime";
+    Pictures :: #import "pixmap_assets_android";
+    host_frame_target_fps: s32 = 60;
+    host_frame_keep_running: bool;
+} else #if #defined(PLATFORM_WEB) {
+    Canvas :: #import "kryon/canvas_host";
+    CanvasWindow :: #import "canvas_window";
 }
 
-// Runs one frame of PROCEDURE. False when the frame could not run. On the
-// desktop host a window the window system ended runs no frame, and
-// HostWindowClosing then reports it.
-#if #defined(DESKTOP_HOST) {
-    HostFrameProcedure :: #type (argument: *void) #c_call;
+HostFrameProcedure :: #type (argument: *void) #c_call;
 
-    HostRunFrame :: (procedure: HostFrameProcedure, argument: *void) -> bool {
+// Runs one frame of PROCEDURE. False when the frame could not run. A window
+// the window system ended runs no frame, and HostWindowClosing then reports
+// it.
+HostRunFrame :: (procedure: HostFrameProcedure, argument: *void) -> bool {
+    #if #defined(DESKTOP_HOST) {
         if !Desktop.PollDesktop() {
             HostMarkWindowEnded()
             return true
@@ -36,42 +43,80 @@
         }
         Desktop.PauseDesktop()
         return presented
-    }
-} else {
-    #if #defined(PLATFORM_WEB) {
-        HostFrameProcedure :: #type (argument: *void) #c_call;
-
-        HostRunFrame :: (procedure: HostFrameProcedure, argument: *void) -> bool {
-            procedure(argument)
+    } else #if #defined(ANDROID_BUILD) {
+        if !Runtime.PollAndroidHost(HostAndroidWaitMilliseconds()) {
+            HostMarkWindowEnded()
             return true
         }
-    } else {
-        HostRunFrame :: (procedure: RaylibRuntime.RaylibFrameProcedure, argument: *void) -> bool {
-            return RaylibRuntime.RunRaylibAppFrame(procedure, argument)
+        HostFrameStarted()
+        Runtime.BeginAndroidFrame()
+        procedure(argument)
+        presented := Runtime.EndAndroidFrame()
+        HostInputFrameEnd()
+        if presented {
+            HostMarkWindowPresented()
         }
+        return presented
+    } else {
+        procedure(argument)
+        return true
     }
 }
 
-// Pictures whose files changed load again. The desktop raster has no call to
-// drop its cached pictures yet, so there they stay until the app restarts.
-HostInvalidatePictures :: () {
-    #if #defined(PLATFORM_WEB) {
-        Canvas.InvalidateCanvasAssets()
+// The frames a second the app wants: 60 while something moves, fewer once
+// its pixels stay the same. Kryon's desktop host paces its own frames.
+HostSetFrameTarget :: (fps: s32) {
+    #if #defined(ANDROID_BUILD) {
+        host_frame_target_fps = ifx fps > 0 then fps else 60
+    } else #if #defined(PLATFORM_WEB) {
+        CanvasWindow.SetTargetFPS(fps)
     } else {
-        #if !#defined(DESKTOP_HOST) {
-            RaylibRuntime.InvalidateRaylibAssets()
+        unused fps
+    }
+}
+
+#if #defined(ANDROID_BUILD) {
+    // A practice in the floating window keeps its frames going while the
+    // activity is paused, as the frame target says; otherwise a paused or
+    // windowless activity waits for its next event.
+    HostKeepRunning :: (running: bool) {
+        host_frame_keep_running = running
+    }
+
+    // How long the next poll may wait for an event: the rest of this frame's
+    // share of the frame target, or until an event when nothing draws.
+    HostAndroidWaitMilliseconds :: () -> s32 {
+        if (Runtime.AndroidHostPaused() || HostWindowHidden()) && !host_frame_keep_running {
+            return -1
         }
+        budget := 1.0 / cast(float64)host_frame_target_fps
+        elapsed := HostSeconds() - host_frame_started
+        if host_frame_started <= 0.0 || elapsed >= budget {
+            return 0
+        }
+        return cast(s32)((budget - elapsed) * 1000.0)
+    }
+}
+
+// Pictures whose files changed load again.
+HostInvalidatePictures :: () {
+    #if #defined(DESKTOP_HOST) {
+        unused Raster.RasterInvalidateImages()
+    } else #if #defined(ANDROID_BUILD) {
+        unused Pictures.RasterInvalidateImages()
+    } else #if #defined(PLATFORM_WEB) {
+        Canvas.InvalidateCanvasAssets()
     }
 }
 
 HostInvalidatePicturesUnder :: (folder: string) {
-    #if #defined(PLATFORM_WEB) {
+    #if #defined(DESKTOP_HOST) {
+        unused Raster.RasterInvalidateImagesIn(folder)
+    } else #if #defined(ANDROID_BUILD) {
+        unused Pictures.RasterInvalidateImagesIn(folder)
+    } else #if #defined(PLATFORM_WEB) {
         Canvas.InvalidateCanvasAssetsUnder(folder)
     } else {
-        #if #defined(DESKTOP_HOST) {
-            unused folder
-        } else {
-            RaylibRuntime.InvalidateRaylibAssetsUnder(folder)
-        }
+        unused folder
     }
 }

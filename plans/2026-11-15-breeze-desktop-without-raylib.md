@@ -176,138 +176,74 @@ Reading the numbers:
 - Frame interval p95 of 67 ms and fewer frames are the desktop frame clock
   pacing unchanged frames at 15 fps, not dropped frames; the 120-frame fps
   matches raylib.
-- The longest desktop frames: one 100 ms wait per run while SDL tries the
-  missing audio device (the benchmark has none; Breeze retries at most every
-  10 s on the desktop host) and one 115 ms frame where a screen first lays
-  out. Before the 10 s back-off every cue retried and stalled 100–200 ms.
+- The longest desktop frames above are SDL's audio-device open waiting
+  about 100 ms for a device that is not there (the benchmark has none):
+  100–200 ms of wall time with 3–5 ms of CPU, right after "Audio device
+  failed to initialize". Breeze tries the device again whenever a sound is
+  wanted (`src/app/audio.zi` `app_audio_ensure_ready` → `audio_runtime`
+  `audio_init` → Kryon `audio_sink_sdl` `AudioSinkOpen`); raylib's audio
+  fails at once. The desktop branch tries again at most every 10 s, so one
+  wait remains per run; Ziran's std audio (`std/audio_device.zi`, Ziran
+  dd0aff64) opens the device on its own thread and removes it once Breeze
+  moves to it.
 
-## Port map: raylib call sites and their replacements
+With a working audio device (SDL's dummy driver for the desktop host, which
+then opens it once at startup; raylib's audio is unchanged), 2026-11-16
+21:55–22:07, load average 11–20, same builds, alternating 5 + 5:
 
-Kryon pieces (claude-kryon-desktop-host-for-breeze builds them as small new
-modules and sends their names and calls as it pushes):
+| Measurement | raylib host, median (range) | desktop host, median (range) | Change |
+|---|---|---|---|
+| Time to first frame (ms) | 470.4 (391.3–563.5) | 667.2 (433–804.7) | +42% |
+| Frame rate while interacting, 120-frame reports (fps) | 60.47 (60.47–60.48) | 60.41 (59.63–60.45) | 0% |
+| App frame time, 120-frame report median (ms) | 0.79 (0.77–0.87) | 1.98 (1.72–2.22) | +151% |
+| Longest app frame while interacting (ms) | 40.59 (38.05–102.2) | 46.33 (42.61–182.2) | +14% |
+| Frame interval p50 (ms) | 16.67 (16.67–16.68) | 16.82 (16.79–16.83) | +1% |
+| Frame interval p95 (ms) | 33.34 (33.34–33.34) | 67.06 (67.02–67.12) | +101% |
+| CPU per frame p50 (ms) | 27.24 (26.45–27.49) | 2.43 (2.06–2.68) | −91% |
+| CPU per frame p95 (ms) | 34.01 (32.94–34.02) | 4.74 (3.59–5.02) | −86% |
+| Frames during interaction | 1337 (1335–1339) | 1192 (1190–1196) | −11% |
+| Idle CPU over 30 s (%) | 63.55 (61.79–63.79) | 2.23 (1.93–2.53) | −96% |
+| Steady RSS, idle median (MiB) | 521.8 (509.6–534.5) | 379.1 (329–444.2) | −27% |
+| Peak RSS (MiB) | 521.8 (509.7–534.5) | 379.1 (368–444.2) | −27% |
 
-- K1 desktop window and input: events routed by window, a sideways wheel,
-  key-down and repeat state, minimize/restore/raise/always-on-top, monitor
-  size and DPI scale.
-- K2 desktop secondary windows: the `raylib_secondary_window` calls, each
-  window with its own Cairo surface, presenter, session input, click, drag,
-  right-click and keyboard grab.
-- K3 SDL2 audio: sounds, streamed music, pushed PCM streams, volume, pitch,
-  a mix tap, and Vorbis/Opus/WAV decoding. MP3 waits on an owner decision.
-- K4 Cairo raster hooks: an asset reader for embedded assets, font
-  registration from memory, and a render scale for zoom.
+What the longest frames then are, from a stack sampler on an unstripped
+build (every one also exists on the raylib host): the first WebP picture
+decoded on the frame thread (Kryon `cairo_raster` LoadPNG →
+`image_decode_linux` OpenWebP, 41 ms), the first opening of an app bundle
+(Ziran `ExecBundleOpen` hashing and linking, 40 ms), an icon first drawn
+at a new size (`svg_shape` ShapeCoverEdges, 30 ms) and, at startup, the font
+map (`pango_fc_font_map_get_config`, 33 ms). Kryon phase 5 takes the
+picture, icon and font work off the first frames; the bundle hashing is
+Ziran's.
 
-Already in Kryon's desktop host (`desktop_runtime`, `desktop_loop`):
-`OpenDesktopSized`, `CloseDesktop`, `PollDesktop`, `BeginDesktopFrame`,
-`EndDesktopFrame`, `PauseDesktop`, `DesktopViewport`, `PollPointer`,
-`PollSecondaryPointer`, `DesktopWheelMove`, `DesktopInputTake`, typed
-codepoints, `DesktopCursor`, `EndFrameRetained` with `DesktopFrameReusable`
-and `DesktopFrameUnchanged`, `frame_snapshot`, `DesktopSetTitle`,
-`DesktopSetIcon`, `DesktopWindow`, `WindowVisibleHost`, `WindowFocusedHost`,
-`WindowSetVisibleHost`, `SystemClipboard*Host`, `CaptureRequested`,
-`CaptureConfigured`. Time comes from `std/timer_linux`.
+## Open work
 
-The Linux desktop build selects its host modules at compile time; Windows,
-Android and web keep today's raylib or canvas modules under the same names.
+Owner, 2026-11-17: "are yo udonig this please finsh removing rayilb". Breeze
+builds with no raylib on every host, on Ziran 7fbc8152, Kryon b5a61b37 and
+plot, entity, apps, css and game2d pinned to that Kryon. Linux and Windows
+run on Kryon's SDL2 and Cairo desktop host, Android on its own-loop
+`android_runtime` with Pixmap, and the browser on Kryon's canvas. Audio is
+Ziran's std audio natively, with Kryon's Web Audio in the browser.
 
-| Breeze file | raylib use today | Linux desktop replacement |
-|---|---|---|
-| `src/platform/app_host.zi` | `RunRaylibAppFrame`; `SetConfigFlags`, `SetExitKey`; `GetRenderWidth/Height`; `GetMousePosition`, `IsMouseButton*` (left, right); `GetMouseWheelMoveV`; `IsKeyPressed` (Esc, Tab, Enter, Space, arrows, Back, zoom keys); `RaylibModifiers`; `SetMouseCursor`; `SetTargetFPS`; `GetTime`; `Begin/EndRetainedFrame*`; `PumpSecondaryWindows`; `LoadImageFromScreen`, `UnloadImage`; `SetTraceLogLevel`, `RaylibTraceToConsole`; `kryon/Raylib` | A Breeze desktop loop: `PollDesktop`, `BeginDesktopFrame`, `DesktopViewport`, `PollPointer`, `PollSecondaryPointer`, `DesktopWheelMove` plus K1 sideways wheel, `DesktopInputTake` keys and modifiers plus K1 key state, `DesktopCursor`, `PauseDesktop` pacing, `EndFrameRetained`, K2 pump, `CaptureConfigured` for screenshots, `trace_log` |
-| `src/platform/raylib_host.zi` | `InitWindow`, `CloseWindow`, `ExportImage`, `RaylibUseIconTextures` | `OpenDesktopSized`, `CloseDesktop`; Cairo draws icons itself; PNG through Kryon `png`. The raylib module stays for Windows and Android |
-| `src/platform/main_platform.zi` | `TraceLog`, `IsWindowReady`, `GetWindowHandle`, `ChangeDirectory`, `GetTime`, `RaylibTraceToFile`, `RaylibTraceRecentErrors`, `RaylibTraceClose` | `trace_log` with an `inbe.log` sink and recent-error buffer; `OpenDesktopSized` result; `DesktopWindow`; `DesktopStartBeside` or libc `chdir`; timer |
-| `src/platform/raylib_text_input.zi` | `GetCharPressed`, `IsKeyPressed`, `IsKeyPressedRepeat`, `IsKeyDown`, `GetClipboardText`, `SetClipboardText` | Typed codepoints and `KeyboardSend` as `desktop_loop` does, K1 repeat state, `SystemClipboard*Host`; the module stays for Windows and Android |
-| `src/platform/practice_window_host.zi` | `raylib_secondary_window`; `RestoreWindow`, `SetWindowFocused`, `ClearWindowState` | K2; K1 restore and raise |
-| `src/breaks/app_breaks.zi` | `raylib_secondary_window`; `GetMouseWheelMove`, `GetMouseDelta`, `IsKeyPressed`, `IsWindowFocused`, `ClearWindowState`, `RestoreWindow`, `SetWindowFocused`, `GetCurrentMonitor`, `GetMonitorWidth/Height`, `GetTime` | K2 with per-window input; `WindowFocusedHost`; K1 restore, raise and monitor size; timer |
-| `src/screens/break_overlay.zi` | `IsMouseButtonPressed`, `GetMousePosition` | The break window's K2 session pointer |
-| `src/platform/desktop_tray.zi` | `IsWindowHidden`, `SetWindowState`, `ClearWindowState`, `RestoreWindow`, `MinimizeWindow`, `TraceLog`, `GetTime` | `WindowVisibleHost`, `WindowSetVisibleHost`, K1 minimize and restore, `trace_log`, timer |
-| `src/app/app_launcher_pins.zi` | `SetWindowTitle` | `DesktopSetTitle` |
-| `src/apps/node_app_tree.zi` | `IsWindowFocused`, `raylib_trace` | `WindowFocusedHost`, `trace_log` |
-| `src/app/application_update.zi` | `IsKeyPressed`, `IsKeyDown` | K1 key state |
-| `src/app/application_frame.zi` | `BeginMode2D`/`EndMode2D` (camera zoom), `BeginScissorMode`/`EndScissorMode`, `RetainedPreviousFrameTexture`, `InvalidateRaylibAssets(Under)`, `ResetRaylibGraphics` (Android), `kryon/raylib_runtime`, `raylib_trace` | K4 render scale; paint-queue clips; `frame_snapshot`; the Cairo image cache's clear; Android keeps its reset; `trace_log` |
-| `src/app/app_frame_transition.zi`, `src/app/media_compression_dialog.zi` | `Texture2D` and `FrameSurface` from retained raylib targets | `frame_snapshot` images |
-| `src/app/dpi_state.zi` | `IsWindowReady`, `GetWindowScaleDPI`, `RaylibSetZoom`, `kryon/Raylib` | K1 DPI scale, K4 render scale |
-| `src/platform/asset_files.zi` | `SetLoadFileDataCallback`, `MemAlloc`, `MemFree`, `GetFileLength` | K4 asset reader |
-| `src/app/fonts.zi` | none directly: `typeface_source` (`RegisterFontAsset`, `RegisterSystemTypeface`), which raylib implements today | K4 font registration behind the same calls |
-| `src/platform/launcher_icon.zi` | `ExportImageToMemory`, `MemFree` | Kryon `png` encoder |
-| `src/app/screenshots.zi` | `GetTime`, `WaitTime` | timer, `SleepMilliseconds` |
-| `src/app/lumi_guide.zi`, `src/screens/habits_screen.zi` | `GetTime` | timer |
-| `src/platform/trace_log.zi`, `src/app/audio_meter_host.zi` | `TraceLog` | `trace_log` on stderr and `inbe.log` |
-| `raylib_trace` importers: `src/main.zi`, `src/apps/module_host.zi`, `src/apps/node_apps.zi`, `src/screens/practice_screen.zi`, `src/app/application_init.zi`, `src/app/app_launcher_apps.zi`, `src/app/device_link_session.zi`, `src/app/app_sync.zi`, `src/app/application_modals.zi` | `TraceLog` | `trace_log` |
-| `src/platform/audio_runtime.zi` | raudio: `InitAudioDevice`, `IsAudioDeviceReady`, `CloseAudioDevice`, `LoadWave(FromMemory)`, `WaveFormat`, `LoadSound(FromWave)`, `Play/Stop/PauseSound`, `SetSoundVolume/Pitch`, `LoadMusicStream(FromMemory)`, `Play/Stop/Pause/ResumeMusicStream`, `UpdateMusicStream`, `SetMusicVolume`, `Attach/DetachAudioMixedProcessor` | K3 |
-| `src/platform/radio_native.zi` | `LoadAudioStream`, `UpdateAudioStream`, `IsAudioStreamProcessed`, `SetAudioStreamVolume`, `SetAudioStreamBufferSizeDefault`, `drmp3dec_*`, `GetTime` | K3 pushed stream; MP3 decoder per the owner's decision; timer |
-| `src/platform/voice_audio.zi` | `media_audio_raylib`, `MediaAudioUseRaylib` | K3's media-audio sink |
-| `src/screens/node_app_screen.zi` | imports `kryon/raylib_runtime`, `raylib_text_input` | Drop on Linux; bundled apps draw into Breeze's own session |
-| `apps/practice/practice_probe.zi` | `raylib_trace`, `kryon/Raylib`, `CaptureRequested`, `CaptureConfigured` | Another lane's untracked probe; follow its owner |
-| `Makefile` | builds `libraylib.a`, `KRYON_BACKEND_RAYLIB=1`, `RAY_*` flags and checks, `AVIF_RAYLIB`, raylib `SUPPORT_*` config | Native Linux links SDL2, Cairo, Pango, fontconfig and FreeType from pkg-config; Windows keeps `WIN64_RAYLIB_A`; Android and web unchanged |
-
-Unchanged: Android's `GetAndroidApp` and window-state calls, and the web
-canvas host (`src/platform/web_window.zi`).
-
-## Breeze's host modules
-
-The Linux desktop build defines `DESKTOP_HOST` (compile time; no run-time
-flag). Breeze reaches its host through these modules, each with a raylib
-branch for the other platforms and a desktop branch:
-
-- `src/platform/app_trace.zi`: the log (stderr or `inbe.log`, recent errors).
-- `src/platform/host_clock.zi`: `HostSeconds`, `HostFrameSeconds`, `HostWait`.
-- `src/platform/host_input.zi`: keys, repeats, pointer, right button, wheel
-  X/Y, pointer movement, modifiers, cursor.
-- `src/platform/host_window.zi`: open, size, retained pixels, PNG capture,
-  render scale, close request, hidden/minimized, close. Light: no runtime.
-- `src/platform/host_window_state.zi`: focus, title, tray hide/show,
-  minimize, restore, monitor size.
-- `src/platform/host_frame.zi`: the frame loop and picture invalidation; the
-  only module that imports `kryon/raylib_runtime` or `kryon/canvas_host`.
-- `src/platform/icon_png.zi`: RGBA to PNG (Ziran's encoder, every native
-  host) and, on the desktop host, pictures decoded to RGBA by the raster.
-- Desktop branches in `audio_runtime.zi` (Kryon's mixer, SDL sink, Opus,
-  WAV, MP3, Vorbis), `radio_native.zi` (dr_mp3 push decoding from the audio
-  package, mixer PCM stream), `raylib_text_input.zi` (desktop keyboard, the
-  window's text per frame, clipboard) and `asset_files.zi` (`cairo_assets`).
-
-## Per-platform checklist
-
-Linux desktop:
-- [x] Every raylib call site above ported and committed (307e3c05); the
-  desktop graph generates, compiles and links with no raylib and no GLES.
-- [ ] Kryon K5–K8 (with the parent coordinator): Cairo picture-cache
-  invalidation; `DisposeFrameTexture` and route-fade frames;
-  `ImagePreviewDecode`/`ImagePreviewRelease`; `notification_desktop`'s
-  raylib `IsWindowFocused`. Until then the private link needs a throwaway
-  stub file outside the repository.
-- [ ] Switch the shared Makefile's native build to `DESKTOP_HOST`
-  (desktop libraries from pkg-config, the audio package's MP3 and Vorbis
-  archives) once the link needs no stubs.
-- [x] The scripted session runs on a private Xvfb; after benchmark above.
-- [ ] Delete the Linux path's raylib build rules (`RAYLIB_A` for native,
-  `KRYON_BACKEND_RAYLIB`, `AVIF_RAYLIB`, raylib `SUPPORT_*` flags).
-- [ ] Rename `raylib_text_input.zi` and move the key constants out of
-  `raylib_host.zi` once no platform uses raylib.
-- Known desktop gaps: no route fade (K6); updated pictures need a restart
-  (K5); window focus for notifications (K8).
-
-Windows, web, Android: every remaining raylib use and Kryon's replacement
-is mapped in `plans/2026-11-16-breeze-raylib-other-platforms.md`. Kryon gaps
-sent to the parent coordinator on 2026-11-16:
-- [ ] Web W1: the browser MediaAudio provider out of `media_audio_raylib`.
-- [ ] Web W2: Canvas-named clip and trace calls for `raylib_clip` and
-  `raylib_trace`.
-- [ ] Android A1: app ticks while paused or windowless (practices, audio,
-  timers, PiP) in `android_run`.
-- [ ] Android A2: a mixer sink (AAudio or OpenSL ES), or SDL2 on Android.
-- [ ] Android A3: picture registration for embedded, disk and practice
-  bytes, with orientation and invalidation.
-- [ ] Android A4: a non-raylib `window_runtime` branch.
-- [ ] Windows X1: platform-selected timer, image, video and accessibility
-  modules for the desktop host, and Windows SDL2/Cairo/Pango/FreeType builds.
-- [ ] Windows X2: a raylib-free picture-to-PNG path (`ImageExport`,
-  `window_icon`).
-
-## Steps
-
-1. Kryon K5–K8, routed by the parent coordinator, pushed, then pinned here.
-2. Switch the shared Linux build to the desktop host and delete its raylib
-   rules (checklist above); rerun the after benchmark on that build.
-3. Windows, web and Android, platform by platform, each with its raylib code
-   deleted as it moves.
+- [ ] Android pictures (Kryon AN5): every Breeze picture is inside its
+  bundles, and Pixmap's Android source reads only the APK's assets and the
+  disk. Kryon needs a reader hook like `cairo_assets.RasterUseAssets`, or an
+  exported `PixmapImageSourceUse`; then `src/platform/asset_files.zi`'s
+  Android branch serves bundle bytes through `PixmapLoadImageBytes`.
+- [ ] AVIF from the linked codecs (Kryon K13): `KRYON_AVIF_LINKED` imports
+  `avif/bridge/static`, which the pinned avif package does not export.
+  Until then `make native` copies `libkryonavif.so` beside the binary, and
+  the Linux packages must ship it. WebP already uses the linked libwebp.
+- [ ] Windows text under Wine is cut off at the bottom of each line; check
+  on real Windows (Kryon W1).
+- [ ] Picture-in-picture: Kryon's `BeginAndroidFrame` skips paused
+  activities, so a practice floating in PiP may not draw; check on the Pixel.
+- [ ] Ubuntu Touch (Click) builds on the desktop host with ARM64 codecs and
+  `AARCH64_DESKTOP_HOST_*`; not built yet (OpenStore workflow only).
+- [ ] The browser still plays sound through Kryon's canvas audio; moving it to
+  Ziran's std audio needs the MP3, Vorbis and Opus decoders built for wasm.
+- [ ] Meditation music across navigation lost its check with the raylib
+  audio wraps (music_navigation_test); cover it through the UI driver.
+- [ ] settings-telegram-ui-test still generates with module paths, which no
+  longer resolve Kryon's package modules; move it to project mode.
+- [ ] Rerun the after benchmark on the shared build (on Alpha).

@@ -2,10 +2,8 @@
 
 ## [Unreleased]
 
-- Rename account sync to Mesh; keep existing accounts, encrypted records and local storage compatible.
-
 - Backspace and text corrections work again; recover unfinished practices and backups, add photos reliably and reset break timers after time away.
-- Switch practices smoothly, choose an astral exercise, and claim daily coins beside the Habits balance.
+- Switch practices smoothly, pick an astral exercise and claim daily coins; account sync is now called Mesh.
 - Read Tao Te Ching art on its own page; find Photos and Radio in Apps, with clearer feedback and appearance controls.
 
 ## [2.1.63] - 2026-11-05

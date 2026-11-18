@@ -18,6 +18,9 @@ root = args.root.resolve()
 kryon = args.kryon.resolve()
 sources = sorted((root / "src").rglob("*.zi"))
 sources.append(root / "apps/practice/hold_reminder.zi")
+# Kryon's Android link wraps fopen; its wrapper serves relative names from the
+# APK's assets and is a host root of its own, as Kryon's generator adds it.
+sources.append(kryon / "src/backend/android_fopen.zi")
 if list((root / "src").rglob("*.c")) or list((root / "src").rglob("*.kry")):
     raise SystemExit("Android application implementation must be current Zi")
 # The compiler writes every file anew. Outputs with the same bytes as before
@@ -47,7 +50,8 @@ if len(target_cpus) != 1:
     parser.error("select exactly one Android CPU define (__aarch64__, __arm__, __x86_64__ or __i386__)")
 command.extend(["--target-os", "android", "--target-cpu", target_cpus.pop()])
 command.extend(["-o", str(args.output)])
-command.extend(str(path.relative_to(root)) for path in sources)
+command.extend(str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
+               for path in sources)
 completed = subprocess.run(command, cwd=root)
 if completed.returncode != 0:
     # The compiler already printed precise diagnostics; avoid repeating the

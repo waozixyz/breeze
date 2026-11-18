@@ -1,30 +1,64 @@
-// The app's main window on the host the build targets: raylib's window, or
-// on Kryon's desktop host the SDL window desktop_runtime opens and draws
-// with Cairo. host_frame.zi runs its frames.
+// The app's main window on the host the build targets: on Kryon's desktop
+// host the SDL window desktop_runtime opens and draws with Cairo, on Android
+// the NativeActivity surface android_runtime lends to Pixmap, and in a
+// browser Kryon's canvas. host_frame.zi runs its frames. A build that
+// selects no host, such as a native test, has no window.
 #import "geometry"
+#import "c_string"
 
 #if #defined(DESKTOP_HOST) {
     Desktop :: #import "desktop_runtime";
     WindowState :: #import "desktop_window_state";
     Raster :: #import "Cairo";
     RenderScale :: #import "cairo_render_scale";
-    host_window_closing: bool;
-    // The window shows once its first frame is painted; before that it is
-    // not yet a hidden window.
-    host_window_presented: bool;
-} else {
+} else #if #defined(ANDROID_BUILD) || #defined(PLATFORM_WEB) {
     WindowRuntime :: #import "kryon/window_runtime";
     WindowClose :: #import "window_close";
+    #if #defined(ANDROID_BUILD) {
+        Runtime :: #import "android_runtime";
+        Pixmap :: #import "pixmap";
+    } else {
+        CanvasWindow :: #import "canvas_window";
+    }
 }
+HOST_WINDOW_HEADLESS :: !#defined(DESKTOP_HOST) && !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB)
+host_window_closing: bool;
+// The window shows once its first frame is painted; before that it is not
+// yet a hidden window.
+host_window_presented: bool;
 
-#if #defined(DESKTOP_HOST) {
-    // Opens the main window with a drawing area of WIDTH by HEIGHT pixels.
-    // Closing it asks the app first (TakeHostCloseRequest).
-    HostOpenWindow :: (width: s32, height: s32, title: string) -> bool {
+// Opens the main window with a drawing area of WIDTH by HEIGHT pixels.
+// Closing it asks the app first (TakeHostCloseRequest). On Android the
+// activity's surface is the window: this waits until it exists, and is
+// false when the activity ends first.
+HostOpenWindow :: (width: s32, height: s32, title: string) -> bool {
+    #if #defined(DESKTOP_HOST) {
         if !Desktop.OpenDesktopTitled(width, height, title) {
             return false
         }
         unused Desktop.WindowInterceptCloseHost(true)
+        return true
+    } else #if #defined(ANDROID_BUILD) {
+        unused width
+        unused height
+        unused title
+        while WindowRuntime.WindowHidden() {
+            if !Runtime.PollAndroidHost(-1) {
+                return false
+            }
+        }
+        return true
+    } else #if HOST_WINDOW_HEADLESS {
+        unused width
+        unused height
+        unused title
+        return false
+    } else {
+        bytes: [256]u8
+        if !CopyCString(title, bytes[:]) {
+            return false
+        }
+        CanvasWindow.InitWindow(width, height, *bytes[0])
         return true
     }
 }
@@ -33,6 +67,8 @@
 HostWindowWidth :: () -> s32 {
     #if #defined(DESKTOP_HOST) {
         return cast(s32)Desktop.DesktopViewport().width
+    } else #if HOST_WINDOW_HEADLESS {
+        return 0
     } else {
         return WindowRuntime.WindowWidth()
     }
@@ -41,27 +77,47 @@ HostWindowWidth :: () -> s32 {
 HostWindowHeight :: () -> s32 {
     #if #defined(DESKTOP_HOST) {
         return cast(s32)Desktop.DesktopViewport().height
+    } else #if HOST_WINDOW_HEADLESS {
+        return 0
     } else {
         return WindowRuntime.WindowHeight()
     }
 }
 
-#if #defined(DESKTOP_HOST) {
-    // Draws the main window's frames at SCALE pixels per layout unit, as
-    // the camera zoom does on raylib hosts.
-    HostSetRenderScale :: (scale: float32) {
-        if scale > 0.0 {
-            unused RenderScale.RasterSetScale(scale)
+#if !#defined(PLATFORM_WEB) {
+    // Draws the main window's frame through a camera: a layout point lands
+    // at point * SCALE + OFFSET in window pixels.
+    HostSetFrameTransform :: (scale: float32, offset_x: float32, offset_y: float32) {
+        #if #defined(DESKTOP_HOST) {
+            unused RenderScale.RasterSetTransform(scale, offset_x, offset_y)
+        } else #if #defined(ANDROID_BUILD) {
+            unused Pixmap.RasterSetTransform(scale, offset_x, offset_y)
+        } else {
+            unused scale
+            unused offset_x
+            unused offset_y
+        }
+    }
+
+    // The layout point under window pixel POINT, through that transform.
+    HostPointFromPixels :: (point: Vector2) -> Vector2 {
+        #if #defined(DESKTOP_HOST) {
+            return RenderScale.RasterPointFromPixels(point)
+        } else #if #defined(ANDROID_BUILD) {
+            return Pixmap.RasterPointFromPixels(point)
+        } else {
+            return point
         }
     }
 }
 
-// Whether the desktop host still holds the last frame's pixels, so a frame
-// whose paint matches them need not draw again. Raylib hosts keep their own
-// retained targets.
+// Whether the host still holds the last frame's pixels, so a frame whose
+// paint matches them need not draw again. The canvas keeps its own.
 HostFramePixelsReusable :: () -> bool {
     #if #defined(DESKTOP_HOST) {
         return Desktop.DesktopFrameReusable()
+    } else #if #defined(ANDROID_BUILD) {
+        return Runtime.AndroidFrameReusable()
     } else {
         return false
     }
@@ -75,10 +131,12 @@ HostFramePixelsReusable :: () -> bool {
 }
 
 // Whether this frame's paint matched the last one, so the window shows the
-// same pixels and the desktop host can slow its frame clock.
+// same pixels and the host can skip presenting or slow its frame clock.
 HostFramePaintUnchanged :: (unchanged: bool) {
     #if #defined(DESKTOP_HOST) {
         Desktop.DesktopFrameUnchanged(unchanged)
+    } else #if #defined(ANDROID_BUILD) {
+        Runtime.AndroidFrameUnchanged(unchanged)
     } else {
         unused unchanged
     }
@@ -88,35 +146,37 @@ HostFramePaintUnchanged :: (unchanged: bool) {
 HostTakeCloseRequest :: () -> bool {
     #if #defined(DESKTOP_HOST) {
         return Desktop.WindowTakeCloseRequestHost()
+    } else #if HOST_WINDOW_HEADLESS {
+        return false
     } else {
         return WindowClose.WindowCloseTake()
     }
 }
 
-#if #defined(DESKTOP_HOST) {
-    // The frame loop found the window or the session ended.
-    HostMarkWindowEnded :: () {
-        host_window_closing = true
-    }
+// The frame loop found the window or the session ended.
+HostMarkWindowEnded :: () {
+    host_window_closing = true
+}
 
-    // The frame loop presented a frame.
-    HostMarkWindowPresented :: () {
-        host_window_presented = true
-    }
+// The frame loop presented a frame.
+HostMarkWindowPresented :: () {
+    host_window_presented = true
 }
 
 // The window system ended the window or the session.
 HostWindowClosing :: () -> bool {
-    #if #defined(DESKTOP_HOST) {
+    #if #defined(DESKTOP_HOST) || HOST_WINDOW_HEADLESS {
         return host_window_closing
     } else {
-        return WindowRuntime.WindowClosing()
+        return host_window_closing || WindowRuntime.WindowClosing()
     }
 }
 
 HostWindowHidden :: () -> bool {
     #if #defined(DESKTOP_HOST) {
         return host_window_presented && !Desktop.WindowVisibleHost()
+    } else #if HOST_WINDOW_HEADLESS {
+        return false
     } else {
         return WindowRuntime.WindowHidden()
     }
@@ -125,6 +185,8 @@ HostWindowHidden :: () -> bool {
 HostWindowMinimized :: () -> bool {
     #if #defined(DESKTOP_HOST) {
         return WindowState.DesktopMinimized()
+    } else #if HOST_WINDOW_HEADLESS {
+        return false
     } else {
         return WindowRuntime.WindowMinimized()
     }
@@ -133,6 +195,8 @@ HostWindowMinimized :: () -> bool {
 HostCloseWindow :: () {
     #if #defined(DESKTOP_HOST) {
         Desktop.CloseDesktop()
+    } else #if HOST_WINDOW_HEADLESS {
+        host_window_closing = true
     } else {
         WindowRuntime.CloseNativeWindow()
     }

@@ -1,0 +1,343 @@
+// Breeze's window as the person sees it and points at it, on a private Xvfb
+// at the owner's 1920x1080 (plans/2026-11-15-breeze-desktop-without-raylib.md):
+//
+//     desktop-window-test BINARY ROOT OUT
+//
+// The window opens at its own size and is then resized as a maximize would.
+// At each size the captured pixels must show the navigation rail along the
+// window's left edge and paint the whole window, with no unpainted strip at
+// its right. A real X pointer then clicks where the Habits rail button is
+// drawn, worked out from the app's logical frame and the window's size, and
+// Habits must open. BINARY must be built with the test driver; the test
+// needs Xvfb, xdotool, xwd and ImageMagick's convert.
+#import "byte_text_linux"
+#import "c_string"
+#import "file"
+#import "file_tree_linux"
+#import "number_text"
+#import "process_run_linux"
+#import "text_tools"
+#import "test_driver_client"
+#import "vec"
+#import, file "desktop_benchmark_profile.zi";
+#import, file "desktop_benchmark_session.zi";
+
+SCREEN :: "1920x1080x24"
+MAXIMIZED_WIDTH :: 1920
+MAXIMIZED_HEIGHT :: 1050
+STEP_TIMEOUT_MS :: 15000
+// The rail is this many pixels wide at render scale 1.
+RAIL_WIDTH :: 88
+
+Report :: (message: string) -> s32 {
+    print("desktop-window-test: %\n", message)
+    return 1
+}
+
+// Runs ARGUMENTS on DISPLAY to completion, with its output in OUTPUT.
+Run :: (display: string, arguments: []string, output: *Vec(u8)) -> bool {
+    entry: Vec(u8)
+    BuilderPrint(*entry, "DISPLAY=%", display)
+    environment: [1]string = .[BuilderFinish(entry)]
+    options: ProcessOptions
+    options.arguments = arguments
+    options.environment = environment[:]
+    options.capture_output = true
+    run: ProcessRun
+    unused VecResize(output.*, 0)
+    if !RunProcess(options, *run) || run.code != 0 {
+        return false
+    }
+    for byte: run.output {
+        unused VecPush(output.*, byte)
+    }
+    return true
+}
+
+Window :: struct {
+    id: string
+    x: s64
+    y: s64
+    width: s64
+    height: s64
+}
+
+// The number after NAME on a line of xwininfo's output, or -1.
+InfoField :: (text: string, name: string) -> s64 {
+    at := TextFind(text, name)
+    if at < 0 {
+        return -1
+    }
+    rest := text[at + name.count:]
+    end := TextFind(rest, "\n")
+    if end >= 0 {
+        rest = rest[:end]
+    }
+    value, ok := TextInteger(TextTrim(rest))
+    return ifx ok then value else -1
+}
+
+// The app's window: the largest top-level window (SDL also makes small
+// helper windows), and where it is on the screen.
+FindWindow :: (display: string, window: *Window) -> bool {
+    list: [3]string = .["xwininfo", "-root", "-children"]
+    listed: Vec(u8)
+    unused Run(display, list[:], *listed)
+    text := TextView(listed[:])
+    best: s64 = 0
+    lines := TextLines(text)
+    for line: lines {
+        trimmed := TextTrim(line)
+        space := TextFind(trimmed, " ")
+        if !TextHasPrefix(trimmed, "0x") || space < 0 {
+            continue
+        }
+        id := trimmed[:space]
+        info: [4]string = .["xwininfo", "-id", id, "-stats"]
+        described: Vec(u8)
+        unused Run(display, info[:], *described)
+        stats := TextView(described[:])
+        width := InfoField(stats, "Width:")
+        height := InfoField(stats, "Height:")
+        if width * height > best {
+            best = width * height
+            named: Vec(u8)
+            BuilderPrint(*named, "%", id)
+            window.id = BuilderFinish(named)
+            window.x = InfoField(stats, "Absolute upper-left X:")
+            window.y = InfoField(stats, "Absolute upper-left Y:")
+            window.width = width
+            window.height = height
+        }
+    }
+    return best > 0
+}
+
+// The screen's pixels as RGB bytes, SCREEN_WIDTH wide.
+Capture :: (display: string, directory: string, name: string, pixels: *Vec(u8)) -> bool {
+    dump: Vec(u8)
+    BuilderPrint(*dump, "%/%.xwd", directory, name)
+    dump_path := BuilderFinish(dump)
+    raw: Vec(u8)
+    BuilderPrint(*raw, "%/%.rgb", directory, name)
+    raw_path := BuilderFinish(raw)
+    target: Vec(u8)
+    BuilderPrint(*target, "rgb:%", raw_path)
+    capture: [5]string = .["xwd", "-root", "-silent", "-out", dump_path]
+    ignored: Vec(u8)
+    unused Run(display, capture[:], *ignored)
+    convert: [5]string = .["convert", dump_path, "-depth", "8", BuilderFinish(target)]
+    unused Run(display, convert[:], *ignored)
+    unused VecResize(pixels.*, 0)
+    return ReadFileInto(raw_path, pixels) && pixels.count > 0
+}
+
+SCREEN_WIDTH :: 1920
+
+// How many pixels in the rectangle have every channel at or above AT, and
+// how many have some channel at or above it.
+Brightness :: struct {
+    white: s64
+    lit: s64
+    total: s64
+}
+
+CountBright :: (pixels: []u8, x: s64, y: s64, width: s64, height: s64, at: u8) -> Brightness {
+    result: Brightness
+    for row: y..y + height - 1 {
+        for column: x..x + width - 1 {
+            offset := (row * SCREEN_WIDTH + column) * 3
+            if offset + 2 >= pixels.count {
+                continue
+            }
+            r := pixels[offset]
+            g := pixels[offset + 1]
+            b := pixels[offset + 2]
+            result.total += 1
+            if r >= at && g >= at && b >= at {
+                result.white += 1
+            }
+            if r >= at || g >= at || b >= at {
+                result.lit += 1
+            }
+        }
+    }
+    return result
+}
+
+// The rail along the window's left edge has light icons and labels, and
+// no strip at its right edge is left white.
+CheckWindow :: (display: string, directory: string, name: string, window: Window) -> bool {
+    pixels: Vec(u8)
+    if !Capture(display, directory, name, *pixels) {
+        return Report("FAIL could not capture the screen") == 0
+    }
+    rail_height := ifx window.height < 400 then window.height else 400
+    rail := CountBright(pixels[:], window.x, window.y, RAIL_WIDTH, rail_height, 180)
+    strip := CountBright(pixels[:], window.x + window.width - RAIL_WIDTH, window.y,
+        RAIL_WIDTH, window.height, 235)
+    message: Vec(u8)
+    BuilderPrint(*message, "% %x%: rail lit pixels %, right strip white pixels % of %",
+        name, window.width, window.height, rail.lit, strip.white, strip.total)
+    unused Report(BuilderFinish(message))
+    if rail.lit < 200 {
+        return Report("FAIL the navigation rail is not drawn at the window's left edge") == 0
+    }
+    // An unpainted strip is all white; title bar icons there are not.
+    if strip.white * 2 > strip.total {
+        return Report("FAIL the window's right edge is left unpainted") == 0
+    }
+    return true
+}
+
+// Whether the last tree has the text LABEL, as a screen's heading is.
+HasHeading :: (driver: *TestDriverClient, label: string) -> bool {
+    for node: driver.nodes {
+        if node.label == label && node.kind == "text" {
+            return true
+        }
+    }
+    return false
+}
+
+// Where the rail's button LABEL is in the last tree, the leftmost button so
+// labelled, or -1.
+RailButton :: (driver: *TestDriverClient, label: string) -> s64 {
+    found: s64 = -1
+    for index: cast(s64)0..driver.nodes.count - 1 {
+        node := *driver.nodes[index]
+        if node.label == label && node.kind == "button" &&
+        (found < 0 || node.x < driver.nodes[found].x) {
+            found = index
+        }
+    }
+    return found
+}
+
+// Clicks with the real X pointer where the Habits rail button is drawn,
+// mapping its logical bounds onto the window through the app's logical
+// frame (the root node), and waits for the Habits screen's heading.
+ClickHabits :: (driver: *TestDriverClient, display: string, out: string, window: Window) -> bool {
+    if DriverTree(driver) <= 0 {
+        return Report("FAIL no widget tree") == 0
+    }
+    frame := *driver.nodes[0]
+    found := RailButton(driver, "Habits")
+    if found < 0 || frame.width <= 0.0 {
+        return Report("FAIL the Habits rail button is not in the tree") == 0
+    }
+    button := *driver.nodes[found]
+    scale := cast(float64)window.width / frame.width
+    x := cast(s64)(cast(float64)window.x + (button.x + button.width / 2.0 - frame.x) * scale)
+    y := cast(s64)(cast(float64)window.y + (button.y + button.height / 2.0 - frame.y) * scale)
+    x_text: Vec(u8)
+    BuilderPrint(*x_text, "%", x)
+    y_text: Vec(u8)
+    BuilderPrint(*y_text, "%", y)
+    move: [4]string = .["xdotool", "mousemove", BuilderFinish(x_text), BuilderFinish(y_text)]
+    ignored: Vec(u8)
+    unused Run(display, move[:], *ignored)
+    unused DriverWaitIdle(driver, 3, 2000)
+    // Down and up on separate frames, as a person clicks; a host polling
+    // once a frame may miss a press and release that arrive together.
+    down: [3]string = .["xdotool", "mousedown", "1"]
+    unused Run(display, down[:], *ignored)
+    unused DriverWaitIdle(driver, 2, 1000)
+    up: [3]string = .["xdotool", "mouseup", "1"]
+    unused Run(display, up[:], *ignored)
+    deadline := NowSeconds() + cast(float64)STEP_TIMEOUT_MS / 1000.0
+    while NowSeconds() < deadline {
+        unused DriverWaitIdle(driver, 1, 1000)
+        if DriverTree(driver) > 0 && HasHeading(driver, "Habits") {
+            return true
+        }
+    }
+    // The screen as the click left it, beside the other captures.
+    pixels: Vec(u8)
+    unused Capture(display, out, "clicked", *pixels)
+    return Report("FAIL a click on the drawn Habits button did not open Habits") == 0
+}
+
+TestWindow :: (binary: string, root: string, out: string) -> bool {
+    unused RemoveTree(out)
+    if !CreateDirectories(out) {
+        return Report("FAIL cannot create the output folder") == 0
+    }
+    display: Display
+    if !StartDisplay(out, SCREEN, *display) {
+        return Report("FAIL Xvfb did not start") == 0
+    }
+    defer { StopProcess(*display.run) }
+    // The app makes its profile on a first start, past its voice offer;
+    // seeded as the benchmark's, the next start opens straight to its
+    // screens with no guide or setup prompt over them.
+    profile := JoinPath(out, "profile")
+    first_directory := JoinPath(out, "first")
+    unused CreateDirectories(first_directory)
+    first_driver := DriverOpen(JoinPath(first_directory, "driver"))
+    first: App
+    if !StartApp(binary, root, first_directory, profile, display.name,
+        DriverEnvironment(*first_driver), *first) {
+        return Report("FAIL the app did not start") == 0
+    }
+    DriverWatch(*first_driver, first.run.pid, first.log)
+    started := WaitFirstFrame(*first, 60.0) >= 0.0
+    if started && DriverWait(*first_driver, .{label = "Not now"}, 10000) {
+        unused DriverPress(*first_driver, .{label = "Not now"})
+        unused DriverWaitIdle(*first_driver, 5, 3000)
+    }
+    StopProcess(*first.run)
+    if !started || !SeedProfile(profile) {
+        return Report("FAIL the profile could not be made") == 0
+    }
+    driver := DriverOpen(JoinPath(out, "driver"))
+    app: App
+    if !StartApp(binary, root, out, profile, display.name, DriverEnvironment(*driver), *app) {
+        return Report("FAIL the app did not start again") == 0
+    }
+    defer { StopProcess(*app.run) }
+    DriverWatch(*driver, app.run.pid, app.log)
+    if WaitFirstFrame(*app, 60.0) < 0.0 {
+        return Report("FAIL no first frame") == 0
+    }
+    if !DriverWait(*driver, .{label = "Habits"}, STEP_TIMEOUT_MS) {
+        return Report("FAIL the navigation never appeared") == 0
+    }
+    unused DriverWaitIdle(*driver, 5, 3000)
+    window: Window
+    if !FindWindow(display.name, *window) {
+        return Report("FAIL the app's window was not found") == 0
+    }
+    if !CheckWindow(display.name, out, "opened", window) {
+        return false
+    }
+    width: Vec(u8)
+    BuilderPrint(*width, "%", MAXIMIZED_WIDTH)
+    height: Vec(u8)
+    BuilderPrint(*height, "%", MAXIMIZED_HEIGHT)
+    resize: [9]string = .["xdotool", "windowmove", window.id, "0", "0",
+        "windowsize", window.id, BuilderFinish(width), BuilderFinish(height)]
+    ignored: Vec(u8)
+    unused Run(display.name, resize[:], *ignored)
+    unused DriverWaitIdle(*driver, 5, 3000)
+    if !FindWindow(display.name, *window) || window.width != MAXIMIZED_WIDTH {
+        return Report("FAIL the window did not take the maximized size") == 0
+    }
+    if !CheckWindow(display.name, out, "maximized", window) {
+        return false
+    }
+    return ClickHabits(*driver, display.name, out, window)
+}
+
+#program_export
+main :: (argc: s32, argv: **u8) -> s32 {
+    if argc != 4 {
+        return Report("usage: desktop-window-test BINARY ROOT OUT")
+    }
+    if !TestWindow(TextFromCString(argv[1]), TextFromCString(argv[2]),
+        TextFromCString(argv[3])) {
+        return 1
+    }
+    unused Report("PASS the rail is drawn and the whole window painted at both sizes, and a real click on the drawn Habits button opens Habits")
+    return 0
+}

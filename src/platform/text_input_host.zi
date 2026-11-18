@@ -11,9 +11,10 @@ TextField :: #import "kryon/text_field";
     #import "android_device"
 }
 
-// The keys, typed text and clipboard text fields read: raylib's input, or
-// on Kryon's desktop host the main window's keyboard and the text it
-// received this frame (TextInputBeginFrame).
+// The keys, typed text and clipboard text fields read: on Kryon's desktop
+// host the main window's keyboard and the text it received this frame
+// (TextInputBeginFrame), on Android the activity's keys with its IME and
+// clipboard, and in a browser the canvas's keyboard and clipboard.
 #if #defined(DESKTOP_HOST) {
     Desktop :: #import "desktop_runtime";
     Keyboard :: #import "desktop_keyboard";
@@ -83,13 +84,45 @@ TextField :: #import "kryon/text_field";
         unused Desktop.SystemClipboardWriteHost(TextFromCString(value))
     }
 } else {
-    raylib :: #system_library "raylib";
-    TextInputGetCharPressed :: () -> s32 #foreign raylib "GetCharPressed";
-    TextInputIsKeyPressed :: (key: s32) -> bool #foreign raylib "IsKeyPressed";
-    TextInputIsKeyPressedRepeat :: (key: s32) -> bool #foreign raylib "IsKeyPressedRepeat";
-    TextInputIsKeyDown :: (key: s32) -> bool #foreign raylib "IsKeyDown";
-    TextInputGetClipboardText :: () -> *u8 #foreign raylib "GetClipboardText";
-    TextInputSetClipboardText :: (value: *u8) #foreign raylib "SetClipboardText";
+    #import, file "host_input.zi";
+    TextInputIsKeyPressed :: (key: s32) -> bool { return HostKeyPressed(key) }
+    TextInputIsKeyPressedRepeat :: (key: s32) -> bool { return HostKeyRepeated(key) }
+    TextInputIsKeyDown :: (key: s32) -> bool { return HostKeyDown(key) }
+    #if #defined(PLATFORM_WEB) {
+        CanvasInput :: #import "canvas_input";
+        CanvasHost :: #import "kryon/canvas_host";
+        #import "byte_text_linux"
+        text_input_clipboard: [4097]u8;
+
+        TextInputGetCharPressed :: () -> s32 {
+            return CanvasInput.GetCharPressed()
+        }
+
+        TextInputGetClipboardText :: () -> *u8 {
+            length := CanvasHost.SystemClipboardOpenHost()
+            if length < 0 {
+                length = 0
+            }
+            if length > 4096 {
+                length = 4096
+            }
+            for index: cast(s32)0..length - 1 {
+                text_input_clipboard[index] = cast(u8)CanvasHost.SystemClipboardByteHost(index)
+            }
+            text_input_clipboard[length] = 0
+            return *text_input_clipboard[0]
+        }
+
+        TextInputSetClipboardText :: (value: *u8) {
+            unused CanvasHost.SystemClipboardWriteHost(TextFromCString(value))
+        }
+    } else #if !#defined(ANDROID_BUILD) {
+        // A build that selects no host types nothing and has no clipboard.
+        text_input_clipboard_empty: [1]u8;
+        TextInputGetCharPressed :: () -> s32 { return 0 }
+        TextInputGetClipboardText :: () -> *u8 { return *text_input_clipboard_empty[0] }
+        TextInputSetClipboardText :: (value: *u8) { unused value }
+    }
 }
 
 TextInputKeyA :: 65;
@@ -151,16 +184,18 @@ TextInputCharacter :: () -> s32 {
     }
     #if #defined(ANDROID_BUILD) {
         return AndroidTextInputCharacter()
+    } else {
+        return TextInputGetCharPressed()
     }
-    return TextInputGetCharPressed()
 }
 
 #program_export
 TextInputClipboardText :: () -> string {
     #if #defined(ANDROID_BUILD) {
         return AppTextFromCString(AndroidClipboardText(), 65536)
+    } else {
+        return AppTextFromCString(TextInputGetClipboardText(), 4096)
     }
-    return AppTextFromCString(TextInputGetClipboardText(), 4096)
 }
 
 // Hosts report Unicode codepoints. The field receives UTF-8 bytes and
@@ -298,9 +333,10 @@ SampleTextAreaInput :: (focused: bool, typed: []u8) -> TextArea.Input {
 TextInputWriteClipboard :: (value: string) -> bool {
     #if #defined(ANDROID_BUILD) {
         return AndroidClipboardWrite(value)
+    } else {
+        bytes: [4096]u8
+        if !AppCopyText(value, bytes[:]) { return false }
+        TextInputSetClipboardText(*bytes[0])
+        return true
     }
-    bytes: [4096]u8
-    if !AppCopyText(value, bytes[:]) { return false }
-    TextInputSetClipboardText(*bytes[0])
-    return true
 }

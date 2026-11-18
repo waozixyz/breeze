@@ -50,12 +50,6 @@ tab-switch-performance-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
 		python3 tests/tab_switch_performance_test.py $(abspath $(TARGET)) mobile-rapid --mobile --rapid
 
-.PHONY: music-navigation-test
-music-navigation-test: $(TARGET)
-	@python3 tests/music_navigation_test.py '$(CC)' '$(NATIVE_COMPILE_FLAGS)' \
-		'$(KRYON_LIBRARY_BUILD_DIR)/libkryon.a $(ZIRAN_BUILD_DIR)/libziran.a $(KRYON_NATIVE_BACKEND_LIBS) $(LIBOQS_A) $(KRYON_NATIVE_BACKEND_LDLIBS) $(RUNTIME_ASSET_LDLIBS) $(NATIVE_SYSTEM_LDLIBS) $(LDFLAGS)' \
-		'$(NATIVE_OBJ_DIR)/objects.rsp'
-
 .PHONY: native-zoom-test
 native-zoom-test: $(TARGET)
 	sh tests/native_zoom_test.sh $(abspath $(TARGET))
@@ -81,21 +75,12 @@ dew-topup-ui-test: $(TARGET)
 		-u SESSION_MANAGER -u GDK_DISPLAY YUE_DESKTOP_RECOVERY=0 \
 		python3 tests/dew_topup_ui_test.py $(abspath $(TARGET))
 
-.PHONY: native-text-pixels-test
-native-text-pixels-test: $(TARGET)
-	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
-		ZIRAN_ROOT=$(abspath $(ZIRAN_DIR)) ZIRAN_BIN=$(ZIRAN_BIN) \
-		RAYLIB_A=$(abspath $(RAYLIB_A)) \
-		KRYON_TEXT_TEST_OUTPUT=$(abspath $(BUILD_DIR)/native-text-pixels-test) \
-		sh $(KRYON_DIR)/tests/raylib_text_pixels_test.sh
-
 # Run every visual suite and retain a receipt even when an earlier suite fails.
 # The longest suites come first so the gate does not end waiting on one.
-VISUAL_TEST_TARGETS := $(NATIVE_VISUAL_TARGETS) launcher-ui-test lumi-ui-test practice-images-ui-test leaderboard-ui-test native-screenshot-test native-text-pixels-test native-zoom-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-history-ui-test habits-table-ui-test habits-count-ui-test habit-day-ui-test habit-schedule-tool-test habit-tracking-tool-test lists-ui-test sync-review-ui-test data-back-ui-test lumi-selection-ui-test lumi-harness-ui-test lumi-feedback-list-ui-test lumi-guide-ui-test lumi-emphasis-ui-test customize-nav-ui-test
+VISUAL_TEST_TARGETS := $(NATIVE_VISUAL_TARGETS) launcher-ui-test lumi-ui-test practice-images-ui-test leaderboard-ui-test native-screenshot-test native-zoom-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-history-ui-test habits-table-ui-test habits-count-ui-test habit-day-ui-test habit-schedule-tool-test habit-tracking-tool-test lists-ui-test sync-review-ui-test data-back-ui-test lumi-selection-ui-test lumi-harness-ui-test lumi-feedback-list-ui-test lumi-guide-ui-test lumi-emphasis-ui-test customize-nav-ui-test
 VISUAL_TEST_TARGETS += audio-setup-ui-test apps-onboarding-test practice-downloads-ui-test tab-switch-performance-test habit-unsaved-ui-test
 VISUAL_TEST_TARGETS += entity-profile-ui-test practice-movement-ui-test
 VISUAL_TEST_TARGETS += dew-topup-ui-test
-VISUAL_TEST_TARGETS += music-navigation-test
 visual-test: $(TARGET) $(INBE_FULL_BUNDLE) $(NODE_APP_BUNDLES)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
 		-u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \

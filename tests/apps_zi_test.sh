@@ -9,6 +9,8 @@ bundles=${APPS_TEST_BUNDLES:-$root/build}
 # system library is linked by name where there is no development symlink.
 curl=${CURL_LIBRARY:-$(ls /usr/lib/x86_64-linux-gnu/libcurl.so.4 2>/dev/null || echo -lcurl)}
 webp=$(pkg-config --libs libwebp libwebpdemux)
+# The radio player decodes MP3 with Ziran's dr_mp3 archive.
+audio=$root/vendor-builds/linux/x86_64/audio-codecs
 mkdir -p "$work/generated" "$work/wrong-record" "$work/wrong-scalar"
 if [ -z "${APPS_TEST_BUNDLES:-}" ]; then
     sh "$root/scripts/build-apps.sh" "$ziran"
@@ -62,9 +64,7 @@ cp "$bundles/apps/habits.zx" "$bundles/apps/practices.zx" "$work/invalid-nested/
     -I"$root/build/packages/ziran/include" -iquote "$work/generated" -iquote "$work/generated/apps" \
     -I"$root/build/packages/monocypher/src" -I"$root/build/packages/monocypher/src/optional" \
     -I"$root/vendor-builds/sqlite" -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
-    -I"$root/build/packages/raylib/src" \
-    "$root/tests/apps_host_test.c" "$root/tests/diary_lock_host.c" \
-    "$root/tests/node_app_audio_host.c" "$work/generated"/*.c \
+    "$root/tests/apps_host_test.c" "$root/tests/diary_lock_host.c" "$work/generated"/*.c \
     "$root/build/packages/monocypher/src/monocypher.c" \
     "$root/build/packages/monocypher/src/optional/monocypher-ed25519.c" \
     "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" "${ZIRAN_LIB:-$(dirname "$(dirname "$ziran")")/libziran.a}" \
@@ -72,6 +72,7 @@ cp "$bundles/apps/habits.zx" "$bundles/apps/practices.zx" "$work/invalid-nested/
     -Wl,--wrap=package_manager_PackageInstalledBytes -Wl,--wrap=package_manager_PackageRevisionFor \
     -Wl,--wrap=package_files_PackageRead \
     -Wl,--wrap=package_manager_PackageTrustedRelease \
+    "$audio/libziran_mp3.a" \
     -Wl,--gc-sections -ldl -lpthread -lz -lm "$curl" $webp -o "$work/test"
 # All data and fixture upgrade paths are disposable. No owner profile is used.
 data=$(mktemp -d "$work/profile.XXXXXX")

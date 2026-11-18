@@ -15,19 +15,30 @@
         return IconPixels(path, desktop_icon_rgba[:]) &&
         Desktop.DesktopSetIcon(ICON_SIZE, ICON_SIZE, desktop_icon_rgba[:])
     }
+
+    #if #defined(_WIN32) {
+        // The Win32 handle of the SDL window, for the resource icon.
+        main_platform_sdl :: #system_library "SDL2";
+        SdlVersion :: (version: *u8) #foreign main_platform_sdl "SDL_GetVersion";
+        SdlWindowInfo :: (window: *void, info: *SdlWindowManagerInfo) -> s32 #foreign main_platform_sdl "SDL_GetWindowWMInfo";
+        SdlWindowManagerInfo :: struct { version: [3]u8; padding: u8; subsystem: s32; window: *void; context: *void; instance: *void; rest: [40]u8; }
+        WindowHandle :: () -> *void {
+            if Desktop.DesktopWindow() == null { return null }
+            info: SdlWindowManagerInfo
+            SdlVersion(*info.version[0])
+            if SdlWindowInfo(Desktop.DesktopWindow(), *info) == 0 || info.subsystem != 1 { return null }
+            return info.window
+        }
+    }
 } else {
     #import "window_close"
-    WindowIcon :: #import "kryon/window_icon";
 }
 #import, file "../app/assets.zi";
 
 c :: #system_library "c";
 ScreenshotEnvironmentBytes :: (name: *u8) -> *u8 #foreign c "getenv";
-raylib :: #system_library "raylib";
 update_apply_at_exit :: () -> s32 #foreign c;
-WindowReady :: () -> bool #foreign raylib "IsWindowReady";
-WindowHandle :: () -> *void #foreign raylib "GetWindowHandle";
-ChangeDirectory :: (path: *u8) -> s32 #foreign raylib;
+ChangeDirectory :: (path: *u8) -> s32 #foreign c "chdir";
 FormatText :: (output: *u8, capacity: usize, format: *u8,
     arguments: ..any) -> s32 #foreign c "snprintf";
 FindText :: (text: *u8, needle: *u8) -> *u8 #foreign c "strstr";
@@ -54,11 +65,10 @@ FindText :: (text: *u8, needle: *u8) -> *u8 #foreign c "strstr";
     LimitAllocator :: (parameter: s32, value: s32) -> s32 #foreign c "mallopt";
 }
 
-MAIN_SDL :: #defined(NATIVE_WINDOW_HAVE_SDL) && !#defined(PLATFORM_WEB) && !#defined(_WIN32) && !#defined(ANDROID_BUILD)
+MAIN_SDL :: #defined(DESKTOP_HOST) && !#defined(_WIN32)
 DESKTOP_WINDOW :: #defined(DESKTOP_HOST)
 #if MAIN_SDL {
     sdl :: #system_library "SDL2";
-    CurrentWindow :: () -> *void #foreign sdl "SDL_GL_GetCurrentWindow";
     GrabWindow :: (window: *void, grab: s32) #foreign sdl "SDL_SetWindowGrab";
     DisplaySleepOff :: () #foreign sdl "SDL_DisableScreenSaver";
     DisplaySleepOn :: () #foreign sdl "SDL_EnableScreenSaver";
@@ -151,7 +161,7 @@ SetDesktopWindowIcon :: (path: *u8) {
             }
         }
     }
-    #if !#defined(ANDROID_BUILD) && !#defined(PLATFORM_WEB) {
+    #if #defined(DESKTOP_HOST) {
         if path == null || path[0] == 0 {
             return
         }
@@ -161,15 +171,7 @@ SetDesktopWindowIcon :: (path: *u8) {
             TraceLog(4, "APP: Missing window icon asset")
             return
         }
-        encoded := TextFromBytes(BytesFromPointer(asset.data, cast(u64)asset.size))
-        applied := false
-        #if DESKTOP_WINDOW {
-            unused encoded
-            applied = SetDesktopIconFromAsset(TextFromCString(path))
-        } else {
-            applied = WindowIcon.SetWindowIcon(encoded, TextFromCString(path))
-        }
-        if !applied {
+        if !SetDesktopIconFromAsset(TextFromCString(path)) {
             TraceLog(4, "APP: Failed to decode or apply window icon asset")
         }
     }
@@ -307,42 +309,31 @@ native_before_window :: () {
     }
 }
 
+// The window could not open: on Windows, where no console shows the log,
+// the person sees why in a dialog.
+#program_export
+native_window_open_failed :: () {
+    #if #defined(_WIN32) {
+        dialog: [3072]u8
+        title: [32]u8
+        if StartupErrorMessage(TraceRecentErrors(), dialog[:]) &&
+        CopyCString("Inner Breeze", title[:]) {
+            ErrorMessage(null, *dialog[0], *title[0], 0x10)
+        }
+        TraceClose()
+    }
+}
+
 #program_export
 native_after_window :: (icon_path: *u8) -> s32 {
-    // The desktop host's window is open once HostOpenWindow returns.
-    #if !DESKTOP_WINDOW {
-        if !WindowReady() {
-            TraceLog(5, "APP: InitWindow failed")
-            #if #defined(_WIN32) && !#defined(ANDROID_BUILD) {
-                dialog: [3072]u8
-                title: [32]u8
-                if StartupErrorMessage(TraceRecentErrors(), dialog[:]) &&
-                CopyCString("Inner Breeze", title[:]) {
-                    ErrorMessage(null, *dialog[0], *title[0], 0x10)
-                }
-                TraceClose()
-            }
-            return 0
-        }
-    }
+    // The window is open once HostOpenWindow returns, and the desktop host
+    // intercepts its own window's close.
     #if MAIN_SDL {
-        window: *void
-        #if DESKTOP_WINDOW {
-            window = Desktop.DesktopWindow()
-        } else {
-            window = CurrentWindow()
-        }
+        window := Desktop.DesktopWindow()
         if window != null {
             GrabWindow(window, 0)
             app_device_attach_window(window)
-            // The desktop host intercepts its own window's close.
-            #if !DESKTOP_WINDOW {
-                WindowCloseWatch(window)
-            }
         }
-    }
-    #if #defined(_WIN32) && !#defined(ANDROID_BUILD) {
-        WindowCloseWatch(WindowHandle())
     }
     SetDesktopWindowIcon(icon_path)
     return 1

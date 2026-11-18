@@ -4,26 +4,16 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/dpi-state-zi-test
+rm -rf "$work/c"
 mkdir -p "$work/c"
-
-"$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
-    "$root/src/app/dpi_state.zi"
-"$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
-    -o "$work/c" "$root/src/app/dpi_state.zi" \
-    "$root/src/platform/dpi_density.zi"
+"$bin/ziran" build --project --offline --target=c --no-main --root "$root" \
+    -o "$work/c" "$root/src/app/dpi_state.zi" "$root/src/platform/dpi_density.zi"
 
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
     -Wno-unused-function -Wno-unused-variable \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
-    -I"$root/build/packages/ziran/include" -iquote "$work/c" \
-    "$root/tests/dpi_state_link_test.c" \
-    "$work/c/platform/dpi_density.c" \
-    "$work/c/app/dpi_state.c" "$work/c/dpi.c" \
-    "$work/c/environment.c" \
+    -I"$root/build/packages/ziran/include" $(find "$work/c" -type d -printf ' -iquote %p') \
+    "$root/tests/dpi_state_link_test.c" $(find "$work/c" -type f -name '*.c') \
     -lm -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
     "$work/test"

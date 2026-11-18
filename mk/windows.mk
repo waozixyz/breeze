@@ -1,24 +1,28 @@
 # Windows build: cross-compiled libraries, the executable, its zip and installer.
 
-# Windows raylib, cross-compiled with MinGW. Kryon's shared make fragments
-# used to provide this rule; Inbe builds it now, like the native library.
-define WINDOWS_RAYLIB_RULE
-$(1): $(RAYLIB_SOURCES) $(RAYLIB_DIR)/Makefile
-	@test -f $(RAYLIB_DIR)/raylib.h || { echo "Fetch the raylib package: sh scripts/packages.sh" >&2; exit 1; }
-	rm -rf $(2)/source
-	mkdir -p $(2)/source
-	cp -R $(RAYLIB_DIR)/. $(2)/source/
-	find $(2)/source -type f \( -name '*.o' -o -name '*.a' \) -delete
-	$(MAKE) -j4 -C $(2)/source \
-		OS=Windows_NT RAYLIB_SRC_PATH=. RAYLIB_RELEASE_PATH=.. \
-		PLATFORM=PLATFORM_DESKTOP_RGFW GRAPHICS=GRAPHICS_API_OPENGL_11 \
-		RAYLIB_LIBTYPE=STATIC RAYLIB_MODULE_AUDIO=TRUE \
-		RAYLIB_MODULE_MODELS=TRUE \
-		CC="$(3)" AR="$(4)" RANLIB="$(5)" \
-		CUSTOM_CFLAGS="$(APP_RAYLIB_CONFIG) -O2 -ffunction-sections -fdata-sections"
-	@test -f $$@
-endef
-$(eval $(call WINDOWS_RAYLIB_RULE,$(WIN64_RAYLIB_A),$(WIN64_RAYLIB_BUILD_DIR),$(WIN64_CC),$(WIN64_AR),$(WIN64_RANLIB)))
+# Kryon's desktop host on Windows: SDL2, Cairo, Pango, Fontconfig, FreeType,
+# GLib and GdkPixbuf as MinGW import libraries with their runtime DLLs, from
+# Kryon's pinned renderer-desktop-windows artifact.
+WIN64_DESKTOP_SDK := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/desktop-sdk
+WIN64_DESKTOP_READY := $(WIN64_DESKTOP_SDK)/.ready
+WIN64_DESKTOP_LIBS := $(addprefix $(WIN64_DESKTOP_SDK)/lib/,libSDL2.dll.a \
+	libpangocairo-1.0.dll.a libpango-1.0.dll.a libcairo.dll.a libfontconfig.dll.a \
+	libfreetype.dll.a libgdk_pixbuf-2.0.dll.a libgobject-2.0.dll.a libglib-2.0.dll.a)
+WIN64_DESKTOP_RUNTIME := $(WIN64_DESKTOP_SDK)/runtime.tar
+
+$(WIN64_DESKTOP_READY): ziran.lock mk/windows.mk | $(ZIRAN_BIN)
+	@set -eu; descriptor=$$($(ZIRAN_BIN) pkg artifact kryon:renderer-desktop-windows \
+		--platform windows-x86_64-mingw); artifact=$$(dirname "$$descriptor"); \
+		mkdir -p $(WIN64_DESKTOP_SDK)/lib; \
+		cp "$$artifact"/lib/*.dll.a $(WIN64_DESKTOP_SDK)/lib/; \
+		cp "$$artifact/runtime.tar" $(WIN64_DESKTOP_RUNTIME)
+	touch $@
+
+$(WIN64_DESKTOP_LIBS) $(WIN64_DESKTOP_RUNTIME): $(WIN64_DESKTOP_READY)
+	@test -f $@
+
+vendor-prebuilds-windows: $(WIN64_DESKTOP_READY)
+.PHONY: windows-package
 
 WIN64_WEBP_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/kryon-webp
 WIN64_WEBP_A := $(WIN64_WEBP_BUILD_DIR)/libkryonwebp.a
@@ -35,7 +39,7 @@ $(WIN64_WEBP_A): Makefile mk/windows.mk ziran.lock $(KRYON_DIR)/cmake/WebP.cmake
 		-DCMAKE_BUILD_TYPE=Release
 	$(CMAKE) --build $(WIN64_WEBP_BUILD_DIR) --target kryonwebp --parallel 2
 
-# Kryon's Raylib image decoder links AVIF. libaom's CMake project also needs
+# Kryon's desktop raster decodes AVIF with libaom, whose CMake project needs
 # the C++ cross compiler and, for x86-64 SIMD, nasm.
 WIN64_CXX ?= $(patsubst %gcc,%g++,$(patsubst %gcc-win32,%g++-win32,$(patsubst %gcc-posix,%g++-posix,$(WIN64_CC))))
 WIN64_CXX_PATH := $(shell command -v $(WIN64_CXX) 2>/dev/null || printf '%s' $(WIN64_CXX))
@@ -65,8 +69,11 @@ $(WIN64_AOM_A): $(WIN64_AVIF_A)
 # which keeps libopus's stack protector, so the app also links libssp.
 WIN64_OPUS_BUILD_DIR := $(VENDOR_BUILD_DIR)/windows/$(WIN64_ARCH)/audio-codecs
 WIN64_OPUS_A := $(WIN64_OPUS_BUILD_DIR)/libopus/libopus.a
+# Ziran's mixer decodes MP3 with dr_mp3 and Ogg Vorbis with libvorbisfile.
+WIN64_MP3_A := $(WIN64_OPUS_BUILD_DIR)/libziran_mp3.a
+WIN64_VORBIS_LIBS := $(WIN64_OPUS_BUILD_DIR)/libvorbisfile.a $(WIN64_OPUS_BUILD_DIR)/libvorbis.a $(WIN64_OPUS_BUILD_DIR)/libogg.a
 
-$(WIN64_OPUS_A): mk/windows.mk ziran.lock $(AUDIO_PACKAGE_DIR)/native/AudioCodecs.cmake $(AUDIO_OPUS_DIR)/CMakeLists.txt
+$(WIN64_OPUS_A) $(WIN64_MP3_A) $(WIN64_VORBIS_LIBS) &: mk/windows.mk ziran.lock $(AUDIO_PACKAGE_DIR)/native/AudioCodecs.cmake $(AUDIO_PACKAGE_DIR)/native/CMakeLists.txt $(AUDIO_OPUS_DIR)/CMakeLists.txt $(ZIRAN_DIR)/std/native/AudioCodecs.cmake
 	$(CMAKE) -S $(AUDIO_PACKAGE_DIR)/native -B $(WIN64_OPUS_BUILD_DIR) \
 		-DCMAKE_SYSTEM_NAME=Windows \
 		-DCMAKE_SYSTEM_PROCESSOR=$(WIN64_CMAKE_SYSTEM_PROCESSOR) \
@@ -76,21 +83,23 @@ $(WIN64_OPUS_A): mk/windows.mk ziran.lock $(AUDIO_PACKAGE_DIR)/native/AudioCodec
 		-DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
 		-DOPUS_DIR=$(abspath $(AUDIO_OPUS_DIR)) \
 		-DSAMPLERATE_DIR=$(abspath $(AUDIO_SAMPLERATE_DIR)) \
+		-DZIRAN_STDLIB=$(abspath $(ZIRAN_DIR))/std \
 		-DCMAKE_BUILD_TYPE=Release
-	$(CMAKE) --build $(WIN64_OPUS_BUILD_DIR) --target opus --parallel 2
-	@test -f $@
+	$(CMAKE) --build $(WIN64_OPUS_BUILD_DIR) --target opus ziran_mp3 vorbisfile --parallel 2
+	@for archive in $(WIN64_OPUS_A) $(WIN64_MP3_A) $(WIN64_VORBIS_LIBS); do test -f $$archive || { echo "Missing $$archive" >&2; exit 1; }; done
 
 $(WINDOWS_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile mk/windows.mk ziran.lock $(ZIRAN_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WINDOWS_GEN_DIR)
 	mkdir -p $(WINDOWS_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZIRAN_BIN) build --target=c --project --offline $(PACKAGE_FLAGS) \
-		--no-main --root . \
-		--define PLATFORM_DESKTOP --define _WIN32 --define AVIF_RAYLIB --define DESKTOP_TRAY_ENABLED \
+		--no-main --root . --target-os windows --target-cpu x64 \
+		--define PLATFORM_DESKTOP --define _WIN32 --define DESKTOP_HOST --define DESKTOP_TRAY_ENABLED \
+		--define KRYON_WEBP_LINKED \
 		-o $(WINDOWS_GEN_DIR) $(ZI_SRCS)
 	touch $@
 	find $(WINDOWS_GEN_DIR) -type f \( -name '*.c' -o -name '*.h' \) -exec touch -r $@ {} +
 
-$(WINDOWS_GEN_SRCS) $(WINDOWS_GEN_GAME_C): $(WINDOWS_GEN_STAMP)
+$(WINDOWS_GEN_SRCS): $(WINDOWS_GEN_STAMP)
 	@test -f $@
 
 $(WINDOWS_BIN_DIR)/$(WIN64_ARCH):
@@ -150,7 +159,7 @@ $(WIN64_RESOURCE): windows/$(APP_NAME).rc windows/$(APP_NAME).ico
 	mkdir -p $(dir $@)
 	$(WIN64_WINDRES) -Iwindows -O coff $< $@
 
-$(WIN64_TARGET): Makefile mk/windows.mk $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WIN64_RAYLIB_A) $(WIN64_WEBP_A) $(WIN64_AVIF_A) $(WIN64_AOM_A) $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(WIN64_OPUS_A) $(WIN64_RESOURCE) | $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)
+$(WIN64_TARGET): Makefile mk/windows.mk $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(FONT_FILES) $(EMBEDDED_ASSETS_C) $(WIN64_DESKTOP_LIBS) $(WIN64_WEBP_A) $(WIN64_AVIF_A) $(WIN64_AOM_A) $(WIN64_CURL_A) $(WIN64_LIBOQS_A) $(WIN64_OPUS_A) $(WIN64_MP3_A) $(WIN64_VORBIS_LIBS) $(WIN64_RESOURCE) | $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)
 	$(WIN64_CC) $(WINDOWS_CFLAGS) \
 		-iquote$(WINDOWS_GEN_DIR) -iquote$(WINDOWS_GEN_DIR)/src $(WINDOWS_APP_INCLUDE) \
 		$(KRYON_INCLUDE) \
@@ -163,13 +172,14 @@ $(WIN64_TARGET): Makefile mk/windows.mk $(WINDOWS_SRC) $(WINDOWS_GEN_STAMP) $(SQ
 		-o $@ \
 		$(WINDOWS_SRC) $(GENERATED_WINDOWS_C) $(WINDOWS_BUNDLE_RUNTIME) \
 		$(SQLITE_SRC) \
-		$(WIN64_RAYLIB_A) \
 		$(WIN64_WEBP_A) \
 		$(WIN64_AVIF_A) \
 		$(WIN64_AOM_A) \
 		$(WIN64_CURL_A) \
 		$(WIN64_LIBOQS_A) \
+		$(WIN64_MP3_A) $(WIN64_VORBIS_LIBS) \
 		$(WIN64_OPUS_A) -lssp \
+		$(WIN64_DESKTOP_LIBS) \
 		$(WIN64_RESOURCE) $(WINDOWS_LDLIBS) \
 		$(WIN64_THREAD_LDFLAGS) \
 		$(WINDOWS_LDFLAGS)
@@ -182,13 +192,21 @@ windows64: windows-runtime-assets-check $(WIN64_TARGET)
 
 # Windows ships for x86_64 only. 32-bit Windows needs stdcall Win32 calls,
 # which Ziran's C output does not emit.
-windows:
-	$(MAKE) windows64
+# The executable sits in bin/ beside the desktop libraries' DLLs, with their
+# fontconfig data in etc/ and licenses in share/.
+WIN64_PACKAGE_DIR := $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)/package
+
+windows-package: windows64 $(WIN64_DESKTOP_RUNTIME)
+	rm -rf $(WIN64_PACKAGE_DIR)
+	mkdir -p $(WIN64_PACKAGE_DIR)
+	tar -xf $(WIN64_DESKTOP_RUNTIME) -C $(WIN64_PACKAGE_DIR)
+	cp $(WIN64_TARGET) $(WIN64_PACKAGE_DIR)/bin/$(WIN64_BINARY_NAME)
+
+windows: windows-package
 	mkdir -p $(WINDOWS_DIST_DIR)
 	rm -f $(WINDOWS_DIST_DIR)/$(APP_NAME)-windows-*.zip
 	rm -f $(WINDOWS_DIST)
-	cd $(WINDOWS_BIN_DIR) && zip -9 -j $(abspath $(WINDOWS_DIST)) \
-		$(WIN64_ARCH)/$(WIN64_BINARY_NAME)
+	cd $(WIN64_PACKAGE_DIR) && zip -9 -r $(abspath $(WINDOWS_DIST)) bin etc share
 
 WINDOWS_SETUP := $(WINDOWS_DIST_DIR)/$(APP_NAME)-windows-setup-$(APP_VERSION).exe
 WINDOWS_SETUP_SCRIPT := packaging/windows/$(APP_NAME)-setup.nsi
@@ -202,6 +220,6 @@ windows-setup-check:
 windows-setup: windows windows-setup-check
 	rm -f $(WINDOWS_SETUP)
 	makensis -DVERSION=$(APP_VERSION) \
-		-DWIN64_EXE=$(abspath $(WINDOWS_BIN_DIR)/$(WIN64_ARCH)/$(WIN64_BINARY_NAME)) \
+		-DPACKAGE_DIR=$(abspath $(WIN64_PACKAGE_DIR)) \
 		-DOUT=$(abspath $(WINDOWS_SETUP)) $(WINDOWS_SETUP_SCRIPT)
 	test -f $(WINDOWS_SETUP)

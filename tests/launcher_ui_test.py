@@ -106,8 +106,8 @@ with contextlib.ExitStack() as stack:
             return image.convert("RGB").copy()
 
     def key(window, name, changed):
-        """Press a key the app reads from raylib directly, not through the
-        test driver, until the screen shows its effect."""
+        """Press a key the app reads from its window directly, not through
+        the test driver, until the screen shows its effect."""
         for attempt in range(3):
             command("xdotool", "windowfocus", window)
             command("xdotool", "keydown", "--clearmodifiers", name)
