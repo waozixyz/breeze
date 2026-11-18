@@ -19,6 +19,9 @@ TaiChiReadingSeconds :: #type (key: string) -> float64;
 tai_chi_reading_seconds: TaiChiReadingSeconds;
 tai_chi_reading_enabled: bool;
 TAI_CHI_PIVOT_RAISE :: 0.20943951023931953
+// A stepping foot rises over this share of its time at each end, and
+// travels only once this share has passed, clear of the floor by then.
+TAI_CHI_STEP_RISE :: 0.25
 TAI_CHI_STEP_PEEL :: 0.12
 // The reference figure's heel and ball offsets from the ankle point, which
 // the choreography's feet are measured with.
@@ -224,6 +227,28 @@ TaiChiGroundPoint :: (x: float64, z: float64, yaw: float64, which: s32) -> TaiCh
     return TaiChiV2(x + Sin(yaw) * offset, z + Cos(yaw) * offset)
 }
 
+// A stepping foot's extra height for its clearance, 0 at both ends and
+// whole through the middle third of the step.
+TaiChiStepRaise :: (u: float64) -> float64 {
+    return TaiChiSmoothstep(TaiChiClamp(u / TAI_CHI_STEP_RISE, 0.0, 1.0)) *
+        TaiChiSmoothstep(TaiChiClamp((1.0 - u) / TAI_CHI_STEP_RISE, 0.0, 1.0))
+}
+
+// How far along its way a stepping foot is: one leaving the floor
+// (FROM_FLOOR) travels only once it has risen, and one landing (TO_FLOOR)
+// has arrived before it comes down, so neither drags along the floor.
+TaiChiStepTravel :: (u: float64, from_floor: bool, to_floor: bool) -> float64 {
+    begin := ifx from_floor then TAI_CHI_STEP_PEEL else 0.0
+    finish := ifx to_floor then TAI_CHI_STEP_PEEL else 0.0
+    return TaiChiSmoothstep(TaiChiClamp((u - begin) / (1.0 - begin - finish), 0.0, 1.0))
+}
+
+// How high a foot clears the floor (metres, for the reference figure) on a
+// step of DISTANCE.
+TaiChiStepClearance :: (distance: float64) -> float64 {
+    return TaiChiClamp(0.3 * distance, 0.035, 0.07)
+}
+
 TaiChiSamePoint :: (a: TaiChiVector2, b: TaiChiVector2) -> bool {
     return TaiChiHypot(a.x - b.x, a.y - b.y) < TAI_CHI_SAME_POINT
 }
@@ -338,6 +363,18 @@ TaiChiChannelAt :: (timeline: *TaiChiTimeline, index: s32, channel: s32, span: f
         timeline.tangents[index][channel], timeline.tangents[index + 1][channel], span, u)
 }
 
+// A key's hand frame: +Y against its fingers, +Z toward its palm's side.
+TaiChiHandFrame :: (channels: []float64, fingers: s32, palm: s32) -> TaiChiQuaternion {
+    y := TaiChiNormalize3(TaiChiV3(-channels[fingers], -channels[fingers + 1], -channels[fingers + 2]))
+    hint := TaiChiV3(channels[palm], channels[palm + 1], channels[palm + 2])
+    z := TaiChiAddScaled3(hint, y, -TaiChiDot3(hint, y))
+    if TaiChiLengthSquared3(z) < 0.00000001 {
+        z = TaiChiAddScaled3(TaiChiV3(0.0, 0.0, 1.0), y, -y.z)
+    }
+    z = TaiChiNormalize3(z)
+    return TaiChiFromBasis(TaiChiNormalize3(TaiChiCross3(y, z)), y, z)
+}
+
 // The pose at `time` (from the timeline's start).
 TaiChiTimelineSample :: (timeline: *TaiChiTimeline, time: float64) -> TaiChiPose {
     segment := TaiChiSegmentAt(timeline, timeline.start + time)
@@ -356,41 +393,33 @@ TaiChiTimelineSample :: (timeline: *TaiChiTimeline, time: float64) -> TaiChiPose
         ax := from.channels[base + TAI_CHI_FOOT_X]
         az := from.channels[base + TAI_CHI_FOOT_Z]
         ayaw := from.channels[base + TAI_CHI_FOOT_YAW]
-        if motion == TAI_CHI_FOOT_STILL || motion == TAI_CHI_FOOT_ANKLE {
+        if motion == TAI_CHI_FOOT_STILL {
             pose.channels[base + TAI_CHI_FOOT_X] = ax
             pose.channels[base + TAI_CHI_FOOT_Z] = az
         } else if motion == TAI_CHI_FOOT_HEEL || motion == TAI_CHI_FOOT_BALL {
             pivot := TaiChiGroundPoint(ax, az, ayaw, motion)
             offset := ifx motion == TAI_CHI_FOOT_HEEL then TAI_CHI_REFERENCE_HEEL_BACK else -TAI_CHI_REFERENCE_BALL
-            yaw := pose.channels[base + TAI_CHI_FOOT_YAW]
+            // A flat foot turning on its heel lifts its toes first, and one
+            // turning on its ball its heel, and turns while they are up.
+            yaw := TaiChiChannelAt(timeline, index, base + TAI_CHI_FOOT_YAW, span, TaiChiStepTravel(u, true, true))
+            pose.channels[base + TAI_CHI_FOOT_YAW] = yaw
             pose.channels[base + TAI_CHI_FOOT_X] = pivot.x + Sin(yaw) * offset
             pose.channels[base + TAI_CHI_FOOT_Z] = pivot.y + Cos(yaw) * offset
-            // A flat foot turning on its heel lifts its toes a little, and
-            // one turning on its ball lifts its heel.
-            wave := Sin(TAI_CHI_PI * u)
-            raise := TAI_CHI_PIVOT_RAISE * wave * wave
-            pitch := pose.channels[base + TAI_CHI_FOOT_PITCH]
-            if motion == TAI_CHI_FOOT_HEEL {
-                pose.channels[base + TAI_CHI_FOOT_PITCH] = TaiChiMax(pitch, raise)
-            } else {
-                pose.channels[base + TAI_CHI_FOOT_PITCH] = TaiChiMin(pitch, -raise)
-            }
+            raise := TAI_CHI_PIVOT_RAISE * TaiChiStepRaise(u)
+            pose.channels[base + TAI_CHI_FOOT_PITCH] += ifx motion == TAI_CHI_FOOT_HEEL then raise else -raise
         } else {
-            // A step: a foot leaving the floor peels off before it
-            // travels, and a landing foot finishes turning and moving
-            // before it touches down.
+            // A step, or a turn on the spot about the ankle: a foot leaving
+            // the floor rises clear before it travels, and a landing foot
+            // finishes turning and moving before it touches down.
             from_floor := from.channels[base + TAI_CHI_FOOT_LIFT] < 0.0001
             to_floor := to.channels[base + TAI_CHI_FOOT_LIFT] < 0.0001
-            begin := ifx from_floor then TAI_CHI_STEP_PEEL else 0.0
-            finish := ifx to_floor then TAI_CHI_STEP_PEEL else 0.0
-            travel := TaiChiClamp((u - begin) / (1.0 - begin - finish), 0.0, 1.0)
-            if from_floor && to_floor {
+            travel := u
+            if from_floor || to_floor {
+                travel = TaiChiStepTravel(u, from_floor, to_floor)
                 bx := to.channels[base + TAI_CHI_FOOT_X]
                 bz := to.channels[base + TAI_CHI_FOOT_Z]
-                distance := TaiChiHypot(ax - bx, az - bz)
-                arc := TaiChiMin(0.05, 0.15 * distance)
-                pose.channels[base + TAI_CHI_FOOT_LIFT] += arc * Sin(TAI_CHI_PI * TaiChiSmoothstep(u))
-                travel = TaiChiSmoothstep(travel)
+                pose.channels[base + TAI_CHI_FOOT_LIFT] += TaiChiStepClearance(TaiChiHypot(ax - bx, az - bz)) *
+                    TaiChiStepRaise(u)
             }
             pose.channels[base + TAI_CHI_FOOT_X] = TaiChiChannelAt(timeline, index, base + TAI_CHI_FOOT_X, span, travel)
             pose.channels[base + TAI_CHI_FOOT_Z] = TaiChiChannelAt(timeline, index, base + TAI_CHI_FOOT_Z, span, travel)
@@ -411,6 +440,23 @@ TaiChiTimelineSample :: (timeline: *TaiChiTimeline, time: float64) -> TaiChiPose
         }
         lift := TaiChiFootBase(side) + TAI_CHI_FOOT_LIFT
         pose.channels[lift] = TaiChiMax(0.0, pose.channels[lift])
+    }
+    // Each hand turns as one piece, from one key's way to the next's,
+    // rather than its finger and palm directions blending on their own,
+    // which can pass through nothing and flip the hand over.
+    for side: cast(s32)0..1 {
+        fingers := TaiChiHandBase(side) + TAI_CHI_HAND_FINGERS
+        palm := TaiChiHandBase(side) + TAI_CHI_HAND_PALM
+        turn := TaiChiSlerp(TaiChiHandFrame(from.channels[:], fingers, palm), TaiChiHandFrame(to.channels[:], fingers, palm),
+            TaiChiSmoothstep(u))
+        pointing := TaiChiRotate(TaiChiV3(0.0, -1.0, 0.0), turn)
+        facing := TaiChiRotate(TaiChiV3(0.0, 0.0, 1.0), turn)
+        pose.channels[fingers] = pointing.x
+        pose.channels[fingers + 1] = pointing.y
+        pose.channels[fingers + 2] = pointing.z
+        pose.channels[palm] = facing.x
+        pose.channels[palm + 1] = facing.y
+        pose.channels[palm + 2] = facing.z
     }
     pose.channels[TAI_CHI_LOAD] = TaiChiClamp(pose.channels[TAI_CHI_LOAD], 0.0, 1.0)
     pose.look_from = from.look

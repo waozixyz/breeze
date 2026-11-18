@@ -248,6 +248,45 @@ WorkoutSidePlank :: (raised: bool) -> WorkoutPose {
     return pose
 }
 
+// Rolling over to the other side plank carries her this far toward the
+// way she first faced: the foot she rolls over turns on its ball, so the
+// balls of her feet stay where they touch down.
+WORKOUT_SIDE_ROLL_SHIFT :: 0.436
+
+// Halfway through rolling from one side plank to the other: a straight
+// plank face down on her hands and toes, head still toward the same end,
+// her right ball where it was on her side and her left beside it.
+WorkoutSidePlankRoll :: () -> WorkoutPose {
+    pose := WorkoutStanding()
+    WorkoutBody(*pose, -0.16, 0.38, 0.218, -90.0, 69.0, 0.0, 0.0, 0.0, -10.0)
+    WorkoutHandAt(*pose, 0, WORKOUT_AT_WORLD, -0.6, 0.035, 0.388)
+    WorkoutHandAt(*pose, 1, WORKOUT_AT_WORLD, -0.6, 0.035, 0.048)
+    WorkoutFlatHands(*pose, 1.0)
+    WorkoutFoot(*pose, 0, 0.728, 0.298, 0.0, -75.0, 0.0)
+    WorkoutFoot(*pose, 1, 0.728, 0.138, 0.0, -75.0, 0.0)
+    return pose
+}
+
+// The same pose on her other side, reached by rolling over face down: her
+// head stays toward the same end, she faces the other way and she has
+// moved by the roll.
+WorkoutRolled :: (pose: WorkoutPose) -> WorkoutPose {
+    rolled := WorkoutMirror(pose)
+    rolled.pelvis.x = pose.pelvis.x
+    rolled.pelvis.z = WORKOUT_SIDE_ROLL_SHIFT - pose.pelvis.z
+    rolled.yaw = 180.0 - pose.yaw
+    for side: cast(s32)0..1 {
+        other := 1 - side
+        if pose.hands[other].mode == WORKOUT_AT_WORLD {
+            rolled.hands[side].at.x = pose.hands[other].at.x
+            rolled.hands[side].at.z = WORKOUT_SIDE_ROLL_SHIFT - pose.hands[other].at.z
+        }
+        rolled.feet[side].x = pose.feet[other].x
+        rolled.feet[side].z = WORKOUT_SIDE_ROLL_SHIFT - pose.feet[other].z
+    }
+    return rolled
+}
+
 WorkoutKeyframe :: (exercise: s32, index: s32) -> WorkoutKey {
     pose := WorkoutStanding()
     if exercise == WORKOUT_JUMPING_JACKS {
@@ -592,15 +631,40 @@ WorkoutBreathe :: (pose: *WorkoutPose, time_ms: s64) {
 
 // The side plank holds her right side, then her left; she lifts at each
 // start and lowers before the switch and the end.
+// How long rolling over to the second side plank takes.
+WORKOUT_SIDE_ROLL_MS :: 1800
+
 WorkoutSidePlankAt :: (time_ms: s64, rig: *TaiChiRig) -> WorkoutPose {
     half := cast(s64)WORKOUT_SIDE_SWITCH_MS
     side := ifx time_ms >= half then 1 else 0
     local := time_ms % half
     lowered := WorkoutSidePlank(false)
     raised := WorkoutSidePlank(true)
+    // The second side starts by rolling over, face down, from the first.
+    roll: s64 = ifx side == 1 then WORKOUT_SIDE_ROLL_MS else 0
+    if side == 1 && local < roll {
+        middle := WorkoutSidePlankRoll()
+        rolled := WorkoutRolled(lowered)
+        first := local < roll / 2
+        start := ifx first then lowered else middle
+        end := ifx first then middle else rolled
+        u := cast(float64)(ifx first then local else local - roll / 2) / cast(float64)(roll / 2)
+        pose := WorkoutBlend(*start, *end, TaiChiSmoothstep(u), rig)
+        // The foot underneath (her right, then her left) turns on its ball
+        // as she rolls over it.
+        under := ifx first then 1 else 0
+        turned := (start.yaw + start.feet[under].yaw) * TAI_CHI_DEGREE
+        ball := TaiChiV2(start.feet[under].x + Sin(turned) * rig.ball, start.feet[under].z + Cos(turned) * rig.ball)
+        turning := (pose.yaw + pose.feet[under].yaw) * TAI_CHI_DEGREE
+        pose.feet[under].x = ball.x - Sin(turning) * rig.ball
+        pose.feet[under].z = ball.y - Cos(turning) * rig.ball
+        // Its heel lifts as it turns, rather than sweeping the floor.
+        pose.feet[under].pitch -= TaiChiPivotRaise(u) / TAI_CHI_DEGREE
+        return pose
+    }
     u: float64 = 1.0
-    if local < 900 {
-        u = cast(float64)local / 900.0
+    if local < roll + 900 {
+        u = cast(float64)(local - roll) / 900.0
     } else if local > half - 900 {
         u = cast(float64)(half - local) / 900.0
     }
@@ -609,7 +673,7 @@ WorkoutSidePlankAt :: (time_ms: s64, rig: *TaiChiRig) -> WorkoutPose {
         WorkoutBreathe(*pose, local)
     }
     if side == 1 {
-        pose = WorkoutMirror(pose)
+        pose = WorkoutRolled(pose)
     }
     return pose
 }
@@ -641,6 +705,13 @@ WorkoutPoseAt :: (exercise: s32, time_ms: s64, rig: *TaiChiRig) -> WorkoutPose {
             next := WorkoutKeyframe(exercise, (index + 1) % count)
             u := cast(float64)t / cast(float64)key.move_ms
             pose := WorkoutBlend(*key.pose, *next.pose, TaiChiSmoothstep(u), rig)
+            // Feet step or pivot rather than slide, except in a jump.
+            if WorkoutHop(exercise) == 0.0 {
+                for side: cast(s32)0..1 {
+                    pose.feet[side] = TaiChiStepFoot(key.pose.feet[side], next.pose.feet[side], u, rig, 1.0,
+                        TAI_CHI_DEGREE)
+                }
+            }
             WorkoutLift(*pose, WorkoutHop(exercise) * Sin(u * TAI_CHI_PI))
             return pose
         }

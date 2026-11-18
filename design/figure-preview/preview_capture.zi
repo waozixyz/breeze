@@ -1,17 +1,19 @@
 // The stage a moment shows, and the fixed review frames the capture mode
-// writes. The figure model is pending, so the stage is the practice's
-// backdrop, with Breeze's current flat figure on it when asked.
+// writes: the practice's backdrop with the figure on it, or Breeze's current
+// flat figure when asked.
 #import "figure_math"
 #import "figure_joints"
 #import "figure_finish"
 #import "preview_practices"
 #import "preview_flat"
+#import "preview_figure"
 #import "kryon/scene"
 #import "sun_salutation_rules"
 #import "workout_rules"
 #import "std/file"
 #import "std/png_linux"
 #import "kryon/image_pixels"
+#import "std/number_text"
 #import "std/vec"
 Raster :: #import "std/image";
 
@@ -51,10 +53,11 @@ PreviewBackdropsRelease :: (backdrops: *PreviewBackdrops) {
     VecFree(backdrops.covered.pixels)
 }
 
-// The practice's backdrop covering a WIDTH by HEIGHT picture in OUT, and,
-// with FLAT, Breeze's current flat figure for MOMENT seen as VIEW over it.
+// The practice's backdrop covering a WIDTH by HEIGHT picture in OUT, and over
+// it, for MOMENT seen as VIEW, Breeze's current flat figure (FLAT) or the
+// loaded FIGURE.
 PreviewStage :: (backdrops: *PreviewBackdrops, practice: s32, moment: *PreviewMoment, view: PreviewView,
-    flat: bool, width: s32, height: s32, out: *Raster.Image) -> bool {
+    flat: bool, figure: *PreviewFigure, width: s32, height: s32, out: *Raster.Image, seconds: float64 = -1.0) -> bool {
     covered := *backdrops.covered
     if covered.width != width || covered.height != height || backdrops.covered_practice != practice {
         // The lying astral body needs the floor raised to her.
@@ -64,6 +67,10 @@ PreviewStage :: (backdrops: *PreviewBackdrops, practice: s32, moment: *PreviewMo
             return false
         }
         backdrops.covered_practice = practice
+    }
+    if !flat && figure != null && figure.loaded {
+        return PreviewFigurePaint(figure, *moment.body, view, width, height, seconds) &&
+            FigureOverOnto(out, covered, *figure.pixels)
     }
     if !flat {
         if !VecResize(out.pixels, covered.pixels.count) {
@@ -76,10 +83,10 @@ PreviewStage :: (backdrops: *PreviewBackdrops, practice: s32, moment: *PreviewMo
         }
         return true
     }
-    figure: Raster.Image
-    defer VecFree(figure.pixels)
+    flat_figure: Raster.Image
+    defer VecFree(flat_figure.pixels)
     camera := PreviewFlatOf(moment, view)
-    return PreviewFlatRender(camera, view, width, height, *figure) && FigureOverOnto(out, covered, *figure)
+    return PreviewFlatRender(camera, view, width, height, *flat_figure) && FigureOverOnto(out, covered, *flat_figure)
 }
 
 PreviewShot :: struct {
@@ -89,9 +96,10 @@ PreviewShot :: struct {
     name: string
 }
 
-// Writes NAME.png (the empty stage) and NAME-current.png (Breeze's current
-// flat figure on it) for each practice's hardest poses.
-PreviewCapture :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directory: string) -> s32 {
+// Writes NAME-woman.png and NAME-man.png (the figure on the practice's
+// backdrop) and NAME-current.png (Breeze's current flat figure) for each
+// practice's hardest poses; PRACTICES holds the figures.
+PreviewCapture :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directory: string, practices: string) -> s32 {
     shots: [16]PreviewShot
     count: s32
     full := PreviewDefaultItem(library, PREVIEW_TAI_CHI)
@@ -116,36 +124,105 @@ PreviewCapture :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, direc
     count += 1
     picture: Raster.Image
     defer VecFree(picture.pixels)
+    figure: PreviewFigure
+    defer PreviewFigureRelease(*figure)
     failed: s32
     written: s32
-    for index: 0..count - 1 {
-        shot := shots[index]
-        moment := PreviewSample(library, shot.practice, shot.item, shot.seconds)
-        // Lying figures need a landscape picture.
-        width: s32 = ifx shot.practice == PREVIEW_ASTRAL then 900 else 600
-        height: s32 = ifx shot.practice == PREVIEW_ASTRAL then 600 else 800
-        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
-        for variant: 0..1 {
+    suffixes: [3]string = .["-woman.png", "-man.png", "-current.png"]
+    for variant: cast(s32)0..2 {
+        if variant < 2 && !PreviewFigureUse(*figure, practices, variant == 1) {
+            failed += 1
+            continue
+        }
+        for index: 0..count - 1 {
+            shot := shots[index]
+            moment := PreviewSample(library, shot.practice, shot.item, shot.seconds)
+            // Lying figures need a landscape picture.
+            width: s32 = ifx shot.practice == PREVIEW_ASTRAL then 900 else 600
+            height: s32 = ifx shot.practice == PREVIEW_ASTRAL then 600 else 800
+            view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
             stem: [1024]u8
             named: [1024]u8
             path: [1024]u8
             name := PreviewJoin(stem[:], directory, "/")
             name = PreviewJoin(named[:], name, shot.name)
-            final := PreviewJoin(path[:], name, ifx variant == 0 then ".png" else "-current.png")
-            if !PreviewStage(backdrops, shot.practice, *moment, view, variant == 1, width, height, *picture) {
+            final := PreviewJoin(path[:], name, suffixes[variant])
+            if !PreviewStage(backdrops, shot.practice, *moment, view, variant == 2, *figure, width, height, *picture) ||
+            !WritePNGFile(final, *picture, false) {
                 print("figure capture: % could not be painted\n", final)
-                failed += 1
-                continue
-            }
-            if !WritePNGFile(final, *picture, false) {
-                print("figure capture: could not write %\n", final)
                 failed += 1
                 continue
             }
             written += 1
         }
     }
-    print("figure capture: % frames\n", written)
+    print("figure capture: % frames, gpu=%\n", written, figure.accelerated)
+    return failed
+}
+
+// Writes PRACTICE's ITEM played from FROM to TO seconds at 30 frames a
+// second, hair swinging and eyes blinking, into DIRECTORY as 0000.png on.
+PreviewVideo :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directory: string, practices: string,
+    practice: s32, item: s32, from: float64, to: float64, man: bool) -> s32 {
+    picture: Raster.Image
+    defer VecFree(picture.pixels)
+    figure: PreviewFigure
+    defer PreviewFigureRelease(*figure)
+    if !PreviewFigureUse(*figure, practices, man) {
+        return 1
+    }
+    frame: s64
+    while from + cast(float64)frame / 30.0 <= to {
+        at := from + cast(float64)frame / 30.0
+        moment := PreviewSample(library, practice, item, at)
+        width: s32 = ifx practice == PREVIEW_ASTRAL then 900 else 600
+        height: s32 = ifx practice == PREVIEW_ASTRAL then 600 else 800
+        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
+        digits: [32]u8
+        stem: [1024]u8
+        named: [1024]u8
+        path: [1024]u8
+        name := PreviewJoin(stem[:], directory, "/")
+        number := FormatDecimal(cast(float64)(10000 + frame), 0, digits[:])
+        name = PreviewJoin(named[:], name, number[1:])
+        if !PreviewStage(backdrops, practice, *moment, view, false, *figure, width, height, *picture, at) ||
+        !WritePNGFile(PreviewJoin(path[:], name, ".png"), *picture, false) {
+            return 1
+        }
+        frame += 1
+    }
+    return 0
+}
+
+// Writes the woman (or the man, MAN) at each of SECONDS of PRACTICE's ITEM
+// into DIRECTORY as SECONDS.png, for looking at chosen moments.
+PreviewShots :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directory: string, practices: string,
+    practice: s32, item: s32, seconds: []float64, man: bool) -> s32 {
+    picture: Raster.Image
+    defer VecFree(picture.pixels)
+    figure: PreviewFigure
+    defer PreviewFigureRelease(*figure)
+    if !PreviewFigureUse(*figure, practices, man) {
+        return 1
+    }
+    failed: s32
+    for at: seconds {
+        moment := PreviewSample(library, practice, item, at)
+        width: s32 = ifx practice == PREVIEW_ASTRAL then 900 else 600
+        height: s32 = ifx practice == PREVIEW_ASTRAL then 600 else 800
+        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
+        digits: [32]u8
+        stem: [1024]u8
+        named: [1024]u8
+        path: [1024]u8
+        name := PreviewJoin(stem[:], directory, "/")
+        name = PreviewJoin(named[:], name, FormatDecimal(at, 1, digits[:]))
+        final := PreviewJoin(path[:], name, ".png")
+        if !PreviewStage(backdrops, practice, *moment, view, false, *figure, width, height, *picture) ||
+        !WritePNGFile(final, *picture, false) {
+            failed += 1
+        }
+    }
     return failed
 }
 

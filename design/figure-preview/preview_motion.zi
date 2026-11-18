@@ -1,0 +1,257 @@
+// Checks how natural each practice's motion is: every item of every
+// practice is stepped thirty times a second through the practices' own
+// solvers, and each awkward moment is reported with its time:
+//   slide     a planted foot sliding along the floor
+//   floor     a foot going through the floor
+//   jump      a joint changing speed faster than a person could (a pop or
+//             snap), or moving faster than one would
+//   knee      a knee bending backwards
+//   through   a hand passing through the trunk
+// `figure_preview --audit` prints them and exits non-zero when any is found.
+#import "figure_math"
+#import "figure_joints"
+#import "preview_practices"
+#import "tai_chi_math"
+#import "tai_chi_solve"
+#import "kryon/scene"
+#import "std/math"
+
+PREVIEW_AUDIT_RATE :: 30.0
+// A planted foot may creep this far (metres) before it counts as sliding.
+PREVIEW_AUDIT_SLIDE :: 0.02
+// Below the floor by more than this is through it.
+PREVIEW_AUDIT_FLOOR :: 0.01
+// No joint of a calm practice speeds up or slows down faster than this
+// (m/s²), nor moves faster than the second bound (m/s); the Workout's
+// brisk moves have the higher bounds.
+PREVIEW_AUDIT_ACCELERATION :: 25.0
+// A stepping leg's joints may change speed faster than the trunk and arms.
+PREVIEW_AUDIT_LEG_ACCELERATION :: 40.0
+PREVIEW_AUDIT_SPEED :: 4.0
+PREVIEW_AUDIT_BRISK_ACCELERATION :: 60.0
+PREVIEW_AUDIT_BRISK_SPEED :: 8.0
+
+PreviewAuditTotals :: struct {
+    slide: s32
+    floor: s32
+    jump: s32
+    knee: s32
+    through: s32
+}
+
+// Audits every practice and item; returns how many awkward moments it found.
+PreviewAudit :: (library: *PreviewLibrary) -> s32 {
+    totals: PreviewAuditTotals
+    names: [4]string = .["Tai Chi", "Sun Salutation", "Workout", "Astral"]
+    for practice: cast(s32)0..3 {
+        count := PreviewItemCount(library, practice)
+        for item: cast(s32)0..count - 1 {
+            print("  (% % is %)\n", practice, item, PreviewItemName(library, practice, item))
+            PreviewAuditItem(library, practice, item, names[practice], *totals)
+        }
+    }
+    found := totals.slide + totals.floor + totals.jump + totals.knee + totals.through
+    print("figure audit: % awkward moments: % slides, % through the floor, % jumps, % knees backwards, % hands through the body\n",
+        found, totals.slide, totals.floor, totals.jump, totals.knee, totals.through)
+    return found
+}
+
+// Prints the right arm's joints every 120th of a second from FROM to TO
+// seconds of PRACTICE's ITEM, for finding where a pop comes from.
+PreviewTrace :: (library: *PreviewLibrary, practice: s32, item: s32, from: float64, to: float64) {
+    seconds := from
+    while seconds <= to {
+        moment := PreviewSample(library, practice, item, seconds)
+        body := *moment.body
+        hand := moment.solved.hand_quats[1]
+        shapes := moment.solved.hand_shapes[1]
+        print("% wrist % % % hand % % % % shape % % %\n", PreviewAuditRound(seconds), PreviewAuditRound(body.wrists[1].x),
+            PreviewAuditRound(body.wrists[1].y), PreviewAuditRound(body.wrists[1].z), PreviewAuditRound(hand.x),
+            PreviewAuditRound(hand.y), PreviewAuditRound(hand.z), PreviewAuditRound(hand.w), PreviewAuditRound(shapes[0]),
+            PreviewAuditRound(shapes[1]), PreviewAuditRound(shapes[2]))
+        seconds += 1.0 / 120.0
+    }
+}
+
+#scope_file
+// Reports one finding, at most once per kind per half second.
+PreviewAuditReport :: (practice: string, item: string, seconds: float64, kind: string, detail: string, amount: float64,
+    last: *float64) -> bool {
+    if seconds - last.* < 0.5 {
+        return false
+    }
+    last.* = seconds
+    whole := cast(s64)(seconds * 10.0 + 0.5)
+    print("  % / % at %.% s: % % %\n", practice, item, whole / 10, whole % 10, kind, detail, PreviewAuditRound(amount))
+    return true
+}
+
+PreviewAuditPart :: (part: s32) -> string {
+    names: [8]string = .["left ankle below the floor by", "left heel below the floor by", "left ball below the floor by",
+        "left toes below the floor by", "right ankle below the floor by", "right heel below the floor by",
+        "right ball below the floor by", "right toes below the floor by"]
+    return names[part]
+}
+
+PreviewAuditJoint :: (which: s32) -> string {
+    names: [14]string = .["pelvis jerked at m/s²", "chest jerked at m/s²", "neck jerked at m/s²",
+        "left elbow jerked at m/s²", "right elbow jerked at m/s²", "left wrist jerked at m/s²",
+        "right wrist jerked at m/s²", "left knee jerked at m/s²", "right knee jerked at m/s²",
+        "left ankle jerked at m/s²", "right ankle jerked at m/s²", "left toes jerked at m/s²",
+        "right toes jerked at m/s²", "spine jerked at m/s²"]
+    return names[which]
+}
+
+PreviewAuditPoint :: (value: TaiChiVector3) -> Vector3 {
+    return .{value.x, value.y, value.z}
+}
+
+PreviewAuditContact :: (side: s32, point: s32) -> string {
+    names: [4]string = .["left heel slid", "left ball slid", "right heel slid", "right ball slid"]
+    return names[side * 2 + point]
+}
+
+PreviewAuditRound :: (value: float64) -> float64 {
+    return cast(float64)cast(s64)(value * 1000.0 + 0.5) / 1000.0
+}
+
+PreviewAuditItem :: (library: *PreviewLibrary, practice: s32, item: s32, practice_name: string,
+    totals: *PreviewAuditTotals) {
+    duration := PreviewDuration(library, practice, item)
+    name := PreviewItemName(library, practice, item)
+    step := 1.0 / PREVIEW_AUDIT_RATE
+    brisk := practice == PREVIEW_WORKOUT
+    bound := ifx brisk then PREVIEW_AUDIT_BRISK_SPEED else PREVIEW_AUDIT_SPEED
+    sudden := ifx brisk then PREVIEW_AUDIT_BRISK_ACCELERATION else PREVIEW_AUDIT_ACCELERATION
+    velocities: [14]Vector3
+    have_velocity := false
+    previous: FigureJoints
+    have_previous := false
+    previous_solved: TaiChiSolved
+    // Per heel and ball of each foot: how far it has crept on the floor.
+    crept: [4]float64
+    last_slide: [4]float64 = .[-10.0, -10.0, -10.0, -10.0]
+    last_floor: float64 = -10.0
+    last_jump: float64 = -10.0
+    last_knee: float64 = -10.0
+    last_through: float64 = -10.0
+    seconds: float64
+    while seconds < duration {
+        moment := PreviewSample(library, practice, item, seconds)
+        joints := moment.body
+        // Through the floor: any part of a foot below it.
+        lowest: float64 = 1000.0
+        part: s32
+        for side: 0..1 {
+            parts: [4]float64 = .[joints.ankles[side].y, moment.solved.heels[side].y, moment.solved.balls[side].y,
+                joints.toes[side].y]
+            for at: 0..3 {
+                if parts[at] < lowest {
+                    lowest = parts[at]
+                    part = cast(s32)(side * 4 + at)
+                }
+            }
+        }
+        if lowest < -PREVIEW_AUDIT_FLOOR && PreviewAuditReport(practice_name, name, seconds, "floor", PreviewAuditPart(part),
+            -lowest, *last_floor) {
+            totals.floor += 1
+        }
+        for side: 0..1 {
+            // A planted contact (the heel or the ball of the foot, on the
+            // floor) must not creep: a pivot on the heel with the toes up is
+            // fine, a flat foot turning or gliding is not.
+            contacts: [2]Vector3 = .[PreviewAuditPoint(moment.solved.heels[side]), PreviewAuditPoint(moment.solved.balls[side])]
+            before_contacts: [2]Vector3 = .[PreviewAuditPoint(previous_solved.heels[side]),
+                PreviewAuditPoint(previous_solved.balls[side])]
+            // The heel and ball are contacts only while the foot stands on
+            // its sole, not once it rolls over its toes onto its top.
+            upright := FigureRotate(FigureQuatNormalize(joints.feet[side]), FigureV3(0.0, 1.0, 0.0)).y > 0.1
+            for point: 0..1 {
+                slot := side * 2 + point
+                here := contacts[point]
+                down := here.y < 0.02 && upright
+                if down && have_previous && before_contacts[point].y < 0.02 {
+                    crept[slot] += FigureLength(FigureV3(here.x - before_contacts[point].x, 0.0,
+                        here.z - before_contacts[point].z))
+                } else {
+                    crept[slot] = 0.0
+                }
+                if crept[slot] > PREVIEW_AUDIT_SLIDE && PreviewAuditReport(practice_name, name, seconds, "slide",
+                    PreviewAuditContact(cast(s32)side, cast(s32)point), crept[slot], *last_slide[slot]) {
+                    totals.slide += 1
+                    crept[slot] = 0.0
+                }
+            }
+            // A knee bending backwards: it bends over the toes, so its
+            // offset from the hip-ankle line goes the way the foot faces
+            // (the foot's heading comes from its side axis, which a foot
+            // rolled onto its top keeps).
+            side_axis := FigureRotate(FigureQuatNormalize(joints.feet[side]), FigureV3(1.0, 0.0, 0.0))
+            forward := FigureNormalize(FigureCross(side_axis, FigureV3(0.0, 1.0, 0.0)))
+            hip := joints.hips[side]
+            ankle := joints.ankles[side]
+            line := FigureSub(ankle, hip)
+            along := FigureClamp(FigureDot(FigureSub(joints.knees[side], hip), line) /
+                FigureMax(FigureDot(line, line), 0.000001), 0.0, 1.0)
+            off := FigureDot(FigureSub(joints.knees[side], FigureAddScaled(hip, line, along)), forward)
+            if off < -0.03 && PreviewAuditReport(practice_name, name, seconds, "knee",
+                ifx side == 0 then "left knee bent backwards by" else "right knee bent backwards by", -off, *last_knee) {
+                totals.knee += 1
+            }
+            // A hand inside the trunk: near the spine line between the hips
+            // and the neck, closer than the trunk is thick.
+            wrist := joints.wrists[side]
+            spine := FigureSub(joints.neck, joints.pelvis)
+            t := FigureDot(FigureSub(wrist, joints.pelvis), spine) / FigureMax(FigureDot(spine, spine), 0.000001)
+            if t > 0.1 && t < 0.9 {
+                distance := FigureDistance(wrist, FigureAddScaled(joints.pelvis, spine, t))
+                if distance < 0.07 && PreviewAuditReport(practice_name, name, seconds, "through",
+                    ifx side == 0 then "left hand inside the body, from the spine" else "right hand inside the body, from the spine",
+                    distance, *last_through) {
+                    totals.through += 1
+                }
+            }
+        }
+        // Pops and snaps: any joint changing speed too suddenly, or too fast.
+        if have_previous {
+            points: [14]Vector3 = .[joints.pelvis, joints.chest, joints.neck, joints.elbows[0], joints.elbows[1],
+                joints.wrists[0], joints.wrists[1], joints.knees[0], joints.knees[1], joints.ankles[0], joints.ankles[1],
+                joints.toes[0], joints.toes[1], joints.spine]
+            before: [14]Vector3 = .[previous.pelvis, previous.chest, previous.neck, previous.elbows[0], previous.elbows[1],
+                previous.wrists[0], previous.wrists[1], previous.knees[0], previous.knees[1], previous.ankles[0],
+                previous.ankles[1], previous.toes[0], previous.toes[1], previous.spine]
+            fastest: float64
+            harshest: float64
+            which: s32
+            for at: 0..13 {
+                velocity := FigureScale(FigureSub(points[at], before[at]), 1.0 / step)
+                fastest = FigureMax(fastest, FigureLength(velocity))
+                if have_velocity {
+                    change := FigureLength(FigureSub(velocity, velocities[at])) / step
+                    // Knees, ankles and toes are judged by the legs' bound.
+                    if at >= 7 && at <= 12 && !brisk {
+                        change *= PREVIEW_AUDIT_ACCELERATION / PREVIEW_AUDIT_LEG_ACCELERATION
+                    }
+                    if change > harshest {
+                        harshest = change
+                        which = cast(s32)at
+                    }
+                }
+                velocities[at] = velocity
+            }
+            if harshest > sudden && PreviewAuditReport(practice_name, name, seconds, "jump",
+                PreviewAuditJoint(which), harshest, *last_jump) {
+                totals.jump += 1
+            }
+            if fastest > bound && PreviewAuditReport(practice_name, name, seconds, "jump", "a joint moved at m/s", fastest,
+                *last_jump) {
+                totals.jump += 1
+            }
+            have_velocity = true
+        }
+        previous = joints
+        previous_solved = moment.solved
+        have_previous = true
+        seconds += step
+    }
+}

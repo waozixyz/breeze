@@ -102,6 +102,49 @@ SquatArmsLevel :: (rig: *TaiChiRig) -> bool {
 }
 
 #program_export
+// Every exercise moves as a person would: feet step and pivot instead of
+// sliding, stay above the floor, and nothing snaps. The first exercise that does
+// not, times ten, plus the bound it broke; or -1.
+WorkoutMotionAwkward :: () -> s32 {
+    rig := WorkoutRig()
+    for exercise: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
+        check: MotionCheck
+        check.lowest = 1000.0
+        MotionStart(*check)
+        time: float64
+        while time < cast(float64)WORKOUT_WORK_MS / 1000.0 {
+            pose := WorkoutPoseAt(exercise, cast(s64)(time * 1000.0), *rig)
+            solved := WorkoutSolve(*pose, *rig)
+            // Rolling over between side planks the feet turn over on the
+            // floor, which the feet (soles only) cannot roll on; the roll
+            // is left out of the sliding measure.
+            switch := cast(float64)WORKOUT_SIDE_SWITCH_MS / 1000.0
+            if exercise == WORKOUT_SIDE_PLANK && time >= switch && time < switch + cast(float64)WORKOUT_SIDE_ROLL_MS / 1000.0 {
+                for slot: 0..3 {
+                    check.crept[slot] = -1.0
+                }
+            }
+            MotionStep(*check, *solved)
+            time += MOTION_STEP
+        }
+        slide: float64 = 0.005
+        if !MotionWithin(*check, slide, 8.0) {
+            // Which bound it broke: sliding, the floor, speed or a knee.
+            broke: s32 = 4
+            if check.worst_slide > slide {
+                broke = 1
+            } else if check.lowest < -0.005 {
+                broke = 2
+            } else if check.fastest > 8.0 {
+                broke = 3
+            }
+            return exercise * 10 + broke
+        }
+    }
+    return -1
+}
+
+#program_export
 Answer :: () -> s32 {
     if WORKOUT_TOTAL_MS != WORKOUT_PREPARE_MS + WORKOUT_EXERCISE_COUNT * WORKOUT_WORK_MS +
     (WORKOUT_EXERCISE_COUNT - 1) * WORKOUT_REST_MS {
@@ -182,11 +225,13 @@ Answer :: () -> s32 {
     if !WorkoutPropsSound() {
         return 9
     }
-    // The side plank switches sides halfway: the planted hand changes side.
+    // The side plank switches sides halfway by rolling over face down: the
+    // planted hand changes side, her head stays toward the same end and
+    // she faces the other way.
     first := WorkoutPoseAt(WORKOUT_SIDE_PLANK, 7000, *rig)
     second := WorkoutPoseAt(WORKOUT_SIDE_PLANK, 22000, *rig)
     if first.hands[1].mode != WORKOUT_AT_WORLD || second.hands[0].mode != WORKOUT_AT_WORLD ||
-    !Near(first.hands[1].at.x, -second.hands[0].at.x, 0.0001) {
+    !Near(first.hands[1].at.x, second.hands[0].at.x, 0.0001) || !Near(second.yaw, 180.0 - first.yaw, 0.0001) {
         return 11
     }
     english := ReadText("en", english_bytes[:])
@@ -195,6 +240,10 @@ Answer :: () -> s32 {
         if !TextComplete(codes[index], english) {
             return 300 + index
         }
+    }
+    awkward := WorkoutMotionAwkward()
+    if awkward >= 0 {
+        return 500 + awkward
     }
     return 42
 }

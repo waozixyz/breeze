@@ -3,15 +3,52 @@
 // Body channels use monotone cubic curves, so weight, sinking and turning
 // never overshoot and come to rest where the movement reverses. Hands use
 // Catmull-Rom curves, so they travel in smooth arcs through their keys.
-// Feet that stay on the floor never slide: a foot that keeps its heel, ball
-// or ankle point pivots about it exactly, and a foot that moves lifts off.
+// Feet that stay on the floor never slide: a foot that keeps its heel or ball
+// pivots about it exactly with the other end raised, and a foot that moves
+// or turns about its ankle lifts clear first.
 
+import { Matrix4, Quaternion, Vector3 } from 'three'
 import { REFERENCE_FOOT, groundPoint } from './pose.js'
 
 const SIDES = ['L', 'R']
 const SAME_POINT = 0.002
 const PIVOT_RAISE = 12 * Math.PI / 180
+// A stepping foot rises over STEP_RISE of its time at each end, and travels
+// only once STEP_PEEL has passed, clear of the floor by then.
+const STEP_RISE = 0.25
 const STEP_PEEL = 0.12
+
+// A stepping foot's extra height for its clearance, 0 at both ends.
+function stepRaise(u) {
+    return smoothstep(Math.min(1, Math.max(0, u / STEP_RISE))) *
+        smoothstep(Math.min(1, Math.max(0, (1 - u) / STEP_RISE)))
+}
+
+// How far along its way a stepping foot is: one leaving the floor travels
+// only once it has risen, and one landing has arrived before it comes down.
+function stepTravel(u, fromFloor, toFloor) {
+    const begin = fromFloor ? STEP_PEEL : 0
+    const finish = toFloor ? STEP_PEEL : 0
+    return smoothstep(Math.min(1, Math.max(0, (u - begin) / (1 - begin - finish))))
+}
+
+// How high a foot clears the floor (reference figure) on a step of distance.
+function stepClearance(distance) {
+    return Math.min(0.07, Math.max(0.035, 0.3 * distance))
+}
+
+// A key's hand frame: +Y against its fingers, +Z toward its palm's side.
+function handFrame(hand) {
+    const y = new Vector3(...hand.fingers).negate().normalize()
+    const hint = new Vector3(...hand.palm)
+    let z = hint.clone().addScaledVector(y, -hint.dot(y))
+    if (z.lengthSq() < 1e-8) {
+        z = new Vector3(0, 0, 1).addScaledVector(y, -y.z)
+    }
+    z.normalize()
+    const x = y.clone().cross(z).normalize()
+    return new Quaternion().setFromRotationMatrix(new Matrix4().makeBasis(x, y, z))
+}
 
 function monotoneTangents(times, values) {
     const count = values.length
@@ -182,36 +219,32 @@ export class Timeline {
             const a = from.pose.feet[side]
             const b = to.pose.feet[side]
             const foot = pose.feet[side]
-            if (motion === 'still' || motion === 'ankle') {
+            if (motion === 'still') {
                 foot.x = a.x
                 foot.z = a.z
             } else if (motion === 'heel' || motion === 'ball') {
+                // A flat foot turning on its heel lifts its toes first, and
+                // one turning on its ball its heel, and turns while they are up.
+                const yaw = this.footChannels[sideIndex].yaw
+                foot.yaw = hermite(yaw.values[index], yaw.values[index + 1], yaw.tangents[index],
+                    yaw.tangents[index + 1], span, stepTravel(u, true, true))
                 const pivot = groundPoint(a, motion)
                 const offset = motion === 'heel' ? REFERENCE_FOOT.heelBack : -REFERENCE_FOOT.ball
                 foot.x = pivot.x + Math.sin(foot.yaw) * offset
                 foot.z = pivot.z + Math.cos(foot.yaw) * offset
-                // A flat foot turning on its heel lifts its toes a little,
-                // and one turning on its ball lifts its heel.
-                const raise = PIVOT_RAISE * Math.sin(Math.PI * u) ** 2
-                if (motion === 'heel') {
-                    foot.pitch = Math.max(foot.pitch, raise)
-                } else {
-                    foot.pitch = Math.min(foot.pitch, -raise)
-                }
+                const raise = PIVOT_RAISE * stepRaise(u)
+                foot.pitch += motion === 'heel' ? raise : -raise
             } else {
-                // A step: a foot leaving the floor peels off before it
-                // travels, and a landing foot finishes turning and moving
-                // before it touches down.
+                // A step, or a turn on the spot about the ankle: a foot
+                // leaving the floor rises clear before it travels, and a
+                // landing foot finishes turning and moving before it touches
+                // down.
                 const fromFloor = a.lift < 1e-4
                 const toFloor = b.lift < 1e-4
-                const begin = fromFloor ? STEP_PEEL : 0
-                const finish = toFloor ? STEP_PEEL : 0
-                let travel = Math.min(1, Math.max(0, (u - begin) / (1 - begin - finish)))
-                if (fromFloor && toFloor) {
-                    const distance = Math.hypot(a.x - b.x, a.z - b.z)
-                    const arc = Math.min(0.05, 0.15 * distance)
-                    foot.lift += arc * Math.sin(Math.PI * smoothstep(u))
-                    travel = smoothstep(travel)
+                let travel = u
+                if (fromFloor || toFloor) {
+                    travel = stepTravel(u, fromFloor, toFloor)
+                    foot.lift += stepClearance(Math.hypot(a.x - b.x, a.z - b.z)) * stepRaise(u)
                 }
                 const channels = this.footChannels[sideIndex]
                 for (const field of ['x', 'z', 'yaw']) {
@@ -220,6 +253,16 @@ export class Timeline {
                         channel.tangents[index], channel.tangents[index + 1], span, travel)
                 }
             }
+        }
+        // Each hand turns as one piece, from one key's way to the next's,
+        // rather than its finger and palm directions blending on their own,
+        // which can pass through nothing and flip the hand over.
+        for (const side of SIDES) {
+            const turn = handFrame(from.pose.hands[side]).slerp(handFrame(to.pose.hands[side]), smoothstep(u))
+            const pointing = new Vector3(0, -1, 0).applyQuaternion(turn)
+            const facing = new Vector3(0, 0, 1).applyQuaternion(turn)
+            pose.hands[side].fingers = [pointing.x, pointing.y, pointing.z]
+            pose.hands[side].palm = [facing.x, facing.y, facing.z]
         }
         for (const side of SIDES) {
             const shape = pose.hands[side].shape

@@ -205,6 +205,9 @@ TaiChiFrameQuat :: (y_axis: TaiChiVector3, z_hint: TaiChiVector3, fallback_z: Ta
     return TaiChiFromBasis(x, y, z)
 }
 
+// The share of a limb's length over which it straightens softly.
+TAI_CHI_SOFT_REACH :: 0.012
+
 TaiChiTwoBone :: struct {
     middle: TaiChiVector3
     end: TaiChiVector3
@@ -219,7 +222,15 @@ TaiChiSolveTwoBone :: (root: TaiChiVector3, target: TaiChiVector3, upper: float6
         direction = TaiChiScale3(to_target, 1.0 / distance)
     }
     reach := upper + lower
-    distance = TaiChiMin(TaiChiMax(distance, TaiChiAbs(upper - lower) + 0.0001), reach * 0.9999)
+    // Near full stretch the middle joint would snap straight, its bend
+    // changing ever faster as the limb nears its length; over the last
+    // stretch the limb straightens smoothly instead, falling a few
+    // millimetres short of a target it cannot reach.
+    soft := reach * TAI_CHI_SOFT_REACH
+    if distance > reach - soft {
+        distance = reach - soft * Exp((reach - soft - distance) / soft)
+    }
+    distance = TaiChiMin(TaiChiMax(distance, TaiChiAbs(upper - lower) + 0.0001), reach * 0.99999)
     cosine := (upper * upper + distance * distance - lower * lower) / (2.0 * upper * distance)
     along := upper * cosine
     across := upper * Sqrt(TaiChiMax(0.0, 1.0 - cosine * cosine))
@@ -281,15 +292,88 @@ TaiChiPlaceFoot :: (foot: TaiChiFootPose, rig: *TaiChiRig) -> TaiChiPlacedFoot {
     // Toes stay on the floor while the heel is up, and follow the foot
     // once it lifts.
     placed.toes_quat = placed.quat
+    toes := TaiChiV3(0.0, 0.0, rig.toe_tip - rig.ball)
     if foot.pitch < 0.0 {
         follow := TaiChiMax(TaiChiMin(1.0, lift / (0.04 * rig.scale)), TaiChiSmoothstep(over))
-        placed.toes_quat = TaiChiSlerp(TaiChiYawQuat(foot.yaw), placed.quat, follow)
+        flat := TaiChiYawQuat(foot.yaw)
+        placed.toes_quat = TaiChiSlerp(flat, placed.quat, follow)
+        // Hanging from a foot lifted on tiptoe, the toes bend up as far as
+        // they must to stay above the floor.
+        if TaiChiAdd3(placed.ball, TaiChiRotate(toes, placed.toes_quat)).y < 0.0 {
+            low: float64 = 0.0
+            high := follow
+            for step: 0..11 {
+                middle := (low + high) * 0.5
+                if TaiChiAdd3(placed.ball, TaiChiRotate(toes, TaiChiSlerp(flat, placed.quat, middle))).y < 0.0 {
+                    high = middle
+                } else {
+                    low = middle
+                }
+            }
+            placed.toes_quat = TaiChiSlerp(flat, placed.quat, low)
+        }
     }
-    placed.toe_tip = TaiChiAdd3(placed.ball, TaiChiRotate(TaiChiV3(0.0, 0.0, rig.toe_tip - rig.ball), placed.toes_quat))
+    placed.toe_tip = TaiChiAdd3(placed.ball, TaiChiRotate(toes, placed.toes_quat))
     placed.forward = forward
     placed.yaw = foot.yaw
     placed.pitch = foot.pitch
     return placed
+}
+
+// How far (radians) a foot turning on its heel or ball, U (0..1) through the
+// turn, has raised its other end.
+TaiChiPivotRaise :: (u: float64) -> float64 {
+    return TAI_CHI_PIVOT_RAISE * TaiChiStepRaise(u)
+}
+
+// A foot going from placement A to B on the floor, U (0..1) of the way, as
+// a person moves it: turning on the spot it pivots on its heel or ball
+// (the ball when it stands on its toes, the heel when its toes are up),
+// that end staying put while the other is raised; moving, it steps, rising
+// clear of the floor before it travels and landing once it has arrived.
+// A foot in the air at both ends moves as keyed. METRE is the
+// placements' length unit in metres and ANGLE their angle unit in radians.
+TaiChiStepFoot :: (a: TaiChiFootPose, b: TaiChiFootPose, u: float64, rig: *TaiChiRig, metre: float64,
+    angle: float64) -> TaiChiFootPose {
+    eased := TaiChiSmoothstep(u)
+    foot: TaiChiFootPose
+    foot.x = a.x + (b.x - a.x) * eased
+    foot.z = a.z + (b.z - a.z) * eased
+    foot.yaw = a.yaw + (b.yaw - a.yaw) * eased
+    foot.pitch = a.pitch + (b.pitch - a.pitch) * eased
+    foot.lift = a.lift + (b.lift - a.lift) * eased
+    distance := TaiChiHypot(b.x - a.x, b.z - a.z) * metre
+    from_floor := a.lift * metre < 0.0001
+    to_floor := b.lift * metre < 0.0001
+    if (!from_floor && !to_floor) || (distance < 0.002 && TaiChiAbs(b.yaw - a.yaw) * angle < 0.001) {
+        return foot
+    }
+    travel := TaiChiStepTravel(u, from_floor, to_floor)
+    foot.yaw = a.yaw + (b.yaw - a.yaw) * travel
+    heel := rig.heel_back / metre
+    ball := rig.ball / metre
+    a_heel := TaiChiV2(a.x - Sin(a.yaw * angle) * heel, a.z - Cos(a.yaw * angle) * heel)
+    b_heel := TaiChiV2(b.x - Sin(b.yaw * angle) * heel, b.z - Cos(b.yaw * angle) * heel)
+    a_ball := TaiChiV2(a.x + Sin(a.yaw * angle) * ball, a.z + Cos(a.yaw * angle) * ball)
+    b_ball := TaiChiV2(b.x + Sin(b.yaw * angle) * ball, b.z + Cos(b.yaw * angle) * ball)
+    on_floor := from_floor && to_floor
+    on_heel := on_floor && a.pitch >= 0.0 && b.pitch >= 0.0 &&
+        TaiChiHypot(a_heel.x - b_heel.x, a_heel.y - b_heel.y) * metre < 0.002
+    on_ball := on_floor && !on_heel && a.pitch <= 0.0 && b.pitch <= 0.0 &&
+        TaiChiHypot(a_ball.x - b_ball.x, a_ball.y - b_ball.y) * metre < 0.002
+    if on_heel || on_ball {
+        pivot := ifx on_heel then a_heel else a_ball
+        offset := ifx on_heel then heel else -ball
+        foot.x = pivot.x + Sin(foot.yaw * angle) * offset
+        foot.z = pivot.y + Cos(foot.yaw * angle) * offset
+        raise := TaiChiPivotRaise(u) / angle
+        foot.pitch += ifx on_heel then raise else -raise
+        return foot
+    }
+    foot.x = a.x + (b.x - a.x) * travel
+    foot.z = a.z + (b.z - a.z) * travel
+    foot.lift += TaiChiStepClearance(distance) / metre * TaiChiStepRaise(u)
+    return foot
 }
 
 // How firmly a foot is on the floor: 1 on the floor, 0 from 3 cm up.

@@ -65,6 +65,9 @@ function chestLocal(side, v) {
     return new Vector3(v[0] * sideSign(side), v[1], v[2])
 }
 
+// The share of a limb's length over which it straightens softly.
+const SOFT_REACH = 0.012
+
 // Two-bone inverse kinematics. Returns the middle joint and the clamped end.
 export function solveTwoBone(root, target, upper, lower, pole) {
     const toTarget = target.clone().sub(root)
@@ -72,7 +75,15 @@ export function solveTwoBone(root, target, upper, lower, pole) {
     const direction = distance > 1e-6 ? toTarget.clone().divideScalar(distance) : new Vector3(0, -1, 0)
     const reach = upper + lower
     const stretched = distance > reach * 0.9999
-    distance = Math.min(Math.max(distance, Math.abs(upper - lower) + 1e-4), reach * 0.9999)
+    // Near full stretch the middle joint would snap straight, its bend
+    // changing ever faster as the limb nears its length; over the last
+    // stretch the limb straightens smoothly instead, falling a few
+    // millimetres short of a target it cannot reach.
+    const soft = reach * SOFT_REACH
+    if (distance > reach - soft) {
+        distance = reach - soft * Math.exp((reach - soft - distance) / soft)
+    }
+    distance = Math.min(Math.max(distance, Math.abs(upper - lower) + 1e-4), reach * 0.99999)
     const cosine = (upper * upper + distance * distance - lower * lower) / (2 * upper * distance)
     const along = upper * cosine
     const across = upper * Math.sqrt(Math.max(0, 1 - cosine * cosine))
@@ -119,12 +130,28 @@ export function placeFoot(foot, rig) {
     // Toes stay on the floor while the heel is up, and follow the foot once it lifts.
     let toesQuat = quat.clone()
     let toesOrigin = ball.clone()
+    const toes = new Vector3(0, 0, rig.toeTip - rig.ball)
     if (pitch < 0) {
         const flat = yawQuat(yaw)
         const follow = Math.min(1, lift / (0.04 * scale))
-        toesQuat = flat.slerp(quat, follow)
+        toesQuat = flat.clone().slerp(quat, follow)
+        // Hanging from a foot lifted on tiptoe, the toes bend up as far as
+        // they must to stay above the floor.
+        if (toesOrigin.y + toes.clone().applyQuaternion(toesQuat).y < 0) {
+            let low = 0
+            let high = follow
+            for (let step = 0; step < 12; step += 1) {
+                const middle = (low + high) / 2
+                if (toesOrigin.y + toes.clone().applyQuaternion(flat.clone().slerp(quat, middle)).y < 0) {
+                    high = middle
+                } else {
+                    low = middle
+                }
+            }
+            toesQuat = flat.clone().slerp(quat, low)
+        }
     }
-    const toeTip = toesOrigin.clone().add(new Vector3(0, 0, rig.toeTip - rig.ball).applyQuaternion(toesQuat))
+    const toeTip = toesOrigin.clone().add(toes.clone().applyQuaternion(toesQuat))
     const grounded = lift < 0.002 * scale
     return { ankle, quat, heel, ball, toeTip, toesQuat, toesOrigin, grounded, forward, yaw, pitch }
 }

@@ -3,6 +3,8 @@
 // the words to translate, and a reference for the app's parity test.
 //
 //   node tools/export-app.mjs
+//   node tools/export-app.mjs --reference   only the parity reference, after a
+//                                           change to the solver or timeline
 //
 // Writes (paths from the Inbe repository root; the practice media goes into
 // the practices checkout that ziran.local.toml maps to
@@ -47,8 +49,9 @@ import { solvePose } from '../src/solve.js'
 import { STUDIO_ROOT } from './serve.mjs'
 
 const INBE_ROOT = resolve(STUDIO_ROOT, '..', '..')
+const REFERENCE_ONLY = process.argv.includes('--reference')
 const MEDIA_DIR = realpathSync(join(INBE_ROOT, 'build', 'packages', 'practices'))
-if (MEDIA_DIR.includes(`${sep}.cache${sep}ziran${sep}`)) {
+if (!REFERENCE_ONLY && MEDIA_DIR.includes(`${sep}.cache${sep}ziran${sep}`)) {
     throw new Error('build/packages/practices is the locked package; map practices to your practices checkout in ziran.local.toml')
 }
 const ASSET_DIR = join(MEDIA_DIR, 'taichi')
@@ -300,8 +303,10 @@ for x, alpha in enumerate(alphas):
     image.putpixel((x, 0), (255, 255, 255, alpha))
 image.save(sys.argv[1], optimize=True)
 `
-mkdirSync(ASSET_DIR, { recursive: true })
-execFileSync('python3', ['-I', '-c', edgeScript, join(ASSET_DIR, 'flat-edge.png')])
+if (!REFERENCE_ONLY) {
+    mkdirSync(ASSET_DIR, { recursive: true })
+    execFileSync('python3', ['-I', '-c', edgeScript, join(ASSET_DIR, 'flat-edge.png')])
+}
 
 function rigValue(rig, field) {
     const match = /^spine(\d)$/.exec(field)
@@ -396,17 +401,23 @@ for (const module of outline) {
     }
 }
 const binary = writer.finish()
-mkdirSync(ASSET_DIR, { recursive: true })
-writeFileSync(join(ASSET_DIR, 'course.tch'), binary)
+if (!REFERENCE_ONLY) {
+    mkdirSync(ASSET_DIR, { recursive: true })
+    writeFileSync(join(ASSET_DIR, 'course.tch'), binary)
+} else if (!Buffer.from(binary).equals(readFileSync(join(ASSET_DIR, 'course.tch')))) {
+    console.log('note: the studio course differs from the practices package course.tch the app test reads')
+}
 
 // --- Words ---------------------------------------------------------------------
 
-mkdirSync(dirname(TEXT_FILE), { recursive: true })
-const entries = [...words.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-writeFileSync(TEXT_FILE, entries.map(([key, value]) => `[${key}]\n${value}\n---\n`).join(''))
-const narrationKeys = [...narrationWords].map((text) =>
-    `tai_chi_text_${createHash('sha1').update(text).digest('hex').slice(0, 8)}`).sort()
-writeFileSync(join(STUDIO_ROOT, 'narration-lines.json'), `${JSON.stringify(narrationKeys, null, 2)}\n`)
+if (!REFERENCE_ONLY) {
+    mkdirSync(dirname(TEXT_FILE), { recursive: true })
+    const entries = [...words.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    writeFileSync(TEXT_FILE, entries.map(([key, value]) => `[${key}]\n${value}\n---\n`).join(''))
+    const narrationKeys = [...narrationWords].map((text) =>
+        `tai_chi_text_${createHash('sha1').update(text).digest('hex').slice(0, 8)}`).sort()
+    writeFileSync(join(STUDIO_ROOT, 'narration-lines.json'), `${JSON.stringify(narrationKeys, null, 2)}\n`)
+}
 
 // --- Parity reference ------------------------------------------------------------
 

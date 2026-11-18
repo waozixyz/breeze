@@ -1,11 +1,14 @@
-// A live preview of the practices' stage for the shared practice figure:
-// pick a practice and one of its items, play, pause, scrub or slow it down,
-// turn and zoom. The poses are the practices' own (preview_practices.zi).
-// The figure model is pending, so the stage shows the practice's backdrop
-// with a note, and Breeze's current flat figure when asked.
+// A live preview of the shared practice figure: pick the woman or the man,
+// a practice and one of its items, play, pause, scrub or slow it down, turn
+// and zoom. The poses are the practices' own (preview_practices.zi); the
+// figures are practices' CC0 VRoid models (shared/figure). Breeze's current
+// flat figure shows when asked.
 //
 //   figure_preview                  opens the window
 //   figure_preview --capture DIR    writes the review frames to DIR and exits
+//   figure_preview --audit          lists every awkward moment of the motion
+//   figure_preview --video DIR PRACTICE ITEM FROM TO [man]
+//                                   writes 30 frames a second of a stretch
 //
 // FIGURE_PRACTICES names a practices checkout; otherwise the preview asks
 // `ziran pkg path practices --locked` beside its own manifest.
@@ -14,6 +17,8 @@
 #import "preview_practices"
 #import "preview_capture"
 #import "preview_flat"
+#import "preview_figure"
+#import "preview_motion"
 #import "kryon/scene"
 #import "kryon/session"
 #import "kryon/geometry"
@@ -36,6 +41,7 @@ Timer :: #import "std/timer_linux";
 #import "std/c_string"
 #import "std/byte_text_linux"
 #import "std/math"
+#import "std/float_text"
 #import "std/number_text"
 #import "std/process_capture_linux"
 #import "std/vec"
@@ -44,6 +50,7 @@ libc :: #system_library "libc";
 PreviewGetEnvironment :: (name: *u8) -> *u8 #foreign libc "getenv";
 PreviewWorkingDirectory :: (output: *u8, size: usize) -> *u8 #foreign libc "getcwd";
 PreviewChangeDirectory :: (path: *u8) -> s32 #foreign libc "chdir";
+PreviewFlushOutput :: (stream: *void) -> s32 #foreign libc "fflush";
 
 PreviewState :: struct {
     practice: s32
@@ -53,6 +60,8 @@ PreviewState :: struct {
     speed: float64
     // Shows Breeze's current flat figure on the stage.
     current: bool
+    // Shows the man instead of the woman.
+    man: bool
     turn: float64
     lift: float64
     zoom: float64
@@ -62,6 +71,11 @@ PreviewState :: struct {
 }
 
 preview_state: PreviewState = .{playing = true, speed = 1.0, zoom = 1.0};
+preview_figure: PreviewFigure;
+// Painted frame intervals, reported to the log every 120 frames.
+preview_frames: [120]float64;
+preview_frame_count: s64;
+preview_last_paint: s64;
 preview_backdrops: PreviewBackdrops;
 preview_library: PreviewLibrary;
 preview_picture: Raster.Image;
@@ -88,8 +102,54 @@ main :: (argc: s32, argv: **u8) -> s32 {
         return 1
     }
     preview_state.item = PreviewDefaultItem(*preview_library, preview_state.practice)
+    if argc >= 2 && TextFromCString(argv[1]) == "--audit" {
+        return ifx PreviewAudit(*preview_library) == 0 then 0 else 1
+    }
+    if argc >= 7 && TextFromCString(argv[1]) == "--video" {
+        // --video DIR PRACTICE ITEM FROM TO [man]: frames at 30 a second.
+        values: [4]float64
+        for index: 0..3 {
+            value, ok := ParseFloat64(TextFromCString(argv[index + 3]))
+            values[index] = ifx ok then value else 0.0
+        }
+        man := argc >= 8 && TextFromCString(argv[7]) == "man"
+        return PreviewVideo(*preview_backdrops, *preview_library, TextFromCString(argv[2]), practices, cast(s32)values[0],
+            cast(s32)values[1], values[2], values[3], man)
+    }
+    if argc >= 6 && TextFromCString(argv[1]) == "--trace" {
+        values: [4]float64
+        for index: 0..3 {
+            value, ok := ParseFloat64(TextFromCString(argv[index + 2]))
+            values[index] = ifx ok then value else 0.0
+        }
+        PreviewTrace(*preview_library, cast(s32)values[0], cast(s32)values[1], values[2], values[3])
+        return 0
+    }
+    if argc >= 6 && TextFromCString(argv[1]) == "--shot" {
+        // --shot DIR PRACTICE ITEM SECONDS... [man]: chosen moments.
+        times: [32]float64
+        count: s64
+        man := false
+        for index: 5..argc - 1 {
+            word := TextFromCString(argv[index])
+            if word == "man" {
+                man = true
+            } else if count < 32 {
+                value, ok := ParseFloat64(word)
+                times[count] = ifx ok then value else 0.0
+                count += 1
+            }
+        }
+        practice_number, practice_ok := ParseFloat64(TextFromCString(argv[3]))
+        item_number, item_ok := ParseFloat64(TextFromCString(argv[4]))
+        if !practice_ok || !item_ok {
+            return 1
+        }
+        return PreviewShots(*preview_backdrops, *preview_library, TextFromCString(argv[2]), practices,
+            cast(s32)practice_number, cast(s32)item_number, times[0:count], man)
+    }
     if argc >= 3 && TextFromCString(argv[1]) == "--capture" {
-        return PreviewCapture(*preview_backdrops, *preview_library, TextFromCString(argv[2]))
+        return PreviewCapture(*preview_backdrops, *preview_library, TextFromCString(argv[2]), practices)
     }
     return Desktop.RunTitled(PreviewDraw, 1360, 900, "Figure preview")
 }
@@ -199,10 +259,22 @@ PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
         state.speed = cast(float64)speed.value
     }
     y += 62.0
+    people: [2]Segmented.SegmentOption
+    people[0].label = "Woman"
+    people[1].label = "Man"
+    person := Segmented.Draw(session, Segmented.Props.{.key = 29, .bounds = .{x, y, width, 40.0},
+        .selected_index = ifx state.man then 1 else 0, .has_selection = true}, people[:]).selected_index
+    if person == 0 || person == 1 {
+        state.man = person == 1
+    }
+    y += 50.0
     state.current = Toggle.Draw(session, Toggle.Props.{.key = 23, .bounds = .{x, y, width, 40.0},
         .label = "Current flat figure", .value = state.current}).value
     y += 56.0
-    note := "Model pending: the practice figure appears here once a new model is chosen."
+    note := "The figures are pixiv's CC0 VRoid sample models."
+    if !preview_figure.loaded {
+        note = "The figure could not be loaded."
+    }
     if preview_failed {
         note = "The stage could not be painted."
     }
@@ -231,8 +303,10 @@ PreviewPaintStage :: (session: Session, area: Rectangle) {
     if key != preview_painted_key || preview_texture.id == 0 {
         moment := PreviewSample(*preview_library, state.practice, state.item, state.seconds)
         view := PreviewViewOf(*moment, state.turn, state.lift, state.zoom)
-        preview_failed = !PreviewStage(*preview_backdrops, state.practice, *moment, view, state.current, width,
-            height, *preview_picture)
+        unused PreviewFigureUse(*preview_figure, TextView(preview_practices_path[0:preview_practices_length]), state.man)
+        preview_failed = !PreviewStage(*preview_backdrops, state.practice, *moment, view, state.current,
+            *preview_figure, width, height, *preview_picture, state.seconds)
+        PreviewTiming()
         if !preview_failed {
             texture := preview_texture
             if texture.id != 0 && (texture.width != width || texture.height != height ||
@@ -260,10 +334,10 @@ PreviewPaintStage :: (session: Session, area: Rectangle) {
 PreviewKey :: (width: s32, height: s32) -> u64 {
     state := *preview_state
     digest: u64 = 1469598103934665603
-    moving := ifx state.current then 1.0 else 0.0
-    values: [7]float64 = .[cast(float64)state.practice, cast(float64)state.item, state.seconds * moving,
+    moving := ifx state.current || preview_figure.loaded then 1.0 else 0.0
+    values: [9]float64 = .[cast(float64)state.practice, cast(float64)state.item, state.seconds * moving,
         (state.turn + state.lift * 7.0 + state.zoom * 13.0) * moving, moving, cast(float64)width,
-        cast(float64)height]
+        cast(float64)height, 0.0, ifx state.man then 1.0 else 0.0]
     for value: values {
         bits := cast(u64)(value * 1000003.0 + 0.5)
         digest = digest * 1099511628211 + bits
@@ -297,6 +371,38 @@ PreviewSeconds :: (seconds: float64, duration: float64, output: []u8) -> string 
         }
     }
     return TextView(output[0:length])
+}
+
+// Every 120 painted frames, the median and slowest frame interval and the
+// last render time go to the log, with the figure shown.
+PreviewTiming :: () {
+    now := Timer.MonotonicNanoseconds()
+    if preview_last_paint != 0 {
+        preview_frames[preview_frame_count % 120] = cast(float64)(now - preview_last_paint) / 1000000.0
+        preview_frame_count += 1
+        if preview_frame_count % 120 == 0 {
+            sorted: [120]float64
+            for at: 0..119 {
+                value := preview_frames[at]
+                spot := at
+                while spot > 0 && sorted[spot - 1] > value {
+                    sorted[spot] = sorted[spot - 1]
+                    spot -= 1
+                }
+                sorted[spot] = value
+            }
+            median_digits: [32]u8
+            slow_digits: [32]u8
+            render_digits: [32]u8
+            median := FormatDecimal(sorted[60], 1, median_digits[:])
+            slow := FormatDecimal(sorted[114], 1, slow_digits[:])
+            render := FormatDecimal(preview_figure.render_ms, 1, render_digits[:])
+            print("figure preview timing, %: frame median % ms, p95 % ms, render % ms, gpu=%\n",
+                ifx preview_state.man then "man" else "woman", median, slow, render, preview_figure.accelerated)
+            unused PreviewFlushOutput(null)
+        }
+    }
+    preview_last_paint = now
 }
 
 PreviewPracticesPath :: () -> string {

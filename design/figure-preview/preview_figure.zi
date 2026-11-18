@@ -1,0 +1,157 @@
+// The practice figure, the woman or the man (practices' shared/figure,
+// CC0 VRoid models), loaded through practices' figure_model, posed from the
+// practice's joints and drawn with the toon look over the stage.
+#import "figure_math"
+#import "figure_joints"
+#import "figure_model"
+#import "figure_finish"
+#import "preview_flat"
+#import "kryon/scene"
+#import "kryon/scene_render"
+#import "kryon/scene_gpu"
+#import "std/math"
+#import "std/vec"
+Raster :: #import "std/image";
+Timer :: #import "std/timer_linux";
+
+PreviewFigure :: struct {
+    scene: Scene
+    model: FigureModel
+    gpu: SceneGpuContext
+    pixels: Raster.Image
+    man: bool
+    loaded: bool
+    // Whether a load was tried for this person.
+    tried: bool
+    accelerated: bool
+    render_ms: float64
+}
+
+PreviewFigureRelease :: (figure: *PreviewFigure) {
+    FigureModelRelease(*figure.model)
+    SceneFree(*figure.scene)
+    SceneGpuRelease(*figure.gpu)
+    VecFree(figure.pixels.pixels)
+    figure.loaded = false
+    figure.tried = false
+}
+
+// Loads the woman or the man from PRACTICES (a practices checkout) unless
+// already loaded.
+PreviewFigureUse :: (figure: *PreviewFigure, practices: string, man: bool) -> bool {
+    if figure.tried && figure.man == man {
+        return figure.loaded
+    }
+    PreviewFigureRelease(figure)
+    figure.man = man
+    figure.tried = true
+    path: [1200]u8
+    named := PreviewFigureJoin(path[:], practices, "/shared/figure/", ifx man then "man.vrm" else "woman.vrm")
+    SceneInit(*figure.scene)
+    figure.scene.background = .{0, 0, 0, 0}
+    figure.loaded = FigureModelLoad(*figure.model, *figure.scene, named) && FigureModelToon(*figure.model, *figure.scene)
+    if !figure.loaded {
+        print("figure preview: % could not be loaded\n", named)
+    }
+    return figure.loaded
+}
+
+// Paints the loaded figure at JOINTS as VIEW frames it, with a soft shadow
+// on the floor, into figure.pixels (straight RGBA, clear background).
+// Played at SECONDS of the practice her hair swings and her eyes blink.
+PreviewFigurePaint :: (figure: *PreviewFigure, joints: *FigureJoints, view: PreviewView, width: s32,
+    height: s32, seconds: float64 = -1.0) -> bool {
+    if !figure.loaded || !FigureModelPose(*figure.model, *figure.scene, joints, seconds) {
+        return false
+    }
+    toward := FigureV3(Sin(view.yaw) * Cos(view.pitch), Sin(view.pitch), Cos(view.yaw) * Cos(view.pitch))
+    half_height := view.height / 2.0
+    half_width := half_height * cast(float64)width / cast(float64)height
+    camera := OrthographicCamera(-half_width, half_width, half_height, -half_height, 0.05, 30.0)
+    camera.target = view.center
+    camera.position = FigureAddScaled(view.center, toward, 8.0)
+    camera.up = FigureV3(0.0, 1.0, 0.0)
+    // The key light from above her front left turns with the camera.
+    light := FigureRotate(FigureAxisAngle(FigureV3(0.0, 1.0, 0.0), view.yaw), FigureV3(-0.45, 0.75, 0.55))
+    FigureModelLight(*figure.model, light, toward)
+    if figure.pixels.width != width || figure.pixels.height != height {
+        if !VecResize(figure.pixels.pixels, cast(s64)width * height * 4) {
+            return false
+        }
+        figure.pixels.width = width
+        figure.pixels.height = height
+    }
+    clock := Timer.MonotonicNanoseconds()
+    result := SceneGpuRenderOrCPU(*figure.gpu, *figure.scene, camera, *figure.pixels)
+    figure.render_ms = cast(float64)(Timer.MonotonicNanoseconds() - clock) / 1000000.0
+    figure.accelerated = result.accelerated
+    if !result.ok {
+        return false
+    }
+    PreviewFigureShadow(figure, joints, camera, view)
+    return true
+}
+
+#scope_file
+PreviewFigureJoin :: (buffer: []u8, a: string, b: string, c: string) -> string {
+    length: s64
+    parts: [3]string = .[a, b, c]
+    for part: parts {
+        for byte: part {
+            if length < buffer.count {
+                buffer[length] = byte
+                length += 1
+            }
+        }
+    }
+    return TextView(buffer[0:length])
+}
+
+// A soft contact shadow under the feet: an ellipse on the floor round the
+// lowest joints, projected into the picture.
+PreviewFigureShadow :: (figure: *PreviewFigure, joints: *FigureJoints, camera: SceneCamera, view: PreviewView) {
+    points: [6]Vector3 = .[joints.ankles[0], joints.ankles[1], joints.toes[0], joints.toes[1], joints.pelvis,
+        joints.wrists[0]]
+    floor: float64 = 1000.0
+    for point: points {
+        floor = FigureMin(floor, point.y)
+    }
+    low: Vector3 = .{1000.0, 0.0, 1000.0}
+    high: Vector3 = .{-1000.0, 0.0, -1000.0}
+    for point: points {
+        if point.y < floor + 0.35 {
+            low = .{FigureMin(low.x, point.x), 0.0, FigureMin(low.z, point.z)}
+            high = .{FigureMax(high.x, point.x), 0.0, FigureMax(high.z, point.z)}
+        }
+    }
+    center: Vector3 = .{(low.x + high.x) * 0.5, floor - 0.06, (low.z + high.z) * 0.5}
+    radii: Vector3 = .{(high.x - low.x) * 0.5 + 0.22, 0.0, (high.z - low.z) * 0.5 + 0.18}
+    look := FigureNormalize(FigureSub(camera.target, camera.position))
+    if FigureAbs(look.y) < 0.03 {
+        return
+    }
+    right := FigureNormalize(FigureCross(look, camera.up))
+    up := FigureCross(right, look)
+    image := *figure.pixels
+    scale := cast(float64)image.height / view.height
+    origin := PreviewFigurePixel(center, camera, right, up, scale, image)
+    a := PreviewFigurePixel(FigureAdd(center, FigureV3(radii.x, 0.0, 0.0)), camera, right, up, scale, image)
+    b := PreviewFigurePixel(FigureAdd(center, FigureV3(0.0, 0.0, radii.z)), camera, right, up, scale, image)
+    ax := a.x - origin.x
+    ay := a.y - origin.y
+    bx := b.x - origin.x
+    by := b.y - origin.y
+    det := ax * by - bx * ay
+    if FigureAbs(det) < 0.5 {
+        return
+    }
+    spot: FigureSpot = .{origin = origin, xx = by / det, xy = -bx / det, yx = -ay / det, yy = ax / det}
+    FigureContactShadow(image, spot, 0.38)
+}
+
+PreviewFigurePixel :: (point: Vector3, camera: SceneCamera, right: Vector3, up: Vector3, scale: float64,
+    image: *Raster.Image) -> ShapePoint {
+    offset := FigureSub(point, camera.target)
+    return .{cast(float64)image.width * 0.5 + FigureDot(offset, right) * scale,
+        cast(float64)image.height * 0.5 - FigureDot(offset, up) * scale}
+}

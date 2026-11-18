@@ -9,17 +9,21 @@ choice. Breeze colours and backdrops stay.
 
 The MakeHuman-based figures were removed on 2026-11-18 at the owner's
 request; never use a MakeHuman-based body again (MakeHuman, MPFB, Anny,
-MB-Lab, CharMorph). The live tuning tool `design/figure-preview/` shows
-the empty stage with a "model pending" note.
+MB-Lab, CharMorph). The owner picked pixiv's CC0 VRoid sample models
+(practices `shared/figure/woman.vrm` and `man.vrm`); the preview
+(`design/figure-preview/`) plays every practice with her or him.
 
-- The owner picks a model from `plans/2026-11-18-figure-model-candidates.md`
-  (contact sheet: `build/model-candidates/contact-sheet.png`).
-- Kryon's glTF importer (meshes, skins, animations, morph targets, PBR
-  materials) is being added in another task; the picked model loads
-  through it.
-- Then: map `FigureJoints` (practices `figure/figure_joints.zi`) onto the
-  model's skeleton, light it with Kryon's standard material, and show it on
-  the preview's stage and in the capture frames.
+- Tai Chi parity: `make test`'s `tests/tai_chi_zi_test.sh` compares the
+  app's solver with the studio's reference, regenerated for the natural
+  stepping, pivots, hand turning, soft reach and toe clamp
+  (`node design/tai-chi/tools/export-app.mjs --reference`). The studio's
+  course differs from the course.tch in the pinned practices package, so
+  sample 11 (the right palm) differs until the owner of the course exports
+  it to practices and Breeze repins.
+- Motion still to smooth (`figure_preview --audit`): the Workout side
+  plank's roll to the second side drifts the feet 2-3 cm (the feet have no
+  edge to roll on) and jerks the left elbow once; two Tai Chi wrist turns
+  (Single Whip again, the full form at 170 s) change speed at 27 m/s².
 - Astral session timings: practices' `astral_projection/sessions/*.json`
   are another task's uncommitted files. Until they are pushed, a pinned
   preview plays the six techniques with steps evenly 20 seconds apart.
@@ -34,5 +38,5 @@ the empty stage with a "model pending" note.
   locales but only 407/880 female clips (cs 6, de 86, en 86, es 78, fr 37,
   ja 5, ko 6, pt 88, ru 10, zh 5). Complete and listen through the owning
   narration task; legacy cues do not fill the new exercise keys.
-- The three.js astral studies (`design/astral-projection/three/`) play with
-  invisible stand-in skeletons until the new model is chosen.
+- The three.js astral studies (`design/astral-projection/three/`) still
+  play stand-in skeletons; load the chosen VRM there.

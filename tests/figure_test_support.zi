@@ -47,3 +47,78 @@ FigureSound :: (pose: *WorkoutPose, rig: *TaiChiRig, exercise: s32) -> bool {
     return test_frame.op_count > 40 && test_frame.op_count < TAI_CHI_FLAT_OP_CAPACITY
 }
 
+// Measures how natural a practice's motion is as it plays thirty times a
+// second: how far a planted heel or ball strays from where it was set down
+// while it stays on the floor, how far
+// any part of a foot goes below it, the fastest any joint moves, and how
+// far a knee bends backwards (against the way its foot faces).
+MOTION_STEP :: 0.03333333333333333
+
+MotionCheck :: struct {
+    previous: TaiChiSolved
+    have_previous: bool
+    crept: [4]float64
+    planted: [4]TaiChiVector3
+    worst_slide: float64
+    lowest: float64
+    fastest: float64
+    knee_back: float64
+}
+
+MotionStart :: (check: *MotionCheck) {
+    check.have_previous = false
+    for slot: 0..3 {
+        check.crept[slot] = 0.0
+    }
+}
+
+MotionStep :: (check: *MotionCheck, solved: *TaiChiSolved) {
+    for side: cast(s32)0..1 {
+        parts: [4]TaiChiVector3 = .[solved.ankles[side], solved.heels[side], solved.balls[side], solved.toes[side]]
+        for part: parts {
+            check.lowest = TaiChiMin(check.lowest, part.y)
+        }
+        // Heel and ball are contacts while the foot stands on its sole.
+        upright := TaiChiRotate(TaiChiV3(0.0, 1.0, 0.0), solved.foot_quats[side]).y > 0.1
+        contacts: [2]TaiChiVector3 = .[solved.heels[side], solved.balls[side]]
+        before: [2]TaiChiVector3 = .[check.previous.heels[side], check.previous.balls[side]]
+        for point: cast(s32)0..1 {
+            slot := side * 2 + point
+            if upright && check.have_previous && contacts[point].y < 0.02 && before[point].y < 0.02 && check.crept[slot] >= 0.0 {
+                planted := check.planted[slot]
+                check.crept[slot] = TaiChiHypot(contacts[point].x - planted.x, contacts[point].z - planted.z)
+                check.worst_slide = TaiChiMax(check.worst_slide, check.crept[slot])
+            } else {
+                check.crept[slot] = 0.0
+                check.planted[slot] = contacts[point]
+            }
+        }
+        heading := TaiChiNormalize3(TaiChiCross3(TaiChiRotate(TaiChiV3(1.0, 0.0, 0.0), solved.foot_quats[side]),
+            TaiChiV3(0.0, 1.0, 0.0)))
+        line := TaiChiSub3(solved.ankles[side], solved.hips[side])
+        along := TaiChiClamp(TaiChiDot3(TaiChiSub3(solved.knees[side], solved.hips[side]), line) /
+            TaiChiMax(TaiChiDot3(line, line), 0.000001), 0.0, 1.0)
+        off := TaiChiDot3(TaiChiSub3(solved.knees[side], TaiChiAddScaled3(solved.hips[side], line, along)), heading)
+        check.knee_back = TaiChiMax(check.knee_back, -off)
+    }
+    if check.have_previous {
+        now: [11]TaiChiVector3 = .[solved.pelvis, solved.chest, solved.neck_base, solved.elbows[0], solved.elbows[1],
+            solved.wrists[0], solved.wrists[1], solved.knees[0], solved.knees[1], solved.ankles[0], solved.ankles[1]]
+        then: [11]TaiChiVector3 = .[check.previous.pelvis, check.previous.chest, check.previous.neck_base,
+            check.previous.elbows[0], check.previous.elbows[1], check.previous.wrists[0], check.previous.wrists[1],
+            check.previous.knees[0], check.previous.knees[1], check.previous.ankles[0], check.previous.ankles[1]]
+        for at: 0..10 {
+            check.fastest = TaiChiMax(check.fastest, TaiChiDistance3(now[at], then[at]) / MOTION_STEP)
+        }
+    }
+    check.previous = solved.*
+    check.have_previous = true
+}
+
+// Whether the motion kept within the bounds: a planted contact creeping at
+// most SLIDE metres, nothing below the floor by more than 5 mm, no joint
+// faster than SPEED m/s and no knee bent backwards by more than 3 cm (about
+// four degrees past straight, which a knee allows).
+MotionWithin :: (check: *MotionCheck, slide: float64, speed: float64) -> bool {
+    return check.worst_slide <= slide && check.lowest >= -0.005 && check.fastest <= speed && check.knee_back <= 0.03
+}
