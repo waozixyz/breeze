@@ -98,37 +98,45 @@ export async function verifySunSalutationCanvas({ evaluate, click, scroll, resiz
     if (!response.ok) throw new Error('Sun Salutation content is unavailable');
     const bundle = new Uint8Array(await response.arrayBuffer());
     const view = new DataView(bundle.buffer);
-    // "ZX" and two zero bytes, then the little-endian format version.
-    if (view.getUint32(0, true) !== 0x0000585a || view.getUint32(4, true) !== 26)
+    const wide = offset => Number(view.getBigUint64(offset, true));
+    // A ZX 28 executable: "ZX", two zero bytes and the version, a 64-byte
+    // header, then 32-byte section records; section kind 3 holds the assets.
+    if (view.getUint32(0, true) !== 0x0000585a || view.getUint32(4, true) !== 28)
       throw new Error('Unsupported Practices package');
-    let at = 8;
+    const sections = view.getUint32(32, true);
+    if (view.getUint32(8, true) !== 64 || view.getUint32(12, true) !== 32 ||
+        wide(40) !== bundle.length || wide(48) !== 64 || sections < 3 ||
+        64 + sections * 32 > bundle.length)
+      throw new Error('Invalid Practices package');
+    let at = -1;
+    let end = 0;
+    for (let index = 0; index < sections; index++) {
+      const record = 64 + index * 32;
+      if (view.getUint32(record, true) !== 3 || !(view.getUint32(record + 4, true) & 1)) continue;
+      at = wide(record + 8);
+      end = at + wide(record + 16);
+    }
+    if (at < 0 || end > bundle.length) throw new Error('Practices package has no assets');
     function number() {
+      if (end - at < 4) throw new Error('Truncated Practices package');
       const value = view.getUint32(at, true);
       at += 4;
       return value;
     }
     function take(size) {
-      if (size > bundle.length - at) throw new Error('Truncated Practices package');
+      if (size > end - at) throw new Error('Truncated Practices package');
       const value = bundle.subarray(at, at + size);
       at += size;
       return value;
     }
     function text() { return new TextDecoder().decode(take(number())); }
-    text(); text();
-    for (let count = number(); count > 0; count--) { text(); text(); }
-    for (let count = number(); count > 0; count--) {
-      for (let field = 0; field < 7; field++) text();
-      take(8); text(); take(4);
-    }
-    for (let count = number(); count > 0; count--) { text(); text(); text(); }
-    take(number());
     const files = new Map();
     for (let count = number(); count > 0; count--) {
       const name = text();
       if (files.has(name)) throw new Error('Duplicate package resource ' + name);
       files.set(name, take(number()));
     }
-    if (at !== bundle.length) throw new Error('Trailing Practices package data');
+    if (at !== end) throw new Error('Trailing Practices package data');
     const root = 'assets/practices/sunsalutation/characters';
     const characters = [...new Set([...files.keys()].filter(name => name.startsWith(root + '/'))
       .map(name => name.slice(root.length + 1).split('/')[0]))].sort();

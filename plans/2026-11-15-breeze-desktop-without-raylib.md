@@ -219,17 +219,12 @@ Ziran's.
 ## Open work
 
 Owner, 2026-11-17: "are yo udonig this please finsh removing rayilb". Breeze
-builds with no raylib on every host, on Ziran 7fbc8152, Kryon b5a61b37 and
+builds with no raylib on every host, on Ziran 0c4465a4, Kryon 1774e550 and
 plot, entity, apps, css and game2d pinned to that Kryon. Linux and Windows
 run on Kryon's SDL2 and Cairo desktop host, Android on its own-loop
 `android_runtime` with Pixmap, and the browser on Kryon's canvas. Audio is
 Ziran's std audio natively, with Kryon's Web Audio in the browser.
 
-- [ ] Android pictures (Kryon AN5): every Breeze picture is inside its
-  bundles, and Pixmap's Android source reads only the APK's assets and the
-  disk. Kryon needs a reader hook like `cairo_assets.RasterUseAssets`, or an
-  exported `PixmapImageSourceUse`; then `src/platform/asset_files.zi`'s
-  Android branch serves bundle bytes through `PixmapLoadImageBytes`.
 - [ ] AVIF from the linked codecs (Kryon K13): `KRYON_AVIF_LINKED` imports
   `avif/bridge/static`, which the pinned avif package does not export.
   Until then `make native` copies `libkryonavif.so` beside the binary, and
