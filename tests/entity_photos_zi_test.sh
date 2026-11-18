@@ -23,7 +23,7 @@ mkdir -p "$work/generated" "$work/data"
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --entry entity_photos_behavior:Check \
     -o "$work/generated" "$root/tests/entity_photos_behavior.zi" \
     "$root/tests/sync_test_host.zi"

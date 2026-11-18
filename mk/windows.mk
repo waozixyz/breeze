@@ -80,7 +80,7 @@ $(WIN64_OPUS_A): mk/windows.mk ziran.lock $(AUDIO_PACKAGE_DIR)/native/AudioCodec
 	$(CMAKE) --build $(WIN64_OPUS_BUILD_DIR) --target opus --parallel 2
 	@test -f $@
 
-$(WINDOWS_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile mk/windows.mk ziran.lock $(ZIRAN_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(WINDOWS_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile mk/windows.mk ziran.lock $(ZIRAN_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WINDOWS_GEN_DIR)
 	mkdir -p $(WINDOWS_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZIRAN_BIN) build --target=c --project --offline $(PACKAGE_FLAGS) \

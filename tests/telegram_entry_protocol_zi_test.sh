@@ -13,7 +13,7 @@ export YUE_DESKTOP_RECOVERY=0
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --entry telegram_entry_protocol_behavior:Check -o "$work/generated" \
     "$root/tests/telegram_entry_protocol_behavior.zi" "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'

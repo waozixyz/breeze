@@ -152,18 +152,18 @@ storage-paths-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		sh tests/storage_paths_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
-.PHONY: daochi-client-zi-test
-daochi-client-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
+.PHONY: mesh-client-zi-test
+mesh-client-zi-test: $(ZI2C_BIN) $(LIBOQS_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		ZI2C_BIN=$(abspath $(ZI2C_BIN)) ZIRAN_DIR=$(abspath $(ZIRAN_DIR)) \
 		ZIRAN_BIN=$(abspath $(ZIRAN_BIN)) OQS_DIR=$(abspath build/packages/oqs) \
 		CRYPTO_DIR=$(abspath build/packages/crypto) LIBOQS_A=$(abspath $(LIBOQS_A)) \
-		sh build/packages/daochi-client/tests/run.sh
+		sh build/packages/mesh-client/tests/run.sh
 
-.PHONY: daochi-native-zi-test device-link-zi-test
-daochi-native-zi-test: $(ZI2C_BIN)
+.PHONY: mesh-native-zi-test device-link-zi-test
+mesh-native-zi-test: $(ZI2C_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-		python3 tests/daochi_native_zi_test.py $(ZI2C_BIN)
+		python3 tests/mesh_native_zi_test.py $(ZI2C_BIN)
 
 device-link-zi-test: $(ZIRAN_BIN) $(LIBOQS_A)
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \

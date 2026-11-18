@@ -4,7 +4,7 @@ The catalog is an asset of the signed Practices harness. Its exact hashes bind
 each practice and language to a resource-only ZX. Lumi's guide narration is
 listed separately under "guide", one pack per language, so hosts that predate
 it keep reading the practice list unchanged. All blobs use the existing
-inbe.practices publisher and Daochi artifact endpoint, with no new registry IDs.
+inbe.practices publisher and Mesh artifact endpoint, with no new registry IDs.
 """
 import json
 from hashlib import sha256

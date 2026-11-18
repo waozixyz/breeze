@@ -2,7 +2,7 @@
 """Print the known-answer entity record of tests/storage_sync_behavior.zi.
 
 The record is sealed with libsodium (PyNaCl), as other apps of the account
-seal theirs, in Daochi's record profile (docs/entity-data.md): the record
+seal theirs, in Mesh's record profile (docs/entity-data.md): the record
 key of kind photos from the test account's private key, XChaCha20-Poly1305
 with a fixed nonce, and the profile's sorted-key envelope, base64url without
 padding. Run it to reproduce the constants the test embeds.

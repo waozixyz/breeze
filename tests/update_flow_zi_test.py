@@ -81,7 +81,7 @@ def build_probe(work, compiler, env):
         *subprocess.check_output(["sh", "scripts/package-paths.sh"], cwd=ROOT, text=True).split(),
         "--module-path", "build/packages/kryon/src/backend",
         "--module-path", "build/packages/ziran/std",
-        "--module-path", "build/packages/daochi-client",
+        "--module-path", "build/packages/mesh-client",
         "-o", str(output), "tests/update_flow_probe.zi",
     ], cwd=ROOT, check=True, env=env)
     sdl = subprocess.check_output(

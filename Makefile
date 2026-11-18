@@ -431,8 +431,8 @@ ZI_PACKAGE_PATHS := $(shell sh scripts/package-paths.sh)
 ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort) apps/practice/hold_reminder.zi apps/practice/whm_controls.zi $(wildcard apps/practice/astral_projection*.zi) $(wildcard apps/practice/workout*.zi) $(wildcard apps/practice/sun_salutation*.zi)
 GAME2D_DIR := build/packages/game2d
 GAME2D_MODULES := $(wildcard $(GAME2D_DIR)/src/*/*.zi)
-DAOCHI_CLIENT_DIR ?= build/packages/daochi-client
-DAOCHI_CLIENT_MODULES := $(wildcard $(DAOCHI_CLIENT_DIR)/*.zi)
+MESH_CLIENT_DIR ?= build/packages/mesh-client
+MESH_CLIENT_MODULES := $(wildcard $(MESH_CLIENT_DIR)/*.zi)
 ZIRAN_STD_MODULES := $(wildcard $(ZIRAN_DIR)/std/*.zi)
 KRYON_ZI_MODULES := $(shell find $(KRYON_DIR)/src -type f -name '*.zi' | LC_ALL=C sort)
 KRY_GEN_SRCS := $(patsubst %.zi,$(KRY_GEN_DIR)/%.c,$(ZI_SRCS))
@@ -672,7 +672,7 @@ $(ZIRAN_BIN): $(ZI2C_BIN)
 zi-check: $(ZI_CHECK_STAMP) | build-laws
 
 $(ZI_CHECK_STAMP): ziran.lock $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile scripts/check-zi-sources.py scripts/package-paths.sh $(KRYON_DIR)/ziran.toml $(ZIRAN_BIN) \
-	$(ZI_SRCS) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) \
+	$(ZI_SRCS) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) \
 	$(KRYON_UI_ZI) $(KRYON_CSS_ZI) $(GAME2D_MODULES) | build-laws
 	@ZI_CHECK_DEFINES="$(ZI_NATIVE_DEFINES)" python3 scripts/check-zi-sources.py $(ZIRAN_BIN)
 	@mkdir -p $(dir $@)
@@ -710,7 +710,7 @@ $(KRYON_CSS_STAMP): Makefile $(ZI2C_BIN) $(KRYON_CSS_ZI) $(KRYON_DIR)/src/ui/mod
 $(KRYON_CSS_C) $(KRYON_CSS_H): $(KRYON_CSS_STAMP)
 	@test -f $@
 
-$(KRY_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile ziran.lock scripts/package-paths.sh $(KRYON_DIR)/ziran.toml $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(KRY_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile ziran.lock scripts/package-paths.sh $(KRYON_DIR)/ziran.toml $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	# --prune-stale removes generated files this run no longer writes, so an
 	# obsolete header/code pair never survives. Unchanged files keep their
 	# timestamps, so only C that actually changed recompiles.

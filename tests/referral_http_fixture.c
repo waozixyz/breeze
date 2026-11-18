@@ -1,6 +1,6 @@
 /* Test-only transport substitution for owned native referral UI processes.
  * The real client retains its canonical issuer and signs production requests.
- * Only curl's final transport URL is mapped to a private test-only Daochi.
+ * Only curl's final transport URL is mapped to a private test-only Mesh.
  * Every other destination fails closed; this library is never packaged.
  */
 #define _GNU_SOURCE

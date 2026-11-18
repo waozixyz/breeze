@@ -33,7 +33,7 @@ def generate(output, architecture=None):
     arguments = [
         "sh", str(ROOT / "scripts/run-ziran.sh"), str(BIN / "zi2c"), "--no-main", "--root", str(ROOT),
         "--module-path", str(ROOT / "build/packages/ziran/std"),
-        "--module-path", str(ROOT / "build/packages/daochi-client"),
+        "--module-path", str(ROOT / "build/packages/mesh-client"),
         "--module-path", str(UI), "--module-path", str(BACKEND),
         "--module-path", "kryon=" + str(UI), "--module-path", "kryon=" + str(BACKEND),
         "--module-path", "entity=" + str(Path(os.environ.get("ENTITY_DIR", ROOT / "build/packages/entity")) / "src"),

@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parent.parent
 NAMES = {"inbe": "Inner Breeze", "habits": "Habits", "practices": "Practices",
          "lists": "Lists", "diary": "Diary", "lumi": "Lumi",
          "leaderboard": "Leaderboard"}
-# Declaration order is part of Daochi's Go JSON signature contract.
+# Declaration order is part of Mesh's Go JSON signature contract.
 FIELDS = ("manifest_version", "manifest_sequence", "app_id", "display_name", "description",
           "homepage_url", "source_url", "status", "expires_at", "lan_only",
           "lan_networks", "registration_node_id", "app_schema_version",
@@ -103,7 +103,7 @@ def manifest_for(component, existing, key_id, public):
 def suspension_for(app_id, existing, key_id, public, sequence):
     """The node's registration of app_id, unchanged except suspended.
 
-    Daochi keeps the manifest with the highest sequence, so the suspension
+    Mesh keeps the manifest with the highest sequence, so the suspension
     must name one above the node's: a replayed older approval cannot list the
     app again.
     """

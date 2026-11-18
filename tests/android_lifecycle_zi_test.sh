@@ -9,13 +9,13 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     "$root/src/platform/android/android_lifecycle.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     -o "$work/gen" "$root/src/platform/android/android_lifecycle.zi" \
@@ -35,7 +35,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 "$bin/zi2c" --root "$root" --entry android_pause_behavior:main --exe \
     --module-path "$root/src" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/ziran/std" \

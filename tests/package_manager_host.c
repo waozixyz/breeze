@@ -116,7 +116,7 @@ void AppsCommitPreparation(int32_t index, int32_t revision) {
     assert(index >= 0 && revision > 0);
 }
 
-/* Wraps daochi-client's SecureRandom so the device bucket is fixed. */
+/* Wraps mesh-client's SecureRandom so the device bucket is fixed. */
 int32_t __wrap_SecureRandom(uint8_t *output, int64_t length) {
     for (int64_t index = 0; index < length; index++) {
         output[index] = (uint8_t)(index * 37 + 11);

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise Inbe's Ziran Daochi adapter through a disposable HTTP server."""
+"""Exercise Inbe's Ziran Mesh adapter through a disposable HTTP server."""
 
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -15,6 +15,7 @@ import threading
 
 ROOT = Path(__file__).resolve().parent.parent
 COMPILER = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "build/packages/ziran/build/bin/zi2c"
+MESH_CLIENT = Path(os.environ.get("MESH_CLIENT_DIR", ROOT / "build/packages/mesh-client"))
 USER_ID = "a" * 64
 NONCE = "c" * 64
 
@@ -145,40 +146,41 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(400, b"{}")
 
 
-with tempfile.TemporaryDirectory(prefix="inbe-daochi-native-") as temporary:
+(ROOT / "build/tests").mkdir(parents=True, exist_ok=True)
+with tempfile.TemporaryDirectory(prefix="mesh-native-", dir=ROOT / "build/tests") as temporary:
     generated = Path(temporary) / "generated"
     executable = Path(temporary) / "client"
     subprocess.run([
         str(COMPILER), "--no-main", "--root", str(ROOT / "src"),
         "--module-path", str(ROOT / "build/packages/ziran/std"),
-        "--module-path", str(ROOT / "build/packages/daochi-client"),
+        "--module-path", str(MESH_CLIENT),
         "--module-path", str(ROOT / "build/packages/kryon/src/ui"),
         *subprocess.check_output(["sh", str(ROOT / "scripts/package-paths.sh"), str(ROOT / "build/packages")], text=True).split(),
         "--module-path", str(ROOT / "build/packages/kryon/src/backend"),
         "--module-path", str(ROOT / "build/packages/css/src"),
         "--module-path", str(ROOT / "build/packages/game2d/src"),
-        "-o", str(generated), str(ROOT / "src/storage/daochi_native.zi"),
+        "-o", str(generated), str(ROOT / "src/storage/mesh_native.zi"),
     ], check=True)
     session_type = ResolveGeneratedAuthSessionType(
-        (generated / "storage/daochi_native.h").read_text()
-        + "\n" + (generated / "auth.h").read_text()
+        (generated / "storage/mesh_native.h").read_text()
+        + "\n" + GeneratedSource(generated, "auth.h").read_text()
     )
     # Only the account path is linked; unused storage code is dropped.
     sources = [
-        "storage/daochi_native.c", "daochi_account.c", "delegate_store.c",
+        "storage/mesh_native.c", "mesh_account.c", "delegate_store.c",
         "client.c", "auth.c", "url.c", "wire.c",
         "sync.c", "transaction.c", "keys.c", "crypto.c", "sha256.c", "Oqs.c",
-        "net_http_curl_linux.c", "json_scan.c", "text.c", "text_buffer.c",
+        "net_http.c", "net_http_curl_linux.c", "json_scan.c", "json_bytes.c", "text.c", "text_buffer.c",
         "byte_text_linux.c", "c_string.c",
     ]
     subprocess.run([
         os.environ.get("CC", "cc"), "-std=c11", "-O0", "-Wall", "-Wextra",
         "-Werror", "-Wno-unused-function", "-Wno-unused-variable",
         "-ffunction-sections", "-fdata-sections", "-Wl,--gc-sections",
-        f"-DDAOCHI_FIXTURE_SESSION_TYPE={session_type}",
+        f"-DMESH_FIXTURE_SESSION_TYPE={session_type}",
         f"-I{ROOT / 'build/packages/ziran/include'}", f"-I{generated}",
         f"-I{generated / 'storage'}",
-        str(ROOT / "tests/daochi_native_zi_test.c"),
+        str(ROOT / "tests/mesh_native_zi_test.c"),
         *(str(GeneratedSource(generated, source)) for source in sources),
         "-l:libcurl.so.4", "-lz", "-o", str(executable),
     ], check=True)

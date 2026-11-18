@@ -1,7 +1,7 @@
 # Account activity and Telegram reopening
 
 The Lumi bot's link belongs to the numeric Telegram account and remains in
-Daochi's database across Telegram clients and node restarts. It does not belong
+Mesh's database across Telegram clients and node restarts. It does not belong
 to a Telegram Desktop window or a Mini App launch.
 
 On reopening the Mini App, Inbe verifies fresh Telegram identity, validates the
@@ -43,7 +43,7 @@ Validation: `make account-activity-test telegram-account-flow-test
 sync-safety-test android-timer-zi-test android-lifecycle-zi-test`;
 `make build-laws proof-test sync-recovery-test version-test`; and the
 two-client `sync-server-test` scenario, which exchanges the encrypted session,
-pause request, acknowledgement, and completion through a real Daochi server.
+pause request, acknowledgement, and completion through a real Mesh server.
 `make account-activity-ui-test` checks the desktop and narrow-screen live view,
 remote control acknowledgement, stale controls, and completion on a private
 Xvfb display. Harmony's application state also exposes the account activity

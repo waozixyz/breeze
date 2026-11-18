@@ -82,7 +82,7 @@ class RegistrationTest(unittest.TestCase):
         self.assertEqual(suspended["manifest_sequence"], 1)
         for field in ("app_id", "display_name", "keys", "current_client_version", "source_url"):
             self.assertEqual(suspended[field], existing[field])
-        # Daochi signs its own field order: the sequence follows the version.
+        # Mesh signs its own field order: the sequence follows the version.
         self.assertEqual(list(suspended)[:3], ["manifest_version", "manifest_sequence", "app_id"])
         self.assertEqual(list(json.loads(manifests.canonical_bytes(suspended)))[:3],
                          ["manifest_version", "manifest_sequence", "app_id"])

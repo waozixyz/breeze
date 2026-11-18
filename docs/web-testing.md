@@ -19,8 +19,8 @@ The shared smoke test is `scripts/web-smoke-test.mjs`:
 
 Server integration:
 
-- Run `make sync-server-test DAOCHI_BIN=/absolute/path/to/daochi` with a built
-  Daochi server. The runner starts a disposable loopback server and two isolated
+- Run `make sync-server-test MESH_BIN=/absolute/path/to/mesh` with a built
+  Mesh server. The runner starts a disposable loopback server and two isolated
   client databases, and retains test data and logs in a printed temporary directory.
 - It checks offline recovery, a lost upload response, retry without duplicates,
   conflicting mood edits, backup restoration, and synced deletion. It uses Inbe's

@@ -8,7 +8,7 @@ work=$root/build/device-preferences-zi-test
 mkdir -p "$work/c"
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     -o "$work/c" "$root/tests/device_preferences_link_behavior.zi"

@@ -15,7 +15,7 @@ mkdir -p "$work/c"
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_ui.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
@@ -23,7 +23,7 @@ mkdir -p "$work/c"
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/c" "$root/src/screens/settings/settings_ui.zi"
 set -- "$root/tests/settings_ui_link_test.c"
@@ -40,7 +40,7 @@ mkdir -p "$work/device"
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_device.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
@@ -48,7 +48,7 @@ mkdir -p "$work/device"
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/device" "$root/src/screens/settings/settings_device.zi"
 "${CC:-cc}" -std=c11 -Wno-unused-function \
@@ -61,7 +61,7 @@ mkdir -p "$work/breaks"
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_breaks.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
@@ -69,7 +69,7 @@ mkdir -p "$work/breaks"
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/breaks" "$root/src/screens/settings/settings_breaks.zi"
 "${CC:-cc}" -std=c11 -Wno-unused-function -Wno-unused-variable \
@@ -82,7 +82,7 @@ mkdir -p "$work/notifications"
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/ziran/std" \
     "$root/src/screens/settings/settings_notifications.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
@@ -90,7 +90,7 @@ mkdir -p "$work/notifications"
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/ziran/std" \
     -o "$work/notifications" \
     "$root/src/screens/settings/settings_notifications.zi"

@@ -66,8 +66,8 @@ test: storage-thread-buffer-zi-test
 test: sqlite-text-zi-test
 test: sql-transaction-zi-test
 test: storage-paths-zi-test
-test: daochi-client-zi-test
-test: daochi-native-zi-test device-link-zi-test
+test: mesh-client-zi-test
+test: mesh-native-zi-test device-link-zi-test
 test: habit-days-memory-zi-test
 test: host-services-zi-test
 test: locale-zi-test

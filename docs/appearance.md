@@ -48,5 +48,5 @@ works offline.
 Verification: `make style-apply-zi-test appearance-ui-test` checks parsing,
 atomic validation, scope isolation, persistence, reset, and real editor input on
 a private display. Harmony's `tests/app_mcp_test.py` checks the registered tool
-path through its companion and hosted app. Daochi's chat tests cover the complete
+path through its companion and hosted app. Mesh's chat tests cover the complete
 tool count and larger style-result continuations while retaining input limits.

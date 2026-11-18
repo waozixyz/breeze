@@ -213,7 +213,7 @@ def main():
         else:
             raise AssertionError("unsafe archive path was accepted")
         # Compare against the node's canonical format when its source is here.
-        node = ROOT.parent.parent / "kryonlabs/daochi/scripts/app_release.py"
+        node = ROOT.parent.parent / "ziranlang/mesh/scripts/app_release.py"
         if node.exists():
             spec = importlib.util.spec_from_file_location("node_release", node)
             protocol = importlib.util.module_from_spec(spec)
@@ -296,7 +296,7 @@ def main():
         (fixtures / "diary-bad").write_text(json.dumps(updated))
         generate(work / 'generated', 'package_release_behavior.zi',
                  [ROOT / 'src', toolchain / 'std', ROOT / 'build/packages/kryon/src/ui',
-                  ROOT / 'build/packages/daochi-client', *package_paths])
+                  ROOT / 'build/packages/mesh-client', *package_paths])
         sources = list((work / "generated").rglob("*.c"))
         subprocess.run([os.environ.get("CC", "cc"), "-std=c11", "-D_GNU_SOURCE", "-O1",
                         "-ffunction-sections", "-fdata-sections", "-I" + str(work / "generated"),
@@ -312,7 +312,7 @@ def main():
         generated = work / "manager"
         generate(generated, 'package_manager_behavior.zi',
                  [ROOT / 'src', toolchain / 'std', ROOT / 'build/packages/kryon/src/ui',
-                  ROOT / 'build/packages/kryon/src/backend', ROOT / 'build/packages/daochi-client',
+                  ROOT / 'build/packages/kryon/src/backend', ROOT / 'build/packages/mesh-client',
                   ROOT / 'build/packages/css/src', ROOT / 'build/packages/game2d/src',
                   *package_paths])
         # Package scoping changes generated C names, not the download API.

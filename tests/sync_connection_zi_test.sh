@@ -18,7 +18,7 @@ mkdir -p "$work/generated"
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/css/src" \
     --module-path "$root/build/packages/game2d/src" --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" --entry sync_connection_behavior:Check \
+    --module-path "$root/build/packages/mesh-client" --entry sync_connection_behavior:Check \
     -o "$work/generated" "$root/tests/sync_connection_behavior.zi" "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "sync_connection_behavior.h"

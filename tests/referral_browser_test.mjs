@@ -31,10 +31,10 @@ for (const key of ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS
   'SESSION_MANAGER', 'GDK_DISPLAY', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy'])
   delete environment[key];
 environment.NO_PROXY = '*';
-const fixture = spawn(join(projects, 'kryonlabs/daochi/work/referral-fixture.test'),
+const fixture = spawn(join(projects, 'ziranlang/mesh/work/referral-fixture.test'),
   ['-test.run', '^TestReferralBrowserFixture$', '-test.v', '-test.timeout=30m'], {
-    cwd: join(projects, 'kryonlabs/daochi'),
-    env: {...environment, DAOCHI_REFERRAL_FIXTURE_REPORT: join(privateRoot, 'fixture.json')},
+    cwd: join(projects, 'ziranlang/mesh'),
+    env: {...environment, MESH_REFERRAL_FIXTURE_REPORT: join(privateRoot, 'fixture.json')},
     stdio: ['ignore', 'pipe', 'pipe']
   });
 let fixtureErrors = '';

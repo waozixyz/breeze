@@ -187,7 +187,7 @@ These actions use the same validation, persistence and refresh path as Settings.
 Bug reports and suggestions still require the feedback card's Yes. The first
 acknowledgement means the report is queued on this device; delivery requires an
 Inner Breeze account and internet access. Lumi confirms receipt by the private
-developer inbox only after Daochi returns the matching report ID. A failed or
+developer inbox only after Mesh returns the matching report ID. A failed or
 invalid acknowledgement leaves the approved report queued for retry and adds a
 failure notice once, including across restarts. Inbox receipt does not mean a
 developer has reviewed the report or started a fix.
@@ -460,7 +460,7 @@ It does not publish packages, change SSH keys or restart the node.
 
 ## Updates and versions
 
-Downloads use the Daochi release v2 endpoints on `https://api.waozi.xyz`:
+Downloads use the Mesh release v2 endpoints on `https://api.waozi.xyz`:
 `/api/v2/packages/{app_id}/latest` and
 `/api/v2/packages/{app_id}/{sha256}.zx`. IDs are `inbe`, `inbe.habits`,
 `inbe.practices`, `inbe.lists`, `inbe.diary` and `inbe.lumi`.
@@ -591,7 +591,7 @@ configured. Incomplete configuration produces downloadable build artifacts
 without claiming publication. When only the signing configuration is present,
 the archived artifacts include signed releases ready to import on the node.
 
-1. Register the seven app IDs and an active Ed25519 publisher key in Daochi.
+1. Register the seven app IDs and an active Ed25519 publisher key in Mesh.
 2. Add the public key to `apps/publishers.json`, scoped to the seven app IDs:
    `[{"key_id":"<registered ID>","public_key":"<64 lowercase hex digits>","app_ids":["inbe","inbe.habits","inbe.practices","inbe.lists","inbe.diary","inbe.lumi","inbe.leaderboard"]}]`.
 3. Configure repository secrets `INBE_PACKAGE_SIGNING_KEY` (PEM Ed25519 key)
@@ -600,7 +600,7 @@ the archived artifacts include signed releases ready to import on the node.
    `INBE_NODE_PACKAGE_STORE` (the node's absolute package directory).
    Node connection values are secrets so GitHub masks them in job output.
 4. Configure repository variable `INBE_PACKAGE_KEY_ID`.
-5. Ensure the node runs Daochi's release v2 package HTTP implementation and
+5. Ensure the node runs Mesh's release v2 package HTTP implementation and
    has Python with `cryptography` available for the remote importer.
 
 `python3 scripts/package-release.py --store build/package-releases --key
@@ -721,7 +721,7 @@ already in the library.
 
 The library belongs to the account, not to Photos, so its photos stay when
 Photos is removed. Each photo is a record of the account's entity data
-(Daochi `docs/entity-data.md`), which every app of the account shares: Diary
+(Mesh `docs/entity-data.md`), which every app of the account shares: Diary
 embeds the same photo, and other apps such as the standalone Photos read and
 write the same record. Everything there is private. The host keeps it
 (`src/apps/media_store.zi`, `entity_photos.zi`): each photo is stored once
@@ -733,7 +733,7 @@ writes a baseline JPEG). The capture day and time come from the file's Exif
 original date (`media_metadata.zi`), otherwise from the day it was added.
 The record is `entity.photos.<sha256>` on the device and record `<sha256>`
 of `private.entity.v1.photos` in the account's signed v6 sync, sealed in
-Daochi's record profile (`storage/entity_record_crypto.zi`: XChaCha20-Poly1305
+Mesh's record profile (`storage/entity_record_crypto.zi`: XChaCha20-Poly1305
 with the account's photos record key, key ID `entity-v1`, the same bytes as
 libsodium's):
 
@@ -802,7 +802,7 @@ asset policy draws `media/` paths of the current account's library only.
 
 Photo bytes travel as the entity data's sealed chunks: chunks of at most
 8 MiB, each sealed with a key made from the account key, the photo's hash and
-the chunk's index (DaochiClient's `entity.zi`), ChaCha20-Poly1305 with a zero
+the chunk's index (Mesh Client's `entity.zi`), ChaCha20-Poly1305 with a zero
 nonce, `PUT /api/v1/blobs/entity/<sha256 of the chunk>`, signed with Inbe's
 own app ID and device key. The same picture is therefore the same chunks for
 every app of the account, uploaded once per node. The media pass
@@ -840,8 +840,8 @@ through the real host; `make entity-photos-test`
 upgrades a 2.1.43 profile (`tests/fixtures/photos-2.1.43.sql`) against nodes
 answered from memory, with interrupted passes, a full node, an unreachable
 node, a node that cannot delete and a damaged chunk; `make sync-server-test`
-(`DAOCHI_BIN=...`, Daochi 17bfd12 or later) adds a photo on one device and
-opens it on another through two real Daochi nodes and moves an old copy
+(`MESH_BIN=...`, Mesh 17bfd12 or later) adds a photo on one device and
+opens it on another through two real Mesh nodes and moves an old copy
 there. The achievement check still loads the catalog the node's Photos
 carries (`tests/fixtures/photos-achievements.json`); this host records no
 new Photos facts and keeps the ones older versions recorded.
@@ -1014,7 +1014,7 @@ A release names one fixed commit while peers keep working on master:
    in the Ubuntu 24.04 container with the candidate's locked packages:
    Secret Scan, package URLs, file sizes, all tests, package
    compatibility, Chrome and muted Firefox smoke tests, and the pinned real
-   Daochi sync server. Platform release builds remain separate. The existing
+   Mesh sync server. Platform release builds remain separate. The existing
    repository overlay materializes every candidate file and recreates source
    directories, so later edits, new files and commits cannot enter the run.
    Outputs stay in `build/release-ready/`. Custom `RELEASE_READY_OUTPUT` names

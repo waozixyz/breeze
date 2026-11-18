@@ -15,7 +15,7 @@
 # takes about 90 minutes.
 #
 # Covered: ci.yml Secret Scan, Package URLs, large-file guard, all three test
-# shards, Chrome/Firefox add-ons and smoke, the real pinned Daochi
+# shards, Chrome/Firefox add-ons and smoke, the real pinned Mesh
 # sync server, and release.yml's package compatibility test. Platform release
 # builds remain separate. The server comes from its canonical checkout through
 # another private overlay; no temporary source checkout is created.
@@ -162,7 +162,7 @@ else
     job "Test: make test" make -k test
     job "Test: make package-compat-test" make package-compat-test
     job "Browser add-ons: Chrome and Firefox" sh .github/local-ci/check-browser.sh
-    job "Sync: pinned Daochi server" sh .github/local-ci/check-sync.sh
+    job "Sync: pinned Mesh server" sh .github/local-ci/check-sync.sh
 fi
 if [ -n "$failed" ]; then
     printf "\nrelease-ready: FAILED:%s\n" "$failed"
@@ -182,7 +182,7 @@ sync_server=""
 sync_mount_source="$root/$output/sync-unused"
 mkdir -p "$sync_mount_source"
 if [ "$#" -eq 0 ]; then
-    sync_server=${RELEASE_READY_DAOCHI_SOURCE:-"$root/../../../kryonlabs/daochi"}
+    sync_server=${RELEASE_READY_MESH_SOURCE:-"$root/../../../ziranlang/mesh"}
     sync_server=$(CDPATH= cd -- "$sync_server" && pwd)
     sync_commit=$(git show "$commit:.github/sync-test-server-commit")
     git -C "$sync_server" cat-file -e "$sync_commit^{commit}"

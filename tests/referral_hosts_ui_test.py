@@ -1,4 +1,4 @@
-"""Exercise production hosts with disposable signed accounts and local Daochi.
+"""Exercise production hosts with disposable signed accounts and local Mesh.
 
 Run through build-queue. Starts its own private Xvfb and test-only backend;
 never uses the desktop, installed app data, production nodes or purchases.
@@ -20,7 +20,7 @@ from ui_driver import UiDriver
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECTS = ROOT.parents[2]
-BACKEND = PROJECTS / 'kryonlabs/daochi'
+BACKEND = PROJECTS / 'ziranlang/mesh'
 SCRUB = ('DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS',
          'SESSION_MANAGER', 'GDK_DISPLAY')
 
@@ -73,7 +73,7 @@ def main():
         server_log = stack.enter_context((output / 'server.log').open('w'))
         server = subprocess.Popen([str(BACKEND / 'work/referral-fixture.test'),
             '-test.run', '^TestReferralBrowserFixture$', '-test.v', '-test.timeout=30m'],
-            cwd=BACKEND, env=env | {'DAOCHI_REFERRAL_FIXTURE_REPORT': str(report)},
+            cwd=BACKEND, env=env | {'MESH_REFERRAL_FIXTURE_REPORT': str(report)},
             stdout=server_log, stderr=subprocess.STDOUT)
         stack.callback(stop, server)
         wait(report.exists, 'fixture did not start')

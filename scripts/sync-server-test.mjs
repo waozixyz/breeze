@@ -5,8 +5,8 @@ import { join, resolve } from 'node:path';
 import net from 'node:net';
 import http from 'node:http';
 
-const binary = process.env.DAOCHI_BIN;
-if (!binary) throw new Error('Set DAOCHI_BIN to a built Daochi server binary.');
+const binary = process.env.MESH_BIN;
+if (!binary) throw new Error('Set MESH_BIN to a built Mesh server binary.');
 const root = await mkdtemp(join(tmpdir(), 'inbe-sync-server-'));
 const probe = net.createServer();
 await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
@@ -16,8 +16,8 @@ const url = `http://127.0.0.1:${port}`;
 const log = await open(join(root, 'server.log'), 'w');
 const server = spawn(resolve(binary), [], {
   cwd: root,
-  env: { PATH: process.env.PATH, DAOCHI_ADDR: `127.0.0.1:${port}`,
-    DAOCHI_DB: join(root, 'server.db'), DAOCHI_ALLOW_EPHEMERAL_TOKEN_SECRET: '1' },
+  env: { PATH: process.env.PATH, MESH_ADDR: `127.0.0.1:${port}`,
+    MESH_DB: join(root, 'server.db'), MESH_ALLOW_EPHEMERAL_TOKEN_SECRET: '1' },
   stdio: ['ignore', log.fd, log.fd],
 });
 let serverError;
@@ -33,8 +33,8 @@ const secondUrl = `http://127.0.0.1:${secondPort}`;
 const secondLog = await open(join(secondRoot, 'server.log'), 'w');
 const secondServer = spawn(resolve(binary), [], {
   cwd: secondRoot,
-  env: { PATH: process.env.PATH, DAOCHI_ADDR: `127.0.0.1:${secondPort}`,
-    DAOCHI_DB: join(secondRoot, 'server.db'), DAOCHI_ALLOW_EPHEMERAL_TOKEN_SECRET: '1' },
+  env: { PATH: process.env.PATH, MESH_ADDR: `127.0.0.1:${secondPort}`,
+    MESH_DB: join(secondRoot, 'server.db'), MESH_ALLOW_EPHEMERAL_TOKEN_SECRET: '1' },
   stdio: ['ignore', secondLog.fd, secondLog.fd],
 });
 secondServer.on('error', error => { serverError = error; });

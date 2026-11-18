@@ -57,7 +57,7 @@ class PackageWorkflowTest(unittest.TestCase):
                     "PACKAGE_PATH": package_path, "LEDGER_PATH": ledger_path,
                 }
                 subprocess.run(["bash", "-eu"], input=stub + script(
-                    "Sign, publish to Waozi's Daochi node and verify", workflow),
+                    "Sign, publish to Waozi's Mesh node and verify", workflow),
                     text=True, capture_output=True, env=environment, check=True)
                 command = log.read_text()
                 self.assertIn(f"--app-ledger {temporary}/node-app/source/{package_path}/{ledger_path}", command)
@@ -113,7 +113,7 @@ class PackageWorkflowTest(unittest.TestCase):
         # Crypto/payload publication has a separate real integration test.
         # Here the actual workflow shell must invoke the correct commands and
         # must not execute a misplaced heredoc delimiter as a shell command.
-        for name in ("Sign app releases", "Sign and publish to Waozi's Daochi node"):
+        for name in ("Sign app releases", "Sign and publish to Waozi's Mesh node"):
             with self.subTest(step=name), tempfile.TemporaryDirectory() as temporary:
                 log = Path(temporary) / "commands"
                 stub = "python3() { printf '%s\\n' \"$*\" >> " + shlex.quote(str(log)) + "; }\n"

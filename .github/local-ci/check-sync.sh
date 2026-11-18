@@ -12,11 +12,11 @@ python3 -c "$RELEASE_READY_SNAPSHOT" "$server" "$commit"
 expected=$(git -c safe.directory="$server" -C "$server" rev-parse HEAD:vendor/liboqs)
 actual=$(git -c safe.directory="$server/vendor/liboqs" -C "$server/vendor/liboqs" rev-parse HEAD)
 if [ "$expected" != "$actual" ]; then
-    echo "release-ready: canonical Daochi's liboqs must match the CI pin" >&2
+    echo "release-ready: canonical Mesh's liboqs must match the CI pin" >&2
     exit 2
 fi
 if [ -n "$(git -c safe.directory="$server/vendor/liboqs" -C "$server/vendor/liboqs" status --porcelain --untracked-files=all)" ]; then
-    echo "release-ready: canonical Daochi's liboqs must be pristine" >&2
+    echo "release-ready: canonical Mesh's liboqs must be pristine" >&2
     exit 2
 fi
 # Emscripten's PATH entry holds a cmake directory, which make's own command
@@ -25,5 +25,5 @@ fi
 make /src/build/packages/ziran/build/bin/zi2c
 make -C "$server" BUILD_DIR="$server/build" CMAKE="$(command -v cmake)" \
     ZIRAN=/src/build/packages/ziran/build/bin/ziran build
-DAOCHI_BIN="$server/daochi" make sync-server-test
+MESH_BIN="$server/mesh" make sync-server-test
 git -c safe.directory="$server" -C "$server" diff --exit-code "$commit" -- .

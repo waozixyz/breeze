@@ -10,13 +10,13 @@ mkdir -p "$work/c"
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     "$root/src/app/language_selection.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     -o "$work/c" "$root/src/app/language_selection.zi"
 # The link test stands in for settings_store, so its header declares those
 # procedures instead of defining inline copies.

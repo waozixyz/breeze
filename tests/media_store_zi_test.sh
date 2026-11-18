@@ -21,7 +21,7 @@ mkdir -p "$work/generated"
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --entry media_store_behavior:Check \
     -o "$work/generated" "$root/tests/media_store_behavior.zi" \
     "$root/tests/sync_test_host.zi"

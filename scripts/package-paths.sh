@@ -3,9 +3,9 @@
 # paths. scripts/packages.sh links dependencies under build/packages.
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-if [ -n "${DAOCHI_CLIENT_DIR:-}" ]; then
+if [ -n "${MESH_CLIENT_DIR:-}" ]; then
     # Standalone storage tests also retain unqualified protocol imports.
-    printf '%s\n' --module-path "$DAOCHI_CLIENT_DIR"
+    printf '%s\n' --module-path "$MESH_CLIENT_DIR"
 fi
 # Read the app and Kryon source roots so every platform resolves
 # the same named modules without file-relative imports.
@@ -39,12 +39,12 @@ for directory in module_roots(kryon / "ziran.toml"):
 PY
 for path in apps=apps/src \
     crypto=crypto/src entity=entity/src plot=plot/src qrcode=qrcode/src \
-    oqs=oqs/src mingcute=mingcute/src daochi_client=daochi-client \
+    oqs=oqs/src mingcute=mingcute/src mesh_client=mesh-client \
     webp=webp/src image_codec=image-codec/src avif=avif/src \
     avif=avif/src/bridge audio=audio/src; do
     directory="$packages/${path#*=}"
-    if [ "${path%%=*}" = daochi_client ] && [ -n "${DAOCHI_CLIENT_DIR:-}" ]; then
-        directory=$DAOCHI_CLIENT_DIR
+    if [ "${path%%=*}" = mesh_client ] && [ -n "${MESH_CLIENT_DIR:-}" ]; then
+        directory=$MESH_CLIENT_DIR
     fi
     printf '%s\n' --module-path "${path%%=*}=$directory"
 done

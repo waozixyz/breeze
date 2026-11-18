@@ -12,7 +12,7 @@ def main():
     parser.add_argument("--ziran", required=True)
     parser.add_argument("--toolchain", type=Path, required=True)
     parser.add_argument("--apps", type=Path, required=True)
-    parser.add_argument("--daochi-client", type=Path, required=True)
+    parser.add_argument("--mesh-client", type=Path, required=True)
     args = parser.parse_args()
     env = {key: value for key, value in os.environ.items()
            if key not in {"DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS"}}

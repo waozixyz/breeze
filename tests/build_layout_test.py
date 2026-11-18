@@ -94,7 +94,7 @@ sys.exit(int(os.environ.get('FIXTURE_STATUS', '0')))
         self.executable("bun", "#!/bin/sh\nexit 0\n")
         self.environment = dict(os.environ, PATH=str(self.root / "bin") + ":" + os.environ["PATH"],
                                 RELEASE_READY_REVISION="1" * 40,
-                                RELEASE_READY_DAOCHI_SOURCE=str(self.root / "server"),
+                                RELEASE_READY_MESH_SOURCE=str(self.root / "server"),
                                 PYTHONDONTWRITEBYTECODE="1")
         for name in ("RELEASE_READY_OUTPUT", "RELEASE_READY_INCREMENTAL", "RELEASE_READY_DNS",
                      "JS_RUNTIME", "JS_TEST_FLAGS", "ADDONS_LINTER"):

@@ -26,14 +26,14 @@ def rejects(operation, message):
 
 with tempfile.TemporaryDirectory() as temporary:
     root = Path(temporary)
-    for name in ("kryon", "daochi-client", "ziran"):
+    for name in ("kryon", "mesh-client", "ziran"):
         (root / "build/packages" / name).mkdir(parents=True)
     (root / "build/zi-check").mkdir()
     (root / "build/zi-check/native.fresh").touch()
     (root / "ziran.lock").write_text(json.dumps(dict(
-        root=dict(dependencies=dict(kryon="ui", daochi_client="client")),
+        root=dict(dependencies=dict(kryon="ui", mesh_client="client")),
         packages=[dict(id="ui", name="Kryon", commit="pinned"),
-                  dict(id="client", name="DaochiClient", commit="pinned")],
+                  dict(id="client", name="mesh_client", commit="pinned")],
         toolchain=dict(commit="pinned"))))
     def git_result(command, **kwargs):
         return "pinned\n" if "rev-parse" in command else ""

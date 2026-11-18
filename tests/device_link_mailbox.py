@@ -1,4 +1,4 @@
-"""A local stand-in for Daochi's device link mailbox, for UI tests.
+"""A local stand-in for Mesh's device link mailbox, for UI tests.
 
 It follows the node's rules: 32-hex link IDs, request and response slots that
 are written once, 404 while waiting, and a 16384-byte message limit. Setting

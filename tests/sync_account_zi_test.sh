@@ -30,7 +30,7 @@ mkdir -p "$work/generated"
     --module-path "$kryon/src/backend" \
     --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --entry sync_account_behavior:Check \
     -o "$work/generated" "$root/tests/sync_account_behavior.zi" \
     "$root/tests/sync_test_host.zi"

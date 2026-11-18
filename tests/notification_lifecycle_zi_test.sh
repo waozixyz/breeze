@@ -19,7 +19,7 @@ sh "$root/scripts/run-ziran.sh" "$bin/zi2c" --no-main --root "$root" \
     --module-path "$root/build/packages/css/src" \
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     -o "$work/c" "$root/tests/notification_lifecycle_behavior.zi"
 find "$work/c" -name '*.c' -type f -exec \
     "${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \

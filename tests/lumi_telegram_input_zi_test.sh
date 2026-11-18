@@ -15,7 +15,7 @@ mkdir -p "$work/generated"
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --entry lumi_telegram_input_behavior:Check -o "$work/generated" \
     "$root/tests/lumi_telegram_input_behavior.zi" "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'

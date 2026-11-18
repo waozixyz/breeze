@@ -2,7 +2,7 @@
 
 JS_TEST_FLAGS ?= --test
 
-# The signed fixture must already be built in canonical Daochi/work.
+# The signed fixture must already be built in canonical Mesh/work.
 .PHONY: referral-browser-ui-test
 referral-browser-ui-test:
 	$(JS_RUNTIME) tests/referral_browser_test.mjs

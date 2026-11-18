@@ -1,6 +1,6 @@
 # Web build: the canvas app, its smoke test, and the Chrome and Firefox extensions.
 
-$(WEB_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile mk/web.mk ziran.lock $(ZIRAN_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(WEB_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile mk/web.mk ziran.lock $(ZIRAN_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WEB_GEN_DIR)
 	mkdir -p $(WEB_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZIRAN_BIN) build --target=c --project --offline $(PACKAGE_FLAGS) \

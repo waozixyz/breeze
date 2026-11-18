@@ -2,8 +2,8 @@
 set -eu
 
 # Builds the two-client sync scenario as a Ziran program. It runs against a
-# real Daochi server through scripts/sync-server-test.mjs, which needs
-# DAOCHI_BIN (a built Daochi server) and node.
+# real Mesh server through scripts/sync-server-test.mjs, which needs
+# MESH_BIN (a built Mesh server) and node.
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
@@ -21,7 +21,7 @@ mkdir -p "$work/generated"
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/game2d/src" \
     --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --entry sync_server_behavior:Check \
     -o "$work/generated" "$root/tests/sync_server_behavior.zi" \
     "$root/tests/sync_test_host.zi"

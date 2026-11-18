@@ -12,8 +12,8 @@ OUTPUT = ROOT / 'build/package-sources-test'
 OUTPUT.mkdir(parents=True, exist_ok=True)
 NAMES = ('ziran kryon css oqs raylib libwebp webp image-codec avif libavif libaom '
          'audio libopus libsamplerate game2d qrcode plot mingcute entity apps crypto '
-         'daochi-client practices sqlite curl liboqs monocypher rini').split()
-SELECTORS = ['daochi_client' if name == 'daochi-client' else name for name in NAMES]
+         'mesh-client practices sqlite curl liboqs monocypher rini').split()
+SELECTORS = ['mesh_client' if name == 'mesh-client' else name for name in NAMES]
 
 CLI = '''#!/usr/bin/env python3
 import json

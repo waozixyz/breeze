@@ -32,7 +32,7 @@ Validation: `make sync-retry-zi-test` checks the proved retry policy across
 Ziran backends. `make sync-recovery-test` covers the native coordinator once
 the app source migration gate passes. The sync account/review and locale tests
 cover their respective boundaries. Run
-`DAOCHI_BIN=/path/to/daochi make sync-server-test` for the server flow. That test creates two
+`MESH_BIN=/path/to/mesh make sync-server-test` for the server flow. That test creates two
 accounts with separate aliases, accepts a friendship, restores the first account's
 exported key on fresh clients with and without pre-seeded default habits, and checks
 that the alias, friend, custom habit, completed habit day, session, and check-in return.

@@ -36,7 +36,7 @@ node-app-loading-test: $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a
 app-locations-test: $(ZIRAN_BIN)
 	python3 tests/app_locations_test.py --ziran '$(abspath $(ZIRAN_BIN))' \
 		--toolchain '$(abspath $(ZIRAN_DIR))' --apps '$(abspath build/packages/apps)' \
-		--daochi-client '$(abspath build/packages/daochi-client)'
+		--mesh-client '$(abspath build/packages/mesh-client)'
 
 node-app-snapshot-test: apps $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
 	python3 tests/node_app_snapshot_test.py --ziran '$(abspath $(ZIRAN_BIN))' \

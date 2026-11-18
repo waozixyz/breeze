@@ -7,13 +7,13 @@ work=$root/build/music-library-zi-test
 mkdir -p "$work/c" "$work/stubs"
 "$bin/zi2zir" --check-only --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     "$root/src/app/music_library.zi"
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/mesh-client" \
     --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     -o "$work/c" "$root/src/app/music_library.zi" \

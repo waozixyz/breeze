@@ -8,7 +8,7 @@ ziran=${ZIRAN_BIN:-"$root/build/packages/ziran/build/bin/ziran"}
     --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     -o "$work/c" "$root/tests/android_geometry_probe_behavior.zi"
 "${CC:-cc}" -std=c11 -O1 -ffunction-sections -fdata-sections \
     -Wl,--gc-sections -I"$work/c" "$work/c"/*.c -ldl -lpthread -lm -o "$work/test"

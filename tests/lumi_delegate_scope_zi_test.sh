@@ -15,7 +15,7 @@ export YUE_DESKTOP_RECOVERY=0
     --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/kryon/src/backend" \
     --module-path "$root/build/packages/game2d/src" --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" --entry lumi_delegate_scope_behavior:Check \
+    --module-path "$root/build/packages/mesh-client" --entry lumi_delegate_scope_behavior:Check \
     -o "$work/generated" "$root/tests/lumi_delegate_scope_behavior.zi" "$root/tests/sync_test_host.zi" "$root/tests/delegate_account_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "lumi_delegate_scope_behavior.h"

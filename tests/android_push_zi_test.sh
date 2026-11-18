@@ -9,7 +9,7 @@ apps=${APPS_DIR:-"$root/build/packages/apps"}
     --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
     --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
     --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" \
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --define ANDROID_BUILD --define KRYON_ANDROID_HOST --define __aarch64__ \
     "$root/src/app/app_notifications.zi" "$root/src/platform/android/android_push.zi"

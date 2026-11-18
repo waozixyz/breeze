@@ -1,4 +1,4 @@
-#include "storage/daochi_native.h"
+#include "storage/mesh_native.h"
 #include "zir_string.h"
 
 #include <assert.h>
@@ -6,9 +6,9 @@
 #include <stdio.h>
 #include <string.h>
 
-typedef DAOCHI_FIXTURE_SESSION_TYPE DaochiFixtureSession;
+typedef MESH_FIXTURE_SESSION_TYPE MeshFixtureSession;
 
-/* liboqs stands in for the signer: it checks the exact bytes each Daochi
+/* liboqs stands in for the signer: it checks the exact bytes each Mesh
  * message signs and returns a recognizable signature. */
 int32_t OQS_SIG_ml_dsa_44_sign(uint8_t *signature, size_t *signature_length,
                                const uint8_t *message, size_t message_length,
@@ -131,7 +131,7 @@ int main(int argc, char **argv)
     memset(account.public_id, 'a', 64);
     strcpy((char *)account.public_key_hex, "pub");
     memset(account.private_key_hex, 'a', 5120);
-    DaochiFixtureSession session = {0};
+    MeshFixtureSession session = {0};
     String base = StringView(argv[1], strlen(argv[1]));
     AuthResult result = LoginAccount(base, &account,
                                      StringLiteral("client-1"), &session);
@@ -176,6 +176,6 @@ int main(int argc, char **argv)
         StringLiteral("bad-client"), &session);
     assert(result == AuthResult_AUTH_FAILED);
     assert(session.token[0] == 0);
-    puts("Inbe Daochi Ziran native adapter passed");
+    puts("Inbe Mesh Ziran native adapter passed");
     return 0;
 }

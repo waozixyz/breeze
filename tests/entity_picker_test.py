@@ -16,7 +16,7 @@ package_args = subprocess.check_output(
     cwd=ROOT, text=True).split()
 module_paths = [ROOT / 'src', STD / 'std', ROOT / 'build/packages/kryon/src/ui',
                 ROOT / 'build/packages/kryon/src/backend', ROOT / 'build/packages/css/src',
-                ROOT / 'build/packages/game2d/src', ROOT / 'build/packages/daochi-client']
+                ROOT / 'build/packages/game2d/src', ROOT / 'build/packages/mesh-client']
 output = ROOT / 'build/entity-picker-test'
 generated = output / 'generated'
 output.mkdir(parents=True, exist_ok=True)

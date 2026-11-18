@@ -100,7 +100,7 @@ deployment.
 To test sync and recovery against an isolated local server:
 
 ```bash
-make sync-server-test DAOCHI_BIN=/absolute/path/to/daochi
+make sync-server-test MESH_BIN=/absolute/path/to/mesh
 ```
 
 This uses disposable client databases and a loopback server; see

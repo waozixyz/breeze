@@ -105,7 +105,7 @@ file(GLOB_RECURSE APP_LIBRARY_ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${REPO_ROOT}/build/packages/image-codec/src/*.zi"
     "${REPO_ROOT}/build/packages/avif/src/*.zi"
     "${REPO_ROOT}/build/packages/audio/src/*.zi"
-    "${ZIRAN_DIR}/std/*.zi" "${REPO_ROOT}/build/packages/daochi-client/*.zi")
+    "${ZIRAN_DIR}/std/*.zi" "${REPO_ROOT}/build/packages/mesh-client/*.zi")
 set(APP_ZIRAN_DEFINES --define ANDROID_BUILD --define KRYON_ANDROID_HOST
     --define KRYON_RAYLIB_HOST --define AVIF_RAYLIB)
 set(APP_ZIRAN_CHECK_DEFINES "ANDROID_BUILD KRYON_ANDROID_HOST KRYON_RAYLIB_HOST AVIF_RAYLIB")

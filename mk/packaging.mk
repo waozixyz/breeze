@@ -48,7 +48,7 @@ $(CLICK_CURL_A): $(KRYON_CURL_DIR)/CMakeLists.txt mk/packaging.mk
 	@sh $(CLICK_CURL_BUILD_DIR)/bin/curl-config --protocols | grep -Eq '(^|[[:space:]])WS([[:space:]]|$$)'
 	@sh $(CLICK_CURL_BUILD_DIR)/bin/curl-config --protocols | grep -Eq '(^|[[:space:]])WSS([[:space:]]|$$)'
 
-$(CLICK_GEN_STAMP): Makefile mk/packaging.mk ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(DAOCHI_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(CLICK_GEN_STAMP): Makefile mk/packaging.mk ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(CLICK_GEN_DIR)
 	mkdir -p $(CLICK_GEN_DIR)
 	sh scripts/run-ziran.sh $(ZI2C_BIN) --no-main --prune-stale --root . \
@@ -59,7 +59,7 @@ $(CLICK_GEN_STAMP): Makefile mk/packaging.mk ziran.lock $(ZI2C_BIN) $(ZI_SRCS) $
 		--module-path $(KRYON_DIR)/src/backend \
 		--module-path $(GAME2D_DIR)/src \
 		--module-path $(ZIRAN_DIR)/std \
-		--module-path $(DAOCHI_CLIENT_DIR) $(ZI_PACKAGE_PATHS) \
+		--module-path $(MESH_CLIENT_DIR) $(ZI_PACKAGE_PATHS) \
 		-o $(CLICK_GEN_DIR) $(ZI_SRCS)
 	touch $@
 

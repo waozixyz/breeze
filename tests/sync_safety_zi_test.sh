@@ -57,7 +57,7 @@ cmp "$work/source/safety.zx" "$work/saved/safety.zx"
 
 "$bin/zi2c" --no-main --root "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/daochi-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
+    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
     -o "$work/native" "$root/src/app/sync_safety.zi"
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK \
     -ffunction-sections -fdata-sections -Wl,--gc-sections \

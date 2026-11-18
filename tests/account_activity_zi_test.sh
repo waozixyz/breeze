@@ -15,7 +15,7 @@ mkdir -p "$work/generated"
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/css/src" \
     --module-path "$root/build/packages/game2d/src" --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" --entry account_activity_behavior:Check \
+    --module-path "$root/build/packages/mesh-client" --entry account_activity_behavior:Check \
     -o "$work/generated" "$root/tests/account_activity_behavior.zi" "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "account_activity_behavior.h"

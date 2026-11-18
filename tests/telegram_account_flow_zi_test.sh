@@ -14,7 +14,7 @@ export YUE_DESKTOP_RECOVERY=0
     $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
     --module-path "$root/build/packages/css/src" \
     --module-path "$root/build/packages/game2d/src" --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/daochi-client" --entry telegram_account_flow_behavior:Check \
+    --module-path "$root/build/packages/mesh-client" --entry telegram_account_flow_behavior:Check \
     -o "$work/generated" "$root/tests/telegram_account_flow_behavior.zi" \
     "$root/tests/telegram_account_flow_host.zi" "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'

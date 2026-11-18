@@ -113,7 +113,7 @@ packages = [
     ("entity", "entity"),
     ("apps", "apps"),
     ("crypto", "crypto"),
-    ("daochi-client", "daochi_client"),
+    ("mesh-client", "mesh_client"),
     ("practices", "practices"),
     ("sqlite", "sqlite"),
     ("curl", "curl"),

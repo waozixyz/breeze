@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-device-key-") as temporary:
         *(["--define", "PLATFORM_WEB", "--define", "__EMSCRIPTEN__"] if args.wasm else []),
         "--module-path", str(ROOT / "build/packages/ziran/std"),
         *subprocess.check_output(["sh", str(ROOT / "scripts/package-paths.sh"), str(ROOT / "build/packages")], text=True).split(),
-        "--module-path", str(ROOT / "build/packages/daochi-client"),
+        "--module-path", str(ROOT / "build/packages/mesh-client"),
         "--module-path", str(ROOT / "build/packages/kryon/src/ui"),
         "--module-path", str(ROOT / "build/packages/kryon/src/backend"),
         "-o", str(generated), str(ROOT / "src/storage/device_key_store.zi"),

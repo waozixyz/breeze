@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build and publish Inbe's independently signed Daochi release v2 files."""
+"""Build and publish Inbe's independently signed Mesh release v2 files."""
 import argparse
 from contextlib import ExitStack
 import fcntl
@@ -98,7 +98,7 @@ def stage(store, key_path, key_id, publishers_path=None, *, build_directory=None
         value['signature'] = key.sign(signing_message(value)).hex()
         content_payloads.append((pack['sha256'], data, value, pack.get('product', '')))
     # Validate all old pointers before publishing any new one. Use the same
-    # per-app lock name as Daochi's staging tool.
+    # per-app lock name as Mesh's staging tool.
     with ExitStack() as stack:
         for name in sorted(NAMES):
             directory = store / releases[name]["app_id"]
@@ -128,7 +128,7 @@ def stage(store, key_path, key_id, publishers_path=None, *, build_directory=None
             if payload.exists() and payload.read_bytes() != data:
                 raise ValueError('immutable practice payload differs')
             # A paid pack is marked for the node before it can be served, so
-            # Daochi only hands it out with a grant for its unlock.
+            # Mesh only hands it out with a grant for its unlock.
             if product:
                 atomic_write(directory / (digest + '.zx.product'), product.encode())
             atomic_write(payload, data)
@@ -171,7 +171,7 @@ def publish(store, target, remote_store, rollout=None):
     if not re.fullmatch(r"[a-zA-Z0-9_.@-]+", target) or target.startswith("-"):
         raise ValueError("invalid SSH target")
     if not remote_store.startswith("/") or "\n" in remote_store:
-        raise ValueError("Daochi package store must be an absolute path")
+        raise ValueError("Mesh package store must be an absolute path")
     # The node installs the importer independently. The upload key may be
     # restricted to this one command and this fixed store; it needs no shell,
     # SFTP access or permission to change the server's code and configuration.
@@ -388,7 +388,7 @@ def published_changes(store, origin, open_url=open_public_url):
 
 
 def import_archive(archive, store, publishers_path=None):
-    """Node-side merge. Daochi still checks registry/key status on every GET."""
+    """Node-side merge. Mesh still checks registry/key status on every GET."""
     publishers = json.loads((publishers_path or ROOT / "apps/publishers.json").read_text())
     ids = BUNDLED_IDS
     entries = {}
@@ -505,7 +505,7 @@ def import_archive(archive, store, publishers_path=None):
             target = store / path
             if target.exists() and target.read_bytes() != data:
                 raise ValueError('immutable practice content differs')
-            # The marker precedes the pack, so Daochi never serves it ungated.
+            # The marker precedes the pack, so Mesh never serves it ungated.
             if product:
                 atomic_write(store / (path + '.product'), product.encode())
             atomic_write(target, data)
@@ -522,7 +522,7 @@ def import_archive(archive, store, publishers_path=None):
             atomic_write(payload.with_name(payload.name + ".release-v2.json"), encoded)
             atomic_write(archived, encoded)
             atomic_write(directory / "latest-v2.json", encoded)
-            # Daochi holds a staged release back from the other buckets until
+            # Mesh holds a staged release back from the other buckets until
             # it expires. A new full release or a full rollout ends staging.
             staged = directory / "rollout.json"
             if rollout is not None and rollout["percent"] < 100 and changed:
