@@ -51,7 +51,8 @@ downward dog, the Workout's lowest squat and lunge, and the astral exits.
 ## Profiling
 
 The window prints a timing report to its standard output (the launcher's
-journal) every 240 painted frames: median and 95th percentile milliseconds
+journal) every 120 painted frames and when it closes: median and 95th
+percentile milliseconds over the last 240 frames
 for the whole frame and for each step (the practice's pose solve, the
 figure's pose, skinning, cloth, render and readback, finish and ground
 shadow, the backdrop, compositing, the astral double, the texture upload
