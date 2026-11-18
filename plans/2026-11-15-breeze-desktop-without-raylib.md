@@ -219,7 +219,7 @@ Ziran's.
 ## Open work
 
 Owner, 2026-11-17: "are yo udonig this please finsh removing rayilb". Breeze
-builds with no raylib on every host, on Ziran 0c4465a4, Kryon 1774e550 and
+builds with no raylib on every host, on Ziran 0.7.0, Kryon 0.6.0 and
 plot, entity, apps, css and game2d pinned to that Kryon. Linux and Windows
 run on Kryon's SDL2 and Cairo desktop host, Android on its own-loop
 `android_runtime` with Pixmap, and the browser on Kryon's canvas. Audio is

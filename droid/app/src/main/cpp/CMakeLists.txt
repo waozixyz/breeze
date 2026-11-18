@@ -53,7 +53,9 @@ if(NOT TARGET oqs)
     message(FATAL_ERROR "Android builds require liboqs for sync account crypto")
 endif()
 set(ZIRAN_DIR "${REPO_ROOT}/build/packages/ziran")
-set(ZIRAN_BUILD_DIR "${REPO_ROOT}/build/ziran-toolchain")
+# The pinned toolchain's own build, which `make` shares. Its checkout is
+# per commit, so a pin change never reuses objects from an older Ziran.
+set(ZIRAN_BUILD_DIR "${ZIRAN_DIR}/build")
 set(ZI2C_BIN "${ZIRAN_BUILD_DIR}/bin/zi2c")
 set(ZI2ZIR_BIN "${ZIRAN_BUILD_DIR}/bin/zi2zir")
 file(GLOB ZIRAN_SOURCES CONFIGURE_DEPENDS

@@ -10,6 +10,7 @@ Ziran's generated C comes from the pinned toolchain's own host zi2c
 
 import argparse
 from pathlib import Path
+import shutil
 import subprocess
 
 p = argparse.ArgumentParser()
@@ -26,6 +27,13 @@ output = a.output.resolve()
 host_zi2c = source / "build/bin/zi2c"
 if not host_zi2c.is_file():
     raise SystemExit(f"{host_zi2c} is missing; build the pinned toolchain first")
+# Ziran's make compares file times, and a newly pinned toolchain's sources can
+# be older than the last runtime built here, so the output records the
+# checkout it was built from and another checkout starts from an empty folder.
+marker = output / ".toolchain-source"
+if output.exists() and (not marker.is_file() or marker.read_text() != str(source)):
+    shutil.rmtree(output)
+output.mkdir(parents=True, exist_ok=True)
 command = [
     "make",
     "-j4",
@@ -43,3 +51,4 @@ if a.wasm:
     command += ["TARGET_MACHINE=wasm32-unknown-emscripten"]
 command += [str(output / "libziran.a")]
 subprocess.run(command, check=True)
+marker.write_text(str(source))
