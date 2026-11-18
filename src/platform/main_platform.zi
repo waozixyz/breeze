@@ -59,6 +59,7 @@ FindText :: (text: *u8, needle: *u8) -> *u8 #foreign c "strstr";
 } else {
     SetEnvironmentBytes :: (name: *u8, value: *u8,
         overwrite: s32) -> s32 #foreign c "setenv";
+    EnvironmentBytes :: (name: *u8) -> *u8 #foreign c "getenv";
     ProcessId :: () -> s32 #foreign c "getpid";
 }
 #if #defined(__GLIBC__) {
@@ -286,6 +287,36 @@ native_window_environment :: () {
     }
 }
 
+#if #defined(ANDROID_BUILD) {
+    // Ziran keeps the machine code it compiles from each app bundle in a disk
+    // cache under XDG_CACHE_HOME or HOME. Android sets neither, so every start
+    // compiled every bundle again. The cache lives in the app's cache folder
+    // beside FILES, which Android may clear when storage runs low.
+    AndroidNativeCachePrepare :: (files: *u8) {
+        name: [24]u8
+        if files == null || !CopyCString("ZIRAN_NATIVE_CACHE", name[:]) ||
+            EnvironmentBytes(*name[0]) != null {
+            return
+        }
+        folder := TextFromCString(files)
+        suffix: string = "/files"
+        cache: string = "/cache/ziran-native"
+        if folder.count <= suffix.count || folder[folder.count - suffix.count:] != suffix {
+            return
+        }
+        base := folder[:folder.count - suffix.count]
+        path: [512]u8
+        if base.count + cache.count >= path.count {
+            return
+        }
+        length: s64 = 0
+        for byte: base { path[length] = byte; length += 1 }
+        for byte: cache { path[length] = byte; length += 1 }
+        path[length] = 0
+        unused SetEnvironmentBytes(*name[0], *path[0], 1)
+    }
+}
+
 #program_export
 native_before_window :: () {
     InstallAssetFiles()
@@ -303,6 +334,7 @@ native_before_window :: () {
         // The package's own files directory: the debug and Play builds use
         // other application IDs than the release path.
         files := AndroidInternalDataPath()
+        AndroidNativeCachePrepare(files)
         if files == null || ChangeDirectory(files) != 0 {
             TraceLog(4, "APP: failed to switch to Android files directory")
         }

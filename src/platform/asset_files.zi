@@ -34,9 +34,14 @@
     #import "c_string"
     #import "byte_text_linux"
 
+    #if #defined(ANDROID_DEBUG) {
+        #import, file "host_clock.zi";
+        #import, file "trace_log.zi";
+    }
+
     // A picture the app carries, such as one inside its bundles, decodes
     // from those bytes; any other comes from the APK's assets or the disk.
-    LoadAssetPicture :: (path: string) -> bool {
+    LoadPictureBytes :: (path: string) -> bool {
         name: [4096]u8
         if CopyCString(path, name[:]) {
             embedded := asset_lookup(*name[0])
@@ -46,6 +51,18 @@
             }
         }
         return Pictures.AndroidPictureLoad(path)
+    }
+
+    // Debug builds log each picture's load time, so slow decodes show up.
+    LoadAssetPicture :: (path: string) -> bool {
+        #if #defined(ANDROID_DEBUG) {
+            started := HostSeconds()
+            loaded := LoadPictureBytes(path)
+            TraceLogPicture(3, path, HostSeconds() - started, loaded)
+            return loaded
+        } else {
+            return LoadPictureBytes(path)
+        }
     }
 
     InstallAssetFiles :: () {
