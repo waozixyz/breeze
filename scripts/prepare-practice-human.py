@@ -9,9 +9,62 @@ import struct
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# The painted textures and backdrops come from generated watercolor
+# originals kept in OUTPUT/source (provenance.json there): each swatch is
+# moved to the style target's palette, made to tile without a seam and
+# sized for phones.
+SWATCHES = {'skin': ('#e8c3a0', 0.45), 'tunic': ('#8fa483', 0.9), 'trousers': ('#6a6a8f', 0.85),
+            'hair': ('#76513a', 1.0), 'sash': ('#e3dabd', 0.6)}
+BACKDROPS = ('tai-chi', 'sun-salutation', 'workout', 'astral')
+
+def prepare_textures(folder):
+    from PIL import Image
+    source = folder/'source'
+    for name, (target, contrast) in SWATCHES.items():
+        picture = np.asarray(Image.open(source/f'{name}.webp').convert('RGB').resize((512, 512), Image.LANCZOS),
+                             dtype=np.float64)
+        mean = picture.reshape(-1, 3).mean(axis=0)
+        goal = np.array([int(target[at:at+2], 16) for at in (1, 3, 5)], dtype=np.float64)
+        light = picture @ np.array([0.30, 0.59, 0.11])
+        # Keep the brushwork's light and dark, painted in the target colour,
+        # with a little of the swatch's own colour variation.
+        shade = (light-light.mean())*contrast
+        tinted = goal+shade[:, :, None]+(picture-mean-(light-light.mean())[:, :, None])*0.25
+        # A copy offset by half covers the seam at the edges.
+        shifted = np.roll(tinted, (256, 256), axis=(0, 1))
+        ramp = 1-np.abs(np.arange(512)/511*2-1)
+        weight = np.clip(np.minimum.outer(ramp, ramp)*3, 0, 1)[:, :, None]
+        tiled = tinted*weight+shifted*(1-weight)
+        Image.fromarray(np.clip(tiled, 0, 255).astype(np.uint8)).save(folder/f'{name}.webp', quality=88, method=6)
+    # The face painting takes the skin swatch's colour on its cheeks and
+    # brow, keeping its own eyes, brows, lips and blush.
+    face = np.asarray(Image.open(source/'face.webp').convert('RGB').resize((512, 512), Image.LANCZOS), dtype=np.float64)
+    skin = face[106:155, 196:318].reshape(-1, 3).mean(axis=0)
+    goal = np.array([int(SWATCHES['skin'][0][at:at+2], 16) for at in (1, 3, 5)], dtype=np.float64)
+    face = face*goal/skin
+    # Outside the painted face (its paper, hair and ears) the painting
+    # becomes plain skin, so wherever the mesh's face reaches past it the
+    # skin goes on.
+    y, x = np.mgrid[0:512, 0:512]
+    oval = np.sqrt(((x-256)/150)**2+((y-262)/190)**2)
+    keep = np.clip((1.0-oval)/0.18, 0, 1)[:, :, None]
+    face = face*keep+goal*(1-keep)
+    Image.fromarray(np.clip(face, 0, 255).astype(np.uint8)).save(folder/'face.webp', quality=90, method=6)
+    (folder/'backdrops').mkdir(exist_ok=True)
+    for name in BACKDROPS:
+        picture = Image.open(source/f'backdrop-{name}.webp').convert('RGB')
+        picture.thumbnail((1280, 1280), Image.LANCZOS)
+        picture.save(folder/'backdrops'/f'{name}.webp', quality=85, method=6)
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--output', type=Path, required=True)
+parser.add_argument('--textures-only', action='store_true',
+                    help='only rebuild the painted textures and backdrops from OUTPUT/source')
 args = parser.parse_args()
+if args.textures_only:
+    prepare_textures(args.output.resolve())
+    raise SystemExit(0)
 source_file = ROOT / 'design/astral-projection/three/assets/makehuman-base.obj.gz'
 vertices, groups, group = [], {}, ''
 for line in gzip.open(source_file, 'rt'):
@@ -260,13 +313,21 @@ def hairline(points):
     value = np.where(ears, np.minimum(value, 0.070-np.abs(x)), value)
     return np.where(y < 1.44, -1.0, value)
 
+def neckline(points):
+    """Positive below the wrap top's collar: level over the shoulders, then
+    a V down the breastbone in front."""
+    points = np.atleast_2d(points)
+    x, y, z = points[:, 0], points[:, 1], points[:, 2]
+    v = 0.075*np.clip(1-np.abs(x)/0.085, 0, 1)*np.clip((z-0.02)/0.04, 0, 1)
+    return (neck_height-0.04-v)-y
+
 def region_of(points):
     points = np.atleast_2d(points)
     x, y, z = points[:, 0], points[:, 1], points[:, 2]
     regions = np.zeros(len(points), dtype=np.uint8)
     # Sleeves continue over the shoulder cap. A horizontal collar cutoff alone
     # leaves isolated bare patches where the arm rises above the neck cutoff.
-    regions[(y > hip_height-0.09) & ((y < neck_height-0.04) |
+    regions[(y > hip_height-0.09) & ((neckline(points) > 0) |
             ((np.abs(x) > 0.115) & (y < neck_height+0.025)))] = 1
     regions[y <= hip_height-0.04] = 2
     for cuff, ankle in zip(cuffs, ankles):
@@ -282,9 +343,9 @@ def region_of(points):
 def plane(axis, value):
     return lambda points: np.atleast_2d(points)[:, axis]-value
 
-planes = [(1, hip_height-0.04), (1, neck_height-0.04), (1, neck_height+0.025), (0, 0.115), (0, -0.115)]
+planes = [(1, hip_height-0.04), (1, neck_height+0.025), (0, 0.115), (0, -0.115)]
 planes += [(0, cuff) for cuff in cuffs] + [(0, -cuff) for cuff in cuffs] + [(1, ankle) for ankle in ankles]
-cuts = [(('plane',)+item, plane(*item)) for item in planes] + [(('hairline',), hairline)]
+cuts = [(('plane',)+item, plane(*item)) for item in planes] + [(('neckline',), neckline), (('hairline',), hairline)]
 points, skin_joints, skin_weights = list(positions), list(joints), list(weights)
 surface_normals = list(normals)
 edges = {}
@@ -354,12 +415,10 @@ positions = points[source]
 normals = np.array(surface_normals)[source]
 joints = np.array(skin_joints)[source]
 weights = np.array(skin_weights)[source]
-uvs = np.column_stack((positions[:, 0]*3+0.5, positions[:, 1]*3))
 triangles = np.array(faces, dtype=np.int64)
-# The head. MakeHuman's own eyeballs sit in the sockets; a hair shell rises
-# from nothing at the hairline to a centimetre over the crown; a low bun sits
-# at the back. All follow the head bone alone. Beyond the four washes the
-# regions are 4 iris, 5 eye white, 6 lips and 7 brows.
+# The head. MakeHuman's own eyeballs sit in the sockets under painted lids;
+# a hair shell rises from nothing at the hairline to a centimetre over the
+# crown; a low bun sits at the back. All follow the head bone alone.
 def outward_faces(vertices, faces, center):
     faces = np.array(faces, dtype=np.int64)
     normal = np.cross(vertices[faces[:, 1]]-vertices[faces[:, 0]], vertices[faces[:, 2]]-vertices[faces[:, 0]])
@@ -380,7 +439,7 @@ used = np.unique(hair_faces)
 depth = hairline(positions[used])
 crown = np.clip((positions[used, 1]-eye_height-0.02)/0.08, 0, 1)
 sides = np.clip(np.abs(positions[used, 0])/0.07, 0, 1)
-thickness = (0.008+0.006*crown+0.005*sides)*np.clip(depth/0.025, 0, 1)**0.6
+thickness = (0.010+0.016*crown+0.005*sides)*np.clip(depth/0.045, 0, 1)**1.1
 shell = positions[used]+normals[used]*thickness[:, None]
 remap = np.full(len(positions), -1, dtype=np.int64)
 remap[used] = np.arange(len(used))
@@ -411,25 +470,9 @@ for prefix in ('l', 'r'):
     center = eye.mean(axis=0)
     eye_faces = outward_faces(eye, [[eye_lookup[face[0]], eye_lookup[face[at]], eye_lookup[face[at+1]]]
                                     for face in groups[f'helper-{prefix}-eye'] for at in range(1, len(face)-1)], center)
-    gaze = joint(f'{prefix}-eye-target')-joint(f'{prefix}-eye')
-    gaze /= np.linalg.norm(gaze)
-    facing = (eye-center)/np.linalg.norm(eye-center, axis=1)[:, None] @ gaze
-    extras.append((eye, vertex_normals(eye, eye_faces), np.where(facing > np.cos(np.radians(32)), 4, 5), eye_faces))
-# Brows arch over the eyes and the lips fill the mouth; both are painted on
-# the skin's own vertices, so their edges stay soft.
-x, y, z = positions[:, 0], positions[:, 1], positions[:, 2]
-for prefix in ('l', 'r'):
-    eye = joint(prefix+'-eye')
-    across = (x-eye[0])/0.023
-    middle = eye[1]+0.017+0.004*(1-across**2)-0.002*np.sign(eye[0])*across
-    brow = (np.abs(across) < 1) & (np.abs(y-middle) < 0.0024*(1.25-0.6*np.abs(across))) & (z > eye[2]-0.005)
-    regions[brow & (regions == 0)] = 7
-mouth = joint('mouth')
-# MakeHuman's mouth joint is the jaw's pivot, level with the nose tip.
-lip_height = mouth[1]-0.027
-lips = ((x/0.021)**2+((y-lip_height)/0.0088)**2 < 1) & (z > 0.145)
-regions[lips & (regions == 0)] = 6
+    extras.append((eye, vertex_normals(eye, eye_faces), np.zeros(len(eye)), eye_faces))
 head_index = [at for at, item in enumerate(bones) if item['role'] == 3][0]
+body_count = len(positions)
 for vertices, vertex_normal, vertex_region, faces_of in extras:
     base = len(positions)
     positions = np.vstack([positions, vertices])
@@ -438,29 +481,311 @@ for vertices, vertex_normal, vertex_region, faces_of in extras:
     weights = np.vstack([weights, np.tile(np.array([1.0, 0.0, 0.0, 0.0]), (len(vertices), 1))])
     regions = np.concatenate([regions, np.asarray(vertex_region, dtype=np.uint8)])
     triangles = np.vstack([triangles, np.asarray(faces_of, dtype=np.int64)+base])
-uvs = np.column_stack((positions[:, 0]*3+0.5, positions[:, 1]*3))
+
+# Loose clothes: shells over the body, skinned by the same rig. The wrap
+# top hangs from the bust and the shoulder blades, its skirt hangs over the
+# hips and both thighs, a sash with two tails covers the seam at the waist,
+# the sleeves open into bells and the trousers balloon to a gathered hem.
+# Regions: 0 skin, 1 tunic, 2 trousers, 3 hair, 4 sash.
+role_of = np.array([item['role'] for item in bones])
+
+def share(rows, shares, roles):
+    return np.sum(shares*np.isin(role_of[rows], roles), axis=1)
+
+def smooth(value):
+    value = np.clip(value, 0, 1)
+    return value*value*(3-2*value)
+
+arm = share(joints, weights, [4, 5, 6, 7])
+trunk_points = (np.arange(len(positions)) < body_count) & (arm < 0.15)
+hips_joint = (joint('l-upper-leg')+joint('r-upper-leg'))/2
+armpit_y = (joint('l-shoulder')[1]+joint('r-shoulder')[1])/2-0.09
+hem_y = hips_joint[1]-0.15
+
+def slab(height, mask=trunk_points, half=0.012):
+    return positions[mask & (np.abs(positions[:, 1]-height) < half)]
+
+heights = np.arange(hip_height+0.02, joint('spine-1')[1], 0.005)
+waist_y = heights[int(np.argmin([np.ptp(slab(h, half=0.006)[:, 0]) for h in heights]))]
+grid_y = np.arange(hem_y-0.04, neck_height+0.0001, 0.01)
+centre_z = np.array([(lambda s: (s[:, 2].min()+s[:, 2].max())/2)(slab(h)) for h in grid_y])
+centre_z = np.convolve(np.pad(centre_z, 2, mode='edge'), np.ones(5)/5, mode='valid')
+
+def trunk_z(y):
+    return np.interp(y, grid_y, centre_z)
+
+K = 72
+angles = np.arange(K)*2*np.pi/K
+directions = np.column_stack((np.sin(angles), np.cos(angles)))
+hang = np.zeros((len(grid_y), K))
+for j, h in enumerate(grid_y):
+    s = slab(h)
+    hang[j] = (np.column_stack((s[:, 0], s[:, 2]-trunk_z(h))) @ directions.T).max(axis=0)
+# Cloth falls straight from the widest place above it, under the armpits.
+top = int(np.searchsorted(grid_y, armpit_y))
+for j in range(top-1, -1, -1):
+    hang[j] = np.maximum(hang[j], hang[j+1])
+for _ in range(3):
+    hang = 0.5*hang+0.25*np.roll(hang, 1, axis=1)+0.25*np.roll(hang, -1, axis=1)
+hang[1:-1] = 0.5*hang[1:-1]+0.25*hang[:-2]+0.25*hang[2:]
+
+def hanging_radius(theta, y):
+    fj = np.clip((y-grid_y[0])/0.01, 0, len(grid_y)-1.001)
+    j = fj.astype(int)
+    tj = fj-j
+    fk = (theta % (2*np.pi))/(2*np.pi)*K
+    k = np.floor(fk).astype(int) % K
+    tk = fk-np.floor(fk)
+    k1 = (k+1) % K
+    a = hang[j, k]*(1-tk)+hang[j, k1]*tk
+    b = hang[j+1, k]*(1-tk)+hang[j+1, k1]*tk
+    return a*(1-tj)+b*tj
+
+def arm_progress(points):
+    result = np.zeros(len(points))
+    for side, prefix in enumerate(('l', 'r')):
+        s, e, h = joint(prefix+'-shoulder'), joint(prefix+'-elbow'), joint(prefix+'-hand')
+        upper, lower = np.linalg.norm(e-s), np.linalg.norm(h-e)
+        mine = (points[:, 0] >= 0) == (side == 0)
+        p = points[mine]
+        a = np.clip((p-s) @ (e-s)/upper**2, 0, 1)
+        b = np.clip((p-e) @ (h-e)/lower**2, 0, 1)
+        da = np.linalg.norm(p-(s+a[:, None]*(e-s)), axis=1)
+        db = np.linalg.norm(p-(e+b[:, None]*(h-e)), axis=1)
+        result[mine] = np.where(da < db, a*upper, upper+b*lower)/(upper+lower)
+    return result
+
+dense_body = np.zeros((body_count, len(bones)))
+for slot in range(4):
+    np.add.at(dense_body, (np.arange(body_count), joints[:body_count, slot]), weights[:body_count, slot])
+
+def nearest_weights(points, near=8):
+    """Skin weights for cloth away from the surface: the weights of the
+    nearest trunk and leg vertices, closer ones counting more."""
+    candidates = np.where(trunk_points[:body_count] & (positions[:body_count, 1] > hem_y-0.12) &
+                          (positions[:body_count, 1] < waist_y+0.15))[0]
+    result = np.zeros((len(points), len(bones)))
+    for at, point in enumerate(points):
+        distance = np.linalg.norm(positions[candidates]-point, axis=1)
+        order = np.argsort(distance)[:near]
+        share_of = 1/np.maximum(distance[order], 0.005)**2
+        result[at] = share_of @ dense_body[candidates[order]]/share_of.sum()
+    return result
+
+def strongest(dense):
+    rows = np.argsort(-dense, axis=1)[:, :4]
+    shares = np.take_along_axis(dense, rows, axis=1)
+    shares[shares < 0.004] = 0.0
+    return rows.astype(np.uint8), shares/shares.sum(axis=1)[:, None]
+
+def grid_faces(rows, columns, wrap):
+    faces = []
+    span = columns if wrap else columns-1
+    for j in range(rows-1):
+        for k in range(span):
+            a, b = j*columns+k, j*columns+(k+1) % columns
+            faces += [[a, b, b+columns], [a, b+columns, a+columns]]
+    return np.array(faces, dtype=np.int64)
+
+def facing_out(points, faces, centre_of):
+    normal = np.cross(points[faces[:, 1]]-points[faces[:, 0]], points[faces[:, 2]]-points[faces[:, 0]])
+    middle = points[faces].mean(axis=1)
+    out = middle-centre_of(middle)
+    flip = np.einsum('ij,ij->i', normal, out) < 0
+    faces[flip] = faces[flip][:, ::-1]
+    return faces
+
+def trunk_axis(points):
+    return np.column_stack((np.zeros(len(points)), points[:, 1], trunk_z(points[:, 1])))
+
+cloth = []  # (points, normals, joints, weights, region, faces, source positions or None, hang)
+
+# The top: the body's own tunic surface lifted off it, above the waist and
+# along the sleeves.
+top_faces = triangles[np.all(regions[triangles] == 1, axis=1) & np.all(triangles < body_count, axis=1)]
+top_faces = top_faces[(positions[top_faces][:, :, 1].min(axis=1) > waist_y-0.03) | (arm[top_faces].mean(axis=1) > 0.5)]
+used = np.unique(top_faces)
+p, n = positions[used], normals[used]
+bust_y = slab((waist_y+armpit_y)/2, half=0.06)[:, 1][np.argmax(slab((waist_y+armpit_y)/2, half=0.06)[:, 2])]
+sleeve = smooth((arm[used]-0.2)/0.6)
+lift = np.interp(p[:, 1], [waist_y, bust_y, neck_height-0.04], [0.022, 0.012, 0.005])*(1-sleeve)
+lift += (0.010+0.045*arm_progress(p)**1.4)*sleeve
+q = p+n*lift[:, None]
+rel = np.column_stack((q[:, 0], q[:, 2]-trunk_z(p[:, 1])))
+theta = np.arctan2(rel[:, 0], rel[:, 1])
+push = np.maximum(hanging_radius(theta, p[:, 1])+lift-np.linalg.norm(rel, axis=1), 0)
+push *= (1-sleeve)*np.clip((armpit_y-p[:, 1])/0.06, 0, 1)
+q[:, 0] += np.sin(theta)*push
+q[:, 2] += np.cos(theta)*push
+remap = np.full(len(positions), -1, dtype=np.int64)
+remap[used] = np.arange(len(used))
+faces_of = remap[top_faces]
+cloth.append((q, vertex_normals(q, faces_of), joints[used], weights[used], 1, faces_of, p, np.zeros(len(q))))
+
+# The skirt of the top, from just above the waist to the upper thigh, with
+# a gently uneven hem.
+rows_y = np.linspace(waist_y+0.035, hem_y, 16)
+fall = (rows_y[0]-rows_y)/(rows_y[0]-rows_y[-1])
+skirt = []
+for y, f in zip(rows_y, fall):
+    hem = 0.012*np.sin(3*angles+0.7)*f**4
+    r = hanging_radius(angles, np.full(K, y))+0.022+0.035*f**1.5
+    skirt.append(np.column_stack((np.sin(angles)*r, np.full(K, y)+hem, trunk_z(y)+np.cos(angles)*r)))
+skirt = np.vstack(skirt)
+faces_of = facing_out(skirt, grid_faces(len(rows_y), K, True), trunk_axis)
+dense = nearest_weights(skirt).reshape(len(rows_y), K, len(bones))
+for _ in range(2):
+    dense = 0.5*dense+0.25*np.roll(dense, 1, axis=1)+0.25*np.roll(dense, -1, axis=1)
+# The hand-over from the pelvis to the thighs spreads down the whole skirt,
+# so a lifted leg draws the hem out gradually instead of tearing a band.
+for _ in range(12):
+    dense[1:-1] = 0.5*dense[1:-1]+0.25*dense[:-2]+0.25*dense[2:]
+    dense[-1] = 0.5*dense[-1]+0.5*dense[-2]
+rows, shares = strongest(dense.reshape(-1, len(bones)))
+cloth.append((skirt, vertex_normals(skirt, faces_of), rows, shares, 1, faces_of, None, np.repeat(fall, K)))
+
+# The sash round the waist and its two tails hanging in front.
+band_y = waist_y+np.array([0.035, 0.012, -0.012, -0.035])
+band = np.vstack([np.column_stack((np.sin(angles)*r, np.full(K, y), trunk_z(y)+np.cos(angles)*r))
+                  for y, r in ((y, hanging_radius(angles, np.full(K, y))+0.022+bulge)
+                               for y, bulge in zip(band_y, (0.005, 0.010, 0.010, 0.005)))])
+faces_of = facing_out(band, grid_faces(len(band_y), K, True), trunk_axis)
+rows, shares = strongest(nearest_weights(band))
+cloth.append((band, vertex_normals(band, faces_of), rows, shares, 4, faces_of, None, np.zeros(len(band))))
+for tail, (turn, length) in enumerate(((0.30, 0.30), (0.46, 0.25))):
+    strip = []
+    for step in np.linspace(0, 1, 9):
+        y = waist_y-0.02-step*length
+        f = np.clip((rows_y[0]-y)/(rows_y[0]-rows_y[-1]), 0, 1)
+        for side in (-1, 1):
+            angle = turn+0.12*step+side*0.022/0.15
+            r = hanging_radius(np.array([angle]), np.array([y]))[0]+0.022+0.035*f**1.5+0.008+0.004*tail
+            strip.append([np.sin(angle)*r, y, trunk_z(y)+np.cos(angle)*r])
+    strip = np.array(strip)
+    faces_of = facing_out(strip, grid_faces(9, 2, False), trunk_axis)
+    rows, shares = strongest(nearest_weights(strip))
+    cloth.append((strip, vertex_normals(strip, faces_of), rows, shares, 4, faces_of, None,
+                  np.repeat(0.25+0.75*np.linspace(0, 1, 9), 2)))
+
+# The trousers: the legs' surface lifted off them, ballooning below the
+# knee and gathered again at the ankle.
+leg_faces = triangles[np.all(regions[triangles] == 2, axis=1) & np.all(triangles < body_count, axis=1)]
+used = np.unique(leg_faces)
+p, n = positions[used], normals[used]
+down = np.clip((hip_height-0.04-p[:, 1])/(hip_height-0.04-np.mean(ankles)), 0, 1)
+lift = 0.012+0.042*smooth(down/0.7)-0.028*smooth((down-0.86)/0.14)
+q = p+n*lift[:, None]
+remap = np.full(len(positions), -1, dtype=np.int64)
+remap[used] = np.arange(len(used))
+faces_of = remap[leg_faces]
+cloth.append((q, vertex_normals(q, faces_of), joints[used], weights[used], 2, faces_of, p, np.zeros(len(q))))
+
+# Painted textures follow the form: the trunk and the head are wrapped
+# about the vertical, each arm and leg about its own length, so brush
+# strokes run down the body and along the limbs. Each wrap is mirrored at
+# its back and front, so it has no seam.
+CLOTH_TILE = 0.30
+HAIR_TILE = 0.18
+
+def trunk_uv(points):
+    turn = np.abs(np.arctan2(points[:, 0], points[:, 2]-trunk_z(points[:, 1])))/np.pi
+    return np.column_stack((turn*0.45/CLOTH_TILE, points[:, 1]/CLOTH_TILE))
+
+def head_uv(points):
+    turn = np.abs(np.arctan2(points[:, 0], points[:, 2]-joint('head')[2]))/np.pi
+    return np.column_stack((turn*0.28/HAIR_TILE, points[:, 1]/HAIR_TILE))
+
+def limb_uv(points, start, end, half_round):
+    axis = (end-start)/np.linalg.norm(end-start)
+    forward = np.array([0.0, 0.0, 1.0])-axis*axis[2]
+    forward /= np.linalg.norm(forward)
+    across = np.cross(axis, forward)
+    rel = points-start
+    turn = np.abs(np.arctan2(rel @ across, rel @ forward))/np.pi
+    return np.column_stack((turn*half_round/CLOTH_TILE, -(rel @ axis)/CLOTH_TILE))
+
+def wrapped_uv(points, rows, shares):
+    dominant = rows[np.arange(len(rows)), np.argmax(shares, axis=1)]
+    roles = role_of[dominant]
+    sides = np.array([item['side'] for item in bones])[dominant]
+    result = trunk_uv(points)
+    head = roles == 3
+    result[head] = head_uv(points[head])
+    for side, prefix in enumerate(('l', 'r')):
+        limb = (roles >= 4) & (roles <= 7) & (sides == side)
+        result[limb] = limb_uv(points[limb], joint(prefix+'-shoulder'), joint(prefix+'-hand'), 0.13)
+        limb = (roles >= 8) & (sides == side)
+        result[limb] = limb_uv(points[limb], joint(prefix+'-upper-leg'), joint(prefix+'-ankle'), 0.25)
+    return result
+
+uvs = wrapped_uv(positions, joints, weights)
+hangs = np.zeros(len(positions))
+hair = regions == 3
+# Hair strokes run from the hairline back into the bun.
+swept = positions[hair]-bun_center
+uvs[hair] = np.column_stack((np.abs(np.arctan2(swept[:, 0], swept[:, 1]))/np.pi*0.25/HAIR_TILE,
+                             np.linalg.norm(swept, axis=1)/HAIR_TILE))
+for points, vertex_normal, rows, shares, region, faces_of, source, hanging in cloth:
+    base = len(positions)
+    if source is None:
+        uv = trunk_uv(points)
+    else:
+        uv = wrapped_uv(source, rows, shares)
+    positions = np.vstack([positions, points])
+    normals = np.vstack([normals, vertex_normal])
+    joints = np.vstack([joints, np.asarray(rows, dtype=np.uint8)])
+    weights = np.vstack([weights, shares])
+    regions = np.concatenate([regions, np.full(len(points), region, dtype=np.uint8)])
+    triangles = np.vstack([triangles, faces_of+base])
+    uvs = np.vstack([uvs, uv])
+    hangs = np.concatenate([hangs, hanging])
+
+# The face is painted by face.webp, projected from the front onto the
+# head: its eyes, mouth and the mesh's own match exactly, and the painting
+# fades out towards the ears, the hairline and under the chin.
+FACE = dict(size=(1254, 1254), right_eye=(420, 586), left_eye=(840, 586), mouth=(630, 884))
+face_ready = FACE['right_eye'] != (0, 0)
+mouth_point = np.array([0.0, joint('mouth')[1]-0.027])
+mesh_marks = np.array([joint('r-eye')[:2], joint('l-eye')[:2], mouth_point])
+picture = np.array([FACE['right_eye'], FACE['left_eye'], FACE['mouth']], dtype=np.float64)
+picture = np.column_stack((picture[:, 0]/FACE['size'][0], 1-picture[:, 1]/FACE['size'][1]))
+mapping = np.linalg.solve(np.column_stack((mesh_marks, np.ones(3))), picture)
+details = np.column_stack((positions[:, :2], np.ones(len(positions)))) @ mapping
+x, y = positions[:, 0], positions[:, 1]
+oval = ((x/0.078)**2+((y-eye_height+0.02)/0.115)**2)**0.5
+mask = smooth((normals[:, 2]-0.12)/0.4)*smooth((1.0-oval)/0.25)*smooth(-hairline(positions)/0.012)
+mask *= (role_of[joints[:, 0]] == 3) & (regions == 0) & face_ready
+details[mask <= 0] = 0.0
+# Cloth's detail is how freely it hangs from the waist: 0 at the waist, 1
+# at the skirt's hem and the sash tails' ends.
+details[regions != 0] = np.column_stack((hangs, np.zeros(len(hangs))))[regions != 0]
+masks = np.rint(np.clip(mask, 0, 1)*255).astype(np.int64)
+
 quantized = np.rint(weights*65535).astype(np.int64)
 quantized[:, 0] += 65535-quantized.sum(axis=1)
 assert np.all(quantized >= 0) and np.all(quantized <= 65535)
-assert np.isfinite(positions).all() and np.isfinite(normals).all()
+assert np.isfinite(positions).all() and np.isfinite(normals).all() and np.isfinite(uvs).all()
 assert np.max(joints) < len(bones) < 256
 assert np.max(triangles) < len(positions) < 65536
 assert np.all(quantized.sum(axis=1) == 65535)
-assert len(bones) == 46
-blob = bytearray(struct.pack('<8sIIIf', b'PFIG0001', len(positions), triangles.size, len(bones), 1.7))
+assert len(bones) == 46 and np.max(regions) <= 4
+blob = bytearray(struct.pack('<8sIIIf', b'PFIG0002', len(positions), triangles.size, len(bones), 1.7))
 for item in bones:
     blob.extend(struct.pack('<4Bi6f', item['role'], item['side'], item['finger'], item['segment'],
                             item['parent'], *item['origin'], *item['tip']))
-for point, normal, uv, influence, weight, region in zip(positions, normals, uvs, joints, quantized, regions):
-    blob.extend(struct.pack('<3f3h2f4B4HBB', *point, *np.rint(normal*32767).astype(int),
-                            *uv, *influence, *weight, int(region), 0))
+for point, normal, uv, detail, influence, weight, region, face in zip(positions, normals, uvs, details, joints,
+                                                                     quantized, regions, masks):
+    blob.extend(struct.pack('<3f3h2f2f4B4HBB', *point, *np.rint(normal*32767).astype(int),
+                            *uv, *detail, *influence, *weight, int(region), int(face)))
 blob.extend(triangles.astype('<u2').tobytes())
 output = args.output.resolve()
 output.mkdir(parents=True, exist_ok=True)
 (output/'anatomy.bin').write_bytes(blob)
-metadata = {'format':'PFIG0001', 'vertices':len(positions), 'triangles':len(triangles),
+metadata = {'format':'PFIG0002', 'vertices':len(positions), 'triangles':len(triangles),
             'bones':len(bones), 'bytes':len(blob), 'sha256':hashlib.sha256(blob).hexdigest(),
+            'regions':['skin', 'tunic', 'trousers', 'hair', 'sash'],
             'source':'https://github.com/makehumancommunity/makehuman/blob/a8bc2d54ff0ac92e78ff71431b1023eda42bf482/makehuman/data/3dobjs/base.obj',
             'license':'CC0-1.0', 'bone_names':[f"{b['role']}/{b['side']}/{b['finger']}/{b['segment']}" for b in bones]}
 (output/'anatomy.json').write_text(json.dumps(metadata,indent=2)+'\n')
 print(f"Prepared {len(positions)} vertices, {len(triangles)} triangles, {len(bones)} bones; {len(blob)} bytes")
+print(f"waist {waist_y:.3f} bust {bust_y:.3f} armpit {armpit_y:.3f} hem {hem_y:.3f}")

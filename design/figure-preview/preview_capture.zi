@@ -1,9 +1,10 @@
 // Composing a moment's picture, and the fixed review frames the capture
-// mode writes: each practice's hardest poses for the figure, painted and
-// bare, on paper.
+// mode writes: each practice's hardest poses for the figure, painted on the
+// practice's backdrop, bare on paper, and Breeze's current flat figure.
 #import "figure_math"
 #import "figure_joints"
 #import "figure_paint"
+#import "figure_wash"
 #import "preview_practices"
 #import "preview_flat"
 #import "kryon/scene"
@@ -11,26 +12,73 @@
 #import "workout_rules"
 #import "std/file"
 #import "std/png_linux"
+#import "kryon/image_pixels"
 #import "std/vec"
 Raster :: #import "std/image";
 
-// The body, and an astral twin over it, into OUT.
+// Each practice's painted backdrop.
+PreviewBackdrops :: struct {
+    images: [4]Raster.Image
+}
+
+PreviewBackdropsLoad :: (backdrops: *PreviewBackdrops, practices: string) -> bool {
+    ready := true
+    for practice: cast(s32)0..3 {
+        folder: [1100]u8
+        path: [1200]u8
+        name := PreviewJoin(folder[:], practices, "/shared/watercolor/backdrops/")
+        name = PreviewJoin(path[:], name, PreviewBackdropName(practice))
+        file: [1300]u8
+        loaded := LoadImagePixels(PreviewJoin(file[:], name, ".webp"))
+        PreviewTake(*backdrops.images[practice], *loaded)
+        ready = ready && Raster.ImageValid(*backdrops.images[practice])
+    }
+    return ready
+}
+
+PreviewTake :: (to: *Raster.Image, from: *Raster.Image) {
+    VecSwap(to.pixels, from.pixels)
+    to.width = from.width
+    to.height = from.height
+    VecFree(from.pixels)
+}
+
+PreviewBackdropsRelease :: (backdrops: *PreviewBackdrops) {
+    for practice: 0..3 {
+        VecFree(backdrops.images[practice].pixels)
+    }
+}
+
+// The body, and an astral twin over it, into OUT: on the practice's
+// painted backdrop with the watercolor finish, on plain paper without.
 PreviewCompose :: (body: *FigurePainter, twin: *FigurePainter, media: *FigureMedia,
-    moment: *PreviewMoment, view: FigureView, style: FigureStyle, width: s32, height: s32,
-    out: *Raster.Image) -> bool {
+    backdrops: *PreviewBackdrops, practice: s32, moment: *PreviewMoment, view: FigureView,
+    style: FigureStyle, width: s32, height: s32, out: *Raster.Image) -> bool {
     still: FigureEffect
-    if !FigurePaint(body, media, *moment.body, moment.look, view, style, still, width, height) {
+    if !FigurePaint(body, media, *moment.body, view, style, still, width, height) {
         return false
     }
-    if out.width != width || out.height != height || out.pixels.count != cast(s64)width * height * 4 {
+    backdrop := *backdrops.images[practice]
+    if style.watercolor && Raster.ImageValid(backdrop) {
+        // The lying astral body needs the bedroom floor raised to her.
+        zoom := ifx practice == PREVIEW_ASTRAL then 1.5 else 1.0
+        focus := ifx practice == PREVIEW_ASTRAL then 0.85 else 0.62
+        if !FigureBackdropCover(out, backdrop, width, height, zoom, focus) {
+            return false
+        }
+    } else {
         if !VecResize(out.pixels, cast(s64)width * height * 4) {
             return false
         }
         out.width = width
         out.height = height
+        paper: [4]u8 = .[243, 237, 225, 255]
+        for index: 0..out.pixels.count - 1 {
+            out.pixels[index] = paper[index % 4]
+        }
     }
-    for index: 0..out.pixels.count - 1 {
-        out.pixels[index] = body.pixels.pixels[index]
+    if !FigureOver(out, *body.pixels, 1.0) {
+        return false
     }
     if !moment.twin_visible {
         return true
@@ -38,26 +86,8 @@ PreviewCompose :: (body: *FigurePainter, twin: *FigurePainter, media: *FigureMed
     glow := style
     glow.luminous = true
     glow.opacity = 0.58
-    if !FigurePaint(twin, media, *moment.twin, PreviewLuminous(), view, glow, moment.twin_effect,
-        width, height) {
-        return false
-    }
-    for index: 0..cast(s64)width * height - 1 {
-        at := index * 4
-        a := cast(float64)twin.pixels.pixels[at + 3] / 255.0
-        if a <= 0.0 {
-            continue
-        }
-        under := cast(float64)out.pixels[at + 3] / 255.0
-        alpha := a + under * (1.0 - a)
-        for channel: 0..2 {
-            top := cast(float64)twin.pixels.pixels[at + channel]
-            bottom := cast(float64)out.pixels[at + channel]
-            out.pixels[at + channel] = cast(u8)((top * a + bottom * under * (1.0 - a)) / alpha + 0.5)
-        }
-        out.pixels[at + 3] = cast(u8)(alpha * 255.0 + 0.5)
-    }
-    return true
+    return FigurePaint(twin, media, *moment.twin, view, glow, moment.twin_effect, width, height) &&
+        FigureOver(out, *twin.pixels, 1.0)
 }
 
 PreviewShot :: struct {
@@ -67,7 +97,8 @@ PreviewShot :: struct {
     name: string
 }
 
-PreviewCapture :: (media: *FigureMedia, library: *PreviewLibrary, directory: string) -> s32 {
+PreviewCapture :: (media: *FigureMedia, backdrops: *PreviewBackdrops, library: *PreviewLibrary,
+    directory: string) -> s32 {
     shots: [24]PreviewShot
     count: s32
     full := PreviewDefaultItem(library, PREVIEW_TAI_CHI)
@@ -135,15 +166,16 @@ PreviewCapture :: (media: *FigureMedia, library: *PreviewLibrary, directory: str
             if variant == 2 {
                 camera := PreviewFlatOf(*moment, view)
                 painted = PreviewFlatRender(camera, view, width, height, *picture)
+                PreviewOnPaper(*picture)
             } else {
-                painted = PreviewCompose(*body, *twin, media, *moment, view, style, width, height, *picture)
+                painted = PreviewCompose(*body, *twin, media, backdrops, shot.practice, *moment, view, style,
+                    width, height, *picture)
             }
             if !painted {
                 print("figure capture: % could not be painted\n", final)
                 failed += 1
                 continue
             }
-            PreviewOnPaper(*picture)
             if !WritePNGFile(final, *picture, false) {
                 print("figure capture: could not write %\n", final)
                 failed += 1

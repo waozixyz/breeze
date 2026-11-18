@@ -6,14 +6,17 @@ package (`figure/`): Tai Chi forms, two rounds of Sun Salutation, the
 Workout's twelve exercises and the six astral techniques. It runs on Ziran
 and Kryon's SDL/Cairo desktop host, without raylib.
 
-The panel picks the practice and item, plays, pauses, scrubs and slows the
-clock. It switches the watercolor finish off to show the bare surface, and
-can show Breeze's current flat figure for the same moment. It also tunes
-edge pooling, pencil contour and paper grain. Drag over her to turn around
-her; scroll to zoom.
+Each practice plays on its own painted backdrop: a misty mountain garden
+for Tai Chi, a sunrise meadow for Sun Salutation, a light room for the
+Workout and the dim bedroom for astral projection. The panel picks the
+practice and item, plays, pauses, scrubs and slows the clock. It switches
+the watercolor finish off to show the bare surface on paper, and can show
+Breeze's current flat figure for the same moment. It also tunes the wet
+bleed, the dried edges, the ink line and the granulation. Drag over her to
+turn around her; scroll to zoom.
 
 This is its own small project so it can pin the Kryon that has
-`scene_skin` and `watercolor`, and the practices commit that has the figure,
+`scene_skin` and portable shaders, and the practices commit that has the figure,
 while Breeze's app still pins older ones. The poses are Breeze's own: the
 build adds Breeze's Tai Chi, Sun Salutation and practice folders as module
 folders, so nothing is copied.
@@ -39,8 +42,9 @@ that checkout's figure code too).
 
 `./build/app/figure_preview --capture DIR` writes review frames to `DIR` and
 exits without a window. Each frame is written three ways: the painted figure
-(`NAME.png`), her bare surface (`NAME-bare.png`) and Breeze's current flat
-figure for the same moment and camera (`NAME-current.png`). The frames cover
+on the practice's backdrop (`NAME.png`), her bare surface on paper
+(`NAME-bare.png`) and Breeze's current flat figure for the same moment and
+camera (`NAME-current.png`). The frames cover
 Tai Chi's deepest stance, Sun Salutation's fold, lunge, plank, cobra and
 downward dog, the Workout's lowest squat and lunge, and the astral exits.
 
