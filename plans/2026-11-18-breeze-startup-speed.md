@@ -26,8 +26,5 @@ then about 3 s drawing that frame.
 - [ ] Practice banners are 2048×1024 WebP for a card a few hundred pixels
   tall: about 760 ms each in the debug build. Decode at the drawn size
   (Kryon's Pixmap) or ship smaller banners.
-- [ ] The WHM banner decodes twice. When the Practices app opens after the
-  start, `practice_downloads.zi` reports `assets/practices` as changed, which
-  reloads pictures whose bytes stayed the same.
 - [ ] Measure a gplay release on the owner's Pixel 3a once these land; debug
   builds log each picture's load time as `APP PROBE: picture`.
