@@ -296,12 +296,15 @@ BreakStep :: (engine: BreakEngine, break_type: s32,
     if break_type == BREAK_DAILY  && engine.timers[break_type].skipped_today != 0 {
         return engine
     }
+    if is_active == BreakActivityUnknown && engine.timers[break_type].state != BreakStateBreaking {
+        engine.timers[break_type].idle_s = 0
+    }
 
     if owner >= 0 && owner != break_type {
-        if is_active != 0 {
+        if is_active == 1 {
             engine.timers[break_type].idle_s = 0
             engine.timers[break_type].idle_latched = 0
-        } else if engine.timers[break_type].idle_latched == 0  && engine.timers[break_type].duration_s > 0 {
+        } else if is_active == 0 && engine.timers[break_type].idle_latched == 0  && engine.timers[break_type].duration_s > 0 {
             engine.timers[break_type].idle_s += 1
             if engine.timers[break_type].idle_s >=
             engine.timers[break_type].duration_s {
@@ -312,7 +315,7 @@ BreakStep :: (engine: BreakEngine, break_type: s32,
     }
 
     if engine.timers[break_type].state == BreakStateRunning {
-        if is_active != 0 {
+        if is_active == 1 {
             engine.timers[break_type].active_s += 1
             engine.timers[break_type].idle_s = 0
             engine.timers[break_type].idle_latched = 0
@@ -320,7 +323,7 @@ BreakStep :: (engine: BreakEngine, break_type: s32,
             engine.timers[break_type].limit_s {
                 engine = BreakDue(engine, break_type)
             }
-        } else if engine.timers[break_type].idle_latched == 0 {
+        } else if is_active == 0 && engine.timers[break_type].idle_latched == 0 {
             engine.timers[break_type].idle_s += 1
             if engine.timers[break_type].duration_s > 0  && engine.timers[break_type].idle_s >=
             engine.timers[break_type].duration_s {
@@ -332,10 +335,10 @@ BreakStep :: (engine: BreakEngine, break_type: s32,
 
     if engine.timers[break_type].state == BreakStatePrompting {
         engine.stats[break_type].overdue_s += 1
-        if is_active != 0 {
+        if is_active == 1 {
             engine.timers[break_type].idle_s = 0
             engine.timers[break_type].idle_latched = 0
-        } else if engine.timers[break_type].idle_latched == 0 {
+        } else if is_active == 0 && engine.timers[break_type].idle_latched == 0 {
             engine.timers[break_type].idle_s += 1
             if engine.timers[break_type].duration_s > 0  && engine.timers[break_type].idle_s >=
             engine.timers[break_type].duration_s {
@@ -415,13 +418,13 @@ BreakTick :: (engine: BreakEngine, active: s32) -> BreakEngine {
 
     reading: s32 = 0
     if engine.reading_mode != 0 {
-        if active != 0 {
+        if active == 1 {
             engine.reading_active = 1
         }
         reading = engine.reading_active
     }
-    is_active: s32 = 0
-    if active != 0 || reading != 0 {
+    is_active := active
+    if active == 1 || (active == 0 && reading != 0) {
         is_active = 1
         engine.usage_today_s += 1
     }
@@ -438,6 +441,28 @@ BreakTick :: (engine: BreakEngine, active: s32) -> BreakEngine {
     while index < BREAK_TYPE_COUNT {
         engine = BreakStep(engine, index, is_active, owner)
         index += 1
+    }
+    return engine
+}
+
+BreakTickDesktop :: (engine: BreakEngine, ticks: s32,
+    active: s32, idle_ms: s64) -> BreakEngine {
+    // A sample only describes the end of a batch. Avoid filling the work or
+    // rest meters with an unsampled interval after a long render stall.
+    observed_ticks: s32 = 0
+    if active == 1 {
+        observed_ticks = BreakTicksPerSecond
+    } else if active == 0 && idle_ms > BreakActivityThresholdMs {
+        // Limit milliseconds before multiplying, including for large OS counters.
+        idle_after_grace := idle_ms - BreakActivityThresholdMs
+        observed_ticks = ticks
+        if idle_after_grace < cast(s64)ticks * 1000 {
+            observed_ticks = cast(s32)(idle_after_grace * BreakTicksPerSecond / 1000)
+        }
+    }
+    for tick: 0..ticks - 1 {
+        sample := ifx tick >= ticks - observed_ticks then active else BreakActivityUnknown
+        engine = BreakTick(engine, sample)
     }
     return engine
 }

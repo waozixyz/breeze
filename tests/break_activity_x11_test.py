@@ -26,32 +26,59 @@ def main():
         probe.stdin.flush()
         assert select.select([probe.stdout], [], [], 5)[0], "probe timed out"
         values = tuple(map(int, probe.stdout.readline().split()))
-        assert len(values) == 4 and values[0] >= 0, values
+        assert len(values) == 6 and values[0] >= 0, values
         return values
+
+    def wait_for(predicate, timeout):
+        deadline = time.monotonic() + timeout
+        while True:
+            values = sample()
+            if predicate(values):
+                return values
+            assert time.monotonic() < deadline, values
+            time.sleep(0.1)
+
+    def start_typing():
+        return subprocess.Popen(["xdotool", "type", "--delay", "45",
+                                 "continuous keyboard activity " * 3])
 
     try:
         window = subprocess.check_output(
             ["xdotool", "search", "--sync", "--onlyvisible", "--name", title],
             text=True, timeout=10).splitlines()[0]
         subprocess.run(["xdotool", "windowfocus", "--sync", window], check=True)
-        time.sleep(1.6)
-        idle = sample()
-        assert idle[1] == 0 and idle[2] > 0 and idle[3] > 0, idle
-        typing = subprocess.Popen(["xdotool", "type", "--delay", "35",
-                                   "continuous keyboard activity " * 6])
-        # Allow the shared OS sampler's 500 ms cache to refresh.
-        time.sleep(0.65)
-        samples = 0
+        subprocess.run(["xdotool", "key", "space"], check=True)
+        typing = start_typing()
+        working = wait_for(lambda values: values[1] == 1 and values[2] >= 2, 5)
+        assert working[2] == working[3] and working[4:] == (0, 0), working
         while typing.poll() is None:
-            values = sample()
-            assert values[1:] == (1, 0, 0), values
-            samples += 1
-            time.sleep(0.15)
-        assert typing.wait() == 0 and samples >= 15, samples
-        time.sleep(1.6)
-        stopped = sample()
-        assert stopped[1] == 0 and stopped[2] > 0 and stopped[3] > 0, stopped
-        print(f"Private Xvfb typing: {samples} active samples; both rest meters stayed at 0; idle resumed after typing stopped")
+            time.sleep(0.1)
+            sample()
+        assert typing.wait() == 0
+
+        short = wait_for(lambda values: values[0] >= 1500, 3)
+        assert short[0] < 4000 and short[1] == 0, short
+        assert short[2] >= working[2] and short[2] == short[3] and short[4:] == (0, 0), short
+        typing = start_typing()
+        returned = wait_for(lambda values: values[1] == 1 and values[2] > short[2], 4)
+        assert returned[2] == returned[3] and returned[4:] == (0, 0), returned
+        while typing.poll() is None:
+            time.sleep(0.1)
+            sample()
+        assert typing.wait() == 0
+
+        micro = wait_for(lambda values: values[4] == 1, 7)
+        assert micro[0] >= 4000 and micro[1] == 0, micro
+        assert micro[2] == 0 and micro[3] >= returned[3] and micro[5] == 0, micro
+        rest = wait_for(lambda values: values[5] == 1, 4)
+        assert rest[0] >= 6000 and rest[1:] == (0, 0, 0, 1, 1), rest
+        continued = wait_for(lambda values: values[0] >= 7000, 3)
+        assert continued[1:] == rest[1:], continued
+
+        typing = start_typing()
+        restarted = wait_for(lambda values: values[1] == 1 and values[2] >= 1, 5)
+        assert restarted[2] == restarted[3] and restarted[4:] == (1, 1), restarted
+        print("Private Xvfb: typing elsewhere accrued work, short idle preserved it, each full rest reset once, and typing resumed work")
     finally:
         for process in (typing, probe, other):
             if process is not None and process.poll() is None:

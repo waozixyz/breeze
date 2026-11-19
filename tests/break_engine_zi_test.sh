@@ -23,6 +23,6 @@ int main(void)
     return result == 0 ? 0 : 1;
 }
 C
-"${CC:-cc}" -std=c11 -I"$include" -I"$work/c" "$work/c"/*.c -o "$work/test"
+"${CC:-cc}" -std=c11 -I"$include" -I"$work/c" "$work/c"/*.c -lm -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "break engine Ziran test passed"

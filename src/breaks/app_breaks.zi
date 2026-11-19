@@ -217,11 +217,11 @@ break_persist_daily_state :: (app: *InnerBreeze) {
 }
 
 break_fallback_pointer_seen :: () -> bool {
-    wheel := cast(s32)(HostWheel().y * 1000.0f)
-    if wheel != 0 {
-        return true
-    }
-    return HostPointerMoved()
+    wheel := HostWheel()
+    primary := HostPointer()
+    secondary := HostSecondaryPointer()
+    return wheel.x != 0.0 || wheel.y != 0.0 || HostPointerMoved() ||
+        primary.pressed || primary.released || secondary.pressed || secondary.released
 }
 
 break_fallback_key_seen :: () -> bool {
@@ -528,8 +528,7 @@ app_breaks_note_lifecycle :: (app: *InnerBreeze, paused: bool) {
     if app.breaks_enabled != 0 && practice_active(app) == null {
         app_breaks_observe_absence(app, -1, 0)
     } else {
-        app.break_absence_clock.initialized = false
-        app.break_absence_clock.idle_seconds = 0.0
+        app.break_absence_clock = .{}
     }
     app.break_lifecycle_paused = paused
 }
@@ -545,15 +544,11 @@ app_breaks_update :: (app: *InnerBreeze) {
     // A running practice session is deliberate rest: freeze break
     // scheduling until it ends so no prompt pops over the session. The
     // elapsed-time base is dropped so no catch-up burst runs afterwards.
-    if practice_active(app) != null {
+    if app.breaks_enabled == 0 || practice_active(app) != null {
         app.break_last_update_time = 0.0f
-        app.break_absence_clock.initialized = false
-        app.break_absence_clock.idle_seconds = 0.0
-        return
-    }
-    if app.breaks_enabled == 0 {
-        app.break_absence_clock.initialized = false
-        app.break_absence_clock.idle_seconds = 0.0
+        app.break_tick_pending = 0.0f
+        app.break_fallback_last_input = 0
+        app.break_absence_clock = .{}
         return
     }
 
@@ -564,7 +559,7 @@ app_breaks_update :: (app: *InnerBreeze) {
         elapsed: float32 = 0.0f
         ticks: s32 = 0
 
-        app.break_input_active = active
+        app.break_input_active = ifx active == 1 then 1 else 0
 
         app_breaks_observe_absence(app, idle_ms, active)
 
@@ -591,19 +586,6 @@ app_breaks_update :: (app: *InnerBreeze) {
         }
         app.break_tick_pending = pending - cast(float32)ticks
 
-        // The activity sample only says whether input happened within the last
-        // BreakActivityThresholdMs - it cannot vouch for a longer stall (occluded
-        // or hidden window, system suspend, a slow frame). Credit at most one
-        // second of the batch to the live sample; older catch-up ticks run as
-        // idle so time away from the machine never counts toward the next break.
-        active_ticks: s32 = 0
-        if active != 0 {
-            active_ticks = BreakTicksPerSecond
-            if active_ticks > ticks {
-                active_ticks = ticks
-            }
-        }
-
         day := break_day_key()
         if day > 0 {
             prior_day := app.breaks.day_key
@@ -617,17 +599,11 @@ app_breaks_update :: (app: *InnerBreeze) {
             }
         }
 
-        {
-            i: s32 = 0
-            while i < ticks {
-
-                sample_active := ifx (i >= ticks - active_ticks) then (active) else (0)
-                app.breaks = BreakTick(app.breaks, sample_active)
-                app.break_stats_flush_s += 1
-
-                i += 1
-            }
+        if app.breaks.reading_active == 0 && idle_ms >= 0 {
+            idle_ms -= app.break_absence_clock.reading_idle_ms
         }
+        app.breaks = BreakTickDesktop(app.breaks, ticks, active, idle_ms)
+        app.break_stats_flush_s += ticks
         if app.break_stats_flush_s >= BreakStatsFlushS {
             app.break_stats_flush_s = 0
             storage_break_flush_day(*app.breaks)

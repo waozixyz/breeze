@@ -1,5 +1,6 @@
 BreakActivityThresholdMs :: 1000
 BreakFallbackInputTicks :: 90
+BreakActivityUnknown :: -1
 
 BreakActivityInput :: struct {
     idle_ms: s64
@@ -19,7 +20,7 @@ BreakAbsenceClock :: struct {
     elapsed_seconds: float64
     frame_seconds: float64
     idle_seconds: float64
-    ignore_os_idle: bool
+    reading_idle_ms: s64
 }
 
 BreakAbsenceSample :: struct {
@@ -28,34 +29,37 @@ BreakAbsenceSample :: struct {
     known_away: bool
 }
 
-// Observe absence before consuming the returning input. A frame stall may
-// contain a whole break, even when the wake-up key reset the OS idle counter.
-// Keep fractional seconds so an unavailable OS counter also works at any FPS.
+// The session counter proves awake idle time. The difference between the
+// two clocks covers suspend even if returning input reset the session counter.
 BreakObserveAbsence :: (clock: BreakAbsenceClock, elapsed_seconds: float64,
     frame_seconds: float64, idle_ms: s64, active: s32,
     backgrounded: bool, reading: bool) -> BreakAbsenceSample {
     result: BreakAbsenceSample
     result.clock = clock
-    if reading {
-        result.clock.idle_seconds = 0.0
-        result.clock.ignore_os_idle = true
-    }
     gap: float64 = 0.0
-    if clock.initialized && elapsed_seconds >= clock.elapsed_seconds {
+    suspended: float64 = 0.0
+    if clock.initialized && elapsed_seconds >= clock.elapsed_seconds &&
+        frame_seconds >= clock.frame_seconds {
         gap = elapsed_seconds - clock.elapsed_seconds
         frame_gap := frame_seconds - clock.frame_seconds
-        result.known_away = gap > frame_gap + 2.0
+        if gap > frame_gap + 2.0 {
+            suspended = gap - frame_gap
+        }
     }
-    result.known_away = result.known_away || backgrounded
-    observed := result.clock.idle_seconds
-    if active == 0 || backgrounded {
-        observed += gap
-    } else if gap > 2.0 {
-        observed += gap
+    result.known_away = suspended > 0.0 || backgrounded
+    observed := suspended
+    if active == 1 || (idle_ms >= 0 && idle_ms < clock.reading_idle_ms) {
+        result.clock.reading_idle_ms = 0
     }
-    if idle_ms >= 0 && !result.clock.ignore_os_idle {
-        os_idle := cast(float64)idle_ms / 1000.0
-        if gap <= 2.0 || os_idle > observed {
+    if backgrounded {
+        observed = clock.idle_seconds + gap
+    } else if reading && !result.known_away {
+        if idle_ms >= 0 {
+            result.clock.reading_idle_ms = idle_ms
+        }
+    } else if idle_ms >= result.clock.reading_idle_ms {
+        os_idle := cast(float64)(idle_ms - result.clock.reading_idle_ms) / 1000.0
+        if os_idle > observed {
             observed = os_idle
         }
     }
@@ -63,10 +67,7 @@ BreakObserveAbsence :: (clock: BreakAbsenceClock, elapsed_seconds: float64,
         observed = 2147483647.0
     }
     result.idle_seconds = cast(s32)observed
-    result.clock.idle_seconds = ifx active != 0 && !backgrounded then 0.0 else observed
-    if active != 0 {
-        result.clock.ignore_os_idle = false
-    }
+    result.clock.idle_seconds = ifx backgrounded then observed else 0.0
     result.clock.elapsed_seconds = elapsed_seconds
     result.clock.frame_seconds = frame_seconds
     result.clock.initialized = elapsed_seconds >= 0.0
@@ -83,12 +84,19 @@ BreakSampleActivity :: (input: BreakActivityInput,
         sample.active = ifx input.idle_ms < BreakActivityThresholdMs then 1 else 0
         return sample
     }
+    sample.active = BreakActivityUnknown
     if !input.focused {
+        sample.last_input_frame = 0
         return sample
     }
+    // Store frame + 1 so that zero means no observed local input at startup.
+    frame := input.frame + 1
     if input.key_pressed || input.pointer_active {
-        sample.last_input_frame = input.frame
+        sample.last_input_frame = frame
     }
-    sample.active = ifx input.frame - sample.last_input_frame < BreakFallbackInputTicks then 1 else 0
+    if sample.last_input_frame > 0 && frame >= sample.last_input_frame &&
+        frame - sample.last_input_frame < BreakFallbackInputTicks {
+        sample.active = 1
+    }
     return sample
 }

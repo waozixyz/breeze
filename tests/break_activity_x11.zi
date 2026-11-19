@@ -2,31 +2,46 @@
 #import, file "../src/breaks/break_types.zi";
 #import, file "../src/breaks/break_activity.zi";
 #import, file "../src/breaks/break_rules.zi";
+#import, file "../src/platform/break_clock.zi";
 
 engine: BreakEngine;
-initialized: bool;
+clock: BreakAbsenceClock;
+pending_ticks: float64;
 active: s32;
 
 #program_export
 Sample :: () -> s64 {
-    if !initialized {
-        initialized = true
+    if !clock.initialized {
         engine = BreakInit()
+        // Keep a real idle integration test fast without touching app defaults.
+        engine.timers[BREAK_MICRO].duration_s = 4
+        engine.timers[BREAK_REST].duration_s = 6
     }
     input: BreakActivityInput
     input.idle_ms = IdleMilliseconds()
     // This host has no focused app window and receives no local input events.
-    sample := BreakSampleActivity(input, -10000)
+    sample := BreakSampleActivity(input, 0)
     active = sample.active
-    for tick: 0..BreakTicksPerSecond - 1 {
-        engine = BreakTick(engine, active)
+    now := BreakElapsedSeconds()
+    if clock.initialized {
+        pending_ticks += (now - clock.elapsed_seconds) * cast(float64)BreakTicksPerSecond
     }
+    observed := BreakObserveAbsence(clock, now, now, input.idle_ms, active, false, false)
+    clock = observed.clock
+    engine = BreakNoteAbsence(engine, observed).engine
+    ticks := cast(s32)pending_ticks
+    pending_ticks -= cast(float64)ticks
+    engine = BreakTickDesktop(engine, ticks, active, input.idle_ms)
     return input.idle_ms
 }
 
 #program_export
 Activity :: () -> s32 { return active }
 #program_export
-MicroIdle :: () -> s32 { return engine.timers[BREAK_MICRO].idle_s }
+MicroWork :: () -> s32 { return engine.timers[BREAK_MICRO].active_s }
 #program_export
-RestIdle :: () -> s32 { return engine.timers[BREAK_REST].idle_s }
+RestWork :: () -> s32 { return engine.timers[BREAK_REST].active_s }
+#program_export
+MicroNatural :: () -> s32 { return engine.stats[BREAK_MICRO].natural }
+#program_export
+RestNatural :: () -> s32 { return engine.stats[BREAK_REST].natural }
