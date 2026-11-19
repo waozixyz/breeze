@@ -5,8 +5,10 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSyn
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { gunzipSync } from 'node:zlib';
+import * as zlib from 'node:zlib';
 import { Script } from 'node:vm';
+
+const { gunzipSync, zstdDecompressSync } = zlib;
 
 const root = resolve(import.meta.dirname, '..');
 const temporary = mkdtempSync(join(tmpdir(), 'inbe-site-assets-'));
@@ -121,6 +123,76 @@ window.originalBootstrapRan = true;
   console.log('Mini App generated bootstrap: syntax, SDK absence/older features, theme and gestures passed');
 }
 
+async function verifyWasmNegotiation() {
+  const partLimit = 96 * 1024;
+  const block = Array.from({ length: 3 }, (_, frame) => {
+    const noise = Buffer.concat(Array.from({ length: 1920 }, (_, i) =>
+      createHash('sha256').update(`${frame}-${i}`).digest()));
+    const repeat = noise.subarray(0, 36 * 1024);
+    return Buffer.concat([repeat, repeat, noise.subarray(repeat.length)]);
+  });
+  const original = Buffer.concat(block);
+  for (const app of ['web', 'telegram']) {
+    const directory = join(temporary, 'build', app);
+    rmSync(directory, { recursive: true, force: true });
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'index.wasm'), original);
+  }
+  const result = spawnSync('python3', [join(root, 'scripts/prepare-site-assets.py'), temporary,
+    '--max-file-bytes', String(partLimit)], { encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  const library = spawnSync('python3', ['-c', `import runpy, sys
+stage = runpy.run_path(sys.argv[1])
+print('available' if stage['load_zstd']() else 'missing')`,
+    join(root, 'scripts/prepare-site-assets.py')], { encoding: 'utf8' });
+  assert.equal(library.status, 0, library.stdout + library.stderr);
+  for (const app of ['web', 'telegram']) {
+    const path = `/build/${app}/index.wasm`;
+    const directory = join(temporary, 'build', app);
+    const gzip = await serve(path, { headers: { 'Accept-Encoding': 'gzip, zstd;q=0' } });
+    assert.equal(gzip.headers.get('Content-Encoding'), 'gzip');
+    assert.ok(gzip.headers.get('Vary').toLowerCase().includes('accept-encoding'));
+    assert.deepEqual(gunzipSync(Buffer.from(await gzip.arrayBuffer())), original);
+    const zstdManifest = join(directory, 'index.wasm.zstd.parts.json');
+    if (library.stdout.trim() === 'missing') {
+      assert.ok(!existsSync(zstdManifest));
+      assert.equal((await serve(path, { method: 'HEAD', headers: { 'Accept-Encoding': 'zstd, gzip' } }))
+        .headers.get('Content-Encoding'), 'gzip');
+      continue;
+    }
+    const requestForZstd = new Request('https://inbe.example' + path + '?v=test', {
+      headers: { 'Accept-Encoding': 'gzip, br', Range: 'bytes=0-9', 'If-None-Match': gzip.headers.get('ETag') },
+    });
+    requestForZstd.cf = { clientAcceptEncoding: 'gzip;q=0.8, ZSTD;q=0.9' };
+    const zstd = await worker.fetch(requestForZstd, { ASSETS: assets });
+    assert.equal(zstd.status, 200);
+    assert.equal(zstd.headers.get('Content-Encoding'), 'zstd');
+    assert.equal(zstd.headers.get('Content-Type'), 'application/wasm');
+    assert.match(zstd.headers.get('Cache-Control'), /no-transform/);
+    const encoded = Buffer.from(await zstd.arrayBuffer());
+    assert.equal(zstd.headers.get('Content-Length'), String(encoded.length));
+    assert.equal(zstd.headers.get('ETag'), '"' + createHash('sha256').update(encoded).digest('hex') + '"');
+    assert.ok(encoded.length < +JSON.parse(readFileSync(join(directory, 'index.wasm.parts.json'))).size);
+    if (typeof zstdDecompressSync === 'function') {
+      assert.deepEqual(zstdDecompressSync(encoded), original);
+    }
+    const manifest = JSON.parse(readFileSync(zstdManifest));
+    assert.ok(manifest.parts.length > 1);
+    assert.ok(manifest.parts.every(part => readFileSync(join(directory, part)).byteLength <= partLimit));
+    const head = await serve(path, { method: 'HEAD', headers: { 'Accept-Encoding': 'zstd, gzip' } });
+    assert.equal(head.headers.get('ETag'), zstd.headers.get('ETag'));
+    assert.equal((await head.arrayBuffer()).byteLength, 0);
+    const cached = await serve(path, { headers: { 'Accept-Encoding': 'gzip, zstd', 'If-None-Match': zstd.headers.get('ETag') } });
+    assert.equal(cached.status, 304);
+    const gzipPreferred = await serve(path, { method: 'HEAD', headers: { 'Accept-Encoding': 'zstd;q=0.5, gzip' } });
+    assert.equal(gzipPreferred.headers.get('Content-Encoding'), 'gzip');
+    writeFileSync(zstdManifest, '{');
+    const fallback = await serve(path, { method: 'HEAD', headers: { 'Accept-Encoding': 'zstd, gzip' } });
+    assert.equal(fallback.headers.get('ETag'), gzip.headers.get('ETag'));
+  }
+  console.log('Wasm variants: Zstd framing, negotiation, gzip fallback, asset limit and validators passed');
+}
+
 try {
   verifyTelegramBootstrap();
   for (const app of ['web', 'telegram']) {
@@ -173,6 +245,7 @@ try {
   rmSync(join(directory, 'index.wasm.gz'));
   assert.equal(await (await serve('/build/web/index.wasm')).text(), 'small wasm');
   console.log('Site assets: both apps, data/Wasm, streaming gzip, cache, HEAD, ranges and missing pieces passed');
+  await verifyWasmNegotiation();
 } finally {
   rmSync(temporary, { recursive: true, force: true });
 }
