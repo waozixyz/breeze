@@ -3,10 +3,12 @@
 #import "transaction"
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/app/app_types.zi";
+#import, file "../src/app/app_clock_host.zi";
 #import, file "../src/apps/inbe_types.zi";
 #import, file "../src/apps/lumi_types.zi";
 #import, file "../src/apps/lumi_online.zi";
 #import, file "../src/apps/lumi_connection.zi";
+#import, file "../src/apps/app_tools.zi";
 #import, file "../src/storage/storage_settings.zi";
 #import, file "../src/storage/sync_async.zi";
 #import "keys"
@@ -19,7 +21,7 @@
 #import, file "../src/apps/lumi_telegram.zi";
 #import, file "../src/apps/lumi_store.zi";
 #import, file "../src/storage/sync_account.zi";
-#import "crypto"
+#import "mesh_client/crypto"
 #import, file "../src/storage/account_types.zi";
 
 c :: #system_library "c";
@@ -28,6 +30,10 @@ owner: AccountKeys;
 mirrors: s32;
 polls: s32;
 acks: s32;
+replies: s32;
+reply_status: s32;
+claim_client: [65]u8;
+fixture_app: InnerBreeze;
 
 FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
     unused context
@@ -51,18 +57,40 @@ FakeStart :: (context: *void, request: HttpRequest, output: []u8) -> bool {
     }
     if request.url == "https://api.waozi.xyz/api/v1/lumi/telegram/ack" {
         acks += 1
+        client: [65]u8
+        check_true("acknowledgement uses the same client as the claim",
+            ToolString(request.body, "client", client[:]) == TextUntilNul(claim_client[:]))
+        if contains(request.body, "\"reply\":") {
+            replies += 1
+            check_true("only the exact update's answer is sent",
+                contains(request.body, "\"id\":17") && contains(request.body, "\"reply\":\"No habits yet.\"") &&
+                !contains(request.body, "App response"))
+            reply_status = 202
+        }
         return AppCopyText("true", output)
     }
     poll_url := "https://api.waozi.xyz/api/v1/lumi/telegram/updates?client="
-    check_true("only input poll reaches transport", request.method == "GET" &&
-        request.url.count == poll_url.count + 64 && request.url[:poll_url.count] == poll_url)
+    valid_poll := request.method == "GET" && request.url.count == poll_url.count + 64 &&
+        request.url[:poll_url.count] == poll_url
+    check_true("only input poll reaches transport", valid_poll)
+    if !valid_poll { return false }
+    client := request.url[poll_url.count:]
+    if polls == 0 {
+        check_true("claim has a client", AppCopyText(client, claim_client[:]))
+    } else {
+        check_true("follow-up polls use the same client", client == TextUntilNul(claim_client[:]))
+    }
     polls += 1
-    return AppCopyText("{\"linked\":true,\"linked_at\":1,\"update\":{\"id\":17,\"kind\":\"message\",\"text\":\"/habits\"}}", output)
+    return AppCopyText("{\"linked\":true,\"linked_at\":1,\"update\":{\"id\":17,\"kind\":\"message\",\"text\":\"/habits\",\"can_reply\":true}}", output)
 }
 
 FakePoll :: (context: *void, status: *s32) -> s32 {
     unused context
     status.* = 200
+    if reply_status != 0 {
+        status.* = reply_status
+        reply_status = 0
+    }
     return 1
 }
 
@@ -105,26 +133,26 @@ Check :: () -> s32 {
     LumiOnlineAppend("App response")
     expected := LumiStoreCount() + 2
     check_int("full preexisting archive", expected, 144)
-    app: InnerBreeze
-    app.enabled_apps = APP_LUMI | APP_HABITS
+    fixture_app.enabled_apps = APP_LUMI | APP_HABITS
     lumi_telegram_connection.linked = true
     lumi_telegram_connection.linked_at = 1
     // Exercise persisted post-link history, inbound execution, acknowledgement,
     // and duplicate input replays through the actual pump and real SQLite.
     for step: cast(s32)0..29 {
         lumi_telegram_connection.retry = 0
-        LumiTelegramPump(*app)
+        LumiTelegramPump(*fixture_app)
     }
     check_int("app history never posts to Telegram", mirrors, 0)
     check_true("input polling retained", polls > 0)
     check_true("input acknowledged", acks > 0)
+    check_int("unconfirmed response consumes the reply without replay", replies, 1)
     incoming_record := storage_get_setting_text("cell.lumi.message.telegram-17")
     check_true("incoming message archived", contains(incoming_record, "/habits"))
     check_true("incoming message records Telegram as its source", contains(incoming_record, "\"payload\":\"telegram\""))
     check_true("incoming message exposes Telegram in the chat row", LumiStoreRow(142).payload == "telegram")
     check_true("local app message stays unlabelled", LumiStoreRow(140).payload == "")
     check_true("incoming execution claim retained", storage_get_setting_int("telegram.update.17", 0) == 1)
-    check_true("input schedules regular account sync", app.ui.sync_requested)
+    check_true("input schedules regular account sync", fixture_app.ui.sync_requested)
     check_int("input and its response appended once", LumiStoreCount(), expected)
     check_true("Lumi response retained", LumiStoreRow(expected - 1).text == "No habits yet." && !LumiStoreRow(expected - 1).user)
     check_int("all history still enters account outbox", read_db_count("SELECT COUNT(*) FROM sync_outbox WHERE entity_type='cell_record' AND entity_id LIKE 'cell.lumi.message.%'"), expected)

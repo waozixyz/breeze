@@ -63,13 +63,11 @@ String __wrap_app_tools_AppToolExecute(InnerBreeze *app, String name, String arg
     return package_files_PackageText((String){.data = "{\"ok\":true}", .length = 11},
         (String){.data = "", .length = 0});
 }
-/* Telegram input runs Lumi's interpreter, which needs the app's window;
-   here the relay itself is under test. */
+/* Use the interpreter's normal append and online host calls without a window. */
 bool __wrap_lumi_screen_LumiSubmit(InnerBreeze *app, String input)
 {
     (void)app;
-    (void)input;
-    return false;
+    return TelegramFixtureSubmit(input);
 }
 int main(void)
 {

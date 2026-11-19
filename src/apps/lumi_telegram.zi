@@ -53,6 +53,14 @@ lumi_telegram_response: [65536]u8;
 lumi_telegram_connection: TelegramConnection;
 lumi_telegram_current: *InnerBreeze;
 
+LumiTelegramTurn :: struct {
+    id: s64
+    owner: [65]u8
+    client: [65]u8
+}
+lumi_telegram_online: LumiTelegramTurn;
+lumi_telegram_reply_client: [65]u8;
+
 LumiTelegramLink :: () {
     lumi_telegram_connection.error = false
     lumi_telegram_connection.link_requested = true
@@ -89,15 +97,82 @@ LumiTelegramStatusKey :: () -> string {
     return ifx lumi_telegram_connection.linked then "lumi_telegram_connected" else "lumi_telegram_body"
 }
 
+LumiTelegramReplyKey :: (id: s64, client: string) -> string {
+    key: Vec(u8)
+    BuilderPrint(*key, "telegram.reply.%.%", client, id)
+    return BuilderFinish(key)
+}
+
 LumiTelegramRequest :: (method: string, path: string, body: string) -> bool {
+    request := body
+    lumi_telegram_reply_client = .{}
+    defer { if request != body { PackageFree(request) } }
+    if path == "/api/v1/lumi/telegram/ack" && lumi_telegram_connection.ack > 0 &&
+    ReadStringText(body, FieldAt(body, 0, "client"), lumi_telegram_reply_client[:]) == 64 {
+        key := LumiTelegramReplyKey(lumi_telegram_connection.ack, TextUntilNul(lumi_telegram_reply_client[:]))
+        reply := storage_get_setting_text(key)
+        PackageFree(key)
+        if reply.count > 0 {
+            out: Vec(u8)
+            BuilderPrint(*out, "%,\"reply\":", body[:body.count - 1])
+            LumiJsonString(*out, reply)
+            BuilderPrint(*out, "}")
+            request = BuilderFinish(out)
+        } else {
+            lumi_telegram_reply_client = .{}
+        }
+    }
     if BeginStoredRequest(*lumi_telegram_operation, "https://api.waozi.xyz",
-        NetworkTransport(*lumi_telegram_transfer), method, path, body,
+        NetworkTransport(*lumi_telegram_transfer), method, path, request,
         lumi_telegram_response[:], false, *lumi_telegram_session) {
         unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), lumi_telegram_connection.owner[:])
         return true
     }
     print("LUMI: telegram_request_start_failed result=%\n", lumi_telegram_operation.result)
     return false
+}
+
+// Only rows written during this Telegram turn's execution can form its reply.
+LumiTelegramFinish :: (turn: LumiTelegramTurn, first: s32) {
+    if turn.id <= 0 { return }
+    out: Vec(u8)
+    for index: first..LumiStoreCount() - 1 {
+        row := LumiStoreRow(index)
+        if row.user || row.developer || row.kind != LUMI_CHAT_TEXT || row.text.count == 0 { continue }
+        if out.count >= 4096 { break }
+        if out.count > 0 { BuilderPrint(*out, "\n") }
+        BuilderPrint(*out, "%", row.text)
+    }
+    reply := BuilderFinish(out)
+    defer { PackageFree(reply) }
+    LumiTelegramSaveReply(turn, reply)
+}
+
+// Store the answer before acknowledging the claim so a lost transfer can retry.
+LumiTelegramSaveReply :: (turn: LumiTelegramTurn, text: string) {
+    if turn.id <= 0 || TextUntilNul(turn.owner[:]) != AppTextFromCString(storage_user_id_buffer(), 64) {
+        return
+    }
+    end := text.count
+    if end > 4096 {
+        end = 4096
+        while (text[end] & cast(u8)192) == cast(u8)128 { end -= 1 }
+    }
+    reply := text[:end]
+    if reply.count > 0 {
+        key := LumiTelegramReplyKey(turn.id, TextUntilNul(turn.client[:]))
+        defer { PackageFree(key) }
+        storage_set_setting_text(key, reply)
+        if storage_setting_text_equals(key, reply) == 0 { return }
+    }
+    lumi_telegram_connection.ack = turn.id
+    lumi_telegram_connection.retry = 0
+}
+
+LumiTelegramFinishOnline :: (first: s32) {
+    turn := lumi_telegram_online
+    lumi_telegram_online = .{}
+    LumiTelegramFinish(turn, first)
 }
 
 // Telegram cannot show an Inner Breeze screen, so the commands that open
@@ -220,6 +295,7 @@ LumiTelegramApply :: (app: *InnerBreeze, document: string) {
             unused FeedbackChoice(text, cast(s32)choice.value)
         }
     } else if type == "message" && text.count < LUMI_INPUT_MAX {
+        first := LumiStoreCount()
         // A remote message never moves this device's screen to Lumi.
         overview := LumiTelegramOverview(app, text)
         if overview.count > 0 {
@@ -228,6 +304,23 @@ LumiTelegramApply :: (app: *InnerBreeze, document: string) {
             PackageFree(overview)
         } else {
             unused LumiSubmit(app, text)
+        }
+        if id > 0 && MatchLiteral(document, FieldAt(document, at, "can_reply"), "true") {
+            archive := PackageText("cell.lumi.message.", stable_id)
+            defer { PackageFree(archive) }
+            if LumiStoreLatestUserKey() == archive {
+                turn := LumiTelegramTurn.{.id = id}
+                unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), turn.owner[:])
+                client := storage_get_setting_text("lumi_telegram_client")
+                if client.count == 64 && AppCopyText(client, turn.client[:]) {
+                    lumi_telegram_connection.ack = 0
+                    if LumiOnlineWaiting() {
+                        lumi_telegram_online = turn
+                    } else {
+                        LumiTelegramFinish(turn, first)
+                    }
+                }
+            }
         }
     }
     lumi_next_message_id = ""
@@ -253,8 +346,10 @@ LumiTelegramPump :: (app: *InnerBreeze) {
         lumi_authorization_disconnect_ready = false
         lumi_telegram_connection.disconnect_requested = true
     }
+    has_account := storage_has_sync_account() != 0
+    // Copy the client before another settings read can reuse its buffer.
     client := storage_get_setting_text("lumi_telegram_client")
-    if storage_has_sync_account() != 0 && client.count != 64 {
+    if has_account && client.count != 64 {
         bytes: [65]u8
         if !NativeNonce(null, bytes[:]) { return }
         storage_set_setting_text("lumi_telegram_client", TextFromCString(*bytes[0]))
@@ -266,19 +361,32 @@ LumiTelegramPump :: (app: *InnerBreeze) {
         TelegramBot.{.name = "inlumi_bot", .relay = "/api/v1/lumi/telegram"},
         TelegramTransport.{.start = LumiTelegramRequest, .poll = LumiTelegramPoll,
             .cancel = LumiTelegramCancel, .receive = LumiTelegramReceive},
-        AppTextFromCString(storage_user_id_buffer(), 64), storage_has_sync_account() != 0,
+        AppTextFromCString(storage_user_id_buffer(), 64), has_account,
         LumiNodeTrafficAllowed(), LumiOnlineWaiting(), TextUntilNul(client_bytes[:]), TelegramNow(null))
 }
 
 LumiTelegramPoll :: (output: []u8) -> s32 {
     if !PollStoredOperation(*lumi_telegram_operation) { return 0 }
     lumi_telegram_session = lumi_telegram_operation.session
-    if lumi_telegram_operation.result != cast(s32)AuthResult.AUTH_OK { return -1 }
+    success := lumi_telegram_operation.result == cast(s32)AuthResult.AUTH_OK
+    if lumi_telegram_connection.stage == 3 && lumi_telegram_reply_client[0] != 0 &&
+    TextUntilNul(lumi_telegram_connection.owner[:]) == AppTextFromCString(storage_user_id_buffer(), 64) {
+        // A conflict after a lost response means the same claim may already be
+        // consumed. If it still exists, the next poll can acknowledge it empty.
+        if success || lumi_telegram_operation.request.status == 409 {
+            key := LumiTelegramReplyKey(lumi_telegram_connection.ack, TextUntilNul(lumi_telegram_reply_client[:]))
+            storage_set_setting_text(key, "")
+            PackageFree(key)
+            return 1
+        }
+    }
+    if !success { return -1 }
     return ifx CopyCString(TextUntilNul(lumi_telegram_response[:]), output) then 1 else -1
 }
 LumiTelegramCancel :: () {
     CancelStoredOperation(*lumi_telegram_operation)
     lumi_telegram_session = Session.{}
+    lumi_telegram_reply_client = .{}
 }
 LumiTelegramReceive :: (document: string) {
     if lumi_telegram_current != null { LumiTelegramApply(lumi_telegram_current, document) }

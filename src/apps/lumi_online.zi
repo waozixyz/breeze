@@ -164,6 +164,7 @@ LumiProviderCancel :: () {
 }
 
 LumiOnlineCancel :: () {
+    lumi_telegram_online = .{}
     AppToolBeginTurn("")
     CancelStoredOperation(*lumi_online_operation)
     LumiProviderCancel()
@@ -589,6 +590,10 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
             return false
         }
         LumiOnlineAppend(text)
+        if lumi_telegram_online.id > 0 {
+            LumiTelegramSaveReply(lumi_telegram_online, text)
+            lumi_telegram_online = .{}
+        }
         LumiOnlineRemember("assistant", text)
         return true
     }
@@ -788,6 +793,7 @@ LumiFeedbackReplies :: () {
 // Ends a conversation turn: the answer or a notice, then the actions the
 // tools asked for. Another round may already be queued.
 LumiOnlineFinishTurn :: (app: *InnerBreeze, success: bool, status: s32) {
+    first := ifx lumi_telegram_online.id > 0 then LumiStoreCount() else 0
     lumi_pending_route = -1
     lumi_pending_practice = -1
     if !success || !LumiOnlineAnswer(app) {
@@ -808,6 +814,7 @@ LumiOnlineFinishTurn :: (app: *InnerBreeze, success: bool, status: s32) {
         app_apply_nav_route(app, lumi_pending_route)
     }
     if !LumiOnlineWaiting() {
+        LumiTelegramFinishOnline(first)
         LumiOnlineNextTurn()
     }
     unused LumiStoreSave()
@@ -836,6 +843,7 @@ LumiOnlineEnforce :: () {
     }
     if (lumi_online_queued || lumi_online_stage == 0) && !turn_allowed &&
     lumi_online_messages.count > 0 && !lumi_online_operation.active {
+        lumi_telegram_online = .{}
         lumi_online_queued = false
         lumi_online_fresh = false
         lumi_online_provider_turn = false
@@ -930,10 +938,12 @@ app_lumi_pump :: (app: *InnerBreeze) {
             return
         }
         if !LumiOnlineRequest(app) {
+            first := ifx lumi_telegram_online.id > 0 then LumiStoreCount() else 0
             lumi_online_queued = false
             text := LocaleText("lumi_online_unavailable")
             LumiOnlineAppend(text)
             LumiOnlineRemember("assistant", text)
+            LumiTelegramFinishOnline(first)
             LumiOnlineNextTurn()
             unused LumiStoreSave()
         }

@@ -54,6 +54,8 @@ developer_id: [33]u8;
 provider_requests: s32;
 feedback_requests: s32;
 telegram_requests: s32;
+telegram_update_pending: bool;
+telegram_answers: s32;
 spelling_requests: s32;
 icon_requests: s32;
 icon_habits: Habits;
@@ -136,6 +138,9 @@ ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool 
         if continuation_test {
             return ContinuationReply(request, output)
         }
+        if telegram_update_pending {
+            return AppCopyText("{\"message\":{\"role\":\"assistant\",\"content\":\"Telegram answer\"}}", output)
+        }
         return AppCopyText("{\"message\":{\"role\":\"assistant\",\"content\":\"Hello from the server\"},\"remaining\":19}", output)
     }
     if request.url == "https://api.waozi.xyz/api/v1/lumi/developer" {
@@ -171,8 +176,21 @@ ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool 
         feedback_requests += 1
         return AppCopyText("{\"feedback\":[]}", output)
     }
+    if request.url == "https://api.waozi.xyz/api/v1/lumi/telegram/ack" {
+        telegram_answers += 1
+        check_true("acknowledgement retains the Telegram update ID", contains(request.body, "\"id\":38"))
+        check_true("acknowledgement carries a reply", FieldAt(request.body, 0, "reply") >= 0)
+        answer: [64]u8
+        check_true("only the final answer of the claimed turn reaches Telegram",
+            ToolString(request.body, "reply", answer[:]) == "Telegram answer")
+        telegram_update_pending = false
+        return AppCopyText("true", output)
+    }
     if contains(request.url, "/api/v1/lumi/telegram") {
         telegram_requests += 1
+        if telegram_update_pending {
+            return AppCopyText("{\"linked\":true,\"update\":{\"id\":38,\"kind\":\"message\",\"text\":\"Can you explain this?\",\"can_reply\":true}}", output)
+        }
         return AppCopyText("{\"linked\":false}", output)
     }
     if request.url.count > 17 && request.url[:17] == "http://127.0.0.1:" {
@@ -238,6 +256,12 @@ Pump :: (app: *InnerBreeze) {
 Ask :: (text: string) -> bool {
     LumiStoreAppend(text, true)
     return LumiOnlineStart(text)
+}
+
+#program_export
+TelegramFixtureSubmit :: (text: string) -> bool {
+    LumiStoreAppend(text, true)
+    return LumiOnlineStart(text, false)
 }
 
 ProviderTail :: (expected: []string) {
@@ -433,6 +457,18 @@ Check :: () -> s32 {
     Pump(*app)
     check_int("one request to the server's AI", chat_requests, 1)
     check_true("the server's answer arrives", LastRow() == "Hello from the server")
+    telegram_update_pending = true
+    for step: cast(s32)0..29 {
+        lumi_telegram_connection.retry = 0
+        LumiTelegramPump(*app)
+        if LumiOnlineWaiting() { break }
+    }
+    check_true("Telegram receipt waits for the asynchronous answer", LumiOnlineWaiting() && telegram_answers == 0)
+    check_true("Telegram input keeps the asynchronous turn's origin", lumi_telegram_online.id == 38)
+    check_true("a regular app turn queues behind the Telegram turn", Ask("Regular app question"))
+    Pump(*app)
+    check_int("only the Telegram turn is acknowledged", telegram_answers, 1)
+    check_true("the app turn completes locally", LastRow() == "Hello from the server")
     #if #defined(ANDROID_DEBUG) {
         input := "/dev Review the private coding fixture"
         check_true("private user request is saved locally", LumiStoreAppendRow(LumiChatRow.{.text = input, .user = true}, true))

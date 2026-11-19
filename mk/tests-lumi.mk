@@ -68,8 +68,8 @@ lumi-narration-test: $(ZI2C_BIN)
 		sh tests/lumi_narration_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: lumi-telegram-input-test
-lumi-telegram-input-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
-	@sh tests/lumi_telegram_input_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+lumi-telegram-input-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(AUDIO_OPUS_A) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS) | build-laws
+	@AUDIO_CODECS_BUILD_DIR="$(abspath $(AUDIO_CODECS_BUILD_DIR))" sh tests/lumi_telegram_input_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 .PHONY: lumi-feedback-delivery-test
 lumi-feedback-delivery-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
