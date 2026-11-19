@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 - Fotos aus Apps; Lumi zeigt Listenfeedback einmal komplett; Listen: längere Aufgaben, Erledigen per Wischen.
-- Übungstabs verschieben den Bildschirm nicht mehr. Vor Start aus sechs Astralübungen wählen. Oberfläche in zehn Sprachen. Laufende Übungen bleiben im Bild-in-Bild-Modus sichtbar.
+- Übungstabs verschieben den Bildschirm nicht mehr. Vor Start aus sechs Astralübungen wählen. Oberfläche in zehn Sprachen. Laufende Übungen bleiben im Bild-in-Bild-Modus sichtbar. Der Downloadfortschritt der Übungen ist klar erkennbar.
 - Sprachpakete für Übungen sind etwa ein Drittel kleiner. Im Gewohnheiten-Shop täglich Münzen abholen.
 
 ## [2.1.63] - 2026-11-05

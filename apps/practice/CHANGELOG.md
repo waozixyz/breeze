@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Download practices with clear progress and more reliable content delivery.
 - Practice figures move more naturally: feet step and pivot instead of sliding, toes stay above the floor, knees and elbows straighten smoothly, hands turn without flipping, and the side plank rolls over to the second side.
 - Recover unfinished practices after an unexpected close; restore a last good data copy from Settings.
 - Changing practices keeps the page steady and fades from the previous practice.

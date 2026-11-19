@@ -254,9 +254,9 @@ class ExactPracticeUploadTest(unittest.TestCase):
               patch.object(uploader.package_release, 'catalog_from_bundle', return_value=self.catalog),
               patch.object(uploader, 'stage_selected_packs', side_effect=stage_selected) as exact_stage,
               patch.object(uploader.package_release, 'stage',
-                  side_effect=lambda store, *args: original_selected(store, self.catalog)) as legacy_stage,
+                  side_effect=AssertionError('content delivery must not stage unrelated app releases')) as legacy_stage,
               patch.object(uploader.tempfile, 'TemporaryDirectory',
-                  side_effect=lambda **kwargs: temporary_directory(dir=self.root, **kwargs)),
+                  side_effect=temporary_directory),
               patch.object(uploader.urllib.request, 'urlopen', side_effect=open_url),
               patch.object(uploader.subprocess, 'run', side_effect=transport),
               patch.object(sys, 'argv', ['upload-practice-packs.py', *arguments]),
@@ -301,17 +301,35 @@ class ExactPracticeUploadTest(unittest.TestCase):
         self.assertEqual(self.transports, [])
 
     def test_check_is_scoped_and_never_uploads_missing_pack(self):
+        self.key_file.unlink()
         self.assertEqual(self.run_upload(['--check', '--pack', 'guide.pt'], {'guide.pt'}), 1)
+        self.assertEqual((self.exact_stages, self.legacy_stages), (0, 0))
         self.assertEqual(self.transports, [])
         self.assertEqual([method for method, _ in self.requests], ['HEAD'])
 
+    def test_check_existing_content_needs_no_key_or_unrelated_app_bundles(self):
+        self.key_file.unlink()
+        self.assertEqual(self.run_upload(['--check'],
+            {uploader.pack_identifier(row) for row in self.catalog}, existing=True), 0)
+        self.assertEqual((self.exact_stages, self.legacy_stages), (0, 0))
+        self.assertEqual(self.transports, [])
+        self.assertEqual([method for method, _ in self.requests].count('GET'), 1)
+
+    def test_keyless_check_rejects_corrupted_existing_exact_content(self):
+        self.key_file.unlink()
+        with self.assertRaisesRegex(SystemExit, 'not served exactly'):
+            self.run_upload(['--check', '--pack', 'guide.pt'],
+                {'guide.pt'}, existing=True, corrupt=True)
+        self.assertEqual((self.exact_stages, self.legacy_stages), (0, 0))
+        self.assertEqual(self.transports, [])
+
     def test_content_flag_still_selects_only_base(self):
         self.assertEqual(self.run_upload(['--content', 'astral_projection'], {'astral_projection'}), 0)
-        self.assertEqual((self.exact_stages, self.legacy_stages), (0, 1))
+        self.assertEqual((self.exact_stages, self.legacy_stages), (1, 0))
 
     def test_default_still_uses_all_catalog_packs(self):
         self.assertEqual(self.run_upload([], {uploader.pack_identifier(row) for row in self.catalog}), 0)
-        self.assertEqual((self.exact_stages, self.legacy_stages), (0, 1))
+        self.assertEqual((self.exact_stages, self.legacy_stages), (1, 0))
 
     def test_invalid_empty_or_mixed_selection_has_no_signing_or_remote_actions(self):
         for args in (['--pack', 'unknown.pt'], ['--pack', ''],
@@ -346,6 +364,55 @@ class ExactPracticeUploadTest(unittest.TestCase):
             with self.subTest(size=len(actual)), patch.object(uploader.urllib.request, 'urlopen',
                     return_value=BoundedResponse(actual)):
                 self.assertEqual(uploader.matches(sha256(data).hexdigest(), len(data)), expected)
+
+
+class AndroidPracticeDeliveryTest(unittest.TestCase):
+    """Run the actual install recipe against disposable tools, never a phone."""
+
+    def setUp(self):
+        OUTPUT.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(dir=OUTPUT)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        (self.root / 'scripts').mkdir()
+        (self.root / 'scripts/upload-practice-packs.py').write_text(
+            "from pathlib import Path\nimport os, sys\n"
+            "Path('delivery-arguments').write_text(' '.join(sys.argv[1:]))\n"
+            "sys.exit(int(os.environ['DELIVERY_STATUS']))\n")
+        (self.root / 'scripts/android-install-apk.sh').write_text(
+            "#!/bin/sh\nset -eu\ntouch installed\n")
+        self.adb = self.root / 'adb'
+        self.adb.write_text('#!/bin/sh\necho arm64-v8a\n')
+        self.adb.chmod(0o700)
+
+    def install(self, *, publisher=False, status=0):
+        if publisher:
+            key = self.root / 'backup/package-publisher/2026-10/publisher.pem'
+            key.parent.mkdir(parents=True)
+            key.touch()
+        return subprocess.run(['make', '--no-print-directory', '-f', str(ROOT / 'mk/android.mk'),
+            '-o', 'android-copy-assets', '-o', 'android-local-properties', 'android-install',
+            'MAKE=true', 'GRADLE=true', 'ADB=' + str(self.adb),
+            'ANDROID_DEBUG_APP_ID=fixture', 'ANDROID_ACTIVITY=Fixture'], cwd=self.root,
+            env=os.environ | {'DELIVERY_STATUS': str(status)}, capture_output=True, text=True)
+
+    def test_missing_remote_content_stops_install_without_a_signing_key(self):
+        result = self.install(status=1)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / 'delivery-arguments').read_text(), '--check')
+        self.assertFalse((self.root / 'installed').exists())
+
+    def test_failed_content_upload_stops_install(self):
+        result = self.install(publisher=True, status=1)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / 'delivery-arguments').read_text(), '')
+        self.assertFalse((self.root / 'installed').exists())
+
+    def test_available_content_allows_install_without_a_signing_key(self):
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.root / 'delivery-arguments').read_text(), '--check')
+        self.assertTrue((self.root / 'installed').exists())
 
 
 if __name__ == "__main__":

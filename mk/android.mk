@@ -184,10 +184,12 @@ android-install: android-copy-assets android-local-properties
 	$(MAKE) android-copy-debug-apks
 # The app downloads practices by the exact hashes this build lists, and a
 # toolchain change gives every pack a new hash. With the publisher key here,
-# the missing packs go to the node before the phone asks for them.
-	@if [ -f backup/package-publisher/2026-10/publisher.pem ]; then \
-		python3 scripts/upload-practice-packs.py || \
-		echo "WARNING: this build's practice packs are not all on the node; downloads fail until scripts/upload-practice-packs.py succeeds" >&2; \
+# deliver missing packs first. Without it, verify availability and stop before
+# replacing the phone's app if this build would have broken downloads.
+	@set -e; if [ -f backup/package-publisher/2026-10/publisher.pem ]; then \
+		python3 scripts/upload-practice-packs.py; \
+	else \
+		python3 scripts/upload-practice-packs.py --check; \
 	fi
 	ADB='$(ADB)' sh scripts/android-install-apk.sh \
 		"$(ANDROID_DEBUG_APP_ID)" "$(ANDROID_ACTIVITY)" \

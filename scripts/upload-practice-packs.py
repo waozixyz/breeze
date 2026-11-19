@@ -161,14 +161,34 @@ def main():
     except ValueError as error:
         parser.error(str(error))
     sun_content = any(pack['practice'] == 'sunsalutation' and not pack['language'] for pack in listed)
-    with tempfile.TemporaryDirectory(prefix="inbe-practice-packs-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="inbe-practice-packs-", dir=ROOT / "build") as scratch:
         store = Path(scratch)
-        if args.pack is not None:
-            stage_selected_packs(store, listed)
-        else:
-            # Legacy callers stage the complete build locally. App releases
-            # and latest metadata never enter this uploader's transport.
-            package_release.stage(store, KEY, KEY_ID)
+        # Availability checks need only the catalog, not a signing key or any
+        # unrelated app bundle. Installation must also work on build hosts
+        # that do not hold the private publisher key.
+        if args.check:
+            missing = []
+            for pack in listed:
+                status = served(pack['sha256'])
+                expected = 403 if pack.get('product') else 200
+                if status == 404:
+                    missing.append(pack)
+                elif status != expected:
+                    raise SystemExit(f"node answered {status} for practice pack {pack_identifier(pack)}")
+            print(f"{len(listed)} packs built, {len(missing)} missing on the node")
+            if missing:
+                for pack in missing:
+                    print(f"missing: {pack_identifier(pack)}", file=sys.stderr)
+                return 1
+            if args.pack is not None:
+                for pack in listed:
+                    if not pack.get('product') and not matches(pack['sha256'], pack['size']):
+                        raise SystemExit(f"pack {pack['sha256']} is not served exactly")
+            return 0 if not sun_content or sun_salutation_downloads(listed) else 1
+        # Only content is being delivered. Requiring a complete, matching
+        # root and every unrelated app here made local content repair fail
+        # before it could upload the practice the installed build requests.
+        stage_selected_packs(store, listed)
         directory = store / "inbe.practices"
         # Only selected catalog content can reach the transport.
         catalog = {pack["sha256"] for pack in listed}
@@ -183,10 +203,8 @@ def main():
             elif status != (403 if gated else 200):
                 raise SystemExit(f"node answered {status} for {'paid' if gated else 'free'} pack {digest}")
         print(f"{len(packs)} packs built, {len(missing)} missing on the node")
-        if args.check or not missing:
-            if missing and args.check:
-                return 1
-            if args.pack is not None and not args.check:
+        if not missing:
+            if args.pack is not None:
                 for path in packs:
                     if not (directory / (path.stem + '.zx.product')).exists() and not matches(path.stem, path.stat().st_size):
                         raise SystemExit(f'pack {path.stem} is not served exactly')
@@ -207,8 +225,7 @@ def main():
                         members.append(info.name)
         # Extract only into the practices folder, never over a file that is
         # already there: packs are immutable once served.
-        permissions = (' '.join(shlex.quote(name) for name in members)
-                       if args.pack is not None else 'inbe.practices/*.zx*')
+        permissions = ' '.join(shlex.quote(name) for name in members)
         command = ("set -e; cd " + STORE + " && tar -x --keep-old-files --no-same-permissions "
                    "--wildcards 'inbe.practices/*' -f - && chmod 600 " + permissions)
         subprocess.run(["ssh", "-o", "BatchMode=yes", TARGET, command],

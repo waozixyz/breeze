@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 - Fotos via Aplicações; Lumi: prévia única do retorno completo da lista; Listas: tarefas longas e conclusão ao deslizar.
-- Abas de Prática não deslocam a tela. Escolha entre seis exercícios astrais antes de começar. Interface em dez idiomas. Mantenha a prática em andamento visível no modo picture-in-picture.
+- Abas de Prática não deslocam a tela. Escolha entre seis exercícios astrais antes de começar. Interface em dez idiomas. Mantenha a prática em andamento visível no modo picture-in-picture. O progresso dos downloads das práticas é exibido com clareza.
 - Pacotes de voz das práticas um terço menores. Resgate moedas todos os dias na loja de Hábitos.
 
 ## [2.1.63] - 2026-11-05

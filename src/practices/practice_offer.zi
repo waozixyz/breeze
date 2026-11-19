@@ -1,6 +1,6 @@
 // What a practice's card on Practice offers when the practice is not ready:
 // Install with its size, Unlock with its price for a paid practice, or
-// Cancel while it downloads; practices that come with the app are always
+// Downloading while it downloads; practices that come with the app are always
 // ready. Practice's home draws the card (apps/practice/practice_home_view.zi)
 // from what these say, and the host does what its button asks.
 #import "entity/dew_model"
@@ -87,7 +87,7 @@ PracticeDownloadReady :: (practice: s32) -> bool {
 }
 
 // What the card offers in place of Start: Unlock for a paid practice not
-// unlocked yet, Cancel while it downloads, Install otherwise, and nothing
+// unlocked yet, Downloading while it downloads, Install otherwise, and nothing
 // once it is ready.
 PracticeDownloadAction :: (practice: s32) -> s32 {
     if PracticePreviewReady(practice) {
@@ -100,7 +100,7 @@ PracticeDownloadAction :: (practice: s32) -> s32 {
         return PRACTICE_OFFER_NONE
     }
     if PracticeContentStatus(practice) == 1 {
-        return PRACTICE_OFFER_CANCEL
+        return PRACTICE_OFFER_DOWNLOADING
     }
     return PRACTICE_OFFER_INSTALL
 }
@@ -129,12 +129,8 @@ PracticeDownloadActionLabel :: (app: *InnerBreeze, practice: s32, action: s32) -
     if action == PRACTICE_OFFER_BUY {
         return PracticeDownloadPriceText(app, "practice_unlock_button")
     }
-    if action == PRACTICE_OFFER_CANCEL {
-        label: [256]u8
-        unused AppCopyText(LocaleText("practice_download_busy"), label[:])
-        unused AppAppendText(" · ", label[:])
-        unused AppAppendText(LocaleText("cancel_button"), label[:])
-        return FrameTextHold(*app.ui.frame_text, TextUntilNul(label[:]))
+    if action == PRACTICE_OFFER_DOWNLOADING {
+        return LocaleText("practice_download_busy")
     }
     // The size rides on the button, so the row's text stays short.
     size: [32]u8
@@ -151,8 +147,6 @@ PracticeDownloadActionLabel :: (app: *InnerBreeze, practice: s32, action: s32) -
 PracticeDownloadAct :: (app: *InnerBreeze, practice: s32, action: s32) {
     if action == PRACTICE_OFFER_BUY {
         UnlockStart()
-    } else if action == PRACTICE_OFFER_CANCEL {
-        PracticeContentCancel(practice)
     } else if action == PRACTICE_OFFER_INSTALL {
         if DataTemporary() {
             app.exercise_type = practice
@@ -185,7 +179,9 @@ PracticeOfferFill :: (app: *InnerBreeze, practice: s32, frame: *PracticeHomeFram
     frame.note = PracticeDownloadNote(practice)
     if offer != PRACTICE_OFFER_NONE {
         disabled := app.modal.active != 0 || practice_active(app) != null
-        if offer == PRACTICE_OFFER_BUY {
+        if offer == PRACTICE_OFFER_DOWNLOADING {
+            disabled = true
+        } else if offer == PRACTICE_OFFER_BUY {
             disabled = disabled || !DewReady() || UnlockBuying()
         } else if offer == PRACTICE_OFFER_INSTALL {
             disabled = disabled || !PracticePackReviewed(practice, "")
