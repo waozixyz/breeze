@@ -388,6 +388,8 @@ Apply :: (message: DiaryMessage) -> DiaryMessage {
 entry: DiaryMessage;
 editor: DiaryUiFrame;
 loaded: bool;
+document_scope: string;
+document_revision: string;
 history: DiaryHistory;
 photo_waiting: bool;
 photo_day: Date;
@@ -460,6 +462,68 @@ DiaryEnsureLoaded :: () {
     }
 }
 
+DiaryRefreshPosition :: (position: s32, text: string) -> s32 {
+    at := ifx position > text.count then cast(s32)text.count else position
+    while at > 0 && at < text.count && DiaryContinuationByte(text[at]) {
+        at -= 1
+    }
+    return at
+}
+
+DiaryObserveDocuments :: (refresh: bool) {
+    if !AppSupports("document.revision") {
+        return
+    }
+    revision := AppService("document.revision", "")
+    if revision == "" || revision == document_revision {
+        return
+    }
+    separator := revision.count - 1
+    while separator >= 0 && revision[separator] != cast(u8)58 {
+        separator -= 1
+    }
+    if separator <= 0 {
+        return
+    }
+    scope := revision[:separator]
+    if document_scope != "" && scope != document_scope {
+        // Keep the selected date, but never save or carry editor state from
+        // another account into it.
+        date := Date.{entry.year, entry.month, entry.day}
+        entry = Apply(DiaryMessage.{.action = DIARY_LOAD, .year = date.year,
+            .month = date.month, .day = date.day})
+        loaded = entry.succeeded
+        editor = DiaryUiFrame.{}
+        DiaryHistoryClear(*history)
+        photo_waiting = false
+        spelling_sent = ""
+        document_scope = scope
+        document_revision = revision
+        return
+    }
+    document_scope = scope
+    if !refresh || (loaded && !entry.saved) {
+        // Leave the revision pending while typing or retrying a failed save.
+        return
+    }
+    document_revision = revision
+    if !loaded {
+        return
+    }
+    fresh := Load(entry, Date.{entry.year, entry.month, entry.day})
+    // A manifest and its chunks may arrive on different sync pages. Keep
+    // the current text until a later committed revision makes it readable.
+    if fresh.load_error || (fresh.document == entry.document && !entry.load_error) {
+        return
+    }
+    fresh.cursor = DiaryRefreshPosition(entry.cursor, fresh.text)
+    fresh.anchor = DiaryRefreshPosition(entry.anchor, fresh.text)
+    if fresh.text != entry.text {
+        DiaryHistoryClear(*history)
+    }
+    entry = fresh
+}
+
 DiaryHistoryApply :: (redo: bool) {
     changed := ifx redo then DiaryHistoryRedo(*history) else DiaryHistoryUndo(*history)
     if !changed { return }
@@ -499,17 +563,20 @@ Main :: () -> s32 {
         return APP_PROTOCOL
     }
     if mode == APP_COMMAND {
+        DiaryObserveDocuments(false)
         entry = Apply(DiaryMessageDecode(AppCommand()))
         loaded = entry.year > 0
         AppReply(DiaryMessageEncode(entry))
         return 0
     }
     if mode == APP_SAVE {
+        DiaryObserveDocuments(false)
         if loaded { entry = Save(entry) }
         AppReply(DiaryMessageEncode(entry))
         return ifx !loaded || entry.saved || entry.load_error then 0 else 1
     }
     if mode != APP_FRAME { return 0 }
+    DiaryObserveDocuments(true)
     DiaryEnsureLoaded()
     bounds := AppBounds()
     editor.session = AppSession()

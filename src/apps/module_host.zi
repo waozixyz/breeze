@@ -42,6 +42,9 @@ TextArea :: #import "kryon/text_area";
 #import, file "node_apps.zi";
 #import, file "node_app_tree.zi";
 #import, file "media_store.zi";
+#import, file "../storage/db.zi";
+#import, file "../storage/state.zi";
+#import, file "../storage/storage_settings.zi";
 
 using HostValueKind;
 
@@ -84,6 +87,7 @@ lumi_message_input: [1024]u8;
 diary_message: DiaryMessage;
 diary_codec: DiaryMessageCodec;
 diary_file_codec: DiaryFileResultCodec;
+diary_document_revision: [160]u8;
 diary_text: string;
 diary_document: string;
 local_bundle_path: [4096]u8;
@@ -1800,13 +1804,33 @@ DiaryServiceAllowed :: (context: *void, name: string) -> bool {
     name == "AppLocaleHost" || name == "ClipboardCopyHost" ||
     name == "media.asset" || name == "media.query" || name == "media.pick" ||
     name == "media.pick.status" || name == "media.compression.open" ||
-    name == "text.correct.start" || name == "text.correct.poll"
+    name == "text.correct.start" || name == "text.correct.poll" || name == "document.revision"
 }
 
 DiaryServiceCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     slot := cast(*ModuleSlot)context
     name := TextFromCString(function)
+    if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "document.revision" {
+        revision := storage_committed_data_revision()
+        value: string
+        owner := AppTextFromCString(storage_user_id_buffer(), 64)
+        if revision >= 0 && owner != "" {
+            account := storage_get_setting_text("sync_public_id")
+            at := owner.count + account.count + 2
+            if at + 24 <= diary_document_revision.count {
+                unused AppCopyText(owner, diary_document_revision[:])
+                diary_document_revision[owner.count] = cast(u8)58
+                unused AppCopyText(account, diary_document_revision[owner.count + 1:])
+                diary_document_revision[at - 1] = cast(u8)58
+                if AppFormatS64(revision, diary_document_revision[at:]) {
+                    value = AppTextFromCString(*diary_document_revision[0], cast(s32)diary_document_revision.count)
+                }
+            }
+        }
+        result.* = NodeAppString(value)
+        return 1
+    }
     if name == "DocumentReadHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
         file := DiaryStoreRead(AppArgumentText(arguments[0]))

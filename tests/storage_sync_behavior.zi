@@ -2023,7 +2023,12 @@ test_bundled_app_records_round_trip :: () {
     set_account()
     response := response_with(5, records)
     check_true("full app response is valid JSON", storage_json_valid(response) != 0)
+    revision := storage_committed_data_revision()
+    check_true("start a storage transaction", exec_sql("SAVEPOINT open_diary_revision") != 0)
+    check_true("open transactions are invisible to the editor", storage_committed_data_revision() < 0)
+    check_true("close the storage transaction", exec_sql("RELEASE open_diary_revision") != 0)
     check_true("encrypted app restore", storage_apply_sync_response_json(response) != 0)
+    check_true("committed incoming records advance the editor revision", storage_committed_data_revision() > revision)
     LumiStoreReset()
     check_int("conversation restored", LumiStoreCount(), 2)
     check_true("chat text survives", LumiStoreRow(0).text == "Private conversation 水")
@@ -2040,6 +2045,47 @@ test_bundled_app_records_round_trip :: () {
     check_true("app collection cannot overwrite signing key",
         storage_apply_decrypted_record("private.inbe.v1.cells", "sync_private_key", "{\"key\":\"sync_private_key\",\"value\":\"forged\",\"updated_at\":\"2026-10-07T00:00:00Z\"}") == 0)
     storage_close()
+}
+
+// The UI test runs this in a separate process. A sender produces a real
+// encrypted upload, then the normal inbound path applies it to the open
+// receiver's database through a second connection.
+ApplyDiaryFixture :: (sender: *u8, receiver: *u8, filename: *u8, document: *u8, version: s32) -> s32 {
+    first := TextFromCString(sender)
+    second := TextFromCString(receiver)
+    prefix := "/mnt/storage/Projects/waozixyz/apps/breeze/build/apps-diary-test/sync-"
+    if !starts_with(first, prefix) || !starts_with(second, prefix) || first == second {
+        return 100
+    }
+    install_english_catalog()
+    if storage_init(first) == 0 {
+        return 1
+    }
+    set_account()
+    name := TextFromCString(filename)
+    value := TextFromCString(document)
+    saved := DiaryRecordSave(name, value)
+    // Use consecutive record clocks, even when several fixtures run in one second.
+    storage_set_sync_enabled(0)
+    clock: [24]u8
+    clock_sql := PackageText("UPDATE settings SET updated_at=", FormatInteger(2000000000 + cast(s64)version, clock[:]))
+    query := PackageText(clock_sql, " WHERE key GLOB 'cell.diary.*'")
+    ready := saved && exec_sql(query) != 0 && build_payload()
+    PackageFree(clock_sql)
+    PackageFree(query)
+    storage_close()
+    if !ready || storage_init(second) == 0 {
+        return 2
+    }
+    defer { storage_close() }
+    set_account()
+    storage_set_sync_enabled(0)
+    if storage_apply_sync_response_json(response_with(version, records_array())) == 0 {
+        return 3
+    }
+    received := DiaryRecordRead(name)
+    defer { PackageFree(received) }
+    return ifx received == value then 0 else 4
 }
 
 // The app choices a new profile starts with, stored as defaults.
@@ -2744,7 +2790,17 @@ test_storage_note_accounting :: () {
 }
 
 #program_export
-Check :: () -> s32 {
+Check :: (count: s32, arguments: **u8) -> s32 {
+    if count != 1 {
+        if count != 7 || TextFromCString(arguments[1]) != "--diary-incoming" {
+            return 2
+        }
+        version := ReadNumber(TextFromCString(arguments[6]), 0)
+        if !version.valid || version.value < 1 || version.value > 100 {
+            return 2
+        }
+        return ApplyDiaryFixture(arguments[2], arguments[3], arguments[4], arguments[5], cast(s32)version.value)
+    }
     guard := support_begin("/mnt/storage/Projects/waozixyz/apps/breeze/build/storage-sync-zi-test/")
     if guard != 0 { return guard }
     test_storage_note_accounting()

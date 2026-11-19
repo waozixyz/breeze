@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Refresh the open Diary day when edits sync from another device.
+
 - Use the private Harmony Lumi chat from the owner's Android debug build.
 
 - Backspace and text corrections work again; recover unfinished practices and backups, add photos reliably and reset break timers after time away.

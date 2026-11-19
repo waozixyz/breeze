@@ -7,6 +7,10 @@ LOG_ERROR :: 5
 sqlite3_open_v2 :: (path: *u8, database: **void, flags: s32, vfs: *u8) -> s32 #foreign sqlite3_lib "sqlite3_open_v2";
 sqlite3_busy_timeout :: (database: *void, milliseconds: s32) -> s32 #foreign sqlite3_lib "sqlite3_busy_timeout";
 sqlite3_total_changes64 :: (database: *void) -> s64 #foreign sqlite3_lib "sqlite3_total_changes64";
+StorageRevisionMutex :: (database: *void) -> *void #foreign sqlite3_lib "sqlite3_db_mutex";
+StorageRevisionLock :: (mutex: *void) #foreign sqlite3_lib "sqlite3_mutex_enter";
+StorageRevisionUnlock :: (mutex: *void) #foreign sqlite3_lib "sqlite3_mutex_leave";
+StorageRevisionAutocommit :: (database: *void) -> s32 #foreign sqlite3_lib "sqlite3_get_autocommit";
 
 // Counts database opens and closes, so memoized reads can tell a reopened
 // connection, whose change counter starts again at zero, from the old one.
@@ -58,6 +62,22 @@ storage_data_revision :: () -> s64 {
         storage_revision_generation = storage_connection_generation
     }
     return storage_revision_value
+}
+
+// A view must not consume a revision while the sync worker's savepoint is
+// open. If the worker rolls it back, SQLite's row counter does not roll back.
+storage_committed_data_revision :: () -> s64 {
+    database := storage_db_handle()
+    if database == null {
+        return -1
+    }
+    mutex := StorageRevisionMutex(database)
+    StorageRevisionLock(mutex)
+    defer { StorageRevisionUnlock(mutex) }
+    if StorageRevisionAutocommit(database) == 0 {
+        return -1
+    }
+    return storage_data_revision()
 }
 sqlite3_db_cacheflush :: (db: *void) -> s32 #foreign sqlite3_lib "sqlite3_db_cacheflush";
 storage_sqlite_errmsg :: (db: *void) -> *u8 #foreign sqlite3_lib "sqlite3_errmsg";

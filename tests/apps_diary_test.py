@@ -1,5 +1,6 @@
 """Verify standalone Diary editing, restart and calendar on an owned test window."""
 import contextlib
+import datetime
 import hashlib
 import json
 import os
@@ -133,6 +134,76 @@ def application(profile, label, import_source=None, size=(900, 720)):
                 except subprocess.TimeoutExpired:
                     app.kill()
                     app.wait(timeout=3)
+
+
+def sync_refresh():
+    fixture = ROOT / "build/storage-sync-zi-test/test"
+    day = (datetime.date.today() - datetime.timedelta(days=1)).isoformat()
+    filename = day + ".json"
+
+    def document(text):
+        return json.dumps(dict(version=1, date=day, text=text, photos=[]))
+
+    def receive(sender, receiver, text, version):
+        subprocess.run([str(fixture), "--diary-incoming", str(sender), str(receiver),
+                        filename, document(text), str(version)], env=ENV, check=True, timeout=10)
+
+    def editor_value(text):
+        deadline = time.monotonic() + 10
+        while True:
+            area = driver.wait(role="text_area")
+            if area["value"] == text:
+                return area
+            assert time.monotonic() < deadline, f"Diary editor still shows {area['value']!r}"
+            time.sleep(0.05)
+
+    with tempfile.TemporaryDirectory(dir=OUTPUT, prefix="sync-") as temporary:
+        sender, receiver = (Path(temporary) / name for name in ("sender", "receiver"))
+        receive(sender, receiver, "Earlier words", 1)
+        with application(receiver, "incoming"):
+            driver.press(label="‹")
+            editor_value("Earlier words")
+            receive(sender, receiver, "Newest words", 2)
+            editor_value("Newest words")
+            assert driver.wait(label="›", role="button")["enabled"], "Diary left the selected prior day"
+
+            # Hold autosaves so that the sync revision is observed while the
+            # editor is dirty, even on a slow or busy test machine.
+            incoming = "Another device edited the same day"
+            remote_hash = hashlib.sha256(document(incoming).encode()).hexdigest()
+            with contextlib.closing(sqlite3.connect(receiver / "inbe.db", timeout=3)) as db:
+                db.execute(f"""CREATE TRIGGER diary_test_hold_save BEFORE UPDATE ON settings
+                    WHEN NEW.key = 'cell.diary.file.{filename}'
+                    AND json_extract(NEW.value, '$.hash') <> '{remote_hash}'
+                    BEGIN SELECT RAISE(IGNORE); END""")
+                db.commit()
+                driver.press(role="text_area")
+                driver.key("end")
+                driver.type(" local draft")
+                driver.key("left", shift=True)
+                dirty = editor_value("Newest words local draft")
+                receive(sender, receiver, incoming, 3)
+                driver.wait_idle(frames=3, timeout=3)
+                after = editor_value("Newest words local draft")
+                assert after["cursor"] == dirty["cursor"]
+                driver.type("!")
+                editor_value("Newest words local draf!")
+
+                # Change the linked account while the old draft is held.
+                # The new scope reopens the selected day from storage.
+                db.execute("UPDATE settings SET value='other-test-account' WHERE key='sync_public_id'")
+                db.commit()
+                editor_value(incoming)
+                db.execute("DROP TRIGGER diary_test_hold_save")
+                db.commit()
+                driver.wait_idle(frames=3, timeout=3)
+                editor_value(incoming)
+    print("Diary incoming sync: open day refreshed in place, active draft and selection survived, and account scope discarded the old editor cache")
+
+
+if sys.argv[2:] == ["--sync-only"]:
+    sync_refresh()
+    sys.exit(0)
 
 
 with tempfile.TemporaryDirectory(prefix="inbe-diary-ui-") as temporary:

@@ -266,6 +266,10 @@ apps-diary-editing-test: $(TARGET)
 apps-diary-test: $(TARGET)
 	sh tests/apps_diary_test.sh $(abspath $(TARGET))
 
+.PHONY: apps-diary-sync-test
+apps-diary-sync-test: $(TARGET) storage-sync-zi-test
+	sh tests/apps_diary_test.sh $(abspath $(TARGET)) --sync-only
+
 .PHONY: practice-downloads-ui-test
 practice-downloads-ui-test: $(TARGET)
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS -u GDK_DISPLAY \

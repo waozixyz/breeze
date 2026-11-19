@@ -41,9 +41,9 @@ C
 cat > "$work/generated/main.c" <<'C'
 #include "storage_sync_behavior.h"
 #include <stdio.h>
-int main(void)
+int main(int argc, char **argv)
 {
-    int result = Check();
+    int result = Check(argc, (uint8_t **)argv);
     if (result != 0) fprintf(stderr, "check failed with code %d\n", result);
     return result == 0 ? 0 : 1;
 }

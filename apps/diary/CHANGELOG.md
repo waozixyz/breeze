@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Show synced edits for the open day as they arrive and preserve text still being edited.
+
 - Read and edit formatted Diary entries with inline photos.
 
 - Compare full-size AVIF copies with adjustable quality and storage totals; reopen image storage from the wrench in Diary or Photos.
