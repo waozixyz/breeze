@@ -25,6 +25,12 @@ lumi_owner: [64]u8;
 lumi_store_loaded: bool;
 lumi_store_error: bool;
 lumi_store_revision: u64;
+LumiDeveloperRecordPrefix :: "lumi.private-harmony.message.";
+
+LumiDeveloperRecord :: (key: string) -> bool {
+    return key.count > LumiDeveloperRecordPrefix.count &&
+        key[:LumiDeveloperRecordPrefix.count] == LumiDeveloperRecordPrefix
+}
 
 LumiStoreReset :: () {
     lumi_store_revision += 1
@@ -223,13 +229,16 @@ LumiStoreLoad :: () {
     LumiStoreRepairReplies(owner)
     // Deleted messages and the retired donation cards stay out of the chat.
     statement: *void
-    if SqlitePrepareText(storage_db_handle(), "SELECT value,key FROM (SELECT value,key FROM settings WHERE user_id=?1 AND key LIKE 'cell.lumi.message.%' AND json_extract(value,'$.deleted') IS NULL AND COALESCE(json_extract(value,'$.kind'),0)!=2 ORDER BY CAST(json_extract(value,'$.time') AS INTEGER) DESC,key DESC LIMIT ?2) ORDER BY CAST(json_extract(value,'$.time') AS INTEGER),key", -1, *statement, null) != SQLITE_OK {
+    if SqlitePrepareText(storage_db_handle(), "SELECT value,key FROM (SELECT value,key FROM settings WHERE user_id=?1 AND (key LIKE 'cell.lumi.message.%' OR (?3 AND key LIKE 'lumi.private-harmony.message.%')) AND json_extract(value,'$.deleted') IS NULL AND COALESCE(json_extract(value,'$.kind'),0)!=2 ORDER BY CAST(json_extract(value,'$.time') AS INTEGER) DESC,key DESC LIMIT ?2) ORDER BY CAST(json_extract(value,'$.time') AS INTEGER),key", -1, *statement, null) != SQLITE_OK {
         lumi_store_error = true
         return
     }
     defer { SqliteFinalize(statement) }
     bind_text(statement, 1, owner)
     SqliteBindInt(statement, 2, lumi_history_limit)
+    #if #defined(ANDROID_DEBUG) {
+        SqliteBindInt(statement, 3, 1)
+    }
     while SqliteStep(statement) == SQLITE_ROW {
         document := AppTextFromCString(SqliteColumnText(statement, 0), 65536)
         element: s32 = 0
@@ -369,7 +378,7 @@ LumiStoreAppend :: (text: string, user: bool) {
 
 // The archive key identifies a submitted turn even when its wording repeats.
 // Callers copy it before later appends or history reloads can change storage.
-LumiStoreLatestUserKey :: () -> string {
+LumiStoreLatestUserKey :: (input: string = "") -> string {
     LumiStoreLoad()
     if lumi_store_error {
         return ""
@@ -377,7 +386,7 @@ LumiStoreLatestUserKey :: () -> string {
     index := lumi_count - 1
     while index >= 0 {
         if lumi_rows[index].user {
-            return lumi_keys[index]
+            return ifx input.count == 0 || lumi_rows[index].text == input then lumi_keys[index] else ""
         }
         index -= 1
     }
@@ -432,7 +441,7 @@ LumiStoreAppendCard :: (text: string, user: bool, kind: s32, payload: string) ->
 }
 
 // Saves a message and shows it. Only the developer's text replies quote.
-LumiStoreAppendRow :: (message: LumiChatRow) -> bool {
+LumiStoreAppendRow :: (message: LumiChatRow, device_local: bool = false) -> bool {
     text := message.text
     user := message.user
     kind := message.kind
@@ -458,10 +467,11 @@ LumiStoreAppendRow :: (message: LumiChatRow) -> bool {
     nonce: [65]u8
     if !NativeNonce(null, nonce[:]) { return false }
     key: string
+    prefix := ifx device_local then LumiDeveloperRecordPrefix else "cell.lumi.message."
     if lumi_next_message_id.count > 0 {
-        key = PackageText("cell.lumi.message.", lumi_next_message_id)
+        key = PackageText(prefix, lumi_next_message_id)
     } else {
-        key = PackageText("cell.lumi.message.", TextFromCString(*nonce[0]))
+        key = PackageText(prefix, TextFromCString(*nonce[0]))
     }
     defer { PackageFree(key) }
     out: Vec(u8)
@@ -476,7 +486,17 @@ LumiStoreAppendRow :: (message: LumiChatRow) -> bool {
     BuilderPrint(*out, "}")
     value := BuilderFinish(out)
     defer { PackageFree(value) }
-    if !BundledAppRecordWrite(key, value) { return false }
+    if device_local {
+        if storage_get_setting_text(key).count > 0 {
+            return true
+        }
+        storage_set_setting_text(key, value)
+        if storage_setting_text_equals(key, value) == 0 {
+            return false
+        }
+    } else if !BundledAppRecordWrite(key, value) {
+        return false
+    }
     lumi_next_message_id = ""
     lumi_storage_revision = storage_data_revision()
     // Keep the messages already loaded while new replies arrive. Once older
@@ -514,7 +534,8 @@ LumiStoreDelete :: (index: s32) -> bool {
         return false
     }
     key := lumi_keys[index]
-    existing := BundledAppRecordRead(key)
+    device_local := LumiDeveloperRecord(key)
+    existing := ifx device_local then PackageText(storage_get_setting_text(key), "") else BundledAppRecordRead(key)
     defer { PackageFree(existing) }
     time := ReadNumber(existing, FieldAt(existing, 0, "time"))
     if !time.valid {
@@ -525,11 +546,20 @@ LumiStoreDelete :: (index: s32) -> bool {
         cast(s64)time.value)
     value := BuilderFinish(out)
     defer { PackageFree(value) }
-    if !BundledAppRecordWrite(key, value) {
+    if device_local {
+        storage_set_setting_text(key, value)
+        if storage_setting_text_equals(key, value) == 0 {
+            return false
+        }
+    } else if !BundledAppRecordWrite(key, value) {
         return false
     }
     lumi_storage_revision = -1
     return true
+}
+
+LumiStoreDeveloperRow :: (index: s32) -> bool {
+    return index >= 0 && index < cast(s32)lumi_keys.count && LumiDeveloperRecord(lumi_keys[index])
 }
 
 LumiStoreRevision :: () -> u64 {

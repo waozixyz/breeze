@@ -17,6 +17,7 @@
 #import "drawing_props"
 #import, file "../src/apps/package_files.zi";
 #import, file "../src/app/app_types.zi";
+#import, file "../src/app/app_clock_host.zi";
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/storage/account_types.zi";
 #import, file "../src/storage/db.zi";
@@ -26,7 +27,7 @@
 #import, file "../src/storage/bundled_app_records.zi";
 #import, file "../src/storage/sync_async.zi";
 #import "keys"
-#import "crypto"
+#import "mesh_client/crypto"
 #import, file "../src/storage/sync_account.zi";
 #import, file "storage_test_support.zi";
 #import "async_client"
@@ -36,7 +37,6 @@
 #import "transaction"
 #import, file "../src/apps/catalog.zi";
 #import "vec"
-#import "text"
 #import "byte_text_linux"
 #import "json_scan"
 #import, file "../src/apps/app_tools.zi";
@@ -44,9 +44,13 @@
 c :: #system_library "c";
 TestNow :: (out: *s64) -> s64 #foreign c "time";
 
+// The full host state exceeds the native test process's stack limit.
+app: InnerBreeze;
 owner: AccountKeys;
 requests: s32;
 chat_requests: s32;
+developer_requests: s32;
+developer_id: [33]u8;
 provider_requests: s32;
 feedback_requests: s32;
 telegram_requests: s32;
@@ -128,10 +132,32 @@ ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool 
     }
     if request.url == "https://api.waozi.xyz/api/v1/chat/completions" {
         chat_requests += 1
+        check_true("normal Lumi never sends private Harmony history", !contains(request.body, "private coding fixture"))
         if continuation_test {
             return ContinuationReply(request, output)
         }
         return AppCopyText("{\"message\":{\"role\":\"assistant\",\"content\":\"Hello from the server\"},\"remaining\":19}", output)
+    }
+    if request.url == "https://api.waozi.xyz/api/v1/lumi/developer" {
+        developer_requests += 1
+        check_true("developer request uses the signed account session", request.token == "synthetic-lumi-token")
+        check_true("developer request sends no Lumi tools or account context",
+            FieldAt(request.body, 0, "context") < 0 && FieldAt(request.body, 0, "tools") < 0)
+        id: [33]u8
+        value := ToolString(request.body, "id", id[:])
+        out: Vec(u8)
+        if developer_requests == 1 {
+            check_true("submit contains just the coding request", contains(request.body, "private coding fixture"))
+            unused AppCopyText(value, developer_id[:])
+            BuilderPrint(*out, "{\"id\":\"%\"}", value)
+        } else {
+            check_true("poll reuses the accepted request id", value == TextUntilNul(developer_id[:]))
+            check_true("poll doesn't resubmit the coding request", FieldAt(request.body, 0, "text") < 0)
+            BuilderPrint(*out, "{\"id\":\"%\",\"reply\":\"Completed private coding fixture\"}", value)
+        }
+        reply := BuilderFinish(out)
+        defer { PackageFree(reply) }
+        return AppCopyText(reply, output)
     }
     if request.url == "https://api.waozi.xyz/api/v1/chat/spelling" {
         spelling_requests += 1
@@ -141,11 +167,11 @@ ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool 
         icon_requests += 1
         return AppCopyText("{\"icons\":[\"book\"]}", output)
     }
-    if ContainsFoldASCII(request.url, "/api/v1/feedback") {
+    if contains(request.url, "/api/v1/feedback") {
         feedback_requests += 1
         return AppCopyText("{\"feedback\":[]}", output)
     }
-    if ContainsFoldASCII(request.url, "/api/v1/lumi/telegram") {
+    if contains(request.url, "/api/v1/lumi/telegram") {
         telegram_requests += 1
         return AppCopyText("{\"linked\":false}", output)
     }
@@ -202,6 +228,7 @@ Pump :: (app: *InnerBreeze) {
         lumi_feedback_retry = 0
         lumi_reply_retry = 0
         lumi_telegram_connection.retry = 0
+        lumi_developer_retry = 0
         app_lumi_pump(app)
     }
 }
@@ -375,8 +402,6 @@ Check :: () -> s32 {
     check_true("owner saved", sync_account_save(*owner,
         cast(SyncAccountLocalDataChoice)SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_MERGE) ==
         cast(SyncAccountSaveResult)SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
-    app: InnerBreeze
-
     // Before agreeing, Lumi is offline whatever its switch says: a request
     // it does not understand gets the offline answer, and a confirmed
     // feedback report waits. Nothing at all is sent.
@@ -408,6 +433,21 @@ Check :: () -> s32 {
     Pump(*app)
     check_int("one request to the server's AI", chat_requests, 1)
     check_true("the server's answer arrives", LastRow() == "Hello from the server")
+    #if #defined(ANDROID_DEBUG) {
+        input := "/dev Review the private coding fixture"
+        check_true("private user request is saved locally", LumiStoreAppendRow(LumiChatRow.{.text = input, .user = true}, true))
+        key := LumiStoreLatestUserKey()
+        check_true("developer record is outside the encrypted app outbox", LumiDeveloperRecord(key) && !BundledAppRecordValid(key))
+        check_true("debug composer starts the developer bridge", LumiOnlineStart(input))
+        Pump(*app)
+        check_int("a developer submission and receipt poll complete", developer_requests, 2)
+        check_true("the matched private response appears", LastRow() == "Completed private coding fixture")
+        check_true("completed turn is no longer pending", storage_get_setting_text(LumiDeveloperPending) == "")
+        LumiStoreReset()
+        check_true("the private result survives reloading the archive", LastRow() == "Completed private coding fixture")
+    } else {
+        check_true("public builds have no developer command", LumiDeveloperCommand("/dev run the fixture") == "")
+    }
     LumiStoreAppend("Remember the blue notebook", true)
     for index: cast(s32)0..5 {
         LumiStoreAppend("An earlier exchange", index % 2 == 0)

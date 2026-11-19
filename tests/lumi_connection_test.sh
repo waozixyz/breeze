@@ -4,20 +4,21 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 compiler=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=${3:-"$root/build/lumi-connection-test"}
+audio_dir=${AUDIO_CODECS_BUILD_DIR:-"$root/vendor-builds/linux/x86_64/audio-codecs"}
 exec 9>"$work.lock"
 flock 9
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 export YUE_DESKTOP_RECOVERY=0
 mkdir -p "$work/generated"
-"$compiler" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/mesh-client" \
-    --entry lumi_connection_behavior:Check -o "$work/generated" \
-    "$root/tests/lumi_connection_behavior.zi" "$root/tests/sync_test_host.zi"
+set --
+if [ "${INBE_LUMI_TEST_DEBUG:-0}" = 1 ]; then
+    set -- --define ANDROID_DEBUG
+fi
+(cd "$root" &&
+    "$compiler" build --project --offline --target=c --no-main --prune-stale \
+        --define PLATFORM_DESKTOP --define DESKTOP_HOST --define STORAGE_TEST_REAL_HOST_SERVICES "$@" --root "$root" \
+        -o "$work/generated" \
+        "$root/tests/lumi_connection_behavior.zi")
 cat > "$work/generated/main.c" <<'C'
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,15 +79,18 @@ int main(void)
 C
 monocypher="$root/build/packages/monocypher/src"
 "${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
-    -I"$root/build/packages/ziran/include" -iquote "$work/generated" \
+    -I"$root/build/packages/ziran/include" -iquote "$work/generated" -iquote "$work/generated/tests" \
     -I"$root/vendor-builds/sqlite" -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
     -I"$monocypher" -I"$monocypher/optional" \
-    "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
+    "$work/generated"/*.c "$work/generated/tests"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
     "$monocypher/monocypher.c" "$monocypher/optional/monocypher-ed25519.c" \
     "$liboqs" -Wl,--gc-sections -Wl,--wrap=network_transport_NetworkTransport \
     -Wl,--wrap=app_apply_nav_route -Wl,--wrap=practice_actions_app_start_practice \
     -Wl,--wrap=app_tools_AppToolContext -Wl,--wrap=app_tools_AppToolExecute \
     -Wl,--wrap=lumi_screen_LumiSubmit \
+    "$audio_dir/libopus/libopus.a" "$audio_dir/libziran_mp3.a" \
+    "$audio_dir/libvorbisfile.a" "$audio_dir/libvorbis.a" "$audio_dir/libogg.a" \
+    $(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11) \
     -ldl -lpthread -lz -lm -o "$work/test"
 # The provider's key must never reach any output, even with request tracing.
 mkdir -p /tmp/inbe-lumi-connection-test
@@ -100,3 +104,6 @@ if grep -q 'sk-test-lumi-provider' "$work/output.txt"; then
 fi
 printf '%s\n' 'Lumi connection: nothing sent before agreeing or offline, diary spelling and habit icons included; server and own provider after agreeing; key only in its header; withdrawal passed'
 printf '%s\n' 'Lumi conversation: recent history, six tool rounds without replay and complete long UTF-8 replies passed'
+if [ "${INBE_LUMI_TEST_DEBUG:-0}" = 1 ]; then
+    printf '%s\n' 'Lumi developer chat: signed submit, receipt polling, local archive, and ordinary chat isolation passed'
+fi

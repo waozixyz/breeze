@@ -68,6 +68,13 @@ lumi_online_provider_address: [LUMI_PROVIDER_URL_MAX]u8;
 lumi_provider_transfer: NetworkTransfer;
 lumi_provider_status: s32;
 LUMI_STAGE_PROVIDER :: 4
+LumiDeveloperPending :: "lumi.private-harmony.pending";
+lumi_developer_operation: StoredOperation;
+lumi_developer_session: Session;
+lumi_developer_transfer: NetworkTransfer;
+lumi_developer_response: [65536]u8;
+lumi_developer_owner: [65]u8;
+lumi_developer_retry: s64;
 c :: #system_library "c";
 #if #defined(_WIN32) {
     OnlineNow :: (out: *s64) -> s64 #foreign c "_time64";
@@ -172,12 +179,124 @@ LumiOnlineCancel :: () {
     lumi_feedback_retry = 0
     lumi_reply_retry = 0
     lumi_reply_offset = 0
+    LumiDeveloperCancel()
 }
 
-LumiOnlineStart :: (input: string) -> bool {
+LumiDeveloperCancel :: () {
+    #if #defined(ANDROID_DEBUG) {
+        CancelStoredOperation(*lumi_developer_operation)
+        lumi_developer_session = Session.{}
+        lumi_developer_owner = .{}
+        lumi_developer_retry = 0
+    }
+}
+
+LumiDeveloperStart :: (id: string, prompt: string) {
+    if !LumiNodeTrafficAllowed() || storage_has_sync_account() == 0 ||
+    storage_get_setting_text(LumiDeveloperPending).count > 0 {
+        unused LumiAppendRows(LocaleText("lumi_online_unavailable"), false, "", "", true)
+        return
+    }
+    payload: Vec(u8)
+    BuilderPrint(*payload, "{\"id\":\"%\",\"text\":", id)
+    LumiJsonString(*payload, prompt)
+    BuilderPrint(*payload, "}")
+    data := BuilderFinish(payload)
+    defer { PackageFree(data) }
+    storage_set_setting_text(LumiDeveloperPending, data)
+    if storage_setting_text_equals(LumiDeveloperPending, data) == 0 {
+        unused LumiAppendRows(LocaleText("results_write_failed"), false, "", "", true)
+    }
+}
+
+LumiDeveloperPump :: () {
+    #if #defined(ANDROID_DEBUG) {
+        owner := AppTextFromCString(storage_user_id_buffer(), 64)
+        if owner != TextUntilNul(lumi_developer_owner[:]) {
+            LumiDeveloperCancel()
+            unused AppCopyText(owner, lumi_developer_owner[:])
+        }
+        pending := storage_get_setting_text(LumiDeveloperPending)
+        if pending.count == 0 {
+            return
+        }
+        if !LumiNodeTrafficAllowed() || storage_has_sync_account() == 0 {
+            LumiDeveloperCancel()
+            return
+        }
+        pending = storage_get_setting_text(LumiDeveloperPending)
+        id_bytes: [33]u8
+        id := ToolString(pending, "id", id_bytes[:])
+        if id.count != 32 {
+            return
+        }
+        now := OnlineNow(null)
+        if lumi_developer_operation.active {
+            if !PollStoredOperation(*lumi_developer_operation) {
+                return
+            }
+            if owner != AppTextFromCString(storage_user_id_buffer(), 64) {
+                LumiDeveloperCancel()
+                return
+            }
+            lumi_developer_session = lumi_developer_operation.session
+            status := lumi_developer_operation.request.status
+            lumi_developer_retry = now + 5
+            if lumi_developer_operation.result == cast(s32)AuthResult.AUTH_OK {
+                document := TextUntilNul(lumi_developer_response[:])
+                receipt: [33]u8
+                if ToolString(document, "id", receipt[:]) != id {
+                    return
+                }
+                decoded := ReadStringValue(document, FieldAt(document, 0, "reply"), 8192)
+                reply := BuilderFinish(decoded.value)
+                defer { PackageFree(reply) }
+                if decoded.valid && reply.count > 0 {
+                    if LumiAppendRows(reply, false, "", id, true) {
+                        storage_set_setting_text(LumiDeveloperPending, "")
+                    }
+                } else if FieldAt(document, 0, "reply") < 0 {
+                    next: Vec(u8)
+                    BuilderPrint(*next, "{\"id\":\"%\"}", id)
+                    poll := BuilderFinish(next)
+                    storage_set_setting_text(LumiDeveloperPending, poll)
+                    PackageFree(poll)
+                }
+            } else if status >= 400 && status < 500 && status != 408 && status != 429 {
+                if LumiAppendRows(LocaleText("lumi_online_unavailable"), false, "", id, true) {
+                    storage_set_setting_text(LumiDeveloperPending, "")
+                }
+            }
+            return
+        }
+        if now < lumi_developer_retry {
+            return
+        }
+        lumi_developer_retry = now + 5
+        request_body := PackageText(pending, "")
+        defer { PackageFree(request_body) }
+        unused BeginStoredRequest(*lumi_developer_operation, "https://api.waozi.xyz",
+            NetworkTransport(*lumi_developer_transfer), "POST", "/api/v1/lumi/developer",
+            request_body, lumi_developer_response[:], false, *lumi_developer_session)
+    }
+}
+
+LumiOnlineStart :: (input: string, local_composer: bool = true) -> bool {
     if StoredAccountMode() == AccountModeDelegate {
         LumiOnlineCancel()
         return false
+    }
+    #if #defined(ANDROID_DEBUG) {
+        developer := ifx local_composer then LumiDeveloperCommand(input) else ""
+        if developer.count > 0 {
+            key := LumiStoreLatestUserKey(input)
+            if LumiDeveloperRecord(key) && key.count >= LumiDeveloperRecordPrefix.count + 32 {
+                LumiDeveloperStart(key[LumiDeveloperRecordPrefix.count:LumiDeveloperRecordPrefix.count + 32], developer)
+            } else {
+                unused LumiAppendRows(LocaleText("results_write_failed"), false, "", "", true)
+            }
+            return true
+        }
     }
     owner := AppTextFromCString(storage_user_id_buffer(), 64)
     if lumi_online_owner[0] != cast(u8)0 && owner != TextUntilNul(lumi_online_owner[:]) {
@@ -218,10 +337,15 @@ LumiOnlineStart :: (input: string) -> bool {
     count := LumiStoreCount()
     first := count - LUMI_REQUEST_MESSAGE_LIMIT
     if first < 0 { first = 0 }
+    comma := ""
     for index: first..count - 1 {
+        if LumiStoreDeveloperRow(index) {
+            continue
+        }
         row := LumiStoreRow(index)
         BuilderPrint(*out, "%{\"role\":\"%\",\"content\":",
-            ifx index == first then "" else ",", ifx row.user then "user" else "assistant")
+            comma, ifx row.user then "user" else "assistant")
+        comma = ","
         if row.developer {
             // Lumi learns that the developer, not Lumi, wrote this reply, so
             // the user can answer it.
@@ -399,6 +523,10 @@ LumiOnlineAppend :: (reply: string) {
 // With an id, each part is saved under a record named after it, so every
 // device that fetches the reply writes the same messages and sync keeps one.
 LumiOnlineAppendFrom :: (reply: string, developer: bool, quote: string, id: string = "") {
+    unused LumiAppendRows(reply, developer, quote, id, false)
+}
+
+LumiAppendRows :: (reply: string, developer: bool, quote: string, id: string, device_local: bool) -> bool {
     start: s64 = 0
     part: s32 = 0
     while start < reply.count {
@@ -408,7 +536,7 @@ LumiOnlineAppendFrom :: (reply: string, developer: bool, quote: string, id: stri
         while end < reply.count && end > start && (reply[end] & cast(u8)192) == cast(u8)128 {
             end -= 1
         }
-        if end <= start { return }
+        if end <= start { return false }
         stable_id := ""
         if id.count > 0 && lumi_next_message_id.count == 0 {
             name: Vec(u8)
@@ -420,11 +548,14 @@ LumiOnlineAppendFrom :: (reply: string, developer: bool, quote: string, id: stri
             stable_id = BuilderFinish(name)
             lumi_next_message_id = stable_id
         }
-        unused LumiStoreAppendRow(LumiChatRow.{.text = reply[start:end], .developer = developer,
-                .quote = ifx start == 0 then quote else ""})
+        saved := LumiStoreAppendRow(LumiChatRow.{.text = reply[start:end], .developer = developer,
+                .quote = ifx start == 0 then quote else ""}, device_local)
         if stable_id.count > 0 {
             lumi_next_message_id = ""
             PackageFree(stable_id)
+        }
+        if device_local && !saved {
+            return false
         }
         start = end
         part += 1
@@ -432,6 +563,7 @@ LumiOnlineAppendFrom :: (reply: string, developer: bool, quote: string, id: stri
     if lumi_ui.follow_end {
         lumi_ui.scroll = 1000000
     }
+    return true
 }
 
 LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
@@ -721,6 +853,7 @@ app_lumi_pump :: (app: *InnerBreeze) {
         return
     }
     LumiTelegramPump(app)
+    LumiDeveloperPump()
     owner := AppTextFromCString(storage_user_id_buffer(), 64)
     if lumi_online_owner[0] != cast(u8)0 && owner != TextUntilNul(lumi_online_owner[:]) {
         LumiOnlineCancel()

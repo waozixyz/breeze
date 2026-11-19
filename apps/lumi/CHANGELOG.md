@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Send private developer turns from the owner's Android debug build.
+
 - Review complete feedback from the referenced list before one Send or Cancel choice; retries keep the same proposal.
 
 ## [1.5.29] - 2026-11-05

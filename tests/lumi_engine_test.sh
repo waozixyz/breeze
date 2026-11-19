@@ -1,6 +1,7 @@
 #!/bin/sh
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$root"
 work="$root/build/lumi-engine-test"
 mkdir -p "$work"
 "$root/build/packages/ziran/build/bin/ziran" bundle --root "$root/tests" \
@@ -24,17 +25,15 @@ result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADD
 [ "$result" = 42 ]
 printf '%s\n' 'Lumi responses: JSON trailing whitespace accepted; malformed and trailing data rejected'
 printf '%s\n' 'Lumi engine: translated commands, Unicode titles, completion matching and bounded actions passed'
-"$root/build/packages/ziran/build/bin/ziran" bundle --root "$root/tests" \
-    --module-path "$root/build/packages/kryon/src/ui" \
+"$root/build/packages/ziran/build/bin/ziran" bundle --project --offline --root "$root/tests" \
     --entry lumi_message_text_behavior:Answer -o "$work/message-text.zx" \
     "$root/tests/lumi_message_text_behavior.zi"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
     "$root/build/packages/ziran/build/bin/ziran" run "$work/message-text.zx")
 [ "$result" = 42 ]
 printf '%s\n' 'Lumi emphasis: visible bold ranges, Unicode, escapes, code and literal user messages passed'
-"$root/build/packages/ziran/build/bin/ziran" bundle --root "$root/tests" \
-    --module-path "$root/build/packages/kryon/src/ui" --define KRYON_HOSTED_UI \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+"$root/build/packages/ziran/build/bin/ziran" bundle --project --offline --root "$root/tests" \
+    --define KRYON_HOSTED_UI \
     --entry lumi_reply_cache_behavior:Answer -o "$work/reply-cache.zx" \
     "$root/tests/lumi_reply_cache_behavior.zi"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \

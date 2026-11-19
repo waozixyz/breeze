@@ -739,7 +739,7 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     if name == "StartLumiOnlineHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
         input := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        result.* = HostScalar("bool", ifx LumiOnlineStart(input) then 1 else 0)
+        result.* = HostScalar("bool", ifx LumiOnlineStart(input, lumi_telegram_current == null) then 1 else 0)
         return 1
     }
     if name == "SetLumiOnlineHost" && count == 1 &&
@@ -790,6 +790,11 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
             .task_count = lumi_ui.task_count, .habit_count = lumi_ui.habit_count,
             .choosing_habit = lumi_choosing_habit, .choosing_diary = lumi_choosing_diary,
             .confirming_delete = LumiDeletePending(), .practices_known = lumi_practice_status != null}
+        #if #defined(ANDROID_DEBUG) {
+            if lumi_telegram_current == null && StoredAccountMode() != AccountModeDelegate {
+                tools.available_apps |= LUMI_DEVELOPER_CHAT
+            }
+        }
         // Lumi asks to download or unlock a practice before starting it.
         for practice: cast(s32)0..EXERCISE_COUNT - 1 {
             if lumi_practice_status == null {
@@ -889,7 +894,13 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "bool", cast(s32)HostInteger) {
         text := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        LumiStoreAppend(text, arguments[1].integer != 0)
+        user := arguments[1].integer != 0
+        if user && lumi_telegram_current == null && StoredAccountMode() != AccountModeDelegate &&
+        LumiDeveloperCommand(text).count > 0 {
+            unused LumiStoreAppendRow(LumiChatRow.{.text = text, .user = true}, true)
+        } else {
+            LumiStoreAppend(text, user)
+        }
         return 1
     }
     if name == "PerformLumiActionHost" && count == 1 && WidgetValidLumiAction(arguments[0]) {

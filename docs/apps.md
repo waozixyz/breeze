@@ -181,6 +181,18 @@ encrypted records when an account is connected. Online AI agreement is separate
 from account sync. The wrapper provides input, persistence and bounded
 app effects; no database pointers or arbitrary code cross the app boundary.
 
+The owner's Android debug build accepts `/dev MESSAGE` in Lumi while signed in
+with Inner Breeze online access enabled. Mesh checks the signed session's exact
+account ID before relaying the message to the private Lumi chat in Harmony.
+The phone uses a saved turn ID to retry safely and retrieve the reply. It
+keeps its copy of the developer transcript in the local archive and excludes
+it from ordinary Lumi model requests, app tool context, and encrypted sync.
+The private coding workflows live in Harmony.
+
+The debug host advertises the bridge through Lumi's existing ZX interface.
+Compatible Lumi package changes use the signed update path described below.
+Install a new debug APK when the native host itself changes.
+
 Lumi can open Settings or Appearance, change the app theme with `/theme forest`
 (or another published theme name), and choose light, dark or system mode.
 These actions use the same validation, persistence and refresh path as Settings.

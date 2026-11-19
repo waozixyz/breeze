@@ -78,8 +78,8 @@ lumi-feedback-delivery-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMA
 # Offline and before the agreement Lumi sends nothing; an own provider gets
 # its key only in its Authorization header.
 .PHONY: lumi-connection-test
-lumi-connection-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
-	@sh tests/lumi_connection_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+lumi-connection-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(AUDIO_OPUS_A) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS) | build-laws
+	@AUDIO_CODECS_BUILD_DIR="$(abspath $(AUDIO_CODECS_BUILD_DIR))" sh tests/lumi_connection_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 .PHONY: lumi-feedback-list-ui-test
 lumi-feedback-list-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
