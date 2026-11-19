@@ -258,6 +258,20 @@ shared-progress-ui-test: $(TARGET)
 practice-images-ui-test: $(TARGET)
 	@sh tests/practice_images_ui_test.sh $(abspath $(TARGET))
 
+.PHONY: practice-start-ui-test
+practice-start-ui-test: $(TARGET)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		python3 tests/practice_start_ui_test.py $(abspath $(TARGET))
+
+.PHONY: practice-start-device-test
+practice-start-device-test:
+	@python3 tests/android_practice_start_device.py
+
+.PHONY: practice-frame-clip-test
+test: practice-frame-clip-test
+practice-frame-clip-test: $(ZIRAN_BIN)
+	@python3 tests/practice_frame_clip_test.py $(ZIRAN_BIN)
+
 .PHONY: apps-diary-editing-test
 apps-diary-editing-test: $(TARGET)
 	sh tests/apps_diary_test.sh $(abspath $(TARGET)) --editing-only

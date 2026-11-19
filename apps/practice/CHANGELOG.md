@@ -5,7 +5,7 @@
 - Download practices with clear progress and more reliable content delivery.
 - Practice figures move more naturally: feet step and pivot instead of sliding, toes stay above the floor, knees and elbows straighten smoothly, hands turn without flipping, and the side plank rolls over to the second side.
 - Recover unfinished practices after an unexpected close; restore a last good data copy from Settings.
-- Changing practices keeps the page steady and fades from the previous practice.
+- Starting practices leaves no navigation leftovers; changing practices keeps the page steady and fades from the previous practice.
 - Choose an astral exercise with its guide and narration; adjust audio together and follow clearer Sun Salutation cues.
 
 ## [1.6.11] - 2026-11-05
