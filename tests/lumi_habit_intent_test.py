@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
-"""Lumi understands habit requests offline, in every language it has
-templates for: each phrase maps to exactly these app tool calls, and near
-misses make none.
+"""Lumi understands habit requests offline in every supported language.
+Each phrase maps to exactly these app tool calls, and near misses make none.
 
 The test builds a Ziran program around apps/lumi/habit_intent.zi with the
 translated templates from locales/*.txt, runs it without a display, and
@@ -32,12 +31,10 @@ HABITS = [
     ('id-lieg', 'Liegestütze', False),
     ('id-flex', 'Flexiones', False),
     ('id-pomp', 'Pompes', False),
-    ('id-fless', 'Flessioni', False),
     ('id-flexoes', 'Flexões', False),
     ('id-otzh', 'Отжимания', False),
     ('id-medru', 'Медитация', False),
     ('id-kliky', 'Kliky', False),
-    ('id-lari', 'Lari pagi', False),
     ('id-ude', '腕立て伏せ', False),
     ('id-pal', '팔굽혀펴기', False),
     ('id-fuwo', '俯卧撑', False),
@@ -159,10 +156,6 @@ CASES = [
         schedule('$new', repeat='daily', notification=True, notification_hour=7)]),
     ('fr', 'pompes au moins 30, plus c\'est mieux', '[]', None),
     ('fr', 'renomme pompes en tractions', '[]', [call('rename_habit', id='id-pomp', name='Tractions')]),
-    ('it', 'nuova abitudine leggere ogni giorno alle 21', '[]', [
-        call('create_habit', name='Leggere'),
-        schedule('$new', repeat='daily', notification=True, notification_hour=21)]),
-    ('it', 'flessioni 10 volte al giorno', '[]', [tracking('id-fless', mode='count', target=10)]),
     ('pt', 'novo hábito ler todos os dias às 8', '[]', [
         call('create_habit', name='Ler'),
         schedule('$new', repeat='daily', notification=True, notification_hour=8)]),
@@ -177,10 +170,6 @@ CASES = [
         call('create_habit', name='čtení'),
         schedule('$new', repeat='daily', notification=True, notification_hour=8)]),
     ('cs', 'kliky třikrát denně', '[]', [tracking('id-kliky', mode='count', target=3)]),
-    ('id', 'tambah kebiasaan membaca setiap hari jam 8', '[]', [
-        call('create_habit', name='Membaca'),
-        schedule('$new', repeat='daily', notification=True, notification_hour=8)]),
-    ('id', 'jeda lari pagi', '[]', [call('set_habit_active', id='id-lari', active=False)]),
     ('ja', '毎日8時に読書の習慣を追加', '[]', [
         call('create_habit', name='読書'),
         schedule('$new', repeat='daily', notification=True, notification_hour=8)]),
@@ -257,8 +246,16 @@ def program(languages):
 
 
 def run():
+    index = (ROOT / 'locales/index.txt').read_text(encoding='utf-8')
+    supported = {line.split('|', 1)[0] for line in index.splitlines() if '|' in line}
+    covered = {case[0] for case in CASES}
+    assert covered == supported, (
+        f'Lumi habit fixtures do not match locales/index.txt. '
+        f'Missing cases: {sorted(supported - covered)}. '
+        f'Unsupported cases: {sorted(covered - supported)}.'
+    )
     WORK.mkdir(parents=True, exist_ok=True)
-    languages = sorted({case[0] for case in CASES} | {'en'})
+    languages = sorted(supported)
     source = WORK / 'lumi_habit_cases.zi'
     source.write_text(program(languages), encoding='utf-8')
     env = {key: value for key, value in os.environ.items()
