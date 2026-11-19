@@ -15,7 +15,7 @@ mkdir -p build "$output"
 exec 9>build/apps-build.lock
 flock 9
 python3 scripts/check-package-versions.py
-python3 scripts/prepare-package-assets.py
+python3 scripts/prepare-package-assets.py --apps-controller "${APPS_BUNDLE:-build/apps-ui/apps.zx}"
 for name in $(python3 -c 'import json; print(" ".join(sorted(json.load(open("apps/versions.json")).get("node_apps", {}))))'); do
     assets=build/package-assets/$name/assets
     mkdir -p "$assets"

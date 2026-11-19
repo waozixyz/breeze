@@ -8,13 +8,13 @@ src/apps/app_codec.zi: scripts/generate-app-codec.py $(APP_CODEC_SCHEMAS)
 
 ENTITY_DIR := build/packages/entity
 ENTITY_SOURCES = $(wildcard $(ENTITY_DIR)/src/*.zi $(ENTITY_DIR)/assets/entity/*)
-# The shared Apps controller is built from the locked Apps package with its
-# own pinned graph, so its digest identifies the reviewed Apps release.
+# The shared Apps controller uses this host's selected dependency graph.
+# Its exact payload must match the independently reviewed native digest.
 APPS_DIR := build/packages/apps
 APPS_BUNDLE ?= build/apps-ui/apps.zx
 NODE_APP_NAMES := $(shell python3 -c 'import json; print(" ".join(json.load(open("apps/versions.json")).get("node_apps", {})))')
 NODE_APP_BUNDLES := $(addprefix $(BUILD_DIR)/node-apps/,$(addsuffix .zx,$(NODE_APP_NAMES)))
-$(BUILD_DIR)/apps-ui/apps.zx: ziran.lock scripts/build-apps.py $(wildcard $(APPS_DIR)/ziran.lock $(APPS_DIR)/src/*.zi $(APPS_DIR)/ui/*.zi $(APPS_DIR)/ui/locales/*.json)
+$(BUILD_DIR)/apps-ui/apps.zx: ziran.toml ziran.lock $(wildcard ziran.local.toml) $(ZIRAN_BIN) $(wildcard $(ZIRAN_BUILD_DIR)/bin/zi2zx) scripts/build-apps.py $(wildcard $(APPS_DIR)/ziran.lock $(APPS_DIR)/src/*.zi $(APPS_DIR)/ui/*.zi $(APPS_DIR)/ui/locales/*.json)
 	env -u DISPLAY -u WAYLAND_DISPLAY PATH="$(abspath $(dir $(ZIRAN_BIN))):$$PATH" \
         python3 scripts/build-apps.py --ziran $(abspath $(ZIRAN_BIN)) --output $(abspath $(dir $@))
 .PHONY: apps
@@ -27,8 +27,8 @@ $(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(ENTITY_SOURCES) $(APP_SOU
 	sh scripts/build-apps.sh $(ZIRAN_BIN) $(BUILD_DIR)/apps $(APPS_BUNDLE)
 
 # Build node apps independently before selecting the small offline baselines.
-$(NODE_APP_BUNDLES) &: $(APP_SOURCES) $(shell rg --files $(addprefix assets/,$(NODE_APP_NAMES)) 2>/dev/null) apps/versions.json scripts/build-node-apps.sh scripts/prepare-package-assets.py scripts/achievement_icons.py $(ZIRAN_BIN)
-	sh scripts/build-node-apps.sh $(ZIRAN_BIN)
+$(NODE_APP_BUNDLES) &: $(APP_SOURCES) $(shell rg --files $(addprefix assets/,$(NODE_APP_NAMES)) 2>/dev/null) apps/versions.json scripts/build-node-apps.sh scripts/prepare-package-assets.py scripts/achievement_icons.py $(ZIRAN_BIN) $(APPS_BUNDLE)
+	APPS_BUNDLE="$(abspath $(APPS_BUNDLE))" sh scripts/build-node-apps.sh $(ZIRAN_BIN)
 
 .PHONY: node-apps
 node-apps: $(NODE_APP_BUNDLES)

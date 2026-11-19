@@ -58,6 +58,9 @@ Layout :: #import "kryon/layout";
 #import "kryon/tree"
 #import "frame_pacing"
 #import "frame_transition"
+#if #defined(ANDROID_BUILD) {
+    AndroidFrame :: #import "android_runtime";
+}
 #import, file "application.zi";
 #import, file "application_update.zi";
 
@@ -116,14 +119,28 @@ app_update_draw_last_content_w: s32 = -1;
 app_update_draw_last_log_time: float64 = -1.0;
 app_last_frame_status: s32;
 app_last_repeated_key: u64;
-app_capture_route_transition :: (app: *InnerBreeze) {
+app_capture_route_transition :: (app: *InnerBreeze, viewport: Rectangle) {
+    #if #defined(ANDROID_BUILD) {
+        // After a viewport change the backing pixels have already been
+        // cleared for the new surface, so there is no matching snapshot.
+        if !app.ui.retained_target_active {
+            app_route_transition_cancel(app)
+            return
+        }
+    }
     if !app.ui.route_transition_pending {
         return
     }
     surface: FrameSurface
-    #if !#defined(PLATFORM_WEB) {
-        // The native host owns the presented pixels; this copy is the app's.
-        surface = FramePreviousSnapshot()
+    #if #defined(ANDROID_BUILD) {
+        surface = AndroidFrame.AndroidFramePreviousViewportSnapshot(cast(s32)viewport.x,
+            cast(s32)viewport.y, cast(s32)viewport.width, cast(s32)viewport.height)
+    } else {
+        unused viewport
+        #if !#defined(PLATFORM_WEB) {
+            // The native host owns the presented pixels; this copy is the app's.
+            surface = FramePreviousSnapshot()
+        }
     }
     // Input can change the route while updateapp builds the destination.
     // Capture the last presented frame before app_finish_frame paints it.
@@ -349,7 +366,7 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
         profile_update_start = app_profile_now()
         updateapp(app)
         app_profile_record_update(profile_update_start)
-        app_capture_route_transition(app)
+        app_capture_route_transition(app, viewport)
         app_breaks_draw_toast(app,
             Rectangle.{0.0, 0.0, cast(float32)view_width, cast(float32)view_height})
         app_route_transition_draw(app, logical_frame, HostSeconds())
@@ -369,7 +386,7 @@ app_update_draw :: (vapp: *void, viewport: Rectangle) {
         profile_update_start = app_profile_now()
         updateapp(app)
         app_profile_record_update(profile_update_start)
-        app_capture_route_transition(app)
+        app_capture_route_transition(app, viewport)
         app_breaks_draw_toast(app,
             Rectangle.{0.0, 0.0, cast(float32)view_width, cast(float32)view_height})
         app_route_transition_draw(app, logical_frame, HostSeconds())

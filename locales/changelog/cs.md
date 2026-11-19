@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 - Fotky z Aplikací; Lumi jednou ukáže úplný návrh ohlasu ze seznamu; Seznamy: delší úkoly a dokončení přejetím.
-- Karty Cvičení už neposouvají obrazovku. Před startem vyber ze šesti astrálních cvičení. Rozhraní má deset jazyků.
+- Karty Cvičení už neposouvají obrazovku. Před startem vyber ze šesti astrálních cvičení. Rozhraní má deset jazyků. Probíhající cvičení může zůstat viditelné v režimu obrazu v obraze.
 - Hlasové balíčky cvičení jsou asi o třetinu menší. V obchodě Návyků si každý den vyzvedněte mince.
 
 ## [2.1.63] - 2026-11-05

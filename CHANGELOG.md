@@ -7,7 +7,7 @@
 - Use the private Harmony Lumi chat from the owner's Android debug build.
 
 - Backspace and text corrections work again; recover unfinished practices and backups, add photos reliably and reset break timers after time away.
-- Switch practices smoothly, pick an astral exercise and claim daily coins; account sync is now called Mesh.
+- Switch practices smoothly, pick an astral exercise and claim daily coins; account sync is now called Mesh. Keep an active practice visible in picture-in-picture.
 - Read Tao Te Ching art on its own page; find Photos and Radio in Apps, with clearer feedback and appearance controls.
 
 ## [2.1.63] - 2026-11-05

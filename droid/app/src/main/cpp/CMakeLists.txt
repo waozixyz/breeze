@@ -242,14 +242,17 @@ endforeach()
 # native compilation. Artwork changes must not reconfigure every native host.
 set(APP_BUNDLE_RUNTIME_DIR "${CMAKE_BINARY_DIR}/bundle-runtime")
 set(APP_BUNDLE_RUNTIME "${APP_BUNDLE_RUNTIME_DIR}/libziran.a")
-execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/build-bundle-runtime.py"
-    --source "${ZIRAN_DIR}" --output "${APP_BUNDLE_RUNTIME_DIR}"
-    --cc "${CMAKE_C_COMPILER} --target=${CMAKE_C_COMPILER_TARGET} --sysroot=${CMAKE_SYSROOT}"
-    --ar "${CMAKE_AR}" --objcopy "${CMAKE_OBJCOPY}"
-    "--flags=-O2 -fPIC -ffunction-sections -fdata-sections"
-    WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${REPO_ROOT}/scripts/build-bundle-runtime.py" "${REPO_ROOT}/ziran.lock")
+# Let Ziran's make check its complete runtime dependency graph on every build.
+# A configure-time build leaves this archive stale after local runtime edits.
+add_custom_target(app_bundle_runtime
+    BYPRODUCTS "${APP_BUNDLE_RUNTIME}"
+    COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/build-bundle-runtime.py"
+        --source "${ZIRAN_DIR}" --output "${APP_BUNDLE_RUNTIME_DIR}"
+        --cc "${CMAKE_C_COMPILER} --target=${CMAKE_C_COMPILER_TARGET} --sysroot=${CMAKE_SYSROOT}"
+        --ar "${CMAKE_AR}" --objcopy "${CMAKE_OBJCOPY}"
+        "--flags=-O2 -fPIC -ffunction-sections -fdata-sections"
+    DEPENDS "${ZI2C_BIN}" "${REPO_ROOT}/scripts/build-bundle-runtime.py"
+    WORKING_DIRECTORY "${REPO_ROOT}" VERBATIM)
 
 set(APP_EMBEDDED_INPUTS
     apps/publishers.json
@@ -310,7 +313,7 @@ target_link_options(main PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-flto=thin>")
 set(APP_COMPILER_LAUNCHER "${HOST_PYTHON}" "${REPO_ROOT}/scripts/relative-compile.py")
 list(APPEND APP_COMPILER_LAUNCHER ${CMAKE_C_COMPILER_LAUNCHER})
 set_property(TARGET main PROPERTY C_COMPILER_LAUNCHER "${APP_COMPILER_LAUNCHER}")
-add_dependencies(main app_ziran_generated app_clean_runtime_api app_build_laws app_zi_check)
+add_dependencies(main app_ziran_generated app_clean_runtime_api app_build_laws app_zi_check app_bundle_runtime)
 
 target_include_directories(main PRIVATE
     "${ZIRAN_DIR}/include"

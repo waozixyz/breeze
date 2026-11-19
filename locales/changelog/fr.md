@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 - Photos via Applications ; Lumi : retours de liste complets en un aperçu ; Listes : tâches longues, cochées par balayage.
-- Les onglets Pratique ne décalent plus l’écran. Choisis parmi six exercices astraux avant de commencer. Dix langues.
+- Les onglets Pratique ne décalent plus l’écran. Choisis parmi six exercices astraux avant de commencer. Dix langues. Garde la pratique en cours à l’écran en mode image dans l’image.
 - Packs de voix un tiers plus légers. Récupérez des pièces chaque jour dans la boutique Habitudes.
 
 ## [2.1.63] - 2026-11-05
