@@ -1,0 +1,88 @@
+name: Cloudflare Pages
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: breeze-pages-${{ gitea.ref }}
+  cancel-in-progress: false
+
+jobs:
+  site:
+    name: Build and verify the site
+    if: gitea.event_name == 'pull_request' || gitea.ref == 'refs/heads/master'
+    # The Ubuntu label is registered by the Build runners.
+    runs-on: alpha-ubuntu24.04
+    timeout-minutes: 45
+    env:
+      PACKAGE_FLAGS: --locked
+      SITE_ASSET_VERSION: ${{ gitea.sha }}
+    steps:
+      - name: Check out Breeze from Gitea
+        uses: https://github.com/actions/checkout@v4
+        with:
+          lfs: true
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: https://github.com/actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install site build dependencies
+        run: .github/scripts/install-apt-packages.sh .github/apt/empty-packages.txt apt-utils gnupg ripgrep unzip zip zstd
+
+      - name: Resolve locked package sources on Gitea
+        env:
+          GIT_CONFIG_COUNT: '3'
+          GIT_CONFIG_KEY_0: url.https://git.waozi.xyz/waozi/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/waozixyz/
+          GIT_CONFIG_KEY_1: url.https://git.waozi.xyz/kryonlabs/.insteadOf
+          GIT_CONFIG_VALUE_1: https://github.com/kryonlabs/
+          GIT_CONFIG_KEY_2: url.https://git.waozi.xyz/ziranlang/.insteadOf
+          GIT_CONFIG_VALUE_2: https://github.com/ziranlang/
+        run: make packages
+
+      - name: Select the verified web app origin
+        if: gitea.event_name != 'pull_request'
+        run: |
+          set -eu
+          host=innerbreeze.org
+          if ! sh site/check-account-origin.sh "$host"; then
+            host=inbe.waozi.xyz
+            sh site/check-account-origin.sh "$host"
+          fi
+          printf 'SITE_APP_HOST=%s\n' "$host" >> "$GITHUB_ENV"
+
+      - name: Build site with the published web app and signed download repository
+        env:
+          APT_SIGNING_KEY: ${{ gitea.event_name != 'pull_request' && secrets.APT_SIGNING_KEY || '' }}
+        run: sh site/build-production.sh
+
+      - name: Test website routes, assets and Telegram bridge
+        run: |
+          make site-assets-test apt-repo-test
+          node tests/telegram_bridge_test.mjs
+
+      - name: Deploy current master to Cloudflare Pages
+        if: gitea.event_name != 'pull_request'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: 'false'
+          REVISION: ${{ gitea.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$REVISION"
+          test "$(git ls-remote origin refs/heads/master | cut -f1)" = "$REVISION"
+          : "${CLOUDFLARE_API_TOKEN:?Missing Gitea Pages deployment token}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?Missing Gitea Pages account ID}"
+          # Verify the public domain and the selected app origin before uploading.
+          curl -fsS --max-time 25 https://innerbreeze.org/ -o /dev/null
+          sh site/check-account-origin.sh "$SITE_APP_HOST"
+          npm exec --yes --package=wrangler@4.152.0 -- wrangler pages deploy build/site \
+            --project-name=inbe --branch=master --commit-hash="$REVISION" --commit-dirty=false
+          sh site/verify-deployment.sh "$REVISION"

@@ -1,3 +1,29 @@
+const canonicalHost = 'innerbreeze.org';
+const appHost = '${app_host}';
+const accountOnPreviousHost = appHost === 'inbe.waozi.xyz';
+const previousHosts = new Set(['inbe.waozi.xyz', 'breeze.waozi.xyz']);
+const appPath = /^\/build\/(web|telegram)(?:\/|$)/;
+const appEntry = /^\/build\/(web|telegram)(?:\/(?:index(?:\.html)?)?)?$/;
+const accountPath = /^\/delete-account(?:[./]|$)/;
+
+function redirectTo(url, host, status) {
+  const destination = new URL(url);
+  destination.protocol = 'https:';
+  destination.hostname = host;
+  destination.port = '';
+  return Response.redirect(destination, status);
+}
+
+function legacyAsset(url) {
+  // Old app data is origin-bound. Keep a deliberate way to open it for export,
+  // along with its same-origin scripts, WASM and other resources.
+  if (appPath.test(url.pathname)) {
+    return !appEntry.test(url.pathname) || url.searchParams.get('legacy-origin') === '1';
+  }
+  // Installed apt sources and older native downloads retain their stable URLs.
+  return /^\/(apt|web-assets\/dl)(?:\/|$)/.test(url.pathname);
+}
+
 function assetRequest(url, request, method = 'GET') {
   const headers = new Headers(request.headers);
   for (const name of ['range', 'if-range', 'if-none-match', 'if-modified-since']) {
@@ -79,7 +105,19 @@ async function multipartAsset(url, request, env, manifestResponse, coding) {
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
-    if (['GET', 'HEAD'].includes(request.method) &&
+    const retrieval = request.method === 'GET' || request.method === 'HEAD';
+    const previousHost = previousHosts.has(url.hostname);
+    const legacy = previousHost && legacyAsset(url);
+    const www = url.hostname === 'www.innerbreeze.org';
+    const accountRoute = accountOnPreviousHost && (appPath.test(url.pathname) || accountPath.test(url.pathname));
+    if (retrieval && accountRoute && url.hostname !== appHost &&
+        (url.hostname === canonicalHost || www || (previousHost && !legacy))) {
+      return redirectTo(url, appHost, 302);
+    }
+    if (retrieval && ((previousHost && !legacy && !accountRoute) || www)) {
+      return redirectTo(url, canonicalHost, 308);
+    }
+    if (retrieval &&
         /^\/build\/(web|telegram)\/index\.(data|wasm)$/.test(url.pathname)) {
       const wasm = url.pathname.endsWith('.wasm');
       const manifestUrl = new URL(url);
@@ -113,6 +151,14 @@ export default {
         });
       }
     }
-    return env.ASSETS.fetch(request);
+    const response = await env.ASSETS.fetch(request);
+    if (response.headers.get('Content-Type')?.includes('text/html') &&
+        (response.status === 404 || url.hostname !== canonicalHost || appPath.test(url.pathname) ||
+         /^\/(?:404|delete-account|radio|web-assets\/canvas_index)(?:[./]|$)/.test(url.pathname))) {
+      const headers = new Headers(response.headers);
+      headers.set('X-Robots-Tag', 'noindex, follow');
+      return new Response(response.body, {status: response.status, headers});
+    }
+    return response;
   },
 };

@@ -46,6 +46,7 @@ expand_template_file() {
 	sed \
 		-e "s#\\\${version}#$version#g" \
 		-e "s#\\\${asset_version}#$asset_version#g" \
+		-e "s#\\\${app_host}#$app_host#g" \
 		-e "s#\\\${android_apk_asset}#$android_apk_asset#g" \
 		-e "s#\\\${android_apk_label}#$android_apk_label#g" \
 		"$src" > "$dst"
@@ -97,13 +98,15 @@ write_site_imports() {
 write_web_app_csp_html() {
 	src=$1
 	dst=$2
-	cache_version=$(date +%s)
+	cache_version=$asset_version
 	csp="default-src 'self' data: blob:; connect-src 'self' https: wss: http: ws:; script-src 'self' 'unsafe-eval' 'unsafe-inline' https://telegram.org https://account.waozi.xyz; style-src 'self' 'unsafe-inline'; worker-src 'self' 'unsafe-eval' 'unsafe-inline' data: blob:; frame-src https:; img-src data: https:; media-src https:; object-src 'none'"
 	meta="<meta http-equiv=\"Content-Security-Policy\" content=\"$csp\">"
 
 	awk -v meta="$meta" -v version="$cache_version" '
 		{
 			gsub(/src="index\.js(\?v=[0-9A-Za-z._-]+)?"/, "src=\"index.js?v=" version "\"")
+			gsub(/https:\/\/(inbe|breeze)\.waozi\.xyz\//, "https://innerbreeze.org/")
+			if ($0 ~ /<\/head>/) print "    <meta name=\"robots\" content=\"noindex, follow\">"
 			if ($0 ~ /<meta http-equiv="Content-Security-Policy"/) {
 				if (!done) print meta
 				done = 1
@@ -199,6 +202,11 @@ case "$android_apk_asset" in
 		;;
 esac
 asset_version=${SITE_ASSET_VERSION:-}
+app_host=${SITE_APP_HOST:-innerbreeze.org}
+case "$app_host" in
+	innerbreeze.org|inbe.waozi.xyz) ;;
+	*) printf 'Error: invalid website app host: %s\n' "$app_host" >&2; exit 1 ;;
+esac
 if [ -z "$asset_version" ]; then
 	if git -C "$root_dir" diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then
 		asset_version=$(git -C "$root_dir" rev-parse --short HEAD 2>/dev/null || date +%s)
@@ -242,6 +250,7 @@ python3 "$root_dir/scripts/prepare-site-assets.py" "$out_dir"
 
 for path in \
 	index.html \
+	404.html \
 	privacy.html \
 	install-apt.html \
 	delete-account.html \
@@ -253,6 +262,7 @@ for path in \
 	robots.txt \
 	sitemap.xml \
 	og.png \
+	og.jpg \
 	web-assets/dl/inbe-meditation-audio-v1.zip \
 	web-assets/icons/inbe.png \
 	web-assets/icons/github.png \
@@ -269,6 +279,7 @@ for path in \
 	site-icons/favicon-32x32.png \
 	css/base.css \
 	css/components.css \
+	css/landing.css \
 	theme.css
 do
 	require_output "$path"

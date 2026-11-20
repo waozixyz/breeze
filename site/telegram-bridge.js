@@ -147,6 +147,7 @@
     let storageEnabled = Boolean(available);
     let generation = 0;
     let memoryGeneration = 0;
+    let invoiceOpen = false;
     let state = {generation: 0, readable: true, mutation: Promise.resolve()};
     if (available) {
       if (!storageStates.has(secure)) storageStates.set(secure, state);
@@ -214,6 +215,35 @@
       context: context,
       contextCurrent: function () {
         return valid && webApp && webApp.initData === context.initData;
+      },
+      invoiceAvailable: function () {
+        return bridge.contextCurrent() && typeof webApp.openInvoice === 'function' &&
+          typeof webApp.isVersionAtLeast === 'function' && webApp.isVersionAtLeast('6.1');
+      },
+      openInvoice: function (invoiceUrl) {
+        const telegramInvoice = /^https:\/\/t\.me\/(?:\$|invoice\/)[A-Za-z0-9_=-]+$/;
+        if (!bridge.invoiceAvailable() || invoiceOpen || typeof invoiceUrl !== 'string' ||
+            invoiceUrl.length > 2048 || !telegramInvoice.test(invoiceUrl)) {
+          return Promise.resolve('failed');
+        }
+        invoiceOpen = true;
+        // The invoice comes from the payment server. The SDK callback describes
+        // the dialog only. The caller must read the authoritative purchase status.
+        return new Promise(function (resolve) {
+          let settled = false;
+          function finish(status) {
+            if (settled) return;
+            settled = true;
+            invoiceOpen = false;
+            const known = ['paid', 'pending', 'cancelled', 'failed'].includes(status);
+            resolve(known && bridge.contextCurrent() ? status : 'failed');
+          }
+          try {
+            webApp.openInvoice(invoiceUrl, finish);
+          } catch (_) {
+            finish('failed');
+          }
+        });
       },
       saveDelegate: async function (capsule) {
         if (!capsuleValid(capsule)) throw new Error('invalid delegate capsule');
