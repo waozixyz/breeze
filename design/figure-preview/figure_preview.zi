@@ -183,27 +183,56 @@ main :: (argc: s32, argv: **u8) -> s32 {
         return 0
     }
     if argc >= 6 && TextFromCString(argv[1]) == "--shot" {
-        // --shot DIR PRACTICE ITEM SECONDS... [man]: chosen moments.
+        // --shot DIR PRACTICE ITEM SECONDS... [man] [turn=DEGREES]
         times: [32]float64
         count: s64
         man := false
+        turn: float64
         for index: 5..argc - 1 {
             word := TextFromCString(argv[index])
             if word == "man" {
                 man = true
+            } else if word.count > 5 && word[:5] == "turn=" {
+                degrees, ok := ParseFloat64(word[5:])
+                if !ok || !Finite64(degrees) {
+                    return 1
+                }
+                turn = degrees * (FIGURE_PI / 180.0)
             } else if count < 32 {
                 value, ok := ParseFloat64(word)
-                times[count] = ifx ok then value else 0.0
+                if !ok || !Finite64(value) {
+                    return 1
+                }
+                times[count] = value
                 count += 1
             }
         }
         practice_number, practice_ok := ParseFloat64(TextFromCString(argv[3]))
         item_number, item_ok := ParseFloat64(TextFromCString(argv[4]))
-        if !practice_ok || !item_ok {
+        if !practice_ok || !item_ok || count == 0 {
             return 1
         }
         return PreviewShots(*preview_backdrops, *preview_library, TextFromCString(argv[2]), practices,
-            cast(s32)practice_number, cast(s32)item_number, times[0:count], man)
+            cast(s32)practice_number, cast(s32)item_number, times[0:count], man, turn)
+    }
+    if argc >= 2 && TextFromCString(argv[1]) == "--rig-pose" {
+        if argc < 5 || argc > 6 || (argc == 6 && TextFromCString(argv[5]) != "man") {
+            return 1
+        }
+        practice, practice_ok := ParseFloat64(TextFromCString(argv[2]))
+        item, item_ok := ParseFloat64(TextFromCString(argv[3]))
+        seconds, time_ok := ParseFloat64(TextFromCString(argv[4]))
+        if !practice_ok || !Finite64(practice) || practice < 0 || practice > 3 ||
+            !item_ok || !Finite64(item) || item < 0 ||
+            item >= cast(float64)PreviewItemCount(*preview_library, cast(s32)practice) || !time_ok || !Finite64(seconds) {
+            return 1
+        }
+        practice_index := cast(s32)practice
+        item_index := cast(s32)item
+        if cast(float64)practice_index != practice || cast(float64)item_index != item {
+            return 1
+        }
+        return PreviewRigPose(*preview_library, practices, practice_index, item_index, seconds, argc == 6)
     }
     if argc >= 3 && TextFromCString(argv[1]) == "--capture" {
         return PreviewCapture(*preview_backdrops, *preview_library, TextFromCString(argv[2]), practices)

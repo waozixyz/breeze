@@ -60,10 +60,13 @@ For captures without a window, create the output directory before running
   a foot through the floor, a joint changing speed too suddenly or moving
   too fast, a knee bent backwards, a hand through the body or an abrupt
   camera change. It exits nonzero when it finds any.
-- `--shot DIR PRACTICE ITEM SECONDS... [man]` writes chosen moments, and
+- `--shot DIR PRACTICE ITEM SECONDS... [man] [turn=DEGREES]` writes chosen
+  moments with an optional camera orbit, and
   `--video DIR PRACTICE ITEM FROM TO [man]` thirty frames a second of a
   stretch, hair swinging; `--trace PRACTICE ITEM FROM TO` prints the right
   arm's joints and hand frame 120 times a second.
+- `--rig-pose PRACTICE ITEM SECONDS [man]` prints the root transform and the
+  model's bind and posed humanoid bone transforms as tab-separated rows.
 
 ## Known limits
 
@@ -71,6 +74,24 @@ For captures without a window, create the output directory before running
   techniques with steps evenly 20 seconds apart, and the panel says so.
 
 ## Motion review
+
+Use Blender to inspect the VRM rig at an exact preview pose. The following
+example opens the man's Workout high-knee pose at 0.4 seconds and produces
+three orthographic renders and a packed Blender file. Run from this folder
+with `ziran` and `blender` on `PATH`.
+
+```sh
+practices=$(ziran pkg path practices --locked)
+out=build/blender-review
+mkdir -p "$out"
+./build/app/figure_preview --rig-pose 2 8 0.4 man > "$out/pose.tsv"
+blender -b --python-exit-code 1 --python blender_pose_review.py -- \
+    "$practices/shared/figure/man.vrm" "$out/pose.tsv" "$out" --save-blend
+```
+
+The importer applies the exported bone transforms to the GLB bind rig and
+approximates native skinning. Use `--shot` to review native cloth draping,
+hair springs, and slipper calibration.
 
 `review.py` writes resumable before/after videos for the four practices and a
 contact sheet with both figures under `build/practice-motion-review/`. It

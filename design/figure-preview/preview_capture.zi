@@ -3,11 +3,13 @@
 // flat figure when asked.
 #import "figure_math"
 #import "figure_joints"
+#import "figure_model"
 #import "figure_finish"
 #import "preview_practices"
 #import "preview_flat"
 #import "preview_figure"
 #import "kryon/scene"
+#import "kryon/scene_gltf"
 #import "sun_salutation_rules"
 #import "workout_rules"
 #import "std/file"
@@ -206,7 +208,7 @@ PreviewVideo :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directo
 // Writes the woman (or the man, MAN) at each of SECONDS of PRACTICE's ITEM
 // into DIRECTORY as SECONDS.png, for looking at chosen moments.
 PreviewShots :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directory: string, practices: string,
-    practice: s32, item: s32, seconds: []float64, man: bool) -> s32 {
+    practice: s32, item: s32, seconds: []float64, man: bool, turn: float64 = 0.0) -> s32 {
     picture: Raster.Image
     defer VecFree(picture.pixels)
     figure: PreviewFigure
@@ -219,7 +221,7 @@ PreviewShots :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directo
         moment := PreviewSample(library, practice, item, at)
         width: s32 = ifx practice == PREVIEW_ASTRAL then 900 else 600
         height: s32 = ifx practice == PREVIEW_ASTRAL then 600 else 800
-        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0, cast(float64)width / cast(float64)height)
+        view := PreviewViewOf(*moment, turn, 0.0, 1.0, cast(float64)width / cast(float64)height)
         digits: [32]u8
         stem: [1024]u8
         named: [1024]u8
@@ -233,6 +235,47 @@ PreviewShots :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directo
         }
     }
     return failed
+}
+
+// One exact native pose in glTF model space for inspecting the bind rig in
+// Blender. The runtime-rendered shots also include the native cloth pass.
+PreviewRigPose :: (library: *PreviewLibrary, practices: string, practice: s32, item: s32,
+    seconds: float64, man: bool) -> s32 {
+    if practice < 0 || practice > 3 || item < 0 || item >= PreviewItemCount(library, practice) ||
+        seconds < 0.0 || seconds > PreviewDuration(library, practice, item) {
+        return 1
+    }
+    scene: Scene
+    SceneInit(*scene)
+    defer SceneFree(*scene)
+    model: FigureModel
+    defer FigureModelRelease(*model)
+    path: [1200]u8
+    file := ifx man then "/shared/figure/man.vrm" else "/shared/figure/woman.vrm"
+    if !FigureModelLoad(*model, *scene, PreviewJoin(path[:], practices, file)) {
+        return 1
+    }
+    moment := PreviewSample(library, practice, item, seconds)
+    if !FigureModelPose(*model, *scene, *moment.body, seconds) {
+        return 1
+    }
+    root := scene.nodes[model.instance.root_node]
+    print("root\t%\t%\t%\t%\t%\n", root.position.x, root.position.y, root.position.z, model.yaw, root.scale.x)
+    for role: 0..FIGURE_BONES - 1 {
+        node := model.bones[role]
+        if node < 0 {
+            continue
+        }
+        source := *model.model.nodes[node]
+        name := TextView(source.name[:])
+        at := model.rest_at[node]
+        rest := model.rest_turn[node]
+        m := model.instance.node_world[node].m
+        print("bone\t%\t%\t%\t%\t%\t%\t%\t%\t%\t%\t%\t%\t%\t%\t%\t%\t%\t%\t%\t%\n",
+            name, at.x, at.y, at.z, rest.x, rest.y, rest.z, rest.w,
+            m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[11])
+    }
+    return 0
 }
 
 #scope_file
