@@ -32,10 +32,10 @@ mkdir -p "$release_dir/app"
 unzip -q "$release_dir/inbe-web.zip" -d "$release_dir/app"
 test -s "$release_dir/app/index.wasm"
 
-make package-unpackaged-assets
+make -f site/production.mk package-unpackaged-assets
 SITE_WEB_DIR="$PWD/$release_dir/app" sh site/build.sh
 # Gitea's job token is only valid on Gitea. Downloads still follow the public release.
-env -u GITHUB_TOKEN -u GH_TOKEN make site-release-assets-check
+env -u GITHUB_TOKEN -u GH_TOKEN make -f site/production.mk site-release-assets-check
 
 if [ -n "${APT_SIGNING_KEY:-}" ]; then
     deb_dir="$release_dir/debs"

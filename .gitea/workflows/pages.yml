@@ -18,7 +18,6 @@ jobs:
     runs-on: alpha-ubuntu24.04
     timeout-minutes: 45
     env:
-      PACKAGE_FLAGS: --locked
       SITE_ASSET_VERSION: ${{ gitea.sha }}
     steps:
       - name: Check out Breeze from Gitea
@@ -39,16 +38,12 @@ jobs:
       - name: Install site build dependencies
         run: USER="$(id -un)" .github/scripts/install-apt-packages.sh .github/apt/empty-packages.txt apt-utils gnupg ripgrep unzip zip zstd
 
-      - name: Resolve locked package sources on Gitea
-        env:
-          GIT_CONFIG_COUNT: '3'
-          GIT_CONFIG_KEY_0: url.https://git.waozi.xyz/waozi/.insteadOf
-          GIT_CONFIG_VALUE_0: https://github.com/waozixyz/
-          GIT_CONFIG_KEY_1: url.https://git.waozi.xyz/kryonlabs/.insteadOf
-          GIT_CONFIG_VALUE_1: https://github.com/kryonlabs/
-          GIT_CONFIG_KEY_2: url.https://git.waozi.xyz/ziranlang/.insteadOf
-          GIT_CONFIG_VALUE_2: https://github.com/ziranlang/
-        run: make packages
+      - name: Fetch the pinned site icons from Gitea
+        run: |
+          set -eu
+          kryon_dir="$PWD/build/site-kryon"
+          sh site/fetch-kryon-icons.sh "$kryon_dir"
+          printf 'KRYON_DIR=%s\n' "$kryon_dir" >> "$GITHUB_ENV"
 
       - name: Select the verified web app origin
         if: gitea.event_name != 'pull_request'
@@ -68,7 +63,8 @@ jobs:
 
       - name: Test website routes, assets and Telegram bridge
         run: |
-          make site-assets-test apt-repo-test
+          node tests/site_assets_test.mjs
+          sh tests/apt_repo_test.sh
           node tests/telegram_bridge_test.mjs
 
       - name: Deploy current master to Cloudflare Pages

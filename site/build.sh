@@ -34,7 +34,7 @@ copy_dir_contents() {
 sync_shared_web_icons() {
 	sync_script="$kryon_dir/scripts/sync-icons.sh"
 	require_path "$sync_script"
-	sh "$sync_script" "$root_dir/web-assets/icons" platforms language tiles
+	sh "$sync_script" "$out_dir/web-assets/icons" platforms language tiles
 }
 
 expand_template_file() {
@@ -230,8 +230,8 @@ fi
 mkdir -p "$out_dir/legacy-converter"
 cp "$out_dir/legacy-converter.html" "$out_dir/legacy-converter/index.html"
 
-sync_shared_web_icons
 copy_dir_contents "$root_dir/web-assets" "$out_dir/web-assets"
+sync_shared_web_icons
 # Keep the released app's audio URL available alongside the current archive name.
 copy_path "$out_dir/web-assets/dl/breathing-meditation-audio-v1.zip" "$out_dir/web-assets/dl/inbe-meditation-audio-v1.zip"
 copy_dir_contents "$root_dir/site-icons" "$out_dir/site-icons"
