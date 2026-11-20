@@ -6,6 +6,10 @@
 - Cvičení startují čistě a plynule se přepínají. Pokračujte v relacích, sledujte stahování i obraz v obraze na Androidu.
 - Časovače se po nečinnosti vynulují, mince i časovače ladí s motivem a v Návycích získáte denní mince.
 
+### Webová aplikace
+
+- Aplikace se v prohlížeči na počítači otevře v běžné velikosti a zachová nastavení vzhledu.
+
 ## [2.1.63] - 2026-11-05
 
 - Opravujte text v seznamech a Lumi bez přeskakování kurzoru.

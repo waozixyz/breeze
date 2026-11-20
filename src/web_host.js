@@ -1,5 +1,13 @@
 // Browser effects imported by the Ziran app through Emscripten.
 addToLibrary({
+  browser_uses_viewport_scale: () => {
+    const mobile = navigator.userAgentData?.mobile ||
+      /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+      // iPad Safari normally identifies itself as desktop Safari.
+      (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    return mobile || globalThis.InbeTelegramBridge ? 1 : 0;
+  },
+
   browser_radio: (action, address, volume) => {
     let radio = Module.__inbeRadio;
     if (!radio) {

@@ -1,12 +1,12 @@
 #!/bin/sh
-# Package current website source with the public, phone-verified app release.
+# Package the website with the supplied web artifact and published downloads.
 set -eu
 cd "$(dirname "$0")/.."
 
 release_dir=build/released-web
 mkdir -p "$release_dir"
 curl -fsSL --retry 3 https://api.github.com/repos/waozixyz/breeze/releases/latest -o "$release_dir/release.json"
-python3 - "$release_dir/release.json" > "$release_dir/release.env" <<'PY'
+python3 - "$release_dir/release.json" "${SITE_WEB_DIR:-}" > "$release_dir/release.env" <<'PY'
 import json
 import re
 import sys
@@ -19,21 +19,26 @@ if not match:
 version = match[1]
 assets = {asset["name"] for asset in release["assets"]}
 android = next((name for name in (f"inbe-{version}-arm64-v8a.apk", f"inbe-{version}.apk") if name in assets), None)
-if not android or "inbe-web.zip" not in assets:
-    raise SystemExit("Published release is missing an Android APK or the web bundle")
+if not android:
+    raise SystemExit("Published release is missing an Android APK")
+if not sys.argv[2] and "inbe-web.zip" not in assets:
+    raise SystemExit("Published release is missing the web bundle")
 print(f"export SITE_RELEASE_VERSION={version}")
 print(f"export SITE_ANDROID_APK_ASSET={android}")
 PY
 . "./$release_dir/release.env"
 release_url="https://github.com/waozixyz/breeze/releases/download/v$SITE_RELEASE_VERSION"
-curl -fsSL --retry 3 "$release_url/inbe-web.zip" -o "$release_dir/inbe-web.zip"
-rm -rf "$release_dir/app"
-mkdir -p "$release_dir/app"
-unzip -q "$release_dir/inbe-web.zip" -d "$release_dir/app"
-test -s "$release_dir/app/index.wasm"
+if [ -z "${SITE_WEB_DIR:-}" ]; then
+    curl -fsSL --retry 3 "$release_url/inbe-web.zip" -o "$release_dir/inbe-web.zip"
+    rm -rf "$release_dir/app"
+    mkdir -p "$release_dir/app"
+    unzip -q "$release_dir/inbe-web.zip" -d "$release_dir/app"
+    SITE_WEB_DIR="$PWD/$release_dir/app"
+fi
+test -s "$SITE_WEB_DIR/index.wasm"
 
 make -f site/production.mk package-unpackaged-assets
-SITE_WEB_DIR="$PWD/$release_dir/app" sh site/build.sh
+SITE_WEB_DIR="$SITE_WEB_DIR" sh site/build.sh
 # Gitea's job token is only valid on Gitea. Downloads still follow the public release.
 env -u GITHUB_TOKEN -u GH_TOKEN make -f site/production.mk site-release-assets-check
 

@@ -1,4 +1,4 @@
-# Pages uses the released web app and builds only the website's downloads.
+# Package the website's downloads independently of the web app toolchain.
 UNPACKAGED_AUDIO_DIR := unpackaged_assets/audio
 UNPACKAGED_AUDIO_FILES := $(shell git ls-files -- $(UNPACKAGED_AUDIO_DIR))
 MEDITATION_AUDIO_TRACKS := $(patsubst $(UNPACKAGED_AUDIO_DIR)/%,%,$(filter %.ogg,$(UNPACKAGED_AUDIO_FILES)))

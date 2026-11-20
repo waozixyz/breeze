@@ -12,10 +12,19 @@ dpi_state: DPIState;
 dpi_user_zoom: float32 = 1.0;
 last_density: float32;
 
+#if #defined(PLATFORM_WEB) {
+    browser :: #system_library "browser";
+    BrowserUsesViewportScale :: () -> s32 #foreign browser "browser_uses_viewport_scale";
+    browser_viewport_scaled: bool;
+}
+
 #program_export
 InitDPI :: () {
     dpi_state = InitialDPI()
     last_density = 0.0
+    #if #defined(PLATFORM_WEB) {
+        browser_viewport_scaled = BrowserUsesViewportScale() != 0
+    }
 }
 
 #program_export
@@ -31,10 +40,18 @@ CurrentDPIPlatform :: () -> DPIPlatform {
 
 #program_export
 UpdateDPI :: (view_width: s32, view_height: s32) {
+    if dpi_state.base_height == 0 {
+        InitDPI()
+    }
     platform: DPIPlatform = CurrentDPIPlatform()
     density := device_density()
-    if dpi_state.base_height == 0 {
-        dpi_state = InitialDPI()
+    #if #defined(PLATFORM_WEB) {
+        // Desktop browser viewports are already in CSS pixels. Use a
+        // fixed base scale while the canvas handles backing pixel density.
+        if !browser_viewport_scaled {
+            platform = cast(DPIPlatform)DPIPlatformDesktop
+            density = 1.0
+        }
     }
     if density != last_density {
         dpi_state = InvalidateDPI(dpi_state)

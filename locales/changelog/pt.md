@@ -6,6 +6,10 @@
 - Inicie práticas sem resíduos, alterne e retome sessões. Veja downloads e use picture-in-picture no Android.
 - Os timers de pausa reiniciam após uma ausência. Timers e moedas seguem o tema. Resgate moedas diárias em Hábitos.
 
+### Aplicativo web
+
+- O aplicativo abre no navegador do computador em tamanho normal e mantém o ajuste de aparência.
+
 ## [2.1.63] - 2026-11-05
 
 - Corrija textos nas listas e no Lumi sem saltos do cursor.

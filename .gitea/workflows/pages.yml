@@ -35,8 +35,70 @@ jobs:
         with:
           node-version: 22
 
+      - name: Identify exact web build inputs
+        id: web-inputs
+        run: |
+          key=$(sh site/web-build-key.sh)
+          printf 'key=%s\n' "$key" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the source-built web app
+        id: web-restore
+        uses: https://github.com/actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        continue-on-error: true
+        with:
+          path: build/dist/web
+          key: breeze-web-${{ runner.os }}-${{ runner.arch }}-${{ steps.web-inputs.outputs.key }}
+
+      - name: Check the cached web build
+        id: web-cache
+        env:
+          WEB_INPUT_KEY: ${{ steps.web-inputs.outputs.key }}
+        run: |
+          if sh site/web-build-receipt.sh verify build/dist/web "$WEB_INPUT_KEY" 2>/dev/null; then
+            echo 'Reusing the verified web build for these inputs'
+            echo 'ready=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'Building the web app for these inputs'
+            echo 'ready=false' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Install site build dependencies
         run: USER="$(id -un)" .github/scripts/install-apt-packages.sh .github/apt/empty-packages.txt apt-utils gnupg ripgrep unzip zip zstd
+
+      - name: Install web build dependencies
+        if: steps.web-cache.outputs.ready != 'true'
+        run: USER="$(id -un)" .github/scripts/install-apt-packages.sh .github/apt/web-packages.txt python3-pil
+
+      - name: Fetch locked Ziran packages
+        if: steps.web-cache.outputs.ready != 'true'
+        uses: ./.github/actions/ziran-packages
+
+      - name: Set up the pinned Emscripten SDK
+        if: steps.web-cache.outputs.ready != 'true'
+        uses: ./.github/actions/emscripten
+
+      - name: Build the web app from this revision
+        if: steps.web-cache.outputs.ready != 'true'
+        env:
+          WEB_INPUT_KEY: ${{ steps.web-inputs.outputs.key }}
+        run: |
+          set -eu
+          rm -f build/dist/web/index.html build/dist/web/index.js build/dist/web/index.wasm
+          make -j2 PACKAGE_FLAGS=--locked WEB_CACHE_BUSTER="$WEB_INPUT_KEY" build/dist/web/index.html
+          sh site/web-build-receipt.sh write build/dist/web "$WEB_INPUT_KEY"
+
+      - name: Verify the exact web app artifact
+        env:
+          WEB_INPUT_KEY: ${{ steps.web-inputs.outputs.key }}
+        run: sh site/web-build-receipt.sh verify build/dist/web "$WEB_INPUT_KEY"
+
+      - name: Save the verified web build for the next deployment
+        if: gitea.event_name != 'pull_request' && steps.web-cache.outputs.ready != 'true' && steps.web-restore.outputs.cache-hit != 'true'
+        uses: https://github.com/actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        continue-on-error: true
+        with:
+          path: build/dist/web
+          key: breeze-web-${{ runner.os }}-${{ runner.arch }}-${{ steps.web-inputs.outputs.key }}
 
       - name: Fetch the pinned site icons from Gitea
         run: |
@@ -56,14 +118,15 @@ jobs:
           fi
           printf 'SITE_APP_HOST=%s\n' "$host" >> "$GITHUB_ENV"
 
-      - name: Build site with the published web app and signed download repository
+      - name: Build site with the source-built web app and signed download repository
         env:
           APT_SIGNING_KEY: ${{ gitea.event_name != 'pull_request' && secrets.APT_SIGNING_KEY || '' }}
-        run: sh site/build-production.sh
+        run: SITE_WEB_DIR="$PWD/build/dist/web" sh site/build-production.sh
 
       - name: Test website routes, assets and Telegram bridge
         run: |
           node tests/site_assets_test.mjs
+          sh tests/site_web_build_test.sh
           # The APT fixture is designed to check package discovery without root.
           if [ "$(id -u)" -eq 0 ]; then
             runuser -u nobody -- sh tests/apt_repo_test.sh

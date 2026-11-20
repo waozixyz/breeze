@@ -25,6 +25,18 @@ verify_asset /robots.txt build/site/robots.txt
 verify_asset /sitemap.xml build/site/sitemap.xml
 verify_asset /build/web/ build/site/build/web/index.html "$app_host"
 verify_asset /build/telegram/ build/site/build/telegram/index.html "$app_host"
+if [ -f build/site/build/web/source-build.txt ]; then
+    verify_asset /build/web/source-build.txt build/site/build/web/source-build.txt "$app_host"
+    verify_asset /build/web/source-build.sha256 build/site/build/web/source-build.sha256 "$app_host"
+    verify_asset /build/web/index.js build/site/build/web/index.js "$app_host"
+    IFS= read -r web_key < build/site/build/web/source-build.txt
+    expected_wasm=$(awk '$2 == "index.wasm" { print $1 }' build/site/build/web/source-build.sha256)
+    test -n "$expected_wasm"
+    actual_wasm=$(curl -fsS --compressed --max-time 120 \
+        "https://$app_host/build/web/index.wasm?v=$web_key" | sha256sum | cut -d ' ' -f 1)
+    test "$actual_wasm" = "$expected_wasm"
+    printf 'Verified the source-built web WASM\n'
+fi
 verify_asset /delete-account build/site/delete-account.html "$app_host"
 verify_asset /apt/dists/stable/InRelease build/site/apt/dists/stable/InRelease
 missing_status=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "https://innerbreeze.org/website-missing-route?revision=$revision")

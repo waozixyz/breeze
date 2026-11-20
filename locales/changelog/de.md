@@ -6,6 +6,10 @@
 - Starte Übungen sauber, wechsle flüssig und setze sie fort. Sieh Downloads und nutze Android-Bild-in-Bild.
 - Pausentimer starten nach Abwesenheit neu. Münzen und Timer folgen dem Design. Hole täglich Münzen in Gewohnheiten.
 
+### Web-App
+
+- Die App öffnet sich im Desktop-Browser in normaler Größe und behält die Anzeigeeinstellung.
+
 ## [2.1.63] - 2026-11-05
 
 - Korrigiere Text in Listen und Lumi ohne springenden Cursor.

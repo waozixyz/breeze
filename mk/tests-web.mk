@@ -32,6 +32,7 @@ web-window-zi-test: $(ZI2C_BIN)
 .PHONY: site-assets-test
 site-assets-test:
 	$(JS_RUNTIME) tests/site_assets_test.mjs
+	sh tests/site_web_build_test.sh
 
 .PHONY: apt-repo-test
 apt-repo-test:

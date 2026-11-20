@@ -7,6 +7,10 @@
 - Reset break timers after time away, match coins and timers to the theme, and claim daily coins in Habits.
 - See the animated Inner Breeze homepage with a simpler footer and reduced-motion support.
 
+### Web app
+
+- Open the desktop browser app at a normal scale and keep your Appearance setting.
+
 ## [2.1.63] - 2026-11-05
 
 - Correct text in lists and Lumi without cursor jumps.

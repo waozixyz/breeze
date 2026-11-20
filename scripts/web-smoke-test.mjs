@@ -712,6 +712,85 @@ async function verifyAppSettingsReloadPersistence(client) {
     throw new Error('app settings did not persist across reload');
 }
 
+async function verifyBrowserStartupScale(client, url) {
+  const desktop = { width: 1280, height: 800, deviceScaleFactor: 1, mobile: false };
+  const desktopAgent = await pageJson(client, 'navigator.userAgent');
+  await client.send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+    window.startupPaintScales = new Map();
+    const contexts = [CanvasRenderingContext2D];
+    if (typeof OffscreenCanvasRenderingContext2D !== 'undefined')
+      contexts.push(OffscreenCanvasRenderingContext2D);
+    for (const { prototype } of contexts) {
+      const fillText = prototype.fillText;
+      prototype.fillText = function(text, ...args) {
+        const canvas = window.Module?.canvas;
+        if (canvas && this.canvas.width === canvas.width && this.canvas.height === canvas.height)
+          window.startupPaintScales.set(text, this.getTransform().a / devicePixelRatio);
+        return fillText.call(this, text, ...args);
+      };
+    }
+  })()` });
+
+  let launch = 0;
+  async function check(metrics, expected) {
+    const startupUrl = new URL(url);
+    startupUrl.searchParams.set('startupScaleCase', String(++launch));
+    await client.send('Emulation.setDeviceMetricsOverride', metrics);
+    await client.send('Page.navigate', { url: startupUrl.href });
+    await waitForHealthyPage(client);
+    const state = await pageJson(client, `(() => {
+      const canvas = Module.canvas;
+      const rect = canvas.getBoundingClientRect();
+      return { width: rect.width, height: rect.height, ratio: devicePixelRatio,
+        backingWidth: canvas.width, backingHeight: canvas.height,
+        scales: [...window.startupPaintScales.values()] };
+    })()`);
+    const { width, height, deviceScaleFactor } = metrics;
+    const atExpectedScale = state.scales.filter(scale => Math.abs(scale - expected) < 0.01);
+    if (state.width !== width || state.height !== height || state.ratio !== deviceScaleFactor ||
+        state.backingWidth !== Math.round(width * deviceScaleFactor) ||
+        state.backingHeight !== Math.round(height * deviceScaleFactor) || atExpectedScale.length < 4) {
+      throw new Error(`web startup expected scale ${expected}, metrics ${JSON.stringify(metrics)}: ${JSON.stringify(state)}`);
+    }
+  }
+
+  await check(desktop, 1);
+  await check({ ...desktop, deviceScaleFactor: 2 }, 1);
+  await check({ ...desktop, width: 1600, height: 1000 }, 1);
+
+  await client.send('Emulation.setUserAgentOverride', {
+    userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36'
+  });
+  await check({ width: 390, height: 844, deviceScaleFactor: 3, mobile: true }, 844 / 560);
+  await client.send('Emulation.setUserAgentOverride', { userAgent: desktopAgent });
+
+  const telegram = await client.send('Page.addScriptToEvaluateOnNewDocument', {
+    source: 'globalThis.InbeTelegramBridge = Object.freeze({});'
+  });
+  await check(desktop, 800 / 560);
+  await client.send('Page.removeScriptToEvaluateOnNewDocument', telegram);
+
+  await check(desktop, 1);
+  await pageJson(client, `(async () => {
+    ${wasmHookEvalHelper()}
+    await callWasmHook('app_web_test_show_appearance');
+  })()`, true);
+  await waitRouteTransition(client);
+  await waitAnimationFrames(client, 3);
+  const slider = await pageJson(client, `({
+    x: Module._app_web_test_control_x(140), y: Module._app_web_test_control_y(140),
+    width: Module._app_web_test_control_width(140), height: Module._app_web_test_control_height(140)
+  })`);
+  if (slider.width <= 0 || slider.height <= 0) throw new Error('Appearance UI scale slider is missing');
+  // The middle of the 50–250% slider selects 150%.
+  await dispatchCanvasClick(client, slider.x + slider.width / 2, slider.y + slider.height / 2);
+  await waitForStorageIdle(client);
+  const flushed = await pageJson(client, 'Module.__inbeFlushStorageSync(true)', true);
+  if (!flushed) throw new Error('Could not persist the Appearance UI scale');
+  await check({ ...desktop, deviceScaleFactor: 2 }, 1.5);
+  console.log('web startup scale: desktop 100% at DPR 1 and 2, mobile and Telegram fit, saved 150% restored');
+}
+
 async function verifySetupRouteDoesNotOverrideSavedOnboarding(client, port) {
   await waitForStorageIdle(client);
   await client.send('Page.navigate', { url: `http://127.0.0.1:${port}/index.html#/audio_setup` });
@@ -1925,7 +2004,27 @@ try {
     });
 
     const devtoolsPort = await waitForDevtools(chrome, chromeStderr);
-    const pages = await jsonRequest(`http://127.0.0.1:${devtoolsPort}/json/new?about:blank`, {
+    const devtools = `http://127.0.0.1:${devtoolsPort}`;
+    const url = `http://127.0.0.1:${port}/index.html`;
+    const browserTarget = await jsonRequest(`${devtools}/json/version`);
+    const browserClient = await connect(browserTarget.webSocketDebuggerUrl);
+    try {
+      // The saved zoom belongs to a disposable context with its own IndexedDB.
+      const { browserContextId } = await browserClient.send('Target.createBrowserContext', { disposeOnDetach: true });
+      const { targetId } = await browserClient.send('Target.createTarget', { url: 'about:blank', browserContextId });
+      const targets = await jsonRequest(`${devtools}/json/list`);
+      const target = targets.find(page => page.id === targetId);
+      if (!target?.webSocketDebuggerUrl) throw new Error('Chromium scale test could not attach to its page');
+      client = await connect(target.webSocketDebuggerUrl);
+      await client.send('Runtime.enable');
+      await client.send('Page.enable');
+      await verifyBrowserStartupScale(client, url);
+    } finally {
+      browserClient.close();
+    }
+    client.close();
+
+    const pages = await jsonRequest(`${devtools}/json/new?about:blank`, {
       method: 'PUT'
     });
     client = await connect(pages.webSocketDebuggerUrl);
@@ -1948,7 +2047,7 @@ try {
       await client.send('Emulation.setCPUThrottlingRate', {
         rate: Number(process.env.WEB_SMOKE_CPU_THROTTLE)
       });
-    await client.send('Page.navigate', { url: `http://127.0.0.1:${port}/index.html` });
+    await client.send('Page.navigate', { url });
     await waitForHealthyPage(client);
     await musicChecks(client);
     if (process.env.WEB_SMOKE_CPU_THROTTLE)

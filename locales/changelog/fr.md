@@ -6,6 +6,10 @@
 - Lancez les pratiques sans traces, reprenez vos séances et suivez les téléchargements et l’incrustation Android.
 - Les minuteurs de pause se réinitialisent après une absence. Minuteurs et pièces quotidiennes suivent le thème.
 
+### Application web
+
+- Dans un navigateur sur ordinateur, l’application s’ouvre à taille normale et conserve votre réglage d’apparence.
+
 ## [2.1.63] - 2026-11-05
 
 - Corrigez le texte des listes et de Lumi sans que le curseur saute.

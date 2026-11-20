@@ -6,6 +6,10 @@
 - Inicia prácticas sin restos, cambia y retoma sesiones. Ve las descargas y usa imagen dentro de imagen en Android.
 - Los temporizadores se reinician tras una pausa y siguen el tema, al igual que las monedas diarias de Hábitos.
 
+### Aplicación web
+
+- La aplicación abre con un tamaño normal en el navegador de escritorio y conserva tu ajuste de apariencia.
+
 ## [2.1.63] - 2026-11-05
 
 - Corrige texto en listas y Lumi sin saltos del cursor.
