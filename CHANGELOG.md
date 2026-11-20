@@ -5,7 +5,7 @@
 - Fix Backspace, editing and backup restores. Find Photos and Radio faster. Buy Dew with Telegram Stars.
 - Start practices cleanly, switch smoothly, resume sessions, and see download progress and Android picture-in-picture.
 - Reset break timers after time away, match coins and timers to the theme, and claim daily coins in Habits.
-- See the animated Inner Breeze homepage, with a pause control and reduced-motion support.
+- See the animated Inner Breeze homepage with a simpler footer and reduced-motion support.
 
 ## [2.1.63] - 2026-11-05
 
