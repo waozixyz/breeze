@@ -1,6 +1,7 @@
 #import, file "../platform/host_window_state.zi";
 #import, file "app_types.zi";
 #import, file "app_nav_state.zi";
+#import, file "entity_host.zi";
 #import, file "app_launcher_state.zi";
 #import, file "launcher_policy.zi";
 #import, file "app_route_state.zi";
@@ -114,19 +115,26 @@ app_launcher_pump_request :: (app: *InnerBreeze) {
         return
     }
     if app.language_selected == 0 || app.apps_selected == 0 { return }
+    // Older desktop shortcuts still open the leaderboard inside Profile.
     route := LauncherRouteForName(name)
+    if name == "leaderboard" { route = cast(s32)AppNavRoute.APP_NAV_ROUTE_LEADERBOARD }
     if route == cast(s32)AppNavRoute.APP_NAV_ROUTE_NONE || !app_nav_route_available(app, route) { return }
     if app.modal.active != 0 { return }
-    if !launcher_request_attempted {
+    attempted := launcher_request_attempted
+    if !attempted {
         app_launcher_close(app)
         app_apply_nav_route(app, route)
         launcher_request_attempted = true
-    } else if app_current_nav_route(app) != route {
+    }
+    current := app_current_nav_route(app)
+    reached := current == route || (route == cast(s32)AppNavRoute.APP_NAV_ROUTE_LEADERBOARD &&
+        current == cast(s32)AppNavRoute.APP_NAV_ROUTE_PROFILE && EntityHostLeaderboardPending())
+    if !reached && attempted {
         // The person dismissed an unsaved-changes dialog and stayed here.
         launcher_pending_name[0] = 0
         return
     }
-    if app_current_nav_route(app) == route {
+    if reached {
         // The host uses a nonzero feature to hide surrounding harness navigation.
         bit := app_nav_route_bit(route)
         app.host_feature = ifx bit != 0 then bit else route

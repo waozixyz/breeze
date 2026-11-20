@@ -4,6 +4,10 @@
 app-codec-check:
 	python3 scripts/generate-app-codec.py --check
 
+.PHONY: apps-controller-zi-test
+apps-controller-zi-test: $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(APPS_BUNDLE)
+	sh tests/apps_controller_zi_test.sh $(abspath $(ZIRAN_BIN)) $(abspath $(ZIRAN_BUILD_DIR)/libziran.a) $(abspath $(APPS_BUNDLE))
+
 .PHONY: apps-test
 apps-test: library-reader-test apps $(ZIRAN_BUILD_DIR)/libziran.a $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	sh tests/apps_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
@@ -40,7 +44,7 @@ app-locations-test: $(ZIRAN_BIN)
 
 node-app-snapshot-test: apps $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
 	python3 tests/node_app_snapshot_test.py --ziran '$(abspath $(ZIRAN_BIN))' \
-		--runtime '$(abspath $(ZIRAN_BUILD_DIR)/libziran.a)'
+		--runtime '$(abspath $(ZIRAN_BUILD_DIR)/libziran.a)' --controller '$(abspath $(APPS_BUNDLE))'
 .PHONY: media-store-test media-metadata-test entity-photos-test
 # The account's media library, which Diary and the node's Photos share.
 media-metadata-test: $(ZI2C_BIN)
@@ -117,6 +121,10 @@ radio-native-test: $(ZI2C_BIN) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS) $(AUDIO_OPUS_
 
 radio-web-test:
 	$(JS_RUNTIME) tests/radio_web_test.mjs
+
+.PHONY: radio-threejs-test
+radio-threejs-test:
+	$(JS_RUNTIME) tests/radio_threejs_test.mjs
 
 radio-android-test:
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \

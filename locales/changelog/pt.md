@@ -2,9 +2,9 @@
 
 ## [Unreleased]
 
-- Fotos via Aplicações; Lumi: prévia única do retorno completo da lista; Listas: tarefas longas e conclusão ao deslizar.
-- Abas de Prática não deslocam a tela. Escolha entre seis exercícios astrais antes de começar. Interface em dez idiomas. Mantenha a prática em andamento visível no modo picture-in-picture. O progresso dos downloads das práticas é exibido com clareza.
-- Pacotes de voz das práticas um terço menores. Resgate moedas todos os dias na loja de Hábitos.
+- Retrocesso, edição e restauração corrigidos. Fotos e Rádio mais acessíveis. Compre Dew com estrelas do Telegram.
+- Inicie práticas sem resíduos, alterne e retome sessões. Veja downloads e use picture-in-picture no Android.
+- Os timers de pausa reiniciam após uma ausência. Timers e moedas seguem o tema. Resgate moedas diárias em Hábitos.
 
 ## [2.1.63] - 2026-11-05
 

@@ -25,7 +25,7 @@ for platform in native web emscripten windows; do
         test -f "$out/date_time_linux.c"
     else
         test ! -f "$out/date_time_linux.c"
-        test -f "$out/time_parts.c"
+        test -f "$out/time_parts.h"
     fi
     if test "$platform" = windows; then
         # The Windows foreign calls use the CRT's 64-bit time entry points.

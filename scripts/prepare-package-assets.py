@@ -53,6 +53,7 @@ practice_patterns = (
     'sunsalutation/characters/*/*.png', 'sunsalutation/flat-edge.png',
     'sunsalutation/voice/**/*', 'sunsalutation/voice-male/**/*',
     'astral_projection/**/*', 'workout/**/*', 'taichi/**/*', 'guide/voice/**/*',
+    'shared/watercolor/*.bin', 'shared/watercolor/*.webp',
 )
 sources = {p: p.relative_to(ROOT).as_posix()
            for pattern in patterns for p in ROOT.glob(pattern) if p.is_file()}
@@ -74,7 +75,8 @@ for file, path in sorted(sources.items(), key=lambda source: source[1]):
         owner = 'practices'
     # Each practice's pictures ship only in its pack. Its banners ship with
     # Practices, whose tabs show every practice before it is downloaded.
-    if path.startswith('assets/practices/') and '/banner-' not in path:
+    if (path.startswith('assets/practices/') and '/banner-' not in path
+            and not path.startswith('assets/practices/shared/')):
         practice = path.split('/')[2]
         owner = 'practice-' + practice
         if '/voice/' in path:

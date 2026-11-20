@@ -3,6 +3,7 @@
 // the calls the host allows Habits. The host never composes the page.
 #import "session"
 #import "geometry"
+#import "drawing_props"
 #import "kryon/tree"
 #import "tree_draw"
 #import "paint_queue"
@@ -105,6 +106,15 @@ ShopTestCall :: (context: *void, module: *u8, function: *u8,
     return 0
 }
 
+// The theme's highlight the host sends: coins, and coins spent, take it.
+ShopTestHighlight :: () -> Color {
+    return Color.{110, 90, 200, 255}
+}
+
+SameRgb :: (a: Color, b: Color) -> bool {
+    return a.r == b.r && a.g == b.g && a.b == b.b
+}
+
 // Draws the shop with two rewards and the grid of symbols open, then the
 // dialog Buy opens; returns 0 when the package drew both through the host.
 CheckHabitShop :: () -> s32 {
@@ -119,7 +129,7 @@ CheckHabitShop :: () -> s32 {
         .halves = 20, .reward_count = 2, .activity_count = 2, .price = 5, .price_text = "5",
         .statistics = HabitsShopStatistics.{.purchase_count = 12, .spent_coins = 150,
             .week_count = 4, .month_count = 9, .last_date = 20260315},
-        .icon = 38, .icon_open = true}
+        .icon = 38, .icon_open = true, .highlight_color = ShopTestHighlight()}
     WidgetHostBegin(session, ShopTestAssets)
     AppsUiBegin(ShopTestCall, null)
     drawn := HabitsRun(HabitsMessage.{.action = HABITS_SHOP_VIEW})
@@ -131,8 +141,14 @@ CheckHabitShop :: () -> s32 {
     statistics_colors: u32 = 0
     spending_seen := false
     date_seen := false
+    coin_highlighted := false
+    coin_gold := false
     for index: cast(s32)0..painted - 1 {
         command := PendingPaintAt(session, index)
+        // Coins are icons rasterized into small rectangles in the theme's
+        // highlight, never the gold they once had in every theme.
+        if command.kind == 2 && SameRgb(command.color, ShopTestHighlight()) { coin_highlighted = true }
+        if SameRgb(command.color, Color.{226, 168, 48, 255}) { coin_gold = true }
         if command.value == "150" {
             spending_seen = true
         }
@@ -142,7 +158,7 @@ CheckHabitShop :: () -> s32 {
         if command.color.r == 63 && command.color.g == 137 && command.color.b == 216 {
             statistics_colors |= cast(u32)1
         }
-        if command.color.r == 196 && command.color.g == 141 && command.color.b == 39 {
+        if SameRgb(command.color, ShopTestHighlight()) {
             statistics_colors |= cast(u32)2
         }
         if command.color.r == 48 && command.color.g == 159 && command.color.b == 128 {
@@ -178,6 +194,10 @@ CheckHabitShop :: () -> s32 {
         print("Purchase statistics leaked into rewards\n")
         return 10
     }
+    if !coin_highlighted || coin_gold {
+        print("Coins: theme highlight %, fixed gold %\n", coin_highlighted, coin_gold)
+        return 14
+    }
     if RewardIconAsset(HABIT_ICON_SODA).count == 0 ||
         RewardIconAsset(REWARD_ICON_ENERGY_DRINK).count != 0 ||
         RewardIconShape(REWARD_ICON_ENERGY_DRINK).count == 0 ||
@@ -208,7 +228,7 @@ CheckHabitShop :: () -> s32 {
         if command.color.r == 63 && command.color.g == 137 && command.color.b == 216 {
             statistics_colors |= cast(u32)1
         }
-        if command.color.r == 196 && command.color.g == 141 && command.color.b == 39 {
+        if SameRgb(command.color, ShopTestHighlight()) {
             statistics_colors |= cast(u32)2
         }
         if command.color.r == 48 && command.color.g == 159 && command.color.b == 128 {

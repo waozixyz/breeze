@@ -111,36 +111,44 @@ def visible_tab(label, labels=TABS):
     return tabs[0] if tabs else None
 
 
+def show_tab(label, labels):
+    """Scroll the category strip until the whole touch target is visible."""
+    bar = driver.wait(role='tab_list')
+    for _ in range(len(labels) + 1):
+        button = visible_tab(label, labels)
+        if button:
+            return button
+        nodes = tab_nodes(labels)
+        visible = [node for node in nodes if node['visible']]
+        assert visible, (label, nodes, bar)
+        left = bar['visible_x'] + 12
+        right = bar['visible_x'] + bar['visible_width'] - 12
+        y = UiDriver.center(bar)[1]
+        first = visible[0]
+        target = next((node for node in nodes if node['label'] == label), None)
+        before_view = (target['x'] <= bar['visible_x'] if target else
+                       labels.index(label) < labels.index(first['label']))
+        start, end = (left, right) if before_view else (right, left)
+        driver.drag((start, y), (end, y), steps=8)
+        driver.wait_idle(frames=3)
+    raise AssertionError(('Category target is clipped or too small', label, tab_nodes(labels), bar))
+
+
 def select_tab(label, labels=TABS):
     """Show one tab's practices."""
-    tabs = [node for node in tab_nodes(labels) if node['label'] == label]
-    assert tabs, f'No {label} tab: ' + screen_text()
-    driver.press(key=tabs[0]['key'])
+    driver.press(key=show_tab(label, labels)['key'])
     driver.wait_idle(frames=3)
     assert selected_tab(labels) == label, home_tabs(labels)
 
 
-def category_art(labels=TABS):
-    """All four translated category buttons and their artwork fit at once."""
-    assert [node['label'] for node in tab_nodes(labels)] == labels, home_tabs(labels)
-    for slot, label in enumerate(labels):
-        button = visible_tab(label, labels)
-        assert button, ('Category target is clipped or too small', label, home_tabs(labels))
-        medallion = driver.wait(key=17510 + slot, role='image')
-        assert medallion['x'] >= button['x'] - 1, (button, medallion)
-        assert medallion['y'] >= button['y'] - 1, (button, medallion)
-        assert medallion['x'] + medallion['width'] <= button['x'] + button['width'] + 1, (button, medallion)
-        assert medallion['y'] + medallion['height'] <= button['y'] + button['height'] + 1, (button, medallion)
-        artwork = [medallion]
-        assert not driver.find(key=17520 + slot, role='text', visible=True)
-        for node in artwork:
-            assert node['width'] > 0 and node['height'] > 0, node
-            assert node['visible_width'] >= node['width'] - 1, node
-            assert node['visible_height'] >= node['height'] - 1, node
-    driver.wait(key=17470, role='image')
-    # The selected medallion replaces the old separate selection backplate.
-    chosen = labels.index(selected_tab(labels))
-    assert driver.wait(key=17480 + chosen, role='button')['selected']
+def category_controls(labels=TABS):
+    """Every translated tab has a full touch target in the scrolling strip."""
+    chosen = selected_tab(labels)
+    for label in labels:
+        assert show_tab(label, labels)['selected'] == (label == chosen)
+        indices = [labels.index(node['label']) for node in tab_nodes(labels)]
+        assert indices == sorted(set(indices)), home_tabs(labels)
+    show_tab(chosen, labels)
     assert 'Missing image' not in driver.labels(), screen_text()
 
 
@@ -198,8 +206,6 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
     sizes = {name: (ROOT / 'build/practice-content' / (name + '.zx')).stat().st_size
              for name in ('whm', 'meditation', 'sunsalutation')}
     cache = profile / 'packages'
-    sizes = {name: (ROOT / 'build/practice-content' / (name + '.zx')).stat().st_size
-             for name in ('whm', 'sunsalutation')}
     sun_mb = (sizes['sunsalutation'] + 512 * 1024) // (1024 * 1024)
     # A practice that comes with the app stays ready even when an older
     # version took it off Practice.
@@ -212,7 +218,7 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
         if tabs != [(label, label == 'Meditation') for label in TABS]:
             (output / 'tabs-failure-tree.json').write_text(json.dumps(driver.tree(), indent=2))
         assert tabs == [(label, label == 'Meditation') for label in TABS], (tabs, screen_text())
-        category_art()
+        category_controls()
         assert not visible_label('Manage practices'), screen_text()
         assert visible_label('Wim Hof'), screen_text()
         # Meditation pages through its four practices, all ready to start.
@@ -240,9 +246,19 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
         driver.wait(label='Start Practice', role='button')
         driver.wait(label='Customize', role='button')
         # A swipe past a tab's last practice goes on to the next tab.
-        title = driver.find(contains='Astral Projection', visible=True)[0]
-        x, y = UiDriver.center(title)
-        driver.drag((x + 120, y - 140), (x - 120, y - 140), steps=8)
+        tab_bar = driver.wait(role='tab_list')
+        title = driver.wait(contains='Astral Projection')
+        top = tab_bar['visible_y'] + tab_bar['visible_height']
+        assert title['visible_y'] > top, (tab_bar, title)
+        y = (top + title['visible_y']) / 2
+        left = tab_bar['visible_x'] + 36
+        right = tab_bar['visible_x'] + tab_bar['visible_width'] - 36
+        command('xdotool', 'mousemove', '--window', window, str(int(right)), str(int(y)),
+                'mousedown', '1', 'sleep', '.1')
+        for step in range(1, 9):
+            x = right + (left - right) * step / 8
+            command('xdotool', 'mousemove', '--window', window, str(int(x)), str(int(y)), 'sleep', '.03')
+        command('xdotool', 'mouseup', '1')
         driver.wait_idle(frames=3)
         driver.wait(contains='Sun Salutation')
         assert selected_tab() == 'Yoga', home_tabs()
@@ -269,8 +285,8 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
         value = database.execute('SELECT value FROM settings WHERE user_id=? AND key=?',
                                  (user, 'tai_chi_progress')).fetchone()[0]
         assert value.startswith('1'), 'Browsing practices changed saved practice progress'
-    # The compact layout keeps every category visible even with long Russian
-    # labels. Selecting a category also moves the jade selection artwork.
+    # Every category is reachable in the compact layout, including with
+    # long Russian labels.
     for language, width in [('en', 320), ('en', 360), ('ru', 320), ('ru', 360)]:
         with sqlite3.connect(profile / 'inbe.db') as database:
             database.execute('UPDATE settings SET value=? WHERE user_id=? AND key=?', (language, user, 'language'))
@@ -280,9 +296,9 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
         try:
             driver.wait(label=labels[0])
             assert selected_tab(labels) == labels[0], home_tabs(labels)
-            category_art(labels)
+            category_controls(labels)
             select_tab(labels[-1], labels)
-            category_art(labels)
+            category_controls(labels)
             driver.wait(contains='7-Minute Workout' if language == 'en' else '7-минутная тренировка')
         finally:
             stop(process)

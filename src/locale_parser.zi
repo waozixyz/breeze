@@ -102,8 +102,13 @@ LocaleFindText :: (catalog: string, key: string) -> LocaleTextResult {
             continue
         }
         if matching {
-            if value_start < 0 { value_start = line.start }
-            value_end = line.end
+            if value_start < 0 {
+                value_start = line.start
+                value_end = line.start
+            }
+            // Blank lines count only when text follows them, as for
+            // LocaleParseEntries.
+            if line.end > line.start { value_end = line.end }
         }
     }
     if matching {
@@ -191,6 +196,17 @@ LocaleCommitEntry :: (text: string, key_start: s32, key_end: s32,
     return state
 }
 
+// Blank lines before a separator only space out the catalog. A value never
+// ends with a line break, which a one-line title or button would draw.
+LocaleTrimBreaks :: (bytes: []u8, body_start: s32,
+    state: LocaleParseResult) -> LocaleParseResult {
+    trimmed: LocaleParseResult = state
+    while trimmed.byte_count > body_start && bytes[trimmed.byte_count - 1] == 10 {
+        trimmed.byte_count -= 1
+    }
+    return trimmed
+}
+
 // A new [key] before a --- separator discards the unfinished entry, matching
 // the catalog format. Duplicate keys keep their original slot and latest value.
 #program_export
@@ -215,6 +231,7 @@ LocaleParseEntries :: (text: string, entries: []LocaleEntrySpan,
         if line.end - line.start == 3 && text[line.start] == #char "-" &&
             text[line.start + 1] == #char "-" && text[line.start + 2] == #char "-" {
             if key_start >= 0 {
+                state = LocaleTrimBreaks(bytes, body_start, state)
                 state = LocaleCommitEntry(text, key_start, key_end,
                     body_start, entries, bytes, state)
                 if !state.complete { return state }
@@ -242,6 +259,7 @@ LocaleParseEntries :: (text: string, entries: []LocaleEntrySpan,
         }
     }
     if key_start >= 0 {
+        state = LocaleTrimBreaks(bytes, body_start, state)
         state = LocaleCommitEntry(text, key_start, key_end,
             body_start, entries, bytes, state)
     }

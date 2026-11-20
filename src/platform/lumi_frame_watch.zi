@@ -1,0 +1,63 @@
+#if #defined(LUMI_ANDROID_FRAME_WATCH) {
+    FrameWatch :: #import "android_frame_watch";
+    #import "c_string"
+    #import, file "../app/app_profile.zi";
+    log :: #system_library "log";
+    WriteWatchLog :: (priority: s32, tag: *u8, message: *u8) -> s32 #foreign log "__android_log_write";
+
+    LumiWatchFrameSetup :: 1;
+    LumiWatchInput :: 2;
+    LumiWatchAppDraw :: 3;
+    LumiWatchHistory :: 4;
+    LumiWatchComposer :: 5;
+    LumiWatchBundle :: 6;
+    LumiWatchInputPublish :: 7;
+    LumiWatchPresent :: 8;
+    LumiWatchEvents :: 9;
+
+    lumi_watch_armed: bool;
+
+    LumiWatchReport :: (phase: u32, elapsed_ms: u64, pc: usize, host_base: usize) {
+        name: string = "unknown"
+        if phase == LumiWatchFrameSetup { name = "frame-setup" }
+        else if phase == LumiWatchInput { name = "input-snapshot" }
+        else if phase == LumiWatchAppDraw { name = "app-draw" }
+        else if phase == LumiWatchHistory { name = "history-layout" }
+        else if phase == LumiWatchComposer { name = "composer-input" }
+        else if phase == LumiWatchBundle { name = "lumi-zx-frame" }
+        else if phase == LumiWatchInputPublish { name = "input-publish" }
+        else if phase == LumiWatchPresent { name = "frame-present" }
+        else if phase == LumiWatchEvents { name = "event-poll" }
+        tag: [16]u8
+        line: [144]u8
+        used: s32 = 0
+        if CopyCString("InbeLumiWatch", tag[:]) &&
+        ProfileAppend(line[:], *used, "Lumi frame stalled phase=") &&
+        ProfileAppend(line[:], *used, name) &&
+        ProfileAppend(line[:], *used, " elapsed_ms=") &&
+        ProfileAppendNumber(line[:], *used, elapsed_ms) &&
+        ProfileAppend(line[:], *used, " pc=") &&
+        ProfileAppendNumber(line[:], *used, cast(u64)pc) &&
+        ProfileAppend(line[:], *used, " host_base=") &&
+        ProfileAppendNumber(line[:], *used, cast(u64)host_base) {
+            unused WriteWatchLog(5, *tag[0], *line[0])
+        }
+    }
+
+    LumiWatchStart :: () { unused FrameWatch.Start(LumiWatchReport) }
+    LumiWatchStop :: () { FrameWatch.Stop() }
+
+    LumiWatchBegin :: () {
+        lumi_watch_armed = true
+        FrameWatch.Mark(LumiWatchEvents)
+    }
+
+    LumiWatchMark :: (phase: u32) {
+        if lumi_watch_armed { FrameWatch.Mark(phase) }
+    }
+
+    LumiWatchEnd :: () {
+        if lumi_watch_armed { FrameWatch.Mark(0) }
+        lumi_watch_armed = false
+    }
+}

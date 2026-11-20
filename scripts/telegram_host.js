@@ -3,6 +3,7 @@ addToLibrary({
   $TelegramHost: {
     next: 1,
     pending: null,
+    invoice: null,
     pinnedBridge: null,
     pinnedContext: null,
     pinnedInitData: null,
@@ -61,6 +62,46 @@ addToLibrary({
   telegram_current: function () {
     TelegramHost.pin();
     return TelegramHost.current() ? 1 : 0;
+  },
+  telegram_invoice_available__deps: ['$TelegramHost'],
+  telegram_invoice_available: function () {
+    TelegramHost.pin();
+    const bridge = TelegramHost.bridge();
+    return TelegramHost.current(bridge) && bridge.invoiceAvailable?.() ? 1 : 0;
+  },
+  telegram_invoice_start__deps: ['$TelegramHost', 'telegram_invoice_available'],
+  telegram_invoice_start: function (input, length) {
+    if (TelegramHost.invoice || !_telegram_invoice_available() ||
+        length < 1 || length > 256 || input < 0 || input + length > HEAPU8.length) return 0;
+    const bridge = TelegramHost.bridge();
+    // The callback only closes the sheet. The app queries the issuer for settlement.
+    const entry = {bridge, done: false};
+    TelegramHost.invoice = entry;
+    try {
+      const link = new TextDecoder('utf-8', {fatal: true}).decode(HEAPU8.subarray(input, input + length));
+      Promise.resolve(bridge.openInvoice(link)).then(
+        function () { entry.done = true; }, function () { entry.done = true; });
+    } catch (_) {
+      TelegramHost.invoice = null;
+      return 0;
+    }
+    return 1;
+  },
+  telegram_invoice_poll__deps: ['$TelegramHost'],
+  telegram_invoice_poll: function () {
+    const entry = TelegramHost.invoice;
+    if (!entry) return -1;
+    if (!TelegramHost.current(entry.bridge)) {
+      TelegramHost.invoice = null;
+      return -1;
+    }
+    if (!entry.done) return 0;
+    TelegramHost.invoice = null;
+    return 1;
+  },
+  telegram_invoice_cancel__deps: ['$TelegramHost'],
+  telegram_invoice_cancel: function () {
+    TelegramHost.invoice = null;
   },
   telegram_storage_start__deps: ['$TelegramHost'],
   telegram_storage_start: function (action, input, length, output, capacity) {

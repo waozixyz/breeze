@@ -19,7 +19,7 @@ mkdir -p "$generated"
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -I"$generated" \
     "$root/tests/lumi_narration_link_test.c" \
-    "$generated/app/lumi_guide.c" "$generated/audio_policy.c" \
+    "$generated/app/lumi_guide.c" "$generated/host_clock.c" "$generated/audio_policy.c" \
     "$generated/byte_text_linux.c" \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"

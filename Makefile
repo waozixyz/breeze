@@ -31,12 +31,12 @@ BUILD_DIR := build
 
 # Dependencies and the Ziran toolchain are pinned in ziran.lock and linked
 # under build/packages/<name>. Make refreshes the links before reading the rest
-# of this file whenever the manifest or lock changes. PACKAGE_FLAGS=--locked
+# of this file whenever the manifest, lock or local overrides change. PACKAGE_FLAGS=--locked
 # ignores ziran.local.toml overrides for release builds.
 PACKAGE_FLAGS ?=
 export PACKAGE_FLAGS
 PACKAGES_MK := $(BUILD_DIR)/packages.mk
-$(PACKAGES_MK): ziran.toml ziran.lock scripts/packages.sh
+$(PACKAGES_MK): ziran.toml ziran.lock $(wildcard ziran.local.toml) scripts/packages.sh
 	sh scripts/packages.sh $(PACKAGE_FLAGS)
 	printf 'PACKAGES_READY := 1\n' > $@
 ifneq ($(filter-out clean distclean,$(or $(MAKECMDGOALS),all)),)
@@ -429,7 +429,7 @@ INBE_BUNDLE := $(BUILD_DIR)/inbe.zx
 INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zx
 APP_SOURCES := $(shell find apps src/apps -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
 APP_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp assets/navigation assets/apps/icons 2>/dev/null)
-APP_RESOURCES += $(shell find -L $(PRACTICE_MEDIA) -type f -not -path '*/.git/*' 2>/dev/null) $(shell rg --files design/tai-chi/text 2>/dev/null) apps/practice/content.json design/tai-chi/narration.json design/tai-chi/narration-lines.json $(wildcard design/tai-chi/narration-receipt.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt design/sun-salutation/narration/text-female/*.txt) $(wildcard design/lumi-guide/*.json) $(wildcard design/astral-projection/*.json) scripts/practice_content.py scripts/practice_media.py scripts/tai_chi_preview.py apps/practice/course_access.zi scripts/generate-lumi-guide-narration.py
+APP_RESOURCES += $(shell find -L $(PRACTICE_MEDIA) -type f -not -path '*/.git/*' 2>/dev/null) $(shell rg --files design/tai-chi/text 2>/dev/null) apps/practice/content.json $(wildcard design/tai-chi/narration*.json design/workout/narration*.json design/narration/*.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt design/sun-salutation/narration/text-female/*.txt) $(wildcard design/lumi-guide/*.json) $(wildcard design/astral-projection/*.json) scripts/practice_content.py scripts/practice_media.py scripts/tai_chi_preview.py apps/practice/course_access.zi scripts/generate-lumi-guide-narration.py
 APP_RESOURCES += $(wildcard design/lumi-guide/text-female/*.txt)
 APP_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievement-locales/*.json)
 APP_RESOURCES += $(wildcard assets/*/sidebar.shape)
@@ -544,32 +544,14 @@ $(WEBP_A): ziran.lock $(KRYON_DIR)/cmake/WebP.cmake $(KRYON_DIR)/cmake/ImagePack
 	$(CMAKE) -S $(KRYON_DIR)/cmake/webp -B $(WEBP_BUILD_DIR) -DWEBP_DIR="$(abspath build/packages/libwebp)" $(IMAGE_PACKAGE_DIRS) -DCMAKE_BUILD_TYPE=Release
 	$(CMAKE) --build $(WEBP_BUILD_DIR) --target kryonwebp --parallel 2
 
-$(AVIF_A): ziran.lock $(KRYON_DIR)/cmake/AVIF.cmake $(KRYON_DIR)/cmake/ImagePackages.cmake $(KRYON_DIR)/cmake/avif/CMakeLists.txt $(wildcard build/packages/avif/native/*.cmake) | $(ZIRAN_BIN)
+$(AVIF_A) $(AOM_A) &: ziran.lock $(KRYON_DIR)/cmake/AVIF.cmake $(KRYON_DIR)/cmake/ImagePackages.cmake $(KRYON_DIR)/cmake/avif/CMakeLists.txt $(wildcard build/packages/avif/native/*.cmake) | $(ZIRAN_BIN)
 	$(CMAKE) -S $(KRYON_DIR)/cmake/avif -B $(AVIF_BUILD_DIR) -DAVIF_DIR="$(abspath build/packages/libavif)" -DAOM_DIR="$(abspath build/packages/libaom)" $(IMAGE_PACKAGE_DIRS) -DCMAKE_BUILD_TYPE=Release
 	$(CMAKE) --build $(AVIF_BUILD_DIR) --target avif_static aom --parallel 2
-	@test -f $@
+	@test -s "$(AVIF_A)" && test -s "$(AOM_A)"
+	@touch -c "$(AVIF_A)" "$(AOM_A)"
 
-$(AOM_A): $(AVIF_A)
-	@test -f $@
+include mk/native-desktop.mk
 
-# Kryon's desktop host and the codecs its raster and mixer link.
-DESKTOP_HOST_PKGS := sdl2 cairo freetype2 pangocairo fontconfig gio-2.0 x11
-DESKTOP_HOST_CFLAGS ?= $(shell pkg-config --cflags $(DESKTOP_HOST_PKGS) 2>/dev/null)
-DESKTOP_HOST_LDLIBS ?= $(shell pkg-config --libs $(DESKTOP_HOST_PKGS) 2>/dev/null)
-KRYON_NATIVE_BACKEND_DEPS := $(WEBP_A) $(AVIF_A) $(AOM_A) $(AUDIO_MP3_A) $(AUDIO_VORBIS_A)
-KRYON_NATIVE_BACKEND_LIBS := $(WEBP_A) $(AVIF_A) $(AOM_A) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS)
-KRYON_NATIVE_BACKEND_CFLAGS := $(DESKTOP_HOST_CFLAGS)
-KRYON_NATIVE_BACKEND_LDLIBS := $(DESKTOP_HOST_LDLIBS)
-ifneq ($(strip $(APP_GIO_LDLIBS)),)
-KRYON_NATIVE_BACKEND_CFLAGS += -DAPP_HAVE_GIO $(APP_GIO_CFLAGS)
-NATIVE_SYSTEM_LDLIBS += $(APP_GIO_LDLIBS)
-endif
-# Kryon decodes Ogg Opus narration with static libopus; Windows links its own
-# MinGW build (mk/windows.mk) and Apple has no native Opus provider yet.
-ifneq ($(NATIVE_PLATFORM),darwin)
-KRYON_NATIVE_BACKEND_DEPS += $(AUDIO_OPUS_A)
-NATIVE_SYSTEM_LDLIBS := $(AUDIO_OPUS_A) $(NATIVE_SYSTEM_LDLIBS)
-endif
 WEB_CACHE_BUSTER ?= $(shell if git diff --quiet --ignore-submodules HEAD -- 2>/dev/null; then git rev-parse --short HEAD 2>/dev/null; else date +%s; fi)
 WEB_CACHE_BUSTER := $(WEB_CACHE_BUSTER)
 WEB_TARGET := $(WEB_DIST_DIR)/index.html

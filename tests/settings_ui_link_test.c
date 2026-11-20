@@ -1,8 +1,6 @@
-#include "screens/settings/settings_ui.h"
+#include "settings_ui.h"
 #include "zir_string.h"
-#include "tree.h"
-#include "tree_input.h"
-#include "paint_queue.h"
+#include "settings_test_backend.h"
 #include "metrics.h"
 
 #include <assert.h>
@@ -67,6 +65,10 @@ void RasterTriangles(Slice points, Color color)
     (void)color;
     assert(0);
 }
+
+// The synthetic settings viewport contains no embedded raster assets.
+int32_t ImageWidth(String path) { (void)path; return 0; }
+int32_t ImageHeight(String path) { (void)path; return 0; }
 
 int32_t MeasureGlyphWidth(String value, int32_t font, String typeface)
 {

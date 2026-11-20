@@ -103,24 +103,25 @@ with tempfile.TemporaryDirectory(prefix='inbe-emphasis-') as directory:
                  'Feedback approval card was not saved')
         pending_sql = ("SELECT value FROM settings WHERE key LIKE 'cell.feedback.pending.%' "
                        "AND json_extract(value,'$.id') IS NOT NULL")
-        assert query(profile, pending_sql) == [], 'Feedback queued before Yes approval'
+        assert query(profile, pending_sql) == [], 'Feedback queued before Send approval'
 
         def card_answer(label):
             """The approval card's answer button, whatever its label's spacing."""
             return [node for node in driver.find(role='button', visible=True, enabled=True)
                     if node['label'].strip() == label]
 
-        wait_for(lambda: card_answer('Yes'), 'The feedback card offers no Yes')
-        driver.press(key=card_answer('Yes')[0]['key'])
+        wait_for(lambda: card_answer('Send'), 'The feedback card offers no Send')
+        assert card_answer('Cancel'), 'The feedback card offers no Cancel'
+        driver.press(key=card_answer('Send')[0]['key'])
         wait_for(lambda: len(query(profile, pending_sql)) == 1,
                  'Approved feedback was not saved in the outbox')
         reports = [json.loads(row[0]) for row in query(profile, pending_sql)]
         assert len(reports) == 1 and reports[0]['message'] == suggestion
         assert reports[0]['title'] == suggestion
         # Answered, the card offers neither answer again.
-        wait_for(lambda: not card_answer('Yes') and not card_answer('No'),
-                 'The answered feedback card still offers Yes or No')
-        # The confirmation card stays the whole exchange: Yes adds no message.
+        wait_for(lambda: not card_answer('Send') and not card_answer('Cancel'),
+                 'The answered feedback card still offers Send or Cancel')
+        # The confirmation card stays the whole exchange after Send.
         time.sleep(1.0)
         assert chat(profile)[-1].get('kind', 0) == 3, 'A message followed the feedback card: %r' % chat(profile)[-2:]
     with application(profile, 'emphasis-restart'):

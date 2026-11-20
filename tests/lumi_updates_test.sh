@@ -10,7 +10,7 @@ flock 9
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 export YUE_DESKTOP_RECOVERY=0
 mkdir -p "$work/generated"
-"$compiler" build --project --locked --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
+"$compiler" build --project ${PACKAGE_FLAGS:---offline} --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --entry lumi_updates_behavior:Check -o "$work/generated" \
     "$root/tests/lumi_updates_behavior.zi" "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'

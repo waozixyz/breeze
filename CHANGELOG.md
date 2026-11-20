@@ -2,13 +2,9 @@
 
 ## [Unreleased]
 
-- Refresh the open Diary day when edits sync from another device.
-
-- Use the private Harmony Lumi chat from the owner's Android debug build.
-
-- Backspace and text corrections work again; recover unfinished practices and backups, add photos reliably and reset break timers after time away.
-- Start practices without navigation leftovers; switch practices smoothly, pick an astral exercise and claim daily coins; account sync is now called Mesh. Keep an active practice visible in picture-in-picture. Practice downloads show clear progress.
-- Read Tao Te Ching art on its own page; find Photos and Radio in Apps, with clearer feedback and appearance controls.
+- Fix Backspace, editing and backup restores. Find Photos and Radio faster. Buy Dew with Telegram Stars.
+- Start practices cleanly, switch smoothly, resume sessions, and see download progress and Android picture-in-picture.
+- Reset break timers after time away, match coins and timers to the theme, and claim daily coins in Habits.
 
 ## [2.1.63] - 2026-11-05
 

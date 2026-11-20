@@ -30,6 +30,7 @@ ENV = os.environ.copy()
 driver = None
 # Lumi's command list and chart bars, from apps/lumi/lumi_view.zi.
 COMMAND_LIST_KEY = 360001
+TYPING_LABEL_KEY = 300382
 CHART_BAR_KEYS = range(310000, 330000)
 
 
@@ -81,6 +82,13 @@ def application(profile, label, standalone=False, recommended=False):
         except BaseException:
             if app.poll() is None:
                 save_tree(label)
+                with contextlib.suppress(Exception):
+                    snapshot = state(window)
+                    (OUTPUT / f"failure-{label}-state.json").write_text(
+                        json.dumps({key: snapshot[key] for key in
+                                    ("settings", "screen", "practice", "practice_running", "paused")
+                                    if key in snapshot}, indent=2) + "\n"
+                    )
             raise
         finally:
             if app.poll() is None:
@@ -107,6 +115,13 @@ def wait_for(predicate, description):
 def state(window):
     prop = command("xprop", "-id", window, "_HARMONY_APP_STATE")
     return json.loads(ast.literal_eval(prop.split(" = ", 1)[1]))
+
+
+def end_practice(window):
+    """End this fixture's practice before closing its app and reopening the profile."""
+    driver.press(label="Close", role="button")
+    driver.press(label="Exit", role="button")
+    wait_for(lambda: not state(window)["practice_running"], "The fixture's practice did not end")
 
 
 def chat(profile):
@@ -215,6 +230,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
             "main_tab": "4", "language": "en", "language_setup_done": "1",
             "apps_setup_done": "1", "lumi_introduced": "1", "package_updates_allowed": "0",
             "tutorial_seen": "1", "habits_guide_seen": "1", "lumi_guides_seen": "127",
+            "voice_narration_enabled": "0", "guide_narration_enabled": "0",
             # Switched offline, Lumi opens on its chat rather than its terms.
             "lumi_online": "0",
         }.items():
@@ -371,9 +387,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         assert re.fullmatch(r"\*\*\d{2}:\d{2}\*\*\nA calm morning\nThen a walk"
                             r"\n\n\*\*\d{2}:\d{2}\*\*\nAnother thought\nA second line", diary_text)
         send(window, profile, "theme forest")
-        assert state(window)['settings']['theme'] == 'forest'
+        wait_for(lambda: state(window)['settings']['theme'] == 'forest',
+                 "The reported theme did not become forest")
         send(window, profile, "/dark")
-        assert state(window)['settings']['theme_mode'] == 2
+        wait_for(lambda: state(window)['settings']['theme_mode'] == 2,
+                 "The reported theme mode did not become dark")
         assert query(profile, "SELECT value FROM settings WHERE key='theme'") == [('2',)]
         # A phone-wide window still fits the chat and its draft.
         command("xdotool", "windowsize", window, "390", "720")
@@ -420,6 +438,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         breath = state(window)["breath"]
         wait_for(lambda: state(window)["breath"] > breath, "WHM did not advance")
         assert state(window)["screen"] == 1 and not state(window)["paused"]
+        end_practice(window)
     # Without a practice on this device Lumi asks first: no drops the offer,
     # yes shows it in Practice to install, and nothing starts either way.
     with sqlite3.connect(profile / "inbe.db") as db:
@@ -428,11 +447,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
         send(window, profile, "start sun salutation")
         offer = chat(profile)[-1]["text"]
         assert offer.startswith("Sun Salutation") and offer.endswith("Download it now?"), offer
-        send(window, profile, "no")
-        assert chat(profile)[-1]["text"] == "Cancelled."
-        # Tai Chi is paid: without the account's unlock Lumi offers to unlock it.
-        send(window, profile, "start tai chi")
-        assert chat(profile)[-1]["text"] == "Tai Chi is unlocked with Dew. Unlock it now?", chat(profile)[-1]
         send(window, profile, "no")
         assert chat(profile)[-1]["text"] == "Cancelled."
         send(window, profile, "start sun salutation")
@@ -464,6 +478,24 @@ with tempfile.TemporaryDirectory(prefix="inbe-lumi-ui-") as directory:
             running = state(window)
             assert running["practice_running"] and running["practice"] == practice_id, running
             assert not state(window)["paused"]
+            end_practice(window)
+    with sqlite3.connect(profile / "inbe.db") as db:
+        db.execute("UPDATE settings SET value='4' WHERE key='main_tab'")
+    with application(profile, "tai-chi-preview", recommended=True) as window:
+        # Lumi opens Tai Chi's course chooser, just like Start Practice.
+        # The shipped public basics start without buying the full course.
+        send(window, profile, "start tai chi")
+        heading = driver.wait(label="Posture and breathing", role="heading")
+        driver.wait(contains="Free · ", role="text")
+        cards = [node for node in driver.tree()
+                 if node["kind"] == "button" and node["visible"] and node["interactive"]
+                 and not node["label"] and node["y"] > heading["y"] and node["height"] > 150]
+        assert cards, "Tai Chi did not offer its free basics"
+        driver.press(key=min(cards, key=lambda node: (node["y"], node["x"]))["key"])
+        wait_for(lambda: state(window)["practice_running"] and state(window)["practice"] == 4,
+                 "Lumi did not start the free Tai Chi preview")
+        assert not state(window)["paused"]
+        end_practice(window)
     with sqlite3.connect(profile / "inbe.db") as db:
         for key, value in {"enabled_apps": "16", "app_used_habits": "0", "app_used_practices": "0",
                            "app_used_leaderboard": "0", "main_tab": "4"}.items():
@@ -561,8 +593,13 @@ def online_composer_test():
                     start_draft("Keep this unfinished draft 茶")
                     wait_for(lambda: len(chat(profile)) == baseline + 3, "Rapid inputs were not saved immediately")
                     assert len(requests) == 1, "Lumi started overlapping requests"
+                    time.sleep(1.3)
+                    assert not driver.find(key=TYPING_LABEL_KEY, visible=True), "Lumi typed while the server was silent"
                     release.set()
+                    driver.wait(key=TYPING_LABEL_KEY)
+                    assert len(chat(profile)) == baseline + 3, "The answer appeared before the typing precursor"
                     wait_for(lambda: len(chat(profile)) == baseline + 6, "Queued questions did not receive replies")
+                    driver.wait_gone(key=TYPING_LABEL_KEY)
                     assert draft() == "Keep this unfinished draft 茶", "A late reply overwrote the current draft"
                     assert [row["text"] for row in chat(profile)[baseline:baseline + 3]] == [
                         "first-online-question", "second-online-question", "third-online-question"]
@@ -592,7 +629,8 @@ def online_composer_test():
 
 
 online_composer_test()
-result["checked"].extend(["rapid online sends", "preceding conversation context", "draft survives late replies",
+result["checked"].extend(["rapid online sends", "server-confirmed typing precursor", "preceding conversation context",
+                          "draft survives late replies",
                           "report Send and Cancel", "queued chat restart persistence"])
 (OUTPUT / "result.json").write_text(json.dumps(result, indent=2) + "\n")
 print("Lumi UI: chat, tools, autocomplete, rapid online sends, draft preservation, report Send/Cancel and persistence passed")

@@ -3,6 +3,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/packages/ziran/build/bin"}
 work="$root/build/app-click-block-test"
+rm -rf "$work/generated"
 mkdir -p "$work/generated"
 "$bin/zi2c" --no-main --define PLATFORM_DESKTOP --root "$root/tests" \
     --module-path "$root/build/packages/kryon/src/ui" \

@@ -49,9 +49,15 @@ LumiOnlineInput :: struct {
 }
 lumi_online_inputs: Vec(LumiOnlineInput);
 lumi_online_queued: bool;
-// A message sent this frame is drawn, with Lumi's typing dots, before its
-// request is prepared, so Enter shows it at once.
+// Draw the submitted message before preparing its first request.
 lumi_online_fresh: bool;
+// Only a completed reply can animate. Keep its turn active until the text
+// has been shown so subsequent submissions still follow it in order.
+LUMI_REPLY_LEAD_IN :: 0.65;
+LUMI_REPLY_DRAW_TIMEOUT :: 1.5;
+lumi_online_reply: string;
+lumi_online_reveal_at: float64;
+lumi_online_typing_drawn: bool;
 lumi_online_stage: s32;
 lumi_online_round: s32;
 lumi_feedback_retry: s64;
@@ -95,7 +101,19 @@ LumiOnlineWaiting :: () -> bool {
     if StoredAccountMode() == AccountModeDelegate {
         return false
     }
-    return lumi_online_queued || lumi_online_stage == 1 || lumi_online_stage == LUMI_STAGE_PROVIDER
+    return lumi_online_queued || lumi_online_stage == 1 || lumi_online_stage == LUMI_STAGE_PROVIDER ||
+        LumiOnlineTyping()
+}
+
+LumiOnlineTyping :: () -> bool {
+    return lumi_online_reply.count > 0
+}
+
+LumiOnlineTypingDrawn :: (now: float64) {
+    if LumiOnlineTyping() && !lumi_online_typing_drawn {
+        lumi_online_typing_drawn = true
+        lumi_online_reveal_at = now + LUMI_REPLY_LEAD_IN
+    }
 }
 
 LumiOnlineClearTools :: () {
@@ -108,6 +126,8 @@ LumiOnlineClearTools :: () {
 }
 
 LumiOnlineClearTurn :: () {
+    PackageFree(lumi_online_reply)
+    lumi_online_reply = ""
     PackageFree(lumi_online_messages)
     lumi_online_messages = ""
     LumiOnlineClearTools()
@@ -567,7 +587,16 @@ LumiAppendRows :: (reply: string, developer: bool, quote: string, id: string, de
     return true
 }
 
-LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
+LumiOnlineDeliverAnswer :: (text: string) {
+    LumiOnlineAppend(text)
+    if lumi_telegram_online.id > 0 {
+        LumiTelegramSaveReply(lumi_telegram_online, text)
+        lumi_telegram_online = .{}
+    }
+    LumiOnlineRemember("assistant", text)
+}
+
+LumiOnlineAnswer :: (app: *InnerBreeze, pace_reply: bool, now: float64) -> bool {
     if StoredAccountMode() == AccountModeDelegate {
         return false
     }
@@ -585,16 +614,19 @@ LumiOnlineAnswer :: (app: *InnerBreeze) -> bool {
         decoded := ReadStringValue(document, FieldAt(document, at, "content"),
             ifx lumi_online_provider_turn then cast(s32)lumi_online_response.count - 1 else 4096)
         text := BuilderFinish(decoded.value)
-        defer { PackageFree(text) }
         if !decoded.valid || text.count == 0 {
+            PackageFree(text)
             return false
         }
-        LumiOnlineAppend(text)
-        if lumi_telegram_online.id > 0 {
-            LumiTelegramSaveReply(lumi_telegram_online, text)
-            lumi_telegram_online = .{}
+        if pace_reply {
+            lumi_online_reply = text
+            lumi_online_typing_drawn = false
+            // A covered screen or a failed draw must not hold the turn open.
+            lumi_online_reveal_at = now + LUMI_REPLY_DRAW_TIMEOUT
+        } else {
+            LumiOnlineDeliverAnswer(text)
+            PackageFree(text)
         }
-        LumiOnlineRemember("assistant", text)
         return true
     }
     if !LumiToolRoundAllowed(lumi_online_round, calls, lumi_tool_count) {
@@ -792,11 +824,12 @@ LumiFeedbackReplies :: () {
 
 // Ends a conversation turn: the answer or a notice, then the actions the
 // tools asked for. Another round may already be queued.
-LumiOnlineFinishTurn :: (app: *InnerBreeze, success: bool, status: s32) {
+LumiOnlineFinishTurn :: (app: *InnerBreeze, success: bool, status: s32,
+    pace_reply: bool, now: float64) {
     first := ifx lumi_telegram_online.id > 0 then LumiStoreCount() else 0
     lumi_pending_route = -1
     lumi_pending_practice = -1
-    if !success || !LumiOnlineAnswer(app) {
+    if !success || !LumiOnlineAnswer(app, pace_reply, now) {
         notice := "lumi_online_unavailable"
         if status == 429 && !lumi_online_provider_turn {
             notice = "lumi_online_limit"
@@ -852,7 +885,7 @@ LumiOnlineEnforce :: () {
     }
 }
 
-app_lumi_pump :: (app: *InnerBreeze) {
+app_lumi_pump :: (app: *InnerBreeze, pace_reply: bool = false, frame_now: float64 = 0.0) {
     if StoredAccountMode() == AccountModeDelegate {
         LumiOnlineCancel()
         return
@@ -869,6 +902,18 @@ app_lumi_pump :: (app: *InnerBreeze) {
         return
     }
     LumiOnlineEnforce()
+    if LumiOnlineTyping() {
+        if pace_reply && frame_now < lumi_online_reveal_at {
+            return
+        }
+        reply := lumi_online_reply
+        lumi_online_reply = ""
+        LumiOnlineDeliverAnswer(reply)
+        PackageFree(reply)
+        LumiOnlineNextTurn()
+        unused LumiStoreSave()
+        return
+    }
     if lumi_online_stage == LUMI_STAGE_PROVIDER {
         transport := NetworkTransport(*lumi_provider_transfer)
         status: s32
@@ -883,7 +928,8 @@ app_lumi_pump :: (app: *InnerBreeze) {
         }
         lumi_online_stage = 0
         lumi_provider_status = status
-        LumiOnlineFinishTurn(app, polled == 1 && status >= 200 && status < 300, status)
+        LumiOnlineFinishTurn(app, polled == 1 && status >= 200 && status < 300,
+            status, pace_reply, frame_now)
         return
     }
     if lumi_online_operation.active {
@@ -902,7 +948,7 @@ app_lumi_pump :: (app: *InnerBreeze) {
         success := lumi_online_operation.result == cast(s32)AuthResult.AUTH_OK
         lumi_online_session = lumi_online_operation.session
         if stage == 1 {
-            LumiOnlineFinishTurn(app, success, lumi_online_operation.request.status)
+            LumiOnlineFinishTurn(app, success, lumi_online_operation.request.status, pace_reply, frame_now)
         } else if stage == 2 {
             id := TextUntilNul(lumi_feedback_id[:])
             confirmed := success && LumiFeedbackReceiptMatches(
@@ -929,7 +975,7 @@ app_lumi_pump :: (app: *InnerBreeze) {
             }
         }
     }
-    if lumi_online_stage != 0 {
+    if lumi_online_stage != 0 || LumiOnlineTyping() {
         return
     }
     if lumi_online_queued {

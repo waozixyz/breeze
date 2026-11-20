@@ -3,12 +3,142 @@ import fs from "node:fs";
 import vm from "node:vm";
 
 const workerSource = fs.readFileSync("packaging/chrome-web-store/service_worker.js", "utf8");
+const appSource = fs.readFileSync("packaging/chrome-web-store/extension_app.js", "utf8");
+
+function appPage() {
+  const status = { textContent: "Downloading..." };
+  const document = Object.assign(new EventTarget(), {
+    hidden: true,
+    hasFocus: () => state.focused,
+    querySelector: () => status,
+  });
+  const state = { focused: false, busy: false, breaksEnabled: false, selected: true, loads: 0, reloads: 0, saves: 0, discards: 0 };
+  let now = 0;
+  let timer;
+  let finishSave;
+  const window = Object.assign(new EventTarget(), {
+    __inbeLoadApp: path => {
+      assert.equal(path, "index.js");
+      state.loads++;
+    },
+  });
+  const Module = {
+    __inbeRuntimeReady: true,
+    __inbeStorageMounted: true,
+    __inbeStorageLastOk: true,
+    Asyncify: { state: 0 },
+    __inbeFlushStorageSync: () => {
+      state.saves++;
+      return new Promise(resolve => { finishSave = resolve; });
+    },
+  };
+  vm.runInNewContext(appSource, {
+    document, window, Module, console,
+    chrome: { tabs: {
+      getCurrent: async () => ({ id: 4, active: state.selected }),
+      discard: async id => {
+        assert.equal(id, 4);
+        state.discards++;
+        return { id, discarded: true };
+      },
+    } },
+    extensionCallExport: name => Number(name === "app_web_extension_breaks_enabled" ? state.breaksEnabled : !state.busy),
+    location: { reload: () => state.reloads++ },
+    performance: { now: () => now },
+    setTimeout: (callback, delay) => { timer = { callback, at: now + delay }; },
+    clearTimeout: () => { timer = undefined; },
+  });
+  return {
+    state, Module, status,
+    focus(focused, hidden = !focused) {
+      state.focused = focused;
+      document.hidden = hidden;
+      document.dispatchEvent(new Event("visibilitychange"));
+      window.dispatchEvent(new Event(focused ? "focus" : "blur"));
+    },
+    advance(ms) {
+      now += ms;
+      if (!timer || timer.at > now) return;
+      const { callback } = timer;
+      timer = undefined;
+      return callback();
+    },
+    retry: window.__inbeTrySuspendExtension,
+    finishSave: ok => finishSave(ok),
+  };
+}
+
+{
+  const page = appPage();
+  assert.equal(page.state.loads, 0, "a restored background tab stays lightweight");
+  assert.equal(page.status.textContent, "");
+  page.focus(true);
+  assert.equal(page.state.loads, 1, "focus starts the runtime once");
+  assert.equal(page.status.textContent, "Downloading...");
+
+  page.state.busy = true;
+  page.focus(false);
+  page.advance(19_999);
+  assert.equal(page.state.saves, 0);
+  await page.advance(1);
+  assert.equal(page.state.saves, 0, "a busy runtime stays running");
+  page.state.busy = false;
+  const interrupted = page.retry();
+  assert.equal(page.state.saves, 1);
+  assert.equal(page.state.reloads, 0, "storage must finish first");
+  page.focus(true);
+  page.focus(false);
+  page.finishSave(true);
+  await interrupted;
+  assert.equal(page.state.reloads, 0, "returning to the app cancels the old reload");
+
+  const failed = page.advance(20_000);
+  page.finishSave(false);
+  await failed;
+  await page.retry();
+  assert.equal(page.state.saves, 2, "an unsuccessful save keeps the runtime awake");
+  assert.equal(page.state.reloads, 0);
+
+  page.focus(true);
+  page.state.breaksEnabled = true;
+  page.focus(false, false);
+  await page.advance(20_000);
+  assert.equal(page.state.saves, 2, "a visible break timer stays running while the window is blurred");
+  page.focus(false);
+  page.Module.__inbeStorageLastOk = false;
+  await page.retry();
+  assert.equal(page.state.saves, 2, "failed initial storage load holds the runtime open");
+  page.Module.__inbeStorageLastOk = true;
+  page.Module.Asyncify.state = 2;
+  await page.retry();
+  assert.equal(page.state.saves, 2, "an asynchronous WebAssembly call keeps the runtime awake");
+  page.Module.Asyncify.state = 0;
+  const saved = page.retry();
+  page.finishSave(true);
+  await saved;
+  assert.equal(page.state.reloads, 1, "a selected tab reloads into the lightweight page after saving");
+  assert.equal(page.state.loads, 1, "focus changes do not duplicate the active runtime");
+}
+
+{
+  const page = appPage();
+  page.focus(true);
+  page.state.selected = false;
+  page.focus(false);
+  const saved = page.advance(20_000);
+  page.finishSave(true);
+  await saved;
+  assert.equal(page.state.discards, 1, "Chromium unloads a saved background tab");
+  assert.equal(page.state.reloads, 0, "the browser reloads the discarded tab on activation");
+}
+
 const storage = {};
 const events = {};
 const notifications = [];
 const tabs = [];
 const alarms = [];
 let idleState = "active";
+let nextTabId = 1;
 
 function event(name) {
   events[name] = [];
@@ -89,8 +219,20 @@ const chrome = {
     onClicked: event("contextMenus.onClicked"),
   },
   tabs: {
-    create(tab) {
+    async query({ currentWindow }) {
+      assert.equal(currentWindow, true);
+      return tabs.slice();
+    },
+    async create({ url }) {
+      const tab = { id: nextTabId++, pendingUrl: url, active: true };
       tabs.push(tab);
+      return tab;
+    },
+    async update(id, changes) {
+      const tab = tabs.find((candidate) => candidate.id === id);
+      assert.ok(tab, "cannot update a missing tab");
+      Object.assign(tab, changes);
+      return tab;
     },
   },
 };
@@ -121,10 +263,28 @@ assert.equal(normalized.timers[0].limitS, 10);
 assert.equal(normalized.timers[0].showSkip, false);
 assert.equal(normalized.timers[1].limitS, 2700);
 
-events["runtime.onInstalled"][0]({ reason: "install" });
-await new Promise((resolve) => setImmediate(resolve));
+await events["runtime.onInstalled"][0]({ reason: "install" });
 assert.ok(chrome.contextMenus.items.some((item) => item.id === "break-rest-now"));
-assert.ok(tabs.some((tab) => tab.url === "chrome-extension://inbe/index.html"));
+assert.equal(tabs.length, 0, "install does not load the app runtime");
+
+const open = events["action.onClicked"][0];
+await Promise.all([open(), open()]);
+assert.equal(tabs.length, 1, "concurrent opens share one app tab");
+const appTab = tabs[0];
+assert.equal(appTab.pendingUrl, "chrome-extension://inbe/index.html");
+appTab.active = false;
+await open();
+assert.equal(tabs.length, 1, "a pending navigation already owns the app tab");
+assert.equal(appTab.active, true);
+appTab.url = appTab.pendingUrl;
+delete appTab.pendingUrl;
+appTab.active = false;
+await open();
+assert.equal(tabs.length, 1, "a loaded app tab is reused");
+assert.equal(appTab.active, true);
+tabs.length = 0;
+await open();
+assert.equal(tabs.length, 1, "a closed tab can be opened again");
 
 await api.requestBreakNow(1);
 assert.equal(storage.inbeBreakConfig.enabled, true);
@@ -185,9 +345,11 @@ await api.tickBreaks(61000);
 assert.equal(storage.inbeBreakState.timers[0].activeS, 0, "natural idle break resets timer");
 
 events["notifications.onClicked"][0]("inbe-break-1");
-assert.ok(tabs.some((tab) => tab.url.endsWith("?inbe_launch=break-settings")));
+await new Promise((resolve) => setImmediate(resolve));
+assert.ok(tabs.some((tab) => tab.pendingUrl?.endsWith("?inbe_launch=break-settings")));
 
 events["contextMenus.onClicked"][0]({ menuItemId: "habits" });
-assert.ok(tabs.some((tab) => tab.url.endsWith("?inbe_launch=habits")));
+await new Promise((resolve) => setImmediate(resolve));
+assert.ok(tabs.some((tab) => tab.pendingUrl?.endsWith("?inbe_launch=habits")));
 
 console.log("Chrome extension break service worker tests passed");

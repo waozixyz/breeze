@@ -20,7 +20,7 @@ output = root / "build/leaderboard-ui-test"
 output.mkdir(parents=True, exist_ok=True)
 WIDTH, HEIGHT = 390, 844
 LEADERBOARD_ROUTE = 9
-RANKED = re.compile(r"(\d+)\. @(\w+)$")
+PLAYER = re.compile(r"@(\w+)$")
 PRACTICES = {"Wim Hof Breathing", "Meditation", "Sun Salutation", "Breathing Patterns",
              "Tai Chi", "Astral Projection", "7-Minute Workout"}
 # A private command folder, so concurrent runs never answer each other.
@@ -37,12 +37,17 @@ def rows():
     nodes = [node for node in driver.tree() if node["visible"]]
     ranked = []
     for node in nodes:
-        match = RANKED.match(node["label"])
-        if match:
-            values = [cell["label"] for cell in sorted(nodes, key=lambda cell: cell["x"])
-                      if cell["parent"] == node["parent"] and cell["y"] == node["y"]
-                      and cell["x"] > node["x"] and cell["kind"] == "text"]
-            ranked.append((node["y"], int(match.group(1)), match.group(2), values))
+        match = PLAYER.fullmatch(node["label"])
+        if not match:
+            continue
+        cells = sorted((cell for cell in nodes if cell["parent"] == node["parent"]
+                        and cell["y"] == node["y"] and cell["kind"] == "text"),
+                       key=lambda cell: cell["x"])
+        ranks = [int(cell["label"]) for cell in cells
+                 if cell["x"] < node["x"] and cell["label"].isdigit()]
+        assert len(ranks) == 1, (node["label"], ranks)
+        values = [cell["label"] for cell in cells if cell["x"] > node["x"]]
+        ranked.append((node["y"], ranks[0], match.group(1), values))
     ranked.sort()
     assert [rank for _, rank, _, _ in ranked] == list(range(1, len(ranked) + 1)), \
         f"ranks are out of order: {ranked}"
@@ -104,7 +109,7 @@ def open_leaderboard():
         driver.pointer(WIDTH // 2, HEIGHT // 2, wheel=-3)
         driver.wait_idle(frames=2, timeout=2)
     driver.press(label="Leaderboard", role="button")
-    driver.wait(label="Leaderboard", role="text")
+    driver.wait(label="Leaderboard", role="title_bar")
 
 
 def stop(process):
@@ -216,7 +221,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-leaderboard-") as directory:
         streak = board(["maple", "river", "cedar"])
         assert [name for name, _ in streak] == ["maple", "river", "cedar"], f"streak order: {streak}"
         assert dict(streak)["cedar"][0] == "0", f"a friend without results is not at zero: {streak}"
-        choose("Avg hold")
+        driver.press(label="Avg hold", role="button")
         average = board(["river", "maple", "cedar"])
         assert [name for name, _ in average] == ["river", "maple", "cedar"], f"average hold order: {average}"
         choose("Meditation")

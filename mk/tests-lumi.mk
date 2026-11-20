@@ -6,6 +6,20 @@ lumi-updates-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_
 	python3 tests/release_notes_test.py
 	sh tests/lumi_updates_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
+# Lumi's mascot faces the chat through a mirrored warp, which every host
+# draws; a negative source width failed the desktop host's frames.
+.PHONY: lumi-mascot-test
+test: lumi-mascot-test
+lumi-mascot-test: $(ZIRAN_BIN)
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY $(ZIRAN_BIN) build --target=c --project --offline \
+		$(PACKAGE_FLAGS) --root $(CURDIR) -o $(BUILD_DIR)/lumi-mascot-test/c \
+		$(CURDIR)/tests/lumi_mascot_behavior.zi
+	@$(CC) -std=c11 -O2 -ffunction-sections -fdata-sections -Wl,--gc-sections \
+		-I$(BUILD_DIR)/lumi-mascot-test/c $$(find $(BUILD_DIR)/lumi-mascot-test/c -name '*.c') \
+		-lm -o $(BUILD_DIR)/lumi-mascot-test/test
+	@$(BUILD_DIR)/lumi-mascot-test/test
+	@echo 'Lumi faces the chat through a mirrored warp the desktop host draws'
+
 .PHONY: lumi-test
 lumi-test: apps
 	sh tests/lumi_engine_test.sh
@@ -72,8 +86,8 @@ lumi-telegram-input-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGA
 	@AUDIO_CODECS_BUILD_DIR="$(abspath $(AUDIO_CODECS_BUILD_DIR))" sh tests/lumi_telegram_input_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 .PHONY: lumi-feedback-delivery-test
-lumi-feedback-delivery-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
-	@sh tests/lumi_feedback_delivery_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+lumi-feedback-delivery-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(AUDIO_OPUS_A) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS) | build-laws
+	@AUDIO_CODECS_BUILD_DIR="$(abspath $(AUDIO_CODECS_BUILD_DIR))" sh tests/lumi_feedback_delivery_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 # Offline and before the agreement Lumi sends nothing; an own provider gets
 # its key only in its Authorization header.

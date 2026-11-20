@@ -31,20 +31,26 @@ EntityTelegramAnswer :: (request: string) -> string {
         action := TextUntilNul(operation[:])
         if action == "connect" {
             if storage_has_sync_account() == 0 || storage_get_setting_text("sync_private_key").count == 0 { return "account" }
-            if LumiTelegramBusy() { return "rejected" }
-            if lumi_telegram_connection.linked { unused LumiTelegramOpen() }
-            else if LumiNodeTrafficAllowed() { LumiTelegramLink() }
-            else { return "rejected" }
+            if LumiTelegramBusy() || !LumiNodeTrafficAllowed() { return "rejected" }
+            if lumi_telegram_connection.linked {
+                if LumiAuthorizationCanRequest() {
+                    if !LumiAuthorizationRequest() { return "rejected" }
+                } else {
+                    if ReadStringText(request, FieldAt(request, 0, "request_id"), requested_id[:]) != 32 ||
+                        TextUntilNul(requested_id[:]) != TextUntilNul(lumi_authorization_pending.request_id[:]) ||
+                        !LumiTelegramOpenAuthorization() { return "rejected" }
+                }
+            } else { LumiTelegramLink() }
         } else if action == "disconnect" {
             if LumiTelegramBusy() || !lumi_telegram_connection.linked { return "rejected" }
             LumiTelegramDisconnect()
-        } else if action == "approve" || action == "cancel" {
+        } else if action == "approve" || action == "approve_stars" || action == "cancel" {
             if LumiAuthorizationBusy() ||
             ReadStringText(request, FieldAt(request, 0, "request_id"), requested_id[:]) != 32 ||
             TextUntilNul(requested_id[:]) != TextUntilNul(lumi_authorization_pending.request_id[:]) { return "rejected" }
-            if action == "approve" {
+            if action == "approve" || action == "approve_stars" {
                 if !lumi_authorization_ready { return "rejected" }
-                LumiAuthorizationApprove()
+                LumiAuthorizationApprove(action == "approve_stars")
             } else { LumiAuthorizationCancel() }
         } else { return "rejected" }
         return "queued"
@@ -52,11 +58,17 @@ EntityTelegramAnswer :: (request: string) -> string {
     PackageFree(entity_telegram_document)
     has_account := storage_has_sync_account() != 0 && storage_get_setting_text("sync_private_key").count > 0
     linked := has_account && lumi_telegram_connection.linked
-    primary := ifx !has_account then "sync_connect_account_button" else ifx linked then "lumi_telegram_open" else "lumi_telegram_connect"
+    can_request := linked && LumiAuthorizationCanRequest()
+    has_pending := linked && lumi_authorization_pending.request_id[0] != 0
+    primary := "sync_connect_account_button"
+    if has_account {
+        primary = ifx !linked then "lumi_telegram_connect" else ifx has_pending && !can_request then "lumi_telegram_open" else "lumi_authorization_request"
+    }
     out: Vec(u8)
     BuilderPrint(*out, "{\"version\":1,\"owner\":")
     EntityQuote(*out, TextUntilNul(owner[:]))
-    BuilderPrint(*out, ",\"busy\":%,\"enabled\":%,\"status\":", LumiTelegramBusy(), !has_account || linked || LumiNodeTrafficAllowed())
+    BuilderPrint(*out, ",\"busy\":%,\"enabled\":%,\"status\":", LumiTelegramBusy(), !has_account ||
+        (LumiNodeTrafficAllowed() && (!linked || can_request || has_pending)))
     EntityQuote(*out, LocaleText(LumiTelegramStatusKey()))
     BuilderPrint(*out, ",\"primary\":")
     EntityQuote(*out, LocaleText(primary))
@@ -73,6 +85,10 @@ EntityTelegramAnswer :: (request: string) -> string {
             if lumi_authorization_ready {
                 BuilderPrint(*out, ",\"approve\":")
                 EntityQuote(*out, LocaleText("lumi_authorization_approve"))
+                BuilderPrint(*out, ",\"stars_disclosure\":")
+                EntityQuote(*out, LocaleText("lumi_authorization_stars_disclosure"))
+                BuilderPrint(*out, ",\"approve_stars\":")
+                EntityQuote(*out, LocaleText("lumi_authorization_approve_stars"))
             }
         }
         if lumi_authorization_pending.request_id[0] != 0 {

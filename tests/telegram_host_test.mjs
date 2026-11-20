@@ -49,6 +49,8 @@ function fixture({ methods = {}, current = true, valid = true, present = true,
   let bridge = {
     context,
     contextCurrent() { return live; },
+    invoiceAvailable() { return Boolean(methods.invoice); },
+    openInvoice(link) { return methods.invoice(link); },
     saveDelegate(text) {
       calls.push({ action: 'save', text });
       return methods.save ? methods.save(text) : Promise.resolve({ persistent: true });
@@ -142,6 +144,7 @@ function fixture({ methods = {}, current = true, valid = true, present = true,
   function zero(pointer = output, size = capacity) {
     assert.ok(heap.subarray(pointer, pointer + size).every(byte => byte === 0), 'Rejected output was not fully cleared');
   }
+  sandbox._telegram_invoice_available = library.telegram_invoice_available;
   function safe() {
     assert.equal(prohibited, 0);
   }
@@ -840,5 +843,51 @@ await test('pinned host denies in-place context replacement even if callback cla
   f.safe();
 });
 
-console.log(`Telegram host: ${passed} synthetic heap, context, storage and file checks passed; ${failed} failed`);
+await test('invoice close only signals that the issuer can be queried', async () => {
+  const close = deferred();
+  const link = 'https://t.me/$test-invoice';
+  const f = fixture({ methods: { invoice(value) {
+    assert.equal(value, link);
+    return close.promise;
+  } } });
+  assert.equal(f.api.telegram_invoice_available(), 1);
+  assert.equal(f.api.telegram_invoice_start(input, f.write(link)), 1);
+  assert.equal(f.api.telegram_invoice_start(input, link.length), 0);
+  assert.equal(f.api.telegram_invoice_poll(), 0);
+  close.resolve('paid');
+  await settle();
+  assert.equal(f.api.telegram_invoice_poll(), 1);
+  assert.equal(f.api.telegram_invoice_poll(), -1);
+});
+
+await test('invoice callback after context replacement is discarded', async () => {
+  const close = deferred();
+  const f = fixture({ methods: { invoice: () => close.promise } });
+  const link = 'https://t.me/$test-invoice';
+  assert.equal(f.api.telegram_invoice_start(input, f.write(link)), 1);
+  f.replaceBridge();
+  close.resolve('paid');
+  await settle();
+  assert.equal(f.api.telegram_invoice_poll(), -1);
+  assert.equal(f.api.telegram_invoice_available(), 0);
+});
+
+await test('cancelled pending invoice cannot signal completion of its successor', async () => {
+  const first = deferred();
+  const second = deferred();
+  const pending = [first, second];
+  const f = fixture({ methods: { invoice: () => pending.shift().promise } });
+  const length = f.write('https://t.me/$test-invoice');
+  assert.equal(f.api.telegram_invoice_start(input, length), 1);
+  f.api.telegram_invoice_cancel();
+  assert.equal(f.api.telegram_invoice_start(input, length), 1);
+  first.resolve('paid');
+  await settle();
+  assert.equal(f.api.telegram_invoice_poll(), 0);
+  second.resolve('cancelled');
+  await settle();
+  assert.equal(f.api.telegram_invoice_poll(), 1);
+});
+
+console.log(`Telegram host: ${passed} synthetic heap, context, invoice, storage and file checks passed; ${failed} failed`);
 process.exitCode = failed === 0 ? 0 : 1;

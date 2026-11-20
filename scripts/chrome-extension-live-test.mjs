@@ -256,6 +256,12 @@ async function main() {
       hasAlarms: true,
     });
 
+    const appUrl = `chrome-extension://${extensionId}/index.html`;
+    await waitForWorkerBreakConfig(cdp, worker, (config) => config !== null, "at installation");
+    const installedTargets = await cdp.send("Target.getTargets");
+    assert.ok(!installedTargets.targetInfos.some((target) => target.url.startsWith(appUrl)),
+      "install leaves the app runtime unloaded");
+
     await evaluate(cdp, worker, `globalThis.__inbeExtensionBreaks.requestBreakNow(1).then(() => true)`, true);
     const workerState = JSON.parse(await evaluate(cdp, worker, `chrome.storage.local.get(['inbeBreakConfig', 'inbeBreakState']).then((data) => JSON.stringify({
       enabled: data.inbeBreakConfig && data.inbeBreakConfig.enabled,
@@ -264,10 +270,16 @@ async function main() {
     assert.equal(workerState.enabled, true);
     assert.equal(workerState.notificationId, "inbe-break-1");
 
-    const { targetId } = await cdp.send("Target.createTarget", {
-      url: `chrome-extension://${extensionId}/index.html?inbe_launch=break-settings`,
-    });
-    const page = await attach(cdp, targetId);
+    const breakSettingsUrl = `${appUrl}?inbe_launch=break-settings`;
+    const openSettings = `openApp(${JSON.stringify(breakSettingsUrl)})`;
+    await evaluate(cdp, worker, `Promise.all([${openSettings}, ${openSettings}]).then(() => true)`, true);
+    const settingsTarget = await waitForTarget(cdp,
+      (target) => target.type === "page" && target.url === breakSettingsUrl, "break settings tab");
+    await evaluate(cdp, worker, `${openSettings}.then(() => true)`, true);
+    const openedTargets = await cdp.send("Target.getTargets");
+    assert.deepEqual(openedTargets.targetInfos.filter((target) => target.url === breakSettingsUrl)
+      .map((target) => target.targetId), [settingsTarget.targetId], "opening again reuses the existing tab");
+    const page = await attach(cdp, settingsTarget.targetId);
     const readyState = await waitForPageReady(cdp, page);
     assert.ok(readyState.href.includes("chrome-extension://"));
 

@@ -144,7 +144,7 @@ with tempfile.TemporaryDirectory(prefix='inbe-lumi-habit-tools-') as directory:
 
         renamed = tool(window, 'rename_habit', dict(id=identifier, name='Morning stretch'))
         assert renamed['ok'] and renamed['title'] == 'Morning stretch', renamed
-        assert tool(window, 'rename_habit', dict(id=identifier, name='Yoga'))['ok'] is False
+        assert tool(window, 'rename_habit', dict(id=identifier, name='Meditation'))['ok'] is False
 
         paused = tool(window, 'set_habit_active', dict(id=identifier, active=False))
         assert paused['ok'] and paused['paused'], paused

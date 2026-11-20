@@ -16,7 +16,7 @@
 #import, file "../src/apps/app_tools.zi";
 #import, file "../src/storage/storage_elist.zi";
 #import "keys"
-#import "crypto"
+#import "mesh_client/crypto"
 #import, file "../src/storage/sync_account.zi";
 #import, file "storage_test_support.zi";
 #import "async_client"
@@ -519,6 +519,9 @@ EscapedBoundaryChecks :: () {
     check_true("boundary fixture clears approved report without HTTP", FeedbackDelivered(report_id))
 }
 
+// Use the same static storage lifetime as the app host for its large state.
+feedback_app: InnerBreeze;
+
 #program_export
 Check :: () -> s32 {
     transport := FeedbackTestTransport()
@@ -539,8 +542,8 @@ Check :: () -> s32 {
     check_true("Lumi's online terms agreed", LumiAgree())
     draft := FeedbackDraft("Lumi freezes", "Please fix Lumi freezing", "view=lumi")
     defer { PackageFree(draft) }
-    app: InnerBreeze
-    Attempt(*app)
+    app := *feedback_app
+    Attempt(app)
     check_int("draft never submits before approval", submissions, 0)
     check_true("draft is not in approved outbox", !Pending())
     check_true("Yes queues report", FeedbackChoice(draft, 1))
@@ -548,11 +551,11 @@ Check :: () -> s32 {
     report_id := PackageText(draft, draft)
     defer { PackageFree(report_id) }
 
-    Attempt(*app)
+    Attempt(app)
     check_true("HTTP failure retains report", Pending())
     check_true("HTTP failure is visible", LumiStoreCount() == 1 &&
         contains(LumiStoreRow(0).text, "is not confirmed"))
-    Attempt(*app)
+    Attempt(app)
     check_int("repeat failure does not flood history", LumiStoreCount(), 1)
 
     LumiOnlineCancel()
@@ -560,37 +563,37 @@ Check :: () -> s32 {
     storage_close()
     check_true("database reopens", storage_init(root) != 0)
     check_true("approved report survives restart", Pending())
-    Attempt(*app)
+    Attempt(app)
     check_int("failure notice survives restart without duplication", LumiStoreCount(), 1)
 
     feedback_status = 200
     feedback_response = "true"
-    Attempt(*app)
+    Attempt(app)
     check_true("unrelated HTTP success never loses report", Pending())
     feedback_response = "\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\""
-    Attempt(*app)
+    Attempt(app)
     check_true("another report's receipt never loses report", Pending())
     receipt: Vec(u8)
     LumiJsonString(*receipt, report_id)
     correct := BuilderFinish(receipt)
     defer { PackageFree(correct) }
     feedback_response = PackageText(correct, "garbage")
-    Attempt(*app)
+    Attempt(app)
     check_true("trailing receipt data never loses report", Pending())
     PackageFree(feedback_response)
     feedback_response = correct
     start_fails = true
-    Attempt(*app)
+    Attempt(app)
     check_true("transport start failure retains report", Pending())
     check_int("transport errors do not flood history", LumiStoreCount(), 1)
     start_fails = false
     feedback_response = PackageText(correct, " \r\n\t")
-    Attempt(*app)
+    Attempt(app)
     check_true("matching receipt completes delivery", !Pending())
     // The confirmation card is the whole exchange: delivery adds no message.
     check_int("matching receipt adds no message", LumiStoreCount(), 1)
     PackageFree(feedback_response)
-    Attempt(*app)
+    Attempt(app)
     check_int("completed delivery stays quiet", LumiStoreCount(), 1)
     LumiOnlineCancel()
     LumiStoreReset()
@@ -607,20 +610,20 @@ Check :: () -> s32 {
     saved_owner: [64]u8
     unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), saved_owner[:])
     switch_in_poll = true
-    Attempt(*app)
+    Attempt(app)
     check_true("new account's pending report is preserved", Pending())
     check_int("old account's notice never enters new history", LumiStoreCount(), 0)
     unused AppCopyText(TextUntilNul(saved_owner[:]), g_storage.user_id[:])
     check_true("original account's report is preserved", Pending())
     check_int("canceled receipt adds no false notice", LumiStoreCount(), 1)
-    Attempt(*app)
+    Attempt(app)
     check_true("original account can still confirm its report", !Pending())
     check_int("separate report adds no message", LumiStoreCount(), 1)
     LumiOnlineCancel()
     DeveloperReplyChecks()
     LegacyOutboxChecks(root, report_id)
-    ListReportChecks(*app)
-    ResolvedProposalChecks(*app)
+    ListReportChecks(app)
+    ResolvedProposalChecks(app)
     ProposalChecks()
     EscapedBoundaryChecks()
     OlderProposalChecks()

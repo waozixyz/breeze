@@ -29,7 +29,7 @@ int main(void)
 }
 C
 "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK -fsanitize=address,undefined \
-    -I"$include" -I"$work/c" "$work/c"/*.c "$work/c/tests"/*.c -o "$work/test"
+    -I"$include" -I"$work/c" "$work/c"/*.c "$work/c/tests"/*.c -lm -o "$work/test"
 # The package runs in the VM, which reclaims its temporary text; the native
 # build of this check keeps it, so only memory errors fail here.
 env -u DISPLAY -u WAYLAND_DISPLAY ASAN_OPTIONS=detect_leaks=0 "$work/test"

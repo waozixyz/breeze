@@ -9,6 +9,7 @@ const STORAGE_CONFIG = "inbeBreakConfig";
 const STORAGE_STATE = "inbeBreakState";
 const MAX_ELAPSED_S = 300;
 const visiblePages = new Set();
+const pendingAppOpens = new Map();
 
 const practiceUrls = {
   whm: `${appUrl}?inbe_launch=start-practice&practice=whm`,
@@ -118,8 +119,29 @@ function storageSet(values) {
   return chrome.storage.local.set(values);
 }
 
+async function showAppTab(url) {
+  const tabs = await chrome.tabs.query({ currentWindow: true });
+  const existing = tabs.find((tab) => (tab.pendingUrl || tab.url) === url);
+  if (existing) {
+    try {
+      await chrome.tabs.update(existing.id, { active: true });
+      return;
+    } catch {
+      // The tab may have closed after the query.
+    }
+  }
+  await chrome.tabs.create({ url });
+}
+
 function openApp(url = appUrl) {
-  chrome.tabs.create({ url });
+  let pending = pendingAppOpens.get(url);
+  if (!pending) {
+    pending = showAppTab(url)
+      .catch((error) => console.error("Inner Breeze could not open:", error))
+      .finally(() => pendingAppOpens.delete(url));
+    pendingAppOpens.set(url, pending);
+  }
+  return pending;
 }
 
 function openBreakSettings() {
@@ -329,15 +351,13 @@ function rebuildContextMenus() {
 }
 
 chrome.action.onClicked.addListener(() => {
-  openApp();
+  return openApp();
 });
 
-chrome.runtime.onInstalled.addListener(async (details) => {
+chrome.runtime.onInstalled.addListener(async () => {
   rebuildContextMenus();
   const data = await storageGet([STORAGE_CONFIG]);
   await saveConfig(normalizeConfig(data[STORAGE_CONFIG]));
-  if (details.reason === "install")
-    openApp();
 });
 
 chrome.runtime.onStartup.addListener(async () => {

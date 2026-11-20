@@ -6,15 +6,8 @@ liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work=$(mktemp -d /tmp/inbe-storage-delegate-build.XXXXXX)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work/generated"
-"$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/mesh-client" \
+cd "$root"
+"$ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --entry storage_delegate_behavior:Check \
     -o "$work/generated" "$root/tests/storage_delegate_behavior.zi" \
     "$root/tests/sync_test_host.zi"

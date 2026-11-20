@@ -20,6 +20,7 @@
 #import "astral_technique"
 #import "sun_salutation_artwork"
 #import "preview_flat"
+#import "preview_ground"
 #import "std/file"
 #import "std/math"
 
@@ -28,16 +29,18 @@ PREVIEW_SUN_SALUTATION :: 1
 PREVIEW_WORKOUT :: 2
 PREVIEW_ASTRAL :: 3
 
-PREVIEW_ITEM_LIMIT :: 64
+PREVIEW_ITEM_LIMIT :: 128
 
 // What one moment of a practice shows: the figure, and for an astral exit
 // the translucent twin beside the still physical body.
 PreviewMoment :: struct {
     body: FigureJoints
-    // The practice's own camera and framing, which the flat figure shares.
+    workout_item: s32
+    ground: PreviewGround
+    body_bounds: PreviewGroundBounds
+    floor_bounds: PreviewGroundBounds
+    // The practice's camera direction, which the flat figure shares.
     camera: TaiChiCamera
-    target: Vector3
-    height: float64
     solved: TaiChiSolved
     rig: TaiChiRig
     flat_look: TaiChiFlatLook
@@ -47,16 +50,22 @@ PreviewMoment :: struct {
 }
 
 // Moves a whole body rigidly, for an astral double rising or rolling out of
-// the physical one: OFFSET, then ROLL radians about the pelvis-height PIVOT
-// in the picture plane.
+// the physical one: ROLL about the lying body's longitudinal Z axis at
+// PIVOT, followed by OFFSET. This also matches the native camera transform.
 PreviewEffect :: struct {
     offset: Vector3
     pivot: Vector3
     roll: float64
 }
 
+PreviewEffectPoint :: (point: Vector3, effect: PreviewEffect) -> Vector3 {
+    return FigureAdd(FigureAdd(effect.pivot, effect.offset),
+        FigureRotate(FigureAxisAngle(.{0.0, 0.0, 1.0}, effect.roll), FigureSub(point, effect.pivot)))
+}
+
 PreviewLibrary :: struct {
     ready: bool
+    ground: [4]PreviewGround
     tai_chi_items: [PREVIEW_ITEM_LIMIT]s32
     tai_chi_count: s32
     timeline_item: s32
@@ -64,14 +73,10 @@ PreviewLibrary :: struct {
     astral: [6]AstralCourse
     astral_ready: [6]bool
     astral_even: bool
-    // The camera framing of the item last framed: where it looks, how tall
-    // a view and from which way, fixed for the whole item.
-    framed_practice: s32
-    framed_item: s32
-    framed_target: Vector3
-    framed_height: float64
-    framed_yaw: float64
-    framed_tilt: float64
+    // A steady frame for push-up rotation and each astral technique.
+    steady_framed: [7]bool
+    steady_body_bounds: [7]PreviewGroundBounds
+    steady_floor_bounds: [7]PreviewGroundBounds
 }
 
 preview_astral_ids: [6]string = .["bruce_foundation_touch", "bruce_full_body_current",
@@ -85,6 +90,18 @@ preview_workout_names: [12]string = .["Jumping jacks", "Wall sit", "Push-ups", "
 // PRACTICES is the practices package checkout (its taichi/ and
 // astral_projection/ folders).
 PreviewLibraryLoad :: (library: *PreviewLibrary, practices: string) -> bool {
+    for practice: cast(s32)0..3 {
+        folder: [1100]u8
+        named: [1200]u8
+        full: [1300]u8
+        prefix := PreviewJoin(folder[:], practices, "/shared/figure/backdrops/")
+        name := PreviewJoin(named[:], prefix, PreviewBackdropName(practice))
+        data, found := ReadEntireFile(PreviewJoin(full[:], name, ".json"))
+        if !found || !PreviewGroundRead(data, *library.ground[practice]) {
+            print("figure preview: missing or invalid ground registration for %\n", PreviewBackdropName(practice))
+            return false
+        }
+    }
     path: [1024]u8
     course, found := ReadEntireFile(PreviewJoin(path[:], practices, "/taichi/course.tch"))
     if !found || !TaiChiCourseParse(*tai_chi_course, course) {
@@ -97,7 +114,22 @@ PreviewLibraryLoad :: (library: *PreviewLibrary, practices: string) -> bool {
         if PreviewEndsWith(id, "/breakdown") || PreviewEndsWith(id, "/follow") {
             continue
         }
-        if library.tai_chi_count < PREVIEW_ITEM_LIMIT {
+        if library.tai_chi_count >= PREVIEW_ITEM_LIMIT {
+            print("figure preview: too many course items for complete review\n")
+            return false
+        }
+        library.tai_chi_items[library.tai_chi_count] = index
+        library.tai_chi_count += 1
+    }
+    // Preserve existing picker IDs, then include slower breakdown/follow
+    // variants as complete reviewable sequences too.
+    for index: cast(s32)0..tai_chi_course.item_count - 1 {
+        id := TaiChiCourseString(tai_chi_course.items[index].id)
+        if PreviewEndsWith(id, "/breakdown") || PreviewEndsWith(id, "/follow") {
+            if library.tai_chi_count >= PREVIEW_ITEM_LIMIT {
+                print("figure preview: too many course items for complete review\n")
+                return false
+            }
             library.tai_chi_items[library.tai_chi_count] = index
             library.tai_chi_count += 1
         }
@@ -167,6 +199,28 @@ PreviewDefaultItem :: (library: *PreviewLibrary, practice: s32) -> s32 {
     return 0
 }
 
+// Review moments from the same durations the preview plays. A contact
+// sheet can cover every Workout item and both Sun Salutation rounds
+// without maintaining another copy of their timing rules in its script.
+PreviewReviewPoints :: (library: *PreviewLibrary) {
+    for item: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
+        duration := PreviewDuration(library, PREVIEW_WORKOUT, item)
+        for part: 1..3 {
+            print("review\t%\t%\t%\t%\n", PREVIEW_WORKOUT, item,
+                duration * cast(float64)part / 4.0, PreviewItemName(library, PREVIEW_WORKOUT, item))
+        }
+    }
+    seconds: float64
+    for round: cast(s32)0..1 {
+        for step: cast(s32)0..SUN_SALUTATION_STEP_COUNT - 1 {
+            duration := cast(float64)SalutationStepSeconds(PreviewSunState(round, step))
+            print("review\t%\t%\t%\tRound % / step %\n", PREVIEW_SUN_SALUTATION, 0,
+                seconds + duration * 0.75, round + 1, step + 1)
+            seconds += duration
+        }
+    }
+}
+
 // Seconds the item plays before it starts again.
 PreviewDuration :: (library: *PreviewLibrary, practice: s32, item: s32) -> float64 {
     if practice == PREVIEW_TAI_CHI {
@@ -193,24 +247,42 @@ PreviewDuration :: (library: *PreviewLibrary, practice: s32, item: s32) -> float
     return 60.0
 }
 
-// The moment SECONDS into PRACTICE's ITEM, seen by a camera framed once for
-// the whole item: it never follows her head or recentres on her, so her
-// planted feet stay put on the stage. Astral techniques keep their own
-// designed cameras.
+// Fit the full pose and its near neighbours so the view leads a transition
+// gently and leaves room for the pose it is moving into.
 PreviewSample :: (library: *PreviewLibrary, practice: s32, item: s32, seconds: float64) -> PreviewMoment {
     moment := PreviewSampleRaw(library, practice, item, seconds)
-    if practice == PREVIEW_ASTRAL || !PreviewFrame(library, practice, item) {
-        return moment
+    moment.ground = library.ground[practice]
+    moment.body_bounds = PreviewEmptyBounds()
+    moment.floor_bounds = PreviewEmptyBounds()
+    steady: s32 = -1
+    if practice == PREVIEW_ASTRAL && item >= 0 && item < 6 {
+        steady = item + 1
+    } else if practice == PREVIEW_WORKOUT && item == WORKOUT_PUSH_UP_ROTATION {
+        // The whole-body roll would otherwise zoom in and out on every rep.
+        steady = 0
     }
-    moment.target = library.framed_target
-    moment.height = library.framed_height
-    moment.camera.yaw = library.framed_yaw
-    moment.camera.tilt = library.framed_tilt
+    if steady >= 0 {
+        PreviewFrameSteady(library, practice, item, steady)
+        moment.body_bounds = library.steady_body_bounds[steady]
+        moment.floor_bounds = library.steady_floor_bounds[steady]
+    } else {
+        duration := PreviewDuration(library, practice, item)
+        earlier := PreviewSampleRaw(library, practice, item, FigureMax(0.0, seconds - 0.35))
+        later := PreviewSampleRaw(library, practice, item, FigureMin(duration, seconds + 0.35))
+        PreviewIncludeMoment(*moment.body_bounds, *moment.floor_bounds, *earlier)
+        PreviewIncludeMoment(*moment.body_bounds, *moment.floor_bounds, *moment)
+        PreviewIncludeMoment(*moment.body_bounds, *moment.floor_bounds, *later)
+        PreviewIncludeProp(*moment.body_bounds, *moment.floor_bounds, moment.workout_item)
+    }
+    span := moment.body_bounds.high.y - moment.body_bounds.low.y
+    low_pose := 1.0 - FigureSmooth(span, 0.7, 1.65)
+    moment.camera.tilt = moment.ground.pitch + 0.12 * low_pose
     return moment
 }
 
 PreviewSampleRaw :: (library: *PreviewLibrary, practice: s32, item: s32, seconds: float64) -> PreviewMoment {
     moment: PreviewMoment
+    moment.workout_item = -1
     if practice == PREVIEW_TAI_CHI {
         moment.rig = TaiChiRigFor(0)
         moment.flat_look = TaiChiFlatLookFor(0)
@@ -218,28 +290,25 @@ PreviewSampleRaw :: (library: *PreviewLibrary, practice: s32, item: s32, seconds
             pose := TaiChiTimelineSample(*library.timeline, seconds)
             moment.solved = TaiChiSolvePose(*pose, *moment.rig)
         }
-        // The forms travel; the camera follows the pelvis over the floor.
         moment.camera.yaw = 0.42
-        moment.camera.tilt = 0.12
         moment.camera.center = TaiChiV3(moment.solved.pelvis.x, 0.0, moment.solved.pelvis.z)
-        PreviewAim(*moment, 2.3, moment.rig.height * 0.5)
     } else if practice == PREVIEW_SUN_SALUTATION {
         moment.rig = WorkoutRig()
         state := PreviewSunAt(seconds)
         pose := SunSalutationPoseAt(state, *moment.rig)
         moment.solved = WorkoutSolve(*pose, *moment.rig)
         moment.flat_look = SunSalutationWomanLook()
-        framing := SunSalutationPaintPose(*preview_flat_frame, 0, pose, SunSalutationViewAt(state), 600.0, 800.0)
-        moment.camera = framing.camera
-        PreviewAim(*moment, framing.view_height, framing.view_center)
+        view := SunSalutationViewAt(state)
+        moment.camera.yaw = view.yaw * TAI_CHI_DEGREE
+        moment.camera.center = TaiChiV3(0.0, 0.0, view.center)
     } else if practice == PREVIEW_WORKOUT {
+        moment.workout_item = item
         moment.rig = WorkoutRig()
         pose := WorkoutPoseAt(item, cast(s64)(seconds * 1000.0), *moment.rig)
         moment.solved = WorkoutSolve(*pose, *moment.rig)
         moment.flat_look = TaiChiFlatLookNamed("jadeWoman")
         framing := WorkoutFramingFor(item)
         moment.camera = framing.camera
-        PreviewAim(*moment, framing.view_height, framing.view_center)
     } else {
         moment.rig = WorkoutRig()
         moment.flat_look = TaiChiFlatLookNamed("jadeWoman")
@@ -249,7 +318,6 @@ PreviewSampleRaw :: (library: *PreviewLibrary, practice: s32, item: s32, seconds
             scene := AstralTechniqueAt(preview_astral_ids[item], *library.astral[item], cast(s64)(seconds * 1000.0))
             moment.solved = WorkoutSolve(*scene.physical, *moment.rig)
             moment.camera = scene.camera
-            PreviewAim(*moment, 2.15, 0.35)
             moment.twin_visible = scene.double_visible
             if scene.double_visible {
                 awareness := WorkoutSolve(*scene.awareness, *moment.rig)
@@ -271,13 +339,12 @@ PreviewSampleRaw :: (library: *PreviewLibrary, practice: s32, item: s32, seconds
 
 // The view of MOMENT turned TURN and lifted LIFT radians from the practice's
 // own camera and zoomed ZOOM times, and the flat figure's camera to match.
-PreviewViewOf :: (moment: *PreviewMoment, turn: float64, lift: float64, zoom: float64) -> PreviewView {
+PreviewViewOf :: (moment: *PreviewMoment, turn: float64, lift: float64, zoom: float64,
+    aspect: float64 = 0.75) -> PreviewView {
     view: PreviewView
     view.yaw = moment.camera.yaw + turn
     view.pitch = FigureClamp(moment.camera.tilt + lift, -1.4, 1.5)
-    view.height = moment.height / zoom
-    view.center = moment.target
-    return view
+    return PreviewGroundFit(moment.ground, moment.body_bounds, moment.floor_bounds, view, aspect, zoom)
 }
 
 PreviewFlatOf :: (moment: *PreviewMoment, view: PreviewView) -> TaiChiCamera {
@@ -315,6 +382,8 @@ PreviewJoints :: (solved: *TaiChiSolved, rig: *TaiChiRig) -> FigureJoints {
         joints.knees[side] = PreviewVector(solved.knees[side])
         joints.ankles[side] = PreviewVector(solved.ankles[side])
         joints.toes[side] = PreviewVector(solved.toes[side])
+        joints.heels[side] = PreviewVector(solved.heels[side])
+        joints.balls[side] = PreviewVector(solved.balls[side])
         joints.feet[side] = PreviewQuat(solved.foot_quats[side])
     }
     return joints
@@ -354,55 +423,83 @@ PreviewJoin :: (buffer: []u8, a: string, b: string) -> string {
 }
 
 #scope_file
-// Frames PRACTICE's ITEM once from the bounds of its whole motion, seen from
-// its own camera's direction, for a portrait view: the view's centre and
-// height fit every joint at every moment, so the camera never moves while
-// she does (a long form is framed whole; scroll to zoom in).
-PreviewFrame :: (library: *PreviewLibrary, practice: s32, item: s32) -> bool {
-    if library.framed_practice == practice && library.framed_item == item && library.framed_height > 0.0 {
-        return true
+PreviewEmptyBounds :: () -> PreviewGroundBounds {
+    return .{.{1000.0, 1000.0, 1000.0}, .{-1000.0, -1000.0, -1000.0}}
+}
+
+PreviewIncludePoint :: (bounds: *PreviewGroundBounds, point: Vector3, padding: Vector3) {
+    bounds.low = .{FigureMin(bounds.low.x, point.x - padding.x), FigureMin(bounds.low.y, point.y - padding.y),
+        FigureMin(bounds.low.z, point.z - padding.z)}
+    bounds.high = .{FigureMax(bounds.high.x, point.x + padding.x), FigureMax(bounds.high.y, point.y + padding.y),
+        FigureMax(bounds.high.z, point.z + padding.z)}
+}
+
+PreviewIncludeFigure :: (bounds: *PreviewGroundBounds, figure: *FigureJoints, effect: PreviewEffect = .{}) {
+    head := FigureAdd(figure.neck, FigureRotate(figure.head_turn, .{0.0, 0.20, 0.0}))
+    joints: [15]Vector3 = .[figure.pelvis, figure.neck, head, figure.wrists[0], figure.wrists[1],
+        figure.elbows[0], figure.elbows[1], figure.toes[0], figure.toes[1], figure.heels[0], figure.heels[1],
+        figure.ankles[0], figure.ankles[1], figure.knees[0], figure.knees[1]]
+    for index: 0..joints.count - 1 {
+        point := PreviewEffectPoint(joints[index], effect)
+        // The silhouette extends past these joint centres (hair, clothing,
+        // fingers and slippers). Allow more room at the head and skirt.
+        padding := ifx index == 0 then 0.26 else ifx index == 2 then 0.19 else 0.12
+        PreviewIncludePoint(bounds, point, .{padding, padding, padding})
     }
-    library.framed_practice = practice
-    library.framed_item = item
-    library.framed_height = 0.0
-    first := PreviewSampleRaw(library, practice, item, 0.0)
-    yaw := first.camera.yaw
-    tilt := first.camera.tilt
-    toward := FigureV3(Sin(yaw) * Cos(tilt), Sin(tilt), Cos(yaw) * Cos(tilt))
-    right := FigureNormalize(FigureCross(FigureScale(toward, -1.0), FigureV3(0.0, 1.0, 0.0)))
-    up := FigureCross(right, FigureScale(toward, -1.0))
-    low: [2]float64 = .[1000.0, 1000.0]
-    high: [2]float64 = .[-1000.0, -1000.0]
-    duration := PreviewDuration(library, practice, item)
-    seconds: float64
-    while seconds <= duration {
-        moment := PreviewSampleRaw(library, practice, item, seconds)
-        body := *moment.body
-        points: [11]Vector3 = .[body.pelvis, body.neck, FigureAddScaled(body.neck, FigureV3(0.0, 1.0, 0.0), 0.25),
-            body.wrists[0], body.wrists[1], body.toes[0], body.toes[1], body.ankles[0], body.ankles[1], body.knees[0],
-            body.knees[1]]
-        for point: points {
-            across := FigureDot(point, right)
-            along := FigureDot(point, up)
-            low[0] = FigureMin(low[0], across)
-            low[1] = FigureMin(low[1], along)
-            high[0] = FigureMax(high[0], across)
-            high[1] = FigureMax(high[1], along)
+}
+
+PreviewIncludeMoment :: (body: *PreviewGroundBounds, floor: *PreviewGroundBounds, moment: *PreviewMoment) {
+    joints := *moment.body
+    PreviewIncludeFigure(body, joints)
+    if moment.twin_visible {
+        PreviewIncludeFigure(body, *moment.twin, moment.twin_effect)
+    }
+    footprint := FigureScale(FigureAdd(joints.balls[0], joints.balls[1]), 0.5)
+    supports: [7]Vector3 = .[joints.heels[0], joints.heels[1], joints.balls[0], joints.balls[1],
+        joints.wrists[0], joints.wrists[1], joints.pelvis]
+    for index: 0..supports.count - 1 {
+        support := supports[index]
+        if index >= 4 {
+            // Weight hands and hips into the floor footprint as they lower.
+            // A hard contact cutoff would jerk the camera as a hand lands.
+            support = FigureLerp(support, footprint, FigureSmooth(support.y, 0.04, 0.38))
         }
-        seconds += 0.25
+        PreviewIncludePoint(floor, .{support.x, 0.0, support.z}, .{0.06, 0.0, 0.06})
     }
-    if high[0] < low[0] {
-        return false
+}
+
+PreviewIncludeProp :: (body: *PreviewGroundBounds, floor: *PreviewGroundBounds, item: s32) {
+    if item < 0 { return }
+    prop := WorkoutPropFor(item)
+    if !prop.wall && !prop.bench { return }
+    low := FigureV3(-0.30, 0.0, FigureMin(prop.bench_near, prop.bench_far))
+    high := FigureV3(0.30, WORKOUT_BENCH_TOP, FigureMax(prop.bench_near, prop.bench_far))
+    if prop.wall {
+        low = .{-0.55, 0.0, prop.wall_at - 0.08}
+        high = .{0.55, 1.95, prop.wall_at}
     }
-    // Room round her, and her shadow under her feet.
-    width := high[0] - low[0] + 0.5
-    tall := high[1] - low[1] + 0.45
-    middle := (low[0] + high[0]) * 0.5
-    library.framed_height = FigureMax(tall, width / 0.75)
-    library.framed_target = FigureAdd(FigureScale(right, middle), FigureScale(up, (low[1] + high[1]) * 0.5 - 0.05))
-    library.framed_yaw = yaw
-    library.framed_tilt = tilt
-    return true
+    PreviewIncludePoint(body, low, .{})
+    PreviewIncludePoint(body, high, .{})
+    PreviewIncludePoint(floor, low, .{})
+    PreviewIncludePoint(floor, .{high.x, 0.0, high.z}, .{})
+}
+
+PreviewFrameSteady :: (library: *PreviewLibrary, practice: s32, item: s32, slot: s32) {
+    if library.steady_framed[slot] { return }
+    body := PreviewEmptyBounds()
+    floor := PreviewEmptyBounds()
+    duration := PreviewDuration(library, practice, item)
+    step := ifx practice == PREVIEW_ASTRAL then 0.5 else 0.125
+    seconds: float64
+    while true {
+        moment := PreviewSampleRaw(library, practice, item, seconds)
+        PreviewIncludeMoment(*body, *floor, *moment)
+        if seconds >= duration { break }
+        seconds = FigureMin(duration, seconds + step)
+    }
+    library.steady_body_bounds[slot] = body
+    library.steady_floor_bounds[slot] = floor
+    library.steady_framed[slot] = true
 }
 
 PreviewVector :: (value: TaiChiVector3) -> Vector3 {
@@ -411,16 +508,6 @@ PreviewVector :: (value: TaiChiVector3) -> Vector3 {
 
 PreviewQuat :: (value: TaiChiQuaternion) -> FigureQuat {
     return .{value.x, value.y, value.z, value.w}
-}
-
-// Frames the practice's camera as its painter does: VIEW_HEIGHT metres tall,
-// centred UP metres above the camera's floor point along its up direction.
-PreviewAim :: (moment: *PreviewMoment, view_height: float64, up: float64) {
-    flat: TaiChiFlatView
-    TaiChiFlatViewSet(*flat, moment.camera)
-    target := TaiChiAddScaled3(flat.center, flat.up, up)
-    moment.target = FigureV3(target.x, target.y, target.z)
-    moment.height = view_height
 }
 
 PreviewTimeline :: (library: *PreviewLibrary, item: s32) -> bool {
@@ -463,4 +550,67 @@ PreviewSunAt :: (seconds: float64) -> SunSalutationPracticeState {
         }
     }
     return PreviewSunState(0, 0)
+}
+
+
+// Movement spans for slow playback, from the actual timeline/key/cue data.
+#scope_export
+PreviewReviewSpans :: (library: *PreviewLibrary) {
+    for item: cast(s32)0..library.tai_chi_count - 1 {
+        if PreviewTimeline(library, item) {
+            timeline := *library.timeline
+            for key: cast(s32)0..timeline.count - 2 {
+                if !timeline.keys[key + 1].held {
+                    print("span\t0\t%\t%\t%\tkey-%\n", item,
+                        timeline.keys[key].t - timeline.start, timeline.keys[key + 1].t - timeline.start, key)
+                }
+            }
+        }
+    }
+    seconds: float64
+    for round: cast(s32)0..1 {
+        for step: cast(s32)0..SUN_SALUTATION_STEP_COUNT - 1 {
+            duration := cast(float64)SalutationStepSeconds(PreviewSunState(round, step))
+            print("span\t1\t0\t%\t%\tround-%-step-%\n", seconds,
+                seconds + FigureMin(duration * 0.75, cast(float64)SUN_SALUTATION_TRANSITION_SECONDS), round + 1, step + 1)
+            seconds += duration
+        }
+    }
+    for item: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
+        duration := PreviewDuration(library, PREVIEW_WORKOUT, item)
+        if item == WORKOUT_SIDE_PLANK {
+            half := cast(float64)WORKOUT_SIDE_SWITCH_MS / 1000.0
+            roll := cast(float64)WORKOUT_SIDE_ROLL_MS / 1000.0
+            print("span\t2\t%\t%\t%\tside-roll\n", item, half - 1.0, half + roll + 1.0)
+        } else {
+            seconds = 0.0
+            count := WorkoutKeyCount(item)
+            if count > 1 {
+                while seconds < duration {
+                    for key: cast(s32)0..count - 1 {
+                        frame := WorkoutKeyframe(item, key)
+                        seconds += cast(float64)frame.hold_ms / 1000.0
+                        end := seconds + cast(float64)frame.move_ms / 1000.0
+                        if seconds < duration && end > seconds {
+                            print("span\t2\t%\t%\t%\tkey-%\n", item, seconds, FigureMin(end, duration), key)
+                        }
+                        seconds = end
+                    }
+                }
+            }
+        }
+    }
+    for item: cast(s32)0..5 {
+        course := *library.astral[item]
+        for cue: cast(s32)0..course.count - 1 {
+            start := cast(float64)course.cues[cue].second
+            end := cast(float64)course.duration
+            if cue + 1 < course.count {
+                end = cast(float64)course.cues[cue + 1].second
+            }
+            // Include the cued change and its breathing/climbing cycle;
+            // complete playback retains the rest of every long quiet hold.
+            print("span\t3\t%\t%\t%\tcue-%\n", item, FigureMax(0.0, start - 1.0), FigureMin(end, start + 8.0), cue)
+        }
+    }
 }

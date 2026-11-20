@@ -21,7 +21,7 @@ for fixture in valid invalid empty; do
             "$root/tests/achievement_package_fixture.zi"
     fi
 done
-"$ziran" build --project --locked --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
+"$ziran" build --project ${PACKAGE_FLAGS:---offline} --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --entry achievements_behavior:Check -o "$work/generated" \
     "$root/tests/achievements_behavior.zi" "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'

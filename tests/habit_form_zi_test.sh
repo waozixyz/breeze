@@ -12,7 +12,7 @@ include=$root/build/packages/ziran/include
 
 rm -rf "$work"
 mkdir -p "$work/generated"
-"$ziran" build --project --locked --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
+"$ziran" build --project ${PACKAGE_FLAGS:---offline} --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --entry habit_form_behavior:Check \
     -o "$work/generated" "$root/tests/habit_form_behavior.zi" \
     "$root/tests/sync_test_host.zi" "$root/tests/app_hooks_host.zi" "$root/tests/leaderboard_hooks_host.zi"

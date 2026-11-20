@@ -2,9 +2,9 @@
 
 ## [Unreleased]
 
-- Fotos aus Apps; Lumi zeigt Listenfeedback einmal komplett; Listen: längere Aufgaben, Erledigen per Wischen.
-- Übungstabs verschieben den Bildschirm nicht mehr. Vor Start aus sechs Astralübungen wählen. Oberfläche in zehn Sprachen. Laufende Übungen bleiben im Bild-in-Bild-Modus sichtbar. Der Downloadfortschritt der Übungen ist klar erkennbar.
-- Sprachpakete für Übungen sind etwa ein Drittel kleiner. Im Gewohnheiten-Shop täglich Münzen abholen.
+- Löschtaste, Text und Backup-Wiederherstellung repariert. Fotos und Radio leichter finden. Dew für Telegram-Sterne.
+- Starte Übungen sauber, wechsle flüssig und setze sie fort. Sieh Downloads und nutze Android-Bild-in-Bild.
+- Pausentimer starten nach Abwesenheit neu. Münzen und Timer folgen dem Design. Hole täglich Münzen in Gewohnheiten.
 
 ## [2.1.63] - 2026-11-05
 

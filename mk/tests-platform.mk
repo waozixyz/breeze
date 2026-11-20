@@ -116,6 +116,11 @@ text-buffers-zi-test: $(ZI2C_BIN)
 main-platform-zi-test: $(ZI2C_BIN)
 	@sh tests/main_platform_zi_test.sh $(abspath $(dir $(ZI2C_BIN)))
 
+.PHONY: feature-request-zi-test
+test: feature-request-zi-test
+feature-request-zi-test: $(ZI2C_BIN)
+	@sh tests/feature_request_zi_test.sh $(abspath $(dir $(ZI2C_BIN)))
+
 .PHONY: update-transport-zi-test
 
 update-transport-zi-test: $(ZI2C_BIN)
@@ -203,3 +208,11 @@ device-info-test: $(ZIRAN_BIN)
 		--module-path src --module-path build/packages/ziran/std --entry device_info_behavior:Main --exe \
 		-o build/device-info-test tests/device_info_behavior.zi
 	@build/device-info-test/device_info_behavior
+
+# Explicit Pixel diagnostic, separate from the development Moto test suite.
+.PHONY: pixel-rotation-geometry-test
+pixel-rotation-geometry-test:
+	@test -n "$(PIXEL_GEOMETRY_TRANSPORT)" || { \
+		echo 'Set PIXEL_GEOMETRY_TRANSPORT to the selected Pixel ADB transport.'; exit 2; }
+	python3 tests/android_rotation_geometry_device.py \
+		--host "$(or $(PIXEL_GEOMETRY_HOST),local)" --transport "$(PIXEL_GEOMETRY_TRANSPORT)"

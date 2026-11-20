@@ -6,9 +6,6 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
-kryon=${KRYON_DIR:-"$root/build/packages/kryon"}
-entity=${ENTITY_DIR:-"$root/build/packages/entity"}
-apps=${APPS_DIR:-"$root/build/packages/apps"}
 work=$root/build/sync-account-zi-test
 include=$root/build/packages/ziran/include
 
@@ -21,22 +18,29 @@ fi
 
 rm -rf "$work"
 mkdir -p "$work/generated"
-"$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src" \
-    --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
-    --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
-    --module-path "$kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/mesh-client" \
+"$ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c \
+    --define PLATFORM_DESKTOP --root "$root/tests" \
     --entry sync_account_behavior:Check \
     -o "$work/generated" "$root/tests/sync_account_behavior.zi" \
     "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "sync_account_behavior.h"
 #include <stdio.h>
+#include <stdlib.h>
+
+/* Sync account fixtures never measure or decode a rendered image. */
+int32_t ImageWidth(String path)
+{
+    (void)path;
+    abort();
+}
+
+int32_t ImageHeight(String path)
+{
+    (void)path;
+    abort();
+}
+
 int main(void)
 {
     int result = Check();

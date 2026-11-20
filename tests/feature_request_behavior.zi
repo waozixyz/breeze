@@ -1,0 +1,65 @@
+Desktop :: #import "desktop_runtime";
+ByteText :: #import "std/byte_text_linux";
+#import "feature_request"
+sdl :: #system_library "SDL2";
+Delay :: (milliseconds: u32) #foreign sdl "SDL_Delay";
+ShowWindow :: (window: *void) #foreign sdl "SDL_ShowWindow";
+CurrentGlWindow :: () -> *void #foreign sdl "SDL_GL_GetCurrentWindow";
+
+#program_export
+main :: () -> s32 {
+    if !Desktop.OpenDesktopSized(240, 160) {
+        return 1
+    }
+    defer Desktop.CloseDesktop()
+    if CurrentGlWindow() != null {
+        return 2
+    }
+    ShowWindow(Desktop.DesktopWindow())
+    if TakeHostFeatureRequest() != -1 {
+        return 3
+    }
+    PublishHostState("bridge-ready")
+    action_received: bool
+    feature_received: bool
+    for attempt: 0..999 {
+        if !Desktop.PollDesktop() {
+            return 4
+        }
+        action: [64]u8
+        count := ReadHostAction(action[:])
+        if count > 0 {
+            if action_received || ByteText.TextFromBytes(action[:count]) != "bridge-ping" {
+                return 5
+            }
+            action_received = true
+        }
+        feature := TakeHostFeatureRequest()
+        if feature != -1 {
+            if feature_received || feature != 16 {
+                return 6
+            }
+            feature_received = true
+        }
+        if action_received && feature_received {
+            if ReadHostAction(action[:]) != 0 || TakeHostFeatureRequest() != -1 {
+                return 7
+            }
+            PublishHostState("bridge-done")
+            // Keep the property until the external reader acknowledges it.
+            for reply: 0..999 {
+                count = ReadHostAction(action[:])
+                if count > 0 {
+                    if ByteText.TextFromBytes(action[:count]) != "bridge-close" {
+                        return 9
+                    }
+                    return 0
+                }
+                Delay(10)
+            }
+            return 10
+        }
+        Delay(10)
+    }
+    return 8
+}

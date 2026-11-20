@@ -4,12 +4,15 @@
 #import "figure_math"
 #import "figure_joints"
 #import "figure_model"
-#import "figure_finish"
 #import "preview_flat"
+#import "workout_moves"
 #import "kryon/scene"
+#import "kryon/drawing_props"
 #import "kryon/scene_render"
 #import "kryon/scene_gpu"
 #import "std/math"
+#import "std/c_string"
+#import "std/byte_text_linux"
 #import "std/vec"
 Raster :: #import "std/image";
 Timer :: #import "std/timer_linux";
@@ -20,11 +23,26 @@ PreviewFigure :: struct {
     gpu: SceneGpuContext
     pixels: Raster.Image
     man: bool
+    props: [6]s32
     loaded: bool
     // Whether a load was tried for this person.
     tried: bool
     accelerated: bool
+    pose_ms: float64
     render_ms: float64
+    prepare_ms: float64
+    submit_ms: float64
+    readback_ms: float64
+    source_path: [1200]u8
+    source_path_count: s64
+    // Separate skin/spring state keeps the resting body independent from
+    // its moving awareness figure during playback and seeking.
+    awareness_scene: Scene
+    awareness_model: FigureModel
+    awareness_gpu: SceneGpuContext
+    awareness_pixels: Raster.Image
+    awareness_loaded: bool
+    awareness_tried: bool
 }
 
 PreviewFigureRelease :: (figure: *PreviewFigure) {
@@ -32,6 +50,12 @@ PreviewFigureRelease :: (figure: *PreviewFigure) {
     SceneFree(*figure.scene)
     SceneGpuRelease(*figure.gpu)
     VecFree(figure.pixels.pixels)
+    FigureModelRelease(*figure.awareness_model)
+    SceneFree(*figure.awareness_scene)
+    SceneGpuRelease(*figure.awareness_gpu)
+    VecFree(figure.awareness_pixels.pixels)
+    figure.awareness_loaded = false
+    figure.awareness_tried = false
     figure.loaded = false
     figure.tried = false
 }
@@ -45,25 +69,125 @@ PreviewFigureUse :: (figure: *PreviewFigure, practices: string, man: bool) -> bo
     PreviewFigureRelease(figure)
     figure.man = man
     figure.tried = true
-    path: [1200]u8
-    named := PreviewFigureJoin(path[:], practices, "/shared/figure/", ifx man then "man.vrm" else "woman.vrm")
+    named := PreviewFigureJoin(figure.source_path[:], practices, "/shared/figure/", ifx man then "man.vrm" else "woman.vrm")
+    figure.source_path_count = named.count
     SceneInit(*figure.scene)
     figure.scene.background = .{0, 0, 0, 0}
     figure.loaded = FigureModelLoad(*figure.model, *figure.scene, named) && FigureModelToon(*figure.model, *figure.scene)
     if !figure.loaded {
         print("figure preview: % could not be loaded\n", named)
+        return false
     }
-    return figure.loaded
+    for index: 0..5 {
+        color: Color = ifx index == 0 then .{181, 199, 189, 255} else .{123, 89, 62, 255}
+        figure.props[index] = RoundedBox(*figure.scene, 1.0, 1.0, 1.0, 0.0, LitMaterial(color), 0)
+        ComputeNormals(*figure.scene, figure.props[index])
+        SetVisible(*figure.scene, figure.props[index], false)
+    }
+    AddHemisphereLight(*figure.scene, .{255, 249, 236, 255}, .{109, 115, 99, 255}, 0.7)
+    unused AddDirectionalLight(*figure.scene, .{255, 248, 235, 255}, 0.6, .{-3.0, 6.0, 4.0})
+    return true
 }
 
-// Paints the loaded figure at JOINTS as VIEW frames it, with a soft shadow
-// on the floor, into figure.pixels (straight RGBA, clear background).
+// The inverse camera transform applies the technique's rigid displacement
+// after skinning, so it cannot distort limbs or force floating feet down.
+// The double has no contact shadow; the physical body stays supported.
+PreviewFigureAwareness :: (figure: *PreviewFigure, joints: *FigureJoints, view: PreviewView,
+    width: s32, height: s32, offset: Vector3, pivot: Vector3, roll: float64, seconds: float64) -> bool {
+    if !figure.awareness_tried {
+        figure.awareness_tried = true
+        SceneInit(*figure.awareness_scene)
+        figure.awareness_scene.background = .{0, 0, 0, 0}
+        figure.awareness_loaded = FigureModelLoad(*figure.awareness_model, *figure.awareness_scene,
+            TextView(figure.source_path[0:figure.source_path_count])) && FigureModelToon(*figure.awareness_model, *figure.awareness_scene)
+        AddHemisphereLight(*figure.awareness_scene, .{233, 251, 255, 255}, .{109, 141, 153, 255}, 0.8)
+        unused AddDirectionalLight(*figure.awareness_scene, .{235, 252, 255, 255}, 0.6, .{-3.0, 6.0, 4.0})
+    }
+    pose_start := Timer.MonotonicNanoseconds()
+    if !figure.awareness_loaded || !FigureModelPose(*figure.awareness_model, *figure.awareness_scene, joints, seconds) {
+        return false
+    }
+    toward := FigureV3(Sin(view.yaw) * Cos(view.pitch), Sin(view.pitch), Cos(view.yaw) * Cos(view.pitch))
+    figure.pose_ms += cast(float64)(Timer.MonotonicNanoseconds() - pose_start) / 1000000.0
+    inverse := FigureAxisAngle(.{0.0, 0.0, 1.0}, -roll)
+    camera := OrthographicCamera(-view.height * cast(float64)width / cast(float64)height / 2.0,
+        view.height * cast(float64)width / cast(float64)height / 2.0, view.height / 2.0, -view.height / 2.0, 0.05, 30.0)
+    camera.target = FigureAdd(pivot, FigureRotate(inverse, FigureSub(FigureSub(view.center, offset), pivot)))
+    position := FigureAddScaled(view.center, toward, 8.0)
+    camera.position = FigureAdd(pivot, FigureRotate(inverse, FigureSub(FigureSub(position, offset), pivot)))
+    camera.up = FigureRotate(inverse, .{0.0, 1.0, 0.0})
+    FigureModelLight(*figure.awareness_model, FigureRotate(inverse, .{-0.45, 0.75, 0.55}), FigureRotate(inverse, toward))
+    image := *figure.awareness_pixels
+    if !VecResize(image.pixels, cast(s64)width * height * 4) {
+        return false
+    }
+    image.width = width
+    image.height = height
+    clock := Timer.MonotonicNanoseconds()
+    result := SceneGpuRenderOrCPU(*figure.awareness_gpu, *figure.awareness_scene, camera, image)
+    figure.render_ms += cast(float64)(Timer.MonotonicNanoseconds() - clock) / 1000000.0
+    figure.prepare_ms += result.prepare_ms
+    figure.submit_ms += result.submit_ms
+    figure.readback_ms += result.readback_ms
+    figure.accelerated = figure.accelerated && result.accelerated
+    if !result.ok {
+        return false
+    }
+    for pixel: cast(s64)0..cast(s64)width * height - 1 {
+        at := pixel * 4
+        // Retain facial and garment shading under a translucent blue tint.
+        image.pixels[at] = cast(u8)(cast(float64)image.pixels[at] * 0.45 + 120.0)
+        image.pixels[at + 1] = cast(u8)(cast(float64)image.pixels[at + 1] * 0.45 + 136.0)
+        image.pixels[at + 2] = cast(u8)(cast(float64)image.pixels[at + 2] * 0.35 + 160.0)
+        image.pixels[at + 3] = cast(u8)(cast(float64)image.pixels[at + 3] * 0.48)
+    }
+    return PreviewFigureImageInFrame(image)
+}
+
+// The same supports used by the app choreography, rendered with depth
+// alongside the avatar rather than leaving wall sits and step-ups in air.
+PreviewFigureProps :: (figure: *PreviewFigure, exercise: s32) {
+    for node: figure.props {
+        SetVisible(*figure.scene, node, false)
+    }
+    prop := WorkoutPropFor(exercise)
+    if prop.wall {
+        PreviewFigureBox(figure, 0, .{-0.55, 0.0, prop.wall_at - 0.08}, .{0.55, 1.95, prop.wall_at})
+    }
+    if !prop.bench {
+        return
+    }
+    near := FigureMin(prop.bench_near, prop.bench_far)
+    far := FigureMax(prop.bench_near, prop.bench_far)
+    PreviewFigureBox(figure, 1, .{-0.3, WORKOUT_BENCH_TOP - 0.045, near}, .{0.3, WORKOUT_BENCH_TOP, far})
+    for xi: cast(s32)0..1 {
+        for zi: cast(s32)0..1 {
+            x := ifx xi == 0 then -0.27 else 0.23
+            z := ifx zi == 0 then near + 0.03 else far - 0.07
+            PreviewFigureBox(figure, 2 + xi * 2 + zi, .{x, 0.0, z}, .{x + 0.04, WORKOUT_BENCH_TOP - 0.045, z + 0.04})
+        }
+    }
+}
+
+PreviewFigureBox :: (figure: *PreviewFigure, index: s32, low: Vector3, high: Vector3) {
+    node := figure.props[index]
+    center := FigureScale(FigureAdd(low, high), 0.5)
+    size := FigureSub(high, low)
+    SetPosition(*figure.scene, node, center.x, center.y, center.z)
+    SetScale(*figure.scene, node, size.x, size.y, size.z)
+    SetVisible(*figure.scene, node, true)
+}
+
+// Paints the loaded figure at JOINTS as VIEW frames it into figure.pixels
+// (straight RGBA, clear background).
 // Played at SECONDS of the practice her hair swings and her eyes blink.
 PreviewFigurePaint :: (figure: *PreviewFigure, joints: *FigureJoints, view: PreviewView, width: s32,
     height: s32, seconds: float64 = -1.0) -> bool {
+    pose_start := Timer.MonotonicNanoseconds()
     if !figure.loaded || !FigureModelPose(*figure.model, *figure.scene, joints, seconds) {
         return false
     }
+    figure.pose_ms = cast(float64)(Timer.MonotonicNanoseconds() - pose_start) / 1000000.0
     toward := FigureV3(Sin(view.yaw) * Cos(view.pitch), Sin(view.pitch), Cos(view.yaw) * Cos(view.pitch))
     half_height := view.height / 2.0
     half_width := half_height * cast(float64)width / cast(float64)height
@@ -84,12 +208,36 @@ PreviewFigurePaint :: (figure: *PreviewFigure, joints: *FigureJoints, view: Prev
     clock := Timer.MonotonicNanoseconds()
     result := SceneGpuRenderOrCPU(*figure.gpu, *figure.scene, camera, *figure.pixels)
     figure.render_ms = cast(float64)(Timer.MonotonicNanoseconds() - clock) / 1000000.0
+    figure.prepare_ms = result.prepare_ms
+    figure.submit_ms = result.submit_ms
+    figure.readback_ms = result.readback_ms
     figure.accelerated = result.accelerated
-    if !result.ok {
-        return false
+    return result.ok
+}
+
+
+// A capture must contain a visible silhouette, clear of all image edges.
+// This tests the rendered model/supports, independently of joint bounds.
+PreviewFigureInFrame :: (figure: *PreviewFigure) -> bool {
+    return PreviewFigureImageInFrame(*figure.pixels)
+}
+
+PreviewFigureImageInFrame :: (image: *Raster.Image) -> bool {
+    visible: s64
+    for y: cast(s32)0..image.height - 1 {
+        for x: cast(s32)0..image.width - 1 {
+            alpha := image.pixels[(cast(s64)y * image.width + x) * 4 + 3]
+            if alpha < 16 {
+                continue
+            }
+            visible += 1
+            if x < 2 || y < 2 || x >= image.width - 2 || y >= image.height - 2 {
+                print("figure capture: silhouette touches image edge at %,%\n", x, y)
+                return false
+            }
+        }
     }
-    PreviewFigureShadow(figure, joints, camera, view)
-    return true
+    return visible > 100
 }
 
 #scope_file
@@ -105,53 +253,4 @@ PreviewFigureJoin :: (buffer: []u8, a: string, b: string, c: string) -> string {
         }
     }
     return TextView(buffer[0:length])
-}
-
-// A soft contact shadow under the feet: an ellipse on the floor round the
-// lowest joints, projected into the picture.
-PreviewFigureShadow :: (figure: *PreviewFigure, joints: *FigureJoints, camera: SceneCamera, view: PreviewView) {
-    points: [6]Vector3 = .[joints.ankles[0], joints.ankles[1], joints.toes[0], joints.toes[1], joints.pelvis,
-        joints.wrists[0]]
-    floor: float64 = 1000.0
-    for point: points {
-        floor = FigureMin(floor, point.y)
-    }
-    low: Vector3 = .{1000.0, 0.0, 1000.0}
-    high: Vector3 = .{-1000.0, 0.0, -1000.0}
-    for point: points {
-        if point.y < floor + 0.35 {
-            low = .{FigureMin(low.x, point.x), 0.0, FigureMin(low.z, point.z)}
-            high = .{FigureMax(high.x, point.x), 0.0, FigureMax(high.z, point.z)}
-        }
-    }
-    center: Vector3 = .{(low.x + high.x) * 0.5, floor - 0.06, (low.z + high.z) * 0.5}
-    radii: Vector3 = .{(high.x - low.x) * 0.5 + 0.22, 0.0, (high.z - low.z) * 0.5 + 0.18}
-    look := FigureNormalize(FigureSub(camera.target, camera.position))
-    if FigureAbs(look.y) < 0.03 {
-        return
-    }
-    right := FigureNormalize(FigureCross(look, camera.up))
-    up := FigureCross(right, look)
-    image := *figure.pixels
-    scale := cast(float64)image.height / view.height
-    origin := PreviewFigurePixel(center, camera, right, up, scale, image)
-    a := PreviewFigurePixel(FigureAdd(center, FigureV3(radii.x, 0.0, 0.0)), camera, right, up, scale, image)
-    b := PreviewFigurePixel(FigureAdd(center, FigureV3(0.0, 0.0, radii.z)), camera, right, up, scale, image)
-    ax := a.x - origin.x
-    ay := a.y - origin.y
-    bx := b.x - origin.x
-    by := b.y - origin.y
-    det := ax * by - bx * ay
-    if FigureAbs(det) < 0.5 {
-        return
-    }
-    spot: FigureSpot = .{origin = origin, xx = by / det, xy = -bx / det, yx = -ay / det, yy = ax / det}
-    FigureContactShadow(image, spot, 0.38)
-}
-
-PreviewFigurePixel :: (point: Vector3, camera: SceneCamera, right: Vector3, up: Vector3, scale: float64,
-    image: *Raster.Image) -> ShapePoint {
-    offset := FigureSub(point, camera.target)
-    return .{cast(float64)image.width * 0.5 + FigureDot(offset, right) * scale,
-        cast(float64)image.height * 0.5 - FigureDot(offset, up) * scale}
 }

@@ -67,6 +67,7 @@ continuation_test: bool;
 continuation_round: s32;
 tool_executions: s32;
 provider_reply: string;
+provider_empty_reply: bool;
 provider_hold: bool;
 provider_status: s32 = 200;
 provider_start_fail: bool;
@@ -202,7 +203,7 @@ ConnectionStart :: (context: *void, request: HttpRequest, output: []u8) -> bool 
         if provider_start_fail {
             return false
         }
-        if provider_reply.count > 0 {
+        if provider_empty_reply || provider_reply.count > 0 {
             out: Vec(u8)
             BuilderPrint(*out, "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":")
             LumiJsonString(*out, provider_reply)
@@ -402,6 +403,92 @@ QueuedTurns :: (app: *InnerBreeze) {
     check_true("poll cancellation preserves old account's message", LastRow() == "poll-account-queued")
 }
 
+// Run a real provider turn with the same monotonic times the frame loop
+// passes. The fixture controls only the remote transport and time.
+PacedStart :: (app: *InnerBreeze, text: string, now: float64) {
+    check_true("paced turn is accepted", Ask(text))
+    app_lumi_pump(app, true, now)
+    app_lumi_pump(app, true, now + 0.1)
+    check_true("starting a network request never shows typing", !LumiOnlineTyping())
+}
+
+PacedTurns :: (app: *InnerBreeze) {
+    before := provider_requests
+    provider_hold = true
+    PacedStart(app, "paced first", 1.0)
+    app_lumi_pump(app, true, 4.0)
+    check_true("a slow network leaves the composer quiet", LumiOnlineWaiting() && !LumiOnlineTyping())
+    check_true("waiting reveals no assistant text", LastRow() == "paced first")
+
+    provider_hold = false
+    app_lumi_pump(app, true, 4.1)
+    check_true("validated final text starts the typing precursor", LumiOnlineTyping() && LumiOnlineWaiting())
+    check_true("the answer stays out of history until shown", LastRow() == "paced first")
+    check_true("another message can be sent during the precursor", Ask("paced follow-up"))
+    submitted := LumiStoreCount()
+    LumiOnlineTypingDrawn(4.3)
+    LumiOnlineTypingDrawn(4.6)
+    app_lumi_pump(app, true, 4.8)
+    check_true("redrawing does not restart the lead-in", LumiOnlineTyping() && LumiStoreCount() == submitted)
+    check_int("follow-up waits behind the confirmed reply", provider_requests, before + 1)
+    app_lumi_pump(app, true, 5.0)
+    check_true("lead-in completion reveals exactly one answer", !LumiOnlineTyping() &&
+        LumiStoreCount() == submitted + 1 && LastRow() == "Hello from the provider")
+    app_lumi_pump(app, true, 5.1)
+    check_int("the next pump does not repeat the answer", LumiStoreCount(), submitted + 1)
+    app_lumi_pump(app, true, 5.2)
+    queued: [3]string = .["paced first", "Hello from the provider", "paced follow-up"]
+    ProviderTail(queued[:])
+    app_lumi_pump(app, true, 5.3)
+    check_true("the next server reply gets its own precursor", LumiOnlineTyping())
+    app_lumi_pump(app, false, 5.4)
+    check_true("leaving Lumi completes the ready reply without stale dots", !LumiOnlineWaiting() &&
+        !LumiOnlineTyping() && LumiStoreCount() == submitted + 2)
+
+    PacedStart(app, "unpainted precursor", 7.0)
+    app_lumi_pump(app, true, 7.2)
+    check_true("an unpainted precursor initially keeps the reply ready", LumiOnlineTyping())
+    app_lumi_pump(app, true, 9.0)
+    check_true("an unpainted precursor still has a bounded delivery", !LumiOnlineWaiting() &&
+        LastRow() == "Hello from the provider")
+
+    PacedStart(app, "failed paced request", 10.0)
+    provider_status = 503
+    app_lumi_pump(app, true, 10.2)
+    provider_status = 200
+    check_true("transport errors are immediate and never show typing", !LumiOnlineWaiting() &&
+        !LumiOnlineTyping() && LastRow() == "UNAVAILABLE")
+
+    provider_empty_reply = true
+    PacedStart(app, "empty paced request", 11.0)
+    app_lumi_pump(app, true, 11.2)
+    provider_empty_reply = false
+    check_true("a successful response without text has no precursor", !LumiOnlineWaiting() &&
+        !LumiOnlineTyping() && LastRow() == "UNAVAILABLE")
+
+    PacedStart(app, "turn canceled during precursor", 12.0)
+    app_lumi_pump(app, true, 12.2)
+    check_true("canceled reply was ready", LumiOnlineTyping())
+    storage_set_setting_int(LumiOnlineSetting, 0)
+    app_lumi_pump(app, true, 12.3)
+    storage_set_setting_int(LumiOnlineSetting, 1)
+    app_lumi_pump(app, true, 15.0)
+    check_true("going offline clears the confirmed reply and its dots", !LumiOnlineWaiting() &&
+        !LumiOnlineTyping() && LastRow() == "turn canceled during precursor")
+
+    PacedStart(app, "old account precursor", 16.0)
+    app_lumi_pump(app, true, 16.2)
+    check_true("old account reply was ready", LumiOnlineTyping())
+    saved_owner: [64]u8
+    unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), saved_owner[:])
+    unused AppCopyText("another-account", g_storage.user_id[:])
+    app_lumi_pump(app, true, 19.0)
+    check_true("account change removes the confirmed reply and its dots", !LumiOnlineWaiting() &&
+        !LumiOnlineTyping() && LumiStoreCount() == 0)
+    unused AppCopyText(TextUntilNul(saved_owner[:]), g_storage.user_id[:])
+    check_true("the discarded answer is never delivered on return", LastRow() == "old account precursor")
+}
+
 LastRow :: () -> string {
     count := LumiStoreCount()
     if count == 0 {
@@ -591,6 +678,7 @@ Check :: () -> s32 {
         provider_response_capacity == 524288)
 
     QueuedTurns(*app)
+    PacedTurns(*app)
     long_reply: Vec(u8)
     for index: cast(s32)0..1799 {
         BuilderPrint(*long_reply, "茶")

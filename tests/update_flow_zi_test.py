@@ -92,7 +92,7 @@ def build_probe(work, compiler, env):
     executable = work / "probe"
     names = {
         "update_flow_probe.c", "update_check.c", "update_policy.c",
-        "json_scan.c", "update.c", "text_buffer.c", "crypto.c", "sha256.c",
+        "json_scan.c", "json_bytes.c", "update.c", "text_buffer.c", "crypto.c", "sha256.c",
         "current_app.c", "update_transport.c", "c_string.c", "byte_text_linux.c",
     }
     sources = sorted(path for path in output.rglob("*.c")

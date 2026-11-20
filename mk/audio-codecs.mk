@@ -15,6 +15,7 @@ AUDIO_VORBIS_LIBS := $(AUDIO_VORBIS_A) $(AUDIO_CODECS_BUILD_DIR)/libvorbis.a $(A
 $(AUDIO_OPUS_A) $(AUDIO_MP3_A) $(AUDIO_VORBIS_LIBS) &: $(AUDIO_PACKAGE_DIR)/native/AudioCodecs.cmake $(AUDIO_PACKAGE_DIR)/native/CMakeLists.txt $(AUDIO_OPUS_DIR)/CMakeLists.txt $(ZIRAN_DIR)/std/native/AudioCodecs.cmake ziran.lock mk/audio-codecs.mk
 	$(CMAKE) -S $(AUDIO_PACKAGE_DIR)/native -B $(AUDIO_CODECS_BUILD_DIR) \
 		-DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 		-DOPUS_DIR=$(abspath $(AUDIO_OPUS_DIR)) \
 		-DSAMPLERATE_DIR=$(abspath $(AUDIO_SAMPLERATE_DIR)) \
 		-DZIRAN_STDLIB=$(abspath $(ZIRAN_DIR))/std

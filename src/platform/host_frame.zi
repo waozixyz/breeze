@@ -17,6 +17,11 @@
     #import, file "android/android_picture_window.zi";
     Runtime :: #import "android_runtime";
     Pictures :: #import "pixmap_assets_android";
+    #if #defined(LUMI_ANDROID_FRAME_WATCH) {
+        #import, file "lumi_frame_watch.zi";
+        #import, file "../app/app_types.zi";
+        #import, file "../core/types.zi";
+    }
     host_frame_target_fps: s32 = 60;
     host_frame_keep_running: bool;
 } else #if #defined(PLATFORM_WEB) {
@@ -45,18 +50,38 @@ HostRunFrame :: (procedure: HostFrameProcedure, argument: *void) -> bool {
         Desktop.PauseDesktop()
         return presented
     } else #if #defined(ANDROID_BUILD) {
-        if !Runtime.PollAndroidHost(HostAndroidWaitMilliseconds()) {
+        wait_ms := HostAndroidWaitMilliseconds()
+        #if #defined(LUMI_ANDROID_FRAME_WATCH) {
+            app := cast(*InnerBreeze)argument
+            if wait_ms >= 0 && app.breathing.screen == ScreenLumi &&
+            !Runtime.AndroidHostPaused() && !HostWindowHidden() {
+                LumiWatchBegin()
+            }
+        }
+        if !Runtime.PollAndroidHost(wait_ms) {
+            #if #defined(LUMI_ANDROID_FRAME_WATCH) {
+                LumiWatchEnd()
+            }
             HostMarkWindowEnded()
             return true
+        }
+        #if #defined(LUMI_ANDROID_FRAME_WATCH) {
+            LumiWatchMark(LumiWatchFrameSetup)
         }
         HostFrameStarted()
         Runtime.SetAndroidPausedSurfaceVisible((AndroidPictureWindowState() & 2) != 0)
         Runtime.BeginAndroidFrame()
         procedure(argument)
+        #if #defined(LUMI_ANDROID_FRAME_WATCH) {
+            LumiWatchMark(LumiWatchPresent)
+        }
         presented := Runtime.EndAndroidFrame()
         HostInputFrameEnd()
         if presented {
             HostMarkWindowPresented()
+        }
+        #if #defined(LUMI_ANDROID_FRAME_WATCH) {
+            LumiWatchEnd()
         }
         return presented
     } else {

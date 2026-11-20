@@ -4,8 +4,9 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/audio-cue-assets
 generated=$work/generated
+rm -rf "$generated"
 mkdir -p "$generated"
-"$bin/ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
+"$bin/ziran" build --target=c --define PLATFORM_WEB --root "$root/tests" \
     --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
     --module-path "$root/build/packages/kryon/src/backend" --module-path "$root/build/packages/ziran/std" \
     --module-path "$root/build/packages/mesh-client" --module-path "$root/build/packages/css/src" \

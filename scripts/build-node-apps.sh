@@ -24,4 +24,8 @@ for name in $(python3 -c 'import json; print(" ".join(sorted(json.load(open("app
         --define KRYON_HOSTED_UI \
         --asset-dir "assets=$assets" \
         --entry "$name:Main" -o "$output/$name.zx" "apps/$name/$name.zi"
+    # The compiler preserves the mtime when the bundle's bytes match.
+    # Mark a verified output current so Make can skip rebuilding it.
+    test -s "$output/$name.zx"
+    touch "$output/$name.zx"
 done

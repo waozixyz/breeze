@@ -2,9 +2,9 @@
 
 ## [Unreleased]
 
-- Fotky z Aplikací; Lumi jednou ukáže úplný návrh ohlasu ze seznamu; Seznamy: delší úkoly a dokončení přejetím.
-- Karty Cvičení už neposouvají obrazovku. Před startem vyber ze šesti astrálních cvičení. Rozhraní má deset jazyků. Probíhající cvičení může zůstat viditelné v režimu obrazu v obraze. Průběh stahování cvičení je jasně viditelný.
-- Hlasové balíčky cvičení jsou asi o třetinu menší. V obchodě Návyků si každý den vyzvedněte mince.
+- Opravený Backspace, úpravy a obnova záloh, snazší přístup k Fotkám a Rádiu, nákup Dew za hvězdy Telegramu.
+- Cvičení startují čistě a plynule se přepínají. Pokračujte v relacích, sledujte stahování i obraz v obraze na Androidu.
+- Časovače se po nečinnosti vynulují, mince i časovače ladí s motivem a v Návycích získáte denní mince.
 
 ## [2.1.63] - 2026-11-05
 

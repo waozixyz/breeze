@@ -214,7 +214,8 @@ TaiChiTwoBone :: struct {
 }
 
 // Two-bone inverse kinematics: the middle joint and the clamped end.
-TaiChiSolveTwoBone :: (root: TaiChiVector3, target: TaiChiVector3, upper: float64, lower: float64, pole: TaiChiVector3) -> TaiChiTwoBone {
+TaiChiSolveTwoBone :: (root: TaiChiVector3, target: TaiChiVector3, upper: float64, lower: float64, pole: TaiChiVector3,
+    soft_end: float64 = 1.0) -> TaiChiTwoBone {
     to_target := TaiChiSub3(target, root)
     distance := TaiChiLength3(to_target)
     direction := TaiChiV3(0.0, -1.0, 0.0)
@@ -226,8 +227,8 @@ TaiChiSolveTwoBone :: (root: TaiChiVector3, target: TaiChiVector3, upper: float6
     // changing ever faster as the limb nears its length; over the last
     // stretch the limb straightens smoothly instead, falling a few
     // millimetres short of a target it cannot reach.
-    soft := reach * TAI_CHI_SOFT_REACH
-    if distance > reach - soft {
+    soft := reach * TAI_CHI_SOFT_REACH * soft_end
+    if soft > 0.000001 && distance > reach - soft {
         distance = reach - soft * Exp((reach - soft - distance) / soft)
     }
     distance = TaiChiMin(TaiChiMax(distance, TaiChiAbs(upper - lower) + 0.0001), reach * 0.99999)
@@ -376,9 +377,9 @@ TaiChiStepFoot :: (a: TaiChiFootPose, b: TaiChiFootPose, u: float64, rig: *TaiCh
     return foot
 }
 
-// How firmly a foot is on the floor: 1 on the floor, 0 from 3 cm up.
+// Let a lifting foot release its influence over the first 12 cm of a step.
 TaiChiGroundedness :: (foot: TaiChiFootPose) -> float64 {
-    return TaiChiClamp(1.0 - foot.lift / 0.03, 0.0, 1.0)
+    return 1.0 - TaiChiSmoothRamp(foot.lift, 0.0, 0.12)
 }
 
 TaiChiHipOffset :: (side: s32, pelvis_quat: TaiChiQuaternion, rig: *TaiChiRig) -> TaiChiVector3 {
@@ -399,8 +400,10 @@ TaiChiHeelRaise :: struct {
 TaiChiRaiseHeelToReach :: (side: s32, foot: TaiChiFootPose, share: float64, pelvis_xz: TaiChiVector3, height: float64,
     pelvis_quat: TaiChiQuaternion, facing: float64, rig: *TaiChiRig) -> TaiChiHeelRaise {
     result: TaiChiHeelRaise
-    room := TaiChiClamp((0.45 - share) / 0.3, 0.0, 1.0)
-    if room <= 0.0 || foot.pitch > 0.01 {
+    // Let the authored lift or heel-first landing take over smoothly.
+    room := TaiChiClamp((0.45 - share) / 0.3, 0.0, 1.0) *
+        TaiChiGroundedness(foot) * (1.0 - TaiChiSmoothRamp(foot.pitch, 0.0, 0.01))
+    if room <= 0.0 {
         return result
     }
     // Small shortfalls are taken up by bending the knees a little lower;
@@ -461,9 +464,11 @@ TaiChiReachablePelvisHeight :: (target: float64, pelvis_xz: TaiChiVector3, pelvi
         horizontal := TaiChiHypot(dx, dz)
         vertical := Sqrt(TaiChiMax(leg_reach * leg_reach - horizontal * horizontal, 0.0))
         allowed := feet[side].ankle.y + vertical - hip_offset.y
-        if allowed < target {
-            height = TaiChiMin(height, target + (allowed - target) * weight)
-        }
+        // Smoothly yield the pelvis instead of snapping at the reach cap.
+        bound := target + (allowed - target) * weight
+        delta := height - bound
+        softness := 0.015 * weight
+        height = (height + bound - Sqrt(delta * delta + softness * softness)) * 0.5
     }
     return height
 }
@@ -530,7 +535,7 @@ TaiChiKneeSafePelvisHeight :: (height: float64, pelvis_xz: TaiChiVector3, pelvis
 TaiChiSupport :: (foot: TaiChiPlacedFoot, ramp: float64, scale: float64) -> TaiChiVector3 {
     middle := TaiChiAddScaled3(TaiChiFlat3(foot.ankle), foot.forward, 0.03 * scale)
     contact := ifx foot.pitch >= 0.0 then TaiChiFlat3(foot.heel) else TaiChiFlat3(foot.ball)
-    return TaiChiLerp3(middle, contact, TaiChiMin(1.0, TaiChiAbs(foot.pitch) / ramp))
+    return TaiChiLerp3(middle, contact, TaiChiSmoothRamp(TaiChiAbs(foot.pitch), 0.0, ramp))
 }
 
 TaiChiLook3 :: struct {
@@ -584,8 +589,9 @@ TaiChiSolveBody :: (pose: *TaiChiPose, rig: *TaiChiRig, correction: TaiChiVector
     }
 
     // Pelvis: over the weighted support point of the feet.
-    flat_ramp := 3.5 * TAI_CHI_DEGREE
     load := TaiChiClamp(pose.channels[TAI_CHI_LOAD], 0.0, 1.0)
+    light_share := ifx load < 0.5 then load else 1.0 - load
+    flat_ramp := (3.5 + 4.5 * TaiChiSmoothRamp(light_share, 0.015, 0.11)) * TAI_CHI_DEGREE
     facing := pose.channels[TAI_CHI_FACING]
     pelvis_xz := TaiChiAdd3(TaiChiScale3(TaiChiSupport(feet[0], flat_ramp, scale), load),
         TaiChiScale3(TaiChiSupport(feet[1], flat_ramp, scale), 1.0 - load))
@@ -709,10 +715,20 @@ TaiChiSolveBody :: (pose: *TaiChiPose, rig: *TaiChiRig, correction: TaiChiVector
     solved.head_top = TaiChiAdd3(head_pivot, TaiChiRotate(TaiChiV3(0.0, rig.head_height, 0.0), head_quat))
 
     // Legs: knees track over the toes.
+    min_ankle_distance := Sqrt(rig.thigh * rig.thigh + rig.shin * rig.shin + 2.0 * rig.thigh * rig.shin * Cos(126.0 * TAI_CHI_DEGREE))
     for side: cast(s32)0..1 {
         foot := feet[side]
         hip := TaiChiAdd3(pelvis, TaiChiHipOffset(side, pelvis_quat, rig))
-        leg := TaiChiSolveTwoBone(hip, foot.ankle, rig.thigh, rig.shin, TaiChiLegPole(foot, side))
+        // Ease an airborne ankle away from its hip when the knee folds too far.
+        // Grounded contacts stay anchored while the pelvis handles their reach.
+        lift := foot_poses[side].lift
+        outward := TaiChiSub3(foot.ankle, hip)
+        distance := TaiChiLength3(outward)
+        correction := min_ankle_distance - distance
+        push := correction * TaiChiSmoothRamp(correction, 0.0, 0.008 * scale) * TaiChiSmoothRamp(lift, 0.02, 0.12)
+        direction := ifx distance > 0.00000001 then TaiChiScale3(outward, 1.0 / distance) else TaiChiV3(0.0, -1.0, 0.0)
+        target := TaiChiAddScaled3(foot.ankle, direction, push)
+        leg := TaiChiSolveTwoBone(hip, target, rig.thigh, rig.shin, TaiChiLegPole(foot, side), TaiChiSmoothRamp(lift, 0.0, 0.03))
         // If the leg could not reach, the foot hangs from the real ankle.
         offset := TaiChiSub3(leg.end, foot.ankle)
         solved.hips[side] = hip

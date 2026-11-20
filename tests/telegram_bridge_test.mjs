@@ -781,5 +781,38 @@ await test('corrupt persistent capsules are never restored', async () => {
   }
 });
 
-console.log(`Telegram bridge: ${passed} synthetic context, capsule and secure-storage checks passed; ${failed} failed`);
+await test('opens only Telegram invoices and returns dialog status', async () => {
+  const { bridge, webApp, safe } = runtime();
+  const invoice = 'https://t.me/$invoice_fixture';
+  let done;
+  let opened = 0;
+  webApp.openInvoice = (url, callback) => {
+    assert.equal(url, invoice);
+    done = callback;
+    opened += 1;
+  };
+  assert.equal(bridge.invoiceAvailable(), false);
+  webApp.isVersionAtLeast = version => version === '6.1';
+  assert.equal(bridge.invoiceAvailable(), true);
+  for (const url of ['http://t.me/$invoice_fixture', 'https://t.me.example/$invoice_fixture',
+    'https://t.me/examplebot', 'https://t.me/$invoice_fixture?next=https://example.org']) {
+    assert.equal(await bridge.openInvoice(url), 'failed');
+  }
+  assert.equal(opened, 0);
+  for (const status of ['paid', 'pending', 'cancelled', 'failed', 'unexpected']) {
+    const result = bridge.openInvoice(invoice);
+    assert.equal(await bridge.openInvoice(invoice), 'failed');
+    done(status);
+    assert.equal(await result, status === 'unexpected' ? 'failed' : status);
+  }
+  const staleResult = bridge.openInvoice(invoice);
+  webApp.initData = 'changed';
+  done('paid');
+  assert.equal(await staleResult, 'failed');
+  assert.equal(bridge.invoiceAvailable(), false);
+  assert.equal(opened, 6);
+  safe();
+});
+
+console.log(`Telegram bridge: ${passed} synthetic context, invoice, capsule and secure-storage checks passed; ${failed} failed`);
 process.exitCode = failed === 0 ? 0 : 1;

@@ -364,7 +364,8 @@ LumiAuthorizationBuildGrant :: (pending: *OwnerRendezvous, owner: string,
 }
 
 LumiAuthorizationSealAndSign :: (account: *AccountKeys, pending: *OwnerRendezvous,
-    now: s64, collection_key: []u8, output: []u8, storage: *GrantStorage) -> bool {
+    now: s64, collection_key: []u8, output: []u8, storage: *GrantStorage,
+    telegram_stars: bool = false) -> bool {
     if output.count > 0 {
         output[0] = cast(u8)0
     }
@@ -374,6 +375,7 @@ LumiAuthorizationSealAndSign :: (account: *AccountKeys, pending: *OwnerRendezvou
         AccountFieldText(*account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE), now, storage) {
         return false
     }
+    storage.telegram_stars = telegram_stars
     // Match the installed owner's isolated collection key before sealing. A
     // caller cannot accidentally pass the legacy key shared by other data.
     expected_key: [32]u8
@@ -464,6 +466,7 @@ lumi_authorization_owner: [65]u8;
 lumi_authorization_state: s32;
 lumi_authorization_action: s32;
 lumi_authorization_intent: s32;
+lumi_authorization_approval_request: [33]u8;
 lumi_authorization_retry: s64;
 lumi_authorization_loaded: bool;
 lumi_authorization_ready: bool;
@@ -506,9 +509,26 @@ LumiAuthorizationHasGrant :: () -> bool {
     ParsePositiveSeconds(storage_get_setting_text("lumi_authorization_grant_expires")) > AuthorizationNow(null)
 }
 
-LumiAuthorizationApprove :: () {
-    if lumi_authorization_ready && !LumiAuthorizationBusy() {
-        lumi_authorization_intent = 3
+LumiAuthorizationCanRequest :: () -> bool {
+    return lumi_authorization_loaded && !LumiAuthorizationBusy() &&
+    (lumi_authorization_pending.request_id[0] == 0 ||
+        lumi_authorization_pending.expires_at <= AuthorizationNow(null)) &&
+    LowerHex(TextUntilNul(lumi_authorization_owner[:]), 64) &&
+    TextUntilNul(lumi_authorization_owner[:]) == storage_get_setting_text("sync_public_id") &&
+    storage_get_setting_text("sync_private_key").count > 0
+}
+
+LumiAuthorizationRequest :: () -> bool {
+    if !LumiAuthorizationCanRequest() { return false }
+    lumi_authorization_intent = 1
+    return true
+}
+
+LumiAuthorizationApprove :: (telegram_stars: bool = false) {
+    request := TextUntilNul(lumi_authorization_pending.request_id[:])
+    if lumi_authorization_ready && !LumiAuthorizationBusy() && LowerHex(request, 32) &&
+    AppCopyText(request, lumi_authorization_approval_request[:]) {
+        lumi_authorization_intent = ifx telegram_stars then 6 else 3
     }
 }
 
@@ -537,6 +557,7 @@ LumiAuthorizationBegin :: (path: string, body: string, signed: bool,
 }
 
 LumiAuthorizationClearPending :: () {
+    lumi_authorization_approval_request = .{}
     lumi_authorization_pending = OwnerRendezvous.{}
     lumi_authorization_ready = false
     lumi_authorization_claimed = false
@@ -559,6 +580,7 @@ LumiAuthorizationPump :: () {
         lumi_authorization_claimed = false
         lumi_authorization_loaded = false
         lumi_authorization_intent = 0
+        lumi_authorization_approval_request = .{}
         lumi_authorization_state = 0
         lumi_authorization_action = 0
         lumi_authorization_retry = 0
@@ -676,6 +698,8 @@ LumiAuthorizationPump :: () {
     }
     if lumi_authorization_intent == 1 {
         lumi_authorization_intent = 0
+        LumiAuthorizationClearPending()
+        lumi_authorization_retry = 0
         scopes: [1]RequestedScope = .[RequestedScope.{LumiPrivateCollection, true, true}]
         body: [512]u8
         if storage_migrate_lumi_collection() == 0 ||
@@ -694,17 +718,21 @@ LumiAuthorizationPump :: () {
         }
         return
     }
-    if lumi_authorization_intent == 3 {
+    if lumi_authorization_intent == 3 || lumi_authorization_intent == 6 {
+        telegram_stars := lumi_authorization_intent == 6
         lumi_authorization_intent = 0
+        matches_review := TextUntilNul(lumi_authorization_approval_request[:]) ==
+            TextUntilNul(lumi_authorization_pending.request_id[:])
+        lumi_authorization_approval_request = .{}
         account: AccountKeys
         key: [32]u8
         body: [32768]u8
         approved_now := ServerNow(*lumi_authorization_operation.session, AuthorizationNow(null))
-        ok := lumi_authorization_ready && sync_account_load(*account) != 0 &&
+        ok := matches_review && lumi_authorization_ready && sync_account_load(*account) != 0 &&
         storage_migrate_lumi_collection() != 0 &&
         storage_private_collection_key(LumiPrivateCollection, LumiPrivateKeyID, *key[0]) != 0 &&
         LumiAuthorizationSealAndSign(*account, *lumi_authorization_pending, approved_now,
-            key[:], body[:], *lumi_authorization_grant)
+            key[:], body[:], *lumi_authorization_grant, telegram_stars)
         SecureWipe(*key[0], 32)
         SecureWipe(*account.private_key_hex[0], ACCOUNT_PRIVATE_KEY_HEX_SIZE)
         if !ok || !LumiAuthorizationBegin("/api/v1/authorization/approve", TextUntilNul(body[:]), false, 3) {

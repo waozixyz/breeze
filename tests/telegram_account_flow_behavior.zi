@@ -1,4 +1,6 @@
 #import "authorization"
+#import "authorization_owner"
+#import "client"
 #import "envelope"
 #import "delegated"
 #import "auth"
@@ -11,6 +13,7 @@
 #import "byte_text_linux"
 #import, file "telegram_account_flow_host.zi";
 #import, file "../src/app/telegram_account_flow.zi";
+#import, file "../src/app/telegram_stars.zi";
 #import, file "../src/app/app_settings.zi";
 #import, file "../src/app/app_types.zi";
 #import, file "../src/apps/inbe_types.zi";
@@ -20,7 +23,7 @@
 #import, file "../src/storage/mesh_account.zi";
 #import, file "../src/storage/sync_account.zi";
 #import "keys"
-#import "crypto"
+#import "mesh_client/crypto"
 #import, file "../src/platform/network_transport.zi";
 #import, file "../src/screens/telegram_account.zi";
 #import, file "../src/storage/sync_async.zi";
@@ -42,6 +45,7 @@ FlowRequest :: "cccccccccccccccccccccccccccccccc"
 FlowGrant :: "dddddddddddddddddddddddddddddddd"
 FlowChallenge :: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 FlowSession :: "ffffffffffffffffffffffffffffffff"
+FlowInvoiceID :: "a71c55c90123456789abcdef01234567"
 FlowBot :: 42
 FlowUser :: 7
 failures: s32;
@@ -63,6 +67,8 @@ fixture_entry_cancels: s32;
 fixture_owner_cancels: s32;
 fixture_telegram_user: s64 = FlowUser;
 fixture_challenge_calls: s32;
+fixture_stars_credit: bool;
+fixture_stars_requests: s32;
 fixture_request_expiry: s64;
 fixture_backup: [17664]u8;
 fixture_body: [32768]u8;
@@ -360,6 +366,45 @@ Reply :: (request: HttpRequest, output: []u8, status: *s32) -> bool {
         }
         return WriteSession(output)
     }
+    if path == "/api/v1/telegram/launch" {
+        Expect("checkout launch sends the exact Telegram context", request.method == "POST" &&
+            FlowContains(request.body, flow_host_raw) && flow_host_authorization[0] != 0)
+        return AppCopyText("{\"app_id\":\"inbe\",\"stars_available\":true}", output)
+    }
+    if path == "/api/v1/tokens/purchases/telegram/catalog?app_id=inbe" {
+        fixture_stars_requests += 1
+        Expect("catalog uses the authenticated delegate", request.method == "GET" &&
+            request.body == "" && flow_host_authorization[0] != 0)
+        return AppCopyText("{\"currency\":\"XTR\",\"products\":[{\"product_id\":\"dew_10\",\"title\":\"10 Dew\",\"amount\":23,\"units\":10000000}]}", output)
+    }
+    if path == "/api/v1/tokens/purchases/telegram/balance?app_id=inbe" {
+        fixture_stars_requests += 1
+        writer := WriteText(Writer.{output, 0, true}, "{\"app_id\":\"inbe\",\"asset_id\":\"waozi:token\",")
+        writer = JsonTextField(writer, "account_id", TextUntilNul(fixture_account.public_id[:]))
+        writer = WriteByte(writer, cast(u8)44)
+        writer = JsonNumberField(writer, "balance", ifx fixture_stars_credit then 15000000 else 5000000)
+        return WriteByte(writer, cast(u8)125).valid
+    }
+    if path == "/api/v1/tokens/purchases/telegram/invoices" ||
+    path == "/api/v1/tokens/purchases/telegram/invoices/a71c55c90123456789abcdef01234567" {
+        fixture_stars_requests += 1
+        creating := request.method == "POST"
+        if creating {
+            Expect("checkout keeps exact Telegram bytes and idempotency key", FlowContains(request.body, flow_host_raw) &&
+                FlowContains(request.body, TextUntilNul(telegram_stars.nonce[:])) && FlowContains(request.body, "dew_10"))
+        } else {
+            Expect("status uses the bound invoice id and an empty GET body", request.method == "GET" && request.body == "")
+        }
+        writer := WriteText(Writer.{output, 0, true}, "{\"product_id\":\"dew_10\",\"currency\":\"XTR\",\"amount\":23,\"units\":10000000,")
+        writer = JsonTextField(writer, "invoice_id", FlowInvoiceID)
+        writer = WriteByte(writer, cast(u8)44)
+        writer = JsonTextField(writer, "status", ifx fixture_stars_credit then "credited" else "pending")
+        if creating {
+            writer = WriteByte(writer, cast(u8)44)
+            writer = JsonTextField(writer, "invoice_url", FlowInvoiceURL)
+        }
+        return WriteByte(writer, cast(u8)125).valid
+    }
     safe_path := path
     for cursor: cast(s64)0..cast(s64)path.count - 1 {
         if path[cursor] == cast(u8)63 {
@@ -377,6 +422,7 @@ FixtureCleared :: () {
 
 StartFixture :: (name: string, mode: string) -> bool {
     if fixture_db_open {
+        TelegramStarsForget()
         TelegramAccountFlowCancel()
         ClearDelegate()
         storage_close()
@@ -402,6 +448,8 @@ StartFixture :: (name: string, mode: string) -> bool {
     fixture_owner_cancels = 0
     fixture_telegram_user = FlowUser
     fixture_challenge_calls = 0
+    fixture_stars_credit = false
+    fixture_stars_requests = 0
     fixture_request_expiry = FlowTime(null) + 600
     fixture_grant = GrantStorage.{}
     root: [512]u8
@@ -639,8 +687,8 @@ CheckRestorePreserves :: () {
     SecureWipe(*other_backup[0], 17664)
 }
 
-CheckConnect :: () {
-    Expect("connect fixture opens", StartFixture("connect", "connect"))
+CheckConnect :: (stars: bool = false) {
+    Expect("connect fixture opens", StartFixture(ifx stars then "stars" else "connect", "connect"))
     storage_set_sync_data_owner_public_id(TextUntilNul(fixture_account.public_id[:]))
     SeedHistory()
     outbox := OutboxCount()
@@ -653,6 +701,19 @@ CheckConnect :: () {
     Expect("existing device signs scoped owner grant", SealAndSignTemporaryLumiGrant(*fixture_account, *pending,
         FlowTime(null), fixture_body[:], *fixture_grant))
     Expect("existing device approval serialized signature", ReadGrantAt(TextUntilNul(fixture_body[:]), 0, *fixture_grant))
+    if stars {
+        // Simulate the other device issuing a signed Stars grant. The native
+        // authorization test separately exercises that device's consent path.
+        fixture_grant.telegram_stars = true
+        client: Client
+        grant: Grant
+        scopes: [1]GrantScope
+        Expect("Stars fixture receives a real owner signature", OpenTemporaryOwnerClient(TelegramFlowServer,
+            *fixture_account, TextUntilNul(pending.client_id[:]), pending.bot_id, pending.telegram_id, *client) &&
+            ViewGrant(*fixture_grant, scopes[:], *grant) &&
+            PrepareGrantApproval(client, grant, fixture_body[:]) == cast(AuthResult)AuthResult.AUTH_OK &&
+            ReadGrantAt(TextUntilNul(fixture_body[:]), 0, *fixture_grant))
+    }
     fixture_approved = true
     FlowAdvanceClock(3)
     Expect("connect acquires key-bound session", PumpUntil(14) && StoredDelegateAvailable() == 1)
@@ -661,9 +722,45 @@ CheckConnect :: () {
     Expect("connect survives installation cleanup callback", telegram_account_flow.phase == 14 && StoredDelegateAvailable() == 1)
     Expect("connect preserves Diary feedback and queued outbox", HistoryCount() == 2 && OutboxCount() == outbox)
     Expect("connect stores no owner credential", storage_get_setting_text("sync_private_key") == "" && storage_get_setting_text("sync_auth_token") == "")
+    CheckStars(stars)
+    if stars { return }
     CheckProtectedRestart()
     FlowAdvanceClock(86401)
     Expect("expired grant fails renewal", PumpUntil(90) && StoredDelegateAvailable() == 0)
+}
+
+PumpStars :: () {
+    for frame: 0..19 {
+        TelegramStarsPump(TelegramFlowServer, false)
+    }
+}
+
+CheckStars :: (allowed: bool) {
+    TelegramStarsLaunch()
+    PumpStars()
+    if !allowed {
+        Expect("ordinary Lumi grant cannot open Stars catalog or invoice", telegram_stars.notice == "telegram_stars_permission" &&
+            fixture_stars_requests == 0 && !telegram_stars.opened)
+        return
+    }
+    Expect("Stars grant loads catalog and server balance", telegram_stars.catalog.count == 1 &&
+        telegram_stars.balance_known && telegram_stars.balance == 5000000)
+    TelegramStarsSelect(0)
+    PumpStars()
+    Expect("bound pending invoice opens once", telegram_stars.sheet && flow_host_invoice_opens == 1 &&
+        TextUntilNul(telegram_stars.invoice.invoice_id[:]) == FlowInvoiceID)
+    flow_host_invoice_result = 1
+    PumpStars()
+    Expect("Telegram paid callback leaves balance pending until the issuer confirms it",
+        telegram_stars.notice == "telegram_stars_pending" && telegram_stars.balance == 5000000)
+    fixture_stars_credit = true
+    FlowAdvanceClock(3)
+    PumpStars()
+    Expect("issuer confirmation refreshes the balance without reopening the invoice", telegram_stars.balance == 15000000 &&
+        telegram_stars.notice == "telegram_stars_credited" && flow_host_invoice_opens == 1)
+    flow_host_current = false
+    PumpStars()
+    Expect("changing Telegram context discards checkout state", !telegram_stars.requested && !telegram_stars.balance_known)
 }
 
 CheckProtectedRestart :: () {
@@ -889,6 +986,7 @@ Check :: () -> s32 {
     CheckCreate()
     CheckRestorePreserves()
     CheckConnect()
+    CheckConnect(true)
     CheckContextCancel()
     CheckStatusTamper()
     CheckWrongNode()

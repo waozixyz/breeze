@@ -184,6 +184,12 @@ with contextlib.ExitStack() as stack:
                          (user, "friends.requests", json.dumps(requests)))
     with application("friends") as process:
         open_profile()
+        screen = next(node for node in driver.tree() if node["kind"] == "screen")
+        for _ in range(12):
+            if driver.find(label="Friends", role="button", visible=True):
+                break
+            driver.pointer(screen["width"] / 2, screen["height"] / 2, wheel=-3)
+            driver.wait_idle(frames=2, timeout=2)
         driver.press(label="Friends", role="button")
         field = driver.wait(focus_id=102, role="text_field")
         driver.press(focus_id=102, role="text_field")

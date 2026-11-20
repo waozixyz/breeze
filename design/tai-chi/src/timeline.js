@@ -199,7 +199,7 @@ export class Timeline {
     }
 
     // The pose at `time` plus the key segment it falls in.
-    sample(time) {
+    sample(time, { authoring = false } = {}) {
         const { index, u } = this.segmentAt(time)
         const from = this.keys[index]
         const to = this.keys[index + 1]
@@ -254,15 +254,19 @@ export class Timeline {
                 }
             }
         }
-        // Each hand turns as one piece, from one key's way to the next's,
-        // rather than its finger and palm directions blending on their own,
-        // which can pass through nothing and flip the hand over.
-        for (const side of SIDES) {
-            const turn = handFrame(from.pose.hands[side]).slerp(handFrame(to.pose.hands[side]), smoothstep(u))
-            const pointing = new Vector3(0, -1, 0).applyQuaternion(turn)
-            const facing = new Vector3(0, 0, 1).applyQuaternion(turn)
-            pose.hands[side].fingers = [pointing.x, pointing.y, pointing.z]
-            pose.hands[side].palm = [facing.x, facing.y, facing.z]
+        if (!authoring) {
+            // Turn each hand as one piece during playback. Inserted keys
+            // retain the interpolated directions of the authored channels.
+            for (const side of SIDES) {
+                const turn = handFrame(from.pose.hands[side]).slerp(handFrame(to.pose.hands[side]), smoothstep(u))
+                const pointing = new Vector3(0, -1, 0).applyQuaternion(turn)
+                const facing = new Vector3(0, 0, 1).applyQuaternion(turn)
+                pose.hands[side].fingers = [pointing.x, pointing.y, pointing.z]
+                pose.hands[side].palm = [facing.x, facing.y, facing.z]
+            }
+            const breath = Math.sin(time * 2 * Math.PI / 6)
+            pose.sink += 0.002 * breath
+            pose.lean -= 0.15 * Math.PI / 180 * breath
         }
         for (const side of SIDES) {
             const shape = pose.hands[side].shape

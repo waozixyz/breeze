@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "app/language_selection.h"
+#include "language_selection.h"
 #include "zir_string.h"
 
 static int32_t active_index;

@@ -236,8 +236,8 @@ telegram-account-flow-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMAL
 telegram-account-ui-test: $(ZIRAN_BIN)
 	@sh tests/telegram_account_ui_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
-settings-telegram-ui-test: $(ZIRAN_BIN) $(LIBOQS_A)
-	@sh tests/settings_telegram_ui_zi_test.sh $(ZIRAN_BUILD_DIR)/bin $(LIBOQS_A)
+settings-telegram-ui-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
+	@sh tests/settings_telegram_ui_zi_test.sh $(ZIRAN_BUILD_DIR)/bin $(LIBOQS_A) $(SQLITE_SRC)
 
 lumi-authorization-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
 	@sh tests/lumi_authorization_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)

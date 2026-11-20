@@ -155,14 +155,14 @@ with contextlib.ExitStack() as stack:
         driver.wait_idle(frames=3, timeout=2)
 
     def resize_window(width, height):
-        window = find_window()
-        add_button = driver.wait(label="Add", role="button")
-        ui_scale = add_button["visible_width"] / add_button["width"]
-        before = add_button["visible_width"]
-        subprocess.run(["xdotool", "windowsize", window,
-                        str(round(width * ui_scale)), str(round(height * ui_scale))], check=True)
-        wait_for(lambda: driver.wait(label="Add", role="button")["visible_width"] != before,
-                 "resizing the native window did not reach the UI")
+        subprocess.run(["xdotool", "windowsize", find_window(), str(width), str(height)], check=True)
+
+        def screen_size():
+            screen = driver.wait(role="screen", visible=None)
+            return screen["width"], screen["height"]
+
+        wait_for(lambda: screen_size() == (width, height),
+                 lambda: f"the UI has size {screen_size()} after resizing to {(width, height)}")
 
     def edit_task(title):
         """Press the Edit button on this title's row."""
@@ -221,11 +221,14 @@ with contextlib.ExitStack() as stack:
     swipe("Fresh fruit", 600)
     driver.press(role="text_area")
     clear_field(sql("SELECT comment FROM elist_items WHERE id=?", (original[0],)))
-    driver.type("Pick organic fruit 茶é")
+    edited_comment = "Pick organic fruit 茶é"
+    driver.type(edited_comment)
+    driver.wait(role="text_area", value=edited_comment)
     driver.press(label="Save", role="button")
-    wait_for(lambda: sql("SELECT comment FROM elist_items WHERE id=?",
-                         (original[0],)) == "Pick organic fruit 茶é",
-             "the custom-task description did not round-trip through the native modal")
+    def saved_comment():
+        return sql("SELECT comment FROM elist_items WHERE id=?", (original[0],))
+    wait_for(lambda: saved_comment() == edited_comment,
+             lambda: f"the custom-task description was saved as {saved_comment()!r}")
     swipe("Fresh fruit", -300)
     wait_for(lambda: sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) > 0,
              "a swipe left did not delete the item")
@@ -238,7 +241,7 @@ with contextlib.ExitStack() as stack:
     wait_for(lambda: sql("SELECT deleted_at FROM elist_items WHERE id=?", (original[0],)) == 0,
              "Undo did not restore the item")
     restored = sql("SELECT id,comment,sort_order,done FROM elist_items WHERE title='Fresh fruit' AND deleted_at=0")
-    assert restored == (*original, 0), ("Undo changed the item", original, restored)
+    assert restored == (original[0], edited_comment, original[2], 0), ("Undo changed the item", restored)
     assert sql("SELECT COUNT(*) FROM elist_items WHERE title='Fresh fruit'") == 1, "Undo made a duplicate"
     swipe("Fresh fruit", 100)
     wait_for(lambda: sql("SELECT done FROM elist_items WHERE id=?", (original[0],)) == 1,
@@ -278,9 +281,10 @@ with contextlib.ExitStack() as stack:
     driver.type("Save after scrolling")
     driver.press(key=6551, role="dropdown")
     driver.press(label="A", role="option")
-    modal = driver.wait(role="modal")
-    wheel_x = modal["visible_x"] + 8
-    wheel_y = modal["visible_y"] + modal["visible_height"] - 16
+    driver.wait(key=6551, label="A", role="dropdown")
+    viewport = driver.wait(key=6555)
+    wheel_x = viewport["visible_x"] + 8
+    wheel_y = viewport["visible_y"] + viewport["visible_height"] - 16
     for _ in range(8):
         driver.pointer(wheel_x, wheel_y, wheel=-4)
         driver.wait_idle(frames=2)

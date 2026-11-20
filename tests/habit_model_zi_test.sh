@@ -32,7 +32,8 @@ int main(void)
     return result == 0 ? 0 : 1;
 }
 C
-"${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
+# Optimize the full application-state initializers, as the native app build does.
+"${CC:-cc}" -std=c11 -O1 -ffunction-sections -fdata-sections \
     -I"$include" -I"$work/generated" -I"$root/vendor-builds/sqlite" \
     -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" "$liboqs" \

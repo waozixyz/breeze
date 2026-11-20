@@ -12,18 +12,18 @@ unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 export YUE_DESKTOP_RECOVERY=0
 rm -rf "$work"
 mkdir -p "$work/generated"
-"$compiler" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/css/src" \
-    --module-path "$root/build/packages/game2d/src" --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/mesh-client" --entry sync_connection_behavior:Check \
+cd "$root"
+"$compiler" build --project --offline ${PACKAGE_FLAGS:-} --target=c \
+    --define PLATFORM_DESKTOP --root "$root/tests" --entry sync_connection_behavior:Check \
     -o "$work/generated" "$root/tests/sync_connection_behavior.zi" "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "sync_connection_behavior.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <assert.h>
+#include "zir_string.h"
+int32_t ImageWidth(String path) { (void)path; assert(0); return 0; }
+int32_t ImageHeight(String path) { (void)path; assert(0); return 0; }
 static int requests;
 int32_t ConnectionRequests(void) { return requests; }
 int32_t app_request_sync(void *app) { (void)app; requests++; return 1; }

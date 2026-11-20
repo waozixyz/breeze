@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Coins follow the selected theme color.
 - Claim the daily reward beside the coin balance: one coin a day, three on the seventh day in a row.
 - Choose soda, coffee, bubble tea, chocolate and candle pictures for custom rewards.
 

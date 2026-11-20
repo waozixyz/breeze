@@ -113,7 +113,14 @@ with contextlib.ExitStack() as stack:
         # Long enough for a deferred switch or a download failure to land.
         time.sleep(1.0)
         driver.wait_idle(frames=3, timeout=3)
-        opened = [switch for switch in SWITCH.findall(log_path.read_text()) if switch[1] == NODE_APP_SCREEN]
+        opened = []
+        with log_path.open() as log:
+            for line in log:
+                assert "NODE: install radio " not in line and "NODE: install photos " not in line, \
+                    f"{step}: opening started a download before confirmation: {line.strip()}"
+                switch = SWITCH.search(line)
+                if switch and switch[2] == NODE_APP_SCREEN:
+                    opened.append(switch.groups())
         assert not opened, f"{step}: an app that is not installed opened: {opened}"
         text = driver.text(visible=False)
         assert "Installing this app" not in text and "node_app_installing" not in text, \
@@ -127,10 +134,11 @@ with contextlib.ExitStack() as stack:
         return [node for node in driver.find(label=label, role="button", visible=True)
                 if node.get("focus_id") != NAVIGATION and node["width"] > 60]
 
-    def close_download():
-        driver.wait(role="modal")
+    def close_download(name):
+        driver.wait(label=name, role="modal")
+        driver.wait(label="Cancel", role="button")
         driver.key("escape")
-        driver.wait_gone(role="modal")
+        driver.wait_gone(label=name, role="modal")
 
     with application("initialize"):
         pass
@@ -162,7 +170,7 @@ with contextlib.ExitStack() as stack:
 
             # Radio's pin in the navigation.
             driver.press(label="Radio", role="button", focus_id=NAVIGATION)
-            close_download()
+            close_download("Radio")
             stays_closed(log_path, "navigation pin")
 
             # Radio's card in Apps: Apps stays open on its list.
@@ -170,7 +178,7 @@ with contextlib.ExitStack() as stack:
             wait(apps_open, "Apps did not open")
             radio = wait(lambda: grid_cards("Radio"), "Radio has no card in Apps")[0]
             driver.press(key=radio["key"], label="Radio")
-            close_download()
+            close_download("Radio")
             stays_closed(log_path, "Apps card")
             assert apps_open(), "Tapping an app that is not installed closed Apps"
 
@@ -181,7 +189,7 @@ with contextlib.ExitStack() as stack:
             driver.press(key=photos["key"], label="Photos")
             driver.wait(contains="Download size:")
             assert settings().get("app_used_photos") != "1", "The app downloaded before consent"
-            close_download()
+            close_download("Photos")
             stays_closed(log_path, "offered app")
             assert apps_open(), "Tapping an offered app closed Apps"
 

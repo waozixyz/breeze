@@ -173,6 +173,7 @@ function startExtensionBridge() {
   setInterval(function() {
     syncExtensionPagePresence();
     publishExtensionBreakConfig(false);
+    if (window.__inbeTrySuspendExtension) window.__inbeTrySuspendExtension();
   }, 2000);
 }
 

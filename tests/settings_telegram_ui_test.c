@@ -1,13 +1,9 @@
-#include "screens/settings/settings_telegram.h"
+#include "settings_telegram.h"
 #include "zir_string.h"
+#include "settings_telegram_ui_backend.h"
 #include "lumi_authorization.h"
 #include "lumi_telegram.h"
-#include "session.h"
-#include "tree.h"
-#include "tree_input.h"
-#include "paint_queue.h"
-#include "scroll_device.h"
-#include "scroll_widget.h"
+#include "package_files.h"
 #include "text_buffers.h"
 #include "metrics.h"
 #include <assert.h>
@@ -16,6 +12,7 @@
 #include <string.h>
 
 static bool truncated_review;
+static char active_owner[65];
 enum { ReviewValueCount = 6 };
 static const char *const review_values[ReviewValueCount] = {
     "inbe", "123456", "700001", "https://api.waozi.xyz", "private.inbe.v2.lumi", "1791529031"
@@ -40,6 +37,9 @@ String __wrap_storage_get_setting_text(String key)
     if (text_equal(key, "sync_private_key")) {
         return StringView("synthetic-owner-present", 23);
     }
+    if (text_equal(key, "sync_public_id")) {
+        return StringView(active_owner, strlen(active_owner));
+    }
     return StringView("", 0);
 }
 int32_t __wrap_storage_has_sync_account(void)
@@ -52,10 +52,12 @@ void __wrap_app_apply_nav_route(InnerBreeze *app, int32_t route)
     (void)route;
     assert(0);
 }
-/* Lumi is online with its agreement, so Telegram linking is allowed. */
-bool __wrap_lumi_connection_LumiNodeTrafficAllowed(void)
+/* The real Lumi traffic policy reads the current, accepted agreement. */
+String __wrap_bundled_app_records_BundledAppRecordRead(String key)
 {
-    return true;
+    assert(text_equal(key, "cell.lumi.agreement"));
+    const char *agreement = "{\"version\":1,\"agreed\":true,\"time\":1791529031}";
+    return package_files_PackageText(StringView(agreement, strlen(agreement)), StringView("", 0));
 }
 bool __wrap_lumi_telegram_LumiTelegramOpen(String start)
 {
@@ -73,6 +75,10 @@ String __wrap_LocaleText(String key)
         text = "Signing key fingerprint: %\nEncryption key fingerprint: %";
     } else if (text_equal(key, "lumi_authorization_approve")) {
         text = "Approve Lumi access for 24 hours";
+    } else if (text_equal(key, "lumi_authorization_approve_stars")) {
+        text = "Allow Lumi and Telegram Stars";
+    } else if (text_equal(key, "lumi_authorization_stars_disclosure")) {
+        text = "Also allows Dew purchases with Telegram Stars for 24 hours.";
     } else if (text_equal(key, "lumi_authorization_review")) {
         text = "Compare the account, node and both key fingerprints before approving.";
     } else if (text_equal(key, "lumi_telegram_body")) {
@@ -266,6 +272,15 @@ static bool has_focus(InnerBreeze *app, int32_t focus)
     }
     return false;
 }
+static bool activate_focus(InnerBreeze *app, int32_t focus)
+{
+    for (int32_t index = 0; index < TreeCount(app->ui.session); ++index) {
+        if (TreeNodeAt(app->ui.session, index).focus_id == focus) {
+            return TreeActivateAt(app->ui.session, index);
+        }
+    }
+    return false;
+}
 static ScrollResult render(InnerBreeze *app, int32_t offset, bool exhausted)
 {
     PaintClear(app->ui.session);
@@ -277,13 +292,13 @@ static ScrollResult render(InnerBreeze *app, int32_t offset, bool exhausted)
     BeginScrollFrame(app->ui.session, (Vector2){0, 0}, false, false, false, 0, 1.0);
     int32_t width = app->ui.view_width - AppScale(32);
     int32_t height = settings_telegram_settings_telegram_content_height(width) + AppScale(24);
-    ScrollProps props = {0};
+    TestScrollProps props = {0};
     props.key = 76000;
     props.bounds = (Rectangle){0, 0, app->ui.view_width, app->ui.view_height};
     props.content_height = height;
     props.scroll_offset = offset;
     props.scale = MetricsScale();
-    ScrollResult scroll = Scroll(app->ui.session, props);
+    ScrollResult scroll = DrawTestScroll(app->ui.session, props);
     assert(scroll.opened);
     int32_t y = (int32_t)scroll.content.y + AppScale(12);
     settings_telegram_settings_telegram_draw(app, AppScale(16), width, &y);
@@ -366,6 +381,7 @@ int main(void)
     lumi_authorization_state = 2;
     memcpy(lumi_authorization_pending.app_id, "inbe", 5);
     memset(lumi_authorization_pending.account_id, 'c', 64);
+    memset(active_owner, 'c', 64);
     memset(lumi_authorization_pending.node_id, 'b', 64);
     memset(lumi_authorization_pending.signing_key, 'a', 64);
     memset(lumi_authorization_pending.encryption_key, 'd', 2368);
@@ -419,27 +435,64 @@ int main(void)
         TreeEntry approve = focused(&app, 7652);
         assert(!approve.disabled);
         assert(approve.bounds.x + approve.bounds.width <= approve.clip.x + approve.clip.width);
+        TreeEntry approve_stars = focused(&app, 7656);
+        assert(!approve_stars.disabled);
+        assert(approve_stars.bounds.y > approve.bounds.y);
         assert(memcmp(&original, &lumi_authorization_pending, sizeof(original)) == 0);
         render(&app, 100000, true);
         assert(focused(&app, 7652).disabled);
+        assert(focused(&app, 7656).disabled);
         truncated_review = true;
         render(&app, 100000, false);
         assert(focused(&app, 7652).disabled);
+        assert(focused(&app, 7656).disabled);
         truncated_review = false;
     }
     assert(lumi_authorization_intent == 0);
 
-    /* A connected chat without a waiting Mini App request shows one action
-       and a quiet disconnect, without Mini App controls. */
+    render(&app, 100000, false);
+    render(&app, 100000, false);
+    assert(activate_focus(&app, 7656));
+    memset(lumi_authorization_pending.request_id, 'f', 32);
+    render(&app, 100000, false);
+    assert(lumi_authorization_intent == 0 && "queued Stars consent belongs to the displayed request");
+    assert(activate_focus(&app, 7656));
+    lumi_authorization_pending.telegram_id += 1;
+    render(&app, 100000, false);
+    assert(lumi_authorization_intent == 0 && "queued Stars consent belongs to the displayed terms");
+    assert(activate_focus(&app, 7656));
+    memset(active_owner, 'a', 64);
+    render(&app, 100000, false);
+    assert(lumi_authorization_intent == 0 && focused(&app, 7656).disabled);
+    memset(lumi_authorization_pending.account_id, 'a', 64);
+    render(&app, 100000, false);
+    assert(lumi_authorization_intent == 0);
+    assert(activate_focus(&app, 7656));
+    render(&app, 100000, false);
+    assert(lumi_authorization_intent == 6);
+    assert(memcmp(lumi_authorization_approval_request, lumi_authorization_pending.request_id, 32) == 0);
+    lumi_authorization_intent = 0;
+    lumi_authorization_approval_request[0] = 0;
+
+    /* A connected owner can start setup without granting either permission. */
     lumi_authorization_ready = false;
     lumi_authorization_state = 0;
+    lumi_authorization_loaded = true;
+    memcpy(lumi_authorization_owner, active_owner, sizeof(active_owner));
     memset(lumi_authorization_pending.request_id, 0, sizeof(lumi_authorization_pending.request_id));
+    assert(lumi_authorization_LumiAuthorizationCanRequest());
     render(&app, 0, false);
     assert(has_focus(&app, 7650));
     assert(has_focus(&app, 7651));
     assert(!has_focus(&app, 7652));
     assert(!has_focus(&app, 7653));
     assert(!has_focus(&app, 7654));
+    assert(!has_focus(&app, 7656));
+    assert(!focused(&app, 7657).disabled);
+    assert(activate_focus(&app, 7657));
+    render(&app, 0, false);
+    assert(lumi_authorization_intent == 1);
+    assert(lumi_authorization_approval_request[0] == 0);
     assert(SessionClose(app.ui.session));
     puts("Settings complete identifiers, fingerprints, active clipped paint and retained review checks passed");
     return 0;

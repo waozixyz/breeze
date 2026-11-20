@@ -41,7 +41,7 @@ for input in source saved; do
 int main(void) { return Answer() == 42 ? 0 : 1; }
 C
     "${CC:-cc}" -std=c11 -DZIRAN_BOUNDS_CHECK \
-        -I"$include" -I"$output/c" "$output/c"/*.c -o "$output/c/test"
+        -I"$include" -I"$output/c" "$output/c"/*.c -lm -o "$output/c/test"
     env -u DISPLAY -u WAYLAND_DISPLAY "$output/c/test"
 
     "$bin/zi2go" --no-main --root "$module_root" \

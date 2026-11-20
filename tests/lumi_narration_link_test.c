@@ -17,7 +17,7 @@ String practice_downloads_PracticeNarrationLanguage(int32_t content, String voic
     (void)voice;
     return StringView("en", 2);
 }
-double GetTime(void) { return 1.0; }
+double app_monotonic_seconds(void) { return 1.0; }
 void app_audio_ensure_ready(InnerBreeze *app) { app->audio_ready = 1; }
 
 AssetView AssetRead(String path)

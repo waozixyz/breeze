@@ -7,12 +7,18 @@
 //             snap), or moving faster than one would
 //   knee      a knee bending backwards
 //   through   a hand passing through the trunk
-//   screen    a planted foot moving on screen (the camera moving under it)
+//   screen    a planted foot moving against the same projected floor point
 //   pinned    her head held at one place on screen while her body travels
+//   camera    an abrupt change of angle, size or position
 // `figure_preview --audit` prints them and exits non-zero when any is found.
 #import "figure_math"
 #import "figure_joints"
+#import "figure_model"
+#import "kryon/scene_gltf"
 #import "preview_practices"
+#import "preview_ground"
+#import "preview_flat"
+#import "workout_moves"
 #import "tai_chi_math"
 #import "tai_chi_solve"
 #import "kryon/scene"
@@ -21,11 +27,11 @@
 PREVIEW_AUDIT_RATE :: 30.0
 // A planted heel or ball may stray this far (metres) from where it was set
 // down before it counts as sliding.
-PREVIEW_AUDIT_SLIDE :: 0.005
+PREVIEW_AUDIT_SLIDE :: 0.0001
 // Below the floor by more than this is through it.
 PREVIEW_AUDIT_FLOOR :: 0.01
 // A planted foot may move this far on screen (metres at her distance).
-PREVIEW_AUDIT_SCREEN :: 0.005
+PREVIEW_AUDIT_SCREEN :: 0.0001
 // No joint of a calm practice speeds up or slows down faster than this
 // (m/s²), nor moves faster than the second bound (m/s); the Workout's
 // brisk moves have the higher bounds.
@@ -44,6 +50,11 @@ PreviewAuditTotals :: struct {
     through: s32
     screen: s32
     pinned: s32
+    camera: s32
+    ground: s32
+    ground_samples: s64
+    contacts: s64
+    worst_slide: float64
 }
 
 // Audits every practice and item; returns how many awkward moments it found.
@@ -57,9 +68,11 @@ PreviewAudit :: (library: *PreviewLibrary) -> s32 {
             PreviewAuditItem(library, practice, item, names[practice], *totals)
         }
     }
-    found := totals.slide + totals.floor + totals.jump + totals.knee + totals.through + totals.screen + totals.pinned
-    print("figure audit: % awkward moments: % slides, % through the floor, % jumps, % knees backwards, % hands through the body, % feet moving on screen, % heads pinned\n",
-        found, totals.slide, totals.floor, totals.jump, totals.knee, totals.through, totals.screen, totals.pinned)
+    found := totals.slide + totals.floor + totals.jump + totals.knee + totals.through + totals.screen + totals.pinned + totals.ground + totals.camera
+    print("figure audit: % awkward moments: % slides, % through the floor, % jumps, % knees backwards, % hands through the body, % feet moving on screen, % heads pinned, % camera jumps\n",
+        found, totals.slide, totals.floor, totals.jump, totals.knee, totals.through, totals.screen, totals.pinned, totals.camera)
+    print("contact samples: %, maximum planted drift % metres\n", totals.contacts, totals.worst_slide)
+    print("ground registration: % outside marked floor, % projected foot/support samples\n", totals.ground, totals.ground_samples)
     return found
 }
 
@@ -79,6 +92,75 @@ PreviewTrace :: (library: *PreviewLibrary, practice: s32, item: s32, from: float
         seconds += 1.0 / 120.0
     }
 }
+
+// Whole-course rendered-sole regression at one-second intervals. Repeated
+// lower-body states share a measurement; the solver/painted-floor audit
+// above independently covers every frame at 30 Hz and three aspect ratios.
+PreviewAuditSoles :: (library: *PreviewLibrary, practices: string) -> s32 {
+    worst_floor: float64
+    worst_flat: float64
+    worst_pivot: float64
+    vertices: s64
+    poses: s64
+    failures: s32
+    for person: 0..1 {
+        scene: Scene
+        SceneInit(*scene)
+        defer SceneFree(*scene)
+        model: FigureModel
+        defer FigureModelRelease(*model)
+        path: [1300]u8
+        relative := ifx person == 0 then "/shared/figure/woman.vrm" else "/shared/figure/man.vrm"
+        if !FigureModelLoad(*model, *scene, PreviewJoin(path[:], practices, relative)) {
+            return 1
+        }
+        for practice: cast(s32)0..3 {
+            for item: cast(s32)0..PreviewItemCount(library, practice) - 1 {
+                previous: FigureJoints
+                have_previous := false
+                duration := PreviewDuration(library, practice, item)
+                seconds: float64
+                while seconds <= duration {
+                    moment := PreviewSample(library, practice, item, seconds)
+                    body := moment.body
+                    if !have_previous || !PreviewSameLower(*previous, *body) {
+                        if !FigureModelPose(*model, *scene, *body) {
+                            return 1
+                        }
+                        measured := FigureModelContacts(*model, *scene, *body)
+                        if practice == PREVIEW_WORKOUT && WorkoutPropFor(item).bench {
+                            raised := FigureModelContacts(*model, *scene, *body, WORKOUT_BENCH_TOP)
+                            measured.vertices += raised.vertices
+                            measured.floor_error = FigureMax(measured.floor_error, raised.floor_error)
+                            measured.flatness = FigureMax(measured.flatness, raised.flatness)
+                            measured.pivot_error = FigureMax(measured.pivot_error, raised.pivot_error)
+                        }
+                        worst_floor = FigureMax(worst_floor, measured.floor_error)
+                        worst_flat = FigureMax(worst_flat, measured.flatness)
+                        worst_pivot = FigureMax(worst_pivot, measured.pivot_error)
+                        vertices += measured.vertices
+                        poses += 1
+                        if measured.floor_error >= 0.001 || measured.flatness >= 0.001 || measured.pivot_error >= 0.001 {
+                            print("sole audit: person % practice % item % at %s: floor %, flatness %, pivot % m\n",
+                                person, practice, item, seconds, measured.floor_error, measured.flatness, measured.pivot_error)
+                            failures += 1
+                            if failures >= 20 {
+                                return 1
+                            }
+                        }
+                        previous = body
+                        have_previous = true
+                    }
+                    seconds += 1.0
+                }
+            }
+        }
+    }
+    print("sole audit: % findings, % distinct poses, % planted vertices, floor error % m, flatness % m, heel/ball error % m\n",
+        failures, poses, vertices, worst_floor, worst_flat, worst_pivot)
+    return ifx failures == 0 && vertices > 10000 then 0 else 1
+}
+
 
 #scope_file
 // Reports one finding, at most once per kind per half second.
@@ -152,11 +234,57 @@ PreviewAuditItem :: (library: *PreviewLibrary, practice: s32, item: s32, practic
     head_high: Vector3 = .{-1000.0, -1000.0, 0.0}
     pelvis_low: Vector3 = .{1000.0, 1000.0, 1000.0}
     pelvis_high: Vector3 = .{-1000.0, -1000.0, -1000.0}
+    last_ground: float64 = -10.0
+    last_camera: float64 = -10.0
+    previous_view: PreviewView
     seconds: float64
     while seconds < duration {
         moment := PreviewSample(library, practice, item, seconds)
         joints := moment.body
+        aspects: [3]float64 = .[0.75, 1000.0 / 900.0, 1.5]
+        for aspect: aspects {
+            ground_view := PreviewViewOf(*moment, 0.0, 0.0, 1.0, aspect)
+            area := PreviewGroundArea(moment.ground, aspect)
+            footprint := moment.floor_bounds
+            outside := false
+            corners: [8]Vector3
+            PreviewGroundCorners(footprint.low, footprint.high, corners[:])
+            for point: corners {
+                totals.ground_samples += 1
+                projected := PreviewGroundProject(point, ground_view, aspect)
+                outside = outside || projected.x < area.left || projected.x > area.right ||
+                    projected.y < area.top || projected.y > area.bottom
+            }
+            for side: 0..1 {
+                contacts: [2]Vector3 = .[PreviewAuditPoint(moment.solved.heels[side]),
+                    PreviewAuditPoint(moment.solved.balls[side])]
+                for contact: contacts {
+                    if FigureAbs(contact.y) < 0.000001 {
+                        totals.ground_samples += 1
+                        projected := PreviewGroundProject(contact, ground_view, aspect)
+                        outside = outside || projected.x < area.left || projected.x > area.right ||
+                            projected.y < area.top || projected.y > area.bottom
+                    }
+                }
+            }
+            if outside && PreviewAuditReport(practice_name, name, seconds, "ground",
+                "foot or support outside painted floor at aspect", aspect, *last_ground) {
+                totals.ground += 1
+            }
+        }
         view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
+        if have_previous {
+            scale := FigureMin(view.height, previous_view.height)
+            pan := FigureDistance(view.center, previous_view.center) / scale
+            zoom := FigureAbs(view.height - previous_view.height) / scale
+            angle := FigureAbs(view.yaw - previous_view.yaw) + FigureAbs(view.pitch - previous_view.pitch)
+            change := FigureMax(FigureMax(pan, zoom), angle)
+            if change > 0.07 && PreviewAuditReport(practice_name, name, seconds, "camera",
+                "camera moved abruptly by", change, *last_camera) {
+                totals.camera += 1
+            }
+        }
+        previous_view = view
         toward := FigureV3(Sin(view.yaw) * Cos(view.pitch), Sin(view.pitch), Cos(view.yaw) * Cos(view.pitch))
         across := FigureNormalize(FigureCross(FigureScale(toward, -1.0), FigureV3(0.0, 1.0, 0.0)))
         upward := FigureCross(across, FigureScale(toward, -1.0))
@@ -198,24 +326,26 @@ PreviewAuditItem :: (library: *PreviewLibrary, practice: s32, item: s32, practic
             for point: 0..1 {
                 slot := side * 2 + point
                 here := contacts[point]
-                down := here.y < 0.02 && upright
-                if down && have_previous && before_contacts[point].y < 0.02 && crept[slot] >= 0.0 {
+                down := TaiChiAbs(here.y) < 0.000001 && upright
+                if down && have_previous && TaiChiAbs(before_contacts[point].y) < 0.000001 && crept[slot] >= 0.0 {
                     crept[slot] = FigureLength(FigureV3(here.x - world_planted[slot].x, 0.0, here.z - world_planted[slot].z))
                 } else {
                     crept[slot] = 0.0
                     world_planted[slot] = here
+                }
+                if down {
+                    totals.contacts += 1
+                    totals.worst_slide = FigureMax(totals.worst_slide, crept[slot])
                 }
                 if crept[slot] > PREVIEW_AUDIT_SLIDE && PreviewAuditReport(practice_name, name, seconds, "slide",
                     PreviewAuditContact(cast(s32)side, cast(s32)point), crept[slot], *last_slide[slot]) {
                     totals.slide += 1
                     crept[slot] = -1.0
                 }
-                // The same contact on screen must not move across it either
-                // (rising a little as the heel or ball peels is not sliding).
-                offset := FigureSub(here, view.center)
-                on_screen := FigureV3(FigureDot(offset, across), 0.0, 0.0)
-                if down && have_previous && before_contacts[point].y < 0.02 && screen_crept[slot] >= 0.0 {
-                    screen_crept[slot] = FigureDistance(on_screen, screen_planted[slot])
+                // Compare against the same painted floor point in today's
+                // view. A camera pan moves both projections together.
+                if down && have_previous && TaiChiAbs(before_contacts[point].y) < 0.000001 && screen_crept[slot] >= 0.0 {
+                    screen_crept[slot] = FigureAbs(FigureDot(FigureSub(here, screen_planted[slot]), across))
                     if screen_crept[slot] > PREVIEW_AUDIT_SCREEN && PreviewAuditReport(practice_name, name, seconds, "screen",
                         "a planted foot moved on screen by", screen_crept[slot], *last_screen) {
                         totals.screen += 1
@@ -223,7 +353,7 @@ PreviewAuditItem :: (library: *PreviewLibrary, practice: s32, item: s32, practic
                     }
                 } else {
                     screen_crept[slot] = 0.0
-                    screen_planted[slot] = on_screen
+                    screen_planted[slot] = here
                 }
             }
             // A knee bending backwards: it bends over the toes, so its
@@ -307,4 +437,166 @@ PreviewAuditItem :: (library: *PreviewLibrary, practice: s32, item: s32, practic
         "her head stays put on screen while her pelvis travels m", travel, *last_pinned) {
         totals.pinned += 1
     }
+}
+
+PreviewSameLower :: (before: *FigureJoints, after: *FigureJoints) -> bool {
+    first: [11]Vector3 = .[before.pelvis, before.hips[0], before.hips[1], before.knees[0], before.knees[1],
+        before.ankles[0], before.ankles[1], before.heels[0], before.heels[1], before.balls[0], before.balls[1]]
+    second: [11]Vector3 = .[after.pelvis, after.hips[0], after.hips[1], after.knees[0], after.knees[1],
+        after.ankles[0], after.ankles[1], after.heels[0], after.heels[1], after.balls[0], after.balls[1]]
+    for index: 0..10 {
+        if FigureDistance(first[index], second[index]) > 0.0000000001 {
+            return false
+        }
+    }
+    old_turns: [3]FigureQuat = .[before.pelvis_turn, before.feet[0], before.feet[1]]
+    new_turns: [3]FigureQuat = .[after.pelvis_turn, after.feet[0], after.feet[1]]
+    for index: 0..2 {
+        a := old_turns[index]
+        b := new_turns[index]
+        if FigureAbs(a.x - b.x) + FigureAbs(a.y - b.y) + FigureAbs(a.z - b.z) + FigureAbs(a.w - b.w) > 0.0000000001 {
+            return false
+        }
+    }
+    return true
+}
+
+#scope_export
+// Actual garment surfaces over complete timelines, with deterministic seeks.
+// A dense solver audit and 30 Hz slow transition videos are separate checks.
+PreviewAuditClothing :: (library: *PreviewLibrary, practices: string) -> s32 {
+    poses: s64
+    vertices: s64
+    failures: s32
+    worst_floor: float64
+    worst_stretch: float64
+    worst_person: s32
+    worst_practice: s32
+    worst_item: s32
+    worst_seconds: float64
+    worst_mesh: string
+    worst_primitive: s32
+    worst_edge: [2]s32
+    for person: 0..1 {
+        scene: Scene
+        SceneInit(*scene)
+        defer SceneFree(*scene)
+        model: FigureModel
+        defer FigureModelRelease(*model)
+        path: [1300]u8
+        relative := ifx person == 0 then "/shared/figure/woman.vrm" else "/shared/figure/man.vrm"
+        if !FigureModelLoad(*model, *scene, PreviewJoin(path[:], practices, relative)) {
+            return 1
+        }
+        clothing := false
+        skirt := false
+        wrap := false
+        for index: 0..model.instance.meshes.count - 1 {
+            inst := *model.instance.meshes[index]
+            if inst.skin.positions.count <= 0 {
+                continue
+            }
+            source := *model.model.meshes[inst.mesh_index]
+            name := TextView(source.name[:])
+            clothing = clothing || name == "PracticeClothing"
+            skirt = skirt || name == "PracticeSkirt"
+            wrap = wrap || name == "PracticeWrapFacings"
+            // Joint posing is shared with the renderer. This audit reads only
+            // garment meshes, so the other skins need no vertex deformation.
+            if name != "PracticeClothing" && name != "PracticeSkirt" && name != "PracticeWrapFacings" {
+                inst.has_skin = false
+            }
+        }
+        if !clothing || !wrap || (person == 0 && !skirt) {
+            print("clothing audit: missing expected skinned garment meshes for %\n", relative)
+            return 1
+        }
+        for practice: cast(s32)0..3 {
+            for item: cast(s32)0..PreviewItemCount(library, practice) - 1 {
+                duration := PreviewDuration(library, practice, item)
+                seconds: float64
+                while true {
+                    moment := PreviewSample(library, practice, item, seconds)
+                    if !FigureModelPose(*model, *scene, *moment.body) {
+                        return 1
+                    }
+                    poses += 1
+                    root := scene.nodes[model.instance.root_node]
+                    for index: 0..model.instance.meshes.count - 1 {
+                        inst := *model.instance.meshes[index]
+                        source := *model.model.meshes[inst.mesh_index]
+                        name := TextView(source.name[:])
+                        is_skirt := name == "PracticeSkirt"
+                        if !is_skirt && name != "PracticeWrapFacings" && name != "PracticeClothing" {
+                            continue
+                        }
+                        mesh := scene.meshes[scene.nodes[inst.scene_node].mesh]
+                        for vertex: 0..inst.skin.positions.count - 1 {
+                            point := scene.positions[mesh.first_vertex + vertex]
+                            world := FigureAdd(root.position, FigureScale(FigureRotate(model.facing, point), root.scale.x))
+                            vertices += 1
+                            if !FigureFinite(point) || !FigureFinite(scene.normals[mesh.first_vertex + vertex]) {
+                                print("clothing audit: non-finite vertex person % practice % item % at %s\n", person, practice, item, seconds)
+                                return 1
+                            }
+                            if is_skirt {
+                                worst_floor = FigureMax(worst_floor, -world.y)
+                                if world.y < -0.005 {
+                                    if failures < 20 {
+                                        print("clothing audit: skirt below floor person % practice % item % at %s by %m\n",
+                                            person, practice, item, seconds, -world.y)
+                                    }
+                                    failures += 1
+                                }
+                            }
+                        }
+                        for edge: 0..mesh.index_count - 1 {
+                            // Three consecutive indices cover all triangle edges.
+                            next := edge - edge % 3 + (edge + 1) % 3
+                            a := scene.indices[mesh.first_index + edge]
+                            b := scene.indices[mesh.first_index + next]
+                            rest := FigureDistance(inst.skin.positions[a], inst.skin.positions[b])
+                            if rest > 0.002 {
+                                ratio := FigureDistance(scene.positions[mesh.first_vertex + a], scene.positions[mesh.first_vertex + b]) / rest
+                                if ratio > worst_stretch {
+                                    worst_stretch = ratio
+                                    worst_person = cast(s32)person
+                                    worst_practice = practice
+                                    worst_item = item
+                                    worst_seconds = seconds
+                                    worst_mesh = "PracticeClothing"
+                                    if is_skirt {
+                                        worst_mesh = "PracticeSkirt"
+                                    } else if name == "PracticeWrapFacings" {
+                                        worst_mesh = "PracticeWrapFacings"
+                                    }
+                                    worst_primitive = inst.primitive_index
+                                    worst_edge[0] = cast(s32)a
+                                    worst_edge[1] = cast(s32)b
+                                }
+                                if ratio > 3.0 {
+                                    if failures < 20 {
+                                        print("clothing audit: % primitive % edge %–%: person % practice % item % at %s, ratio %\n",
+                                            name, inst.primitive_index, a, b, person, practice, item, seconds, ratio)
+                                    }
+                                    failures += 1
+                                }
+                            }
+                        }
+                    }
+                    if seconds >= duration {
+                        break
+                    }
+                    seconds = FigureMin(duration, seconds + 1.0)
+                }
+            }
+        }
+    }
+    print("clothing audit: % findings, % whole-timeline poses, % garment vertices, floor penetration %m, maximum edge stretch %\n",
+        failures, poses, vertices, worst_floor, worst_stretch)
+    if worst_stretch > 3.0 {
+        print("clothing audit: worst stretch on % primitive % edge %–%, person % practice % item % at %s\n",
+            worst_mesh, worst_primitive, worst_edge[0], worst_edge[1], worst_person, worst_practice, worst_item, worst_seconds)
+    }
+    return ifx failures == 0 && vertices > 10000 then 0 else 1
 }

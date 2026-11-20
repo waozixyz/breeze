@@ -319,3 +319,9 @@ habit-shop-ui-test: $(TARGET)
 	sh tests/habit_shop_ui_test.sh $(abspath $(TARGET))
 
 VISUAL_TEST_TARGETS += habit-shop-ui-test library-ui-test
+
+.PHONY: tao-chapter-pagination-ui-test
+tao-chapter-pagination-ui-test: $(TARGET) node-apps
+	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		-u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \
+		python3 tests/tao_chapter_pagination_ui_test.py $(abspath $(TARGET))

@@ -13,15 +13,19 @@ mkdir -p "$work/c"
 python3 - "$root" "$work" <<'PY'
 from pathlib import Path
 import sys
+import os
 import zipfile
 root, work = map(Path, sys.argv[1:])
 sys.path.insert(0, str(root / 'scripts'))
 from tai_chi_preview import preview_course
-preview, _ = preview_course((root / 'build/packages/practices/taichi/course.tch').read_bytes())
+media = Path(os.environ.get('PRACTICE_MEDIA', root / 'build/packages/practices'))
+course = (media / 'taichi/course.tch').read_bytes()
+(work / 'course.tch').write_bytes(course)
+preview, _ = preview_course(course)
 (work / 'course-preview.tch').write_bytes(preview)
 with zipfile.ZipFile(work / 'course.zip', 'w', zipfile.ZIP_DEFLATED,
                      compresslevel=9) as archive:
-    archive.writestr('course.tch', (root / 'build/packages/practices/taichi/course.tch').read_bytes())
+    archive.writestr('course.tch', course)
 PY
 "$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/ziran/std" \

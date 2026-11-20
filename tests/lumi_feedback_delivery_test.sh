@@ -4,38 +4,19 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 compiler=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
 work="$root/build/lumi-feedback-test"
+audio_dir=${AUDIO_CODECS_BUILD_DIR:-"$root/vendor-builds/linux/x86_64/audio-codecs"}
 exec 9>"$work.lock"
 flock 9
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 export YUE_DESKTOP_RECOVERY=0
+rm -rf "$work/generated"
 mkdir -p "$work/generated"
 # shellcheck disable=SC2046
-"$compiler" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/mesh-client" \
-    --entry lumi_feedback_delivery_behavior:Check -o "$work/generated" \
-    "$root/tests/lumi_feedback_delivery_behavior.zi" "$root/tests/sync_test_host.zi"
-# Calls within one translation unit cannot be intercepted by the linker's
-# --wrap. Isolate the unused conversation branches in this generated fixture;
-# either branch aborts if the feedback pump unexpectedly invokes it.
-python3 - "$work/generated/lumi_online.c" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-source = path.read_text()
-for name in ("LumiOnlineAnswer", "LumiOnlineRequest"):
-    source = source.replace(f"lumi_online_{name}(app)", f"__wrap_lumi_online_{name}(app)")
-source = source.replace('#include "lumi_online.h"', '#include "lumi_online.h"\n'
-    'extern bool __wrap_lumi_online_LumiOnlineAnswer(InnerBreeze *app);\n'
-    'extern bool __wrap_lumi_online_LumiOnlineRequest(InnerBreeze *app);')
-path.write_text(source)
-PY
+cd "$root"
+"$compiler" build --project --offline ${PACKAGE_FLAGS:-} --target=c --no-main \
+    --define PLATFORM_DESKTOP --define DESKTOP_HOST --define STORAGE_TEST_REAL_HOST_SERVICES --root "$root" \
+    -o "$work/generated" \
+    "$root/tests/lumi_feedback_delivery_behavior.zi" "$root/src/app/app_clock_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,6 +24,8 @@ cat > "$work/generated/main.c" <<'C'
 #include "network_transport.h"
 #include "lumi_online.h"
 #include "lumi_telegram.h"
+#include "lumi_screen.h"
+#include "app_tools.h"
 #include "app_nav_state.h"
 #include "practice_actions.h"
 
@@ -55,16 +38,26 @@ void __wrap_lumi_telegram_LumiTelegramPump(InnerBreeze *app)
 {
     (void)app;
 }
-bool __wrap_lumi_online_LumiOnlineAnswer(InnerBreeze *app)
+/* The test exercises report tools directly. It must never start model chat. */
+String __wrap_app_tools_AppToolContext(InnerBreeze *app)
 {
     (void)app;
-    fputs("unexpected online conversation in feedback fixture\n", stderr);
+    fputs("unexpected model context request in feedback fixture\n", stderr);
     abort();
 }
-bool __wrap_lumi_online_LumiOnlineRequest(InnerBreeze *app)
+String __wrap_app_tools_AppToolExecute(InnerBreeze *app, String name, String arguments)
 {
     (void)app;
-    fputs("unexpected online request in feedback fixture\n", stderr);
+    (void)name;
+    (void)arguments;
+    fputs("unexpected model tool call in feedback fixture\n", stderr);
+    abort();
+}
+bool __wrap_lumi_screen_LumiSubmit(InnerBreeze *app, String input)
+{
+    (void)app;
+    (void)input;
+    fputs("unexpected composer call in feedback fixture\n", stderr);
     abort();
 }
 void __wrap_app_apply_nav_route(InnerBreeze *app, int32_t route)
@@ -88,14 +81,18 @@ int main(void)
 C
 monocypher="$root/build/packages/monocypher/src"
 "${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
-    -I"$root/build/packages/ziran/include" -iquote "$work/generated" \
+    -I"$root/build/packages/ziran/include" -iquote "$work/generated" -iquote "$work/generated/tests" \
     -I"$root/vendor-builds/sqlite" -I"$root/vendor-builds/linux/x86_64/inbe-liboqs/include" \
     -I"$monocypher" -I"$monocypher/optional" \
-    "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
+    "$work/generated"/*.c "$work/generated/tests"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
     "$monocypher/monocypher.c" "$monocypher/optional/monocypher-ed25519.c" \
     "$liboqs" -Wl,--gc-sections -Wl,--wrap=AppsInstalledMask -Wl,--wrap=network_transport_NetworkTransport \
-    -Wl,--wrap=lumi_telegram_LumiTelegramPump -Wl,--wrap=lumi_online_LumiOnlineAnswer \
+    -Wl,--wrap=lumi_telegram_LumiTelegramPump \
+    -Wl,--wrap=app_tools_AppToolContext -Wl,--wrap=app_tools_AppToolExecute -Wl,--wrap=lumi_screen_LumiSubmit \
     -Wl,--wrap=app_apply_nav_route -Wl,--wrap=practice_actions_app_start_practice \
+    "$audio_dir/libopus/libopus.a" "$audio_dir/libziran_mp3.a" \
+    "$audio_dir/libvorbisfile.a" "$audio_dir/libvorbis.a" "$audio_dir/libogg.a" \
+    $(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11) \
     -ldl -lpthread -lz -lm -o "$work/test"
 APP_DATA_ROOT=/tmp/inbe-lumi-feedback-test/data "$work/test"
 printf '%s\n' 'Lumi feedback approval, HTTP failure, receipt verification, retries, restart and older outbox upgrade checks passed'

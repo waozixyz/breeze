@@ -3,99 +3,28 @@ set -eu
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/packages/ziran/build/bin"}
-kryon=${KRYON_DIR:-"$root/build/packages/kryon"}
-entity=${ENTITY_DIR:-"$root/build/packages/entity"}
-apps=${APPS_DIR:-"$root/build/packages/apps"}
 mkdir -p "$root/build"
 work=$(mktemp -d "$root/build/settings-ui-zi-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work/c"
-"$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
-    --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
-    --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/mesh-client" \
-    --module-path "$root/build/packages/ziran/std" \
-    "$root/src/screens/settings/settings_ui.zi"
-"$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
-    --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
-    --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/mesh-client" \
-    --module-path "$root/build/packages/ziran/std" \
-    -o "$work/c" "$root/src/screens/settings/settings_ui.zi"
-set -- "$root/tests/settings_ui_link_test.c"
-for generated in "$work/c"/*.c "$work/c/screens/settings"/*.c; do
-    set -- "$@" "$generated"
-done
+cd "$root"
+"$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c --no-main \
+    --root "$root/src" -o "$work/c" "$root/src/screens/settings/settings_ui.zi"
+for header in "$work/c"/p*_tree.h "$work/c"/p*_tree_input.h "$work/c"/p*_paint_queue.h; do
+    test -f "$header"
+    printf '#include "%s"\n' "${header##*/}"
+done > "$work/c/settings_test_backend.h"
 "${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \
-    -Wl,--gc-sections -I"$root/build/packages/ziran/include" -I"$work/c" -I"$work/c/screens/settings" \
-    "$@" -o "$work/test"
+    -Wl,--gc-sections -I"$root/build/packages/ziran/include" -I"$work/c" \
+    "$root/tests/settings_ui_link_test.c" "$work/c"/*.c -lm -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
-mkdir -p "$work/device"
-"$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
-    --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
-    --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/mesh-client" \
-    --module-path "$root/build/packages/ziran/std" \
-    "$root/src/screens/settings/settings_device.zi"
-"$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
-    --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
-    --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/mesh-client" \
-    --module-path "$root/build/packages/ziran/std" \
-    -o "$work/device" "$root/src/screens/settings/settings_device.zi"
-"${CC:-cc}" -std=c11 -Wno-unused-function \
-    -I"$root/build/packages/ziran/include" -I"$work/device" \
-    -c "$work/device/screens/settings/settings_device.c" \
-    -o "$work/device/settings_device.o"
-mkdir -p "$work/breaks"
-"$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
-    --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
-    --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/mesh-client" \
-    --module-path "$root/build/packages/ziran/std" \
-    "$root/src/screens/settings/settings_breaks.zi"
-"$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
-    --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
-    --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/mesh-client" \
-    --module-path "$root/build/packages/ziran/std" \
-    -o "$work/breaks" "$root/src/screens/settings/settings_breaks.zi"
-"${CC:-cc}" -std=c11 -Wno-unused-function -Wno-unused-variable \
-    -I"$root/build/packages/ziran/include" -I"$work/breaks" \
-    -c "$work/breaks/screens/settings/settings_breaks.c" \
-    -o "$work/breaks/settings_breaks.o"
-mkdir -p "$work/notifications"
-"$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
-    --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
-    --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/mesh-client" \
-    --module-path "$root/build/packages/ziran/std" \
-    "$root/src/screens/settings/settings_notifications.zi"
-"$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
-    --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
-    --module-path "$kryon/src/ui" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/mesh-client" \
-    --module-path "$root/build/packages/ziran/std" \
-    -o "$work/notifications" \
-    "$root/src/screens/settings/settings_notifications.zi"
-"${CC:-cc}" -std=c11 \
-    -I"$root/build/packages/ziran/include" -I"$work/notifications" \
-    -c "$work/notifications/screens/settings/settings_notifications.c" \
-    -o "$work/notifications/settings_notifications.o"
+for widget in device breaks notifications; do
+    generated="$work/$widget"
+    mkdir -p "$generated"
+    "$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c --no-main \
+        --root "$root/src" -o "$generated" "$root/src/screens/settings/settings_$widget.zi"
+    "${CC:-cc}" -std=c11 -Wno-unused-function -Wno-unused-variable \
+        -I"$root/build/packages/ziran/include" -I"$generated" \
+        -c "$generated/settings_$widget.c" -o "$generated/settings_$widget.o"
+done
 echo "Inbe settings UI interaction, device, break, and notifications module compilation passed"

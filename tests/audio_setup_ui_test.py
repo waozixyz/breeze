@@ -77,6 +77,7 @@ def capture(window, name):
 
 
 QUESTION = "Add voice guidance?"
+LAUNCHER_GUIDE = "Step 1 of 1"
 
 
 def downloads(log):
@@ -111,11 +112,10 @@ for name, width, height in (("desktop", 900, 720), ("mobile", 390, 844)):
             saved(profile, "guide_narration_enabled", 1)
             saved(profile, "voice_narration_enabled", 1)
             assert settings(profile).get("language", "") == ""
-            driver.wait(label="Step 1 of 3")
-            # Download fetches the guide's and every narrated practice's voice
-            # in the background. Offline, each attempt fails and stays
-            # downloadable where it is today.
-            expected = {"guide/en", "sunsalutation/en", "astral_projection/en", "workout/en"}
+            driver.wait(label=LAUNCHER_GUIDE)
+            # Request every available English voice. The Astral Projection
+            # recording in the practice catalog is Portuguese.
+            expected = {"guide/en", "sunsalutation/en", "workout/en"}
             deadline = time.monotonic() + 60
             while not downloads(log) >= expected and time.monotonic() < deadline:
                 time.sleep(0.2)
@@ -125,12 +125,12 @@ for name, width, height in (("desktop", 900, 720), ("mobile", 390, 844)):
             driver.press(label="Mute guide voice", role="button", settle=False)
             saved(profile, "guide_narration_muted", 1)
             saved(profile, "guide_narration_enabled", 1)
-            driver.wait(label="Step 1 of 3")
+            driver.wait(label=LAUNCHER_GUIDE)
             saved(profile, "voice_narration_enabled", 1)
             driver.press(contains="Hi, I'm Lumi", role="text", settle=False)
             capture(window, name + "-muted-guide")
         with application(profile, name + "-muted-restart", width, height):
-            driver.wait(label="Step 1 of 3")
+            driver.wait(label=LAUNCHER_GUIDE)
             driver.wait(label="Enable guide voice", role="button")
             driver.press(label="Enable guide voice", role="button", settle=False)
             saved(profile, "guide_narration_muted", 0)
@@ -144,7 +144,7 @@ for name, width, height in (("desktop", 900, 720), ("mobile", 390, 844)):
             saved(profile, "language_setup_done", 1)
             saved(profile, "guide_narration_enabled", 0)
             saved(profile, "voice_narration_enabled", 0)
-            driver.wait(label="Step 1 of 3")
+            driver.wait(label=LAUNCHER_GUIDE)
             assert not driver.find(key=83113, role="button", visible=True)
             capture(window, name + "-guide-without-voice")
             assert not downloads(log)
@@ -156,7 +156,7 @@ for name, width, height in (("desktop", 900, 720), ("mobile", 390, 844)):
                     db.execute("DELETE FROM settings WHERE key='guide_narration_enabled'")
                     db.execute("UPDATE settings SET value=? WHERE key='voice_narration_enabled'", (str(enabled),))
                 with application(profile, "existing-" + str(enabled), width, height):
-                    driver.wait(label="Step 1 of 3")
+                    driver.wait(label=LAUNCHER_GUIDE)
                     if enabled:
                         driver.wait(label="Mute guide voice", role="button")
                     else:

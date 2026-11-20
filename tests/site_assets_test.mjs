@@ -36,6 +36,39 @@ async function serve(path, options = {}) {
   return worker.fetch(new Request('https://inbe.example' + path + '?v=test', options), { ASSETS: assets });
 }
 
+async function verifyHostRouting() {
+  const staticAssets = {
+    fetch: request => new Response(request.method === 'HEAD' ? null : 'page fixture', {
+      status: new URL(request.url).pathname === '/missing-page' ? 404 : 200,
+      headers: { 'Content-Type': 'text/html; charset=utf-8' },
+    }),
+  };
+  const at = (host, path, method) => worker.fetch(new Request(`https://${host}${path}`, { method }), { ASSETS: staticAssets });
+  for (const host of ['inbe.waozi.xyz', 'breeze.waozi.xyz', 'www.innerbreeze.org']) {
+    for (const path of ['/privacy?from=A%2FB&hl=en', '//other.example/path?q=1', '/build/telegram/?r=abcdef']) {
+      const response = await at(host, path, 'HEAD');
+      assert.equal(response.status, 308);
+      assert.equal(response.headers.get('Location'), `https://innerbreeze.org${path}`);
+    }
+  }
+  for (const path of ['/build/web/?legacy-origin=1', '/build/web/index.js', '/apt/inbe.sources', '/web-assets/dl/audio.zip']) {
+    assert.equal((await at('breeze.waozi.xyz', path)).status, 200);
+  }
+  for (const path of ['/', '/privacy', '/install-apt', '/legacy-converter/']) {
+    assert.equal((await at('innerbreeze.org', path)).headers.get('X-Robots-Tag'), null);
+  }
+  for (const [host, path] of [['innerbreeze.org', '/build/web/'], ['innerbreeze.org', '/delete-account'],
+    ['innerbreeze.org', '/web-assets/canvas_index'], ['innerbreeze.org', '/web-assets/canvas_index.html'],
+    ['innerbreeze.org', '/404'],
+    ['breeze.waozi.xyz', '/build/web/?legacy-origin=1'], ['preview.inbe.pages.dev', '/']]) {
+    assert.equal((await at(host, path)).headers.get('X-Robots-Tag'), 'noindex, follow');
+  }
+  const missing = await at('innerbreeze.org', '/missing-page');
+  assert.equal(missing.status, 404);
+  assert.equal(missing.headers.get('X-Robots-Tag'), 'noindex, follow');
+  console.log('Site hosts: exact path/query redirects, origin-bound app data routes, APT and noindex passed');
+}
+
 
 function verifyTelegramBootstrap() {
   const generator = readFileSync(join(root, 'site/build.sh'), 'utf8');
@@ -194,6 +227,7 @@ print('available' if stage['load_zstd']() else 'missing')`,
 }
 
 try {
+  await verifyHostRouting();
   verifyTelegramBootstrap();
   for (const app of ['web', 'telegram']) {
     const directory = join(temporary, 'build', app);

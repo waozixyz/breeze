@@ -16,7 +16,7 @@ from tai_chi_preview import preview_course
 def assets(data):
     return bundle_assets(data)
 
-root = assets((ROOT / 'build/inbe.zx').read_bytes())
+root = bundle_assets((ROOT / 'build/inbe.zx').read_bytes(), maximum=128 * 1024 * 1024)
 for name in ('apps', 'diary', 'lists', 'habits', 'practices', 'leaderboard'):
     path = 'assets/apps/icons/' + name + '.png'
     assert root[path] == (ROOT / path).read_bytes(), f'missing or stale launcher icon: {name}'

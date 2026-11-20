@@ -60,17 +60,26 @@ PreviewStage :: (backdrops: *PreviewBackdrops, practice: s32, moment: *PreviewMo
     flat: bool, figure: *PreviewFigure, width: s32, height: s32, out: *Raster.Image, seconds: float64 = -1.0) -> bool {
     covered := *backdrops.covered
     if covered.width != width || covered.height != height || backdrops.covered_practice != practice {
-        // The lying astral body needs the floor raised to her.
-        zoom := ifx practice == PREVIEW_ASTRAL then 1.7 else 1.0
-        focus := ifx practice == PREVIEW_ASTRAL then 1.0 else 0.62
-        if !FigureBackdropCover(covered, *backdrops.images[practice], width, height, zoom, focus, 1.2) {
+        if !FigureBackdropCover(covered, *backdrops.images[practice], width, height,
+            moment.ground.zoom, moment.ground.focus, 1.2) {
             return false
         }
         backdrops.covered_practice = practice
     }
     if !flat && figure != null && figure.loaded {
-        return PreviewFigurePaint(figure, *moment.body, view, width, height, seconds) &&
-            FigureOverOnto(out, covered, *figure.pixels)
+        PreviewFigureProps(figure, moment.workout_item)
+        if !PreviewFigurePaint(figure, *moment.body, view, width, height, seconds) ||
+        !FigureOverOnto(out, covered, *figure.pixels) {
+            return false
+        }
+        if moment.twin_visible {
+            if !PreviewFigureInFrame(figure) || !PreviewFigureAwareness(figure, *moment.twin, view, width, height,
+                moment.twin_effect.offset, moment.twin_effect.pivot, moment.twin_effect.roll, seconds) {
+                return false
+            }
+            return FigureOverOnto(out, out, *figure.awareness_pixels)
+        }
+        return true
     }
     if !flat {
         if !VecResize(out.pixels, covered.pixels.count) {
@@ -140,7 +149,7 @@ PreviewCapture :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, direc
             // Lying figures need a landscape picture.
             width: s32 = ifx shot.practice == PREVIEW_ASTRAL then 900 else 600
             height: s32 = ifx shot.practice == PREVIEW_ASTRAL then 600 else 800
-            view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
+            view := PreviewViewOf(*moment, 0.0, 0.0, 1.0, cast(float64)width / cast(float64)height)
             stem: [1024]u8
             named: [1024]u8
             path: [1024]u8
@@ -148,7 +157,7 @@ PreviewCapture :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, direc
             name = PreviewJoin(named[:], name, shot.name)
             final := PreviewJoin(path[:], name, suffixes[variant])
             if !PreviewStage(backdrops, shot.practice, *moment, view, variant == 2, *figure, width, height, *picture) ||
-            !WritePNGFile(final, *picture, false) {
+            (variant < 2 && !PreviewFigureInFrame(*figure)) || !WritePNGFile(final, *picture, false) {
                 print("figure capture: % could not be painted\n", final)
                 failed += 1
                 continue
@@ -177,7 +186,7 @@ PreviewVideo :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directo
         moment := PreviewSample(library, practice, item, at)
         width: s32 = ifx practice == PREVIEW_ASTRAL then 900 else 600
         height: s32 = ifx practice == PREVIEW_ASTRAL then 600 else 800
-        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
+        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0, cast(float64)width / cast(float64)height)
         digits: [32]u8
         stem: [1024]u8
         named: [1024]u8
@@ -186,7 +195,7 @@ PreviewVideo :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directo
         number := FormatDecimal(cast(float64)(10000 + frame), 0, digits[:])
         name = PreviewJoin(named[:], name, number[1:])
         if !PreviewStage(backdrops, practice, *moment, view, false, *figure, width, height, *picture, at) ||
-        !WritePNGFile(PreviewJoin(path[:], name, ".png"), *picture, false) {
+        !PreviewFigureInFrame(*figure) || !WritePNGFile(PreviewJoin(path[:], name, ".png"), *picture, false) {
             return 1
         }
         frame += 1
@@ -210,7 +219,7 @@ PreviewShots :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directo
         moment := PreviewSample(library, practice, item, at)
         width: s32 = ifx practice == PREVIEW_ASTRAL then 900 else 600
         height: s32 = ifx practice == PREVIEW_ASTRAL then 600 else 800
-        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0)
+        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0, cast(float64)width / cast(float64)height)
         digits: [32]u8
         stem: [1024]u8
         named: [1024]u8
@@ -219,7 +228,7 @@ PreviewShots :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, directo
         name = PreviewJoin(named[:], name, FormatDecimal(at, 1, digits[:]))
         final := PreviewJoin(path[:], name, ".png")
         if !PreviewStage(backdrops, practice, *moment, view, false, *figure, width, height, *picture) ||
-        !WritePNGFile(final, *picture, false) {
+        !PreviewFigureInFrame(*figure) || !WritePNGFile(final, *picture, false) {
             failed += 1
         }
     }
@@ -256,4 +265,54 @@ PreviewSunHeld :: (step: s32) -> float64 {
         total += cast(float64)SalutationStepSeconds(state)
     }
     return total - 0.5
+}
+
+
+PreviewStreamLibc :: #system_library "libc";
+PreviewStreamWrite :: (descriptor: s32, data: *u8, size: usize) -> s64 #foreign PreviewStreamLibc "write";
+
+#scope_export
+// Stream complete review sequences through an inherited pipe to the encoder.
+PreviewStream :: (backdrops: *PreviewBackdrops, library: *PreviewLibrary, practices: string,
+    practice: s32, item: s32, from: float64, to: float64, rate: float64,
+    width: s32, height: s32, descriptor: s32, man: bool) -> s32 {
+    if practice < 0 || practice > 3 || item < 0 || item >= PreviewItemCount(library, practice) ||
+    from < 0.0 || to < from || to > PreviewDuration(library, practice, item) + 0.001 ||
+    rate < 1.0 || rate > 60.0 || width < 160 || width > 1920 || height < 160 || height > 1920 || descriptor < 3 {
+        return 1
+    }
+    picture: Raster.Image
+    defer VecFree(picture.pixels)
+    figure: PreviewFigure
+    defer PreviewFigureRelease(*figure)
+    if !PreviewFigureUse(*figure, practices, man) {
+        return 1
+    }
+    frame: s64
+    while true {
+        at := FigureMin(to, from + cast(float64)frame / rate)
+        moment := PreviewSample(library, practice, item, at)
+        view := PreviewViewOf(*moment, 0.0, 0.0, 1.0, cast(float64)width / cast(float64)height)
+        if !PreviewStage(backdrops, practice, *moment, view, false, *figure, width, height, *picture, at) ||
+        !PreviewFigureInFrame(*figure) {
+            print("review stream: person % practice % item % failed at %s\n", ifx man then "man" else "woman", practice, item, at)
+            return 1
+        }
+        size := cast(s64)width * cast(s64)height * 4
+        sent: s64
+        while sent < size {
+            count := PreviewStreamWrite(descriptor, *picture.pixels[sent], cast(usize)(size - sent))
+            if count <= 0 {
+                return 1
+            }
+            sent += count
+        }
+        frame += 1
+        if at >= to {
+            break
+        }
+    }
+    print("review stream: person % practice % item % from % to % fps % frames %\n",
+        ifx man then "man" else "woman", practice, item, from, to, rate, frame)
+    return 0
 }

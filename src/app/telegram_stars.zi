@@ -1,0 +1,264 @@
+// Checkout runs only inside the verified Telegram Mini App. Telegram's sheet
+// callback says it closed. Only the issuer can report payment and the balance.
+#if #defined(PLATFORM_WEB) {
+    Stars :: #import "entity/telegram_mini_app";
+    #import "async_delegated"
+    #import "delegated"
+    #import "auth"
+    #import "text"
+    #import "byte_text_linux"
+    #import "vec"
+    #import "text_buffer"
+    #import "keys"
+    #import, file "../apps/package_files.zi";
+    #import, file "../platform/network_transport.zi";
+    #import, file "../platform/telegram_bridge.zi";
+    #import, file "../storage/delegate_store.zi";
+    #import, file "../storage/mesh_account.zi";
+    #import, file "../storage/sync_async.zi";
+    #import, file "../storage/sync_state.zi";
+    #import, file "text_buffers.zi";
+
+    TelegramStarsFlow :: struct {
+        generation: s64
+        requested: bool
+        opened: bool
+        sheet: bool
+        balance_known: bool
+        balance: s64
+        next_poll: s64
+        deadline: s64
+        notice: string
+        catalog: Stars.TelegramStarsCatalog
+        selected: Stars.TelegramStarsProduct
+        invoice: Stars.TelegramStarsInvoice
+        nonce: [33]u8
+        request: StoredOperation
+        transfer: NetworkTransfer
+        next: TelegramDelegateOperation
+        sent: TelegramDelegateOperation
+        response: [65537]u8
+    }
+    telegram_stars: TelegramStarsFlow;
+    telegram_stars_visible: bool;
+
+    TelegramStarsCurrent :: () -> bool {
+        return TelegramContextCurrent() && StoredAccountMode() == AccountModeDelegate &&
+            StoredDelegateAvailable() != 0
+    }
+
+    TelegramStarsForget :: () {
+        CancelTelegramInvoice()
+        CancelStoredOperation(*telegram_stars.request)
+        SecureWipe(*telegram_stars.request.body[0], 262144)
+        telegram_stars = TelegramStarsFlow.{}
+        telegram_stars_visible = false
+    }
+
+    TelegramStarsLaunch :: () {
+        if !TelegramStarsCurrent() || !TelegramInvoiceAvailable() { return }
+        if telegram_stars.generation != StoredDelegateGeneration() { TelegramStarsForget() }
+        if telegram_stars.requested { return }
+        telegram_stars.generation = StoredDelegateGeneration()
+        telegram_stars.requested = true
+        telegram_stars.notice = "telegram_stars_loading"
+        telegram_stars.next = .Launch
+    }
+
+    TelegramStarsSelect :: (index: s32) {
+        flow := *telegram_stars
+        if !TelegramStarsCurrent() || flow.generation != StoredDelegateGeneration() ||
+        !flow.opened || flow.sent != .Unspecified || flow.next != .Unspecified ||
+        flow.nonce[0] != 0 || flow.sheet || index < 0 || index >= flow.catalog.count { return }
+        nonce: [65]u8
+        if !NativeNonce(null, nonce[:]) || !AppCopyText(TextUntilNul(nonce[:])[:32], flow.nonce[:]) {
+            flow.notice = "telegram_stars_error"
+            return
+        }
+        flow.selected = flow.catalog.products[index]
+        flow.next = .CreateInvoice
+        flow.notice = "telegram_stars_loading"
+    }
+
+    TelegramStarsRetry :: () {
+        flow := *telegram_stars
+        if !TelegramStarsCurrent() || flow.generation != StoredDelegateGeneration() ||
+        flow.sent != .Unspecified || flow.next != .Unspecified || flow.sheet { return }
+        if flow.invoice.invoice_id[0] != 0 {
+            flow.next = .InvoiceStatus
+        } else {
+            flow.next = ifx flow.nonce[0] != 0 then .CreateInvoice else .Launch
+        }
+        flow.deadline = 0
+        flow.notice = "telegram_stars_loading"
+    }
+
+    TelegramStarsCancelPurchase :: () {
+        flow := *telegram_stars
+        if TelegramStarsCurrent() && flow.generation == StoredDelegateGeneration() &&
+        flow.invoice.invoice_id[0] != 0 && flow.sent == .Unspecified && flow.next == .Unspecified && !flow.sheet {
+            flow.next = .CancelInvoice
+        }
+    }
+
+    TelegramStarsBegin :: (flow: *TelegramStarsFlow, action: TelegramDelegateOperation, server: string) -> bool {
+        if !PrepareStoredOperation(*flow.request, server, false) { return false }
+        if flow.request.account_mode != AccountModeDelegate ||
+        (action != .Launch && !DelegateTelegramStarsAllowed(flow.request.delegate_client)) {
+            ReleaseStoredOperation(*flow.request)
+            return false
+        }
+        body := ""
+        if action == .Launch || action == .CreateInvoice {
+            entry: [33]u8
+            init_data: [16385]u8
+            encoded: Vec(u8)
+            defer {
+                SecureWipe(*init_data[0], 16385)
+            }
+            if !ReadTelegramContext(entry[:], init_data[:]) {
+                ReleaseStoredOperation(*flow.request)
+                return false
+            }
+            raw := TextUntilNul(init_data[:])
+            valid := false
+            if action == .Launch {
+                valid = Stars.TelegramLaunchRequest("inbe", raw, *encoded)
+            } else {
+                valid = Stars.TelegramStarsInvoiceRequest("inbe", TextUntilNul(flow.selected.product_id[:]),
+                    TextUntilNul(flow.nonce[:]), raw, *encoded)
+            }
+            payload := BuilderFinish(encoded)
+            defer {
+                bytes := cast(*TextDescriptor)(*payload)
+                if payload.count > 0 { SecureWipe(bytes.data, payload.count) }
+                PackageFree(payload)
+            }
+            if !valid || !AppCopyText(payload, flow.request.body[:]) {
+                ReleaseStoredOperation(*flow.request)
+                return false
+            }
+            body = TextUntilNul(flow.request.body[:])
+        }
+        flow.response[0] = 0
+        id := ifx action == .InvoiceStatus || action == .CancelInvoice then TextUntilNul(flow.invoice.invoice_id[:]) else ""
+        if !BeginTelegramDelegateRequest(*flow.request.delegate_request, flow.request.delegate_client,
+            *flow.request.delegate.session, NetworkTransport(*flow.transfer), action, id,
+            body, flow.response[:]) {
+            SecureWipe(*flow.request.body[0], 262144)
+            ReleaseStoredOperation(*flow.request)
+            return false
+        }
+        flow.sent = action
+        return true
+    }
+
+    TelegramStarsReadInvoice :: (flow: *TelegramStarsFlow, action: TelegramDelegateOperation,
+        result: *Stars.TelegramStarsInvoice) -> bool {
+        id := ifx action == .CreateInvoice then "" else TextUntilNul(flow.invoice.invoice_id[:])
+        return Stars.TelegramReadStarsInvoice(TextUntilNul(flow.response[:]), *flow.selected, id, result)
+    }
+
+    TelegramStarsResponse :: (flow: *TelegramStarsFlow, action: TelegramDelegateOperation, account: string, now: s64) -> bool {
+        if action == .Launch {
+            launch: Stars.TelegramLaunchContext
+            if !Stars.TelegramReadLaunch(TextUntilNul(flow.response[:]), "inbe", *launch) { return false }
+            flow.opened = false
+            if !DelegateTelegramStarsAllowed(flow.request.delegate_client) {
+                flow.notice = "telegram_stars_permission"
+            } else if !launch.stars_available {
+                flow.notice = "telegram_stars_unavailable"
+            } else {
+                flow.opened = true
+                flow.next = .Catalog
+            }
+        } else if action == .Catalog {
+            if !Stars.TelegramReadStarsCatalog(TextUntilNul(flow.response[:]), *flow.catalog) { return false }
+            flow.next = .Balance
+            flow.notice = ifx flow.catalog.count > 0 then "" else "telegram_stars_unavailable"
+        } else if action == .Balance {
+            balance: s64
+            if !Stars.TelegramReadStarsBalance(TextUntilNul(flow.response[:]), account, "inbe", *balance) { return false }
+            flow.balance = balance
+            flow.balance_known = true
+        } else {
+            result: Stars.TelegramStarsInvoice
+            if !TelegramStarsReadInvoice(flow, action, *result) { return false }
+            flow.invoice = result
+            if result.state == .Pending {
+                flow.notice = "telegram_stars_pending"
+                if flow.deadline == 0 { flow.deadline = now + 120 }
+                flow.next_poll = now + 3
+                if action == .CreateInvoice {
+                    flow.sheet = StartTelegramInvoice(TextUntilNul(result.invoice_url[:]))
+                    if !flow.sheet { flow.notice = "telegram_stars_error" }
+                }
+            } else {
+                flow.notice = "telegram_stars_error"
+                if result.state == .Credited {
+                    flow.notice = "telegram_stars_credited"
+                } else if result.state == .Refunded {
+                    flow.notice = "telegram_stars_refunded"
+                } else if result.state == .Cancelled || result.state == .Expired {
+                    flow.notice = "telegram_stars_cancelled"
+                }
+                flow.invoice = Stars.TelegramStarsInvoice.{}
+                flow.nonce[0] = 0
+                flow.deadline = 0
+                flow.next_poll = 0
+                flow.next = .Balance
+            }
+        }
+        return true
+    }
+
+    TelegramStarsPump :: (server: string, sync_active: bool) {
+        flow := *telegram_stars
+        if !flow.requested { return }
+        if !TelegramStarsCurrent() || flow.generation != StoredDelegateGeneration() ||
+        (flow.request.active && !StoredIdentityCurrent(*flow.request)) {
+            TelegramStarsForget()
+            return
+        }
+        now := CurrentStoredDelegateTime(null)
+        if flow.sent != .Unspecified {
+            if !PollDelegate(*flow.request.delegate_request) { return }
+            action := flow.sent
+            flow.sent = .Unspecified
+            if !TelegramStarsCurrent() || !StoredIdentityCurrent(*flow.request) {
+                TelegramStarsForget()
+                return
+            }
+            if flow.request.delegate_request.result != cast(AuthResult)AuthResult.AUTH_OK ||
+            !SaveStoredDelegateSession(*flow.request.delegate) ||
+            !TelegramStarsResponse(flow, action, flow.request.delegate_client.account_id, now) {
+                flow.next_poll = 0
+                flow.notice = "telegram_stars_error"
+            }
+            SecureWipe(*flow.request.body[0], 262144)
+            ReleaseStoredOperation(*flow.request)
+        }
+        if flow.sheet {
+            flow.sheet = PollTelegramInvoice() == 0
+            if flow.sheet { return }
+            flow.next_poll = now
+            flow.deadline = now + 120
+        }
+        if flow.next == .Unspecified && flow.next_poll > 0 && now >= flow.next_poll {
+            if now < flow.deadline { flow.next = .InvoiceStatus }
+            else { flow.next_poll = 0 }
+        }
+        if flow.next != .Unspecified && !sync_active {
+            action := flow.next
+            flow.next = .Unspecified
+            if !TelegramStarsBegin(flow, action, server) {
+                flow.next_poll = 0
+                flow.notice = "telegram_stars_error"
+            }
+        }
+    }
+
+    TelegramStarsNetworkBusy :: () -> bool {
+        return telegram_stars.sent != .Unspecified || telegram_stars.next != .Unspecified
+    }
+}

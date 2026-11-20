@@ -64,7 +64,7 @@ with contextlib.ExitStack() as stack:
                              str(OUTPUT / 'unused.png'), '--screenshot-scene', scene,
                              '--screenshot-width', '411', '--screenshot-height', '900',
                              '--screenshot-ui-scale', '10', '--screenshot-theme', '0']
-                bootstrap = subprocess.Popen(arguments, cwd=ROOT, env=local_env,
+                bootstrap = subprocess.Popen(arguments[:3], cwd=ROOT, env=local_env,
                                              stdout=log, stderr=subprocess.STDOUT)
                 try:
                     deadline = time.monotonic() + 20

@@ -10,18 +10,19 @@ work=$(mktemp -d /tmp/inbe-lumi-delegate-scope.XXXXXX)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 export YUE_DESKTOP_RECOVERY=0
-"$compiler" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/game2d/src" --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/mesh-client" --entry lumi_delegate_scope_behavior:Check \
+cd "$root"
+"$compiler" build --project --offline ${PACKAGE_FLAGS:-} --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
+    --entry lumi_delegate_scope_behavior:Check \
     -o "$work/generated" "$root/tests/lumi_delegate_scope_behavior.zi" "$root/tests/sync_test_host.zi" "$root/tests/delegate_account_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "lumi_delegate_scope_behavior.h"
+#include "zir_string.h"
 #include <stdio.h>
 #include <stdint.h>
-// Only installed-bundle host facts are synthetic; no fake bundle is called.
+// The fixture exercises scope and permissions without a display or raster assets.
+int32_t ImageWidth(String path) { (void)path; return 0; }
+int32_t ImageHeight(String path) { (void)path; return 0; }
+// No fake bundle is called.
 int32_t __wrap_AppsInstalledMask(void) { return 1 | 2 | 8 | 16; }
 int main(void) {
     int result = Check();

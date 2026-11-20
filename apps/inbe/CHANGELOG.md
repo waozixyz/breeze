@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+- Backspace and text corrections work again. Restore backups and add photos reliably.
+- Read Tao Te Ching art on its own page. Find Photos and Radio in Apps, with clearer feedback and appearance controls.
+- Desktop controls respond, translations keep clean line breaks, and account sync is called Mesh.
+- Start the Chromium extension when opened and reuse tabs for repeated opens of the same page.
+- Free the Chromium extension's WebAssembly memory when an idle Practices or Habits tab loses focus, and load it again on return.
+
 - Use one modern appearance and a simpler About list with Core and app versions.
 
 ## [2.1.64] - 2026-11-05

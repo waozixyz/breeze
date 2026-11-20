@@ -167,10 +167,10 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
     # Closing before opening a tile keeps first-start Apps on restart.
     with application(profile, "resume-apps") as (window, log):
         driver.wait(label="Pinned")
-        # Right steps through Lumi's guide's three steps to the end.
-        for step in range(1, 4):
-            driver.wait(label=f"Step {step} of 3")
-            key(window, "Right", lambda: not driver.find(label=f"Step {step} of 3", visible=True))
+        # Right completes the single launcher guide step.
+        guide = "Step 1 of 1"
+        driver.wait(label=guide)
+        key(window, "Right", lambda: not driver.find(label=guide, visible=True))
         wait_setting(profile, "launcher_guide_seen", 1)
         # The existing question is asked once, after the launcher guide.
         driver.wait(label="Don't allow", role="button")

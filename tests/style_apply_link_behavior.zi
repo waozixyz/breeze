@@ -7,10 +7,12 @@
 #import, file "../src/app/text_buffers.zi";
 #import, file "../src/apps/package_files.zi";
 #import, file "../src/core/types.zi";
+#import, file "../apps/habits/coin_color.zi";
 #import "vec"
 #import "control_props"
 #import "drawing_props"
 #import "style_sheet"
+#import "theme"
 #import "style"
 using ButtonState;
 
@@ -19,15 +21,57 @@ style_test_app: InnerBreeze;
 
 #program_export
 StartupStyleCheck :: () -> s32 {
+    highlights: [ThemeCount * 2]u32
     for theme: 0..ThemeCount - 1 {
         if !StyleInstall(cast(s32)theme, false) {
             return 100 + cast(s32)theme * 2
         }
+        if !HighlightFollows(cast(s32)theme, false) {
+            return 300 + cast(s32)theme * 2
+        }
+        highlights[theme * 2] = ThemeCatalogLoad(cast(s32)theme, false).circle
         if !StyleInstall(cast(s32)theme, true) {
             return 101 + cast(s32)theme * 2
         }
+        if !HighlightFollows(cast(s32)theme, true) {
+            return 301 + cast(s32)theme * 2
+        }
+        highlights[theme * 2 + 1] = ThemeCatalogLoad(cast(s32)theme, true).circle
     }
+    // The highlight changes with the theme instead of staying one color.
+    distinct: s32 = 0
+    for index: 0..ThemeCount * 2 - 1 {
+        seen := false
+        for before: 0..index - 1 {
+            if highlights[before] == highlights[index] { seen = true }
+        }
+        if !seen { distinct += 1 }
+    }
+    if distinct < ThemeCount { return 299 }
+    // A host older than the highlight sends none: coins take the text color.
+    text := StyleTokenColor("text")
+    if !SameColor(HabitsCoinColor(Color.{}, text), text) { return 298 }
     return 42
+}
+
+// Coins and other important numbers were one warm gold in every theme.
+OLD_COIN_GOLD :: Color.{226, 168, 48, 255}
+
+SameColor :: (a: Color, b: Color) -> bool {
+    return a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a
+}
+
+// After a theme is installed, coins and other important numbers take its
+// highlight, the theme's circle color, and text on it takes that color's
+// own ink.
+HighlightFollows :: (theme: s32, dark: bool) -> bool {
+    circle := ColorFromPacked(ThemeCatalogLoad(theme, dark).circle)
+    highlight := StyleTokenColor("highlight")
+    ink := StyleTokenColor("highlight-ink")
+    coin := HabitsCoinColor(highlight, StyleTokenColor("text"))
+    return SameColor(highlight, circle) &&
+        SameColor(ink, ColorFromPacked(OnColor(ThemeCatalogLoad(theme, dark).circle))) &&
+        SameColor(coin, highlight) && !SameColor(coin, OLD_COIN_GOLD)
 }
 
 CustomButtonRadius :: () -> float32 {

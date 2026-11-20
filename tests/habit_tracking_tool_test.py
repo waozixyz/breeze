@@ -119,6 +119,9 @@ with tempfile.TemporaryDirectory(prefix='inbe-habit-tracking-') as directory:
         pass
     with sqlite3.connect(profile / 'inbe.db') as db:
         user = db.execute('SELECT id FROM users LIMIT 1').fetchone()[0]
+        db.execute("INSERT INTO habits(id,user_id,name,color_r,color_g,color_b,"
+                   "sync_mode,sync_activity,sort_order,updated_at) "
+                   "VALUES('yoga',?,'Yoga',239,178,102,0,0,0,1)", (user,))
         settings = dict(enabled_apps='31', language='en', language_setup_done='1',
                         apps_setup_done='1', tutorial_seen='1', habits_guide_seen='1', lumi_guides_seen='127',
                         lumi_introduced='1', package_updates_allowed='0')

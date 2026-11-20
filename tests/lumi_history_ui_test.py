@@ -169,9 +169,9 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
         # The shared Entity profile lists Telegram among Inner Breeze's extensions.
         driver.press(label="Telegram")
         driver.wait(contains="Connect your sync account first")
-        driver.wait(contains="Telegram input", role="title_bar")
+        driver.wait(label="Telegram", role="title_bar")
         normalized = " ".join(driver.text().split())
-        assert "Telegram input" in normalized and "Connect your sync account first" in normalized, normalized
+        assert "Telegram" in normalized and "Connect your sync account first" in normalized, normalized
         command("xdotool", "windowsize", window, "390", "720")
         wait_screen_width(390)
         text = driver.text()

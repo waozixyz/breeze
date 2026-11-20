@@ -7,21 +7,22 @@ work=$(mktemp -d /tmp/inbe-telegram-account-flow.XXXXXX)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 export YUE_DESKTOP_RECOVERY=0
-"$compiler" build --target=c --define PLATFORM_WEB --root "$root/tests" \
+cd "$root"
+"$compiler" build --project --offline ${PACKAGE_FLAGS:-} --target=c --target-os web --target-cpu wasm32 \
+    --define PLATFORM_WEB --define __EMSCRIPTEN__ --root "$root/tests" \
     --module-path "$root/tests/flow_fake" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/css/src" \
-    --module-path "$root/build/packages/game2d/src" --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/mesh-client" --entry telegram_account_flow_behavior:Check \
+    --entry telegram_account_flow_behavior:Check \
     -o "$work/generated" "$root/tests/telegram_account_flow_behavior.zi" \
     "$root/tests/telegram_account_flow_host.zi" "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "telegram_account_flow_behavior.h"
+#include "zir_string.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <time.h>
+// This synthetic browser host has no embedded raster assets.
+int32_t ImageWidth(String path) { (void)path; return 0; }
+int32_t ImageHeight(String path) { (void)path; return 0; }
 static int64_t fixture_clock = 1700000000;
 void FlowClockSet(int64_t value) { fixture_clock = value; }
 void FlowClockAdvance(int64_t seconds) { fixture_clock += seconds; }

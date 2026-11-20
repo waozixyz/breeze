@@ -2,31 +2,43 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/packages/ziran/build/bin"}
-kryon=${KRYON_DIR:-"$root/build/packages/kryon"}
-entity=${ENTITY_DIR:-"$root/build/packages/entity"}
-apps=${APPS_DIR:-"$root/build/packages/apps"}
 work=$root/build/notification-lifecycle-test
-rm -rf "$work"
+rm -rf "$work/c"
 mkdir -p "$work/c"
-sh "$root/scripts/run-ziran.sh" "$bin/zi2c" --no-main --root "$root" \
-    --module-path "$root/src" \
-    --module-path "$kryon/src/ui" \
-    --module-path "$kryon/src/backend" \
-    --module-path "kryon=$kryon/src/ui" \
-    --module-path "kryon=$kryon/src/backend" \
-    --module-path "entity=$entity/src" \
-    --module-path "apps=$apps/src" \
-    --module-path "$root/build/packages/css/src" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/mesh-client" \
+cd "$root"
+sh "$root/scripts/run-ziran.sh" "$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} \
+    --target=c --no-main --define DESKTOP_HOST --root "$root" \
     -o "$work/c" "$root/tests/notification_lifecycle_behavior.zi"
-find "$work/c" -name '*.c' -type f -exec \
-    "${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \
-    -Wl,--gc-sections -Wl,--wrap=LocaleText \
+paint_header=$(find "$work/c" -name 'p*_paint_queue.h' -type f)
+test -f "$paint_header"
+printf '#include "%s"\n' "$(basename "$paint_header")" > "$work/c/kryon_raster_test_backend.h"
+cat > "$work/c/image_fixture.c" <<'C'
+#include "kryon_raster_test_backend.h"
+#include <assert.h>
+
+void RasterLine(Rectangle line, Color color) { (void)line; (void)color; assert(0); }
+void RasterImage(String path, uint32_t texture, Rectangle source,
+    Rectangle destination, Rectangle clip, Vector2 origin, float rotation,
+    float radius, Color tint) {
+    (void)path; (void)texture; (void)source; (void)destination; (void)clip;
+    (void)origin; (void)rotation; (void)radius; (void)tint; assert(0);
+}
+
+int32_t ImageWidth(String path) { (void)path; assert(0); return 0; }
+int32_t ImageHeight(String path) { (void)path; assert(0); return 0; }
+C
+# The fixture supplies raster and metrics functions so unexpected immediate
+# painting fails without starting a desktop surface.
+set --
+for source in "$work/c"/*.c "$work/c/tests"/*.c; do
+    case "$source" in */p*_cairo_raster.c) continue ;; esac
+    set -- "$@" "$source"
+done
+"${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \
+    -Wl,--gc-sections -Wl,--wrap=LocaleText -Wl,--wrap=WindowFocusedHost \
     -Wl,--wrap=DailyNotificationsSupported -Wl,--wrap=ScheduleDailyNotification \
     -Wl,--wrap=ScheduleNotificationDates -Wl,--wrap=CancelDailyNotification \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$work/c/tests" \
-    -o "$work/test" {} +
+    -o "$work/test" "$@" -lz -lm
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY "$work/test"
 echo "Notification lifecycle, preference preservation, reminder catch-up and plain toast timing passed"

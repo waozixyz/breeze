@@ -84,3 +84,8 @@ bundle --root . --module-path apps/inbe \
     --asset-dir "icons=build/package-assets/inbe/icons" \
     --asset-dir "assets/entity=$entity_dir/assets/entity" --asset-dir "assets/entity/bundles=build/entity" \
     --asset-dir "cells=$output" -o build/inbe-full.zx apps/inbe/inbe.zi
+
+# Successful, byte-identical root bundles must also satisfy Make's timestamp
+# checks. The app bundles above are created fresh in their staging directory.
+test -s build/inbe.zx && test -s build/inbe-full.zx || exit 1
+touch build/inbe.zx build/inbe-full.zx

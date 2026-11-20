@@ -8,19 +8,20 @@ data=$(mktemp -d /tmp/inbe-account-activity.XXXXXX)
 trap 'rm -rf "$data"' EXIT HUP INT TERM
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 export YUE_DESKTOP_RECOVERY=0
+rm -rf "$work/generated"
 mkdir -p "$work/generated"
-"$compiler" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/css/src" \
-    --module-path "$root/build/packages/game2d/src" --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/mesh-client" --entry account_activity_behavior:Check \
+cd "$root"
+"$compiler" build --project --offline ${PACKAGE_FLAGS:-} --target=c \
+    --define PLATFORM_DESKTOP --root "$root/tests" --entry account_activity_behavior:Check \
     -o "$work/generated" "$root/tests/account_activity_behavior.zi" "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "account_activity_behavior.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <assert.h>
+#include "zir_string.h"
+int32_t ImageWidth(String path) { (void)path; assert(0); return 0; }
+int32_t ImageHeight(String path) { (void)path; assert(0); return 0; }
 #include <time.h>
 typedef struct sqlite3 sqlite3;
 typedef struct sqlite3_stmt sqlite3_stmt;
@@ -32,7 +33,7 @@ time_t __wrap_time(time_t *output) {
     if (output) *output = fixture_now;
     return fixture_now;
 }
-double GetTime(void) { return fixture_clock; }
+double __wrap_app_monotonic_seconds(void) { return fixture_clock; }
 void FixtureAdvance(int64_t seconds) { fixture_now += seconds; fixture_clock += seconds; }
 void FixtureFrame(void) { fixture_clock += 1.0 / 60.0; }
 int32_t FixtureQueries(void) { return queries; }
@@ -62,7 +63,7 @@ monocypher=$root/build/packages/monocypher/src
     -I"$monocypher" -I"$monocypher/optional" \
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
     "$monocypher/monocypher.c" "$monocypher/optional/monocypher-ed25519.c" "$liboqs" \
-    -Wl,--gc-sections -Wl,--wrap=time -Wl,--wrap=sqlite3_prepare_v2 -Wl,--wrap=app_auto_sync \
+    -Wl,--gc-sections -Wl,--wrap=time -Wl,--wrap=app_monotonic_seconds -Wl,--wrap=sqlite3_prepare_v2 -Wl,--wrap=app_auto_sync \
     -ldl -lpthread -lz -lm -o "$work/test"
 APP_DATA_ROOT="$data" "$work/test"
 printf '%s\n' 'Account activity, private outbox, controls, freshness and account switching passed'

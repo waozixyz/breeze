@@ -2,21 +2,13 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/packages/ziran/build/bin"}
-kryon=${KRYON_DIR:-"$root/build/packages/kryon"}
-entity=${ENTITY_DIR:-"$root/build/packages/entity"}
-apps=${APPS_DIR:-"$root/build/packages/apps"}
 work=$(mktemp -d "$root/build/settings-mutation-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
-sh "$root/scripts/run-ziran.sh" "$bin/zi2c" --no-main --root "$root" \
-    --module-path "$root/src" \
-    --module-path "kryon=$kryon/src/ui" --module-path "kryon=$kryon/src/backend" \
-    --module-path "entity=$entity/src" --module-path "apps=$apps/src" \
-    --module-path "$kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/ziran/std" --module-path "$kryon/src/backend" \
-    --module-path "$root/build/packages/mesh-client" \
+cd "$root"
+sh "$root/scripts/run-ziran.sh" "$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} \
+    --target=c --no-main --root "$root" \
     -o "$work/c" "$root/tests/settings_mutation_behavior.zi"
-find "$work/c" -name '*.c' -type f -exec \
+find "$work/c" -name '*.c' -type f -exec sh -c 'exec "$@" -lm' sh \
     "${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \
     -Wl,--gc-sections -Wl,--wrap=save_settings -Wl,--wrap=LocaleText \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$work/c/tests" \

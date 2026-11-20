@@ -1,0 +1,65 @@
+Controller :: #import "apps/controller";
+Files :: #import "std/file";
+ByteText :: #import "std/byte_text_linux";
+CString :: #import "std/c_string";
+Values :: #import "std/bundle_host";
+#import, file "../src/apps/apps_controller.zi";
+
+libc :: #system_library "c";
+GetEnvironment :: (name: *u8) -> *u8 #foreign libc "getenv";
+
+EnvironmentText :: (name: string) -> string {
+    key: [64]u8
+    if !CString.CopyCString(name, key[:]) {
+        return ""
+    }
+    return ByteText.TextFromCString(GetEnvironment(*key[0]))
+}
+
+Service :: (context: *void, request: string) -> string {
+    return "{}"
+}
+
+Widgets :: (context: *void, module: *u8, function: *u8,
+    arguments: *Values.HostValue, count: s32, result: *Values.HostValue) -> s32 {
+    return 0
+}
+
+#program_export
+main :: () -> s32 {
+    bytes, found := Files.ReadEntireFile(EnvironmentText("APPS_CONTROLLER_TEST_BUNDLE"))
+    if !found || bytes.count == 0 {
+        return 1
+    }
+    digest := EnvironmentText("APPS_CONTROLLER_TEST_SHA256")
+    if digest == "" {
+        digest = AppsControllerSha256
+    }
+    platform := Controller.AppControllerPlatform.{.service = Service, .widgets = Widgets}
+    controller: Controller.AppController
+    if Controller.AppControllerOpen(*controller, bytes,
+        "0000000000000000000000000000000000000000000000000000000000000000", platform) {
+        return 2
+    }
+    if controller.ready || controller.app.app.bundle != null {
+        return 3
+    }
+    // Opening the real payload executes its Apps identity handshake.
+    if !Controller.AppControllerOpen(*controller, bytes, digest, platform) {
+        return 4
+    }
+    if !controller.ready || !Controller.AppControllerClose(*controller) {
+        return 5
+    }
+    // The unchanged installation digest must reject even a one-byte change.
+    descriptor := cast(*ByteText.TextDescriptor)(*bytes)
+    last := bytes.count - 1
+    descriptor.data[last] = descriptor.data[last] ^ cast(u8)1
+    if Controller.AppControllerOpen(*controller, bytes, digest, platform) {
+        return 6
+    }
+    if controller.ready || controller.app.app.bundle != null {
+        return 7
+    }
+    return 0
+}

@@ -316,7 +316,7 @@ export class Form {
                 continue
             }
             const part = Math.min(0.7, Math.max(0.15, (shareStart - PIVOT_SHARE) / (shareStart - shareEnd)))
-            const pose = new Timeline([{ t: 0, pose: from }, { t: 1, pose: to }]).sample(part).pose
+            const pose = new Timeline([{ t: 0, pose: from }, { t: 1, pose: to }]).sample(part, { authoring: true }).pose
             pose.look = to.look
             pose.feet[side] = { ...from.feet[side] }
             pose.load = side === 'L' ? PIVOT_SHARE : 1 - PIVOT_SHARE
@@ -339,7 +339,7 @@ export class Form {
             }
             const share0 = Math.min(1, share / 0.3)
             const part = 0.2 + 0.2 * share0
-            const pose = new Timeline([{ t: 0, pose: from }, { t: 1, pose: to }]).sample(part).pose
+            const pose = new Timeline([{ t: 0, pose: from }, { t: 1, pose: to }]).sample(part, { authoring: true }).pose
             pose.look = to.look
             pose.feet[side] = { ...a }
             pose.load = side === 'L' ? 0 : 1

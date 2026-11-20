@@ -1,4 +1,5 @@
 """Shop statistics opens separately from Activity at phone and desktop sizes."""
+import contextlib
 import os
 import hashlib
 import json
@@ -39,7 +40,11 @@ def capture(process, destination):
 
 
 def scroll_to(driver, label, kind):
+    driver.wait(label=label, role=kind, visible=False)
     for _ in range(40):
+        # The committed bounds must settle after navigating or scrolling
+        # before the next pointer press uses them.
+        driver.wait_idle(frames=3, required=True)
         nodes = driver.tree()
         node = next(n for n in nodes if n["label"] == label and n["kind"] == kind)
         if node["visible"] and node["visible_height"] >= node["height"] - 1:
@@ -49,7 +54,6 @@ def scroll_to(driver, label, kind):
         driver.pointer(viewport["visible_x"] + viewport["visible_width"] / 2,
                        viewport["visible_y"] + viewport["visible_height"] / 2, wheel=direction * 3)
         driver.release_pointer()
-        driver.wait_idle(frames=3)
     raise AssertionError(("control unreachable", label, driver.tree()))
 
 
@@ -103,7 +107,7 @@ for width, height, scale in [(390, 844, 10), (900, 720, 10), (390, 844, 20)]:
                 if node["kind"] == "text" and node["label"] in names:
                     assert node["width"] > 20, (name, "reward name has no readable column", node)
             scroll_to(driver, "Purchase statistics", kind="button")
-            driver.press(label="Purchase statistics", kind="button")
+            driver.press(label="Purchase statistics", role="button")
             driver.wait(label="Coins spent", visible=False)
             nodes = driver.tree()
             assert not any(node["label"] == "Your rewards" for node in nodes), (name, nodes)
@@ -121,21 +125,31 @@ for width, height, scale in [(390, 844, 10), (900, 720, 10), (390, 844, 20)]:
                           node["label"] == "Purchases: 2 · Last 30 days: 2"]
             assert len(per_reward) == 6, (name, "each reward retains both purchases", per_reward)
             capture(process, OUTPUT / f"{name}-statistics.png")
-            driver.press(label="Back", kind="button")
+            driver.press(label="Back", role="button")
             driver.wait(label="Your rewards", visible=False)
             assert not any("Last bought" in node["label"] for node in driver.tree())
+            # The seeded habit history earns this notification. At 200% zoom
+            # its card covers the form and correctly receives pointer input.
+            driver.wait_gone(label="One habit, seven times", role="button", visible=False)
             scroll_to(driver, "Icon", kind="button")
-            driver.press(label="Icon", kind="button")
+            driver.press(label="Icon", role="button")
+            driver.wait_idle(frames=3)
             scroll_to(driver, "Energy drink", kind="button")
-            driver.press(label="Energy drink", kind="button")
-            driver.wait_gone(label="Energy drink", kind="button", visible=False)
+            driver.press(label="Energy drink", role="button")
+            driver.wait_gone(label="Energy drink", role="button", visible=False)
             scroll_to(driver, "Icon", kind="button")
-            driver.press(label="Icon", kind="button")
+            driver.press(label="Icon", role="button")
             scroll_to(driver, "Soda", kind="button")
-            driver.press(label="Soda", kind="button")
-            driver.wait_gone(label="Energy drink", kind="button", visible=False)
+            driver.press(label="Soda", role="button")
+            driver.wait_gone(label="Energy drink", role="button", visible=False)
             time.sleep(4.2)
             capture(process, OUTPUT / f"{name}.png")
+        except BaseException:
+            with contextlib.suppress(Exception):
+                (OUTPUT / f"failure-{name}.json").write_text(
+                    json.dumps(driver.tree(), indent=1) + "\n")
+                capture(process, OUTPUT / f"failure-{name}.png")
+            raise
         finally:
             process.terminate()
             try:

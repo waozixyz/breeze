@@ -49,7 +49,15 @@ encoder = re.search(
     re.S,
 )
 assert encoder, "Lists encoder missing"
-actual = int(re.search(r"value.field_count = (\d+);", encoder[1])[1])
+count_address = re.search(
+    r"\bsize_t\*\s+(\w+)\s*=\s*&\(value\.field_count\);", encoder[1]
+)
+assert count_address, "Lists encoder field-count address missing"
+count_assignment = re.search(
+    rf"\(\*{re.escape(count_address[1])}\)\s*=\s*(\d+);", encoder[1]
+)
+assert count_assignment, "Lists encoder field-count assignment missing"
+actual = int(count_assignment[1])
 assert actual == expected, (actual, expected)
 result["codec"] = {
     "path": str(codecs[0].relative_to(ROOT)),

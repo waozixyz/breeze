@@ -3,8 +3,9 @@
 ## [Unreleased]
 
 - Return Lumi's answer to the private Telegram message that requested it.
-- Send private developer turns from the owner's Android debug build.
 
+- Send private developer turns from the owner's Android debug build.
+- Lumi faces the conversation.
 - Review complete feedback from the referenced list before one Send or Cancel choice; retries keep the same proposal.
 
 ## [1.5.29] - 2026-11-05

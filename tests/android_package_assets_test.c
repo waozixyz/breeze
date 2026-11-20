@@ -6,7 +6,6 @@
 
 static NativeActivity activity;
 static NativeAndroidApp app;
-static int available;
 static uint8_t package_bytes[] = {'Z', 'X', 0, 0, 26, 0, 0, 0};
 static uint8_t apps_bytes[] = {'Z', 'X', 0, 0, 26, 0, 0, 0, 'A'};
 
@@ -22,7 +21,6 @@ typedef struct {
 static TestAsset package_asset = {.bytes = package_bytes};
 static TestAsset apps_asset = {.bytes = apps_bytes};
 
-NativeAndroidApp *GetAndroidApp(void) { return available ? &app : NULL; }
 size_t asset_entry_total(void) { return 0; }
 const AssetEntry *asset_entry_at(size_t index) { (void)index; return NULL; }
 
@@ -63,7 +61,7 @@ int main(void)
 {
     assert(PackageSize() == 0);
     assert(AppsPackageSize() == 0);
-    available = 1;
+    jni_android_app = &app;
     assert(PackageSize() == 0);
     assert(AppsPackageSize() == 0);
     app.activity = &activity;
@@ -81,11 +79,11 @@ int main(void)
     assert(PackageSize() == sizeof(package_bytes) && package_asset.opens == 4 && package_asset.closes == 2);
 
     /* Loading one asset must not mark the other asset as loaded. */
-    available = 0;
+    jni_android_app = NULL;
     app.activity = NULL;
     assert(PackageSize() == sizeof(package_bytes) && package_asset.opens == 4);
     assert(AppsPackageSize() == 0 && apps_asset.opens == 0);
-    available = 1;
+    jni_android_app = &app;
     app.activity = &activity;
     apps_asset.fail_open = 1;
     assert(AppsPackageSize() == 0 && apps_asset.opens == 1 && apps_asset.closes == 0);
@@ -103,7 +101,7 @@ int main(void)
     app.activity = &replacement_activity;
     assert(PackageSize() == sizeof(package_bytes) && package_asset.opens == 4);
     assert(AppsPackageSize() == sizeof(apps_bytes) && apps_asset.opens == 4);
-    available = 0;
+    jni_android_app = NULL;
     app.activity = NULL;
     assert(PackageSize() == sizeof(package_bytes) && package_asset.closes == 2);
     assert(AppsPackageSize() == sizeof(apps_bytes) && apps_asset.closes == 2);

@@ -17,7 +17,7 @@ static int saved_done;
 static char saved_comment[ELIST_COMMENT_SIZE];
 
 String
-storage_db_path(void)
+__wrap_storage_db_path(void)
 {
     return StringLiteral("");
 }
@@ -97,6 +97,14 @@ node_apps_NodeAppAsset(String path)
 {
     (void)path;
     return (AssetView){0};
+}
+
+HostValue
+node_apps_NodeAppString(String text)
+{
+    (void)text;
+    assert(!"Lists requested a node app result");
+    return (HostValue){0};
 }
 
 bool

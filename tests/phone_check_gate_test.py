@@ -219,5 +219,45 @@ class PhoneCheckGateTest(unittest.TestCase):
                     gate.validate(self.root, "3.0.0")
 
 
+class PresentedFrameTimingTest(unittest.TestCase):
+    def measure(self, observation_seconds=0):
+        clock = [0.0]
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        def shell(*args):
+            if "--list" in args:
+                return "Token{fixture}\nSurfaceView - fixture.debug/activity#0\n"
+            if "--latency-clear" in args:
+                return ""
+            self.assertIn("--latency", args)
+            # Four intervals: 16, 16, 16 and 48 ms. Duplicate polls, zeroes
+            # and an unfinished presentation must not alter the percentiles.
+            return "16666667\n0 0 0\n" + "\n".join(
+                f"1 {timestamp} 1" for timestamp in
+                (1000000000, 1016000000, 1032000000, 1048000000,
+                 1096000000, phone_check.PENDING))
+
+        observer = mock.Mock(side_effect=lambda: sleep(observation_seconds))
+        phone = mock.Mock()
+        phone.shell.side_effect = shell
+        with mock.patch.object(phone_check.time, "monotonic", side_effect=lambda: clock[0]), \
+                mock.patch.object(phone_check.time, "sleep", side_effect=sleep):
+            timing = phone_check.frame_timing(phone, "fixture.debug", 5, observer)
+        self.assertTrue(observer.called)
+        return timing
+
+    def test_presented_frames_keep_the_slow_tail(self):
+        timing = self.measure()
+        self.assertEqual(timing["frames"], 5)
+        self.assertEqual(timing["median_frame_ms"], 16)
+        self.assertEqual(timing["p95_frame_ms"], 48)
+        self.assertFalse(timing["buffer_overrun_possible"])
+
+    def test_slow_observer_reports_possible_lost_frame_history(self):
+        self.assertTrue(self.measure(observation_seconds=3)["buffer_overrun_possible"])
+
+
 if __name__ == "__main__":
     unittest.main()

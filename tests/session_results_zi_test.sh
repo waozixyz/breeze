@@ -49,7 +49,7 @@ app_play_bell_cue :: (app: *InnerBreeze, volume: float32) #foreign c3;
 '''
 (work / 'meditation_session_behavior.zi').write_text(header + body)
 PY
-"$ziran" build --project --locked --target=c --define PLATFORM_DESKTOP --define DESKTOP_HOST \
+"$ziran" build --project ${PACKAGE_FLAGS:---offline} --target=c --define PLATFORM_DESKTOP --define DESKTOP_HOST \
     --define NATIVE_WINDOW_HAVE_SDL --root "$root/tests" \
     --module-path "$work" \
     --entry session_results_behavior:Check \

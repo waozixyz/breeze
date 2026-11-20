@@ -1,10 +1,6 @@
-#include "screens/telegram_account.h"
+#include "telegram_account.h"
 #include "zir_string.h"
-#include "session.h"
-#include "tree.h"
-#include "tree_input.h"
-#include "paint_queue.h"
-#include "scroll_device.h"
+#include "telegram_account_ui_backend.h"
 #include "text_buffers.h"
 #include "metrics.h"
 #include <assert.h>

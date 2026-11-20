@@ -112,6 +112,13 @@ set(APP_ZIRAN_CHECK_DEFINES "ANDROID_BUILD KRYON_ANDROID_HOST")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     list(APPEND APP_ZIRAN_DEFINES --define ANDROID_DEBUG)
     string(APPEND APP_ZIRAN_CHECK_DEFINES " ANDROID_DEBUG")
+    # The frame sampler is optional while the pinned Kryon predates it.
+    file(GLOB KRYON_ANDROID_FRAME_WATCH CONFIGURE_DEPENDS
+        "${KRYON_DIR}/src/backend/android_frame_watch.zi")
+    if(KRYON_ANDROID_FRAME_WATCH)
+        list(APPEND APP_ZIRAN_DEFINES --define LUMI_ANDROID_FRAME_WATCH)
+        string(APPEND APP_ZIRAN_CHECK_DEFINES " LUMI_ANDROID_FRAME_WATCH")
+    endif()
 endif()
 # The Google Play edition (build.gradle's gplay type) buys Dew through Play
 # Billing (entity/dew_play).
@@ -283,6 +290,12 @@ add_custom_command(
 )
 
 kryon_android_codecs("${WEBP_DIR}" "${AVIF_DIR}" "${AOM_DIR}")
+# Picture decoding runs during startup. Match the host's speed optimization in
+# debug builds while retaining symbols; the decoder's object libraries carry
+# the hot loops, so optimizing only the aggregate archive would miss them.
+foreach(decoder_target kryonwebp webpdecode webpdspdecode webputilsdecode)
+    target_compile_options(${decoder_target} PRIVATE "$<$<CONFIG:Debug>:-O2>")
+endforeach()
 # Kryon's Android host draws with Pixmap on the activity's surface; its helper
 # supplies the platform glue and picture codecs. Ziran's mixer decodes Ogg
 # Opus with the audio package's libopus, MP3 with dr_mp3 and Ogg Vorbis with

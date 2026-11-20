@@ -1,4 +1,7 @@
 #import, file "../platform/host_clock.zi";
+#if #defined(LUMI_ANDROID_FRAME_WATCH) {
+    #import, file "../platform/lumi_frame_watch.zi";
+}
 #import "std/json_scan"
 #import "std/format"
 #import, file "../../apps/lumi/lumi_achievements.zi";
@@ -22,6 +25,9 @@ Text :: #import "kryon/text";
 #import, file "../apps/lumi_online.zi";
 #import, file "../apps/lumi_connection.zi";
 #import, file "lumi_settings.zi";
+#if #defined(PLATFORM_WEB) {
+    #import, file "telegram_stars_view.zi";
+}
 #import, file "../app/app_modal_state.zi";
 #import, file "../apps/lumi_habit_tools.zi";
 #import, file "../apps/lumi_telegram.zi";
@@ -72,9 +78,6 @@ using Text.Wrap;
 using TextAlign;
 using ExerciseType;
 lumi_ui: LumiUiFrame;
-// Seconds Lumi's typing dots wait after a message is sent.
-LUMI_TYPING_DELAY :: 1.2;
-lumi_waiting_since: float64 = -1.0;
 lumi_ui_codec: WidgetLumiUiFrameCodec;
 lumi_row_codec: WidgetLumiChatRowCodec;
 lumi_task_codec: WidgetLumiTaskCodec;
@@ -1106,7 +1109,7 @@ LumiPrepareTools :: (app: *InnerBreeze) {
     }
     lumi_ui.choosing_habit = lumi_choosing_habit
     lumi_ui.choosing_diary = lumi_choosing_diary
-    lumi_ui.waiting = LumiOnlineWaiting()
+    lumi_ui.waiting = LumiOnlineTyping()
     lumi_ui.habit_count = LumiHabitCount(app)
     lumi_ui.online = LumiToggleOn()
     lumi_ui.connection = true
@@ -1185,6 +1188,9 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     lumi_ui.width = app.ui.view_width
     lumi_ui.height = app.ui.view_height
     lumi_ui.bottom = app_content_bottom_reserved(app)
+    #if #defined(PLATFORM_WEB) {
+        lumi_ui.bottom += TelegramStarsFooterHeight()
+    }
     lumi_ui.scale = MetricsScale()
     // A quiet frame keeps the clock it was recorded with: Lumi uses it only
     // to animate, and a quiet frame does not animate.
@@ -1192,14 +1198,11 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     if !quiet || lumi_ui.now == 0.0 {
         lumi_ui.now = HostSeconds()
     }
-    if !lumi_ui.waiting {
-        lumi_waiting_since = -1.0
-    } else if lumi_waiting_since < 0.0 {
-        lumi_waiting_since = lumi_ui.now
-    }
-    lumi_ui.typing_pause = lumi_ui.waiting && lumi_ui.now - lumi_waiting_since < LUMI_TYPING_DELAY
     lumi_ui.background = StyleTokenColor("canvas")
     lumi_ui.font = AppFontSize()
+    #if #defined(LUMI_ANDROID_FRAME_WATCH) {
+        LumiWatchMark(LumiWatchHistory)
+    }
     revision := LumiStoreRevision()
     history_changed := revision != lumi_rows_revision
     assets := AssetGeneration()
@@ -1220,6 +1223,9 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     }
     if !LumiRowsMeasure() {
         LumiDrawLoading(app)
+        #if #defined(LUMI_ANDROID_FRAME_WATCH) {
+            LumiWatchMark(LumiWatchAppDraw)
+        }
         return
     }
     history_measured := lumi_rows_history_pending
@@ -1234,6 +1240,9 @@ lumi_screen_draw :: (app: *InnerBreeze) {
         lumi_history_loading = false
     } else if lumi_ui.follow_end && history_measured {
         lumi_ui.scroll = 1000000
+    }
+    #if #defined(LUMI_ANDROID_FRAME_WATCH) {
+        LumiWatchMark(LumiWatchComposer)
     }
     column_width := Layout.CenteredColumnFor(lumi_ui.width, AppScale(720), AppScale(16)).width
     draft_width := column_width - AppScale(112)
@@ -1271,7 +1280,17 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
     AppsUiBegin(LumiUiCall, cast(*void)app)
     LumiSetFrameQuiet(quiet)
+    #if #defined(LUMI_ANDROID_FRAME_WATCH) {
+        LumiWatchMark(LumiWatchBundle)
+    }
     response := LumiRun(LumiMessage.{.action = LUMI_FRAME})
+    if response.succeeded && lumi_ui.waiting && lumi_ui.agreement == 0 {
+        LumiOnlineTypingDrawn(HostSeconds())
+        AppRequestSmoothFrames(2)
+    }
+    #if #defined(LUMI_ANDROID_FRAME_WATCH) {
+        LumiWatchMark(LumiWatchAppDraw)
+    }
     LumiSetFrameQuiet(false)
     AppsUiEnd()
     WidgetHostEnd()

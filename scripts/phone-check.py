@@ -254,7 +254,7 @@ def layout_shift(before, after):
         return round(sum(ImageStat.Stat(difference).mean) / 3, 1)
 
 
-def frame_timing(phone, package, seconds):
+def frame_timing(phone, package, seconds, observe=None):
     """Collect every presented frame of the app's window for the session."""
     # Android 9 names layers "<id> package/activity#N"; tokens are not layers.
     layers = [line.strip() for line in phone.shell("dumpsys", "SurfaceFlinger", "--list").splitlines()
@@ -263,10 +263,15 @@ def frame_timing(phone, package, seconds):
         raise ValueError("Inner Breeze has no window layer")
     presented = {}
     period = 0
+    last_poll = time.monotonic()
+    maximum_poll_gap = 0.0
     deadline = time.monotonic() + seconds
     for layer in layers:
         phone.shell("dumpsys", "SurfaceFlinger", "--latency-clear", shlex.quote(layer))
     while time.monotonic() < deadline:
+        now = time.monotonic()
+        maximum_poll_gap = max(maximum_poll_gap, now - last_poll)
+        last_poll = now
         for layer in layers:
             lines = phone.shell("dumpsys", "SurfaceFlinger", "--latency", shlex.quote(layer)).split("\n")
             if lines and lines[0].strip().isdigit():
@@ -277,6 +282,8 @@ def frame_timing(phone, package, seconds):
                     actual = int(fields[1])
                     if 0 < actual < PENDING:
                         presented.setdefault(layer, set()).add(actual)
+        if observe is not None:
+            observe()
         time.sleep(0.5)
     if not presented or period <= 0:
         raise ValueError("SurfaceFlinger reported no frames for Inner Breeze")
@@ -291,7 +298,11 @@ def frame_timing(phone, package, seconds):
                 refresh_hz=round(1000 / period_ms, 1),
                 fps=round((len(frames) - 1) / ((frames[-1] - frames[0]) / 1e9), 1),
                 late_percent=round(100 * late / len(gaps), 2),
-                p95_frame_ms=round(ordered[int(len(ordered) * 0.95) - 1], 1),
+                maximum_poll_gap_ms=round(maximum_poll_gap * 1000, 2),
+                buffer_overrun_possible=maximum_poll_gap * 1e9 > period * 127,
+                median_frame_ms=round((ordered[(len(ordered) - 1) // 2] +
+                                       ordered[len(ordered) // 2]) / 2, 2),
+                p95_frame_ms=round(ordered[(len(ordered) * 95 + 99) // 100 - 1], 1),
                 worst_frame_ms=round(ordered[-1], 1))
 
 

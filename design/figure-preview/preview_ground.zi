@@ -1,0 +1,146 @@
+// Painted-ground registration shared by the camera and floor audit.
+#import "figure_math"
+#import "kryon/scene"
+#import "preview_flat"
+#import "json_scan"
+#import "std/math"
+
+PreviewGroundBounds :: struct {
+    low: Vector3
+    high: Vector3
+}
+PreviewGroundRect :: struct {
+    left: float64
+    top: float64
+    right: float64
+    bottom: float64
+}
+
+PreviewGround :: struct {
+    horizon: float64
+    left: float64
+    top: float64
+    right: float64
+    bottom: float64
+    zoom: float64
+    focus: float64
+    pitch: float64
+    minimum_height: float64
+}
+
+PreviewGroundRead :: (data: string, ground: *PreviewGround) -> bool {
+    if data.count > 4096 || ValueEnd(data, 0, 0) < 0 {
+        return false
+    }
+    names: [10]string = .["horizon", "floor_left", "floor_top", "floor_right", "floor_bottom",
+        "zoom", "focus", "pitch", "minimum_view_height", "schema"]
+    values: [10]float64
+    for index: 0..9 {
+        at := FieldAt(data, 0, names[index])
+        if at < 0 || at >= cast(s32)data.count {
+            return false
+        }
+        number := ReadNumber(data, at)
+        if !number.valid || !Finite64(number.value) {
+            return false
+        }
+        values[index] = number.value
+    }
+    ground.* = .{values[0], values[1], values[2], values[3], values[4], values[5], values[6],
+        values[7], values[8]}
+    return values[9] == 1.0 && ground.horizon >= 0.0 && ground.horizon < ground.top && ground.left >= 0.0 &&
+        ground.right <= 1.0 && ground.left < ground.right && ground.top < ground.bottom &&
+        ground.bottom <= 1.0 && ground.zoom >= 1.0 && ground.focus >= 0.0 && ground.focus <= 1.0 &&
+        ground.pitch > 0.03 && ground.pitch < 0.5 && ground.minimum_height >= 2.0
+}
+
+// Safe rectangle after exactly the same cover/crop used for the painting.
+// X/Y are normalized output coordinates, not source-image coordinates.
+PreviewGroundArea :: (ground: PreviewGround, aspect: float64) -> PreviewGroundRect {
+    image_aspect := 1280.0 / 853.0
+    wide := FigureMax(aspect, image_aspect) * ground.zoom
+    tall := wide / image_aspect
+    left := (wide - aspect) * 0.5
+    top := (tall - 1.0) * ground.focus
+    return .{FigureMax(0.08, (ground.left * wide - left) / aspect),
+        FigureMax(0.08, ground.top * tall - top),
+        FigureMin(0.92, (ground.right * wide - left) / aspect),
+        FigureMin(0.96, ground.bottom * tall - top)}
+}
+
+PreviewGroundCorners :: (low: Vector3, high: Vector3, out: []Vector3) {
+    out[0] = low
+    out[1] = high
+    out[2] = .{low.x, low.y, high.z}
+    out[3] = .{high.x, low.y, low.z}
+    out[4] = .{low.x, high.y, low.z}
+    out[5] = .{low.x, high.y, high.z}
+    out[6] = .{high.x, low.y, high.z}
+    out[7] = .{high.x, high.y, low.z}
+}
+
+PreviewGroundProject :: (point: Vector3, view: PreviewView, aspect: float64) -> Vector3 {
+    toward := FigureV3(Sin(view.yaw) * Cos(view.pitch), Sin(view.pitch), Cos(view.yaw) * Cos(view.pitch))
+    right := FigureNormalize(FigureCross(FigureScale(toward, -1.0), FigureV3(0.0, 1.0, 0.0)))
+    up := FigureCross(right, FigureScale(toward, -1.0))
+    offset := FigureSub(point, view.center)
+    return .{0.5 + FigureDot(offset, right) / (view.height * aspect),
+        0.5 - FigureDot(offset, up) / view.height, 0.0}
+}
+
+// Fit the moving silhouette while anchoring its supports inside the marked
+// floor. Low poses can use a tighter lens than an upright stance.
+PreviewGroundFit :: (ground: PreviewGround, body: PreviewGroundBounds, floor: PreviewGroundBounds,
+    view: PreviewView, aspect: float64, zoom: float64) -> PreviewView {
+    toward := FigureV3(Sin(view.yaw) * Cos(view.pitch), Sin(view.pitch), Cos(view.yaw) * Cos(view.pitch))
+    right := FigureNormalize(FigureCross(FigureScale(toward, -1.0), FigureV3(0.0, 1.0, 0.0)))
+    up := FigureCross(right, FigureScale(toward, -1.0))
+    low := FigureV3(1000.0, 1000.0, 0.0)
+    high := FigureV3(-1000.0, -1000.0, 0.0)
+    corners: [8]Vector3
+    PreviewGroundCorners(floor.low, floor.high, corners[:])
+    for point: corners {
+        x := FigureDot(point, right)
+        y := FigureDot(point, up)
+        low.x = FigureMin(low.x, x)
+        low.y = FigureMin(low.y, y)
+        high.x = FigureMax(high.x, x)
+        high.y = FigureMax(high.y, y)
+    }
+    area := PreviewGroundArea(ground, aspect)
+    cx := (low.x + high.x) * 0.5
+    cy := (low.y + high.y) * 0.5
+    anchor_x := (area.left + area.right) * 0.5
+    anchor_y := (area.top + area.bottom) * 0.5
+    upright := FigureSmooth(body.high.y - body.low.y, 0.7, 1.75)
+    minimum := ground.minimum_height * (0.55 + 0.45 * upright)
+    tall := FigureMax(minimum,
+        FigureMax((high.x - low.x) / ((area.right - area.left) * aspect),
+            (high.y - low.y) / (area.bottom - area.top))) * 1.04
+    floor_height := tall
+    PreviewGroundCorners(body.low, body.high, corners[:])
+    body_bottom := 1000.0
+    body_top := -1000.0
+    for point: corners {
+        x := FigureDot(point, right) - cx
+        y := FigureDot(point, up) - cy
+        body_bottom = FigureMin(body_bottom, y)
+        body_top = FigureMax(body_top, y)
+        tall = FigureMax(tall, FigureAbs(x) / (aspect * FigureMin(anchor_x - 0.04, 0.96 - anchor_x)))
+        tall = FigureMax(tall, ifx y >= 0.0 then y / (anchor_y - 0.04) else -y / (0.96 - anchor_y))
+    }
+    tall = FigureMax(floor_height, tall / zoom)
+    // Use the available floor depth to bring low poses nearer the middle of
+    // the picture while keeping both the silhouette and its supports in view.
+    top := FigureMax(area.top + 0.001 + (high.y - cy) / tall, 0.04 + body_top / tall)
+    bottom := FigureMin(area.bottom - 0.001 + (low.y - cy) / tall, 0.96 + body_bottom / tall)
+    if top <= bottom {
+        center_y := 0.53 + (body_bottom + body_top) * 0.5 / tall
+        anchor_y = FigureClamp(center_y + (anchor_y - center_y) * upright, top, bottom)
+    }
+    result := view
+    result.height = tall
+    result.center = FigureAdd(FigureScale(right, cx - (anchor_x - 0.5) * tall * aspect),
+        FigureScale(up, cy + (anchor_y - 0.5) * tall))
+    return result
+}

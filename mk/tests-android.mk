@@ -11,8 +11,7 @@ android-source-test: $(ZIRAN_BIN) | build-laws
 
 .PHONY: accessibility-test
 accessibility-test: $(ZIRAN_BIN)
-	$(ZIRAN_BIN) build --target=c --exe --root tests --module-path src \
-		--module-path $(KRYON_DIR)/src/ui --module-path $(ZIRAN_DIR)/std \
+	$(ZIRAN_BIN) build --project --offline $(PACKAGE_FLAGS) --target=c --exe --root tests \
 		--entry accessibility_behavior:main -o $(BUILD_DIR)/accessibility-test \
 		tests/accessibility_behavior.zi
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \

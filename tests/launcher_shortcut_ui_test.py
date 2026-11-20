@@ -202,6 +202,8 @@ with contextlib.ExitStack() as stack:
             identity = subprocess.run(["xprop", "-id", window, "WM_CLASS"], env=env,
                                       check=True, capture_output=True, text=True).stdout
             assert "xyz.waozi.inbe." + name in identity, identity
+            if name == "leaderboard":
+                driver.wait(label=title, role="title_bar")
             if name == "diary":
                 driver.wait_idle(frames=5)
                 assert "Could not read this entry" not in driver.text(), driver.text()

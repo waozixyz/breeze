@@ -50,9 +50,12 @@ import { STUDIO_ROOT } from './serve.mjs'
 
 const INBE_ROOT = resolve(STUDIO_ROOT, '..', '..')
 const REFERENCE_ONLY = process.argv.includes('--reference')
-const MEDIA_DIR = realpathSync(join(INBE_ROOT, 'build', 'packages', 'practices'))
+const mediaOption = process.argv.indexOf('--media-dir')
+const MEDIA_DIR = realpathSync(mediaOption >= 0
+    ? resolve(process.argv[mediaOption + 1])
+    : join(INBE_ROOT, 'build', 'packages', 'practices'))
 if (!REFERENCE_ONLY && MEDIA_DIR.includes(`${sep}.cache${sep}ziran${sep}`)) {
-    throw new Error('build/packages/practices is the locked package; map practices to your practices checkout in ziran.local.toml')
+    throw new Error('build/packages/practices is the locked package; pass --media-dir with the canonical practices checkout')
 }
 const ASSET_DIR = join(MEDIA_DIR, 'taichi')
 const TEXT_FILE = join(STUDIO_ROOT, 'text', 'en.txt')
@@ -410,7 +413,7 @@ if (!REFERENCE_ONLY) {
 
 // --- Words ---------------------------------------------------------------------
 
-if (!REFERENCE_ONLY) {
+if (!REFERENCE_ONLY && !process.argv.includes('--course-only')) {
     mkdirSync(dirname(TEXT_FILE), { recursive: true })
     const entries = [...words.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     writeFileSync(TEXT_FILE, entries.map(([key, value]) => `[${key}]\n${value}\n---\n`).join(''))

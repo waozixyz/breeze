@@ -12,10 +12,10 @@ flock 9
 
 # The screen as the Linux app builds it, on Kryon's desktop host.
 defines="--define PLATFORM_DESKTOP --define DESKTOP_HOST --define NATIVE_WINDOW_HAVE_SDL"
-"$bin/ziran" check --project --locked --root "$root/src" $defines \
+"$bin/ziran" check --project ${PACKAGE_FLAGS:---offline} --root "$root/src" $defines \
     "$root/src/screens/elist_screen.zi"
-"$bin/ziran" build --project --locked --target=c --no-main --prune-stale --root "$root/src" $defines \
-    -o "$work/c" "$root/src/screens/elist_screen.zi"
+"$bin/ziran" build --project ${PACKAGE_FLAGS:---offline} --target=c --no-main --prune-stale --root "$root/src" $defines \
+    -o "$work/c" "$root/src/screens/elist_screen.zi" "$root/src/storage/storage_thread_buffers.zi"
 
 includes="-I$root/build/packages/ziran/include -I$work/c"
 
@@ -33,11 +33,13 @@ done
 # scale functions the test host replaces stay out. Observe the sync scheduling
 # boundary through a linker wrapper, leaving its production export intact.
 "${CC:-cc}" -std=c11 -w -ffunction-sections -fdata-sections -Wl,--gc-sections -Wl,--wrap=app_auto_sync \
+    -Wl,--wrap=storage_db_path \
     $includes "$work/elist_screen_link_test.o" "$work/elist_screen.o" \
     $(find "$work/c" -name '*.c' | grep -v -e '/elist_screen\.c$' \
-        -e '/db\.c$' -e '/storage_elist\.c$' -e '/lists_network\.c$' \
+        -e '/storage_elist\.c$' -e '/lists_network\.c$' \
         -e '/diary_store\.c$' -e '/node_apps\.c$' -e '/media_store\.c$' \
         -e '/metrics\.c$') \
+    "$root/vendor-builds/sqlite/sqlite3.c" \
     "$bin/../libziran.a" \
     "$root/vendor-builds/linux/x86_64/audio-codecs/libziran_mp3.a" \
     "$root/vendor-builds/linux/x86_64/audio-codecs/libvorbisfile.a" \

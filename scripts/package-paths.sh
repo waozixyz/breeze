@@ -37,7 +37,7 @@ for directory in module_roots(kryon / "ziran.toml"):
     print("--module-path")
     print("kryon=" + str(kryon / directory))
 PY
-for path in apps=apps/src \
+for path in apps=apps/src css=css/src \
     crypto=crypto/src entity=entity/src plot=plot/src qrcode=qrcode/src \
     oqs=oqs/src mingcute=mingcute/src mesh_client=mesh-client \
     webp=webp/src image_codec=image-codec/src avif=avif/src \

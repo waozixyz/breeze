@@ -20,6 +20,7 @@
 #import "preview_figure"
 #import "preview_motion"
 #import "kryon/scene"
+#import "kryon/scene_gpu"
 #import "kryon/session"
 #import "kryon/geometry"
 #import "kryon/frame_snapshot"
@@ -72,10 +73,26 @@ PreviewState :: struct {
 
 preview_state: PreviewState = .{playing = true, speed = 1.0, zoom = 1.0};
 preview_figure: PreviewFigure;
-// Painted frame intervals, reported to the log every 120 frames.
-preview_frames: [120]float64;
-preview_frame_count: s64;
-preview_last_paint: s64;
+PREVIEW_TIMING_SAMPLES :: 30
+PreviewFrameTiming :: struct {
+    intervals: [PREVIEW_TIMING_SAMPLES]float64
+    count: s64
+    last_paint: s64
+    last_seconds: float64
+    max_step: float64
+    visible_frames: s64
+    focused_frames: s64
+    minimized_frames: s64
+    draw_ms: float64
+    stage_ms: float64
+    pose_ms: float64
+    render_ms: float64
+    prepare_ms: float64
+    submit_ms: float64
+    readback_ms: float64
+}
+preview_timing: PreviewFrameTiming;
+preview_last_draw_ms: float64;
 preview_backdrops: PreviewBackdrops;
 preview_library: PreviewLibrary;
 preview_picture: Raster.Image;
@@ -102,6 +119,46 @@ main :: (argc: s32, argv: **u8) -> s32 {
         return 1
     }
     preview_state.item = PreviewDefaultItem(*preview_library, preview_state.practice)
+    if argc >= 2 && TextFromCString(argv[1]) == "--review-spans" {
+        PreviewReviewSpans(*preview_library)
+        return 0
+    }
+    if argc >= 2 && TextFromCString(argv[1]) == "--review-items" {
+        for practice: cast(s32)0..3 {
+            for item: cast(s32)0..PreviewItemCount(*preview_library, practice) - 1 {
+                print("item\t%\t%\t%\t%\n", practice, item, PreviewDuration(*preview_library, practice, item),
+                    PreviewItemName(*preview_library, practice, item))
+            }
+        }
+        return 0
+    }
+    if argc >= 2 && TextFromCString(argv[1]) == "--stream" {
+        if argc < 10 || argc > 11 || (argc == 11 && TextFromCString(argv[10]) != "man") {
+            print("usage: --stream PRACTICE ITEM FROM TO FPS WIDTH HEIGHT FD [man]\n")
+            return 1
+        }
+        values: [8]float64
+        for index: 0..7 {
+            value, ok := ParseFloat64(TextFromCString(argv[index + 2]))
+            if !ok {
+                return 1
+            }
+            values[index] = value
+        }
+        man := argc >= 11 && TextFromCString(argv[10]) == "man"
+        return PreviewStream(*preview_backdrops, *preview_library, practices, cast(s32)values[0], cast(s32)values[1],
+            values[2], values[3], values[4], cast(s32)values[5], cast(s32)values[6], cast(s32)values[7], man)
+    }
+    if argc >= 2 && TextFromCString(argv[1]) == "--review-points" {
+        PreviewReviewPoints(*preview_library)
+        return 0
+    }
+    if argc >= 2 && TextFromCString(argv[1]) == "--clothing-audit" {
+        return PreviewAuditClothing(*preview_library, practices)
+    }
+    if argc >= 2 && TextFromCString(argv[1]) == "--sole-audit" {
+        return PreviewAuditSoles(*preview_library, practices)
+    }
     if argc >= 2 && TextFromCString(argv[1]) == "--audit" {
         return ifx PreviewAudit(*preview_library) == 0 then 0 else 1
     }
@@ -155,6 +212,10 @@ main :: (argc: s32, argv: **u8) -> s32 {
 }
 
 PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
+    draw_started := Timer.MonotonicNanoseconds()
+    defer {
+        preview_last_draw_ms = cast(float64)(Timer.MonotonicNanoseconds() - draw_started) / 1000000.0
+    }
     input := CaptureFrameInput(session)
     state := *preview_state
     panel_width: float32 = 360.0
@@ -164,16 +225,22 @@ PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
     Box.Draw(session, Box.Props.{.key = 2, .bounds = panel, .fill = .{232, 225, 211, 255}})
 
     duration := PreviewDuration(*preview_library, state.practice, state.item)
-    now := Timer.MonotonicMilliseconds()
+    now := Timer.MonotonicNanoseconds()
     elapsed := ifx preview_clock == 0 then 0 else now - preview_clock
     preview_clock = now
     if state.playing {
         // A stalled frame never jumps the figure ahead by more than a moment.
-        state.seconds += cast(float64)FigureClamp(cast(float64)elapsed, 0.0, 250.0) / 1000.0 * state.speed
+        state.seconds += FigureClamp(cast(float64)elapsed / 1000000000.0, 0.0, 0.1) * state.speed
         if state.seconds >= duration {
-            state.seconds -= duration * cast(float64)cast(s64)(state.seconds / duration)
+            // A completed demonstration holds its final pose. Wrapping to
+            // time zero teleported a travelling stance across the stage.
+            state.seconds = duration
+            state.playing = false
         }
         DesktopRequestFrame()
+    }
+    if !state.playing {
+        preview_timing = .{}
     }
     // Turn and tilt by dragging over her; zoom with the wheel.
     pointer := input.pointer
@@ -233,7 +300,12 @@ PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
     y += 54.0
     if Button.Draw(session, Button.Props.{.key = 13, .bounds = .{x, y, width * 0.48, 40.0},
         .label = ifx state.playing then "Pause" else "Play"}) != 0 {
+        if !state.playing && state.seconds >= duration {
+            state.seconds = 0.0
+        }
         state.playing = !state.playing
+        preview_clock = 0
+        DesktopRequestFrame()
     }
     if Button.Draw(session, Button.Props.{.key = 14, .bounds = .{x + width * 0.52, y, width * 0.48, 40.0},
         .label = "Front view"}) != 0 {
@@ -292,8 +364,14 @@ PreviewDraw :: (session: Session, viewport: Rectangle) -> s32 {
 
 PreviewPaintStage :: (session: Session, area: Rectangle) {
     state := *preview_state
-    // Paint at most 760 pixels tall; the image scales smoothly to the area.
-    scale := FigureClamp(760.0 / cast(float64)area.height, 0.2, 1.0)
+    if area.width < 16.0 || area.height < 16.0 {
+        return
+    }
+    if !state.current {
+        unused PreviewFigureUse(*preview_figure, TextView(preview_practices_path[0:preview_practices_length]), state.man)
+    }
+    moving := state.playing || state.dragging
+    scale := FigureMin(760.0 / cast(float64)area.height, 1.0)
     width := cast(s32)(cast(float64)area.width * scale)
     height := cast(s32)(cast(float64)area.height * scale)
     if width < 16 || height < 16 {
@@ -301,12 +379,11 @@ PreviewPaintStage :: (session: Session, area: Rectangle) {
     }
     key := PreviewKey(width, height)
     if key != preview_painted_key || preview_texture.id == 0 {
+        started := Timer.MonotonicNanoseconds()
         moment := PreviewSample(*preview_library, state.practice, state.item, state.seconds)
-        view := PreviewViewOf(*moment, state.turn, state.lift, state.zoom)
-        unused PreviewFigureUse(*preview_figure, TextView(preview_practices_path[0:preview_practices_length]), state.man)
+        view := PreviewViewOf(*moment, state.turn, state.lift, state.zoom, cast(float64)width / cast(float64)height)
         preview_failed = !PreviewStage(*preview_backdrops, state.practice, *moment, view, state.current,
             *preview_figure, width, height, *preview_picture, state.seconds)
-        PreviewTiming()
         if !preview_failed {
             texture := preview_texture
             if texture.id != 0 && (texture.width != width || texture.height != height ||
@@ -322,10 +399,13 @@ PreviewPaintStage :: (session: Session, area: Rectangle) {
             }
             preview_texture = texture
             preview_painted_key = key
+            if state.playing && !preview_failed {
+                PreviewTiming(started, width, height)
+            }
         }
     }
     if preview_texture.id != 0 {
-        Image.Draw(session, Image.Props.{.key = 3, .bounds = area, .texture = preview_texture, .smooth = true,
+        Image.Draw(session, Image.Props.{.key = 3, .bounds = area, .texture = preview_texture, .smooth = !moving,
             .alt_text = "The practice stage"})
     }
 }
@@ -337,7 +417,7 @@ PreviewKey :: (width: s32, height: s32) -> u64 {
     moving := ifx state.current || preview_figure.loaded then 1.0 else 0.0
     values: [9]float64 = .[cast(float64)state.practice, cast(float64)state.item, state.seconds * moving,
         (state.turn + state.lift * 7.0 + state.zoom * 13.0) * moving, moving, cast(float64)width,
-        cast(float64)height, 0.0, ifx state.man then 1.0 else 0.0]
+        cast(float64)height, ifx state.current then 1.0 else 0.0, ifx state.man then 1.0 else 0.0]
     for value: values {
         bits := cast(u64)(value * 1000003.0 + 0.5)
         digest = digest * 1099511628211 + bits
@@ -373,17 +453,34 @@ PreviewSeconds :: (seconds: float64, duration: float64, output: []u8) -> string 
     return TextView(output[0:length])
 }
 
-// Every 120 painted frames, the median and slowest frame interval and the
-// last render time go to the log, with the figure shown.
-PreviewTiming :: () {
-    now := Timer.MonotonicNanoseconds()
-    if preview_last_paint != 0 {
-        preview_frames[preview_frame_count % 120] = cast(float64)(now - preview_last_paint) / 1000000.0
-        preview_frame_count += 1
-        if preview_frame_count % 120 == 0 {
-            sorted: [120]float64
-            for at: 0..119 {
-                value := preview_frames[at]
+// Time between rendered animation frames includes the desktop host's present
+// and wait. Stage time includes sampling, skinning, rasterization and upload.
+PreviewTiming :: (started: s64, width: s32, height: s32) {
+    timing := *preview_timing
+    state := *preview_state
+    if state.seconds < timing.last_seconds {
+        <<timing = .{}
+    }
+    if timing.last_paint != 0 {
+        timing.intervals[timing.count] = cast(float64)(started - timing.last_paint) / 1000000.0
+        timing.max_step = FigureMax(timing.max_step, 1000.0 * (state.seconds - timing.last_seconds))
+        timing.draw_ms += preview_last_draw_ms
+        if WindowVisibleHost() { timing.visible_frames += 1 }
+        if WindowFocusedHost() { timing.focused_frames += 1 }
+        if WindowMinimizedHost() { timing.minimized_frames += 1 }
+        timing.stage_ms += cast(float64)(Timer.MonotonicNanoseconds() - started) / 1000000.0
+        if !state.current {
+            timing.pose_ms += preview_figure.pose_ms
+            timing.render_ms += preview_figure.render_ms
+            timing.prepare_ms += preview_figure.prepare_ms
+            timing.submit_ms += preview_figure.submit_ms
+            timing.readback_ms += preview_figure.readback_ms
+        }
+        timing.count += 1
+        if timing.count == PREVIEW_TIMING_SAMPLES {
+            sorted: [PREVIEW_TIMING_SAMPLES]float64
+            for at: 0..PREVIEW_TIMING_SAMPLES - 1 {
+                value := timing.intervals[at]
                 spot := at
                 while spot > 0 && sorted[spot - 1] > value {
                     sorted[spot] = sorted[spot - 1]
@@ -391,18 +488,22 @@ PreviewTiming :: () {
                 }
                 sorted[spot] = value
             }
-            median_digits: [32]u8
-            slow_digits: [32]u8
-            render_digits: [32]u8
-            median := FormatDecimal(sorted[60], 1, median_digits[:])
-            slow := FormatDecimal(sorted[114], 1, slow_digits[:])
-            render := FormatDecimal(preview_figure.render_ms, 1, render_digits[:])
-            print("figure preview timing, %: frame median % ms, p95 % ms, render % ms, gpu=%\n",
-                ifx preview_state.man then "man" else "woman", median, slow, render, preview_figure.accelerated)
+            renderer := "Cairo"
+            if !state.current {
+                renderer = ifx preview_figure.accelerated then TextFromCString(*preview_figure.gpu.capabilities.renderer[0]) else "CPU"
+            }
+            count := cast(float64)PREVIEW_TIMING_SAMPLES
+            print("figure preview timing: %x%, p50 % ms, p95 % ms, draw % ms, stage % ms, pose % ms, raster % ms, prepare % ms, submit % ms, readback % ms, max step % ms, visible %/%, focused %, minimized %, renderer %\n",
+                width, height, (sorted[14] + sorted[15]) * 0.5, sorted[28], timing.draw_ms / count, timing.stage_ms / count,
+                timing.pose_ms / count, timing.render_ms / count, timing.prepare_ms / count,
+                timing.submit_ms / count, timing.readback_ms / count, timing.max_step, timing.visible_frames,
+                PREVIEW_TIMING_SAMPLES, timing.focused_frames, timing.minimized_frames, renderer)
             unused PreviewFlushOutput(null)
+            <<timing = .{}
         }
     }
-    preview_last_paint = now
+    timing.last_paint = started
+    timing.last_seconds = state.seconds
 }
 
 PreviewPracticesPath :: () -> string {

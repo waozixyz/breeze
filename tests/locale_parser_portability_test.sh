@@ -3,7 +3,8 @@ set -eu
 
 repo=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ziran=${ZIRAN_BIN:-"$repo/build/packages/ziran/build/bin/ziran"}
-work=$(mktemp -d)
+mkdir -p "$repo/build/apps-test"
+work=$(mktemp -d "$repo/build/apps-test/locale-parser.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 cat > "$work/app.zi" <<'ZI'
@@ -29,6 +30,11 @@ Answer :: () -> s32 {
         !LocaleSpanEquals(data[:], entries[0].value, "First\n\nLast") {
         return -2
     }
+    // A blank line before the separator is spacing, never part of the value.
+    parsed = LocaleParseEntries("[title]\nSave?\n\n---\n[last]\nEnd\n\n", entries[:], data[:])
+    if !parsed.complete || parsed.count != 2 ||
+        !LocaleSpanEquals(data[:], entries[0].value, "Save?") ||
+        !LocaleSpanEquals(data[:], entries[1].value, "End") { return -11 }
     parsed = LocaleParseEntries("[empty]\n---\n", entries[:], data[:])
     if !parsed.complete || parsed.count != 1 ||
         !LocaleSpanEquals(data[:], entries[0].value, "") { return -3 }
@@ -63,6 +69,8 @@ Answer :: () -> s32 {
     if !found.found || found.text != "First\n\nLast" { return -8 }
     found = LocaleFindText("[missing]\nvalue\n---", "absent")
     if found.found || found.text != "" { return -9 }
+    found = LocaleFindText("[title]\nSave?\n\n---\n", "title")
+    if !found.found || found.text != "Save?" { return -12 }
     found = LocaleFindText("[line]\nOne\r\nTwo\n---", "line")
     if !found.found || found.text != "One\r\nTwo" { return -10 }
     return 42

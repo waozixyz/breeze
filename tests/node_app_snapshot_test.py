@@ -24,10 +24,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--ziran', type=Path, required=True)
     parser.add_argument('--runtime', type=Path, required=True)
+    parser.add_argument('--controller', type=Path, help='The reviewed Apps controller used by this build')
     parser.add_argument('--photos-module', type=Path, help='Test this actual current Photos module through signed local download')
     parser.add_argument('--output', type=Path, help='Separate output for a concurrent diagnostic run')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
+    controller = args.controller.resolve() if args.controller else root / 'build/apps-ui/apps.zx'
     work = args.output.resolve() if args.output else root / 'build/node-app-snapshot-test'
     generated = work / 'c'
     if generated.exists():
@@ -166,7 +168,7 @@ Main :: () -> s32 {
             'NODE_EMBEDDED_ARCADE': str(root / 'apps/bundled/arcade.zx'),
             'NODE_EMBEDDED_ART': str(root / 'apps/bundled/arcade.games' / arcade_art),
             'NODE_EMBEDDED_ART_PATH': 'assets/apps/bundled/arcade/' + arcade_art,
-            'NODE_EMBEDDED_CONTROLLER': str(root / 'build/apps-ui/apps.zx'),
+            'NODE_EMBEDDED_CONTROLLER': str(controller),
             **{f'ICON_{name.upper()}_BUNDLE': str(fixture / f'{name}.zx')
                for name in ('valid', 'invalid', 'empty', 'corrupt')},
         }, check=True)

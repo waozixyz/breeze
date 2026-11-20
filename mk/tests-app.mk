@@ -5,7 +5,7 @@ android-push-delivery-test:
 	@python3 tests/android_push_delivery_test.py
 
 .PHONY: notification-lifecycle-test
-notification-lifecycle-test: $(ZI2C_BIN)
+notification-lifecycle-test: $(ZIRAN_BIN)
 	@sh tests/notification_lifecycle_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: habits-table-layout-test
@@ -85,7 +85,7 @@ settings-ui-zi-test: $(ZI2C_BIN)
 		sh tests/settings_ui_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: language-selection-zi-test
-language-selection-zi-test: $(ZI2C_BIN)
+language-selection-zi-test: $(ZIRAN_BIN)
 	@env -u DISPLAY -u WAYLAND_DISPLAY \
 		sh tests/language_selection_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
@@ -99,7 +99,7 @@ settings-status-zi-test: $(ZI2C_BIN)
 	@python3 tests/settings_status_test.py $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: settings-mutation-zi-test
-settings-mutation-zi-test: $(ZI2C_BIN)
+settings-mutation-zi-test: $(ZIRAN_BIN)
 	@sh tests/settings_mutation_zi_test.sh $(ZIRAN_BUILD_DIR)/bin
 
 .PHONY: theme-catalog-zi-test

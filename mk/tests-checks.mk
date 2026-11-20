@@ -62,6 +62,11 @@ test-references-check:
 screenshot-scene-test:
 	bash ./tests/screenshot_scene_test.sh
 
+.PHONY: narration-text-matcher-test
+test: narration-text-matcher-test
+narration-text-matcher-test:
+	python3 tests/narration_text_matcher_test.py
+
 audio-test-fixture-check:
 	printf '%s  %s\n' \
 		d1f25feccd8af5cfe22ca1ed6afa901a5f97cbf976b93fc46096a2bd83315034 \

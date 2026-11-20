@@ -195,14 +195,15 @@ CloseCustomTask :: () {
     custom_task_scroll = 0
 }
 
-SaveCustomTask :: () -> bool {
-    if ListsTitleWithoutPriority(frame.value).count == 0 { return false }
+SaveCustomTask :: () {
+    if ListsTitleWithoutPriority(frame.value).count == 0 { return }
     if !ListsTitlePriorityFits(frame.value, frame.task_priority, LISTS_TEXT_LIMIT) {
-        return false
+        return
     }
-    frame.value = ListsTitleForPriority(frame.value, frame.task_priority)
     Mutation(LISTS_COMMIT, -1)
-    return true
+    if state.remote && state.request_body.count > 0 {
+        CloseCustomTask()
+    }
 }
 
 // Remembers a deleted item's name for a few seconds so Undo can restore it.
@@ -254,6 +255,7 @@ Mutation :: (action: s32, index: s32) {
     if action == LISTS_COMMIT {
         state.title = frame.value
         if frame.panel == 3 {
+            state.title = ListsTitleForPriority(frame.value, frame.task_priority)
             state.comment = frame.comment_value
         } else {
             state.comment = ""
@@ -654,6 +656,9 @@ InvitationsDialog :: () {
             .width = width, .height = height, .scale = frame.scale,
             .has_right_action = true, .right_label = ListsLocaleHost("close_button")})
     if dialog.dismissed || dialog.right_clicked {
+        if dialog.opened {
+            End(frame.session)
+        }
         frame.panel = 0
         frame.focused = false
         sharing_scroll = 0
@@ -764,7 +769,6 @@ CustomTaskDialog :: () {
     alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     for index: cast(s32)1..26 {
         options[index].label = alphabet[index - 1:index]
-        options[index].key = cast(u64)index
     }
     chosen := Dropdown.Draw(frame.session, Dropdown.Props.{.key = cast(u64)6551,
             .bounds = Bounds(x + content_width - Scale(124), y, Scale(124), Scale(44)),
@@ -791,10 +795,9 @@ CustomTaskDialog :: () {
     if task_escaped || description_escaped || cancel {
         CloseCustomTask()
     } else if save || task_committed {
-        if SaveCustomTask() {
-            CloseCustomTask()
-        }
+        SaveCustomTask()
     }
+    End(frame.session)
     End(frame.session)
 }
 
@@ -837,9 +840,6 @@ InvitationRow :: (row: ListsUiPerson, index: s32, x: s32, y: s32, width: s32, di
 ListsView :: (message: ListsMessage) -> ListsMessage {
     frame = ReadListsUiHost()
     state = message
-    if frame.panel == 3 && state.succeeded && state.editing_item == -1 && state.reset_input {
-        CloseCustomTask()
-    }
     // Sharing lives in List settings; an older saved Share panel opens it.
     if frame.panel == 1 {
         frame.panel = 0
@@ -1600,10 +1600,8 @@ RowContextMenu :: (blocked: bool) {
         state.done = ifx row.done != 0 then 0 else 1
         Mutation(LISTS_SET_DONE, row_menu_index)
         row_menu_open = false
-        End(frame.session)
     } else if menu.activated_id == LISTS_ROW_MENU_EDIT && !blocked {
         BeginCustomTask(row_menu_index, row.title, row.comment)
         row_menu_open = false
-        End(frame.session)
     }
 }

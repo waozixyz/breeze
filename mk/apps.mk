@@ -8,13 +8,12 @@ src/apps/app_codec.zi: scripts/generate-app-codec.py $(APP_CODEC_SCHEMAS)
 
 ENTITY_DIR := build/packages/entity
 ENTITY_SOURCES = $(wildcard $(ENTITY_DIR)/src/*.zi $(ENTITY_DIR)/assets/entity/*)
-# The shared Apps controller uses this host's selected dependency graph.
-# Its exact payload must match the independently reviewed native digest.
+# Use the locked dependency graph for the reviewed Apps controller payload.
 APPS_DIR := build/packages/apps
 APPS_BUNDLE ?= build/apps-ui/apps.zx
 NODE_APP_NAMES := $(shell python3 -c 'import json; print(" ".join(json.load(open("apps/versions.json")).get("node_apps", {})))')
 NODE_APP_BUNDLES := $(addprefix $(BUILD_DIR)/node-apps/,$(addsuffix .zx,$(NODE_APP_NAMES)))
-$(BUILD_DIR)/apps-ui/apps.zx: ziran.toml ziran.lock $(wildcard ziran.local.toml) $(ZIRAN_BIN) $(wildcard $(ZIRAN_BUILD_DIR)/bin/zi2zx) scripts/build-apps.py $(wildcard $(APPS_DIR)/ziran.lock $(APPS_DIR)/src/*.zi $(APPS_DIR)/ui/*.zi $(APPS_DIR)/ui/locales/*.json)
+$(BUILD_DIR)/apps-ui/apps.zx: ziran.toml ziran.lock $(ZIRAN_BIN) $(wildcard $(ZIRAN_BUILD_DIR)/bin/zi2zx) scripts/build-apps.py $(wildcard $(APPS_DIR)/ziran.lock $(APPS_DIR)/src/*.zi $(APPS_DIR)/ui/*.zi $(APPS_DIR)/ui/locales/*.json)
 	env -u DISPLAY -u WAYLAND_DISPLAY PATH="$(abspath $(dir $(ZIRAN_BIN))):$$PATH" \
         python3 scripts/build-apps.py --ziran $(abspath $(ZIRAN_BIN)) --output $(abspath $(dir $@))
 .PHONY: apps

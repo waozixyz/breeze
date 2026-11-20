@@ -6,6 +6,7 @@ bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/device-policy-test
 source=$root/tests/device_policy_behavior.zi
 
+rm -rf "$work/ir" "$work/c"
 mkdir -p "$work/ir" "$work/c"
 "$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
     --module-path "$root/build/packages/kryon/src/ui" \

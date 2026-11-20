@@ -1,6 +1,7 @@
 """Run the complete visual gate against unchanged release artifacts."""
 
 import argparse
+from collections import deque
 from concurrent.futures import ALL_COMPLETED, FIRST_COMPLETED, ThreadPoolExecutor, wait
 import contextlib
 import fcntl
@@ -33,8 +34,18 @@ def artifacts(binary):
     paths = [binary, ROOT / "ziran.lock", ROOT / "build/inbe.zx",
              ROOT / "build/inbe-full.zx", *sorted((ROOT / "build/apps").glob("*.zx")),
              *sorted((ROOT / "build/node-apps").glob("*.zx"))]
-    return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
-            for path in paths}
+    hashes = {}
+    for path in paths:
+        digest = hashlib.sha256()
+        hash_contents(digest, path)
+        hashes[str(path.relative_to(ROOT))] = digest.hexdigest()
+    return hashes
+
+
+def hash_contents(digest, path):
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
 
 
 def source_hash():
@@ -47,7 +58,7 @@ def source_hash():
     for name in sorted(set(paths) - {b""}):
         path = ROOT / os.fsdecode(name)
         digest.update(name + b"\0")
-        digest.update(path.read_bytes())
+        hash_contents(digest, path)
     return digest.hexdigest()
 
 
@@ -179,7 +190,8 @@ def run(arguments):
         save()
         print(f"Visual gate: {check['suite']} {check['status']}", flush=True)
         if check["status"] != "passed":
-            print("\n".join((ROOT / check["log"]).read_text().splitlines()[-20:]), flush=True)
+            with (ROOT / check["log"]).open(errors="replace") as log:
+                print("".join(deque(log, maxlen=20)).rstrip("\n"), flush=True)
 
     def cancel():
         cancelled.set()

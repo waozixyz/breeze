@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/native-visual-test"
 DESKTOP_ENV = ("DISPLAY", "WAYLAND_DISPLAY", "XAUTHORITY", "GDK_DISPLAY",
                "DBUS_SESSION_BUS_ADDRESS", "SESSION_MANAGER")
+TOP_OUTLINE_ROWS = (-1, 0, 1)
 
 
 def stop(process):
@@ -46,10 +47,16 @@ def assert_selection(image, bounds, name, expected="apps", below_label=12, node=
     width, height = tile.size
     # Sample the flat fill, top outline and surrounding page separately.
     fill = tile.getpixel((width // 2, 6))
-    outside = image.getpixel((bounds[0] + width // 2, bounds[1] - 3))
-    edge = tile.getpixel((width // 2, 1))
+    left, top = bounds[:2]
+    middle = left + width // 2
+    outside = image.getpixel((middle, top - 3))
+    # Cairo centers the stroke on the widget boundary. Other renderers can
+    # draw it inside that boundary, so sample both sides and exclude the fill.
+    edge_pixels = [image.getpixel((middle, top + offset)) for offset in TOP_OUTLINE_ROWS]
+    outline_contrast = max((contrast(pixel, outside) for pixel in edge_pixels if pixel != fill),
+                           default=1)
     assert fill != outside, f"{name}: active app has no visible fill"
-    assert contrast(edge, outside) >= 3, f"{name}: active outline blends into the page"
+    assert outline_contrast >= 3, f"{name}: active outline blends into the page ({outline_contrast:.2f}:1)"
     label = tile.crop((8, height // 2 + 5, width - 8, height - below_label))
     colors = label.getcolors(label.width * label.height)
     _, ink = max(colors, key=lambda entry: contrast(entry[1], fill))
@@ -65,7 +72,7 @@ def assert_selection(image, bounds, name, expected="apps", below_label=12, node=
         assert node["label"].lower() == expected, f"{name}: {expected} label is missing: {node['label']}"
         assert node["selected"], f"{name}: {expected} is not shown as active"
     return {"label_contrast": round(ratio, 2),
-            "outline_contrast": round(contrast(edge, outside), 2)}
+            "outline_contrast": round(outline_contrast, 2)}
 
 
 def assert_regressions_rejected(image, bounds, name):
@@ -82,7 +89,8 @@ def assert_regressions_rejected(image, bounds, name):
         if defect == "fill":
             broken.putpixel(((left + right) // 2, top + 6), outside)
         elif defect == "outline":
-            broken.putpixel(((left + right) // 2, top + 1), outside)
+            for offset in TOP_OUTLINE_ROWS:
+                broken.putpixel(((left + right) // 2, top + offset), outside if offset < 0 else fill)
         elif defect == "missing-label":
             broken.paste(fill, label)
         else:
@@ -386,9 +394,9 @@ def run_cases(arguments, cases, suffix, evidence):
         # test checks a readable title at all 21 scale values.
         scales = [case[1] for case in cases if case[0] == "appearance"]
         for scale in scales:
-            labels = ("style", "color theme", "mode", "scale factor",
-                      "navigation position", "material", "mono", "light",
-                      "automatic", f"{scale * 10}%")
+            labels = ("theme", "color theme", "mode", "layout", "scale factor",
+                      "navigation position", "mono", "light", "automatic",
+                      "advanced appearance (css)", f"{scale * 10}%")
             name = f"appearance-phone-{scale * 10}"
             with application(name, "theme_selection", 390, 844, scale=scale) as (window, capture, on_screen, point):
                 shown = {}

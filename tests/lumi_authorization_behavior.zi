@@ -21,7 +21,7 @@
 #import, file "../src/storage/sync_account.zi";
 #import, file "../src/storage/device_key.zi";
 #import, file "../src/storage/delegate_store.zi";
-#import "crypto"
+#import "mesh_client/crypto"
 
 c :: #system_library "c";
 TestNow :: (out: *s64) -> s64 #foreign c "time";
@@ -142,6 +142,7 @@ check_envelope :: () {
     grant: Grant
     check_true("approved view", ViewGrant(*parsed, scopes[:], *grant))
     check_true("real owner ML-DSA signature", VerifyGrantSignature(grant, TextUntilNul(owner_account.public_key_hex[:]), now))
+    check_true("ordinary approval excludes Telegram Stars", !grant.telegram_stars)
     check_true("finite 24 hour grant", grant.expires_at - grant.issued_at == 86400)
     check_true("verified numeric identity bound", grant.bot_id == claim.bot_id && grant.telegram_id == claim.telegram_id)
     check_true("only v2 Lumi generation", grant.scopes.count == 1 && scopes[0].collection == LumiPrivateCollection &&
@@ -161,6 +162,13 @@ check_envelope :: () {
     altered = scopes[0]
     altered.collection = "private.inbe.v2.diary"
     check_true("Diary excluded cryptographically", !OpenCollectionKey(grant, altered, *recipient, opened[:]))
+    owner_public := TextUntilNul(owner_account.public_key_hex[:])
+    check_true("explicit approval signs Telegram Stars permission", LumiAuthorizationSealAndSign(*owner_account,
+        *claim, now, key[:], body[:], *approval, true))
+    check_true("Telegram Stars approval round trips", ReadGrantAt(TextUntilNul(body[:]), 0, *parsed) &&
+        ViewGrant(*parsed, scopes[:], *grant) && grant.telegram_stars && VerifyGrantSignature(grant, owner_public, now))
+    grant.telegram_stars = false
+    check_true("changing Telegram Stars permission breaks signature", !VerifyGrantSignature(grant, owner_public, now))
     ClearEncryptionKeys(*other)
     SecureWipe(*key[0], 32)
     SecureWipe(*opened[0], 32)
@@ -317,11 +325,14 @@ reset_owner_pump :: () {
 check_owner_pump_storage :: () {
     owner := TextUntilNul(owner_account.public_id[:])
     reset_owner_pump()
+    check_true("owner pump test transport is available", OwnerPumpTestTransport().start != null)
     check_true("pending wire fixture", write_pending_response(owner_pump_fake.response[:]))
-    check_true("actual owner pump operation begins", BeginOwnerAuthorizationOperation(
-        *lumi_authorization_operation, AuthorizationAudience, OwnerPumpTestTransport(),
-        "/api/v1/authorization/requests", "{\"app_id\":\"inbe\"}", lumi_authorization_response[:], true))
-    lumi_authorization_action = 1
+    check_true("current owner can explicitly start a Mini App request", LumiAuthorizationRequest())
+    check_true("duplicate owner tap cannot start a second request", !LumiAuthorizationRequest())
+    LumiAuthorizationPump()
+    check_true("signed request starts via the real pump", lumi_authorization_operation.active &&
+        lumi_authorization_action == 1 && TextUntilNul(lumi_authorization_operation.path[:]) ==
+        "/api/v1/authorization/requests")
     steps: s32 = 0
     while lumi_authorization_operation.active && steps < 10 {
         LumiAuthorizationPump()
@@ -333,6 +344,8 @@ check_owner_pump_storage :: () {
         TextUntilNul(lumi_authorization_pending.account_id[:]) == owner &&
         TextUntilNul(lumi_authorization_pending.request_id[:]) == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     check_true("session actually saved by pump", storage_get_setting_text("sync_auth_token") == "synthetic-owner-token")
+    lumi_authorization_intent = 0
+    check_true("an active linked request is preserved", !LumiAuthorizationRequest())
     saved: [4096]u8
     check_true("pending persisted fully", AppCopyText(storage_get_setting_text("lumi_authorization_pending"), saved[:]) &&
         TextUntilNul(saved[:]) == TextUntilNul(owner_pump_fake.response[:]))
@@ -504,6 +517,7 @@ check_temporary_envelope :: () {
     scopes: [1]GrantScope
     grant: Grant
     check_true("temporary grant view", ViewGrant(*parsed, scopes[:], *grant))
+    check_true("temporary approval excludes Telegram Stars", !grant.telegram_stars)
     check_true("temporary real owner signature", VerifyGrantSignature(grant,
         TextUntilNul(owner_account.public_key_hex[:]), now))
     key: [32]u8

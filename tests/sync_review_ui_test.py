@@ -110,7 +110,8 @@ for choice, width, height, dark in [('merge', 900, 720, 0), ('replace', 411, 813
                 ), 'action buttons moved with the scrolling text'
             footer = panel_top + min(height - 32, 720) - 18 - 132 + 19
             action_index = {'merge': 0, 'keep': 1, 'replace': 2}[choice]
-            pending_before = count(db, 'SELECT COUNT(*) FROM sync_outbox')
+            pending_query = 'SELECT entity_type,entity_id,local_date FROM sync_outbox'
+            pending_before = set(readers[db].execute(pending_query))
             click(window, width // 2, footer + action_index * 44)
             time.sleep(0.5)
             local = count(db, "SELECT COUNT(*) FROM habits WHERE id='local-review-walk'")
@@ -118,7 +119,13 @@ for choice, width, height, dark in [('merge', 900, 720, 0), ('replace', 411, 813
             assert local == (0 if choice == 'replace' else 1), (choice, 'local', local)
             assert (remote > 0) == (choice != 'keep'), (choice, 'remote', remote)
             if choice == 'keep':
-                assert count(db, 'SELECT COUNT(*) FROM sync_outbox') == pending_before
+                pending_after = set(readers[db].execute(pending_query))
+                # Closing the review can also release the pending award for
+                # the fixture's own local habit. No other row may change.
+                local_award = ('cell_record', 'cell.achievement.award.habits.created.1', 0)
+                assert not pending_before - pending_after, pending_before - pending_after
+                added = pending_after - pending_before
+                assert added <= {local_award}, added
             assert count(db, "SELECT json_extract(json,'$.friends[0].alias') FROM social_snapshots WHERE kind='friends.list'") == (
                 'Alice' if choice == 'keep' else 'Alicia')
             assert count(db, "SELECT value FROM meta WHERE key='sync_pending_review_pending'") != '1'
