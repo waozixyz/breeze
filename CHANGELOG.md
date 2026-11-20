@@ -6,6 +6,7 @@
 - Start practices cleanly, switch smoothly, resume sessions, and see download progress and Android picture-in-picture.
 - Reset break timers after time away, match coins and timers to the theme, and claim daily coins in Habits.
 - See the animated Inner Breeze homepage with a simpler footer and reduced-motion support.
+- Find the right installer or launch the web app from the homepage’s platform cards.
 
 ### Web app
 
