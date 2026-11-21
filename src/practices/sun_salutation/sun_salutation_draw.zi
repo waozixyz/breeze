@@ -8,6 +8,7 @@
 #import, file "../tai_chi/tai_chi_solve.zi";
 #import, file "../tai_chi/tai_chi_flat.zi";
 #import, file "../tai_chi/tai_chi_draw.zi";
+#import, file "../practice_figure_draw.zi";
 #import, file "../tai_chi/tai_chi_rules.zi";
 #import, file "../tai_chi/tai_chi_view.zi";
 
@@ -18,8 +19,21 @@ SunSalutationDrawState :: (session: Session, state: SunSalutationPracticeState,
     area: Rectangle, key: u64, alt_text: string) {
     rig := WorkoutRig()
     pose := SunSalutationPoseAt(state, *rig)
-    SunSalutationDrawPose(session, state.character, pose, SunSalutationViewAt(state),
-        area, key, alt_text)
+    // Use the existing practice position so the hair keeps moving through
+    // transitions and freezes with the pose on pause.
+    seconds := cast(float64)state.step_ticks / 60.0
+    prior := state
+    for repetition: cast(s32)0..state.repetition {
+        prior.repetition = repetition
+        first := ifx repetition == 0 then 0 else SUN_SALUTATION_REPEAT_STEP
+        end := ifx repetition == state.repetition then state.step else SUN_SALUTATION_STEP_COUNT
+        for step: first..end - 1 {
+            prior.step = cast(s32)step
+            seconds += cast(float64)SalutationStepSeconds(prior)
+        }
+    }
+    SunSalutationDrawPose(session, state.character, pose, SunSalutationViewStable(),
+        area, key, alt_text, seconds)
 }
 
 SunSalutationDrawHeld :: (session: Session, character: s32, step: s32,
@@ -29,20 +43,28 @@ SunSalutationDrawHeld :: (session: Session, character: s32, step: s32,
 }
 
 SunSalutationDrawPose :: (session: Session, character: s32, pose: WorkoutPose, view: SunSalutationView,
-    area: Rectangle, key: u64, alt_text: string) {
+    area: Rectangle, key: u64, alt_text: string, seconds: float64 = -1.0) {
     if area.width <= 0.0 || area.height <= 0.0 {
         return
     }
-    // A held or paused pose replays its kept meshes instead of solving again.
+    rig := WorkoutRig()
+    solved := WorkoutSolve(*pose, *rig)
+    framing := SunSalutationFraming(view, cast(float64)area.width, cast(float64)area.height)
     digest := WorkoutPoseDigest(*pose, cast(u64)14695981039346656037)
     digest = TaiChiDigest(digest, cast(float64)character)
     digest = TaiChiDigest(digest, view.yaw)
     digest = TaiChiDigest(digest, view.span)
     digest = TaiChiDigest(digest, view.center)
+    digest = TaiChiDigest(digest, view.lateral)
+    digest = TaiChiDigest(digest, view.height)
+    if PracticeFigureDrawModel(session, *solved, *rig, framing, character == SUN_SALUTATION_MAN,
+        false, area, key, alt_text, seconds, digest) {
+        return
+    }
     if TaiChiPaintFlatCached(session, key, digest, area, alt_text, SUN_SALUTATION_EDGE_PATH) {
         return
     }
-    framing := SunSalutationPaintPose(*sun_salutation_figure, character, pose, view,
+    unused SunSalutationPaintPose(*sun_salutation_figure, character, pose, view,
         cast(float64)area.width, cast(float64)area.height)
     TaiChiPaintFlatEdge(session, *sun_salutation_figure, framing, false, area, key,
         alt_text, SUN_SALUTATION_EDGE_PATH, digest)

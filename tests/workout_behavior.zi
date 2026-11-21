@@ -8,8 +8,8 @@
 #import "locale_parser"
 #import "byte_text_linux"
 
-StepIs :: (elapsed_ms: s64, phase: s32, exercise: s32, elapsed: s32) -> bool {
-    step := WorkoutStepAt(elapsed_ms)
+StepIs :: (routine: s32, elapsed_ms: s64, phase: s32, exercise: s32, elapsed: s32) -> bool {
+    step := WorkoutStepAt(routine, elapsed_ms)
     return step.phase == phase && step.exercise == exercise && (phase == WORKOUT_PHASE_DONE || step.elapsed_ms == elapsed)
 }
 
@@ -101,6 +101,27 @@ SquatArmsLevel :: (rig: *TaiChiRig) -> bool {
     return true
 }
 
+PushUpContacts :: (rig: *TaiChiRig) -> bool {
+    start := WorkoutPoseAt(WORKOUT_PUSH_UPS, 0, rig)
+    top := WorkoutSolve(*start, rig)
+    lowest_chest := top.chest.y
+    for sample: cast(s64)0..400 {
+        pose := WorkoutPoseAt(WORKOUT_PUSH_UPS, sample * 10, rig)
+        solved := WorkoutSolve(*pose, rig)
+        lowest_chest = TaiChiMin(lowest_chest, solved.chest.y)
+        for side: cast(s32)0..1 {
+            if solved.knees[side].y < 0.09 || !Near(solved.balls[side].y, 0.0, 0.001) ||
+                TaiChiDistance3(solved.balls[side], top.balls[side]) > 0.001 ||
+                TaiChiDistance3(solved.wrists[side], start.hands[side].at) > 0.001 ||
+                TaiChiDistance3(solved.palms[side], top.palms[side]) > 0.001 {
+                print("Push-up contact moved at %ms (side %)\n", sample * 10, side)
+                return false
+            }
+        }
+    }
+    return top.chest.y - lowest_chest > 0.16
+}
+
 #program_export
 // Every exercise moves as a person would: feet step and pivot instead of
 // sliding, stay above the floor, and nothing snaps. The first exercise that does
@@ -144,58 +165,218 @@ WorkoutMotionAwkward :: () -> s32 {
     return -1
 }
 
+WallRestAt :: (time_ms: s64, rig: *TaiChiRig) -> WorkoutPose {
+    start := cast(s64)(WORKOUT_PREPARE_MS + WORKOUT_WORK_MS)
+    step := WorkoutStepAt(WORKOUT_ROUTINE_FULL, start + time_ms)
+    if time_ms == WORKOUT_REST_MS {
+        step.phase = WORKOUT_PHASE_REST
+        step.elapsed_ms = WORKOUT_REST_MS
+    }
+    return WorkoutRestPose(step, start + time_ms, rig)
+}
+
+// The difference of the two one-millisecond displacements estimates the
+// velocity change. Check the solved body and all four moving endpoints.
+WallJoinSmooth :: (before: WorkoutPose, seam: WorkoutPose, after: WorkoutPose, rig: *TaiChiRig) -> bool {
+    a := WorkoutSolve(*before, rig)
+    b := WorkoutSolve(*seam, rig)
+    c := WorkoutSolve(*after, rig)
+    if TaiChiDistance3(TaiChiSub3(b.pelvis, a.pelvis), TaiChiSub3(c.pelvis, b.pelvis)) > 0.00004 {
+        return false
+    }
+    for side: cast(s32)0..1 {
+        if TaiChiDistance3(TaiChiSub3(b.ankles[side], a.ankles[side]), TaiChiSub3(c.ankles[side], b.ankles[side])) > 0.00004 ||
+        TaiChiDistance3(TaiChiSub3(b.wrists[side], a.wrists[side]), TaiChiSub3(c.wrists[side], b.wrists[side])) > 0.0002 {
+            return false
+        }
+    }
+    return true
+}
+
+WorkoutWallTransitionFailure :: (rig: *TaiChiRig) -> s32 {
+    jack := WorkoutPoseAt(WORKOUT_JUMPING_JACKS, WORKOUT_WORK_MS, rig)
+    seated := WorkoutPoseAt(WORKOUT_WALL_SIT, 0, rig)
+    first := WallRestAt(0, rig)
+    last := WallRestAt(WORKOUT_REST_MS, rig)
+    if WorkoutPoseDigest(*first, 1) != WorkoutPoseDigest(*jack, 1) ||
+    WorkoutPoseDigest(*last, 1) != WorkoutPoseDigest(*seated, 1) {
+        return 500
+    }
+    if !WallJoinSmooth(WorkoutPoseAt(WORKOUT_JUMPING_JACKS, WORKOUT_WORK_MS - 1, rig), first, WallRestAt(1, rig), rig) ||
+    !WallJoinSmooth(WallRestAt(WORKOUT_REST_MS - 1, rig), last, WorkoutPoseAt(WORKOUT_WALL_SIT, 1, rig), rig) {
+        return 501
+    }
+    landing := WorkoutJackLandingMs()
+    step_start := landing + WORKOUT_WALL_SHIFT_MS
+    seams: [5]s64 = .[landing - WORKOUT_JACK_SETTLE_MS, landing, step_start,
+    landing + WORKOUT_WALL_CONTACT_MS, landing + WORKOUT_WALL_SIT_MS]
+    for index: cast(s32)0..4 {
+        time_ms := seams[index]
+        if !WallJoinSmooth(WallRestAt(time_ms - 1, rig), WallRestAt(time_ms, rig), WallRestAt(time_ms + 1, rig), rig) {
+            return 502 + index
+        }
+    }
+    for stride: cast(s32)0..1 {
+        start := step_start + cast(s64)(stride * WORKOUT_WALL_STEP_MS)
+        initial := WallRestAt(start, rig)
+        expected := WorkoutSolve(*initial, rig)
+        swing := stride % 2
+        plant := 1 - swing
+        raised := false
+        for sample: cast(s64)0..WORKOUT_WALL_STEP_MS / 10 {
+            pose := WallRestAt(start + sample * 10, rig)
+            solved := WorkoutSolve(*pose, rig)
+            if TaiChiDistance3(solved.heels[plant], expected.heels[plant]) > 0.000001 ||
+            TaiChiDistance3(solved.balls[plant], expected.balls[plant]) > 0.000001 ||
+            !Near(solved.heels[plant].y, 0.0, 0.000001) || !Near(solved.balls[plant].y, 0.0, 0.000001) {
+                return 510 + stride
+            }
+            raised = raised || solved.heels[swing].y > 0.025
+        }
+        finish := start + WORKOUT_WALL_STEP_MS
+        landed := WallRestAt(finish, rig)
+        if !raised || !Near(landed.feet[swing].z, initial.feet[swing].z, 0.000001) ||
+        TaiChiAbs(landed.feet[swing].x) <= TaiChiAbs(initial.feet[swing].x) + 0.034 ||
+        !WallJoinSmooth(WallRestAt(finish - 1, rig), landed, WallRestAt(finish + 1, rig), rig) {
+            return 520 + stride
+        }
+    }
+    prop := WorkoutPropFor(WORKOUT_WALL_SIT)
+    if !prop.wall || !Near(seated.pelvis.z - prop.wall_at, 0.125, 0.000001) ||
+    !Near(seated.feet[0].z - prop.wall_at, 0.515, 0.000001) {
+        return 530
+    }
+    for time_ms: (landing + WORKOUT_WALL_CONTACT_MS)..WORKOUT_REST_MS {
+        pose := WallRestAt(time_ms, rig)
+        solved := WorkoutSolve(*pose, rig)
+        if !Near(solved.pelvis.z, seated.pelvis.z, 0.000001) || solved.shoulder_center.z < prop.wall_at ||
+        !Near(solved.heels[0].y, 0.0, 0.000001) || !Near(solved.heels[1].y, 0.0, 0.000001) ||
+        !Near(solved.balls[0].y, 0.0, 0.000001) || !Near(solved.balls[1].y, 0.0, 0.000001) {
+            return 531
+        }
+    }
+    if !FigureSound(*last, rig, WORKOUT_WALL_SIT) {
+        return 532
+    }
+    return 0
+}
+
 #program_export
 Answer :: () -> s32 {
-    if WORKOUT_TOTAL_MS != WORKOUT_PREPARE_MS + WORKOUT_EXERCISE_COUNT * WORKOUT_WORK_MS +
-    (WORKOUT_EXERCISE_COUNT - 1) * WORKOUT_REST_MS {
+    if WorkoutTotalMilliseconds(WORKOUT_ROUTINE_FULL) != 480000 {
         return 1
     }
-    if !StepIs(0, WORKOUT_PHASE_PREPARE, 0, 0) || !StepIs(9999, WORKOUT_PHASE_PREPARE, 0, 9999) ||
-    !StepIs(10000, WORKOUT_PHASE_WORK, 0, 0) || !StepIs(39999, WORKOUT_PHASE_WORK, 0, 29999) ||
-    !StepIs(40000, WORKOUT_PHASE_REST, 1, 0) || !StepIs(50000, WORKOUT_PHASE_WORK, 1, 0) ||
-    !StepIs(450000, WORKOUT_PHASE_WORK, 11, 0) || !StepIs(479999, WORKOUT_PHASE_WORK, 11, 29999) ||
-    !StepIs(480000, WORKOUT_PHASE_DONE, 11, 0) || !StepIs(-5, WORKOUT_PHASE_PREPARE, 0, 0) {
+    if !StepIs(WORKOUT_ROUTINE_FULL, 0, WORKOUT_PHASE_PREPARE, 0, 0) || !StepIs(WORKOUT_ROUTINE_FULL, 9999, WORKOUT_PHASE_PREPARE, 0, 9999) ||
+    !StepIs(WORKOUT_ROUTINE_FULL, 10000, WORKOUT_PHASE_WORK, 0, 0) || !StepIs(WORKOUT_ROUTINE_FULL, 39999, WORKOUT_PHASE_WORK, 0, 29999) ||
+    !StepIs(WORKOUT_ROUTINE_FULL, 40000, WORKOUT_PHASE_REST, 1, 0) || !StepIs(WORKOUT_ROUTINE_FULL, 50000, WORKOUT_PHASE_WORK, 1, 0) ||
+    !StepIs(WORKOUT_ROUTINE_FULL, 450000, WORKOUT_PHASE_WORK, 11, 0) || !StepIs(WORKOUT_ROUTINE_FULL, 479999, WORKOUT_PHASE_WORK, 11, 29999) ||
+    !StepIs(WORKOUT_ROUTINE_FULL, 480000, WORKOUT_PHASE_DONE, 11, 0) || !StepIs(WORKOUT_ROUTINE_FULL, -5, WORKOUT_PHASE_PREPARE, 0, 0) {
         return 2
     }
-    if WorkoutStepSecondsLeft(WorkoutStepAt(10000)) != 30 || WorkoutStepSecondsLeft(WorkoutStepAt(39001)) != 1 ||
-    WorkoutStepSecondsLeft(WorkoutStepAt(40000)) != 10 {
+    if WorkoutStepSecondsLeft(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 10000)) != 30 || WorkoutStepSecondsLeft(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 39001)) != 1 ||
+    WorkoutStepSecondsLeft(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 40000)) != 10 {
         return 3
     }
-    if WorkoutAdvance(1000, 500, true) != 1000 || WorkoutAdvance(1000, 500, false) != 1500 ||
-    WorkoutAdvance(479000, 5000, false) != 480000 || WorkoutAdvance(1000, -3, false) != 1000 {
+    if WorkoutAdvance(WORKOUT_ROUTINE_FULL, 1000, 500, true) != 1000 || WorkoutAdvance(WORKOUT_ROUTINE_FULL, 1000, 500, false) != 1500 ||
+    WorkoutAdvance(WORKOUT_ROUTINE_FULL, 479000, 5000, false) != 480000 || WorkoutAdvance(WORKOUT_ROUTINE_FULL, 1000, -3, false) != 1000 {
         return 4
     }
-    if WorkoutExerciseSeconds(5000) != 0 || WorkoutExerciseSeconds(25000) != 15 ||
-    WorkoutExerciseSeconds(45000) != 30 || WorkoutExerciseSeconds(480000) != 360 {
+    if WorkoutExerciseSeconds(WORKOUT_ROUTINE_FULL, 5000) != 0 || WorkoutExerciseSeconds(WORKOUT_ROUTINE_FULL, 25000) != 15 ||
+    WorkoutExerciseSeconds(WORKOUT_ROUTINE_FULL, 45000) != 30 || WorkoutExerciseSeconds(WORKOUT_ROUTINE_FULL, 480000) != 360 {
         return 5
     }
     key: [64]u8
-    if WorkoutCueKey(WorkoutStepAt(0), key[:]) != "workout_say_start" ||
-    WorkoutCueKey(WorkoutStepAt(6999), key[:]) != "workout_say_start" ||
-    WorkoutCueKey(WorkoutStepAt(7000), key[:]) != "workout_say_count_3" ||
-    WorkoutCueKey(WorkoutStepAt(8500), key[:]) != "workout_say_count_2" ||
-    WorkoutCueKey(WorkoutStepAt(9999), key[:]) != "workout_say_count_1" ||
-    WorkoutCueKey(WorkoutStepAt(10000), key[:]) != "workout_say_go" ||
-    WorkoutCueKey(WorkoutStepAt(40000), key[:]) != "workout_say_next_wall_sit" ||
-    WorkoutCueKey(WorkoutStepAt(47000), key[:]) != "workout_say_count_3" ||
-    WorkoutCueKey(WorkoutStepAt(49500), key[:]) != "workout_say_count_1" ||
-    WorkoutCueKey(WorkoutStepAt(50000), key[:]) != "workout_say_go" ||
-    WorkoutCueKey(WorkoutStepAt(450000), key[:]) != "workout_say_go" ||
-    WorkoutCueKey(WorkoutStepAt(465000), key[:]) != "workout_say_switch" ||
-    WorkoutCueKey(WorkoutStepAt(480000), key[:]) != "" {
+    if WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 0), key[:]) != "workout_say_start" ||
+    WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 6999), key[:]) != "workout_say_start" ||
+    WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 7000), key[:]) != "workout_say_count_3" ||
+    WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 8500), key[:]) != "workout_say_count_2" ||
+    WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 9999), key[:]) != "workout_say_count_1" ||
+    WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 10000), key[:]) != "workout_say_go" ||
+    WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 40000), key[:]) != "workout_say_next_wall_sit" ||
+    WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 47000), key[:]) != "workout_say_count_3" ||
+    WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 49500), key[:]) != "workout_say_count_1" ||
+    WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 50000), key[:]) != "workout_say_go" ||
+    WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 450000), key[:]) != "workout_say_go" ||
+    WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 465000), key[:]) != "workout_say_switch" ||
+    WorkoutCueKey(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 480000), key[:]) != "" {
         return 6
+    }
+    short: s32 = WORKOUT_ROUTINE_SHORT
+    if WorkoutTotalMilliseconds(short) != 240000 || WorkoutRoutineCount(short) != 6 ||
+    WorkoutTotalMilliseconds(-1) != 480000 {
+        return 13
+    }
+    exercises: [6]s32 = .[WORKOUT_STEP_JACKS, WORKOUT_MINI_SQUATS, WORKOUT_HEEL_RAISES,
+        WORKOUT_EASY_MARCH, WORKOUT_SIDE_REACHES, WORKOUT_BACK_TAPS]
+    if !StepIs(short, 0, WORKOUT_PHASE_PREPARE, exercises[0], 0) ||
+    WorkoutStepAt(short, 0).length_ms != 15000 || WorkoutCountdownAt(WorkoutStepAt(short, 0)) != 15 {
+        return 14
+    }
+    for index: cast(s32)0..5 {
+        begins := cast(s64)(15000 + index * 40000)
+        if !StepIs(short, begins, WORKOUT_PHASE_WORK, exercises[index], 0) ||
+        WorkoutStepAt(short, begins).length_ms != 25000 ||
+        !StepIs(short, begins + 24999, WORKOUT_PHASE_WORK, exercises[index], 24999) {
+            return 15
+        }
+        if index < 5 && (!StepIs(short, begins + 25000, WORKOUT_PHASE_REST, exercises[index + 1], 0) ||
+        WorkoutStepAt(short, begins + 25000).length_ms != 15000) {
+            return 16
+        }
+    }
+    if !StepIs(short, 240000, WORKOUT_PHASE_DONE, WORKOUT_BACK_TAPS, 0) ||
+    WorkoutAdvance(short, 239900, 200, true) != 239900 ||
+    WorkoutAdvance(short, 239900, 200, false) != 240000 ||
+    WorkoutExerciseSeconds(short, 179000) != 104 || WorkoutExerciseSeconds(short, 240000) != 150 {
+        return 17
+    }
+    if WorkoutStepStart(short, -1) != -1 || WorkoutStepStart(short, 0) != 0 ||
+    WorkoutStepStart(short, 4) != 160000 || WorkoutStepStart(short, 5) != 200000 ||
+    WorkoutStepStart(short, 6) != -1 || WorkoutStepStart(WORKOUT_ROUTINE_FULL, 11) != 440000 ||
+    WorkoutStepStart(WORKOUT_ROUTINE_FULL, 12) != -1 {
+        return 40
+    }
+    coverage: WorkoutCoverage
+    target := WorkoutStepStart(short, 4)
+    WorkoutCredit(*coverage, short, target, WorkoutAdvance(short, target, 5000, true))
+    if coverage.played_ms != 0 || WorkoutCompletedMask(*coverage, short) != 0 {
+        return 41
+    }
+    WorkoutCredit(*coverage, short, target, target + 18000)
+    WorkoutCredit(*coverage, short, target, target + 17000)
+    if coverage.played_ms != 18000 || coverage.work[4] != 3000 {
+        return 43
+    }
+    WorkoutCredit(*coverage, short, target, target + 41000)
+    if coverage.played_ms != 41000 || coverage.ready[5] != 1000 ||
+    WorkoutCompletedMask(*coverage, short) != 1 << 4 {
+        return 44
+    }
+    WorkoutCredit(*coverage, short, 0, 160000)
+    WorkoutCredit(*coverage, short, target + 41000, 240000)
+    if coverage.played_ms != 240000 || WorkoutCompletedMask(*coverage, short) != 63 {
+        return 45
+    }
+    if WorkoutCueKey(WorkoutStepAt(short, 0), key[:]) != "" ||
+    WorkoutCueKey(WorkoutStepAt(short, 12000), key[:]) != "workout_say_count_3" ||
+    WorkoutCueKey(WorkoutStepAt(short, 160000), key[:]) != "" ||
+    WorkoutCueKey(WorkoutStepAt(short, 200000), key[:]) != "" ||
+    WorkoutCueKey(WorkoutStepAt(short, 212000), key[:]) != "workout_say_count_3" ||
+    WorkoutCueKey(WorkoutStepAt(short, 225000), key[:]) != "workout_say_go" ||
+    WorkoutCueKey(WorkoutStepAt(short, 240000), key[:]) != "" {
+        return 18
     }
     // The countdown shows every second of getting ready and of each rest,
     // then Go as the exercise starts, and nothing while it runs.
-    if WorkoutCountdownAt(WorkoutStepAt(0)) != 10 || WorkoutCountdownAt(WorkoutStepAt(9001)) != 1 ||
-    WorkoutCountdownAt(WorkoutStepAt(10000)) != WORKOUT_COUNT_GO ||
-    WorkoutCountdownAt(WorkoutStepAt(10799)) != WORKOUT_COUNT_GO ||
-    WorkoutCountdownAt(WorkoutStepAt(10800)) != WORKOUT_COUNT_NONE ||
-    WorkoutCountdownAt(WorkoutStepAt(40000)) != 10 || WorkoutCountdownAt(WorkoutStepAt(47500)) != 3 ||
-    WorkoutCountdownAt(WorkoutStepAt(480000)) != WORKOUT_COUNT_NONE {
+    if WorkoutCountdownAt(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 0)) != 10 || WorkoutCountdownAt(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 9001)) != 1 ||
+    WorkoutCountdownAt(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 10000)) != WORKOUT_COUNT_GO ||
+    WorkoutCountdownAt(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 10799)) != WORKOUT_COUNT_GO ||
+    WorkoutCountdownAt(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 10800)) != WORKOUT_COUNT_NONE ||
+    WorkoutCountdownAt(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 40000)) != 10 || WorkoutCountdownAt(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 47500)) != 3 ||
+    WorkoutCountdownAt(WorkoutStepAt(WORKOUT_ROUTINE_FULL, 480000)) != WORKOUT_COUNT_NONE {
         return 12
     }
-    if WorkoutKeyFor("workout_name_", 12, key[:]) != "" || WorkoutKeyFor("workout_name_", -1, key[:]) != "" ||
+    if WorkoutKeyFor("workout_name_", WORKOUT_MOVE_COUNT, key[:]) != "" || WorkoutKeyFor("workout_name_", -1, key[:]) != "" ||
     WorkoutKeyFor("workout_name_", 7, key[:]) != "workout_name_plank" {
         return 7
     }
@@ -205,7 +386,9 @@ Answer :: () -> s32 {
         return 8
     }
     for exercise: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
-        rest := WorkoutRestPose(exercise, 1234, *rig)
+        step := WorkoutStep.{.phase = WORKOUT_PHASE_REST, .exercise = exercise, .elapsed_ms = 1234,
+            .length_ms = WORKOUT_REST_MS}
+        rest := WorkoutRestPose(step, 1234, *rig)
         if !FigureSound(*rest, *rig, exercise) {
             return 100 + exercise
         }
@@ -218,12 +401,42 @@ Answer :: () -> s32 {
             time += 70
         }
     }
+    for exercise: exercises {
+        prop := WorkoutPropFor(exercise)
+        if !WorkoutGentleExercise(exercise) || WorkoutHop(exercise) != 0.0 || prop.wall || prop.bench {
+            return 70 + exercise
+        }
+        base := WorkoutPoseAt(exercise, 0, *rig)
+        start_digest := WorkoutPoseDigest(*base, 1)
+        moved := false
+        time: s64 = 0
+        while time < 25000 {
+            pose := WorkoutPoseAt(exercise, time, *rig)
+            if !FigureSound(*pose, *rig, exercise) || pose.pelvis.y < 0.76 || pose.pelvis.y > 0.95 ||
+            pose.lean < -0.1 || pose.lean > 15.0 || pose.hands[0].mode != WORKOUT_AT_ARM ||
+            pose.hands[1].mode != WORKOUT_AT_ARM || (pose.feet[0].lift > 0.001 && pose.feet[1].lift > 0.001) {
+                print("Gentle workout pose failed: exercise % at %ms\n", exercise, time)
+                return 110 + exercise
+            }
+            moved = moved || WorkoutPoseDigest(*pose, 1) != start_digest
+            time += 70
+        }
+        if !moved { return 140 + exercise }
+    }
+    print("Four-minute workout: six low-impact standing poses, 25s work, 15s preparation/recovery, neutral recorded cues and 240s total passed\n")
     if !SquatArmsLevel(*rig) {
         return 10
+    }
+    if !PushUpContacts(*rig) {
+        return 12
     }
     // Props stand only where they belong.
     if !WorkoutPropsSound() {
         return 9
+    }
+    wall_transition := WorkoutWallTransitionFailure(*rig)
+    if wall_transition != 0 {
+        return wall_transition
     }
     // The side plank switches sides halfway by rolling over face down: the
     // planted hand changes side, her head stays toward the same end and
@@ -235,10 +448,10 @@ Answer :: () -> s32 {
         return 11
     }
     english := ReadText("en", english_bytes[:])
-    codes: [12]string = .["en", "cs", "de", "es", "fr", "id", "it", "ja", "ko", "pt", "ru", "zh"]
-    for index: cast(s32)0..11 {
+    codes: [10]string = .["en", "cs", "de", "es", "fr", "ja", "ko", "pt", "ru", "zh"]
+    for index: 0..codes.count-1 {
         if !TextComplete(codes[index], english) {
-            return 300 + index
+            return 300 + cast(s32)index
         }
     }
     awkward := WorkoutMotionAwkward()

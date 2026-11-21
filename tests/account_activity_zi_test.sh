@@ -11,7 +11,9 @@ export YUE_DESKTOP_RECOVERY=0
 rm -rf "$work/generated"
 mkdir -p "$work/generated"
 cd "$root"
+python3 scripts/stage-practice-figure.py
 "$compiler" build --project --offline ${PACKAGE_FLAGS:-} --target=c \
+    --module-path "$root/build/practice-figure" \
     --define PLATFORM_DESKTOP --root "$root/tests" --entry account_activity_behavior:Check \
     -o "$work/generated" "$root/tests/account_activity_behavior.zi" "$root/tests/sync_test_host.zi"
 cat > "$work/generated/main.c" <<'C'

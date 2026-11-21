@@ -76,6 +76,11 @@ AssetView FixtureAsset(String path) {
         if (!pack.data) pack = read_fixture("default-whm.zx");
         result.data = pack;
         result.found = true;
+    } else if (shipped && StringEqual(path, StringLiteral("assets/practices/default/sunsalutation.en.zx"))) {
+        static String pack;
+        if (!pack.data) pack = read_fixture("default-sunsalutation.en.zx");
+        result.data = pack;
+        result.found = true;
     } else if (shipped && StringEqual(path, StringLiteral("assets/practices/shipped/patterns.zx"))) {
         static String pack;
         if (!pack.data) pack = read_fixture("shipped-patterns.zx");
@@ -116,24 +121,26 @@ bool __wrap_file_download_FileDownloadStart(FileDownload *download, String url, 
     }
     assert(memcmp(url.data, prefix, sizeof prefix - 1) == 0);
     assert(memcmp(url.data + sizeof prefix - 1 + 64, suffix, sizeof suffix - 1) == 0);
+    snprintf((char *)download->destination, sizeof download->destination,
+             "%.*s", (int)destination.length, destination.data);
+    download->status = FileDownloadStatus_Downloading;
+    starts++;
+    if (mode == 404) return true;
     char name[69];
     memcpy(name, url.data + sizeof prefix - 1, named);
     name[named] = 0;
     String bytes = read_fixture(name);
     assert(bytes.length == download->maximum_bytes);
-    snprintf((char *)download->destination, sizeof download->destination,
-             "%.*s", (int)destination.length, destination.data);
     FILE *file = fopen((char *)download->destination, "wb");
     assert(file);
     assert(fwrite(bytes.data, 1, bytes.length, file) == bytes.length);
     if (mode == 1) { fseek(file, -1, SEEK_END); fputc(bytes.data[bytes.length - 1] ^ 1, file); }
     fclose(file);
-    download->status = FileDownloadStatus_Downloading;
-    starts++;
     return true;
 }
 FileDownloadStatus __wrap_file_download_FileDownloadPoll(FileDownload *download) {
-    download->status = mode == 2 ? FileDownloadStatus_Error : FileDownloadStatus_Ready;
+    download->http_status = mode == 404 ? 404 : 0;
+    download->status = mode == 2 || mode == 404 ? FileDownloadStatus_Error : FileDownloadStatus_Ready;
     return download->status;
 }
 void __wrap_file_download_FileDownloadRelease(FileDownload *download) { download->handle = 0; }

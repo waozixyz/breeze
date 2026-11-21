@@ -134,9 +134,21 @@ astral-projection-test: $(ZI2C_BIN)
 	sh tests/astral_technique_test.sh $(ZIRAN_BUILD_DIR)/bin $(ZIRAN_DIR)/std
 	python3 tests/astral_narration_test.py
 
+.PHONY: practice-banner-motion-test
+practice-banner-motion-test: $(ZIRAN_BIN)
+	$(ZIRAN_BIN) tests/practice_banner_motion_test.zi
+
+# Alpha GPU regression using the linked native test and the canonical banner art.
+BANNER_SHADER_TEST_ASSETS ?= $(abspath $(BUILD_DIR)/packages/practices)
+.PHONY: practice-banner-shader-test
+practice-banner-shader-test:
+	@test -n "$(BANNER_SHADER_TEST_EXE)" || { echo "Set BANNER_SHADER_TEST_EXE to the native shader test executable"; exit 2; }
+	python3 tests/practice_banner_shader_test.py "$(abspath $(BANNER_SHADER_TEST_EXE))" "$(BANNER_SHADER_TEST_ASSETS)"
+
 .PHONY: workout-test
 workout-test: $(ZI2C_BIN)
 	sh tests/practice_figure_test.sh $(ZIRAN_BUILD_DIR)/bin tests/workout_behavior.zi
+	sh tests/practice_figure_test.sh $(ZIRAN_BUILD_DIR)/bin tests/workout_custom_behavior.zi
 
 .PHONY: sun-salutation-pose-test
 sun-salutation-pose-test: $(ZI2C_BIN)
@@ -162,9 +174,10 @@ practice-narration-keys-test:
 .PHONY: practice-narration-snapshot-test
 practice-narration-snapshot-test:
 	python3 tests/practice_narration_snapshot_test.py
+	python3 tests/practice_jungle_narration_test.py
 
 .PHONY: astral-projection-ui-test
-astral-projection-ui-test: $(TARGET)
+astral-projection-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
 		-u GDK_DISPLAY -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \
 		python3 tests/astral_projection_ui_test.py $(abspath $(TARGET))

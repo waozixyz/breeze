@@ -102,6 +102,7 @@ file(GLOB_RECURSE APP_LIBRARY_ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${REPO_ROOT}/build/packages/css/src/*.zi" "${REPO_ROOT}/build/packages/oqs/src/*.zi" "${REPO_ROOT}/build/packages/game2d/src/*.zi"
     "${REPO_ROOT}/build/packages/qrcode/src/*.zi"
     "${REPO_ROOT}/build/packages/entity/src/*.zi"
+    "${REPO_ROOT}/build/packages/practices/figure/*.zi"
     "${REPO_ROOT}/build/packages/webp/src/*.zi"
     "${REPO_ROOT}/build/packages/image-codec/src/*.zi"
     "${REPO_ROOT}/build/packages/avif/src/*.zi"
@@ -112,6 +113,10 @@ set(APP_ZIRAN_CHECK_DEFINES "ANDROID_BUILD KRYON_ANDROID_HOST")
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     list(APPEND APP_ZIRAN_DEFINES --define ANDROID_DEBUG)
     string(APPEND APP_ZIRAN_CHECK_DEFINES " ANDROID_DEBUG")
+    if(APP_VERIFICATION_INSTANCE)
+        list(APPEND APP_ZIRAN_DEFINES --define KRYON_TEST_DRIVER)
+        string(APPEND APP_ZIRAN_CHECK_DEFINES " KRYON_TEST_DRIVER")
+    endif()
     # The frame sampler is optional while the pinned Kryon predates it.
     file(GLOB KRYON_ANDROID_FRAME_WATCH CONFIGURE_DEPENDS
         "${KRYON_DIR}/src/backend/android_frame_watch.zi")
@@ -220,6 +225,7 @@ add_custom_command(
     COMMAND ${CMAKE_COMMAND} -E touch "${APP_ZIRAN_STAMP}"
     DEPENDS ${APP_ZIRAN_SOURCES} ${APP_LIBRARY_ZIRAN_SOURCES} "${ZIRAN_BIN}"
         "${REPO_ROOT}/scripts/generate-android-sources.py"
+        "${REPO_ROOT}/scripts/stage-practice-figure.py"
         "${REPO_ROOT}/scripts/run-ziran.sh"
     WORKING_DIRECTORY "${REPO_ROOT}" VERBATIM)
 add_custom_target(app_ziran_generated DEPENDS "${APP_ZIRAN_STAMP}")

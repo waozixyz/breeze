@@ -1,0 +1,263 @@
+#import, file "../apps/practice/workout_transitions.zi";
+#import, file "../apps/practice/workout_sequence.zi";
+#import, file "../apps/practice/workout_rules.zi";
+#import, file "../apps/practice/workout_moves.zi";
+#import, file "figure_test_support.zi";
+#import, file "../src/practices/tai_chi/tai_chi_math.zi";
+#import, file "../src/practices/tai_chi/tai_chi_solve.zi";
+
+SameSettlement :: (a: *WorkoutPose, b: *WorkoutPose, rig: *TaiChiRig, tolerance: float64) -> bool {
+    sa := WorkoutSolve(a, rig)
+    sb := WorkoutSolve(b, rig)
+    if TaiChiDistance3(sa.pelvis, sb.pelvis) > tolerance ||
+        TaiChiDistance3(sa.head_center, sb.head_center) > tolerance {
+        return false
+    }
+    for side: cast(s32)0..1 {
+        if TaiChiDistance3(sa.wrists[side], sb.wrists[side]) > tolerance ||
+            TaiChiDistance3(sa.toes[side], sb.toes[side]) > tolerance ||
+            TaiChiDistance3(sa.knees[side], sb.knees[side]) > tolerance {
+            return false
+        }
+    }
+    return true
+}
+
+ExerciseEditAndClock :: () -> s32 {
+    sequence: WorkoutSequence
+    if WorkoutSequenceSetName(*sequence, "  ") ||
+        !WorkoutSequenceSetName(*sequence, "Routine 🧘 / 日本語") ||
+        !WorkoutSequenceInsert(*sequence, 0, WorkoutBlock.{WORKOUT_LUNGES, 5, WORKOUT_CUSTOM_LEFT}) ||
+        !WorkoutSequenceInsert(*sequence, 1, WorkoutBlock.{WORKOUT_WALL_SIT, 300, WORKOUT_CUSTOM_ORDINARY}) ||
+        !WorkoutSequenceDuplicate(*sequence, 0) || !WorkoutSequenceRemove(*sequence, 0) ||
+        !WorkoutSequenceMove(*sequence, 0, 1) || sequence.blocks[0].exercise != WORKOUT_WALL_SIT ||
+        !WorkoutSequenceDuplicate(*sequence, 1) {
+        return 1
+    }
+    encoded := WorkoutSequenceEncode(*sequence)
+    readback: WorkoutSequence
+    if !WorkoutSequenceDecode(encoded, *readback) || WorkoutSequenceEncode(*readback) != encoded ||
+        WorkoutSequenceDecode("workout/2\nUnknown\nplank 18 0\n", *readback) ||
+        WorkoutSequenceDecode("workout/1\nUnknown\nplank 301 0\n", *readback) ||
+        WorkoutSequenceDecode("workout/1\nUnknown\nplank 05 0\n", *readback) ||
+        WorkoutSequenceDecode("workout/1\nUnknown\nplank 5 1\n", *readback) ||
+        WorkoutSequenceDecode("workout/1\nUnknown\nplank 5 0\n\n", *readback) ||
+        WorkoutSequenceDecode("workout/1\nUnknown\nside_plank 8 0\n", *readback) ||
+        WorkoutSequenceDecode("workout/1\nUnknown\nunknown_exercise 8 0\n", *readback) ||
+        WorkoutSequenceEncode(*readback) != encoded {
+        return 2
+    }
+    total := WorkoutSequenceStart(*readback, 3)
+    if WorkoutSequenceActiveSeconds(*readback) != 310 || total != 332000 ||
+        WorkoutSequenceStart(*readback, -1) != -1 || WorkoutSequenceStart(*readback, 4) != -1 ||
+        WorkoutSequenceStep(*readback, 11000).length_ms != 300000 ||
+        WorkoutSequenceStep(*readback, 321999).length_ms != 11000 ||
+        WorkoutSequenceStep(*readback, 327000).index != 2 ||
+        WorkoutSequenceBridge(*readback, 2) != 0 {
+        return 3
+    }
+    coverage: WorkoutCoverage
+    second := WorkoutSequenceStart(*readback, 1)
+    third := WorkoutSequenceStart(*readback, 2)
+    paused := WorkoutSequenceAdvance(*readback, second, 9000, true)
+    if paused != second || coverage.played_ms != 0 {
+        return 4
+    }
+    WorkoutSequenceCredit(*coverage, *readback, second, third - 1000)
+    WorkoutSequenceCredit(*coverage, *readback, second, third - 2000)
+    if coverage.played_ms != third - second - 1000 || WorkoutSequenceCompleted(*coverage, *readback) != 0 {
+        return 5
+    }
+    end := WorkoutSequenceAdvance(*readback, third, 10000, false)
+    WorkoutSequenceCredit(*coverage, *readback, third, end)
+    if end != total || coverage.played_ms != third - second + 4000 ||
+        WorkoutSequenceCompleted(*coverage, *readback) != 4 {
+        return 6
+    }
+    for index: cast(s32)readback.count..WORKOUT_CUSTOM_BLOCK_LIMIT - 1 {
+        if !WorkoutSequenceInsert(*readback, index, WorkoutBlockDefault(WORKOUT_PLANK)) {
+            return 7
+        }
+    }
+    if WorkoutSequenceDuplicate(*readback, 0) || WorkoutSequenceInsert(*readback, -1, WorkoutBlockDefault(WORKOUT_PLANK)) {
+        return 8
+    }
+    cue: [64]u8
+    if WorkoutSequenceCue(WorkoutStep.{WORKOUT_PHASE_PREPARE, WORKOUT_JUMPING_JACKS, 0, 0, 5000}, cue[:]) != "" ||
+        WorkoutSequenceCue(WorkoutStep.{WORKOUT_PHASE_REST, WORKOUT_JUMPING_JACKS, 1, 0, 11000}, cue[:]) != "" ||
+        WorkoutSequenceCue(WorkoutStep.{WORKOUT_PHASE_REST, WORKOUT_JUMPING_JACKS, 1, 8000, 11000}, cue[:]) != "workout_say_count_3" ||
+        WorkoutSequenceCue(WorkoutStep.{WORKOUT_PHASE_WORK, WORKOUT_JUMPING_JACKS, 1, 0, 5000}, cue[:]) != "workout_say_jumping_jacks" ||
+        WorkoutSequenceCue(WorkoutStep.{WORKOUT_PHASE_REST, WORKOUT_WALL_SIT, 1, 0, 11000}, cue[:]) != "workout_say_next_wall_sit" {
+        return 9
+    }
+    return 0
+}
+
+TestRoute :: (block: WorkoutBlock, rig: *TaiChiRig) -> s32 {
+    seconds := WorkoutAccessSeconds(block.exercise)
+    start := WorkoutStanding()
+    first := WorkoutCustomKey(block, 0).pose
+    begins := WorkoutAccessPose(block, 0, rig)
+    ends := WorkoutAccessPose(block, seconds * 1000, rig)
+    if !SameSettlement(*begins, *start, rig, 0.00001) || !SameSettlement(*ends, *first, rig, 0.00001) {
+        return 10
+    }
+    for index: cast(s32)0..seconds - 1 {
+        a := WorkoutAccessKey(block, *first, index)
+        b := WorkoutAccessKey(block, *first, index + 1)
+        t := index * 1000
+        before := WorkoutAccessPose(block, t - 1, rig)
+        after := WorkoutAccessPose(block, t + 1, rig)
+        if !SameSettlement(*before, *after, rig, 0.0002) {
+            return 11
+        }
+        previous := a
+        max_error: float64 = 0.0
+        max_hand: float64 = 0.0
+        for sample: cast(s32)1..20 {
+            frame := WorkoutAccessPose(block, t + sample * 50, rig)
+            solved := WorkoutSolve(*frame, rig)
+            if solved.head_center.y < 0.0 || !SameSettlement(*previous, *frame, rig, 0.28) {
+                was := WorkoutSolve(*previous, rig)
+                print("route phase % sample % head % wrists % % knees % % toes % %\n", index, sample,
+                    solved.head_center.y, TaiChiDistance3(was.wrists[0], solved.wrists[0]),
+                    TaiChiDistance3(was.wrists[1], solved.wrists[1]), TaiChiDistance3(was.knees[0], solved.knees[0]),
+                    TaiChiDistance3(was.knees[1], solved.knees[1]), TaiChiDistance3(was.toes[0], solved.toes[0]),
+                    TaiChiDistance3(was.toes[1], solved.toes[1]))
+                return 12
+            }
+            for side: cast(s32)0..1 {
+                if frame.feet[side].lift < 0.0001 {
+                    point := WorkoutPlacedFoot(*frame, side, rig)
+                    max_error = TaiChiMax(max_error, TaiChiDistance3(solved.toes[side], point.toe_tip))
+                }
+                if a.hands[side].mode == WORKOUT_AT_WORLD && b.hands[side].mode == WORKOUT_AT_WORLD &&
+                    (frame.hands[side].at.y <= 0.06 || block.exercise == WORKOUT_TRICEPS_DIPS) {
+                    max_hand = TaiChiMax(max_hand, TaiChiDistance3(solved.wrists[side], frame.hands[side].at))
+                }
+                x0 := a.feet[side].x
+                z0 := a.feet[side].z
+                if (TaiChiAbs(a.feet[side].x - b.feet[side].x) > 0.002 ||
+                    TaiChiAbs(a.feet[side].z - b.feet[side].z) > 0.002) &&
+                    frame.feet[side].lift < 0.0001 && sample != 20 &&
+                    TaiChiHypot(frame.feet[side].x - x0, frame.feet[side].z - z0) > 0.0001 &&
+                    TaiChiHypot(frame.feet[side].x - b.feet[side].x, frame.feet[side].z - b.feet[side].z) > 0.0001 {
+                    return 13
+                }
+                if a.hands[side].mode == WORKOUT_AT_WORLD && b.hands[side].mode == WORKOUT_AT_WORLD &&
+                    TaiChiDistance3(a.hands[side].at, b.hands[side].at) < 0.0001 &&
+                    TaiChiDistance3(frame.hands[side].at, a.hands[side].at) > 0.0001 {
+                    return 14
+                }
+            }
+            previous = frame
+        }
+        if max_error > 0.025 || max_hand > 0.025 {
+            print("route %/% phase %: planted reach error foot % hand %\n", block.exercise, block.variant, index, max_error, max_hand)
+            return 15
+        }
+    }
+    return 0
+}
+
+TestActiveCycle :: (block: WorkoutBlock, rig: *TaiChiRig) -> bool {
+    period: s64 = 0
+    count := WorkoutCustomCycleCount(block)
+    for index: cast(s32)0..count - 1 {
+        key := WorkoutCustomKey(block, index)
+        period += key.hold_ms + key.move_ms
+    }
+    length := cast(s64)block.seconds * 1000
+    repetitions := (length + period / 2) / period
+    if repetitions < 1 {
+        repetitions = 1
+    }
+    span := length / repetitions
+    before := WorkoutCustomActivePose(block, 0, rig)
+    for sample: cast(s32)1..160 {
+        after := WorkoutCustomActivePose(block, sample * span / 160, rig)
+        if !SameSettlement(*before, *after, rig, 0.22) {
+            print("active cycle %/% length % sample % exceeds joint travel\n", block.exercise, block.variant, block.seconds, sample)
+            return false
+        }
+        before = after
+    }
+    first := WorkoutCustomActivePose(block, 0, rig)
+    near_end := WorkoutCustomActivePose(block, length - 1, rig)
+    end := WorkoutCustomActivePose(block, length, rig)
+    return SameSettlement(*first, *end, rig, 0.000001) && SameSettlement(*near_end, *end, rig, 0.00025)
+}
+
+TestPair :: (a: WorkoutBlock, b: WorkoutBlock, rig: *TaiChiRig) -> s32 {
+    sequence: WorkoutSequence
+    unused WorkoutSequenceInsert(*sequence, 0, a)
+    unused WorkoutSequenceInsert(*sequence, 1, b)
+    start := WorkoutSequenceStart(*sequence, 1)
+    active := start + WorkoutSequenceBridge(*sequence, 1)
+    a0 := WorkoutSequenceFrame(*sequence, WorkoutSequenceStep(*sequence, start - 1), rig)
+    a1 := WorkoutSequenceFrame(*sequence, WorkoutSequenceStep(*sequence, start), rig)
+    b0 := WorkoutSequenceFrame(*sequence, WorkoutSequenceStep(*sequence, active - 1), rig)
+    b1 := WorkoutSequenceFrame(*sequence, WorkoutSequenceStep(*sequence, active), rig)
+    if !SameSettlement(*a0.pose, *a1.pose, rig, 0.0002) || !SameSettlement(*b0.pose, *b1.pose, rig, 0.0002) {
+        return 21
+    }
+    if TaiChiAbs(a0.framing.camera.yaw - a1.framing.camera.yaw) > 0.0002 ||
+        TaiChiAbs(b0.framing.camera.yaw - b1.framing.camera.yaw) > 0.0002 {
+        return 22
+    }
+    at := (start + active) / 2
+    original := WorkoutSequenceFrame(*sequence, WorkoutSequenceStep(*sequence, at), rig)
+    unused WorkoutSequenceFrame(*sequence, WorkoutSequenceStep(*sequence, 0), rig)
+    reset := WorkoutSequenceFrame(*sequence, WorkoutSequenceStep(*sequence, at), rig)
+    if WorkoutPoseDigest(*original.pose, 0) != WorkoutPoseDigest(*reset.pose, 0) ||
+        original.prop_opacity != reset.prop_opacity || original.prop != reset.prop {
+        return 23
+    }
+    return 0
+}
+
+#program_export
+Answer :: () -> s32 {
+    result := ExerciseEditAndClock()
+    if result != 0 {
+        return result
+    }
+    rig := WorkoutRig()
+    blocks: [WORKOUT_MOVE_COUNT * 4]WorkoutBlock
+    count: s32 = 0
+    for exercise: cast(s32)0..WORKOUT_MOVE_COUNT - 1 {
+        for variant: cast(s32)0..WORKOUT_CUSTOM_SHALLOW {
+            if !WorkoutBlockSupports(exercise, variant) {
+                continue
+            }
+            block := WorkoutBlock.{exercise, WORKOUT_CUSTOM_MIN_SECONDS, variant}
+            route := TestRoute(block, *rig)
+            if route != 0 {
+                print("access route % variant % failed %\n", exercise, variant, route)
+                return route
+            }
+            long := block
+            long.seconds = WORKOUT_CUSTOM_MAX_SECONDS
+            if !TestActiveCycle(block, *rig) || !TestActiveCycle(long, *rig) {
+                return 16
+            }
+            blocks[count] = block
+            count += 1
+        }
+    }
+    for i: cast(s32)0..count - 1 {
+        for j: cast(s32)0..count - 1 {
+            from := blocks[i]
+            to := blocks[j]
+            if (i + j) % 2 == 0 { from.seconds = WORKOUT_CUSTOM_MAX_SECONDS }
+            if (i + j) % 2 != 0 { to.seconds = WORKOUT_CUSTOM_MAX_SECONDS }
+            pair := TestPair(from, to, *rig)
+            if pair != 0 {
+                print("pair %/% -> %/% failed %\n", from.exercise, from.variant, to.exercise, to.variant, pair)
+                return pair
+            }
+        }
+    }
+    print("Custom workout tested % ordered pairs over % supported movement variants\n", count * count, count)
+    return 42
+}

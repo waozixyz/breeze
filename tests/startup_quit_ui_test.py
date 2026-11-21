@@ -211,13 +211,15 @@ with tempfile.TemporaryDirectory(prefix="profile-", dir=OUTPUT) as temporary, co
             quit_button = driver.wait(label="Quit", role="button")
             started = time.monotonic()
             try:
-                pressed = driver.press(label="Quit", role="button")
+                pressed = driver.press(key=quit_button["key"], role="button")
             except UiDriverError:
                 # The app may exit before it answers the press.
                 assert app.poll() is not None, "Pressing Quit failed\n" + log.read_text()
             else:
-                assert pressed["hit"] == quit_button["index"], \
-                    f"{scene}: the press reached widget {pressed['hit']}, not Quit, so the prompt is covered"
+                # A rebuild may move the Quit widget to another tree index.
+                # The key selects the same control, and one click must exit.
+                if pressed["nodes"] and pressed["nodes"][0]["key"] == quit_button["key"]:
+                    assert pressed["hit"] == pressed["nodes"][0]["index"], (scene, pressed)
             try:
                 status = app.wait(timeout=1)
             except subprocess.TimeoutExpired:

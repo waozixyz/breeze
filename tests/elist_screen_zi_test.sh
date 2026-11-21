@@ -12,9 +12,10 @@ flock 9
 
 # The screen as the Linux app builds it, on Kryon's desktop host.
 defines="--define PLATFORM_DESKTOP --define DESKTOP_HOST --define NATIVE_WINDOW_HAVE_SDL"
-"$bin/ziran" check --project ${PACKAGE_FLAGS:---offline} --root "$root/src" $defines \
+python3 "$root/scripts/stage-practice-figure.py"
+"$bin/ziran" check --project ${PACKAGE_FLAGS:---offline} --module-path "$root/build/practice-figure" --root "$root/src" $defines \
     "$root/src/screens/elist_screen.zi"
-"$bin/ziran" build --project ${PACKAGE_FLAGS:---offline} --target=c --no-main --prune-stale --root "$root/src" $defines \
+"$bin/ziran" build --project ${PACKAGE_FLAGS:---offline} --target=c --no-main --prune-stale --module-path "$root/build/practice-figure" --root "$root/src" $defines \
     -o "$work/c" "$root/src/screens/elist_screen.zi" "$root/src/storage/storage_thread_buffers.zi"
 
 includes="-I$root/build/packages/ziran/include -I$work/c"

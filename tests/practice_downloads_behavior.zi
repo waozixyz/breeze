@@ -82,7 +82,7 @@ CheckPracticeDownloads :: () -> s32 {
     practice_owned = FixtureOwned
     unused AssetTakeChanges()
     FixturePracticePump(0, false, false, true)
-    if practice_pack_count != 11 || PracticeContentReady(0) {
+    if practice_pack_count != 12 || PracticeContentReady(0) {
         return 1
     }
     // The first catalog closes no pack, so the pictures already on screen
@@ -175,11 +175,31 @@ CheckPracticeDownloads :: () -> s32 {
         return 38
     }
     PracticeContentRemove(4)
+    // A missing pack ends the busy state on the first response. Frames
+    // continue without silently re-enqueuing the same content.
+    FixtureMode(404)
+    missing_before := FixtureStarts()
+    PracticeContentRequest(4)
+    FixturePracticePump(4, false, false, true)
+    FixturePracticePump(4, false, false, true)
+    missing := *practice_packs[PracticePackFind(4, "")]
+    if PracticeContentStatus(4) != 3 || missing.failure_http != 404 ||
+    missing.requested || missing.retry_at != 0 || FixtureTaiChiSaved() {
+        return 133
+    }
+    for frame: cast(s32)0..cast(s32)99 {
+        PracticeDownloadsPump(4, false, false, true)
+    }
+    if FixtureStarts() != missing_before + 1 || PracticeContentStatus(4) != 3 {
+        return 134
+    }
+    // The same request succeeds after Retry when the publisher has the pack.
     FixtureMode(0)
     PracticeContentRequest(4)
     FixturePracticePump(4, false, false, true)
     FixturePracticePump(4, false, false, true)
-    if !PracticeContentReady(4) {
+    if !PracticeContentReady(4) || PracticeContentStatus(4) != 2 ||
+    FixtureStarts() != missing_before + 2 {
         return 7
     }
 
@@ -659,6 +679,40 @@ CheckPracticeDownloads :: () -> s32 {
         if PracticeContentReady(sun) || PracticeDownloadsAsset(figure).found || practice_content_jobs != 0 {
             return 129
         }
+    }
+    // The packaged Sun recording is ready offline even when Start is pressed
+    // before its asynchronous verification finishes. Removing the voice is
+    // remembered across restart, and choosing it again mounts the same bytes.
+    PracticeDownloadsClose()
+    // Restore the base pack removed above, so Start can actually run.
+    FixturePracticePump(sun, false, false, true)
+    PracticeContentRequest(sun)
+    for step: cast(s32)0..cast(s32)5 {
+        FixturePracticePump(sun, false, false, true)
+    }
+    if !PracticeContentReady(sun) {
+        return 138
+    }
+    before = FixtureStarts()
+    PracticeDownloadsPump(sun, true, false, true)
+    FixturePracticePump(sun, true, false, false)
+    clip := "assets/practices/sunsalutation/voice/en/sun_salutation_voice_intro_1.ogg"
+    sun_voice := PracticeNarrationPack(sun, "en", "")
+    if sun_voice < 0 || PracticeNarrationLanguage(sun, "") != "en" ||
+    !PracticeDownloadsAsset(clip).found || FixtureStarts() != before {
+        return 135
+    }
+    PracticeNarrationDecline(sun_voice)
+    PracticeDownloadsClose()
+    FixturePracticePump(sun, true, false, true)
+    sun_voice = PracticeNarrationPack(sun, "en", "")
+    if sun_voice < 0 || PracticeNarrationState(sun_voice) != 0 || PracticeDownloadsAsset(clip).found {
+        return 136
+    }
+    PracticeNarrationDownload(sun_voice)
+    FixturePracticePump(sun, true, false, true)
+    if !PracticeDownloadsAsset(clip).found || FixtureStarts() != before {
+        return 137
     }
     return 0
 }

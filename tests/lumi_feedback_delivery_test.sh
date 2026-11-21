@@ -12,8 +12,9 @@ export YUE_DESKTOP_RECOVERY=0
 rm -rf "$work/generated"
 mkdir -p "$work/generated"
 # shellcheck disable=SC2046
+python3 "$root/scripts/stage-practice-figure.py"
 cd "$root"
-"$compiler" build --project --offline ${PACKAGE_FLAGS:-} --target=c --no-main \
+"$compiler" build --project --offline ${PACKAGE_FLAGS:-} --module-path "$root/build/practice-figure" --target=c --no-main \
     --define PLATFORM_DESKTOP --define DESKTOP_HOST --define STORAGE_TEST_REAL_HOST_SERVICES --root "$root" \
     -o "$work/generated" \
     "$root/tests/lumi_feedback_delivery_behavior.zi" "$root/src/app/app_clock_host.zi"

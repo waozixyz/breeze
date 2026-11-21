@@ -44,7 +44,9 @@ if [ "$suite" = astral ]; then
 else
     # The accepted Russian and Czech exports with measured decoder headroom,
     # observed as shipped, never normalized or replaced by the test.
-    for clip in taichi/voice/en/tai_chi_text_73f9fa69 guide/voice/en/practice_guide_start \
+    for clip in sunsalutation/voice/en/sun_salutation_voice_intro_1 \
+        sunsalutation/voice-male/en/sun_salutation_voice_mountain_start \
+        taichi/voice/en/tai_chi_text_73f9fa69 guide/voice/en/practice_guide_start \
         guide/voice/ru/diary_guide_write guide/voice/ru/habits_guide_coins \
         guide/voice/ru/habits_guide_meditation_edit guide/voice/ru/habits_guide_meditation_views \
         guide/voice/ru/settings_guide_sections guide/voice/cs/habits_guide_overview_grid \

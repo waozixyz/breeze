@@ -7,14 +7,7 @@
 #import "asset_files"
 #if #defined(DESKTOP_HOST) {
     Desktop :: #import "desktop_runtime";
-    #import, file "icon_png.zi";
-    desktop_icon_rgba: [ICON_SIZE * ICON_SIZE * 4]u8;
-
-    // The window icon from an embedded picture, given to SDL as RGBA.
-    SetDesktopIconFromAsset :: (path: string) -> bool {
-        return IconPixels(path, desktop_icon_rgba[:]) &&
-        Desktop.DesktopSetIcon(ICON_SIZE, ICON_SIZE, desktop_icon_rgba[:])
-    }
+    Cairo :: #import "Cairo";
 
     #if #defined(_WIN32) {
         // The Win32 handle of the SDL window, for the resource icon.
@@ -172,8 +165,20 @@ SetDesktopWindowIcon :: (path: *u8) {
             TraceLog(4, "APP: Missing window icon asset")
             return
         }
-        if !SetDesktopIconFromAsset(TextFromCString(path)) {
-            TraceLog(4, "APP: Failed to decode or apply window icon asset")
+        data := TextFromBytes(BytesFromPointer(asset.data, cast(u64)asset.size))
+        width: s32
+        height: s32
+        channels: s32
+        upright: bool
+        pixels := Cairo.ImagePreviewDecode(data, "webp", *width, *height, *channels, *upright)
+        if pixels == null {
+            TraceLog(4, "APP: Failed to decode window icon asset")
+            return
+        }
+        defer { Cairo.ImagePreviewRelease(pixels) }
+        if channels != 4 || !Desktop.DesktopSetIcon(width, height,
+            BytesFromPointer(pixels, cast(u64)width * cast(u64)height * 4)) {
+            TraceLog(4, "APP: Failed to apply window icon asset")
         }
     }
     unused path

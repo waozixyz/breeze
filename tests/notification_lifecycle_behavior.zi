@@ -7,6 +7,7 @@
 #import, file "../src/habits/habit_schedule.zi";
 #import, file "notification_game_host_behavior.zi";
 #import "notification"
+#import, file "../src/apps/lumi_notifications.zi";
 #import "date_time"
 #import "session"
 #import "geometry"
@@ -19,6 +20,10 @@ Fail :: (code: s32) #foreign c "exit";
 
 test_app: InnerBreeze;
 test_allowed: bool;
+test_driver_active: bool;
+
+#program_export "__wrap_TestDriverActive"
+TestIsDriverActive :: () -> bool { return test_driver_active }
 test_window_focused: bool;
 test_send_ok: bool = true;
 test_requests: s32;
@@ -66,6 +71,10 @@ TestWindowFocused :: () -> bool { return test_window_focused }
 
 #program_export
 NotificationSendHost :: (props: NotificationProps) -> bool {
+    if props.id == 4 {
+        Require(props.title == "Lumi" && props.tag == "inbe.lumi.reply" &&
+            props.body == "An unseen reply" && !props.suppress_when_focused, 70)
+    }
     test_sends += 1
     test_last_id = props.id
     return test_send_ok
@@ -271,6 +280,24 @@ main :: () -> s32 {
     Require(test_cancels == previous_cancels + 2, 51)
     Require(test_app.reminders[0].enabled == 0 &&
         test_app.notification_habit_reminders == 0, 52)
+    // An active desktop driver carries out reminder bookkeeping with its
+    // own sink even when the simulated OS offers a persistent scheduler.
+    test_driver_active = true
+    test_allowed = false
+    test_app.reminder_count = 1
+    test_app.reminders[0] = AppReminder.{.enabled = 1, .hour = 8}
+    previous_requests := test_requests
+    previous_schedules := test_practice_schedules
+    Require(send_test_notification(*test_app), 62)
+    test_second += 1
+    Require(app_notifications_tick(*test_app), 63)
+    Require(test_app.reminders[0].last_day == 2026306, 64)
+    test_second += 1
+    Require(!app_notifications_tick(*test_app), 65)
+    Require(test_sends == previous_sends && test_requests == previous_requests &&
+        test_practice_schedules == previous_schedules && test_cancels == previous_cancels + 2, 66)
+    test_driver_active = false
+
     Require(NotificationWeekdays(1) == 2 && NotificationWeekdays(64) == 1, 53)
     Require(NotificationDateAfter(20260228, 1) == 20260301 &&
         NotificationDateAfter(20280228, 1) == 20280229, 54)
@@ -300,5 +327,38 @@ main :: () -> s32 {
     Require(NotificationGameHostBehavior(*test_app) == 0, 60)
     test_window_focused = true
     Require(NotificationGameHostBehavior(*test_app) == 1, 61)
+    test_driver_active = false
+    test_allowed = true
+    sent := test_sends
+    LumiReplyNoticeQueue("A visible reply", "owner")
+    LumiReplyNoticeTick(true, "owner")
+    LumiReplyNoticeTick(true, "owner")
+    Require(test_sends == sent && lumi_notice_text[0] == 0, 71)
+    // Focus in another screen must not suppress an unread Lumi reply.
+    test_window_focused = true
+    LumiReplyNoticeQueue("An unseen reply", "owner")
+    LumiReplyNoticeTick(false, "owner")
+    Require(test_sends == sent, 72)
+    LumiReplyNoticeTick(false, "owner")
+    Require(test_sends == sent + 1 && test_last_id == 4, 73)
+    LumiReplyNoticeTick(false, "owner")
+    Require(test_sends == sent + 1, 74)
+    test_allowed = false
+    LumiReplyNoticeQueue("An unseen reply", "owner")
+    LumiReplyNoticeTick(false, "owner")
+    LumiReplyNoticeTick(false, "owner")
+    Require(test_sends == sent + 1 && lumi_notice_text[0] != 0, 75)
+    test_allowed = true
+    test_send_ok = false
+    LumiReplyNoticeTick(false, "owner")
+    Require(lumi_notice_text[0] != 0, 76)
+    test_send_ok = true
+    LumiReplyNoticeTick(false, "owner")
+    Require(lumi_notice_text[0] == 0, 77)
+    sent = test_sends
+    LumiReplyNoticeQueue("A private reply", "previous-owner")
+    LumiReplyNoticeTick(false, "new-owner")
+    LumiReplyNoticeTick(false, "new-owner")
+    Require(test_sends == sent && lumi_notice_text[0] == 0, 78)
     return 0
 }

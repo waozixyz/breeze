@@ -219,5 +219,10 @@ def run(arguments):
     print(f"Visual gate: all {len(checks)} suites passed on unchanged release artifacts", flush=True)
 
 
+def terminate_gate(signum, _frame):
+    raise SystemExit(128 + signum)
+
+
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, terminate_gate)
     main()

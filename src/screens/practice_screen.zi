@@ -1,6 +1,7 @@
 c3 :: #system_library "c";
 app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c3;
 #import, file "../platform/host_input.zi";
+#import, file "../platform/host_window.zi";
 #import "byte_text_linux"
 #import, file "../platform/app_trace.zi";
 KEY_LEFT :: 263;
@@ -36,10 +37,14 @@ TitleBar :: #import "kryon/title_bar";
 #import, file "../app/app_nav_state.zi";
 #import, file "../app/app_frame_transition.zi";
 #import, file "../app/app_settings.zi";
+#import, file "../app/settings_actions.zi";
+#import, file "../app/assets.zi";
 #import, file "manual_screen.zi";
 #import, file "manual_dispatch.zi";
 #import, file "practice_manual_layout.zi";
 #import, file "../practices/practice_registry.zi";
+#import, file "../../apps/practice/workout.zi";
+#import, file "../../apps/practice/workout_rules.zi";
 #import, file "../practices/practice_downloads.zi";
 #import, file "../practices/practice_offer.zi";
 #import, file "../../apps/practice/recovery.zi";
@@ -49,6 +54,7 @@ TitleBar :: #import "kryon/title_bar";
 #import "swipe"
 #import "swipe_props"
 #import "text_align"
+#import "theme"
 #import, file "../app/exercise_types.zi";
 #import, file "../app/metrics.zi";
 #import, file "../app/color.zi";
@@ -76,6 +82,8 @@ TitleBar :: #import "kryon/title_bar";
 #import, file "../apps/app_codec.zi";
 #import, file "../apps/hosted_assets.zi";
 #import, file "../apps/module_host.zi";
+#import, file "practice_banner_draw.zi";
+#import "widget_codec"
 
 using HostValueKind;
 
@@ -174,7 +182,7 @@ practice_screen_leave_config :: (app: *InnerBreeze, modal_type: s32) {
 
 practice_card_banner_asset_path :: (app: *InnerBreeze, exercise: s32) -> string {
     id := practice_clamp_id(exercise)
-    dark: bool = app != null && ((app.theme_mode == APP_THEME_DARK)  || (app.theme_mode != APP_THEME_LIGHT && app.dark_mode != 0))
+    dark := app.dark_mode != 0
 
     if id == EXERCISE_WIM_HOF {
         return ifx (dark) then ("assets/practices/whm/banner-dark.webp") else ("assets/practices/whm/banner-light.webp")
@@ -223,12 +231,26 @@ practice_draw_card_banner :: (asset_path: string, dest: Rectangle) {
 
 // Practice lists every practice, apart from paid ones where they cannot be
 // bought, under a tab for its kind.
+// A carousel-only card ID, outside the persisted practice IDs.
+PRACTICE_HOME_SHORT_WORKOUT :: -2
+
+practice_home_exercise :: (card: s32) -> s32 {
+    return ifx card == PRACTICE_HOME_SHORT_WORKOUT then EXERCISE_WORKOUT else practice_clamp_id(card)
+}
+
+practice_home_selected :: (app: *InnerBreeze) -> s32 {
+    if app.exercise_type == EXERCISE_WORKOUT && app.workout_routine == WORKOUT_ROUTINE_SHORT {
+        return PRACTICE_HOME_SHORT_WORKOUT
+    }
+    return practice_clamp_id(app.exercise_type)
+}
+
 practice_home_listed :: (id: s32) -> bool {
-    return !PracticeHidden(id)
+    return !PracticeHidden(practice_home_exercise(id))
 }
 
 practice_home_kind_of :: (id: s32) -> s32 {
-    return practice_get(practice_clamp_id(id)).kind
+    return practice_get(practice_home_exercise(id)).kind
 }
 
 // The listed practices of one kind, in their usual order.
@@ -243,6 +265,10 @@ practice_kind_ids :: (kind: s32, ids: []s32) -> s32 {
         if id != EXERCISE_WIM_HOF && practice_home_listed(id) && practice_home_kind_of(id) == kind && count < ids.count {
             ids[count] = id
             count += 1
+            if id == EXERCISE_WORKOUT && count < ids.count {
+                ids[count] = PRACTICE_HOME_SHORT_WORKOUT
+                count += 1
+            }
         }
     }
     return count
@@ -286,13 +312,13 @@ practice_home_tabs :: (app: *InnerBreeze, selected: *s32) -> s32 {
     current := practice_home_kind_of(app.exercise_type)
     for slot: cast(s32)0..PRACTICE_HOME_KIND_COUNT - 1 {
         kind := practice_home_kinds[slot]
-        ids: [EXERCISE_COUNT]s32
+        ids: [EXERCISE_COUNT + 1]s32
         if practice_kind_ids(kind, ids[:]) == 0 {
             continue
         }
         if kind == current {
             selected.* = count
-            practice_home_kind_choice[slot] = practice_clamp_id(app.exercise_type)
+            practice_home_kind_choice[slot] = practice_home_selected(app)
         }
         practice_home_tab_kinds[count] = kind
         practice_home_tab_slots[count] = slot
@@ -308,8 +334,8 @@ practice_home_choose_tab :: (app: *InnerBreeze, tab: s32, count: s32) {
     }
     kind := practice_home_tab_kinds[tab]
     choice := practice_home_kind_choice[practice_home_tab_slots[tab]]
-    if choice < 0 || practice_home_kind_of(choice) != kind || !practice_home_listed(choice) {
-        ids: [EXERCISE_COUNT]s32
+    if choice == -1 || practice_home_kind_of(choice) != kind || !practice_home_listed(choice) {
+        ids: [EXERCISE_COUNT + 1]s32
         unused practice_kind_ids(kind, ids[:])
         choice = ids[0]
     }
@@ -323,8 +349,8 @@ practice_next_ordered :: (app: *InnerBreeze, dir: s32) -> s32 {
     if app == null {
         return EXERCISE_WIM_HOF
     }
-    current := practice_clamp_id(app.exercise_type)
-    ids: [EXERCISE_COUNT]s32
+    current := practice_home_selected(app)
+    ids: [EXERCISE_COUNT + 1]s32
     total: s32 = 0
     for slot: cast(s32)0..PRACTICE_HOME_KIND_COUNT - 1 {
         total += practice_kind_ids(practice_home_kinds[slot], ids[total:])
@@ -343,11 +369,11 @@ practice_next_ordered :: (app: *InnerBreeze, dir: s32) -> s32 {
 
 practice_home_carousel_controls_height :: (app: *InnerBreeze) -> s32 {
     unused app
-    ids: [EXERCISE_COUNT]s32
+    ids: [EXERCISE_COUNT + 1]s32
     return ifx practice_home_ids(ids[:]) > 1 then AppScale(48) else 0
 }
 
-practice_select_home_card :: (app: *InnerBreeze, exercise: s32) {
+practice_select_home_card :: (app: *InnerBreeze, card: s32) {
     route := AppRoute.{0 }
 
     if app == null {
@@ -363,7 +389,15 @@ practice_select_home_card :: (app: *InnerBreeze, exercise: s32) {
     }
     route = app_current_route(app)
     route.screen = ScreenStart
-    route.exercise_type = practice_clamp_id(exercise)
+    route.exercise_type = practice_home_exercise(card)
+    if route.exercise_type == EXERCISE_WORKOUT {
+        routine: s32 = ifx card == PRACTICE_HOME_SHORT_WORKOUT then WORKOUT_ROUTINE_SHORT else WORKOUT_ROUTINE_FULL
+        if app.workout_routine != routine {
+            app.workout_routine = routine
+            app.settings_dirty = 1
+            save_settings(app)
+        }
+    }
     route.practice_tab = PRACTICE_TAB_PLAY
     route.practice_config_tab = 0
     app.manual_scroll = 0
@@ -430,11 +464,117 @@ practice_home_has_config :: (practice: *PracticeDefinition) -> bool {
 practice_home_frame: PracticeHomeFrame;
 practice_home_frame_codec: WidgetPracticeHomeFrameCodec;
 practice_home_tab_codec: WidgetPracticeHomeTabCodec;
+practice_banner_bounds_codec: WidgetRectangleCodec;
+
+practice_home_theme_button :: (app: *InnerBreeze, frame: PracticeHomeFrame) -> bool {
+    if frame.card.width <= 0.0 || frame.top <= 0 {
+        return false
+    }
+    width := cast(float32)AppScale(44)
+    height := cast(float32)frame.top
+    size := ifx width < height then width else height
+    night := app.dark_mode != 0
+    button := Button.Props.{.key = Layout.KeyHash("practice/theme-mode"),
+        .bounds = .{frame.card.x + frame.card.width - width - cast(float32)AppScale(8),
+            (height - size) * 0.5, width, size},
+        .label = LocaleText(ifx night then "theme_light" else "theme_dark"),
+        .icon_type = cast(s32)(ifx night then IconSun else IconMoon),
+        .icon_only = true, .circle = true, .disabled = !frame.choosing,
+        .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}
+    if Button.Draw(app.ui.session, button) == 0 {
+        return false
+    }
+    if !CurrentTheme().motion.reduced_motion {
+        app_route_transition_request(app)
+    }
+    return AppSetThemeMode(app, ifx night then APP_THEME_LIGHT else APP_THEME_DARK)
+}
+
+PracticeBannerLayers :: struct {
+    landscape: string
+    character: string
+}
+
+practice_home_banner_layers :: (card: s32) -> PracticeBannerLayers {
+    if card == PRACTICE_HOME_SHORT_WORKOUT {
+        return .{"assets/practices/workout/banner-short-landscape.webp",
+            "assets/practices/workout/banner-short-character.webp"}
+    }
+    if card == EXERCISE_WORKOUT {
+        return .{"assets/practices/workout/banner-landscape.webp",
+            "assets/practices/workout/banner-character.webp"}
+    }
+    if card == EXERCISE_WIM_HOF {
+        return .{"assets/practices/whm/banner-landscape.webp", "assets/practices/whm/banner-character.webp"}
+    }
+    if card == EXERCISE_MEDITATION {
+        return .{"assets/practices/meditation/banner-landscape.webp", "assets/practices/meditation/banner-character.webp"}
+    }
+    if card == EXERCISE_SUN_SALUTATION {
+        return .{"assets/practices/sunsalutation/banner-landscape.webp", "assets/practices/sunsalutation/banner-character.webp"}
+    }
+    if card == EXERCISE_PATTERNS {
+        return .{"assets/practices/patterns/banner-landscape.webp", "assets/practices/patterns/banner-character.webp"}
+    }
+    if card == EXERCISE_TAI_CHI {
+        return .{"assets/practices/taichi/banner-landscape.webp", "assets/practices/taichi/banner-character.webp"}
+    }
+    if card == EXERCISE_ASTRAL_PROJECTION {
+        return .{"assets/practices/astral_projection/banner-landscape.webp", "assets/practices/astral_projection/banner-character.webp"}
+    }
+    return .{}
+}
+
+// Paint underneath the hosted title fade. The two transparent layers share
+// the sky's framing, so they line up at every card width.
+practice_home_banner_draw :: (props: HostValue) {
+    missing: HostValue
+    asset := HostValueText(HostFieldValue(*props, 0, "asset_path", *missing).*)
+    if asset.count == 0 || asset != practice_home_frame.banner {
+        return
+    }
+    bounds := WidgetDecodeRectangle(HostFieldValue(*props, 2, "bounds", *missing).*,
+        *practice_banner_bounds_codec)
+    frame := *practice_home_frame
+    visible := bounds.width > 0.0 && bounds.height > 0.0 &&
+        bounds.x < cast(float32)frame.view_width && bounds.y < cast(float32)frame.view_height &&
+        bounds.x + bounds.width > 0.0 && bounds.y + bounds.height > 0.0 &&
+        !frame.modal_active && !HostWindowHidden() && !HostWindowMinimized()
+    app := CurrentApp()
+    layers := practice_home_banner_layers(practice_home_selected(app))
+    layered := layers.landscape.count > 0 && AssetRead(layers.landscape).found && AssetRead(layers.character).found
+    night := app.dark_mode != 0
+    if layered {
+        Box.Draw(frame.session, Box.Props.{.key = Layout.KeyHash("practice/banner-sky-fallback"), .bounds = bounds,
+            .fill = ifx night then Color.{13, 38, 78, 255} else Color.{92, 157, 204, 255},
+            .fill_bottom = ifx night then Color.{61, 91, 130, 255} else Color.{213, 233, 230, 255},
+            .has_fill_bottom = true})
+    }
+    steam := PracticeBannerDraw(frame.session, Layout.KeyHash("practice/banner-motion"), frame.banner,
+        bounds, frame.swipe_frame.now_seconds, visible, CurrentTheme().motion.reduced_motion, layered)
+    if layered {
+        Image.Draw(frame.session, Image.Props.{.key = Layout.KeyHash("practice/banner-landscape"), .bounds = bounds,
+            .asset_path = layers.landscape, .fit = .ImageFitCover,
+            .tint = ifx night then cast(u32)0x627eabff else cast(u32)0xffffffff})
+        Image.Draw(frame.session, Image.Props.{.key = Layout.KeyHash("practice/banner-character"), .bounds = bounds,
+            .asset_path = layers.character, .fit = .ImageFitCover,
+            .tint = ifx night then cast(u32)0x99b4d6ff else cast(u32)0xffffffff})
+        if steam.id != 0 {
+            Image.Draw(frame.session, Image.Props.{.key = Layout.KeyHash("practice/banner-steam"), .bounds = bounds,
+                .texture = steam, .fit = .ImageFitCover, .smooth = true})
+        }
+    }
+}
 
 PracticeHomeCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
-    if TextFromCString(module) != "practice_home_view" {
-        return WidgetHostCall(context, module, function, arguments, count, result)
+    owner := TextFromCString(module)
+    if owner != "practice_home_view" {
+        handled := WidgetHostCall(context, module, function, arguments, count, result)
+        if handled != 0 && count == 2 && TextFromCString(function) == "ImageHostedHost" {
+            practice_home_banner_draw(arguments[1])
+        }
+        return handled
     }
     name := TextFromCString(function)
     if name == "ReadPracticeHomeHost" && count == 0 {
@@ -498,8 +638,13 @@ practice_home_frame_for :: (app: *InnerBreeze, ids: []s32, listed: s32) -> Pract
         .tab_scroll = practice_home_tab_scroll, .listed = listed,
         .has_manual = practice != null && practice.draw_manual != null,
         .has_config = practice_home_has_config(practice)}
+    if app.exercise_type == EXERCISE_WORKOUT && app.workout_routine == WORKOUT_ROUTINE_SHORT {
+        frame.title = WorkoutTitle(app.workout_routine)
+        frame.subtitle = LocaleText("practice_home_subtitle_workout_short")
+    }
+    selected := practice_home_selected(app)
     for index: cast(s32)0..listed - 1 {
-        if ids[index] == app.exercise_type {
+        if ids[index] == selected {
             frame.index = index
         }
     }
@@ -529,7 +674,7 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
             }
         }
     }
-    ids: [EXERCISE_COUNT]s32
+    ids: [EXERCISE_COUNT + 1]s32
     listed := practice_home_ids(ids[:])
     if listed == 0 {
         return 0
@@ -559,6 +704,10 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
     app.practice_home_bounds_start = frame.start
     app.practice_home_bounds_manual = frame.manual
     app.practice_home_bounds_config = frame.config
+    if practice_home_theme_button(app, frame) {
+        app_block_current_click(app)
+        return 1
+    }
     if frame.action == PRACTICE_HOME_RECOVERY_SAVE || frame.action == PRACTICE_HOME_RECOVERY_DISCARD {
         practice_recovery_save_failed = !PracticeDraftDecide(frame.action == PRACTICE_HOME_RECOVERY_SAVE)
         if !practice_recovery_save_failed {

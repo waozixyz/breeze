@@ -19,24 +19,29 @@ parser.add_argument('--output', default='build/package-assets',
                     help='Build directory for staged package assets')
 parser.add_argument('--apps-controller', type=Path, default=ROOT / 'build/apps-ui/apps.zx',
                     help='Reviewed Apps controller to include in the root package')
+parser.add_argument('--node-only', action='store_true',
+                    help='Stage only assets for independently offered node apps')
 options = parser.parse_args()
 OUTPUT = (ROOT / options.output).resolve()
 if not OUTPUT.is_relative_to(ROOT / 'build') or OUTPUT == ROOT / 'build':
     parser.error('output must be a directory below the project build directory')
-_, _, unique_animation = inventory()
-unique_animation = set(unique_animation)
+unique_animation = set()
+if not options.node_only:
+    _, _, animation_sources = inventory()
+    unique_animation = set(animation_sources)
 # Apps the node offers each keep their assets/<name>/ in their own package.
 NODE_APPS = tuple(sorted(json.loads((ROOT / 'apps/versions.json').read_text()).get('node_apps', {})))
 if OUTPUT.exists():
     shutil.rmtree(OUTPUT)
-for name in ('inbe', 'lists', 'habits', 'practices', 'diary', 'lumi', 'leaderboard',
+root_owners = ('inbe', 'lists', 'habits', 'practices', 'diary', 'lumi', 'leaderboard',
              'practice-whm', 'practice-meditation', 'practice-sunsalutation',
              'practice-patterns', 'practice-taichi', 'practice-astral_projection',
-             'practice-workout') + NODE_APPS:
+             'practice-workout')
+for name in NODE_APPS if options.node_only else root_owners + NODE_APPS:
     (OUTPUT / name / 'assets').mkdir(parents=True)
 patterns = (
     'assets/mcp/*.json', 'assets/app/icon.webp', 'assets/app/icon-sky-cradle.webp',
-    'assets/app/icon-ink-and-air.webp', 'assets/pet/*.png',
+    'assets/app/icon-ink-and-air.webp', 'assets/app/practice-clouds.rg', 'assets/pet/*.png',
     'assets/apps/icons/*.png', 'assets/app/back-home.avif',
     'assets/social/*.png', 'assets/social/*.webp', 'assets/social/telegram.svg',
     'assets/sounds/*.ogg',
@@ -45,28 +50,33 @@ patterns = (
     'locales/*.txt', 'themes/catalog_*.css',
     'build/packages/css/styles/*.css', 'build/packages/kryon/icons/ui.webp',
     'build/packages/kryon/icons/pfp.webp',
-) + tuple(f'assets/{name}/**/*' for name in NODE_APPS)
+)
+node_patterns = tuple(f'assets/{name}/**/*' for name in NODE_APPS)
+patterns = node_patterns if options.node_only else patterns + node_patterns
 # The practice media comes from the practices package and is packaged
 # under assets/practices/.
 practice_patterns = (
     'whm/1.webp', 'whm/2.webp', 'meditation/1.webp', '*/banner-light.webp', '*/banner-dark.webp',
+    '*/banner-landscape.webp', '*/banner-character.webp',
     'sunsalutation/characters/*/*.png', 'sunsalutation/flat-edge.png',
     'sunsalutation/voice/**/*', 'sunsalutation/voice-male/**/*',
     'astral_projection/**/*', 'workout/**/*', 'taichi/**/*', 'guide/voice/**/*',
     'shared/watercolor/*.bin', 'shared/watercolor/*.webp',
+    'shared/figure/man.vrm', 'shared/figure/woman.vrm', 'shared/figure/MODELS.md',
 )
 sources = {p: p.relative_to(ROOT).as_posix()
            for pattern in patterns for p in ROOT.glob(pattern) if p.is_file()}
-sources.update({p: PREFIX + p.relative_to(MEDIA).as_posix()
-                for pattern in practice_patterns for p in MEDIA.glob(pattern) if p.is_file()})
-if not any(path.startswith(PREFIX) for path in sources.values()):
-    raise SystemExit(f'no practice media in {MEDIA}; run make packages')
+if not options.node_only:
+    sources.update({p: PREFIX + p.relative_to(MEDIA).as_posix()
+                    for pattern in practice_patterns for p in MEDIA.glob(pattern) if p.is_file()})
+    if not any(path.startswith(PREFIX) for path in sources.values()):
+        raise SystemExit(f'no practice media in {MEDIA}; run make packages')
 supported = supported_languages()
 for file, path in sorted(sources.items(), key=lambda source: source[1]):
     language = resource_language(path)
     if language and language not in supported:
         continue
-    if '-prompt.' in file.name or '/astral_projection/drafts/' in path:
+    if '-prompt.' in file.name or '/astral_projection/drafts/' in path or '/voice-jungle/' in path:
         continue
     if '/sunsalutation/characters/' in path and file not in unique_animation:
         continue
@@ -106,35 +116,38 @@ for file, path in sorted(sources.items(), key=lambda source: source[1]):
         continue
     shutil.copyfile(file, target)
 
-# Public basics are separate from the unchanged grant-gated full course.
-from tai_chi_preview import stage_preview
-stage_preview(MEDIA, OUTPUT / 'practices/assets')
+if not options.node_only:
+    # Public basics are separate from the unchanged grant-gated full course.
+    from tai_chi_preview import stage_preview
+    stage_preview(MEDIA, OUTPUT / 'practices/assets')
 
-# Catalog outlines are small metadata, available before an app is installed.
-# The app retains its own copy for standalone and embedded use.
-for name in NODE_APPS:
-    source = ROOT / 'assets' / name / 'sidebar.shape'
-    if source.is_file():
-        destination = OUTPUT / 'inbe/assets/apps/icons' / (name + '.shape')
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source, destination)
+    # Catalog outlines are small metadata, available before an app is installed.
+    # The app retains its own copy for standalone and embedded use.
+    for name in NODE_APPS:
+        source = ROOT / 'assets' / name / 'sidebar.shape'
+        if source.is_file():
+            destination = OUTPUT / 'inbe/assets/apps/icons' / (name + '.shape')
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
 
-# Root launcher cards share the reviewed Apps controller. The host reads it
-# from its own apps.zx asset beside the root package, so the root package
-# does not carry a second copy. A node-only build can omit it.
-apps_bundle = options.apps_controller.resolve()
-if apps_bundle.is_file():
-    controller = apps_bundle.read_bytes()
-    source = (ROOT / 'src/apps/apps_controller.zi').read_text()
-    expected = re.search(r'AppsControllerSha256\s*::\s*"([0-9a-f]{64})"', source)
-    if not expected or hashlib.sha256(controller).hexdigest() != expected[1]:
-        raise SystemExit('Apps controller differs from the reviewed native digest')
+    # Root launcher cards share the reviewed Apps controller. The host reads it
+    # from its own apps.zx asset beside the root package, so the root package
+    # does not carry a second copy. A node-only build can omit it.
+    apps_bundle = options.apps_controller.resolve()
+    if apps_bundle.is_file():
+        controller = apps_bundle.read_bytes()
+        source = (ROOT / 'src/apps/apps_controller.zi').read_text()
+        expected = re.search(r'AppsControllerSha256\s*::\s*"([0-9a-f]{64})"', source)
+        if not expected or hashlib.sha256(controller).hexdigest() != expected[1]:
+            raise SystemExit('Apps controller differs from the reviewed native digest')
 
 # Each app owns its bounded achievement catalog and translations, including
 # optional node apps. Source presence never determines device visibility.
 for catalog in sorted((ROOT / 'apps').glob('*/achievements.json')):
     source_name = catalog.parent.name
     owner = 'practices' if source_name == 'practice' else source_name
+    if options.node_only and owner not in NODE_APPS:
+        continue
     resource_name = 'app' if owner == 'inbe' else owner
     destination = OUTPUT / owner / 'assets' / resource_name
     destination.mkdir(parents=True, exist_ok=True)
@@ -149,6 +162,9 @@ for catalog in sorted((ROOT / 'apps').glob('*/achievements.json')):
         target = destination / 'achievement-locales' / translation.name
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(translation, target)
+
+if options.node_only:
+    raise SystemExit(0)
 
 # Diary's own translations travel with its bundle for other harnesses and
 # the generic player; it does not need the Inner Breeze root package.

@@ -10,8 +10,9 @@ flock 9
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 export YUE_DESKTOP_RECOVERY=0
 mkdir -p "$work/generated"
+python3 "$root/scripts/stage-practice-figure.py"
 (cd "$root" &&
-    "$ziran" build --project --offline --target=c --no-main --prune-stale \
+    "$ziran" build --project --offline ${PACKAGE_FLAGS:-} --module-path "$root/build/practice-figure" --target=c --no-main --prune-stale \
         --define PLATFORM_DESKTOP --define DESKTOP_HOST --define STORAGE_TEST_REAL_HOST_SERVICES \
         --root "$root" -o "$work/generated" "$root/tests/lumi_telegram_input_behavior.zi")
 cat > "$work/generated/main.c" <<'C'

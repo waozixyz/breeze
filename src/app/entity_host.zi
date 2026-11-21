@@ -50,6 +50,9 @@ Shared :: #import "entity/native_files";
 #import, file "../screens/dew_worth.zi";
 #import, file "../habits/habit_model.zi";
 #import, file "../habits/habit_calendar.zi";
+#import, file "../habits/habit_icons.zi";
+#import, file "../habits/habit_types.zi";
+#import, file "../habits/habit_linked_rules.zi";
 #import, file "../storage/sync_node_storage.zi";
 #import, file "current_app.zi";
 #import, file "../platform/text_input_host.zi";
@@ -57,6 +60,8 @@ Shared :: #import "entity/native_files";
 // A profile reads the host's busy flag without importing the sync engine.
 c :: #system_library "c";
 EntitySyncLoading :: () -> s32 #foreign c "app_sync_loading";
+EntityHabitLinkedEntries :: (app: *InnerBreeze, habit_index: s32,
+    day_filter: s32) -> *HabitLinkedContext #foreign c "habit_cached_linked_entries";
 
 entity_context: AppContext;
 entity_opened: bool;
@@ -234,12 +239,16 @@ InbeEntityActivity :: () -> string {
     today := habits_today_index()
     due: s32 = 0
     done: s32 = 0
+    completed: [HABIT_MAX]bool
     app := CurrentApp()
     if app != null {
         for index: 0..app.habits.count - 1 {
+            habit := *app.habits.items[index]
+            linked := EntityHabitLinkedEntries(app, cast(s32)index, today)
+            completed[index] = HabitEffectiveDayComplete(habit, today, linked)
             if habit_scheduled_day(*app.habits.items[index], today) != 0 {
                 due += 1
-                if habit_completed_day(*app.habits.items[index], today) != 0 { done += 1 }
+                if completed[index] { done += 1 }
             }
         }
     }
@@ -261,6 +270,26 @@ InbeEntityActivity :: () -> string {
         BuilderPrint(*out, ",\"value\":")
         Entity.EntityQuote(*out, TextUntilNul(values[index][:]))
         BuilderPrint(*out, ",\"icon\":\"%\"}", icons[index])
+    }
+    BuilderPrint(*out, "],\"items_title\":")
+    Entity.EntityQuote(*out, LocaleText("profile_completed_habits"))
+    BuilderPrint(*out, ",\"items\":[")
+    item_count: s32 = 0
+    if app != null {
+        for index: cast(s32)0..app.habits.count - 1 {
+            habit := *app.habits.items[index]
+            if !completed[index] {
+                continue
+            }
+            BuilderPrint(*out, "%{\"label\":", ifx item_count > 0 then "," else "")
+            Entity.EntityQuote(*out, AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE))
+            BuilderPrint(*out, ",\"shape\":")
+            Entity.EntityQuote(*out, HabitIconShape(habit.icon))
+            color := cast(s64)habit.color.r * 16777216 + cast(s64)habit.color.g * 65536 +
+            cast(s64)habit.color.b * 256 + 255
+            BuilderPrint(*out, ",\"color\":%}", color)
+            item_count += 1
+        }
     }
     BuilderPrint(*out, "]}")
     entity_snapshot = BuilderFinish(out)

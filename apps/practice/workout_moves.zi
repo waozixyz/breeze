@@ -1,4 +1,4 @@
-// How the 7-Minute Workout's figure moves: each exercise is a loop of key
+// How the workout figure moves: each exercise is a loop of key
 // poses, blended smoothly, and solved into the same skeleton the Tai Chi
 // figures use, so the flat Jade woman of tai_chi_flat.zi draws it.
 //
@@ -14,6 +14,9 @@
 #import, file "../../src/practices/tai_chi/tai_chi_rules.zi";
 
 WORKOUT_HEIGHT :: 1.65
+// The approach ends at the wall. Keep the sitting pose and its support in
+// the same world space so the figure can back up from the jumping area.
+WORKOUT_WALL_OFFSET :: -0.29
 
 // Where a hand goes. ARM aims the arm from the shoulder: `at` is how far it
 // is raised from hanging (degrees; negative swings it back), its turn from
@@ -188,6 +191,9 @@ WorkoutKeyOf :: (pose: WorkoutPose, hold_ms: s32, move_ms: s32) -> WorkoutKey {
 // --- The exercises ---------------------------------------------------------------
 
 WorkoutKeyCount :: (exercise: s32) -> s32 {
+    if WorkoutGentleExercise(exercise) {
+        return ifx exercise == WORKOUT_MINI_SQUATS || exercise == WORKOUT_HEEL_RAISES then 2 else 4
+    }
     if exercise == WORKOUT_WALL_SIT || exercise == WORKOUT_PLANK {
         return 1
     }
@@ -203,15 +209,18 @@ WorkoutKeyCount :: (exercise: s32) -> s32 {
 // Push-ups: hands under the shoulders, the body straight from heels to head.
 WorkoutPushUp :: (down: bool) -> WorkoutPose {
     pose := WorkoutStanding()
+    // The VRM's arms are shorter than the motion rig's. Keep both keyed
+    // shoulder heights within the avatar's reach of the planted wrists.
     if down {
-        WorkoutBody(*pose, 0.0, 0.245, 0.0, 0.0, 84.0, 0.0, 0.0, 0.0, -8.0)
+        WorkoutBody(*pose, 0.0, 0.215, 0.0, 0.0, 85.0, 0.0, 0.0, 0.0, -8.0)
     } else {
-        WorkoutBody(*pose, 0.0, 0.41, 0.0, 0.0, 71.0, 0.0, 0.0, 0.0, -12.0)
+        WorkoutBody(*pose, 0.0, 0.345, 0.0, 0.0, 74.0, 0.0, 0.0, 0.0, -12.0)
     }
     WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.2, 0.035, 0.43)
     WorkoutElbows(*pose, 0.55, -0.7, -0.35)
     WorkoutFlatHands(*pose, 1.0)
-    WorkoutFeet(*pose, 0.09, -0.955, 0.0, -75.0, 0.0)
+    // Keep the toes behind the hips so the knees stay clear of the floor.
+    WorkoutFeet(*pose, 0.09, -0.985, 0.0, -75.0, 0.0)
     return pose
 }
 
@@ -219,8 +228,8 @@ WorkoutPushUp :: (down: bool) -> WorkoutPose {
 // the ceiling: `side` is the hand she stays on.
 WorkoutRotation :: (side: s32) -> WorkoutPose {
     pose := WorkoutPushUp(false)
-    WorkoutBody(*pose, 0.0, 0.5, -0.02, 0.0, 74.0, 0.0, -90.0, 0.0, -6.0)
-    WorkoutHandAt(*pose, 0, WORKOUT_AT_WORLD, 0.07, 0.035, 0.43)
+    // Stack the supporting shoulder above the same palm as the body rolls.
+    WorkoutBody(*pose, 0.08, 0.464, -0.02, 0.0, 74.0, 0.0, -90.0, 0.0, -6.0)
     WorkoutHandAt(*pose, 1, WORKOUT_AT_ARM, 180.0, 90.0, 0.99)
     pose.hands[1].flat = 0.0
     WorkoutFoot(*pose, 0, 0.0, -0.98, 0.0, -20.0, 0.0)
@@ -287,7 +296,52 @@ WorkoutRolled :: (pose: WorkoutPose) -> WorkoutPose {
     return rolled
 }
 
+// The beginner circuit keeps the torso upright. Alternating moves pass
+// through a two-foot stance before transferring weight to the other foot.
+WorkoutGentleKeyframe :: (exercise: s32, index: s32) -> WorkoutKey {
+    pose := WorkoutStanding()
+    if exercise == WORKOUT_MINI_SQUATS {
+        WorkoutFeet(*pose, 0.13, 0.0, 10.0, 0.0, 0.0)
+        if index == 1 {
+            WorkoutBody(*pose, 0.0, 0.772, -0.061, 0.0, 14.0, 0.0, 0.0, 0.0, -9.0)
+            WorkoutHandsAt(*pose, WORKOUT_AT_ARM, 75.0, 8.0, 0.97)
+            WorkoutKnees(*pose, 0.2, 0.0, 1.0)
+        }
+        return WorkoutKeyOf(pose, 200, 1200)
+    }
+    if exercise == WORKOUT_HEEL_RAISES {
+        if index == 1 {
+            pose.pelvis.y = 0.927
+            pose.pelvis.z = 0.035
+            WorkoutFeet(*pose, 0.09, 0.0, 5.0, -18.0, 0.0)
+        }
+        return WorkoutKeyOf(pose, 250, 1050)
+    }
+    if exercise == WORKOUT_SIDE_REACHES { WorkoutFeet(*pose, 0.15, 0.0, 6.0, 0.0, 0.0) }
+    if index % 2 == 0 { return WorkoutKeyOf(pose, 60, 780) }
+    if exercise == WORKOUT_STEP_JACKS {
+        pose.pelvis.x = 0.063
+        WorkoutFoot(*pose, 0, 0.285, 0.0, 9.0, 0.0, 0.0)
+        WorkoutHandsAt(*pose, WORKOUT_AT_ARM, 72.0, 85.0, 0.97)
+    } else if exercise == WORKOUT_EASY_MARCH {
+        pose.pelvis.x = -0.057
+        WorkoutFoot(*pose, 0, 0.09, 0.092, 5.0, 2.0, 0.103)
+        WorkoutHandAt(*pose, 0, WORKOUT_AT_ARM, -14.0, 23.0, 0.94)
+        WorkoutHandAt(*pose, 1, WORKOUT_AT_ARM, 30.0, 16.0, 0.88)
+    } else if exercise == WORKOUT_SIDE_REACHES {
+        pose.bend = 8.0
+        WorkoutHandAt(*pose, 0, WORKOUT_AT_ARM, 83.0, 88.0, 0.99)
+    } else {
+        pose.pelvis.x = -0.058
+        pose.lean = 5.0
+        WorkoutFoot(*pose, 0, 0.1, -0.18, 5.0, -14.0, 0.0)
+        WorkoutHandsAt(*pose, WORKOUT_AT_ARM, 22.0, 22.0, 0.89)
+    }
+    return WorkoutKeyOf(ifx index == 1 then pose else WorkoutMirror(pose), 120, 780)
+}
+
 WorkoutKeyframe :: (exercise: s32, index: s32) -> WorkoutKey {
+    if WorkoutGentleExercise(exercise) { return WorkoutGentleKeyframe(exercise, index) }
     pose := WorkoutStanding()
     if exercise == WORKOUT_JUMPING_JACKS {
         if index == 0 {
@@ -302,10 +356,10 @@ WorkoutKeyframe :: (exercise: s32, index: s32) -> WorkoutKey {
         return WorkoutKeyOf(pose, 100, 600)
     }
     if exercise == WORKOUT_WALL_SIT {
-        WorkoutBody(*pose, 0.0, 0.52, -0.1, 0.0, 0.0, 0.0, 0.0, 0.0, -4.0)
-        WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.15, 0.565, 0.2)
+        WorkoutBody(*pose, 0.0, 0.52, WORKOUT_WALL_OFFSET - 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, -4.0)
+        WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.15, 0.565, WORKOUT_WALL_OFFSET + 0.2)
         WorkoutFlatHands(*pose, 1.0)
-        WorkoutFeet(*pose, 0.12, 0.29, 6.0, 0.0, 0.0)
+        WorkoutFeet(*pose, 0.12, WORKOUT_WALL_OFFSET + 0.29, 6.0, 0.0, 0.0)
         return WorkoutKeyOf(pose, 4000, 0)
     }
     if exercise == WORKOUT_PUSH_UPS {
@@ -446,7 +500,7 @@ WorkoutPropFor :: (exercise: s32) -> WorkoutProp {
         prop.bench_far = -0.74
     } else if exercise == WORKOUT_WALL_SIT {
         prop.wall = true
-        prop.wall_at = -0.225
+        prop.wall_at = WORKOUT_WALL_OFFSET - 0.225
     }
     return prop
 }
@@ -720,14 +774,112 @@ WorkoutPoseAt :: (exercise: s32, time_ms: s64, rig: *TaiChiRig) -> WorkoutPose {
     return WorkoutKeyframe(exercise, 0).pose
 }
 
-// The pose that waits during a rest: the next exercise's first one.
-WorkoutRestPose :: (exercise: s32, time_ms: s64, rig: *TaiChiRig) -> WorkoutPose {
-    if exercise == WORKOUT_SIDE_PLANK {
+WORKOUT_WALL_SHIFT_MS :: 450
+WORKOUT_WALL_STEP_MS :: 600
+WORKOUT_WALL_CONTACT_MS :: 2900
+WORKOUT_WALL_SIT_MS :: 4700
+WORKOUT_JACK_SETTLE_MS :: 250
+
+WorkoutJackLandingMs :: () -> s64 {
+    narrow := WorkoutKeyframe(WORKOUT_JUMPING_JACKS, 0)
+    wide := WorkoutKeyframe(WORKOUT_JUMPING_JACKS, 1)
+    period := cast(s64)(narrow.hold_ms + narrow.move_ms + wide.hold_ms + wide.move_ms)
+    return (period - cast(s64)WORKOUT_WORK_MS % period) % period
+}
+
+// Set the feet hip-width apart, shift weight onto the wall and slide down.
+WorkoutWallSetupKey :: (stood: *WorkoutPose, seated: *WorkoutPose, index: s32) -> WorkoutPose {
+    if index >= 5 { return seated.* }
+    pose := stood.*
+    if index == 0 { return pose }
+    pose.pelvis.x = -0.035
+    pose.pelvis.y = 0.86
+    if index == 1 { return pose }
+    pose.pelvis.x = 0.045
+    pose.feet[0] = seated.feet[0]
+    if index == 2 { return pose }
+    pose.pelvis = TaiChiV3(0.0, 0.845, -0.045)
+    pose.feet[1] = seated.feet[1]
+    if index == 4 {
+        pose.pelvis.y = 0.70
+        pose.pelvis.z = seated.pelvis.z
+    }
+    return pose
+}
+
+WorkoutWallSettle :: (stood: *WorkoutPose, seated: *WorkoutPose, time_ms: s64, rig: *TaiChiRig) -> WorkoutPose {
+    if time_ms < WORKOUT_WALL_SHIFT_MS {
+        shift := WorkoutWallSetupKey(stood, seated, 1)
+        u := cast(float64)time_ms / cast(float64)WORKOUT_WALL_SHIFT_MS
+        return WorkoutBlend(stood, *shift, TaiChiSmoothstep(u), rig)
+    }
+    steps_end := WORKOUT_WALL_SHIFT_MS + 2 * WORKOUT_WALL_STEP_MS
+    if time_ms < steps_end {
+        elapsed := time_ms - WORKOUT_WALL_SHIFT_MS
+        side := cast(s32)(elapsed / WORKOUT_WALL_STEP_MS)
+        u := cast(float64)(elapsed % WORKOUT_WALL_STEP_MS) / cast(float64)WORKOUT_WALL_STEP_MS
+        from := WorkoutWallSetupKey(stood, seated, side + 1)
+        to := WorkoutWallSetupKey(stood, seated, side + 2)
+        pose := WorkoutBlend(*from, *to, TaiChiSmoothstep(u), rig)
+        pose.feet[side].lift = 0.038 * Sin(u * TAI_CHI_PI) * Sin(u * TAI_CHI_PI)
+        return pose
+    }
+    supported := WorkoutWallSetupKey(stood, seated, 4)
+    if time_ms < WORKOUT_WALL_CONTACT_MS {
+        ready := WorkoutWallSetupKey(stood, seated, 3)
+        u := cast(float64)(time_ms - steps_end) / cast(float64)(WORKOUT_WALL_CONTACT_MS - steps_end)
+        return WorkoutBlend(*ready, *supported, TaiChiSmoothstep(u), rig)
+    }
+    if time_ms < WORKOUT_WALL_SIT_MS {
+        u := cast(float64)(time_ms - WORKOUT_WALL_CONTACT_MS) / cast(float64)(WORKOUT_WALL_SIT_MS - WORKOUT_WALL_CONTACT_MS)
+        return WorkoutBlend(*supported, seated, TaiChiSmoothstep(u), rig)
+    }
+    return seated.*
+}
+
+WorkoutWallApproach :: (time_ms: s64, rig: *TaiChiRig) -> WorkoutPose {
+    landing := WorkoutJackLandingMs()
+    if time_ms < landing {
+        // Ease the final landing into the weight shift without changing the
+        // jack animation before the rest or the moment both feet touch down.
+        settle_start := ifx landing > WORKOUT_JACK_SETTLE_MS then landing - WORKOUT_JACK_SETTLE_MS else 0
+        if time_ms >= settle_start {
+            closing := WorkoutKeyframe(WORKOUT_JUMPING_JACKS, 1)
+            landed := WorkoutKeyframe(WORKOUT_JUMPING_JACKS, 0)
+            settle_duration := cast(float64)(landing - settle_start)
+            u := cast(float64)(time_ms - settle_start) / settle_duration
+            remaining := settle_duration * (1.0 - u - u * u * (1.0 - u))
+            progress := 1.0 - remaining / cast(float64)closing.move_ms
+            pose := WorkoutBlend(*closing.pose, *landed.pose, TaiChiSmoothstep(progress), rig)
+            WorkoutLift(*pose, WorkoutHop(WORKOUT_JUMPING_JACKS) * Sin(progress * TAI_CHI_PI))
+            return pose
+        }
+        return WorkoutPoseAt(WORKOUT_JUMPING_JACKS, cast(s64)WORKOUT_WORK_MS + time_ms, rig)
+    }
+    stood := WorkoutKeyframe(WORKOUT_JUMPING_JACKS, 0).pose
+    seated := WorkoutKeyframe(WORKOUT_WALL_SIT, 0).pose
+    elapsed := time_ms - landing
+    settled := WorkoutWallSettle(*stood, *seated, elapsed, rig)
+    if elapsed < WORKOUT_WALL_SIT_MS {
+        return settled
+    }
+    // Share the breathing phase across the rest/work seam.
+    breathing := seated
+    WorkoutBreathe(*breathing, time_ms - WORKOUT_REST_MS)
+    u := TaiChiSmoothRamp(cast(float64)elapsed, cast(float64)WORKOUT_WALL_SIT_MS, cast(float64)(WORKOUT_WALL_SIT_MS + 500))
+    return WorkoutBlend(*seated, *breathing, u, rig)
+}
+
+WorkoutRestPose :: (step: WorkoutStep, time_ms: s64, rig: *TaiChiRig) -> WorkoutPose {
+    if step.phase == WORKOUT_PHASE_REST && step.exercise == WORKOUT_WALL_SIT {
+        return WorkoutWallApproach(cast(s64)step.elapsed_ms, rig)
+    }
+    if step.exercise == WORKOUT_SIDE_PLANK {
         pose := WorkoutSidePlank(false)
         WorkoutBreathe(*pose, time_ms)
         return pose
     }
-    pose := WorkoutKeyframe(exercise, 0).pose
+    pose := WorkoutKeyframe(step.exercise, 0).pose
     WorkoutBreathe(*pose, time_ms)
     return pose
 }
@@ -824,7 +976,11 @@ WorkoutFramingFor :: (exercise: s32) -> TaiChiFraming {
     if index < 0 || index >= WORKOUT_EXERCISE_COUNT {
         index = 0
     }
-    framing.camera.yaw = yaws[index] * TAI_CHI_DEGREE
+    yaw := yaws[index]
+    if WorkoutGentleExercise(exercise) {
+        yaw = ifx exercise == WORKOUT_SIDE_REACHES || exercise == WORKOUT_STEP_JACKS then -15.0 else -44.0
+    }
+    framing.camera.yaw = yaw * TAI_CHI_DEGREE
     framing.camera.tilt = 7.0 * TAI_CHI_DEGREE
     framing.camera.center = TaiChiV3(0.0, 0.0, 0.0)
     framing.view_height = 2.35

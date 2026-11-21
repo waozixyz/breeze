@@ -1,0 +1,358 @@
+#if (#defined(DESKTOP_HOST) && !#defined(_WIN32)) || #defined(ANDROID_BUILD) || #defined(KRYON_WEBGL2) {
+    #import "kryon/bitmap_image"
+    #import "kryon/drawing_props"
+    #import "kryon/geometry"
+    #import "kryon/scene"
+    #import "kryon/scene_gpu"
+    #import "kryon/session"
+    #import, file "../app/assets.zi";
+    #import, file "practice_banner_motion.zi";
+    #import, file "practice_banner_regions.zi";
+    #import, file "practice_banner_shader.zi";
+    BannerImage :: #import "kryon/image";
+
+    PracticeBannerRenderer :: struct {
+        banner: PracticeBannerShader
+        gpu: SceneGpuContext
+        clouds: [PRACTICE_CLOUD_BYTES]u8
+        mask: [PRACTICE_BANNER_MASK_WIDTH * PRACTICE_BANNER_MASK_HEIGHT * 4]u8
+    }
+
+    #if OS != .WEB {
+        #import "std/image"
+        #import "std/thread_linux"
+        #import "std/vec"
+        BannerMutex :: #import "std/mutex_linux";
+
+        banner_c :: #system_library "c";
+        BannerConditionInit :: (condition: *void, attributes: *void) -> s32 #foreign banner_c "pthread_cond_init";
+        BannerConditionWait :: (condition: *void, mutex: *void) -> s32 #foreign banner_c "pthread_cond_wait";
+        BannerConditionSignal :: (condition: *void) -> s32 #foreign banner_c "pthread_cond_signal";
+        BannerConditionDestroy :: (condition: *void) -> s32 #foreign banner_c "pthread_cond_destroy";
+
+        PracticeBannerPhase :: enum { Idle; Pending; Drawing; Ready; Failed }
+
+        PracticeBannerRequest :: struct {
+            revision: u64
+            tick: s64
+            regions: PracticeBannerRegions
+        }
+
+        PracticeBannerWork :: struct {
+            thread: Thread
+            mutex: BannerMutex.Mutex
+            condition: [8]u64
+            stop: bool
+            phase: PracticeBannerPhase
+            request: PracticeBannerRequest
+            renderer: PracticeBannerRenderer
+            pixels: Image
+            steam: Image
+            steam_ready: bool
+        }
+    }
+
+    PracticeBannerDrawState :: struct {
+        motion: PracticeBannerMotion
+        texture: Texture2D
+        steam: Texture2D
+        session: Session
+        asset: string
+        asset_generation: u64
+        revision: u64
+        regions: PracticeBannerRegions
+        tick: s64
+        asset_ready: bool
+        unavailable: bool
+        wants_frames: bool
+        #if OS == .WEB {
+            renderer: PracticeBannerRenderer
+            steam_gpu: SceneGpuContext
+        } else {
+            work: PracticeBannerWork
+        }
+    }
+
+    practice_banner_draw: PracticeBannerDrawState;
+
+    PracticeBannerDraw :: (session: Session, key: u64, asset: string, bounds: Rectangle,
+        now: float64, visible: bool, reduced_motion: bool, full_sky: bool) -> Texture2D {
+        state := *practice_banner_draw
+        tick := PracticeBannerTick(*state.motion, asset, now, visible, reduced_motion && !full_sky)
+        if tick <= 0 {
+            return .{}
+        }
+        if reduced_motion { tick = 1 }
+        if state.session.slot != session.slot || state.session.epoch != session.epoch {
+            #if OS != .WEB {
+                BitmapImageRelease(state.session, state.texture)
+                BitmapImageRelease(state.session, state.steam)
+            }
+            state.session = session
+            state.texture = .{}
+            state.steam = .{}
+            state.tick = 0
+            if state.unavailable {
+                // Retry graphics initialization on a new UI session.
+                #if OS == .WEB {
+                    SceneGpuRelease(*state.renderer.gpu)
+                    SceneGpuRelease(*state.steam_gpu)
+                } else {
+                    practice_banner_stop(*state.work)
+                    practice_banner_draw.work = PracticeBannerWork.{}
+                }
+                state.unavailable = false
+                state.asset = ""
+            }
+        }
+        if state.unavailable {
+            return .{}
+        }
+        generation := AssetGeneration()
+        if state.asset != asset || state.regions.full_sky != full_sky ||
+            (!state.asset_ready && state.asset_generation != generation) {
+            state.asset = asset
+            state.asset_generation = generation
+            state.revision += 1
+            state.tick = 0
+            state.regions = PracticeBannerRegionsFor(asset)
+            state.regions.full_sky = full_sky
+            state.asset_ready = full_sky || (state.regions.sky[0].radius_x > 0.0 && AssetRead(asset).found)
+            #if OS == .WEB {
+                if !state.renderer.banner.program.ready {
+                    practice_banner_load_clouds(*state.renderer)
+                }
+                if state.asset_ready && !practice_banner_configure(*state.renderer, state.regions) {
+                    state.unavailable = true
+                    return .{}
+                }
+            }
+        }
+        if !state.asset_ready {
+            return .{}
+        }
+        foreground_steam := full_sky && state.regions.steam_opacity > 0.0
+        #if OS == .WEB {
+            if tick != state.tick {
+                renderer := *state.renderer
+                PracticeBannerShaderPass(*renderer.banner, state.regions, false)
+                PracticeBannerShaderPhase(*renderer.banner, tick)
+                frame, texture := SceneGpuRenderCanvas(*renderer.gpu, *renderer.banner.scene,
+                    renderer.banner.camera, PRACTICE_BANNER_WIDTH, PRACTICE_BANNER_HEIGHT)
+                state.unavailable = !frame.ok || !frame.accelerated || texture.id == 0
+                state.texture = texture
+                if !state.unavailable && foreground_steam {
+                    PracticeBannerShaderPass(*renderer.banner, state.regions, true)
+                    steam_frame, steam := SceneGpuRenderCanvas(*state.steam_gpu, *renderer.banner.scene,
+                        renderer.banner.camera, PRACTICE_BANNER_WIDTH, PRACTICE_BANNER_HEIGHT)
+                    state.steam = ifx steam_frame.ok then steam else Texture2D.{}
+                }
+                state.tick = tick
+            }
+        } else {
+            practice_banner_poll(state, tick)
+        }
+        if !state.unavailable && state.tick > 0 {
+            BannerImage.Draw(session, BannerImage.Props.{.key = key, .bounds = bounds,
+                .texture = state.texture, .fit = .ImageFitCover, .smooth = true})
+        }
+        state.wants_frames = !state.unavailable && (!reduced_motion || state.tick != tick)
+        return ifx foreground_steam && !state.unavailable && state.tick > 0 then state.steam else Texture2D.{}
+    }
+
+    // Frame pacing consumes the request on the next frame. Navigating away
+    // or suppressing motion stops requests when the banner stops drawing.
+    PracticeBannerWantsFrames :: () -> bool {
+        wants_frames := practice_banner_draw.wants_frames
+        practice_banner_draw.wants_frames = false
+        return wants_frames
+    }
+
+    PracticeBannerDrawRelease :: () {
+        state := *practice_banner_draw
+        #if OS == .WEB {
+            SceneGpuRelease(*state.renderer.gpu)
+            SceneGpuRelease(*state.steam_gpu)
+            SceneFree(*state.renderer.banner.scene)
+        } else {
+            practice_banner_stop(*state.work)
+            BitmapImageRelease(state.session, state.texture)
+            BitmapImageRelease(state.session, state.steam)
+        }
+        practice_banner_draw = PracticeBannerDrawState.{}
+    }
+
+    #scope_file
+    practice_banner_load_clouds :: (renderer: *PracticeBannerRenderer) {
+        source := AssetRead("assets/app/practice-clouds.rg")
+        if source.found && source.data.count == PRACTICE_CLOUD_BYTES {
+            for index: 0..PRACTICE_CLOUD_BYTES - 1 {
+                renderer.clouds[index] = source.data[index]
+            }
+        }
+    }
+
+    #scope_file
+    practice_banner_configure :: (renderer: *PracticeBannerRenderer, regions: PracticeBannerRegions) -> bool {
+        if !SceneGpuProbe(*renderer.gpu).available ||
+        (!renderer.banner.program.ready && !PracticeBannerShaderInit(*renderer.banner, renderer.clouds[:])) {
+            return false
+        }
+        PracticeBannerMask(regions, renderer.mask[:])
+        PracticeBannerShaderLook(*renderer.banner, regions, renderer.mask[:])
+        return true
+    }
+
+    #if OS != .WEB {
+        #scope_file
+        practice_banner_upload :: (session: Session, texture: *Texture2D, image: *Image) -> bool {
+            if texture.id == 0 {
+                texture.* = BitmapImageCreate(session, image.width, image.height, image.pixels[:])
+                return texture.id != 0
+            }
+            return BitmapImageUpdate(session, texture.*, image.pixels[:])
+        }
+
+        #scope_file
+        practice_banner_poll :: (state: *PracticeBannerDrawState, tick: s64) {
+            work := *state.work
+            if !ThreadRunning(*work.thread) && !practice_banner_start(work) {
+                state.unavailable = true
+                return
+            }
+            unused BannerMutex.Lock(*work.mutex)
+            phase := work.phase
+            result := work.request
+            if phase == .Ready {
+                work.phase = .Idle
+            }
+            unused BannerMutex.Unlock(*work.mutex)
+            if phase == .Failed {
+                state.unavailable = true
+                return
+            }
+            // Until a new request is sent, the worker is idle and the pixels
+            // from a completed frame stay valid for Kryon's texture upload.
+            if phase == .Ready && result.revision == state.revision && result.tick <= tick {
+                state.unavailable = !practice_banner_upload(state.session, *state.texture, *work.pixels)
+                if result.regions.full_sky && result.regions.steam_opacity > 0.0 &&
+                    (!work.steam_ready || !practice_banner_upload(state.session, *state.steam, *work.steam)) {
+                    BitmapImageRelease(state.session, state.steam)
+                    state.steam = .{}
+                }
+                state.tick = result.tick
+            }
+            if !state.unavailable && state.tick != tick && (phase == .Idle || phase == .Ready) {
+                unused BannerMutex.Lock(*work.mutex)
+                work.request = .{state.revision, tick, state.regions}
+                work.phase = .Pending
+                unused BannerConditionSignal(cast(*void)*work.condition[0])
+                unused BannerMutex.Unlock(*work.mutex)
+            }
+        }
+
+        #scope_file
+        practice_banner_start :: (work: *PracticeBannerWork) -> bool {
+            practice_banner_load_clouds(*work.renderer)
+            if !BannerMutex.Open(*work.mutex) {
+                return false
+            }
+            condition := cast(*void)*work.condition[0]
+            if BannerConditionInit(condition, null) != 0 {
+                unused BannerMutex.Close(*work.mutex)
+                return false
+            }
+            procedure: ThreadProcedure = practice_banner_worker
+            if ThreadStart(*work.thread, procedure, cast(*void)work) {
+                return true
+            }
+            unused BannerConditionDestroy(condition)
+            unused BannerMutex.Close(*work.mutex)
+            return false
+        }
+
+        #scope_file
+        practice_banner_stop :: (work: *PracticeBannerWork) {
+            if !ThreadRunning(*work.thread) {
+                return
+            }
+            condition := cast(*void)*work.condition[0]
+            unused BannerMutex.Lock(*work.mutex)
+            work.stop = true
+            unused BannerConditionSignal(condition)
+            unused BannerMutex.Unlock(*work.mutex)
+            ThreadWait(*work.thread)
+            unused BannerConditionDestroy(condition)
+            unused BannerMutex.Close(*work.mutex)
+        }
+
+        #scope_file
+        practice_banner_worker :: (argument: *void) {
+            work := cast(*PracticeBannerWork)argument
+            renderer := *work.renderer
+            condition := cast(*void)*work.condition[0]
+            work.pixels.width = PRACTICE_BANNER_WIDTH
+            work.pixels.height = PRACTICE_BANNER_HEIGHT
+            work.steam.width = PRACTICE_BANNER_WIDTH
+            work.steam.height = PRACTICE_BANNER_HEIGHT
+            revision: u64
+            // Keep the EGL context on this thread through render and release.
+            // Compilation and readback cannot block tab navigation.
+            unused BannerMutex.Lock(*work.mutex)
+            while !work.stop {
+                while work.phase != .Pending && !work.stop {
+                    unused BannerConditionWait(condition, BannerMutex.Address(*work.mutex))
+                }
+                if work.stop {
+                    break
+                }
+                request := work.request
+                work.phase = .Drawing
+                unused BannerMutex.Unlock(*work.mutex)
+                ready := request.revision == revision || practice_banner_configure(renderer, request.regions)
+                work.steam_ready = false
+                if ready {
+                    revision = request.revision
+                    PracticeBannerShaderPass(*renderer.banner, request.regions, false)
+                    PracticeBannerShaderPhase(*renderer.banner, request.tick)
+                    frame := SceneGpuRender(*renderer.gpu, *renderer.banner.scene,
+                        renderer.banner.camera, *work.pixels)
+                    ready = frame.ok && frame.accelerated
+                    if ready && request.regions.full_sky && request.regions.steam_opacity > 0.0 {
+                        PracticeBannerShaderPass(*renderer.banner, request.regions, true)
+                        steam_frame := SceneGpuRender(*renderer.gpu, *renderer.banner.scene,
+                            renderer.banner.camera, *work.steam)
+                        work.steam_ready = steam_frame.ok && steam_frame.accelerated
+                    }
+                }
+                unused BannerMutex.Lock(*work.mutex)
+                work.phase = ifx ready then .Ready else .Failed
+            }
+            unused BannerMutex.Unlock(*work.mutex)
+            SceneGpuRelease(*renderer.gpu)
+            SceneFree(*renderer.banner.scene)
+            VecFree(work.pixels.pixels)
+            VecFree(work.steam.pixels)
+        }
+    }
+} else {
+    #import "kryon/drawing_props"
+    #import "kryon/geometry"
+    #import "kryon/session"
+
+    PracticeBannerDrawRelease :: () {}
+    PracticeBannerWantsFrames :: () -> bool { return false }
+
+    PracticeBannerDraw :: (session: Session, key: u64, asset: string, bounds: Rectangle,
+        now: float64, visible: bool, reduced_motion: bool, full_sky: bool) -> Texture2D {
+        unused session
+        unused key
+        unused asset
+        unused bounds
+        unused now
+        unused visible
+        unused reduced_motion
+        unused full_sky
+        return .{}
+    }
+}

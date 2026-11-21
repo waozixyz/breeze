@@ -214,8 +214,11 @@ class ExactPracticeUploadTest(unittest.TestCase):
 
         def transport(command, input, check):
             self.assertEqual(command[:3], ['ssh', '-o', 'BatchMode=yes'])
-            self.assertEqual(command[3], uploader.TARGET)
-            self.assertIn('--keep-old-files', command[4])
+            self.assertEqual(command[-2], uploader.TARGET)
+            self.assertIn('--keep-old-files', command[-1])
+            if '--signed-metadata' in arguments:
+                self.assertIn('StrictHostKeyChecking=yes', command)
+                self.assertLess(command[-1].index('test-store-match'), command[-1].index('tar -x'))
             self.assertTrue(check)
             names = []
             with tarfile.open(fileobj=BytesIO(input)) as tar:
@@ -236,7 +239,7 @@ class ExactPracticeUploadTest(unittest.TestCase):
                         self.assertEqual(data, b'inbe.practice.taichi')
             self.assertFalse(any('latest' in name for name in names))
             if '--pack' in arguments:
-                self.assertEqual(set(command[4].split(' && chmod 600 ', 1)[1].split()), set(names))
+                self.assertEqual(set(command[-1].split(' && chmod 600 ', 1)[1].split()), set(names))
             self.transports.append(names)
 
         original_selected = uploader.stage_selected_packs
@@ -258,6 +261,7 @@ class ExactPracticeUploadTest(unittest.TestCase):
               patch.object(uploader.tempfile, 'TemporaryDirectory',
                   side_effect=temporary_directory),
               patch.object(uploader.urllib.request, 'urlopen', side_effect=open_url),
+              patch.object(uploader, 'archive_destination_guard', return_value='test-store-match'),
               patch.object(uploader.subprocess, 'run', side_effect=transport),
               patch.object(sys, 'argv', ['upload-practice-packs.py', *arguments]),
               redirect_stdout(StringIO()), redirect_stderr(StringIO())):
@@ -268,6 +272,40 @@ class ExactPracticeUploadTest(unittest.TestCase):
                 self.legacy_stages = legacy_stage.call_count
         return result
 
+
+    def archive_for(self, identifier):
+        rows = [row for row in self.catalog if uploader.pack_identifier(row) == identifier]
+        store = self.root / 'signed-archive'
+        with (patch.object(uploader, 'ROOT', self.root), patch.object(uploader, 'KEY', self.key_file),
+              patch.object(uploader, 'KEY_ID', 'test')):
+            uploader.stage_selected_packs(store, rows)
+        return store / 'inbe.practices'
+
+    def test_archived_signature_restores_exact_public_pack_without_private_key(self):
+        archive = self.archive_for('guide.pt')
+        self.key_file.unlink()
+        self.assertEqual(self.run_upload(['--signed-metadata', str(archive), '--pack', 'guide.pt'],
+                                        {'guide.pt'}), 0)
+        self.assertEqual((self.exact_stages, self.legacy_stages), (0, 0))
+        self.assertEqual(len(self.transports), 1)
+        self.assertEqual([method for method, _ in self.requests], ['HEAD', 'GET'])
+
+    def test_invalid_archived_signature_never_reaches_transport(self):
+        archive = self.archive_for('guide.pt')
+        descriptor = next(archive.glob('*.release-v2.json'))
+        value = json.loads(descriptor.read_bytes())
+        value['signature'] = '00' * 64
+        descriptor.write_text(json.dumps(value))
+        with self.assertRaises(ValueError):
+            self.run_upload(['--signed-metadata', str(archive), '--pack', 'guide.pt'], {'guide.pt'})
+        self.assertEqual((self.requests, self.transports), ([], []))
+
+    def test_archived_restore_refuses_a_gated_pack(self):
+        archive = self.archive_for('taichi.en.male')
+        with self.assertRaisesRegex(ValueError, 'requires a public pack'):
+            self.run_upload(['--signed-metadata', str(archive), '--pack', 'taichi.en.male'],
+                            {'taichi.en.male'})
+        self.assertEqual((self.requests, self.transports), ([], []))
 
     def test_exact_language_pack_excludes_all_other_content(self):
         self.assertEqual(self.run_upload(['--pack', 'astral_projection.pt'], {'astral_projection.pt'}), 0)

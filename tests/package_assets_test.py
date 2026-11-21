@@ -13,10 +13,12 @@ from practice_content import NAMES, bundle_assets
 from practice_media import media_path, packaged_path
 from tai_chi_preview import preview_course
 
+EMBEDDED_PACKAGE_LIMIT = 128 * 1024 * 1024
+
 def assets(data):
     return bundle_assets(data)
 
-root = bundle_assets((ROOT / 'build/inbe.zx').read_bytes(), maximum=128 * 1024 * 1024)
+root = bundle_assets((ROOT / 'build/inbe.zx').read_bytes(), maximum=EMBEDDED_PACKAGE_LIMIT)
 for name in ('apps', 'diary', 'lists', 'habits', 'practices', 'leaderboard'):
     path = 'assets/apps/icons/' + name + '.png'
     assert root[path] == (ROOT / path).read_bytes(), f'missing or stale launcher icon: {name}'
@@ -32,7 +34,9 @@ assert not any(name.startswith('assets/apps/bundled/photos') or name == 'assets/
 assert set(name for name in root if name.startswith('cells/')) == {
     'cells/lumi.zx', 'cells/habits.zx', 'cells/practices.zx',
     'cells/lists.zx', 'cells/diary.zx', 'cells/leaderboard.zx'}
-practices = assets(root['cells/practices.zx'])
+# This built-in app includes offline course voices. Individual download packs
+# below still use the resource parser's separate, smaller size limit.
+practices = bundle_assets(root['cells/practices.zx'], maximum=EMBEDDED_PACKAGE_LIMIT)
 assert not any(name.startswith('assets/practices/ui/') for name in practices), 'unused practice tab art'
 assert root['cells/practices.zx'] == (ROOT / 'build/apps/practices.zx').read_bytes(), 'stale embedded Practices'
 preview_prefix = 'assets/practices/taichi-preview/'
@@ -96,7 +100,7 @@ for name in root:
 assert not any(name.endswith('/banner.png') for name in practices)
 # Practice pictures ship only in their packs, apart from every practice's
 # banners: Practice's tabs show each practice before it is downloaded.
-banner = re.compile(r'assets/practices/[a-z_]+/banner-(?:light|dark)\.webp')
+banner = re.compile(r'assets/practices/[a-z_]+/banner-(?:light|dark|(?:short-)?(?:landscape|character))\.webp')
 assert not any(name.endswith(('.png', '.webp')) and name != preview_outline and not banner.fullmatch(name)
                for name in practices), \
     [name for name in practices if name.endswith(('.png', '.webp')) and name != preview_outline and not banner.fullmatch(name)]
@@ -104,15 +108,36 @@ for name in NAMES:
     for theme in ('light', 'dark'):
         path = f'assets/practices/{name}/banner-{theme}.webp'
         assert practices[path] == media_path(path).read_bytes(), path
+for name, prefix in [(name, 'banner') for name in NAMES] + [('workout', 'banner-short')]:
+    pair = [f'assets/practices/{name}/{prefix}-{layer}.webp' for layer in ('landscape', 'character')]
+    if any(media_path(path).is_file() for path in pair):
+        for path in pair:
+            assert practices[path] == media_path(path).read_bytes(), path
+for character in ('woman', 'man'):
+    path = f'assets/practices/shared/figure/{character}.vrm'
+    assert practices[path] == media_path(path).read_bytes(), f'missing or stale shared figure: {path}'
 # The small practices ship installed with Practices, each its pack's exact
 # bytes; Sun Salutation and Tai Chi download.
 for name in ('whm', 'meditation', 'patterns', 'astral_projection', 'workout'):
     pack = next(pack for pack in catalog['packs'] if pack['practice'] == name and not pack['language'])
     shipped = practices['assets/practices/default/' + name + '.zx']
     assert len(shipped) == pack['size'] and sha256(shipped).hexdigest() == pack['sha256'], name
-assert {name for name in practices if name.startswith('assets/practices/default/')} == {
-    'assets/practices/default/' + name + '.zx'
-    for name in ('whm', 'meditation', 'patterns', 'astral_projection', 'workout')}
+default_assets = {'assets/practices/default/' + name + '.zx'
+                  for name in ('whm', 'meditation', 'patterns', 'astral_projection', 'workout')}
+sun_voices = [pack for pack in catalog['packs']
+              if pack['practice'] == 'sunsalutation' and pack['language']]
+assert any(pack['language'] == 'en' and not pack.get('voice') for pack in sun_voices)
+assert any(pack['language'] == 'en' and pack.get('voice') == 'male' for pack in sun_voices)
+for pack in sun_voices:
+    assert not pack.get('product'), pack
+    filename = 'sunsalutation.' + pack['language']
+    if pack.get('voice'):
+        filename += '.' + pack['voice']
+    path = 'assets/practices/default/' + filename + '.zx'
+    audio = practices[path]
+    assert len(audio) == pack['size'] and sha256(audio).hexdigest() == pack['sha256'], filename
+    default_assets.add(path)
+assert {name for name in practices if name.startswith('assets/practices/default/')} == default_assets
 assert not any(name.startswith('assets/practices/shipped/') for name in practices)
 paths, sources, unique_animation = inventory()
 packaged_animation = {name for name in content if '/characters/' in name}
@@ -122,7 +147,9 @@ for index, original in enumerate(paths):
     assert content[stored] == original.read_bytes(), f'animation frame changed: {original}'
 assert not any('/characters/' in name or
                (name.endswith('/course.zip') and name != preview_prefix + 'course.zip') for name in practices)
-native = (ROOT / 'build/obj/inbe_embedded_assets.c').read_text()
+with (ROOT / 'build/obj/inbe_embedded_assets.c').open('rb') as native_source:
+    native_source.seek(-4096, 2)
+    native = native_source.read().decode('ascii')
 entries = set(re.findall(r'\{(?:\(uint8_t \*\))?"([^"\n]+)"', native))
 assert entries == {'assets/app/icon.webp', 'apps/publishers.json', 'inbe.zx', 'apps.zx'}, entries
 print(f'Package assets: {len(root)} root resources, {len(practices)} Practice resources; exact image/font/locale ownership passed')

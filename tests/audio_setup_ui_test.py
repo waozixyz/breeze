@@ -113,9 +113,9 @@ for name, width, height in (("desktop", 900, 720), ("mobile", 390, 844)):
             saved(profile, "voice_narration_enabled", 1)
             assert settings(profile).get("language", "") == ""
             driver.wait(label=LAUNCHER_GUIDE)
-            # Request every available English voice. The Astral Projection
-            # recording in the practice catalog is Portuguese.
-            expected = {"guide/en", "sunsalutation/en", "workout/en"}
+            # Sun Salutation's English recording is bundled. The optional
+            # English guide and Workout voices still need a download.
+            expected = {"guide/en", "workout/en"}
             deadline = time.monotonic() + 60
             while not downloads(log) >= expected and time.monotonic() < deadline:
                 time.sleep(0.2)

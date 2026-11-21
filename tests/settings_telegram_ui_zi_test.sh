@@ -8,7 +8,8 @@ work=$(mktemp -d "${TMPDIR:-/tmp}/inbe-settings-telegram-ui.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work/c" "$work/storage"
 cd "$root"
-"$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c --no-main \
+python3 scripts/stage-practice-figure.py
+"$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} --module-path "$root/build/practice-figure" --target=c --no-main \
     --define PLATFORM_DESKTOP --root "$root/src" \
     -o "$work/c" "$root/src/screens/settings/settings_telegram.zi"
 "$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c --no-main \

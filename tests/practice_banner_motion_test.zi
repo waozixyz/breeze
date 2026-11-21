@@ -1,0 +1,78 @@
+#import, file "../src/screens/practice_banner_motion.zi";
+#import, file "../src/screens/practice_banner_regions.zi";
+#import, file "../src/screens/practice_banner_shader.zi";
+#import "kryon/scene"
+#import "kryon/shader"
+
+banner: PracticeBannerShader;
+mask: [PRACTICE_BANNER_MASK_WIDTH * PRACTICE_BANNER_MASK_HEIGHT * 4]u8;
+
+SteamChanges :: (asset: string) -> s32 {
+    regions := PracticeBannerRegionsFor(asset)
+    PracticeBannerMask(regions, mask[:])
+    PracticeBannerShaderLook(*banner, regions, mask[:])
+    PracticeBannerShaderPhase(*banner, 1)
+    first_uniforms := banner.steam_uniforms
+    PracticeBannerShaderPhase(*banner, 1 + 9 * PRACTICE_BANNER_HZ)
+    changed: s32
+    for row: 0..23 {
+        for column: 0..31 {
+            input := ShaderInputs.{.uv = .{(cast(float64)column + 0.5) / 32.0,
+                (cast(float64)row + 0.5) / 24.0, 0, 0}}
+            first := ShaderRun(*banner.steam_program, input, first_uniforms[:], banner.samplers[1:2])
+            last := ShaderRun(*banner.steam_program, input, banner.steam_uniforms[:], banner.samplers[1:2])
+            difference := first.color.w - last.color.w
+            if first.discard != last.discard || difference < -0.01 || difference > 0.01 {
+                changed += 1
+            }
+        }
+    }
+    return changed
+}
+
+main :: () -> s32 {
+    motion: PracticeBannerMotion
+    asset := "banner-light.webp"
+    for sample: 0..1200 {
+        now := cast(float64)sample / 60.0
+        tick := PracticeBannerTick(*motion, asset, now, true, false)
+        if tick != 1 + sample / 2 {
+            return 1
+        }
+    }
+    asset = "banner-dark.webp"
+    if PracticeBannerTick(*motion, asset, 22.0, true, false) != 1 || motion.started != 22.0 {
+        return 2
+    }
+    if PracticeBannerTick(*motion, asset, 22.25, true, false) != 8 ||
+    PracticeBannerTick(*motion, asset, 22.26, true, false) != 8 {
+        return 3
+    }
+    if PracticeBannerTick(*motion, asset, 22.3, true, true) != 0 {
+        return 4
+    }
+    if PracticeBannerTick(*motion, asset, 22.4, true, false) != 8 {
+        return 5
+    }
+    if PracticeBannerTick(*motion, asset, 22.5, false, false) != 0 {
+        return 6
+    }
+    if PracticeBannerTick(*motion, asset, 24.0, true, false) != 8 ||
+       PracticeBannerTick(*motion, asset, 24.2, true, false) != 14 ||
+       PracticeBannerTick(*motion, asset, 28.0, true, false) != 14 ||
+       PracticeBannerTick(*motion, asset, 10.0, true, false) != 14 ||
+       PracticeBannerTick(*motion, asset, 10.1, true, false) != 17 {
+        return 7
+    }
+    clear_sky: []u8
+    if !PracticeBannerShaderInit(*banner, clear_sky) {
+        return 8
+    }
+    defer SceneFree(*banner.scene)
+    if SteamChanges("assets/practices/whm/banner-light.webp") < 10 ||
+       SteamChanges("assets/practices/whm/banner-dark.webp") < 10 ||
+       SteamChanges("assets/practices/sunsalutation/banner-light.webp") != 0 {
+        return 9
+    }
+    return 0
+}

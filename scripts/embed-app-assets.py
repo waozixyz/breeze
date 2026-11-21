@@ -23,13 +23,15 @@ MIME_TYPES = {
 }
 
 
-def emit(output: Path, files: list[Path], root: Path) -> None:
+def emit(output: Path, files: list[Path], root: Path, apps_controller: Path | None = None) -> None:
+    if apps_controller is not None:
+        files = [*files, apps_controller]
     entries = {}
     for file in files:
         resolved = file.resolve(strict=True)
         # Keep build/packages/<name> links unresolved so package assets get
         # stable embedded names regardless of the package cache location.
-        if file.name == "apps.zx":
+        if file == apps_controller or file.name == "apps.zx":
             path = "apps.zx"
         else:
             path = Path(os.path.abspath(file)).relative_to(root).as_posix()
@@ -88,9 +90,10 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("output", type=Path)
     parser.add_argument("files", nargs="*", type=Path)
+    parser.add_argument("--apps-controller", type=Path, help="Embed the reviewed controller at apps.zx")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
-    emit(args.output, args.files, root)
+    emit(args.output, args.files, root, args.apps_controller)
 
 
 if __name__ == "__main__":

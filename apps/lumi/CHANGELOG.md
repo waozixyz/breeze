@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Answer simple conversation locally without spending AI tokens; notify about replies you have not seen.
+
 - Return Lumi's answer to the private Telegram message that requested it.
 
 - Send private developer turns from the owner's Android debug build.

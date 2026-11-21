@@ -2,13 +2,9 @@
 
 ## [Unreleased]
 
-- Retrocesso, edição e restauração corrigidos. Fotos e Rádio mais acessíveis. Compre Dew com estrelas do Telegram.
-- Inicie práticas sem resíduos, alterne e retome sessões. Veja downloads e use picture-in-picture no Android.
-- Os timers de pausa reiniciam após uma ausência. Timers e moedas seguem o tema. Resgate moedas diárias em Hábitos.
-
-### Aplicativo web
-
-- O aplicativo abre no navegador do computador em tamanho normal e mantém o ajuste de aparência.
+- Retrocesso, edição e restauração corrigidos. Fotos/Rádio. Dew via estrelas Telegram. Lumi responde e avisa do não lido.
+- Inicie, alterne, retome. Avanço astral. Treino 4 min leve e próprio. Status/repetir download. Correções PiP/Início.
+- Timers zeram ao voltar. Timers/moedas do tema. Moedas diárias, links ao Diário, gráficos, totais e ícones da Atividade.
 
 ## [2.1.63] - 2026-11-05
 

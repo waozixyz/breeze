@@ -1,6 +1,13 @@
 #import "session"
 #import "style_sheet"
 #import "drawing_props"
+#import "locale_parser"
+#import "locale_policy"
+#import "text_buffer"
+#import "std/text_tools"
+#import, file "../app/exercise_types.zi";
+#import, file "../app/assets.zi";
+#import, file "../app/text_buffers.zi";
 #import, file "../app/cards.zi";
 #import "bundle_host"
 #import "hosted_values"
@@ -17,8 +24,27 @@
 #import, file "practice_figure_host.zi";
 
 using HostValueKind;
+using ExerciseType;
 practice_movement_frame: PracticeMovementFrame;
 practice_movement_codec: WidgetPracticeMovementFrameCodec;
+
+WorkoutTextAsset :: (code: string) -> AssetView {
+    path: [128]u8
+    if !AppCopyText("assets/practices/workout/text/", path[:]) ||
+    !AppAppendText(code, path[:]) || !AppAppendText(".txt", path[:]) {
+        return AssetView.{}
+    }
+    return AssetRead(TextUntilNul(path[:]))
+}
+
+// A line of the workout's own words, in the app's language when it has it.
+WorkoutText :: (app: *InnerBreeze, key: string) -> string {
+    localized := WorkoutTextAsset(LocaleActiveCode())
+    english := WorkoutTextAsset("en")
+    text := LocaleResolveCatalog(localized.data, english.data, key)
+    if text == key { text = LocaleText(key) }
+    return FrameTextHold(*app.ui.frame_text, text)
+}
 
 PracticeMovementCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
@@ -43,7 +69,12 @@ PracticeMovementCall :: (context: *void, module: *u8, function: *u8,
     if name == "MovementLocaleHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
         key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
+        text: string
+        if practice_movement_frame.practice == EXERCISE_WORKOUT && TextHasPrefix(key, "workout_name_") {
+            text = WorkoutText(cast(*InnerBreeze)context, key)
+        } else {
+            text = LocaleText(key)
+        }
         result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
             .data = HostTextData(text), .length = cast(usize)text.count}
         return 1

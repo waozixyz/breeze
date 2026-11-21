@@ -36,11 +36,18 @@ BUILD_DIR := build
 PACKAGE_FLAGS ?=
 export PACKAGE_FLAGS
 PACKAGES_MK := $(BUILD_DIR)/packages.mk
-$(PACKAGES_MK): ziran.toml ziran.lock $(wildcard ziran.local.toml) scripts/packages.sh
+PACKAGE_OVERRIDES := $(wildcard ziran.local.toml)
+$(PACKAGES_MK): ziran.toml ziran.lock $(PACKAGE_OVERRIDES) scripts/packages.sh
 	sh scripts/packages.sh $(PACKAGE_FLAGS)
-	printf 'PACKAGES_READY := 1\n' > $@
+	printf 'PACKAGES_READY := 1\nPACKAGES_RESOLUTION := %s|%s\n' '$(strip $(PACKAGE_FLAGS))' '$(PACKAGE_OVERRIDES)' > $@
 ifneq ($(filter-out clean distclean,$(or $(MAKECMDGOALS),all)),)
 include $(PACKAGES_MK)
+# The same directory holds local and locked links. Reselect when the caller
+# switches mode or removes an override file, even if the lock is unchanged.
+ifneq ($(strip $(PACKAGE_FLAGS))|$(PACKAGE_OVERRIDES),$(PACKAGES_RESOLUTION))
+.PHONY: packages-reselect
+$(PACKAGES_MK): packages-reselect
+endif
 endif
 
 .PHONY: packages
@@ -100,7 +107,7 @@ DEB_PACKAGE_NAME ?= $(APP_NAME)
 DEB_MAINTAINER ?= $(APP_MAINTAINER)
 DEB_SECTION ?= utils
 DEB_PRIORITY ?= optional
-DEB_DEPENDS ?= libc6, libsdl2-2.0-0, libgtk-3-0, libcurl4, libdrm2, libgbm1, libegl1, libgles2, hicolor-icon-theme
+DEB_DEPENDS ?= libc6, libsdl2-2.0-0, libgtk-3-0, libcurl4, libdrm2, libgbm1, libegl1, libgles2, libglx0, hicolor-icon-theme
 DEB_TARGET = $(DEB_DIST_DIR)/$(DEB_PACKAGE_NAME)_$(APP_VERSION)_$(DEB_ARCH).deb
 DEB_TARGET_PREREQS = Makefile $(LINUX_APPIMAGE_DESKTOP) $(LINUX_APPIMAGE_ICON) $(LINUX_APPIMAGE_APPDATA) $(VERSION_FILE) $(if $(filter linux,$(NATIVE_PLATFORM)),$(TARGET),)
 RPM_BUILD_DIR := $(BUILD_OBJ_DIR)/rpm
@@ -112,7 +119,7 @@ RPM_BIN_INPUT = $(if $(strip $(RPM_BIN_SOURCE)),$(RPM_BIN_SOURCE),$(if $(filter 
 RPM_PACKAGE_NAME ?= $(APP_NAME)
 RPM_RELEASE ?= 1
 RPM_LICENSE ?= BSD-3-Clause
-RPM_REQUIRES ?= glibc, SDL2, gtk3, libcurl, libdrm, mesa-libgbm, mesa-libEGL, mesa-libGLES, hicolor-icon-theme
+RPM_REQUIRES ?= glibc, SDL2, gtk3, libcurl, libdrm, mesa-libgbm, mesa-libEGL, mesa-libGLES, libglvnd-glx, hicolor-icon-theme
 RPM_SPEC := $(RPM_BUILD_DIR)/$(RPM_PACKAGE_NAME).spec
 RPM_TARGET = $(RPM_DIST_DIR)/$(RPM_PACKAGE_NAME)-$(APP_VERSION)-$(RPM_RELEASE).$(RPM_ARCH).rpm
 RPM_TARGET_PREREQS = Makefile $(LINUX_APPIMAGE_DESKTOP) $(LINUX_APPIMAGE_ICON) $(LINUX_APPIMAGE_APPDATA) $(VERSION_FILE) $(if $(filter linux,$(NATIVE_PLATFORM)),$(TARGET),)
@@ -404,9 +411,19 @@ SYSTEM_THEME_CFLAGS :=
 SYSTEM_THEME_LDLIBS := $(if $(filter linux,$(NATIVE_PLATFORM)),-lX11,)
 
 LOCALE_FILES := $(wildcard locales/*.txt)
-# The practice media is the practices package, packaged under
-# assets/practices/ (scripts/practice_media.py).
-PRACTICE_MEDIA := build/packages/practices
+# Local builds can select verified Practices source and media through the
+# same directory. Locked builds always take both from the resolved package.
+PRACTICE_PACKAGE_MEDIA := build/packages/practices
+PRACTICE_MEDIA := $(PRACTICE_PACKAGE_MEDIA)
+ifneq ($(filter --locked,$(PACKAGE_FLAGS)),)
+ifneq ($(abspath $(PRACTICE_MEDIA)),$(abspath $(PRACTICE_PACKAGE_MEDIA)))
+$(error PRACTICE_MEDIA cannot override the Practices package in a locked build)
+endif
+endif
+export PRACTICE_MEDIA
+PRACTICE_MEDIA_STAMP := $(BUILD_DIR)/practice-media-source
+PRACTICE_FIGURE_DIR := $(BUILD_DIR)/practice-figure
+PRACTICE_FIGURE_MODULES := $(PRACTICE_MEDIA_STAMP) $(wildcard $(PRACTICE_MEDIA)/figure/*.zi) scripts/stage-practice-figure.py
 IMAGE_FILES := assets/app/icon.webp $(PRACTICE_MEDIA)/whm/1.webp $(PRACTICE_MEDIA)/whm/2.webp $(PRACTICE_MEDIA)/meditation/1.webp assets/pet/egg1.png $(wildcard $(PRACTICE_MEDIA)/*/banner*.webp) $(wildcard $(PRACTICE_MEDIA)/sunsalutation/characters/*/*.png) $(wildcard $(PRACTICE_MEDIA)/taichi/*.png $(PRACTICE_MEDIA)/taichi/*/*.png) $(PRACTICE_MEDIA)/taichi/course.tch
 SOUND_FILES := $(wildcard assets/sounds/*.ogg)
 FONT_SUBSET_DIR := assets/fonts/subset
@@ -430,12 +447,12 @@ INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zx
 APP_SOURCES := $(shell find apps src/apps -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
 APP_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp assets/navigation assets/apps/icons 2>/dev/null)
 APP_RESOURCES += $(shell find -L $(PRACTICE_MEDIA) -type f -not -path '*/.git/*' 2>/dev/null) $(shell rg --files design/tai-chi/text 2>/dev/null) apps/practice/content.json $(wildcard design/tai-chi/narration*.json design/workout/narration*.json design/narration/*.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt design/sun-salutation/narration/text-female/*.txt) $(wildcard design/lumi-guide/*.json) $(wildcard design/astral-projection/*.json) scripts/practice_content.py scripts/practice_media.py scripts/tai_chi_preview.py apps/practice/course_access.zi scripts/generate-lumi-guide-narration.py
-APP_RESOURCES += $(wildcard design/lumi-guide/text-female/*.txt)
+APP_RESOURCES += assets/app/practice-clouds.rg $(wildcard design/lumi-guide/text-female/*.txt)
 APP_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievement-locales/*.json)
 APP_RESOURCES += $(wildcard assets/*/sidebar.shape)
 
 APPS_BUNDLE ?= build/apps-ui/apps.zx
-EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) $(APPS_BUNDLE) assets/app/icon.webp
+EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) assets/app/icon.webp
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 # Dependencies are imported as PACKAGE/Module through their linked packages.
 ZI_PACKAGE_PATHS := $(shell sh scripts/package-paths.sh)
@@ -498,7 +515,7 @@ ZI_NATIVE_DEFINES += $(if $(strip $(APP_GIO_LDLIBS)),APP_HAVE_GIO,)
 
 COMMON_CFLAGS := -Wall -Wextra -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DNATIVE_WINDOW_HAVE_SDL -DKRYON_WITH_SYNC=1
 CFLAGS := $(COMMON_CFLAGS) -std=c99 $(RUNTIME_ASSET_CFLAGS) $(SYSTEM_THEME_CFLAGS) $(KRYON_NOTIFICATION_CPPFLAGS) $(KRYON_NOTIFICATION_CFLAGS)
-NATIVE_SYSTEM_LDLIBS := $(KRYON_NOTIFICATION_LDLIBS) -lz -lm -lpthread -latomic $(if $(filter linux,$(NATIVE_PLATFORM)),-ldl -lrt,) $(SYSTEM_THEME_LDLIBS)
+NATIVE_SYSTEM_LDLIBS := $(KRYON_NOTIFICATION_LDLIBS) -lz -lm -lpthread -latomic $(if $(filter linux,$(NATIVE_PLATFORM)),-ldl -lrt -lEGL -lGLESv2 -lGLX,) $(SYSTEM_THEME_LDLIBS)
 WINDOWS_CFLAGS := -Wall -Wextra -std=c99 -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DKRYON_WITH_SYNC=1
 WEB_CFLAGS := $(filter-out -Os -DNATIVE_WINDOW_HAVE_SDL,$(COMMON_CFLAGS)) -O2 -std=gnu99
 CLICK_CFLAGS := -Wall -Wextra -std=c99 -Os -D_DEFAULT_SOURCE -D_GNU_SOURCE -ffunction-sections -fdata-sections -DSUPPORT_FILEFORMAT_JPG=1 -DUI_EMBEDDED_ONLY=1 -DDISABLE_KRYON_FILE_DIALOG -DHAS_LIBCURL=1 -DKRYON_WITH_SYNC=1 $(AARCH64_KRYON_CURL_CFLAGS)
@@ -626,8 +643,8 @@ $(ZIRAN_BIN): $(ZI2C_BIN)
 
 zi-check: $(ZI_CHECK_STAMP) | build-laws
 
-$(ZI_CHECK_STAMP): ziran.lock $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile scripts/check-zi-sources.py scripts/package-paths.sh $(KRYON_DIR)/ziran.toml $(ZIRAN_BIN) \
-	$(ZI_SRCS) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) \
+$(ZI_CHECK_STAMP): $(PACKAGES_MK) ziran.lock $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile scripts/check-zi-sources.py scripts/package-paths.sh $(KRYON_DIR)/ziran.toml $(ZIRAN_BIN) \
+	$(ZI_SRCS) $(PRACTICE_FIGURE_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) \
 	$(KRYON_UI_ZI) $(KRYON_CSS_ZI) $(GAME2D_MODULES) | build-laws
 	@ZI_CHECK_DEFINES="$(ZI_NATIVE_DEFINES)" python3 scripts/check-zi-sources.py $(ZIRAN_BIN)
 	@mkdir -p $(dir $@)
@@ -678,13 +695,19 @@ $(KRY_GEN_DEFINES): FORCE
 	@printf '%s\n' '$(ZI_NATIVE_DEFINES)' > $@.new
 	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
 
-$(KRY_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile ziran.lock scripts/package-paths.sh $(KRYON_DIR)/ziran.toml $(ZI2C_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) $(KRY_GEN_DEFINES) | build-laws zi-check
+$(PRACTICE_MEDIA_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@printf '%s\n' '$(abspath $(PRACTICE_MEDIA))' > $@.new
+	@if cmp -s $@.new $@; then rm -f $@.new; else mv $@.new $@; fi
+
+$(KRY_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile ziran.lock scripts/package-paths.sh $(KRYON_DIR)/ziran.toml $(ZI2C_BIN) $(ZI_SRCS) $(PRACTICE_FIGURE_MODULES) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) $(KRY_GEN_DEFINES) | build-laws zi-check
 	# --prune-stale removes generated files this run no longer writes, so an
 	# obsolete header/code pair never survives. Unchanged files keep their
 	# timestamps, so only C that actually changed recompiles.
 	mkdir -p $(KRY_GEN_DIR)
+	python3 scripts/stage-practice-figure.py
 	sh scripts/run-ziran.sh $(ZIRAN_BIN) build --target=c --project --offline $(PACKAGE_FLAGS) \
-		--no-main --prune-stale --root . \
+		--module-path $(PRACTICE_FIGURE_DIR) --no-main --prune-stale --root . \
 		$(foreach define,$(ZI_NATIVE_DEFINES),--define $(define)) \
 		-o $(KRY_GEN_DIR) $(ZI_SRCS)
 	touch $@
@@ -718,8 +741,8 @@ theme-catalog-bundle-check:
 	@cmp themes/catalog_light.css $(KRYON_DIR)/themes/catalog_light.css
 	@cmp themes/catalog_dark.css $(KRYON_DIR)/themes/catalog_dark.css
 
-$(EMBEDDED_ASSETS_C): Makefile $(EMBEDDED_ASSET_FILES) scripts/embed-app-assets.py src/app/assets_host.h | $(BUILD_OBJ_DIR) theme-catalog-bundle-check
-	python3 scripts/embed-app-assets.py $@ $(EMBEDDED_ASSET_FILES)
+$(EMBEDDED_ASSETS_C): Makefile $(EMBEDDED_ASSET_FILES) $(APPS_BUNDLE) scripts/embed-app-assets.py src/app/assets_host.h | $(BUILD_OBJ_DIR) theme-catalog-bundle-check
+	python3 scripts/embed-app-assets.py $@ $(EMBEDDED_ASSET_FILES) --apps-controller "$(APPS_BUNDLE)"
 
 $(KRYON_ICON_ASSETS_C) $(KRYON_ICON_NAMES_C) $(KRYON_ICON_TYPES_H): $(KRYON_ICON_FILES) $(KRYON_DIR)/scripts/embed-icon-sheets.py  | $(BUILD_OBJ_DIR)
 	cd $(KRYON_DIR) && python3 scripts/embed-icon-sheets.py "$(KRYON_ICON_DIR)" \

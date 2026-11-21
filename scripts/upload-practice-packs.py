@@ -92,6 +92,75 @@ def select_packs(catalog, identifiers=None, content=None):
             (pack['practice'] in content and not pack['language'])]
 
 
+def stage_payload(directory, pack):
+    name = pack_identifier(pack)
+    digest = pack['sha256']
+    target = directory / (digest + '.zx')
+    shutil.copyfile(ROOT / 'build/practice-content' / (name + '.zx'), target)
+    with target.open('rb') as stream:
+        checksum = sha256()
+        while block := stream.read(65536):
+            checksum.update(block)
+    if target.stat().st_size != pack['size'] or checksum.hexdigest() != digest:
+        raise ValueError('practice content differs from its signed catalog')
+
+
+def stage_archived_packs(store, packs, metadata_directory, publishers):
+    """Restore exact public content from its original signed descriptor."""
+    directory = store / 'inbe.practices'
+    directory.mkdir()
+    for pack in packs:
+        name = pack_identifier(pack)
+        digest = pack['sha256']
+        filename = digest + '.zx.release-v2.json'
+        if pack.get('product') or (metadata_directory / (digest + '.zx.product')).exists():
+            raise ValueError(f'{name}: archived restoration requires a public pack')
+        with (metadata_directory / filename).open('rb') as source:
+            encoded = source.read(65537)
+        if len(encoded) > 65536:
+            raise ValueError(f'{name}: signed descriptor is too large')
+        value = json.loads(encoded)
+        package_release.validate_release(value, 'inbe.practices', publishers)
+        expected = [dict(variant='module', sha256=digest, size=pack['size'])]
+        if value['data_schema'] != 1 or value['artifacts'] != expected:
+            raise ValueError(f'{name}: signed descriptor differs from the catalog')
+        stage_payload(directory, pack)
+        package_release.atomic_write(directory / filename, encoded)
+
+
+def archive_destination_guard(publishers):
+    """Match the configured store's current release to the public node before writing."""
+    origin = NODE.split('/api/', 1)[0]
+    with package_release.open_public_url(NODE + 'latest?format=zx&bucket=0', 15) as response:
+        encoded = response.read(65537)
+    if len(encoded) > 65536:
+        raise ValueError('public Practices descriptor is too large')
+    value = json.loads(encoded)
+    package_release.validate_release(value, 'inbe.practices', publishers)
+    digest = sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+    with package_release.open_public_url(origin + '/api/v1/node', 15) as response:
+        encoded = response.read(65537)
+    if len(encoded) > 65536:
+        raise ValueError('public Mesh node status is too large')
+    public_revision = json.loads(encoded)['build_version']
+    program = """import hashlib, json, pathlib, sys, urllib.request
+root = pathlib.Path('inbe.practices')
+latest = root / 'latest-v2.json'
+if root.is_symlink() or latest.is_symlink():
+    sys.exit('Configured store has a symlinked Practices release')
+with latest.open('rb') as source:
+    encoded = source.read(65537)
+if len(encoded) > 65536:
+    sys.exit('Configured store has an oversized Practices descriptor')
+actual = hashlib.sha256(json.dumps(json.loads(encoded), sort_keys=True).encode()).hexdigest()
+with urllib.request.urlopen('http://127.0.0.1:8080/api/v1/node', timeout=8) as response:
+    revision = json.loads(response.read(65537))['build_version']
+if actual != sys.argv[1] or revision != sys.argv[2]:
+    sys.exit('Configured store does not match the public Mesh node and Practices release')
+"""
+    return shlex.join(['python3', '-c', program, digest, public_revision])
+
+
 def stage_selected_packs(store, packs):
     """Sign only the selected immutable content; never stage app releases."""
     key = package_release.serialization.load_pem_private_key(KEY.read_bytes(), password=None)
@@ -111,14 +180,7 @@ def stage_selected_packs(store, packs):
     directory.mkdir(parents=True, exist_ok=True)
     for pack in packs:
         digest = pack['sha256']
-        target = directory / (digest + '.zx')
-        shutil.copyfile(ROOT / 'build/practice-content' / (pack_identifier(pack) + '.zx'), target)
-        with target.open('rb') as stream:
-            checksum = sha256()
-            while block := stream.read(65536):
-                checksum.update(block)
-        if target.stat().st_size != pack['size'] or checksum.hexdigest() != digest:
-            raise ValueError('practice content differs from its signed catalog')
+        stage_payload(directory, pack)
         value = dict(app_id=component['id'], sequence=component['sequence'],
                      version=component['version'], runtime='kryon-app-v1',
                      host_api=component.get('host_api', versions['host_api']),
@@ -154,7 +216,11 @@ def main():
                         help="limit this attempt to the named practice's content pack; repeat for another practice")
     selection.add_argument('--pack', action='append',
                            help='exact catalog filename without .zx, e.g. astral_projection.pt, guide.pt or taichi.en.male; repeat for another pack')
+    parser.add_argument('--signed-metadata', type=Path,
+                        help='restore selected public packs with their original signed descriptors')
     args = parser.parse_args()
+    if args.signed_metadata and (not args.pack or args.check):
+        parser.error('--signed-metadata requires --pack and cannot be used with --check')
     practices = (ROOT / 'build/apps/practices.zx').read_bytes()
     try:
         listed = select_packs(package_release.catalog_from_bundle(practices), args.pack, args.content)
@@ -188,7 +254,11 @@ def main():
         # Only content is being delivered. Requiring a complete, matching
         # root and every unrelated app here made local content repair fail
         # before it could upload the practice the installed build requests.
-        stage_selected_packs(store, listed)
+        if args.signed_metadata:
+            publishers = json.loads((ROOT / 'apps/publishers.json').read_bytes())
+            stage_archived_packs(store, listed, args.signed_metadata, publishers)
+        else:
+            stage_selected_packs(store, listed)
         directory = store / "inbe.practices"
         # Only selected catalog content can reach the transport.
         catalog = {pack["sha256"] for pack in listed}
@@ -226,9 +296,14 @@ def main():
         # Extract only into the practices folder, never over a file that is
         # already there: packs are immutable once served.
         permissions = ' '.join(shlex.quote(name) for name in members)
-        command = ("set -e; cd " + STORE + " && tar -x --keep-old-files --no-same-permissions "
+        ssh = ['ssh', '-o', 'BatchMode=yes']
+        target = 'cd ' + shlex.quote(STORE) + ' && '
+        if args.signed_metadata:
+            ssh += ['-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=8']
+            target += archive_destination_guard(publishers) + ' && '
+        command = ("set -e; " + target + "tar -x --keep-old-files --no-same-permissions "
                    "--wildcards 'inbe.practices/*' -f - && chmod 600 " + permissions)
-        subprocess.run(["ssh", "-o", "BatchMode=yes", TARGET, command],
+        subprocess.run([*ssh, TARGET, command],
                        input=archive.getvalue(), check=True)
         lines = []
         for path in (packs if args.pack is not None else missing):

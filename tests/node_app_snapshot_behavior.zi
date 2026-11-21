@@ -7,8 +7,11 @@ Ui :: #import "kryon/tree";
 #import "kryon/widget_host"
 TextField :: #import "kryon/text_field";
 PhotoLegacy :: #import "apps/node_types";
+#import "apps/node_codec"
+#import, file "../src/apps/hosted_assets.zi";
 #import "apps/tree"
 #import, file "../src/apps/package_manager.zi";
+#import, file "../src/apps/download_recovery.zi";
 #import, file "../src/apps/node_apps.zi";
 #import, file "../src/apps/node_app_tree.zi";
 #import, file "../src/apps/node_app_runner.zi";
@@ -329,7 +332,13 @@ SnapshotMediaCompressionCheck :: () -> s32 {
     function: [32]u8
     arguments: [2]HostValue
     result: HostValue
+    NodeAppAssign(slot, "radio")
+    if NodeAppAllows(cast(*void)runner, "app_context", "AppSupportsHost") ||
+    NodeAppAllows(cast(*void)runner, "app_context", "AppServiceHost") { return 139 }
     NodeAppAssign(slot, "photos")
+    if !NodeAppAllows(cast(*void)runner, "app_context", "AppSupportsHost") ||
+    !NodeAppAllows(cast(*void)runner, "app_context", "AppServiceHost") ||
+    NodeAppAllows(cast(*void)runner, "other", "AppServiceHost") { return 140 }
     runner.nested = *nested
     runner.embedded_release.valid = true
     unused CopyCString("baseline", runner.embedded_release.key_id[:])
@@ -470,6 +479,20 @@ Check :: () -> s32 {
     if compression != 0 { return compression }
     embedded := NodeAppEmbeddedCheck()
     if embedded != 0 { return embedded }
+    legacy_path := IconsEnvironmentPath("PHOTOS_LEGACY_MODULE")
+    if legacy_path.count > 0 {
+        slot := cast(s32)(NodeAppSlots - 4)
+        NodeAppAssign(slot, "photos")
+        bytes: string = PackageRead(legacy_path, PackageMaximumBytes)
+        descriptor := cast(*TextDescriptor)(*bytes)
+        data := descriptor.data
+        length := bytes.count
+        view := TextFromBytes(BytesFromPointer(data, cast(u64)length))
+        accepted := length > 0 && NodeAppValidate(slot, view)
+        PackageFree(TextFromBytes(BytesFromPointer(data, cast(u64)length)))
+        NodeAppAssign(slot, "")
+        if !accepted || MediaCompressionTakeRequest() { return 211 }
+    }
     photos := PhotosClientCheck()
     if photos != 0 { return photos }
     storage_close()
@@ -487,12 +510,52 @@ PhotosClientAsset :: (path: string) -> AssetView {
     return AssetView.{}
 }
 
-PhotosClientFrame :: (slot: s32, session: Session, tick: u64, width: s32) -> bool {
-    BeginFrame(session, tick, Rectangle.{0.0, 0.0, cast(float32)width, 844.0})
-    WidgetHostBegin(session, NodeTreeAssetAllowed, NodeTreeAssetPath)
-    NodeAppUiBegin(WidgetHostCall, null)
-    NodeTreeFrame(slot, PhotoLegacy.AppUiFrame.{.session = session, .width = width,
-        .height = 844, .scale = 1.0, .font = 16}, 0, 0, TextField.Input.{})
+photos_client_frame_codec: WidgetAppUiFrameCodec;
+PhotosClientUiCall :: (context: *void, module: *u8, function: *u8,
+    arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    name := TextFromCString(function)
+    if name == "ReadAppUiHost" && count == 0 {
+        result.* = WidgetEncodeAppUiFrame((cast(*PhotoLegacy.AppUiFrame)context).*, *photos_client_frame_codec)
+        return 1
+    }
+    if name == "AppLocaleHost" && count == 1 && HostScalarValid(arguments[0], "string", cast(s32)HostValueKind.HostString) {
+        result.* = arguments[0]
+        return 1
+    }
+    handled := WidgetHostCall(null, module, function, arguments, count, result)
+    if handled == 0 { print("Photos fixture UI rejected %:%\n", TextFromCString(module), name) }
+    return handled
+}
+
+PhotosClientFrame :: (slot: s32, session: Session, width: s32,
+    pointer: PointerFrame = PointerFrame.{}) -> bool {
+    hit := TreePointerUpdate(session, pointer)
+    if pointer.pressed || pointer.released {
+        if hit < 0 {
+            print("Photos %px pointer at %, % missed the tree\n", width, pointer.x, pointer.y)
+            return false
+        }
+        node := Ui.TreeNodeAt(session, hit)
+        if node.key != 7004 {
+            print("Photos %px wrench pointer hit UI key % focus %\n", width, node.key, node.focus_id)
+            return false
+        }
+    }
+    bounds := Rectangle.{0.0, 0.0, cast(float32)width, 844.0}
+    frame := PhotoLegacy.AppUiFrame.{.session = session, .width = width,
+        .height = 844, .scale = 1.0, .font = 16}
+    // Keep the screen key stable so the press and release share a retained tree.
+    BeginFrame(session, 8, bounds)
+    if node_runners[slot].nested != null {
+        WidgetHostBegin(session, NodeTreeAssetAllowed, NodeTreeAssetPath)
+        NodeTreeFrame(slot, frame, 0, 0, TextField.Input.{})
+    } else {
+        WidgetHostBegin(session, HostedAssetAllowed, WidgetHostPackedPath)
+        if NodeAppPortable(slot) {
+            NodeAppPortableFrame(slot, session, bounds, false, 1.0, 16, 0, 0, TextField.Input.{})
+        }
+    }
+    NodeAppUiBegin(PhotosClientUiCall, cast(*void)(*frame))
     message := NodeAppRunMessage(slot, PhotoLegacy.AppMessage.{
         .action = PhotoLegacy.APP_FRAME, .name = "photos", .locale = "en"})
     NodeAppUiEnd()
@@ -504,24 +567,33 @@ PhotosClientFrame :: (slot: s32, session: Session, tick: u64, width: s32) -> boo
 PhotosClientWrench :: (slot: s32, width: s32) -> bool {
     session := SessionOpen()
     defer { unused SessionClose(session) }
-    if !PhotosClientFrame(slot, session, 1, width) { return false }
+    if !PhotosClientFrame(slot, session, width) {
+        print("Photos %px frame failed; portable %, nested %\n", width, NodeAppPortable(slot), node_runners[slot].nested != null)
+        return false
+    }
     bounds: Rectangle
     for index: cast(s32)0..Ui.TreeCount(session) - 1 {
         node := Ui.TreeNodeAt(session, index)
-        if node.focus_id == 7004 { bounds = node.bounds }
+        if node.key == 7004 { bounds = node.bounds }
     }
     if bounds.width <= 0.0 || bounds.height <= 0.0 || bounds.x < 0.0 ||
     bounds.x + bounds.width > cast(float32)width || bounds.y < 0.0 ||
-    bounds.y + bounds.height > 844.0 { return false }
-    unused TreePointerUpdate(session, PointerFrame.{
-        .x = bounds.x + bounds.width / 2.0, .y = bounds.y + bounds.height / 2.0,
-        .down = true, .pressed = true})
-    unused TreePointerUpdate(session, PointerFrame.{
-        .x = bounds.x + bounds.width / 2.0, .y = bounds.y + bounds.height / 2.0,
-        .released = true})
-    if !PhotosClientFrame(slot, session, 2, width) ||
-    !MediaCompressionTakeRequest() || MediaCompressionTakeRequest() { return false }
-    if !PhotosClientFrame(slot, session, 3, width) || MediaCompressionTakeRequest() { return false }
+    bounds.y + bounds.height > 844.0 {
+        print("Photos %px wrench unavailable; % UI nodes, portable %, nested %\n",
+            width, Ui.TreeCount(session), NodeAppPortable(slot), node_runners[slot].nested != null)
+        return false
+    }
+    x := bounds.x + bounds.width / 2.0
+    y := bounds.y + bounds.height / 2.0
+    if !PhotosClientFrame(slot, session, width, PointerFrame.{
+        .x = x, .y = y, .down = true, .pressed = true}) || MediaCompressionTakeRequest() { return false }
+    released := PhotosClientFrame(slot, session, width, PointerFrame.{.x = x, .y = y, .released = true})
+    requested := MediaCompressionTakeRequest()
+    if !released || !requested {
+        print("Photos %px wrench release rendered %, requested %\n", width, released, requested)
+        return false
+    }
+    if !PhotosClientFrame(slot, session, width) || MediaCompressionTakeRequest() { return false }
     return true
 }
 
@@ -550,17 +622,25 @@ PhotosClientCheck :: () -> s32 {
         unused CopyCString("https://api.waozi.xyz", package_origin[:])
     }
     if NodeAppLocal("photos") || PackageAvailable(index) { return 200 }
-    if NodeAppInstall("photos") != slot { return 201 }
+    PackageCheckForUpdate(index)
+    if !PackagePending(index) || PackageInstallPending(index) { return 221 }
+    if NodeAppInstall("photos") != slot || !PackageInstallPending(index) { return 201 }
+    // Drive the package's clock to each scheduled retry without waiting 40 seconds.
+    now: s32 = 1
     deadline := SnapshotNow() + 20.0
     while PackageStatus(index) != 3 && SnapshotNow() < deadline {
-        PackagePump(0, 0, false)
+        PackagePump(0, now, false)
+        if package_recovery.retry_at > cast(s64)now { now = cast(s32)package_recovery.retry_at }
         SnapshotYield()
     }
-    if PackageStatus(index) != 3 || PackageAvailable(index) || NodeAppRunning(slot) { return 202 }
+    if PackageStatus(index) != 3 || PackageInstallPending(index) ||
+        PackageAvailable(index) || NodeAppRunning(slot) { return 202 }
+    PackageCheckForUpdate(index)
+    if !NodeAppOpenFailed(slot) { return 222 }
     if NodeAppInstall("photos") != slot { return 203 }
     deadline = SnapshotNow() + 20.0
     while PackageStatus(index) != 2 && SnapshotNow() < deadline {
-        PackagePump(0, 0, false)
+        PackagePump(0, now, false)
         SnapshotYield()
     }
     if PackageStatus(index) != 2 || !PackageAvailable(index) { return 204 }
@@ -568,14 +648,18 @@ PhotosClientCheck :: () -> s32 {
     valid := PackageVerifyBytes(bytes, package_cached_releases[index]) && TextUntilNul(package_cached_releases[index].hash[:]) == IconsEnvironmentPath("PHOTOS_CLIENT_SHA256")
     PackageFree(bytes)
     if !valid || TextUntilNul(package_cached_releases[index].key_id[:]) != "photos-fixture" { return 205 }
-    if !NodeAppOpen(slot) || !SnapshotWaitOpen(slot) || node_runners[slot].nested == null { return 206 }
+    if !NodeAppOpen(slot) || !SnapshotWaitOpen(slot) || NodeAppVerifiedLeafName(slot) != "photos" { return 206 }
     if !PhotosClientWrench(slot, 390) { return 207 }
-    SnapshotOtherAccount(true)
-    session := SessionOpen()
-    rejected := !PhotosClientFrame(slot, session, 4, 390)
-    unused SessionClose(session)
-    SnapshotOtherAccount(false)
-    if !rejected || MediaCompressionTakeRequest() { return 208 }
+    // Nested runtimes retain an account snapshot. The launcher itself closes
+    // direct modules on account changes, outside this node-level fixture.
+    if node_runners[slot].nested != null {
+        SnapshotOtherAccount(true)
+        session := SessionOpen()
+        rejected := !PhotosClientFrame(slot, session, 390)
+        unused SessionClose(session)
+        SnapshotOtherAccount(false)
+        if !rejected || MediaCompressionTakeRequest() { return 208 }
+    }
     if !SnapshotWaitClose(slot) || !NodeAppOpen(slot) || !SnapshotWaitOpen(slot) { return 209 }
     if !PhotosClientWrench(slot, 1280) { return 210 }
     return 0

@@ -11,6 +11,7 @@ Image :: #import "kryon/image";
 Layout :: #import "kryon/layout";
 #import "session"
 #import, file "tai_chi_math.zi";
+#import, file "../practice_figure_draw.zi";
 #import, file "tai_chi_course.zi";
 #import, file "tai_chi_timeline.zi";
 #import, file "tai_chi_solve.zi";
@@ -30,8 +31,42 @@ TAI_CHI_FLAT_MESH_CAPACITY :: 4 * (TAI_CHI_FLAT_SCRATCH * 2 + 1)
 
 tai_chi_flat_frame: TaiChiFlatFrame;
 
-// Draws the figure at the practice's current time into `area`, following
-// it with the camera. `dt` moves the camera; `snap` places it at once.
+// The frame is fixed for the piece. Foot keys are world-space positions,
+// so the original steps determine the room needed on either side.
+TaiChiStageFraming :: (timeline: *TaiChiTimeline, rig: *TaiChiRig, angle: s32, aspect: float64) -> TaiChiFraming {
+    view := TaiChiViewSpecFor(angle)
+    camera: TaiChiCameraState
+    camera.yaw = view.yaw
+    if !view.fixed {
+        camera.yaw += timeline.keys[0].channels[TAI_CHI_FACING]
+    }
+    low := TaiChiV3(1000.0, 0.0, 1000.0)
+    high := TaiChiV3(-1000.0, 0.0, -1000.0)
+    for index: cast(s32)0..timeline.count - 1 {
+        for side: cast(s32)0..1 {
+            base := TaiChiFootBase(side)
+            x := timeline.keys[index].channels[base + TAI_CHI_FOOT_X] * rig.scale
+            z := timeline.keys[index].channels[base + TAI_CHI_FOOT_Z] * rig.scale
+            low.x = TaiChiMin(low.x, x)
+            high.x = TaiChiMax(high.x, x)
+            low.z = TaiChiMin(low.z, z)
+            high.z = TaiChiMax(high.z, z)
+        }
+    }
+    camera.center = TaiChiLerp3(low, high, 0.5)
+    framing := TaiChiFramingFor(camera, view)
+    flat: TaiChiFlatView
+    TaiChiFlatViewSet(*flat, framing.camera)
+    width := 1.66 + (high.x - low.x) * TaiChiAbs(flat.right.x) + (high.z - low.z) * TaiChiAbs(flat.right.z)
+    pitch_span := (high.x - low.x) * TaiChiAbs(flat.up.x) + (high.z - low.z) * TaiChiAbs(flat.up.z)
+    framing.view_height = TaiChiMax(framing.view_height + pitch_span, width / aspect)
+    return framing
+}
+
+TaiChiStageMan :: (character: s32) -> bool {
+    return TaiChiFlatLookFor(character).male
+}
+
 TaiChiDrawFigure :: (session: Session, state: *TaiChiPracticeState, area: Rectangle, dt: float64, snap: bool,
     alt_text: string) {
     if state.built_item < 0 || area.width <= 0.0 || area.height <= 0.0 {
@@ -41,15 +76,21 @@ TaiChiDrawFigure :: (session: Session, state: *TaiChiPracticeState, area: Rectan
     if character < 0 || character >= tai_chi_course.character_count {
         character = 0
     }
-    view := TaiChiViewSpecFor(state.view)
     pose := TaiChiTimelineSample(*tai_chi_timeline, state.time)
     rig := TaiChiRigFor(character)
     solved := TaiChiSolvePose(*pose, *rig)
-    state.camera = TaiChiCameraUpdate(state.camera, view, solved.pelvis, pose.channels[TAI_CHI_FACING], dt, snap)
-    framing := TaiChiFramingFor(state.camera, view)
-    TaiChiFlatPaint(*tai_chi_flat_frame, *solved, *rig, character, framing.camera)
-    TaiChiPaintFlat(session, *tai_chi_flat_frame, framing, TaiChiViewMirrored(state.view), area,
-        Layout.KeyHash("inbe/practices/tai_chi/figure"), alt_text)
+    framing := TaiChiStageFraming(*tai_chi_timeline, *rig, state.view, cast(float64)area.width / cast(float64)area.height)
+    key := Layout.KeyHash("inbe/practices/tai_chi/figure")
+    mirrored := TaiChiViewMirrored(state.view)
+    digest := TaiChiDigest(cast(u64)state.built_item + 1, state.time)
+    digest = TaiChiDigest(digest, cast(float64)state.view + 8.0 * cast(float64)character)
+    if !PracticeFigureDrawModel(session, *solved, *rig, framing, TaiChiStageMan(character), mirrored,
+        area, key, alt_text, state.time, digest) {
+        TaiChiFlatPaint(*tai_chi_flat_frame, *solved, *rig, character, framing.camera)
+        TaiChiPaintFlat(session, *tai_chi_flat_frame, framing, mirrored, area, key, alt_text)
+    }
+    unused dt
+    unused snap
 }
 
 // Shared painting for the live player and the course thumbnails.
@@ -318,13 +359,17 @@ TaiChiDrawPreview :: (session: Session, item_index: s32, character: s32, angle: 
         preview.ready = true
     }
     // Fit the full pose horizontally as well as vertically on narrow
-    // character cards, including outstretched hands and their shadow.
+    // character cards, including outstretched hands.
     framing := preview.framing
     if area.width > 0.0 {
         width_height := preview.half_width * 2.1 * cast(float64)area.height / cast(float64)area.width
         framing.view_height = TaiChiMax(framing.view_height, width_height)
     }
-    TaiChiFlatPaint(*tai_chi_flat_frame, *preview.solved, *rig, character, framing.camera)
-    TaiChiPaintFlat(session, *tai_chi_flat_frame, framing, TaiChiViewMirrored(angle),
-        area, key, alt_text)
+    digest := TaiChiDigest(cast(u64)tai_chi_course_generation + 1, cast(float64)(item_index * 32 + character * 8 + angle))
+    if !PracticeFigureDrawModel(session, *preview.solved, *rig, framing, TaiChiStageMan(character),
+        TaiChiViewMirrored(angle), area, key, alt_text, -1.0, digest) {
+        TaiChiFlatPaint(*tai_chi_flat_frame, *preview.solved, *rig, character, framing.camera)
+        TaiChiPaintFlat(session, *tai_chi_flat_frame, framing, TaiChiViewMirrored(angle),
+            area, key, alt_text)
+    }
 }

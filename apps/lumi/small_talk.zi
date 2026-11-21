@@ -1,0 +1,81 @@
+// Exact, short phrases only. Commands, extra clauses and quoted text fall
+// through to Lumi's interpreter and AI; no fuzzy or substring matching.
+#import, file "command_text.zi";
+
+LumiSmallTalkTrim :: (text: string) -> string {
+    start: s64 = 0
+    end := text.count
+    while start < end && (text[start] == 32 || text[start] == 9) {
+        start += 1
+    }
+    while end > start && (text[end - 1] == 32 || text[end - 1] == 9 ||
+    text[end - 1] == 33 || text[end - 1] == 63 || text[end - 1] == 46 || text[end - 1] == 44) {
+        end -= 1
+    }
+    text = text[start:end]
+    if text.count >= 2 && (text[:2] == "¿" || text[:2] == "¡") {
+        text = text[2:]
+    }
+    while text.count >= 3 && (text[text.count - 3:] == "？" ||
+    text[text.count - 3:] == "！" || text[text.count - 3:] == "。") {
+        text = text[:text.count - 3]
+    }
+    return text
+}
+
+LumiSmallTalkPhrase :: (message: string, phrases: string) -> bool {
+    start: s64 = 0
+    for at: cast(s64)0..phrases.count {
+        if at == phrases.count || phrases[at] == 124 {
+            phrase := phrases[start:at]
+            if phrase.count > 0 && CommandEqual(message, phrase) {
+                return true
+            }
+            start = at + 1
+        }
+    }
+    return false
+}
+
+// Returns a locale key, or empty for the normal interpreter/AI path. Lists
+// contain English and the active language; replies use the active locale.
+LumiSmallTalk :: (message: string, greetings: string, thanks: string,
+    wellbeing: string, affection: string, goodbye: string) -> string {
+    if message.count == 0 || message.count > 96 {
+        return ""
+    }
+    for byte: message {
+        if byte == 10 || byte == 13 {
+            return ""
+        }
+    }
+    message = LumiSmallTalkTrim(message)
+    if message.count > 4 && CommandEqual(message[:4], "lumi") &&
+    (message[4] == 32 || message[4] == 44) {
+        message = LumiSmallTalkTrim(message[5:])
+    } else if message.count > 5 && CommandEqual(message[message.count - 4:], "lumi") &&
+    (message[message.count - 5] == 32 || message[message.count - 5] == 44) {
+        message = LumiSmallTalkTrim(message[:message.count - 5])
+    }
+    if LumiSmallTalkPhrase(message, "hi|hello|hey|good morning|good afternoon|good evening") ||
+    LumiSmallTalkPhrase(message, greetings) {
+        return "lumi_small_greeting"
+    }
+    if LumiSmallTalkPhrase(message, "thanks|thank you|thanks a lot|thank you very much") ||
+    LumiSmallTalkPhrase(message, thanks) {
+        return "lumi_small_thanks"
+    }
+    if LumiSmallTalkPhrase(message, "how are you|how are you doing") ||
+    LumiSmallTalkPhrase(message, wellbeing) {
+        return "lumi_small_wellbeing"
+    }
+    if LumiSmallTalkPhrase(message, "do you love me|i love you") ||
+    LumiSmallTalkPhrase(message, affection) {
+        return "lumi_small_affection"
+    }
+    if LumiSmallTalkPhrase(message, "bye|goodbye|good night|see you later") ||
+    LumiSmallTalkPhrase(message, goodbye) {
+        return "lumi_small_goodbye"
+    }
+    return ""
+}

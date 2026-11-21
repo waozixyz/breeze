@@ -17,6 +17,10 @@ practice-movement-ui-test: $(TARGET)
 		-u GDK_DISPLAY -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \
 		python3 tests/practice_movement_ui_test.py $(abspath $(TARGET))
 
+.PHONY: workout-custom-ui-test
+workout-custom-ui-test: $(TARGET) $(INBE_BUNDLE)
+	sh tests/run-isolated-desktop.sh python3 tests/workout_custom_ui_test.py $(abspath $(TARGET)) $(abspath $(INBE_BUNDLE))
+
 .PHONY: launcher-ui-test
 launcher-ui-test: $(TARGET) launcher-header-ui-test
 	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS YUE_DESKTOP_RECOVERY=0 \
@@ -79,12 +83,10 @@ dew-topup-ui-test: $(TARGET)
 # The longest suites come first so the gate does not end waiting on one.
 VISUAL_TEST_TARGETS := $(NATIVE_VISUAL_TARGETS) launcher-ui-test lumi-ui-test practice-images-ui-test leaderboard-ui-test native-screenshot-test native-zoom-test settings-sidebar-ui-test startup-quit-ui-test locale-render-ui-test lumi-history-ui-test habits-table-ui-test habits-count-ui-test habit-day-ui-test habit-schedule-tool-test habit-tracking-tool-test lists-ui-test sync-review-ui-test data-back-ui-test lumi-selection-ui-test lumi-harness-ui-test lumi-feedback-list-ui-test lumi-guide-ui-test lumi-emphasis-ui-test customize-nav-ui-test
 VISUAL_TEST_TARGETS += audio-setup-ui-test apps-onboarding-test practice-downloads-ui-test tab-switch-performance-test habit-unsaved-ui-test
-VISUAL_TEST_TARGETS += entity-profile-ui-test practice-movement-ui-test
+VISUAL_TEST_TARGETS += entity-profile-ui-test practice-movement-ui-test astral-projection-ui-test workout-custom-ui-test
 VISUAL_TEST_TARGETS += dew-topup-ui-test
 visual-test: $(TARGET) $(INBE_FULL_BUNDLE) $(NODE_APP_BUNDLES)
-	env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY \
-		-u DBUS_SESSION_BUS_ADDRESS -u SESSION_MANAGER YUE_DESKTOP_RECOVERY=0 \
-		python3 tests/visual_test.py $(abspath $(TARGET)) $(VISUAL_TEST_TARGETS)
+	sh tests/run-isolated-desktop.sh python3 tests/visual_test.py $(abspath $(TARGET)) $(VISUAL_TEST_TARGETS)
 
 .PHONY: customize-nav-ui-test
 customize-nav-ui-test: $(TARGET)
@@ -132,6 +134,12 @@ habits-count-ui-test: $(TARGET)
 .PHONY: habit-day-ui-test
 habit-day-ui-test: $(TARGET)
 	bash tests/habit_day_ui_test.sh "$(abspath $(TARGET))"
+
+.PHONY: habit-diary-ui-test
+habit-diary-ui-test: $(TARGET) $(INBE_FULL_BUNDLE)
+	sh tests/habit_diary_ui_test.sh "$(abspath $(TARGET))"
+
+VISUAL_TEST_TARGETS += habit-diary-ui-test
 
 .PHONY: lists-ui-test
 lists-ui-test: $(TARGET)

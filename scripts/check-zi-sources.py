@@ -29,6 +29,7 @@ define_args = [part for name in target_defines for part in ("--define", name)]
 (root / "build").mkdir(exist_ok=True)
 compiler_lock = (root / "build/ziran-compiler.lock").open("a")
 fcntl.flock(compiler_lock, fcntl.LOCK_EX)
+subprocess.run([sys.executable, str(root / "scripts/stage-practice-figure.py")], cwd=root, check=True)
 result = subprocess.run(
     [
         str(compiler),
@@ -38,6 +39,8 @@ result = subprocess.run(
         *shlex.split(os.environ.get("PACKAGE_FLAGS", "")),
         "--root",
         ".",
+        "--module-path",
+        str(root / "build/practice-figure"),
         *define_args,
         *(str(source.relative_to(root)) for source in sources),
     ],

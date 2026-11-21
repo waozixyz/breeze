@@ -1,10 +1,11 @@
 # Web build: the canvas app, its smoke test, and the Chrome and Firefox extensions.
 
-$(WEB_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile mk/web.mk ziran.lock $(ZIRAN_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(WEB_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile mk/web.mk ziran.lock $(ZIRAN_BIN) $(ZI_SRCS) $(PRACTICE_FIGURE_MODULES) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WEB_GEN_DIR)
 	mkdir -p $(WEB_GEN_DIR)
+	python3 scripts/stage-practice-figure.py
 	sh scripts/run-ziran.sh $(ZIRAN_BIN) build --target=c --project --offline $(PACKAGE_FLAGS) \
-		--no-main --root . --target-os web --target-cpu wasm32 \
+		--module-path $(PRACTICE_FIGURE_DIR) --no-main --root . --target-os web --target-cpu wasm32 \
 		--define PLATFORM_WEB --define __EMSCRIPTEN__ \
 		-o $(WEB_GEN_DIR) $(ZI_SRCS) $(KRYON_DIR)/src/backend/canvas_raster.zi $(KRYON_DIR)/src/backend/canvas_audio.zi $(KRYON_DIR)/src/backend/page_route.zi
 	touch $@

@@ -25,8 +25,9 @@ def photos_client_fixture(module, key, signing_message):
             if path == '/api/v2/packages/inbe.photos/latest':
                 body = metadata
             elif path == '/api/v2/packages/inbe.photos/' + digest + '.zx':
-                count = requests.count(path)
-                body = bytes([payload[0] ^ 1]) + payload[1:] if count == 1 else payload
+                # Keep the first install corrupt through its recovery attempts.
+                initial_install = requests.count('/api/v2/packages/inbe.photos/latest') == 1
+                body = bytes([payload[0] ^ 1]) + payload[1:] if initial_install else payload
             else:
                 self.send_error(404)
                 return
@@ -44,8 +45,11 @@ def photos_client_fixture(module, key, signing_message):
         yield {'PHOTOS_CLIENT_ORIGIN': f'http://127.0.0.1:{server.server_port}',
                'PHOTOS_CLIENT_SHA256': digest}
         path = '/api/v2/packages/inbe.photos/' + digest + '.zx'
-        assert requests.count(path) == 2, requests
+        assert requests.count(path) == 5, requests
         assert requests.count('/api/v2/packages/inbe.photos/latest') == 2, requests
+    except BaseException:
+        print(f'Photos fixture requests before failure: {requests}', flush=True)
+        raise
     finally:
         server.shutdown()
         server.server_close()

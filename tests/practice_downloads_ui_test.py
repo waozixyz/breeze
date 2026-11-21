@@ -226,9 +226,15 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
         for name in ('Steady Box Breath', 'Meditation', 'Astral Projection'):
             next_card()
             driver.wait(contains=name)
-            assert buttons('Start Practice') and not buttons('Install'), (name, screen_text())
+            action = 'Choose Lesson' if name == 'Astral Projection' else 'Start Practice'
+            assert buttons(action) and not buttons('Install'), (name, screen_text())
             # Every meditation practice has How to and Customize.
             assert buttons('How to') and buttons('Customize'), (name, screen_text())
+        press_button('Choose Lesson')
+        driver.wait(label='Foundation Touch', role='button')
+        assert buttons('Start Practice'), screen_text()
+        driver.press(label='Close', role='button')
+        driver.wait(label='Choose Lesson', role='button')
         # Astral Projection's Customize offers its music and narration, in its
         # one voice, and How to explains the selected foundation exercise.
         driver.press(label='Customize', role='button')
@@ -236,14 +242,14 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
         assert driver.find(label='Voice narration'), screen_text()
         assert not driver.find(label='Male voice', role='button'), screen_text()
         driver.press(label='Back', role='button')
-        driver.wait(label='Start Practice', role='button')
+        driver.wait(label='Choose Lesson', role='button')
         driver.press(label='How to', role='button')
         driver.wait(contains='Practice small circular tactile imaging.')
         driver.press(label='Back', role='button')
         # Back returns to the pre-start choices; Close returns to its home card.
         driver.wait(label='Foundation Touch', role='button')
         driver.press(label='Close', role='button')
-        driver.wait(label='Start Practice', role='button')
+        driver.wait(label='Choose Lesson', role='button')
         driver.wait(label='Customize', role='button')
         # A swipe past a tab's last practice goes on to the next tab.
         tab_bar = driver.wait(role='tab_list')
@@ -279,6 +285,7 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=output) as temporary:
         select_tab('Martial arts')
         driver.wait(contains='Tai Chi')
         assert buttons('Start Practice') and not buttons('Unlock'), screen_text()
+        assert not buttons('Choose Lesson'), screen_text()
     finally:
         stop(process)
     with sqlite3.connect(profile / 'inbe.db') as database:

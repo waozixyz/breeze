@@ -10,23 +10,23 @@ import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-MEDIA = ROOT / 'build/packages/practices'
+MEDIA = ROOT / os.environ.get('PRACTICE_MEDIA', 'build/packages/practices')
 PREFIX = 'assets/practices/'
 
 
-def media_path(path):
+def media_path(path, media_root=None):
     """The file on disk for a packaged path, or for a path in the project."""
     path = str(path)
     if path.startswith(PREFIX):
-        return MEDIA / path[len(PREFIX):]
+        return (MEDIA if media_root is None else Path(media_root)) / path[len(PREFIX):]
     return ROOT / path
 
 
-def narration_text_path(config, code, default_directory):
+def narration_text_path(config, code, default_directory, media_root=None):
     """Resolve the configured voice's locale text, retaining other defaults."""
     selected = config.get('locale_text_files', {}).get(code)
     if selected is not None:
-        return media_path(selected)
+        return media_path(selected, media_root)
     return Path(default_directory) / (code + '.txt')
 
 

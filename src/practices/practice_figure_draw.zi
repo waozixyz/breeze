@@ -1,0 +1,159 @@
+// Native painter behind the bounded PracticeFigureRequest host effect.
+#import "kryon/geometry"
+#import "kryon/session"
+#import "kryon/drawing_props"
+#import "kryon/bitmap_image"
+#import "figure_model"
+#import "figure_math"
+#import "std/byte_text_linux"
+#import, file "../app/assets.zi";
+#import, file "practice_figure_pose.zi";
+#import "figure_stage"
+#import, file "tai_chi/tai_chi_rules.zi";
+#import, file "tai_chi/tai_chi_solve.zi";
+#import, file "tai_chi/tai_chi_view.zi";
+#import, file "tai_chi/tai_chi_math.zi";
+Image :: #import "kryon/image";
+
+PracticeFigurePlacement :: struct {
+    offset: TaiChiVector3
+    pivot: TaiChiVector3
+    roll: float64
+    translucent: bool
+    training: bool
+    training_shorts: bool
+}
+
+PracticeFigureTexture :: struct {
+    session: Session
+    texture: Texture2D
+    key: u64
+    digest: u64
+    man: bool
+    training: bool
+    training_shorts: bool
+    animation_tick: s64
+    used: u64
+}
+
+practice_figure_stages: [2]FigureStage;
+practice_figure_textures: [24]PracticeFigureTexture;
+practice_figure_clock: u64;
+
+PracticeFigureDrawModel :: (session: Session, solved: *TaiChiSolved, rig: *TaiChiRig,
+    framing: TaiChiFraming, man: bool, mirrored: bool, area: Rectangle, key: u64,
+    alt_text: string, seconds: float64 = -1.0, digest: u64 = 0,
+    placement: PracticeFigurePlacement = .{}) -> bool {
+    if !(area.width > 0.0 && area.height > 0.0) {
+        return false
+    }
+    scale := FigureMin(1.0, 960.0 / FigureMax(area.width, area.height))
+    width := cast(s32)FigureMax(1.0, cast(float64)area.width * scale)
+    height := cast(s32)FigureMax(1.0, cast(float64)area.height * scale)
+    stage := *practice_figure_stages[ifx man then 1 else 0]
+    if !stage.model.ready {
+        asset := AssetRead(ifx man then "assets/practices/shared/figure/man.vrm" else "assets/practices/shared/figure/woman.vrm")
+        if !asset.found {
+            return false
+        }
+        descriptor := cast(*TextDescriptor)(*asset.data)
+        if !FigureStageLoadBytes(stage, BytesFromPointer(descriptor.data, cast(u64)asset.data.count)) {
+            FigureStageFree(stage)
+            return false
+        }
+    }
+    slot := PracticeFigureTextureFor(session, key, width, height)
+    animation_tick := ifx seconds >= 0.0 then cast(s64)(seconds * 30.0) else -1
+    if digest == 0 || slot.digest != digest || slot.man != man ||
+    slot.training != placement.training || slot.training_shorts != placement.training_shorts ||
+    slot.animation_tick != animation_tick {
+        FigureModelTraining(*stage.model, *stage.scene, placement.training, !placement.training_shorts)
+        view: TaiChiFlatView
+        TaiChiFlatViewSet(*view, framing.camera)
+        target := TaiChiAddScaled3(view.center, view.up, framing.view_center)
+        center := FigureV3(target.x, target.y, target.z)
+        joints := PracticeFigureJoints(solved, rig)
+        offset := FigureV3(placement.offset.x, placement.offset.y, placement.offset.z)
+        pivot := FigureV3(placement.pivot.x, placement.pivot.y, placement.pivot.z)
+        if !FigureStagePaint(stage, *joints, center, view.yaw, view.tilt, framing.view_height,
+            width, height, seconds, offset, pivot, placement.roll) {
+            return false
+        }
+        if placement.translucent {
+            for pixel: cast(s64)0..cast(s64)width * height - 1 {
+                at := pixel * 4
+                stage.pixels.pixels[at] = cast(u8)(cast(s32)stage.pixels.pixels[at] * 45 / 100 + 120)
+                stage.pixels.pixels[at + 1] = cast(u8)(cast(s32)stage.pixels.pixels[at + 1] * 45 / 100 + 136)
+                stage.pixels.pixels[at + 2] = cast(u8)(cast(s32)stage.pixels.pixels[at + 2] * 35 / 100 + 160)
+                stage.pixels.pixels[at + 3] = cast(u8)(cast(s32)stage.pixels.pixels[at + 3] * 48 / 100)
+            }
+        }
+        if mirrored {
+            for row: cast(s32)0..height - 1 {
+                for column: cast(s32)0..width / 2 - 1 {
+                    left := (cast(s64)row * width + column) * 4
+                    right := (cast(s64)row * width + width - column - 1) * 4
+                    for channel: cast(s32)0..3 {
+                        first := stage.pixels.pixels[left + channel]
+                        stage.pixels.pixels[left + channel] = stage.pixels.pixels[right + channel]
+                        stage.pixels.pixels[right + channel] = first
+                    }
+                }
+            }
+        }
+        if slot.texture.id == 0 {
+            slot.texture = BitmapImageCreate(session, width, height, stage.pixels.pixels[:])
+            if slot.texture.id == 0 {
+                return false
+            }
+        } else if !BitmapImageUpdate(session, slot.texture, stage.pixels.pixels[:]) {
+            BitmapImageRelease(session, slot.texture)
+            slot.texture = .{}
+            slot.digest = 0
+            return false
+        }
+        slot.digest = digest
+        slot.man = man
+        slot.training = placement.training
+        slot.training_shorts = placement.training_shorts
+        slot.animation_tick = animation_tick
+    }
+    Image.Draw(session, Image.Props.{.key = key, .bounds = area, .texture = slot.texture,
+        .alt_text = alt_text, .smooth = true})
+    return true
+}
+
+PracticeFigureDrawRelease :: () {
+    for index: 0..practice_figure_textures.count - 1 {
+        slot := *practice_figure_textures[index]
+        BitmapImageRelease(slot.session, slot.texture)
+        slot.* = .{}
+    }
+    for index: 0..practice_figure_stages.count - 1 {
+        FigureStageFree(*practice_figure_stages[index])
+    }
+}
+
+#scope_file
+PracticeFigureTextureFor :: (session: Session, key: u64, width: s32, height: s32) -> *PracticeFigureTexture {
+    oldest := *practice_figure_textures[0]
+    practice_figure_clock += 1
+    for index: 0..practice_figure_textures.count - 1 {
+        slot := *practice_figure_textures[index]
+        if slot.session.slot == session.slot && slot.session.epoch == session.epoch && slot.key == key {
+            if slot.texture.width != width || slot.texture.height != height {
+                BitmapImageRelease(slot.session, slot.texture)
+                slot.texture = .{}
+                slot.digest = 0
+            }
+            slot.used = practice_figure_clock
+            return slot
+        }
+        if slot.used < oldest.used {
+            oldest = slot
+        }
+    }
+    BitmapImageRelease(oldest.session, oldest.texture)
+    oldest.* = PracticeFigureTexture.{.session = session, .key = key, .used = practice_figure_clock}
+    return oldest
+}

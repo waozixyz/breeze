@@ -314,11 +314,13 @@ PracticePackFile :: (index: s32, suffix: string) -> string {
         return ""
     }
     prefix := PackageText(directory, "/practice-")
+    defer { PackageFree(prefix) }
+    return PracticePackFilename(index, prefix, suffix)
+}
+
+PracticePackFilename :: (index: s32, prefix: string, suffix: string) -> string {
     name := PackageText(prefix, PracticeContentName(practice_packs[index].practice))
-    defer {
-        PackageFree(prefix)
-        PackageFree(name)
-    }
+    defer { PackageFree(name) }
     language := TextFromCString(*practice_packs[index].language[0])
     if language.count == 0 {
         return PackageText(name, suffix)
@@ -338,18 +340,15 @@ PracticePackFile :: (index: s32, suffix: string) -> string {
     return PackageText(slot, suffix)
 }
 
-// Small practices ship with the app: those in default/ are installed until
-// removed, and those in shipped/ are added from the app without a download.
+// The default directory can include free narration as well as practices.
 PracticeShippedFrom :: (index: s32, folder: string) -> string {
-    if index < 0 || index >= practice_pack_count || practice_packs[index].language[0] != cast(u8)0 {
+    if index < 0 || index >= practice_pack_count {
         return ""
     }
     directory := PackageText("assets/practices/", folder)
-    prefix := PackageText(directory, PracticeContentName(practice_packs[index].practice))
-    path := PackageText(prefix, ".zx")
+    path := PracticePackFilename(index, directory, ".zx")
     defer {
         PackageFree(directory)
-        PackageFree(prefix)
         PackageFree(path)
     }
     view := AssetRead(path)
@@ -436,6 +435,9 @@ PracticePackStored :: (index: s32) -> bool {
 PracticePackPresent :: (index: s32) -> bool {
     practice := practice_packs[index].practice
     base := practice_packs[index].language[0] == cast(u8)0
+    if practice_packs[index].declined {
+        return false
+    }
     // A practice that comes with the app is always on Practice.
     if base && PracticeShippedBytes(index).count > 0 {
         return true
@@ -580,8 +582,8 @@ PracticeDownloadLog :: (index: s32, warning: bool, event: string, reason: string
     PackageFree(message)
 }
 
-// A failed grant or transfer is asked for again, with a fresh grant for a
-// paid pack, before the manager shows the failure.
+// Temporary failures can retry with a fresh grant for paid packs. Permanent
+// failures end the busy state and wait for an explicit retry.
 PracticeDownloadFailed :: (index: s32, reason: string, http_status: s32 = 0) {
     pack := *practice_packs[index]
     pack.failure_http = http_status
@@ -601,8 +603,9 @@ PracticeDownloadFailed :: (index: s32, reason: string, http_status: s32 = 0) {
         PracticeDownloadLog(index, true, "retrying", reason)
         return
     }
-    practice_packs[index].status = 3
-    practice_packs[index].requested = false
+    pack.status = 3
+    pack.requested = false
+    pack.retry_at = 0
     PracticeDownloadLog(index, true, "failed", reason)
 }
 
@@ -792,12 +795,12 @@ PracticeCatalogLoad :: () {
         practice_pack_count = count
         for index: cast(s32)0..count - 1 {
             practice_packs[index] = packs[index]
-            practice_packs[index].present = PracticePackPresent(index)
-            practice_packs[index].removed = practice_packs[index].language[0] == cast(u8)0 &&
-            PracticeMarked(practice_packs[index].practice, ".removed") && !practice_packs[index].present
             declined := PracticeNarrationDeclinedPath(index)
             practice_packs[index].declined = declined.count > 0 && PathExists(declined)
             PackageFree(declined)
+            practice_packs[index].present = PracticePackPresent(index)
+            practice_packs[index].removed = practice_packs[index].language[0] == cast(u8)0 &&
+            PracticeMarked(practice_packs[index].practice, ".removed") && !practice_packs[index].present
         }
     }
     practice_catalog_generation = AssetGeneration()
@@ -980,6 +983,14 @@ PracticeNarrationDownload :: (index: s32) {
     PracticeNarrationDeclined(index, false)
     state := PracticeNarrationState(index)
     if state == 1 || state == 2 {
+        return
+    }
+    if PracticeDefaultBytes(index).count > 0 {
+        pack := *practice_packs[index]
+        pack.present = true
+        pack.checked = false
+        pack.cache_checked = false
+        pack.status = 0
         return
     }
     practice_packs[index].requested = true
@@ -1304,7 +1315,7 @@ PracticeContentReviewNext :: () {
     PracticeContentWorkCollect()
     for index: cast(s32)0..practice_pack_count - 1 {
         pack := *practice_packs[index]
-        if pack.cache_checked || pack.status == 1 {
+        if pack.cache_checked || pack.declined || pack.status == 1 {
             continue
         }
         if pack.bundle != null {
@@ -1481,9 +1492,16 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, guide_narration: bool,
     PracticeContentWorkCollect()
     // Never replace borrowed animation/course/audio data during a session.
     if !idle {
-        // Voice packs contain no borrowed practice animation or course data.
-        // Let their pending transfer finish after Start instead of leaving
-        // the session silent until the person exits it.
+        // Voice can become available during a session without replacing its
+        // animation or course data. Finish mounting the selected recording.
+        if practice_narration_selected && selected == practice_selected {
+            voice := TextFromCString(*practice_voice_selected[0])
+            language := TextFromCString(*practice_narration_language[0])
+            index := PracticeNarrationPack(selected, language, voice)
+            if language.count > 0 && index >= 0 && practice_packs[index].present {
+                PracticeAttachWantedPack(index)
+            }
+        }
         PracticeTransfersPump(true)
         return
     }
@@ -1550,43 +1568,40 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, guide_narration: bool,
         PracticeNarrationEnsure(PracticeGuide)
     }
     for index: cast(s32)0..practice_pack_count - 1 {
-        pack := *practice_packs[index]
-        if !PracticePackWanted(pack) || pack.checked {
-            continue
-        }
-        // A removed practice is not mounted; the manager still reviews its copy.
-        if pack.removed {
-            continue
-        }
-        pack.cache_checked = true
-        if pack.bundle != null {
-            pack.checked = true
-            continue
-        }
-        if !PracticeContentLoadStart(index) {
-            continue
-        }
-        work := practice_load_work[index]
-        if !PracticeContentWorkReady(work) {
-            continue
-        }
-        pack.bundle = work.bundle
-        work.bundle = null
-        PracticeContentWorkFree(work)
-        practice_load_work[index] = null
-        pack.checked = true
-        if pack.bundle != null {
-            pack.status = 2
-            AssetNotifyAvailable()
-        } else if !PracticePackRefresh(index) && pack.status == 2 {
-            pack.status = 0
-        }
-        if pack.status != 1 {
-            pack.present = pack.bundle != null
-        }
+        PracticeAttachWantedPack(index)
     }
     PracticeTransfersPump(false)
     PracticeContentTrim()
+}
+
+PracticeAttachWantedPack :: (index: s32) {
+    pack := *practice_packs[index]
+    if pack.checked || pack.removed || pack.declined || !PracticePackWanted(pack) {
+        return
+    }
+    pack.cache_checked = true
+    if pack.bundle != null {
+        pack.checked = true
+        return
+    }
+    if !PracticeContentLoadStart(index) || !PracticeContentWorkReady(practice_load_work[index]) {
+        return
+    }
+    work := practice_load_work[index]
+    pack.bundle = work.bundle
+    work.bundle = null
+    PracticeContentWorkFree(work)
+    practice_load_work[index] = null
+    pack.checked = true
+    if pack.bundle != null {
+        pack.status = 2
+        AssetNotifyAvailable()
+    } else if !PracticePackRefresh(index) && pack.status == 2 {
+        pack.status = 0
+    }
+    if pack.status != 1 {
+        pack.present = pack.bundle != null
+    }
 }
 
 PracticeTransfersPump :: (narration_only: bool) {

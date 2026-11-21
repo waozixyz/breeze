@@ -13,7 +13,7 @@ practice and works offline afterwards. Each feature can add private resources un
 `assets/lumi/`, `assets/habits/`, `assets/practices/`, `assets/lists/`, `assets/diary/`
 or `assets/leaderboard/`. The practices' media (pictures, course data and
 recordings) is not kept in this repository: it is the
-[practices](https://github.com/waozixyz/practices) package, pinned
+[practices](https://git.waozi.xyz/waozi/practices) package, pinned
 in `ziran.lock`, linked at `build/packages/practices` and packaged under
 `assets/practices/` (`scripts/practice_media.py`). Change it there, then run
 `ziran update practices` and commit the lock. The narration, character
@@ -52,10 +52,19 @@ Meditation, Patterns and Wim Hof layouts are in `meditation_view.zi`,
 `patterns_view.zi` and `whm_view.zi`; Sun Salutation, Tai Chi, Astral Projection
 and the 7-Minute Workout use `movement_view.zi`. Tai Chi's course chooser is
 in `course_view.zi`. These pages return actions to the host, which retains
-session clocks, saved settings, audio, lifecycle and routing. Detailed
-movement figures stay on the render thread with their native mesh caches:
+session clocks, saved settings, audio, lifecycle and routing. Workout's custom
+editor lives in `apps/practice/workout_builder.zi`. It saves up to 16 routines
+per local user profile through the standard settings interface, with one
+versioned record per routine. Each routine can have up to 12 supported
+exercises, with active intervals from 5 to 300 seconds. Playback adds the
+same preparation and transition time shown in the editor to the active
+intervals, and uses the normal Workout renderer, cues and session history.
+Detailed movement figures stay on the render thread with their native mesh caches:
 `figure_view.zi` submits one bounded figure request, accepted only by the
-painter installed for the active page. The package owns each figure's bounds,
+painter installed for the active page. The app compiles the shared figure
+source from the pinned Practices checkout against the app's Kryon instance.
+The compiler inputs are staged under `build/practice-figure/`.
+Both avatars are bundled with the Practices app. The package owns each figure's bounds,
 labels and surrounding controls; changing native pose/rendering capabilities
 still needs a wrapper release. Practices 1.5.0 requires host interface 31.
 The list's frame (`HabitsListFrame`) carries the page's bounds, the theme

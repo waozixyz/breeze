@@ -6,6 +6,11 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 liboqs=${2:-"$root/vendor-builds/linux/x86_64/inbe-liboqs/lib/liboqs.a"}
+compile_only=${3:-}
+if [ -n "$compile_only" ] && [ "$compile_only" != "--compile-only" ]; then
+    echo "usage: $0 [ziran] [liboqs] [--compile-only]" >&2
+    exit 2
+fi
 work=$root/build/sync-account-zi-test
 include=$root/build/packages/ziran/include
 
@@ -18,7 +23,10 @@ fi
 
 rm -rf "$work"
 mkdir -p "$work/generated"
-"$ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c \
+python3 scripts/stage-practice-figure.py
+# shellcheck disable=SC2086
+sh scripts/run-ziran.sh "$ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c \
+    --module-path "$root/build/practice-figure" \
     --define PLATFORM_DESKTOP --root "$root/tests" \
     --entry sync_account_behavior:Check \
     -o "$work/generated" "$root/tests/sync_account_behavior.zi" \
@@ -54,6 +62,9 @@ C
     "$work/generated"/*.c "$root/vendor-builds/sqlite/sqlite3.c" \
     "$root/build/packages/monocypher/src/monocypher.c" "$liboqs" \
     -Wl,--wrap=PushSyncAccount -Wl,--gc-sections -ldl -lpthread -lm -o "$work/test"
+if [ "$compile_only" = "--compile-only" ]; then
+    exit 0
+fi
 # Storage must never open the real data directory.
 APP_DATA_ROOT=work/sync-account-zi-test/data
 export APP_DATA_ROOT

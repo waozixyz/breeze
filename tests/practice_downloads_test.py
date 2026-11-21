@@ -28,6 +28,10 @@ for name in NAMES:
     if name == 'taichi':
         pack['product'] = 'inbe.practice.taichi'
     packs.append(pack)
+sun_voice = (ROOT / 'build/package-assets/practices/assets/practices/default/sunsalutation.en.zx').read_bytes()
+(fixtures / 'default-sunsalutation.en.zx').write_bytes(sun_voice)
+packs.append(dict(practice='sunsalutation', language='en',
+                  sha256=hashlib.sha256(sun_voice).hexdigest(), size=len(sun_voice)))
 for code in ('en', 'es'):
     assets = work / code / 'assets'
     voice = assets / ('practices/taichi/voice/' + code)
@@ -119,6 +123,6 @@ assert (cache / 'practice-guide.en.removed').exists()
 assert not (cache / 'practice-whm.zx').exists() and not (cache / 'practice-whm.removed').exists()
 for name, data in preserved.items():
     assert (cache / name).read_bytes() == data
-print('Practice downloads: verified content, corrupt-download retry, offline cache, narration in the app '
+print('Practice downloads: verified content, corrupt-download retry, HTTP 404 recovery, offline cache, narration in the app '
       "language, chosen and removed languages, Lumi's guide narration, removal, shipped Wim Hof, granted "
       'paid packs, and Sun Salutation downloading and updating an older copy passed')

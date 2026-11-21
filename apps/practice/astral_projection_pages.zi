@@ -47,16 +47,11 @@ using ModalType;
 using TextAlign;
 using Text.Wrap;
 
-AstralManualStart :: (app: *InnerBreeze) {
-    if app == null { return }
-    app.tutorial_step = 0
-    app.manual_scroll = 0
-    app.practice_tab = PRACTICE_TAB_PLAY
-    AstralStartSelected(app)
-}
-
 AstralManualClose :: (app: *InnerBreeze, mark_seen: s32) {
-    if app == null { return }
+    if app == null {
+        return
+    }
+    astral_content_error = false
     if mark_seen != 0 {
         mark_exercise_manual_seen(app, EXERCISE_ASTRAL_PROJECTION)
     }
@@ -76,12 +71,14 @@ AstralManualDraw :: (app: *InnerBreeze) {
     if app == null {
         return
     }
-    if AstralLegacyAvailable() {
+    // The old guide remains usable from How to on legacy packages. The main
+    // lesson entry always shows the selector or an explicit content error.
+    if app.modal.active == 0 && AstralLegacyAvailable() {
         action := PracticeManualDraw(app)
         if action == PRACTICE_MANUAL_CLOSE {
             AstralManualClose(app, 0)
         } else if action == PRACTICE_MANUAL_START {
-            AstralManualStart(app)
+            AstralStartSelected(app, true)
         }
         return
     }
@@ -119,11 +116,19 @@ AstralManualDraw :: (app: *InnerBreeze) {
     if width <= 0 || bottom <= top {
         return
     }
-    if !available || astral_content_error {
+    if !available {
         Text.Draw(app.ui.session, Text.Props.{.text = LocaleText("astral_content_unavailable"),
-            .bounds = Rectangle.{content.x, content.y, content.width, content.height},
-            .size = AppFontSize(), .wrap = cast(Text.Wrap)TextWrapAuto})
+                .bounds = Rectangle.{content.x, content.y, content.width, content.height},
+                .size = AppFontSize(), .wrap = cast(Text.Wrap)TextWrapAuto})
         return
+    }
+    if astral_content_error {
+        message := LocaleText("astral_content_unavailable")
+        height := AstralParagraphHeight(app, message, width)
+        Text.Draw(app.ui.session, Text.Props.{.text = message,
+                .bounds = Rectangle.{content.x, content.y, content.width, cast(float32)height},
+                .size = AppFontSize(), .wrap = cast(Text.Wrap)TextWrapAuto})
+        top += height + AppScale(12)
     }
     pad := AppScale(16)
     selected := AstralSelection(app)
@@ -131,12 +136,14 @@ AstralManualDraw :: (app: *InnerBreeze) {
     if bottom - top < AppScale(280) {
         preview_height = AppScale(64)
     }
-    AstralPreviewDraw(app.ui.session, selected,
-        Rectangle.{cast(float32)left, cast(float32)top,
-            cast(float32)width, cast(float32)preview_height},
-        app.dark_mode != 0, Layout.KeyHash("astral/preview"),
-        AstralText(TextFromCString(*astral_catalogue.practices[selected].title_key[0])))
-    top += preview_height
+    if bottom - top >= preview_height + AppScale(72) {
+        AstralPreviewDraw(app.ui.session, selected,
+            Rectangle.{cast(float32)left, cast(float32)top,
+                cast(float32)width, cast(float32)preview_height},
+            app.dark_mode != 0, Layout.KeyHash("astral/preview"),
+            AstralText(TextFromCString(*astral_catalogue.practices[selected].title_key[0])))
+        top += preview_height
+    }
     showing_guide := app.tutorial_step == 1
     heights: [6]s32
     durations: [6][64]u8
@@ -181,6 +188,7 @@ AstralManualDraw :: (app: *InnerBreeze) {
                     .label = title, .fit_content = true}) != 0 {
                     unused AppCopyText(TextFromCString(*row.id[0]), app.astral_projection_exercise[:])
                     save_settings(app)
+                    astral_content_error = false
                     // Keep the selector in place while changing the selected guide.
                 }
                 // The labelled selection target occupies the heading; supporting
@@ -215,10 +223,10 @@ AstralManualDraw :: (app: *InnerBreeze) {
         astral_reveal_selection = showing_guide
     }
     if Button.Draw(app.ui.session, Button.Props.{.key = Layout.KeyHash("astral/start-selected"),
-        .bounds = Rectangle.{cast(float32)(left + button_w + gap), cast(float32)bottom,
-            cast(float32)button_w, cast(float32)AppScale(52)},
-        .label = LocaleText("practice_start_button"), .fit_content = true}) != 0 {
-        AstralManualStart(app)
+            .bounds = Rectangle.{cast(float32)(left + button_w + gap), cast(float32)bottom,
+                cast(float32)button_w, cast(float32)AppScale(52)},
+            .label = LocaleText("practice_start_button"), .fit_content = true}) != 0 {
+        AstralStartSelected(app, false)
     }
 }
 

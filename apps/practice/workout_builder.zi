@@ -1,0 +1,490 @@
+#import, file "workout_sequence.zi";
+#import, file "workout_rules.zi";
+#import, file "../../src/app/app_types.zi";
+#import, file "../../src/app/locale.zi";
+#import, file "../../src/app/metrics.zi";
+#import, file "../../src/app/text_buffers.zi";
+#import, file "../../src/platform/text_input_host.zi";
+#import, file "../../src/practices/practice_movement_host.zi";
+#import, file "../../src/screens/practice_subscreen_layout.zi";
+#import, file "../../src/storage/state.zi";
+#import, file "../../src/storage/storage_settings.zi";
+#import "byte_text_linux"
+#import "std/text_tools"
+#import "text_buffer"
+#import "geometry"
+#import "control_props"
+#import "kryon/tree"
+Button :: #import "kryon/button";
+Layout :: #import "kryon/layout";
+Scroll :: #import "kryon/scroll";
+Text :: #import "kryon/text";
+TextField :: #import "kryon/text_field";
+
+using ButtonTone;
+using ButtonEmphasis;
+using Text.Wrap;
+
+WORKOUT_BUILDER_STAY :: 0
+WORKOUT_BUILDER_BACK :: 1
+WORKOUT_BUILDER_PLAY :: 2
+WORKOUT_BUILDER_LIBRARY :: 0
+WORKOUT_BUILDER_EDITOR :: 1
+WORKOUT_BUILDER_PICKER :: 2
+
+WorkoutBuilderState :: struct {
+    page: s32
+    slots: [WORKOUT_CUSTOM_ROUTINE_LIMIT]WorkoutSequence
+    occupied: [WORKOUT_CUSTOM_ROUTINE_LIMIT]bool
+    account: [64]u8
+    draft: WorkoutSequence
+    slot: s32
+    block: s32
+    dirty: bool
+    confirm_back: bool
+    editor_scroll: s32
+    library_scroll: s32
+    picker_scroll: s32
+    name: TextField.State
+    duration: TextField.State
+    status: string
+}
+
+workout_builder: WorkoutBuilderState;
+workout_builder_name: [WORKOUT_CUSTOM_NAME_LIMIT]u8;
+workout_builder_duration: [3]u8;
+
+WorkoutBuilderKey :: (slot: s32) -> string {
+    result: Vec(u8)
+    BuilderPrint(*result, "workout_custom_v1_%", slot)
+    return BuilderFinish(result)
+}
+
+WorkoutBuilderOpen :: () {
+    workout_builder = WorkoutBuilderState.{.slot = -1, .block = -1}
+    unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), workout_builder.account[:])
+    workout_builder.name.bytes = workout_builder_name[:]
+    workout_builder.duration.bytes = workout_builder_duration[:]
+    for slot: cast(s32)0..WORKOUT_CUSTOM_ROUTINE_LIMIT - 1 {
+        key := WorkoutBuilderKey(slot)
+        text := storage_get_setting_text(key)
+        workout_builder.occupied[slot] = text.count > 0 || storage_setting_exists(key) != 0
+        if text.count > 0 {
+            unused WorkoutSequenceDecode(text, *workout_builder.slots[slot])
+        }
+    }
+}
+
+WorkoutBuilderSameAccount :: () -> bool {
+    return AppTextFromCString(storage_user_id_buffer(), 64) == TextUntilNul(workout_builder.account[:])
+}
+
+WorkoutBuilderFieldSet :: (state: *TextField.State, value: string) {
+    length: s32 = 0
+    for byte: value {
+        state.bytes[length] = byte
+        length += 1
+    }
+    state.length = length
+    state.cursor = length
+    state.anchor = length
+    state.scroll_x = 0
+    state.focused = false
+}
+
+WorkoutBuilderSelect :: (index: s32) {
+    workout_builder.block = index
+    if index < 0 || index >= workout_builder.draft.count {
+        WorkoutBuilderFieldSet(*workout_builder.duration, "")
+        return
+    }
+    text: [16]u8
+    AppFormatS32(workout_builder.draft.blocks[index].seconds, text[:])
+    WorkoutBuilderFieldSet(*workout_builder.duration, TextUntilNul(text[:]))
+}
+
+WorkoutBuilderEdit :: (slot: s32) {
+    workout_builder.slot = slot
+    workout_builder.draft = ifx slot >= 0 then workout_builder.slots[slot] else WorkoutSequence.{}
+    workout_builder.page = WORKOUT_BUILDER_EDITOR
+    workout_builder.editor_scroll = 0
+    workout_builder.dirty = false
+    workout_builder.confirm_back = false
+    workout_builder.status = ""
+    name: [WORKOUT_CUSTOM_NAME_LIMIT]u8
+    WorkoutBuilderFieldSet(*workout_builder.name, WorkoutSequenceName(*workout_builder.draft, name[:]))
+    WorkoutBuilderSelect(-1)
+}
+
+WorkoutBuilderChanged :: () {
+    workout_builder.dirty = true
+    workout_builder.confirm_back = false
+    workout_builder.status = ""
+}
+
+WorkoutBuilderFreeSlot :: () -> s32 {
+    for slot: cast(s32)0..WORKOUT_CUSTOM_ROUTINE_LIMIT - 1 {
+        if !workout_builder.occupied[slot] {
+            return slot
+        }
+    }
+    return -1
+}
+
+WorkoutBuilderDuration :: () -> bool {
+    index := workout_builder.block
+    if index < 0 {
+        return true
+    }
+    bytes := workout_builder_duration[:workout_builder.duration.length]
+    ticks: s32 = 0
+    for byte: bytes {
+        if byte < 48 || byte > 57 {
+            return false
+        }
+        ticks = ticks * 10 + cast(s32)byte - 48
+    }
+    if ticks < WORKOUT_CUSTOM_MIN_SECONDS || ticks > WORKOUT_CUSTOM_MAX_SECONDS {
+        return false
+    }
+    if workout_builder.draft.blocks[index].seconds != ticks {
+        workout_builder.draft.blocks[index].seconds = ticks
+        WorkoutBuilderChanged()
+    }
+    return true
+}
+
+WorkoutBuilderTake :: (output: *WorkoutSequence) -> bool {
+    if !WorkoutBuilderSameAccount() || !WorkoutBuilderDuration() || workout_builder.draft.count == 0 {
+        return false
+    }
+    name := TextTrim(TextFromBytes(workout_builder_name[:workout_builder.name.length]))
+    if !WorkoutSequenceSetName(*workout_builder.draft, name) {
+        return false
+    }
+    <<output = workout_builder.draft
+    return true
+}
+
+WorkoutBuilderStore :: (slot: s32, sequence: *WorkoutSequence) -> bool {
+    key := WorkoutBuilderKey(slot)
+    value := WorkoutSequenceEncode(sequence)
+    storage_settings_begin_write()
+    if workout_builder.slot < 0 {
+        if storage_setting_exists(key) == 0 && WorkoutBuilderSameAccount() {
+            storage_set_setting_text(key, value)
+        }
+    } else {
+        base := WorkoutSequenceEncode(*workout_builder.slots[slot])
+        if storage_setting_text_equals(key, base) != 0 && WorkoutBuilderSameAccount() {
+            storage_set_setting_text(key, value)
+        }
+    }
+    storage_settings_end_write()
+    return WorkoutBuilderSameAccount() && storage_setting_text_equals(key, value) != 0
+}
+
+WorkoutBuilderSave :: () {
+    sequence: WorkoutSequence
+    if !WorkoutBuilderTake(*sequence) {
+        workout_builder.status = "workout_custom_invalid"
+        return
+    }
+    slot := workout_builder.slot
+    if slot < 0 {
+        slot = WorkoutBuilderFreeSlot()
+    }
+    if slot < 0 {
+        workout_builder.status = "workout_custom_full"
+        return
+    }
+    if !WorkoutBuilderStore(slot, *sequence) {
+        workout_builder.status = "workout_custom_save_failed"
+        return
+    }
+    workout_builder.slot = slot
+    workout_builder.slots[slot] = sequence
+    workout_builder.occupied[slot] = true
+    workout_builder.dirty = false
+    workout_builder.confirm_back = false
+    workout_builder.status = "workout_custom_saved"
+}
+
+WorkoutBuilderExercise :: (app: *InnerBreeze, exercise: s32) -> string {
+    key: [64]u8
+    return WorkoutText(app, WorkoutKeyFor("workout_name_", exercise, key[:]))
+}
+
+WorkoutBuilderVariantKey :: (variant: s32) -> string {
+    if variant == WORKOUT_CUSTOM_LEFT {
+        return "workout_custom_left"
+    }
+    if variant == WORKOUT_CUSTOM_RIGHT {
+        return "workout_custom_right"
+    }
+    if variant == WORKOUT_CUSTOM_SHALLOW {
+        return "workout_custom_shallow"
+    }
+    return "workout_custom_standard"
+}
+
+WorkoutBuilderNextVariant :: (block: WorkoutBlock) -> s32 {
+    for offset: cast(s32)1..4 {
+        variant := (block.variant + offset) % 4
+        if WorkoutBlockSupports(block.exercise, variant) {
+            return variant
+        }
+    }
+    return block.variant
+}
+
+WorkoutBuilderFormat :: (app: *InnerBreeze, key: string, values: []FormatArg) -> string {
+    text: [160]u8
+    unused FormatTemplate(LocaleText(key), values, text[:])
+    return FrameTextHold(*app.ui.frame_text, TextUntilNul(text[:]))
+}
+
+// Keep the duration breakdown visible above the blocks. Every figure comes
+// from the same timeline the session uses to advance its clock.
+WorkoutBuilderTotals :: (app: *InnerBreeze, bounds: Rectangle) {
+    work := WorkoutSequenceActiveSeconds(*workout_builder.draft)
+    total := cast(s32)(WorkoutSequenceStart(*workout_builder.draft, workout_builder.draft.count) / 1000)
+    args: [3]FormatArg = .[.{.number = total}, .{.number = work}, .{.number = total - work}]
+    Text.Draw(app.ui.session, Text.Props.{.bounds = bounds, .text = WorkoutBuilderFormat(app, "workout_custom_totals", args[:]),
+        .size = AppFontSize(), .wrap = cast(Text.Wrap)TextWrapAuto})
+}
+
+WorkoutBuilderButtonProps :: (id: u64, bounds: Rectangle, label: string,
+    disabled: bool = false, selected: bool = false) -> Button.Props {
+    return Button.Props.{.key = Layout.KeyHash("workout/builder") + id,
+        .bounds = bounds, .label = label, .disabled = disabled, .selected = selected,
+        .tone = cast(ButtonTone)(ifx selected then ButtonToneAccent else ButtonToneNeutral),
+        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}
+}
+
+WorkoutBuilderRow :: (area: Rectangle, y: s32, height: s32, column: s32 = 0, columns: s32 = 1) -> Rectangle {
+    gap := AppScale(6)
+    part := (cast(s32)area.width + gap) / columns
+    return Rectangle.{area.x + cast(float32)(column * part), area.y + cast(float32)y,
+        cast(float32)(part - gap), cast(float32)height}
+}
+
+WorkoutBuilderField :: (app: *InnerBreeze, state: *TextField.State, field: s32, bounds: Rectangle, key: string) -> bool {
+    typed: [256]u8
+    input := SampleTextFieldInput(state.focused, typed[:])
+    result := TextField.Draw(app.ui.session, TextField.StateProps(state.*, TextField.Props.{
+        .key = Layout.KeyHash(key), .id = field, .focus_id = field, .bounds = bounds,
+        .numeric = field == 28911, .label = LocaleText(key), .placeholder = LocaleText(key), .input = input}))
+    if !TextField.StateApplyResult(state, result) {
+        return false
+    }
+    if result.clipboard_write {
+        unused TextInputWriteClipboard(result.clipboard_text)
+    }
+    if result.committed || result.escaped {
+        state.focused = false
+    }
+    return result.edit.changed
+}
+
+WorkoutBuilderList :: (app: *InnerBreeze, area: Rectangle, stride: s32, height: s32) -> s32 {
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(1, WorkoutBuilderRow(area, 0, height, 0, 2), LocaleText("workout_custom_presets"))) != 0 {
+        return WORKOUT_BUILDER_BACK
+    }
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(2, WorkoutBuilderRow(area, 0, height, 1, 2), LocaleText("workout_custom_new"),
+        WorkoutBuilderFreeSlot() < 0)) != 0 {
+        WorkoutBuilderEdit(-1)
+        return WORKOUT_BUILDER_STAY
+    }
+    y := stride
+    for slot: cast(s32)0..WORKOUT_CUSTOM_ROUTINE_LIMIT - 1 {
+        if !workout_builder.occupied[slot] {
+            continue
+        }
+        name: [WORKOUT_CUSTOM_NAME_LIMIT]u8
+        label := WorkoutSequenceName(*workout_builder.slots[slot], name[:])
+        if label.count == 0 {
+            label = LocaleText("workout_custom_unavailable")
+        }
+        if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(cast(u64)(40 + slot), WorkoutBuilderRow(area, y, height),
+            FrameTextHold(*app.ui.frame_text, label), workout_builder.slots[slot].count == 0)) != 0 {
+            WorkoutBuilderEdit(slot)
+            return WORKOUT_BUILDER_STAY
+        }
+        y += stride
+    }
+    return WORKOUT_BUILDER_STAY
+}
+
+WorkoutBuilderPick :: (app: *InnerBreeze, area: Rectangle, stride: s32, height: s32) {
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(3, WorkoutBuilderRow(area, 0, height), LocaleText("workout_custom_blocks"))) != 0 {
+        workout_builder.page = WORKOUT_BUILDER_EDITOR
+        return
+    }
+    for exercise: cast(s32)0..WORKOUT_MOVE_COUNT - 1 {
+        if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(cast(u64)(80 + exercise), WorkoutBuilderRow(area, (exercise + 1) * stride, height),
+            WorkoutBuilderExercise(app, exercise))) != 0 {
+            index := ifx workout_builder.block >= 0 then workout_builder.block + 1 else workout_builder.draft.count
+            if WorkoutSequenceInsert(*workout_builder.draft, index, WorkoutBlockDefault(exercise)) {
+                WorkoutBuilderSelect(index)
+                WorkoutBuilderChanged()
+            }
+            workout_builder.page = WORKOUT_BUILDER_EDITOR
+            return
+        }
+    }
+}
+
+WorkoutBuilderBlockActions :: (app: *InnerBreeze, area: Rectangle, y: s32, stride: s32, height: s32) -> bool {
+    index := workout_builder.block
+    if index < 0 {
+        return false
+    }
+    if WorkoutBuilderField(app, *workout_builder.duration, 28911, WorkoutBuilderRow(area, y, height, 0, 2),
+        "workout_custom_seconds") {
+        workout_builder.status = ""
+    }
+    duration_ok := WorkoutBuilderDuration()
+    if !duration_ok {
+        workout_builder.status = "workout_custom_duration_range"
+    }
+    block := workout_builder.draft.blocks[index]
+    next := WorkoutBuilderNextVariant(block)
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(20, WorkoutBuilderRow(area, y, height, 1, 2), LocaleText(WorkoutBuilderVariantKey(block.variant)),
+        next == block.variant)) != 0 {
+        workout_builder.draft.blocks[index].variant = next
+        WorkoutBuilderChanged()
+    }
+    y += stride
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(21, WorkoutBuilderRow(area, y, height, 0, 2), LocaleText("move_up_button"), !duration_ok || index == 0)) != 0 {
+        unused WorkoutSequenceMove(*workout_builder.draft, index, index - 1)
+        WorkoutBuilderSelect(index - 1)
+        WorkoutBuilderChanged()
+        return true
+    }
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(22, WorkoutBuilderRow(area, y, height, 1, 2), LocaleText("move_down_button"),
+        !duration_ok || index >= workout_builder.draft.count - 1)) != 0 {
+        unused WorkoutSequenceMove(*workout_builder.draft, index, index + 1)
+        WorkoutBuilderSelect(index + 1)
+        WorkoutBuilderChanged()
+        return true
+    }
+    y += stride
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(23, WorkoutBuilderRow(area, y, height, 0, 2), LocaleText("workout_custom_duplicate"),
+        !duration_ok || workout_builder.draft.count >= WORKOUT_CUSTOM_BLOCK_LIMIT)) != 0 {
+        unused WorkoutSequenceDuplicate(*workout_builder.draft, index)
+        WorkoutBuilderSelect(index + 1)
+        WorkoutBuilderChanged()
+        return true
+    }
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(24, WorkoutBuilderRow(area, y, height, 1, 2), LocaleText("workout_custom_remove"))) != 0 {
+        unused WorkoutSequenceRemove(*workout_builder.draft, index)
+        WorkoutBuilderSelect(-1)
+        WorkoutBuilderChanged()
+        return true
+    }
+    return false
+}
+
+WorkoutBuilderEditor :: (app: *InnerBreeze, area: Rectangle, stride: s32, height: s32) -> s32 {
+    back := ifx workout_builder.confirm_back then "workout_custom_discard" else "workout_custom_library"
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(4, WorkoutBuilderRow(area, 0, height), LocaleText(back))) != 0 {
+        if !workout_builder.dirty || workout_builder.confirm_back {
+            workout_builder.page = WORKOUT_BUILDER_LIBRARY
+            workout_builder.status = ""
+            return WORKOUT_BUILDER_STAY
+        }
+        workout_builder.confirm_back = true
+    }
+    if WorkoutBuilderField(app, *workout_builder.name, 28910, WorkoutBuilderRow(area, stride, height), "workout_custom_name") {
+        WorkoutBuilderChanged()
+    }
+    WorkoutBuilderTotals(app, WorkoutBuilderRow(area, stride * 2, stride * 2))
+    duration_ok := WorkoutBuilderDuration()
+    named := WorkoutNameValid(TextTrim(TextFromBytes(workout_builder_name[:workout_builder.name.length])))
+    can_play := named && duration_ok && workout_builder.draft.count > 0
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(5, WorkoutBuilderRow(area, stride * 4, height, 0, 2), LocaleText("save_button"), !can_play)) != 0 {
+        WorkoutBuilderSave()
+    }
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(6, WorkoutBuilderRow(area, stride * 4, height, 1, 2), LocaleText("workout_custom_play"), !can_play, true)) != 0 {
+        return WORKOUT_BUILDER_PLAY
+    }
+    if workout_builder.status.count > 0 {
+        Text.Draw(app.ui.session, Text.Props.{.bounds = WorkoutBuilderRow(area, stride * 5, stride),
+            .text = LocaleText(workout_builder.status), .size = AppSmallFontSize(), .wrap = cast(Text.Wrap)TextWrapAuto})
+    }
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(7, WorkoutBuilderRow(area, stride * 6, height), LocaleText("workout_custom_add"),
+        !duration_ok || workout_builder.draft.count >= WORKOUT_CUSTOM_BLOCK_LIMIT)) != 0 {
+        workout_builder.page = WORKOUT_BUILDER_PICKER
+        workout_builder.picker_scroll = 0
+        return WORKOUT_BUILDER_STAY
+    }
+    y := stride * 7
+    for index: cast(s32)0..workout_builder.draft.count - 1 {
+        block := workout_builder.draft.blocks[index]
+        name := WorkoutBuilderExercise(app, block.exercise)
+        args: [3]FormatArg = .[.{.number = index + 1}, .{.text = name, .is_text = true}, .{.number = block.seconds}]
+        label := WorkoutBuilderFormat(app, "workout_custom_block", args[:])
+        open := index == workout_builder.block
+        if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(cast(u64)(120 + index), WorkoutBuilderRow(area, y, height), label,
+            !duration_ok && !open, open)) != 0 {
+            WorkoutBuilderSelect(ifx open then -1 else index)
+            return WORKOUT_BUILDER_STAY
+        }
+        y += stride
+        if open {
+            if WorkoutBuilderBlockActions(app, area, y, stride, height) {
+                return WORKOUT_BUILDER_STAY
+            }
+            y += stride * 3
+        }
+    }
+    return WORKOUT_BUILDER_STAY
+}
+
+WorkoutBuilderDraw :: (app: *InnerBreeze, layout: PracticeSubscreenLayout) -> s32 {
+    if !WorkoutBuilderSameAccount() {
+        WorkoutBuilderOpen()
+    }
+    height := AppScale(48)
+    stride := height + AppScale(6)
+    scroll_at := *workout_builder.editor_scroll
+    rows: s32 = 7 + workout_builder.draft.count + (ifx workout_builder.block >= 0 then 3 else 0)
+    if workout_builder.page == WORKOUT_BUILDER_LIBRARY {
+        scroll_at = *workout_builder.library_scroll
+        rows = 1
+        for occupied: workout_builder.occupied {
+            if occupied {
+                rows += 1
+            }
+        }
+    } else if workout_builder.page == WORKOUT_BUILDER_PICKER {
+        scroll_at = *workout_builder.picker_scroll
+        rows = WORKOUT_MOVE_COUNT + 1
+    }
+    scroll := Scroll.Draw(app.ui.session, Scroll.Props.{.key = Layout.KeyHash("workout/builder/scroll") + cast(u64)workout_builder.page,
+        .bounds = Rectangle.{0.0, cast(float32)layout.scroll_y, cast(float32)app.ui.view_width, cast(float32)layout.scroll_h},
+        .content_height = stride * rows, .scroll_offset = scroll_at.*})
+    scroll_at.* = scroll.scroll_offset
+    if !scroll.opened {
+        return WORKOUT_BUILDER_STAY
+    }
+    defer { unused End(app.ui.session) }
+    full := cast(s32)scroll.content.width
+    width := full - Layout.PageSidePaddingFor(full) * 2
+    if width > AppScale(560) {
+        width = AppScale(560)
+    }
+    if width <= 0 {
+        return WORKOUT_BUILDER_STAY
+    }
+    area := Rectangle.{scroll.content.x + cast(float32)((full - width) / 2), scroll.content.y, cast(float32)width, scroll.content.height}
+    if workout_builder.page == WORKOUT_BUILDER_LIBRARY {
+        return WorkoutBuilderList(app, area, stride, height)
+    }
+    if workout_builder.page == WORKOUT_BUILDER_PICKER {
+        WorkoutBuilderPick(app, area, stride, height)
+        return WORKOUT_BUILDER_STAY
+    }
+    return WorkoutBuilderEditor(app, area, stride, height)
+}

@@ -24,8 +24,16 @@ bundle = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None
 output = root / "build/practice-images-ui-test"
 output.mkdir(parents=True, exist_ok=True)
 WIDTH, HEIGHT = 390, 844
-PRACTICES = ("wim-hof", "patterns", "meditation", "astral-projection",
-             "sun-salutation", "tai-chi", "workout")
+PRACTICES = (
+    ("wim-hof", "Wim Hof Breathing"),
+    ("patterns", "Steady Box Breath"),
+    ("meditation", "Meditation"),
+    ("astral-projection", "Astral Projection"),
+    ("sun-salutation", "Sun Salutation"),
+    ("tai-chi", "Tai Chi"),
+    ("workout", "7-Minute Workout"),
+    ("workout-short", "4-Minute Workout"),
+)
 driver = UiDriver(output / "driver")
 environment = os.environ | driver.environment() | {
     "SDL_VIDEODRIVER": "x11", "SDL_AUDIODRIVER": "dummy",
@@ -34,15 +42,6 @@ environment = os.environ | driver.environment() | {
 
 def command(*args):
     return subprocess.check_output(args, env=environment, text=True, timeout=5).strip()
-
-
-def click(window, x, y):
-    command("xdotool", "mousemove", "--window", window, str(x), str(y))
-    time.sleep(0.12)
-    command("xdotool", "mousedown", "1")
-    time.sleep(0.15)
-    command("xdotool", "mouseup", "1")
-    time.sleep(1.2)
 
 
 def capture(window, name):
@@ -55,6 +54,12 @@ def capture(window, name):
 def pictured(image, box):
     """A loaded picture varies; a missing one leaves the flat page colour."""
     return max(ImageStat.Stat(image.crop(box)).stddev) > 12
+
+
+def log_tail(path):
+    with path.open("rb") as log:
+        log.seek(max(0, path.stat().st_size - 4000))
+        return log.read(4000).decode(errors="replace")
 
 
 def state(window):
@@ -86,20 +91,18 @@ def stop(process):
 
 
 def launch(profile, name):
-    log = (output / (name + ".log")).open("w")
+    log_path = output / (name + ".log")
     arguments = [str(binary)] + (["--bundle", str(bundle)] if bundle else [])
-    app = subprocess.Popen(arguments, cwd=root, env=environment | {"APP_DATA_ROOT": str(profile)},
-                           stdout=log, stderr=subprocess.STDOUT)
-    driver.attach(app, output / (name + ".log"))
+    with log_path.open("w") as log:
+        app = subprocess.Popen(arguments, cwd=root, env=environment | {"APP_DATA_ROOT": str(profile)},
+                               stdout=log, stderr=subprocess.STDOUT)
+    driver.attach(app, log_path)
     for _ in range(200):
-        assert app.poll() is None, (output / (name + ".log")).read_text()
+        assert app.poll() is None, log_tail(log_path)
         found = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(app.pid)],
                                env=environment, capture_output=True, text=True)
         if found.returncode == 0 and (profile / "inbe.db").exists():
             window = found.stdout.splitlines()[0]
-            command("xdotool", "windowsize", window, str(WIDTH), str(HEIGHT))
-            command("xdotool", "windowmove", window, "0", "0")
-            time.sleep(1.5)
             return app, window
         time.sleep(0.1)
     stop(app)
@@ -147,20 +150,32 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory, c
                        (user, key, str(value)))
     app, window = launch(profile, "practice")
     try:
+        driver.wait(label="Wim Hof Breathing", role="text")
+        command("xdotool", "windowsize", window, str(WIDTH), str(HEIGHT))
+        command("xdotool", "windowmove", window, "0", "0")
+        command("xdotool", "windowfocus", window)
+        deadline = time.monotonic() + 5
+        while capture(window, "viewport").size != (WIDTH, HEIGHT):
+            assert time.monotonic() < deadline, "Practice did not render the requested viewport"
+            time.sleep(.05)
         missing = []
-        for index, practice in enumerate(PRACTICES):
-            if 0 < index < 4:
-                click(window, 324, 620)  # The next meditation practice.
-            elif index == 4:
-                click(window, 145, 24)  # Yoga.
-            elif index == 5:
-                click(window, 235, 24)  # Martial arts.
-            elif index == 6:
-                click(window, 325, 24)  # Workout.
+        for index, (practice, title) in enumerate(PRACTICES):
+            if index:
+                command("xdotool", "key", "Right")
+            driver.wait(label=title, role="text")
             if not pictured(capture(window, practice), (0, 40, WIDTH, 420)):
                 missing.append(practice)
-        click(window, 145, 24)  # Yoga.
+        for title in ("7-Minute Workout", "Tai Chi", "Sun Salutation"):
+            command("xdotool", "key", "Left")
+            driver.wait(label=title, role="text")
         driver.wait(label="Start Practice", role="button")
+        sky = (55, 52, WIDTH - 55, 225)
+        first_sky = capture(window, "sun-salutation-banner-first").crop(sky)
+        time.sleep(8)
+        next_sky = capture(window, "sun-salutation-banner-eight-seconds").crop(sky)
+        changed = sum(max(pixel) >= 6 for pixel in ImageChops.difference(first_sky, next_sky).getdata())
+        assert changed >= 100, f"Visible Sun Salutation banner changed only {changed} pixels"
+        print(f"Visible Sun Salutation banner changed {changed} pixels over eight seconds", flush=True)
         driver.press(label="How to", role="button")
         driver.wait(contains="Mountain")
         capture(window, "sun-salutation-guide")
@@ -180,12 +195,20 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory, c
         running = capture(window, "sun-salutation-running")
         if not pictured(running, figure):
             missing.append("sun-salutation figure")
-        # This interior patch contains the jade cloth and its wrap shadow,
-        # whose green channels are 143 and 123. Retained-frame alpha errors
-        # add dark seams between the opaque, adjoining illustration pieces.
-        cloth = running.crop((175, 450, 195, 510))
-        assert cloth.getchannel("G").getextrema()[0] >= 115, \
-            "The retained guide has dark seams across its clothing"
+        # Find the teal skirt in this pose before checking the opaque interior.
+        # The guide can sway during the intro, so a fixed crop can cross the hem.
+        cloth = running.crop((145, 450, 260, 550))
+        spans = []
+        for y in range(cloth.height):
+            pixels = [x for x in range(cloth.width) if cloth.getpixel((x, y)) == (61, 99, 91)]
+            if pixels and pixels[-1] - pixels[0] >= 24:
+                spans.append((y, pixels[0], pixels[-1]))
+        assert len(spans) >= 30, "The retained guide's skirt is missing"
+        edge_rows = len(spans) // 5
+        for y, left, right in spans[edge_rows:-edge_rows]:
+            # A UV seam crack exposes the dark page between cloth triangles.
+            assert min(cloth.getpixel((x, y))[1] for x in range(left, right + 1)) >= 85, \
+                "The retained guide exposes the background through its skirt"
         driver.press(label="Next", role="button", settle=False)
         time.sleep(.5)
         first = capture(window, "sun-salutation-moving-first").crop(figure)
@@ -203,7 +226,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory, c
         resumed = capture(window, "sun-salutation-resumed").crop(figure)
         assert ImageChops.difference(second, resumed).getbbox(), "The guide did not resume"
         assert not missing, "Practice pictures are missing: " + ", ".join(missing)
-        assert app.poll() is None, (output / "practice.log").read_text()
+        assert app.poll() is None, log_tail(output / "practice.log")
     finally:
         stop(app)
-print("All seven practice covers, Sun Salutation guide, real session, animation, pause and resume passed")
+print("All eight practice covers, Sun Salutation guide, real session, animation, pause and resume passed")

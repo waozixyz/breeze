@@ -89,7 +89,20 @@ def exercise_audio_modal(driver, read_state, read_setting, track_key):
     driver.wait(label='Cue volume', role='slider')
     assert read_setting('sound_volume') == '17'
     assert read_setting('music_volume') == '23'
-    driver.press(label='Close', role='button')
+    # The running session and the audio dialog both expose a Close button.
+    nodes = driver.tree()
+    dialog = next(node for node in nodes if node['kind'] == 'modal'
+                  and node['label'] == 'Background music' and node['visible'])
+    descendants = {dialog['index']}
+    close_buttons = []
+    for node in nodes:
+        if node['parent'] not in descendants:
+            continue
+        descendants.add(node['index'])
+        if node['kind'] == 'button' and node['label'] == 'Close' and node['visible']:
+            close_buttons.append(node)
+    assert len(close_buttons) == 1, close_buttons
+    driver.press(key=close_buttons[0]['key'])
     driver.wait_gone(label='Cue volume', role='slider')
     preserved()
     assert not read_state()['music_playing']

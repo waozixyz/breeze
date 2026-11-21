@@ -283,20 +283,40 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         for label in ('Jade woman', 'Indigo man'):
             driver.wait(label=label, role='text')
 
-    def choose_lesson(label, width, height):
+    def choose_lesson(label):
         dropdowns = driver.find(role='dropdown', visible=True)
         if dropdowns:
             driver.press(key=dropdowns[0]['key'])
-            driver.press(label=label, role='option')
+            driver.wait(role='option')
+            for _ in range(35):
+                options = driver.find(role='option', visible=True)
+                target = next((node for node in options if node['label'] == label), None)
+                if target:
+                    driver.release_pointer()
+                    driver.press(key=target['key'])
+                    break
+                viewport = next(node for node in driver.tree() if node['index'] == options[0]['parent'])
+                assert viewport['kind'] == 'scroll', viewport
+                driver.pointer(*driver.center(viewport), wheel=-2)
+                driver.wait_idle(frames=3, timeout=2)
+            else:
+                raise AssertionError('Could not reveal dropdown option ' + label)
         else:
             for _ in range(35):
-                found = driver.find(label=label, role='button', visible=True)
-                if found and found[0]['visible_height'] >= found[0]['height'] - 1:
-                    driver.press(key=found[0]['key'])
+                tree = driver.tree()
+                target = next(node for node in tree if node['kind'] == 'button'
+                              and node['label'] == label and node['interactive'])
+                if target['visible'] and target['visible_height'] >= target['height'] - 1:
+                    driver.release_pointer()
+                    driver.press(key=target['key'])
                     break
-                driver.pointer(180, height * .55, wheel=-2)
-                driver.release_pointer()
-                time.sleep(.1)
+                by_index = {node['index']: node for node in tree}
+                viewport = by_index[target['parent']]
+                while viewport['kind'] != 'scroll':
+                    viewport = by_index[viewport['parent']]
+                direction = 2 if target['y'] < viewport['visible_y'] else -2
+                driver.pointer(*driver.center(viewport), wheel=direction)
+                driver.wait_idle(frames=3, timeout=2)
             else:
                 raise AssertionError('Could not reveal ' + label)
         driver.wait(label=label, role='heading')
@@ -316,13 +336,13 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         for title in ("Posture and breathing", "Lesson 1", "Lesson 2", "Lesson 3"):
             with application('tai_chi_home', width, height):
                 driver.press(label='Start Practice', role='button')
-                choose_lesson(title, width, height)
+                choose_lesson(title)
                 driver.wait(contains='Free · ', role='text')
                 first_course_card(title)
                 driver.wait(label='Pause', role='button')
                 driver.press(label='Pause', role='button')
-                driver.wait(label='Resume', role='button')
-                driver.press(label='Resume', role='button')
+                driver.wait(label='PLAY', role='button')
+                driver.press(label='PLAY', role='button')
                 driver.wait(label='Pause', role='button')
                 driver.press(label='Close', role='button')
                 driver.press(label='Exit', role='button')
@@ -331,7 +351,7 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
             with application('tai_chi_home', width, height):
                 before = settings().get('tai_chi_item')
                 driver.press(label='Start Practice', role='button')
-                choose_lesson(title, width, height)
+                choose_lesson(title)
                 driver.wait(label='Unlock course', role='text')
                 first_course_card(title)
                 driver.wait(label='Unlock course', role='modal')
@@ -361,7 +381,7 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
         with application('tai_chi_home', width, height):
             assert settings().get('tai_chi_item') == previous_item
             driver.press(label='Start Practice', role='button')
-            choose_lesson('Lesson 4', width, height)
+            choose_lesson('Lesson 4')
             assert not driver.find(label='Unlock course', role='text', visible=True)
             first_course_card('Lesson 4')
             driver.wait(label='Pause', role='button')

@@ -32,6 +32,7 @@ stats_test_reads: s32;
 stats_test_written: s32;
 stats_test_charts: s32;
 stats_test_points: s32;
+stats_test_trends: s32;
 stats_test_holds: s32;
 stats_test_changes: s32;
 stats_test_band_charts: s32;
@@ -72,6 +73,15 @@ StatsTestCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "ReadHabitsStatsChartHost" && count == 1 {
         chart := cast(s32)arguments[0].integer
+        if chart < 0 {
+            stats_test_trends += 1
+            empty := stats_test_frame.overview && stats_test_frame.habit_count == 0
+            result.* = WidgetEncodeHabitsStatsChart(HabitsStatsChart.{
+                    .title = "Daily completions", .shown = true, .point_count = 30,
+                    .highest = ifx empty then 0 else 2, .sum = ifx empty then 0 else 15,
+                    .answered = ifx empty then 0 else 30}, *stats_test_chart_codec)
+            return 1
+        }
         if chart < 0 || chart > stats_test_frame.question_count { return 0 }
         stats_test_charts += 1
         value := HabitsStatsChart.{.title = "Plates", .answer_type = HABIT_ANSWER_NUMBER,
@@ -81,7 +91,17 @@ StatsTestCall :: (context: *void, module: *u8, function: *u8,
         return 1
     }
     if name == "ReadHabitsStatsPointHost" && count == 2 {
+        chart := cast(s32)arguments[0].integer
         index := cast(s32)arguments[1].integer
+        if chart < 0 && index >= 0 && index < 30 {
+            stats_test_points += 1
+            empty := stats_test_frame.overview && stats_test_frame.habit_count == 0
+            value: s32 = ifx empty then 0 else index % 3
+            result.* = WidgetEncodeHabitsStatsPoint(HabitsStatsPoint.{
+                    .slot = index, .value = value, .good = 1,
+                    .label = "20261020 · 1"}, *stats_test_point_codec)
+            return 1
+        }
         if index < 0 || index >= 3 { return 0 }
         stats_test_points += 1
         point := HabitsStatsPoint.{.slot = 20 + index * 3, .value = index + 1,
@@ -131,7 +151,7 @@ CheckHabitStats :: () -> s32 {
         .canvas_color = Color.{.r = 20, .g = 20, .b = 30, .a = 255},
         .card_fill = Color.{.r = 30, .g = 30, .b = 40, .a = 255},
         .name = "Meditation", .color = Color.{.r = 120, .g = 190, .b = 230, .a = 255},
-        .current_streak = 4, .best_streak = 9, .last_30_done = 20, .sunday = 3,
+        .current_streak = 4, .best_streak = 9, .last_30_done = 20, .last_30_due = 30, .sunday = 3,
         .monday = 5, .linked = true, .best_time = "20m", .total_time = "4h",
         .mood_total = 7, .mood_average = 3.85, .mood_3 = 2, .mood_4 = 3, .mood_5 = 2,
         .hold_count = 4, .hold_days = 7, .span_start_average = -1,
@@ -149,9 +169,53 @@ CheckHabitStats :: () -> s32 {
     if painted == 0 { return 3 }
     if stats_test_frame.action != HABITS_STATS_NONE || stats_test_frame.hold_days != 7 { return 4 }
     // The question's chart and its points, each hold and each change.
-    if stats_test_charts == 0 || stats_test_points < 3 { return 5 }
+    if stats_test_charts == 0 || stats_test_points < 33 || stats_test_trends == 0 { return 5 }
     if stats_test_holds < 4 || stats_test_changes < 2 { return 6 }
     // The answer chart came from plot, through the host.
     if stats_test_band_charts != 1 || stats_test_refused { return 7 }
+    overview := CheckHabitStatsOverview(2)
+    if overview != 0 { return 10 + overview }
+    empty := CheckHabitStatsOverview(0)
+    if empty != 0 { return 20 + empty }
+    return 0
+}
+
+// The all-habits page includes the combined daily series and one series
+// for each habit. An empty account still draws its zero-valued overview.
+CheckHabitStatsOverview :: (habit_count: s32) -> s32 {
+    session := SessionOpen()
+    bounds := Rectangle.{0.0, 0.0, 400.0, 2400.0}
+    BeginFrame(session, cast(u64)1, bounds)
+    stats_test_frame = HabitsStatsFrame.{.session = session, .scale = 1.0,
+        .view_width = 400, .view_height = 2400, .font = 16, .small_font = 14,
+        .text_color = Color.{.r = 230, .g = 230, .b = 240, .a = 255},
+        .canvas_color = Color.{.r = 20, .g = 20, .b = 30, .a = 255},
+        .card_fill = Color.{.r = 30, .g = 30, .b = 40, .a = 255},
+        .color = Color.{.r = 120, .g = 190, .b = 230, .a = 255},
+        .overview = true, .habit_count = habit_count, .name = "All habits",
+        .last_30_done = 15, .last_30_due = habit_count * 30}
+    stats_test_reads = 0
+    stats_test_written = 0
+    stats_test_charts = 0
+    stats_test_trends = 0
+    stats_test_points = 0
+    stats_test_holds = 0
+    stats_test_changes = 0
+    stats_test_band_charts = 0
+    stats_test_refused = false
+    WidgetHostBegin(session, StatsTestAssets)
+    AppsUiBegin(StatsTestCall, null)
+    drawn := HabitsRun(HabitsMessage.{.action = HABITS_STATS_VIEW})
+    AppsUiEnd()
+    WidgetHostEnd()
+    painted := PendingPaintCount(session)
+    unused EndFrame(session)
+    unused SessionClose(session)
+    if !drawn.succeeded || painted == 0 { return 1 }
+    if stats_test_reads != 1 || stats_test_written != 1 { return 2 }
+    if stats_test_points != (habit_count + 1) * 30 { return 3 }
+    if stats_test_trends < habit_count + 1 { return 4 }
+    if stats_test_charts != 0 || stats_test_holds != 0 ||
+    stats_test_changes != 0 || stats_test_band_charts != 0 || stats_test_refused { return 5 }
     return 0
 }

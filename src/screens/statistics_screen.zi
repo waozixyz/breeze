@@ -242,6 +242,84 @@ habit_stats_hold_codec: WidgetHabitsStatsHoldCodec;
 habit_stats_change_codec: WidgetHabitsStatsChangeCodec;
 // The habit the page shows while it draws.
 habit_stats_habit: *Habit;
+statistics_trend_days: [30]s32;
+statistics_trend_done: [HABIT_MAX + 1][30]s32;
+statistics_trend_charts: [HABIT_MAX + 1]HabitsStatsChart;
+statistics_trend_storage: s64 = -1;
+statistics_trend_sessions: s64 = -1;
+statistics_trend_today: s32;
+statistics_trend_count: s32;
+statistics_trend_selected: s32 = -1;
+
+// Each day's completed habits, including Diary completions and linked
+// practices. Counting and avoidance habits use the same goal as their list.
+statistics_prepare_trends :: (app: *InnerBreeze) {
+    today := statistics_today_index()
+    revision := storage_data_revision()
+    sessions := storage_session_change_clock()
+    statistics_trend_selected = app.habits.selected
+    if statistics_trend_storage == revision && statistics_trend_sessions == sessions &&
+    statistics_trend_today == today && statistics_trend_count == app.habits.count {
+        return
+    }
+    statistics_trend_storage = revision
+    statistics_trend_sessions = sessions
+    statistics_trend_today = today
+    statistics_trend_count = app.habits.count
+    statistics_last_days(today, statistics_trend_days[:])
+    statistics_trend_charts[0] = HabitsStatsChart.{.title = LocaleText("habit_stats_all_habits"),
+        .shown = true, .point_count = 30, .highest = 1}
+    for slot: cast(s32)0..29 {
+        statistics_trend_done[0][slot] = 0
+    }
+    for index: cast(s32)0..app.habits.count - 1 {
+        habit := *app.habits.items[index]
+        linked := habit_cached_linked_entries(app, index, 0)
+        chart := HabitsStatsChart.{.title = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE),
+            .shown = true, .point_count = 30, .highest = 1}
+        for slot: cast(s32)0..29 {
+            day := statistics_trend_days[slot]
+            done: s32 = ifx HabitEffectiveDayComplete(habit, day, linked) then 1 else 0
+            statistics_trend_done[index + 1][slot] = done
+            statistics_trend_done[0][slot] += done
+            chart.sum += cast(s64)done
+            if habit_scheduled_day(habit, day) != 0 {
+                chart.answered += 1
+            }
+        }
+        statistics_trend_charts[index + 1] = chart
+        statistics_trend_charts[0].sum += chart.sum
+        statistics_trend_charts[0].answered += chart.answered
+    }
+    for slot: cast(s32)0..29 {
+        if statistics_trend_done[0][slot] > statistics_trend_charts[0].highest {
+            statistics_trend_charts[0].highest = statistics_trend_done[0][slot]
+        }
+    }
+}
+
+statistics_trend_row :: (chart: s32) -> s32 {
+    if chart == -1 {
+        return statistics_trend_selected + 1
+    }
+    return -chart - 1
+}
+
+habit_stats_overview_frame_for :: (app: *InnerBreeze) -> HabitsStatsFrame {
+    card := CardProps(Rectangle.{})
+    return HabitsStatsFrame.{
+        .session = app.ui.session, .scale = MetricsScale(), .view_width = app.ui.view_width,
+        .view_height = app.ui.view_height, .bottom = app_content_bottom_reserved(app),
+        .font = AppFontSize(), .small_font = AppSmallFontSize(),
+        .text_color = StyleTokenColor("text"), .canvas_color = StyleTokenColor("canvas"),
+        .card_fill = card.fill, .card_border = card.border, .muted_class = MutedTextClass(),
+        .modal_active = app.modal.active != 0, .color = StyleTokenColor("accent"),
+        .name = LocaleText("habit_stats_all_habits"), .overview = true,
+        .habit_count = app.habits.count, .scroll = app.habits.scroll,
+        .last_30_done = cast(s32)statistics_trend_charts[0].sum,
+        .last_30_due = statistics_trend_charts[0].answered}
+}
+
 habit_stats_holds: [STATISTICS_HOLD_MAX]HabitsStatsHold;
 habit_stats_hold_count: s32;
 
@@ -310,6 +388,9 @@ habit_stats_frame_for :: (app: *InnerBreeze, index: s32) -> HabitsStatsFrame {
         scheduled := habit_scheduled_day(active, day_index) != 0
         if day_number < 30 && count > 0 {
             frame.last_30_done += 1
+        }
+        if day_number < 30 && scheduled {
+            frame.last_30_due += 1
         }
         if day_number < 56 && count > 0 {
             weekday := statistics_day_of_week(day_index)
@@ -400,6 +481,13 @@ habit_stats_chart_of :: (chart: s32) -> *HabitAnswerStats {
 }
 
 habit_stats_chart :: (chart: s32) -> HabitsStatsChart {
+    if chart < 0 {
+        row := statistics_trend_row(chart)
+        if row >= 0 && row <= statistics_trend_count {
+            return statistics_trend_charts[row]
+        }
+        return HabitsStatsChart.{}
+    }
     stats := habit_stats_chart_of(chart)
     if stats == null {
         return HabitsStatsChart.{}
@@ -451,7 +539,20 @@ HabitStatsCall :: (context: *void, module: *u8, function: *u8,
         index := cast(s32)arguments[1].integer
         stats := habit_stats_chart_of(chart)
         point: HabitsStatsPoint
-        if stats != null && index >= 0 && index < stats.point_count {
+        if chart < 0 && index >= 0 && index < 30 {
+            row := statistics_trend_row(chart)
+            if row >= 0 && row <= statistics_trend_count {
+                label: [80]u8
+                unused AppFormatS32(statistics_trend_days[index], label[:])
+                unused AppAppendText(" · ", label[:])
+                value: [32]u8
+                unused AppFormatS32(statistics_trend_done[row][index], value[:])
+                unused AppAppendText(AppTextFromCString(*value[0], 32), label[:])
+                point = HabitsStatsPoint.{.slot = index, .value = statistics_trend_done[row][index],
+                    .good = 1, .label = FrameTextHold(*app.ui.frame_text,
+                        AppTextFromCString(*label[0], 80))}
+            }
+        } else if stats != null && index >= 0 && index < stats.point_count {
             source := *stats.points[index]
             point = HabitsStatsPoint.{.slot = source.slot, .value = source.value,
                 .good = source.good,
@@ -523,15 +624,19 @@ HabitStatsCall :: (context: *void, module: *u8, function: *u8,
 // Has Habits draw the selected habit's statistics. Returns false when Back
 // was pressed.
 draw_statistics_page :: (app: *InnerBreeze) -> bool {
-    if app == null || app.habits.count <= 0 {
+    if app == null {
         return true
     }
+    statistics_prepare_trends(app)
     index := app.habits.selected
     if index < 0 || index >= app.habits.count {
-        index = 0
+        habit_stats_habit = null
+        habit_stats_frame = habit_stats_overview_frame_for(app)
+    } else {
+        habit_stats_habit = *app.habits.items[index]
+        habit_stats_frame = habit_stats_frame_for(app, index)
+        habit_stats_frame.last_30_done = cast(s32)statistics_trend_charts[index + 1].sum
     }
-    habit_stats_habit = *app.habits.items[index]
-    habit_stats_frame = habit_stats_frame_for(app, index)
     habit_stats_frame.action = HABITS_STATS_NONE
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
     AppsUiBegin(HabitStatsCall, cast(*void)app)

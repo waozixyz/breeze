@@ -5,6 +5,13 @@ cd "$root"
 work="$root/build/lumi-engine-test"
 mkdir -p "$work"
 "$root/build/packages/ziran/build/bin/ziran" bundle --root "$root/tests" \
+    --entry lumi_small_talk_behavior:Answer -o "$work/small-talk.zx" \
+    "$root/tests/lumi_small_talk_behavior.zi"
+result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+    "$root/build/packages/ziran/build/bin/ziran" run "$work/small-talk.zx")
+[ "$result" = 42 ]
+printf '%s\n' 'Lumi small talk: exact phrases, translated phrases and ambiguous-message fallback passed'
+"$root/build/packages/ziran/build/bin/ziran" bundle --root "$root/tests" \
     --entry lumi_tool_budget_behavior:Answer -o "$work/tool-budget.zx" \
     "$root/tests/lumi_tool_budget_behavior.zi"
 result=$(env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \

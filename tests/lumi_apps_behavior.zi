@@ -31,6 +31,8 @@ last_action: LumiAction;
 last_id: [37]u8;
 last_title: [2048]u8;
 last_reply: [1024]u8;
+online_calls: s32;
+record_chat: bool;
 
 TestLumiCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
@@ -42,6 +44,7 @@ TestLumiCall :: (context: *void, module: *u8, function: *u8,
         return 1
     }
     if name == "StartLumiOnlineHost" {
+        online_calls += 1
         result.* = HostScalar("bool", 0)
         return 1
     }
@@ -115,6 +118,10 @@ TestLumiCall :: (context: *void, module: *u8, function: *u8,
         return 1
     }
     if name == "AppendLumiChatHost" && count == 2 {
+        if record_chat {
+            LumiStoreAppend(TextFromBytes(BytesFromPointer(arguments[0].data,
+                cast(u64)arguments[0].length)), arguments[1].integer != 0)
+        }
         if arguments[1].integer == 0 {
             unused AppCopyText(TextFromBytes(BytesFromPointer(arguments[0].data,
                 cast(u64)arguments[0].length)), last_reply[:])
@@ -135,6 +142,38 @@ CheckLumiConversation :: () -> s32 {
     if !AppsSetEnabled(APP_ALL) {
         return 101
     }
+    // Keep the persistence fixture separate from the archive scenarios below.
+    small_talk_owner: [64]u8
+    unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), small_talk_owner[:])
+    unused AppCopyText("small-talk-user", g_storage.user_id[:])
+    LumiStoreReset()
+    online_calls = 0
+    record_chat = true
+    rows := LumiStoreCount()
+    if !SendLumi("LUMI, do you love me?") || online_calls != 0 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_small_affection" ||
+    LumiStoreCount() != rows + 2 {
+        return 180
+    }
+    LumiStoreReset()
+    if LumiStoreCount() != rows + 2 || LumiStoreRow(rows).text != "LUMI, do you love me?" ||
+    !LumiStoreRow(rows).user || LumiStoreRow(rows + 1).text != "lumi_small_affection" ||
+    LumiStoreRow(rows + 1).user {
+        return 181
+    }
+    record_chat = false
+    unused AppCopyText(AppTextFromCString(*small_talk_owner[0], 64), g_storage.user_id[:])
+    LumiStoreReset()
+    if !SendLumi("thanks, but I still need help with my plan") || online_calls != 1 ||
+    AppTextFromCString(*last_reply[0], 1024) != "lumi_unknown" {
+        return 182
+    }
+    choosing_diary = true
+    if !SendLumi("hello") || last_action.kind != LUMI_WRITE_DIARY ||
+    AppTextFromCString(*last_reply[0], 1024) == "lumi_small_greeting" {
+        return 183
+    }
+    choosing_diary = false
     action_count = 0
     if !SendLumi("/done Drink") || action_count != 0 ||
     AppTextFromCString(*last_reply[0], 1024) != "lumi_ambiguous" {

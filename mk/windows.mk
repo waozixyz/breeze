@@ -88,11 +88,12 @@ $(WIN64_OPUS_A) $(WIN64_MP3_A) $(WIN64_VORBIS_LIBS) &: mk/windows.mk ziran.lock 
 	$(CMAKE) --build $(WIN64_OPUS_BUILD_DIR) --target opus ziran_mp3 vorbisfile --parallel 2
 	@for archive in $(WIN64_OPUS_A) $(WIN64_MP3_A) $(WIN64_VORBIS_LIBS); do test -f $$archive || { echo "Missing $$archive" >&2; exit 1; }; done
 
-$(WINDOWS_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile mk/windows.mk ziran.lock $(ZIRAN_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(WINDOWS_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile mk/windows.mk ziran.lock $(ZIRAN_BIN) $(ZI_SRCS) $(PRACTICE_FIGURE_MODULES) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(WINDOWS_GEN_DIR)
 	mkdir -p $(WINDOWS_GEN_DIR)
+	python3 scripts/stage-practice-figure.py
 	sh scripts/run-ziran.sh $(ZIRAN_BIN) build --target=c --project --offline $(PACKAGE_FLAGS) \
-		--no-main --root . --target-os windows --target-cpu x64 \
+		--module-path $(PRACTICE_FIGURE_DIR) --no-main --root . --target-os windows --target-cpu x64 \
 		--define PLATFORM_DESKTOP --define _WIN32 --define DESKTOP_HOST --define DESKTOP_TRAY_ENABLED \
 		--define KRYON_WEBP_LINKED \
 		-o $(WINDOWS_GEN_DIR) $(ZI_SRCS)

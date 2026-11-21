@@ -2,12 +2,13 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/packages/ziran/build/bin"}
+compile_only=${2:-}
 work=$root/build/notification-lifecycle-test
 rm -rf "$work/c"
 mkdir -p "$work/c"
 cd "$root"
 sh "$root/scripts/run-ziran.sh" "$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} \
-    --target=c --no-main --define DESKTOP_HOST --root "$root" \
+    --target=c --no-main --define DESKTOP_HOST --define KRYON_TEST_DRIVER --root "$root" \
     -o "$work/c" "$root/tests/notification_lifecycle_behavior.zi"
 paint_header=$(find "$work/c" -name 'p*_paint_queue.h' -type f)
 test -f "$paint_header"
@@ -36,9 +37,12 @@ for source in "$work/c"/*.c "$work/c/tests"/*.c; do
 done
 "${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \
     -Wl,--gc-sections -Wl,--wrap=LocaleText -Wl,--wrap=WindowFocusedHost \
-    -Wl,--wrap=DailyNotificationsSupported -Wl,--wrap=ScheduleDailyNotification \
+    -Wl,--wrap=TestDriverActive -Wl,--wrap=DailyNotificationsSupported -Wl,--wrap=ScheduleDailyNotification \
     -Wl,--wrap=ScheduleNotificationDates -Wl,--wrap=CancelDailyNotification \
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$work/c/tests" \
     -o "$work/test" "$@" -lz -lm
-env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u GDK_DISPLAY "$work/test"
+if [ "$compile_only" = '--compile-only' ]; then
+    exit 0
+fi
+sh "$root/tests/run-isolated-desktop.sh" "$work/test"
 echo "Notification lifecycle, preference preservation, reminder catch-up and plain toast timing passed"

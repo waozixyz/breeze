@@ -2,13 +2,9 @@
 
 ## [Unreleased]
 
-- Retour arrière, édition et restauration corrigés. Photos et Radio plus accessibles. Dew avec les étoiles Telegram.
-- Lancez les pratiques sans traces, reprenez vos séances et suivez les téléchargements et l’incrustation Android.
-- Les minuteurs de pause se réinitialisent après une absence. Minuteurs et pièces quotidiennes suivent le thème.
-
-### Application web
-
-- Dans un navigateur sur ordinateur, l’application s’ouvre à taille normale et conserve votre réglage d’apparence.
+- Corrige retour arrière, édition, restauration. Photos/Radio. Dew et étoiles Telegram. Lumi répond et alerte si non lu.
+- Débutez, changez, reprenez. Avance astrale. Circuit doux 4 min et perso. Suivi/relance des téléchargements. PiP/Accueil.
+- Minuteurs au thème, remis à zéro au retour. Pièces au thème et du jour, liens Journal, courbes, stats, icônes Activité.
 
 ## [2.1.63] - 2026-11-05
 

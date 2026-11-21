@@ -189,3 +189,39 @@ AstralAdvanceSession :: (clock: AstralClock, milliseconds: s32, paused: bool,
     }
     return next
 }
+
+// Seeking only moves the lesson position. Recorded practice time accumulates
+// from playing frames and stops accumulating at the lesson's end.
+AstralPlayback :: struct {
+    position: AstralClock
+    practiced: AstralClock
+}
+
+AstralSeekPosition :: (playback: AstralPlayback, second: s32, duration: s32) -> AstralPlayback {
+    if duration > 0 {
+        bounded := ifx second < 0 then 0 else (ifx second > duration then duration else second)
+        playback.position = AstralClock.{bounded, 0}
+    }
+    return playback
+}
+
+AstralPlaybackAdvance :: (playback: AstralPlayback, milliseconds: s32, paused: bool,
+    duration: s32) -> AstralPlayback {
+    position := AstralAdvanceSession(playback.position, milliseconds, paused, duration)
+    played := (cast(s64)position.elapsed_seconds - cast(s64)playback.position.elapsed_seconds) * 1000
+        + position.remainder_ms - playback.position.remainder_ms
+    playback.position = position
+    playback.practiced = AstralAdvance(playback.practiced, cast(s32)played, false)
+    return playback
+}
+
+// Restart a spoken line after seeking within its speaking time if there is
+// room for it before the next cue. Preserve the guide's silent intervals.
+AstralNarrationCanRestart :: (course: *AstralCourse, position: AstralClock,
+    cue: s32, clip_ms: s32) -> bool {
+    if cue < 0 || cue >= course.count || clip_ms <= 0 { return false }
+    start := course.cues[cue].second
+    end := ifx cue + 1 < course.count then course.cues[cue + 1].second else course.duration
+    offset := (position.elapsed_seconds - start) * 1000 + position.remainder_ms
+    return offset >= 0 && offset < clip_ms && offset + clip_ms <= (end - start) * 1000
+}

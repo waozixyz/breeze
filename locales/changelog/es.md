@@ -2,13 +2,9 @@
 
 ## [Unreleased]
 
-- Retroceso, edición y restauración reparados. Fotos y Radio más accesibles. Compra Dew con estrellas de Telegram.
-- Inicia prácticas sin restos, cambia y retoma sesiones. Ve las descargas y usa imagen dentro de imagen en Android.
-- Los temporizadores se reinician tras una pausa y siguen el tema, al igual que las monedas diarias de Hábitos.
-
-### Aplicación web
-
-- La aplicación abre con un tamaño normal en el navegador de escritorio y conserva tu ajuste de apariencia.
+- Retroceso, edición y copias corregidos. Fotos/Radio. Dew con estrellas de Telegram. Lumi responde y avisa si no lo ves.
+- Inicia, cambia, retoma. Avance astral. Rutina suave de 4 min y propias. Descargas y reintento. Arreglos PiP/Inicio.
+- Reinicio al volver. Tema de reloj y monedas. Monedas diarias, Diario vinculado, gráficas, totales e iconos de Actividad.
 
 ## [2.1.63] - 2026-11-05
 

@@ -33,6 +33,8 @@ spec = importlib.util.spec_from_file_location('speech', ROOT / 'scripts/generate
 speech = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(speech)
 folder = media_path('assets/practices/astral_projection')
+if '--media' in sys.argv[2:]:
+    folder = Path(sys.argv[sys.argv.index('--media') + 1]).resolve()
 rows = json.loads((folder / 'catalogue.json').read_text())['practices']
 text = speech.entries(folder / 'text/en.txt')
 
@@ -71,10 +73,10 @@ with contextlib.ExitStack() as stack:
     prepare_music_fixture(profile)
     cache = profile / 'packages'
     cache.mkdir()
-    for name in ('astral_projection', 'astral_projection.en'):
-        source = ROOT / 'build/practice-content' / (name + '.zx')
-        if source.exists():
-            shutil.copyfile(source, cache / ('practice-' + name + '.zx'))
+    # The base pack must come from the app, including on a fresh profile.
+    voice = ROOT / 'build/practice-content/astral_projection.en.zx'
+    if voice.exists():
+        shutil.copyfile(voice, cache / ('practice-' + voice.name))
     alsa = profile / 'alsa.conf'
     alsa.write_text('pcm.!default {\n    type null\n}\n')
     env.update(ALSA_CONFIG_PATH=str(alsa), INBE_SCREENSHOT_DATA_ROOT=str(profile), APP_DATA_ROOT=str(profile))
@@ -124,22 +126,25 @@ with contextlib.ExitStack() as stack:
             row = db.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
             return row[0] if row else None
 
-    def reveal(title, description, width, height):
-        driver.pointer(width * .6, height * .5, wheel=100)
-        driver.release_pointer()
-        time.sleep(.25)
+    def reveal(title, description):
         for _ in range(30):
-            nodes = driver.find(label=title, role='button')
-            descriptions = driver.find(label=description, role='text')
-            if (nodes and nodes[0]['visible_height'] >= nodes[0]['height'] - 1 and
-                    descriptions and descriptions[0]['visible_height'] >= descriptions[0]['height'] - 1 and
-                    descriptions[0]['y'] + descriptions[0]['height'] + 44 <= height - 88):
-                driver.wait_idle(frames=3, timeout=2)
-                if driver.find(label=title, role='button'):
-                    return
-            driver.pointer(width * .6, height * .5, wheel=-2)
-            driver.release_pointer()
-            time.sleep(.15)
+            tree = driver.tree()
+            by_index = {node['index']: node for node in tree}
+            heading = next(node for node in tree if node['label'] == title and node['kind'] == 'button')
+            paragraph = next(node for node in tree if node['label'] == description and node['kind'] == 'text')
+            viewport = by_index[heading['parent']]
+            while viewport['kind'] != 'scroll':
+                viewport = by_index[viewport['parent']]
+            top = viewport['visible_y']
+            bottom = top + viewport['visible_height']
+            if (heading['visible_height'] >= heading['height'] - 1 and
+                    paragraph['visible_height'] >= paragraph['height'] - 1 and
+                    paragraph['y'] + paragraph['height'] + 44 <= bottom):
+                driver.release_pointer()
+                return
+            direction = 2 if heading['y'] < top else -2
+            driver.pointer(*driver.center(viewport), wheel=direction)
+            driver.wait_idle(frames=3, timeout=2)
         raise AssertionError('Could not scroll to ' + title)
 
     # Initialize only this private database, then choose English and suppress
@@ -209,22 +214,75 @@ with contextlib.ExitStack() as stack:
         driver.wait_idle(frames=20)
         driver.press(label=label, role='button')
 
+    def timeline(duration):
+        labels = [node['label'] for node in driver.tree() if node['visible']]
+        clocks = [match.groups() for label in labels
+                  if (match := re.fullmatch(r'(\d+):(\d{2}) / (\d+):(\d{2})', label))]
+        assert len(clocks) == 1, labels
+        minutes, seconds, total_minutes, total_seconds = map(int, clocks[0])
+        assert total_minutes * 60 + total_seconds == duration, clocks
+        return minutes * 60 + seconds
+
+    def check_seeking(window, row, session):
+        duration = row['duration']
+        slider = driver.wait(label='Playback position', role='slider')
+        assert slider['visible_width'] >= 180, slider
+        assert slider['visible_height'] == slider['height'], slider
+        left, top = slider['visible_x'], slider['visible_y']
+        length = slider['visible_width']
+        center_y = top + slider['visible_height'] / 2
+        middle = (left + length / 2, center_y)
+        early = (left + length / 4, center_y)
+        driver.drag(middle, middle, steps=1)
+        assert abs(timeline(duration) - duration // 2) < 10
+        assert not state(window)['paused']
+        driver.press(label='Pause', role='button')
+        driver.wait(label='Resume', role='button')
+        driver.drag(middle, early)
+        paused_at = timeline(duration)
+        assert duration // 5 < paused_at < duration * 3 // 10, paused_at
+        current_cue = next(cue for cue in reversed(session['cues']) if cue['second'] <= paused_at)
+        driver.wait(label=text[current_cue['key']], role='text')
+        assert driver.wait(label='Playback position', role='slider')['focused']
+        # Exercise SDL's keyboard input while the real private window owns focus.
+        subprocess.run(['xdotool', 'windowfocus', window, 'key', 'Right'], env=env,
+                       check=True, timeout=5)
+        goal = paused_at + 5
+        driver.wait(label=f'{goal // 60}:{goal % 60:02} / {duration // 60}:{duration % 60:02}', role='text')
+        time.sleep(1.05)
+        assert timeline(duration) == paused_at + 5 and state(window)['paused']
+        driver.drag(early, (left + length - 1, center_y))
+        assert timeline(duration) == duration
+        assert state(window)['practice_running'] and state(window)['paused']
+        assert not recorded(row['id'], duration), 'Seeking to the end recorded a completed session'
+        driver.press(label='Resume', role='button')
+        driver.wait(label='Pause', role='button')
+        driver.wait_idle(frames=3)
+        assert state(window)['practice_running']
+        assert not recorded(row['id'], duration)
+        driver.drag((left + length - 1, center_y), (left + 1, center_y))
+        assert timeline(duration) < 10
+        driver.wait(label=text[session['cues'][0]['key']], role='text')
+        print(f'{slider["visible_width"]}px timeline: click, drag, keyboard, pause and history passed')
+
     for width, height in ((1280, 900), (390, 844)):
         for row in rows:
             title = text[row['title_key']]
             session = json.loads((folder / 'sessions' / (row['id'] + '.json')).read_text())
             with application(width=width, height=height) as window:
-                press_home('Start Practice')
+                press_home('Choose Lesson')
                 assert not state(window)['practice_running'], 'Session started before selection'
                 modal = driver.wait(label='Astral Projection', role='modal')
                 assert modal['width'] <= width and modal['height'] <= height, modal
+                choices = {node['label'] for node in driver.tree() if node['kind'] == 'button'}
+                assert {text[item['title_key']] for item in rows} <= choices, choices
                 if row == rows[0]:
                     driver.press(label='Close', role='button')
                     driver.wait_gone(role='modal')
                     assert not state(window)['practice_running']
-                    press_home('Start Practice')
+                    press_home('Choose Lesson')
                     driver.wait(label='Astral Projection', role='modal')
-                reveal(title, text[row['description_key']], width, height)
+                reveal(title, text[row['description_key']])
                 driver.press(label=title, role='button')
                 assert setting('astral_projection_exercise') == row['id']
                 driver.wait(label=title, role='image')
@@ -232,20 +290,18 @@ with contextlib.ExitStack() as stack:
                 press_home('How to')
                 driver.wait(label=text[row['guide_key']], role='text')
                 driver.press(label='Back', role='button')
-                reveal(title, text[row['description_key']], width, height)
+                reveal(title, text[row['description_key']])
                 subprocess.run(['import', '-window', window, str(OUTPUT / (row['id'] + '-' + str(width) + '.png'))],
                                env=env, check=True, capture_output=True, timeout=10)
                 press_home('Start Practice')
                 driver.wait(label='Pause', role='button')
                 assert state(window)['practice_running']
                 driver.wait(label=text[session['cues'][0]['key']], role='text')
-                labels = [node['label'] for node in driver.tree() if node['visible']]
-                remaining = [int(v.split(':')[0]) * 60 + int(v.split(':')[1])
-                             for v in labels if re.fullmatch(r'\d+:\d{2}', v)]
-                assert len(remaining) == 1 and row['duration'] - 10 < remaining[0] <= row['duration'], labels
+                assert timeline(row['duration']) < 10
                 if row == rows[0]:
                     exercise_audio_modal(driver, lambda: state(window), setting,
                                          'practice_music_track_5')
+                    check_seeking(window, row, session)
                 driver.press(label='Pause', role='button')
                 driver.wait(label='Resume', role='button')
                 assert state(window)['paused']
@@ -258,28 +314,31 @@ with contextlib.ExitStack() as stack:
                 assert not state(window)['paused']
                 driver.press(label='Close', role='button')
                 driver.press(label='Exit', role='button')
-                driver.wait(label='Start Practice', role='button')
+                driver.wait(label='Choose Lesson', role='button')
                 assert not state(window)['practice_running']
-                driver.press(label='Start Practice', role='button')
+                driver.press(label='Choose Lesson', role='button')
                 assert setting('astral_projection_exercise') == row['id']
+                driver.wait(label=title, role='image')
                 assert not state(window)['practice_running']
                 driver.press(label='Start Practice', role='button')
                 driver.wait(label=text[session['cues'][0]['key']], role='text')
                 driver.press(label='Close', role='button')
                 driver.press(label='Exit', role='button')
-                driver.press(label='Start Practice', role='button')
+                driver.press(label='Choose Lesson', role='button')
                 following = rows[(rows.index(row) + 1) % len(rows)]
                 following_session = json.loads((folder / 'sessions' / (following['id'] + '.json')).read_text())
                 following_title = text[following['title_key']]
-                reveal(following_title, text[following['description_key']], width, height)
+                reveal(following_title, text[following['description_key']])
                 driver.press(label=following_title, role='button')
                 driver.press(label='Start Practice', role='button')
                 driver.wait(label=text[following_session['cues'][0]['key']], role='text')
                 assert setting('astral_projection_exercise') == following['id']
-                labels = [node['label'] for node in driver.tree() if node['visible']]
-                remaining = [int(v.split(':')[0]) * 60 + int(v.split(':')[1])
-                             for v in labels if re.fullmatch(r'\d+:\d{2}', v)]
-                assert len(remaining) == 1 and following['duration'] - 10 < remaining[0] <= following['duration'], labels
+                assert timeline(following['duration']) < 10
+                # End the switched session before this shared test profile restarts.
+                driver.press(label='Close', role='button')
+                driver.press(label='Exit', role='button')
+                driver.wait(label='Choose Lesson', role='button')
+                assert not state(window)['practice_running']
                 print(f'{width}x{height}: {row["id"]} guided, paused, restarted and switched to {following["id"]}')
 
     # Drive the final second through the real native lifecycle and recording
@@ -295,6 +354,10 @@ with contextlib.ExitStack() as stack:
             assert not state(window)['practice_running'] and state(window)['screen'] == 5
             matches = recorded(row['id'], row['duration'])
             assert len(matches) == 1 and matches[0]['title'] == text[row['title_key']], matches
+            driver.press(label='Done', role='button')
+            driver.press(label='Choose Lesson', role='button')
+            driver.wait(label=text[row['title_key']], role='image')
+            assert not state(window)['practice_running']
         with application('astral_projection_home', 390, 844) as window:
             assert len(recorded(row['id'], row['duration'])) == 1
             press_home('How to')
@@ -308,12 +371,35 @@ with contextlib.ExitStack() as stack:
         driver.wait(label='Resume', role='button')
         driver.press(label='Close', role='button')
         driver.press(label='Save', role='button')
-        driver.wait(label='Start Practice', role='button')
+        driver.wait(label='Choose Lesson', role='button')
         assert len(recorded(rows[0]['id'], 60)) == 1
 
     with application('astral_projection_missing', 390, 844) as window:
         driver.wait(label='This practice could not be loaded. Download the practice again and try once more.', role='text')
         assert not state(window)['practice_running'], 'Missing selected session fell back to the legacy practice'
+        reveal(text[rows[1]['title_key']], text[rows[1]['description_key']])
+        driver.press(label=text[rows[1]['title_key']], role='button')
+        assert setting('astral_projection_exercise') == rows[1]['id']
+        assert not state(window)['practice_running']
+
+    with application('astral_projection_legacy_home', 390, 844) as window:
+        press_home('Choose Lesson')
+        driver.wait(label='This practice could not be loaded. Download the practice again and try once more.', role='text')
+        assert not state(window)['practice_running'], 'The lesson entry launched an unrelated legacy session'
+        assert not driver.find(label='Start Practice', role='button')
+        driver.press(label='Close', role='button')
+        driver.wait(label='Choose Lesson', role='button')
+        assert setting('astral_projection_exercise') == rows[1]['id']
+        driver.press(label='How to', role='button')
+        assert not state(window)['practice_running']
+        driver.press(label='Start Practice', role='button')
+        driver.wait(label='Pause', role='button')
+        legacy = json.loads((folder / 'session.json').read_text())
+        driver.wait(label=text[legacy['cues'][0]['key']], role='text')
+        driver.press(label='Close', role='button')
+        driver.press(label='Exit', role='button')
+        driver.wait(label='Choose Lesson', role='button')
+        assert setting('astral_projection_exercise') == rows[1]['id']
 
     with application('astral_projection_legacy', 390, 844) as window:
         driver.wait(label='Resume', role='button')
@@ -324,7 +410,7 @@ with contextlib.ExitStack() as stack:
         assert state(window)['practice_running'], 'Older package no longer starts its original session'
         driver.press(label='Close', role='button')
         driver.press(label='Save', role='button')
-        driver.wait(label='Start Practice', role='button')
+        driver.wait(label='Choose Lesson', role='button')
         assert len(recorded('', 60)) == 1, 'Original package no longer saves an elapsed session'
 
     # A translated portrait uses the actual packaged metadata and cue text.
@@ -336,16 +422,16 @@ with contextlib.ExitStack() as stack:
     for row in rows:
         choose_saved(row['id'])
         with application(width=390, height=844) as window:
-            driver.press(label=labels['practice_start_button'], role='button')
+            driver.press(label=labels['astral_choose_lesson'], role='button')
             assert not state(window)['practice_running']
             title = localized[row['title_key']]
-            reveal(title, localized[row['description_key']], 390, 844)
+            reveal(title, localized[row['description_key']])
             driver.wait(label=localized[row['description_key']], role='text')
             driver.press(label=title, role='button')
             driver.press(label=labels['practice_manual_button'], role='button')
             driver.wait(label=localized[row['guide_key']], role='text')
             driver.press(label=labels['back_button'], role='button')
-            reveal(title, localized[row['description_key']], 390, 844)
+            reveal(title, localized[row['description_key']])
             subprocess.run(['import', '-window', window, str(OUTPUT / (row['id'] + '-de-390.png'))],
                            env=env, check=True, capture_output=True, timeout=10)
             driver.press(label=labels['practice_start_button'], role='button')
@@ -354,6 +440,10 @@ with contextlib.ExitStack() as stack:
             driver.press(label=labels['pause_button'], role='button')
             driver.wait(label=labels['patterns_resume_button'], role='button')
             assert state(window)['paused']
+            driver.press(label=labels['close_button'], role='button')
+            driver.press(label=labels['exit_button'], role='button')
+            driver.wait(label=labels['astral_choose_lesson'], role='button')
+            assert not state(window)['practice_running']
         print(f"390x844 de: {row['id']} translated selection, guide and initial cue passed")
 
 print('All six astral exercises passed desktop and portrait native UI selection/session coverage')

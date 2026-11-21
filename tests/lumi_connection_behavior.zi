@@ -14,7 +14,9 @@
 #import, file "../src/habits/habit_types.zi";
 #import, file "../src/habits/habit_model.zi";
 #import, file "../src/habits/habit_icons.zi";
+#import, file "../src/core/types.zi";
 #import "drawing_props"
+#import "notification"
 #import, file "../src/apps/package_files.zi";
 #import, file "../src/app/app_types.zi";
 #import, file "../src/app/app_clock_host.zi";
@@ -72,6 +74,25 @@ provider_hold: bool;
 provider_status: s32 = 200;
 provider_start_fail: bool;
 provider_switch_account: bool;
+notice_count: s32;
+notice_focused: bool;
+
+#program_export "__wrap_NotificationAllowedHost"
+NoticeAllowed :: () -> bool { return true }
+
+#program_export "__wrap_NotificationSendHost"
+NoticeSend :: (props: NotificationProps) -> bool {
+    check_true("reply notification has stable identity", props.tag == "inbe.lumi.reply" && props.id == 4)
+    notice_count += 1
+    return true
+}
+
+#program_export
+NotificationWindowFocusedHost :: () -> bool { return notice_focused }
+
+#program_export "__wrap_WindowFocusedHost"
+NoticeFocused :: () -> bool { return notice_focused }
+
 TEST_KEY :: "sk-test-lumi-provider-0123456789"
 
 ContinuationReply :: (request: HttpRequest, output: []u8) -> bool {
@@ -513,6 +534,37 @@ Check :: () -> s32 {
     check_true("owner saved", sync_account_save(*owner,
         cast(SyncAccountLocalDataChoice)SyncAccountLocalDataChoice.SYNC_ACCOUNT_LOCAL_DATA_MERGE) ==
         cast(SyncAccountSaveResult)SyncAccountSaveResult.SYNC_ACCOUNT_SAVE_OK)
+    // Newly saved replies notify when unseen. Reopening an archive does
+    // not re-emit them, and the actual screen/focus/scroll policy is used.
+    LumiStoreAppend("An unread local reply", false)
+    Pump(*app)
+    check_int("unseen saved reply notified once", notice_count, 1)
+    LumiStoreReset()
+    unused LumiStoreCount()
+    Pump(*app)
+    check_int("history reload does not notify", notice_count, 1)
+    app.breathing.screen = ScreenLumi
+    lumi_ui.follow_end = true
+    lumi_ui.chat_count = LumiStoreCount() + 1
+    lumi_rows_measured = lumi_ui.chat_count
+    lumi_rows_revision = LumiStoreRevision()
+    notice_focused = true
+    check_true("latest chat in focused app is visible", LumiReplyIsVisible(*app))
+    lumi_ui.follow_end = false
+    check_true("older history is not the latest reply", !LumiReplyIsVisible(*app))
+    lumi_ui.follow_end = true
+    app.backgrounded = 1
+    check_true("background chat is not seen", !LumiReplyIsVisible(*app))
+    app.backgrounded = 0
+    lumi_settings_open = true
+    check_true("settings cover the chat", !LumiReplyIsVisible(*app))
+    lumi_settings_open = false
+    app.launcher_open = true
+    check_true("launcher covers the chat", !LumiReplyIsVisible(*app))
+    app.launcher_open = false
+    notice_focused = false
+    check_true("unfocused chat is not seen", !LumiReplyIsVisible(*app))
+    app.breathing.screen = ScreenStart
     // Before agreeing, Lumi is offline whatever its switch says: a request
     // it does not understand gets the offline answer, and a confirmed
     // feedback report waits. Nothing at all is sent.

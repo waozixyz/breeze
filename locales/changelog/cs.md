@@ -2,13 +2,9 @@
 
 ## [Unreleased]
 
-- Opravený Backspace, úpravy a obnova záloh, snazší přístup k Fotkám a Rádiu, nákup Dew za hvězdy Telegramu.
-- Cvičení startují čistě a plynule se přepínají. Pokračujte v relacích, sledujte stahování i obraz v obraze na Androidu.
-- Časovače se po nečinnosti vynulují, mince i časovače ladí s motivem a v Návycích získáte denní mince.
-
-### Webová aplikace
-
-- Aplikace se v prohlížeči na počítači otevře v běžné velikosti a zachová nastavení vzhledu.
+- Opravy Backspace, úprav a obnovy záloh. Fotky a Rádio. Dew za hvězdy Telegramu. Lumi hned odpoví a hlásí nepřečtené.
+- Start, změna, návrat. Posun v astrálních lekcích. Lehké 4min a vlastní cviky. Stav/opakování stahování. Opravy PiP/Domů.
+- Reset po pauze, tematické časovače a mince. Denní mince, odkazy na Deník, grafy, statistiky a ikony návyků v Aktivitě.
 
 ## [2.1.63] - 2026-11-05
 

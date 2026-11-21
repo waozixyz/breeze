@@ -41,9 +41,8 @@ sessions_test_movement_codec: WidgetPracticeMovementFrameCodec;
 sessions_test_figure_codec: WidgetPracticeFigureRequestCodec;
 sessions_test_figures: s32;
 sessions_test_figure: PracticeFigureRequest;
-sessions_test_next_label: bool;
-sessions_test_next_name: bool;
-sessions_test_next_card: bool;
+sessions_test_cue: bool;
+sessions_test_heading: Rectangle;
 sessions_test_native_app: InnerBreeze;
 sessions_test_native_paints: s32;
 sessions_test_course: PracticeCourseFrame;
@@ -71,16 +70,20 @@ SessionsTestCall :: (context: *void, module: *u8, function: *u8,
         }
         if name == "WritePracticeMovementHost" && count == 1 && WidgetValidPracticeMovementFrame(arguments[0]) {
             sessions_test_writes += 1
-            sessions_test_movement = WidgetDecodePracticeMovementFrame(arguments[0], *sessions_test_movement_codec)
+            written := WidgetDecodePracticeMovementFrame(arguments[0], *sessions_test_movement_codec)
+            // The bundle lends its strings only during this call. Retain the
+            // host's input text for the tree assertions and the following frame.
+            sessions_test_movement.action = written.action
+            sessions_test_movement.value = written.value
             return 1
         }
         if name == "MovementLocaleHost" && count == 1 {
             key := HostValueText(arguments[0])
             text := "Practice"
-            if key == "sun_salutation_next" {
-                text = "Next"
-            } else if key == "sun_salutation_step_3" {
-                text = "Upward salute"
+            if key == "sun_salutation_breathe_in" {
+                text = "Breathe in"
+            } else if key == "sun_salutation_breathe_out" {
+                text = "Breathe out"
             }
             result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
                 .data = HostTextData(text), .length = cast(usize)text.count}
@@ -171,9 +174,8 @@ SessionsTestDraw :: (action: s32, frame_id: u64) -> s32 {
     sessions_test_course.session = session
     sessions_test_writes = 0
     sessions_test_figures = 0
-    sessions_test_next_label = false
-    sessions_test_next_name = false
-    sessions_test_next_card = false
+    sessions_test_cue = false
+    sessions_test_heading = .{}
     WidgetHostBegin(session, SessionsTestAssets)
     AppsUiBegin(SessionsTestCall, null)
     drawn := PracticeRun(PracticeMessage.{.action = action})
@@ -181,25 +183,15 @@ SessionsTestDraw :: (action: s32, frame_id: u64) -> s32 {
     WidgetHostEnd()
     painted := PendingPaintCount(session)
     unused EndFrame(session)
-    next_bounds: Rectangle
-    for index: cast(s32)0..TreeCount(session) - 1 {
-        node := TreeNodeAt(session, index)
-        if node.semantic_label == "Next ·" {
-            sessions_test_next_label = true
-            next_bounds = node.bounds
-        }
-        if node.semantic_label == "Upward salute" {
-            sessions_test_next_name = true
-        }
-    }
-    center_x := next_bounds.x + next_bounds.width / 2.0
-    center_y := next_bounds.y + next_bounds.height / 2.0
-    for index: cast(s32)0..TreeCount(session) - 1 {
-        node := TreeNodeAt(session, index)
-        if node.kind == WidgetKindBox && node.bounds.x <= center_x &&
-        node.bounds.x + node.bounds.width >= center_x && node.bounds.y <= center_y &&
-        node.bounds.y + node.bounds.height >= center_y {
-            sessions_test_next_card = true
+    if action == PRACTICE_MOVEMENT_VIEW {
+        for index: cast(s32)0..TreeCount(session) - 1 {
+            node := TreeNodeAt(session, index)
+            if node.semantic_label == sessions_test_movement.heading {
+                sessions_test_heading = node.bounds
+            }
+            if node.semantic_label == sessions_test_movement.cue {
+                sessions_test_cue = true
+            }
         }
     }
     unused SessionClose(session)
@@ -368,26 +360,46 @@ CheckPracticeSessions :: () -> s32 {
     EXERCISE_ASTRAL_PROJECTION, EXERCISE_WORKOUT]
     for index: cast(s32)0..3 {
         sessions_test_movement.practice = practices[index]
-        for layout: cast(s32)0..1 {
-            sessions_test_movement.view_width = ifx layout == 0 then 411 else 1024
-            sessions_test_movement.view_height = ifx layout == 0 then 900 else 768
+        for layout: cast(s32)0..2 {
+            sessions_test_movement.view_width = ifx layout == 0 then 411 else ifx layout == 1 then 1024 else 800
+            sessions_test_movement.view_height = ifx layout == 0 then 900 else ifx layout == 1 then 768 else 1080
+            sessions_test_movement.scale = ifx layout == 2 then 1.25 else 1.0
+            sessions_test_movement.font = ifx layout == 2 then 20 else 16
             sessions_test_movement.paused = layout == 1
-            tested := SessionsTestDraw(PRACTICE_MOVEMENT_VIEW, cast(u64)(20 + index * 2 + layout))
+            sessions_test_movement.heading = "Mountain pose"
+            sessions_test_movement.subtitle = ""
+            sessions_test_movement.cue = "Breathe in"
+            frame := cast(u64)(20 + index * 6 + layout * 2)
+            tested := SessionsTestDraw(PRACTICE_MOVEMENT_VIEW, frame)
             if tested != 0 {
                 return 20 + tested
             }
-            // Sun Salutation names the next pose in one quiet text line,
-            // without a preview card or a second figure.
-            figures := 1
-            if sessions_test_movement.action != PRACTICE_MOVEMENT_NONE || sessions_test_figures != figures ||
-            sessions_test_figure.preview || (practices[index] == EXERCISE_SUN_SALUTATION &&
-            (!sessions_test_next_label || !sessions_test_next_name || sessions_test_next_card)) {
-                return 24
-            }
+            failure := 60 + index * 9 + layout * 3
+            if sessions_test_movement.action != PRACTICE_MOVEMENT_NONE { return failure }
+            if sessions_test_figures != 1 || sessions_test_figure.preview { return failure + 1 }
+            if practices[index] == EXERCISE_SUN_SALUTATION && !sessions_test_cue { return failure + 2 }
             area := sessions_test_figure.bounds
+            width := cast(float32)sessions_test_movement.view_width
             if sessions_test_figure.practice != practices[index] || area.width <= 0.0 || area.height <= 0.0 ||
-            area.x < 0.0 || area.y < 48.0 || area.x + area.width > cast(float32)sessions_test_movement.view_width ||
+            area.x < 0.0 || area.y < 48.0 || area.x + area.width > width ||
             area.y + area.height > cast(float32)sessions_test_movement.view_height { return 25 }
+            sessions_test_movement.heading = "Schritt nach hinten in den tiefen Ausfallschritt"
+            sessions_test_movement.subtitle = "Setze deinen vorderen Fuß zwischen deine Hände und senke dein hinteres Knie zum Boden."
+            sessions_test_movement.cue = "Breathe out"
+            sessions_test_movement.progress = 850
+            tested = SessionsTestDraw(PRACTICE_MOVEMENT_VIEW, frame + 1)
+            next_area := sessions_test_figure.bounds
+            if tested != 0 || sessions_test_figures != 1 || area.x != next_area.x || area.y != next_area.y ||
+            area.width != next_area.width || area.height != next_area.height {
+                return 26
+            }
+            if practices[index] == EXERCISE_WORKOUT && layout != 1 {
+                heading := sessions_test_heading
+                center_error := heading.x * 2.0 + heading.width - width
+                if heading.width <= 0.0 || center_error < -2.0 || center_error > 2.0 {
+                    return 27
+                }
+            }
         }
     }
     sessions_test_course = PracticeCourseFrame.{.scale = 1.0, .view_width = 411, .view_height = 900,

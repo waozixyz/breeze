@@ -103,11 +103,13 @@ class VersionTest(unittest.TestCase):
         for name in ("ziran.toml", "ziran.lock", "scripts/packages.sh"):
             (self.root / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(REPO / name, self.root / name)
-        (self.root / "build/packages.mk").write_text("PACKAGES_READY := 1\n")
+        (self.root / "build/packages.mk").write_text(
+            "PACKAGES_READY := 1\nPACKAGES_RESOLUTION := |\n"
+        )
         (self.root / "build/packages/kryon").symlink_to(REPO / "build/packages/kryon", target_is_directory=True)
 
         def build():
-            return subprocess.run(["make", "version-check"], cwd=self.root,
+            return subprocess.run(["make", "PACKAGE_FLAGS=", "version-check"], cwd=self.root,
                                   capture_output=True, text=True, check=False)
 
         valid = build()

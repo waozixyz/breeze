@@ -1,0 +1,45 @@
+// Notices are device-local and arise only from newly saved replies, never
+// from loading history. A later frame gets the chance to show the reply.
+#import "notification"
+#import "c_string"
+#import "byte_text_linux"
+#import, file "../app/notification_delivery.zi";
+
+lumi_notice_text: [4096]u8;
+lumi_notice_owner: [65]u8;
+lumi_notice_wait: bool;
+
+LumiReplyNoticeReset :: () {
+    lumi_notice_text = .{}
+    lumi_notice_owner = .{}
+    lumi_notice_wait = false
+}
+
+LumiReplyNoticeQueue :: (text: string, owner: string) {
+    unused CopyCString(text, lumi_notice_text[:])
+    unused CopyCString(owner, lumi_notice_owner[:])
+    lumi_notice_wait = true
+}
+
+LumiReplyNoticeTick :: (visible: bool, owner: string) {
+    if lumi_notice_text[0] == 0 {
+        return
+    }
+    if owner != TextFromCString(*lumi_notice_owner[0]) {
+        LumiReplyNoticeReset()
+        return
+    }
+    if lumi_notice_wait {
+        lumi_notice_wait = false
+        return
+    }
+    if visible {
+        LumiReplyNoticeReset()
+        return
+    }
+    if AppNotificationsAllowed() && AppNotify(NotificationProps.{.title = "Lumi",
+            .body = TextFromCString(*lumi_notice_text[0]),
+            .tag = "inbe.lumi.reply", .id = 4}) {
+        LumiReplyNoticeReset()
+    }
+}

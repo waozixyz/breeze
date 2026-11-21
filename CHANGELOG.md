@@ -2,15 +2,9 @@
 
 ## [Unreleased]
 
-- Fix Backspace, editing and backup restores. Find Photos and Radio faster. Buy Dew with Telegram Stars.
-- Start practices cleanly, switch smoothly, resume sessions, and see download progress and Android picture-in-picture.
-- Reset break timers after time away, match coins and timers to the theme, and claim daily coins in Habits.
-- See the animated Inner Breeze homepage with a simpler footer and reduced-motion support.
-- Find the right installer or launch the web app from the homepage’s platform cards.
-
-### Web app
-
-- Open the desktop browser app at a normal scale and keep your Appearance setting.
+- Fix Backspace, edits, backup restores. Find Photos/Radio. Dew via Telegram Stars. Fast Lumi chat, unseen reply alerts.
+- Start/switch/resume. Seek Astral. Gentle 4-min and custom workouts. Day and night skies in Practices. Download status/retry. Fix PiP/Home crashes.
+- Reset break timers on return. Themed timers/coins. Daily coins, Diary links, habit charts, all stats and Activity icons.
 
 ## [2.1.63] - 2026-11-05
 

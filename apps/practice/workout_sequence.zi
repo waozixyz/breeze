@@ -1,0 +1,363 @@
+// A custom routine is a bounded list of blocks. Bridges belong to the timeline
+// but never consume the active seconds the person set on an exercise.
+#import, file "workout_rules.zi";
+#import "std/text_tools"
+#import "byte_text_linux"
+Utf8 :: #import "std/utf8";
+
+WORKOUT_CUSTOM_BLOCK_LIMIT :: 12
+WORKOUT_CUSTOM_ROUTINE_LIMIT :: 16
+WORKOUT_CUSTOM_NAME_LIMIT :: 120
+WORKOUT_CUSTOM_MIN_SECONDS :: 5
+WORKOUT_CUSTOM_MAX_SECONDS :: 300
+WORKOUT_CUSTOM_DEFAULT_SECONDS :: 30
+WORKOUT_CUSTOM_ORDINARY :: 0
+WORKOUT_CUSTOM_LEFT :: 1
+WORKOUT_CUSTOM_RIGHT :: 2
+WORKOUT_CUSTOM_SHALLOW :: 3
+WORKOUT_ROUTINE_CUSTOM :: 2
+
+WorkoutBlock :: struct {
+    exercise: s32
+    seconds: s32
+    variant: s32
+}
+
+WorkoutSequence :: struct {
+    name: [WORKOUT_CUSTOM_NAME_LIMIT]u8
+    name_length: s32
+    blocks: [WORKOUT_CUSTOM_BLOCK_LIMIT]WorkoutBlock
+    count: s32
+}
+
+WorkoutBlockSupports :: (exercise: s32, variant: s32) -> bool {
+    if exercise < 0 || exercise >= WORKOUT_MOVE_COUNT {
+        return false
+    }
+    if variant == WORKOUT_CUSTOM_ORDINARY {
+        return exercise != WORKOUT_SIDE_PLANK
+    }
+    if variant == WORKOUT_CUSTOM_SHALLOW {
+        return exercise == WORKOUT_SQUATS
+    }
+    return (variant == WORKOUT_CUSTOM_LEFT || variant == WORKOUT_CUSTOM_RIGHT) &&
+        (exercise == WORKOUT_SIDE_PLANK || exercise == WORKOUT_LUNGES || exercise == WORKOUT_STEP_UPS ||
+        exercise == WORKOUT_PUSH_UP_ROTATION || exercise == WORKOUT_HIGH_KNEES || exercise == WORKOUT_STEP_JACKS ||
+        exercise == WORKOUT_EASY_MARCH || exercise == WORKOUT_SIDE_REACHES || exercise == WORKOUT_BACK_TAPS)
+}
+
+WorkoutBlockDefault :: (exercise: s32) -> WorkoutBlock {
+    variant: s32 = ifx exercise == WORKOUT_SIDE_PLANK then WORKOUT_CUSTOM_RIGHT else WORKOUT_CUSTOM_ORDINARY
+    return WorkoutBlock.{exercise, WORKOUT_CUSTOM_DEFAULT_SECONDS, variant}
+}
+
+WorkoutBlockValid :: (block: WorkoutBlock) -> bool {
+    return WorkoutBlockSupports(block.exercise, block.variant) &&
+        block.seconds >= WORKOUT_CUSTOM_MIN_SECONDS && block.seconds <= WORKOUT_CUSTOM_MAX_SECONDS
+}
+
+WorkoutSequenceInsert :: (sequence: *WorkoutSequence, index: s32, block: WorkoutBlock) -> bool {
+    if index < 0 || index > sequence.count || sequence.count >= WORKOUT_CUSTOM_BLOCK_LIMIT || !WorkoutBlockValid(block) {
+        return false
+    }
+    cursor := sequence.count
+    while cursor > index {
+        sequence.blocks[cursor] = sequence.blocks[cursor - 1]
+        cursor -= 1
+    }
+    sequence.blocks[index] = block
+    sequence.count += 1
+    return true
+}
+
+WorkoutSequenceRemove :: (sequence: *WorkoutSequence, index: s32) -> bool {
+    if index < 0 || index >= sequence.count {
+        return false
+    }
+    sequence.count -= 1
+    cursor := index
+    while cursor < sequence.count {
+        sequence.blocks[cursor] = sequence.blocks[cursor + 1]
+        cursor += 1
+    }
+    sequence.blocks[sequence.count] = WorkoutBlock.{}
+    return true
+}
+
+WorkoutSequenceMove :: (sequence: *WorkoutSequence, from: s32, to: s32) -> bool {
+    if from < 0 || to < 0 || from >= sequence.count || to >= sequence.count {
+        return false
+    }
+    block := sequence.blocks[from]
+    unused WorkoutSequenceRemove(sequence, from)
+    return WorkoutSequenceInsert(sequence, to, block)
+}
+
+WorkoutSequenceDuplicate :: (sequence: *WorkoutSequence, index: s32) -> bool {
+    if index < 0 || index >= sequence.count {
+        return false
+    }
+    return WorkoutSequenceInsert(sequence, index + 1, sequence.blocks[index])
+}
+
+// The editor and loader share the same name limits. Validate UTF-8 before
+// exposing saved bytes to drawing and text editing.
+WorkoutNameValid :: (name: string) -> bool {
+    if name.count == 0 || name.count > WORKOUT_CUSTOM_NAME_LIMIT || TextTrim(name).count == 0 {
+        return false
+    }
+    for byte: name {
+        if byte < 32 || byte == 127 {
+            return false
+        }
+    }
+    return Utf8.Valid(name)
+}
+
+WorkoutSequenceName :: (sequence: *WorkoutSequence, output: []u8) -> string {
+    if sequence.name_length <= 0 || sequence.name_length > output.count || sequence.name_length > WORKOUT_CUSTOM_NAME_LIMIT {
+        return ""
+    }
+    for index: cast(s32)0..sequence.name_length - 1 {
+        output[index] = sequence.name[index]
+    }
+    return TextFromBytes(output[:sequence.name_length])
+}
+
+WorkoutSequenceSetName :: (sequence: *WorkoutSequence, name: string) -> bool {
+    if !WorkoutNameValid(name) {
+        return false
+    }
+    index: s32 = 0
+    for byte: name {
+        sequence.name[index] = byte
+        index += 1
+    }
+    sequence.name_length = index
+    return true
+}
+
+WorkoutSequenceEncode :: (sequence: *WorkoutSequence) -> string {
+    name_buffer: [WORKOUT_CUSTOM_NAME_LIMIT]u8
+    name := WorkoutSequenceName(sequence, name_buffer[:])
+    if !WorkoutNameValid(name) || sequence.count < 1 || sequence.count > WORKOUT_CUSTOM_BLOCK_LIMIT {
+        return ""
+    }
+    line: Vec(u8)
+    BuilderPrint(*line, "workout/1\n%\n", name)
+    for index: cast(s32)0..sequence.count - 1 {
+        block := sequence.blocks[index]
+        if !WorkoutBlockValid(block) {
+            return ""
+        }
+        BuilderPrint(*line, "% % %\n", WorkoutExerciseKey(block.exercise), block.seconds, block.variant)
+    }
+    return BuilderFinish(line)
+}
+
+WorkoutSequenceDecode :: (text: string, sequence: *WorkoutSequence) -> bool {
+    if text.count == 0 || text.count > 1024 || !TextHasPrefix(text, "workout/1\n") || text[text.count - 1] != 10 {
+        return false
+    }
+    lines := TextLines(text)
+    result: WorkoutSequence
+    index: s32 = 0
+    for line: lines {
+        if index == 1 {
+            if !WorkoutSequenceSetName(*result, line) {
+                return false
+            }
+        } else if index >= 2 && line.count != 0 {
+            words := TextSplit(line, " ")
+            if words.count != 3 || words[1].count > 3 || words[2].count != 1 {
+                return false
+            }
+            seconds, valid_seconds := TextInteger(words[1])
+            variant, valid_variant := TextInteger(words[2])
+            if !valid_seconds || !valid_variant {
+                return false
+            }
+            exercise: s32 = 0
+            while exercise < WORKOUT_MOVE_COUNT && WorkoutExerciseKey(exercise) != words[0] {
+                exercise += 1
+            }
+            if !WorkoutSequenceInsert(*result, result.count, WorkoutBlock.{exercise, cast(s32)seconds, cast(s32)variant}) {
+                return false
+            }
+        }
+        index += 1
+    }
+    // Reject malformed/future records as a whole. They remain on disk and the
+    // editor will never reuse their occupied slot.
+    if result.count == 0 || WorkoutSequenceEncode(*result) != text {
+        return false
+    }
+    <<sequence = result
+    return true
+}
+
+WORKOUT_SUPPORT_UPRIGHT :: 0
+WORKOUT_SUPPORT_WALL :: 1
+WORKOUT_SUPPORT_HANDS :: 2
+WORKOUT_SUPPORT_BACK :: 3
+WORKOUT_SUPPORT_BENCH :: 4
+WORKOUT_SUPPORT_SIDE :: 5
+
+WorkoutBlockSupport :: (exercise: s32) -> s32 {
+    if exercise == WORKOUT_WALL_SIT {
+        return WORKOUT_SUPPORT_WALL
+    }
+    if exercise == WORKOUT_PUSH_UPS || exercise == WORKOUT_PLANK || exercise == WORKOUT_PUSH_UP_ROTATION {
+        return WORKOUT_SUPPORT_HANDS
+    }
+    if exercise == WORKOUT_CRUNCHES {
+        return WORKOUT_SUPPORT_BACK
+    }
+    if exercise == WORKOUT_TRICEPS_DIPS {
+        return WORKOUT_SUPPORT_BENCH
+    }
+    if exercise == WORKOUT_SIDE_PLANK {
+        return WORKOUT_SUPPORT_SIDE
+    }
+    return WORKOUT_SUPPORT_UPRIGHT
+}
+
+WorkoutAccessSeconds :: (exercise: s32) -> s32 {
+    support := WorkoutBlockSupport(exercise)
+    if support == WORKOUT_SUPPORT_WALL || support == WORKOUT_SUPPORT_BACK {
+        return 8
+    }
+    if support == WORKOUT_SUPPORT_HANDS {
+        return 7
+    }
+    if support == WORKOUT_SUPPORT_SIDE {
+        return 10
+    }
+    if support == WORKOUT_SUPPORT_BENCH {
+        return 6
+    }
+    return 2
+}
+
+WorkoutBridgeMilliseconds :: (from: WorkoutBlock, to: WorkoutBlock) -> s32 {
+    if from.exercise == to.exercise && from.variant == to.variant {
+        return 0
+    }
+    departure: s32 = ifx from.exercise < 0 then 0 else WorkoutAccessSeconds(from.exercise)
+    // One second at the neutral stance to change equipment/camera between
+    // different movements. Initial preparation gets the spoken countdown.
+    handoff: s32 = ifx from.exercise < 0 then 3 else 1
+    return (departure + handoff + WorkoutAccessSeconds(to.exercise)) * 1000
+}
+
+WorkoutSequenceBridge :: (sequence: *WorkoutSequence, index: s32) -> s32 {
+    if index < 0 || index >= sequence.count {
+        return 0
+    }
+    previous := ifx index == 0 then WorkoutBlock.{.exercise = -1} else sequence.blocks[index - 1]
+    return WorkoutBridgeMilliseconds(previous, sequence.blocks[index])
+}
+
+WorkoutSequenceStart :: (sequence: *WorkoutSequence, index: s32) -> s64 {
+    if index < 0 || index > sequence.count {
+        return -1
+    }
+    start: s64 = 0
+    for block_index: cast(s32)0..index - 1 {
+        start += WorkoutSequenceBridge(sequence, block_index) + sequence.blocks[block_index].seconds * 1000
+    }
+    return start
+}
+
+WorkoutSequenceActiveSeconds :: (sequence: *WorkoutSequence) -> s32 {
+    seconds: s32 = 0
+    for index: cast(s32)0..sequence.count - 1 {
+        seconds += sequence.blocks[index].seconds
+    }
+    return seconds
+}
+
+WorkoutSequenceStep :: (sequence: *WorkoutSequence, elapsed_ms: s64) -> WorkoutStep {
+    time := ifx elapsed_ms > 0 then elapsed_ms else 0
+    for index: cast(s32)0..sequence.count - 1 {
+        block := sequence.blocks[index]
+        bridge := WorkoutSequenceBridge(sequence, index)
+        if time < bridge {
+            phase: s32 = ifx index == 0 then WORKOUT_PHASE_PREPARE else WORKOUT_PHASE_REST
+            return WorkoutStep.{phase, block.exercise, index, cast(s32)time, bridge}
+        }
+        time -= bridge
+        work := block.seconds * 1000
+        if time < work {
+            return WorkoutStep.{WORKOUT_PHASE_WORK, block.exercise, index, cast(s32)time, work}
+        }
+        time -= work
+    }
+    return WorkoutStep.{.phase = WORKOUT_PHASE_DONE, .index = sequence.count}
+}
+
+WorkoutSequenceAdvance :: (sequence: *WorkoutSequence, elapsed_ms: s64, delta_ms: s32, paused: bool) -> s64 {
+    if paused || delta_ms <= 0 {
+        return elapsed_ms
+    }
+    end := WorkoutSequenceStart(sequence, sequence.count)
+    return ifx delta_ms >= end - elapsed_ms then end else elapsed_ms + delta_ms
+}
+
+WorkoutSequenceCredit :: (coverage: *WorkoutCoverage, sequence: *WorkoutSequence, before: s64, after: s64) {
+    cursor := before
+    while cursor < after {
+        step := WorkoutSequenceStep(sequence, cursor)
+        if step.phase == WORKOUT_PHASE_DONE {
+            return
+        }
+        span := step.length_ms - step.elapsed_ms
+        if span > after - cursor {
+            span = cast(s32)(after - cursor)
+        }
+        if step.phase == WORKOUT_PHASE_WORK {
+            // Playback can only seek to the beginning of a block's bridge.
+            // Replaying an already covered part will never add elapsed time.
+            paid := step.elapsed_ms + span
+            if paid > coverage.work[step.index] {
+                coverage.played_ms += paid - coverage.work[step.index]
+                coverage.work[step.index] = paid
+            }
+        } else {
+            paid := step.elapsed_ms + span
+            if paid > coverage.ready[step.index] {
+                coverage.played_ms += paid - coverage.ready[step.index]
+                coverage.ready[step.index] = paid
+            }
+        }
+        cursor += span
+    }
+}
+
+WorkoutSequenceCompleted :: (coverage: *WorkoutCoverage, sequence: *WorkoutSequence) -> s32 {
+    mask: s32 = 0
+    for index: cast(s32)0..sequence.count - 1 {
+        if coverage.work[index] == sequence.blocks[index].seconds * 1000 {
+            mask |= 1 << index
+        }
+    }
+    return mask
+}
+
+WorkoutSequenceCue :: (step: WorkoutStep, output: []u8) -> string {
+    if step.phase == WORKOUT_PHASE_WORK {
+        return ifx step.exercise == WORKOUT_JUMPING_JACKS then "workout_say_jumping_jacks" else "workout_say_go"
+    }
+    if step.phase == WORKOUT_PHASE_PREPARE || step.phase == WORKOUT_PHASE_REST {
+        left := WorkoutStepSecondsLeft(step)
+        if left <= WORKOUT_SPOKEN_COUNT || WorkoutGentleExercise(step.exercise) {
+            return WorkoutCueKey(step, output)
+        }
+        // Jumping jacks open the full preset and have no recorded next cue.
+        if step.exercise == WORKOUT_JUMPING_JACKS {
+            return ""
+        }
+        return WorkoutKeyFor("workout_say_next_", step.exercise, output)
+    }
+    return ""
+}

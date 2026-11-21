@@ -48,11 +48,12 @@ $(CLICK_CURL_A): $(KRYON_CURL_DIR)/CMakeLists.txt mk/packaging.mk
 	@sh $(CLICK_CURL_BUILD_DIR)/bin/curl-config --protocols | grep -Eq '(^|[[:space:]])WS([[:space:]]|$$)'
 	@sh $(CLICK_CURL_BUILD_DIR)/bin/curl-config --protocols | grep -Eq '(^|[[:space:]])WSS([[:space:]]|$$)'
 
-$(CLICK_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile mk/packaging.mk ziran.lock $(ZIRAN_BIN) $(ZI_SRCS) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
+$(CLICK_GEN_STAMP): $(wildcard ziran.local.toml build/packages/*/ziran.toml) Makefile mk/packaging.mk ziran.lock $(ZIRAN_BIN) $(ZI_SRCS) $(PRACTICE_FIGURE_MODULES) $(KRYON_ZI_MODULES) $(GAME2D_MODULES) $(MESH_CLIENT_MODULES) $(wildcard build/packages/entity/src/*.zi) $(ZIRAN_STD_MODULES) $(SYNC_RETRY_SOURCE) | build-laws zi-check
 	rm -rf $(CLICK_GEN_DIR)
 	mkdir -p $(CLICK_GEN_DIR)
+	python3 scripts/stage-practice-figure.py
 	sh scripts/run-ziran.sh $(ZIRAN_BIN) build --target=c --project --offline $(PACKAGE_FLAGS) \
-		--no-main --root . --target-os linux --target-cpu arm64 \
+		--module-path $(PRACTICE_FIGURE_DIR) --no-main --root . --target-os linux --target-cpu arm64 \
 		--define PLATFORM_DESKTOP --define DESKTOP_HOST --define NATIVE_WINDOW_HAVE_SDL \
 		--define __GLIBC__ --define __aarch64__ \
 		-o $(CLICK_GEN_DIR) $(ZI_SRCS)
@@ -119,7 +120,7 @@ $(CLICK_BIN): Makefile mk/packaging.mk $(APP_SRCS) $(CLICK_GEN_STAMP) $(SQLITE_S
 		$(CLICK_LIBOQS_A) \
 		$(AARCH64_DESKTOP_HOST_LDLIBS) \
 		$(CLICK_CURL_A) -lssl -lcrypto \
-		-lm -lpthread -ldl -lrt -latomic -lz \
+		-lm -lpthread -ldl -lrt -latomic -lz -lEGL -lGLESv2 -lGLX \
 		$(LDFLAGS)
 	@if command -v patchelf >/dev/null; then \
 		patchelf --set-interpreter "$(CLICK_PATCHELF_INTERPRETER)" --set-rpath '$$ORIGIN/../lib' $@; \
@@ -230,7 +231,7 @@ $(APPIMAGE_TARGET): $(TARGET) $(LINUX_APPIMAGE_APPRUN) $(LINUX_APPIMAGE_DESKTOP)
 	cp $(LINUX_APPIMAGE_ICON) $(LINUX_APPDIR)/$(APP_ICON_NAME).png
 	cp $(LINUX_APPIMAGE_ICON) $(LINUX_APPDIR)/usr/share/icons/hicolor/512x512/apps/$(APP_ICON_NAME).png
 	@# Manually copy critical X11/OpenGL libraries that linuxdeploy might miss
-	@for lib in libX11.so.6 libXext.so.6 libdrm.so.2 libgbm.so.1 libEGL.so.1 libGLESv2.so.2 libGLdispatch.so.0 libglapi.so.0; do \
+	@for lib in libX11.so.6 libXext.so.6 libdrm.so.2 libgbm.so.1 libEGL.so.1 libGLESv2.so.2 libGLX.so.0 libGLdispatch.so.0 libglapi.so.0; do \
 		found=$$(find /usr/lib /lib -name "$$lib" 2>/dev/null | head -n 1); \
 		if [ -n "$$found" ]; then \
 			echo "Copying $$lib from $$found"; \

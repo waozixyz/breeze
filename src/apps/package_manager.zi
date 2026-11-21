@@ -171,9 +171,16 @@ PackageRevisionFor :: (index: s32) -> s32 {
     return package_slot_revisions[index]
 }
 
-// Whether the package waits to download or is downloading now.
+// Whether this package has any queued or active work.
 PackagePending :: (index: s32) -> bool {
     return index >= 0 && index < PackageSlots && (package_requested[index] || package_index == index)
+}
+
+// History and update checks never install an app or block a failed download notice.
+PackageInstallPending :: (index: s32) -> bool {
+    if index < 0 || index >= PackageSlots { return false }
+    return (package_requested[index] && !package_requested_check_only[index]) ||
+        (package_index == index && !package_check_only && package_phase != PACKAGE_PHASE_HISTORY)
 }
 
 // How much of the package downloading now has arrived, in percent of its
@@ -181,7 +188,7 @@ PackagePending :: (index: s32) -> bool {
 // expected size also keeps the small release notice fetched first from
 // reading as finished.
 PackageProgress :: (index: s32, expected: s64) -> s32 {
-    if index < 0 || index != package_index {
+    if index < 0 || index != package_index || package_check_only || package_phase == PACKAGE_PHASE_HISTORY {
         return -1
     }
     total := ifx expected > 0 then expected else cast(s64)package_download.total_bytes
@@ -679,7 +686,9 @@ PackageFinish :: (ok: bool) {
     package_recovery = DownloadRecovery.{}
     PackageWorkCancel()
     FileDownloadRelease(*package_download)
-    if package_phase != PACKAGE_PHASE_HISTORY { package_status[package_index] = ifx ok then 2 else 3 }
+    if !package_check_only && package_phase != PACKAGE_PHASE_HISTORY {
+        package_status[package_index] = ifx ok then 2 else 3
+    }
     PackageFree(package_metadata)
     package_metadata = ""
     package_index = -1
@@ -697,7 +706,7 @@ PackageRecover :: (reason: string, transport: bool = false) {
     FileDownloadRelease(*package_download)
     if package_phase != PACKAGE_PHASE_HISTORY && retryable &&
         DownloadRecoverySchedule(*package_recovery, package_recovery_now) {
-        package_status[index] = 1
+        if !package_check_only { package_status[index] = 1 }
         return
     }
     PackageFinish(false)
@@ -873,7 +882,7 @@ PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
                 package_requested_check_only[index] = false
                 package_requested_automatic[index] = false
                 package_index = index
-                package_status[index] = 1
+                if !package_check_only { package_status[index] = 1 }
                 if package_target && (TextUntilNul(package_target_account[:]) != PackageAccount() ||
                     TextUntilNul(package_target_identity[:]) != PackageID(index) ||
                     TextUntilNul(package_target_current[:]) != PackageVersion(index)) {
@@ -977,8 +986,9 @@ PackagePump :: (desired: s32, now: s32, defer_installation: bool) {
         public_key[0] = cast(u8)0
         if !PackageTrustedKey(package_metadata, package_index, public_key[:]) {
             index := package_index
+            checking := package_check_only
             PackageFinish(false)
-            package_status[index] = 4
+            if !checking { package_status[index] = 4 }
             return
         }
         package_release = PackageParseRelease(package_metadata, package_index,

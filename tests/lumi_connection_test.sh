@@ -14,8 +14,9 @@ set --
 if [ "${INBE_LUMI_TEST_DEBUG:-0}" = 1 ]; then
     set -- --define ANDROID_DEBUG
 fi
+python3 "$root/scripts/stage-practice-figure.py"
 (cd "$root" &&
-    "$compiler" build --project --offline --target=c --no-main --prune-stale \
+    "$compiler" build --project --offline ${PACKAGE_FLAGS:-} --module-path "$root/build/practice-figure" --target=c --no-main --prune-stale \
         --define PLATFORM_DESKTOP --define DESKTOP_HOST --define STORAGE_TEST_REAL_HOST_SERVICES "$@" --root "$root" \
         -o "$work/generated" \
         "$root/tests/lumi_connection_behavior.zi")
@@ -86,6 +87,7 @@ monocypher="$root/build/packages/monocypher/src"
     -Wl,--wrap=app_apply_nav_route -Wl,--wrap=practice_actions_app_start_practice \
     -Wl,--wrap=app_tools_AppToolContext -Wl,--wrap=app_tools_AppToolExecute \
     -Wl,--wrap=lumi_screen_LumiSubmit \
+    -Wl,--wrap=NotificationAllowedHost -Wl,--wrap=NotificationSendHost -Wl,--wrap=WindowFocusedHost \
     "$audio_dir/libopus/libopus.a" "$audio_dir/libziran_mp3.a" \
     "$audio_dir/libvorbisfile.a" "$audio_dir/libvorbis.a" "$audio_dir/libogg.a" \
     $(pkg-config --libs sdl2 cairo pangocairo fontconfig freetype2 gio-2.0 x11) \

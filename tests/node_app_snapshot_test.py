@@ -26,6 +26,7 @@ def main():
     parser.add_argument('--runtime', type=Path, required=True)
     parser.add_argument('--controller', type=Path, help='The reviewed Apps controller used by this build')
     parser.add_argument('--photos-module', type=Path, help='Test this actual current Photos module through signed local download')
+    parser.add_argument('--legacy-photos-module', type=Path, help='Validate an exact published legacy Photos bundle')
     parser.add_argument('--output', type=Path, help='Separate output for a concurrent diagnostic run')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
@@ -156,6 +157,7 @@ Main :: () -> s32 {
         subprocess.run([str(work / 'test')], env=environment | {
             'APP_DATA_ROOT': profile,
             **photos_env,
+            'PHOTOS_LEGACY_MODULE': str(args.legacy_photos_module.resolve()) if args.legacy_photos_module else '',
             'ICON_CACHE_PATH': str(Path(profile) / 'fixture.icon'),
             'IMAGE_REPLACEMENT_BUNDLE': str(fixture / 'replacement.zx'),
             'NODE_OPEN_ROOT_BUNDLE': str(packed_root),
@@ -172,8 +174,10 @@ Main :: () -> s32 {
             **{f'ICON_{name.upper()}_BUNDLE': str(fixture / f'{name}.zx')
                for name in ('valid', 'invalid', 'empty', 'corrupt')},
         }, check=True)
+    if args.legacy_photos_module:
+        print('Legacy Photos module: launcher validation and read-only identification passed')
     if args.photos_module:
-        print('Actual Photos module: corrupt download rejected; signed install, portrait/desktop wrench grant, account isolation and offline reopen passed')
+        print('Actual Photos module: corrupt retries rejected; terminal state retained during metadata check; explicit signed retry, portrait/desktop wrench grant and offline reopen passed')
     print('Installed apps: leaf discovery, background icons, stale-job isolation, deferred images and shared mappings passed')
     print('Photos compression: grant queues once; wrong app, publisher, account, validation, scanning and malformed request rejected')
     print('Embedded apps: identity, publisher scope, API, size and digest rejection; fallback publisher binding; newer signed update precedence; actual Arcade with complete art and no games opened offline')

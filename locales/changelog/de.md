@@ -2,13 +2,9 @@
 
 ## [Unreleased]
 
-- Löschtaste, Text und Backup-Wiederherstellung repariert. Fotos und Radio leichter finden. Dew für Telegram-Sterne.
-- Starte Übungen sauber, wechsle flüssig und setze sie fort. Sieh Downloads und nutze Android-Bild-in-Bild.
-- Pausentimer starten nach Abwesenheit neu. Münzen und Timer folgen dem Design. Hole täglich Münzen in Gewohnheiten.
-
-### Web-App
-
-- Die App öffnet sich im Desktop-Browser in normaler Größe und behält die Anzeigeeinstellung.
+- Löschtaste, Text, Backup repariert. Fotos/Radio. Dew für Telegram-Sterne. Lumi antwortet gleich, meldet Ungelesenes.
+- Start, Wechsel, Fortsetzen. Astralkurse spulen. 4-Min- und eigene Workouts. Downloadstatus/Neustart. PiP/Home repariert.
+- Pausentimer neu. Timer/Münzen im Design. Tagesmünzen, Tagebuch-Links, Kurven, Gesamtstatistik und Icons in Aktivität.
 
 ## [2.1.63] - 2026-11-05
 

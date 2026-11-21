@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--compiler", type=Path, required=True)
@@ -23,6 +24,7 @@ sources.append(root / "apps/practice/hold_reminder.zi")
 sources.append(kryon / "src/backend/android_fopen.zi")
 if list((root / "src").rglob("*.c")) or list((root / "src").rglob("*.kry")):
     raise SystemExit("Android application implementation must be current Zi")
+subprocess.run([sys.executable, str(root / "scripts/stage-practice-figure.py")], cwd=root, check=True)
 # The compiler writes every file anew. Outputs with the same bytes as before
 # get their earlier times back, so the native build recompiles only changes.
 previous = args.output.with_name(args.output.name + ".previous")
@@ -33,7 +35,8 @@ if args.output.exists():
 args.output.mkdir(parents=True)
 command = ["sh", str(root / "scripts/run-ziran.sh"), str(args.compiler),
            "build", "--target=c", "--no-main", "--project", "--offline",
-           "--root", str(root)]
+           "--root", str(root), "--module-path",
+           str(root / "build/practice-figure")]
 for name in args.define:
     command.extend(["--define", name])
 # Ziran selects platform code by its target, not by C preprocessor defines:

@@ -2,7 +2,11 @@
 
 ## [Unreleased]
 
+- Diary links are exclusive. Activity shows completed habit icons, and Habits has daily line graphs and an overview beside Shop.
+
+- Tap a diary-linked habit's day to open that date in Diary and keep its completion.
 - Coins follow the selected theme color.
+- Statistics and Shop have matching icons and separate tap targets.
 - Claim the daily reward beside the coin balance: one coin a day, three on the seventh day in a row.
 - Choose soda, coffee, bubble tea, chocolate and candle pictures for custom rewards.
 

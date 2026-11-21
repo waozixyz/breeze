@@ -15,9 +15,9 @@ mkdir -p build "$output"
 exec 9>build/apps-build.lock
 flock 9
 python3 scripts/check-package-versions.py
-python3 scripts/prepare-package-assets.py --apps-controller "${APPS_BUNDLE:-build/apps-ui/apps.zx}"
+python3 scripts/prepare-package-assets.py --node-only --output build/node-package-assets
 for name in $(python3 -c 'import json; print(" ".join(sorted(json.load(open("apps/versions.json")).get("node_apps", {}))))'); do
-    assets=build/package-assets/$name/assets
+    assets=build/node-package-assets/$name/assets
     mkdir -p "$assets"
     # shellcheck disable=SC2086
     bundle --root . --module-path "apps/$name" \

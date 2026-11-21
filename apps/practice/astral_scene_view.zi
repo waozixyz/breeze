@@ -2,11 +2,13 @@
 #import "kryon/session"
 #import "kryon/geometry"
 #import, file "astral_scene.zi";
+#import, file "astral_technique.zi";
 #import, file "workout_moves.zi";
 #import, file "../../src/practices/tai_chi/tai_chi_math.zi";
 #import, file "../../src/practices/tai_chi/tai_chi_flat.zi";
 #import, file "../../src/practices/tai_chi/tai_chi_solve.zi";
 #import, file "../../src/practices/tai_chi/tai_chi_draw.zi";
+#import, file "../../src/practices/practice_figure_draw.zi";
 #import, file "../../src/practices/tai_chi/tai_chi_rules.zi";
 #import, file "../../src/practices/tai_chi/tai_chi_view.zi";
 
@@ -56,11 +58,18 @@ AstralPreviewDraw :: (session: Session, exercise: s32, area: Rectangle,
     } else if exercise == 5 {
         WorkoutBody(*scene.pose, 0.0, 0.18, 0.0, 0.0, -90.0, 55.0, 0.0, 0.0, 2.0)
     }
-    AstralScenePaint(session, scene, area, dark, key, alt_text)
+    AstralScenePaint(session, scene, area, dark, key, alt_text, null, true)
+}
+
+AstralTechniqueDraw :: (session: Session, scene: AstralTechniqueScene, milliseconds: s64,
+    area: Rectangle, dark: bool, key: u64, alt_text: string) {
+    phase := cast(float64)milliseconds / 28000.0
+    body := AstralScene.{.pose = scene.physical, .camera = scene.camera, .phase = phase}
+    AstralScenePaint(session, body, area, dark, key, alt_text, *scene)
 }
 
 AstralScenePaint :: (session: Session, scene: AstralScene, area: Rectangle,
-    dark: bool, key: u64, alt_text: string) {
+    dark: bool, key: u64, alt_text: string, technique: *AstralTechniqueScene = null, overview: bool = false) {
     if area.width <= 0.0 || area.height <= 0.0 {
         return
     }
@@ -75,16 +84,85 @@ AstralScenePaint :: (session: Session, scene: AstralScene, area: Rectangle,
     astral_scene_floor.op_count = 0
     astral_scene_floor.point_count = 0
     color := ifx dark then cast(u32)0x6a9ead else cast(u32)0x3f6f8f
-    AstralSceneRing(*view, 0.68, scene.phase, color)
-    AstralSceneRing(*view, 1.0, scene.phase + 1.4, color)
-    AstralSceneRing(*view, 1.32, scene.phase + 2.8, color)
-    TaiChiPaintFlatEdge(session, *astral_scene_floor, framing, false, area, key, "", ASTRAL_EDGE_PATH)
+    if overview {
+        AstralSceneRing(*view, 0.68, scene.phase, color)
+        AstralSceneRing(*view, 1.0, scene.phase + 1.4, color)
+        AstralSceneRing(*view, 1.32, scene.phase + 2.8, color)
+    }
     rig := WorkoutRig()
     solved := WorkoutSolve(*scene.pose, *rig)
+    if technique != null {
+        AstralTechniqueCues(technique, *solved, *view, color)
+    }
+    if astral_scene_floor.op_count > 0 {
+        TaiChiPaintFlatEdge(session, *astral_scene_floor, framing, false, area, key, "", ASTRAL_EDGE_PATH)
+    }
+    if PracticeFigureDrawModel(session, *solved, *rig, framing, false, false, area,
+        key + cast(u64)4096, alt_text) {
+        if technique != null && technique.double_visible {
+            awareness := WorkoutSolve(*technique.awareness, *rig)
+            placement := PracticeFigurePlacement.{.offset = technique.double_offset, .pivot = solved.pelvis,
+                .roll = technique.double_roll, .translucent = true}
+            unused PracticeFigureDrawModel(session, *awareness, *rig, framing, false, false, area,
+                key + cast(u64)8192, "", -1.0, 0, placement)
+        }
+        return
+    }
     look := TaiChiFlatLookNamed("jadeWoman")
     look.top = cast(u32)0x3f6f8f
     look.pants = cast(u32)0x2e7d68
     look.accent = cast(u32)0xf2a65e
     TaiChiFlatPaintLook(*astral_scene_figure, *solved, *rig, look, scene.camera)
     TaiChiPaintFlatEdge(session, *astral_scene_figure, framing, false, area, key + cast(u64)4096, alt_text, ASTRAL_EDGE_PATH)
+}
+
+#scope_file
+AstralCueStroke :: (view: *TaiChiFlatView, points: []TaiChiVector3, color: u32, width: float64, alpha: float64) {
+    frame := *astral_scene_floor
+    frame.ops[frame.op_count] = TaiChiFlatOp.{.kind = TAI_CHI_FLAT_LINE, .color = color,
+        .alpha = alpha, .width = width, .first = frame.point_count, .count = cast(s32)points.count}
+    frame.op_count += 1
+    for point: points {
+        frame.points[frame.point_count] = TaiChiProject(view, point)
+        frame.point_count += 1
+    }
+}
+
+AstralTechniqueCues :: (scene: *AstralTechniqueScene, body: *TaiChiSolved, view: *TaiChiFlatView, color: u32) {
+    if scene.rope {
+        start := TaiChiAdd3(body.chest, .{0.0, 0.28, 0.0})
+        rope: [2]TaiChiVector3 = .[start, TaiChiAdd3(start, .{0.0, 1.10, 0.0})]
+        AstralCueStroke(view, rope[:], color, 0.012, 0.8)
+    }
+    if scene.path == 7 {
+        for side: cast(s32)0..1 {
+            for mark: cast(s32)0..3 {
+                y := cast(float64)mark * 0.37 + scene.elevator * 0.37
+                at := TaiChiV3(TaiChiSideSign(side) * 0.82, y, 0.0)
+                tick: [2]TaiChiVector3 = .[at, TaiChiAdd3(at, .{0.0, 0.0, 0.13})]
+                AstralCueStroke(view, tick[:], color, 0.012, 0.65)
+            }
+        }
+    }
+    if scene.path >= 2 && scene.path <= 6 {
+        trace: [5]TaiChiVector3 = .[body.ankles[1], body.knees[1], body.pelvis, body.chest, body.head_center]
+        if scene.path == 2 {
+            trace = TaiChiVector3.[body.palms[1], body.wrists[1], body.elbows[1], body.shoulders[1], body.chest]
+        } else if scene.path == 5 {
+            trace = TaiChiVector3.[body.palms[0], body.elbows[0], body.chest, body.elbows[1], body.palms[1]]
+        }
+        for index: 0..trace.count - 1 {
+            trace[index].y += 0.035
+        }
+        glow := 0.33 + 0.52 * scene.stroke
+        AstralCueStroke(view, trace[:], color, 0.018, glow)
+    }
+    if scene.marker_visible {
+        marker: [17]TaiChiVector3
+        for index: 0..marker.count - 1 {
+            angle := cast(float64)index / 16.0 * TAI_CHI_PI * 2.0
+            marker[index] = TaiChiAdd3(scene.marker, TaiChiV3(Cos(angle) * 0.035, 0.0, Sin(angle) * 0.035))
+        }
+        AstralCueStroke(view, marker[:], color, 0.013, 0.9)
+    }
 }

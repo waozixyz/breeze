@@ -7,7 +7,10 @@ mkdir -p "$root/build"
 work=$(mktemp -d "$root/build/app-nav-state-zi-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
-"$bin/ziran" build --target=c --no-main --project --offline --root "$root/src" -o "$work/gen" "$root/src/app/app_nav_state.zi"
+python3 "$root/scripts/stage-practice-figure.py"
+"$bin/ziran" build --target=c --no-main --project --offline ${PACKAGE_FLAGS:-} \
+    --module-path "$root/build/practice-figure" --root "$root/src" \
+    -o "$work/gen" "$root/src/app/app_nav_state.zi"
 # The link test stands in for these modules, so their headers declare those
 # procedures instead of defining inline copies.
 "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \

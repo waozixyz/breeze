@@ -9,6 +9,7 @@ Progress :: #import "kryon/progress";
 Scroll :: #import "kryon/scroll";
 SegmentedControl :: #import "kryon/segmented_control";
 Shape :: #import "kryon/shape";
+Slider :: #import "kryon/slider";
 Text :: #import "kryon/text";
 Toolbar :: #import "kryon/toolbar";
 #import "kryon/system_clipboard"
@@ -22,6 +23,7 @@ Toolbar :: #import "kryon/toolbar";
 #import, file "../../src/apps/practice_types.zi";
 #import, file "../../src/app/exercise_types.zi";
 #import, file "workout_rules.zi";
+#import, file "workout_sequence.zi";
 #import, file "../../src/practices/sun_salutation/sun_salutation_rules.zi";
 #import, file "figure_view.zi";
 
@@ -85,109 +87,88 @@ Controls :: () -> s32 {
     return layout.y
 }
 
-CenteredLine :: (text: string, y: s32, preferred: s32, minimum: s32, strong: bool) -> s32 {
-    font := preferred
-    if TextWidth(movement.session, Text.Props.{.text = text, .size = font}) > movement.view_width - Scale(80) {
-        font = minimum
+SunBreathCue :: (y: s32, width: s32) {
+    text_size := Scale(16)
+    inhale_width := TextWidth(movement.session, Text.Props.{
+            .text = Locale("sun_salutation_breathe_in"), .size = text_size})
+    exhale_width := TextWidth(movement.session, Text.Props.{
+            .text = Locale("sun_salutation_breathe_out"), .size = text_size})
+    label_width := ifx inhale_width > exhale_width then inhale_width else exhale_width
+    icon_slot := Scale(34)
+    if label_width > width - icon_slot {
+        label_width = width - icon_slot
     }
-    emphasis: [1]Text.Range = .[Text.Range.{.start = 0, .end = cast(s32)text.count}]
-    Text.Draw(movement.session, Text.Props.{.text = text,
-            .bounds = Bounds(0, y, movement.view_width, 0), .size = font,
-            .align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapNone,
-            .strong = ifx strong then emphasis[:1] else emphasis[:0]})
-    return y + TextHeight(movement.session, Text.Props.{.text = "M", .size = font})
+    left := (movement.view_width - label_width - icon_slot) / 2
+    center := Vector2.{cast(float32)(left + Scale(15)), cast(float32)(y + Scale(15))}
+    radius := cast(float32)Scale(13)
+    inner_radius := radius - cast(float32)Scale(1)
+    // Lung fullness comes from the same clock as the breath label and pose.
+    amount := cast(float32)SalutationClamp(movement.progress, 0, 1000) / 1000.0
+    Shape.Circle(movement.session, Shape.CircleProps.{.center = center,
+            .radius = inner_radius, .fill = Alpha(movement.accent_color, 0.12)})
+    Shape.Ring(movement.session, Shape.RingProps.{.center = center,
+            .inner_radius = inner_radius, .outer_radius = radius,
+            .start_angle = 0.0, .end_angle = 360.0,
+            .color = Alpha(movement.accent_color, 0.55)})
+    Shape.Ring(movement.session, Shape.RingProps.{.center = center,
+            .outer_radius = inner_radius, .start_angle = -90.0,
+            .end_angle = -90.0 + amount * 360.0, .color = movement.accent_color})
+    Text.Draw(movement.session, Text.Props.{.text = movement.cue,
+            .bounds = Bounds(left + icon_slot, y, label_width, Scale(30)), .size = text_size,
+            .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapEllipsis})
 }
 
-// The name of the step that follows, as one quiet line across the bottom of
-// the stage; returns the stage left for the moving figure.
-SunSalutationNext :: (stage: Rectangle, step: s32) -> Rectangle {
-    joined: Vec(u8)
-    BuilderPrint(*joined, "% ·", Locale("sun_salutation_next"))
-    label := BuilderFinish(joined)
-    name := Locale(SalutationStepKey(step))
-    font := Scale(16)
-    emphasis: [1]Text.Range = .[Text.Range.{.start = 0, .end = cast(s32)name.count}]
-    line_h := TextHeight(movement.session, Text.Props.{.text = "M", .size = font})
-    if cast(s32)stage.height - line_h < Scale(160) {
-        return stage
-    }
-    // A word space between "Next ·" and the pose name.
-    space := Scale(5)
-    available := cast(s32)stage.width - Scale(32) - space
-    label_w := TextWidth(movement.session, Text.Props.{.text = label, .size = font})
-    name_w := TextWidth(movement.session,
-        Text.Props.{.text = name, .size = font, .strong = emphasis[:1]})
-    if label_w + name_w > available {
-        font = Scale(14)
-        line_h = TextHeight(movement.session, Text.Props.{.text = "M", .size = font})
-        label_w = TextWidth(movement.session, Text.Props.{.text = label, .size = font})
-        name_w = TextWidth(movement.session,
-            Text.Props.{.text = name, .size = font, .strong = emphasis[:1]})
-    }
-    if label_w + name_w > available && name_w > available - label_w {
-        if label_w > available {
-            label_w = available
-        }
-        name_w = available - label_w
-    }
-    line_w := label_w + space + name_w
-    line_x := cast(s32)stage.x + (cast(s32)stage.width - line_w) / 2
-    line_y := cast(s32)(stage.y + stage.height) - line_h
-    Text.Draw(movement.session, Text.Props.{.text = label, .bounds = Bounds(line_x, line_y, label_w, line_h),
-            .size = font, .class_name = movement.muted_class, .wrap = cast(Text.Wrap)TextWrapEllipsis})
-    Text.Draw(movement.session, Text.Props.{.text = name, .bounds = Bounds(line_x + label_w + space, line_y, name_w, line_h),
-            .size = font, .strong = emphasis[:1], .wrap = cast(Text.Wrap)TextWrapEllipsis})
-    stage.height -= cast(float32)(line_h + Scale(8))
-    return stage
-}
-
-// The pose and how to hold it, the leg that is back in a lunge, the breath
-// with its bar, the moving figure and the pose that comes next.
 SunSalutation :: () {
-    bottom := Controls() - Scale(18)
-    y := CenteredLine(movement.heading, movement.top + Scale(18), Scale(24), Scale(20), true)
-    text_w := movement.view_width - Scale(48)
+    controls_y := Controls()
+    pad := Scale(24)
+    text_w := movement.view_width - pad * 2
     if text_w > Scale(560) {
         text_w = Scale(560)
     }
-    if movement.subtitle.count > 0 {
-        cue_h := ParagraphHeight(movement.subtitle, text_w, Scale(16))
-        Text.Draw(movement.session, Text.Props.{.text = movement.subtitle,
-                .bounds = Bounds((movement.view_width - text_w) / 2, y + Scale(2), text_w, cue_h),
-                .size = Scale(16), .class_name = movement.muted_class,
-                .align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapAuto})
-        y += Scale(2) + cue_h
-    }
+    text_x := (movement.view_width - text_w) / 2
+    heading_y := movement.top + Scale(8)
+    breath_y := heading_y + Scale(34)
+    emphasis: [1]Text.Range = .[Text.Range.{.start = 0, .end = cast(s32)movement.heading.count}]
+    Text.Draw(movement.session, Text.Props.{.text = movement.heading,
+            .bounds = Bounds(pad, heading_y, movement.view_width - pad * 2, Scale(32)),
+            .size = Scale(22), .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter, .strong = emphasis[:1],
+            .wrap = cast(Text.Wrap)TextWrapEllipsis})
+    SunBreathCue(breath_y, text_w)
+
+    // Reserve the same caption space for every pose. Captions and leg
+    // changes never resize the camera viewport.
+    cue_font := Scale(16)
+    line_h := TextHeight(movement.session, Text.Props.{.text = "M", .size = cue_font})
+    cue_h := line_h * 3
+    cue_y := controls_y - Scale(8) - cue_h
     side := SalutationSideKey(movement.phase)
+    cue := movement.subtitle
     if side.count > 0 {
-        y = CenteredLine(Locale(side), y + Scale(4), Scale(18), Scale(16), true)
+        joined: Vec(u8)
+        BuilderPrint(*joined, "% · %", Locale(side), cue)
+        cue = BuilderFinish(joined)
     }
-    y = CenteredLine(movement.cue, y + Scale(6), Scale(20), Scale(18), false)
-    width := movement.view_width - Scale(96)
-    if width > Scale(280) {
-        width = Scale(280)
-    }
-    y += Scale(8)
-    Progress.Draw(movement.session, Progress.Props.{.bounds = Bounds((movement.view_width - width) / 2,
-            y, width, Scale(10)), .min = 0, .max = 1000, .value = movement.progress})
-    y += Scale(22)
-    stage := Bounds(Scale(24), y, movement.view_width - Scale(48), bottom - y)
-    if movement.exercise > 0 {
-        stage = SunSalutationNext(stage, movement.exercise - 1)
-    }
-    Figure(stage, "sun-salutation/figure", Locale("exercise_sun_salutation"))
+    Text.Draw(movement.session, Text.Props.{.text = cue,
+            .bounds = Bounds(text_x, cue_y, text_w, cue_h), .size = cue_font,
+            .class_name = movement.muted_class, .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapAuto})
+    stage_y := breath_y + Scale(32)
+    Figure(Bounds(pad, stage_y, movement.view_width - pad * 2, cue_y - Scale(4) - stage_y),
+        "sun-salutation/figure", Locale("exercise_sun_salutation"))
 }
 
 TaiChi :: () {
     row_y := Controls()
     y := movement.top + Scale(12)
+    subtitle_h := TextHeight(movement.session, Text.Props.{.text = "M", .size = Scale(16)})
     if movement.subtitle.count > 0 {
         Text.Draw(movement.session, Text.Props.{.text = movement.subtitle,
-                .bounds = Bounds(Scale(24), y, movement.view_width - Scale(48), 0),
+                .bounds = Bounds(Scale(24), y, movement.view_width - Scale(48), subtitle_h),
                 .size = Scale(16), .class_name = movement.muted_class,
                 .align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapEllipsis})
-        y += TextHeight(movement.session, Text.Props.{.text = "M", .size = Scale(16)}) + Scale(4)
     }
+    y += subtitle_h + Scale(4)
     cue_height := TextHeight(movement.session, Text.Props.{.text = "M", .size = Scale(20)}) * 2
     Text.Draw(movement.session, Text.Props.{.text = movement.cue,
             .bounds = Bounds(Scale(24), y, movement.view_width - Scale(48), cue_height),
@@ -237,10 +218,18 @@ Astral :: () {
     Text.Draw(movement.session, Text.Props.{.text = movement.time,
             .bounds = Bounds(pad, movement.top + Scale(12), width, Scale(48)),
             .size = Scale(28), .align = cast(TextAlign)TextAlignCenter})
-    Progress.Draw(movement.session, Progress.Props.{.key = Layout.KeyHash("astral/progress"),
-        .bounds = Bounds(pad, movement.top + Scale(64), width, Scale(8)),
-        .min = 0, .max = 1000, .value = movement.progress})
-    y := movement.top + Scale(84)
+    y := movement.top + Scale(64)
+    if movement.length_ms > 0 {
+        seek := Slider.DiscreteSlider(movement.session, Slider.DiscreteSliderProps.{
+                .key = Layout.KeyHash("astral/progress"), .bounds = Bounds(pad, y, width, Scale(44)),
+                .semantic_label = Locale("practice_playback_position"),
+                .min = 0, .max = movement.length_ms / 1000, .value = movement.elapsed_ms / 1000})
+        if seek.changed {
+            movement.action = PRACTICE_MOVEMENT_SEEK
+            movement.value = seek.value
+        }
+        y += Scale(48)
+    }
     button_y := movement.view_height - Scale(76)
     height := button_y - y - Scale(16)
     if height < Scale(40) {
@@ -269,23 +258,44 @@ Astral :: () {
     Pause((movement.view_width - button_w) / 2, button_y, button_w)
 }
 
-WorkoutProgress :: (x: s32, y: s32, width: s32) {
-    gap := Scale(4)
-    bar_w := (width - gap * (WORKOUT_EXERCISE_COUNT - 1)) / WORKOUT_EXERCISE_COUNT
+WorkoutProgress :: (x: s32, y: s32, width: s32) -> s32 {
+    custom := movement.view == WORKOUT_ROUTINE_CUSTOM
+    count := ifx custom then cast(s32)movement.time.count else WorkoutRoutineCount(movement.view)
+    if count <= 0 || count > WORKOUT_CUSTOM_BLOCK_LIMIT { return 0 }
+    target := Scale(44)
+    columns := width / target
+    if columns < 1 {
+        columns = 1
+    }
+    rows := (count + columns - 1) / columns
+    columns = (count + rows - 1) / rows
     bar_h := Scale(6)
-    for index: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
-        bar := Bounds(x + index * (bar_w + gap), y, bar_w, bar_h)
-        Box.Draw(movement.session, Box.Props.{.bounds = bar, .fill = Alpha(movement.text_color, 0.14),
-                .radius = cast(float32)bar_h / 2.0})
+    gap := Scale(4)
+    for index: cast(s32)0..count - 1 {
+        col := index % columns
+        top := y + (index / columns) * target
+        left := x + width * col / columns
+        cell := x + width * (col + 1) / columns - left
+        exercise := ifx custom then cast(s32)movement.time[index] - 65 else WorkoutRoutineExercise(movement.view, index)
+        label_key: [64]u8
+        name := Locale(WorkoutKeyFor("workout_name_", exercise, label_key[:]))
+        current := ifx custom then index == movement.scroll else exercise == movement.exercise
+        if Button.Draw(movement.session, Button.Props.{
+                .key = Layout.KeyHash("workout/progress") + cast(u64)index,
+                .bounds = Bounds(left, top, cell, target), .label = name,
+                .icon_only = true, .selected = current, .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
+            movement.action = PRACTICE_MOVEMENT_SEEK
+            movement.value = index
+        }
+        bar := Bounds(left + gap / 2, top + (target - bar_h) / 2, cell - gap, bar_h)
+        tint := ifx current then Alpha(movement.accent_color, 0.35) else Alpha(movement.text_color, 0.14)
+        Box.Draw(movement.session, Box.Props.{.bounds = bar, .fill = tint, .radius = cast(float32)bar_h / 2.0})
         share: float32 = 0.0
-        if index < movement.exercise || movement.phase == WORKOUT_PHASE_DONE {
+        if (movement.progress & (1 << index)) != 0 {
             share = 1.0
-        } else if index == movement.exercise && movement.phase == WORKOUT_PHASE_WORK && movement.length_ms > 0 {
+        } else if current && movement.phase == WORKOUT_PHASE_WORK && movement.length_ms > 0 {
             share = cast(float32)movement.elapsed_ms / cast(float32)movement.length_ms
-        } else if index == movement.exercise {
-            // The exercise being got ready for is tinted.
-            Box.Draw(movement.session, Box.Props.{.bounds = bar, .fill = Alpha(movement.accent_color, 0.35),
-                    .radius = cast(float32)bar_h / 2.0})
         }
         if share > 0.0 {
             bar.width *= share
@@ -296,9 +306,9 @@ WorkoutProgress :: (x: s32, y: s32, width: s32) {
                     .radius = cast(float32)bar_h / 2.0})
         }
     }
+    return rows * target
 }
 
-// While getting ready or resting, the seconds left as a large plain number,
 // then "Go!" as the exercise starts.
 WorkoutCountdownNumber :: (center: Vector2, radius: float32, count: s32) {
     text := Locale("workout_go")
@@ -351,13 +361,20 @@ Workout :: () {
     if panel_w > Scale(560) {
         panel_w = Scale(560)
     }
-    panel_x := ifx wide then movement.view_width - pad - panel_w else pad
-    progress_y := movement.top + Scale(10)
-    WorkoutProgress(pad, progress_y, movement.view_width - pad * 2)
+    panel_x := ifx wide then movement.view_width - pad - panel_w else (movement.view_width - panel_w) / 2
+    progress_y := movement.top + Scale(4)
+    progress_h := WorkoutProgress(pad, progress_y, movement.view_width - pad * 2)
     heading_h := ParagraphHeight(movement.heading, panel_w, Scale(26))
     sub_h := ParagraphHeight(movement.subtitle, panel_w, movement.font)
     tip_h := ParagraphHeight(movement.cue, panel_w, movement.font, Scale(3))
-    content_top := progress_y + Scale(20)
+    if !wide {
+        // Keep the figure and controls anchored while portrait captions change.
+        body_line := TextHeight(movement.session, Text.Props.{.text = "M", .size = movement.font})
+        heading_h = TextHeight(movement.session, Text.Props.{.text = "M", .size = Scale(26)}) * 2
+        sub_h = body_line * 2
+        tip_h = body_line * 3
+    }
+    content_top := progress_y + progress_h + Scale(4)
     words_h := heading_h + Scale(4) + sub_h
     ring_r := Scale(44)
     lower_h := tip_h + Scale(16) + ring_r * 2 + Scale(16 + 48 + 20)
@@ -376,7 +393,8 @@ Workout :: () {
     emphasis: [1]Text.Range = .[Text.Range.{.start = 0, .end = cast(s32)movement.heading.count}]
     Text.Draw(movement.session, Text.Props.{.text = movement.heading,
             .bounds = Bounds(panel_x, panel_top, panel_w, heading_h), .size = Scale(26),
-            .align = cast(TextAlign)TextAlignCenter, .strong = emphasis[:1]})
+            .align = cast(TextAlign)TextAlignCenter, .vertical_align = cast(TextAlign)TextAlignEnd,
+            .strong = emphasis[:1]})
     Text.Draw(movement.session, Text.Props.{.text = movement.subtitle,
             .bounds = Bounds(panel_x, panel_top + heading_h + Scale(4), panel_w, sub_h),
             .size = movement.font, .align = cast(TextAlign)TextAlignCenter, .disabled = true})

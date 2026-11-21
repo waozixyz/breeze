@@ -14,7 +14,10 @@ rm -rf "$work"
 mkdir -p "$work/c"
 # Use the application's package graph so public UI imports retain their aliases.
 cd "$root"
-"$bin/ziran" build --target=c --project --offline --no-main \
+python3 scripts/stage-practice-figure.py
+# shellcheck disable=SC2086
+sh scripts/run-ziran.sh "$bin/ziran" build --target=c --project --offline ${PACKAGE_FLAGS:-} --no-main \
+    --module-path "$root/build/practice-figure" \
     --define PLATFORM_DESKTOP --define DESKTOP_HOST --define NATIVE_WINDOW_HAVE_SDL \
     --root "$root/tests" --module-path "$root/tests" \
     -o "$work/c" "$root/tests/sync_recovery_behavior.zi"

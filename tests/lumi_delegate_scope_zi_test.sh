@@ -10,8 +10,9 @@ work=$(mktemp -d /tmp/inbe-lumi-delegate-scope.XXXXXX)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 unset DISPLAY WAYLAND_DISPLAY XAUTHORITY DBUS_SESSION_BUS_ADDRESS
 export YUE_DESKTOP_RECOVERY=0
+python3 "$root/scripts/stage-practice-figure.py"
 cd "$root"
-"$compiler" build --project --offline ${PACKAGE_FLAGS:-} --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
+"$compiler" build --project --offline ${PACKAGE_FLAGS:-} --module-path "$root/build/practice-figure" --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --entry lumi_delegate_scope_behavior:Check \
     -o "$work/generated" "$root/tests/lumi_delegate_scope_behavior.zi" "$root/tests/sync_test_host.zi" "$root/tests/delegate_account_host.zi"
 cat > "$work/generated/main.c" <<'C'

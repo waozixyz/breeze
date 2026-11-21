@@ -22,7 +22,10 @@ apps: $(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE)
 $(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE): scripts/package-paths.sh $(KRYON_DIR)/ziran.toml CHANGELOG.md $(wildcard locales/changelog/*.md) scripts/release_notes.py $(APPS_BUNDLE) src/apps/apps_controller.zi
 $(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE): $(NODE_APP_BUNDLES) scripts/small_app_bundling.py apps/bundled.json $(wildcard apps/bundled/*.zx apps/bundled/*.games/*.zx)
 
-$(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(ENTITY_SOURCES) $(APP_SOURCES) $(APP_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/achievement_icons.py scripts/animation_inventory.py scripts/build-apps.sh src/practices/sun_salutation/sun_salutation_assets.zi src/practices/sun_salutation/sun_salutation_inventory.zi $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
+# Switching package sources also changes which assets we bundle, even when
+# the files in the newly selected package have older timestamps.
+$(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE): $(PACKAGES_MK) $(PRACTICE_MEDIA_STAMP)
+$(APP_BUNDLES) $(INBE_BUNDLE) $(INBE_FULL_BUNDLE) &: $(ENTITY_SOURCES) $(APP_SOURCES) $(APP_RESOURCES) ziran.lock apps/versions.json scripts/check-package-versions.py scripts/generate-package-versions.py scripts/prepare-package-assets.py scripts/achievement_icons.py scripts/animation_inventory.py scripts/practice_content.py scripts/practice_media.py scripts/build-apps.sh src/practices/sun_salutation/sun_salutation_assets.zi src/practices/sun_salutation/sun_salutation_inventory.zi $(IMAGE_FILES) $(SOUND_FILES) $(FONT_FILES) $(STYLE_FILES) $(LOCALE_FILES) $(ZIRAN_BIN)
 	sh scripts/build-apps.sh $(ZIRAN_BIN) $(BUILD_DIR)/apps $(APPS_BUNDLE)
 
 # Build node apps independently before selecting the small offline baselines.
