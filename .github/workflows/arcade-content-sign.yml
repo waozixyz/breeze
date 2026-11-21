@@ -1,0 +1,63 @@
+name: Sign bundled Arcade content
+
+# The established publisher key is currently held only by this repository's
+# GitHub secret. This manual repair signs the checked-in catalog's immutable
+# content descriptors and exports them; it never publishes an app release.
+on:
+  workflow_dispatch:
+    inputs:
+      catalog_sha256:
+        description: Exact SHA-256 of the bundled Arcade catalog being repaired
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Load the pinned Apps release API
+        run: |
+          python3 - <<'PY'
+          from hashlib import sha256
+          import json
+          from pathlib import Path
+          import urllib.request
+          package = next(p for p in json.loads(Path('ziran.lock').read_text())['packages'] if p['name'].lower() == 'apps')
+          if package['url'] != 'https://git.waozi.xyz/waozi/apps.git' or package['commit'] != 'c18e70b434456823a5d332255d78b48064f12de3':
+              raise SystemExit('Review the changed Apps pin before signing content')
+          url = 'https://git.waozi.xyz/waozi/apps/raw/commit/' + package['commit'] + '/scripts/node_release.py'
+          request = urllib.request.Request(url, headers={'User-Agent': 'Breeze-content-signing/1'})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              source = response.read(1048577)
+          if sha256(source).hexdigest() != '6b02a862edcd0d1f966cf168f762a6e91dcb3eaae4bacd555c096ad25ceebffe':
+              raise SystemExit('Pinned Apps release API bytes differ')
+          path = Path('build/content-signing-api/node_release.py')
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_bytes(source)
+          PY
+      - name: Install signature library
+        run: python3 -m pip install cryptography
+      - name: Test content signing
+        env:
+          APPS_RELEASE_API: build/content-signing-api/node_release.py
+        run: python3 tests/arcade_content_sign_test.py
+      - name: Sign only the requested catalog's content
+        env:
+          INBE_PACKAGE_SIGNING_KEY: ${{ secrets.INBE_PACKAGE_SIGNING_KEY }}
+          KEY_ID: ${{ vars.INBE_PACKAGE_KEY_ID }}
+          CATALOG_SHA256: ${{ inputs.catalog_sha256 }}
+        run: |
+          python3 scripts/sign-arcade-content.py --catalog-sha256 "$CATALOG_SHA256" \
+            --key-id "$KEY_ID" --release-api build/content-signing-api/node_release.py \
+            --output build/arcade-content-signatures
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: arcade-content-signatures
+          path: build/arcade-content-signatures/*.zx.release-v2.json
+          if-no-files-found: error
+          retention-days: 30
