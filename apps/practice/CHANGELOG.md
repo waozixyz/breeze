@@ -6,7 +6,7 @@
 - Swipe from the 7-Minute Workout card to the 4-Minute Workout card to start or customize the shorter circuit. Its character and landscape are separate from the animated sky.
 - Build and save custom workouts with timed exercises, pose options, and automatic transitions. The editor shows active time and transition time separately.
 - Choose Woman or Man in Workout Customize. Your choice is saved for both circuits and custom routines.
-- The woman wears training shorts in the seven-minute circuit and a fitted sports skirt in the four-minute circuit and custom routines. The original barefoot contours are restored.
+- The woman wears leggings and a fitted crop top in both Workout circuits and custom routines. The original barefoot contours are restored.
 - The figure keeps its hands planted during push-ups and lowers into wall sits without walking backward.
 - The included Sun Salutation voices play offline.
 - Practice cards have new light and dark covers with a brief breathing glow.
