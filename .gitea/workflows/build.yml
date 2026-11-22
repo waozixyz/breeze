@@ -1,5 +1,7 @@
 name: Breeze build
 on:
+  push:
+    branches: [master]
   workflow_dispatch:
     inputs:
       profile:
@@ -12,35 +14,34 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: breeze-build-${{ gitea.ref }}
+  cancel-in-progress: true
+
 jobs:
   linux:
     name: Linux native
-    runs-on: build-breeze
+    if: gitea.ref == 'refs/heads/master'
+    runs-on: build-native-breeze
     timeout-minutes: 60
+    env:
+      BREEZE_PROFILE: ${{ gitea.event_name == 'push' && 'quick' || inputs.profile }}
     steps:
-      - uses: https://github.com/actions/checkout@v4
-        with:
-          lfs: true
-          persist-credentials: false
-      - name: Install Linux build and test dependencies
-        run: USER="$(id -un)" .github/scripts/install-apt-packages.sh .github/apt/test-packages.txt ccache
-      - name: Fetch locked Ziran packages
-        uses: ./.github/actions/ziran-packages
-      - name: Restore Linux compiler objects
-        uses: https://github.com/actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
-        with:
-          path: ~/.cache/ccache
-          key: breeze-native-ccache-v1-${{ runner.os }}-${{ runner.arch }}-${{ gitea.sha }}
-          restore-keys: breeze-native-ccache-v1-${{ runner.os }}-${{ runner.arch }}-
-      - name: Build the desktop app
+      - name: Check out the current pushed commit from Build
+        id: native
         env:
-          CCACHE_COMPILERCHECK: content
-          CCACHE_MAXSIZE: 200M
+          BUILD_NATIVE_SOURCE_TOKEN: ${{ github.token }}
+        run: /usr/local/libexec/gitea-native-build checkout
+      - name: Fetch locked Ziran packages
+        if: steps.native.outputs.current == 'true'
+        run: /usr/local/libexec/gitea-native-build run sh scripts/packages.sh --locked
+      - name: Build the desktop app
+        if: steps.native.outputs.current == 'true'
         run: |
-          export PATH="/usr/lib/ccache:$PATH"
-          export CCACHE_BASEDIR="$GITHUB_WORKSPACE" CCACHE_DIR="$HOME/.cache/ccache"
-          make -j2 PACKAGE_FLAGS=--locked native
-          ccache --show-stats
+          /usr/local/libexec/gitea-native-build run bash -ec '
+            make -j"$JOBS" PACKAGE_FLAGS=--locked native
+            ccache --show-stats || true
+          '
       - name: Run the retained local tests
-        if: inputs.profile == 'full'
-        run: env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY HARMONY_DESKTOP_RECOVERY=0 make -j2 PACKAGE_FLAGS=--locked test
+        if: steps.native.outputs.current == 'true' && env.BREEZE_PROFILE == 'full'
+        run: /usr/local/libexec/gitea-native-build run bash -ec 'make -j"$JOBS" PACKAGE_FLAGS=--locked test'
