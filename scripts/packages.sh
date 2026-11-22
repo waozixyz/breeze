@@ -47,7 +47,9 @@ ziran=${ZIRAN:-"$bootstrap/build/bin/ziran"}
 python3 scripts/seed-package-sources.py
 tool_cache="${XDG_CACHE_HOME:-$HOME/.cache}/ziran/sources/$(python3 -c 'import hashlib, sys; print("p" + hashlib.sha256(f"{sys.argv[1]}\n{sys.argv[2]}".encode()).hexdigest()[:16])' "$tool_url" "$tool_commit")"
 
-if [ -z "${ZIRAN:-}" ]; then
+if [ -z "${ZIRAN:-}" ] && [ -x "$tool_cache/build/bin/ziran" ] && [ "$(git -C "$tool_cache" rev-parse HEAD 2>/dev/null || true)" = "$tool_commit" ]; then
+    ziran="$tool_cache/build/bin/ziran"
+elif [ -z "${ZIRAN:-}" ]; then
     current=$(git -C "$bootstrap" rev-parse HEAD 2>/dev/null || true)
     if [ "$current" != "$tool_commit" ]; then
         case " $flags " in
