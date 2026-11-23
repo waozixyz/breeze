@@ -53,12 +53,30 @@ Meditation, Patterns and Wim Hof layouts are in `meditation_view.zi`,
 and the 7-Minute Workout use `movement_view.zi`. Tai Chi's course chooser is
 in `course_view.zi`. These pages return actions to the host, which retains
 session clocks, saved settings, audio, lifecycle and routing. Workout's custom
-editor lives in `apps/practice/workout_builder.zi`. It saves up to 16 routines
+editor lives in `apps/practice/workout_builder.zi`. The Workout carousel
+shows the seven-minute preset, the four-minute preset and Custom workout in
+that order. **Manage workouts** opens the routine library and editor in a
+modal. Customize on either preset opens the shared character picker.
+The custom editor saves up to 16 routines
 per local user profile through the standard settings interface, with one
 versioned record per routine. Each routine can have up to 12 supported
 exercises, with active intervals from 5 to 300 seconds. Playback adds the
 same preparation and transition time shown in the editor to the active
 intervals, and uses the normal Workout renderer, cues and session history.
+Preset and custom workouts wait for the first rendered scene before narration
+and the preparation countdown begin. The countdown shows the seconds until the
+first exercise. After an interruption, the Workout, Breathing Patterns and
+Meditation recovery card shows the session identity, phase and elapsed time.
+Continue loads the saved playback state, including the custom routine as it was
+started and the time actually played. Cancel closes the card. Older summaries
+and drafts without a usable checkpoint remain hidden and are archived in local
+metadata if a new practice needs the draft slot.
+Practice cards use separate day and night skies. A marker moves along Box
+Breathing's painted square. The original Box Breathing and Wim Hof skies drift,
+and Wim Hof draws steam over its ice bath. Reduced motion keeps the artwork still.
+Sun Salutation starts with relaxed arms during the intro, then moves into
+Mountain pose with palms together at the chest. Woman wears the fitted Workout
+top and leggings in the Sun Salutation sequence.
 Detailed movement figures stay on the render thread with their native mesh caches:
 `figure_view.zi` submits one bounded figure request, accepted only by the
 painter installed for the active page. The app compiles the shared figure

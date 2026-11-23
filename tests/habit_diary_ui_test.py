@@ -63,6 +63,7 @@ with tempfile.TemporaryDirectory(prefix="profile-", dir=OUTPUT) as directory:
         environment[variable] = str(profile / folder)
         (profile / folder).mkdir(mode=0o700)
     (profile / "home").mkdir()
+    environment["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path={profile / 'runtime' / 'no-session-bus'}"
     environment.pop("INBE_DIARY_IMPORT", None)
     with (OUTPUT / "app.log").open("w") as log:
         app = subprocess.Popen([
@@ -153,9 +154,14 @@ with tempfile.TemporaryDirectory(prefix="profile-", dir=OUTPUT) as directory:
             assert pressed["hit"] == pressed["nodes"][0]["index"], "Pointer did not reach Statistics"
             driver.wait(label="All habits")
             driver.wait(label="Daily completions")
-            driver.wait(key=6100000 + 30 + 29)
-            reveal(driver, key=6100000 + 8 * 30 + 29)
-            driver.wait(key=6100000 + 8 * 30 + 29, label=f"{today} · 1")
+            legend = {"label": "Diary navigation regression", "role": "button"}
+            reveal(driver, **legend)
+            driver.press(**legend)
+            assert driver.wait(**legend)["selected"]
+            reveal(driver, key=6100000 + 29)
+            driver.wait(key=6100000 + 29, label=f"{today} · 1")
+            driver.press(key=6100000 + 29)
+            driver.wait(label=f"Diary navigation regression · {today} · 1")
             assert snapshot(database) == before, "Statistics changed habit or diary data"
             print("PASS all-habits statistics opens beside Shop and graphs the linked diary completion", flush=True)
             driver.press(label="Apps", role="button")

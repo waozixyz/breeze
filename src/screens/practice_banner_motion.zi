@@ -1,3 +1,7 @@
+#import, file "../practices/patterns/patterns_rules.zi";
+#import "std/math"
+#import "geometry"
+
 PracticeBannerMotion :: struct {
     asset: string
     started: float64
@@ -29,4 +33,56 @@ PracticeBannerTick :: (motion: *PracticeBannerMotion, asset: string,
     motion.last_seen = now
     // Treat floating-point rounding at an exact interval as the new tick.
     return 1 + cast(s64)((now - motion.started) * PRACTICE_BANNER_HZ + 0.00001)
+}
+
+PracticeBannerBoxPhase :: struct {
+    phase: s32
+    progress: float32
+}
+
+// Move the original painted sky by sampling the existing texture. The small
+// overscan lets it drift even when the banner is shown at its full aspect ratio.
+PracticeBannerSkySource :: (bounds: Rectangle, crop: Rectangle, tick: s64) -> Rectangle {
+    source := crop
+    if source.width <= 0.0 || source.height <= 0.0 {
+        if bounds.width <= 0.0 || bounds.height <= 0.0 { return .{} }
+        if bounds.width <= bounds.height * 2.0 {
+            source.width = bounds.width / (bounds.height * 2.0)
+            source.height = 1.0
+        } else {
+            source.width = 1.0
+            source.height = (bounds.height * 2.0) / bounds.width
+        }
+        source.x = (1.0 - source.width) * 0.5
+        source.y = (1.0 - source.height) * 0.5
+    }
+    if tick > 0 {
+        seconds := cast(float64)(tick - 1) / PRACTICE_BANNER_HZ
+        inset := source.width * 0.048
+        drift := cast(float32)Sin(seconds * 0.31) * inset
+        source.x += inset + drift
+        source.y += source.height * 0.048
+        source.width *= 0.904
+        source.height *= 0.904
+    }
+    return .{source.x * 1536.0, source.y * 768.0, source.width * 1536.0, source.height * 768.0}
+}
+
+PracticeBannerBoxAt :: (milliseconds: s64) -> PracticeBannerBoxPhase {
+    if milliseconds <= 0 { return .{} }
+    durations: [4]s32
+    total: s32
+    for phase: cast(s32)0..3 {
+        durations[phase] = patterns_preset_ratio(PATTERNS_PRESET_BOX, phase) * 1000
+        total += durations[phase]
+    }
+    elapsed := cast(s32)(milliseconds % cast(s64)total)
+    for phase: cast(s32)0..3 {
+        duration := durations[phase]
+        if elapsed < duration {
+            return .{phase, cast(float32)elapsed / cast(float32)duration}
+        }
+        elapsed -= duration
+    }
+    return .{}
 }

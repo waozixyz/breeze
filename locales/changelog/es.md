@@ -3,8 +3,8 @@
 ## [Unreleased]
 
 - Retroceso, edición y copias corregidos. Fotos/Radio. Dew con estrellas de Telegram. Lumi responde y avisa si no lo ves.
-- Inicia, cambia, retoma. Avance astral. Rutina suave de 4 min y propias. Descargas y reintento. Arreglos PiP/Inicio.
-- Reinicio al volver. Tema de reloj y monedas. Monedas diarias, Diario vinculado, gráficas, totales e iconos de Actividad.
+- Inicia, cambia, retoma. Avance astral. Rutinas de 4 min y propias. Banners día/noche. Reintento de descargas. PiP.
+- Reinicio al volver. Reloj y monedas del tema. Monedas diarias, Diario vinculado, una gráfica, totales e iconos.
 
 ## [2.1.63] - 2026-11-05
 

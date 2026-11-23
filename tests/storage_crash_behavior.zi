@@ -895,6 +895,7 @@ CheckPracticeRecoveryDecision :: () {
     check_int("restore cannot resurrect deleted sessions", storage_session_count(), 0)
     CheckPracticeRecoveryRepeatedHour()
     CheckPracticeCheckpointTriggers()
+    CheckPracticeResumeCheckpoint()
 }
 
 CheckPracticeRecoveryRepeatedHour :: () {
@@ -955,4 +956,51 @@ CheckPracticeCheckpointTriggers :: () {
         PracticeDraftParse(TextFromBytes(buffer[:length]), *parsed) && parsed.rounds[0] == 41)
     PracticeDraftEnd()
     check_true("normal completion clears the draft", storage_practice_draft_load(buffer[:]) == 0)
+}
+
+CheckPracticeResumeCheckpoint :: () {
+    before := storage_session_count()
+    values: [3]s32 = .[2, 1, 2007]
+    definition := "workout/1\nÉlan 快走\nwall_sit 30 0\n"
+    PracticeDraftBegin(6)
+    PracticeDraftSetDefinition(definition)
+    PracticeDraftProgress(6, 2, 1, values[:], true)
+    draft: PracticeRecoveryDraft
+    check_true("load a resumable checkpoint", PracticeDraftLoad(*draft))
+    check_int("resume keeps milliseconds", draft.resume.values[2], 2007)
+    check_true("resume keeps UTF-8 and newlines", TextFromBytes(draft.resume.definition[:draft.resume.definition_length]) == definition)
+    original_start := draft.started_at
+    PracticeDraftResume(*draft)
+    values[2] += 100
+    PracticeDraftProgress(6, 2, 1, values[:], false)
+    PracticeDraftPause()
+    check_true("read the resumed checkpoint", PracticeDraftLoad(*draft))
+    check_true("continue keeps its original time and exact position", draft.started_at == original_start && draft.resume.values[2] == 2107)
+    check_true("Cancel clears current checkpoint", PracticeDraftCancel(true))
+    PracticeDraftEnd()
+    check_int("resume and Cancel add no sessions", storage_session_count(), before)
+
+    legacy := "{\"schema\":1,\"started_at\":1794800000,\"activity\":1,\"topic\":0,\"rounds\":[40]}"
+    check_int("seed a legacy draft", storage_practice_draft_save(legacy), 1)
+    check_true("legacy contains only a summary", PracticeDraftLoad(*draft) && draft.resume.count == 0)
+    unused exec_sql("CREATE TEMP TRIGGER fail_archive_practice BEFORE DELETE ON practice_draft BEGIN SELECT RAISE(ABORT,'test failure'); END")
+    check_true("failed archive reports failure and retains original", !PracticeDraftCancel(false) && PracticeDraftLoad(*draft))
+    check_int("failed archive leaves no partial copy", read_db_count("SELECT COUNT(*) FROM meta WHERE key LIKE 'practice_draft_archive/%'"), 0)
+    unused exec_sql("DROP TRIGGER fail_archive_practice")
+    check_true("Cancel archives the original text", PracticeDraftCancel(false) && !PracticeDraftLoad(*draft))
+    check_int("archive matches the original payload", read_db_count("SELECT COUNT(*) FROM meta WHERE key LIKE 'practice_draft_archive/%' AND value='{\"schema\":1,\"started_at\":1794800000,\"activity\":1,\"topic\":0,\"rounds\":[40]}'"), 1)
+    check_int("legacy cancellation adds no history", storage_session_count(), before)
+
+    PracticeDraftBegin(6)
+    PracticeDraftProgress(6, 75, 1, values[:], true)
+    unused exec_sql("CREATE TEMP TRIGGER fail_finish_practice BEFORE DELETE ON practice_draft BEGIN SELECT RAISE(ABORT,'test failure'); END")
+    check_int("history commit cannot consume the draft", PracticeDraftSaveElapsed(6, 75, null, 0), 0)
+    check_int("failed completion rolled back history", storage_session_count(), before)
+    check_true("failed completion keeps the recovery point", PracticeDraftLoad(*draft) && draft.rounds[0] == 75)
+    unused exec_sql("DROP TRIGGER fail_finish_practice")
+    PracticeDraftResume(*draft)
+    identity: [96]u8
+    check_int("recovered session completes", PracticeDraftSaveElapsed(6, 75, *identity[0], 96), 1)
+    check_true("completed session has an identity and no remaining draft", identity[0] != 0 && !PracticeDraftLoad(*draft))
+    check_int("completion adds one history row", storage_session_count(), before + 1)
 }

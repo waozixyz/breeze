@@ -20,6 +20,7 @@
 #import, file "../src/habits/habit_types.zi";
 
 using HostValueKind;
+using PaintKind;
 
 stats_test_frame: HabitsStatsFrame;
 stats_test_codec: WidgetHabitsStatsFrameCodec;
@@ -37,6 +38,12 @@ stats_test_holds: s32;
 stats_test_changes: s32;
 stats_test_band_charts: s32;
 stats_test_refused: bool;
+
+// A distinct saved colour per trend row, so the combined graph's paints
+// are checkable: -1 is the collection, -2 the first habit and so on.
+StatsTestChartColor :: (chart: s32) -> Color {
+    return Color.{.r = cast(u8)(60 - chart * 40), .g = 190, .b = 120, .a = 255}
+}
 
 StatsTestAssets :: (path: string) -> bool {
     return path.count == 0
@@ -76,10 +83,11 @@ StatsTestCall :: (context: *void, module: *u8, function: *u8,
         if chart < 0 {
             stats_test_trends += 1
             empty := stats_test_frame.overview && stats_test_frame.habit_count == 0
-            result.* = WidgetEncodeHabitsStatsChart(HabitsStatsChart.{
-                    .title = "Daily completions", .shown = true, .point_count = 30,
-                    .highest = ifx empty then 0 else 2, .sum = ifx empty then 0 else 15,
-                    .answered = ifx empty then 0 else 30}, *stats_test_chart_codec)
+            value := HabitsStatsChart.{.title = "Daily completions", .shown = true,
+                .point_count = 30, .highest = ifx empty then 0 else 2,
+                .sum = ifx empty then 0 else 15, .answered = ifx empty then 0 else 30,
+                .color = StatsTestChartColor(chart)}
+            result.* = WidgetEncodeHabitsStatsChart(value, *stats_test_chart_codec)
             return 1
         }
         if chart < 0 || chart > stats_test_frame.question_count { return 0 }
@@ -96,7 +104,7 @@ StatsTestCall :: (context: *void, module: *u8, function: *u8,
         if chart < 0 && index >= 0 && index < 30 {
             stats_test_points += 1
             empty := stats_test_frame.overview && stats_test_frame.habit_count == 0
-            value: s32 = ifx empty then 0 else index % 3
+            value: s32 = ifx empty then 0 else index % 2
             result.* = WidgetEncodeHabitsStatsPoint(HabitsStatsPoint.{
                     .slot = index, .value = value, .good = 1,
                     .label = "20261020 · 1"}, *stats_test_point_codec)
@@ -175,13 +183,27 @@ CheckHabitStats :: () -> s32 {
     if stats_test_band_charts != 1 || stats_test_refused { return 7 }
     overview := CheckHabitStatsOverview(2)
     if overview != 0 { return 10 + overview }
+    single := CheckHabitStatsOverview(1)
+    if single != 0 { return 30 + single }
     empty := CheckHabitStatsOverview(0)
     if empty != 0 { return 20 + empty }
     return 0
 }
 
-// The all-habits page includes the combined daily series and one series
-// for each habit. An empty account still draws its zero-valued overview.
+// Get the first painted line in a habit's saved color.
+HabitTrendLineBounds :: (session: Session, color: Color) -> Rectangle {
+    count := PendingPaintCount(session)
+    for index: cast(s32)0..count - 1 {
+        command := PendingPaintAt(session, index)
+        if command.kind == cast(s32)PaintKindShapeLine && command.color.r == color.r && command.color.g == color.g &&
+        command.color.b == color.b && command.color.a == color.a {
+            return command.bounds
+        }
+    }
+    return Rectangle.{}
+}
+
+// The overview paints each habit's line on the same plot in its saved color.
 CheckHabitStatsOverview :: (habit_count: s32) -> s32 {
     session := SessionOpen()
     bounds := Rectangle.{0.0, 0.0, 400.0, 2400.0}
@@ -209,13 +231,21 @@ CheckHabitStatsOverview :: (habit_count: s32) -> s32 {
     AppsUiEnd()
     WidgetHostEnd()
     painted := PendingPaintCount(session)
+    first_line := HabitTrendLineBounds(session, StatsTestChartColor(-2))
+    second_line := HabitTrendLineBounds(session, StatsTestChartColor(-3))
     unused EndFrame(session)
     unused SessionClose(session)
     if !drawn.succeeded || painted == 0 { return 1 }
     if stats_test_reads != 1 || stats_test_written != 1 { return 2 }
-    if stats_test_points != (habit_count + 1) * 30 { return 3 }
-    if stats_test_trends < habit_count + 1 { return 4 }
+    series_count := ifx habit_count > 0 then habit_count else 1
+    if stats_test_points != series_count * 30 { return 3 }
+    if stats_test_trends != series_count { return 4 }
     if stats_test_charts != 0 || stats_test_holds != 0 ||
     stats_test_changes != 0 || stats_test_band_charts != 0 || stats_test_refused { return 5 }
+    if (first_line.width > 0.0) != (habit_count > 0) { return 6 }
+    if (second_line.width > 0.0) != (habit_count > 1) { return 7 }
+    // Both fixtures have the same values, so their first segments coincide.
+    if habit_count > 1 && (first_line.x != second_line.x || first_line.y != second_line.y ||
+        first_line.height != second_line.height || first_line.width != second_line.width) { return 8 }
     return 0
 }

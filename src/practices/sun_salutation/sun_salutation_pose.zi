@@ -35,17 +35,26 @@ SunSalutationJointPlanes :: (pose: WorkoutPose) -> WorkoutPose {
     return pose
 }
 
-SunSalutationPose :: (step: s32, other_side: bool) -> WorkoutPose {
-    step = SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
+SunSalutationStanding :: () -> WorkoutPose {
     pose := WorkoutStanding()
     // Standing tall: the legs straight, just short of the rig's full reach.
     pose.pelvis.y = SUN_SALUTATION_STANDING_PELVIS
     pose.pelvis.z = 0.284
     WorkoutFeet(*pose, 0.075, 0.301, 0.0, 0.0, 0.0)
-    // Mountain pose accompanies the intro cue to relax both arms by the
-    // sides, and is the resting pose at the end of each round.
     WorkoutHandsAt(*pose, WORKOUT_AT_ARM, 4.0, 20.0, 0.975)
-    if step == 1 {
+    return SunSalutationJointPlanes(pose)
+}
+
+SunSalutationPose :: (step: s32, other_side: bool) -> WorkoutPose {
+    step = SalutationClamp(step, 0, SUN_SALUTATION_STEP_COUNT - 1)
+    pose := SunSalutationStanding()
+    if step == 0 || step == SUN_SALUTATION_STEP_COUNT - 1 {
+        // Wrist spacing leaves room for the palms to meet at the sternum.
+        WorkoutHandsAt(*pose, WORKOUT_AT_WORLD, 0.014, 1.20, 0.49)
+        WorkoutElbows(*pose, 0.4, -1.0, -0.1)
+        pose.hands[0].upright = 1.0
+        pose.hands[1].upright = 1.0
+    } else if step == 1 {
         // On the way up the salute arches back: hips forward, chest open,
         // arms reaching up and back, eyes following the hands.
         WorkoutBody(*pose, 0.0, 0.893, 0.31, 0.0, -8.0, 0.0, 0.0, -16.0, -14.0)
@@ -111,6 +120,7 @@ SUN_SALUTATION_STANDING_PELVIS :: 0.904
 // shares of the move, so the figure never starts and stops as one block.
 SUN_SALUTATION_ARMS_LAG :: 0.08
 SUN_SALUTATION_HEAD_LAG :: 0.16
+SUN_SALUTATION_PRAYER_TICKS :: 96
 // On the step back into plank the hips pike up to let the front leg pass
 // under them, turning about the shoulders so the hands stay planted:
 // degrees of extra lean, and the pelvis's rise and shift back in metres.
@@ -125,6 +135,9 @@ SUN_SALUTATION_BREATH_NOD :: 1.5
 
 // How long the move into a step takes, in ticks.
 SunSalutationMoveTicks :: (state: SunSalutationPracticeState) -> s32 {
+    if state.step == 0 {
+        return SUN_SALUTATION_PRAYER_TICKS
+    }
     transition: s32 = SUN_SALUTATION_TRANSITION_SECONDS * 60
     breath := SalutationBreathSeconds(state) * 60
     if transition > breath * 3 / 4 {
@@ -134,11 +147,8 @@ SunSalutationMoveTicks :: (state: SunSalutationPracticeState) -> s32 {
 }
 
 // How far the move into the current step has come: 0 as the step begins
-// and 1 once its pose is reached. The first step has no move.
+// and 1 once its pose is reached.
 SunSalutationProgress :: (state: SunSalutationPracticeState) -> float64 {
-    if state.step <= 0 {
-        return 1.0
-    }
     return TaiChiClamp(cast(float64)state.step_ticks / cast(float64)SunSalutationMoveTicks(state), 0.0, 1.0)
 }
 
@@ -162,7 +172,7 @@ SunSalutationLeadAmount :: (progress: float64, lead: float64) -> float64 {
 // a little with each breath, from stillness to stillness, so a hold never
 // freezes her and the next move starts from rest.
 SunSalutationBreathe :: (pose: *WorkoutPose, state: SunSalutationPracticeState) {
-    start := ifx state.step <= 0 then 0 else SunSalutationMoveTicks(state)
+    start := SunSalutationMoveTicks(state)
     length := SalutationStepSeconds(state) * 60 - start
     held := state.step_ticks - start
     if length <= 0 || held <= 0 || held >= length {
@@ -178,11 +188,10 @@ SunSalutationBreathe :: (pose: *WorkoutPose, state: SunSalutationPracticeState) 
 SunSalutationPoseAt :: (state: SunSalutationPracticeState, rig: *TaiChiRig) -> WorkoutPose {
     other_side := SalutationOtherSide(state)
     to := SunSalutationPose(state.step, other_side)
-    if state.step <= 0 {
-        SunSalutationBreathe(*to, state)
-        return to
+    from := SunSalutationStanding()
+    if state.step > 0 {
+        from = SunSalutationPose(state.step - 1, other_side)
     }
-    from := SunSalutationPose(state.step - 1, other_side)
     progress := SunSalutationProgress(state)
     body := SunSalutationPartAmount(progress, 0.0)
     pose := WorkoutBlend(*from, *to, body, rig)

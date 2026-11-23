@@ -3,8 +3,8 @@
 ## [Unreleased]
 
 - Opravy Backspace, úprav a obnovy záloh. Fotky a Rádio. Dew za hvězdy Telegramu. Lumi hned odpoví a hlásí nepřečtené.
-- Start, změna, návrat. Posun v astrálních lekcích. Lehké 4min a vlastní cviky. Stav/opakování stahování. Opravy PiP/Domů.
-- Reset po pauze, tematické časovače a mince. Denní mince, odkazy na Deník, grafy, statistiky a ikony návyků v Aktivitě.
+- Start, změna, návrat. Posun v Astrálu. 4min a vlastní cviky. Denní/noční bannery. Stav stahování. Opravy PiP/Domů.
+- Reset časovačů po návratu. Tematické časovače/mince. Denní mince, odkazy Deníku, jeden graf návyků, statistiky, ikony.
 
 ## [2.1.63] - 2026-11-05
 

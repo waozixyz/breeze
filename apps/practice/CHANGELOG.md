@@ -1,19 +1,23 @@
 # Changelog
 
 ## [Unreleased]
+- Follow a marker around Box Breathing’s painted square. The original skies drift in both breathing banners, and Wim Hof keeps the rising steam above its ice bath.
+- Workout shows one countdown and starts narration when the figure is ready. Choose Woman or Man in Customize. Open the routine manager from the third Workout card.
+- Woman wears the fitted Workout top and leggings in Sun Salutation and brings her palms together at the chest in Mountain pose.
 - Practice cards stay responsive while their animated banners start.
-- Switch the app between day and night from the top-right corner of Practices. The banners show drifting clouds from NOAA photography and stars from Hipparcos. Steam rises above the Wim Hof ice bath.
-- Swipe from the 7-Minute Workout card to the 4-Minute Workout card to start or customize the shorter circuit. Its character and landscape are separate from the animated sky.
+- Switch between day and night in the top-right corner of Practices. Characters and landscapes keep their painted details. Steam rises above the original Wim Hof ice bath. The other banners show drifting clouds from NOAA photography and stars from Hipparcos.
+- Swipe from the 7-Minute Workout card to the 4-Minute Workout card to start the shorter circuit. Its character and landscape are separate from the animated sky.
 - Build and save custom workouts with timed exercises, pose options, and automatic transitions. The editor shows active time and transition time separately.
 - Choose Woman or Man in Workout Customize. Your choice is saved for both circuits and custom routines.
-- The woman wears leggings and a fitted crop top in both Workout circuits and custom routines. The original barefoot contours are restored.
+- The woman has a fuller ponytail, layered bangs, and refined barefoot poses. The man wears a short-sleeve crew-neck T-shirt in Workout and the character preview.
+- The woman wears leggings and a fitted crop top in both Workout circuits and custom routines.
 - The figure keeps its hands planted during push-ups and lowers into wall sits without walking backward.
 - The included Sun Salutation voices play offline.
 - Practice cards have new light and dark covers with a brief breathing glow.
 - See practice download progress and retry failed downloads.
 - Follow the 3D figures in Tai Chi, Sun Salutation, Workout and Astral Projection. The camera holds steady, the figures are barefoot, and the skirt drapes around the legs and sleeves.
 - Practice figures move more naturally: feet step and pivot instead of sliding, toes stay above the floor, knees and elbows straighten smoothly, hands turn without flipping, and the side plank rolls over to the second side.
-- Recover unfinished practices after an unexpected close; restore a last good data copy from Settings.
+- Continue Workout, Breathing Patterns, or Meditation from a recovery card showing the practice and where it stopped. Restore a last good data copy from Settings.
 - Starting practices leaves no navigation leftovers; changing practices keeps the page steady and fades from the previous practice.
 - Choose an astral exercise with its guide and narration; adjust audio together and follow clearer Sun Salutation cues.
 - Open all six Astral Projection lessons from Choose Lesson and return to your last choice.

@@ -48,17 +48,37 @@
 #import "byte_text_linux"
 #import "text_buffer"
 Layout :: #import "kryon/layout";
+Box :: #import "kryon/box";
 Button :: #import "kryon/button";
-Scroll :: #import "kryon/scroll";
+Dropdown :: #import "kryon/dropdown";
+Modal :: #import "kryon/modal";
 Text :: #import "kryon/text";
+TitleBar :: #import "kryon/title_bar";
+#import "kryon/tree"
 #import "session"
 #import "control_props"
 #import "drawing_props"
 #import "geometry"
 #import "text_align"
-#import "kryon/tree"
 
 c :: #system_library "c";
+#if #defined(KRYON_TEST_DRIVER) && #defined(DESKTOP_HOST) && OS == .LINUX {
+    #import "test_driver"
+    #import "std/c_string"
+
+    WorkoutTestGetEnv :: (name: *u8) -> *u8 #foreign c "app_getenv_bytes";
+    WorkoutTestFileAccess :: (path: *u8, mode: s32) -> s32 #foreign c "access";
+
+    WorkoutTestSceneAvailable :: () -> bool {
+        if !TestDriverActive() {
+            return true
+        }
+        name: [32]u8
+        unused CopyCString("INBE_TEST_WORKOUT_READY_FILE", name[:])
+        path := WorkoutTestGetEnv(*name[0])
+        return path == null || path[0] == cast(u8)0 || WorkoutTestFileAccess(path, 0) == 0
+    }
+}
 practice_background_start :: (app: *InnerBreeze, id: s32) #foreign c;
 practice_active_background_stop :: (app: *InnerBreeze) #foreign c;
 app_auto_sync :: (app: *InnerBreeze) -> s32 #foreign c;
@@ -71,10 +91,9 @@ using AppThemeMode;
 using ExerciseType;
 using ModalType;
 using SessionExitModalResult;
-using TextAlign;
-using Text.Wrap;
 using ButtonTone;
 using ButtonEmphasis;
+using TextAlign;
 
 WORKOUT_EDGE_PATH :: "assets/practices/workout/flat-edge.png"
 
@@ -82,7 +101,11 @@ workout_elapsed_ms: s64;
 workout_coverage: WorkoutCoverage;
 workout_routine: s32;
 workout_custom: WorkoutSequence;
-workout_config_custom: bool;
+workout_session_character: s32;
+workout_voice_elapsed_ms: s32 = -1;
+workout_resume_cue: [64]u8;
+workout_startup: s32;
+workout_skip_initial_delta: bool;
 workout_frame_carry: float64;
 workout_exit_was_paused: s32;
 // The phase and exercise last seen, so each change rings once.
@@ -97,107 +120,112 @@ WorkoutActive :: (app: *InnerBreeze) -> s32 {
 }
 
 WorkoutTitle :: (routine: s32) -> string {
+    if routine == WORKOUT_ROUTINE_CUSTOM {
+        return LocaleText("workout_custom_entry")
+    }
     return ifx routine == WORKOUT_ROUTINE_SHORT then LocaleText("exercise_workout_short") else LocaleText("exercise_workout")
 }
 
+WorkoutConfigBack :: (app: *InnerBreeze) {
+    app_block_current_click(app)
+    PracticeConfigLeave(app, cast(s32)ModalPracticeConfig)
+}
+
 WorkoutConfigDraw :: (app: *InnerBreeze) {
-    modal := cast(s32)ModalPracticeConfig
-    title := ifx workout_config_custom then LocaleText("workout_custom_entry") else LocaleText("practice_configure_button")
-    if PracticeConfigTitle(app, title, modal, 1) != 0 {
-        workout_config_custom = false
-        return
-    }
     layout: PracticeSubscreenLayout
-    PracticeConfigLayout(app, modal, AppScale(18), *layout)
-    if workout_config_custom {
-        action := WorkoutBuilderDraw(app, layout)
-        if action == WORKOUT_BUILDER_BACK {
-            workout_config_custom = false
-        } else if action == WORKOUT_BUILDER_PLAY && ActivityStartAllowed() && WorkoutBuilderTake(*workout_custom) {
-            WorkoutStartRoutine(app, WORKOUT_ROUTINE_CUSTOM)
-        }
+    PracticeConfigLayout(app, cast(s32)ModalPracticeConfig, AppScale(12), *layout)
+    options: [1]Dropdown.Option
+    bar := TitleBar.Props.{.title = LocaleText("practice_configure_button"), .height = layout.title_h,
+        .has_leading_action = true, .leading_label = LocaleText("back_button")}
+    if TitleBar.Draw(app.ui.session, bar, options[:0]).clicked_leading {
+        WorkoutConfigBack(app)
         return
     }
-    width := app.ui.view_width
-    height := AppScale(56)
-    gap := AppScale(8)
-    label_height := AppScale(30)
-    scroll := Scroll.Draw(app.ui.session, Scroll.Props.{
-        .key = Layout.KeyHash("workout/customize/scroll"),
-        .bounds = Rectangle.{0.0, cast(float32)layout.scroll_y, cast(float32)width, cast(float32)layout.scroll_h},
-        .content_height = (height + gap) * 4 + label_height, .scroll_offset = app.settings_scroll})
-    app.settings_scroll = scroll.scroll_offset
-    if !scroll.opened {
+    width := app.ui.view_width - Layout.PageSidePaddingFor(app.ui.view_width) * 2
+    if width > AppScale(308) {
+        width = AppScale(308)
+    }
+    height := width * 2 / 3
+    if height > AppScale(188) {
+        height = AppScale(188)
+    }
+    if height > layout.scroll_h {
+        height = layout.scroll_h
+    }
+    if width <= 0 || height < AppScale(44) {
         return
     }
-    width = cast(s32)scroll.content.width
-    padding := Layout.PageSidePaddingFor(width)
-    button_width := width - padding * 2
-    if button_width > AppScale(480) {
-        button_width = AppScale(480)
+    x := (app.ui.view_width - width) / 2
+    y := layout.scroll_y + (layout.scroll_h - height) / 2
+    WorkoutCharacterPreview(app, Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)height})
+}
+
+WorkoutManagerOpen :: (app: *InnerBreeze) {
+    WorkoutBuilderOpen()
+    app_open_modal(app, cast(ModalType)ModalWorkoutManager)
+}
+
+WorkoutManagerBack :: (app: *InnerBreeze) {
+    app_block_current_click(app)
+    if WorkoutBuilderBack() {
+        app_close_modal(app)
     }
-    x := scroll.content.x + cast(float32)((width - button_width) / 2)
-    for routine: cast(s32)WORKOUT_ROUTINE_FULL..WORKOUT_ROUTINE_SHORT {
-        selected := routine == app.workout_routine
-        y := scroll.content.y + cast(float32)(routine * (height + gap))
-        if Button.Draw(app.ui.session, Button.Props.{
-                .key = Layout.KeyHash("workout/customize/routine") + cast(u64)routine,
-                .bounds = Rectangle.{x, y, cast(float32)button_width, cast(float32)height},
-                .label = WorkoutTitle(routine),
-                .tone = cast(ButtonTone)(ifx selected then ButtonToneAccent else ButtonToneNeutral),
-                .emphasis = cast(ButtonEmphasis)(ifx selected then ButtonEmphasisFilled else ButtonEmphasisSoft)}) != 0 && !selected {
-            app.workout_routine = routine
-            app.settings_dirty = 1
-            save_settings(app)
-        }
+}
+
+WorkoutManagerDraw :: (app: *InnerBreeze) {
+    title := WorkoutTitle(WORKOUT_ROUTINE_CUSTOM)
+    height := app.ui.view_height - AppScale(32)
+    if height > AppScale(660) {
+        height = AppScale(660)
     }
-    custom_y := scroll.content.y + cast(float32)(2 * (height + gap))
-    if Button.Draw(app.ui.session, Button.Props.{
-            .key = Layout.KeyHash("workout/customize/custom"),
-            .bounds = Rectangle.{x, custom_y, cast(float32)button_width, cast(float32)height},
-            .label = LocaleText("workout_custom_entry"),
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        WorkoutBuilderOpen()
-        workout_config_custom = true
+    frame := Modal.Draw(app.ui.session, Modal.Props.{.id = 28900, .title = title,
+        .width = AppScale(500), .height = height, .scale = MetricsScale(),
+        .has_left_action = true, .left_label = LocaleText("back_button"), .strong_title = true})
+    if frame.left_clicked || frame.dismissed {
+        WorkoutManagerBack(app)
+        return
     }
-    character_y := custom_y + cast(float32)(height + gap)
-    Text.Draw(app.ui.session, Text.Props.{
-        .bounds = Rectangle.{x, character_y, cast(float32)button_width, cast(float32)label_height},
-        .text = LocaleText("sun_salutation_character_label"), .size = AppScale(18),
-        .vertical_align = cast(TextAlign)TextAlignCenter})
-    option_width := (button_width - gap) / 2
-    options: [2]string = .[LocaleText("workout_character_woman"), LocaleText("workout_character_man")]
-    for character: cast(s32)0..1 {
-        selected := character == app.workout_character
-        if Button.Draw(app.ui.session, Button.Props.{
-                .key = Layout.KeyHash("workout/customize/character") + cast(u64)character,
-                .bounds = Rectangle.{x + cast(float32)(character * (option_width + gap)),
-                    character_y + cast(float32)label_height, cast(float32)option_width, cast(float32)height},
-                .label = options[character], .selected = selected,
-                .tone = cast(ButtonTone)(ifx selected then ButtonToneAccent else ButtonToneNeutral),
-                .emphasis = cast(ButtonEmphasis)(ifx selected then ButtonEmphasisFilled else ButtonEmphasisSoft)}) != 0 && !selected {
-            app.workout_character = character
-            app.settings_dirty = 1
-            save_settings(app)
-        }
+    if !frame.opened {
+        return
     }
-    unused End(app.ui.session)
+    defer { unused End(app.ui.session) }
+    if WorkoutBuilderDraw(app, frame.layout.content, PracticeContentReady(EXERCISE_WORKOUT)) == WORKOUT_BUILDER_PLAY &&
+    ActivityStartAllowed() && WorkoutBuilderTake(*workout_custom) {
+        WorkoutStartRoutine(app, WORKOUT_ROUTINE_CUSTOM)
+    }
 }
 
 WorkoutStart :: (app: *InnerBreeze) {
     if app != null && ActivityStartAllowed() {
+        if app.workout_routine == WORKOUT_ROUTINE_CUSTOM {
+            WorkoutManagerOpen(app)
+            return
+        }
         WorkoutStartRoutine(app, app.workout_routine)
     }
 }
 
 WorkoutStartRoutine :: (app: *InnerBreeze, routine: s32) {
-    mark_exercise_manual_seen(app, EXERCISE_WORKOUT)
     workout_elapsed_ms = 0
     workout_coverage = WorkoutCoverage.{}
-    workout_frame_carry = 0.0
     workout_routine = routine
-    workout_config_custom = false
+    workout_session_character = app.workout_character
+    workout_voice_elapsed_ms = -1
+    workout_resume_cue[0] = cast(u8)0
+    WorkoutEnter(app)
+    PracticeDraftBegin(EXERCISE_WORKOUT)
+    if routine == WORKOUT_ROUTINE_CUSTOM {
+        PracticeDraftSetDefinition(WorkoutSequenceEncode(*workout_custom))
+    }
+    WorkoutCheckpoint(true)
+}
+
+WorkoutEnter :: (app: *InnerBreeze) {
+    app.exercise_type = EXERCISE_WORKOUT
+    mark_exercise_manual_seen(app, EXERCISE_WORKOUT)
+    workout_frame_carry = 0.0
+    workout_startup = WORKOUT_START_WAITING
+    workout_skip_initial_delta = false
     first := WorkoutCurrentStep()
     workout_last_phase = first.phase
     workout_last_exercise = first.exercise
@@ -205,10 +233,103 @@ WorkoutStartRoutine :: (app: *InnerBreeze, routine: s32) {
     app.session_paused = 0
     PracticeNarrationStop()
     app_close_modal(app)
-    PracticeDraftBegin(EXERCISE_WORKOUT)
     app_switch_screen(app, ScreenWorkout)
-    meditation_music_start_session(app)
-    practice_background_start(app, EXERCISE_WORKOUT)
+}
+
+WorkoutRecovery :: struct {
+    routine: s32
+    character: s32
+    elapsed_ms: s32
+    voiced_ms: s32
+    duration_ms: s32
+    sequence: WorkoutSequence
+    coverage: WorkoutCoverage
+}
+
+WorkoutRecoveryStep :: (state: *WorkoutRecovery) -> WorkoutStep {
+    return WorkoutTimelineStep(state.routine, *state.sequence, state.elapsed_ms)
+}
+
+WorkoutRecoveryDecode :: (draft: *PracticeRecoveryDraft, state: *WorkoutRecovery) -> bool {
+    if draft.activity != EXERCISE_WORKOUT || draft.resume.count != 4 + WORKOUT_EXERCISE_COUNT * 2 {
+        return false
+    }
+    values := draft.resume.values[:]
+    state.* = WorkoutRecovery.{.routine = values[0], .character = values[1],
+        .elapsed_ms = values[2], .voiced_ms = values[3] - 1}
+    if state.routine > WORKOUT_ROUTINE_CUSTOM || state.character > 1 || state.voiced_ms > state.elapsed_ms {
+        return false
+    }
+    count := WorkoutRoutineCount(state.routine)
+    if state.routine == WORKOUT_ROUTINE_CUSTOM {
+        if !WorkoutSequenceDecode(TextFromBytes(draft.resume.definition[:draft.resume.definition_length]), *state.sequence) {
+            return false
+        }
+        count = state.sequence.count
+        state.duration_ms = cast(s32)WorkoutSequenceStart(*state.sequence, count)
+    } else {
+        if draft.resume.definition_length != 0 {
+            return false
+        }
+        state.duration_ms = WorkoutTotalMilliseconds(state.routine)
+    }
+    for index: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
+        ready := values[4 + index]
+        work := values[4 + WORKOUT_EXERCISE_COUNT + index]
+        ready_limit: s32 = 0
+        work_limit: s32 = 0
+        if index < count {
+            ready_limit = WorkoutLeadMilliseconds(state.routine)
+            work_limit = WorkoutWorkMilliseconds(state.routine)
+            if state.routine == WORKOUT_ROUTINE_CUSTOM {
+                ready_limit = WorkoutSequenceBridge(*state.sequence, index)
+                work_limit = state.sequence.blocks[index].seconds * 1000
+            }
+        }
+        if ready > ready_limit || work > work_limit {
+            return false
+        }
+        state.coverage.ready[index] = ready
+        state.coverage.work[index] = work
+        state.coverage.played_ms += ready + work
+    }
+    return state.elapsed_ms <= state.duration_ms && state.coverage.played_ms / 1000 == draft.rounds[0]
+}
+
+WorkoutCheckpoint :: (force: bool) {
+    values: [4 + WORKOUT_EXERCISE_COUNT * 2]s32
+    values[0] = workout_routine
+    values[1] = workout_session_character
+    values[2] = cast(s32)workout_elapsed_ms
+    values[3] = workout_voice_elapsed_ms + 1
+    for index: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
+        values[4 + index] = workout_coverage.ready[index]
+        values[4 + WORKOUT_EXERCISE_COUNT + index] = workout_coverage.work[index]
+    }
+    step := WorkoutCurrentStep()
+    PracticeDraftProgress(EXERCISE_WORKOUT, WorkoutPlayedSeconds(), step.index * 4 + step.phase, values[:], force)
+}
+
+WorkoutContinue :: (app: *InnerBreeze, draft: *PracticeRecoveryDraft) -> bool {
+    state: WorkoutRecovery
+    if !WorkoutRecoveryDecode(draft, *state) {
+        return false
+    }
+    workout_routine = state.routine
+    workout_custom = state.sequence
+    workout_elapsed_ms = state.elapsed_ms
+    workout_coverage = state.coverage
+    workout_session_character = state.character
+    workout_voice_elapsed_ms = state.voiced_ms
+    workout_resume_cue[0] = cast(u8)0
+    if state.voiced_ms >= 0 {
+        voiced := WorkoutTimelineStep(state.routine, *state.sequence, state.voiced_ms)
+        key: [64]u8
+        unused AppCopyText(WorkoutNarrationCue(voiced, key[:]), workout_resume_cue[:])
+    }
+    PracticeDraftResume(draft)
+    WorkoutEnter(app)
+    return true
 }
 
 WorkoutElapsedSeconds :: () -> s32 {
@@ -223,10 +344,14 @@ WorkoutDuration :: () -> s32 {
 }
 
 WorkoutCurrentStep :: () -> WorkoutStep {
-    if workout_routine == WORKOUT_ROUTINE_CUSTOM {
-        return WorkoutSequenceStep(*workout_custom, workout_elapsed_ms)
+    return WorkoutTimelineStep(workout_routine, *workout_custom, workout_elapsed_ms)
+}
+
+WorkoutTimelineStep :: (routine: s32, sequence: *WorkoutSequence, milliseconds: s64) -> WorkoutStep {
+    if routine == WORKOUT_ROUTINE_CUSTOM {
+        return WorkoutSequenceStep(sequence, milliseconds)
     }
-    return WorkoutStepAt(workout_routine, workout_elapsed_ms)
+    return WorkoutStepAt(routine, milliseconds)
 }
 
 WorkoutActiveCount :: () -> s32 {
@@ -250,14 +375,15 @@ WorkoutPlayedSeconds :: () -> s32 {
 
 WorkoutSave :: (app: *InnerBreeze, output: *u8, capacity: s64) {
     seconds := WorkoutPlayedSeconds()
-    if seconds >= 60 && data_save_session_path_for_activity(*seconds, 1, 0,
-        EXERCISE_WORKOUT, output, capacity) != 0 {
+    if seconds >= 60 && PracticeDraftSaveElapsed(EXERCISE_WORKOUT, seconds, output, capacity) != 0 {
         sync_habits_for_activity(app, EXERCISE_WORKOUT)
         unused app_auto_sync(app)
     }
 }
 
 WorkoutStop :: (app: *InnerBreeze) {
+    workout_startup = WORKOUT_START_WAITING
+    workout_skip_initial_delta = false
     PracticeDraftEnd()
     PracticeNarrationStop()
     meditation_music_stop(app)
@@ -303,7 +429,7 @@ WorkoutRing :: (app: *InnerBreeze, step: WorkoutStep) {
 }
 
 WorkoutAdvanceElapsed :: (app: *InnerBreeze, milliseconds: s32) {
-    if WorkoutActive(app) == 0 {
+    if WorkoutActive(app) == 0 || workout_startup != WORKOUT_START_RUNNING {
         return
     }
     before := workout_elapsed_ms
@@ -317,14 +443,15 @@ WorkoutAdvanceElapsed :: (app: *InnerBreeze, milliseconds: s32) {
     }
     step := WorkoutCurrentStep()
     WorkoutRing(app, step)
-    PracticeDraftElapsed(EXERCISE_WORKOUT, WorkoutPlayedSeconds(), step.exercise, false)
+    WorkoutCheckpoint(false)
     if step.phase == WORKOUT_PHASE_DONE {
         WorkoutFinish(app)
     }
 }
 
 WorkoutSeek :: (app: *InnerBreeze, index: s32) {
-    if WorkoutActive(app) == 0 || index < 0 || index >= WorkoutActiveCount() {
+    if WorkoutActive(app) == 0 || workout_startup != WORKOUT_START_RUNNING ||
+    WorkoutCurrentStep().phase == WORKOUT_PHASE_PREPARE || index < 0 || index >= WorkoutActiveCount() {
         return
     }
     if workout_routine == WORKOUT_ROUTINE_CUSTOM {
@@ -338,24 +465,49 @@ WorkoutSeek :: (app: *InnerBreeze, index: s32) {
     workout_last_exercise = step.exercise
     workout_last_index = step.index
     PracticeNarrationStop()
-    PracticeDraftElapsed(EXERCISE_WORKOUT, WorkoutPlayedSeconds(), step.exercise, true)
+    workout_voice_elapsed_ms = -1
+    workout_resume_cue[0] = cast(u8)0
+    WorkoutCheckpoint(true)
+}
+
+WorkoutNarrationCue :: (step: WorkoutStep, output: []u8) -> string {
+    return ifx workout_routine == WORKOUT_ROUTINE_CUSTOM then WorkoutSequenceCue(step, output) else WorkoutCueKey(step, output)
 }
 
 WorkoutUpdate :: (app: *InnerBreeze) {
     if WorkoutActive(app) == 0 {
         return
     }
+    if workout_startup != WORKOUT_START_RUNNING {
+        if workout_startup != WORKOUT_START_READY || app.session_paused != 0 || app.backgrounded != 0 {
+            return
+        }
+        workout_startup = WORKOUT_START_RUNNING
+        workout_skip_initial_delta = true
+        meditation_music_start_session(app)
+        practice_background_start(app, EXERCISE_WORKOUT)
+    }
     meditation_music_update(app)
     key: [64]u8
     step := WorkoutCurrentStep()
-    cue := ifx workout_routine == WORKOUT_ROUTINE_CUSTOM then WorkoutSequenceCue(step, key[:]) else WorkoutCueKey(step, key[:])
+    cue := WorkoutNarrationCue(step, key[:])
+    if workout_resume_cue[0] != cast(u8)0 {
+        voiced := WorkoutTimelineStep(workout_routine, *workout_custom, workout_voice_elapsed_ms)
+        if cue == TextFromCString(*workout_resume_cue[0]) && step.index == voiced.index && step.phase == voiced.phase {
+            return
+        }
+        workout_resume_cue[0] = cast(u8)0
+    }
     PracticeNarrationUpdate(app, "workout", cue)
+    if app.session_paused == 0 && cue.count > 0 {
+        workout_voice_elapsed_ms = cast(s32)workout_elapsed_ms
+    }
 }
 
 WorkoutRequestExit :: (app: *InnerBreeze) {
     workout_exit_was_paused = app.session_paused
     app.session_paused = 1
-    PracticeDraftElapsed(EXERCISE_WORKOUT, WorkoutPlayedSeconds(), 0, true)
+    WorkoutCheckpoint(true)
     app_open_modal(app, cast(ModalType)ModalConfirmExitSession)
 }
 
@@ -419,6 +571,10 @@ WorkoutHeading :: (app: *InnerBreeze, step: WorkoutStep) -> string {
 
 // "Get into position" while waiting, "Exercise 2 of 12" while working.
 WorkoutSubheading :: (app: *InnerBreeze, step: WorkoutStep) -> string {
+    if workout_startup == WORKOUT_START_WAITING {
+        return LocaleText("workout_loading_scene")
+    }
+    if step.phase == WORKOUT_PHASE_PREPARE { return "" }
     if step.phase == WORKOUT_PHASE_REST && workout_routine == WORKOUT_ROUTINE_CUSTOM {
         return LocaleText("workout_custom_transition")
     }
@@ -457,9 +613,9 @@ WorkoutDark :: (app: *InnerBreeze) -> bool {
 }
 
 // The figure doing the exercise, getting ready, or moving between exercises.
-WorkoutDrawFigure :: (app: *InnerBreeze, step: WorkoutStep, area: Rectangle, key: u64, alt_text: string) {
+WorkoutDrawFigure :: (app: *InnerBreeze, step: WorkoutStep, area: Rectangle, key: u64, alt_text: string) -> bool {
     if area.width <= 0.0 || area.height <= 0.0 {
-        return
+        return false
     }
     rig := WorkoutRig()
     pose: WorkoutPose
@@ -477,7 +633,6 @@ WorkoutDrawFigure :: (app: *InnerBreeze, step: WorkoutStep, area: Rectangle, key
     } else {
         pose = WorkoutRestPose(step, workout_elapsed_ms, *rig)
     }
-    solved := WorkoutSolve(*pose, *rig)
     if workout_routine != WORKOUT_ROUTINE_CUSTOM && step.phase == WORKOUT_PHASE_REST && step.exercise == WORKOUT_WALL_SIT {
         start := WorkoutFramingFor(WORKOUT_JUMPING_JACKS)
         turn := TaiChiSmoothstep(TaiChiClamp(cast(float64)step.elapsed_ms / 2000.0, 0.0, 1.0))
@@ -500,22 +655,71 @@ WorkoutDrawFigure :: (app: *InnerBreeze, step: WorkoutStep, area: Rectangle, key
         TaiChiPaintFlatEdge(app.ui.session, *workout_props, framing, false, area, key, "", WORKOUT_EDGE_PATH)
     }
     digest := WorkoutPoseDigest(*pose, cast(u64)step.exercise + 1)
-    figure_key := key + cast(u64)4096
-    man := app.workout_character == 1
-    if PracticeFigureDrawModel(app.ui.session, *solved, *rig, framing, man, false,
-        area, figure_key, alt_text, cast(float64)workout_elapsed_ms / 1000.0, digest,
-        PracticeFigurePlacement.{.training = true, .training_shorts = true}) {
-        return
+    return WorkoutDrawAppearance(app, *pose, *rig, framing, workout_session_character == 1,
+        area, key + cast(u64)4096, alt_text, cast(float64)workout_elapsed_ms / 1000.0, digest)
+}
+
+WorkoutDrawAppearance :: (app: *InnerBreeze, pose: *WorkoutPose, rig: *TaiChiRig,
+    framing: TaiChiFraming, man: bool, area: Rectangle, key: u64, alt_text: string,
+    seconds: float64, digest: u64) -> bool {
+    solved := WorkoutSolve(pose, rig)
+    if PracticeFigureDrawModel(app.ui.session, *solved, rig, framing, man, false, area, key,
+        alt_text, seconds, digest, PracticeFigurePlacement.{.training = true, .training_shorts = true}) {
+        return true
     }
     look := TaiChiFlatLookNamed(ifx man then "indigoMan" else "jadeWoman")
-    TaiChiFlatPaintLook(*workout_figure, *solved, *rig, look, framing.camera)
-    TaiChiPaintFlatEdge(app.ui.session, *workout_figure, framing, false, area, key + cast(u64)4096,
-        alt_text, WORKOUT_EDGE_PATH)
+    TaiChiFlatPaintLook(*workout_figure, *solved, rig, look, framing.camera)
+    TaiChiPaintFlatEdge(app.ui.session, *workout_figure, framing, false, area, key, alt_text, WORKOUT_EDGE_PATH)
+    return false
+}
+
+WorkoutCharacterPreview :: (app: *InnerBreeze, area: Rectangle) {
+    rig := WorkoutRig()
+    pose := WorkoutStanding()
+    framing := TaiChiFraming.{.view_height = rig.height * 1.16, .view_center = rig.height * 0.50}
+    digest := WorkoutPoseDigest(*pose, 2)
+    label_h := cast(float32)AppScale(32)
+    gap := cast(float32)AppScale(6)
+    column := (area.width - gap) / 2.0
+    key := Layout.KeyHash("workout/customize/character")
+    for character: cast(s32)0..1 {
+        man := character == 1
+        label := LocaleText(ifx man then "workout_character_man" else "workout_character_woman")
+        x := area.x + cast(float32)character * (column + gap)
+        selected := app.workout_character == character
+        bounds := Rectangle.{x, area.y, column, area.height}
+        Box.Draw(app.ui.session, Box.Props.{.key = key + cast(u64)(8 + character), .bounds = bounds,
+            .fill = StyleTokenColor("surface"), .radius = cast(float32)AppScale(12),
+            .border = StyleTokenColor(ifx selected then "accent" else "surface")})
+        if Button.Draw(app.ui.session, Button.Props.{.key = key + cast(u64)character,
+                .id = 28910 + character, .bounds = bounds,
+                .label = label, .invisible = true, .selected = selected}) != 0 && !selected {
+            app.workout_character = character
+            app.settings_dirty = 1
+            save_settings(app)
+        }
+        figure_h := area.height - label_h - gap * 2.0
+        figure_w := column - gap * 2.0
+        if figure_h > 0.0 && figure_w > 0.0 {
+            framing.view_height = rig.height * 1.16
+            if figure_w < figure_h * 0.48 {
+                framing.view_height *= cast(float64)(figure_h * 0.48 / figure_w)
+            }
+            unused WorkoutDrawAppearance(app, *pose, *rig, framing, man,
+                Rectangle.{x + (column - figure_w) / 2.0, area.y + gap, figure_w, figure_h},
+                key + cast(u64)(4 + character), label, -1.0, digest)
+        }
+        strong: [1]Text.Range = .[.{.start = 0, .end = cast(s32)label.count}]
+        Text.Draw(app.ui.session, Text.Props.{.bounds = Rectangle.{x, area.y + area.height - label_h, column, label_h},
+            .text = label, .size = AppFontSize(), .strong = strong[:(ifx selected then 1 else 0)],
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter})
+    }
 }
 
 WorkoutDrawWindow :: (app: *InnerBreeze, picture: Rectangle, output: []u8) -> string {
     step := WorkoutCurrentStep()
-    WorkoutDrawFigure(app, step, picture, Layout.KeyHash("workout/window/figure"), "")
+    unused WorkoutDrawFigure(app, step, picture, Layout.KeyHash("workout/window/figure"), "")
     cursor: s32 = 0
     output[0] = cast(u8)0
     heading := WorkoutHeading(app, step)
@@ -528,7 +732,15 @@ WorkoutDrawWindow :: (app: *InnerBreeze, picture: Rectangle, output: []u8) -> st
 }
 
 WorkoutSessionFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
-    WorkoutDrawFigure(app, WorkoutCurrentStep(), request.bounds, request.key, request.alt_text)
+    #if #defined(KRYON_TEST_DRIVER) && #defined(DESKTOP_HOST) && OS == .LINUX {
+        if workout_startup == WORKOUT_START_WAITING && !WorkoutTestSceneAvailable() {
+            return
+        }
+    }
+    drawn := WorkoutDrawFigure(app, WorkoutCurrentStep(), request.bounds, request.key, request.alt_text)
+    if drawn && workout_startup == WORKOUT_START_WAITING {
+        workout_startup = WORKOUT_START_READY
+    }
 }
 
 WorkoutDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
@@ -549,7 +761,7 @@ WorkoutDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     frame := PracticeMovementFrameFor(app, EXERCISE_WORKOUT, top)
     frame.heading = WorkoutHeading(app, step)
     frame.subtitle = WorkoutSubheading(app, step)
-    frame.cue = WorkoutTip(app, step)
+    frame.cue = ifx workout_startup != WORKOUT_START_WAITING && step.phase == WORKOUT_PHASE_WORK then WorkoutTip(app, step) else ""
     frame.exercise = step.exercise
     frame.view = workout_routine
     frame.progress = WorkoutActiveCompletion()
@@ -563,7 +775,7 @@ WorkoutDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
         frame.time = TextFromBytes(blocks[:workout_custom.count])
         frame.scroll = step.index
     }
-    frame.phase = step.phase
+    frame.phase = ifx workout_startup == WORKOUT_START_WAITING then WORKOUT_PHASE_LOADING else step.phase
     frame.elapsed_ms = step.elapsed_ms
     frame.length_ms = step.length_ms
     frame.seconds_left = WorkoutStepSecondsLeft(step)
@@ -574,9 +786,13 @@ WorkoutDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     }
     if frame.action == PRACTICE_MOVEMENT_PAUSE {
         app.session_paused = ifx app.session_paused != 0 then 0 else 1
-        PracticeDraftElapsed(EXERCISE_WORKOUT, WorkoutPlayedSeconds(), 0, true)
+        WorkoutCheckpoint(true)
     }
-    if app.backgrounded == 0 {
+    if workout_skip_initial_delta {
+        // The host delta can include the expensive first model render.
+        workout_skip_initial_delta = false
+    } else if workout_startup == WORKOUT_START_RUNNING && app.backgrounded == 0 && app.session_paused == 0 &&
+    frame.action != PRACTICE_MOVEMENT_PAUSE {
         total := cast(float64)HostFrameSeconds() * 1000.0 + workout_frame_carry
         milliseconds := cast(s32)total
         workout_frame_carry = total - cast(float64)milliseconds

@@ -7,6 +7,8 @@ c :: #system_library "c";
 #import, file "../../app/modal_rules.zi";
 #import, file "../../core/types.zi";
 #import, file "patterns_rules.zi";
+#import, file "patterns_clock.zi";
+#import, file "patterns_types.zi";
 #import, file "../../app/activity_start.zi";
 
 using ExerciseType;
@@ -31,6 +33,52 @@ patterns_practice_init :: (app: *InnerBreeze) {
 #program_export
 patterns_practice_destroy :: (app: *InnerBreeze) { unused app }
 
+PatternsCheckpoint :: (state: Patterns, force: bool) {
+    fraction := cast(s32)(state.second_accumulator * 1000.0)
+    if fraction > 999 { fraction = 999 }
+    values: [11]s32 = .[state.preset, state.duration_minutes, state.phase, state.phase_second,
+        state.cycle, state.elapsed_seconds, fraction, state.custom[0], state.custom[1],
+        state.custom[2], state.custom[3]]
+    PracticeDraftProgress(EXERCISE_PATTERNS, state.elapsed_seconds, state.cycle * 4 + state.phase, values[:], force)
+}
+
+PatternsRecoveryDecode :: (draft: *PracticeRecoveryDraft, state: *Patterns) -> bool {
+    if draft.activity != EXERCISE_PATTERNS || draft.resume.count != 11 || draft.resume.definition_length != 0 {
+        return false
+    }
+    values := draft.resume.values[:]
+    if values[0] >= PATTERNS_PRESET_COUNT || values[1] > 20 || values[2] > PATTERNS_PHASE_HOLD_OUT ||
+    values[3] >= PATTERNS_MAX_SECONDS || values[4] > values[5] || values[5] != draft.rounds[0] || values[6] >= 1000 ||
+    (values[1] > 0 && values[5] >= values[1] * 60) {
+        return false
+    }
+    state.* = Patterns.{.active = 1, .preset = values[0], .duration_minutes = values[1],
+        .phase = values[2], .phase_second = values[3], .cycle = values[4], .elapsed_seconds = values[5],
+        .second_accumulator = cast(float64)values[6] / 1000.0}
+    for index: cast(s32)0..3 {
+        if values[7 + index] > PATTERNS_MAX_SECONDS { return false }
+        state.custom[index] = values[7 + index]
+    }
+    span := patterns_ratio_part(state.*, state.phase)
+    return state.phase_second == 0 || state.phase_second < span
+}
+
+PatternsEnter :: (app: *InnerBreeze) {
+    app.exercise_type = EXERCISE_PATTERNS
+    app_close_modal(app)
+    app_switch_screen(app, ScreenPatterns)
+    practice_background_start(app, EXERCISE_PATTERNS)
+}
+
+PatternsContinue :: (app: *InnerBreeze, draft: *PracticeRecoveryDraft) -> bool {
+    state: Patterns
+    if !PatternsRecoveryDecode(draft, *state) { return false }
+    app.patterns = state
+    PracticeDraftResume(draft)
+    PatternsEnter(app)
+    return true
+}
+
 #program_export
 patterns_practice_start :: (app: *InnerBreeze) {
     if app == null || !ActivityStartAllowed() { return }
@@ -42,10 +90,9 @@ patterns_practice_start :: (app: *InnerBreeze) {
     app.patterns.second_accumulator = 0.0
     app.patterns.cycle = 0
     app.patterns.elapsed_seconds = 0
-    app_close_modal(app)
     PracticeDraftBegin(EXERCISE_PATTERNS)
-    app_switch_screen(app, ScreenPatterns)
-    practice_background_start(app, EXERCISE_PATTERNS)
+    PatternsCheckpoint(app.patterns, true)
+    PatternsEnter(app)
 }
 
 #program_export
@@ -54,7 +101,7 @@ patterns_practice_leave_config :: (app: *InnerBreeze) { unused app }
 #program_export
 patterns_request_exit :: (app: *InnerBreeze) {
     if app != null {
-        PracticeDraftPause()
+        PatternsCheckpoint(app.patterns, true)
         app_open_modal(app, cast(ModalType)ModalConfirmExitSession)
     }
 }

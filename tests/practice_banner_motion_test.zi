@@ -3,14 +3,20 @@
 #import, file "../src/screens/practice_banner_shader.zi";
 #import "kryon/scene"
 #import "kryon/shader"
+#import "std/vec"
 
 banner: PracticeBannerShader;
 mask: [PRACTICE_BANNER_MASK_WIDTH * PRACTICE_BANNER_MASK_HEIGHT * 4]u8;
 
 SteamChanges :: (asset: string) -> s32 {
     regions := PracticeBannerRegionsFor(asset)
+    regions.artwork_sky = regions.steam_opacity > 0.0
+    regions.full_sky = regions.artwork_sky
     PracticeBannerMask(regions, mask[:])
-    PracticeBannerShaderLook(*banner, regions, mask[:])
+    clear_sky: []u8
+    if !PracticeBannerShaderLook(*banner, regions, mask[:], clear_sky) {
+        return -1
+    }
     PracticeBannerShaderPhase(*banner, 1)
     first_uniforms := banner.steam_uniforms
     PracticeBannerShaderPhase(*banner, 1 + 9 * PRACTICE_BANNER_HZ)
@@ -64,15 +70,66 @@ main :: () -> s32 {
        PracticeBannerTick(*motion, asset, 10.1, true, false) != 17 {
         return 7
     }
-    clear_sky: []u8
-    if !PracticeBannerShaderInit(*banner, clear_sky) {
+    if !PracticeBannerShaderInit(*banner) {
         return 8
     }
     defer SceneFree(*banner.scene)
+    defer VecFree(banner.sky.noise)
     if SteamChanges("assets/practices/whm/banner-light.webp") < 10 ||
        SteamChanges("assets/practices/whm/banner-dark.webp") < 10 ||
-       SteamChanges("assets/practices/sunsalutation/banner-light.webp") != 0 {
+       banner.sky.noise.count != 0 {
         return 9
+    }
+    if SteamChanges("assets/practices/sunsalutation/banner-light.webp") != 0 ||
+       banner.sky.noise.count != PRACTICE_CLOUD_BYTES * 2 {
+        return 10
+    }
+    if SteamChanges("assets/practices/whm/banner-light.webp") < 10 ||
+       SteamChanges("assets/practices/sunsalutation/banner-dark.webp") != 0 ||
+       banner.sky.noise.count != PRACTICE_CLOUD_BYTES * 2 {
+        return 11
+    }
+    for phase: cast(s32)0..3 {
+        start := cast(s64)phase * 4000
+        first := PracticeBannerBoxAt(start)
+        middle := PracticeBannerBoxAt(start + 2000)
+        last := PracticeBannerBoxAt(start + 3999)
+        if first.phase != phase || first.progress != 0.0 || middle.phase != phase || middle.progress != 0.5 ||
+        last.phase != phase || last.progress < 0.999 || last.progress >= 1.0 {
+            return 12
+        }
+    }
+    repeated := PracticeBannerBoxAt(16000)
+    if repeated.phase != 0 || repeated.progress != 0.0 {
+        return 13
+    }
+    still_source := PracticeBannerSkySource(.{0, 0, 400, 500}, .{}, 0)
+    if still_source.x < 460.79 || still_source.x > 460.81 || still_source.y != 0.0 ||
+        still_source.width < 614.39 || still_source.width > 614.41 || still_source.height != 768.0 {
+        return 16
+    }
+    first_source := PracticeBannerSkySource(.{}, .{0.2, 0.0, 0.5, 1.0}, 1)
+    moved_source := PracticeBannerSkySource(.{}, .{0.2, 0.0, 0.5, 1.0}, 151)
+    if moved_source.x <= first_source.x || moved_source.y != first_source.y ||
+        moved_source.width != first_source.width || moved_source.x + moved_source.width > 1536.0 {
+        return 17
+    }
+    assets: [8]string = .["assets/practices/whm/banner-light.webp", "assets/practices/meditation/banner-light.webp",
+        "assets/practices/patterns/banner-light.webp", "assets/practices/astral_projection/banner-light.webp",
+        "assets/practices/sunsalutation/banner-light.webp", "assets/practices/taichi/banner-light.webp",
+        "assets/practices/workout/banner-light.webp", "assets/practices/workout/banner-short-light.webp"]
+    for index: 0..assets.count - 1 {
+        look := PracticeBannerRegionsFor(assets[index]).look
+        if look.zenith == 0 || look.horizon == 0 || look.disc <= 0.0 || look.clouds.width_scale <= 0.0 {
+            return 14
+        }
+        for other: 0..index - 1 {
+            previous := PracticeBannerRegionsFor(assets[other]).look
+            if look.zenith == previous.zenith || look.horizon == previous.horizon ||
+            (look.clouds.offset_x == previous.clouds.offset_x && look.clouds.offset_y == previous.clouds.offset_y) {
+                return 15
+            }
+        }
     }
     return 0
 }

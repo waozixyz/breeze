@@ -15,12 +15,13 @@ PRACTICE_CLOUD_BYTES :: Sky.DAYLIGHT_NOISE * Sky.DAYLIGHT_NOISE * 2
 BANNER_REFLECTION :: 12
 BANNER_WAVE :: 13
 BANNER_WATER :: 14
+BANNER_CLOUD_SCALE :: 15
 
 // The steam quad covers just the space around and above the bath.
 BANNER_STEAM_LEFT :: 0.27
-BANNER_STEAM_BOTTOM :: 0.44
+BANNER_STEAM_BOTTOM :: 0.33
 BANNER_STEAM_WIDTH :: 0.46
-BANNER_STEAM_HEIGHT :: 0.38
+BANNER_STEAM_HEIGHT :: 0.49
 BANNER_STEAM_TINT :: 0
 BANNER_STEAM_PHASE :: 1
 BANNER_STEAM_OPACITY :: 2
@@ -30,8 +31,10 @@ PracticeBannerShader :: struct {
     program: ShaderProgram
     scene: Scene
     camera: SceneCamera
-    uniforms: [15]ShaderValue
+    uniforms: [16]ShaderValue
+    clouds: PracticeBannerClouds
     samplers: [3]ShaderSampler
+    cloudless_noise: [4]u8
     stars: [PRACTICE_BANNER_WIDTH * PRACTICE_BANNER_HEIGHT * 4]u8
     steam_program: ShaderProgram
     steam_uniforms: [3]ShaderValue
@@ -117,12 +120,11 @@ practice_banner_program :: (program: *ShaderProgram) -> bool {
         }
         if step.op == .ShaderLiteral && step.dest == Sky.DAYLIGHT_REG_Q &&
             step.value.x == 1.0 && step.value.y == 0.7 {
-            // Broad low clouds with horizontally elongated silhouettes.
-            step.value = .{1.45, 0.54, 0, 0}
+            step = .{.op = .ShaderUniform, .dest = step.dest, .slot = BANNER_CLOUD_SCALE}
         }
         if step.op == .ShaderLiteral && step.dest == Sky.DAYLIGHT_REG_R &&
             step.value.x == 1.7 && step.value.y == 1.1 {
-            // Smaller, faster detail breaks up the primary cloud edges.
+            // Small cloud details retain a tighter second sampling scale.
             step.value = .{2.4, 1.35, 0, 0}
         }
         if catalog_coordinates && step.op == .ShaderLiteral && step.dest == Sky.DAYLIGHT_REG_T {
@@ -214,21 +216,15 @@ practice_banner_catalog :: (pixels: []u8) {
 }
 
 #scope_export
-PracticeBannerShaderInit :: (banner: *PracticeBannerShader, clouds: []u8) -> bool {
+PracticeBannerShaderInit :: (banner: *PracticeBannerShader) -> bool {
     if !practice_banner_program(*banner.program) || !practice_banner_steam_program(*banner.steam_program) {
         return false
     }
-    // Two density channels sampled from a NOAA photograph of cumulus clouds.
-    // A missing observation leaves a clear sky.
-    observed := clouds.count == PRACTICE_CLOUD_BYTES
-    for pixel: 0..PRACTICE_CLOUD_BYTES / 2 - 1 {
-        unused VecPush(banner.sky.noise, ifx observed then clouds[pixel * 2] else cast(u8)0)
-        unused VecPush(banner.sky.noise, ifx observed then clouds[pixel * 2 + 1] else cast(u8)0)
-        unused VecPush(banner.sky.noise, cast(u8)0)
-        unused VecPush(banner.sky.noise, cast(u8)255)
-    }
+    // Kryon validates the sky material even when the artwork hides its mesh.
+    // Bind a neutral texel until a card needs the full cloud texture.
+    banner.cloudless_noise[3] = 255
+    banner.samplers[0] = .{1, 1, banner.cloudless_noise[:], true}
     practice_banner_catalog(banner.stars[:])
-    banner.samplers[0] = .{Sky.DAYLIGHT_NOISE, Sky.DAYLIGHT_NOISE, banner.sky.noise[:], true}
     banner.samplers[2] = .{PRACTICE_BANNER_WIDTH, PRACTICE_BANNER_HEIGHT, banner.stars[:], false}
     SceneInit(*banner.scene)
     banner.scene.background = .{0, 0, 0, 0}
@@ -249,6 +245,26 @@ PracticeBannerShaderInit :: (banner: *PracticeBannerShader, clouds: []u8) -> boo
 }
 
 #scope_file
+practice_banner_observed_clouds :: (banner: *PracticeBannerShader, clouds: []u8) -> bool {
+    if banner.sky.noise.count > 0 {
+        return true
+    }
+    // Expand the two density channels only when a card uses the NOAA photograph.
+    if !VecResize(banner.sky.noise, PRACTICE_CLOUD_BYTES * 2) {
+        return false
+    }
+    observed := clouds.count == PRACTICE_CLOUD_BYTES
+    for pixel: 0..PRACTICE_CLOUD_BYTES / 2 - 1 {
+        at := pixel * 4
+        banner.sky.noise[at] = ifx observed then clouds[pixel * 2] else cast(u8)0
+        banner.sky.noise[at + 1] = ifx observed then clouds[pixel * 2 + 1] else cast(u8)0
+        banner.sky.noise[at + 2] = 0
+        banner.sky.noise[at + 3] = 255
+    }
+    return true
+}
+
+#scope_file
 practice_banner_linear_channel :: (value: u32) -> float64 {
     encoded := cast(float64)(value & 255) / 255.0
     if encoded <= 0.04045 {
@@ -264,8 +280,13 @@ practice_banner_linear :: (rgb: u32) -> ShaderValue {
 }
 
 #scope_export
-PracticeBannerShaderLook :: (banner: *PracticeBannerShader, regions: PracticeBannerRegions, mask: []u8) {
+PracticeBannerShaderLook :: (banner: *PracticeBannerShader, regions: PracticeBannerRegions, mask: []u8,
+    observed_clouds: []u8) -> bool {
+    if !regions.artwork_sky && !practice_banner_observed_clouds(banner, observed_clouds) {
+        return false
+    }
     look := regions.look
+    banner.clouds = look.clouds
     daylight := Sky.DaylightAt(look.hour)
     daylight.zenith = practice_banner_linear(look.zenith)
     daylight.horizon = practice_banner_linear(look.horizon)
@@ -281,17 +302,24 @@ PracticeBannerShaderLook :: (banner: *PracticeBannerShader, regions: PracticeBan
     if night {
         banner.uniforms[Sky.DAYLIGHT_SUN_COLOR] = .{0.62, 0.72, 0.92, 0}
     }
-    banner.uniforms[Sky.DAYLIGHT_SUN_SHAPE] = .{60, 0.0005, 5800, 0}
+    disc_squared := look.disc * look.disc
+    if disc_squared > 0.0 {
+        banner.uniforms[Sky.DAYLIGHT_SUN_SHAPE] = .{60, disc_squared, 3.0 / disc_squared, 0}
+    }
     banner.uniforms[Sky.DAYLIGHT_STARS] = .{ifx night then 0.72 else 0.0, 0,
         ifx night then 0.10 else 0.23, 0}
-    banner.uniforms[Sky.DAYLIGHT_CLOUD] = .{ifx night then 0.055 else 0.025, 4.5,
-        ifx night then 0.45 else 0.96, 0}
+    banner.uniforms[Sky.DAYLIGHT_CLOUD] = .{look.clouds.threshold, 4.5, look.clouds.opacity, 0}
+    banner.uniforms[BANNER_CLOUD_SCALE] = .{look.clouds.width_scale, look.clouds.height_scale, 0, 0}
+    if !regions.artwork_sky {
+        banner.samplers[0] = .{Sky.DAYLIGHT_NOISE, Sky.DAYLIGHT_NOISE, banner.sky.noise[:], true}
+    }
     banner.uniforms[Sky.DAYLIGHT_CLOUD_LIT] = practice_banner_linear(look.cloud_light)
     banner.uniforms[Sky.DAYLIGHT_CLOUD_SHADE] = practice_banner_linear(look.cloud_shadow)
     opacity := regions.steam_opacity
     banner.steam_uniforms[BANNER_STEAM_TINT] = practice_banner_linear(regions.steam_color)
     banner.steam_uniforms[BANNER_STEAM_OPACITY] = .{opacity, opacity, opacity, opacity}
     unused SetVisible(*banner.scene, banner.steam_node, opacity > 0.0)
+    return true
 }
 
 PracticeBannerShaderPass :: (banner: *PracticeBannerShader, regions: PracticeBannerRegions, steam_only: bool) {
@@ -300,12 +328,22 @@ PracticeBannerShaderPass :: (banner: *PracticeBannerShader, regions: PracticeBan
         regions.steam_opacity > 0.0 && (steam_only || !regions.full_sky))
 }
 
+PracticeBannerSteamCamera :: (camera: SceneCamera) -> SceneCamera {
+    cropped := OrthographicCamera(2.0 * BANNER_STEAM_LEFT - 1.0,
+        2.0 * (BANNER_STEAM_LEFT + BANNER_STEAM_WIDTH) - 1.0,
+        BANNER_STEAM_BOTTOM + BANNER_STEAM_HEIGHT - 0.5, BANNER_STEAM_BOTTOM - 0.5, 0.1, 4.0)
+    cropped.position = camera.position
+    cropped.target = camera.target
+    return cropped
+}
+
 PracticeBannerShaderPhase :: (banner: *PracticeBannerShader, tick: s64) {
     seconds := cast(float64)(tick - 1) / PRACTICE_BANNER_HZ
-    low_cloud := seconds * 0.0063
-    high_cloud := seconds * 0.0108
-    banner.uniforms[Sky.DAYLIGHT_CLOUD_A] = .{low_cloud - Sky.DaylightFloor(low_cloud), 0, 0, 0}
-    banner.uniforms[Sky.DAYLIGHT_CLOUD_B] = .{high_cloud - Sky.DaylightFloor(high_cloud), 0, 0, 0}
+    clouds := banner.clouds
+    low_cloud := clouds.offset_x + seconds * 0.0063
+    high_cloud := clouds.offset_y + seconds * 0.0108
+    banner.uniforms[Sky.DAYLIGHT_CLOUD_A] = .{low_cloud - Sky.DaylightFloor(low_cloud), clouds.offset_y, 0, 0}
+    banner.uniforms[Sky.DAYLIGHT_CLOUD_B] = .{high_cloud - Sky.DaylightFloor(high_cloud), clouds.offset_x, 0, 0}
     twinkle := seconds * 0.37
     banner.uniforms[Sky.DAYLIGHT_STARS].y = twinkle - Sky.DaylightFloor(twinkle)
     turn := seconds * 0.26

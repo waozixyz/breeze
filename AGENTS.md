@@ -95,6 +95,13 @@
   direct Ziran foreign imports for native libraries; migrate owned C adapters
   as Ziran gains the required ABI support. Never keep application policy in C.
 
+## Desktop testing
+
+- Run manual Breeze app, runtime and UI tests on Alpha. Use private Xvfb,
+  isolated home and XDG directories, and the test notification sink. Do not
+  launch Breeze test instances on Omega. Builds follow normal Build routing
+  unless the owner selects another machine.
+
 ## Product behavior and readability
 
 - Desktop focus loss must not pause practices, freeze animation, suppress

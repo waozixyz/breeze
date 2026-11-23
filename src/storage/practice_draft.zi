@@ -2,6 +2,8 @@
 // clears it when it ends, so a start after a crash finds what was left
 // unfinished. Storage only keeps the text; the practice owns the JSON.
 #import, file "../app/text_buffers.zi";
+#import, file "../../apps/practice/practice_achievements.zi";
+#import "byte_text_linux"
 #import, file "state.zi";
 #import, file "sqlite.zi";
 #import, file "db.zi";
@@ -77,6 +79,22 @@ storage_practice_draft_clear :: () -> s32 {
     return exec_sql("DELETE FROM practice_draft")
 }
 
+// Keep summary-only or unrecognized drafts verbatim in local metadata when
+// the person closes recovery. The active slot can then hold a new practice.
+storage_practice_draft_archive :: () -> s32 {
+    if storage_db_handle() == null || exec_sql("SAVEPOINT archive_practice") == 0 {
+        return 0
+    }
+    archived := exec_sql("INSERT INTO meta(key,value) SELECT 'practice_draft_archive/' || saved_at || '/' || lower(hex(randomblob(16))),json FROM practice_draft WHERE id=1") != 0 &&
+        storage_practice_draft_clear() != 0
+    if !archived || exec_sql("RELEASE archive_practice") == 0 {
+        unused exec_sql("ROLLBACK TO archive_practice")
+        unused exec_sql("RELEASE archive_practice")
+        return 0
+    }
+    return 1
+}
+
 #import, file "storage_sessions.zi";
 #import, file "time_parts.zi";
 draft_libc :: #system_library "c";
@@ -84,7 +102,7 @@ DraftLocalTime :: (seconds: *s64) -> *Tm #foreign draft_libc "localtime";
 
 // Generic storage operation: one session and removal of its draft commit together.
 storage_practice_draft_commit :: (started_at: s64, activity: s32,
-    topic: s32, rounds: []s32) -> s32 {
+    topic: s32, rounds: []s32, output: *u8 = null, capacity: s64 = 0, award: bool = false) -> s32 {
     civil := DraftLocalTime(*started_at)
     if civil == null || rounds.count == 0 || exec_sql("SAVEPOINT recover_practice") == 0 {
         return 0
@@ -92,13 +110,21 @@ storage_practice_draft_commit :: (started_at: s64, activity: s32,
     date := (civil.tm_year + 1900) * 10000 + (civil.tm_mon + 1) * 100 + civil.tm_mday
     // Keep the epoch itself: converting the repeated local hour at the end
     // of daylight saving back through mktime can select a different start.
+    identity: [96]u8
     saved := insert_session_at_ex(started_at, date, *rounds[0], cast(s32)rounds.count,
-        topic, activity, "app", null, 0, null) != 0 &&
+        topic, activity, "app", *identity[0], size_of(type_of(identity)), null) != 0 &&
     storage_practice_draft_clear() != 0
     if !saved || exec_sql("RELEASE recover_practice") == 0 {
         unused exec_sql("ROLLBACK TO recover_practice")
         unused exec_sql("RELEASE recover_practice")
         return 0
+    }
+    path := AppTextFromCString(*identity[0], 96)
+    if output != null && capacity > 0 {
+        unused AppCopyText(path, BytesFromPointer(output, cast(u64)capacity))
+    }
+    if award {
+        AchievementPracticeSaved(path, activity, date, rounds)
     }
     return 1
 }

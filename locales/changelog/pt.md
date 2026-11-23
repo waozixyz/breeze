@@ -3,8 +3,8 @@
 ## [Unreleased]
 
 - Retrocesso, edição e restauração corrigidos. Fotos/Rádio. Dew via estrelas Telegram. Lumi responde e avisa do não lido.
-- Inicie, alterne, retome. Avanço astral. Treino 4 min leve e próprio. Status/repetir download. Correções PiP/Início.
-- Timers zeram ao voltar. Timers/moedas do tema. Moedas diárias, links ao Diário, gráficos, totais e ícones da Atividade.
+- Inicie, alterne, retome. Avanço astral. Treino 4 min e próprio. Banners dia/noite. Status/repetir download. PiP/Início.
+- Timers zeram ao voltar. Timers/moedas do tema. Moedas diárias, links ao Diário, um gráfico, totais e ícones.
 
 ## [2.1.63] - 2026-11-05
 

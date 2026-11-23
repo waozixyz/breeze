@@ -9,6 +9,7 @@
 #import "kryon/session"
 #import "kryon/scene"
 #import "kryon/scene_gpu"
+#import, file "../src/screens/practice_banner_motion.zi";
 #import, file "../src/screens/practice_banner_regions.zi";
 #import, file "../src/screens/practice_banner_shader.zi";
 
@@ -33,7 +34,6 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if regions.sky[0].radius_x == 0.0 {
         return 2
     }
-    PracticeBannerMask(regions, mask[:])
     photo := OpenRead("assets/app/practice-clouds.rg")
     if !photo.valid {
         print("could not load cloud observations\n")
@@ -42,12 +42,36 @@ main :: (argc: s32, argv: **u8) -> s32 {
     count := ReadAt(photo, clouds[:], 0)
     unused CloseFile(photo)
     banner: PracticeBannerShader
-    if count != PRACTICE_CLOUD_BYTES || !PracticeBannerShaderInit(*banner, clouds[:]) {
+    if count != PRACTICE_CLOUD_BYTES || !PracticeBannerShaderInit(*banner) {
         return 3
     }
     defer SceneFree(*banner.scene)
     defer VecFree(banner.sky.noise)
-    PracticeBannerShaderLook(*banner, regions, mask[:])
+    if regions.steam_opacity > 0.0 {
+        // A fresh app opens Wim Hof before any card loads the cloud texture.
+        original := PracticeBannerRegionsFor(TextFromCString(argv[1]), true)
+        original.full_sky = true
+        PracticeBannerMask(original, mask[:])
+        if !PracticeBannerShaderLook(*banner, original, mask[:], clouds[:]) || banner.sky.noise.count != 0 {
+            return 28
+        }
+        PracticeBannerShaderPass(*banner, original, true)
+        PracticeBannerShaderPhase(*banner, 49)
+        cold_gpu: SceneGpuContext
+        defer SceneGpuRelease(*cold_gpu)
+        cold_steam := NewImage(176, 72)
+        defer VecFree(cold_steam.pixels)
+        cold_frame := SceneGpuRender(*cold_gpu, *banner.scene, PracticeBannerSteamCamera(banner.camera), *cold_steam)
+        if !cold_frame.ok || !cold_frame.accelerated {
+            print("cold artwork steam render failed: %\n", cold_frame.diagnostic)
+            return 29
+        }
+    }
+    PracticeBannerMask(regions, mask[:])
+    if !PracticeBannerShaderLook(*banner, regions, mask[:], clouds[:]) {
+        return 3
+    }
+    unused SetVisible(*banner.scene, banner.sky_node, true)
     unused SetVisible(*banner.scene, banner.steam_node, false)
     gpu: SceneGpuContext
     caps := SceneGpuProbe(*gpu)
@@ -222,11 +246,18 @@ main :: (argc: s32, argv: **u8) -> s32 {
     if regions.steam_opacity > 0.0 {
         regions.full_sky = true
         PracticeBannerMask(regions, mask[:])
-        PracticeBannerShaderLook(*banner, regions, mask[:])
+        if !PracticeBannerShaderLook(*banner, regions, mask[:], clouds[:]) {
+            return 21
+        }
         PracticeBannerShaderPass(*banner, regions, false)
         frame = SceneGpuRender(*gpu, *banner.scene, banner.camera, *first)
         if !frame.ok || !frame.accelerated || first.pixels[3] < 250 {
             return 21
+        }
+        regions = PracticeBannerRegionsFor(TextFromCString(argv[1]), true)
+        PracticeBannerMask(regions, mask[:])
+        if !PracticeBannerShaderLook(*banner, regions, mask[:], clouds[:]) {
+            return 26
         }
         PracticeBannerShaderPass(*banner, regions, true)
         frame = SceneGpuRender(*gpu, *banner.scene, banner.camera, *current)
@@ -242,6 +273,33 @@ main :: (argc: s32, argv: **u8) -> s32 {
         print("foreground steam visible in % pixels\n", steam_pixels)
         if steam_pixels < 120 {
             return 23
+        }
+        cropped := NewImage(176, 72)
+        defer VecFree(cropped.pixels)
+        frame = SceneGpuRender(*gpu, *banner.scene, PracticeBannerSteamCamera(banner.camera), *cropped)
+        if !frame.ok || !frame.accelerated { return 24 }
+        visible_samples: s64
+        alpha_error: s64
+        for row: 0..cropped.height - 1 {
+            for column: 0..cropped.width - 1 {
+                x := BANNER_STEAM_LEFT + BANNER_STEAM_WIDTH * (cast(float64)column + 0.5) / cast(float64)cropped.width
+                y := 1.0 - BANNER_STEAM_BOTTOM - BANNER_STEAM_HEIGHT +
+                    BANNER_STEAM_HEIGHT * (cast(float64)row + 0.5) / cast(float64)cropped.height
+                full_row := cast(s32)(y * cast(float64)current.height)
+                full_column := cast(s32)(x * cast(float64)current.width)
+                full_pixel := (full_row * current.width + full_column) * 4
+                crop_pixel := (row * cropped.width + column) * 4
+                full_alpha := cast(s64)current.pixels[full_pixel + 3]
+                crop_alpha := cast(s64)cropped.pixels[crop_pixel + 3]
+                if full_alpha > 10 || crop_alpha > 10 {
+                    visible_samples += 1
+                    alpha_error += ifx full_alpha > crop_alpha then full_alpha - crop_alpha else crop_alpha - full_alpha
+                }
+            }
+        }
+        if visible_samples < 150 || alpha_error > visible_samples * 7 {
+            print("cropped steam alignment failed: % visible pixels, total alpha error %\n", visible_samples, alpha_error)
+            return 25
         }
     }
     return 0

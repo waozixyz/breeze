@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Compare daily completions on one shared graph. Each line uses its habit’s color, and selecting a habit in the legend brings its line forward.
+
 - Diary links are exclusive. Activity shows completed habit icons, and Habits has daily line graphs and an overview beside Shop.
 
 - Tap a diary-linked habit's day to open that date in Diary and keep its completion.

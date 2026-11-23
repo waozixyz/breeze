@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build/habit-shop-ui-test"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 BINARY = Path(sys.argv[1]).resolve()
-BUNDLE = ROOT / "build/inbe-full.zx"
+BUNDLE = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else ROOT / "build/inbe-full.zx"
 
 
 def digest(path):
@@ -69,6 +69,7 @@ for width, height, scale in [(390, 844, 10), (900, 720, 10), (390, 844, 20)]:
             "--screenshot-height", str(height), "--screenshot-ui-scale", str(scale),
             "--screenshot-theme", "0", "--screenshot-dark", "0"], cwd=ROOT,
             env=os.environ | {"APP_SHOT_WINDOW": "1", "APP_NO_TRAY": "1",
+                              "DBUS_SESSION_BUS_ADDRESS": "unix:path=" + directory + "/no-session-bus",
                               "INBE_SCREENSHOT_DATA_ROOT": str(Path(directory) / "data")} | driver.environment(),
             stdout=log, stderr=subprocess.STDOUT)
         driver.attach(process, OUTPUT / f"{name}.log")
@@ -144,6 +145,29 @@ for width, height, scale in [(390, 844, 10), (900, 720, 10), (390, 844, 20)]:
             driver.wait_gone(label="Energy drink", role="button", visible=False)
             time.sleep(4.2)
             capture(process, OUTPUT / f"{name}.png")
+            driver.press(label="Back", role="button")
+            shop = driver.wait(label="Shop", role="button")
+            stats = driver.wait(label="Statistics", role="button")
+            assert shop["height"] >= 44 and shop["width"] > stats["width"], (name, shop, stats)
+            assert shop["x"] >= stats["x"] + stats["width"] or stats["x"] >= shop["x"] + shop["width"]
+            for x_fraction, y_fraction in ((.25, .5), (.85, .5), (.92, .82)):
+                shop = driver.wait(label="Shop", role="button")
+                driver.wait_idle(frames=3)
+                x = shop["x"] + shop["width"] * x_fraction
+                y = shop["y"] + shop["height"] * y_fraction
+                driver.pointer(x, y, down=True)
+                driver.pointer(x, y)
+                driver.release_pointer()
+                driver.wait(label="Your rewards", visible=False)
+                driver.press(label="Back", role="button")
+            for _ in range(30):
+                if driver.wait(label="Shop", role="button")["focused"]:
+                    break
+                driver.key("tab")
+            else:
+                raise AssertionError((name, "Shop is unreachable by keyboard"))
+            driver.key("enter")
+            driver.wait(label="Your rewards", visible=False)
         except BaseException:
             with contextlib.suppress(Exception):
                 (OUTPUT / f"failure-{name}.json").write_text(
@@ -160,4 +184,4 @@ for width, height, scale in [(390, 844, 10), (900, 720, 10), (390, 844, 20)]:
 assert digest(BINARY) == candidate["binary_sha256"], "candidate binary changed during UI test"
 assert digest(BUNDLE) == candidate["bundle_sha256"], "candidate package changed during UI test"
 (OUTPUT / "candidate.json").write_text(json.dumps(candidate, indent=2) + "\n")
-print("Shop: full purchase totals, per-reward frequency and complete activity at phone, desktop and 200% zoom")
+print("Shop: full button hit area, keyboard activation, purchase statistics and complete activity at all sizes")

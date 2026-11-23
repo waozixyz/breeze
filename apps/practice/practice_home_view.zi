@@ -5,6 +5,7 @@
 // is not ready. Swipes and the arrow keys go to the next or previous
 // practice. The host keeps the practices, their downloads and the route.
 #import "session"
+#import "kryon/tree"
 Modal :: #import "kryon/modal";
 #import "geometry"
 #import "vec"
@@ -503,6 +504,74 @@ Page :: () {
     }
 }
 
+RecoveryCard :: () {
+    width := ScalePixels(400, home.scale)
+    height := ScalePixels(226, home.scale)
+    frame := Modal.Draw(home.session, Modal.Props.{.id = 17402,
+            .title = Locale("practice_recovery_title"), .width = width, .height = height,
+            .scale = home.scale, .strong_title = true, .title_at_start = true, .dismiss_disabled = true})
+    if !frame.opened { return }
+    defer { unused End(home.session) }
+    area := frame.layout.content
+    gap := cast(float32)ScalePixels(8, home.scale)
+    button_h := cast(float32)ScalePixels(44, home.scale)
+    row_y := area.y + area.height - button_h
+    detail_h := row_y - area.y - gap
+    if home.note.count > 0 {
+        note_h := cast(float32)ScalePixels(26, home.scale)
+        Text.Draw(home.session, Text.Props.{.text = home.note, .size = home.small_font,
+                .bounds = Rectangle.{area.x, row_y - note_h, area.width, note_h}})
+        detail_h -= note_h
+    }
+    left := area.x
+    available := area.width
+    if home.banner.count > 0 {
+        thumb := area.width / 3.2
+        if thumb > detail_h { thumb = detail_h }
+        if thumb > gap * 3.0 {
+            Image.Draw(home.session, Image.Props.{.asset_path = home.banner,
+                    .bounds = Rectangle.{left, area.y, thumb, thumb}, .fit = cast(Image.ImageFit)ImageFitCover})
+            left += thumb + gap
+            available -= thumb + gap
+        }
+    }
+    title_h := cast(float32)ScalePixels(28, home.scale)
+    clock_h := cast(float32)ScalePixels(26, home.scale)
+    y := area.y
+    if home.title.count > 0 {
+        Text.Draw(home.session, Text.Props.{.text = home.title, .size = home.font,
+                .wrap = cast(Text.Wrap)TextWrapEllipsis,
+                .bounds = Rectangle.{left, y, available, title_h}})
+        y += title_h
+    }
+    if home.subtitle.count > 0 {
+        stage_h := detail_h - (y - area.y) - clock_h
+        if stage_h > title_h * 1.5 { stage_h = title_h * 1.5 }
+        if stage_h > 0.0 {
+            Text.Draw(home.session, Text.Props.{.text = home.subtitle, .size = home.small_font,
+                    .wrap = cast(Text.Wrap)TextWrapAuto,
+                    .bounds = Rectangle.{left, y, available, stage_h}})
+            y += stage_h
+        }
+    }
+    if home.status.count > 0 {
+        Text.Draw(home.session, Text.Props.{.text = home.status, .size = home.small_font,
+                .wrap = cast(Text.Wrap)TextWrapEllipsis,
+                .bounds = Rectangle.{left, y, available, clock_h}})
+    }
+    button_w := (area.width - gap) / 2.0
+    if Button.Draw(home.session, Button.Props.{.id = 17404, .label = Locale("cancel_button"),
+            .bounds = Rectangle.{area.x, row_y, ifx home.ready then button_w else area.width, button_h}}) != 0 {
+        home.action = PRACTICE_HOME_RECOVERY_CANCEL
+    }
+    if home.ready && Button.Draw(home.session, Button.Props.{.id = 17403, .label = Locale("practice_recovery_continue"),
+            .disabled = home.offer_disabled,
+            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
+            .bounds = Rectangle.{area.x + button_w + gap, row_y, button_w, button_h}}) != 0 {
+        home.action = PRACTICE_HOME_RECOVERY_CONTINUE
+    }
+}
+
 PracticeHomeView :: (message: PracticeMessage) -> PracticeMessage {
     home = ReadPracticeHomeHost()
     home.action = PRACTICE_HOME_NONE
@@ -512,18 +581,7 @@ PracticeHomeView :: (message: PracticeMessage) -> PracticeMessage {
     home.manual = Rectangle.{}
     home.config = Rectangle.{}
     if home.draft_pending {
-        actions: [2]Modal.ActionModalAction = .[
-        Modal.ActionModalAction.{.label = Locale("save_button")},
-        Modal.ActionModalAction.{.label = Locale("discard_button")}
-        ]
-        choice := Modal.ActionModal(home.session, Modal.ActionModalProps.{
-                .title = Locale("practice_recovery_title"),
-                .message = ifx home.status.count > 0 then home.status else Locale("practice_recovery_message")}, actions[:]).action
-        if choice == 1 {
-            home.action = PRACTICE_HOME_RECOVERY_SAVE
-        } else if choice == 2 {
-            home.action = PRACTICE_HOME_RECOVERY_DISCARD
-        }
+        RecoveryCard()
     } else {
         Page()
     }

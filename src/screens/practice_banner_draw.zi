@@ -5,11 +5,68 @@
     #import "kryon/scene"
     #import "kryon/scene_gpu"
     #import "kryon/session"
+    #import "std/vec"
     #import, file "../app/assets.zi";
     #import, file "practice_banner_motion.zi";
     #import, file "practice_banner_regions.zi";
     #import, file "practice_banner_shader.zi";
     BannerImage :: #import "kryon/image";
+    #if #defined(ANDROID_BUILD) {
+        #import "kryon/image_behavior"
+
+        ANDROID_BANNER_WIDTH :: 384
+        ANDROID_BANNER_HEIGHT :: 192
+        ANDROID_STEAM_WIDTH :: 176
+        ANDROID_STEAM_HEIGHT :: 72
+    }
+    #if #defined(ANDROID_DEBUG) {
+        #import "std/byte_text_linux"
+        #import "std/c_string"
+        #import, file "../app/app_profile.zi";
+        banner_android_log :: #system_library "log";
+        BannerAndroidLog :: (priority: s32, tag: *u8, line: *u8) -> s32 #foreign banner_android_log "__android_log_write";
+
+        PracticeBannerProfile :: struct {
+            frames: s32
+            submits_ms: float64
+            readbacks_ms: float64
+            copies_ms: float64
+        }
+
+        #scope_file
+        practice_banner_log :: (parts: []string) {
+            output: [800]u8
+            used: s32
+            for part: parts {
+                if !ProfileAppend(output[:], *used, part) { return }
+            }
+            tag: [16]u8
+            if CopyCString("InbeBannerGpu", tag[:]) {
+                unused BannerAndroidLog(4, *tag[0], *output[0])
+            }
+        }
+
+        #scope_file
+        practice_banner_profile_frame :: (profile: *PracticeBannerProfile, frame: SceneGpuFrame) {
+            if !frame.ok { return }
+            profile.frames += 1
+            profile.submits_ms += frame.submit_ms
+            profile.readbacks_ms += frame.readback_ms
+            profile.copies_ms += frame.conversion_ms
+            if profile.frames < 120 { return }
+            metrics: [96]u8
+            used: s32
+            if ProfileAppendTwoDecimals(metrics[:], *used, profile.submits_ms / 120.0) &&
+                ProfileAppend(metrics[:], *used, " readback=") &&
+                ProfileAppendTwoDecimals(metrics[:], *used, profile.readbacks_ms / 120.0) &&
+                ProfileAppend(metrics[:], *used, " copy=") &&
+                ProfileAppendTwoDecimals(metrics[:], *used, profile.copies_ms / 120.0) {
+                parts: [2]string = .["offscreen GPU average ms over 120 passes submit=", TextView(metrics[0:used])]
+                practice_banner_log(parts[:])
+            }
+            profile.* = .{}
+        }
+    }
 
     PracticeBannerRenderer :: struct {
         banner: PracticeBannerShader
@@ -21,7 +78,6 @@
     #if OS != .WEB {
         #import "std/image"
         #import "std/thread_linux"
-        #import "std/vec"
         BannerMutex :: #import "std/mutex_linux";
 
         banner_c :: #system_library "c";
@@ -46,6 +102,9 @@
             phase: PracticeBannerPhase
             request: PracticeBannerRequest
             renderer: PracticeBannerRenderer
+            #if #defined(ANDROID_BUILD) {
+                steam_gpu: SceneGpuContext
+            }
             pixels: Image
             steam: Image
             steam_ready: bool
@@ -65,6 +124,9 @@
         asset_ready: bool
         unavailable: bool
         wants_frames: bool
+        #if #defined(ANDROID_DEBUG) {
+            profile_entry: float64
+        }
         #if OS == .WEB {
             renderer: PracticeBannerRenderer
             steam_gpu: SceneGpuContext
@@ -74,15 +136,16 @@
     }
 
     practice_banner_draw: PracticeBannerDrawState;
+    practice_banner_artwork_frames: bool;
 
+    #scope_export
     PracticeBannerDraw :: (session: Session, key: u64, asset: string, bounds: Rectangle,
-        now: float64, visible: bool, reduced_motion: bool, full_sky: bool) -> Texture2D {
+        now: float64, visible: bool, reduced_motion: bool, full_sky: bool, artwork_sky: bool) -> Texture2D {
         state := *practice_banner_draw
-        tick := PracticeBannerTick(*state.motion, asset, now, visible, reduced_motion && !full_sky)
-        if tick <= 0 {
+        tick := PracticeBannerTick(*state.motion, asset, now, visible, reduced_motion)
+        if tick <= 0 && (!visible || !reduced_motion || !full_sky || artwork_sky || asset.count == 0) {
             return .{}
         }
-        if reduced_motion { tick = 1 }
         if state.session.slot != session.slot || state.session.epoch != session.epoch {
             #if OS != .WEB {
                 BitmapImageRelease(state.session, state.texture)
@@ -109,13 +172,16 @@
             return .{}
         }
         generation := AssetGeneration()
-        if state.asset != asset || state.regions.full_sky != full_sky ||
+        if state.asset != asset || state.regions.full_sky != full_sky || state.regions.artwork_sky != artwork_sky ||
             (!state.asset_ready && state.asset_generation != generation) {
             state.asset = asset
             state.asset_generation = generation
             state.revision += 1
             state.tick = 0
-            state.regions = PracticeBannerRegionsFor(asset)
+            #if #defined(ANDROID_DEBUG) {
+                state.profile_entry = app_profile_now()
+            }
+            state.regions = PracticeBannerRegionsFor(asset, artwork_sky)
             state.regions.full_sky = full_sky
             state.asset_ready = full_sky || (state.regions.sky[0].radius_x > 0.0 && AssetRead(asset).found)
             #if OS == .WEB {
@@ -131,28 +197,38 @@
         if !state.asset_ready {
             return .{}
         }
+        if reduced_motion {
+            // Keep the last displayed sky, or prepare one still frame for a
+            // newly opened card that needs the procedural background.
+            tick = ifx state.tick > 0 then state.tick else 1
+        }
         foreground_steam := full_sky && state.regions.steam_opacity > 0.0
         #if OS == .WEB {
             if tick != state.tick {
                 renderer := *state.renderer
-                PracticeBannerShaderPass(*renderer.banner, state.regions, false)
                 PracticeBannerShaderPhase(*renderer.banner, tick)
-                frame, texture := SceneGpuRenderCanvas(*renderer.gpu, *renderer.banner.scene,
-                    renderer.banner.camera, PRACTICE_BANNER_WIDTH, PRACTICE_BANNER_HEIGHT)
-                state.unavailable = !frame.ok || !frame.accelerated || texture.id == 0
-                state.texture = texture
+                if !artwork_sky {
+                    PracticeBannerShaderPass(*renderer.banner, state.regions, false)
+                    frame, texture := SceneGpuRenderCanvas(*renderer.gpu, *renderer.banner.scene,
+                        renderer.banner.camera, PRACTICE_BANNER_WIDTH, PRACTICE_BANNER_HEIGHT)
+                    state.unavailable = !frame.ok || !frame.accelerated || texture.id == 0
+                    state.texture = texture
+                }
                 if !state.unavailable && foreground_steam {
                     PracticeBannerShaderPass(*renderer.banner, state.regions, true)
                     steam_frame, steam := SceneGpuRenderCanvas(*state.steam_gpu, *renderer.banner.scene,
                         renderer.banner.camera, PRACTICE_BANNER_WIDTH, PRACTICE_BANNER_HEIGHT)
                     state.steam = ifx steam_frame.ok then steam else Texture2D.{}
+                    if artwork_sky && state.steam.id == 0 {
+                        state.unavailable = true
+                    }
                 }
                 state.tick = tick
             }
         } else {
             practice_banner_poll(state, tick)
         }
-        if !state.unavailable && state.tick > 0 {
+        if !artwork_sky && !state.unavailable && state.tick > 0 {
             BannerImage.Draw(session, BannerImage.Props.{.key = key, .bounds = bounds,
                 .texture = state.texture, .fit = .ImageFitCover, .smooth = true})
         }
@@ -160,12 +236,50 @@
         return ifx foreground_steam && !state.unavailable && state.tick > 0 then state.steam else Texture2D.{}
     }
 
+    PracticeBannerDrawSteam :: (session: Session, key: u64, bounds: Rectangle, steam: Texture2D,
+        crop: Rectangle = .{}) {
+        if steam.id == 0 { return }
+        #if #defined(ANDROID_BUILD) {
+            // Position the cropped render in the same cover framing as the
+            // sky and artwork, even when the card clips part of the plume.
+            covered := ImageFitBounds(bounds, .{}, PRACTICE_BANNER_WIDTH, PRACTICE_BANNER_HEIGHT, 2)
+            if crop.width > 0.0 && crop.height > 0.0 {
+                covered.width = bounds.width / crop.width
+                covered.height = bounds.height / crop.height
+                covered.x = bounds.x - crop.x * covered.width
+                covered.y = bounds.y - crop.y * covered.height
+            }
+            plume := Rectangle.{covered.x + covered.width * BANNER_STEAM_LEFT,
+                covered.y + covered.height * (1.0 - BANNER_STEAM_BOTTOM - BANNER_STEAM_HEIGHT),
+                covered.width * BANNER_STEAM_WIDTH, covered.height * BANNER_STEAM_HEIGHT}
+            clipped := RectangleIntersection(bounds, plume)
+            if clipped.width <= 0.0 || clipped.height <= 0.0 { return }
+            scale_x := cast(float32)steam.width / plume.width
+            scale_y := cast(float32)steam.height / plume.height
+            source := Rectangle.{(clipped.x - plume.x) * scale_x, (clipped.y - plume.y) * scale_y,
+                clipped.width * scale_x, clipped.height * scale_y}
+            BannerImage.Draw(session, BannerImage.Props.{.key = key, .bounds = clipped,
+                .source = source, .texture = steam, .smooth = true})
+        } else {
+            width := cast(float32)steam.width
+            height := cast(float32)steam.height
+            source := Rectangle.{crop.x * width, crop.y * height, crop.width * width, crop.height * height}
+            BannerImage.Draw(session, BannerImage.Props.{.key = key, .bounds = bounds,
+                .source = source, .texture = steam, .fit = .ImageFitCover, .smooth = true})
+        }
+    }
+
     // Frame pacing consumes the request on the next frame. Navigating away
     // or suppressing motion stops requests when the banner stops drawing.
     PracticeBannerWantsFrames :: () -> bool {
-        wants_frames := practice_banner_draw.wants_frames
+        wants_frames := practice_banner_draw.wants_frames || practice_banner_artwork_frames
         practice_banner_draw.wants_frames = false
+        practice_banner_artwork_frames = false
         return wants_frames
+    }
+
+    PracticeBannerArtworkFrames :: () {
+        practice_banner_artwork_frames = true
     }
 
     PracticeBannerDrawRelease :: () {
@@ -174,6 +288,7 @@
             SceneGpuRelease(*state.renderer.gpu)
             SceneGpuRelease(*state.steam_gpu)
             SceneFree(*state.renderer.banner.scene)
+            VecFree(state.renderer.banner.sky.noise)
         } else {
             practice_banner_stop(*state.work)
             BitmapImageRelease(state.session, state.texture)
@@ -195,12 +310,11 @@
     #scope_file
     practice_banner_configure :: (renderer: *PracticeBannerRenderer, regions: PracticeBannerRegions) -> bool {
         if !SceneGpuProbe(*renderer.gpu).available ||
-        (!renderer.banner.program.ready && !PracticeBannerShaderInit(*renderer.banner, renderer.clouds[:])) {
+        (!renderer.banner.program.ready && !PracticeBannerShaderInit(*renderer.banner)) {
             return false
         }
         PracticeBannerMask(regions, renderer.mask[:])
-        PracticeBannerShaderLook(*renderer.banner, regions, renderer.mask[:])
-        return true
+        return PracticeBannerShaderLook(*renderer.banner, regions, renderer.mask[:], renderer.clouds[:])
     }
 
     #if OS != .WEB {
@@ -234,11 +348,32 @@
             // Until a new request is sent, the worker is idle and the pixels
             // from a completed frame stay valid for Kryon's texture upload.
             if phase == .Ready && result.revision == state.revision && result.tick <= tick {
-                state.unavailable = !practice_banner_upload(state.session, *state.texture, *work.pixels)
+                #if #defined(ANDROID_DEBUG) {
+                    upload_started := app_profile_now()
+                }
+                if !result.regions.artwork_sky {
+                    state.unavailable = !practice_banner_upload(state.session, *state.texture, *work.pixels)
+                }
                 if result.regions.full_sky && result.regions.steam_opacity > 0.0 &&
                     (!work.steam_ready || !practice_banner_upload(state.session, *state.steam, *work.steam)) {
                     BitmapImageRelease(state.session, state.steam)
                     state.steam = .{}
+                    if result.regions.artwork_sky {
+                        state.unavailable = true
+                    }
+                }
+                #if #defined(ANDROID_DEBUG) {
+                    if !state.unavailable && state.tick == 0 && state.profile_entry > 0.0 {
+                        metrics: [96]u8
+                        used: s32
+                        finished := app_profile_now()
+                        if ProfileAppendTwoDecimals(metrics[:], *used, (finished - state.profile_entry) * 1000.0) &&
+                            ProfileAppend(metrics[:], *used, " bitmap_copy_ms=") &&
+                            ProfileAppendTwoDecimals(metrics[:], *used, (finished - upload_started) * 1000.0) {
+                            parts: [4]string = .["first_banner asset=", state.asset, " entry_ms=", TextView(metrics[0:used])]
+                            practice_banner_log(parts[:])
+                        }
+                    }
                 }
                 state.tick = result.tick
             }
@@ -291,11 +426,36 @@
             work := cast(*PracticeBannerWork)argument
             renderer := *work.renderer
             condition := cast(*void)*work.condition[0]
-            work.pixels.width = PRACTICE_BANNER_WIDTH
-            work.pixels.height = PRACTICE_BANNER_HEIGHT
-            work.steam.width = PRACTICE_BANNER_WIDTH
-            work.steam.height = PRACTICE_BANNER_HEIGHT
+            #if #defined(ANDROID_BUILD) {
+                // Keep two equally scaled targets without reallocating the
+                // sky target for a plume that covers only part of the card.
+                work.pixels.width = ANDROID_BANNER_WIDTH
+                work.pixels.height = ANDROID_BANNER_HEIGHT
+                work.steam.width = ANDROID_STEAM_WIDTH
+                work.steam.height = ANDROID_STEAM_HEIGHT
+            } else {
+                work.pixels.width = PRACTICE_BANNER_WIDTH
+                work.pixels.height = PRACTICE_BANNER_HEIGHT
+                work.steam.width = PRACTICE_BANNER_WIDTH
+                work.steam.height = PRACTICE_BANNER_HEIGHT
+            }
             revision: u64
+            #if #defined(ANDROID_DEBUG) {
+                profile: PracticeBannerProfile
+                profile_enabled := app_profile_env_enabled()
+                if profile_enabled {
+                    caps := SceneGpuProbe(*renderer.gpu)
+                    if caps.available {
+                        parts: [6]string = .["offscreen GPU with CPU readback, sky=384x192 steam=176x72 vendor=",
+                            TextFromCString(*caps.vendor[0]), " renderer=", TextFromCString(*caps.renderer[0]),
+                            " version=", TextFromCString(*caps.version[0])]
+                        practice_banner_log(parts[:])
+                    } else {
+                        parts: [2]string = .["unavailable: ", caps.diagnostic]
+                        practice_banner_log(parts[:])
+                    }
+                }
+            }
             // Keep the EGL context on this thread through render and release.
             // Compilation and readback cannot block tab navigation.
             unused BannerMutex.Lock(*work.mutex)
@@ -313,16 +473,33 @@
                 work.steam_ready = false
                 if ready {
                     revision = request.revision
-                    PracticeBannerShaderPass(*renderer.banner, request.regions, false)
                     PracticeBannerShaderPhase(*renderer.banner, request.tick)
-                    frame := SceneGpuRender(*renderer.gpu, *renderer.banner.scene,
-                        renderer.banner.camera, *work.pixels)
-                    ready = frame.ok && frame.accelerated
+                    if !request.regions.artwork_sky {
+                        PracticeBannerShaderPass(*renderer.banner, request.regions, false)
+                        frame := SceneGpuRender(*renderer.gpu, *renderer.banner.scene,
+                            renderer.banner.camera, *work.pixels)
+                        ready = frame.ok && frame.accelerated
+                        #if #defined(ANDROID_DEBUG) {
+                            if profile_enabled { practice_banner_profile_frame(*profile, frame) }
+                        }
+                    }
                     if ready && request.regions.full_sky && request.regions.steam_opacity > 0.0 {
                         PracticeBannerShaderPass(*renderer.banner, request.regions, true)
-                        steam_frame := SceneGpuRender(*renderer.gpu, *renderer.banner.scene,
-                            renderer.banner.camera, *work.steam)
+                        #if #defined(ANDROID_BUILD) {
+                            steam_gpu := ifx request.regions.artwork_sky then *renderer.gpu else *work.steam_gpu
+                            steam_frame := SceneGpuRender(steam_gpu, *renderer.banner.scene,
+                                PracticeBannerSteamCamera(renderer.banner.camera), *work.steam)
+                        } else {
+                            steam_frame := SceneGpuRender(*renderer.gpu, *renderer.banner.scene,
+                                renderer.banner.camera, *work.steam)
+                        }
                         work.steam_ready = steam_frame.ok && steam_frame.accelerated
+                        if request.regions.artwork_sky {
+                            ready = work.steam_ready
+                        }
+                        #if #defined(ANDROID_DEBUG) {
+                            if profile_enabled { practice_banner_profile_frame(*profile, steam_frame) }
+                        }
                     }
                 }
                 unused BannerMutex.Lock(*work.mutex)
@@ -330,7 +507,11 @@
             }
             unused BannerMutex.Unlock(*work.mutex)
             SceneGpuRelease(*renderer.gpu)
+            #if #defined(ANDROID_BUILD) {
+                SceneGpuRelease(*work.steam_gpu)
+            }
             SceneFree(*renderer.banner.scene)
+            VecFree(renderer.banner.sky.noise)
             VecFree(work.pixels.pixels)
             VecFree(work.steam.pixels)
         }
@@ -340,11 +521,22 @@
     #import "kryon/geometry"
     #import "kryon/session"
 
+    #scope_export
     PracticeBannerDrawRelease :: () {}
     PracticeBannerWantsFrames :: () -> bool { return false }
+    PracticeBannerArtworkFrames :: () {}
+
+    PracticeBannerDrawSteam :: (session: Session, key: u64, bounds: Rectangle, steam: Texture2D,
+        crop: Rectangle = .{}) {
+        unused session
+        unused key
+        unused bounds
+        unused steam
+        unused crop
+    }
 
     PracticeBannerDraw :: (session: Session, key: u64, asset: string, bounds: Rectangle,
-        now: float64, visible: bool, reduced_motion: bool, full_sky: bool) -> Texture2D {
+        now: float64, visible: bool, reduced_motion: bool, full_sky: bool, artwork_sky: bool) -> Texture2D {
         unused session
         unused key
         unused asset
@@ -353,6 +545,7 @@
         unused visible
         unused reduced_motion
         unused full_sky
+        unused artwork_sky
         return .{}
     }
 }

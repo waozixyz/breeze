@@ -58,6 +58,9 @@ patterns = node_patterns if options.node_only else patterns + node_patterns
 practice_patterns = (
     'whm/1.webp', 'whm/2.webp', 'meditation/1.webp', '*/banner-light.webp', '*/banner-dark.webp',
     '*/banner-landscape.webp', '*/banner-character.webp',
+    'patterns/banner-sky-light.webp', 'patterns/banner-sky-dark.webp',
+    'whm/banner-sky.webp', 'whm/banner-sky-dark.webp',
+    'whm/banner-landscape-dark.webp', 'whm/banner-character-dark.webp',
     'sunsalutation/characters/*/*.png', 'sunsalutation/flat-edge.png',
     'sunsalutation/voice/**/*', 'sunsalutation/voice-male/**/*',
     'astral_projection/**/*', 'workout/**/*', 'taichi/**/*', 'guide/voice/**/*',

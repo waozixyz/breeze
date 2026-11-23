@@ -6,7 +6,6 @@
 #import, file "../../src/app/text_buffers.zi";
 #import, file "../../src/platform/text_input_host.zi";
 #import, file "../../src/practices/practice_movement_host.zi";
-#import, file "../../src/screens/practice_subscreen_layout.zi";
 #import, file "../../src/storage/state.zi";
 #import, file "../../src/storage/storage_settings.zi";
 #import "byte_text_linux"
@@ -26,8 +25,7 @@ using ButtonEmphasis;
 using Text.Wrap;
 
 WORKOUT_BUILDER_STAY :: 0
-WORKOUT_BUILDER_BACK :: 1
-WORKOUT_BUILDER_PLAY :: 2
+WORKOUT_BUILDER_PLAY :: 1
 WORKOUT_BUILDER_LIBRARY :: 0
 WORKOUT_BUILDER_EDITOR :: 1
 WORKOUT_BUILDER_PICKER :: 2
@@ -61,7 +59,7 @@ WorkoutBuilderKey :: (slot: s32) -> string {
 }
 
 WorkoutBuilderOpen :: () {
-    workout_builder = WorkoutBuilderState.{.slot = -1, .block = -1}
+    workout_builder = WorkoutBuilderState.{.page = WORKOUT_BUILDER_LIBRARY, .slot = -1, .block = -1}
     unused AppCopyText(AppTextFromCString(storage_user_id_buffer(), 64), workout_builder.account[:])
     workout_builder.name.bytes = workout_builder_name[:]
     workout_builder.duration.bytes = workout_builder_duration[:]
@@ -288,10 +286,7 @@ WorkoutBuilderField :: (app: *InnerBreeze, state: *TextField.State, field: s32, 
 }
 
 WorkoutBuilderList :: (app: *InnerBreeze, area: Rectangle, stride: s32, height: s32) -> s32 {
-    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(1, WorkoutBuilderRow(area, 0, height, 0, 2), LocaleText("workout_custom_presets"))) != 0 {
-        return WORKOUT_BUILDER_BACK
-    }
-    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(2, WorkoutBuilderRow(area, 0, height, 1, 2), LocaleText("workout_custom_new"),
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(2, WorkoutBuilderRow(area, 0, height), LocaleText("workout_custom_new"),
         WorkoutBuilderFreeSlot() < 0)) != 0 {
         WorkoutBuilderEdit(-1)
         return WORKOUT_BUILDER_STAY
@@ -314,6 +309,22 @@ WorkoutBuilderList :: (app: *InnerBreeze, area: Rectangle, stride: s32, height: 
         y += stride
     }
     return WORKOUT_BUILDER_STAY
+}
+
+WorkoutBuilderBack :: () -> bool {
+    if workout_builder.page == WORKOUT_BUILDER_PICKER {
+        workout_builder.page = WORKOUT_BUILDER_EDITOR
+    } else if workout_builder.page == WORKOUT_BUILDER_EDITOR {
+        if workout_builder.dirty && !workout_builder.confirm_back {
+            workout_builder.confirm_back = true
+            return false
+        }
+        workout_builder.page = WORKOUT_BUILDER_LIBRARY
+        workout_builder.status = ""
+    } else {
+        return true
+    }
+    return false
 }
 
 WorkoutBuilderPick :: (app: *InnerBreeze, area: Rectangle, stride: s32, height: s32) {
@@ -386,15 +397,13 @@ WorkoutBuilderBlockActions :: (app: *InnerBreeze, area: Rectangle, y: s32, strid
     return false
 }
 
-WorkoutBuilderEditor :: (app: *InnerBreeze, area: Rectangle, stride: s32, height: s32) -> s32 {
+WorkoutBuilderEditor :: (app: *InnerBreeze, area: Rectangle, stride: s32, height: s32, ready: bool) -> s32 {
     back := ifx workout_builder.confirm_back then "workout_custom_discard" else "workout_custom_library"
     if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(4, WorkoutBuilderRow(area, 0, height), LocaleText(back))) != 0 {
-        if !workout_builder.dirty || workout_builder.confirm_back {
-            workout_builder.page = WORKOUT_BUILDER_LIBRARY
-            workout_builder.status = ""
+        unused WorkoutBuilderBack()
+        if workout_builder.page == WORKOUT_BUILDER_LIBRARY {
             return WORKOUT_BUILDER_STAY
         }
-        workout_builder.confirm_back = true
     }
     if WorkoutBuilderField(app, *workout_builder.name, 28910, WorkoutBuilderRow(area, stride, height), "workout_custom_name") {
         WorkoutBuilderChanged()
@@ -406,7 +415,7 @@ WorkoutBuilderEditor :: (app: *InnerBreeze, area: Rectangle, stride: s32, height
     if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(5, WorkoutBuilderRow(area, stride * 4, height, 0, 2), LocaleText("save_button"), !can_play)) != 0 {
         WorkoutBuilderSave()
     }
-    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(6, WorkoutBuilderRow(area, stride * 4, height, 1, 2), LocaleText("workout_custom_play"), !can_play, true)) != 0 {
+    if Button.Draw(app.ui.session, WorkoutBuilderButtonProps(6, WorkoutBuilderRow(area, stride * 4, height, 1, 2), LocaleText("workout_custom_play"), !can_play || !ready, true)) != 0 {
         return WORKOUT_BUILDER_PLAY
     }
     if workout_builder.status.count > 0 {
@@ -442,7 +451,7 @@ WorkoutBuilderEditor :: (app: *InnerBreeze, area: Rectangle, stride: s32, height
     return WORKOUT_BUILDER_STAY
 }
 
-WorkoutBuilderDraw :: (app: *InnerBreeze, layout: PracticeSubscreenLayout) -> s32 {
+WorkoutBuilderDraw :: (app: *InnerBreeze, bounds: Rectangle, ready: bool) -> s32 {
     if !WorkoutBuilderSameAccount() {
         WorkoutBuilderOpen()
     }
@@ -463,7 +472,7 @@ WorkoutBuilderDraw :: (app: *InnerBreeze, layout: PracticeSubscreenLayout) -> s3
         rows = WORKOUT_MOVE_COUNT + 1
     }
     scroll := Scroll.Draw(app.ui.session, Scroll.Props.{.key = Layout.KeyHash("workout/builder/scroll") + cast(u64)workout_builder.page,
-        .bounds = Rectangle.{0.0, cast(float32)layout.scroll_y, cast(float32)app.ui.view_width, cast(float32)layout.scroll_h},
+        .bounds = bounds,
         .content_height = stride * rows, .scroll_offset = scroll_at.*})
     scroll_at.* = scroll.scroll_offset
     if !scroll.opened {
@@ -471,10 +480,7 @@ WorkoutBuilderDraw :: (app: *InnerBreeze, layout: PracticeSubscreenLayout) -> s3
     }
     defer { unused End(app.ui.session) }
     full := cast(s32)scroll.content.width
-    width := full - Layout.PageSidePaddingFor(full) * 2
-    if width > AppScale(560) {
-        width = AppScale(560)
-    }
+    width := full - AppScale(4) * 2
     if width <= 0 {
         return WORKOUT_BUILDER_STAY
     }
@@ -486,5 +492,5 @@ WorkoutBuilderDraw :: (app: *InnerBreeze, layout: PracticeSubscreenLayout) -> s3
         WorkoutBuilderPick(app, area, stride, height)
         return WORKOUT_BUILDER_STAY
     }
-    return WorkoutBuilderEditor(app, area, stride, height)
+    return WorkoutBuilderEditor(app, area, stride, height, ready)
 }

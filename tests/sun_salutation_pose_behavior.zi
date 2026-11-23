@@ -23,7 +23,8 @@ CheckMoves :: (start_seconds: s32, end_seconds: s32) -> s32 {
     rig := WorkoutRig()
     // Every transition and held pose, with alternating leading legs.
     for round: cast(s32)0..1 {
-        for step: cast(s32)0..11 {
+        first := ifx round == 0 then 0 else SUN_SALUTATION_REPEAT_STEP
+        for step: cast(s32)first..11 {
             state := SalutationInit(SunSalutationPracticeState.{})
             state.start_seconds = start_seconds
             state.end_seconds = end_seconds
@@ -99,9 +100,14 @@ CheckMoves :: (start_seconds: s32, end_seconds: s32) -> s32 {
                 previous = solved
             }
             // Each step ends exactly where the next begins.
-            if step < 11 {
+            if step < 11 || round == 0 {
                 next := state
-                next.step = step + 1
+                if step == 11 {
+                    next.repetition += 1
+                    next.step = SUN_SALUTATION_REPEAT_STEP
+                } else {
+                    next.step = step + 1
+                }
                 next.step_ticks = 0
                 next_pose := SunSalutationPoseAt(next, *rig)
                 after := WorkoutSolve(*next_pose, *rig)
@@ -125,15 +131,29 @@ CheckMoves :: (start_seconds: s32, end_seconds: s32) -> s32 {
     if !LowLungeSupports(*first_solved, 0) || !LowLungeSupports(*other_solved, 1) {
         return 413
     }
-    for exit_pose: cast(s32)0..1 {
-        mountain := SunSalutationPose(exit_pose * 11, false)
-        solved := WorkoutSolve(*mountain, *rig)
-        for side: cast(s32)0..1 {
-            wrist := solved.wrists[side]
-            if wrist.y >= solved.hips[side].y || TaiChiAbs(wrist.x) <= 0.14 ||
-            TaiChiAbs(wrist.z - solved.shoulders[side].z) > 0.06 {
-                return 415
-            }
+    state := SalutationInit(SunSalutationPracticeState.{})
+    start_pose := SunSalutationPoseAt(state, *rig)
+    start := WorkoutSolve(*start_pose, *rig)
+    state.step_ticks = SunSalutationMoveTicks(state)
+    prayer_pose := SunSalutationPoseAt(state, *rig)
+    prayer := WorkoutSolve(*prayer_pose, *rig)
+    if TaiChiDistance3(prayer.palms[0], prayer.palms[1]) > 0.01 {
+        return 416
+    }
+    for side: cast(s32)0..1 {
+        wrist := start.wrists[side]
+        finger_axis := TaiChiAxis(prayer.hand_quats[side], 0.0, -1.0, 0.0)
+        if wrist.y >= start.hips[side].y || TaiChiAbs(wrist.x) <= 0.14 ||
+        TaiChiAbs(wrist.z - start.shoulders[side].z) > 0.06 {
+            return 417
+        }
+        if finger_axis.y < 0.95 || prayer.palms[side].y < prayer.chest.y + 0.04 ||
+        prayer.palms[side].y > prayer.shoulder_center.y - 0.055 ||
+        prayer.wrists[side].z < prayer.chest.z + 0.12 {
+            return 418
+        }
+        if TaiChiDistance3(start.ankles[side], prayer.ankles[side]) > 0.0001 {
+            return 419
         }
     }
     lowered := SunSalutationPose(5, false)
@@ -181,7 +201,8 @@ SunSalutationMotionNatural :: () -> s32 {
     check.lowest = 1000.0
     MotionStart(*check)
     for round: cast(s32)0..1 {
-        for step: cast(s32)0..SUN_SALUTATION_STEP_COUNT - 1 {
+        first := ifx round == 0 then 0 else SUN_SALUTATION_REPEAT_STEP
+        for step: cast(s32)first..SUN_SALUTATION_STEP_COUNT - 1 {
             state: SunSalutationPracticeState
             state.repetitions = 2
             state.repetition = round

@@ -239,11 +239,10 @@ with contextlib.ExitStack() as stack:
 
     with application('workout_home') as (driver, profile, window, local_env):
         driver.wait(label='7-Minute Workout')
-        driver.press(label='Customize', role='button')
-        driver.press(label='4-Minute Workout', role='button')
-        assert saved(profile, 'workout_routine', '1') == '1'
-        driver.press(label='Back', role='button')
+        subprocess.run(['xdotool', 'windowfocus', window, 'key', 'Right'],
+                       env=local_env, check=True, timeout=5)
         driver.wait(label='4-Minute Workout', role='text')
+        assert saved(profile, 'workout_routine', '1') == '1'
         driver.press(label='Start Practice', role='button')
         driver.wait(label='4-Minute Workout', role='text')
         driver.wait(label='Step jacks', role='image')
@@ -255,6 +254,7 @@ with contextlib.ExitStack() as stack:
         for exercise in ('Jumping jacks', 'Push-ups', 'Side plank'):
             assert not driver.find(label=exercise, role='button', visible=True)
         assert driver.wait(label='Step jacks', role='button')['selected']
+        driver.wait(label='Exercise 1 of 6', role='text', timeout=30)
         driver.press(label='Back taps', role='button')
         driver.wait(label='Back taps', role='image')
         driver.wait(label='Rest before the next exercise', role='text')
@@ -281,14 +281,12 @@ with contextlib.ExitStack() as stack:
         assert not state(window, local_env)['paused']
         driver.press(label='Close', role='button')
         driver.press(label='Exit', role='button')
-        driver.press(label='Customize', role='button')
-        # A session can unlock an achievement whose toast covers the first choice.
-        driver.wait_gone(contains='Achievement unlocked', role='text')
-        driver.press(label='7-Minute Workout', role='button')
-        assert saved(profile, 'workout_routine', '0') == '0'
-        driver.press(label='Back', role='button')
+        subprocess.run(['xdotool', 'windowfocus', window, 'key', 'Left'],
+                       env=local_env, check=True, timeout=5)
         driver.wait(label='7-Minute Workout', role='text')
+        assert saved(profile, 'workout_routine', '0') == '0'
         driver.press(label='Start Practice', role='button')
+        driver.wait(label='Exercise 1 of 12', role='text', timeout=25)
         first = driver.wait(label='Jumping jacks', role='button')
         last = driver.wait(label='Side plank', role='button')
         assert last['y'] >= first['y'] + 44, (first, last)

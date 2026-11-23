@@ -283,7 +283,9 @@ WorkoutProgress :: (x: s32, y: s32, width: s32) -> s32 {
         if Button.Draw(movement.session, Button.Props.{
                 .key = Layout.KeyHash("workout/progress") + cast(u64)index,
                 .bounds = Bounds(left, top, cell, target), .label = name,
-                .icon_only = true, .selected = current, .tone = cast(ButtonTone)ButtonToneAccent,
+                .icon_only = true, .selected = current,
+                .disabled = movement.phase == WORKOUT_PHASE_LOADING || movement.phase == WORKOUT_PHASE_PREPARE,
+                .tone = cast(ButtonTone)ButtonToneAccent,
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
             movement.action = PRACTICE_MOVEMENT_SEEK
             movement.value = index
@@ -309,7 +311,7 @@ WorkoutProgress :: (x: s32, y: s32, width: s32) -> s32 {
     return rows * target
 }
 
-// then "Go!" as the exercise starts.
+// Show one large numeral, followed by “Go!” when the exercise starts.
 WorkoutCountdownNumber :: (center: Vector2, radius: float32, count: s32) {
     text := Locale("workout_go")
     if count != WORKOUT_COUNT_GO {
@@ -327,6 +329,7 @@ WorkoutCountdownNumber :: (center: Vector2, radius: float32, count: s32) {
 
 // The exercise's seconds left in a ring.
 WorkoutCountdown :: (center: Vector2, radius: float32) {
+    if movement.phase == WORKOUT_PHASE_LOADING { return }
     count := WorkoutCountdownAt(WorkoutStep.{.phase = movement.phase, .exercise = movement.exercise,
             .elapsed_ms = movement.elapsed_ms, .length_ms = movement.length_ms})
     if count != WORKOUT_COUNT_NONE {
@@ -398,12 +401,23 @@ Workout :: () {
     Text.Draw(movement.session, Text.Props.{.text = movement.subtitle,
             .bounds = Bounds(panel_x, panel_top + heading_h + Scale(4), panel_w, sub_h),
             .size = movement.font, .align = cast(TextAlign)TextAlignCenter, .disabled = true})
-    if stage.height > cast(float32)Scale(60) {
+    minimum_stage := cast(float32)Scale(60)
+    if stage.height < minimum_stage && movement.phase == WORKOUT_PHASE_LOADING {
+        // Give the first model a visible destination on short windows, too.
+        stage.height = minimum_stage
+    }
+    if stage.height > 0.0 {
         Figure(stage, "workout/figure", movement.heading)
     }
     lower_y := ifx wide then panel_top + words_h + Scale(24) else movement.view_height - lower_h
     Text.Draw(movement.session, Text.Props.{.text = movement.cue, .bounds = Bounds(panel_x, lower_y, panel_w, tip_h),
             .size = movement.font, .align = cast(TextAlign)TextAlignCenter})
+    if movement.phase == WORKOUT_PHASE_PREPARE {
+        label_h := TextHeight(movement.session, Text.Props.{.text = Locale("workout_starting_in"), .size = movement.font})
+        Text.Draw(movement.session, Text.Props.{.text = Locale("workout_starting_in"),
+                .bounds = Bounds(panel_x, lower_y + tip_h + Scale(16) - label_h, panel_w, label_h),
+                .size = movement.font, .align = cast(TextAlign)TextAlignCenter})
+    }
     WorkoutCountdown(Vector2.{cast(float32)(panel_x + panel_w / 2),
             cast(float32)(lower_y + tip_h + Scale(16) + ring_r)}, cast(float32)ring_r)
     width := Scale(220)

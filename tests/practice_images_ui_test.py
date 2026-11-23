@@ -37,7 +37,7 @@ PRACTICES = (
 driver = UiDriver(output / "driver")
 environment = os.environ | driver.environment() | {
     "SDL_VIDEODRIVER": "x11", "SDL_AUDIODRIVER": "dummy",
-    "YUE_DESKTOP_RECOVERY": "0", "APP_NO_TRAY": "1"}
+    "HARMONY_DESKTOP_RECOVERY": "0", "YUE_DESKTOP_RECOVERY": "0", "APP_NO_TRAY": "1"}
 
 
 def command(*args):
@@ -54,6 +54,54 @@ def capture(window, name):
 def pictured(image, box):
     """A loaded picture varies; a missing one leaves the flat page colour."""
     return max(ImageStat.Stat(image.crop(box)).stddev) > 12
+
+
+def has_foreground_detail(image):
+    # The sky and backdrop fade still vary when a tint flattens the figures
+    # and landscapes. Sample the warm colors and shading in the artwork itself.
+    foreground = image.crop((80, 185, WIDTH - 80, 375))
+    colors = {(red // 12, green // 12, blue // 12)
+              for red, green, blue in foreground.getdata()
+              if red > 55 and red > green + 12 and red > blue + 27}
+    return len(colors) >= 24
+
+
+def matching_pixels(image, match):
+    return [(x, y) for y in range(image.height) for x in range(image.width)
+            if match(*image.getpixel((x, y)))]
+
+
+def workout_outfit(figure, upright=False):
+    top = matching_pixels(figure, lambda r, g, b: 45 <= r <= 95 and g >= r + 45 and g >= b + 9)
+    leggings = matching_pixels(figure, lambda r, g, b: 22 <= r <= 48 and 52 <= g <= 83 and 0 <= b - g <= 7)
+    assert len(top) >= 125 and len(leggings) >= 450, ("Workout top or leggings missing", len(top), len(leggings))
+    if upright:
+        top_y = sorted(y for x, y in top)[len(top) * 9 // 10]
+        hip_y = sorted(y for x, y in leggings)[len(leggings) // 12]
+        assert hip_y > top_y, "The top overlaps the leggings in the standing pose"
+        center = sorted(x for x, y in leggings)[len(leggings) // 2]
+        waist = figure.crop((center - 16, top_y, center + 16, hip_y))
+        assert len(matching_pixels(waist, lambda r, g, b: r >= 207 and 10 <= r - g <= 55 and g > b)) >= 20, \
+            "The crop top's waist opening is missing"
+        ankle_y = max(y for x, y in leggings)
+        assert ankle_y - hip_y >= 65, "The fitted leggings end above the ankles"
+
+
+def changed_pixels(before, after, bounds, minimum):
+    return sum(max(pixel) >= minimum for pixel in
+               ImageChops.difference(before.crop(bounds), after.crop(bounds)).getdata())
+
+
+def moving_sky(window, name, first):
+    # Sample above the square, figure and steam.
+    bounds = (52, 59, WIDTH - 42, 127)
+    counts = []
+    for sample in range(1, 4):
+        time.sleep(1.1)
+        image = capture(window, f"{name}-sky-{sample}")
+        counts.append(changed_pixels(first, image, bounds, 4))
+    assert max(counts) >= 60, (name, "The painted sky did not move", counts)
+    print(f"{name} painted sky: {max(counts)} changing pixels", flush=True)
 
 
 def log_tail(path):
@@ -109,7 +157,12 @@ def launch(profile, name):
     raise AssertionError("Inbe did not map its window")
 
 
-with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory, contextlib.ExitStack() as stack:
+with tempfile.TemporaryDirectory(prefix="profile-", dir=output) as directory, contextlib.ExitStack() as stack:
+    profile = Path(directory)
+    for name in ("HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR"):
+        path = profile / name.lower()
+        path.mkdir(mode=0o700)
+        environment[name] = str(path)
     display_log = stack.enter_context((output / "display.log").open("w"))
     display = subprocess.Popen(["Xvfb", "-noreset", "-displayfd", "1", "-screen", "0", "1280x900x24",
                                 "-nolisten", "tcp"], env=environment,
@@ -125,7 +178,6 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory, c
     display_log.write(f"Verified owned Xvfb pid={display.pid} display=:{number}\n")
     display_log.flush()
     environment["DISPLAY"] = ":" + number
-    profile = Path(directory)
     cache = profile / "packages"
     cache.mkdir()
     # Start the real practice offline. A cover on the Install screen must
@@ -139,6 +191,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory, c
         user = db.execute("SELECT id FROM users WHERE kind='local' LIMIT 1").fetchone()[0]
         settings = {"language": "en", "language_system": 0, "language_setup_done": 1,
                     "apps_setup_done": 1, "main_tab": 1, "tutorial_seen": 1,
+                    "theme": 0, "theme_mode": 2, "theme_source": 0,
                     "habits_guide_seen": 1, "lumi_guides_seen": 127, "launcher_guide_seen": 1, "package_updates_allowed": 0,
                     "voice_narration_enabled": 0, "music_volume": 0,
                     "sun_salutation_character": 0,
@@ -159,12 +212,46 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory, c
             assert time.monotonic() < deadline, "Practice did not render the requested viewport"
             time.sleep(.05)
         missing = []
+        flattened = []
+        banner_skies = {}
         for index, (practice, title) in enumerate(PRACTICES):
             if index:
                 command("xdotool", "key", "Right")
             driver.wait(label=title, role="text")
-            if not pictured(capture(window, practice), (0, 40, WIDTH, 420)):
+            # Complete the card slide before sampling this practice's artwork.
+            time.sleep(0.6)
+            image = capture(window, practice)
+            banner_skies[practice] = image.crop((60, 58, WIDTH // 2, 144))
+            if practice == "wim-hof" and settings["theme_mode"] == 2:
+                upper_left = image.crop((3, 64, 110, 154))
+                moon = sum(red > 155 and green > 170 and blue > 190 for red, green, blue in upper_left.getdata())
+                assert moon >= 30, f"Wim Hof's moon disappeared in the narrow card ({moon} pixels)"
+            if practice in ("wim-hof", "patterns"):
+                moving_sky(window, f"{practice}-night", image)
+                driver.press(label="Light", role="button")
+                driver.wait(label="Dark", role="button")
+                time.sleep(.7)
+                moving_sky(window, f"{practice}-day", capture(window, f"{practice}-day"))
+                driver.press(label="Dark", role="button")
+                driver.wait(label="Light", role="button")
+                time.sleep(.7)
+            if practice == "patterns":
+                for phase in ("Inhale", "Hold", "Exhale"):
+                    assert not driver.find(label=phase, role="text", visible=True)
+                image = capture(window, "patterns-marker-start")
+                time.sleep(1.2)
+                advanced = capture(window, "patterns-inhale-progress")
+                changed = changed_pixels(image, advanced, (90, 150, WIDTH - 90, 346), 24)
+                assert 25 < changed < 600, f"Expected a moving marker on the square, got {changed} pixels"
+            if not pictured(image, (0, 40, WIDTH, 420)):
                 missing.append(practice)
+            elif not has_foreground_detail(image):
+                flattened.append(practice)
+        assert not flattened, "Dark practice cards lost the artwork detail: " + ", ".join(flattened)
+        for index, (name, sky_image) in enumerate(banner_skies.items()):
+            for other, previous in list(banner_skies.items())[:index]:
+                changes = max(ImageStat.Stat(ImageChops.difference(sky_image, previous)).mean)
+                assert changes > 1, f"{name} and {other} still show the same sky"
         for title in ("7-Minute Workout", "Tai Chi", "Sun Salutation"):
             command("xdotool", "key", "Left")
             driver.wait(label=title, role="text")
@@ -181,6 +268,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory, c
         capture(window, "sun-salutation-guide")
         driver.press(label="Back", role="button")
         driver.press(label="Start Practice", role="button")
+        driver.wait(label="Settle in", role="text")
         driver.wait(label="Next", role="button")
         actual = state(window)
         assert actual["practice_running"] and actual["screen"] == 3, actual
@@ -195,26 +283,16 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory, c
         running = capture(window, "sun-salutation-running")
         if not pictured(running, figure):
             missing.append("sun-salutation figure")
-        # Find the teal skirt in this pose before checking the opaque interior.
-        # The guide can sway during the intro, so a fixed crop can cross the hem.
-        cloth = running.crop((145, 450, 260, 550))
-        spans = []
-        for y in range(cloth.height):
-            pixels = [x for x in range(cloth.width) if cloth.getpixel((x, y)) == (61, 99, 91)]
-            if pixels and pixels[-1] - pixels[0] >= 24:
-                spans.append((y, pixels[0], pixels[-1]))
-        assert len(spans) >= 30, "The retained guide's skirt is missing"
-        edge_rows = len(spans) // 5
-        for y, left, right in spans[edge_rows:-edge_rows]:
-            # A UV seam crack exposes the dark page between cloth triangles.
-            assert min(cloth.getpixel((x, y))[1] for x in range(left, right + 1)) >= 85, \
-                "The retained guide exposes the background through its skirt"
+        workout_outfit(running.crop(figure), upright=True)
         driver.press(label="Next", role="button", settle=False)
+        driver.wait(label="Step 1", role="text")
+        driver.wait(label="Mountain pose", role="text")
         time.sleep(.5)
         first = capture(window, "sun-salutation-moving-first").crop(figure)
-        time.sleep(1)
-        second = capture(window, "sun-salutation-moving-second").crop(figure)
+        time.sleep(1.5)
+        second = capture(window, "sun-salutation-mountain-prayer").crop(figure)
         assert ImageChops.difference(first, second).getbbox(), "The live guide did not move"
+        assert ImageChops.difference(running.crop(figure), second).getbbox(), "Mountain reused the intro pose"
         pause(window, True, "practice-images-pause")
         time.sleep(.2)
         first = capture(window, "sun-salutation-paused-first").crop(figure)
@@ -225,8 +303,23 @@ with tempfile.TemporaryDirectory(prefix="inbe-practice-images-") as directory, c
         time.sleep(.5)
         resumed = capture(window, "sun-salutation-resumed").crop(figure)
         assert ImageChops.difference(second, resumed).getbbox(), "The guide did not resume"
+        driver.wait(label="Standing forward fold", role="text")
+        time.sleep(2)
+        descent = capture(window, "sun-salutation-fold-descent")
+        time.sleep(2.7)
+        fold = capture(window, "sun-salutation-forward-fold")
+        assert ImageChops.difference(descent.crop(figure), fold.crop(figure)).getbbox(), \
+            "The guide did not continue into the fold"
+        workout_outfit(descent.crop(figure))
+        workout_outfit(fold.crop(figure))
+        for step, name in (("Low lunge", "lunge"), ("Plank", "plank"),
+                           ("Knees, chest and chin", "lowering-to-floor"),
+                           ("Downward-facing dog", "downward-dog")):
+            driver.wait(label=step, role="text", timeout=25)
+            time.sleep(2)
+            workout_outfit(capture(window, f"sun-salutation-{name}").crop(figure))
         assert not missing, "Practice pictures are missing: " + ", ".join(missing)
         assert app.poll() is None, log_tail(output / "practice.log")
     finally:
         stop(app)
-print("All eight practice covers, Sun Salutation guide, real session, animation, pause and resume passed")
+print("Eight practice covers, day and night sky motion, the Box marker, and Sun Salutation outfit and playback passed")

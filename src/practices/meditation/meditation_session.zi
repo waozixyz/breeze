@@ -84,15 +84,69 @@ meditation_start_seconds :: (app: *InnerBreeze, seconds: s32) {
     app.meditation.complete_waiting = 0
     background_remainder_ms = 0
     last_bell_index = 0
+    MeditationEnter(app)
+    app_play_bell_cue(app, 1.0f)
+    PracticeDraftBegin(EXERCISE_MEDITATION)
+    MeditationCheckpoint(app, true)
+}
+
+MeditationEnter :: (app: *InnerBreeze) {
+    app.exercise_type = EXERCISE_MEDITATION
     app.session_paused = 0
     app.volume_popup_active = 0
     app.music_volume_popup_active = 0
     app_close_modal(app)
     app_switch_screen(app, ScreenMeditation)
-    meditation_music_start_session(app)
-    app_play_bell_cue(app, 1.0f)
-    PracticeDraftBegin(EXERCISE_MEDITATION)
+    if app.meditation.complete_waiting == 0 {
+        meditation_music_start_session(app)
+    }
     practice_background_start(app, EXERCISE_MEDITATION)
+}
+
+MeditationRecovery :: struct {
+    duration: s32
+    remaining: s32
+    frames: s32
+    background_ms: s32
+    bell_minutes: s32
+    bell_index: s32
+    complete_waiting: s32
+}
+
+MeditationRecoveryDecode :: (draft: *PracticeRecoveryDraft, state: *MeditationRecovery) -> bool {
+    if draft.activity != EXERCISE_MEDITATION || draft.resume.count != 7 || draft.resume.definition_length != 0 {
+        return false
+    }
+    v := draft.resume.values[:]
+    if v[0] < 60 || v[1] > v[0] || v[2] >= 60 || v[3] >= 1000 || v[4] > 30 || v[6] > 1 ||
+    (v[1] == 0) != (v[6] != 0) || v[0] - v[1] != draft.rounds[0] ||
+    (v[4] == 0 && v[5] != 0) || (v[4] > 0 && v[5] > (v[0] - v[1]) / (v[4] * 60)) {
+        return false
+    }
+    state.* = MeditationRecovery.{v[0], v[1], v[2], v[3], v[4], v[5], v[6]}
+    return true
+}
+
+MeditationCheckpoint :: (app: *InnerBreeze, force: bool) {
+    state := app.meditation
+    values: [7]s32 = .[state.duration_seconds, state.remaining_seconds, state.frame_ticks,
+        background_remainder_ms, state.interval_bell_minutes, last_bell_index, state.complete_waiting]
+    PracticeDraftProgress(EXERCISE_MEDITATION, elapsed_seconds(app), state.complete_waiting, values[:], force)
+}
+
+MeditationContinue :: (app: *InnerBreeze, draft: *PracticeRecoveryDraft) -> bool {
+    state: MeditationRecovery
+    if !MeditationRecoveryDecode(draft, *state) { return false }
+    app.meditation.duration_seconds = state.duration
+    app.meditation.remaining_seconds = state.remaining
+    app.meditation.frame_ticks = state.frames
+    app.meditation.interval_bell_minutes = state.bell_minutes
+    app.meditation.complete_waiting = state.complete_waiting
+    background_remainder_ms = state.background_ms
+    last_bell_index = state.bell_index
+    PracticeDraftResume(draft)
+    MeditationEnter(app)
+    return true
 }
 
 // Interval bell: ring once for every completed interval while the session
@@ -150,12 +204,7 @@ finish :: (app: *InnerBreeze) {
 
     duration = app.meditation.duration_seconds
     if duration >= 60 {
-        session_duration := duration
-
-        if data_save_session_path_for_activity(*session_duration,
-            1,
-            0,
-            EXERCISE_MEDITATION,
+        if PracticeDraftSaveElapsed(EXERCISE_MEDITATION, duration,
             *result_path[0],
             size_of(type_of(result_path))) != 0 {
             sync_habits_for_activity(app, EXERCISE_MEDITATION)
@@ -222,11 +271,11 @@ meditation_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
     }
     background_remainder_ms = step.remainder_ms
     if step.elapsed_seconds <= 0 {
+        MeditationCheckpoint(app, false)
         return
     }
 
     app.meditation.remaining_seconds = step.remaining_seconds
-    PracticeDraftElapsed(EXERCISE_MEDITATION, elapsed_seconds(app), 0, false)
     if !step.completed {
         maybe_interval_bell(app)
     }
@@ -235,6 +284,7 @@ meditation_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
     if step.completed {
         timer_complete(app)
     }
+    MeditationCheckpoint(app, step.completed)
 }
 
 elapsed_seconds :: (app: *InnerBreeze) -> s32 {
@@ -265,12 +315,7 @@ save_elapsed :: (app: *InnerBreeze) -> s32 {
     if elapsed < 60 {
         return 0
     }
-    if data_save_session_path_for_activity(*elapsed,
-        1,
-        0,
-        EXERCISE_MEDITATION,
-        null,
-        0) != 0 {
+    if PracticeDraftSaveElapsed(EXERCISE_MEDITATION, elapsed, null, 0) != 0 {
         sync_habits_for_activity(app, EXERCISE_MEDITATION)
         app_auto_sync(app)
         return 1
@@ -302,7 +347,7 @@ meditation_request_exit :: (app: *InnerBreeze) {
     if app == null {
         return
     }
-    PracticeDraftPause()
+    MeditationCheckpoint(app, true)
     app_open_modal(app, cast(ModalType)ModalConfirmExitSession)
 }
 
@@ -401,6 +446,7 @@ extend_session :: (app: *InnerBreeze, seconds: s32) {
     if was_complete != 0 {
         meditation_music_start_session(app)
     }
+    MeditationCheckpoint(app, true)
 }
 
 meditation_draw_setup_modal :: (app: *InnerBreeze) {
@@ -552,7 +598,6 @@ meditation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
             app.meditation.frame_ticks = 0
             if app.meditation.remaining_seconds > 0 {
                 app.meditation.remaining_seconds -= 1
-                PracticeDraftElapsed(EXERCISE_MEDITATION, elapsed_seconds(app), 0, false)
                 maybe_interval_bell(app)
             }
             if app.meditation.remaining_seconds <= 0 {
@@ -560,6 +605,7 @@ meditation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
             }
         }
     }
+    MeditationCheckpoint(app, app.meditation.complete_waiting != 0)
 }
 
 meditation :: (app: *InnerBreeze) {

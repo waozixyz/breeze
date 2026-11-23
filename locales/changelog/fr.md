@@ -3,8 +3,8 @@
 ## [Unreleased]
 
 - Corrige retour arrière, édition, restauration. Photos/Radio. Dew et étoiles Telegram. Lumi répond et alerte si non lu.
-- Débutez, changez, reprenez. Avance astrale. Circuit doux 4 min et perso. Suivi/relance des téléchargements. PiP/Accueil.
-- Minuteurs au thème, remis à zéro au retour. Pièces au thème et du jour, liens Journal, courbes, stats, icônes Activité.
+- Débutez, changez, reprenez. Avance astrale. Circuits 4 min et perso. Bannières jour/nuit. Téléchargements. PiP/Accueil.
+- Minuteurs remis à zéro au retour. Pièces au thème et du jour, liens Journal, une courbe, stats, icônes Activité.
 
 ## [2.1.63] - 2026-11-05
 

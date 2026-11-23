@@ -480,6 +480,21 @@ def stage_jungle_narration(configuration, assets_root, languages):
             if len(recordings) != cue_count:
                 print(f'{practice}/{language}: Jungle narration incomplete, keeping the verified existing voice')
                 continue
+            if practice == 'workout':
+                inventory, _, speech, config, _ = plan
+                short_keys = config.get('short_workout_keys', [])
+                short_recordings = {}
+                for _, key, text in speech.wanted(config, [language], short_keys):
+                    name = key + '.ogg'
+                    path = locale_prefix + name
+                    audio = verified_jungle_clip(receipt['clips'].get(path), inventory, language, key, text,
+                                                 speech.maximum_clip_seconds(config, key),
+                                                 media_path('assets/practices/' + path))
+                    if audio is None:
+                        break
+                    short_recordings[name] = audio
+                if len(short_recordings) == len(short_keys):
+                    recordings.update(short_recordings)
             target = assets_root / f'practice-{practice}-voice-{language}' / 'assets/practices' / practice / 'voice' / language
             target.mkdir(parents=True, exist_ok=True)
             for existing in target.iterdir():

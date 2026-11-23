@@ -3,8 +3,8 @@
 ## [Unreleased]
 
 - Löschtaste, Text, Backup repariert. Fotos/Radio. Dew für Telegram-Sterne. Lumi antwortet gleich, meldet Ungelesenes.
-- Start, Wechsel, Fortsetzen. Astralkurse spulen. 4-Min- und eigene Workouts. Downloadstatus/Neustart. PiP/Home repariert.
-- Pausentimer neu. Timer/Münzen im Design. Tagesmünzen, Tagebuch-Links, Kurven, Gesamtstatistik und Icons in Aktivität.
+- Start, Wechsel, Fortsetzen. Astral spulen. 4-Min- und eigene Workouts. Tag/Nacht-Banner. Downloadstatus. PiP/Home-Fixes.
+- Pausentimer neu. Timer/Münzen im Design. Tagesmünzen, Tagebuch-Links, ein Gewohnheitsgraph, Statistik, Aktivitäts-Icons.
 
 ## [2.1.63] - 2026-11-05
 
