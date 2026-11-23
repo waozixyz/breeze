@@ -1,16 +1,19 @@
-// A custom routine is a bounded list of blocks. Bridges belong to the timeline
-// but never consume the active seconds the person set on an exercise.
+// A custom routine plays as a bounded timeline of blocks, its groups already
+// repeated (see workout_plan.zi). Bridges belong to the timeline but never
+// consume the active seconds the person set on an exercise.
 #import, file "workout_rules.zi";
 #import "std/text_tools"
 #import "byte_text_linux"
 Utf8 :: #import "std/utf8";
 
+// Routines saved before groups (workout/1) held at most this many blocks.
 WORKOUT_CUSTOM_BLOCK_LIMIT :: 12
 WORKOUT_CUSTOM_ROUTINE_LIMIT :: 16
 WORKOUT_CUSTOM_NAME_LIMIT :: 120
 WORKOUT_CUSTOM_MIN_SECONDS :: 5
 WORKOUT_CUSTOM_MAX_SECONDS :: 300
 WORKOUT_CUSTOM_DEFAULT_SECONDS :: 30
+WORKOUT_CUSTOM_REST_MAX :: 120
 WORKOUT_CUSTOM_ORDINARY :: 0
 WORKOUT_CUSTOM_LEFT :: 1
 WORKOUT_CUSTOM_RIGHT :: 2
@@ -21,12 +24,15 @@ WorkoutBlock :: struct {
     exercise: s32
     seconds: s32
     variant: s32
+    // Seconds of rest the person chose before this block, on top of the
+    // time needed to get into position.
+    rest: s32
 }
 
 WorkoutSequence :: struct {
     name: [WORKOUT_CUSTOM_NAME_LIMIT]u8
     name_length: s32
-    blocks: [WORKOUT_CUSTOM_BLOCK_LIMIT]WorkoutBlock
+    blocks: [WORKOUT_TIMELINE_LIMIT]WorkoutBlock
     count: s32
 }
 
@@ -48,16 +54,17 @@ WorkoutBlockSupports :: (exercise: s32, variant: s32) -> bool {
 
 WorkoutBlockDefault :: (exercise: s32) -> WorkoutBlock {
     variant: s32 = ifx exercise == WORKOUT_SIDE_PLANK then WORKOUT_CUSTOM_RIGHT else WORKOUT_CUSTOM_ORDINARY
-    return WorkoutBlock.{exercise, WORKOUT_CUSTOM_DEFAULT_SECONDS, variant}
+    return WorkoutBlock.{exercise, WORKOUT_CUSTOM_DEFAULT_SECONDS, variant, 0}
 }
 
 WorkoutBlockValid :: (block: WorkoutBlock) -> bool {
     return WorkoutBlockSupports(block.exercise, block.variant) &&
-        block.seconds >= WORKOUT_CUSTOM_MIN_SECONDS && block.seconds <= WORKOUT_CUSTOM_MAX_SECONDS
+        block.seconds >= WORKOUT_CUSTOM_MIN_SECONDS && block.seconds <= WORKOUT_CUSTOM_MAX_SECONDS &&
+        block.rest >= 0 && block.rest <= WORKOUT_CUSTOM_REST_MAX
 }
 
 WorkoutSequenceInsert :: (sequence: *WorkoutSequence, index: s32, block: WorkoutBlock) -> bool {
-    if index < 0 || index > sequence.count || sequence.count >= WORKOUT_CUSTOM_BLOCK_LIMIT || !WorkoutBlockValid(block) {
+    if index < 0 || index > sequence.count || sequence.count >= WORKOUT_TIMELINE_LIMIT || !WorkoutBlockValid(block) {
         return false
     }
     cursor := sequence.count
@@ -137,6 +144,8 @@ WorkoutSequenceSetName :: (sequence: *WorkoutSequence, name: string) -> bool {
     return true
 }
 
+// The first saved format, kept to read routines saved before groups:
+// workout/1, the name, then one "exercise seconds variant" line per block.
 WorkoutSequenceEncode :: (sequence: *WorkoutSequence) -> string {
     name_buffer: [WORKOUT_CUSTOM_NAME_LIMIT]u8
     name := WorkoutSequenceName(sequence, name_buffer[:])
@@ -147,7 +156,7 @@ WorkoutSequenceEncode :: (sequence: *WorkoutSequence) -> string {
     BuilderPrint(*line, "workout/1\n%\n", name)
     for index: cast(s32)0..sequence.count - 1 {
         block := sequence.blocks[index]
-        if !WorkoutBlockValid(block) {
+        if !WorkoutBlockValid(block) || block.rest != 0 {
             return ""
         }
         BuilderPrint(*line, "% % %\n", WorkoutExerciseKey(block.exercise), block.seconds, block.variant)
@@ -181,7 +190,7 @@ WorkoutSequenceDecode :: (text: string, sequence: *WorkoutSequence) -> bool {
             while exercise < WORKOUT_MOVE_COUNT && WorkoutExerciseKey(exercise) != words[0] {
                 exercise += 1
             }
-            if !WorkoutSequenceInsert(*result, result.count, WorkoutBlock.{exercise, cast(s32)seconds, cast(s32)variant}) {
+            if !WorkoutSequenceInsert(*result, result.count, WorkoutBlock.{exercise, cast(s32)seconds, cast(s32)variant, 0}) {
                 return false
             }
         }
@@ -239,15 +248,17 @@ WorkoutAccessSeconds :: (exercise: s32) -> s32 {
     return 2
 }
 
+// The same exercise again continues without a break unless a rest was
+// chosen; then the figure stands up, rests and gets back into position.
 WorkoutBridgeMilliseconds :: (from: WorkoutBlock, to: WorkoutBlock) -> s32 {
-    if from.exercise == to.exercise && from.variant == to.variant {
+    if from.exercise == to.exercise && from.variant == to.variant && to.rest == 0 {
         return 0
     }
     departure: s32 = ifx from.exercise < 0 then 0 else WorkoutAccessSeconds(from.exercise)
     // One second at the neutral stance to change equipment/camera between
     // different movements. Initial preparation gets the spoken countdown.
     handoff: s32 = ifx from.exercise < 0 then 3 else 1
-    return (departure + handoff + WorkoutAccessSeconds(to.exercise)) * 1000
+    return (departure + handoff + to.rest + WorkoutAccessSeconds(to.exercise)) * 1000
 }
 
 WorkoutSequenceBridge :: (sequence: *WorkoutSequence, index: s32) -> s32 {

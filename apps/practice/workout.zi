@@ -7,6 +7,7 @@
 // supplies the existing audio, storage and platform lifecycle effects.
 #import, file "workout_rules.zi";
 #import, file "workout_sequence.zi";
+#import, file "workout_plan.zi";
 #import, file "workout_moves.zi";
 #import, file "workout_builder.zi";
 #import, file "workout_transitions.zi";
@@ -100,6 +101,8 @@ WORKOUT_EDGE_PATH :: "assets/practices/workout/flat-edge.png"
 workout_elapsed_ms: s64;
 workout_coverage: WorkoutCoverage;
 workout_routine: s32;
+// The custom routine as built, and the timeline it plays.
+workout_custom_plan: WorkoutPlan;
 workout_custom: WorkoutSequence;
 workout_session_character: s32;
 workout_voice_elapsed_ms: s32 = -1;
@@ -190,7 +193,7 @@ WorkoutManagerDraw :: (app: *InnerBreeze) {
     }
     defer { unused End(app.ui.session) }
     if WorkoutBuilderDraw(app, frame.layout.content, PracticeContentReady(EXERCISE_WORKOUT)) == WORKOUT_BUILDER_PLAY &&
-    ActivityStartAllowed() && WorkoutBuilderTake(*workout_custom) {
+    ActivityStartAllowed() && WorkoutBuilderTake(*workout_custom_plan) && WorkoutPlanExpand(*workout_custom_plan, *workout_custom) {
         WorkoutStartRoutine(app, WORKOUT_ROUTINE_CUSTOM)
     }
 }
@@ -215,7 +218,7 @@ WorkoutStartRoutine :: (app: *InnerBreeze, routine: s32) {
     WorkoutEnter(app)
     PracticeDraftBegin(EXERCISE_WORKOUT)
     if routine == WORKOUT_ROUTINE_CUSTOM {
-        PracticeDraftSetDefinition(WorkoutSequenceEncode(*workout_custom))
+        PracticeDraftSetDefinition(WorkoutPlanEncode(*workout_custom_plan))
     }
     WorkoutCheckpoint(true)
 }
@@ -242,6 +245,7 @@ WorkoutRecovery :: struct {
     elapsed_ms: s32
     voiced_ms: s32
     duration_ms: s32
+    plan: WorkoutPlan
     sequence: WorkoutSequence
     coverage: WorkoutCoverage
 }
@@ -250,8 +254,13 @@ WorkoutRecoveryStep :: (state: *WorkoutRecovery) -> WorkoutStep {
     return WorkoutTimelineStep(state.routine, *state.sequence, state.elapsed_ms)
 }
 
+// A checkpoint holds the routine, character, clock and spoken cue, then the
+// covered preparation and work of each step. Checkpoints written before
+// grouped routines always held twelve steps.
+WORKOUT_RECOVERY_HEADER :: 4
+
 WorkoutRecoveryDecode :: (draft: *PracticeRecoveryDraft, state: *WorkoutRecovery) -> bool {
-    if draft.activity != EXERCISE_WORKOUT || draft.resume.count != 4 + WORKOUT_EXERCISE_COUNT * 2 {
+    if draft.activity != EXERCISE_WORKOUT || draft.resume.count < WORKOUT_RECOVERY_HEADER {
         return false
     }
     values := draft.resume.values[:]
@@ -262,7 +271,8 @@ WorkoutRecoveryDecode :: (draft: *PracticeRecoveryDraft, state: *WorkoutRecovery
     }
     count := WorkoutRoutineCount(state.routine)
     if state.routine == WORKOUT_ROUTINE_CUSTOM {
-        if !WorkoutSequenceDecode(TextFromBytes(draft.resume.definition[:draft.resume.definition_length]), *state.sequence) {
+        if !WorkoutPlanDecode(TextFromBytes(draft.resume.definition[:draft.resume.definition_length]), *state.plan) ||
+            !WorkoutPlanExpand(*state.plan, *state.sequence) {
             return false
         }
         count = state.sequence.count
@@ -273,9 +283,14 @@ WorkoutRecoveryDecode :: (draft: *PracticeRecoveryDraft, state: *WorkoutRecovery
         }
         state.duration_ms = WorkoutTotalMilliseconds(state.routine)
     }
-    for index: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
-        ready := values[4 + index]
-        work := values[4 + WORKOUT_EXERCISE_COUNT + index]
+    slots := (draft.resume.count - WORKOUT_RECOVERY_HEADER) / 2
+    if draft.resume.count != WORKOUT_RECOVERY_HEADER + slots * 2 ||
+        (slots != count && !(slots == WORKOUT_EXERCISE_COUNT && count <= WORKOUT_EXERCISE_COUNT)) {
+        return false
+    }
+    for index: cast(s32)0..slots - 1 {
+        ready := values[WORKOUT_RECOVERY_HEADER + index]
+        work := values[WORKOUT_RECOVERY_HEADER + slots + index]
         ready_limit: s32 = 0
         work_limit: s32 = 0
         if index < count {
@@ -297,17 +312,19 @@ WorkoutRecoveryDecode :: (draft: *PracticeRecoveryDraft, state: *WorkoutRecovery
 }
 
 WorkoutCheckpoint :: (force: bool) {
-    values: [4 + WORKOUT_EXERCISE_COUNT * 2]s32
+    values: [WORKOUT_RECOVERY_HEADER + WORKOUT_TIMELINE_LIMIT * 2]s32
     values[0] = workout_routine
     values[1] = workout_session_character
     values[2] = cast(s32)workout_elapsed_ms
     values[3] = workout_voice_elapsed_ms + 1
-    for index: cast(s32)0..WORKOUT_EXERCISE_COUNT - 1 {
-        values[4 + index] = workout_coverage.ready[index]
-        values[4 + WORKOUT_EXERCISE_COUNT + index] = workout_coverage.work[index]
+    steps := WorkoutActiveCount()
+    for index: cast(s32)0..steps - 1 {
+        values[WORKOUT_RECOVERY_HEADER + index] = workout_coverage.ready[index]
+        values[WORKOUT_RECOVERY_HEADER + steps + index] = workout_coverage.work[index]
     }
     step := WorkoutCurrentStep()
-    PracticeDraftProgress(EXERCISE_WORKOUT, WorkoutPlayedSeconds(), step.index * 4 + step.phase, values[:], force)
+    PracticeDraftProgress(EXERCISE_WORKOUT, WorkoutPlayedSeconds(), step.index * 4 + step.phase,
+        values[:WORKOUT_RECOVERY_HEADER + steps * 2], force)
 }
 
 WorkoutContinue :: (app: *InnerBreeze, draft: *PracticeRecoveryDraft) -> bool {
@@ -316,6 +333,7 @@ WorkoutContinue :: (app: *InnerBreeze, draft: *PracticeRecoveryDraft) -> bool {
         return false
     }
     workout_routine = state.routine
+    workout_custom_plan = state.plan
     workout_custom = state.sequence
     workout_elapsed_ms = state.elapsed_ms
     workout_coverage = state.coverage
@@ -659,12 +677,18 @@ WorkoutDrawFigure :: (app: *InnerBreeze, step: WorkoutStep, area: Rectangle, key
         area, key + cast(u64)4096, alt_text, cast(float64)workout_elapsed_ms / 1000.0, digest)
 }
 
+// The Workout's figure wears its training clothes; the Customize cards show
+// the same figure in them.
+WorkoutFigurePlacement :: () -> PracticeFigurePlacement {
+    return PracticeFigurePlacement.{.training = true, .training_shorts = true}
+}
+
 WorkoutDrawAppearance :: (app: *InnerBreeze, pose: *WorkoutPose, rig: *TaiChiRig,
     framing: TaiChiFraming, man: bool, area: Rectangle, key: u64, alt_text: string,
     seconds: float64, digest: u64) -> bool {
     solved := WorkoutSolve(pose, rig)
     if PracticeFigureDrawModel(app.ui.session, *solved, rig, framing, man, false, area, key,
-        alt_text, seconds, digest, PracticeFigurePlacement.{.training = true, .training_shorts = true}) {
+        alt_text, seconds, digest, WorkoutFigurePlacement()) {
         return true
     }
     look := TaiChiFlatLookNamed(ifx man then "indigoMan" else "jadeWoman")
@@ -682,6 +706,7 @@ WorkoutCharacterPreview :: (app: *InnerBreeze, area: Rectangle) {
     gap := cast(float32)AppScale(6)
     column := (area.width - gap) / 2.0
     key := Layout.KeyHash("workout/customize/character")
+    PracticeFigurePrepare(app.workout_character == 1)
     for character: cast(s32)0..1 {
         man := character == 1
         label := LocaleText(ifx man then "workout_character_man" else "workout_character_woman")
@@ -705,9 +730,12 @@ WorkoutCharacterPreview :: (app: *InnerBreeze, area: Rectangle) {
             if figure_w < figure_h * 0.48 {
                 framing.view_height *= cast(float64)(figure_h * 0.48 / figure_w)
             }
-            unused WorkoutDrawAppearance(app, *pose, *rig, framing, man,
+            // A card shows the Workout's own current figure, or nothing; never
+            // the flat figure painted when a model cannot load.
+            solved := WorkoutSolve(*pose, *rig)
+            unused PracticeFigureDrawModel(app.ui.session, *solved, *rig, framing, man, false,
                 Rectangle.{x + (column - figure_w) / 2.0, area.y + gap, figure_w, figure_h},
-                key + cast(u64)(4 + character), label, -1.0, digest)
+                key + cast(u64)(4 + character), label, -1.0, digest, WorkoutFigurePlacement())
         }
         strong: [1]Text.Range = .[.{.start = 0, .end = cast(s32)label.count}]
         Text.Draw(app.ui.session, Text.Props.{.bounds = Rectangle.{x, area.y + area.height - label_h, column, label_h},
@@ -765,7 +793,7 @@ WorkoutDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     frame.exercise = step.exercise
     frame.view = workout_routine
     frame.progress = WorkoutActiveCompletion()
-    blocks: [WORKOUT_CUSTOM_BLOCK_LIMIT]u8
+    blocks: [WORKOUT_TIMELINE_LIMIT]u8
     if workout_routine == WORKOUT_ROUTINE_CUSTOM {
         // The workout frame carries one ASCII exercise ID per block and the
         // current block position. Repeated exercises remain distinct controls.

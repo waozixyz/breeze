@@ -7,7 +7,7 @@
 - Practice cards stay responsive while their animated banners start.
 - Switch between day and night in the top-right corner of Practices. Characters and landscapes keep their painted details. Every banner has a live sky painted as you watch: its colours, the sun or moon and the moon’s phase follow your local time and date, Hipparcos stars flicker at night, and clouds drift at different depths and change shape. Each banner has its own scenery.
 - Swipe from the 7-Minute Workout card to the 4-Minute Workout card to start the shorter circuit. Its character and landscape are separate from the animated sky.
-- Build and save custom workouts with timed exercises, pose options, and automatic transitions. The editor shows active time and transition time separately.
+- Build custom workouts from blocks that show each exercise's figure, name and length. Drag blocks to reorder them, group them into rounds that repeat, drop a block onto a group to add it, and set each block's length, rest and form. Saved routines join as blocks, the total updates as you edit, and routines saved earlier open and play as before.
 - Choose Woman or Man in Workout Customize. Your choice is saved for both circuits and custom routines.
 - The woman has a fuller ponytail, layered bangs, and refined barefoot poses. The man wears a short-sleeve crew-neck T-shirt in Workout and the character preview.
 - The woman wears leggings and a fitted crop top in both Workout circuits and custom routines.

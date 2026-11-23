@@ -1,0 +1,691 @@
+// A custom routine as the person builds it: exercise blocks and groups of
+// blocks that repeat, in order. Nodes are stored in reading order; the nodes
+// after a group that are deeper than it are its contents. Playback expands
+// the plan into a WorkoutSequence timeline.
+#import, file "workout_rules.zi";
+#import, file "workout_sequence.zi";
+#import "std/text_tools"
+#import "byte_text_linux"
+Utf8 :: #import "std/utf8";
+
+WORKOUT_PLAN_NODE_LIMIT :: 24
+// Groups sit at most this deep, so three levels of groups at the most.
+WORKOUT_PLAN_GROUP_DEPTH :: 2
+WORKOUT_PLAN_REPEAT_MAX :: 10
+WORKOUT_PLAN_DEFAULT_REPEATS :: 2
+WORKOUT_PLAN_TITLE_LIMIT :: 40
+// A saved plan and a recovery checkpoint both hold at most this many bytes.
+WORKOUT_PLAN_TEXT_LIMIT :: 1024
+WORKOUT_NODE_EXERCISE :: 0
+WORKOUT_NODE_GROUP :: 1
+
+WorkoutNode :: struct {
+    kind: s32
+    depth: s32
+    // An exercise's movement, active seconds and form or side.
+    exercise: s32
+    seconds: s32
+    variant: s32
+    // Rest after an exercise, or after each round of a group.
+    rest: s32
+    // A group's rounds.
+    repeats: s32
+    // A group added from a saved routine keeps that routine's name.
+    title: [WORKOUT_PLAN_TITLE_LIMIT]u8
+    title_length: s32
+}
+
+WorkoutPlan :: struct {
+    name: [WORKOUT_CUSTOM_NAME_LIMIT]u8
+    name_length: s32
+    nodes: [WORKOUT_PLAN_NODE_LIMIT]WorkoutNode
+    count: s32
+}
+
+WorkoutPlanTimes :: struct {
+    valid: bool
+    steps: s32
+    total_seconds: s32
+    active_seconds: s32
+}
+
+WorkoutPlanExercise :: (exercise: s32) -> WorkoutNode {
+    block := WorkoutBlockDefault(exercise)
+    return WorkoutNode.{.kind = WORKOUT_NODE_EXERCISE, .exercise = exercise, .seconds = block.seconds,
+        .variant = block.variant}
+}
+
+WorkoutPlanGroupNode :: (repeats: s32) -> WorkoutNode {
+    return WorkoutNode.{.kind = WORKOUT_NODE_GROUP, .exercise = -1, .repeats = repeats}
+}
+
+WorkoutPlanIsGroup :: (plan: *WorkoutPlan, index: s32) -> bool {
+    return index >= 0 && index < plan.count && plan.nodes[index].kind == WORKOUT_NODE_GROUP
+}
+
+// The index after a node and, for a group, everything inside it.
+WorkoutPlanEnd :: (plan: *WorkoutPlan, index: s32) -> s32 {
+    if index < 0 || index >= plan.count {
+        return index
+    }
+    end := index + 1
+    if plan.nodes[index].kind == WORKOUT_NODE_GROUP {
+        while end < plan.count && plan.nodes[end].depth > plan.nodes[index].depth {
+            end += 1
+        }
+    }
+    return end
+}
+
+// The group a node sits in, or -1 at the top level.
+WorkoutPlanParent :: (plan: *WorkoutPlan, index: s32) -> s32 {
+    if index <= 0 || index >= plan.count {
+        return -1
+    }
+    cursor := index - 1
+    while cursor >= 0 {
+        if plan.nodes[cursor].depth < plan.nodes[index].depth {
+            return cursor
+        }
+        cursor -= 1
+    }
+    return -1
+}
+
+WorkoutPlanTitle :: (node: *WorkoutNode, output: []u8) -> string {
+    if node.title_length <= 0 || node.title_length > WORKOUT_PLAN_TITLE_LIMIT || node.title_length > output.count {
+        return ""
+    }
+    for index: cast(s32)0..node.title_length - 1 {
+        output[index] = node.title[index]
+    }
+    return TextFromBytes(output[:node.title_length])
+}
+
+WorkoutPlanTitleValid :: (title: string) -> bool {
+    if title.count == 0 {
+        return true
+    }
+    return title.count <= WORKOUT_PLAN_TITLE_LIMIT && WorkoutNameValid(title) && TextTrim(title) == title
+}
+
+// The longest start of `name` that fits a group title, cut between whole
+// characters and without spaces at its ends.
+WorkoutPlanSetTitle :: (node: *WorkoutNode, name: string) {
+    length := name.count
+    if length > WORKOUT_PLAN_TITLE_LIMIT {
+        length = WORKOUT_PLAN_TITLE_LIMIT
+    }
+    while length > 0 && !Utf8.Valid(name[0:length]) {
+        length -= 1
+    }
+    title := TextTrim(name[0:length])
+    node.title_length = 0
+    if !WorkoutPlanTitleValid(title) {
+        return
+    }
+    for byte: title {
+        node.title[node.title_length] = byte
+        node.title_length += 1
+    }
+}
+
+WorkoutPlanNodeValid :: (node: *WorkoutNode) -> bool {
+    if node.rest < 0 || node.rest > WORKOUT_CUSTOM_REST_MAX {
+        return false
+    }
+    if node.kind == WORKOUT_NODE_GROUP {
+        title: [WORKOUT_PLAN_TITLE_LIMIT]u8
+        return node.depth <= WORKOUT_PLAN_GROUP_DEPTH && node.repeats >= 1 && node.repeats <= WORKOUT_PLAN_REPEAT_MAX &&
+            node.title_length >= 0 && node.title_length <= WORKOUT_PLAN_TITLE_LIMIT &&
+            WorkoutPlanTitleValid(WorkoutPlanTitle(node, title[:]))
+    }
+    return node.kind == WORKOUT_NODE_EXERCISE && node.title_length == 0 &&
+        WorkoutBlockValid(WorkoutBlock.{node.exercise, node.seconds, node.variant, 0})
+}
+
+// The first node is at the top level, and each node is at most one deeper
+// than the one before it, and only after a group.
+WorkoutPlanWellFormed :: (plan: *WorkoutPlan) -> bool {
+    if plan.count < 0 || plan.count > WORKOUT_PLAN_NODE_LIMIT {
+        return false
+    }
+    for index: cast(s32)0..plan.count - 1 {
+        node := *plan.nodes[index]
+        if node.depth < 0 || !WorkoutPlanNodeValid(node) {
+            return false
+        }
+        open: s32 = 0
+        if index > 0 {
+            previous := plan.nodes[index - 1]
+            open = ifx previous.kind == WORKOUT_NODE_GROUP then previous.depth + 1 else previous.depth
+        }
+        if node.depth > open {
+            return false
+        }
+    }
+    return true
+}
+
+// Copies nodes `from` to before `end` onto the end of `output`, `shift`
+// levels deeper.
+WorkoutPlanCopy :: (output: *WorkoutPlan, source: *WorkoutPlan, from: s32, end: s32, shift: s32) -> bool {
+    for index: from..end - 1 {
+        if output.count >= WORKOUT_PLAN_NODE_LIMIT {
+            return false
+        }
+        node := source.nodes[index]
+        node.depth += shift
+        output.nodes[output.count] = node
+        output.count += 1
+    }
+    return true
+}
+
+WorkoutPlanEmpty :: (plan: *WorkoutPlan) -> WorkoutPlan {
+    result: WorkoutPlan
+    result.name = plan.name
+    result.name_length = plan.name_length
+    return result
+}
+
+// Keeps `result` only when it is well formed.
+WorkoutPlanCommit :: (plan: *WorkoutPlan, result: *WorkoutPlan) -> bool {
+    if !WorkoutPlanWellFormed(result) {
+        return false
+    }
+    plan.* = result.*
+    return true
+}
+
+// Puts nodes `first` to before `end` of `source` before node `slot` of the
+// plan, the first of them at `depth`.
+WorkoutPlanInsertFrom :: (plan: *WorkoutPlan, slot: s32, depth: s32, source: *WorkoutPlan, first: s32, end: s32) -> bool {
+    if slot < 0 || slot > plan.count || first < 0 || first >= end || end > source.count || depth < 0 {
+        return false
+    }
+    result := WorkoutPlanEmpty(plan)
+    shift := depth - source.nodes[first].depth
+    if !WorkoutPlanCopy(*result, plan, 0, slot, 0) || !WorkoutPlanCopy(*result, source, first, end, shift) ||
+        !WorkoutPlanCopy(*result, plan, slot, plan.count, 0) {
+        return false
+    }
+    return WorkoutPlanCommit(plan, *result)
+}
+
+WorkoutPlanInsert :: (plan: *WorkoutPlan, slot: s32, depth: s32, node: WorkoutNode) -> bool {
+    single: WorkoutPlan
+    single.nodes[0] = node
+    single.nodes[0].depth = 0
+    single.count = 1
+    return WorkoutPlanInsertFrom(plan, slot, depth, *single, 0, 1)
+}
+
+// A saved routine joins as a group named after it, played once.
+WorkoutPlanInsertRoutine :: (plan: *WorkoutPlan, slot: s32, depth: s32, routine: *WorkoutPlan) -> bool {
+    if routine.count == 0 {
+        return false
+    }
+    wrapped: WorkoutPlan
+    wrapped.nodes[0] = WorkoutPlanGroupNode(1)
+    name: [WORKOUT_CUSTOM_NAME_LIMIT]u8
+    WorkoutPlanSetTitle(*wrapped.nodes[0], WorkoutPlanName(routine, name[:]))
+    wrapped.count = 1
+    if !WorkoutPlanCopy(*wrapped, routine, 0, routine.count, 1) {
+        return false
+    }
+    return WorkoutPlanInsertFrom(plan, slot, depth, *wrapped, 0, wrapped.count)
+}
+
+// Moves a node, with a group's contents, to before node `slot` at `depth`.
+// Nothing changes when it would land inside itself or too deep.
+WorkoutPlanMove :: (plan: *WorkoutPlan, from: s32, slot: s32, depth: s32) -> bool {
+    if from < 0 || from >= plan.count || slot < 0 || slot > plan.count || depth < 0 {
+        return false
+    }
+    end := WorkoutPlanEnd(plan, from)
+    if slot > from && slot < end {
+        return false
+    }
+    result := WorkoutPlanEmpty(plan)
+    shift := depth - plan.nodes[from].depth
+    for index: cast(s32)0..plan.count {
+        if index == slot && !WorkoutPlanCopy(*result, plan, from, end, shift) {
+            return false
+        }
+        if index < plan.count && (index < from || index >= end) && !WorkoutPlanCopy(*result, plan, index, index + 1, 0) {
+            return false
+        }
+    }
+    return WorkoutPlanCommit(plan, *result)
+}
+
+WorkoutPlanRemove :: (plan: *WorkoutPlan, index: s32) -> bool {
+    if index < 0 || index >= plan.count {
+        return false
+    }
+    result := WorkoutPlanEmpty(plan)
+    if !WorkoutPlanCopy(*result, plan, 0, index, 0) ||
+        !WorkoutPlanCopy(*result, plan, WorkoutPlanEnd(plan, index), plan.count, 0) {
+        return false
+    }
+    return WorkoutPlanCommit(plan, *result)
+}
+
+WorkoutPlanDuplicate :: (plan: *WorkoutPlan, index: s32) -> bool {
+    if index < 0 || index >= plan.count {
+        return false
+    }
+    end := WorkoutPlanEnd(plan, index)
+    copy := plan.*
+    return WorkoutPlanInsertFrom(plan, end, plan.nodes[index].depth, *copy, index, end)
+}
+
+// Wraps the chosen nodes in a new group where the first of them was. They
+// must sit side by side in one group or at the top level; a chosen group
+// brings its contents. Returns the new group's index, or -1.
+WorkoutPlanGroup :: (plan: *WorkoutPlan, chosen: []bool) -> s32 {
+    first: s32 = -1
+    parent: s32 = -1
+    for index: cast(s32)0..plan.count - 1 {
+        if !chosen[index] {
+            continue
+        }
+        above := WorkoutPlanParent(plan, index)
+        // Inside a chosen group the node is already carried along.
+        carried := false
+        while above >= 0 {
+            if chosen[above] {
+                carried = true
+            }
+            above = WorkoutPlanParent(plan, above)
+        }
+        if carried {
+            continue
+        }
+        if first < 0 {
+            first = index
+            parent = WorkoutPlanParent(plan, index)
+        } else if WorkoutPlanParent(plan, index) != parent {
+            return -1
+        }
+    }
+    if first < 0 {
+        return -1
+    }
+    depth := plan.nodes[first].depth
+    result := WorkoutPlanEmpty(plan)
+    if !WorkoutPlanCopy(*result, plan, 0, first, 0) || result.count >= WORKOUT_PLAN_NODE_LIMIT {
+        return -1
+    }
+    group := WorkoutPlanGroupNode(WORKOUT_PLAN_DEFAULT_REPEATS)
+    group.depth = depth
+    result.nodes[result.count] = group
+    result.count += 1
+    index := first
+    while index < plan.count {
+        end := WorkoutPlanEnd(plan, index)
+        if chosen[index] && plan.nodes[index].depth == depth && !WorkoutPlanCopy(*result, plan, index, end, 1) {
+            return -1
+        }
+        if chosen[index] && plan.nodes[index].depth == depth {
+            index = end
+        } else {
+            index += 1
+        }
+    }
+    index = first
+    while index < plan.count {
+        end := WorkoutPlanEnd(plan, index)
+        if chosen[index] && plan.nodes[index].depth == depth {
+            index = end
+        } else {
+            if !WorkoutPlanCopy(*result, plan, index, index + 1, 0) {
+                return -1
+            }
+            index += 1
+        }
+    }
+    if !WorkoutPlanCommit(plan, *result) {
+        return -1
+    }
+    return first
+}
+
+// Replaces a group with its contents, played once.
+WorkoutPlanUngroup :: (plan: *WorkoutPlan, index: s32) -> bool {
+    if !WorkoutPlanIsGroup(plan, index) {
+        return false
+    }
+    end := WorkoutPlanEnd(plan, index)
+    result := WorkoutPlanEmpty(plan)
+    if !WorkoutPlanCopy(*result, plan, 0, index, 0) || !WorkoutPlanCopy(*result, plan, index + 1, end, -1) ||
+        !WorkoutPlanCopy(*result, plan, end, plan.count, 0) {
+        return false
+    }
+    return WorkoutPlanCommit(plan, *result)
+}
+
+// The same blocks and groups in the same order, whatever the name.
+WorkoutPlanSameNodes :: (a: *WorkoutPlan, b: *WorkoutPlan) -> bool {
+    if a.count != b.count {
+        return false
+    }
+    for index: cast(s32)0..a.count - 1 {
+        x := *a.nodes[index]
+        y := *b.nodes[index]
+        if x.kind != y.kind || x.depth != y.depth || x.exercise != y.exercise || x.seconds != y.seconds ||
+            x.variant != y.variant || x.rest != y.rest || x.repeats != y.repeats || x.title_length != y.title_length {
+            return false
+        }
+        for at: cast(s32)0..x.title_length - 1 {
+            if x.title[at] != y.title[at] {
+                return false
+            }
+        }
+    }
+    return true
+}
+
+WorkoutPlanStep :: (value: s32, delta: s32, minimum: s32, maximum: s32) -> s32 {
+    next := value + delta
+    if next < minimum {
+        return minimum
+    }
+    if next > maximum {
+        return maximum
+    }
+    return next
+}
+
+// The steppers: active seconds in 5 s steps, rest in 5 s steps, rounds by one.
+WorkoutPlanAdjustSeconds :: (plan: *WorkoutPlan, index: s32, delta: s32) -> bool {
+    if index < 0 || index >= plan.count || plan.nodes[index].kind != WORKOUT_NODE_EXERCISE {
+        return false
+    }
+    node := *plan.nodes[index]
+    next := WorkoutPlanStep(node.seconds, delta, WORKOUT_CUSTOM_MIN_SECONDS, WORKOUT_CUSTOM_MAX_SECONDS)
+    changed := next != node.seconds
+    node.seconds = next
+    return changed
+}
+
+WorkoutPlanAdjustRest :: (plan: *WorkoutPlan, index: s32, delta: s32) -> bool {
+    if index < 0 || index >= plan.count {
+        return false
+    }
+    node := *plan.nodes[index]
+    next := WorkoutPlanStep(node.rest, delta, 0, WORKOUT_CUSTOM_REST_MAX)
+    changed := next != node.rest
+    node.rest = next
+    return changed
+}
+
+WorkoutPlanAdjustRepeats :: (plan: *WorkoutPlan, index: s32, delta: s32) -> bool {
+    if !WorkoutPlanIsGroup(plan, index) {
+        return false
+    }
+    node := *plan.nodes[index]
+    next := WorkoutPlanStep(node.repeats, delta, 1, WORKOUT_PLAN_REPEAT_MAX)
+    changed := next != node.repeats
+    node.repeats = next
+    return changed
+}
+
+WorkoutPlanSetVariant :: (plan: *WorkoutPlan, index: s32, variant: s32) -> bool {
+    if index < 0 || index >= plan.count || plan.nodes[index].kind != WORKOUT_NODE_EXERCISE ||
+        !WorkoutBlockSupports(plan.nodes[index].exercise, variant) {
+        return false
+    }
+    plan.nodes[index].variant = variant
+    return true
+}
+
+// Appends the steps of nodes `first` to before `end`. `rest` carries the
+// rest owed before the next step: an exercise's own rest, or after a
+// round the longer of that and the group's rest.
+WorkoutPlanAppend :: (plan: *WorkoutPlan, first: s32, end: s32, sequence: *WorkoutSequence, rest: *s32) -> bool {
+    index := first
+    while index < end {
+        node := plan.nodes[index]
+        if node.kind == WORKOUT_NODE_EXERCISE {
+            before: s32 = ifx sequence.count == 0 then 0 else rest.*
+            if !WorkoutSequenceInsert(sequence, sequence.count, WorkoutBlock.{node.exercise, node.seconds, node.variant, before}) {
+                return false
+            }
+            rest.* = node.rest
+            index += 1
+        } else {
+            inner := WorkoutPlanEnd(plan, index)
+            for round: cast(s32)1..node.repeats {
+                if !WorkoutPlanAppend(plan, index + 1, inner, sequence, rest) {
+                    return false
+                }
+                if node.rest > rest.* {
+                    rest.* = node.rest
+                }
+            }
+            index = inner
+        }
+    }
+    return true
+}
+
+// The timeline playback follows: groups repeated, rests before the blocks
+// that follow them, and the routine's name.
+WorkoutPlanExpand :: (plan: *WorkoutPlan, sequence: *WorkoutSequence) -> bool {
+    result: WorkoutSequence
+    result.name = plan.name
+    result.name_length = plan.name_length
+    rest: s32 = 0
+    if !WorkoutPlanWellFormed(plan) || !WorkoutPlanAppend(plan, 0, plan.count, *result, *rest) || result.count == 0 {
+        return false
+    }
+    <<sequence = result
+    return true
+}
+
+WorkoutPlanTimesOf :: (plan: *WorkoutPlan) -> WorkoutPlanTimes {
+    sequence: WorkoutSequence
+    if !WorkoutPlanExpand(plan, *sequence) {
+        return WorkoutPlanTimes.{}
+    }
+    return WorkoutPlanTimes.{.valid = true, .steps = sequence.count,
+        .total_seconds = cast(s32)(WorkoutSequenceStart(*sequence, sequence.count) / 1000),
+        .active_seconds = WorkoutSequenceActiveSeconds(*sequence)}
+}
+
+// The steps one group or exercise adds, all its rounds included.
+WorkoutPlanNodeSteps :: (plan: *WorkoutPlan, index: s32) -> s32 {
+    node := plan.nodes[index]
+    if node.kind == WORKOUT_NODE_EXERCISE {
+        return 1
+    }
+    steps: s32 = 0
+    inner := index + 1
+    end := WorkoutPlanEnd(plan, index)
+    while inner < end {
+        steps += WorkoutPlanNodeSteps(plan, inner)
+        inner = WorkoutPlanEnd(plan, inner)
+    }
+    return steps * node.repeats
+}
+
+// Active seconds of one group or exercise, all its rounds included.
+WorkoutPlanNodeSeconds :: (plan: *WorkoutPlan, index: s32) -> s32 {
+    node := plan.nodes[index]
+    if node.kind == WORKOUT_NODE_EXERCISE {
+        return node.seconds
+    }
+    seconds: s32 = 0
+    inner := index + 1
+    end := WorkoutPlanEnd(plan, index)
+    while inner < end {
+        seconds += WorkoutPlanNodeSeconds(plan, inner)
+        inner = WorkoutPlanEnd(plan, inner)
+    }
+    return seconds * node.repeats
+}
+
+WorkoutPlanName :: (plan: *WorkoutPlan, output: []u8) -> string {
+    if plan.name_length <= 0 || plan.name_length > output.count || plan.name_length > WORKOUT_CUSTOM_NAME_LIMIT {
+        return ""
+    }
+    for index: cast(s32)0..plan.name_length - 1 {
+        output[index] = plan.name[index]
+    }
+    return TextFromBytes(output[:plan.name_length])
+}
+
+WorkoutPlanSetName :: (plan: *WorkoutPlan, name: string) -> bool {
+    if !WorkoutNameValid(name) {
+        return false
+    }
+    index: s32 = 0
+    for byte: name {
+        plan.name[index] = byte
+        index += 1
+    }
+    plan.name_length = index
+    return true
+}
+
+// workout/2, the name, then a line per node: "e depth exercise seconds
+// variant rest" or "g depth rounds rest" with the group's title, if any.
+WorkoutPlanEncode :: (plan: *WorkoutPlan) -> string {
+    name_buffer: [WORKOUT_CUSTOM_NAME_LIMIT]u8
+    name := WorkoutPlanName(plan, name_buffer[:])
+    if !WorkoutNameValid(name) || plan.count < 1 || !WorkoutPlanWellFormed(plan) {
+        return ""
+    }
+    line: Vec(u8)
+    BuilderPrint(*line, "workout/2\n%\n", name)
+    for index: cast(s32)0..plan.count - 1 {
+        node := *plan.nodes[index]
+        if node.kind == WORKOUT_NODE_EXERCISE {
+            BuilderPrint(*line, "e % % % % %\n", node.depth, WorkoutExerciseKey(node.exercise), node.seconds,
+                node.variant, node.rest)
+        } else if node.title_length > 0 {
+            title: [WORKOUT_PLAN_TITLE_LIMIT]u8
+            BuilderPrint(*line, "g % % % %\n", node.depth, node.repeats, node.rest, WorkoutPlanTitle(node, title[:]))
+        } else {
+            BuilderPrint(*line, "g % % %\n", node.depth, node.repeats, node.rest)
+        }
+    }
+    text := BuilderFinish(line)
+    if text.count > WORKOUT_PLAN_TEXT_LIMIT {
+        return ""
+    }
+    return text
+}
+
+WorkoutPlanNumber :: (word: string, digits: s64) -> (value: s32, ok: bool) {
+    if word.count == 0 || word.count > digits {
+        return 0, false
+    }
+    value, ok := TextInteger(word)
+    return cast(s32)value, ok
+}
+
+WorkoutPlanDecodeNode :: (line: string, node: *WorkoutNode) -> bool {
+    words := TextSplit(line, " ")
+    if words.count < 4 {
+        return false
+    }
+    depth, depth_ok := WorkoutPlanNumber(words[1], 1)
+    if !depth_ok {
+        return false
+    }
+    node.* = WorkoutNode.{.depth = depth}
+    if words[0] == "e" {
+        if words.count != 6 {
+            return false
+        }
+        exercise: s32 = 0
+        while exercise < WORKOUT_MOVE_COUNT && WorkoutExerciseKey(exercise) != words[2] {
+            exercise += 1
+        }
+        seconds, seconds_ok := WorkoutPlanNumber(words[3], 3)
+        variant, variant_ok := WorkoutPlanNumber(words[4], 1)
+        rest, rest_ok := WorkoutPlanNumber(words[5], 3)
+        node.kind = WORKOUT_NODE_EXERCISE
+        node.exercise = exercise
+        node.seconds = seconds
+        node.variant = variant
+        node.rest = rest
+        return seconds_ok && variant_ok && rest_ok && WorkoutPlanNodeValid(node)
+    }
+    if words[0] != "g" {
+        return false
+    }
+    repeats, repeats_ok := WorkoutPlanNumber(words[2], 2)
+    rest, rest_ok := WorkoutPlanNumber(words[3], 3)
+    node.kind = WORKOUT_NODE_GROUP
+    node.exercise = -1
+    node.repeats = repeats
+    node.rest = rest
+    if words.count > 4 {
+        start := words[0].count + words[1].count + words[2].count + words[3].count + 4
+        title := line[start:line.count]
+        if title.count == 0 || title.count > WORKOUT_PLAN_TITLE_LIMIT {
+            return false
+        }
+        for byte: title {
+            node.title[node.title_length] = byte
+            node.title_length += 1
+        }
+    }
+    return repeats_ok && rest_ok && WorkoutPlanNodeValid(node)
+}
+
+// A routine saved before groups becomes a plan of top-level exercises with
+// the same names, seconds and forms, and plays exactly as before.
+WorkoutPlanFromSequence :: (sequence: *WorkoutSequence, plan: *WorkoutPlan) -> bool {
+    result: WorkoutPlan
+    result.name = sequence.name
+    result.name_length = sequence.name_length
+    for index: cast(s32)0..sequence.count - 1 {
+        block := sequence.blocks[index]
+        result.nodes[result.count] = WorkoutNode.{.kind = WORKOUT_NODE_EXERCISE, .exercise = block.exercise,
+            .seconds = block.seconds, .variant = block.variant}
+        result.count += 1
+    }
+    if result.count == 0 || !WorkoutPlanWellFormed(*result) {
+        return false
+    }
+    <<plan = result
+    return true
+}
+
+// Reads a saved routine in either format. Malformed and future records are
+// rejected as a whole; they stay on disk and keep their slot.
+WorkoutPlanDecode :: (text: string, plan: *WorkoutPlan) -> bool {
+    if TextHasPrefix(text, "workout/1\n") {
+        sequence: WorkoutSequence
+        return WorkoutSequenceDecode(text, *sequence) && WorkoutPlanFromSequence(*sequence, plan)
+    }
+    if text.count == 0 || text.count > WORKOUT_PLAN_TEXT_LIMIT || !TextHasPrefix(text, "workout/2\n") ||
+        text[text.count - 1] != 10 {
+        return false
+    }
+    result: WorkoutPlan
+    index: s32 = 0
+    for line: TextLines(text) {
+        if index == 1 {
+            if !WorkoutPlanSetName(*result, line) {
+                return false
+            }
+        } else if index >= 2 && line.count != 0 {
+            if result.count >= WORKOUT_PLAN_NODE_LIMIT || !WorkoutPlanDecodeNode(line, *result.nodes[result.count]) {
+                return false
+            }
+            result.count += 1
+        }
+        index += 1
+    }
+    if result.count == 0 || WorkoutPlanEncode(*result) != text {
+        return false
+    }
+    <<plan = result
+    return true
+}

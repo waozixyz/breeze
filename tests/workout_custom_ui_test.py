@@ -142,17 +142,38 @@ def press_builder(driver, label, role='button'):
     driver.press(label=label, role=role)
 
 
-def adjust_seconds(driver, seconds):
-    press_builder(driver, 'Active seconds', 'text_field')
-    driver.key('a', control=True)
-    driver.type(str(seconds))
-    driver.key('enter')
+def tap(driver, node):
+    x, y = driver.center(node)
+    driver.pointer(x, y)
+    driver.pointer(x, y, down=True)
+    driver.pointer(x, y, down=False)
+    driver.release_pointer()
+    driver.wait_idle(frames=2, timeout=2)
 
 
-def add(driver, exercise, seconds):
-    press_builder(driver, 'Add exercise')
+def step(driver, label, presses):
+    """Press a block's length stepper: each press is five seconds."""
+    sign = '+' if presses > 0 else '-'
+    for _ in range(abs(presses)):
+        reveal_builder(driver, label, 'spinbox')
+        nodes = driver.tree()
+        box = next(node for node in nodes if node['label'] == label and node['visible'] and
+                   'spinbox' in (node['role'], node['kind']))
+        tap(driver, next(node for node in nodes if node['parent'] == box['index'] and node['label'] == sign))
+
+
+def add(driver, exercise, presses):
+    press_builder(driver, 'Add block')
     press_builder(driver, exercise)
-    adjust_seconds(driver, seconds)
+    reveal_builder(driver, 'Length', 'spinbox')
+    step(driver, 'Length', presses)
+
+
+def blocks(driver, labels):
+    """The visible blocks among labels, top to bottom."""
+    nodes = [node for node in driver.tree() if node['label'] in labels and node['visible'] and
+             'button' in (node['role'], node['kind'])]
+    return [node['label'] for node in sorted(nodes, key=lambda node: node['y'])]
 
 
 def create_routine(driver, profile):
@@ -160,24 +181,25 @@ def create_routine(driver, profile):
     driver.press(label='New routine', role='button')
     driver.press(label='Routine name', role='text_field')
     driver.type('Mat and wall')
-    add(driver, 'Squats', 75)
-    press_builder(driver, 'Standard form')
-    reveal_builder(driver, 'Shallow')
-    add(driver, 'Push-ups', 5)
+    add(driver, 'Squats', 9)
+    press_builder(driver, 'Shallow')
+    add(driver, 'Push-ups', -5)
     press_builder(driver, 'Duplicate')
-    reveal_builder(driver, '3. Push-ups · 5 sec')
-    press_builder(driver, 'Remove exercise')
-    driver.wait_gone(label='3. Push-ups · 5 sec', role='button', visible=False)
-    add(driver, 'Wall sit', 5)
+    assert blocks(driver, {'Push-ups'}) == ['Push-ups', 'Push-ups']
+    press_builder(driver, 'Remove')
+    driver.wait_gone(label='Length', role='spinbox')
+    assert blocks(driver, {'Push-ups'}) == ['Push-ups']
+    add(driver, 'Wall sit', -5)
     press_builder(driver, 'Up')
-    reveal_builder(driver, '2. Wall sit · 5 sec')
-    reveal_builder(driver, '3. Push-ups · 5 sec')
-    reveal_builder(driver, '117 s total · 85 s active · 32 s transitions', 'text')
+    order = blocks(driver, {'Squats', 'Push-ups', 'Wall sit'})
+    assert order == ['Squats', 'Wall sit', 'Push-ups'], order
+    reveal_builder(driver, '1:57 total · 1:25 active · 3 exercises', 'text')
     press_builder(driver, 'Save')
     driver.wait(label='Routine saved.', role='text')
     data = saved(profile)
     assert data['workout_custom_v1_0'] == 'workout/2\nExisting routine\n'
-    assert data['workout_custom_v1_1'] == 'workout/1\nMat and wall\nsquats 75 3\nwall_sit 5 0\npush_ups 5 0\n'
+    assert data['workout_custom_v1_1'] == ('workout/2\nMat and wall\ne 0 squats 75 3 0\ne 0 wall_sit 5 0 0\n'
+                                           'e 0 push_ups 5 0 0\n'), data['workout_custom_v1_1']
     assert data['workout_routine'] == '2'
 
 
@@ -311,13 +333,13 @@ def capture_custom_character(driver, window, output, character, env):
 def play_routine(driver, profile, output, window, env):
     open_routine_library(driver)
     driver.press(label='Mat and wall', role='button')
-    driver.wait(label='117 s total · 85 s active · 32 s transitions', role='text')
-    press_builder(driver, '3. Push-ups · 5 sec')
-    adjust_seconds(driver, 6)
-    reveal_builder(driver, '118 s total · 86 s active · 32 s transitions', 'text')
+    driver.wait(label='1:57 total · 1:25 active · 3 exercises', role='text')
+    press_builder(driver, 'Push-ups')
+    step(driver, 'Length', 1)
+    reveal_builder(driver, '2:02 total · 1:30 active · 3 exercises', 'text')
     press_builder(driver, 'Save')
     driver.wait(label='Routine saved.', role='text')
-    assert saved(profile)['workout_custom_v1_1'].endswith('push_ups 6 0\n')
+    assert saved(profile)['workout_custom_v1_1'].endswith('e 0 push_ups 10 0 0\n')
     pose = capture_custom_character(driver, window, output, 'Man', env)
     driver.press(label='Resume', role='button', settle=False)
     driver.wait(label='Exercise 1 of 3', role='text', timeout=25)
@@ -356,6 +378,12 @@ def play_routine(driver, profile, output, window, env):
     return pose
 
 
+def work_of(values, index):
+    """A Workout checkpoint's covered work for one step: four fields, then each step's preparation and work."""
+    steps = (len(values) - 4) // 2
+    return values[4 + steps + index]
+
+
 def checkpoint(profile, matches):
     deadline = time.monotonic() + 25
     while time.monotonic() < deadline:
@@ -385,6 +413,7 @@ def recovery_prompt(driver, title, stage=None):
 
 def recovery_test(arguments, env, profile, driver, output):
     routine = 'workout/1\nRecovery circuit\nsquats 35 3\npush_ups 12 0\n'
+    upgraded = 'workout/2\nRecovery circuit\ne 0 squats 35 3 0\ne 0 push_ups 12 0 0\n'
     legacy = '{"schema":1,"started_at":1794800000,"activity":1,"topic":0,"rounds":[42]}'
 
     def setting(key, value):
@@ -426,10 +455,10 @@ def recovery_test(arguments, env, profile, driver, output):
         driver.press(label='Recovery circuit', role='button')
         driver.press(label='Start routine', role='button')
         driver.wait(label='Exercise 1 of 2', role='text')
-        checkpoint(profile, lambda v: v[16] > 1000)
+        checkpoint(profile, lambda v: work_of(v, 0) > 1000)
         driver.press(label='Pause', role='button', settle=False)
         driver.wait(label='Resume', role='button')
-        first = checkpoint(profile, lambda v: v[1] == 1 and v[16] > 1000)
+        first = checkpoint(profile, lambda v: v[1] == 1 and work_of(v, 0) > 1000)
         interrupt(app)
     setting('workout_character', '0')
     setting('workout_custom_v1_1', routine.replace('Recovery circuit', 'Edited circuit'))
@@ -443,7 +472,7 @@ def recovery_test(arguments, env, profile, driver, output):
         later = checkpoint(profile, lambda v: v[2] > elapsed)
         assert later['started_at'] == first['started_at']
         assert later['resume']['values'][1] == 1 and later['resume']['values'][2] - elapsed < 3000
-        assert bytes.fromhex(later['resume']['definition']).decode() == routine
+        assert bytes.fromhex(later['resume']['definition']).decode() == upgraded
         interrupt(app)
     with running('workout-repeated') as app:
         recovery_prompt(driver, 'Recovery circuit', 'Squats · Exercise 1 of 2')
