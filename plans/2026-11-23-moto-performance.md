@@ -8,14 +8,15 @@ keeps 127 frames per layer, so a benchmark's `fps` is only a floor; the median
 gap between presented frames is the pacing figure.
 
 Already fixed (Kryon efeafd9c, 61963a58, 7e1a37e2 and 2d7d37ca; Entity
-8d30188; Breeze 6affdbaa and 1039893c): the GLES presenter falling back to
-software after a smaller picture upload, the per-pixel CPU path for crops past
-an image edge by float rounding, decoding glTF images no material samples, the
-synchronous figure loads that froze Customize (38 s) and Workout start (17 s),
-the Practice tabs scrolling off the right edge, the one-row tabs clipping their
-last letters, capsule outlines sampled pixel by pixel, the account state built
-several times per pump, and the window size queried over binder more than once
-per frame (now 1–3%).
+8d30188; Breeze 6affdbaa, 1039893c and 0d101a4f): the GLES presenter falling
+back to software after a smaller picture upload, the per-pixel CPU path for
+crops past an image edge by float rounding, decoding glTF images no material
+samples, the synchronous figure loads that froze Customize (38 s) and Workout
+start (17 s), the Practice tabs scrolling off the right edge, the one-row tabs
+clipping their last letters, capsule outlines sampled pixel by pixel, the
+account state built several times per pump, the window size queried over binder
+more than once per frame (now 1–3%), and the settings cache, which now empties
+only when the settings table is written instead of on every row change.
 
 On the `1039893c` build: GLES presenter, no software fallback; idle Practice
 home 21 fps at a 52 ms median gap (was 8.7 fps, 121 ms); tab switch 19 fps,
@@ -25,6 +26,13 @@ Hof controls) opens at once and the Tai Chi Customize, which froze for 37 s,
 opens with a 468 ms worst gap and streams the two figure previews in without
 blocking. First frame 4.0 s cold, 2.9 s warm. The one-row tabs show every
 label whole.
+
+On the idle Workout tab the settings cache stayed inside the noise:
+fresh-process runs of the verification APK measured a 34.63 ms median gap
+before and 34.65 ms after, and a 51.90 ms before and 51.94 ms after. The screen
+takes either of those two pacing modes with both builds, so the 7–12% of the
+app thread the cached read used does not set the median gap; the change still
+removes its SQL and the 8192-byte copies from every cached read.
 
 ## Open
 
@@ -47,12 +55,6 @@ label whole.
   `ProviderBackupStatusPump` (13.8% of the Habits thread). Check the cheap
   owner and throttle conditions before building it, in
   `entity/src/native_management.zi`; keep the account and backup semantics.
-- **Settings cache emptied by any write.** `SettingsCacheFind` drops all 64
-  entries when `storage_data_revision()` moves, and the revision follows the
-  connection's total changes, so a Workout's progress drafts or a sync write
-  flush every setting. The cached path also copies through 8192-byte buffers
-  (`AppTextFromCString`, `AppCopyText`: 7–12%). Invalidate on settings writes
-  only, and return cached values without the copy.
 - **Android font paint state.** `AndroidFontPaint` looks up its Java methods
   with `GetMethodID` on every call (about 7% alone); the paint reuse another
   lane is writing covers the rebuild, not the lookup.
