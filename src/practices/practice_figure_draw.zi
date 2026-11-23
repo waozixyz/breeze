@@ -14,6 +14,11 @@
 #import, file "tai_chi/tai_chi_view.zi";
 #import, file "tai_chi/tai_chi_math.zi";
 Image :: #import "kryon/image";
+#if #defined(ANDROID_BUILD) {
+    #import, file "practice_figure_load.zi";
+    #import, file "../platform/host_clock.zi";
+    Loading :: #import "kryon/loading_indicator";
+}
 
 PracticeFigurePlacement :: struct {
     offset: TaiChiVector3
@@ -37,6 +42,9 @@ PracticeFigureTexture :: struct {
 }
 
 practice_figure_stages: [2]FigureStage;
+#if #defined(ANDROID_BUILD) {
+    practice_figure_loads: [2]PracticeFigureLoad;
+}
 practice_figure_textures: [24]PracticeFigureTexture;
 practice_figure_clock: u64;
 
@@ -51,15 +59,28 @@ PracticeFigureDrawModel :: (session: Session, solved: *TaiChiSolved, rig: *TaiCh
     width := cast(s32)FigureMax(1.0, cast(float64)area.width * scale)
     height := cast(s32)FigureMax(1.0, cast(float64)area.height * scale)
     stage := *practice_figure_stages[ifx man then 1 else 0]
-    if !stage.model.ready {
-        asset := AssetRead(ifx man then "assets/practices/shared/figure/man.vrm" else "assets/practices/shared/figure/woman.vrm")
-        if !asset.found {
-            return false
+    #if #defined(ANDROID_BUILD) {
+        // A phone reads a model for many seconds on its own thread. Until it
+        // is ready the figure's place shows the loading dots, never an older
+        // figure; the caller draws its own only when the model cannot load.
+        if !PracticeFigureModelReady(man) {
+            if !PracticeFigureModelPending(man) {
+                return false
+            }
+            Loading.Draw(session, Loading.Props.{.key = key, .bounds = area, .now = HostSeconds(), .scale = 1.0})
+            return true
         }
-        descriptor := cast(*TextDescriptor)(*asset.data)
-        if !FigureStageLoadBytes(stage, BytesFromPointer(descriptor.data, cast(u64)asset.data.count)) {
-            FigureStageFree(stage)
-            return false
+    } else {
+        if !stage.model.ready {
+            asset := AssetRead(PracticeFigureModelPath(man))
+            if !asset.found {
+                return false
+            }
+            descriptor := cast(*TextDescriptor)(*asset.data)
+            if !FigureStageLoadBytes(stage, BytesFromPointer(descriptor.data, cast(u64)asset.data.count)) {
+                FigureStageFree(stage)
+                return false
+            }
         }
     }
     slot := PracticeFigureTextureFor(session, key, width, height)
@@ -129,8 +150,63 @@ PracticeFigureDrawRelease :: () {
         BitmapImageRelease(slot.session, slot.texture)
         slot.* = .{}
     }
+    #if #defined(ANDROID_BUILD) {
+        for index: 0..practice_figure_loads.count - 1 {
+            PracticeFigureLoadWait(*practice_figure_loads[index])
+        }
+    }
     for index: 0..practice_figure_stages.count - 1 {
         FigureStageFree(*practice_figure_stages[index])
+    }
+}
+
+// Starts loading the man's or woman's model before its first drawing where
+// models load on their own thread, so a chosen figure comes first.
+PracticeFigurePrepare :: (man: bool) {
+    #if #defined(ANDROID_BUILD) {
+        unused PracticeFigureModelReady(man)
+    } else {
+        unused man
+    }
+}
+
+#scope_file
+PracticeFigureModelPath :: (man: bool) -> string {
+    return ifx man then "assets/practices/shared/figure/man.vrm" else "assets/practices/shared/figure/woman.vrm"
+}
+
+#if #defined(ANDROID_BUILD) {
+    // Whether the man's or woman's model is loaded. The first call starts its
+    // load once no other model is loading, so two models never read at once.
+    #scope_file
+    PracticeFigureModelReady :: (man: bool) -> bool {
+        index := ifx man then 1 else 0
+        load := *practice_figure_loads[index]
+        if PracticeFigureLoadReady(load) {
+            return practice_figure_stages[index].model.ready
+        }
+        if load.started || PracticeFigureLoadBusy(*practice_figure_loads[1 - index]) {
+            return false
+        }
+        asset := AssetRead(PracticeFigureModelPath(man))
+        if !asset.found {
+            return false
+        }
+        descriptor := cast(*TextDescriptor)(*asset.data)
+        unused PracticeFigureLoadStart(load, *practice_figure_stages[index],
+            BytesFromPointer(descriptor.data, cast(u64)asset.data.count))
+        return false
+    }
+
+    // Whether the model is on its way: loading, or waiting for the other
+    // model. A model that failed or is not installed is not pending.
+    #scope_file
+    PracticeFigureModelPending :: (man: bool) -> bool {
+        load := *practice_figure_loads[ifx man then 1 else 0]
+        if load.started {
+            return !load.finished
+        }
+        return AssetRead(PracticeFigureModelPath(man)).found
     }
 }
 

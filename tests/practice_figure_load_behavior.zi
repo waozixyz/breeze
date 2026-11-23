@@ -1,0 +1,64 @@
+// Workout Customize opens with the woman and the man side by side. On a phone
+// their models load on their own threads: the frame that opens the screen may
+// only copy the models' bytes, while reading the models happens elsewhere.
+#import, file "../src/practices/practice_figure_load.zi";
+#import "figure_stage"
+#import "std/file"
+#import "std/timer_linux"
+#import "std/vec"
+
+failures: s32;
+
+Expect :: (ok: bool, what: string) {
+    if !ok {
+        failures += 1
+        print("FAIL: %\n", what)
+    }
+}
+
+stages: [2]FigureStage;
+loads: [2]PracticeFigureLoad;
+
+main :: () -> s32 {
+    paths: [2]string = .["build/packages/practices/shared/figure/woman.vrm",
+        "build/packages/practices/shared/figure/man.vrm"]
+    woman: Vec(u8)
+    man: Vec(u8)
+    defer VecFree(woman)
+    defer VecFree(man)
+    if !ReadFileInto(paths[0], *woman) || !ReadFileInto(paths[1], *man) {
+        print("FAIL: read the figure models; run make packages\n")
+        return 1
+    }
+
+    opened := MonotonicMilliseconds()
+    woman_started := PracticeFigureLoadStart(*loads[0], *stages[0], woman[:])
+    man_started := PracticeFigureLoadStart(*loads[1], *stages[1], man[:])
+    first_ready := PracticeFigureLoadReady(*loads[0]) || PracticeFigureLoadReady(*loads[1])
+    setup_ms := MonotonicMilliseconds() - opened
+    Expect(woman_started && man_started, "both models start loading")
+    Expect(!first_ready, "starting does not read a model on the calling thread")
+    Expect(!PracticeFigureLoadStart(*loads[0], *stages[0], woman[:]), "a loading model is not started twice")
+
+    deadline := opened + 300000
+    while !(PracticeFigureLoadReady(*loads[0]) && PracticeFigureLoadReady(*loads[1])) &&
+        MonotonicMilliseconds() < deadline {
+        unused SleepMilliseconds(10)
+    }
+    loaded_ms := MonotonicMilliseconds() - opened
+    Expect(PracticeFigureLoadReady(*loads[0]) && stages[0].model.ready, "the woman's model loads")
+    Expect(PracticeFigureLoadReady(*loads[1]) && stages[1].model.ready, "the man's model loads")
+    // The screen's own frame does a small, fixed share of the work.
+    Expect(setup_ms <= 250 && setup_ms * 10 <= loaded_ms, "starting both loads stays a small share of loading them")
+    print("figure models: setup % ms on the calling thread, loaded after % ms\n", setup_ms, loaded_ms)
+
+    for index: 0..1 {
+        PracticeFigureLoadWait(*loads[index])
+        FigureStageFree(*stages[index])
+    }
+    Expect(!loads[0].started && !loads[1].started, "waiting forgets finished loads")
+    if failures == 0 {
+        print("practice_figure_load_behavior: all checks passed\n")
+    }
+    return ifx failures == 0 then 0 else 1
+}

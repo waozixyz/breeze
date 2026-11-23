@@ -1,0 +1,76 @@
+// Loads a practice figure's model on its own thread. Reading a VRM takes many
+// seconds on a phone, so a screen showing the figure keeps running and draws
+// the flat figure until the model is ready. The stage belongs to the thread
+// until PracticeFigureLoadReady or PracticeFigureLoadWait has seen it finish.
+#import "figure_stage"
+#import "std/thread_linux"
+#import "std/vec"
+
+figure_load_c :: #system_library "c";
+FigureLoadCopy :: (output: *void, input: *void, count: usize) -> *void #foreign figure_load_c "memcpy";
+
+PracticeFigureLoad :: struct {
+    thread: Thread
+    bytes: Vec(u8)
+    stage: *FigureStage
+    started: bool
+    finished: bool
+    loaded: bool
+}
+
+// Starts loading MODEL_BYTES into STAGE. The bytes are copied first, so the
+// asset may change while the model loads. False when it cannot start.
+PracticeFigureLoadStart :: (load: *PracticeFigureLoad, stage: *FigureStage, model_bytes: []u8) -> bool {
+    if load.started || model_bytes.count == 0 {
+        return false
+    }
+    if !VecResize(load.bytes, model_bytes.count) {
+        return false
+    }
+    unused FigureLoadCopy(cast(*void)*load.bytes[0], cast(*void)*model_bytes[0], cast(usize)model_bytes.count)
+    load.stage = stage
+    load.finished = false
+    load.loaded = false
+    procedure: ThreadProcedure = PracticeFigureLoadRun
+    load.started = ThreadStart(*load.thread, procedure, cast(*void)load)
+    if !load.started {
+        VecFree(load.bytes)
+    }
+    return load.started
+}
+
+// Whether the stage holds the loaded model. Never waits.
+PracticeFigureLoadReady :: (load: *PracticeFigureLoad) -> bool {
+    if load.started && !load.finished && ThreadFinished(*load.thread) {
+        load.finished = true
+        VecFree(load.bytes)
+    }
+    return load.finished && load.loaded
+}
+
+// Whether a started load is still running. Never waits.
+PracticeFigureLoadBusy :: (load: *PracticeFigureLoad) -> bool {
+    unused PracticeFigureLoadReady(load)
+    return load.started && !load.finished
+}
+
+// Waits for a started load, then forgets it, so the stage can be freed.
+PracticeFigureLoadWait :: (load: *PracticeFigureLoad) {
+    if load.started && !load.finished {
+        ThreadWait(*load.thread)
+    }
+    VecFree(load.bytes)
+    load.stage = null
+    load.started = false
+    load.finished = false
+    load.loaded = false
+}
+
+#scope_file
+PracticeFigureLoadRun :: (argument: *void) {
+    load := cast(*PracticeFigureLoad)argument
+    load.loaded = FigureStageLoadBytes(load.stage, load.bytes[:])
+    if !load.loaded {
+        FigureStageFree(load.stage)
+    }
+}
