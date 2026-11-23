@@ -1,11 +1,11 @@
 # Changelog
 
 ## [Unreleased]
-- Follow a marker around Box Breathing’s painted square. The original skies drift in both breathing banners, and Wim Hof keeps the rising steam above its ice bath.
+- Follow a marker around Box Breathing’s glowing square, now drawn behind the figure. Box Breathing and Wim Hof keep their original paintings as separate land and figure layers, and cold vapour rises from the Wim Hof ice bath puff by puff.
 - Workout shows one countdown and starts narration when the figure is ready. Choose Woman or Man in Customize. Open the routine manager from the third Workout card.
 - Woman wears the fitted Workout top and leggings in Sun Salutation and brings her palms together at the chest in Mountain pose.
 - Practice cards stay responsive while their animated banners start.
-- Switch between day and night in the top-right corner of Practices. Characters and landscapes keep their painted details. Steam rises above the original Wim Hof ice bath. The other banners show drifting clouds from NOAA photography and stars from Hipparcos.
+- Switch between day and night in the top-right corner of Practices. Characters and landscapes keep their painted details. Every banner has a live sky painted as you watch: its colours, the sun or moon and the moon’s phase follow your local time and date, Hipparcos stars flicker at night, and clouds drift at different depths and change shape. Each banner has its own scenery.
 - Swipe from the 7-Minute Workout card to the 4-Minute Workout card to start the shorter circuit. Its character and landscape are separate from the animated sky.
 - Build and save custom workouts with timed exercises, pose options, and automatic transitions. The editor shows active time and transition time separately.
 - Choose Woman or Man in Workout Customize. Your choice is saved for both circuits and custom routines.

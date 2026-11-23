@@ -447,7 +447,7 @@ INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zx
 APP_SOURCES := $(shell find apps src/apps -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
 APP_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp assets/navigation assets/apps/icons 2>/dev/null)
 APP_RESOURCES += $(shell find -L $(PRACTICE_MEDIA) -type f -not -path '*/.git/*' 2>/dev/null) $(shell rg --files design/tai-chi/text 2>/dev/null) apps/practice/content.json $(wildcard design/tai-chi/narration*.json design/workout/narration*.json design/narration/*.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt design/sun-salutation/narration/text-female/*.txt) $(wildcard design/lumi-guide/*.json) $(wildcard design/astral-projection/*.json) scripts/practice_content.py scripts/practice_media.py scripts/tai_chi_preview.py apps/practice/course_access.zi scripts/generate-lumi-guide-narration.py
-APP_RESOURCES += assets/app/practice-clouds.rg $(wildcard design/lumi-guide/text-female/*.txt)
+APP_RESOURCES += $(wildcard design/lumi-guide/text-female/*.txt)
 APP_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievement-locales/*.json)
 APP_RESOURCES += $(wildcard assets/*/sidebar.shape)
 

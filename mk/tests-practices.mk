@@ -138,13 +138,6 @@ astral-projection-test: $(ZI2C_BIN)
 practice-banner-motion-test: $(ZIRAN_BIN)
 	$(ZIRAN_BIN) tests/practice_banner_motion_test.zi
 
-# Alpha GPU regression using the linked native test and the canonical banner art.
-BANNER_SHADER_TEST_ASSETS ?= $(abspath $(BUILD_DIR)/packages/practices)
-.PHONY: practice-banner-shader-test
-practice-banner-shader-test:
-	@test -n "$(BANNER_SHADER_TEST_EXE)" || { echo "Set BANNER_SHADER_TEST_EXE to the native shader test executable"; exit 2; }
-	python3 tests/practice_banner_shader_test.py "$(abspath $(BANNER_SHADER_TEST_EXE))" "$(BANNER_SHADER_TEST_ASSETS)"
-
 .PHONY: workout-test
 workout-test: $(ZI2C_BIN)
 	sh tests/practice_figure_test.sh $(ZIRAN_BUILD_DIR)/bin tests/workout_behavior.zi

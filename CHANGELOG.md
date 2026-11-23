@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 - Fix Backspace, edits, backup restores. Find Photos/Radio. Dew via Telegram Stars. Fast Lumi chat, unseen reply alerts.
-- Start/switch/resume. Seek Astral. 4-min and custom workouts. Day/night banners. Download status/retry. PiP/Home fixes.
+- Start/switch/resume. Seek Astral. 4-min and custom workouts. Live-sky banners. Download status/retry. PiP/Home fixes.
 - Reset break timers on return. Themed timers/coins. Daily coins, Diary links, one habit graph, stats and Activity icons.
 
 ## [2.1.63] - 2026-11-05

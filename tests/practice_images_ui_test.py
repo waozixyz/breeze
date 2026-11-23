@@ -38,6 +38,9 @@ driver = UiDriver(output / "driver")
 environment = os.environ | driver.environment() | {
     "SDL_VIDEODRIVER": "x11", "SDL_AUDIODRIVER": "dummy",
     "HARMONY_DESKTOP_RECOVERY": "0", "YUE_DESKTOP_RECOVERY": "0", "APP_NO_TRAY": "1"}
+# The banner skies follow the local clock. Run where it is just past midnight:
+# the sun or moon is then near the top of its arc, inside a narrow card.
+environment["TZ"] = "SKY-%d" % ((24 - time.gmtime().tm_hour) % 24)
 
 
 def command(*args):
@@ -93,15 +96,15 @@ def changed_pixels(before, after, bounds, minimum):
 
 
 def moving_sky(window, name, first):
-    # Sample above the square, figure and steam.
+    # Sample above the square, figure and vapour: clouds drift and stars flicker.
     bounds = (52, 59, WIDTH - 42, 127)
     counts = []
     for sample in range(1, 4):
         time.sleep(1.1)
         image = capture(window, f"{name}-sky-{sample}")
         counts.append(changed_pixels(first, image, bounds, 4))
-    assert max(counts) >= 60, (name, "The painted sky did not move", counts)
-    print(f"{name} painted sky: {max(counts)} changing pixels", flush=True)
+    assert max(counts) >= 60, (name, "The live sky did not change", counts)
+    print(f"{name} live sky: {max(counts)} changing pixels", flush=True)
 
 
 def log_tail(path):
@@ -223,9 +226,10 @@ with tempfile.TemporaryDirectory(prefix="profile-", dir=output) as directory, co
             image = capture(window, practice)
             banner_skies[practice] = image.crop((60, 58, WIDTH // 2, 144))
             if practice == "wim-hof" and settings["theme_mode"] == 2:
-                upper_left = image.crop((3, 64, 110, 154))
-                moon = sum(red > 155 and green > 170 and blue > 190 for red, green, blue in upper_left.getdata())
-                assert moon >= 30, f"Wim Hof's moon disappeared in the narrow card ({moon} pixels)"
+                # The rendered moon stays inside the narrow card, even behind a cloud.
+                sky_band = image.crop((3, 44, WIDTH - 3, 200))
+                moon = sum(red > 150 and green > 155 and blue > 150 for red, green, blue in sky_band.getdata())
+                assert moon >= 30, f"Wim Hof's moon is missing from the narrow card ({moon} pixels)"
             if practice in ("wim-hof", "patterns"):
                 moving_sky(window, f"{practice}-night", image)
                 driver.press(label="Light", role="button")

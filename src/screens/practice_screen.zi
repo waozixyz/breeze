@@ -90,7 +90,6 @@ TitleBar :: #import "kryon/title_bar";
 #import, file "../apps/hosted_assets.zi";
 #import, file "../apps/module_host.zi";
 #import, file "practice_banner_draw.zi";
-#import, file "practice_banner_regions.zi";
 #import, file "practice_banner_motion.zi";
 #import "widget_codec"
 
@@ -517,115 +516,87 @@ practice_home_theme_button :: (app: *InnerBreeze, frame: PracticeHomeFrame) -> b
     return AppSetThemeMode(app, ifx night then APP_THEME_LIGHT else APP_THEME_DARK)
 }
 
-PracticeBannerLayers :: struct {
-    landscape: string
-    character: string
-    sky: string
-}
-
-PracticeBannerLayerCache :: struct {
-    card: s32
-    generation: u64
-    night: bool
-    layers: PracticeBannerLayers
-}
-
-practice_banner_layers: PracticeBannerLayerCache = .{.card = -1};
-
-practice_home_banner_layers :: (card: s32, night: bool) -> PracticeBannerLayers {
-    if card == PRACTICE_HOME_SHORT_WORKOUT {
-        return .{"assets/practices/workout/banner-short-landscape.webp",
-            "assets/practices/workout/banner-short-character.webp", ""}
-    }
-    if card == EXERCISE_WORKOUT || card == PRACTICE_HOME_CUSTOM_WORKOUT {
-        return .{"assets/practices/workout/banner-landscape.webp",
-            "assets/practices/workout/banner-character.webp", ""}
-    }
-    if card == EXERCISE_WIM_HOF {
-        if night {
-            return .{"assets/practices/whm/banner-landscape-dark.webp", "assets/practices/whm/banner-character-dark.webp",
-                "assets/practices/whm/banner-sky-dark.webp"}
-        }
-        return .{"assets/practices/whm/banner-landscape.webp", "assets/practices/whm/banner-character.webp",
-            "assets/practices/whm/banner-sky.webp"}
-    }
-    if card == EXERCISE_MEDITATION {
-        return .{"assets/practices/meditation/banner-landscape.webp", "assets/practices/meditation/banner-character.webp", ""}
-    }
-    if card == EXERCISE_SUN_SALUTATION {
-        return .{"assets/practices/sunsalutation/banner-landscape.webp", "assets/practices/sunsalutation/banner-character.webp", ""}
-    }
-    if card == EXERCISE_TAI_CHI {
-        return .{"assets/practices/taichi/banner-landscape.webp", "assets/practices/taichi/banner-character.webp", ""}
-    }
-    if card == EXERCISE_ASTRAL_PROJECTION {
-        return .{"assets/practices/astral_projection/banner-landscape.webp", "assets/practices/astral_projection/banner-character.webp", ""}
-    }
-    return .{}
-}
-
-practice_home_available_banner_layers :: (card: s32, night: bool) -> PracticeBannerLayers {
-    generation := AssetGeneration()
-    cache := *practice_banner_layers
-    if cache.card != card || cache.generation != generation || cache.night != night {
-        layers := practice_home_banner_layers(card, night)
-        if layers.landscape.count > 0 && (!AssetRead(layers.landscape).found || !AssetRead(layers.character).found ||
-            (layers.sky.count > 0 && !AssetRead(layers.sky).found)) {
-            layers = .{}
-        }
-        cache.* = .{card, generation, night, layers}
-    }
-    return cache.layers
-}
-
 practice_banner_color :: (rgb: u32, alpha: u8 = 255) -> Color {
     return .{cast(u8)(rgb >> 16), cast(u8)(rgb >> 8), cast(u8)rgb, alpha}
 }
 
-practice_banner_artwork_motion: PracticeBannerMotion;
-
-practice_home_wim_hof_crop :: (bounds: Rectangle, night: bool) -> Rectangle {
-    if !night || bounds.width <= 0.0 || bounds.height <= 0.0 {
-        return .{}
-    }
-    width := bounds.width / (bounds.height * 2.0)
-    left := (1.0 - width) * 0.5
-    if left <= 0.20 {
-        return .{}
-    }
-    // The night painting puts the moon near x = 0.22 and the bather near
-    // x = 0.50. Keep the moon in view as long as the crop can reach both.
-    bather_crop_left := 0.55 - width
-    return .{ifx bather_crop_left > 0.20 then bather_crop_left else 0.20, 0.0, width, 1.0}
+// The height on screen of the whole painting that covers a banner.
+practice_home_painting_height :: (bounds: Rectangle) -> float32 {
+    return ifx bounds.height > bounds.width * 0.5 then bounds.height else bounds.width * 0.5
 }
 
+// The breathing box around the figure. Each painting places its figure, and
+// so its box, a little differently.
+practice_home_box_frame :: (bounds: Rectangle, night: bool) -> Rectangle {
+    art_h := practice_home_painting_height(bounds)
+    art_w := art_h * 2.0
+    art_x := bounds.x + (bounds.width - art_w) * 0.5
+    art_y := bounds.y + (bounds.height - art_h) * 0.5
+    if night {
+        return .{art_x + art_w * 0.394, art_y + art_h * 0.340, art_w * 0.208, art_h * 0.407}
+    }
+    return .{art_x + art_w * 0.3625, art_y + art_h * 0.2275, art_w * 0.269, art_h * 0.5125}
+}
+
+practice_home_box_line :: (session: Session, bounds: Rectangle, line: Rectangle, color: Color) {
+    shown := RectangleIntersection(bounds, line)
+    if shown.width > 0.0 && shown.height > 0.0 {
+        Box.Draw(session, Box.Props.{.bounds = shown, .fill = color})
+    }
+}
+
+// The box the breath travels around, drawn behind the figure: four glowing
+// corners joined by thin lines.
+practice_home_box_outline :: (session: Session, bounds: Rectangle, night: bool) {
+    box := practice_home_box_frame(bounds, night)
+    art_h := practice_home_painting_height(bounds)
+    thickness := art_h * 0.006
+    if thickness < 1.0 {
+        thickness = 1.0
+    }
+    color := practice_banner_color(ifx night then 0xffbe66 else 0xfff0b4, 235)
+    half := thickness * 0.5
+    practice_home_box_line(session, bounds, .{box.x, box.y - half, box.width, thickness}, color)
+    practice_home_box_line(session, bounds, .{box.x, box.y + box.height - half, box.width, thickness}, color)
+    practice_home_box_line(session, bounds, .{box.x - half, box.y, thickness, box.height}, color)
+    practice_home_box_line(session, bounds, .{box.x + box.width - half, box.y, thickness, box.height}, color)
+    radius := art_h * (ifx night then 0.016 else 0.027)
+    glow := radius * 1.8
+    for corner: 0..3 {
+        x := ifx corner == 1 || corner == 2 then box.x + box.width else box.x
+        y := ifx corner >= 2 then box.y + box.height else box.y
+        halo := Rectangle.{x - glow, y - glow, glow * 2.0, glow * 2.0}
+        shown := RectangleIntersection(bounds, halo)
+        if shown.width == halo.width && shown.height == halo.height {
+            Box.Draw(session, Box.Props.{.bounds = halo, .radius = glow,
+                .fill = practice_banner_color(ifx night then 0xffc46c else 0xfff3bc, 70)})
+            Box.Draw(session, Box.Props.{.bounds = .{x - radius, y - radius, radius * 2.0, radius * 2.0},
+                .radius = radius, .fill = practice_banner_color(ifx night then 0xffdc94 else 0xfffbe2)})
+        }
+    }
+}
+
+// One indicator travels around the box and marks the current breath position.
 practice_home_box_breath :: (session: Session, bounds: Rectangle, night: bool, tick: s64) {
     if tick <= 0 {
         return
     }
-    // Travel along the four painted corners. The painting supplies the only
-    // outline, with a single indicator marking the current breath position.
-    art_h := ifx bounds.height > bounds.width * 0.5 then bounds.height else bounds.width * 0.5
-    art_w := art_h * 2.0
-    art_x := bounds.x + (bounds.width - art_w) * 0.5
-    art_y := bounds.y + (bounds.height - art_h) * 0.5
-    x := art_x + art_w * (ifx night then 0.394 else 0.3625)
-    y := art_y + art_h * (ifx night then 0.340 else 0.2275)
-    width := art_w * (ifx night then 0.208 else 0.269)
-    height := art_h * (ifx night then 0.407 else 0.5125)
-    size := art_h * 0.023
+    box := practice_home_box_frame(bounds, night)
+    x := box.x
+    y := box.y
+    size := practice_home_painting_height(bounds) * 0.023
     color := practice_banner_color(ifx night then 0xffdf92 else 0xfff9dc)
     timing := PracticeBannerBoxAt((tick - 1) * 1000 / PRACTICE_BANNER_HZ)
     if timing.phase == PATTERNS_PHASE_INHALE {
-        x += width * timing.progress
+        x += box.width * timing.progress
     } else if timing.phase == PATTERNS_PHASE_HOLD_IN {
-        x += width
-        y += height * timing.progress
+        x += box.width
+        y += box.height * timing.progress
     } else if timing.phase == PATTERNS_PHASE_EXHALE {
-        x += width * (1.0 - timing.progress)
-        y += height
+        x += box.width * (1.0 - timing.progress)
+        y += box.height
     } else {
-        y += height * (1.0 - timing.progress)
+        y += box.height * (1.0 - timing.progress)
     }
     marker := Rectangle.{x - size * 0.5, y - size * 0.5, size, size}
     clipped := RectangleIntersection(bounds, marker)
@@ -635,8 +606,8 @@ practice_home_box_breath :: (session: Session, bounds: Rectangle, night: bool, t
     }
 }
 
-// Paint underneath the hosted title fade. The two transparent layers share
-// the sky's framing, so they line up at every card width.
+// Paint underneath the hosted title fade: the rendered sky, then the painted
+// land and figure, which share one framing and line up at every card width.
 practice_home_banner_draw :: (props: HostValue) {
     missing: HostValue
     asset := HostValueText(HostFieldValue(*props, 0, "asset_path", *missing).*)
@@ -653,59 +624,23 @@ practice_home_banner_draw :: (props: HostValue) {
     app := CurrentApp()
     night := app.dark_mode != 0
     card := practice_home_selected(app)
-    reduced_motion := CurrentTheme().motion.reduced_motion
-    animated_paint := card == EXERCISE_PATTERNS || card == EXERCISE_WIM_HOF
-    paint_asset := ifx animated_paint then asset else ""
-    tick := PracticeBannerTick(*practice_banner_artwork_motion, paint_asset,
-        frame.swipe_frame.now_seconds, visible, reduced_motion)
-    if tick > 0 {
-        PracticeBannerArtworkFrames()
+    if card == PRACTICE_HOME_SHORT_WORKOUT {
+        // The four-minute card shares Workout's painting and has its own layers.
+        asset = ifx night then "assets/practices/workout/banner-short-dark.webp" else "assets/practices/workout/banner-short-light.webp"
     }
-    if card == EXERCISE_PATTERNS {
-        unused PracticeBannerDraw(frame.session, Layout.KeyHash("practice/banner-motion"), "",
-            bounds, frame.swipe_frame.now_seconds, false, reduced_motion, false, false)
-        if tick > 0 {
-            sky := ifx night then "assets/practices/patterns/banner-sky-dark.webp" else "assets/practices/patterns/banner-sky-light.webp"
-            if AssetWidth(sky) > 0 {
-                Image.Draw(frame.session, Image.Props.{.key = Layout.KeyHash("practice/banner-box-sky"), .bounds = bounds,
-                    .asset_path = sky, .source = PracticeBannerSkySource(bounds, .{}, tick),
-                    .fit = .ImageFitCover, .tint = 0xffffffff})
-            }
-            practice_home_box_breath(frame.session, bounds, night, tick)
-        }
+    now := frame.swipe_frame.now_seconds
+    // Clouds hold still when frames are drawn on the CPU, as after a GPU
+    // fallback: the phone is slow then.
+    still := CurrentTheme().motion.reduced_motion || !HostWindowGpuDrawn()
+    if !PracticeBannerDrawBack(frame.session, asset, bounds, now, visible, still) {
         return
     }
-    layers := practice_home_available_banner_layers(card, night)
-    layered := layers.landscape.count > 0
-    artwork_sky := layers.sky.count > 0
-    crop := ifx artwork_sky then practice_home_wim_hof_crop(bounds, night) else Rectangle.{}
-    // All three WHM paintings have matching 1536 × 768 source bounds.
-    source := Rectangle.{crop.x * 1536.0, crop.y * 768.0, crop.width * 1536.0, crop.height * 768.0}
-    sky_asset := asset
-    if card == PRACTICE_HOME_SHORT_WORKOUT && layered {
-        // The four-minute card uses the same fallback picture as Workout.
-        sky_asset = ifx night then "assets/practices/workout/banner-short-dark.webp" else "assets/practices/workout/banner-short-light.webp"
+    if card == EXERCISE_PATTERNS {
+        practice_home_box_outline(frame.session, bounds, night)
     }
-    look := PracticeBannerRegionsFor(sky_asset).look
-    if artwork_sky {
-        Image.Draw(frame.session, Image.Props.{.key = Layout.KeyHash("practice/banner-original-sky"), .bounds = bounds,
-            .asset_path = layers.sky, .source = PracticeBannerSkySource(bounds, crop, tick),
-            .fit = .ImageFitCover, .tint = 0xffffffff})
-    } else if layered {
-        Box.Draw(frame.session, Box.Props.{.key = Layout.KeyHash("practice/banner-sky-fallback"), .bounds = bounds,
-            .fill = practice_banner_color(look.zenith), .fill_bottom = practice_banner_color(look.horizon),
-            .has_fill_bottom = true})
-    }
-    steam := PracticeBannerDraw(frame.session, Layout.KeyHash("practice/banner-motion"), sky_asset,
-        bounds, frame.swipe_frame.now_seconds, visible, reduced_motion, layered, artwork_sky)
-    if layered {
-        // A colored Image tint can replace the artwork RGB with an alpha mask.
-        // Keep the painted detail and let the sky set the time of day.
-        Image.Draw(frame.session, Image.Props.{.key = Layout.KeyHash("practice/banner-landscape"), .bounds = bounds,
-            .asset_path = layers.landscape, .source = source, .fit = .ImageFitCover, .tint = 0xffffffff})
-        Image.Draw(frame.session, Image.Props.{.key = Layout.KeyHash("practice/banner-character"), .bounds = bounds,
-            .asset_path = layers.character, .source = source, .fit = .ImageFitCover, .tint = 0xffffffff})
-        PracticeBannerDrawSteam(frame.session, Layout.KeyHash("practice/banner-steam"), bounds, steam, crop)
+    PracticeBannerDrawFront(frame.session, bounds)
+    if card == EXERCISE_PATTERNS {
+        practice_home_box_breath(frame.session, bounds, night, PracticeBannerDrawTick())
     }
 }
 

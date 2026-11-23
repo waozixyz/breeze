@@ -1,0 +1,384 @@
+// Paints a PracticeSky into RGBA pixels. Each pixel is computed from the
+// sky's state: the air, the stars, the sun or moon and three depths of cloud
+// cut from generated noise. No picture is copied in.
+#import "std/math"
+#import "std/vec"
+#import, file "practice_banner_sky.zi";
+#import, file "practice_banner_stars.zi";
+
+#scope_file
+practice_sky_blend :: (pixels: []u8, at: s32, color: PracticeSkyColor, amount: float64) {
+    red := cast(float64)pixels[at]
+    green := cast(float64)pixels[at + 1]
+    blue := cast(float64)pixels[at + 2]
+    pixels[at] = cast(u8)(red + (color.r - red) * amount + 0.5)
+    pixels[at + 1] = cast(u8)(green + (color.g - green) * amount + 0.5)
+    pixels[at + 2] = cast(u8)(blue + (color.b - blue) * amount + 0.5)
+}
+
+// The air: zenith to horizon, the glow around the light and, at dawn and
+// dusk, the bright rim along the horizon under it.
+#scope_file
+practice_sky_paint_air :: (sky: *PracticeSky, canvas: PracticeBannerCanvas) {
+    step_x := canvas.view.width / cast(float64)canvas.width
+    step_y := canvas.view.height / cast(float64)canvas.height
+    reach := sky.light_radius * (ifx sky.night then 5.0 else 7.0)
+    inverse_reach := 1.0 / (reach * reach)
+    at: s32
+    for row: cast(s32)0..canvas.height - 1 {
+        v := canvas.view.top + (cast(float64)row + 0.5) * step_y
+        down := v / sky.horizon_line
+        if down > 1.0 {
+            down = 1.0
+        }
+        air := PracticeSkyMix(sky.zenith, sky.middle, down / 0.55)
+        if down > 0.55 {
+            air = PracticeSkyMix(sky.middle, sky.horizon, (down - 0.55) / 0.45)
+        }
+        rim := PracticeSkyStep(0.4, 1.0, down) * sky.twilight * 0.55
+        dy := v - sky.light_y
+        for column: cast(s32)0..canvas.width - 1 {
+            u := canvas.view.left + (cast(float64)column + 0.5) * step_x
+            // Distances count painting heights; the painting is twice as wide.
+            dx := (u - sky.light_x) * 2.0
+            near := 1.0 / (1.0 + (dx * dx + dy * dy) * inverse_reach)
+            amount := sky.glow_strength * near * near + rim / (1.0 + dx * dx * 5.0)
+            if amount > 1.0 {
+                amount = 1.0
+            }
+            canvas.pixels[at] = cast(u8)(air.r + (sky.glow.r - air.r) * amount + 0.5)
+            canvas.pixels[at + 1] = cast(u8)(air.g + (sky.glow.g - air.g) * amount + 0.5)
+            canvas.pixels[at + 2] = cast(u8)(air.b + (sky.glow.b - air.b) * amount + 0.5)
+            canvas.pixels[at + 3] = 255
+            at += 4
+        }
+    }
+}
+
+// Stars from the Hipparcos catalogue around Orion, each flickering at its own
+// pace and fading into the haze near the horizon.
+#scope_file
+practice_sky_paint_stars :: (sky: *PracticeSky, canvas: PracticeBannerCanvas) {
+    radians := 0.0174532925199433
+    centre := 3.0 * radians
+    sin_centre := Sin(centre)
+    cos_centre := Cos(centre)
+    half_width := Tan(46.0 * radians)
+    scale_x := cast(float64)canvas.width / canvas.view.width
+    scale_y := cast(float64)canvas.height / canvas.view.height
+    starlight := PracticeSkyRgb(0xeef3ff)
+    for star: practice_banner_stars {
+        declination := star.dec * radians
+        ascension := (star.ra - sky.star_field) * radians
+        depth := sin_centre * Sin(declination) + cos_centre * Cos(declination) * Cos(ascension)
+        if depth <= 0.3 {
+            continue
+        }
+        u := 0.5 - Cos(declination) * Sin(ascension) / (2.0 * half_width * depth)
+        elevation := cos_centre * Sin(declination) - sin_centre * Cos(declination) * Cos(ascension)
+        v := sky.horizon_line * 0.45 - elevation / (half_width * depth)
+        haze := PracticeSkyStep(sky.horizon_line, sky.horizon_line - 0.12, v)
+        px := (u - canvas.view.left) * scale_x - 0.5
+        py := (v - canvas.view.top) * scale_y - 0.5
+        if haze <= 0.0 || px < -2.0 || py < -2.0 || px > cast(float64)canvas.width + 1.0 ||
+        py > cast(float64)canvas.height + 1.0 {
+            continue
+        }
+        pace := 1.1 + 2.4 * PracticeSkyHash(star.hip, 0, 7)
+        flicker := 0.7 + 0.3 * Sin(sky.seconds * pace + PracticeSkyHash(star.hip, 0, 8) * 2.0 * PRACTICE_SKY_PI)
+        // Compress magnitudes so faint stars still show on a small banner.
+        brightness := 0.46 * Pow(10.0, (530.0 - cast(float64)star.magnitude) / 640.0) * flicker * haze * sky.stars
+        first_row := cast(s32)PracticeSkyFloor(py) - 1
+        first_column := cast(s32)PracticeSkyFloor(px) - 1
+        for row: first_row..first_row + 3 {
+            for column: first_column..first_column + 3 {
+                if row < 0 || row >= canvas.height || column < 0 || column >= canvas.width {
+                    continue
+                }
+                dx := cast(float64)column - px
+                dy := cast(float64)row - py
+                spread := 1.0 / (1.0 + 2.6 * (dx * dx + dy * dy))
+                level := brightness * spread * spread
+                if level > 0.01 {
+                    practice_sky_blend(canvas.pixels, (row * canvas.width + column) * 4, starlight,
+                        ifx level < 1.0 then level else 1.0)
+                }
+            }
+        }
+    }
+}
+
+// The sun's disc, or the moon lit as far as its age: a new moon is a thin
+// crescent and a full moon a whole disc.
+#scope_file
+practice_sky_paint_light :: (sky: *PracticeSky, canvas: PracticeBannerCanvas) {
+    scale_x := cast(float64)canvas.width / (canvas.view.width * 2.0)
+    scale_y := cast(float64)canvas.height / canvas.view.height
+    radius_x := sky.light_radius * scale_x
+    radius_y := sky.light_radius * scale_y
+    centre_x := (sky.light_x - canvas.view.left) * 2.0 * scale_x
+    centre_y := (sky.light_y - canvas.view.top) * scale_y
+    first_row := cast(s32)PracticeSkyFloor(centre_y - radius_y) - 1
+    last_row := cast(s32)PracticeSkyFloor(centre_y + radius_y) + 1
+    first_column := cast(s32)PracticeSkyFloor(centre_x - radius_x) - 1
+    last_column := cast(s32)PracticeSkyFloor(centre_x + radius_x) + 1
+    for row: first_row..last_row {
+        if row < 0 || row >= canvas.height {
+            continue
+        }
+        y := (cast(float64)row + 0.5 - centre_y) / radius_y
+        for column: first_column..last_column {
+            if column < 0 || column >= canvas.width {
+                continue
+            }
+            x := (cast(float64)column + 0.5 - centre_x) / radius_x
+            from_centre := Sqrt(x * x + y * y)
+            // A one-pixel soft rim.
+            cover := (1.0 - from_centre) * radius_y + 0.5
+            if cover <= 0.0 {
+                continue
+            }
+            if cover > 1.0 {
+                cover = 1.0
+            }
+            at := (row * canvas.width + column) * 4
+            if !sky.night {
+                practice_sky_blend(canvas.pixels, at, sky.light, cover)
+                continue
+            }
+            // From the southern hemisphere a waxing moon is lit on its left.
+            side := ifx sky.moon_waning then x else -x
+            limb := 1.0 - y * y
+            edge := sky.moon_shadow * (ifx limb > 0.0 then Sqrt(limb) else 0.0)
+            lit := (side - edge) * radius_y * 0.8 + 0.5
+            if lit < 0.0 {
+                lit = 0.0
+            }
+            if lit > 1.0 {
+                lit = 1.0
+            }
+            // The dark part keeps a little earthshine.
+            practice_sky_blend(canvas.pixels, at, sky.light, cover * (0.14 + 0.86 * lit))
+        }
+    }
+}
+
+PRACTICE_SKY_NOISE :: 128
+PRACTICE_SKY_NOISE_OCTAVES :: 4
+
+// Two fields of layered noise that tile, each PRACTICE_SKY_NOISE square with
+// values 0..1, computed once. Clouds are cut from them; they hold no picture.
+practice_sky_noise: [PRACTICE_SKY_NOISE * PRACTICE_SKY_NOISE * 2]float32;
+practice_sky_noise_ready: bool;
+// One cloud layer's density while it is shaded.
+practice_sky_density: Vec(float32);
+
+// Smooth noise on a wrapping lattice of FREQUENCY cells.
+#scope_file
+practice_sky_lattice :: (u: float64, v: float64, frequency: s32, seed: s32) -> float64 {
+    x := u * cast(float64)frequency
+    y := v * cast(float64)frequency
+    x0 := cast(s32)PracticeSkyFloor(x)
+    y0 := cast(s32)PracticeSkyFloor(y)
+    fx := x - cast(float64)x0
+    fy := y - cast(float64)y0
+    sx := fx * fx * fx * (fx * (fx * 6.0 - 15.0) + 10.0)
+    sy := fy * fy * fy * (fy * (fy * 6.0 - 15.0) + 10.0)
+    x1 := (x0 + 1) % frequency
+    y1 := (y0 + 1) % frequency
+    x0 = x0 % frequency
+    y0 = y0 % frequency
+    top := PracticeSkyHash(seed, x0, y0) + (PracticeSkyHash(seed, x1, y0) - PracticeSkyHash(seed, x0, y0)) * sx
+    bottom := PracticeSkyHash(seed, x0, y1) + (PracticeSkyHash(seed, x1, y1) - PracticeSkyHash(seed, x0, y1)) * sx
+    return top + (bottom - top) * sy
+}
+
+#scope_file
+practice_sky_noise_fill :: () {
+    for field: cast(s32)0..1 {
+        first := field * PRACTICE_SKY_NOISE * PRACTICE_SKY_NOISE
+        lowest := 1.0
+        highest := 0.0
+        for y: cast(s32)0..PRACTICE_SKY_NOISE - 1 {
+            for x: cast(s32)0..PRACTICE_SKY_NOISE - 1 {
+                u := cast(float64)x / PRACTICE_SKY_NOISE
+                v := cast(float64)y / PRACTICE_SKY_NOISE
+                total := 0.0
+                weight := 0.5
+                frequency: s32 = 4
+                for octave: cast(s32)0..PRACTICE_SKY_NOISE_OCTAVES - 1 {
+                    total += practice_sky_lattice(u, v, frequency, 31 + field * 101 + octave * 17) * weight
+                    weight *= 0.5
+                    frequency *= 2
+                }
+                if total < lowest {
+                    lowest = total
+                }
+                if total > highest {
+                    highest = total
+                }
+                practice_sky_noise[first + y * PRACTICE_SKY_NOISE + x] = cast(float32)total
+            }
+        }
+        // Spread each field over the whole 0..1 range.
+        range := highest - lowest
+        for at: first..first + PRACTICE_SKY_NOISE * PRACTICE_SKY_NOISE - 1 {
+            practice_sky_noise[at] = cast(float32)((cast(float64)practice_sky_noise[at] - lowest) / range)
+        }
+    }
+    practice_sky_noise_ready = true
+}
+
+// FIELD's noise at X, Y in tiles, blended between its four nearest values.
+#scope_file
+practice_sky_noise_at :: (field: s32, x: float64, y: float64) -> float64 {
+    px := (x - PracticeSkyFloor(x)) * PRACTICE_SKY_NOISE
+    py := (y - PracticeSkyFloor(y)) * PRACTICE_SKY_NOISE
+    x0 := cast(s32)px
+    y0 := cast(s32)py
+    fx := px - cast(float64)x0
+    fy := py - cast(float64)y0
+    x0 = x0 % PRACTICE_SKY_NOISE
+    y0 = y0 % PRACTICE_SKY_NOISE
+    x1 := (x0 + 1) % PRACTICE_SKY_NOISE
+    y1 := (y0 + 1) % PRACTICE_SKY_NOISE
+    first := field * PRACTICE_SKY_NOISE * PRACTICE_SKY_NOISE
+    a := cast(float64)practice_sky_noise[first + y0 * PRACTICE_SKY_NOISE + x0]
+    b := cast(float64)practice_sky_noise[first + y0 * PRACTICE_SKY_NOISE + x1]
+    c := cast(float64)practice_sky_noise[first + y1 * PRACTICE_SKY_NOISE + x0]
+    d := cast(float64)practice_sky_noise[first + y1 * PRACTICE_SKY_NOISE + x1]
+    top := a + (b - a) * fx
+    bottom := c + (d - c) * fx
+    return top + (bottom - top) * fy
+}
+
+// One depth of cloud. Broad and fine noise add up to a density: cloud begins
+// where it passes the layer's threshold, which rises with height, so clouds
+// stand on a level base and heap up into uneven tops. Each pixel is then lit by comparing its density
+// with the density a step towards the sun or moon.
+#scope_file
+practice_sky_paint_clouds :: (sky: *PracticeSky, layer: PracticeSkyCloudLayer, canvas: PracticeBannerCanvas) {
+    step_u := canvas.view.width / cast(float64)canvas.width
+    step_v := canvas.view.height / cast(float64)canvas.height
+    first_row := cast(s32)PracticeSkyFloor((layer.top - canvas.view.top) / step_v)
+    last_row := cast(s32)PracticeSkyFloor((layer.bottom - canvas.view.top) / step_v)
+    if first_row < 0 {
+        first_row = 0
+    }
+    if last_row >= canvas.height {
+        last_row = canvas.height - 1
+    }
+    rows := last_row - first_row + 1
+    if rows <= 0 || layer.bottom <= layer.top || !VecResize(practice_sky_density, cast(s64)rows * cast(s64)canvas.width) {
+        return
+    }
+    band := layer.bottom - layer.top
+    for row: first_row..last_row {
+        v := canvas.view.top + (cast(float64)row + 0.5) * step_v
+        rise := (layer.bottom - v) / band
+        // Less cloud the higher it heaps, and none at the top of the band,
+        // so every cloud rounds off below it.
+        high := rise * rise
+        threshold := layer.threshold + rise * 0.26 + high * high * 0.5
+        // The broad shapes change little with height, so they stand on the base.
+        broad_y := v * layer.scale_y * 0.3 + layer.drift_y
+        fine_y := v * layer.scale_y * 2.3 + layer.detail_y
+        at := (row - first_row) * canvas.width
+        for column: cast(s32)0..canvas.width - 1 {
+            // Across, in painting heights: the painting is twice as wide as tall.
+            x := (canvas.view.left + (cast(float64)column + 0.5) * step_u) * 2.0
+            broad := practice_sky_noise_at(0, x * layer.scale_x + layer.drift_x, broad_y)
+            density := 0.0
+            if 0.72 * broad + 0.28 > threshold {
+                fine := practice_sky_noise_at(1, x * layer.scale_x * 2.3 + layer.detail_x, fine_y)
+                // A level base that follows the cloud's own unevenness a little.
+                base := PracticeSkyStep(0.0, 0.12, rise + (fine - 0.5) * 0.1)
+                density = PracticeSkyStep(threshold, threshold + layer.soft, 0.72 * broad + 0.28 * fine) * base
+            }
+            practice_sky_density[at + column] = cast(float32)density
+        }
+    }
+    // A step of a few pixels towards the light, from the middle of the layer.
+    towards_x := (sky.light_x - (canvas.view.left + canvas.view.width * 0.5)) * 2.0
+    towards_y := sky.light_y - (layer.top + layer.bottom) * 0.5
+    length := Sqrt(towards_x * towards_x + towards_y * towards_y)
+    reach := cast(float64)canvas.height * 0.03 + 1.5
+    step_x: s32
+    step_y := cast(s32)(-reach)
+    if length > 0.001 {
+        step_x = cast(s32)PracticeSkyFloor(towards_x / length * reach + 0.5)
+        step_y = cast(s32)PracticeSkyFloor(towards_y / length * reach + 0.5)
+    }
+    // Distant layers take on the colour of the air at the horizon.
+    lit_color := PracticeSkyMix(sky.cloud_light, sky.horizon, layer.haze)
+    shade_color := PracticeSkyMix(sky.cloud_shade, sky.horizon, layer.haze)
+    for row: first_row..last_row {
+        v := canvas.view.top + (cast(float64)row + 0.5) * step_v
+        rise := (layer.bottom - v) / band
+        at := (row - first_row) * canvas.width
+        lit_row := row + step_y
+        for column: cast(s32)0..canvas.width - 1 {
+            density := cast(float64)practice_sky_density[at + column]
+            if density <= 0.004 {
+                continue
+            }
+            towards := 0.0
+            lit_column := column + step_x
+            if lit_row >= first_row && lit_row <= last_row && lit_column >= 0 && lit_column < canvas.width {
+                towards = cast(float64)practice_sky_density[(lit_row - first_row) * canvas.width + lit_column]
+            }
+            // The side facing the light and the tops are bright; bases and the
+            // far side stay in shade.
+            lit := 0.42 + (density - towards) * 0.9 + rise * 0.3
+            if lit < 0.0 {
+                lit = 0.0
+            }
+            if lit > 1.0 {
+                lit = 1.0
+            }
+            color := PracticeSkyMix(shade_color, lit_color, lit)
+            // At dawn and dusk the thin edges catch the low light.
+            color = PracticeSkyMix(color, sky.cloud_rim, (1.0 - density) * sky.twilight * 0.55)
+            practice_sky_blend(canvas.pixels, (row * canvas.width + column) * 4, color, density * layer.opacity)
+        }
+    }
+}
+
+#scope_file
+practice_sky_canvas_holds :: (canvas: PracticeBannerCanvas) -> bool {
+    return canvas.width > 0 && canvas.height > 0 &&
+    canvas.pixels.count >= cast(s64)canvas.width * cast(s64)canvas.height * 4
+}
+
+// The air alone. It changes only with the clock, so a banner can keep it and
+// paint the moving parts over a copy. CANVAS must hold width * height * 4 bytes.
+#scope_export
+PracticeSkyPaintAir :: (sky: *PracticeSky, canvas: PracticeBannerCanvas) {
+    if practice_sky_canvas_holds(canvas) {
+        practice_sky_paint_air(sky, canvas)
+    }
+}
+
+// Everything that moves, painted over air already in CANVAS: flickering
+// stars, the sun or moon and the drifting clouds.
+PracticeSkyPaintOver :: (sky: *PracticeSky, canvas: PracticeBannerCanvas) {
+    if !practice_sky_canvas_holds(canvas) {
+        return
+    }
+    if sky.night {
+        practice_sky_paint_stars(sky, canvas)
+    }
+    practice_sky_paint_light(sky, canvas)
+    if !practice_sky_noise_ready {
+        practice_sky_noise_fill()
+    }
+    for index: cast(s32)0..PRACTICE_SKY_LAYERS - 1 {
+        practice_sky_paint_clouds(sky, sky.layers[index], canvas)
+    }
+}
+
+// The whole sky.
+PracticeSkyPaint :: (sky: *PracticeSky, canvas: PracticeBannerCanvas) {
+    PracticeSkyPaintAir(sky, canvas)
+    PracticeSkyPaintOver(sky, canvas)
+}

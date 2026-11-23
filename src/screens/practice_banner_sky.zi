@@ -1,0 +1,246 @@
+// The live sky behind a Practice banner. Every value comes from the banner's
+// scenery, the local clock and how long the banner has been showing. Nothing
+// here reads, samples or moves painted artwork.
+#import "std/math"
+
+PRACTICE_SKY_LAYERS :: 3
+PRACTICE_SKY_PI :: 3.141592653589793
+// A new moon, 6 January 2000 18:14 UTC, and the mean time between new moons.
+PRACTICE_SKY_NEW_MOON :: 947182440.0
+PRACTICE_SKY_MOON_MONTH :: 2551442.9
+
+// One banner's view of the sky. Colours are 0xRRGGBB. Heights are fractions
+// of the painting's height from its top; widths are fractions of its width.
+PracticeSkyScenery :: struct {
+    seed: s32
+    night: bool
+    zenith: u32              // overhead, with the sun or moon high
+    horizon: u32             // at the horizon, with the sun or moon high
+    twilight: u32            // at the horizon while the light rises or sets
+    cloud_light: u32
+    cloud_shade: u32
+    horizon_line: float64    // where the sky meets the land
+    cloud_top: float64       // the band the clouds drift in
+    cloud_bottom: float64
+    cloud_cover: float64     // the share of that band that is cloud
+    cloud_scale: float64     // the size of the nearest clouds, in painting heights
+    cloud_stretch: float64   // 1 heaps up cumulus; more draws out stratus
+    cloud_soft: float64      // how gradually an edge thins into the air
+    cloud_opacity: float64
+    wind: float64            // painting widths per second; negative blows left
+    disc: float64            // radius of the sun or moon
+    westward: bool           // the light crosses from right to left
+    star_field: float64      // right ascension at the centre of the view, degrees
+}
+
+// The local time of day in hours and the moon's age: 0 new, 0.5 full.
+PracticeSkyClock :: struct {
+    hour: float64
+    moon: float64
+}
+
+// A part of the painting, in fractions of its width and height.
+PracticeBannerView :: struct {
+    left: float64
+    top: float64
+    width: float64
+    height: float64
+}
+
+// Pixels for the part of the painting in `view`, row by row from the top.
+PracticeBannerCanvas :: struct {
+    view: PracticeBannerView
+    width: s32
+    height: s32
+    pixels: []u8
+}
+
+// Channels run 0..255.
+PracticeSkyColor :: struct {
+    r: float64
+    g: float64
+    b: float64
+}
+
+// One depth of cloud. Its shapes come from two fields of layered noise that
+// drift at different speeds, so the clouds change as they travel. Offsets and
+// scales count noise tiles.
+PracticeSkyCloudLayer :: struct {
+    depth: float64           // 0 far, small, slow and hazy; 1 near
+    top: float64             // the band this layer fills
+    bottom: float64
+    scale_x: float64         // noise tiles per painting height
+    scale_y: float64
+    drift_x: float64         // where the broad shapes have travelled to
+    drift_y: float64
+    detail_x: float64        // where the finer shapes have travelled to
+    detail_y: float64
+    threshold: float64       // the noise level where cloud begins
+    soft: float64
+    opacity: float64
+    haze: float64            // how far the layer takes the horizon's colour
+}
+
+PracticeSky :: struct {
+    night: bool
+    arc: float64             // 0 rising, 0.5 highest, 1 setting
+    twilight: float64        // 1 with the light on the horizon, 0 with it high
+    zenith: PracticeSkyColor
+    middle: PracticeSkyColor
+    horizon: PracticeSkyColor
+    horizon_line: float64
+    light_x: float64
+    light_y: float64
+    light_radius: float64
+    light: PracticeSkyColor
+    glow: PracticeSkyColor
+    glow_strength: float64
+    moon_shadow: float64     // the terminator: 1 new, 0 half, -1 full
+    moon_waning: bool
+    stars: float64
+    star_field: float64
+    seconds: float64
+    cloud_light: PracticeSkyColor
+    cloud_shade: PracticeSkyColor
+    cloud_rim: PracticeSkyColor   // thin edges at dawn and dusk
+    layers: [PRACTICE_SKY_LAYERS]PracticeSkyCloudLayer
+}
+
+PracticeSkyFloor :: (value: float64) -> float64 {
+    whole := cast(float64)cast(s64)value
+    return ifx whole > value then whole - 1.0 else whole
+}
+
+PracticeSkyStep :: (edge0: float64, edge1: float64, value: float64) -> float64 {
+    t := (value - edge0) / (edge1 - edge0)
+    if t <= 0.0 {
+        return 0.0
+    }
+    if t >= 1.0 {
+        return 1.0
+    }
+    return t * t * (3.0 - 2.0 * t)
+}
+
+PracticeSkyRgb :: (rgb: u32) -> PracticeSkyColor {
+    return .{cast(float64)((rgb >> 16) & 255), cast(float64)((rgb >> 8) & 255), cast(float64)(rgb & 255)}
+}
+
+PracticeSkyMix :: (a: PracticeSkyColor, b: PracticeSkyColor, t: float64) -> PracticeSkyColor {
+    return .{a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t}
+}
+
+// A repeatable value in 0..1 for one numbered detail of a banner's sky.
+PracticeSkyHash :: (seed: s32, index: s32, salt: s32) -> float64 {
+    h: u32 = cast(u32)seed * 374761393 + cast(u32)index * 668265263 + cast(u32)salt * 2246822519
+    h = (h ^ (h >> 13)) * 1274126177
+    h = h ^ (h >> 16)
+    return cast(float64)(h & 16777215) / 16777216.0
+}
+
+// The sun is up from 06:00 to 18:00 and the moon for the other half. A light
+// banner shows the sun's place on its arc and a dark banner the moon's.
+PracticeSkyArc :: (hour: float64) -> float64 {
+    turn := (hour - 6.0) / 12.0
+    return turn - PracticeSkyFloor(turn)
+}
+
+PracticeSkyMoonAge :: (unix_seconds: float64) -> float64 {
+    months := (unix_seconds - PRACTICE_SKY_NEW_MOON) / PRACTICE_SKY_MOON_MONTH
+    return months - PracticeSkyFloor(months)
+}
+
+#scope_file
+practice_sky_cloud_layer :: (scenery: PracticeSkyScenery, index: s32, seconds: float64) -> PracticeSkyCloudLayer {
+    layer: PracticeSkyCloudLayer
+    layer.depth = cast(float64)index / cast(float64)(PRACTICE_SKY_LAYERS - 1)
+    // Far clouds are smaller and sit low; near ones are large and ride high.
+    size := scenery.cloud_scale * (0.5 + 0.5 * layer.depth)
+    layer.scale_y = 1.0 / size
+    layer.scale_x = layer.scale_y / scenery.cloud_stretch
+    band := scenery.cloud_bottom - scenery.cloud_top
+    centre := scenery.cloud_bottom - band * (0.22 + 0.5 * layer.depth)
+    half := band * (0.24 + 0.1 * layer.depth)
+    layer.top = centre - half
+    layer.bottom = centre + half
+    if layer.top < scenery.cloud_top {
+        layer.top = scenery.cloud_top
+    }
+    if layer.bottom > scenery.cloud_bottom {
+        layer.bottom = scenery.cloud_bottom
+    }
+    // The wind carries near clouds faster. The painting is twice as wide as
+    // it is tall.
+    travelled := scenery.wind * (0.35 + 0.65 * layer.depth) * seconds * 2.0 * layer.scale_x
+    layer.drift_x = PracticeSkyHash(scenery.seed, index, 1) * 64.0 - travelled
+    layer.drift_y = PracticeSkyHash(scenery.seed, index, 2) * 64.0
+    // The finer shapes lag behind and slowly rise through the broad ones.
+    layer.detail_x = PracticeSkyHash(scenery.seed, index, 3) * 64.0 - travelled * 1.25
+    layer.detail_y = PracticeSkyHash(scenery.seed, index, 4) * 64.0 - seconds * 0.02
+    layer.threshold = 0.62 - scenery.cloud_cover * (0.8 + 0.2 * layer.depth) * 0.35
+    layer.soft = scenery.cloud_soft * (1.3 - 0.3 * layer.depth)
+    layer.opacity = scenery.cloud_opacity * (0.5 + 0.5 * layer.depth)
+    layer.haze = 0.5 * (1.0 - layer.depth)
+    return layer
+}
+
+// The sky a banner shows at CLOCK, SECONDS into the day, composed for the
+// part of the painting in WINDOW.
+#scope_export
+PracticeSkyAt :: (scenery: PracticeSkyScenery, clock: PracticeSkyClock, seconds: float64,
+    window: PracticeBannerView) -> PracticeSky {
+    sky: PracticeSky
+    sky.night = scenery.night
+    sky.seconds = seconds
+    sky.horizon_line = scenery.horizon_line
+    sky.star_field = scenery.star_field
+    sky.arc = PracticeSkyArc(clock.hour)
+    rising := sky.arc < 0.5
+    from_horizon := ifx rising then sky.arc else 1.0 - sky.arc
+    sky.twilight = 1.0 - PracticeSkyStep(0.0, 0.2, from_horizon)
+    height := Sin(sky.arc * PRACTICE_SKY_PI)
+
+    zenith := PracticeSkyRgb(scenery.zenith)
+    horizon := PracticeSkyRgb(scenery.horizon)
+    twilight := PracticeSkyRgb(scenery.twilight)
+    if scenery.night {
+        // Dusk leaves a warm rim and dawn brings a cold one.
+        rim := ifx rising then twilight else PracticeSkyMix(twilight, PracticeSkyRgb(0x4f8fa6), 0.6)
+        sky.zenith = PracticeSkyMix(zenith, PracticeSkyMix(zenith, horizon, 0.3), sky.twilight)
+        sky.horizon = PracticeSkyMix(horizon, PracticeSkyMix(horizon, rim, 0.6), sky.twilight)
+        sky.light = PracticeSkyRgb(0xf6f1dc)
+        sky.glow = PracticeSkyRgb(0x9cbcf2)
+        sky.glow_strength = 0.30
+        sky.stars = 1.0 - 0.55 * sky.twilight
+        sky.cloud_rim = PracticeSkyMix(sky.glow, rim, 0.6 * sky.twilight)
+    } else {
+        // Dawn is rose, dusk burns orange, and noon is the clearest blue.
+        rim := ifx rising then twilight else PracticeSkyMix(twilight, PracticeSkyRgb(0xff7a3d), 0.5)
+        pale := PracticeSkyMix(zenith, horizon, 0.22 * (1.0 - height))
+        sky.zenith = PracticeSkyMix(pale, PracticeSkyMix(pale, PracticeSkyRgb(0x6d6aa8), 0.45), sky.twilight)
+        sky.horizon = PracticeSkyMix(horizon, rim, 0.9 * sky.twilight)
+        sky.light = PracticeSkyMix(PracticeSkyRgb(0xfffdf0), PracticeSkyRgb(0xffc98a), sky.twilight)
+        sky.glow = PracticeSkyMix(PracticeSkyRgb(0xfff0b4), rim, 0.7 * sky.twilight)
+        sky.glow_strength = 0.62 + 0.12 * sky.twilight
+        sky.cloud_rim = sky.glow
+    }
+    sky.middle = PracticeSkyMix(sky.zenith, sky.horizon, 0.42 + 0.2 * sky.twilight)
+
+    // The light crosses the part of the painting in view and peaks below its
+    // top edge. On the horizon it sits behind the painted land.
+    across := ifx scenery.westward then 1.0 - sky.arc else sky.arc
+    sky.light_x = window.left + window.width * (0.08 + 0.84 * across)
+    sky.light_y = scenery.horizon_line - (scenery.horizon_line - window.top) * 0.8 * height
+    sky.light_radius = scenery.disc
+    lit := Cos(2.0 * PRACTICE_SKY_PI * clock.moon)
+    // The thinnest moon drawn is a crescent.
+    sky.moon_shadow = ifx lit > 0.72 then 0.72 else lit
+    sky.moon_waning = clock.moon > 0.5
+
+    sky.cloud_light = PracticeSkyMix(PracticeSkyRgb(scenery.cloud_light), sky.glow, 0.35 * sky.twilight)
+    sky.cloud_shade = PracticeSkyMix(PracticeSkyRgb(scenery.cloud_shade), sky.horizon, 0.25 * sky.twilight)
+    for index: cast(s32)0..PRACTICE_SKY_LAYERS - 1 {
+        sky.layers[index] = practice_sky_cloud_layer(scenery, index, seconds)
+    }
+    return sky
+}

@@ -1,0 +1,114 @@
+// Cold vapour over the ice bath: separate puffs that leave the water, climb,
+// spread and thin out. Where a puff is depends only on the seconds on screen.
+#import "std/math"
+#import, file "practice_banner_sky.zi";
+
+PRACTICE_STEAM_PUFFS :: 28
+
+// Heights are fractions of the painting's height from its top; widths are
+// fractions of its width. A count of zero means the banner has no vapour.
+PracticeSteamSource :: struct {
+    count: s32
+    seed: s32
+    left: float64        // the water the vapour leaves
+    right: float64
+    surface: float64
+    rise: float64        // how far a puff climbs
+    drift: float64       // how far the air carries it sideways
+    color: u32
+    opacity: float64
+}
+
+PracticeSteamPuff :: struct {
+    x: float64
+    y: float64
+    radius: float64      // in painting heights
+    density: float64
+}
+
+// The part of the painting the vapour can reach.
+PracticeSteamView :: (source: PracticeSteamSource) -> PracticeBannerView {
+    reach := 0.13
+    side := ifx source.drift < 0.0 then -source.drift else source.drift
+    return .{source.left - side - reach, source.surface - source.rise - reach,
+        source.right - source.left + 2.0 * (side + reach), source.rise + 2.0 * reach}
+}
+
+PracticeSteamAt :: (source: PracticeSteamSource, index: s32, seconds: float64) -> PracticeSteamPuff {
+    puff: PracticeSteamPuff
+    life := 4.4 + 3.4 * PracticeSkyHash(source.seed, index, 1)
+    lives := seconds / life + PracticeSkyHash(source.seed, index, 2)
+    born := PracticeSkyFloor(lives)
+    age := lives - born
+    // Every new life leaves another place on the water.
+    generation := cast(s32)(born - PracticeSkyFloor(born / 4096.0) * 4096.0)
+    place := index * 4099 + generation
+    start := PracticeSkyHash(source.seed, place, 3)
+    climb := age * (1.7 - 0.7 * age)
+    sway := Sin(age * (4.0 + 3.0 * PracticeSkyHash(source.seed, place, 4)) +
+        PracticeSkyHash(source.seed, place, 5) * 2.0 * PRACTICE_SKY_PI)
+    puff.x = source.left + (source.right - source.left) * start +
+    source.drift * climb * (0.3 + 1.4 * PracticeSkyHash(source.seed, place, 6)) + 0.012 * sway * age
+    puff.y = source.surface - source.rise * climb * (0.55 + 0.45 * PracticeSkyHash(source.seed, place, 7))
+    puff.radius = (0.022 + 0.075 * age) * (0.75 + 0.5 * PracticeSkyHash(source.seed, place, 8))
+    // A puff appears at once and thins as it spreads.
+    thin := 1.0 - age
+    puff.density = PracticeSkyStep(0.0, 0.1, age) * thin * (0.4 + 0.6 * thin)
+    return puff
+}
+
+// Paints the vapour as its colour with a see-through alpha. CANVAS must hold
+// width * height * 4 bytes.
+PracticeSteamPaint :: (source: PracticeSteamSource, seconds: float64, canvas: PracticeBannerCanvas) {
+    if canvas.width <= 0 || canvas.height <= 0 ||
+    canvas.pixels.count < cast(s64)canvas.width * cast(s64)canvas.height * 4 {
+        return
+    }
+    red := cast(u8)((source.color >> 16) & 255)
+    green := cast(u8)((source.color >> 8) & 255)
+    blue := cast(u8)(source.color & 255)
+    for pixel: cast(s32)0..canvas.width * canvas.height - 1 {
+        canvas.pixels[pixel * 4] = red
+        canvas.pixels[pixel * 4 + 1] = green
+        canvas.pixels[pixel * 4 + 2] = blue
+        canvas.pixels[pixel * 4 + 3] = 0
+    }
+    scale_x := cast(float64)canvas.width / (canvas.view.width * 2.0)
+    scale_y := cast(float64)canvas.height / canvas.view.height
+    count := ifx source.count < PRACTICE_STEAM_PUFFS then source.count else PRACTICE_STEAM_PUFFS
+    for index: cast(s32)0..count - 1 {
+        puff := PracticeSteamAt(source, index, seconds)
+        strength := puff.density * source.opacity
+        if strength <= 0.004 {
+            continue
+        }
+        centre_x := (puff.x - canvas.view.left) * 2.0 * scale_x
+        centre_y := (puff.y - canvas.view.top) * scale_y
+        radius_x := puff.radius * scale_x
+        radius_y := puff.radius * scale_y
+        first_row := cast(s32)PracticeSkyFloor(centre_y - radius_y)
+        last_row := cast(s32)PracticeSkyFloor(centre_y + radius_y) + 1
+        first_column := cast(s32)PracticeSkyFloor(centre_x - radius_x)
+        last_column := cast(s32)PracticeSkyFloor(centre_x + radius_x) + 1
+        for row: first_row..last_row {
+            if row < 0 || row >= canvas.height {
+                continue
+            }
+            y := (cast(float64)row + 0.5 - centre_y) / radius_y
+            for column: first_column..last_column {
+                if column < 0 || column >= canvas.width {
+                    continue
+                }
+                x := (cast(float64)column + 0.5 - centre_x) / radius_x
+                inside := 1.0 - x * x - y * y
+                if inside <= 0.0 {
+                    continue
+                }
+                // Overlapping puffs thicken the vapour without ever going solid.
+                at := (row * canvas.width + column) * 4 + 3
+                alpha := cast(float64)canvas.pixels[at]
+                canvas.pixels[at] = cast(u8)(alpha + (255.0 - alpha) * strength * inside * inside + 0.5)
+            }
+        }
+    }
+}

@@ -41,7 +41,7 @@ for name in NODE_APPS if options.node_only else root_owners + NODE_APPS:
     (OUTPUT / name / 'assets').mkdir(parents=True)
 patterns = (
     'assets/mcp/*.json', 'assets/app/icon.webp', 'assets/app/icon-sky-cradle.webp',
-    'assets/app/icon-ink-and-air.webp', 'assets/app/practice-clouds.rg', 'assets/pet/*.png',
+    'assets/app/icon-ink-and-air.webp', 'assets/pet/*.png',
     'assets/apps/icons/*.png', 'assets/app/back-home.avif',
     'assets/social/*.png', 'assets/social/*.webp', 'assets/social/telegram.svg',
     'assets/sounds/*.ogg',
@@ -58,9 +58,7 @@ patterns = node_patterns if options.node_only else patterns + node_patterns
 practice_patterns = (
     'whm/1.webp', 'whm/2.webp', 'meditation/1.webp', '*/banner-light.webp', '*/banner-dark.webp',
     '*/banner-landscape.webp', '*/banner-character.webp',
-    'patterns/banner-sky-light.webp', 'patterns/banner-sky-dark.webp',
-    'whm/banner-sky.webp', 'whm/banner-sky-dark.webp',
-    'whm/banner-landscape-dark.webp', 'whm/banner-character-dark.webp',
+    '*/banner-landscape-dark.webp', '*/banner-character-dark.webp',
     'sunsalutation/characters/*/*.png', 'sunsalutation/flat-edge.png',
     'sunsalutation/voice/**/*', 'sunsalutation/voice-male/**/*',
     'astral_projection/**/*', 'workout/**/*', 'taichi/**/*', 'guide/voice/**/*',
