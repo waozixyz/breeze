@@ -174,6 +174,9 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
         achievement_key[:22] == "cell.achievement.fact."
         query := ifx award then SyncAchievementAwardsSQL else (ifx fact then SyncAchievementFactsSQL else SyncBundledAppRecordsSQL)
         ok = storage_exec_json_user_sql(query, record_response)
+        if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 {
+            SettingsCacheClear()
+        }
         if ok != 0 && achievement_key == AchievementAlertsKey && storage_setting_text_equals(AchievementAlertsKey, "0") != 0 {
             AchievementDiscardAlerts()
         }
@@ -218,6 +221,9 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
             return 0
         }
         ok = storage_exec_json_user_sql(SyncAppPreferencesSQL, record_response)
+        if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 {
+            SettingsCacheClear()
+        }
         if ok != 0 {
             storage_set_setting_int("apps_setup_done", 1)
         }
@@ -234,6 +240,7 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
             if key == record_id && MediaRecordKeyAccepted(key) {
                 ok = storage_exec_json_user_sql(SyncMediaRecordsSQL, record_response)
                 if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 {
+                    SettingsCacheClear()
                     storage_media_changes += 1
                 }
             }
@@ -250,9 +257,15 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
             key := ifx key_count > 0 && key_count < 181 then TextFromBytes(key_bytes[:key_count]) else ""
             if key == record_id && array_name == "app_installs" && NodeAppInstallKeyValid(key) {
                 ok = storage_exec_json_user_sql(SyncAppInstallsSQL, record_response)
+                if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 {
+                    SettingsCacheClear()
+                }
             } else if key == record_id && array_name == "app_records" && NodeAppRecordKeyValid(key) &&
             collection == storage_node_app_records_collection(key) {
                 ok = storage_exec_json_user_sql(SyncAppRecordsSQL, record_response)
+                if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 {
+                    SettingsCacheClear()
+                }
             }
         }
     } else if array_name == "habit_settings" {
@@ -261,6 +274,9 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
         if record_id == "habit_shop_borrow_limit" &&
         Scan.ArrayCount(record_response, records) == 1 && storage_bundled_app_plaintext_fields_valid(plaintext) {
             ok = storage_exec_json_user_sql(SyncHabitSettingsSQL, record_response)
+            if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 {
+                SettingsCacheClear()
+            }
         }
     } else if array_name == "app_order" {
         // A record this version can't read, such as another key a newer
@@ -270,6 +286,7 @@ storage_apply_decrypted_record :: (collection: string, record_id: string, plaint
         if Scan.ArrayCount(record_response, records) == 1 {
             ok = storage_exec_json_user_sql(SyncAppOrderSQL, record_response)
             if ok != 0 && sqlite3_changes(storage_db_handle()) > 0 {
+                SettingsCacheClear()
                 storage_set_setting_int(AppOrderReceivedKey, 1)
             }
         }
@@ -332,7 +349,13 @@ storage_apply_entity_record :: (collection: string, record_id: string, plaintext
         bind_text(statement, 2, ENTITY_PROFILE_APPEARANCE_KEY)
         bind_text(statement, 3, plaintext)
         bind_text(statement, 4, updated_at)
-        return ifx SqliteStep(statement) == SQLITE_DONE then 1 else 0
+        if SqliteStep(statement) != SQLITE_DONE {
+            return 0
+        }
+        if sqlite3_changes(storage_db_handle()) > 0 {
+            SettingsCacheClear()
+        }
+        return 1
     }
     if collection == EntityLevelsCollection {
         if !EntityProgressIDValid(record_id) || (plaintext != "" && !EntityLevelDocumentValid(plaintext)) {
@@ -352,7 +375,10 @@ storage_apply_entity_record :: (collection: string, record_id: string, plaintext
         bind_text(statement, 3, plaintext)
         bind_text(statement, 4, updated_at)
         if SqliteStep(statement) != SQLITE_DONE { return 0 }
-        if sqlite3_changes(storage_db_handle()) > 0 { entity_levels_revision += 1 }
+        if sqlite3_changes(storage_db_handle()) > 0 {
+            SettingsCacheClear()
+            entity_levels_revision += 1
+        }
         return 1
     }
     if collection == EntityGameProgressCollection {
@@ -373,6 +399,9 @@ storage_apply_entity_record :: (collection: string, record_id: string, plaintext
         result := SqliteStep(statement)
         SqliteFinalize(statement)
         if result != SQLITE_DONE { return 0 }
+        if sqlite3_changes(storage_db_handle()) > 0 {
+            SettingsCacheClear()
+        }
         entity_progress_revision += 1
         // If each installation earned different wins, send their union.
         if merged != plaintext { unused storage_enqueue_sync_entity("entity_record", key, 0) }
@@ -399,6 +428,7 @@ storage_apply_entity_record :: (collection: string, record_id: string, plaintext
             return 0
         }
         if sqlite3_changes(storage_db_handle()) > 0 {
+            SettingsCacheClear()
             storage_media_changes += 1
         }
         return 1
@@ -423,6 +453,7 @@ storage_apply_entity_record :: (collection: string, record_id: string, plaintext
         return 0
     }
     if sqlite3_changes(storage_db_handle()) > 0 {
+        SettingsCacheClear()
         storage_media_changes += 1
     }
     return 1

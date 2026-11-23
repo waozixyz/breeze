@@ -135,8 +135,8 @@ storage_get_setting_int :: (key: string, fallback: s32) -> s32 {
 
 // Dew, Lumi, sync and app versions read settings on every frame, and each
 // read prepared its SQL again: a sixth of a phone's frame. Short values are
-// kept until stored data or the user changes (see storage_data_revision).
-// A longer value, such as an account key, is only remembered as present.
+// kept until the settings table is written or the user changes. A longer
+// value, such as an account key, is only remembered as present.
 SETTINGS_CACHE_SLOTS :: 64
 SETTINGS_CACHE_KEY :: 96
 SETTINGS_CACHE_VALUE :: 512
@@ -150,23 +150,43 @@ SettingsCacheEntry :: struct {
 settings_cache: [SETTINGS_CACHE_SLOTS]SettingsCacheEntry;
 settings_cache_count: s32;
 settings_cache_next: s32;
-settings_cache_revision: s64 = -1;
+settings_cache_generation: s64 = -1;
 settings_cache_user: [64]u8;
 
-// The slot holding `key`, or -1, after emptying the cache when stored data
-// or the user changed. Hold the connection's mutex: threads share the cache.
+SettingsCacheReset :: () {
+    settings_cache_count = 0
+    settings_cache_next = 0
+}
+
+// Empties the cache because the settings table was written. Threads share
+// the cache, so the caller's path takes the connection's mutex; a write
+// batch already holds it, and SQLite's connection mutex is recursive.
+SettingsCacheClear :: () {
+    database := storage_db_handle()
+    if database == null {
+        SettingsCacheReset()
+        return
+    }
+    mutex := sqlite3_db_mutex(database)
+    sqlite3_mutex_enter(mutex)
+    SettingsCacheReset()
+    sqlite3_mutex_leave(mutex)
+}
+
+// The slot holding `key`, or -1, after emptying the cache when the user or
+// the connection changed. Hold the connection's mutex: threads share the
+// cache. Writes to the settings table empty it through SettingsCacheClear.
 SettingsCacheFind :: (key: string) -> s32 {
-    revision := storage_data_revision()
+    generation := storage_connection_generation
     user := storage_user_id_buffer()
     same_user := true
     for at: cast(s32)0..63 {
         if settings_cache_user[at] != user[at] { same_user = false; break }
         if user[at] == cast(u8)0 { break }
     }
-    if revision != settings_cache_revision || !same_user {
-        settings_cache_count = 0
-        settings_cache_next = 0
-        settings_cache_revision = revision
+    if generation != settings_cache_generation || !same_user {
+        SettingsCacheReset()
+        settings_cache_generation = generation
         for at: cast(s32)0..63 {
             settings_cache_user[at] = user[at]
             if user[at] == cast(u8)0 { break }
@@ -176,7 +196,7 @@ SettingsCacheFind :: (key: string) -> s32 {
     for slot: cast(s32)0..settings_cache_count - 1 {
         entry := *settings_cache[slot]
         if entry.key_count == cast(s32)key.count &&
-            TextFromBytes(entry.key[:entry.key_count]) == key { return slot }
+        TextFromBytes(entry.key[:entry.key_count]) == key { return slot }
     }
     return -1
 }
@@ -218,13 +238,13 @@ storage_get_setting_text :: (key: string) -> string {
         slot := SettingsCacheFind(key)
         if slot >= 0 && settings_cache[slot].value_count >= 0 {
             entry := *settings_cache[slot]
-            for at: cast(s32)0..entry.value_count - 1 { text_value[at] = entry.value[at] }
-            text_value[entry.value_count] = cast(u8)0
+            count := entry.value_count
+            for at: cast(s32)0..count - 1 { text_value[at] = entry.value[at] }
+            text_value[count] = cast(u8)0
             sqlite3_mutex_leave(mutex)
-            if entry.value_count == 0 {
-                return ""
-            }
-            return AppTextFromCString(text_value, 8192)
+            // The caller keeps this per-thread buffer; its length is known,
+            // so no scan over an 8192-byte maximum is needed.
+            return TextFromBytes(BytesFromPointer(text_value, cast(u64)count))
         }
     }
     defer {
@@ -239,13 +259,15 @@ storage_get_setting_text :: (key: string) -> string {
     }
     bind_text(stmt, 1, AppTextFromCString(storage_user_id_buffer(), 64))
     bind_text(stmt, 2, key)
+    value_count: s32 = 0
     if SqliteStep(stmt) == SQLITE_ROW {
         text: string = AppTextFromCString(SqliteColumnText(stmt, 0), 8192)
-        AppCopyText(ifx (text.count > 0) then (text) else (""),
-            BytesFromPointer(text_value, 8192))
+        if text.count > 0 && AppCopyText(text, BytesFromPointer(text_value, 8192)) {
+            value_count = cast(s32)text.count
+        }
     }
     SqliteFinalize(stmt)
-    value := ifx text_value[0] != cast(u8)0 then AppTextFromCString(text_value, 8192) else ""
+    value := ifx value_count > 0 then TextFromBytes(BytesFromPointer(text_value, cast(u64)value_count)) else ""
     if cached {
         if SettingsCacheFind(key) < 0 { SettingsCacheStore(key, value) }
     }
@@ -331,6 +353,7 @@ storage_set_setting_text :: (key: string, value: string) {
     rc = SqliteStep(stmt)
     SqliteFinalize(stmt)
     if rc == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0 {
+        SettingsCacheClear()
         if HabitSettingKeyValid(key) {
             unused storage_enqueue_sync_entity("habit_setting", key, 0)
         }
@@ -381,9 +404,11 @@ storage_set_setting_default_text :: (key: string, value: string) {
     SqliteBindInt64(statement, 4, AppDefaultTime)
     rc := SqliteStep(statement)
     SqliteFinalize(statement)
-    if rc == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0 &&
-    storage_state_handle().settings_write_depth <= 0 {
-        storage_schedule_persist()
+    if rc == SQLITE_DONE && sqlite3_changes(storage_db_handle()) > 0 {
+        SettingsCacheClear()
+        if storage_state_handle().settings_write_depth <= 0 {
+            storage_schedule_persist()
+        }
     }
 }
 
