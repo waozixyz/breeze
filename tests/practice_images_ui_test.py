@@ -95,14 +95,29 @@ def changed_pixels(before, after, bounds, minimum):
                ImageChops.difference(before.crop(bounds), after.crop(bounds)).getdata())
 
 
+def marker_pixels(before, after, bounds):
+    """Changed pixels in the night marker's own colours. The live sky behind
+    the square changes too, so only the marker's fill and rim count."""
+    def marker(red, green, blue):
+        fill = abs(red - 255) + abs(green - 223) + abs(blue - 146) < 60
+        rim = abs(red - 150) + abs(green - 109) + abs(blue - 71) < 45
+        return fill or rim
+    count = 0
+    for old, new in zip(before.crop(bounds).getdata(), after.crop(bounds).getdata()):
+        if max(abs(a - b) for a, b in zip(old, new)) >= 24 and (marker(*old) or marker(*new)):
+            count += 1
+    return count
+
+
 def moving_sky(window, name, first):
-    # Sample above the square, figure and vapour: clouds drift and stars flicker.
-    bounds = (52, 59, WIDTH - 42, 127)
+    # The whole banner except the column the Box marker travels in: clouds
+    # drift and change shape, stars flicker and the vapour rises.
+    regions = ((3, 48, 100, 256), (100, 48, 290, 100), (290, 48, WIDTH - 3, 256))
     counts = []
     for sample in range(1, 4):
         time.sleep(1.1)
         image = capture(window, f"{name}-sky-{sample}")
-        counts.append(changed_pixels(first, image, bounds, 4))
+        counts.append(sum(changed_pixels(first, image, bounds, 4) for bounds in regions))
     assert max(counts) >= 60, (name, "The live sky did not change", counts)
     print(f"{name} live sky: {max(counts)} changing pixels", flush=True)
 
@@ -245,7 +260,7 @@ with tempfile.TemporaryDirectory(prefix="profile-", dir=output) as directory, co
                 image = capture(window, "patterns-marker-start")
                 time.sleep(1.2)
                 advanced = capture(window, "patterns-inhale-progress")
-                changed = changed_pixels(image, advanced, (90, 150, WIDTH - 90, 346), 24)
+                changed = marker_pixels(image, advanced, (90, 150, WIDTH - 90, 346))
                 assert 25 < changed < 600, f"Expected a moving marker on the square, got {changed} pixels"
             if not pictured(image, (0, 40, WIDTH, 420)):
                 missing.append(practice)
