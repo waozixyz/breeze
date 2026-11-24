@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+- The Workout clock waits at its start value until the 3D figure is on screen, so it never counts down over the loading dots. A resumed workout starts at once.
 - Follow a marker around Box Breathing’s glowing square, now drawn behind the figure. Box Breathing and Wim Hof keep their original paintings as separate land and figure layers, and cold vapour rises from the Wim Hof ice bath puff by puff.
 - Workout shows one countdown and starts narration when the figure is ready. Choose Woman or Man in Customize. Open the routine manager from the third Workout card.
 - Woman wears the fitted Workout top and leggings in Sun Salutation and brings her palms together at the chest in Mountain pose.

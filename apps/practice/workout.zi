@@ -108,6 +108,9 @@ workout_session_character: s32;
 workout_voice_elapsed_ms: s32 = -1;
 workout_resume_cue: [64]u8;
 workout_startup: s32;
+// A fresh session holds its clock at the start value until the chosen
+// figure's model is on screen; a resumed one counts at once.
+workout_hold_for_figure: bool;
 workout_skip_initial_delta: bool;
 workout_frame_carry: float64;
 workout_exit_was_paused: s32;
@@ -215,6 +218,7 @@ WorkoutStartRoutine :: (app: *InnerBreeze, routine: s32) {
     workout_session_character = app.workout_character
     workout_voice_elapsed_ms = -1
     workout_resume_cue[0] = cast(u8)0
+    workout_hold_for_figure = true
     WorkoutEnter(app)
     PracticeDraftBegin(EXERCISE_WORKOUT)
     if routine == WORKOUT_ROUTINE_CUSTOM {
@@ -340,6 +344,7 @@ WorkoutContinue :: (app: *InnerBreeze, draft: *PracticeRecoveryDraft) -> bool {
     workout_session_character = state.character
     workout_voice_elapsed_ms = state.voiced_ms
     workout_resume_cue[0] = cast(u8)0
+    workout_hold_for_figure = false
     if state.voiced_ms >= 0 {
         voiced := WorkoutTimelineStep(state.routine, *state.sequence, state.voiced_ms)
         key: [64]u8
@@ -759,16 +764,25 @@ WorkoutDrawWindow :: (app: *InnerBreeze, picture: Rectangle, output: []u8) -> st
     return TextUntilNul(output)
 }
 
+// The session's figure, or the loading dots while its model is on its way.
+// A fresh session holds its clock at the start until the chosen character's
+// model is on screen; a resumed session, or one whose model is not coming,
+// starts at once and falls back to the flat figure.
 WorkoutSessionFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
     #if #defined(KRYON_TEST_DRIVER) && #defined(DESKTOP_HOST) && OS == .LINUX {
         if workout_startup == WORKOUT_START_WAITING && !WorkoutTestSceneAvailable() {
             return
         }
     }
-    drawn := WorkoutDrawFigure(app, WorkoutCurrentStep(), request.bounds, request.key, request.alt_text)
-    if drawn && workout_startup == WORKOUT_START_WAITING {
-        workout_startup = WORKOUT_START_READY
+    unused WorkoutDrawFigure(app, WorkoutCurrentStep(), request.bounds, request.key, request.alt_text)
+    if workout_startup != WORKOUT_START_WAITING {
+        return
     }
+    if workout_hold_for_figure && PracticeFigureModelLoading(workout_session_character == 1) {
+        return
+    }
+    workout_hold_for_figure = false
+    workout_startup = WORKOUT_START_READY
 }
 
 WorkoutDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {

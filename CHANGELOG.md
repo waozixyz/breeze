@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Hold the Workout clock until its 3D figure loads; a resumed workout starts at once.
 - Accept an app-unlocked picture set as the profile picture and translate its picker tab, so a picture chosen in any app is kept here instead of being replaced by the stored icon.
 - Fix Backspace, edits, backup restores. Find Photos/Radio. Dew via Telegram Stars. Fast Lumi chat, unseen reply alerts.
 - Start/switch/resume. Seek Astral. 4-min and custom workouts. Live-sky banners. Download status/retry. PiP/Home fixes.
