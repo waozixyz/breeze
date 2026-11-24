@@ -2,7 +2,8 @@
 
 ## [Unreleased]
 
-- Draw each frame straight to the screen and reuse text measurements, so scrolling and practice starts hold 60 fps.
+- Draw each frame straight to the screen and reuse text measurements.
+- Show bundled WebP and AVIF pictures on Android again. The Kryon bump had turned every one of them into a Missing image box: Breeze never asked Kryon for its in-process decoders, and its activity lacked the BitmapFactory bridge Kryon now expects.
 - Hold the Workout clock until its 3D figure loads; a resumed workout starts at once.
 - Accept an app-unlocked picture set as the profile picture and translate its picker tab, so a picture chosen in any app is kept here instead of being replaced by the stored icon.
 - Fix Backspace, edits, backup restores. Find Photos/Radio. Dew via Telegram Stars. Fast Lumi chat, unseen reply alerts.

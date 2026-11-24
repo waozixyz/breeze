@@ -16,6 +16,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.res.Configuration;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Insets;
 import android.graphics.Rect;
 import android.net.Uri;
@@ -1482,6 +1484,37 @@ public class MainActivity extends NativeActivity {
 
         } catch (Exception e) {
             Log.e(TAG, "Error structuralizing window layout properties: " + e.getMessage());
+        }
+    }
+
+    // Called by Kryon from the native frame thread. Native ZX supplies
+    // immutable bundle bytes; Android returns width, height and ARGB_8888
+    // pixels for formats the portable native decoders cannot read.
+    public int[] decodeBundleImage(byte[] bytes) {
+        if (bytes == null) return null;
+        Bitmap bitmap = null;
+        try {
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inJustDecodeBounds = true;
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+            int width = options.outWidth;
+            int height = options.outHeight;
+            if (width <= 0 || height <= 0 || width > 32768 || height > 32768
+                    || (long) width * height > 67108864) return null;
+            options.inJustDecodeBounds = false;
+            options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+            bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
+            if (bitmap == null || bitmap.getWidth() != width || bitmap.getHeight() != height) return null;
+            int[] result = new int[2 + width * height];
+            result[0] = width;
+            result[1] = height;
+            bitmap.getPixels(result, 2, width, 0, 0, width, height);
+            return result;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not decode bundled image", error);
+            return null;
+        } finally {
+            if (bitmap != null) bitmap.recycle();
         }
     }
 
