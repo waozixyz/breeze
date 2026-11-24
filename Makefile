@@ -750,7 +750,7 @@ $(KRYON_ICON_ASSETS_C) $(KRYON_ICON_NAMES_C) $(KRYON_ICON_TYPES_H): $(KRYON_ICON
 		--types-output "$(abspath $(KRYON_ICON_TYPES_H))" \
 		--names-output "$(abspath $(KRYON_ICON_NAMES_C))"
 
-$(SQLITE_AMALGAMATION_C) $(SQLITE_AMALGAMATION_H): $(SQLITE_DIR)/configure $(SQLITE_DIR)/manifest | $(BUILD_OBJ_DIR)
+$(SQLITE_AMALGAMATION_C) $(SQLITE_AMALGAMATION_H) &: $(SQLITE_DIR)/configure $(SQLITE_DIR)/manifest | $(BUILD_OBJ_DIR)
 	mkdir -p $(SQLITE_BUILD_DIR)
 	cd $(SQLITE_BUILD_DIR) && $(abspath $(SQLITE_DIR))/configure
 	$(MAKE) -C $(SQLITE_BUILD_DIR) sqlite3.c sqlite3.h
