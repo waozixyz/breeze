@@ -79,6 +79,9 @@ PracticeLogFn :: #type (warning: bool, message: string) -> ();
 practice_log: PracticeLogFn;
 // A failed download tries again this many times before it reports failure.
 PracticeDownloadRetries :: 2
+// A failure the person should notice once, as a toast. The app takes it.
+practice_download_notice: [96]u8;
+practice_download_notice_pending: bool;
 // Paid practices are bought with Dew, which the Google Play build does not
 // offer, so there they are neither listed nor downloaded.
 practice_paid_allowed: bool = true;
@@ -582,6 +585,18 @@ PracticeDownloadLog :: (index: s32, warning: bool, event: string, reason: string
     PackageFree(message)
 }
 
+// Whether a practice has a pack on this device or already open. Its content
+// then does not depend on a download.
+PracticeContentOnDevice :: (practice: s32) -> bool {
+    for index: cast(s32)0..practice_pack_count - 1 {
+        pack := *practice_packs[index]
+        if pack.practice == practice && (pack.bundle != null || pack.present) {
+            return true
+        }
+    }
+    return false
+}
+
 // Temporary failures can retry with a fresh grant for paid packs. Permanent
 // failures end the busy state and wait for an explicit retry.
 PracticeDownloadFailed :: (index: s32, reason: string, http_status: s32 = 0) {
@@ -607,6 +622,26 @@ PracticeDownloadFailed :: (index: s32, reason: string, http_status: s32 = 0) {
     pack.requested = false
     pack.retry_at = 0
     PracticeDownloadLog(index, true, "failed", reason)
+    // Only a failure that leaves an unlocked practice without any content on
+    // this device is worth a message, and that is a toast, never a line on
+    // a page.
+    product := TextFromCString(*pack.product[0])
+    locked := product.count > 0 && (practice_owned == null || !practice_owned(product))
+    if locked || PracticeContentOnDevice(pack.practice) {
+        return
+    }
+    if CopyCString(LocaleText("practice_download_failed"), practice_download_notice[:]) {
+        practice_download_notice_pending = true
+    }
+}
+
+// Hands over the notice a failed download queued, or "" when there is none.
+PracticeDownloadNoticeTake :: () -> string {
+    if !practice_download_notice_pending {
+        return ""
+    }
+    practice_download_notice_pending = false
+    return TextFromCString(*practice_download_notice[0])
 }
 
 PracticeDownloadsCancel :: () {

@@ -1,0 +1,51 @@
+// A short status message for an event the person should notice once, drawn
+// as a toast instead of a status line on a page.
+#import "std/byte_text_linux"
+#import "std/c_string"
+#import, file "app_types.zi";
+#import, file "metrics.zi";
+#import, file "dpi_state.zi";
+#import, file "notification_presentation.zi";
+#import, file "../platform/host_clock.zi";
+Layout :: #import "kryon/layout";
+Toast :: #import "kryon/toast";
+#import "geometry"
+#import "session"
+
+// The toast keeps a view of its message while it shows, so the message is
+// kept here beyond the frame that asked for it.
+app_toast_message: [256]u8;
+app_toast_request: string;
+app_toast_state: Toast.ToastState;
+
+// Shows one message as the next toast. An empty message changes nothing.
+AppToast :: (message: string) {
+    if message.count == 0 {
+        return
+    }
+    if !CopyCString(message, app_toast_message[:]) {
+        return
+    }
+    app_toast_request = TextFromCString(*app_toast_message[0])
+}
+
+// Draws the pending toast inside the page's viewport, which ends above the
+// navigation, and keeps its state across frames.
+AppToastDraw :: (app: *InnerBreeze, viewport: Rectangle) {
+    if app == null || !SessionValid(app.ui.session) {
+        return
+    }
+    if app_toast_state.message.count == 0 && app_toast_request.count == 0 {
+        return
+    }
+    props: Toast.Props
+    props.key = Layout.KeyHash("inbe/app/toast")
+    props.viewport = viewport
+    props.state = app_toast_state
+    props.message = app_toast_request
+    props.seconds = AppNotificationToastSeconds
+    props.now_seconds = HostSeconds()
+    props.scale = GetDPIScale()
+    app_toast_state = Toast.Draw(app.ui.session, props).state
+    app_toast_request = ""
+}

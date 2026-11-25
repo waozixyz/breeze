@@ -44,6 +44,14 @@ achievement_scan_owner: [65]u8;
 achievement_scan_profile_revision: u64;
 achievement_scan_restart: bool;
 achievement_snapshot_revision: u64 = 18446744073709551615;
+// Visibility follows the installed apps, the catalogs and the practice packs,
+// which change rarely while reading the packs costs a phone a share of its
+// frame; a frame reuses the last answer until one of them changes or a
+// second passes.
+achievement_visibility_apps: u64;
+achievement_visibility_catalog: u64;
+achievement_visibility_assets: u64;
+achievement_visibility_at: float64 = -1.0;
 achievement_habits: Habits;
 achievement_toast: AchievementToast;
 
@@ -112,6 +120,21 @@ AchievementLumiPracticeSaved :: (id: string, activity: s32, day: s32) {
     AchievementMarkLive("habit.scheduled")
 }
 
+AchievementVisibilityRefresh :: (apps: u64) {
+    now := HostSeconds()
+    catalog := achievement_catalog_revision
+    assets := AssetGeneration()
+    if now - achievement_visibility_at < 1.0 && apps == achievement_visibility_apps &&
+    catalog == achievement_visibility_catalog && assets == achievement_visibility_assets {
+        return
+    }
+    achievement_visibility_at = now
+    achievement_visibility_apps = apps
+    achievement_visibility_catalog = catalog
+    achievement_visibility_assets = assets
+    AchievementVisibility()
+}
+
 AchievementFrame :: (app: *InnerBreeze) {
     if app == null { return }
     AchievementBindHost(AchievementInstalled, AchievementPracticeReady, AchievementNodeCatalogs)
@@ -147,7 +170,7 @@ AchievementFrame :: (app: *InnerBreeze) {
     achievement_locale_asset = AchievementLocaleAsset
     achievement_locale_directory = AchievementLocaleDirectory
     AchievementLocaleFrame()
-    AchievementVisibility()
+    AchievementVisibilityRefresh(snapshot)
     revision := AchievementSourceRevision()
     if !achievement_reconciling && revision == achievement_scan_revision {
         AchievementEvaluate()

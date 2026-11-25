@@ -50,6 +50,9 @@ EntityReloadData :: (app: *InnerBreeze, settings: s32) #foreign c "app_reload_af
 
 entity_management: Provider.ManagementProvider;
 entity_management_started: bool;
+// The second in which the provider's pump last ran; a settled pump runs
+// once a second rather than every frame.
+entity_management_pumped_at: s64 = -1;
 entity_management_picker: bool;
 entity_management_picker_kind: s32;
 entity_management_picker_abandoned: bool;
@@ -508,12 +511,30 @@ InbeManagementDiscardPicker :: () {
     }
 }
 
+// True while the provider's pump has nothing to follow from frame to frame:
+// no queued request, transfer, platform poll or picker.
+InbeManagementSettled :: () -> bool {
+    return !entity_management.queue.pending && !entity_management.asynchronous &&
+        !entity_management.drive_pending && !entity_management.handoff_pending &&
+        entity_management.bridge_operation == 0 && !entity_management.backup_status_pending &&
+        !entity_management.methods_asked && !entity_management.delegated
+}
+
 InbeManagementPump :: (app: *InnerBreeze) {
     InbeManagementStart(app)
     if entity_management_picker && entity_management.queue.pending {
         entity_management.delegated = false
     }
-    Provider.ProviderPump(*entity_management)
+    // Building the provider's state asks for the account, its sync status
+    // and every node from SQLite, most of a phone's frame, and none of that
+    // changes while the pump is settled. The provider's own pumps run at
+    // most once a second, so a settled pump joins that pace.
+    settled := InbeManagementSettled()
+    now := UnixNow()
+    if !settled || now != entity_management_pumped_at {
+        entity_management_pumped_at = now
+        Provider.ProviderPump(*entity_management)
+    }
     InbePicturePump(app)
     InbeManagementDiscardPicker()
     if !entity_management.queue.pending && entity_management_selected[0] != cast(u8)0 {

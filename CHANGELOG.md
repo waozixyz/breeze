@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Keep the bottom navigation when a shortcut opens one of Inbe's own screens.
+- Say a failed practice download once, as a toast, and only when the practice cannot start. Starting a practice whose content is on the device no longer asks for a download. Shorter Workout descriptions, and a Workout exit dialog that no longer calls the session a meditation.
+- Draw Android system text from the GPU atlas, and run a settled account pump and the achievement check once a second instead of every frame.
 - Draw each frame straight to the screen and reuse text measurements.
 - Show bundled WebP and AVIF pictures on Android again. The Kryon bump had turned every one of them into a Missing image box: Breeze never asked Kryon for its in-process decoders, and its activity lacked the BitmapFactory bridge Kryon now expects.
 - Hold the Workout clock until its 3D figure loads; a resumed workout starts at once.
