@@ -103,6 +103,7 @@ packages = [
     ("avif", "avif"),
     ("libavif", "libavif"),
     ("libaom", "libaom"),
+    ("dav1d", "dav1d"),
     # Kryon's Ogg Opus decoder and its pinned native source packages.
     ("audio", "audio"),
     ("libopus", "libopus"),

@@ -15,8 +15,10 @@
 #import, file "tai_chi/tai_chi_math.zi";
 Image :: #import "kryon/image";
 #if #defined(ANDROID_BUILD) {
+    #import "std/format"
     #import, file "practice_figure_load.zi";
     #import, file "../platform/host_clock.zi";
+    #import, file "../platform/app_trace.zi";
     Loading :: #import "kryon/loading_indicator";
 }
 
@@ -44,6 +46,7 @@ PracticeFigureTexture :: struct {
 practice_figure_stages: [2]FigureStage;
 #if #defined(ANDROID_BUILD) {
     practice_figure_loads: [2]PracticeFigureLoad;
+    practice_figure_renderer_status: [2]s32;
 }
 practice_figure_textures: [24]PracticeFigureTexture;
 practice_figure_clock: u64;
@@ -96,8 +99,15 @@ PracticeFigureDrawModel :: (session: Session, solved: *TaiChiSolved, rig: *TaiCh
         joints := PracticeFigureJoints(solved, rig)
         offset := FigureV3(placement.offset.x, placement.offset.y, placement.offset.z)
         pivot := FigureV3(placement.pivot.x, placement.pivot.y, placement.pivot.z)
-        if !FigureStagePaint(stage, *joints, center, view.yaw, view.tilt, framing.view_height,
-            width, height, seconds, offset, pivot, placement.roll) {
+        #if OS == .ANDROID {
+            gpu_frames := stage.gpu.resources.frames
+        }
+        rendered := FigureStagePaint(stage, *joints, center, view.yaw, view.tilt, framing.view_height,
+            width, height, seconds, offset, pivot, placement.roll)
+        #if OS == .ANDROID {
+            PracticeFigureReportRenderer(stage, man, rendered, stage.gpu.resources.frames > gpu_frames, width, height)
+        }
+        if !rendered {
             return false
         }
         if placement.translucent {
@@ -140,7 +150,7 @@ PracticeFigureDrawModel :: (session: Session, solved: *TaiChiSolved, rig: *TaiCh
         slot.animation_tick = animation_tick
     }
     Image.Draw(session, Image.Props.{.key = key, .bounds = area, .texture = slot.texture,
-        .alt_text = alt_text, .smooth = true})
+            .alt_text = alt_text, .smooth = true})
     return true
 }
 
@@ -153,6 +163,7 @@ PracticeFigureDrawRelease :: () {
     #if #defined(ANDROID_BUILD) {
         for index: 0..practice_figure_loads.count - 1 {
             PracticeFigureLoadWait(*practice_figure_loads[index])
+            practice_figure_renderer_status[index] = 0
         }
     }
     for index: 0..practice_figure_stages.count - 1 {
@@ -193,6 +204,28 @@ PracticeFigureModelPath :: (man: bool) -> string {
 }
 
 #if #defined(ANDROID_BUILD) {
+    #if OS == .ANDROID {
+        // A composition context alone does not prove that a figure avoided the
+        // CPU fallback. Count a completed Scene GPU frame, and log only the first
+        // result or a backend change, without adding work to settled frames.
+        #scope_file
+        PracticeFigureReportRenderer :: (stage: *FigureStage, man: bool, rendered: bool,
+            accelerated: bool, width: s32, height: s32) {
+            index := ifx man then 1 else 0
+            status: s32 = ifx !rendered then 3 else ifx accelerated then 1 else 2
+            if practice_figure_renderer_status[index] == status {
+                return
+            }
+            practice_figure_renderer_status[index] = status
+            line: Vec(u8)
+            BuilderPrint(*line, "APP PROBE: practice figure man=% rendered=% accelerated=% path=offscreen-readback size=%x% msaa=% renderer=% diagnostic=%",
+                man, rendered, accelerated, width, height, stage.gpu.samples,
+                TextFromCString(*stage.gpu.capabilities.renderer[0]), stage.gpu.capabilities.diagnostic)
+            TraceLog(3, TextView(line[:]))
+            VecFree(line)
+        }
+    }
+
     // Whether the man's or woman's model is loaded. The first call starts its
     // load once no other model is loading, so two models never read at once.
     #scope_file

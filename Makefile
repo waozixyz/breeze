@@ -216,10 +216,9 @@ WEBP_A := $(WEBP_BUILD_DIR)/libkryonwebp.a
 AVIF_BUILD_DIR := $(NATIVE_VENDOR_BUILD_DIR)/kryon-avif
 AVIF_A := $(AVIF_BUILD_DIR)/avif/libavif.a
 AOM_A := $(AVIF_BUILD_DIR)/aom/libaom.a
-# Kryon's codec recipes come from the codec packages in this app's lock.
-# Kryon resolves the rest (dav1d) with this build's ziran, which CI runners
-# do not have on PATH.
-IMAGE_PACKAGE_DIRS := -DKRYON_WEBP_PACKAGE_DIR="$(abspath build/packages/webp)" -DKRYON_AVIF_PACKAGE_DIR="$(abspath build/packages/avif)" -DZIRAN_BIN="$(ZIRAN_BIN)"
+# Codec recipes and sources come from this app's lock, including dav1d.
+# Use the pinned compiler for any package resolution on CI runners.
+IMAGE_PACKAGE_DIRS := -DKRYON_WEBP_PACKAGE_DIR="$(abspath build/packages/webp)" -DKRYON_AVIF_PACKAGE_DIR="$(abspath build/packages/avif)" -DDAV1D_DIR="$(abspath build/packages/dav1d)" -DZIRAN_BIN="$(ZIRAN_BIN)"
 WIN64_ARCH := x86_64
 WIN64_CC ?= $(or $(WIN_CC),x86_64-w64-mingw32-gcc)
 WIN64_AR ?= $(or $(WIN_AR),x86_64-w64-mingw32-ar)

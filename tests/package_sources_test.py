@@ -10,7 +10,7 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'build/package-sources-test'
 OUTPUT.mkdir(parents=True, exist_ok=True)
-NAMES = ('ziran kryon css oqs libwebp webp image-codec avif libavif libaom '
+NAMES = ('ziran kryon css oqs libwebp webp image-codec avif libavif libaom dav1d '
          'audio libopus libsamplerate game2d qrcode plot mingcute entity apps crypto '
          'mesh-client practices sqlite curl liboqs monocypher rini').split()
 SELECTORS = ['mesh_client' if name == 'mesh-client' else name for name in NAMES]

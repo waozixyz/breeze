@@ -22,6 +22,7 @@ get_filename_component(KRYON_DIR "${KRYON_DIR}" ABSOLUTE BASE_DIR "${REPO_ROOT}"
 set(WEBP_DIR "${REPO_ROOT}/build/packages/libwebp")
 set(AVIF_DIR "${REPO_ROOT}/build/packages/libavif")
 set(AOM_DIR "${REPO_ROOT}/build/packages/libaom")
+set(DAV1D_DIR "${REPO_ROOT}/build/packages/dav1d")
 # Ogg Opus narration is decoded through the audio package's static libopus.
 set(AUDIO_DIR "${REPO_ROOT}/build/packages/audio")
 set(OPUS_DIR "${REPO_ROOT}/build/packages/libopus")

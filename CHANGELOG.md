@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Use the corrected Android figure renderer and update native startup for the current Kryon host.
 - Show real habit measurements on selectable shared trends, graph session rounds, and focus entry fields with Enter to save.
 
 - Keep the bottom navigation when a shortcut opens one of Inbe's own screens.
