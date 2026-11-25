@@ -14,6 +14,7 @@ Image :: #import "kryon/image";
 Layout :: #import "kryon/layout";
 Modal :: #import "kryon/modal";
 Scroll :: #import "kryon/scroll";
+Shape :: #import "kryon/shape";
 Text :: #import "kryon/text";
 TextField :: #import "kryon/text_field";
 TimePicker :: #import "kryon/time_picker";
@@ -338,6 +339,58 @@ Divider :: (x: s32, y: s32, width: s32) {
             .fill = Alpha(day.text_color, 0.1)})
 }
 
+// Each breathing session shows its actual round values on a labelled plot.
+SessionRoundGraph :: (session_index: s32, rounds: s32, x: s32, y: s32, width: s32) {
+    left := x + Scale(62)
+    right := x + width - Scale(12)
+    top := y + Scale(12)
+    bottom := y + Scale(120)
+    highest: s32 = 0
+    for round: cast(s32)0..rounds - 1 {
+        value := ReadHabitsDayRoundHost(session_index, round)
+        if value > highest {
+            highest = value
+        }
+    }
+    if highest < 1 {
+        highest = 1
+    }
+    Text.Draw(look_session, Text.Props.{.bounds = Bounds(x, top - Scale(8), Scale(56), Scale(20)),
+            .text = Filled(Locale("results_metric_seconds"), highest), .size = look_small_font,
+            .align = cast(TextAlign)TextAlignEnd})
+    Text.Draw(look_session, Text.Props.{.bounds = Bounds(x, bottom - Scale(8), Scale(56), Scale(20)),
+            .text = Filled(Locale("results_metric_seconds"), 0), .size = look_small_font,
+            .align = cast(TextAlign)TextAlignEnd})
+    unused Shape.Draw(look_session, Shape.Props.{.start = Vector2.{cast(float32)left, cast(float32)bottom},
+            .end = Vector2.{cast(float32)right, cast(float32)bottom}, .color = Alpha(day.text_color, 0.2)})
+    previous_x := left
+    previous_y := bottom
+    for round: cast(s32)0..rounds - 1 {
+        value := ReadHabitsDayRoundHost(session_index, round)
+        point_x := left + (right - left) / 2
+        if rounds > 1 {
+            point_x = left + (right - left) * round / (rounds - 1)
+        }
+        point_y := bottom - cast(s32)(cast(s64)(bottom - top) * value / highest)
+        if round > 0 {
+            unused Shape.Draw(look_session, Shape.Props.{
+                    .start = Vector2.{cast(float32)previous_x, cast(float32)previous_y},
+                    .end = Vector2.{cast(float32)point_x, cast(float32)point_y}, .color = day.text_color})
+        }
+        unused Box.Draw(look_session, Box.Props.{.bounds = Bounds(point_x - Scale(3), point_y - Scale(3), Scale(6), Scale(6)),
+                .fill = day.text_color, .radius = cast(float32)Scale(3)})
+        if round == 0 || round == rounds - 1 {
+            label_x := ifx round == 0 then left else left + (right - left) / 2
+            label_width := ifx rounds == 1 then right - left else (right - left) / 2
+            Text.Draw(look_session, Text.Props.{.bounds = Bounds(label_x, bottom + Scale(6), label_width, Scale(20)),
+                    .text = Filled(Locale("round_number_label"), round + 1), .size = look_small_font,
+                    .align = cast(TextAlign)(ifx rounds == 1 then TextAlignCenter else ifx round == 0 then TextAlignStart else TextAlignEnd)})
+        }
+        previous_x = point_x
+        previous_y = point_y
+    }
+}
+
 // One practice's sessions of the day on its card: the practice's name, each
 // session's time and summary with a button that deletes it, and a breathing
 // session's rounds below it, each with buttons that change or delete it.
@@ -379,7 +432,7 @@ PracticeCard :: (first_session: s32, last_session: s32, content_x: s32, content_
                     .text = session.time, .size = font, .wrap = cast(Text.Wrap)TextWrapNone,
                     .vertical_align = cast(TextAlign)TextAlignCenter})
             Text.Draw(look_session, Text.Props.{.bounds = Bounds(summary_x, y, trash_x - summary_x - Scale(8),
-                        summary_height),
+                    summary_height),
                     .text = session.summary, .size = font, .wrap = cast(Text.Wrap)TextWrapNone,
                     .vertical_align = cast(TextAlign)TextAlignCenter})
             if !day.editing && IconButton(cast(u64)(5750000 + index), 0,
@@ -402,7 +455,10 @@ PracticeCard :: (first_session: s32, last_session: s32, content_x: s32, content_
             rounds = DAY_ROUND_MAX
         }
         if rounds > 0 {
-            y += Scale(8)
+            if draw {
+                SessionRoundGraph(index, rounds, x, y, width)
+            }
+            y += Scale(156)
         }
         for round: cast(s32)0..rounds - 1 {
             round_trash_x := x + width - icon_width
@@ -420,11 +476,11 @@ PracticeCard :: (first_session: s32, last_session: s32, content_x: s32, content_
                 Divider(x, y, width)
                 if editing_round {
                     unused Box.Draw(look_session, Box.Props.{.bounds = Bounds(x, y + Scale(2), width,
-                                row_height - Scale(4)),
+                            row_height - Scale(4)),
                             .fill = Alpha(day.surface_color, 0.75),
                             .border = Alpha(day.text_color, 0.55), .radius = cast(float32)Scale(8)})
                     unused Box.Draw(look_session, Box.Props.{.bounds = Bounds(value_x - Scale(8), y + Scale(6),
-                                Scale(78), row_height - Scale(12)),
+                            Scale(78), row_height - Scale(12)),
                             .border = day.text_color, .radius = cast(float32)Scale(6)})
                 }
                 Text.Draw(look_session, Text.Props.{.bounds = Bounds(x, y, value_x - x - Scale(8), row_height),
@@ -514,7 +570,7 @@ DayContent :: (content_x: s32, content_width: s32, y: s32, draw: bool) -> s32 {
             unused Box.Draw(look_session, Box.Props.{.bounds = Bounds(label_x, y, label_width, button_height),
                     .fill = DarkenColor(day.canvas_color, 5), .radius = cast(float32)Scale(8)})
             Text.Draw(look_session, Text.Props.{.bounds = Bounds(label_x + Scale(8), y,
-                        label_width - Scale(8), button_height),
+                    label_width - Scale(8), button_height),
                     .text = Filled(Locale("habit_session_total_count"), day.count),
                     .vertical_align = cast(TextAlign)TextAlignCenter,
                     .wrap = cast(Text.Wrap)TextWrapNone})
@@ -669,7 +725,7 @@ NumberPad :: () {
         row := key / 3
         if Button.Draw(look_session, Button.Props.{.key = cast(u64)(5770000 + key),
                 .bounds = Bounds(x + column * (key_width + gap),
-                    y + pad + header_height + row * (key_height + gap), key_width, key_height),
+                y + pad + header_height + row * (key_height + gap), key_width, key_height),
                 .label = labels[key], .tone = cast(ButtonTone)ButtonToneNeutral,
                 .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
             if key == 9 {
@@ -716,7 +772,7 @@ DayScreen :: () {
     close_label := Locale("close_button")
     if !day.modal_active && Button.Draw(look_session, Button.Props.{.id = 9101,
             .bounds = Bounds(day.view_width - button_total - Scale(8), close_y,
-                button_total, button_total),
+            button_total, button_total),
             .label = close_label, .image = UiImage(close_label, 448.0, 384.0),
             .icon_only = true, .circle = true, .tone = cast(ButtonTone)ButtonToneNeutral,
             .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
@@ -848,6 +904,9 @@ AnswerField :: (index: s32, answer: *HabitsAnswer, bounds: Rectangle, numeric: b
     } else if focused {
         entry.focus = -1
     }
+    if result.committed {
+        EntryAsk(HABITS_ENTRY_SAVE)
+    }
     if result.clipboard_write {
         entry.clipboard_write = true
         entry.clipboard_text = result.clipboard_text
@@ -869,7 +928,7 @@ YesNo :: (answer: *HabitsAnswer, id: s32, x: s32, y: s32, width: s32) -> bool {
                 .label = labels[option],
                 .tone = cast(ButtonTone)(ifx chosen then ButtonToneAccent else ButtonToneNeutral),
                 .emphasis = cast(ButtonEmphasis)(ifx chosen then ButtonEmphasisFilled
-                    else ButtonEmphasisSoft),
+                else ButtonEmphasisSoft),
                 .disabled = entry.modal_active}) != 0 {
             answer.value = ifx chosen then "" else values[option]
             changed = true
@@ -915,7 +974,7 @@ AnswerFields :: (x: s32, y: s32, width: s32) {
         if picker_width + Scale(8) + now_width <= width {
             if Button.Draw(look_session, Button.Props.{.id = 5730005,
                     .bounds = Bounds(x + picker_width + Scale(8), y + Scale(DAY_ANSWER_INPUT_Y),
-                        now_width, Scale(44)),
+                    now_width, Scale(44)),
                     .label = Locale("statistics_now_label"), .tone = cast(ButtonTone)ButtonToneAccent,
                     .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
                     .disabled = entry.modal_active}) != 0 {

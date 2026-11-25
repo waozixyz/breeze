@@ -37,6 +37,8 @@ habit_cached_linked_entries :: (app: *InnerBreeze,
 #import, file "../app/current_app.zi";
 #import, file "../app/cards.zi";
 #import, file "habit_change_text.zi";
+#import, file "habits/habit_session_screen.zi";
+#import, file "../practices/practice_registry.zi";
 #import, file "../habits/habit_changes.zi";
 #import, file "../apps/habits_ui_types.zi";
 #import, file "../apps/habits_types.zi";
@@ -251,6 +253,152 @@ statistics_trend_today: s32;
 statistics_trend_count: s32;
 statistics_trend_selected: s32 = -1;
 
+// Measured series keep every recorded value; missing days add no synthetic zero.
+STATISTICS_METRIC_MAX :: 1024
+StatisticsMetric :: struct {
+    chart: HabitsStatsChart
+    title: [256]u8
+    points: [HABIT_ANSWER_POINT_MAX]HabitsStatsPoint
+}
+statistics_metrics: [STATISTICS_METRIC_MAX]StatisticsMetric;
+statistics_metric_count: s32;
+// Labels survive the whole draw without exhausting the shared frame text store.
+statistics_metric_labels: [STATISTICS_METRIC_MAX][HABIT_ANSWER_POINT_MAX][64]u8;
+
+statistics_metric_begin :: (habit: *Habit, title: string, answer_type: s32) -> s32 {
+    if statistics_metric_count >= STATISTICS_METRIC_MAX {
+        return -1
+    }
+    index := statistics_metric_count
+    statistics_metric_count += 1
+    metric := *statistics_metrics[index]
+    metric.chart = HabitsStatsChart.{.shown = true, .answer_type = answer_type,
+        .color = habit.color}
+    unused AppCopyText(AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE), metric.title[:])
+    if title.count > 0 {
+        unused AppAppendText(" · ", metric.title[:])
+        unused AppAppendText(title, metric.title[:])
+    }
+    metric.chart.title = AppTextFromCString(*metric.title[0], 256)
+    return index
+}
+
+statistics_metric_add :: (index: s32, slot: s32, time: s32, value: s32) {
+    if index < 0 || slot < 0 || slot >= 30 {
+        return
+    }
+    metric := *statistics_metrics[index]
+    count := metric.chart.point_count
+    place := count
+    while place > 0 && (metric.points[place - 1].slot > slot ||
+        (metric.points[place - 1].slot == slot && metric.points[place - 1].time > time)) {
+        place -= 1
+    }
+    if count >= HABIT_ANSWER_POINT_MAX {
+        if place == 0 {
+            return
+        }
+        for point: cast(s32)1..count - 1 {
+            metric.points[point - 1] = metric.points[point]
+        }
+        count -= 1
+        place -= 1
+    }
+    move := count
+    while move > place {
+        metric.points[move] = metric.points[move - 1]
+        move -= 1
+    }
+    metric.points[place] = HabitsStatsPoint.{.slot = slot, .time = time,
+        .value = value, .good = -1}
+    metric.chart.point_count = count + 1
+}
+
+statistics_metric_answers :: (habit: *Habit, title: string, answers: *HabitAnswerStats) {
+    index := statistics_metric_begin(habit, title, answers.answer_type)
+    for point: cast(s32)0..answers.point_count - 1 {
+        source := answers.points[point]
+        statistics_metric_add(index, source.slot,
+            storage_local_minutes_of(source.at) * 60, source.value)
+    }
+}
+
+statistics_metric_finish :: () {
+    for index: cast(s32)0..statistics_metric_count - 1 {
+        metric := *statistics_metrics[index]
+        for point: cast(s32)0..metric.chart.point_count - 1 {
+            value := metric.points[point].value
+            if point == 0 || value < metric.chart.lowest {
+                metric.chart.lowest = value
+            }
+            if point == 0 || value > metric.chart.highest {
+                metric.chart.highest = value
+            }
+        }
+    }
+}
+
+statistics_collect_metrics :: (habit: *Habit, linked: *HabitLinkedContext) {
+    first := statistics_metric_count
+    habit_id := AppTextFromCString(*habit.id[0], HABIT_ID_SIZE)
+    if habit.span != 0 {
+        lengths: HabitAnswerStats
+        starts: HabitAnswerStats
+        ends: HabitAnswerStats
+        unused storage_habit_span_stats(habit, statistics_trend_days[:], *lengths, *starts, *ends)
+        statistics_metric_answers(habit, LocaleText("habit_stats_spans_title"), *lengths)
+    }
+    for question: cast(s32)0..habit.question_count - 1 {
+        source := *habit.questions[question]
+        if source.answer_type != HABIT_ANSWER_NUMBER && source.answer_type != HABIT_ANSWER_TIME {
+            continue
+        }
+        if HabitSpanQuestionRole(habit.questions[:], habit.question_count, habit.span != 0, question) != 0 {
+            continue
+        }
+        answers: HabitAnswerStats
+        unused storage_habit_answer_stats(habit_id, source, statistics_trend_days[:], *answers)
+        statistics_metric_answers(habit, HabitQuestionText(source), *answers)
+    }
+    if linked != null {
+        for activity: cast(s32)0..EXERCISE_COUNT - 1 {
+            metric: s32 = -1
+            for session: cast(s32)0..linked.count - 1 {
+                entry := *linked.entries[session]
+                if entry.activity != activity {
+                    continue
+                }
+                day := entry.year * 10000 + entry.month * 100 + entry.day
+                ago := statistics_day_offset_from_today(day, statistics_trend_today)
+                if ago < 0 || ago >= 30 {
+                    continue
+                }
+                repetitions := activity == EXERCISE_SUN_SALUTATION
+                if metric < 0 {
+                    metric = statistics_metric_begin(habit, practice_label(activity),
+                        ifx repetitions then HABIT_ANSWER_NUMBER else HABITS_METRIC_SECONDS)
+                }
+                time := entry.hour * 3600 + entry.minute * 60 + entry.second
+                if repetitions {
+                    statistics_metric_add(metric, 29 - ago, time, entry.rounds[0])
+                } else if activity == EXERCISE_WIM_HOF || !habit_session_without_rounds(activity) {
+                    for round: cast(s32)0..entry.round_count - 1 {
+                        statistics_metric_add(metric, 29 - ago, time, entry.rounds[round])
+                    }
+                } else {
+                    statistics_metric_add(metric, 29 - ago, time, entry.total_seconds)
+                }
+            }
+        }
+    }
+    if first == statistics_metric_count {
+        metric := statistics_metric_begin(habit, LocaleText("review_count"), HABIT_ANSWER_NUMBER)
+        for slot: cast(s32)0..29 {
+            statistics_metric_add(metric, slot, 0, HabitEffectiveDayCount(habit, statistics_trend_days[slot], linked))
+        }
+    }
+}
+
 // Each day's completed habits, including Diary completions and linked
 // practices. Counting and avoidance habits use the same goal as their list.
 statistics_prepare_trends :: (app: *InnerBreeze) {
@@ -266,6 +414,7 @@ statistics_prepare_trends :: (app: *InnerBreeze) {
     statistics_trend_sessions = sessions
     statistics_trend_today = today
     statistics_trend_count = app.habits.count
+    statistics_metric_count = 0
     statistics_last_days(today, statistics_trend_days[:])
     statistics_trend_charts[0] = HabitsStatsChart.{.title = LocaleText("habit_stats_all_habits"),
         .shown = true, .point_count = 30, .highest = 1}
@@ -275,6 +424,7 @@ statistics_prepare_trends :: (app: *InnerBreeze) {
     for index: cast(s32)0..app.habits.count - 1 {
         habit := *app.habits.items[index]
         linked := habit_cached_linked_entries(app, index, 0)
+        statistics_collect_metrics(habit, linked)
         chart := HabitsStatsChart.{.title = AppTextFromCString(*habit.name[0], HABIT_NAME_SIZE),
             .shown = true, .point_count = 30, .highest = 1, .color = habit.color}
         for slot: cast(s32)0..29 {
@@ -296,6 +446,7 @@ statistics_prepare_trends :: (app: *InnerBreeze) {
             statistics_trend_charts[0].highest = statistics_trend_done[0][slot]
         }
     }
+    statistics_metric_finish()
 }
 
 statistics_trend_row :: (chart: s32) -> s32 {
@@ -315,7 +466,7 @@ habit_stats_overview_frame_for :: (app: *InnerBreeze) -> HabitsStatsFrame {
         .card_fill = card.fill, .card_border = card.border, .muted_class = MutedTextClass(),
         .modal_active = app.modal.active != 0, .color = StyleTokenColor("accent"),
         .name = LocaleText("habit_stats_all_habits"), .overview = true,
-        .habit_count = app.habits.count, .scroll = app.habits.scroll,
+        .habit_count = app.habits.count, .trend_count = statistics_metric_count, .scroll = app.habits.scroll,
         .last_30_done = cast(s32)statistics_trend_charts[0].sum,
         .last_30_due = statistics_trend_charts[0].answered}
 }
@@ -481,6 +632,13 @@ habit_stats_chart_of :: (chart: s32) -> *HabitAnswerStats {
 }
 
 habit_stats_chart :: (chart: s32) -> HabitsStatsChart {
+    if chart <= -2 {
+        index := -chart - 2
+        if index >= 0 && index < statistics_metric_count {
+            return statistics_metrics[index].chart
+        }
+        return HabitsStatsChart.{}
+    }
     if chart < 0 {
         row := statistics_trend_row(chart)
         if row >= 0 && row <= statistics_trend_count {
@@ -539,7 +697,42 @@ HabitStatsCall :: (context: *void, module: *u8, function: *u8,
         index := cast(s32)arguments[1].integer
         stats := habit_stats_chart_of(chart)
         point: HabitsStatsPoint
-        if chart < 0 && index >= 0 && index < 30 {
+        if chart <= -2 {
+            row := -chart - 2
+            if row >= 0 && row < statistics_metric_count && index >= 0 &&
+            index < statistics_metrics[row].chart.point_count {
+                metric := *statistics_metrics[row]
+                point = metric.points[index]
+                date: [32]u8
+                value: [32]u8
+                date_args: [3]FormatArg
+                day := statistics_trend_days[point.slot]
+                date_args[0].number = day / 10000
+                date_args[1].number = (day / 100) % 100
+                date_args[2].number = day % 100
+                unused FormatTemplate("%04d-%02d-%02d", date_args[:], date[:])
+                label: [112]u8
+                unused AppCopyText(AppTextFromCString(*date[0], 32), label[:])
+                unused AppAppendText(" · ", label[:])
+                clock: [16]u8
+                clock_args: [2]FormatArg
+                clock_args[0].number = point.time / 3600
+                clock_args[1].number = (point.time / 60) % 60
+                unused FormatTemplate("%02d:%02d", clock_args[:], clock[:])
+                unused AppAppendText(AppTextFromCString(*clock[0], 16), label[:])
+                unused AppAppendText(" · ", label[:])
+                if metric.chart.answer_type == HABITS_METRIC_SECONDS {
+                    seconds: [1]FormatArg
+                    seconds[0].number = point.value
+                    unused FormatTemplate(LocaleText("results_metric_seconds"), seconds[:], value[:])
+                } else {
+                    unused HabitStatsValueText(metric.chart.answer_type, point.value, value[:])
+                }
+                unused AppAppendText(AppTextFromCString(*value[0], 32), label[:])
+                unused AppCopyText(AppTextFromCString(*label[0], 112), statistics_metric_labels[row][index][:])
+                point.label = AppTextFromCString(*statistics_metric_labels[row][index][0], 64)
+            }
+        } else if chart == -1 && index >= 0 && index < 30 {
             row := statistics_trend_row(chart)
             if row >= 0 && row <= statistics_trend_count {
                 label: [80]u8

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Show real habit measurements on selectable shared trends, graph session rounds, and focus entry fields with Enter to save.
+
 - Keep the bottom navigation when a shortcut opens one of Inbe's own screens.
 - Say a failed practice download once, as a toast, and only when the practice cannot start. Starting a practice whose content is on the device no longer asks for a download. Shorter Workout descriptions, and a Workout exit dialog that no longer calls the session a meditation.
 - Draw Android system text from the GPU atlas, and run a settled account pump and the achievement check once a second instead of every frame.

@@ -76,10 +76,11 @@ class PackageVersionsTest(unittest.TestCase):
 
     def test_root_package_needs_the_newest_bundled_host(self):
         value = copy.deepcopy(self.ledger)
-        # The host range spans two interfaces, so only the root's pin is wrong.
-        value["host_api"] = value["oldest_host_api"] + 1
-        value["apps"]["inbe"]["host_api"] = value["oldest_host_api"]
-        value["apps"]["lumi"]["host_api"] = value["oldest_host_api"] + 1
+        # Keep existing packages in range; only Lumi needs a newer root.
+        current = value["host_api"]
+        value["host_api"] = current + 1
+        value["apps"]["inbe"]["host_api"] = current
+        value["apps"]["lumi"]["host_api"] = current + 1
         self.write(value)
         with self.assertRaisesRegex(ValueError, "the root package carries it"):
             versions.validate(self.root)

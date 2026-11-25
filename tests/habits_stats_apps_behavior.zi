@@ -87,6 +87,10 @@ StatsTestCall :: (context: *void, module: *u8, function: *u8,
                 .point_count = 30, .highest = ifx empty then 0 else 2,
                 .sum = ifx empty then 0 else 15, .answered = ifx empty then 0 else 30,
                 .color = StatsTestChartColor(chart)}
+            if chart <= -2 {
+                value.lowest = ifx chart == -2 then 10 else 100
+                value.highest = value.lowest * 30
+            }
             result.* = WidgetEncodeHabitsStatsChart(value, *stats_test_chart_codec)
             return 1
         }
@@ -105,6 +109,9 @@ StatsTestCall :: (context: *void, module: *u8, function: *u8,
             stats_test_points += 1
             empty := stats_test_frame.overview && stats_test_frame.habit_count == 0
             value: s32 = ifx empty then 0 else index % 2
+            if chart <= -2 {
+                value = (index + 1) * (ifx chart == -2 then 10 else 100)
+            }
             result.* = WidgetEncodeHabitsStatsPoint(HabitsStatsPoint.{
                     .slot = index, .value = value, .good = 1,
                     .label = "20261020 · 1"}, *stats_test_point_codec)
@@ -214,7 +221,7 @@ CheckHabitStatsOverview :: (habit_count: s32) -> s32 {
         .canvas_color = Color.{.r = 20, .g = 20, .b = 30, .a = 255},
         .card_fill = Color.{.r = 30, .g = 30, .b = 40, .a = 255},
         .color = Color.{.r = 120, .g = 190, .b = 230, .a = 255},
-        .overview = true, .habit_count = habit_count, .name = "All habits",
+        .overview = true, .habit_count = habit_count, .trend_count = habit_count, .name = "All habits",
         .last_30_done = 15, .last_30_due = habit_count * 30}
     stats_test_reads = 0
     stats_test_written = 0
@@ -238,13 +245,13 @@ CheckHabitStatsOverview :: (habit_count: s32) -> s32 {
     if !drawn.succeeded || painted == 0 { return 1 }
     if stats_test_reads != 1 || stats_test_written != 1 { return 2 }
     series_count := ifx habit_count > 0 then habit_count else 1
-    if stats_test_points != series_count * 30 { return 3 }
+    if stats_test_points != series_count * 30 + (ifx habit_count > 0 then 2 else 0) { return 3 }
     if stats_test_trends != series_count { return 4 }
     if stats_test_charts != 0 || stats_test_holds != 0 ||
     stats_test_changes != 0 || stats_test_band_charts != 0 || stats_test_refused { return 5 }
     if (first_line.width > 0.0) != (habit_count > 0) { return 6 }
     if (second_line.width > 0.0) != (habit_count > 1) { return 7 }
-    // Both fixtures have the same values, so their first segments coincide.
+    // Different raw ranges normalize to the same shape on the shared dates.
     if habit_count > 1 && (first_line.x != second_line.x || first_line.y != second_line.y ||
         first_line.height != second_line.height || first_line.width != second_line.width) { return 8 }
     return 0

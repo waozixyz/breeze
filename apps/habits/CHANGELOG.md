@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Compare recorded answers, span lengths and practice measurements on shared dates, with a separate scale per line and exact values on selection. Session cards graph their rounds. Entry fields focus on open, and Enter saves.
+
 - Compare daily completions on one shared graph. Each line uses its habit’s color, and selecting a habit in the legend brings its line forward.
 
 - Diary links are exclusive. Activity shows completed habit icons, and Habits has daily line graphs and an overview beside Shop.

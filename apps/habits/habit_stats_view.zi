@@ -7,6 +7,7 @@
 #import "session"
 #import "geometry"
 #import "vec"
+#import "pointer_input"
 #import "dpi"
 Box :: #import "kryon/box";
 Button :: #import "kryon/button";
@@ -61,7 +62,7 @@ STATS_BACK_SHAPE :: "S1.8rr:M15 5L8 12L15 19"
 STATS_MINUTES_PER_DAY :: 1440
 STATS_TREND_HEIGHT :: 200
 STATS_TREND_LEGEND_HEIGHT :: 44
-trend_selected_habit: s32;
+trend_selected_habit: s32 = -1;
 trend_selected_chart: s32 = -1;
 trend_selected_slot: s32 = 29;
 
@@ -299,58 +300,90 @@ HabitTrendLegendColumns :: (width: s32) -> s32 {
 
 HabitsTrendsHeight :: (width: s32) -> s32 {
     columns := HabitTrendLegendColumns(width)
-    rows := (stats.habit_count + columns - 1) / columns
-    return Scale(STATS_TREND_HEIGHT + 8) + rows * Scale(STATS_TREND_LEGEND_HEIGHT)
+    rows := (stats.trend_count + columns - 1) / columns
+    return Scale(STATS_TREND_HEIGHT + 68) + rows * Scale(STATS_TREND_LEGEND_HEIGHT)
 }
 
-// The overview plots all habits against the same dates and 0–1 completion scale.
-// At a shared point, draw the selected habit last so its line stays visible.
+// Value formatting stays in the metric's own units when a series is selected.
+MetricValueText :: (answer_type: s32, value: s32) -> string {
+    if answer_type == HABITS_METRIC_SECONDS {
+        return Filled(Locale("results_metric_seconds"), value, 0)
+    }
+    return ValueText(answer_type, value)
+}
+
+// Squared distance to a segment also makes the connecting line selectable.
+TrendDistance :: (px: float32, py: float32, x1: s32, y1: s32, x2: s32, y2: s32) -> float32 {
+    dx := cast(float32)(x2 - x1)
+    dy := cast(float32)(y2 - y1)
+    length := dx * dx + dy * dy
+    amount: float32 = 0.0
+    if length > 0.0 {
+        amount = ((px - cast(float32)x1) * dx + (py - cast(float32)y1) * dy) / length
+    }
+    if amount < 0.0 {
+        amount = 0.0
+    }
+    if amount > 1.0 {
+        amount = 1.0
+    }
+    near_x := cast(float32)x1 + amount * dx
+    near_y := cast(float32)y1 + amount * dy
+    return (px - near_x) * (px - near_x) + (py - near_y) * (py - near_y)
+}
+
+// Every series shares dates, but uses its own measured minimum and maximum.
+// No numeric y axis is shown until a line or its legend is selected.
 CompletionTrends :: (x: s32, y: s32, width: s32) {
     Card(x, y, width, HabitsTrendsHeight(width))
-    left := x + Scale(32)
+    left := x + Scale(78)
     right := x + width - Scale(14)
     top := y + Scale(18)
     bottom := y + Scale(STATS_TREND_HEIGHT - 52)
     plot_width := right - left
-    if plot_width <= 0 {
+    if plot_width <= 0 || stats.trend_count <= 0 {
         return
     }
-    for grid: cast(s32)0..1 {
-        grid_y := ifx grid == 0 then top else bottom
+    for grid: cast(s32)0..2 {
+        grid_y := top + (bottom - top) * grid / 2
         ChartLine(left, grid_y, right, grid_y, Alpha(stats.text_color, 0.12))
-        Text.Draw(stats.session, Text.Props.{.bounds = Bounds(x + Scale(4), grid_y - Scale(8),
-                Scale(24), Scale(18)), .text = ifx grid == 0 then "1" else "0",
-                .size = stats.small_font, .class_name = stats.muted_class,
-                .align = cast(TextAlign)TextAlignEnd})
     }
-    if trend_selected_habit >= stats.habit_count {
-        trend_selected_habit = 0
+    if trend_selected_habit >= stats.trend_count {
+        trend_selected_habit = -1
     }
     selected := trend_selected_habit
-    selected_slot := trend_selected_slot
+    pointer := SamplePointer()
+    choose := Button.Draw(stats.session, Button.Props.{.id = 6100000,
+            .bounds = Bounds(left - Scale(8), top - Scale(8), plot_width + Scale(16), bottom - top + Scale(16)),
+            .label = Locale("habit_stats_answers_title"), .invisible = true,
+            .disabled = stats.modal_active}) != 0
+    nearest_distance := cast(float32)(Scale(14) * Scale(14))
+    nearest_series: s32 = -1
+    nearest_point: s32 = -1
     columns := HabitTrendLegendColumns(width)
     legend_x := x + Scale(10)
-    legend_y := y + Scale(STATS_TREND_HEIGHT)
+    legend_y := y + Scale(STATS_TREND_HEIGHT + 60)
     legend_width := (width - Scale(20)) / columns
-    first: string
-    last: string
+    first := TrendDate(ReadHabitsStatsPointHost(-1, 0).label)
+    last := TrendDate(ReadHabitsStatsPointHost(-1, STATS_DAYS - 1).label)
     detail: string
-    for offset: cast(s32)1..stats.habit_count {
-        index := (selected + offset) % stats.habit_count
+    for offset: cast(s32)1..stats.trend_count {
+        index := (selected + offset) % stats.trend_count
         chart_index := -2 - index
         chart := ReadHabitsStatsChartHost(chart_index)
-        chip_size := Scale(8)
         entry_x := legend_x + (index % columns) * legend_width
         entry_y := legend_y + (index / columns) * Scale(STATS_TREND_LEGEND_HEIGHT)
-        entry := Bounds(entry_x, entry_y, legend_width - Scale(4), Scale(STATS_TREND_LEGEND_HEIGHT))
+        bounds := Bounds(entry_x, entry_y, legend_width - Scale(4), Scale(STATS_TREND_LEGEND_HEIGHT))
         if index == selected {
-            Fill(entry, cast(float32)Scale(8), Alpha(chart.color, 0.16))
+            Fill(bounds, cast(float32)Scale(8), Alpha(chart.color, 0.16))
         }
-        if Button.Draw(stats.session, Button.Props.{.id = 6101000 + index, .bounds = entry,
+        if Button.Draw(stats.session, Button.Props.{.id = 6101000 + index, .bounds = bounds,
                 .label = chart.title, .invisible = true, .selected = index == selected,
                 .disabled = stats.modal_active}) != 0 {
-            trend_selected_habit = index
+            trend_selected_habit = ifx index == selected then -1 else index
+            trend_selected_slot = chart.point_count - 1
         }
+        chip_size := Scale(8)
         Fill(Bounds(entry_x + Scale(8), entry_y + Scale(18), chip_size, chip_size),
             cast(float32)chip_size * 0.5, chart.color)
         Text.Draw(stats.session, Text.Props.{.bounds = Bounds(entry_x + Scale(22), entry_y,
@@ -358,57 +391,77 @@ CompletionTrends :: (x: s32, y: s32, width: s32) {
                 .text = chart.title, .size = stats.small_font,
                 .vertical_align = cast(TextAlign)TextAlignCenter,
                 .wrap = cast(Text.Wrap)TextWrapEllipsis})
+        if index == selected && chart.point_count > 0 {
+            Text.Draw(stats.session, Text.Props.{.bounds = Bounds(x + Scale(4), (ifx chart.lowest == chart.highest then (top + bottom) / 2 else top) - Scale(8),
+                    Scale(66), Scale(18)), .text = MetricValueText(chart.answer_type, chart.highest),
+                    .size = stats.small_font, .class_name = stats.muted_class,
+                    .align = cast(TextAlign)TextAlignEnd})
+            if chart.lowest != chart.highest {
+                Text.Draw(stats.session, Text.Props.{.bounds = Bounds(x + Scale(4), bottom - Scale(8),
+                        Scale(66), Scale(18)), .text = MetricValueText(chart.answer_type, chart.lowest),
+                        .size = stats.small_font, .class_name = stats.muted_class,
+                        .align = cast(TextAlign)TextAlignEnd})
+            }
+        }
         count := chart.point_count
-        if count > STATS_DAYS {
-            count = STATS_DAYS
+        if count > STATS_POINT_MAX {
+            count = STATS_POINT_MAX
         }
         previous_x := left
         previous_y := bottom
-        for slot: cast(s32)0..count - 1 {
-            point := ReadHabitsStatsPointHost(chart_index, slot)
-            point_x := left + plot_width * slot / (STATS_DAYS - 1)
-            point_y := ifx point.value > 0 then top else bottom
-            if slot > 0 {
+        for point_index: cast(s32)0..count - 1 {
+            point := ReadHabitsStatsPointHost(chart_index, point_index)
+            // Day slots plus recorded time preserve multiple sessions per day.
+            elapsed := cast(s64)point.slot * 86400 + point.time
+            point_x := left + cast(s32)(cast(s64)plot_width * elapsed / (30 * 86400 - 1))
+            point_y := top + (bottom - top) / 2
+            range := cast(s64)chart.highest - chart.lowest
+            if range > 0 {
+                point_y = bottom - cast(s32)(cast(s64)(bottom - top) *
+                    (cast(s64)point.value - chart.lowest) / range)
+            }
+            if point_index > 0 {
                 ChartLine(previous_x, previous_y, point_x, point_y, chart.color)
             }
-            if index == selected {
-                if slot == 0 {
-                    first = TrendDate(point.label)
+            dot := Scale(ifx index == selected && point_index == trend_selected_slot then 8 else 4)
+            Fill(Bounds(point_x - dot / 2, point_y - dot / 2, dot, dot),
+                cast(float32)dot * 0.5, chart.color)
+            distance := TrendDistance(pointer.x, pointer.y, point_x, point_y, point_x, point_y)
+            if distance <= nearest_distance {
+                nearest_distance = distance
+                nearest_series = index
+                nearest_point = point_index
+            }
+            if point_index > 0 {
+                segment_distance := TrendDistance(pointer.x, pointer.y, previous_x, previous_y, point_x, point_y)
+                if segment_distance < nearest_distance {
+                    nearest_distance = segment_distance
+                    nearest_series = index
+                    before := TrendDistance(pointer.x, pointer.y, previous_x, previous_y, previous_x, previous_y)
+                    nearest_point = ifx before < distance then point_index - 1 else point_index
                 }
-                if slot == count - 1 {
-                    last = TrendDate(point.label)
-                }
-                // Divide the plot into adjacent day targets so a point's hit
-                // area never covers the neighbouring or a different series.
-                bin_left := left + plot_width * (slot * 2 - 1) / ((STATS_DAYS - 1) * 2)
-                bin_right := left + plot_width * (slot * 2 + 1) / ((STATS_DAYS - 1) * 2)
-                if Button.Draw(stats.session, Button.Props.{.id = 6100000 + slot,
-                        .bounds = Bounds(bin_left, top - Scale(8), bin_right - bin_left, bottom - top + Scale(16)),
-                        .label = point.label, .invisible = true, .selected = selected_slot == slot,
-                        .disabled = stats.modal_active}) != 0 {
-                    trend_selected_slot = slot
-                }
-                if selected_slot == slot {
-                    dot := Scale(8)
-                    Fill(Bounds(point_x - dot / 2, point_y - dot / 2, dot, dot),
-                        cast(float32)dot * 0.5, chart.color)
-                    out: Vec(u8)
-                    BuilderPrint(*out, "% · %", chart.title, point.label)
-                    detail = BuilderFinish(out)
-                }
+            }
+            if index == selected && point_index == trend_selected_slot {
+                out: Vec(u8)
+                BuilderPrint(*out, "% · %", chart.title, point.label)
+                detail = BuilderFinish(out)
             }
             previous_x = point_x
             previous_y = point_y
         }
+    }
+    if choose && nearest_series >= 0 {
+        trend_selected_habit = nearest_series
+        trend_selected_slot = nearest_point
     }
     Text.Draw(stats.session, Text.Props.{.bounds = Bounds(left, bottom + Scale(6), plot_width / 2, Scale(18)),
             .text = first, .size = stats.small_font, .class_name = stats.muted_class})
     Text.Draw(stats.session, Text.Props.{.bounds = Bounds(left + plot_width / 2, bottom + Scale(6),
             plot_width / 2, Scale(18)), .text = last, .size = stats.small_font,
             .class_name = stats.muted_class, .align = cast(TextAlign)TextAlignEnd})
-    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(left, bottom + Scale(28), plot_width, Scale(20)),
+    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(x + Scale(12), bottom + Scale(28), width - Scale(24), Scale(76)),
             .text = detail, .size = stats.small_font, .class_name = stats.muted_class,
-            .align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapEllipsis})
+            .align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapAuto})
 }
 
 // A bar of a chart, its top a little rounded.
@@ -1094,8 +1147,8 @@ PageHeader :: (x: s32, y: s32, width: s32) -> s32 {
 ContentHeight :: (width: s32) -> s32 {
     gap := Scale(STATS_SECTION_GAP)
     height := Scale(8) + Scale(STATS_FIGURE_HEIGHT) + gap
-    trend_height := ifx stats.overview && stats.habit_count > 0 then HabitsTrendsHeight(width) else Scale(STATS_TREND_HEIGHT)
-    height += SectionTitleHeight(Locale("habit_stats_daily_completions"), width) + Scale(10) + trend_height + gap
+    trend_height := ifx stats.overview && stats.trend_count > 0 then HabitsTrendsHeight(width) else Scale(STATS_TREND_HEIGHT)
+    height += SectionTitleHeight(Locale(ifx stats.overview then "habit_stats_metric_trends" else "habit_stats_daily_completions"), width) + Scale(10) + trend_height + gap
     if stats.overview {
         return height
     }
@@ -1129,8 +1182,8 @@ Content :: (x: s32, y: s32, width: s32) {
             Locale("habit_stats_last_30_days"), Filled("%d/%d", stats.last_30_done, stats.last_30_due))
     }
     y += Scale(STATS_FIGURE_HEIGHT) + gap
-    y += SectionTitle(Locale("habit_stats_daily_completions"), x, y, width) + Scale(10)
-    if stats.overview && stats.habit_count > 0 {
+    y += SectionTitle(Locale(ifx stats.overview then "habit_stats_metric_trends" else "habit_stats_daily_completions"), x, y, width) + Scale(10)
+    if stats.overview && stats.trend_count > 0 {
         CompletionTrends(x, y, width)
         return
     }

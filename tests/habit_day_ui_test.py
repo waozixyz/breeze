@@ -137,16 +137,16 @@ with scene("habit_questions_dialog") as (driver, database):
     driver.type("3")
     wait_for(driver, lambda: fields(driver)[0]["value"] == "3", "the typed number")
     expect(fields(driver)[1]["value"], "Oatmeal with berries", "the text answer")
-    driver.press(key=DONE)
+    driver.key("enter")
     driver.wait_gone(key=DONE)
-    wait_for(driver, lambda: entries(database, "First meal") == before + 1, "Done saved the entry")
+    wait_for(driver, lambda: entries(database, "First meal") == before + 1, "Enter saved the entry")
     answers = sql(database, "SELECT answers FROM habit_entries WHERE deleted_at=0 AND "
                             "habit_id=(SELECT id FROM habits WHERE name='First meal') "
                             "ORDER BY updated_at DESC LIMIT 1")
     for value in ('"3"', "Oatmeal with berries", '"yes"'):
         if value not in answers:
             raise Failure(f"FAIL the saved answers lack {value}: {answers} ({TEST_DIR})")
-print("PASS the entry dialog types an answer and Done saves the entry")
+print("PASS the entry dialog types an answer and Enter saves the entry")
 
 with scene("habit_day_entries") as (driver, database):
     driver.wait(label="Entries")
