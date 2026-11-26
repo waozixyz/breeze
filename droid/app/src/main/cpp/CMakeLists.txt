@@ -324,6 +324,9 @@ add_library(main SHARED
     ${APP_ZIRAN_GENERATED_SOURCES}
 )
 kryon_android_app(main)
+# Keep debug symbols while running the generated animation and skinning code
+# at device speed; unoptimized loops stall frames on the development Moto.
+target_compile_options(main PRIVATE "$<$<CONFIG:Debug>:-O2>")
 # Optimize across generated modules while retaining the Android export map.
 # Use the NDK's ThinLTO directly: older CMake IPO selects the retired gold
 # linker, whereas Android's Clang already uses lld. Keep debug builds separate.

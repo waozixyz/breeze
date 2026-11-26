@@ -4,7 +4,9 @@
 
 - Keep navigation hidden throughout full-screen practices; restore it on the app page when a practice is minimized or closed.
 
-- Use the corrected Android figure renderer and update native startup for the current Kryon host.
+- Breathing Patterns shows the phase countdown inside its smoothly growing circle and keeps your saved duration after restarting.
+
+- Fix Android figure rendering and stale frames after rotation, optimize development builds, and keep prepackaged Habits available offline.
 - Show real habit measurements on selectable shared trends, graph session rounds, and focus entry fields with Enter to save.
 
 - Keep the bottom navigation when a shortcut opens one of Inbe's own screens.
