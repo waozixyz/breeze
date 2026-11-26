@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep navigation hidden throughout full-screen practices; restore it on the app page when a practice is minimized or closed.
+
 - Use the corrected Android figure renderer and update native startup for the current Kryon host.
 - Show real habit measurements on selectable shared trends, graph session rounds, and focus entry fields with Enter to save.
 

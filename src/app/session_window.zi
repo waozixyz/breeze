@@ -1,5 +1,4 @@
-// A running practice keeps going in a small window while another app is
-// open, and the navigation slides out of the way while a practice runs.
+// A running practice keeps going in a small window while another app is open.
 #import, file "../platform/host_clock.zi";
 #import, file "app_types.zi";
 #import, file "../core/types.zi";
@@ -9,18 +8,9 @@
 #import, file "app_modal_state.zi";
 #import, file "app_launcher_state.zi";
 #import, file "route_types.zi";
-#import, file "metrics.zi";
-#import "drawing_props"
-#import "geometry"
-
-c :: #system_library "c";
 
 using AppMainTab;
 using AppNavRoute;
-using NavigationPlacement;
-
-// Seconds the navigation takes to slide fully in or out.
-SESSION_NAV_SLIDE_SECONDS :: 0.18
 
 // Keeps the running practice going in its small window. Returns false when
 // no practice is on screen.
@@ -69,47 +59,6 @@ app_session_window_route :: (app: *InnerBreeze, route: s32) -> bool {
     return false
 }
 
-// The navigation as a sidebar while a practice hides it.
-app_session_nav_rail :: (app: *InnerBreeze) -> bool {
-    placement := app_navigation_placement(app)
-    return (placement == NAVIGATION_LEFT || placement == NAVIGATION_RIGHT) &&
-    app.ui.navigation_height >= AppScale(476)
-}
-
-// Slides the navigation toward where it belongs: shown on app pages and
-// hidden while a practice runs.
-app_session_nav_update :: (app: *InnerBreeze) {
-    if app == null {
-        return
-    }
-    window := *app.session_window
-    now := HostSeconds()
-    step := cast(float32)(now - window.nav_frame_time)
-    window.nav_frame_time = now
-    if step < 0.0 || step > 0.1 {
-        step = 0.1
-    }
-    target: float32 = ifx app_is_session_screen(app.breathing.screen) then 0.0 else 1.0
-    // The first frame shows the navigation where it belongs.
-    if !window.nav_started {
-        window.nav_started = true
-        window.nav_shown = target
-        return
-    }
-    rate := step / cast(float32)SESSION_NAV_SLIDE_SECONDS
-    if window.nav_shown < target {
-        window.nav_shown += rate
-        if window.nav_shown > target {
-            window.nav_shown = target
-        }
-    } else if window.nav_shown > target {
-        window.nav_shown -= rate
-        if window.nav_shown < target {
-            window.nav_shown = target
-        }
-    }
-}
-
 // Remembers the app page shown while no practice runs, so a practice
 // minimizes back to the page it was started from.
 app_session_window_note_page :: (app: *InnerBreeze) {
@@ -155,42 +104,4 @@ app_session_window_take_minimize :: (app: *InnerBreeze) {
         app.session_window.detach_requested = true
     }
     app_apply_nav_route(app, session_window_return_route(app))
-}
-
-// Where the navigation sits when fully shown over a practice.
-app_session_nav_bounds :: (app: *InnerBreeze) -> Rectangle {
-    if app_session_nav_rail(app) {
-        width := cast(float32)app_nav_desktop_rail_width(app)
-        x: float32 = 0.0
-        if app_navigation_placement(app) == NAVIGATION_RIGHT {
-            x = cast(float32)app.ui.view_width - width
-        }
-        return Rectangle.{x, 0.0, width, cast(float32)app.ui.view_height}
-    }
-    height := cast(float32)app_dock_height(app)
-    y := cast(float32)app.ui.view_height - height
-    if app_navigation_placement(app) == NAVIGATION_TOP {
-        y = 0.0
-    }
-    return Rectangle.{0.0, y, cast(float32)app.ui.view_width, height}
-}
-
-// How far the navigation has slid toward its edge, out of the given
-// bounds, for its current share on screen.
-app_session_nav_slide :: (app: *InnerBreeze, bounds: Rectangle,
-    rail: bool) -> Rectangle {
-    hidden := 1.0 - app.session_window.nav_shown
-    if hidden <= 0.0 {
-        return bounds
-    }
-    placement := app_navigation_placement(app)
-    moved := bounds
-    if rail {
-        distance := bounds.width * hidden
-        moved.x += ifx placement == NAVIGATION_RIGHT then distance else 0.0 - distance
-        return moved
-    }
-    distance := bounds.height * hidden
-    moved.y += ifx placement == NAVIGATION_TOP then 0.0 - distance else distance
-    return moved
 }
