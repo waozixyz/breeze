@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Tai Chi offers Woman or Man, waits for the figure before playback, and lets you seek with its progress bar. The woman wears a wrap top and loose trousers.
+- Tai Chi offers Woman or Man, waits for the figure before playback, and lets you seek with its progress bar. The woman wears a wrap top and slim, tapered trousers.
 
 - Breathing Patterns shows the phase countdown inside its smoothly growing circle and keeps your saved duration after restarting.
 - The Workout clock waits at its start value until the 3D figure is on screen, so it never counts down over the loading dots. A resumed workout starts at once.
