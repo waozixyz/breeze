@@ -10,7 +10,7 @@
 
 - Breathing Patterns shows the phase countdown inside its smoothly growing circle and keeps your saved duration after restarting.
 
-- Improve Android scrolling and figure rendering, fix stale frames after rotation, and keep prepackaged Habits available offline.
+- Improve Android scrolling with smaller lesson covers decoded at their display size, fix stale frames after rotation, and keep prepackaged Habits available offline.
 - Show real habit measurements on selectable shared trends, graph session rounds, and focus entry fields with Enter to save.
 
 - Keep the bottom navigation when a shortcut opens one of Inbe's own screens.

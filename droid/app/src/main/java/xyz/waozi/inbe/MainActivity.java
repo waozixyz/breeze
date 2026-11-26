@@ -1492,6 +1492,7 @@ public class MainActivity extends NativeActivity {
     // pixels for formats the portable native decoders cannot read.
     public int[] decodeBundleImage(byte[] bytes, int sample) {
         if (bytes == null) return null;
+        long started = BuildConfig.DEBUG ? SystemClock.elapsedRealtimeNanos() : 0;
         Bitmap bitmap = null;
         try {
             BitmapFactory.Options options = new BitmapFactory.Options();
@@ -1512,6 +1513,11 @@ public class MainActivity extends NativeActivity {
             result[0] = width;
             result[1] = height;
             bitmap.getPixels(result, 2, width, 0, 0, width, height);
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, "APP PROBE: bitmap sample=" + options.inSampleSize
+                        + " size=" + width + "x" + height + " decode_ms="
+                        + (SystemClock.elapsedRealtimeNanos() - started) / 1000000.0);
+            }
             return result;
         } catch (RuntimeException error) {
             Log.w(TAG, "Could not decode bundled image", error);

@@ -63,7 +63,7 @@ practice_patterns = (
     'sunsalutation/voice/**/*', 'sunsalutation/voice-male/**/*',
     'astral_projection/**/*', 'workout/**/*', 'taichi/**/*', 'guide/voice/**/*',
     'shared/watercolor/*.bin', 'shared/watercolor/*.webp',
-    'shared/tai-chi-gallery/*.png',
+    'shared/tai-chi-gallery/thumbnails/*.webp',
     'shared/figure/man.vrm', 'shared/figure/woman.vrm', 'shared/figure/MODELS.md',
 )
 sources = {p: p.relative_to(ROOT).as_posix()
