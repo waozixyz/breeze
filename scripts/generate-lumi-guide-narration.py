@@ -19,6 +19,7 @@ import base64
 import copy
 from concurrent.futures import ThreadPoolExecutor
 import difflib
+from functools import lru_cache
 import hashlib
 import json
 import math
@@ -563,6 +564,14 @@ def direction_tokens(text, code):
     return tuple(token.lastgroup for token in re.finditer(expression, text))
 
 
+@lru_cache(maxsize=1024)
+def simplified_chinese(text):
+    """Compare Chinese scripts without changing the recorded transcript."""
+    return subprocess.run(
+        ['uconv', '-f', 'utf-8', '-t', 'utf-8', '-x', 'Traditional-Simplified'],
+        input=text, text=True, encoding='utf-8', check=True, capture_output=True).stdout
+
+
 def comparison_spellings(config, code, text, transcript):
     # Keep the original transcript in the receipt. Equivalent spellings of
     # the same spoken word cannot be distinguished by listening (lute/loot).
@@ -592,6 +601,9 @@ def comparison_spellings(config, code, text, transcript):
                                 equivalent, flags=re.IGNORECASE)
             expected = re.sub(r'\b' + re.escape(heard) + r'\b', intended,
                               expected, flags=re.IGNORECASE)
+    if code == 'zh' and config.get('normalize_chinese_script'):
+        expected = simplified_chinese(expected)
+        equivalent = simplified_chinese(equivalent)
     return expected, equivalent
 
 

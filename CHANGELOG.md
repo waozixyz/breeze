@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Verify Mandarin Astral narration across Simplified and Traditional Chinese spellings.
+
 - Offer to send saved crash diagnostics to the developer after reopening, with an explicit choice to send or discard.
 
 - Optionally keep Meditation counting up after the end gong, with interval bells and the full session time saved on Finish.
