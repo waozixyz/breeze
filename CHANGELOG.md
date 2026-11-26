@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Fix a GPU rendering seam through the Habits **+ New Habit** button.
+
 - Verify Mandarin Astral narration across Simplified and Traditional Chinese spellings.
 
 - Offer to send saved crash diagnostics to the developer after reopening, with an explicit choice to send or discard.
