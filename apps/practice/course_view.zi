@@ -1,10 +1,10 @@
-// Tai Chi's course chooser uses the same package-owned widget surface as
-// its running session. The host supplies course records and plays a choice.
+// Illustrated lesson cards start sessions directly. Foundations remain available
+// on their own page; individual movement variants keep their saved item IDs.
 #import "session"
 #import "geometry"
 #import "dpi"
 Button :: #import "kryon/button";
-Dropdown :: #import "kryon/dropdown";
+Image :: #import "kryon/image";
 Layout :: #import "kryon/layout";
 Modal :: #import "kryon/modal";
 Scroll :: #import "kryon/scroll";
@@ -16,10 +16,7 @@ Text :: #import "kryon/text";
 #import "kryon/tree"
 #import, file "../../src/apps/practice_ui_types.zi";
 #import, file "../../src/apps/practice_types.zi";
-#import, file "../../src/app/exercise_types.zi";
-#import, file "figure_view.zi";
 
-using ExerciseType;
 using SemanticKind;
 using ButtonTone;
 using ButtonEmphasis;
@@ -33,6 +30,7 @@ ReadPracticeCourseRowHost :: (lesson: bool, index: s32) -> PracticeCourseRow #fo
 CourseLocaleHost :: (key: string) -> string #foreign host_api;
 course: PracticeCourseFrame;
 COURSE_LESSON_LIMIT :: 32
+course_lessons: [COURSE_LESSON_LIMIT]PracticeCourseRow;
 
 Scale :: (pixels: s32) -> s32 {
     return ScalePixels(pixels, course.scale)
@@ -58,124 +56,241 @@ Section :: (text: string, bounds: Rectangle) {
             .semantic_kind = cast(SemanticKind)SemanticHeading, .heading_level = 2})
 }
 
-ChooseLesson :: (lesson: s32) {
-    if lesson != course.lesson && lesson >= 0 && lesson < course.lesson_count {
-        course.lesson = lesson
-        course.item_scroll = 0
-        course.reveal_next = false
+Play :: (item: s32) {
+    course.action = PRACTICE_COURSE_PLAY
+    course.value = item
+}
+
+lesson_artwork: [8]string = .[
+    "assets/practices/shared/tai-chi-gallery/lesson-1.png",
+    "assets/practices/shared/tai-chi-gallery/lesson-2.png",
+    "assets/practices/shared/tai-chi-gallery/lesson-3.png",
+    "assets/practices/shared/tai-chi-gallery/lesson-4.png",
+    "assets/practices/shared/tai-chi-gallery/lesson-5.png",
+    "assets/practices/shared/tai-chi-gallery/lesson-6.png",
+    "assets/practices/shared/tai-chi-gallery/lesson-7.png",
+    "assets/practices/shared/tai-chi-gallery/lesson-8.png"];
+lesson_bounds: [COURSE_LESSON_LIMIT]Rectangle;
+lesson_indices: [COURSE_LESSON_LIMIT]s32;
+lesson_total: s32;
+lesson_unlock_y: s32;
+lesson_foundations_y: s32;
+lesson_full_y: s32;
+
+LessonHeight :: (row: PracticeCourseRow, width: s32) -> s32 {
+    text_width := width - Scale(24)
+    return Scale(80) + text_width * 3 / 4 +
+        ParagraphHeight(row.title, text_width, course.font + Scale(2)) +
+        ParagraphHeight(row.subtitle, text_width, course.font)
+}
+
+LessonCard :: (bounds: Rectangle, index: s32, artwork: s32, row: PracticeCourseRow) {
+    activated := Button.Draw(course.session, Button.Props.{
+        .key = Layout.KeyHash("inbe/tai_chi/lesson") + cast(u64)index,
+        .bounds = bounds, .label = row.title, .icon_only = true, .selected = row.done,
+        .tone = cast(ButtonTone)ButtonToneNeutral,
+        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft})
+    inset := cast(float32)Scale(12)
+    content := Rectangle.{bounds.x + inset, bounds.y + inset,
+        bounds.width - inset * 2.0, bounds.height - inset * 2.0}
+    picture_h := cast(s32)content.width * 3 / 4
+    if artwork >= 0 && artwork < 8 {
+        Image.Draw(course.session, Image.Props.{
+            .key = Layout.KeyHash("inbe/tai_chi/lesson-image") + cast(u64)index,
+            .asset_path = lesson_artwork[artwork], .alt_text = row.title,
+            .bounds = Rectangle.{content.x, content.y, content.width, cast(float32)picture_h},
+            .radius = cast(float32)Scale(8), .smooth = true,
+            .fit = Image.ImageFit.ImageFitCover})
+    }
+    content.y += cast(float32)(picture_h + Scale(12))
+    heading_h := ParagraphHeight(row.title, cast(s32)content.width, course.font + Scale(2))
+    subtitle_h := ParagraphHeight(row.subtitle, cast(s32)content.width, course.font)
+    Section(row.title, Rectangle.{content.x, content.y, content.width, cast(float32)heading_h})
+    Text.Draw(course.session, Text.Props.{.text = row.subtitle, .size = course.font,
+            .bounds = Rectangle.{content.x, content.y + cast(float32)(heading_h + Scale(6)),
+                content.width, cast(float32)subtitle_h}})
+    Text.Draw(course.session, Text.Props.{.text = row.detail, .size = course.small_font,
+            .class_name = course.muted_class,
+            .bounds = Rectangle.{content.x, bounds.y + bounds.height - cast(float32)Scale(36),
+                content.width, cast(float32)Scale(24)}})
+    if activated != 0 {
+        Play(row.first)
     }
 }
 
-Navigation :: (bounds: Rectangle) {
-    gap := Scale(8)
-    row_h := Scale(58)
+PlanLessonGroup :: (start: s32, count: s32, columns: s32, width: s32, y: s32) -> s32 {
+    gap := Scale(12)
+    card_w := (width - gap * (columns - 1)) / columns
+    offset: s32 = 0
+    while offset < count {
+        row_count := count - offset
+        if row_count > columns {
+            row_count = columns
+        }
+        row_h: s32 = 0
+        for column: cast(s32)0..row_count - 1 {
+            index := lesson_indices[start + offset + column]
+            height := LessonHeight(course_lessons[index], card_w)
+            if height > row_h {
+                row_h = height
+            }
+        }
+        for column: cast(s32)0..row_count - 1 {
+            index := lesson_indices[start + offset + column]
+            lesson_bounds[index] = Bounds(column * (card_w + gap), y, card_w, row_h)
+        }
+        offset += row_count
+        y += row_h + gap
+    }
+    return y
+}
+
+Lessons :: (bounds: Rectangle) {
+    gap := Scale(12)
+    width := cast(s32)bounds.width - Scale(10)
+    columns: s32 = ifx width >= Scale(640) then 3 else 2
+    lesson_total = 0
+    free_count: s32 = 0
+    full: s32 = -1
+    for index: cast(s32)0..course.lesson_count - 1 {
+        row := course_lessons[index]
+        if row.kind == PRACTICE_COURSE_LESSON {
+            lesson_indices[lesson_total] = index
+            lesson_total += 1
+            if !row.locked {
+                free_count += 1
+            }
+        } else if row.kind == PRACTICE_COURSE_FULL {
+            full = index
+        }
+    }
+    y := PlanLessonGroup(0, free_count, columns, width, 0)
+    lesson_unlock_y = -1
+    if free_count < lesson_total {
+        lesson_unlock_y = y
+        y += Scale(52) + gap
+        y = PlanLessonGroup(free_count, lesson_total - free_count, columns, width, y)
+    }
+    lesson_foundations_y = y
+    y += Scale(52) + gap
+    lesson_full_y = y
+    if full >= 0 {
+        y += Scale(64) + gap
+    }
     scrolled := Scroll.Draw(course.session, Scroll.Props.{.key = Layout.KeyHash("inbe/tai_chi/lessons"),
-            .bounds = bounds, .content_height = course.lesson_count * (row_h + gap), .scroll_offset = course.lesson_scroll})
+            .bounds = bounds, .content_height = y, .scroll_offset = course.lesson_scroll})
     course.lesson_scroll = scrolled.scroll_offset
     if !scrolled.opened {
         return
     }
-    for index: cast(s32)0..course.lesson_count - 1 {
-        lesson := ReadPracticeCourseRowHost(true, index)
-        selected := index == course.lesson
-        if Button.Draw(course.session, Button.Props.{.key = Layout.KeyHash("inbe/tai_chi/lesson") + cast(u64)index,
-                .bounds = Rectangle.{scrolled.content.x, scrolled.content.y + cast(float32)(index * (row_h + gap)),
-                    bounds.width - cast(float32)Scale(10), cast(float32)row_h},
-                .label = lesson.title, .detail = lesson.subtitle, .selected = selected,
-                .tone = cast(ButtonTone)(ifx selected then ButtonToneAccent else ButtonToneNeutral),
-                .emphasis = cast(ButtonEmphasis)(ifx selected then ButtonEmphasisFilled else ButtonEmphasisSoft),
-                .content_alignment = cast(ContentAlignment)ContentAlignmentStart}) != 0 {
-            ChooseLesson(index)
+    for artwork: cast(s32)0..lesson_total - 1 {
+        index := lesson_indices[artwork]
+        card := lesson_bounds[index]
+        card.x += scrolled.content.x
+        card.y += scrolled.content.y
+        if card.y + card.height >= bounds.y && card.y <= bounds.y + bounds.height {
+            LessonCard(card, index, artwork, course_lessons[index])
+        }
+    }
+    if lesson_unlock_y >= 0 {
+        if Button.Draw(course.session, Button.Props.{.key = Layout.KeyHash("inbe/tai_chi/unlock"),
+                .bounds = Rectangle.{scrolled.content.x, scrolled.content.y + cast(float32)lesson_unlock_y,
+                    cast(float32)width, cast(float32)Scale(52)},
+                .label = Locale("tai_chi_unlock_title"), .tone = cast(ButtonTone)ButtonToneAccent,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
+            Play(course_lessons[lesson_indices[free_count]].first)
+        }
+    }
+    if Button.Draw(course.session, Button.Props.{.key = Layout.KeyHash("inbe/tai_chi/foundations"),
+            .bounds = Rectangle.{scrolled.content.x, scrolled.content.y + cast(float32)lesson_foundations_y,
+                cast(float32)width, cast(float32)Scale(52)},
+            .label = Locale("tai_chi_foundations"), .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        course.lesson = 0
+        course.item_scroll = 0
+    }
+    if full >= 0 {
+        row := course_lessons[full]
+        if Button.Draw(course.session, Button.Props.{.key = Layout.KeyHash("inbe/tai_chi/full"),
+                .bounds = Rectangle.{scrolled.content.x, scrolled.content.y + cast(float32)lesson_full_y,
+                    cast(float32)width, cast(float32)Scale(64)},
+                .label = row.title, .detail = row.detail,
+                .content_alignment = cast(ContentAlignment)ContentAlignmentStart,
+                .tone = cast(ButtonTone)ButtonToneNeutral,
+                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+            Play(row.first)
         }
     }
     unused End(course.session)
 }
 
-Card :: (bounds: Rectangle, index: s32, row: PracticeCourseRow) -> bool {
-    key := Layout.KeyHash("inbe/tai_chi/item-card") + cast(u64)index * cast(u64)4096
-    clicked := Button.Draw(course.session, Button.Props.{.key = key, .bounds = bounds,
-            .selected = index == course.next_item, .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
-    padding := cast(float32)Scale(14)
-    text_y := bounds.y + bounds.height - cast(float32)Scale(76)
-    PracticeFigure(PracticeFigureRequest.{.practice = EXERCISE_TAI_CHI, .preview = true,
-            .index = index, .character = course.character, .key = key + cast(u64)1000, .alt_text = row.title,
-            .bounds = Rectangle.{bounds.x + padding, bounds.y + padding,
-                bounds.width - padding * 2.0, bounds.height - cast(float32)Scale(94)}})
-    Text.Draw(course.session, Text.Props.{.text = row.title, .size = course.font,
-            .bounds = Rectangle.{bounds.x + padding, text_y, bounds.width - padding * 2.0, cast(float32)Scale(44)}})
-    Text.Draw(course.session, Text.Props.{.text = row.detail, .size = course.small_font, .class_name = course.muted_class,
-            .wrap = cast(Text.Wrap)TextWrapEllipsis, .bounds = Rectangle.{bounds.x + padding,
-                text_y + cast(float32)Scale(48), bounds.width - padding * 2.0, cast(float32)Scale(24)}})
-    if row.done {
-        unused Button.Draw(course.session, Button.Props.{.key = key + cast(u64)2000,
-                .bounds = Rectangle.{bounds.x + bounds.width - cast(float32)Scale(38), bounds.y + cast(float32)Scale(8),
-                    cast(float32)Scale(30), cast(float32)Scale(30)},
-                .icon_only = true, .icon_shape = TAI_CHI_DONE_ICON, .disabled = true,
-                .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft})
+Foundations :: (bounds: Rectangle) {
+    gap := Scale(10)
+    if Button.Draw(course.session, Button.Props.{.key = Layout.KeyHash("inbe/tai_chi/back"),
+            .bounds = Rectangle.{bounds.x, bounds.y, bounds.width, cast(float32)Scale(44)},
+            .label = Locale("back_button"), .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+        course.lesson = -1
     }
-    return clicked
-}
-
-Cards :: (bounds: Rectangle) {
-    lesson := ReadPracticeCourseRowHost(true, course.lesson)
-    gap := Scale(14)
-    columns: s32 = ifx bounds.width >= cast(float32)Scale(460) then 2 else 1
-    card_w := (cast(s32)bounds.width - gap * (columns - 1) - Scale(10)) / columns
-    card_h := Scale(252)
-    heading_h := ParagraphHeight(lesson.title, cast(s32)bounds.width - Scale(12), course.font + Scale(2))
-    summary_h: s32 = 0
-    if lesson.summary.count > 0 {
-        summary_h = ParagraphHeight(lesson.summary, cast(s32)bounds.width - Scale(12), course.font) + gap
-    }
-    header_h := heading_h + gap + summary_h + gap
-    rows := (lesson.count + columns - 1) / columns
-    if course.reveal_next {
-        course.reveal_next = false
-        offset := course.next_item - lesson.first
-        if offset >= columns {
-            course.item_scroll = header_h + (offset / columns) * (card_h + gap)
+    bounds.y += cast(float32)(Scale(44) + gap)
+    bounds.height -= cast(float32)(Scale(44) + gap)
+    content_h: s32 = 0
+    for index: cast(s32)0..course.lesson_count - 1 {
+        row := course_lessons[index]
+        if row.kind == PRACTICE_COURSE_FOUNDATION {
+            content_h += ParagraphHeight(row.title, cast(s32)bounds.width - Scale(12), course.font + Scale(2)) + gap +
+                row.count * (Scale(64) + gap) + gap
         }
     }
-    scrolled := Scroll.Draw(course.session, Scroll.Props.{.key = Layout.KeyHash("inbe/tai_chi/items"),
-            .bounds = bounds, .content_height = header_h + rows * (card_h + gap), .scroll_offset = course.item_scroll})
+    scrolled := Scroll.Draw(course.session, Scroll.Props.{.key = Layout.KeyHash("inbe/tai_chi/foundation-list"),
+            .bounds = bounds, .content_height = content_h, .scroll_offset = course.item_scroll})
     course.item_scroll = scrolled.scroll_offset
     if !scrolled.opened {
         return
     }
-    Section(lesson.title, Rectangle.{scrolled.content.x, scrolled.content.y, bounds.width - cast(float32)Scale(12),
-            cast(float32)heading_h})
-    Text.Draw(course.session, Text.Props.{.text = lesson.summary, .class_name = course.muted_class,
-            .bounds = Rectangle.{scrolled.content.x, scrolled.content.y + cast(float32)(heading_h + gap),
-                bounds.width - cast(float32)Scale(12), cast(float32)summary_h}})
-    for offset: cast(s32)0..lesson.count - 1 {
-        index := lesson.first + offset
-        card := Rectangle.{scrolled.content.x + cast(float32)(offset % columns * (card_w + gap)),
-            scrolled.content.y + cast(float32)(header_h + offset / columns * (card_h + gap)),
-            cast(float32)card_w, cast(float32)card_h}
-        if card.y + card.height < bounds.y || card.y > bounds.y + bounds.height {
+    y := scrolled.content.y
+    width := bounds.width - cast(float32)Scale(12)
+    for index: cast(s32)0..course.lesson_count - 1 {
+        row := course_lessons[index]
+        if row.kind != PRACTICE_COURSE_FOUNDATION {
             continue
         }
-        if Card(card, index, ReadPracticeCourseRowHost(false, index)) {
-            course.action = PRACTICE_COURSE_PLAY
-            course.value = index
-            break
+        heading_h := ParagraphHeight(row.title, cast(s32)width, course.font + Scale(2))
+        Section(row.title, Rectangle.{scrolled.content.x, y, width, cast(float32)heading_h})
+        y += cast(float32)(heading_h + gap)
+        for offset: cast(s32)0..row.count - 1 {
+            item := row.first + offset
+            if y + cast(float32)Scale(64) >= bounds.y && y <= bounds.y + bounds.height {
+                detail := ReadPracticeCourseRowHost(false, item)
+                if Button.Draw(course.session, Button.Props.{
+                        .key = Layout.KeyHash("inbe/tai_chi/foundation") + cast(u64)item,
+                        .bounds = Rectangle.{scrolled.content.x, y, width, cast(float32)Scale(64)},
+                        .label = detail.title, .detail = detail.detail, .selected = detail.done,
+                        .content_alignment = cast(ContentAlignment)ContentAlignmentStart,
+                        .tone = cast(ButtonTone)ButtonToneNeutral,
+                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+                    Play(item)
+                }
+            }
+            y += cast(float32)(Scale(64) + gap)
         }
+        y += cast(float32)gap
     }
     unused End(course.session)
 }
 
 Course :: () {
     width := course.view_width - Scale(32)
-    if width > Scale(1060) {
-        width = Scale(1060)
+    if width > Scale(940) {
+        width = Scale(940)
     }
     height := course.view_height - Scale(48)
     if height > Scale(740) {
         height = Scale(740)
     }
+    title := Locale(ifx course.lesson < 0 then "tai_chi_course_title" else "tai_chi_foundations")
     frame := Modal.Draw(course.session, Modal.Props.{.key = Layout.KeyHash("inbe/tai_chi/modal"),
-            .title = Locale("tai_chi_course_title"), .width = width, .height = height, .scale = course.scale,
+            .title = title, .width = width, .height = height, .scale = course.scale,
             .title_at_start = true, .strong_title = true, .dismiss_on_outside = true,
             .has_right_action = true, .right_label = Locale("close_button")})
     if frame.dismissed || frame.right_clicked {
@@ -186,33 +301,24 @@ Course :: () {
         return
     }
     bounds := frame.layout.content
-    progress_h := Scale(32)
-    Text.Draw(course.session, Text.Props.{.text = course.progress, .class_name = course.muted_class,
-            .wrap = cast(Text.Wrap)TextWrapEllipsis,
-            .bounds = Rectangle.{bounds.x, bounds.y, bounds.width, cast(float32)progress_h}})
-    bounds.y += cast(float32)(progress_h + Scale(10))
-    bounds.height -= cast(float32)(progress_h + Scale(10))
-    if bounds.width >= cast(float32)Scale(700) {
-        sidebar := bounds
-        sidebar.width = cast(float32)Scale(190)
-        Navigation(sidebar)
-        bounds.x += sidebar.width + cast(float32)Scale(24)
-        bounds.width -= sidebar.width + cast(float32)Scale(24)
+    if course.lesson < 0 {
+        if !course.owned {
+            intro := Locale("tai_chi_course_intro")
+            intro_h := ParagraphHeight(intro, cast(s32)bounds.width, course.font)
+            Text.Draw(course.session, Text.Props.{.text = intro, .size = course.font,
+                    .bounds = Rectangle.{bounds.x, bounds.y, bounds.width, cast(float32)intro_h}})
+            bounds.y += cast(float32)(intro_h + Scale(12))
+            bounds.height -= cast(float32)(intro_h + Scale(12))
+        }
+        Text.Draw(course.session, Text.Props.{.text = course.progress, .size = course.small_font,
+                .class_name = course.muted_class,
+                .bounds = Rectangle.{bounds.x, bounds.y, bounds.width, cast(float32)Scale(28)}})
+        bounds.y += cast(float32)Scale(36)
+        bounds.height -= cast(float32)Scale(36)
+        Lessons(bounds)
     } else {
-        options: [COURSE_LESSON_LIMIT]Dropdown.Option
-        for index: cast(s32)0..course.lesson_count - 1 {
-            options[index].label = ReadPracticeCourseRowHost(true, index).title
-        }
-        choice := Dropdown.Draw(course.session, Dropdown.Props.{.key = Layout.KeyHash("inbe/tai_chi/lesson-select"),
-                .bounds = Rectangle.{bounds.x, bounds.y, bounds.width, cast(float32)Scale(48)},
-                .selected_index = course.lesson}, options[:course.lesson_count])
-        if choice.changed {
-            ChooseLesson(choice.selected_index)
-        }
-        bounds.y += cast(float32)Scale(62)
-        bounds.height -= cast(float32)Scale(62)
+        Foundations(bounds)
     }
-    Cards(bounds)
     unused End(course.session)
 }
 
@@ -224,13 +330,14 @@ PracticeCourseView :: (message: PracticeMessage) -> PracticeMessage {
         message.succeeded = false
         return message
     }
-    if course.lesson < 0 || course.lesson >= course.lesson_count {
-        course.lesson = 0
+    for index: cast(s32)0..course.lesson_count - 1 {
+        course_lessons[index] = ReadPracticeCourseRowHost(true, index)
+    }
+    if course.lesson < -1 || course.lesson >= course.lesson_count {
+        course.lesson = -1
     }
     Course()
     WritePracticeCourseHost(course)
     message.succeeded = true
     return message
 }
-
-TAI_CHI_DONE_ICON :: "F:M8.46431 11.2095C8.07379 10.819 7.44063 10.819 7.0501 11.2095C6.65958 11.6 6.65958 12.2332 7.0501 12.6237L7.75721 11.9166L8.46431 11.2095ZM10.5856 14.745L9.87853 15.4522C10.2691 15.8427 10.9022 15.8427 11.2927 15.4522L10.5856 14.745ZM16.9496 9.7953C17.3401 9.40478 17.3401 8.77161 16.9496 8.38109C16.5591 7.99056 15.9259 7.99056 15.5354 8.38109L16.2425 9.08819L16.9496 9.7953ZM21 12H20C20 16.4183 16.4183 20 12 20V21V22C17.5228 22 22 17.5228 22 12H21ZM12 21V20C7.58172 20 4 16.4183 4 12H3H2C2 17.5228 6.47715 22 12 22V21ZM3 12H4C4 7.58172 7.58172 4 12 4V3V2C6.47715 2 2 6.47715 2 12H3ZM12 3V4C16.4183 4 20 7.58172 20 12H21H22C22 6.47715 17.5228 2 12 2V3ZM7.75721 11.9166L7.0501 12.6237L9.87853 15.4522L10.5856 14.745L11.2927 14.0379L8.46431 11.2095L7.75721 11.9166ZM10.5856 14.745L11.2927 15.4522L16.9496 9.7953L16.2425 9.08819L15.5354 8.38109L9.87853 14.0379L10.5856 14.745Z"

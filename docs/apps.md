@@ -51,7 +51,12 @@ picked, discards the session or closes the results as asked. The running
 Meditation, Patterns and Wim Hof layouts are in `meditation_view.zi`,
 `patterns_view.zi` and `whm_view.zi`; Sun Salutation, Tai Chi, Astral Projection
 and the 7-Minute Workout use `movement_view.zi`. Tai Chi's course chooser is
-in `course_view.zi`. These pages return actions to the host, which retains
+in `course_view.zi`: its eight numbered lessons start directly from illustrated gallery cards.
+Their original PNG covers are bundled in the free Practices package, including
+previews for locked lessons, so the gallery works offline.
+Lessons 1–3 and Foundations work offline without an account; lessons 4–8 and
+the full form use the existing one-time course unlock. Foundations has a separate
+page, and progress counts completed numbered lessons. These pages return actions to the host, which retains
 session clocks, saved settings, audio, lifecycle and routing. Workout's custom
 editor lives in `apps/practice/workout_builder.zi`. The Workout carousel
 shows the seven-minute preset, the four-minute preset and Custom workout in

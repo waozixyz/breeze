@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Choose Tai Chi lessons from an illustrated gallery. The first three are free, with one unlock for the rest; Foundations remain available separately.
+
 - Tai Chi offers Woman or Man, waits for the figure before playback, and lets you seek with its progress bar. The woman wears a wrap top and slim, tapered trousers.
 
 - Keep navigation hidden throughout full-screen practices; restore it on the app page when a practice is minimized or closed.

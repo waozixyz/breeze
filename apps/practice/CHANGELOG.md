@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Choose Tai Chi lessons from an illustrated gallery. The first three are free, with one unlock for the rest; Foundations remain available separately.
+
 - Tai Chi offers Woman or Man, waits for the figure before playback, and lets you seek with its progress bar. The woman wears a wrap top and slim, tapered trousers.
 
 - Breathing Patterns shows the phase countdown inside its smoothly growing circle and keeps your saved duration after restarting.

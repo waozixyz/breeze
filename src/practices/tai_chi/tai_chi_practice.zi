@@ -85,10 +85,21 @@ TaiChiItemDetail :: (app: *InnerBreeze, item: TaiChiItem) -> string {
 }
 
 TaiChiProgressLine :: (app: *InnerBreeze) -> string {
+    practised: s32 = 0
+    lessons: s32 = 0
+    for index: cast(s32)0..tai_chi_course.lesson_count - 1 {
+        item := tai_chi_course.lessons[index].item_first
+        if tai_chi_course.items[item].kind == TAI_CHI_KIND_LESSON {
+            lessons += 1
+            if app.tai_chi.done[item] {
+                practised += 1
+            }
+        }
+    }
     buffer: [160]u8
     args: [2]FormatArg = .[
-    FormatArg.{.number = TaiChiDoneCount(app.tai_chi)},
-    FormatArg.{.number = tai_chi_course.item_count}
+    FormatArg.{.number = practised},
+    FormatArg.{.number = lessons}
     ]
     FormatTemplate(LocaleText("tai_chi_progress"), args[:], buffer[:])
     return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 160))
@@ -137,6 +148,11 @@ TaiChiCourseCall :: (context: *void, module: *u8, function: *u8,
                 row.summary = LocaleText(TaiChiCourseString(ifx lesson.summary < 0 then lesson.subtitle else lesson.summary))
                 row.first = lesson.item_first
                 row.count = lesson.item_count
+                item := tai_chi_course.items[lesson.item_first]
+                row.kind = item.kind
+                row.locked = !TaiChiItemAllowed(lesson.item_first)
+                row.done = app.tai_chi.done[lesson.item_first]
+                row.detail = ifx row.locked then LocaleText("tai_chi_unlock_title") else TaiChiItemDetail(app, item)
             }
         } else if index >= 0 && index < tai_chi_course.item_count {
             item := tai_chi_course.items[index]
@@ -249,7 +265,7 @@ tai_chi_modal_draw :: (app: *InnerBreeze) {
         .lesson_count = tai_chi_course.lesson_count, .lesson = tai_chi_selected_lesson,
         .lesson_scroll = tai_chi_lesson_scroll, .item_scroll = tai_chi_course_scroll,
         .reveal_next = tai_chi_reveal_next, .next_item = TaiChiItemToPlay(app.tai_chi),
-        .character = app.tai_chi.character, .progress = TaiChiProgressLine(app)}
+        .character = app.tai_chi.character, .owned = UnlockOwned(UnlockTaiChi), .progress = TaiChiProgressLine(app)}
     PracticeFigureBegin(app, EXERCISE_TAI_CHI, TaiChiCourseFigure)
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
     AppsUiBegin(TaiChiCourseCall, cast(*void)app)
@@ -260,7 +276,7 @@ tai_chi_modal_draw :: (app: *InnerBreeze) {
     if !drawn.succeeded {
         return
     }
-    if course_frame.lesson >= 0 && course_frame.lesson < tai_chi_course.lesson_count {
+    if course_frame.lesson >= -1 && course_frame.lesson < tai_chi_course.lesson_count {
         tai_chi_selected_lesson = course_frame.lesson
     }
     tai_chi_lesson_scroll = course_frame.lesson_scroll
