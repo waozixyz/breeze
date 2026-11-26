@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Open the illustrated Foundations section above Tai Chi lessons, then choose a focused group of free drills.
+
 - Choose Tai Chi lessons from an illustrated gallery, with Foundations and the first three lessons free. Tap a faded, locked lesson to unlock the rest of the course.
 
 - Tai Chi offers Woman or Man, waits for the figure before playback, and lets you seek with its progress bar. The woman wears a wrap top and slim, tapered trousers.

@@ -1,4 +1,4 @@
-// The gallery includes free Foundations and faded, tappable course unlocks.
+// Foundations expands above the illustrated lessons and their course unlocks.
 // Individual movement variants retain their saved item IDs.
 #import "session"
 #import "geometry"
@@ -64,7 +64,7 @@ Play :: (item: s32) {
     course.value = item
 }
 
-lesson_artwork: [8]string = .[
+lesson_artwork: [14]string = .[
     "assets/practices/shared/tai-chi-gallery/thumbnails/lesson-1.webp",
     "assets/practices/shared/tai-chi-gallery/thumbnails/lesson-2.webp",
     "assets/practices/shared/tai-chi-gallery/thumbnails/lesson-3.webp",
@@ -72,7 +72,14 @@ lesson_artwork: [8]string = .[
     "assets/practices/shared/tai-chi-gallery/thumbnails/lesson-5.webp",
     "assets/practices/shared/tai-chi-gallery/thumbnails/lesson-6.webp",
     "assets/practices/shared/tai-chi-gallery/thumbnails/lesson-7.webp",
-    "assets/practices/shared/tai-chi-gallery/thumbnails/lesson-8.webp"];
+    "assets/practices/shared/tai-chi-gallery/thumbnails/lesson-8.webp",
+    "assets/practices/shared/tai-chi-gallery/thumbnails/foundation-posture.webp",
+    "assets/practices/shared/tai-chi-gallery/thumbnails/foundation-warm-up.webp",
+    "assets/practices/shared/tai-chi-gallery/thumbnails/foundation-standing-meditation.webp",
+    "assets/practices/shared/tai-chi-gallery/thumbnails/foundation-stances.webp",
+    "assets/practices/shared/tai-chi-gallery/thumbnails/foundation-stepping.webp",
+    "assets/practices/shared/tai-chi-gallery/thumbnails/foundation-hand-shapes.webp"];
+foundations_open: bool;
 lesson_bounds: [COURSE_LESSON_LIMIT]Rectangle;
 lesson_indices: [COURSE_LESSON_LIMIT]s32;
 lesson_total: s32;
@@ -95,7 +102,7 @@ LessonCard :: (bounds: Rectangle, index: s32, artwork: s32, row: PracticeCourseR
     content := Rectangle.{bounds.x + inset, bounds.y + inset,
         bounds.width - inset * 2.0, bounds.height - inset * 2.0}
     picture_h := cast(s32)content.width * 3 / 4
-    if artwork >= 0 && artwork < 8 {
+    if artwork >= 0 && artwork < 14 {
         Image.Draw(course.session, Image.Props.{
             .key = Layout.KeyHash("inbe/tai_chi/lesson-image") + cast(u64)index,
             .asset_path = lesson_artwork[artwork], .alt_text = row.title,
@@ -167,18 +174,51 @@ PlanLessonGroup :: (start: s32, count: s32, columns: s32, width: s32, y: s32) ->
     return y
 }
 
+FoundationHeader :: (bounds: Rectangle) {
+    activated := Button.Draw(course.session, Button.Props.{
+            .key = Layout.KeyHash("inbe/tai_chi/foundations-toggle"),
+            .bounds = bounds, .label = Locale("tai_chi_foundations"),
+            .icon_only = true, .selected = foundations_open,
+            .tone = cast(ButtonTone)ButtonToneNeutral,
+            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0
+    if activated {
+        foundations_open = !foundations_open
+    }
+    inset := cast(float32)Scale(12)
+    Image.Draw(course.session, Image.Props.{
+        .key = Layout.KeyHash("inbe/tai_chi/foundations-cover"),
+        .asset_path = lesson_artwork[8], .alt_text = Locale("tai_chi_foundations"),
+        .bounds = Rectangle.{bounds.x + inset, bounds.y + (bounds.height - cast(float32)Scale(72)) * 0.5,
+            cast(float32)Scale(96), cast(float32)Scale(72)},
+        .radius = cast(float32)Scale(8), .smooth = true, .tint = cast(u32)0xffffffff, .fit = Image.ImageFit.ImageFitCover})
+    Section(Locale("tai_chi_foundations"), Rectangle.{bounds.x + cast(float32)Scale(120),
+        bounds.y + inset, bounds.width - cast(float32)Scale(152), bounds.height - inset * 2.0})
+    center := Vector2.{bounds.x + bounds.width - cast(float32)Scale(20), bounds.y + bounds.height * 0.5}
+    half := cast(float32)Scale(5)
+    direction: float32 = ifx foundations_open then -1.0 else 1.0
+    for side: cast(s32)0..cast(s32)1 {
+        sign: float32 = ifx side == 0 then -1.0 else 1.0
+        unused Shape.Draw(course.session, Shape.Props.{
+            .key = Layout.KeyHash("inbe/tai_chi/foundations-chevron") + cast(u64)side,
+            .start = Vector2.{center.x + sign * half, center.y - direction * half * 0.5},
+            .end = Vector2.{center.x, center.y + direction * half * 0.5},
+            .thickness = cast(float32)Scale(2), .color = Color.{135, 156, 145, 255}})
+    }
+}
+
 Lessons :: (bounds: Rectangle) {
     width := cast(s32)bounds.width - Scale(10)
     columns: s32 = ifx width >= Scale(640) then 3 else 2
+    expanded := foundations_open
     lesson_total = 0
-    // Foundations is a free card at the beginning of the same gallery.
+    // Each foundation group has its own cover and opens only its own drills.
+    foundation_count: s32 = 0
     for index: cast(s32)0..course.lesson_count - 1 {
         if course_lessons[index].kind == PRACTICE_COURSE_FOUNDATION {
-            course_lessons[index].title = Locale("tai_chi_foundations")
             lesson_indices[lesson_total] = index
-            lesson_artwork_indices[index] = 0
+            lesson_artwork_indices[index] = 8 + foundation_count
             lesson_total += 1
-            break
+            foundation_count += 1
         }
     }
     artwork: s32 = 0
@@ -199,14 +239,26 @@ Lessons :: (bounds: Rectangle) {
         lesson_artwork_indices[full] = 7
         lesson_total += 1
     }
-    content_height := PlanLessonGroup(0, lesson_total, columns, width, 0)
+    header_h := Scale(96)
+    heading_h := ParagraphHeight(Locale("tai_chi_foundations"), width - Scale(152), course.font + Scale(2)) + Scale(24)
+    if heading_h > header_h {
+        header_h = heading_h
+    }
+    y := header_h + Scale(12)
+    if expanded {
+        y = PlanLessonGroup(0, foundation_count, columns, width, y)
+        y += Scale(12)
+    }
+    content_height := PlanLessonGroup(foundation_count, lesson_total - foundation_count, columns, width, y)
     scrolled := Scroll.Draw(course.session, Scroll.Props.{.key = Layout.KeyHash("inbe/tai_chi/lessons"),
             .bounds = bounds, .content_height = content_height, .scroll_offset = course.lesson_scroll})
     course.lesson_scroll = scrolled.scroll_offset
     if !scrolled.opened {
         return
     }
-    for position: cast(s32)0..lesson_total - 1 {
+    FoundationHeader(Bounds(cast(s32)scrolled.content.x, cast(s32)scrolled.content.y, width, header_h))
+    first := ifx expanded then 0 else foundation_count
+    for position: cast(s32)first..lesson_total - 1 {
         index := lesson_indices[position]
         card := lesson_bounds[index]
         card.x += scrolled.content.x
@@ -225,50 +277,58 @@ Foundations :: (bounds: Rectangle) {
             .label = Locale("back_button"), .tone = cast(ButtonTone)ButtonToneNeutral,
             .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
         course.lesson = -1
+        return
     }
     bounds.y += cast(float32)(Scale(44) + gap)
     bounds.height -= cast(float32)(Scale(44) + gap)
-    content_h: s32 = 0
-    for index: cast(s32)0..course.lesson_count - 1 {
-        row := course_lessons[index]
-        if row.kind == PRACTICE_COURSE_FOUNDATION {
-            content_h += ParagraphHeight(row.title, cast(s32)bounds.width - Scale(12), course.font + Scale(2)) + gap +
-                row.count * (Scale(64) + gap) + gap
-        }
+    row := course_lessons[course.lesson]
+    width := bounds.width - cast(float32)Scale(12)
+    picture_h := cast(s32)width * 3 / 4
+    if picture_h > Scale(220) {
+        picture_h = Scale(220)
     }
+    summary_h := ParagraphHeight(row.summary, cast(s32)width, course.font)
+    content_h := picture_h + gap + summary_h + gap + row.count * (Scale(64) + gap)
     scrolled := Scroll.Draw(course.session, Scroll.Props.{.key = Layout.KeyHash("inbe/tai_chi/foundation-list"),
             .bounds = bounds, .content_height = content_h, .scroll_offset = course.item_scroll})
     course.item_scroll = scrolled.scroll_offset
     if !scrolled.opened {
         return
     }
+    artwork: s32 = 8
+    for index: cast(s32)0..course.lesson - 1 {
+        if course_lessons[index].kind == PRACTICE_COURSE_FOUNDATION {
+            artwork += 1
+        }
+    }
+    if artwork >= 14 {
+        artwork = 8
+    }
     y := scrolled.content.y
-    width := bounds.width - cast(float32)Scale(12)
-    for index: cast(s32)0..course.lesson_count - 1 {
-        row := course_lessons[index]
-        if row.kind != PRACTICE_COURSE_FOUNDATION {
-            continue
-        }
-        heading_h := ParagraphHeight(row.title, cast(s32)width, course.font + Scale(2))
-        Section(row.title, Rectangle.{scrolled.content.x, y, width, cast(float32)heading_h})
-        y += cast(float32)(heading_h + gap)
-        for offset: cast(s32)0..row.count - 1 {
-            item := row.first + offset
-            if y + cast(float32)Scale(64) >= bounds.y && y <= bounds.y + bounds.height {
-                detail := ReadPracticeCourseRowHost(false, item)
-                if Button.Draw(course.session, Button.Props.{
-                        .key = Layout.KeyHash("inbe/tai_chi/foundation") + cast(u64)item,
-                        .bounds = Rectangle.{scrolled.content.x, y, width, cast(float32)Scale(64)},
-                        .label = detail.title, .detail = detail.detail, .selected = detail.done,
-                        .content_alignment = cast(ContentAlignment)ContentAlignmentStart,
-                        .tone = cast(ButtonTone)ButtonToneNeutral,
-                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-                    Play(item)
-                }
+    Image.Draw(course.session, Image.Props.{
+        .key = Layout.KeyHash("inbe/tai_chi/foundation-detail-cover") + cast(u64)course.lesson,
+        .asset_path = lesson_artwork[artwork], .alt_text = row.title,
+        .bounds = Rectangle.{scrolled.content.x, y, width, cast(float32)picture_h},
+        .radius = cast(float32)Scale(8), .smooth = true, .tint = cast(u32)0xffffffff, .fit = Image.ImageFit.ImageFitCover})
+    y += cast(float32)(picture_h + gap)
+    Text.Draw(course.session, Text.Props.{.text = row.summary, .size = course.font,
+        .bounds = Rectangle.{scrolled.content.x, y, width, cast(float32)summary_h}})
+    y += cast(float32)(summary_h + gap)
+    for offset: cast(s32)0..row.count - 1 {
+        item := row.first + offset
+        if y + cast(float32)Scale(64) >= bounds.y && y <= bounds.y + bounds.height {
+            detail := ReadPracticeCourseRowHost(false, item)
+            if Button.Draw(course.session, Button.Props.{
+                    .key = Layout.KeyHash("inbe/tai_chi/foundation") + cast(u64)item,
+                    .bounds = Rectangle.{scrolled.content.x, y, width, cast(float32)Scale(64)},
+                    .label = detail.title, .detail = detail.detail, .selected = detail.done,
+                    .content_alignment = cast(ContentAlignment)ContentAlignmentStart,
+                    .tone = cast(ButtonTone)ButtonToneNeutral,
+                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
+                Play(item)
             }
-            y += cast(float32)(Scale(64) + gap)
         }
-        y += cast(float32)gap
+        y += cast(float32)(Scale(64) + gap)
     }
     unused End(course.session)
 }
@@ -282,7 +342,7 @@ Course :: () {
     if height > Scale(740) {
         height = Scale(740)
     }
-    title := Locale(ifx course.lesson < 0 then "tai_chi_course_title" else "tai_chi_foundations")
+    title := ifx course.lesson < 0 then Locale("tai_chi_course_title") else course_lessons[course.lesson].title
     frame := Modal.Draw(course.session, Modal.Props.{.key = Layout.KeyHash("inbe/tai_chi/modal"),
             .title = title, .width = width, .height = height, .scale = course.scale,
             .title_at_start = true, .strong_title = true, .dismiss_on_outside = true,
@@ -328,6 +388,9 @@ PracticeCourseView :: (message: PracticeMessage) -> PracticeMessage {
         course_lessons[index] = ReadPracticeCourseRowHost(true, index)
     }
     if course.lesson < -1 || course.lesson >= course.lesson_count {
+        course.lesson = -1
+    }
+    if course.lesson >= 0 && course_lessons[course.lesson].kind != PRACTICE_COURSE_FOUNDATION {
         course.lesson = -1
     }
     Course()
