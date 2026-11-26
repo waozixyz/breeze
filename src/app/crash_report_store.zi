@@ -1,0 +1,390 @@
+// Post-crash diagnostics storage, parsing, formatting, and explicit-consent
+// queueing through the existing developer feedback outbox.
+#import "json_scan"
+#import "byte_text_linux"
+#import "c_string"
+#import "file_linux"
+#import "text_buffer"
+#import "vec"
+#import, file "../core/device_info.zi";
+#import, file "../core/version.zi";
+#import, file "../apps/feedback_store.zi";
+#import, file "../apps/lumi_store.zi";
+#import, file "../apps/package_files.zi";
+#import, file "../platform/crash_handler.zi";
+#import, file "text_buffers.zi";
+
+CrashReportMaxFileBytes :: 32768
+CrashReportMaxTitleBytes :: 160
+CrashReportMaxMessageBytes :: 16384
+CrashReportMaxContextBytes :: 2048
+
+PendingCrashReport :: struct {
+    present: bool
+    timestamp: s64
+    signal: s32
+    screen: s32
+    practice: s32
+    pip: bool
+    kind: [64]u8
+    signal_name: [32]u8
+    summary: [161]u8
+    thread: [96]u8
+    version: [32]u8
+    platform: [32]u8
+    system: [128]u8
+    device: [160]u8
+    package: [96]u8
+    breadcrumbs: [2048]u8
+    details: [8192]u8
+    primary_path: [1024]u8
+    secondary_path: [1024]u8
+}
+
+CrashUtf8Truncate :: (text: string, limit: s64) -> string {
+    if text.count <= limit {
+        return text
+    }
+    end := limit
+    while end > 0 && (text[end] & cast(u8)192) == cast(u8)128 {
+        end -= 1
+    }
+    return text[:end]
+}
+
+CrashReadOptionalString :: (json: string, name: string, output: []u8) {
+    output[0] = cast(u8)0
+    at := FieldAt(json, 0, name)
+    if at < 0 {
+        return
+    }
+    count := ReadStringText(json, at, output)
+    if count <= 0 || count >= output.count {
+        output[0] = cast(u8)0
+        return
+    }
+    output[count] = cast(u8)0
+}
+
+CrashReadOptionalInt :: (json: string, name: string, fallback: s64) -> s64 {
+    at := FieldAt(json, 0, name)
+    if at < 0 {
+        return fallback
+    }
+    parsed := ReadNumber(json, at)
+    if !parsed.valid {
+        return fallback
+    }
+    return cast(s64)parsed.value
+}
+
+CrashReportParse :: (json: string, report: *PendingCrashReport) -> bool {
+    report.* = PendingCrashReport.{.screen = -1, .practice = -1}
+    if json.count == 0 || json.count > CrashReportMaxFileBytes {
+        return false
+    }
+    end := ValueEnd(json, 0, 0)
+    if end < 0 || Space(json, end) != json.count {
+        return false
+    }
+    if CrashReadOptionalInt(json, "schema", 0) != 1 {
+        return false
+    }
+    CrashReadOptionalString(json, "kind", report.kind[:])
+    if report.kind[0] == cast(u8)0 {
+        return false
+    }
+    CrashReadOptionalString(json, "signal_name", report.signal_name[:])
+    CrashReadOptionalString(json, "summary", report.summary[:])
+    if report.summary[0] == cast(u8)0 {
+        fallback := TextUntilNul(report.signal_name[:])
+        if fallback.count == 0 {
+            fallback = TextUntilNul(report.kind[:])
+        }
+        unused AppCopyText(fallback, report.summary[:])
+    }
+    if report.summary[0] == cast(u8)0 {
+        return false
+    }
+    report.timestamp = CrashReadOptionalInt(json, "timestamp", 0)
+    report.signal = cast(s32)CrashReadOptionalInt(json, "signal", 0)
+    report.screen = cast(s32)CrashReadOptionalInt(json, "screen", -1)
+    report.practice = cast(s32)CrashReadOptionalInt(json, "practice", -1)
+    pip_at := FieldAt(json, 0, "pip")
+    report.pip = pip_at >= 0 && MatchLiteral(json, pip_at, "true")
+    CrashReadOptionalString(json, "thread", report.thread[:])
+    CrashReadOptionalString(json, "version", report.version[:])
+    CrashReadOptionalString(json, "platform", report.platform[:])
+    CrashReadOptionalString(json, "system", report.system[:])
+    CrashReadOptionalString(json, "device", report.device[:])
+    CrashReadOptionalString(json, "package", report.package[:])
+    CrashReadOptionalString(json, "breadcrumbs", report.breadcrumbs[:])
+    CrashReadOptionalString(json, "details", report.details[:])
+    report.present = true
+    return true
+}
+
+CrashReadFileText :: (path: string, output: []u8) -> s64 {
+    if path.count == 0 || output.count < 2 || !PathExists(path) {
+        return -1
+    }
+    file := OpenRead(path)
+    if !file.valid {
+        return -1
+    }
+    defer {
+        unused CloseFile(file)
+    }
+    total: s64 = 0
+    while total < output.count - 1 {
+        read := ReadAt(file, output[total:output.count - 1], total)
+        if read < 0 {
+            return -1
+        }
+        if read == 0 {
+            break
+        }
+        total += read
+    }
+    output[total] = cast(u8)0
+    return total
+}
+
+CrashReportClearPaths :: (primary: string, secondary: string) {
+    if primary.count > 0 && PathExists(primary) {
+        unused RemoveFile(primary)
+    }
+    if secondary.count > 0 && secondary != primary && PathExists(secondary) {
+        unused RemoveFile(secondary)
+    }
+}
+
+CrashReportLoadFromPaths :: (primary: string, secondary: string, report: *PendingCrashReport) -> bool {
+    report.* = PendingCrashReport.{.screen = -1, .practice = -1}
+    buffer: [CrashReportMaxFileBytes + 1]u8
+    paths: [2]string = .[primary, secondary]
+    for candidate, index: paths {
+        if candidate.count == 0 || !PathExists(candidate) {
+            continue
+        }
+        length := CrashReadFileText(candidate, buffer[:])
+        if length > 0 && CrashReportParse(TextFromBytes(buffer[:length]), report) {
+            unused AppCopyText(primary, report.primary_path[:])
+            unused AppCopyText(secondary, report.secondary_path[:])
+            // If native crash capture wrote primary and Android's exit info wrote
+            // secondary with extra trace details, preserve those details too.
+            if index == 0 && secondary.count > 0 && secondary != primary && PathExists(secondary) &&
+            (report.details[0] == cast(u8)0 || report.breadcrumbs[0] == cast(u8)0) {
+                extra_len := CrashReadFileText(secondary, buffer[:])
+                extra: PendingCrashReport
+                if extra_len > 0 && CrashReportParse(TextFromBytes(buffer[:extra_len]), *extra) {
+                    if report.details[0] == cast(u8)0 && extra.details[0] != cast(u8)0 {
+                        unused AppCopyText(TextUntilNul(extra.details[:]), report.details[:])
+                    }
+                    if report.breadcrumbs[0] == cast(u8)0 && extra.breadcrumbs[0] != cast(u8)0 {
+                        unused AppCopyText(TextUntilNul(extra.breadcrumbs[:]), report.breadcrumbs[:])
+                    }
+                }
+            }
+            return true
+        }
+        // Remove corrupt or empty crash markers so they cannot loop on future launches.
+        unused RemoveFile(candidate)
+    }
+    return false
+}
+
+CrashReportBuildTitle :: (report: *PendingCrashReport, output: []u8) -> string {
+    if report == null || output.count == 0 {
+        return ""
+    }
+    summary := TextUntilNul(report.summary[:])
+    out: Vec(u8)
+    BuilderPrint(*out, "Crash report: %", summary)
+    built := BuilderFinish(out)
+    defer {
+        PackageFree(built)
+    }
+    trimmed := CrashUtf8Truncate(built, CrashReportMaxTitleBytes)
+    if !AppCopyText(trimmed, output) {
+        return ""
+    }
+    return TextUntilNul(output)
+}
+
+CrashReportBuildMessage :: (report: *PendingCrashReport) -> string {
+    if report == null || !report.present {
+        return ""
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "Unexpected crash report\nSummary: %\nKind: %",
+        TextUntilNul(report.summary[:]), TextUntilNul(report.kind[:]))
+    if report.timestamp > 0 {
+        BuilderPrint(*out, "\nTimestamp: %", report.timestamp)
+    }
+    if report.signal > 0 {
+        BuilderPrint(*out, "\nSignal: % (%)", TextUntilNul(report.signal_name[:]), report.signal)
+    }
+    thread := TextUntilNul(report.thread[:])
+    if thread.count > 0 {
+        BuilderPrint(*out, "\nThread: %", thread)
+    }
+    details: DeviceDetails
+    DeviceDescribe(*details)
+    version := TextUntilNul(report.version[:])
+    if version.count == 0 {
+        version = VersionString
+    }
+    platform := TextUntilNul(report.platform[:])
+    if platform.count == 0 {
+        platform = DevicePlatform()
+    }
+    system := TextUntilNul(report.system[:])
+    if system.count == 0 {
+        system = DeviceSystem(*details)
+    }
+    device := TextUntilNul(report.device[:])
+    if device.count == 0 {
+        device = DeviceModel(*details)
+    }
+    pkg := TextUntilNul(report.package[:])
+    if pkg.count == 0 {
+        pkg = DevicePackage(*details)
+    }
+    BuilderPrint(*out, "\nVersion: %\nPlatform: %", version, platform)
+    if system.count > 0 {
+        BuilderPrint(*out, "\nSystem: %", system)
+    }
+    if device.count > 0 {
+        BuilderPrint(*out, "\nDevice: %", device)
+    }
+    if pkg.count > 0 {
+        BuilderPrint(*out, "\nPackage: %", pkg)
+    }
+    if report.screen >= 0 || report.practice >= 0 || report.pip {
+        BuilderPrint(*out, "\nState: screen=% practice=% pip=%",
+            report.screen, report.practice, ifx report.pip then "true" else "false")
+    }
+    breadcrumbs := TextUntilNul(report.breadcrumbs[:])
+    if breadcrumbs.count > 0 {
+        BuilderPrint(*out, "\n\nRecent lifecycle events:\n%", breadcrumbs)
+    }
+    trace := TextUntilNul(report.details[:])
+    if trace.count > 0 {
+        BuilderPrint(*out, "\n\nDiagnostic details:\n%", trace)
+    }
+    built := BuilderFinish(out)
+    if built.count <= CrashReportMaxMessageBytes {
+        return built
+    }
+    truncated := PackageText(CrashUtf8Truncate(built, CrashReportMaxMessageBytes), "")
+    PackageFree(built)
+    return truncated
+}
+
+CrashReportBuildContext :: (report: *PendingCrashReport, screen: s32, apps_mask: s32,
+    theme: string, scale_tenths: s32) -> string {
+    if report == null || !report.present {
+        return ""
+    }
+    details: DeviceDetails
+    DeviceDescribe(*details)
+    version := TextUntilNul(report.version[:])
+    if version.count == 0 {
+        version = VersionString
+    }
+    platform := TextUntilNul(report.platform[:])
+    if platform.count == 0 {
+        platform = DevicePlatform()
+    }
+    system := TextUntilNul(report.system[:])
+    if system.count == 0 {
+        system = DeviceSystem(*details)
+    }
+    device := TextUntilNul(report.device[:])
+    if device.count == 0 {
+        device = DeviceModel(*details)
+    }
+    pkg := TextUntilNul(report.package[:])
+    if pkg.count == 0 {
+        pkg = DevicePackage(*details)
+    }
+
+    out: Vec(u8)
+    BuilderPrint(*out, "{\"source\":\"crash_report\",\"crash_kind\":")
+    LumiJsonString(*out, TextUntilNul(report.kind[:]))
+    BuilderPrint(*out, ",\"screen\":%,\"apps\":%,\"theme\":", screen, apps_mask)
+    LumiJsonString(*out, theme)
+    BuilderPrint(*out, ",\"scale\":%,\"version\":", scale_tenths)
+    LumiJsonString(*out, version)
+    BuilderPrint(*out, ",\"platform\":")
+    LumiJsonString(*out, platform)
+    BuilderPrint(*out, ",\"system\":")
+    LumiJsonString(*out, system)
+    BuilderPrint(*out, ",\"device\":")
+    LumiJsonString(*out, device)
+    BuilderPrint(*out, ",\"package\":")
+    LumiJsonString(*out, pkg)
+    BuilderPrint(*out, "}")
+    built := BuilderFinish(out)
+    if built.count <= CrashReportMaxContextBytes {
+        return built
+    }
+    PackageFree(built)
+    fallback: Vec(u8)
+    BuilderPrint(*fallback, "{\"source\":\"crash_report\",\"crash_kind\":")
+    LumiJsonString(*fallback, TextUntilNul(report.kind[:]))
+    BuilderPrint(*fallback, ",\"version\":")
+    LumiJsonString(*fallback, version)
+    BuilderPrint(*fallback, ",\"platform\":")
+    LumiJsonString(*fallback, platform)
+    BuilderPrint(*fallback, "}")
+    return BuilderFinish(fallback)
+}
+
+// Explicit user confirmation path: queues the crash report into the durable
+// feedback outbox and removes the pending crash files once safely stored.
+CrashReportApproveAndQueue :: (report: *PendingCrashReport, screen: s32, apps_mask: s32,
+    theme: string, scale_tenths: s32) -> bool {
+    if report == null || !report.present {
+        return false
+    }
+    title_buf: [CrashReportMaxTitleBytes + 1]u8
+    title := CrashReportBuildTitle(report, title_buf[:])
+    if title.count == 0 {
+        return false
+    }
+    message := CrashReportBuildMessage(report)
+    defer {
+        PackageFree(message)
+    }
+    if message.count == 0 {
+        return false
+    }
+    context := CrashReportBuildContext(report, screen, apps_mask, theme, scale_tenths)
+    defer {
+        PackageFree(context)
+    }
+    queued_id := FeedbackEnqueue(title, message, context)
+    defer {
+        PackageFree(queued_id)
+    }
+    if queued_id.count != 64 {
+        return false
+    }
+    CrashReportClearPaths(TextUntilNul(report.primary_path[:]),
+        TextUntilNul(report.secondary_path[:]))
+    report.* = PendingCrashReport.{.screen = -1, .practice = -1}
+    return true
+}
+
+// Explicit user dismissal path: deletes the pending crash files and never
+// enqueues or transmits anything.
+CrashReportDiscard :: (report: *PendingCrashReport) {
+    if report == null {
+        return
+    }
+    CrashReportClearPaths(TextUntilNul(report.primary_path[:]),
+        TextUntilNul(report.secondary_path[:]))
+    report.* = PendingCrashReport.{.screen = -1, .practice = -1}
+}

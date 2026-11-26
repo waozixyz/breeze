@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Offer to send saved crash diagnostics to the developer after reopening, with an explicit choice to send or discard.
+
 - Optionally keep Meditation counting up after the end gong, with interval bells and the full session time saved on Finish.
 
 - Open the illustrated Foundations section above Tai Chi lessons, then choose a focused group of free drills.

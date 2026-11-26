@@ -74,6 +74,11 @@ android-http-transport-test:
 	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
 		python3 tests/android_http_transport_test.py
 
+.PHONY: android-crash-reporter-test
+android-crash-reporter-test:
+	@env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+		python3 tests/android_crash_reporter_test.py
+
 # Explicit device check; never part of the CI or ordinary test target.
 # Inbe's Device settings must allow System orientation for real rotation.
 .PHONY: android-graphics-device-test

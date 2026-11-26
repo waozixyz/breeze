@@ -1,0 +1,288 @@
+// Async-signal-safe native fatal crash capture. Writes a compact JSON report
+// to the app's data directory before re-raising the signal so the next launch
+// can ask the person whether to send it to the developer.
+#import "c_string"
+#import "byte_text_linux"
+#import, file "../core/device_info.zi";
+#import, file "../core/version.zi";
+
+CrashPendingFileName :: "crash-report.pending.json"
+
+CRASH_SIGILL :: 4
+CRASH_SIGABRT :: 6
+#if #defined(__FreeBSD__) || #defined(__APPLE__) {
+    CRASH_SIGBUS :: 10
+} else {
+    CRASH_SIGBUS :: 7
+}
+CRASH_SIGFPE :: 8
+CRASH_SIGSEGV :: 11
+
+#if !#defined(PLATFORM_WEB) && !#defined(_WIN32) {
+    crash_libc :: #system_library "c";
+    crash_atomic :: #system_library "atomic";
+    CrashOpen :: (path: *u8, flags: s32, mode: s32) -> s32 #foreign crash_libc "open";
+    CrashWrite :: (fd: s32, bytes: *u8, count: usize) -> isize #foreign crash_libc "write";
+    CrashClose :: (fd: s32) -> s32 #foreign crash_libc "close";
+    CrashSignalCallback :: #type (s32) -> void #c_call;
+    CrashSignal :: (signal_number: s32, callback: CrashSignalCallback) -> CrashSignalCallback #foreign crash_libc "signal";
+    CrashRaise :: (signal_number: s32) -> s32 #foreign crash_libc "raise";
+    CrashTime :: (out: *s64) -> s64 #foreign crash_libc "time";
+    CrashAtomicStore :: (target: *s32, value: s32, order: s32) #foreign crash_atomic "__atomic_store_4";
+    CrashAtomicLoad :: (target: *s32, order: s32) -> s32 #foreign crash_atomic "__atomic_load_4";
+    #if #defined(__FreeBSD__) || #defined(__APPLE__) {
+        CRASH_OPEN_FLAGS :: 0x601
+    } else {
+        CRASH_OPEN_FLAGS :: 0x241
+    }
+    CRASH_FILE_MODE :: 384
+}
+
+crash_handler_path: [1024]u8;
+crash_handler_meta: [1024]u8;
+crash_handler_meta_length: s64;
+crash_handler_screen: s32 = -1;
+crash_handler_practice: s32 = -1;
+crash_handler_pip: s32 = 0;
+crash_handler_in_progress: s32 = 0;
+crash_handler_installed: bool;
+
+CrashBufferAppend :: (output: []u8, used: *s64, text: string) -> bool {
+    if used.* < 0 || used.* + text.count >= output.count {
+        return false
+    }
+    for index: cast(s64)0..text.count - 1 {
+        output[used.*] = text[index]
+        used.* += 1
+    }
+    output[used.*] = cast(u8)0
+    return true
+}
+
+CrashBufferAppendInt :: (output: []u8, used: *s64, value: s64) -> bool {
+    digits: [32]u8
+    negative := value < 0
+    remaining := value
+    count: s64 = 0
+    if remaining == 0 {
+        digits[0] = cast(u8)48
+        count = 1
+    } else {
+        while remaining != 0 && count < 31 {
+            digit := remaining % 10
+            if digit < 0 {
+                digit = -digit
+            }
+            digits[count] = cast(u8)(48 + digit)
+            count += 1
+            remaining /= 10
+        }
+    }
+    needed := count + (ifx negative then cast(s64)1 else cast(s64)0)
+    if used.* < 0 || used.* + needed >= output.count {
+        return false
+    }
+    if negative {
+        output[used.*] = cast(u8)45
+        used.* += 1
+    }
+    while count > 0 {
+        count -= 1
+        output[used.*] = digits[count]
+        used.* += 1
+    }
+    output[used.*] = cast(u8)0
+    return true
+}
+
+CrashBufferAppendJsonString :: (output: []u8, used: *s64, text: string) -> bool {
+    if !CrashBufferAppend(output, used, "\"") {
+        return false
+    }
+    for byte: text {
+        if byte == cast(u8)34 {
+            if !CrashBufferAppend(output, used, "\\\"") {
+                return false
+            }
+        } else if byte == cast(u8)92 {
+            if !CrashBufferAppend(output, used, "\\\\") {
+                return false
+            }
+        } else if byte == cast(u8)10 {
+            if !CrashBufferAppend(output, used, "\\n") {
+                return false
+            }
+        } else if byte == cast(u8)13 {
+            if !CrashBufferAppend(output, used, "\\r") {
+                return false
+            }
+        } else if byte == cast(u8)9 {
+            if !CrashBufferAppend(output, used, "\\t") {
+                return false
+            }
+        } else if byte >= cast(u8)32 && byte != cast(u8)127 {
+            if used.* + 1 >= output.count {
+                return false
+            }
+            output[used.*] = byte
+            used.* += 1
+            output[used.*] = cast(u8)0
+        }
+    }
+    return CrashBufferAppend(output, used, "\"")
+}
+
+CrashSignalName :: (signal_number: s32) -> string {
+    if signal_number == CRASH_SIGSEGV {
+        return "SIGSEGV"
+    }
+    if signal_number == CRASH_SIGABRT {
+        return "SIGABRT"
+    }
+    if signal_number == CRASH_SIGFPE {
+        return "SIGFPE"
+    }
+    if signal_number == CRASH_SIGILL {
+        return "SIGILL"
+    }
+    if signal_number == CRASH_SIGBUS {
+        return "SIGBUS"
+    }
+    return "SIGNAL"
+}
+
+CrashFormatSignalJson :: (signal_number: s32, timestamp: s64, screen: s32, practice: s32,
+    pip: bool, meta_fields: string, output: []u8) -> s64 {
+    if output.count == 0 {
+        return 0
+    }
+    used: s64 = 0
+    output[0] = cast(u8)0
+    name := CrashSignalName(signal_number)
+    if !CrashBufferAppend(output, *used, "{\"schema\":1,\"kind\":\"native_signal\",\"timestamp\":") ||
+    !CrashBufferAppendInt(output, *used, ifx timestamp > 0 then timestamp else 0) ||
+    !CrashBufferAppend(output, *used, ",\"signal\":") ||
+    !CrashBufferAppendInt(output, *used, cast(s64)signal_number) ||
+    !CrashBufferAppend(output, *used, ",\"signal_name\":") ||
+    !CrashBufferAppendJsonString(output, *used, name) ||
+    !CrashBufferAppend(output, *used, ",\"summary\":\"Native crash (") ||
+    !CrashBufferAppend(output, *used, name) ||
+    !CrashBufferAppend(output, *used, ", signal ") ||
+    !CrashBufferAppendInt(output, *used, cast(s64)signal_number) ||
+    !CrashBufferAppend(output, *used, ")\",\"screen\":") ||
+    !CrashBufferAppendInt(output, *used, cast(s64)screen) ||
+    !CrashBufferAppend(output, *used, ",\"practice\":") ||
+    !CrashBufferAppendInt(output, *used, cast(s64)practice) ||
+    !CrashBufferAppend(output, *used, ",\"pip\":") ||
+    !CrashBufferAppend(output, *used, ifx pip then "true" else "false") {
+        return 0
+    }
+    if meta_fields.count > 0 && !CrashBufferAppend(output, *used, meta_fields) {
+        return 0
+    }
+    if !CrashBufferAppend(output, *used, "}") {
+        return 0
+    }
+    return used
+}
+
+CrashHandlerPrepareMeta :: () {
+    details: DeviceDetails
+    DeviceDescribe(*details)
+    used: s64 = 0
+    crash_handler_meta[0] = cast(u8)0
+    ok := CrashBufferAppend(crash_handler_meta[:], *used, ",\"version\":") &&
+    CrashBufferAppendJsonString(crash_handler_meta[:], *used, VersionString) &&
+    CrashBufferAppend(crash_handler_meta[:], *used, ",\"platform\":") &&
+    CrashBufferAppendJsonString(crash_handler_meta[:], *used, DevicePlatform()) &&
+    CrashBufferAppend(crash_handler_meta[:], *used, ",\"system\":") &&
+    CrashBufferAppendJsonString(crash_handler_meta[:], *used, DeviceSystem(*details)) &&
+    CrashBufferAppend(crash_handler_meta[:], *used, ",\"device\":") &&
+    CrashBufferAppendJsonString(crash_handler_meta[:], *used, DeviceModel(*details)) &&
+    CrashBufferAppend(crash_handler_meta[:], *used, ",\"package\":") &&
+    CrashBufferAppendJsonString(crash_handler_meta[:], *used, DevicePackage(*details))
+    crash_handler_meta_length = ifx ok then used else 0
+    if !ok {
+        crash_handler_meta[0] = cast(u8)0
+    }
+}
+
+CrashHandlerPathForRoot :: (root: string, output: []u8) -> bool {
+    if root.count == 0 || output.count == 0 {
+        return false
+    }
+    used: s64 = 0
+    output[0] = cast(u8)0
+    if !CrashBufferAppend(output, *used, root) {
+        return false
+    }
+    if root[root.count - 1] != cast(u8)47 && root[root.count - 1] != cast(u8)92 {
+        if !CrashBufferAppend(output, *used, "/") {
+            return false
+        }
+    }
+    return CrashBufferAppend(output, *used, CrashPendingFileName)
+}
+
+CrashHandlerUpdateState :: (screen: s32, practice: s32, pip: bool) {
+    #if !#defined(PLATFORM_WEB) && !#defined(_WIN32) {
+        CrashAtomicStore(*crash_handler_screen, screen, 0)
+        CrashAtomicStore(*crash_handler_practice, practice, 0)
+        CrashAtomicStore(*crash_handler_pip, ifx pip then cast(s32)1 else cast(s32)0, 0)
+    } else {
+        crash_handler_screen = screen
+        crash_handler_practice = practice
+        crash_handler_pip = ifx pip then cast(s32)1 else cast(s32)0
+    }
+}
+
+#if !#defined(PLATFORM_WEB) && !#defined(_WIN32) {
+    CrashSignalHandler :: (signal_number: s32) {
+        // Restore default disposition first so re-raising always terminates
+        // cleanly and produces normal OS/Android crash tombstones.
+        unused CrashSignal(signal_number, cast(CrashSignalCallback)null)
+        if CrashAtomicLoad(*crash_handler_in_progress, 0) == 0 {
+            CrashAtomicStore(*crash_handler_in_progress, 1, 0)
+            if crash_handler_path[0] != cast(u8)0 {
+                payload: [2048]u8
+                meta := TextFromBytes(BytesFromPointer(*crash_handler_meta[0],
+                    cast(u64)crash_handler_meta_length))
+                written_len := CrashFormatSignalJson(
+                    signal_number,
+                    CrashTime(null),
+                    CrashAtomicLoad(*crash_handler_screen, 0),
+                    CrashAtomicLoad(*crash_handler_practice, 0),
+                    CrashAtomicLoad(*crash_handler_pip, 0) != 0,
+                    meta,
+                    payload[:])
+                if written_len > 0 {
+                    fd := CrashOpen(*crash_handler_path[0], CRASH_OPEN_FLAGS, CRASH_FILE_MODE)
+                    if fd >= 0 {
+                        unused CrashWrite(fd, *payload[0], cast(usize)written_len)
+                        unused CrashClose(fd)
+                    }
+                }
+            }
+        }
+        unused CrashRaise(signal_number)
+    }
+}
+
+CrashHandlerInstall :: (root: string) -> bool {
+    if !CrashHandlerPathForRoot(root, crash_handler_path[:]) {
+        return false
+    }
+    CrashHandlerPrepareMeta()
+    #if !#defined(PLATFORM_WEB) && !#defined(_WIN32) {
+        if !crash_handler_installed {
+            callback: CrashSignalCallback = CrashSignalHandler
+            unused CrashSignal(CRASH_SIGSEGV, callback)
+            unused CrashSignal(CRASH_SIGABRT, callback)
+            unused CrashSignal(CRASH_SIGFPE, callback)
+            unused CrashSignal(CRASH_SIGILL, callback)
+            unused CrashSignal(CRASH_SIGBUS, callback)
+            crash_handler_installed = true
+        }
+    }
+    return true
+}

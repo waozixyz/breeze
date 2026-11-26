@@ -173,3 +173,5 @@ test: local-game-records-test
 test: android-push-delivery-test
 
 test: telegram-svg-test
+
+test: crash-report-test android-crash-reporter-test

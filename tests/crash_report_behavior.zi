@@ -1,0 +1,223 @@
+// Post-crash diagnostics capture, parsing, explicit-consent feedback queueing,
+// and dismissal checks against real SQLite storage and native signal capture.
+#import, file "../src/platform/crash_handler.zi";
+#import, file "../src/app/crash_report_store.zi";
+#import, file "../src/apps/feedback_store.zi";
+#import, file "../src/apps/package_files.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/storage_settings.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "storage_test_support.zi";
+#import "byte_text_linux"
+#import "c_string"
+#import "file_linux"
+#import "json_scan"
+#import "text"
+#import "text_buffer"
+#import "vec"
+
+crash_test_c :: #system_library "c";
+CrashTestGetenv :: (name: *u8) -> *u8 #foreign crash_test_c "getenv";
+CrashTestRaise :: (sig: s32) -> s32 #foreign crash_test_c "raise";
+
+CrashTestEnv :: (name: string) -> string {
+    key: [64]u8
+    if !CopyCString(name, key[:]) {
+        return ""
+    }
+    value := CrashTestGetenv(*key[0])
+    if value == null {
+        return ""
+    }
+    return TextFromCString(value)
+}
+
+WriteTextFile :: (path: string, text: string) -> bool {
+    file := OpenReplace(path)
+    if !file.valid {
+        return false
+    }
+    defer { unused CloseFile(file) }
+    if text.count == 0 {
+        return true
+    }
+    return WriteTextAt(file, text, 0) == text.count
+}
+
+FeedbackPending :: () -> bool {
+    value := FeedbackFirst()
+    defer { PackageFree(value) }
+    return value.count != 0
+}
+
+TestPathFormatting :: () {
+    buf: [1024]u8
+    check_true("joins root without trailing slash",
+        CrashHandlerPathForRoot("/tmp/inbe-root", buf[:]) &&
+        TextUntilNul(buf[:]) == "/tmp/inbe-root/crash-report.pending.json")
+    check_true("joins root with trailing slash",
+        CrashHandlerPathForRoot("/tmp/inbe-root/", buf[:]) &&
+        TextUntilNul(buf[:]) == "/tmp/inbe-root/crash-report.pending.json")
+    check_true("rejects empty root", !CrashHandlerPathForRoot("", buf[:]))
+}
+
+TestSignalFormattingAndParse :: () {
+    payload: [2048]u8
+    meta := ",\"version\":\"2.1.63\",\"platform\":\"android\",\"system\":\"Android 13 (SDK 33)\",\"device\":\"Moto\",\"package\":\"xyz.waozi.inbe\""
+    written := CrashFormatSignalJson(CRASH_SIGSEGV, 1795000123, 2, 0, true, meta, payload[:])
+    check_true("formats signal crash json", written > 0)
+    json := TextFromBytes(payload[:written])
+    report: PendingCrashReport
+    check_true("parses formatted signal json", CrashReportParse(json, *report))
+    check_true("parsed report is marked present", report.present)
+    check_true("kind is native_signal", TextUntilNul(report.kind[:]) == "native_signal")
+    check_int("signal number preserved", report.signal, CRASH_SIGSEGV)
+    check_true("signal name preserved", TextUntilNul(report.signal_name[:]) == "SIGSEGV")
+    check_int("screen preserved", report.screen, 2)
+    check_int("practice preserved", report.practice, 0)
+    check_true("pip flag preserved", report.pip)
+    check_true("summary names signal", contains(TextUntilNul(report.summary[:]), "SIGSEGV"))
+    check_true("device metadata preserved", TextUntilNul(report.device[:]) == "Moto")
+
+    bad: PendingCrashReport
+    check_true("rejects invalid json", !CrashReportParse("{not json", *bad))
+    check_true("rejects wrong schema version", !CrashReportParse("{\"schema\":2,\"kind\":\"native_signal\",\"summary\":\"x\"}", *bad))
+    check_true("rejects missing kind", !CrashReportParse("{\"schema\":1,\"summary\":\"x\"}", *bad))
+}
+
+TestConsentAndDismissal :: (root: string) {
+    primary_buf: [1024]u8
+    secondary_buf: [1024]u8
+    check_true("primary path", CrashHandlerPathForRoot(root, primary_buf[:]))
+    secondary_root := PackageText(root, "/android-files")
+    defer { PackageFree(secondary_root) }
+    check_true("secondary dir created", DirectoryExists(secondary_root) || CreateDirectory(secondary_root))
+    check_true("secondary path", CrashHandlerPathForRoot(secondary_root, secondary_buf[:]))
+    primary := TextUntilNul(primary_buf[:])
+    secondary := TextUntilNul(secondary_buf[:])
+
+    // 1. Corrupt file is deleted cleanly and does not trigger a prompt.
+    check_true("writes corrupt marker", WriteTextFile(primary, "{broken"))
+    corrupt: PendingCrashReport
+    check_true("corrupt file rejected", !CrashReportLoadFromPaths(primary, secondary, *corrupt))
+    check_true("corrupt file removed so it cannot loop", !PathExists(primary))
+    check_true("corrupt file never queues feedback", !FeedbackPending())
+
+    // 2. Dismissal deletes both pending files without queueing anything.
+    java_json := "{\"schema\":1,\"kind\":\"android_java_exception\",\"timestamp\":1795000200,\"summary\":\"IllegalStateException: PiP expand failed\",\"thread\":\"main\",\"version\":\"2.1.63\",\"platform\":\"android\",\"system\":\"Android 13\",\"device\":\"Moto\",\"package\":\"xyz.waozi.inbe\",\"breadcrumbs\":\"[1] enterPictureWindow\",\"details\":\"java.lang.IllegalStateException: PiP\"}"
+    check_true("writes secondary java report", WriteTextFile(secondary, java_json))
+    loaded: PendingCrashReport
+    check_true("loads pending java report from secondary path",
+        CrashReportLoadFromPaths(primary, secondary, *loaded))
+    check_true("loading alone never queues feedback before consent", !FeedbackPending())
+    CrashReportDiscard(*loaded)
+    check_true("discard clears report state", !loaded.present)
+    check_true("discard deletes secondary file", !PathExists(secondary))
+    check_true("discard never queues feedback", !FeedbackPending())
+
+    // 3. Primary native signal + secondary exit trace merges details and queues
+    //    only after explicit user approval, then cleans up both files.
+    native_json := "{\"schema\":1,\"kind\":\"native_signal\",\"timestamp\":1795000300,\"signal\":11,\"signal_name\":\"SIGSEGV\",\"summary\":\"Native crash (SIGSEGV, signal 11)\",\"screen\":2,\"practice\":0,\"pip\":true,\"version\":\"2.1.63\",\"platform\":\"android\",\"system\":\"Android 13\",\"device\":\"Moto\",\"package\":\"xyz.waozi.inbe\"}"
+    exit_json := "{\"schema\":1,\"kind\":\"android_native_crash\",\"timestamp\":1795000300,\"summary\":\"Native crash\",\"details\":\"backtrace: libmain.so+0x1234\"}"
+    check_true("writes primary native report", WriteTextFile(primary, native_json))
+    check_true("writes secondary exit trace", WriteTextFile(secondary, exit_json))
+    merged: PendingCrashReport
+    check_true("loads primary and merges secondary details",
+        CrashReportLoadFromPaths(primary, secondary, *merged))
+    check_true("merged report preserves primary signal state", merged.signal == 11 && merged.pip)
+    check_true("merged report preserves secondary trace details",
+        contains(TextUntilNul(merged.details[:]), "libmain.so+0x1234"))
+    check_true("no feedback queued before explicit Approve", !FeedbackPending())
+
+    check_true("explicit approval queues crash report",
+        CrashReportApproveAndQueue(*merged, 2, 31, "dark", 10))
+    check_true("approved report clears in-memory pending flag", !merged.present)
+    check_true("approved report removes primary file", !PathExists(primary))
+    check_true("approved report removes secondary file", !PathExists(secondary))
+    check_true("second approval attempt is rejected",
+        !CrashReportApproveAndQueue(*merged, 2, 31, "dark", 10))
+
+    queued := FeedbackFirst()
+    defer { PackageFree(queued) }
+    check_true("feedback outbox contains queued crash report", queued.count > 0)
+    check_true("outbox payload targets inbe", contains(queued, "\"app_id\":\"inbe\""))
+    title_buf: [161]u8
+    title_len := ReadStringText(queued, FieldAt(queued, 0, "title"), title_buf[:])
+    check_true("queued title starts with Crash report:",
+        title_len > 0 && contains(TextFromBytes(title_buf[:title_len]), "Crash report: Native crash (SIGSEGV"))
+    msg := ReadStringValue(queued, FieldAt(queued, 0, "message"), FeedbackMessageMax)
+    msg_text := BuilderFinish(msg.value)
+    defer { PackageFree(msg_text) }
+    check_true("queued message contains state and merged trace",
+        msg.valid &&
+        contains(msg_text, "Signal: SIGSEGV (11)") &&
+        contains(msg_text, "pip=true") &&
+        contains(msg_text, "libmain.so+0x1234"))
+    ctx := ReadStringValue(queued, FieldAt(queued, 0, "context"), 2048)
+    ctx_text := BuilderFinish(ctx.value)
+    defer { PackageFree(ctx_text) }
+    check_true("queued context marks crash_report source",
+        ctx.valid && contains(ctx_text, "\"source\":\"crash_report\"") &&
+        contains(ctx_text, "\"crash_kind\":\"native_signal\""))
+    id_buf: [65]u8
+    id_len := ReadStringText(queued, FieldAt(queued, 0, "id"), id_buf[:])
+    check_true("queued report has 64-char id and clears cleanly",
+        id_len == 64 && FeedbackDelivered(TextFromBytes(id_buf[:id_len])))
+    check_true("outbox empty after delivery", !FeedbackPending())
+}
+
+TestRealSignalSubprocessResult :: (signal_root: string) {
+    path_buf: [1024]u8
+    check_true("signal root path", CrashHandlerPathForRoot(signal_root, path_buf[:]))
+    path := TextUntilNul(path_buf[:])
+    check_true("real signal crash wrote pending file", PathExists(path))
+    report: PendingCrashReport
+    check_true("real signal pending file parses cleanly",
+        CrashReportLoadFromPaths(path, "", *report))
+    check_int("real signal captured SIGABRT", report.signal, CRASH_SIGABRT)
+    check_true("real signal name is SIGABRT", TextUntilNul(report.signal_name[:]) == "SIGABRT")
+    check_int("real signal captured active screen", report.screen, 5)
+    check_int("real signal captured active practice", report.practice, 2)
+    check_true("real signal captured pip=true", report.pip)
+    check_true("real signal report approves into feedback outbox",
+        CrashReportApproveAndQueue(*report, 5, 31, "dark", 10))
+    check_true("real signal report removed after approval", !PathExists(path))
+    queued := FeedbackFirst()
+    defer { PackageFree(queued) }
+    check_true("real signal report reached feedback outbox",
+        queued.count > 0 && contains(queued, "SIGABRT"))
+}
+
+#program_export
+Check :: () -> s32 {
+    if CrashTestEnv("CRASH_TEST_ROLE") == "crash-child" {
+        root := CrashTestEnv("CRASH_TEST_ROOT")
+        if root.count == 0 {
+            return 2
+        }
+        if !CrashHandlerInstall(root) {
+            return 3
+        }
+        CrashHandlerUpdateState(5, 2, true)
+        unused CrashTestRaise(CRASH_SIGABRT)
+        return 4
+    }
+
+    guard := support_begin("/tmp/inbe-crash-report-test/")
+    if guard != 0 {
+        return guard
+    }
+    root := "/tmp/inbe-crash-report-test/data"
+    check_true("fixture storage initializes", storage_init(root) != 0)
+    TestPathFormatting()
+    TestSignalFormattingAndParse()
+    TestConsentAndDismissal(root)
+    signal_root := CrashTestEnv("CRASH_TEST_SIGNAL_ROOT")
+    if signal_root.count > 0 {
+        TestRealSignalSubprocessResult(signal_root)
+    }
+    storage_close()
+    remove_tree("/tmp/inbe-crash-report-test/")
+    return failures
+}

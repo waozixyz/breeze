@@ -149,6 +149,7 @@ public class MainActivity extends NativeActivity {
             return;
         }
         pictureWindowEntering = true;
+        CrashReporter.recordBreadcrumb("enterPictureWindow:" + reason);
         try {
             if (!enterPictureInPictureMode(pictureWindowParams())) {
                 pictureWindowEntering = false;
@@ -240,6 +241,7 @@ public class MainActivity extends NativeActivity {
     @Override
     public void onPictureInPictureModeChanged(boolean visible, Configuration configuration) {
         super.onPictureInPictureModeChanged(visible, configuration);
+        CrashReporter.recordBreadcrumb("onPictureInPictureModeChanged:visible=" + visible + ",stopped=" + activityStopped);
         pictureWindowEntering = false;
         // Closing the floating window stops the activity first; opening it
         // back into the app leaves the activity started.
@@ -1247,6 +1249,8 @@ public class MainActivity extends NativeActivity {
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        CrashReporter.install(this, BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE);
+        CrashReporter.recordBreadcrumb("onCreate");
         startupStarted = SystemClock.elapsedRealtime();
         configureSystemBars();
         // Set or clear the local override before the native app starts.
@@ -1291,6 +1295,7 @@ public class MainActivity extends NativeActivity {
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        CrashReporter.recordBreadcrumb("onConfigurationChanged");
         nativeInvalidateGraphicsResources();
         configureSystemBars();
         pushDeviceConfiguration();
@@ -1568,6 +1573,7 @@ public class MainActivity extends NativeActivity {
 
     @Override
     protected void onPause() {
+        CrashReporter.recordBreadcrumb("onPause");
         NotificationPresence.setActivityVisible(false);
         watchRecents(false);
         super.onPause();
@@ -1578,6 +1584,7 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onStart() {
         super.onStart();
+        CrashReporter.recordBreadcrumb("onStart");
         activityStopped = false;
         refreshPictureWindowState();
         syncLifecycleState("onStart");
@@ -1586,6 +1593,7 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onStop() {
         super.onStop();
+        CrashReporter.recordBreadcrumb("onStop");
         activityStopped = true;
         pictureWindowEntering = false;
         refreshPictureWindowState();
@@ -1595,6 +1603,7 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        CrashReporter.recordBreadcrumb("onResume");
         PushBridge.autoConnect(this);
         NotificationPresence.setActivityVisible(true);
         activityPaused = false;
@@ -1614,6 +1623,7 @@ public class MainActivity extends NativeActivity {
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
+        CrashReporter.recordBreadcrumb("onNewIntent");
         setIntent(intent);
         captureLaunchUri(intent);
         appShortcuts.accept(intent);

@@ -193,3 +193,7 @@ entity-picker-test: $(ZI2C_BIN)
 .PHONY: telegram-svg-test
 telegram-svg-test: $(ZI2C_BIN)
 	sh tests/telegram_svg_test.sh $(ZIRAN_BUILD_DIR)/bin
+
+.PHONY: crash-report-test
+crash-report-test: $(ZIRAN_BIN) $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) | build-laws
+	@sh tests/crash_report_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
