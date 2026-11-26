@@ -6,7 +6,7 @@
 
 - Breathing Patterns shows the phase countdown inside its smoothly growing circle and keeps your saved duration after restarting.
 
-- Fix Android figure rendering and stale frames after rotation, optimize development builds, and keep prepackaged Habits available offline.
+- Use GPU filtering and mirroring for Android figures, fix stale frames after rotation, optimize development builds, and keep prepackaged Habits available offline.
 - Show real habit measurements on selectable shared trends, graph session rounds, and focus entry fields with Enter to save.
 
 - Keep the bottom navigation when a shortcut opens one of Inbe's own screens.
