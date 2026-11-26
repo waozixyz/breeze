@@ -45,6 +45,7 @@ Text :: #import "kryon/text";
 #import, file "tai_chi_draw.zi";
 #import, file "tai_chi_entry.zi";
 #import, file "../practice_narration.zi";
+#import, file "../practice_figure_draw.zi";
 
 using ModalType;
 using ExerciseType;
@@ -130,7 +131,18 @@ tai_chi_request_exit :: (app: *InnerBreeze) {
     app_open_modal(app, cast(ModalType)ModalConfirmExitSession)
 }
 
+// Loading holds the clock and narration, including restored sessions and
+// the small-window timer. Failed loads can proceed with the flat figure.
+TaiChiFigureLoading :: (app: *InnerBreeze) -> bool {
+    man := TaiChiStageMan(app.tai_chi.character)
+    PracticeFigurePrepare(man)
+    return PracticeFigureModelLoading(man)
+}
+
 TaiChiAdvanceBy :: (app: *InnerBreeze, seconds: float64) {
+    if TaiChiFigureLoading(app) {
+        return
+    }
     PracticeNarrationUpdate(app, "taichi", TaiChiCueKey(app))
     next := TaiChiAdvance(app.tai_chi, seconds)
     app.tai_chi = next.state
@@ -218,7 +230,9 @@ TaiChiSubtitle :: (app: *InnerBreeze) -> string {
 
 #program_export
 tai_chi_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) -> string {
-    PracticeNarrationUpdate(app, "taichi", TaiChiCueKey(app))
+    if !TaiChiFigureLoading(app) {
+        PracticeNarrationUpdate(app, "taichi", TaiChiCueKey(app))
+    }
     TaiChiDrawFigure(app.ui.session, *app.tai_chi, picture, cast(float64)HostFrameSeconds(), false,
         LocaleText("exercise_tai_chi"))
     status[0] = 0
@@ -255,6 +269,8 @@ tai_chi_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     frame.can_back = app.tai_chi.time > 0.0
     frame.view = app.tai_chi.view
     duration := TaiChiDuration(app.tai_chi)
+    frame.length_ms = cast(s32)(duration * 1000.0)
+    frame.elapsed_ms = cast(s32)(app.tai_chi.time * 1000.0)
     if duration > 0.0 {
         frame.progress = cast(s32)(app.tai_chi.time / duration * 1000.0)
     }
@@ -274,12 +290,20 @@ tai_chi_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
         app.tai_chi = TaiChiSeek(app.tai_chi, TaiChiNextStepTime(app.tai_chi, true))
         return
     }
+    if frame.action == PRACTICE_MOVEMENT_SEEK {
+        PracticeNarrationStop()
+        app.tai_chi = TaiChiSeek(app.tai_chi, cast(float64)frame.value)
+        PracticeDraftElapsed(EXERCISE_TAI_CHI, cast(s32)app.tai_chi.practised, app.tai_chi.built_item, true)
+        return
+    }
     if frame.action == PRACTICE_MOVEMENT_VIEWPOINT && frame.value >= 0 && frame.value < TAI_CHI_VIEW_COUNT {
         app.tai_chi.view = frame.value
         app.settings_dirty = 1
         save_settings(app)
     }
-    PracticeNarrationUpdate(app, "taichi", TaiChiCueKey(app))
+    if !TaiChiFigureLoading(app) {
+        PracticeNarrationUpdate(app, "taichi", TaiChiCueKey(app))
+    }
     if app.session_paused == 0 {
         TaiChiAdvanceBy(app, cast(float64)HostFrameSeconds())
     }

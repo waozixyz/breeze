@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Tai Chi offers Woman or Man, waits for the figure before playback, and lets you seek with its progress bar. The woman wears a wrap top and loose trousers.
+
 - Keep navigation hidden throughout full-screen practices; restore it on the app page when a practice is minimized or closed.
 
 - Breathing Patterns shows the phase countdown inside its smoothly growing circle and keeps your saved duration after restarting.

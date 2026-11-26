@@ -3,6 +3,8 @@
 #import "kryon/session"
 #import "kryon/drawing_props"
 #import "kryon/bitmap_image"
+#import "kryon/scene"
+#import "figure_joints"
 #import "figure_model"
 #import "figure_math"
 #import "std/byte_text_linux"
@@ -29,6 +31,7 @@ PracticeFigurePlacement :: struct {
     translucent: bool
     training: bool
     training_shorts: bool
+    tai_chi: bool
 }
 
 PracticeFigureTexture :: struct {
@@ -39,11 +42,23 @@ PracticeFigureTexture :: struct {
     man: bool
     training: bool
     training_shorts: bool
+    tai_chi: bool
     animation_tick: s64
     used: u64
 }
 
+PracticeFigurePending :: struct {
+    owner: *PracticeFigureTexture
+    request_id: u64
+    digest: u64
+    animation_tick: s64
+    seconds: float64
+    placement: PracticeFigurePlacement
+}
+
 practice_figure_stages: [2]FigureStage;
+practice_figure_pending: [2]PracticeFigurePending;
+practice_figure_request_id: u64;
 #if #defined(ANDROID_BUILD) {
     practice_figure_loads: [2]PracticeFigureLoad;
     practice_figure_renderer_status: [2]s32;
@@ -88,10 +103,14 @@ PracticeFigureDrawModel :: (session: Session, solved: *TaiChiSolved, rig: *TaiCh
     }
     slot := PracticeFigureTextureFor(session, key, width, height)
     animation_tick := ifx seconds >= 0.0 then cast(s64)(seconds * 30.0) else -1
-    if digest == 0 || slot.digest != digest || slot.man != man ||
+    changed := digest == 0 || slot.digest != digest || slot.man != man ||
     slot.training != placement.training || slot.training_shorts != placement.training_shorts ||
-    slot.animation_tick != animation_tick {
+    slot.tai_chi != placement.tai_chi ||
+    slot.animation_tick != animation_tick
+    pending := *practice_figure_pending[ifx man then 1 else 0]
+    if changed || pending.owner == slot {
         FigureModelTraining(*stage.model, *stage.scene, placement.training, !placement.training_shorts)
+        FigureModelTaiChi(*stage.model, *stage.scene, placement.tai_chi)
         view: TaiChiFlatView
         TaiChiFlatViewSet(*view, framing.camera)
         target := TaiChiAddScaled3(view.center, view.up, framing.view_center)
@@ -99,42 +118,29 @@ PracticeFigureDrawModel :: (session: Session, solved: *TaiChiSolved, rig: *TaiCh
         joints := PracticeFigureJoints(solved, rig)
         offset := FigureV3(placement.offset.x, placement.offset.y, placement.offset.z)
         pivot := FigureV3(placement.pivot.x, placement.pivot.y, placement.pivot.z)
-        #if OS == .ANDROID {
-            gpu_frames := stage.gpu.resources.frames
+        ahead := placement.tai_chi && !placement.translucent && seconds >= 0.0 &&
+        slot.texture.id != 0 && slot.man == man && slot.tai_chi && FigureStageAsyncAvailable(stage)
+        if ahead {
+            ahead = PracticeFigurePaintAhead(stage, pending, slot, *joints, center, view.yaw, view.tilt,
+                framing.view_height, width, height, seconds, offset, pivot, placement, man, digest, animation_tick)
         }
-        rendered := FigureStagePaint(stage, *joints, center, view.yaw, view.tilt, framing.view_height,
-            width, height, seconds, offset, pivot, placement.roll)
-        #if OS == .ANDROID {
-            PracticeFigureReportRenderer(stage, man, rendered, stage.gpu.resources.frames > gpu_frames, width, height)
-        }
-        if !rendered {
-            return false
-        }
-        if placement.translucent {
-            for pixel: cast(s64)0..cast(s64)width * height - 1 {
-                at := pixel * 4
-                stage.pixels.pixels[at] = cast(u8)(cast(s32)stage.pixels.pixels[at] * 45 / 100 + 120)
-                stage.pixels.pixels[at + 1] = cast(u8)(cast(s32)stage.pixels.pixels[at + 1] * 45 / 100 + 136)
-                stage.pixels.pixels[at + 2] = cast(u8)(cast(s32)stage.pixels.pixels[at + 2] * 35 / 100 + 160)
-                stage.pixels.pixels[at + 3] = cast(u8)(cast(s32)stage.pixels.pixels[at + 3] * 48 / 100)
+        if !ahead {
+            PracticeFigureCancelPending(ifx man then 1 else 0)
+            #if OS == .ANDROID {
+                gpu_frames := stage.gpu.resources.frames
             }
-        }
-        if slot.texture.id == 0 {
-            slot.texture = BitmapImageCreate(session, width, height, stage.pixels.pixels[:])
-            if slot.texture.id == 0 {
+            rendered := FigureStagePaint(stage, *joints, center, view.yaw, view.tilt, framing.view_height,
+                width, height, seconds, offset, pivot, placement.roll)
+            #if OS == .ANDROID {
+                PracticeFigureReportRenderer(stage, man, rendered, stage.gpu.resources.frames > gpu_frames, width, height)
+            }
+            if !rendered {
                 return false
             }
-        } else if !BitmapImageUpdate(session, slot.texture, stage.pixels.pixels[:]) {
-            BitmapImageRelease(session, slot.texture)
-            slot.texture = .{}
-            slot.digest = 0
-            return false
+            if !PracticeFigurePublish(stage, slot, width, height, man, placement, digest, animation_tick) {
+                return false
+            }
         }
-        slot.digest = digest
-        slot.man = man
-        slot.training = placement.training
-        slot.training_shorts = placement.training_shorts
-        slot.animation_tick = animation_tick
     }
     // Mirror by sampling the texture in reverse. Moving the camera never
     // needs to copy or rewrite every pixel of the cached figure.
@@ -146,6 +152,9 @@ PracticeFigureDrawModel :: (session: Session, solved: *TaiChiSolved, rig: *TaiCh
 }
 
 PracticeFigureDrawRelease :: () {
+    for index: 0..practice_figure_pending.count - 1 {
+        PracticeFigureCancelPending(cast(s32)index)
+    }
     for index: 0..practice_figure_textures.count - 1 {
         slot := *practice_figure_textures[index]
         BitmapImageRelease(slot.session, slot.texture)
@@ -209,8 +218,8 @@ PracticeFigureModelPath :: (man: bool) -> string {
             }
             practice_figure_renderer_status[index] = status
             line: Vec(u8)
-            BuilderPrint(*line, "APP PROBE: practice figure man=% rendered=% accelerated=% path=offscreen-readback size=%x% msaa=% renderer=% diagnostic=%",
-                man, rendered, accelerated, width, height, stage.gpu.samples,
+            BuilderPrint(*line, "APP PROBE: practice figure man=% rendered=% accelerated=% skinning=% path=offscreen-readback size=%x% msaa=% renderer=% diagnostic=%",
+                man, rendered, accelerated, stage.model.gpu_skinning, width, height, stage.gpu.samples,
                 TextFromCString(*stage.gpu.capabilities.renderer[0]), stage.gpu.capabilities.diagnostic)
             TraceLog(3, TextView(line[:]))
             VecFree(line)
@@ -252,6 +261,92 @@ PracticeFigureModelPath :: (man: bool) -> string {
 }
 
 #scope_file
+PracticeFigureCancelPending :: (index: s32) {
+    FigureStageCancel(*practice_figure_stages[index])
+    practice_figure_pending[index] = .{}
+}
+
+PracticeFigureCancelTexture :: (slot: *PracticeFigureTexture) {
+    for index: 0..practice_figure_pending.count - 1 {
+        if practice_figure_pending[index].owner == slot {
+            PracticeFigureCancelPending(cast(s32)index)
+        }
+    }
+}
+
+// Keep the metadata of the frame that actually reached the bitmap. A pending
+// pose never makes an old image look current, including the last paused pose.
+PracticeFigurePublish :: (stage: *FigureStage, slot: *PracticeFigureTexture, width: s32, height: s32,
+    man: bool, placement: PracticeFigurePlacement, digest: u64, animation_tick: s64) -> bool {
+    if placement.translucent {
+        for pixel: cast(s64)0..cast(s64)width * height - 1 {
+            at := pixel * 4
+            stage.pixels.pixels[at] = cast(u8)(cast(s32)stage.pixels.pixels[at] * 45 / 100 + 120)
+            stage.pixels.pixels[at + 1] = cast(u8)(cast(s32)stage.pixels.pixels[at + 1] * 45 / 100 + 136)
+            stage.pixels.pixels[at + 2] = cast(u8)(cast(s32)stage.pixels.pixels[at + 2] * 35 / 100 + 160)
+            stage.pixels.pixels[at + 3] = cast(u8)(cast(s32)stage.pixels.pixels[at + 3] * 48 / 100)
+        }
+    }
+    if slot.texture.id == 0 {
+        slot.texture = BitmapImageCreate(slot.session, width, height, stage.pixels.pixels[:])
+        if slot.texture.id == 0 {
+            return false
+        }
+    } else if !BitmapImageUpdate(slot.session, slot.texture, stage.pixels.pixels[:]) {
+        BitmapImageRelease(slot.session, slot.texture)
+        slot.texture = .{}
+        slot.digest = 0
+        return false
+    }
+    slot.digest = digest
+    slot.man = man
+    slot.training = placement.training
+    slot.training_shorts = placement.training_shorts
+    slot.tai_chi = placement.tai_chi
+    slot.animation_tick = animation_tick
+    return true
+}
+
+PracticeFigurePaintAhead :: (stage: *FigureStage, pending: *PracticeFigurePending,
+    slot: *PracticeFigureTexture, joints: *FigureJoints, center: Vector3, yaw: float64, pitch: float64,
+    span: float64, width: s32, height: s32, seconds: float64, offset: Vector3, pivot: Vector3,
+    placement: PracticeFigurePlacement, man: bool, digest: u64, animation_tick: s64) -> bool {
+    if pending.owner != null {
+        // Seeking and texture reuse discard the old transfer before its pixels
+        // can reach a different pose, size, session or figure card.
+        if pending.owner != slot || seconds < pending.seconds || seconds - pending.seconds > 0.2 {
+            PracticeFigureCancelPending(ifx man then 1 else 0)
+            return false
+        }
+        result := FigureStagePoll(stage)
+        if !result.ok || (result.completed && result.request_id != pending.request_id) {
+            return false
+        }
+        if !result.completed {
+            return true
+        }
+        submitted := pending.*
+        pending.* = .{}
+        if !PracticeFigurePublish(stage, slot, width, height, man, submitted.placement,
+            submitted.digest, submitted.animation_tick) {
+            return false
+        }
+    }
+    if digest != 0 && slot.digest == digest && slot.animation_tick == animation_tick {
+        return true
+    }
+    practice_figure_request_id += 1
+    result := FigureStageSubmit(stage, joints, center, yaw, pitch, span, width, height, seconds,
+        offset, pivot, placement.roll, practice_figure_request_id)
+    if !result.ok || !result.queued {
+        return false
+    }
+    pending.* = .{.owner = slot, .request_id = result.request_id, .digest = digest,
+        .animation_tick = animation_tick, .seconds = seconds, .placement = placement}
+    return true
+}
+
+#scope_file
 PracticeFigureTextureFor :: (session: Session, key: u64, width: s32, height: s32) -> *PracticeFigureTexture {
     oldest := *practice_figure_textures[0]
     practice_figure_clock += 1
@@ -259,6 +354,7 @@ PracticeFigureTextureFor :: (session: Session, key: u64, width: s32, height: s32
         slot := *practice_figure_textures[index]
         if slot.session.slot == session.slot && slot.session.epoch == session.epoch && slot.key == key {
             if slot.texture.width != width || slot.texture.height != height {
+                PracticeFigureCancelTexture(slot)
                 BitmapImageRelease(slot.session, slot.texture)
                 slot.texture = .{}
                 slot.digest = 0
@@ -270,6 +366,7 @@ PracticeFigureTextureFor :: (session: Session, key: u64, width: s32, height: s32
             oldest = slot
         }
     }
+    PracticeFigureCancelTexture(oldest)
     BitmapImageRelease(oldest.session, oldest.texture)
     oldest.* = PracticeFigureTexture.{.session = session, .key = key, .used = practice_figure_clock}
     return oldest
