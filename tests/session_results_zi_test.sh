@@ -31,7 +31,8 @@ imports = ['apps/shared_state', 'apps/module_host', 'apps/practice_types',
            'apps/app_codec', 'apps/hosted_assets', 'core/types', 'app/app_types',
            'app/session_screen', 'app/activity_start', 'app/app_notifications',
            'app/app_modal_state', 'app/app_route_state', 'app/text_buffers',
-           'app/exercise_types', 'storage/data', 'practices/session_results']
+           'app/exercise_types', 'storage/data', 'practices/session_results',
+           'practices/meditation/meditation_timing']
 header = ''.join('#import, file "' + os.path.relpath(root / 'src' / (name + '.zi'), work) + '";\n'
                  for name in imports)
 header += '#import, file "' + os.path.relpath(root / 'apps/practice/recovery.zi', work) + '";\n'

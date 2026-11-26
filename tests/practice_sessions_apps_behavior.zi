@@ -52,9 +52,9 @@ sessions_test_course_images: s32;
 
 SessionsTestAssets :: (path: string) -> bool {
     return path.count == 0 || path == "icons/ui.webp" ||
-        path == "assets/practices/shared/tai-chi-gallery/thumbnails/lesson-1.webp" ||
-        path == "assets/practices/shared/tai-chi-gallery/thumbnails/lesson-2.webp" ||
-        path == "assets/practices/shared/tai-chi-gallery/thumbnails/foundation-posture.webp"
+    path == "assets/practices/shared/tai-chi-gallery/thumbnails/lesson-1.webp" ||
+    path == "assets/practices/shared/tai-chi-gallery/thumbnails/lesson-2.webp" ||
+    path == "assets/practices/shared/tai-chi-gallery/thumbnails/foundation-posture.webp"
 }
 
 SessionsTestCall :: (context: *void, module: *u8, function: *u8,
@@ -328,6 +328,57 @@ CheckPracticeSessions :: () -> s32 {
     }
     if sessions_test_meditation.action != PRACTICE_MEDITATION_NONE {
         return 4
+    }
+
+    // Overtime mode with extend controls hidden still draws Finish and handles a click.
+    meditation_session := SessionOpen()
+    sessions_test_meditation = PracticeMeditationFrame.{.session = meditation_session,
+        .scale = 1.0, .view_width = 411, .center_x = 205, .center_y = 450,
+        .accent_color = accent, .time_text = "+1:23", .extend = false,
+        .complete = true, .finish_label = "Finish"}
+    finish_bounds: Rectangle
+    found_finish := false
+    for frame: cast(s32)0..1 {
+        if frame == 1 {
+            unused TreePointerUpdate(meditation_session, PointerFrame.{
+                    .x = finish_bounds.x + finish_bounds.width / 2.0,
+                    .y = finish_bounds.y + finish_bounds.height / 2.0,
+                    .down = true, .pressed = true})
+            unused TreePointerUpdate(meditation_session, PointerFrame.{
+                    .x = finish_bounds.x + finish_bounds.width / 2.0,
+                    .y = finish_bounds.y + finish_bounds.height / 2.0,
+                    .released = true})
+        }
+        BeginFrame(meditation_session, cast(u64)90, Rectangle.{0.0, 0.0, 411.0, 900.0})
+        sessions_test_meditation.session = meditation_session
+        WidgetHostBegin(meditation_session, SessionsTestAssets)
+        AppsUiBegin(SessionsTestCall, null)
+        drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_MEDITATION_VIEW})
+        AppsUiEnd()
+        WidgetHostEnd()
+        unused EndFrame(meditation_session)
+        if !drawn.succeeded {
+            unused SessionClose(meditation_session)
+            return 45
+        }
+        if frame == 0 {
+            for index: cast(s32)0..TreeCount(meditation_session) - 1 {
+                node := TreeNodeAt(meditation_session, index)
+                if node.kind == cast(s32)WidgetKindButton && node.semantic_label == "Finish" {
+                    finish_bounds = node.bounds
+                    found_finish = true
+                    break
+                }
+            }
+            if !found_finish {
+                unused SessionClose(meditation_session)
+                return 46
+            }
+        }
+    }
+    unused SessionClose(meditation_session)
+    if sessions_test_meditation.action != PRACTICE_MEDITATION_FINISH {
+        return 47
     }
 
     sessions_test_patterns = PracticePatternsFrame.{.scale = 1.0, .view_width = 411,

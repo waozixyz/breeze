@@ -16,6 +16,7 @@
 #import, file "../src/app/music_library_host.zi";
 #import "notification_desktop"
 #import, file "../src/practices/session_results.zi";
+#import, file "../apps/practice/recovery.zi";
 #import "meditation_session_behavior"
 #import "session_results_test_root"
 #import, file "background_audio_stub.zi";
@@ -24,6 +25,9 @@ c :: #system_library "c";
 pause_microseconds :: (microseconds: u32) -> s32 #foreign c "usleep";
 
 app_state: InnerBreeze;
+bell_cue_count: s32 = 0;
+last_bell_volume: float32 = 0.0f;
+music_fade_count: s32 = 0;
 
 // Effects outside the session-result rules; finishing a meditation asks for
 // a sync directly.
@@ -39,7 +43,8 @@ host_save_settings :: (app: *InnerBreeze) {
 #program_export "app_play_bell_cue"
 host_play_bell_cue :: (app: *InnerBreeze, volume: float32) {
     unused app
-    unused volume
+    bell_cue_count += 1
+    last_bell_volume = volume
 }
 #program_export "meditation_music_start_session"
 host_music_start :: (app: *InnerBreeze) {
@@ -48,6 +53,7 @@ host_music_start :: (app: *InnerBreeze) {
 #program_export "meditation_music_fade_out"
 host_music_fade :: (app: *InnerBreeze) {
     unused app
+    music_fade_count += 1
 }
 #program_export "practice_background_start"
 host_background_start :: (app: *InnerBreeze, id: s32) {
@@ -142,6 +148,104 @@ Check :: () -> s32 {
     app.session_result.mood = 4
     session_result_done(app)
     check_true("done returns to the start", app.breathing.screen == ScreenStart && app.session_result.active == 0)
+
+    // Overtime mode: after 00:00 and its end gong, the clock counts up, keeps
+    // firing interval bells, preserves recovery checkpoints, and saves full
+    // elapsed time when the user taps Finish.
+    unused pause_microseconds(1100000)
+    bell_cue_count = 0
+    last_bell_volume = 0.0f
+    music_fade_count = 0
+    app.meditation.duration_mode = 5
+    app.meditation.custom_minutes = 1
+    app.meditation.show_extend_controls = 0
+    app.meditation.overtime_enabled = 1
+    app.meditation.interval_bell_minutes = 1
+    meditation_start_configured(app)
+    check_int("overtime start bell", bell_cue_count, 1)
+    meditation_advance_elapsed(app, 59000)
+    check_int("before zero remaining", app.meditation.remaining_seconds, 1)
+    check_int("before zero overtime", app.meditation.overtime_seconds, 0)
+    check_int("no early interval bell", bell_cue_count, 1)
+    meditation_advance_elapsed(app, 1000)
+    check_true("overtime stays on meditation screen at zero", app.breathing.screen == ScreenMeditation)
+    check_int("zero sets complete waiting", app.meditation.complete_waiting, 1)
+    check_int("zero remaining", app.meditation.remaining_seconds, 0)
+    check_int("zero overtime", app.meditation.overtime_seconds, 0)
+    check_int("end gong rings once without duplicate interval bell", bell_cue_count, 2)
+    check_int("overtime keeps music playing", music_fade_count, 0)
+    meditation_advance_elapsed(app, 59000)
+    check_int("overtime counts up", app.meditation.overtime_seconds, 59)
+    check_int("overtime total elapsed", elapsed_seconds(app), 119)
+    check_int("no bell before overtime interval", bell_cue_count, 2)
+    meditation_advance_elapsed(app, 1000)
+    check_int("overtime interval reached", app.meditation.overtime_seconds, 60)
+    check_int("overtime interval bell fires", bell_cue_count, 3)
+    check_true("interval bell uses softer volume", last_bell_volume > 0.8f && last_bell_volume < 0.9f)
+    app.session_paused = 1
+    meditation_advance_elapsed(app, 30000)
+    check_int("paused overtime does not advance", app.meditation.overtime_seconds, 60)
+    check_int("paused overtime does not ring bell", bell_cue_count, 3)
+    app.session_paused = 0
+    meditation_advance_elapsed(app, 65000)
+    check_int("overtime resumes past next interval", app.meditation.overtime_seconds, 125)
+    check_int("second overtime interval bell fires", bell_cue_count, 4)
+    MeditationCheckpoint(app, true)
+    draft: PracticeRecoveryDraft
+    check_true("overtime checkpoint loads", PracticeDraftLoad(*draft))
+    recovered: MeditationRecovery
+    check_true("overtime checkpoint decodes", MeditationRecoveryDecode(*draft, *recovered))
+    check_int("recovered overtime seconds", recovered.overtime_seconds, 125)
+    check_int("recovered overtime flag", recovered.overtime_enabled, 1)
+    check_int("recovered complete flag", recovered.complete_waiting, 1)
+    check_int("recovered total elapsed", draft.rounds[0], 185)
+    // Legacy 7-value checkpoints without overtime fields remain valid.
+    legacy := draft
+    legacy.rounds[0] = 50
+    legacy.resume.count = 7
+    legacy.resume.values[0] = 60
+    legacy.resume.values[1] = 10
+    legacy.resume.values[5] = 0
+    legacy.resume.values[6] = 0
+    legacy_state: MeditationRecovery
+    check_true("legacy meditation checkpoint decodes", MeditationRecoveryDecode(*legacy, *legacy_state))
+    check_int("legacy overtime defaults off", legacy_state.overtime_enabled, 0)
+    check_int("legacy overtime seconds default zero", legacy_state.overtime_seconds, 0)
+    // Continuing from the overtime draft restores the live overtime state.
+    app.meditation.overtime_seconds = 0
+    app.meditation.overtime_enabled = 0
+    app.meditation.complete_waiting = 0
+    check_true("overtime continue succeeds", MeditationContinue(app, *draft))
+    check_int("continued overtime seconds", app.meditation.overtime_seconds, 125)
+    check_int("continued overtime enabled", app.meditation.overtime_enabled, 1)
+    finish(app)
+    check_true("finish from overtime shows results", app.breathing.screen == ScreenResults)
+    check_int("overtime session saved", storage_session_count(), 2)
+    check_true("results record full elapsed time including overtime",
+        app.session_result.saved != 0 && app.session_result.primary_value == 185)
+    check_int("finish clears overtime", app.meditation.overtime_seconds, 0)
+    session_result_done(app)
+
+    // Single background step crossing 00:00 into overtime fires end gong and
+    // overtime interval bell, and saves full elapsed time on Finish.
+    unused pause_microseconds(1100000)
+    bell_cue_count = 0
+    app.meditation.duration_mode = 5
+    app.meditation.custom_minutes = 1
+    app.meditation.show_extend_controls = 0
+    app.meditation.overtime_enabled = 1
+    app.meditation.interval_bell_minutes = 1
+    meditation_start_configured(app)
+    meditation_advance_elapsed(app, 135000)
+    check_true("background cross-zero stays in meditation", app.breathing.screen == ScreenMeditation)
+    check_int("background cross-zero sets complete", app.meditation.complete_waiting, 1)
+    check_int("background cross-zero overtime seconds", app.meditation.overtime_seconds, 75)
+    check_int("background cross-zero rings end gong and interval bell", bell_cue_count, 3)
+    finish(app)
+    check_int("background overtime saved", storage_session_count(), 3)
+    check_int("background overtime elapsed saved", app.session_result.primary_value, 135)
+    session_result_done(app)
+
     CloseTestApps()
     storage_close()
     return failures

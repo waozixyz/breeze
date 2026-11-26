@@ -80,6 +80,7 @@ meditation_start_seconds :: (app: *InnerBreeze, seconds: s32) {
 
     app.meditation.duration_seconds = seconds
     app.meditation.remaining_seconds = seconds
+    app.meditation.overtime_seconds = 0
     app.meditation.frame_ticks = 0
     app.meditation.complete_waiting = 0
     background_remainder_ms = 0
@@ -97,7 +98,7 @@ MeditationEnter :: (app: *InnerBreeze) {
     app.music_volume_popup_active = 0
     app_close_modal(app)
     app_switch_screen(app, ScreenMeditation)
-    if app.meditation.complete_waiting == 0 {
+    if app.meditation.complete_waiting == 0 || app.meditation.overtime_enabled != 0 {
         meditation_music_start_session(app)
     }
     practice_background_start(app, EXERCISE_MEDITATION)
@@ -111,34 +112,60 @@ MeditationRecovery :: struct {
     bell_minutes: s32
     bell_index: s32
     complete_waiting: s32
+    overtime_seconds: s32
+    overtime_enabled: s32
 }
 
 MeditationRecoveryDecode :: (draft: *PracticeRecoveryDraft, state: *MeditationRecovery) -> bool {
-    if draft.activity != EXERCISE_MEDITATION || draft.resume.count != 7 || draft.resume.definition_length != 0 {
+    if draft.activity != EXERCISE_MEDITATION ||
+    (draft.resume.count != 7 && draft.resume.count != 9) ||
+    draft.resume.definition_length != 0 {
         return false
     }
     v := draft.resume.values[:]
-    if v[0] < 60 || v[1] > v[0] || v[2] >= 60 || v[3] >= 1000 || v[4] > 30 || v[6] > 1 ||
-    (v[1] == 0) != (v[6] != 0) || v[0] - v[1] != draft.rounds[0] ||
-    (v[4] == 0 && v[5] != 0) || (v[4] > 0 && v[5] > (v[0] - v[1]) / (v[4] * 60)) {
+    overtime_seconds: s32 = 0
+    overtime_enabled: s32 = 0
+    if draft.resume.count == 9 {
+        overtime_seconds = v[7]
+        overtime_enabled = v[8]
+    }
+    if v[0] < 60 || v[1] < 0 || v[1] > v[0] || v[2] < 0 || v[2] >= 60 ||
+    v[3] < 0 || v[3] >= 1000 || v[4] < 0 || v[4] > 30 || v[5] < 0 ||
+    v[6] < 0 || v[6] > 1 || overtime_seconds < 0 ||
+    overtime_enabled < 0 || overtime_enabled > 1 ||
+    (v[1] == 0) != (v[6] != 0) ||
+    (overtime_seconds > 0 && (v[6] == 0 || overtime_enabled == 0)) {
         return false
     }
-    state.* = MeditationRecovery.{v[0], v[1], v[2], v[3], v[4], v[5], v[6]}
+    elapsed := v[0] - v[1] + overtime_seconds
+    if elapsed != draft.rounds[0] ||
+    (v[4] == 0 && v[5] != 0) ||
+    (v[4] > 0 && v[5] > MeditationIntervalBellIndex(elapsed, v[4])) {
+        return false
+    }
+    state.* = MeditationRecovery.{v[0], v[1], v[2], v[3], v[4], v[5], v[6],
+        overtime_seconds, overtime_enabled}
     return true
 }
 
 MeditationCheckpoint :: (app: *InnerBreeze, force: bool) {
     state := app.meditation
-    values: [7]s32 = .[state.duration_seconds, state.remaining_seconds, state.frame_ticks,
-        background_remainder_ms, state.interval_bell_minutes, last_bell_index, state.complete_waiting]
+    overtime_flag: s32 = ifx state.overtime_enabled != 0 then 1 else 0
+    values: [9]s32 = .[state.duration_seconds, state.remaining_seconds, state.frame_ticks,
+    background_remainder_ms, state.interval_bell_minutes, last_bell_index,
+    state.complete_waiting, state.overtime_seconds, overtime_flag]
     PracticeDraftProgress(EXERCISE_MEDITATION, elapsed_seconds(app), state.complete_waiting, values[:], force)
 }
 
 MeditationContinue :: (app: *InnerBreeze, draft: *PracticeRecoveryDraft) -> bool {
     state: MeditationRecovery
-    if !MeditationRecoveryDecode(draft, *state) { return false }
+    if !MeditationRecoveryDecode(draft, *state) {
+        return false
+    }
     app.meditation.duration_seconds = state.duration
     app.meditation.remaining_seconds = state.remaining
+    app.meditation.overtime_seconds = state.overtime_seconds
+    app.meditation.overtime_enabled = state.overtime_enabled
     app.meditation.frame_ticks = state.frames
     app.meditation.interval_bell_minutes = state.bell_minutes
     app.meditation.complete_waiting = state.complete_waiting
@@ -153,13 +180,21 @@ MeditationContinue :: (app: *InnerBreeze, draft: *PracticeRecoveryDraft) -> bool
 // runs (foreground tick and background advance both funnel through here).
 last_bell_index: s32 = 0;
 
-maybe_interval_bell :: (app: *InnerBreeze) {
-    interval := app.meditation.interval_bell_minutes * 60
+sync_bell_index_to_elapsed :: (app: *InnerBreeze, elapsed: s32) {
+    index := MeditationIntervalBellIndex(elapsed, app.meditation.interval_bell_minutes)
+    if index > last_bell_index {
+        last_bell_index = index
+    }
+}
 
-    if interval <= 0 || app.meditation.complete_waiting != 0 {
+maybe_interval_bell :: (app: *InnerBreeze) {
+    if app.meditation.interval_bell_minutes <= 0 {
         return
     }
-    index := elapsed_seconds(app) / interval
+    if app.meditation.complete_waiting != 0 && app.meditation.overtime_enabled == 0 {
+        return
+    }
+    index := MeditationIntervalBellIndex(elapsed_seconds(app), app.meditation.interval_bell_minutes)
     if index > last_bell_index {
         last_bell_index = index
         app_play_bell_cue(app, 0.85f)
@@ -202,7 +237,7 @@ finish :: (app: *InnerBreeze) {
     result_path[0] = cast(u8)0
     send_session_complete(app)
 
-    duration = app.meditation.duration_seconds
+    duration = elapsed_seconds(app)
     if duration >= 60 {
         if PracticeDraftSaveElapsed(EXERCISE_MEDITATION, duration,
             *result_path[0],
@@ -219,6 +254,7 @@ finish :: (app: *InnerBreeze) {
 
     app.meditation.duration_seconds = 0
     app.meditation.remaining_seconds = 0
+    app.meditation.overtime_seconds = 0
     app.meditation.frame_ticks = 0
     app.meditation.complete_waiting = 0
     background_remainder_ms = 0
@@ -237,12 +273,15 @@ timer_complete :: (app: *InnerBreeze) {
         return
     }
 
-    if app.meditation.show_extend_controls != 0 {
+    if app.meditation.overtime_enabled != 0 || app.meditation.show_extend_controls != 0 {
         app.meditation.remaining_seconds = 0
         app.meditation.frame_ticks = 0
         if app.meditation.complete_waiting == 0 {
             app.meditation.complete_waiting = 1
-            meditation_music_fade_out(app)
+            sync_bell_index_to_elapsed(app, app.meditation.duration_seconds)
+            if app.meditation.overtime_enabled == 0 {
+                meditation_music_fade_out(app)
+            }
             app_play_bell_cue(app, 1.0f)
         }
         return
@@ -259,9 +298,15 @@ meditation_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
         background_remainder_ms = 0
         return
     }
+    if app.meditation.complete_waiting != 0 && app.meditation.overtime_enabled == 0 {
+        background_remainder_ms = 0
+        return
+    }
 
+    prev_remaining := app.meditation.remaining_seconds
+    was_complete := app.meditation.complete_waiting != 0
     message := PracticeStepFor(app, PRACTICE_MEDITATION_STEP)
-    message.remaining_seconds = app.meditation.remaining_seconds
+    message.remaining_seconds = ifx was_complete then 0 else prev_remaining
     message.remainder_ms = background_remainder_ms
     message.elapsed_ms = elapsed_ms
     step := PracticeRun(message)
@@ -275,16 +320,31 @@ meditation_advance_elapsed :: (app: *InnerBreeze, elapsed_ms: s32) {
         return
     }
 
+    app.meditation.frame_ticks = 0
+    overtime_delta := MeditationOvertimeDelta(prev_remaining, step.elapsed_seconds,
+        was_complete, app.meditation.overtime_enabled != 0)
+    if was_complete {
+        if overtime_delta > 0 {
+            app.meditation.overtime_seconds += overtime_delta
+            maybe_interval_bell(app)
+        }
+        MeditationCheckpoint(app, false)
+        return
+    }
+
     app.meditation.remaining_seconds = step.remaining_seconds
     if !step.completed {
         maybe_interval_bell(app)
+        MeditationCheckpoint(app, false)
+        return
     }
-    app.meditation.frame_ticks = 0
 
-    if step.completed {
-        timer_complete(app)
+    timer_complete(app)
+    if overtime_delta > 0 && app_session_screen(app) == ScreenMeditation {
+        app.meditation.overtime_seconds += overtime_delta
+        maybe_interval_bell(app)
     }
-    MeditationCheckpoint(app, step.completed)
+    MeditationCheckpoint(app, true)
 }
 
 elapsed_seconds :: (app: *InnerBreeze) -> s32 {
@@ -294,12 +354,15 @@ elapsed_seconds :: (app: *InnerBreeze) -> s32 {
         return 0
     }
 
-    elapsed = app.meditation.duration_seconds -               app.meditation.remaining_seconds
+    elapsed = app.meditation.duration_seconds - app.meditation.remaining_seconds
     if elapsed < 0 {
         elapsed = 0
     }
     if elapsed > app.meditation.duration_seconds {
         elapsed = app.meditation.duration_seconds
+    }
+    if app.meditation.overtime_seconds > 0 {
+        elapsed += app.meditation.overtime_seconds
     }
     return elapsed
 }
@@ -332,6 +395,7 @@ exit_to_start :: (app: *InnerBreeze) {
     meditation_music_stop(app)
     app.meditation.duration_seconds = 0
     app.meditation.remaining_seconds = 0
+    app.meditation.overtime_seconds = 0
     app.meditation.frame_ticks = 0
     app.meditation.complete_waiting = 0
     background_remainder_ms = 0
@@ -396,7 +460,7 @@ append_two_digits :: (dst: []u8, cursor: *s32, value: s32) -> bool {
     return TextBufferAppendNumber(dst, cursor, value)
 }
 
-format_time :: (dst: []u8, seconds: s32) {
+format_time_prefixed :: (dst: []u8, seconds: s32, prefix: u8) {
     hours: s32
     minutes: s32
     secs: s32
@@ -408,6 +472,9 @@ format_time :: (dst: []u8, seconds: s32) {
     dst[0] = cast(u8)0
     if seconds < 0 {
         seconds = 0
+    }
+    if prefix != 0 && !TextBufferAppendByte(dst, *cursor, prefix) {
+        return
     }
 
     hours = seconds / 3600
@@ -431,6 +498,20 @@ format_time :: (dst: []u8, seconds: s32) {
     append_two_digits(dst, *cursor, secs)
 }
 
+format_time :: (dst: []u8, seconds: s32) {
+    format_time_prefixed(dst, seconds, 0)
+}
+
+format_meditation_clock :: (app: *InnerBreeze, dst: []u8) {
+    if app != null && app.meditation.complete_waiting != 0 &&
+    app.meditation.overtime_enabled != 0 {
+        format_time_prefixed(dst, app.meditation.overtime_seconds, cast(u8)#char "+")
+        return
+    }
+    seconds := ifx app != null then app.meditation.remaining_seconds else 0
+    format_time(dst, seconds)
+}
+
 extend_session :: (app: *InnerBreeze, seconds: s32) {
     was_complete: s32
 
@@ -439,11 +520,13 @@ extend_session :: (app: *InnerBreeze, seconds: s32) {
     }
 
     was_complete = app.meditation.complete_waiting
-    app.meditation.duration_seconds += seconds
+    app.meditation.duration_seconds += app.meditation.overtime_seconds + seconds
     app.meditation.remaining_seconds += seconds
+    app.meditation.overtime_seconds = 0
     app.meditation.complete_waiting = 0
     app.meditation.frame_ticks = 0
-    if was_complete != 0 {
+    background_remainder_ms = 0
+    if was_complete != 0 && app.meditation.music_playing == 0 {
         meditation_music_start_session(app)
     }
     MeditationCheckpoint(app, true)
@@ -484,26 +567,27 @@ meditation_draw_setup_modal :: (app: *InnerBreeze) {
 }
 
 // A meditation waiting at its end to be extended has finished its time;
-// the floating window shows that with the time so far.
+// the floating window shows that with the time so far. When overtime counting
+// is enabled, the live session keeps running in the floating window.
 meditation_window_result :: (app: *InnerBreeze, result: *SessionResult) -> s32 {
-    if app.meditation.complete_waiting == 0 {
+    if app.meditation.complete_waiting == 0 || app.meditation.overtime_enabled != 0 {
         return 0
     }
     result.* = SessionResult.{}
     result.active = 1
     result.activity = EXERCISE_MEDITATION
-    result.primary_value = app.meditation.duration_seconds
+    result.primary_value = elapsed_seconds(app)
     return 1
 }
 
 // The meditation circle in the practice's small window with the time left
-// inside it, as on the practice's screen.
+// (or overtime elapsed) inside it, as on the practice's screen.
 meditation_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) -> string {
     // The screen's circle is 86 units inside a halo 20 units wider.
     circle := PracticeWindowCircle(CurrentApp().ui.session, picture, 0.0, 86.0 / 106.0,
         color_with_alpha(StyleTokenColor("accent"), 0.24f))
     time_text: [32]u8
-    format_time(time_text[:], app.meditation.remaining_seconds)
+    format_meditation_clock(app, time_text[:])
     PracticeWindowLabel(app, circle, AppTextFromCString(*time_text[0], 32))
     status[0] = 0
     return AppTextFromCString(*status[0], cast(s32)status.count)
@@ -545,7 +629,7 @@ meditation_draw_content :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> 
         return PracticeMeditationFrame.{}
     }
     time_text: [32]u8
-    format_time(time_text[:], app.meditation.remaining_seconds)
+    format_meditation_clock(app, time_text[:])
     practice_meditation_frame = PracticeMeditationFrame.{.session = app.ui.session,
         .scale = MetricsScale(), .view_width = app.ui.view_width,
         .center_x = center_x, .center_y = center_y,
@@ -587,25 +671,34 @@ meditation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     } else if content.action == PRACTICE_MEDITATION_FINISH &&
     app.meditation.complete_waiting != 0 {
         finish(app)
+        return
     }
-    if app.meditation.complete_waiting != 0 {
+    if app.meditation.complete_waiting != 0 && app.meditation.overtime_enabled == 0 {
         return
     }
 
-    if app.backgrounded == 0 {
+    was_complete := app.meditation.complete_waiting != 0
+    if app.backgrounded == 0 && app.session_paused == 0 {
         app.meditation.frame_ticks += 1
         if app.meditation.frame_ticks >= 60 {
             app.meditation.frame_ticks = 0
-            if app.meditation.remaining_seconds > 0 {
-                app.meditation.remaining_seconds -= 1
+            if app.meditation.complete_waiting != 0 {
+                app.meditation.overtime_seconds += 1
                 maybe_interval_bell(app)
-            }
-            if app.meditation.remaining_seconds <= 0 {
+            } else if app.meditation.remaining_seconds > 0 {
+                app.meditation.remaining_seconds -= 1
+                if app.meditation.remaining_seconds > 0 {
+                    maybe_interval_bell(app)
+                } else {
+                    timer_complete(app)
+                }
+            } else {
                 timer_complete(app)
             }
         }
     }
-    MeditationCheckpoint(app, app.meditation.complete_waiting != 0)
+    just_completed := !was_complete && app.meditation.complete_waiting != 0
+    MeditationCheckpoint(app, just_completed)
 }
 
 meditation :: (app: *InnerBreeze) {
