@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Choose Tai Chi lessons from an illustrated gallery. The first three are free, with one unlock for the rest; Foundations remain available separately.
+- Choose Tai Chi lessons from an illustrated gallery, with Foundations and the first three lessons free. Tap a faded, locked lesson to unlock the rest of the course.
 
 - Tai Chi offers Woman or Man, waits for the figure before playback, and lets you seek with its progress bar. The woman wears a wrap top and slim, tapered trousers.
 
@@ -10,7 +10,7 @@
 
 - Breathing Patterns shows the phase countdown inside its smoothly growing circle and keeps your saved duration after restarting.
 
-- Use GPU filtering and mirroring for Android figures, fix stale frames after rotation, optimize development builds, and keep prepackaged Habits available offline.
+- Improve Android scrolling and figure rendering, fix stale frames after rotation, and keep prepackaged Habits available offline.
 - Show real habit measurements on selectable shared trends, graph session rounds, and focus entry fields with Enter to save.
 
 - Keep the bottom navigation when a shortcut opens one of Inbe's own screens.

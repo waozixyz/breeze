@@ -1490,7 +1490,7 @@ public class MainActivity extends NativeActivity {
     // Called by Kryon from the native frame thread. Native ZX supplies
     // immutable bundle bytes; Android returns width, height and ARGB_8888
     // pixels for formats the portable native decoders cannot read.
-    public int[] decodeBundleImage(byte[] bytes) {
+    public int[] decodeBundleImage(byte[] bytes, int sample) {
         if (bytes == null) return null;
         Bitmap bitmap = null;
         try {
@@ -1502,9 +1502,12 @@ public class MainActivity extends NativeActivity {
             if (width <= 0 || height <= 0 || width > 32768 || height > 32768
                     || (long) width * height > 67108864) return null;
             options.inJustDecodeBounds = false;
+            options.inSampleSize = Math.max(1, sample);
             options.inPreferredConfig = Bitmap.Config.ARGB_8888;
             bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
-            if (bitmap == null || bitmap.getWidth() != width || bitmap.getHeight() != height) return null;
+            if (bitmap == null) return null;
+            width = bitmap.getWidth();
+            height = bitmap.getHeight();
             int[] result = new int[2 + width * height];
             result[0] = width;
             result[1] = height;

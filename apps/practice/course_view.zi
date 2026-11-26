@@ -1,9 +1,12 @@
-// Illustrated lesson cards start sessions directly. Foundations remain available
-// on their own page; individual movement variants keep their saved item IDs.
+// The gallery includes free Foundations and faded, tappable course unlocks.
+// Individual movement variants retain their saved item IDs.
 #import "session"
 #import "geometry"
+#import "drawing_props"
 #import "dpi"
+Box :: #import "kryon/box";
 Button :: #import "kryon/button";
+Shape :: #import "kryon/shape";
 Image :: #import "kryon/image";
 Layout :: #import "kryon/layout";
 Modal :: #import "kryon/modal";
@@ -73,9 +76,7 @@ lesson_artwork: [8]string = .[
 lesson_bounds: [COURSE_LESSON_LIMIT]Rectangle;
 lesson_indices: [COURSE_LESSON_LIMIT]s32;
 lesson_total: s32;
-lesson_unlock_y: s32;
-lesson_foundations_y: s32;
-lesson_full_y: s32;
+lesson_artwork_indices: [COURSE_LESSON_LIMIT]s32;
 
 LessonHeight :: (row: PracticeCourseRow, width: s32) -> s32 {
     text_width := width - Scale(24)
@@ -87,7 +88,7 @@ LessonHeight :: (row: PracticeCourseRow, width: s32) -> s32 {
 LessonCard :: (bounds: Rectangle, index: s32, artwork: s32, row: PracticeCourseRow) {
     activated := Button.Draw(course.session, Button.Props.{
         .key = Layout.KeyHash("inbe/tai_chi/lesson") + cast(u64)index,
-        .bounds = bounds, .label = row.title, .icon_only = true, .selected = row.done,
+        .bounds = bounds, .label = row.title, .detail = row.detail, .icon_only = true, .selected = row.done,
         .tone = cast(ButtonTone)ButtonToneNeutral,
         .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft})
     inset := cast(float32)Scale(12)
@@ -100,7 +101,23 @@ LessonCard :: (bounds: Rectangle, index: s32, artwork: s32, row: PracticeCourseR
             .asset_path = lesson_artwork[artwork], .alt_text = row.title,
             .bounds = Rectangle.{content.x, content.y, content.width, cast(float32)picture_h},
             .radius = cast(float32)Scale(8), .smooth = true,
+            .tint = ifx row.locked then cast(u32)0xffffff50 else cast(u32)0xffffffff,
             .fit = Image.ImageFit.ImageFitCover})
+        if row.locked {
+            center := Vector2.{content.x + content.width * 0.5,
+                content.y + cast(float32)picture_h * 0.5}
+            unit := cast(float32)Scale(1)
+            unused Box.Draw(course.session, Box.Props.{
+                .bounds = Rectangle.{center.x - 24.0 * unit, center.y - 24.0 * unit, 48.0 * unit, 48.0 * unit},
+                .fill = Color.{28, 36, 40, 224}, .radius = 12.0 * unit})
+            unused Shape.Ring(course.session, Shape.RingProps.{
+                .center = Vector2.{center.x, center.y - 5.0 * unit},
+                .inner_radius = 5.0 * unit, .outer_radius = 7.0 * unit,
+                .start_angle = 180.0, .end_angle = 360.0, .color = Color.{255, 255, 255, 255}})
+            unused Box.Draw(course.session, Box.Props.{
+                .bounds = Rectangle.{center.x - 10.0 * unit, center.y - 5.0 * unit, 20.0 * unit, 17.0 * unit},
+                .fill = Color.{255, 255, 255, 255}, .radius = 3.0 * unit})
+        }
     }
     content.y += cast(float32)(picture_h + Scale(12))
     heading_h := ParagraphHeight(row.title, cast(s32)content.width, course.font + Scale(2))
@@ -114,7 +131,12 @@ LessonCard :: (bounds: Rectangle, index: s32, artwork: s32, row: PracticeCourseR
             .bounds = Rectangle.{content.x, bounds.y + bounds.height - cast(float32)Scale(36),
                 content.width, cast(float32)Scale(24)}})
     if activated != 0 {
-        Play(row.first)
+        if row.kind == PRACTICE_COURSE_FOUNDATION {
+            course.lesson = index
+            course.item_scroll = 0
+        } else {
+            Play(row.first)
+        }
     }
 }
 
@@ -146,79 +168,51 @@ PlanLessonGroup :: (start: s32, count: s32, columns: s32, width: s32, y: s32) ->
 }
 
 Lessons :: (bounds: Rectangle) {
-    gap := Scale(12)
     width := cast(s32)bounds.width - Scale(10)
     columns: s32 = ifx width >= Scale(640) then 3 else 2
     lesson_total = 0
-    free_count: s32 = 0
+    // Foundations is a free card at the beginning of the same gallery.
+    for index: cast(s32)0..course.lesson_count - 1 {
+        if course_lessons[index].kind == PRACTICE_COURSE_FOUNDATION {
+            course_lessons[index].title = Locale("tai_chi_foundations")
+            lesson_indices[lesson_total] = index
+            lesson_artwork_indices[index] = 0
+            lesson_total += 1
+            break
+        }
+    }
+    artwork: s32 = 0
     full: s32 = -1
     for index: cast(s32)0..course.lesson_count - 1 {
         row := course_lessons[index]
         if row.kind == PRACTICE_COURSE_LESSON {
             lesson_indices[lesson_total] = index
+            lesson_artwork_indices[index] = artwork
             lesson_total += 1
-            if !row.locked {
-                free_count += 1
-            }
+            artwork += 1
         } else if row.kind == PRACTICE_COURSE_FULL {
             full = index
         }
     }
-    y := PlanLessonGroup(0, free_count, columns, width, 0)
-    lesson_unlock_y = -1
-    if free_count < lesson_total {
-        lesson_unlock_y = y
-        y += Scale(52) + gap
-        y = PlanLessonGroup(free_count, lesson_total - free_count, columns, width, y)
-    }
-    lesson_foundations_y = y
-    y += Scale(52) + gap
-    lesson_full_y = y
     if full >= 0 {
-        y += Scale(64) + gap
+        lesson_indices[lesson_total] = full
+        lesson_artwork_indices[full] = 7
+        lesson_total += 1
     }
+    content_height := PlanLessonGroup(0, lesson_total, columns, width, 0)
     scrolled := Scroll.Draw(course.session, Scroll.Props.{.key = Layout.KeyHash("inbe/tai_chi/lessons"),
-            .bounds = bounds, .content_height = y, .scroll_offset = course.lesson_scroll})
+            .bounds = bounds, .content_height = content_height, .scroll_offset = course.lesson_scroll})
     course.lesson_scroll = scrolled.scroll_offset
     if !scrolled.opened {
         return
     }
-    for artwork: cast(s32)0..lesson_total - 1 {
-        index := lesson_indices[artwork]
+    for position: cast(s32)0..lesson_total - 1 {
+        index := lesson_indices[position]
         card := lesson_bounds[index]
         card.x += scrolled.content.x
         card.y += scrolled.content.y
         if card.y + card.height >= bounds.y && card.y <= bounds.y + bounds.height {
-            LessonCard(card, index, artwork, course_lessons[index])
-        }
-    }
-    if lesson_unlock_y >= 0 {
-        if Button.Draw(course.session, Button.Props.{.key = Layout.KeyHash("inbe/tai_chi/unlock"),
-                .bounds = Rectangle.{scrolled.content.x, scrolled.content.y + cast(float32)lesson_unlock_y,
-                    cast(float32)width, cast(float32)Scale(52)},
-                .label = Locale("tai_chi_unlock_title"), .tone = cast(ButtonTone)ButtonToneAccent,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
-            Play(course_lessons[lesson_indices[free_count]].first)
-        }
-    }
-    if Button.Draw(course.session, Button.Props.{.key = Layout.KeyHash("inbe/tai_chi/foundations"),
-            .bounds = Rectangle.{scrolled.content.x, scrolled.content.y + cast(float32)lesson_foundations_y,
-                cast(float32)width, cast(float32)Scale(52)},
-            .label = Locale("tai_chi_foundations"), .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-        course.lesson = 0
-        course.item_scroll = 0
-    }
-    if full >= 0 {
-        row := course_lessons[full]
-        if Button.Draw(course.session, Button.Props.{.key = Layout.KeyHash("inbe/tai_chi/full"),
-                .bounds = Rectangle.{scrolled.content.x, scrolled.content.y + cast(float32)lesson_full_y,
-                    cast(float32)width, cast(float32)Scale(64)},
-                .label = row.title, .detail = row.detail,
-                .content_alignment = cast(ContentAlignment)ContentAlignmentStart,
-                .tone = cast(ButtonTone)ButtonToneNeutral,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft}) != 0 {
-            Play(row.first)
+            LessonCard(card, index, lesson_artwork_indices[index], course_lessons[index])
         }
     }
     unused End(course.session)
