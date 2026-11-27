@@ -9,10 +9,10 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
 source=$root/tests/habit_calendar_behavior.zi
-"$bin/zi2zir" --root "$root/tests" --module-path "$root/src" \
-    --module-path "$ui" --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" -o "$work/ir" "$source"
-"$bin/zi2zx" --root "$root/tests" --module-path "$root/src" \
-    --module-path "$ui" --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" --entry habit_calendar_behavior:CalendarAnswer \
+"$bin/ziran" ir --project --offline ${PACKAGE_FLAGS:-} --root "$root/tests"  \
+        -o "$work/ir" "$source"
+"$bin/ziran" bundle --project --offline ${PACKAGE_FLAGS:-} --root "$root/tests"  \
+        --entry habit_calendar_behavior:CalendarAnswer \
     -o "$work/source.zx" "$source"
 "$bin/zi2zx" --root "$work/ir" \
     --entry habit_calendar_behavior:CalendarAnswer \
@@ -21,8 +21,8 @@ cmp "$work/source.zx" "$work/saved.zx"
 test "$("$bin/zi2zx" run "$work/source.zx")" = 42
 test "$("$bin/zi2zx" run "$work/saved.zx")" = 42
 
-"$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
-    --module-path "$ui" --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" -o "$work/c" "$source"
+"$bin/ziran" build --target=c --project --offline ${PACKAGE_FLAGS:-} --no-main --root "$root/tests"  \
+        -o "$work/c" "$source"
 cat > "$work/c/main.c" <<'C'
 #include "habit_calendar_behavior.h"
 int main(void) { return Answer() == 42 && CalendarAnswer() == 42 ? 0 : 1; }

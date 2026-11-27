@@ -7,24 +7,16 @@ kryon=${KRYON_DIR:-"$root/build/packages/kryon"}
 toolchain=${ZIRAN_DIR:-"$root/build/packages/ziran"}
 work=$root/build/locale-zi-test
 mkdir -p "$work/c" "$work/dropdown-c"
-"$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$kryon/src/ui" \
-    --module-path "$toolchain/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$kryon/src/backend" "$root/src/app/locale.zi"
-"$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$kryon/src/ui" \
-    --module-path "$toolchain/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$kryon/src/backend" \
+"$bin/ziran" check --project --offline ${PACKAGE_FLAGS:-} --root "$root/src" \
+       "$root/src/app/locale.zi"
+"$bin/ziran" check --project --offline ${PACKAGE_FLAGS:-} --root "$root/src" \
     "$root/src/app/locale_dropdown.zi"
-"$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$kryon/src/ui" \
-    --module-path "$toolchain/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$kryon/src/backend" \
+"$bin/ziran" build --target=c --project --offline ${PACKAGE_FLAGS:-} --no-main --root "$root/src" \
     -o "$work/dropdown-c" "$root/src/app/locale_dropdown.zi"
 "${CC:-cc}" -std=c11 -I"$toolchain/include" \
-    -I"$work/dropdown-c" -c "$work/dropdown-c/app/locale_dropdown.c" \
+    -I"$work/dropdown-c" -c "$work/dropdown-c/locale_dropdown.c" \
     -o "$work/locale_dropdown.o"
-"$bin/zi2c" --no-main --root "$root/tests" \
-    --module-path "$root/src" \
-    --module-path "$kryon/src/ui" \
-    --module-path "$toolchain/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$kryon/src/backend" \
+"$bin/ziran" build --target=c --project --offline ${PACKAGE_FLAGS:-} --no-main --root "$root/tests" \
     -o "$work/c" "$root/tests/locale_link_behavior.zi"
 mkdir -p "$work/c/app"
 cp "$work/c/assets.h" "$work/c/app/assets.h"

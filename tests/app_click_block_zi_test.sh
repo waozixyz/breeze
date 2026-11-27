@@ -5,10 +5,7 @@ bin=${1:-"$root/build/packages/ziran/build/bin"}
 work="$root/build/app-click-block-test"
 rm -rf "$work/generated"
 mkdir -p "$work/generated"
-"$bin/zi2c" --no-main --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" --module-path "$root/build/packages/kryon/src/backend" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+"$bin/ziran" build --target=c --project --offline ${PACKAGE_FLAGS:-} --no-main --define PLATFORM_DESKTOP --root "$root/tests" \
     -o "$work/generated" "$root/tests/app_click_block_behavior.zi"
 cat > "$work/generated/main.c" <<'C'
 #include "app_click_block_behavior.h"

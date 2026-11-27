@@ -6,11 +6,7 @@ work=$root/build/audio-first-cue
 generated=$work/generated
 rm -rf "$generated"
 mkdir -p "$generated"
-"$bin/ziran" build --target=c --define PLATFORM_WEB --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/kryon/src/backend" --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/mesh-client" --module-path "$root/build/packages/css/src" \
-    --module-path "$root/build/packages/game2d/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+"$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c --define PLATFORM_WEB --root "$root/tests" \
     -o "$generated" "$root/tests/audio_first_cue_test.zi"
 python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
     "$root/assets/sounds/bell.ogg" "$root/assets/sounds/breath-in.ogg" "$root/assets/sounds/breath-out.ogg"

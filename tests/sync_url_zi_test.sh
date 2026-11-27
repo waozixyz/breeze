@@ -6,9 +6,7 @@ ziran=${1:-"$root/build/packages/ziran/build/bin/ziran"}
 work=$root/build/sync-url-zi-test
 
 mkdir -p "$work"
-"$ziran" bundle --root "$root/tests" \
-    --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/ziran/std" \
+"$ziran" bundle --project --offline ${PACKAGE_FLAGS:-} --root "$root/tests" \
     --entry sync_url_behavior:Check \
     -o "$work/sync_url.zx" "$root/tests/sync_url_behavior.zi"
 test "$("$ziran" run "$work/sync_url.zx")" = 0

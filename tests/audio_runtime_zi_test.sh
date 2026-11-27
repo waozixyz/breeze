@@ -6,17 +6,13 @@ bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 
-"$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
+"$bin/ziran" check --project --offline ${PACKAGE_FLAGS:-} --root "$root/src" \
     "$root/src/platform/audio_runtime.zi"
-"$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
+"$bin/ziran" build --target=c --project --offline ${PACKAGE_FLAGS:-} --no-main --root "$root/src" \
     -o "$work/c" "$root/src/platform/audio_runtime.zi"
 "${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections \
     -I"$root/build/packages/ziran/include" -I"$work/c" \
-    -c "$work/c/platform/audio_runtime.c" -o "$work/audio_runtime.o"
+    -c "$work/c/audio_runtime.c" -o "$work/audio_runtime.o"
 "${CC:-cc}" -std=c11 -O0 -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -I"$work/c" \
     "$root/tests/audio_runtime_zi_test.c" "$work/audio_runtime.o" \

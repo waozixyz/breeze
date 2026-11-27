@@ -2,7 +2,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "app/app_frame_pacing.h"
+#include "app_frame_pacing.h"
 #include "smooth_frames.h"
 
 static int android_platform;

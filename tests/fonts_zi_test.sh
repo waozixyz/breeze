@@ -7,13 +7,11 @@ work=$root/build/fonts-zi-test
 
 rm -rf "$work/c"
 mkdir -p "$work/c"
-"$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/kryon/src/ui" \
+"$bin/ziran" build --target=c --project --offline ${PACKAGE_FLAGS:-} --no-main --root "$root/tests"  \
     -o "$work/c" "$root/tests/fonts_link_behavior.zi"
 mkdir -p "$work/c/app"
 cp "$work/c/assets.h" "$work/c/app/assets.h"
-set -- "$work/c"/p*_typeface_source.h
+set -- "$work/c"/*_typeface_source.h
 test "$#" -eq 1
 test -f "$1"
 python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \

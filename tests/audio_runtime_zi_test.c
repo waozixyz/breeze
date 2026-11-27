@@ -1,4 +1,4 @@
-#include "platform/audio_runtime.h"
+#include "audio_runtime.h"
 #include <assert.h>
 #include <stdio.h>
 
@@ -7,19 +7,19 @@ static int played_sounds;
 static int unloaded_music;
 static int played_music;
 
-AudioVoice audio_AudioLoadFile(String path, bool stream)
+AudioVoice std_audio_AudioLoadFile(String path, bool stream)
 {
     assert(path.length > 0);
     return (AudioVoice){.slot = stream ? 1 : 0, .generation = 1};
 }
 
-double audio_AudioLength(AudioVoice voice)
+double std_audio_AudioLength(AudioVoice voice)
 {
     assert(voice.slot == 0 && voice.generation == 1);
     return 0.01;
 }
 
-void audio_AudioUnload(AudioVoice voice)
+void std_audio_AudioUnload(AudioVoice voice)
 {
     assert(voice.generation == 1);
     if (voice.slot == 0) unloaded_sounds++;
@@ -29,7 +29,7 @@ void audio_AudioUnload(AudioVoice voice)
     }
 }
 
-bool audio_AudioPlay(AudioVoice voice)
+bool std_audio_AudioPlay(AudioVoice voice)
 {
     assert(voice.generation == 1);
     if (voice.slot == 0) played_sounds++;

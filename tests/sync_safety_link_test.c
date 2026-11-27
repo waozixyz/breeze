@@ -1,4 +1,4 @@
-#include "app/sync_safety.h"
+#include "sync_safety.h"
 
 #include <assert.h>
 

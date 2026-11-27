@@ -1,5 +1,5 @@
 #include "habit_types.h"
-#include "habits/habit_days.h"
+#include "habit_days.h"
 
 #include <assert.h>
 #include <stdio.h>

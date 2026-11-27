@@ -5,12 +5,7 @@ bin=${1:-"$root/build/packages/ziran/build/bin"}
 work=$root/build/lumi-narration-test
 generated=$work/generated
 mkdir -p "$generated"
-"$bin/zi2c" --no-main --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/mesh-client" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" \
+"$bin/ziran" build --target=c --project --offline ${PACKAGE_FLAGS:-} --no-main --root "$root/src" \
     -o "$generated" "$root/src/app/lumi_guide.zi"
 # The link test stands in for these modules, so their headers declare the
 # functions it replaces instead of defining them inline.
@@ -19,8 +14,8 @@ mkdir -p "$generated"
     -ffunction-sections -fdata-sections -Wl,--gc-sections \
     -I"$root/build/packages/ziran/include" -I"$generated" \
     "$root/tests/lumi_narration_link_test.c" \
-    "$generated/app/lumi_guide.c" "$generated/host_clock.c" "$generated/audio_policy.c" \
-    "$generated/byte_text_linux.c" \
+    "$generated/lumi_guide.c" "$generated/host_clock.c" "$generated/audio_policy.c" \
+    "$generated/std_byte_text_linux.c" \
     -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
 echo "Lumi narration playback and mute tests passed"

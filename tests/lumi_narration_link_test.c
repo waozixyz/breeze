@@ -1,4 +1,4 @@
-#include "app/lumi_guide.h"
+#include "lumi_guide.h"
 #include "zir_string.h"
 #include "assets.h"
 

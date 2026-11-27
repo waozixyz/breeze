@@ -7,12 +7,10 @@ work=$(mktemp -d "$root/build/patterns-session-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 source=$root/tests/patterns_session_behavior.zi
 
-"$bin/zi2zir" --check-only --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" "$source"
-"$bin/zi2c" --no-main --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" -o "$work/c" "$source"
+"$bin/ziran" check --project --offline ${PACKAGE_FLAGS:-} --root "$root/tests" \
+       "$source"
+"$bin/ziran" build --target=c --project --offline ${PACKAGE_FLAGS:-} --no-main --root "$root/tests" \
+       -o "$work/c" "$source"
 cat > "$work/c/main.c" <<'C'
 #include "patterns_session_behavior.h"
 int main(void) { return Answer() == 42 ? 0 : 1; }

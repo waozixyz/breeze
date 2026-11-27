@@ -1,4 +1,4 @@
-#include "app/music_library.h"
+#include "music_library.h"
 #include "zir_string.h"
 
 #include <assert.h>

@@ -2,8 +2,6 @@
 set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 bin=${1:-"$root/build/packages/ziran/build/bin"}
-"$bin/zi2zir" --check-only --root "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
+"$bin/ziran" check --project --offline ${PACKAGE_FLAGS:-} --root "$root/src" \
     "$root/src/platform/android/android_wakelock.zi"
 exec python3 "$root/tests/android_jni_zi_test.py" "$bin"

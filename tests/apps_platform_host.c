@@ -1,9 +1,86 @@
 #include "zir_string.h"
 #include "ziran_host.h"
-#include "zir_stream.h"
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+/* Read-only seekable memory stream. zir_stream.h no longer ships with the
+ * toolchain, so the one function this host needs lives here now. */
+#if defined(__ANDROID__) || defined(__APPLE__) || defined(__FreeBSD__)
+typedef struct ZirMemoryReader {
+    const unsigned char *data;
+    size_t size;
+    size_t offset;
+} ZirMemoryReader;
+
+static ssize_t
+ZirMemoryRead(void *context, char *buffer, size_t count)
+{
+    ZirMemoryReader *reader = context;
+    if(reader->offset >= reader->size) {
+        return 0;
+    }
+    if(count > reader->size - reader->offset) {
+        count = reader->size - reader->offset;
+    }
+    memcpy(buffer, reader->data + reader->offset, count);
+    reader->offset += count;
+    return (ssize_t)count;
+}
+
+static fpos_t
+ZirMemorySeek(void *context, off_t position, int whence)
+{
+    ZirMemoryReader *reader = context;
+    size_t base = whence == SEEK_SET ? 0 :
+                  whence == SEEK_CUR ? reader->offset : reader->size;
+    if(position < 0 || (size_t)position > reader->size ||
+       base > reader->size - (size_t)position) {
+        return (fpos_t)-1;
+    }
+    reader->offset = base + (size_t)position;
+    return (fpos_t)reader->offset;
+}
+
+static int
+ZirMemoryClose(void *context)
+{
+    free(context);
+    return 0;
+}
+#endif
+
+static FILE *
+ZirReadMemory(const unsigned char *data, size_t size)
+{
+#if defined(_WIN32) || defined(ZIR_STREAM_TMPFILE)
+    FILE *file = tmpfile();
+    if(file == NULL) {
+        return NULL;
+    }
+    if(fwrite(data, 1, size, file) != size || fflush(file) != 0 ||
+       fseek(file, 0, SEEK_SET) != 0) {
+        fclose(file);
+        return NULL;
+    }
+    return file;
+#elif defined(__ANDROID__) || defined(__APPLE__) || defined(__FreeBSD__)
+    ZirMemoryReader *reader = calloc(1, sizeof(*reader));
+    if(reader == NULL) {
+        return NULL;
+    }
+    reader->data = data;
+    reader->size = size;
+    FILE *file = funopen(reader, ZirMemoryRead, NULL, ZirMemorySeek, ZirMemoryClose);
+    if(file == NULL) {
+        free(reader);
+    }
+    return file;
+#else
+    return fmemopen((void *)data, size, "rb");
+#endif
+}
 
 static unsigned char *payload;
 static size_t payload_size;
@@ -42,6 +119,20 @@ int32_t storage_get_setting_int(String key)
 #endif
 
 void app_web_storage_flush(void) {}
+
+/* The headless probe has no Kryon raster backend linked; image geometry is
+ * irrelevant to the typed-module paths it exercises. */
+int32_t ImageWidth(String asset_path)
+{
+    (void)asset_path;
+    return 0;
+}
+
+int32_t ImageHeight(String asset_path)
+{
+    (void)asset_path;
+    return 0;
+}
 
 static unsigned char *read_payload(const char *path, size_t *size)
 {

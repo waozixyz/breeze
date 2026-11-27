@@ -7,18 +7,12 @@ work=$(mktemp -d "$root/build/statistics-date-test.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 source=$root/tests/statistics_date_behavior.zi
 
-"$bin/ziran" bundle --root "$root" \
-    --module-path "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
+"$bin/ziran" bundle --project --offline ${PACKAGE_FLAGS:-} --root "$root" \
     --entry statistics_date_behavior:Answer \
     -o "$work/date.zx" "$source"
 test "$("$bin/ziran" run "$work/date.zx")" = 42
 
-"$bin/zi2c" --no-main --root "$root" \
-    --module-path "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/mesh-client" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") --module-path "$root/build/packages/kryon/src/backend" \
+"$bin/ziran" build --target=c --project --offline ${PACKAGE_FLAGS:-} --no-main --root "$root" \
     -o "$work/c" "$source"
 cat > "$work/c/main.c" <<'C'
 #include "statistics_date_behavior.h"

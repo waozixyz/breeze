@@ -7,11 +7,7 @@ work=$root/build/device-preferences-zi-test
 
 rm -rf "$work/c"
 mkdir -p "$work/c"
-"$bin/zi2c" --no-main --root "$root/tests" --module-path "$root/src" \
-    --module-path "$root/build/packages/ziran/std" --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/mesh-client" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
+"$bin/ziran" build --target=c --project --offline ${PACKAGE_FLAGS:-} --no-main --root "$root/tests"  \
     -o "$work/c" "$root/tests/device_preferences_link_behavior.zi"
 mv "$work/c/device_host.c" "$work/c/device_host.c.skip"
 mkdir -p "$work/c/app"

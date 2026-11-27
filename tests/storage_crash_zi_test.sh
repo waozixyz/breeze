@@ -15,14 +15,7 @@ include=$root/build/packages/ziran/include
 
 rm -rf "$work"
 mkdir -p "$work/generated"
-"$ziran" build --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
-    --module-path "$root/src" \
-    --module-path "$root/build/packages/kryon/src/ui" \
-    --module-path "$root/build/packages/css/src" $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/kryon/src/backend" \
-    --module-path "$root/build/packages/game2d/src" \
-    --module-path "$root/build/packages/ziran/std" \
-    --module-path "$root/build/packages/mesh-client" \
+"$ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c --define PLATFORM_DESKTOP --root "$root/tests" \
     --entry storage_crash_behavior:Check \
     -o "$work/generated" "$root/tests/storage_crash_behavior.zi" \
     "$root/tests/sync_test_host.zi"

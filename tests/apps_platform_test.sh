@@ -21,11 +21,8 @@ else
     set -- "$root/tests/delegate_account_host.zi" "$root/tests/sync_test_host.zi" \
         "$root/tests/background_audio_stub.zi"
 fi
-"$ziran" build --target=c --no-main $definitions --root "$root/tests" \
-    --module-path "$root/src" --module-path "$root/build/packages/kryon/src/ui" --module-path "$root/build/packages/kryon/src/backend" \
-    $(sh "$root/scripts/package-paths.sh" "$root/build/packages") \
-    --module-path "$root/build/packages/mesh-client" \
-    --module-path "$source/std" -o "$generated" \
+"$ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c --no-main $definitions --root "$root/tests" \
+     -o "$generated" \
     "$root/tests/apps_platform_probe.zi" "$@"
 if [ "$target" = android ]; then
     sdk=${ANDROID_SDK_ROOT:-/home/wao/Android/Sdk}
