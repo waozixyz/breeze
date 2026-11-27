@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Rebuild the calendar, entry editor and photo gallery with Kryon’s TSX components.
+
 - Show synced edits for the open day as they arrive and preserve text still being edited.
 
 - Read and edit formatted Diary entries with inline photos.
