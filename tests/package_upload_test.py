@@ -239,7 +239,10 @@ class ExactPracticeUploadTest(unittest.TestCase):
                         self.assertEqual(data, b'inbe.practice.taichi')
             self.assertFalse(any('latest' in name for name in names))
             if '--pack' in arguments:
-                self.assertEqual(set(command[-1].split(' && chmod 600 ', 1)[1].split()), set(names))
+                ownership_command, permissions = command[-1].split(' && chmod 600 -- ', 1)
+                ownership = ownership_command.split('chown --reference=inbe.practices -- ', 1)[1]
+                self.assertEqual(set(ownership.split()), set(names))
+                self.assertEqual(set(permissions.split()), set(names))
             self.transports.append(names)
 
         original_selected = uploader.stage_selected_packs

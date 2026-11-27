@@ -295,6 +295,9 @@ def main():
                         members.append(info.name)
         # Extract only into the practices folder, never over a file that is
         # already there: packs are immutable once served.
+        # The node runs as the package store's owner, which may be a service
+        # account rather than the SSH upload user. Keep private pack files
+        # readable by that owner after extraction.
         permissions = ' '.join(shlex.quote(name) for name in members)
         ssh = ['ssh', '-o', 'BatchMode=yes']
         target = 'cd ' + shlex.quote(STORE) + ' && '
@@ -302,7 +305,9 @@ def main():
             ssh += ['-o', 'StrictHostKeyChecking=yes', '-o', 'ConnectTimeout=8']
             target += archive_destination_guard(publishers) + ' && '
         command = ("set -e; " + target + "tar -x --keep-old-files --no-same-permissions "
-                   "--wildcards 'inbe.practices/*' -f - && chmod 600 " + permissions)
+                   "--wildcards 'inbe.practices/*' -f - && "
+                   "chown --reference=inbe.practices -- " + permissions +
+                   " && chmod 600 -- " + permissions)
         subprocess.run([*ssh, TARGET, command],
                        input=archive.getvalue(), check=True)
         lines = []

@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Keep uploaded practice downloads readable by the node when installing Android development builds.
+
 - Fix a GPU rendering seam through the Habits **+ New Habit** button.
 
 - Verify Mandarin Astral narration across Simplified and Traditional Chinese spellings.
