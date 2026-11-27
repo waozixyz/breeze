@@ -20,7 +20,7 @@ for name in $(python3 -c 'import json; print(" ".join(sorted(json.load(open("app
     assets=build/node-package-assets/$name/assets
     mkdir -p "$assets"
     # shellcheck disable=SC2086
-    bundle --root . --module-path "apps/$name" \
+    bundle --root . \
         --define KRYON_HOSTED_UI \
         --asset-dir "assets=$assets" \
         --entry "$name:Main" -o "$output/$name.zx" "apps/$name/$name.zi"
