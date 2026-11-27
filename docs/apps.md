@@ -1113,6 +1113,18 @@ valid phone-check receipt and changes no other file. It downloads the original
 immutable build artifacts for publication and store delivery. A changed source,
 unfinished gate or missing result requires the normal complete build.
 
+The GitHub Release workflow also pushes the identical tag to Gitea using
+the repository's `GITEA_RELEASE_TOKEN` secret. After that run succeeds,
+download its release artifacts into `build/release/` and publish those exact
+downloads with `python3 scripts/publish-gitea-release.py --version X.Y.Z
+--revision COMMIT --notes PATH --token-stdin`. The token comes from stdin;
+`--origin http://127.0.0.1:PORT` supports an administrative SSH forward to
+Gitea when its public API is unavailable. The publisher requires every
+platform artifact and the appcast, verifies the existing tag, and reads back
+each attachment to compare its SHA-256 before publishing the draft. After
+an interrupted operation, it inspects and verifies existing attachments;
+it never replaces different published downloads or creates a release tag.
+
 Harmony Projects shows this wrapper release, every app version and its Moto
 screenshots. Harmony's `make inbe-release-verify` checks the latest published
 APK on the development Moto and writes private evidence under

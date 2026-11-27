@@ -1183,6 +1183,32 @@ jobs:
             echo "release_upload=true" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Push the Verified Release Tag to Gitea
+        env:
+          GITEA_RELEASE_TOKEN: ${{ secrets.GITEA_RELEASE_TOKEN }}
+          RELEASE_TAG: ${{ steps.tag_version.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          test -n "$GITEA_RELEASE_TOKEN"
+          # Resolve credentials from the environment, never a URL or argv.
+          export GIT_CONFIG_COUNT=2
+          export GIT_CONFIG_KEY_0=credential.helper
+          export GIT_CONFIG_VALUE_0=
+          export GIT_CONFIG_KEY_1=credential.helper
+          export GIT_CONFIG_VALUE_1='!f() { printf "%s\n" username=waozi "password=$GITEA_RELEASE_TOKEN"; }; f'
+          destination=https://git.waozi.xyz/waozi/breeze.git
+          reference="refs/tags/$RELEASE_TAG"
+          expected=$(git rev-parse "$reference")
+          current=$(git ls-remote --refs "$destination" "$reference" | cut -f1)
+          if [ -n "$current" ] && [ "$current" != "$expected" ]; then
+            echo "::error::Gitea already has a different release tag"
+            exit 1
+          fi
+          if [ -z "$current" ]; then
+            git push "$destination" "$reference:$reference"
+          fi
+          test "$(git ls-remote --refs "$destination" "$reference" | cut -f1)" = "$expected"
+
       - name: Generate Update Appcast
         if: steps.tag_version.outputs.release_upload == 'true'
         run: |
