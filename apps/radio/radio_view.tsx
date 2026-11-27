@@ -18,7 +18,7 @@ import * as Model from "radio_model";
 
 export function RadioView(message: AppMessage): AppMessage {
     Model.RadioLoad(message.account);
-    const frame = Model.ReadFrame();
+    const frame = Model.ReadAppUiHost();
     const margin = s32(16.0 * frame.scale);
     let width = frame.width - margin * s32(2);
     const maximum = s32(620.0 * frame.scale);
@@ -32,7 +32,7 @@ export function RadioView(message: AppMessage): AppMessage {
         height: float32(frame.height - frame.bottom - y)};
     const view = <Scroll session={frame.session}
         props={{key: u64(26000), bounds: viewport, content_height: width,
-            scroll_offset: Model.CurrentScrollOffset(), scale: frame.scale}}
+            scroll_offset: Model.scroll_offset, scale: frame.scale}}
         children={(scroll: ScrollResult): void => {
             const cabinet: Rectangle = {x: scroll.content.x, y: scroll.content.y,
                 width: scroll.content.width, height: scroll.content.width};
@@ -47,8 +47,8 @@ export function RadioView(message: AppMessage): AppMessage {
             const tuning = Model.RadioTarget(
                 Model.RadioRect(cabinet, 942.0, 735.0, 160.0, 160.0), target);
             const pointer = Model.RadioDragUpdate(volume_control, tuning, frame.scale);
-            const drag_moved = Model.CurrentDragMoved();
-            const selected = Model.CurrentSelected();
+            const drag_moved = Model.drag_moved;
+            const selected = Model.selected;
             // Presets are ordinary buttons: focus, activation and drags.
             for (let index: s32 = s32(0); index < s32(RADIO_STATION_COUNT); index += s32(1)) {
                 const preset = Model.RadioTarget(Model.RadioRect(cabinet,
@@ -67,7 +67,7 @@ export function RadioView(message: AppMessage): AppMessage {
                 Model.RadioRect(cabinet, 654.0, 433.0, 459.0, 186.0));
             <Box session={frame.session} props={{key: u64(26031), bounds: needle,
                 fill: {r: u8(153), g: u8(66), b: u8(39), a: u8(255)}}}/>;
-            const state = Model.AudioState();
+            const state = Model.AudioStateHost();
             // Power is independent of the knobs' drags.
             const power_pressed = <Button session={frame.session}
                 props={{id: s32(26002), bounds: power,
@@ -80,7 +80,7 @@ export function RadioView(message: AppMessage): AppMessage {
             }
             const volume_pressed = <Button session={frame.session}
                 props={{id: s32(26003), bounds: volume_control,
-                    label: Model.Locale("music_volume_label"),
+                    label: Model.AppLocaleHost("music_volume_label"),
                     detail: Model.RadioVolumeLabel(),
                     icon_only: true, invisible: true,
                     tone: ButtonTone.ButtonToneNeutral,
@@ -90,7 +90,7 @@ export function RadioView(message: AppMessage): AppMessage {
             }
             const tuning_pressed = <Button session={frame.session}
                 props={{id: s32(26005), bounds: tuning,
-                    label: Model.Locale("radio_tuning"),
+                    label: Model.AppLocaleHost("radio_tuning"),
                     detail: StationName(selected),
                     icon_only: true, invisible: true,
                     tone: ButtonTone.ButtonToneNeutral,
@@ -108,7 +108,7 @@ export function RadioView(message: AppMessage): AppMessage {
                 wrap: NativeText.Wrap.TextWrapAuto}}/>;
             Model.RadioDragEnd(pointer);
         }}/>;
-    Model.SetScrollOffset(view.scroll_offset);
+    Model.scroll_offset = view.scroll_offset;
     if (!view.opened) {
         message.succeeded = true;
         return message;
