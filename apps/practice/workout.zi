@@ -1,3 +1,6 @@
+#import "workout_ui"
+#import "practice_title_bar_ui"
+#import "application_close_ui"
 #import, file "../../src/platform/host_clock.zi";
 #import, file "recovery.zi";
 #import, file "../../src/apps/practice_ui_types.zi";
@@ -49,18 +52,8 @@
 #import "byte_text_linux"
 #import "text_buffer"
 Layout :: #import "kryon/layout";
-Box :: #import "kryon/box";
-Button :: #import "kryon/button";
-Dropdown :: #import "kryon/dropdown";
-Modal :: #import "kryon/modal";
-Text :: #import "kryon/text";
-TitleBar :: #import "kryon/title_bar";
-#import "kryon/tree"
 #import "session"
-#import "control_props"
-#import "drawing_props"
 #import "geometry"
-#import "text_align"
 
 c :: #system_library "c";
 #if #defined(KRYON_TEST_DRIVER) && #defined(DESKTOP_HOST) && OS == .LINUX {
@@ -92,9 +85,6 @@ using AppThemeMode;
 using ExerciseType;
 using ModalType;
 using SessionExitModalResult;
-using ButtonTone;
-using ButtonEmphasis;
-using TextAlign;
 
 WORKOUT_EDGE_PATH :: "assets/practices/workout/flat-edge.png"
 
@@ -140,30 +130,7 @@ WorkoutConfigBack :: (app: *InnerBreeze) {
 WorkoutConfigDraw :: (app: *InnerBreeze) {
     layout: PracticeSubscreenLayout
     PracticeConfigLayout(app, cast(s32)ModalPracticeConfig, AppScale(12), *layout)
-    options: [1]Dropdown.Option
-    bar := TitleBar.Props.{.title = LocaleText("practice_configure_button"), .height = layout.title_h,
-        .has_leading_action = true, .leading_label = LocaleText("back_button")}
-    if TitleBar.Draw(app.ui.session, bar, options[:0]).clicked_leading {
-        WorkoutConfigBack(app)
-        return
-    }
-    width := app.ui.view_width - Layout.PageSidePaddingFor(app.ui.view_width) * 2
-    if width > AppScale(308) {
-        width = AppScale(308)
-    }
-    height := width * 2 / 3
-    if height > AppScale(188) {
-        height = AppScale(188)
-    }
-    if height > layout.scroll_h {
-        height = layout.scroll_h
-    }
-    if width <= 0 || height < AppScale(44) {
-        return
-    }
-    x := (app.ui.view_width - width) / 2
-    y := layout.scroll_y + (layout.scroll_h - height) / 2
-    WorkoutCharacterPreview(app, Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)height})
+    WorkoutConfigView(app, layout)
 }
 
 WorkoutManagerOpen :: (app: *InnerBreeze) {
@@ -179,23 +146,11 @@ WorkoutManagerBack :: (app: *InnerBreeze) {
 }
 
 WorkoutManagerDraw :: (app: *InnerBreeze) {
-    title := WorkoutTitle(WORKOUT_ROUTINE_CUSTOM)
-    height := app.ui.view_height - AppScale(32)
-    if height > AppScale(660) {
-        height = AppScale(660)
-    }
-    frame := Modal.Draw(app.ui.session, Modal.Props.{.id = 28900, .title = title,
-        .width = AppScale(500), .height = height, .scale = MetricsScale(),
-        .has_left_action = true, .left_label = LocaleText("back_button"), .strong_title = true})
-    if frame.left_clicked || frame.dismissed {
-        WorkoutManagerBack(app)
-        return
-    }
-    if !frame.opened {
-        return
-    }
-    defer { unused End(app.ui.session) }
-    if WorkoutBuilderDraw(app, frame.layout.content, PracticeContentReady(EXERCISE_WORKOUT)) == WORKOUT_BUILDER_PLAY &&
+    WorkoutManagerView(app)
+}
+
+WorkoutManagerPlay :: (app: *InnerBreeze, action: s32) {
+    if action == WORKOUT_BUILDER_PLAY &&
     ActivityStartAllowed() && WorkoutBuilderTake(*workout_custom_plan) && WorkoutPlanExpand(*workout_custom_plan, *workout_custom) {
         WorkoutStartRoutine(app, WORKOUT_ROUTINE_CUSTOM)
     }
@@ -704,51 +659,26 @@ WorkoutDrawAppearance :: (app: *InnerBreeze, pose: *WorkoutPose, rig: *TaiChiRig
 }
 
 WorkoutCharacterPreview :: (app: *InnerBreeze, area: Rectangle) {
+    WorkoutCharacterCards(app, area)
+}
+
+WorkoutChooseCharacter :: (app: *InnerBreeze, character: s32) {
+    app.workout_character = character
+    app.settings_dirty = 1
+    save_settings(app)
+}
+
+WorkoutPreviewFigure :: (app: *InnerBreeze, bounds: Rectangle, character: s32, key: u64, label: string) {
     rig := WorkoutRig()
     pose := WorkoutStanding()
     framing := TaiChiFraming.{.view_height = rig.height * 1.16, .view_center = rig.height * 0.50}
-    digest := WorkoutPoseDigest(*pose, 2)
-    label_h := cast(float32)AppScale(32)
-    gap := cast(float32)AppScale(6)
-    column := (area.width - gap) / 2.0
-    key := Layout.KeyHash("workout/customize/character")
-    PracticeFigurePrepare(app.workout_character == 1)
-    for character: cast(s32)0..1 {
-        man := character == 1
-        label := LocaleText(ifx man then "workout_character_man" else "workout_character_woman")
-        x := area.x + cast(float32)character * (column + gap)
-        selected := app.workout_character == character
-        bounds := Rectangle.{x, area.y, column, area.height}
-        Box.Draw(app.ui.session, Box.Props.{.key = key + cast(u64)(8 + character), .bounds = bounds,
-            .fill = StyleTokenColor("surface"), .radius = cast(float32)AppScale(12),
-            .border = StyleTokenColor(ifx selected then "accent" else "surface")})
-        if Button.Draw(app.ui.session, Button.Props.{.key = key + cast(u64)character,
-                .id = 28910 + character, .bounds = bounds,
-                .label = label, .invisible = true, .selected = selected}) != 0 && !selected {
-            app.workout_character = character
-            app.settings_dirty = 1
-            save_settings(app)
-        }
-        figure_h := area.height - label_h - gap * 2.0
-        figure_w := column - gap * 2.0
-        if figure_h > 0.0 && figure_w > 0.0 {
-            framing.view_height = rig.height * 1.16
-            if figure_w < figure_h * 0.48 {
-                framing.view_height *= cast(float64)(figure_h * 0.48 / figure_w)
-            }
-            // A card shows the Workout's own current figure, or nothing; never
-            // the flat figure painted when a model cannot load.
-            solved := WorkoutSolve(*pose, *rig)
-            unused PracticeFigureDrawModel(app.ui.session, *solved, *rig, framing, man, false,
-                Rectangle.{x + (column - figure_w) / 2.0, area.y + gap, figure_w, figure_h},
-                key + cast(u64)(4 + character), label, -1.0, digest, WorkoutFigurePlacement())
-        }
-        strong: [1]Text.Range = .[.{.start = 0, .end = cast(s32)label.count}]
-        Text.Draw(app.ui.session, Text.Props.{.bounds = Rectangle.{x, area.y + area.height - label_h, column, label_h},
-            .text = label, .size = AppFontSize(), .strong = strong[:(ifx selected then 1 else 0)],
-            .align = cast(TextAlign)TextAlignCenter,
-            .vertical_align = cast(TextAlign)TextAlignCenter})
+    if bounds.width < bounds.height * 0.48 {
+        framing.view_height *= cast(float64)(bounds.height * 0.48 / bounds.width)
     }
+    // The selector previews the model when it is available.
+    solved := WorkoutSolve(*pose, *rig)
+    unused PracticeFigureDrawModel(app.ui.session, *solved, *rig, framing, character == 1, false,
+        bounds, key, label, -1.0, WorkoutPoseDigest(*pose, 2), WorkoutFigurePlacement())
 }
 
 WorkoutDrawWindow :: (app: *InnerBreeze, picture: Rectangle, output: []u8) -> string {
