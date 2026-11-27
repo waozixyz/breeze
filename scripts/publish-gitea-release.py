@@ -149,14 +149,14 @@ def main():
     parser.add_argument("--assets", type=Path, default=ROOT / "build/release")
     parser.add_argument("--notes", type=Path, required=True)
     parser.add_argument("--origin", default=PUBLIC,
-                        help="Gitea origin, or its loopback address through an administrative SSH forward")
+                        help="Gitea origin, or its loopback address when running on Build")
     parser.add_argument("--token-stdin", action="store_true")
     args = parser.parse_args()
     origin = urlsplit(args.origin)
     if args.origin != PUBLIC and not (origin.scheme == "http" and origin.hostname == "127.0.0.1"
                                       and origin.port and not origin.path and not origin.query
                                       and not origin.fragment and not origin.username):
-        parser.error("use the public Gitea origin or an HTTP loopback forward")
+        parser.error("use the public Gitea origin or its HTTP loopback address on Build")
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", args.version) or \
             not re.fullmatch(r"[0-9a-f]{40}", args.revision):
         parser.error("a numeric version and full verified commit are required")

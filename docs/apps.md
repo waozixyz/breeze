@@ -1118,8 +1118,9 @@ the repository's `GITEA_RELEASE_TOKEN` secret. After that run succeeds,
 download its release artifacts into `build/release/` and publish those exact
 downloads with `python3 scripts/publish-gitea-release.py --version X.Y.Z
 --revision COMMIT --notes PATH --token-stdin`. The token comes from stdin;
-`--origin http://127.0.0.1:PORT` supports an administrative SSH forward to
-Gitea when its public API is unavailable. The publisher requires every
+When its public API is unavailable, run the same publisher on Build with
+`--origin http://127.0.0.1:3000`, keeping the publisher and asset-list scripts
+in `scripts/` beside the unchanged artifact directory. The publisher requires every
 platform artifact and the appcast, verifies the existing tag, and reads back
 each attachment to compare its SHA-256 before publishing the draft. After
 an interrupted operation, it inspects and verifies existing attachments;
