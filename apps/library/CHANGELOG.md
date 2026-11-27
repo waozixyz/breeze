@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Organize app sources under `src/` with a clear `main.zi` program entry.
+
 - Rebuild the bookshelf and reader controls with Kryon’s TSX components.
 
 ## [1.0.7] - 2026-11-17

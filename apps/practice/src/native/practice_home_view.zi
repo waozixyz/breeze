@@ -1,0 +1,288 @@
+#import "practice_home_view_ui"
+#import "results_view_ui"
+// Practice's home: the chosen practice's banner fading into the page, its
+// title and what its card says, the tabs for each kind of practice, arrows
+// through the practices under the tab, and Start with the manual and the
+// settings, or the button that installs, unlocks or cancels a practice that
+// is not ready. Swipes and the arrow keys go to the next or previous
+// practice. The host keeps the practices, their downloads and the route.
+#import "session"
+#import "kryon/tree"
+Modal :: #import "kryon/modal";
+#import "geometry"
+#import "vec"
+#import "dpi"
+#import "drawing_props"
+Box :: #import "kryon/box";
+Button :: #import "kryon/button";
+Image :: #import "kryon/image";
+TabBar :: #import "kryon/tab_bar";
+Text :: #import "kryon/text";
+#import "text_align"
+#import "text_measure"
+#import "control_props"
+#import "swipe_props"
+#import "swipe"
+#import, file "../../../../src/apps/practice_ui_types.zi";
+#import, file "../../../../src/apps/practice_types.zi";
+#import, file "../../../../src/app/exercise_types.zi";
+
+using Button.ArrowDirection;
+using ButtonTone;
+using ButtonEmphasis;
+using ControlSize;
+using ExerciseType;
+using Image.ImageFit;
+using SwipeDirection;
+using TextAlign;
+using Text.Wrap;
+host_api :: #system_library "host_api";
+ReadPracticeHomeHost :: () -> PracticeHomeFrame #foreign host_api;
+WritePracticeHomeHost :: (frame: PracticeHomeFrame) #foreign host_api;
+ReadPracticeHomeTabHost :: (index: s32) -> PracticeHomeTab #foreign host_api;
+PracticeLocaleHost :: (key: string) -> string #foreign host_api;
+home: PracticeHomeFrame;
+
+HOME_TAB_MAX :: 8
+// Keep these identities stable when status text or optional actions change.
+HOME_CAROUSEL_ID :: 7090
+HOME_TABS_ID :: 17470
+HOME_TAB_KEY :: 17480
+HOME_OFFER_ID :: 17410
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+Locale :: (key: string) -> string {
+    return PracticeLocaleHost(key)
+}
+
+Width :: (text: string, font: s32) -> s32 {
+    return TextWidth(home.session, Text.Props.{.text = text, .size = font})
+}
+
+FitFont :: (text: string, max_width: s32, preferred: s32, minimum: s32) -> s32 {
+    font := preferred
+    if max_width <= 0 {
+        return font
+    }
+    while font > minimum && Width(text, font) > max_width {
+        font -= 1
+    }
+    return font
+}
+
+// The height of text wrapped in width, with a small gap between its lines.
+ParagraphHeight :: (text: string, width: s32, font: s32) -> s32 {
+    return TextHeight(home.session, Text.Props.{.text = text, .size = font,
+            .bounds = Bounds(0, 0, width, 0), .wrap = cast(Text.Wrap)TextWrapAuto,
+            .line_gap = ScalePixels(3, home.scale)})
+}
+
+Alpha :: (color: Color, opacity: float32) -> Color {
+    color.a = cast(u8)(255.0 * opacity)
+    return color
+}
+
+// ---- The title and the lines under it -----------------------------------------
+
+TitleLayout :: struct {
+    title: Text.Props
+    subtitle: Text.Props
+    height: s32
+}
+
+// The centred heading, measured with room for accents and descenders, and
+// the practice's description under it.
+Title :: (x: s32, width: s32) -> TitleLayout {
+    layout: TitleLayout
+    preferred := ifx width >= ScalePixels(600, home.scale) then ScalePixels(42, home.scale) else ScalePixels(34, home.scale)
+    max_width := width - ScalePixels(36, home.scale)
+    if max_width < ScalePixels(220, home.scale) {
+        max_width = width
+    }
+    padding := ScalePixels(4, home.scale)
+    layout.title = Text.Props.{.text = home.title, .bounds = Bounds(x, 0, width, 0),
+        .size = FitFont(home.title, max_width, preferred, home.font + ScalePixels(4, home.scale)),
+        .align = cast(TextAlign)TextAlignCenter,
+        .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapAuto}
+    title_height := TextHeight(home.session, layout.title) + padding * 2
+    layout.title.bounds.height = cast(float32)title_height
+    layout.height = title_height
+    if home.subtitle.count > 0 {
+        layout.subtitle = Text.Props.{.text = home.subtitle,
+            .bounds = Bounds(x, title_height + ScalePixels(6, home.scale), width, 0),
+            .size = FitFont(home.subtitle, max_width, home.font + ScalePixels(1, home.scale), ScalePixels(14, home.scale)),
+            .align = cast(TextAlign)TextAlignCenter,
+            .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapAuto}
+        subtitle_height := TextHeight(home.session, layout.subtitle) + padding * 2
+        layout.subtitle.bounds.height = cast(float32)subtitle_height
+        layout.height += ScalePixels(6, home.scale) + subtitle_height
+    }
+    return layout
+}
+
+PriceRowHeight :: () -> s32 {
+    return home.small_font + ScalePixels(12, home.scale)
+}
+
+// The offer row, with what the price is worth under it once the node's
+// rates are known.
+PriceHeight :: () -> s32 {
+    height: s32 = 0
+    if home.regular_price.count > 0 {
+        height = PriceRowHeight()
+    }
+    if home.worth.count > 0 {
+        height += home.small_font + ScalePixels(6, home.scale)
+    }
+    return height
+}
+
+StatusHeight :: (width: s32) -> s32 {
+    height: s32 = 0
+    if home.status.count > 0 {
+        height += ParagraphHeight(home.status, width, home.small_font) + ScalePixels(4, home.scale)
+    }
+    if home.priced && PriceHeight() > 0 {
+        height += PriceHeight() + ScalePixels(4, home.scale)
+    }
+    if home.note.count > 0 {
+        height += ParagraphHeight(home.note, width, home.small_font) + ScalePixels(4, home.scale)
+    }
+    return height
+}
+
+
+
+// During an offer the regular price is struck through beside its discount
+// badge, such as -90%; what the price is worth follows under it.
+
+
+// The download's progress or failure, a paid practice's price and why it
+// cannot be unlocked yet.
+Status :: (x: s32, y: s32, width: s32) {
+    if home.status.count > 0 {
+        y += CentredLine(home.status, x, y, width)
+    }
+    if home.priced && PriceHeight() > 0 {
+        price_width := width
+        if price_width > ScalePixels(300, home.scale) {
+            price_width = ScalePixels(300, home.scale)
+        }
+        Price(x + (width - price_width) / 2, y + ScalePixels(4, home.scale), price_width)
+        y += PriceHeight() + ScalePixels(4, home.scale)
+    }
+    if home.note.count > 0 {
+        unused CentredLine(home.note, x, y, width)
+    }
+}
+
+// ---- Tabs, arrows and buttons -------------------------------------------------------
+
+// One tab for each kind with a practice to list. Choosing one asks the host
+// for the practice that tab last showed.
+
+
+// Arrows round the practices under the tab, with "2 / 5" between them.
+
+
+ActionGap :: (width: s32) -> s32 {
+    return ifx width < ScalePixels(340, home.scale) then ScalePixels(8, home.scale) else ScalePixels(12, home.scale)
+}
+
+// Whether Manual and Settings fit side by side in width, each wide enough
+// for its label.
+ActionsShareRow :: (width: s32) -> bool {
+    if !home.has_manual || !home.has_config {
+        return false
+    }
+    padding := ScalePixels(20, home.scale)
+    gap := ActionGap(width)
+    manual_min := Width(Locale("practice_manual_button"), home.font) + padding * 2
+    config_min := Width(Locale("practice_configure_button"), home.font) + padding * 2
+    if width < manual_min + config_min + gap {
+        return false
+    }
+    available := width - gap
+    half := available / 2
+    if half >= manual_min && available - half >= config_min {
+        return true
+    }
+    manual := manual_min
+    config := available - manual
+    if config < config_min {
+        config = config_min
+        manual = available - config
+    }
+    return manual >= manual_min && config >= config_min
+}
+
+// The button in place of Start for a practice that is not ready.
+
+
+
+// ---- The page ---------------------------------------------------------------------------
+
+
+
+
+
+PracticeHomeView :: (message: PracticeMessage) -> PracticeMessage {
+    home = ReadPracticeHomeHost()
+    home.action = PRACTICE_HOME_NONE
+    home.value = 0
+    home.card = Rectangle.{}
+    home.start = Rectangle.{}
+    home.manual = Rectangle.{}
+    home.config = Rectangle.{}
+    if home.draft_pending {
+        RecoveryCard()
+    } else {
+        Page()
+    }
+    WritePracticeHomeHost(home)
+    message.succeeded = true
+    return message
+}
+
+PracticeHomeCarouselLabel :: (selected: s32, count: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "% / %", selected + 1, count)
+    return BuilderFinish(out)
+}
+
+NewTabs :: () -> [HOME_TAB_MAX]TabBar.Tab {
+    result: [HOME_TAB_MAX]TabBar.Tab
+    return result
+}
+
+CentredLine :: (text: string, x: s32, y: s32, width: s32) -> s32  {
+    return CentredLineView(text, x, y, width)
+}
+
+Price :: (x: s32, y: s32, width: s32)  {
+    PriceView(x, y, width)
+}
+
+Tabs :: (bounds: Rectangle)  {
+    TabsView(bounds)
+}
+
+Carousel :: (bounds: Rectangle)  {
+    CarouselView(bounds)
+}
+
+Offer :: (bounds: Rectangle)  {
+    OfferView(bounds)
+}
+
+Page :: ()  {
+    PageView()
+}
+
+RecoveryCard :: ()  {
+    RecoveryCardView()
+}

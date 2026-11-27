@@ -135,7 +135,7 @@ class ReleaseTest(unittest.TestCase):
         files = ["droid/app/build.gradle", "src/core/version.zi", "packaging/snap/snap/snapcraft.yaml",
                  "fastlane/metadata/android/en-US/changelogs/173.txt", "apps/diary/CHANGELOG.md",
                  "apps/versions.json", "src/apps/versions.zi"]
-        stray = ["src/screens/diary_screen.zi", "locales/pt.txt", "apps/diary/diary.zi"]
+        stray = ["src/screens/diary_screen.zi", "locales/pt.txt", "apps/diary/src/native/diary.zi"]
         allowed = [path for path in files + stray
                    if any(release.fnmatch.fnmatchcase(path, pattern) for pattern in release.VERSION_FILES)]
         self.assertEqual(allowed, files)

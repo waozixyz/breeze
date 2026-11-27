@@ -1,0 +1,483 @@
+// Habit statistics state and host bindings. The host dispatch uses this module name.
+#import "session"
+#import "geometry"
+#import "vec"
+#import "pointer_input"
+#import "dpi"
+Text :: #import "kryon/text";
+#import "drawing_props"
+#import "semantic"
+#import "text_align"
+#import "text_measure"
+#import "control_props"
+#import "kryon/tree"
+#import "plot/band_chart"
+#import "plot/band_chart_props"
+#import, file "../../../../src/apps/habits_ui_types.zi";
+#import, file "../../../../src/apps/habits_types.zi";
+#import, file "../../../../src/habits/habit_types.zi";
+
+using Text.Wrap;
+host_api :: #system_library "host_api";
+ReadHabitsStatsHost :: () -> HabitsStatsFrame #foreign host_api;
+WriteHabitsStatsHost :: (frame: HabitsStatsFrame) #foreign host_api;
+ReadHabitsStatsChartHost :: (chart: s32) -> HabitsStatsChart #foreign host_api;
+ReadHabitsStatsPointHost :: (chart: s32, index: s32) -> HabitsStatsPoint #foreign host_api;
+ReadHabitsStatsRecentHost :: (chart: s32, index: s32) -> HabitsStatsRecent #foreign host_api;
+ReadHabitsStatsHoldHost :: (index: s32) -> HabitsStatsHold #foreign host_api;
+ReadHabitsStatsChangeHost :: (index: s32) -> HabitsStatsChange #foreign host_api;
+HabitsLocaleHost :: (key: string) -> string #foreign host_api;
+stats: HabitsStatsFrame;
+
+STATS_CONTENT_MAX_WIDTH :: 440
+STATS_CARD_RADIUS :: 12
+STATS_CARD_PADDING :: 16
+STATS_FIGURE_HEIGHT :: 74
+STATS_CARD_GAP :: 10
+STATS_SECTION_GAP :: 28
+STATS_CHART_HEIGHT :: 128
+STATS_ANSWER_ROW :: 40
+STATS_MOOD_BARS_HEIGHT :: 64
+STATS_HOLD_GRAPH_HEIGHT :: 170
+// The days a chart's values cover, the most it shows, and Wim Hof rounds.
+STATS_DAYS :: 30
+STATS_POINT_MAX :: 128
+STATS_HOLD_MAX :: 256
+STATS_HOLD_DAYS_MAX :: 31
+STATS_BACK_SHAPE :: "S1.8rr:M15 5L8 12L15 19"
+STATS_MINUTES_PER_DAY :: 1440
+STATS_TREND_HEIGHT :: 200
+STATS_TREND_LEGEND_HEIGHT :: 44
+trend_selected_habit: s32 = -1;
+trend_selected_chart: s32 = -1;
+trend_selected_slot: s32 = 29;
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, stats.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+Locale :: (key: string) -> string {
+    return HabitsLocaleHost(key)
+}
+
+Width :: (text: string, font: s32) -> s32 {
+    return TextWidth(stats.session, Text.Props.{.text = text, .size = font})
+}
+
+Alpha :: (color: Color, opacity: float32) -> Color {
+    color.a = cast(u8)(255.0 * opacity)
+    return color
+}
+
+Strong :: (text: string) -> [1]Text.Range {
+    ranges: [1]Text.Range
+    ranges[0] = Text.Range.{.start = 0, .end = cast(s32)text.count}
+    return ranges
+}
+
+Number :: (value: s64) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value)
+    return BuilderFinish(out)
+}
+
+// The template with each %d replaced by the next value.
+Filled :: (template: string, first: s32, second: s32) -> string {
+    out: Vec(u8)
+    values: [2]s32 = .[first, second]
+    used: s32 = 0
+    at: s64 = 0
+    while at < template.count {
+        if at + 1 < template.count && template[at] == cast(u8)37 &&
+        template[at + 1] == cast(u8)100 && used < 2 {
+            BuilderPrint(*out, "%", values[used])
+            used += 1
+            at += 2
+        } else {
+            BuilderPrint(*out, "%", template[at:at + 1])
+            at += 1
+        }
+    }
+    return BuilderFinish(out)
+}
+
+Padded :: (out: *Vec(u8), value: s32) {
+    if value < 10 {
+        BuilderPrint(out, "0")
+    }
+    BuilderPrint(out, "%", value)
+}
+
+// Minutes after midnight, of this or the next day, as "HH:MM".
+TimeText :: (minutes: s32) -> string {
+    if minutes < 0 {
+        return ""
+    }
+    minutes = minutes % STATS_MINUTES_PER_DAY
+    out: Vec(u8)
+    Padded(*out, minutes / 60)
+    BuilderPrint(*out, ":")
+    Padded(*out, minutes % 60)
+    return BuilderFinish(out)
+}
+
+// A length in minutes as hours and minutes: "16h 05m", or "45m".
+SpanText :: (minutes: s32) -> string {
+    if minutes < 0 {
+        return ""
+    }
+    out: Vec(u8)
+    if minutes >= 60 {
+        BuilderPrint(*out, "%h ", minutes / 60)
+        Padded(*out, minutes % 60)
+    } else {
+        BuilderPrint(*out, "%", minutes)
+    }
+    BuilderPrint(*out, "m")
+    return BuilderFinish(out)
+}
+
+// A number in hundredths with up to one decimal: 1250 is "12.5".
+DecimalText :: (value: s64) -> string {
+    tenths := (value + 5) / 10
+    out: Vec(u8)
+    BuilderPrint(*out, "%", tenths / 10)
+    if tenths % 10 != 0 {
+        BuilderPrint(*out, ".%", tenths % 10)
+    }
+    return BuilderFinish(out)
+}
+
+ValueText :: (answer_type: s32, value: s32) -> string {
+    if answer_type == HABIT_ANSWER_TIME {
+        return TimeText(value)
+    }
+    if answer_type == HABIT_ANSWER_SPAN {
+        return SpanText(value)
+    }
+    return Number(cast(s64)value)
+}
+
+// A day as YYYY-MM-DD.
+DateText :: (day: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%-", day / 10000)
+    Padded(*out, (day / 100) % 100)
+    BuilderPrint(*out, "-")
+    Padded(*out, day % 100)
+    return BuilderFinish(out)
+}
+
+DayCountText :: (count: s32) -> string {
+    return Filled(Locale(ifx count == 1 then "habit_stats_day_singular"
+        else "habit_stats_day_plural"), count, 0)
+}
+
+TrendDate :: (label: string) -> string {
+    if label.count < 8 {
+        return label
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%-%-%", label[0:4], label[4:6], label[6:8])
+    return BuilderFinish(out)
+}
+
+HabitTrendLegendColumns :: (width: s32) -> s32 {
+    return ifx width >= Scale(260) then 2 else 1
+}
+
+HabitsTrendsHeight :: (width: s32) -> s32 {
+    columns := HabitTrendLegendColumns(width)
+    rows := (stats.trend_count + columns - 1) / columns
+    return Scale(STATS_TREND_HEIGHT + 68) + rows * Scale(STATS_TREND_LEGEND_HEIGHT)
+}
+
+// Value formatting stays in the metric's own units when a series is selected.
+MetricValueText :: (answer_type: s32, value: s32) -> string {
+    if answer_type == HABITS_METRIC_SECONDS {
+        return Filled(Locale("results_metric_seconds"), value, 0)
+    }
+    return ValueText(answer_type, value)
+}
+
+// Squared distance to a segment also makes the connecting line selectable.
+TrendDistance :: (px: float32, py: float32, x1: s32, y1: s32, x2: s32, y2: s32) -> float32 {
+    dx := cast(float32)(x2 - x1)
+    dy := cast(float32)(y2 - y1)
+    length := dx * dx + dy * dy
+    amount: float32 = 0.0
+    if length > 0.0 {
+        amount = ((px - cast(float32)x1) * dx + (py - cast(float32)y1) * dy) / length
+    }
+    if amount < 0.0 {
+        amount = 0.0
+    }
+    if amount > 1.0 {
+        amount = 1.0
+    }
+    near_x := cast(float32)x1 + amount * dx
+    near_y := cast(float32)y1 + amount * dy
+    return (px - near_x) * (px - near_x) + (py - near_y) * (py - near_y)
+}
+
+SectionFont :: () -> s32 {
+    return stats.font + Scale(2)
+}
+
+SectionTitleHeight :: (title: string, width: s32) -> s32 {
+    return TextHeight(stats.session, Text.Props.{.text = title, .size = SectionFont(),
+            .bounds = Bounds(0, 0, width, 0), .wrap = cast(Text.Wrap)TextWrapAuto,
+            .line_gap = Scale(3)})
+}
+
+MoodColor :: (mood: s32) -> Color {
+    if mood <= 1 {
+        return Color.{.r = 226, .g = 83, .b = 78, .a = 255}
+    } else if mood == 2 {
+        return Color.{.r = 238, .g = 139, .b = 70, .a = 255}
+    } else if mood == 3 {
+        return Color.{.r = 235, .g = 202, .b = 77, .a = 255}
+    } else if mood == 4 {
+        return Color.{.r = 108, .g = 199, .b = 104, .a = 255}
+    }
+    return Color.{.r = 73, .g = 194, .b = 192, .a = 255}
+}
+
+MoodPanelHeight :: (width: s32) -> s32 {
+    return SectionTitleHeight(Locale("habit_stats_mood_title"), width) + Scale(10) +
+    Scale(STATS_FIGURE_HEIGHT) + Scale(STATS_CARD_GAP) + Scale(STATS_MOOD_BARS_HEIGHT)
+}
+
+// A round on the graph: its day's slot, its time, and where it is drawn.
+HoldPoint :: struct {
+    time_key: s64
+    round: s32
+    slot: s32
+    seconds: s32
+    x: s32
+    y: s32
+}
+
+hold_points: [STATS_HOLD_MAX]HoldPoint;
+
+AnswerHeight :: (chart: HabitsStatsChart, width: s32) -> s32 {
+    height := SectionTitleHeight(chart.title, width) + Scale(10) + Scale(STATS_FIGURE_HEIGHT)
+    if chart.answer_type == HABIT_ANSWER_TIME || chart.answer_type == HABIT_ANSWER_NUMBER {
+        height += Scale(STATS_CARD_GAP) + Scale(STATS_CHART_HEIGHT)
+    } else if chart.answer_type == HABIT_ANSWER_TEXT {
+        height += chart.recent_count * Scale(STATS_ANSWER_ROW)
+    }
+    return height + Scale(STATS_SECTION_GAP)
+}
+
+SpanHeight :: (width: s32) -> s32 {
+    return SectionTitleHeight(Locale("habit_stats_spans_title"), width) + Scale(10) +
+    Scale(STATS_FIGURE_HEIGHT) * 2 + Scale(STATS_CHART_HEIGHT) + Scale(STATS_CARD_GAP) * 2 +
+    Scale(STATS_SECTION_GAP)
+}
+
+ShownAnswers :: () -> s32 {
+    shown: s32 = 0
+    for chart: cast(s32)1..stats.question_count {
+        if ReadHabitsStatsChartHost(chart).shown {
+            shown += 1
+        }
+    }
+    return shown
+}
+
+AnswersHeight :: (width: s32) -> s32 {
+    if stats.question_count <= 0 {
+        return 0
+    }
+    height: s32 = 0
+    if ShownAnswers() > 0 {
+        height += SectionTitleHeight(Locale("habit_stats_answers_title"), width) + Scale(10)
+    }
+    for chart: cast(s32)1..stats.question_count {
+        answer := ReadHabitsStatsChartHost(chart)
+        if answer.shown {
+            height += AnswerHeight(answer, width)
+        }
+    }
+    return height
+}
+
+OnTargetText :: (chart: HabitsStatsChart) -> string {
+    return Filled("%d/%d", chart.good, chart.judged)
+}
+
+// A goal's bound on the chart: times move a day later when that puts them
+// nearer the times shown, which may run past midnight.
+ChartBound :: (chart: HabitsStatsChart, bound: s32) -> float32 {
+    if chart.answer_type != HABIT_ANSWER_TIME {
+        return cast(float32)bound
+    }
+    middle := (chart.lowest + chart.highest) / 2
+    later := bound + STATS_MINUTES_PER_DAY
+    if later - middle < middle - bound {
+        return cast(float32)later
+    }
+    return cast(float32)bound
+}
+
+// The good values of a point's goal, from the point's day on.
+PointBand :: (chart: HabitsStatsChart, point: HabitsStatsPoint) -> BandChartBand {
+    band := BandChartBand.{.from = point.slot}
+    if point.goal_kind == HABIT_GOAL_ABOVE_AVERAGE || point.goal_kind == HABIT_GOAL_BELOW_AVERAGE {
+        if point.benchmark >= 0 {
+            average := cast(float32)point.benchmark / 100.0
+            band.has_low = point.goal_kind == HABIT_GOAL_ABOVE_AVERAGE
+            band.has_high = point.goal_kind == HABIT_GOAL_BELOW_AVERAGE
+            band.low = average
+            band.high = average
+        }
+        return band
+    }
+    if point.goal_kind == HABIT_GOAL_AT_LEAST || point.goal_kind == HABIT_GOAL_BETWEEN {
+        band.has_low = true
+        band.low = ChartBound(chart, point.goal_low)
+    }
+    if point.goal_kind == HABIT_GOAL_AT_MOST || point.goal_kind == HABIT_GOAL_BETWEEN {
+        band.has_high = true
+        band.high = ChartBound(chart, point.goal_high)
+    }
+    band.wraps = point.goal_kind == HABIT_GOAL_BETWEEN && band.low > band.high
+    return band
+}
+
+SameBand :: (first: BandChartBand, second: BandChartBand) -> bool {
+    return first.has_low == second.has_low && first.has_high == second.has_high &&
+    first.wraps == second.wraps && (!first.has_low || first.low == second.low) &&
+    (!first.has_high || first.high == second.high)
+}
+
+chart_points: [STATS_POINT_MAX]BandChartPoint;
+chart_bands: [STATS_POINT_MAX]BandChartBand;
+
+ChangeRowHeight :: (line: string, width: s32) -> s32 {
+    return Scale(30) + TextHeight(stats.session, Text.Props.{.text = line, .size = stats.font,
+            .bounds = Bounds(0, 0, width, 0), .wrap = cast(Text.Wrap)TextWrapAuto,
+            .line_gap = Scale(6)}) + Scale(12)
+}
+
+ChangeRowsHeight :: (width: s32) -> s32 {
+    row_width := width - Scale(STATS_CARD_PADDING) * 2
+    height: s32 = 0
+    for index: cast(s32)0..stats.change_count - 1 {
+        height += ChangeRowHeight(ReadHabitsStatsChangeHost(index).line, row_width)
+    }
+    return height
+}
+
+ChangesHeight :: (width: s32) -> s32 {
+    if stats.change_count <= 0 {
+        return 0
+    }
+    return SectionTitleHeight(Locale("habit_changes_title"), width) + Scale(10) +
+    ChangeRowsHeight(width) + Scale(STATS_CARD_PADDING) * 2 + Scale(STATS_SECTION_GAP)
+}
+
+ContentHeight :: (width: s32) -> s32 {
+    gap := Scale(STATS_SECTION_GAP)
+    height := Scale(8) + Scale(STATS_FIGURE_HEIGHT) + gap
+    trend_height := ifx stats.overview && stats.trend_count > 0 then HabitsTrendsHeight(width) else Scale(STATS_TREND_HEIGHT)
+    height += SectionTitleHeight(Locale(ifx stats.overview then "habit_stats_metric_trends" else "habit_stats_daily_completions"), width) + Scale(10) + trend_height + gap
+    if stats.overview {
+        return height
+    }
+    if stats.span {
+        height += SpanHeight(width)
+    }
+    if stats.mood_total > 0 {
+        height += MoodPanelHeight(width) + gap
+    }
+    if stats.hold_days > 0 {
+        height += SectionTitleHeight(Locale("habit_stats_wim_hof_hold_rounds"), width) +
+        Scale(10) + Scale(42) + Scale(STATS_HOLD_GRAPH_HEIGHT) + gap
+    }
+    height += SectionTitleHeight(Locale("habit_stats_weekday_pattern"), width) + Scale(10) +
+    Scale(STATS_CHART_HEIGHT) + gap
+    if stats.linked {
+        height += SectionTitleHeight(Locale("habit_stats_practice_time"), width) + Scale(10)
+    }
+    height += Scale(STATS_FIGURE_HEIGHT) + gap
+    return height + AnswersHeight(width) + ChangesHeight(width)
+}
+
+NewDayPoints :: () -> [STATS_HOLD_DAYS_MAX]s32 {
+    result: [STATS_HOLD_DAYS_MAX]s32
+    return result
+}
+
+NewDayTotals :: () -> [STATS_HOLD_DAYS_MAX]s32 {
+    result: [STATS_HOLD_DAYS_MAX]s32
+    return result
+}
+
+NewSeen :: () -> [STATS_HOLD_DAYS_MAX]s32 {
+    result: [STATS_HOLD_DAYS_MAX]s32
+    return result
+}
+
+NewFirstX :: () -> [STATS_HOLD_DAYS_MAX]s32 {
+    result: [STATS_HOLD_DAYS_MAX]s32
+    return result
+}
+
+NewLastX :: () -> [STATS_HOLD_DAYS_MAX]s32 {
+    result: [STATS_HOLD_DAYS_MAX]s32
+    return result
+}
+
+TrendDetail :: (title: string, label: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "% · %", title, label)
+    return BuilderFinish(out)
+}
+
+MoodAverageLabel :: (hundredths: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%.", hundredths / 100)
+    Padded(*out, hundredths % 100)
+    BuilderPrint(*out, "/5")
+    return BuilderFinish(out)
+}
+
+PercentLabel :: (percent: s64) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", percent)
+    BuilderPrint(*out, "%%")
+    return BuilderFinish(out)
+}
+
+TimeRangeLabel :: (lowest: s32, highest: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "% - %", TimeText(lowest), TimeText(highest))
+    return BuilderFinish(out)
+}
+
+CurrentStatistics :: () -> *HabitsStatsFrame {
+    return *stats
+}
+
+SetStatistics :: (value: HabitsStatsFrame) {
+    stats = value
+}
+
+HoldPoints :: () -> []HoldPoint {
+    return hold_points[:]
+}
+
+ChartPoints :: () -> []BandChartPoint {
+    return chart_points[:]
+}
+
+ChartBands :: () -> []BandChartBand {
+    return chart_bands[:]
+}

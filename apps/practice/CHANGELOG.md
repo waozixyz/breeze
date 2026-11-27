@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Organize app sources under `src/` with a clear `main.zi` program entry.
+
 - Author the practice pages, guides, settings and workout editor with Kryon TSX components.
 
 - Verify Mandarin Astral narration across Simplified and Traditional Chinese spellings.

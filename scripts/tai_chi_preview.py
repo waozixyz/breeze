@@ -17,7 +17,7 @@ LOCKED_SOURCE = 2
 
 
 def free_lesson_count():
-    source = (ROOT / 'apps/practice/course_access.zi').read_text()
+    source = (ROOT / 'apps/practice/src/native/course_access.zi').read_text()
     match = re.search(r'^TAI_CHI_FREE_FORM_LESSONS :: ([1-8])$', source, re.M)
     if match is None:
         raise ValueError('missing Tai Chi free lesson boundary')

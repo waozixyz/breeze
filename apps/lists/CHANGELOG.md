@@ -10,6 +10,8 @@
 
 ## [Unreleased]
 
+- Organize app sources under `src/` with a clear `main.zi` program entry.
+
 - Rebuild list tabs, tasks and sharing views with Kryon’s TSX components.
 
 - Write longer todos; open a custom task for a description and todo.txt priority, with shorter fixed-width complete and edit swipes.

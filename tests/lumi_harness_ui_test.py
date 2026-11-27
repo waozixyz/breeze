@@ -41,7 +41,7 @@ KEY = 'sk-test-harness-provider-4242'
 REPLY = 'Here is a joke from the test provider.'
 SIZES = {'phone': (1080, 1920, 25), 'desktop': (900, 720, 10)}
 driver = UiDriver(OUTPUT / 'driver')
-# Lumi's title bar buttons, from apps/lumi/lumi_view.zi.
+# Lumi's title bar buttons, from apps/lumi/src/native/lumi_view.zi.
 CONNECTION_KEY = 300401
 WRENCH_KEY = 300390
 

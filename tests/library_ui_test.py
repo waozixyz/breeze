@@ -70,7 +70,7 @@ def launch(profile, name):
 
 
 def chapter_text(number):
-    source = (ROOT / "apps/library/tao_te_ching.zi").read_text()
+    source = (ROOT / "apps/library/src/native/tao_te_ching.zi").read_text()
     return re.search(rf"^TAO_{number} :: #string END\n(.*?)\nEND;$", source, re.M | re.S)[1]
 
 

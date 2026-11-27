@@ -144,7 +144,7 @@ with tempfile.TemporaryDirectory(prefix="inbe-chat-history-") as directory, cont
         driver.wait(label="History message 140")
         latest = driver.text()
         assert not re.search(r"\bOlder\b|\bNewer\b|Chat on Telegram", latest), latest
-        chat_area = driver.wait(key=300100)  # Lumi's chat, from apps/lumi/lumi_view.zi.
+        chat_area = driver.wait(key=300100)  # Lumi's chat, from apps/lumi/src/native/lumi_view.zi.
         x, y = UiDriver.center(chat_area)
         earliest = min(history_numbers())
         for batch in range(20):

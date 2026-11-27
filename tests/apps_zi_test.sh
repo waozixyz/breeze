@@ -29,7 +29,7 @@ for shape in wrong-record wrong-scalar; do
     fi
     cat > "$work/$shape/lists.zi" <<ZIRAN
 #import, file "../../../src/apps/lists_types.zi";
-#import, file "../../../apps/lists/lists_view.zi";
+#import, file "../../../apps/lists/src/native/lists_view.zi";
 host_api :: #system_library "host_api";
 ReadListsHost :: () -> ListsMessage #foreign host_api;
 WriteListsHost :: (value: $type) #foreign host_api;
@@ -47,16 +47,16 @@ ZIRAN
     "$ziran" bundle --project --offline --root "$root" --module-path "$work/$shape" \
         --define KRYON_HOSTED_UI --entry lists:Main -o "$work/$shape.zx" "$work/$shape/lists.zi"
 done
-"$ziran" bundle --project --offline --root "$root" --module-path "$root/apps/inbe" \
-    --define KRYON_HOSTED_UI --entry inbe:Main -o "$work/missing-assets.zx" \
-    "$root/apps/inbe/inbe.zi"
+"$ziran" bundle --project --offline --root "$root" \
+    --define KRYON_HOSTED_UI --entry main:main -o "$work/missing-assets.zx" \
+    "$root/apps/inbe/src/main.zi"
 mkdir -p "$work/invalid-nested"
 printf 'ZX' > "$work/invalid-nested/lists.zx"
 cp "$bundles/apps/habits.zx" "$bundles/apps/practices.zx" "$work/invalid-nested/"
-"$ziran" bundle --project --offline --root "$root" --module-path "$root/apps/inbe" \
-    --define KRYON_HOSTED_UI --entry inbe:Main \
+"$ziran" bundle --project --offline --root "$root" \
+    --define KRYON_HOSTED_UI --entry main:main \
     --asset-dir "cells=$work/invalid-nested" -o "$work/invalid-nested.zx" \
-    "$root/apps/inbe/inbe.zi"
+    "$root/apps/inbe/src/main.zi"
 "$ziran" build --target=c --no-main --project --offline --define PLATFORM_DESKTOP --root "$root/tests" \
     -o "$work/generated" "$root/tests/apps_behavior.zi" "$root/tests/sync_test_host.zi"
 # The --wrap fakes below must see every call, not header inline copies.

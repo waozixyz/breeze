@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Organize app sources under `src/` with a clear `main.zi` program entry.
+
 - Rebuild the app picker with Kryon’s TSX components.
 
 - Backspace and text corrections work again. Restore backups and add photos reliably.

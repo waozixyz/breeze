@@ -355,7 +355,7 @@ photo, and an empty entry receives only the embed.
 
 ## 6. Files
 
-New: `apps/diary/diary_markdown.zi` (embed grammar, Markdown preview
+New: `apps/diary/src/native/diary_markdown.zi` (embed grammar, Markdown preview
 ranges, migration, mirror, insertion; no host access),
 `src/cells/media_store.zi` and `src/cells/media_types.zi` (the host media
 library and its calls), `src/storage/media_node_session.zi` (a media
@@ -364,7 +364,7 @@ session per node), `apps/photos/{photos.zi,photos_view.zi,CHANGELOG.md}`
 `tests/diary_markdown_behavior.zi` and its runner, and Kryon
 `tests/ziran_text_area_blocks_test.{zi,sh}`.
 
-Changed: `apps/diary/diary.zi`, `apps/diary/diary_view.zi`,
+Changed: `apps/diary/src/native/diary.zi`, `apps/diary/src/native/diary_view.zi`,
 `apps/diary/CHANGELOG.md`, `src/screens/diary_screen.zi`,
 `src/cells/module_host.zi`, `src/cells/hosted_assets.zi`,
 `src/cells/diary_blobs.zi`, `src/cells/diary_blobs_native.zi`,

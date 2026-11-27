@@ -1,0 +1,520 @@
+// Lists frame state and host effects. Widget composition lives in lists_view_ui.tsx.
+#import "session"
+#import "entity/model"
+#import "entity/picture_image"
+#import "geometry"
+#import "std/text"
+#import "vec"
+#import "c_string"
+#import "text_buffer"
+ContextMenu :: #import "kryon/context_menu";
+Dropdown :: #import "kryon/dropdown";
+SwipeRow :: #import "kryon/swipe_row";
+TextField :: #import "kryon/text_field";
+#import "kryon/swipe_row"
+#import "text_align"
+#import "control_props"
+#import "text_measure"
+#import "pointer_input"
+#import "swipe"
+#import "swipe_props"
+#import "drawing_props"
+#import "kryon/tree"
+#import "icon"
+CompleteIcon :: #import "mingcute/mingcute_regular_check";
+EditIcon :: #import "mingcute/mingcute_regular_edit_2";
+#import, file "../../../../src/apps/lists_ui_types.zi";
+#import, file "../../../../src/apps/lists_types.zi";
+#import, file "task_title.zi";
+
+host_api :: #system_library "host_api";
+ReadListsUiHost :: () -> ListsUiFrame #foreign host_api;
+WriteListsUiHost :: (frame: ListsUiFrame) #foreign host_api;
+ReadListsRowHost :: (index: s32, item: bool) -> ListsUiRow #foreign host_api;
+ReadListsSharingRowHost :: (index: s32, invitation: bool) -> ListsUiPerson #foreign host_api;
+PrepareListsCommandHost :: (request: ListsUiRequest) -> string #foreign host_api;
+ListsLocaleHost :: (key: string) -> string #foreign host_api;
+frame: ListsUiFrame;
+state: ListsMessage;
+// The open Share or Invitations dialog's scroll offset.
+sharing_scroll: s32;
+SharingAccessControl :: struct {
+    target: [65]u8
+    bounds: Rectangle
+    role: s32
+    disabled: bool
+}
+sharing_controls: Vec(SharingAccessControl);
+sharing_viewport: Rectangle;
+invite_text: string;
+invite_target: [65]u8;
+invite_cursor: s32;
+invite_anchor: s32;
+invite_scroll: s32;
+invite_focused: bool;
+invite_suggestions: bool;
+// Delete lives inside Edit and asks first; this is true once it has asked.
+delete_confirm: bool;
+// The last deleted item, kept briefly so Undo can bring it back.
+undo_item: ListsUiRow;
+undo_account: string;
+undo_until: float64;
+// A pull down on the items that shows or hides the finished ones.
+finished_pull: SwipeGesture;
+// List settings replaces the page: the name, who has access and Delete.
+settings_open: bool;
+settings_scroll: s32;
+// An access menu was open in the last frame, so Escape closes it first.
+settings_menu_open: bool;
+// The access an invitation gives: 0 Owner, 1 Can edit, 2 Read only.
+invite_role: s32 = 1;
+// The same trash can as Photos and Lumi.
+TRASH_ICON :: "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
+// A short swipe right completes or reopens an item; a long one edits it.
+// Swiping left deletes it; Undo brings a deleted item back.
+row_swipe: SwipeRow.SwipeRowState;
+// A task row's context menu, opened where the pointer was released.
+LISTS_ROW_MENU_CHECK :: 1
+LISTS_ROW_MENU_EDIT :: 2
+row_menu_open: bool;
+row_menu_index: s32;
+row_menu_x: float32;
+row_menu_y: float32;
+custom_task_scroll: s32;
+
+CompleteSwipe :: () -> SwipeRow.SwipeRowAction {
+    return SwipeRow.SwipeRowAction.{.fill = Color.{46, 139, 120, 255},
+        .icon_shape = CompleteIcon.Shape, .icon_color = Color.{255, 255, 255, 255}}
+}
+
+EditSwipe :: () -> SwipeRow.SwipeRowAction {
+    return SwipeRow.SwipeRowAction.{.fill = Color.{58, 110, 165, 255},
+        .icon_shape = EditIcon.Shape, .icon_color = Color.{255, 255, 255, 255}}
+}
+
+DeleteSwipe :: () -> SwipeRow.SwipeRowAction {
+    return SwipeRow.SwipeRowAction.{.fill = Color.{198, 52, 52, 255},
+        .icon_shape = TRASH_ICON, .icon_color = Color.{255, 255, 255, 255}, .removes = true}
+}
+
+// Avatar circles take one of four fills, by the person's place in the list.
+AvatarFill :: (place: s32) -> Color {
+    if place % 4 == 1 {
+        return Color.{46, 139, 120, 255}
+    }
+    if place % 4 == 2 {
+        return Color.{123, 92, 180, 255}
+    }
+    if place % 4 == 3 {
+        return Color.{176, 112, 58, 255}
+    }
+    return Color.{58, 110, 165, 255}
+}
+
+Scale :: (pixels: s32) -> s32 {
+    return cast(s32)(cast(float32)pixels * frame.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+BeginInput :: (item: s32, value: string) {
+    state.editing_item = item
+    state.input_error = 0
+    frame.value = value
+    frame.cursor = cast(s32)value.count
+    frame.anchor = frame.cursor
+    frame.scroll_x = 0
+    frame.focused = true
+}
+
+BeginCustomTask :: (item: s32, title: string, comment: string) {
+    row_menu_open = false
+    BeginInput(item, ListsTitleWithoutPriority(title))
+    frame.comment_value = comment
+    frame.comment_cursor = cast(s32)comment.count
+    frame.comment_anchor = frame.comment_cursor
+    frame.comment_scroll_y = 0
+    frame.comment_focused = false
+    frame.task_priority = ListsPriorityForTitle(title)
+    frame.panel = 3
+    custom_task_scroll = 0
+    field_focus_request = true
+}
+
+CloseCustomTask :: () {
+    frame.panel = 0
+    frame.value = ""
+    frame.comment_value = ""
+    frame.task_priority = 0
+    frame.focused = false
+    frame.comment_focused = false
+    state.editing_item = -1
+    state.reset_input = true
+    custom_task_scroll = 0
+}
+
+SaveCustomTask :: () {
+    if ListsTitleWithoutPriority(frame.value).count == 0 { return }
+    if !ListsTitlePriorityFits(frame.value, frame.task_priority, LISTS_TEXT_LIMIT) {
+        return
+    }
+    Mutation(LISTS_COMMIT, -1)
+    if state.remote && state.request_body.count > 0 {
+        CloseCustomTask()
+    }
+}
+
+// Remembers a deleted item's name for a few seconds so Undo can restore it.
+RememberDeleted :: (row: ListsUiRow) {
+    undo_item = row
+    undo_item.id = Copied(row.id)
+    undo_item.parent_id = Copied(row.parent_id)
+    undo_item.title = Copied(row.title)
+    undo_item.comment = Copied(row.comment)
+    undo_account = Copied(frame.public_id)
+    undo_until = state.now + 10.0
+}
+
+// A copy that survives the next host call. Rows read from the host share one
+// text buffer, so a second read overwrites the strings of the first.
+Copied :: (value: string) -> string {
+    text: Vec(u8)
+    BuilderPrint(*text, "%", value)
+    return BuilderFinish(text)
+}
+
+Finish :: () -> ListsMessage {
+    WriteListsUiHost(frame)
+    state.succeeded = true
+    return state
+}
+
+Mutation :: (action: s32, index: s32) {
+    state.action = action
+    state.index = index
+    if state.selected_list >= 0 && state.selected_list < state.list_count {
+        row := ReadListsRowHost(state.selected_list, false)
+        state.id = row.id
+        state.selected_id = row.id
+        state.sort_order = row.sort_order
+    }
+    item := ifx action == LISTS_COMMIT then state.editing_item else index
+    if item >= 0 && item < state.item_count {
+        row := ReadListsRowHost(item, true)
+        state.id = row.id
+        state.parent_id = row.parent_id
+        state.title = row.title
+        state.comment = row.comment
+        if action != LISTS_SET_DONE {
+            state.done = row.done
+        }
+        state.sort_order = row.sort_order
+    }
+    if action == LISTS_COMMIT {
+        state.title = frame.value
+        if frame.panel == 3 {
+            state.title = ListsTitleForPriority(frame.value, frame.task_priority)
+            state.comment = frame.comment_value
+        } else {
+            state.comment = ""
+        }
+    }
+    if state.selected_list >= 0 && state.selected_list < state.list_count &&
+    state.editing_item != -2 && ReadListsRowHost(state.selected_list, false).shared {
+        Remote(action)
+    }
+}
+
+// Escape in the last Field drawn, which leaves an item's edit.
+field_escaped: bool;
+// The next Field takes the focus from whatever held it, as when a swipe
+// turns a row into its field.
+field_focus_request: bool;
+
+Remote :: (action: s32, target: string = "", invitation: string = "",
+    invitation_list: string = "", access: string = "") {
+    state.action = action
+    state.remote = true
+    list: ListsUiRow
+    if state.selected_list >= 0 && state.selected_list < state.list_count {
+        list = ReadListsRowHost(state.selected_list, false)
+    }
+    if invitation_list.count > 0 {
+        list.id = invitation_list
+    }
+    state.selected_id = list.id
+    state.request_body = PrepareListsCommandHost(ListsUiRequest.{
+            .action = action, .index = state.index, .editing_item = state.editing_item,
+            .selected_list = state.selected_list, .done = state.done,
+            .value = ifx action == LISTS_COMMIT || action == LISTS_RESTORE_ITEM
+                then state.title else frame.value,
+            .next_id = frame.next_id, .item_id = state.id, .comment = state.comment,
+            .target = target, .invitation = invitation, .list_id = list.id, .access = access})
+}
+
+// Apps cannot measure text, so a paragraph's height allows a generous
+// average character width; wide characters count twice.
+ParagraphHeight :: (text: string, width: s32) -> s32 {
+    if text.count == 0 {
+        return 0
+    }
+    columns: s32 = 0
+    for index: cast(s32)0..cast(s32)text.count - 1 {
+        byte := text[index]
+        if byte >= cast(u8)224 {
+            columns += 2
+        } else if byte < cast(u8)128 || byte >= cast(u8)192 {
+            columns += 1
+        }
+    }
+    per_line := width / Scale(8)
+    if per_line < 1 {
+        per_line = 1
+    }
+    lines := (columns + per_line - 1) / per_line
+    return lines * Scale(22)
+}
+
+// Active and pending collaborators, independent of this account's friends.
+SharingMemberShown :: (row: ListsUiPerson, list_id: string) -> bool {
+    return row.list_id == list_id && (row.status == "accepted" || row.status == "pending")
+}
+
+InvitationAvailable :: (friend: string, list_id: string, owner: string) -> bool {
+    if friend == frame.public_id || friend == owner {
+        return false
+    }
+    for index: cast(s32)0..frame.invitation_count - 1 {
+        if SharingMemberShown(ReadListsSharingRowHost(index, true), list_id) {
+            if ReadListsSharingRowHost(index, true).target == friend {
+                return false
+            }
+        }
+    }
+    return true
+}
+
+ResetInvite :: () {
+    invite_text = ""
+    invite_target[0] = cast(u8)0
+    invite_cursor = 0
+    invite_anchor = 0
+    invite_scroll = 0
+    invite_focused = false
+    invite_suggestions = false
+}
+
+invite_role_bounds: Rectangle;
+
+InviteFieldHeight :: (width: s32) -> s32 {
+    return ifx width < Scale(480) then Scale(96) else Scale(44)
+}
+
+MEMBER_ROW :: 56;
+
+// List settings opens with its name ready to change but no keyboard.
+OpenSettings :: (title: string) {
+    settings_open = true
+    row_menu_open = false
+    settings_scroll = 0
+    delete_confirm = false
+    invite_role = 1
+    ResetInvite()
+    BeginInput(-3, title)
+    frame.focused = false
+    frame.panel = 0
+}
+
+CloseSettings :: () {
+    settings_open = false
+    delete_confirm = false
+    ResetInvite()
+    state.editing_item = -1
+    state.reset_input = true
+    frame.focused = false
+}
+
+ListChipsResult :: struct {
+    height: s32
+    acted: bool
+}
+
+// A friend's profile picture, or this account's own; 0 when unknown.
+FriendIcon :: (id: string) -> s32 {
+    if id == frame.public_id {
+        return frame.profile_icon
+    }
+    for index: cast(s32)0..frame.friend_count - 1 {
+        friend := ReadListsSharingRowHost(index, false)
+        if friend.id == id {
+            return friend.profile_icon
+        }
+    }
+    return 0
+}
+
+NewPreviousBytes :: () -> [128]u8 {
+    result: [128]u8
+    return result
+}
+
+NewInviteRoleOptions :: () -> [3]Dropdown.Option {
+    result: [3]Dropdown.Option
+    return result
+}
+
+NewInviteSuggestions :: () -> [8]ContextMenu.ContextMenuItem {
+    result: [8]ContextMenu.ContextMenuItem
+    return result
+}
+
+NewNames :: () -> [8][128]u8 {
+    result: [8][128]u8
+    return result
+}
+
+NewTargets :: () -> [8][65]u8 {
+    result: [8][65]u8
+    return result
+}
+
+NewId :: () -> [65]u8 {
+    result: [65]u8
+    return result
+}
+
+NewAlias :: () -> [128]u8 {
+    result: [128]u8
+    return result
+}
+
+NewTarget :: () -> [65]u8 {
+    result: [65]u8
+    return result
+}
+
+NewAccessOptions :: () -> [4]Dropdown.Option {
+    result: [4]Dropdown.Option
+    return result
+}
+
+NewPriorityOptions :: () -> [27]Dropdown.Option {
+    result: [27]Dropdown.Option
+    return result
+}
+
+NewChipX :: () -> [33]s32 {
+    result: [33]s32
+    return result
+}
+
+NewChipRow :: () -> [33]s32 {
+    result: [33]s32
+    return result
+}
+
+NewChipWidth :: () -> [33]s32 {
+    result: [33]s32
+    return result
+}
+
+NewOpenOrder :: () -> [256]s32 {
+    result: [256]s32
+    return result
+}
+
+NewFinishedOrder :: () -> [256]s32 {
+    result: [256]s32
+    return result
+}
+
+ListsEditText :: (value: string, start: s32, end: s32, inserted: string) -> string {
+    edited: Vec(u8)
+    BuilderPrint(*edited, "%", value[:start])
+    BuilderPrint(*edited, "%", inserted)
+    BuilderPrint(*edited, "%", value[end:])
+    return BuilderFinish(edited)
+}
+
+ListPersonLabel :: (name: string, detail: string) -> string {
+    label: Vec(u8)
+    BuilderPrint(*label, "% (%)", name, detail)
+    return BuilderFinish(label)
+}
+
+ListInvitationSender :: (name: string) -> string {
+    label: Vec(u8)
+    BuilderPrint(*label, "%: %", ListsLocaleHost("elist_invitation_from"), name)
+    return BuilderFinish(label)
+}
+
+ListShareSummary :: struct {
+    names: [3]string
+    icons: [3]s32
+    count: s32
+    title: string
+    label: string
+}
+
+SharedListSummary :: (current: ListsUiRow) -> ListShareSummary {
+    summary: ListShareSummary
+    list_id := Copied(current.id)
+    owner_id := Copied(current.owner_id)
+    owner_name := Copied(ifx current.owner_alias.count > 0 then current.owner_alias else current.people)
+    owns := current.owner
+    summary.title = Copied(current.title)
+    invited_label := Copied(ListsLocaleHost("elist_invited"))
+    text: Vec(u8)
+    count: s32 = 0
+    if !owns {
+        BuilderPrint(*text, "%", owner_name)
+        summary.names[0] = owner_name
+        summary.icons[0] = FriendIcon(owner_id)
+        count = 1
+    }
+    // People who joined come first, then those still invited.
+    for pass: cast(s32)0..1 {
+        if !owns {
+            break
+        }
+        for index: cast(s32)0..frame.invitation_count - 1 {
+            row := ReadListsSharingRowHost(index, true)
+            if !SharingMemberShown(row, list_id) || (row.status == "pending") != (pass == 1) {
+                continue
+            }
+            icon := row.profile_icon
+            name := Copied(ifx row.target_alias.count > 0 then row.target_alias else
+                row.target[:ifx row.target.count > 8 then 8 else row.target.count])
+            if text.count > 0 {
+                BuilderPrint(*text, " · ")
+            }
+            if pass == 0 {
+                BuilderPrint(*text, "%", name)
+            } else {
+                BuilderPrint(*text, "% (%)", name, invited_label)
+            }
+            if count < 3 {
+                summary.names[count] = name
+                summary.icons[count] = icon
+            }
+            count += 1
+        }
+    }
+    summary.count = ifx count > 3 then 3 else count
+    if count > 0 {
+        summary.label = BuilderFinish(text)
+    }
+    return summary
+}
+
+ClearAccessControls :: () { VecClear(sharing_controls) }
+
+AddAccessControl :: (target: [65]u8, bounds: Rectangle, role: s32, disabled: bool) {
+    VecPush(sharing_controls, .{target = target, bounds = bounds, role = role, disabled = disabled})
+}
+
+SharingAccessControlCount :: () -> s32 { return cast(s32)sharing_controls.count }
+SharingAccessControlAt :: (index: s32) -> SharingAccessControl { return sharing_controls[index] }

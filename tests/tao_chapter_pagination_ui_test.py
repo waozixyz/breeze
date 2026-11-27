@@ -33,7 +33,7 @@ env = {key: value for key, value in os.environ.items() if key not in DESKTOP_ENV
 env.update(HARMONY_DESKTOP_RECOVERY="0", YUE_DESKTOP_RECOVERY="0", ZIRAN_DESKTOP_RECOVERY="0",
            SDL_VIDEODRIVER="x11", SDL_AUDIODRIVER="dummy", LIBGL_ALWAYS_SOFTWARE="1", APP_NO_TRAY="1",
            https_proxy="http://127.0.0.1:9", http_proxy="http://127.0.0.1:9", NO_PROXY="")
-source = (ROOT / "apps/library/tao_te_ching.zi").read_text()
+source = (ROOT / "apps/library/src/native/tao_te_ching.zi").read_text()
 titles = re.findall(r'^"([^"]+)",?$', source.split("TaoTeChingChapterTitle", 1)[0], re.M)
 
 
@@ -137,11 +137,13 @@ with contextlib.ExitStack() as stack:
                "window": window, "binary_sha256": digest(args.binary.resolve()),
                "package_sha256": digest(args.package.resolve()), "pages": [], "captures": {}}
     receipt["sources"] = {str(path.relative_to(ROOT)): digest(path) for path in
-                          [ROOT / "apps/library/library.zi", ROOT / "apps/library/books.zi",
-                           ROOT / "apps/library/tao_te_ching.zi"]}
+                          [ROOT / "apps/library/src/native/library.zi", ROOT / "apps/library/src/native/books.zi",
+                           ROOT / "apps/library/src/native/tao_te_ching.zi"]}
     if not args.capture_baseline:
         for name in ("library_model.zi", "library_ui.tsx"):
-            receipt["sources"]["apps/library/" + name] = digest(ROOT / "apps/library" / name)
+            folder = "ui" if name.endswith(".tsx") else "native"
+            source = ROOT / "apps/library/src" / folder / name
+            receipt["sources"][str(source.relative_to(ROOT))] = digest(source)
     if args.capture_baseline:
         for name in ("library.zi", "books.zi"):
             receipt["sources"]["apps/library/" + name] = digest(CAPTURES / name)

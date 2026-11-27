@@ -2,7 +2,7 @@
 """Lumi understands habit requests offline in every supported language.
 Each phrase maps to exactly these app tool calls, and near misses make none.
 
-The test builds a Ziran program around apps/lumi/habit_intent.zi with the
+The test builds a Ziran program around apps/lumi/src/native/habit_intent.zi with the
 translated templates from locales/*.txt, runs it without a display, and
 compares the calls it prints with the table below.
 """
@@ -199,8 +199,8 @@ def locale_values(language):
 
 
 def program(languages):
-    lines = ['#import, file "../../apps/lumi/habit_intent.zi";',
-             '#import, file "../../apps/lumi/habit_patterns.zi";',
+    lines = ['#import, file "../../apps/lumi/src/native/habit_intent.zi";',
+             '#import, file "../../apps/lumi/src/native/habit_patterns.zi";',
              '#import "text"', '#import "vec"', '']
     for language in languages:
         values = locale_values(language)

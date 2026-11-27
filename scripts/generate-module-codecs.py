@@ -9,7 +9,7 @@ schema = {}
 record_names = {}
 for file in [
     *sorted((root / "src/apps").glob("*_types.zi")),
-    root / "apps/diary/diary_types.zi",
+    root / "apps/diary/src/native/diary_types.zi",
     root / "src/core/types.zi",
     root / "src/practices/patterns/patterns_types.zi",
     root / "src/practices/sun_salutation/sun_salutation_rules.zi",
@@ -53,7 +53,7 @@ lines = [
     "// Generated from protocol records by scripts/generate-module-codecs.py.",
     "// No native application pointers cross the portable module boundary.",
     *[
-        f'#import, file "../../apps/diary/{name}_types.zi";' if name == "diary" else f'#import, file "{name}_types.zi";'
+        f'#import, file "../../apps/diary/src/native/{name}_types.zi";' if name == "diary" else f'#import, file "{name}_types.zi";'
         for name in ["module", "lists", "habits", "practice", "inbe", "diary", "lumi", "leaderboard"]
     ],
     '#import "bundle_host"',

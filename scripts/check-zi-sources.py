@@ -13,7 +13,7 @@ root = Path(__file__).resolve().parent.parent
 compiler = Path(sys.argv[1]).resolve()
 sources = sorted(path for path in (root / "src").rglob("*")
                  if path.suffix in {".zi", ".ts", ".tsx"})
-sources.append(root / "apps/practice/hold_reminder.zi")
+sources.append(root / "apps/practice/src/native/hold_reminder.zi")
 legacy = sorted((root / "src").rglob("*.kry"))
 
 if legacy:

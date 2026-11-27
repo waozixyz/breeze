@@ -35,7 +35,7 @@ imports = ['apps/shared_state', 'apps/module_host', 'apps/practice_types',
            'practices/meditation/meditation_timing']
 header = ''.join('#import, file "' + os.path.relpath(root / 'src' / (name + '.zi'), work) + '";\n'
                  for name in imports)
-header += '#import, file "' + os.path.relpath(root / 'apps/practice/recovery.zi', work) + '";\n'
+header += '#import, file "' + os.path.relpath(root / 'apps/practice/src/native/recovery.zi', work) + '";\n'
 header += '''#import "byte_text_linux"
 c3 :: #system_library "c";
 using ExerciseType;

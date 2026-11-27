@@ -40,7 +40,7 @@ for code in ('en', 'es'):
     bundle = work / (code + '.zx')
     subprocess.run([str(compiler), 'bundle', '--root', str(ROOT), '--entry', 'content:Main',
         '--asset-dir', 'assets=' + str(assets), '-o', str(bundle),
-        str(ROOT / 'apps/practice/content.zi')], check=True)
+        str(ROOT / 'apps/practice/src/native/content.zi')], check=True)
     data = bundle.read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     (fixtures / (digest + '.zx')).write_bytes(data)
@@ -54,7 +54,7 @@ voice.mkdir(parents=True)
 bundle = work / 'en-male.zx'
 subprocess.run([str(compiler), 'bundle', '--project', '--offline', '--root', str(ROOT), '--entry', 'content:Main',
     '--asset-dir', 'assets=' + str(assets), '-o', str(bundle),
-    str(ROOT / 'apps/practice/content.zi')], check=True)
+    str(ROOT / 'apps/practice/src/native/content.zi')], check=True)
 data = bundle.read_bytes()
 digest = hashlib.sha256(data).hexdigest()
 (fixtures / (digest + '.zx')).write_bytes(data)
@@ -68,7 +68,7 @@ voice.mkdir(parents=True)
 bundle = work / 'guide-en.zx'
 subprocess.run([str(compiler), 'bundle', '--root', str(ROOT), '--entry', 'content:Main',
     '--asset-dir', 'assets=' + str(assets), '-o', str(bundle),
-    str(ROOT / 'apps/practice/content.zi')], check=True)
+    str(ROOT / 'apps/practice/src/native/content.zi')], check=True)
 data = bundle.read_bytes()
 digest = hashlib.sha256(data).hexdigest()
 (fixtures / (digest + '.zx')).write_bytes(data)

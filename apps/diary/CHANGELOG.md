@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Organize app sources under `src/` with a clear `main.zi` program entry.
+
 - Rebuild the calendar, entry editor and photo gallery with Kryon’s TSX components.
 
 - Show synced edits for the open day as they arrive and preserve text still being edited.

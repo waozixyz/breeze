@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Organize app sources under `src/` with a clear `main.zi` program entry.
+
 - Port the radio cabinet view to the authored TSX rendering, split into
   radio_model (state, audio and saved preferences) and radio_view; no
   user-visible change.

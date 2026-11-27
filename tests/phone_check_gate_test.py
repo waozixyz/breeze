@@ -152,7 +152,7 @@ class PhoneCheckGateTest(unittest.TestCase):
         self.record()
         for name in ("src/main.zi", "ziran.lock", "droid/app/build.gradle", "Makefile", "mk/sync.mk",
                      "scripts/build-apps.sh", "scripts/new-generator.py", "assets/app/icon.png",
-                     "locales/pt.txt", "apps/diary/diary.zi", "design/tai-chi/text/en.txt"):
+                     "locales/pt.txt", "apps/diary/src/native/diary.zi", "design/tai-chi/text/en.txt"):
             with self.subTest(path=name):
                 self.commit({name: "changed " + name + "\n"})
                 with self.assertRaisesRegex(ValueError, "changed after its phone check"):

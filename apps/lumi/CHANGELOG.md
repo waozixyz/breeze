@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Organize app sources under `src/` with a clear `main.zi` program entry.
+
 - Rebuild the chat, command menu and agreement views with Kryon’s TSX components.
 
 - Answer simple conversation locally without spending AI tokens; notify about replies you have not seen.

@@ -10,7 +10,7 @@ cd "$root"
 # shellcheck disable=SC2086
 "$ziran" bundle --project --offline ${PACKAGE_FLAGS:-} --root "$root" \
     --define KRYON_HOSTED_UI \
-    --entry radio:Main -o "$work/radio.zx" "$root/apps/radio/radio.zi"
+    --entry main:main -o "$work/radio.zx" "$root/apps/radio/src/main.zi"
 library=${ZIRAN_LIB:-"$(dirname "$ziran")/../libziran.a"}
 "${CC:-cc}" -std=c11 -O1 -g -fsanitize=address,undefined \
     -I"$(dirname "$standard")/include" "$root/tests/radio_app_test.c" \

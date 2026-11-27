@@ -1,0 +1,294 @@
+// A small offline engine. UI and host effects do not depend on its internals;
+// an on-device model can later produce the same typed LumiAction values.
+#import "utf8"
+#import, file "command_text.zi";
+#import, file "regex.zi";
+#import, file "../../../../src/apps/lumi_types.zi";
+#import, file "../../../../src/app/route_types.zi";
+
+using AppNavRoute;
+
+LumiTrim :: (value: string) -> string {
+    start: s64 = 0
+    end := value.count
+    while start < end && CommandSpace(value[start]) {
+        start += 1
+    }
+    while end > start && CommandSpace(value[end - 1]) {
+        end -= 1
+    }
+    return value[start:end]
+}
+
+LumiStarts :: (value: string, prefix: string) -> bool {
+    a: s32 = 0
+    b: s32 = 0
+    while b < prefix.count {
+        if a >= value.count { return false }
+        x := Decode(value, a)
+        y := Decode(prefix, b)
+        if CommandFold(x.value) != CommandFold(y.value) { return false }
+        a = x.after
+        b = y.after
+    }
+    return true
+}
+
+LumiEqual :: (left: string, right: string) -> bool {
+    return CommandEqual(left, right)
+}
+
+LumiSuggests :: (candidate: string, typed: string) -> bool {
+    a: s32 = 0
+    b: s32 = 0
+    while b < typed.count {
+        while a < candidate.count && CommandSpace(candidate[a]) { a += 1 }
+        while b < typed.count && CommandSpace(typed[b]) { b += 1 }
+        if b >= typed.count { return true }
+        start_a := a
+        start_b := b
+        while a < candidate.count && !CommandSpace(candidate[a]) { a += 1 }
+        while b < typed.count && !CommandSpace(typed[b]) { b += 1 }
+        word := typed[start_b:b]
+        option := candidate[start_a:a]
+        if b == typed.count && LumiStarts(option, word) { return true }
+        if !CommandTypo(word, option) { return false }
+    }
+    return true
+}
+
+LumiArgument :: (input: string, command: string) -> string {
+    end := CommandPrefixEnd(input, command)
+    if command.count == 0 || end < 0 || end >= input.count || !CommandSpace(input[end]) {
+        return ""
+    }
+    return LumiTrim(input[end:])
+}
+
+LumiProgressIntent :: (input: string, commands: LumiCommands) -> LumiAction {
+    prefixes: [2]string = .[commands.progress, "/progress"]
+    for prefix: prefixes {
+        if prefix.count == 0 {
+            continue
+        }
+        if LumiEqual(input, prefix) {
+            return LumiAction.{.kind = LUMI_SHOW_PROGRESS, .practice = LUMI_PROGRESS_SESSIONS, .route = 7}
+        }
+        argument := LumiArgument(input, prefix)
+        if argument.count == 0 {
+            continue
+        }
+        boundary: s64 = 0
+        while boundary < argument.count && !CommandSpace(argument[boundary]) {
+            boundary += 1
+        }
+        metrics: [4]string = .["sessions", "meditation", "retention", "habits"]
+        for metric: cast(s32)0..cast(s32)3 {
+            if !LumiEqual(argument[:boundary], metrics[metric]) {
+                continue
+            }
+            days_text := LumiTrim(argument[boundary:])
+            days: s32 = 7
+            if days_text.count > 0 {
+                if days_text.count > 2 {
+                    return LumiAction.{}
+                }
+                days = 0
+                for byte: days_text {
+                    if byte < cast(u8)48 || byte > cast(u8)57 {
+                        return LumiAction.{}
+                    }
+                    days = days * 10 + cast(s32)(byte - cast(u8)48)
+                }
+            }
+            if days >= 1 && days <= LUMI_PROGRESS_MAX_DAYS {
+                return LumiAction.{.kind = LUMI_SHOW_PROGRESS, .practice = metric, .route = days}
+            }
+        }
+    }
+    aliases: [4]string = .["show my progress", "show progress", "show progress chart", "progress chart"]
+    for alias: aliases {
+        if CommandPhrase(input, alias) {
+            return LumiAction.{.kind = LUMI_SHOW_PROGRESS, .practice = LUMI_PROGRESS_SESSIONS, .route = 7}
+        }
+    }
+    return LumiAction.{}
+}
+
+LumiIntent :: (input: string, commands: LumiCommands) -> LumiAction {
+    return LumiIntentWith(input, commands, true)
+}
+
+// Without shorthand, "add" and "done" alone are left for habit requests
+// such as "add a habit ...", which Lumi reads before them.
+LumiIntentWith :: (input: string, commands: LumiCommands, shorthand: bool) -> LumiAction {
+    input = LumiTrim(input)
+    progress := LumiProgressIntent(input, commands)
+    if progress.kind != 0 {
+        return progress
+    }
+    // Explicit reports remain usable without a network or a model allowance.
+    feedback_prefixes: [24]string = .["/feedback ", "feedback:", "feedback ", "fix ", "please fix ",
+    "/suggest ", "suggestion:", "suggestion ", "feature request:", "feature request ",
+    "app idea:", "improve the app ", "the app should ", "this app should ", "inbe should ",
+    "inner breeze should ", "lumi should ", "i wish the app ", "i suggest ",
+    "bug:", "bug report:", "there is a bug ", "there's a bug ", "i found a bug "]
+    for prefix: feedback_prefixes {
+        if LumiStarts(input, prefix) && input.count > prefix.count {
+            return LumiAction.{.kind = LUMI_REPORT_FEEDBACK, .title = input}
+        }
+    }
+    diary_prefixes: [7]string = .[commands.write_diary, "write this to my diary",
+    "write to my diary", "add to my diary", "save to my diary", "/journal", "/diary"]
+    boundary: s32 = 0
+    while boundary < input.count && input[boundary] != cast(u8)58 && input[boundary] != cast(u8)10 {
+        boundary += 1
+    }
+    for prefix: diary_prefixes {
+        if prefix.count == 0 || (prefix == "/diary" && LumiEqual(input, prefix)) {
+            continue
+        }
+        if boundary < input.count && CommandPhrase(LumiTrim(input[:boundary]), prefix) {
+            return LumiAction.{.kind = LUMI_WRITE_DIARY, .title = LumiTrim(input[boundary + 1:])}
+        }
+        end := CommandPrefixEnd(input, prefix)
+        if end >= 0 && (end == input.count || CommandSpace(input[end])) {
+            return LumiAction.{.kind = LUMI_WRITE_DIARY, .title = LumiTrim(input[end:])}
+        }
+    }
+    if LumiEqual(input, commands.settings) || LumiEqual(input, "/settings") ||
+    CommandPhrase(input, "open settings") {
+        return LumiAction.{.kind = LUMI_OPEN, .route = APP_NAV_ROUTE_SETTINGS}
+    }
+    if LumiEqual(input, commands.appearance) || LumiEqual(input, "/appearance") ||
+    CommandPhrase(input, "open appearance") {
+        return LumiAction.{.kind = LUMI_OPEN, .route = APP_NAV_ROUTE_SETTINGS, .practice = 1}
+    }
+    modes: [3]string = .[commands.system, commands.light, commands.dark]
+    mode_aliases: [3]string = .["system mode", "light mode", "dark mode"]
+    mode_commands: [3]string = .["/system", "/light", "/dark"]
+    for index: cast(s32)0..cast(s32)2 {
+        if LumiEqual(input, modes[index]) || LumiEqual(input, mode_commands[index]) ||
+        CommandPhrase(input, mode_aliases[index]) {
+            return LumiAction.{.kind = LUMI_SET_MODE, .route = index}
+        }
+    }
+    theme := LumiArgument(input, commands.theme)
+    if theme.count == 0 {
+        theme = LumiArgument(input, "/theme")
+    }
+    if theme.count == 0 {
+        theme = LumiArgument(input, "theme")
+    }
+    if theme.count > 0 {
+        return LumiAction.{.kind = LUMI_SET_THEME, .title = theme}
+    }
+    starts: [5]string = .[commands.start_whm, commands.start_meditation,
+    commands.start_sun, commands.start_patterns, commands.start_taichi]
+    for index: cast(s32)0..cast(s32)4 {
+        if starts[index].count > 0 && CommandPhrase(input, starts[index]) {
+            return LumiAction.{.kind = LUMI_START_PRACTICE, .practice = index}
+        }
+    }
+    first_word_end: s32 = 0
+    while first_word_end < input.count && !CommandSpace(input[first_word_end]) {
+        first_word_end += 1
+    }
+    // All practice expressions start with the corrected word "start". Free
+    // text needs neither a normalized copy nor seven regex evaluations.
+    if CommandTypo(input[:first_word_end], "start") {
+        normalized := CommandNormalize(input)
+        practice_patterns: [8]string = .["^start\\s+whm[.!?]*$", "^start\\s+wim\\s+hof$",
+        "^start\\s+wim\\s+hof\\s+method$", "^start\\s+meditation[.!?]*$",
+        "^start\\s+sun\\s+salutations?[.!?]*$", "^start\\s+breathing\\s+patterns[.!?]*$",
+        "^start\\s+patterns[.!?]*$", "^start\\s+tai\\s*chi[.!?]*$"]
+        ids: [8]s32 = .[0, 0, 0, 1, 2, 3, 3, 4]
+        for index: cast(s32)0..cast(s32)7 {
+            if RegexMatch(practice_patterns[index], normalized) {
+                return LumiAction.{.kind = LUMI_START_PRACTICE, .practice = ids[index]}
+            }
+        }
+    }
+    practice_aliases: [11]string = .["start whm", "start wim hof", "start wim hof method",
+    "/whm", "start meditation", "start sun salutation", "start sun salutations",
+    "start breathing patterns", "start patterns", "/meditate", "start tai chi"]
+    practice_ids: [11]s32 = .[0, 0, 0, 0, 1, 2, 2, 3, 3, 1, 4]
+    for index: cast(s32)0..cast(s32)10 {
+        if LumiEqual(input, practice_aliases[index]) {
+            return LumiAction.{.kind = LUMI_START_PRACTICE, .practice = practice_ids[index]}
+        }
+    }
+    habit_prefixes: [5]string = .[commands.complete_habit, "/habit", "complete habit",
+    "done habit", "mark habit complete"]
+    for prefix: habit_prefixes {
+        if CommandPhrase(input, prefix) {
+            return LumiAction.{.kind = LUMI_COMPLETE_HABIT}
+        }
+        title := LumiArgument(input, prefix)
+        if title.count > 0 {
+            return LumiAction.{.kind = LUMI_COMPLETE_HABIT, .title = title}
+        }
+    }
+    routes: [4]s32 = .[APP_NAV_ROUTE_ELIST, APP_NAV_ROUTE_HABITS,
+    APP_NAV_ROUTE_PRACTICE, APP_NAV_ROUTE_DIARY]
+    labels: [4]string = .[commands.lists, commands.habits, commands.practices, commands.diary]
+    aliases: [4]string = .["/lists", "/habits", "/practices", "/diary"]
+    for index: cast(s32)0..cast(s32)3 {
+        if CommandPhrase(input, labels[index]) || LumiEqual(input, aliases[index]) {
+            return LumiAction.{.kind = LUMI_OPEN, .route = routes[index]}
+        }
+    }
+    prefixes: [9]string = .[commands.add, "/todo", "add todo", commands.complete,
+    "/done", "complete todo", commands.reopen, "/reopen", "reopen todo"]
+    for index: cast(s32)0..cast(s32)8 {
+        title := LumiArgument(input, prefixes[index])
+        if title.count > 0 {
+            kind: s32 = ifx index < 3 then LUMI_ADD_TODO else ifx index < 6 then LUMI_COMPLETE_TODO else LUMI_REOPEN_TODO
+            return LumiAction.{.kind = kind, .title = title}
+        }
+    }
+    // Common English shorthand remains available beside translated commands.
+    if !shorthand {
+        return LumiAction.{}
+    }
+    add := LumiArgument(input, "add")
+    if add.count > 0 {
+        return LumiAction.{.kind = LUMI_ADD_TODO, .title = add}
+    }
+    done := LumiArgument(input, "done")
+    if done.count > 0 {
+        return LumiAction.{.kind = LUMI_COMPLETE_TODO, .title = done}
+    }
+    return LumiAction.{}
+}
+
+// Both the conversation and autocomplete use the same installed tool policy.
+LumiActionAvailable :: (action: LumiAction, available_apps: s32) -> bool {
+    if action.kind == LUMI_REPORT_FEEDBACK || action.kind == LUMI_SET_THEME || action.kind == LUMI_SET_MODE ||
+    (action.kind == LUMI_OPEN && action.route == APP_NAV_ROUTE_SETTINGS) {
+        return true
+    }
+    bit: s32 = 0
+    if action.kind == LUMI_SHOW_PROGRESS {
+        bit = ifx action.practice == LUMI_PROGRESS_HABITS then LUMI_HABITS else LUMI_PRACTICES
+    } else if action.kind == LUMI_ADD_TODO || action.kind == LUMI_COMPLETE_TODO || action.kind == LUMI_REOPEN_TODO {
+        bit = LUMI_LISTS
+    } else if action.kind == LUMI_WRITE_DIARY {
+        bit = LUMI_DIARY
+    } else if action.kind == LUMI_COMPLETE_HABIT {
+        bit = LUMI_HABITS
+    } else if action.kind == LUMI_START_PRACTICE {
+        bit = LUMI_PRACTICES
+    } else if action.kind == LUMI_OPEN {
+        if action.route == APP_NAV_ROUTE_ELIST {
+            bit = LUMI_LISTS
+        } else if action.route == APP_NAV_ROUTE_HABITS {
+            bit = LUMI_HABITS
+        } else if action.route == APP_NAV_ROUTE_PRACTICE {
+            bit = LUMI_PRACTICES
+        } else if action.route == APP_NAV_ROUTE_DIARY {
+            bit = LUMI_DIARY
+        }
+    }
+    return bit != 0 && (available_apps & bit) != 0
+}

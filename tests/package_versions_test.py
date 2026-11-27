@@ -123,7 +123,7 @@ class PackageVersionsTest(unittest.TestCase):
                     included = not excluded
             return included
 
-        for path in ("apps/diary/diary_view.zi", "assets/practices/breath.png",
+        for path in ("apps/diary/src/native/diary_view.zi", "assets/practices/breath.png",
                      "locales/en.txt", "themes/catalog_dark.css",
                      "scripts/prepare-package-assets.py", "src/apps/versions.zi"):
             with self.subTest(path=path):

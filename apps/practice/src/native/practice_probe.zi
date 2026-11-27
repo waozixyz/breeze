@@ -1,0 +1,147 @@
+#import "practice_screen_ui"
+// Practice component probes live with the Practices screen implementation.
+#import, file "../../../../src/platform/host_window.zi";
+#import, file "../../../../src/platform/host_frame.zi";
+#import, file "../../../../src/platform/app_host.zi";
+#import, file "../../../../src/app/app_types.zi";
+#import, file "../../../../src/app/exercise_types.zi";
+#import, file "../../../../src/app/route_types.zi";
+#import, file "../../../../src/app/app_nav_state.zi";
+#import, file "../../../../src/core/types.zi";
+#import, file "../../../../src/app/current_app.zi";
+#import, file "../../../../src/app/text_buffers.zi";
+#import, file "../../../../src/screens/practice_screen.zi";
+#import, file "../../../../src/widgets/bottom_nav.zi";
+#import "session"
+#import "kryon/tree"
+Layout :: #import "kryon/layout";
+#import "tree_draw"
+#import "geometry"
+#import "drawing_props"
+#import, file "../../../../src/platform/app_trace.zi";
+#if #defined(PLATFORM_WEB) {
+    using CanvasHost :: #import "canvas_host";
+} else {
+    #if #defined(DESKTOP_HOST) {
+        Cairo :: #import "Cairo";
+    }
+}
+using ExerciseType;
+using AppMainTab;
+using NavigationPlacement;
+LOG_INFO :: 3
+
+practice_probe_frame_count: s32;
+practice_probe_app: *InnerBreeze;
+practice_probe_mode: s32;
+practice_probe_size: WindowSize;
+
+PracticeProbeMode :: (argc: s32, argv: **u8) -> s32 {
+    if argc < 2 {
+        return 0
+    }
+    argument := AppTextFromCString(argv[1], 32)
+    if argument == "--practice-banner" {
+        return 1
+    }
+    if argument == "--practice-hero" {
+        return 2
+    }
+    if argument == "--practice-screen" {
+        return 3
+    }
+    if argument == "--practice-nav" {
+        return 4
+    }
+    return 0
+}
+
+// One probe frame's widgets: the component the mode names.
+PracticeProbeDraw :: (app: *InnerBreeze, mode: s32, size: WindowSize, first_probe_frame: bool) {
+    FrameTextReset(*app.ui.frame_text)
+    bounds := Rectangle.{0.0, 0.0,
+        cast(float32)size.width, cast(float32)size.height}
+    if cast(s32)BeginFrame(app.ui.session, Layout.KeyHash("practice/probe"),
+        bounds) == 0 {
+        if mode == 4 {
+            if first_probe_frame {
+                TraceLog(LOG_INFO, "APP PROBE: before navigation bar")
+            }
+            unused app_draw_bottom_nav(app)
+            if first_probe_frame {
+                TraceLog(LOG_INFO, "APP PROBE: after navigation bar")
+            }
+        } else if mode == 1 {
+            practice_draw_card_banner(
+                "assets/practices/meditation/banner-dark.png",
+                Rectangle.{0.0, 0.0,
+                    cast(float32)size.width, 360.0})
+        } else if mode == 2 {
+            unused practice_screen_draw_home_hero(app)
+        } else {
+            practice_screen_draw_home(app)
+        }
+        if first_probe_frame {
+            TraceLog(LOG_INFO, "APP PROBE: before EndFrame")
+        }
+        unused EndFrame(app.ui.session)
+        if first_probe_frame {
+            TraceLog(LOG_INFO, "APP PROBE: after EndFrame")
+        }
+    }
+}
+
+#if #defined(DESKTOP_HOST) {
+    // The desktop host polls, rasterizes and presents around this.
+    #program_export
+    practice_probe_frame :: (argument: *void) {
+        unused argument
+        first_probe_frame := practice_probe_frame_count == 0
+        practice_probe_frame_count += 1
+        PracticeProbeDraw(practice_probe_app, practice_probe_mode, practice_probe_size,
+            first_probe_frame)
+    }
+}
+
+RunPracticeProbe :: (app: *InnerBreeze, mode: s32, size: WindowSize) -> s32 {
+    app.ui.session = SessionOpen()
+    if !SessionValid(app.ui.session) {
+        HostCloseWindow()
+        return 1
+    }
+    app.ui.view_width = size.width
+    app.ui.view_height = size.height
+    app.ui.navigation_height = size.height
+    app.camera.zoom = 1.0
+    app.exercise_type = EXERCISE_MEDITATION
+    app.main_tab = APP_MAIN_TAB_PRACTICE
+    app.practice_tab = PRACTICE_TAB_PLAY
+    app.breathing.screen = ScreenStart
+    if mode == 4 {
+        app.navigation_placement = NAVIGATION_BOTTOM
+        app_reset_bottom_nav_routes(app)
+    }
+    SetCurrentApp(app)
+    #if #defined(DESKTOP_HOST) {
+        practice_probe_app = app
+        practice_probe_mode = mode
+        practice_probe_size = size
+        while !HostWindowClosing() && !HostTakeCloseRequest() {
+            first_probe_frame := practice_probe_frame_count == 0
+            if !HostRunFrame(practice_probe_frame, null) {
+                break
+            }
+            if mode == 4 && first_probe_frame && Cairo.CaptureRequested() {
+                unused Cairo.CaptureConfigured()
+            }
+        }
+    } else {
+        // Startup tools run from a desktop command line, never on Android
+        // or in a page.
+        SetCurrentApp(null)
+        return 1
+    }
+    SetCurrentApp(null)
+    HostCloseWindow()
+    return 0
+}

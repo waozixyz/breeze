@@ -26,7 +26,7 @@ BINARY = sys.argv[1]
 ROOT = Path(__file__).resolve().parents[1]
 TEST_DIR = ROOT / "build/habit-day-ui-test"
 TEST_DIR.mkdir(parents=True, exist_ok=True)
-# The buttons' keys, fixed by apps/habits/habit_day_view.zi.
+# The buttons' keys, fixed by apps/habits/src/native/habit_day_view.zi.
 DELETE_ENTRY, SAVE_ENTRY, DONE, SKIP = 5730001, 5730002, 5730003, 5730004
 EDIT_FIRST, DELETE_FIRST, END_SPAN, ADD_ENTRY = 5740000, 5740001, 5739990, 5739991
 ROUND_EDIT = 5760000

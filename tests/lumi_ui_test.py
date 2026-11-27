@@ -28,7 +28,7 @@ assert int(os.environ["DISPLAY"].split(":")[-1].split(".")[0]) >= 300
 ENV = os.environ.copy()
 # Made when the first app starts, in the OUTPUT of the test that runs it.
 driver = None
-# Lumi's command list and chart bars, from apps/lumi/lumi_view.zi.
+# Lumi's command list and chart bars, from apps/lumi/src/native/lumi_view.zi.
 COMMAND_LIST_KEY = 360001
 TYPING_LABEL_KEY = 300382
 CHART_BAR_KEYS = range(310000, 330000)

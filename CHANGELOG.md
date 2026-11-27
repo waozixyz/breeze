@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Author Breeze and module screens in Kryon TSX, keeping native state and platform effects.
+- Author Breeze and module screens in Kryon TSX, keeping native state and platform effects; app sources now have clear program, UI and native folders.
 - Remove Arcade from the app choices.
 
 - Keep uploaded practice downloads readable by the node when installing Android development builds.

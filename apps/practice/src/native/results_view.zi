@@ -1,0 +1,390 @@
+#import "results_view_ui"
+// A finished practice's results: its name over a soft glow, Wim Hof's
+// rounds with the best and average hold and a chart of every round, or the
+// time, pattern and cycles of the other practices, whether the session was
+// saved, the habit a practice's first session offers, a mood to pick, and
+// Discard and Done. The host keeps the session's results, saves the mood
+// and adds the habit.
+#import "session"
+#import "geometry"
+#import "vec"
+#import "dpi"
+Box :: #import "kryon/box";
+Button :: #import "kryon/button";
+Layout :: #import "kryon/layout";
+Scroll :: #import "kryon/scroll";
+Shape :: #import "kryon/shape";
+Text :: #import "kryon/text";
+#import "drawing_props"
+#import "text_align"
+#import "text_measure"
+#import "control_props"
+#import "kryon/tree"
+#import, file "../../../../src/apps/practice_ui_types.zi";
+#import, file "../../../../src/apps/practice_types.zi";
+#import, file "../../../../src/app/exercise_types.zi";
+
+using ButtonTone;
+using ButtonEmphasis;
+using ExerciseType;
+using TextAlign;
+using Text.Wrap;
+host_api :: #system_library "host_api";
+ReadPracticeResultsHost :: () -> PracticeResultsFrame #foreign host_api;
+WritePracticeResultsHost :: (frame: PracticeResultsFrame) #foreign host_api;
+ReadPracticeResultRoundHost :: (index: s32) -> PracticeResultRound #foreign host_api;
+ResultsLocaleHost :: (key: string) -> string #foreign host_api;
+results: PracticeResultsFrame;
+
+RESULTS_MOODS :: 5
+RESULTS_ROUND_MAX :: 64
+results_rounds: [RESULTS_ROUND_MAX]s32;
+
+Scale :: (pixels: s32) -> s32 {
+    return ScalePixels(pixels, results.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+Locale :: (key: string) -> string {
+    return ResultsLocaleHost(key)
+}
+
+Width :: (text: string, font: s32) -> s32 {
+    return TextWidth(results.session, Text.Props.{.text = text, .size = font})
+}
+
+FitFont :: (text: string, max_width: s32, preferred: s32, minimum: s32) -> s32 {
+    font := preferred
+    if max_width <= 0 {
+        return font
+    }
+    while font > minimum && Width(text, font) > max_width {
+        font -= 1
+    }
+    return font
+}
+
+Alpha :: (color: Color, opacity: float32) -> Color {
+    color.a = cast(u8)(cast(float32)color.a * opacity)
+    return color
+}
+
+Padded :: (out: *Vec(u8), value: s32) {
+    if value < 10 {
+        BuilderPrint(out, "0")
+    }
+    BuilderPrint(out, "%", value)
+}
+
+// The template with each %d replaced by the next number, %s by the text and
+// %% by a percent.
+Filled :: (template: string, first: s32, second: s32, text: string) -> string {
+    out: Vec(u8)
+    values: [2]s32 = .[first, second]
+    used: s32 = 0
+    at: s64 = 0
+    while at < template.count {
+        if at + 1 < template.count && template[at] == cast(u8)37 {
+            next := template[at + 1]
+            if next == cast(u8)100 && used < 2 {
+                BuilderPrint(*out, "%", values[used])
+                used += 1
+                at += 2
+                continue
+            }
+            if next == cast(u8)115 {
+                BuilderPrint(*out, "%", text)
+                at += 2
+                continue
+            }
+            if next == cast(u8)37 {
+                BuilderPrint(*out, "%%")
+                at += 2
+                continue
+            }
+        }
+        BuilderPrint(*out, "%", template[at:at + 1])
+        at += 1
+    }
+    return BuilderFinish(out)
+}
+
+Number :: (key: string, value: s32) -> string {
+    return Filled(Locale(key), value, 0, "")
+}
+
+// "1h 05m", "4m 02s" or "35s".
+Duration :: (seconds: s32) -> string {
+    if seconds < 0 {
+        seconds = 0
+    }
+    out: Vec(u8)
+    if seconds >= 3600 {
+        BuilderPrint(*out, "%h ", seconds / 3600)
+        Padded(*out, (seconds % 3600) / 60)
+        BuilderPrint(*out, "m")
+    } else if seconds >= 60 {
+        BuilderPrint(*out, "%m ", seconds / 60)
+        Padded(*out, seconds % 60)
+        BuilderPrint(*out, "s")
+    } else {
+        BuilderPrint(*out, "%", seconds)
+        BuilderPrint(*out, "s")
+    }
+    return BuilderFinish(out)
+}
+
+
+
+// The corner radius that rounds off `roundness` of a box's shorter side.
+Corner :: (roundness: float32, width: s32, height: s32) -> float32 {
+    shorter := ifx height < width then height else width
+    return roundness * cast(float32)shorter * 0.5
+}
+
+
+
+// A deep blue on light themes and a soft violet on dark ones.
+Accent :: () -> Color {
+    background := results.canvas_color
+    luma := cast(s32)background.r * 299 + cast(s32)background.g * 587 + cast(s32)background.b * 114
+    if luma >= 128000 {
+        return Color.{.r = 82, .g = 119, .b = 193, .a = 255}
+    }
+    return Color.{.r = 190, .g = 163, .b = 250, .a = 255}
+}
+
+Rounds :: () {
+    count := results.round_count
+    if count > RESULTS_ROUND_MAX {
+        count = RESULTS_ROUND_MAX
+        results.round_count = count
+    }
+    for index: cast(s32)0..count - 1 {
+        results_rounds[index] = ReadPracticeResultRoundHost(index).seconds
+    }
+}
+
+// The best and the average hold.
+RoundStats :: (best: *s32, average: *s32) {
+    total: s32 = 0
+    best.* = 0
+    average.* = 0
+    for index: cast(s32)0..results.round_count - 1 {
+        seconds := results_rounds[index]
+        if seconds < 0 {
+            seconds = 0
+        }
+        total += seconds
+        if seconds > best.* {
+            best.* = seconds
+        }
+    }
+    if results.round_count > 0 {
+        average.* = total / results.round_count
+    }
+}
+
+// ---- Moods -----------------------------------------------------------------------------
+
+// Soft hues from red at 1 to teal at 5, in step with the app's palette.
+MoodColor :: (mood: s32) -> Color {
+    if mood <= 1 { return Color.{.r = 214, .g = 104, .b = 100, .a = 255} }
+    if mood == 2 { return Color.{.r = 226, .g = 152, .b = 92, .a = 255} }
+    if mood == 3 { return Color.{.r = 230, .g = 200, .b = 98, .a = 255} }
+    if mood == 4 { return Color.{.r = 128, .g = 196, .b = 120, .a = 255} }
+    return Color.{.r = 88, .g = 184, .b = 182, .a = 255}
+}
+
+// Half-way to grey and mostly see-through, for the faces that were not picked.
+MoodMuted :: (color: Color) -> Color {
+    grey := (cast(s32)color.r + cast(s32)color.g + cast(s32)color.b) / 3
+    color.r = cast(u8)((cast(s32)color.r + grey) / 2)
+    color.g = cast(u8)((cast(s32)color.g + grey) / 2)
+    color.b = cast(u8)((cast(s32)color.b + grey) / 2)
+    return Alpha(color, 0.55)
+}
+
+MoodPoint :: (x: float32, y: float32) -> Vector2 {
+    return Vector2.{x, y}
+}
+
+// A round face from frowning red at 1 to grinning teal at 5. Once a mood is
+// picked the others fade; the picked one gets an accent ring.
+
+
+MOOD_CARD_HEIGHT :: 132
+
+MoodLabelKey :: (mood: s32) -> string {
+    if mood <= 1 { return "results_mood_1" }
+    if mood == 2 { return "results_mood_2" }
+    if mood == 3 { return "results_mood_3" }
+    if mood == 4 { return "results_mood_4" }
+    return "results_mood_5"
+}
+
+
+
+// ---- Wim Hof's rounds -------------------------------------------------------------------
+
+
+
+ChartHeight :: () -> s32 {
+    return ifx results.round_count <= 1 then Scale(165) else Scale(220)
+}
+
+ChartX :: (index: s32, chart_x: s32, chart_width: s32) -> s32 {
+    if results.round_count > 1 {
+        return chart_x + index * chart_width / (results.round_count - 1)
+    }
+    return chart_x + chart_width / 2
+}
+
+ChartY :: (index: s32, baseline: s32, chart_height: s32, top: s32) -> s32 {
+    value := results_rounds[index]
+    if value < 0 {
+        value = 0
+    }
+    return baseline - value * chart_height / top
+}
+
+// Each round's hold as a point on a line, with guides and labels; a single
+// round shows its hold large in a glowing ring.
+
+
+
+
+// ---- The other practices ---------------------------------------------------------------
+
+OtherCount :: () -> s32 {
+    if results.activity == EXERCISE_PATTERNS {
+        return 1 + (ifx results.detail.count > 0 then 1 else 0) + (ifx results.secondary > 0 then 1 else 0)
+    }
+    return 1
+}
+
+
+
+// Saved, not saved, or failed to save.
+
+
+// The practice's first session, with no habit for it yet, asks whether to
+// make it one; once added, it says so.
+HabitOfferHeight :: () -> s32 {
+    if results.habit_offer == PRACTICE_HABIT_OFFER_ASK {
+        return Scale(130)
+    }
+    if results.habit_offer == PRACTICE_HABIT_OFFER_ADDED {
+        return Scale(50)
+    }
+    return 0
+}
+
+
+
+// ---- The page ---------------------------------------------------------------------------
+
+ContentHeight :: () -> s32 {
+    height := Scale(20 + 86 + 14)
+    if results.activity == EXERCISE_WIM_HOF {
+        height += Scale(78 + 14 + 14) + ChartHeight()
+    } else {
+        height += Scale(50 + OtherCount() * 38 + 14)
+    }
+    if !results.temporary {
+        height += Scale(50 + 14 + 124 + 14)
+    }
+    if HabitOfferHeight() > 0 {
+        height += HabitOfferHeight() + Scale(14)
+    }
+    if results.activity == EXERCISE_WIM_HOF && results.round_count > 1 {
+        height += Scale(50 + ((results.round_count + 1) / 2) * 40 + 14)
+    }
+    return height + Scale(20)
+}
+
+Content :: (x: s32, width: s32, top: s32, best: s32, average: s32) {
+    y := top + Scale(20)
+    Shape.Circle(results.session, Shape.CircleProps.{
+            .center = Vector2.{cast(float32)results.center_x, cast(float32)(y + Scale(20))},
+            .radius = cast(float32)Scale(170), .fill = Alpha(Accent(), 0.17),
+            .edge = Alpha(results.canvas_color, 0.0), .has_edge = true})
+    Label(Locale("results_title"), x, y, width, Scale(25), Scale(14), cast(TextAlign)TextAlignStart)
+    Label(results.name, x, y + Scale(30), width, Scale(50), FitFont(results.name, width, Scale(34), Scale(20)),
+        cast(TextAlign)TextAlignStart)
+    y += Scale(86 + 14)
+    if results.activity == EXERCISE_WIM_HOF {
+        Metrics(x, y, width, best, average)
+        y += Scale(78 + 14)
+        Chart(x, y, width, best)
+        y += ChartHeight() + Scale(14)
+    } else {
+        OtherSummary(x, y, width)
+        y += Scale(50 + OtherCount() * 38 + 14)
+    }
+    // Temporary results are not kept, so there is no save status and no
+    // mood to record.
+    if !results.temporary {
+        Status(x, y, width)
+        y += Scale(50 + 14)
+    }
+    if HabitOfferHeight() > 0 {
+        HabitOffer(x, y, width)
+        y += HabitOfferHeight() + Scale(14)
+    }
+    if !results.temporary {
+        MoodPicker(x, y, width)
+        y += Scale(MOOD_CARD_HEIGHT + 14)
+    }
+    if results.activity == EXERCISE_WIM_HOF && results.round_count > 1 {
+        RoundList(x, y, width)
+    }
+}
+
+
+
+PracticeResultsView :: (message: PracticeMessage) -> PracticeMessage {
+    results = ReadPracticeResultsHost()
+    results.action = PRACTICE_RESULTS_NONE
+    results.value = 0
+    Results()
+    WritePracticeResultsHost(results)
+    message.succeeded = true
+    return message
+}
+
+EmptyString :: () -> string {
+    return ""
+}
+
+NewByteBuffer :: () -> Vec(u8) {
+    result: Vec(u8)
+    return result
+}
+
+NewLines :: () -> [3]string {
+    result: [3]string
+    return result
+}
+
+FormatValue :: (value: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value)
+    return BuilderFinish(out)
+}
+
+RoundCountLabel :: () -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", results.round_count)
+    return BuilderFinish(out)
+}
+
+ChartRoundLabel :: (index: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", index + 1)
+    return BuilderFinish(out)
+}

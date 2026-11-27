@@ -27,7 +27,7 @@ BINARY = sys.argv[1]
 ROOT = Path(__file__).resolve().parents[1]
 TEST_DIR = ROOT / "build/habits-count-ui-test"
 TEST_DIR.mkdir(parents=True, exist_ok=True)
-# The dialog's buttons, fixed by apps/habits/habits_view.zi.
+# The dialog's buttons, fixed by apps/habits/src/native/habits_view.zi.
 MINUS, PLUS, SESSIONS, DONE, ENTRIES = 5720000, 5720001, 5720002, 5720003, 5720004
 
 

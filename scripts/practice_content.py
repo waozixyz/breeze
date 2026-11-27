@@ -350,7 +350,7 @@ def prepare(compiler, assets_root=None, output=None):
             path = output / (practice + ('.' + language if language else '') + ('.' + voice if voice else '') + '.zx')
             subprocess.run([str(compiler), 'bundle', '--root', str(ROOT),
                 '--entry', 'content:Main', '--asset-dir', 'assets=' + str(assets),
-                '-o', str(path), str(ROOT / 'apps/practice/content.zi')], check=True)
+                '-o', str(path), str(ROOT / 'apps/practice/src/native/content.zi')], check=True)
             data = path.read_bytes()
             if len(data) > min(MAXIMUM, configuration['maximum_pack_bytes']):
                 raise ValueError('practice pack exceeds its size budget')
