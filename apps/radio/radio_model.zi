@@ -1,0 +1,217 @@
+// Radio state, saved preferences, audio calls and host bindings. The
+// cabinet view module renders from these; the host owns the stream after
+// the screen is left.
+#import "std/text"
+#import "vec"
+#import "geometry"
+#import "input_protocol"
+#import "pointer_input"
+#import "apps/node_types"
+#import, file "stations.zi";
+
+host_api :: #system_library "host_api";
+ReadAppHost :: () -> AppMessage #foreign host_api;
+WriteAppHost :: (message: AppMessage) #foreign host_api;
+ReadAppUiHost :: () -> AppUiFrame #foreign host_api;
+AppLocaleHost :: (key: string) -> string #foreign host_api;
+AppRecordHost :: (record: string) -> string #foreign host_api;
+SaveAppRecordHost :: (record: string, value: string) -> bool #foreign host_api;
+AudioStartHost :: (url: string) -> bool #foreign host_api;
+AudioStopHost :: () -> bool #foreign host_api;
+AudioStateHost :: () -> s32 #foreign host_api;
+AudioVolumeHost :: (percent: s32) -> bool #foreign host_api;
+
+loaded: bool;
+loaded_account: string;
+selected: s32;
+volume: s32 = 60;
+failed: bool;
+scroll_offset: s32;
+drag_control: s32;
+drag_origin: float32;
+drag_value: s32;
+drag_moved: bool;
+
+ReadPercent :: (value: string) -> s32 {
+    if value.count == 0 || value.count > 3 { return 60 }
+    answer: s32 = 0
+    for index: cast(s64)0..value.count - 1 {
+        if value[index] < cast(u8)48 || value[index] > cast(u8)57 { return 60 }
+        answer = answer * 10 + cast(s32)value[index] - 48
+    }
+    if answer > 100 { return 60 }
+    return answer
+}
+
+RadioLoad :: (account: string) {
+    if loaded && loaded_account == account { return }
+    loaded_account = account
+    selected = 0
+    failed = false
+    drag_control = 0
+    saved := AppRecordHost("station")
+    for index: cast(s32)0..RADIO_STATION_COUNT - 1 {
+        if saved == StationStream(index) { selected = index }
+    }
+    volume = ReadPercent(AppRecordHost("volume"))
+    loaded = true
+}
+
+RadioStart :: () {
+    failed = !AudioStartHost(StationStream(selected))
+    if !failed { unused AudioVolumeHost(volume) }
+}
+
+// The cabinet is the control surface. Power is independent; the two knobs
+// retain ordinary button focus/activation and pointer drags.
+RadioVolume :: (next: s32) {
+    if next < 0 { next = 0 }
+    if next > 100 { next = 100 }
+    if next == volume { return }
+    volume = next
+    unused AudioVolumeHost(volume)
+    saved: Vec(u8)
+    BuilderPrint(*saved, "%", volume)
+    unused SaveAppRecordHost("volume", BuilderFinish(saved))
+}
+
+RadioTune :: (next: s32) {
+    if next < 0 { next = 0 }
+    if next >= RADIO_STATION_COUNT { next = RADIO_STATION_COUNT - 1 }
+    if next == selected { return }
+    selected = next
+    unused SaveAppRecordHost("station", StationStream(selected))
+    if AudioStateHost() > 0 { RadioStart() }
+}
+
+RadioRect :: (cabinet: Rectangle, x: float32, y: float32,
+    width: float32, height: float32) -> Rectangle {
+    unit := cabinet.width / 1254.0
+    return Rectangle.{cabinet.x + x * unit, cabinet.y + y * unit,
+        width * unit, height * unit}
+}
+
+RadioTarget :: (bounds: Rectangle, target: float32) -> Rectangle {
+    if bounds.width < target {
+        bounds.x -= (target - bounds.width) / 2.0
+        bounds.width = target
+    }
+    if bounds.height < target {
+        bounds.y -= (target - bounds.height) / 2.0
+        bounds.height = target
+    }
+    return bounds
+}
+
+// The illuminated dial shows the actual tuned station.
+RadioNeedle :: (dial: Rectangle) -> Rectangle {
+    return Rectangle.{dial.x + dial.width * (cast(float32)selected + 0.5) / 3.0 - 1.5,
+        dial.y + dial.height * 0.12, 3.0, dial.height * 0.76}
+}
+
+// Sample the pointer once and turn presses and drags on the knobs into
+// volume and tuning changes. The view keeps the pointer for the release
+// handling at the end of the frame.
+RadioDragUpdate :: (volume_control: Rectangle, tuning: Rectangle,
+    scale: float32) -> PointerFrame {
+    pointer := SamplePointer()
+    if pointer.pressed {
+        drag_control = 0
+        drag_moved = false
+        if PointInBounds(pointer.x, pointer.y, volume_control) {
+            drag_control = 1
+            drag_origin = pointer.y
+            drag_value = volume
+        } else if PointInBounds(pointer.x, pointer.y, tuning) {
+            drag_control = 2
+            drag_origin = pointer.x
+            drag_value = selected
+        }
+    }
+    if pointer.down && drag_control != 0 {
+        delta := ifx drag_control == 1 then drag_origin - pointer.y else pointer.x - drag_origin
+        if delta > 4.0 * scale || delta < -4.0 * scale { drag_moved = true }
+        if drag_moved && drag_control == 1 {
+            RadioVolume(drag_value + cast(s32)(delta * 0.75 / scale))
+        } else if drag_moved && drag_control == 2 {
+            RadioTune(drag_value + cast(s32)(delta / (28.0 * scale)))
+        }
+    }
+    return pointer
+}
+
+RadioDragEnd :: (pointer: PointerFrame) {
+    if pointer.released || !pointer.down {
+        drag_control = 0
+        drag_moved = false
+    }
+}
+
+RadioPower :: (state: s32) {
+    if state > 0 {
+        unused AudioStopHost()
+        failed = false
+    } else { RadioStart() }
+}
+
+RadioVolumeStep :: () {
+    next_volume := volume + 5
+    if next_volume > 100 { next_volume = 0 }
+    RadioVolume(next_volume)
+}
+
+RadioTuneNext :: () {
+    RadioTune((selected + 1) % RADIO_STATION_COUNT)
+}
+
+RadioPowerLabel :: (state: s32) -> string {
+    return AppLocaleHost(ifx state > 0 then "radio_stop" else "play_button")
+}
+
+RadioVolumeLabel :: () -> string {
+    text: Vec(u8)
+    BuilderPrint(*text, "%: %%%", AppLocaleHost("music_volume_label"), volume)
+    return BuilderFinish(text)
+}
+
+// The dial's status line: state, station and volume in one string.
+RadioDisplayText :: (state: s32) -> string {
+    status := "radio_stopped"
+    if failed || state < 0 { status = "radio_error" }
+    else if state == 1 { status = "radio_connecting" }
+    else if state == 2 { status = "radio_playing" }
+    else if state == 3 { status = "radio_reconnecting" }
+    text: Vec(u8)
+    BuilderPrint(*text, "% · % · %%%",
+        AppLocaleHost(status), StationName(selected), volume)
+    return BuilderFinish(text)
+}
+
+// View accessors: the TSX reads state and host values through these.
+Locale :: (key: string) -> string {
+    return AppLocaleHost(key)
+}
+
+ReadFrame :: () -> AppUiFrame {
+    return ReadAppUiHost()
+}
+
+AudioState :: () -> s32 {
+    return AudioStateHost()
+}
+
+CurrentSelected :: () -> s32 {
+    return selected
+}
+
+CurrentDragMoved :: () -> bool {
+    return drag_moved
+}
+
+CurrentScrollOffset :: () -> s32 {
+    return scroll_offset
+}
+
+SetScrollOffset :: (value: s32) {
+    scroll_offset = value
+}

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- Port the radio cabinet view to the authored TSX rendering, split into
+  radio_model (state, audio and saved preferences) and radio_view; no
+  user-visible change.
+
 ## [1.0.6] - 2026-11-17
 
 - Rebuilt on Apps with the Python 3.10 packaging fix; no user-visible change.
