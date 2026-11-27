@@ -1,3 +1,4 @@
+#import "settings_sync_account_impl_ui"
 // Account storage and its Kryon controls. The private key is never drawn.
 #import "keys"
 #import, file "../../app/app.zi";
@@ -31,26 +32,16 @@
 #import, file "../../storage/storage_elist.zi";
 #import, file "../../screens/profile_social.zi";
 #import, file "settings_status.zi";
-#import, file "../qr_code_view.zi";
 #import, file "../../app/device_link_session.zi";
 #import, file "../../platform/android/android_import.zi";
 #import "android_picker"
 #import, file "../../platform/environment.zi";
-#import, file "settings_status_view.zi";
 #import "url"
 #import "byte_text_linux"
 #import "geometry"
-#import "session"
 Button :: #import "kryon/button";
-Fieldset :: #import "kryon/fieldset";
-Layout :: #import "kryon/layout";
-Modal :: #import "kryon/modal";
 Text :: #import "kryon/text";
-TextField :: #import "kryon/text_field";
-#import "kryon/tree"
-#import "drawing_props"
 #import "control_props"
-#import "text_align"
 
 using SyncAccountSaveResult;
 using SyncAccountLocalDataChoice;
@@ -181,6 +172,13 @@ SettingsSyncAccountId :: (account: *AccountKeys) -> string {
         return ""
     }
     return AppTextFromCString(*account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE)
+}
+
+SettingsSyncLoadAccountId :: (app: *InnerBreeze, account_id: *string) -> bool {
+    account: AccountKeys
+    available := sync_account_load(*account) != 0
+    account_id.* = FrameTextHold(*app.ui.frame_text, SettingsSyncAccountId(*account))
+    return available
 }
 
 SettingsSyncNormalizeAlias :: (app: *InnerBreeze) {
@@ -375,39 +373,6 @@ settings_sync_account_clear_remote_confirmed :: (app: *InnerBreeze) {
     }
 }
 
-SettingsSyncField :: (app: *InnerBreeze, value: []u8,
-    cursor: *s32, focused: *s32, anchor: *s32, scroll_x: *s32,
-    x: s32, y: s32, width: s32, id: s32,
-    max_codepoints: s32) -> bool {
-    typed: [128]u8
-    field: TextField.Props
-    field.key = cast(u64)id
-    field.bounds = SettingsSyncRect(x, y, width, AppScale(38))
-    field.value = FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*value[0], cast(s32)value.count))
-    field.cursor = cursor.*
-    field.anchor = anchor.*
-    field.scroll_x = scroll_x.*
-    field.focused = focused.* != 0
-    field.focus_id = id
-    field.max_bytes = cast(s32)value.count - 1
-    field.max_codepoints = max_codepoints
-    field.input = SampleTextFieldInput(field.focused, typed[:])
-    result := TextField.Draw(app.ui.session, field)
-    if result.edit.changed {
-        unused AppReplaceText(value, result.edit.start,
-            result.edit.end, result.edit.replacement)
-    }
-    cursor.* = result.cursor
-    anchor.* = result.anchor
-    scroll_x.* = result.scroll_x
-    focused.* = ifx (result.focused) then (1) else (0)
-    if result.clipboard_write {
-        unused TextInputWriteClipboard(result.clipboard_text)
-    }
-    return result.committed
-}
-
 SettingsSyncNodeHintHeight :: (width: s32) -> s32 {
     hint_props: Text.Props = SettingsSyncTextProps(LocaleText("sync_nodes_hint"), 0, 0, width, 0, true)
     hint_props.wrap = cast(Text.Wrap)TextWrapAuto
@@ -438,7 +403,32 @@ SettingsDeviceLinkHeight :: (width: s32) -> s32 {
     return AppScale(30 + 52 + 48 + 10)
 }
 
-SettingsDeviceLinkDigits :: (value: s32) -> string {
+SettingsDeviceLinkUpdate :: (app: *InnerBreeze) {
+    DeviceLinkPump()
+    DeviceLinkTestScan()
+    // A code scanned by the camera arrives like an imported file.
+    scanned: [512]u8
+    if AndroidPickerPoll(cast(s32)ANDROID_IMPORT_KIND_QR_CODE, scanned[:]) == .AndroidPickerSelected {
+        unused DeviceLinkScan(AppTextFromCString(*scanned[0], 512))
+    }
+    received := DeviceLinkAccountReceived()
+    if received != null {
+        if settings_sync_account_save_prepared(app, received,
+            cast(PendingSyncAccountAction)PendingSyncAccountImport,
+            cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_ASK) != 0 {
+            SettingsSyncNow(app)
+        }
+        DeviceLinkImported()
+    }
+}
+
+SettingsDeviceLinkOpenScanner :: () {
+    if !AndroidScannerOpen(cast(s32)ANDROID_IMPORT_KIND_QR_CODE, LocaleText("device_link_scan_prompt")) {
+        settings_screen_set_status_error(LocaleText("device_link_failed"))
+    }
+}
+
+SettingsDeviceLinkDigits :: (app: *InnerBreeze, value: s32) -> string {
     // Six digits in two groups, as 042 917.
     digits: [7]u8
     remaining := value
@@ -452,116 +442,7 @@ SettingsDeviceLinkDigits :: (value: s32) -> string {
         }
         index -= 1
     }
-    return PackageText(TextFromBytes(digits[:]), "")
-}
-
-SettingsDeviceLinkText :: (app: *InnerBreeze, value: string, x: s32, y: *s32, width: s32, height: s32) {
-    props: Text.Props = SettingsSyncTextProps(value, x, y.*, width, height, true)
-    props.wrap = cast(Text.Wrap)TextWrapAuto
-    Text.Draw(app.ui.session, props)
-    y.* += height
-}
-
-SettingsDeviceLinkDraw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32, has_account: bool) {
-    DeviceLinkPump()
-    DeviceLinkTestScan()
-    // A code scanned by the camera arrives like an imported file.
-    scanned: [512]u8
-    if AndroidPickerPoll(cast(s32)ANDROID_IMPORT_KIND_QR_CODE, scanned[:]) == .AndroidPickerSelected {
-        unused DeviceLinkScan(AppTextFromCString(*scanned[0], 512))
-    }
-    received := DeviceLinkAccountReceived()
-    if received != null {
-        if settings_sync_account_save_prepared(app, received,
-            cast(PendingSyncAccountAction)PendingSyncAccountImport,
-            cast(SyncAccountLocalDataChoice)SYNC_ACCOUNT_LOCAL_DATA_ASK) != 0 {
-            storage_set_sync_enabled(1)
-            unused app_request_sync(app)
-        }
-        DeviceLinkImported()
-    }
-    button_h := AppScale(48)
-    half := (width - AppScale(10)) / 2
-    Text.Draw(app.ui.session, SettingsSyncTextProps(LocaleText("device_link_title"),
-        x, y.*, width, AppScale(28), false))
-    y.* += AppScale(30)
-    stage := device_link.stage
-    if stage == cast(DeviceLinkStage)DeviceLinkShowing {
-        hint := ifx device_link.sends then "device_link_show_hint_send" else "device_link_show_hint_receive"
-        SettingsDeviceLinkText(app, LocaleText(hint), x, y, width, AppScale(56))
-        side := SettingsDeviceLinkCodeSide(width)
-        unused DrawQrCode(app.ui.session, DeviceLinkCodeShown(),
-            Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)side})
-        y.* += side + AppScale(10)
-        cancel := SettingsSyncButtonProps(LocaleText("cancel_button"), x, y.*, width, button_h, 5280, false)
-        if Button.Draw(app.ui.session, cancel) != 0 { DeviceLinkCancel() }
-        y.* += button_h
-        return
-    }
-    if stage == cast(DeviceLinkStage)DeviceLinkConfirm || stage == cast(DeviceLinkStage)DeviceLinkWaiting {
-        hint := ifx stage == cast(DeviceLinkStage)DeviceLinkConfirm then "device_link_compare" else "device_link_waiting_compare"
-        SettingsDeviceLinkText(app, LocaleText(hint), x, y, width, AppScale(52))
-        digits := SettingsDeviceLinkDigits(device_link.confirmation)
-        number: Text.Props = SettingsSyncTextProps(FrameTextHold(*app.ui.frame_text, digits), x, y.*, width, AppScale(56), false)
-        number.size = AppScale(40)
-        Text.Draw(app.ui.session, number)
-        PackageFree(digits)
-        y.* += AppScale(60)
-        if stage == cast(DeviceLinkStage)DeviceLinkConfirm {
-            connect := SettingsSyncButtonProps(LocaleText("device_link_connect"), x, y.*, half, button_h, 5281, true)
-            if Button.Draw(app.ui.session, connect) != 0 { DeviceLinkAccept() }
-            cancel := SettingsSyncButtonProps(LocaleText("cancel_button"), x + half + AppScale(10), y.*, half,
-                button_h, 5282, false)
-            if Button.Draw(app.ui.session, cancel) != 0 { DeviceLinkCancel() }
-        } else {
-            cancel := SettingsSyncButtonProps(LocaleText("cancel_button"), x, y.*, width, button_h, 5282, false)
-            if Button.Draw(app.ui.session, cancel) != 0 { DeviceLinkCancel() }
-        }
-        y.* += button_h + AppScale(10)
-        return
-    }
-    if stage == cast(DeviceLinkStage)DeviceLinkAsk {
-        SettingsDeviceLinkText(app, LocaleText("device_link_ask"), x, y, width, AppScale(52))
-        connect := SettingsSyncButtonProps(LocaleText("device_link_connect"), x, y.*, half, button_h, 5283, true)
-        if Button.Draw(app.ui.session, connect) != 0 { DeviceLinkAccept() }
-        cancel := SettingsSyncButtonProps(LocaleText("cancel_button"), x + half + AppScale(10), y.*, half,
-            button_h, 5284, false)
-        if Button.Draw(app.ui.session, cancel) != 0 { DeviceLinkCancel() }
-        y.* += button_h + AppScale(10)
-        return
-    }
-    if stage == cast(DeviceLinkStage)DeviceLinkWorking || stage == cast(DeviceLinkStage)DeviceLinkReceived ||
-    stage == cast(DeviceLinkStage)DeviceLinkConnected || stage == cast(DeviceLinkStage)DeviceLinkFailed {
-        message := "device_link_working"
-        if stage == cast(DeviceLinkStage)DeviceLinkConnected { message = "device_link_connected" }
-        if stage == cast(DeviceLinkStage)DeviceLinkFailed { message = device_link.error }
-        SettingsDeviceLinkText(app, LocaleText(message), x, y, width, AppScale(52))
-        if stage == cast(DeviceLinkStage)DeviceLinkWorking || stage == cast(DeviceLinkStage)DeviceLinkReceived {
-            y.* += button_h + AppScale(10)
-            return
-        }
-        done := SettingsSyncButtonProps(LocaleText("done_button"), x, y.*, width, button_h, 5285, false)
-        if Button.Draw(app.ui.session, done) != 0 { DeviceLinkCancel() }
-        y.* += button_h + AppScale(10)
-        return
-    }
-    hint := ifx has_account then "device_link_intro_send" else "device_link_intro_receive"
-    SettingsDeviceLinkText(app, LocaleText(hint), x, y, width, AppScale(52))
-    scan_supported := AndroidPlatform() != 0
-    show_width := ifx scan_supported then half else width
-    show := SettingsSyncButtonProps(LocaleText("device_link_show"), x, y.*, show_width, button_h, 5286, !scan_supported)
-    if Button.Draw(app.ui.session, show) != 0 { unused DeviceLinkShow() }
-    if scan_supported {
-        scan := SettingsSyncButtonProps(LocaleText("device_link_scan"), x + half + AppScale(10), y.*, half,
-            button_h, 5287, true)
-        if Button.Draw(app.ui.session, scan) != 0 {
-            if !AndroidScannerOpen(cast(s32)ANDROID_IMPORT_KIND_QR_CODE,
-                LocaleText("device_link_scan_prompt")) {
-                settings_screen_set_status_error(LocaleText("device_link_failed"))
-            }
-        }
-    }
-    y.* += button_h + AppScale(10)
+    return FrameTextHold(*app.ui.frame_text, TextFromBytes(digits[:]))
 }
 
 SettingsSyncStatusHeight :: (width: s32) -> s32 {
@@ -580,180 +461,65 @@ settings_sync_account_config_content_height :: (content_w: s32) -> s32 {
     return AppScale(357 + SyncNodeCount() * 60 + (ifx sync_account_details then 240 else 0)) + hint_height + link + SettingsSyncStatusHeight(content_w) - AppScale(24)
 }
 
-#program_export
-settings_sync_account_draw_config :: (app: *InnerBreeze,
-    x: s32, width: s32, y: *s32) {
-    if app == null || y == null {
-        return
-    }
-    account: AccountKeys
-    has_account := sync_account_load(*account) != 0
-    button_h := AppScale(38)
-    gap := AppScale(10)
-    if !has_account {
-        create := SettingsSyncButtonProps(LocaleText("sync_create_account_button"),
-            x, y.*, width, button_h, 5201, true)
-        if Button.Draw(app.ui.session, create) != 0 {
-            has_account = SettingsSyncCreate(app) != 0
-        }
-        y.* += button_h + gap
-        if !has_account {
-            y.* += AppScale(8)
-            SettingsDeviceLinkDraw(app, x, width, y, false)
-            has_account = sync_account_load(*account) != 0
-        }
-        if !has_account {
-            settings_screen_draw_status_reserved(x, y, AppScale(42))
-            return
-        }
-    }
+SettingsSyncEnsureNode :: () {
     if SyncNodeCount() == 0 {
         unused SyncNodeAdd(sync_server_url_default)
     }
-    account_id := SettingsSyncAccountId(*account)
-    alias := storage_get_setting_text(sync_account_alias_key)
-    display_id := account_id
-    alias_label: [96]u8
-    if alias.count > 0 {
-        alias_label[0] = #char "@"
-        unused AppCopyText(alias, alias_label[1:])
-        display_id = AppTextFromCString(*alias_label[0], 96)
-    } else if account_id.count >= 16 {
-        out: Vec(u8)
-        BuilderPrint(*out, "%…%", account_id[:4], account_id[account_id.count - 4:])
-        shortened := BuilderFinish(out)
-        display_id = FrameTextHold(*app.ui.frame_text, shortened)
-        PackageFree(shortened)
-    }
-    Text.Draw(app.ui.session, SettingsSyncTextProps(
-        LocaleText("sync_account_title"),
-        x, y.*, width, AppScale(28), false))
-    y.* += AppScale(30)
-    Text.Draw(app.ui.session, SettingsSyncTextProps(display_id,
-        x, y.*, width, AppScale(32), false))
-    y.* += AppScale(36)
-    step := app_sync_status_key()
-    status_height := SettingsSyncStatusHeight(width)
-    status_props: Text.Props = SettingsSyncTextProps(LocaleText(step), x, y.*, width, status_height, true)
-    status_props.wrap = cast(Text.Wrap)TextWrapAuto
-    Text.Draw(app.ui.session, status_props)
-    y.* += status_height + AppScale(8)
-    sync_now := SettingsSyncButtonProps(LocaleText("sync_now_button"),
-        x, y.*, width, button_h, 5204, true)
-    if Button.Draw(app.ui.session, sync_now) != 0 {
-        storage_set_sync_enabled(1)
-        unused app_request_sync(app)
-    }
-    y.* += button_h + gap + AppScale(8)
-    SettingsDeviceLinkDraw(app, x, width, y, true)
-    y.* += AppScale(8)
-    Text.Draw(app.ui.session, SettingsSyncTextProps(LocaleText("sync_nodes_title"),
-        x, y.*, width, AppScale(28), false))
-    y.* += AppScale(30)
-    hint_height := SettingsSyncNodeHintHeight(width)
-    hint_props: Text.Props = SettingsSyncTextProps(LocaleText("sync_nodes_hint"),
-        x, y.*, width, hint_height, true)
-    hint_props.wrap = cast(Text.Wrap)TextWrapAuto
-    Text.Draw(app.ui.session, hint_props)
-    y.* += hint_height + AppScale(8)
-    active := PackageText(storage_get_setting_text(sync_server_url_key), "")
-    preferred := PackageText(storage_get_setting_text("sync_preferred_node"), "")
-    defer {
-        PackageFree(active)
-        PackageFree(preferred)
-    }
-    if preferred.count == 0 { preferred = PackageText(active, "") }
-    busy := app_sync_loading() != 0
-    for index: cast(s32)0..SyncNodeCount() - 1 {
-        address := SyncNodeAt(index)
-        defer { PackageFree(address) }
-        node := SettingsSyncButtonProps(address, x, y.*, width - AppScale(48),
-            AppScale(52), 5250 + index, address == preferred)
-        node.disabled = busy
-        node.fit_content = true
-        if address == preferred { node.icon_shape = "S1.6rr:M12 3L15 9L22 10L17 15L18 22L12 18L6 22L7 15L2 10L9 9Z" }
-        if Button.Draw(app.ui.session, node) != 0 && SyncNodePrefer(address) {
-            storage_set_sync_enabled(1)
-            unused app_request_sync(app)
-        }
-        remove := SettingsSyncButtonProps(LocaleText("launcher_uninstall"),
-            x + width - AppScale(44), y.*, AppScale(44), AppScale(52), 5260 + index, false)
-        remove.icon_only = true
-        remove.icon_shape = "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
-        remove.disabled = busy || SyncNodeCount() <= 1
-        if Button.Draw(app.ui.session, remove) != 0 {
-            unused SyncNodeRemove(index)
-            break
-        }
-        y.* += AppScale(60)
-    }
-    Text.Draw(app.ui.session, SettingsSyncTextProps(LocaleText("sync_remote_label"),
-        x, y.*, width, AppScale(24), true))
-    y.* += AppScale(25)
-    if SettingsSyncField(app, app.sync_server_url[:],
-        *app.sync_server_url_cursor, *app.sync_server_url_focused,
-        *server_anchor, *server_scroll_x,
-        x, y.*, width - AppScale(84), 5207, 255) && !busy { SettingsSyncServerSave(app) }
-    add := SettingsSyncButtonProps(LocaleText("sync_nodes_add"),
-        x + width - AppScale(78), y.*, AppScale(78), button_h, 5208, false)
-    add.disabled = busy
-    if Button.Draw(app.ui.session, add) != 0 { SettingsSyncServerSave(app) }
-    y.* += button_h + AppScale(20)
-    details := SettingsSyncButtonProps(LocaleText("sync_account_options"),
-        x, y.*, width, button_h, 5240, false)
-    if Button.Draw(app.ui.session, details) != 0 { sync_account_details = !sync_account_details }
-    y.* += button_h + gap
-    if !sync_account_details {
-        settings_screen_draw_status_reserved(x, y, AppScale(42))
-        return
-    }
-    copy_id := SettingsSyncButtonProps(LocaleText("sync_copy_id_button"),
-        x, y.*, width, button_h, 5205, false)
-    if Button.Draw(app.ui.session, copy_id) != 0 {
-        unused TextInputWriteClipboard(account_id)
-        settings_screen_set_status_success(LocaleText("sync_public_id_copied"), "")
-    }
-    y.* += button_h + gap
-    alias_button := SettingsSyncButtonProps(LocaleText("sync_alias_button"),
-        x, y.*, width, button_h, 5206, false)
-    if Button.Draw(app.ui.session, alias_button) != 0 {
-        SettingsSyncOpenAlias(app)
-    }
-    y.* += button_h + gap
-    logout := SettingsSyncButtonProps(LocaleText("sync_logout_button"),
-        x, y.*, width, button_h, 5209, false)
-    if Button.Draw(app.ui.session, logout) != 0 {
-        unused sync_account_clear()
-        settings_screen_set_status_success(
-            LocaleText("sync_logged_out_local_data_kept"), "")
-    }
-    y.* += button_h + gap
-    clear_remote := SettingsSyncButtonProps(
-        LocaleText("sync_clear_remote_data_button"),
-        x, y.*, width, button_h, 5210, false)
-    if Button.Draw(app.ui.session, clear_remote) != 0 {
-        app_open_modal(app, cast(ModalType)ModalConfirmDeleteSyncAccount)
-    }
-    y.* += button_h + gap
-    settings_screen_draw_status_reserved(x, y, AppScale(42))
 }
 
-SettingsSyncModal :: (app: *InnerBreeze,
-    key: string, title: string, height: s32) -> Modal.ModalFrameResult {
-    width := app.ui.view_width - AppScale(32)
-    if width > AppScale(400) {
-        width = AppScale(400)
+SettingsSyncDisplayId :: (app: *InnerBreeze, account_id: string) -> string {
+    alias := storage_get_setting_text(sync_account_alias_key)
+    if alias.count > 0 {
+        label: [96]u8
+        label[0] = #char "@"
+        unused AppCopyText(alias, label[1:])
+        return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*label[0], 96))
     }
-    return Modal.Draw(app.ui.session, Modal.Props.{
-            .key = Layout.KeyHash(key), .title = title,
-            .width = width, .height = height})
+    if account_id.count < 16 {
+        return FrameTextHold(*app.ui.frame_text, account_id)
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%…%", account_id[:4], account_id[account_id.count - 4:])
+    shortened := BuilderFinish(out)
+    defer { PackageFree(shortened) }
+    return FrameTextHold(*app.ui.frame_text, shortened)
+}
+
+SettingsSyncPreferredNode :: (app: *InnerBreeze) -> string {
+    preferred := storage_get_setting_text("sync_preferred_node")
+    if preferred.count == 0 {
+        preferred = storage_get_setting_text(sync_server_url_key)
+    }
+    return FrameTextHold(*app.ui.frame_text, preferred)
+}
+
+SettingsSyncNodeAddress :: (app: *InnerBreeze, index: s32) -> string {
+    address := SyncNodeAt(index)
+    defer { PackageFree(address) }
+    return FrameTextHold(*app.ui.frame_text, address)
+}
+
+SettingsSyncNow :: (app: *InnerBreeze) {
+    storage_set_sync_enabled(1)
+    unused app_request_sync(app)
+}
+
+SettingsSyncCopyId :: (account_id: string) {
+    unused TextInputWriteClipboard(account_id)
+    settings_screen_set_status_success(LocaleText("sync_public_id_copied"), "")
+}
+
+SettingsSyncLogout :: () {
+    unused sync_account_clear()
+    settings_screen_set_status_success(LocaleText("sync_logged_out_local_data_kept"), "")
 }
 
 #program_export
-settings_sync_account_draw_alias_modal :: (app: *InnerBreeze) -> s32 {
-    if app == null {
-        return 3
-    }
+settings_sync_account_draw_config :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
+    SettingsSyncAccountConfig(app, x, width, y)
+}
+
+SettingsSyncTakeAliasResult :: (app: *InnerBreeze) -> s32 {
     #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
         request := *settings_account_request
         if request.owner == app && request.alias_result != 0 {
@@ -762,78 +528,40 @@ settings_sync_account_draw_alias_modal :: (app: *InnerBreeze) -> s32 {
             request.owner = null
             return result
         }
+    } else {
+        unused app
     }
-    stored := storage_get_setting_text(sync_account_alias_key)
-    has_alias := stored.count != 0
-    title := LocaleText("sync_alias_title")
-    message := LocaleText("sync_alias_message")
-    if has_alias {
-        title = LocaleText("sync_alias_change_title")
-        message = LocaleText("sync_alias_change_message")
-    }
-    frame := SettingsSyncModal(app, "inbe/account/alias", title, AppScale(280))
-    if frame.dismissed {
-        return 3
-    }
-    if !frame.opened {
-        return 0
-    }
-    content := frame.layout.content
-    x := cast(s32)content.x
-    y := cast(s32)content.y
-    width := cast(s32)content.width
-    Text.Draw(app.ui.session, SettingsSyncTextProps(
-        message, x, y, width, AppScale(48), false))
-    y += AppScale(54)
-    committed := SettingsSyncField(app, app.sync_alias_input[:],
-        *app.sync_alias_cursor, *app.sync_alias_focused,
-        *alias_anchor, *alias_scroll_x,
-        x, y, width, 5240, 32)
-    SettingsSyncNormalizeAlias(app)
-    y += AppScale(45)
-    Text.Draw(app.ui.session, SettingsSyncTextProps(
-        LocaleText("sync_alias_rule"),
-        x, y, width, AppScale(36), true))
-    y += AppScale(46)
-    close := SettingsSyncButtonProps(LocaleText("close_button"),
-        x, y, width, AppScale(38), 5241, false)
-    result: s32 = 0
-    if Button.Draw(app.ui.session, close) != 0 {
-        result = 3
-    }
-    y += AppScale(47)
-    save_label := LocaleText("sync_alias_register_button")
-    if has_alias {
-        save_label = LocaleText("sync_alias_save_button")
-    }
-    save := SettingsSyncButtonProps(save_label,
-        x, y, width, AppScale(38), 5242, true)
+    return 0
+}
+
+SettingsSyncAliasBusy :: () -> bool {
     #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
-        save.disabled = settings_account_request.operation.active
-        if save.disabled {
-            committed = false
-        }
+        return settings_account_request.operation.active
+    } else {
+        return false
     }
-    alias := AppTextFromCString(*app.sync_alias_input[0], 40)
-    if (Button.Draw(app.ui.session, save) != 0 || committed) &&
-    SettingsSyncAliasValid(alias) && alias != stored {
-        url: [256]u8
-        if !SettingsSyncConnected(app) ||
+}
+
+SettingsSyncSubmitAlias :: (app: *InnerBreeze, alias: string) -> s32 {
+    url: [256]u8
+    if !SettingsSyncConnected(app) ||
         !NormalizeUrl(storage_get_setting_text(sync_server_url_key), url[:]) {
-            result = 2
-        } else {
-            #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
-                if !SettingsBeginAlias(app, AppTextFromCString(*url[0], 256), alias) {
-                    result = 2
-                }
-            } else {
-                result = ifx (RegisterAliasStored(AppTextFromCString(*url[0], 256), alias) ==
-                    cast(s32)SyncResult.SYNC_OK) then (1) else (2)
-            }
-        }
+        return 2
     }
-    unused End(app.ui.session)
-    return result
+    address := AppTextFromCString(*url[0], 256)
+    #if #defined(PLATFORM_WEB) || #defined(ANDROID_BUILD) {
+        if !SettingsBeginAlias(app, address, alias) {
+            return 2
+        }
+        return 0
+    } else {
+        return ifx RegisterAliasStored(address, alias) == cast(s32)SyncResult.SYNC_OK then 1 else 2
+    }
+}
+
+#program_export
+settings_sync_account_draw_alias_modal :: (app: *InnerBreeze) -> s32 {
+    return SettingsSyncAliasModal(app)
 }
 
 #program_export
@@ -866,55 +594,27 @@ PublicIdDisplayGroups :: (id: string, out: []u8) -> string {
     return TextFromCString(*out[0])
 }
 
+NewTyped :: () -> [128]u8 {
+    result: [128]u8
+    return result
+}
+
+NewAliasLabel :: () -> [96]u8 {
+    result: [96]u8
+    return result
+}
+
+NewByteBuffer :: () -> Vec(u8) {
+    result: Vec(u8)
+    return result
+}
+
+NewDisplayedId :: () -> [80]u8 {
+    result: [80]u8
+    return result
+}
+
 #program_export
 settings_sync_account_draw_public_id_modal :: (app: *InnerBreeze, public_id: string = "") -> s32 {
-    account: AccountKeys
-    if app == null || (public_id.count == 0 && sync_account_load(*account) == 0) {
-        return 1
-    }
-    frame := SettingsSyncModal(app, "inbe/account/public-id",
-        LocaleText("sync_public_id_full_title"), AppScale(300))
-    if frame.dismissed {
-        return 1
-    }
-    if !frame.opened {
-        return 0
-    }
-    content := frame.layout.content
-    x := cast(s32)content.x
-    y := cast(s32)content.y
-    width := cast(s32)content.width
-    Text.Draw(app.ui.session, SettingsSyncTextProps(
-        LocaleText("sync_public_id_full_message"),
-        x, y, width, AppScale(30), false))
-    y += AppScale(38)
-    account_id := ifx public_id.count > 0 then public_id else SettingsSyncAccountId(*account)
-    // Copy keeps the raw ID while the field presents grouped hexadecimal.
-    displayed_id: [80]u8
-    id := PublicIdDisplayGroups(account_id, displayed_id[:])
-    field: Fieldset.Props
-    field.bounds = SettingsSyncRect(x, y, width, AppScale(70))
-    Fieldset.Draw(app.ui.session, field)
-    id_props: Text.Props = SettingsSyncTextProps(id,
-        x + AppScale(10), y + AppScale(15),
-        width - AppScale(20), AppScale(40), true)
-    id_props.align = cast(TextAlign)TextAlign.TextAlignCenter
-    id_props.wrap = cast(Text.Wrap)TextWrapAuto
-    Text.Draw(app.ui.session, id_props)
-    y += AppScale(86)
-    copy := SettingsSyncButtonProps(LocaleText("sync_copy_id_button"),
-        x, y, width, AppScale(38), 5250, false)
-    if Button.Draw(app.ui.session, copy) != 0 {
-        unused TextInputWriteClipboard(account_id)
-        settings_screen_set_status_success(LocaleText("sync_public_id_copied"), "")
-    }
-    y += AppScale(47)
-    close := SettingsSyncButtonProps(LocaleText("close_button"),
-        x, y, width, AppScale(38), 5251, false)
-    result: s32 = 0
-    if Button.Draw(app.ui.session, close) != 0 {
-        result = 1
-    }
-    unused End(app.ui.session)
-    return result
+    return SettingsSyncPublicIdModal(app, public_id)
 }

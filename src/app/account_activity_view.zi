@@ -1,27 +1,17 @@
+#import "account_activity_view_ui"
 #import, file "account_activity.zi";
 #import, file "account_activity_model.zi";
 #import, file "../core/types.zi";
 #import, file "app_types.zi";
-#import, file "metrics.zi";
 #import, file "locale.zi";
 #import, file "text_buffers.zi";
 #import, file "session_window_view.zi";
 #import, file "../practices/practice_registry.zi";
-#import, file "../practices/sun_salutation/sun_salutation_labels.zi";
-#import, file "../practices/patterns/patterns_rules.zi";
-Button :: #import "kryon/button";
-Layout :: #import "kryon/layout";
-Text :: #import "kryon/text";
-#import "geometry"
-#import "kryon/tree"
-#import "session"
-#import "text"
 #import "vec"
 #import "text_buffer"
 #import, file "session_screen.zi";
 #import, file "app_nav_state.zi";
 #import, file "route_types.zi";
-#import, file "app_chrome.zi";
 #import, file "../apps/package_files.zi";
 
 using AppNavRoute;
@@ -90,95 +80,14 @@ ActivityStatus :: (value: AccountActivity, output: []u8) -> string {
     return TextUntilNul(output)
 }
 
-// The account's running practice occupies the Practice page on observers.
-// Its controls request an action; the acknowledged state comes from the runner.
-ActivityDrawRemote :: (app: *InnerBreeze, hosted: bool = false) -> bool {
-    if app == null || !ActivityRemoteVisible() {
-        return false
-    }
-    value := account_activity.remote
-    session := app.ui.session
-    left := AppScale(24)
-    width := app.ui.view_width - left * 2
-    top := app_content_top_reserved(app) + AppScale(24)
-    name := practice_label(session_window_practice(value.screen))
-    Text.Draw(session, Text.Props.{.key = Layout.KeyHash("inbe/activity/name"),
-            .bounds = Rectangle.{cast(float32)left, cast(float32)top, cast(float32)width, cast(float32)AppScale(56)},
-            .text = name, .size = AppScale(28)})
-    fresh := ActivityFresh(value, ActivityCurrentTime())
-    state_key := "activity_remote_running"
-    if !fresh {
-        state_key = "activity_remote_stale"
-    } else if value.paused != 0 {
-        state_key = "activity_remote_paused"
-    }
-    Text.Draw(session, Text.Props.{.key = Layout.KeyHash("inbe/activity/state"),
-            .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(72)),
-                cast(float32)width, cast(float32)AppScale(72)},
-            .text = LocaleText(state_key), .size = AppFontSize()})
-    status_buffer: [160]u8
-    status := ActivityStatus(value, status_buffer[:])
-    Text.Draw(session, Text.Props.{.key = Layout.KeyHash("inbe/activity/progress"),
-            .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(148)),
-                cast(float32)width, cast(float32)AppScale(76)},
-            .text = FrameTextHold(*app.ui.frame_text, status), .size = AppScale(32)})
-    phase: string
-    if value.screen == ScreenPatterns {
-        phase = LocaleText(patterns_phase_label_key(value.phase))
-    } else if value.screen == ScreenSunSalutation {
-        phase = SunSalutationPoseName(value.phase)
-    } else if value.screen == ScreenSession {
-        round: [64]u8
-        unused FormatNumberTemplate(LocaleText("session_round_label"), value.round, round[:])
-        phase = FrameTextHold(*app.ui.frame_text, TextUntilNul(round[:]))
-    }
-    if phase.count > 0 {
-        Text.Draw(session, Text.Props.{.key = Layout.KeyHash("inbe/activity/phase"),
-                .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(232)),
-                    cast(float32)width, cast(float32)AppScale(60)},
-                .text = phase, .size = AppFontSize()})
-    }
-    pending := account_activity.pending_control[0] != cast(u8)0
-    label := "pause_button"
-    if pending {
-        label = "activity_control_pending"
-    } else if value.paused != 0 {
-        label = "play_button"
-    }
-    // A session that stopped updating can be ended for every device; one
-    // still updating is paused or resumed by its own device.
-    if !fresh {
-        if Button.Draw(session, Button.Props.{.key = Layout.KeyHash("inbe/activity/end"),
-                .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(308)),
-                    cast(float32)width, cast(float32)AppScale(48)},
-                .label = LocaleText("activity_end_session")}) != 0 {
-            unused ActivityEndRemote(app)
-            account_activity.view_open = false
-        }
-    } else if Button.Draw(session, Button.Props.{.key = Layout.KeyHash("inbe/activity/pause"),
-            .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(308)),
-                cast(float32)width, cast(float32)AppScale(48)},
-            .label = LocaleText(label), .disabled = pending, .loading = pending}) != 0 {
-        unused ActivityRequestPause(app, ifx value.paused != 0 then 0 else 1)
-    }
-    // Close always returns to this device's own page; the corner button
-    // opens the session again.
-    if Button.Draw(session, Button.Props.{.key = Layout.KeyHash("inbe/activity/close"),
-            .bounds = Rectangle.{cast(float32)left, cast(float32)(top + AppScale(372)),
-                cast(float32)width, cast(float32)AppScale(44)},
-            .label = ifx hosted then "Lumi" else LocaleText("close_button")}) != 0 {
-        account_activity.view_open = false
-    }
-    return true
+ActivityIndicatorVisible :: (app: *InnerBreeze, hosted: bool) -> bool {
+    return app != null && ActivityRemoteVisible() && !app.launcher_open &&
+        !app_is_session_screen(app_session_screen(app)) &&
+        (hosted || !account_activity.view_open || app.breathing.screen != ScreenStart ||
+        app.main_tab != cast(s32)AppMainTab.APP_MAIN_TAB_PRACTICE)
 }
 
-ActivityDrawIndicator :: (app: *InnerBreeze, hosted: bool = false) {
-    if app == null || !ActivityRemoteVisible() || app.launcher_open ||
-    app_is_session_screen(app_session_screen(app)) ||
-    (!hosted && account_activity.view_open && app.breathing.screen == ScreenStart &&
-        app.main_tab == cast(s32)AppMainTab.APP_MAIN_TAB_PRACTICE) {
-        return
-    }
+ActivityIndicatorLabel :: (app: *InnerBreeze) -> string {
     status_buffer: [160]u8
     value := account_activity.remote
     status := ActivityStatus(value, status_buffer[:])
@@ -186,17 +95,22 @@ ActivityDrawIndicator :: (app: *InnerBreeze, hosted: bool = false) {
     BuilderPrint(*summary, "% · %", practice_label(session_window_practice(value.screen)), status)
     text := BuilderFinish(summary)
     defer { PackageFree(text) }
-    width := AppScale(240)
-    if width > app.ui.view_width - AppScale(16) {
-        width = app.ui.view_width - AppScale(16)
+    return FrameTextHold(*app.ui.frame_text, text)
+}
+
+ActivityOpenRemote :: (app: *InnerBreeze, hosted: bool) {
+    account_activity.view_open = true
+    if !hosted {
+        app_apply_nav_route(app, APP_NAV_ROUTE_PRACTICE)
     }
-    if Button.Draw(app.ui.session, Button.Props.{.key = Layout.KeyHash("inbe/activity/open"),
-            .bounds = Rectangle.{cast(float32)(app.ui.view_width - width - AppScale(8)),
-                cast(float32)AppScale(72), cast(float32)width, cast(float32)AppScale(56)},
-            .label = FrameTextHold(*app.ui.frame_text, text)}) != 0 {
-        account_activity.view_open = true
-        if !hosted {
-            app_apply_nav_route(app, APP_NAV_ROUTE_PRACTICE)
-        }
-    }
+}
+
+NewStatusBuffer :: () -> [160]u8 {
+    result: [160]u8
+    return result
+}
+
+NewRound :: () -> [64]u8 {
+    result: [64]u8
+    return result
 }
