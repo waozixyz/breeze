@@ -10,6 +10,8 @@
 
 ## [Unreleased]
 
+- Rebuild list tabs, tasks and sharing views with Kryon’s TSX components.
+
 - Write longer todos; open a custom task for a description and todo.txt priority, with shorter fixed-width complete and edit swipes.
 
 - Close List settings after a successful save and keep edits open if saving fails.

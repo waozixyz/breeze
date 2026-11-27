@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Rebuild the bookshelf and reader controls with Kryon’s TSX components.
+
 ## [1.0.7] - 2026-11-17
 
 - Rebuilt on Apps with the Python 3.10 packaging fix; no user-visible change.

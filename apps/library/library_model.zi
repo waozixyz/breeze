@@ -1,0 +1,369 @@
+// Reader state, pagination and account records.
+#import "session"
+#import "geometry"
+#import "vec"
+#import "text_buffer"
+Dropdown :: #import "kryon/dropdown";
+Text :: #import "kryon/text";
+TextArea :: #import "kryon/text_area";
+TextField :: #import "kryon/text_field";
+#import "text_measure"
+#import "text_align"
+#import "grid"
+#import "grid_props"
+#import "control_props"
+#import "kryon/tree"
+#import "pointer_input"
+#import "swipe"
+#import "swipe_props"
+#import "input_protocol"
+#import "drawing_props"
+#import "kryon/transition"
+#import "widget_palette"
+#import "icon"
+#import "transition"
+#import "apps/node_types"
+#import, file "../../src/app/text_buffers.zi";
+#import, file "books.zi";
+
+host_api :: #system_library "host_api";
+ReadAppUiHost :: () -> AppUiFrame #foreign host_api;
+AppLocaleHost :: (key: string) -> string #foreign host_api;
+AppRecordHost :: (record: string) -> string #foreign host_api;
+SaveAppRecordHost :: (record: string, value: string) -> bool #foreign host_api;
+AppKeyHost :: () -> s32 #foreign host_api;
+AppFieldInputHost :: () -> TextField.Input #foreign host_api;
+CloseAppHost :: () -> bool #foreign host_api;
+SmoothFramesHost :: (frames: s32) -> bool #foreign host_api;
+
+
+using Text.Wrap;
+using TextAlign;
+
+frame: AppUiFrame;
+reading: bool;
+book: s32;
+loaded_account: string;
+loaded: bool;
+shelf_scroll: s32;
+pages: [LIBRARY_PAGE_LIMIT]LibraryPage;
+page_count: s32;
+page_index: s32;
+anchor_chapter: s32 = 1;
+anchor_offset: s32;
+anchor_picture: bool;
+layout_width: s32;
+layout_height: s32;
+layout_scale: float32;
+font_size: s32 = 21;
+font_face: s32;
+margin: s32 = 24;
+line_gap: s32 = 8;
+settings_dirty: bool;
+position_dirty: bool;
+save_failed: bool;
+panel_open: bool;
+panel_tab: s32;
+panel_scroll: s32;
+annotation_chapter: s32;
+annotations: [LIBRARY_ANNOTATION_LIMIT]LibraryAnnotation;
+annotation_count: s32;
+annotation_index: s32 = -1;
+annotation_dirty: bool;
+note: [2049]u8;
+note_state: TextArea.Result;
+passage_state: TextArea.Result;
+reader_swipe: SwipeGesture;
+book_dark: bool;
+picture_book: bool;
+opening_started: float64;
+opening: bool;
+opening_from: Rectangle;
+
+Scale :: (value: s32) -> s32 {
+    return cast(s32)(cast(float32)value * frame.scale)
+}
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y, cast(float32)width, cast(float32)height}
+}
+
+NumberText :: (value: s32) -> string {
+    text: Vec(u8)
+    BuilderPrint(*text, "%", value)
+    return BuilderFinish(text)
+}
+
+RecordNumber :: (key: string, fallback: s32, minimum: s32, maximum: s32) -> s32 {
+    at: s32
+    value := ReadLibraryNumber(AppRecordHost(key), *at)
+    return ifx value >= minimum && value <= maximum then value else fallback
+}
+
+SaveSettings :: () -> bool {
+    if !settings_dirty { return true }
+    value: Vec(u8)
+    BuilderPrint(*value, "% % % %", font_size, font_face, margin, line_gap)
+    if !SaveAppRecordHost("reader.settings", BuilderFinish(value)) { return false }
+    if !SaveAppRecordHost("tao-te-ching.theme", ifx book_dark then "1" else "0") { return false }
+    if !SaveAppRecordHost(BookModeRecord(book), ifx picture_book then "1" else "0") { return false }
+    settings_dirty = false
+    return true
+}
+
+SavePosition :: () -> bool {
+    if !position_dirty { return true }
+    value: Vec(u8)
+    BuilderPrint(*value, "% % %", anchor_chapter, anchor_offset,
+        ifx anchor_picture then 1 else 0)
+    if !SaveAppRecordHost(BookPositionRecord(book), BuilderFinish(value)) { return false }
+    position_dirty = false
+    return true
+}
+
+SaveAnnotations :: () -> bool {
+    if !annotation_dirty { return true }
+    if annotation_index >= 0 {
+        value: Vec(u8)
+        BuilderPrint(*value, "%", TextUntilNul(note[:]))
+        annotations[annotation_index].note = BuilderFinish(value)
+    }
+    if !SaveAppRecordHost(BookAnnotationsRecord(book, annotation_chapter),
+        EncodeLibraryAnnotations(annotations[:annotation_count])) { return false }
+    annotation_dirty = false
+    return true
+}
+
+SaveReader :: () -> bool {
+    notes_saved := SaveAnnotations()
+    settings_saved := SaveSettings()
+    position_saved := SavePosition()
+    save_failed = !notes_saved || !settings_saved || !position_saved
+    return !save_failed
+}
+
+LoadSettings :: () {
+    font_size = 21
+    font_face = 0
+    margin = 24
+    line_gap = 8
+    book_dark = RecordNumber("tao-te-ching.theme", ifx frame.dark then 1 else 0, 0, 1) == 1
+    picture_book = RecordNumber(BookModeRecord(0), 1, 0, 1) == 1
+    text := AppRecordHost("reader.settings")
+    at: s32
+    size := ReadLibraryNumber(text, *at)
+    face := ReadLibraryNumber(text, *at)
+    inset := ReadLibraryNumber(text, *at)
+    gap := ReadLibraryNumber(text, *at)
+    if size >= 14 && size <= 36 { font_size = size }
+    if face >= 0 && face <= 1 { font_face = face }
+    if inset >= 12 && inset <= 56 { margin = inset }
+    if gap >= 2 && gap <= 20 { line_gap = gap }
+}
+
+ReaderAreaBounds :: () -> Rectangle {
+    width := frame.width - Scale(margin * 2)
+    if width > Scale(680) { width = Scale(680) }
+    top := frame.top + Scale(16)
+    height := frame.height - frame.bottom - top - Scale(48)
+    return Bounds((frame.width - width) / 2, top, width, height)
+}
+
+ReaderTypeface :: () -> string {
+    return ifx font_face == 1 then "assets/library/noto-sans.ttf" else "ui"
+}
+
+ChapterHeadingProps :: (chapter: s32) -> Text.Props {
+    props := Text.Props.{.key = 27501,
+        .text = BookChapterTitle(book, chapter),
+        .bounds = ReaderAreaBounds(), .size = Scale(font_size), .typeface = ReaderTypeface(),
+        .align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapAuto}
+    props.bounds.height = cast(float32)TextHeight(frame.session, props)
+    return props
+}
+
+ReadingProps :: (chapter: s32) -> Text.Props {
+    bounds := ReaderAreaBounds()
+    heading := ChapterHeadingProps(chapter)
+    inset := heading.bounds.height + cast(float32)Scale(16)
+    bounds.y += inset
+    bounds.height -= inset
+    return Text.Props.{.bounds = bounds, .size = Scale(font_size), .typeface = ReaderTypeface(),
+        .line_gap = Scale(line_gap), .wrap = cast(Text.Wrap)TextWrapAuto}
+}
+
+HasPicturePages :: () -> bool {
+    return picture_book && BookChapterArtApproved(book)
+}
+
+Reflow :: () {
+    // Cache the viewport, independent of whichever page is currently visible.
+    bounds := ReaderAreaBounds()
+    if page_count > 0 && layout_width == cast(s32)bounds.width &&
+    layout_height == cast(s32)bounds.height && layout_scale == frame.scale { return }
+    // During a transient resize (for example a phone keyboard), keep the
+    // passage rather than saving a fabricated page with no room for a line.
+    if bounds.width < cast(float32)Scale(60) || bounds.height < cast(float32)Scale(font_size + line_gap) { return }
+    count: s32
+    for chapter: cast(s32)1..BookChapters(book) {
+        if HasPicturePages() && count < LIBRARY_PAGE_LIMIT {
+            pages[count] = LibraryPage.{.chapter = chapter, .picture = true}
+            count += 1
+        }
+        props := ReadingProps(chapter)
+        props.text = BookChapter(book, chapter)
+        at: s32
+        while at < props.text.count && count < LIBRARY_PAGE_LIMIT {
+            part := TextPage(frame.session, props, at)
+            if part.next <= at { return }
+            pages[count] = LibraryPage.{chapter, part.start, part.end, false}
+            count += 1
+            at = part.next
+        }
+    }
+    page_count = count
+    page_index = LibraryPageFor(pages[:page_count], anchor_chapter, anchor_offset, anchor_picture)
+    layout_width = cast(s32)bounds.width
+    layout_height = cast(s32)bounds.height
+    layout_scale = frame.scale
+}
+
+LoadPageAnnotations :: () {
+    current := pages[page_index]
+    if annotation_chapter != current.chapter {
+        annotation_count = DecodeLibraryAnnotations(AppRecordHost(BookAnnotationsRecord(book, current.chapter)), annotations[:])
+        annotation_chapter = current.chapter
+    }
+    annotation_index = -1
+    for index: cast(s32)0..annotation_count - 1 {
+        if annotation_index < 0 && LibraryOverlaps(current, annotations[index]) { annotation_index = index }
+    }
+    note[0] = 0
+    if annotation_index >= 0 { unused AppCopyText(annotations[annotation_index].note, note[:]) }
+    note_state = TextArea.Result.{}
+    passage_state = TextArea.Result.{}
+    if annotation_index >= 0 {
+        saved := annotations[annotation_index]
+        // Keep older page-wide notes, without selecting the entire page.
+        if saved.end - saved.start < current.end - current.start {
+            passage_state.anchor = ifx saved.start > current.start then saved.start - current.start else 0
+            passage_state.cursor = ifx saved.end < current.end then saved.end - current.start else current.end - current.start
+        }
+    }
+}
+
+OpenBook :: (index: s32) {
+    book = index
+    text := AppRecordHost(BookPositionRecord(book))
+    at: s32
+    anchor_chapter = ReadLibraryNumber(text, *at)
+    anchor_offset = ReadLibraryNumber(text, *at)
+    saved_picture := ReadLibraryNumber(text, *at)
+    if anchor_chapter < 1 || anchor_chapter > BookChapters(book) {
+        anchor_chapter = RecordNumber(BookRecord(book), 1, 1, BookChapters(book))
+        anchor_offset = 0
+    }
+    if anchor_offset < 0 || anchor_offset >= BookChapter(book, anchor_chapter).count { anchor_offset = 0 }
+    // Older two-number positions open a chapter at its picture. New positions
+    // distinguish that picture from the first text page, also at byte zero.
+    anchor_picture = anchor_offset == 0
+    if saved_picture == 0 || saved_picture == 1 {
+        anchor_picture = saved_picture == 1
+    }
+    page_count = 0
+    annotation_chapter = 0
+    panel_open = false
+    reading = true
+    opening = true
+    opening_started = frame.now
+    unused SmoothFramesHost(24)
+    reader_swipe = SwipeGesture.{}
+    Reflow()
+    if page_count > 0 { LoadPageAnnotations() }
+}
+
+SetPictureMode :: (pictures: bool) {
+    if !SaveReader() { return }
+    picture_book = pictures
+    layout_width = 0
+    settings_dirty = true
+    reader_swipe = SwipeGesture.{}
+    unused SmoothFramesHost(2)
+    unused SaveReader()
+}
+
+TurnPage :: (index: s32) {
+    if index < 0 || index >= page_count || !SaveReader() { return }
+    page_index = index
+    anchor_chapter = pages[index].chapter
+    anchor_offset = pages[index].start
+    anchor_picture = pages[index].picture
+    position_dirty = true
+    unused SaveReader()
+    LoadPageAnnotations()
+}
+
+LibraryBack :: () -> bool {
+    if !reading { return false }
+    if !SaveReader() { return true }
+    if panel_open { panel_open = false }
+    else { reading = false }
+    return true
+}
+
+EnsureAnnotation :: () -> bool {
+    if annotation_index >= 0 { return true }
+    if annotation_count >= LIBRARY_ANNOTATION_LIMIT { return false }
+    current := pages[page_index]
+    start := ifx passage_state.anchor < passage_state.cursor then passage_state.anchor else passage_state.cursor
+    end := ifx passage_state.anchor > passage_state.cursor then passage_state.anchor else passage_state.cursor
+    if end <= start { return false }
+    annotation_index = annotation_count
+    annotation_count += 1
+    annotations[annotation_index] = LibraryAnnotation.{.start = current.start + start, .end = current.start + end}
+    return true
+}
+
+ReaderPalette :: () -> WidgetPalette {
+    return WidgetPalette.{
+        .background = ifx book_dark then cast(u32)0x28231dff else cast(u32)0xf8f1e0ff,
+        .base = ifx book_dark then cast(u32)0x342e25ff else cast(u32)0xeee3ccff,
+        .text = ifx book_dark then cast(u32)0xe8dfccff else cast(u32)0x40372bff,
+        .selected = ifx book_dark then cast(u32)0xb49b70ff else cast(u32)0x89724eff,
+        .selected_text = ifx book_dark then cast(u32)0x211c16ff else cast(u32)0xfffbf1ff,
+        .border = ifx book_dark then cast(u32)0x655947ff else cast(u32)0xc9b993ff,
+        .danger = cast(u32)0xb54f45ff, .warning = cast(u32)0xb08b40ff,
+        .success = cast(u32)0x70835aff}
+}
+
+NewOptions :: () -> [2]Dropdown.Option {
+    result: [2]Dropdown.Option
+    return result
+}
+
+NewMarks :: () -> [LIBRARY_ANNOTATION_LIMIT]Text.Range {
+    result: [LIBRARY_ANNOTATION_LIMIT]Text.Range
+    return result
+}
+
+PageIndicator :: () -> string {
+    label: Vec(u8)
+    BuilderPrint(*label, "% / %", page_index + 1, page_count)
+    return BuilderFinish(label)
+}
+
+BeginLibraryFrame :: (account: string) {
+    frame = ReadAppUiHost()
+    frame.top = Scale(56)
+    if !loaded || loaded_account != account {
+        loaded = true
+        loaded_account = account
+        reading = false
+        panel_open = false
+        annotation_dirty = false
+        settings_dirty = false
+        position_dirty = false
+        save_failed = false
+        LoadSettings()
+    }
+}

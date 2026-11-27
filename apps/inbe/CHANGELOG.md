@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Rebuild the app picker with Kryon’s TSX components.
+
 - Backspace and text corrections work again. Restore backups and add photos reliably.
 - Read Tao Te Ching art on its own page. Find Photos and Radio in Apps, with clearer feedback and appearance controls.
 - Desktop controls respond, translations keep clean line breaks, and account sync is called Mesh.

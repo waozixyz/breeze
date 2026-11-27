@@ -1,5 +1,4 @@
-// Lists owns its complete screen composition; the host supplies saved rows,
-// device input and ordinary Kryon widget effects.
+// Lists frame state and host effects. Widget composition lives in lists_view_ui.tsx.
 #import "session"
 #import "entity/model"
 #import "entity/picture_image"
@@ -8,17 +7,9 @@
 #import "vec"
 #import "c_string"
 #import "text_buffer"
-Box :: #import "kryon/box";
-Button :: #import "kryon/button";
 ContextMenu :: #import "kryon/context_menu";
 Dropdown :: #import "kryon/dropdown";
-Image :: #import "kryon/image";
-Layout :: #import "kryon/layout";
-Modal :: #import "kryon/modal";
-Scroll :: #import "kryon/scroll";
 SwipeRow :: #import "kryon/swipe_row";
-Text :: #import "kryon/text";
-TextArea :: #import "kryon/text_area";
 TextField :: #import "kryon/text_field";
 #import "kryon/swipe_row"
 #import "text_align"
@@ -32,19 +23,10 @@ TextField :: #import "kryon/text_field";
 #import "icon"
 CompleteIcon :: #import "mingcute/mingcute_regular_check";
 EditIcon :: #import "mingcute/mingcute_regular_edit_2";
-SettingsIcon :: #import "mingcute/mingcute_regular_settings_3";
-BackIcon :: #import "mingcute/mingcute_regular_arrow_left";
 #import, file "../../src/apps/lists_ui_types.zi";
 #import, file "../../src/apps/lists_types.zi";
 #import, file "task_title.zi";
 
-using ButtonTone;
-using ButtonEmphasis;
-using TextAlign;
-using Text.Wrap;
-using IconType;
-using IconPlacement;
-using ContentAlignment;
 host_api :: #system_library "host_api";
 ReadListsUiHost :: () -> ListsUiFrame #foreign host_api;
 WriteListsUiHost :: (frame: ListsUiFrame) #foreign host_api;
@@ -127,27 +109,6 @@ AvatarFill :: (place: s32) -> Color {
         return Color.{176, 112, 58, 255}
     }
     return Color.{58, 110, 165, 255}
-}
-
-// A person's profile picture, or a round avatar with the first letter of
-// their name when they have not chosen one.
-Avatar :: (key: u64, name: string, place: s32, x: s32, y: s32, size: s32, icon: s32) {
-    // Pictures chosen in any app, Entity's abstract ones included.
-    if EntityPublicIconChosen(icon) {
-        picture := EntityIconImage(icon, Bounds(x, y, size, size), name)
-        picture.key = key
-        Image.Draw(frame.session, picture)
-        return
-    }
-    Box.Draw(frame.session, Box.Props.{.key = key, .bounds = Bounds(x, y, size, size),
-            .fill = AvatarFill(place), .radius = cast(float32)size / 2.0})
-    letter_end: s64 = 1
-    while letter_end < name.count && (name[letter_end] & cast(u8)192) == cast(u8)128 {
-        letter_end += 1
-    }
-    letter := ifx name.count > 0 then name[:letter_end] else "?"
-    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y, size, size), .text = letter,
-            .align = cast(TextAlign)TextAlignCenter, .vertical_align = cast(TextAlign)TextAlignCenter})
 }
 
 Scale :: (pixels: s32) -> s32 {
@@ -273,85 +234,6 @@ field_escaped: bool;
 // turns a row into its field.
 field_focus_request: bool;
 
-Field :: (bounds: Rectangle, placeholder: string, read_only: bool = false) -> bool {
-    input := frame.input
-    if field_focus_request {
-        input.focus = true
-        field_focus_request = false
-    }
-    edited := TextField.Draw(frame.session, TextField.Props.{.key = cast(u64)6501,
-            .bounds = bounds, .value = frame.value, .placeholder = placeholder, .cursor = frame.cursor,
-            .anchor = frame.anchor, .scroll_x = frame.scroll_x,
-            .focused = frame.focused, .focus_id = 6501,
-            .max_bytes = LISTS_TEXT_LIMIT, .max_codepoints = LISTS_TEXT_LIMIT,
-            .input = input,
-            .disabled = frame.sharing_busy || frame.sharing_pending || read_only})
-    if edited.edit.changed {
-        start := edited.edit.start
-        end := edited.edit.end
-        if start >= 0 && end >= start && end <= frame.value.count {
-            value: Vec(u8)
-            BuilderPrint(*value, "%", frame.value[:start])
-            BuilderPrint(*value, "%", edited.edit.replacement)
-            BuilderPrint(*value, "%", frame.value[end:])
-            replacement := BuilderFinish(value)
-            if replacement.count <= LISTS_TEXT_LIMIT {
-                frame.value = replacement
-            }
-        }
-    }
-    frame.cursor = edited.cursor
-    frame.anchor = edited.anchor
-    frame.scroll_x = edited.scroll_x
-    frame.focused = edited.focused
-    if edited.focused {
-        frame.comment_focused = false
-        frame.comment_input.blur = true
-    }
-    frame.clipboard_write = edited.clipboard_write
-    frame.clipboard_text = edited.clipboard_text
-    field_escaped = edited.escaped
-    return edited.committed
-}
-
-DescriptionField :: (bounds: Rectangle, placeholder: string, read_only: bool = false) -> bool {
-    input := frame.comment_input
-    edited := TextArea.Draw(frame.session, TextArea.Props.{.key = cast(u64)6552,
-            .bounds = bounds, .value = frame.comment_value, .placeholder = placeholder,
-            .cursor = frame.comment_cursor, .anchor = frame.comment_anchor,
-            .scroll_y = frame.comment_scroll_y, .focused = frame.comment_focused,
-            .focus_id = 6552, .max_bytes = LISTS_TEXT_LIMIT,
-            .max_codepoints = LISTS_TEXT_LIMIT, .wrap = true, .input = input,
-            .disabled = frame.sharing_busy || frame.sharing_pending || read_only})
-    if edited.edit.changed {
-        start := edited.edit.start
-        end := edited.edit.end
-        if start >= 0 && end >= start && end <= frame.comment_value.count {
-            value: Vec(u8)
-            BuilderPrint(*value, "%", frame.comment_value[:start])
-            BuilderPrint(*value, "%", edited.edit.replacement)
-            BuilderPrint(*value, "%", frame.comment_value[end:])
-            replacement := BuilderFinish(value)
-            if replacement.count <= LISTS_TEXT_LIMIT {
-                frame.comment_value = replacement
-            }
-        }
-    }
-    frame.comment_cursor = edited.cursor
-    frame.comment_anchor = edited.anchor
-    frame.comment_scroll_y = edited.scroll_y
-    frame.comment_focused = edited.focused
-    if edited.focused {
-        frame.focused = false
-        frame.input.blur = true
-    }
-    if edited.clipboard_write {
-        frame.clipboard_write = true
-        frame.clipboard_text = edited.clipboard_text
-    }
-    return edited.escaped
-}
-
 Remote :: (action: s32, target: string = "", invitation: string = "",
     invitation_list: string = "", access: string = "") {
     state.action = action
@@ -425,455 +307,13 @@ ResetInvite :: () {
     invite_suggestions = false
 }
 
-// An explicit invitation follows selection from the name suggestions. The
-// access it gives sits between the name and Invite, or under the name on a
-// narrow screen; its menu opens after the page's scroll ends.
 invite_role_bounds: Rectangle;
 
 InviteFieldHeight :: (width: s32) -> s32 {
     return ifx width < Scale(480) then Scale(96) else Scale(44)
 }
 
-InviteField :: (x: s32, y: s32, width: s32, disabled: bool) -> bool {
-    button_width := Scale(96)
-    role_width := Scale(140)
-    narrow := width < Scale(480)
-    field_width := ifx narrow then width else width - button_width - role_width - Scale(16)
-    row_y := ifx narrow then y + Scale(52) else y
-    invite_role_bounds = Bounds(ifx narrow then x else x + field_width + Scale(8), row_y, role_width, Scale(44))
-    previous_bytes: [128]u8
-    unused CopyCString(invite_text, previous_bytes[:])
-    previous := TextUntilNul(previous_bytes[:])
-    edited := TextField.Draw(frame.session, TextField.Props.{.key = cast(u64)6540,
-            .bounds = Bounds(x, y, field_width, Scale(44)),
-            .value = previous, .placeholder = ListsLocaleHost("elist_invite_by_name"),
-            .cursor = invite_cursor, .anchor = invite_anchor, .scroll_x = invite_scroll,
-            .focused = invite_focused, .focus_id = 6540, .scale = frame.scale,
-            .max_bytes = 127, .max_codepoints = 127, .input = frame.input, .disabled = disabled})
-    if edited.edit.changed {
-        value := previous
-        if edited.edit.start >= 0 && edited.edit.end >= edited.edit.start && edited.edit.end <= value.count {
-            text: Vec(u8)
-            BuilderPrint(*text, "%", value[:edited.edit.start])
-            BuilderPrint(*text, "%", edited.edit.replacement)
-            BuilderPrint(*text, "%", value[edited.edit.end:])
-            invite_text = BuilderFinish(text)
-            invite_target[0] = cast(u8)0
-            invite_suggestions = true
-        }
-    }
-    invite_cursor = edited.cursor
-    invite_anchor = edited.anchor
-    invite_scroll = edited.scroll_x
-    invite_focused = edited.focused
-    // The host shows the keyboard while a field is focused; the name field
-    // treats the flag as its own only while this one is not focused.
-    if invite_focused {
-        frame.focused = true
-    }
-    if edited.clipboard_write {
-        frame.clipboard_write = true
-        frame.clipboard_text = edited.clipboard_text
-    }
-    if edited.escaped {
-        invite_suggestions = false
-    }
-    if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6541,
-            .bounds = Bounds(x + width - button_width, row_y, button_width, Scale(44)),
-            .label = ListsLocaleHost("elist_invite"),
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .disabled = disabled || invite_target[0] == cast(u8)0}) != 0 {
-        access: [3]string = .["owner", "editor", "viewer"]
-        Remote(LISTS_INVITE, TextUntilNul(invite_target[:]), "", "", access[invite_role])
-        ResetInvite()
-        return true
-    }
-    return false
-}
-
-// The access a new invitation gives, as a menu like each person's.
-InviteRole :: (disabled: bool) {
-    if invite_role_bounds.width <= 0.0 || invite_role_bounds.y < sharing_viewport.y ||
-    invite_role_bounds.y + invite_role_bounds.height > sharing_viewport.y + sharing_viewport.height {
-        return
-    }
-    labels: [3]string = .[ListsLocaleHost("elist_owner"), ListsLocaleHost("elist_can_edit"), ListsLocaleHost("elist_read_only")]
-    options: [3]Dropdown.Option
-    for index: cast(s32)0..2 {
-        options[index] = Dropdown.Option.{.key = cast(u64)(index + 1), .label = labels[index]}
-    }
-    chosen := Dropdown.Draw(frame.session, Dropdown.Props.{.key = cast(u64)6543,
-            .bounds = invite_role_bounds, .selected_index = invite_role,
-            .disabled = disabled, .scale = frame.scale}, options[:3])
-    if chosen.open {
-        settings_menu_open = true
-    }
-    if chosen.changed {
-        invite_role = chosen.selected_index
-    }
-}
-
-// Suggestions float below the input while typing and only select a person.
-InviteSuggestions :: (x: s32, y: s32, list_id: string, owner: string) {
-    if !invite_suggestions || invite_text.count == 0 {
-        return
-    }
-    options: [8]ContextMenu.ContextMenuItem
-    names: [8][128]u8
-    targets: [8][65]u8
-    count: s32 = 0
-    for index: cast(s32)0..frame.friend_count - 1 {
-        friend := ReadListsSharingRowHost(index, false)
-        id: [65]u8
-        alias: [128]u8
-        unused CopyCString(friend.id, id[:])
-        unused CopyCString(friend.alias, alias[:])
-        if !ContainsFoldASCII(TextUntilNul(alias[:]), invite_text) ||
-        !InvitationAvailable(TextUntilNul(id[:]), list_id, owner) {
-            continue
-        }
-        names[count] = alias
-        targets[count] = id
-        options[count] = ContextMenu.ContextMenuItem.{.id = count + 1, .label = TextUntilNul(names[count][:])}
-        count += 1
-        if count == 8 {
-            break
-        }
-    }
-    if count == 0 {
-        options[0] = ContextMenu.ContextMenuItem.{.id = 1, .label = ListsLocaleHost("elist_no_matches"), .disabled = true}
-        count = 1
-    }
-    result := ContextMenu.Draw(frame.session, ContextMenu.Props.{.key = cast(u64)6542,
-            .open = true, .x = cast(float32)x, .y = cast(float32)y,
-            .escape = frame.input.escape, .scale = frame.scale}, options[:count])
-    if result.activated_id > 0 && result.activated_id <= count && !options[result.activated_id - 1].disabled {
-        selected := result.activated_id - 1
-        invite_text = Copied(TextUntilNul(names[selected][:]))
-        invite_target = targets[selected]
-        invite_cursor = cast(s32)invite_text.count
-        invite_anchor = invite_cursor
-        invite_suggestions = false
-    } else if result.closed {
-        invite_suggestions = false
-    }
-}
-
-// A person with access: an avatar, the name (marked while invited) and the
-// access, which an owner changes from a menu. Rows are MEMBER_ROW tall.
 MEMBER_ROW :: 56;
-
-MemberRow :: (row: ListsUiPerson, place: s32, x: s32, y: s32, width: s32, manages: bool,
-    original_owner: bool, disabled: bool) {
-    target: [65]u8
-    unused CopyCString(row.target, target[:])
-    name := row.target_alias
-    if name.count == 0 {
-        name = row.target[:ifx row.target.count > 8 then 8 else row.target.count]
-    }
-    if row.target == frame.public_id {
-        name = ListsLocaleHost("elist_you")
-    }
-    shown := name
-    if row.status == "pending" {
-        invited: Vec(u8)
-        BuilderPrint(*invited, "% (%)", Copied(name), ListsLocaleHost("elist_invited"))
-        shown = BuilderFinish(invited)
-    }
-    avatar := Scale(36)
-    icon := ifx row.target == frame.public_id then frame.profile_icon else row.profile_icon
-    Avatar(cast(u64)(7900 + place), shown, place, x, y + (Scale(MEMBER_ROW) - avatar) / 2, avatar, icon)
-    role_width := Scale(140)
-    name_x := x + avatar + Scale(12)
-    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(name_x, y, x + width - role_width - Scale(8) - name_x, Scale(MEMBER_ROW)),
-            .text = shown, .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapEllipsis})
-    role: s32 = ifx original_owner || row.access == "owner" then 0 else ifx row.access == "viewer" then 2 else 1
-    labels: [3]string = .[ListsLocaleHost("elist_owner"), ListsLocaleHost("elist_can_edit"), ListsLocaleHost("elist_read_only")]
-    bounds := Bounds(x + width - role_width, y + (Scale(MEMBER_ROW) - Scale(40)) / 2, role_width, Scale(40))
-    if manages && !original_owner && bounds.y >= sharing_viewport.y &&
-    bounds.y + bounds.height <= sharing_viewport.y + sharing_viewport.height {
-        // Submit after Scroll ends: its viewport must not crop the menu.
-        unused VecPush(sharing_controls, SharingAccessControl.{.target = target,
-                .bounds = bounds, .role = role, .disabled = disabled})
-    } else {
-        Text.Draw(frame.session, Text.Props.{.bounds = bounds, .text = labels[role],
-                .align = cast(TextAlign)TextAlignEnd, .vertical_align = cast(TextAlign)TextAlignCenter,
-                .disabled = true})
-    }
-}
-
-SharingAccessControls :: () -> bool {
-    labels: [3]string = .[ListsLocaleHost("elist_owner"), ListsLocaleHost("elist_can_edit"), ListsLocaleHost("elist_read_only")]
-    options: [4]Dropdown.Option
-    for index: cast(s32)0..2 {
-        options[index] = Dropdown.Option.{.key = cast(u64)(index + 1), .label = labels[index]}
-    }
-    options[3] = Dropdown.Option.{.key = cast(u64)4, .label = ListsLocaleHost("elist_remove_access"), .separator_before = true}
-    for control: sharing_controls {
-        target := TextUntilNul(control.target[:])
-        changed := Dropdown.Draw(frame.session, Dropdown.Props.{.key = Layout.KeyHash(target),
-                .bounds = control.bounds, .selected_index = control.role,
-                .disabled = control.disabled, .scale = frame.scale}, options[:4])
-        if changed.open {
-            settings_menu_open = true
-        }
-        if changed.changed {
-            if changed.selected_index == 3 {
-                Remote(LISTS_REMOVE_ACCESS, target)
-            } else {
-                access: [3]string = .["owner", "editor", "viewer"]
-                Remote(LISTS_SET_ACCESS, target, "", "", access[changed.selected_index])
-            }
-            return true
-        }
-    }
-    return false
-}
-
-// Invitations to other people's lists update while the dialog is open.
-InvitationsDialog :: () {
-    width := frame.width - Scale(32)
-    if width > Scale(520) {
-        width = Scale(520)
-    }
-    detail := ListsLocaleHost(ifx frame.connected then "elist_invitations_detail" else "elist_connect")
-    count: s32 = 0
-    for index: cast(s32)0..frame.invitation_count - 1 {
-        row := ReadListsSharingRowHost(index, true)
-        if row.target == frame.public_id && row.status == "pending" {
-            count += 1
-        }
-    }
-    row_height := Scale(160)
-    shown := ifx count > 4 then 4 else count
-    height := Scale(120) + shown * row_height
-    if height > frame.height - frame.bottom - Scale(32) {
-        height = frame.height - frame.bottom - Scale(32)
-    }
-    dialog := Modal.Draw(frame.session, Modal.Props.{.key = cast(u64)6520,
-            .title = ListsLocaleHost("elist_invitations"),
-            .width = width, .height = height, .scale = frame.scale,
-            .has_right_action = true, .right_label = ListsLocaleHost("close_button")})
-    if dialog.dismissed || dialog.right_clicked {
-        if dialog.opened {
-            End(frame.session)
-        }
-        frame.panel = 0
-        frame.focused = false
-        sharing_scroll = 0
-        return
-    }
-    if !dialog.opened {
-        return
-    }
-    x := cast(s32)dialog.layout.content.x
-    y := cast(s32)dialog.layout.content.y
-    content_width := cast(s32)dialog.layout.content.width
-    bottom := cast(s32)(dialog.layout.content.y + dialog.layout.content.height)
-    disabled := frame.sharing_busy || frame.sharing_pending
-    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y, content_width, Scale(32)),
-            .text = detail, .wrap = cast(Text.Wrap)TextWrapAuto})
-    y += Scale(40)
-    if !frame.connected {
-        End(frame.session)
-        return
-    }
-    if count == 0 {
-        Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y, content_width, Scale(44)),
-                .text = ListsLocaleHost("elist_no_invitations"), .wrap = cast(Text.Wrap)TextWrapAuto})
-        End(frame.session)
-        return
-    }
-    scroll := Scroll.Draw(frame.session, Scroll.Props.{.key = cast(u64)6512,
-            .bounds = Bounds(x, y, content_width, bottom - y),
-            .content_height = count * row_height, .scroll_offset = sharing_scroll})
-    sharing_scroll = scroll.scroll_offset
-    if scroll.opened {
-        row_y := cast(s32)scroll.content.y
-        changed: bool
-        for index: cast(s32)0..frame.invitation_count - 1 {
-            row := ReadListsSharingRowHost(index, true)
-            if row.target != frame.public_id || row.status != "pending" {
-                continue
-            }
-            if row_y + row_height > cast(s32)scroll.viewport.y && row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height) {
-                changed = InvitationRow(row, index, x, row_y, content_width - Scale(14), disabled)
-                if changed {
-                    break
-                }
-            }
-            row_y += row_height
-        }
-        End(frame.session)
-    }
-    End(frame.session)
-}
-
-CustomTaskDialog :: () {
-    width := frame.width - Scale(32)
-    if width > Scale(440) {
-        width = Scale(440)
-    }
-    height := Scale(404)
-    available := frame.height - frame.bottom - Scale(32)
-    if available < height { height = available }
-    dialog := Modal.Draw(frame.session, Modal.Props.{.key = cast(u64)6550,
-            .title = ListsLocaleHost("elist_custom_task"), .width = width,
-            .height = height, .scale = frame.scale})
-    if dialog.dismissed {
-        CloseCustomTask()
-        return
-    }
-    if !dialog.opened {
-        return
-    }
-    current: ListsUiRow
-    blocked := frame.sharing_busy || frame.sharing_pending
-    if state.selected_list >= 0 && state.selected_list < state.list_count {
-        current = ReadListsRowHost(state.selected_list, false)
-        blocked = blocked || current.read_only || current.incomplete
-    } else {
-        blocked = true
-    }
-    x := cast(s32)dialog.layout.content.x
-    y := cast(s32)dialog.layout.content.y
-    content_width := cast(s32)dialog.layout.content.width
-    scroll := Scroll.Draw(frame.session, Scroll.Props.{.key = cast(u64)6555,
-            .bounds = Bounds(x, y, content_width, cast(s32)dialog.layout.content.height),
-            .content_height = Scale(350), .scroll_offset = custom_task_scroll,
-            .scale = frame.scale})
-    custom_task_scroll = scroll.scroll_offset
-    if !scroll.opened {
-        End(frame.session)
-        return
-    }
-    x = cast(s32)scroll.content.x
-    y = cast(s32)scroll.content.y
-    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y, content_width, Scale(20)),
-            .text = ListsLocaleHost("elist_task_label")})
-    task_committed := Field(Bounds(x, y + Scale(24), content_width, Scale(44)),
-        ListsLocaleHost("elist_item_name_placeholder"), blocked)
-    task_escaped := field_escaped
-    y += Scale(76)
-    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y, content_width, Scale(20)),
-            .text = ListsLocaleHost("habit_description_label")})
-    description_escaped := DescriptionField(Bounds(x, y + Scale(24), content_width, Scale(112)),
-        ListsLocaleHost("habit_description_label"), blocked)
-    y += Scale(144)
-    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y, content_width - Scale(132), Scale(44)),
-            .text = ListsLocaleHost("elist_priority_label"),
-            .vertical_align = cast(TextAlign)TextAlignCenter})
-    options: [27]Dropdown.Option
-    options[0].label = ListsLocaleHost("profile_none_label")
-    alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    for index: cast(s32)1..26 {
-        options[index].label = alphabet[index - 1:index]
-    }
-    chosen := Dropdown.Draw(frame.session, Dropdown.Props.{.key = cast(u64)6551,
-            .bounds = Bounds(x + content_width - Scale(124), y, Scale(124), Scale(44)),
-            .selected_index = frame.task_priority, .disabled = blocked,
-            .scale = frame.scale}, options[:27])
-    if chosen.changed {
-        frame.task_priority = chosen.selected_index
-    }
-    y += Scale(54)
-    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y, content_width, Scale(24)),
-            .text = "+project @context due:YYYY-MM-DD", .disabled = true})
-    y += Scale(32)
-    button_width := (content_width - Scale(8)) / 2
-    save := Button.Draw(frame.session, Button.Props.{.key = cast(u64)6553,
-            .bounds = Bounds(x, y, button_width, Scale(44)),
-            .label = ListsLocaleHost("save_button"),
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .disabled = ListsTitleWithoutPriority(frame.value).count == 0 || blocked ||
-                !ListsTitlePriorityFits(frame.value, frame.task_priority, LISTS_TEXT_LIMIT)}) != 0
-    cancel := Button.Draw(frame.session, Button.Props.{.key = cast(u64)6554,
-            .bounds = Bounds(x + button_width + Scale(8), y, button_width, Scale(44)),
-            .label = ListsLocaleHost("cancel_button")}) != 0
-    if task_escaped || description_escaped || cancel {
-        CloseCustomTask()
-    } else if save || task_committed {
-        SaveCustomTask()
-    }
-    End(frame.session)
-    End(frame.session)
-}
-
-// An invitation to a list, who sent it, and Accept and Decline. True once
-// one is chosen.
-InvitationRow :: (row: ListsUiPerson, index: s32, x: s32, y: s32, width: s32, disabled: bool) -> bool {
-    alias := row.alias
-    if alias.count == 0 {
-        alias = row.owner
-    }
-    Box.Draw(frame.session, Box.Props.{.key = cast(u64)(7800 + index),
-            .bounds = Bounds(x, y + Scale(4), width, Scale(144)),
-            .border = Color.{128, 128, 128, 64}, .radius = cast(float32)Scale(12)})
-    x += Scale(16)
-    width -= Scale(32)
-    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y + Scale(14), width, Scale(44)),
-            .text = row.title, .size = Scale(18), .wrap = cast(Text.Wrap)TextWrapAuto})
-    sender: Vec(u8)
-    BuilderPrint(*sender, "%: %", ListsLocaleHost("elist_invitation_from"), alias)
-    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y + Scale(60), width, Scale(24)),
-            .text = BuilderFinish(sender), .size = Scale(13), .wrap = cast(Text.Wrap)TextWrapEllipsis})
-    button_width := (width - Scale(12)) / 2
-    accept := Button.Draw(frame.session, Button.Props.{.key = cast(u64)(7600 + index * 2),
-            .bounds = Bounds(x, y + Scale(92), button_width, Scale(44)),
-            .label = ListsLocaleHost("profile_friend_accept_button"),
-            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .disabled = disabled || state.list_count >= 32}) != 0
-    decline := Button.Draw(frame.session, Button.Props.{.key = cast(u64)(7601 + index * 2),
-            .bounds = Bounds(x + button_width + Scale(12), y + Scale(92), button_width, Scale(44)),
-            .label = ListsLocaleHost("profile_friend_decline_button"), .disabled = disabled,
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0
-    if accept || decline {
-        Remote(ifx accept then LISTS_ACCEPT else LISTS_DECLINE, "", row.id, row.list_id)
-        return true
-    }
-    return false
-}
-
-ListsView :: (message: ListsMessage) -> ListsMessage {
-    frame = ReadListsUiHost()
-    state = message
-    // Sharing lives in List settings; an older saved Share panel opens it.
-    if frame.panel == 1 {
-        frame.panel = 0
-        if state.selected_list >= 0 && state.selected_list < state.list_count {
-            OpenSettings(ReadListsRowHost(state.selected_list, false).title)
-        }
-    }
-    if settings_open && (state.selected_list < 0 || state.selected_list >= state.list_count) {
-        CloseSettings()
-    }
-    // A successful list save resets editing in the applied message. The next
-    // frame therefore leaves settings, while a failed save keeps editing_item.
-    if settings_open && state.editing_item != -3 {
-        CloseSettings()
-    }
-    input := frame.input
-    if frame.panel == 2 {
-        frame.input = TextField.Input.{}
-        frame.focused = false
-    }
-    if settings_open {
-        ListSettingsPage()
-    } else {
-        ListsPage()
-    }
-    frame.input = input
-    if frame.panel == 2 {
-        InvitationsDialog()
-    }
-    if frame.panel == 3 {
-        CustomTaskDialog()
-    }
-    return Finish()
-}
 
 // List settings opens with its name ready to change but no keyboard.
 OpenSettings :: (title: string) {
@@ -902,261 +342,6 @@ ListChipsResult :: struct {
     acted: bool
 }
 
-// The lists are chips that wrap onto more rows, as in 1List, so each keeps
-// its whole name however many there are; the last chip makes a new list.
-// Past three rows the chips scroll.
-ListChips :: (x: s32, y: s32, width: s32, blocked: bool) -> ListChipsResult {
-    result: ListChipsResult
-    chip_height := Scale(40)
-    gap := Scale(8)
-    padding := Scale(18)
-    chip_x: [33]s32
-    chip_row: [33]s32
-    chip_width: [33]s32
-    row: s32 = 0
-    row_x: s32 = 0
-    for index: cast(s32)0..state.list_count {
-        chip_width[index] = chip_height
-        if index < state.list_count {
-            label := ReadListsRowHost(index, false).title
-            chip_width[index] = TextWidth(frame.session, Text.Props.{.text = label}) + padding * 2
-            // The selected chip carries the gear that opens List settings.
-            if index == state.selected_list {
-                chip_width[index] += Scale(26)
-            }
-        }
-        if chip_width[index] > width {
-            chip_width[index] = width
-        }
-        if row_x > 0 && row_x + chip_width[index] > width {
-            row += 1
-            row_x = 0
-        }
-        chip_x[index] = row_x
-        chip_row[index] = row
-        row_x += chip_width[index] + gap
-    }
-    rows := row + 1
-    shown_rows := ifx rows > 3 then 3 else rows
-    result.height = shown_rows * chip_height + (shown_rows - 1) * gap
-    scroll := Scroll.Draw(frame.session, Scroll.Props.{.key = cast(u64)6500,
-            .bounds = Bounds(x, y, width, result.height),
-            .content_height = rows * chip_height + (rows - 1) * gap,
-            .scroll_offset = frame.tab_scroll})
-    frame.tab_scroll = scroll.scroll_offset
-    if !scroll.opened {
-        return result
-    }
-    for index: cast(s32)0..state.list_count {
-        bounds := Bounds(x + chip_x[index], cast(s32)scroll.content.y + chip_row[index] * (chip_height + gap),
-            chip_width[index], chip_height)
-        if index == state.list_count {
-            if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6505, .bounds = bounds,
-                    .label = ListsLocaleHost("elist_new_list"), .icon_type = cast(s32)IconPlus,
-                    .icon_only = true, .pill = true,
-                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline,
-                    .disabled = blocked || state.list_count >= 32}) != 0 {
-                BeginInput(-2, "")
-                frame.panel = 0
-                result.acted = true
-            }
-            continue
-        }
-        chosen := index == state.selected_list
-        title := ReadListsRowHost(index, false).title
-        if Button.Draw(frame.session, Button.Props.{.key = cast(u64)(6800 + index), .bounds = bounds,
-                .label = title, .pill = true, .selected = chosen,
-                .icon_shape = ifx chosen then SettingsIcon.Shape else "",
-                .icon_placement = cast(IconPlacement)IconPlacementTrailing,
-                .tone = cast(ButtonTone)(ifx chosen then ButtonToneAccent else ButtonToneNeutral),
-                .emphasis = cast(ButtonEmphasis)(ifx chosen then ButtonEmphasisFilled else ButtonEmphasisOutline)}) != 0 {
-            if chosen {
-                OpenSettings(Copied(title))
-            } else {
-                state.action = LISTS_SELECT
-                state.index = index
-                undo_until = 0.0
-                delete_confirm = false
-                frame.panel = 0
-            }
-            result.acted = true
-        }
-    }
-    End(frame.session)
-    return result
-}
-
-// List settings replaces the page: the name, the people with access and an
-// invitation, and for the owner a Delete that asks first. Back returns.
-ListSettingsPage :: () {
-    x := Scale(16)
-    width := frame.width - x * 2
-    if width > Scale(640) {
-        x = (frame.width - Scale(640)) / 2
-        width = Scale(640)
-    }
-    y := Scale(12)
-    blocked := frame.sharing_busy || frame.sharing_pending
-    row := ReadListsRowHost(state.selected_list, false)
-    list_id := Copied(row.id)
-    title := Copied(row.title)
-    owner_id := Copied(row.owner_id)
-    owner_alias := Copied(row.owner_alias)
-    shared := row.shared
-    owns := !row.shared || row.owner
-    read_only := row.read_only
-    incomplete := row.incomplete
-    VecClear(sharing_controls)
-    invite_role_bounds = Rectangle.{}
-    menu_was_open := settings_menu_open
-    settings_menu_open = false
-    if frame.input.escape && !menu_was_open && !invite_suggestions {
-        CloseSettings()
-        return
-    }
-    if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6550,
-            .bounds = Bounds(x, y, Scale(44), Scale(44)),
-            .label = ListsLocaleHost("back_button"), .icon_shape = BackIcon.Shape, .icon_only = true,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
-        CloseSettings()
-        return
-    }
-    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x + Scale(56), y, width - Scale(56), Scale(44)),
-            .text = ListsLocaleHost("elist_settings"), .size = Scale(20),
-            .vertical_align = cast(TextAlign)TextAlignCenter})
-    y += Scale(60)
-    // Save reports through the applied message before the next frame closes
-    // settings, so a failed write can keep the edited name.
-    if state.editing_item != -3 {
-        BeginInput(-3, title)
-        frame.focused = false
-    }
-    members: s32 = 1
-    for index: cast(s32)0..frame.invitation_count - 1 {
-        if SharingMemberShown(ReadListsSharingRowHost(index, true), list_id) {
-            members += 1
-        }
-    }
-    inner := width - Scale(14)
-    can_invite := frame.connected && !read_only
-    content := Scale(28 + 44 + 28 + 32 + 20)
-    content += ifx frame.connected then members * Scale(MEMBER_ROW) else Scale(64)
-    if can_invite {
-        content += InviteFieldHeight(inner) + Scale(24)
-    }
-    if owns {
-        content += ifx delete_confirm then Scale(170) else Scale(52)
-    }
-    scroll := Scroll.Draw(frame.session, Scroll.Props.{.key = cast(u64)6560,
-            .bounds = Bounds(x, y, width, frame.height - frame.bottom - y - Scale(12)),
-            .content_height = content, .scroll_offset = settings_scroll})
-    settings_scroll = scroll.scroll_offset
-    sharing_viewport = scroll.viewport
-    if !scroll.opened {
-        return
-    }
-    cy := cast(s32)scroll.content.y
-    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, cy, inner, Scale(24)),
-            .text = ListsLocaleHost("elist_list_name_placeholder"), .disabled = true})
-    cy += Scale(28)
-    if invite_focused {
-        frame.focused = false
-    }
-    committed := Field(Bounds(x, cy, inner - Scale(96), Scale(44)),
-        ListsLocaleHost("elist_list_name_placeholder"), read_only || blocked)
-    renamed := frame.value.count > 0 && frame.value != title && !read_only && !blocked
-    if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6551,
-            .bounds = Bounds(x + inner - Scale(88), cy, Scale(88), Scale(44)),
-            .label = ListsLocaleHost("save_button"),
-            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .disabled = !renamed}) != 0 || (committed && renamed) {
-        Mutation(LISTS_COMMIT, -1)
-        frame.focused = false
-        End(frame.session)
-        return
-    }
-    cy += Scale(72)
-    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, cy, inner, Scale(24)),
-            .text = ListsLocaleHost("elist_people_with_access"), .disabled = true})
-    cy += Scale(32)
-    if !frame.connected {
-        Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, cy, inner, Scale(64)),
-                .text = ListsLocaleHost("elist_connect"), .wrap = cast(Text.Wrap)TextWrapAuto})
-        cy += Scale(64)
-    } else {
-        owner_name := ifx owner_alias.count > 0 then owner_alias else owner_id
-        if !shared || owner_id == frame.public_id {
-            owner_name = ListsLocaleHost("elist_you")
-        }
-        MemberRow(ListsUiPerson.{.target = owner_id, .target_alias = owner_name, .access = "owner",
-                .profile_icon = FriendIcon(owner_id)}, 0, x, cy, inner, false, true, blocked)
-        cy += Scale(MEMBER_ROW)
-        place: s32 = 1
-        for index: cast(s32)0..frame.invitation_count - 1 {
-            person := ReadListsSharingRowHost(index, true)
-            if !SharingMemberShown(person, list_id) {
-                continue
-            }
-            MemberRow(person, place, x, cy, inner, owns, false, blocked)
-            place += 1
-            cy += Scale(MEMBER_ROW)
-        }
-    }
-    cy += Scale(20)
-    suggestions_y := cy + Scale(48)
-    if can_invite {
-        if InviteField(x, cy, inner, blocked || incomplete) {
-            End(frame.session)
-            return
-        }
-        cy += InviteFieldHeight(inner) + Scale(24)
-    }
-    // Only the owner deletes, and only after a second, explicit answer.
-    if owns && !delete_confirm {
-        if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6515,
-                .bounds = Bounds(x, cy, inner, Scale(44)),
-                .label = ListsLocaleHost("elist_delete_list"), .icon_shape = TRASH_ICON,
-                .tone = cast(ButtonTone)ButtonToneDanger,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .disabled = blocked}) != 0 {
-            delete_confirm = true
-        }
-    } else if owns {
-        Box.Draw(frame.session, Box.Props.{.key = cast(u64)6518, .bounds = Bounds(x, cy, inner, Scale(160)),
-                .border = Color.{198, 52, 52, 160}, .radius = cast(float32)Scale(12)})
-        Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x + Scale(16), cy + Scale(12), inner - Scale(32), Scale(30)),
-                .text = ListsLocaleHost("elist_delete_question"), .size = Scale(18)})
-        Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x + Scale(16), cy + Scale(44), inner - Scale(32), Scale(48)),
-                .text = ListsLocaleHost("elist_delete_detail"), .wrap = cast(Text.Wrap)TextWrapAuto,
-                .disabled = true})
-        button_width := (inner - Scale(44)) / 2
-        if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6514,
-                .bounds = Bounds(x + Scale(16), cy + Scale(100), button_width, Scale(44)),
-                .label = ListsLocaleHost("cancel_button")}) != 0 {
-            delete_confirm = false
-        }
-        if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6516,
-                .bounds = Bounds(x + Scale(28) + button_width, cy + Scale(100), button_width, Scale(44)),
-                .label = ListsLocaleHost("elist_delete_list"),
-                .tone = cast(ButtonTone)ButtonToneDanger,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled, .disabled = blocked}) != 0 {
-            CloseSettings()
-            Mutation(LISTS_DELETE_LIST, -1)
-            End(frame.session)
-            return
-        }
-    }
-    End(frame.session)
-    if SharingAccessControls() {
-        return
-    }
-    if can_invite {
-        InviteRole(blocked || incomplete)
-        if !blocked {
-            InviteSuggestions(x, suggestions_y, list_id, owner_id)
-        }
-    }
-}
-
 // A friend's profile picture, or this account's own; 0 when unknown.
 FriendIcon :: (id: string) -> s32 {
     if id == frame.public_id {
@@ -1171,23 +356,123 @@ FriendIcon :: (id: string) -> s32 {
     return 0
 }
 
-// Under the chips, a shared list shows who has it, as a document does:
-// pictures and names, invited people marked. A tap opens List settings.
-SharedLine :: (current: ListsUiRow, x: s32, y: s32, width: s32) -> bool {
+NewPreviousBytes :: () -> [128]u8 {
+    result: [128]u8
+    return result
+}
+
+NewInviteRoleOptions :: () -> [3]Dropdown.Option {
+    result: [3]Dropdown.Option
+    return result
+}
+
+NewInviteSuggestions :: () -> [8]ContextMenu.ContextMenuItem {
+    result: [8]ContextMenu.ContextMenuItem
+    return result
+}
+
+NewNames :: () -> [8][128]u8 {
+    result: [8][128]u8
+    return result
+}
+
+NewTargets :: () -> [8][65]u8 {
+    result: [8][65]u8
+    return result
+}
+
+NewId :: () -> [65]u8 {
+    result: [65]u8
+    return result
+}
+
+NewAlias :: () -> [128]u8 {
+    result: [128]u8
+    return result
+}
+
+NewTarget :: () -> [65]u8 {
+    result: [65]u8
+    return result
+}
+
+NewAccessOptions :: () -> [4]Dropdown.Option {
+    result: [4]Dropdown.Option
+    return result
+}
+
+NewPriorityOptions :: () -> [27]Dropdown.Option {
+    result: [27]Dropdown.Option
+    return result
+}
+
+NewChipX :: () -> [33]s32 {
+    result: [33]s32
+    return result
+}
+
+NewChipRow :: () -> [33]s32 {
+    result: [33]s32
+    return result
+}
+
+NewChipWidth :: () -> [33]s32 {
+    result: [33]s32
+    return result
+}
+
+NewOpenOrder :: () -> [256]s32 {
+    result: [256]s32
+    return result
+}
+
+NewFinishedOrder :: () -> [256]s32 {
+    result: [256]s32
+    return result
+}
+
+ListsEditText :: (value: string, start: s32, end: s32, inserted: string) -> string {
+    edited: Vec(u8)
+    BuilderPrint(*edited, "%", value[:start])
+    BuilderPrint(*edited, "%", inserted)
+    BuilderPrint(*edited, "%", value[end:])
+    return BuilderFinish(edited)
+}
+
+ListPersonLabel :: (name: string, detail: string) -> string {
+    label: Vec(u8)
+    BuilderPrint(*label, "% (%)", name, detail)
+    return BuilderFinish(label)
+}
+
+ListInvitationSender :: (name: string) -> string {
+    label: Vec(u8)
+    BuilderPrint(*label, "%: %", ListsLocaleHost("elist_invitation_from"), name)
+    return BuilderFinish(label)
+}
+
+ListShareSummary :: struct {
+    names: [3]string
+    icons: [3]s32
+    count: s32
+    title: string
+    label: string
+}
+
+SharedListSummary :: (current: ListsUiRow) -> ListShareSummary {
+    summary: ListShareSummary
     list_id := Copied(current.id)
     owner_id := Copied(current.owner_id)
     owner_name := Copied(ifx current.owner_alias.count > 0 then current.owner_alias else current.people)
     owns := current.owner
-    title := Copied(current.title)
+    summary.title = Copied(current.title)
     invited_label := Copied(ListsLocaleHost("elist_invited"))
     text: Vec(u8)
-    names: [3]string
-    icons: [3]s32
     count: s32 = 0
     if !owns {
         BuilderPrint(*text, "%", owner_name)
-        names[0] = owner_name
-        icons[0] = FriendIcon(owner_id)
+        summary.names[0] = owner_name
+        summary.icons[0] = FriendIcon(owner_id)
         count = 1
     }
     // People who joined come first, then those still invited.
@@ -1212,396 +497,24 @@ SharedLine :: (current: ListsUiRow, x: s32, y: s32, width: s32) -> bool {
                 BuilderPrint(*text, "% (%)", name, invited_label)
             }
             if count < 3 {
-                names[count] = name
-                icons[count] = icon
+                summary.names[count] = name
+                summary.icons[count] = icon
             }
             count += 1
         }
     }
-    if count == 0 {
-        return false
+    summary.count = ifx count > 3 then 3 else count
+    if count > 0 {
+        summary.label = BuilderFinish(text)
     }
-    size := Scale(32)
-    step := Scale(22)
-    shown := ifx count > 3 then 3 else count
-    for place: cast(s32)0..shown - 1 {
-        Avatar(cast(u64)(7950 + place), names[place], place, x + place * step, y + Scale(4), size, icons[place])
-    }
-    text_x := x + (shown - 1) * step + size + Scale(10)
-    if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6508,
-            .bounds = Bounds(text_x, y, x + width - text_x, Scale(40)),
-            .label = BuilderFinish(text),
-            .content_alignment = cast(ContentAlignment)ContentAlignmentStart,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
-        OpenSettings(title)
-        return true
-    }
-    return false
+    return summary
 }
 
-// The selected list: its chips, who has it, the new item field and items.
-ListsPage :: () {
-    x := Scale(16)
-    width := frame.width - x * 2
-    y := Scale(12)
-    blocked := frame.sharing_busy || frame.sharing_pending
-    current: ListsUiRow
-    if state.selected_list >= 0 && state.selected_list < state.list_count {
-        current = ReadListsRowHost(state.selected_list, false)
-    }
-    // Rename and Delete live in List settings now.
-    if state.editing_item == -3 {
-        state.editing_item = -1
-        state.reset_input = true
-    }
-    chips := ListChips(x, y, width, blocked)
-    if chips.acted {
-        return
-    }
-    y += chips.height + Scale(12)
-    if current.shared {
-        if SharedLine(current, x, y, width) {
-            return
-        }
-        y += Scale(48)
-    }
-    if (frame.sharing_status != 0 && frame.sharing_status != 2) || frame.sharing_pending {
-        key := "elist_saving"
-        if frame.sharing_pending && !frame.sharing_busy {
-            key = "elist_unconfirmed"
-        } else if frame.sharing_status == 3 {
-            key = "elist_share_failed"
-        } else if frame.sharing_status == 4 {
-            key = "elist_conflict"
-        } else if frame.sharing_status == 5 {
-            key = "elist_unavailable"
-        }
-        notice_width := ifx frame.sharing_pending && !frame.sharing_busy then width - Scale(104) else width
-        Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y, notice_width, Scale(64)),
-                .text = ListsLocaleHost(key), .wrap = cast(Text.Wrap)TextWrapAuto})
-        if frame.sharing_pending && !frame.sharing_busy {
-            if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6513,
-                    .bounds = Bounds(x + width - Scale(96), y, Scale(96), Scale(44)),
-                    .label = ListsLocaleHost("retry_button")}) != 0 {
-                state.action = LISTS_RETRY
-                state.remote = true
-                return
-            }
-        }
-        y += Scale(72)
-    }
-    if current.shared && current.incomplete {
-        blocked = true
-        Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y, width, Scale(64)),
-                .text = ListsLocaleHost("elist_capacity"), .wrap = cast(Text.Wrap)TextWrapAuto})
-        y += Scale(72)
-    }
-    if current.read_only && state.editing_item != -2 {
-        blocked = true
-    }
-    editing_list := state.editing_item == -2
-    if !editing_list {
-        // Invitations to other people's lists appear only while some wait.
-        if frame.pending_count_text != "0" && frame.pending_count_text != "" {
-            label: Vec(u8)
-            BuilderPrint(*label, "% (%)", ListsLocaleHost("elist_invitations"), frame.pending_count_text)
-            if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6509,
-                    .bounds = Bounds(x, y, width, Scale(44)),
-                    .label = BuilderFinish(label),
-                    .tone = cast(ButtonTone)ButtonToneAccent}) != 0 {
-                frame.panel = 2
-                frame.focused = false
-                sharing_scroll = 0
-            }
-            y += Scale(52)
-        }
-    }
-    if state.input_error != 0 {
-        Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y, width, Scale(48)),
-                .text = ListsLocaleHost("results_write_failed"), .wrap = cast(Text.Wrap)TextWrapAuto})
-        y += Scale(56)
-    }
-    if editing_list {
-        committed := Field(Bounds(x, y, width, Scale(44)),
-            ListsLocaleHost("elist_new_list_placeholder"), blocked)
-        button_width := (width - Scale(8)) / 2
-        if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6506,
-                .label = ListsLocaleHost("elist_create_list"),
-                .bounds = Bounds(x, y + Scale(56), button_width, Scale(44)),
-                .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-                .disabled = frame.value.count == 0 || blocked}) != 0 || (committed && !blocked) {
-            Mutation(LISTS_COMMIT, -1)
-        }
-        if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6514,
-                .label = ListsLocaleHost("cancel_button"),
-                .bounds = Bounds(x + button_width + Scale(8), y + Scale(56), button_width, Scale(44)),
-                .disabled = blocked}) != 0 {
-            state.editing_item = -1
-            state.reset_input = true
-        }
-        return
-    }
-    if state.list_count == 0 {
-        Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y + Scale(32), width, Scale(30)),
-                .text = ListsLocaleHost("elist_empty_title"), .align = cast(TextAlign)TextAlignCenter})
-        Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y + Scale(72), width, Scale(64)),
-                .text = ListsLocaleHost("elist_empty_detail"), .align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapAuto})
-        return
-    }
-    if frame.panel == 3 {
-        y += Scale(56)
-    } else if state.editing_item >= 0 {
-        // The item's own row holds its field; Escape or Back leaves it.
-        if frame.input.escape {
-            state.editing_item = -1
-            state.reset_input = true
-            frame.focused = false
-        }
-        unused TextField.Draw(frame.session, TextField.Props.{.key = cast(u64)6502,
-                .bounds = Bounds(x, y, width - Scale(96), Scale(44)),
-                .placeholder = ListsLocaleHost("elist_add_item_placeholder"), .disabled = true})
-        unused Button.Draw(frame.session, Button.Props.{.key = cast(u64)6510,
-                .label = ListsLocaleHost("elist_add_item"),
-                .bounds = Bounds(x + width - Scale(88), y, Scale(88), Scale(44)),
-                .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-                .disabled = true})
-    } else {
-        committed := Field(Bounds(x, y, width - Scale(180), Scale(44)),
-            ListsLocaleHost("elist_add_item_placeholder"), blocked)
-        if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6507,
-                .label = ListsLocaleHost("elist_add_item"),
-                .bounds = Bounds(x + width - Scale(176), y, Scale(84), Scale(44)),
-                .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-                .disabled = frame.value.count == 0 || blocked}) != 0 || (committed && !blocked) {
-            Mutation(LISTS_COMMIT, -1)
-            return
-        }
-        if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6515,
-                .label = ListsLocaleHost("elist_custom_button"),
-                .bounds = Bounds(x + width - Scale(84), y, Scale(84), Scale(44))}) != 0 {
-            BeginCustomTask(-1, "", "")
-        }
-    }
-    y += Scale(56)
-    // Finished items stay out of the way, as in 1List: a pull down on the
-    // items shows them above the open ones, and another pull hides them.
-    open_order: [256]s32
-    open_count: s32 = 0
-    finished_order: [256]s32
-    finished_count: s32 = 0
-    for index: cast(s32)0..state.item_count - 1 {
-        row := ReadListsRowHost(index, true)
-        if row.parent_id != current.id {
-            continue
-        }
-        // A hidden item just finished stays in place a moment before it goes.
-        leaving := state.show_completed == 0 && row.id == state.completing_id &&
-        state.now < state.completing_until
-        if row.done == 0 || leaving {
-            open_order[open_count] = index
-            open_count += 1
-        } else {
-            finished_order[finished_count] = index
-            finished_count += 1
-        }
-    }
-    // The items fill what is left above the bottom bar, never past it. Undo
-    // takes a line under them for the few seconds it is offered.
-    list_height := frame.height - frame.bottom - y - Scale(12)
-    undo_shown := undo_item.title.count > 0 && state.now < undo_until &&
-    undo_item.parent_id == current.id && undo_account == frame.public_id
-    if undo_shown {
-        list_height -= Scale(52)
-    }
-    if list_height < Scale(72) {
-        list_height = Scale(72)
-    }
-    if undo_shown {
-        if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6517,
-                .label = ListsLocaleHost("elist_undo"),
-                .bounds = Bounds(x, y + list_height + Scale(8), width, Scale(44)),
-                .tone = cast(ButtonTone)ButtonToneAccent,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost, .disabled = blocked}) != 0 {
-            state.action = LISTS_RESTORE_ITEM
-            state.id = undo_item.id
-            state.parent_id = undo_item.parent_id
-            state.title = undo_item.title
-            state.comment = undo_item.comment
-            state.done = undo_item.done
-            state.sort_order = undo_item.sort_order
-            state.index = undo_item.sort_order
-            if current.shared {
-                Remote(LISTS_RESTORE_ITEM)
-            }
-            undo_until = 0.0
-            return
-        }
-    }
-    // The pull starts only with the items at their top. The rows follow the
-    // finger down, and a release past the threshold shows or hides the
-    // finished items.
-    pointer := SamplePointer()
-    pull := Swipe(SwipeSpec.{.bounds = Bounds(x, y, width, list_height),
-            .directions = cast(u32)SwipeDirection.SwipeDown,
-            .min_distance = cast(float32)Scale(96), .axis_bias = 1.5},
-        finished_pull, SwipeFrame.{.pointer = Vector2.{pointer.x, pointer.y},
-            .pressed = pointer.pressed, .down = pointer.down, .released = pointer.released,
-            .input_clear = frame.scroll == 0 && frame.panel == 0 &&
-            (finished_count > 0 || state.show_completed != 0),
-            .owner_clear = frame.scroll == 0, .now_seconds = state.now, .scale = frame.scale})
-    finished_pull = pull.gesture
-    if pull.direction == SwipeDirection.SwipeDown {
-        state.show_completed = ifx state.show_completed != 0 then 0 else 1
-        frame.scroll = 0
-    }
-    pull_offset: s32 = 0
-    if pull.dragging != 0 && pull.delta.y > 0.0 {
-        pull_offset = cast(s32)(pull.delta.y / 2.0)
-        if pull_offset > Scale(64) {
-            pull_offset = Scale(64)
-        }
-    }
-    if pull_offset >= Scale(24) {
-        key := ifx state.show_completed != 0 then "elist_pull_hide" else "elist_pull_show"
-        if pull.progress >= 1.0 {
-            key = ifx state.show_completed != 0 then "elist_release_hide" else "elist_release_show"
-        }
-        Text.Draw(frame.session, Text.Props.{.bounds = Bounds(x, y, width, pull_offset),
-                .text = ListsLocaleHost(key), .align = cast(TextAlign)TextAlignCenter,
-                .vertical_align = cast(TextAlign)TextAlignCenter, .disabled = true})
-    }
-    shown_finished := ifx state.show_completed != 0 then finished_count else 0
-    scroll := Scroll.Draw(frame.session, Scroll.Props.{.key = cast(u64)6600,
-            .bounds = Bounds(x, y + pull_offset, width, list_height - pull_offset),
-            .content_height = (shown_finished + open_count) * Scale(72),
-            .scroll_offset = frame.scroll})
-    frame.scroll = scroll.scroll_offset
-    if scroll.opened {
-        row_y := cast(s32)scroll.content.y
-        // Rows stop short of the right edge so the scroll bar has room.
-        row_right := x + width - Scale(14)
-        for position: cast(s32)0..shown_finished + open_count - 1 {
-            index := ifx position < shown_finished then finished_order[position] else open_order[position - shown_finished]
-            visible_row := row_y + Scale(64) > cast(s32)scroll.viewport.y &&
-            row_y < cast(s32)(scroll.viewport.y + scroll.viewport.height)
-            // An item being edited becomes a field in its own row, with a
-            // check that saves it.
-            if visible_row && index == state.editing_item && frame.panel != 3 {
-                check_x := row_right - Scale(44)
-                committed := Field(Bounds(x, row_y + Scale(10), check_x - Scale(8) - x, Scale(44)),
-                    ListsLocaleHost("elist_item_name_placeholder"), blocked)
-                if field_escaped {
-                    state.editing_item = -1
-                    state.reset_input = true
-                    frame.focused = false
-                    End(frame.session)
-                    return
-                }
-                if Button.Draw(frame.session, Button.Props.{.key = cast(u64)6511,
-                        .bounds = Bounds(check_x, row_y + Scale(10), Scale(44), Scale(44)),
-                        .label = ListsLocaleHost("save_button"), .icon_type = cast(s32)IconCheck,
-                        .icon_only = true, .tone = cast(ButtonTone)ButtonToneAccent,
-                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-                        .disabled = frame.value.count == 0 || blocked}) != 0 || (committed && !blocked) {
-                    Mutation(LISTS_COMMIT, -1)
-                    End(frame.session)
-                    return
-                }
-            } else if visible_row {
-                row := ReadListsRowHost(index, true)
-                swiped := SwipeRow.Draw(frame.session, SwipeRow.Props.{.key = cast(u64)(7000 + index * 4),
-                        .bounds = Bounds(x, row_y, row_right - x, Scale(64)),
-                        .label = row.title, .now = state.now, .scale = frame.scale,
-                        .start = CompleteSwipe(), .end = DeleteSwipe(),
-                        .threshold = 0.5, .end_threshold = 0.35, .long_threshold = 1.0,
-                        .start_width = cast(float32)Scale(176), .long_start = EditSwipe(),
-                        .disabled = blocked},
-                    row_swipe)
-                row_swipe = swiped.state
-                if Button.Draw(frame.session, Button.Props.{.key = cast(u64)(8200 + index),
-                        .bounds = Bounds(row_right - Scale(44), row_y + Scale(10), Scale(44), Scale(44)),
-                        .label = ListsLocaleHost("elist_edit_task"), .icon_type = cast(s32)IconEdit,
-                        .icon_only = true, .tone = cast(ButtonTone)ButtonToneNeutral,
-                        .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost,
-                        .disabled = blocked}) != 0 {
-                    BeginCustomTask(index, row.title, row.comment)
-                    End(frame.session)
-                    return
-                }
-                text_x := x + Scale(12) + cast(s32)swiped.offset
-                text_width := row_right - x - Scale(68)
-                Text.Draw(frame.session, Text.Props.{.bounds = Bounds(text_x, row_y,
-                        text_width, ifx row.comment.count > 0 then Scale(30) else Scale(64)),
-                        .text = row.title, .vertical_align = cast(TextAlign)TextAlignCenter,
-                        .strikethrough = row.done != 0})
-                if row.comment.count > 0 {
-                    Text.Draw(frame.session, Text.Props.{.bounds = Bounds(text_x, row_y + Scale(34),
-                            text_width, Scale(24)), .text = row.comment})
-                }
-                if swiped.swiped_start {
-                    state.done = ifx row.done != 0 then 0 else 1
-                    Mutation(LISTS_SET_DONE, index)
-                    End(frame.session)
-                    return
-                }
-                if swiped.clicked {
-                    state.done = ifx row.done != 0 then 0 else 1
-                    Mutation(LISTS_SET_DONE, index)
-                    End(frame.session)
-                    return
-                }
-                if swiped.right_clicked {
-                    row_menu_open = true
-                    row_menu_index = index
-                    row_menu_x = swiped.pointer_x
-                    row_menu_y = swiped.pointer_y
-                }
-                if swiped.swiped_long_start {
-                    BeginCustomTask(index, row.title, row.comment)
-                }
-                if swiped.swiped_end {
-                    // Deleting leaves Edit, since the items after it move up.
-                    RememberDeleted(row)
-                    Mutation(LISTS_DELETE_ITEM, index)
-                    if state.editing_item >= 0 {
-                        state.editing_item = -1
-                        state.reset_input = true
-                    }
-                    End(frame.session)
-                    return
-                }
-            }
-            row_y += Scale(72)
-        }
-        End(frame.session)
-    }
-    RowContextMenu(blocked)
+ClearAccessControls :: () { VecClear(sharing_controls) }
+
+AddAccessControl :: (target: [65]u8, bounds: Rectangle, role: s32, disabled: bool) {
+    VecPush(sharing_controls, .{target = target, bounds = bounds, role = role, disabled = disabled})
 }
 
-// A row's alternative commands. Check is the row's own activation; Edit opens
-// the same modal as the long swipe.
-RowContextMenu :: (blocked: bool) {
-    if !row_menu_open || row_menu_index < 0 || row_menu_index >= state.item_count {
-        return
-    }
-    row := ReadListsRowHost(row_menu_index, true)
-    items: [2]ContextMenu.ContextMenuItem = .[
-        ContextMenu.ContextMenuItem.{.id = LISTS_ROW_MENU_CHECK, .label = ListsLocaleHost("elist_check_task"), .disabled = blocked},
-        ContextMenu.ContextMenuItem.{.id = LISTS_ROW_MENU_EDIT, .label = ListsLocaleHost("elist_edit_task"), .disabled = blocked}
-    ]
-    menu := ContextMenu.Draw(frame.session, ContextMenu.Props.{.key = cast(u64)8500,
-            .open = true, .x = row_menu_x, .y = row_menu_y,
-            .escape = frame.input.escape, .scale = frame.scale}, items[:])
-    if !menu.open {
-        row_menu_open = false
-    }
-    if menu.activated_id == LISTS_ROW_MENU_CHECK && !blocked {
-        state.done = ifx row.done != 0 then 0 else 1
-        Mutation(LISTS_SET_DONE, row_menu_index)
-        row_menu_open = false
-    } else if menu.activated_id == LISTS_ROW_MENU_EDIT && !blocked {
-        BeginCustomTask(row_menu_index, row.title, row.comment)
-        row_menu_open = false
-    }
-}
+SharingAccessControlCount :: () -> s32 { return cast(s32)sharing_controls.count }
+SharingAccessControlAt :: (index: s32) -> SharingAccessControl { return sharing_controls[index] }
