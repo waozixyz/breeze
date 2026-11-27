@@ -38,11 +38,11 @@ kryon_sources = {path.stem: path for path in (KRYON / 'src/ui').rglob('*.zi')
 for module in KRYON_MODULES:
     command += ['--source', str(kryon_sources[module])]
 for name in APP_TYPES:
-    command += ['--source', str(ROOT / ('apps/diary' if name == 'diary_ui_types' else 'src/apps') / (name + '.zi'))]
+    command += ['--source', str(ROOT / ('apps/diary/src/native' if name == 'diary_ui_types' else 'src/apps') / (name + '.zi'))]
 for root in ROOTS:
     command += ['--root', root]
 for line in ['"std/bundle_host"', '"std/byte_text_linux"', '"hosted_values"', '"widget_codec"',
-             *(f', file "../../apps/diary/{name}.zi";' if name == 'diary_ui_types' else f', file "{name}.zi";' for name in APP_TYPES), *(f'"{module}"' for module in KRYON_MODULES)]:
+             *(f', file "../../apps/diary/src/native/{name}.zi";' if name == 'diary_ui_types' else f', file "{name}.zi";' for name in APP_TYPES), *(f'"{module}"' for module in KRYON_MODULES)]:
     command += ['--import', line]
 command += sys.argv[1:]
 sys.exit(subprocess.run(command).returncode)
