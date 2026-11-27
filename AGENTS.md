@@ -105,6 +105,8 @@
 
 ## Product behavior and readability
 
+- When opening a source file in VS Code, open the full Breeze project folder
+  first, then open the requested file in that project window.
 - Desktop focus loss must not pause practices, freeze animation, suppress
   updates, or enter the mobile background-timer path. Preserve mobile/web
   lifecycle handling and explicit user pause as separate behavior.
