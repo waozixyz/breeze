@@ -1,0 +1,239 @@
+// Crypto regression for the paths a released version reads: the Diary blob
+// copy on a node, the account's entity chunks and the private record round
+// trip. Each opens what it sealed and refuses a wrong key, tampered
+// ciphertext and another identity, so the zero nonce released bytes send
+// never repeats a key. No released format changes here; this only re-derives
+// what the app derives and checks the answers.
+#import "byte_text_linux"
+#import "vec"
+#import "mesh_client/crypto"
+#import "mesh_client/keys"
+#import, file "storage_test_support.zi";
+#import, file "../src/app/text_buffers.zi";
+#import, file "../src/storage/data.zi";
+#import, file "../src/storage/state.zi";
+#import, file "../src/storage/db.zi";
+#import, file "../src/storage/storage_core.zi";
+#import, file "../src/storage/storage_settings.zi";
+#import, file "../src/storage/sync_record_crypto.zi";
+#import, file "../src/apps/diary_records.zi";
+MeshEntity :: #import "mesh_client/entity";
+
+DIARY_BLOB_KEY_CONTEXT :: "inbe-diary-blob-key-v1"
+RECORD_COLLECTION :: "private.inbe.v1.habits"
+RECORD_ID :: "2026-11-27:meditation"
+
+// The account key material, an ML-DSA-sized key of repeating "42" hex, as
+// the sync tests set it.
+set_account :: () {
+    key: [5121]u8
+    index: s32 = 0
+    while index < 5120 {
+        if index % 2 == 0 { key[index] = cast(u8)52 } else { key[index] = cast(u8)50 }
+        index += 1
+    }
+    key[5120] = cast(u8)0
+    storage_set_setting_text("sync_public_id", "test-public-id")
+    storage_set_setting_text("sync_public_key", "test-public-key")
+    storage_set_setting_text("sync_private_key", TextFromCString(*key[0]))
+}
+
+KeysDiffer :: (first: []u8, second: []u8) -> bool {
+    if first.count != second.count { return true }
+    difference: u8 = 0
+    for index: cast(s64)0..first.count - 1 {
+        difference = difference | (first[index] ^ second[index])
+    }
+    return difference != 0
+}
+
+// (a) The released Diary blob path: a file key from the account key and the
+// file's hash, a zero nonce and DiaryBlobAad, exactly as released versions
+// sealed every old copy. The entry key opens it; a wrong key, and modified
+// ciphertext even with the stored address updated to match, open nothing.
+test_diary_blob :: () {
+    root := make_root("diary-blob-crypto")
+    check_true("open the database", storage_init(root) != 0)
+    set_account()
+
+    file: string = "Rain on the tin roof, tea at four."
+    descriptor := cast(*TextDescriptor)(*file)
+    file_hash: [65]u8
+    storage_sha256_hex(descriptor.data, file.count, *file_hash[0])
+    hash := TextFromCString(*file_hash[0])
+
+    master: [32]u8
+    check_true("the diary blob master key derives",
+        storage_private_record_key_for_context(DIARY_BLOB_KEY_CONTEXT, *master[0]) == 1)
+    file_key: [32]u8
+    check_true("the file key derives", HmacSha256Text(*master[0], 32, hash, *file_key[0]) == 1)
+    sealed: [128]u8
+    zero_nonce: [12]u8
+    aad: [32]u8
+    DiaryBlobAad(aad[:])
+    check_true("the old copy seals", ChaCha20Poly1305Seal(*file_key[0], *zero_nonce[0],
+        descriptor.data, file.count, *aad[0], cast(s64)DIARY_BLOB_AAD.count,
+        *sealed[0], 128) == 1)
+    sealed_length := file.count + 16
+
+    sealed_hash: [65]u8
+    storage_sha256_hex(*sealed[0], sealed_length, *sealed_hash[0])
+    key_hex: [65]u8
+    check_true("the key encodes", BytesToHex(*file_key[0], 32, *key_hex[0], 65) == 1)
+    entry: Vec(u8)
+    BuilderPrint(*entry, "{\"hash\":\"%\",\"size\":%,\"blob\":\"%\",\"key\":\"%\"}",
+        hash, file.count, TextFromCString(*sealed_hash[0]), TextFromCString(*key_hex[0]))
+    media := DiaryMediaParse(BuilderFinish(entry))
+    check_true("the entry parses", media.valid)
+    check_true("the copy is marked uploaded", DiaryMediaUploaded(media))
+
+    opened := DiaryBlobOpen(media, sealed[0:sealed_length])
+    check_true("the entry key opens the copy", opened == file)
+
+    wrong_entry: Vec(u8)
+    BuilderPrint(*wrong_entry, "{\"hash\":\"%\",\"size\":%,\"blob\":\"%\",\"key\":\"%\"}",
+        hash, file.count, TextFromCString(*sealed_hash[0]),
+        "e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8e8")
+    wrong_media := DiaryMediaParse(BuilderFinish(wrong_entry))
+    check_true("the wrong entry parses", wrong_media.valid)
+    check_true("a wrong key opens nothing",
+        DiaryBlobOpen(wrong_media, sealed[0:sealed_length]) == "")
+
+    tampered: [128]u8
+    for index: cast(s64)0..sealed_length - 1 { tampered[index] = sealed[index] }
+    tampered[2] = tampered[2] ^ cast(u8)1
+    tampered_hash: [65]u8
+    storage_sha256_hex(*tampered[0], sealed_length, *tampered_hash[0])
+    tampered_entry: Vec(u8)
+    BuilderPrint(*tampered_entry, "{\"hash\":\"%\",\"size\":%,\"blob\":\"%\",\"key\":\"%\"}",
+        hash, file.count, TextFromCString(*tampered_hash[0]), TextFromCString(*key_hex[0]))
+    tampered_media := DiaryMediaParse(BuilderFinish(tampered_entry))
+    check_true("the retagged entry parses", tampered_media.valid)
+    check_true("a modified copy is refused even with its address updated",
+        DiaryBlobOpen(tampered_media, tampered[0:sealed_length]) == "")
+
+    SecureWipe(*master[0], 32)
+    SecureWipe(*file_key[0], 32)
+}
+
+// (b) The entity chunk path: SealEntityChunk and OpenEntityChunk round-trip,
+// a flipped byte refuses to open, and kind, hash and index each take their
+// own key, so one zero nonce never reuses one.
+test_entity_chunks :: () {
+    account: [32]u8
+    for index: cast(s64)0..31 { account[index] = cast(u8)(index + 7) }
+
+    plain: string = "Trail notes saved once for every device."
+    descriptor := cast(*TextDescriptor)(*plain)
+    plain_bytes := BytesFromPointer(descriptor.data, cast(u64)plain.count)
+    hash_hex: [65]u8
+    storage_sha256_hex(descriptor.data, plain.count, *hash_hex[0])
+    hash := TextFromCString(*hash_hex[0])
+    other_hex: [65]u8
+    storage_sha256_hex(descriptor.data, plain.count - 1, *other_hex[0])
+    other_hash := TextFromCString(*other_hex[0])
+
+    sealed: [128]u8
+    length := MeshEntity.SealEntityChunk(account[:], "photo", hash, 0, plain_bytes, sealed[:])
+    check_int("a chunk seals to its size plus the tag", cast(s32)length,
+        cast(s32)(plain.count + 16))
+    opened: [128]u8
+    got := MeshEntity.OpenEntityChunk(account[:], "photo", hash, 0, sealed[0:length], opened[:])
+    check_int("the chunk opens to the plain length", cast(s32)got, cast(s32)plain.count)
+    check_true("the chunk round-trips", TextFromBytes(opened[0:got]) == plain)
+
+    // The zero nonce is safe because every identity keeps its own key.
+    photo_key: [32]u8
+    note_key: [32]u8
+    next_index_key: [32]u8
+    other_hash_key: [32]u8
+    check_true("chunk keys derive",
+        MeshEntity.EntityChunkKey(account[:], "photo", hash, 0, photo_key[:]) &&
+        MeshEntity.EntityChunkKey(account[:], "note", hash, 0, note_key[:]) &&
+        MeshEntity.EntityChunkKey(account[:], "photo", hash, 1, next_index_key[:]) &&
+        MeshEntity.EntityChunkKey(account[:], "photo", other_hash, 0, other_hash_key[:]))
+    check_true("another kind takes another key", KeysDiffer(photo_key[:], note_key[:]))
+    check_true("another index takes another key", KeysDiffer(photo_key[:], next_index_key[:]))
+    check_true("another content takes another key", KeysDiffer(photo_key[:], other_hash_key[:]))
+
+    check_true("a chunk refuses another index",
+        MeshEntity.OpenEntityChunk(account[:], "photo", hash, 1, sealed[0:length], opened[:]) == -1)
+    check_true("a chunk refuses another kind",
+        MeshEntity.OpenEntityChunk(account[:], "note", hash, 0, sealed[0:length], opened[:]) == -1)
+    check_true("a chunk refuses another content",
+        MeshEntity.OpenEntityChunk(account[:], "photo", other_hash, 0, sealed[0:length], opened[:]) == -1)
+
+    // and a copy sealed under its own identity still opens whole.
+    note_sealed: [128]u8
+    note_length := MeshEntity.SealEntityChunk(account[:], "note", hash, 0, plain_bytes, note_sealed[:])
+    check_int("a chunk of another kind seals", cast(s32)note_length,
+        cast(s32)(plain.count + 16))
+    got_note := MeshEntity.OpenEntityChunk(account[:], "note", hash, 0,
+        note_sealed[0:note_length], opened[:])
+    check_int("that chunk opens", cast(s32)got_note, cast(s32)plain.count)
+    check_true("it round-trips too", TextFromBytes(opened[0:got_note]) == plain)
+
+    // One flipped ciphertext byte fails the tag.
+    sealed[5] = sealed[5] ^ cast(u8)1
+    check_true("a tampered chunk refuses to open",
+        MeshEntity.OpenEntityChunk(account[:], "photo", hash, 0, sealed[0:length], opened[:]) == -1)
+}
+
+// (c) The private record round trip: the collection key seals a record and
+// storage_decrypt_record opens it, and one flipped ciphertext byte makes the
+// open fail instead of returning foreign bytes.
+test_private_records :: () {
+    root := make_root("private-record-crypto")
+    check_true("open the record database", storage_init(root) != 0)
+    set_account()
+
+    record: string = "{\"sleep\":\"deep\",\"mood\":\"calm\"}"
+    descriptor := cast(*TextDescriptor)(*record)
+    key: [32]u8
+    check_true("the collection key derives",
+        storage_private_collection_key(RECORD_COLLECTION, STORAGE_SYNC_RECORD_KEY_ID, *key[0]) == 1)
+
+    sealed: [128]u8
+    zero_nonce: [12]u8
+    aad: Vec(u8)
+    BuilderPrint(*aad, "%\n%\n%", RECORD_COLLECTION, RECORD_ID, STORAGE_SYNC_RECORD_KEY_ID)
+    aad_text := BuilderFinish(aad)
+    check_true("the record seals", ChaCha20Poly1305Seal(*key[0], *zero_nonce[0],
+        descriptor.data, record.count, pointer_of(aad_text), aad_text.count,
+        *sealed[0], 128) == 1)
+    sealed_length := record.count + 16
+
+    cipher_hex: [257]u8
+    nonce_hex: [25]u8
+    content_hash: [65]u8
+    check_true("the ciphertext encodes", BytesToHex(*sealed[0], sealed_length, *cipher_hex[0], 257) == 1)
+    check_true("the nonce encodes", BytesToHex(*zero_nonce[0], 12, *nonce_hex[0], 25) == 1)
+    storage_sha256_hex(descriptor.data, record.count, *content_hash[0])
+
+    plaintext: *u8 = null
+    check_true("a sealed record opens", storage_decrypt_record(RECORD_COLLECTION,
+        RECORD_ID, STORAGE_SYNC_RECORD_KEY_ID, TextFromCString(*nonce_hex[0]),
+        TextFromCString(*cipher_hex[0]), TextFromCString(*content_hash[0]), *plaintext) == 1)
+    check_true("the record text matches", TextFromCString(plaintext) == record)
+    memory_free(cast(*void)plaintext)
+
+    sealed[3] = sealed[3] ^ cast(u8)2
+    flipped_hex: [257]u8
+    check_true("the flipped ciphertext encodes",
+        BytesToHex(*sealed[0], sealed_length, *flipped_hex[0], 257) == 1)
+    plaintext = null
+    check_true("a flipped ciphertext byte refuses to open", storage_decrypt_record(RECORD_COLLECTION,
+        RECORD_ID, STORAGE_SYNC_RECORD_KEY_ID, TextFromCString(*nonce_hex[0]),
+        TextFromCString(*flipped_hex[0]), TextFromCString(*content_hash[0]), *plaintext) == 0)
+    check_true("a refused record returns nothing", plaintext == null)
+
+    SecureWipe(*key[0], 32)
+}
+
+#program_export
+Check :: () -> s32 {
+    test_diary_blob()
+    test_entity_chunks()
+    test_private_records()
+    return failures
+}
