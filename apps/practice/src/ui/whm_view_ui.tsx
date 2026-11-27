@@ -166,22 +166,20 @@ export function Hold(): void {
         y = State_whm_view.whm.breath_max_y;
     }
     if (
-        (
-            <Button
-                session={State_whm_view.whm.session}
-                props={{
-                    bounds: {
-                        x: float32(State_whm_view.whm.center_x - width / 2n),
-                        y: float32(y),
-                        width: float32(width),
-                        height: float32(NativeText.Text16 + Scale(28n))
-                    },
-                    label: State_whm_view.whm.breath_label,
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                }}
-            />
-        )
+        Button({
+            session: State_whm_view.whm.session,
+            props: {
+                bounds: {
+                    x: float32(State_whm_view.whm.center_x - width / 2n),
+                    y: float32(y),
+                    width: float32(width),
+                    height: float32(NativeText.Text16 + Scale(28n))
+                },
+                label: State_whm_view.whm.breath_label,
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisFilled
+            }
+        })
     ) {
         State_whm_view.whm.action = PRACTICE_WHM_BREATH;
     }

@@ -19,7 +19,7 @@ import {
 import { AppNavRoute } from "route_types";
 import { ScreenNodeApp } from "types";
 
-export function app_draw_return_barView(app: *InnerBreeze): void {
+export function app_draw_return_barView(app: NativeRef<InnerBreeze>): void {
     let route = app_return_bar_route(app);
     if (route === s32(AppNavRoute.APP_NAV_ROUTE_NONE) || app.file_dialog_active !== 0n) {
         return;
@@ -32,27 +32,25 @@ export function app_draw_return_barView(app: *InnerBreeze): void {
         app.breathing.screen === ScreenNodeApp ? "back_button" : "return_to_apps"
     );
     if (
-        (
-            <Button
-                session={app.ui.session}
-                props={{
-                    key: NativeLayout.KeyHash("inbe/return-to-apps"),
-                    bounds: { x: inset, y: y, width: control, height: control },
-                    label: label,
-                    image: {
-                        asset_path: "assets/app/back-home.avif",
-                        alt_text: label,
-                        fit: ImageFit.ImageFitContain,
-                        smooth: true
-                    },
-                    icon_only: true,
-                    circle: true,
-                    disabled: app.modal.active !== 0n,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        ) &&
+        Button({
+            session: app.ui.session,
+            props: {
+                key: NativeLayout.KeyHash("inbe/return-to-apps"),
+                bounds: { x: inset, y: y, width: control, height: control },
+                label: label,
+                image: {
+                    asset_path: "assets/app/back-home.avif",
+                    alt_text: label,
+                    fit: ImageFit.ImageFitContain,
+                    smooth: true
+                },
+                icon_only: true,
+                circle: true,
+                disabled: app.modal.active !== 0n,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        }) &&
         !app_node_app_back(app)
     ) {
         app_return_to_apps(app);
@@ -61,26 +59,24 @@ export function app_draw_return_barView(app: *InnerBreeze): void {
         app.breathing.screen === ScreenNodeApp && NodeAppName(app.node_app_slot) === "photos";
     if (photos) {
         if (
-            (
-                <Button
-                    session={app.ui.session}
-                    props={{
-                        key: NativeLayout.KeyHash("media/compression/settings"),
-                        bounds: {
-                            x: float32(app.ui.view_width) - inset - control,
-                            y: y,
-                            width: control,
-                            height: control
-                        },
-                        label: LocaleText("media_compression_title"),
-                        icon_shape: NativeCompressionIcon.Shape,
-                        icon_only: true,
-                        disabled: app.modal.active !== 0n,
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                    }}
-                />
-            )
+            Button({
+                session: app.ui.session,
+                props: {
+                    key: NativeLayout.KeyHash("media/compression/settings"),
+                    bounds: {
+                        x: float32(app.ui.view_width) - inset - control,
+                        y: y,
+                        width: control,
+                        height: control
+                    },
+                    label: LocaleText("media_compression_title"),
+                    icon_shape: NativeCompressionIcon.Shape,
+                    icon_only: true,
+                    disabled: app.modal.active !== 0n,
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
+                }
+            })
         ) {
             app_block_current_click(app);
             MediaCompressionRequest();

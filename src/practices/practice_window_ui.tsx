@@ -99,7 +99,7 @@ export function PracticeWindowBandView(session: Session, circle: Rectangle, cont
 }
 
 export function PracticeWindowLabelView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     circle: Rectangle,
     text: string
 ): void {
@@ -120,7 +120,7 @@ export function PracticeWindowLabelView(
         session={app.ui.session}
         props={{
             key: NativeLayout.KeyHash("inbe/practice-window/label"),
-            text: FrameTextHold(&app.ui.frame_text, text),
+            text: FrameTextHold(nativeRef(app.ui.frame_text), text),
             bounds: circle,
             size: font,
             class_name: CssClass("circle-ink"),

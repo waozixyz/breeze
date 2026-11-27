@@ -37,10 +37,10 @@ import {
 import { AppTextFromCString, FormatNumberTemplate, FrameTextHold } from "text_buffers";
 
 export function settings_section_beginView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     title: string,
     body_height: s32
 ): SettingsSection {
@@ -56,27 +56,27 @@ export function settings_section_beginView(
         heading.heading_level = 2n;
         heading.bounds = {
             x: float32(x + AppScale(4n)),
-            y: float32((*y)),
+            y: float32(nativeDeref(y)),
             width: float32(width - AppScale(4n)),
             height: float32(AppScale(22n))
         };
         <Text session={app.ui.session} props={heading} />;
-        (*y) = (*y) + settings_section_title_height();
+        nativeDeref(y) = nativeDeref(y) + settings_section_title_height();
     }
     let frame: NativeFieldset.Props = {};
     frame.bounds = {
         x: float32(x),
-        y: float32((*y)),
+        y: float32(nativeDeref(y)),
         width: float32(width),
         height: float32(body_height + settings_section_padding() * 2n)
     };
     <Fieldset session={app.ui.session} props={frame} />;
-    (*y) = (*y) + settings_section_padding();
+    nativeDeref(y) = nativeDeref(y) + settings_section_padding();
     return section;
 }
 
 export function settings_row_dividerView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     section: SettingsSection,
     y: s32
 ): void {
@@ -91,10 +91,10 @@ export function settings_row_dividerView(
 }
 
 export function settings_choice_rowView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     label: string
 ): Rectangle {
     let control_height = AppScale(36n);
@@ -111,13 +111,13 @@ export function settings_choice_rowView(
         text.wrap = Wrap.TextWrapAuto;
         text.bounds = {
             x: float32(x),
-            y: float32((*y) + AppScale(10n)),
+            y: float32(nativeDeref(y) + AppScale(10n)),
             width: float32(width),
             height: float32(label_height)
         };
         control = {
             x: float32(x),
-            y: float32((*y) + AppScale(16n) + label_height),
+            y: float32(nativeDeref(y) + AppScale(16n) + label_height),
             width: float32(width),
             height: float32(control_height)
         };
@@ -126,31 +126,30 @@ export function settings_choice_rowView(
         let control_width = settings_choice_control_width(width);
         text.bounds = {
             x: float32(x),
-            y: float32((*y)),
+            y: float32(nativeDeref(y)),
             width: float32(width - control_width - AppScale(16n)),
             height: float32(row_height)
         };
         text.vertical_align = TextAlign.TextAlignCenter;
         control = {
             x: float32(x + width - control_width),
-            y: float32((*y) + (row_height - control_height) / 2n),
+            y: float32(nativeDeref(y) + (row_height - control_height) / 2n),
             width: float32(control_width),
             height: float32(control_height)
         };
     }
     <Text session={app.ui.session} props={text} />;
-    (*y) =
-        (*y) + settings_choice_row_height(label, width);
+    nativeDeref(y) = nativeDeref(y) + settings_choice_row_height(label, width);
     return control;
 }
 
 export function draw_toggle_row(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     label: string,
-    value: *s32
+    value: NativeRef<s32>
 ): boolean {
     if (
         !NativePresent(app) ||
@@ -170,13 +169,13 @@ export function draw_toggle_row(
     }
     let label_height = AppParagraphHeight(label, label_width, 0n, 0n);
     let toggle_x = x;
-    let toggle_y = (*y) + (row_height - toggle_height) / 2n;
+    let toggle_y = nativeDeref(y) + (row_height - toggle_height) / 2n;
     let label_y: s32 = s32(0);
     if (label_width < width) {
-        label_y = (*y) + (row_height - label_height) / 2n;
+        label_y = nativeDeref(y) + (row_height - label_height) / 2n;
         toggle_x = x + width - toggle_width;
     } else {
-        label_y = (*y) + AppScale(8n);
+        label_y = nativeDeref(y) + AppScale(8n);
         toggle_y = label_y + label_height + AppScale(8n);
     }
     let text: NativeText.Props = {};
@@ -191,34 +190,34 @@ export function draw_toggle_row(
     };
     <Text session={app.ui.session} props={text} />;
     let props: NativeToggle.Props = {};
-    props.id = s32(62000n) + (*y);
+    props.id = s32(62000n) + nativeDeref(y);
     props.bounds = {
         x: float32(toggle_x),
         y: float32(toggle_y),
         width: float32(toggle_width),
         height: float32(toggle_height)
     };
-    props.value = (*value) !== 0n;
+    props.value = nativeDeref(value) !== 0n;
     props.label = label;
-    let result = <Toggle session={app.ui.session} props={props} />;
-    (*y) = (*y) + row_height;
+    let result = Toggle({ session: app.ui.session, props: props });
+    nativeDeref(y) = nativeDeref(y) + row_height;
     if (result.changed) {
-        (*value) = result.value ? 1n : 0n;
+        nativeDeref(value) = result.value ? 1n : 0n;
     }
     return result.changed;
 }
 
 export function commit_slider_rowView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     id: s32,
     x: s32,
     width: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     row_height: s32,
     label: string,
     minimum: s32,
     maximum: s32,
-    value: *s32,
+    value: NativeRef<s32>,
     suffix: string,
     save_now: s32
 ): s32 {
@@ -238,14 +237,10 @@ export function commit_slider_rowView(
         template = "%dx";
     }
     let number_buffer = SettingsUiNewNumberBuffer();
-    FormatNumberTemplate(
-        template,
-        (*value),
-        number_buffer[:]
-    );
+    FormatNumberTemplate(template, nativeDeref(value), nativeSlice(number_buffer));
     let number = FrameTextHold(
-        &app.ui.frame_text,
-        AppTextFromCString(&number_buffer[0n], 32n)
+        nativeRef(app.ui.frame_text),
+        AppTextFromCString(nativeRef(nativeAt(number_buffer, 0n)), 32n)
     );
     let label_props: NativeText.Props = {};
     label_props.text = label;
@@ -253,7 +248,7 @@ export function commit_slider_rowView(
     label_props.wrap = Wrap.TextWrapNone;
     label_props.bounds = {
         x: float32(x),
-        y: float32((*y)),
+        y: float32(nativeDeref(y)),
         width: float32(width - AppScale(64n)),
         height: float32(AppScale(20n))
     };
@@ -265,7 +260,7 @@ export function commit_slider_rowView(
     number_props.align = TextAlign.TextAlignEnd;
     number_props.bounds = {
         x: float32(x + width - AppScale(64n)),
-        y: float32((*y)),
+        y: float32(nativeDeref(y)),
         width: float32(AppScale(64n)),
         height: float32(AppScale(20n))
     };
@@ -274,20 +269,20 @@ export function commit_slider_rowView(
     slider.id = id;
     slider.bounds = {
         x: float32(x),
-        y: float32((*y) + AppScale(20n)),
+        y: float32(nativeDeref(y) + AppScale(20n)),
         width: float32(width),
         height: float32(AppScale(36n))
     };
     slider.semantic_label = label;
-    slider.value = (*value);
+    slider.value = nativeDeref(value);
     slider.min = minimum;
     slider.max = maximum;
     let result = NativeSlider.DiscreteSlider(app.ui.session, slider);
-    (*y) = (*y) + row_height;
+    nativeDeref(y) = nativeDeref(y) + row_height;
     if (!result.changed) {
         return 0n;
     }
-    (*value) = result.value;
+    nativeDeref(value) = result.value;
     app.settings_dirty = 1n;
     if (save_now !== 0n) {
         save_settings(app);
@@ -296,7 +291,7 @@ export function commit_slider_rowView(
 }
 
 export function draw_audio_meterView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     level: float32,
     x: s32,
     y: s32,

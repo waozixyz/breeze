@@ -70,7 +70,7 @@ export function PracticePatternsView(message: PracticeMessage): PracticeMessage 
     let digits = NewDigits();
     let counter = FormatInteger(
         s64(State_patterns_view.patterns.phase_seconds),
-        digits[:]
+        nativeSlice(digits)
     );
     CenteredLine(
         counter,
@@ -108,32 +108,28 @@ export function PracticePatternsView(message: PracticeMessage): PracticeMessage 
     };
     if (State_patterns_view.patterns.paused) {
         if (
-            (
-                <Button
-                    session={State_patterns_view.patterns.session}
-                    props={{
-                        bounds: bounds,
-                        label: State_patterns_view.patterns.resume_label,
-                        tone: ButtonTone.ButtonToneAccent,
-                        emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                    }}
-                />
-            )
+            Button({
+                session: State_patterns_view.patterns.session,
+                props: {
+                    bounds: bounds,
+                    label: State_patterns_view.patterns.resume_label,
+                    tone: ButtonTone.ButtonToneAccent,
+                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
+                }
+            })
         ) {
             State_patterns_view.patterns.action = PRACTICE_PATTERNS_RESUME;
         }
     } else if (
-        (
-            <Button
-                session={State_patterns_view.patterns.session}
-                props={{
-                    bounds: bounds,
-                    label: State_patterns_view.patterns.pause_label,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: State_patterns_view.patterns.session,
+            props: {
+                bounds: bounds,
+                label: State_patterns_view.patterns.pause_label,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         State_patterns_view.patterns.action = PRACTICE_PATTERNS_PAUSE;
     }

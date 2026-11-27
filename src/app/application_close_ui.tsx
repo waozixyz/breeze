@@ -9,7 +9,7 @@ import { LocaleText } from "locale";
 import { NativePresent } from "native_flags";
 
 export function app_draw_session_exit_modalView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     can_save: s32,
     save_message: string,
     discard_message: string
@@ -37,13 +37,11 @@ export function app_draw_session_exit_modalView(
                 emphasis: ButtonEmphasis.ButtonEmphasisSoft
             }
         ];
-        modal_result = (
-            <ActionModal
-                session={app.ui.session}
-                props={{ title: LocaleText("exit_session_title"), message: save_message }}
-                actions={actions[:3n]}
-            />
-        ).action;
+        modal_result = ActionModal({
+            session: app.ui.session,
+            props: { title: LocaleText("exit_session_title"), message: save_message },
+            actions: nativeSlice(actions, 0n, 3n)
+        }).action;
         if (modal_result === 2n) {
             return SessionExitModalResult.SessionExitModalSave;
         }
@@ -63,13 +61,11 @@ export function app_draw_session_exit_modalView(
                 emphasis: ButtonEmphasis.ButtonEmphasisFilled
             }
         ];
-        modal_result = (
-            <ActionModal
-                session={app.ui.session}
-                props={{ title: LocaleText("exit_session_title"), message: discard_message }}
-                actions={actions[:2n]}
-            />
-        ).action;
+        modal_result = ActionModal({
+            session: app.ui.session,
+            props: { title: LocaleText("exit_session_title"), message: discard_message },
+            actions: nativeSlice(actions, 0n, 2n)
+        }).action;
         if (modal_result === 2n) {
             return SessionExitModalResult.SessionExitModalDiscard;
         }
@@ -79,7 +75,7 @@ export function app_draw_session_exit_modalView(
         : SessionExitModalResult.SessionExitModalNone;
 }
 
-export function app_draw_close_prompt(app: *InnerBreeze): void {
+export function app_draw_close_prompt(app: NativeRef<InnerBreeze>): void {
     let modal_result: s32 = s32(0);
     let actions: [NativeModal.ActionModalAction, NativeModal.ActionModalAction] = [{}, {}];
     let props: NativeModal.ActionModalProps = {};
@@ -89,23 +85,21 @@ export function app_draw_close_prompt(app: *InnerBreeze): void {
     if (app.blocked_input_frame === app.breathing.frame) {
         return;
     }
-    actions[0n].label = LocaleText("desktop_close_keep_running_button");
-    actions[0n].tone = ButtonTone.ButtonToneAccent;
-    actions[0n].emphasis = ButtonEmphasis.ButtonEmphasisFilled;
-    actions[1n].label = LocaleText("desktop_close_quit_button");
-    actions[1n].tone = ButtonTone.ButtonToneDanger;
-    actions[1n].emphasis = ButtonEmphasis.ButtonEmphasisFilled;
+    nativeAt(actions, 0n).label = LocaleText("desktop_close_keep_running_button");
+    nativeAt(actions, 0n).tone = ButtonTone.ButtonToneAccent;
+    nativeAt(actions, 0n).emphasis = ButtonEmphasis.ButtonEmphasisFilled;
+    nativeAt(actions, 1n).label = LocaleText("desktop_close_quit_button");
+    nativeAt(actions, 1n).tone = ButtonTone.ButtonToneDanger;
+    nativeAt(actions, 1n).emphasis = ButtonEmphasis.ButtonEmphasisFilled;
     props.key = NativeLayout.KeyHash("inbe/desktop-close");
     props.title = LocaleText("desktop_close_prompt_title");
     props.message = LocaleText("desktop_close_prompt_message");
     props.max_width = 420n;
-    modal_result = (
-        <ActionModal
-            session={app.ui.session}
-            props={props}
-            actions={actions[:2n]}
-        />
-    ).action;
+    modal_result = ActionModal({
+        session: app.ui.session,
+        props: props,
+        actions: nativeSlice(actions, 0n, 2n)
+    }).action;
     if (modal_result === -1n) {
         app.close_prompt_open = 0n;
     } else if (modal_result === 1n) {

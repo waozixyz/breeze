@@ -34,20 +34,18 @@ export function ExtendControls(y: s32): void {
         let x = RowX(State_meditation_view.meditation.center_x, width * 3n + gap * 2n);
         for (let index = s32(0n); index <= 2n; index += s32(1)) {
             if (
-                (
-                    <Button
-                        session={State_meditation_view.meditation.session}
-                        props={{
-                            bounds: Bounds(x + index * (width + gap), y, width, height),
-                            label: labels[index],
-                            tone: ButtonTone.ButtonToneNeutral,
-                            emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                        }}
-                    />
-                )
+                Button({
+                    session: State_meditation_view.meditation.session,
+                    props: {
+                        bounds: Bounds(x + index * (width + gap), y, width, height),
+                        label: nativeAt(labels, index),
+                        tone: ButtonTone.ButtonToneNeutral,
+                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                    }
+                })
             ) {
                 State_meditation_view.meditation.action = PRACTICE_MEDITATION_EXTEND;
-                State_meditation_view.meditation.value = minutes[index] * 60n;
+                State_meditation_view.meditation.value = nativeAt(minutes, index) * 60n;
             }
         }
         finish_y = y + height + Scale(10n);
@@ -57,22 +55,20 @@ export function ExtendControls(y: s32): void {
     }
     let finish_width = Scale(96n);
     if (
-        (
-            <Button
-                session={State_meditation_view.meditation.session}
-                props={{
-                    bounds: Bounds(
-                        RowX(State_meditation_view.meditation.center_x, finish_width),
-                        finish_y,
-                        finish_width,
-                        height
-                    ),
-                    label: State_meditation_view.meditation.finish_label,
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                }}
-            />
-        )
+        Button({
+            session: State_meditation_view.meditation.session,
+            props: {
+                bounds: Bounds(
+                    RowX(State_meditation_view.meditation.center_x, finish_width),
+                    finish_y,
+                    finish_width,
+                    height
+                ),
+                label: State_meditation_view.meditation.finish_label,
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisFilled
+            }
+        })
     ) {
         State_meditation_view.meditation.action = PRACTICE_MEDITATION_FINISH;
     }

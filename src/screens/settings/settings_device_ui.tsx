@@ -24,11 +24,11 @@ import {
 } from "settings_ui_ui";
 
 export function settings_device_draw_display(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32,
-    state: *SettingsDeviceState
+    y: NativeRef<s32>,
+    state: NativeRef<SettingsDeviceState>
 ): void {
     let desktop = DesktopPlatform() !== 0n;
     let inner = settings_section_inner_width(width);
@@ -47,10 +47,10 @@ export function settings_device_draw_display(
         orientation_count - 1n
     );
     let orientation_options = SettingsDeviceNewOrientationOptions();
-    orientation_options[0n].label = LocaleText("orientation_system");
-    orientation_options[1n].label = LocaleText("orientation_portrait");
-    orientation_options[2n].label = LocaleText("orientation_landscape");
-    orientation_options[3n].label = LocaleText("orientation_sensor");
+    nativeAt(orientation_options, 0n).label = LocaleText("orientation_system");
+    nativeAt(orientation_options, 1n).label = LocaleText("orientation_portrait");
+    nativeAt(orientation_options, 2n).label = LocaleText("orientation_landscape");
+    nativeAt(orientation_options, 3n).label = LocaleText("orientation_sensor");
     let orientation: NativeDropdown.Props = {};
     orientation.id = 103n;
     orientation.bounds = settings_choice_row(
@@ -61,19 +61,17 @@ export function settings_device_draw_display(
         LocaleText("orientation_label")
     );
     orientation.selected_index = app.orientation_mode;
-    let orientation_settings_menu = (
-        <Dropdown
-            session={app.ui.session}
-            props={orientation}
-            options={orientation_options[:orientation_count]}
-        />
-    );
+    let orientation_settings_menu = Dropdown({
+        session: app.ui.session,
+        props: orientation,
+        options: nativeSlice(orientation_options, 0n, orientation_count)
+    });
     if (orientation_settings_menu.changed) {
         app.orientation_mode = orientation_settings_menu.selected_index;
         state.orientation_changed = 1n;
     }
     if (desktop) {
-        settings_row_divider(app, section, (*y));
+        settings_row_divider(app, section, nativeDeref(y));
         let fullscreen = app.fullscreen_enabled;
         if (
             commit_toggle_row(
@@ -82,14 +80,14 @@ export function settings_device_draw_display(
                 section.inner_width,
                 y,
                 LocaleText("fullscreen_label"),
-                &fullscreen,
+                nativeRef(fullscreen),
                 0n
             ) !== 0n
         ) {
             app.fullscreen_enabled = fullscreen;
             app_desktop_set_fullscreen(app.fullscreen_enabled);
         }
-        settings_row_divider(app, section, (*y));
+        settings_row_divider(app, section, nativeDeref(y));
         let keyboard = app.on_screen_keyboard_enabled;
         if (
             commit_toggle_row(
@@ -98,7 +96,7 @@ export function settings_device_draw_display(
                 section.inner_width,
                 y,
                 LocaleText("on_screen_keyboard_label"),
-                &keyboard,
+                nativeRef(keyboard),
                 0n
             ) !== 0n
         ) {
@@ -109,10 +107,10 @@ export function settings_device_draw_display(
 }
 
 export function settings_device_draw_window(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     let inner = settings_section_inner_width(width);
     let section = settings_section_begin(
@@ -124,8 +122,8 @@ export function settings_device_draw_window(
         settings_device_window_body(inner)
     );
     let startup_options = SettingsDeviceNewStartupOptions();
-    startup_options[0n].label = LocaleText("desktop_startup_mode_normal");
-    startup_options[1n].label = LocaleText("desktop_startup_mode_minimized");
+    nativeAt(startup_options, 0n).label = LocaleText("desktop_startup_mode_normal");
+    nativeAt(startup_options, 1n).label = LocaleText("desktop_startup_mode_minimized");
     let startup: NativeDropdown.Props = {};
     startup.id = 104n;
     startup.bounds = settings_choice_row(
@@ -136,23 +134,21 @@ export function settings_device_draw_window(
         LocaleText("desktop_startup_mode_label")
     );
     startup.selected_index = app.desktop_startup_mode;
-    let startup_settings_menu = (
-        <Dropdown
-            session={app.ui.session}
-            props={startup}
-            options={startup_options[:]}
-        />
-    );
+    let startup_settings_menu = Dropdown({
+        session: app.ui.session,
+        props: startup,
+        options: nativeSlice(startup_options)
+    });
     if (startup_settings_menu.changed) {
         app.desktop_startup_mode = startup_settings_menu.selected_index;
         app.settings_dirty = 1n;
         save_settings(app);
     }
-    settings_row_divider(app, section, (*y));
+    settings_row_divider(app, section, nativeDeref(y));
     let close_options = SettingsDeviceNewCloseOptions();
-    close_options[0n].label = LocaleText("desktop_close_action_ask");
-    close_options[1n].label = LocaleText("desktop_close_action_keep_running");
-    close_options[2n].label = LocaleText("desktop_close_action_quit");
+    nativeAt(close_options, 0n).label = LocaleText("desktop_close_action_ask");
+    nativeAt(close_options, 1n).label = LocaleText("desktop_close_action_keep_running");
+    nativeAt(close_options, 2n).label = LocaleText("desktop_close_action_quit");
     let close: NativeDropdown.Props = {};
     close.id = 105n;
     close.bounds = settings_choice_row(
@@ -163,13 +159,11 @@ export function settings_device_draw_window(
         LocaleText("desktop_close_action_label")
     );
     close.selected_index = app.desktop_close_action;
-    let close_settings_menu = (
-        <Dropdown
-            session={app.ui.session}
-            props={close}
-            options={close_options[:]}
-        />
-    );
+    let close_settings_menu = Dropdown({
+        session: app.ui.session,
+        props: close,
+        options: nativeSlice(close_options)
+    });
     if (close_settings_menu.changed) {
         app.desktop_close_action = close_settings_menu.selected_index;
         app.settings_dirty = 1n;

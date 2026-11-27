@@ -75,8 +75,8 @@ export function GuideOverlayView(guide: GuideOverlayProps): GuideOverlayResult {
     if (height <= 0n) {
         height = app.ui.view_height;
     }
-    let step = GuideStepFor((*guide.step), guide.count);
-    let anchor = guide.steps[step].anchor;
+    let step = GuideStepFor(nativeDeref(guide.step), guide.count);
+    let anchor = nativeAt(guide.steps, step).anchor;
     if (anchor.width <= 0.0 || anchor.height <= 0.0) {
         return result;
     }
@@ -103,7 +103,7 @@ export function GuideOverlayView(guide: GuideOverlayProps): GuideOverlayResult {
     }
     let geometry = GuideStepGeometryFor(guide, step, width, height, metrics);
     let tip = geometry.place.tip;
-    let text = guide.steps[step].text;
+    let text = nativeAt(guide.steps, step).text;
     let layout = GuideLayoutFor(
         tip,
         geometry.text_width,
@@ -114,7 +114,7 @@ export function GuideOverlayView(guide: GuideOverlayProps): GuideOverlayResult {
     );
     State_widgets.guide_layout = layout;
     let lumi_request: LumiGuideRequest = {};
-    lumi_request.voice = guide.steps[step].voice;
+    lumi_request.voice = nativeAt(guide.steps, step).voice;
     lumi_request.text = text;
     lumi_request.place = geometry.place;
     lumi_request.anchor = anchor;
@@ -128,7 +128,7 @@ export function GuideOverlayView(guide: GuideOverlayProps): GuideOverlayResult {
     overlay_props.view_width = width;
     overlay_props.view_height = height;
     overlay_props.dismiss_disabled = true;
-    let overlay = <DismissibleOverlay session={session} props={overlay_props} />;
+    let overlay = DismissibleOverlay({ session: session, props: overlay_props });
     if (overlay.node < 0n || overlay.panel_node < 0n) {
         return result;
     }
@@ -242,7 +242,7 @@ export function GuideOverlayView(guide: GuideOverlayProps): GuideOverlayResult {
     button.circle = true;
     button.tone = ButtonTone.ButtonToneNeutral;
     button.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
-    if ((<Button session={session} props={button} />)) {
+    if (Button({ session: session, props: button })) {
         close = true;
     }
     if (voice_control) {
@@ -256,7 +256,7 @@ export function GuideOverlayView(guide: GuideOverlayProps): GuideOverlayResult {
         let voice_icon =
             app.guide_narration_muted !== 0n ? IconType.IconSound0 : IconType.IconSound3;
         button.icon_type = s32(voice_icon);
-        if ((<Button session={session} props={button} />)) {
+        if (Button({ session: session, props: button })) {
             LumiGuideToggleMuted(app);
         }
     }
@@ -270,7 +270,7 @@ export function GuideOverlayView(guide: GuideOverlayProps): GuideOverlayResult {
         button.direction = ArrowDirection.ArrowLeft;
         button.tone = ButtonTone.ButtonToneNeutral;
         button.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
-        if ((<Button session={session} props={button} />)) {
+        if (Button({ session: session, props: button })) {
             previous = true;
         }
     }
@@ -287,7 +287,7 @@ export function GuideOverlayView(guide: GuideOverlayProps): GuideOverlayResult {
         button.arrow = false;
         button.image = ActionImage(ActionIcon.IconCheck, button.label);
     }
-    if ((<Button session={session} props={button} />)) {
+    if (Button({ session: session, props: button })) {
         next = true;
     }
     End(session);
@@ -312,7 +312,7 @@ export function GuideOverlayView(guide: GuideOverlayProps): GuideOverlayResult {
     if (policy.closed || policy.finished) {
         LumiGuideStop();
     }
-    (*guide.step) = policy.step;
+    nativeDeref(guide.step) = policy.step;
     result.step = policy.step;
     result.changed = policy.changed ? 1n : 0n;
     result.closed = policy.closed ? 1n : 0n;
@@ -340,9 +340,9 @@ export function PracticeControlRowView(row: IconRowRequest): NativeToolbar.IconR
     let layout = NativeToolbar.BottomIconRowLayoutFor(props, MetricsScale());
     result.y = layout.y;
     result.button_width = layout.button_width;
-    let index: s32 = 0n;
+    let index: s32 = s32(0n);
     while (index < row.count) {
-        let action = row.items[index];
+        let action = nativeAt(row.items, index);
         let button: NativeButton.Props = {};
         button.id = s32(83000n) + index;
         button.bounds = NativeToolbar.BottomIconRowButtonBoundsFor(layout, index);
@@ -352,7 +352,7 @@ export function PracticeControlRowView(row: IconRowRequest): NativeToolbar.IconR
         button.tone = ButtonTone.ButtonToneNeutral;
         button.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
         button.disabled = action.disabled;
-        if ((<Button session={app.ui.session} props={button} />)) {
+        if (Button({ session: app.ui.session, props: button })) {
             result.clicked_index = index;
         }
         index = index + 1n;

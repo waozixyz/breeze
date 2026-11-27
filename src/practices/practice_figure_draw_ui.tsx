@@ -9,8 +9,8 @@ import { PracticeFigurePrepare } from "practice_figure_draw";
 
 export function PracticeFigureDrawModelView(
     session: Session,
-    solved: *TaiChiSolved,
-    rig: *TaiChiRig,
+    solved: NativeRef<TaiChiSolved>,
+    rig: NativeRef<TaiChiRig>,
     framing: TaiChiFraming,
     man: boolean,
     mirrored: boolean,

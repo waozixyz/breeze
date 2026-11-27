@@ -17,12 +17,7 @@ import {
     AppTitleFontSize
 } from "metrics";
 
-export function AudioSetupLine(
-    app: *InnerBreeze,
-    text: string,
-    font: s32,
-    y: s32
-): void {
+export function AudioSetupLine(app: NativeRef<InnerBreeze>, text: string, font: s32, y: s32): void {
     let width = AppTextWidth(text, font);
     <Text
         session={app.ui.session}
@@ -40,14 +35,14 @@ export function AudioSetupLine(
     />;
 }
 
-export function AudioSetupScreen(app: *InnerBreeze): void {
+export function AudioSetupScreen(app: NativeRef<InnerBreeze>): void {
     let column = NativeLayout.CenteredColumnFor(app.ui.view_width, AppScale(380n), AppScale(16n));
     let gap = AppScale(12n);
     let button_height = AppScale(48n);
     let title = LocaleText("optional_audio_title");
     let title_font = AppTitleFontSize(title, column.width);
     let size_buffer = AudioSetupScreenNewSizeBuffer();
-    let size = AudioSetupSizeText(AudioSetupBytes(), size_buffer[:]);
+    let size = AudioSetupSizeText(AudioSetupBytes(), nativeSlice(size_buffer));
     let content_height =
         AppTextLineHeight(title_font) +
         AppTextLineHeight(AppSmallFontSize()) +
@@ -62,46 +57,42 @@ export function AudioSetupScreen(app: *InnerBreeze): void {
     AudioSetupLine(app, size, AppSmallFontSize(), y);
     y = y + (AppTextLineHeight(AppSmallFontSize()) + gap * 2n);
     if (
-        (
-            <Button
-                session={app.ui.session}
-                props={{
-                    id: 264n,
-                    bounds: {
-                        x: float32(column.x),
-                        y: float32(y),
-                        width: float32(column.width),
-                        height: float32(button_height)
-                    },
-                    label: LocaleText("practice_narration_download"),
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                }}
-            />
-        )
+        Button({
+            session: app.ui.session,
+            props: {
+                id: 264n,
+                bounds: {
+                    x: float32(column.x),
+                    y: float32(y),
+                    width: float32(column.width),
+                    height: float32(button_height)
+                },
+                label: LocaleText("practice_narration_download"),
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisFilled
+            }
+        })
     ) {
         AudioSetupFinish(app, true);
         return;
     }
     y = y + (button_height + gap);
     if (
-        (
-            <Button
-                session={app.ui.session}
-                props={{
-                    id: 265n,
-                    bounds: {
-                        x: float32(column.x),
-                        y: float32(y),
-                        width: float32(column.width),
-                        height: float32(button_height)
-                    },
-                    label: LocaleText("optional_audio_skip"),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: app.ui.session,
+            props: {
+                id: 265n,
+                bounds: {
+                    x: float32(column.x),
+                    y: float32(y),
+                    width: float32(column.width),
+                    height: float32(button_height)
+                },
+                label: LocaleText("optional_audio_skip"),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         AudioSetupFinish(app, false);
     }

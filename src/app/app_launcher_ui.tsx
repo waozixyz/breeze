@@ -88,7 +88,7 @@ import { ScreenAppSelection } from "types";
 import { GuideOverlayStepFor } from "widgets";
 import { GuideOverlayView as GuideOverlay } from "widgets_ui";
 
-export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): void {
+export function app_draw_launcherView(app: NativeRef<InnerBreeze>, dock_drawn: boolean): void {
     app.launcher_panel_node = -1n;
     if (!app.launcher_open || app.host_feature !== 0n) {
         return;
@@ -108,7 +108,7 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
             for (let offer = s32(0n); offer < NodeAppOfferCount(); offer += s32(1)) {
                 if (
                     NodeAppOfferName(offer) ===
-                    AppTextFromCString(&app.launcher_drag_name[0n], 25n)
+                    AppTextFromCString(nativeRef(nativeAt(app.launcher_drag_name, 0n)), 25n)
                 ) {
                     app.launcher_drag_route = -offer - 2n;
                     found = true;
@@ -138,7 +138,7 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
     overlay.key = NativeLayout.KeyHash("inbe/apps/overlay");
     overlay.bounds = TreeRootBounds(app.ui.session);
     overlay.dismiss_disabled = app.breathing.screen === ScreenAppSelection;
-    let result = <DismissibleOverlay session={app.ui.session} props={overlay} />;
+    let result = DismissibleOverlay({ session: app.ui.session, props: overlay });
     if (result.closed) {
         app_launcher_close(app);
         return;
@@ -164,17 +164,17 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
     let subtitle = AppLauncherNewSubtitle();
     app_nav_profile_identity(
         app,
-        identity[:],
+        nativeSlice(identity),
         identity.count,
-        subtitle[:],
+        nativeSlice(subtitle),
         subtitle.count
     );
     let account: NativeButton.Props = {};
     account.key = NativeLayout.KeyHash("inbe/apps/profile");
     account.id = 6792n;
     account.label = FrameTextHold(
-        &app.ui.frame_text,
-        AppTextFromCString(&identity[0n], s32(identity.count))
+        nativeRef(app.ui.frame_text),
+        AppTextFromCString(nativeRef(nativeAt(identity, 0n)), s32(identity.count))
     );
     account.icon_shape = compact_header
         ? ""
@@ -242,7 +242,7 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
         width: float32(profile_w),
         height: float32(account_h)
     };
-    if ((<Button session={app.ui.session} props={account} />)) {
+    if (Button({ session: app.ui.session, props: account })) {
         app_launcher_activate(app, s32(AppNavRoute.APP_NAV_ROUTE_PROFILE));
         End(app.ui.session);
         return;
@@ -259,7 +259,7 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
         width: float32(edit_w),
         height: float32(AppScale(44n))
     };
-    if ((<Button session={app.ui.session} props={edit} />)) {
+    if (Button({ session: app.ui.session, props: edit })) {
         app.launcher_editing = !app.launcher_editing;
         app.launcher_drag_key = 0n;
         app.launcher_drag_moving = false;
@@ -277,7 +277,7 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
         width: float32(AppScale(44n)),
         height: float32(AppScale(44n))
     };
-    if ((<Button session={app.ui.session} props={settings} />)) {
+    if (Button({ session: app.ui.session, props: settings })) {
         app_launcher_close(app);
         app_apply_nav_route(app, s32(AppNavRoute.APP_NAV_ROUTE_SETTINGS));
         End(app.ui.session);
@@ -306,11 +306,15 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
     for (let index = s32(0n); index < app.launcher_favorite_count; index += s32(1)) {
         if (
             !app.launcher_editing &&
-            AppPropertiesHidden(LauncherRouteName(app.launcher_favorites[index]))
+            AppPropertiesHidden(LauncherRouteName(nativeAt(app.launcher_favorites, index)))
         ) {
             continue;
         }
-        State_app_launcher.launcher_screen_routes[count] = app.launcher_favorites[index];
+        nativeSet(
+            State_app_launcher.launcher_screen_routes,
+            count,
+            nativeAt(app.launcher_favorites, index)
+        );
         count = count + 1n;
     }
     let more_catalog = AppLauncherNewMoreCatalog();
@@ -325,7 +329,7 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
         if (!app.launcher_editing && AppPropertiesHidden(LauncherRouteName(route))) {
             continue;
         }
-        more_catalog[more_catalog_count] = route;
+        nativeSet(more_catalog, more_catalog_count, route);
         more_catalog_count = more_catalog_count + 1n;
     }
     for (let offer = s32(0n); offer < NodeAppOfferCount(); offer += s32(1)) {
@@ -336,31 +340,31 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
             NodeAppSlotFor(name) < 0n &&
             (app.launcher_editing || !AppPropertiesHidden(name))
         ) {
-            more_catalog[more_catalog_count] = -offer - 2n;
+            nativeSet(more_catalog, more_catalog_count, -offer - 2n);
             more_catalog_count = more_catalog_count + 1n;
         }
     }
-    LauncherLibrarySort(app, more_catalog[:more_catalog_count]);
+    LauncherLibrarySort(app, nativeSlice(more_catalog, 0n, more_catalog_count));
     for (let index = s32(0n); index < more_catalog_count; index += s32(1)) {
-        State_app_launcher.launcher_screen_routes[count] = more_catalog[index];
+        nativeSet(State_app_launcher.launcher_screen_routes, count, nativeAt(more_catalog, index));
         count = count + 1n;
     }
     for (let index = s32(0n); index < count; index += s32(1)) {
-        let route = State_app_launcher.launcher_screen_routes[index];
+        let route = nativeAt(State_app_launcher.launcher_screen_routes, index);
         let title =
             route >= 0n ? app_nav_route_label(route) : NodeAppTitle(LauncherLibraryName(route));
-        AppCopyText(title, titles[index][:]);
+        AppCopyText(title, nativeSlice(nativeAt(titles, index)));
         let search = LauncherLibraryName(route);
         for (let at = s32(0n); at <= 5n; at += s32(1)) {
-            if (routes[at] === route) {
-                search = canonical[at];
+            if (nativeAt(routes, at) === route) {
+                search = nativeAt(canonical, at);
             }
         }
-        items[index] = {
-            title: AppTextFromCString(&titles[index][0n], 256n),
+        nativeSet(items, index, {
+            title: AppTextFromCString(nativeRef(nativeAt(nativeAt(titles, index), 0n)), 256n),
             search: search,
             favorite: route >= 0n && app_launcher_is_favorite(app, route)
-        };
+        });
     }
     let bottom_dock = app_content_bottom_reserved(app);
     let status = "";
@@ -375,10 +379,10 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
         status = LocaleText(status_key);
     }
     let typed = AppLauncherNewTyped();
-    let input = SampleTextFieldInput(true, typed[:]);
+    let input = SampleTextFieldInput(true, nativeSlice(typed));
     let layout = NativeSharedLauncher.AppLauncherScreen(
         app.ui.session,
-        &State_app_launcher.launcher_screen,
+        nativeRef(State_app_launcher.launcher_screen),
         {
             bounds: {
                 x: float32(x),
@@ -397,7 +401,7 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
             context: NativeContext(app),
             cards: LauncherScreenCards
         },
-        items[:count]
+        nativeSlice(items, 0n, count)
     );
     app.launcher_search = State_app_launcher.launcher_screen.query;
     app.launcher_search_cursor = State_app_launcher.launcher_screen.cursor;
@@ -406,7 +410,9 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
     app.launcher_search_focused = State_app_launcher.launcher_screen.focused;
     app.launcher_scroll = State_app_launcher.launcher_screen.scroll;
     if (layout.clipboard_write) {
-        TextInputWriteClipboard(AppTextFromCString(&layout.clipboard_text[0n], 128n));
+        TextInputWriteClipboard(
+            AppTextFromCString(nativeRef(nativeAt(layout.clipboard_text, 0n)), 128n)
+        );
     }
     if (layout.changed) {
         app.launcher_grid_view = State_app_launcher.launcher_screen.grid;
@@ -420,16 +426,24 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
     let pinned = AppLauncherNewPinned();
     let more = AppLauncherNewMore();
     for (let index = s32(0n); index < pinned_count; index += s32(1)) {
-        pinned[index] =
-            State_app_launcher.launcher_screen_routes[
-                State_app_launcher.launcher_screen.visible[index]
-            ];
+        nativeSet(
+            pinned,
+            index,
+            nativeAt(
+                State_app_launcher.launcher_screen_routes,
+                nativeAt(State_app_launcher.launcher_screen.visible, index)
+            )
+        );
     }
     for (let index = s32(0n); index < more_count; index += s32(1)) {
-        more[index] =
-            State_app_launcher.launcher_screen_routes[
-                State_app_launcher.launcher_screen.visible[pinned_count + index]
-            ];
+        nativeSet(
+            more,
+            index,
+            nativeAt(
+                State_app_launcher.launcher_screen_routes,
+                nativeAt(State_app_launcher.launcher_screen.visible, pinned_count + index)
+            )
+        );
     }
     let scrolled = layout.scrolled;
     let pinned_bounds = layout.favorites_bounds;
@@ -458,9 +472,9 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
     });
     let pinned_slots = AppLauncherNewPinnedSlots();
     for (let index = s32(0n); index < pinned_count; index += s32(1)) {
-        pinned_slots[index] = GridCellBounds(pinned_cells, index, tile_height);
+        nativeSet(pinned_slots, index, GridCellBounds(pinned_cells, index, tile_height));
     }
-    let query = AppTextFromCString(&app.launcher_search[0n], 128n);
+    let query = AppTextFromCString(nativeRef(nativeAt(app.launcher_search, 0n)), 128n);
     if (!dock_drawn) {
         app_draw_favorites_dock(app);
     }
@@ -482,7 +496,7 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
             );
             let highlight = pinned_bounds;
             if (target < pinned_count) {
-                highlight = pinned_slots[target];
+                highlight = nativeAt(pinned_slots, target);
             }
             highlight = RectangleIntersection(highlight, scrolled.viewport);
             PaintRoundedOutline(
@@ -502,7 +516,7 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
                     app_launcher_install(app, app.launcher_drag_route)
                 ) {
                     app.launcher_favorite_count = LauncherPlaceFavorite(
-                        app.launcher_favorites[:],
+                        nativeSlice(app.launcher_favorites),
                         app.launcher_favorite_count,
                         app.launcher_drag_route,
                         target
@@ -520,7 +534,7 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
                     app_launcher_is_favorite(app, app.launcher_drag_route)
                 ) {
                     app.launcher_favorite_count = LauncherToggleFavorite(
-                        app.launcher_favorites[:],
+                        nativeSlice(app.launcher_favorites),
                         app.launcher_favorite_count,
                         app.launcher_drag_route
                     );
@@ -529,7 +543,7 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
                 target = GridIndexAt(more_cells, point.x, point.y, tile_height, more_count);
                 LauncherLibraryMove(
                     app,
-                    more[:more_count],
+                    nativeSlice(more, 0n, more_count),
                     app.launcher_drag_route,
                     target
                 );
@@ -590,12 +604,12 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
     End(app.ui.session);
     if (app.launcher_guide_seen === 0n) {
         let steps = AppLauncherNewSteps();
-        steps[0n] = GuideOverlayStepFor(layout.search_bounds, "launcher_guide_find");
+        nativeSet(steps, 0n, GuideOverlayStepFor(layout.search_bounds, "launcher_guide_find"));
         let guide: GuideOverlayProps = {};
-        guide.steps = &steps[0n];
+        guide.steps = nativeRef(nativeAt(steps, 0n));
         guide.count = 1n;
         app.launcher_guide_step = 0n;
-        guide.step = &app.launcher_guide_step;
+        guide.step = nativeRef(app.launcher_guide_step);
         guide.view_width = app.ui.view_width;
         guide.view_height = app.ui.view_height;
         guide.reserved_bottom = bottom_dock;
@@ -615,7 +629,7 @@ export function app_draw_launcherView(app: *InnerBreeze, dock_drawn: boolean): v
     }
 }
 
-export function app_launcher_ask_package_updates(app: *InnerBreeze): void {
+export function app_launcher_ask_package_updates(app: NativeRef<InnerBreeze>): void {
     if (State_app_launcher.launcher_package_updates_closed || !PackageAutomaticUnasked()) {
         return;
     }
@@ -636,13 +650,11 @@ export function app_launcher_ask_package_updates(app: *InnerBreeze): void {
     props.title = LocaleText("package_updates_title");
     props.message = LocaleText("package_updates_message");
     props.max_width = 420n;
-    let answer = (
-        <ActionModal
-            session={app.ui.session}
-            props={props}
-            actions={actions[:2n]}
-        />
-    ).action;
+    let answer = ActionModal({
+        session: app.ui.session,
+        props: props,
+        actions: nativeSlice(actions, 0n, 2n)
+    }).action;
     if (answer === 0n) {
         return;
     }

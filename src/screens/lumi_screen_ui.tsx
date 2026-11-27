@@ -14,7 +14,7 @@ import { MetricsScale } from "metrics";
 import { AppNavRoute } from "route_types";
 import { AppRequestSmoothFrames } from "smooth_frames";
 
-export function LumiDrawLoading(app: *InnerBreeze): void {
+export function LumiDrawLoading(app: NativeRef<InnerBreeze>): void {
     let area: Rectangle = {
         x: 0.0,
         y: 0.0,

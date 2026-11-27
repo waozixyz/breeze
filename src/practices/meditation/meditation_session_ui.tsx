@@ -9,7 +9,7 @@ import { LocaleText } from "locale";
 import { meditation_start_seconds } from "meditation_session";
 import { NativePresent } from "native_flags";
 
-export function meditation_draw_setup_modalView(app: *InnerBreeze): void {
+export function meditation_draw_setup_modalView(app: NativeRef<InnerBreeze>): void {
     if (!NativePresent(app)) {
         return;
     }
@@ -52,15 +52,16 @@ export function meditation_draw_setup_modalView(app: *InnerBreeze): void {
             emphasis: ButtonEmphasis.ButtonEmphasisSoft
         }
     ];
-    let result = (
-        <ActionModal
-            session={app.ui.session}
-            props={{ title: LocaleText("meditation_title") }}
-            actions={actions[:6n]}
-        />
-    ).action;
+    let result = ActionModal({
+        session: app.ui.session,
+        props: { title: LocaleText("meditation_title") },
+        actions: nativeSlice(actions, 0n, 6n)
+    }).action;
     if (result >= 1n && result <= 5n) {
-        meditation_start_seconds(app, State_meditation_session.duration_presets[result - 1n]);
+        meditation_start_seconds(
+            app,
+            nativeAt(State_meditation_session.duration_presets, result - 1n)
+        );
     } else if (result === 6n || result === -1n) {
         app_close_modal(app);
     }

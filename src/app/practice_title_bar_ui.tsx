@@ -20,7 +20,7 @@ import { PracticeTitleBarHeight } from "practice_title_bar";
 import { app_is_session_screen } from "session_screen";
 
 export function PracticeTitleBarView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     title: string,
     height: s32
 ): boolean {
@@ -70,7 +70,7 @@ export function PracticeTitleBarView(
     let bar: NativeTitleBar.Props = {};
     bar.height = height;
     bar.bounds = { x: 0.0, y: 0.0, width: float32(view_width), height: float32(height) };
-    <TitleBar session={app.ui.session} props={bar} options={options[0n:0n]} />;
+    <TitleBar session={app.ui.session} props={bar} options={nativeSlice(options, 0n, 0n)} />;
     let text_props: NativeText.Props = {};
     text_props.text = title;
     text_props.size = font;
@@ -116,7 +116,7 @@ export function PracticeTitleBarView(
         minimize.circle = true;
         minimize.tone = ButtonTone.ButtonToneNeutral;
         minimize.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
-        if ((<Button session={app.ui.session} props={minimize} />)) {
+        if (Button({ session: app.ui.session, props: minimize })) {
             app.session_window.minimize_requested = true;
         }
     }
@@ -131,5 +131,5 @@ export function PracticeTitleBarView(
     ) {
         AppMiniModeExpand(app);
     }
-    return <Button session={app.ui.session} props={close} />;
+    return Button({ session: app.ui.session, props: close });
 }

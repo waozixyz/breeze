@@ -85,10 +85,10 @@ import {
 import { TextInputWriteClipboard } from "text_input_host";
 
 export function ProfileDewText(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     text: string,
     x: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     width: s32,
     font: s32,
     draw: boolean
@@ -100,24 +100,24 @@ export function ProfileDewText(
             props={{
                 bounds: {
                     x: float32(x),
-                    y: float32((*y)),
+                    y: float32(nativeDeref(y)),
                     width: float32(width),
                     height: float32(height)
                 },
-                text: FrameTextHold(&app.ui.frame_text, text),
+                text: FrameTextHold(nativeRef(app.ui.frame_text), text),
                 size: font,
                 wrap: Wrap.TextWrapAuto
             }}
         />;
     }
-    (*y) = (*y) + (height + AppScale(8n));
+    nativeDeref(y) = nativeDeref(y) + (height + AppScale(8n));
 }
 
 export function ProfileDewButton(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     label: string,
     x: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     width: s32,
     disabled: boolean,
     draw: boolean,
@@ -126,33 +126,31 @@ export function ProfileDewButton(
     let height = AppScale(detail.count > 0n ? 58n : 44n);
     let clicked = false;
     if (draw) {
-        clicked = (
-            <Button
-                session={app.ui.session}
-                props={{
-                    bounds: {
-                        x: float32(x),
-                        y: float32((*y)),
-                        width: float32(width),
-                        height: float32(height)
-                    },
-                    label: FrameTextHold(&app.ui.frame_text, label),
-                    detail: FrameTextHold(&app.ui.frame_text, detail),
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                    disabled: disabled
-                }}
-            />
-        );
+        clicked = Button({
+            session: app.ui.session,
+            props: {
+                bounds: {
+                    x: float32(x),
+                    y: float32(nativeDeref(y)),
+                    width: float32(width),
+                    height: float32(height)
+                },
+                label: FrameTextHold(nativeRef(app.ui.frame_text), label),
+                detail: FrameTextHold(nativeRef(app.ui.frame_text), detail),
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                disabled: disabled
+            }
+        });
     }
-    (*y) = (*y) + (height + AppScale(8n));
+    nativeDeref(y) = nativeDeref(y) + (height + AppScale(8n));
     return clicked;
 }
 
 export function ProfileDewUsage(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     width: s32,
     draw: boolean
 ): void {
@@ -171,7 +169,7 @@ export function ProfileDewUsage(
             props={{
                 bounds: {
                     x: float32(x),
-                    y: float32((*y)),
+                    y: float32(nativeDeref(y)),
                     width: float32(width),
                     height: float32(bar_h)
                 },
@@ -195,7 +193,7 @@ export function ProfileDewUsage(
                 props={{
                     bounds: {
                         x: float32(x),
-                        y: float32((*y)),
+                        y: float32(nativeDeref(y)),
                         width: float32(fill_w),
                         height: float32(bar_h)
                     },
@@ -205,36 +203,28 @@ export function ProfileDewUsage(
             />;
         }
     }
-    (*y) = (*y) + (bar_h + AppScale(8n));
+    nativeDeref(y) = nativeDeref(y) + (bar_h + AppScale(8n));
     let used = ProfileDewNewUsed();
     let limit = ProfileDewNewLimit();
     let line = ProfileDewNewLine();
-    SyncStorageFormatBytes(storage.used_bytes, used[:]);
-    SyncStorageFormatBytes(storage.limit_bytes, limit[:]);
+    SyncStorageFormatBytes(storage.used_bytes, nativeSlice(used));
+    SyncStorageFormatBytes(storage.limit_bytes, nativeSlice(limit));
     let arguments: [FormatArg, FormatArg] = [
-        { text: TextUntilNul(used[:]), is_text: true },
-        { text: TextUntilNul(limit[:]), is_text: true }
+        { text: TextUntilNul(nativeSlice(used)), is_text: true },
+        { text: TextUntilNul(nativeSlice(limit)), is_text: true }
     ];
     FormatTemplate(
         LocaleText("profile_node_storage_used_of"),
-        arguments[:],
-        line[:]
+        nativeSlice(arguments),
+        nativeSlice(line)
     );
-    ProfileDewText(
-        app,
-        TextUntilNul(line[:]),
-        x,
-        y,
-        width,
-        AppSmallFontSize(),
-        draw
-    );
+    ProfileDewText(app, TextUntilNul(nativeSlice(line)), x, y, width, AppSmallFontSize(), draw);
 }
 
 export function ProfileDewDraw(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     width: s32
 ): void {
     let height = ProfileDewHeight(app, width);
@@ -249,7 +239,7 @@ export function ProfileDewDraw(
         props={{
             bounds: {
                 x: float32(x),
-                y: float32((*y)),
+                y: float32(nativeDeref(y)),
                 width: float32(width),
                 height: float32(height - AppScale(8n))
             },
@@ -257,15 +247,15 @@ export function ProfileDewDraw(
             radius: float32(AppScale(12n))
         }}
     />;
-    let inner = (*y) + AppScale(14n);
-    ProfileDewContent(app, x + AppScale(14n), &inner, width - AppScale(28n), true);
-    (*y) = (*y) + height;
+    let inner = nativeDeref(y) + AppScale(14n);
+    ProfileDewContent(app, x + AppScale(14n), nativeRef(inner), width - AppScale(28n), true);
+    nativeDeref(y) = nativeDeref(y) + height;
 }
 
 export function ProfileStoragePlansContent(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     width: s32,
     draw: boolean
 ): void {
@@ -273,71 +263,58 @@ export function ProfileStoragePlansContent(
     ProfileDewFormatDew(
         State_dew.dew_account.balance,
         LocaleText("profile_dew_balance_line"),
-        line[:]
+        nativeSlice(line)
     );
-    ProfileDewText(
-        app,
-        TextUntilNul(line[:]),
-        x,
-        y,
-        width,
-        AppSmallFontSize(),
-        draw
-    );
+    ProfileDewText(app, TextUntilNul(nativeSlice(line)), x, y, width, AppSmallFontSize(), draw);
     ProfileDewUsage(app, x, y, width, draw);
     let labels = ProfileDewNewLabels();
-    AppCopyText(LocaleText("profile_dew_plan_free"), labels[0n][:]);
+    AppCopyText(LocaleText("profile_dew_plan_free"), nativeSlice(nativeAt(labels, 0n)));
     for (let index = s32(0n); index < DewPlanCount; index += s32(1)) {
         ProfileDewSizeText(
-            State_dew.dew_account.plans[index].limit_bytes,
-            labels[index + 1n][:]
+            nativeAt(State_dew.dew_account.plans, index).limit_bytes,
+            nativeSlice(nativeAt(labels, index + 1n))
         );
     }
     if (draw) {
         let options = ProfileDewNewOptions();
         for (let index = s32(0n); index <= DewPlanCount; index += s32(1)) {
-            options[index].label = FrameTextHold(
-                &app.ui.frame_text,
-                TextUntilNul(labels[index][:])
+            nativeAt(options, index).label = FrameTextHold(
+                nativeRef(app.ui.frame_text),
+                TextUntilNul(nativeSlice(nativeAt(labels, index)))
             );
         }
         let props: NativeSegmentedControl.Props = {};
         props.key = NativeLayout.KeyHash("profile/storage/tabs");
         props.bounds = {
             x: float32(x),
-            y: float32((*y)),
+            y: float32(nativeDeref(y)),
             width: float32(width),
             height: float32(AppScale(42n))
         };
         props.height = AppScale(42n);
         props.selected_index = State_profile_dew.profile_storage_tab;
         props.has_selection = true;
-        let choice = (
-            <SegmentedControl
-                session={app.ui.session}
-                props={props}
-                options={options[:]}
-            />
-        );
+        let choice = SegmentedControl({
+            session: app.ui.session,
+            props: props,
+            options: nativeSlice(options)
+        });
         if (choice.changed) {
             State_profile_dew.profile_storage_tab = choice.selected_index;
             State_dew.dew_notice = "";
         }
     }
-    (*y) = (*y) + AppScale(54n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(54n);
     let tab = State_profile_dew.profile_storage_tab;
     let size = ProfileDewNewSize();
     if (tab === 0n) {
-        ProfileDewSizeText(State_dew.dew_account.free_bytes, size[:]);
+        ProfileDewSizeText(State_dew.dew_account.free_bytes, nativeSlice(size));
     } else {
-        AppCopyText(
-            TextUntilNul(labels[tab][:]),
-            size[:]
-        );
+        AppCopyText(TextUntilNul(nativeSlice(nativeAt(labels, tab))), nativeSlice(size));
     }
     ProfileDewText(
         app,
-        TextUntilNul(size[:]),
+        TextUntilNul(nativeSlice(size)),
         x,
         y,
         width,
@@ -347,23 +324,15 @@ export function ProfileStoragePlansContent(
     let current = ProfileDewCurrentSize();
     if (tab === current) {
         if (current === 0n) {
-            AppCopyText(LocaleText("profile_dew_plan_current"), line[:]);
+            AppCopyText(LocaleText("profile_dew_plan_current"), nativeSlice(line));
         } else {
             FormatNumberTemplate(
                 LocaleText("profile_dew_plan_current_days"),
                 ProfileDewDaysLeft(),
-                line[:]
+                nativeSlice(line)
             );
         }
-        ProfileDewText(
-            app,
-            TextUntilNul(line[:]),
-            x,
-            y,
-            width,
-            AppFontSize(),
-            draw
-        );
+        ProfileDewText(app, TextUntilNul(nativeSlice(line)), x, y, width, AppFontSize(), draw);
     } else if (tab === 0n) {
         ProfileDewText(
             app,
@@ -412,53 +381,29 @@ export function ProfileStoragePlansContent(
         return;
     }
     let busy = State_dew.dew_operation.active;
-    if (State_dew.dew_attempt[0n] !== u8(0n)) {
+    if (nativeAt(State_dew.dew_attempt, 0n) !== u8(0n)) {
         if (ProfileDewButton(app, LocaleText("profile_dew_retry"), x, y, width, busy, draw)) {
             DewBuyStorage("", "");
         }
     } else {
-        let offer = State_dew.dew_account.plans[tab - 1n];
+        let offer = nativeAt(State_dew.dew_account.plans, tab - 1n);
         ProfileDewFormatDew(
             offer.monthly_units,
             LocaleText("profile_dew_month"),
-            line[:]
+            nativeSlice(line)
         );
-        if (
-            ProfileDewButton(
-                app,
-                TextUntilNul(line[:]),
-                x,
-                y,
-                width,
-                busy,
-                draw
-            )
-        ) {
-            DewBuyStorage(State_entity_dew_model.DewPlanSizes[tab - 1n], "monthly");
+        if (ProfileDewButton(app, TextUntilNul(nativeSlice(line)), x, y, width, busy, draw)) {
+            DewBuyStorage(nativeAt(State_entity_dew_model.DewPlanSizes, tab - 1n), "monthly");
         }
-        ProfileDewFormatDew(
-            offer.yearly_units,
-            LocaleText("profile_dew_year"),
-            line[:]
-        );
-        if (
-            ProfileDewButton(
-                app,
-                TextUntilNul(line[:]),
-                x,
-                y,
-                width,
-                busy,
-                draw
-            )
-        ) {
-            DewBuyStorage(State_entity_dew_model.DewPlanSizes[tab - 1n], "yearly");
+        ProfileDewFormatDew(offer.yearly_units, LocaleText("profile_dew_year"), nativeSlice(line));
+        if (ProfileDewButton(app, TextUntilNul(nativeSlice(line)), x, y, width, busy, draw)) {
+            DewBuyStorage(nativeAt(State_entity_dew_model.DewPlanSizes, tab - 1n), "yearly");
         }
     }
     ProfileDewText(app, LocaleText("profile_dew_rates"), x, y, width, AppSmallFontSize(), draw);
 }
 
-export function ProfileStoragePlansModalDraw(app: *InnerBreeze): void {
+export function ProfileStoragePlansModalDraw(app: NativeRef<InnerBreeze>): void {
     let width = app.ui.view_width - AppScale(32n);
     if (width > AppScale(520n)) {
         width = AppScale(520n);
@@ -470,11 +415,11 @@ export function ProfileStoragePlansModalDraw(app: *InnerBreeze): void {
         State_profile_dew.profile_storage_tab = 0n;
     }
     let chosen = State_profile_dew.profile_storage_tab;
-    let tallest: s32 = 0n;
+    let tallest: s32 = s32(0n);
     for (let tab = s32(0n); tab <= DewPlanCount; tab += s32(1)) {
         State_profile_dew.profile_storage_tab = tab;
-        let measured: s32 = 0n;
-        ProfileStoragePlansContent(app, 0n, &measured, width - AppScale(46n), false);
+        let measured: s32 = s32(0n);
+        ProfileStoragePlansContent(app, 0n, nativeRef(measured), width - AppScale(46n), false);
         if (measured > tallest) {
             tallest = measured;
         }
@@ -504,8 +449,8 @@ export function ProfileStoragePlansModalDraw(app: *InnerBreeze): void {
         return;
     }
     let content_w = s32(frame.layout.content.width) - AppScale(10n);
-    let content_h: s32 = 0n;
-    ProfileStoragePlansContent(app, 0n, &content_h, content_w, false);
+    let content_h: s32 = s32(0n);
+    ProfileStoragePlansContent(app, 0n, nativeRef(content_h), content_w, false);
     let scroll = NativeScroll.Draw(app.ui.session, {
         key: NativeLayout.KeyHash("profile/storage/scroll"),
         bounds: frame.layout.content,
@@ -515,27 +460,27 @@ export function ProfileStoragePlansModalDraw(app: *InnerBreeze): void {
     State_profile_dew.profile_storage_scroll = scroll.scroll_offset;
     if (scroll.opened) {
         let y = s32(scroll.content.y);
-        ProfileStoragePlansContent(app, s32(scroll.content.x), &y, content_w, true);
+        ProfileStoragePlansContent(app, s32(scroll.content.x), nativeRef(y), content_w, true);
         End(app.ui.session);
     }
     End(app.ui.session);
 }
 
 export function ProfileTopUpPlayContent(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     width: s32,
     draw: boolean
 ): void {
     let billing: PlayBillingState = {};
     PlayBillingRead(
-        TextUntilNul(State_dew_payment.dew_play.state[:]),
-        &billing
+        TextUntilNul(nativeSlice(State_dew_payment.dew_play.state)),
+        nativeRef(billing)
     );
     let busy =
         State_dew.dew_operation.active ||
-        TextUntilNul(State_dew_payment.dew_play.status[:]) === "verifying";
+        TextUntilNul(nativeSlice(State_dew_payment.dew_play.status)) === "verifying";
     let packs: [string, string, string, string, string] = [
         "dew_10",
         "dew_100",
@@ -543,16 +488,16 @@ export function ProfileTopUpPlayContent(
         "dew_1000",
         "dew_5000"
     ];
-    let shown: s32 = 0n;
+    let shown: s32 = s32(0n);
     let savings_shown = false;
     for (const pack of packs) {
-        let product: *PlayBillingProduct = EmptyPlayBillingProduct();
+        let product: NativeRef<PlayBillingProduct> = EmptyPlayBillingProduct();
         for (let index = s32(0n); index <= 7n; index += s32(1)) {
             if (index >= billing.product_count) {
                 break;
             }
-            let candidate = &billing.products[index];
-            if (TextUntilNul(candidate.id[:]) === pack) {
+            let candidate = nativeRef(nativeAt(billing.products, index));
+            if (TextUntilNul(nativeSlice(candidate.id)) === pack) {
                 product = candidate;
             }
         }
@@ -560,17 +505,17 @@ export function ProfileTopUpPlayContent(
             continue;
         }
         let label = ProfileDewNewLabel();
-        let arguments: [FormatArg] = [{ text: pack[4n:], is_text: true }];
+        let arguments: [FormatArg] = [{ text: nativeSlice(pack, 4n), is_text: true }];
         FormatTemplate(
             LocaleText("profile_dew_play_pack"),
-            arguments[:],
-            label[:]
+            nativeSlice(arguments),
+            nativeSlice(label)
         );
-        let price = TextUntilNul(product.price[:]);
+        let price = TextUntilNul(nativeSlice(product.price));
         let detail = ProfileDewNewDetail();
-        AppCopyText(price, detail[:]);
+        AppCopyText(price, nativeSlice(detail));
         let savings = DewPlaySavings(
-            TextUntilNul(State_dew_payment.dew_play.state[:]),
+            TextUntilNul(nativeSlice(State_dew_payment.dew_play.state)),
             pack
         );
         if (savings > 0n) {
@@ -578,29 +523,25 @@ export function ProfileTopUpPlayContent(
                 { text: price, is_text: true },
                 { number: savings }
             ];
-            FormatTemplate(
-                "%s · −%d%%",
-                detail_args[:],
-                detail[:]
-            );
+            FormatTemplate("%s · −%d%%", nativeSlice(detail_args), nativeSlice(detail));
             savings_shown = true;
         }
         if (
             ProfileDewButton(
                 app,
-                TextUntilNul(label[:]),
+                TextUntilNul(nativeSlice(label)),
                 x,
                 y,
                 width,
                 busy,
                 draw,
-                TextUntilNul(detail[:])
+                TextUntilNul(nativeSlice(detail))
             )
         ) {
             DewPlayBuy(
-                &State_dew_payment.dew_play,
+                nativeRef(State_dew_payment.dew_play),
                 pack,
-                TextUntilNul(State_dew.dew_identity[:])
+                TextUntilNul(nativeSlice(State_dew.dew_identity))
             );
         }
         shown = shown + 1n;
@@ -616,17 +557,14 @@ export function ProfileTopUpPlayContent(
             draw
         );
     }
-    let notice = ProfileTopUpPlayNotice(&billing, shown);
+    let notice = ProfileTopUpPlayNotice(nativeRef(billing), shown);
     if (notice !== "") {
         ProfileDewText(app, notice, x, y, width, AppSmallFontSize(), draw);
     }
     if (shown === 0n && notice === LocaleText("profile_dew_play_unavailable")) {
         if (ProfileDewButton(app, LocaleText("retry_button"), x, y, width, busy, draw)) {
             State_profile_dew.profile_play_prices_deadline = HostSeconds() + 15.0;
-            PlayBillingProducts(
-                DEW_PLAY_PRODUCTS,
-                State_dew_payment.dew_play.state[:]
-            );
+            PlayBillingProducts(DEW_PLAY_PRODUCTS, nativeSlice(State_dew_payment.dew_play.state));
         }
     } else if (shown === 0n && notice === LocaleText("profile_dew_play_loading")) {
         if (draw) {
@@ -636,7 +574,7 @@ export function ProfileTopUpPlayContent(
                     key: NativeLayout.KeyHash("profile/dew/play/loading"),
                     bounds: {
                         x: float32(x),
-                        y: float32((*y)),
+                        y: float32(nativeDeref(y)),
                         width: float32(width),
                         height: float32(AppScale(28n))
                     },
@@ -646,14 +584,14 @@ export function ProfileTopUpPlayContent(
             />;
             AppRequestSmoothFrames(2n);
         }
-        (*y) = (*y) + AppScale(36n);
+        nativeDeref(y) = nativeDeref(y) + AppScale(36n);
     }
 }
 
 export function ProfileTopUpContent(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     width: s32,
     draw: boolean
 ): void {
@@ -661,43 +599,19 @@ export function ProfileTopUpContent(
     ProfileDewFormatDew(
         State_dew.dew_account.balance,
         LocaleText("profile_dew_balance_line"),
-        line[:]
+        nativeSlice(line)
     );
     if (State_dew_payment.dew_play.enabled) {
-        ProfileDewText(
-            app,
-            TextUntilNul(line[:]),
-            x,
-            y,
-            width,
-            AppSmallFontSize(),
-            draw
-        );
+        ProfileDewText(app, TextUntilNul(nativeSlice(line)), x, y, width, AppSmallFontSize(), draw);
         ProfileTopUpPlayContent(app, x, y, width, draw);
         return;
     }
-    DewAppendWorth(State_dew.dew_account.balance, line[:]);
-    ProfileDewText(
-        app,
-        TextUntilNul(line[:]),
-        x,
-        y,
-        width,
-        AppSmallFontSize(),
-        draw
-    );
-    if (ProfileDewExchangeText(line[:])) {
-        ProfileDewText(
-            app,
-            TextUntilNul(line[:]),
-            x,
-            y,
-            width,
-            AppSmallFontSize(),
-            draw
-        );
+    DewAppendWorth(State_dew.dew_account.balance, nativeSlice(line));
+    ProfileDewText(app, TextUntilNul(nativeSlice(line)), x, y, width, AppSmallFontSize(), draw);
+    if (ProfileDewExchangeText(nativeSlice(line))) {
+        ProfileDewText(app, TextUntilNul(nativeSlice(line)), x, y, width, AppSmallFontSize(), draw);
     }
-    if (State_dew.dew_address[0n] === u8(0n)) {
+    if (nativeAt(State_dew.dew_address, 0n) === u8(0n)) {
         if (State_profile_dew.profile_topup_failed) {
             ProfileDewText(
                 app,
@@ -738,73 +652,58 @@ export function ProfileTopUpContent(
     line = {};
     if (State_dew.dew_minimum_atomic >= TopUpMinimumShown) {
         let minimum = ProfileDewNewMinimum();
-        DewFormat(
-            State_dew.dew_minimum_atomic,
-            s64(1000000000000n),
-            minimum[:]
-        );
+        DewFormat(State_dew.dew_minimum_atomic, s64(1000000000000n), nativeSlice(minimum));
         let minimum_usd = ProfileDewNewMinimumUsd();
-        if (DewUsdText(State_dew.dew_minimum_atomic, minimum_usd[:])) {
+        if (DewUsdText(State_dew.dew_minimum_atomic, nativeSlice(minimum_usd))) {
             let hint_arguments: [FormatArg, FormatArg, FormatArg] = [
-                { text: TextUntilNul(minimum[:]), is_text: true },
-                { text: TextUntilNul(minimum_usd[:]), is_text: true },
+                { text: TextUntilNul(nativeSlice(minimum)), is_text: true },
+                { text: TextUntilNul(nativeSlice(minimum_usd)), is_text: true },
                 { number: s32(State_dew.dew_confirmations) }
             ];
             FormatTemplate(
                 LocaleText("profile_dew_topup_hint_usd"),
-                hint_arguments[:],
-                line[:]
+                nativeSlice(hint_arguments),
+                nativeSlice(line)
             );
         } else {
             let hint_arguments: [FormatArg, FormatArg] = [
-                { text: TextUntilNul(minimum[:]), is_text: true },
+                { text: TextUntilNul(nativeSlice(minimum)), is_text: true },
                 { number: s32(State_dew.dew_confirmations) }
             ];
             FormatTemplate(
                 LocaleText("profile_dew_topup_hint"),
-                hint_arguments[:],
-                line[:]
+                nativeSlice(hint_arguments),
+                nativeSlice(line)
             );
         }
     } else {
         let send_arguments: [FormatArg] = [{ number: s32(State_dew.dew_confirmations) }];
         FormatTemplate(
             LocaleText("profile_dew_topup_send"),
-            send_arguments[:],
-            line[:]
+            nativeSlice(send_arguments),
+            nativeSlice(line)
         );
     }
-    ProfileDewText(
-        app,
-        TextUntilNul(line[:]),
-        x,
-        y,
-        width,
-        AppSmallFontSize(),
-        draw
-    );
+    ProfileDewText(app, TextUntilNul(nativeSlice(line)), x, y, width, AppSmallFontSize(), draw);
     let side = width;
     if (side > AppScale(220n)) {
         side = AppScale(220n);
     }
     let uri = ProfileDewNewUri();
-    AppCopyText("monero:", uri[:]);
-    AppAppendText(
-        TextUntilNul(State_dew.dew_address[:]),
-        uri[:]
-    );
+    AppCopyText("monero:", nativeSlice(uri));
+    AppAppendText(TextUntilNul(nativeSlice(State_dew.dew_address)), nativeSlice(uri));
     if (draw) {
-        DrawQrCode(app.ui.session, TextUntilNul(uri[:]), {
+        DrawQrCode(app.ui.session, TextUntilNul(nativeSlice(uri)), {
             x: float32(x + (width - side) / 2n),
-            y: float32((*y)),
+            y: float32(nativeDeref(y)),
             width: float32(side),
             height: float32(side)
         });
     }
-    (*y) = (*y) + (side + AppScale(12n));
+    nativeDeref(y) = nativeDeref(y) + (side + AppScale(12n));
     let address = ProfileDewNewAddress();
-    ProfileTopUpAddressText(address[:]);
-    let address_text = TextUntilNul(address[:]);
+    ProfileTopUpAddressText(nativeSlice(address));
+    let address_text = TextUntilNul(nativeSlice(address));
     let address_height = AppParagraphHeight(address_text, width, AppSmallFontSize(), 0n);
     if (draw) {
         <Text
@@ -812,20 +711,20 @@ export function ProfileTopUpContent(
             props={{
                 bounds: {
                     x: float32(x),
-                    y: float32((*y)),
+                    y: float32(nativeDeref(y)),
                     width: float32(width),
                     height: float32(address_height)
                 },
-                text: FrameTextHold(&app.ui.frame_text, address_text),
+                text: FrameTextHold(nativeRef(app.ui.frame_text), address_text),
                 size: AppSmallFontSize(),
                 wrap: Wrap.TextWrapAuto,
                 align: TextAlign.TextAlignCenter
             }}
         />;
     }
-    (*y) = (*y) + (address_height + AppScale(16n));
+    nativeDeref(y) = nativeDeref(y) + (address_height + AppScale(16n));
     let half = (width - AppScale(8n)) / 2n;
-    let row_y = (*y);
+    let row_y = nativeDeref(y);
     let copy_y = row_y;
     if (
         ProfileDewButton(
@@ -834,14 +733,14 @@ export function ProfileTopUpContent(
                 State_profile_dew.profile_topup_copied ? "address_copied" : "copy_address_button"
             ),
             x,
-            &copy_y,
+            nativeRef(copy_y),
             half,
             false,
             draw
         )
     ) {
         State_profile_dew.profile_topup_copied = TextInputWriteClipboard(
-            TextUntilNul(State_dew.dew_address[:])
+            TextUntilNul(nativeSlice(State_dew.dew_address))
         );
     }
     let wallet_y = row_y;
@@ -850,27 +749,24 @@ export function ProfileTopUpContent(
             app,
             LocaleText("open_wallet_button"),
             x + width - half,
-            &wallet_y,
+            nativeRef(wallet_y),
             half,
             false,
             draw
         )
     ) {
-        OpenUri(TextUntilNul(uri[:]));
+        OpenUri(TextUntilNul(nativeSlice(uri)));
     }
-    (*y) = copy_y;
+    nativeDeref(y) = copy_y;
     if (ProfileDewButton(app, LocaleText("dew_other_coin_button"), x, y, width, false, draw)) {
         let link = ProfileDewNewLink();
-        AppCopyText("https://dew.waozi.xyz/?account=", link[:]);
-        AppAppendText(
-            TextUntilNul(State_dew.dew_identity[:]),
-            link[:]
-        );
-        OpenUri(TextUntilNul(link[:]));
+        AppCopyText("https://dew.waozi.xyz/?account=", nativeSlice(link));
+        AppAppendText(TextUntilNul(nativeSlice(State_dew.dew_identity)), nativeSlice(link));
+        OpenUri(TextUntilNul(nativeSlice(link)));
     }
 }
 
-export function ProfileTopUpModalDraw(app: *InnerBreeze): void {
+export function ProfileTopUpModalDraw(app: NativeRef<InnerBreeze>): void {
     if (!State_dew_payment.dew_play.enabled) {
         ProfileTopUpPump();
         DewRatesRefresh();
@@ -879,8 +775,8 @@ export function ProfileTopUpModalDraw(app: *InnerBreeze): void {
     if (width > AppScale(480n)) {
         width = AppScale(480n);
     }
-    let measured: s32 = 0n;
-    ProfileTopUpContent(app, 0n, &measured, width - AppScale(46n), false);
+    let measured: s32 = s32(0n);
+    ProfileTopUpContent(app, 0n, nativeRef(measured), width - AppScale(46n), false);
     let height = measured + AppScale(96n);
     if (height > app.ui.view_height - AppScale(48n)) {
         height = app.ui.view_height - AppScale(48n);
@@ -904,8 +800,8 @@ export function ProfileTopUpModalDraw(app: *InnerBreeze): void {
         return;
     }
     let content_w = s32(frame.layout.content.width) - AppScale(10n);
-    let content_h: s32 = 0n;
-    ProfileTopUpContent(app, 0n, &content_h, content_w, false);
+    let content_h: s32 = s32(0n);
+    ProfileTopUpContent(app, 0n, nativeRef(content_h), content_w, false);
     let scroll = NativeScroll.Draw(app.ui.session, {
         key: NativeLayout.KeyHash("profile/topup/scroll"),
         bounds: frame.layout.content,
@@ -915,7 +811,7 @@ export function ProfileTopUpModalDraw(app: *InnerBreeze): void {
     State_profile_dew.profile_topup_scroll = scroll.scroll_offset;
     if (scroll.opened) {
         let y = s32(scroll.content.y);
-        ProfileTopUpContent(app, s32(scroll.content.x), &y, content_w, true);
+        ProfileTopUpContent(app, s32(scroll.content.x), nativeRef(y), content_w, true);
         End(app.ui.session);
     }
     End(app.ui.session);

@@ -28,14 +28,8 @@ export function PracticeBannerDrawBack(
     visible: boolean,
     reduced_motion: boolean
 ): boolean {
-    let state = &State_practice_banner_draw.practice_banner_draw;
-    state.tick = PracticeBannerTick(
-        &state.motion,
-        asset,
-        now,
-        visible,
-        reduced_motion
-    );
+    let state = nativeRef(State_practice_banner_draw.practice_banner_draw);
+    state.tick = PracticeBannerTick(nativeRef(state.motion), asset, now, visible, reduced_motion);
     if (state.session.slot !== session.slot || state.session.epoch !== session.epoch) {
         BitmapImageRelease(state.session, state.sky);
         BitmapImageRelease(state.session, state.steam);
@@ -113,7 +107,7 @@ export function PracticeBannerDrawBack(
 }
 
 export function PracticeBannerDrawFront(session: Session, bounds: Rectangle): void {
-    let state = &State_practice_banner_draw.practice_banner_draw;
+    let state = nativeRef(State_practice_banner_draw.practice_banner_draw);
     <BannerImage
         session={session}
         props={{

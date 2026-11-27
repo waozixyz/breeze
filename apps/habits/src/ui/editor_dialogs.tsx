@@ -30,13 +30,11 @@ export function HabitEditorDialog(props: HabitEditorDialogProps): ActionModalRes
                 emphasis: ButtonEmphasis.ButtonEmphasisFilled
             }
         ];
-        return (
-            <ActionModal
-                session={props.session}
-                actions={actions[:]}
-                props={{ title: props.title, message: props.message }}
-            />
-        );
+        return ActionModal({
+            session: props.session,
+            actions: nativeSlice(actions),
+            props: { title: props.title, message: props.message }
+        });
     }
 
     const actions: [ActionModalAction, ActionModalAction, ActionModalAction] = [
@@ -56,11 +54,9 @@ export function HabitEditorDialog(props: HabitEditorDialogProps): ActionModalRes
             emphasis: ButtonEmphasis.ButtonEmphasisSoft
         }
     ];
-    return (
-        <ActionModal
-            session={props.session}
-            actions={actions[:]}
-            props={{ title: props.title, message: props.message }}
-        />
-    );
+    return ActionModal({
+        session: props.session,
+        actions: nativeSlice(actions),
+        props: { title: props.title, message: props.message }
+    });
 }

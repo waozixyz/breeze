@@ -57,7 +57,7 @@ import { ExerciseType } from "exercise_types";
 export function Paragraph(
     text: string,
     x: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     width: s32,
     align: TextAlign
 ): void {
@@ -68,14 +68,14 @@ export function Paragraph(
     <Text
         session={State_manual_view.manual.session}
         props={{
-            bounds: Bounds(x, *y, width, height),
+            bounds: Bounds(x, nativeDeref(y), width, height),
             text: text,
             size: State_manual_view.manual.font,
             wrap: Wrap.TextWrapAuto,
             align: align
         }}
     />;
-    *y = *y + height;
+    nativeSet(y, nativeDeref(y) + height);
 }
 
 export function Label(text: string, bounds: Rectangle, font: s32, centred: boolean): void {
@@ -115,12 +115,12 @@ export function Disc(center_x: s32, center_y: s32, radius: s32, color: Color): v
     />;
 }
 
-export function Header(title: string, x: s32, y: *s32, width: s32): void {
+export function Header(title: string, x: s32, y: NativeRef<s32>, width: s32): void {
     let page = State_manual_view.manual.page;
     <Text
         session={State_manual_view.manual.session}
         props={{
-            bounds: Bounds(x, *y, width, Scale(42n)),
+            bounds: Bounds(x, nativeDeref(y), width, Scale(42n)),
             text: title,
             wrap: Wrap.TextWrapNone,
             vertical_align: TextAlign.TextAlignCenter
@@ -129,12 +129,12 @@ export function Header(title: string, x: s32, y: *s32, width: s32): void {
     <Text
         session={State_manual_view.manual.session}
         props={{
-            bounds: Bounds(x, *y + Scale(52n), width, Scale(24n)),
+            bounds: Bounds(x, nativeDeref(y) + Scale(52n), width, Scale(24n)),
             text: Filled(Locale("tutorial_step_progress"), page + 1n, PageCount()),
             wrap: Wrap.TextWrapNone
         }}
     />;
-    *y = *y + HeaderHeight();
+    nativeSet(y, nativeDeref(y) + HeaderHeight());
 }
 
 export function Picture(
@@ -175,12 +175,12 @@ export function CustomizeRing(hero: Rectangle, label: string): void {
     />;
 }
 
-export function WhmSpeed(x: s32, width: s32, y: *s32): void {
+export function WhmSpeed(x: s32, width: s32, y: NativeRef<s32>): void {
     let height = Scale(86n);
-    Panel(Bounds(x, *y, width, height), Scale(14n), false);
+    Panel(Bounds(x, nativeDeref(y), width, height), Scale(14n), false);
     let row_x = x + Scale(18n);
     let row_width = width - Scale(36n);
-    let row_y = *y + Scale(9n);
+    let row_y = nativeDeref(y) + Scale(9n);
     let label = Locale("speed_label");
     <Text
         session={State_manual_view.manual.session}
@@ -201,30 +201,28 @@ export function WhmSpeed(x: s32, width: s32, y: *s32): void {
             bounds: Bounds(row_x + row_width - Scale(64n), row_y, Scale(64n), Scale(20n))
         }}
     />;
-    let step = (
-        <DiscreteSlider
-            session={State_manual_view.manual.session}
-            props={{
-                id: MANUAL_SPEED_ID,
-                bounds: Bounds(row_x, row_y + Scale(20n), row_width, Scale(36n)),
-                semantic_label: label,
-                value: State_manual_view.manual.speed,
-                min: State_manual_view.manual.speed_min,
-                max: State_manual_view.manual.speed_max
-            }}
-        />
-    );
+    let step = DiscreteSlider({
+        session: State_manual_view.manual.session,
+        props: {
+            id: MANUAL_SPEED_ID,
+            bounds: Bounds(row_x, row_y + Scale(20n), row_width, Scale(36n)),
+            semantic_label: label,
+            value: State_manual_view.manual.speed,
+            min: State_manual_view.manual.speed_min,
+            max: State_manual_view.manual.speed_max
+        }
+    });
     if (step.changed && step.value !== State_manual_view.manual.speed) {
         State_manual_view.manual.speed = step.value;
         State_manual_view.manual.speed_changed = true;
     }
-    *y = *y + height;
+    nativeSet(y, nativeDeref(y) + height);
 }
 
-export function WhmPage(x: s32, width: s32, y: *s32): void {
+export function WhmPage(x: s32, width: s32, y: NativeRef<s32>): void {
     let page = State_manual_view.manual.page;
     let height = WhmVisualHeight(page);
-    let hero = Hero(x, width, *y, height);
+    let hero = Hero(x, width, nativeDeref(y), height);
     if (page === 0n || page === 3n) {
         Picture(
             page === 3n ? "assets/practices/whm/2.webp" : "assets/practices/whm/1.webp",
@@ -233,11 +231,11 @@ export function WhmPage(x: s32, width: s32, y: *s32): void {
             NativeImage.ImageFit.ImageFitContain
         );
         HeroDots(hero);
-        *y = *y + (height + Scale(16n));
+        nativeSet(y, nativeDeref(y) + (height + Scale(16n)));
     } else {
         Panel(hero, Scale(16n), false);
         let center_x = x + width / 2n;
-        let center_y = *y + height / 2n - Scale(8n);
+        let center_y = nativeDeref(y) + height / 2n - Scale(8n);
         if (page === 1n) {
             WhmCircle(center_x, center_y, State_manual_view.manual.breath_radius, EmptyString());
         } else {
@@ -247,7 +245,7 @@ export function WhmPage(x: s32, width: s32, y: *s32): void {
                 props={{
                     bounds: Bounds(
                         x + Scale(36n),
-                        *y + height - Scale(34n),
+                        nativeDeref(y) + height - Scale(34n),
                         width - Scale(72n),
                         Scale(5n)
                     ),
@@ -258,18 +256,18 @@ export function WhmPage(x: s32, width: s32, y: *s32): void {
             />;
         }
         HeroDots(hero);
-        *y = *y + (height + Scale(18n));
+        nativeSet(y, nativeDeref(y) + (height + Scale(18n)));
     }
     Header(Locale(WhmTitleKey(page)), x, y, width);
     Paragraph(Locale(WhmBodyKey(page)), x, y, width, TextAlign.TextAlignStart);
     if (page === 0n) {
-        *y = *y + Scale(34n);
+        nativeSet(y, nativeDeref(y) + Scale(34n));
         WhmSafety(x, width, y);
     } else if (page === 1n) {
-        *y = *y + Scale(24n);
+        nativeSet(y, nativeDeref(y) + Scale(24n));
         WhmSpeed(x, width, y);
     } else {
-        *y = *y + Scale(24n);
+        nativeSet(y, nativeDeref(y) + Scale(24n));
         WhmHint(x, width, y);
     }
 }
@@ -288,9 +286,9 @@ export function PatternsPanel(bounds: Rectangle, radius: s32, selected: boolean)
     />;
 }
 
-export function SunPage(x: s32, width: s32, y: *s32): void {
+export function SunPage(x: s32, width: s32, y: NativeRef<s32>): void {
     let height = SunVisualHeight(width);
-    let hero = Hero(x, width, *y, height);
+    let hero = Hero(x, width, nativeDeref(y), height);
     Panel(hero, Scale(16n), false);
     x = s32(hero.x);
     width = s32(hero.width);
@@ -308,7 +306,7 @@ export function SunPage(x: s32, width: s32, y: *s32): void {
         for (let step = s32(0n); step <= 11n; step += s32(1)) {
             let card = Bounds(
                 x + inset + (step % 3n) * (card_w + gap),
-                *y + inset + (step / 3n) * (card_h + gap),
+                nativeDeref(y) + inset + (step / 3n) * (card_h + gap),
                 card_w,
                 card_h
             );
@@ -365,19 +363,19 @@ export function SunPage(x: s32, width: s32, y: *s32): void {
         for (let index = s32(0n); index <= 2n; index += s32(1)) {
             let pose_bounds = Bounds(
                 x + Scale(10n) + index * (pose_width + Scale(8n)),
-                *y + Scale(24n),
+                nativeDeref(y) + Scale(24n),
                 pose_width,
                 Scale(112n)
             );
             SunFigure(
-                steps[index],
+                nativeAt(steps, index),
                 pose_bounds,
-                NativeLayout.KeyHash(keys[index]),
+                NativeLayout.KeyHash(nativeAt(keys, index)),
                 Locale("exercise_sun_salutation")
             );
             Disc(
                 s32(pose_bounds.x + pose_bounds.width / 2.0),
-                *y + Scale(151n),
+                nativeDeref(y) + Scale(151n),
                 Scale(4n),
                 index === 1n
                     ? State_manual_view.manual.guide_foreground
@@ -385,7 +383,7 @@ export function SunPage(x: s32, width: s32, y: *s32): void {
             );
         }
     } else {
-        let row_y = *y + Scale(24n);
+        let row_y = nativeDeref(y) + Scale(24n);
         SunStat(
             Locale("sun_salutation_repetitions_label"),
             Filled("%dx", State_manual_view.manual.sun_repetitions, 0n),
@@ -410,7 +408,7 @@ export function SunPage(x: s32, width: s32, y: *s32): void {
             width
         );
     }
-    *y = *y + (height + Scale(18n));
+    nativeSet(y, nativeDeref(y) + (height + Scale(18n)));
     HeroDots(hero);
     Header(Locale(SunTitleKey()), x, y, width);
     Paragraph(Locale(SunBodyKey()), x, y, width, TextAlign.TextAlignStart);
@@ -460,18 +458,16 @@ export function Pager(nav_y: s32, nav_height: s32, content_y: s32, content_heigh
         />;
         let button_y = nav_y + (nav_height - height) / 2n;
         if (
-            (
-                <Button
-                    session={State_manual_view.manual.session}
-                    props={{
-                        id: FocusId(),
-                        bounds: Bounds(content_x, button_y, width, height),
-                        label: Locale("back_button"),
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                    }}
-                />
-            )
+            Button({
+                session: State_manual_view.manual.session,
+                props: {
+                    id: FocusId(),
+                    bounds: Bounds(content_x, button_y, width, height),
+                    label: Locale("back_button"),
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                }
+            })
         ) {
             if (State_manual_view.manual.page === 0n) {
                 close = true;
@@ -480,22 +476,20 @@ export function Pager(nav_y: s32, nav_height: s32, content_y: s32, content_heigh
             }
         }
         if (
-            (
-                <Button
-                    session={State_manual_view.manual.session}
-                    props={{
-                        id: FocusId() + 1n,
-                        bounds: Bounds(content_x + padding + width, button_y, width, height),
-                        label: Locale(
-                            State_manual_view.manual.page === count - 1n
-                                ? "practice_start_button"
-                                : "next_button"
-                        ),
-                        tone: ButtonTone.ButtonToneAccent,
-                        emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                    }}
-                />
-            )
+            Button({
+                session: State_manual_view.manual.session,
+                props: {
+                    id: FocusId() + 1n,
+                    bounds: Bounds(content_x + padding + width, button_y, width, height),
+                    label: Locale(
+                        State_manual_view.manual.page === count - 1n
+                            ? "practice_start_button"
+                            : "next_button"
+                    ),
+                    tone: ButtonTone.ButtonToneAccent,
+                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
+                }
+            })
         ) {
             finish = true;
         }
@@ -532,24 +526,22 @@ export function Manual(): void {
     }
     if (State_manual_view.manual.title_height > 0n) {
         let options = NewOptions();
-        let bar = (
-            <TitleBar
-                session={State_manual_view.manual.session}
-                props={{
-                    title: Title(),
-                    height: State_manual_view.manual.title_height,
-                    bounds: Bounds(
-                        0n,
-                        0n,
-                        State_manual_view.manual.view_width,
-                        State_manual_view.manual.title_height
-                    ),
-                    has_leading_action: true,
-                    leading_label: Locale("back_button")
-                }}
-                options={options[0n:0n]}
-            />
-        );
+        let bar = TitleBar({
+            session: State_manual_view.manual.session,
+            props: {
+                title: Title(),
+                height: State_manual_view.manual.title_height,
+                bounds: Bounds(
+                    0n,
+                    0n,
+                    State_manual_view.manual.view_width,
+                    State_manual_view.manual.title_height
+                ),
+                has_leading_action: true,
+                leading_label: Locale("back_button")
+            },
+            options: nativeSlice(options, 0n, 0n)
+        });
         if (bar.clicked_leading) {
             State_manual_view.manual.action = PRACTICE_MANUAL_CLOSE;
             State_manual_view.manual.block_click = true;

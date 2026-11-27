@@ -34,7 +34,7 @@ import {
 import { SyncNodeCount } from "sync_nodes";
 
 function ProfileNodeStorageText(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     text: string,
     x: s32,
     y: s32,
@@ -57,7 +57,7 @@ function ProfileNodeStorageText(
 }
 
 function ProfileDrawNodeCard(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     index: s32,
     address: string,
     card: ProfileNodeCard,
@@ -83,7 +83,7 @@ function ProfileDrawNodeCard(
     />;
     let left = x + pad;
     let top = y + pad;
-    let badge_w: s32 = 0n;
+    let badge_w: s32 = s32(0n);
     if (card.active) {
         let badge = LocaleText("profile_node_storage_active");
         badge_w = AppTextWidth(badge, small) + AppScale(16n);
@@ -258,7 +258,7 @@ function ProfileDrawNodeCard(
     toggle.value = card.media;
     toggle.label = label;
     toggle.disabled = app_sync_loading() !== 0n;
-    let result = <Toggle session={app.ui.session} props={toggle} />;
+    let result = Toggle({ session: app.ui.session, props: toggle });
     if (result.changed) {
         ProfileNodeStorageSetMedia(app, address, result.value, card.active);
     }
@@ -280,10 +280,10 @@ function ProfileDrawNodeCard(
 }
 
 export function ProfileNodeStorageView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     if (!NativePresent(app) || !NativePresent(y) || !ProfileNodeStorageVisible()) {
         return;
@@ -296,13 +296,13 @@ export function ProfileNodeStorageView(
             wrap: Wrap.TextWrapNone,
             bounds: {
                 x: float32(x),
-                y: float32((*y)),
+                y: float32(nativeDeref(y)),
                 width: float32(width),
                 height: float32(AppScale(26n))
             }
         }}
     />;
-    (*y) = (*y) + AppScale(30n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(30n);
     const hint = LocaleText("profile_node_storage_hint");
     const small = AppSmallFontSize();
     const hintHeight = AppParagraphHeight(hint, width, small, 0n);
@@ -310,22 +310,22 @@ export function ProfileNodeStorageView(
         app,
         hint,
         x,
-        (*y),
+        nativeDeref(y),
         width,
         hintHeight,
         small,
         "storage-detail",
         TextAlign.TextAlignStart
     );
-    (*y) = (*y) + hintHeight + AppScale(10n);
+    nativeDeref(y) = nativeDeref(y) + hintHeight + AppScale(10n);
     const active = ProfileNodeStorageActive(app);
     const mediaBytes = SyncMediaLocalBytes();
     const count = SyncNodeCount();
-    for (let index: s32 = 0n; index < count; index += 1n) {
+    for (let index: s32 = s32(0n); index < count; index += 1n) {
         const address = ProfileNodeStorageAddress(app, index);
         const card = ProfileNodeCardFor(app, address, active, mediaBytes, width);
-        ProfileDrawNodeCard(app, index, address, card, x, (*y), width);
-        (*y) = (*y) + card.height + AppScale(10n);
+        ProfileDrawNodeCard(app, index, address, card, x, nativeDeref(y), width);
+        nativeDeref(y) = nativeDeref(y) + card.height + AppScale(10n);
     }
-    (*y) = (*y) + AppScale(8n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(8n);
 }

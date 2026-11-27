@@ -16,7 +16,7 @@ import { AppRequestSmoothFrames } from "smooth_frames";
 import { ScreenNodeApp } from "types";
 
 export function NodeScreenProgress(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     area: Rectangle,
     title: string,
     stage: string,
@@ -51,7 +51,7 @@ export function NodeScreenProgress(
 }
 
 export function NodeScreenCover(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     area: Rectangle,
     pictures: NodeScreenPictures
 ): void {

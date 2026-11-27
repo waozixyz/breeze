@@ -47,10 +47,10 @@ import {
 import { AppTextFromCString, FormatArg, FormatTemplate, FrameTextHold } from "text_buffers";
 
 export function settings_breaks_draw_status(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     let section = settings_section_begin(
         app,
@@ -63,17 +63,17 @@ export function settings_breaks_draw_status(
     let ix = section.inner_x;
     let iw = section.inner_width;
     let names = SettingsBreaksNewNames();
-    names[0n] = LocaleText("break_micro_title");
-    names[1n] = LocaleText("break_rest_title");
-    names[2n] = LocaleText("break_daily_title");
+    nativeSet(names, 0n, LocaleText("break_micro_title"));
+    nativeSet(names, 1n, LocaleText("break_rest_title"));
+    nativeSet(names, 2n, LocaleText("break_daily_title"));
     let row_h = settings_breaks_status_row_height();
     let bar_width = (iw * 2n) / 5n;
     let due_width = AppScale(72n);
     let bar_x = ix + iw - bar_width;
     let name_width = iw - bar_width - due_width - AppScale(24n);
-    (*y) = (*y) + AppScale(8n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(8n);
     for (let index = s32(0); index <= BREAK_TYPE_COUNT - 1n; index += s32(1)) {
-        let timer = (*app).breaks.timers[index];
+        let timer = nativeAt(nativeDeref(app).breaks.timers, index);
         let next = BreakNextDueSeconds(app.breaks, s32(index));
         let due: string = "";
         if (timer.enabled === 0n || next < 0n) {
@@ -83,17 +83,17 @@ export function settings_breaks_draw_status(
         } else {
             let duration = BreakFormatDuration(next);
             due = FrameTextHold(
-                &app.ui.frame_text,
-                AppTextFromCString(&duration.bytes[0n], 16n)
+                nativeRef(app.ui.frame_text),
+                AppTextFromCString(nativeRef(nativeAt(duration.bytes, 0n)), 16n)
             );
         }
         let name_props: NativeText.Props = {};
-        name_props.text = names[index];
+        name_props.text = nativeAt(names, index);
         name_props.size = AppSmallFontSize();
         name_props.vertical_align = TextAlign.TextAlignCenter;
         name_props.bounds = {
             x: float32(ix),
-            y: float32((*y)),
+            y: float32(nativeDeref(y)),
             width: float32(name_width),
             height: float32(row_h)
         };
@@ -105,7 +105,7 @@ export function settings_breaks_draw_status(
         due_props.vertical_align = TextAlign.TextAlignCenter;
         due_props.bounds = {
             x: float32(bar_x - AppScale(12n) - due_width),
-            y: float32((*y)),
+            y: float32(nativeDeref(y)),
             width: float32(due_width),
             height: float32(row_h)
         };
@@ -114,7 +114,7 @@ export function settings_breaks_draw_status(
             let progress: NativeProgress.Props = {};
             progress.bounds = {
                 x: float32(bar_x),
-                y: float32((*y) + (row_h - AppScale(8n)) / 2n),
+                y: float32(nativeDeref(y) + (row_h - AppScale(8n)) / 2n),
                 width: float32(bar_width),
                 height: float32(AppScale(8n))
             };
@@ -123,34 +123,34 @@ export function settings_breaks_draw_status(
             progress.value = timer.active_s;
             <Progress session={app.ui.session} props={progress} />;
         }
-        (*y) = (*y) + row_h;
+        nativeDeref(y) = nativeDeref(y) + row_h;
     }
-    (*y) = (*y) + AppScale(8n);
-    settings_row_divider(app, section, (*y));
+    nativeDeref(y) = nativeDeref(y) + AppScale(8n);
+    settings_row_divider(app, section, nativeDeref(y));
     let rest: NativeButton.Props = {};
     rest.id = 545n;
     rest.bounds = {
         x: float32(ix),
-        y: float32((*y) + AppScale(10n)),
+        y: float32(nativeDeref(y) + AppScale(10n)),
         width: float32(iw),
         height: float32(AppScale(36n))
     };
     rest.label = LocaleText("settings_breaks_rest_now");
     rest.tone = ButtonTone.ButtonToneNeutral;
     rest.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
-    if ((<Button session={app.ui.session} props={rest} />)) {
+    if (Button({ session: app.ui.session, props: rest })) {
         app.ui.rest_break_requested = true;
     }
-    (*y) = (*y) + settings_breaks_button_row_height();
+    nativeDeref(y) = nativeDeref(y) + settings_breaks_button_row_height();
     settings_section_end(y);
 }
 
 export function settings_breaks_draw_timer_row(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     index: s32,
     x: s32,
     width: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     let summary = SettingsBreaksNewSummary();
     let expanded = settings_breaks_timer_expanded(index);
@@ -159,34 +159,34 @@ export function settings_breaks_draw_timer_row(
     row.key = u64(546n + index);
     row.bounds = {
         x: float32(x),
-        y: float32((*y)),
+        y: float32(nativeDeref(y)),
         width: float32(width),
         height: float32(AppScale(SETTINGS_BREAKS_TIMER_ROW))
     };
     row.label = settings_breaks_timer_header(index);
-    row.detail = settings_breaks_timer_summary(app, index, summary[:]);
+    row.detail = settings_breaks_timer_summary(app, index, nativeSlice(summary));
     row.content_alignment = ContentAlignment.ContentAlignmentStart;
     row.tone = ButtonTone.ButtonToneNeutral;
     row.emphasis = ButtonEmphasis.ButtonEmphasisGhost;
     row.arrow = true;
     row.direction = expanded ? ArrowDirection.ArrowDown : ArrowDirection.ArrowRight;
-    if ((<Button session={app.ui.session} props={row} />)) {
+    if (Button({ session: app.ui.session, props: row })) {
         State_settings_breaks.settings_breaks_expanded = settings_breaks_expanded_toggle(
             State_settings_breaks.settings_breaks_expanded,
             index
         );
     }
-    (*y) = (*y) + AppScale(SETTINGS_BREAKS_TIMER_ROW);
+    nativeDeref(y) = nativeDeref(y) + AppScale(SETTINGS_BREAKS_TIMER_ROW);
 }
 
 export function settings_breaks_draw_week(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     let rows = SettingsBreaksNewRows();
-    let count = storage_break_history(7n, &rows[0n], 42n);
+    let count = storage_break_history(7n, nativeRef(nativeAt(rows, 0n)), 42n);
     let section = settings_section_begin(
         app,
         x,
@@ -198,7 +198,7 @@ export function settings_breaks_draw_week(
     let ix = section.inner_x;
     let iw = section.inner_width;
     let row_h = settings_breaks_week_row_height();
-    (*y) = (*y) + AppScale(6n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(6n);
     if (count <= 0n) {
         let empty: NativeText.Props = {};
         empty.text = LocaleText("settings_breaks_no_data");
@@ -206,25 +206,30 @@ export function settings_breaks_draw_week(
         empty.vertical_align = TextAlign.TextAlignCenter;
         empty.bounds = {
             x: float32(ix),
-            y: float32((*y)),
+            y: float32(nativeDeref(y)),
             width: float32(iw),
             height: float32(row_h)
         };
         <Text session={app.ui.session} props={empty} />;
-        (*y) = (*y) + (row_h + AppScale(6n));
+        nativeDeref(y) = nativeDeref(y) + (row_h + AppScale(6n));
         settings_section_end(y);
         return;
     }
     let taken = SettingsBreaksNewTaken();
     let skipped = SettingsBreaksNewSkipped();
     let postponed = SettingsBreaksNewPostponed();
-    let index: s32 = 0n;
+    let index: s32 = s32(0n);
     while (index < count) {
-        let kind = rows[index].break_type;
+        let kind = nativeAt(rows, index).break_type;
         if (kind >= 0n && kind < BREAK_TYPE_COUNT) {
-            taken[kind] = taken[kind] + (rows[index].taken + rows[index].natural);
-            skipped[kind] = skipped[kind] + rows[index].skipped;
-            postponed[kind] = postponed[kind] + rows[index].postponed;
+            nativeSet(
+                taken,
+                kind,
+                nativeAt(taken, kind) +
+                    (nativeAt(rows, index).taken + nativeAt(rows, index).natural)
+            );
+            nativeSet(skipped, kind, nativeAt(skipped, kind) + nativeAt(rows, index).skipped);
+            nativeSet(postponed, kind, nativeAt(postponed, kind) + nativeAt(rows, index).postponed);
         }
         index = index + 1n;
     }
@@ -238,49 +243,45 @@ export function settings_breaks_draw_week(
         }
         let summary = SettingsBreaksNewSummary48u8();
         let summary_args: [FormatArg, FormatArg, FormatArg] = [
-            { number: taken[kind] },
-            { number: skipped[kind] },
-            { number: postponed[kind] }
+            { number: nativeAt(taken, kind) },
+            { number: nativeAt(skipped, kind) },
+            { number: nativeAt(postponed, kind) }
         ];
-        FormatTemplate(
-            "%d / %d / %d",
-            summary_args[:],
-            summary[:]
-        );
+        FormatTemplate("%d / %d / %d", nativeSlice(summary_args), nativeSlice(summary));
         let name_props: NativeText.Props = {};
         name_props.text = name;
         name_props.size = AppSmallFontSize();
         name_props.vertical_align = TextAlign.TextAlignCenter;
         name_props.bounds = {
             x: float32(ix),
-            y: float32((*y)),
+            y: float32(nativeDeref(y)),
             width: float32(iw / 2n),
             height: float32(row_h)
         };
         <Text session={app.ui.session} props={name_props} />;
         let value_props: NativeText.Props = {};
-        value_props.text = AppTextFromCString(&summary[0n], 48n);
+        value_props.text = AppTextFromCString(nativeRef(nativeAt(summary, 0n)), 48n);
         value_props.size = AppSmallFontSize();
         value_props.align = TextAlign.TextAlignEnd;
         value_props.vertical_align = TextAlign.TextAlignCenter;
         value_props.bounds = {
             x: float32(ix + iw / 2n),
-            y: float32((*y)),
+            y: float32(nativeDeref(y)),
             width: float32(iw - iw / 2n),
             height: float32(row_h)
         };
         <Text session={app.ui.session} props={value_props} />;
-        (*y) = (*y) + row_h;
+        nativeDeref(y) = nativeDeref(y) + row_h;
     }
-    (*y) = (*y) + AppScale(6n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(6n);
     settings_section_end(y);
 }
 
 export function settings_breaks_draw_general(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     let inner = settings_section_inner_width(width);
     let section = settings_section_begin(
@@ -304,7 +305,7 @@ export function settings_breaks_draw_general(
             iw,
             y,
             LocaleText("settings_breaks_enabled"),
-            &enabled,
+            nativeRef(enabled),
             0n
         ) !== 0n
     ) {
@@ -313,27 +314,25 @@ export function settings_breaks_draw_general(
             app.breaks = BreakSetMode(app.breaks, BreakModeNormal, 0n);
         }
     }
-    settings_row_divider(app, section, (*y));
+    settings_row_divider(app, section, nativeDeref(y));
     let block_options = SettingsBreaksNewBlockOptions();
-    block_options[0n].label = LocaleText("settings_breaks_block_off");
-    block_options[1n].label = LocaleText("settings_breaks_block_input");
-    block_options[2n].label = LocaleText("settings_breaks_block_screen");
+    nativeAt(block_options, 0n).label = LocaleText("settings_breaks_block_off");
+    nativeAt(block_options, 1n).label = LocaleText("settings_breaks_block_input");
+    nativeAt(block_options, 2n).label = LocaleText("settings_breaks_block_screen");
     let block: NativeDropdown.Props = {};
     block.id = 540n;
     block.bounds = settings_choice_row(app, ix, iw, y, LocaleText("settings_breaks_block_mode"));
     block.selected_index = app.break_block_mode;
-    let break_mode_settings_menu = (
-        <Dropdown
-            session={app.ui.session}
-            props={block}
-            options={block_options[:]}
-        />
-    );
+    let break_mode_settings_menu = Dropdown({
+        session: app.ui.session,
+        props: block,
+        options: nativeSlice(block_options)
+    });
     if (break_mode_settings_menu.changed) {
         app.break_block_mode = break_mode_settings_menu.selected_index;
         app.settings_dirty = 1n;
     }
-    settings_row_divider(app, section, (*y));
+    settings_row_divider(app, section, nativeDeref(y));
     if (
         commit_toggle_row(
             app,
@@ -341,13 +340,13 @@ export function settings_breaks_draw_general(
             iw,
             y,
             LocaleText("settings_breaks_sounds"),
-            &sounds,
+            nativeRef(sounds),
             0n
         ) !== 0n
     ) {
         app.break_sounds_enabled = sounds;
     }
-    settings_row_divider(app, section, (*y));
+    settings_row_divider(app, section, nativeDeref(y));
     if (
         commit_toggle_row(
             app,
@@ -355,13 +354,13 @@ export function settings_breaks_draw_general(
             iw,
             y,
             LocaleText("settings_breaks_reading_mode"),
-            &reading,
+            nativeRef(reading),
             0n
         ) !== 0n
     ) {
         app.breaks.reading_mode = reading;
     }
-    settings_row_divider(app, section, (*y));
+    settings_row_divider(app, section, nativeDeref(y));
     if (
         commit_toggle_row(
             app,
@@ -369,7 +368,7 @@ export function settings_breaks_draw_general(
             iw,
             y,
             LocaleText("settings_breaks_micro_counts"),
-            &micro_counts,
+            nativeRef(micro_counts),
             0n
         ) !== 0n
     ) {

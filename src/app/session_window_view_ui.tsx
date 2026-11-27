@@ -49,9 +49,9 @@ import {
 import { FrameTextHold } from "text_buffers";
 import { ScreenStart } from "types";
 
-export function session_window_resize(app: *InnerBreeze, bounds: Rectangle): void {
+export function session_window_resize(app: NativeRef<InnerBreeze>, bounds: Rectangle): void {
     let session = app.ui.session;
-    let window = &app.session_window;
+    let window = nativeRef(app.session_window);
     let grip_size = float32(AppScale(SESSION_WINDOW_GRIP));
     let grip: NativeButton.Props = {};
     grip.id = SESSION_WINDOW_RESIZE_ID;
@@ -97,7 +97,7 @@ export function session_window_resize(app: *InnerBreeze, bounds: Rectangle): voi
 }
 
 export function session_window_breathe_button(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     bounds: Rectangle
 ): boolean {
     let label = LocaleText("breath_button");
@@ -121,10 +121,10 @@ export function session_window_breathe_button(
     button.label = label;
     button.tone = ButtonTone.ButtonToneAccent;
     button.emphasis = ButtonEmphasis.ButtonEmphasisFilled;
-    return <Button session={app.ui.session} props={button} />;
+    return Button({ session: app.ui.session, props: button });
 }
 
-export function app_session_window_draw(app: *InnerBreeze): void {
+export function app_session_window_draw(app: NativeRef<InnerBreeze>): void {
     if (
         !NativePresent(app) ||
         app.session_window.screen === ScreenStart ||
@@ -137,7 +137,7 @@ export function app_session_window_draw(app: *InnerBreeze): void {
         session_window_exit_prompt(app);
         return;
     }
-    let window = &app.session_window;
+    let window = nativeRef(app.session_window);
     if (!window.placed) {
         window.size = {
             x: float32(AppScale(SESSION_WINDOW_WIDTH)),
@@ -216,7 +216,7 @@ export function app_session_window_draw(app: *InnerBreeze): void {
         }
     }
     let tapped = drag.ended && !window.drag_moved && TreeHoveredAt(session, previous);
-    let activated = <Button session={session} props={card} /> || tapped;
+    let activated = Button({ session: session, props: card }) || tapped;
     let node = TreeSubmitted(
         session,
         TreeCurrentParent(session),
@@ -252,11 +252,11 @@ export function app_session_window_draw(app: *InnerBreeze): void {
     close.icon_shape = "S1.8rr:M6 6L18 18M18 6L6 18";
     close.emphasis = ButtonEmphasis.ButtonEmphasisGhost;
     close.class_name = CssClass("launcher-action");
-    if ((<Button session={session} props={maximize} />)) {
+    if (Button({ session: session, props: maximize })) {
         app_session_window_restore(app);
         return;
     }
-    if ((<Button session={session} props={close} />)) {
+    if (Button({ session: session, props: close })) {
         app_session_window_close(app);
         return;
     }
@@ -284,7 +284,7 @@ export function app_session_window_draw(app: *InnerBreeze): void {
 }
 
 export function app_session_window_picture(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     screen: s32,
     bounds: Rectangle,
     button_row: float32
@@ -302,10 +302,10 @@ export function app_session_window_picture(
     };
     let practice = practice_get(session_window_practice(screen));
     let status_text = SessionWindowViewNewStatusText();
-    status_text[0n] = 0n;
+    nativeSet(status_text, 0n, 0n);
     let status: string = "";
     if (NativePresent(practice) && NativePresent(practice.draw_window)) {
-        status = practice.draw_window(app, picture, status_text[:]);
+        status = practice.draw_window(app, picture, nativeSlice(status_text));
     }
     let name = practice_label(session_window_practice(screen));
     let text_y = picture.y + picture.height + float32(AppScale(4n));
@@ -319,7 +319,7 @@ export function app_session_window_picture(
                 width: width - padding * 2.0,
                 height: float32(AppScale(20n))
             },
-            text: FrameTextHold(&app.ui.frame_text, name),
+            text: FrameTextHold(nativeRef(app.ui.frame_text), name),
             size: AppScale(15n),
             wrap: Wrap.TextWrapNone,
             align: TextAlign.TextAlignCenter
@@ -336,7 +336,7 @@ export function app_session_window_picture(
                     width: width - padding * 2.0,
                     height: float32(AppScale(18n))
                 },
-                text: FrameTextHold(&app.ui.frame_text, status),
+                text: FrameTextHold(nativeRef(app.ui.frame_text), status),
                 size: AppScale(13n),
                 wrap: Wrap.TextWrapNone,
                 align: TextAlign.TextAlignCenter,

@@ -16,16 +16,16 @@ import { session_result_window_lines } from "session_results_screen";
 import { AppTextFromCString, FrameTextHold } from "text_buffers";
 
 export function practice_draw_results_window(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     bounds: Rectangle,
-    result: *SessionResult
+    result: NativeRef<SessionResult>
 ): void {
     let session = app.ui.session;
     let lines = SessionResultsScreenNewLines();
     let count = session_result_window_lines(
         result,
-        lines[0n][:],
-        lines[1n][:]
+        nativeSlice(nativeAt(lines, 0n)),
+        nativeSlice(nativeAt(lines, 1n))
     );
     let padding = float32(AppScale(12n));
     let width = bounds.width - padding * 2.0;
@@ -87,16 +87,16 @@ export function practice_draw_results_window(
         NativeLayout.KeyHash("inbe/picture-window/results/line-1"),
         NativeLayout.KeyHash("inbe/picture-window/results/line-2")
     ];
-    let index: s32 = 0n;
+    let index: s32 = s32(0n);
     while (index < count) {
         let line = FrameTextHold(
-            &app.ui.frame_text,
-            AppTextFromCString(&lines[index][0n], 80n)
+            nativeRef(app.ui.frame_text),
+            AppTextFromCString(nativeRef(nativeAt(nativeAt(lines, index), 0n)), 80n)
         );
         <Text
             session={session}
             props={{
-                key: keys[index],
+                key: nativeAt(keys, index),
                 bounds: { x: x, y: y, width: width, height: line_height },
                 text: line,
                 size: AppFitFontSize(line, s32(width), AppScale(17n), AppScale(11n)),

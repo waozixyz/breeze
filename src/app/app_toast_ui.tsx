@@ -11,7 +11,7 @@ import { Toast } from "kryon/tsx/toast";
 import { NativePresent } from "native_flags";
 import { AppNotificationToastSeconds } from "notification_presentation";
 
-export function AppToastDraw(app: *InnerBreeze, viewport: Rectangle): void {
+export function AppToastDraw(app: NativeRef<InnerBreeze>, viewport: Rectangle): void {
     if (!NativePresent(app) || !SessionValid(app.ui.session)) {
         return;
     }
@@ -29,6 +29,6 @@ export function AppToastDraw(app: *InnerBreeze, viewport: Rectangle): void {
     props.seconds = AppNotificationToastSeconds;
     props.now_seconds = HostSeconds();
     props.scale = GetDPIScale();
-    State_app_toast.app_toast_state = (<Toast session={app.ui.session} props={props} />).state;
+    State_app_toast.app_toast_state = Toast({ session: app.ui.session, props: props }).state;
     State_app_toast.app_toast_request = "";
 }

@@ -32,10 +32,7 @@ import { FormatNumberTemplate, FrameTextHold } from "text_buffers";
 import { ScreenPatterns, ScreenSession, ScreenSunSalutation } from "types";
 
 // The Practice page shows the running device’s acknowledged state.
-export function ActivityDrawRemote(
-    app: *InnerBreeze,
-    hosted: boolean = false
-): boolean {
+export function ActivityDrawRemote(app: NativeRef<InnerBreeze>, hosted: boolean = false): boolean {
     if (!NativePresent(app) || !ActivityRemoteVisible()) {
         return false;
     }
@@ -81,7 +78,7 @@ export function ActivityDrawRemote(
         }}
     />;
     let status_buffer = NewStatusBuffer();
-    let status = ActivityStatus(value, status_buffer[:]);
+    let status = ActivityStatus(value, nativeSlice(status_buffer));
     <Text
         session={session}
         props={{
@@ -92,7 +89,7 @@ export function ActivityDrawRemote(
                 width: float32(width),
                 height: float32(AppScale(76n))
             },
-            text: FrameTextHold(&app.ui.frame_text, status),
+            text: FrameTextHold(nativeRef(app.ui.frame_text), status),
             size: AppScale(32n)
         }}
     />;
@@ -103,15 +100,8 @@ export function ActivityDrawRemote(
         phase = SunSalutationPoseName(value.phase);
     } else if (value.screen === ScreenSession) {
         let round = NewRound();
-        FormatNumberTemplate(
-            LocaleText("session_round_label"),
-            value.round,
-            round[:]
-        );
-        phase = FrameTextHold(
-            &app.ui.frame_text,
-            TextUntilNul(round[:])
-        );
+        FormatNumberTemplate(LocaleText("session_round_label"), value.round, nativeSlice(round));
+        phase = FrameTextHold(nativeRef(app.ui.frame_text), TextUntilNul(nativeSlice(round)));
     }
     if (phase.count > 0n) {
         <Text
@@ -129,7 +119,7 @@ export function ActivityDrawRemote(
             }}
         />;
     }
-    let pending = ActivityState.account_activity.pending_control[0n] !== u8(0n);
+    let pending = nativeAt(ActivityState.account_activity.pending_control, 0n) !== u8(0n);
     let label = "pause_button";
     if (pending) {
         label = "activity_control_pending";
@@ -138,72 +128,63 @@ export function ActivityDrawRemote(
     }
     if (!fresh) {
         if (
-            (
-                <Button
-                    session={session}
-                    props={{
-                        key: NativeLayout.KeyHash("inbe/activity/end"),
-                        bounds: {
-                            x: float32(left),
-                            y: float32(top + AppScale(308n)),
-                            width: float32(width),
-                            height: float32(AppScale(48n))
-                        },
-                        label: LocaleText("activity_end_session")
-                    }}
-                />
-            )
-        ) {
-            ActivityEndRemote(app);
-            ActivityState.account_activity.view_open = false;
-        }
-    } else if (
-        (
-            <Button
-                session={session}
-                props={{
-                    key: NativeLayout.KeyHash("inbe/activity/pause"),
+            Button({
+                session: session,
+                props: {
+                    key: NativeLayout.KeyHash("inbe/activity/end"),
                     bounds: {
                         x: float32(left),
                         y: float32(top + AppScale(308n)),
                         width: float32(width),
                         height: float32(AppScale(48n))
                     },
-                    label: LocaleText(label),
-                    disabled: pending,
-                    loading: pending
-                }}
-            />
-        )
+                    label: LocaleText("activity_end_session")
+                }
+            })
+        ) {
+            ActivityEndRemote(app);
+            ActivityState.account_activity.view_open = false;
+        }
+    } else if (
+        Button({
+            session: session,
+            props: {
+                key: NativeLayout.KeyHash("inbe/activity/pause"),
+                bounds: {
+                    x: float32(left),
+                    y: float32(top + AppScale(308n)),
+                    width: float32(width),
+                    height: float32(AppScale(48n))
+                },
+                label: LocaleText(label),
+                disabled: pending,
+                loading: pending
+            }
+        })
     ) {
         ActivityRequestPause(app, value.paused !== 0n ? 0n : 1n);
     }
     if (
-        (
-            <Button
-                session={session}
-                props={{
-                    key: NativeLayout.KeyHash("inbe/activity/close"),
-                    bounds: {
-                        x: float32(left),
-                        y: float32(top + AppScale(372n)),
-                        width: float32(width),
-                        height: float32(AppScale(44n))
-                    },
-                    label: hosted ? "Lumi" : LocaleText("close_button")
-                }}
-            />
-        )
+        Button({
+            session: session,
+            props: {
+                key: NativeLayout.KeyHash("inbe/activity/close"),
+                bounds: {
+                    x: float32(left),
+                    y: float32(top + AppScale(372n)),
+                    width: float32(width),
+                    height: float32(AppScale(44n))
+                },
+                label: hosted ? "Lumi" : LocaleText("close_button")
+            }
+        })
     ) {
         ActivityState.account_activity.view_open = false;
     }
     return true;
 }
 
-export function ActivityDrawIndicator(
-    app: *InnerBreeze,
-    hosted: boolean = false
-): void {
+export function ActivityDrawIndicator(app: NativeRef<InnerBreeze>, hosted: boolean = false): void {
     if (!ActivityIndicatorVisible(app, hosted)) {
         return;
     }
@@ -213,21 +194,19 @@ export function ActivityDrawIndicator(
         width = available;
     }
     if (
-        (
-            <Button
-                session={app.ui.session}
-                props={{
-                    key: NativeLayout.KeyHash("inbe/activity/open"),
-                    bounds: {
-                        x: float32(app.ui.view_width - width - AppScale(8n)),
-                        y: float32(AppScale(72n)),
-                        width: float32(width),
-                        height: float32(AppScale(56n))
-                    },
-                    label: ActivityIndicatorLabel(app)
-                }}
-            />
-        )
+        Button({
+            session: app.ui.session,
+            props: {
+                key: NativeLayout.KeyHash("inbe/activity/open"),
+                bounds: {
+                    x: float32(app.ui.view_width - width - AppScale(8n)),
+                    y: float32(AppScale(72n)),
+                    width: float32(width),
+                    height: float32(AppScale(56n))
+                },
+                label: ActivityIndicatorLabel(app)
+            }
+        })
     ) {
         ActivityOpenRemote(app, hosted);
     }

@@ -7,7 +7,7 @@ import { IconType, ImageForIcon } from "kryon/icon";
 import { Button } from "kryon/tsx/button";
 import { LocaleText } from "locale";
 
-export function AppMiniExpandButton(app: *InnerBreeze, bounds: Rectangle): boolean {
+export function AppMiniExpandButton(app: NativeRef<InnerBreeze>, bounds: Rectangle): boolean {
     let label = LocaleText("mini_open_full_app");
     let icon = ImageForIcon(s32(s32(IconType.IconExpand)), bounds, label);
     let button: NativeButton.Props = {};
@@ -21,5 +21,5 @@ export function AppMiniExpandButton(app: *InnerBreeze, bounds: Rectangle): boole
     button.circle = true;
     button.tone = ButtonTone.ButtonToneNeutral;
     button.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
-    return <Button session={app.ui.session} props={button} />;
+    return Button({ session: app.ui.session, props: button });
 }

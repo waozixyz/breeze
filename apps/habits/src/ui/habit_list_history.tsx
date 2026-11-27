@@ -1,19 +1,6 @@
+import * as Shared from "habit_shared";
 import { DateValid } from "date_parse";
 import * as Model from "habit_list_view";
-import {
-    WeeklyCountLabel,
-    Ask,
-    Bounds,
-    DateText,
-    Day,
-    DayAgo,
-    Filled,
-    Locale,
-    Number,
-    OffDay,
-    Scale,
-    Weekday
-} from "habit_list_view";
 import {
     HABIT_WEEKLY_INITIAL_DAYS,
     HABIT_WEEKLY_LOAD_DAYS,
@@ -43,8 +30,8 @@ function DayButton(
 ): void {
     const rows = Model.Rows();
     const list_state = Model.CurrentList();
-    let row = rows[index];
-    let state = Day(index, day);
+    let row = nativeAt(rows, index);
+    let state = Model.Day(index, day);
     let scheduled = state.planned;
     let complete = state.complete;
     let recorded = complete || state.count > 0n || state.running;
@@ -83,11 +70,11 @@ function DayButton(
         />;
     }
     if (dot) {
-        let top = s32(bounds.y) + Scale(3n);
+        let top = s32(bounds.y) + Model.Scale(3n);
         <Text
             session={list_state.session}
             props={{
-                bounds: Bounds(s32(bounds.x), top, s32(bounds.width), Scale(18n)),
+                bounds: Shared.Bounds(s32(bounds.x), top, s32(bounds.width), Model.Scale(18n)),
                 text: label,
                 size: list_state.small_font,
                 align: TextAlign.TextAlignCenter,
@@ -97,14 +84,14 @@ function DayButton(
             }}
         />;
         if (state.count > 0n || complete) {
-            let radius = Scale(12n);
+            let radius = Model.Scale(12n);
             let accent = row.color;
             if (!scheduled) {
-                accent = OffDay(row.color);
+                accent = Model.OffDay(row.color);
             }
             DayDot(
                 s32(bounds.x + bounds.width / 2n),
-                s32(bounds.y + bounds.height) - Scale(4n) - radius,
+                s32(bounds.y + bounds.height) - Model.Scale(4n) - radius,
                 radius,
                 accent,
                 complete,
@@ -115,9 +102,9 @@ function DayButton(
         }
     }
     if (press.clicked) {
-        Ask(HABITS_LIST_DAY, index, day);
+        Model.Ask(HABITS_LIST_DAY, index, day);
     } else if (press.right_clicked && !disabled) {
-        Ask(HABITS_LIST_DAY, index, day);
+        Model.Ask(HABITS_LIST_DAY, index, day);
         list_state.action_decrement = true;
     }
 }
@@ -125,8 +112,8 @@ function DayButton(
 export function Weekly(index: s32, x: s32, width: s32, top: s32, bottom: s32): void {
     const rows = Model.Rows();
     const list_state = Model.CurrentList();
-    let row_height = Scale(46n);
-    let gap = Scale(8n);
+    let row_height = Model.Scale(46n);
+    let gap = Model.Scale(8n);
     let count = list_state.weekly_days;
     if (count < HABIT_WEEKLY_INITIAL_DAYS) {
         count = HABIT_WEEKLY_INITIAL_DAYS;
@@ -135,74 +122,69 @@ export function Weekly(index: s32, x: s32, width: s32, top: s32, bottom: s32): v
         count = HABIT_WEEKLY_MAX_DAYS;
     }
     list_state.weekly_days = count;
-    let content_height = count * (row_height + gap) + Scale(52n);
-    let viewport = Bounds(x, top, width, bottom - top);
-    const scrolled = (
-        <Scroll
-            session={list_state.session}
-            props={{
-                key: NativeLayout.KeyHash("inbe/habits/week"),
-                bounds: viewport,
-                content_height: content_height,
-                scroll_offset: list_state.scroll
-            }}
-            children={(scrolled: NativeScroll.ScrollResult): void => {
-                const list_state = Model.CurrentList();
-                list_state.scroll = scrolled.scroll_offset;
-                let first_row = (scrolled.scroll_offset - row_height) / (row_height + gap);
-                if (first_row < 0n) {
-                    first_row = 0n;
+    let content_height = count * (row_height + gap) + Model.Scale(52n);
+    let viewport = Shared.Bounds(x, top, width, bottom - top);
+    const scrolled = Scroll({
+        session: list_state.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/habits/week"),
+            bounds: viewport,
+            content_height: content_height,
+            scroll_offset: list_state.scroll
+        },
+        children: (scrolled: NativeScroll.ScrollResult): void => {
+            const list_state = Model.CurrentList();
+            list_state.scroll = scrolled.scroll_offset;
+            let first_row = (scrolled.scroll_offset - row_height) / (row_height + gap);
+            if (first_row < 0n) {
+                first_row = 0n;
+            }
+            let last_row =
+                (scrolled.scroll_offset + s32(viewport.height) + row_height) / (row_height + gap);
+            if (last_row >= count) {
+                last_row = count - 1n;
+            }
+            let row = nativeAt(rows, index);
+            for (let position = first_row; position <= last_row; position += s32(1)) {
+                let row_y = s32(scrolled.content.y) + position * (row_height + gap);
+                let day = Model.DayAgo(position);
+                let label = Model.DateText(day);
+                if (row.counting) {
+                    label = Model.WeeklyCountLabel(label, Model.Day(index, day).count, row.target);
                 }
-                let last_row =
-                    (scrolled.scroll_offset + s32(viewport.height) + row_height) /
-                    (row_height + gap);
-                if (last_row >= count) {
-                    last_row = count - 1n;
-                }
-                let row = rows[index];
-                for (let position = first_row; position <= last_row; position += s32(1)) {
-                    let row_y = s32(scrolled.content.y) + position * (row_height + gap);
-                    let day = DayAgo(position);
-                    let label = DateText(day);
-                    if (row.counting) {
-                        label = WeeklyCountLabel(label, Day(index, day).count, row.target);
-                    }
-                    DayButton(
-                        index,
-                        day,
-                        label,
-                        4400n + position,
-                        Bounds(x, row_y, width, row_height),
-                        false
-                    );
-                }
-                if (count < HABIT_WEEKLY_MAX_DAYS) {
-                    let button_y = s32(scrolled.content.y) + count * (row_height + gap);
-                    if (
-                        (
-                            <Button
-                                session={list_state.session}
-                                props={{
-                                    id: 4500n,
-                                    bounds: Bounds(x, button_y, width, Scale(42n)),
-                                    label: Locale("habit_load_more_button"),
-                                    tone: ButtonTone.ButtonToneNeutral,
-                                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                                    disabled: list_state.modal_active
-                                }}
-                            />
-                        )
-                    ) {
-                        list_state.weekly_days = list_state.weekly_days + HABIT_WEEKLY_LOAD_DAYS;
-                        if (list_state.weekly_days > HABIT_WEEKLY_MAX_DAYS) {
-                            list_state.weekly_days = HABIT_WEEKLY_MAX_DAYS;
+                DayButton(
+                    index,
+                    day,
+                    label,
+                    4400n + position,
+                    Shared.Bounds(x, row_y, width, row_height),
+                    false
+                );
+            }
+            if (count < HABIT_WEEKLY_MAX_DAYS) {
+                let button_y = s32(scrolled.content.y) + count * (row_height + gap);
+                if (
+                    Button({
+                        session: list_state.session,
+                        props: {
+                            id: 4500n,
+                            bounds: Shared.Bounds(x, button_y, width, Model.Scale(42n)),
+                            label: Model.Locale("habit_load_more_button"),
+                            tone: ButtonTone.ButtonToneNeutral,
+                            emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                            disabled: list_state.modal_active
                         }
+                    })
+                ) {
+                    list_state.weekly_days = list_state.weekly_days + HABIT_WEEKLY_LOAD_DAYS;
+                    if (list_state.weekly_days > HABIT_WEEKLY_MAX_DAYS) {
+                        list_state.weekly_days = HABIT_WEEKLY_MAX_DAYS;
                     }
                 }
-                list_state.anchor_day = Bounds(x, top, width, row_height);
-            }}
-        />
-    );
+            }
+            list_state.anchor_day = Shared.Bounds(x, top, width, row_height);
+        }
+    });
     if (!scrolled.opened) {
         list_state.scroll = scrolled.scroll_offset;
     }
@@ -224,40 +206,36 @@ export function Calendar(index: s32, x: s32, width: s32, top: s32): void {
     if (!DateValid(year, month, 1n)) {
         return;
     }
-    let header_height = Scale(42n);
-    let gap = Scale(6n);
-    let arrow_width = Scale(48n);
+    let header_height = Model.Scale(42n);
+    let gap = Model.Scale(6n);
+    let arrow_width = Model.Scale(48n);
     if (
-        (
-            <Button
-                session={list_state.session}
-                props={{
-                    id: 4600n,
-                    bounds: Bounds(x, top, arrow_width, header_height),
-                    label: "<",
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                    disabled: list_state.modal_active
-                }}
-            />
-        )
+        Button({
+            session: list_state.session,
+            props: {
+                id: 4600n,
+                bounds: Shared.Bounds(x, top, arrow_width, header_height),
+                label: "<",
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                disabled: list_state.modal_active
+            }
+        })
     ) {
         list_state.month_offset = list_state.month_offset - 1n;
     }
     if (
-        (
-            <Button
-                session={list_state.session}
-                props={{
-                    id: 4601n,
-                    bounds: Bounds(x + width - arrow_width, top, arrow_width, header_height),
-                    label: ">",
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                    disabled: list_state.modal_active || list_state.month_offset >= 0n
-                }}
-            />
-        )
+        Button({
+            session: list_state.session,
+            props: {
+                id: 4601n,
+                bounds: Shared.Bounds(x + width - arrow_width, top, arrow_width, header_height),
+                label: ">",
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                disabled: list_state.modal_active || list_state.month_offset >= 0n
+            }
+        })
     ) {
         list_state.month_offset = list_state.month_offset + 1n;
     }
@@ -291,24 +269,24 @@ export function Calendar(index: s32, x: s32, width: s32, top: s32): void {
     <Text
         session={list_state.session}
         props={{
-            bounds: Bounds(
+            bounds: Shared.Bounds(
                 x + arrow_width + gap,
                 top,
                 width - (arrow_width + gap) * 2n,
                 header_height
             ),
-            text: Filled(Locale(month_keys[month - 1n]), year, 0n),
+            text: Model.Filled(Model.Locale(nativeAt(month_keys, month - 1n)), year, 0n),
             size: list_state.font,
             align: TextAlign.TextAlignCenter,
             vertical_align: TextAlign.TextAlignCenter,
             wrap: NativeText.Wrap.TextWrapNone
         }}
     />;
-    let weekday = Weekday(year * 10000n + month * 100n + 1n);
+    let weekday = Model.Weekday(year * 10000n + month * 100n + 1n);
     let cell_width = (width - gap * 6n) / 7n;
-    let counting = rows[index].counting;
-    let cell_height = Scale(counting ? 56n : 50n);
-    let day: s32 = 1n;
+    let counting = nativeAt(rows, index).counting;
+    let cell_height = Model.Scale(counting ? 56n : 50n);
+    let day: s32 = s32(1n);
     while (DateValid(year, month, day)) {
         let slot = weekday + day - 1n;
         let column = slot % 7n;
@@ -318,9 +296,9 @@ export function Calendar(index: s32, x: s32, width: s32, top: s32): void {
             DayButton(
                 index,
                 day_index,
-                Number(s64(day)),
+                Shared.Number(s64(day)),
                 4700n + slot,
-                Bounds(
+                Shared.Bounds(
                     x + column * (cell_width + gap),
                     top + header_height + gap + row * (cell_height + gap),
                     cell_width,

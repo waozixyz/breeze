@@ -33,10 +33,10 @@ import { AppTextFromCString, FormatTwoNumberTemplate, FrameTextHold } from "text
 import { GuideFace } from "widgets";
 
 export function ManualParagraphView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     paragraph: ManualParagraphSpec,
     x: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     if (!NativePresent(app) || !NativePresent(y) || paragraph.width <= 0n) {
         return;
@@ -46,7 +46,7 @@ export function ManualParagraphView(
         font = AppFontSize();
     }
     let height = AppParagraphHeight(paragraph.text, paragraph.width, font, paragraph.line_gap);
-    let current_y = (*y);
+    let current_y = nativeDeref(y);
     let props: NativeText.Props = {};
     props.bounds = {
         x: float32(x),
@@ -59,7 +59,7 @@ export function ManualParagraphView(
     props.wrap = Wrap.TextWrapAuto;
     props.align = paragraph.align;
     <Text session={app.ui.session} props={props} />;
-    (*y) = (*y) + height;
+    nativeDeref(y) = nativeDeref(y) + height;
 }
 
 export function manual_screen_draw_guide_headerView(
@@ -67,7 +67,7 @@ export function manual_screen_draw_guide_headerView(
     page: s32,
     page_count: s32,
     content_x: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     content_w: s32
 ): void {
     let app = CurrentApp();
@@ -81,19 +81,19 @@ export function manual_screen_draw_guide_headerView(
             LocaleText("tutorial_step_progress"),
             page + 1n,
             page_count,
-            progress[:]
+            nativeSlice(progress)
         )
     ) {
         return;
     }
     let progress_text = FrameTextHold(
-        &app.ui.frame_text,
-        AppTextFromCString(&progress[0n], 96n)
+        nativeRef(app.ui.frame_text),
+        AppTextFromCString(nativeRef(nativeAt(progress, 0n)), 96n)
     );
     let title_h = AppScale(42n);
     let title_step_gap = AppScale(10n);
     let step_h = AppScale(24n);
-    let current_y = (*y);
+    let current_y = nativeDeref(y);
     let heading: NativeText.Props = {};
     heading.bounds = {
         x: float32(content_x),
@@ -115,12 +115,11 @@ export function manual_screen_draw_guide_headerView(
     label.text = progress_text;
     label.wrap = Wrap.TextWrapNone;
     <Text session={app.ui.session} props={label} />;
-    (*y) =
-        (*y) + (title_h + title_step_gap + step_h + AppScale(16n));
+    nativeDeref(y) = nativeDeref(y) + (title_h + title_step_gap + step_h + AppScale(16n));
 }
 
 export function manual_screen_draw_title_barView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     title: string,
     title_h: s32
 ): s32 {
@@ -134,9 +133,11 @@ export function manual_screen_draw_title_barView(
     bar.has_leading_action = true;
     bar.leading_label = LocaleText("back_button");
     let options = ManualScreenNewOptions();
-    let result = (
-        <TitleBar session={app.ui.session} props={bar} options={options[0n:0n]} />
-    );
+    let result = TitleBar({
+        session: app.ui.session,
+        props: bar,
+        options: nativeSlice(options, 0n, 0n)
+    });
     if (!result.clicked_leading) {
         return 0n;
     }
@@ -145,7 +146,7 @@ export function manual_screen_draw_title_barView(
 }
 
 export function manual_screen_guide_controlsView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     nav: ManualGuideNav
 ): GuidePagerPolicy {
     let empty: GuidePagerPolicy = {};
@@ -218,7 +219,7 @@ export function manual_screen_guide_controlsView(
         back.label = LocaleText("back_button");
         back.tone = ButtonTone.ButtonToneNeutral;
         back.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
-        if ((<Button session={app.ui.session} props={back} />)) {
+        if (Button({ session: app.ui.session, props: back })) {
             if (page === 0n) {
                 close_requested = true;
             } else {
@@ -239,7 +240,7 @@ export function manual_screen_guide_controlsView(
         }
         forward.tone = ButtonTone.ButtonToneAccent;
         forward.emphasis = ButtonEmphasis.ButtonEmphasisFilled;
-        if ((<Button session={app.ui.session} props={forward} />)) {
+        if (Button({ session: app.ui.session, props: forward })) {
             finish = true;
         }
     }

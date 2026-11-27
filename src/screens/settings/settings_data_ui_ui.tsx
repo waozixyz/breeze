@@ -61,37 +61,37 @@ import { StorageSyncStatus, storage_sync_status } from "sync_state";
 import { AppTextFromCString, FormatNumberTemplate, FrameTextHold } from "text_buffers";
 
 export function settings_data_draw_actionsView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     if (!NativePresent(app) || !NativePresent(y)) {
         return;
     }
-    (*y) = (*y) + AppScale(8n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(8n);
     if (storage_database_damaged() !== 0n) {
         let props = SettingsDataTextProps(
             LocaleText("database_damaged_message"),
             x,
-            (*y),
+            nativeDeref(y),
             width,
             AppScale(70n)
         );
         props.wrap = Wrap.TextWrapAuto;
         <Text session={app.ui.session} props={props} />;
-        (*y) = (*y) + AppScale(78n);
+        nativeDeref(y) = nativeDeref(y) + AppScale(78n);
     }
     let restore_button = SettingsDataButtonProps(
         LocaleText("restore_last_good_button"),
         x,
-        (*y),
+        nativeDeref(y),
         width,
         5305n,
         false
     );
     restore_button.disabled = State_settings_data_ui.restore_last_good_requested;
-    if ((<Button session={app.ui.session} props={restore_button} />)) {
+    if (Button({ session: app.ui.session, props: restore_button })) {
         State_settings_data_ui.restore_last_good_requested = true;
     }
     if (State_settings_data_ui.restore_last_good_requested && app_sync_stop_for_restore(app)) {
@@ -106,76 +106,72 @@ export function settings_data_draw_actionsView(
             settings_screen_set_status_error(LocaleText("restore_last_good_failed"));
         }
     }
-    (*y) = (*y) + AppScale(50n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(50n);
     let import_button = SettingsDataButtonProps(
         LocaleText("import_data_button"),
         x,
-        (*y),
+        nativeDeref(y),
         width,
         5301n,
         true
     );
-    if ((<Button session={app.ui.session} props={import_button} />)) {
+    if (Button({ session: app.ui.session, props: import_button })) {
         SettingsDataImport(app);
     }
-    (*y) = (*y) + AppScale(50n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(50n);
     let export_button = SettingsDataButtonProps(
         LocaleText("export_data_button"),
         x,
-        (*y),
+        nativeDeref(y),
         width,
         5302n,
         true
     );
-    if ((<Button session={app.ui.session} props={export_button} />)) {
+    if (Button({ session: app.ui.session, props: export_button })) {
         SettingsDataExport(app);
     }
-    (*y) = (*y) + AppScale(50n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(50n);
     let csv_button = SettingsDataButtonProps(
         LocaleText("export_csv_button"),
         x,
-        (*y),
+        nativeDeref(y),
         width,
         5303n,
         false
     );
-    if ((<Button session={app.ui.session} props={csv_button} />)) {
+    if (Button({ session: app.ui.session, props: csv_button })) {
         SettingsDataExportCsv(app);
     }
-    (*y) = (*y) + AppScale(50n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(50n);
     let account: AccountKeys = {};
-    if (sync_account_load(&account) === 0n) {
+    if (sync_account_load(nativeRef(account)) === 0n) {
         let clear_button = SettingsDataButtonProps(
             LocaleText("clear_local_data_button"),
             x,
-            (*y),
+            nativeDeref(y),
             width,
             5304n,
             false
         );
-        if ((<Button session={app.ui.session} props={clear_button} />)) {
+        if (Button({ session: app.ui.session, props: clear_button })) {
             if (data_has_any() !== 0n) {
                 app_open_modal(app, ModalType.ModalConfirmDeleteData);
             } else {
                 settings_screen_set_status_error(LocaleText("no_data_to_delete"));
             }
         }
-        (*y) = (*y) + AppScale(50n);
+        nativeDeref(y) = nativeDeref(y) + AppScale(50n);
     }
     settings_screen_draw_status_reserved(x, y, AppScale(42n));
 }
 
-export function settings_data_draw_sync_statusView(
-    x: s32,
-    width: s32,
-    y: *s32
-): void {
+export function settings_data_draw_sync_statusView(x: s32, width: s32, y: NativeRef<s32>): void {
     let app = CurrentApp();
     if (!NativePresent(app) || !NativePresent(y)) {
         return;
     }
     let status: StorageSyncStatus = {};
-    if (storage_sync_status(&status) === 0n || status.has_account === 0n) {
+    if (storage_sync_status(nativeRef(status)) === 0n || status.has_account === 0n) {
         return;
     }
     <Text
@@ -183,59 +179,59 @@ export function settings_data_draw_sync_statusView(
         props={SettingsDataTextProps(
             LocaleText("sync_status_title"),
             x,
-            (*y),
+            nativeDeref(y),
             width,
             AppScale(26n)
         )}
     />;
-    (*y) = (*y) + AppScale(28n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(28n);
     let queued = SettingsDataUiNewQueued();
     FormatNumberTemplate(
         LocaleText("sync_status_queued"),
         s32(status.queued_changes),
-        queued[:]
+        nativeSlice(queued)
     );
     <Text
         session={app.ui.session}
         props={SettingsDataTextProps(
             FrameTextHold(
-                &app.ui.frame_text,
-                AppTextFromCString(&queued[0n], 64n)
+                nativeRef(app.ui.frame_text),
+                AppTextFromCString(nativeRef(nativeAt(queued, 0n)), 64n)
             ),
             x,
-            (*y),
+            nativeDeref(y),
             width,
             AppScale(24n)
         )}
     />;
-    (*y) = (*y) + AppScale(28n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(28n);
     <Text
         session={app.ui.session}
         props={SettingsDataTextProps(
             LocaleText(app_sync_status_key()),
             x,
-            (*y),
+            nativeDeref(y),
             width,
             AppScale(48n)
         )}
     />;
-    (*y) = (*y) + AppScale(52n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(52n);
 }
 
 export function SettingsDataPrompt(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     key: string,
     title: string,
     message: string,
     labels: string[]
 ): s32 {
     let actions = SettingsDataUiNewActions();
-    let index: s32 = 0n;
+    let index: s32 = s32(0n);
     while (index < s32(labels.count) && index < 3n) {
-        actions[index].label = labels[index];
-        actions[index].tone =
+        nativeAt(actions, index).label = nativeAt(labels, index);
+        nativeAt(actions, index).tone =
             index === 0n ? ButtonTone.ButtonToneNeutral : ButtonTone.ButtonToneAccent;
-        actions[index].emphasis =
+        nativeAt(actions, index).emphasis =
             index === 0n ? ButtonEmphasis.ButtonEmphasisSoft : ButtonEmphasis.ButtonEmphasisFilled;
         index = index + 1n;
     }
@@ -244,18 +240,16 @@ export function SettingsDataPrompt(
     props.title = title;
     props.message = message;
     props.max_width = AppScale(440n);
-    let result = (
-        <ActionModal
-            session={app.ui.session}
-            props={props}
-            actions={actions[0n:labels.count]}
-        />
-    );
+    let result = ActionModal({
+        session: app.ui.session,
+        props: props,
+        actions: nativeSlice(actions, 0n, labels.count)
+    });
     return result.action === -1n ? 1n : result.action;
 }
 
 export function SettingsReviewLines(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     value: string,
     bounds: Rectangle,
     offset: s32,
@@ -263,15 +257,15 @@ export function SettingsReviewLines(
     line_height: s32,
     initial_class: string
 ): s32 {
-    let start: s32 = 0n;
+    let start: s32 = s32(0n);
     let y = s32(bounds.y) - offset;
     let action_class = initial_class;
     while (start < s32(value.count)) {
         let end = start;
-        while (end < s32(value.count) && value[end] !== u8(10)) {
+        while (end < s32(value.count) && nativeAt(value, end) !== u8(10)) {
             end = end + 1n;
         }
-        let logical_line = value[start:end];
+        let logical_line = nativeSlice(value, start, end);
         if (logical_line === LocaleText("review_added")) {
             action_class = "review-added";
         } else if (logical_line === LocaleText("review_removed")) {
@@ -279,23 +273,23 @@ export function SettingsReviewLines(
         } else if (logical_line === LocaleText("review_changed")) {
             action_class = "review-changed";
         }
-        let indent: s32 = 0n;
-        while (indent < s32(logical_line.count) && logical_line[indent] === u8(32)) {
+        let indent: s32 = s32(0n);
+        while (indent < s32(logical_line.count) && nativeAt(logical_line, indent) === u8(32)) {
             indent = indent + 1n;
         }
         let class_name = action_class;
         if (indent >= 6n) {
             class_name = "review-detail";
         }
-        let inset: s32 = 0n;
+        let inset: s32 = s32(0n);
         if (indent >= 2n) {
             inset = AppScale(12n);
         }
         if (indent >= 6n) {
             inset = AppScale(24n);
         }
-        let visible_line = logical_line[indent:];
-        let wrapped_start: s32 = 0n;
+        let visible_line = nativeSlice(logical_line, indent);
+        let wrapped_start: s32 = s32(0n);
         while (wrapped_start < s32(visible_line.count)) {
             let line = NextTextLine(
                 visible_line,
@@ -311,7 +305,7 @@ export function SettingsReviewLines(
                 y < s32(bounds.y + bounds.height)
             ) {
                 let props = SettingsDataTextProps(
-                    visible_line[line.start:line.end],
+                    nativeSlice(visible_line, line.start, line.end),
                     s32(bounds.x) + inset,
                     y,
                     s32(bounds.width) - AppScale(12n) - inset,
@@ -336,7 +330,7 @@ export function SettingsReviewLines(
     return y - s32(bounds.y) + offset;
 }
 
-export function SettingsDataReviewModal(app: *InnerBreeze): s32 {
+export function SettingsDataReviewModal(app: NativeRef<InnerBreeze>): s32 {
     if (
         State_settings_data_ui.review_cached_revision !== storage_data_revision() &&
         storage_sync_review_clear_if_no_visible_diff() !== 0n
@@ -378,14 +372,12 @@ export function SettingsDataReviewModal(app: *InnerBreeze): s32 {
     if (State_settings_data_ui.review_cached_revision !== revision) {
         SettingsReviewClearCachedText();
         State_settings_data_ui.review_cached_available =
-            storage_sync_review_plan(
-                2n,
-                &State_settings_data_ui.review_cached_text
-            ) !== 0n;
+            storage_sync_review_plan(2n, nativeRef(State_settings_data_ui.review_cached_text)) !==
+            0n;
         State_settings_data_ui.review_cached_replace_available =
             storage_sync_review_plan(
                 1n,
-                &State_settings_data_ui.review_cached_replace_text
+                nativeRef(State_settings_data_ui.review_cached_replace_text)
             ) !== 0n;
         State_settings_data_ui.review_cached_revision = storage_data_revision();
     }
@@ -442,7 +434,7 @@ export function SettingsDataReviewModal(app: *InnerBreeze): s32 {
         AppTextFromCString(State_settings_data_ui.review_cached_replace_text, 2147483647n)
     );
     let replacement = "";
-    let replacement_height: s32 = 0n;
+    let replacement_height: s32 = s32(0n);
     if (removals.count > 0n) {
         replacement = LocaleText("review_replace_detail");
         replacement_height =
@@ -522,11 +514,11 @@ export function SettingsDataReviewModal(app: *InnerBreeze): s32 {
     ];
     let modes: [s32, s32, s32] = [2n, 0n, 1n];
     y = s32(content.y + content.height) - AppScale(132n);
-    let index: s32 = 0n;
-    let decision: s32 = 0n;
+    let index: s32 = s32(0n);
+    let decision: s32 = s32(0n);
     while (index < 3n) {
         let button = SettingsDataButtonProps(
-            LocaleText(options[index]),
+            LocaleText(nativeAt(options, index)),
             x,
             y,
             text_width,
@@ -539,8 +531,8 @@ export function SettingsDataReviewModal(app: *InnerBreeze): s32 {
             button.disabled = !State_settings_data_ui.review_cached_replace_available;
             button.tone = ButtonTone.ButtonToneDanger;
         }
-        if ((<Button session={app.ui.session} props={button} />)) {
-            decision = modes[index] + 1n;
+        if (Button({ session: app.ui.session, props: button })) {
+            decision = nativeAt(modes, index) + 1n;
         }
         y = y + AppScale(44n);
         index = index + 1n;

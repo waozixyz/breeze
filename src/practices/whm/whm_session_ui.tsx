@@ -33,7 +33,7 @@ import { AppCopyText, AppFormatS32, FormatTwoNumberTemplate, FrameTextHold } fro
 import { FormatLocaleCount, collect_result_rounds, whm_exit_to_start } from "whm_session";
 
 export function session_draw_start_previewView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     center_x: s32,
     center_y: s32
 ): s32 {
@@ -82,9 +82,9 @@ export function session_draw_start_previewView(
             wrap: Wrap.TextWrapNone
         }}
     />;
-    const clicked = <Button
-        session={app.ui.session}
-        props={{
+    const clicked = Button({
+        session: app.ui.session,
+        props: {
             bounds: {
                 x: float32(center_x - scaled_radius),
                 y: float32(center_y - scaled_radius),
@@ -95,8 +95,8 @@ export function session_draw_start_previewView(
             tone: ButtonTone.ButtonToneAccent,
             emphasis: ButtonEmphasis.ButtonEmphasisFilled,
             circle: true
-        }}
-    />;
+        }
+    });
     if (clicked) {
         return 1n;
     }
@@ -104,20 +104,20 @@ export function session_draw_start_previewView(
 }
 
 export function session_draw_results_screenView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     center_x: s32,
     center_y: s32,
-    hover: *s32
+    hover: NativeRef<s32>
 ): void {
     let box_x: s32 = s32(0);
     let box_y: s32 = AppScale(78n);
     let box_w: s32 = s32(0);
     let row_y: s32 = AppScale(215n);
     let row_h: s32 = AppScale(32n);
-    let total: s32 = 0n;
-    let best: s32 = -1n;
+    let total: s32 = s32(0n);
+    let best: s32 = s32(-1n);
     let round_times = WhmSessionNewRoundTimes();
-    let rounds: s32 = collect_result_rounds(app, &round_times[0n], MaxRounds);
+    let rounds: s32 = collect_result_rounds(app, nativeRef(nativeAt(round_times, 0n)), MaxRounds);
     let action_y: s32 = app.ui.view_height - AppScale(40n);
     let title_font: s32 = s32(0);
     let title_w: s32 = s32(0);
@@ -131,12 +131,7 @@ export function session_draw_results_screenView(
     if (responsive_max_w < min_content_w) {
         responsive_max_w = min_content_w;
     }
-    GetCenteredColumn(
-        responsive_max_w,
-        GetPageSidePadding(),
-        &box_x,
-        &box_w
-    );
+    GetCenteredColumn(responsive_max_w, GetPageSidePadding(), nativeRef(box_x), nativeRef(box_w));
     title_font = AppTitleFontSize(LocaleText("results_title"), app.ui.view_width - AppScale(48n));
     title_w = AppTextWidth(LocaleText("results_title"), title_font);
     <Text
@@ -153,9 +148,9 @@ export function session_draw_results_screenView(
         }}
     />;
     {
-        let i: s32 = 0n;
+        let i: s32 = s32(0n);
         while (i < rounds) {
-            let seconds: s32 = round_times[i];
+            let seconds: s32 = nativeAt(round_times, i);
             total = total + seconds;
             if (best < 0n || seconds > best) {
                 best = seconds;
@@ -169,26 +164,26 @@ export function session_draw_results_screenView(
     {
         let lines = WhmSessionNewLines();
         let summary_font: s32 = NativeText.Text16;
-        FormatLocaleCount(lines[0n][:], "results_rounds", rounds);
-        FormatLocaleCount(lines[1n][:], "results_best", best);
+        FormatLocaleCount(nativeSlice(nativeAt(lines, 0n)), "results_rounds", rounds);
+        FormatLocaleCount(nativeSlice(nativeAt(lines, 1n)), "results_best", best);
         FormatLocaleCount(
-            lines[2n][:],
+            nativeSlice(nativeAt(lines, 2n)),
             "results_avg",
             rounds > 0n ? total / rounds : 0n
         );
         if (
             app.ui.view_width < 420n &&
-            AppTextWidth(AppTextFromCString(&lines[2n][0n], 64n), summary_font) >
+            AppTextWidth(
+                AppTextFromCString(nativeRef(nativeAt(nativeAt(lines, 2n), 0n)), 64n),
+                summary_font
+            ) >
                 box_w - AppScale(20n)
         ) {
             let seconds_text = WhmSessionNewSecondsText();
-            AppFormatS32(
-                rounds > 0n ? s32(total / rounds) : 0n,
-                seconds_text[:]
-            );
+            AppFormatS32(rounds > 0n ? s32(total / rounds) : 0n, nativeSlice(seconds_text));
             AppCopyText(
-                AppTextFromCString(&seconds_text[0n], 16n),
-                lines[2n][:]
+                AppTextFromCString(nativeRef(nativeAt(seconds_text, 0n)), 16n),
+                nativeSlice(nativeAt(lines, 2n))
             );
         }
         <Box
@@ -204,7 +199,7 @@ export function session_draw_results_screenView(
             }}
         />;
         {
-            let i: s32 = 0n;
+            let i: s32 = s32(0n);
             while (i < 3n) {
                 let info_y = box_y + i * AppScale(29n);
                 if (i > 0n) {
@@ -227,8 +222,8 @@ export function session_draw_results_screenView(
                             height: float32(AppScale(29n))
                         },
                         text: FrameTextHold(
-                            &app.ui.frame_text,
-                            AppTextFromCString(&lines[i][0n], 64n)
+                            nativeRef(app.ui.frame_text),
+                            AppTextFromCString(nativeRef(nativeAt(nativeAt(lines, i), 0n)), 64n)
                         ),
                         wrap: Wrap.TextWrapNone
                     }}
@@ -251,15 +246,15 @@ export function session_draw_results_screenView(
         }}
     />;
     {
-        let i: s32 = 0n;
+        let i: s32 = s32(0n);
         while (i < rounds) {
             let row = WhmSessionNewRow();
             let row_font: s32 = AppFontSize();
             FormatTwoNumberTemplate(
                 LocaleText("round_result_label"),
                 i + 1n,
-                round_times[i],
-                row[:]
+                nativeAt(round_times, i),
+                nativeSlice(row)
             );
             <Box
                 session={CurrentApp().ui.session}
@@ -283,8 +278,8 @@ export function session_draw_results_screenView(
                         height: float32(row_h)
                     },
                     text: FrameTextHold(
-                        &app.ui.frame_text,
-                        AppTextFromCString(&row[0n], 48n)
+                        nativeRef(app.ui.frame_text),
+                        AppTextFromCString(nativeRef(nativeAt(row, 0n)), 48n)
                     ),
                     wrap: Wrap.TextWrapNone
                 }}
@@ -308,43 +303,39 @@ export function session_draw_results_screenView(
         button_h = AppScale(34n);
     }
     if (
-        (
-            <Button
-                session={CurrentApp().ui.session}
-                props={{
-                    label: discard_label,
-                    bounds: {
-                        x: float32(center_x - box_w / 4n - discard_w / 2n),
-                        y: float32(action_y),
-                        width: float32(discard_w),
-                        height: float32(button_h)
-                    },
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: CurrentApp().ui.session,
+            props: {
+                label: discard_label,
+                bounds: {
+                    x: float32(center_x - box_w / 4n - discard_w / 2n),
+                    y: float32(action_y),
+                    width: float32(discard_w),
+                    height: float32(button_h)
+                },
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         session_discard_saved_results(app);
         whm_exit_to_start(app);
     }
     if (
-        (
-            <Button
-                session={CurrentApp().ui.session}
-                props={{
-                    label: save_label,
-                    bounds: {
-                        x: float32(center_x + box_w / 4n - save_w / 2n),
-                        y: float32(action_y),
-                        width: float32(save_w),
-                        height: float32(button_h)
-                    },
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: CurrentApp().ui.session,
+            props: {
+                label: save_label,
+                bounds: {
+                    x: float32(center_x + box_w / 4n - save_w / 2n),
+                    y: float32(action_y),
+                    width: float32(save_w),
+                    height: float32(button_h)
+                },
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         if (session_ensure_results_saved(app) !== 0n) {
             whm_exit_to_start(app);

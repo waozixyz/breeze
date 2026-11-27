@@ -121,10 +121,13 @@ function Avatar(key: u64, name: string, place: s32, x: s32, y: s32, size: s32, i
         }}
     />;
     let letter_end: s64 = 1n;
-    while (letter_end < name.count && FlagIntersection(name[letter_end], u8(192n)) === u8(128n)) {
+    while (
+        letter_end < name.count &&
+        FlagIntersection(nativeAt(name, letter_end), u8(192n)) === u8(128n)
+    ) {
         letter_end += 1n;
     }
-    let letter = name.count > 0n ? name[:letter_end] : "?";
+    let letter = name.count > 0n ? nativeSlice(name, 0n, letter_end) : "?";
     <Text
         session={State.frame.session}
         props={{
@@ -142,26 +145,24 @@ function Field(bounds: Rectangle, placeholder: string, read_only: boolean = fals
         input.focus = true;
         State.field_focus_request = false;
     }
-    let edited = (
-        <ControlledTextField
-            session={State.frame.session}
-            props={{
-                key: u64(6501n),
-                bounds: bounds,
-                value: State.frame.value,
-                placeholder: placeholder,
-                cursor: State.frame.cursor,
-                anchor: State.frame.anchor,
-                scroll_x: State.frame.scroll_x,
-                focused: State.frame.focused,
-                focus_id: 6501n,
-                max_bytes: LISTS_TEXT_LIMIT,
-                max_codepoints: LISTS_TEXT_LIMIT,
-                input: input,
-                disabled: State.frame.sharing_busy || State.frame.sharing_pending || read_only
-            }}
-        />
-    );
+    let edited = ControlledTextField({
+        session: State.frame.session,
+        props: {
+            key: u64(6501n),
+            bounds: bounds,
+            value: State.frame.value,
+            placeholder: placeholder,
+            cursor: State.frame.cursor,
+            anchor: State.frame.anchor,
+            scroll_x: State.frame.scroll_x,
+            focused: State.frame.focused,
+            focus_id: 6501n,
+            max_bytes: LISTS_TEXT_LIMIT,
+            max_codepoints: LISTS_TEXT_LIMIT,
+            input: input,
+            disabled: State.frame.sharing_busy || State.frame.sharing_pending || read_only
+        }
+    });
     if (edited.edit.changed) {
         let start = edited.edit.start;
         let end = edited.edit.end;
@@ -192,27 +193,25 @@ function DescriptionField(
     read_only: boolean = false
 ): boolean {
     let input = State.frame.comment_input;
-    let edited = (
-        <TextArea
-            session={State.frame.session}
-            props={{
-                key: u64(6552n),
-                bounds: bounds,
-                value: State.frame.comment_value,
-                placeholder: placeholder,
-                cursor: State.frame.comment_cursor,
-                anchor: State.frame.comment_anchor,
-                scroll_y: State.frame.comment_scroll_y,
-                focused: State.frame.comment_focused,
-                focus_id: 6552n,
-                max_bytes: LISTS_TEXT_LIMIT,
-                max_codepoints: LISTS_TEXT_LIMIT,
-                wrap: true,
-                input: input,
-                disabled: State.frame.sharing_busy || State.frame.sharing_pending || read_only
-            }}
-        />
-    );
+    let edited = TextArea({
+        session: State.frame.session,
+        props: {
+            key: u64(6552n),
+            bounds: bounds,
+            value: State.frame.comment_value,
+            placeholder: placeholder,
+            cursor: State.frame.comment_cursor,
+            anchor: State.frame.comment_anchor,
+            scroll_y: State.frame.comment_scroll_y,
+            focused: State.frame.comment_focused,
+            focus_id: 6552n,
+            max_bytes: LISTS_TEXT_LIMIT,
+            max_codepoints: LISTS_TEXT_LIMIT,
+            wrap: true,
+            input: input,
+            disabled: State.frame.sharing_busy || State.frame.sharing_pending || read_only
+        }
+    });
     if (edited.edit.changed) {
         let start = edited.edit.start;
         let end = edited.edit.end;
@@ -257,29 +256,27 @@ function InviteField(x: s32, y: s32, width: s32, disabled: boolean): boolean {
         Scale(44n)
     );
     let previous_bytes = NewPreviousBytes();
-    CopyCString(State.invite_text, previous_bytes[:]);
-    let previous = TextUntilNul(previous_bytes[:]);
-    let edited = (
-        <ControlledTextField
-            session={State.frame.session}
-            props={{
-                key: u64(6540n),
-                bounds: Bounds(x, y, field_width, Scale(44n)),
-                value: previous,
-                placeholder: ListsLocaleHost("elist_invite_by_name"),
-                cursor: State.invite_cursor,
-                anchor: State.invite_anchor,
-                scroll_x: State.invite_scroll,
-                focused: State.invite_focused,
-                focus_id: 6540n,
-                scale: State.frame.scale,
-                max_bytes: 127n,
-                max_codepoints: 127n,
-                input: State.frame.input,
-                disabled: disabled
-            }}
-        />
-    );
+    CopyCString(State.invite_text, nativeSlice(previous_bytes));
+    let previous = TextUntilNul(nativeSlice(previous_bytes));
+    let edited = ControlledTextField({
+        session: State.frame.session,
+        props: {
+            key: u64(6540n),
+            bounds: Bounds(x, y, field_width, Scale(44n)),
+            value: previous,
+            placeholder: ListsLocaleHost("elist_invite_by_name"),
+            cursor: State.invite_cursor,
+            anchor: State.invite_anchor,
+            scroll_x: State.invite_scroll,
+            focused: State.invite_focused,
+            focus_id: 6540n,
+            scale: State.frame.scale,
+            max_bytes: 127n,
+            max_codepoints: 127n,
+            input: State.frame.input,
+            disabled: disabled
+        }
+    });
     if (edited.edit.changed) {
         let value = previous;
         if (
@@ -293,7 +290,7 @@ function InviteField(x: s32, y: s32, width: s32, disabled: boolean): boolean {
                 edited.edit.end,
                 edited.edit.replacement
             );
-            State.invite_target[0n] = u8(0n);
+            nativeSet(State.invite_target, 0n, u8(0n));
             State.invite_suggestions = true;
         }
     }
@@ -312,27 +309,25 @@ function InviteField(x: s32, y: s32, width: s32, disabled: boolean): boolean {
         State.invite_suggestions = false;
     }
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    key: u64(6541n),
-                    bounds: Bounds(x + width - button_width, row_y, button_width, Scale(44n)),
-                    label: ListsLocaleHost("elist_invite"),
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                    disabled: disabled || State.invite_target[0n] === u8(0n)
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                key: u64(6541n),
+                bounds: Bounds(x + width - button_width, row_y, button_width, Scale(44n)),
+                label: ListsLocaleHost("elist_invite"),
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                disabled: disabled || nativeAt(State.invite_target, 0n) === u8(0n)
+            }
+        })
     ) {
         let access: [string, string, string] = ["owner", "editor", "viewer"];
         Remote(
             LISTS_INVITE,
-            TextUntilNul(State.invite_target[:]),
+            TextUntilNul(nativeSlice(State.invite_target)),
             "",
             "",
-            access[State.invite_role]
+            nativeAt(access, State.invite_role)
         );
         ResetInvite();
         return true;
@@ -356,22 +351,20 @@ function InviteRole(disabled: boolean): void {
         ListsLocaleHost("elist_read_only")
     ];
     let options = NewInviteRoleOptions();
-    for (let index: s32 = 0n; index <= 2n; index += 1n) {
-        options[index] = { key: u64(index + 1n), label: labels[index] };
+    for (let index: s32 = s32(0n); index <= 2n; index += 1n) {
+        nativeSet(options, index, { key: u64(index + 1n), label: nativeAt(labels, index) });
     }
-    let chosen = (
-        <Dropdown
-            session={State.frame.session}
-            props={{
-                key: u64(6543n),
-                bounds: State.invite_role_bounds,
-                selected_index: State.invite_role,
-                disabled: disabled,
-                scale: State.frame.scale
-            }}
-            options={options[:3n]}
-        />
-    );
+    let chosen = Dropdown({
+        session: State.frame.session,
+        props: {
+            key: u64(6543n),
+            bounds: State.invite_role_bounds,
+            selected_index: State.invite_role,
+            disabled: disabled,
+            scale: State.frame.scale
+        },
+        options: nativeSlice(options, 0n, 3n)
+    });
     if (chosen.open) {
         State.settings_menu_open = true;
     }
@@ -388,53 +381,58 @@ function InviteSuggestions(x: s32, y: s32, list_id: string, owner: string): void
     let options = NewInviteSuggestions();
     let names = NewNames();
     let targets = NewTargets();
-    let count: s32 = 0n;
-    for (let index: s32 = 0n; index < State.frame.friend_count; index += 1n) {
+    let count: s32 = s32(0n);
+    for (let index: s32 = s32(0n); index < State.frame.friend_count; index += 1n) {
         let friend = ReadListsSharingRowHost(index, false);
         let id = NewId();
         let alias = NewAlias();
-        CopyCString(friend.id, id[:]);
-        CopyCString(friend.alias, alias[:]);
+        CopyCString(friend.id, nativeSlice(id));
+        CopyCString(friend.alias, nativeSlice(alias));
         if (
-            !ContainsFoldASCII(TextUntilNul(alias[:]), State.invite_text) ||
-            !InvitationAvailable(TextUntilNul(id[:]), list_id, owner)
+            !ContainsFoldASCII(TextUntilNul(nativeSlice(alias)), State.invite_text) ||
+            !InvitationAvailable(TextUntilNul(nativeSlice(id)), list_id, owner)
         ) {
             continue;
         }
-        names[count] = alias;
-        targets[count] = id;
-        options[count] = { id: count + 1n, label: TextUntilNul(names[count][:]) };
+        nativeSet(names, count, alias);
+        nativeSet(targets, count, id);
+        nativeSet(options, count, {
+            id: count + 1n,
+            label: TextUntilNul(nativeSlice(nativeAt(names, count)))
+        });
         count += 1n;
         if (count === 8n) {
             break;
         }
     }
     if (count === 0n) {
-        options[0n] = { id: 1n, label: ListsLocaleHost("elist_no_matches"), disabled: true };
+        nativeSet(options, 0n, {
+            id: 1n,
+            label: ListsLocaleHost("elist_no_matches"),
+            disabled: true
+        });
         count = 1n;
     }
-    let result = (
-        <ContextMenu
-            session={State.frame.session}
-            props={{
-                key: u64(6542n),
-                open: true,
-                x: float32(x),
-                y: float32(y),
-                escape: State.frame.input.escape,
-                scale: State.frame.scale
-            }}
-            items={options[:count]}
-        />
-    );
+    let result = ContextMenu({
+        session: State.frame.session,
+        props: {
+            key: u64(6542n),
+            open: true,
+            x: float32(x),
+            y: float32(y),
+            escape: State.frame.input.escape,
+            scale: State.frame.scale
+        },
+        items: nativeSlice(options, 0n, count)
+    });
     if (
         result.activated_id > 0n &&
         result.activated_id <= count &&
-        !options[result.activated_id - 1n].disabled
+        !nativeAt(options, result.activated_id - 1n).disabled
     ) {
         let selected = result.activated_id - 1n;
-        State.invite_text = Copied(TextUntilNul(names[selected][:]));
-        State.invite_target = targets[selected];
+        State.invite_text = Copied(TextUntilNul(nativeSlice(nativeAt(names, selected))));
+        State.invite_target = nativeAt(targets, selected);
         State.invite_cursor = s32(State.invite_text.count);
         State.invite_anchor = State.invite_cursor;
         State.invite_suggestions = false;
@@ -454,10 +452,10 @@ function MemberRow(
     disabled: boolean
 ): void {
     let target = NewTarget();
-    CopyCString(row.target, target[:]);
+    CopyCString(row.target, nativeSlice(target));
     let name = row.target_alias;
     if (name.count === 0n) {
-        name = row.target[:(row.target.count > 8n ? 8n : row.target.count)];
+        name = nativeSlice(row.target, 0n, row.target.count > 8n ? 8n : row.target.count);
     }
     if (row.target === State.frame.public_id) {
         name = ListsLocaleHost("elist_you");
@@ -519,7 +517,7 @@ function MemberRow(
             session={State.frame.session}
             props={{
                 bounds: bounds,
-                text: labels[role],
+                text: nativeAt(labels, role),
                 align: TextAlign.TextAlignEnd,
                 vertical_align: TextAlign.TextAlignCenter,
                 disabled: true
@@ -535,30 +533,28 @@ function SharingAccessControls(): boolean {
         ListsLocaleHost("elist_read_only")
     ];
     let options = NewAccessOptions();
-    for (let index: s32 = 0n; index <= 2n; index += 1n) {
-        options[index] = { key: u64(index + 1n), label: labels[index] };
+    for (let index: s32 = s32(0n); index <= 2n; index += 1n) {
+        nativeSet(options, index, { key: u64(index + 1n), label: nativeAt(labels, index) });
     }
-    options[3n] = {
+    nativeSet(options, 3n, {
         key: u64(4n),
         label: ListsLocaleHost("elist_remove_access"),
         separator_before: true
-    };
-    for (let index: s32 = 0n; index < SharingAccessControlCount(); index += 1n) {
+    });
+    for (let index: s32 = s32(0n); index < SharingAccessControlCount(); index += 1n) {
         let control = SharingAccessControlAt(index);
-        let target = TextUntilNul(control.target[:]);
-        let changed = (
-            <Dropdown
-                session={State.frame.session}
-                props={{
-                    key: NativeLayout.KeyHash(target),
-                    bounds: control.bounds,
-                    selected_index: control.role,
-                    disabled: control.disabled,
-                    scale: State.frame.scale
-                }}
-                options={options[:4n]}
-            />
-        );
+        let target = TextUntilNul(nativeSlice(control.target));
+        let changed = Dropdown({
+            session: State.frame.session,
+            props: {
+                key: NativeLayout.KeyHash(target),
+                bounds: control.bounds,
+                selected_index: control.role,
+                disabled: control.disabled,
+                scale: State.frame.scale
+            },
+            options: nativeSlice(options, 0n, 4n)
+        });
         if (changed.open) {
             State.settings_menu_open = true;
         }
@@ -567,7 +563,7 @@ function SharingAccessControls(): boolean {
                 Remote(LISTS_REMOVE_ACCESS, target);
             } else {
                 let access: [string, string, string] = ["owner", "editor", "viewer"];
-                Remote(LISTS_SET_ACCESS, target, "", "", access[changed.selected_index]);
+                Remote(LISTS_SET_ACCESS, target, "", "", nativeAt(access, changed.selected_index));
             }
             return true;
         }
@@ -584,8 +580,8 @@ export function InvitationsDialog(): void {
     let detail = ListsLocaleHost(
         State.frame.connected ? "elist_invitations_detail" : "elist_connect"
     );
-    let count: s32 = 0n;
-    for (let index: s32 = 0n; index < State.frame.invitation_count; index += 1n) {
+    let count: s32 = s32(0n);
+    for (let index: s32 = s32(0n); index < State.frame.invitation_count; index += 1n) {
         let row = ReadListsSharingRowHost(index, true);
         if (row.target === State.frame.public_id && row.status === "pending") {
             count += 1n;
@@ -649,20 +645,18 @@ export function InvitationsDialog(): void {
         End(State.frame.session);
         return;
     }
-    let invitations = (
-        <Scroll
-            session={State.frame.session}
-            props={{
-                key: 6512n,
-                bounds: Bounds(x, y, content_width, bottom - y),
-                content_height: count * row_height,
-                scroll_offset: State.sharing_scroll
-            }}
-            children={(scroll: NativeScroll.ScrollResult): void => {
-                InvitationRows(scroll, x, content_width, row_height, disabled);
-            }}
-        />
-    );
+    let invitations = Scroll({
+        session: State.frame.session,
+        props: {
+            key: 6512n,
+            bounds: Bounds(x, y, content_width, bottom - y),
+            content_height: count * row_height,
+            scroll_offset: State.sharing_scroll
+        },
+        children: (scroll: NativeScroll.ScrollResult): void => {
+            InvitationRows(scroll, x, content_width, row_height, disabled);
+        }
+    });
     State.sharing_scroll = invitations.scroll_offset;
     End(State.frame.session);
 }
@@ -677,7 +671,7 @@ function InvitationRows(
     State.sharing_scroll = scroll.scroll_offset;
     let row_y = s32(scroll.content.y);
     let changed: boolean = false;
-    for (let index: s32 = 0n; index < State.frame.invitation_count; index += 1n) {
+    for (let index: s32 = s32(0n); index < State.frame.invitation_count; index += 1n) {
         let row = ReadListsSharingRowHost(index, true);
         if (row.target !== State.frame.public_id || row.status !== "pending") {
             continue;
@@ -731,21 +725,19 @@ export function CustomTaskDialog(): void {
     let x = s32(dialog.layout.content.x);
     let y = s32(dialog.layout.content.y);
     let content_width = s32(dialog.layout.content.width);
-    let fields = (
-        <Scroll
-            session={State.frame.session}
-            props={{
-                key: 6555n,
-                bounds: Bounds(x, y, content_width, s32(dialog.layout.content.height)),
-                content_height: Scale(350n),
-                scroll_offset: State.custom_task_scroll,
-                scale: State.frame.scale
-            }}
-            children={(scroll: NativeScroll.ScrollResult): void => {
-                CustomTaskFields(scroll, content_width, blocked);
-            }}
-        />
-    );
+    let fields = Scroll({
+        session: State.frame.session,
+        props: {
+            key: 6555n,
+            bounds: Bounds(x, y, content_width, s32(dialog.layout.content.height)),
+            content_height: Scale(350n),
+            scroll_offset: State.custom_task_scroll,
+            scale: State.frame.scale
+        },
+        children: (scroll: NativeScroll.ScrollResult): void => {
+            CustomTaskFields(scroll, content_width, blocked);
+        }
+    });
     if (!fields.opened) {
         State.custom_task_scroll = fields.scroll_offset;
     }
@@ -796,24 +788,22 @@ function CustomTaskFields(
         }}
     />;
     let options = NewPriorityOptions();
-    options[0n].label = ListsLocaleHost("profile_none_label");
+    nativeAt(options, 0n).label = ListsLocaleHost("profile_none_label");
     let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-    for (let index: s32 = 1n; index <= 26n; index += 1n) {
-        options[index].label = alphabet[index - 1n:index];
+    for (let index: s32 = s32(1n); index <= 26n; index += 1n) {
+        nativeAt(options, index).label = nativeSlice(alphabet, index - 1n, index);
     }
-    let chosen = (
-        <Dropdown
-            session={State.frame.session}
-            props={{
-                key: u64(6551n),
-                bounds: Bounds(x + content_width - Scale(124n), y, Scale(124n), Scale(44n)),
-                selected_index: State.frame.task_priority,
-                disabled: blocked,
-                scale: State.frame.scale
-            }}
-            options={options[:27n]}
-        />
-    );
+    let chosen = Dropdown({
+        session: State.frame.session,
+        props: {
+            key: u64(6551n),
+            bounds: Bounds(x + content_width - Scale(124n), y, Scale(124n), Scale(44n)),
+            selected_index: State.frame.task_priority,
+            disabled: blocked,
+            scale: State.frame.scale
+        },
+        options: nativeSlice(options, 0n, 27n)
+    });
     if (chosen.changed) {
         State.frame.task_priority = chosen.selected_index;
     }
@@ -828,36 +818,32 @@ function CustomTaskFields(
     />;
     y += Scale(32n);
     let button_width = (content_width - Scale(8n)) / 2n;
-    let save = (
-        <Button
-            session={State.frame.session}
-            props={{
-                key: u64(6553n),
-                bounds: Bounds(x, y, button_width, Scale(44n)),
-                label: ListsLocaleHost("save_button"),
-                tone: ButtonTone.ButtonToneAccent,
-                emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                disabled:
-                    ListsTitleWithoutPriority(State.frame.value).count === 0n ||
-                    blocked ||
-                    !ListsTitlePriorityFits(
-                        State.frame.value,
-                        State.frame.task_priority,
-                        LISTS_TEXT_LIMIT
-                    )
-            }}
-        />
-    );
-    let cancel = (
-        <Button
-            session={State.frame.session}
-            props={{
-                key: u64(6554n),
-                bounds: Bounds(x + button_width + Scale(8n), y, button_width, Scale(44n)),
-                label: ListsLocaleHost("cancel_button")
-            }}
-        />
-    );
+    let save = Button({
+        session: State.frame.session,
+        props: {
+            key: u64(6553n),
+            bounds: Bounds(x, y, button_width, Scale(44n)),
+            label: ListsLocaleHost("save_button"),
+            tone: ButtonTone.ButtonToneAccent,
+            emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+            disabled:
+                ListsTitleWithoutPriority(State.frame.value).count === 0n ||
+                blocked ||
+                !ListsTitlePriorityFits(
+                    State.frame.value,
+                    State.frame.task_priority,
+                    LISTS_TEXT_LIMIT
+                )
+        }
+    });
+    let cancel = Button({
+        session: State.frame.session,
+        props: {
+            key: u64(6554n),
+            bounds: Bounds(x + button_width + Scale(8n), y, button_width, Scale(44n)),
+            label: ListsLocaleHost("cancel_button")
+        }
+    });
     if (task_escaped || description_escaped || cancel) {
         CloseCustomTask();
     } else if (save || task_committed) {
@@ -908,37 +894,28 @@ function InvitationRow(
         }}
     />;
     let button_width = (width - Scale(12n)) / 2n;
-    let accept = (
-        <Button
-            session={State.frame.session}
-            props={{
-                key: u64(7600n + index * 2n),
-                bounds: Bounds(x, y + Scale(92n), button_width, Scale(44n)),
-                label: ListsLocaleHost("profile_friend_accept_button"),
-                tone: ButtonTone.ButtonToneAccent,
-                emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                disabled: disabled || State.state.list_count >= 32n
-            }}
-        />
-    );
-    let decline = (
-        <Button
-            session={State.frame.session}
-            props={{
-                key: u64(7601n + index * 2n),
-                bounds: Bounds(
-                    x + button_width + Scale(12n),
-                    y + Scale(92n),
-                    button_width,
-                    Scale(44n)
-                ),
-                label: ListsLocaleHost("profile_friend_decline_button"),
-                disabled: disabled,
-                tone: ButtonTone.ButtonToneNeutral,
-                emphasis: ButtonEmphasis.ButtonEmphasisGhost
-            }}
-        />
-    );
+    let accept = Button({
+        session: State.frame.session,
+        props: {
+            key: u64(7600n + index * 2n),
+            bounds: Bounds(x, y + Scale(92n), button_width, Scale(44n)),
+            label: ListsLocaleHost("profile_friend_accept_button"),
+            tone: ButtonTone.ButtonToneAccent,
+            emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+            disabled: disabled || State.state.list_count >= 32n
+        }
+    });
+    let decline = Button({
+        session: State.frame.session,
+        props: {
+            key: u64(7601n + index * 2n),
+            bounds: Bounds(x + button_width + Scale(12n), y + Scale(92n), button_width, Scale(44n)),
+            label: ListsLocaleHost("profile_friend_decline_button"),
+            disabled: disabled,
+            tone: ButtonTone.ButtonToneNeutral,
+            emphasis: ButtonEmphasis.ButtonEmphasisGhost
+        }
+    });
     if (accept || decline) {
         Remote(accept ? LISTS_ACCEPT : LISTS_DECLINE, "", row.id, row.list_id);
         return true;
@@ -955,27 +932,31 @@ function ListChips(x: s32, y: s32, width: s32, blocked: boolean): ListChipsResul
     let chip_x = NewChipX();
     let chip_row = NewChipRow();
     let chip_width = NewChipWidth();
-    let row: s32 = 0n;
-    let row_x: s32 = 0n;
-    for (let index: s32 = 0n; index <= State.state.list_count; index += 1n) {
-        chip_width[index] = chip_height;
+    let row: s32 = s32(0n);
+    let row_x: s32 = s32(0n);
+    for (let index: s32 = s32(0n); index <= State.state.list_count; index += 1n) {
+        nativeSet(chip_width, index, chip_height);
         if (index < State.state.list_count) {
             let label = ReadListsRowHost(index, false).title;
-            chip_width[index] = TextWidth(State.frame.session, { text: label }) + padding * 2n;
+            nativeSet(
+                chip_width,
+                index,
+                TextWidth(State.frame.session, { text: label }) + padding * 2n
+            );
             if (index === State.state.selected_list) {
-                chip_width[index] = chip_width[index] + Scale(26n);
+                nativeSet(chip_width, index, nativeAt(chip_width, index) + Scale(26n));
             }
         }
-        if (chip_width[index] > width) {
-            chip_width[index] = width;
+        if (nativeAt(chip_width, index) > width) {
+            nativeSet(chip_width, index, width);
         }
-        if (row_x > 0n && row_x + chip_width[index] > width) {
+        if (row_x > 0n && row_x + nativeAt(chip_width, index) > width) {
             row += 1n;
             row_x = 0n;
         }
-        chip_x[index] = row_x;
-        chip_row[index] = row;
-        row_x += chip_width[index] + gap;
+        nativeSet(chip_x, index, row_x);
+        nativeSet(chip_row, index, row);
+        row_x += nativeAt(chip_width, index) + gap;
     }
     let rows = row + 1n;
     let shown_rows = rows > 3n ? 3n : rows;
@@ -990,30 +971,28 @@ function ListChips(x: s32, y: s32, width: s32, blocked: boolean): ListChipsResul
     if (!scroll.opened) {
         return result;
     }
-    for (let index: s32 = 0n; index <= State.state.list_count; index += 1n) {
+    for (let index: s32 = s32(0n); index <= State.state.list_count; index += 1n) {
         let bounds = Bounds(
-            x + chip_x[index],
-            s32(scroll.content.y) + chip_row[index] * (chip_height + gap),
-            chip_width[index],
+            x + nativeAt(chip_x, index),
+            s32(scroll.content.y) + nativeAt(chip_row, index) * (chip_height + gap),
+            nativeAt(chip_width, index),
             chip_height
         );
         if (index === State.state.list_count) {
             if (
-                (
-                    <Button
-                        session={State.frame.session}
-                        props={{
-                            key: u64(6505n),
-                            bounds: bounds,
-                            label: ListsLocaleHost("elist_new_list"),
-                            icon_type: s32(IconType.IconPlus),
-                            icon_only: true,
-                            pill: true,
-                            emphasis: ButtonEmphasis.ButtonEmphasisOutline,
-                            disabled: blocked || State.state.list_count >= 32n
-                        }}
-                    />
-                )
+                Button({
+                    session: State.frame.session,
+                    props: {
+                        key: u64(6505n),
+                        bounds: bounds,
+                        label: ListsLocaleHost("elist_new_list"),
+                        icon_type: s32(IconType.IconPlus),
+                        icon_only: true,
+                        pill: true,
+                        emphasis: ButtonEmphasis.ButtonEmphasisOutline,
+                        disabled: blocked || State.state.list_count >= 32n
+                    }
+                })
             ) {
                 BeginInput(-2n, "");
                 State.frame.panel = 0n;
@@ -1024,24 +1003,22 @@ function ListChips(x: s32, y: s32, width: s32, blocked: boolean): ListChipsResul
         let chosen = index === State.state.selected_list;
         let title = ReadListsRowHost(index, false).title;
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        key: u64(6800n + index),
-                        bounds: bounds,
-                        label: title,
-                        pill: true,
-                        selected: chosen,
-                        icon_shape: chosen ? NativeSettingsIcon.Shape : "",
-                        icon_placement: IconPlacement.IconPlacementTrailing,
-                        tone: chosen ? ButtonTone.ButtonToneAccent : ButtonTone.ButtonToneNeutral,
-                        emphasis: chosen
-                            ? ButtonEmphasis.ButtonEmphasisFilled
-                            : ButtonEmphasis.ButtonEmphasisOutline
-                    }}
-                />
-            )
+            Button({
+                session: State.frame.session,
+                props: {
+                    key: u64(6800n + index),
+                    bounds: bounds,
+                    label: title,
+                    pill: true,
+                    selected: chosen,
+                    icon_shape: chosen ? NativeSettingsIcon.Shape : "",
+                    icon_placement: IconPlacement.IconPlacementTrailing,
+                    tone: chosen ? ButtonTone.ButtonToneAccent : ButtonTone.ButtonToneNeutral,
+                    emphasis: chosen
+                        ? ButtonEmphasis.ButtonEmphasisFilled
+                        : ButtonEmphasis.ButtonEmphasisOutline
+                }
+            })
         ) {
             if (chosen) {
                 OpenSettings(Copied(title));
@@ -1087,19 +1064,17 @@ export function ListSettingsPage(): void {
         return;
     }
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    key: u64(6550n),
-                    bounds: Bounds(x, y, Scale(44n), Scale(44n)),
-                    label: ListsLocaleHost("back_button"),
-                    icon_shape: NativeBackIcon.Shape,
-                    icon_only: true,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                key: u64(6550n),
+                bounds: Bounds(x, y, Scale(44n), Scale(44n)),
+                label: ListsLocaleHost("back_button"),
+                icon_shape: NativeBackIcon.Shape,
+                icon_only: true,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         CloseSettings();
         return;
@@ -1118,8 +1093,8 @@ export function ListSettingsPage(): void {
         BeginInput(-3n, title);
         State.frame.focused = false;
     }
-    let members: s32 = 1n;
-    for (let index: s32 = 0n; index < State.frame.invitation_count; index += 1n) {
+    let members: s32 = s32(1n);
+    for (let index: s32 = s32(0n); index < State.frame.invitation_count; index += 1n) {
         if (SharingMemberShown(ReadListsSharingRowHost(index, true), list_id)) {
             members += 1n;
         }
@@ -1166,19 +1141,17 @@ export function ListSettingsPage(): void {
     let renamed =
         State.frame.value.count > 0n && State.frame.value !== title && !read_only && !blocked;
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    key: u64(6551n),
-                    bounds: Bounds(x + inner - Scale(88n), cy, Scale(88n), Scale(44n)),
-                    label: ListsLocaleHost("save_button"),
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                    disabled: !renamed
-                }}
-            />
-        ) ||
+        Button({
+            session: State.frame.session,
+            props: {
+                key: u64(6551n),
+                bounds: Bounds(x + inner - Scale(88n), cy, Scale(88n), Scale(44n)),
+                label: ListsLocaleHost("save_button"),
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                disabled: !renamed
+            }
+        }) ||
         (committed && renamed)
     ) {
         Mutation(LISTS_COMMIT, -1n);
@@ -1227,8 +1200,8 @@ export function ListSettingsPage(): void {
             blocked
         );
         cy += Scale(MEMBER_ROW);
-        let place: s32 = 1n;
-        for (let index: s32 = 0n; index < State.frame.invitation_count; index += 1n) {
+        let place: s32 = s32(1n);
+        for (let index: s32 = s32(0n); index < State.frame.invitation_count; index += 1n) {
             let person = ReadListsSharingRowHost(index, true);
             if (!SharingMemberShown(person, list_id)) {
                 continue;
@@ -1249,20 +1222,18 @@ export function ListSettingsPage(): void {
     }
     if (owns && !State.delete_confirm) {
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        key: u64(6515n),
-                        bounds: Bounds(x, cy, inner, Scale(44n)),
-                        label: ListsLocaleHost("elist_delete_list"),
-                        icon_shape: TRASH_ICON,
-                        tone: ButtonTone.ButtonToneDanger,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                        disabled: blocked
-                    }}
-                />
-            )
+            Button({
+                session: State.frame.session,
+                props: {
+                    key: u64(6515n),
+                    bounds: Bounds(x, cy, inner, Scale(44n)),
+                    label: ListsLocaleHost("elist_delete_list"),
+                    icon_shape: TRASH_ICON,
+                    tone: ButtonTone.ButtonToneDanger,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                    disabled: blocked
+                }
+            })
         ) {
             State.delete_confirm = true;
         }
@@ -1295,38 +1266,34 @@ export function ListSettingsPage(): void {
         />;
         let button_width = (inner - Scale(44n)) / 2n;
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        key: u64(6514n),
-                        bounds: Bounds(x + Scale(16n), cy + Scale(100n), button_width, Scale(44n)),
-                        label: ListsLocaleHost("cancel_button")
-                    }}
-                />
-            )
+            Button({
+                session: State.frame.session,
+                props: {
+                    key: u64(6514n),
+                    bounds: Bounds(x + Scale(16n), cy + Scale(100n), button_width, Scale(44n)),
+                    label: ListsLocaleHost("cancel_button")
+                }
+            })
         ) {
             State.delete_confirm = false;
         }
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        key: u64(6516n),
-                        bounds: Bounds(
-                            x + Scale(28n) + button_width,
-                            cy + Scale(100n),
-                            button_width,
-                            Scale(44n)
-                        ),
-                        label: ListsLocaleHost("elist_delete_list"),
-                        tone: ButtonTone.ButtonToneDanger,
-                        emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                        disabled: blocked
-                    }}
-                />
-            )
+            Button({
+                session: State.frame.session,
+                props: {
+                    key: u64(6516n),
+                    bounds: Bounds(
+                        x + Scale(28n) + button_width,
+                        cy + Scale(100n),
+                        button_width,
+                        Scale(44n)
+                    ),
+                    label: ListsLocaleHost("elist_delete_list"),
+                    tone: ButtonTone.ButtonToneDanger,
+                    emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                    disabled: blocked
+                }
+            })
         ) {
             CloseSettings();
             Mutation(LISTS_DELETE_LIST, -1n);
@@ -1355,31 +1322,29 @@ function SharedLine(current: ListsUiRow, x: s32, y: s32, width: s32): boolean {
     let size = Scale(32n);
     let step = Scale(22n);
     let shown = shared.count;
-    for (let place: s32 = 0n; place < shown; place += s32(1)) {
+    for (let place: s32 = s32(0n); place < shown; place += s32(1)) {
         Avatar(
             u64(7950n + place),
-            shared.names[place],
+            nativeAt(shared.names, place),
             place,
             x + place * step,
             y + Scale(4n),
             size,
-            shared.icons[place]
+            nativeAt(shared.icons, place)
         );
     }
     let text_x = x + (shown - 1n) * step + size + Scale(10n);
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    key: u64(6508n),
-                    bounds: Bounds(text_x, y, x + width - text_x, Scale(40n)),
-                    label: shared.label,
-                    content_alignment: ContentAlignment.ContentAlignmentStart,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                key: u64(6508n),
+                bounds: Bounds(text_x, y, x + width - text_x, Scale(40n)),
+                label: shared.label,
+                content_alignment: ContentAlignment.ContentAlignmentStart,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         OpenSettings(shared.title);
         return true;
@@ -1438,16 +1403,14 @@ export function ListsPage(): void {
         />;
         if (State.frame.sharing_pending && !State.frame.sharing_busy) {
             if (
-                (
-                    <Button
-                        session={State.frame.session}
-                        props={{
-                            key: u64(6513n),
-                            bounds: Bounds(x + width - Scale(96n), y, Scale(96n), Scale(44n)),
-                            label: ListsLocaleHost("retry_button")
-                        }}
-                    />
-                )
+                Button({
+                    session: State.frame.session,
+                    props: {
+                        key: u64(6513n),
+                        bounds: Bounds(x + width - Scale(96n), y, Scale(96n), Scale(44n)),
+                        label: ListsLocaleHost("retry_button")
+                    }
+                })
             ) {
                 State.state.action = LISTS_RETRY;
                 State.state.remote = true;
@@ -1475,20 +1438,18 @@ export function ListsPage(): void {
     if (!editing_list) {
         if (State.frame.pending_count_text !== "0" && State.frame.pending_count_text !== "") {
             if (
-                (
-                    <Button
-                        session={State.frame.session}
-                        props={{
-                            key: u64(6509n),
-                            bounds: Bounds(x, y, width, Scale(44n)),
-                            label: ListPersonLabel(
-                                ListsLocaleHost("elist_invitations"),
-                                State.frame.pending_count_text
-                            ),
-                            tone: ButtonTone.ButtonToneAccent
-                        }}
-                    />
-                )
+                Button({
+                    session: State.frame.session,
+                    props: {
+                        key: u64(6509n),
+                        bounds: Bounds(x, y, width, Scale(44n)),
+                        label: ListPersonLabel(
+                            ListsLocaleHost("elist_invitations"),
+                            State.frame.pending_count_text
+                        ),
+                        tone: ButtonTone.ButtonToneAccent
+                    }
+                })
             ) {
                 State.frame.panel = 2n;
                 State.frame.focused = false;
@@ -1516,40 +1477,36 @@ export function ListsPage(): void {
         );
         let button_width = (width - Scale(8n)) / 2n;
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        key: u64(6506n),
-                        label: ListsLocaleHost("elist_create_list"),
-                        bounds: Bounds(x, y + Scale(56n), button_width, Scale(44n)),
-                        tone: ButtonTone.ButtonToneAccent,
-                        emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                        disabled: State.frame.value.count === 0n || blocked
-                    }}
-                />
-            ) ||
+            Button({
+                session: State.frame.session,
+                props: {
+                    key: u64(6506n),
+                    label: ListsLocaleHost("elist_create_list"),
+                    bounds: Bounds(x, y + Scale(56n), button_width, Scale(44n)),
+                    tone: ButtonTone.ButtonToneAccent,
+                    emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                    disabled: State.frame.value.count === 0n || blocked
+                }
+            }) ||
             (committed && !blocked)
         ) {
             Mutation(LISTS_COMMIT, -1n);
         }
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        key: u64(6514n),
-                        label: ListsLocaleHost("cancel_button"),
-                        bounds: Bounds(
-                            x + button_width + Scale(8n),
-                            y + Scale(56n),
-                            button_width,
-                            Scale(44n)
-                        ),
-                        disabled: blocked
-                    }}
-                />
-            )
+            Button({
+                session: State.frame.session,
+                props: {
+                    key: u64(6514n),
+                    label: ListsLocaleHost("cancel_button"),
+                    bounds: Bounds(
+                        x + button_width + Scale(8n),
+                        y + Scale(56n),
+                        button_width,
+                        Scale(44n)
+                    ),
+                    disabled: blocked
+                }
+            })
         ) {
             State.state.editing_item = -1n;
             State.state.reset_input = true;
@@ -1611,45 +1568,41 @@ export function ListsPage(): void {
             blocked
         );
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        key: u64(6507n),
-                        label: ListsLocaleHost("elist_add_item"),
-                        bounds: Bounds(x + width - Scale(176n), y, Scale(84n), Scale(44n)),
-                        tone: ButtonTone.ButtonToneAccent,
-                        emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                        disabled: State.frame.value.count === 0n || blocked
-                    }}
-                />
-            ) ||
+            Button({
+                session: State.frame.session,
+                props: {
+                    key: u64(6507n),
+                    label: ListsLocaleHost("elist_add_item"),
+                    bounds: Bounds(x + width - Scale(176n), y, Scale(84n), Scale(44n)),
+                    tone: ButtonTone.ButtonToneAccent,
+                    emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                    disabled: State.frame.value.count === 0n || blocked
+                }
+            }) ||
             (committed && !blocked)
         ) {
             Mutation(LISTS_COMMIT, -1n);
             return;
         }
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        key: u64(6515n),
-                        label: ListsLocaleHost("elist_custom_button"),
-                        bounds: Bounds(x + width - Scale(84n), y, Scale(84n), Scale(44n))
-                    }}
-                />
-            )
+            Button({
+                session: State.frame.session,
+                props: {
+                    key: u64(6515n),
+                    label: ListsLocaleHost("elist_custom_button"),
+                    bounds: Bounds(x + width - Scale(84n), y, Scale(84n), Scale(44n))
+                }
+            })
         ) {
             BeginCustomTask(-1n, "", "");
         }
     }
     y += Scale(56n);
     let open_order = NewOpenOrder();
-    let open_count: s32 = 0n;
+    let open_count: s32 = s32(0n);
     let finished_order = NewFinishedOrder();
-    let finished_count: s32 = 0n;
-    for (let index: s32 = 0n; index < State.state.item_count; index += 1n) {
+    let finished_count: s32 = s32(0n);
+    for (let index: s32 = s32(0n); index < State.state.item_count; index += 1n) {
         let row = ReadListsRowHost(index, true);
         if (row.parent_id !== current.id) {
             continue;
@@ -1659,10 +1612,10 @@ export function ListsPage(): void {
             row.id === State.state.completing_id &&
             State.state.now < State.state.completing_until;
         if (row.done === 0n || leaving) {
-            open_order[open_count] = index;
+            nativeSet(open_order, open_count, index);
             open_count += 1n;
         } else {
-            finished_order[finished_count] = index;
+            nativeSet(finished_order, finished_count, index);
             finished_count += 1n;
         }
     }
@@ -1680,19 +1633,17 @@ export function ListsPage(): void {
     }
     if (undo_shown) {
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        key: u64(6517n),
-                        label: ListsLocaleHost("elist_undo"),
-                        bounds: Bounds(x, y + list_height + Scale(8n), width, Scale(44n)),
-                        tone: ButtonTone.ButtonToneAccent,
-                        emphasis: ButtonEmphasis.ButtonEmphasisGhost,
-                        disabled: blocked
-                    }}
-                />
-            )
+            Button({
+                session: State.frame.session,
+                props: {
+                    key: u64(6517n),
+                    label: ListsLocaleHost("elist_undo"),
+                    bounds: Bounds(x, y + list_height + Scale(8n), width, Scale(44n)),
+                    tone: ButtonTone.ButtonToneAccent,
+                    emphasis: ButtonEmphasis.ButtonEmphasisGhost,
+                    disabled: blocked
+                }
+            })
         ) {
             State.state.action = LISTS_RESTORE_ITEM;
             State.state.id = State.undo_item.id;
@@ -1738,7 +1689,7 @@ export function ListsPage(): void {
         State.state.show_completed = State.state.show_completed !== 0n ? 0n : 1n;
         State.frame.scroll = 0n;
     }
-    let pull_offset: s32 = 0n;
+    let pull_offset: s32 = s32(0n);
     if (pull.dragging !== 0n && pull.delta.y > 0.0) {
         pull_offset = s32(pull.delta.y / 2.0);
         if (pull_offset > Scale(64n)) {
@@ -1772,11 +1723,15 @@ export function ListsPage(): void {
     if (scroll.opened) {
         let row_y = s32(scroll.content.y);
         let row_right = x + width - Scale(14n);
-        for (let position: s32 = 0n; position < shown_finished + open_count; position += s32(1)) {
+        for (
+            let position: s32 = s32(0n);
+            position < shown_finished + open_count;
+            position += s32(1)
+        ) {
             let index =
                 position < shown_finished
-                    ? finished_order[position]
-                    : open_order[position - shown_finished];
+                    ? nativeAt(finished_order, position)
+                    : nativeAt(open_order, position - shown_finished);
             let visible_row =
                 row_y + Scale(64n) > s32(scroll.viewport.y) &&
                 row_y < s32(scroll.viewport.y + scroll.viewport.height);
@@ -1795,21 +1750,19 @@ export function ListsPage(): void {
                     return;
                 }
                 if (
-                    (
-                        <Button
-                            session={State.frame.session}
-                            props={{
-                                key: u64(6511n),
-                                bounds: Bounds(check_x, row_y + Scale(10n), Scale(44n), Scale(44n)),
-                                label: ListsLocaleHost("save_button"),
-                                icon_type: s32(IconType.IconCheck),
-                                icon_only: true,
-                                tone: ButtonTone.ButtonToneAccent,
-                                emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                                disabled: State.frame.value.count === 0n || blocked
-                            }}
-                        />
-                    ) ||
+                    Button({
+                        session: State.frame.session,
+                        props: {
+                            key: u64(6511n),
+                            bounds: Bounds(check_x, row_y + Scale(10n), Scale(44n), Scale(44n)),
+                            label: ListsLocaleHost("save_button"),
+                            icon_type: s32(IconType.IconCheck),
+                            icon_only: true,
+                            tone: ButtonTone.ButtonToneAccent,
+                            emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                            disabled: State.frame.value.count === 0n || blocked
+                        }
+                    }) ||
                     (committed && !blocked)
                 ) {
                     Mutation(LISTS_COMMIT, -1n);
@@ -1818,51 +1771,47 @@ export function ListsPage(): void {
                 }
             } else if (visible_row) {
                 let row = ReadListsRowHost(index, true);
-                let swiped = (
-                    <SwipeRow
-                        widget={{
-                            session: State.frame.session,
-                            props: {
-                                key: u64(7000n + index * 4n),
-                                bounds: Bounds(x, row_y, row_right - x, Scale(64n)),
-                                label: row.title,
-                                now: State.state.now,
-                                scale: State.frame.scale,
-                                start: CompleteSwipe(),
-                                end: DeleteSwipe(),
-                                threshold: 0.5,
-                                end_threshold: 0.35,
-                                long_threshold: 1.0,
-                                start_width: float32(Scale(176n)),
-                                long_start: EditSwipe(),
-                                disabled: blocked
-                            }
-                        }}
-                        state={State.row_swipe}
-                    />
-                );
+                let swiped = SwipeRow({
+                    widget: {
+                        session: State.frame.session,
+                        props: {
+                            key: u64(7000n + index * 4n),
+                            bounds: Bounds(x, row_y, row_right - x, Scale(64n)),
+                            label: row.title,
+                            now: State.state.now,
+                            scale: State.frame.scale,
+                            start: CompleteSwipe(),
+                            end: DeleteSwipe(),
+                            threshold: 0.5,
+                            end_threshold: 0.35,
+                            long_threshold: 1.0,
+                            start_width: float32(Scale(176n)),
+                            long_start: EditSwipe(),
+                            disabled: blocked
+                        }
+                    },
+                    state: State.row_swipe
+                });
                 State.row_swipe = swiped.state;
                 if (
-                    (
-                        <Button
-                            session={State.frame.session}
-                            props={{
-                                key: u64(8200n + index),
-                                bounds: Bounds(
-                                    row_right - Scale(44n),
-                                    row_y + Scale(10n),
-                                    Scale(44n),
-                                    Scale(44n)
-                                ),
-                                label: ListsLocaleHost("elist_edit_task"),
-                                icon_type: s32(IconType.IconEdit),
-                                icon_only: true,
-                                tone: ButtonTone.ButtonToneNeutral,
-                                emphasis: ButtonEmphasis.ButtonEmphasisGhost,
-                                disabled: blocked
-                            }}
-                        />
-                    )
+                    Button({
+                        session: State.frame.session,
+                        props: {
+                            key: u64(8200n + index),
+                            bounds: Bounds(
+                                row_right - Scale(44n),
+                                row_y + Scale(10n),
+                                Scale(44n),
+                                Scale(44n)
+                            ),
+                            label: ListsLocaleHost("elist_edit_task"),
+                            icon_type: s32(IconType.IconEdit),
+                            icon_only: true,
+                            tone: ButtonTone.ButtonToneNeutral,
+                            emphasis: ButtonEmphasis.ButtonEmphasisGhost,
+                            disabled: blocked
+                        }
+                    })
                 ) {
                     BeginCustomTask(index, row.title, row.comment);
                     End(State.frame.session);
@@ -1946,20 +1895,18 @@ function RowContextMenu(blocked: boolean): void {
         { id: LISTS_ROW_MENU_CHECK, label: ListsLocaleHost("elist_check_task"), disabled: blocked },
         { id: LISTS_ROW_MENU_EDIT, label: ListsLocaleHost("elist_edit_task"), disabled: blocked }
     ];
-    let menu = (
-        <ContextMenu
-            session={State.frame.session}
-            props={{
-                key: u64(8500n),
-                open: true,
-                x: State.row_menu_x,
-                y: State.row_menu_y,
-                escape: State.frame.input.escape,
-                scale: State.frame.scale
-            }}
-            items={items[:]}
-        />
-    );
+    let menu = ContextMenu({
+        session: State.frame.session,
+        props: {
+            key: u64(8500n),
+            open: true,
+            x: State.row_menu_x,
+            y: State.row_menu_y,
+            escape: State.frame.input.escape,
+            scale: State.frame.scale
+        },
+        items: nativeSlice(items)
+    });
     if (!menu.open) {
         State.row_menu_open = false;
     }

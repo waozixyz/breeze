@@ -35,7 +35,7 @@ import { practice_label } from "practice_registry";
 import { AppTextFromCString, FormatArg, FormatTemplate, FrameTextHold } from "text_buffers";
 
 export function break_overlay_draw_bar(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     y: s32,
     w: s32,
@@ -74,7 +74,7 @@ export function break_overlay_draw_bar(
 }
 
 export function break_overlay_draw_practice_chips(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     w: s32,
     h: s32
 ): void {
@@ -84,8 +84,8 @@ export function break_overlay_draw_practice_chips(
         app,
         w,
         h,
-        &rects[0n],
-        &ids[0n]
+        nativeRef(nativeAt(rects, 0n)),
+        nativeRef(nativeAt(ids, 0n))
     );
     if (chips <= 0n) {
         return;
@@ -93,9 +93,9 @@ export function break_overlay_draw_practice_chips(
     let chip_fill = DarkenColor(StyleTokenColor("canvas"), 18n);
     let chip_border = StyleTokenColor("border");
     {
-        let i: s32 = 0n;
+        let i: s32 = s32(0n);
         while (i < chips) {
-            let r: Rectangle = rects[i];
+            let r: Rectangle = nativeAt(rects, i);
             <Box
                 session={app.ui.session}
                 props={{
@@ -106,9 +106,9 @@ export function break_overlay_draw_practice_chips(
                 }}
             />;
             let label: string =
-                ids[i] === BREAK_OVERLAY_HABITS_CHIP_ID
+                nativeAt(ids, i) === BREAK_OVERLAY_HABITS_CHIP_ID
                     ? LocaleText("tab_habits")
-                    : practice_label(ids[i]);
+                    : practice_label(nativeAt(ids, i));
             <Text
                 session={CurrentApp().ui.session}
                 props={{
@@ -125,7 +125,7 @@ export function break_overlay_draw_practice_chips(
     }
 }
 
-export function break_overlay_draw_sized(app: *InnerBreeze, w: s32, h: s32): void {
+export function break_overlay_draw_sized(app: NativeRef<InnerBreeze>, w: s32, h: s32): void {
     if (!NativePresent(app)) {
         return;
     }
@@ -133,7 +133,7 @@ export function break_overlay_draw_sized(app: *InnerBreeze, w: s32, h: s32): voi
     if (t < 0n) {
         return;
     }
-    let timer = &app.breaks.timers[t];
+    let timer = nativeRef(nativeAt(app.breaks.timers, t));
     let panel_w = (w * 72n) / 100n;
     if (panel_w > AppScale(560n)) {
         panel_w = AppScale(560n);
@@ -214,18 +214,21 @@ export function break_overlay_draw_sized(app: *InnerBreeze, w: s32, h: s32): voi
         let time_label = BreakOverlayNewTimeLabel();
         let time_args: [FormatArg] = [
             {
-                text: AppTextFromCString(&time_text.bytes[0n], time_text.count + 1n),
+                text: AppTextFromCString(
+                    nativeRef(nativeAt(time_text.bytes, 0n)),
+                    time_text.count + 1n
+                ),
                 is_text: true
             }
         ];
         FormatTemplate(
             LocaleText("break_time_remaining"),
-            time_args[:],
-            time_label[:]
+            nativeSlice(time_args),
+            nativeSlice(time_label)
         );
         let remaining_label = FrameTextHold(
-            &app.ui.frame_text,
-            AppTextFromCString(&time_label[0n], s32(time_label.count))
+            nativeRef(app.ui.frame_text),
+            AppTextFromCString(nativeRef(nativeAt(time_label, 0n)), s32(time_label.count))
         );
         let reminder_bounds: Rectangle = {
             x: float32(panel_x + AppScale(24n)),
@@ -318,12 +321,12 @@ export function break_overlay_draw_sized(app: *InnerBreeze, w: s32, h: s32): voi
         LocaleText("break_rest_now_button")
     ];
     for (let label_index = s32(0); label_index <= 2n; label_index += s32(1)) {
-        let label_w = AppTextWidth(labels[label_index], AppFontSize()) + AppScale(32n);
+        let label_w = AppTextWidth(nativeAt(labels, label_index), AppFontSize()) + AppScale(32n);
         if (label_w > button_w) {
             button_w = label_w;
         }
     }
-    let count: s32 = 0n;
+    let count: s32 = s32(0n);
     if (timer.show_postpone !== 0n) {
         count = count + 1n;
     }
@@ -342,12 +345,12 @@ export function break_overlay_draw_sized(app: *InnerBreeze, w: s32, h: s32): voi
             let lock_args: [FormatArg] = [{ number: timer.lock_buttons_s }];
             FormatTemplate(
                 LocaleText("break_lock_note"),
-                lock_args[:],
-                locked_label[:]
+                nativeSlice(lock_args),
+                nativeSlice(locked_label)
             );
             let lock_text = FrameTextHold(
-                &app.ui.frame_text,
-                AppTextFromCString(&locked_label[0n], s32(locked_label.count))
+                nativeRef(app.ui.frame_text),
+                AppTextFromCString(nativeRef(nativeAt(locked_label, 0n)), s32(locked_label.count))
             );
             <Text
                 session={CurrentApp().ui.session}
@@ -366,23 +369,21 @@ export function break_overlay_draw_sized(app: *InnerBreeze, w: s32, h: s32): voi
             />;
         } else {
             if (
-                (
-                    <Button
-                        session={CurrentApp().ui.session}
-                        props={{
-                            id: 4101n,
-                            label: LocaleText("break_postpone_button"),
-                            bounds: {
-                                x: float32(button_x),
-                                y: float32(button_y),
-                                width: float32(button_w),
-                                height: float32(button_h)
-                            },
-                            tone: ButtonTone.ButtonToneNeutral,
-                            emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                        }}
-                    />
-                )
+                Button({
+                    session: CurrentApp().ui.session,
+                    props: {
+                        id: 4101n,
+                        label: LocaleText("break_postpone_button"),
+                        bounds: {
+                            x: float32(button_x),
+                            y: float32(button_y),
+                            width: float32(button_w),
+                            height: float32(button_h)
+                        },
+                        tone: ButtonTone.ButtonToneNeutral,
+                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                    }
+                })
             ) {
                 app.breaks = BreakPostpone(app.breaks, t);
                 return;
@@ -393,23 +394,21 @@ export function break_overlay_draw_sized(app: *InnerBreeze, w: s32, h: s32): voi
     if (timer.show_skip !== 0n) {
         if (!locked) {
             if (
-                (
-                    <Button
-                        session={CurrentApp().ui.session}
-                        props={{
-                            id: 4102n,
-                            label: LocaleText("break_skip_button"),
-                            bounds: {
-                                x: float32(button_x),
-                                y: float32(button_y),
-                                width: float32(button_w),
-                                height: float32(button_h)
-                            },
-                            tone: ButtonTone.ButtonToneNeutral,
-                            emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                        }}
-                    />
-                )
+                Button({
+                    session: CurrentApp().ui.session,
+                    props: {
+                        id: 4102n,
+                        label: LocaleText("break_skip_button"),
+                        bounds: {
+                            x: float32(button_x),
+                            y: float32(button_y),
+                            width: float32(button_w),
+                            height: float32(button_h)
+                        },
+                        tone: ButtonTone.ButtonToneNeutral,
+                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                    }
+                })
             ) {
                 app.breaks = BreakSkip(app.breaks, t);
                 return;
@@ -419,23 +418,21 @@ export function break_overlay_draw_sized(app: *InnerBreeze, w: s32, h: s32): voi
     }
     if (t === BREAK_MICRO) {
         if (
-            (
-                <Button
-                    session={CurrentApp().ui.session}
-                    props={{
-                        id: 4103n,
-                        label: LocaleText("break_rest_now_button"),
-                        bounds: {
-                            x: float32(button_x),
-                            y: float32(button_y),
-                            width: float32(button_w),
-                            height: float32(button_h)
-                        },
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                    }}
-                />
-            )
+            Button({
+                session: CurrentApp().ui.session,
+                props: {
+                    id: 4103n,
+                    label: LocaleText("break_rest_now_button"),
+                    bounds: {
+                        x: float32(button_x),
+                        y: float32(button_y),
+                        width: float32(button_w),
+                        height: float32(button_h)
+                    },
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                }
+            })
         ) {
             app.breaks = BreakForce(app.breaks, BREAK_REST);
             return;

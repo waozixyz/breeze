@@ -93,7 +93,7 @@ export function ProfileImagePickerView(
     result.scroll_offset = scrolled.scroll_offset;
     if (scrolled.opened) {
         let grid_width = columns * cell + (columns - 1n) * gap;
-        let index: s32 = 0n;
+        let index: s32 = s32(0n);
         while (index < ProfilePictureCount) {
             let row = index / columns;
             let column = index % columns;
@@ -116,7 +116,7 @@ export function ProfileImagePickerView(
             button.tone = ButtonTone.ButtonToneNeutral;
             button.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
             button.icon_only = true;
-            if ((<Button session={session} props={button} />)) {
+            if (Button({ session: session, props: button })) {
                 result.changed = true;
                 result.closed = true;
                 result.selected_index = index;

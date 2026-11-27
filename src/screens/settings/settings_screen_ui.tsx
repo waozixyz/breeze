@@ -41,7 +41,7 @@ import { settings_theme_draw } from "settings_theme_ui";
 import { SettingsDeviceState } from "settings_types";
 
 export function SettingsScreenPanel(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     tab: s32,
     bounds: Rectangle
 ): void {
@@ -87,27 +87,27 @@ export function SettingsScreenPanel(
     let y = s32(scrolled.content.y) + AppScale(12n);
     let device_state: SettingsDeviceState = {};
     if (tab === SETTINGS_TAB_DEVICE) {
-        settings_device_draw(app, x, width, &y, &device_state);
+        settings_device_draw(app, x, width, nativeRef(y), nativeRef(device_state));
     } else if (tab === SETTINGS_TAB_AUDIO) {
-        settings_audio_draw(app, x, width, &y);
+        settings_audio_draw(app, x, width, nativeRef(y));
     } else if (tab === SETTINGS_TAB_BREAKS) {
-        SettingsScreenBreaks(app, x, width, &y);
+        SettingsScreenBreaks(app, x, width, nativeRef(y));
     } else if (tab === SETTINGS_TAB_NOTIFICATIONS) {
-        settings_notifications_draw(app, x, width, &y);
+        settings_notifications_draw(app, x, width, nativeRef(y));
     } else if (tab === SETTINGS_TAB_THEME) {
-        settings_theme_draw(app, x, width, &y, &app.theme_state);
+        settings_theme_draw(app, x, width, nativeRef(y), nativeRef(app.theme_state));
     } else {
-        settings_about_draw(app, x, width, &y);
+        settings_about_draw(app, x, width, nativeRef(y));
     }
     End(app.ui.session);
     if (tab === SETTINGS_TAB_DEVICE) {
-        settings_device_handle_overlays(app, &device_state);
+        settings_device_handle_overlays(app, nativeRef(device_state));
     } else if (tab === SETTINGS_TAB_NOTIFICATIONS) {
         settings_notifications_handle_overlays(app);
     }
 }
 
-export function SettingsScreenMobileHub(app: *InnerBreeze): void {
+export function SettingsScreenMobileHub(app: NativeRef<InnerBreeze>): void {
     let width = app.ui.view_width;
     let height = app.ui.view_height - app_content_bottom_reserved(app);
     let column = NativeLayout.CenteredColumnFor(width, AppScale(560n), AppScale(16n));
@@ -119,9 +119,11 @@ export function SettingsScreenMobileHub(app: *InnerBreeze): void {
     bar.has_leading_action = app.modal.active === 0n;
     bar.leading_label = LocaleText("back_button");
     let options = SettingsScreenNewOptions();
-    let result = (
-        <TitleBar session={app.ui.session} props={bar} options={options[0n:0n]} />
-    );
+    let result = TitleBar({
+        session: app.ui.session,
+        props: bar,
+        options: nativeSlice(options, 0n, 0n)
+    });
     if (result.clicked_leading) {
         app_block_current_click(app);
         app_settings_back(app);
@@ -152,7 +154,7 @@ export function SettingsScreenMobileHub(app: *InnerBreeze): void {
         SettingsScreenTabCount() * row_h
     );
     PaintRoundedFill(app.ui.session, -1n, tabs_bounds, float32(AppScale(14n)), 12n, surface);
-    let position: s32 = 0n;
+    let position: s32 = s32(0n);
     while (position < SettingsScreenTabCount()) {
         if (position > 0n) {
             PaintRoundedFill(
@@ -180,7 +182,7 @@ export function SettingsScreenMobileHub(app: *InnerBreeze): void {
             7510n + position
         );
         tab_props.emphasis = ButtonEmphasis.ButtonEmphasisGhost;
-        if ((<Button session={app.ui.session} props={tab_props} />)) {
+        if (Button({ session: app.ui.session, props: tab_props })) {
             app.settings_tab = tab;
             app.settings_overview = 0n;
             app.settings_scroll = 0n;
@@ -191,7 +193,7 @@ export function SettingsScreenMobileHub(app: *InnerBreeze): void {
     End(app.ui.session);
 }
 
-export function SettingsScreenDesktop(app: *InnerBreeze): void {
+export function SettingsScreenDesktop(app: NativeRef<InnerBreeze>): void {
     let width = app.ui.view_width;
     let height = app.ui.view_height - app_content_bottom_reserved(app);
     let outer = AppScale(20n);
@@ -209,9 +211,11 @@ export function SettingsScreenDesktop(app: *InnerBreeze): void {
     bar.has_leading_action = app.modal.active === 0n;
     bar.leading_label = LocaleText("back_button");
     let options = SettingsScreenNewOptions();
-    let result = (
-        <TitleBar session={app.ui.session} props={bar} options={options[0n:0n]} />
-    );
+    let result = TitleBar({
+        session: app.ui.session,
+        props: bar,
+        options: nativeSlice(options, 0n, 0n)
+    });
     if (result.clicked_leading) {
         app_block_current_click(app);
         app_settings_back(app);
@@ -219,7 +223,7 @@ export function SettingsScreenDesktop(app: *InnerBreeze): void {
     }
     let top = title_height + AppScale(12n);
     let nav_y = top;
-    let position: s32 = 0n;
+    let position: s32 = s32(0n);
     while (position < SettingsScreenTabCount()) {
         let tab = SettingsScreenTabAt(position);
         let tab_props = SettingsScreenTabProps(
@@ -234,7 +238,7 @@ export function SettingsScreenDesktop(app: *InnerBreeze): void {
         if (!tab_props.selected) {
             tab_props.emphasis = ButtonEmphasis.ButtonEmphasisGhost;
         }
-        if ((<Button session={app.ui.session} props={tab_props} />)) {
+        if (Button({ session: app.ui.session, props: tab_props })) {
             app.settings_tab = tab;
             app.settings_scroll = 0n;
         }
@@ -246,7 +250,7 @@ export function SettingsScreenDesktop(app: *InnerBreeze): void {
     SettingsScreenPanel(app, app.settings_tab, panel);
 }
 
-export function SettingsScreenMobileDetail(app: *InnerBreeze): void {
+export function SettingsScreenMobileDetail(app: NativeRef<InnerBreeze>): void {
     let title = settings_screen_tab_label(app.settings_tab);
     let title_height = AppTitleBarHeight();
     let bar: NativeTitleBar.Props = {};
@@ -256,9 +260,11 @@ export function SettingsScreenMobileDetail(app: *InnerBreeze): void {
     bar.has_leading_action = app.modal.active === 0n;
     bar.leading_label = LocaleText("back_button");
     let options = SettingsScreenNewOptions();
-    let result = (
-        <TitleBar session={app.ui.session} props={bar} options={options[0n:0n]} />
-    );
+    let result = TitleBar({
+        session: app.ui.session,
+        props: bar,
+        options: nativeSlice(options, 0n, 0n)
+    });
     if (result.clicked_leading) {
         app_block_current_click(app);
         app_settings_back(app);

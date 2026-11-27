@@ -58,21 +58,19 @@ function DiaryDayGallery(
     }
     let tile = (inner - float32(columns - 1n) * gap) / float32(columns);
     let rows = (State.day_photo_count + columns - 1n) / columns;
-    let photos = (
-        <Scroll
-            session={State.frame.session}
-            props={{
-                key: 290302n,
-                bounds: { x: left, y: top, width: width, height: height },
-                scale: State.frame.scale,
-                content_height: s32(float32(rows) * (tile + gap)),
-                scroll_offset: State.frame.photos_scroll
-            }}
-            children={(strip: NativeScroll.ScrollResult): void => {
-                DiaryPhotoTiles(strip, columns, tile, gap, editable);
-            }}
-        />
-    );
+    let photos = Scroll({
+        session: State.frame.session,
+        props: {
+            key: 290302n,
+            bounds: { x: left, y: top, width: width, height: height },
+            scale: State.frame.scale,
+            content_height: s32(float32(rows) * (tile + gap)),
+            scroll_offset: State.frame.photos_scroll
+        },
+        children: (strip: NativeScroll.ScrollResult): void => {
+            DiaryPhotoTiles(strip, columns, tile, gap, editable);
+        }
+    });
     State.frame.photos_scroll = photos.scroll_offset;
 }
 
@@ -84,8 +82,8 @@ function DiaryPhotoTiles(
     editable: boolean
 ): void {
     State.frame.photos_scroll = strip.scroll_offset;
-    for (let index: s32 = 0n; index < State.day_photo_count; index += 1n) {
-        let photo = State.day_photos[index];
+    for (let index: s32 = s32(0n); index < State.day_photo_count; index += 1n) {
+        let photo = nativeAt(State.day_photos, index);
         let bounds: Rectangle = {
             x: strip.content.x + float32(index % columns) * (tile + gap),
             y: strip.content.y + float32(index / columns) * (tile + gap),
@@ -114,19 +112,17 @@ function DiaryPhotoTiles(
                 }}
             />;
         }
-        let press = (
-            <Press
-                session={State.frame.session}
-                props={{
-                    key: u64(292200n + index),
-                    id: 292200n + index,
-                    bounds: bounds,
-                    label: photo.name,
-                    now: State.frame.now,
-                    disabled: !editable
-                }}
-            />
-        );
+        let press = Press({
+            session: State.frame.session,
+            props: {
+                key: u64(292200n + index),
+                id: 292200n + index,
+                bounds: bounds,
+                label: photo.name,
+                now: State.frame.now,
+                disabled: !editable
+            }
+        });
         if (press.clicked && !State.pending) {
             DiaryInsertPhoto(photo.destination, photo.name);
             State.frame.photos_open_day = 0n;
@@ -144,27 +140,25 @@ function DiaryAction(
     loading: boolean = false
 ): void {
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: id,
-                    bounds: bounds,
-                    label: label,
-                    disabled: !enabled,
-                    selected: selected,
-                    loading: loading,
-                    icon_shape: icon,
-                    icon_only: icon !== "",
-                    fit_content: true,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis:
-                        icon !== ""
-                            ? ButtonEmphasis.ButtonEmphasisGhost
-                            : ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                id: id,
+                bounds: bounds,
+                label: label,
+                disabled: !enabled,
+                selected: selected,
+                loading: loading,
+                icon_shape: icon,
+                icon_only: icon !== "",
+                fit_content: true,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis:
+                    icon !== ""
+                        ? ButtonEmphasis.ButtonEmphasisGhost
+                        : ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         DiaryControl(id);
     }
@@ -194,25 +188,23 @@ export function DiaryViewComposition(today: Date): DiaryMessage {
         }
         title_left = left + (width - control - gap - title_width) / 2.0;
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        id: 29018n,
-                        bounds: {
-                            x: left + width - control,
-                            y: top,
-                            width: control,
-                            height: control
-                        },
-                        label: AppLocale("media_compression_title"),
-                        icon_only: true,
-                        icon_shape: NativeCompressionIcon.Shape,
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                    }}
-                />
-            )
+            Button({
+                session: State.frame.session,
+                props: {
+                    id: 29018n,
+                    bounds: {
+                        x: left + width - control,
+                        y: top,
+                        width: control,
+                        height: control
+                    },
+                    label: AppLocale("media_compression_title"),
+                    icon_only: true,
+                    icon_shape: NativeCompressionIcon.Shape,
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
+                }
+            })
         ) {
             AppService("media.compression.open", "");
         }
@@ -246,7 +238,7 @@ export function DiaryViewComposition(today: Date): DiaryMessage {
             bounds: { x: title_left, y: top, width: title_width, height: control },
             text: title,
             size: title_font,
-            strong: title_strong[:],
+            strong: nativeSlice(title_strong),
             align: TextAlign.TextAlignCenter,
             vertical_align: TextAlign.TextAlignCenter,
             wrap: NativeText.Wrap.TextWrapEllipsis
@@ -368,20 +360,18 @@ export function DiaryViewComposition(today: Date): DiaryMessage {
         return FinishView();
     }
     if (State.state.calendar) {
-        let calendar = (
-            <Scroll
-                session={State.frame.session}
-                props={{
-                    key: 290300n,
-                    bounds: { x: left, y: content, width: width, height: content_height },
-                    content_height: Scale(344n),
-                    scroll_offset: State.frame.calendar_scroll
-                }}
-                children={(scroll: NativeScroll.ScrollResult): void => {
-                    DiaryCalendar(scroll, left, width, part, today);
-                }}
-            />
-        );
+        let calendar = Scroll({
+            session: State.frame.session,
+            props: {
+                key: 290300n,
+                bounds: { x: left, y: content, width: width, height: content_height },
+                content_height: Scale(344n),
+                scroll_offset: State.frame.calendar_scroll
+            },
+            children: (scroll: NativeScroll.ScrollResult): void => {
+                DiaryCalendar(scroll, left, width, part, today);
+            }
+        });
         State.frame.calendar_scroll = calendar.scroll_offset;
         return FinishView();
     }
@@ -392,21 +382,19 @@ export function DiaryViewComposition(today: Date): DiaryMessage {
     if (editor_height < Scale(120n)) {
         editor_height = Scale(120n);
     }
-    let viewport = (
-        <Scroll
-            session={State.frame.session}
-            props={{
-                key: 290301n,
-                bounds: { x: left, y: content, width: width, height: content_height },
-                content_height: editor_height + notice_room,
-                scroll_offset: State.frame.page_scroll,
-                scale: State.frame.scale
-            }}
-            children={(page: NativeScroll.ScrollResult): void => {
-                DiaryEditor(page, left, width, editor_height, editable, notice);
-            }}
-        />
-    );
+    let viewport = Scroll({
+        session: State.frame.session,
+        props: {
+            key: 290301n,
+            bounds: { x: left, y: content, width: width, height: content_height },
+            content_height: editor_height + notice_room,
+            scroll_offset: State.frame.page_scroll,
+            scale: State.frame.scale
+        },
+        children: (page: NativeScroll.ScrollResult): void => {
+            DiaryEditor(page, left, width, editor_height, editable, notice);
+        }
+    });
     State.frame.page_scroll = viewport.scroll_offset;
     return FinishView();
 }
@@ -455,7 +443,7 @@ function DiaryCalendar(
         "habit_day_sat",
         "habit_day_sun"
     ];
-    for (let day: s32 = 0n; day <= s32(6n); day += s32(1)) {
+    for (let day: s32 = s32(0n); day <= s32(6n); day += s32(1)) {
         <Text
             session={State.frame.session}
             props={{
@@ -465,12 +453,12 @@ function DiaryCalendar(
                     width: width / 7.0,
                     height: float32(Scale(24n))
                 },
-                text: AppLocale(weekdays[day]),
+                text: AppLocale(nativeAt(weekdays, day)),
                 size: State.frame.font
             }}
         />;
     }
-    for (let day: s32 = 1n; day <= State.state.month_days; day += s32(1)) {
+    for (let day: s32 = s32(1n); day <= State.state.month_days; day += s32(1)) {
         let position = State.state.month_weekday + day - 1n;
         let day_title = DiaryDayLabel(day);
         let cell = width / 7.0;
@@ -517,7 +505,7 @@ function DiaryEditor(
     area.max_bytes = 2147483646n;
     area.max_codepoints = 2147483646n;
     area.input = State.frame.input;
-    let edited = <MarkdownEditor session={State.frame.session} props={DiaryEditorProps(area)} />;
+    let edited = MarkdownEditor({ session: State.frame.session, props: DiaryEditorProps(area) });
     DiaryEdited(edited);
     if (notice) {
         let status = State.frame.spelling_notice;

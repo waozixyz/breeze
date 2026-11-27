@@ -57,8 +57,8 @@ import { AppReplaceText, AppTextFromCString } from "text_buffers";
 import { SampleTextFieldInput } from "text_input_host";
 
 export function lumi_settings_field(
-    app: *InnerBreeze,
-    field: *LumiSettingsField,
+    app: NativeRef<InnerBreeze>,
+    field: NativeRef<LumiSettingsField>,
     id: s32,
     label: string,
     placeholder: string,
@@ -66,7 +66,7 @@ export function lumi_settings_field(
     max_bytes: s32,
     x: s32,
     width: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     <Text
         session={app.ui.session}
@@ -75,64 +75,62 @@ export function lumi_settings_field(
             size: AppSmallFontSize(),
             bounds: {
                 x: float32(x),
-                y: float32((*y)),
+                y: float32(nativeDeref(y)),
                 width: float32(width),
                 height: float32(AppScale(SETTINGS_LUMI_LABEL))
             }
         }}
     />;
-    (*y) = (*y) + AppScale(SETTINGS_LUMI_LABEL);
+    nativeDeref(y) = nativeDeref(y) + AppScale(SETTINGS_LUMI_LABEL);
     let mask = LumiSettingsNewMask();
     if (secure) {
-        let count: s32 = 0n;
+        let count: s32 = s32(0n);
         for (const byte of AppTextFromCString(
-            &field.value[0n],
+            nativeRef(nativeAt(field.value, 0n)),
             LUMI_PROVIDER_URL_MAX
         )) {
             if ((byte < u8(128n) || byte >= u8(192n)) && count < LUMI_PROVIDER_URL_MAX - 1n) {
-                mask[count] = u8(42n);
+                nativeSet(mask, count, u8(42n));
                 count = count + 1n;
             }
         }
     }
     let typed = LumiSettingsNewTyped();
-    let input = SampleTextFieldInput(field.focused, typed[:]);
+    let input = SampleTextFieldInput(field.focused, nativeSlice(typed));
     if (secure) {
         input.copy = false;
         input.cut = false;
     }
-    let result = (
-        <ControlledTextField
-            session={app.ui.session}
-            props={{
-                key: u64(id),
-                focus_id: id,
-                bounds: {
-                    x: float32(x),
-                    y: float32((*y)),
-                    width: float32(width),
-                    height: float32(AppScale(SETTINGS_LUMI_FIELD))
-                },
-                value: AppTextFromCString(&field.value[0n], LUMI_PROVIDER_URL_MAX),
-                display_value: secure ? TextUntilNul(mask[:]) : "",
-                label: label,
-                placeholder: placeholder,
-                cursor: field.cursor,
-                anchor: field.anchor,
-                scroll_x: field.scroll_x,
-                focused: field.focused,
-                composition: field.composition,
-                max_bytes: max_bytes,
-                max_codepoints: max_bytes,
-                secure: secure,
-                input: input,
-                scale: MetricsScale()
-            }}
-        />
-    );
+    let result = ControlledTextField({
+        session: app.ui.session,
+        props: {
+            key: u64(id),
+            focus_id: id,
+            bounds: {
+                x: float32(x),
+                y: float32(nativeDeref(y)),
+                width: float32(width),
+                height: float32(AppScale(SETTINGS_LUMI_FIELD))
+            },
+            value: AppTextFromCString(nativeRef(nativeAt(field.value, 0n)), LUMI_PROVIDER_URL_MAX),
+            display_value: secure ? TextUntilNul(nativeSlice(mask)) : "",
+            label: label,
+            placeholder: placeholder,
+            cursor: field.cursor,
+            anchor: field.anchor,
+            scroll_x: field.scroll_x,
+            focused: field.focused,
+            composition: field.composition,
+            max_bytes: max_bytes,
+            max_codepoints: max_bytes,
+            secure: secure,
+            input: input,
+            scale: MetricsScale()
+        }
+    });
     if (result.edit.changed) {
         AppReplaceText(
-            field.value[:],
+            nativeSlice(field.value),
             result.edit.start,
             result.edit.end,
             result.edit.replacement
@@ -143,15 +141,15 @@ export function lumi_settings_field(
     field.scroll_x = result.scroll_x;
     field.focused = result.focused;
     field.composition = result.composition;
-    SecureWipe(typed[:]);
-    (*y) = (*y) + AppScale(SETTINGS_LUMI_FIELD + 10n);
+    SecureWipe(nativeSlice(typed));
+    nativeDeref(y) = nativeDeref(y) + AppScale(SETTINGS_LUMI_FIELD + 10n);
 }
 
 export function lumi_settings_draw(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     if (!NativePresent(app) || !NativePresent(y)) {
         return;
@@ -176,34 +174,32 @@ export function lumi_settings_draw(
             wrap: Wrap.TextWrapAuto,
             bounds: {
                 x: float32(terms.inner_x),
-                y: float32((*y) + AppScale(6n)),
+                y: float32(nativeDeref(y) + AppScale(6n)),
                 width: float32(terms.inner_width),
                 height: float32(status_height)
             }
         }}
     />;
-    (*y) = (*y) + status_height;
+    nativeDeref(y) = nativeDeref(y) + status_height;
     let agreed = LumiAiAgreed() && LumiNodeAgreed();
     let half = (terms.inner_width - AppScale(8n)) / 2n;
     let read_width = agreed ? half : terms.inner_width;
     if (
-        (
-            <Button
-                session={app.ui.session}
-                props={{
-                    id: 7801n,
-                    label: LocaleText("lumi_settings_read_terms"),
-                    bounds: {
-                        x: float32(terms.inner_x),
-                        y: float32((*y)),
-                        width: float32(read_width),
-                        height: float32(AppScale(44n))
-                    },
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: app.ui.session,
+            props: {
+                id: 7801n,
+                label: LocaleText("lumi_settings_read_terms"),
+                bounds: {
+                    x: float32(terms.inner_x),
+                    y: float32(nativeDeref(y)),
+                    width: float32(read_width),
+                    height: float32(AppScale(44n))
+                },
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         if (LumiOwnProviderSelected() && !LumiOwnProviderReady()) {
             State_lumi_settings.lumi_settings_notice = 2n;
@@ -212,27 +208,26 @@ export function lumi_settings_draw(
         }
     }
     if (
-        agreed && (
-            <Button
-                session={app.ui.session}
-                props={{
-                    id: 7802n,
-                    label: LocaleText("lumi_agreement_withdraw"),
-                    bounds: {
-                        x: float32(terms.inner_x + half + AppScale(8n)),
-                        y: float32((*y)),
-                        width: float32(half),
-                        height: float32(AppScale(44n))
-                    },
-                    tone: ButtonTone.ButtonToneDanger,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        agreed &&
+        Button({
+            session: app.ui.session,
+            props: {
+                id: 7802n,
+                label: LocaleText("lumi_agreement_withdraw"),
+                bounds: {
+                    x: float32(terms.inner_x + half + AppScale(8n)),
+                    y: float32(nativeDeref(y)),
+                    width: float32(half),
+                    height: float32(AppScale(44n))
+                },
+                tone: ButtonTone.ButtonToneDanger,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         LumiWithdraw();
     }
-    (*y) = (*y) + AppScale(56n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(56n);
     settings_section_end(y);
     let connection = settings_section_begin(
         app,
@@ -251,32 +246,30 @@ export function lumi_settings_draw(
     props.id = 7803n;
     props.bounds = {
         x: float32(connection.inner_x),
-        y: float32((*y) + AppScale(6n)),
+        y: float32(nativeDeref(y) + AppScale(6n)),
         width: float32(connection.inner_width),
         height: float32(AppScale(42n))
     };
     props.height = AppScale(42n);
     props.selected_index = own ? 1n : 0n;
     props.has_selection = true;
-    let choice = (
-        <SegmentedControl
-            session={app.ui.session}
-            props={props}
-            options={options[:]}
-        />
-    );
+    let choice = SegmentedControl({
+        session: app.ui.session,
+        props: props,
+        options: nativeSlice(options)
+    });
     if (choice.changed) {
         storage_set_setting_text(LumiProviderSetting, choice.selected_index === 1n ? "own" : "");
         State_lumi_settings.lumi_settings_notice = 0n;
     }
-    (*y) = (*y) + AppScale(54n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(54n);
     if (!LumiOwnProviderSelected()) {
         settings_section_end(y);
         return;
     }
     lumi_settings_field(
         app,
-        &State_lumi_settings.lumi_settings_url,
+        nativeRef(State_lumi_settings.lumi_settings_url),
         7804n,
         LocaleText("lumi_settings_url"),
         "https://api.openai.com/v1",
@@ -289,7 +282,7 @@ export function lumi_settings_draw(
     let key_saved = storage_get_setting_text(LumiProviderKeySetting).count > 0n;
     lumi_settings_field(
         app,
-        &State_lumi_settings.lumi_settings_key,
+        nativeRef(State_lumi_settings.lumi_settings_key),
         7805n,
         LocaleText("lumi_settings_key"),
         key_saved ? LocaleText("lumi_settings_key_saved") : "",
@@ -301,7 +294,7 @@ export function lumi_settings_draw(
     );
     lumi_settings_field(
         app,
-        &State_lumi_settings.lumi_settings_model,
+        nativeRef(State_lumi_settings.lumi_settings_model),
         7806n,
         LocaleText("lumi_settings_model"),
         "",
@@ -321,13 +314,13 @@ export function lumi_settings_draw(
             wrap: Wrap.TextWrapAuto,
             bounds: {
                 x: float32(connection.inner_x),
-                y: float32((*y)),
+                y: float32(nativeDeref(y)),
                 width: float32(connection.inner_width),
                 height: float32(note_height)
             }
         }}
     />;
-    (*y) = (*y) + note_height;
+    nativeDeref(y) = nativeDeref(y) + note_height;
     if (State_lumi_settings.lumi_settings_notice !== 0n) {
         let notice = LocaleText(
             State_lumi_settings.lumi_settings_notice === 1n
@@ -343,66 +336,63 @@ export function lumi_settings_draw(
                 wrap: Wrap.TextWrapAuto,
                 bounds: {
                     x: float32(connection.inner_x),
-                    y: float32((*y)),
+                    y: float32(nativeDeref(y)),
                     width: float32(connection.inner_width),
                     height: float32(notice_height)
                 }
             }}
         />;
-        (*y) = (*y) + notice_height;
+        nativeDeref(y) = nativeDeref(y) + notice_height;
     }
     half = (connection.inner_width - AppScale(8n)) / 2n;
     let save_width = key_saved ? half : connection.inner_width;
     if (
-        (
-            <Button
-                session={app.ui.session}
-                props={{
-                    id: 7807n,
-                    label: LocaleText("save_button"),
-                    bounds: {
-                        x: float32(connection.inner_x),
-                        y: float32((*y)),
-                        width: float32(save_width),
-                        height: float32(AppScale(44n))
-                    },
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                }}
-            />
-        )
+        Button({
+            session: app.ui.session,
+            props: {
+                id: 7807n,
+                label: LocaleText("save_button"),
+                bounds: {
+                    x: float32(connection.inner_x),
+                    y: float32(nativeDeref(y)),
+                    width: float32(save_width),
+                    height: float32(AppScale(44n))
+                },
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisFilled
+            }
+        })
     ) {
         lumi_settings_save();
     }
     if (
-        key_saved && (
-            <Button
-                session={app.ui.session}
-                props={{
-                    id: 7808n,
-                    label: LocaleText("lumi_settings_remove_key"),
-                    bounds: {
-                        x: float32(connection.inner_x + half + AppScale(8n)),
-                        y: float32((*y)),
-                        width: float32(half),
-                        height: float32(AppScale(44n))
-                    },
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        key_saved &&
+        Button({
+            session: app.ui.session,
+            props: {
+                id: 7808n,
+                label: LocaleText("lumi_settings_remove_key"),
+                bounds: {
+                    x: float32(connection.inner_x + half + AppScale(8n)),
+                    y: float32(nativeDeref(y)),
+                    width: float32(half),
+                    height: float32(AppScale(44n))
+                },
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         storage_set_setting_text(LumiProviderKeySetting, "");
         State_lumi_settings.lumi_settings_notice = 0n;
     }
-    (*y) = (*y) + AppScale(56n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(56n);
     settings_section_end(y);
 }
 
 export function lumi_settings_page_draw(
-    app: *InnerBreeze,
-    scroll: *s32
+    app: NativeRef<InnerBreeze>,
+    scroll: NativeRef<s32>
 ): boolean {
     let title_h = AppScale(LUMI_SETTINGS_TITLE);
     let bar: NativeTitleBar.Props = {};
@@ -414,7 +404,7 @@ export function lumi_settings_page_draw(
     bar.leading_label = LocaleText("back_button");
     let options = LumiSettingsNewOptions();
     if (
-        (<TitleBar session={app.ui.session} props={bar} options={options[0n:0n]} />)
+        TitleBar({ session: app.ui.session, props: bar, options: nativeSlice(options, 0n, 0n) })
             .clicked_leading
     ) {
         return true;
@@ -431,13 +421,13 @@ export function lumi_settings_page_draw(
         height: float32(bottom - top)
     };
     props.content_height = lumi_settings_content_height(column.width) + AppScale(16n);
-    props.scroll_offset = (*scroll);
+    props.scroll_offset = nativeDeref(scroll);
     props.scale = MetricsScale();
     let result = NativeScroll.Draw(app.ui.session, props);
-    (*scroll) = result.scroll_offset;
+    nativeDeref(scroll) = result.scroll_offset;
     if (result.opened) {
         let y = s32(result.content.y);
-        lumi_settings_draw(app, column.x, column.width, &y);
+        lumi_settings_draw(app, column.x, column.width, nativeRef(y));
         End(app.ui.session);
     }
     return false;

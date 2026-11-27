@@ -39,7 +39,7 @@ import { PackageFree } from "package_files";
 import { AppRequestSmoothFrames } from "smooth_frames";
 import { FrameTextReset } from "text_buffers";
 
-export function MediaCompressionOfferDraw(app: *InnerBreeze): void {
+export function MediaCompressionOfferDraw(app: NativeRef<InnerBreeze>): void {
     if (
         !MediaCompressionScreen(app) ||
         app.launcher_open ||
@@ -59,26 +59,24 @@ export function MediaCompressionOfferDraw(app: *InnerBreeze): void {
     ) {
         message = LocaleText("media_compression_offer");
     }
-    let result = (
-        <Toast
-            session={app.ui.session}
-            props={{
-                key: NativeLayout.KeyHash("media/compression/offer"),
-                viewport: {
-                    x: 0.0,
-                    y: 0.0,
-                    width: float32(app.ui.view_width),
-                    height: float32(app.ui.view_height)
-                },
-                state: State_media_compression_dialog.media_compression_toast,
-                message: message,
-                action_label: LocaleText("media_compression_review"),
-                seconds: 12.0,
-                now_seconds: HostSeconds(),
-                scale: MetricsScale()
-            }}
-        />
-    );
+    let result = Toast({
+        session: app.ui.session,
+        props: {
+            key: NativeLayout.KeyHash("media/compression/offer"),
+            viewport: {
+                x: 0.0,
+                y: 0.0,
+                width: float32(app.ui.view_width),
+                height: float32(app.ui.view_height)
+            },
+            state: State_media_compression_dialog.media_compression_toast,
+            message: message,
+            action_label: LocaleText("media_compression_review"),
+            seconds: 12.0,
+            now_seconds: HostSeconds(),
+            scale: MetricsScale()
+        }
+    });
     State_media_compression_dialog.media_compression_toast = result.state;
     if (result.visible) {
         AppRequestSmoothFrames(2n);
@@ -90,7 +88,7 @@ export function MediaCompressionOfferDraw(app: *InnerBreeze): void {
 }
 
 export function MediaCompressionLine(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     area: Rectangle,
     text: string
 ): void {
@@ -100,8 +98,8 @@ export function MediaCompressionLine(
     />;
 }
 
-export function MediaCompressionDialogDraw(app: *InnerBreeze): void {
-    FrameTextReset(&State_media_compression_dialog.media_compression_text);
+export function MediaCompressionDialogDraw(app: NativeRef<InnerBreeze>): void {
+    FrameTextReset(nativeRef(State_media_compression_dialog.media_compression_text));
     let width = AppScale(760n);
     if (width > app.ui.view_width - AppScale(24n)) {
         width = app.ui.view_width - AppScale(24n);
@@ -141,7 +139,7 @@ export function MediaCompressionDialogDraw(app: *InnerBreeze): void {
     End(app.ui.session);
 }
 
-export function MediaCompressionContent(app: *InnerBreeze, area: Rectangle): void {
+export function MediaCompressionContent(app: NativeRef<InnerBreeze>, area: Rectangle): void {
     let x = area.x;
     let y = area.y;
     let w = area.width - float32(AppScale(10n));
@@ -241,19 +239,17 @@ export function MediaCompressionContent(app: *InnerBreeze, area: Rectangle): voi
         );
     }
     y = y + line;
-    let apply = (
-        <Button
-            session={app.ui.session}
-            props={{
-                key: NativeLayout.KeyHash("media/compression/apply"),
-                bounds: { x: x, y: y, width: half, height: float32(AppScale(44n)) },
-                label: LocaleText("media_compression_apply"),
-                disabled: !ready || work.encoded.data.count >= work.source.count,
-                tone: ButtonTone.ButtonToneAccent,
-                emphasis: ButtonEmphasis.ButtonEmphasisFilled
-            }}
-        />
-    );
+    let apply = Button({
+        session: app.ui.session,
+        props: {
+            key: NativeLayout.KeyHash("media/compression/apply"),
+            bounds: { x: x, y: y, width: half, height: float32(AppScale(44n)) },
+            label: LocaleText("media_compression_apply"),
+            disabled: !ready || work.encoded.data.count >= work.source.count,
+            tone: ButtonTone.ButtonToneAccent,
+            emphasis: ButtonEmphasis.ButtonEmphasisFilled
+        }
+    });
     if (apply && ready) {
         if (
             MediaCompressionCommit(
@@ -275,23 +271,21 @@ export function MediaCompressionContent(app: *InnerBreeze, area: Rectangle): voi
         }
     }
     if (
-        (
-            <Button
-                session={app.ui.session}
-                props={{
-                    key: NativeLayout.KeyHash("media/compression/next"),
-                    bounds: {
-                        x: x + half + float32(AppScale(12n)),
-                        y: y,
-                        width: half,
-                        height: float32(AppScale(44n))
-                    },
-                    label: LocaleText("media_compression_next"),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: app.ui.session,
+            props: {
+                key: NativeLayout.KeyHash("media/compression/next"),
+                bounds: {
+                    x: x + half + float32(AppScale(12n)),
+                    y: y,
+                    width: half,
+                    height: float32(AppScale(44n))
+                },
+                label: LocaleText("media_compression_next"),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         let next = MediaCompressionNext(State_media_compression_dialog.media_compression_hash);
         MediaCompressionInvalidate(app);

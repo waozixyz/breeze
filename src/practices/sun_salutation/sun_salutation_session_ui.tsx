@@ -9,7 +9,7 @@ import { ModalType } from "modal_rules";
 import { NativePresent } from "native_flags";
 import { exit_to_start } from "sun_salutation_session";
 
-export function sun_salutation_handle_exit_modalView(app: *InnerBreeze): s32 {
+export function sun_salutation_handle_exit_modalView(app: NativeRef<InnerBreeze>): s32 {
     if (
         !NativePresent(app) ||
         app.modal.active === 0n ||
@@ -29,16 +29,14 @@ export function sun_salutation_handle_exit_modalView(app: *InnerBreeze): s32 {
             emphasis: ButtonEmphasis.ButtonEmphasisFilled
         }
     ];
-    let modal_result = (
-        <ActionModal
-            session={app.ui.session}
-            props={{
-                title: LocaleText("exit_session_title"),
-                message: LocaleText("all_progress_lost_message")
-            }}
-            actions={actions[:2n]}
-        />
-    ).action;
+    let modal_result = ActionModal({
+        session: app.ui.session,
+        props: {
+            title: LocaleText("exit_session_title"),
+            message: LocaleText("all_progress_lost_message")
+        },
+        actions: nativeSlice(actions, 0n, 2n)
+    }).action;
     if (modal_result === 1n || modal_result === -1n) {
         app_close_modal(app);
     } else if (modal_result === 2n) {

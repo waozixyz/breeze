@@ -15,7 +15,7 @@ import { PracticeAudioImage } from "practice_audio_controls";
 import { save_settings } from "practice_settings_host";
 
 export function PracticeAudioTriggerView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     id: s32,
     x: s32,
     y: s32,
@@ -39,11 +39,11 @@ export function PracticeAudioTriggerView(
     button.circle = true;
     button.tone = ButtonTone.ButtonToneNeutral;
     button.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
-    return <Button session={app.ui.session} props={button} />;
+    return Button({ session: app.ui.session, props: button });
 }
 
 export function PracticeAudioPopupView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     id: s32,
     x: s32,
     y: s32,
@@ -79,7 +79,7 @@ export function PracticeAudioPopupView(
     overlay_props.bounds = bounds;
     overlay_props.view_width = app.ui.view_width;
     overlay_props.view_height = app.ui.view_height;
-    let overlay = <DismissibleOverlay session={app.ui.session} props={overlay_props} />;
+    let overlay = DismissibleOverlay({ session: app.ui.session, props: overlay_props });
     if (overlay.closed) {
         return true;
     }
@@ -112,9 +112,10 @@ export function PracticeAudioPopupView(
     slider.min = SETTINGS_VOLUME_MIN;
     slider.max = SETTINGS_VOLUME_MAX;
     slider.vertical = true;
-    let result: NativeSlider.SliderDiscreteStep = (
-        <DiscreteSlider session={app.ui.session} props={slider} />
-    );
+    let result: NativeSlider.SliderDiscreteStep = DiscreteSlider({
+        session: app.ui.session,
+        props: slider
+    });
     End(app.ui.session);
     if (!result.changed) {
         return false;

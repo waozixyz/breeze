@@ -1,3 +1,4 @@
+import * as Shared from "habit_shared";
 // The habit editor: a habit's details (its name, description, colour and
 // icon), its routine (how it repeats, its days and when it reminds), and how
 // it is tracked (how hard it is and the coins a done day earns, counting or
@@ -6,123 +7,14 @@
 // asks the host to save it, delete it, open the practice picker, or add or
 // remove a question.
 import { HabitsCoinColor } from "coin_color";
-import {
-    HabitCoinParse,
-    HabitDifficultyAt,
-    HabitDifficultyHalfCoins,
-    HabitDifficultyIndex
-} from "habit_coins";
+import * as Coins from "habit_coins";
 import * as Model from "habit_edit_view";
-import {
-    AnswerLabel,
-    FirstLetterEnd,
-    ReminderHourLabel,
-    DaySelected,
-    DayMask,
-    ToggleDayMask,
-    PracticeLinked,
-    Ask,
-    Bounds,
-    Clipboard,
-    CoinText,
-    Columns,
-    ContentHeight,
-    CounterText,
-    DifficultyEarns,
-    DifficultyHeight,
-    DifficultyLabel,
-    EDIT_CONTENT_MAX_WIDTH,
-    EDIT_ICON_BUTTON_BASE,
-    EDIT_QUESTION_GAP,
-    EDIT_QUESTION_PADDING,
-    EDIT_SPAN_FIELD_CODE,
-    EditColor,
-    EnsureVisible,
-    Filled,
-    FitFont,
-    FocusOnly,
-    FormulaValid,
-    GoalHasValues,
-    GoalMenuWidth,
-    GoalOptions,
-    GoalTexts,
-    GridBounds,
-    GridHeight,
-    HasSpanStart,
-    HintHeight,
-    IconSlots,
-    Locale,
-    NewHours,
-    NewKinds,
-    NewMonths,
-    NewOptions,
-    NewOptions1NativeDropdownOption,
-    NewOptions6NativeDropdownOption,
-    NewParts,
-    NewRepeats,
-    NewTypes,
-    NewWeeks,
-    Normalize,
-    Number,
-    QuestionCardHeight,
-    ReadHabitsEditHost,
-    ReadHabitsEditPracticeHost,
-    ReadQuestions,
-    RepeatPhrase,
-    Replaced,
-    Scale,
-    SectionBody,
-    SectionHeight,
-    SetRepeat,
-    SpanGoalHeight,
-    SpanTexts,
-    SpreadBounds,
-    Width,
-    WriteHabitsEditHost,
-    WriteHabitsEditQuestionHost
-} from "habit_edit_view";
 import { HABIT_ICON_LETTER, HabitIconShape } from "habit_icons";
 import { HABIT_LINK_DIARY, HabitLinkSelect } from "habit_links";
 import { HabitGoalDefault, HabitSpanGoalDefault, HabitTimeTypedNumber } from "habit_questions";
 import { HabitScheduleDateOf, HabitScheduleMonthLength } from "habit_schedule";
-import {
-    HABIT_ANSWER_NUMBER,
-    HABIT_ANSWER_TYPE_COUNT,
-    HABIT_COUNTER_TARGET_MAX,
-    HABIT_DESCRIPTION_SIZE,
-    HABIT_DIFFICULTY_EASY,
-    HABIT_DIFFICULTY_HARD,
-    HABIT_DIFFICULTY_MEDIUM,
-    HABIT_DIFFICULTY_VERY_HARD,
-    HABIT_FORMULA_SIZE,
-    HABIT_GOAL_ABOVE_AVERAGE,
-    HABIT_GOAL_AT_LEAST,
-    HABIT_GOAL_AT_MOST,
-    HABIT_GOAL_BELOW_AVERAGE,
-    HABIT_GOAL_BETWEEN,
-    HABIT_GOAL_NONE,
-    HABIT_NAME_SIZE,
-    HABIT_QUESTION_MAX,
-    HABIT_QUESTION_TEXT_SIZE,
-    HABIT_REPEAT_DAILY,
-    HABIT_REPEAT_FORMULA,
-    HABIT_REPEAT_MONTHLY,
-    HABIT_REPEAT_NONE,
-    HABIT_REPEAT_WEEKLY,
-    HABIT_REPEAT_YEARLY,
-    HABIT_SCHEDULE_EVERY_MAX
-} from "habit_types";
-import {
-    HABITS_EDIT_ADD_QUESTION,
-    HABITS_EDIT_BACK,
-    HABITS_EDIT_DELETE,
-    HABITS_EDIT_NONE,
-    HABITS_EDIT_PRACTICES,
-    HABITS_EDIT_PRACTICES_DONE,
-    HABITS_EDIT_REMOVE_QUESTION,
-    HABITS_EDIT_SAVE,
-    HabitsMessage
-} from "habits_types";
+import * as Habit from "habit_types";
+import * as Habits from "habits_types";
 import { HabitsEditQuestion } from "habits_ui_types";
 import * as NativeButton from "kryon/button";
 import { ButtonEmphasis, ButtonTone } from "kryon/control_props";
@@ -134,7 +26,6 @@ import * as NativeSegmentedControl from "kryon/segmented_control";
 import { SemanticKind } from "kryon/semantic";
 import * as NativeText from "kryon/text";
 import { TextAlign } from "kryon/text_align";
-import * as NativeTextField from "kryon/text_field";
 import { TextHeight } from "kryon/text_measure";
 import * as NativeToggle from "kryon/toggle";
 import { ToggleSize } from "kryon/toggle_measure";
@@ -160,7 +51,7 @@ function Label(text: string, x: s32, y: s32, width: s32, height: s32): void {
     const edit_state = Model.CurrentEditor();
     <Text
         session={edit_state.session}
-        props={{ bounds: Bounds(x, y, width, height), text: text }}
+        props={{ bounds: Shared.Bounds(x, y, width, height), text: text }}
     />;
 }
 
@@ -170,7 +61,7 @@ function RowLabel(text: string, x: s32, y: s32, width: s32): void {
     <Text
         session={edit_state.session}
         props={{
-            bounds: Bounds(x, y + Scale(4n), width, Scale(44n)),
+            bounds: Shared.Bounds(x, y + Model.Scale(4n), width, Model.Scale(44n)),
             text: text,
             vertical_align: TextAlign.TextAlignCenter
         }}
@@ -179,19 +70,17 @@ function RowLabel(text: string, x: s32, y: s32, width: s32): void {
 
 function Step(id: s32, label: string, bounds: Rectangle, disabled: boolean): boolean {
     const edit_state = Model.CurrentEditor();
-    return (
-        <Button
-            session={edit_state.session}
-            props={{
-                id: id,
-                bounds: bounds,
-                label: label,
-                disabled: disabled,
-                tone: ButtonTone.ButtonToneNeutral,
-                emphasis: ButtonEmphasis.ButtonEmphasisSoft
-            }}
-        />
-    );
+    return Button({
+        session: edit_state.session,
+        props: {
+            id: id,
+            bounds: bounds,
+            label: label,
+            disabled: disabled,
+            tone: ButtonTone.ButtonToneNeutral,
+            emphasis: ButtonEmphasis.ButtonEmphasisSoft
+        }
+    });
 }
 
 // A planned day's button lights up in the habit's colour, as its circles do
@@ -210,7 +99,12 @@ function LitDay(bounds: Rectangle, label: string): void {
         props={{
             bounds: bounds,
             text: label,
-            size: FitFont(label, s32(bounds.width) - Scale(6n), edit_state.small_font, Scale(9n)),
+            size: Model.FitFont(
+                label,
+                s32(bounds.width) - Model.Scale(6n),
+                edit_state.small_font,
+                Model.Scale(9n)
+            ),
             class_name: luma >= 128000n ? edit_state.ink_dark_class : edit_state.ink_light_class,
             align: TextAlign.TextAlignCenter,
             vertical_align: TextAlign.TextAlignCenter,
@@ -224,100 +118,94 @@ function LitDay(bounds: Rectangle, label: string): void {
 function WeekdayButtons(x: s32, y: s32, width: s32): s32 {
     const edit_state = Model.CurrentEditor();
     let days: [string, string, string, string, string, string, string] = [
-        Locale("habit_day_mon"),
-        Locale("habit_day_tue"),
-        Locale("habit_day_wed"),
-        Locale("habit_day_thu"),
-        Locale("habit_day_fri"),
-        Locale("habit_day_sat"),
-        Locale("habit_day_sun")
+        Model.Locale("habit_day_mon"),
+        Model.Locale("habit_day_tue"),
+        Model.Locale("habit_day_wed"),
+        Model.Locale("habit_day_thu"),
+        Model.Locale("habit_day_fri"),
+        Model.Locale("habit_day_sat"),
+        Model.Locale("habit_day_sun")
     ];
     for (let day = s32(0n); day <= 6n; day += s32(1)) {
-        let selected = DaySelected(edit_state.weekdays, day);
-        let bounds = SpreadBounds(x, y, width, 7n, day);
-        let clicked = (
-            <Button
-                session={edit_state.session}
-                props={{
-                    id: 7710n + day,
-                    bounds: bounds,
-                    label: days[day],
-                    circle: true,
-                    fit_content: true,
-                    selected: selected,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        );
+        let selected = Model.DaySelected(edit_state.weekdays, day);
+        let bounds = Model.SpreadBounds(x, y, width, 7n, day);
+        let clicked = Button({
+            session: edit_state.session,
+            props: {
+                id: 7710n + day,
+                bounds: bounds,
+                label: nativeAt(days, day),
+                circle: true,
+                fit_content: true,
+                selected: selected,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        });
         if (selected) {
-            LitDay(bounds, days[day]);
+            LitDay(bounds, nativeAt(days, day));
         }
         if (clicked) {
-            let mask = ToggleDayMask(edit_state.weekdays, day);
+            let mask = Model.ToggleDayMask(edit_state.weekdays, day);
             if (mask !== 0n) {
                 edit_state.weekdays = mask;
             }
         }
     }
-    return y + GridHeight(7n, width);
+    return y + Model.GridHeight(7n, width);
 }
 
 // The days of the month from the 1st to the 31st, and the last day.
 function MonthDayButtons(x: s32, y: s32, width: s32): s32 {
     const edit_state = Model.CurrentEditor();
     for (let day = s32(1n); day <= 31n; day += s32(1)) {
-        let selected = DaySelected(edit_state.month_days, day - 1n);
-        let label = Number(s64(day));
-        let bounds = GridBounds(x, y, width, day - 1n);
-        let clicked = (
-            <Button
-                session={edit_state.session}
-                props={{
-                    id: 7730n + day,
-                    bounds: bounds,
-                    label: label,
-                    circle: true,
-                    selected: selected,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        );
+        let selected = Model.DaySelected(edit_state.month_days, day - 1n);
+        let label = Shared.Number(s64(day));
+        let bounds = Model.GridBounds(x, y, width, day - 1n);
+        let clicked = Button({
+            session: edit_state.session,
+            props: {
+                id: 7730n + day,
+                bounds: bounds,
+                label: label,
+                circle: true,
+                selected: selected,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        });
         if (selected) {
             LitDay(bounds, label);
         }
         if (clicked) {
-            let mask = ToggleDayMask(edit_state.month_days, day - 1n);
+            let mask = Model.ToggleDayMask(edit_state.month_days, day - 1n);
             if (mask !== 0n || edit_state.last_day) {
                 edit_state.month_days = mask;
             }
         }
     }
-    y += GridHeight(31n, width);
+    y += Model.GridHeight(31n, width);
     let last = edit_state.last_day;
     if (
-        (
-            <Button
-                session={edit_state.session}
-                props={{
-                    id: 7729n,
-                    bounds: Bounds(x, y, width, Scale(40n)),
-                    label: Locale("habit_month_last_day"),
-                    selected: last,
-                    tone: last ? ButtonTone.ButtonToneAccent : ButtonTone.ButtonToneNeutral,
-                    emphasis: last
-                        ? ButtonEmphasis.ButtonEmphasisFilled
-                        : ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: edit_state.session,
+            props: {
+                id: 7729n,
+                bounds: Shared.Bounds(x, y, width, Model.Scale(40n)),
+                label: Model.Locale("habit_month_last_day"),
+                selected: last,
+                tone: last ? ButtonTone.ButtonToneAccent : ButtonTone.ButtonToneNeutral,
+                emphasis: last
+                    ? ButtonEmphasis.ButtonEmphasisFilled
+                    : ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         if (!last || edit_state.month_days !== 0n) {
             edit_state.last_day = !last;
         }
     }
-    return y + Scale(48n);
+    return y + Model.Scale(48n);
 }
 
 // A monthly schedule plans days of the month, or a weekday in a week of the
@@ -325,22 +213,20 @@ function MonthDayButtons(x: s32, y: s32, width: s32): s32 {
 function Monthly(x: s32, y: s32, width: s32): s32 {
     const edit_state = Model.CurrentEditor();
     let options: [NativeSegmentedControl.SegmentOption, NativeSegmentedControl.SegmentOption] = [
-        { label: Locale("habit_month_by_day") },
-        { label: Locale("habit_month_by_weekday") }
+        { label: Model.Locale("habit_month_by_day") },
+        { label: Model.Locale("habit_month_by_weekday") }
     ];
-    let selection = (
-        <SegmentedControl
-            session={edit_state.session}
-            props={{
-                id: 7720n,
-                bounds: Bounds(x, y + Scale(4n), width, Scale(42n)),
-                height: Scale(42n),
-                selected_index: edit_state.week_of_month !== 0n ? 1n : 0n,
-                has_selection: true
-            }}
-            options={options[:]}
-        />
-    );
+    let selection = SegmentedControl({
+        session: edit_state.session,
+        props: {
+            id: 7720n,
+            bounds: Shared.Bounds(x, y + Model.Scale(4n), width, Model.Scale(42n)),
+            height: Model.Scale(42n),
+            selected_index: edit_state.week_of_month !== 0n ? 1n : 0n,
+            has_selection: true
+        },
+        options: nativeSlice(options)
+    });
     if (selection.changed) {
         let anchor_day = edit_state.start;
         if (anchor_day === 0n) {
@@ -352,18 +238,23 @@ function Monthly(x: s32, y: s32, width: s32): s32 {
             if (anchor.day + 7n > anchor.month_length) {
                 edit_state.week_of_month = -1n;
             }
-            edit_state.weekdays = DayMask(anchor.weekday);
+            edit_state.weekdays = Model.DayMask(anchor.weekday);
         } else {
             edit_state.week_of_month = 0n;
         }
-        Normalize();
+        Model.Normalize();
     }
-    y += Scale(52n);
+    y += Model.Scale(52n);
     if (edit_state.week_of_month === 0n) {
         return MonthDayButtons(x, y, width);
     }
-    let control_width = Scale(168n);
-    RowLabel(Locale("habit_week_of_month_label"), x, y, width - control_width - Scale(8n));
+    let control_width = Model.Scale(168n);
+    RowLabel(
+        Model.Locale("habit_week_of_month_label"),
+        x,
+        y,
+        width - control_width - Model.Scale(8n)
+    );
     let week_keys: [string, string, string, string, string, string] = [
         "habit_week_first",
         "habit_week_second",
@@ -372,28 +263,31 @@ function Monthly(x: s32, y: s32, width: s32): s32 {
         "habit_week_fifth",
         "habit_week_last"
     ];
-    let weeks = NewWeeks();
+    let weeks = Model.NewWeeks();
     for (let index = s32(0n); index <= 5n; index += s32(1)) {
-        weeks[index].label = Locale(week_keys[index]);
+        nativeAt(weeks, index).label = Model.Locale(nativeAt(week_keys, index));
     }
-    let week_menu = (
-        <Dropdown
-            session={edit_state.session}
-            props={{
-                id: 7721n,
-                bounds: Bounds(x + width - control_width, y + Scale(4n), control_width, Scale(44n)),
-                selected_index: edit_state.week_of_month > 0n ? edit_state.week_of_month - 1n : 5n
-            }}
-            options={weeks[:]}
-        />
-    );
+    let week_menu = Dropdown({
+        session: edit_state.session,
+        props: {
+            id: 7721n,
+            bounds: Shared.Bounds(
+                x + width - control_width,
+                y + Model.Scale(4n),
+                control_width,
+                Model.Scale(44n)
+            ),
+            selected_index: edit_state.week_of_month > 0n ? edit_state.week_of_month - 1n : 5n
+        },
+        options: nativeSlice(weeks)
+    });
     if (week_menu.changed) {
         edit_state.week_of_month = week_menu.selected_index + 1n;
         if (week_menu.selected_index === 5n) {
             edit_state.week_of_month = -1n;
         }
     }
-    y += Scale(52n);
+    y += Model.Scale(52n);
     return WeekdayButtons(x, y, width);
 }
 
@@ -404,7 +298,7 @@ function Yearly(x: s32, y: s32, width: s32): void {
     if (!date.valid) {
         date = HabitScheduleDateOf(edit_state.today);
     }
-    let gap = Scale(8n);
+    let gap = Model.Scale(8n);
     let month_width = (width - gap) / 2n;
     let keys: [
         string,
@@ -433,46 +327,42 @@ function Yearly(x: s32, y: s32, width: s32): void {
         "habit_month_name_11",
         "habit_month_name_12"
     ];
-    let months = NewMonths();
+    let months = Model.NewMonths();
     for (let month = s32(0n); month <= 11n; month += s32(1)) {
-        months[month].label = Locale(keys[month]);
+        nativeAt(months, month).label = Model.Locale(nativeAt(keys, month));
     }
-    let month_menu = (
-        <Dropdown
-            session={edit_state.session}
-            props={{
-                id: 7724n,
-                bounds: Bounds(x, y + Scale(4n), month_width, Scale(44n)),
-                selected_index: date.month - 1n
-            }}
-            options={months[:]}
-        />
-    );
+    let month_menu = Dropdown({
+        session: edit_state.session,
+        props: {
+            id: 7724n,
+            bounds: Shared.Bounds(x, y + Model.Scale(4n), month_width, Model.Scale(44n)),
+            selected_index: date.month - 1n
+        },
+        options: nativeSlice(months)
+    });
     let chosen_month = date.month;
     if (month_menu.changed) {
         chosen_month = month_menu.selected_index + 1n;
     }
-    let stepped = (
-        <Spinbox
-            session={edit_state.session}
-            props={{
-                id: 7725n,
-                bounds: Bounds(
-                    x + month_width + gap,
-                    y + Scale(4n),
-                    width - month_width - gap,
-                    Scale(44n)
-                ),
-                label: Locale("habit_every_year"),
-                min: 1n,
-                max: 31n,
-                step: 1n,
-                value: date.day,
-                wrap: true,
-                value_text: Number(s64(date.day))
-            }}
-        />
-    );
+    let stepped = Spinbox({
+        session: edit_state.session,
+        props: {
+            id: 7725n,
+            bounds: Shared.Bounds(
+                x + month_width + gap,
+                y + Model.Scale(4n),
+                width - month_width - gap,
+                Model.Scale(44n)
+            ),
+            label: Model.Locale("habit_every_year"),
+            min: 1n,
+            max: 31n,
+            step: 1n,
+            value: date.day,
+            wrap: true,
+            value_text: Shared.Number(s64(date.day))
+        }
+    });
     let chosen_day = date.day;
     if (stepped.changed) {
         chosen_day = stepped.value;
@@ -489,42 +379,32 @@ function Yearly(x: s32, y: s32, width: s32): void {
 function FormulaField(bounds: Rectangle): boolean {
     const edit_state = Model.CurrentEditor();
     let focused = edit_state.formula_focused;
-    let result = (
-        <ControlledTextField
-            session={edit_state.session}
-            props={{
-                key: NativeLayout.KeyHash("habit/edit/formula"),
-                bounds: bounds,
-                value: edit_state.formula,
-                cursor: edit_state.formula_cursor,
-                anchor: edit_state.formula_anchor,
-                scroll_x: edit_state.formula_scroll_x,
-                focused: focused,
-                focus_id: 7770n,
-                max_bytes: HABIT_FORMULA_SIZE - 1n,
-                max_codepoints: HABIT_FORMULA_SIZE - 1n,
-                input: focused ? edit_state.input : {}
-            }}
-        />
+    let binding = Shared.BindText(
+        nativeRef(edit_state.formula_cursor),
+        nativeRef(edit_state.formula_anchor),
+        nativeRef(edit_state.formula_scroll_x)
     );
-    if (result.edit.changed) {
-        edit_state.formula = Replaced(
-            edit_state.formula,
-            result.edit.start,
-            result.edit.end,
-            result.edit.replacement,
-            HABIT_FORMULA_SIZE - 1n
-        );
-    }
-    edit_state.formula_cursor = result.cursor;
-    edit_state.formula_anchor = result.anchor;
-    edit_state.formula_scroll_x = result.scroll_x;
+    let props = Shared.InputProps(
+        binding,
+        {
+            key: NativeLayout.KeyHash("habit/edit/formula"),
+            bounds: bounds,
+            value: edit_state.formula,
+            focused: focused,
+            focus_id: 7770n,
+            max_bytes: Habit.HABIT_FORMULA_SIZE - 1n
+        },
+        edit_state.input
+    );
+    let result = ControlledTextField({ session: edit_state.session, props: props });
+    Shared.AcceptText(binding, result);
+    edit_state.formula = Shared.EditedText(edit_state.formula, result.edit, props.max_bytes);
+    Model.Clipboard(result);
     if (result.focused) {
-        FocusOnly(4n);
+        Model.FocusOnly(4n);
     } else {
         edit_state.formula_focused = false;
     }
-    Clipboard(result);
     return result.focused;
 }
 
@@ -532,107 +412,119 @@ function FormulaField(bounds: Rectangle): boolean {
 // often, then its days and when it reminds.
 function Routine(x: s32, y: s32, width: s32): void {
     const edit_state = Model.CurrentEditor();
-    let row = Scale(52n);
-    let step_width = Scale(44n);
+    let row = Model.Scale(52n);
+    let step_width = Model.Scale(44n);
     let counted =
-        edit_state.repeat >= HABIT_REPEAT_DAILY && edit_state.repeat <= HABIT_REPEAT_YEARLY;
+        edit_state.repeat >= Habit.HABIT_REPEAT_DAILY &&
+        edit_state.repeat <= Habit.HABIT_REPEAT_YEARLY;
     let menu_width = width;
     if (counted) {
-        menu_width = width - step_width * 2n - Scale(8n);
+        menu_width = width - step_width * 2n - Model.Scale(8n);
     }
-    let repeats = NewRepeats();
+    let repeats = Model.NewRepeats();
     for (let index = s32(0n); index <= 5n; index += s32(1)) {
-        repeats[index].label = RepeatPhrase(index + 1n, edit_state.every);
+        nativeAt(repeats, index).label = Model.RepeatPhrase(index + 1n, edit_state.every);
     }
-    let repeat_menu = (
-        <Dropdown
-            session={edit_state.session}
-            props={{
-                id: 7700n,
-                bounds: Bounds(x, y + Scale(4n), menu_width, Scale(44n)),
-                selected_index: edit_state.repeat - 1n
-            }}
-            options={repeats[:]}
-        />
-    );
+    let repeat_menu = Dropdown({
+        session: edit_state.session,
+        props: {
+            id: 7700n,
+            bounds: Shared.Bounds(x, y + Model.Scale(4n), menu_width, Model.Scale(44n)),
+            selected_index: edit_state.repeat - 1n
+        },
+        options: nativeSlice(repeats)
+    });
     if (repeat_menu.changed) {
-        SetRepeat(repeat_menu.selected_index + 1n);
+        Model.SetRepeat(repeat_menu.selected_index + 1n);
     }
     if (counted) {
         if (
             Step(
                 7702n,
                 "-",
-                Bounds(x + menu_width + Scale(4n), y + Scale(4n), step_width, Scale(44n)),
+                Shared.Bounds(
+                    x + menu_width + Model.Scale(4n),
+                    y + Model.Scale(4n),
+                    step_width,
+                    Model.Scale(44n)
+                ),
                 edit_state.every <= 1n
             )
         ) {
             edit_state.every = edit_state.every - 1n;
-            Normalize();
+            Model.Normalize();
         }
         if (
             Step(
                 7703n,
                 "+",
-                Bounds(x + width - step_width, y + Scale(4n), step_width, Scale(44n)),
-                edit_state.every >= HABIT_SCHEDULE_EVERY_MAX
+                Shared.Bounds(
+                    x + width - step_width,
+                    y + Model.Scale(4n),
+                    step_width,
+                    Model.Scale(44n)
+                ),
+                edit_state.every >= Habit.HABIT_SCHEDULE_EVERY_MAX
             )
         ) {
             edit_state.every = edit_state.every + 1n;
-            Normalize();
+            Model.Normalize();
         }
     }
     y += row;
-    if (edit_state.repeat === HABIT_REPEAT_WEEKLY) {
+    if (edit_state.repeat === Habit.HABIT_REPEAT_WEEKLY) {
         y = WeekdayButtons(x, y, width);
-    } else if (edit_state.repeat === HABIT_REPEAT_MONTHLY) {
+    } else if (edit_state.repeat === Habit.HABIT_REPEAT_MONTHLY) {
         y = Monthly(x, y, width);
-    } else if (edit_state.repeat === HABIT_REPEAT_YEARLY) {
+    } else if (edit_state.repeat === Habit.HABIT_REPEAT_YEARLY) {
         Yearly(x, y, width);
         y += row;
-    } else if (edit_state.repeat === HABIT_REPEAT_FORMULA) {
-        let formula_bounds = Bounds(x, y + Scale(4n), width, Scale(44n));
+    } else if (edit_state.repeat === Habit.HABIT_REPEAT_FORMULA) {
+        let formula_bounds = Shared.Bounds(x, y + Model.Scale(4n), width, Model.Scale(44n));
         let was_focused = edit_state.formula_focused;
         if (FormulaField(formula_bounds) && !was_focused) {
-            EnsureVisible(formula_bounds);
+            Model.EnsureVisible(formula_bounds);
         }
         y += row;
-        let hint_height = HintHeight(width);
+        let hint_height = Model.HintHeight(width);
         <Text
             session={edit_state.session}
             props={{
-                bounds: Bounds(x, y, width, hint_height),
-                text: Locale("habit_formula_hint"),
+                bounds: Shared.Bounds(x, y, width, hint_height),
+                text: Model.Locale("habit_formula_hint"),
                 size: edit_state.small_font,
                 wrap: NativeText.Wrap.TextWrapAuto
             }}
         />;
-        y += hint_height + Scale(8n);
-        if (!FormulaValid()) {
-            Label(Locale("habit_formula_invalid"), x, y, width, Scale(24n));
-            y += Scale(28n);
+        y += hint_height + Model.Scale(8n);
+        if (!Model.FormulaValid()) {
+            Label(Model.Locale("habit_formula_invalid"), x, y, width, Model.Scale(24n));
+            y += Model.Scale(28n);
         }
     }
-    if (edit_state.repeat === HABIT_REPEAT_NONE) {
+    if (edit_state.repeat === Habit.HABIT_REPEAT_NONE) {
         return;
     }
-    RowLabel(Locale("habit_reminder_label"), x, y, width - Scale(144n));
-    let hours = NewHours();
-    hours[0n].label = Locale("habit_reminder_off");
+    RowLabel(Model.Locale("habit_reminder_label"), x, y, width - Model.Scale(144n));
+    let hours = Model.NewHours();
+    nativeAt(hours, 0n).label = Model.Locale("habit_reminder_off");
     for (let hour = s32(0n); hour <= 23n; hour += s32(1)) {
-        hours[hour + 1n].label = ReminderHourLabel(hour);
+        nativeAt(hours, hour + 1n).label = Model.ReminderHourLabel(hour);
     }
-    let hour_menu = (
-        <Dropdown
-            session={edit_state.session}
-            props={{
-                id: 7400n,
-                bounds: Bounds(x + width - Scale(136n), y + Scale(4n), Scale(136n), Scale(44n)),
-                selected_index: edit_state.reminder_hour + 1n
-            }}
-            options={hours[:]}
-        />
-    );
+    let hour_menu = Dropdown({
+        session: edit_state.session,
+        props: {
+            id: 7400n,
+            bounds: Shared.Bounds(
+                x + width - Model.Scale(136n),
+                y + Model.Scale(4n),
+                Model.Scale(136n),
+                Model.Scale(44n)
+            ),
+            selected_index: edit_state.reminder_hour + 1n
+        },
+        options: nativeSlice(hours)
+    });
     if (hour_menu.changed) {
         edit_state.reminder_hour = hour_menu.selected_index - 1n;
     }
@@ -642,77 +534,67 @@ function Routine(x: s32, y: s32, width: s32): void {
 function NameField(bounds: Rectangle): boolean {
     const edit_state = Model.CurrentEditor();
     let focused = edit_state.name_focused;
-    let result = (
-        <ControlledTextField
-            session={edit_state.session}
-            props={{
-                key: NativeLayout.KeyHash("habit/edit/name"),
-                bounds: bounds,
-                value: edit_state.name,
-                cursor: edit_state.name_cursor,
-                anchor: edit_state.name_anchor,
-                scroll_x: edit_state.name_scroll_x,
-                focused: focused,
-                focus_id: 7511n,
-                max_bytes: HABIT_NAME_SIZE - 1n,
-                max_codepoints: HABIT_NAME_SIZE - 1n,
-                input: focused ? edit_state.input : {}
-            }}
-        />
+    let previous = edit_state.name;
+    let binding = Shared.BindText(
+        nativeRef(edit_state.name_cursor),
+        nativeRef(edit_state.name_anchor),
+        nativeRef(edit_state.name_scroll_x)
     );
+    let props = Shared.InputProps(
+        binding,
+        {
+            key: NativeLayout.KeyHash("habit/edit/name"),
+            bounds: bounds,
+            value: edit_state.name,
+            focused: focused,
+            focus_id: 7511n,
+            max_bytes: Habit.HABIT_NAME_SIZE - 1n
+        },
+        edit_state.input
+    );
+    let result = ControlledTextField({ session: edit_state.session, props: props });
+    Shared.AcceptText(binding, result);
+    edit_state.name = Shared.EditedText(edit_state.name, result.edit, props.max_bytes);
+    Model.Clipboard(result);
     if (result.edit.changed) {
-        let changed = Replaced(
-            edit_state.name,
-            result.edit.start,
-            result.edit.end,
-            result.edit.replacement,
-            HABIT_NAME_SIZE - 1n
-        );
-        if (changed !== edit_state.name) {
+        if (previous !== edit_state.name) {
             edit_state.name_error = 0n;
         }
-        edit_state.name = changed;
     }
-    edit_state.name_cursor = result.cursor;
-    edit_state.name_anchor = result.anchor;
-    edit_state.name_scroll_x = result.scroll_x;
     edit_state.name_focused = result.focused;
     if (result.focused) {
-        FocusOnly(1n);
+        Model.FocusOnly(1n);
     }
-    Clipboard(result);
     return result.focused;
 }
 
 function DescriptionField(bounds: Rectangle): boolean {
     const edit_state = Model.CurrentEditor();
     let focused = edit_state.description_focused;
-    let result = (
-        <TextArea
-            session={edit_state.session}
-            props={{
-                key: NativeLayout.KeyHash("habit/edit/description"),
-                bounds: bounds,
-                value: edit_state.description,
-                cursor: edit_state.description_cursor,
-                anchor: edit_state.description_anchor,
-                scroll_y: edit_state.description_scroll_y,
-                focused: focused,
-                focus_id: 7512n,
-                max_bytes: HABIT_DESCRIPTION_SIZE - 1n,
-                max_codepoints: HABIT_DESCRIPTION_SIZE - 1n,
-                wrap: true,
-                input: focused ? edit_state.area_input : {}
-            }}
-        />
-    );
+    let result = TextArea({
+        session: edit_state.session,
+        props: {
+            key: NativeLayout.KeyHash("habit/edit/description"),
+            bounds: bounds,
+            value: edit_state.description,
+            cursor: edit_state.description_cursor,
+            anchor: edit_state.description_anchor,
+            scroll_y: edit_state.description_scroll_y,
+            focused: focused,
+            focus_id: 7512n,
+            max_bytes: Habit.HABIT_DESCRIPTION_SIZE - 1n,
+            max_codepoints: Habit.HABIT_DESCRIPTION_SIZE - 1n,
+            wrap: true,
+            input: focused ? edit_state.area_input : {}
+        }
+    });
     if (result.edit.changed) {
-        edit_state.description = Replaced(
+        edit_state.description = Shared.Replaced(
             edit_state.description,
             result.edit.start,
             result.edit.end,
             result.edit.replacement,
-            HABIT_DESCRIPTION_SIZE - 1n
+            Habit.HABIT_DESCRIPTION_SIZE - 1n
         );
     }
     edit_state.description_cursor = result.cursor;
@@ -720,7 +602,7 @@ function DescriptionField(bounds: Rectangle): boolean {
     edit_state.description_scroll_y = result.scroll_y;
     edit_state.description_focused = result.focused;
     if (result.focused) {
-        FocusOnly(2n);
+        Model.FocusOnly(2n);
     }
     if (result.clipboard_write) {
         edit_state.clipboard_write = true;
@@ -731,38 +613,36 @@ function DescriptionField(bounds: Rectangle): boolean {
 
 function Colors(x: s32, y: s32, width: s32): void {
     const edit_state = Model.CurrentEditor();
-    let columns = Columns(width);
+    let columns = Model.Columns(width);
     let count: s32 = edit_state.more_colors ? 12n : 7n;
     for (let index = s32(0n); index < count; index += s32(1)) {
         let more = index === 6n && !edit_state.more_colors;
-        let swatch = EditColor(index);
+        let swatch = Model.EditColor(index);
         let chosen =
             !more &&
             edit_state.color.r === swatch.r &&
             edit_state.color.g === swatch.g &&
             edit_state.color.b === swatch.b;
         if (
-            (
-                <Button
-                    session={edit_state.session}
-                    props={{
-                        id: 7530n + index,
-                        bounds: Bounds(
-                            x + (index % columns) * Scale(48n) + Scale(4n),
-                            y + (index / columns) * Scale(44n) + Scale(2n),
-                            Scale(40n),
-                            Scale(40n)
-                        ),
-                        label: more ? "..." : "",
-                        circle: true,
-                        selected: chosen,
-                        swatch: !more,
-                        swatch_color: swatch,
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                    }}
-                />
-            )
+            Button({
+                session: edit_state.session,
+                props: {
+                    id: 7530n + index,
+                    bounds: Shared.Bounds(
+                        x + (index % columns) * Model.Scale(48n) + Model.Scale(4n),
+                        y + (index / columns) * Model.Scale(44n) + Model.Scale(2n),
+                        Model.Scale(40n),
+                        Model.Scale(40n)
+                    ),
+                    label: more ? "..." : "",
+                    circle: true,
+                    selected: chosen,
+                    swatch: !more,
+                    swatch_color: swatch,
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
+                }
+            })
         ) {
             if (more) {
                 edit_state.more_colors = true;
@@ -779,12 +659,12 @@ function Colors(x: s32, y: s32, width: s32): void {
 function Icons(x: s32, y: s32, width: s32): void {
     const edit_state = Model.CurrentEditor();
     let name = edit_state.name;
-    const first = FirstLetterEnd(name);
+    const first = Model.FirstLetterEnd(name);
     let chosen_icon = edit_state.icon;
     if (chosen_icon === HABIT_ICON_LETTER) {
         chosen_icon = 0n;
     }
-    let slots = IconSlots(width);
+    let slots = Model.IconSlots(width);
     let collapsed = !edit_state.more_icons;
     let shown = collapsed ? slots - 1n : slots;
     for (let slot = s32(0n); slot < shown; slot += s32(1)) {
@@ -798,8 +678,8 @@ function Icons(x: s32, y: s32, width: s32): void {
         }
         let selected = edit_state.icon === chosen;
         let button: NativeButton.Props = {
-            id: EDIT_ICON_BUTTON_BASE + icon,
-            bounds: GridBounds(x, y - Scale(2n), width, slot),
+            id: Model.EDIT_ICON_BUTTON_BASE + icon,
+            bounds: Model.GridBounds(x, y - Model.Scale(2n), width, slot),
             circle: true,
             selected: selected,
             tone: selected ? ButtonTone.ButtonToneAccent : ButtonTone.ButtonToneNeutral,
@@ -808,30 +688,28 @@ function Icons(x: s32, y: s32, width: s32): void {
                 : ButtonEmphasis.ButtonEmphasisSoft
         };
         if (icon === 0n) {
-            button.label = name.count > 0n ? name[0n:first] : "-";
+            button.label = name.count > 0n ? nativeSlice(name, 0n, first) : "-";
         } else {
             button.icon_shape = HabitIconShape(icon);
             button.icon_only = true;
         }
-        if ((<Button session={edit_state.session} props={button} />)) {
+        if (Button({ session: edit_state.session, props: button })) {
             edit_state.icon = chosen;
         }
     }
     if (collapsed) {
         if (
-            (
-                <Button
-                    session={edit_state.session}
-                    props={{
-                        id: 7559n,
-                        bounds: GridBounds(x, y - Scale(2n), width, shown),
-                        circle: true,
-                        label: "...",
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                    }}
-                />
-            )
+            Button({
+                session: edit_state.session,
+                props: {
+                    id: 7559n,
+                    bounds: Model.GridBounds(x, y - Model.Scale(2n), width, shown),
+                    circle: true,
+                    label: "...",
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                }
+            })
         ) {
             edit_state.more_icons = true;
         }
@@ -840,120 +718,110 @@ function Icons(x: s32, y: s32, width: s32): void {
 
 function Details(x: s32, y: s32, width: s32): void {
     const edit_state = Model.CurrentEditor();
-    let label_height = Scale(24n);
-    Label(Locale("habit_name_label"), x, y, width, label_height);
-    y += label_height + Scale(4n);
-    let name_bounds = Bounds(x, y, width, Scale(44n));
+    let label_height = Model.Scale(24n);
+    Label(Model.Locale("habit_name_label"), x, y, width, label_height);
+    y += label_height + Model.Scale(4n);
+    let name_bounds = Shared.Bounds(x, y, width, Model.Scale(44n));
     let was_focused = edit_state.name_focused;
     if (NameField(name_bounds) && !was_focused) {
-        EnsureVisible(name_bounds);
+        Model.EnsureVisible(name_bounds);
     }
-    y += Scale(54n);
-    Label(Locale("habit_description_label"), x, y, width, label_height);
-    y += label_height + Scale(4n);
-    let description_bounds = Bounds(x, y, width, Scale(80n));
+    y += Model.Scale(54n);
+    Label(Model.Locale("habit_description_label"), x, y, width, label_height);
+    y += label_height + Model.Scale(4n);
+    let description_bounds = Shared.Bounds(x, y, width, Model.Scale(80n));
     was_focused = edit_state.description_focused;
     if (DescriptionField(description_bounds) && !was_focused) {
-        EnsureVisible(description_bounds);
+        Model.EnsureVisible(description_bounds);
     }
-    y += Scale(90n);
-    Label(Locale("habit_color_label"), x, y, width, label_height);
-    y += label_height + Scale(4n);
+    y += Model.Scale(90n);
+    Label(Model.Locale("habit_color_label"), x, y, width, label_height);
+    y += label_height + Model.Scale(4n);
     Colors(x, y, width);
-    let columns = Columns(width);
+    let columns = Model.Columns(width);
     let colors: s32 = edit_state.more_colors ? 12n : 7n;
-    y += ((colors + columns - 1n) / columns) * Scale(44n) + Scale(10n);
-    Label(Locale("habit_icon_label"), x, y, width, label_height);
-    y += label_height + Scale(4n);
+    y += ((colors + columns - 1n) / columns) * Model.Scale(44n) + Model.Scale(10n);
+    Label(Model.Locale("habit_icon_label"), x, y, width, label_height);
+    y += label_height + Model.Scale(4n);
     Icons(x, y, width);
 }
 
 function CoinField(bounds: Rectangle): void {
     const edit_state = Model.CurrentEditor();
     if (!edit_state.coin_focused) {
-        edit_state.coin_text = CoinText(edit_state.coin_halves);
+        edit_state.coin_text = Model.CoinText(edit_state.coin_halves);
         edit_state.coin_cursor = s32(edit_state.coin_text.count);
         edit_state.coin_anchor = edit_state.coin_cursor;
     }
     let focused = edit_state.coin_focused;
-    let result = (
-        <ControlledTextField
-            session={edit_state.session}
-            props={{
-                key: NativeLayout.KeyHash("habit/edit/coins"),
-                bounds: bounds,
-                value: edit_state.coin_text,
-                cursor: edit_state.coin_cursor,
-                anchor: edit_state.coin_anchor,
-                scroll_x: edit_state.coin_scroll_x,
-                focused: focused,
-                focus_id: 7607n,
-                max_bytes: 7n,
-                max_codepoints: 7n,
-                input: focused ? edit_state.input : {}
-            }}
-        />
+    let binding = Shared.BindText(
+        nativeRef(edit_state.coin_cursor),
+        nativeRef(edit_state.coin_anchor),
+        nativeRef(edit_state.coin_scroll_x)
     );
+    let props = Shared.InputProps(
+        binding,
+        {
+            key: NativeLayout.KeyHash("habit/edit/coins"),
+            bounds: bounds,
+            value: edit_state.coin_text,
+            focused: focused,
+            focus_id: 7607n,
+            max_bytes: 7n
+        },
+        edit_state.input
+    );
+    let result = ControlledTextField({ session: edit_state.session, props: props });
+    Shared.AcceptText(binding, result);
+    edit_state.coin_text = Shared.EditedText(edit_state.coin_text, result.edit, props.max_bytes);
+    Model.Clipboard(result);
     if (result.edit.changed) {
-        edit_state.coin_text = Replaced(
-            edit_state.coin_text,
-            result.edit.start,
-            result.edit.end,
-            result.edit.replacement,
-            7n
-        );
         let halves = edit_state.coin_halves;
-        if (HabitCoinParse(edit_state.coin_text, &halves)) {
+        if (Coins.HabitCoinParse(edit_state.coin_text, nativeRef(halves))) {
             edit_state.coin_halves = halves;
         }
     }
-    edit_state.coin_cursor = result.cursor;
-    edit_state.coin_anchor = result.anchor;
-    edit_state.coin_scroll_x = result.scroll_x;
     edit_state.coin_focused = result.focused;
     if (result.focused) {
-        FocusOnly(7n);
+        Model.FocusOnly(7n);
     }
-    Clipboard(result);
 }
 
 function Difficulty(x: s32, y: s32, width: s32): void {
     const edit_state = Model.CurrentEditor();
-    Label(Locale("habit_difficulty_label"), x, y, width, Scale(26n));
+    Label(Model.Locale("habit_difficulty_label"), x, y, width, Model.Scale(26n));
     let options: [
         NativeSegmentedControl.SegmentOption,
         NativeSegmentedControl.SegmentOption,
         NativeSegmentedControl.SegmentOption,
         NativeSegmentedControl.SegmentOption
     ] = [
-        { label: DifficultyLabel(HABIT_DIFFICULTY_EASY) },
-        { label: DifficultyLabel(HABIT_DIFFICULTY_MEDIUM) },
-        { label: DifficultyLabel(HABIT_DIFFICULTY_HARD) },
-        { label: DifficultyLabel(HABIT_DIFFICULTY_VERY_HARD) }
+        { label: Model.DifficultyLabel(Habit.HABIT_DIFFICULTY_EASY) },
+        { label: Model.DifficultyLabel(Habit.HABIT_DIFFICULTY_MEDIUM) },
+        { label: Model.DifficultyLabel(Habit.HABIT_DIFFICULTY_HARD) },
+        { label: Model.DifficultyLabel(Habit.HABIT_DIFFICULTY_VERY_HARD) }
     ];
-    let selection = (
-        <SegmentedControl
-            session={edit_state.session}
-            props={{
-                id: 7605n,
-                bounds: Bounds(x, y + Scale(30n), width, Scale(42n)),
-                height: Scale(42n),
-                selected_index: HabitDifficultyIndex(edit_state.difficulty),
-                has_selection: !edit_state.custom_coins
-            }}
-            options={options[:]}
-        />
-    );
+    let selection = SegmentedControl({
+        session: edit_state.session,
+        props: {
+            id: 7605n,
+            bounds: Shared.Bounds(x, y + Model.Scale(30n), width, Model.Scale(42n)),
+            height: Model.Scale(42n),
+            selected_index: Coins.HabitDifficultyIndex(edit_state.difficulty),
+            has_selection: !edit_state.custom_coins
+        },
+        options: nativeSlice(options)
+    });
     if (selection.changed) {
-        edit_state.difficulty = HabitDifficultyAt(selection.selected_index);
+        edit_state.difficulty = Coins.HabitDifficultyAt(selection.selected_index);
         edit_state.custom_coins = false;
     }
-    let hint_y = y + Scale(80n);
-    let coin = Scale(18n);
+    let hint_y = y + Model.Scale(80n);
+    let coin = Model.Scale(18n);
     <SvgIcon
         session={edit_state.session}
         props={{
-            bounds: Bounds(x, hint_y + (Scale(22n) - coin) / 2n, coin, coin),
+            bounds: Shared.Bounds(x, hint_y + (Model.Scale(22n) - coin) / 2n, coin, coin),
             shape: NativeCoinIcon.Shape,
             color: HabitsCoinColor(edit_state.highlight_color, edit_state.text_color)
         }}
@@ -961,101 +829,113 @@ function Difficulty(x: s32, y: s32, width: s32): void {
     <Text
         session={edit_state.session}
         props={{
-            bounds: Bounds(x + coin + Scale(8n), hint_y, width - coin - Scale(8n), Scale(30n)),
+            bounds: Shared.Bounds(
+                x + coin + Model.Scale(8n),
+                hint_y,
+                width - coin - Model.Scale(8n),
+                Model.Scale(30n)
+            ),
             text: edit_state.custom_coins
-                ? Locale("habit_coins_signed_hint")
-                : DifficultyEarns(edit_state.difficulty),
+                ? Model.Locale("habit_coins_signed_hint")
+                : Model.DifficultyEarns(edit_state.difficulty),
             size: edit_state.small_font,
             class_name: edit_state.muted_class,
             vertical_align: TextAlign.TextAlignCenter,
             wrap: NativeText.Wrap.TextWrapAuto
         }}
     />;
-    y += Scale(112n);
-    Label(Locale("habit_custom_coins"), x, y + Scale(10n), width - Scale(110n), Scale(36n));
-    let custom = (
-        <Toggle
-            session={edit_state.session}
-            props={{
-                id: 7606n,
-                bounds: Bounds(x + width - Scale(100n), y, Scale(100n), Scale(36n)),
-                value: edit_state.custom_coins,
-                off_label: Locale("toggle_off"),
-                on_label: Locale("toggle_on")
-            }}
-        />
+    y += Model.Scale(112n);
+    Label(
+        Model.Locale("habit_custom_coins"),
+        x,
+        y + Model.Scale(10n),
+        width - Model.Scale(110n),
+        Model.Scale(36n)
     );
+    let custom = Toggle({
+        session: edit_state.session,
+        props: {
+            id: 7606n,
+            bounds: Shared.Bounds(
+                x + width - Model.Scale(100n),
+                y,
+                Model.Scale(100n),
+                Model.Scale(36n)
+            ),
+            value: edit_state.custom_coins,
+            off_label: Model.Locale("toggle_off"),
+            on_label: Model.Locale("toggle_on")
+        }
+    });
     if (custom.changed) {
         edit_state.custom_coins = custom.value;
         if (custom.value) {
-            edit_state.coin_halves = HabitDifficultyHalfCoins(edit_state.difficulty);
+            edit_state.coin_halves = Coins.HabitDifficultyHalfCoins(edit_state.difficulty);
         }
     }
     if (edit_state.custom_coins) {
-        y += Scale(52n);
+        y += Model.Scale(52n);
         Label(
-            Locale("habit_coins_per_occurrence"),
+            Model.Locale("habit_coins_per_occurrence"),
             x,
-            y + Scale(10n),
-            width - Scale(128n),
-            Scale(36n)
+            y + Model.Scale(10n),
+            width - Model.Scale(128n),
+            Model.Scale(36n)
         );
-        CoinField(Bounds(x + width - Scale(120n), y, Scale(120n), Scale(44n)));
+        CoinField(
+            Shared.Bounds(x + width - Model.Scale(120n), y, Model.Scale(120n), Model.Scale(44n))
+        );
     }
 }
 
 function CounterField(bounds: Rectangle): boolean {
     const edit_state = Model.CurrentEditor();
     if (!edit_state.counter_focused) {
-        CounterText();
+        Model.CounterText();
     }
     let focused = edit_state.counter_focused;
-    let result = (
-        <ControlledTextField
-            session={edit_state.session}
-            props={{
-                key: NativeLayout.KeyHash("habit/edit/counter"),
-                bounds: bounds,
-                value: edit_state.counter_text,
-                cursor: edit_state.counter_cursor,
-                anchor: edit_state.counter_anchor,
-                scroll_x: edit_state.counter_scroll_x,
-                focused: focused,
-                focus_id: 7622n,
-                numeric: true,
-                max_bytes: 4n,
-                max_codepoints: 4n,
-                input: focused ? edit_state.input : {}
-            }}
-        />
+    let binding = Shared.BindText(
+        nativeRef(edit_state.counter_cursor),
+        nativeRef(edit_state.counter_anchor),
+        nativeRef(edit_state.counter_scroll_x)
     );
+    let props = Shared.InputProps(
+        binding,
+        {
+            key: NativeLayout.KeyHash("habit/edit/counter"),
+            bounds: bounds,
+            value: edit_state.counter_text,
+            focused: focused,
+            focus_id: 7622n,
+            numeric: true,
+            max_bytes: 4n
+        },
+        edit_state.input
+    );
+    let result = ControlledTextField({ session: edit_state.session, props: props });
+    Shared.AcceptText(binding, result);
+    edit_state.counter_text = Shared.EditedText(
+        edit_state.counter_text,
+        result.edit,
+        props.max_bytes
+    );
+    Model.Clipboard(result);
     if (result.edit.changed) {
-        edit_state.counter_text = Replaced(
-            edit_state.counter_text,
-            result.edit.start,
-            result.edit.end,
-            result.edit.replacement,
-            4n
-        );
-        let value: s32 = 0n;
+        let value: s32 = s32(0n);
         for (let at = s64(0n); at < edit_state.counter_text.count; at += s64(1)) {
-            value = value * 10n + s32(edit_state.counter_text[at]) - 48n;
+            value = value * 10n + s32(nativeAt(edit_state.counter_text, at)) - 48n;
         }
-        if (value > HABIT_COUNTER_TARGET_MAX) {
-            value = HABIT_COUNTER_TARGET_MAX;
+        if (value > Habit.HABIT_COUNTER_TARGET_MAX) {
+            value = Habit.HABIT_COUNTER_TARGET_MAX;
         }
         if (edit_state.counter_text.count > 0n) {
             edit_state.counter_target = value;
         }
     }
-    edit_state.counter_cursor = result.cursor;
-    edit_state.counter_anchor = result.anchor;
-    edit_state.counter_scroll_x = result.scroll_x;
     edit_state.counter_focused = result.focused;
     if (result.focused) {
-        FocusOnly(3n);
+        Model.FocusOnly(3n);
     }
-    Clipboard(result);
     return result.focused;
 }
 
@@ -1073,23 +953,23 @@ function RowToggle(
     let props: NativeToggle.Props = {
         id: id,
         value: value,
-        off_label: Locale("toggle_off"),
-        on_label: Locale("toggle_on")
+        off_label: Model.Locale("toggle_off"),
+        on_label: Model.Locale("toggle_on")
     };
     let size = ToggleSize(edit_state.session, props);
     let toggle_width = s32(size.x);
     let toggle_height = s32(size.y);
-    if (toggle_height < Scale(30n)) {
-        toggle_height = Scale(30n);
+    if (toggle_height < Model.Scale(30n)) {
+        toggle_height = Model.Scale(30n);
     }
-    props.bounds = Bounds(
+    props.bounds = Shared.Bounds(
         x + width - toggle_width,
-        y + (Scale(44n) - toggle_height) / 2n,
+        y + (Model.Scale(44n) - toggle_height) / 2n,
         toggle_width,
         toggle_height
     );
-    Label(label, x, y + Scale(10n), width - toggle_width - Scale(8n), Scale(36n));
-    return <Toggle session={edit_state.session} props={props} />;
+    Label(label, x, y + Model.Scale(10n), width - toggle_width - Model.Scale(8n), Model.Scale(36n));
+    return Toggle({ session: edit_state.session, props: props });
 }
 
 // One typed goal value. Goal fields share one cursor: only the focused one
@@ -1097,43 +977,36 @@ function RowToggle(
 function GoalField(code: s32, bounds: Rectangle, value: string, max_bytes: s32): string {
     const edit_state = Model.CurrentEditor();
     let focused = edit_state.goal_focused === code + 1n;
-    let props: NativeTextField.Props = {
-        key: NativeLayout.KeyHash("habit/edit/goal") + u64(code),
-        bounds: bounds,
-        value: value,
-        focused: focused,
-        focus_id: 7800n + code,
-        numeric: true,
-        max_bytes: max_bytes,
-        max_codepoints: max_bytes
-    };
-    if (focused) {
-        props.cursor = edit_state.goal_cursor;
-        props.anchor = edit_state.goal_anchor;
-        props.scroll_x = edit_state.goal_scroll_x;
-        props.input = edit_state.input;
-    }
-    let result = <ControlledTextField session={edit_state.session} props={props} />;
     let typed = value;
-    if (result.edit.changed) {
-        typed = Replaced(
-            value,
-            result.edit.start,
-            result.edit.end,
-            result.edit.replacement,
-            max_bytes
-        );
-    }
+    let binding = Shared.BindText(
+        nativeRef(edit_state.goal_cursor),
+        nativeRef(edit_state.goal_anchor),
+        nativeRef(edit_state.goal_scroll_x)
+    );
+    let props = Shared.InputProps(
+        binding,
+        {
+            key: NativeLayout.KeyHash("habit/edit/goal") + u64(code),
+            bounds: bounds,
+            value: value,
+            focused: focused,
+            focus_id: 7800n + code,
+            numeric: true,
+            max_bytes: max_bytes
+        },
+        edit_state.input,
+        true
+    );
+    let result = ControlledTextField({ session: edit_state.session, props: props });
+    Shared.AcceptText(binding, result, true);
+    typed = Shared.EditedText(value, result.edit, props.max_bytes);
+    Model.Clipboard(result);
     if (result.focused) {
         edit_state.goal_focused = code + 1n;
-        edit_state.goal_cursor = result.cursor;
-        edit_state.goal_anchor = result.anchor;
-        edit_state.goal_scroll_x = result.scroll_x;
-        FocusOnly(6n);
+        Model.FocusOnly(6n);
     } else if (focused) {
         edit_state.goal_focused = 0n;
     }
-    Clipboard(result);
     return typed;
 }
 
@@ -1142,16 +1015,16 @@ function GoalField(code: s32, bounds: Rectangle, value: string, max_bytes: s32):
 function GoalBound(
     slot: s32,
     high: boolean,
-    question: *HabitsEditQuestion,
+    question: NativeRef<HabitsEditQuestion>,
     x: s32,
     y: s32
 ): s32 {
     const edit_state = Model.CurrentEditor();
-    if (question.answer_type === HABIT_ANSWER_NUMBER) {
+    if (question.answer_type === Habit.HABIT_ANSWER_NUMBER) {
         let code = slot * 2n + (high ? 1n : 0n);
         let typed = GoalField(
             code,
-            Bounds(x, y, Scale(120n), Scale(44n)),
+            Shared.Bounds(x, y, Model.Scale(120n), Model.Scale(44n)),
             high ? question.high_text : question.low_text,
             9n
         );
@@ -1167,26 +1040,24 @@ function GoalBound(
                 question.goal_low = number;
             }
         }
-        return Scale(120n);
+        return Model.Scale(120n);
     }
-    let picker_width = Scale(132n);
+    let picker_width = Model.Scale(132n);
     let code = slot * 2n + (high ? 1n : 0n);
-    let picked = (
-        <TimePicker
-            session={edit_state.session}
-            props={{
-                key: NativeLayout.KeyHash("habit/edit/goal-time") + u64(code),
-                id: 7940n + code,
-                bounds: Bounds(x, y, picker_width, Scale(44n)),
-                label: Locale(high ? "habit_goal_before" : "habit_goal_after"),
-                value: high ? question.goal_high : question.goal_low,
-                now: edit_state.now,
-                now_label: Locale("statistics_now_label"),
-                done_label: Locale("done_button"),
-                scale: edit_state.scale
-            }}
-        />
-    );
+    let picked = TimePicker({
+        session: edit_state.session,
+        props: {
+            key: NativeLayout.KeyHash("habit/edit/goal-time") + u64(code),
+            id: 7940n + code,
+            bounds: Shared.Bounds(x, y, picker_width, Model.Scale(44n)),
+            label: Model.Locale(high ? "habit_goal_before" : "habit_goal_after"),
+            value: high ? question.goal_high : question.goal_low,
+            now: edit_state.now,
+            now_label: Model.Locale("statistics_now_label"),
+            done_label: Model.Locale("done_button"),
+            scale: edit_state.scale
+        }
+    });
     if (picked.changed && picked.value >= 0n) {
         if (high) {
             question.goal_high = picked.value;
@@ -1199,71 +1070,69 @@ function GoalBound(
 
 // "Good when" and the goal's options, then its values: from, up to, or
 // from and to. Changes the question; returns the y below them.
-function Goal(
-    slot: s32,
-    question: *HabitsEditQuestion,
-    x: s32,
-    y: s32,
-    width: s32
-): s32 {
+function Goal(slot: s32, question: NativeRef<HabitsEditQuestion>, x: s32, y: s32, width: s32): s32 {
     const edit_state = Model.CurrentEditor();
-    let options = NewOptions();
-    let kinds = NewKinds();
-    let count = GoalOptions(
-        question.answer_type,
-        options[:],
-        kinds[:]
-    );
+    let options = Model.NewOptions();
+    let kinds = Model.NewKinds();
+    let count = Model.GoalOptions(question.answer_type, nativeSlice(options), nativeSlice(kinds));
     if (count === 0n) {
         return y;
     }
-    let menu_width = GoalMenuWidth(width);
-    RowLabel(Locale("habit_goal_label"), x, y, width - menu_width - Scale(8n));
-    let selected: s32 = 0n;
+    let menu_width = Model.GoalMenuWidth(width);
+    RowLabel(Model.Locale("habit_goal_label"), x, y, width - menu_width - Model.Scale(8n));
+    let selected: s32 = s32(0n);
     for (let option = s32(0n); option < count; option += s32(1)) {
-        if (kinds[option] === question.goal_kind) {
+        if (nativeAt(kinds, option) === question.goal_kind) {
             selected = option;
         }
     }
-    let chosen = (
-        <Dropdown
-            session={edit_state.session}
-            props={{
-                id: 7770n + slot,
-                bounds: Bounds(x + width - menu_width, y + Scale(4n), menu_width, Scale(44n)),
-                selected_index: selected
-            }}
-            options={options[:count]}
-        />
-    );
+    let chosen = Dropdown({
+        session: edit_state.session,
+        props: {
+            id: 7770n + slot,
+            bounds: Shared.Bounds(
+                x + width - menu_width,
+                y + Model.Scale(4n),
+                menu_width,
+                Model.Scale(44n)
+            ),
+            selected_index: selected
+        },
+        options: nativeSlice(options, 0n, count)
+    });
     if (chosen.changed) {
-        question.goal_kind = kinds[chosen.selected_index];
-        GoalTexts(question);
+        question.goal_kind = nativeAt(kinds, chosen.selected_index);
+        Model.GoalTexts(question);
     }
-    y += Scale(52n);
-    if (!GoalHasValues(question.goal_kind)) {
+    y += Model.Scale(52n);
+    if (!Model.GoalHasValues(question.goal_kind)) {
         return y;
     }
     let bound_x = x;
-    if (question.goal_kind !== HABIT_GOAL_AT_MOST) {
-        bound_x += GoalBound(slot, false, question, bound_x, y + Scale(4n));
+    if (question.goal_kind !== Habit.HABIT_GOAL_AT_MOST) {
+        bound_x += GoalBound(slot, false, question, bound_x, y + Model.Scale(4n));
     }
-    if (question.goal_kind === HABIT_GOAL_BETWEEN) {
+    if (question.goal_kind === Habit.HABIT_GOAL_BETWEEN) {
         <Text
             session={edit_state.session}
             props={{
-                bounds: Bounds(bound_x, y + Scale(4n), Scale(40n), Scale(44n)),
-                text: Locale("habit_goal_and"),
+                bounds: Shared.Bounds(
+                    bound_x,
+                    y + Model.Scale(4n),
+                    Model.Scale(40n),
+                    Model.Scale(44n)
+                ),
+                text: Model.Locale("habit_goal_and"),
                 align: TextAlign.TextAlignCenter,
                 vertical_align: TextAlign.TextAlignCenter
             }}
         />;
-        bound_x += Scale(40n);
+        bound_x += Model.Scale(40n);
     }
-    if (question.goal_kind !== HABIT_GOAL_AT_LEAST) {
-        GoalBound(slot, true, question, bound_x, y + Scale(4n));
+    if (question.goal_kind !== Habit.HABIT_GOAL_AT_LEAST) {
+        GoalBound(slot, true, question, bound_x, y + Model.Scale(4n));
     }
-    return y + Scale(52n);
+    return y + Model.Scale(52n);
 }
 
 // One length of a span goal, typed as hours and minutes at the row's end,
@@ -1271,19 +1140,19 @@ function Goal(
 // is empty.
 function SpanLength(bound: s32, label: string, x: s32, y: s32, width: s32): s32 {
     const edit_state = Model.CurrentEditor();
-    let unit_width = Width(Locale("habit_unit_hours"), edit_state.font);
-    let minutes_unit = Width(Locale("habit_unit_minutes"), edit_state.font);
+    let unit_width = Model.Width(Model.Locale("habit_unit_hours"), edit_state.font);
+    let minutes_unit = Model.Width(Model.Locale("habit_unit_minutes"), edit_state.font);
     if (minutes_unit > unit_width) {
         unit_width = minutes_unit;
     }
-    unit_width += Scale(12n);
-    let hours_width = Scale(64n);
-    let minutes_width = Scale(56n);
+    unit_width += Model.Scale(12n);
+    let hours_width = Model.Scale(64n);
+    let minutes_width = Model.Scale(56n);
     let fields_width = hours_width + unit_width + minutes_width + unit_width;
-    RowLabel(label, x, y, width - fields_width - Scale(8n));
+    RowLabel(label, x, y, width - fields_width - Model.Scale(8n));
     let field_x = x + width - fields_width;
     let units: [string, string] = ["habit_unit_hours", "habit_unit_minutes"];
-    let parts = NewParts();
+    let parts = Model.NewParts();
     for (let part = s32(0n); part <= 1n; part += s32(1)) {
         let part_width = part === 0n ? hours_width : minutes_width;
         let typed = "";
@@ -1293,8 +1162,8 @@ function SpanLength(bound: s32, label: string, x: s32, y: s32, width: s32): s32 
             typed = part === 0n ? edit_state.span_high_hours : edit_state.span_high_minutes;
         }
         typed = GoalField(
-            EDIT_SPAN_FIELD_CODE + bound * 2n + part,
-            Bounds(field_x, y + Scale(4n), part_width, Scale(44n)),
+            Model.EDIT_SPAN_FIELD_CODE + bound * 2n + part,
+            Shared.Bounds(field_x, y + Model.Scale(4n), part_width, Model.Scale(44n)),
             typed,
             part === 0n ? 3n : 2n
         );
@@ -1307,22 +1176,27 @@ function SpanLength(bound: s32, label: string, x: s32, y: s32, width: s32): s32 
         } else {
             edit_state.span_high_minutes = typed;
         }
-        parts[part] = HabitTimeTypedNumber(typed);
+        nativeSet(parts, part, HabitTimeTypedNumber(typed));
         <Text
             session={edit_state.session}
             props={{
-                bounds: Bounds(field_x + part_width, y + Scale(4n), unit_width, Scale(44n)),
-                text: Locale(units[part]),
+                bounds: Shared.Bounds(
+                    field_x + part_width,
+                    y + Model.Scale(4n),
+                    unit_width,
+                    Model.Scale(44n)
+                ),
+                text: Model.Locale(nativeAt(units, part)),
                 align: TextAlign.TextAlignCenter,
                 vertical_align: TextAlign.TextAlignCenter
             }}
         />;
         field_x += part_width + unit_width;
     }
-    if (parts[0n] < 0n || parts[1n] < 0n || parts[1n] > 59n) {
+    if (nativeAt(parts, 0n) < 0n || nativeAt(parts, 1n) < 0n || nativeAt(parts, 1n) > 59n) {
         return -1n;
     }
-    return parts[0n] * 60n + parts[1n];
+    return nativeAt(parts, 0n) * 60n + nativeAt(parts, 1n);
 }
 
 // Which spans are good: any, shorter or longer than the average of the
@@ -1330,55 +1204,60 @@ function SpanLength(bound: s32, label: string, x: s32, y: s32, width: s32): s32 
 // and minutes, such as at most 8 hours for an eating window.
 function SpanGoal(x: s32, y: s32, width: s32): void {
     const edit_state = Model.CurrentEditor();
-    let options = NewOptions6NativeDropdownOption();
+    let options = Model.NewOptions6NativeDropdownOption();
     let kinds: [s32, s32, s32, s32, s32, s32] = [
-        HABIT_GOAL_NONE,
-        HABIT_GOAL_BELOW_AVERAGE,
-        HABIT_GOAL_ABOVE_AVERAGE,
-        HABIT_GOAL_AT_LEAST,
-        HABIT_GOAL_AT_MOST,
-        HABIT_GOAL_BETWEEN
+        Habit.HABIT_GOAL_NONE,
+        Habit.HABIT_GOAL_BELOW_AVERAGE,
+        Habit.HABIT_GOAL_ABOVE_AVERAGE,
+        Habit.HABIT_GOAL_AT_LEAST,
+        Habit.HABIT_GOAL_AT_MOST,
+        Habit.HABIT_GOAL_BETWEEN
     ];
-    options[0n].label = Locale("habit_span_goal_any");
-    options[1n].label = Locale("habit_span_goal_shorter");
-    options[2n].label = Locale("habit_span_goal_longer");
-    options[3n].label = Locale("habit_goal_at_least");
-    options[4n].label = Locale("habit_goal_at_most");
-    options[5n].label = Locale("habit_goal_between");
-    let menu_width = GoalMenuWidth(width);
-    RowLabel(Locale("habit_goal_label"), x, y, width - menu_width - Scale(8n));
-    let selected: s32 = 0n;
+    nativeAt(options, 0n).label = Model.Locale("habit_span_goal_any");
+    nativeAt(options, 1n).label = Model.Locale("habit_span_goal_shorter");
+    nativeAt(options, 2n).label = Model.Locale("habit_span_goal_longer");
+    nativeAt(options, 3n).label = Model.Locale("habit_goal_at_least");
+    nativeAt(options, 4n).label = Model.Locale("habit_goal_at_most");
+    nativeAt(options, 5n).label = Model.Locale("habit_goal_between");
+    let menu_width = Model.GoalMenuWidth(width);
+    RowLabel(Model.Locale("habit_goal_label"), x, y, width - menu_width - Model.Scale(8n));
+    let selected: s32 = s32(0n);
     for (let option = s32(0n); option <= 5n; option += s32(1)) {
-        if (kinds[option] === edit_state.span_kind) {
+        if (nativeAt(kinds, option) === edit_state.span_kind) {
             selected = option;
         }
     }
-    let chosen = (
-        <Dropdown
-            session={edit_state.session}
-            props={{
-                id: 7615n,
-                bounds: Bounds(x + width - menu_width, y + Scale(4n), menu_width, Scale(44n)),
-                selected_index: selected
-            }}
-            options={options[:]}
-        />
-    );
+    let chosen = Dropdown({
+        session: edit_state.session,
+        props: {
+            id: 7615n,
+            bounds: Shared.Bounds(
+                x + width - menu_width,
+                y + Model.Scale(4n),
+                menu_width,
+                Model.Scale(44n)
+            ),
+            selected_index: selected
+        },
+        options: nativeSlice(options)
+    });
     if (chosen.changed) {
-        edit_state.span_kind = kinds[chosen.selected_index];
+        edit_state.span_kind = nativeAt(kinds, chosen.selected_index);
         // A length starts at 8 hours, or keeps the one typed.
         if (edit_state.span_low <= 0n && edit_state.span_high <= 0n) {
             edit_state.span_low = 8n * 60n;
             edit_state.span_high = 8n * 60n;
-            SpanTexts();
+            Model.SpanTexts();
         }
     }
-    y += Scale(52n);
+    y += Model.Scale(52n);
     let kind = edit_state.span_kind;
-    if (kind === HABIT_GOAL_AT_LEAST || kind === HABIT_GOAL_BETWEEN) {
+    if (kind === Habit.HABIT_GOAL_AT_LEAST || kind === Habit.HABIT_GOAL_BETWEEN) {
         let low = SpanLength(
             0n,
-            Locale(kind === HABIT_GOAL_BETWEEN ? "habit_goal_between" : "habit_goal_at_least"),
+            Model.Locale(
+                kind === Habit.HABIT_GOAL_BETWEEN ? "habit_goal_between" : "habit_goal_at_least"
+            ),
             x,
             y,
             width
@@ -1386,12 +1265,14 @@ function SpanGoal(x: s32, y: s32, width: s32): void {
         if (low >= 0n) {
             edit_state.span_low = low;
         }
-        y += Scale(52n);
+        y += Model.Scale(52n);
     }
-    if (kind === HABIT_GOAL_AT_MOST || kind === HABIT_GOAL_BETWEEN) {
+    if (kind === Habit.HABIT_GOAL_AT_MOST || kind === Habit.HABIT_GOAL_BETWEEN) {
         let high = SpanLength(
             1n,
-            Locale(kind === HABIT_GOAL_BETWEEN ? "habit_goal_and" : "habit_goal_at_most"),
+            Model.Locale(
+                kind === Habit.HABIT_GOAL_BETWEEN ? "habit_goal_and" : "habit_goal_at_most"
+            ),
             x,
             y,
             width
@@ -1404,47 +1285,40 @@ function SpanGoal(x: s32, y: s32, width: s32): void {
 
 function QuestionField(
     index: s32,
-    question: *HabitsEditQuestion,
+    question: NativeRef<HabitsEditQuestion>,
     bounds: Rectangle
 ): boolean {
     const edit_state = Model.CurrentEditor();
     let focused = edit_state.question_focused === index + 1n;
-    let props: NativeTextField.Props = {
-        key: NativeLayout.KeyHash("habit/edit/question") + u64(index),
-        bounds: bounds,
-        value: question.text,
-        placeholder: Locale("habit_question_placeholder"),
-        focused: focused,
-        focus_id: 7720n + index,
-        max_bytes: HABIT_QUESTION_TEXT_SIZE - 1n,
-        max_codepoints: HABIT_QUESTION_TEXT_SIZE - 1n
-    };
-    if (focused) {
-        props.cursor = edit_state.question_cursor;
-        props.anchor = edit_state.question_anchor;
-        props.scroll_x = edit_state.question_scroll_x;
-        props.input = edit_state.input;
-    }
-    let result = <ControlledTextField session={edit_state.session} props={props} />;
-    if (result.edit.changed) {
-        question.text = Replaced(
-            question.text,
-            result.edit.start,
-            result.edit.end,
-            result.edit.replacement,
-            HABIT_QUESTION_TEXT_SIZE - 1n
-        );
-    }
+    let binding = Shared.BindText(
+        nativeRef(edit_state.question_cursor),
+        nativeRef(edit_state.question_anchor),
+        nativeRef(edit_state.question_scroll_x)
+    );
+    let props = Shared.InputProps(
+        binding,
+        {
+            key: NativeLayout.KeyHash("habit/edit/question") + u64(index),
+            bounds: bounds,
+            value: question.text,
+            placeholder: Model.Locale("habit_question_placeholder"),
+            focused: focused,
+            focus_id: 7720n + index,
+            max_bytes: Habit.HABIT_QUESTION_TEXT_SIZE - 1n
+        },
+        edit_state.input,
+        true
+    );
+    let result = ControlledTextField({ session: edit_state.session, props: props });
+    Shared.AcceptText(binding, result, true);
+    question.text = Shared.EditedText(question.text, result.edit, props.max_bytes);
+    Model.Clipboard(result);
     if (result.focused) {
         edit_state.question_focused = index + 1n;
-        edit_state.question_cursor = result.cursor;
-        edit_state.question_anchor = result.anchor;
-        edit_state.question_scroll_x = result.scroll_x;
-        FocusOnly(5n);
+        Model.FocusOnly(5n);
     } else if (focused) {
         edit_state.question_focused = 0n;
     }
-    Clipboard(result);
     return result.focused;
 }
 
@@ -1454,70 +1328,82 @@ function QuestionField(
 function Questions(x: s32, y: s32, width: s32): void {
     const questions = Model.Questions();
     const edit_state = Model.CurrentEditor();
-    Label(Locale("habit_questions_label"), x, y + Scale(12n), width, Scale(28n));
-    y += Scale(48n);
-    let remove_width = Scale(44n);
-    let type_width = Scale(160n);
-    let types = NewTypes();
-    for (let answer_type = s32(0n); answer_type < HABIT_ANSWER_TYPE_COUNT; answer_type += s32(1)) {
-        types[answer_type].label = AnswerLabel(answer_type + 1n);
+    Label(Model.Locale("habit_questions_label"), x, y + Model.Scale(12n), width, Model.Scale(28n));
+    y += Model.Scale(48n);
+    let remove_width = Model.Scale(44n);
+    let type_width = Model.Scale(160n);
+    let types = Model.NewTypes();
+    for (
+        let answer_type = s32(0n);
+        answer_type < Habit.HABIT_ANSWER_TYPE_COUNT;
+        answer_type += s32(1)
+    ) {
+        nativeAt(types, answer_type).label = Model.AnswerLabel(answer_type + 1n);
     }
     // Each question's card spans the options' width; its rows sit inside.
-    let pad = Scale(EDIT_QUESTION_PADDING);
+    let pad = Model.Scale(Model.EDIT_QUESTION_PADDING);
     let inner_x = x + pad;
     let inner_width = width - pad * 2n;
     for (let index = s32(0n); index < edit_state.question_count; index += s32(1)) {
-        let question = questions[index];
+        let question = nativeAt(questions, index);
         let before = question;
-        let card_height = QuestionCardHeight(index);
+        let card_height = Model.QuestionCardHeight(index);
         <Box
             session={edit_state.session}
             props={{
-                bounds: Bounds(x, y, width, card_height),
+                bounds: Shared.Bounds(x, y, width, card_height),
                 fill: edit_state.card_fill,
                 border: edit_state.card_border,
-                radius: float32(Scale(12n))
+                radius: float32(Model.Scale(12n))
             }}
         />;
         let card_bottom = y + card_height;
         y += pad;
-        let text_bounds = Bounds(inner_x, y, inner_width - remove_width - Scale(8n), Scale(44n));
+        let text_bounds = Shared.Bounds(
+            inner_x,
+            y,
+            inner_width - remove_width - Model.Scale(8n),
+            Model.Scale(44n)
+        );
         let was_focused = edit_state.question_focused === index + 1n;
-        if (QuestionField(index, &question, text_bounds) && !was_focused) {
-            EnsureVisible(text_bounds);
+        if (QuestionField(index, nativeRef(question), text_bounds) && !was_focused) {
+            Model.EnsureVisible(text_bounds);
         }
         if (
             Step(
                 7740n + index,
                 "-",
-                Bounds(inner_x + inner_width - remove_width, y, remove_width, Scale(44n)),
+                Shared.Bounds(
+                    inner_x + inner_width - remove_width,
+                    y,
+                    remove_width,
+                    Model.Scale(44n)
+                ),
                 false
             )
         ) {
-            Ask(HABITS_EDIT_REMOVE_QUESTION, index);
+            Model.Ask(Habits.HABITS_EDIT_REMOVE_QUESTION, index);
         }
         RowLabel(
-            Locale("habit_answer_as"),
+            Model.Locale("habit_answer_as"),
             inner_x,
-            y + Scale(48n),
-            inner_width - type_width - Scale(8n)
+            y + Model.Scale(48n),
+            inner_width - type_width - Model.Scale(8n)
         );
-        let chosen = (
-            <Dropdown
-                session={edit_state.session}
-                props={{
-                    id: 7750n + index,
-                    bounds: Bounds(
-                        inner_x + inner_width - type_width,
-                        y + Scale(52n),
-                        type_width,
-                        Scale(44n)
-                    ),
-                    selected_index: question.answer_type - 1n
-                }}
-                options={types[:]}
-            />
-        );
+        let chosen = Dropdown({
+            session: edit_state.session,
+            props: {
+                id: 7750n + index,
+                bounds: Shared.Bounds(
+                    inner_x + inner_width - type_width,
+                    y + Model.Scale(52n),
+                    type_width,
+                    Model.Scale(44n)
+                ),
+                selected_index: question.answer_type - 1n
+            },
+            options: nativeSlice(types)
+        });
         if (chosen.changed) {
             // Another answer type starts with its own goal.
             question.answer_type = chosen.selected_index + 1n;
@@ -1525,13 +1411,13 @@ function Questions(x: s32, y: s32, width: s32): void {
             question.goal_kind = goal.kind;
             question.goal_low = goal.low;
             question.goal_high = goal.high;
-            GoalTexts(&question);
+            Model.GoalTexts(nativeRef(question));
         }
-        y += Scale(104n);
-        if (Model.question_roles[index] === 1n) {
+        y += Model.Scale(104n);
+        if (nativeAt(Model.question_roles, index) === 1n) {
             SpanGoal(inner_x, y, inner_width);
-        } else if (Model.question_roles[index] === 0n) {
-            Goal(index, &question, inner_x, y, inner_width);
+        } else if (nativeAt(Model.question_roles, index) === 0n) {
+            Goal(index, nativeRef(question), inner_x, y, inner_width);
         }
         if (
             question.text !== before.text ||
@@ -1542,37 +1428,35 @@ function Questions(x: s32, y: s32, width: s32): void {
             question.low_text !== before.low_text ||
             question.high_text !== before.high_text
         ) {
-            WriteHabitsEditQuestionHost(index, question);
-            questions[index] = question;
+            Model.WriteHabitsEditQuestionHost(index, question);
+            nativeSet(questions, index, question);
         }
-        y = card_bottom + Scale(EDIT_QUESTION_GAP);
+        y = card_bottom + Model.Scale(Model.EDIT_QUESTION_GAP);
     }
     if (
-        (
-            <Button
-                session={edit_state.session}
-                props={{
-                    id: 7760n,
-                    bounds: Bounds(x, y, width, Scale(44n)),
-                    label: Filled("+  %s", 0n, Locale("habit_question_add")),
-                    disabled: edit_state.question_count >= HABIT_QUESTION_MAX,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: edit_state.session,
+            props: {
+                id: 7760n,
+                bounds: Shared.Bounds(x, y, width, Model.Scale(44n)),
+                label: Model.Filled("+  %s", 0n, Model.Locale("habit_question_add")),
+                disabled: edit_state.question_count >= Habit.HABIT_QUESTION_MAX,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
-        Ask(HABITS_EDIT_ADD_QUESTION, -1n);
+        Model.Ask(Habits.HABITS_EDIT_ADD_QUESTION, -1n);
     }
 }
 
 function Tracking(x: s32, y: s32, width: s32): void {
     const edit_state = Model.CurrentEditor();
     Difficulty(x, y, width);
-    y += Scale(DifficultyHeight());
+    y += Model.Scale(Model.DifficultyHeight());
     let counter = RowToggle(
         7610n,
-        Locale("habit_counter_mode"),
+        Model.Locale("habit_counter_mode"),
         edit_state.counter_enabled,
         x,
         y,
@@ -1585,40 +1469,51 @@ function Tracking(x: s32, y: s32, width: s32): void {
             edit_state.span = false;
         }
     }
-    y += Scale(52n);
+    y += Model.Scale(52n);
     if (edit_state.counter_enabled) {
-        Label(Locale("habit_counter_target"), x, y + Scale(10n), width - Scale(164n), Scale(36n));
-        let control_x = x + width - Scale(160n);
+        Label(
+            Model.Locale("habit_counter_target"),
+            x,
+            y + Model.Scale(10n),
+            width - Model.Scale(164n),
+            Model.Scale(36n)
+        );
+        let control_x = x + width - Model.Scale(160n);
         if (
             Step(
                 7620n,
                 "-",
-                Bounds(control_x, y, Scale(44n), Scale(44n)),
+                Shared.Bounds(control_x, y, Model.Scale(44n), Model.Scale(44n)),
                 edit_state.counter_target <= 0n
             )
         ) {
             edit_state.counter_target = edit_state.counter_target - 1n;
-            CounterText();
+            Model.CounterText();
         }
-        let counter_bounds = Bounds(control_x + Scale(50n), y, Scale(60n), Scale(44n));
+        let counter_bounds = Shared.Bounds(
+            control_x + Model.Scale(50n),
+            y,
+            Model.Scale(60n),
+            Model.Scale(44n)
+        );
         let was_focused = edit_state.counter_focused;
         if (CounterField(counter_bounds) && !was_focused) {
-            EnsureVisible(counter_bounds);
+            Model.EnsureVisible(counter_bounds);
         }
         if (
             Step(
                 7621n,
                 "+",
-                Bounds(control_x + Scale(116n), y, Scale(44n), Scale(44n)),
-                edit_state.counter_target >= HABIT_COUNTER_TARGET_MAX
+                Shared.Bounds(control_x + Model.Scale(116n), y, Model.Scale(44n), Model.Scale(44n)),
+                edit_state.counter_target >= Habit.HABIT_COUNTER_TARGET_MAX
             )
         ) {
             edit_state.counter_target = edit_state.counter_target + 1n;
-            CounterText();
+            Model.CounterText();
         }
-        y += Scale(52n);
+        y += Model.Scale(52n);
     }
-    let span = RowToggle(7612n, Locale("habit_span_mode"), edit_state.span, x, y, width);
+    let span = RowToggle(7612n, Model.Locale("habit_span_mode"), edit_state.span, x, y, width);
     if (span.changed) {
         edit_state.span = span.value;
         if (span.value) {
@@ -1627,131 +1522,135 @@ function Tracking(x: s32, y: s32, width: s32): void {
             edit_state.span_kind = goal.kind;
             edit_state.span_low = goal.low;
             edit_state.span_high = goal.high;
-            SpanTexts();
+            Model.SpanTexts();
         }
-        ReadQuestions();
+        Model.ReadQuestions();
     }
-    y += Scale(52n);
+    y += Model.Scale(52n);
     // Without a start question the span's goal sits under its selection.
-    if (edit_state.span && !HasSpanStart()) {
+    if (edit_state.span && !Model.HasSpanStart()) {
         SpanGoal(x, y, width);
-        y += SpanGoalHeight();
+        y += Model.SpanGoalHeight();
     }
-    let linked: s32 = 0n;
+    let linked: s32 = s32(0n);
     for (let index = s32(0n); index < edit_state.practice_count; index += s32(1)) {
-        if (PracticeLinked(ReadHabitsEditPracticeHost(index).mask)) {
+        if (Model.PracticeLinked(Model.ReadHabitsEditPracticeHost(index).mask)) {
             linked += 1n;
         }
     }
     if (
-        (
-            <Button
-                session={edit_state.session}
-                props={{
-                    id: 7630n,
-                    bounds: Bounds(x, y, width, Scale(44n)),
-                    label: Filled("%s · %d", linked, Locale("habit_link_practices")),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: edit_state.session,
+            props: {
+                id: 7630n,
+                bounds: Shared.Bounds(x, y, width, Model.Scale(44n)),
+                label: Model.Filled("%s · %d", linked, Model.Locale("habit_link_practices")),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
-        Ask(HABITS_EDIT_PRACTICES, -1n);
+        Model.Ask(Habits.HABITS_EDIT_PRACTICES, -1n);
     }
-    Questions(x, y + Scale(44n), width);
+    Questions(x, y + Model.Scale(44n), width);
 }
 
 function Form(): void {
     const edit_state = Model.CurrentEditor();
-    let top = Scale(56n);
-    let footer = Scale(edit_state.name_error !== 0n ? 92n : 64n);
-    let options = NewOptions1NativeDropdownOption();
-    let title = (
-        <TitleBar
-            session={edit_state.session}
-            props={{
-                title: Locale(edit_state.is_new ? "habit_new_title" : "habit_edit_title"),
-                height: top,
-                strong_title: true,
-                bounds: Bounds(0n, 0n, edit_state.view_width, top),
-                has_leading_action: true,
-                leading_label: Locale("back_button")
-            }}
-            options={options[0n:0n]}
-        />
-    );
+    let top = Model.Scale(56n);
+    let footer = Model.Scale(edit_state.name_error !== 0n ? 92n : 64n);
+    let options = Model.NewOptions1NativeDropdownOption();
+    let title = TitleBar({
+        session: edit_state.session,
+        props: {
+            title: Model.Locale(edit_state.is_new ? "habit_new_title" : "habit_edit_title"),
+            height: top,
+            strong_title: true,
+            bounds: Shared.Bounds(0n, 0n, edit_state.view_width, top),
+            has_leading_action: true,
+            leading_label: Model.Locale("back_button")
+        },
+        options: nativeSlice(options, 0n, 0n)
+    });
     if (title.clicked_leading) {
-        Ask(HABITS_EDIT_BACK, -1n);
+        Model.Ask(Habits.HABITS_EDIT_BACK, -1n);
         return;
     }
     let viewport_height = edit_state.view_height - top - footer;
     if (viewport_height < 1n) {
         viewport_height = 1n;
     }
-    let side = Scale(16n);
+    let side = Model.Scale(16n);
     let x = side;
     let width = edit_state.view_width - side * 2n;
-    if (width > Scale(EDIT_CONTENT_MAX_WIDTH)) {
-        x += (width - Scale(EDIT_CONTENT_MAX_WIDTH)) / 2n;
-        width = Scale(EDIT_CONTENT_MAX_WIDTH);
+    if (width > Model.Scale(Model.EDIT_CONTENT_MAX_WIDTH)) {
+        x += (width - Model.Scale(Model.EDIT_CONTENT_MAX_WIDTH)) / 2n;
+        width = Model.Scale(Model.EDIT_CONTENT_MAX_WIDTH);
     }
-    let content_height = ContentHeight(width);
+    let content_height = Model.ContentHeight(width);
     Model.form_top = top;
     Model.form_height = viewport_height;
     Model.form_content = content_height;
-    const scrolled = (
-        <Scroll
-            session={edit_state.session}
-            props={{
-                key: NativeLayout.KeyHash("habit/edit/scroll"),
-                bounds: Bounds(0n, top, edit_state.view_width, viewport_height),
-                content_height: content_height,
-                scroll_offset: edit_state.scroll
-            }}
-            children={(scrolled: NativeScroll.ScrollResult): void => {
-                const edit_state = Model.CurrentEditor();
-                edit_state.scroll = scrolled.scroll_offset;
-                let y = s32(scrolled.content.y) + Scale(8n);
-                let titles: [string, string, string] = [
-                    Locale("habit_details_title"),
-                    Locale("habit_routine_title"),
-                    Locale("habit_tracking_title")
-                ];
-                for (let section = s32(0n); section <= 2n; section += s32(1)) {
-                    let body_width = width - Scale(24n);
-                    let body_height = SectionBody(section, body_width);
-                    <Text
-                        session={edit_state.session}
-                        props={{
-                            bounds: Bounds(x + Scale(4n), y, width - Scale(4n), Scale(26n)),
-                            text: titles[section],
-                            size: edit_state.font,
-                            wrap: NativeText.Wrap.TextWrapNone,
-                            semantic_kind: SemanticKind.SemanticHeading,
-                            heading_level: 2n
-                        }}
-                    />;
-                    <Fieldset
-                        session={edit_state.session}
-                        props={{
-                            bounds: Bounds(x, y + Scale(30n), width, body_height + Scale(24n))
-                        }}
-                    />;
-                    let body_x = x + Scale(12n);
-                    let body_y = y + Scale(42n);
-                    if (section === 0n) {
-                        Details(body_x, body_y, body_width);
-                    } else if (section === 1n) {
-                        Routine(body_x, body_y, body_width);
-                    } else {
-                        Tracking(body_x, body_y, body_width);
-                    }
-                    y += SectionHeight(section, body_width) + Scale(12n);
+    const scrolled = Scroll({
+        session: edit_state.session,
+        props: {
+            key: NativeLayout.KeyHash("habit/edit/scroll"),
+            bounds: Shared.Bounds(0n, top, edit_state.view_width, viewport_height),
+            content_height: content_height,
+            scroll_offset: edit_state.scroll
+        },
+        children: (scrolled: NativeScroll.ScrollResult): void => {
+            const edit_state = Model.CurrentEditor();
+            edit_state.scroll = scrolled.scroll_offset;
+            let y = s32(scrolled.content.y) + Model.Scale(8n);
+            let titles: [string, string, string] = [
+                Model.Locale("habit_details_title"),
+                Model.Locale("habit_routine_title"),
+                Model.Locale("habit_tracking_title")
+            ];
+            for (let section = s32(0n); section <= 2n; section += s32(1)) {
+                let body_width = width - Model.Scale(24n);
+                let body_height = Model.SectionBody(section, body_width);
+                <Text
+                    session={edit_state.session}
+                    props={{
+                        bounds: Shared.Bounds(
+                            x + Model.Scale(4n),
+                            y,
+                            width - Model.Scale(4n),
+                            Model.Scale(26n)
+                        ),
+                        text: nativeAt(titles, section),
+                        size: edit_state.font,
+                        wrap: NativeText.Wrap.TextWrapNone,
+                        semantic_kind: SemanticKind.SemanticHeading,
+                        heading_level: 2n
+                    }}
+                />;
+                <Fieldset
+                    session={edit_state.session}
+                    props={{
+                        bounds: Shared.Bounds(
+                            x,
+                            y + Model.Scale(30n),
+                            width,
+                            body_height + Model.Scale(24n)
+                        )
+                    }}
+                />;
+                let body_x = x + Model.Scale(12n);
+                let body_y = y + Model.Scale(42n);
+                if (section === 0n) {
+                    Details(body_x, body_y, body_width);
+                } else if (section === 1n) {
+                    Routine(body_x, body_y, body_width);
+                } else {
+                    Tracking(body_x, body_y, body_width);
                 }
-            }}
-        />
-    );
+                y += Model.SectionHeight(section, body_width) + Model.Scale(12n);
+            }
+        }
+    });
     if (!scrolled.opened) {
         edit_state.scroll = scrolled.scroll_offset;
     }
@@ -1759,7 +1658,12 @@ function Form(): void {
     <Box
         session={edit_state.session}
         props={{
-            bounds: Bounds(0n, edit_state.view_height - footer, edit_state.view_width, footer),
+            bounds: Shared.Bounds(
+                0n,
+                edit_state.view_height - footer,
+                edit_state.view_width,
+                footer
+            ),
             fill: edit_state.canvas_color
         }}
     />;
@@ -1768,67 +1672,70 @@ function Form(): void {
     <Box
         session={edit_state.session}
         props={{
-            bounds: Bounds(0n, edit_state.view_height - footer, edit_state.view_width, Scale(1n)),
+            bounds: Shared.Bounds(
+                0n,
+                edit_state.view_height - footer,
+                edit_state.view_width,
+                Model.Scale(1n)
+            ),
             fill: rule
         }}
     />;
     if (edit_state.name_error !== 0n) {
         Label(
-            Locale(edit_state.name_error === 1n ? "habit_name_required" : "habit_name_duplicate"),
+            Model.Locale(
+                edit_state.name_error === 1n ? "habit_name_required" : "habit_name_duplicate"
+            ),
             x,
-            edit_state.view_height - footer + Scale(8n),
+            edit_state.view_height - footer + Model.Scale(8n),
             width,
-            Scale(28n)
+            Model.Scale(28n)
         );
     }
     let action_x = x;
     let action_width = width;
     if (!edit_state.is_new) {
-        let delete_width = Scale(104n);
+        let delete_width = Model.Scale(104n);
         if (
-            (
-                <Button
-                    session={edit_state.session}
-                    props={{
-                        id: 7650n,
-                        bounds: Bounds(
-                            x,
-                            edit_state.view_height - Scale(54n),
-                            delete_width,
-                            Scale(44n)
-                        ),
-                        label: Locale("habit_delete_button"),
-                        tone: ButtonTone.ButtonToneDanger,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                    }}
-                />
-            )
+            Button({
+                session: edit_state.session,
+                props: {
+                    id: 7650n,
+                    bounds: Shared.Bounds(
+                        x,
+                        edit_state.view_height - Model.Scale(54n),
+                        delete_width,
+                        Model.Scale(44n)
+                    ),
+                    label: Model.Locale("habit_delete_button"),
+                    tone: ButtonTone.ButtonToneDanger,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                }
+            })
         ) {
-            Ask(HABITS_EDIT_DELETE, -1n);
+            Model.Ask(Habits.HABITS_EDIT_DELETE, -1n);
         }
-        action_x += delete_width + Scale(8n);
-        action_width -= delete_width + Scale(8n);
+        action_x += delete_width + Model.Scale(8n);
+        action_width -= delete_width + Model.Scale(8n);
     }
     if (
-        (
-            <Button
-                session={edit_state.session}
-                props={{
-                    id: 7651n,
-                    bounds: Bounds(
-                        action_x,
-                        edit_state.view_height - Scale(54n),
-                        action_width,
-                        Scale(44n)
-                    ),
-                    label: Locale(edit_state.is_new ? "habit_create_button" : "save_button"),
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                }}
-            />
-        )
+        Button({
+            session: edit_state.session,
+            props: {
+                id: 7651n,
+                bounds: Shared.Bounds(
+                    action_x,
+                    edit_state.view_height - Model.Scale(54n),
+                    action_width,
+                    Model.Scale(44n)
+                ),
+                label: Model.Locale(edit_state.is_new ? "habit_create_button" : "save_button"),
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisFilled
+            }
+        })
     ) {
-        Ask(HABITS_EDIT_SAVE, -1n);
+        Model.Ask(Habits.HABITS_EDIT_SAVE, -1n);
     }
 }
 
@@ -1836,19 +1743,19 @@ function Form(): void {
 // sessions count, then apps such as Diary, as the host lists them.
 function PracticePicker(): void {
     const edit_state = Model.CurrentEditor();
-    let width = edit_state.view_width - Scale(32n);
-    if (width > Scale(400n)) {
-        width = Scale(400n);
+    let width = edit_state.view_width - Model.Scale(32n);
+    if (width > Model.Scale(400n)) {
+        width = Model.Scale(400n);
     }
     let frame = NativeModal.Draw(edit_state.session, {
         key: NativeLayout.KeyHash("habit/edit/practices"),
-        title: Locale("habit_link_practices"),
+        title: Model.Locale("habit_link_practices"),
         width: width,
-        height: Scale(160n + edit_state.practice_count * 42n),
+        height: Model.Scale(160n + edit_state.practice_count * 42n),
         scale: edit_state.scale
     });
     if (frame.dismissed) {
-        Ask(HABITS_EDIT_PRACTICES_DONE, -1n);
+        Model.Ask(Habits.HABITS_EDIT_PRACTICES_DONE, -1n);
         return;
     }
     if (!frame.opened) {
@@ -1858,103 +1765,97 @@ function PracticePicker(): void {
     let x = s32(content.x);
     let y = s32(content.y);
     width = s32(content.width);
-    let hint = Locale("habit_link_practices_hint");
+    let hint = Model.Locale("habit_link_practices_hint");
     let hint_height = TextHeight(edit_state.session, {
         text: hint,
         size: edit_state.font,
-        bounds: Bounds(0n, 0n, width, 0n),
+        bounds: Shared.Bounds(0n, 0n, width, 0n),
         wrap: NativeText.Wrap.TextWrapAuto
     });
     Label(hint, x, y, width, hint_height);
-    y += hint_height + Scale(8n);
-    let choices_height = s32(content.y + content.height) - y - Scale(52n);
-    if (choices_height < Scale(40n)) {
-        choices_height = Scale(40n);
+    y += hint_height + Model.Scale(8n);
+    let choices_height = s32(content.y + content.height) - y - Model.Scale(52n);
+    if (choices_height < Model.Scale(40n)) {
+        choices_height = Model.Scale(40n);
     }
-    const choices = (
-        <Scroll
-            session={edit_state.session}
-            props={{
-                key: NativeLayout.KeyHash("habit/edit/practice-list"),
-                bounds: Bounds(x, y, width, choices_height),
-                scale: edit_state.scale,
-                content_height: edit_state.practice_count * Scale(42n),
-                scroll_offset: Model.practice_scroll
-            }}
-            children={(choices: NativeScroll.ScrollResult): void => {
-                const edit_state = Model.CurrentEditor();
-                Model.practice_scroll = choices.scroll_offset;
-                let y = s32(choices.content.y);
-                for (let index = s32(0n); index < edit_state.practice_count; index += s32(1)) {
-                    let practice = ReadHabitsEditPracticeHost(index);
-                    let checkbox = (
-                        <Checkbox
-                            session={edit_state.session}
-                            props={{
-                                id: 9120n + index,
-                                bounds: Bounds(x, y, s32(choices.content.width), Scale(38n)),
-                                label: practice.label,
-                                checked: PracticeLinked(practice.mask),
-                                disabled:
-                                    PracticeLinked(HABIT_LINK_DIARY) &&
-                                    practice.mask !== HABIT_LINK_DIARY
-                            }}
-                        />
-                    );
-                    if (checkbox.changed) {
-                        edit_state.sync_activity = HabitLinkSelect(
-                            edit_state.sync_activity,
-                            practice.mask,
-                            checkbox.checked
-                        );
+    const choices = Scroll({
+        session: edit_state.session,
+        props: {
+            key: NativeLayout.KeyHash("habit/edit/practice-list"),
+            bounds: Shared.Bounds(x, y, width, choices_height),
+            scale: edit_state.scale,
+            content_height: edit_state.practice_count * Model.Scale(42n),
+            scroll_offset: Model.practice_scroll
+        },
+        children: (choices: NativeScroll.ScrollResult): void => {
+            const edit_state = Model.CurrentEditor();
+            Model.practice_scroll = choices.scroll_offset;
+            let y = s32(choices.content.y);
+            for (let index = s32(0n); index < edit_state.practice_count; index += s32(1)) {
+                let practice = Model.ReadHabitsEditPracticeHost(index);
+                let checkbox = Checkbox({
+                    session: edit_state.session,
+                    props: {
+                        id: 9120n + index,
+                        bounds: Shared.Bounds(x, y, s32(choices.content.width), Model.Scale(38n)),
+                        label: practice.label,
+                        checked: Model.PracticeLinked(practice.mask),
+                        disabled:
+                            Model.PracticeLinked(HABIT_LINK_DIARY) &&
+                            practice.mask !== HABIT_LINK_DIARY
                     }
-                    y += Scale(42n);
+                });
+                if (checkbox.changed) {
+                    edit_state.sync_activity = HabitLinkSelect(
+                        edit_state.sync_activity,
+                        practice.mask,
+                        checkbox.checked
+                    );
                 }
-            }}
-        />
-    );
+                y += Model.Scale(42n);
+            }
+        }
+    });
     if (!choices.opened) {
         Model.practice_scroll = choices.scroll_offset;
     }
     if (
-        (
-            <Button
-                session={edit_state.session}
-                props={{
-                    id: 9160n,
-                    bounds: {
-                        x: float32(x),
-                        y: content.y + content.height - float32(Scale(44n)),
-                        width: float32(width),
-                        height: float32(Scale(40n))
-                    },
-                    label: Locale("done_button"),
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                }}
-            />
-        )
+        Button({
+            session: edit_state.session,
+            props: {
+                id: 9160n,
+                bounds: {
+                    x: float32(x),
+                    y: content.y + content.height - float32(Model.Scale(44n)),
+                    width: float32(width),
+                    height: float32(Model.Scale(40n))
+                },
+                label: Model.Locale("done_button"),
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisFilled
+            }
+        })
     ) {
-        Ask(HABITS_EDIT_PRACTICES_DONE, -1n);
+        Model.Ask(Habits.HABITS_EDIT_PRACTICES_DONE, -1n);
     }
     End(edit_state.session);
 }
 
-export function HabitsEditView(message: HabitsMessage): HabitsMessage {
+export function HabitsEditView(message: Habits.HabitsMessage): Habits.HabitsMessage {
     const edit_state = Model.CurrentEditor();
-    Model.SetEditor(ReadHabitsEditHost());
-    edit_state.action = HABITS_EDIT_NONE;
+    Model.SetEditor(Model.ReadHabitsEditHost());
+    edit_state.action = Habits.HABITS_EDIT_NONE;
     edit_state.action_index = -1n;
     edit_state.clipboard_write = false;
     edit_state.clipboard_text = "";
-    ReadQuestions();
+    Model.ReadQuestions();
     if (edit_state.picking_practices) {
         PracticePicker();
     } else {
         Model.practice_scroll = 0n;
         Form();
     }
-    WriteHabitsEditHost(*edit_state);
+    Model.WriteHabitsEditHost(nativeDeref(edit_state));
     message.succeeded = true;
     return message;
 }

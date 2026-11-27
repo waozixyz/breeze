@@ -18,7 +18,7 @@ export function InbePickerViewComposition(): InbeMessage {
     let compact = State.frame.height < Scale(480n);
     let scroll_top = compact ? Scale(104n) : Scale(156n);
     let content_height = Scale(548n);
-    for (let packageId: s32 = 1n; packageId <= s32(5n); packageId += s32(1)) {
+    for (let packageId: s32 = s32(1n); packageId <= s32(5n); packageId += s32(1)) {
         if (Status(packageId) >= 3n) {
             content_height += Scale(16n);
         }
@@ -50,47 +50,43 @@ export function InbePickerViewComposition(): InbeMessage {
         }}
     />;
     let left = column.x;
-    let scroll = (
-        <Scroll
-            session={State.frame.session}
-            props={{
-                key: 27000n,
-                bounds: {
-                    x: float32(left),
-                    y: float32(scroll_top),
-                    width: float32(column.width),
-                    height: float32(State.frame.height - scroll_top - Scale(80n))
-                },
-                content_height: content_height,
-                scroll_offset: State.frame.scroll
-            }}
-            children={(view: NativeScroll.ScrollResult): void => {
-                PickerRows(view, left);
-            }}
-        />
-    );
+    let scroll = Scroll({
+        session: State.frame.session,
+        props: {
+            key: 27000n,
+            bounds: {
+                x: float32(left),
+                y: float32(scroll_top),
+                width: float32(column.width),
+                height: float32(State.frame.height - scroll_top - Scale(80n))
+            },
+            content_height: content_height,
+            scroll_offset: State.frame.scroll
+        },
+        children: (view: NativeScroll.ScrollResult): void => {
+            PickerRows(view, left);
+        }
+    });
     State.frame.scroll = scroll.scroll_offset;
     if (!scroll.opened) {
         return FinishPicker();
     }
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: 274n,
-                    bounds: {
-                        x: float32(column.x),
-                        y: float32(State.frame.height - Scale(64n)),
-                        width: float32(column.width),
-                        height: float32(Scale(44n))
-                    },
-                    label: PickerLocaleHost("next_button"),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                id: 274n,
+                bounds: {
+                    x: float32(column.x),
+                    y: float32(State.frame.height - Scale(64n)),
+                    width: float32(column.width),
+                    height: float32(Scale(44n))
+                },
+                label: PickerLocaleHost("next_button"),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         State.frame.confirm = true;
     }
@@ -109,7 +105,7 @@ function PickerRows(scroll: NativeScroll.ScrollResult, left: s32): void {
         PickerLocaleHost("tab_diary")
     ];
     let packageIds: [s32, s32, s32, s32, s32] = [5n, 2n, 3n, 1n, 4n];
-    let index: s32 = 0n;
+    let index: s32 = s32(0n);
     while (index < 5n) {
         if (index === 0n || index === 3n) {
             <Text
@@ -127,24 +123,22 @@ function PickerRows(scroll: NativeScroll.ScrollResult, left: s32): void {
             />;
             row_top += Scale(40n);
         }
-        let packageId = packageIds[index];
+        let packageId = nativeAt(packageIds, index);
         let bit = Bit(packageId);
-        let checkbox = (
-            <Checkbox
-                session={State.frame.session}
-                props={{
-                    id: packageId === 5n ? 278n : 270n + packageId - 1n,
-                    bounds: {
-                        x: float32(left),
-                        y: float32(row_top),
-                        width: float32(content_width),
-                        height: float32(Scale(44n))
-                    },
-                    label: labels[index],
-                    checked: FlagIntersection(State.state.enabled_apps, bit) !== 0n
-                }}
-            />
-        );
+        let checkbox = Checkbox({
+            session: State.frame.session,
+            props: {
+                id: packageId === 5n ? 278n : 270n + packageId - 1n,
+                bounds: {
+                    x: float32(left),
+                    y: float32(row_top),
+                    width: float32(content_width),
+                    height: float32(Scale(44n))
+                },
+                label: nativeAt(labels, index),
+                checked: FlagIntersection(State.state.enabled_apps, bit) !== 0n
+            }
+        });
         if (checkbox.changed) {
             if (checkbox.checked) {
                 State.state.enabled_apps = FlagUnion(State.state.enabled_apps, bit);
@@ -199,44 +193,40 @@ function PickerRows(scroll: NativeScroll.ScrollResult, left: s32): void {
             size: State.frame.font
         }}
     />;
-    let automatic = (
-        <Toggle
-            session={State.frame.session}
-            props={{
-                id: 276n,
-                bounds: {
-                    x: float32(left + content_width - Scale(64n)),
-                    y: float32(row_top + Scale(12n)),
-                    width: float32(Scale(64n)),
-                    height: float32(Scale(44n))
-                },
-                label: PickerLocaleHost("cells_auto_update"),
-                value: State.frame.automatic
-            }}
-        />
-    );
+    let automatic = Toggle({
+        session: State.frame.session,
+        props: {
+            id: 276n,
+            bounds: {
+                x: float32(left + content_width - Scale(64n)),
+                y: float32(row_top + Scale(12n)),
+                width: float32(Scale(64n)),
+                height: float32(Scale(44n))
+            },
+            label: PickerLocaleHost("cells_auto_update"),
+            value: State.frame.automatic
+        }
+    });
     if (automatic.changed) {
         State.frame.automatic = automatic.value;
     }
     row_top += Scale(64n);
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: 277n,
-                    bounds: {
-                        x: float32(left),
-                        y: float32(row_top),
-                        width: float32(content_width),
-                        height: float32(Scale(44n))
-                    },
-                    label: PickerLocaleHost("cells_check_updates"),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                id: 277n,
+                bounds: {
+                    x: float32(left),
+                    y: float32(row_top),
+                    width: float32(content_width),
+                    height: float32(Scale(44n))
+                },
+                label: PickerLocaleHost("cells_check_updates"),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         State.frame.check_updates = true;
     }

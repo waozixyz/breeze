@@ -33,7 +33,7 @@ import { tai_chi_modal_draw } from "tai_chi_practice";
 import { ScreenNodeApp } from "types";
 import { WorkoutManagerDraw } from "workout";
 
-export function draw_global_modal(app: *InnerBreeze): void {
+export function draw_global_modal(app: NativeRef<InnerBreeze>): void {
     if (NativePresent(app)) {
         CrashReportPump(app);
         MediaCompressionPump(app);
@@ -74,16 +74,14 @@ export function draw_global_modal(app: *InnerBreeze): void {
                 emphasis: ButtonEmphasis.ButtonEmphasisFilled
             }
         ];
-        let choice = (
-            <ActionModal
-                session={app.ui.session}
-                props={{
-                    title: NodeAppTitle(NodeAppName(app.node_app_slot)),
-                    message: LocaleText("node_app_unavailable")
-                }}
-                actions={actions[:]}
-            />
-        ).action;
+        let choice = ActionModal({
+            session: app.ui.session,
+            props: {
+                title: NodeAppTitle(NodeAppName(app.node_app_slot)),
+                message: LocaleText("node_app_unavailable")
+            },
+            actions: nativeSlice(actions)
+        }).action;
         if (choice === 1n || choice === -1n) {
             app_close_modal(app);
             app.host_feature = 0n;
@@ -107,16 +105,14 @@ export function draw_global_modal(app: *InnerBreeze): void {
                 emphasis: ButtonEmphasis.ButtonEmphasisFilled
             }
         ];
-        modal_result = (
-            <ActionModal
-                session={app.ui.session}
-                props={{
-                    title: LocaleText("meditation_music_network_error_title"),
-                    message: LocaleText("meditation_music_network_error_message")
-                }}
-                actions={actions[:2n]}
-            />
-        ).action;
+        modal_result = ActionModal({
+            session: app.ui.session,
+            props: {
+                title: LocaleText("meditation_music_network_error_title"),
+                message: LocaleText("meditation_music_network_error_message")
+            },
+            actions: nativeSlice(actions, 0n, 2n)
+        }).action;
         if (modal_result === 1n || modal_result === -1n) {
             TraceLog(LOG_INFO, "AUDIO: Network error download cancelled");
             app_close_modal(app);

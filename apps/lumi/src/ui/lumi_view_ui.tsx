@@ -135,36 +135,32 @@ function SelectionBar(x: s32, top: s32, width: s32): void {
             }}
         />;
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        id: 30020n,
-                        bounds: Bounds(x + width - Scale(208n), top, Scale(100n), control),
-                        label: LumiViewLocaleHost("cancel_button"),
-                        fit_content: true,
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                    }}
-                />
-            )
+            Button({
+                session: State.frame.session,
+                props: {
+                    id: 30020n,
+                    bounds: Bounds(x + width - Scale(208n), top, Scale(100n), control),
+                    label: LumiViewLocaleHost("cancel_button"),
+                    fit_content: true,
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                }
+            })
         ) {
             State.confirm_delete = false;
         }
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        id: 30021n,
-                        bounds: Bounds(x + width - Scale(100n), top, Scale(100n), control),
-                        label: LumiViewLocaleHost("delete_button"),
-                        fit_content: true,
-                        tone: ButtonTone.ButtonToneDanger,
-                        emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                    }}
-                />
-            )
+            Button({
+                session: State.frame.session,
+                props: {
+                    id: 30021n,
+                    bounds: Bounds(x + width - Scale(100n), top, Scale(100n), control),
+                    label: LumiViewLocaleHost("delete_button"),
+                    fit_content: true,
+                    tone: ButtonTone.ButtonToneDanger,
+                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
+                }
+            })
         ) {
             let index = State.frame.chat_count - 1n;
             while (index >= 0n) {
@@ -178,20 +174,18 @@ function SelectionBar(x: s32, top: s32, width: s32): void {
         return;
     }
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: 30022n,
-                    bounds: Bounds(x, top, control, control),
-                    label: LumiViewLocaleHost("lumi_cancel_selection"),
-                    icon_shape: LUMI_CLOSE_ICON,
-                    icon_only: true,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                id: 30022n,
+                bounds: Bounds(x, top, control, control),
+                label: LumiViewLocaleHost("lumi_cancel_selection"),
+                icon_shape: LUMI_CLOSE_ICON,
+                icon_only: true,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         SelectionClear();
         return;
@@ -223,20 +217,18 @@ function SelectionBar(x: s32, top: s32, width: s32): void {
         }}
     />;
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: 30023n,
-                    bounds: Bounds(x + width - 2n * control - Scale(4n), top, control, control),
-                    label: LumiViewLocaleHost("lumi_copy"),
-                    icon_shape: LUMI_COPY_ICON,
-                    icon_only: true,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                id: 30023n,
+                bounds: Bounds(x + width - 2n * control - Scale(4n), top, control, control),
+                label: LumiViewLocaleHost("lumi_copy"),
+                icon_shape: LUMI_COPY_ICON,
+                icon_only: true,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         State.pending_copy = SelectedText();
         State.copy_pending = true;
@@ -244,20 +236,18 @@ function SelectionBar(x: s32, top: s32, width: s32): void {
         return;
     }
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: 30024n,
-                    bounds: Bounds(x + width - control, top, control, control),
-                    label: LumiViewLocaleHost("delete_button"),
-                    icon_shape: LUMI_DELETE_ICON,
-                    icon_only: true,
-                    tone: ButtonTone.ButtonToneDanger,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                id: 30024n,
+                bounds: Bounds(x + width - control, top, control, control),
+                label: LumiViewLocaleHost("delete_button"),
+                icon_shape: LUMI_DELETE_ICON,
+                icon_only: true,
+                tone: ButtonTone.ButtonToneDanger,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         State.confirm_delete = true;
     }
@@ -265,19 +255,17 @@ function SelectionBar(x: s32, top: s32, width: s32): void {
 
 function Suggestion(id: s32, text: string, bounds: Rectangle, label: string = ""): boolean {
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: id,
-                    bounds: bounds,
-                    label: label.count > 0n ? label : text,
-                    pill: true,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                id: id,
+                bounds: bounds,
+                label: label.count > 0n ? label : text,
+                pill: true,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         FillDraft(text);
         return true;
@@ -299,29 +287,28 @@ function ProgressCard(row: LumiChatRow, index: s32, x: s32, y: s32, width: s32):
     let plot_y = y + Scale(30n);
     let plot_height = Scale(130n);
     let step = float32(width) / float32(chart.count);
-    for (let point: s32 = 0n; point < chart.count; point += s32(1)) {
+    for (let point: s32 = s32(0n); point < chart.count; point += s32(1)) {
         let left = x + s32(float32(point) * step);
         let bar_width = s32(step) - Scale(2n);
         if (bar_width < 1n) {
             bar_width = 1n;
         }
-        let bar_height: s32 = 0n;
+        let bar_height: s32 = s32(0n);
         if (chart.maximum > 0n) {
             bar_height = s32(
-                (float64(chart.values[point]) / float64(chart.maximum)) * float64(plot_height)
+                (float64(nativeAt(chart.values, point)) / float64(chart.maximum)) *
+                    float64(plot_height)
             );
         }
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        id: 310000n + index * 32n + point,
-                        bounds: Bounds(left, plot_y, s32(step), plot_height),
-                        invisible: true
-                    }}
-                />
-            )
+            Button({
+                session: State.frame.session,
+                props: {
+                    id: 310000n + index * 32n + point,
+                    bounds: Bounds(left, plot_y, s32(step), plot_height),
+                    invisible: true
+                }
+            })
         ) {
             selected = point;
             State.chart_selected_key = selection_key;
@@ -353,7 +340,10 @@ function ProgressCard(row: LumiChatRow, index: s32, x: s32, y: s32, width: s32):
         props={{
             key: u64(key + 32n),
             bounds: Bounds(x, y, width, Scale(24n)),
-            text: ChartPointSummary(chart.dates[selected], chart.values[selected]),
+            text: ChartPointSummary(
+                nativeAt(chart.dates, selected),
+                nativeAt(chart.values, selected)
+            ),
             size: Scale(14n)
         }}
     />;
@@ -363,7 +353,7 @@ function ProgressCard(row: LumiChatRow, index: s32, x: s32, y: s32, width: s32):
         props={{
             key: u64(key + 33n),
             bounds: Bounds(x, plot_y + plot_height + Scale(6n), half, Scale(22n)),
-            text: ChartDate(chart.dates[0n]),
+            text: ChartDate(nativeAt(chart.dates, 0n)),
             size: Scale(12n)
         }}
     />;
@@ -372,7 +362,7 @@ function ProgressCard(row: LumiChatRow, index: s32, x: s32, y: s32, width: s32):
         props={{
             key: u64(key + 34n),
             bounds: Bounds(x + half, plot_y + plot_height + Scale(6n), width - half, Scale(22n)),
-            text: ChartDate(chart.dates[chart.count - 1n]),
+            text: ChartDate(nativeAt(chart.dates, chart.count - 1n)),
             size: Scale(12n)
         }}
     />;
@@ -442,7 +432,7 @@ function TypingDots(x: s32, top: s32): void {
         props={LumiMascotFacingLeft(
             u64(300380n),
             Bounds(x, top + Scale(16n), Scale(40n), Scale(40n)),
-            corners[:]
+            nativeSlice(corners)
         )}
     />;
     <Box
@@ -491,19 +481,17 @@ function LumiAvatar(index: s32, x: s32, y: s32): void {
     let corners = NewCorners();
     <Image
         session={State.frame.session}
-        props={LumiMascotFacingLeft(u64(300400n + index * 4n), bounds, corners[:])}
+        props={LumiMascotFacingLeft(u64(300400n + index * 4n), bounds, nativeSlice(corners))}
     />;
-    let press = (
-        <Press
-            session={State.frame.session}
-            props={{
-                key: u64(430000n + RowSlot(index) + 1n),
-                bounds: Bounds(x, y, Scale(40n), Scale(40n)),
-                label: "Lumi",
-                now: State.frame.now
-            }}
-        />
-    );
+    let press = Press({
+        session: State.frame.session,
+        props: {
+            key: u64(430000n + RowSlot(index) + 1n),
+            bounds: Bounds(x, y, Scale(40n), Scale(40n)),
+            label: "Lumi",
+            now: State.frame.now
+        }
+    });
     if (press.clicked) {
         State.swirl_row = index;
         State.swirl_started = State.frame.now;
@@ -514,18 +502,16 @@ function LumiAvatar(index: s32, x: s32, y: s32): void {
 // A hold starts selection. While selecting, a press can sweep across several messages.
 function RowPress(index: s32, bounds: Rectangle, content_y: float32): NativePress.PressResult {
     let key = index === 0n ? 0n : RowSlot(index) + 1n;
-    let press = (
-        <Press
-            session={State.frame.session}
-            props={{
-                key: u64(410000n + key),
-                bounds: bounds,
-                label: LumiViewLocaleHost("lumi_message"),
-                now: State.frame.now,
-                capture: State.selecting
-            }}
-        />
-    );
+    let press = Press({
+        session: State.frame.session,
+        props: {
+            key: u64(410000n + key),
+            bounds: bounds,
+            label: LumiViewLocaleHost("lumi_message"),
+            now: State.frame.now,
+            capture: State.selecting
+        }
+    });
     if (!State.selecting && press.held) {
         State.selecting = true;
         State.confirm_delete = false;
@@ -563,19 +549,17 @@ function RowMenu(): s32 {
     let items: [NativeContextMenu.ContextMenuItem] = [
         { id: LUMI_MENU_COPY, label: LumiViewLocaleHost("lumi_copy") }
     ];
-    let menu = (
-        <ContextMenu
-            session={State.frame.session}
-            props={{
-                key: u64(380000n),
-                open: true,
-                x: State.row_menu_x,
-                y: State.row_menu_y,
-                scale: State.frame.scale
-            }}
-            items={items[:]}
-        />
-    );
+    let menu = ContextMenu({
+        session: State.frame.session,
+        props: {
+            key: u64(380000n),
+            open: true,
+            x: State.row_menu_x,
+            y: State.row_menu_y,
+            scale: State.frame.scale
+        },
+        items: nativeSlice(items)
+    });
     if (!menu.open) {
         State.row_menu_open = false;
     }
@@ -588,20 +572,18 @@ function LumiTitleBar(): s32 {
     let gap = Scale(4n);
     let trailing = State.frame.connection ? 2n * button + gap : 0n;
     let options = NewOptions();
-    let bar = (
-        <TitleBar
-            session={State.frame.session}
-            props={{
-                key: u64(300400n),
-                title: "Lumi",
-                bounds: Bounds(0n, 0n, State.frame.width, height),
-                height: height,
-                scale: State.frame.scale,
-                trailing_width: trailing
-            }}
-            options={options[0n:0n]}
-        />
-    );
+    let bar = TitleBar({
+        session: State.frame.session,
+        props: {
+            key: u64(300400n),
+            title: "Lumi",
+            bounds: Bounds(0n, 0n, State.frame.width, height),
+            height: height,
+            scale: State.frame.scale,
+            trailing_width: trailing
+        },
+        options: nativeSlice(options, 0n, 0n)
+    });
     if (!State.frame.connection || bar.trailing_bounds.width <= 0.0) {
         return height;
     }
@@ -610,48 +592,44 @@ function LumiTitleBar(): s32 {
     let size = float32(button);
     let state = State.frame.online ? "lumi_toggle_online" : "lumi_toggle_offline";
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    key: u64(300401n),
-                    id: 30040n,
-                    bounds: {
-                        x: area.x + area.width - 2.0 * size - float32(gap),
-                        y: top,
-                        width: size,
-                        height: size
-                    },
-                    label: LumiViewLocaleHost(state),
-                    selected: State.frame.online,
-                    icon_shape: State.frame.online
-                        ? NativeConnectedIcon.Shape
-                        : NativeDisconnectedIcon.Shape,
-                    icon_only: true,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                key: u64(300401n),
+                id: 30040n,
+                bounds: {
+                    x: area.x + area.width - 2.0 * size - float32(gap),
+                    y: top,
+                    width: size,
+                    height: size
+                },
+                label: LumiViewLocaleHost(state),
+                selected: State.frame.online,
+                icon_shape: State.frame.online
+                    ? NativeConnectedIcon.Shape
+                    : NativeDisconnectedIcon.Shape,
+                icon_only: true,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         SetLumiOnlineHost(!State.frame.online);
     }
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    key: u64(300390n),
-                    id: 30043n,
-                    bounds: { x: area.x + area.width - size, y: top, width: size, height: size },
-                    label: LumiViewLocaleHost("settings_title"),
-                    icon_shape: NativeConfigureIcon.Shape,
-                    icon_only: true,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                key: u64(300390n),
+                id: 30043n,
+                bounds: { x: area.x + area.width - size, y: top, width: size, height: size },
+                label: LumiViewLocaleHost("settings_title"),
+                icon_shape: NativeConfigureIcon.Shape,
+                icon_only: true,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         OpenLumiSettingsHost();
     }
@@ -668,62 +646,56 @@ function LumiAgreementView(top: s32): void {
     let counts = LumiFormatInto(
         State.frame.agreement_text,
         true,
-        State.agreement_bytes[:],
-        State.agreement_strong[:]
+        nativeSlice(State.agreement_bytes),
+        nativeSlice(State.agreement_strong)
     );
     let width = column.width;
-    let panel = (
-        <Scroll
-            session={State.frame.session}
-            props={{
-                key: 300410n,
-                bounds: Bounds(column.x, top, width, area_height),
-                content_height: State.frame.agreement_height,
-                scroll_offset: State.agreement_scroll,
-                scale: State.frame.scale
-            }}
-            children={(scroll: NativeScroll.ScrollResult): void => {
-                LumiAgreementText(scroll, width, counts.count, counts.strong_count);
-            }}
-        />
-    );
+    let panel = Scroll({
+        session: State.frame.session,
+        props: {
+            key: 300410n,
+            bounds: Bounds(column.x, top, width, area_height),
+            content_height: State.frame.agreement_height,
+            scroll_offset: State.agreement_scroll,
+            scale: State.frame.scale
+        },
+        children: (scroll: NativeScroll.ScrollResult): void => {
+            LumiAgreementText(scroll, width, counts.count, counts.strong_count);
+        }
+    });
     State.agreement_scroll = panel.scroll_offset;
     let reading = State.frame.agreement === 2n;
     let half = (column.width - Scale(12n)) / 2n;
     let first = reading ? "lumi_agreement_withdraw" : "lumi_agreement_agree";
     let second = reading ? "close_button" : "lumi_agreement_later";
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: 30041n,
-                    bounds: Bounds(column.x, buttons_top, half, Scale(48n)),
-                    label: LumiViewLocaleHost(first),
-                    tone: reading ? ButtonTone.ButtonToneDanger : ButtonTone.ButtonToneAccent,
-                    emphasis: reading
-                        ? ButtonEmphasis.ButtonEmphasisSoft
-                        : ButtonEmphasis.ButtonEmphasisFilled
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                id: 30041n,
+                bounds: Bounds(column.x, buttons_top, half, Scale(48n)),
+                label: LumiViewLocaleHost(first),
+                tone: reading ? ButtonTone.ButtonToneDanger : ButtonTone.ButtonToneAccent,
+                emphasis: reading
+                    ? ButtonEmphasis.ButtonEmphasisSoft
+                    : ButtonEmphasis.ButtonEmphasisFilled
+            }
+        })
     ) {
         State.agreement_scroll = 0n;
         LumiAgreementHost(reading ? 3n : 1n);
     }
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: 30042n,
-                    bounds: Bounds(column.x + half + Scale(12n), buttons_top, half, Scale(48n)),
-                    label: LumiViewLocaleHost(second),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                id: 30042n,
+                bounds: Bounds(column.x + half + Scale(12n), buttons_top, half, Scale(48n)),
+                label: LumiViewLocaleHost(second),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         State.agreement_scroll = 0n;
         LumiAgreementHost(reading ? 4n : 2n);
@@ -747,9 +719,9 @@ function LumiAgreementText(
                 width: float32(width - Scale(24n)),
                 height: float32(State.frame.agreement_height)
             },
-            text: MessageTextFromBytes(State.agreement_bytes[:count]),
+            text: MessageTextFromBytes(nativeSlice(State.agreement_bytes, 0n, count)),
             size: State.frame.font,
-            strong: State.agreement_strong[:strong_count],
+            strong: nativeSlice(State.agreement_strong, 0n, strong_count),
             wrap: NativeText.Wrap.TextWrapAuto
         }}
     />;
@@ -789,22 +761,20 @@ function ChatHistory(
         }
         if (State.selecting) {
             let checked = IsSelected(index);
-            let toggled = (
-                <Checkbox
-                    session={State.frame.session}
-                    props={{
-                        key: u64(420000n + RowSlot(index) + 1n),
-                        bounds: Bounds(
-                            x + Scale(8n),
-                            top + (row_height - Scale(10n)) / 2n - Scale(12n),
-                            Scale(24n),
-                            Scale(24n)
-                        ),
-                        label: LumiViewLocaleHost("lumi_message"),
-                        checked: checked
-                    }}
-                />
-            );
+            let toggled = Checkbox({
+                session: State.frame.session,
+                props: {
+                    key: u64(420000n + RowSlot(index) + 1n),
+                    bounds: Bounds(
+                        x + Scale(8n),
+                        top + (row_height - Scale(10n)) / 2n - Scale(12n),
+                        Scale(24n),
+                        Scale(24n)
+                    ),
+                    label: LumiViewLocaleHost("lumi_message"),
+                    checked: checked
+                }
+            });
             if (toggled.changed) {
                 SelectionSet(index, toggled.checked);
             }
@@ -881,14 +851,17 @@ function ChatHistory(
             wrap: NativeText.Wrap.TextWrapAuto
         };
         let drawn = RowText(index, row.text, !row.user);
-        props.text = MessageTextFromBytes(drawn.text.bytes[:drawn.text.count]);
-        props.strong = drawn.text.strong[:drawn.text.strong_count];
+        props.text = MessageTextFromBytes(nativeSlice(drawn.text.bytes, 0n, drawn.text.count));
+        props.strong = nativeSlice(drawn.text.strong, 0n, drawn.text.strong_count);
         let links = drawn.links;
         let link_ranges = NewLinkRanges();
-        for (let link: s32 = 0n; link < links.count; link += s32(1)) {
-            link_ranges[link] = { start: links.items[link].start, end: links.items[link].end };
+        for (let link: s32 = s32(0n); link < links.count; link += s32(1)) {
+            nativeSet(link_ranges, link, {
+                start: nativeAt(links.items, link).start,
+                end: nativeAt(links.items, link).end
+            });
         }
-        props.links = link_ranges[:links.count];
+        props.links = nativeSlice(link_ranges, 0n, links.count);
         <Text session={State.frame.session} props={props} />;
         if (row_press.clicked && !State.selecting && links.count > 0n) {
             let tapped = NativeText.TextLinkAt(
@@ -898,7 +871,13 @@ function ChatHistory(
                 row_press.y
             );
             if (tapped >= 0n) {
-                OpenLinkHost(props.text[link_ranges[tapped].start:link_ranges[tapped].end]);
+                OpenLinkHost(
+                    nativeSlice(
+                        props.text,
+                        nativeAt(link_ranges, tapped).start,
+                        nativeAt(link_ranges, tapped).end
+                    )
+                );
             }
         }
         let card_top = top + text_top + text_height + Scale(8n);
@@ -907,32 +886,28 @@ function ChatHistory(
         } else if (row.kind === LUMI_CHAT_FEEDBACK) {
             let pending = LumiFeedbackChoiceHost(row.payload, 0n);
             if (
-                (
-                    <Button
-                        session={State.frame.session}
-                        props={{
-                            id: 351000n + index * 2n,
-                            bounds: Bounds(left + Scale(14n), card_top, Scale(88n), Scale(44n)),
-                            label: LumiViewLocaleHost("lumi_feedback_yes"),
-                            disabled: !pending
-                        }}
-                    />
-                )
+                Button({
+                    session: State.frame.session,
+                    props: {
+                        id: 351000n + index * 2n,
+                        bounds: Bounds(left + Scale(14n), card_top, Scale(88n), Scale(44n)),
+                        label: LumiViewLocaleHost("lumi_feedback_yes"),
+                        disabled: !pending
+                    }
+                })
             ) {
                 LumiFeedbackChoiceHost(row.payload, 1n);
             }
             if (
-                (
-                    <Button
-                        session={State.frame.session}
-                        props={{
-                            id: 351001n + index * 2n,
-                            bounds: Bounds(left + Scale(108n), card_top, Scale(88n), Scale(44n)),
-                            label: LumiViewLocaleHost("lumi_feedback_no"),
-                            disabled: !pending
-                        }}
-                    />
-                )
+                Button({
+                    session: State.frame.session,
+                    props: {
+                        id: 351001n + index * 2n,
+                        bounds: Bounds(left + Scale(108n), card_top, Scale(88n), Scale(44n)),
+                        label: LumiViewLocaleHost("lumi_feedback_no"),
+                        disabled: !pending
+                    }
+                })
             ) {
                 LumiFeedbackChoiceHost(row.payload, 2n);
             }
@@ -983,11 +958,11 @@ export function LumiViewComposition(
     let history_top = title_height + Scale(8n);
     let menu = MenuCommands(revision);
     let menu_matches = NewMenuMatches();
-    let menu_count: s32 = 0n;
-    let menu_target: s32 = -1n;
+    let menu_count: s32 = s32(0n);
+    let menu_target: s32 = s32(-1n);
     if (MenuOpen(State.frame.value)) {
-        for (let index: s32 = 0n; index < LUMI_MENU_COMMANDS; index += 1n) {
-            let command = menu[index];
+        for (let index: s32 = s32(0n); index < LUMI_MENU_COMMANDS; index += 1n) {
+            let command = nativeAt(menu, index);
             if (
                 (command.requirement !== 0n &&
                     FlagIntersection(State.frame.available_apps, command.requirement) === 0n) ||
@@ -1001,7 +976,7 @@ export function LumiViewComposition(
             if (menu_target < 0n || LumiEqual(command.name, State.frame.value)) {
                 menu_target = menu_count;
             }
-            menu_matches[menu_count] = index;
+            nativeSet(menu_matches, menu_count, index);
             menu_count += 1n;
         }
     }
@@ -1031,21 +1006,19 @@ export function LumiViewComposition(
     }
     let typing = State.frame.waiting && !State.frame.typing_pause;
     let typing_height = typing ? Scale(70n) : 0n;
-    let history = (
-        <Scroll
-            session={State.frame.session}
-            props={{
-                key: 300100n,
-                bounds: Bounds(x, history_top, width, chat_height),
-                content_height: State.frame.history_height + typing_height,
-                scroll_offset: State.frame.scroll,
-                scale: State.frame.scale
-            }}
-            children={(scroll: NativeScroll.ScrollResult): void => {
-                ChatHistory(scroll, x, width, history_top + chat_height, typing);
-            }}
-        />
-    );
+    let history = Scroll({
+        session: State.frame.session,
+        props: {
+            key: 300100n,
+            bounds: Bounds(x, history_top, width, chat_height),
+            content_height: State.frame.history_height + typing_height,
+            scroll_offset: State.frame.scroll,
+            scale: State.frame.scale
+        },
+        children: (scroll: NativeScroll.ScrollResult): void => {
+            ChatHistory(scroll, x, width, history_top + chat_height, typing);
+        }
+    });
     if (!history.opened) {
         SetHistoryScroll(history);
     }
@@ -1168,7 +1141,7 @@ export function LumiViewComposition(
         LUMI_PRACTICES,
         LUMI_PRACTICES
     ];
-    let suggestion_count: s32 = 0n;
+    let suggestion_count: s32 = s32(0n);
     let selected: boolean = false;
     let limit: s32 = menu_count > 0n ? 0n : 2n;
     let chip_width = (width - Scale(8n)) / 2n;
@@ -1186,7 +1159,7 @@ export function LumiViewComposition(
     ) {
         let count =
             action.kind === LUMI_COMPLETE_HABIT ? State.frame.habit_count : State.frame.task_count;
-        for (let index: s32 = 0n; index < count; index += 1n) {
+        for (let index: s32 = s32(0n); index < count; index += 1n) {
             if (suggestion_count >= limit) {
                 break;
             }
@@ -1228,20 +1201,21 @@ export function LumiViewComposition(
         State.candidate_ready = 0n;
     }
     if (typed.count > 0n) {
-        let prepared: s32 = 0n;
+        let prepared: s32 = s32(0n);
         while (
             State.candidate_ready < s32(candidates.count) &&
             prepared < LUMI_CANDIDATES_PER_FRAME
         ) {
-            State.candidate_actions[State.candidate_ready] = LumiIntent(
-                candidates[State.candidate_ready],
-                commands
+            nativeSet(
+                State.candidate_actions,
+                State.candidate_ready,
+                LumiIntent(nativeAt(candidates, State.candidate_ready), commands)
             );
             State.candidate_ready = State.candidate_ready + 1n;
             prepared += 1n;
         }
     }
-    for (let index: s32 = 0n; index < s32(candidates.count); index += 1n) {
+    for (let index: s32 = s32(0n); index < s32(candidates.count); index += 1n) {
         if (
             typed.count === 0n ||
             State.frame.choosing_diary ||
@@ -1251,7 +1225,7 @@ export function LumiViewComposition(
         ) {
             break;
         }
-        let candidate_action = State.candidate_actions[index];
+        let candidate_action = nativeAt(State.candidate_actions, index);
         let practice_match =
             action.kind === LUMI_START_PRACTICE &&
             candidate_action.kind === LUMI_START_PRACTICE &&
@@ -1264,14 +1238,17 @@ export function LumiViewComposition(
             ) !== 0n;
         if (
             hidden_practice ||
-            (requirements[index] !== 0n &&
-                FlagIntersection(State.frame.available_apps, requirements[index]) === 0n) ||
+            (nativeAt(requirements, index) !== 0n &&
+                FlagIntersection(State.frame.available_apps, nativeAt(requirements, index)) ===
+                    0n) ||
             suggestion_count >= limit ||
-            (typed.count > 0n && !LumiSuggests(candidates[index], typed) && !practice_match)
+            (typed.count > 0n &&
+                !LumiSuggests(nativeAt(candidates, index), typed) &&
+                !practice_match)
         ) {
             continue;
         }
-        let text = candidates[index];
+        let text = nativeAt(candidates, index);
         if (index === 1n || (index >= 5n && index <= 7n)) {
             text = CommandPrefix(text);
         }
@@ -1288,7 +1265,7 @@ export function LumiViewComposition(
             ) || selected;
         suggestion_count += 1n;
     }
-    let chosen: s32 = -1n;
+    let chosen: s32 = s32(-1n);
     if (menu_count > 0n) {
         <Box
             session={State.frame.session}
@@ -1309,13 +1286,13 @@ export function LumiViewComposition(
         State.menu_scroll = menu_list.scroll_offset;
         if (menu_list.opened) {
             let name_width = Scale(104n);
-            for (let row: s32 = 0n; row < menu_count; row += s32(1)) {
+            for (let row: s32 = s32(0n); row < menu_count; row += s32(1)) {
                 let top = s32(menu_list.content.y) + row * menu_row;
                 if (top + menu_row < menu_top || top > menu_top + menu_height) {
                     continue;
                 }
-                let index = menu_matches[row];
-                let command = menu[index];
+                let index = nativeAt(menu_matches, row);
+                let command = nativeAt(menu, index);
                 let key = 360100n + index * 4n;
                 if (row === menu_target) {
                     <Box
@@ -1329,17 +1306,15 @@ export function LumiViewComposition(
                     />;
                 }
                 if (
-                    (
-                        <Button
-                            session={State.frame.session}
-                            props={{
-                                id: 360200n + index,
-                                bounds: Bounds(x, top, width, menu_row),
-                                invisible: true,
-                                label: command.description
-                            }}
-                        />
-                    )
+                    Button({
+                        session: State.frame.session,
+                        props: {
+                            id: 360200n + index,
+                            bounds: Bounds(x, top, width, menu_row),
+                            invisible: true,
+                            label: command.description
+                        }
+                    })
                 ) {
                     chosen = index;
                 }
@@ -1351,7 +1326,7 @@ export function LumiViewComposition(
                         bounds: Bounds(x + Scale(16n), top, name_width, menu_row),
                         text: command.name,
                         size: State.frame.font,
-                        strong: strong[:],
+                        strong: nativeSlice(strong),
                         wrap: NativeText.Wrap.TextWrapNone,
                         vertical_align: TextAlign.TextAlignCenter
                     }}
@@ -1378,20 +1353,19 @@ export function LumiViewComposition(
     }
     let show_commands = LumiTrim(State.frame.value).count === 0n;
     if (
-        show_commands && (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: 30012n,
-                    bounds: Bounds(x + width - Scale(48n), footer, Scale(48n), Scale(48n)),
-                    label: LumiViewLocaleHost("lumi_commands"),
-                    icon_shape: LUMI_COMMANDS_ICON,
-                    icon_only: true,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        show_commands &&
+        Button({
+            session: State.frame.session,
+            props: {
+                id: 30012n,
+                bounds: Bounds(x + width - Scale(48n), footer, Scale(48n), Scale(48n)),
+                label: LumiViewLocaleHost("lumi_commands"),
+                icon_shape: LUMI_COMMANDS_ICON,
+                icon_only: true,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         FillDraft("/");
         selected = true;
@@ -1404,30 +1378,28 @@ export function LumiViewComposition(
         field_input.focus = true;
         State.focus_request = State.focus_request - 1n;
     }
-    let field = (
-        <TextArea
-            session={State.frame.session}
-            props={{
-                key: u64(300200n),
-                focus_id: 30010n,
-                bounds: Bounds(x, footer, width - Scale(56n), input_height),
-                value: State.frame.value,
-                placeholder: LumiViewLocaleHost("lumi_placeholder"),
-                label: "Lumi",
-                cursor: State.frame.cursor,
-                anchor: State.frame.anchor,
-                scroll_y: State.frame.input_scroll,
-                selecting: State.frame.selecting,
-                preferred_x: State.frame.preferred_x,
-                preferred_x_valid: State.frame.preferred_x_valid,
-                wrap: true,
-                focused: State.frame.focused,
-                input: field_input,
-                max_bytes: LUMI_INPUT_MAX - 1n,
-                max_codepoints: LUMI_INPUT_MAX - 1n
-            }}
-        />
-    );
+    let field = TextArea({
+        session: State.frame.session,
+        props: {
+            key: u64(300200n),
+            focus_id: 30010n,
+            bounds: Bounds(x, footer, width - Scale(56n), input_height),
+            value: State.frame.value,
+            placeholder: LumiViewLocaleHost("lumi_placeholder"),
+            label: "Lumi",
+            cursor: State.frame.cursor,
+            anchor: State.frame.anchor,
+            scroll_y: State.frame.input_scroll,
+            selecting: State.frame.selecting,
+            preferred_x: State.frame.preferred_x,
+            preferred_x_valid: State.frame.preferred_x_valid,
+            wrap: true,
+            focused: State.frame.focused,
+            input: field_input,
+            max_bytes: LUMI_INPUT_MAX - 1n,
+            max_codepoints: LUMI_INPUT_MAX - 1n
+        }
+    });
     if (!selected) {
         if (
             field.edit.changed &&
@@ -1463,10 +1435,11 @@ export function LumiViewComposition(
     if (copy_row >= 0n) {
         CopyChatRow(copy_row);
     }
-    let send = !show_commands && (
-        <Button
-            session={State.frame.session}
-            props={{
+    let send =
+        !show_commands &&
+        Button({
+            session: State.frame.session,
+            props: {
                 id: 30011n,
                 bounds: Bounds(x + width - Scale(48n), footer, Scale(48n), Scale(48n)),
                 label: LumiViewLocaleHost("lumi_send"),
@@ -1474,16 +1447,15 @@ export function LumiViewComposition(
                 icon_only: true,
                 tone: ButtonTone.ButtonToneNeutral,
                 emphasis: ButtonEmphasis.ButtonEmphasisGhost
-            }}
-        />
-    );
+            }
+        });
     if (chosen < 0n && field.committed && !send && menu_target >= 0n && !selected) {
-        chosen = menu_matches[menu_target];
+        chosen = nativeAt(menu_matches, menu_target);
     }
     let submit = "";
     if (chosen >= 0n) {
-        let text = CommandText(menu[chosen]);
-        if (menu[chosen].needs_text) {
+        let text = CommandText(nativeAt(menu, chosen));
+        if (nativeAt(menu, chosen).needs_text) {
             FillDraft(text);
         } else {
             submit = text;

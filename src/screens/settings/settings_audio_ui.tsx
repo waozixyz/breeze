@@ -69,36 +69,34 @@ import {
 } from "settings_ui_ui";
 import { AppTextFromCString } from "text_buffers";
 
-export function settings_audio_draw_status(x: s32, y: *s32, action: s32): void {
+export function settings_audio_draw_status(x: s32, y: NativeRef<s32>, action: s32): void {
     if (
         State_settings_audio.audio_status_action !== action ||
-        State_settings_audio.audio_status[0n] === u8(0n)
+        nativeAt(State_settings_audio.audio_status, 0n) === u8(0n)
     ) {
         return;
     }
     <Text
         session={CurrentApp().ui.session}
         props={{
-            bounds: { x: float32(x), y: float32((*y)), width: 0n, height: 0n },
-            text: AppTextFromCString(&State_settings_audio.audio_status[0n], 256n),
+            bounds: { x: float32(x), y: float32(nativeDeref(y)), width: 0n, height: 0n },
+            text: AppTextFromCString(
+                nativeRef(nativeAt(State_settings_audio.audio_status, 0n)),
+                256n
+            ),
             wrap: Wrap.TextWrapNone
         }}
     />;
-    (*y) = (*y) + AppScale(24n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(24n);
 }
 
-export function settings_audio_subheading(
-    x: s32,
-    w: s32,
-    y: *s32,
-    text: string
-): void {
+export function settings_audio_subheading(x: s32, w: s32, y: NativeRef<s32>, text: string): void {
     <Text
         session={CurrentApp().ui.session}
         props={{
             bounds: {
                 x: float32(x),
-                y: float32((*y) + AppScale(10n)),
+                y: float32(nativeDeref(y) + AppScale(10n)),
                 width: float32(w),
                 height: float32(AppScale(20n))
             },
@@ -107,15 +105,15 @@ export function settings_audio_subheading(
             wrap: Wrap.TextWrapNone
         }}
     />;
-    (*y) = (*y) + AppScale(36n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(36n);
 }
 
 export function settings_audio_list_row(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     id: s32,
     x: s32,
     w: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     title: string,
     detail: string,
     playing: boolean
@@ -133,7 +131,7 @@ export function settings_audio_list_row(
             props={{
                 bounds: {
                     x: float32(x),
-                    y: float32((*y)),
+                    y: float32(nativeDeref(y)),
                     width: float32(label_w),
                     height: float32(row_h)
                 },
@@ -148,7 +146,7 @@ export function settings_audio_list_row(
             props={{
                 bounds: {
                     x: float32(x),
-                    y: float32((*y) + AppScale(6n)),
+                    y: float32(nativeDeref(y) + AppScale(6n)),
                     width: float32(label_w),
                     height: float32(AppScale(20n))
                 },
@@ -161,7 +159,7 @@ export function settings_audio_list_row(
             props={{
                 bounds: {
                     x: float32(x),
-                    y: float32((*y) + AppScale(26n)),
+                    y: float32(nativeDeref(y) + AppScale(26n)),
                     width: float32(label_w),
                     height: float32(AppScale(16n))
                 },
@@ -171,60 +169,56 @@ export function settings_audio_list_row(
             }}
         />;
     }
-    let control_y = (*y) + (row_h - control_h) / 2n;
-    let result: s32 = 0n;
+    let control_y = nativeDeref(y) + (row_h - control_h) / 2n;
+    let result: s32 = s32(0n);
     if (
-        (
-            <Button
-                session={CurrentApp().ui.session}
-                props={{
-                    id: id,
-                    bounds: {
-                        x: float32(x + w - remove_w - gap - play_w),
-                        y: float32(control_y),
-                        width: float32(play_w),
-                        height: float32(control_h)
-                    },
-                    label: play_label,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                    disabled: !NativePresent(app) || app.audio_ready === 0n
-                }}
-            />
-        )
+        Button({
+            session: CurrentApp().ui.session,
+            props: {
+                id: id,
+                bounds: {
+                    x: float32(x + w - remove_w - gap - play_w),
+                    y: float32(control_y),
+                    width: float32(play_w),
+                    height: float32(control_h)
+                },
+                label: play_label,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                disabled: !NativePresent(app) || app.audio_ready === 0n
+            }
+        })
     ) {
         result = 1n;
     }
     if (
-        (
-            <Button
-                session={CurrentApp().ui.session}
-                props={{
-                    id: id + 1n,
-                    bounds: {
-                        x: float32(x + w - remove_w),
-                        y: float32(control_y),
-                        width: float32(remove_w),
-                        height: float32(control_h)
-                    },
-                    label: LocaleText("remove_button"),
-                    tone: ButtonTone.ButtonToneDanger,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: CurrentApp().ui.session,
+            props: {
+                id: id + 1n,
+                bounds: {
+                    x: float32(x + w - remove_w),
+                    y: float32(control_y),
+                    width: float32(remove_w),
+                    height: float32(control_h)
+                },
+                label: LocaleText("remove_button"),
+                tone: ButtonTone.ButtonToneDanger,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         result = 2n;
     }
-    (*y) = (*y) + row_h;
+    nativeDeref(y) = nativeDeref(y) + row_h;
     return result;
 }
 
 export function settings_audio_draw_output(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     w: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     let section = settings_section_begin(
         app,
@@ -243,7 +237,7 @@ export function settings_audio_draw_output(
             iw,
             y,
             LocaleText("guide_narration_label"),
-            &app.guide_narration_enabled
+            nativeRef(app.guide_narration_enabled)
         )
     ) {
         app.guide_narration_muted = 0n;
@@ -259,7 +253,7 @@ export function settings_audio_draw_output(
         props={{
             bounds: {
                 x: float32(ix),
-                y: float32((*y)),
+                y: float32(nativeDeref(y)),
                 width: float32(iw - status_w),
                 height: float32(AppScale(48n))
             },
@@ -273,7 +267,7 @@ export function settings_audio_draw_output(
         props={{
             bounds: {
                 x: float32(ix + iw - status_w),
-                y: float32((*y)),
+                y: float32(nativeDeref(y)),
                 width: float32(status_w),
                 height: float32(AppScale(48n))
             },
@@ -283,74 +277,70 @@ export function settings_audio_draw_output(
             wrap: Wrap.TextWrapNone
         }}
     />;
-    (*y) = (*y) + AppScale(48n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(48n);
     let button_gap = AppScale(12n);
     let button_w = (iw - button_gap) / 2n;
-    let clicked: s32 = 0n;
+    let clicked: s32 = s32(0n);
     if (
-        (
-            <Button
-                session={CurrentApp().ui.session}
-                props={{
-                    id: 3401n,
-                    bounds: {
-                        x: float32(ix),
-                        y: float32((*y) + AppScale(10n)),
-                        width: float32(button_w),
-                        height: float32(AppScale(36n))
-                    },
-                    label: LocaleText("audio_test_output_button"),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: CurrentApp().ui.session,
+            props: {
+                id: 3401n,
+                bounds: {
+                    x: float32(ix),
+                    y: float32(nativeDeref(y) + AppScale(10n)),
+                    width: float32(button_w),
+                    height: float32(AppScale(36n))
+                },
+                label: LocaleText("audio_test_output_button"),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         clicked = 1n;
     }
     if (
-        (
-            <Button
-                session={CurrentApp().ui.session}
-                props={{
-                    id: 3402n,
-                    bounds: {
-                        x: float32(ix + button_w + button_gap),
-                        y: float32((*y) + AppScale(10n)),
-                        width: float32(iw - button_w - button_gap),
-                        height: float32(AppScale(36n))
-                    },
-                    label: LocaleText("audio_reinitialize_button"),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: CurrentApp().ui.session,
+            props: {
+                id: 3402n,
+                bounds: {
+                    x: float32(ix + button_w + button_gap),
+                    y: float32(nativeDeref(y) + AppScale(10n)),
+                    width: float32(iw - button_w - button_gap),
+                    height: float32(AppScale(36n))
+                },
+                label: LocaleText("audio_reinitialize_button"),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         clicked = 2n;
     }
-    (*y) = (*y) + settings_audio_button_row_height();
+    nativeDeref(y) = nativeDeref(y) + settings_audio_button_row_height();
     if (clicked === 1n) {
         app_play_bell_cue(app, float32(1.0));
     }
     if (clicked === 2n) {
         app_audio_reinitialize(app);
     }
-    (*y) =
-        (*y) +
+    nativeDeref(y) =
+        nativeDeref(y) +
         draw_audio_meter(
             app,
             app_audio_output_level(app),
             ix,
-            (*y),
+            nativeDeref(y),
             iw,
             LocaleText("audio_output_level_label")
         );
-    (*y) = (*y) + AppScale(12n);
-    settings_row_divider(app, section, (*y));
+    nativeDeref(y) = nativeDeref(y) + AppScale(12n);
+    settings_row_divider(app, section, nativeDeref(y));
     let sound_volume = app.sound_volume;
     let music_volume = app.music_volume;
-    (*y) = (*y) + AppScale(10n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(10n);
     if (
         commit_slider_row(
             app,
@@ -362,7 +352,7 @@ export function settings_audio_draw_output(
             LocaleText("cue_volume_label"),
             SETTINGS_VOLUME_MIN,
             SETTINGS_VOLUME_MAX,
-            &sound_volume,
+            nativeRef(sound_volume),
             "",
             0n
         ) !== 0n
@@ -375,7 +365,7 @@ export function settings_audio_draw_output(
             );
         }
     }
-    (*y) = (*y) + AppScale(10n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(10n);
     if (
         commit_slider_row(
             app,
@@ -387,7 +377,7 @@ export function settings_audio_draw_output(
             LocaleText("music_volume_label"),
             SETTINGS_VOLUME_MIN,
             SETTINGS_VOLUME_MAX,
-            &music_volume,
+            nativeRef(music_volume),
             "",
             0n
         ) !== 0n
@@ -404,36 +394,34 @@ export function settings_audio_draw_output(
 }
 
 export function draw_import_button(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     w: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     label: string,
     action: s32,
     practice: s32
 ): void {
     if (
-        (
-            <Button
-                session={CurrentApp().ui.session}
-                props={{
-                    bounds: {
-                        x: float32(x),
-                        y: float32((*y) + AppScale(10n)),
-                        width: float32(w),
-                        height: float32(AppScale(36n))
-                    },
-                    label: label,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                    disabled: false
-                }}
-            />
-        )
+        Button({
+            session: CurrentApp().ui.session,
+            props: {
+                bounds: {
+                    x: float32(x),
+                    y: float32(nativeDeref(y) + AppScale(10n)),
+                    width: float32(w),
+                    height: float32(AppScale(36n))
+                },
+                label: label,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                disabled: false
+            }
+        })
     ) {
         settings_audio_start_import(app, action, practice);
     }
-    (*y) = (*y) + settings_audio_button_row_height();
+    nativeDeref(y) = nativeDeref(y) + settings_audio_button_row_height();
     if (
         action !== SETTINGS_AUDIO_ACTION_MUSIC ||
         practice === State_settings_audio.audio_status_practice
@@ -443,10 +431,10 @@ export function draw_import_button(
 }
 
 export function draw_cue_selector(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     w: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     cue: s32,
     label: string,
     action: s32
@@ -461,14 +449,14 @@ export function draw_cue_selector(
     let import_w = settings_button_width(LocaleText("audio_import_sound_button"), AppScale(120n));
     let gap = AppScale(8n);
     let dropdown_w = w - play_w - import_w - gap * 2n;
-    options[0n].label = LocaleText("audio_builtin_label");
+    nativeAt(options, 0n).label = LocaleText("audio_builtin_label");
     if (count > AUDIO_CUSTOM_SOUND_MAX + 1n) {
         count = AUDIO_CUSTOM_SOUND_MAX + 1n;
     }
-    let i: s32 = 0n;
+    let i: s32 = s32(0n);
     while (i < app.audio_custom_sound_count && i < AUDIO_CUSTOM_SOUND_MAX) {
-        options[i + 1n].label = AppTextFromCString(
-            &app.audio_custom_sounds[i].title[0n],
+        nativeAt(options, i + 1n).label = AppTextFromCString(
+            nativeRef(nativeAt(nativeAt(app.audio_custom_sounds, i).title, 0n)),
             AUDIO_LABEL_SIZE
         );
         i = i + 1n;
@@ -478,7 +466,7 @@ export function draw_cue_selector(
         props={{
             bounds: {
                 x: float32(x),
-                y: float32((*y) + AppScale(10n)),
+                y: float32(nativeDeref(y) + AppScale(10n)),
                 width: float32(w),
                 height: float32(AppScale(22n))
             },
@@ -486,82 +474,76 @@ export function draw_cue_selector(
             wrap: Wrap.TextWrapNone
         }}
     />;
-    let control_y = (*y) + AppScale(38n);
-    let menu = (
-        <Dropdown
-            session={CurrentApp().ui.session}
-            props={{
-                id: s32(820n) + cue,
-                bounds: {
-                    x: float32(x),
-                    y: float32(control_y),
-                    width: float32(dropdown_w),
-                    height: float32(AppScale(36n))
-                },
-                selected_index: app.audio_cue_selected[cue]
-            }}
-            options={options[0n:count]}
-        />
-    );
+    let control_y = nativeDeref(y) + AppScale(38n);
+    let menu = Dropdown({
+        session: CurrentApp().ui.session,
+        props: {
+            id: s32(820n) + cue,
+            bounds: {
+                x: float32(x),
+                y: float32(control_y),
+                width: float32(dropdown_w),
+                height: float32(AppScale(36n))
+            },
+            selected_index: nativeAt(app.audio_cue_selected, cue)
+        },
+        options: nativeSlice(options, 0n, count)
+    });
     if (menu.changed) {
-        app.audio_cue_selected[cue] = menu.selected_index;
+        nativeSet(app.audio_cue_selected, cue, menu.selected_index);
         settings_audio_stop_preview(app);
         app_audio_reload_cue_sounds(app);
         app.settings_dirty = 1n;
         save_settings(app);
     }
     if (
-        (
-            <Button
-                session={CurrentApp().ui.session}
-                props={{
-                    id: s32(830n) + cue,
-                    bounds: {
-                        x: float32(x + dropdown_w + gap),
-                        y: float32(control_y),
-                        width: float32(play_w),
-                        height: float32(AppScale(36n))
-                    },
-                    label: play_label,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                    disabled: !NativePresent(app) || app.audio_ready === 0n
-                }}
-            />
-        )
+        Button({
+            session: CurrentApp().ui.session,
+            props: {
+                id: s32(830n) + cue,
+                bounds: {
+                    x: float32(x + dropdown_w + gap),
+                    y: float32(control_y),
+                    width: float32(play_w),
+                    height: float32(AppScale(36n))
+                },
+                label: play_label,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                disabled: !NativePresent(app) || app.audio_ready === 0n
+            }
+        })
     ) {
         settings_audio_toggle_cue_preview(app, cue);
     }
     if (
-        (
-            <Button
-                session={CurrentApp().ui.session}
-                props={{
-                    id: s32(840n) + cue,
-                    bounds: {
-                        x: float32(x + w - import_w),
-                        y: float32(control_y),
-                        width: float32(import_w),
-                        height: float32(AppScale(36n))
-                    },
-                    label: LocaleText("audio_import_sound_button"),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: CurrentApp().ui.session,
+            props: {
+                id: s32(840n) + cue,
+                bounds: {
+                    x: float32(x + w - import_w),
+                    y: float32(control_y),
+                    width: float32(import_w),
+                    height: float32(AppScale(36n))
+                },
+                label: LocaleText("audio_import_sound_button"),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         settings_audio_start_import(app, action, -1n);
     }
-    (*y) = (*y) + AppScale(86n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(86n);
     settings_audio_draw_status(x, y, action);
 }
 
 export function draw_music_download(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     w: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     if (!NativePresent(app)) {
         return;
@@ -574,84 +556,79 @@ export function draw_music_download(
         download_label = LocaleText("meditation_music_download_button");
     }
     if (
-        (
-            <Button
-                session={CurrentApp().ui.session}
-                props={{
-                    bounds: {
-                        x: float32(x),
-                        y: float32((*y) + AppScale(10n)),
-                        width: float32(w),
-                        height: float32(AppScale(36n))
-                    },
-                    label: download_label,
-                    tone:
-                        installed !== 0n
-                            ? ButtonTone.ButtonToneNeutral
-                            : ButtonTone.ButtonToneAccent,
-                    emphasis:
-                        installed !== 0n
-                            ? ButtonEmphasis.ButtonEmphasisSoft
-                            : ButtonEmphasis.ButtonEmphasisFilled,
-                    disabled: false
-                }}
-            />
-        )
+        Button({
+            session: CurrentApp().ui.session,
+            props: {
+                bounds: {
+                    x: float32(x),
+                    y: float32(nativeDeref(y) + AppScale(10n)),
+                    width: float32(w),
+                    height: float32(AppScale(36n))
+                },
+                label: download_label,
+                tone: installed !== 0n ? ButtonTone.ButtonToneNeutral : ButtonTone.ButtonToneAccent,
+                emphasis:
+                    installed !== 0n
+                        ? ButtonEmphasis.ButtonEmphasisSoft
+                        : ButtonEmphasis.ButtonEmphasisFilled,
+                disabled: false
+            }
+        })
     ) {
         meditation_music_start_download(app);
     }
-    (*y) = (*y) + settings_audio_button_row_height();
+    nativeDeref(y) = nativeDeref(y) + settings_audio_button_row_height();
     if (installed === 0n || app.meditation.music_download.status !== FileDownloadStatus.Idle) {
         if (app.meditation.music_download.status === FileDownloadStatus.Downloading) {
             let download_status = SettingsAudioNewDownloadStatus();
             meditation_music_format_download_status(
-                &download_status[0n],
+                nativeRef(nativeAt(download_status, 0n)),
                 s32(download_status.count),
-                &app.meditation.music_download
+                nativeRef(app.meditation.music_download)
             );
             <Text
                 session={CurrentApp().ui.session}
                 props={{
                     bounds: {
                         x: float32(x),
-                        y: float32((*y)),
+                        y: float32(nativeDeref(y)),
                         width: float32(w),
                         height: float32(AppScale(22n))
                     },
-                    text: AppTextFromCString(&download_status[0n], 96n),
+                    text: AppTextFromCString(nativeRef(nativeAt(download_status, 0n)), 96n),
                     wrap: Wrap.TextWrapNone
                 }}
             />;
-            (*y) = (*y) + AppScale(28n);
-            meditation_music_draw_download_progress(app, x, (*y), w);
-            (*y) = (*y) + AppScale(22n);
+            nativeDeref(y) = nativeDeref(y) + AppScale(28n);
+            meditation_music_draw_download_progress(app, x, nativeDeref(y), w);
+            nativeDeref(y) = nativeDeref(y) + AppScale(22n);
         } else if (app.meditation.music_download.status === FileDownloadStatus.Error) {
             <Text
                 session={CurrentApp().ui.session}
                 props={{
                     bounds: {
                         x: float32(x),
-                        y: float32((*y)),
+                        y: float32(nativeDeref(y)),
                         width: float32(w),
                         height: float32(AppScale(28n))
                     },
                     text: AppTextFromCString(
-                        &app.meditation.music_status[0n],
+                        nativeRef(nativeAt(app.meditation.music_status, 0n)),
                         s32(app.meditation.music_status.count)
                     ),
                     wrap: Wrap.TextWrapNone
                 }}
             />;
-            (*y) = (*y) + AppScale(34n);
+            nativeDeref(y) = nativeDeref(y) + AppScale(34n);
         }
     }
 }
 
 export function settings_audio_draw_music(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     w: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     let section = settings_section_begin(
         app,
@@ -678,12 +655,12 @@ export function settings_audio_draw_music(
         SETTINGS_AUDIO_ACTION_MUSIC,
         -1n
     );
-    settings_row_divider(app, section, (*y));
+    settings_row_divider(app, section, nativeDeref(y));
     settings_audio_subheading(ix, iw, y, LocaleText("audio_music_applied_title"));
-    let assigned: s32 = 0n;
-    let p: s32 = 0n;
+    let assigned: s32 = s32(0n);
+    let p: s32 = s32(0n);
     while (p < practice_count()) {
-        let current = app.meditation.music_practice_tracks[p];
+        let current = nativeAt(app.meditation.music_practice_tracks, p);
         if (current !== AUDIO_MUSIC_NONE && current >= 0n && current < count) {
             assigned = assigned + 1n;
             let action = settings_audio_list_row(
@@ -701,7 +678,7 @@ export function settings_audio_draw_music(
             }
             if (action === 2n) {
                 settings_audio_stop_preview(app);
-                app.meditation.music_practice_tracks[p] = AUDIO_MUSIC_NONE;
+                nativeSet(app.meditation.music_practice_tracks, p, AUDIO_MUSIC_NONE);
                 app.meditation.music_practice_mask = FlagIntersection(
                     app.meditation.music_practice_mask,
                     FlagComplement(FlagShiftLeft(s32(1n), p))
@@ -720,7 +697,7 @@ export function settings_audio_draw_music(
             props={{
                 bounds: {
                     x: float32(ix),
-                    y: float32((*y)),
+                    y: float32(nativeDeref(y)),
                     width: float32(iw),
                     height: float32(AppScale(22n))
                 },
@@ -729,16 +706,16 @@ export function settings_audio_draw_music(
                 wrap: Wrap.TextWrapNone
             }}
         />;
-        (*y) = (*y) + AppScale(30n);
+        nativeDeref(y) = nativeDeref(y) + AppScale(30n);
     }
     let custom_count = settings_audio_clamp_count(
         app.audio_custom_music_count,
         AUDIO_CUSTOM_MUSIC_MAX
     );
     if (custom_count > 0n) {
-        settings_row_divider(app, section, (*y));
+        settings_row_divider(app, section, nativeDeref(y));
         settings_audio_subheading(ix, iw, y, LocaleText("audio_custom_music_title"));
-        let i: s32 = 0n;
+        let i: s32 = s32(0n);
         while (i < custom_count) {
             let track_index = AUDIO_BUILTIN_MUSIC_COUNT + i;
             let action = settings_audio_list_row(
@@ -748,7 +725,7 @@ export function settings_audio_draw_music(
                 iw,
                 y,
                 AppTextFromCString(
-                    &app.audio_custom_music[i].title[0n],
+                    nativeRef(nativeAt(nativeAt(app.audio_custom_music, i).title, 0n)),
                     AUDIO_LABEL_SIZE
                 ),
                 "",

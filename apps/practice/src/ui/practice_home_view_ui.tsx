@@ -74,7 +74,7 @@ export function CentredLineView(text: string, x: s32, y: s32, width: s32): s32 {
 
 export function PriceView(x: s32, y: s32, width: s32): void {
     let font = State_practice_home_view.home.small_font;
-    let height: s32 = 0n;
+    let height: s32 = s32(0n);
     if (State_practice_home_view.home.regular_price.count > 0n) {
         height = PriceRowHeight();
         let regular_width = Width(State_practice_home_view.home.regular_price, font);
@@ -150,43 +150,39 @@ export function TabsView(bounds: Rectangle): void {
     }
     for (let index = s32(0n); index < count; index += s32(1)) {
         let tab = ReadPracticeHomeTabHost(index);
-        tabs[index] = {
+        nativeSet(tabs, index, {
             key: u64(HOME_TAB_KEY + tab.slot),
             label: tab.label,
             disabled: State_practice_home_view.home.modal_active
-        };
+        });
     }
     <Box
         session={State_practice_home_view.home.session}
         props={{ bounds: bounds, fill: State_practice_home_view.home.canvas_color }}
     />;
-    let bar = (
-        <TabBar
-            session={State_practice_home_view.home.session}
-            props={{
-                id: HOME_TABS_ID,
-                bounds: {
-                    x: bounds.x + float32(ScalePixels(12n, State_practice_home_view.home.scale)),
-                    y: bounds.y + float32(ScalePixels(2n, State_practice_home_view.home.scale)),
-                    width:
-                        bounds.width -
-                        float32(ScalePixels(68n, State_practice_home_view.home.scale)),
-                    height:
-                        bounds.height -
-                        float32(ScalePixels(4n, State_practice_home_view.home.scale))
-                },
-                selected_index: State_practice_home_view.home.tab_selected,
-                min_tab_width: ScalePixels(72n, State_practice_home_view.home.scale),
-                max_tab_width: ScalePixels(220n, State_practice_home_view.home.scale),
-                content_sized: true,
-                fit: true,
-                scroll_offset: State_practice_home_view.home.tab_scroll,
-                scale: State_practice_home_view.home.scale,
-                focus_selected: State_practice_home_view.home.tab_focus
-            }}
-            tabs={tabs[:count]}
-        />
-    );
+    let bar = TabBar({
+        session: State_practice_home_view.home.session,
+        props: {
+            id: HOME_TABS_ID,
+            bounds: {
+                x: bounds.x + float32(ScalePixels(12n, State_practice_home_view.home.scale)),
+                y: bounds.y + float32(ScalePixels(2n, State_practice_home_view.home.scale)),
+                width:
+                    bounds.width - float32(ScalePixels(68n, State_practice_home_view.home.scale)),
+                height:
+                    bounds.height - float32(ScalePixels(4n, State_practice_home_view.home.scale))
+            },
+            selected_index: State_practice_home_view.home.tab_selected,
+            min_tab_width: ScalePixels(72n, State_practice_home_view.home.scale),
+            max_tab_width: ScalePixels(220n, State_practice_home_view.home.scale),
+            content_sized: true,
+            fit: true,
+            scroll_offset: State_practice_home_view.home.tab_scroll,
+            scale: State_practice_home_view.home.scale,
+            focus_selected: State_practice_home_view.home.tab_focus
+        },
+        tabs: nativeSlice(tabs, 0n, count)
+    });
     State_practice_home_view.home.tab_scroll = bar.scroll_offset;
     if (
         !State_practice_home_view.home.modal_active &&
@@ -208,50 +204,46 @@ export function CarouselView(bounds: Rectangle): void {
     let button_size = float32(ScalePixels(48n, State_practice_home_view.home.scale));
     let inset = bounds.width * 0.08;
     let button_y = bounds.y + (bounds.height - button_size) / 2n;
-    let picked: s32 = -1n;
+    let picked: s32 = s32(-1n);
     if (
-        (
-            <Button
-                session={State_practice_home_view.home.session}
-                props={{
-                    bounds: {
-                        x: bounds.x + inset,
-                        y: button_y,
-                        width: button_size,
-                        height: button_size
-                    },
-                    id: HOME_CAROUSEL_ID + 1n,
-                    disabled: State_practice_home_view.home.modal_active,
-                    arrow: true,
-                    direction: ArrowDirection.ArrowLeft,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        Button({
+            session: State_practice_home_view.home.session,
+            props: {
+                bounds: {
+                    x: bounds.x + inset,
+                    y: button_y,
+                    width: button_size,
+                    height: button_size
+                },
+                id: HOME_CAROUSEL_ID + 1n,
+                disabled: State_practice_home_view.home.modal_active,
+                arrow: true,
+                direction: ArrowDirection.ArrowLeft,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         picked = selected > 0n ? selected - 1n : count - 1n;
     }
     if (
-        (
-            <Button
-                session={State_practice_home_view.home.session}
-                props={{
-                    bounds: {
-                        x: bounds.x + bounds.width - button_size - inset,
-                        y: button_y,
-                        width: button_size,
-                        height: button_size
-                    },
-                    id: HOME_CAROUSEL_ID + 2n,
-                    disabled: State_practice_home_view.home.modal_active,
-                    arrow: true,
-                    direction: ArrowDirection.ArrowRight,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        Button({
+            session: State_practice_home_view.home.session,
+            props: {
+                bounds: {
+                    x: bounds.x + bounds.width - button_size - inset,
+                    y: button_y,
+                    width: button_size,
+                    height: button_size
+                },
+                id: HOME_CAROUSEL_ID + 2n,
+                disabled: State_practice_home_view.home.modal_active,
+                arrow: true,
+                direction: ArrowDirection.ArrowRight,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         picked = selected < count - 1n ? selected + 1n : 0n;
     }
@@ -278,23 +270,21 @@ export function OfferView(bounds: Rectangle): void {
         ? Locale("practice_download_busy")
         : State_practice_home_view.home.offer_label;
     if (
-        (
-            <Button
-                session={State_practice_home_view.home.session}
-                props={{
-                    id: HOME_OFFER_ID + State_practice_home_view.home.practice * 2n,
-                    bounds: bounds,
-                    pill: true,
-                    label: label,
-                    disabled: State_practice_home_view.home.offer_disabled || downloading,
-                    tone: downloading ? ButtonTone.ButtonToneNeutral : ButtonTone.ButtonToneAccent,
-                    emphasis: downloading
-                        ? ButtonEmphasis.ButtonEmphasisSoft
-                        : ButtonEmphasis.ButtonEmphasisFilled,
-                    size: ControlSize.ControlSizeLarge
-                }}
-            />
-        )
+        Button({
+            session: State_practice_home_view.home.session,
+            props: {
+                id: HOME_OFFER_ID + State_practice_home_view.home.practice * 2n,
+                bounds: bounds,
+                pill: true,
+                label: label,
+                disabled: State_practice_home_view.home.offer_disabled || downloading,
+                tone: downloading ? ButtonTone.ButtonToneNeutral : ButtonTone.ButtonToneAccent,
+                emphasis: downloading
+                    ? ButtonEmphasis.ButtonEmphasisSoft
+                    : ButtonEmphasis.ButtonEmphasisFilled,
+                size: ControlSize.ControlSizeLarge
+            }
+        })
     ) {
         State_practice_home_view.home.action = PRACTICE_HOME_OFFER;
     }
@@ -334,7 +324,7 @@ export function PageView(): void {
     if (total_width < ScalePixels(360n, State_practice_home_view.home.scale)) {
         total_width = view_width - ScalePixels(24n, State_practice_home_view.home.scale);
     }
-    let secondary_count: s32 = 0n;
+    let secondary_count: s32 = s32(0n);
     let manual = State_practice_home_view.home.ready && State_practice_home_view.home.has_manual;
     let config = State_practice_home_view.home.ready && State_practice_home_view.home.has_config;
     if (manual) {
@@ -346,7 +336,7 @@ export function PageView(): void {
     let button_count = 1n + secondary_count;
     let wide = total_width >= ScalePixels(600n, State_practice_home_view.home.scale);
     let secondary_row = secondary_count < 2n || ActionsShareRow(total_width);
-    let rows: s32 = 1n;
+    let rows: s32 = s32(1n);
     if (!wide) {
         if (secondary_row) {
             rows = rows + (secondary_count > 0n ? 1n : 0n);
@@ -483,20 +473,18 @@ export function PageView(): void {
     if (State_practice_home_view.home.offer !== PRACTICE_OFFER_NONE) {
         OfferView(State_practice_home_view.home.start);
     } else if (
-        (
-            <Button
-                session={State_practice_home_view.home.session}
-                props={{
-                    bounds: State_practice_home_view.home.start,
-                    label: start_label,
-                    disabled: State_practice_home_view.home.modal_active,
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                    size: ControlSize.ControlSizeLarge,
-                    pill: true
-                }}
-            />
-        )
+        Button({
+            session: State_practice_home_view.home.session,
+            props: {
+                bounds: State_practice_home_view.home.start,
+                label: start_label,
+                disabled: State_practice_home_view.home.modal_active,
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                size: ControlSize.ControlSizeLarge,
+                pill: true
+            }
+        })
     ) {
         State_practice_home_view.home.action = PRACTICE_HOME_START;
     }
@@ -513,19 +501,17 @@ export function PageView(): void {
             button_height
         );
         if (
-            (
-                <Button
-                    session={State_practice_home_view.home.session}
-                    props={{
-                        bounds: State_practice_home_view.home.manual,
-                        label: Locale("practice_manual_button"),
-                        disabled: State_practice_home_view.home.modal_active,
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                        pill: true
-                    }}
-                />
-            )
+            Button({
+                session: State_practice_home_view.home.session,
+                props: {
+                    bounds: State_practice_home_view.home.manual,
+                    label: Locale("practice_manual_button"),
+                    disabled: State_practice_home_view.home.modal_active,
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                    pill: true
+                }
+            })
         ) {
             State_practice_home_view.home.action = PRACTICE_HOME_MANUAL;
         }
@@ -543,19 +529,17 @@ export function PageView(): void {
             button_height
         );
         if (
-            (
-                <Button
-                    session={State_practice_home_view.home.session}
-                    props={{
-                        bounds: State_practice_home_view.home.config,
-                        label: Locale("practice_configure_button"),
-                        disabled: State_practice_home_view.home.modal_active,
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                        pill: true
-                    }}
-                />
-            )
+            Button({
+                session: State_practice_home_view.home.session,
+                props: {
+                    bounds: State_practice_home_view.home.config,
+                    label: Locale("practice_configure_button"),
+                    disabled: State_practice_home_view.home.modal_active,
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                    pill: true
+                }
+            })
         ) {
             State_practice_home_view.home.action = PRACTICE_HOME_CONFIG;
         }
@@ -661,43 +645,40 @@ export function RecoveryCardView(): void {
     }
     let button_w = (area.width - gap) / 2.0;
     if (
-        (
-            <Button
-                session={State_practice_home_view.home.session}
-                props={{
-                    id: 17404n,
-                    label: Locale("cancel_button"),
-                    bounds: {
-                        x: area.x,
-                        y: row_y,
-                        width: State_practice_home_view.home.ready ? button_w : area.width,
-                        height: button_h
-                    }
-                }}
-            />
-        )
+        Button({
+            session: State_practice_home_view.home.session,
+            props: {
+                id: 17404n,
+                label: Locale("cancel_button"),
+                bounds: {
+                    x: area.x,
+                    y: row_y,
+                    width: State_practice_home_view.home.ready ? button_w : area.width,
+                    height: button_h
+                }
+            }
+        })
     ) {
         State_practice_home_view.home.action = PRACTICE_HOME_RECOVERY_CANCEL;
     }
     if (
-        State_practice_home_view.home.ready && (
-            <Button
-                session={State_practice_home_view.home.session}
-                props={{
-                    id: 17403n,
-                    label: Locale("practice_recovery_continue"),
-                    disabled: State_practice_home_view.home.offer_disabled,
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                    bounds: {
-                        x: area.x + button_w + gap,
-                        y: row_y,
-                        width: button_w,
-                        height: button_h
-                    }
-                }}
-            />
-        )
+        State_practice_home_view.home.ready &&
+        Button({
+            session: State_practice_home_view.home.session,
+            props: {
+                id: 17403n,
+                label: Locale("practice_recovery_continue"),
+                disabled: State_practice_home_view.home.offer_disabled,
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                bounds: {
+                    x: area.x + button_w + gap,
+                    y: row_y,
+                    width: button_w,
+                    height: button_h
+                }
+            }
+        })
     ) {
         State_practice_home_view.home.action = PRACTICE_HOME_RECOVERY_CONTINUE;
     }

@@ -245,21 +245,19 @@ function ShelfView(): void {
             has_fill_bottom: true
         }}
     />;
-    let shelf = (
-        <Scroll
-            session={State.frame.session}
-            props={{
-                key: 27000n,
-                bounds: area,
-                content_height: content_height,
-                scroll_offset: State.shelf_scroll,
-                scale: State.frame.scale
-            }}
-            children={(scroll: NativeScroll.ScrollResult): void => {
-                ShelfRows(scroll, grid, rows, row_height, cover_width, height);
-            }}
-        />
-    );
+    let shelf = Scroll({
+        session: State.frame.session,
+        props: {
+            key: 27000n,
+            bounds: area,
+            content_height: content_height,
+            scroll_offset: State.shelf_scroll,
+            scale: State.frame.scale
+        },
+        children: (scroll: NativeScroll.ScrollResult): void => {
+            ShelfRows(scroll, grid, rows, row_height, cover_width, height);
+        }
+    });
     State.shelf_scroll = shelf.scroll_offset;
 }
 
@@ -273,7 +271,7 @@ function ShelfRows(
 ): void {
     State.shelf_scroll = scroll.scroll_offset;
     grid.content.y = scroll.content.y + float32(Scale(20n));
-    for (let row: s32 = 0n; row < rows; row += s32(1)) {
+    for (let row: s32 = s32(0n); row < rows; row += s32(1)) {
         let x = s32(scroll.content.x);
         let y = s32(scroll.content.y) + row * row_height;
         let width = s32(scroll.content.width);
@@ -327,7 +325,7 @@ function ShelfRows(
                 has_fill_bottom: true
             }}
         />;
-        for (let grain: s32 = 0n; grain <= 3n; grain += s32(1)) {
+        for (let grain: s32 = s32(0n); grain <= 3n; grain += s32(1)) {
             <Box
                 session={State.frame.session}
                 props={{
@@ -343,7 +341,7 @@ function ShelfRows(
             />;
         }
     }
-    for (let index: s32 = 0n; index < BOOK_COUNT; index += 1n) {
+    for (let index: s32 = s32(0n); index < BOOK_COUNT; index += 1n) {
         let cover = GridCellBounds(grid, index, row_height - grid.gap);
         cover.width = float32(cover_width);
         cover.height = float32(height);
@@ -368,17 +366,15 @@ function ShelfRows(
                 border: { r: 121n, g: 101n, b: 66n, a: 255n }
             }}
         />;
-        let press = (
-            <Press
-                session={State.frame.session}
-                props={{
-                    key: u64(27010n + index),
-                    bounds: cover,
-                    label: BookTitle(index),
-                    now: State.frame.now
-                }}
-            />
-        );
+        let press = Press({
+            session: State.frame.session,
+            props: {
+                key: u64(27010n + index),
+                bounds: cover,
+                label: BookTitle(index),
+                now: State.frame.now
+            }
+        });
         BookJacket(index, cover, key + 4n);
         <Box
             session={State.frame.session}
@@ -406,7 +402,7 @@ function ShelfRows(
 function AnnotationPanel(bounds: Rectangle): void {
     let y = s32(bounds.y);
     let width = s32(bounds.width);
-    let current = State.pages[State.page_index];
+    let current = nativeAt(State.pages, State.page_index);
     let input = AppFieldInputHost();
     <Text
         session={State.frame.session}
@@ -425,36 +421,38 @@ function AnnotationPanel(bounds: Rectangle): void {
         State.passage_state.anchor > State.passage_state.cursor
             ? State.passage_state.anchor
             : State.passage_state.cursor;
-    State.passage_state = (
-        <TextArea
-            session={State.frame.session}
-            props={{
-                key: 27619n,
-                focus_id: 27619n,
-                bounds: Bounds(s32(bounds.x), y, width, Scale(168n)),
-                value: BookChapter(State.book, current.chapter)[current.start:current.end],
-                label: AppLocaleHost("library_select_passage"),
-                read_only: true,
-                wrap: true,
-                cursor: State.passage_state.cursor,
-                anchor: State.passage_state.anchor,
-                focused: State.passage_state.focused,
-                scroll_y: State.passage_state.scroll_y,
-                selecting: State.passage_state.selecting,
-                scale: State.frame.scale,
-                input: {
-                    left: input.left,
-                    right: input.right,
-                    home: input.home,
-                    end: input.end,
-                    shift: input.shift,
-                    select_all: input.select_all,
-                    copy: input.copy,
-                    now_seconds: State.frame.now
-                }
-            }}
-        />
-    );
+    State.passage_state = TextArea({
+        session: State.frame.session,
+        props: {
+            key: 27619n,
+            focus_id: 27619n,
+            bounds: Bounds(s32(bounds.x), y, width, Scale(168n)),
+            value: nativeSlice(
+                BookChapter(State.book, current.chapter),
+                current.start,
+                current.end
+            ),
+            label: AppLocaleHost("library_select_passage"),
+            read_only: true,
+            wrap: true,
+            cursor: State.passage_state.cursor,
+            anchor: State.passage_state.anchor,
+            focused: State.passage_state.focused,
+            scroll_y: State.passage_state.scroll_y,
+            selecting: State.passage_state.selecting,
+            scale: State.frame.scale,
+            input: {
+                left: input.left,
+                right: input.right,
+                home: input.home,
+                end: input.end,
+                shift: input.shift,
+                select_all: input.select_all,
+                copy: input.copy,
+                now_seconds: State.frame.now
+            }
+        }
+    });
     let start =
         State.passage_state.anchor < State.passage_state.cursor
             ? State.passage_state.anchor
@@ -465,24 +463,28 @@ function AnnotationPanel(bounds: Rectangle): void {
             : State.passage_state.cursor;
     if (end > start && (start !== previous_start || end !== previous_end) && SaveAnnotations()) {
         State.annotation_index = -1n;
-        for (let index: s32 = 0n; index < State.annotation_count; index += 1n) {
+        for (let index: s32 = s32(0n); index < State.annotation_count; index += 1n) {
             if (
-                State.annotations[index].start === current.start + start &&
-                State.annotations[index].end === current.start + end
+                nativeAt(State.annotations, index).start === current.start + start &&
+                nativeAt(State.annotations, index).end === current.start + end
             ) {
                 State.annotation_index = index;
             }
         }
-        State.note[0n] = 0n;
+        nativeSet(State.note, 0n, 0n);
         if (State.annotation_index >= 0n) {
-            AppCopyText(State.annotations[State.annotation_index].note, State.note[:]);
+            AppCopyText(
+                nativeAt(State.annotations, State.annotation_index).note,
+                nativeSlice(State.note)
+            );
         }
         State.note_state = {};
     }
     y += Scale(184n);
     let selected = end > start || State.annotation_index >= 0n;
     let highlighted =
-        State.annotation_index >= 0n && State.annotations[State.annotation_index].highlighted;
+        State.annotation_index >= 0n &&
+        nativeAt(State.annotations, State.annotation_index).highlighted;
     <Text
         session={State.frame.session}
         props={{
@@ -491,71 +493,67 @@ function AnnotationPanel(bounds: Rectangle): void {
             bounds: Bounds(s32(bounds.x), y, width - Scale(72n), Scale(48n))
         }}
     />;
-    let toggle = (
-        <Toggle
-            session={State.frame.session}
-            props={{
-                key: 27620n,
-                bounds: Bounds(s32(bounds.x) + width - Scale(64n), y, Scale(64n), Scale(48n)),
-                label: AppLocaleHost("library_highlight"),
-                value: highlighted,
-                disabled: !selected
-            }}
-        />
-    );
+    let toggle = Toggle({
+        session: State.frame.session,
+        props: {
+            key: 27620n,
+            bounds: Bounds(s32(bounds.x) + width - Scale(64n), y, Scale(64n), Scale(48n)),
+            label: AppLocaleHost("library_highlight"),
+            value: highlighted,
+            disabled: !selected
+        }
+    });
     if (toggle.changed && EnsureAnnotation()) {
-        State.annotations[State.annotation_index].highlighted = toggle.value;
+        nativeAt(State.annotations, State.annotation_index).highlighted = toggle.value;
         State.annotation_dirty = true;
         SaveReader();
     }
     y += Scale(64n);
-    let edit = (
-        <TextArea
-            session={State.frame.session}
-            props={{
-                key: 27621n,
-                focus_id: 27621n,
-                bounds: Bounds(s32(bounds.x), y, width, Scale(160n)),
-                value: TextUntilNul(State.note[:]),
-                label: AppLocaleHost("library_note"),
-                placeholder: AppLocaleHost("library_note"),
-                max_bytes: 2048n,
-                max_codepoints: 2048n,
-                cursor: State.note_state.cursor,
-                anchor: State.note_state.anchor,
-                scroll_y: State.note_state.scroll_y,
-                focused: State.note_state.focused,
-                composition: State.note_state.composition,
-                wrap: true,
-                scale: State.frame.scale,
-                disabled: !selected,
-                input: {
-                    text: input.text,
-                    paste_text: input.paste_text,
-                    composition_event: input.composition_event,
-                    left: input.left,
-                    right: input.right,
-                    home: input.home,
-                    end: input.end,
-                    shift: input.shift,
-                    backspace: input.backspace,
-                    delete_forward: input.delete_forward,
-                    select_all: input.select_all,
-                    copy: input.copy,
-                    cut: input.cut,
-                    paste: input.paste,
-                    enter: input.commit,
-                    escape: input.escape,
-                    now_seconds: State.frame.now
-                }
-            }}
-        />
-    );
+    let edit = TextArea({
+        session: State.frame.session,
+        props: {
+            key: 27621n,
+            focus_id: 27621n,
+            bounds: Bounds(s32(bounds.x), y, width, Scale(160n)),
+            value: TextUntilNul(nativeSlice(State.note)),
+            label: AppLocaleHost("library_note"),
+            placeholder: AppLocaleHost("library_note"),
+            max_bytes: 2048n,
+            max_codepoints: 2048n,
+            cursor: State.note_state.cursor,
+            anchor: State.note_state.anchor,
+            scroll_y: State.note_state.scroll_y,
+            focused: State.note_state.focused,
+            composition: State.note_state.composition,
+            wrap: true,
+            scale: State.frame.scale,
+            disabled: !selected,
+            input: {
+                text: input.text,
+                paste_text: input.paste_text,
+                composition_event: input.composition_event,
+                left: input.left,
+                right: input.right,
+                home: input.home,
+                end: input.end,
+                shift: input.shift,
+                backspace: input.backspace,
+                delete_forward: input.delete_forward,
+                select_all: input.select_all,
+                copy: input.copy,
+                cut: input.cut,
+                paste: input.paste,
+                enter: input.commit,
+                escape: input.escape,
+                now_seconds: State.frame.now
+            }
+        }
+    });
     State.note_state = edit;
     if (edit.edit.changed && EnsureAnnotation()) {
         if (
             AppReplaceText(
-                State.note[:],
+                nativeSlice(State.note),
                 edit.edit.start,
                 edit.edit.end,
                 edit.edit.replacement
@@ -565,16 +563,16 @@ function AnnotationPanel(bounds: Rectangle): void {
         }
     }
     y += Scale(176n);
-    for (let index: s32 = 0n; index < State.annotation_count; index += 1n) {
+    for (let index: s32 = s32(0n); index < State.annotation_count; index += 1n) {
         if (
             index !== State.annotation_index &&
-            LibraryOverlaps(current, State.annotations[index]) &&
-            State.annotations[index].note !== ""
+            LibraryOverlaps(current, nativeAt(State.annotations, index)) &&
+            nativeAt(State.annotations, index).note !== ""
         ) {
             <Text
                 session={State.frame.session}
                 props={{
-                    text: State.annotations[index].note,
+                    text: nativeAt(State.annotations, index).note,
                     size: State.frame.font,
                     bounds: Bounds(s32(bounds.x), y, width, Scale(100n))
                 }}
@@ -596,29 +594,27 @@ function FontPanel(bounds: Rectangle): void {
             bounds: Bounds(x, y, width, Scale(28n))
         }}
     />;
-    let size = (
-        <Spinbox
-            session={State.frame.session}
-            props={{
-                key: 27630n,
-                bounds: Bounds(x, y + Scale(32n), width, Scale(56n)),
-                label: AppLocaleHost("library_font_size"),
-                min: 14n,
-                max: 36n,
-                step: 1n,
-                value: State.font_size,
-                value_text: NumberText(State.font_size)
-            }}
-        />
-    );
+    let size = Spinbox({
+        session: State.frame.session,
+        props: {
+            key: 27630n,
+            bounds: Bounds(x, y + Scale(32n), width, Scale(56n)),
+            label: AppLocaleHost("library_font_size"),
+            min: 14n,
+            max: 36n,
+            step: 1n,
+            value: State.font_size,
+            value_text: NumberText(State.font_size)
+        }
+    });
     if (size.changed) {
         State.font_size = size.value;
         State.layout_width = 0n;
         State.settings_dirty = true;
     }
     let options = NewOptions();
-    options[0n].label = AppLocaleHost("library_font_system");
-    options[1n].label = "Noto Sans";
+    nativeAt(options, 0n).label = AppLocaleHost("library_font_system");
+    nativeAt(options, 1n).label = "Noto Sans";
     <Text
         session={State.frame.session}
         props={{
@@ -627,19 +623,17 @@ function FontPanel(bounds: Rectangle): void {
             bounds: Bounds(x, y + Scale(112n), width, Scale(28n))
         }}
     />;
-    let face = (
-        <Dropdown
-            session={State.frame.session}
-            props={{
-                key: 27631n,
-                bounds: Bounds(x, y + Scale(144n), width, Scale(48n)),
-                placeholder: AppLocaleHost("library_typeface"),
-                selected_index: State.font_face,
-                scale: State.frame.scale
-            }}
-            options={options[:]}
-        />
-    );
+    let face = Dropdown({
+        session: State.frame.session,
+        props: {
+            key: 27631n,
+            bounds: Bounds(x, y + Scale(144n), width, Scale(48n)),
+            placeholder: AppLocaleHost("library_typeface"),
+            selected_index: State.font_face,
+            scale: State.frame.scale
+        },
+        options: nativeSlice(options)
+    });
     if (face.changed) {
         State.font_face = face.selected_index;
         State.layout_width = 0n;
@@ -668,36 +662,32 @@ function LayoutPanel(bounds: Rectangle): void {
             bounds: Bounds(x, y + Scale(112n), width, Scale(28n))
         }}
     />;
-    let inset = (
-        <Spinbox
-            session={State.frame.session}
-            props={{
-                key: 27640n,
-                bounds: Bounds(x, y + Scale(32n), width, Scale(56n)),
-                label: AppLocaleHost("library_margins"),
-                min: 12n,
-                max: 56n,
-                step: 4n,
-                value: State.margin,
-                value_text: NumberText(State.margin)
-            }}
-        />
-    );
-    let gap = (
-        <Spinbox
-            session={State.frame.session}
-            props={{
-                key: 27641n,
-                bounds: Bounds(x, y + Scale(144n), width, Scale(56n)),
-                label: AppLocaleHost("library_line_spacing"),
-                min: 2n,
-                max: 20n,
-                step: 2n,
-                value: State.line_gap,
-                value_text: NumberText(State.line_gap)
-            }}
-        />
-    );
+    let inset = Spinbox({
+        session: State.frame.session,
+        props: {
+            key: 27640n,
+            bounds: Bounds(x, y + Scale(32n), width, Scale(56n)),
+            label: AppLocaleHost("library_margins"),
+            min: 12n,
+            max: 56n,
+            step: 4n,
+            value: State.margin,
+            value_text: NumberText(State.margin)
+        }
+    });
+    let gap = Spinbox({
+        session: State.frame.session,
+        props: {
+            key: 27641n,
+            bounds: Bounds(x, y + Scale(144n), width, Scale(56n)),
+            label: AppLocaleHost("library_line_spacing"),
+            min: 2n,
+            max: 20n,
+            step: 2n,
+            value: State.line_gap,
+            value_text: NumberText(State.line_gap)
+        }
+    });
     if (inset.changed || gap.changed) {
         State.margin = inset.value;
         State.line_gap = gap.value;
@@ -708,31 +698,31 @@ function LayoutPanel(bounds: Rectangle): void {
 }
 
 function ContentsPanel(bounds: Rectangle): void {
-    for (let chapter: s32 = 1n; chapter <= BookChapters(State.book); chapter += s32(1)) {
+    for (let chapter: s32 = s32(1n); chapter <= BookChapters(State.book); chapter += s32(1)) {
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        id: 27200n + chapter,
-                        bounds: Bounds(
-                            s32(bounds.x),
-                            s32(bounds.y) + (chapter - 1n) * Scale(56n),
-                            s32(bounds.width),
-                            Scale(48n)
-                        ),
-                        label: BookChapterTitle(State.book, chapter),
-                        content_alignment: ContentAlignment.ContentAlignmentStart,
-                        fit_content: true,
-                        size: ControlSize.ControlSizeLarge,
-                        selected: chapter === State.pages[State.page_index].chapter,
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                    }}
-                />
-            )
+            Button({
+                session: State.frame.session,
+                props: {
+                    id: 27200n + chapter,
+                    bounds: Bounds(
+                        s32(bounds.x),
+                        s32(bounds.y) + (chapter - 1n) * Scale(56n),
+                        s32(bounds.width),
+                        Scale(48n)
+                    ),
+                    label: BookChapterTitle(State.book, chapter),
+                    content_alignment: ContentAlignment.ContentAlignmentStart,
+                    fit_content: true,
+                    size: ControlSize.ControlSizeLarge,
+                    selected: chapter === nativeAt(State.pages, State.page_index).chapter,
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                }
+            })
         ) {
-            TurnPage(LibraryPageFor(State.pages[:State.page_count], chapter, 0n, true));
+            TurnPage(
+                LibraryPageFor(nativeSlice(State.pages, 0n, State.page_count), chapter, 0n, true)
+            );
             if (!State.save_failed) {
                 State.panel_open = false;
             }
@@ -756,24 +746,22 @@ function ReaderToolbar(): void {
     let size = State.frame.width < Scale(360n) ? Scale(40n) : Scale(44n);
     let gap = Scale(2n);
     let left = State.frame.width - Scale(12n) - size * 6n - gap * 5n;
-    for (let index: s32 = 0n; index <= 3n; index += 1n) {
+    for (let index: s32 = s32(0n); index <= 3n; index += 1n) {
         if (
-            (
-                <Button
-                    session={State.frame.session}
-                    props={{
-                        id: 27700n + index,
-                        bounds: Bounds(left + index * (size + gap), Scale(6n), size, size),
-                        label: AppLocaleHost(labels[index]),
-                        icon_type: icons[index],
-                        icon_only: true,
-                        size: ControlSize.ControlSizeLarge,
-                        selected: State.panel_open && State.panel_tab === index,
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                    }}
-                />
-            ) &&
+            Button({
+                session: State.frame.session,
+                props: {
+                    id: 27700n + index,
+                    bounds: Bounds(left + index * (size + gap), Scale(6n), size, size),
+                    label: AppLocaleHost(nativeAt(labels, index)),
+                    icon_type: nativeAt(icons, index),
+                    icon_only: true,
+                    size: ControlSize.ControlSizeLarge,
+                    selected: State.panel_open && State.panel_tab === index,
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
+                }
+            }) &&
             SaveReader()
         ) {
             State.panel_open = !State.panel_open || State.panel_tab !== index;
@@ -784,45 +772,42 @@ function ReaderToolbar(): void {
         }
     }
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: 27704n,
-                    bounds: Bounds(left + 4n * (size + gap), Scale(6n), size, size),
-                    label: AppLocaleHost(State.book_dark ? "theme_light" : "theme_dark"),
-                    icon_type: s32(State.book_dark ? IconType.IconSun : IconType.IconMoon),
-                    icon_only: true,
-                    size: ControlSize.ControlSizeLarge,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                id: 27704n,
+                bounds: Bounds(left + 4n * (size + gap), Scale(6n), size, size),
+                label: AppLocaleHost(State.book_dark ? "theme_light" : "theme_dark"),
+                icon_type: s32(State.book_dark ? IconType.IconSun : IconType.IconMoon),
+                icon_only: true,
+                size: ControlSize.ControlSizeLarge,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         State.book_dark = !State.book_dark;
         State.settings_dirty = true;
         SaveReader();
     }
     if (
-        BookChapterArtApproved(State.book) && (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: 27705n,
-                    bounds: Bounds(left + 5n * (size + gap), Scale(6n), size, size),
-                    label: AppLocaleHost(
-                        State.picture_book ? "library_hide_images" : "library_show_images"
-                    ),
-                    icon_type: s32(IconType.IconStack),
-                    icon_only: true,
-                    selected: State.picture_book,
-                    size: ControlSize.ControlSizeLarge,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        BookChapterArtApproved(State.book) &&
+        Button({
+            session: State.frame.session,
+            props: {
+                id: 27705n,
+                bounds: Bounds(left + 5n * (size + gap), Scale(6n), size, size),
+                label: AppLocaleHost(
+                    State.picture_book ? "library_hide_images" : "library_show_images"
+                ),
+                icon_type: s32(IconType.IconStack),
+                icon_only: true,
+                selected: State.picture_book,
+                size: ControlSize.ControlSizeLarge,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         SetPictureMode(!State.picture_book);
     }
@@ -850,26 +835,24 @@ function ReaderPanel(): void {
         }}
     />;
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: 27601n,
-                    bounds: Bounds(
-                        s32(bounds.x + bounds.width) - Scale(44n),
-                        s32(bounds.y) - Scale(8n),
-                        Scale(44n),
-                        Scale(44n)
-                    ),
-                    label: AppLocaleHost("close_button"),
-                    icon_type: s32(IconType.IconCheck),
-                    icon_only: true,
-                    size: ControlSize.ControlSizeLarge,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        ) &&
+        Button({
+            session: State.frame.session,
+            props: {
+                id: 27601n,
+                bounds: Bounds(
+                    s32(bounds.x + bounds.width) - Scale(44n),
+                    s32(bounds.y) - Scale(8n),
+                    Scale(44n),
+                    Scale(44n)
+                ),
+                label: AppLocaleHost("close_button"),
+                icon_type: s32(IconType.IconCheck),
+                icon_only: true,
+                size: ControlSize.ControlSizeLarge,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        }) &&
         SaveReader()
     ) {
         State.panel_open = false;
@@ -878,11 +861,14 @@ function ReaderPanel(): void {
     bounds.height = bounds.height - float32(Scale(48n));
     let content_height = State.panel_tab === 0n ? Scale(600n) : Scale(420n);
     if (State.panel_tab === 0n) {
-        for (let index: s32 = 0n; index < State.annotation_count; index += 1n) {
+        for (let index: s32 = s32(0n); index < State.annotation_count; index += 1n) {
             if (
                 index !== State.annotation_index &&
-                LibraryOverlaps(State.pages[State.page_index], State.annotations[index]) &&
-                State.annotations[index].note !== ""
+                LibraryOverlaps(
+                    nativeAt(State.pages, State.page_index),
+                    nativeAt(State.annotations, index)
+                ) &&
+                nativeAt(State.annotations, index).note !== ""
             ) {
                 content_height += Scale(112n);
             }
@@ -892,21 +878,19 @@ function ReaderPanel(): void {
         content_height = BookChapters(State.book) * Scale(56n) - Scale(8n);
     }
     let tab = State.panel_tab;
-    let panel = (
-        <Scroll
-            session={State.frame.session}
-            props={{
-                key: u64(27602n + State.panel_tab),
-                bounds: bounds,
-                content_height: content_height,
-                scroll_offset: State.panel_scroll,
-                scale: State.frame.scale
-            }}
-            children={(scroll: NativeScroll.ScrollResult): void => {
-                ReaderTools(scroll, tab);
-            }}
-        />
-    );
+    let panel = Scroll({
+        session: State.frame.session,
+        props: {
+            key: u64(27602n + State.panel_tab),
+            bounds: bounds,
+            content_height: content_height,
+            scroll_offset: State.panel_scroll,
+            scale: State.frame.scale
+        },
+        children: (scroll: NativeScroll.ScrollResult): void => {
+            ReaderTools(scroll, tab);
+        }
+    });
     State.panel_scroll = panel.scroll_offset;
 }
 
@@ -925,11 +909,11 @@ function ReaderTools(scroll: NativeScroll.ScrollResult, tab: s32): void {
 
 function ChapterTextView(current: LibraryPage): void {
     let props: NativeText.Props = ReadingProps(current.chapter);
-    props.text = BookChapter(State.book, current.chapter)[current.start:current.end];
+    props.text = nativeSlice(BookChapter(State.book, current.chapter), current.start, current.end);
     props.key = 27502n;
     let marks = NewMarks();
     let mark_count: s32 = s32(0);
-    for (const annotation of State.annotations[:State.annotation_count]) {
+    for (const annotation of nativeSlice(State.annotations, 0n, State.annotation_count)) {
         if (!annotation.highlighted || !LibraryOverlaps(current, annotation)) {
             continue;
         }
@@ -939,25 +923,25 @@ function ChapterTextView(current: LibraryPage): void {
                 ? annotation.end - current.start
                 : current.end - current.start;
         let place = mark_count;
-        while (place > 0n && marks[place - 1n].start > start) {
-            marks[place] = marks[place - 1n];
+        while (place > 0n && nativeAt(marks, place - 1n).start > start) {
+            nativeSet(marks, place, nativeAt(marks, place - 1n));
             place -= 1n;
         }
-        marks[place] = { start: start, end: end };
+        nativeSet(marks, place, { start: start, end: end });
         mark_count += 1n;
     }
     let merged: s32 = s32(0);
-    for (let index: s32 = 0n; index < mark_count; index += 1n) {
-        if (merged > 0n && marks[index].start <= marks[merged - 1n].end) {
-            if (marks[index].end > marks[merged - 1n].end) {
-                marks[merged - 1n].end = marks[index].end;
+    for (let index: s32 = s32(0n); index < mark_count; index += 1n) {
+        if (merged > 0n && nativeAt(marks, index).start <= nativeAt(marks, merged - 1n).end) {
+            if (nativeAt(marks, index).end > nativeAt(marks, merged - 1n).end) {
+                nativeAt(marks, merged - 1n).end = nativeAt(marks, index).end;
             }
         } else {
-            marks[merged] = marks[index];
+            nativeSet(marks, merged, nativeAt(marks, index));
             merged += 1n;
         }
     }
-    props.strong = marks[:merged];
+    props.strong = nativeSlice(marks, 0n, merged);
     <Text session={State.frame.session} props={ChapterHeadingProps(current.chapter)} />;
     <Text session={State.frame.session} props={props} />;
 }
@@ -1028,7 +1012,7 @@ function ReaderView(): void {
             TurnPage(State.page_index - 1n);
         }
     }
-    let current = State.pages[State.page_index];
+    let current = nativeAt(State.pages, State.page_index);
     if (!State.panel_open) {
         if (current.picture) {
             PicturePageView(current.chapter);
@@ -1080,21 +1064,19 @@ export function LibraryViewComposition(): void {
         ShelfView();
     }
     if (
-        (
-            <Button
-                session={State.frame.session}
-                props={{
-                    id: 27710n,
-                    bounds: Bounds(Scale(8n), Scale(6n), Scale(44n), Scale(44n)),
-                    label: AppLocaleHost("back_button"),
-                    icon_type: s32(IconType.IconLeft),
-                    icon_only: true,
-                    size: ControlSize.ControlSizeLarge,
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                }}
-            />
-        )
+        Button({
+            session: State.frame.session,
+            props: {
+                id: 27710n,
+                bounds: Bounds(Scale(8n), Scale(6n), Scale(44n), Scale(44n)),
+                label: AppLocaleHost("back_button"),
+                icon_type: s32(IconType.IconLeft),
+                icon_only: true,
+                size: ControlSize.ControlSizeLarge,
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisGhost
+            }
+        })
     ) {
         if (!LibraryBack()) {
             CloseAppHost();

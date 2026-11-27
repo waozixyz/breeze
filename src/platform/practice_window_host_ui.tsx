@@ -21,14 +21,14 @@ import {
 } from "session_window_view";
 import { session_window_breathe_button } from "session_window_view_ui";
 
-export function PracticeWindowControls(app: *InnerBreeze, bounds: Rectangle): s32 {
+export function PracticeWindowControls(app: NativeRef<InnerBreeze>, bounds: Rectangle): s32 {
     let session = app.ui.session;
     let card: NativeButton.Props = {};
     card.id = SESSION_WINDOW_DESKTOP_ID + 2n;
     card.bounds = bounds;
     card.invisible = true;
     card.label = practice_label(session_window_practice(app.session_window.screen));
-    let tapped = <Button session={session} props={card} />;
+    let tapped = Button({ session: session, props: card });
     let names: [string, string] = [
         LocaleText("session_maximize_button"),
         LocaleText("close_button")
@@ -47,11 +47,11 @@ export function PracticeWindowControls(app: *InnerBreeze, bounds: Rectangle): s3
             width: 36.0,
             height: 36.0
         };
-        button.label = names[index];
+        button.label = nativeAt(names, index);
         button.icon_only = true;
-        button.icon_shape = icons[index];
+        button.icon_shape = nativeAt(icons, index);
         button.emphasis = ButtonEmphasis.ButtonEmphasisGhost;
-        if ((<Button session={session} props={button} />)) {
+        if (Button({ session: session, props: button })) {
             action = index === 0n ? PRACTICE_WINDOW_RESTORE : PRACTICE_WINDOW_CLOSE;
         }
     }

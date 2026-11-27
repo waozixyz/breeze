@@ -10,7 +10,7 @@ import { AppScale } from "metrics";
 import { NativePresent } from "native_flags";
 
 export function app_draw_close_title_barView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     title: string,
     close_label: string,
     height: s32
@@ -31,7 +31,7 @@ export function app_draw_close_title_barView(
     bar.title = title;
     bar.height = height;
     bar.bounds = { x: 0.0, y: 0.0, width: float32(app.ui.view_width), height: float32(height) };
-    <TitleBar session={app.ui.session} props={bar} options={options[0n:0n]} />;
+    <TitleBar session={app.ui.session} props={bar} options={nativeSlice(options, 0n, 0n)} />;
     let close: NativeButton.Props = {};
     close.id = 9101n;
     close.label = close_label;
@@ -48,7 +48,7 @@ export function app_draw_close_title_barView(
     close.circle = true;
     close.tone = ButtonTone.ButtonToneNeutral;
     close.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
-    if (app.modal.active === 0n && <Button session={app.ui.session} props={close} />) {
+    if (app.modal.active === 0n && Button({ session: app.ui.session, props: close })) {
         return 1n;
     }
     return 0n;

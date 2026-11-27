@@ -1,0 +1,150 @@
+#import "kryon/geometry"
+#import "kryon/drawing_props"
+Text :: #import "kryon/text";
+
+Bounds :: (x: s32, y: s32, width: s32, height: s32) -> Rectangle {
+    return Rectangle.{cast(float32)x, cast(float32)y,
+        cast(float32)width, cast(float32)height}
+}
+
+Number :: (value: s64) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value)
+    return BuilderFinish(out)
+}
+
+Replaced :: (value: string, start: s32, end: s32, replacement: string,
+    limit: s64) -> string {
+    if start < 0 || end < start || cast(s64)end > value.count ||
+    value.count - cast(s64)(end - start) + replacement.count > limit {
+        return value
+    }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", value[:start])
+    BuilderPrint(*out, "%", replacement)
+    BuilderPrint(*out, "%", value[end:])
+    return BuilderFinish(out)
+}
+
+Alpha :: (color: Color, opacity: float32) -> Color {
+    color.a = cast(u8)(255.0 * opacity)
+    return color
+}
+
+Strong :: (text: string) -> [1]Text.Range {
+    ranges: [1]Text.Range
+    ranges[0] = Text.Range.{.start = 0, .end = cast(s32)text.count}
+    return ranges
+}
+
+NewStrong :: () -> [1]Text.Range {
+    result: [1]Text.Range
+    return result
+}
+
+Coins :: (halves: s64) -> string {
+    out: Vec(u8)
+    whole := halves / 2
+    odd := halves % 2 != 0
+    if whole != 0 || !odd {
+        BuilderPrint(*out, "%", whole)
+    } else if halves < 0 {
+        BuilderPrint(*out, "-")
+    }
+    if odd {
+        BuilderPrint(*out, "½")
+    }
+    return BuilderFinish(out)
+}
+
+#import "kryon/session"
+#import "kryon/dpi"
+#import "kryon/text_measure"
+
+Surface :: struct {
+    session: Session
+    scale: float32
+    font: s32
+    small_font: s32
+    muted_class: s32
+    fill: Color
+    border: Color
+    coin: Color
+    radius: s32
+    padding: s32
+    modal_active: bool
+    empty_width_fits: bool
+}
+
+SurfaceScale :: (surface: Surface, pixels: s32) -> s32 {
+    return ScalePixels(pixels, surface.scale)
+}
+
+SurfaceWidth :: (surface: Surface, text: string, font: s32) -> s32 {
+    return TextWidth(surface.session, Text.Props.{.text = text, .size = font})
+}
+
+SurfaceTitleFont :: (surface: Surface, text: string, width: s32) -> s32 {
+    large := SurfaceScale(surface, Text.Text24)
+    if (surface.empty_width_fits && width <= 0) || SurfaceWidth(surface, text, large) <= width {
+        return large
+    }
+    medium := SurfaceScale(surface, Text.Text16)
+    if SurfaceWidth(surface, text, medium) <= width {
+        return medium
+    }
+    return SurfaceScale(surface, Text.Text14)
+}
+
+SurfaceFigureFont :: (surface: Surface, value: string, width: s32) -> s32 {
+    font := SurfaceScale(surface, Text.Text24)
+    if surface.empty_width_fits && width <= 0 {
+        return font
+    }
+    minimum := SurfaceScale(surface, Text.Text16)
+    while font > minimum && SurfaceWidth(surface, value, font) > width {
+        font -= 1
+    }
+    return font
+}
+
+TextField :: #import "kryon/text_field";
+
+TextBinding :: struct {
+    cursor: *s32
+    anchor: *s32
+    scroll_x: *s32
+}
+
+BindText :: (cursor: *s32, anchor: *s32, scroll_x: *s32) -> TextBinding {
+    return TextBinding.{cursor, anchor, scroll_x}
+}
+
+InputProps :: (binding: TextBinding, props: TextField.Props, input: TextField.Input,
+    shared_cursor: bool = false) -> TextField.Props {
+    if !shared_cursor || props.focused {
+        props.cursor = binding.cursor.*
+        props.anchor = binding.anchor.*
+        props.scroll_x = binding.scroll_x.*
+    }
+    if props.focused {
+        props.input = input
+    }
+    props.max_codepoints = props.max_bytes
+    return props
+}
+
+AcceptText :: (binding: TextBinding, result: TextField.Result, shared_cursor: bool = false) {
+    if !shared_cursor || result.focused {
+        binding.cursor.* = result.cursor
+        binding.anchor.* = result.anchor
+        binding.scroll_x.* = result.scroll_x
+    }
+}
+
+EditedText :: (value: string, edit: TextField.Edit, limit: s32) -> string {
+    if edit.changed {
+        return Replaced(value, edit.start, edit.end, edit.replacement, limit)
+    }
+    return value
+}

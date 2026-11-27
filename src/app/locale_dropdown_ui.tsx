@@ -17,12 +17,12 @@ export function LocaleDropdownView(
         count = 64n;
     }
     if (count <= 0n) {
-        options[0n].label = LocaleText("language_system_label");
+        nativeAt(options, 0n).label = LocaleText("language_system_label");
         count = 1n;
     } else {
-        let index: s32 = 0n;
+        let index: s32 = s32(0n);
         while (index < count) {
-            options[index].label = LocaleLanguageAt(index).label;
+            nativeAt(options, index).label = LocaleLanguageAt(index).label;
             index = index + 1n;
         }
     }
@@ -30,7 +30,9 @@ export function LocaleDropdownView(
     if (resolved.selected_index < 0n || resolved.selected_index >= count) {
         resolved.selected_index = 0n;
     }
-    return (
-        <Dropdown session={session} props={resolved} options={options[0n:count]} />
-    );
+    return Dropdown({
+        session: session,
+        props: resolved,
+        options: nativeSlice(options, 0n, count)
+    });
 }

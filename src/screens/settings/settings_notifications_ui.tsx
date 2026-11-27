@@ -54,37 +54,36 @@ import {
 import { AppTextFromCString, FormatArg, FormatTemplate, FrameTextHold } from "text_buffers";
 
 export function settings_notifications_button_row(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     id: s32,
     x: s32,
     width: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     label: string
 ): boolean {
     let button: NativeButton.Props = {};
     button.id = id;
     button.bounds = {
         x: float32(x),
-        y: float32((*y) + AppScale(10n)),
+        y: float32(nativeDeref(y) + AppScale(10n)),
         width: float32(width),
         height: float32(AppScale(36n))
     };
     button.label = label;
     button.tone = ButtonTone.ButtonToneNeutral;
     button.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
-    (*y) =
-        (*y) + settings_notifications_button_row_height();
-    return <Button session={app.ui.session} props={button} />;
+    nativeDeref(y) = nativeDeref(y) + settings_notifications_button_row_height();
+    return Button({ session: app.ui.session, props: button });
 }
 
 export function settings_notifications_draw_entry(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     index: s32,
     x: s32,
     width: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): boolean {
-    let reminder = &app.reminders[index];
+    let reminder = nativeRef(nativeAt(app.reminders, index));
     let control_height = AppScale(36n);
     let gap = AppScale(12n);
     let remove_width = settings_button_width(LocaleText("remove_button"), AppScale(88n));
@@ -98,19 +97,19 @@ export function settings_notifications_draw_entry(
     if (hour > 23n) {
         hour = 23n;
     }
-    time_bytes[0n] = u8(48n + hour / 10n);
-    time_bytes[1n] = u8(48n + (hour % 10n));
-    time_bytes[2n] = u8(58n);
-    time_bytes[3n] = u8(48n);
-    time_bytes[4n] = u8(48n);
-    time_bytes[5n] = u8(0n);
+    nativeSet(time_bytes, 0n, u8(48n + hour / 10n));
+    nativeSet(time_bytes, 1n, u8(48n + (hour % 10n)));
+    nativeSet(time_bytes, 2n, u8(58n));
+    nativeSet(time_bytes, 3n, u8(48n));
+    nativeSet(time_bytes, 4n, u8(48n));
+    nativeSet(time_bytes, 5n, u8(0n));
     let time_text = FrameTextHold(
-        &app.ui.frame_text,
-        AppTextFromCString(&time_bytes[0n], 6n)
+        nativeRef(app.ui.frame_text),
+        AppTextFromCString(nativeRef(nativeAt(time_bytes, 0n)), 6n)
     );
     let stepper_width =
         control_height * 2n + AppTextWidth(time_text, AppFontSize()) + AppScale(24n);
-    let first_center = (*y) + AppScale(28n);
+    let first_center = nativeDeref(y) + AppScale(28n);
     let toggle_x = x;
     let toggle_center = first_center;
     let menu_x = x + toggle_width + gap;
@@ -134,7 +133,7 @@ export function settings_notifications_draw_entry(
     };
     enabled.label = practice_label(reminder.practice);
     enabled.value = reminder.enabled !== 0n;
-    let toggle_result = <Toggle session={app.ui.session} props={enabled} />;
+    let toggle_result = Toggle({ session: app.ui.session, props: enabled });
     if (toggle_result.changed) {
         reminder.enabled = toggle_result.value ? 1n : 0n;
         app.settings_dirty = 1n;
@@ -142,7 +141,7 @@ export function settings_notifications_draw_entry(
     }
     let options = SettingsNotificationsNewOptions();
     for (let practice = s32(0); practice <= APP_REMINDER_PRACTICE_COUNT - 1n; practice += s32(1)) {
-        options[practice].label = practice_label(s32(practice));
+        nativeAt(options, practice).label = practice_label(s32(practice));
     }
     let menu: NativeDropdown.Props = {};
     menu.id = s32(400n) + index * 4n;
@@ -153,13 +152,11 @@ export function settings_notifications_draw_entry(
         height: float32(control_height)
     };
     menu.selected_index = reminder.practice;
-    let reminder_menu = (
-        <Dropdown
-            session={app.ui.session}
-            props={menu}
-            options={options[:]}
-        />
-    );
+    let reminder_menu = Dropdown({
+        session: app.ui.session,
+        props: menu,
+        options: nativeSlice(options)
+    });
     if (reminder_menu.changed) {
         reminder.practice = reminder_menu.selected_index;
         app.settings_dirty = 1n;
@@ -179,7 +176,7 @@ export function settings_notifications_draw_entry(
     time.value = reminder.hour;
     time.value_text = time_text;
     time.wrap = true;
-    let time_result = <Spinbox session={app.ui.session} props={time} />;
+    let time_result = Spinbox({ session: app.ui.session, props: time });
     if (time_result.changed) {
         reminder.hour = time_result.value;
         app.settings_dirty = 1n;
@@ -196,9 +193,8 @@ export function settings_notifications_draw_entry(
     remove.label = LocaleText("remove_button");
     remove.tone = ButtonTone.ButtonToneNeutral;
     remove.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
-    (*y) =
-        (*y) + settings_notifications_entry_height(width);
-    if ((<Button session={app.ui.session} props={remove} />)) {
+    nativeDeref(y) = nativeDeref(y) + settings_notifications_entry_height(width);
+    if (Button({ session: app.ui.session, props: remove })) {
         settings_notifications_remove_reminder(app, index);
         return true;
     }
@@ -206,7 +202,7 @@ export function settings_notifications_draw_entry(
 }
 
 export function settings_notifications_push_row(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     id: s32,
     label: string,
     detail: string,
@@ -237,10 +233,10 @@ export function settings_notifications_push_row(
             smooth: true
         };
     }
-    return <Button session={app.ui.session} props={props} />;
+    return Button({ session: app.ui.session, props: props });
 }
 
-export function settings_notifications_handle_overlaysView(app: *InnerBreeze): void {
+export function settings_notifications_handle_overlaysView(app: NativeRef<InnerBreeze>): void {
     if (!NativePresent(app) || AndroidPlatform() === 0n || app.push_picker_open === 0n) {
         return;
     }
@@ -273,11 +269,20 @@ export function settings_notifications_handle_overlaysView(app: *InnerBreeze): v
     let x = s32(content.x);
     let width = s32(content.width);
     let y = s32(content.y);
-    let index: s32 = 0n;
+    let index: s32 = s32(0n);
     while (index < count) {
-        let label = AppTextFromCString(&app.push_distributor_labels[index][0n], 64n);
-        let package = AppTextFromCString(&app.push_distributors[index][0n], 96n);
-        let icon = AppTextFromCString(&app.push_distributor_icons[index][0n], 256n);
+        let label = AppTextFromCString(
+            nativeRef(nativeAt(nativeAt(app.push_distributor_labels, index), 0n)),
+            64n
+        );
+        let package = AppTextFromCString(
+            nativeRef(nativeAt(nativeAt(app.push_distributors, index), 0n)),
+            96n
+        );
+        let icon = AppTextFromCString(
+            nativeRef(nativeAt(nativeAt(app.push_distributor_icons, index), 0n)),
+            256n
+        );
         let detail = SettingsNotificationsNewDetail();
         let named = false;
         for (const byte of package) {
@@ -289,8 +294,8 @@ export function settings_notifications_handle_overlaysView(app: *InnerBreeze): v
             let args: [FormatArg] = [{ text: package, is_text: true }];
             FormatTemplate(
                 LocaleText("notifications_push_uses_app"),
-                args[:],
-                detail[:]
+                nativeSlice(args),
+                nativeSlice(detail)
             );
         }
         if (
@@ -299,8 +304,8 @@ export function settings_notifications_handle_overlaysView(app: *InnerBreeze): v
                 7210n + index,
                 label,
                 FrameTextHold(
-                    &app.ui.frame_text,
-                    AppTextFromCString(&detail[0n], 160n)
+                    nativeRef(app.ui.frame_text),
+                    AppTextFromCString(nativeRef(nativeAt(detail, 0n)), 160n)
                 ),
                 icon,
                 x,
@@ -333,10 +338,10 @@ export function settings_notifications_handle_overlaysView(app: *InnerBreeze): v
 }
 
 export function settings_notifications_draw_push(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     if (AndroidPlatform() === 0n) {
         return;
@@ -358,13 +363,13 @@ export function settings_notifications_draw_push(
     status.vertical_align = TextAlign.TextAlignCenter;
     status.bounds = {
         x: float32(section.inner_x),
-        y: float32((*y)),
+        y: float32(nativeDeref(y)),
         width: float32(section.inner_width),
         height: float32(AppScale(44n))
     };
     <Text session={app.ui.session} props={status} />;
-    (*y) = (*y) + AppScale(44n);
-    settings_row_divider(app, section, (*y));
+    nativeDeref(y) = nativeDeref(y) + AppScale(44n);
+    settings_row_divider(app, section, nativeDeref(y));
     if (
         settings_notifications_button_row(
             app,

@@ -144,16 +144,16 @@ export function profile_draw_hub_stat_card(
 export function profile_draw_stat_row(
     x: s32,
     w: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     label: string,
     value: string
 ): void {
     let font = AppFontSize();
-    let value_w: s32 = 0n;
+    let value_w: s32 = s32(0n);
     <Text
         session={CurrentApp().ui.session}
         props={{
-            bounds: { x: float32(x), y: float32((*y)), width: 0n, height: 0n },
+            bounds: { x: float32(x), y: float32(nativeDeref(y)), width: 0n, height: 0n },
             text: label,
             wrap: Wrap.TextWrapNone
         }}
@@ -164,7 +164,7 @@ export function profile_draw_stat_row(
         props={{
             bounds: {
                 x: float32(x + w - value_w),
-                y: float32((*y) - AppScale(2n)),
+                y: float32(nativeDeref(y) - AppScale(2n)),
                 width: 0n,
                 height: 0n
             },
@@ -172,7 +172,7 @@ export function profile_draw_stat_row(
             wrap: Wrap.TextWrapNone
         }}
     />;
-    (*y) = (*y) + AppScale(28n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(28n);
 }
 
 export function profile_draw_divider(x: s32, w: s32, y: s32): void {
@@ -208,25 +208,28 @@ export function profile_draw_fitted_text(
 }
 
 export function profile_draw_habits(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     w: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     let font = AppFontSize();
     let btn_h = AppScale(32n);
     let btn_w = AppScale(74n);
     let gap = AppScale(8n);
     let stack_rows = w < AppScale(260n);
-    (*y) = (*y) + AppScale(16n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(16n);
     {
-        let i: s32 = 0n;
+        let i: s32 = s32(0n);
         while (i < app.habits.count) {
-            let row_y = (*y);
+            let row_y = nativeDeref(y);
             let controls_w = btn_w * 2n + gap;
             let name_w = stack_rows ? w : w - controls_w - gap;
             profile_draw_fitted_text(
-                AppTextFromCString(&app.habits.items[i].name[0n], HABIT_NAME_SIZE),
+                AppTextFromCString(
+                    nativeRef(nativeAt(nativeAt(app.habits.items, i).name, 0n)),
+                    HABIT_NAME_SIZE
+                ),
                 x,
                 row_y + AppScale(7n),
                 name_w,
@@ -236,56 +239,51 @@ export function profile_draw_habits(
                 row_y = row_y + AppScale(36n);
             }
             if (
-                (
-                    <Button
-                        session={CurrentApp().ui.session}
-                        props={{
-                            bounds: {
-                                x: float32(stack_rows ? x : x + w - btn_w * 2n - gap),
-                                y: float32(row_y),
-                                width: float32(btn_w),
-                                height: float32(btn_h)
-                            },
-                            label: LocaleText("move_up_button"),
-                            tone: ButtonTone.ButtonToneNeutral,
-                            emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                            disabled: i === 0n
-                        }}
-                    />
-                )
+                Button({
+                    session: CurrentApp().ui.session,
+                    props: {
+                        bounds: {
+                            x: float32(stack_rows ? x : x + w - btn_w * 2n - gap),
+                            y: float32(row_y),
+                            width: float32(btn_w),
+                            height: float32(btn_h)
+                        },
+                        label: LocaleText("move_up_button"),
+                        tone: ButtonTone.ButtonToneNeutral,
+                        emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                        disabled: i === 0n
+                    }
+                })
             ) {
-                if (habits_move(&app.habits, i, i - 1n) !== 0n) {
+                if (habits_move(nativeRef(app.habits), i, i - 1n) !== 0n) {
                     app_auto_sync(app);
                 }
                 return;
             }
             if (
-                (
-                    <Button
-                        session={CurrentApp().ui.session}
-                        props={{
-                            bounds: {
-                                x: float32(stack_rows ? x + btn_w + gap : x + w - btn_w),
-                                y: float32(row_y),
-                                width: float32(btn_w),
-                                height: float32(btn_h)
-                            },
-                            label: LocaleText("move_down_button"),
-                            tone: ButtonTone.ButtonToneNeutral,
-                            emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                            disabled: i === app.habits.count - 1n
-                        }}
-                    />
-                )
+                Button({
+                    session: CurrentApp().ui.session,
+                    props: {
+                        bounds: {
+                            x: float32(stack_rows ? x + btn_w + gap : x + w - btn_w),
+                            y: float32(row_y),
+                            width: float32(btn_w),
+                            height: float32(btn_h)
+                        },
+                        label: LocaleText("move_down_button"),
+                        tone: ButtonTone.ButtonToneNeutral,
+                        emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                        disabled: i === app.habits.count - 1n
+                    }
+                })
             ) {
-                if (habits_move(&app.habits, i, i + 1n) !== 0n) {
+                if (habits_move(nativeRef(app.habits), i, i + 1n) !== 0n) {
                     app_auto_sync(app);
                 }
                 return;
             }
-            (*y) =
-                (*y) + (stack_rows ? AppScale(78n) : AppScale(46n));
-            profile_draw_divider(x, w, (*y) - AppScale(6n));
+            nativeDeref(y) = nativeDeref(y) + (stack_rows ? AppScale(78n) : AppScale(46n));
+            profile_draw_divider(x, w, nativeDeref(y) - AppScale(6n));
             i = i + 1n;
         }
     }
@@ -295,7 +293,7 @@ export function profile_draw_habits(
             props={{
                 bounds: {
                     x: float32(x),
-                    y: float32((*y)),
+                    y: float32(nativeDeref(y)),
                     width: 0n,
                     height: 0n
                 },
@@ -306,7 +304,7 @@ export function profile_draw_habits(
     }
 }
 
-export function profile_screen_draw(app: *InnerBreeze): s32 {
+export function profile_screen_draw(app: NativeRef<InnerBreeze>): s32 {
     if (!NativePresent(app)) {
         return 0n;
     }
@@ -314,11 +312,11 @@ export function profile_screen_draw(app: *InnerBreeze): s32 {
     let content_y = header_h + AppScale(8n);
     let view_width: s32 = app.ui.view_width;
     let content_h = app.ui.view_height - content_y - app_content_bottom_reserved(app);
-    let content_x: s32 = 0n;
-    let content_w: s32 = 0n;
-    let page_content_h: s32 = 0n;
+    let content_x: s32 = s32(0n);
+    let content_w: s32 = s32(0n);
+    let page_content_h: s32 = s32(0n);
     let max_w = AppScale(CONTENT_MAX_W);
-    let y: s32 = 0n;
+    let y: s32 = s32(0n);
     let title = LocaleText("tab_profile");
     profile_screen_handle_platform_import(app);
     if (app.profile_tab < 0n || app.profile_tab >= PROFILE_TAB_COUNT) {
@@ -385,23 +383,23 @@ export function profile_screen_draw(app: *InnerBreeze): s32 {
         let page: Rectangle = scroll_1_result.content;
         let y = s32(page.y) + AppScale(12n);
         if (recovery) {
-            profile_draw_data(app, content_x, content_w, &y);
+            profile_draw_data(app, content_x, content_w, nativeRef(y));
         } else if (app.profile_view === PROFILE_VIEW_DEW) {
-            ProfileDewDraw(app, content_x, &y, content_w);
+            ProfileDewDraw(app, content_x, nativeRef(y), content_w);
         } else if (app.profile_view === PROFILE_VIEW_SYNC_ACCOUNT) {
-            settings_sync_account_draw_config(app, content_x, content_w, &y);
+            settings_sync_account_draw_config(app, content_x, content_w, nativeRef(y));
         } else if (app.profile_view === PROFILE_VIEW_DATA) {
-            profile_draw_data(app, content_x, content_w, &y);
+            profile_draw_data(app, content_x, content_w, nativeRef(y));
         } else if (app.profile_view === PROFILE_VIEW_HABITS) {
-            profile_draw_habits(app, content_x, content_w, &y);
+            profile_draw_habits(app, content_x, content_w, nativeRef(y));
         } else if (app.profile_tab === PROFILE_TAB_OVERVIEW) {
-            profile_draw_overview(app, content_x, content_w, &y);
+            profile_draw_overview(app, content_x, content_w, nativeRef(y));
         } else if (app.profile_tab === PROFILE_TAB_DATA) {
-            profile_draw_data(app, content_x, content_w, &y);
+            profile_draw_data(app, content_x, content_w, nativeRef(y));
         } else if (app.profile_tab === PROFILE_TAB_TELEGRAM) {
-            settings_telegram_draw(app, content_x, content_w, &y);
+            settings_telegram_draw(app, content_x, content_w, nativeRef(y));
         } else {
-            settings_sync_account_draw_config(app, content_x, content_w, &y);
+            settings_sync_account_draw_config(app, content_x, content_w, nativeRef(y));
         }
         End(app.ui.session);
     }
@@ -420,9 +418,11 @@ export function profile_screen_draw(app: *InnerBreeze): s32 {
     bar.has_leading_action = app.modal.active === 0n;
     bar.leading_label = LocaleText("back_button");
     let options = ProfileScreenNewOptions();
-    let title_result = (
-        <TitleBar session={app.ui.session} props={bar} options={options[0n:0n]} />
-    );
+    let title_result = TitleBar({
+        session: app.ui.session,
+        props: bar,
+        options: nativeSlice(options, 0n, 0n)
+    });
     if (title_result.clicked_leading) {
         app_block_current_click(app);
         profile_screen_back(app);

@@ -40,10 +40,10 @@ import { storage_has_sync_account } from "sync_state";
 import { FrameTextHold } from "text_buffers";
 
 export function settings_telegram_draw(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     width: s32,
-    y: *s32
+    y: NativeRef<s32>
 ): void {
     let key = LumiTelegramStatusKey();
     let height = settings_telegram_text_height(key, width);
@@ -54,14 +54,14 @@ export function settings_telegram_draw(
             size: AppFontSize(),
             bounds: {
                 x: float32(x),
-                y: float32((*y)),
+                y: float32(nativeDeref(y)),
                 width: float32(width),
                 height: float32(height)
             },
             wrap: Wrap.TextWrapAuto
         }}
     />;
-    (*y) = (*y) + height;
+    nativeDeref(y) = nativeDeref(y) + height;
     let has_account =
         storage_has_sync_account() !== 0n &&
         storage_get_setting_text("sync_private_key").count > 0n;
@@ -73,24 +73,22 @@ export function settings_telegram_draw(
         label = "lumi_telegram_open";
     }
     if (
-        (
-            <Button
-                session={app.ui.session}
-                props={{
-                    id: 7650n,
-                    bounds: {
-                        x: float32(x),
-                        y: float32((*y)),
-                        width: float32(width),
-                        height: float32(AppScale(48n))
-                    },
-                    label: LocaleText(label),
-                    loading: LumiTelegramBusy(),
-                    disabled:
-                        LumiTelegramBusy() || (has_account && !linked && !LumiNodeTrafficAllowed())
-                }}
-            />
-        )
+        Button({
+            session: app.ui.session,
+            props: {
+                id: 7650n,
+                bounds: {
+                    x: float32(x),
+                    y: float32(nativeDeref(y)),
+                    width: float32(width),
+                    height: float32(AppScale(48n))
+                },
+                label: LocaleText(label),
+                loading: LumiTelegramBusy(),
+                disabled:
+                    LumiTelegramBusy() || (has_account && !linked && !LumiNodeTrafficAllowed())
+            }
+        })
     ) {
         if (!has_account) {
             app_apply_nav_route(app, s32(s32(AppNavRoute.APP_NAV_ROUTE_ACCOUNT)));
@@ -102,9 +100,9 @@ export function settings_telegram_draw(
             LumiTelegramLink();
         }
     }
-    (*y) = (*y) + AppScale(56n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(56n);
     if (!linked || !State_lumi_authorization.lumi_authorization_ready) {
-        State_settings_telegram.settings_telegram_stars_review[0n] = 0n;
+        nativeSet(State_settings_telegram.settings_telegram_stars_review, 0n, 0n);
     }
     if (linked && settings_telegram_authorization_active()) {
         let status_height = settings_telegram_text_height(LumiAuthorizationStatusKey(), width);
@@ -115,14 +113,14 @@ export function settings_telegram_draw(
                 size: AppFontSize(),
                 bounds: {
                     x: float32(x),
-                    y: float32((*y)),
+                    y: float32(nativeDeref(y)),
                     width: float32(width),
                     height: float32(status_height)
                 },
                 wrap: Wrap.TextWrapAuto
             }}
         />;
-        (*y) = (*y) + status_height;
+        nativeDeref(y) = nativeDeref(y) + status_height;
         let review_visible = false;
         let held_review = "";
         let review = settings_telegram_review_text(width);
@@ -137,7 +135,7 @@ export function settings_telegram_draw(
                 NativeText.DefaultTextFace()
             );
             let review_height = s32(prepared.bounds.height) + AppScale(16n);
-            held_review = FrameTextHold(&app.ui.frame_text, review);
+            held_review = FrameTextHold(nativeRef(app.ui.frame_text), review);
             review_visible = held_review.count === review.count && held_review.count > 0n;
             <Text
                 session={app.ui.session}
@@ -146,39 +144,37 @@ export function settings_telegram_draw(
                     size: AppFontSize(),
                     bounds: {
                         x: float32(x),
-                        y: float32((*y)),
+                        y: float32(nativeDeref(y)),
                         width: float32(width),
                         height: float32(review_height)
                     },
                     wrap: Wrap.TextWrapAuto
                 }}
             />;
-            (*y) = (*y) + review_height;
+            nativeDeref(y) = nativeDeref(y) + review_height;
             PackageFree(review);
         }
         if (State_lumi_authorization.lumi_authorization_ready) {
             if (
-                (
-                    <Button
-                        session={app.ui.session}
-                        props={{
-                            id: 7652n,
-                            bounds: {
-                                x: float32(x),
-                                y: float32((*y)),
-                                width: float32(width),
-                                height: float32(AppScale(48n))
-                            },
-                            label: LocaleText("lumi_authorization_approve"),
-                            disabled: LumiAuthorizationBusy() || !review_visible,
-                            loading: LumiAuthorizationBusy()
-                        }}
-                    />
-                )
+                Button({
+                    session: app.ui.session,
+                    props: {
+                        id: 7652n,
+                        bounds: {
+                            x: float32(x),
+                            y: float32(nativeDeref(y)),
+                            width: float32(width),
+                            height: float32(AppScale(48n))
+                        },
+                        label: LocaleText("lumi_authorization_approve"),
+                        disabled: LumiAuthorizationBusy() || !review_visible,
+                        loading: LumiAuthorizationBusy()
+                    }
+                })
             ) {
                 LumiAuthorizationApprove();
             }
-            (*y) = (*y) + AppScale(56n);
+            nativeDeref(y) = nativeDeref(y) + AppScale(56n);
             let disclosure = "lumi_authorization_stars_disclosure";
             let stars_height = settings_telegram_text_height(disclosure, width);
             <Text
@@ -188,14 +184,14 @@ export function settings_telegram_draw(
                     size: AppFontSize(),
                     bounds: {
                         x: float32(x),
-                        y: float32((*y)),
+                        y: float32(nativeDeref(y)),
                         width: float32(width),
                         height: float32(stars_height)
                     },
                     wrap: Wrap.TextWrapAuto
                 }}
             />;
-            (*y) = (*y) + stars_height;
+            nativeDeref(y) = nativeDeref(y) + stars_height;
             let stars_label = LocaleText("lumi_authorization_approve_stars");
             let stars_review = review_visible ? held_review : "";
             let stars_ready = settings_telegram_stars_ready(
@@ -204,99 +200,93 @@ export function settings_telegram_draw(
                 stars_label
             );
             if (
-                (
-                    <Button
-                        session={app.ui.session}
-                        props={{
-                            id: 7656n,
-                            key: State_settings_telegram.settings_telegram_stars_key,
-                            bounds: {
-                                x: float32(x),
-                                y: float32((*y)),
-                                width: float32(width),
-                                height: float32(AppScale(48n))
-                            },
-                            label: stars_label,
-                            disabled: !stars_ready
-                        }}
-                    />
-                ) &&
+                Button({
+                    session: app.ui.session,
+                    props: {
+                        id: 7656n,
+                        key: State_settings_telegram.settings_telegram_stars_key,
+                        bounds: {
+                            x: float32(x),
+                            y: float32(nativeDeref(y)),
+                            width: float32(width),
+                            height: float32(AppScale(48n))
+                        },
+                        label: stars_label,
+                        disabled: !stars_ready
+                    }
+                }) &&
                 stars_ready
             ) {
-                State_settings_telegram.settings_telegram_stars_review[0n] = 0n;
+                nativeSet(State_settings_telegram.settings_telegram_stars_review, 0n, 0n);
                 LumiAuthorizationApprove(true);
             }
-            (*y) = (*y) + AppScale(56n);
+            nativeDeref(y) = nativeDeref(y) + AppScale(56n);
         }
-        if (State_lumi_authorization.lumi_authorization_pending.request_id[0n] !== u8(0n)) {
+        if (
+            nativeAt(State_lumi_authorization.lumi_authorization_pending.request_id, 0n) !== u8(0n)
+        ) {
             if (
-                (
-                    <Button
-                        session={app.ui.session}
-                        props={{
-                            id: 7654n,
-                            bounds: {
-                                x: float32(x),
-                                y: float32((*y)),
-                                width: float32(width),
-                                height: float32(AppScale(48n))
-                            },
-                            label: LocaleText("cancel_button"),
-                            disabled: LumiAuthorizationBusy(),
-                            emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                        }}
-                    />
-                )
+                Button({
+                    session: app.ui.session,
+                    props: {
+                        id: 7654n,
+                        bounds: {
+                            x: float32(x),
+                            y: float32(nativeDeref(y)),
+                            width: float32(width),
+                            height: float32(AppScale(48n))
+                        },
+                        label: LocaleText("cancel_button"),
+                        disabled: LumiAuthorizationBusy(),
+                        emphasis: ButtonEmphasis.ButtonEmphasisGhost
+                    }
+                })
             ) {
                 LumiAuthorizationCancel();
             }
-            (*y) = (*y) + AppScale(56n);
+            nativeDeref(y) = nativeDeref(y) + AppScale(56n);
         }
     }
     if (linked) {
         if (
-            (
-                <Button
-                    session={app.ui.session}
-                    props={{
-                        id: 7657n,
-                        bounds: {
-                            x: float32(x),
-                            y: float32((*y)),
-                            width: float32(width),
-                            height: float32(AppScale(48n))
-                        },
-                        label: LocaleText("lumi_authorization_request"),
-                        disabled: !LumiNodeTrafficAllowed() || !LumiAuthorizationCanRequest()
-                    }}
-                />
-            ) &&
+            Button({
+                session: app.ui.session,
+                props: {
+                    id: 7657n,
+                    bounds: {
+                        x: float32(x),
+                        y: float32(nativeDeref(y)),
+                        width: float32(width),
+                        height: float32(AppScale(48n))
+                    },
+                    label: LocaleText("lumi_authorization_request"),
+                    disabled: !LumiNodeTrafficAllowed() || !LumiAuthorizationCanRequest()
+                }
+            }) &&
             LumiNodeTrafficAllowed()
         ) {
             LumiAuthorizationRequest();
         }
-        (*y) = (*y) + AppScale(56n);
+        nativeDeref(y) = nativeDeref(y) + AppScale(56n);
         if (
-            (
-                <Button
-                    session={app.ui.session}
-                    props={{
-                        id: 7651n,
-                        bounds: {
-                            x: float32(x),
-                            y: float32((*y)),
-                            width: float32(width),
-                            height: float32(AppScale(48n))
-                        },
-                        label: LocaleText("lumi_telegram_disconnect"),
-                        disabled: LumiTelegramBusy(),
-                        emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                    }}
-                />
-            )
+            Button({
+                session: app.ui.session,
+                props: {
+                    id: 7651n,
+                    bounds: {
+                        x: float32(x),
+                        y: float32(nativeDeref(y)),
+                        width: float32(width),
+                        height: float32(AppScale(48n))
+                    },
+                    label: LocaleText("lumi_telegram_disconnect"),
+                    disabled: LumiTelegramBusy(),
+                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
+                }
+            })
         ) {
             LumiTelegramDisconnect();
         }
-        (*y) = (*y) + AppScale(56n);
+        nativeDeref(y) = nativeDeref(y) + AppScale(56n);
     }
 }

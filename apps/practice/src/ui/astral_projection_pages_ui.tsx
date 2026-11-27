@@ -34,7 +34,7 @@ import { TextFromCString } from "std/byte_text_linux";
 import { TextUntilNul } from "std/text_buffer";
 import { AppCopyText, FormatNumberTemplate } from "text_buffers";
 
-export function AstralManualDrawView(app: *InnerBreeze): void {
+export function AstralManualDrawView(app: NativeRef<InnerBreeze>): void {
     if (!NativePresent(app)) {
         return;
     }
@@ -136,8 +136,13 @@ export function AstralManualDrawView(app: *InnerBreeze): void {
             NativeLayout.KeyHash("astral/preview"),
             AstralText(
                 TextFromCString(
-                    &State_astral_projection.astral_catalogue.practices[selected]
-                        .title_key[0n]
+                    nativeRef(
+                        nativeAt(
+                            nativeAt(State_astral_projection.astral_catalogue.practices, selected)
+                                .title_key,
+                            0n
+                        )
+                    )
                 )
             )
         );
@@ -146,26 +151,33 @@ export function AstralManualDrawView(app: *InnerBreeze): void {
     let showing_guide = app.tutorial_step === 1n;
     let heights = NewHeights();
     let durations = NewDurations();
-    let total: s32 = 0n;
+    let total: s32 = s32(0n);
     for (
         let index = s32(0n);
         index < State_astral_projection.astral_catalogue.count;
         index += s32(1)
     ) {
-        let row = State_astral_projection.astral_catalogue.practices[index];
-        let title = AstralText(TextFromCString(&row.title_key[0n]));
-        let description = AstralText(TextFromCString(&row.description_key[0n]));
-        heights[index] =
+        let row = nativeAt(State_astral_projection.astral_catalogue.practices, index);
+        let title = AstralText(TextFromCString(nativeRef(nativeAt(row.title_key, 0n))));
+        let description = AstralText(TextFromCString(nativeRef(nativeAt(row.description_key, 0n))));
+        nativeSet(
+            heights,
+            index,
             AstralParagraphHeight(app, title, width - pad * 2n) +
-            AstralParagraphHeight(app, description, width - pad * 2n) +
-            AppScale(72n);
-        total = total + (heights[index] + AppScale(12n));
+                AstralParagraphHeight(app, description, width - pad * 2n) +
+                AppScale(72n)
+        );
+        total = total + (nativeAt(heights, index) + AppScale(12n));
     }
     let guide = AstralText(
         TextFromCString(
-            &State_astral_projection.astral_catalogue.practices[selected].guide_key[
-                0n
-            ]
+            nativeRef(
+                nativeAt(
+                    nativeAt(State_astral_projection.astral_catalogue.practices, selected)
+                        .guide_key,
+                    0n
+                )
+            )
         )
     );
     let guide_h = AstralParagraphHeight(app, guide, width);
@@ -175,7 +187,7 @@ export function AstralManualDrawView(app: *InnerBreeze): void {
     if (!showing_guide && State_astral_projection.astral_reveal_selection) {
         app.manual_scroll = 0n;
         for (let index = s32(0n); index < selected; index += s32(1)) {
-            app.manual_scroll = app.manual_scroll + (heights[index] + AppScale(12n));
+            app.manual_scroll = app.manual_scroll + (nativeAt(heights, index) + AppScale(12n));
         }
         State_astral_projection.astral_reveal_selection = false;
     }
@@ -199,10 +211,10 @@ export function AstralManualDrawView(app: *InnerBreeze): void {
                 index < State_astral_projection.astral_catalogue.count;
                 index += s32(1)
             ) {
-                let row = State_astral_projection.astral_catalogue.practices[index];
-                let title = AstralText(TextFromCString(&row.title_key[0n]));
+                let row = nativeAt(State_astral_projection.astral_catalogue.practices, index);
+                let title = AstralText(TextFromCString(nativeRef(nativeAt(row.title_key, 0n))));
                 let description = AstralText(
-                    TextFromCString(&row.description_key[0n])
+                    TextFromCString(nativeRef(nativeAt(row.description_key, 0n)))
                 );
                 let card: Rectangle = {
                     x: float32(left),
@@ -213,26 +225,24 @@ export function AstralManualDrawView(app: *InnerBreeze): void {
                     )
                 };
                 if (
-                    (
-                        <Button
-                            session={app.ui.session}
-                            props={{
-                                key: NativeLayout.KeyHash("astral/exercise") + u64(index),
-                                bounds: card,
-                                selected: index === selected,
-                                tone:
-                                    index === selected
-                                        ? ButtonTone.ButtonToneAccent
-                                        : ButtonTone.ButtonToneNeutral,
-                                label: title,
-                                fit_content: true
-                            }}
-                        />
-                    )
+                    Button({
+                        session: app.ui.session,
+                        props: {
+                            key: NativeLayout.KeyHash("astral/exercise") + u64(index),
+                            bounds: card,
+                            selected: index === selected,
+                            tone:
+                                index === selected
+                                    ? ButtonTone.ButtonToneAccent
+                                    : ButtonTone.ButtonToneNeutral,
+                            label: title,
+                            fit_content: true
+                        }
+                    })
                 ) {
                     AppCopyText(
-                        TextFromCString(&row.id[0n]),
-                        app.astral_projection_exercise[:]
+                        TextFromCString(nativeRef(nativeAt(row.id, 0n))),
+                        nativeSlice(app.astral_projection_exercise)
                     );
                     save_settings(app);
                     State_astral_projection.astral_content_error = false;
@@ -257,22 +267,22 @@ export function AstralManualDrawView(app: *InnerBreeze): void {
                 FormatNumberTemplate(
                     LocaleText("practice_home_minutes"),
                     row.duration / 60n,
-                    durations[index][:]
+                    nativeSlice(nativeAt(durations, index))
                 );
                 <Text
                     session={app.ui.session}
                     props={{
-                        text: TextUntilNul(durations[index][:]),
+                        text: TextUntilNul(nativeSlice(nativeAt(durations, index))),
                         bounds: {
                             x: float32(left + pad),
-                            y: float32(y + heights[index] - AppScale(32n)),
+                            y: float32(y + nativeAt(heights, index) - AppScale(32n)),
                             width: float32(width - pad * 2n),
                             height: float32(AppScale(28n))
                         },
                         size: AppSmallFontSize()
                     }}
                 />;
-                y = y + (heights[index] + AppScale(12n));
+                y = y + (nativeAt(heights, index) + AppScale(12n));
             }
         } else {
             <Text
@@ -295,43 +305,39 @@ export function AstralManualDrawView(app: *InnerBreeze): void {
     let gap = AppScale(12n);
     let button_w = (width - gap) / 2n;
     if (
-        (
-            <Button
-                session={app.ui.session}
-                props={{
-                    key: NativeLayout.KeyHash("astral/guide"),
-                    bounds: {
-                        x: float32(left),
-                        y: float32(bottom),
-                        width: float32(button_w),
-                        height: float32(AppScale(52n))
-                    },
-                    label: LocaleText(showing_guide ? "back_button" : "practice_manual_button")
-                }}
-            />
-        )
+        Button({
+            session: app.ui.session,
+            props: {
+                key: NativeLayout.KeyHash("astral/guide"),
+                bounds: {
+                    x: float32(left),
+                    y: float32(bottom),
+                    width: float32(button_w),
+                    height: float32(AppScale(52n))
+                },
+                label: LocaleText(showing_guide ? "back_button" : "practice_manual_button")
+            }
+        })
     ) {
         app.tutorial_step = showing_guide ? 0n : 1n;
         app.manual_scroll = 0n;
         State_astral_projection.astral_reveal_selection = showing_guide;
     }
     if (
-        (
-            <Button
-                session={app.ui.session}
-                props={{
-                    key: NativeLayout.KeyHash("astral/start-selected"),
-                    bounds: {
-                        x: float32(left + button_w + gap),
-                        y: float32(bottom),
-                        width: float32(button_w),
-                        height: float32(AppScale(52n))
-                    },
-                    label: LocaleText("practice_start_button"),
-                    fit_content: true
-                }}
-            />
-        )
+        Button({
+            session: app.ui.session,
+            props: {
+                key: NativeLayout.KeyHash("astral/start-selected"),
+                bounds: {
+                    x: float32(left + button_w + gap),
+                    y: float32(bottom),
+                    width: float32(button_w),
+                    height: float32(AppScale(52n))
+                },
+                label: LocaleText("practice_start_button"),
+                fit_content: true
+            }
+        })
     ) {
         AstralStartSelected(app, false);
     }

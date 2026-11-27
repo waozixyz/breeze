@@ -26,10 +26,7 @@ import { NativePresent } from "native_flags";
 import { AppNotificationToastSeconds } from "notification_presentation";
 import { AppCopyText, AppTextFromCString } from "text_buffers";
 
-export function app_breaks_draw_toastView(
-    app: *InnerBreeze,
-    viewport: Rectangle
-): void {
+export function app_breaks_draw_toastView(app: NativeRef<InnerBreeze>, viewport: Rectangle): void {
     if (!NativePresent(app) || !SessionValid(app.ui.session)) {
         return;
     }
@@ -47,7 +44,7 @@ export function app_breaks_draw_toastView(
     props.seconds = AppNotificationToastSeconds;
     props.now_seconds = HostSeconds();
     props.scale = GetDPIScale();
-    State_app_breaks.break_toast_state = (<Toast session={app.ui.session} props={props} />).state;
+    State_app_breaks.break_toast_state = Toast({ session: app.ui.session, props: props }).state;
     State_app_breaks.break_toast_request = "";
 }
 
@@ -74,7 +71,7 @@ export function break_hud_draw_timeView(
 }
 
 export function app_breaks_hud_drawView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     hud_w: s32,
     hud_h: s32,
     row_h: s32,
@@ -94,11 +91,11 @@ export function app_breaks_hud_drawView(
             border: border
         }}
     />;
-    let row: s32 = 0n;
+    let row: s32 = s32(0n);
     {
-        let t: s32 = 0n;
+        let t: s32 = s32(0n);
         while (t < BREAK_TYPE_COUNT) {
-            let timer: *BreakTimer = &app.breaks.timers[t];
+            let timer: NativeRef<BreakTimer> = nativeRef(nativeAt(app.breaks.timers, t));
             if (timer.enabled === 0n) {
                 t = t + 1n;
                 continue;
@@ -148,7 +145,7 @@ export function app_breaks_hud_drawView(
                     left = 0n;
                 }
                 let line = BreakFormatDuration(left);
-                let line_text = AppTextFromCString(&line.bytes[0n], 16n);
+                let line_text = AppTextFromCString(nativeRef(nativeAt(line.bytes, 0n)), 16n);
                 break_hud_draw_timeView(
                     app.ui.session,
                     line_text,
@@ -195,18 +192,15 @@ export function app_breaks_hud_drawView(
             } else {
                 let line = AppBreaksNewLine();
                 if (next === 0n) {
-                    AppCopyText(
-                        LocaleText("settings_breaks_due_now"),
-                        line[:]
-                    );
+                    AppCopyText(LocaleText("settings_breaks_due_now"), nativeSlice(line));
                 } else {
                     let duration = BreakFormatDuration(next);
                     AppCopyText(
-                        AppTextFromCString(&duration.bytes[0n], 16n),
-                        line[:]
+                        AppTextFromCString(nativeRef(nativeAt(duration.bytes, 0n)), 16n),
+                        nativeSlice(line)
                     );
                 }
-                let line_text = AppTextFromCString(&line[0n], 64n);
+                let line_text = AppTextFromCString(nativeRef(nativeAt(line, 0n)), 64n);
                 break_hud_draw_timeView(
                     app.ui.session,
                     line_text,

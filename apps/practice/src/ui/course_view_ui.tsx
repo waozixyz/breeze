@@ -40,7 +40,7 @@ export function Section(text: string, bounds: Rectangle): void {
             text: text,
             bounds: bounds,
             size: State_course_view.course.font + Scale(2n),
-            strong: strong[:],
+            strong: nativeSlice(strong),
             semantic_kind: SemanticKind.SemanticHeading,
             heading_level: 2n
         }}
@@ -53,21 +53,19 @@ export function LessonCard(
     artwork: s32,
     row: PracticeCourseRow
 ): void {
-    let activated = (
-        <Button
-            session={State_course_view.course.session}
-            props={{
-                key: NativeLayout.KeyHash("inbe/tai_chi/lesson") + u64(index),
-                bounds: bounds,
-                label: row.title,
-                detail: row.detail,
-                icon_only: true,
-                selected: row.done,
-                tone: ButtonTone.ButtonToneNeutral,
-                emphasis: ButtonEmphasis.ButtonEmphasisSoft
-            }}
-        />
-    );
+    let activated = Button({
+        session: State_course_view.course.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/tai_chi/lesson") + u64(index),
+            bounds: bounds,
+            label: row.title,
+            detail: row.detail,
+            icon_only: true,
+            selected: row.done,
+            tone: ButtonTone.ButtonToneNeutral,
+            emphasis: ButtonEmphasis.ButtonEmphasisSoft
+        }
+    });
     let inset = float32(Scale(12n));
     let content: Rectangle = {
         x: bounds.x + inset,
@@ -81,7 +79,7 @@ export function LessonCard(
             session={State_course_view.course.session}
             props={{
                 key: NativeLayout.KeyHash("inbe/tai_chi/lesson-image") + u64(index),
-                asset_path: State_course_view.lesson_artwork[artwork],
+                asset_path: nativeAt(State_course_view.lesson_artwork, artwork),
                 alt_text: row.title,
                 bounds: {
                     x: content.x,
@@ -192,20 +190,18 @@ export function LessonCard(
 }
 
 export function FoundationHeader(bounds: Rectangle): void {
-    let activated = (
-        <Button
-            session={State_course_view.course.session}
-            props={{
-                key: NativeLayout.KeyHash("inbe/tai_chi/foundations-toggle"),
-                bounds: bounds,
-                label: Locale("tai_chi_foundations"),
-                icon_only: true,
-                selected: State_course_view.foundations_open,
-                tone: ButtonTone.ButtonToneNeutral,
-                emphasis: ButtonEmphasis.ButtonEmphasisSoft
-            }}
-        />
-    );
+    let activated = Button({
+        session: State_course_view.course.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/tai_chi/foundations-toggle"),
+            bounds: bounds,
+            label: Locale("tai_chi_foundations"),
+            icon_only: true,
+            selected: State_course_view.foundations_open,
+            tone: ButtonTone.ButtonToneNeutral,
+            emphasis: ButtonEmphasis.ButtonEmphasisSoft
+        }
+    });
     if (activated) {
         State_course_view.foundations_open = !State_course_view.foundations_open;
     }
@@ -214,7 +210,7 @@ export function FoundationHeader(bounds: Rectangle): void {
         session={State_course_view.course.session}
         props={{
             key: NativeLayout.KeyHash("inbe/tai_chi/foundations-cover"),
-            asset_path: State_course_view.lesson_artwork[8n],
+            asset_path: nativeAt(State_course_view.lesson_artwork, 8n),
             alt_text: Locale("tai_chi_foundations"),
             bounds: {
                 x: bounds.x + inset,
@@ -260,22 +256,22 @@ export function Lessons(bounds: Rectangle): void {
     let columns: s32 = width >= Scale(640n) ? 3n : 2n;
     let expanded = State_course_view.foundations_open;
     State_course_view.lesson_total = 0n;
-    let foundation_count: s32 = 0n;
+    let foundation_count: s32 = s32(0n);
     for (let index = s32(0n); index < State_course_view.course.lesson_count; index += s32(1)) {
-        if (State_course_view.course_lessons[index].kind === PRACTICE_COURSE_FOUNDATION) {
-            State_course_view.lesson_indices[State_course_view.lesson_total] = index;
-            State_course_view.lesson_artwork_indices[index] = 8n + foundation_count;
+        if (nativeAt(State_course_view.course_lessons, index).kind === PRACTICE_COURSE_FOUNDATION) {
+            nativeSet(State_course_view.lesson_indices, State_course_view.lesson_total, index);
+            nativeSet(State_course_view.lesson_artwork_indices, index, 8n + foundation_count);
             State_course_view.lesson_total = State_course_view.lesson_total + 1n;
             foundation_count = foundation_count + 1n;
         }
     }
-    let artwork: s32 = 0n;
-    let full: s32 = -1n;
+    let artwork: s32 = s32(0n);
+    let full: s32 = s32(-1n);
     for (let index = s32(0n); index < State_course_view.course.lesson_count; index += s32(1)) {
-        let row = State_course_view.course_lessons[index];
+        let row = nativeAt(State_course_view.course_lessons, index);
         if (row.kind === PRACTICE_COURSE_LESSON) {
-            State_course_view.lesson_indices[State_course_view.lesson_total] = index;
-            State_course_view.lesson_artwork_indices[index] = artwork;
+            nativeSet(State_course_view.lesson_indices, State_course_view.lesson_total, index);
+            nativeSet(State_course_view.lesson_artwork_indices, index, artwork);
             State_course_view.lesson_total = State_course_view.lesson_total + 1n;
             artwork = artwork + 1n;
         } else if (row.kind === PRACTICE_COURSE_FULL) {
@@ -283,8 +279,8 @@ export function Lessons(bounds: Rectangle): void {
         }
     }
     if (full >= 0n) {
-        State_course_view.lesson_indices[State_course_view.lesson_total] = full;
-        State_course_view.lesson_artwork_indices[full] = 7n;
+        nativeSet(State_course_view.lesson_indices, State_course_view.lesson_total, full);
+        nativeSet(State_course_view.lesson_artwork_indices, full, 7n);
         State_course_view.lesson_total = State_course_view.lesson_total + 1n;
     }
     let header_h = Scale(96n);
@@ -322,16 +318,16 @@ export function Lessons(bounds: Rectangle): void {
     FoundationHeader(Bounds(s32(scrolled.content.x), s32(scrolled.content.y), width, header_h));
     let first = expanded ? 0n : foundation_count;
     for (let position = s32(first); position < State_course_view.lesson_total; position += s32(1)) {
-        let index = State_course_view.lesson_indices[position];
-        let card = State_course_view.lesson_bounds[index];
+        let index = nativeAt(State_course_view.lesson_indices, position);
+        let card = nativeAt(State_course_view.lesson_bounds, index);
         card.x = card.x + scrolled.content.x;
         card.y = card.y + scrolled.content.y;
         if (card.y + card.height >= bounds.y && card.y <= bounds.y + bounds.height) {
             LessonCard(
                 card,
                 index,
-                State_course_view.lesson_artwork_indices[index],
-                State_course_view.course_lessons[index]
+                nativeAt(State_course_view.lesson_artwork_indices, index),
+                nativeAt(State_course_view.course_lessons, index)
             );
         }
     }
@@ -341,30 +337,28 @@ export function Lessons(bounds: Rectangle): void {
 export function Foundations(bounds: Rectangle): void {
     let gap = Scale(10n);
     if (
-        (
-            <Button
-                session={State_course_view.course.session}
-                props={{
-                    key: NativeLayout.KeyHash("inbe/tai_chi/back"),
-                    bounds: {
-                        x: bounds.x,
-                        y: bounds.y,
-                        width: bounds.width,
-                        height: float32(Scale(44n))
-                    },
-                    label: Locale("back_button"),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: State_course_view.course.session,
+            props: {
+                key: NativeLayout.KeyHash("inbe/tai_chi/back"),
+                bounds: {
+                    x: bounds.x,
+                    y: bounds.y,
+                    width: bounds.width,
+                    height: float32(Scale(44n))
+                },
+                label: Locale("back_button"),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         State_course_view.course.lesson = -1n;
         return;
     }
     bounds.y = bounds.y + float32(Scale(44n) + gap);
     bounds.height = bounds.height - float32(Scale(44n) + gap);
-    let row = State_course_view.course_lessons[State_course_view.course.lesson];
+    let row = nativeAt(State_course_view.course_lessons, State_course_view.course.lesson);
     let width = bounds.width - float32(Scale(12n));
     let picture_h = (s32(width) * 3n) / 4n;
     if (picture_h > Scale(220n)) {
@@ -382,9 +376,9 @@ export function Foundations(bounds: Rectangle): void {
     if (!scrolled.opened) {
         return;
     }
-    let artwork: s32 = 8n;
+    let artwork: s32 = s32(8n);
     for (let index = s32(0n); index < State_course_view.course.lesson; index += s32(1)) {
-        if (State_course_view.course_lessons[index].kind === PRACTICE_COURSE_FOUNDATION) {
+        if (nativeAt(State_course_view.course_lessons, index).kind === PRACTICE_COURSE_FOUNDATION) {
             artwork = artwork + 1n;
         }
     }
@@ -398,7 +392,7 @@ export function Foundations(bounds: Rectangle): void {
             key:
                 NativeLayout.KeyHash("inbe/tai_chi/foundation-detail-cover") +
                 u64(State_course_view.course.lesson),
-            asset_path: State_course_view.lesson_artwork[artwork],
+            asset_path: nativeAt(State_course_view.lesson_artwork, artwork),
             alt_text: row.title,
             bounds: { x: scrolled.content.x, y: y, width: width, height: float32(picture_h) },
             radius: float32(Scale(8n)),
@@ -422,26 +416,24 @@ export function Foundations(bounds: Rectangle): void {
         if (y + float32(Scale(64n)) >= bounds.y && y <= bounds.y + bounds.height) {
             let detail = ReadPracticeCourseRowHost(false, item);
             if (
-                (
-                    <Button
-                        session={State_course_view.course.session}
-                        props={{
-                            key: NativeLayout.KeyHash("inbe/tai_chi/foundation") + u64(item),
-                            bounds: {
-                                x: scrolled.content.x,
-                                y: y,
-                                width: width,
-                                height: float32(Scale(64n))
-                            },
-                            label: detail.title,
-                            detail: detail.detail,
-                            selected: detail.done,
-                            content_alignment: ContentAlignment.ContentAlignmentStart,
-                            tone: ButtonTone.ButtonToneNeutral,
-                            emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                        }}
-                    />
-                )
+                Button({
+                    session: State_course_view.course.session,
+                    props: {
+                        key: NativeLayout.KeyHash("inbe/tai_chi/foundation") + u64(item),
+                        bounds: {
+                            x: scrolled.content.x,
+                            y: y,
+                            width: width,
+                            height: float32(Scale(64n))
+                        },
+                        label: detail.title,
+                        detail: detail.detail,
+                        selected: detail.done,
+                        content_alignment: ContentAlignment.ContentAlignmentStart,
+                        tone: ButtonTone.ButtonToneNeutral,
+                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                    }
+                })
             ) {
                 Play(item);
             }
@@ -463,7 +455,7 @@ export function Course(): void {
     let title =
         State_course_view.course.lesson < 0n
             ? Locale("tai_chi_course_title")
-            : State_course_view.course_lessons[State_course_view.course.lesson].title;
+            : nativeAt(State_course_view.course_lessons, State_course_view.course.lesson).title;
     let frame = NativeModal.Draw(State_course_view.course.session, {
         key: NativeLayout.KeyHash("inbe/tai_chi/modal"),
         title: title,

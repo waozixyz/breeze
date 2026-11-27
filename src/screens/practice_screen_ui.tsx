@@ -48,12 +48,12 @@ import { PRACTICE_TAB_CONFIG, PRACTICE_TAB_MANUAL } from "route_types";
 import { AppSetThemeMode } from "settings_actions";
 
 export function practice_screen_handle_config_titleView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     title: string,
     modal_type: s32,
     has_leave_config: s32
 ): s32 {
-    let title_h: s32 = 0n;
+    let title_h: s32 = s32(0n);
     if (!NativePresent(app)) {
         return 0n;
     }
@@ -66,9 +66,11 @@ export function practice_screen_handle_config_titleView(
     bar.height = title_h;
     bar.has_leading_action = true;
     bar.leading_label = LocaleText("back_button");
-    let title_result = (
-        <TitleBar session={CurrentApp().ui.session} props={bar} options={empty_title_options()} />
-    );
+    let title_result = TitleBar({
+        session: CurrentApp().ui.session,
+        props: bar,
+        options: empty_title_options()
+    });
     if (!title_result.clicked_leading) {
         return 0n;
     }
@@ -80,7 +82,7 @@ export function practice_screen_handle_config_titleView(
 export function practice_draw_card_banner(asset_path: string, dest: Rectangle): void {
     if (
         asset_path.count === 0n ||
-        asset_path[0n] === u8(0) ||
+        nativeAt(asset_path, 0n) === u8(0) ||
         dest.width <= 0n ||
         dest.height <= 0n
     ) {
@@ -102,7 +104,7 @@ export function practice_draw_card_banner(asset_path: string, dest: Rectangle): 
 }
 
 export function practice_home_theme_button(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     frame: PracticeHomeFrame
 ): boolean {
     if (frame.card.width <= 0.0 || frame.top <= 0n) {
@@ -128,7 +130,7 @@ export function practice_home_theme_button(
         tone: ButtonTone.ButtonToneNeutral,
         emphasis: ButtonEmphasis.ButtonEmphasisGhost
     };
-    if (!(<Button session={app.ui.session} props={button} />)) {
+    if (!Button({ session: app.ui.session, props: button })) {
         return false;
     }
     if (!CurrentTheme().motion.reduced_motion) {
@@ -261,7 +263,7 @@ export function practice_home_box_breath(
     }
 }
 
-export function practice_screen_draw_modal(app: *InnerBreeze): void {
+export function practice_screen_draw_modal(app: NativeRef<InnerBreeze>): void {
     if (!NativePresent(app) || app.modal.active === 0n) {
         return;
     }

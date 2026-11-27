@@ -1,5 +1,4 @@
 import * as Model from "habit_list_view";
-import { ReadHabitsListHost, ReadRows, WriteHabitsListHost } from "habit_list_view";
 import { HABITS_SCREEN_HISTORY } from "habit_types";
 import { HABITS_LIST_NONE, HabitsMessage } from "habits_types";
 import { SamplePointer } from "kryon/pointer_input";
@@ -9,7 +8,7 @@ import { HabitPage } from "habit_list_page";
 export function HabitsListView(message: HabitsMessage): HabitsMessage {
     const rows = Model.Rows();
     const list_state = Model.CurrentList();
-    Model.SetList(ReadHabitsListHost());
+    Model.SetList(Model.ReadHabitsListHost());
     list_state.action = HABITS_LIST_NONE;
     list_state.action_habit = -1n;
     list_state.action_day = 0n;
@@ -25,18 +24,18 @@ export function HabitsListView(message: HabitsMessage): HabitsMessage {
     list_state.anchor_day = {};
     list_state.first_day = {};
     Model.SetPointerFrame(SamplePointer());
-    ReadRows();
+    Model.ReadRows();
     let page =
         list_state.screen_mode === HABITS_SCREEN_HISTORY &&
         list_state.selected >= 0n &&
         list_state.selected < Model.row_count &&
-        !rows[list_state.selected].deactivated;
+        !nativeAt(rows, list_state.selected).deactivated;
     if (page) {
         HabitPage();
     } else {
         Overview();
     }
-    WriteHabitsListHost(*list_state);
+    Model.WriteHabitsListHost(nativeDeref(list_state));
     message.succeeded = true;
     return message;
 }

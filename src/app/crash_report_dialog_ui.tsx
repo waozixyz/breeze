@@ -17,7 +17,7 @@ import { FlagIntersection, NativePresent } from "native_flags";
 import { AppThemeName } from "settings_actions";
 import { storage_has_sync_account } from "sync_state";
 
-export function CrashReportModalDraw(app: *InnerBreeze): void {
+export function CrashReportModalDraw(app: NativeRef<InnerBreeze>): void {
     if (!NativePresent(app)) {
         return;
     }
@@ -44,20 +44,18 @@ export function CrashReportModalDraw(app: *InnerBreeze): void {
         message: message,
         max_width: 460n
     };
-    let choice = (
-        <ActionModal
-            session={app.ui.session}
-            props={props}
-            actions={actions[:]}
-        />
-    ).action;
+    let choice = ActionModal({
+        session: app.ui.session,
+        props: props,
+        actions: nativeSlice(actions)
+    }).action;
     if (choice === 1n || choice === -1n) {
-        CrashReportDiscard(&State_crash_report_dialog.crash_report_pending);
+        CrashReportDiscard(nativeRef(State_crash_report_dialog.crash_report_pending));
         State_crash_report_dialog.crash_report_prompted = false;
         app_close_modal(app);
     } else if (choice === 2n) {
         let queued = CrashReportApproveAndQueue(
-            &State_crash_report_dialog.crash_report_pending,
+            nativeRef(State_crash_report_dialog.crash_report_pending),
             app.breathing.screen,
             FlagIntersection(app.enabled_apps, AppsInstalledMask()),
             AppThemeName(app.theme_id),

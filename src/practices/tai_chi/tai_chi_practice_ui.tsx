@@ -27,7 +27,7 @@ import { TAI_CHI_SOURCE_LOCKED, TaiChiCourseItemIndex } from "tai_chi_course";
 import { TAI_CHI_CHARACTER_COUNT } from "tai_chi_rules";
 
 export function TaiChiCourseFigureView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     request: PracticeFigureRequest
 ): void {
     if (
@@ -72,13 +72,13 @@ export function TaiChiCourseFigureView(
     }
 }
 
-export function TaiChiUnlockDrawView(app: *InnerBreeze): boolean {
+export function TaiChiUnlockDrawView(app: NativeRef<InnerBreeze>): boolean {
     let owned = UnlockOwned(UnlockTaiChi);
     let full = TaiChiCourseItemIndex("full/normal");
     if (
         owned &&
         full >= 0n &&
-        State_tai_chi_course.tai_chi_course.items[full].source !== TAI_CHI_SOURCE_LOCKED
+        nativeAt(State_tai_chi_course.tai_chi_course.items, full).source !== TAI_CHI_SOURCE_LOCKED
     ) {
         EntryState.tai_chi_unlock_requested = false;
         return false;
@@ -114,18 +114,16 @@ export function TaiChiUnlockDrawView(app: *InnerBreeze): boolean {
                 busy || (!owned && (!DewReady() || !State_practice_downloads.practice_paid_allowed))
         }
     ];
-    let result = (
-        <ActionModal
-            session={app.ui.session}
-            props={{
-                key: NativeLayout.KeyHash("tai-chi/unlock"),
-                title: LocaleText("tai_chi_unlock_title"),
-                message: note,
-                scale: MetricsScale()
-            }}
-            actions={actions[:]}
-        />
-    ).action;
+    let result = ActionModal({
+        session: app.ui.session,
+        props: {
+            key: NativeLayout.KeyHash("tai-chi/unlock"),
+            title: LocaleText("tai_chi_unlock_title"),
+            message: note,
+            scale: MetricsScale()
+        },
+        actions: nativeSlice(actions)
+    }).action;
     if (result === -1n || result === 1n) {
         EntryState.tai_chi_unlock_requested = false;
     } else if (result === 2n) {

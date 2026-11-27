@@ -231,18 +231,16 @@ export function MoodPicker(x: s32, y: s32, width: s32): void {
             index === RESULTS_MOODS - 1n ? x + width - padding - button_x : item_width;
         let selected = State_results_view.results.mood === index + 1n;
         if (
-            (
-                <Button
-                    session={State_results_view.results.session}
-                    props={{
-                        bounds: Bounds(button_x, button_y, button_width, button_height),
-                        id: 24800n + index,
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                        selected: selected
-                    }}
-                />
-            )
+            Button({
+                session: State_results_view.results.session,
+                props: {
+                    bounds: Bounds(button_x, button_y, button_width, button_height),
+                    id: 24800n + index,
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                    selected: selected
+                }
+            })
         ) {
             State_results_view.results.action = PRACTICE_RESULTS_MOOD;
             State_results_view.results.value = index + 1n;
@@ -272,7 +270,7 @@ export function MoodPicker(x: s32, y: s32, width: s32): void {
                 vertical_align: TextAlign.TextAlignCenter,
                 wrap: Wrap.TextWrapNone,
                 disabled: !selected,
-                strong: strong[:(selected ? 1n : 0n)]
+                strong: nativeSlice(strong, 0n, selected ? 1n : 0n)
             }}
         />;
     }
@@ -305,21 +303,21 @@ export function Metrics(x: s32, y: s32, width: s32, best: s32, average: s32): vo
             }}
         />;
         Label(
-            titles[index],
+            nativeAt(titles, index),
             cell_x + Scale(5n),
             y + Scale(18n),
             actual - Scale(10n),
             Scale(22n),
-            FitFont(titles[index], actual - Scale(12n), Scale(17n), Scale(12n)),
+            FitFont(nativeAt(titles, index), actual - Scale(12n), Scale(17n), Scale(12n)),
             TextAlign.TextAlignCenter
         );
         Label(
-            values[index],
+            nativeAt(values, index),
             cell_x + Scale(5n),
             y + Scale(38n),
             actual - Scale(10n),
             Scale(34n),
-            FitFont(values[index], actual - Scale(12n), Scale(28n), Scale(20n)),
+            FitFont(nativeAt(values, index), actual - Scale(12n), Scale(28n), Scale(20n)),
             TextAlign.TextAlignCenter
         );
     }
@@ -370,7 +368,7 @@ export function Chart(x: s32, y: s32, width: s32, best: s32): void {
     if (State_results_view.results.round_count <= 1n) {
         let value =
             State_results_view.results.round_count === 1n
-                ? State_results_view.results_rounds[0n]
+                ? nativeAt(State_results_view.results_rounds, 0n)
                 : 0n;
         if (value < 0n) {
             value = 0n;
@@ -446,7 +444,7 @@ export function Chart(x: s32, y: s32, width: s32, best: s32): void {
     }
     for (let index = s32(0n); index < State_results_view.results.round_count; index += s32(1)) {
         if (index % step === 0n || index === State_results_view.results.round_count - 1n) {
-            let value = State_results_view.results_rounds[index];
+            let value = nativeAt(State_results_view.results_rounds, index);
             if (value < 0n) {
                 value = 0n;
             }
@@ -495,7 +493,7 @@ export function RoundList(x: s32, y: s32, width: s32): void {
         let label = Filled(
             Locale("round_result_label"),
             index + 1n,
-            State_results_view.results_rounds[index],
+            nativeAt(State_results_view.results_rounds, index),
             EmptyString()
         );
         <Box
@@ -520,7 +518,7 @@ export function RoundList(x: s32, y: s32, width: s32): void {
 
 export function OtherSummary(x: s32, y: s32, width: s32): void {
     let lines = NewLines();
-    let count: s32 = 0n;
+    let count: s32 = s32(0n);
     let activity = State_results_view.results.activity;
     if (
         activity === s32(ExerciseType.EXERCISE_MEDITATION) ||
@@ -529,22 +527,20 @@ export function OtherSummary(x: s32, y: s32, width: s32): void {
         activity === s32(ExerciseType.EXERCISE_ASTRAL_PROJECTION) ||
         activity === s32(ExerciseType.EXERCISE_WORKOUT)
     ) {
-        lines[count] = Filled(
-            Locale("results_duration"),
-            0n,
-            0n,
-            Duration(State_results_view.results.primary)
+        nativeSet(
+            lines,
+            count,
+            Filled(Locale("results_duration"), 0n, 0n, Duration(State_results_view.results.primary))
         );
         count = count + 1n;
         if (
             activity === s32(ExerciseType.EXERCISE_PATTERNS) &&
             State_results_view.results.detail.count > 0n
         ) {
-            lines[count] = Filled(
-                Locale("results_pattern"),
-                0n,
-                0n,
-                State_results_view.results.detail
+            nativeSet(
+                lines,
+                count,
+                Filled(Locale("results_pattern"), 0n, 0n, State_results_view.results.detail)
             );
             count = count + 1n;
         }
@@ -552,11 +548,11 @@ export function OtherSummary(x: s32, y: s32, width: s32): void {
             activity === s32(ExerciseType.EXERCISE_PATTERNS) &&
             State_results_view.results.secondary > 0n
         ) {
-            lines[count] = Number("results_cycles", State_results_view.results.secondary);
+            nativeSet(lines, count, Number("results_cycles", State_results_view.results.secondary));
             count = count + 1n;
         }
     } else {
-        lines[count] = Number("results_repetitions", State_results_view.results.primary);
+        nativeSet(lines, count, Number("results_repetitions", State_results_view.results.primary));
         count = count + 1n;
     }
     Card(x, y, width, Scale(50n) + count * Scale(38n));
@@ -573,7 +569,7 @@ export function OtherSummary(x: s32, y: s32, width: s32): void {
             />;
         }
         Label(
-            lines[index],
+            nativeAt(lines, index),
             x + Scale(18n),
             y + Scale(30n) + index * Scale(38n),
             width - Scale(36n),
@@ -684,37 +680,33 @@ export function HabitOffer(x: s32, y: s32, width: s32): void {
     let button_width = (inner - gap) / 2n;
     let button_y = y + Scale(76n);
     if (
-        (
-            <Button
-                session={State_results_view.results.session}
-                props={{
-                    bounds: Bounds(x + padding, button_y, button_width, Scale(40n)),
-                    label: Locale("results_habit_not_now"),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: State_results_view.results.session,
+            props: {
+                bounds: Bounds(x + padding, button_y, button_width, Scale(40n)),
+                label: Locale("results_habit_not_now"),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         State_results_view.results.action = PRACTICE_RESULTS_SKIP_HABIT;
     }
     if (
-        (
-            <Button
-                session={State_results_view.results.session}
-                props={{
-                    bounds: Bounds(
-                        x + padding + button_width + gap,
-                        button_y,
-                        inner - button_width - gap,
-                        Scale(40n)
-                    ),
-                    label: Locale("results_habit_add"),
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                }}
-            />
-        )
+        Button({
+            session: State_results_view.results.session,
+            props: {
+                bounds: Bounds(
+                    x + padding + button_width + gap,
+                    button_y,
+                    inner - button_width - gap,
+                    Scale(40n)
+                ),
+                label: Locale("results_habit_add"),
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisFilled
+            }
+        })
     ) {
         State_results_view.results.action = PRACTICE_RESULTS_ADD_HABIT;
     }
@@ -734,10 +726,10 @@ export function Results(): void {
     if (button_y < Scale(200n)) {
         button_y = State_results_view.results.view_height - button_height;
     }
-    let best: s32 = 0n;
-    let average: s32 = 0n;
+    let best: s32 = s32(0n);
+    let average: s32 = s32(0n);
     if (State_results_view.results.activity === s32(ExerciseType.EXERCISE_WIM_HOF)) {
-        RoundStats(&best, &average);
+        RoundStats(nativeRef(best), nativeRef(average));
     }
     let scrolled = NativeScroll.Draw(State_results_view.results.session, {
         key: NativeLayout.KeyHash("inbe/screens/session_results/scroll/1"),
@@ -753,52 +745,46 @@ export function Results(): void {
     if (State_results_view.results.saved) {
         let button_width = (width - gap) / 2n;
         if (
-            (
-                <Button
-                    session={State_results_view.results.session}
-                    props={{
-                        bounds: Bounds(x, button_y, button_width, button_height),
-                        label: Locale("discard_button"),
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                    }}
-                />
-            )
+            Button({
+                session: State_results_view.results.session,
+                props: {
+                    bounds: Bounds(x, button_y, button_width, button_height),
+                    label: Locale("discard_button"),
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                }
+            })
         ) {
             State_results_view.results.action = PRACTICE_RESULTS_DISCARD;
         }
         if (
-            (
-                <Button
-                    session={State_results_view.results.session}
-                    props={{
-                        bounds: Bounds(
-                            x + button_width + gap,
-                            button_y,
-                            width - button_width - gap,
-                            button_height
-                        ),
-                        label: Locale("done_button"),
-                        tone: ButtonTone.ButtonToneAccent,
-                        emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                    }}
-                />
-            )
+            Button({
+                session: State_results_view.results.session,
+                props: {
+                    bounds: Bounds(
+                        x + button_width + gap,
+                        button_y,
+                        width - button_width - gap,
+                        button_height
+                    ),
+                    label: Locale("done_button"),
+                    tone: ButtonTone.ButtonToneAccent,
+                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
+                }
+            })
         ) {
             State_results_view.results.action = PRACTICE_RESULTS_DONE;
         }
     } else if (
-        (
-            <Button
-                session={State_results_view.results.session}
-                props={{
-                    bounds: Bounds(x, button_y, width, button_height),
-                    label: Locale("done_button"),
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisFilled
-                }}
-            />
-        )
+        Button({
+            session: State_results_view.results.session,
+            props: {
+                bounds: Bounds(x, button_y, width, button_height),
+                label: Locale("done_button"),
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisFilled
+            }
+        })
     ) {
         State_results_view.results.action = PRACTICE_RESULTS_DONE;
     }

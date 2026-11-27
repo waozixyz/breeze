@@ -1,3 +1,4 @@
+import * as Shared from "habit_shared";
 // A separate, read-only view of the persisted shop purchase history.
 import * as NativeLayout from "kryon/layout";
 import * as NativeScroll from "kryon/scroll";
@@ -7,9 +8,7 @@ import { Scroll } from "kryon/tsx/scroll";
 import { Text } from "kryon/tsx/text";
 import * as Shop from "shop_view";
 import {
-    Bounds,
     Filled,
-    Locale,
     ParagraphHeight,
     SHOP_COLUMN_MAX,
     SHOP_GAP,
@@ -18,7 +17,6 @@ import {
 } from "shop_view";
 import { HABITS_SHOP_NONE, HABITS_SHOP_STATS_BACK, HabitsMessage } from "habits_types";
 import {
-    NewStrong,
     PurchaseDate,
     ReadHabitRewardHost,
     ReadHabitsShopHost,
@@ -37,13 +35,18 @@ import { Card, PageHeader, SectionTitle } from "shop_screen";
 
 function Statistics(x: s32, y: s32, width: s32): void {
     const shop_state = Shop.CurrentShop();
-    y += SectionTitle(Locale("habit_shop_stats_title"), x, y, width) + Scale(10n);
+    y += SectionTitle(Shop.Locale("habit_shop_stats_title"), x, y, width) + Scale(10n);
     if (shop_state.statistics.purchase_count === 0n) {
-        let text = Locale("habit_shop_stats_empty");
+        let text = Shop.Locale("habit_shop_stats_empty");
         <Text
             session={shop_state.session}
             props={{
-                bounds: Bounds(x, y, width, ParagraphHeight(text, width, shop_state.small_font)),
+                bounds: Shared.Bounds(
+                    x,
+                    y,
+                    width,
+                    ParagraphHeight(text, width, shop_state.small_font)
+                ),
                 text: text,
                 size: shop_state.small_font,
                 class_name: shop_state.muted_class,
@@ -59,21 +62,21 @@ function Statistics(x: s32, y: s32, width: s32): void {
     for (let index = s32(0n); index <= 3n; index += s32(1)) {
         let card_x = x + (index % columns) * (card_w + Scale(8n));
         let card_y = y + (index / columns) * (card_h + Scale(8n));
-        Card(Bounds(card_x, card_y, card_w, card_h), "");
+        Card(Shared.Bounds(card_x, card_y, card_w, card_h), "");
         <Box
             session={shop_state.session}
             props={{
-                bounds: Bounds(card_x, card_y + Scale(12n), Scale(4n), card_h - Scale(24n)),
+                bounds: Shared.Bounds(card_x, card_y + Scale(12n), Scale(4n), card_h - Scale(24n)),
                 fill: StatisticsColor(index)
             }}
         />;
         let value = StatisticsValue(index);
-        let strong = NewStrong();
-        strong[0n] = { start: 0n, end: s32(value.count) };
+        let strong = Shared.NewStrong();
+        nativeSet(strong, 0n, { start: 0n, end: s32(value.count) });
         <Text
             session={shop_state.session}
             props={{
-                bounds: Bounds(
+                bounds: Shared.Bounds(
                     card_x + Scale(16n),
                     card_y + Scale(12n),
                     card_w - Scale(32n),
@@ -81,14 +84,14 @@ function Statistics(x: s32, y: s32, width: s32): void {
                 ),
                 text: value,
                 size: shop_state.font + Scale(6n),
-                strong: strong[:],
+                strong: nativeSlice(strong),
                 wrap: NativeText.Wrap.TextWrapAnywhere
             }}
         />;
         <Text
             session={shop_state.session}
             props={{
-                bounds: Bounds(
+                bounds: Shared.Bounds(
                     card_x + Scale(16n),
                     card_y + number_h + Scale(18n),
                     card_w - Scale(32n),
@@ -102,14 +105,19 @@ function Statistics(x: s32, y: s32, width: s32): void {
         />;
     }
     let last = Filled(
-        Locale("habit_shop_stats_last"),
+        Shop.Locale("habit_shop_stats_last"),
         PurchaseDate(shop_state.statistics.last_date)
     );
     let last_y = y + (4n / columns) * (card_h + Scale(8n));
     <Text
         session={shop_state.session}
         props={{
-            bounds: Bounds(x, last_y, width, ParagraphHeight(last, width, shop_state.small_font)),
+            bounds: Shared.Bounds(
+                x,
+                last_y,
+                width,
+                ParagraphHeight(last, width, shop_state.small_font)
+            ),
             text: last,
             size: shop_state.small_font,
             class_name: shop_state.muted_class,
@@ -122,14 +130,14 @@ function StatisticsReward(index: s32, x: s32, y: s32, width: s32): s32 {
     const shop_state = Shop.CurrentShop();
     let reward = ReadHabitRewardHost(index);
     let height = StatisticsRewardHeight(index, width);
-    Card(Bounds(x, y, width, height), "");
+    Card(Shared.Bounds(x, y, width, height), "");
     let pad = Scale(16n);
     let inner = width - pad * 2n;
     let name_h = ParagraphHeight(reward.name, inner, shop_state.font);
     <Text
         session={shop_state.session}
         props={{
-            bounds: Bounds(x + pad, y + pad, inner, name_h),
+            bounds: Shared.Bounds(x + pad, y + pad, inner, name_h),
             text: reward.name,
             wrap: NativeText.Wrap.TextWrapAuto
         }}
@@ -140,7 +148,7 @@ function StatisticsReward(index: s32, x: s32, y: s32, width: s32): s32 {
     <Text
         session={shop_state.session}
         props={{
-            bounds: Bounds(x + pad, line_y, inner, text_h),
+            bounds: Shared.Bounds(x + pad, line_y, inner, text_h),
             text: text,
             size: shop_state.small_font,
             wrap: NativeText.Wrap.TextWrapAuto
@@ -148,13 +156,13 @@ function StatisticsReward(index: s32, x: s32, y: s32, width: s32): s32 {
     />;
     if (reward.statistics.purchase_count > 0n) {
         let last = Filled(
-            Locale("habit_shop_stats_last"),
+            Shop.Locale("habit_shop_stats_last"),
             PurchaseDate(reward.statistics.last_date)
         );
         <Text
             session={shop_state.session}
             props={{
-                bounds: Bounds(
+                bounds: Shared.Bounds(
                     x + pad,
                     line_y + text_h + Scale(4n),
                     inner,
@@ -179,7 +187,7 @@ function ShopStatisticsPage(): void {
         x += (width - Scale(SHOP_COLUMN_MAX)) / 2n;
         width = Scale(SHOP_COLUMN_MAX);
     }
-    let top = PageHeader(x, s32(bounds.y), width, Locale("habit_shop_stats_title"), "");
+    let top = PageHeader(x, s32(bounds.y), width, Shop.Locale("habit_shop_stats_title"), "");
     if (top < 0n) {
         shop_state.action = HABITS_SHOP_STATS_BACK;
         return;
@@ -190,27 +198,25 @@ function ShopStatisticsPage(): void {
     for (let index = s32(0n); index < shop_state.reward_count; index += s32(1)) {
         content_h += StatisticsRewardHeight(index, content_width) + gap;
     }
-    const scrolled = (
-        <Scroll
-            session={shop_state.session}
-            props={{
-                key: NativeLayout.KeyHash("inbe/habits/shop/statistics"),
-                bounds: Bounds(x, top, width, s32(bounds.y + bounds.height) - top),
-                content_height: content_h,
-                scroll_offset: shop_state.scroll
-            }}
-            children={(scrolled: NativeScroll.ScrollResult): void => {
-                const shop_state = Shop.CurrentShop();
-                shop_state.scroll = scrolled.scroll_offset;
-                let y = s32(scrolled.content.y);
-                Statistics(x, y, content_width);
-                y += StatisticsHeight(content_width) + gap;
-                for (let index = s32(0n); index < shop_state.reward_count; index += s32(1)) {
-                    y += StatisticsReward(index, x, y, content_width) + gap;
-                }
-            }}
-        />
-    );
+    const scrolled = Scroll({
+        session: shop_state.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/habits/shop/statistics"),
+            bounds: Shared.Bounds(x, top, width, s32(bounds.y + bounds.height) - top),
+            content_height: content_h,
+            scroll_offset: shop_state.scroll
+        },
+        children: (scrolled: NativeScroll.ScrollResult): void => {
+            const shop_state = Shop.CurrentShop();
+            shop_state.scroll = scrolled.scroll_offset;
+            let y = s32(scrolled.content.y);
+            Statistics(x, y, content_width);
+            y += StatisticsHeight(content_width) + gap;
+            for (let index = s32(0n); index < shop_state.reward_count; index += s32(1)) {
+                y += StatisticsReward(index, x, y, content_width) + gap;
+            }
+        }
+    });
     if (!scrolled.opened) {
         shop_state.scroll = scrolled.scroll_offset;
     }
@@ -222,7 +228,7 @@ export function HabitsShopStatisticsView(message: HabitsMessage): HabitsMessage 
     shop_state.action = HABITS_SHOP_NONE;
     shop_state.clipboard_write = false;
     ShopStatisticsPage();
-    WriteHabitsShopHost(*shop_state);
+    WriteHabitsShopHost(nativeDeref(shop_state));
     message.succeeded = true;
     return message;
 }

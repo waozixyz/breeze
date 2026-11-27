@@ -105,15 +105,15 @@ import {
 } from "workout_sequence";
 
 function WorkoutBuilderField(
-    app: *InnerBreeze,
-    state: *NativeField.State,
+    app: NativeRef<InnerBreeze>,
+    state: NativeRef<NativeField.State>,
     field: s32,
     bounds: Rectangle,
     key: string
 ): boolean {
     let typed = WorkoutBuilderFieldInputBytes();
-    const input = SampleTextFieldInput(state.focused, typed[:]);
-    const props = NativeField.StateProps((*state), {
+    const input = SampleTextFieldInput(state.focused, nativeSlice(typed));
+    const props = NativeField.StateProps(nativeDeref(state), {
         key: Layout.KeyHash(key),
         id: field,
         focus_id: field,
@@ -122,12 +122,12 @@ function WorkoutBuilderField(
         placeholder: LocaleText(key),
         input: input
     });
-    const result = <ControlledTextField session={app.ui.session} props={props} />;
+    const result = ControlledTextField({ session: app.ui.session, props: props });
     return WorkoutBuilderApplyField(state, result);
 }
 
 function WorkoutBuilderCard(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     key: u64,
     bounds: Rectangle,
     selected: boolean,
@@ -150,7 +150,7 @@ function WorkoutBuilderCard(
 }
 
 function WorkoutBuilderLabels(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     bounds: Rectangle,
     title: string,
     detail: string
@@ -163,7 +163,7 @@ function WorkoutBuilderLabels(
             bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: half },
             text: title,
             size: AppFontSize(),
-            strong: strong[:],
+            strong: nativeSlice(strong),
             vertical_align: TextAlign.TextAlignEnd,
             wrap: Wrap.TextWrapEllipsis
         }}
@@ -182,7 +182,7 @@ function WorkoutBuilderLabels(
 }
 
 function WorkoutBuilderCheck(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     key: u64,
     bounds: Rectangle,
     chosen: boolean
@@ -219,49 +219,45 @@ function WorkoutBuilderCheck(
 }
 
 function WorkoutBuilderPress(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     row_index: s32,
     face: Rectangle,
     key: u64,
     label: string,
     selected: boolean
 ): boolean {
-    let node = workout_builder.rows[row_index].node;
+    let node = nativeAt(workout_builder.rows, row_index).node;
     if (workout_builder.choosing) {
-        const rowClicked = (
-            <Button
-                session={app.ui.session}
-                props={{
-                    key: key,
-                    bounds: face,
-                    label: label,
-                    invisible: true,
-                    selected: selected
-                }}
-            />
-        );
+        const rowClicked = Button({
+            session: app.ui.session,
+            props: {
+                key: key,
+                bounds: face,
+                label: label,
+                invisible: true,
+                selected: selected
+            }
+        });
         if (rowClicked) {
             WorkoutBuilderTap(node);
         }
         return false;
     }
-    const result = (
-        <SortableItem
-            state={&workout_builder.drag}
-            widget={{
-                session: app.ui.session,
-                props: {
-                    key: key,
-                    row: row_index,
-                    bounds: face,
-                    label: label,
-                    now: HostSeconds(),
-                    touch: WorkoutBuilderTouch(),
-                    slop: float32(AppScale(6n))
-                }
-            }}
-        />
-    );
+    const result = SortableItem({
+        state: nativeRef(workout_builder.drag),
+        widget: {
+            session: app.ui.session,
+            props: {
+                key: key,
+                row: row_index,
+                bounds: face,
+                label: label,
+                now: HostSeconds(),
+                touch: WorkoutBuilderTouch(),
+                slop: float32(AppScale(6n))
+            }
+        }
+    });
     if (result.clicked) {
         WorkoutBuilderTap(node);
     }
@@ -269,17 +265,17 @@ function WorkoutBuilderPress(
 }
 
 function WorkoutBuilderBlockFace(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     row_index: s32,
     bounds: Rectangle,
     copy: s32,
     visible: boolean
 ): boolean {
-    let row = &workout_builder.rows[row_index];
-    let plan = &workout_builder.draft;
-    let node = &plan.nodes[row.node];
+    let row = nativeRef(nativeAt(workout_builder.rows, row_index));
+    let plan = nativeRef(workout_builder.draft);
+    let node = nativeRef(nativeAt(plan.nodes, row.node));
     let selected = row.node === workout_builder.selected && !workout_builder.choosing;
-    let chosen = workout_builder.choosing && workout_builder.chosen[row.node];
+    let chosen = workout_builder.choosing && nativeAt(workout_builder.chosen, row.node);
     let key = Layout.KeyHash("workout/builder/block") + u64(row.node) * 8n;
     let name = WorkoutBuilderExercise(app, node.exercise);
     if (visible) {
@@ -299,8 +295,8 @@ function WorkoutBuilderBlockFace(
 }
 
 function WorkoutBuilderBlockLabels(
-    app: *InnerBreeze,
-    node: *WorkoutNode,
+    app: NativeRef<InnerBreeze>,
+    node: NativeRef<WorkoutNode>,
     bounds: Rectangle,
     copy: s32,
     name: string
@@ -326,15 +322,15 @@ function WorkoutBuilderBlockLabels(
 }
 
 function WorkoutBuilderGroupFace(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     row_index: s32,
     bounds: Rectangle
 ): boolean {
-    let row = &workout_builder.rows[row_index];
-    let plan = &workout_builder.draft;
-    let node = &plan.nodes[row.node];
+    let row = nativeRef(nativeAt(workout_builder.rows, row_index));
+    let plan = nativeRef(workout_builder.draft);
+    let node = nativeRef(nativeAt(plan.nodes, row.node));
     let selected = row.node === workout_builder.selected && !workout_builder.choosing;
-    let chosen = workout_builder.choosing && workout_builder.chosen[row.node];
+    let chosen = workout_builder.choosing && nativeAt(workout_builder.chosen, row.node);
     let key = Layout.KeyHash("workout/builder/group") + u64(row.node) * 8n;
     let title = WorkoutBuilderGroupTitle(app, node);
     if (selected || chosen) {
@@ -351,7 +347,7 @@ function WorkoutBuilderGroupFace(
 }
 
 function WorkoutBuilderGroupLabels(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     index: s32,
     bounds: Rectangle,
     title: string
@@ -372,11 +368,11 @@ function WorkoutBuilderGroupLabels(
 }
 
 function WorkoutBuilderGroupEnd(
-    app: *InnerBreeze,
-    row: *WorkoutBuilderRow,
+    app: NativeRef<InnerBreeze>,
+    row: NativeRef<WorkoutBuilderRow>,
     bounds: Rectangle
 ): void {
-    let node = &workout_builder.draft.nodes[row.node];
+    let node = nativeRef(nativeAt(workout_builder.draft.nodes, row.node));
     let args: [FormatArg, FormatArg] = [{ number: node.repeats }, { number: node.rest }];
     <Text
         session={app.ui.session}
@@ -387,7 +383,7 @@ function WorkoutBuilderGroupEnd(
                 width: bounds.width - float32(AppScale(24n)),
                 height: bounds.height
             },
-            text: WorkoutBuilderFormat(app, "workout_custom_group_end", args[:]),
+            text: WorkoutBuilderFormat(app, "workout_custom_group_end", nativeSlice(args)),
             size: AppSmallFontSize(),
             class_name: MutedTextClass(),
             vertical_align: TextAlign.TextAlignCenter,
@@ -397,7 +393,7 @@ function WorkoutBuilderGroupEnd(
 }
 
 function WorkoutBuilderSpin(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     id: u64,
     bounds: Rectangle,
     label: string,
@@ -422,36 +418,30 @@ function WorkoutBuilderSpin(
         }}
     />;
     let shown: [FormatArg] = [{ number: value }];
-    let result = (
-        <Spinbox
-            session={app.ui.session}
-            props={{
-                key: Layout.KeyHash("workout/builder/spin") + id,
-                bounds: {
-                    x: bounds.x,
-                    y: bounds.y + float32(AppScale(24n)),
-                    width: bounds.width,
-                    height: bounds.height - float32(AppScale(24n))
-                },
-                label: label,
-                min: minimum,
-                max: maximum,
-                step: step,
-                value: value,
-                value_text: WorkoutBuilderFormat(app, value_key, shown[:])
-            }}
-        />
-    );
+    let result = Spinbox({
+        session: app.ui.session,
+        props: {
+            key: Layout.KeyHash("workout/builder/spin") + id,
+            bounds: {
+                x: bounds.x,
+                y: bounds.y + float32(AppScale(24n)),
+                width: bounds.width,
+                height: bounds.height - float32(AppScale(24n))
+            },
+            label: label,
+            min: minimum,
+            max: maximum,
+            step: step,
+            value: value,
+            value_text: WorkoutBuilderFormat(app, value_key, nativeSlice(shown))
+        }
+    });
     return result.changed ? result.value : value;
 }
 
-function WorkoutBuilderSettings(
-    app: *InnerBreeze,
-    index: s32,
-    area: Rectangle
-): boolean {
-    let plan = &workout_builder.draft;
-    let node = &plan.nodes[index];
+function WorkoutBuilderSettings(app: NativeRef<InnerBreeze>, index: s32, area: Rectangle): boolean {
+    let plan = nativeRef(workout_builder.draft);
+    let node = nativeRef(nativeAt(plan.nodes, index));
     let group = node.kind === WORKOUT_NODE_GROUP;
     let stride = WorkoutBuilderStride();
     let height = WorkoutBuilderControl();
@@ -519,23 +509,21 @@ function WorkoutBuilderSettings(
     y += spin_h + AppScale(6n);
     if (!group && WorkoutBuilderVariantCount(node.exercise) > 1n) {
         let columns = WorkoutBuilderVariantCount(node.exercise);
-        let column: s32 = 0n;
-        for (let variant: s32 = 0n; variant <= 3n; variant += 1n) {
+        let column: s32 = s32(0n);
+        for (let variant: s32 = s32(0n); variant <= 3n; variant += 1n) {
             if (!WorkoutBlockSupports(node.exercise, variant)) {
                 continue;
             }
-            const selectVariant = (
-                <Button
-                    session={app.ui.session}
-                    props={WorkoutBuilderButtonProps(
-                        u64(30n + variant),
-                        WorkoutBuilderSlice(area, y, height, column, columns),
-                        LocaleText(WorkoutBuilderVariantKey(variant)),
-                        false,
-                        node.variant === variant
-                    )}
-                />
-            );
+            const selectVariant = Button({
+                session: app.ui.session,
+                props: WorkoutBuilderButtonProps(
+                    u64(30n + variant),
+                    WorkoutBuilderSlice(area, y, height, column, columns),
+                    LocaleText(WorkoutBuilderVariantKey(variant)),
+                    false,
+                    node.variant === variant
+                )
+            });
             if (
                 selectVariant &&
                 node.variant !== variant &&
@@ -547,16 +535,14 @@ function WorkoutBuilderSettings(
         }
         y += stride;
     }
-    const moveUp = (
-        <Button
-            session={app.ui.session}
-            props={WorkoutBuilderButtonProps(
-                21n,
-                WorkoutBuilderSlice(area, y, height, 0n, 2n),
-                LocaleText("move_up_button")
-            )}
-        />
-    );
+    const moveUp = Button({
+        session: app.ui.session,
+        props: WorkoutBuilderButtonProps(
+            21n,
+            WorkoutBuilderSlice(area, y, height, 0n, 2n),
+            LocaleText("move_up_button")
+        )
+    });
     if (moveUp) {
         let moved = WorkoutBuilderShift(index, false);
         if (moved >= 0n) {
@@ -565,16 +551,14 @@ function WorkoutBuilderSettings(
             return true;
         }
     }
-    const moveDown = (
-        <Button
-            session={app.ui.session}
-            props={WorkoutBuilderButtonProps(
-                22n,
-                WorkoutBuilderSlice(area, y, height, 1n, 2n),
-                LocaleText("move_down_button")
-            )}
-        />
-    );
+    const moveDown = Button({
+        session: app.ui.session,
+        props: WorkoutBuilderButtonProps(
+            22n,
+            WorkoutBuilderSlice(area, y, height, 1n, 2n),
+            LocaleText("move_down_button")
+        )
+    });
     if (moveDown) {
         let moved = WorkoutBuilderShift(index, true);
         if (moved >= 0n) {
@@ -585,18 +569,16 @@ function WorkoutBuilderSettings(
     }
     y += stride;
     let columns: s32 = group ? 3n : 2n;
-    let column: s32 = 0n;
+    let column: s32 = s32(0n);
     if (group) {
-        const ungroup = (
-            <Button
-                session={app.ui.session}
-                props={WorkoutBuilderButtonProps(
-                    23n,
-                    WorkoutBuilderSlice(area, y, height, 0n, 3n),
-                    LocaleText("workout_custom_ungroup")
-                )}
-            />
-        );
+        const ungroup = Button({
+            session: app.ui.session,
+            props: WorkoutBuilderButtonProps(
+                23n,
+                WorkoutBuilderSlice(area, y, height, 0n, 3n),
+                LocaleText("workout_custom_ungroup")
+            )
+        });
         if (ungroup && WorkoutPlanUngroup(plan, index)) {
             workout_builder.selected = -1n;
             WorkoutBuilderChanged();
@@ -604,32 +586,28 @@ function WorkoutBuilderSettings(
         }
         column = 1n;
     }
-    const duplicate = (
-        <Button
-            session={app.ui.session}
-            props={WorkoutBuilderButtonProps(
-                24n,
-                WorkoutBuilderSlice(area, y, height, column, columns),
-                LocaleText("workout_custom_duplicate"),
-                !WorkoutBuilderFits(index)
-            )}
-        />
-    );
+    const duplicate = Button({
+        session: app.ui.session,
+        props: WorkoutBuilderButtonProps(
+            24n,
+            WorkoutBuilderSlice(area, y, height, column, columns),
+            LocaleText("workout_custom_duplicate"),
+            !WorkoutBuilderFits(index)
+        )
+    });
     if (duplicate && WorkoutPlanDuplicate(plan, index)) {
         workout_builder.selected = WorkoutPlanEnd(plan, index);
         WorkoutBuilderChanged();
         return true;
     }
-    const remove = (
-        <Button
-            session={app.ui.session}
-            props={WorkoutBuilderButtonProps(
-                25n,
-                WorkoutBuilderSlice(area, y, height, column + 1n, columns),
-                LocaleText("workout_custom_remove_block")
-            )}
-        />
-    );
+    const remove = Button({
+        session: app.ui.session,
+        props: WorkoutBuilderButtonProps(
+            25n,
+            WorkoutBuilderSlice(area, y, height, column + 1n, columns),
+            LocaleText("workout_custom_remove_block")
+        )
+    });
     if (remove && WorkoutPlanRemove(plan, index)) {
         workout_builder.selected = -1n;
         WorkoutBuilderChanged();
@@ -638,8 +616,8 @@ function WorkoutBuilderSettings(
     return false;
 }
 
-function WorkoutBuilderTotals(app: *InnerBreeze, bounds: Rectangle): void {
-    let times = WorkoutPlanTimesOf(&workout_builder.draft);
+function WorkoutBuilderTotals(app: NativeRef<InnerBreeze>, bounds: Rectangle): void {
+    let times = WorkoutPlanTimesOf(nativeRef(workout_builder.draft));
     let text = LocaleText("workout_custom_empty");
     if (times.valid) {
         let args: [FormatArg, FormatArg, FormatArg] = [
@@ -647,7 +625,7 @@ function WorkoutBuilderTotals(app: *InnerBreeze, bounds: Rectangle): void {
             { text: WorkoutBuilderClock(app, times.active_seconds), is_text: true },
             { number: times.steps }
         ];
-        text = WorkoutBuilderFormat(app, "workout_custom_summary", args[:]);
+        text = WorkoutBuilderFormat(app, "workout_custom_summary", nativeSlice(args));
     } else if (workout_builder.draft.count > 0n) {
         text = LocaleText("workout_custom_too_long");
     }
@@ -664,50 +642,46 @@ function WorkoutBuilderTotals(app: *InnerBreeze, bounds: Rectangle): void {
 }
 
 function WorkoutBuilderList(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     area: Rectangle,
     stride: s32,
     height: s32
 ): s32 {
-    const newRoutine = (
-        <Button
-            session={app.ui.session}
-            props={WorkoutBuilderButtonProps(
-                2n,
-                WorkoutBuilderSlice(area, 0n, height),
-                LocaleText("workout_custom_new"),
-                WorkoutBuilderFreeSlot() < 0n
-            )}
-        />
-    );
+    const newRoutine = Button({
+        session: app.ui.session,
+        props: WorkoutBuilderButtonProps(
+            2n,
+            WorkoutBuilderSlice(area, 0n, height),
+            LocaleText("workout_custom_new"),
+            WorkoutBuilderFreeSlot() < 0n
+        )
+    });
     if (newRoutine) {
         WorkoutBuilderEdit(-1n);
         return WORKOUT_BUILDER_STAY;
     }
     let y = stride;
-    for (let slot: s32 = 0n; slot < WORKOUT_CUSTOM_ROUTINE_LIMIT; slot += 1n) {
-        if (!workout_builder.occupied[slot]) {
+    for (let slot: s32 = s32(0n); slot < WORKOUT_CUSTOM_ROUTINE_LIMIT; slot += 1n) {
+        if (!nativeAt(workout_builder.occupied, slot)) {
             continue;
         }
         let name = WorkoutBuilderNameBuffer();
         let label = WorkoutPlanName(
-            &workout_builder.slots[slot],
-            name[:]
+            nativeRef(nativeAt(workout_builder.slots, slot)),
+            nativeSlice(name)
         );
         if (label.count === 0n) {
             label = LocaleText("workout_custom_unavailable");
         }
-        const editRoutine = (
-            <Button
-                session={app.ui.session}
-                props={WorkoutBuilderButtonProps(
-                    u64(40n + slot),
-                    WorkoutBuilderSlice(area, y, height),
-                    FrameTextHold(&app.ui.frame_text, label),
-                    workout_builder.slots[slot].count === 0n
-                )}
-            />
-        );
+        const editRoutine = Button({
+            session: app.ui.session,
+            props: WorkoutBuilderButtonProps(
+                u64(40n + slot),
+                WorkoutBuilderSlice(area, y, height),
+                FrameTextHold(nativeRef(app.ui.frame_text), label),
+                nativeAt(workout_builder.slots, slot).count === 0n
+            )
+        });
         if (editRoutine) {
             WorkoutBuilderEdit(slot);
             return WORKOUT_BUILDER_STAY;
@@ -717,11 +691,7 @@ function WorkoutBuilderList(
     return WORKOUT_BUILDER_STAY;
 }
 
-function WorkoutBuilderHeading(
-    app: *InnerBreeze,
-    bounds: Rectangle,
-    key: string
-): void {
+function WorkoutBuilderHeading(app: NativeRef<InnerBreeze>, bounds: Rectangle, key: string): void {
     let text = LocaleText(key);
     let strong: [NativeText.Range] = [{ start: 0n, end: s32(text.count) }];
     <Text
@@ -730,28 +700,22 @@ function WorkoutBuilderHeading(
             bounds: bounds,
             text: text,
             size: AppFontSize(),
-            strong: strong[:],
+            strong: nativeSlice(strong),
             vertical_align: TextAlign.TextAlignCenter
         }}
     />;
 }
 
-function WorkoutBuilderPick(
-    app: *InnerBreeze,
-    area: Rectangle,
-    bounds: Rectangle
-): void {
+function WorkoutBuilderPick(app: NativeRef<InnerBreeze>, area: Rectangle, bounds: Rectangle): void {
     let height = WorkoutBuilderControl();
-    const backToEditor = (
-        <Button
-            session={app.ui.session}
-            props={WorkoutBuilderButtonProps(
-                3n,
-                WorkoutBuilderSlice(area, 0n, height),
-                LocaleText("workout_custom_blocks")
-            )}
-        />
-    );
+    const backToEditor = Button({
+        session: app.ui.session,
+        props: WorkoutBuilderButtonProps(
+            3n,
+            WorkoutBuilderSlice(area, 0n, height),
+            LocaleText("workout_custom_blocks")
+        )
+    });
     if (backToEditor) {
         workout_builder.page = WORKOUT_BUILDER_EDITOR;
         return;
@@ -766,12 +730,12 @@ function WorkoutBuilderPick(
         "workout_custom_exercises"
     );
     y += AppScale(36n);
-    for (let exercise: s32 = 0n; exercise < WORKOUT_MOVE_COUNT; exercise += 1n) {
+    for (let exercise: s32 = s32(0n); exercise < WORKOUT_MOVE_COUNT; exercise += 1n) {
         let tile_bounds = WorkoutBuilderSlice(area, y, tile);
         y += tile + gap;
         let node = WorkoutPlanExercise(exercise);
         let trial: WorkoutPlan = {};
-        const fits = WorkoutBuilderTryInsert(insertion, node, &trial);
+        const fits = WorkoutBuilderTryInsert(insertion, node, nativeRef(trial));
         let key = Layout.KeyHash("workout/builder/pick") + u64(exercise) * 4n;
         let name = WorkoutBuilderExercise(app, exercise);
         // Every exercise stays reachable; only tiles in view draw their figure.
@@ -781,20 +745,18 @@ function WorkoutBuilderPick(
         if (visible) {
             WorkoutBuilderCard(app, key, tile_bounds, false, "surface");
         }
-        const exerciseClicked = (
-            <Button
-                session={app.ui.session}
-                props={{
-                    key: key + 1n,
-                    bounds: tile_bounds,
-                    label: name,
-                    invisible: true,
-                    disabled: !fits
-                }}
-            />
-        );
+        const exerciseClicked = Button({
+            session: app.ui.session,
+            props: {
+                key: key + 1n,
+                bounds: tile_bounds,
+                label: name,
+                invisible: true,
+                disabled: !fits
+            }
+        });
         if (exerciseClicked && fits) {
-            WorkoutBuilderAcceptInsertion(insertion.slot, &trial);
+            WorkoutBuilderAcceptInsertion(insertion.slot, nativeRef(trial));
             return;
         }
         if (!visible) {
@@ -820,14 +782,14 @@ function WorkoutBuilderPick(
                 height: size
             },
             name,
-            WorkoutBuilderDetail(app, &node)
+            WorkoutBuilderDetail(app, nativeRef(node))
         );
     }
     let heading = false;
-    for (let saved: s32 = 0n; saved < WORKOUT_CUSTOM_ROUTINE_LIMIT; saved += 1n) {
-        let routine = &workout_builder.slots[saved];
+    for (let saved: s32 = s32(0n); saved < WORKOUT_CUSTOM_ROUTINE_LIMIT; saved += 1n) {
+        let routine = nativeRef(nativeAt(workout_builder.slots, saved));
         if (
-            !workout_builder.occupied[saved] ||
+            !nativeAt(workout_builder.occupied, saved) ||
             routine.count === 0n ||
             saved === workout_builder.slot
         ) {
@@ -845,39 +807,40 @@ function WorkoutBuilderPick(
         let tile_bounds = WorkoutBuilderSlice(area, y, tile);
         y += tile + gap;
         let trial: WorkoutPlan = {};
-        const fits = WorkoutBuilderTryInsertRoutine(insertion, routine, &trial);
+        const fits = WorkoutBuilderTryInsertRoutine(insertion, routine, nativeRef(trial));
         let key = Layout.KeyHash("workout/builder/pick/routine") + u64(saved) * 4n;
         WorkoutBuilderCard(app, key, tile_bounds, false, "surface");
         let name_buffer = WorkoutBuilderNameBuffer();
         let name = FrameTextHold(
-            &app.ui.frame_text,
-            WorkoutPlanName(routine, name_buffer[:])
+            nativeRef(app.ui.frame_text),
+            WorkoutPlanName(routine, nativeSlice(name_buffer))
         );
-        const routineClicked = (
-            <Button
-                session={app.ui.session}
-                props={{
-                    key: key + 1n,
-                    bounds: tile_bounds,
-                    label: name,
-                    invisible: true,
-                    disabled: !fits
-                }}
-            />
-        );
+        const routineClicked = Button({
+            session: app.ui.session,
+            props: {
+                key: key + 1n,
+                bounds: tile_bounds,
+                label: name,
+                invisible: true,
+                disabled: !fits
+            }
+        });
         if (routineClicked && fits) {
-            WorkoutBuilderAcceptInsertion(insertion.slot, &trial);
+            WorkoutBuilderAcceptInsertion(insertion.slot, nativeRef(trial));
             return;
         }
         let pad = float32(AppScale(6n));
         let size = tile_bounds.height - pad * 2.0;
-        let first = routine.nodes[0n];
-        let cursor: s32 = 0n;
-        while (cursor < routine.count && routine.nodes[cursor].kind === WORKOUT_NODE_GROUP) {
+        let first = nativeAt(routine.nodes, 0n);
+        let cursor: s32 = s32(0n);
+        while (
+            cursor < routine.count &&
+            nativeAt(routine.nodes, cursor).kind === WORKOUT_NODE_GROUP
+        ) {
             cursor += 1n;
         }
         if (cursor < routine.count) {
-            first = routine.nodes[cursor];
+            first = nativeAt(routine.nodes, cursor);
             WorkoutBuilderThumbnail(
                 app,
                 first.exercise,
@@ -902,26 +865,26 @@ function WorkoutBuilderPick(
                 height: size
             },
             name,
-            WorkoutBuilderFormat(app, "workout_custom_routine_detail", args[:])
+            WorkoutBuilderFormat(app, "workout_custom_routine_detail", nativeSlice(args))
         );
     }
 }
 
 function WorkoutBuilderBlocks(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     area: Rectangle,
     top: s32,
     bounds: Rectangle
 ): boolean {
     let indent = WorkoutBuilderIndent();
     let copies = WorkoutBuilderPictureCopies();
-    for (let row_index: s32 = 0n; row_index < workout_builder.row_count; row_index += 1n) {
-        let row = &workout_builder.rows[row_index];
+    for (let row_index: s32 = s32(0n); row_index < workout_builder.row_count; row_index += 1n) {
+        let row = nativeRef(nativeAt(workout_builder.rows, row_index));
         if (row.kind !== WORKOUT_BUILDER_ROW_GROUP || row.end < 0n) {
             continue;
         }
         // A group's frame holds its header, contents and end.
-        let last = &workout_builder.rows[row.end];
+        let last = nativeRef(nativeAt(workout_builder.rows, row.end));
         let x = area.x + float32(row.depth * indent);
         let frame: Rectangle = {
             x: x,
@@ -944,8 +907,8 @@ function WorkoutBuilderBlocks(
             }}
         />;
     }
-    for (let row_index: s32 = 0n; row_index < workout_builder.row_count; row_index += 1n) {
-        let row = &workout_builder.rows[row_index];
+    for (let row_index: s32 = s32(0n); row_index < workout_builder.row_count; row_index += 1n) {
+        let row = nativeRef(nativeAt(workout_builder.rows, row_index));
         let inset = row.depth * indent;
         let face: Rectangle = {
             x: area.x + float32(inset),
@@ -953,23 +916,23 @@ function WorkoutBuilderBlocks(
             width: area.width - float32(inset),
             height: float32(row.face)
         };
-        workout_builder.sortable[row_index] = {
+        nativeSet(workout_builder.sortable, row_index, {
             bounds: face,
             depth: row.depth,
             end: row.end,
             closes: row.kind === WORKOUT_BUILDER_ROW_END,
             fixed: row.kind === WORKOUT_BUILDER_ROW_END
-        };
+        });
     }
-    for (let row_index: s32 = 0n; row_index < workout_builder.row_count; row_index += 1n) {
-        let row = &workout_builder.rows[row_index];
-        let face = workout_builder.sortable[row_index].bounds;
+    for (let row_index: s32 = s32(0n); row_index < workout_builder.row_count; row_index += 1n) {
+        let row = nativeRef(nativeAt(workout_builder.rows, row_index));
+        let face = nativeAt(workout_builder.sortable, row_index).bounds;
         let visible = face.y + face.height >= bounds.y && face.y <= bounds.y + bounds.height;
         if (row.kind === WORKOUT_BUILDER_ROW_BLOCK) {
-            let node = workout_builder.draft.nodes[row.node];
+            let node = nativeAt(workout_builder.draft.nodes, row.node);
             let picture = node.exercise * 4n + node.variant;
-            let copy = copies[picture];
-            copies[picture] = copy + 1n;
+            let copy = nativeAt(copies, picture);
+            nativeSet(copies, picture, copy + 1n);
             // The lifted block keeps its press while it is scrolled away.
             if (WorkoutBuilderBlockFace(app, row_index, face, copy, visible)) {
                 return true;
@@ -1001,22 +964,22 @@ function WorkoutBuilderBlocks(
     return false;
 }
 
-function WorkoutBuilderLiftedRow(app: *InnerBreeze): void {
+function WorkoutBuilderLiftedRow(app: NativeRef<InnerBreeze>): void {
     let drag = workout_builder.drag;
     if (!drag.active || !drag.lifted || drag.row < 0n || drag.row >= workout_builder.row_count) {
         return;
     }
     let drop = Sortable.Target(
-        workout_builder.sortable[:workout_builder.row_count],
+        nativeSlice(workout_builder.sortable, 0n, workout_builder.row_count),
         drag.row,
         drag.pointer.y,
         float32(WorkoutBuilderIndent())
     );
-    let row = workout_builder.rows[drag.row];
+    let row = nativeAt(workout_builder.rows, drag.row);
     let ghost = Sortable.Lifted(drag);
     let key = Layout.KeyHash("workout/builder/lifted");
     WorkoutBuilderCard(app, key, ghost, true, "surface");
-    let node = &workout_builder.draft.nodes[row.node];
+    let node = nativeRef(nativeAt(workout_builder.draft.nodes, row.node));
     if (row.kind === WORKOUT_BUILDER_ROW_BLOCK) {
         WorkoutBuilderBlockLabels(
             app,
@@ -1030,7 +993,7 @@ function WorkoutBuilderLiftedRow(app: *InnerBreeze): void {
     }
     // The landing place stays visible over the lifted block.
     let moved: WorkoutPlan = {};
-    if (WorkoutBuilderDropped(drag.row, drop, &moved)) {
+    if (WorkoutBuilderDropped(drag.row, drop, nativeRef(moved))) {
         <SortableIndicator
             session={app.ui.session}
             key={Layout.KeyHash("workout/builder/drop")}
@@ -1043,72 +1006,64 @@ function WorkoutBuilderLiftedRow(app: *InnerBreeze): void {
 }
 
 function WorkoutBuilderToolbar(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     area: Rectangle,
     y: s32,
     height: s32
 ): boolean {
     if (workout_builder.choosing) {
         const grouped = WorkoutBuilderCanGroup();
-        const groupBlocks = (
-            <Button
-                session={app.ui.session}
-                props={WorkoutBuilderButtonProps(
-                    8n,
-                    WorkoutBuilderSlice(area, y, height, 0n, 2n),
-                    LocaleText("workout_custom_group"),
-                    !grouped,
-                    true
-                )}
-            />
-        );
+        const groupBlocks = Button({
+            session: app.ui.session,
+            props: WorkoutBuilderButtonProps(
+                8n,
+                WorkoutBuilderSlice(area, y, height, 0n, 2n),
+                LocaleText("workout_custom_group"),
+                !grouped,
+                true
+            )
+        });
         if (groupBlocks && grouped) {
             WorkoutBuilderGroupChosen();
             return true;
         }
-        const cancelGrouping = (
-            <Button
-                session={app.ui.session}
-                props={WorkoutBuilderButtonProps(
-                    9n,
-                    WorkoutBuilderSlice(area, y, height, 1n, 2n),
-                    LocaleText("cancel_button")
-                )}
-            />
-        );
+        const cancelGrouping = Button({
+            session: app.ui.session,
+            props: WorkoutBuilderButtonProps(
+                9n,
+                WorkoutBuilderSlice(area, y, height, 1n, 2n),
+                LocaleText("cancel_button")
+            )
+        });
         if (cancelGrouping) {
             WorkoutBuilderStopChoosing();
             return true;
         }
         return false;
     }
-    const pickBlock = (
-        <Button
-            session={app.ui.session}
-            props={WorkoutBuilderButtonProps(
-                7n,
-                WorkoutBuilderSlice(area, y, height, 0n, 2n),
-                LocaleText("workout_custom_add_block"),
-                workout_builder.draft.count >= WORKOUT_PLAN_NODE_LIMIT
-            )}
-        />
-    );
+    const pickBlock = Button({
+        session: app.ui.session,
+        props: WorkoutBuilderButtonProps(
+            7n,
+            WorkoutBuilderSlice(area, y, height, 0n, 2n),
+            LocaleText("workout_custom_add_block"),
+            workout_builder.draft.count >= WORKOUT_PLAN_NODE_LIMIT
+        )
+    });
     if (pickBlock) {
         workout_builder.page = WORKOUT_BUILDER_PICKER;
         workout_builder.picker_scroll = 0n;
         return true;
     }
-    const chooseBlocks = (
-        <Button
-            session={app.ui.session}
-            props={WorkoutBuilderButtonProps(
-                10n,
-                WorkoutBuilderSlice(area, y, height, 1n, 2n),
-                LocaleText("workout_custom_select"),
-                workout_builder.draft.count === 0n
-            )}
-        />
-    );
+    const chooseBlocks = Button({
+        session: app.ui.session,
+        props: WorkoutBuilderButtonProps(
+            10n,
+            WorkoutBuilderSlice(area, y, height, 1n, 2n),
+            LocaleText("workout_custom_select"),
+            workout_builder.draft.count === 0n
+        )
+    });
     if (chooseBlocks) {
         WorkoutBuilderStartChoosing();
         return true;
@@ -1117,7 +1072,7 @@ function WorkoutBuilderToolbar(
 }
 
 function WorkoutBuilderEditor(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     area: Rectangle,
     bounds: Rectangle,
     ready: boolean
@@ -1127,16 +1082,14 @@ function WorkoutBuilderEditor(
     const backLabel = workout_builder.confirm_back
         ? "workout_custom_discard"
         : "workout_custom_library";
-    const back = (
-        <Button
-            session={app.ui.session}
-            props={WorkoutBuilderButtonProps(
-                4n,
-                WorkoutBuilderSlice(area, 0n, height),
-                LocaleText(backLabel)
-            )}
-        />
-    );
+    const back = Button({
+        session: app.ui.session,
+        props: WorkoutBuilderButtonProps(
+            4n,
+            WorkoutBuilderSlice(area, 0n, height),
+            LocaleText(backLabel)
+        )
+    });
     if (back) {
         WorkoutBuilderBack();
         if (workout_builder.page === WORKOUT_BUILDER_LIBRARY) {
@@ -1146,7 +1099,7 @@ function WorkoutBuilderEditor(
     if (
         WorkoutBuilderField(
             app,
-            &workout_builder.name,
+            nativeRef(workout_builder.name),
             WORKOUT_BUILDER_NAME_FIELD,
             WorkoutBuilderSlice(area, stride, height),
             "workout_custom_name"
@@ -1156,32 +1109,28 @@ function WorkoutBuilderEditor(
     }
     WorkoutBuilderTotals(app, WorkoutBuilderSlice(area, stride * 2n, height));
     const can_play = WorkoutBuilderCanPlay();
-    const save = (
-        <Button
-            session={app.ui.session}
-            props={WorkoutBuilderButtonProps(
-                5n,
-                WorkoutBuilderSlice(area, stride * 3n, height, 0n, 2n),
-                LocaleText("save_button"),
-                !can_play
-            )}
-        />
-    );
+    const save = Button({
+        session: app.ui.session,
+        props: WorkoutBuilderButtonProps(
+            5n,
+            WorkoutBuilderSlice(area, stride * 3n, height, 0n, 2n),
+            LocaleText("save_button"),
+            !can_play
+        )
+    });
     if (save) {
         WorkoutBuilderSave();
     }
-    const play = (
-        <Button
-            session={app.ui.session}
-            props={WorkoutBuilderButtonProps(
-                6n,
-                WorkoutBuilderSlice(area, stride * 3n, height, 1n, 2n),
-                LocaleText("workout_custom_play"),
-                !can_play || !ready,
-                true
-            )}
-        />
-    );
+    const play = Button({
+        session: app.ui.session,
+        props: WorkoutBuilderButtonProps(
+            6n,
+            WorkoutBuilderSlice(area, stride * 3n, height, 1n, 2n),
+            LocaleText("workout_custom_play"),
+            !can_play || !ready,
+            true
+        )
+    });
     if (play) {
         return WORKOUT_BUILDER_PLAY;
     }
@@ -1208,7 +1157,7 @@ function WorkoutBuilderEditor(
 }
 
 function WorkoutBuilderPage(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     content: Rectangle,
     bounds: Rectangle,
     ready: boolean
@@ -1235,7 +1184,7 @@ function WorkoutBuilderPage(
 }
 
 export function WorkoutBuilderView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     bounds: Rectangle,
     ready: boolean
 ): s32 {

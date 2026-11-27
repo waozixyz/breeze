@@ -29,22 +29,20 @@ import {
 } from "workout";
 
 export function WorkoutConfigView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     layout: PracticeSubscreenLayout
 ): void {
     let options: [NativeDropdown.Option] = [{}];
-    const bar = (
-        <TitleBar
-            session={app.ui.session}
-            props={{
-                title: LocaleText("practice_configure_button"),
-                height: layout.title_h,
-                has_leading_action: true,
-                leading_label: LocaleText("back_button")
-            }}
-            options={options[0n:0n]}
-        />
-    );
+    const bar = TitleBar({
+        session: app.ui.session,
+        props: {
+            title: LocaleText("practice_configure_button"),
+            height: layout.title_h,
+            has_leading_action: true,
+            leading_label: LocaleText("back_button")
+        },
+        options: nativeSlice(options, 0n, 0n)
+    });
     if (bar.clicked_leading) {
         WorkoutConfigBack(app);
         return;
@@ -71,7 +69,7 @@ export function WorkoutConfigView(
     });
 }
 
-export function WorkoutManagerView(app: *InnerBreeze): void {
+export function WorkoutManagerView(app: NativeRef<InnerBreeze>): void {
     let height = app.ui.view_height - AppScale(32n);
     if (height > AppScale(660n)) {
         height = AppScale(660n);
@@ -102,13 +100,13 @@ export function WorkoutManagerView(app: *InnerBreeze): void {
     }
 }
 
-export function WorkoutCharacterCards(app: *InnerBreeze, area: Rectangle): void {
+export function WorkoutCharacterCards(app: NativeRef<InnerBreeze>, area: Rectangle): void {
     const labelHeight = float32(AppScale(32n));
     const gap = float32(AppScale(6n));
     const column = (area.width - gap) / 2.0;
     const key = Layout.KeyHash("workout/customize/character");
     PracticeFigurePrepare(app.workout_character === 1n);
-    for (let character: s32 = 0n; character <= 1n; character += 1n) {
+    for (let character: s32 = s32(0n); character <= 1n; character += 1n) {
         const label = LocaleText(
             character === 1n ? "workout_character_man" : "workout_character_woman"
         );
@@ -125,19 +123,17 @@ export function WorkoutCharacterCards(app: *InnerBreeze, area: Rectangle): void 
                 border: StyleTokenColor(selected ? "accent" : "surface")
             }}
         />;
-        const clicked = (
-            <Button
-                session={app.ui.session}
-                props={{
-                    key: key + u64(character),
-                    id: 28910n + character,
-                    bounds: bounds,
-                    label: label,
-                    invisible: true,
-                    selected: selected
-                }}
-            />
-        );
+        const clicked = Button({
+            session: app.ui.session,
+            props: {
+                key: key + u64(character),
+                id: 28910n + character,
+                bounds: bounds,
+                label: label,
+                invisible: true,
+                selected: selected
+            }
+        });
         if (clicked && !selected) {
             WorkoutChooseCharacter(app, character);
         }
@@ -169,7 +165,7 @@ export function WorkoutCharacterCards(app: *InnerBreeze, area: Rectangle): void 
                 },
                 text: label,
                 size: AppFontSize(),
-                strong: strong[0n:(selected ? 1n : 0n)],
+                strong: nativeSlice(strong, 0n, selected ? 1n : 0n),
                 align: TextAlign.TextAlignCenter,
                 vertical_align: TextAlign.TextAlignCenter
             }}

@@ -6,10 +6,7 @@ if rg -n '\b(StyledButton|TextButton|RenderTextButton|IconButton|PaddedIconBtn|I
     echo 'Use Kryon Button JSX with native props for authored UI; use standard Checkbox/Toggle for their own controls.' >&2
     exit 1
 fi
-if rg -n --pcre2 '(?<![\w.])(Button|Toggle|Checkbox)\s*\(|(?<![\w.])(Button|Toggle|Checkbox)Props\b' src apps --glob '*.zi' --glob '*.ts' --glob '*.tsx'; then
-    echo 'Use Kryon TSX components with native widget props.' >&2
-    exit 1
-fi
+python3 scripts/check-button-api.py src apps
 if rg -n -U '(?s:\b\w+\s*::[^{}]*\{\s*return\s+Button\.Draw\([^,{}]*,\s*Button\.Props\.\{.*?\}\)\s*\})' src apps --glob '*.zi' --glob '*.ts' --glob '*.tsx'; then
     echo 'Inline thin Button forwarding helpers at their call sites.' >&2
     exit 1

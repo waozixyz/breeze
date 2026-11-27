@@ -28,7 +28,7 @@ import { AppScale } from "metrics";
 import { app_return_bar_height } from "return_bar";
 import { AppNavRoute } from "route_types";
 
-export function app_draw_favorites_dockView(app: *InnerBreeze): void {
+export function app_draw_favorites_dockView(app: NativeRef<InnerBreeze>): void {
     let desktop = app_nav_desktop_rail_enabled(app) !== 0n;
     let dock_width = app_nav_desktop_rail_width(app);
     let props: NativeNavigation.Props = {};
@@ -69,15 +69,15 @@ export function app_draw_favorites_dockView(app: *InnerBreeze): void {
         };
     }
     let routes = BottomNavNewRoutes();
-    let count: s32 = 0n;
+    let count: s32 = s32(0n);
     for (let index = s32(0n); index < app.launcher_favorite_count; index += s32(1)) {
-        let route = app.launcher_favorites[index];
+        let route = nativeAt(app.launcher_favorites, index);
         if (app_nav_route_available(app, route)) {
-            routes[count] = route;
+            nativeSet(routes, count, route);
             count = count + 1n;
         }
     }
-    routes[count] = s32(AppNavRoute.APP_NAV_ROUTE_APPS);
+    nativeSet(routes, count, s32(AppNavRoute.APP_NAV_ROUTE_APPS));
     count = count + 1n;
     if (desktop) {
         PaintRoundedFill(
@@ -91,29 +91,27 @@ export function app_draw_favorites_dockView(app: *InnerBreeze): void {
     }
     let items = BottomNavNewItems();
     for (let index = s32(0n); index < count; index += s32(1)) {
-        let route = routes[index];
-        items[index].key = u64(6600n + route);
-        items[index].route = route;
-        items[index].label = app_nav_route_label(route);
-        items[index].image = bottom_nav_route_image(route);
-        items[index].icon_shape = app_nav_route_shape(route);
-        items[index].active = !app.launcher_open && bottom_nav_route_active(app, route);
-        items[index].disabled =
+        let route = nativeAt(routes, index);
+        nativeAt(items, index).key = u64(6600n + route);
+        nativeAt(items, index).route = route;
+        nativeAt(items, index).label = app_nav_route_label(route);
+        nativeAt(items, index).image = bottom_nav_route_image(route);
+        nativeAt(items, index).icon_shape = app_nav_route_shape(route);
+        nativeAt(items, index).active = !app.launcher_open && bottom_nav_route_active(app, route);
+        nativeAt(items, index).disabled =
             app.modal.active !== 0n || app.blocked_input_frame === app.breathing.frame;
         if (route === s32(AppNavRoute.APP_NAV_ROUTE_APPS)) {
-            items[index].active = app.launcher_open;
-            items[index].image = {};
-            items[index].icon_shape =
+            nativeAt(items, index).active = app.launcher_open;
+            nativeAt(items, index).image = {};
+            nativeAt(items, index).icon_shape =
                 "S1.6rr:M4 4H9V9H4ZM15 4H20V9H15ZM4 15H9V20H4ZM15 15H20V20H15Z";
         }
     }
-    let result = (
-        <NavigationBar
-            session={app.ui.session}
-            props={props}
-            items={items[0n:count]}
-        />
-    );
+    let result = NavigationBar({
+        session: app.ui.session,
+        props: props,
+        items: nativeSlice(items, 0n, count)
+    });
     app.launcher_dock_scroll = result.scroll_offset;
     app.launcher_dock_drop_index = result.drop_index;
     if (result.drag.started) {
@@ -139,7 +137,7 @@ export function app_draw_favorites_dockView(app: *InnerBreeze): void {
     if (!app.launcher_open && app.launcher_drag_released) {
         if (app.launcher_drag_moving && result.drop_index >= 0n) {
             app.launcher_favorite_count = LauncherPlaceFavorite(
-                app.launcher_favorites[:],
+                nativeSlice(app.launcher_favorites),
                 app.launcher_favorite_count,
                 app.launcher_drag_route,
                 result.drop_index

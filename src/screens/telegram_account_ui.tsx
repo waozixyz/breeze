@@ -33,8 +33,8 @@ import { AppCopyText, AppReplaceText, AppTextFromCString, FrameTextHold } from "
 import { SampleTextFieldInput } from "text_input_host";
 
 export function DrawTelegramAccount(
-    app: *InnerBreeze,
-    view: *TelegramAccountView
+    app: NativeRef<InnerBreeze>,
+    view: NativeRef<TelegramAccountView>
 ): s32 {
     if (
         !NativePresent(app) ||
@@ -45,13 +45,13 @@ export function DrawTelegramAccount(
         return 0n;
     }
     if (
-        TextUntilNul(view.seen_review_id[:]) !== view.review_id ||
-        TextUntilNul(view.seen_review_details[:]) !== view.details
+        TextUntilNul(nativeSlice(view.seen_review_id)) !== view.review_id ||
+        TextUntilNul(nativeSlice(view.seen_review_details)) !== view.details
     ) {
         view.review_seen = false;
         view.scroll_offset = 0n;
-        AppCopyText(view.review_id, view.seen_review_id[:]);
-        AppCopyText(view.details, view.seen_review_details[:]);
+        AppCopyText(view.review_id, nativeSlice(view.seen_review_id));
+        AppCopyText(view.details, nativeSlice(view.seen_review_details));
     }
     let width = app.ui.view_width - AppScale(24n);
     if (width > AppScale(520n)) {
@@ -123,39 +123,33 @@ export function DrawTelegramAccount(
     let review_display = TelegramAccountNewReviewDisplay();
     let review = "";
     let paragraphs: [string, string, string] = [message, status, ""];
-    if (paragraphs[1n].count > 1024n) {
-        paragraphs[1n] = "";
+    if (nativeAt(paragraphs, 1n).count > 1024n) {
+        nativeSet(paragraphs, 1n, "");
     }
     let paragraph_heights = TelegramAccountNewParagraphHeights();
-    let password_label_height: s32 = 0n;
-    let content_height: s32 = 0n;
+    let password_label_height: s32 = s32(0n);
+    let content_height: s32 = s32(0n);
     for (let pass = s32(0); pass <= 1n; pass += s32(1)) {
         content_height = AppScale(16n);
         review = "";
-        if (
-            TelegramAccountReviewText(
-                view.details,
-                content_width,
-                review_display[:]
-            )
-        ) {
-            review = TextUntilNul(review_display[:]);
+        if (TelegramAccountReviewText(view.details, content_width, nativeSlice(review_display))) {
+            review = TextUntilNul(nativeSlice(review_display));
         }
-        paragraphs[2n] = review;
+        nativeSet(paragraphs, 2n, review);
         for (let index = s32(0); index <= 2n; index += s32(1)) {
-            paragraph_heights[index] = 0n;
-            if (paragraphs[index].count > 0n) {
+            nativeSet(paragraph_heights, index, 0n);
+            if (nativeAt(paragraphs, index).count > 0n) {
                 let prepared = NativeText.PrepareText(
                     {
-                        text: paragraphs[index],
+                        text: nativeAt(paragraphs, index),
                         size: AppFontSize(),
                         bounds: { x: 0.0, y: 0.0, width: float32(content_width), height: 0.0 },
                         wrap: Wrap.TextWrapAuto
                     },
                     NativeText.DefaultTextFace()
                 );
-                paragraph_heights[index] = s32(prepared.bounds.height) + AppScale(16n);
-                content_height = content_height + paragraph_heights[index];
+                nativeSet(paragraph_heights, index, s32(prepared.bounds.height) + AppScale(16n));
+                content_height = content_height + nativeAt(paragraph_heights, index);
             }
         }
         if (NativePresent(view.password)) {
@@ -196,14 +190,14 @@ export function DrawTelegramAccount(
         metrics: scroll_metrics
     });
     view.scroll_offset = scroll.scroll_offset;
-    let result: s32 = 0n;
+    let result: s32 = s32(0n);
     if (scroll.opened) {
         let x = s32(scroll.content.x);
         let y = s32(scroll.content.y) + AppScale(8n);
         let review_retained = false;
         for (let index = s32(0); index <= 2n; index += s32(1)) {
-            if (paragraphs[index].count > 0n) {
-                let held = FrameTextHold(&app.ui.frame_text, paragraphs[index]);
+            if (nativeAt(paragraphs, index).count > 0n) {
+                let held = FrameTextHold(nativeRef(app.ui.frame_text), nativeAt(paragraphs, index));
                 <Text
                     session={app.ui.session}
                     props={{
@@ -213,12 +207,12 @@ export function DrawTelegramAccount(
                             x: float32(x),
                             y: float32(y),
                             width: float32(content_width),
-                            height: float32(paragraph_heights[index])
+                            height: float32(nativeAt(paragraph_heights, index))
                         },
                         wrap: Wrap.TextWrapAuto
                     }}
                 />;
-                y = y + paragraph_heights[index];
+                y = y + nativeAt(paragraph_heights, index);
                 if (index === 2n) {
                     review_retained = held.count === review.count && held.count > 0n;
                     if (
@@ -232,7 +226,7 @@ export function DrawTelegramAccount(
         }
         let password_valid = false;
         if (NativePresent(view.password)) {
-            let held_label = FrameTextHold(&app.ui.frame_text, password_label);
+            let held_label = FrameTextHold(nativeRef(app.ui.frame_text), password_label);
             <Text
                 session={app.ui.session}
                 props={{
@@ -253,53 +247,51 @@ export function DrawTelegramAccount(
             password_valid =
                 held_label.count === password_label.count &&
                 held_label.count > 0n &&
-                TelegramAccountPasswordMask(password, mask[:]);
+                TelegramAccountPasswordMask(password, nativeSlice(mask));
             if (password_valid) {
                 let typed = TelegramAccountNewTyped();
                 let input = SampleTextFieldInput(
                     password.focused && !view.busy,
-                    typed[:]
+                    nativeSlice(typed)
                 );
                 input.copy = false;
                 input.cut = false;
-                let field = (
-                    <ControlledTextField
-                        session={app.ui.session}
-                        props={{
-                            key: u64(76602n),
-                            bounds: {
-                                x: float32(x),
-                                y: float32(y),
-                                width: float32(content_width),
-                                height: float32(AppScale(48n))
-                            },
-                            value: AppTextFromCString(&password.value[0n], 257n),
-                            display_value: FrameTextHold(
-                                &app.ui.frame_text,
-                                TextUntilNul(mask[:])
-                            ),
-                            label: held_label,
-                            cursor: password.cursor,
-                            anchor: password.anchor,
-                            scroll_x: password.scroll_x,
-                            focused: password.focused,
-                            composition: password.composition,
-                            focus_id: 76602n,
-                            max_bytes: 256n,
-                            max_codepoints: 256n,
-                            secure: true,
-                            disabled:
-                                view.busy ||
-                                held_label.count !== password_label.count ||
-                                held_label.count === 0n,
-                            input: input,
-                            scale: MetricsScale()
-                        }}
-                    />
-                );
+                let field = ControlledTextField({
+                    session: app.ui.session,
+                    props: {
+                        key: u64(76602n),
+                        bounds: {
+                            x: float32(x),
+                            y: float32(y),
+                            width: float32(content_width),
+                            height: float32(AppScale(48n))
+                        },
+                        value: AppTextFromCString(nativeRef(nativeAt(password.value, 0n)), 257n),
+                        display_value: FrameTextHold(
+                            nativeRef(app.ui.frame_text),
+                            TextUntilNul(nativeSlice(mask))
+                        ),
+                        label: held_label,
+                        cursor: password.cursor,
+                        anchor: password.anchor,
+                        scroll_x: password.scroll_x,
+                        focused: password.focused,
+                        composition: password.composition,
+                        focus_id: 76602n,
+                        max_bytes: 256n,
+                        max_codepoints: 256n,
+                        secure: true,
+                        disabled:
+                            view.busy ||
+                            held_label.count !== password_label.count ||
+                            held_label.count === 0n,
+                        input: input,
+                        scale: MetricsScale()
+                    }
+                });
                 if (field.edit.changed) {
                     AppReplaceText(
-                        password.value[:],
+                        nativeSlice(password.value),
                         field.edit.start,
                         field.edit.end,
                         field.edit.replacement
@@ -310,7 +302,7 @@ export function DrawTelegramAccount(
                 password.scroll_x = field.scroll_x;
                 password.focused = field.focused;
                 password.composition = field.composition;
-                SecureWipe(typed[:]);
+                SecureWipe(nativeSlice(typed));
                 if (field.escaped && cancel_allowed) {
                     TelegramAccountClearPassword(password);
                     result = 4n;
@@ -330,40 +322,41 @@ export function DrawTelegramAccount(
                 NativePresent(view.password) &&
                 (action === 5n || action === 7n) &&
                 (!password_valid ||
-                    view.password.value[0n] === u8(0n) ||
+                    nativeAt(view.password.value, 0n) === u8(0n) ||
                     password_label.count === 0n)
             ) {
                 disabled = true;
             }
             let label = TelegramAccountActionLabel(action);
-            if (view.action_labels[action].count > 0n) {
-                label = FrameTextHold(&app.ui.frame_text, view.action_labels[action]);
+            if (nativeAt(view.action_labels, action).count > 0n) {
+                label = FrameTextHold(
+                    nativeRef(app.ui.frame_text),
+                    nativeAt(view.action_labels, action)
+                );
                 if (label.count === 0n) {
                     disabled = true;
                 }
             }
             if (
-                (
-                    <Button
-                        session={app.ui.session}
-                        props={{
-                            id: 76610n + action,
-                            bounds: {
-                                x: float32(x),
-                                y: float32(y),
-                                width: float32(content_width),
-                                height: float32(AppScale(48n))
-                            },
-                            label: label,
-                            disabled: disabled,
-                            loading: view.busy && action !== 4n,
-                            emphasis:
-                                action === 4n
-                                    ? ButtonEmphasis.ButtonEmphasisGhost
-                                    : ButtonEmphasis.ButtonEmphasisFilled
-                        }}
-                    />
-                ) &&
+                Button({
+                    session: app.ui.session,
+                    props: {
+                        id: 76610n + action,
+                        bounds: {
+                            x: float32(x),
+                            y: float32(y),
+                            width: float32(content_width),
+                            height: float32(AppScale(48n))
+                        },
+                        label: label,
+                        disabled: disabled,
+                        loading: view.busy && action !== 4n,
+                        emphasis:
+                            action === 4n
+                                ? ButtonEmphasis.ButtonEmphasisGhost
+                                : ButtonEmphasis.ButtonEmphasisFilled
+                    }
+                }) &&
                 result === 0n &&
                 !disabled
             ) {

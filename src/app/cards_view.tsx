@@ -31,7 +31,7 @@ export function SectionTitle(session: Session, title: string, x: s32, y: s32, wi
             },
             text: title,
             size: SectionTitleFont(),
-            strong: strong[:],
+            strong: nativeSlice(strong),
             semantic_kind: SemanticKind.SemanticHeading,
             heading_level: s32(2),
             wrap: NativeText.Wrap.TextWrapAuto
@@ -97,7 +97,7 @@ export function FigureCard(
             },
             text: value,
             size: valueFont,
-            strong: strong[:],
+            strong: nativeSlice(strong),
             wrap: NativeText.Wrap.TextWrapNone
         }}
     />;

@@ -72,25 +72,23 @@ export function Controls(): s32 {
     ];
     for (let index = s32(0n); index <= 2n; index += s32(1)) {
         if (
-            (
-                <Button
-                    session={State_movement_view.movement.session}
-                    props={{
-                        id: 83000n + index,
-                        bounds: NativeToolbar.BottomIconRowButtonBoundsFor(layout, index),
-                        label: labels[index],
-                        icon_only: true,
-                        image: {
-                            asset_path: "icons/ui.webp",
-                            source: sources[index],
-                            alt_text: labels[index]
-                        },
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                        disabled: index === 0n && !State_movement_view.movement.can_back
-                    }}
-                />
-            )
+            Button({
+                session: State_movement_view.movement.session,
+                props: {
+                    id: 83000n + index,
+                    bounds: NativeToolbar.BottomIconRowButtonBoundsFor(layout, index),
+                    label: nativeAt(labels, index),
+                    icon_only: true,
+                    image: {
+                        asset_path: "icons/ui.webp",
+                        source: nativeAt(sources, index),
+                        alt_text: nativeAt(labels, index)
+                    },
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                    disabled: index === 0n && !State_movement_view.movement.can_back
+                }
+            })
         ) {
             State_movement_view.movement.action = index + 1n;
         }
@@ -177,7 +175,7 @@ export function SunSalutation(): void {
             size: Scale(22n),
             align: TextAlign.TextAlignCenter,
             vertical_align: TextAlign.TextAlignCenter,
-            strong: emphasis[:1n],
+            strong: nativeSlice(emphasis, 0n, 1n),
             wrap: Wrap.TextWrapEllipsis
         }}
     />;
@@ -264,24 +262,22 @@ export function TaiChi(): void {
     if (width > Scale(420n)) {
         width = Scale(420n);
     }
-    let seek = (
-        <DiscreteSlider
-            session={State_movement_view.movement.session}
-            props={{
-                key: NativeLayout.KeyHash("inbe/practices/tai_chi/progress"),
-                bounds: Bounds(
-                    (State_movement_view.movement.view_width - width) / 2n,
-                    progress_y,
-                    width,
-                    Scale(44n)
-                ),
-                semantic_label: Locale("practice_playback_position"),
-                min: 0n,
-                max: State_movement_view.movement.length_ms / 1000n,
-                value: State_movement_view.movement.elapsed_ms / 1000n
-            }}
-        />
-    );
+    let seek = DiscreteSlider({
+        session: State_movement_view.movement.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/practices/tai_chi/progress"),
+            bounds: Bounds(
+                (State_movement_view.movement.view_width - width) / 2n,
+                progress_y,
+                width,
+                Scale(44n)
+            ),
+            semantic_label: Locale("practice_playback_position"),
+            min: 0n,
+            max: State_movement_view.movement.length_ms / 1000n,
+            value: State_movement_view.movement.elapsed_ms / 1000n
+        }
+    });
     if (seek.changed) {
         State_movement_view.movement.action = PRACTICE_MOVEMENT_SEEK;
         State_movement_view.movement.value = seek.value;
@@ -302,24 +298,22 @@ export function TaiChi(): void {
         { label: Locale("tai_chi_view_side") },
         { label: Locale("tai_chi_view_angled") }
     ];
-    let choice = (
-        <SegmentedControl
-            session={State_movement_view.movement.session}
-            props={{
-                key: NativeLayout.KeyHash("inbe/practices/tai_chi/angle"),
-                bounds: Bounds(
-                    (State_movement_view.movement.view_width - width) / 2n,
-                    angle_y,
-                    width,
-                    Scale(40n)
-                ),
-                height: Scale(40n),
-                selected_index: State_movement_view.movement.view,
-                has_selection: true
-            }}
-            options={options[:]}
-        />
-    );
+    let choice = SegmentedControl({
+        session: State_movement_view.movement.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/practices/tai_chi/angle"),
+            bounds: Bounds(
+                (State_movement_view.movement.view_width - width) / 2n,
+                angle_y,
+                width,
+                Scale(40n)
+            ),
+            height: Scale(40n),
+            selected_index: State_movement_view.movement.view,
+            has_selection: true
+        },
+        options: nativeSlice(options)
+    });
     if (choice.changed) {
         State_movement_view.movement.action = PRACTICE_MOVEMENT_VIEWPOINT;
         State_movement_view.movement.value = choice.selected_index;
@@ -338,26 +332,22 @@ export function TaiChi(): void {
 
 export function Pause(x: s32, y: s32, width: s32): void {
     if (
-        (
-            <Button
-                session={State_movement_view.movement.session}
-                props={{
-                    key: NativeLayout.KeyHash(
-                        State_movement_view.movement.practice === s32(ExerciseType.EXERCISE_WORKOUT)
-                            ? "workout/pause"
-                            : "astral/pause"
-                    ),
-                    label: Locale(
-                        State_movement_view.movement.paused
-                            ? "patterns_resume_button"
-                            : "pause_button"
-                    ),
-                    bounds: Bounds(x, y, width, Scale(48n)),
-                    tone: ButtonTone.ButtonToneAccent,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }}
-            />
-        )
+        Button({
+            session: State_movement_view.movement.session,
+            props: {
+                key: NativeLayout.KeyHash(
+                    State_movement_view.movement.practice === s32(ExerciseType.EXERCISE_WORKOUT)
+                        ? "workout/pause"
+                        : "astral/pause"
+                ),
+                label: Locale(
+                    State_movement_view.movement.paused ? "patterns_resume_button" : "pause_button"
+                ),
+                bounds: Bounds(x, y, width, Scale(48n)),
+                tone: ButtonTone.ButtonToneAccent,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        })
     ) {
         State_movement_view.movement.action = PRACTICE_MOVEMENT_PAUSE;
     }
@@ -377,19 +367,17 @@ export function Astral(): void {
     />;
     let y = State_movement_view.movement.top + Scale(64n);
     if (State_movement_view.movement.length_ms > 0n) {
-        let seek = (
-            <DiscreteSlider
-                session={State_movement_view.movement.session}
-                props={{
-                    key: NativeLayout.KeyHash("astral/progress"),
-                    bounds: Bounds(pad, y, width, Scale(44n)),
-                    semantic_label: Locale("practice_playback_position"),
-                    min: 0n,
-                    max: State_movement_view.movement.length_ms / 1000n,
-                    value: State_movement_view.movement.elapsed_ms / 1000n
-                }}
-            />
-        );
+        let seek = DiscreteSlider({
+            session: State_movement_view.movement.session,
+            props: {
+                key: NativeLayout.KeyHash("astral/progress"),
+                bounds: Bounds(pad, y, width, Scale(44n)),
+                semantic_label: Locale("practice_playback_position"),
+                min: 0n,
+                max: State_movement_view.movement.length_ms / 1000n,
+                value: State_movement_view.movement.elapsed_ms / 1000n
+            }
+        });
         if (seek.changed) {
             State_movement_view.movement.action = PRACTICE_MOVEMENT_SEEK;
             State_movement_view.movement.value = seek.value;
@@ -473,33 +461,29 @@ export function WorkoutProgress(x: s32, y: s32, width: s32): s32 {
         let left = x + (width * col) / columns;
         let cell = x + (width * (col + 1n)) / columns - left;
         let exercise = custom
-            ? s32(State_movement_view.movement.time[index]) - 65n
+            ? s32(nativeAt(State_movement_view.movement.time, index)) - 65n
             : WorkoutRoutineExercise(State_movement_view.movement.view, index);
         let label_key = NewLabelKey();
-        let name = Locale(
-            WorkoutKeyFor("workout_name_", exercise, label_key[:])
-        );
+        let name = Locale(WorkoutKeyFor("workout_name_", exercise, nativeSlice(label_key)));
         let current = custom
             ? index === State_movement_view.movement.scroll
             : exercise === State_movement_view.movement.exercise;
         if (
-            (
-                <Button
-                    session={State_movement_view.movement.session}
-                    props={{
-                        key: NativeLayout.KeyHash("workout/progress") + u64(index),
-                        bounds: Bounds(left, top, cell, target),
-                        label: name,
-                        icon_only: true,
-                        selected: current,
-                        disabled:
-                            State_movement_view.movement.phase === WORKOUT_PHASE_LOADING ||
-                            State_movement_view.movement.phase === WORKOUT_PHASE_PREPARE,
-                        tone: ButtonTone.ButtonToneAccent,
-                        emphasis: ButtonEmphasis.ButtonEmphasisGhost
-                    }}
-                />
-            )
+            Button({
+                session: State_movement_view.movement.session,
+                props: {
+                    key: NativeLayout.KeyHash("workout/progress") + u64(index),
+                    bounds: Bounds(left, top, cell, target),
+                    label: name,
+                    icon_only: true,
+                    selected: current,
+                    disabled:
+                        State_movement_view.movement.phase === WORKOUT_PHASE_LOADING ||
+                        State_movement_view.movement.phase === WORKOUT_PHASE_PREPARE,
+                    tone: ButtonTone.ButtonToneAccent,
+                    emphasis: ButtonEmphasis.ButtonEmphasisGhost
+                }
+            })
         ) {
             State_movement_view.movement.action = PRACTICE_MOVEMENT_SEEK;
             State_movement_view.movement.value = index;
@@ -567,7 +551,7 @@ export function WorkoutCountdownNumber(center: Vector2, radius: float32, count: 
             align: TextAlign.TextAlignCenter,
             vertical_align: TextAlign.TextAlignCenter,
             wrap: Wrap.TextWrapNone,
-            strong: emphasis[:1n]
+            strong: nativeSlice(emphasis, 0n, 1n)
         }}
     />;
 }
@@ -716,7 +700,7 @@ export function Workout(): void {
             size: Scale(26n),
             align: TextAlign.TextAlignCenter,
             vertical_align: TextAlign.TextAlignEnd,
-            strong: emphasis[:1n]
+            strong: nativeSlice(emphasis, 0n, 1n)
         }}
     />;
     <Text

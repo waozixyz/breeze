@@ -42,20 +42,20 @@ import {
 import { AppTextFromCString } from "text_buffers";
 
 export function meditation_music_draw_download_progressView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     x: s32,
     y: s32,
     w: s32
 ): void {
-    let download: *FileDownload = &app.meditation.music_download;
+    let download: NativeRef<FileDownload> = nativeRef(app.meditation.music_download);
     let bar_h = AppScale(10n);
-    let fill_w: s32 = 0n;
+    let fill_w: s32 = s32(0n);
     let bg = StyleTokenColor("canvas");
     let button = StyleTokenColor("accent");
     if (!NativePresent(app) || w <= 0n) {
         return;
     }
-    download = &app.meditation.music_download;
+    download = nativeRef(app.meditation.music_download);
     if (download.status !== FileDownloadStatus.Downloading) {
         return;
     }
@@ -118,7 +118,7 @@ export function meditation_music_draw_download_progressView(
     }
 }
 
-export function draw_attributionView(content_x: s32, content_w: s32, y: *s32): void {
+export function draw_attributionView(content_x: s32, content_w: s32, y: NativeRef<s32>): void {
     if (!NativePresent(y) || content_w <= 0n) {
         return;
     }
@@ -134,7 +134,7 @@ export function draw_attributionView(content_x: s32, content_w: s32, y: *s32): v
         props={{
             bounds: {
                 x: float32(content_x),
-                y: float32((*y)),
+                y: float32(nativeDeref(y)),
                 width: float32(content_w),
                 height: float32(height)
             },
@@ -143,15 +143,15 @@ export function draw_attributionView(content_x: s32, content_w: s32, y: *s32): v
             wrap: Wrap.TextWrapAuto
         }}
     />;
-    (*y) = (*y) + height;
+    nativeDeref(y) = nativeDeref(y) + height;
 }
 
 export function meditation_music_draw_practice_settingsView(
-    app: *InnerBreeze,
+    app: NativeRef<InnerBreeze>,
     practice: s32,
     content_x: s32,
     content_w: s32,
-    y: *s32,
+    y: NativeRef<s32>,
     show_installed_download: s32,
     show_status: s32
 ): void {
@@ -169,10 +169,10 @@ export function meditation_music_draw_practice_settingsView(
     }
     sanitize_practice_music(app);
     practice = practice_clamp_id(practice);
-    selected_track = app.meditation.music_practice_tracks[practice];
+    selected_track = nativeAt(app.meditation.music_practice_tracks, practice);
     if (selected_track < 0n) {
         selected_track = AUDIO_MUSIC_NONE;
-        app.meditation.music_practice_tracks[practice] = AUDIO_MUSIC_NONE;
+        nativeSet(app.meditation.music_practice_tracks, practice, AUDIO_MUSIC_NONE);
         app.meditation.music_practice_mask = FlagIntersection(
             app.meditation.music_practice_mask,
             FlagComplement(FlagShiftLeft(s32(1n), practice))
@@ -188,7 +188,7 @@ export function meditation_music_draw_practice_settingsView(
         props={{
             bounds: {
                 x: float32(content_x),
-                y: float32((*y)),
+                y: float32(nativeDeref(y)),
                 width: 0n,
                 height: 0n
             },
@@ -204,11 +204,11 @@ export function meditation_music_draw_practice_settingsView(
     if (track_count > AUDIO_MUSIC_COUNT_MAX) {
         track_count = AUDIO_MUSIC_COUNT_MAX;
     }
-    track_options[0n] = { label: LocaleText("audio_music_none_option") };
+    nativeSet(track_options, 0n, { label: LocaleText("audio_music_none_option") });
     {
-        let i: s32 = 0n;
+        let i: s32 = s32(0n);
         while (i < track_count) {
-            track_options[i + 1n] = { label: app_audio_music_label(app, i) };
+            nativeSet(track_options, i + 1n, { label: app_audio_music_label(app, i) });
             i = i + 1n;
         }
     }
@@ -216,44 +216,42 @@ export function meditation_music_draw_practice_settingsView(
     if (selection < 0n || selection > track_count) {
         selection = 0n;
     }
-    let dropdown_pick = (
-        <Dropdown
-            session={CurrentApp().ui.session}
-            props={{
-                id: s32(451n) + practice,
-                bounds: {
-                    x: float32(content_x),
-                    y: float32((*y) + AppScale(26n)),
-                    width: float32(content_w),
-                    height: float32(AppScale(48n))
-                },
-                selected_index: selection
-            }}
-            options={track_options[:track_count + 1n]}
-        />
-    );
+    let dropdown_pick = Dropdown({
+        session: CurrentApp().ui.session,
+        props: {
+            id: s32(451n) + practice,
+            bounds: {
+                x: float32(content_x),
+                y: float32(nativeDeref(y) + AppScale(26n)),
+                width: float32(content_w),
+                height: float32(AppScale(48n))
+            },
+            selected_index: selection
+        },
+        options: nativeSlice(track_options, 0n, track_count + 1n)
+    });
     if (dropdown_pick.changed) {
         selection = dropdown_pick.selected_index;
         if (selection <= 0n) {
-            app.meditation.music_practice_tracks[practice] = AUDIO_MUSIC_NONE;
+            nativeSet(app.meditation.music_practice_tracks, practice, AUDIO_MUSIC_NONE);
             app.meditation.music_practice_mask = FlagIntersection(
                 app.meditation.music_practice_mask,
                 FlagComplement(FlagShiftLeft(s32(1n), practice))
             );
         } else {
-            app.meditation.music_practice_tracks[practice] = selection - 1n;
+            nativeSet(app.meditation.music_practice_tracks, practice, selection - 1n);
             app.meditation.music_practice_mask = FlagUnion(
                 app.meditation.music_practice_mask,
                 FlagShiftLeft(s32(1n), practice)
             );
-            app.meditation.music_track = app.meditation.music_practice_tracks[practice];
+            app.meditation.music_track = nativeAt(app.meditation.music_practice_tracks, practice);
         }
         app.settings_dirty = 1n;
         meditation_music_unload(app);
         save_settings(app);
     }
-    (*y) = (*y) + AppScale(90n);
-    selected_track = app.meditation.music_practice_tracks[practice];
+    nativeDeref(y) = nativeDeref(y) + AppScale(90n);
+    selected_track = nativeAt(app.meditation.music_practice_tracks, practice);
     if (selected_track === AUDIO_MUSIC_NONE) {
         return;
     }
@@ -270,28 +268,26 @@ export function meditation_music_draw_practice_settingsView(
             button_w = content_w;
         }
         if (
-            (
-                <Button
-                    session={CurrentApp().ui.session}
-                    props={{
-                        bounds: {
-                            x: float32(content_x),
-                            y: float32((*y)),
-                            width: float32(button_w),
-                            height: float32(button_h)
-                        },
-                        label: test_label,
-                        tone: ButtonTone.ButtonToneNeutral,
-                        emphasis: ButtonEmphasis.ButtonEmphasisSoft,
-                        disabled: false
-                    }}
-                />
-            )
+            Button({
+                session: CurrentApp().ui.session,
+                props: {
+                    bounds: {
+                        x: float32(content_x),
+                        y: float32(nativeDeref(y)),
+                        width: float32(button_w),
+                        height: float32(button_h)
+                    },
+                    label: test_label,
+                    tone: ButtonTone.ButtonToneNeutral,
+                    emphasis: ButtonEmphasis.ButtonEmphasisSoft,
+                    disabled: false
+                }
+            })
         ) {
-            app.meditation.music_track = app.meditation.music_practice_tracks[practice];
+            app.meditation.music_track = nativeAt(app.meditation.music_practice_tracks, practice);
             test_track(app);
         }
-        (*y) = (*y) + (button_h + AppScale(12n));
+        nativeDeref(y) = nativeDeref(y) + (button_h + AppScale(12n));
     }
     if (built_in && (installed === 0n || show_installed_download !== 0n)) {
         let download_label: string = "";
@@ -305,27 +301,25 @@ export function meditation_music_draw_practice_settingsView(
             button_w = content_w;
         }
         if (
-            (
-                <Button
-                    session={CurrentApp().ui.session}
-                    props={{
-                        bounds: {
-                            x: float32(content_x),
-                            y: float32((*y)),
-                            width: float32(button_w),
-                            height: float32(button_h)
-                        },
-                        label: download_label,
-                        tone: ButtonTone.ButtonToneAccent,
-                        emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                        disabled: false
-                    }}
-                />
-            )
+            Button({
+                session: CurrentApp().ui.session,
+                props: {
+                    bounds: {
+                        x: float32(content_x),
+                        y: float32(nativeDeref(y)),
+                        width: float32(button_w),
+                        height: float32(button_h)
+                    },
+                    label: download_label,
+                    tone: ButtonTone.ButtonToneAccent,
+                    emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                    disabled: false
+                }
+            })
         ) {
             meditation_music_start_download(app);
         }
-        (*y) = (*y) + (button_h + AppScale(12n));
+        nativeDeref(y) = nativeDeref(y) + (button_h + AppScale(12n));
     }
     if (
         show_status !== 0n &&
@@ -333,54 +327,49 @@ export function meditation_music_draw_practice_settingsView(
     ) {
         if (app.meditation.music_download.status === FileDownloadStatus.Downloading) {
             meditation_music_format_download_status(
-                &download_status[0n],
+                nativeRef(nativeAt(download_status, 0n)),
                 s32(download_status.count),
-                &app.meditation.music_download
+                nativeRef(app.meditation.music_download)
             );
             <Text
                 session={CurrentApp().ui.session}
                 props={{
                     bounds: {
                         x: float32(content_x),
-                        y: float32((*y)),
+                        y: float32(nativeDeref(y)),
                         width: 0n,
                         height: 0n
                     },
                     text: AppTextFromCString(
-                        &download_status[0n],
+                        nativeRef(nativeAt(download_status, 0n)),
                         s32(download_status.count)
                     ),
                     wrap: Wrap.TextWrapNone
                 }}
             />;
-            (*y) = (*y) + AppScale(28n);
-            meditation_music_draw_download_progressView(
-                app,
-                content_x,
-                (*y),
-                content_w
-            );
-            (*y) = (*y) + AppScale(22n);
+            nativeDeref(y) = nativeDeref(y) + AppScale(28n);
+            meditation_music_draw_download_progressView(app, content_x, nativeDeref(y), content_w);
+            nativeDeref(y) = nativeDeref(y) + AppScale(22n);
         } else {
             <Text
                 session={CurrentApp().ui.session}
                 props={{
                     bounds: {
                         x: float32(content_x),
-                        y: float32((*y)),
+                        y: float32(nativeDeref(y)),
                         width: 0n,
                         height: 0n
                     },
                     text: AppTextFromCString(
-                        &app.meditation.music_status[0n],
+                        nativeRef(nativeAt(app.meditation.music_status, 0n)),
                         s32(app.meditation.music_status.count)
                     ),
                     wrap: Wrap.TextWrapNone
                 }}
             />;
-            (*y) = (*y) + AppScale(34n);
+            nativeDeref(y) = nativeDeref(y) + AppScale(34n);
         }
     }
     draw_attributionView(content_x, content_w, y);
-    (*y) = (*y) + AppScale(10n);
+    nativeDeref(y) = nativeDeref(y) + AppScale(10n);
 }

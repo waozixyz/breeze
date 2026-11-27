@@ -30,7 +30,7 @@ export function TaiChiPaintFlatCachedView(
     if (digest === 0n || found < 0n) {
         return false;
     }
-    let slot = &State_tai_chi_draw.tai_chi_flat_cache[found];
+    let slot = nativeRef(nativeAt(State_tai_chi_draw.tai_chi_flat_cache, found));
     if (!slot.stored || slot.digest !== digest) {
         return false;
     }
@@ -38,10 +38,10 @@ export function TaiChiPaintFlatCachedView(
     slot.used = State_tai_chi_draw.tai_chi_flat_cache_clock;
     let screen = TaiChiDrawNewScreen();
     for (let at = s32(0n); at < slot.op_count; at += s32(1)) {
-        let op = slot.ops[at];
+        let op = nativeAt(slot.ops, at);
         for (let point = s32(0n); point < op.count; point += s32(1)) {
-            let kept = slot.points[op.first + point];
-            screen[point] = { x: area.x + kept.x, y: area.y + kept.y };
+            let kept = nativeAt(slot.points, op.first + point);
+            nativeSet(screen, point, { x: area.x + kept.x, y: area.y + kept.y });
         }
         let picture: NativeImage.Props = {};
         picture.key = key + u64(op.index);
@@ -52,7 +52,7 @@ export function TaiChiPaintFlatCachedView(
         picture.tint = op.tint;
         picture.mesh.columns = op.columns;
         picture.mesh.rows = op.count / op.columns;
-        picture.mesh.points = screen[:op.count];
+        picture.mesh.points = nativeSlice(screen, 0n, op.count);
         <Image session={session} props={picture} />;
     }
     return true;
@@ -60,7 +60,7 @@ export function TaiChiPaintFlatCachedView(
 
 export function TaiChiPaintFlatEdgeView(
     session: Session,
-    frame: *TaiChiFlatFrame,
+    frame: NativeRef<TaiChiFlatFrame>,
     framing: TaiChiFraming,
     mirrored: boolean,
     area: Rectangle,
@@ -80,29 +80,27 @@ export function TaiChiPaintFlatEdgeView(
     }
     let screen = TaiChiDrawNewScreen();
     for (let index = s32(0n); index < frame.op_count; index += s32(1)) {
-        let op = frame.ops[index];
-        let points = frame.points[op.first:op.first + op.count];
-        let count: s32 = 0n;
-        let columns: s32 = 0n;
+        let op = nativeAt(frame.ops, index);
+        let points = nativeSlice(frame.points, op.first, op.first + op.count);
+        let count: s32 = s32(0n);
+        let columns: s32 = s32(0n);
         if (op.kind === TAI_CHI_FLAT_FILL) {
-            count = TaiChiFlatFanMesh(
-                points,
-                TAI_CHI_FLAT_FEATHER / pixels,
-                screen[:]
-            );
+            count = TaiChiFlatFanMesh(points, TAI_CHI_FLAT_FEATHER / pixels, nativeSlice(screen));
             columns = 4n;
         } else {
             let width = TaiChiMax(op.width, TAI_CHI_FLAT_THINNEST / pixels);
-            count = TaiChiFlatStripMesh(points, width * 0.75, screen[:]);
+            count = TaiChiFlatStripMesh(points, width * 0.75, nativeSlice(screen));
             columns = 2n;
         }
         if (count === 0n) {
             continue;
         }
         for (let point = s32(0n); point < count; point += s32(1)) {
-            screen[point].x = float32(middle_x + float64(screen[point].x) * pixels * mirror);
-            screen[point].y = float32(
-                middle_y - (float64(screen[point].y) - framing.view_center) * pixels
+            nativeAt(screen, point).x = float32(
+                middle_x + float64(nativeAt(screen, point).x) * pixels * mirror
+            );
+            nativeAt(screen, point).y = float32(
+                middle_y - (float64(nativeAt(screen, point).y) - framing.view_center) * pixels
             );
         }
         let alpha = u32(TaiChiClamp(op.alpha, 0.0, 1.0) * 255.0 + 0.5);
@@ -120,13 +118,13 @@ export function TaiChiPaintFlatEdgeView(
         picture.tint = tint;
         picture.mesh.columns = columns;
         picture.mesh.rows = count / columns;
-        picture.mesh.points = screen[:count];
+        picture.mesh.points = nativeSlice(screen, 0n, count);
         <Image session={session} props={picture} />;
         if (kept) {
             kept = TaiChiFlatCacheKeep(
-                &State_tai_chi_draw.tai_chi_flat_cache[keeping],
+                nativeRef(nativeAt(State_tai_chi_draw.tai_chi_flat_cache, keeping)),
                 index,
-                screen[:count],
+                nativeSlice(screen, 0n, count),
                 columns,
                 tint,
                 labelled,
@@ -135,6 +133,6 @@ export function TaiChiPaintFlatEdgeView(
         }
     }
     if (keeping >= 0n) {
-        State_tai_chi_draw.tai_chi_flat_cache[keeping].stored = kept;
+        nativeAt(State_tai_chi_draw.tai_chi_flat_cache, keeping).stored = kept;
     }
 }
