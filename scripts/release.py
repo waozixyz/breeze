@@ -31,7 +31,6 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -167,21 +166,54 @@ def require_unpushed(commit):
 
 
 def without_release_notes(commit, notes):
-    """Leave note edits for the final release commit, using a private index."""
-    with tempfile.TemporaryDirectory(prefix="inbe-release-notes-") as temporary:
-        environment = dict(os.environ, GIT_INDEX_FILE=str(Path(temporary) / "index"))
-        git("read-tree", commit, env=environment)
-        for path in notes:
-            entry = git("ls-tree", commit + "^", "--", path).strip()
-            if entry:
-                mode, _, blob = entry.split("\t", 1)[0].split()
-                git("update-index", "--add", "--cacheinfo", mode, blob, path, env=environment)
-            else:
-                git("update-index", "--force-remove", "--", path, env=environment)
-        tree = git("write-tree", env=environment).strip()
+    """Leave note edits for the final release commit without touching an index."""
+    replacements = {}
+    for path in notes:
+        entry = git("ls-tree", commit + "^", "--", path).strip()
+        replacements[path] = entry.split("\t", 1)[0] if entry else None
+    tree = edited_tree(commit, replacements)
     return subprocess.run(["git", "-C", ROOT, "commit-tree", tree, "-p", commit + "^", "-F", "-"],
                           input="Release-note replay input\n", check=True, capture_output=True,
                           text=True).stdout.strip()
+
+
+def edited_tree(revision, replacements):
+    """Edit Git objects directly, preserving shared staged and working files."""
+    root = git("rev-parse", revision + "^{tree}").strip()
+
+    def edit(tree, changes):
+        records = subprocess.check_output(["git", "-C", ROOT, "ls-tree", "-z", tree]) if tree else b""
+        entries = {}
+        for record in records.split(b"\0"):
+            if record:
+                metadata, name = record.split(b"\t", 1)
+                entries[os.fsdecode(name)] = metadata.decode("ascii")
+        directories = {}
+        for path, replacement in changes.items():
+            name, separator, rest = path.partition("/")
+            if separator:
+                directories.setdefault(name, {})[rest] = replacement
+            elif replacement is None:
+                entries.pop(name, None)
+            else:
+                entries[name] = replacement
+        for name, children in directories.items():
+            existing = entries.get(name)
+            if existing and not existing.startswith("040000 tree "):
+                raise Refused(f"cannot add release data under a non-directory: {name}")
+            subtree = edit(existing.split()[2] if existing else None, children)
+            if subtree is None:
+                entries.pop(name, None)
+            else:
+                entries[name] = "040000 tree " + subtree
+        if not entries:
+            return None
+        content = b"".join(metadata.encode("ascii") + b"\t" + os.fsencode(name) + b"\0"
+                           for name, metadata in entries.items())
+        return subprocess.run(["git", "-C", ROOT, "mktree", "-z"], input=content,
+                              capture_output=True, check=True).stdout.decode("ascii").strip()
+
+    return edit(root, replacements)
 
 
 def replay(commit, parent, notes=()):
@@ -257,11 +289,7 @@ def fixed_release_commit(base, version, details):
                   GIT_COMMITTER_NAME="Waozi", GIT_COMMITTER_EMAIL="waozi@proton.me")
 
     def record(parent, message, other_parent=None):
-        with tempfile.TemporaryDirectory(prefix="inbe-release-index-") as temporary:
-            environment = dict(author, GIT_INDEX_FILE=str(Path(temporary) / "index"))
-            git("read-tree", parent, env=environment)
-            git("update-index", "--add", "--cacheinfo", "100644", blob, path, env=environment)
-            tree = git("write-tree", env=environment).strip()
+        tree = edited_tree(parent, {path: "100644 blob " + blob})
         command = ["git", "-C", ROOT, "commit-tree", tree, "-p", parent]
         if other_parent:
             command += ["-p", other_parent]

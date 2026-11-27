@@ -20,10 +20,8 @@ import os
 from pathlib import Path
 import re
 import shlex
-import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -159,17 +157,68 @@ def git(root, *argv, env=None):
 
 
 def working_tree(root):
-    """Tree of the tracked files as they are on disk, in a throwaway index."""
+    """Tree of tracked files on disk, without writing or replacing an index."""
+    def objects(*argv, data=None):
+        return subprocess.run(["git", "--no-optional-locks", "-C", str(root), *argv],
+                              input=data, check=True, capture_output=True).stdout
+
     git_dir = Path(git(root, "rev-parse", "--absolute-git-dir").strip())
-    with tempfile.TemporaryDirectory(prefix="inbe-tree-") as temporary:
-        index = Path(temporary) / "index"
-        if (git_dir / "index").is_file():
-            shutil.copyfile(git_dir / "index", index)
-        env = dict(os.environ, GIT_INDEX_FILE=str(index))
-        if not (git_dir / "index").is_file():
-            git(root, "read-tree", "HEAD", env=env)
-        git(root, "add", "--update", "--", ".", env=env)
-        return git(root, "write-tree", env=env).strip()
+    entries = {}
+    if (git_dir / "index").is_file():
+        for entry in objects("ls-files", "--stage", "-z").split(b"\0"):
+            if entry:
+                metadata, path = entry.split(b"\t", 1)
+                mode, oid, _stage = metadata.split()
+                entries[path] = (mode, oid)
+        changed = set(objects("ls-files", "--modified", "--deleted", "-z").split(b"\0"))
+    else:
+        for entry in objects("ls-tree", "-r", "-z", "HEAD").split(b"\0"):
+            if entry:
+                metadata, path = entry.split(b"\t", 1)
+                mode, _kind, oid = metadata.split()
+                entries[path] = (mode, oid)
+        changed = set(entries)
+    filemode = subprocess.run(["git", "-C", str(root), "config", "--bool", "core.filemode"],
+                              capture_output=True, text=True).stdout.strip() != "false"
+    for path in changed & entries.keys():
+        file = Path(root) / os.fsdecode(path)
+        mode, oid = entries[path]
+        if file.is_symlink():
+            mode = b"120000"
+            oid = objects("hash-object", "-w", "--stdin", data=os.fsencode(os.readlink(file))).strip()
+        elif not file.exists():
+            del entries[path]
+            continue
+        elif mode == b"160000":
+            oid = subprocess.run(["git", "-C", str(file), "rev-parse", "HEAD"],
+                                 check=True, capture_output=True).stdout.strip()
+        else:
+            if filemode:
+                mode = b"100755" if file.stat().st_mode & 0o100 else b"100644"
+            oid = objects("hash-object", "-w", "--path=" + os.fsdecode(path), "--",
+                          os.fsdecode(path)).strip()
+        entries[path] = (mode, oid)
+
+    tree = {}
+    for path, value in entries.items():
+        node = tree
+        parts = path.split(b"/")
+        for directory in parts[:-1]:
+            node = node.setdefault(directory, {})
+        node[parts[-1]] = value
+
+    def write_tree(node):
+        records = []
+        for name, value in node.items():
+            if isinstance(value, dict):
+                mode, kind, oid = b"40000", b"tree", write_tree(value)
+            else:
+                mode, oid = value
+                kind = b"commit" if mode == b"160000" else b"blob"
+            records.append(mode + b" " + kind + b" " + oid + b"\t" + name + b"\0")
+        return objects("mktree", "-z", data=b"".join(records)).strip()
+
+    return write_tree(tree).decode("ascii")
 
 
 def tree_identity(root, revision, include):

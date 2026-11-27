@@ -180,6 +180,25 @@ class PhoneCheckGateTest(unittest.TestCase):
         changed, untracked = phone_check.changed_app_files(self.root)
         self.assertEqual((changed, untracked), ([], ["src/apps/new.zi"]))
 
+    def test_working_tree_preserves_staged_content_and_tracks_disk_changes(self):
+        self.write({"src/main.zi": "staged\n", "src/new.zi": "staged new\n"})
+        self.git("add", "src/main.zi", "src/new.zi")
+        self.write({"src/main.zi": "on disk\n", "src/new.zi": "new on disk\n",
+                    "src/untracked.zi": "excluded\n"})
+        (self.root / "scripts/build-apps.sh").unlink()
+        (self.root / "src/link.zi").symlink_to("missing.zi")
+        self.git("add", "src/link.zi")
+        index = (self.root / ".git/index").read_bytes()
+        tree = phone_check.working_tree(self.root)
+        self.assertEqual((self.root / ".git/index").read_bytes(), index)
+        self.assertEqual(self.git("show", ":src/main.zi"), "staged\n")
+        self.assertEqual(self.git("show", tree + ":src/main.zi"), "on disk\n")
+        self.assertEqual(self.git("show", tree + ":src/new.zi"), "new on disk\n")
+        self.assertEqual(self.git("show", tree + ":src/link.zi"), "missing.zi")
+        paths = self.git("ls-tree", "-r", "--name-only", tree).splitlines()
+        self.assertNotIn("scripts/build-apps.sh", paths)
+        self.assertNotIn("src/untracked.zi", paths)
+
     def test_missing_check(self):
         with self.assertRaisesRegex(ValueError, "no phone check"):
             gate.validate(self.root, "3.0.0")

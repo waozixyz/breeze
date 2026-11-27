@@ -128,11 +128,12 @@ def course_narration_keys(data):
 
 
 ZX28 = b'ZX\0\0\x1c\0\0\0'
+ZX29 = b'ZX\0\0\x1d\0\0\0'
 ZX28_ASSETS = 3
 
 
 def zx28_assets_section(data):
-    """The bounds of a revision-28 executable's asset section (kind 3).
+    """The bounds of a revision-28/29 executable's asset section (kind 3).
 
     Ziran's ASSEMBLY/zx-executable-format.md: a 64-byte header, then 32-byte
     directory records in increasing kind order; the file length is exact."""
@@ -191,10 +192,10 @@ def zx28_bundle_assets(data, include_paths):
 
 
 def bundle_assets(data, *, maximum=MAXIMUM, include_paths=None):
-    """Read a bundle's resources (ZX 28, or released v26/v27); never run its code."""
+    """Read resources from ZX 28/29 or released v26/v27; never run code."""
     if len(data) > maximum:
         raise ValueError('unsupported resource bundle')
-    if data[:8] == ZX28:
+    if data[:8] in (ZX28, ZX29):
         return zx28_bundle_assets(data, include_paths)
     if data[:8] not in (b'ZX\0\0\x1a\0\0\0', b'ZX\0\0\x1b\0\0\0'):
         raise ValueError('unsupported resource bundle')
@@ -249,7 +250,7 @@ def bundle_assets(data, *, maximum=MAXIMUM, include_paths=None):
 
 def catalog_from_bundle(data):
     # Older releases have no content catalog and remain installable.
-    if data[:8] not in (b'ZX\0\0\x1a\0\0\0', ZX28):
+    if data[:8] not in (b'ZX\0\0\x1a\0\0\0', ZX28, ZX29):
         return []
     assets = bundle_assets(data, maximum=len(data), include_paths={CATALOG})
     if CATALOG not in assets:
