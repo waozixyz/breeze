@@ -1,3 +1,4 @@
+#import "settings_telegram_ui"
 #import "entity/telegram_connection"
 #import "geometry"
 Button :: #import "kryon/button";
@@ -103,7 +104,7 @@ settings_telegram_review_text :: (width: s32) -> string {
 // Mini App approval appears only while a request waits for this device.
 settings_telegram_authorization_active :: () -> bool {
     return lumi_authorization_ready || lumi_authorization_pending.request_id[0] != cast(u8)0 ||
-        lumi_authorization_state == 5
+    lumi_authorization_state == 5
 }
 
 settings_telegram_content_height :: (width: s32) -> s32 {
@@ -162,118 +163,3 @@ settings_telegram_stars_ready :: (review: string, disclosure: string, label: str
 }
 
 // One line says what to do next and one button does it.
-settings_telegram_draw :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
-    key := LumiTelegramStatusKey()
-    height := settings_telegram_text_height(key, width)
-    Text.Draw(app.ui.session, Text.Props.{.text = LocaleText(key), .size = AppFontSize(),
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)height},
-            .wrap = cast(Text.Wrap)TextWrapAuto})
-    y.* += height
-    has_account := storage_has_sync_account() != 0 &&
-    storage_get_setting_text("sync_private_key").count > 0
-    linked := lumi_telegram_connection.linked && has_account
-    label := "lumi_telegram_connect"
-    if !has_account {
-        label = "sync_connect_account_button"
-    } else if linked {
-        label = "lumi_telegram_open"
-    }
-    if Button.Draw(app.ui.session, Button.Props.{.id = 7650,
-            .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(48)},
-            .label = LocaleText(label), .loading = LumiTelegramBusy(),
-            // Offline Lumi links nothing; the line above says why.
-            .disabled = LumiTelegramBusy() || (has_account && !linked && !LumiNodeTrafficAllowed())}) != 0 {
-        if !has_account {
-            app_apply_nav_route(app, cast(s32)APP_NAV_ROUTE_ACCOUNT)
-        } else if linked {
-            if !LumiTelegramOpen() {
-                lumi_telegram_connection.error = true
-            }
-        } else {
-            LumiTelegramLink()
-        }
-    }
-    y.* += AppScale(56)
-    if !linked || !lumi_authorization_ready {
-        settings_telegram_stars_review[0] = 0
-    }
-    if linked && settings_telegram_authorization_active() {
-        status_height := settings_telegram_text_height(LumiAuthorizationStatusKey(), width)
-        Text.Draw(app.ui.session, Text.Props.{.text = LocaleText(LumiAuthorizationStatusKey()), .size = AppFontSize(),
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)status_height},
-                .wrap = cast(Text.Wrap)TextWrapAuto})
-        y.* += status_height
-        review_visible := false
-        held_review := ""
-        review := settings_telegram_review_text(width)
-        if review.count > 0 {
-            prepared := Text.PrepareText(Text.Props.{.text = review, .size = AppFontSize(),
-                    .bounds = Rectangle.{0.0, 0.0, cast(float32)width, 0.0},
-                    .wrap = cast(Text.Wrap)TextWrapAuto}, Text.DefaultTextFace())
-            review_height := cast(s32)prepared.bounds.height + AppScale(16)
-            held_review = FrameTextHold(*app.ui.frame_text, review)
-            review_visible = held_review.count == review.count && held_review.count > 0
-            Text.Draw(app.ui.session, Text.Props.{.text = held_review, .size = AppFontSize(),
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)review_height},
-                    .wrap = cast(Text.Wrap)TextWrapAuto})
-            y.* += review_height
-            PackageFree(review)
-        }
-        if lumi_authorization_ready {
-            if Button.Draw(app.ui.session, Button.Props.{.id = 7652,
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(48)},
-                    .label = LocaleText("lumi_authorization_approve"),
-                    .disabled = LumiAuthorizationBusy() || !review_visible,
-                    .loading = LumiAuthorizationBusy()}) != 0 {
-                LumiAuthorizationApprove()
-            }
-            y.* += AppScale(56)
-            disclosure := "lumi_authorization_stars_disclosure"
-            stars_height := settings_telegram_text_height(disclosure, width)
-            Text.Draw(app.ui.session, Text.Props.{.text = LocaleText(disclosure), .size = AppFontSize(),
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)stars_height},
-                    .wrap = cast(Text.Wrap)TextWrapAuto})
-            y.* += stars_height
-            stars_label := LocaleText("lumi_authorization_approve_stars")
-            stars_review := ifx review_visible then held_review else ""
-            // A queued activation belongs to the preceding committed review.
-            // Give a changed review a fresh key before consuming any input.
-            stars_ready := settings_telegram_stars_ready(stars_review, LocaleText(disclosure), stars_label)
-            if Button.Draw(app.ui.session, Button.Props.{.id = 7656, .key = settings_telegram_stars_key,
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(48)},
-                    .label = stars_label, .disabled = !stars_ready}) != 0 && stars_ready {
-                settings_telegram_stars_review[0] = 0
-                LumiAuthorizationApprove(true)
-            }
-            y.* += AppScale(56)
-        }
-        if lumi_authorization_pending.request_id[0] != cast(u8)0 {
-            if Button.Draw(app.ui.session, Button.Props.{.id = 7654,
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(48)},
-                    .label = LocaleText("cancel_button"), .disabled = LumiAuthorizationBusy(),
-                    .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
-                LumiAuthorizationCancel()
-            }
-            y.* += AppScale(56)
-        }
-    }
-    if linked {
-        if Button.Draw(app.ui.session, Button.Props.{.id = 7657,
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(48)},
-                .label = LocaleText("lumi_authorization_request"),
-                .disabled = !LumiNodeTrafficAllowed() || !LumiAuthorizationCanRequest()}) != 0 &&
-            LumiNodeTrafficAllowed() {
-            unused LumiAuthorizationRequest()
-        }
-        y.* += AppScale(56)
-        // Disconnecting also revokes any Mini App access.
-        if Button.Draw(app.ui.session, Button.Props.{.id = 7651,
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)AppScale(48)},
-                .label = LocaleText("lumi_telegram_disconnect"),
-                .disabled = LumiTelegramBusy(),
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
-            LumiTelegramDisconnect()
-        }
-        y.* += AppScale(56)
-    }
-}

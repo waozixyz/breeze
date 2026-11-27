@@ -119,7 +119,7 @@ def validate(root, structure_only=False):
     sources.extend(sorted((root / "mk").glob("*.mk")))
     for directory in ("src", "scripts", ".github"):
         sources.extend(path for path in (root / directory).rglob("*")
-                       if path.suffix in (".c", ".h", ".zi", ".sh", ".py", ".yml", ".yaml", ".mjs"))
+                       if path.suffix in (".c", ".h", ".zi", ".ts", ".tsx", ".sh", ".py", ".yml", ".yaml", ".mjs"))
     for path in sources:
         for macro in re.findall(r"\b[A-Z][A-Z0-9_]*_VERSION_(?:STRING|MAJOR|MINOR|PATCH)\b",
                                 path.read_text(encoding="utf-8")):

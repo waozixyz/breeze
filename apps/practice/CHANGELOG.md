@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Author the practice pages, guides, settings and workout editor with Kryon TSX components.
+
 - Verify Mandarin Astral narration across Simplified and Traditional Chinese spellings.
 
 - Optionally keep Meditation counting up after the end gong, with interval bells and the full session time saved on Finish.

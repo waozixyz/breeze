@@ -131,7 +131,7 @@ def main() -> int:
     for name in tests:
         path = Path(name)
         by_name.setdefault(path.name, []).append(name)
-        if path.suffix in (".py", ".zi"):
+        if path.suffix in (".py", ".zi", ".ts", ".tsx"):
             by_module.setdefault(path.stem, []).append(name)
 
     root_texts = [expand_loops(read_text(name)) for name in files

@@ -9,7 +9,9 @@ import sys
 root = Path(__file__).resolve().parent.parent
 used = set()
 for directory in (root / "src", root / "apps"):
-    for source in directory.rglob("*.zi"):
+    for source in directory.rglob("*"):
+        if source.suffix not in {".zi", ".ts", ".tsx"}:
+            continue
         used |= set(re.findall(r'(?:LocaleText|[A-Za-z]+LocaleHost)\(\s*"([a-z0-9_]+)"', source.read_text(encoding="utf-8")))
 
 # Placeholders the app's formatters substitute.

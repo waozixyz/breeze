@@ -1,3 +1,4 @@
+#import "practice_figure_draw_ui"
 // Native painter behind the bounded PracticeFigureRequest host effect.
 #import "kryon/geometry"
 #import "kryon/session"
@@ -66,12 +67,21 @@ practice_figure_request_id: u64;
 practice_figure_textures: [24]PracticeFigureTexture;
 practice_figure_clock: u64;
 
-PracticeFigureDrawModel :: (session: Session, solved: *TaiChiSolved, rig: *TaiChiRig,
+// The painter prepares pixels and metadata; the TSX view submits widgets.
+PracticeFigurePresentation :: struct {
+    available: bool;
+    loading: bool;
+    now: float64;
+    image: Image.Props;
+}
+
+PracticeFigurePrepare :: (session: Session, solved: *TaiChiSolved, rig: *TaiChiRig,
     framing: TaiChiFraming, man: bool, mirrored: bool, area: Rectangle, key: u64,
     alt_text: string, seconds: float64 = -1.0, digest: u64 = 0,
-    placement: PracticeFigurePlacement = .{}) -> bool {
+    placement: PracticeFigurePlacement = .{}) -> PracticeFigurePresentation {
+    result: PracticeFigurePresentation
     if !(area.width > 0.0 && area.height > 0.0) {
-        return false
+        return result
     }
     scale := FigureMin(1.0, 960.0 / FigureMax(area.width, area.height))
     width := cast(s32)FigureMax(1.0, cast(float64)area.width * scale)
@@ -83,21 +93,23 @@ PracticeFigureDrawModel :: (session: Session, solved: *TaiChiSolved, rig: *TaiCh
         // figure; the caller draws its own only when the model cannot load.
         if !PracticeFigureModelReady(man) {
             if !PracticeFigureModelPending(man) {
-                return false
+                return result
             }
-            Loading.Draw(session, Loading.Props.{.key = key, .bounds = area, .now = HostSeconds(), .scale = 1.0})
-            return true
+            result.loading = true
+            result.available = true
+            result.now = HostSeconds()
+            return result
         }
     } else {
         if !stage.model.ready {
             asset := AssetRead(PracticeFigureModelPath(man))
             if !asset.found {
-                return false
+                return result
             }
             descriptor := cast(*TextDescriptor)(*asset.data)
             if !FigureStageLoadBytes(stage, BytesFromPointer(descriptor.data, cast(u64)asset.data.count)) {
                 FigureStageFree(stage)
-                return false
+                return result
             }
         }
     }
@@ -135,10 +147,10 @@ PracticeFigureDrawModel :: (session: Session, solved: *TaiChiSolved, rig: *TaiCh
                 PracticeFigureReportRenderer(stage, man, rendered, stage.gpu.resources.frames > gpu_frames, width, height)
             }
             if !rendered {
-                return false
+                return result
             }
             if !PracticeFigurePublish(stage, slot, width, height, man, placement, digest, animation_tick) {
-                return false
+                return result
             }
         }
     }
@@ -146,9 +158,17 @@ PracticeFigureDrawModel :: (session: Session, solved: *TaiChiSolved, rig: *TaiCh
     // needs to copy or rewrite every pixel of the cached figure.
     source := Rectangle.{0.0, 0.0, cast(float32)width, cast(float32)height}
     if mirrored { source.width = -source.width }
-    Image.Draw(session, Image.Props.{.key = key, .bounds = area, .texture = slot.texture, .source = source,
-            .alt_text = alt_text, .smooth = true})
-    return true
+    result.image = Image.Props.{.key = key, .bounds = area, .texture = slot.texture, .source = source,
+        .alt_text = alt_text, .smooth = true}
+    result.available = true
+    return result
+}
+
+PracticeFigureDrawModel :: (session: Session, solved: *TaiChiSolved, rig: *TaiChiRig,
+    framing: TaiChiFraming, man: bool, mirrored: bool, area: Rectangle, key: u64,
+    alt_text: string, seconds: float64 = -1.0, digest: u64 = 0,
+    placement: PracticeFigurePlacement = .{}) -> bool {
+    return PracticeFigureDrawModelView(session, solved, rig, framing, man, mirrored, area, key, alt_text, seconds, digest, placement)
 }
 
 PracticeFigureDrawRelease :: () {

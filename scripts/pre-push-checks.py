@@ -57,9 +57,9 @@ def plan(files):
     checks = [("version files agree", ["python3", "scripts/check-version.py"]),
               ("package versions", ["python3", "scripts/check-package-versions.py"]),
               ("package version tests", ["python3", "tests/package_versions_test.py"])]
-    if any_of("locales/", "assets/fonts/") or any_suffix(".zi"):
+    if any_of("locales/", "assets/fonts/") or any_suffix(".zi", ".ts", ".tsx"):
         checks.append(("translations and fonts", ["make", "-s", "locale-check"]))
-    if any_suffix(".zi"):
+    if any_suffix(".zi", ".ts", ".tsx"):
         checks.append(("canonical UI APIs", ["make", "-s", "clean-text-api-check", "button-api-check"]))
     if any_of("apps/", "src/apps/", "locales/"):
         checks.append(("app bundles", ["make", "-s", "apps-test"]))

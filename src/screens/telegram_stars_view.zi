@@ -1,4 +1,7 @@
 #if #defined(PLATFORM_WEB) {
+    #import "telegram_stars_view_ui"
+}
+#if #defined(PLATFORM_WEB) {
     #import, file "../app/telegram_stars.zi";
     #import, file "../app/app_types.zi";
     #import, file "../app/app_nav_state.zi";
@@ -28,102 +31,39 @@
         return ifx TelegramStarsCurrent() && TelegramInvoiceAvailable() then AppScale(58) else 0
     }
 
-    TelegramStarsFooter :: (app: *InnerBreeze) {
-        height := TelegramStarsFooterHeight()
-        if height == 0 { return }
-        column := Layout.CenteredColumnFor(app.ui.view_width, AppScale(720), AppScale(16))
-        bottom := app.ui.view_height - app_content_bottom_reserved(app)
-        if Button.Draw(app.ui.session, Button.Props.{.id = 7930,
-                .label = LocaleText("telegram_stars_title"),
-                .bounds = Rectangle.{cast(float32)column.x, cast(float32)(bottom - height + AppScale(4)),
-                    cast(float32)column.width, cast(float32)AppScale(48)}}) != 0 {
-            TelegramStarsLaunch()
-            telegram_stars_visible = telegram_stars.requested
-            telegram_stars_scroll = 0
-            app_block_current_click(app)
-        }
-    }
+}
+#if #defined(PLATFORM_WEB) {
 
-    TelegramStarsText :: (app: *InnerBreeze, value: string, x: s32, width: s32, y: *s32, height: s32) {
-        Text.Draw(app.ui.session, Text.Props.{.text = FrameTextHold(*app.ui.frame_text, value),
-                .size = AppFontSize(), .wrap = cast(Text.Wrap)TextWrapAuto,
-                .bounds = Rectangle.{cast(float32)x, cast(float32)y.*, cast(float32)width, cast(float32)height}})
-        y.* += height
+    TelegramStarsViewNewOptions :: () -> [1]Dropdown.Option {
+        result: [1]Dropdown.Option
+        return result
     }
+}
+#if #defined(PLATFORM_WEB) {
 
-    TelegramStarsPage :: (app: *InnerBreeze) -> bool {
-        flow := *telegram_stars
-        if !telegram_stars_visible || !TelegramStarsCurrent() || flow.generation != StoredDelegateGeneration() {
-            return false
-        }
-        top := AppScale(52)
-        bar := TitleBar.Props.{.key = Layout.KeyHash("inbe/telegram/stars/title"),
-            .title = LocaleText("telegram_stars_title"), .height = top,
-            .bounds = Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width, cast(float32)top},
-            .has_leading_action = true, .leading_label = LocaleText("back_button")}
-        options: [1]Dropdown.Option
-        if TitleBar.Draw(app.ui.session, bar, options[0:0]).clicked_leading {
-            telegram_stars_visible = false
-            app_block_current_click(app)
-            return true
-        }
-        column := Layout.CenteredColumnFor(app.ui.view_width, AppScale(620), AppScale(16))
-        bottom := app.ui.view_height - app_content_bottom_reserved(app)
-        busy := TelegramStarsNetworkBusy() || flow.sheet
-        can_retry := !busy && (flow.notice == "telegram_stars_error" || flow.notice == "telegram_stars_pending")
-        can_cancel := !busy && flow.invoice.invoice_id[0] != 0
-        panel := Scroll.Draw(app.ui.session, Scroll.Props.{.key = Layout.KeyHash("inbe/telegram/stars/scroll"),
-                .bounds = Rectangle.{0.0, cast(float32)top, cast(float32)app.ui.view_width, cast(float32)(bottom - top)},
-                .content_height = AppScale(166 + flow.catalog.count * 86), .scroll_offset = telegram_stars_scroll,
-                .scale = MetricsScale()})
-        telegram_stars_scroll = panel.scroll_offset
-        if !panel.opened { return true }
-        y := cast(s32)panel.content.y + AppScale(8)
-        if flow.balance_known {
-            balance: [128]u8
-            ProfileDewFormatDew(flow.balance, LocaleText("profile_dew_balance_line"), balance[:])
-            TelegramStarsText(app, TextUntilNul(balance[:]), column.x, column.width, *y, AppScale(32))
-        }
-        if flow.notice != "" {
-            TelegramStarsText(app, LocaleText(flow.notice), column.x, column.width, *y, AppScale(64))
-        }
-        if can_retry || can_cancel {
-            width := ifx can_retry && can_cancel then (column.width - AppScale(8)) / 2 else column.width
-            if can_retry && Button.Draw(app.ui.session, Button.Props.{.id = 7931,
-                    .label = LocaleText("retry_button"),
-                    .bounds = Rectangle.{cast(float32)column.x, cast(float32)y, cast(float32)width, cast(float32)AppScale(48)}}) != 0 {
-                TelegramStarsRetry()
-            }
-            cancel_x := ifx can_retry then column.x + width + AppScale(8) else column.x
-            if can_cancel && Button.Draw(app.ui.session, Button.Props.{.id = 7932,
-                    .label = LocaleText("cancel_button"),
-                    .bounds = Rectangle.{cast(float32)cancel_x, cast(float32)y, cast(float32)width, cast(float32)AppScale(48)}}) != 0 {
-                TelegramStarsCancelPurchase()
-            }
-            y += AppScale(56)
-        }
-        for index: cast(s32)0..flow.catalog.count - 1 {
-            product := *flow.catalog.products[index]
-            units: [48]u8
-            amount: [48]u8
-            unused DewFormat(product.units, DewUnits, units[:])
-            unused AppFormatS64(product.amount, amount[:])
-            terms: [196]u8
-            values: [2]FormatArg = .[
-                FormatArg.{.text = TextUntilNul(units[:]), .is_text = true},
-                FormatArg.{.text = TextUntilNul(amount[:]), .is_text = true}]
-            if FormatTemplate(LocaleText("telegram_stars_product_terms"), values[:], terms[:]) {
-                TelegramStarsText(app, TextUntilNul(terms[:]), column.x, column.width, *y, AppScale(32))
-            }
-            if Button.Draw(app.ui.session, Button.Props.{.id = 7940 + index,
-                    .label = TextUntilNul(product.title[:]),
-                    .bounds = Rectangle.{cast(float32)column.x, cast(float32)y, cast(float32)column.width, cast(float32)AppScale(46)},
-                    .disabled = busy || flow.nonce[0] != 0}) != 0 {
-                TelegramStarsSelect(index)
-            }
-            y += AppScale(54)
-        }
-        unused End(app.ui.session)
-        return true
+    TelegramStarsViewNewBalance :: () -> [128]u8 {
+        result: [128]u8
+        return result
+    }
+}
+#if #defined(PLATFORM_WEB) {
+
+    TelegramStarsViewNewUnits :: () -> [48]u8 {
+        result: [48]u8
+        return result
+    }
+}
+#if #defined(PLATFORM_WEB) {
+
+    TelegramStarsViewNewAmount :: () -> [48]u8 {
+        result: [48]u8
+        return result
+    }
+}
+#if #defined(PLATFORM_WEB) {
+
+    TelegramStarsViewNewTerms :: () -> [196]u8 {
+        result: [196]u8
+        return result
     }
 }

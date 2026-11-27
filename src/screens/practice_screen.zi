@@ -1,3 +1,7 @@
+#import "widgets_ui"
+#import "account_activity_view_ui"
+#import "practice_banner_draw_ui"
+#import "practice_screen_ui"
 c3 :: #system_library "c";
 #import, file "../platform/host_input.zi";
 #import, file "../platform/host_window.zi";
@@ -145,28 +149,7 @@ practice_screen_config_layout :: (app: *InnerBreeze, modal_type: s32, content_to
     layout.scroll_h = scroll_h
 }
 
-#program_export
-practice_screen_handle_config_title :: (app: *InnerBreeze, title: string, modal_type: s32, has_leave_config: s32) -> s32 {
-    title_h: s32 = 0
 
-    if app == null {
-        return 0
-    }
-    title_h = ifx (practice_screen_subscreen_integrated(app, modal_type) != 0) then (app_content_top_reserved(app)) else (AppTitleBarHeight())
-    // The page closes only when its back action is pressed.
-    bar: TitleBar.Props
-    bar.title = title
-    bar.height = title_h
-    bar.has_leading_action = true
-    bar.leading_label = LocaleText("back_button")
-    title_result := TitleBar.Draw(CurrentApp().ui.session, bar, empty_title_options())
-    if !title_result.clicked_leading {
-        return 0
-    }
-    unused has_leave_config
-    practice_screen_leave_config(app, modal_type)
-    return 1
-}
 
 // Back on a practice's Customize: the page closes, saving what changed.
 #program_export
@@ -218,24 +201,7 @@ practice_card_banner_asset_path :: (app: *InnerBreeze, exercise: s32) -> string 
 
 practice_banner_probe_count: s32;
 
-practice_draw_card_banner :: (asset_path: string, dest: Rectangle) {
-    if asset_path.count == 0 || asset_path[0] == #char "\0" || dest.width <= 0 || dest.height <= 0 {
-        return
-    }
-    first_banner := practice_banner_probe_count == 0
-    practice_banner_probe_count += 1
-    if first_banner {
-        TraceLog(3, "APP PROBE: before banner Image")
-    }
-    Image.Draw(CurrentApp().ui.session, Image.Props.{
-            .asset_path = asset_path,
-            .bounds = dest,
-            .fit = cast(Image.ImageFit)ImageFitCover
-        })
-    if first_banner {
-        TraceLog(3, "APP PROBE: after banner Image")
-    }
-}
+
 
 // Practice lists every practice, apart from paid ones where they cannot be
 // bought, under a tab for its kind.
@@ -492,29 +458,7 @@ practice_home_frame_codec: WidgetPracticeHomeFrameCodec;
 practice_home_tab_codec: WidgetPracticeHomeTabCodec;
 practice_banner_bounds_codec: WidgetRectangleCodec;
 
-practice_home_theme_button :: (app: *InnerBreeze, frame: PracticeHomeFrame) -> bool {
-    if frame.card.width <= 0.0 || frame.top <= 0 {
-        return false
-    }
-    width := cast(float32)AppScale(44)
-    height := cast(float32)frame.top
-    size := ifx width < height then width else height
-    night := app.dark_mode != 0
-    button := Button.Props.{.key = Layout.KeyHash("practice/theme-mode"),
-        .bounds = .{frame.card.x + frame.card.width - width - cast(float32)AppScale(8),
-            (height - size) * 0.5, width, size},
-        .label = LocaleText(ifx night then "theme_light" else "theme_dark"),
-        .icon_type = cast(s32)(ifx night then IconSun else IconMoon),
-        .icon_only = true, .circle = true, .disabled = !frame.choosing,
-        .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}
-    if Button.Draw(app.ui.session, button) == 0 {
-        return false
-    }
-    if !CurrentTheme().motion.reduced_motion {
-        app_route_transition_request(app)
-    }
-    return AppSetThemeMode(app, ifx night then APP_THEME_LIGHT else APP_THEME_DARK)
-}
+
 
 practice_banner_color :: (rgb: u32, alpha: u8 = 255) -> Color {
     return .{cast(u8)(rgb >> 16), cast(u8)(rgb >> 8), cast(u8)rgb, alpha}
@@ -545,71 +489,14 @@ practice_home_inside :: (bounds: Rectangle, item: Rectangle) -> bool {
     item.y + item.height <= bounds.y + bounds.height
 }
 
-practice_home_box_line :: (session: Session, bounds: Rectangle, line: Rectangle, color: Color) {
-    shown := RectangleIntersection(bounds, line)
-    if shown.width > 0.0 && shown.height > 0.0 {
-        Box.Draw(session, Box.Props.{.bounds = shown, .fill = color})
-    }
-}
+
 
 // The box the breath travels around, drawn behind the figure: four glowing
 // corners joined by thin lines.
-practice_home_box_outline :: (session: Session, bounds: Rectangle, night: bool) {
-    box := practice_home_box_frame(bounds, night)
-    art_h := practice_home_painting_height(bounds)
-    thickness := art_h * 0.006
-    if thickness < 1.0 {
-        thickness = 1.0
-    }
-    color := practice_banner_color(ifx night then 0xffbe66 else 0xfff0b4, 235)
-    half := thickness * 0.5
-    practice_home_box_line(session, bounds, .{box.x, box.y - half, box.width, thickness}, color)
-    practice_home_box_line(session, bounds, .{box.x, box.y + box.height - half, box.width, thickness}, color)
-    practice_home_box_line(session, bounds, .{box.x - half, box.y, thickness, box.height}, color)
-    practice_home_box_line(session, bounds, .{box.x + box.width - half, box.y, thickness, box.height}, color)
-    radius := art_h * (ifx night then 0.016 else 0.027)
-    glow := radius * 1.8
-    for corner: 0..3 {
-        x := ifx corner == 1 || corner == 2 then box.x + box.width else box.x
-        y := ifx corner >= 2 then box.y + box.height else box.y
-        halo := Rectangle.{x - glow, y - glow, glow * 2.0, glow * 2.0}
-        if practice_home_inside(bounds, halo) {
-            Box.Draw(session, Box.Props.{.bounds = halo, .radius = glow,
-                    .fill = practice_banner_color(ifx night then 0xffc46c else 0xfff3bc, 70)})
-            Box.Draw(session, Box.Props.{.bounds = .{x - radius, y - radius, radius * 2.0, radius * 2.0},
-                    .radius = radius, .fill = practice_banner_color(ifx night then 0xffdc94 else 0xfffbe2)})
-        }
-    }
-}
+
 
 // One indicator travels around the box and marks the current breath position.
-practice_home_box_breath :: (session: Session, bounds: Rectangle, night: bool, tick: s64) {
-    if tick <= 0 {
-        return
-    }
-    box := practice_home_box_frame(bounds, night)
-    x := box.x
-    y := box.y
-    size := practice_home_painting_height(bounds) * 0.023
-    color := practice_banner_color(ifx night then 0xffdf92 else 0xfff9dc)
-    timing := PracticeBannerBoxAt((tick - 1) * 1000 / PRACTICE_BANNER_HZ)
-    if timing.phase == PATTERNS_PHASE_INHALE {
-        x += box.width * timing.progress
-    } else if timing.phase == PATTERNS_PHASE_HOLD_IN {
-        x += box.width
-        y += box.height * timing.progress
-    } else if timing.phase == PATTERNS_PHASE_EXHALE {
-        x += box.width * (1.0 - timing.progress)
-        y += box.height
-    } else {
-        y += box.height * (1.0 - timing.progress)
-    }
-    marker := Rectangle.{x - size * 0.5, y - size * 0.5, size, size}
-    if practice_home_inside(bounds, marker) {
-        Box.Draw(session, Box.Props.{.bounds = marker, .fill = color, .radius = size * 0.5,
-                .border = practice_banner_color(ifx night then 0x966d47 else 0xc28957)})
-    }
-}
+
 
 // Paint underneath the hosted title fade: the rendered sky, then the painted
 // land and figure, which share one framing and line up at every card width.
@@ -998,44 +885,7 @@ practice_screen_open_tab :: (app: *InnerBreeze, tab: s32) {
     }
 }
 
-practice_screen_draw_modal :: (app: *InnerBreeze) {
-    if app == null || app.modal.active == 0 {
-        return
-    }
-    if app.modal.type != cast(ModalType)ModalPracticeManual && app.modal.type != cast(ModalType)ModalPracticeConfig && app.modal.type != cast(ModalType)ModalEditProgressiveStartSpeed {
-        return
-    }
-    // Astral selection owns a real modal frame over its practice card.
-    if app.modal.type == cast(ModalType)ModalPracticeManual &&
-    app.exercise_type == EXERCISE_ASTRAL_PROJECTION {
-        app.practice_tab = PRACTICE_TAB_MANUAL
-        manual_screen_draw(app)
-        return
-    }
-    // The page is drawn over the canvas. The dock, already drawn this frame
-    // while a bottom dock shows, stays above it.
-    Box.Draw(app.ui.session, Box.Props.{
-            .bounds = Rectangle.{0.0, 0.0, cast(float32)app.ui.view_width,
-                cast(float32)(app.ui.view_height - app_content_bottom_reserved(app))},
-            .fill = StyleTokenColor("canvas")})
-    if app.modal.type == cast(ModalType)ModalEditProgressiveStartSpeed {
-        practice := practice_get(app.exercise_type)
-        if practice.draw_config != null {
-            practice.draw_config(app)
-        }
-        return
-    }
-    if app.modal.type == cast(ModalType)ModalPracticeManual {
-        app.practice_tab = PRACTICE_TAB_MANUAL
-        manual_screen_draw(app)
-    } else {
-        practice := practice_get(app.exercise_type)
-        app.practice_tab = PRACTICE_TAB_CONFIG
-        if practice.draw_config != null {
-            practice.draw_config(app)
-        }
-    }
-}
+
 
 practice_screen_dismiss_first_run_guide :: (app: *InnerBreeze) {
     if app == null {
@@ -1181,3 +1031,9 @@ start :: (app: *InnerBreeze) {
 }
 
 practice_recovery_failed: bool;
+
+// Preserve the package-facing native ABI; the view is authored in TSX.
+#program_export
+practice_screen_handle_config_title :: (app: *InnerBreeze, title: string, modal_type: s32, has_leave_config: s32) -> s32 {
+    return practice_screen_handle_config_titleView(app, title, modal_type, has_leave_config)
+}

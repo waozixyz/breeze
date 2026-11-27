@@ -71,14 +71,15 @@
 
 ## Public UI and sync boundaries
 
-- Use Kryon's namespaced widgets directly, each imported by package
-  (`Text :: #import "kryon/text";`): `Text.Draw(session, Text.Props)`,
-  `Image.Draw(session, Image.Props)` and `Button.Draw(session, Button.Props)`.
-  Semantic images use the same `Image` surface; file pictures come with
-  `kryon/image` and button icons with `kryon/icon`. No positional Text,
-  `Kryon`/`Widgets` facades, legacy drawing calls, alternate widgets, or thin
-  local forwarding wrappers. Keep meaningful compositions and gestures; use
-  standard `Checkbox.Draw` and `Toggle.Draw`.
+- Author application and module UI as TSX using Kryon's public components,
+  imported by package (`import { Button } from "kryon/tsx/button";`), with
+  the native widget props. Keep state, models, platform effects, media and
+  geometry in native Ziran modules. Preserve package-facing native exports
+  as ABI bridges into authored TSX views; do not forward whole screens from
+  TSX to native UI implementations or duplicate native records in TypeScript.
+  Use standard Text, Image, Button, Checkbox and Toggle components. Keep
+  meaningful compositions and gestures; no facades, alternate widgets,
+  positional Text calls or thin local widget forwarding wrappers.
   Run `make clean-text-api-check button-api-check` for UI changes.
 - If a required widget capability is missing, implement the reusable primitive
   upstream first. Do not work around it in Inbe or generated code.

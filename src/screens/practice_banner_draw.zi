@@ -1,3 +1,4 @@
+#import "practice_banner_draw_ui"
 // Draws a Practice banner in layers: the rendered sky, the painted land, the
 // painted figure and, over the ice bath, rendered vapour. The sky and the
 // vapour are painted from their state several times a second and shown
@@ -320,7 +321,7 @@ practice_banner_plan :: (state: *PracticeBannerDrawState, bounds: Rectangle, now
 }
 
 // Takes a finished picture from the painter and asks for the next one.
-#scope_file
+#scope_export
 practice_banner_update :: (state: *PracticeBannerDrawState, session: Session, bounds: Rectangle, now: float64) {
     work := *state.work
     phase := practice_banner_phase(work)
@@ -346,7 +347,7 @@ practice_banner_update :: (state: *PracticeBannerDrawState, session: Session, bo
     }
 }
 
-#scope_file
+#scope_export
 practice_banner_air :: (color: PracticeSkyColor) -> Color {
     return .{cast(u8)color.r, cast(u8)color.g, cast(u8)color.b, 255}
 }
@@ -355,82 +356,11 @@ practice_banner_air :: (color: PracticeSkyColor) -> Color {
 // means nothing was drawn: the banner is hidden or has no separate layers,
 // and shows its whole painting.
 #scope_export
-PracticeBannerDrawBack :: (session: Session, asset: string, bounds: Rectangle, now: float64,
-    visible: bool, reduced_motion: bool) -> bool {
-    state := *practice_banner_draw
-    state.tick = PracticeBannerTick(*state.motion, asset, now, visible, reduced_motion)
-    if state.session.slot != session.slot || state.session.epoch != session.epoch {
-        BitmapImageRelease(state.session, state.sky)
-        BitmapImageRelease(state.session, state.steam)
-        state.sky = .{}
-        state.steam = .{}
-        state.shown = false
-        state.session = session
-    }
-    generation := AssetGeneration()
-    if state.asset != asset || state.asset_generation != generation {
-        state.asset = asset
-        state.asset_generation = generation
-        state.scene = PracticeBannerSceneFor(asset)
-        state.layered = state.scene.landscape.count > 0 && AssetRead(state.scene.landscape).found &&
-        AssetRead(state.scene.character).found
-        // Another banner has another sky: nothing painted so far fits it.
-        state.asked.revision += 1
-        state.air_painted = false
-        state.shown = false
-    }
-    if !state.layered || !visible {
-        return false
-    }
-    if !state.day_known {
-        local := LocalNowHost()
-        state.day_started = cast(float64)(cast(s64)local.hour * 3600 + cast(s64)local.minute * 60 +
-            cast(s64)local.second) - now
-        state.day_known = true
-    }
-    practice_banner_update(state, session, bounds, now)
-    // Frames keep coming while the sky moves or its first picture is awaited.
-    state.wants_frames = state.tick > 0 || !state.shown
-    view := PracticeBannerViewFor(bounds.width, bounds.height)
-    sky_view := PracticeBannerSkyView(view, state.scene.sky)
-    sky_bounds := Rectangle.{bounds.x, bounds.y, bounds.width,
-        bounds.height * cast(float32)(sky_view.height / view.height)}
-    if state.shown {
-        BannerImage.Draw(session, BannerImage.Props.{.key = BannerLayout.KeyHash("practice/banner-live-sky"),
-                .bounds = sky_bounds, .texture = state.sky, .smooth = true})
-    } else {
-        // Until the first picture arrives, the air's two colours stand in.
-        sky := PracticeSkyAt(state.scene.sky, state.asked.clock, state.asked.seconds, view)
-        BannerBox.Draw(session, BannerBox.Props.{.key = BannerLayout.KeyHash("practice/banner-air-waiting"),
-                .bounds = sky_bounds, .fill = practice_banner_air(sky.zenith),
-                .fill_bottom = practice_banner_air(sky.horizon), .has_fill_bottom = true})
-    }
-    BannerImage.Draw(session, BannerImage.Props.{.key = BannerLayout.KeyHash("practice/banner-landscape"),
-            .bounds = bounds, .asset_path = state.scene.landscape, .fit = .ImageFitCover, .tint = 0xffffffff})
-    return true
-}
+
 
 // Draws the painted figure and, over the ice bath, the vapour in front of it.
 // Call it after PracticeBannerDrawBack returned true.
-PracticeBannerDrawFront :: (session: Session, bounds: Rectangle) {
-    state := *practice_banner_draw
-    BannerImage.Draw(session, BannerImage.Props.{.key = BannerLayout.KeyHash("practice/banner-character"),
-            .bounds = bounds, .asset_path = state.scene.character, .fit = .ImageFitCover, .tint = 0xffffffff})
-    if state.scene.steam.count == 0 || state.steam.id == 0 {
-        return
-    }
-    view := PracticeBannerViewFor(bounds.width, bounds.height)
-    shown := PracticeBannerViewOverlap(view, PracticeSteamView(state.scene.steam))
-    if shown.width <= 0.0 || shown.height <= 0.0 {
-        return
-    }
-    BannerImage.Draw(session, BannerImage.Props.{.key = BannerLayout.KeyHash("practice/banner-steam"),
-            .bounds = .{bounds.x + bounds.width * cast(float32)((shown.left - view.left) / view.width),
-                bounds.y + bounds.height * cast(float32)((shown.top - view.top) / view.height),
-                bounds.width * cast(float32)(shown.width / view.width),
-                bounds.height * cast(float32)(shown.height / view.height)},
-            .texture = state.steam, .smooth = true})
-}
+
 
 // The banner's motion tick: zero while it is hidden or motion is reduced.
 PracticeBannerDrawTick :: () -> s64 {

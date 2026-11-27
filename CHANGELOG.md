@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+- Author Breeze and module screens in Kryon TSX, keeping native state and platform effects.
+- Remove Arcade from the app choices.
+
 - Keep uploaded practice downloads readable by the node when installing Android development builds.
 
 - Fix a GPU rendering seam through the Habits **+ New Habit** button.

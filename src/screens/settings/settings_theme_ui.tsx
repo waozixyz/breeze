@@ -19,7 +19,6 @@ import { Button } from "kryon/tsx/button";
 import { DiscreteSlider } from "kryon/tsx/slider";
 import { Dropdown } from "kryon/tsx/dropdown";
 import { Image } from "kryon/tsx/image";
-import { Scroll } from "kryon/tsx/scroll";
 import { Text } from "kryon/tsx/text";
 import { LocaleText } from "locale";
 import { AppFitFontSize, AppScale, AppSmallFontSize, MetricsScale } from "metrics";
@@ -314,6 +313,25 @@ function draw_scale_row(
     (*y) = (*y) + settings_theme_scale_row_height(w);
 }
 
+function SettingsThemePickerRows(app: *InnerBreeze, view: NativeScroll.ScrollResult): void {
+    app.theme_state.theme_picker_scroll = view.scroll_offset;
+    const picker = view.content;
+    if (draw_theme_picker(s32(picker.x), s32(picker.y), s32(picker.width), &app.theme_id) === 0n) {
+        return;
+    }
+    if (app.theme_id < 0n) {
+        app.theme_id = 0n;
+    }
+    if (app.theme_id >= ThemeCount) {
+        app.theme_id = ThemeCount - 1n;
+    }
+    app.theme_source = s32(AppThemeSource.APP_THEME_SOURCE_APP);
+    app_refresh_theme(app);
+    app.settings_dirty = 1n;
+    save_settings(app);
+    app_close_modal(app);
+}
+
 export function SettingsThemePickerModal(app: *InnerBreeze): void {
     let modal_w = AppScale(320n);
     let modal_h = AppScale(360n);
@@ -335,39 +353,19 @@ export function SettingsThemePickerModal(app: *InnerBreeze): void {
         return;
     }
     const content = frame.layout.content;
-    <Scroll
-        session={CurrentApp().ui.session}
-        props={{
-            key: NativeLayout.KeyHash("inbe/screens/settings/settings_theme/scroll/1"),
-            bounds: content,
-            content_height: theme_picker_content_height(s32(content.width)),
-            scroll_offset: app.theme_state.theme_picker_scroll
-        }}
-        children={(view: NativeScroll.ScrollResult): void => {
-            SettingsThemePickerRows(app, view);
-        }}
-    />;
+    const view = NativeScroll.Draw(app.ui.session, {
+        key: NativeLayout.KeyHash("inbe/screens/settings/settings_theme/scroll/1"),
+        bounds: content,
+        content_height: theme_picker_content_height(s32(content.width)),
+        scroll_offset: app.theme_state.theme_picker_scroll
+    });
+    if (view.opened) {
+        SettingsThemePickerRows(app, view);
+        End(app.ui.session);
+    }
     End(app.ui.session);
 }
 
-function SettingsThemePickerRows(app: *InnerBreeze, view: NativeScroll.ScrollResult): void {
-    app.theme_state.theme_picker_scroll = view.scroll_offset;
-    const picker = view.content;
-    if (draw_theme_picker(s32(picker.x), s32(picker.y), s32(picker.width), &app.theme_id) === 0n) {
-        return;
-    }
-    if (app.theme_id < 0n) {
-        app.theme_id = 0n;
-    }
-    if (app.theme_id >= ThemeCount) {
-        app.theme_id = ThemeCount - 1n;
-    }
-    app.theme_source = s32(AppThemeSource.APP_THEME_SOURCE_APP);
-    app_refresh_theme(app);
-    app.settings_dirty = 1n;
-    save_settings(app);
-    app_close_modal(app);
-}
 
 function draw_theme_picker(
     x: s32,

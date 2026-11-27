@@ -443,7 +443,7 @@ IMAGE_FILES += $(KRYON_DIR)/icons/ui.webp $(KRYON_DIR)/icons/pfp.webp
 APP_BUNDLES := $(addprefix $(BUILD_DIR)/apps/,lists.zx habits.zx practices.zx diary.zx lumi.zx leaderboard.zx)
 INBE_BUNDLE := $(BUILD_DIR)/inbe.zx
 INBE_FULL_BUNDLE := $(BUILD_DIR)/inbe-full.zx
-APP_SOURCES := $(shell find apps src/apps -name '*.zi' | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
+APP_SOURCES := $(shell find apps src/apps -type f \( -name '*.zi' -o -name '*.ts' -o -name '*.tsx' \) | LC_ALL=C sort) src/core/types.zi src/core/breath_timing.zi $(wildcard src/practices/patterns/*rules.zi) src/practices/patterns/patterns_clock.zi src/practices/patterns/patterns_types.zi src/practices/sun_salutation/sun_salutation_rules.zi src/practices/meditation/meditation_timing.zi
 APP_RESOURCES := $(shell rg --files assets/habits assets/lists assets/diary assets/lumi assets/mcp assets/navigation assets/apps/icons 2>/dev/null)
 APP_RESOURCES += $(shell find -L $(PRACTICE_MEDIA) -type f -not -path '*/.git/*' 2>/dev/null) $(shell rg --files design/tai-chi/text 2>/dev/null) apps/practice/content.json $(wildcard design/tai-chi/narration*.json design/workout/narration*.json design/narration/*.json) $(wildcard design/sun-salutation/narration/*.json) $(wildcard design/sun-salutation/narration/text/*.txt design/sun-salutation/narration/text-female/*.txt) $(wildcard design/lumi-guide/*.json) $(wildcard design/astral-projection/*.json) scripts/practice_content.py scripts/practice_media.py scripts/tai_chi_preview.py apps/practice/course_access.zi scripts/generate-lumi-guide-narration.py
 APP_RESOURCES += $(wildcard design/lumi-guide/text-female/*.txt)
@@ -455,19 +455,20 @@ EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) assets/app/icon.webp
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 # Dependencies are imported as PACKAGE/Module through their linked packages.
 ZI_PACKAGE_PATHS := $(shell sh scripts/package-paths.sh)
-ZI_SRCS := $(shell find src -type f -name '*.zi' 2>/dev/null | LC_ALL=C sort) apps/practice/hold_reminder.zi apps/practice/whm_controls.zi $(wildcard apps/practice/astral_projection*.zi) $(wildcard apps/practice/workout*.zi) $(wildcard apps/practice/sun_salutation*.zi)
+# Web-only TSX is reached through its conditional native dispatcher.
+ZI_SRCS := $(filter-out src/screens/telegram_stars_view_ui.tsx,$(shell find src -type f \( -name '*.zi' -o -name '*.ts' -o -name '*.tsx' \) 2>/dev/null | LC_ALL=C sort)) apps/practice/hold_reminder.zi apps/practice/whm_controls.zi $(wildcard apps/practice/astral_projection*.zi apps/practice/astral_projection*.ts apps/practice/astral_projection*.tsx) $(wildcard apps/practice/workout*.zi apps/practice/workout*.ts apps/practice/workout*.tsx) $(wildcard apps/practice/sun_salutation*.zi apps/practice/sun_salutation*.ts apps/practice/sun_salutation*.tsx)
 GAME2D_DIR := build/packages/game2d
 GAME2D_MODULES := $(wildcard $(GAME2D_DIR)/src/*/*.zi)
 MESH_CLIENT_DIR ?= build/packages/mesh-client
 MESH_CLIENT_MODULES := $(wildcard $(MESH_CLIENT_DIR)/*.zi)
 ZIRAN_STD_MODULES := $(wildcard $(ZIRAN_DIR)/std/*.zi)
-KRYON_ZI_MODULES := $(shell find $(KRYON_DIR)/src -type f -name '*.zi' | LC_ALL=C sort)
-KRY_GEN_SRCS := $(patsubst %.zi,$(KRY_GEN_DIR)/%.c,$(ZI_SRCS))
+KRYON_ZI_MODULES := $(shell find $(KRYON_DIR)/src -type f \( -name '*.zi' -o -name '*.ts' -o -name '*.tsx' \) | LC_ALL=C sort)
+KRY_GEN_SRCS := $(addprefix $(KRY_GEN_DIR)/,$(addsuffix .c,$(basename $(ZI_SRCS))))
 KRY_GEN_SRCS += $(addprefix $(KRY_GEN_DIR)/,account.c auth.c authorization.c authorization_owner.c delegated.c async_delegated.c envelope.c byte_text_linux.c \
 	c_string.c client.c date_parse.c date_time.c events.c json_scan.c net_http_curl_linux.c \
 	net_ws_curl_linux.c social.c sync.c \
 	text.c text_buffer.c transaction.c update.c url.c wire.c)
-KRY_GEN_HDRS := $(patsubst %.zi,$(KRY_GEN_DIR)/%.h,$(ZI_SRCS))
+KRY_GEN_HDRS := $(addprefix $(KRY_GEN_DIR)/,$(addsuffix .h,$(basename $(ZI_SRCS))))
 KRY_GEN_STAMP := $(KRY_GEN_DIR)/.fresh
 # The defines the C was generated with, outside the pruned output directory.
 KRY_GEN_DEFINES := $(BUILD_DIR)/kryon/generated-defines.txt

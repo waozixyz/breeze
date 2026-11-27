@@ -1,3 +1,4 @@
+#import "session_window_view_ui"
 // The running practice in its small window: advancing it while another
 // app is open, and the window that returns to it or ends it.
 #import, file "../platform/host_clock.zi";
@@ -282,36 +283,7 @@ session_window_clamp :: (app: *InnerBreeze) {
 
 // The corner handle resizes the window from its bottom right while the top
 // left stays in place.
-session_window_resize :: (app: *InnerBreeze, bounds: Rectangle) {
-    session := app.ui.session
-    window := *app.session_window
-    grip_size := cast(float32)AppScale(SESSION_WINDOW_GRIP)
-    grip: Button.Props
-    grip.id = SESSION_WINDOW_RESIZE_ID
-    grip.bounds = Rectangle.{bounds.x + bounds.width - grip_size,
-        bounds.y + bounds.height - grip_size, grip_size, grip_size}
-    grip.label = LocaleText("session_resize_button")
-    grip.icon_only = true
-    grip.icon_shape = "S1.6rr:M19 13L13 19M19 7L7 19"
-    grip.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    grip.class_name = CssClass("launcher-muted")
-    key := cast(u64)grip.id
-    previous := TreePrevious(session, TreeCurrentParent(session), key, WidgetKindButton)
-    drag := TreeTakeDragAt(session, previous)
-    if drag.started {
-        window.resize_origin = Vector2.{drag.x, drag.y}
-        window.resize_start = window.size
-    }
-    if drag.active || drag.ended {
-        window.size = Vector2.{window.resize_start.x + drag.x - window.resize_origin.x,
-            window.resize_start.y + drag.y - window.resize_origin.y}
-        session_window_fit_size(app)
-        session_window_clamp(app)
-    }
-    unused Button.Draw(session, grip)
-    node := TreeSubmitted(session, TreeCurrentParent(session), key, WidgetKindButton)
-    TreeSetDragCapture(session, node, true)
-}
+
 
 // The running practice waits for the person to breathe, as a held breath
 // does.
@@ -322,25 +294,7 @@ session_window_can_breathe :: (app: *InnerBreeze, practice: *PracticeDefinition)
 
 // The window's Breath button, centered along the bottom of its picture,
 // below the held breath's small circle. Returns true when it was pressed.
-session_window_breathe_button :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
-    label := LocaleText("breath_button")
-    padding := cast(float32)AppScale(SESSION_WINDOW_PADDING)
-    height := cast(float32)AppScale(SESSION_WINDOW_BREATHE_HEIGHT)
-    width := cast(float32)(AppTextWidth(label, AppFontSize()) +
-        AppScale(SESSION_WINDOW_BREATHE_SPACE))
-    if width > bounds.width - padding * 2.0 {
-        width = bounds.width - padding * 2.0
-    }
-    bottom := bounds.y + bounds.height - cast(float32)AppScale(SESSION_WINDOW_TEXT_HEIGHT) - padding
-    button: Button.Props
-    button.id = SESSION_WINDOW_BREATHE_ID
-    button.bounds = Rectangle.{bounds.x + (bounds.width - width) * 0.5, bottom - height,
-        width, height}
-    button.label = label
-    button.tone = cast(ButtonTone)ButtonToneAccent
-    button.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    return Button.Draw(app.ui.session, button) != 0
-}
+
 
 // A tap on the window while the practice is set to double tap to breathe:
 // the second tap in quick succession breathes.
@@ -359,167 +313,12 @@ session_window_breathe_tap :: (app: *InnerBreeze, practice: *PracticeDefinition)
 // move, and the X asks to end the practice over the open page. While the
 // practice waits for a breath, its Breath button or a double tap, as it is
 // set, breathes right from the window.
-app_session_window_draw :: (app: *InnerBreeze) {
-    if app == null || app.session_window.screen == ScreenStart ||
-    app_is_session_screen(app.breathing.screen) ||
-    !SessionValid(app.ui.session) {
-        return
-    }
-    if app.session_window.detached {
-        unused session_window_exit_prompt(app)
-        return
-    }
-    window := *app.session_window
-    // It starts at the top right, clear of page titles and of the message
-    // fields and actions along the bottom, and stays where it is dragged
-    // and at the size it is given.
-    if !window.placed {
-        window.size = Vector2.{cast(float32)AppScale(SESSION_WINDOW_WIDTH),
-            cast(float32)AppScale(SESSION_WINDOW_HEIGHT)}
-        window.position = Vector2.{cast(float32)app.ui.view_width - window.size.x,
-            cast(float32)AppScale(72)}
-        window.placed = true
-    }
-    session_window_fit_size(app)
-    session_window_clamp(app)
-    width := window.size.x
-    height := window.size.y
-    bounds := Rectangle.{window.position.x, window.position.y, width, height}
-    session := app.ui.session
-    radius := cast(float32)AppScale(18)
-    // The window floats above the page it covers.
-    shadow := Rectangle.{bounds.x + cast(float32)AppScale(2), bounds.y + cast(float32)AppScale(6),
-        width, height}
-    PaintRoundedFill(session, -1, shadow, radius, 14, Color.{0, 0, 0, 64})
-    Box.Draw(session, Box.Props.{.key = Layout.KeyHash("inbe/session-window/card"),
-            .bounds = bounds, .fill = StyleTokenColor("surface"),
-            .border = color_with_alpha(StyleTokenColor("accent"), 0.35f), .radius = radius})
 
-    app_session_window_picture(app, window.screen, bounds,
-        cast(float32)AppScale(SESSION_WINDOW_BUTTON_ROW))
-    name := practice_label(session_window_practice(window.screen))
-
-    // The whole card returns to the practice and drags the window; the
-    // buttons and the corner handle are submitted after it so their taps
-    // stay their own.
-    card: Button.Props
-    card.id = SESSION_WINDOW_CARD_ID
-    card.bounds = bounds
-    card.invisible = true
-    card.label = name
-    key := cast(u64)card.id
-    previous := TreePrevious(session, TreeCurrentParent(session), key, WidgetKindButton)
-    drag := TreeTakeDragAt(session, previous)
-    if drag.started {
-        window.drag_moved = false
-        window.drag_origin = Vector2.{drag.x, drag.y}
-        window.drag_start = window.position
-    }
-    if drag.active || drag.ended {
-        dx := drag.x - window.drag_origin.x
-        dy := drag.y - window.drag_origin.y
-        threshold := cast(float32)AppScale(6)
-        if dx * dx + dy * dy >= threshold * threshold {
-            window.drag_moved = true
-        }
-        if window.drag_moved {
-            window.position = Vector2.{window.drag_start.x + dx, window.drag_start.y + dy}
-            session_window_clamp(app)
-        }
-    }
-    tapped := drag.ended && !window.drag_moved && TreeHoveredAt(session, previous)
-    activated := Button.Draw(session, card) != 0 || tapped
-    node := TreeSubmitted(session, TreeCurrentParent(session), key, WidgetKindButton)
-    TreeSetDragCapture(session, node, true)
-    session_window_resize(app, bounds)
-
-    button_size := cast(float32)AppScale(36)
-
-    // Maximize returns to the practice; the X asks to end it right here.
-    maximize: Button.Props
-    maximize.id = SESSION_WINDOW_MAXIMIZE_ID
-    maximize.bounds = Rectangle.{bounds.x + width - cast(float32)AppScale(78),
-        bounds.y + cast(float32)AppScale(2), button_size, button_size}
-    maximize.label = LocaleText("session_maximize_button")
-    maximize.icon_only = true
-    maximize.icon_shape = "S1.8rr:M14 5H19V10M10 19H5V14M19 5L13 11M5 19L11 13"
-    maximize.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    maximize.class_name = CssClass("launcher-action")
-    close: Button.Props
-    close.id = SESSION_WINDOW_CLOSE_ID
-    close.bounds = Rectangle.{bounds.x + width - cast(float32)AppScale(42),
-        bounds.y + cast(float32)AppScale(2), button_size, button_size}
-    close.label = LocaleText("close_button")
-    close.icon_only = true
-    close.icon_shape = "S1.8rr:M6 6L18 18M18 6L6 18"
-    close.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    close.class_name = CssClass("launcher-action")
-    if Button.Draw(session, maximize) != 0 {
-        unused app_session_window_restore(app)
-        return
-    }
-    if Button.Draw(session, close) != 0 {
-        app_session_window_close(app)
-        return
-    }
-    practice := practice_get(session_window_practice(window.screen))
-    can_breathe := session_window_can_breathe(app, practice)
-    double_tap := can_breathe && app.double_tap_to_breathe != 0
-    if !double_tap {
-        app.breath_tap_last_time = 0.0
-    }
-    if can_breathe && !double_tap && session_window_breathe_button(app, bounds) {
-        practice.breathe(app)
-        return
-    }
-    if session_window_exit_prompt(app) {
-        return
-    }
-    if !activated || window.drag_moved {
-        return
-    }
-    // Set to double tap, taps on the window are for breathing; maximize
-    // still returns to the practice.
-    if double_tap {
-        session_window_breathe_tap(app, practice)
-        return
-    }
-    unused app_session_window_restore(app)
-}
 
 // Shared content for the in-app card, detached desktop window and Android PiP.
-app_session_window_picture :: (app: *InnerBreeze, screen: s32,
-    bounds: Rectangle, button_row: float32) {
-    session := app.ui.session
-    width := bounds.width
-    height := bounds.height
-    padding := cast(float32)AppScale(SESSION_WINDOW_PADDING)
-    text_height := cast(float32)AppScale(SESSION_WINDOW_TEXT_HEIGHT)
-    picture := Rectangle.{bounds.x + padding, bounds.y + button_row,
-        width - padding * 2.0, height - button_row - text_height - padding}
-    practice := practice_get(session_window_practice(screen))
-    status_text: [64]u8
-    status_text[0] = 0
-    status: string
-    if practice != null && practice.draw_window != null {
-        status = practice.draw_window(app, picture, status_text[:])
-    }
-    name := practice_label(session_window_practice(screen))
-    text_y := picture.y + picture.height + cast(float32)AppScale(4)
-    Text.Draw(session, Text.Props.{.key = Layout.KeyHash("inbe/session-window/name"),
-            .bounds = Rectangle.{bounds.x + padding, text_y, width - padding * 2.0,
-                cast(float32)AppScale(20)},
-            .text = FrameTextHold(*app.ui.frame_text, name), .size = AppScale(15),
-            .wrap = cast(Text.Wrap)TextWrapNone,
-            .align = cast(TextAlign)TextAlignCenter})
-    if status.count > 0 {
-        Text.Draw(session, Text.Props.{.key = Layout.KeyHash("inbe/session-window/status"),
-                .bounds = Rectangle.{bounds.x + padding, text_y + cast(float32)AppScale(20),
-                    width - padding * 2.0, cast(float32)AppScale(18)},
-                .text = FrameTextHold(*app.ui.frame_text, status), .size = AppScale(13),
-                .wrap = cast(Text.Wrap)TextWrapNone,
-                .align = cast(TextAlign)TextAlignCenter,
-                .class_name = CssClass("launcher-muted")})
-    }
 
+
+SessionWindowViewNewStatusText :: () -> [64]u8 {
+    result: [64]u8
+    return result
 }

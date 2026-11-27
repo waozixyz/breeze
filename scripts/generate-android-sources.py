@@ -17,7 +17,9 @@ parser.add_argument("--define", action="append", default=[])
 args = parser.parse_args()
 root = args.root.resolve()
 kryon = args.kryon.resolve()
-sources = sorted((root / "src").rglob("*.zi"))
+sources = sorted(path for path in (root / "src").rglob("*")
+                 if path.suffix in {".zi", ".ts", ".tsx"}
+                 and path.name != "telegram_stars_view_ui.tsx")
 sources.append(root / "apps/practice/hold_reminder.zi")
 # Kryon's Android link wraps fopen; its wrapper serves relative names from the
 # APK's assets and is a host root of its own, as Kryon's generator adds it.

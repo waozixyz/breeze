@@ -116,7 +116,7 @@ check_practice_labels(english, "en.txt")
 sources = []
 for directory in (root / "src", root / "apps", root / "build/packages/kryon/src", root / "build/packages/entity/src"):
     if directory.is_dir():
-        sources += sorted(p for p in directory.rglob("*") if p.suffix in (".zi", ".c", ".h"))
+        sources += sorted(p for p in directory.rglob("*") if p.suffix in (".zi", ".ts", ".tsx", ".c", ".h"))
 
 call = re.compile(r'\b(?:LocaleText|GetLocaleText|FormatLocaleText|[A-Za-z]+LocaleHost)\(\s*"([^"]*)"')
 used = set(DYNAMIC_KEYS)

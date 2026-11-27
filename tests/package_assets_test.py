@@ -76,7 +76,8 @@ for pack in catalog['guide']:
 lumi = assets(root['cells/lumi.zx'])
 assert not any(name.endswith('.ogg') for name in lumi), [name for name in lumi if name.endswith('.ogg')][:3]
 combined = root | practices | content
-source = '\n'.join(path.read_text(errors='replace') for path in (ROOT / 'src').rglob('*.zi'))
+source = '\n'.join(path.read_text(errors='replace') for path in (ROOT / 'src').rglob('*')
+                   if path.suffix in {'.zi', '.ts', '.tsx'})
 paths = set(re.findall(r'"((?:assets/)?(?:practices|pet)/[^"\n]+\.(?:png|jpg|jpeg|webp))"', source))
 assert paths
 for path in paths:

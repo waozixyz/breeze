@@ -1,3 +1,4 @@
+#import "telegram_account_ui"
 Button :: #import "kryon/button";
 Modal :: #import "kryon/modal";
 Scroll :: #import "kryon/scroll";
@@ -187,220 +188,24 @@ TelegramAccountApprovalReady :: (view: *TelegramAccountView, retained: bool) -> 
     view.review_seen && TextUntilNul(view.seen_review_id[:]) == view.review_id
 }
 
-DrawTelegramAccount :: (app: *InnerBreeze, view: *TelegramAccountView) -> s32 {
-    if app == null || view == null || !view.visible || !SessionValid(app.ui.session) {
-        return 0
-    }
-    if TextUntilNul(view.seen_review_id[:]) != view.review_id ||
-    TextUntilNul(view.seen_review_details[:]) != view.details {
-        view.review_seen = false
-        view.scroll_offset = 0
-        unused AppCopyText(view.review_id, view.seen_review_id[:])
-        unused AppCopyText(view.details, view.seen_review_details[:])
-    }
-    width := app.ui.view_width - AppScale(24)
-    if width > AppScale(520) {
-        width = AppScale(520)
-    }
-    height := app.ui.view_height - AppScale(24)
-    if width < AppScale(120) || height < AppScale(120) {
-        return 0
-    }
-    password_label := view.password_label
-    if password_label.count == 0 {
-        password_label = LocaleText("telegram_account_passphrase")
-    }
-    cancel_allowed := TelegramAccountActionAllowed(view, 4)
-    title_key := ifx view.title_key.count > 0 then view.title_key else "telegram_account_title"
-    frame := Modal.Draw(app.ui.session, Modal.Props.{.key = cast(u64)76600,
-            .title = LocaleText(title_key), .width = width, .height = height,
-            .scale = MetricsScale(), .has_right_action = cancel_allowed,
-            .right_label = LocaleText("cancel_button"), .dismiss_disabled = !cancel_allowed})
-    if frame.dismissed || frame.right_clicked {
-        if cancel_allowed {
-            TelegramAccountClearPassword(view.password)
-            return 4
-        }
-        return 0
-    }
-    if !frame.opened {
-        return 0
-    }
-    content_width := cast(s32)frame.layout.content.width
-    message := LocaleText(view.message_key)
-    if view.message_key.count == 0 {
-        if TelegramAccountActionAllowed(view, 1) {
-            message = LocaleText("telegram_account_create_body")
-        } else if TelegramAccountActionAllowed(view, 2) || TelegramAccountActionAllowed(view, 7) {
-            message = LocaleText("telegram_account_restore_body")
-        } else {
-            message = LocaleText("telegram_account_connect_body")
-        }
-    }
-    status := view.status
-    if view.restore_failed {
-        status = LocaleText("telegram_account_restore_failed")
-    }
-    track := Scroll.ScrollFace(StyleKindScroll(), 0, false,
-        cast(s32)ButtonStateNormal, 10.0)
-    thumb := Scroll.ScrollFace(StyleKindScrollThumb(), 0, false,
-        cast(s32)ButtonStateNormal, 10.0)
-    scroll_metrics := Scroll.ScrollMetricsFor(MetricsScale(), track, thumb)
-    review_display: [8193]u8
-    review := ""
-    paragraphs: [3]string = .[message, status, ""]
-    if paragraphs[1].count > 1024 {
-        paragraphs[1] = ""
-    }
-    paragraph_heights: [3]s32
-    password_label_height: s32 = 0
-    content_height: s32 = 0
-    // The scrollbar narrows the child clip. Measure again at that width before
-    // opening the scroll scope, so wrapping, content height and controls agree.
-    for pass: 0..1 {
-        content_height = AppScale(16)
-        review = ""
-        if TelegramAccountReviewText(view.details, content_width, review_display[:]) {
-            review = TextUntilNul(review_display[:])
-        }
-        paragraphs[2] = review
-        for index: 0..2 {
-            paragraph_heights[index] = 0
-            if paragraphs[index].count > 0 {
-                prepared := Text.PrepareText(Text.Props.{.text = paragraphs[index], .size = AppFontSize(),
-                        .bounds = Rectangle.{0.0, 0.0, cast(float32)content_width, 0.0},
-                        .wrap = cast(Text.Wrap)TextWrapAuto}, Text.DefaultTextFace())
-                paragraph_heights[index] = cast(s32)prepared.bounds.height + AppScale(16)
-                content_height += paragraph_heights[index]
-            }
-        }
-        if view.password != null {
-            prepared := Text.PrepareText(Text.Props.{.text = password_label, .size = AppFontSize(),
-                    .bounds = Rectangle.{0.0, 0.0, cast(float32)content_width, 0.0},
-                    .wrap = cast(Text.Wrap)TextWrapAuto}, Text.DefaultTextFace())
-            password_label_height = cast(s32)prepared.bounds.height + AppScale(8)
-            content_height += password_label_height + AppScale(64)
-        }
-        for action: cast(s32)1..7 {
-            if TelegramAccountActionAllowed(view, action) {
-                content_height += AppScale(56)
-            }
-        }
-        if pass == 0 && cast(float32)content_height > frame.layout.content.height {
-            narrowed := Scroll.ScrollContentBounds(frame.layout.content, true, scroll_metrics)
-            content_width = cast(s32)narrowed.width
-        } else {
-            break
-        }
-    }
-    scroll := Scroll.Draw(app.ui.session, Scroll.Props.{.key = cast(u64)76601,
-            .bounds = frame.layout.content, .content_height = content_height,
-            .scroll_offset = view.scroll_offset, .scale = MetricsScale(),
-            .metrics = scroll_metrics})
-    view.scroll_offset = scroll.scroll_offset
-    result: s32 = 0
-    if scroll.opened {
-        x := cast(s32)scroll.content.x
-        y := cast(s32)scroll.content.y + AppScale(8)
-        review_retained := false
-        for index: 0..2 {
-            if paragraphs[index].count > 0 {
-                held := FrameTextHold(*app.ui.frame_text, paragraphs[index])
-                Text.Draw(app.ui.session, Text.Props.{.text = held, .size = AppFontSize(),
-                        .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                            cast(float32)content_width, cast(float32)paragraph_heights[index]},
-                        .wrap = cast(Text.Wrap)TextWrapAuto})
-                y += paragraph_heights[index]
-                if index == 2 {
-                    review_retained = held.count == review.count && held.count > 0
-                    if review_retained && cast(float32)(y - AppScale(16)) <=
-                    scroll.viewport.y + scroll.viewport.height {
-                        view.review_seen = true
-                    }
-                }
-            }
-        }
-        password_valid := false
-        if view.password != null {
-            held_label := FrameTextHold(*app.ui.frame_text, password_label)
-            Text.Draw(app.ui.session, Text.Props.{.text = held_label, .size = AppFontSize(),
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                        cast(float32)content_width, cast(float32)password_label_height},
-                    .wrap = cast(Text.Wrap)TextWrapAuto})
-            y += password_label_height
-            password := view.password
-            mask: [257]u8
-            password_valid = held_label.count == password_label.count && held_label.count > 0 &&
-            TelegramAccountPasswordMask(password, mask[:])
-            if password_valid {
-                typed: [128]u8
-                input := SampleTextFieldInput(password.focused && !view.busy, typed[:])
-                input.copy = false
-                input.cut = false
-                field := TextField.Draw(app.ui.session, TextField.Props.{.key = cast(u64)76602,
-                        .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                            cast(float32)content_width, cast(float32)AppScale(48)},
-                        .value = AppTextFromCString(*password.value[0], 257),
-                        .display_value = FrameTextHold(*app.ui.frame_text, TextUntilNul(mask[:])),
-                        .label = held_label, .cursor = password.cursor,
-                        .anchor = password.anchor, .scroll_x = password.scroll_x,
-                        .focused = password.focused, .composition = password.composition,
-                        .focus_id = 76602, .max_bytes = 256, .max_codepoints = 256,
-                        .secure = true, .disabled = view.busy || held_label.count != password_label.count || held_label.count == 0,
-                        .input = input, .scale = MetricsScale()})
-                if field.edit.changed {
-                    unused AppReplaceText(password.value[:], field.edit.start,
-                        field.edit.end, field.edit.replacement)
-                }
-                password.cursor = field.cursor
-                password.anchor = field.anchor
-                password.scroll_x = field.scroll_x
-                password.focused = field.focused
-                // A password's composition is never exposed as visible text.
-                password.composition = field.composition
-                SecureWipe(*typed[0], 128)
-                if field.escaped && cancel_allowed {
-                    TelegramAccountClearPassword(password)
-                    result = 4
-                }
-            }
-            y += AppScale(64)
-        }
-        for action: cast(s32)1..7 {
-            if !TelegramAccountActionAllowed(view, action) {
-                continue
-            }
-            disabled := view.busy && action != 4
-            if action == 6 && !TelegramAccountApprovalReady(view, review_retained) {
-                disabled = true
-            }
-            if view.password != null && (action == 5 || action == 7) &&
-            (!password_valid || view.password.value[0] == cast(u8)0 || password_label.count == 0) {
-                disabled = true
-            }
-            label := TelegramAccountActionLabel(action)
-            if view.action_labels[action].count > 0 {
-                label = FrameTextHold(*app.ui.frame_text, view.action_labels[action])
-                if label.count == 0 {
-                    disabled = true
-                }
-            }
-            if Button.Draw(app.ui.session, Button.Props.{.id = 76610 + action,
-                    .bounds = Rectangle.{cast(float32)x, cast(float32)y,
-                        cast(float32)content_width, cast(float32)AppScale(48)},
-                    .label = label, .disabled = disabled,
-                    .loading = view.busy && action != 4,
-                    .emphasis = cast(ButtonEmphasis)(ifx action == 4 then ButtonEmphasisGhost else ButtonEmphasisFilled)}) != 0 &&
-            result == 0 && !disabled {
-                result = action
-                if action == 4 {
-                    TelegramAccountClearPassword(view.password)
-                }
-            }
-            y += AppScale(56)
-        }
-        unused End(app.ui.session)
-    }
-    unused End(app.ui.session)
+
+
+TelegramAccountNewReviewDisplay :: () -> [8193]u8 {
+    result: [8193]u8
+    return result
+}
+
+TelegramAccountNewParagraphHeights :: () -> [3]s32 {
+    result: [3]s32
+    return result
+}
+
+TelegramAccountNewMask :: () -> [257]u8 {
+    result: [257]u8
+    return result
+}
+
+TelegramAccountNewTyped :: () -> [128]u8 {
+    result: [128]u8
     return result
 }

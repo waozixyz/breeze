@@ -19,46 +19,53 @@ in `ziran.lock`, linked at `build/packages/practices` and packaged under
 `ziran update practices` and commit the lock. The narration, character
 and Tai Chi generators write into a practices checkout mapped in
 `ziran.local.toml` and refuse the locked package.
+Application and module UI is authored in `.tsx` using Kryon's public
+`kryon/tsx/*` components and native widget props. Native `.zi` modules keep
+state, models, persistence, media, platform effects and geometry. Existing
+package entrypoints and host-facing exports keep their native ABI and call
+into the TSX views. Fixed native buffers and records retain their native
+owners; views do not declare a second schema.
+
 The app picker, Lists and Diary editor/calendar compose the
-standard Kryon widgets inside their ZX bundles. Raylib, Android and canvas bind the
+standard Kryon components inside their ZX bundles. Raylib, Android and canvas bind the
 same typed render effects to their normal widgets. File dialogs, persistence,
 account sync and native input stay in the wrapper. Habits draws all of its
 screens in its package: the habit list and each habit's week and calendar
-(`apps/habits/habit_list_view.zi`), a day's screen and the entry dialog
-(`habit_day_view.zi`), the editor with its practice picker
-(`habit_edit_view.zi`), the statistics (`habit_stats_view.zi`), the count
-dialog and the editor's save/discard/delete confirmations (`habits_view.zi`
-and `editor_dialogs.zi`). Practices draws its home in its package
-(`apps/practice/practice_home_view.zi`): the host gives the chosen
+(`apps/habits/habit_list_screen.tsx`), a day's screen and the entry dialog
+(`habit_day_screen.tsx`), the editor with its practice picker
+(`habit_edit_screen.tsx`), the statistics (`habit_statistics_screen.tsx`), the count
+dialog and the editor's save/discard/delete confirmations (`habit_dialogs.tsx`
+and `editor_dialogs.tsx`). Practices draws its home in its package
+(`apps/practice/practice_home_view_ui.tsx`): the host gives the chosen
 practice's banner, title, tabs and what its card offers (Start, or Install,
 Unlock or Cancel with the download's status and price, from
 `src/practices/practice_offer.zi`), and does what the page asks: start,
 open the manual or settings, press the offer, or choose another practice by
 swipe, arrow key, arrow button or tab. The manuals of Wim Hof, Meditation,
 Patterns, Astral Projection and Sun Salutation are the package's too
-(`apps/practice/manual_view.zi`): the host gives the page, the guide's
+(`apps/practice/manual_view_ui.tsx`): the host gives the page, the guide's
 colours and the settings the pages show, runs the Wim Hof breathing preview
 and saves a speed changed on its page (`src/practices/practice_manual_host.zi`),
 and each practice closes its manual or starts from what the page asks.
 The Customize pages of Meditation, Breathing Patterns, Wim Hof, Astral
-Projection, Sun Salutation and Tai Chi come from the package as well (`apps/practice/settings_view.zi`): the host gives the settings, the
+Projection, Sun Salutation and Tai Chi come from the package as well (`apps/practice/settings_view_ui.tsx`): the host gives the settings, the
 music tracks with the chosen track's download, and the languages narration
 is recorded in, and saves the one change the page asks for
 (`src/practices/practice_settings_host.zi`). A finished practice's results
-are drawn there too (`apps/practice/results_view.zi`): the host gives the
+are drawn there too (`apps/practice/results_view_ui.tsx`): the host gives the
 session's numbers and reads out each Wim Hof round, and keeps the mood
 picked, discards the session or closes the results as asked. The running
-Meditation, Patterns and Wim Hof layouts are in `meditation_view.zi`,
-`patterns_view.zi` and `whm_view.zi`; Sun Salutation, Tai Chi, Astral Projection
-and the 7-Minute Workout use `movement_view.zi`. Tai Chi's course chooser is
-in `course_view.zi`: its eight numbered lessons start directly from illustrated gallery cards.
+Meditation, Patterns and Wim Hof layouts are in `meditation_view_ui.tsx`,
+`patterns_view_ui.tsx` and `whm_view_ui.tsx`; Sun Salutation, Tai Chi, Astral Projection
+and the 7-Minute Workout use `movement_view_ui.tsx`. Tai Chi's course chooser is
+in `course_view_ui.tsx`: its eight numbered lessons start directly from illustrated gallery cards.
 Their original PNG covers are bundled in the free Practices package, including
 previews for locked lessons, so the gallery works offline.
 Lessons 1–3 and Foundations work offline without an account; lessons 4–8 and
 the full form use the existing one-time course unlock. Foundations has a separate
 page, and progress counts completed numbered lessons. These pages return actions to the host, which retains
 session clocks, saved settings, audio, lifecycle and routing. Workout's custom
-editor lives in `apps/practice/workout_builder.zi`. The Workout carousel
+editor lives in `apps/practice/workout_builder_ui.tsx`. The Workout carousel
 shows the seven-minute preset, the four-minute preset and Custom workout in
 that order. **Manage workouts** opens the routine library and editor in a
 modal. Customize on either preset opens the shared character picker.
@@ -126,7 +133,7 @@ Wim Hof rounds and span times, then each answer chart, its points, each
 hold and each change. Their answer charts are plot's band chart, which the
 host draws for the package (`BandChartHostSupports` and `BandChartHostCall`
 from `plot/band_chart_host`).
-The habit shop is Habits' own page as well (`apps/habits/shop_view.zi`): the
+The habit shop is Habits' own page as well (`apps/habits/shop_screen.tsx`): the
 package draws the coins, the rewards and the form and asks the wrapper to
 save, delete or buy a reward; the wrapper checks each request against what
 is stored, so a reward is bought only at its stored price with enough coins.
@@ -170,7 +177,7 @@ navigation bars use the matching transparent `assets/lumi/sidebar.png`.
 The chat avatar is mirrored toward the conversation. Enter sends a message;
 Shift+Enter inserts a new line and the composer grows with the draft.
 
-`apps/lumi/lumi_view.zi` composes the chat and command suggestions with hosted
+`apps/lumi/lumi_view_ui.tsx` composes the chat and command suggestions with hosted
 Kryon widgets. `apps/lumi/engine.zi` interprets supported commands offline;
 its typed `LumiAction` output is validated by the host before an action runs.
 Offline commands need no AI model or model download. Lumi starts offline.

@@ -1,3 +1,4 @@
+#import "crash_report_dialog_ui"
 // Relaunch crash-report confirmation dialog. Pending crash diagnostics are
 // never queued or sent until the person explicitly chooses Send.
 Layout :: #import "kryon/layout";
@@ -129,56 +130,4 @@ CrashReportModalMessage :: (app: *InnerBreeze) -> string {
     message := FrameTextHold(*app.ui.frame_text, body)
     PackageFree(body)
     return message
-}
-
-CrashReportModalDraw :: (app: *InnerBreeze) {
-    if app == null {
-        return
-    }
-    if !crash_report_pending.present {
-        app_close_modal(app)
-        return
-    }
-    message := CrashReportModalMessage(app)
-
-    actions: [2]Modal.ActionModalAction = .[
-    Modal.ActionModalAction.{
-        .label = LocaleText("crash_report_dismiss"),
-        .tone = cast(ButtonTone)ButtonToneNeutral,
-        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    },
-    Modal.ActionModalAction.{
-        .label = LocaleText("crash_report_send"),
-        .tone = cast(ButtonTone)ButtonToneAccent,
-        .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    }
-    ]
-    props := Modal.ActionModalProps.{
-        .key = Layout.KeyHash("inbe/crash-report"),
-        .title = LocaleText("crash_report_title"),
-        .message = message,
-        .max_width = 460
-    }
-    choice := Modal.ActionModal(app.ui.session, props, actions[:]).action
-    if choice == 1 || choice == -1 {
-        CrashReportDiscard(*crash_report_pending)
-        crash_report_prompted = false
-        app_close_modal(app)
-    } else if choice == 2 {
-        queued := CrashReportApproveAndQueue(
-            *crash_report_pending,
-            app.breathing.screen,
-            app.enabled_apps & AppsInstalledMask(),
-            AppThemeName(app.theme_id),
-            app.ui_scale_tenths)
-        if queued {
-            LumiFeedbackWake()
-            crash_report_prompted = false
-            app_close_modal(app)
-            online_ready := storage_has_sync_account() != 0 && LumiNodeTrafficAllowed()
-            AppToast(LocaleText(ifx online_ready then "crash_report_queued" else "crash_report_saved_offline"))
-        } else {
-            AppToast(LocaleText("crash_report_failed"))
-        }
-    }
 }

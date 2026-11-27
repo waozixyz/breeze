@@ -48,14 +48,13 @@ export function RadioView(message: AppMessage): AppMessage {
                 Model.RadioRect(cabinet, 942.0, 735.0, 160.0, 160.0), target);
             const pointer = Model.RadioDragUpdate(volume_control, tuning, frame.scale);
             const drag_moved = Model.drag_moved;
-            const selected = Model.selected;
             // Presets are ordinary buttons: focus, activation and drags.
             for (let index: s32 = s32(0); index < s32(RADIO_STATION_COUNT); index += s32(1)) {
                 const preset = Model.RadioTarget(Model.RadioRect(cabinet,
                     767.0 + float32(index) * 80.0, 636.0, 80.0, 62.0), target);
                 const pressed = <Button session={frame.session}
                     props={{id: s32(26010) + index, bounds: preset,
-                        label: StationName(index), selected: selected === index,
+                        label: StationName(index), selected: Model.selected === index,
                         icon_only: true, invisible: true,
                         tone: ButtonTone.ButtonToneNeutral,
                         emphasis: ButtonEmphasis.ButtonEmphasisGhost}}/>;
@@ -91,7 +90,7 @@ export function RadioView(message: AppMessage): AppMessage {
             const tuning_pressed = <Button session={frame.session}
                 props={{id: s32(26005), bounds: tuning,
                     label: Model.AppLocaleHost("radio_tuning"),
-                    detail: StationName(selected),
+                    detail: StationName(Model.selected),
                     icon_only: true, invisible: true,
                     tone: ButtonTone.ButtonToneNeutral,
                     emphasis: ButtonEmphasis.ButtonEmphasisGhost}}/>;

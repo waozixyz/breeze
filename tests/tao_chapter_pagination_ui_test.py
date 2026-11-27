@@ -139,6 +139,9 @@ with contextlib.ExitStack() as stack:
     receipt["sources"] = {str(path.relative_to(ROOT)): digest(path) for path in
                           [ROOT / "apps/library/library.zi", ROOT / "apps/library/books.zi",
                            ROOT / "apps/library/tao_te_ching.zi"]}
+    if not args.capture_baseline:
+        for name in ("library_model.zi", "library_ui.tsx"):
+            receipt["sources"]["apps/library/" + name] = digest(ROOT / "apps/library" / name)
     if args.capture_baseline:
         for name in ("library.zi", "books.zi"):
             receipt["sources"]["apps/library/" + name] = digest(CAPTURES / name)

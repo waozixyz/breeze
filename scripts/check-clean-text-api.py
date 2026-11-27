@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 
-SOURCE_SUFFIXES = {".c", ".h", ".zi"}
+SOURCE_SUFFIXES = {".c", ".h", ".zi", ".ts", ".tsx"}
 SKIPPED_DIRECTORIES = {".git", "build", "dist", "vendor", "vendor-builds"}
 # A bare `Text(` call, not `Text.Draw(` or a member such as `value.Text(`.
 LEGACY_TEXT_CALL = re.compile(r"(?<![\w.])Text\s*\(")

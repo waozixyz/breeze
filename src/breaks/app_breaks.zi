@@ -1,3 +1,5 @@
+#import "break_overlay_ui"
+#import "app_breaks_ui"
 c :: #system_library "c";
 #import, file "../platform/host_clock.zi";
 #if !#defined(PLATFORM_WEB) {
@@ -98,22 +100,7 @@ BreakToastMessage :: () -> string {
     return BuilderFinish(message)
 }
 
-#program_export
-app_breaks_draw_toast :: (app: *InnerBreeze, viewport: Rectangle) {
-    if app == null || !SessionValid(app.ui.session) { return }
-    if break_toast_state.message.count == 0 &&
-    break_toast_request.count == 0 { return }
-    props: Toast.Props
-    props.key = cast(u64)0x627265616b746f61
-    props.viewport = viewport
-    props.state = break_toast_state
-    props.message = break_toast_request
-    props.seconds = AppNotificationToastSeconds
-    props.now_seconds = HostSeconds()
-    props.scale = GetDPIScale()
-    break_toast_state = Toast.Draw(app.ui.session, props).state
-    break_toast_request = ""
-}
+
 
 close_break_window :: () {
     #if DESKTOP {
@@ -188,17 +175,7 @@ break_hud_row_height :: (app: *InnerBreeze, label: string,
     return BreakReminderLayout(props.bounds, text_height, scale).height
 }
 
-break_hud_draw_time :: (session: Session, text: string, right_x: s32,
-    layout: BreakReminderLayoutResult, width: s32, font: s32) {
-    props: Text.Props
-    props.bounds = Rectangle.{cast(float32)(right_x - AppTextWidth(text, font)),
-        layout.text.y, cast(float32)width, layout.text.height}
-    props.text = text
-    props.size = font
-    props.vertical_align = cast(TextAlign)TextAlignCenter
-    props.wrap = cast(Text.Wrap)TextWrapNone
-    Text.Draw(session, props)
-}
+
 
 #program_export
 CloseBreakWindows :: () {
@@ -222,7 +199,7 @@ break_fallback_pointer_seen :: () -> bool {
     primary := HostPointer()
     secondary := HostSecondaryPointer()
     return wheel.x != 0.0 || wheel.y != 0.0 || HostPointerMoved() ||
-        primary.pressed || primary.released || secondary.pressed || secondary.released
+    primary.pressed || primary.released || secondary.pressed || secondary.released
 }
 
 break_fallback_key_seen :: () -> bool {
@@ -924,137 +901,24 @@ app_breaks_hud_update :: (app: *InnerBreeze) {
     }
 }
 
+
+
+AppBreaksNewLine :: () -> [64]u8 {
+    result: [64]u8
+    return result
+}
+
+#program_export
+app_breaks_draw_toast :: (app: *InnerBreeze, viewport: Rectangle)  {
+    app_breaks_draw_toastView(app, viewport)
+}
+
+break_hud_draw_time :: (session: Session, text: string, right_x: s32,
+    layout: BreakReminderLayoutResult, width: s32, font: s32)  {
+    break_hud_draw_timeView(session, text, right_x, layout, width, font)
+}
+
 app_breaks_hud_draw :: (app: *InnerBreeze, hud_w: s32, hud_h: s32,
-    row_h: s32, pad: s32, scale: float32) {
-    track := DarkenColor(StyleTokenColor("canvas"), 18)
-    border: Color = DarkenColor(StyleTokenColor("text"), 62)
-    // The theme's colors for time running toward a break, a break that is
-    // due now, and idle time that counts toward a natural break.
-    fill := StyleTokenColor("progress")
-    overdue := StyleTokenColor("danger")
-    idle_col := StyleTokenColor("link")
-
-    Box.Draw(app.ui.session, Box.Props.{
-            .bounds = Rectangle.{0.0, 0.0, cast(float32)hud_w, cast(float32)hud_h},
-            .fill = track, .border = border
-        })
-
-    row: s32 = 0
-    {
-        t: s32 = 0
-        while t < BREAK_TYPE_COUNT {
-            timer: *BreakTimer = *app.breaks.timers[t]
-            if timer.enabled == 0 {
-                t += 1; continue
-            }
-            row_y := pad + row_h * row
-            row = row + 1
-            bar_x := pad
-            bar_w := hud_w - pad * 2
-            time_x := hud_w - pad
-            next := BreakNextDueSeconds(app.breaks, t)
-            font: s32 = AppScale(Text.Text12)
-            time_reserve := break_hud_time_reserve(timer)
-            label_width := bar_w - time_reserve - AppScale(8)
-            if label_width < 1 {
-                label_width = 1
-            }
-            label_props: Text.Props
-            label_props.bounds = Rectangle.{cast(float32)bar_x,
-                cast(float32)row_y, cast(float32)label_width, 0.0}
-            label_props.text = break_hud_label(t)
-            label_props.size = font
-            label_props.wrap = cast(Text.Wrap)TextWrapAuto
-            label_height := TextHeight(app.ui.session, label_props)
-            if label_height <= 0 {
-                label_height = font
-            }
-            row_layout := BreakReminderLayout(label_props.bounds,
-                label_height, scale)
-
-            label_props.bounds = row_layout.text
-            Text.Draw(CurrentApp().ui.session, label_props)
-
-            if next < 0 {
-                line_text := "off"
-                break_hud_draw_time(app.ui.session, line_text, time_x,
-                    row_layout, time_reserve, font)
-            } else if timer.state == BreakStateBreaking {
-                // active break: count down the remaining rest time (this is the
-                // wait that resets the timer once it completes)
-                left: s32 = timer.duration_s - timer.idle_s
-                if left < 0 {
-                    left = 0
-                }
-                line := BreakFormatDuration(left)
-                line_text := AppTextFromCString(*line.bytes[0], 16)
-                break_hud_draw_time(app.ui.session, line_text, time_x,
-                    row_layout, time_reserve, font)
-                if timer.duration_s > 0 {
-                    fraction := timer.idle_s * (bar_w - 2) / timer.duration_s
-                    if fraction > bar_w - 2 {
-                        fraction = bar_w - 2
-                    }
-                    bar_bounds: Rectangle = Rectangle.{row_layout.bar.x, row_layout.bar.y, cast(float32)bar_w, row_layout.bar.height}
-                    Box.Draw(app.ui.session, Box.Props.{
-                            .bounds = bar_bounds,
-                            .fill = DarkenColor(StyleTokenColor("canvas"), 30),
-                            .border = DarkenColor(StyleTokenColor("canvas"), 30)
-                        })
-                    if fraction > 0 {
-                        Box.Draw(app.ui.session, Box.Props.{
-                                .bounds = Rectangle.{bar_bounds.x + 1.0, bar_bounds.y, cast(float32)fraction, bar_bounds.height},
-                                .fill = fill, .border = fill
-                            })
-                    }
-                }
-            } else {
-                line: [64] u8
-                if next == 0 {
-                    AppCopyText(LocaleText("settings_breaks_due_now"), line[:])
-                } else {
-                    duration := BreakFormatDuration(next)
-                    AppCopyText(AppTextFromCString(*duration.bytes[0], 16), line[:])
-                }
-                line_text := AppTextFromCString(*line[0], 64)
-                break_hud_draw_time(app.ui.session, line_text, time_x,
-                    row_layout, time_reserve, font)
-
-                if timer.limit_s > 0 {
-                    fraction := timer.active_s * (bar_w - 2) / timer.limit_s
-                    if fraction > bar_w - 2 {
-                        fraction = bar_w - 2
-                    }
-                    bar_bounds: Rectangle = Rectangle.{row_layout.bar.x, row_layout.bar.y, cast(float32)bar_w, row_layout.bar.height}
-                    Box.Draw(app.ui.session, Box.Props.{
-                            .bounds = bar_bounds,
-                            .fill = DarkenColor(StyleTokenColor("canvas"), 30),
-                            .border = DarkenColor(StyleTokenColor("canvas"), 30)
-                        })
-                    if fraction > 0 {
-                        bar_color := ifx (next == 0) then (overdue) else (fill)
-                        Box.Draw(app.ui.session, Box.Props.{
-                                .bounds = Rectangle.{bar_bounds.x + 1.0, bar_bounds.y, cast(float32)fraction, bar_bounds.height},
-                                .fill = bar_color, .border = bar_color
-                            })
-                    }
-                    // Idle progress toward a natural break: a tip in the idle
-                    // color grows on top of the fill toward the end of the bar.
-                    // A full tip means the idle duration is reached - the break
-                    // is taken naturally and the timer resets.
-                    if timer.state == BreakStateRunning && timer.duration_s > 0  && timer.idle_s > 0 && timer.idle_latched == 0 {
-                        tip := (bar_w - 2 - fraction) * timer.idle_s / timer.duration_s
-                        if tip > 0 {
-                            Box.Draw(app.ui.session, Box.Props.{
-                                    .bounds = Rectangle.{bar_bounds.x + 1.0 + cast(float32)fraction, bar_bounds.y, cast(float32)tip, bar_bounds.height},
-                                    .fill = idle_col, .border = idle_col
-                                })
-                        }
-                    }
-                }
-            }
-            t += 1
-        }
-
-    }
+    row_h: s32, pad: s32, scale: float32)  {
+    app_breaks_hud_drawView(app, hud_w, hud_h, row_h, pad, scale)
 }

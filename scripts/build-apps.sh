@@ -48,12 +48,9 @@ for feature in lists habits practices diary lumi leaderboard; do
     if [ "$feature" = practices ]; then source=practice; entry=practice; fi
     locale_args=
     if [ "$feature" = diary ]; then locale_args="--asset-dir locales=build/package-assets/diary/locales"; fi
-    # Practices already belongs to the root manifest. Passing its source
-    # folder again would register the same modules as generated modules.
-    set -- --module-path "apps/$source"
-    if [ "$feature" = practices ]; then set --; fi
+    # Every app source is registered in the project manifest, including TSX.
     # shellcheck disable=SC2086
-    bundle --root . "$@" $locale_args \
+    bundle --root . $locale_args \
         --define KRYON_HOSTED_UI \
         --asset-dir "assets=build/package-assets/$feature/assets" \
         --entry "$entry:Main" -o "$output/$feature.zx" \
@@ -64,7 +61,7 @@ done
 python3 scripts/small_app_bundling.py --bundles "$output"
 # The package folder keeps its historical name cells/ for released hosts.
 # shellcheck disable=SC2086
-bundle --root . --module-path apps/inbe \
+bundle --root . \
     --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "assets=build/package-assets/inbe/assets" \
     --asset-dir "styles=build/package-assets/inbe/styles" \
@@ -74,7 +71,7 @@ bundle --root . --module-path apps/inbe \
     --asset-dir "assets/entity=$entity_dir/assets/entity" --asset-dir "assets/entity/bundles=build/entity" \
     --asset-dir "cells=build/bundled-apps" -o build/inbe.zx apps/inbe/inbe.zi
 # shellcheck disable=SC2086
-bundle --root . --module-path apps/inbe \
+bundle --root . \
     --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "assets=build/package-assets/inbe/assets" \
     --asset-dir "styles=build/package-assets/inbe/styles" \

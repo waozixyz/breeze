@@ -1,3 +1,4 @@
+#import "settings_screen_ui"
 // Settings navigation for this device's preferences. Account, data and
 // Telegram live in Profile. Each panel owns its own controls and persistence.
 #import, file "../../app/app.zi";
@@ -141,191 +142,13 @@ SettingsScreenTabProps :: (app: *InnerBreeze,
     return props
 }
 
-SettingsScreenPanel :: (app: *InnerBreeze,
-    tab: s32, bounds: Rectangle) {
-    if bounds.width <= 0.0 || bounds.height <= 0.0 { return }
-    padding := AppScale(ifx bounds.width < 240.0 then 8 else 16)
-    column := Layout.CenteredColumnFor(cast(s32)bounds.width,
-        AppScale(760), padding)
-    content_height := settings_tab_content_height(app, tab, column.width) + AppScale(24)
-    key := Layout.KeyHash("inbe/settings/panel")
-    props: Scroll.Props
-    props.key = key
-    props.bounds = bounds
-    if content_height > cast(s32)bounds.height {
-        track := Scroll.ScrollFace(StyleKindScroll(), 0, false, cast(s32)ButtonStateNormal, 10.0)
-        thumb := Scroll.ScrollFace(StyleKindScrollThumb(), 0, false, cast(s32)ButtonStateNormal, 10.0)
-        props.metrics = Scroll.ScrollMetricsFor(1.0, track, thumb)
-        content := Scroll.ScrollContentBounds(bounds, true, props.metrics)
-        column = Layout.CenteredColumnFor(cast(s32)content.width, AppScale(760), padding)
-        content_height = settings_tab_content_height(app, tab, column.width) + AppScale(24)
-    }
-    props.content_height = content_height
-    props.scroll_offset = app.settings_scroll
-    scrolled := Scroll.Draw(app.ui.session, props)
-    app.settings_scroll = scrolled.scroll_offset
-    if !scrolled.opened { return }
-    x := cast(s32)scrolled.content.x + column.x
-    width := column.width
-    y := cast(s32)scrolled.content.y + AppScale(12)
-    device_state: SettingsDeviceState
-    if tab == {
-        case SETTINGS_TAB_DEVICE;
-        settings_device_draw(app, x, width, *y, *device_state)
-        case SETTINGS_TAB_AUDIO;
-        settings_audio_draw(app, x, width, *y)
-        case SETTINGS_TAB_BREAKS;
-        #if SETTINGS_DESKTOP {
-            settings_breaks_draw(app, x, width, *y)
-        }
-        case SETTINGS_TAB_NOTIFICATIONS;
-        settings_notifications_draw(app, x, width, *y)
-        case SETTINGS_TAB_THEME;
-        settings_theme_draw(app, x, width, *y, *app.theme_state)
-        case;
-        settings_about_draw(app, x, width, *y)
-    }
-    End(app.ui.session)
-    if tab == SETTINGS_TAB_DEVICE {
-        settings_device_handle_overlays(app, *device_state)
-    } else if tab == SETTINGS_TAB_NOTIFICATIONS {
-        settings_notifications_handle_overlays(app)
-    }
-}
 
-SettingsScreenMobileHub :: (app: *InnerBreeze) {
-    width := app.ui.view_width
-    height := app.ui.view_height - app_content_bottom_reserved(app)
-    column := Layout.CenteredColumnFor(width, AppScale(560), AppScale(16))
-    title_height := AppTitleBarHeight()
-    bar: TitleBar.Props
-    bar.bounds = SettingsScreenRect(0, 0, width, title_height)
-    bar.title = LocaleText("settings_title")
-    bar.height = title_height
-    bar.has_leading_action = app.modal.active == 0
-    bar.leading_label = LocaleText("back_button")
-    options: [1]Dropdown.Option
-    result := TitleBar.Draw(app.ui.session, bar, options[0:0])
-    if result.clicked_leading {
-        app_block_current_click(app)
-        app_settings_back(app)
-        return
-    }
-    top := title_height + AppScale(12)
-    row_h := AppScale(52)
-    content_height := SettingsScreenTabCount() * row_h + AppScale(12)
-    viewport := SettingsScreenRect(column.x, top, column.width,
-        height - top - AppScale(12))
-    key := Layout.KeyHash("inbe/settings/mobile-hub")
-    props: Scroll.Props
-    props.key = key
-    props.bounds = viewport
-    props.content_height = content_height
-    props.scroll_offset = app.settings_scroll
-    scrolled := Scroll.Draw(app.ui.session, props)
-    app.settings_scroll = scrolled.scroll_offset
-    if !scrolled.opened { return }
-    y := cast(s32)scrolled.content.y
-    surface := DarkenColor(StyleTokenColor("canvas"), 5)
-    divider := DarkenColor(StyleTokenColor("canvas"), 18)
-    tabs_bounds := SettingsScreenRect(column.x, y,
-        column.width, SettingsScreenTabCount() * row_h)
-    PaintRoundedFill(app.ui.session, -1, tabs_bounds,
-        cast(float32)AppScale(14), 12, surface)
-    position: s32 = 0
-    while position < SettingsScreenTabCount() {
-        if position > 0 {
-            PaintRoundedFill(app.ui.session, -1,
-                SettingsScreenRect(column.x + AppScale(16), y,
-                column.width - AppScale(32), AppScale(1)),
-                0.0, 4, divider)
-        }
-        tab := SettingsScreenTabAt(position)
-        tab_props := SettingsScreenTabProps(app, tab,
-            column.x, y, column.width, row_h,
-            7510 + position)
-        tab_props.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-        if Button.Draw(app.ui.session, tab_props) != 0 {
-            app.settings_tab = tab
-            app.settings_overview = 0
-            app.settings_scroll = 0
-        }
-        y += row_h
-        position += 1
-    }
-    End(app.ui.session)
-}
 
-SettingsScreenDesktop :: (app: *InnerBreeze) {
-    width := app.ui.view_width
-    height := app.ui.view_height - app_content_bottom_reserved(app)
-    outer := AppScale(20)
-    nav_width := AppScale(220)
-    gap := AppScale(20)
-    if width < AppScale(780) {
-        nav_width = AppScale(170)
-        gap = AppScale(12)
-    }
-    title_height := AppTitleBarHeight()
-    bar: TitleBar.Props
-    bar.bounds = SettingsScreenRect(0, 0, width, title_height)
-    bar.title = LocaleText("settings_title")
-    bar.height = title_height
-    bar.has_leading_action = app.modal.active == 0
-    bar.leading_label = LocaleText("back_button")
-    options: [1]Dropdown.Option
-    result := TitleBar.Draw(app.ui.session, bar, options[0:0])
-    if result.clicked_leading {
-        app_block_current_click(app)
-        app_settings_back(app)
-        return
-    }
-    top := title_height + AppScale(12)
-    nav_y := top
-    position: s32 = 0
-    while position < SettingsScreenTabCount() {
-        tab := SettingsScreenTabAt(position)
-        tab_props := SettingsScreenTabProps(app, tab,
-            outer, nav_y, nav_width, AppScale(48),
-            7600 + position)
-        if !tab_props.selected {
-            tab_props.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-        }
-        if Button.Draw(app.ui.session, tab_props) != 0 {
-            app.settings_tab = tab
-            app.settings_scroll = 0
-        }
-        nav_y += AppScale(56)
-        position += 1
-    }
-    panel_x := outer + nav_width + gap
-    panel := SettingsScreenRect(panel_x, top,
-        width - panel_x - outer, height - top - outer)
-    SettingsScreenPanel(app, app.settings_tab, panel)
-}
 
-SettingsScreenMobileDetail :: (app: *InnerBreeze) {
-    title := settings_screen_tab_label(app.settings_tab)
-    title_height := AppTitleBarHeight()
-    bar: TitleBar.Props
-    bar.bounds = SettingsScreenRect(0, 0,
-        app.ui.view_width, title_height)
-    bar.title = title
-    bar.height = title_height
-    bar.has_leading_action = app.modal.active == 0
-    bar.leading_label = LocaleText("back_button")
-    options: [1]Dropdown.Option
-    result := TitleBar.Draw(app.ui.session, bar, options[0:0])
-    if result.clicked_leading {
-        app_block_current_click(app)
-        app_settings_back(app)
-        return
-    }
-    top := title_height + AppScale(8)
-    height := app.ui.view_height - top - app_content_bottom_reserved(app)
-    SettingsScreenPanel(app, app.settings_tab,
-        SettingsScreenRect(0, top, app.ui.view_width, height))
-}
+
+
+
+
 
 #program_export
 settings_screen_draw :: (app: *InnerBreeze) -> s32 {
@@ -346,4 +169,15 @@ settings_screen_draw :: (app: *InnerBreeze) -> s32 {
 #program_export
 settings :: (app: *InnerBreeze) {
     unused settings_screen_draw(app)
+}
+
+SettingsScreenBreaks :: (app: *InnerBreeze, x: s32, width: s32, y: *s32) {
+    #if SETTINGS_DESKTOP {
+        settings_breaks_draw(app, x, width, y)
+    }
+}
+
+SettingsScreenNewOptions :: () -> [1]Dropdown.Option {
+    result: [1]Dropdown.Option
+    return result
 }

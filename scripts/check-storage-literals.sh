@@ -16,7 +16,7 @@ check_pattern() {
     local pattern="$1"
     local message="$2"
     local allowed="${3:-^$}"
-    if rg -n "$pattern" src --glob '*.zi' --glob '*.c' --glob '*.h' \
+    if rg -n "$pattern" src --glob '*.zi' --glob '*.ts' --glob '*.tsx' --glob '*.c' --glob '*.h' \
         --glob '!layout.zi' --glob '!storage_layout.zi' \
         --glob '!storage_layout_laws.zi' | rg -v "$allowed"; then
         echo "$message" >&2

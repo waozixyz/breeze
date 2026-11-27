@@ -1,3 +1,5 @@
+#import "practice_home_view_ui"
+#import "results_view_ui"
 // Practice's home: the chosen practice's banner fading into the page, its
 // title and what its card says, the tabs for each kind of practice, arrows
 // through the practices under the tab, and Start with the manual and the
@@ -153,42 +155,11 @@ StatusHeight :: (width: s32) -> s32 {
     return height
 }
 
-CentredLine :: (text: string, x: s32, y: s32, width: s32) -> s32 {
-    height := ParagraphHeight(text, width, home.small_font)
-    Text.Draw(home.session, Text.Props.{.bounds = Bounds(x, y + ScalePixels(4, home.scale), width, height),
-            .text = text, .size = home.small_font, .align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(Text.Wrap)TextWrapAuto})
-    return height + ScalePixels(4, home.scale)
-}
+
 
 // During an offer the regular price is struck through beside its discount
 // badge, such as -90%; what the price is worth follows under it.
-Price :: (x: s32, y: s32, width: s32) {
-    font := home.small_font
-    height: s32 = 0
-    if home.regular_price.count > 0 {
-        height = PriceRowHeight()
-        regular_width := Width(home.regular_price, font)
-        Text.Draw(home.session, Text.Props.{.bounds = Bounds(x, y, regular_width, height),
-                .text = home.regular_price, .size = font,
-                .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapNone, .disabled = true, .strikethrough = true})
-        badge_height := font + ScalePixels(8, home.scale)
-        badge_width := Width(home.discount, font) + ScalePixels(14, home.scale)
-        badge := Bounds(x + regular_width + ScalePixels(10, home.scale), y + (height - badge_height) / 2,
-            badge_width, badge_height)
-        Box.Draw(home.session, Box.Props.{.bounds = badge, .fill = Alpha(home.accent_color, 64.0 / 255.0),
-                .radius = cast(float32)badge_height / 2.0})
-        Text.Draw(home.session, Text.Props.{.bounds = badge, .text = home.discount, .size = font,
-                .align = cast(TextAlign)TextAlignCenter,
-                .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapNone})
-    }
-    if home.worth.count > 0 {
-        Text.Draw(home.session, Text.Props.{.bounds = Bounds(x, y + height, width, font + ScalePixels(6, home.scale)),
-                .text = home.worth, .size = font, .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapNone})
-    }
-}
+
 
 // The download's progress or failure, a paid practice's price and why it
 // cannot be unlocked yet.
@@ -213,76 +184,10 @@ Status :: (x: s32, y: s32, width: s32) {
 
 // One tab for each kind with a practice to list. Choosing one asks the host
 // for the practice that tab last showed.
-Tabs :: (bounds: Rectangle) {
-    if home.tab_count <= 0 {
-        return
-    }
-    tabs: [HOME_TAB_MAX]TabBar.Tab
-    count := home.tab_count
-    if count > HOME_TAB_MAX {
-        count = HOME_TAB_MAX
-    }
-    for index: cast(s32)0..count - 1 {
-        tab := ReadPracticeHomeTabHost(index)
-        tabs[index] = TabBar.Tab.{.key = cast(u64)(HOME_TAB_KEY + tab.slot), .label = tab.label,
-            .disabled = home.modal_active}
-    }
-    Box.Draw(home.session, Box.Props.{.bounds = bounds, .fill = home.canvas_color})
-    bar := TabBar.Draw(home.session, TabBar.Props.{.id = HOME_TABS_ID,
-            .bounds = Rectangle.{bounds.x + cast(float32)ScalePixels(12, home.scale),
-                bounds.y + cast(float32)ScalePixels(2, home.scale),
-                bounds.width - cast(float32)ScalePixels(68, home.scale),
-                bounds.height - cast(float32)ScalePixels(4, home.scale)},
-            .selected_index = home.tab_selected, .min_tab_width = ScalePixels(72, home.scale),
-            .max_tab_width = ScalePixels(220, home.scale), .content_sized = true, .fit = true,
-            .scroll_offset = home.tab_scroll, .scale = home.scale,
-            .focus_selected = home.tab_focus}, tabs[:count])
-    home.tab_scroll = bar.scroll_offset
-    if !home.modal_active && bar.selected_index >= 0 && bar.selected_index < count &&
-    bar.selected_index != home.tab_selected {
-        home.action = PRACTICE_HOME_TAB
-        home.value = bar.selected_index
-    }
-}
+
 
 // Arrows round the practices under the tab, with "2 / 5" between them.
-Carousel :: (bounds: Rectangle) {
-    count := home.listed
-    selected := home.index
-    if count <= 1 || bounds.width <= 0 || bounds.height <= 0 {
-        return
-    }
-    button_size := cast(float32)ScalePixels(48, home.scale)
-    inset := bounds.width * 0.08
-    button_y := bounds.y + (bounds.height - button_size) / 2
-    picked: s32 = -1
-    if Button.Draw(home.session, Button.Props.{
-            .bounds = Rectangle.{bounds.x + inset, button_y, button_size, button_size},
-            .id = HOME_CAROUSEL_ID + 1, .disabled = home.modal_active,
-            .arrow = true, .direction = cast(Button.ArrowDirection)ArrowLeft,
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
-        picked = ifx selected > 0 then selected - 1 else count - 1
-    }
-    if Button.Draw(home.session, Button.Props.{
-            .bounds = Rectangle.{bounds.x + bounds.width - button_size - inset, button_y,
-                button_size, button_size},
-            .id = HOME_CAROUSEL_ID + 2, .disabled = home.modal_active,
-            .arrow = true, .direction = cast(Button.ArrowDirection)ArrowRight,
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost}) != 0 {
-        picked = ifx selected < count - 1 then selected + 1 else 0
-    }
-    out: Vec(u8)
-    BuilderPrint(*out, "% / %", selected + 1, count)
-    Text.Draw(home.session, Text.Props.{.text = BuilderFinish(out), .bounds = bounds,
-            .size = ScalePixels(18, home.scale), .align = cast(TextAlign)TextAlignCenter,
-            .vertical_align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapNone})
-    if picked >= 0 && picked != selected {
-        home.action = PRACTICE_HOME_PICK
-        home.value = picked
-    }
-}
+
 
 ActionGap :: (width: s32) -> s32 {
     return ifx width < ScalePixels(340, home.scale) then ScalePixels(8, home.scale) else ScalePixels(12, home.scale)
@@ -316,261 +221,14 @@ ActionsShareRow :: (width: s32) -> bool {
 }
 
 // The button in place of Start for a practice that is not ready.
-Offer :: (bounds: Rectangle) {
-    downloading := home.offer == PRACTICE_OFFER_DOWNLOADING
-    label := ifx downloading then Locale("practice_download_busy") else home.offer_label
-    if Button.Draw(home.session, Button.Props.{.id = HOME_OFFER_ID + home.practice * 2,
-            .bounds = bounds, .pill = true, .label = label,
-            .disabled = home.offer_disabled || downloading,
-            .tone = cast(ButtonTone)(ifx downloading then ButtonToneNeutral else ButtonToneAccent),
-            .emphasis = cast(ButtonEmphasis)(ifx downloading then ButtonEmphasisSoft else ButtonEmphasisFilled),
-            .size = cast(ControlSize)ControlSizeLarge}) != 0 {
-        home.action = PRACTICE_HOME_OFFER
-    }
-}
 
-SecondaryButton :: (bounds: Rectangle, label: string) -> bool {
-    return Button.Draw(home.session, Button.Props.{.bounds = bounds, .label = label,
-            .disabled = home.modal_active, .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .pill = true}) != 0
-}
+
 
 // ---- The page ---------------------------------------------------------------------------
 
-Page :: () {
-    view_x := home.left
-    view_width := home.view_width - home.left
-    if view_width < ScalePixels(320, home.scale) {
-        view_x = 0
-        view_width = home.view_width
-    }
-    content_width := view_width - ScalePixels(80, home.scale)
-    if content_width > ScalePixels(940, home.scale) {
-        content_width = ScalePixels(940, home.scale)
-    }
-    if content_width < ScalePixels(520, home.scale) {
-        content_width = view_width - ScalePixels(32, home.scale)
-    }
-    x := view_x + (view_width - content_width) / 2
-    hero_height := home.view_height - home.bottom
-    tabs_height := home.top
-    if hero_height <= tabs_height {
-        return
-    }
-    hero := Bounds(view_x, tabs_height, view_width, hero_height - tabs_height)
-    button_height := ScalePixels(48, home.scale)
-    action_gap := ScalePixels(14, home.scale)
-    total_width := content_width
-    if total_width > ScalePixels(700, home.scale) {
-        total_width = ScalePixels(700, home.scale)
-    }
-    if total_width > view_width - ScalePixels(32, home.scale) {
-        total_width = view_width - ScalePixels(32, home.scale)
-    }
-    if total_width < ScalePixels(360, home.scale) {
-        total_width = view_width - ScalePixels(24, home.scale)
-    }
-    secondary_count: s32 = 0
-    manual := home.ready && home.has_manual
-    config := home.ready && home.has_config
-    if manual {
-        secondary_count += 1
-    }
-    if config {
-        secondary_count += 1
-    }
-    button_count := 1 + secondary_count
-    wide := total_width >= ScalePixels(600, home.scale)
-    secondary_row := secondary_count < 2 || ActionsShareRow(total_width)
-    rows: s32 = 1
-    if !wide {
-        if secondary_row {
-            rows += ifx secondary_count > 0 then 1 else 0
-        } else {
-            rows += secondary_count
-        }
-    }
-    bottom_gap := ifx home.bottom > 0 then ScalePixels(28, home.scale) else ScalePixels(20, home.scale)
-    actions_height := rows * button_height + (rows - 1) * action_gap
-    button_y := hero_height - bottom_gap - actions_height
-    pager_height := ifx home.listed > 1 then ScalePixels(48, home.scale) else 0
-    pager_y := button_y - ScalePixels(10, home.scale) - pager_height
-    title := Title(x, content_width)
-    title_block := title.height + StatusHeight(content_width) + ScalePixels(28, home.scale)
-    if title_block < ScalePixels(100, home.scale) {
-        title_block = ScalePixels(100, home.scale)
-    }
-    title_y := pager_y - title_block
-    if title_y < tabs_height + ScalePixels(8, home.scale) {
-        title_y = tabs_height + ScalePixels(8, home.scale)
-    }
-    primary_width := total_width
-    if wide {
-        primary_width = (total_width - action_gap * (button_count - 1)) / button_count
-    }
-    secondary_width := total_width
-    if wide {
-        secondary_width = primary_width
-    } else if secondary_row && secondary_count > 0 {
-        secondary_width = (total_width - action_gap * (secondary_count - 1)) / secondary_count
-    }
-    action_x := view_x + (view_width - total_width) / 2
-    pager_width := ifx total_width < ScalePixels(480, home.scale) then total_width else ScalePixels(480, home.scale)
-    pager_x := view_x + (view_width - pager_width) / 2
-    home.card = hero
 
-    swipe := Swipe(SwipeSpec.{.bounds = hero, .directions = 3,
-            .min_distance = cast(float32)ScalePixels(48, home.scale), .axis_bias = 1.4, .max_duration = 1.2},
-        home.swipe, home.swipe_frame)
-    home.swipe = swipe.gesture
-    home.claim_pointer = swipe.claim_pointer
-    home.release_pointer = swipe.release_pointer
-    home.block_click = swipe.capture_input || swipe.consume_release
-    if home.choosing && (swipe.direction == cast(SwipeDirection)SwipeLeft || home.key_right) {
-        home.action = PRACTICE_HOME_STEP
-        home.value = 1
-    } else if home.choosing && (swipe.direction == cast(SwipeDirection)SwipeRight || home.key_left) {
-        home.action = PRACTICE_HOME_STEP
-        home.value = -1
-    }
-    if home.banner.count > 0 {
-        Image.Draw(home.session, Image.Props.{.asset_path = home.banner,
-                .bounds = Rectangle.{hero.x, hero.y, hero.width,
-                    cast(float32)(title_y + ScalePixels(8, home.scale)) - hero.y},
-                .fit = cast(Image.ImageFit)ImageFitCover})
-    } else {
-        Box.Draw(home.session, Box.Props.{.bounds = hero, .fill = home.surface_color})
-    }
-    // The banner fades into the page above the title.
-    fade_height := ScalePixels(120, home.scale)
-    Box.Draw(home.session, Box.Props.{
-            .bounds = Bounds(view_x, title_y - fade_height, view_width, fade_height),
-            .fill = Alpha(home.canvas_color, 0.0), .fill_bottom = home.canvas_color,
-            .has_fill_bottom = true})
-    Box.Draw(home.session, Box.Props.{.bounds = Bounds(view_x, title_y, view_width, hero_height - title_y),
-            .fill = home.canvas_color})
 
-    title.title.bounds.y += cast(float32)title_y
-    title_props: Text.Props = title.title
-    Text.Draw(home.session, title_props)
-    if title.subtitle.text.count > 0 {
-        title.subtitle.bounds.y += cast(float32)title_y
-        subtitle_props: Text.Props = title.subtitle
-        Text.Draw(home.session, subtitle_props)
-    }
-    Status(x, title_y + title.height, content_width)
 
-    Tabs(Bounds(view_x, 0, view_width, tabs_height))
-    Carousel(Bounds(pager_x, pager_y, pager_width, pager_height))
-
-    home.start = Bounds(action_x, button_y, primary_width, button_height)
-    start_label := Locale("practice_start_button")
-    if home.practice == EXERCISE_ASTRAL_PROJECTION {
-        lesson_label := Locale("astral_choose_lesson")
-        if lesson_label != "astral_choose_lesson" {
-            start_label = lesson_label
-        }
-    }
-    if home.offer != PRACTICE_OFFER_NONE {
-        Offer(home.start)
-    } else if Button.Draw(home.session, Button.Props.{.bounds = home.start,
-            .label = start_label, .disabled = home.modal_active,
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .size = cast(ControlSize)ControlSizeLarge, .pill = true}) != 0 {
-        home.action = PRACTICE_HOME_START
-    }
-    if wide {
-        action_x += primary_width + action_gap
-    } else {
-        button_y += button_height + action_gap
-    }
-    if manual {
-        home.manual = Bounds(action_x, button_y, secondary_width, button_height)
-        if SecondaryButton(home.manual, Locale("practice_manual_button")) {
-            home.action = PRACTICE_HOME_MANUAL
-        }
-        if wide || secondary_row {
-            action_x += secondary_width + action_gap
-        } else {
-            button_y += button_height + action_gap
-        }
-    }
-    if config {
-        home.config = Bounds(action_x, button_y, secondary_width, button_height)
-        if SecondaryButton(home.config, Locale("practice_configure_button")) {
-            home.action = PRACTICE_HOME_CONFIG
-        }
-    }
-}
-
-RecoveryCard :: () {
-    width := ScalePixels(400, home.scale)
-    height := ScalePixels(226, home.scale)
-    frame := Modal.Draw(home.session, Modal.Props.{.id = 17402,
-            .title = Locale("practice_recovery_title"), .width = width, .height = height,
-            .scale = home.scale, .strong_title = true, .title_at_start = true, .dismiss_disabled = true})
-    if !frame.opened { return }
-    defer { unused End(home.session) }
-    area := frame.layout.content
-    gap := cast(float32)ScalePixels(8, home.scale)
-    button_h := cast(float32)ScalePixels(44, home.scale)
-    row_y := area.y + area.height - button_h
-    detail_h := row_y - area.y - gap
-    if home.note.count > 0 {
-        note_h := cast(float32)ScalePixels(26, home.scale)
-        Text.Draw(home.session, Text.Props.{.text = home.note, .size = home.small_font,
-                .bounds = Rectangle.{area.x, row_y - note_h, area.width, note_h}})
-        detail_h -= note_h
-    }
-    left := area.x
-    available := area.width
-    if home.banner.count > 0 {
-        thumb := area.width / 3.2
-        if thumb > detail_h { thumb = detail_h }
-        if thumb > gap * 3.0 {
-            Image.Draw(home.session, Image.Props.{.asset_path = home.banner,
-                    .bounds = Rectangle.{left, area.y, thumb, thumb}, .fit = cast(Image.ImageFit)ImageFitCover})
-            left += thumb + gap
-            available -= thumb + gap
-        }
-    }
-    title_h := cast(float32)ScalePixels(28, home.scale)
-    clock_h := cast(float32)ScalePixels(26, home.scale)
-    y := area.y
-    if home.title.count > 0 {
-        Text.Draw(home.session, Text.Props.{.text = home.title, .size = home.font,
-                .wrap = cast(Text.Wrap)TextWrapEllipsis,
-                .bounds = Rectangle.{left, y, available, title_h}})
-        y += title_h
-    }
-    if home.subtitle.count > 0 {
-        stage_h := detail_h - (y - area.y) - clock_h
-        if stage_h > title_h * 1.5 { stage_h = title_h * 1.5 }
-        if stage_h > 0.0 {
-            Text.Draw(home.session, Text.Props.{.text = home.subtitle, .size = home.small_font,
-                    .wrap = cast(Text.Wrap)TextWrapAuto,
-                    .bounds = Rectangle.{left, y, available, stage_h}})
-            y += stage_h
-        }
-    }
-    if home.status.count > 0 {
-        Text.Draw(home.session, Text.Props.{.text = home.status, .size = home.small_font,
-                .wrap = cast(Text.Wrap)TextWrapEllipsis,
-                .bounds = Rectangle.{left, y, available, clock_h}})
-    }
-    button_w := (area.width - gap) / 2.0
-    if Button.Draw(home.session, Button.Props.{.id = 17404, .label = Locale("cancel_button"),
-            .bounds = Rectangle.{area.x, row_y, ifx home.ready then button_w else area.width, button_h}}) != 0 {
-        home.action = PRACTICE_HOME_RECOVERY_CANCEL
-    }
-    if home.ready && Button.Draw(home.session, Button.Props.{.id = 17403, .label = Locale("practice_recovery_continue"),
-            .disabled = home.offer_disabled,
-            .tone = cast(ButtonTone)ButtonToneAccent, .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .bounds = Rectangle.{area.x + button_w + gap, row_y, button_w, button_h}}) != 0 {
-        home.action = PRACTICE_HOME_RECOVERY_CONTINUE
-    }
-}
 
 PracticeHomeView :: (message: PracticeMessage) -> PracticeMessage {
     home = ReadPracticeHomeHost()
@@ -588,4 +246,43 @@ PracticeHomeView :: (message: PracticeMessage) -> PracticeMessage {
     WritePracticeHomeHost(home)
     message.succeeded = true
     return message
+}
+
+PracticeHomeCarouselLabel :: (selected: s32, count: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "% / %", selected + 1, count)
+    return BuilderFinish(out)
+}
+
+NewTabs :: () -> [HOME_TAB_MAX]TabBar.Tab {
+    result: [HOME_TAB_MAX]TabBar.Tab
+    return result
+}
+
+CentredLine :: (text: string, x: s32, y: s32, width: s32) -> s32  {
+    return CentredLineView(text, x, y, width)
+}
+
+Price :: (x: s32, y: s32, width: s32)  {
+    PriceView(x, y, width)
+}
+
+Tabs :: (bounds: Rectangle)  {
+    TabsView(bounds)
+}
+
+Carousel :: (bounds: Rectangle)  {
+    CarouselView(bounds)
+}
+
+Offer :: (bounds: Rectangle)  {
+    OfferView(bounds)
+}
+
+Page :: ()  {
+    PageView()
+}
+
+RecoveryCard :: ()  {
+    RecoveryCardView()
 }

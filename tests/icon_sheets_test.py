@@ -51,7 +51,9 @@ def used_icons(names):
     pattern = re.compile(r"\b(" + "|".join(sorted(names, key=len, reverse=True)) + r")\b")
     found = {}
     for folder in ("src", "apps"):
-        for path in sorted((ROOT / folder).rglob("*.zi")):
+        for path in sorted((ROOT / folder).rglob("*")):
+            if path.suffix not in {".zi", ".ts", ".tsx"}:
+                continue
             for number, line in enumerate(path.read_text(errors="ignore").splitlines(), 1):
                 for name in pattern.findall(line):
                     found.setdefault(name, f"{path.relative_to(ROOT)}:{number}")

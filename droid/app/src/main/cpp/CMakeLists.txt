@@ -96,10 +96,12 @@ add_custom_command(
 )
 set(APP_ZIRAN_GEN_DIR "${CMAKE_BINARY_DIR}/ziran/generated")
 set(APP_ZIRAN_MANIFEST "${CMAKE_BINARY_DIR}/ziran/generated-sources.cmake")
-file(GLOB_RECURSE APP_ZIRAN_SOURCES CONFIGURE_DEPENDS "${SRC_DIR}/*.zi")
+file(GLOB_RECURSE APP_ZIRAN_SOURCES CONFIGURE_DEPENDS
+    "${SRC_DIR}/*.zi" "${SRC_DIR}/*.ts" "${SRC_DIR}/*.tsx")
 list(APPEND APP_ZIRAN_SOURCES "${REPO_ROOT}/apps/practice/hold_reminder.zi")
 file(GLOB_RECURSE APP_LIBRARY_ZIRAN_SOURCES CONFIGURE_DEPENDS
-    "${KRYON_DIR}/src/ui/*.zi" "${KRYON_DIR}/src/backend/*.zi"
+    "${KRYON_DIR}/src/ui/*.zi" "${KRYON_DIR}/src/tsx/*.tsx"
+    "${KRYON_DIR}/src/backend/*.zi"
     "${REPO_ROOT}/build/packages/css/src/*.zi" "${REPO_ROOT}/build/packages/oqs/src/*.zi" "${REPO_ROOT}/build/packages/game2d/src/*.zi"
     "${REPO_ROOT}/build/packages/qrcode/src/*.zi"
     "${REPO_ROOT}/build/packages/entity/src/*.zi"
@@ -109,6 +111,11 @@ file(GLOB_RECURSE APP_LIBRARY_ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${REPO_ROOT}/build/packages/avif/src/*.zi"
     "${REPO_ROOT}/build/packages/audio/src/*.zi"
     "${ZIRAN_DIR}/std/*.zi" "${REPO_ROOT}/build/packages/mesh-client/*.zi")
+# Native imports reach shared Practice views, and each module has authored TSX.
+# Track those sources so changing a view regenerates the Android import graph.
+file(GLOB_RECURSE APP_MODULE_UI_SOURCES CONFIGURE_DEPENDS
+    "${REPO_ROOT}/apps/*.zi" "${REPO_ROOT}/apps/*.ts" "${REPO_ROOT}/apps/*.tsx")
+list(APPEND APP_LIBRARY_ZIRAN_SOURCES ${APP_MODULE_UI_SOURCES})
 # The NativeActivity owns the render target. An unattached Pixmap must have
 # empty bounds while Android is between drawable frames.
 set(APP_ZIRAN_DEFINES --define ANDROID_BUILD --define KRYON_ANDROID_HOST --define KRYON_PIXMAP_EXTERNAL_BUFFER)

@@ -11,7 +11,8 @@ import sys
 
 root = Path(__file__).resolve().parent.parent
 compiler = Path(sys.argv[1]).resolve()
-sources = sorted((root / "src").rglob("*.zi"))
+sources = sorted(path for path in (root / "src").rglob("*")
+                 if path.suffix in {".zi", ".ts", ".tsx"})
 sources.append(root / "apps/practice/hold_reminder.zi")
 legacy = sorted((root / "src").rglob("*.kry"))
 
@@ -21,11 +22,26 @@ if legacy:
     sys.exit(1)
 
 if not sources:
-    print("No Inbe .zi sources found", file=sys.stderr)
+    print("No Inbe native sources found", file=sys.stderr)
     sys.exit(1)
 
 target_defines = os.environ.get("ZI_CHECK_DEFINES", "PLATFORM_DESKTOP").split()
+# The browser payment view is imported by its native platform dispatcher only
+# on web builds; checking it as a desktop root bypasses that platform boundary.
+if "PLATFORM_WEB" not in target_defines:
+    sources = [path for path in sources if path.name != "telegram_stars_view_ui.tsx"]
 define_args = [part for name in target_defines for part in ("--define", name)]
+# Native target constants select backend modules independently of defines.
+# Match the artifact target so a web/Android check includes its actual backend.
+target_args = []
+if "PLATFORM_WEB" in target_defines:
+    target_args = ["--target-os", "web", "--target-cpu", "wasm32"]
+elif "ANDROID_BUILD" in target_defines:
+    cpu_defines = {"__aarch64__": "arm64", "__x86_64__": "x64",
+                   "__arm__": "none", "__i386__": "none"}
+    target_cpu = next((cpu for name, cpu in cpu_defines.items()
+                       if name in target_defines), "arm64")
+    target_args = ["--target-os", "android", "--target-cpu", target_cpu]
 (root / "build").mkdir(exist_ok=True)
 compiler_lock = (root / "build/ziran-compiler.lock").open("a")
 fcntl.flock(compiler_lock, fcntl.LOCK_EX)
@@ -41,6 +57,7 @@ result = subprocess.run(
         ".",
         "--module-path",
         str(root / "build/practice-figure"),
+        *target_args,
         *define_args,
         *(str(source.relative_to(root)) for source in sources),
     ],

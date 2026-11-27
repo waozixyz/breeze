@@ -1,3 +1,4 @@
+#import "tai_chi_draw_ui"
 // Draws the flat Tai Chi figure: the pose at the practice's time, solved and
 // turned into paint operations as the course studio does (tai_chi_flat.zi),
 // each filled shape and line drawn as a tinted mesh with Kryon's image mesh
@@ -153,39 +154,7 @@ TaiChiFlatCacheFind :: (key: u64, area: Rectangle) -> s32 {
 }
 
 // Draws the kept meshes of this figure when they were kept for this digest.
-TaiChiPaintFlatCached :: (session: Session, key: u64, digest: u64, area: Rectangle,
-    alt_text: string, edge_path: string) -> bool {
-    found := TaiChiFlatCacheFind(key, area)
-    if digest == 0 || found < 0 {
-        return false
-    }
-    slot := *tai_chi_flat_cache[found]
-    if !slot.stored || slot.digest != digest {
-        return false
-    }
-    tai_chi_flat_cache_clock += 1
-    slot.used = tai_chi_flat_cache_clock
-    screen: [TAI_CHI_FLAT_MESH_CAPACITY]Vector2
-    for at: cast(s32)0..slot.op_count - 1 {
-        op := slot.ops[at]
-        for point: cast(s32)0..op.count - 1 {
-            kept := slot.points[op.first + point]
-            screen[point] = Vector2.{area.x + kept.x, area.y + kept.y}
-        }
-        picture: Image.Props
-        picture.key = key + cast(u64)op.index
-        picture.bounds = area
-        picture.smooth = true
-        picture.alt_text = ifx op.labelled then alt_text else ""
-        picture.asset_path = edge_path
-        picture.tint = op.tint
-        picture.mesh.columns = op.columns
-        picture.mesh.rows = op.count / op.columns
-        picture.mesh.points = screen[:op.count]
-        Image.Draw(session, picture)
-    }
-    return true
-}
+
 
 // The slot to fill while this figure paints, or -1. The first frame with a
 // new digest only remembers it; the second one keeps the meshes.
@@ -241,67 +210,7 @@ TaiChiFlatCacheKeep :: (slot: *TaiChiFlatCacheSlot, index: s32, mesh: []Vector2,
 
 // The same painting with another practice's copy of the edge image. A
 // non-zero digest offers the figure to the cache (TaiChiPaintFlatCached).
-TaiChiPaintFlatEdge :: (session: Session, frame: *TaiChiFlatFrame, framing: TaiChiFraming,
-    mirrored: bool, area: Rectangle, key: u64, alt_text: string, edge_path: string,
-    digest: u64 = 0) {
-    keeping := TaiChiFlatCacheBegin(key, digest, area)
-    kept := keeping >= 0
-    // Metres on the picture plane to pixels in the area: the view's height
-    // fills the area's height, centred on its middle.
-    pixels := cast(float64)area.height / framing.view_height
-    middle_x := cast(float64)area.x + cast(float64)area.width / 2.0
-    middle_y := cast(float64)area.y + cast(float64)area.height / 2.0
-    mirror: float64 = 1.0
-    if mirrored {
-        mirror = -1.0
-    }
-    screen: [TAI_CHI_FLAT_MESH_CAPACITY]Vector2
-    for index: cast(s32)0..frame.op_count - 1 {
-        op := frame.ops[index]
-        points := frame.points[op.first:op.first + op.count]
-        count: s32 = 0
-        columns: s32 = 0
-        if op.kind == TAI_CHI_FLAT_FILL {
-            count = TaiChiFlatFanMesh(points, TAI_CHI_FLAT_FEATHER / pixels, screen[:])
-            columns = 4
-        } else {
-            width := TaiChiMax(op.width, TAI_CHI_FLAT_THINNEST / pixels)
-            count = TaiChiFlatStripMesh(points, width * 0.75, screen[:])
-            columns = 2
-        }
-        if count == 0 {
-            continue
-        }
-        for point: cast(s32)0..count - 1 {
-            screen[point].x = cast(float32)(middle_x + cast(float64)screen[point].x * pixels * mirror)
-            screen[point].y = cast(float32)(middle_y - (cast(float64)screen[point].y - framing.view_center) * pixels)
-        }
-        alpha := cast(u32)(TaiChiClamp(op.alpha, 0.0, 1.0) * 255.0 + 0.5)
-        if alpha == cast(u32)0 {
-            continue
-        }
-        labelled := index == frame.op_count - 1
-        tint := (op.color << cast(u32)8) | alpha
-        picture: Image.Props
-        picture.key = key + cast(u64)index
-        picture.bounds = area
-        picture.smooth = true
-        picture.alt_text = ifx labelled then alt_text else ""
-        picture.asset_path = edge_path
-        picture.tint = tint
-        picture.mesh.columns = columns
-        picture.mesh.rows = count / columns
-        picture.mesh.points = screen[:count]
-        Image.Draw(session, picture)
-        if kept {
-            kept = TaiChiFlatCacheKeep(*tai_chi_flat_cache[keeping], index, screen[:count],
-                columns, tint, labelled, area)
-        }
-    }
-    if keeping >= 0 {
-        tai_chi_flat_cache[keeping].stored = kept
-    }
-}
+
 
 // Each thumbnail is a solved pose of its actual item, seen from the chosen
 // angle. Building these uses a separate timeline, so opening a chooser
@@ -372,4 +281,20 @@ TaiChiDrawPreview :: (session: Session, item_index: s32, character: s32, angle: 
         TaiChiPaintFlat(session, *tai_chi_flat_frame, framing, TaiChiViewMirrored(angle),
             area, key, alt_text)
     }
+}
+
+TaiChiDrawNewScreen :: () -> [TAI_CHI_FLAT_MESH_CAPACITY]Vector2 {
+    result: [TAI_CHI_FLAT_MESH_CAPACITY]Vector2
+    return result
+}
+
+TaiChiPaintFlatCached :: (session: Session, key: u64, digest: u64, area: Rectangle,
+    alt_text: string, edge_path: string) -> bool  {
+    return TaiChiPaintFlatCachedView(session, key, digest, area, alt_text, edge_path)
+}
+
+TaiChiPaintFlatEdge :: (session: Session, frame: *TaiChiFlatFrame, framing: TaiChiFraming,
+    mirrored: bool, area: Rectangle, key: u64, alt_text: string, edge_path: string,
+    digest: u64 = 0)  {
+    TaiChiPaintFlatEdgeView(session, frame, framing, mirrored, area, key, alt_text, edge_path, digest)
 }

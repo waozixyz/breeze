@@ -1,3 +1,4 @@
+#import "settings_data_ui_ui"
 // Data transfer choices and account safety prompts remain in Ziran.
 c :: #system_library "c";
 #import "keys"
@@ -299,99 +300,9 @@ settings_data_content_height :: (content_w: s32) -> s32 {
     return AppScale(446)
 }
 
-#program_export
-settings_data_draw_actions :: (app: *InnerBreeze,
-    x: s32, width: s32, y: *s32) {
-    if app == null || y == null {
-        return
-    }
-    y.* += AppScale(8)
-    if storage_database_damaged() != 0 {
-        props := SettingsDataTextProps(LocaleText("database_damaged_message"), x, y.*, width, AppScale(70))
-        props.wrap = cast(Text.Wrap)TextWrapAuto
-        Text.Draw(app.ui.session, props)
-        y.* += AppScale(78)
-    }
-    restore_button := SettingsDataButtonProps(LocaleText("restore_last_good_button"), x, y.*, width, 5305, false)
-    restore_button.disabled = restore_last_good_requested
-    if Button.Draw(app.ui.session, restore_button) != 0 {
-        restore_last_good_requested = true
-    }
-    if restore_last_good_requested && app_sync_stop_for_restore(app) {
-        restore_last_good_requested = false
-        restored := storage_restore_last_good() != 0
-        app_sync_resume_after_restore()
-        if restored {
-            app_reload_after_import(app, 1)
-            unused app_request_sync(app)
-            settings_screen_set_status_success(LocaleText("restore_last_good_success"), "")
-        } else {
-            settings_screen_set_status_error(LocaleText("restore_last_good_failed"))
-        }
-    }
-    y.* += AppScale(50)
-    import_button := SettingsDataButtonProps(LocaleText("import_data_button"),
-        x, y.*, width, 5301, true)
-    if Button.Draw(app.ui.session, import_button) != 0 {
-        SettingsDataImport(app)
-    }
-    y.* += AppScale(50)
-    export_button := SettingsDataButtonProps(LocaleText("export_data_button"),
-        x, y.*, width, 5302, true)
-    if Button.Draw(app.ui.session, export_button) != 0 {
-        SettingsDataExport(app)
-    }
-    y.* += AppScale(50)
-    csv_button := SettingsDataButtonProps(LocaleText("export_csv_button"),
-        x, y.*, width, 5303, false)
-    if Button.Draw(app.ui.session, csv_button) != 0 {
-        SettingsDataExportCsv(app)
-    }
-    y.* += AppScale(50)
-    account: AccountKeys
-    if sync_account_load(*account) == 0 {
-        clear_button := SettingsDataButtonProps(
-            LocaleText("clear_local_data_button"),
-            x, y.*, width, 5304, false)
-        if Button.Draw(app.ui.session, clear_button) != 0 {
-            if data_has_any() != 0 {
-                app_open_modal(app, cast(ModalType)ModalConfirmDeleteData)
-            } else {
-                settings_screen_set_status_error(LocaleText("no_data_to_delete"))
-            }
-        }
-        y.* += AppScale(50)
-    }
-    settings_screen_draw_status_reserved(x, y, AppScale(42))
-}
 
-#program_export
-settings_data_draw_sync_status :: (x: s32, width: s32, y: *s32) {
-    app := CurrentApp()
-    if app == null || y == null {
-        return
-    }
-    status: StorageSyncStatus
-    if storage_sync_status(*status) == 0 || status.has_account == 0 {
-        return
-    }
-    Text.Draw(app.ui.session, SettingsDataTextProps(
-        LocaleText("sync_status_title"),
-        x, y.*, width, AppScale(26)))
-    y.* += AppScale(28)
-    queued: [64]u8
-    unused FormatNumberTemplate(LocaleText("sync_status_queued"),
-        cast(s32)status.queued_changes, queued[:])
-    Text.Draw(app.ui.session, SettingsDataTextProps(
-        FrameTextHold(*app.ui.frame_text,
-        AppTextFromCString(*queued[0], 64)),
-        x, y.*, width, AppScale(24)))
-    y.* += AppScale(28)
-    Text.Draw(app.ui.session, SettingsDataTextProps(
-        LocaleText(app_sync_status_key()),
-        x, y.*, width, AppScale(48)))
-    y.* += AppScale(52)
-}
+
+
 
 settings_data_handle_import :: (app: *InnerBreeze) {
     if app == null || AndroidPlatform() == 0 ||
@@ -412,26 +323,7 @@ settings_data_handle_import :: (app: *InnerBreeze) {
     SettingsDataInspectImport(app, AppTextFromCString(*path[0], 4096))
 }
 
-SettingsDataPrompt :: (app: *InnerBreeze, key: string,
-    title: string, message: string, labels: []string) -> s32 {
-    actions: [3]Modal.ActionModalAction
-    index: s32 = 0
-    while index < cast(s32)labels.count && index < 3 {
-        actions[index].label = labels[index]
-        actions[index].tone = cast(ButtonTone)(ifx (index == 0) then
-            (ButtonToneNeutral) else (ButtonToneAccent))
-        actions[index].emphasis = cast(ButtonEmphasis)(ifx (index == 0) then
-            (ButtonEmphasisSoft) else (ButtonEmphasisFilled))
-        index += 1
-    }
-    props: Modal.ActionModalProps
-    props.key = Layout.KeyHash(key)
-    props.title = title
-    props.message = message
-    props.max_width = AppScale(440)
-    result := Modal.ActionModal(app.ui.session, props, actions[0:labels.count])
-    return ifx result.action == -1 then 1 else result.action
-}
+
 
 review_scroll: s32;
 review_cached_revision: s64 = -1;
@@ -474,187 +366,9 @@ SettingsReviewRemovals :: (value: string) -> string {
     return ""
 }
 
-SettingsReviewLines :: (app: *InnerBreeze, value: string,
-    bounds: Rectangle, offset: s32, font: s32, line_height: s32,
-    initial_class: string) -> s32 {
-    start: s32 = 0
-    y := cast(s32)bounds.y - offset
-    action_class := initial_class
-    while start < cast(s32)value.count {
-        end := start
-        while end < cast(s32)value.count && value[end] != #char "\n" {
-            end += 1
-        }
-        logical_line := value[start:end]
-        if logical_line == LocaleText("review_added") {
-            action_class = "review-added"
-        } else if logical_line == LocaleText("review_removed") {
-            action_class = "review-removed"
-        } else if logical_line == LocaleText("review_changed") {
-            action_class = "review-changed"
-        }
-        indent: s32 = 0
-        while indent < cast(s32)logical_line.count && logical_line[indent] == #char " " {
-            indent += 1
-        }
-        class_name := action_class
-        if indent >= 6 {
-            class_name = "review-detail"
-        }
-        inset: s32 = 0
-        if indent >= 2 {
-            inset = AppScale(12)
-        }
-        if indent >= 6 {
-            inset = AppScale(24)
-        }
-        visible_line := logical_line[indent:]
-        wrapped_start: s32 = 0
-        while wrapped_start < cast(s32)visible_line.count {
-            line := NextTextLine(visible_line, wrapped_start,
-                bounds.width - cast(float32)(AppScale(12) + inset),
-                cast(Text.Wrap)TextWrapAuto, font, "ui")
-            if app != null && y + line_height >= cast(s32)bounds.y &&
-            y < cast(s32)(bounds.y + bounds.height) {
-                props := SettingsDataTextProps(visible_line[line.start:line.end],
-                    cast(s32)bounds.x + inset, y,
-                    cast(s32)bounds.width - AppScale(12) - inset, line_height)
-                props.size = font
-                props.wrap = cast(Text.Wrap)TextWrapNone
-                props.class_name = CssClass(class_name)
-                Text.Draw(app.ui.session, props)
-            }
-            y += line_height
-            if line.next <= wrapped_start {
-                break
-            }
-            wrapped_start = line.next
-        }
-        if visible_line.count == 0 {
-            y += line_height
-        }
-        start = end + 1
-    }
-    return y - cast(s32)bounds.y + offset
-}
 
-SettingsDataReviewModal :: (app: *InnerBreeze) -> s32 {
-    if review_cached_revision != storage_data_revision() &&
-    storage_sync_review_clear_if_no_visible_diff() != 0 {
-        SettingsReviewReset()
-        app_close_modal(app)
-        app_reload_after_import(app, 0)
-        return 0
-    }
-    width := app.ui.view_width - AppScale(32)
-    if width > AppScale(680) {
-        width = AppScale(680)
-    }
-    height := app.ui.view_height - AppScale(32)
-    if height > AppScale(720) {
-        height = AppScale(720)
-    }
-    frame := Modal.Draw(app.ui.session, Modal.Props.{
-            .key = Layout.KeyHash("inbe/data/sync-review"),
-            .title = LocaleText("sync_review_title"),
-            .width = width, .height = height,
-            .has_right_action = true, .right_label = LocaleText("cancel_button")})
-    if frame.dismissed || frame.right_clicked {
-        SettingsReviewReset()
-        app_close_modal(app)
-        return 0
-    }
-    if !frame.opened {
-        return 0
-    }
-    content := frame.layout.content
-    x := cast(s32)content.x
-    y := cast(s32)content.y
-    text_width := cast(s32)content.width
-    revision := storage_data_revision()
-    if review_cached_revision != revision {
-        free(cast(*void)review_cached_text)
-        free(cast(*void)review_cached_replace_text)
-        review_cached_text = null
-        review_cached_replace_text = null
-        review_cached_available = storage_sync_review_plan(2, *review_cached_text) != 0
-        review_cached_replace_available = storage_sync_review_plan(1, *review_cached_replace_text) != 0
-        review_cached_revision = storage_data_revision()
-    }
-    // The cache owns the full preview; render only visible wrapped lines so
-    // large reviews never hit a fixed frame-text or tree-label capacity.
-    value := LocaleText("review_unavailable")
-    if review_cached_available {
-        value = AppTextFromCString(review_cached_text, 2147483647)
-    }
-    explanation := LocaleText("review_merge_detail")
-    font := AppScale(16)
-    line_height := AppTextLineHeight(font)
-    direction := LocaleText("review_merge")
-    direction_height := AppParagraphHeight(direction, text_width, font, 0)
-    direction_props: Text.Props = SettingsDataTextProps(direction,
-        x, y, text_width, direction_height)
-    direction_props.size = font
-    direction_props.wrap = cast(Text.Wrap)TextWrapAuto
-    direction_props.class_name = CssClass("review-heading")
-    Text.Draw(app.ui.session, direction_props)
-    y += direction_height + AppScale(8)
-    view := SettingsDataRect(x, y, text_width,
-        cast(s32)(content.y + content.height) - y - AppScale(140))
-    explanation_height := SettingsReviewLines(null, explanation, view, 0,
-        font, line_height, "review-detail") + line_height
-    props: Scroll.Props
-    props.key = Layout.KeyHash("inbe/data/sync-review/details")
-    props.bounds = view
-    merge_height := SettingsReviewLines(null, value, view, 0, font, line_height, "")
-    removals := SettingsReviewRemovals(AppTextFromCString(review_cached_replace_text, 2147483647))
-    replacement := ""
-    replacement_height: s32 = 0
-    if removals.count > 0 {
-        replacement = LocaleText("review_replace_detail")
-        replacement_height = SettingsReviewLines(null, replacement, view, 0,
-            font, line_height, "review-removed") + line_height
-    }
-    props.content_height = explanation_height + merge_height + replacement_height +
-    SettingsReviewLines(null, removals, view, 0, font, line_height, "review-removed")
-    props.scroll_offset = review_scroll
-    scrolled := Scroll.Draw(app.ui.session, props)
-    review_scroll = scrolled.scroll_offset
-    if scrolled.opened {
-        SettingsReviewLines(app, explanation, view, review_scroll, font, line_height, "review-detail")
-        SettingsReviewLines(app, value, view, review_scroll - explanation_height, font, line_height, "")
-        if removals.count > 0 {
-            replacement_offset := review_scroll - explanation_height - merge_height
-            SettingsReviewLines(app, replacement, view, replacement_offset,
-                font, line_height, "review-removed")
-            SettingsReviewLines(app, removals, view, replacement_offset - replacement_height,
-                font, line_height, "review-removed")
-        }
-        unused End(app.ui.session)
-    }
-    options: [3]string = .["review_merge", "sync_review_keep_local", "sync_review_use_remote"]
-    modes: [3]s32 = .[2, 0, 1]
-    y = cast(s32)(content.y + content.height) - AppScale(132)
-    index: s32 = 0
-    decision: s32 = 0
-    while index < 3 {
-        button := SettingsDataButtonProps(LocaleText(options[index]),
-            x, y, text_width, 5351 + index, index == 0)
-        if index == 0 {
-            button.disabled = !review_cached_available
-        } else if index == 2 {
-            button.disabled = !review_cached_replace_available
-            button.tone = cast(ButtonTone)ButtonToneDanger
-        }
-        if Button.Draw(app.ui.session, button) != 0 {
-            decision = modes[index] + 1
-        }
-        y += AppScale(44)
-        index += 1
-    }
-    unused End(app.ui.session)
-    return decision
-}
+
+
 
 #program_export
 settings_data_draw_modals :: (app: *InnerBreeze) -> s32 {
@@ -790,4 +504,39 @@ settings_data_draw_modals :: (app: *InnerBreeze) -> s32 {
         return 1
     }
     return 0
+}
+
+SettingsDataUiNewQueued :: () -> [64]u8 {
+    result: [64]u8
+    return result
+}
+
+SettingsDataUiNewActions :: () -> [3]Modal.ActionModalAction {
+    result: [3]Modal.ActionModalAction
+    return result
+}
+
+// The native model owns the allocated review text buffers.
+SettingsReviewClearCachedText :: () {
+    free(cast(*void)review_cached_text)
+    free(cast(*void)review_cached_replace_text)
+    review_cached_text = null
+    review_cached_replace_text = null
+}
+
+SettingsReviewNoApp :: () -> *InnerBreeze {
+    return null
+}
+
+// Preserve the package-facing native ABI; the view is authored in TSX.
+#program_export
+settings_data_draw_actions :: (app: *InnerBreeze,
+    x: s32, width: s32, y: *s32) {
+    settings_data_draw_actionsView(app, x, width, y)
+}
+
+// Preserve the package-facing native ABI; the view is authored in TSX.
+#program_export
+settings_data_draw_sync_status :: (x: s32, width: s32, y: *s32) {
+    settings_data_draw_sync_statusView(x, width, y)
 }

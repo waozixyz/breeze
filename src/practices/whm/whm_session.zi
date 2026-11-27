@@ -1,3 +1,8 @@
+#import "practice_window_ui"
+#import "whm_session_ui"
+#import "practice_title_bar_ui"
+#import "application_close_ui"
+#import "widgets_ui"
 #import, file "../../platform/host_input.zi";
 #import, file "../../platform/app_trace.zi";
 #import, file "../../platform/host_clock.zi";
@@ -970,56 +975,7 @@ session_draw_inbe :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     }
 }
 
-session_draw_start_preview :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> s32 {
-    play_text: string = LocaleText("play_button")
-    practice_text: string = practice_label(app.exercise_type)
-    practice_font: s32 = AppFontSize()
-    practice_w: s32
-    practice_y: s32
-    radius: s32 = AppScale(44)
-    pointer_x := app.ui.mouse_x - center_x
-    pointer_y := app.ui.mouse_y - center_y
-    hovered := app.ui.pointer_active &&
-    pointer_x * pointer_x + pointer_y * pointer_y <= radius * radius
-    app.play_circle_hover = ifx (hovered) then (1) else (0)
 
-    target_scale: float32 = ifx (hovered) then (1.08f) else (1.0f)
-    app.play_circle_scale += (target_scale - app.play_circle_scale) * 0.2f
-    if app.play_circle_scale < 1.0f {
-        app.play_circle_scale = 1.0f
-    }
-    if app.play_circle_scale > 1.08f {
-        app.play_circle_scale = 1.08f
-    }
-
-    scaled_radius: s32 = cast(s32)(cast(float32)radius * app.play_circle_scale)
-    practice_w = AppTextWidth(practice_text, practice_font)
-    if practice_w > app.ui.view_width - AppScale(48) {
-        practice_font = AppSmallFontSize()
-    }
-    practice_w = AppTextWidth(practice_text, practice_font)
-    practice_y = center_y - scaled_radius - AppScale(42)
-    if practice_y < AppScale(8) {
-        practice_y = AppScale(8)
-    }
-    Text.Draw(CurrentApp().ui.session, Text.Props.{
-            .bounds = Rectangle.{cast(float32)(center_x - practice_w / 2),
-                cast(float32)AppControlTextY(practice_text, practice_y,
-                AppScale(32), practice_font), 0.0, 0.0},
-            .text = practice_text,
-            .wrap = cast(Text.Wrap)TextWrapNone
-        })
-    return Button.Draw(app.ui.session, Button.Props.{
-            .bounds = Rectangle.{cast(float32)(center_x - scaled_radius),
-                cast(float32)(center_y - scaled_radius),
-                cast(float32)(scaled_radius * 2),
-                cast(float32)(scaled_radius * 2)},
-            .label = play_text,
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled,
-            .circle = true
-        })
-}
 
 draw_session_status :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     unused app
@@ -1200,170 +1156,38 @@ session_update_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32, hover
     }
 }
 
-session_draw_results_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32, hover: *s32) {
-    box_x: s32
-    box_y: s32 = AppScale(78)
-    box_w: s32
-    row_y: s32 = AppScale(215)
-    row_h: s32 = AppScale(32)
-    total: s32 = 0
-    best: s32 = -1
-    round_times: [MaxRounds] s32
-    rounds: s32 = collect_result_rounds(app, *round_times[0], MaxRounds)
-    action_y: s32 = app.ui.view_height - AppScale(40)
-    title_font: s32
-    title_w: s32
 
-    unused center_y
-
-    if rounds <= 0 {
-        whm_exit_to_start(app)
-        return
-    }
-
-    responsive_max_w: s32 = cast(s32)(cast(float32)app.ui.view_width * 0.96f)
-    min_content_w: s32 = AppScale(320)
-    if responsive_max_w < min_content_w {
-        responsive_max_w = min_content_w
-    }
-    GetCenteredColumn(responsive_max_w, GetPageSidePadding(), *box_x, *box_w)
-
-    title_font = AppTitleFontSize(LocaleText("results_title"), app.ui.view_width - AppScale(48))
-    title_w = AppTextWidth(LocaleText("results_title"), title_font)
-    Text.Draw(CurrentApp().ui.session, Text.Props.{.bounds = Rectangle.{cast(float32)(center_x - title_w / 2), cast(float32)(AppScale(34)), 0, 0}, .text = (LocaleText("results_title")), .wrap = cast(Text.Wrap)TextWrapNone})
-
-    {
-        i: s32 = 0
-        while i < rounds {
-            seconds: s32 = round_times[i]
-            total += seconds
-            if best < 0 || seconds > best {
-                best = seconds
-            }
-            i += 1
-        }
-    }
-    if best < 0 {
-        best = 0
-    }
-
-    {
-        lines: [3][64] u8
-        summary_font: s32 = Text.Text16
-
-        FormatLocaleCount(lines[0][:], "results_rounds", rounds)
-        FormatLocaleCount(lines[1][:], "results_best", best)
-        FormatLocaleCount(lines[2][:], "results_avg",
-            ifx (rounds > 0) then (total / rounds) else (0))
-        if app.ui.view_width < 420 &&
-        AppTextWidth(AppTextFromCString(*lines[2][0], 64), summary_font) >
-        box_w - AppScale(20) {
-            seconds_text: [16] u8
-            AppFormatS32(ifx (rounds > 0) then (cast(s32)(total / rounds)) else (0), seconds_text[:])
-            AppCopyText(AppTextFromCString(*seconds_text[0], 16), lines[2][:])
-        }
-        Box.Draw(CurrentApp().ui.session, Box.Props.{
-                .bounds = Rectangle.{cast(float32)box_x, cast(float32)box_y,
-                    cast(float32)box_w, cast(float32)(AppScale(29) * 3)},
-                .fill = DarkenColor(StyleTokenColor("canvas"), 6)})
-        {
-            i: s32 = 0
-            while i < 3 {
-                info_y := box_y + i * AppScale(29)
-                if i > 0 {
-                    Shape.Draw(CurrentApp().ui.session, Shape.Props.{
-                            .start = Vector2.{cast(float32)box_x, cast(float32)info_y},
-                            .end = Vector2.{cast(float32)(box_x + box_w), cast(float32)info_y},
-                            .color = DarkenColor(StyleTokenColor("canvas"), 30)})
-                }
-                Text.Draw(CurrentApp().ui.session, Text.Props.{
-                        .bounds = Rectangle.{cast(float32)(box_x + AppScale(10)),
-                            cast(float32)info_y,
-                            cast(float32)(box_w - AppScale(20)),
-                            cast(float32)AppScale(29)},
-                        .text = FrameTextHold(*app.ui.frame_text,
-                        AppTextFromCString(*lines[i][0], 64)),
-                        .wrap = cast(Text.Wrap)TextWrapNone
-                    })
-                i += 1
-            }
-        }
-    }
-
-    Text.Draw(CurrentApp().ui.session, Text.Props.{.bounds = Rectangle.{cast(float32)box_x, cast(float32)AppScale(181), cast(float32)box_w, cast(float32)AppScale(28)}, .text = (LocaleText("round_times_title")), .wrap = cast(Text.Wrap)TextWrapNone})
-    {
-        i: s32 = 0
-        while i < rounds {
-            row: [48] u8
-            row_font: s32 = AppFontSize()
-            FormatTwoNumberTemplate(LocaleText("round_result_label"),
-                i + 1, round_times[i], row[:])
-            Box.Draw(CurrentApp().ui.session, Box.Props.{
-                    .bounds = Rectangle.{cast(float32)box_x, cast(float32)(row_y - 1),
-                        cast(float32)box_w, cast(float32)row_h},
-                    .fill = DarkenColor(StyleTokenColor("canvas"), 4)})
-            Text.Draw(CurrentApp().ui.session, Text.Props.{
-                    .bounds = Rectangle.{cast(float32)(box_x + AppScale(10)),
-                        cast(float32)(row_y - 1), cast(float32)(box_w - AppScale(20)),
-                        cast(float32)row_h},
-                    .text = FrameTextHold(*app.ui.frame_text,
-                    AppTextFromCString(*row[0], 48)),
-                    .wrap = cast(Text.Wrap)TextWrapNone
-                })
-            row_y += row_h
-            i += 1
-        }
-    }
-
-    discard_label := LocaleText("discard_button")
-    save_label := LocaleText("save_results_button")
-    discard_w := AppTextWidth(discard_label, AppFontSize()) + AppScale(16)
-    save_w := AppTextWidth(save_label, AppFontSize()) + AppScale(16)
-    button_h := AppTextLineHeight(AppFontSize()) + AppScale(8)
-    if discard_w < AppScale(34) {
-        discard_w = AppScale(34)
-    }
-    if save_w < AppScale(34) {
-        save_w = AppScale(34)
-    }
-    if button_h < AppScale(34) {
-        button_h = AppScale(34)
-    }
-
-    if Button.Draw(CurrentApp().ui.session, Button.Props.{
-            .label = discard_label,
-            .bounds = Rectangle.{
-                cast(float32)(center_x - box_w / 4 - discard_w / 2),
-                cast(float32)action_y,
-                cast(float32)discard_w,
-                cast(float32)button_h
-            },
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-        }) != 0 {
-        session_discard_saved_results(app)
-        whm_exit_to_start(app)
-    }
-    if Button.Draw(CurrentApp().ui.session, Button.Props.{
-            .label = save_label,
-            .bounds = Rectangle.{
-                cast(float32)(center_x + box_w / 4 - save_w / 2),
-                cast(float32)action_y,
-                cast(float32)save_w,
-                cast(float32)button_h
-            },
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-        }) != 0 {
-        if session_ensure_results_saved(app) != 0 {
-            whm_exit_to_start(app)
-        }
-    }
-    unused hover
-}
 
 whm_checkpoint :: (app: *InnerBreeze, force: bool) {
     rounds: [MaxRounds]s32
     count := collect_result_rounds(app, *rounds[0], MaxRounds)
     PracticeDraftCheckpoint(app.exercise_type, *rounds[0], count, count, force)
+}
+
+WhmSessionNewRoundTimes :: () -> [MaxRounds]s32 {
+    result: [MaxRounds]s32
+    return result
+}
+
+WhmSessionNewLines :: () -> [3][64]u8 {
+    result: [3][64]u8
+    return result
+}
+
+WhmSessionNewSecondsText :: () -> [16]u8 {
+    result: [16]u8
+    return result
+}
+
+WhmSessionNewRow :: () -> [48]u8 {
+    result: [48]u8
+    return result
+}
+
+session_draw_start_preview :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> s32  {
+    return session_draw_start_previewView(app, center_x, center_y)
+}
+
+session_draw_results_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32, hover: *s32)  {
+    session_draw_results_screenView(app, center_x, center_y, hover)
 }

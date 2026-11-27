@@ -21,7 +21,9 @@ ziran = sys.argv[1] if len(sys.argv) > 1 else str(root / "build/packages/ziran/b
 config = json.loads((root / "design/lumi-guide/narration.json").read_text(encoding="utf-8"))
 narrated = set(config["keys"])
 named = set()
-for source in (root / "src").rglob("*.zi"):
+for source in (root / "src").rglob("*"):
+    if source.suffix not in {".zi", ".ts", ".tsx"}:
+        continue
     text = source.read_text(encoding="utf-8")
     if "GuideOverlayStepFor(" not in text:
         continue

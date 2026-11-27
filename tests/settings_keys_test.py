@@ -15,7 +15,8 @@ root = Path(__file__).resolve().parent.parent
 settings = (root / "src/app/app_settings.zi").read_text(encoding="utf-8")
 # The application module and its parts (application_init.zi, ...).
 application = "\n".join(path.read_text(encoding="utf-8")
-                        for path in sorted((root / "src/app").glob("application*.zi")))
+                        for path in sorted((root / "src/app").glob("application*"))
+                        if path.suffix in {".zi", ".ts", ".tsx"})
 importer = (root / "src/storage/import.zi").read_text(encoding="utf-8")
 failures = []
 
