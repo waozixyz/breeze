@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Migrate the Habits screens and dialogs to Kryon TSX.
+- Migrate the Habits screens and dialogs to Kryon TSX, with focused list, row and history modules.
 
 - Fix a GPU rendering seam through the **+ New Habit** button.
 
