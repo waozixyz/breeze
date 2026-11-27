@@ -1,14 +1,8 @@
-// Habits draws a counting habit's count dialog: the day's count with large
-// steps down and up. The host supplies the day's count and the theme, and
-// applies the step or opens the day the dialog asks for.
+// Count dialog state and host bindings. The host dispatch uses this module name.
 #import "session"
 #import "geometry"
 #import "vec"
 #import "dpi"
-Box :: #import "kryon/box";
-Button :: #import "kryon/button";
-Layout :: #import "kryon/layout";
-Modal :: #import "kryon/modal";
 Text :: #import "kryon/text";
 #import "drawing_props"
 #import "text_align"
@@ -17,12 +11,7 @@ Text :: #import "kryon/text";
 #import, file "../../src/apps/habits_ui_types.zi";
 #import, file "../../src/apps/habits_types.zi";
 #import, file "../../src/app/color.zi";
-#import, file "editor_dialogs.zi";
 
-using ButtonTone;
-using ButtonEmphasis;
-using TextAlign;
-using Text.Wrap;
 host_api :: #system_library "host_api";
 ReadHabitsUiHost :: () -> HabitsUiFrame #foreign host_api;
 WriteHabitsUiHost :: (frame: HabitsUiFrame) #foreign host_api;
@@ -80,174 +69,27 @@ CountText :: (template: string, count: s32) -> string {
     return BuilderFinish(out)
 }
 
-CountLabel :: (bounds: Rectangle, text: string) {
-    Text.Draw(frame.session, Text.Props.{
-            .bounds = bounds, .text = text, .size = frame.small_font,
-            .align = cast(TextAlign)TextAlignCenter,
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(Text.Wrap)TextWrapNone})
+NewCountStrong :: () -> [1]Text.Range {
+    result: [1]Text.Range
+    return result
 }
 
-// A step button draws its minus or plus as bars sized to the button, which
-// read clearly where a "-" or "+" glyph is thin and small.
-StepButton :: (id: s32, bounds: Rectangle, plus: bool, disabled: bool) -> bool {
-    clicked := Button.Draw(frame.session, Button.Props.{
-            .id = id, .bounds = bounds,
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-            .disabled = disabled}) != 0
-    side := bounds.height
-    if bounds.width < side {
-        side = bounds.width
-    }
-    length := side * 0.36
-    thickness := cast(float32)Scale(3)
-    center_x := bounds.x + bounds.width * 0.5
-    center_y := bounds.y + bounds.height * 0.5
-    color := frame.text_color
-    if disabled {
-        color = color_with_alpha(color, 0.35)
-    }
-    unused Box.Draw(frame.session, Box.Props.{
-            .bounds = Rectangle.{center_x - length * 0.5, center_y - thickness * 0.5,
-                length, thickness},
-            .fill = color, .radius = thickness * 0.5})
-    if plus {
-        unused Box.Draw(frame.session, Box.Props.{
-                .bounds = Rectangle.{center_x - thickness * 0.5, center_y - length * 0.5,
-                    thickness, length},
-                .fill = color, .radius = thickness * 0.5})
-    }
-    return clicked
+CurrentCountLabel :: () -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", frame.count)
+    return BuilderFinish(out)
 }
 
-// Draws the dialog and leaves in frame.action what the host does next.
-CountDialog :: () {
-    frame.action = HABITS_COUNT_NONE
-    gap := Scale(12)
-    step_h := Scale(56)
-    button_h := Scale(44)
-    content_h := Scale(24) + Scale(64) + Scale(24) + gap + step_h + gap + button_h
-    if frame.linked_count > 0 {
-        content_h += button_h + gap
-    }
-    // A counting habit that asks questions keeps their answers as the
-    // day's entries, opened from here.
-    if frame.asks {
-        content_h += button_h + gap
-    }
-    dialog := Modal.Draw(frame.session, Modal.Props.{
-            .key = Layout.KeyHash("habits/count-dialog"),
-            .title = frame.name,
-            .strong_title = true,
-            .width = Scale(340), .height = content_h + Scale(74),
-            .scale = frame.scale,
-            .has_right_action = true,
-            .right_label = HabitsLocaleHost("close_button")})
-    if dialog.dismissed || dialog.right_clicked {
-        frame.action = HABITS_COUNT_CLOSE
-        return
-    }
-    if !dialog.opened {
-        return
-    }
-    content := dialog.layout.content
-    x := cast(s32)content.x
-    y := cast(s32)content.y
-    width := cast(s32)content.width
-
-    day_text := DayText(frame.day)
-    if frame.today {
-        day_text = HabitsLocaleHost("habits_today")
-    }
-    CountLabel(Bounds(x, y, width, Scale(24)), day_text)
-    y += Scale(24)
-    count_out: Vec(u8)
-    BuilderPrint(*count_out, "%", frame.count)
-    count_text := BuilderFinish(count_out)
-    count_strong: [1]Text.Range
-    count_strong[0] = Text.Range.{.start = 0, .end = cast(s32)count_text.count}
-    Text.Draw(frame.session, Text.Props.{
-            .bounds = Bounds(x, y, width, Scale(64)),
-            .text = count_text, .size = Scale(Text.Text48),
-            .strong = count_strong[:],
-            .align = cast(TextAlign)TextAlignCenter,
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(Text.Wrap)TextWrapNone})
-    y += Scale(64)
-    target_out: Vec(u8)
-    BuilderPrint(*target_out, "%  %", HabitsLocaleHost("habit_counter_target"), frame.target)
-    CountLabel(Bounds(x, y, width, Scale(24)), BuilderFinish(target_out))
-    y += Scale(24) + gap
-
-    step_w := (width - gap) / 2
-    if StepButton(5720000, Bounds(x, y, step_w, step_h), false,
-        frame.count <= frame.linked_count) {
-        frame.action = HABITS_COUNT_DECREMENT
-    }
-    if StepButton(5720001, Bounds(x + width - step_w, y, step_w, step_h), true, false) {
-        frame.action = HABITS_COUNT_INCREMENT
-    }
-    y += step_h + gap
-    if frame.asks {
-        if Button.Draw(frame.session, Button.Props.{
-                .id = 5720004, .bounds = Bounds(x, y, width, button_h),
-                .label = HabitsLocaleHost("habit_day_entries"),
-                .tone = cast(ButtonTone)ButtonToneNeutral,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline}) != 0 {
-            unused End(frame.session)
-            frame.action = HABITS_COUNT_OPEN_DAY
-            return
-        }
-        y += button_h + gap
-    }
-
-    if frame.linked_count > 0 {
-        template := HabitsLocaleHost(ifx frame.linked_count == 1
-            then "session_count_singular" else "session_count_plural")
-        if Button.Draw(frame.session, Button.Props.{
-                .id = 5720002, .bounds = Bounds(x, y, width, button_h),
-                .label = CountText(template, frame.linked_count),
-                .tone = cast(ButtonTone)ButtonToneNeutral,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline}) != 0 {
-            unused End(frame.session)
-            frame.action = HABITS_COUNT_OPEN_DAY
-            return
-        }
-        y += button_h + gap
-    }
-    if Button.Draw(frame.session, Button.Props.{
-            .id = 5720003, .bounds = Bounds(x, y, width, button_h),
-            .label = HabitsLocaleHost("done_button"),
-            .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled}) != 0 {
-        frame.action = HABITS_COUNT_CLOSE
-    }
-    unused End(frame.session)
+CounterTargetLabel :: () -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%  %", HabitsLocaleHost("habit_counter_target"), frame.target)
+    return BuilderFinish(out)
 }
 
-HabitsCountView :: (message: HabitsMessage) -> HabitsMessage {
-    frame = ReadHabitsUiHost()
-    CountDialog()
-    WriteHabitsUiHost(frame)
-    message.succeeded = true
-    return message
+CurrentFrame :: () -> *HabitsUiFrame {
+    return *frame
 }
 
-HabitsEditorView :: (message: HabitsMessage) -> HabitsMessage {
-    frame = ReadHabitsUiHost()
-    deleting := message.action == HABITS_DELETE_DIALOG
-    result := HabitEditorDialog(HabitEditorDialogProps.{
-            .session = frame.session, .deleting = deleting,
-            .title = HabitsLocaleHost(ifx deleting then "habit_delete_title" else "habit_unsaved_title"),
-            .message = HabitsLocaleHost(ifx deleting then "habit_delete_message" else "habit_unsaved_message"),
-            .keep_editing = HabitsLocaleHost("habit_keep_editing"),
-            .save = HabitsLocaleHost("save_button"),
-            .discard = HabitsLocaleHost("discard_button"),
-            .cancel = HabitsLocaleHost("cancel_button"),
-            .delete_label = HabitsLocaleHost("delete_button")})
-    frame.action = result.action
-    WriteHabitsUiHost(frame)
-    message.succeeded = true
-    return message
+SetFrame :: (value: HabitsUiFrame) {
+    frame = value
 }

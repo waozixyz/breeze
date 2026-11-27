@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Migrate the Habits screens and dialogs to Kryon TSX.
+
 - Fix a GPU rendering seam through the **+ New Habit** button.
 
 - Compare recorded answers, span lengths and practice measurements on shared dates, with a separate scale per line and exact values on selection. Session cards graph their rounds. Entry fields focus on open, and Enter saves.

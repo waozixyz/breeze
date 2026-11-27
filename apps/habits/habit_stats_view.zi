@@ -1,19 +1,9 @@
-// A habit's statistics: its streaks and its last 30 days, a span habit's
-// lengths and when its spans started and ended, the moods after its
-// practices, its Wim Hof rounds, the weekdays it is done on, its practice
-// time or best streak, what each question's answers add up to with a chart
-// of the last 30 days, and its latest changes. The host counts the figures
-// from the habit's days and entries; the page lays them out and draws them.
+// Habit statistics state and host bindings. The host dispatch uses this module name.
 #import "session"
 #import "geometry"
 #import "vec"
 #import "pointer_input"
 #import "dpi"
-Box :: #import "kryon/box";
-Button :: #import "kryon/button";
-Layout :: #import "kryon/layout";
-Scroll :: #import "kryon/scroll";
-Shape :: #import "kryon/shape";
 Text :: #import "kryon/text";
 #import "drawing_props"
 #import "semantic"
@@ -27,10 +17,6 @@ Text :: #import "kryon/text";
 #import, file "../../src/apps/habits_types.zi";
 #import, file "../../src/habits/habit_types.zi";
 
-using ButtonTone;
-using ButtonEmphasis;
-using SemanticKind;
-using TextAlign;
 using Text.Wrap;
 host_api :: #system_library "host_api";
 ReadHabitsStatsHost :: () -> HabitsStatsFrame #foreign host_api;
@@ -192,22 +178,6 @@ DayCountText :: (count: s32) -> string {
         else "habit_stats_day_plural"), count, 0)
 }
 
-Card :: (x: s32, y: s32, width: s32, height: s32) {
-    unused Box.Draw(stats.session, Box.Props.{.bounds = Bounds(x, y, width, height),
-            .fill = stats.card_fill, .border = stats.card_border,
-            .radius = cast(float32)Scale(STATS_CARD_RADIUS)})
-}
-
-Fill :: (bounds: Rectangle, radius: float32, color: Color) {
-    unused Box.Draw(stats.session, Box.Props.{.bounds = bounds, .fill = color, .radius = radius})
-}
-
-// A line of a chart, from one end to the other, one pixel wide.
-ChartLine :: (x1: s32, y1: s32, x2: s32, y2: s32, color: Color) {
-    unused Shape.Draw(stats.session, Shape.Props.{.start = Vector2.{cast(float32)x1, cast(float32)y1},
-            .end = Vector2.{cast(float32)x2, cast(float32)y2}, .color = color})
-}
-
 TrendDate :: (label: string) -> string {
     if label.count < 8 {
         return label
@@ -215,83 +185,6 @@ TrendDate :: (label: string) -> string {
     out: Vec(u8)
     BuilderPrint(*out, "%-%-%", label[0:4], label[4:6], label[6:8])
     return BuilderFinish(out)
-}
-
-// A daily completion series, oldest to newest, with zero days retained.
-// The same chart draws one habit and the whole collection.
-CompletionTrend :: (chart_index: s32, x: s32, y: s32, width: s32) {
-    chart := ReadHabitsStatsChartHost(chart_index)
-    height := Scale(STATS_TREND_HEIGHT)
-    Card(x, y, width, height)
-    left := x + Scale(32)
-    right := x + width - Scale(14)
-    top := y + Scale(18)
-    bottom := y + height - Scale(52)
-    highest := chart.highest
-    if highest < 1 {
-        highest = 1
-    }
-    for grid: cast(s32)0..2 {
-        grid_y := top + (bottom - top) * grid / 2
-        ChartLine(left, grid_y, right, grid_y, Alpha(stats.text_color, 0.12))
-    }
-    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(x + Scale(4), top - Scale(8),
-            Scale(24), Scale(18)), .text = Number(cast(s64)highest),
-            .size = stats.small_font, .class_name = stats.muted_class,
-            .align = cast(TextAlign)TextAlignEnd})
-    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(x + Scale(4), bottom - Scale(8),
-            Scale(24), Scale(18)), .text = "0", .size = stats.small_font,
-            .class_name = stats.muted_class, .align = cast(TextAlign)TextAlignEnd})
-    count := chart.point_count
-    if count > STATS_DAYS {
-        count = STATS_DAYS
-    }
-    previous_x := left
-    previous_y := bottom
-    selected: HabitsStatsPoint
-    first: HabitsStatsPoint
-    last: HabitsStatsPoint
-    for slot: cast(s32)0..count - 1 {
-        point := ReadHabitsStatsPointHost(chart_index, slot)
-        point_x := left + (right - left) * slot / (STATS_DAYS - 1)
-        point_y := bottom - (bottom - top) * point.value / highest
-        if slot > 0 {
-            ChartLine(previous_x, previous_y, point_x, point_y, stats.color)
-        }
-        dot := Scale(4)
-        Fill(Bounds(point_x - dot / 2, point_y - dot / 2, dot, dot),
-            cast(float32)dot * 0.5, stats.color)
-        if Button.Draw(stats.session, Button.Props.{
-                .id = 6100000 + (-chart_index) * STATS_DAYS + slot,
-                .bounds = Bounds(point_x - Scale(8), point_y - Scale(10), Scale(16), Scale(20)),
-                .label = point.label, .invisible = true, .disabled = stats.modal_active}) != 0 {
-            trend_selected_chart = chart_index
-            trend_selected_slot = slot
-        }
-        if slot == 0 {
-            first = point
-        }
-        last = point
-        if slot == trend_selected_slot {
-            selected = point
-        }
-        previous_x = point_x
-        previous_y = point_y
-    }
-    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(left, bottom + Scale(6),
-            (right - left) / 2, Scale(18)), .text = TrendDate(first.label),
-            .size = stats.small_font, .class_name = stats.muted_class})
-    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(left + (right - left) / 2,
-            bottom + Scale(6), (right - left) / 2, Scale(18)), .text = TrendDate(last.label),
-            .size = stats.small_font, .class_name = stats.muted_class,
-            .align = cast(TextAlign)TextAlignEnd})
-    if trend_selected_chart != chart_index {
-        selected = last
-    }
-    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(left, bottom + Scale(28),
-            right - left, Scale(20)), .text = selected.label, .size = stats.small_font,
-            .class_name = stats.muted_class, .align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(Text.Wrap)TextWrapEllipsis})
 }
 
 HabitTrendLegendColumns :: (width: s32) -> s32 {
@@ -332,186 +225,6 @@ TrendDistance :: (px: float32, py: float32, x1: s32, y1: s32, x2: s32, y2: s32) 
     return (px - near_x) * (px - near_x) + (py - near_y) * (py - near_y)
 }
 
-// Every series shares dates, but uses its own measured minimum and maximum.
-// No numeric y axis is shown until a line or its legend is selected.
-CompletionTrends :: (x: s32, y: s32, width: s32) {
-    Card(x, y, width, HabitsTrendsHeight(width))
-    left := x + Scale(78)
-    right := x + width - Scale(14)
-    top := y + Scale(18)
-    bottom := y + Scale(STATS_TREND_HEIGHT - 52)
-    plot_width := right - left
-    if plot_width <= 0 || stats.trend_count <= 0 {
-        return
-    }
-    for grid: cast(s32)0..2 {
-        grid_y := top + (bottom - top) * grid / 2
-        ChartLine(left, grid_y, right, grid_y, Alpha(stats.text_color, 0.12))
-    }
-    if trend_selected_habit >= stats.trend_count {
-        trend_selected_habit = -1
-    }
-    selected := trend_selected_habit
-    pointer := SamplePointer()
-    choose := Button.Draw(stats.session, Button.Props.{.id = 6100000,
-            .bounds = Bounds(left - Scale(8), top - Scale(8), plot_width + Scale(16), bottom - top + Scale(16)),
-            .label = Locale("habit_stats_answers_title"), .invisible = true,
-            .disabled = stats.modal_active}) != 0
-    nearest_distance := cast(float32)(Scale(14) * Scale(14))
-    nearest_series: s32 = -1
-    nearest_point: s32 = -1
-    columns := HabitTrendLegendColumns(width)
-    legend_x := x + Scale(10)
-    legend_y := y + Scale(STATS_TREND_HEIGHT + 60)
-    legend_width := (width - Scale(20)) / columns
-    first := TrendDate(ReadHabitsStatsPointHost(-1, 0).label)
-    last := TrendDate(ReadHabitsStatsPointHost(-1, STATS_DAYS - 1).label)
-    detail: string
-    for offset: cast(s32)1..stats.trend_count {
-        index := (selected + offset) % stats.trend_count
-        chart_index := -2 - index
-        chart := ReadHabitsStatsChartHost(chart_index)
-        entry_x := legend_x + (index % columns) * legend_width
-        entry_y := legend_y + (index / columns) * Scale(STATS_TREND_LEGEND_HEIGHT)
-        bounds := Bounds(entry_x, entry_y, legend_width - Scale(4), Scale(STATS_TREND_LEGEND_HEIGHT))
-        if index == selected {
-            Fill(bounds, cast(float32)Scale(8), Alpha(chart.color, 0.16))
-        }
-        if Button.Draw(stats.session, Button.Props.{.id = 6101000 + index, .bounds = bounds,
-                .label = chart.title, .invisible = true, .selected = index == selected,
-                .disabled = stats.modal_active}) != 0 {
-            trend_selected_habit = ifx index == selected then -1 else index
-            trend_selected_slot = chart.point_count - 1
-        }
-        chip_size := Scale(8)
-        Fill(Bounds(entry_x + Scale(8), entry_y + Scale(18), chip_size, chip_size),
-            cast(float32)chip_size * 0.5, chart.color)
-        Text.Draw(stats.session, Text.Props.{.bounds = Bounds(entry_x + Scale(22), entry_y,
-                legend_width - Scale(32), Scale(STATS_TREND_LEGEND_HEIGHT)),
-                .text = chart.title, .size = stats.small_font,
-                .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapEllipsis})
-        if index == selected && chart.point_count > 0 {
-            Text.Draw(stats.session, Text.Props.{.bounds = Bounds(x + Scale(4), (ifx chart.lowest == chart.highest then (top + bottom) / 2 else top) - Scale(8),
-                    Scale(66), Scale(18)), .text = MetricValueText(chart.answer_type, chart.highest),
-                    .size = stats.small_font, .class_name = stats.muted_class,
-                    .align = cast(TextAlign)TextAlignEnd})
-            if chart.lowest != chart.highest {
-                Text.Draw(stats.session, Text.Props.{.bounds = Bounds(x + Scale(4), bottom - Scale(8),
-                        Scale(66), Scale(18)), .text = MetricValueText(chart.answer_type, chart.lowest),
-                        .size = stats.small_font, .class_name = stats.muted_class,
-                        .align = cast(TextAlign)TextAlignEnd})
-            }
-        }
-        count := chart.point_count
-        if count > STATS_POINT_MAX {
-            count = STATS_POINT_MAX
-        }
-        previous_x := left
-        previous_y := bottom
-        for point_index: cast(s32)0..count - 1 {
-            point := ReadHabitsStatsPointHost(chart_index, point_index)
-            // Day slots plus recorded time preserve multiple sessions per day.
-            elapsed := cast(s64)point.slot * 86400 + point.time
-            point_x := left + cast(s32)(cast(s64)plot_width * elapsed / (30 * 86400 - 1))
-            point_y := top + (bottom - top) / 2
-            range := cast(s64)chart.highest - chart.lowest
-            if range > 0 {
-                point_y = bottom - cast(s32)(cast(s64)(bottom - top) *
-                    (cast(s64)point.value - chart.lowest) / range)
-            }
-            if point_index > 0 {
-                ChartLine(previous_x, previous_y, point_x, point_y, chart.color)
-            }
-            dot := Scale(ifx index == selected && point_index == trend_selected_slot then 8 else 4)
-            Fill(Bounds(point_x - dot / 2, point_y - dot / 2, dot, dot),
-                cast(float32)dot * 0.5, chart.color)
-            distance := TrendDistance(pointer.x, pointer.y, point_x, point_y, point_x, point_y)
-            if distance <= nearest_distance {
-                nearest_distance = distance
-                nearest_series = index
-                nearest_point = point_index
-            }
-            if point_index > 0 {
-                segment_distance := TrendDistance(pointer.x, pointer.y, previous_x, previous_y, point_x, point_y)
-                if segment_distance < nearest_distance {
-                    nearest_distance = segment_distance
-                    nearest_series = index
-                    before := TrendDistance(pointer.x, pointer.y, previous_x, previous_y, previous_x, previous_y)
-                    nearest_point = ifx before < distance then point_index - 1 else point_index
-                }
-            }
-            if index == selected && point_index == trend_selected_slot {
-                out: Vec(u8)
-                BuilderPrint(*out, "% · %", chart.title, point.label)
-                detail = BuilderFinish(out)
-            }
-            previous_x = point_x
-            previous_y = point_y
-        }
-    }
-    if choose && nearest_series >= 0 {
-        trend_selected_habit = nearest_series
-        trend_selected_slot = nearest_point
-    }
-    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(left, bottom + Scale(6), plot_width / 2, Scale(18)),
-            .text = first, .size = stats.small_font, .class_name = stats.muted_class})
-    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(left + plot_width / 2, bottom + Scale(6),
-            plot_width / 2, Scale(18)), .text = last, .size = stats.small_font,
-            .class_name = stats.muted_class, .align = cast(TextAlign)TextAlignEnd})
-    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(x + Scale(12), bottom + Scale(28), width - Scale(24), Scale(76)),
-            .text = detail, .size = stats.small_font, .class_name = stats.muted_class,
-            .align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapAuto})
-}
-
-// A bar of a chart, its top a little rounded.
-Bar :: (x: s32, y: s32, width: s32, height: s32, color: Color) {
-    radius := Scale(3)
-    if radius * 2 > width {
-        radius = width / 2
-    }
-    Fill(Bounds(x, y, width, height), cast(float32)radius, color)
-}
-
-// A figure on a card: its label muted above it and the figure strong, with
-// the card's edge in the habit's colour.
-FigureCard :: (bounds: Rectangle, label: string, value: string) {
-    radius := cast(float32)Scale(STATS_CARD_RADIUS)
-    bar := cast(float32)Scale(5)
-    Fill(bounds, radius, stats.color)
-    unused Box.Draw(stats.session, Box.Props.{.bounds = Rectangle.{bounds.x + bar, bounds.y,
-                bounds.width - bar, bounds.height}, .fill = stats.card_fill, .radius = radius})
-    unused Box.Draw(stats.session, Box.Props.{.bounds = bounds, .border = stats.card_border,
-            .radius = radius})
-    pad := cast(float32)Scale(STATS_CARD_PADDING)
-    inner := bounds.width - bar - pad * 2.0
-    Text.Draw(stats.session, Text.Props.{.bounds = Rectangle.{bounds.x + bar + pad,
-                bounds.y + cast(float32)Scale(10), inner, cast(float32)Scale(22)},
-            .text = label, .size = stats.small_font, .class_name = stats.muted_class,
-            .wrap = cast(Text.Wrap)TextWrapEllipsis})
-    font := Scale(Text.Text24)
-    while font > Scale(Text.Text16) && Width(value, font) > cast(s32)inner {
-        font -= 1
-    }
-    strong := Strong(value)
-    Text.Draw(stats.session, Text.Props.{.bounds = Rectangle.{bounds.x + bar + pad,
-                bounds.y + cast(float32)Scale(34), inner, cast(float32)Scale(32)},
-            .text = value, .size = font, .strong = strong[:],
-            .wrap = cast(Text.Wrap)TextWrapNone})
-}
-
-Figure :: (x: s32, y: s32, width: s32, label: string, value: string) {
-    FigureCard(Bounds(x, y, width, Scale(STATS_FIGURE_HEIGHT)), label, value)
-}
-
-FigurePair :: (x: s32, y: s32, width: s32, first_label: string, first: string,
-    second_label: string, second: string) {
-    gap := Scale(STATS_CARD_GAP)
-    half := (width - gap) / 2
-    Figure(x, y, half, first_label, first)
-    Figure(x + half + gap, y, width - half - gap, second_label, second)
-}
-
 SectionFont :: () -> s32 {
     return stats.font + Scale(2)
 }
@@ -521,20 +234,6 @@ SectionTitleHeight :: (title: string, width: s32) -> s32 {
             .bounds = Bounds(0, 0, width, 0), .wrap = cast(Text.Wrap)TextWrapAuto,
             .line_gap = Scale(3)})
 }
-
-// A section's title above its cards: strong and a little larger than the
-// text, wrapping onto more lines when it must. Returns its height.
-SectionTitle :: (title: string, x: s32, y: s32, width: s32) -> s32 {
-    height := SectionTitleHeight(title, width)
-    strong := Strong(title)
-    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(x, y, width, height), .text = title,
-            .size = SectionFont(), .strong = strong[:],
-            .semantic_kind = cast(SemanticKind)SemanticHeading, .heading_level = 2,
-            .wrap = cast(Text.Wrap)TextWrapAuto, .line_gap = Scale(3)})
-    return height
-}
-
-// ---- Moods ------------------------------------------------------------------
 
 MoodColor :: (mood: s32) -> Color {
     if mood <= 1 {
@@ -554,48 +253,6 @@ MoodPanelHeight :: (width: s32) -> s32 {
     Scale(STATS_FIGURE_HEIGHT) + Scale(STATS_CARD_GAP) + Scale(STATS_MOOD_BARS_HEIGHT)
 }
 
-// The mood check-ins: their average and count, and a bar for each mood.
-MoodPanel :: (x: s32, y: s32, width: s32) {
-    gap := Scale(STATS_CARD_GAP)
-    y += SectionTitle(Locale("habit_stats_mood_title"), x, y, width) + Scale(10)
-    hundredths := cast(s32)(stats.mood_average * 100.0)
-    out: Vec(u8)
-    BuilderPrint(*out, "%.", hundredths / 100)
-    Padded(*out, hundredths % 100)
-    BuilderPrint(*out, "/5")
-    FigurePair(x, y, width, Locale("habit_stats_mood_average"), BuilderFinish(out),
-        Locale("habit_stats_mood_checkins"), Number(cast(s64)stats.mood_total))
-    bars_height := Scale(STATS_MOOD_BARS_HEIGHT)
-    bars_y := y + Scale(STATS_FIGURE_HEIGHT) + gap
-    Card(x, bars_y, width, bars_height)
-    counts: [5]s32 = .[stats.mood_1, stats.mood_2, stats.mood_3, stats.mood_4, stats.mood_5]
-    slot := width / 5
-    for mood: cast(s32)0..4 {
-        count := counts[mood]
-        bar_height := Scale(3)
-        if count > 0 && stats.mood_total > 0 {
-            bar_height = (count * (bars_height - Scale(30))) / stats.mood_total
-        }
-        bar_x := x + mood * slot + Scale(10)
-        bar_width := slot - Scale(20)
-        if bar_width < Scale(4) {
-            bar_width = Scale(4)
-        }
-        color := MoodColor(mood + 1)
-        if count <= 0 {
-            color = Alpha(stats.text_color, 0.16)
-        }
-        Bar(bar_x, bars_y + bars_height - bar_height - Scale(22), bar_width, bar_height, color)
-        Text.Draw(stats.session, Text.Props.{.bounds = Bounds(bar_x, bars_y + bars_height - Scale(20),
-                bar_width, Scale(16)),
-                .text = Number(cast(s64)(mood + 1)), .size = Text.Text12,
-                .class_name = stats.muted_class, .align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapNone})
-    }
-}
-
-// ---- Wim Hof rounds ---------------------------------------------------------------
-
 // A round on the graph: its day's slot, its time, and where it is drawn.
 HoldPoint :: struct {
     time_key: s64
@@ -607,159 +264,6 @@ HoldPoint :: struct {
 }
 
 hold_points: [STATS_HOLD_MAX]HoldPoint;
-
-// The week or the month, as two buttons side by side.
-HoldRange :: (x: s32, y: s32, width: s32) {
-    labels: [2]string = .["1W", "1M"]
-    values: [2]s32 = .[7, 31]
-    selected := ifx stats.hold_days == 31 then 1 else 0
-    segment := width / 2
-    for index: cast(s32)0..1 {
-        segment_x := x + index * segment
-        segment_width := ifx index == 1 then x + width - segment_x else segment
-        if Button.Draw(stats.session, Button.Props.{.id = 24700 + index,
-                .bounds = Bounds(segment_x, y, segment_width, Scale(34)), .label = labels[index],
-                .tone = cast(ButtonTone)(ifx index == selected then ButtonToneAccent
-                else ButtonToneNeutral),
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .selected = index == selected,
-                .disabled = stats.modal_active}) != 0 && selected != index {
-            stats.hold_days = values[index]
-        }
-    }
-}
-
-// Each round of the last days as a dot at its day, held longer higher,
-// with a line through each day's average.
-HoldGraph :: (x: s32, y: s32, width: s32) {
-    days: s32 = ifx stats.hold_days == 31 then 31 else 7
-    graph_height := Scale(STATS_HOLD_GRAPH_HEIGHT)
-    axis_width := Scale(48)
-    plot_x := x + axis_width
-    plot_y := y + Scale(8)
-    plot_width := width - axis_width - Scale(10)
-    plot_height := graph_height - Scale(36)
-    Card(x, y, width, graph_height)
-    count: s32 = 0
-    longest: s32 = 1
-    day_points: [STATS_HOLD_DAYS_MAX]s32
-    day_totals: [STATS_HOLD_DAYS_MAX]s32
-    for index: cast(s32)0..stats.hold_count - 1 {
-        if count >= STATS_HOLD_MAX {
-            break
-        }
-        hold := ReadHabitsStatsHoldHost(index)
-        if hold.days_ago < 0 || hold.days_ago >= days {
-            continue
-        }
-        slot := days - 1 - hold.days_ago
-        if hold.seconds > longest {
-            longest = hold.seconds
-        }
-        day_points[slot] += 1
-        day_totals[slot] += hold.seconds
-        hold_points[count] = HoldPoint.{.time_key = cast(s64)(-hold.days_ago) * 86400 +
-            cast(s64)hold.time, .round = hold.round, .slot = slot, .seconds = hold.seconds}
-        count += 1
-    }
-    // Oldest first, a session's rounds in order.
-    for index: cast(s32)1..count - 1 {
-        point := hold_points[index]
-        other := index - 1
-        while other >= 0 && (hold_points[other].time_key > point.time_key ||
-            (hold_points[other].time_key == point.time_key && hold_points[other].round > point.round)) {
-            hold_points[other + 1] = hold_points[other]
-            other -= 1
-        }
-        hold_points[other + 1] = point
-    }
-    grid := Alpha(stats.text_color, 0.1)
-    for day: cast(s32)1..days - 1 {
-        if days == 7 || day % 5 == 0 {
-            line_x := plot_x + (plot_width * day) / days
-            ChartLine(line_x, plot_y, line_x, plot_y + plot_height, grid)
-        }
-    }
-    for step: cast(s32)0..2 {
-        line_y := plot_y + (plot_height * step) / 2
-        ChartLine(plot_x, line_y, plot_x + plot_width, line_y, grid)
-        out: Vec(u8)
-        BuilderPrint(*out, "%", longest - (longest * step) / 2)
-        Text.Draw(stats.session, Text.Props.{.bounds = Bounds(x + Scale(4), line_y - Scale(8),
-                axis_width - Scale(4), Scale(18)),
-                .text = BuilderFinish(out), .wrap = cast(Text.Wrap)TextWrapNone})
-    }
-    ChartLine(plot_x, plot_y + plot_height, plot_x + plot_width, plot_y + plot_height,
-        Alpha(stats.text_color, 0.4))
-    seen: [STATS_HOLD_DAYS_MAX]s32
-    first_x: [STATS_HOLD_DAYS_MAX]s32
-    last_x: [STATS_HOLD_DAYS_MAX]s32
-    for day: cast(s32)0..days - 1 {
-        first_x[day] = -1
-        last_x[day] = -1
-    }
-    for index: cast(s32)0..count - 1 {
-        slot := hold_points[index].slot
-        in_day := ifx day_points[slot] > 0 then day_points[slot] else 1
-        ordinal := seen[slot]
-        seen[slot] += 1
-        x0 := plot_x + (plot_width * slot) / days
-        x1 := plot_x + (plot_width * (slot + 1)) / days
-        hold_points[index].x = x0 + ((ordinal + 1) * (x1 - x0)) / (in_day + 1)
-        hold_points[index].y = plot_y + plot_height -
-        (hold_points[index].seconds * (plot_height - Scale(10))) / longest
-        if first_x[slot] < 0 || hold_points[index].x < first_x[slot] {
-            first_x[slot] = hold_points[index].x
-        }
-        if last_x[slot] < 0 || hold_points[index].x > last_x[slot] {
-            last_x[slot] = hold_points[index].x
-        }
-    }
-    previous_x: s32 = 0
-    previous_y: s32 = 0
-    has_previous := false
-    for day: cast(s32)0..days - 1 {
-        if day_points[day] <= 0 {
-            continue
-        }
-        average := day_totals[day] / day_points[day]
-        average_y := plot_y + plot_height - (average * (plot_height - Scale(10))) / longest
-        if has_previous {
-            ChartLine(previous_x, previous_y, first_x[day], average_y, stats.color)
-        }
-        ChartLine(first_x[day], average_y, last_x[day], average_y, stats.color)
-        previous_x = last_x[day]
-        previous_y = average_y
-        has_previous = true
-    }
-    dot := Scale(3)
-    for index: cast(s32)0..count - 1 {
-        Fill(Bounds(hold_points[index].x - dot, hold_points[index].y - dot, dot * 2, dot * 2),
-            cast(float32)dot, stats.color)
-    }
-    if count <= 0 {
-        empty := Locale(ifx days == 31 then "habit_stats_no_rounds_month"
-            else "habit_stats_no_rounds_week")
-        Text.Draw(stats.session, Text.Props.{.bounds = Bounds(x, y + graph_height / 2 - Scale(8), width,
-                Scale(18)),
-                .text = empty, .align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapNone})
-    }
-    for day: cast(s32)0..days - 1 {
-        days_ago := days - 1 - day
-        if !(days == 7 || days_ago == 0 || days_ago % 5 == 0) {
-            continue
-        }
-        label := Locale("statistics_now_label")
-        if days_ago > 0 {
-            label = Filled(Locale("statistics_day_offset_label"), days_ago, 0)
-        }
-        Text.Draw(stats.session, Text.Props.{.bounds = Bounds(plot_x + (plot_width * day) / days + Scale(2),
-                y + graph_height - Scale(20), Scale(48), Scale(18)),
-                .text = label, .wrap = cast(Text.Wrap)TextWrapNone})
-    }
-}
-
-// ---- Answers and spans --------------------------------------------------------------
 
 AnswerHeight :: (chart: HabitsStatsChart, width: s32) -> s32 {
     height := SectionTitleHeight(chart.title, width) + Scale(10) + Scale(STATS_FIGURE_HEIGHT)
@@ -856,201 +360,6 @@ SameBand :: (first: BandChartBand, second: BandChartBand) -> bool {
 chart_points: [STATS_POINT_MAX]BandChartPoint;
 chart_bands: [STATS_POINT_MAX]BandChartBand;
 
-// The days oldest to newest: bars from zero for numbers and lengths, dots
-// for times. Values that met their goal are in the habit's colour and the
-// rest are muted; the good range is shaded as it was each day, so a changed
-// goal or a moving average steps. Hovering or tapping a value shows its
-// day, value and goal.
-AnswerChart :: (chart_index: s32, chart: HabitsStatsChart, x: s32, y: s32, width: s32) {
-    chart_height := Scale(STATS_CHART_HEIGHT)
-    Card(x, y, width, chart_height)
-    if chart.point_count <= 0 {
-        return
-    }
-    count := chart.point_count
-    if count > STATS_POINT_MAX {
-        count = STATS_POINT_MAX
-    }
-    band_count: s32 = 0
-    is_time := chart.answer_type == HABIT_ANSWER_TIME
-    low: float32 = 0.0
-    if is_time {
-        low = cast(float32)chart.lowest
-    }
-    high := cast(float32)chart.highest
-    for index: cast(s32)0..count - 1 {
-        point := ReadHabitsStatsPointHost(chart_index, index)
-        chart_points[index] = BandChartPoint.{.slot = point.slot, .value = cast(float32)point.value,
-            .good = point.good, .label = point.label}
-        band := PointBand(chart, point)
-        // Keep the good range in view.
-        if band.has_low && band.low > high {
-            high = band.low
-        }
-        if band.has_high && band.high > high {
-            high = band.high
-        }
-        if is_time && band.has_low && band.low < low {
-            low = band.low
-        }
-        if is_time && band.has_high && band.high < low {
-            low = band.high
-        }
-        if band_count == 0 {
-            band.from = 0
-            chart_bands[0] = band
-            band_count = 1
-        } else if !SameBand(chart_bands[band_count - 1], band) {
-            if chart_bands[band_count - 1].from == band.from {
-                chart_bands[band_count - 1] = band
-            } else {
-                chart_bands[band_count] = band
-                band_count += 1
-            }
-        }
-    }
-    if is_time && high - low < 60.0 {
-        low -= 30.0
-        high += 30.0
-    }
-    if high <= low {
-        high = low + 1.0
-    }
-    inset := Scale(10)
-    unused BandChart(stats.session, BandChartProps.{
-            .key = Layout.KeyHash("statistics/answer-chart") + cast(u64)chart_index,
-            .bounds = Bounds(x + inset, y + inset, width - inset * 2, chart_height - inset * 2),
-            .semantic_label = Locale("habit_stats_answers_title"), .slots = STATS_DAYS,
-            .min_value = low, .max_value = high, .bars = !is_time,
-            .top_label = ValueText(chart.answer_type, cast(s32)high),
-            .bottom_label = ValueText(chart.answer_type, cast(s32)low),
-            .font = stats.small_font, .good_color = stats.color,
-            .other_color = Alpha(stats.text_color, 0.35),
-            .band_color = Alpha(stats.color, 0.14), .grid_color = Alpha(stats.text_color, 0.15),
-            .text_color = stats.text_color, .label_fill = LightenColor(stats.canvas_color, 6)},
-        chart_points[:count], chart_bands[:band_count])
-}
-
-// How often a written question was answered, with its latest answers below
-// on the same card: each answer's day muted beside it.
-TextAnswers :: (chart_index: s32, chart: HabitsStatsChart, answered: string, x: s32, y: s32,
-    width: s32) {
-    row_height := Scale(STATS_ANSWER_ROW)
-    FigureCard(Bounds(x, y, width, Scale(STATS_FIGURE_HEIGHT) + chart.recent_count * row_height),
-        Locale("habit_stats_answered"), answered)
-    inset := Scale(5) + Scale(STATS_CARD_PADDING)
-    row_x := x + inset
-    row_width := width - inset - Scale(STATS_CARD_PADDING)
-    date_width := Width("0000-00-00", stats.small_font) + Scale(20)
-    row_y := y + Scale(STATS_FIGURE_HEIGHT)
-    for index: cast(s32)0..chart.recent_count - 1 {
-        recent := ReadHabitsStatsRecentHost(chart_index, index)
-        Fill(Bounds(row_x, row_y, row_width, Scale(1)), 0.0, Alpha(stats.text_color, 0.1))
-        Text.Draw(stats.session, Text.Props.{.bounds = Bounds(row_x, row_y, date_width, row_height),
-                .text = DateText(recent.day), .size = stats.small_font,
-                .class_name = stats.muted_class, .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapNone})
-        Text.Draw(stats.session, Text.Props.{.bounds = Bounds(row_x + date_width, row_y,
-                row_width - date_width, row_height),
-                .text = recent.text, .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapEllipsis})
-        row_y += row_height
-    }
-}
-
-Answer :: (chart_index: s32, chart: HabitsStatsChart, x: s32, y: s32, width: s32) {
-    y += SectionTitle(chart.title, x, y, width) + Scale(10)
-    first_label := Locale("habit_stats_average")
-    second_label := Locale("habit_stats_total")
-    first := "-"
-    second := "-"
-    answered := Filled("%d/%d", chart.days, STATS_DAYS)
-    if chart.answer_type == HABIT_ANSWER_TEXT {
-        TextAnswers(chart_index, chart, answered, x, y, width)
-        return
-    }
-    if chart.answer_type == HABIT_ANSWER_YES_NO {
-        first_label = Locale("habit_answer_yes")
-        second_label = Locale("habit_stats_answered")
-        second = answered
-        if chart.answered > 0 {
-            percent := (chart.yes * 100 + chart.answered / 2) / chart.answered
-            out: Vec(u8)
-            BuilderPrint(*out, "%", percent)
-            BuilderPrint(*out, "%%")
-            first = BuilderFinish(out)
-        }
-    } else if chart.point_count > 0 {
-        if chart.answer_type == HABIT_ANSWER_TIME {
-            first = TimeText(cast(s32)((chart.average + 50) / 100))
-            out: Vec(u8)
-            BuilderPrint(*out, "% - %", TimeText(chart.lowest), TimeText(chart.highest))
-            second = BuilderFinish(out)
-            second_label = Locale("habit_stats_time_range")
-        } else {
-            first = DecimalText(chart.average)
-            second = Number(chart.sum)
-        }
-    }
-    // With a goal, the second figure is how many were on target.
-    if chart.judged > 0 {
-        second_label = Locale("habit_stats_on_target")
-        second = OnTargetText(chart)
-    }
-    FigurePair(x, y, width, first_label, first, second_label, second)
-    y += Scale(STATS_FIGURE_HEIGHT) + Scale(STATS_CARD_GAP)
-    if chart.answer_type == HABIT_ANSWER_TIME || chart.answer_type == HABIT_ANSWER_NUMBER {
-        AnswerChart(chart_index, chart, x, y, width)
-    }
-}
-
-// A span habit's average and longest length, or how many were on target
-// when its spans are judged, and when they started and ended on average.
-Spans :: (x: s32, y: s32, width: s32) {
-    lengths := ReadHabitsStatsChartHost(0)
-    y += SectionTitle(Locale("habit_stats_spans_title"), x, y, width) + Scale(10)
-    first := "-"
-    second := "-"
-    second_label := Locale("habit_stats_longest")
-    if lengths.point_count > 0 {
-        first = SpanText(cast(s32)((lengths.average + 50) / 100))
-        second = SpanText(lengths.highest)
-    }
-    if lengths.judged > 0 {
-        second_label = Locale("habit_stats_on_target")
-        second = OnTargetText(lengths)
-    }
-    FigurePair(x, y, width, Locale("habit_stats_average"), first, second_label, second)
-    y += Scale(STATS_FIGURE_HEIGHT) + Scale(STATS_CARD_GAP)
-    AnswerChart(0, lengths, x, y, width)
-    y += Scale(STATS_CHART_HEIGHT) + Scale(STATS_CARD_GAP)
-    started := "-"
-    ended := "-"
-    if stats.span_start_average >= 0 {
-        started = TimeText(cast(s32)((stats.span_start_average + 50) / 100))
-        ended = TimeText(cast(s32)((stats.span_end_average + 50) / 100))
-    }
-    FigurePair(x, y, width, Locale("habit_stats_started"), started, Locale("habit_stats_ended"),
-        ended)
-}
-
-Answers :: (x: s32, y: s32, width: s32) {
-    if stats.question_count <= 0 || ShownAnswers() <= 0 {
-        return
-    }
-    y += SectionTitle(Locale("habit_stats_answers_title"), x, y, width) + Scale(10)
-    for chart_index: cast(s32)1..stats.question_count {
-        chart := ReadHabitsStatsChartHost(chart_index)
-        if !chart.shown {
-            continue
-        }
-        Answer(chart_index, chart, x, y, width)
-        y += AnswerHeight(chart, width)
-    }
-}
-
-// ---- Changes ------------------------------------------------------------------
-
 ChangeRowHeight :: (line: string, width: s32) -> s32 {
     return Scale(30) + TextHeight(stats.session, Text.Props.{.text = line, .size = stats.font,
             .bounds = Bounds(0, 0, width, 0), .wrap = cast(Text.Wrap)TextWrapAuto,
@@ -1072,76 +381,6 @@ ChangesHeight :: (width: s32) -> s32 {
     }
     return SectionTitleHeight(Locale("habit_changes_title"), width) + Scale(10) +
     ChangeRowsHeight(width) + Scale(STATS_CARD_PADDING) * 2 + Scale(STATS_SECTION_GAP)
-}
-
-// The habit's latest changes on one card, newest first: each change's day
-// and time muted above its line, which wraps.
-Changes :: (x: s32, y: s32, width: s32) {
-    if stats.change_count <= 0 {
-        return
-    }
-    y += SectionTitle(Locale("habit_changes_title"), x, y, width) + Scale(10)
-    padding := Scale(STATS_CARD_PADDING)
-    Card(x, y, width, ChangeRowsHeight(width) + padding * 2)
-    row_x := x + padding
-    row_width := width - padding * 2
-    row_y := y + padding
-    for index: cast(s32)0..stats.change_count - 1 {
-        change := ReadHabitsStatsChangeHost(index)
-        if index > 0 {
-            Fill(Bounds(row_x, row_y, row_width, Scale(1)), 0.0, Alpha(stats.text_color, 0.1))
-        }
-        Text.Draw(stats.session, Text.Props.{.bounds = Bounds(row_x, row_y + Scale(6), row_width, Scale(18)),
-                .text = change.when, .size = stats.small_font, .class_name = stats.muted_class,
-                .wrap = cast(Text.Wrap)TextWrapNone})
-        row_height := ChangeRowHeight(change.line, row_width)
-        Text.Draw(stats.session, Text.Props.{.bounds = Bounds(row_x, row_y + Scale(28), row_width,
-                row_height - Scale(36)),
-                .text = change.line, .size = stats.font, .wrap = cast(Text.Wrap)TextWrapAuto,
-                .line_gap = Scale(6)})
-        row_y += row_height
-    }
-}
-
-// ---- The page -------------------------------------------------------------------
-
-// Back, then the habit's name, strong, with "Statistics" muted below it.
-// Returns the y below it, or -1 when Back was pressed.
-PageHeader :: (x: s32, y: s32, width: s32) -> s32 {
-    back_label := Locale("back_button")
-    back_width := Width(back_label, stats.font) + Scale(48)
-    if back_width < Scale(88) {
-        back_width = Scale(88)
-    }
-    if back_width > width / 3 {
-        back_width = width / 3
-    }
-    if Button.Draw(stats.session, Button.Props.{.id = 4300,
-            .bounds = Bounds(x, y + Scale(2), back_width, Scale(42)),
-            .label = back_label, .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline,
-            .icon_shape = STATS_BACK_SHAPE, .fit_content = true,
-            .disabled = stats.modal_active}) != 0 {
-        return -1
-    }
-    title_x := x + back_width + Scale(16)
-    title_width := width - back_width - Scale(16)
-    font := Scale(Text.Text24)
-    if Width(stats.name, font) > title_width {
-        font = Scale(Text.Text16)
-        if Width(stats.name, font) > title_width {
-            font = Scale(Text.Text14)
-        }
-    }
-    strong := Strong(stats.name)
-    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(title_x, y, title_width, Scale(34)),
-            .text = stats.name, .size = font, .strong = strong[:],
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(Text.Wrap)TextWrapEllipsis})
-    Text.Draw(stats.session, Text.Props.{.bounds = Bounds(title_x, y + Scale(34), title_width, Scale(22)),
-            .text = Locale("habit_statistics_title"), .size = stats.small_font,
-            .class_name = stats.muted_class, .wrap = cast(Text.Wrap)TextWrapEllipsis})
-    return y + Scale(68)
 }
 
 ContentHeight :: (width: s32) -> s32 {
@@ -1171,120 +410,74 @@ ContentHeight :: (width: s32) -> s32 {
     return height + AnswersHeight(width) + ChangesHeight(width)
 }
 
-Content :: (x: s32, y: s32, width: s32) {
-    gap := Scale(STATS_SECTION_GAP)
-    card_gap := Scale(STATS_CARD_GAP)
-    if stats.overview {
-        FigurePair(x, y, width, Locale("tab_habits"), Number(cast(s64)stats.habit_count),
-            Locale("habit_stats_last_30_days"), Number(cast(s64)stats.last_30_done))
-    } else {
-        FigurePair(x, y, width, Locale("habit_stats_current_streak"), DayCountText(stats.current_streak),
-            Locale("habit_stats_last_30_days"), Filled("%d/%d", stats.last_30_done, stats.last_30_due))
-    }
-    y += Scale(STATS_FIGURE_HEIGHT) + gap
-    y += SectionTitle(Locale(ifx stats.overview then "habit_stats_metric_trends" else "habit_stats_daily_completions"), x, y, width) + Scale(10)
-    if stats.overview && stats.trend_count > 0 {
-        CompletionTrends(x, y, width)
-        return
-    }
-    CompletionTrend(-1, x, y, width)
-    y += Scale(STATS_TREND_HEIGHT) + gap
-    if stats.overview {
-        return
-    }
-    // A habit that measures spans is about their length: it comes first.
-    if stats.span {
-        Spans(x, y, width)
-        y += SpanHeight(width)
-    }
-    if stats.mood_total > 0 {
-        MoodPanel(x, y, width)
-        y += MoodPanelHeight(width) + gap
-    }
-    if stats.hold_days > 0 {
-        y += SectionTitle(Locale("habit_stats_wim_hof_hold_rounds"), x, y, width) + Scale(10)
-        HoldRange(x, y, Scale(118))
-        y += Scale(42)
-        HoldGraph(x, y, width)
-        y += Scale(STATS_HOLD_GRAPH_HEIGHT) + gap
-    }
-    y += SectionTitle(Locale("habit_stats_weekday_pattern"), x, y, width) + Scale(10)
-    chart_height := Scale(STATS_CHART_HEIGHT)
-    Card(x, y, width, chart_height)
-    counts: [7]s32 = .[stats.sunday, stats.monday, stats.tuesday, stats.wednesday,
-    stats.thursday, stats.friday, stats.saturday]
-    most: s32 = 1
-    for day: cast(s32)0..6 {
-        if counts[day] > most {
-            most = counts[day]
-        }
-    }
-    labels: [7]string = .["S", "M", "T", "W", "T", "F", "S"]
-    inner_x := x + Scale(8)
-    slot := (width - Scale(16)) / 7
-    for day: cast(s32)0..6 {
-        height := Scale(3)
-        if counts[day] > 0 {
-            height = (counts[day] * (chart_height - Scale(44))) / most
-        }
-        bar_x := inner_x + day * slot + Scale(5)
-        bar_width := slot - Scale(10)
-        if bar_width < Scale(4) {
-            bar_width = Scale(4)
-        }
-        Bar(bar_x, y + chart_height - height - Scale(28), bar_width, height,
-            ifx counts[day] > 0 then LightenColor(stats.color, 12) else Alpha(stats.text_color, 0.16))
-        Text.Draw(stats.session, Text.Props.{.bounds = Bounds(bar_x, y + chart_height - Scale(24),
-                bar_width, Scale(18)),
-                .text = labels[day], .size = Text.Text12, .class_name = stats.muted_class,
-                .align = cast(TextAlign)TextAlignCenter, .wrap = cast(Text.Wrap)TextWrapNone})
-    }
-    y += chart_height + gap
-    if stats.linked {
-        y += SectionTitle(Locale("habit_stats_practice_time"), x, y, width) + Scale(10)
-        FigurePair(x, y, width, Locale("habit_stats_best_hold"), stats.best_time,
-            Locale("habit_stats_total_hold"), stats.total_time)
-    } else {
-        Figure(x, y, width, Locale("habit_stats_best_streak"), DayCountText(stats.best_streak))
-    }
-    y += Scale(STATS_FIGURE_HEIGHT) + gap
-    Answers(x, y, width)
-    y += AnswersHeight(width)
-    Changes(x, y, width)
-    unused card_gap
+NewDayPoints :: () -> [STATS_HOLD_DAYS_MAX]s32 {
+    result: [STATS_HOLD_DAYS_MAX]s32
+    return result
 }
 
-HabitsStatsView :: (message: HabitsMessage) -> HabitsMessage {
-    stats = ReadHabitsStatsHost()
-    stats.action = HABITS_STATS_NONE
-    side := Scale(16)
-    x := side
-    width := stats.view_width - side * 2
-    if width > Scale(STATS_CONTENT_MAX_WIDTH) {
-        x += (width - Scale(STATS_CONTENT_MAX_WIDTH)) / 2
-        width = Scale(STATS_CONTENT_MAX_WIDTH)
-    }
-    top := PageHeader(x, Scale(20), width)
-    if top < 0 {
-        stats.action = HABITS_STATS_BACK
-        WriteHabitsStatsHost(stats)
-        message.succeeded = true
-        return message
-    }
-    viewport_height := stats.view_height - top - stats.bottom - Scale(4)
-    if viewport_height < 0 {
-        viewport_height = 0
-    }
-    scrolled := Scroll.Draw(stats.session, Scroll.Props.{
-            .key = Layout.KeyHash("inbe/screens/statistics_screen/scroll/1"),
-            .bounds = Bounds(0, top + Scale(4), stats.view_width, viewport_height),
-            .content_height = ContentHeight(width), .scroll_offset = stats.scroll})
-    stats.scroll = scrolled.scroll_offset
-    if scrolled.opened {
-        Content(x, cast(s32)scrolled.content.y + Scale(8), width)
-        unused End(stats.session)
-    }
-    WriteHabitsStatsHost(stats)
-    message.succeeded = true
-    return message
+NewDayTotals :: () -> [STATS_HOLD_DAYS_MAX]s32 {
+    result: [STATS_HOLD_DAYS_MAX]s32
+    return result
+}
+
+NewSeen :: () -> [STATS_HOLD_DAYS_MAX]s32 {
+    result: [STATS_HOLD_DAYS_MAX]s32
+    return result
+}
+
+NewFirstX :: () -> [STATS_HOLD_DAYS_MAX]s32 {
+    result: [STATS_HOLD_DAYS_MAX]s32
+    return result
+}
+
+NewLastX :: () -> [STATS_HOLD_DAYS_MAX]s32 {
+    result: [STATS_HOLD_DAYS_MAX]s32
+    return result
+}
+
+TrendDetail :: (title: string, label: string) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "% · %", title, label)
+    return BuilderFinish(out)
+}
+
+MoodAverageLabel :: (hundredths: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%.", hundredths / 100)
+    Padded(*out, hundredths % 100)
+    BuilderPrint(*out, "/5")
+    return BuilderFinish(out)
+}
+
+PercentLabel :: (percent: s64) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%", percent)
+    BuilderPrint(*out, "%%")
+    return BuilderFinish(out)
+}
+
+TimeRangeLabel :: (lowest: s32, highest: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "% - %", TimeText(lowest), TimeText(highest))
+    return BuilderFinish(out)
+}
+
+CurrentStatistics :: () -> *HabitsStatsFrame {
+    return *stats
+}
+
+SetStatistics :: (value: HabitsStatsFrame) {
+    stats = value
+}
+
+HoldPoints :: () -> []HoldPoint {
+    return hold_points[:]
+}
+
+ChartPoints :: () -> []BandChartPoint {
+    return chart_points[:]
+}
+
+ChartBands :: () -> []BandChartBand {
+    return chart_bands[:]
 }

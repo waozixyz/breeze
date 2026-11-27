@@ -1,18 +1,5 @@
-// The habit list and a habit's own page. The list shows today's progress
-// and the coins to spend, then a table: day names over the rows, each row a
-// habit's icon and name and a circle for each of the last days. A tap on a
-// row opens its details; a row held on a touch screen, or pressed and moved
-// with a mouse, drags it to another place, or among the inactive habits
-// below the table. A habit's page lists its days, or shows them on a
-// calendar. The host keeps the habits and their days and does what the
-// page asks once it is drawn.
-Box :: #import "kryon/box";
-Button :: #import "kryon/button";
-Layout :: #import "kryon/layout";
+// Habit list and history state and host bindings. The host dispatch uses this module name.
 Press :: #import "kryon/press";
-Scroll :: #import "kryon/scroll";
-SegmentedControl :: #import "kryon/segmented_control";
-SvgIcon :: #import "kryon/svg_icon";
 Text :: #import "kryon/text";
 #import "kryon/system_clipboard"
 #import "session"
@@ -35,17 +22,8 @@ Text :: #import "kryon/text";
 #import, file "../../src/habits/habit_date.zi";
 #import, file "coin_color.zi";
 #import, file "table_layout.zi";
-CoinIcon :: #import "mingcute/mingcute_filled_copper_coin";
-ShopIcon :: #import "mingcute/mingcute_regular_shop";
-StatisticsIcon :: #import "mingcute/mingcute_regular_chart_line";
 
-using ButtonTone;
-using ButtonEmphasis;
 using ButtonState;
-using ContentAlignment;
-using IconType;
-using TextAlign;
-using Text.Wrap;
 host_api :: #system_library "host_api";
 ReadHabitsListHost :: () -> HabitsListFrame #foreign host_api;
 WriteHabitsListHost :: (frame: HabitsListFrame) #foreign host_api;
@@ -225,14 +203,6 @@ OffDay :: (accent: Color) -> Color {
         255}
 }
 
-Fill :: (bounds: Rectangle, radius: float32, color: Color) {
-    unused Box.Draw(list.session, Box.Props.{.bounds = bounds, .fill = color, .radius = radius})
-}
-
-Circle :: (x: s32, y: s32, radius: s32, color: Color) {
-    Fill(Bounds(x - radius, y - radius, radius * 2, radius * 2), cast(float32)radius, color)
-}
-
 // The table's lines: one pixel high, or more on a dense screen.
 Hairline :: () -> s32 {
     height := Scale(1)
@@ -240,18 +210,6 @@ Hairline :: () -> s32 {
         height = 1
     }
     return height
-}
-
-// The drop place and the dragged copy are outlined in the text colour,
-// which stands out on every theme, two pixels wide.
-Outline :: (bounds: Rectangle) {
-    radius := cast(float32)Scale(12)
-    color := Alpha(list.text_color, 0.8)
-    unused Box.Draw(list.session, Box.Props.{.bounds = bounds, .border = color, .radius = radius})
-    inset := cast(float32)Hairline()
-    unused Box.Draw(list.session, Box.Props.{.bounds = Rectangle.{bounds.x + inset,
-                bounds.y + inset, bounds.width - inset * 2.0, bounds.height - inset * 2.0},
-            .border = color, .radius = radius - inset})
 }
 
 PointIn :: (point: Vector2, bounds: Rectangle) -> bool {
@@ -343,74 +301,6 @@ FaceState :: (bounds: Rectangle, selected: bool) -> ButtonState {
     return cast(ButtonState)ButtonStateNormal
 }
 
-// A button's face with a press over it, which holds, drags and counts a
-// secondary click as well. Returns the press; its click also counts a
-// keyboard activation of the face.
-PressButton :: (face: Button.Props, press: Press.Props) -> Press.PressResult {
-    face.key = cast(u64)(LIST_FACE_KEYS + press.id)
-    face.id = 0
-    face.disabled = face.disabled || list.modal_active
-    // The press is drawn over the face, so the face never sees the pointer;
-    // its look follows the pointer instead.
-    face.state = FaceState(face.bounds, face.selected)
-    if face.disabled {
-        face.state = cast(ButtonState)ButtonStateAuto
-    }
-    activated := Button.Draw(list.session, face) != 0
-    press.key = cast(u64)press.id
-    press.bounds = face.bounds
-    press.label = face.label
-    press.now = list.now
-    press.disabled = press.disabled || face.disabled
-    result := Press.Draw(list.session, press)
-    result.clicked = result.clicked || activated
-    return result
-}
-
-// A coin and its amount, centred on the bounds' height from their left.
-CoinAmount :: (amount: string, bounds: Rectangle, font: s32) {
-    size := cast(float32)font
-    unused SvgIcon.Draw(list.session, SvgIcon.Props.{.bounds = Rectangle.{bounds.x,
-                bounds.y + (bounds.height - size) * 0.5, size, size},
-            .shape = CoinIcon.Shape, .color = HabitsCoinColor(list.highlight_color, list.text_color)})
-    strong: [1]Text.Range
-    strong[0] = Text.Range.{.start = 0, .end = cast(s32)amount.count}
-    Text.Draw(list.session, Text.Props.{
-            .bounds = Rectangle.{bounds.x + size + cast(float32)Scale(6), bounds.y,
-                bounds.width - size - cast(float32)Scale(6), bounds.height},
-            .text = amount, .size = font, .strong = strong[:],
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(Text.Wrap)TextWrapEllipsis})
-}
-
-// A figure on a card: its label muted above it and the figure strong, with
-// the card's edge in the accent colour.
-FigureCard :: (bounds: Rectangle, label: string, value: string, accent: Color) {
-    radius := cast(float32)Scale(LIST_CARD_RADIUS)
-    bar := cast(float32)Scale(5)
-    Fill(bounds, radius, accent)
-    unused Box.Draw(list.session, Box.Props.{.bounds = Rectangle.{bounds.x + bar, bounds.y,
-                bounds.width - bar, bounds.height}, .fill = list.card_fill, .radius = radius})
-    unused Box.Draw(list.session, Box.Props.{.bounds = bounds, .border = list.card_border,
-            .radius = radius})
-    pad := cast(float32)Scale(LIST_CARD_PADDING)
-    inner := bounds.width - bar - pad * 2.0
-    Text.Draw(list.session, Text.Props.{
-            .bounds = Rectangle.{bounds.x + bar + pad, bounds.y + cast(float32)Scale(10),
-                inner, cast(float32)Scale(22)},
-            .text = label, .size = list.small_font, .class_name = list.muted_class,
-            .wrap = cast(Text.Wrap)TextWrapEllipsis})
-    strong: [1]Text.Range
-    strong[0] = Text.Range.{.start = 0, .end = cast(s32)value.count}
-    Text.Draw(list.session, Text.Props.{
-            .bounds = Rectangle.{bounds.x + bar + pad, bounds.y + cast(float32)Scale(34),
-                inner, cast(float32)Scale(32)},
-            .text = value, .size = FitFont(value, cast(s32)inner, Scale(Text.Text24), Scale(Text.Text16)),
-            .strong = strong[:], .wrap = cast(Text.Wrap)TextWrapNone})
-}
-
-// ---- Habits and days --------------------------------------------------------
-
 ReadRows :: () {
     row_count = list.habit_count
     if row_count > HABIT_MAX {
@@ -466,161 +356,6 @@ FirstLetter :: (name: string) -> string {
     return name[0:end]
 }
 
-// A habit's icon: a circle in its colour with the icon, or the first
-// letter of its name, in the colour that reads on it.
-HabitIcon :: (index: s32, bounds: Rectangle) {
-    row := rows[index]
-    radius := cast(s32)(bounds.width * 0.5)
-    center_x := cast(s32)bounds.x + radius
-    center_y := cast(s32)bounds.y + radius
-    Circle(center_x, center_y, radius, DarkenColor(row.color, 10))
-    Circle(center_x, center_y, radius - Scale(1), row.color)
-    shape := HabitIconShape(row.icon)
-    if row.icon >= 1 && shape.count > 0 {
-        inset := bounds.width * 0.22
-        unused SvgIcon.Draw(list.session, SvgIcon.Props.{.bounds = Rectangle.{bounds.x + inset,
-                    bounds.y + inset, bounds.width - inset * 2.0, bounds.height - inset * 2.0},
-                .shape = shape, .color = TextOn(row.color)})
-        return
-    }
-    Text.Draw(list.session, Text.Props.{.bounds = bounds, .text = FirstLetter(row.name),
-            .size = list.font, .class_name = InkClass(row.color),
-            .align = cast(TextAlign)TextAlignCenter,
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(Text.Wrap)TextWrapNone})
-}
-
-// A day's dot: filled once the day is complete, showing the day's count
-// when the habit counts and a clean check when it does not. The flat fill
-// and thin rim stay legible in tight rows and at small touch targets.
-DayDot :: (center_x: s32, center_y: s32, radius: s32, accent: Color,
-    complete: bool, half: bool, counting: bool, count: s32) {
-    show_count := counting && count > 0
-    if complete {
-        Circle(center_x, center_y, radius, DarkenColor(accent, 12))
-        Circle(center_x, center_y, radius - Scale(1), accent)
-        if !show_count {
-            reach := radius - Scale(4)
-            unused SvgIcon.Draw(list.session, SvgIcon.Props.{.bounds = Bounds(center_x - reach,
-                    center_y - reach, reach * 2, reach * 2),
-                    .shape = LIST_CHECK_SHAPE, .color = TextOn(accent)})
-        }
-    } else {
-        Circle(center_x, center_y, radius, Alpha(list.text_color, 0.26))
-        Circle(center_x, center_y, radius - Scale(1), list.surface_color)
-        if half {
-            face := radius - Scale(1)
-            unused SvgIcon.Draw(list.session, SvgIcon.Props.{.bounds = Bounds(center_x - face,
-                    center_y - face, face * 2, face * 2),
-                    .shape = LIST_HALF_DOT_SHAPE, .color = accent})
-        }
-    }
-    if show_count {
-        count_text := Number(cast(s64)count)
-        Text.Draw(list.session, Text.Props.{.bounds = Bounds(center_x - radius, center_y - radius,
-                radius * 2, radius * 2),
-                .text = count_text,
-                .size = FitFont(count_text, radius * 2 - Scale(2), radius + Scale(4), Scale(8)),
-                .class_name = ifx complete then InkClass(accent) else 0,
-                .align = cast(TextAlign)TextAlignCenter,
-                .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapNone})
-    }
-}
-
-// ---- The table ----------------------------------------------------------------
-
-// One of the last days in a habit's row: a planned day has a circle that
-// marks it. A day off the schedule has none and cannot be tapped, unless
-// something was recorded on it, which shows faded and opens like any other
-// day.
-DayCell :: (index: s32, first_active: bool, day: s32, column: s32, bounds: Rectangle) {
-    row := rows[index]
-    state := Day(index, day)
-    shown := state.planned || state.complete || state.count > 0 || state.running
-    id := 5200000 + index * 16 + column
-    press := Press.Draw(list.session, Press.Props.{.key = cast(u64)id, .id = id, .bounds = bounds,
-            .now = list.now, .disabled = list.modal_active || !shown})
-    if first_active && column == 0 {
-        list.first_day = bounds
-    }
-    center_x := cast(s32)(bounds.x + bounds.width * 0.5)
-    center_y := cast(s32)(bounds.y + bounds.height * 0.5)
-    radius := cast(s32)(bounds.width * 0.3)
-    if radius > Scale(14) {
-        radius = Scale(14)
-    }
-    if radius < Scale(9) {
-        radius = Scale(9)
-    }
-    if shown && !list.modal_active && !list.touch && !list.dragging && PointIn(Pointer(), bounds) {
-        Circle(center_x, center_y, radius + Scale(5), Alpha(row.color, 0.24))
-    }
-    if state.planned {
-        DayDot(center_x, center_y, radius, row.color, state.complete, state.running,
-            row.counting, state.count)
-    } else if shown {
-        DayDot(center_x, center_y, radius, OffDay(row.color), state.complete,
-            state.running, row.counting, state.count)
-    }
-    if press.clicked {
-        Ask(HABITS_LIST_DAY, index, day)
-    }
-}
-
-// The day names over the table's day columns, today first.
-TableHeader :: (x: s32, y: s32, layout: HabitTableLayout, height: s32) {
-    for column: cast(s32)0..layout.days - 1 {
-        label := WeekdayLabel(DayAgo(column), column)
-        Text.Draw(list.session, Text.Props.{
-                .bounds = Bounds(x + column * layout.day_width, y, layout.day_width, height),
-                .text = label,
-                .size = FitFont(label, layout.day_width - Scale(4), list.small_font, Scale(10)),
-                .align = cast(TextAlign)TextAlignCenter,
-                .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapNone})
-    }
-}
-
-// The border between names and days resizes the name column. Its saved
-// width is in design units, so it follows the window and device scale. The
-// handle sits left of the border, so it never covers today's day name.
-NameResize :: (x: s32, y: s32, height: s32, name_width: s32) {
-    handle_width := Scale(LIST_NAME_RESIZE_HANDLE_WIDTH)
-    press := PressButton(Button.Props.{
-            .bounds = Bounds(x - handle_width - Scale(2), y, handle_width, height),
-            .label = Locale("session_resize_button"), .icon_only = true,
-            .icon_shape = LIST_RESIZE_SHAPE, .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost},
-        Press.Props.{.id = 4100000, .capture = true})
-    unit := cast(float32)Scale(1)
-    if unit <= 0.0 {
-        unit = 1.0
-    }
-    if press.down && !list.name_resizing && !list.dragging {
-        list.name_resizing = true
-        list.name_resize_origin = press.x
-        list.name_resize_start = cast(float32)name_width / unit
-    }
-    if list.name_resizing && (press.down || press.released) {
-        width := list.name_resize_start + (press.x - list.name_resize_origin) / unit
-        if width < cast(float32)LIST_NAME_MIN_WIDTH {
-            width = cast(float32)LIST_NAME_MIN_WIDTH
-        }
-        if width > cast(float32)LIST_NAME_MAXIMUM_WIDTH {
-            width = cast(float32)LIST_NAME_MAXIMUM_WIDTH
-        }
-        list.name_width = cast(s32)(width + 0.5)
-        if press.released {
-            list.name_resizing = false
-            list.save = true
-        }
-    } else if list.name_resizing && !press.down {
-        list.name_resizing = false
-        list.save = true
-    }
-}
-
 // Where a row reacts to the pointer: a little inside the row, so its hover
 // and press highlight stays clear of the table's border and the lines
 // between rows.
@@ -629,24 +364,6 @@ RowTouch :: (bounds: Rectangle) -> Rectangle {
     y := cast(float32)Scale(2)
     return Rectangle.{bounds.x + x, bounds.y + y, bounds.width - x * 2.0,
         bounds.height - y * 2.0}
-}
-
-// A habit's icon and name at the start of its row; without room for the
-// name, a smaller icon alone.
-RowFace :: (index: s32, bounds: Rectangle, layout: HabitTableLayout, pad: s32) {
-    icon_size := Scale(ifx layout.names then LIST_ROW_ICON_SIZE else LIST_ROW_SMALL_ICON_SIZE)
-    HabitIcon(index, Bounds(cast(s32)bounds.x + pad,
-        cast(s32)(bounds.y + (bounds.height - cast(float32)icon_size) * 0.5),
-        icon_size, icon_size))
-    if !layout.names {
-        return
-    }
-    Text.Draw(list.session, Text.Props.{
-            .bounds = Bounds(cast(s32)bounds.x + pad + icon_size + Scale(10), cast(s32)bounds.y,
-            layout.name_width - icon_size - Scale(14), cast(s32)bounds.height),
-            .text = rows[index].name, .size = list.font,
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(Text.Wrap)TextWrapEllipsis})
 }
 
 // A mouse drags a habit row as soon as it moves. On a touch screen a swipe
@@ -715,29 +432,6 @@ RowDrag :: (index: s32, bounds: Rectangle, press: Press.PressResult) -> bool {
     return false
 }
 
-// A habit's row: its icon and name, which open its details and drag it to
-// another place, and then a circle for each of the last days. Returns true
-// when the row was tapped.
-Row :: (index: s32, first_active: bool, bounds: Rectangle, layout: HabitTableLayout,
-    pad: s32, open: bool) -> bool {
-    touch := RowTouch(bounds)
-    lifted := list.dragging && list.drag_habit == index && list.drag_lifted
-    press := PressButton(Button.Props.{.bounds = touch,
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost, .selected = open},
-        Press.Props.{.id = 4200 + index, .hold_seconds = LIST_CARD_HOLD_SECONDS,
-            .capture = !list.touch || lifted})
-    tapped := RowDrag(index, touch, press)
-    RowFace(index, bounds, layout, pad)
-    x := cast(s32)bounds.x + pad + layout.name_width
-    for column: cast(s32)0..layout.days - 1 {
-        DayCell(index, first_active, DayAgo(column), column,
-            Bounds(x + column * layout.day_width, cast(s32)bounds.y,
-            layout.day_width, cast(s32)bounds.height))
-    }
-    return tapped
-}
-
 RowDetailHeight :: (index: s32) -> s32 {
     height := Scale(4) + Scale(LIST_DETAIL_PADDING) * 2 +
     Scale(LIST_DETAIL_ACTION_SIZE) + Scale(12) + Scale(LIST_FIGURE_CARD_HEIGHT) + Scale(12)
@@ -751,70 +445,6 @@ RowDetailHeight :: (index: s32) -> s32 {
 DayCountText :: (count: s32) -> string {
     key := ifx count == 1 then "habit_stats_day_singular" else "habit_stats_day_plural"
     return Filled(Locale(key), count, 0)
-}
-
-// An open habit's details below its row, together on a tinted panel: its
-// description, its history, statistics and editor, and its current streak
-// and this week's days.
-RowDetail :: (index: s32, first_active: bool, bounds: Rectangle, pad: s32) {
-    row := rows[index]
-    panel_x := cast(s32)bounds.x + pad
-    panel_width := cast(s32)bounds.width - pad * 2
-    panel_y := cast(s32)bounds.y + Scale(4)
-    panel_height := cast(s32)bounds.height - Scale(4) - Scale(12)
-    Fill(Bounds(panel_x, panel_y, panel_width, panel_height),
-        cast(float32)Scale(LIST_CARD_RADIUS), Alpha(list.text_color, 0.04))
-    inner := Scale(LIST_DETAIL_PADDING)
-    x := panel_x + inner
-    width := panel_width - inner * 2
-    y := panel_y + inner
-    Text.Draw(list.session, Text.Props.{.bounds = Bounds(x, y, width, Scale(LIST_DETAIL_TITLE_HEIGHT)),
-            .text = row.name, .size = list.font,
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(Text.Wrap)TextWrapEllipsis})
-    y += Scale(LIST_DETAIL_TITLE_HEIGHT + LIST_DETAIL_TITLE_GAP)
-    if row.description.count > 0 {
-        Text.Draw(list.session, Text.Props.{.bounds = Bounds(x, y, width, Scale(22)),
-                .text = row.description, .size = list.small_font,
-                .wrap = cast(Text.Wrap)TextWrapEllipsis})
-        y += Scale(30)
-    }
-    action_size := Scale(LIST_DETAIL_ACTION_SIZE)
-    action_gap := (width - action_size * 3) / 2
-    icons: [3]s32 = .[cast(s32)IconCalendar, cast(s32)IconStat, cast(s32)IconEdit]
-    actions: [3]s32 = .[HABITS_LIST_HISTORY, HABITS_LIST_STATISTICS, HABITS_LIST_EDIT]
-    for column: cast(s32)0..2 {
-        action_bounds := Bounds(x + column * (action_size + action_gap), y,
-            action_size, action_size)
-        if Button.Draw(list.session, Button.Props.{.id = 5600000 + index * 3 + column,
-                .bounds = action_bounds, .icon_type = icons[column], .icon_only = true,
-                .tone = cast(ButtonTone)ButtonToneNeutral,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline,
-                .disabled = list.modal_active}) != 0 {
-            Ask(actions[column], index, 0)
-        }
-        if first_active {
-            if column == 0 {
-                list.anchor_history = action_bounds
-            } else if column == 1 {
-                list.anchor_statistics = action_bounds
-            } else {
-                list.anchor_edit = action_bounds
-            }
-        }
-    }
-    if first_active {
-        list.anchor_day = list.anchor_table
-    }
-    metric_y := y + action_size + Scale(12)
-    metric_gap := Scale(10)
-    metric_width := (width - metric_gap) / 2
-    FigureCard(Bounds(x, metric_y, metric_width, Scale(LIST_FIGURE_CARD_HEIGHT)),
-        Locale("habit_stats_current_streak"), DayCountText(row.streak), row.color)
-    FigureCard(Bounds(x + metric_width + metric_gap, metric_y,
-        width - metric_width - metric_gap, Scale(LIST_FIGURE_CARD_HEIGHT)),
-        Locale("profile_progress_title"), Filled("%d / %d", row.week_done, row.week_planned),
-        row.color)
 }
 
 // The habit rows' height with the tallest habit details and the inactive
@@ -836,73 +466,6 @@ OpenHeight :: (active: []s32, active_count: s32, deactivated_count: s32) -> s32 
         deactivated_count * Scale(LIST_DEACTIVATED_ROW_HEIGHT)
     }
     return height
-}
-
-// Three short bars at a row's end show that the row can be dragged.
-Grip :: (bounds: Rectangle) {
-    width := cast(float32)Scale(18)
-    thickness := cast(float32)Scale(2)
-    spacing := cast(float32)Scale(5)
-    x := bounds.x + bounds.width - cast(float32)Scale(16) - width
-    y := bounds.y + bounds.height * 0.5 - spacing - thickness * 0.5
-    color := Alpha(list.text_color, 0.45)
-    for bar: cast(s32)0..2 {
-        Fill(Rectangle.{x, y + cast(float32)bar * spacing, width, thickness},
-            thickness * 0.5, color)
-    }
-}
-
-// A habit's icon, name and grip, in a deactivated habit's row or in the
-// copy that follows the pointer while a habit is dragged.
-DragFace :: (index: s32, bounds: Rectangle) {
-    icon_size := Scale(32)
-    HabitIcon(index, Bounds(cast(s32)bounds.x + Scale(12),
-        cast(s32)(bounds.y + (bounds.height - cast(float32)icon_size) * 0.5),
-        icon_size, icon_size))
-    Text.Draw(list.session, Text.Props.{
-            .bounds = Bounds(cast(s32)bounds.x + Scale(54), cast(s32)bounds.y,
-            cast(s32)bounds.width - Scale(104), cast(s32)bounds.height),
-            .text = rows[index].name, .size = list.font,
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(Text.Wrap)TextWrapEllipsis})
-    Grip(bounds)
-}
-
-// An inactive habit's row below the inactive habits' header. It drags like
-// a habit's row: back into the habits above makes it active again.
-DeactivatedRow :: (index: s32, bounds: Rectangle) {
-    touch := RowTouch(bounds)
-    lifted := list.dragging && list.drag_habit == index && list.drag_lifted
-    press := PressButton(Button.Props.{.bounds = touch,
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost},
-        Press.Props.{.id = 4900 + index, .hold_seconds = LIST_CARD_HOLD_SECONDS,
-            .capture = !list.touch || lifted})
-    unused RowDrag(index, touch, press)
-    DragFace(index, bounds)
-}
-
-// The inactive habits' header row after the habits: their count and a
-// chevron. A tap shows or hides their rows below it.
-InactiveHeader :: (bounds: Rectangle, count: s32, pad: s32) {
-    open := list.show_deactivated
-    if Button.Draw(list.session, Button.Props.{.id = 4110, .bounds = RowTouch(bounds),
-            .label = Filled(Locale("habits_inactive_section"), count, 0),
-            .content_alignment = cast(ContentAlignment)ContentAlignmentStart,
-            .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost,
-            .disabled = list.modal_active}) != 0 {
-        list.show_deactivated = !open
-        list.save = true
-    }
-    // The chevron at the row's end points down while the rows are hidden.
-    span := Scale(5)
-    center_x := cast(s32)(bounds.x + bounds.width) - pad - Scale(12)
-    center_y := cast(s32)(bounds.y + bounds.height * 0.5)
-    shape := ifx open then "S2.4rr:M0 18L12 6L24 18" else "S2.4rr:M0 6L12 18L24 6"
-    unused SvgIcon.Draw(list.session, SvgIcon.Props.{.bounds = Bounds(center_x - span, center_y - span,
-            span * 2, span * 2),
-            .shape = shape, .color = Alpha(list.text_color, 0.7)})
 }
 
 // Scrolls the habit table while a dragged habit is near its top or bottom
@@ -956,64 +519,6 @@ EdgeScroll :: (viewport: Rectangle, max_scroll: s32, point: Vector2) {
     }
 }
 
-// While a habit is dragged over the habit list, the row it would take the
-// place of is outlined, or the whole list when it would go last. Releasing
-// it there moves a row to that place or reactivates a deactivated habit. A
-// row dragged onto the inactive habits below the list becomes inactive.
-Drop :: (viewport: Rectangle, max_scroll: s32, cards: []Rectangle, count: s32,
-    section: Rectangle, released: bool) {
-    if !list.dragging {
-        return
-    }
-    dragged := list.drag_habit
-    if dragged < 0 || dragged >= row_count {
-        EndDrag()
-        return
-    }
-    reactivating := rows[dragged].deactivated
-    point := list.drag_pointer
-    // Over the inactive habits, a habit is dropped among them.
-    in_section := list.drag_moving && section.height > 0.0 && PointIn(point, section)
-    target: s32 = -1
-    if list.drag_moving && !in_section && PointIn(point, viewport) {
-        target = count
-        highlight := viewport
-        for position: cast(s32)0..count - 1 {
-            if PointIn(point, cards[position]) {
-                target = position
-                highlight = Intersection(cards[position], viewport)
-                break
-            }
-        }
-        Outline(highlight)
-    }
-    over_section := !reactivating && in_section
-    if over_section {
-        Outline(section)
-    }
-    if released {
-        if list.drag_moving && over_section {
-            Ask(HABITS_LIST_DEACTIVATE, dragged, 0)
-        } else if list.drag_moving && target >= 0 {
-            Ask(ifx reactivating then HABITS_LIST_REACTIVATE else HABITS_LIST_MOVE,
-                dragged, 0)
-            list.action_target = target
-        }
-        EndDrag()
-        return
-    }
-    if !list.drag_moving {
-        return
-    }
-    EdgeScroll(viewport, max_scroll, point)
-    lifted := list.drag_bounds
-    lifted.x = point.x - list.drag_grab.x
-    lifted.y = point.y - list.drag_grab.y
-    Fill(lifted, cast(float32)Scale(12), list.surface_color)
-    Outline(lifted)
-    DragFace(dragged, lifted)
-}
-
 // The pointer of a dragged row: it follows the pointer while it is down,
 // and the row drops where it is released. Returns true on the release.
 FollowDrag :: () -> bool {
@@ -1033,564 +538,52 @@ FollowDrag :: () -> bool {
     return pointer.released && list.drag_lifted
 }
 
-Overview :: () {
-    x := cast(s32)list.bounds.x
-    y := cast(s32)list.bounds.y
-    width := cast(s32)list.bounds.width
-    height := cast(s32)list.bounds.height
-    heading_height := Scale(34)
-    button_height := Scale(42)
-    gap := Scale(12)
-    add_label := Locale("habit_new_button")
-    add_width := Width(add_label, list.font) + Scale(40)
-    if add_width < Scale(120) {
-        add_width = Scale(120)
-    }
-    if add_width > width * 2 / 3 {
-        add_width = width * 2 / 3
-    }
-    heading := Locale("tab_habits")
-    heading_strong: [1]Text.Range
-    heading_strong[0] = Text.Range.{.start = 0, .end = cast(s32)heading.count}
-    heading_width := width - add_width - gap
-    Text.Draw(list.session, Text.Props.{.bounds = Bounds(x, y, heading_width, heading_height),
-            .text = heading, .size = TitleFont(heading, heading_width),
-            .strong = heading_strong[:], .wrap = cast(Text.Wrap)TextWrapNone})
-    if Button.Draw(list.session, Button.Props.{.id = 4100,
-            .bounds = Bounds(x + width - add_width, y, add_width, button_height),
-            .label = add_label, .tone = cast(ButtonTone)ButtonToneAccent,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled, .pill = true,
-            .disabled = list.modal_active || row_count >= list.habit_limit}) != 0 {
-        Ask(HABITS_LIST_ADD, -1, 0)
-        return
-    }
-    summary_y := y + heading_height + gap
-    coins := Coins(list.halves)
-    coins_width := list.font + Scale(6) + Width(coins, list.font)
-    minimum_action_size: s32 = 44
-    action_size := Scale(minimum_action_size)
-    action_gap := Scale(8)
-    coin_padding := Scale(6)
-    coin_gap := Scale(10)
-    wide_actions_width := coins_width + coin_padding + coin_gap + action_gap + 2 * minimum_action_size
-    if action_size < minimum_action_size && width >= wide_actions_width {
-        action_size = minimum_action_size
-    }
-    icon_size := Scale(20)
-    icon_inset := (action_size - icon_size) / 2
-    statistics_x := x + width - action_size
-    shop_right := statistics_x - action_gap
-    shop_icon_x := shop_right - action_size + icon_inset
-    shop_x := shop_icon_x - coins_width - coin_gap - coin_padding
-    if shop_x < x {
-        shop_x = x
-        coin_padding = 0
-        coins_width = shop_icon_x - x - Scale(5)
-    }
-    // Keep the coin balance and storefront in the same tap target.
-    action_y := summary_y + (Scale(34) - action_size) / 2
-    summary_width := shop_x - x - gap
-    due: s32 = 0
-    done: s32 = 0
-    for index: cast(s32)0..row_count - 1 {
-        if today_days[index].planned {
-            due += 1
-            if today_days[index].complete {
-                done += 1
-            }
-        }
-    }
-    summary := Filled(Locale("habits_done_count_label"), done, due)
-    if summary_width < Width(summary, list.font) {
-        action_y = summary_y
-        summary_y += action_size + Scale(6)
-        summary_width = width
-    }
-    shop_bounds := Bounds(shop_x, action_y, shop_right - shop_x, action_size)
-    if Button.Draw(list.session, Button.Props.{.id = 4120,
-            .bounds = shop_bounds,
-            .label = Locale("habits_shop_button"), .invisible = true,
-            .disabled = list.modal_active}) != 0 {
-        Ask(HABITS_LIST_SHOP, -1, 0)
-        return
-    }
-    if Button.Draw(list.session, Button.Props.{.id = 4121,
-            .bounds = Bounds(statistics_x, action_y, action_size, action_size),
-            .label = Locale("habit_statistics_title"), .icon_only = true,
-            .tone = cast(ButtonTone)ButtonToneNeutral, .emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost,
-            .disabled = list.modal_active}) != 0 {
-        Ask(HABITS_LIST_ALL_STATISTICS, -1, 0)
-        return
-    }
-    CoinAmount(coins, Bounds(shop_x + coin_padding, action_y, coins_width, action_size), list.font)
-    unused SvgIcon.Draw(list.session, SvgIcon.Props.{.bounds = Bounds(shop_icon_x,
-            action_y + icon_inset, icon_size, icon_size),
-            .shape = ShopIcon.Shape, .color = list.text_color})
-    unused SvgIcon.Draw(list.session, SvgIcon.Props.{.bounds = Bounds(statistics_x + icon_inset,
-            action_y + icon_inset, icon_size, icon_size),
-            .shape = StatisticsIcon.Shape, .color = list.text_color})
-    list.anchor_coins = shop_bounds
-    progress_y := summary_y + Scale(28)
-    progress_height := Scale(6)
-    Text.Draw(list.session, Text.Props.{.bounds = Bounds(x, summary_y, summary_width, Scale(24)),
-            .text = summary, .size = list.font, .wrap = cast(Text.Wrap)TextWrapNone})
-    list.anchor_progress = Bounds(x, summary_y, summary_width, Scale(24))
-    progress_width := summary_width
-    if progress_width > Scale(420) {
-        progress_width = Scale(420)
-    }
-    Fill(Bounds(x, progress_y, progress_width, progress_height), cast(float32)Scale(3),
-        Alpha(list.text_color, 0.12))
-    if due > 0 && done > 0 {
-        progress_fill := progress_width * done / due
-        if progress_fill > progress_width {
-            progress_fill = progress_width
-        }
-        Fill(Bounds(x, progress_y, progress_fill, progress_height), cast(float32)Scale(3),
-            list.accent_color)
-    }
-    released := FollowDrag()
-    active: [HABIT_MAX]s32
-    active_count := ActiveIndices(active[:])
-    selected_position: s32 = -1
-    for position: cast(s32)0..active_count - 1 {
-        if active[position] == list.selected {
-            selected_position = position
-        }
-    }
-    deactivated_count := row_count - active_count
-    show_section := row_count > 0
-    list_y := summary_y + Scale(54)
-    list_bottom := y + height
-    header_height := Scale(LIST_TABLE_HEADER_HEIGHT)
-    rows_y := list_y + header_height
-    if list_bottom < rows_y {
-        list_bottom = rows_y
-    }
-    viewport := Bounds(x, rows_y, width, list_bottom - rows_y)
-    row_height := Scale(LIST_ROW_HEIGHT)
-    detail_height: s32 = 0
-    if selected_position >= 0 {
-        detail_height = RowDetailHeight(active[selected_position])
-    }
-    active_height := active_count * row_height + detail_height
-    if active_count == 0 {
-        active_height = Scale(80)
-    }
-    // After the habits, the inactive habits' header, and their rows when it
-    // is open.
-    section_height: s32 = 0
-    inactive_row_height := Scale(LIST_DEACTIVATED_ROW_HEIGHT)
-    if show_section {
-        section_height = Scale(LIST_INACTIVE_HEADER_HEIGHT)
-        if list.show_deactivated {
-            section_height += Scale(LIST_DEACTIVATED_HINT_HEIGHT) +
-            deactivated_count * inactive_row_height
-        }
-    }
-    content_height := active_height + section_height
-    // When the rows would scroll with a habit's details and the inactive
-    // habits open, the scrollbar shows from the start: opening them then
-    // leaves the table's width, and so its day columns, as they are.
-    keep_scrollbar := OpenHeight(active[:], active_count, deactivated_count) >
-    cast(s32)viewport.height
-    // The table's panel holds the day names and the rows, as tall as the
-    // rows need up to the space there is; the rows scroll within it, so a
-    // scrollbar shown before they fill the space ends with the panel.
-    panel_rows_height := content_height
-    if panel_rows_height > cast(s32)viewport.height {
-        panel_rows_height = cast(s32)viewport.height
-    }
-    unused Box.Draw(list.session, Box.Props.{.bounds = Bounds(x, list_y, width,
-            header_height + panel_rows_height),
-            .fill = list.surface_color, .border = Alpha(list.text_color, 0.12),
-            .radius = cast(float32)Scale(14)})
-    // A habit that just opened scrolls into view: all of it when it fits,
-    // otherwise from its top.
-    if list.reveal_selected {
-        list.reveal_selected = false
-        if selected_position >= 0 {
-            card_top := HabitRowOffset(selected_position, selected_position, row_height,
-                detail_height)
-            card_bottom := card_top + row_height + detail_height
-            view_height := cast(s32)viewport.height
-            if card_bottom - list.scroll > view_height {
-                list.scroll = card_bottom - view_height
-            }
-            if card_top < list.scroll {
-                list.scroll = card_top
-            }
-            if list.scroll > content_height - view_height {
-                list.scroll = content_height - view_height
-            }
-            if list.scroll < 0 {
-                list.scroll = 0
-            }
-        }
-    }
-    scrolled := Scroll.Draw(list.session, Scroll.Props.{.key = Layout.KeyHash("inbe/habits/overview"),
-            .bounds = Bounds(x, rows_y, width, panel_rows_height),
-            .content_height = content_height, .keep_scrollbar = keep_scrollbar,
-            .scroll_offset = list.scroll})
-    list.scroll = scrolled.scroll_offset
-    if !scrolled.opened {
-        return
-    }
-    pad := Scale(12)
-    table_x := cast(s32)scrolled.content.x
-    table_width := cast(s32)scrolled.content.width
-    name_preferred: s32 = LIST_NAME_PREFERRED_WIDTH
-    if list.name_width > 0 {
-        name_preferred = list.name_width
-    }
-    if name_preferred < LIST_NAME_MIN_WIDTH {
-        name_preferred = LIST_NAME_MIN_WIDTH
-    }
-    if name_preferred > LIST_NAME_MAXIMUM_WIDTH {
-        name_preferred = LIST_NAME_MAXIMUM_WIDTH
-    }
-    layout := HabitTableLayoutFor(table_width - pad * 2, Scale(name_preferred),
-        Scale(LIST_NAME_MIN_WIDTH), Scale(LIST_ICON_COLUMN_WIDTH), Scale(LIST_DAY_MIN_WIDTH),
-        Scale(LIST_DAY_MAX_WIDTH))
-    if active_count == 0 {
-        Text.Draw(list.session, Text.Props.{.bounds = Bounds(table_x + pad,
-                cast(s32)scrolled.content.y + Scale(10), table_width - pad * 2, Scale(48)),
-                .text = Locale("habit_empty_title"), .size = list.font,
-                .wrap = cast(Text.Wrap)TextWrapNone})
-    }
-    cards: [HABIT_MAX]Rectangle
-    for position: cast(s32)0..active_count - 1 {
-        index := active[position]
-        open := position == selected_position
-        row := Bounds(table_x, cast(s32)scrolled.content.y +
-            HabitRowOffset(position, selected_position, row_height, detail_height),
-            table_width, row_height)
-        cards[position] = row
-        if position > 0 {
-            Fill(Bounds(table_x + pad, cast(s32)row.y, table_width - pad * 2, Hairline()),
-                0.0, Alpha(list.text_color, 0.08))
-        }
-        if position == 0 {
-            list.anchor_table = row
-        }
-        if Row(index, position == 0, row, layout, pad, open) {
-            Ask(ifx open then HABITS_LIST_CLOSE else HABITS_LIST_OPEN, index, 0)
-        }
-        if open {
-            RowDetail(index, position == 0, Bounds(table_x, cast(s32)(row.y + row.height),
-                table_width, detail_height), pad)
-        }
-    }
-    section := Bounds(table_x, cast(s32)scrolled.content.y + active_height, table_width,
-        section_height)
-    if show_section {
-        Fill(Bounds(table_x, cast(s32)section.y, table_width, Hairline()), 0.0,
-            Alpha(list.text_color, 0.12))
-        InactiveHeader(Bounds(table_x, cast(s32)section.y, table_width,
-            Scale(LIST_INACTIVE_HEADER_HEIGHT)), deactivated_count, pad)
-    }
-    if show_section && list.show_deactivated {
-        row_y := cast(s32)section.y + Scale(LIST_INACTIVE_HEADER_HEIGHT)
-        Text.Draw(list.session, Text.Props.{.bounds = Bounds(table_x + pad, row_y,
-                table_width - pad * 2, Scale(LIST_DEACTIVATED_HINT_HEIGHT)),
-                .text = Locale("habits_deactivated_hint"), .size = list.small_font,
-                .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapAuto})
-        row_y += Scale(LIST_DEACTIVATED_HINT_HEIGHT)
-        for index: cast(s32)0..row_count - 1 {
-            if rows[index].deactivated {
-                DeactivatedRow(index, Bounds(table_x, row_y, table_width, inactive_row_height))
-                row_y += inactive_row_height
-            }
-        }
-    }
-    unused End(list.session)
-    TableHeader(table_x + pad + layout.name_width, list_y, layout, header_height)
-    NameResize(table_x + pad + layout.name_width, list_y, header_height, layout.name_width)
-    Fill(Bounds(x, rows_y, width, Hairline()), 0.0, Alpha(list.text_color, 0.12))
-    // A row dropped below the panel, while the rows do not fill the space,
-    // still goes last.
-    Drop(viewport, scrolled.max_scroll, cards[:], active_count,
-        Intersection(section, scrolled.viewport), released)
+NewStrong :: () -> [1]Text.Range {
+    result: [1]Text.Range
+    return result
 }
 
-// ---- A habit's page -------------------------------------------------------------
-
-// Back, then the habit's name, strong. Returns the y below it, or -1 when
-// Back was pressed.
-PageHeader :: (x: s32, y: s32, width: s32, title: string) -> s32 {
-    back_label := Locale("back_button")
-    back_width := Width(back_label, list.font) + Scale(48)
-    if back_width < Scale(88) {
-        back_width = Scale(88)
-    }
-    if back_width > width / 3 {
-        back_width = width / 3
-    }
-    if Button.Draw(list.session, Button.Props.{.id = 4300,
-            .bounds = Bounds(x, y + Scale(2), back_width, Scale(42)),
-            .label = back_label, .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisOutline,
-            .icon_shape = LIST_BACK_SHAPE, .fit_content = true,
-            .disabled = list.modal_active}) != 0 {
-        return -1
-    }
-    title_x := x + back_width + Scale(16)
-    title_width := width - back_width - Scale(16)
-    strong: [1]Text.Range
-    strong[0] = Text.Range.{.start = 0, .end = cast(s32)title.count}
-    Text.Draw(list.session, Text.Props.{.bounds = Bounds(title_x, y, title_width, Scale(46)),
-            .text = title, .size = TitleFont(title, title_width), .strong = strong[:],
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(Text.Wrap)TextWrapEllipsis})
-    return y + Scale(58)
+NewHeadingStrong :: () -> [1]Text.Range {
+    result: [1]Text.Range
+    return result
 }
 
-// The habit's page switches only between its week list and its calendar.
-ViewSwitch :: (x: s32, width: s32, top: s32) -> s32 {
-    options: [2]SegmentedControl.SegmentOption = .[
-    SegmentedControl.SegmentOption.{.label = Locale("habit_focus_week")},
-    SegmentedControl.SegmentOption.{.label = Locale("habit_focus_calendar")}]
-    switch := SegmentedControl.Draw(list.session, SegmentedControl.Props.{.id = 4301,
-            .bounds = Bounds(x, top, width, Scale(42)), .height = Scale(42),
-            .selected_index = ifx list.view_mode == HABIT_VIEW_CALENDAR then 1 else 0,
-            .has_selection = true, .disabled = list.modal_active}, options[:])
-    if switch.changed {
-        list.view_mode = ifx switch.selected_index == 1 then HABIT_VIEW_CALENDAR else HABIT_VIEW_WEEKLY
-        list.scroll = 0
-        list.save = true
-    }
-    return top + Scale(54)
+NewActive :: () -> [HABIT_MAX]s32 {
+    result: [HABIT_MAX]s32
+    return result
 }
 
-// A day button. With a dot, as for a counting habit's calendar day, the
-// label sits at the top and the day's dot with its count below it, and the
-// dot rather than the button shows that the day is complete. A day off the
-// habit's schedule has no background and a faded label, and opens only when
-// something was recorded on it. A secondary click counts it down.
-DayButton :: (index: s32, day: s32, label: string, id: s32, bounds: Rectangle, dot: bool) {
-    row := rows[index]
-    state := Day(index, day)
-    scheduled := state.planned
-    complete := state.complete
-    recorded := complete || state.count > 0 || state.running
-    disabled := list.modal_active || (!scheduled && !recorded)
-    filled := complete && !dot
-    faded_label := !scheduled && !filled
-    face := Button.Props.{.bounds = bounds,
-        .label = ifx dot || faded_label then "" else label,
-        .tone = cast(ButtonTone)(ifx filled then ButtonToneAccent else ButtonToneNeutral),
-        .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft, .selected = filled,
-        .disabled = disabled}
-    if filled && scheduled {
-        face.emphasis = cast(ButtonEmphasis)ButtonEmphasisFilled
-    } else if !scheduled && !filled {
-        face.emphasis = cast(ButtonEmphasis)ButtonEmphasisGhost
-    }
-    // A running span's day is lit softly until the span ends.
-    if !filled && state.running {
-        face.tone = cast(ButtonTone)ButtonToneAccent
-        face.emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft
-    }
-    press := PressButton(face, Press.Props.{.id = id})
-    if faded_label && !dot {
-        Text.Draw(list.session, Text.Props.{.bounds = bounds, .text = label,
-                .align = cast(TextAlign)TextAlignCenter,
-                .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapNone, .disabled = true})
-    }
-    if dot {
-        top := cast(s32)bounds.y + Scale(3)
-        Text.Draw(list.session, Text.Props.{.bounds = Bounds(cast(s32)bounds.x, top,
-                cast(s32)bounds.width, Scale(18)),
-                .text = label, .size = list.small_font, .align = cast(TextAlign)TextAlignCenter,
-                .vertical_align = cast(TextAlign)TextAlignCenter,
-                .wrap = cast(Text.Wrap)TextWrapNone, .disabled = disabled || !scheduled})
-        if state.count > 0 || complete {
-            radius := Scale(12)
-            accent := row.color
-            if !scheduled {
-                accent = OffDay(row.color)
-            }
-            DayDot(cast(s32)(bounds.x + bounds.width / 2),
-                cast(s32)(bounds.y + bounds.height) - Scale(4) - radius,
-                radius, accent, complete, false, true, state.count)
-        }
-    }
-    if press.clicked {
-        Ask(HABITS_LIST_DAY, index, day)
-    } else if press.right_clicked && !disabled {
-        Ask(HABITS_LIST_DAY, index, day)
-        list.action_decrement = true
-    }
+NewCards :: () -> [HABIT_MAX]Rectangle {
+    result: [HABIT_MAX]Rectangle
+    return result
 }
 
-Weekly :: (index: s32, x: s32, width: s32, top: s32, bottom: s32) {
-    row_height := Scale(46)
-    gap := Scale(8)
-    count := list.weekly_days
-    if count < HABIT_WEEKLY_INITIAL_DAYS {
-        count = HABIT_WEEKLY_INITIAL_DAYS
-    }
-    if count > HABIT_WEEKLY_MAX_DAYS {
-        count = HABIT_WEEKLY_MAX_DAYS
-    }
-    list.weekly_days = count
-    content_height := count * (row_height + gap) + Scale(52)
-    viewport := Bounds(x, top, width, bottom - top)
-    scrolled := Scroll.Draw(list.session, Scroll.Props.{.key = Layout.KeyHash("inbe/habits/week"),
-            .bounds = viewport, .content_height = content_height,
-            .scroll_offset = list.scroll})
-    list.scroll = scrolled.scroll_offset
-    if !scrolled.opened {
-        return
-    }
-    first_row := (scrolled.scroll_offset - row_height) / (row_height + gap)
-    if first_row < 0 {
-        first_row = 0
-    }
-    last_row := (scrolled.scroll_offset + cast(s32)viewport.height + row_height) /
-    (row_height + gap)
-    if last_row >= count {
-        last_row = count - 1
-    }
-    row := rows[index]
-    for position: first_row..last_row {
-        row_y := cast(s32)scrolled.content.y + position * (row_height + gap)
-        day := DayAgo(position)
-        label := DateText(day)
-        if row.counting {
-            out: Vec(u8)
-            BuilderPrint(*out, "%  %/%", label, Day(index, day).count, row.target)
-            label = BuilderFinish(out)
-        }
-        DayButton(index, day, label, 4400 + position, Bounds(x, row_y, width, row_height), false)
-    }
-    if count < HABIT_WEEKLY_MAX_DAYS {
-        button_y := cast(s32)scrolled.content.y + count * (row_height + gap)
-        if Button.Draw(list.session, Button.Props.{.id = 4500,
-                .bounds = Bounds(x, button_y, width, Scale(42)),
-                .label = Locale("habit_load_more_button"),
-                .tone = cast(ButtonTone)ButtonToneNeutral,
-                .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-                .disabled = list.modal_active}) != 0 {
-            list.weekly_days += HABIT_WEEKLY_LOAD_DAYS
-            if list.weekly_days > HABIT_WEEKLY_MAX_DAYS {
-                list.weekly_days = HABIT_WEEKLY_MAX_DAYS
-            }
-        }
-    }
-    list.anchor_day = Bounds(x, top, width, row_height)
-    unused End(list.session)
+WeeklyCountLabel :: (label: string, count: s32, target: s32) -> string {
+    out: Vec(u8)
+    BuilderPrint(*out, "%  %/%", label, count, target)
+    return BuilderFinish(out)
 }
 
-Calendar :: (index: s32, x: s32, width: s32, top: s32) {
-    year := list.today / 10000
-    month := (list.today / 100) % 100 + list.month_offset
-    while month < 1 {
-        month += 12
-        year -= 1
-    }
-    while month > 12 {
-        month -= 12
-        year += 1
-    }
-    if !DateValid(year, month, 1) {
-        return
-    }
-    header_height := Scale(42)
-    gap := Scale(6)
-    arrow_width := Scale(48)
-    if Button.Draw(list.session, Button.Props.{.id = 4600, .bounds = Bounds(x, top, arrow_width,
-            header_height), .label = "<", .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-            .disabled = list.modal_active}) != 0 {
-        list.month_offset -= 1
-    }
-    if Button.Draw(list.session, Button.Props.{.id = 4601,
-            .bounds = Bounds(x + width - arrow_width, top, arrow_width, header_height),
-            .label = ">", .tone = cast(ButtonTone)ButtonToneNeutral,
-            .emphasis = cast(ButtonEmphasis)ButtonEmphasisSoft,
-            .disabled = list.modal_active || list.month_offset >= 0}) != 0 {
-        list.month_offset += 1
-    }
-    month_keys: [12]string = .["habit_month_1", "habit_month_2", "habit_month_3",
-    "habit_month_4", "habit_month_5", "habit_month_6", "habit_month_7", "habit_month_8",
-    "habit_month_9", "habit_month_10", "habit_month_11", "habit_month_12"]
-    Text.Draw(list.session, Text.Props.{.bounds = Bounds(x + arrow_width + gap, top,
-            width - (arrow_width + gap) * 2, header_height),
-            .text = Filled(Locale(month_keys[month - 1]), year, 0), .size = list.font,
-            .align = cast(TextAlign)TextAlignCenter,
-            .vertical_align = cast(TextAlign)TextAlignCenter,
-            .wrap = cast(Text.Wrap)TextWrapNone})
-    weekday := Weekday(year * 10000 + month * 100 + 1)
-    cell_width := (width - gap * 6) / 7
-    counting := rows[index].counting
-    // A counting habit's day holds its date above its count.
-    cell_height := Scale(ifx counting then 56 else 50)
-    day: s32 = 1
-    while DateValid(year, month, day) {
-        slot := weekday + day - 1
-        column := slot % 7
-        row := slot / 7
-        day_index := year * 10000 + month * 100 + day
-        if day_index <= list.today {
-            DayButton(index, day_index, Number(cast(s64)day), 4700 + slot,
-                Bounds(x + column * (cell_width + gap),
-                top + header_height + gap + row * (cell_height + gap), cell_width, cell_height),
-                counting)
-        }
-        day += 1
-    }
+CurrentList :: () -> *HabitsListFrame {
+    return *list
 }
 
-HabitPage :: () {
-    x := cast(s32)list.bounds.x
-    y := cast(s32)list.bounds.y
-    width := cast(s32)list.bounds.width
-    bottom := y + cast(s32)list.bounds.height
-    index := list.selected
-    top := PageHeader(x, y, width, rows[index].name)
-    if top < 0 {
-        Ask(HABITS_LIST_BACK, index, 0)
-        return
-    }
-    top = ViewSwitch(x, width, top)
-    if list.view_mode == HABIT_VIEW_CALENDAR {
-        Calendar(index, x, width, top)
-    } else {
-        Weekly(index, x, width, top, bottom)
-    }
+SetList :: (value: HabitsListFrame) {
+    list = value
 }
 
-// Draws the habit list, or the selected habit's page, from the host's frame
-// and returns what the page asks for.
-HabitsListView :: (message: HabitsMessage) -> HabitsMessage {
-    list = ReadHabitsListHost()
-    list.action = HABITS_LIST_NONE
-    list.action_habit = -1
-    list.action_day = 0
-    list.action_target = -1
-    list.action_decrement = false
-    list.save = false
-    list.anchor_progress = Rectangle.{}
-    list.anchor_coins = Rectangle.{}
-    list.anchor_table = Rectangle.{}
-    list.anchor_history = Rectangle.{}
-    list.anchor_statistics = Rectangle.{}
-    list.anchor_edit = Rectangle.{}
-    list.anchor_day = Rectangle.{}
-    list.first_day = Rectangle.{}
-    pointer = SamplePointer()
-    ReadRows()
-    page := list.screen_mode == HABITS_SCREEN_HISTORY && list.selected >= 0 &&
-    list.selected < row_count && !rows[list.selected].deactivated
-    if page {
-        HabitPage()
-    } else {
-        Overview()
-    }
-    WriteHabitsListHost(list)
-    message.succeeded = true
-    return message
+Rows :: () -> []HabitsListRow {
+    return rows[:]
+}
+
+CurrentPointerFrame :: () -> *PointerFrame {
+    return *pointer
+}
+
+SetPointerFrame :: (value: PointerFrame) {
+    pointer = value
+}
+
+TodayDays :: () -> []HabitsListDay {
+    return today_days[:]
 }
