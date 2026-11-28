@@ -45,15 +45,18 @@ bundle --root . --define KRYON_HOSTED_UI \
 for feature in lists habits practices diary lumi leaderboard; do
     source=$feature
     if [ "$feature" = practices ]; then source=practice; fi
+    entry="$source:Main"
+    if [ "$feature" = habits ]; then entry=habits:RunHostFrame; fi
     locale_args=
     if [ "$feature" = diary ]; then locale_args="--asset-dir locales=build/package-assets/diary/locales"; fi
-    # Every app source is registered in the project manifest, including TSX.
+    # Use the registered native frame entry; the per-app main wrappers share
+    # a module name with the host and are outside its flattened module roots.
     # shellcheck disable=SC2086
     bundle --root . $locale_args \
         --define KRYON_HOSTED_UI \
         --asset-dir "assets=build/package-assets/$feature/assets" \
-        --entry main:main -o "$output/$feature.zx" \
-        "apps/$source/src/main.zi"
+        --entry "$entry" -o "$output/$feature.zx" \
+        "apps/$source/src/native/$source.zi"
 done
 # Keep the historical shipped set and add complete packages below 1 decimal MB.
 # Optional apps remain outside cells/ and never change saved app selections.
@@ -61,24 +64,24 @@ python3 scripts/small_app_bundling.py --bundles "$output"
 # The package folder keeps its historical name cells/ for released hosts.
 # shellcheck disable=SC2086
 bundle --root . \
-    --define KRYON_HOSTED_UI --entry main:main \
+    --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "assets=build/package-assets/inbe/assets" \
     --asset-dir "styles=build/package-assets/inbe/styles" \
     --asset-dir "themes=build/package-assets/inbe/themes" \
     --asset-dir "locales=build/package-assets/inbe/locales" \
     --asset-dir "icons=build/package-assets/inbe/icons" \
     --asset-dir "assets/entity=$entity_dir/assets/entity" --asset-dir "assets/entity/bundles=build/entity" \
-    --asset-dir "cells=build/bundled-apps" -o build/inbe.zx apps/inbe/src/main.zi
+    --asset-dir "cells=build/bundled-apps" -o build/inbe.zx apps/inbe/src/native/inbe.zi
 # shellcheck disable=SC2086
 bundle --root . \
-    --define KRYON_HOSTED_UI --entry main:main \
+    --define KRYON_HOSTED_UI --entry inbe:Main \
     --asset-dir "assets=build/package-assets/inbe/assets" \
     --asset-dir "styles=build/package-assets/inbe/styles" \
     --asset-dir "themes=build/package-assets/inbe/themes" \
     --asset-dir "locales=build/package-assets/inbe/locales" \
     --asset-dir "icons=build/package-assets/inbe/icons" \
     --asset-dir "assets/entity=$entity_dir/assets/entity" --asset-dir "assets/entity/bundles=build/entity" \
-    --asset-dir "cells=$output" -o build/inbe-full.zx apps/inbe/src/main.zi
+    --asset-dir "cells=$output" -o build/inbe-full.zx apps/inbe/src/native/inbe.zi
 
 # Successful, byte-identical root bundles must also satisfy Make's timestamp
 # checks. The app bundles above are created fresh in their staging directory.
