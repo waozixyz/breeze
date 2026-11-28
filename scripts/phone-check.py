@@ -102,6 +102,10 @@ class Phone:
         # Launcher aliases name the window too, so any activity of the app counts.
         windows = self.shell("dumpsys", "window", "windows")
         line = next((line for line in windows.splitlines() if "mCurrentFocus=" in line), "")
+        if not line:
+            # Newer Android versions omit global focus from the windows section.
+            windows = self.shell("dumpsys", "window")
+            line = next((line for line in windows.splitlines() if "mCurrentFocus=" in line), "")
         if f" {package}/" not in line:
             raise ValueError("Inner Breeze does not own the foreground window: " + line.strip())
 
@@ -303,15 +307,17 @@ def layout_shift(before, after):
         return round(sum(ImageStat.Stat(difference).mean) / 3, 1)
 
 
-def frame_timing(phone, package, seconds, observe=None):
+def frame_timing(phone, package, seconds, observe=None, expected_fps=None):
     """Collect every presented frame of the app's window for the session."""
-    # Android 9 names layers "<id> package/activity#N"; tokens are not layers.
+    # The layer can be named package/activity#N or SurfaceView[package/activity].
+    # Exclude window and Activity tokens that do not report frame timestamps.
+    package_layer = re.compile(r"(?<![\w.])" + re.escape(package) + r"/")
     layers = [line.strip() for line in phone.shell("dumpsys", "SurfaceFlinger", "--list").splitlines()
-              if f" {package}/" in " " + line.strip() and "Token{" not in line]
+              if package_layer.search(line) and "Token{" not in line]
     if not layers:
         raise ValueError("Inner Breeze has no window layer")
     presented = {}
-    period = 0
+    periods = {}
     last_poll = time.monotonic()
     maximum_poll_gap = 0.0
     deadline = time.monotonic() + seconds
@@ -325,6 +331,8 @@ def frame_timing(phone, package, seconds, observe=None):
             lines = phone.shell("dumpsys", "SurfaceFlinger", "--latency", shlex.quote(layer)).split("\n")
             if lines and lines[0].strip().isdigit():
                 period = int(lines[0])
+                if period > 0:
+                    periods[layer] = period
             for line in lines[1:]:
                 fields = line.split()
                 if len(fields) == 3 and fields[1].isdigit():
@@ -334,16 +342,20 @@ def frame_timing(phone, package, seconds, observe=None):
         if observe is not None:
             observe()
         time.sleep(0.5)
-    if not presented or period <= 0:
+    measured_layers = presented.keys() & periods.keys()
+    if not measured_layers:
         raise ValueError("SurfaceFlinger reported no frames for Inner Breeze")
-    frames = sorted(max(presented.values(), key=len))
+    layer = max((layer for layer in layers if layer in measured_layers),
+                key=lambda candidate: len(presented[candidate]))
+    period = periods[layer]
+    frames = sorted(presented[layer])
     if len(frames) < 2:
         raise ValueError("Inner Breeze presented fewer than two frames")
     gaps = [(right - left) / 1e6 for left, right in zip(frames, frames[1:])]
     period_ms = period / 1e6
     late = sum(1 for gap in gaps if gap > period_ms * 1.5)
     ordered = sorted(gaps)
-    return dict(seconds=round((frames[-1] - frames[0]) / 1e9, 2), frames=len(frames),
+    timing = dict(seconds=round((frames[-1] - frames[0]) / 1e9, 2), frames=len(frames),
                 refresh_hz=round(1000 / period_ms, 1),
                 fps=round((len(frames) - 1) / ((frames[-1] - frames[0]) / 1e9), 1),
                 late_percent=round(100 * late / len(gaps), 2),
@@ -353,6 +365,10 @@ def frame_timing(phone, package, seconds, observe=None):
                                        ordered[len(ordered) // 2]) / 2, 2),
                 p95_frame_ms=round(ordered[(len(ordered) * 95 + 99) // 100 - 1], 1),
                 worst_frame_ms=round(ordered[-1], 1))
+    if expected_fps is not None:
+        timing.update(layer=layer, expected_fps=expected_fps,
+                      late_vs_cadence_percent=round(100 * sum(gap > 1500.0 / expected_fps for gap in gaps) / len(gaps), 2))
+    return timing
 
 
 def smooth(timing):
