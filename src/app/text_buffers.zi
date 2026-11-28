@@ -8,6 +8,13 @@ FrameTextStore :: struct {
     used: s32
 }
 
+// Save ranges while composing a frame; borrow their text after all writes.
+// Ranges belong to the current frame and expire when the store is reset.
+FrameTextRange :: struct {
+    start: s32
+    count: s32
+}
+
 app_append_text_host :: (dst: *u8, dst_size: s64, src: string) #foreign c "app_append_text";
 
 // C ABI callers still share these bounded text operations during the Ziran
@@ -44,7 +51,7 @@ AppendTextToBuffer :: (dst: *u8, dst_size: s64, src: string) {
     }
     source_index: s64 = 0
     while source_index < src.count && index + 1 < dst_size &&
-        src[source_index] != cast(u8)0 {
+    src[source_index] != cast(u8)0 {
         dst[index] = src[source_index]
         source_index += 1
         index += 1
@@ -88,7 +95,7 @@ AppCopyText :: (value: string, output: []u8) -> bool {
 AppReplaceText :: (output: []u8, start: s32, end: s32,
     replacement: string) -> bool {
     if output.count == 0 || output.count > 2147483647 ||
-        replacement.count >= output.count {
+    replacement.count >= output.count {
         return false
     }
 
@@ -103,7 +110,7 @@ AppReplaceText :: (output: []u8, start: s32, end: s32,
 
     added: s32 = cast(s32)replacement.count
     new_length: s64 = cast(s64)length - cast(s64)(end - start) +
-        cast(s64)added
+    cast(s64)added
     if new_length >= cast(s64)capacity {
         return false
     }
@@ -216,23 +223,42 @@ FrameTextReset :: (store: *FrameTextStore) {
 
 #program_export
 FrameTextHold :: (store: *FrameTextStore, value: string) -> string {
-    if store == null || value.count == 0 { return "" }
-    if value.count >= FrameTextCapacity { return "" }
+    range := FrameTextSave(store, value)
+    return FrameTextRead(store, range)
+}
+
+#program_export
+FrameTextSave :: (store: *FrameTextStore, value: string) -> FrameTextRange {
+    if store == null || value.count == 0 { return .{} }
+    if value.count >= FrameTextCapacity { return .{} }
     length := cast(s32)value.count
-    if store.used < 0  || length >= FrameTextCapacity - store.used {
-        return ""
+    if store.used < 0 || length >= FrameTextCapacity - store.used {
+        return .{}
     }
     start := store.used
     index: s32 = 0
     while index < length {
         byte := value[index]
-        if byte == cast(u8)0 { return "" }
+        if byte == cast(u8)0 { return .{} }
         store.bytes[start + index] = byte
         index += 1
     }
     store.bytes[start + length] = cast(u8)0
     store.used += length + 1
-    return AppTextFromCString(*store.bytes[start], length + 1)
+    return FrameTextRange.{.start = start, .count = length}
+}
+
+#program_export
+FrameTextRead :: (store: *FrameTextStore, range: FrameTextRange) -> string {
+    if store == null || range.start < 0 || range.count <= 0 ||
+    store.used < 0 || store.used > FrameTextCapacity ||
+    range.start >= store.used || range.count >= store.used - range.start {
+        return ""
+    }
+    if store.bytes[range.start + range.count] != cast(u8)0 {
+        return ""
+    }
+    return AppTextFromCString(*store.bytes[range.start], range.count + 1)
 }
 
 TextBufferAppendByte :: (output: []u8, cursor: *s32,
