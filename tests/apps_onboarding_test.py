@@ -76,6 +76,14 @@ def wait_setting(profile, key, expected):
              lambda: (key, expected, settings(profile)))
 
 
+def quiet_first_start(profile):
+    driver.wait_idle(frames=40)
+    assert not driver.find(contains="Achievement unlocked", visible=True), "A tutorial announced an achievement"
+    with database(profile) as db:
+        awards = db.execute("SELECT key FROM settings WHERE key LIKE 'cell.achievement.award.%'").fetchall()
+    assert not awards, ("Setup earned achievements before any activity", awards)
+
+
 def wait_log(log, text):
     wait_for(lambda: text in log.read_text(), lambda: log.read_text())
 
@@ -142,9 +150,11 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
     with application(profile, "fresh-practices") as (window, log):
         driver.wait(label="Add voice guidance?")
         assert settings(profile)["language_setup_done"] == "0"
+        quiet_first_start(profile)
         driver.press(label="Not now", role="button")
         wait_setting(profile, "language_setup_done", 1)
         driver.wait(contains="Step 1 of", role="text")
+        quiet_first_start(profile)
         assert not driver.find(label="Pinned", visible=True), "First start opened Apps"
         saved = settings(profile)
         assert saved["apps_setup_done"] == "1"
@@ -167,15 +177,18 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
         assert queued == 0, "a new profile queued its default apps"
         assert "app_order" not in saved, "a new profile sent its default pins"
         key(window, "Escape", lambda: settings(profile).get("tutorial_seen") == "1")
+        quiet_first_start(profile)
     # Restart keeps Practices; the Apps library remains an explicit action.
     with application(profile, "resume-practices") as (window, log):
         driver.wait(label="Start Practice", role="button")
+        quiet_first_start(profile)
         assert not driver.find(label="Pinned", visible=True), "Restart opened Apps"
         driver.press(label="Apps", role="button")
         driver.wait(label="Pinned")
         # Right completes the single launcher guide step.
         guide = "Step 1 of 1"
         driver.wait(label=guide)
+        quiet_first_start(profile)
         key(window, "Right", lambda: not driver.find(label=guide, visible=True))
         wait_setting(profile, "launcher_guide_seen", 1)
         driver.wait(label="Don't allow", role="button")
@@ -301,7 +314,8 @@ with tempfile.TemporaryDirectory(prefix="inbe-app-choices-") as temporary:
                 "-set", "_HARMONY_APP_FEATURE", "1")
         wait_log(log, "->16")
     result.update(
-        first_start_practices=True, system_language=True,
+        first_start_practices=True, first_start_earns_no_achievements=True,
+        tutorials_have_no_achievement_alerts=True, system_language=True,
         default_apps_lumi_habits_practice=True, default_apps_not_sent=True, restart_preserves_practices=True,
         opening_apps_preserves_setup=True, explicit_feature_cli=True,
         same_runtime_feature_property=True, mini_lists_only_and_zero_apps=True,

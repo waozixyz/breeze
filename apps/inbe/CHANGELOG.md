@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-- Open Practices after first-run setup, preserving saved app choices.
+- Open Practices after first-run setup, preserving saved app choices. Keep setup and tutorial guides free of achievement interruptions.
 
 - Organize app sources under `src/` with a clear `main.zi` program entry.
 
