@@ -18,7 +18,9 @@ if [ -z "${APPS_TEST_BUNDLES:-}" ]; then
     sh "$root/scripts/build-apps.sh" "$ziran"
 fi
 # These are valid portable bundles with an identity handshake and all three
-# named capabilities. Their mismatched values must never reach a decoder.
+# named capabilities. These dependency-free fixtures use their own source
+# root so their host imports keep the Lists identity without shadowing the
+# project module. Their mismatched values must never reach a decoder.
 for shape in wrong-record wrong-scalar; do
     if [ "$shape" = wrong-record ]; then
         declaration='Bad :: struct { unexpected: s32; }'
@@ -44,8 +46,8 @@ Main :: () -> s32 {
     return PersistListsHost($argument)
 }
 ZIRAN
-    "$ziran" bundle --project --offline --root "$root" \
-        --define KRYON_HOSTED_UI --entry lists:Main -o "$work/$shape.zx" "$work/$shape/lists.zi"
+    "$ziran" bundle --root "$work/$shape" \
+        --entry lists:Main -o "$work/$shape.zx" "$work/$shape/lists.zi"
 done
 "$ziran" bundle --project --offline --root "$root" \
     --define KRYON_HOSTED_UI --entry main:main -o "$work/missing-assets.zx" \
