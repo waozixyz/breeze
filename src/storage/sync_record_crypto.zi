@@ -162,42 +162,47 @@ storage_sync_record_merge :: (plain: *StorageJsonBuilder, collection: string, re
     if storage_db_handle() == null || plain.ok == 0 || plain.data == null {
         return
     }
-    own := AppTextFromCString(plain.data, cast(s32)(plain.len + 1))
     // Old cached records may still contain a board. Canonicalize before
     // encryption even when no earlier remote copy exists to merge with.
     if collection == EntityGameProgressCollection {
-        progress := EntityGameProgressMerge(own, own)
+        progress: string
+        {
+            own := AppTextFromCString(plain.data, cast(s32)(plain.len + 1))
+            progress = EntityGameProgressMerge(own, own)
+        }
         if progress == "" { plain.ok = 0; return }
         storage_json_builder_free(plain)
         plain.ok = 1
         storage_json_builder_append_text(plain, progress)
         PackageFree(progress)
         if plain.ok == 0 || plain.data == null { return }
-        own = AppTextFromCString(plain.data, cast(s32)(plain.len + 1))
     }
-    sql: [256]u8
-    AppCopyText(ifx collection == EntityGameProgressCollection then
-        "SELECT json FROM sync_record_copies WHERE collection=?1 AND id=?2" else
-        "SELECT json_patch(json,?3) FROM sync_record_copies WHERE collection=?1 AND id=?2 AND json_valid(json) AND json_valid(?3) AND json_type(json)='object' AND json_type(?3)='object'", sql[:])
-    if SqlitePrepare(storage_db_handle(), *sql[0], -1, *stmt, null) != SQLITE_OK {
-        return
-    }
-    bind_text(stmt, 1, collection)
-    bind_text(stmt, 2, record_id)
-    bind_text(stmt, 3, own)
     merged: StorageJsonBuilder
     merged.ok = 1
-    if SqliteStep(stmt) == SQLITE_ROW {
-        value := SqliteColumnText(stmt, 0)
-        if value != null {
-            if collection == EntityGameProgressCollection {
-                union := EntityGameProgressMerge(AppTextFromCString(value, 65536), own)
-                storage_json_builder_append_text(*merged, union)
-                PackageFree(union)
-            } else { storage_json_builder_append(*merged, value) }
+    {
+        own := AppTextFromCString(plain.data, cast(s32)(plain.len + 1))
+        sql: [256]u8
+        AppCopyText(ifx collection == EntityGameProgressCollection then
+            "SELECT json FROM sync_record_copies WHERE collection=?1 AND id=?2" else
+            "SELECT json_patch(json,?3) FROM sync_record_copies WHERE collection=?1 AND id=?2 AND json_valid(json) AND json_valid(?3) AND json_type(json)='object' AND json_type(?3)='object'", sql[:])
+        if SqlitePrepare(storage_db_handle(), *sql[0], -1, *stmt, null) != SQLITE_OK {
+            return
         }
+        bind_text(stmt, 1, collection)
+        bind_text(stmt, 2, record_id)
+        bind_text(stmt, 3, own)
+        if SqliteStep(stmt) == SQLITE_ROW {
+            value := SqliteColumnText(stmt, 0)
+            if value != null {
+                if collection == EntityGameProgressCollection {
+                    union := EntityGameProgressMerge(AppTextFromCString(value, 65536), own)
+                    storage_json_builder_append_text(*merged, union)
+                    PackageFree(union)
+                } else { storage_json_builder_append(*merged, value) }
+            }
+        }
+        SqliteFinalize(stmt)
     }
-    SqliteFinalize(stmt)
     if merged.ok != 0 && merged.data != null && merged.len > 0 {
         storage_json_builder_free(plain)
         plain.* = merged

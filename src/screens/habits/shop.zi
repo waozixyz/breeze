@@ -35,7 +35,10 @@ using HostValueKind;
 
 HABIT_SHOP_DEFAULT_PRICE :: 5
 
-habit_shop_frame: HabitsShopFrame;
+HabitShopUiContext :: struct {
+    app: *InnerBreeze
+    frame: *HabitsShopFrame
+}
 habit_shop_frame_codec: WidgetHabitsShopFrameCodec;
 habit_shop_reward_codec: WidgetHabitsShopRewardCodec;
 habit_shop_activity_codec: WidgetHabitsShopActivityCodec;
@@ -211,7 +214,7 @@ HabitShopBuy :: (app: *InnerBreeze, id: string) -> bool {
 }
 
 // Keeps the page's form state and what it asks for.
-HabitShopKeep :: (app: *InnerBreeze, observed: HabitsShopFrame) -> bool {
+HabitShopKeep :: (app: *InnerBreeze, frame: *HabitsShopFrame, observed: HabitsShopFrame) -> bool {
     shop := *app.habit_shop
     // VM strings are borrowed only during this call.
     if !AppCopyText(observed.editing, shop.editing[:]) ||
@@ -249,12 +252,12 @@ HabitShopKeep :: (app: *InnerBreeze, observed: HabitsShopFrame) -> bool {
     if observed.clipboard_write {
         unused TextInputWriteClipboard(observed.clipboard_text)
     }
-    habit_shop_frame.action = observed.action
+    frame.action = observed.action
     if observed.action == HABITS_SHOP_BUY {
         // Buy asks about the reward as stored, never as the page sent it.
         stored := HabitShopFind(app, observed.buying.id)
         if stored == null {
-            habit_shop_frame.action = HABITS_SHOP_NONE
+            frame.action = HABITS_SHOP_NONE
         } else {
             shop.buying = stored.*
         }
@@ -264,18 +267,19 @@ HabitShopKeep :: (app: *InnerBreeze, observed: HabitsShopFrame) -> bool {
 
 HabitShopCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    host := cast(*HabitShopUiContext)context
     if TextFromCString(module) != "shop_view" && TextFromCString(module) != "shop_stats_view" {
-        return WidgetHostCall(context, module, function, arguments, count, result)
+        return WidgetHostCall(cast(*void)host.app, module, function, arguments, count, result)
     }
-    app := cast(*InnerBreeze)context
+    app := host.app
     shop := *app.habit_shop
     name := TextFromCString(function)
     if name == "ReadHabitsShopHost" && count == 0 {
-        result.* = WidgetEncodeHabitsShopFrame(habit_shop_frame, *habit_shop_frame_codec)
+        result.* = WidgetEncodeHabitsShopFrame(host.frame.*, *habit_shop_frame_codec)
         return 1
     }
     if name == "WriteHabitsShopHost" && count == 1 && WidgetValidHabitsShopFrame(arguments[0]) {
-        return ifx HabitShopKeep(app,
+        return ifx HabitShopKeep(app, host.frame,
             WidgetDecodeHabitsShopFrame(arguments[0], *habit_shop_frame_codec)) then 1 else 0
     }
     if name == "ReadHabitRewardHost" && count == 1 &&
@@ -314,8 +318,11 @@ HabitShopCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "DeleteHabitRewardHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        id := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        deleted := HabitShopFind(app, id) != null && storage_habit_reward_delete(id) != 0
+        deleted: bool
+        {
+            id := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            deleted = HabitShopFind(app, id) != null && storage_habit_reward_delete(id) != 0
+        }
         result.* = HostScalar("bool", ifx deleted then 1 else 0)
         return 1
     }
@@ -327,10 +334,14 @@ HabitShopCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "HabitsLocaleHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
+        reply: HostValue
+        {
+            key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            text := LocaleText(key)
+            reply = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+        }
+        result.* = reply
         return 1
     }
     return 0
@@ -374,15 +385,15 @@ HabitShopFrameFor :: (app: *InnerBreeze, bounds: Rectangle, typed: []u8) -> Habi
 // Has Habits draw the frame for action; returns what the page asks for, or
 // -1 when the package could not draw it.
 HabitShopRun :: (app: *InnerBreeze, frame: HabitsShopFrame, action: s32) -> s32 {
-    habit_shop_frame = frame
-    habit_shop_frame.action = HABITS_SHOP_NONE
+    current := frame
+    current.action = HABITS_SHOP_NONE
     WidgetHostBegin(frame.session, HostedAssetAllowed)
-    AppsUiBegin(HabitShopCall, cast(*void)app)
+    host := HabitShopUiContext.{.app = app, .frame = *current}
+    AppsUiBegin(HabitShopCall, cast(*void)(*host))
     drawn := HabitsRun(HabitsMessage.{.action = action})
     AppsUiEnd()
     WidgetHostEnd()
-    asked := ifx drawn.succeeded then habit_shop_frame.action else -1
-    habit_shop_frame = HabitsShopFrame.{}
+    asked := ifx drawn.succeeded then current.action else -1
     return asked
 }
 

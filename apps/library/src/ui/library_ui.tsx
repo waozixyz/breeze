@@ -3,19 +3,29 @@ import * as NativeImage from "kryon/image";
 import * as NativeScroll from "kryon/scroll";
 import * as NativeText from "kryon/text";
 import * as State from "library_model";
-import { AppCopyText, AppReplaceText } from "text_buffers";
+import { AppCopyText } from "text_buffers";
 import {
     AppFieldInputHost,
+    ApplyNoteEdit,
     AppKeyHost,
     AppLocaleHost,
     Bounds,
     ChapterHeadingProps,
+    ClearNoteComposition,
     CloseAppHost,
+    DiscardNoteComposition,
+    DiscardNoteEdit,
     EnsureAnnotation,
     LibraryBack,
+    KeepNoteComposition,
     LoadPageAnnotations,
     NewMarks,
     NewOptions,
+    NoteComposition,
+    NoteCompositionKeep,
+    NoteCompositionUpdate,
+    NoteEditKeep,
+    NoteEditUpdate,
     NumberText,
     OpenBook,
     PageIndicator,
@@ -399,6 +409,53 @@ function ShelfRows(
     }
 }
 
+// The passage editor keeps only its scalar fields across frames; its raw
+// TextArea result stays in this helper so no global retains a view of the
+// host's text request scratch.
+function AnnotationPassageEditor(
+    bounds: Rectangle,
+    y: s32,
+    width: s32,
+    chapter: s32,
+    start: s32,
+    end: s32
+): void {
+    let input = AppFieldInputHost();
+    let result = TextArea({
+        session: State.frame.session,
+        props: {
+            key: 27619n,
+            focus_id: 27619n,
+            bounds: Bounds(s32(bounds.x), y, width, Scale(168n)),
+            value: nativeSlice(BookChapter(State.book, chapter), start, end),
+            label: AppLocaleHost("library_select_passage"),
+            read_only: true,
+            wrap: true,
+            cursor: State.passage_cursor,
+            anchor: State.passage_anchor,
+            focused: State.passage_focused,
+            scroll_y: State.passage_scroll_y,
+            selecting: State.passage_selecting,
+            scale: State.frame.scale,
+            input: {
+                left: input.left,
+                right: input.right,
+                home: input.home,
+                end: input.end,
+                shift: input.shift,
+                select_all: input.select_all,
+                copy: input.copy,
+                now_seconds: State.frame.now
+            }
+        }
+    });
+    State.passage_cursor = result.cursor;
+    State.passage_anchor = result.anchor;
+    State.passage_focused = result.focused;
+    State.passage_scroll_y = result.scroll_y;
+    State.passage_selecting = result.selecting;
+}
+
 function AnnotationPanel(bounds: Rectangle): void {
     let y = s32(bounds.y);
     let width = s32(bounds.width);
@@ -414,53 +471,14 @@ function AnnotationPanel(bounds: Rectangle): void {
     />;
     y += Scale(40n);
     let previous_start =
-        State.passage_state.anchor < State.passage_state.cursor
-            ? State.passage_state.anchor
-            : State.passage_state.cursor;
+        State.passage_anchor < State.passage_cursor ? State.passage_anchor : State.passage_cursor;
     let previous_end =
-        State.passage_state.anchor > State.passage_state.cursor
-            ? State.passage_state.anchor
-            : State.passage_state.cursor;
-    State.passage_state = TextArea({
-        session: State.frame.session,
-        props: {
-            key: 27619n,
-            focus_id: 27619n,
-            bounds: Bounds(s32(bounds.x), y, width, Scale(168n)),
-            value: nativeSlice(
-                BookChapter(State.book, current.chapter),
-                current.start,
-                current.end
-            ),
-            label: AppLocaleHost("library_select_passage"),
-            read_only: true,
-            wrap: true,
-            cursor: State.passage_state.cursor,
-            anchor: State.passage_state.anchor,
-            focused: State.passage_state.focused,
-            scroll_y: State.passage_state.scroll_y,
-            selecting: State.passage_state.selecting,
-            scale: State.frame.scale,
-            input: {
-                left: input.left,
-                right: input.right,
-                home: input.home,
-                end: input.end,
-                shift: input.shift,
-                select_all: input.select_all,
-                copy: input.copy,
-                now_seconds: State.frame.now
-            }
-        }
-    });
+        State.passage_anchor > State.passage_cursor ? State.passage_anchor : State.passage_cursor;
+    AnnotationPassageEditor(bounds, y, width, current.chapter, current.start, current.end);
     let start =
-        State.passage_state.anchor < State.passage_state.cursor
-            ? State.passage_state.anchor
-            : State.passage_state.cursor;
+        State.passage_anchor < State.passage_cursor ? State.passage_anchor : State.passage_cursor;
     let end =
-        State.passage_state.anchor > State.passage_state.cursor
-            ? State.passage_state.anchor
-            : State.passage_state.cursor;
+        State.passage_anchor > State.passage_cursor ? State.passage_anchor : State.passage_cursor;
     if (end > start && (start !== previous_start || end !== previous_end) && SaveAnnotations()) {
         State.annotation_index = -1n;
         for (let index: s32 = s32(0n); index < State.annotation_count; index += 1n) {
@@ -479,6 +497,7 @@ function AnnotationPanel(bounds: Rectangle): void {
             );
         }
         State.note_state = {};
+        ClearNoteComposition();
     }
     y += Scale(184n);
     let selected = end > start || State.annotation_index >= 0n;
@@ -509,59 +528,72 @@ function AnnotationPanel(bounds: Rectangle): void {
         SaveReader();
     }
     y += Scale(64n);
-    let edit = TextArea({
-        session: State.frame.session,
-        props: {
-            key: 27621n,
-            focus_id: 27621n,
-            bounds: Bounds(s32(bounds.x), y, width, Scale(160n)),
-            value: TextUntilNul(nativeSlice(State.note)),
-            label: AppLocaleHost("library_note"),
-            placeholder: AppLocaleHost("library_note"),
-            max_bytes: 2048n,
-            max_codepoints: 2048n,
-            cursor: State.note_state.cursor,
-            anchor: State.note_state.anchor,
-            scroll_y: State.note_state.scroll_y,
-            focused: State.note_state.focused,
-            composition: State.note_state.composition,
-            wrap: true,
-            scale: State.frame.scale,
-            disabled: !selected,
-            input: {
-                text: input.text,
-                paste_text: input.paste_text,
-                composition_event: input.composition_event,
-                left: input.left,
-                right: input.right,
-                home: input.home,
-                end: input.end,
-                shift: input.shift,
-                backspace: input.backspace,
-                delete_forward: input.delete_forward,
-                select_all: input.select_all,
-                copy: input.copy,
-                cut: input.cut,
-                paste: input.paste,
-                enter: input.commit,
-                escape: input.escape,
-                now_seconds: State.frame.now
+    // Snapshot the area result inside this block, so its views of the
+    // host's per-frame bytes end before the model-owned preedit buffer is
+    // rewritten below.
+    let kept: NoteCompositionKeep = {};
+    let edit_keep: NoteEditKeep = {};
+    {
+        let edit = TextArea({
+            session: State.frame.session,
+            props: {
+                key: 27621n,
+                focus_id: 27621n,
+                bounds: Bounds(s32(bounds.x), y, width, Scale(160n)),
+                value: TextUntilNul(nativeSlice(State.note)),
+                label: AppLocaleHost("library_note"),
+                placeholder: AppLocaleHost("library_note"),
+                max_bytes: 2048n,
+                max_codepoints: 2048n,
+                cursor: State.note_state.cursor,
+                anchor: State.note_state.anchor,
+                scroll_y: State.note_state.scroll_y,
+                focused: State.note_state.focused,
+                composition: NoteComposition(),
+                wrap: true,
+                scale: State.frame.scale,
+                disabled: !selected,
+                input: {
+                    text: input.text,
+                    paste_text: input.paste_text,
+                    composition_event: input.composition_event,
+                    left: input.left,
+                    right: input.right,
+                    home: input.home,
+                    end: input.end,
+                    shift: input.shift,
+                    backspace: input.backspace,
+                    delete_forward: input.delete_forward,
+                    select_all: input.select_all,
+                    copy: input.copy,
+                    cut: input.cut,
+                    paste: input.paste,
+                    enter: input.commit,
+                    escape: input.escape,
+                    now_seconds: State.frame.now
+                }
             }
+        });
+        State.note_state.cursor = edit.cursor;
+        State.note_state.anchor = edit.anchor;
+        State.note_state.scroll_y = edit.scroll_y;
+        State.note_state.focused = edit.focused;
+        if (edit.composition_changed) {
+            let fresh_composition = NoteCompositionUpdate(edit.composition);
+            DiscardNoteComposition(kept);
+            kept = fresh_composition;
         }
-    });
-    State.note_state = edit;
-    if (edit.edit.changed && EnsureAnnotation()) {
-        if (
-            AppReplaceText(
-                nativeSlice(State.note),
-                edit.edit.start,
-                edit.edit.end,
-                edit.edit.replacement
-            )
-        ) {
-            State.annotation_dirty = true;
-        }
+        let fresh_edit = NoteEditUpdate(edit);
+        DiscardNoteEdit(edit_keep);
+        edit_keep = fresh_edit;
     }
+    // The area result's scope ended above; applying the kept edit and
+    // rewriting the owned preedit record now touches no live view, and an
+    // unchanged composition is kept with no per-frame copies.
+    if (ApplyNoteEdit(edit_keep)) {
+        State.annotation_dirty = true;
+    }
+    KeepNoteComposition(kept);
     y += Scale(176n);
     for (let index: s32 = s32(0n); index < State.annotation_count; index += 1n) {
         if (

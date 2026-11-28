@@ -1,3 +1,4 @@
+import { Scroll } from "kryon/tsx/scroll";
 // Authored UI composition; native application state remains in manual_view.zi.
 import * as NativeImage from "kryon/image";
 import * as NativeLayout from "kryon/layout";
@@ -10,7 +11,6 @@ import { Swipe } from "kryon/swipe";
 import { SwipeDirection } from "kryon/swipe_props";
 import { TextAlign } from "kryon/text_align";
 import { Wrap } from "kryon/text_props";
-import { End } from "kryon/tree";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
 import { Image } from "kryon/tsx/image";
@@ -573,17 +573,22 @@ export function Manual(): void {
         max_width,
         Scale(State_manual_view.MANUAL_SIDE_PADDING)
     );
-    let scrolled = NativeScroll.Draw(State_manual_view.manual.session, {
-        key: ScrollKey(),
-        bounds: Bounds(0n, content_y, State_manual_view.manual.view_width, content_height),
-        content_height: PageHeight(column.width),
-        scroll_offset: State_manual_view.manual.scroll,
-        scale: State_manual_view.manual.scale
+    let scrolled = Scroll({
+        session: State_manual_view.manual.session,
+        props: {
+            key: ScrollKey(),
+            bounds: Bounds(0n, content_y, State_manual_view.manual.view_width, content_height),
+            content_height: PageHeight(column.width),
+            scroll_offset: State_manual_view.manual.scroll,
+            scale: State_manual_view.manual.scale
+        },
+        children: (scrolled: NativeScroll.ScrollResult): void => {
+            State_manual_view.manual.scroll = scrolled.scroll_offset;
+            Page(column.x, column.width, s32(scrolled.content.y));
+        }
     });
-    State_manual_view.manual.scroll = scrolled.scroll_offset;
-    if (scrolled.opened) {
-        Page(column.x, column.width, s32(scrolled.content.y));
-        End(State_manual_view.manual.session);
+    if (!scrolled.opened) {
+        State_manual_view.manual.scroll = scrolled.scroll_offset;
     }
     Pager(nav_y, nav_height, content_y, content_height);
 }

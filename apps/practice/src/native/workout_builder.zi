@@ -9,7 +9,6 @@
 #import, file "../../../../src/app/locale.zi";
 #import, file "../../../../src/app/metrics.zi";
 #import, file "../../../../src/app/text_buffers.zi";
-#import, file "../../../../src/platform/text_input_host.zi";
 #import, file "../../../../src/practices/practice_figure_draw.zi";
 #import, file "../../../../src/practices/practice_movement_host.zi";
 #import, file "../../../../src/practices/tai_chi/tai_chi_solve.zi";
@@ -268,19 +267,26 @@ WorkoutBuilderVariantCount :: (exercise: s32) -> s32 {
     return count
 }
 
-WorkoutBuilderFormat :: (app: *InnerBreeze, key: string, values: []FormatArg) -> string {
-    text: [200]u8
-    unused FormatTemplate(LocaleText(key), values, text[:])
-    return FrameTextHold(*app.ui.frame_text, TextUntilNul(text[:]))
+// Each label owns its formatting storage until the widget copies it.
+WorkoutBuilderTextBuffer :: () -> [200]u8 {
+    return .{}
 }
 
-// "4:05", kept for this frame.
-WorkoutBuilderClock :: (app: *InnerBreeze, seconds: s32) -> string {
-    text: Vec(u8)
-    BuilderPrint(*text, "%:", seconds / 60)
-    BuilderPrint(*text, "%", seconds % 60 / 10)
-    BuilderPrint(*text, "%", seconds % 10)
-    return FrameTextHold(*app.ui.frame_text, BuilderFinish(text))
+WorkoutBuilderTitleBuffer :: () -> [WORKOUT_PLAN_TITLE_LIMIT]u8 {
+    return .{}
+}
+
+WorkoutBuilderFormat :: (key: string, values: []FormatArg, output: []u8) -> string {
+    unused FormatTemplate(LocaleText(key), values, output)
+    return TextUntilNul(output)
+}
+
+// "4:05", in the caller's storage.
+WorkoutBuilderClock :: (seconds: s32, output: []u8) -> string {
+    args: [3]FormatArg = .[.{.number = seconds / 60},
+    .{.number = seconds % 60 / 10}, .{.number = seconds % 10}]
+    unused FormatTemplate("%d:%d%d", args[:], output)
+    return TextUntilNul(output)
 }
 
 WorkoutBuilderButtonProps :: (id: u64, bounds: Rectangle, label: string,
@@ -296,21 +302,6 @@ WorkoutBuilderSlice :: (area: Rectangle, y: s32, height: s32, column: s32 = 0, c
     part := (cast(s32)area.width + gap) / columns
     return Rectangle.{area.x + cast(float32)(column * part), area.y + cast(float32)y,
         cast(float32)(part - gap), cast(float32)height}
-}
-
-WorkoutBuilderFieldInputBytes :: () -> [256]u8 { return .{} }
-
-WorkoutBuilderApplyField :: (state: *TextField.State, result: TextField.Result) -> bool {
-    if !TextField.StateApplyResult(state, result) {
-        return false
-    }
-    if result.clipboard_write {
-        unused TextInputWriteClipboard(result.clipboard_text)
-    }
-    if result.committed || result.escaped {
-        state.focused = false
-    }
-    return result.edit.changed
 }
 
 // --- Sizes ------------------------------------------------------------------------
@@ -408,36 +399,41 @@ WorkoutBuilderThumbnail :: (app: *InnerBreeze, exercise: s32, variant: s32, area
         PracticeFigurePlacement.{.training = true, .training_shorts = true})
 }
 
-WorkoutBuilderDetail :: (app: *InnerBreeze, node: *WorkoutNode) -> string {
+// The variant suffix is not bounded by the numeric format buffer. The caller
+// releases this owned label after the widgets have copied it.
+WorkoutBuilderDetail :: (node: *WorkoutNode) -> string {
+    seconds: [200]u8
     value: [1]FormatArg = .[.{.number = node.seconds}]
-    seconds := WorkoutBuilderFormat(app, "workout_custom_seconds_value", value[:])
+    unused WorkoutBuilderFormat("workout_custom_seconds_value", value[:], seconds[:])
+    joined: Vec(u8)
     if node.rest > 0 {
-        args: [2]FormatArg = .[.{.text = seconds, .is_text = true}, .{.number = node.rest}]
-        seconds = WorkoutBuilderFormat(app, "workout_custom_block_rest", args[:])
+        rest: [200]u8
+        args: [2]FormatArg = .[.{.text = TextUntilNul(seconds[:]), .is_text = true}, .{.number = node.rest}]
+        BuilderPrint(*joined, "%", WorkoutBuilderFormat("workout_custom_block_rest", args[:], rest[:]))
+    } else {
+        BuilderPrint(*joined, "%", TextUntilNul(seconds[:]))
     }
     if WorkoutBuilderVariantCount(node.exercise) > 1 || node.variant != WORKOUT_CUSTOM_ORDINARY {
-        joined: Vec(u8)
-        BuilderPrint(*joined, "% · %", seconds, LocaleText(WorkoutBuilderVariantKey(node.variant)))
-        return FrameTextHold(*app.ui.frame_text, BuilderFinish(joined))
+        BuilderPrint(*joined, " · %", LocaleText(WorkoutBuilderVariantKey(node.variant)))
     }
-    return seconds
+    return BuilderFinish(joined)
 }
 
-WorkoutBuilderGroupTitle :: (app: *InnerBreeze, node: *WorkoutNode) -> string {
-    title: [WORKOUT_PLAN_TITLE_LIMIT]u8
-    text := WorkoutPlanTitle(node, title[:])
+WorkoutBuilderGroupTitle :: (node: *WorkoutNode, output: []u8) -> string {
+    text := WorkoutPlanTitle(node, output)
     if text.count == 0 {
         return LocaleText("workout_custom_group_name")
     }
-    return FrameTextHold(*app.ui.frame_text, text)
+    return text
 }
 
-WorkoutBuilderGroupDetail :: (app: *InnerBreeze, index: s32) -> string {
+WorkoutBuilderGroupDetail :: (index: s32, output: []u8) -> string {
     plan := *workout_builder.draft
+    clock: [200]u8
     args: [3]FormatArg = .[.{.number = plan.nodes[index].repeats},
-        .{.text = WorkoutBuilderClock(app, WorkoutPlanNodeSeconds(plan, index)), .is_text = true},
-        .{.number = WorkoutPlanNodeSteps(plan, index)}]
-    return WorkoutBuilderFormat(app, "workout_custom_group_detail", args[:])
+    .{.text = WorkoutBuilderClock(WorkoutPlanNodeSeconds(plan, index), clock[:]), .is_text = true},
+    .{.number = WorkoutPlanNodeSteps(plan, index)}]
+    return WorkoutBuilderFormat("workout_custom_group_detail", args[:], output)
 }
 
 // A mouse drags a block as soon as it moves; on a touch screen a swipe
@@ -688,7 +684,7 @@ WorkoutBuilderScrollProps :: (bounds: Rectangle) -> WorkoutBuilderScrollView {
         content_height = WorkoutBuilderHeaderHeight() + WorkoutBuilderLayout()
     }
     return .{.offset = scroll_at, .props = .{.key = Layout.KeyHash("workout/builder/scroll") + cast(u64)workout_builder.page,
-        .bounds = bounds, .content_height = content_height, .scroll_offset = scroll_at.*}}
+            .bounds = bounds, .content_height = content_height, .scroll_offset = scroll_at.*}}
 }
 
 WorkoutBuilderScrollOffset :: (bounds: Rectangle, scroll_at: *s32, scroll: Scroll.ScrollResult) {

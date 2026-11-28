@@ -1,3 +1,4 @@
+import { Scroll } from "kryon/tsx/scroll";
 // Authored UI composition; native application state remains in movement_view.zi.
 import * as NativeLayout from "kryon/layout";
 import * as NativeScroll from "kryon/scroll";
@@ -11,7 +12,6 @@ import { Rectangle, Vector2 } from "kryon/geometry";
 import { TextAlign } from "kryon/text_align";
 import { TextHeight, TextWidth } from "kryon/text_measure";
 import { Wrap } from "kryon/text_props";
-import { End } from "kryon/tree";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
 import { SegmentedControl } from "kryon/tsx/segmented_control";
@@ -404,29 +404,34 @@ export function Astral(): void {
         width,
         State_movement_view.movement.font
     );
-    let scrolled = NativeScroll.Draw(State_movement_view.movement.session, {
-        key: NativeLayout.KeyHash("astral/guidance"),
-        bounds: Bounds(pad, y, width, height),
-        content_height: text_h,
-        scroll_offset: State_movement_view.movement.scroll
+    let scrolled = Scroll({
+        session: State_movement_view.movement.session,
+        props: {
+            key: NativeLayout.KeyHash("astral/guidance"),
+            bounds: Bounds(pad, y, width, height),
+            content_height: text_h,
+            scroll_offset: State_movement_view.movement.scroll
+        },
+        children: (scrolled: NativeScroll.ScrollResult): void => {
+            State_movement_view.movement.scroll = scrolled.scroll_offset;
+            <Text
+                session={State_movement_view.movement.session}
+                props={{
+                    text: State_movement_view.movement.cue,
+                    bounds: {
+                        x: scrolled.content.x,
+                        y: scrolled.content.y,
+                        width: float32(width),
+                        height: float32(text_h)
+                    },
+                    size: State_movement_view.movement.font,
+                    align: TextAlign.TextAlignCenter
+                }}
+            />;
+        }
     });
-    State_movement_view.movement.scroll = scrolled.scroll_offset;
-    if (scrolled.opened) {
-        <Text
-            session={State_movement_view.movement.session}
-            props={{
-                text: State_movement_view.movement.cue,
-                bounds: {
-                    x: scrolled.content.x,
-                    y: scrolled.content.y,
-                    width: float32(width),
-                    height: float32(text_h)
-                },
-                size: State_movement_view.movement.font,
-                align: TextAlign.TextAlignCenter
-            }}
-        />;
-        End(State_movement_view.movement.session);
+    if (!scrolled.opened) {
+        State_movement_view.movement.scroll = scrolled.scroll_offset;
     }
     let button_w = Scale(220n);
     if (button_w > width) {

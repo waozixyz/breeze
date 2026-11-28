@@ -174,33 +174,39 @@ SettingsSyncAccountId :: (account: *AccountKeys) -> string {
     return AppTextFromCString(*account.public_id[0], ACCOUNT_PUBLIC_ID_HEX_SIZE)
 }
 
-SettingsSyncLoadAccountId :: (app: *InnerBreeze, account_id: *string) -> bool {
+SettingsSyncLoadAccountId :: (output: []u8) -> bool {
     account: AccountKeys
     available := sync_account_load(*account) != 0
-    account_id.* = FrameTextHold(*app.ui.frame_text, SettingsSyncAccountId(*account))
-    return available
+    copied := AppCopyText(SettingsSyncAccountId(*account), output)
+    return available && copied
+}
+
+NewAccountId :: () -> [ACCOUNT_PUBLIC_ID_HEX_SIZE]u8 {
+    return .{}
 }
 
 SettingsSyncNormalizeAlias :: (app: *InnerBreeze) {
     output: [40]u8
-    value := AppTextFromCString(*app.sync_alias_input[0], 40)
-    index: s32 = 0
     written: s32 = 0
-    if value.count > 0 && value[0] == #char "@" {
-        index = 1
-    }
-    while index < cast(s32)value.count && written < 32 {
-        byte := value[index]
-        if byte >= #char "A" && byte <= #char "Z" {
-            byte = cast(u8)(byte - #char "A" + #char "a")
+    {
+        value := AppTextFromCString(*app.sync_alias_input[0], 40)
+        index: s32 = 0
+        if value.count > 0 && value[0] == #char "@" {
+            index = 1
         }
-        if (byte >= #char "a" && byte <= #char "z") ||
-        (byte >= #char "0" && byte <= #char "9") ||
-        byte == #char "_" {
-            output[written] = byte
-            written += 1
+        while index < cast(s32)value.count && written < 32 {
+            byte := value[index]
+            if byte >= #char "A" && byte <= #char "Z" {
+                byte = cast(u8)(byte - #char "A" + #char "a")
+            }
+            if (byte >= #char "a" && byte <= #char "z") ||
+            (byte >= #char "0" && byte <= #char "9") ||
+            byte == #char "_" {
+                output[written] = byte
+                written += 1
+            }
+            index += 1
         }
-        index += 1
     }
     output[written] = cast(u8)0
     unused AppCopyText(AppTextFromCString(*output[0], 40),
@@ -225,9 +231,11 @@ SettingsSyncAliasValid :: (value: string) -> bool {
 
 SettingsSyncServerNormalize :: (app: *InnerBreeze,
     output: []u8) -> bool {
-    value := AppTextFromCString(*app.sync_server_url[0], 256)
-    if !NormalizeUrl(value, output) {
-        return false
+    {
+        value := AppTextFromCString(*app.sync_server_url[0], 256)
+        if !NormalizeUrl(value, output) {
+            return false
+        }
     }
     normalized := AppTextFromCString(*output[0], cast(s32)output.count)
     if !AppCopyText(normalized, app.sync_server_url[:]) {
@@ -485,18 +493,16 @@ SettingsSyncDisplayId :: (app: *InnerBreeze, account_id: string) -> string {
     return FrameTextHold(*app.ui.frame_text, shortened)
 }
 
-SettingsSyncPreferredNode :: (app: *InnerBreeze) -> string {
+SettingsSyncPreferredNode :: () -> string {
     preferred := storage_get_setting_text("sync_preferred_node")
     if preferred.count == 0 {
         preferred = storage_get_setting_text(sync_server_url_key)
     }
-    return FrameTextHold(*app.ui.frame_text, preferred)
+    return PackageText(preferred, "")
 }
 
-SettingsSyncNodeAddress :: (app: *InnerBreeze, index: s32) -> string {
-    address := SyncNodeAt(index)
-    defer { PackageFree(address) }
-    return FrameTextHold(*app.ui.frame_text, address)
+SettingsSyncNodeAddress :: (index: s32) -> string {
+    return SyncNodeAt(index)
 }
 
 SettingsSyncNow :: (app: *InnerBreeze) {
@@ -545,7 +551,7 @@ SettingsSyncAliasBusy :: () -> bool {
 SettingsSyncSubmitAlias :: (app: *InnerBreeze, alias: string) -> s32 {
     url: [256]u8
     if !SettingsSyncConnected(app) ||
-        !NormalizeUrl(storage_get_setting_text(sync_server_url_key), url[:]) {
+    !NormalizeUrl(storage_get_setting_text(sync_server_url_key), url[:]) {
         return 2
     }
     address := AppTextFromCString(*url[0], 256)

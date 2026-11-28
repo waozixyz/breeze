@@ -1,3 +1,4 @@
+import { Scroll } from "kryon/tsx/scroll";
 // Authored UI composition; native application state remains in results_view.zi.
 import * as NativeLayout from "kryon/layout";
 import * as NativeScroll from "kryon/scroll";
@@ -9,7 +10,6 @@ import { Color, DarkenColor } from "kryon/drawing_props";
 import { Vector2 } from "kryon/geometry";
 import { TextAlign } from "kryon/text_align";
 import { Wrap } from "kryon/text_props";
-import { End } from "kryon/tree";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
 import { Shape } from "kryon/tsx/shape";
@@ -731,16 +731,21 @@ export function Results(): void {
     if (State_results_view.results.activity === s32(ExerciseType.EXERCISE_WIM_HOF)) {
         RoundStats(nativeRef(best), nativeRef(average));
     }
-    let scrolled = NativeScroll.Draw(State_results_view.results.session, {
-        key: NativeLayout.KeyHash("inbe/screens/session_results/scroll/1"),
-        bounds: Bounds(0n, 0n, State_results_view.results.view_width, button_y - Scale(12n)),
-        content_height: ContentHeight(),
-        scroll_offset: State_results_view.results.scroll
+    let scrolled = Scroll({
+        session: State_results_view.results.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/screens/session_results/scroll/1"),
+            bounds: Bounds(0n, 0n, State_results_view.results.view_width, button_y - Scale(12n)),
+            content_height: ContentHeight(),
+            scroll_offset: State_results_view.results.scroll
+        },
+        children: (scrolled: NativeScroll.ScrollResult): void => {
+            State_results_view.results.scroll = scrolled.scroll_offset;
+            Content(x, width, s32(scrolled.content.y), best, average);
+        }
     });
-    State_results_view.results.scroll = scrolled.scroll_offset;
-    if (scrolled.opened) {
-        Content(x, width, s32(scrolled.content.y), best, average);
-        End(State_results_view.results.session);
+    if (!scrolled.opened) {
+        State_results_view.results.scroll = scrolled.scroll_offset;
     }
     if (State_results_view.results.saved) {
         let button_width = (width - gap) / 2n;

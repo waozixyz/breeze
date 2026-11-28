@@ -3,6 +3,8 @@
 #import "drawing_props"
 Dropdown :: #import "kryon/dropdown";
 Text :: #import "kryon/text";
+TextArea :: #import "kryon/text_area";
+OwnedText :: #import "std/vec";
 #import "kryon/system_clipboard"
 #import "text_align"
 #import "control_props"
@@ -43,6 +45,32 @@ frame: LumiUiFrame;
 agreement_scroll: s32;
 agreement_bytes: [8192]u8;
 agreement_strong: [32]Text.Range;
+
+// The composer's draft lives in this model-owned dynamic record. It is
+// rewritten only when the draft actually changes, and the previous bytes
+// are freed before a new record moves in, so an unchanged frame costs no
+// work, nothing detaches, and the frame's strings never keep views of the
+// host's per-frame text request scratch.
+lumi_draft_text: OwnedText.Text;
+
+DraftText :: () -> string {
+    return TextView(lumi_draft_text)
+}
+
+// Take the host's draft into the owned record, copying only on a change;
+// the previous bytes are freed before the new record moves in.
+StoreLumiDraft :: (value: string) {
+    if value != TextView(lumi_draft_text) {
+        fresh: OwnedText.Text = OwnedText.TextCopy(value)
+        VecFree(lumi_draft_text.bytes)
+        lumi_draft_text = fresh
+    }
+}
+
+ClearLumiDraft :: () {
+    VecFree(lumi_draft_text.bytes)
+    lumi_draft_text = OwnedText.Text.{}
+}
 chart_selected_key: u64;
 chart_selected_point: s32;
 
@@ -117,6 +145,10 @@ row_menu_slot: s32;
 row_menu_x: float32;
 row_menu_y: float32;
 copy_pending: bool;
+// Pressed suggestion chips wait to fill the draft until the composer has
+// finished its borrowed reads of the draft text.
+pending_draft: OwnedText.Text;
+draft_pending: bool;
 LUMI_CLOSE_ICON :: "S1.8rr:M6 6L18 18M18 6L6 18"
 LUMI_COPY_ICON :: "S1.6rr:M9 9H20V20H9ZM15 5V4H4V15H5"
 LUMI_DELETE_ICON :: "S1.6rr:M3 6H21M9 6V3H15V6M5 6L6 21H18L19 6M10 10V17M14 10V17"
@@ -238,35 +270,35 @@ MenuCommands :: (revision: s64) -> []LumiMenuCommand {
     if revision != menu_revision {
         menu_revision = revision
         table: [LUMI_MENU_COMMANDS]LumiMenuCommand = .[
-            LumiMenuCommand.{.name = "/help", .description = LumiViewLocaleHost("lumi_command_help")},
-            LumiMenuCommand.{.name = "/todo", .description = LumiViewLocaleHost("lumi_add"),
-                .needs_text = true, .requirement = LUMI_LISTS},
-            LumiMenuCommand.{.name = "/done", .description = LumiViewLocaleHost("lumi_complete"),
-                .needs_text = true, .requirement = LUMI_LISTS},
-            LumiMenuCommand.{.name = "/reopen", .description = LumiViewLocaleHost("lumi_reopen"),
-                .needs_text = true, .requirement = LUMI_LISTS},
-            LumiMenuCommand.{.name = "/lists", .description = LumiViewLocaleHost("lumi_open_lists"),
-                .requirement = LUMI_LISTS},
-            LumiMenuCommand.{.name = "/habit", .description = LumiViewLocaleHost("lumi_complete_habit"),
-                .requirement = LUMI_HABITS},
-            LumiMenuCommand.{.name = "/habits", .description = LumiViewLocaleHost("lumi_open_habits"),
-                .requirement = LUMI_HABITS},
-            LumiMenuCommand.{.name = "/journal", .description = LumiViewLocaleHost("lumi_write_diary"),
-                .requirement = LUMI_DIARY},
-            LumiMenuCommand.{.name = "/diary", .description = LumiViewLocaleHost("lumi_open_diary"),
-                .requirement = LUMI_DIARY},
-            LumiMenuCommand.{.name = "/meditate", .description = LumiViewLocaleHost("lumi_start_meditation"),
-                .requirement = LUMI_PRACTICES},
-            LumiMenuCommand.{.name = "/whm", .description = LumiViewLocaleHost("lumi_start_whm"),
-                .requirement = LUMI_PRACTICES},
-            LumiMenuCommand.{.name = "/practices", .description = LumiViewLocaleHost("lumi_open_practices"),
-                .requirement = LUMI_PRACTICES},
-            LumiMenuCommand.{.name = "/progress", .description = LumiViewLocaleHost("lumi_show_progress"),
-                .requirement = LUMI_PRACTICES},
-            LumiMenuCommand.{.name = "/feedback", .description = LumiViewLocaleHost("lumi_command_feedback"),
-                .needs_text = true},
-            LumiMenuCommand.{.name = "/cancel", .description = LumiViewLocaleHost("cancel_button"),
-                .choice_only = true}]
+        LumiMenuCommand.{.name = "/help", .description = LumiViewLocaleHost("lumi_command_help")},
+        LumiMenuCommand.{.name = "/todo", .description = LumiViewLocaleHost("lumi_add"),
+            .needs_text = true, .requirement = LUMI_LISTS},
+        LumiMenuCommand.{.name = "/done", .description = LumiViewLocaleHost("lumi_complete"),
+            .needs_text = true, .requirement = LUMI_LISTS},
+        LumiMenuCommand.{.name = "/reopen", .description = LumiViewLocaleHost("lumi_reopen"),
+            .needs_text = true, .requirement = LUMI_LISTS},
+        LumiMenuCommand.{.name = "/lists", .description = LumiViewLocaleHost("lumi_open_lists"),
+            .requirement = LUMI_LISTS},
+        LumiMenuCommand.{.name = "/habit", .description = LumiViewLocaleHost("lumi_complete_habit"),
+            .requirement = LUMI_HABITS},
+        LumiMenuCommand.{.name = "/habits", .description = LumiViewLocaleHost("lumi_open_habits"),
+            .requirement = LUMI_HABITS},
+        LumiMenuCommand.{.name = "/journal", .description = LumiViewLocaleHost("lumi_write_diary"),
+            .requirement = LUMI_DIARY},
+        LumiMenuCommand.{.name = "/diary", .description = LumiViewLocaleHost("lumi_open_diary"),
+            .requirement = LUMI_DIARY},
+        LumiMenuCommand.{.name = "/meditate", .description = LumiViewLocaleHost("lumi_start_meditation"),
+            .requirement = LUMI_PRACTICES},
+        LumiMenuCommand.{.name = "/whm", .description = LumiViewLocaleHost("lumi_start_whm"),
+            .requirement = LUMI_PRACTICES},
+        LumiMenuCommand.{.name = "/practices", .description = LumiViewLocaleHost("lumi_open_practices"),
+            .requirement = LUMI_PRACTICES},
+        LumiMenuCommand.{.name = "/progress", .description = LumiViewLocaleHost("lumi_show_progress"),
+            .requirement = LUMI_PRACTICES},
+        LumiMenuCommand.{.name = "/feedback", .description = LumiViewLocaleHost("lumi_command_feedback"),
+            .needs_text = true},
+        LumiMenuCommand.{.name = "/cancel", .description = LumiViewLocaleHost("cancel_button"),
+            .choice_only = true}]
         menu_commands = table
     }
     return menu_commands[:]
@@ -296,13 +328,36 @@ CommandText :: (command: LumiMenuCommand) -> string {
 }
 
 FillDraft :: (text: string) {
-    frame.value = text
-    frame.cursor = cast(s32)text.count
+    count := cast(s32)text.count
+    StoreLumiDraft(text)
+    DraftCursorAtEnd(count)
+}
+
+DraftCursorAtEnd :: (count: s32) {
+    frame.cursor = count
     frame.anchor = frame.cursor
     frame.input_scroll = 0
     frame.selecting = false
     frame.preferred_x_valid = false
     frame.focused = true
+}
+
+QueueLumiDraft :: (text: string) {
+    fresh: OwnedText.Text = OwnedText.TextCopy(text)
+    VecFree(pending_draft.bytes)
+    pending_draft = fresh
+    draft_pending = true
+}
+
+ApplyPendingLumiDraft :: () {
+    if draft_pending {
+        count := cast(s32)pending_draft.bytes.count
+        VecFree(lumi_draft_text.bytes)
+        lumi_draft_text = pending_draft
+        pending_draft = OwnedText.Text.{}
+        draft_pending = false
+        DraftCursorAtEnd(count)
+    }
 }
 
 // Interpretation depends on the draft and translated command set. Cursor
@@ -413,12 +468,133 @@ CommandPrefix :: (command: string) -> string {
     return BuilderFinish(label)
 }
 
-ApplyDraftEdit :: (start: s32, end: s32, inserted: string) -> string {
-    text: Vec(u8)
-    BuilderPrint(*text, "%", frame.value[:start])
-    BuilderPrint(*text, "%", inserted)
-    BuilderPrint(*text, "%", frame.value[end:])
-    return BuilderFinish(text)
+// An owned snapshot of one composer edit: the replacement bytes are copied
+// into their own owned record only when the edit changed, so carrying it
+// past the area's scope keeps no view of the area result, at any length the
+// edit produces.
+LumiEditKeep :: struct {
+    start: s32
+    end: s32
+    replacement: OwnedText.Text
+    changed: bool
+    valid: bool
+}
+
+LumiEditUpdate :: (result: TextArea.Result) -> LumiEditKeep {
+    update: LumiEditKeep
+    if result.edit.changed {
+        update.replacement = OwnedText.TextCopy(result.edit.replacement)
+        update.start = result.edit.start
+        update.end = result.edit.end
+        update.changed = true
+        update.valid = true
+    }
+    return update
+}
+
+// Splice a kept edit into the owned draft, then free the previous bytes
+// and move the new record in. The splice copies the old bytes before the
+// free, and the call happens after the area result's scope ended, so no
+// live view remains. The editor's own bound still caps the result; an
+// edit past it is dropped whole, never truncated mid-byte.
+ApplyLumiEdit :: (update: LumiEditKeep) -> bool {
+    if !update.valid || !update.changed { return false }
+    start := update.start
+    end := update.end
+    count := cast(s32)lumi_draft_text.bytes.count
+    if start < 0 || end < start || end > count { return false }
+    length := start + cast(s32)update.replacement.bytes.count + (count - end)
+    if length > LUMI_INPUT_MAX - 1 { return false }
+    out: Vec(u8)
+    BuilderPrint(*out, "%", TextView(lumi_draft_text)[:start])
+    BuilderPrint(*out, "%", TextView(update.replacement))
+    BuilderPrint(*out, "%", TextView(lumi_draft_text)[end:])
+    built: OwnedText.Text = OwnedText.TextFromBuilder(out)
+    VecFree(lumi_draft_text.bytes)
+    lumi_draft_text = built
+    return true
+}
+
+// An owned snapshot of the area's clipboard text: copied into its own owned
+// record inside the area's scope, so no view of the result crosses it.
+LumiClipboardKeep :: struct {
+    text: OwnedText.Text
+    valid: bool
+}
+
+LumiClipboardUpdate :: (result: TextArea.Result) -> LumiClipboardKeep {
+    update: LumiClipboardKeep
+    update.text = OwnedText.TextCopy(result.clipboard_text)
+    update.valid = true
+    return update
+}
+
+// Release a kept edit snapshot that will not be applied: taking it by
+// value moves the owned bytes, and they free when this scope ends.
+DiscardLumiEdit :: (keep: LumiEditKeep) {
+    VecFree(keep.replacement.bytes)
+}
+
+// Release a kept clipboard snapshot that will not be used: taking it by
+// value moves the owned bytes, and they free when this scope ends.
+DiscardLumiClipboard :: (keep: LumiClipboardKeep) {
+    VecFree(keep.text.bytes)
+}
+
+// Return the composed frame to the host: scalars from the global frame, the
+// draft from the owned record, and the frame's other strings from this
+// frame's locals, so no host scratch view is ever stored in the global.
+WriteLumiFrame :: (provider: string, agreement: string, clipboard: string,
+    input: TextArea.Input) {
+    out := frame
+    out.value = TextView(lumi_draft_text)
+    out.clipboard_text = clipboard
+    out.provider_host = provider
+    out.agreement_text = agreement
+    out.input = input
+    WriteLumiUiHost(out)
+}
+
+// A frame copy with every string cleared: the module keeps its strings in
+// owned storage and frame locals, so host scratch views never enter the
+// global frame. Every scalar is kept for drawing and the host round-trip.
+LumiFrameScalars :: (host: LumiUiFrame) -> LumiUiFrame {
+    fresh: LumiUiFrame = LumiUiFrame.{}
+    fresh.session = host.session
+    fresh.width = host.width
+    fresh.height = host.height
+    fresh.bottom = host.bottom
+    fresh.scale = host.scale
+    fresh.font = host.font
+    fresh.draft_height = host.draft_height
+    fresh.cursor = host.cursor
+    fresh.anchor = host.anchor
+    fresh.input_scroll = host.input_scroll
+    fresh.selecting = host.selecting
+    fresh.preferred_x = host.preferred_x
+    fresh.preferred_x_valid = host.preferred_x_valid
+    fresh.focused = host.focused
+    fresh.scroll = host.scroll
+    fresh.follow_end = host.follow_end
+    fresh.chat_count = host.chat_count
+    fresh.history_height = host.history_height
+    fresh.has_older = host.has_older
+    fresh.task_count = host.task_count
+    fresh.habit_count = host.habit_count
+    fresh.available_apps = host.available_apps
+    fresh.practices_hidden = host.practices_hidden
+    fresh.choosing_habit = host.choosing_habit
+    fresh.choosing_diary = host.choosing_diary
+    fresh.waiting = host.waiting
+    fresh.clipboard_write = host.clipboard_write
+    fresh.now = host.now
+    fresh.background = host.background
+    fresh.typing_pause = host.typing_pause
+    fresh.online = host.online
+    fresh.connection = host.connection
+    fresh.agreement = host.agreement
+    fresh.agreement_height = host.agreement_height
+    return fresh
 }
 
 CopyLumiText :: (value: string) -> string {
@@ -427,9 +603,8 @@ CopyLumiText :: (value: string) -> string {
     return BuilderFinish(copy)
 }
 
-CopyChatRow :: (index: s32) {
-    frame.clipboard_write = true
-    frame.clipboard_text = CopyLumiText(ReadLumiChatRowHost(index).text)
+CopyChatRow :: (index: s32) -> string {
+    return CopyLumiText(ReadLumiChatRowHost(index).text)
 }
 
 MessageTextFromBytes :: (bytes: []u8) -> string { return TextFromBytes(bytes) }

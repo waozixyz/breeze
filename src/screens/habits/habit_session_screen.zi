@@ -50,7 +50,10 @@ ANDROID :: #defined(ANDROID_BUILD)
 habit_day_context: HabitLinkedContext;
 habit_day_order: [HABIT_LINKED_ENTRY_MAX]s32;
 habit_day_order_count: s32;
-habit_day_frame: HabitsDayFrame;
+HabitDayUiContext :: struct {
+    app: *InnerBreeze
+    frame: *HabitsDayFrame
+}
 habit_day_frame_codec: WidgetHabitsDayFrameCodec;
 habit_day_entry_codec: WidgetHabitsDayEntryCodec;
 habit_day_session_codec: WidgetHabitsDaySessionCodec;
@@ -183,13 +186,14 @@ habit_day_session_at :: (index: s32) -> *HabitLinkedEntry {
 
 HabitDayCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    host := cast(*HabitDayUiContext)context
     if TextFromCString(module) != "habit_day_view" {
-        return WidgetHostCall(context, module, function, arguments, count, result)
+        return WidgetHostCall(cast(*void)host.app, module, function, arguments, count, result)
     }
-    app := cast(*InnerBreeze)context
+    app := host.app
     name := TextFromCString(function)
     if name == "ReadHabitsDayHost" && count == 0 {
-        result.* = WidgetEncodeHabitsDayFrame(habit_day_frame, *habit_day_frame_codec)
+        result.* = WidgetEncodeHabitsDayFrame(host.frame.*, *habit_day_frame_codec)
         return 1
     }
     if name == "WriteHabitsDayHost" && count == 1 && WidgetValidHabitsDayFrame(arguments[0]) {
@@ -199,7 +203,7 @@ HabitDayCall :: (context: *void, module: *u8, function: *u8,
             observed.editing = false
         }
         observed.edit_text = ""
-        habit_day_frame = observed
+        host.frame.* = observed
         return 1
     }
     if name == "ReadHabitsDayEntryHost" && count == 1 &&
@@ -242,10 +246,14 @@ HabitDayCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "HabitsLocaleHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
+        reply: HostValue
+        {
+            key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            text := LocaleText(key)
+            reply = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+        }
+        result.* = reply
         return 1
     }
     return 0
@@ -404,36 +412,51 @@ habit_session_draw_edit_screen :: (app: *InnerBreeze) {
     editing := habit_day_editing_session(app)
     typed: [64]u8
     card := CardProps(Rectangle.{})
-    habit_day_frame = HabitsDayFrame.{
-        .session = app.ui.session, .scale = MetricsScale(), .view_width = app.ui.view_width,
-        .view_height = app.ui.view_height, .bottom = app_content_bottom_reserved(app),
-        .font = AppFontSize(), .small_font = AppSmallFontSize(),
-        .text_color = StyleTokenColor("text"), .surface_color = StyleTokenColor("surface"),
-        .canvas_color = StyleTokenColor("canvas"), .card_fill = card.fill,
-        .card_border = card.border, .muted_class = MutedTextClass(),
-        .modal_active = app.modal.active != 0,
-        .title = AppTextFromCString(*date_text[0], size_of(type_of(date_text))),
-        .keeps_entries = habit_keeps_entries(habit), .span = habit.span != 0,
-        .counting = habit_counting_enabled(habit) != 0,
-        .count = HabitEffectiveDayCount(habit, app.habit_detail_day, *habit_day_context),
-        .minimum_count = habit_day_context.count,
-        .entry_count = app.habits.day_entries.count, .session_count = habit_day_order_count,
-        .scroll = app.habit_session_edit.scroll, .editing = editing >= 0,
-        .edit_session = editing, .edit_round = app.habit_session_edit.round,
-        .edit_text = AppTextFromCString(*app.habit_session_edit.text[0],
-            size_of(type_of(app.habit_session_edit.text))),
-        .edit_cursor = app.habit_session_edit.cursor, .keyboard = keyboard,
-        .input = SampleTextFieldInput(editing >= 0, typed[:])}
-    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
-    AppsUiBegin(HabitDayCall, cast(*void)app)
-    drawn := HabitsRun(HabitsMessage.{.action = HABITS_DAY_VIEW})
-    AppsUiEnd()
-    WidgetHostEnd()
-    if drawn.succeeded {
-        app.habit_session_edit.scroll = habit_day_frame.scroll
-        habit_day_keep_editing(app, *habit_day_frame)
-        habit_day_apply(app, *habit_day_frame)
+    observed: HabitsDayFrame
+    succeeded: bool
+    {
+        frame := HabitsDayFrame.{
+            .session = app.ui.session, .scale = MetricsScale(), .view_width = app.ui.view_width,
+            .view_height = app.ui.view_height, .bottom = app_content_bottom_reserved(app),
+            .font = AppFontSize(), .small_font = AppSmallFontSize(),
+            .text_color = StyleTokenColor("text"), .surface_color = StyleTokenColor("surface"),
+            .canvas_color = StyleTokenColor("canvas"), .card_fill = card.fill,
+            .card_border = card.border, .muted_class = MutedTextClass(),
+            .modal_active = app.modal.active != 0,
+            .title = AppTextFromCString(*date_text[0], size_of(type_of(date_text))),
+            .keeps_entries = habit_keeps_entries(habit), .span = habit.span != 0,
+            .counting = habit_counting_enabled(habit) != 0,
+            .count = HabitEffectiveDayCount(habit, app.habit_detail_day, *habit_day_context),
+            .minimum_count = habit_day_context.count,
+            .entry_count = app.habits.day_entries.count, .session_count = habit_day_order_count,
+            .scroll = app.habit_session_edit.scroll, .editing = editing >= 0,
+            .edit_session = editing, .edit_round = app.habit_session_edit.round,
+            .edit_text = AppTextFromCString(*app.habit_session_edit.text[0],
+                size_of(type_of(app.habit_session_edit.text))),
+            .edit_cursor = app.habit_session_edit.cursor, .keyboard = keyboard,
+            .input = SampleTextFieldInput(editing >= 0, typed[:])}
+        WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+        host := HabitDayUiContext.{.app = app, .frame = *frame}
+        AppsUiBegin(HabitDayCall, cast(*void)(*host))
+        drawn := HabitsRun(HabitsMessage.{.action = HABITS_DAY_VIEW})
+        AppsUiEnd()
+        WidgetHostEnd()
+        succeeded = drawn.succeeded
+        observed = HabitsDayFrame.{
+            .scroll = frame.scroll,
+            .editing = frame.editing,
+            .edit_session = frame.edit_session,
+            .edit_round = frame.edit_round,
+            .edit_cursor = frame.edit_cursor,
+            .action = frame.action,
+            .action_index = frame.action_index,
+            .action_round = frame.action_round,
+            .action_step = frame.action_step}
     }
-    habit_day_frame = HabitsDayFrame.{}
+    if succeeded {
+        app.habit_session_edit.scroll = observed.scroll
+        habit_day_keep_editing(app, *observed)
+        habit_day_apply(app, *observed)
+    }
     HabitScreenEntryDialog(app)
 }

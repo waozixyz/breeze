@@ -1,3 +1,4 @@
+import { ResolvedModal } from "kryon/tsx/modal";
 import * as Shared from "habit_shared";
 // Habits draws a counting habit's count dialog: the day's count with large
 // steps down and up. The host supplies the day's count and the theme, and
@@ -12,7 +13,6 @@ import * as NativeLayout from "kryon/layout";
 import * as NativeModal from "kryon/modal";
 import * as NativeText from "kryon/text";
 import { TextAlign } from "kryon/text_align";
-import { End } from "kryon/tree";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
 import { Text } from "kryon/tsx/text";
@@ -106,122 +106,130 @@ function CountDialog(): void {
     if (frame_state.asks) {
         content_h += button_h + gap;
     }
-    let dialog = NativeModal.Draw(frame_state.session, {
-        key: NativeLayout.KeyHash("habits/count-dialog"),
-        title: frame_state.name,
-        strong_title: true,
-        width: Model.Scale(340n),
-        height: content_h + Model.Scale(74n),
-        scale: frame_state.scale,
-        has_right_action: true,
-        right_label: Model.HabitsLocaleHost("close_button")
+    let dialog = ResolvedModal({
+        session: frame_state.session,
+        props: {
+            key: NativeLayout.KeyHash("habits/count-dialog"),
+            title: frame_state.name,
+            strong_title: true,
+            width: Model.Scale(340n),
+            height: content_h + Model.Scale(74n),
+            scale: frame_state.scale,
+            has_right_action: true,
+            right_label: Model.HabitsLocaleHost("close_button")
+        },
+        children: (dialog: NativeModal.ModalFrameResult): void => {
+            let content = dialog.layout.content;
+            let x = s32(content.x);
+            let y = s32(content.y);
+            let width = s32(content.width);
+            let day_text = Model.DayText(frame_state.day);
+            if (frame_state.today) {
+                day_text = Model.HabitsLocaleHost("habits_today");
+            }
+            CountLabel(Shared.Bounds(x, y, width, Model.Scale(24n)), day_text);
+            y += Model.Scale(24n);
+            const count_text = Model.CurrentCountLabel();
+            let count_strong = Model.NewCountStrong();
+            nativeSet(count_strong, 0n, { start: 0n, end: s32(count_text.count) });
+            <Text
+                session={frame_state.session}
+                props={{
+                    bounds: Shared.Bounds(x, y, width, Model.Scale(64n)),
+                    text: count_text,
+                    size: Model.Scale(NativeText.Text48),
+                    strong: nativeSlice(count_strong),
+                    align: TextAlign.TextAlignCenter,
+                    vertical_align: TextAlign.TextAlignCenter,
+                    wrap: NativeText.Wrap.TextWrapNone
+                }}
+            />;
+            y += Model.Scale(64n);
+            CountLabel(Shared.Bounds(x, y, width, Model.Scale(24n)), Model.CounterTargetLabel());
+            y += Model.Scale(24n) + gap;
+            let step_w = (width - gap) / 2n;
+            if (
+                StepButton(
+                    5720000n,
+                    Shared.Bounds(x, y, step_w, step_h),
+                    false,
+                    frame_state.count <= frame_state.linked_count
+                )
+            ) {
+                nativeDeref(frame_state).action = Habits.HABITS_COUNT_DECREMENT;
+            }
+            if (
+                StepButton(
+                    5720001n,
+                    Shared.Bounds(x + width - step_w, y, step_w, step_h),
+                    true,
+                    false
+                )
+            ) {
+                nativeDeref(frame_state).action = Habits.HABITS_COUNT_INCREMENT;
+            }
+            y += step_h + gap;
+            if (frame_state.asks) {
+                if (
+                    Button({
+                        session: frame_state.session,
+                        props: {
+                            id: 5720004n,
+                            bounds: Shared.Bounds(x, y, width, button_h),
+                            label: Model.HabitsLocaleHost("habit_day_entries"),
+                            tone: ButtonTone.ButtonToneNeutral,
+                            emphasis: ButtonEmphasis.ButtonEmphasisOutline
+                        }
+                    })
+                ) {
+                    nativeDeref(frame_state).action = Habits.HABITS_COUNT_OPEN_DAY;
+                    return;
+                }
+                y += button_h + gap;
+            }
+            if (frame_state.linked_count > 0n) {
+                let template = Model.HabitsLocaleHost(
+                    frame_state.linked_count === 1n
+                        ? "session_count_singular"
+                        : "session_count_plural"
+                );
+                if (
+                    Button({
+                        session: frame_state.session,
+                        props: {
+                            id: 5720002n,
+                            bounds: Shared.Bounds(x, y, width, button_h),
+                            label: Model.CountText(template, frame_state.linked_count),
+                            tone: ButtonTone.ButtonToneNeutral,
+                            emphasis: ButtonEmphasis.ButtonEmphasisOutline
+                        }
+                    })
+                ) {
+                    nativeDeref(frame_state).action = Habits.HABITS_COUNT_OPEN_DAY;
+                    return;
+                }
+                y += button_h + gap;
+            }
+            if (
+                Button({
+                    session: frame_state.session,
+                    props: {
+                        id: 5720003n,
+                        bounds: Shared.Bounds(x, y, width, button_h),
+                        label: Model.HabitsLocaleHost("done_button"),
+                        tone: ButtonTone.ButtonToneAccent,
+                        emphasis: ButtonEmphasis.ButtonEmphasisFilled
+                    }
+                })
+            ) {
+                nativeDeref(frame_state).action = Habits.HABITS_COUNT_CLOSE;
+            }
+        }
     });
     if (dialog.dismissed || dialog.right_clicked) {
         frame_state.action = Habits.HABITS_COUNT_CLOSE;
         return;
     }
-    if (!dialog.opened) {
-        return;
-    }
-    let content = dialog.layout.content;
-    let x = s32(content.x);
-    let y = s32(content.y);
-    let width = s32(content.width);
-    let day_text = Model.DayText(frame_state.day);
-    if (frame_state.today) {
-        day_text = Model.HabitsLocaleHost("habits_today");
-    }
-    CountLabel(Shared.Bounds(x, y, width, Model.Scale(24n)), day_text);
-    y += Model.Scale(24n);
-    const count_text = Model.CurrentCountLabel();
-    let count_strong = Model.NewCountStrong();
-    nativeSet(count_strong, 0n, { start: 0n, end: s32(count_text.count) });
-    <Text
-        session={frame_state.session}
-        props={{
-            bounds: Shared.Bounds(x, y, width, Model.Scale(64n)),
-            text: count_text,
-            size: Model.Scale(NativeText.Text48),
-            strong: nativeSlice(count_strong),
-            align: TextAlign.TextAlignCenter,
-            vertical_align: TextAlign.TextAlignCenter,
-            wrap: NativeText.Wrap.TextWrapNone
-        }}
-    />;
-    y += Model.Scale(64n);
-    CountLabel(Shared.Bounds(x, y, width, Model.Scale(24n)), Model.CounterTargetLabel());
-    y += Model.Scale(24n) + gap;
-    let step_w = (width - gap) / 2n;
-    if (
-        StepButton(
-            5720000n,
-            Shared.Bounds(x, y, step_w, step_h),
-            false,
-            frame_state.count <= frame_state.linked_count
-        )
-    ) {
-        frame_state.action = Habits.HABITS_COUNT_DECREMENT;
-    }
-    if (StepButton(5720001n, Shared.Bounds(x + width - step_w, y, step_w, step_h), true, false)) {
-        frame_state.action = Habits.HABITS_COUNT_INCREMENT;
-    }
-    y += step_h + gap;
-    if (frame_state.asks) {
-        if (
-            Button({
-                session: frame_state.session,
-                props: {
-                    id: 5720004n,
-                    bounds: Shared.Bounds(x, y, width, button_h),
-                    label: Model.HabitsLocaleHost("habit_day_entries"),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisOutline
-                }
-            })
-        ) {
-            End(frame_state.session);
-            frame_state.action = Habits.HABITS_COUNT_OPEN_DAY;
-            return;
-        }
-        y += button_h + gap;
-    }
-    if (frame_state.linked_count > 0n) {
-        let template = Model.HabitsLocaleHost(
-            frame_state.linked_count === 1n ? "session_count_singular" : "session_count_plural"
-        );
-        if (
-            Button({
-                session: frame_state.session,
-                props: {
-                    id: 5720002n,
-                    bounds: Shared.Bounds(x, y, width, button_h),
-                    label: Model.CountText(template, frame_state.linked_count),
-                    tone: ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisOutline
-                }
-            })
-        ) {
-            End(frame_state.session);
-            frame_state.action = Habits.HABITS_COUNT_OPEN_DAY;
-            return;
-        }
-        y += button_h + gap;
-    }
-    if (
-        Button({
-            session: frame_state.session,
-            props: {
-                id: 5720003n,
-                bounds: Shared.Bounds(x, y, width, button_h),
-                label: Model.HabitsLocaleHost("done_button"),
-                tone: ButtonTone.ButtonToneAccent,
-                emphasis: ButtonEmphasis.ButtonEmphasisFilled
-            }
-        })
-    ) {
-        frame_state.action = Habits.HABITS_COUNT_CLOSE;
-    }
-    End(frame_state.session);
 }
 
 export function HabitsCountView(message: Habits.HabitsMessage): Habits.HabitsMessage {

@@ -1,3 +1,5 @@
+import { ResolvedModal } from "kryon/tsx/modal";
+import { Scroll } from "kryon/tsx/scroll";
 // Authored UI composition; native application state remains in settings_view.zi.
 import * as NativeDropdown from "kryon/dropdown";
 import * as NativeLayout from "kryon/layout";
@@ -15,7 +17,6 @@ import { Rectangle } from "kryon/geometry";
 import { TextAlign } from "kryon/text_align";
 import { Wrap } from "kryon/text_props";
 import { ToggleSize } from "kryon/toggle_measure";
-import { End } from "kryon/tree";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
 import { Dropdown } from "kryon/tsx/dropdown";
@@ -651,50 +652,51 @@ export function Whm(x: s32, width: s32, y: NativeRef<s32>): void {
 }
 
 export function WhmStartSpeedEditor(): void {
-    let frame = NativeModal.Draw(State_settings_view.settings.session, {
-        key: NativeLayout.KeyHash("whm/start_speed"),
-        title: Locale("progressive_start_speed_editor_title"),
-        width: Scale(340n),
-        height: Scale(360n),
-        scale: State_settings_view.settings.scale,
-        has_right_action: true,
-        right_label: Locale("close_button")
+    let frame = ResolvedModal({
+        session: State_settings_view.settings.session,
+        props: {
+            key: NativeLayout.KeyHash("whm/start_speed"),
+            title: Locale("progressive_start_speed_editor_title"),
+            width: Scale(340n),
+            height: Scale(360n),
+            scale: State_settings_view.settings.scale,
+            has_right_action: true,
+            right_label: Locale("close_button")
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            let content = frame.layout.content;
+            let x = s32(content.x);
+            let y = s32(content.y);
+            let width = s32(content.width);
+            BreathPreview(
+                x + width / 2n,
+                y + Scale(90n),
+                width,
+                Scale(180n),
+                State_settings_view.settings.whm_editor_preview
+            );
+            let slider_y = y + Scale(206n);
+            let start = SliderRow(
+                12n,
+                x,
+                width,
+                nativeRef(slider_y),
+                Scale(56n),
+                Locale("progressive_start_speed_label"),
+                State_settings_view.settings.whm_speed_min,
+                State_settings_view.settings.whm_speed,
+                State_settings_view.settings.whm_start_speed,
+                EmptyString()
+            );
+            if (start.changed) {
+                Ask(PRACTICE_SETTINGS_WHM_START_SPEED, start.value);
+            }
+        }
     });
     if (frame.dismissed || frame.right_clicked) {
         Ask(PRACTICE_SETTINGS_WHM_EDITOR_CLOSE, 0n);
         return;
     }
-    if (!frame.opened) {
-        return;
-    }
-    let content = frame.layout.content;
-    let x = s32(content.x);
-    let y = s32(content.y);
-    let width = s32(content.width);
-    BreathPreview(
-        x + width / 2n,
-        y + Scale(90n),
-        width,
-        Scale(180n),
-        State_settings_view.settings.whm_editor_preview
-    );
-    let slider_y = y + Scale(206n);
-    let start = SliderRow(
-        12n,
-        x,
-        width,
-        nativeRef(slider_y),
-        Scale(56n),
-        Locale("progressive_start_speed_label"),
-        State_settings_view.settings.whm_speed_min,
-        State_settings_view.settings.whm_speed,
-        State_settings_view.settings.whm_start_speed,
-        EmptyString()
-    );
-    if (start.changed) {
-        Ask(PRACTICE_SETTINGS_WHM_START_SPEED, start.value);
-    }
-    End(State_settings_view.settings.session);
 }
 
 export function MusicProgress(x: s32, y: s32, width: s32): void {
@@ -1245,78 +1247,84 @@ export function TaiCustomize(): void {
     if (height > Scale(740n)) {
         height = Scale(740n);
     }
-    let frame = NativeModal.Draw(State_settings_view.settings.session, {
-        key: NativeLayout.KeyHash("inbe/tai_chi/modal"),
-        title: Locale("practice_configure_button"),
-        width: width,
-        height: height,
-        scale: State_settings_view.settings.scale,
-        title_at_start: true,
-        strong_title: true,
-        has_right_action: true,
-        right_label: Locale("close_button")
+    let frame = ResolvedModal({
+        session: State_settings_view.settings.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/tai_chi/modal"),
+            title: Locale("practice_configure_button"),
+            width: width,
+            height: height,
+            scale: State_settings_view.settings.scale,
+            title_at_start: true,
+            strong_title: true,
+            has_right_action: true,
+            right_label: Locale("close_button")
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            let bounds = frame.layout.content;
+            let gap = Scale(24n);
+            let wide = bounds.width >= float32(Scale(700n));
+            let audio_w = s32(bounds.width) - Scale(10n);
+            let character_w = audio_w;
+            if (wide) {
+                character_w = (audio_w - gap) / 2n;
+                audio_w = audio_w - (character_w + gap);
+            }
+            let audio_h = TaiAudioHeight(audio_w);
+            let rows = (State_settings_view.settings.tai_character_count + 1n) / 2n;
+            if (rows < 1n) {
+                rows = 1n;
+            }
+            let title = Locale("tai_chi_character_label");
+            let title_font = State_settings_view.settings.font + Scale(2n);
+            let title_h = ParagraphHeight(title, character_w, title_font, Scale(3n));
+            let character_h = title_h + Scale(12n) + rows * Scale(280n) + (rows - 1n) * Scale(16n);
+            let content_h = audio_h + gap + character_h;
+            if (wide) {
+                content_h = audio_h > character_h ? audio_h : character_h;
+            }
+            let scrolled = Scroll({
+                session: State_settings_view.settings.session,
+                props: {
+                    key: NativeLayout.KeyHash("inbe/tai_chi/customize/scroll"),
+                    bounds: bounds,
+                    content_height: content_h + Scale(16n),
+                    scroll_offset: State_settings_view.settings.scroll
+                },
+                children: (scrolled: NativeScroll.ScrollResult): void => {
+                    State_settings_view.settings.scroll = scrolled.scroll_offset;
+                    let x = s32(scrolled.content.x);
+                    let y = s32(scrolled.content.y);
+                    let character_y = wide ? y : y + audio_h + gap;
+                    let audio_x = wide ? x + character_w + gap : x;
+                    TaiAudio(audio_x, audio_w, y);
+                    <Text
+                        session={State_settings_view.settings.session}
+                        props={{
+                            text: title,
+                            size: title_font,
+                            bounds: Bounds(x, character_y, character_w, title_h)
+                        }}
+                    />;
+                    TaiCharacters(
+                        Bounds(
+                            x,
+                            character_y + title_h + Scale(12n),
+                            character_w,
+                            character_h - title_h - Scale(12n)
+                        )
+                    );
+                }
+            });
+            if (!scrolled.opened) {
+                State_settings_view.settings.scroll = scrolled.scroll_offset;
+            }
+        }
     });
     if (frame.dismissed || frame.right_clicked) {
         Ask(PRACTICE_SETTINGS_BACK, 0n);
         return;
     }
-    if (!frame.opened) {
-        return;
-    }
-    let bounds = frame.layout.content;
-    let gap = Scale(24n);
-    let wide = bounds.width >= float32(Scale(700n));
-    let audio_w = s32(bounds.width) - Scale(10n);
-    let character_w = audio_w;
-    if (wide) {
-        character_w = (audio_w - gap) / 2n;
-        audio_w = audio_w - (character_w + gap);
-    }
-    let audio_h = TaiAudioHeight(audio_w);
-    let rows = (State_settings_view.settings.tai_character_count + 1n) / 2n;
-    if (rows < 1n) {
-        rows = 1n;
-    }
-    let title = Locale("tai_chi_character_label");
-    let title_font = State_settings_view.settings.font + Scale(2n);
-    let title_h = ParagraphHeight(title, character_w, title_font, Scale(3n));
-    let character_h = title_h + Scale(12n) + rows * Scale(280n) + (rows - 1n) * Scale(16n);
-    let content_h = audio_h + gap + character_h;
-    if (wide) {
-        content_h = audio_h > character_h ? audio_h : character_h;
-    }
-    let scrolled = NativeScroll.Draw(State_settings_view.settings.session, {
-        key: NativeLayout.KeyHash("inbe/tai_chi/customize/scroll"),
-        bounds: bounds,
-        content_height: content_h + Scale(16n),
-        scroll_offset: State_settings_view.settings.scroll
-    });
-    State_settings_view.settings.scroll = scrolled.scroll_offset;
-    if (scrolled.opened) {
-        let x = s32(scrolled.content.x);
-        let y = s32(scrolled.content.y);
-        let character_y = wide ? y : y + audio_h + gap;
-        let audio_x = wide ? x + character_w + gap : x;
-        TaiAudio(audio_x, audio_w, y);
-        <Text
-            session={State_settings_view.settings.session}
-            props={{
-                text: title,
-                size: title_font,
-                bounds: Bounds(x, character_y, character_w, title_h)
-            }}
-        />;
-        TaiCharacters(
-            Bounds(
-                x,
-                character_y + title_h + Scale(12n),
-                character_w,
-                character_h - title_h - Scale(12n)
-            )
-        );
-        End(State_settings_view.settings.session);
-    }
-    End(State_settings_view.settings.session);
 }
 
 export function Settings(): void {
@@ -1364,21 +1372,26 @@ export function Settings(): void {
         x = x + (width - max_width) / 2n;
         width = max_width;
     }
-    let scrolled = NativeScroll.Draw(State_settings_view.settings.session, {
-        key: ScrollKey(),
-        bounds: Bounds(
-            0n,
-            State_settings_view.settings.scroll_y,
-            State_settings_view.settings.view_width,
-            State_settings_view.settings.scroll_height
-        ),
-        content_height: ContentHeight(width),
-        scroll_offset: State_settings_view.settings.scroll
+    let scrolled = Scroll({
+        session: State_settings_view.settings.session,
+        props: {
+            key: ScrollKey(),
+            bounds: Bounds(
+                0n,
+                State_settings_view.settings.scroll_y,
+                State_settings_view.settings.view_width,
+                State_settings_view.settings.scroll_height
+            ),
+            content_height: ContentHeight(width),
+            scroll_offset: State_settings_view.settings.scroll
+        },
+        children: (scrolled: NativeScroll.ScrollResult): void => {
+            State_settings_view.settings.scroll = scrolled.scroll_offset;
+            Page(x, width, s32(scrolled.content.y));
+        }
     });
-    State_settings_view.settings.scroll = scrolled.scroll_offset;
-    if (scrolled.opened) {
-        Page(x, width, s32(scrolled.content.y));
-        End(State_settings_view.settings.session);
+    if (!scrolled.opened) {
+        State_settings_view.settings.scroll = scrolled.scroll_offset;
     }
     if (
         State_settings_view.settings.practice === s32(ExerciseType.EXERCISE_WIM_HOF) &&
@@ -1397,147 +1410,159 @@ export function SessionAudio(): void {
     if (height > Scale(680n)) {
         height = Scale(680n);
     }
-    let frame = NativeModal.Draw(State_settings_view.settings.session, {
-        key: NativeLayout.KeyHash("inbe/practice/session-audio"),
-        title: Locale("practice_background_music_label"),
-        width: width,
-        height: height,
-        scale: State_settings_view.settings.scale,
-        title_at_start: true,
-        strong_title: true,
-        has_right_action: true,
-        right_label: Locale("close_button")
+    let frame = ResolvedModal({
+        session: State_settings_view.settings.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/practice/session-audio"),
+            title: Locale("practice_background_music_label"),
+            width: width,
+            height: height,
+            scale: State_settings_view.settings.scale,
+            title_at_start: true,
+            strong_title: true,
+            has_right_action: true,
+            right_label: Locale("close_button")
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            let bounds = frame.layout.content;
+            let count = State_settings_view.settings.music_count;
+            if (count < 0n) {
+                count = 0n;
+            } else if (count > SETTINGS_MUSIC_TRACK_MAX) {
+                count = SETTINGS_MUSIC_TRACK_MAX;
+            }
+            let content_width = s32(bounds.width);
+            let status_height: s32 = s32(0n);
+            if (
+                State_settings_view.settings.music_show_status &&
+                State_settings_view.settings.music_status.count > 0n
+            ) {
+                status_height =
+                    ParagraphHeight(
+                        State_settings_view.settings.music_status,
+                        content_width,
+                        State_settings_view.settings.font,
+                        0n
+                    ) + Scale(12n);
+            }
+            let attribution_height = AttributionHeight(content_width);
+            let content_height = Scale(74n * 2n + 34n + 52n * (count + 1n) + 16n);
+            if (State_settings_view.settings.music_selection > 0n) {
+                content_height = content_height + (status_height + attribution_height + Scale(12n));
+                if (
+                    State_settings_view.settings.music_built_in &&
+                    !State_settings_view.settings.music_installed
+                ) {
+                    content_height = content_height + Scale(56n);
+                }
+                if (State_settings_view.settings.music_downloading) {
+                    content_height = content_height + Scale(28n);
+                }
+            }
+            let scrolled = Scroll({
+                session: State_settings_view.settings.session,
+                props: {
+                    key: NativeLayout.KeyHash("inbe/practice/session-audio/scroll"),
+                    bounds: bounds,
+                    content_height: content_height,
+                    scroll_offset: State_settings_view.settings.scroll
+                },
+                children: (scrolled: NativeScroll.ScrollResult): void => {
+                    State_settings_view.settings.scroll = scrolled.scroll_offset;
+                    let x = s32(scrolled.content.x);
+                    let y = s32(scrolled.content.y);
+                    MovementVolume(x, content_width, nativeRef(y), true);
+                    MovementVolume(x, content_width, nativeRef(y), false);
+                    Label(Locale("practice_background_music_label"), x, y);
+                    y = y + Scale(34n);
+                    for (let index = s32(0n); index <= count; index += s32(1)) {
+                        let label = Locale("audio_music_none_option");
+                        if (index > 0n) {
+                            label = ReadPracticeMusicTrackHost(index - 1n).label;
+                        }
+                        let selected = State_settings_view.settings.music_selection === index;
+                        if (
+                            Button({
+                                session: State_settings_view.settings.session,
+                                props: {
+                                    key:
+                                        NativeLayout.KeyHash("inbe/practice/session-audio/track") +
+                                        u64(index),
+                                    bounds: Bounds(x, y, content_width, Scale(44n)),
+                                    label: label,
+                                    selected: selected,
+                                    fit_content: true,
+                                    tone: selected
+                                        ? ButtonTone.ButtonToneAccent
+                                        : ButtonTone.ButtonToneNeutral,
+                                    emphasis: selected
+                                        ? ButtonEmphasis.ButtonEmphasisFilled
+                                        : ButtonEmphasis.ButtonEmphasisSoft
+                                }
+                            })
+                        ) {
+                            Ask(PRACTICE_SETTINGS_MUSIC, index);
+                        }
+                        y = y + Scale(52n);
+                    }
+                    if (State_settings_view.settings.music_selection > 0n) {
+                        if (
+                            State_settings_view.settings.music_built_in &&
+                            !State_settings_view.settings.music_installed
+                        ) {
+                            if (
+                                Button({
+                                    session: State_settings_view.settings.session,
+                                    props: {
+                                        key: NativeLayout.KeyHash(
+                                            "inbe/practice/session-audio/download"
+                                        ),
+                                        bounds: Bounds(x, y, content_width, Scale(44n)),
+                                        label: Locale("meditation_music_download_button"),
+                                        disabled: State_settings_view.settings.music_downloading,
+                                        tone: ButtonTone.ButtonToneAccent,
+                                        emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                                    }
+                                })
+                            ) {
+                                Ask(PRACTICE_SETTINGS_MUSIC_DOWNLOAD, 0n);
+                            }
+                            y = y + Scale(56n);
+                        }
+                        if (status_height > 0n) {
+                            <Text
+                                session={State_settings_view.settings.session}
+                                props={{
+                                    bounds: Bounds(x, y, content_width, status_height - Scale(12n)),
+                                    text: State_settings_view.settings.music_status,
+                                    wrap: Wrap.TextWrapAuto
+                                }}
+                            />;
+                            y = y + status_height;
+                        }
+                        if (State_settings_view.settings.music_downloading) {
+                            MusicProgress(x, y, content_width);
+                            y = y + Scale(28n);
+                        }
+                        <Text
+                            session={State_settings_view.settings.session}
+                            props={{
+                                bounds: Bounds(x, y, content_width, attribution_height),
+                                text: Locale("meditation_music_attribution"),
+                                size: SETTINGS_TEXT_12,
+                                wrap: Wrap.TextWrapAuto
+                            }}
+                        />;
+                    }
+                }
+            });
+            if (!scrolled.opened) {
+                State_settings_view.settings.scroll = scrolled.scroll_offset;
+            }
+        }
     });
     if (frame.dismissed || frame.right_clicked) {
         Ask(PRACTICE_SETTINGS_BACK, 0n);
         return;
     }
-    if (!frame.opened) {
-        return;
-    }
-    let bounds = frame.layout.content;
-    let count = State_settings_view.settings.music_count;
-    if (count < 0n) {
-        count = 0n;
-    } else if (count > SETTINGS_MUSIC_TRACK_MAX) {
-        count = SETTINGS_MUSIC_TRACK_MAX;
-    }
-    let content_width = s32(bounds.width);
-    let status_height: s32 = s32(0n);
-    if (
-        State_settings_view.settings.music_show_status &&
-        State_settings_view.settings.music_status.count > 0n
-    ) {
-        status_height =
-            ParagraphHeight(
-                State_settings_view.settings.music_status,
-                content_width,
-                State_settings_view.settings.font,
-                0n
-            ) + Scale(12n);
-    }
-    let attribution_height = AttributionHeight(content_width);
-    let content_height = Scale(74n * 2n + 34n + 52n * (count + 1n) + 16n);
-    if (State_settings_view.settings.music_selection > 0n) {
-        content_height = content_height + (status_height + attribution_height + Scale(12n));
-        if (
-            State_settings_view.settings.music_built_in &&
-            !State_settings_view.settings.music_installed
-        ) {
-            content_height = content_height + Scale(56n);
-        }
-        if (State_settings_view.settings.music_downloading) {
-            content_height = content_height + Scale(28n);
-        }
-    }
-    let scrolled = NativeScroll.Draw(State_settings_view.settings.session, {
-        key: NativeLayout.KeyHash("inbe/practice/session-audio/scroll"),
-        bounds: bounds,
-        content_height: content_height,
-        scroll_offset: State_settings_view.settings.scroll
-    });
-    State_settings_view.settings.scroll = scrolled.scroll_offset;
-    if (scrolled.opened) {
-        let x = s32(scrolled.content.x);
-        let y = s32(scrolled.content.y);
-        MovementVolume(x, content_width, nativeRef(y), true);
-        MovementVolume(x, content_width, nativeRef(y), false);
-        Label(Locale("practice_background_music_label"), x, y);
-        y = y + Scale(34n);
-        for (let index = s32(0n); index <= count; index += s32(1)) {
-            let label = Locale("audio_music_none_option");
-            if (index > 0n) {
-                label = ReadPracticeMusicTrackHost(index - 1n).label;
-            }
-            let selected = State_settings_view.settings.music_selection === index;
-            if (
-                Button({
-                    session: State_settings_view.settings.session,
-                    props: {
-                        key: NativeLayout.KeyHash("inbe/practice/session-audio/track") + u64(index),
-                        bounds: Bounds(x, y, content_width, Scale(44n)),
-                        label: label,
-                        selected: selected,
-                        fit_content: true,
-                        tone: selected ? ButtonTone.ButtonToneAccent : ButtonTone.ButtonToneNeutral,
-                        emphasis: selected
-                            ? ButtonEmphasis.ButtonEmphasisFilled
-                            : ButtonEmphasis.ButtonEmphasisSoft
-                    }
-                })
-            ) {
-                Ask(PRACTICE_SETTINGS_MUSIC, index);
-            }
-            y = y + Scale(52n);
-        }
-        if (State_settings_view.settings.music_selection > 0n) {
-            if (
-                State_settings_view.settings.music_built_in &&
-                !State_settings_view.settings.music_installed
-            ) {
-                if (
-                    Button({
-                        session: State_settings_view.settings.session,
-                        props: {
-                            key: NativeLayout.KeyHash("inbe/practice/session-audio/download"),
-                            bounds: Bounds(x, y, content_width, Scale(44n)),
-                            label: Locale("meditation_music_download_button"),
-                            disabled: State_settings_view.settings.music_downloading,
-                            tone: ButtonTone.ButtonToneAccent,
-                            emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                        }
-                    })
-                ) {
-                    Ask(PRACTICE_SETTINGS_MUSIC_DOWNLOAD, 0n);
-                }
-                y = y + Scale(56n);
-            }
-            if (status_height > 0n) {
-                <Text
-                    session={State_settings_view.settings.session}
-                    props={{
-                        bounds: Bounds(x, y, content_width, status_height - Scale(12n)),
-                        text: State_settings_view.settings.music_status,
-                        wrap: Wrap.TextWrapAuto
-                    }}
-                />;
-                y = y + status_height;
-            }
-            if (State_settings_view.settings.music_downloading) {
-                MusicProgress(x, y, content_width);
-                y = y + Scale(28n);
-            }
-            <Text
-                session={State_settings_view.settings.session}
-                props={{
-                    bounds: Bounds(x, y, content_width, attribution_height),
-                    text: Locale("meditation_music_attribution"),
-                    size: SETTINGS_TEXT_12,
-                    wrap: Wrap.TextWrapAuto
-                }}
-            />;
-        }
-        End(State_settings_view.settings.session);
-    }
-    End(State_settings_view.settings.session);
 }

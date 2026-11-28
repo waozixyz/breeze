@@ -243,25 +243,27 @@ storage_habit_entry_save :: (entry_id: string, habit_id: string,
         storage_json_builder_free(*json)
         return 0
     }
-    answers_text := ifx written > 0 then AppTextFromCString(json.data,
-        cast(s32)json.len) else ""
-    stmt: *void = null
-    sql := "INSERT INTO habit_entries(id,user_id,habit_id,local_date,started_at,ended_at,answers,deleted_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,0,?8) ON CONFLICT(id) DO UPDATE SET habit_id=excluded.habit_id,local_date=excluded.local_date,started_at=excluded.started_at,ended_at=excluded.ended_at,answers=excluded.answers,deleted_at=0,updated_at=excluded.updated_at"
     ok: s32 = 0
     stored_id := AppTextFromCString(*id[0], HABIT_ENTRY_ID_SIZE)
-    if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) == SQLITE_OK {
-        bind_text(stmt, 1, stored_id)
-        bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
-        bind_text(stmt, 3, habit_id)
-        sqlite3_bind_int(stmt, 4, local_date)
-        SqliteBindInt64(stmt, 5, started_at)
-        SqliteBindInt64(stmt, 6, ended_at)
-        bind_text(stmt, 7, answers_text)
-        SqliteBindInt64(stmt, 8, storage_next_change_time())
-        if SqliteStep(stmt) == SQLITE_DONE {
-            ok = 1
+    {
+        answers_text := ifx written > 0 then AppTextFromCString(json.data,
+            cast(s32)json.len) else ""
+        stmt: *void = null
+        sql := "INSERT INTO habit_entries(id,user_id,habit_id,local_date,started_at,ended_at,answers,deleted_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,0,?8) ON CONFLICT(id) DO UPDATE SET habit_id=excluded.habit_id,local_date=excluded.local_date,started_at=excluded.started_at,ended_at=excluded.ended_at,answers=excluded.answers,deleted_at=0,updated_at=excluded.updated_at"
+        if SqlitePrepareText(storage_db_handle(), sql, -1, *stmt, null) == SQLITE_OK {
+            bind_text(stmt, 1, stored_id)
+            bind_text(stmt, 2, AppTextFromCString(storage_user_id_buffer(), 64))
+            bind_text(stmt, 3, habit_id)
+            sqlite3_bind_int(stmt, 4, local_date)
+            SqliteBindInt64(stmt, 5, started_at)
+            SqliteBindInt64(stmt, 6, ended_at)
+            bind_text(stmt, 7, answers_text)
+            SqliteBindInt64(stmt, 8, storage_next_change_time())
+            if SqliteStep(stmt) == SQLITE_DONE {
+                ok = 1
+            }
+            SqliteFinalize(stmt)
         }
-        SqliteFinalize(stmt)
     }
     storage_json_builder_free(*json)
     if ok == 0 {

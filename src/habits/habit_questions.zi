@@ -131,20 +131,26 @@ HabitQuestionRemove :: (questions: []HabitQuestion, count: *s32,
 HabitQuestionsKeepWorded :: (questions: []HabitQuestion, count: *s32) {
     index: s32 = 0
     while index < count.* {
-        text := HabitQuestionText(*questions[index])
-        start: s64 = 0
-        end := text.count
-        while start < end && (text[start] == cast(u8)32 || text[start] == cast(u8)9) {
-            start += 1
+        trimmed: [HABIT_QUESTION_TEXT_SIZE]u8
+        worded: bool
+        {
+            text := HabitQuestionText(*questions[index])
+            start: s64 = 0
+            end := text.count
+            while start < end && (text[start] == cast(u8)32 || text[start] == cast(u8)9) {
+                start += 1
+            }
+            while end > start && (text[end - 1] == cast(u8)32 || text[end - 1] == cast(u8)9) {
+                end -= 1
+            }
+            worded = start != end
+            if worded {
+                unused AppCopyText(text[start:end], trimmed[:])
+            }
         }
-        while end > start && (text[end - 1] == cast(u8)32 || text[end - 1] == cast(u8)9) {
-            end -= 1
-        }
-        if start == end {
+        if !worded {
             HabitQuestionRemove(questions, count, index)
         } else {
-            trimmed: [HABIT_QUESTION_TEXT_SIZE]u8
-            unused AppCopyText(text[start:end], trimmed[:])
             unused AppCopyText(AppTextFromCString(*trimmed[0],
                 HABIT_QUESTION_TEXT_SIZE), questions[index].text[:])
             index += 1
@@ -246,7 +252,8 @@ HabitAnswersFor :: (habit: *Habit, stored: []HabitAnswer,
         while match < stored_count && match < cast(s32)stored.count {
             if !used[match] && stored[match].id == question.id {
                 used[match] = true
-                unused AppCopyText(HabitAnswerValue(*stored[match]),
+                value := stored[match].value
+                unused AppCopyText(AppTextFromCString(*value[0], HABIT_ANSWER_SIZE),
                     answer.value[:])
                 break
             }

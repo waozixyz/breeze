@@ -2,42 +2,9 @@
 
 ## [Unreleased]
 
-- Author Breeze and module screens in Kryon TSX, keeping native state and platform effects; app sources now have clear program, UI and native folders.
-- Remove Arcade from the app choices.
-
-- Keep uploaded practice downloads readable by the node when installing Android development builds.
-
-- Fix a GPU rendering seam through the Habits **+ New Habit** button.
-
-- Verify Mandarin Astral narration across Simplified and Traditional Chinese spellings.
-
-- Offer to send saved crash diagnostics to the developer after reopening, with an explicit choice to send or discard.
-
-- Optionally keep Meditation counting up after the end gong, with interval bells and the full session time saved on Finish.
-
-- Open the illustrated Foundations section above Tai Chi lessons, then choose a focused group of free drills.
-
-- Choose Tai Chi lessons from an illustrated gallery, with Foundations and the first three lessons free. Tap a faded, locked lesson to unlock the rest of the course.
-
-- Tai Chi offers Woman or Man, waits for the figure before playback, and lets you seek with its progress bar. The woman wears a wrap top and slim, tapered trousers.
-
-- Keep navigation hidden throughout full-screen practices; restore it on the app page when a practice is minimized or closed.
-
-- Breathing Patterns shows the phase countdown inside its smoothly growing circle and keeps your saved duration after restarting.
-
-- Improve Android scrolling with smaller lesson covers decoded at their display size, fix stale frames after rotation, and keep prepackaged Habits available offline.
-- Show real habit measurements on selectable shared trends, graph session rounds, and focus entry fields with Enter to save.
-
-- Keep the bottom navigation when a shortcut opens one of Inbe's own screens.
-- Say a failed practice download once, as a toast, and only when the practice cannot start. Starting a practice whose content is on the device no longer asks for a download. Shorter Workout descriptions, and a Workout exit dialog that no longer calls the session a meditation.
-- Draw Android system text from the GPU atlas, and run a settled account pump and the achievement check once a second instead of every frame.
-- Draw each frame straight to the screen and reuse text measurements.
-- Show bundled WebP and AVIF pictures on Android again. The Kryon bump had turned every one of them into a Missing image box: Breeze never asked Kryon for its in-process decoders, and its activity lacked the BitmapFactory bridge Kryon now expects.
-- Hold the Workout clock until its 3D figure loads; a resumed workout starts at once.
-- Accept an app-unlocked picture set as the profile picture and translate its picker tab, so a picture chosen in any app is kept here instead of being replaced by the stored icon.
-- Fix Backspace, edits, backup restores. Find Photos/Radio. Dew via Telegram Stars. Fast Lumi chat, unseen reply alerts.
-- Start/switch/resume. Seek Astral. 4-min and custom workouts. Live-sky banners. Download status/retry. PiP/Home fixes.
-- Reset break timers on return. Themed timers/coins. Daily coins, Diary links, one habit graph, stats and Activity icons.
+- Learn Tai Chi through illustrated lessons, Foundations drills and Woman or Man playback.
+- Start in Practices and keep timers, downloads and full-screen navigation steady when switching or resuming.
+- Improve habit trends, account recovery and Lumi chat, with optional crash reports.
 
 ## [2.1.63] - 2026-11-05
 

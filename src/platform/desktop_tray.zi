@@ -125,7 +125,6 @@ TrayNextStatusUpdateTime: float64;
 TrayStatusUpdateInitialized: s32;
 TrayLastWindowVisible: s32 = -1;
 TrayLastStatusText: [128] u8;
-TrayIconPaths: [4] string;
 GetTrayHabitAction :: (index: s32) -> DesktopTrayAction {
     if index < 0 || index >= HABIT_MAX {
         return cast(DesktopTrayAction)DESKTOP_TRAY_ACTION_NONE
@@ -283,17 +282,19 @@ desktop_tray_init :: () -> s32 {
     if tray_getenv(*no_tray_name[0]) != null {
         return 0
     }
-    TrayIconPaths[0] = TrayIconFromAssets()
-    TrayIconPaths[1] = "packaging/linux/appimage/inbe.png"
-    TrayIconPaths[2] = "packaging/snap/snap/gui/inbe.png"
-    TrayIconPaths[3] = "web-assets/icons/inbe.png"
+    icon_file: [1024]u8
+    icon_paths: [4]string
+    icon_paths[0] = TrayIconFromAssets(icon_file[:])
+    icon_paths[1] = "packaging/linux/appimage/inbe.png"
+    icon_paths[2] = "packaging/snap/snap/gui/inbe.png"
+    icon_paths[3] = "web-assets/icons/inbe.png"
     SeedTraySnapshot()
     menu: TrayMenuStorage
     spec: TraySpec
     spec.id = "breeze"
     spec.title = "Inner Breeze"
     spec.icon_name = "inbe"
-    spec.icon_paths = TrayIconPaths[:]
+    spec.icon_paths = icon_paths[:]
     spec.activate_action = cast(s32)GetTrayWindowAction(app_tray_snapshot.window_visible)
     BuildTrayMenu(*app_tray_snapshot, *menu)
     spec.menu = menu.items[:]
@@ -304,19 +305,17 @@ desktop_tray_init :: () -> s32 {
 // and saved as a real PNG in the data folder. Without it the tray looks for an icon
 // named "inbe" in the desktop's theme, which an older install may have
 // left with an old logo.
-TrayIconFile: [1024]u8;
-
-TrayIconFromAssets :: () -> string {
+TrayIconFromAssets :: (output: []u8) -> string {
     asset := AssetRead("assets/app/icon.webp")
     if !asset.found || asset.data.count == 0 ||
     asset.data.count > 16777216 {
         return ""
     }
-    if !AppCopyText(data_root(), TrayIconFile[:]) ||
-    !AppAppendText("/tray-icon.png", TrayIconFile[:]) {
+    if !AppCopyText(data_root(), output) ||
+    !AppAppendText("/tray-icon.png", output) {
         return ""
     }
-    path := AppTextFromCString(*TrayIconFile[0], cast(s32)TrayIconFile.count)
+    path := AppTextFromCString(*output[0], cast(s32)output.count)
     #if #defined(DESKTOP_HOST) {
         // The desktop raster decodes the WebP; Ziran writes the PNG.
         rgba: [ICON_SIZE * ICON_SIZE * 4]u8

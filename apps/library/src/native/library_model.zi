@@ -7,6 +7,7 @@ Dropdown :: #import "kryon/dropdown";
 Text :: #import "kryon/text";
 TextArea :: #import "kryon/text_area";
 TextField :: #import "kryon/text_field";
+OwnedText :: #import "std/vec";
 #import "text_measure"
 #import "text_align"
 #import "grid"
@@ -17,6 +18,7 @@ TextField :: #import "kryon/text_field";
 #import "swipe"
 #import "swipe_props"
 #import "input_protocol"
+#import "kryon/text_input"
 #import "drawing_props"
 #import "kryon/transition"
 #import "widget_palette"
@@ -72,7 +74,14 @@ annotation_index: s32 = -1;
 annotation_dirty: bool;
 note: [2049]u8;
 note_state: TextArea.Result;
-passage_state: TextArea.Result;
+// Only the scalar passage editor fields are kept across frames; the raw
+// TextArea result stays in the UI function so no global keeps a view of
+// the shared text request scratch.
+passage_cursor: s32;
+passage_anchor: s32;
+passage_focused: bool;
+passage_scroll_y: s32;
+passage_selecting: bool;
 reader_swipe: SwipeGesture;
 book_dark: bool;
 picture_book: bool;
@@ -92,6 +101,118 @@ NumberText :: (value: s32) -> string {
     text: Vec(u8)
     BuilderPrint(*text, "%", value)
     return BuilderFinish(text)
+}
+
+// The note editor's IME preedit lives in this model-owned dynamic record,
+// rewritten only when the composition changes; the previous bytes are
+// freed before a new record moves in, so nothing detaches or leaks. A
+// stable preedit costs no per-frame work, no global keeps a view of the
+// host's per-frame text request scratch, and the preedit is kept in full
+// at any length.
+note_composition_text: OwnedText.Text;
+note_composition_active: bool;
+note_composition_cursor: s32;
+note_composition_selection: s32;
+
+ClearNoteComposition :: () {
+    VecFree(note_composition_text.bytes)
+    note_composition_text = OwnedText.Text.{}
+    note_composition_active = false
+    note_composition_cursor = 0
+    note_composition_selection = 0
+}
+
+// The composition state the note editor feeds back: its text borrows the
+// model's owned preedit bytes, never the host's per-frame scratch.
+NoteComposition :: () -> CompositionState {
+    state: CompositionState = CompositionState.{}
+    state.active = note_composition_active
+    state.text = TextView(note_composition_text)
+    state.cursor = note_composition_cursor
+    state.selection_length = note_composition_selection
+    return state
+}
+
+// An owned snapshot of one composition update: the bytes are copied into
+// their own owned record before anything is written, so carrying it past
+// the area's scope keeps no view of the result or of the model record, and
+// an unchanged frame reading the same record cannot corrupt itself. The
+// preedit is kept in full, whatever its length.
+NoteCompositionKeep :: struct {
+    text: OwnedText.Text
+    active: bool
+    cursor: s32
+    selection_length: s32
+    valid: bool
+}
+
+NoteCompositionUpdate :: (state: CompositionState) -> NoteCompositionKeep {
+    update: NoteCompositionKeep
+    update.text = OwnedText.TextCopy(state.text)
+    update.active = state.active
+    update.cursor = state.cursor
+    update.selection_length = state.selection_length
+    update.valid = true
+    return update
+}
+
+// An owned snapshot of one note edit: the replacement bytes are copied into
+// their own owned record only when the edit changed, so carrying it past the
+// result's scope keeps no view of the area result, at any length the edit
+// produces.
+NoteEditKeep :: struct {
+    start: s32
+    end: s32
+    replacement: OwnedText.Text
+    changed: bool
+    valid: bool
+}
+
+NoteEditUpdate :: (result: TextArea.Result) -> NoteEditKeep {
+    update: NoteEditKeep
+    if result.edit.changed {
+        update.replacement = OwnedText.TextCopy(result.edit.replacement)
+        update.start = result.edit.start
+        update.end = result.edit.end
+        update.changed = result.edit.changed
+        update.valid = true
+    }
+    return update
+}
+
+// Apply a kept note edit to the model-owned buffer. Called after the area
+// result's scope ended, so no live view of the buffer remains.
+ApplyNoteEdit :: (update: NoteEditKeep) -> bool {
+    if !update.valid || !update.changed { return false }
+    if !EnsureAnnotation() { return false }
+    return AppReplaceText(note[:], update.start, update.end,
+        TextView(update.replacement))
+}
+
+// Move the owned snapshot into the model's preedit record; the previous
+// bytes are freed first, after the area result's scope ended, so no live
+// view of the record remains. The snapshot copied the bytes before any
+// free, so re-keeping a composition that still reads the record cannot
+// clear or truncate it.
+KeepNoteComposition :: (update: NoteCompositionKeep) {
+    if !update.valid { return }
+    note_composition_active = update.active
+    note_composition_cursor = update.cursor
+    note_composition_selection = update.selection_length
+    VecFree(note_composition_text.bytes)
+    note_composition_text = update.text
+}
+
+// Release a kept composition snapshot that will not be stored: taking it
+// by value moves the owned bytes, and they free when this scope ends.
+DiscardNoteComposition :: (keep: NoteCompositionKeep) {
+    VecFree(keep.text.bytes)
+}
+
+// Release a kept note-edit snapshot that will not be applied: taking it
+// by value moves the owned bytes, and they free when this scope ends.
+DiscardNoteEdit :: (keep: NoteEditKeep) {
+    VecFree(keep.replacement.bytes)
 }
 
 RecordNumber :: (key: string, fallback: s32, minimum: s32, maximum: s32) -> s32 {
@@ -241,13 +362,18 @@ LoadPageAnnotations :: () {
     note[0] = 0
     if annotation_index >= 0 { unused AppCopyText(annotations[annotation_index].note, note[:]) }
     note_state = TextArea.Result.{}
-    passage_state = TextArea.Result.{}
+    ClearNoteComposition()
+    passage_cursor = 0
+    passage_anchor = 0
+    passage_focused = false
+    passage_scroll_y = 0
+    passage_selecting = false
     if annotation_index >= 0 {
         saved := annotations[annotation_index]
         // Keep older page-wide notes, without selecting the entire page.
         if saved.end - saved.start < current.end - current.start {
-            passage_state.anchor = ifx saved.start > current.start then saved.start - current.start else 0
-            passage_state.cursor = ifx saved.end < current.end then saved.end - current.start else current.end - current.start
+            passage_anchor = ifx saved.start > current.start then saved.start - current.start else 0
+            passage_cursor = ifx saved.end < current.end then saved.end - current.start else current.end - current.start
         }
     }
 }
@@ -315,8 +441,8 @@ EnsureAnnotation :: () -> bool {
     if annotation_index >= 0 { return true }
     if annotation_count >= LIBRARY_ANNOTATION_LIMIT { return false }
     current := pages[page_index]
-    start := ifx passage_state.anchor < passage_state.cursor then passage_state.anchor else passage_state.cursor
-    end := ifx passage_state.anchor > passage_state.cursor then passage_state.anchor else passage_state.cursor
+    start := ifx passage_anchor < passage_cursor then passage_anchor else passage_cursor
+    end := ifx passage_anchor > passage_cursor then passage_anchor else passage_cursor
     if end <= start { return false }
     annotation_index = annotation_count
     annotation_count += 1

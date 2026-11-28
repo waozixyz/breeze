@@ -1,3 +1,4 @@
+import { ResolvedModal } from "kryon/tsx/modal";
 import { ArrowDirection } from "kryon/button";
 // Authored UI composition; native application state remains in practice_home_view.zi.
 import * as NativeModal from "kryon/modal";
@@ -12,7 +13,6 @@ import { Swipe } from "kryon/swipe";
 import { SwipeDirection } from "kryon/swipe_props";
 import { TextAlign } from "kryon/text_align";
 import { Wrap } from "kryon/text_props";
-import { End } from "kryon/tree";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
 import { Image } from "kryon/tsx/image";
@@ -549,138 +549,139 @@ export function PageView(): void {
 export function RecoveryCardView(): void {
     let width = ScalePixels(400n, State_practice_home_view.home.scale);
     let height = ScalePixels(226n, State_practice_home_view.home.scale);
-    let frame = NativeModal.Draw(State_practice_home_view.home.session, {
-        id: 17402n,
-        title: Locale("practice_recovery_title"),
-        width: width,
-        height: height,
-        scale: State_practice_home_view.home.scale,
-        strong_title: true,
-        title_at_start: true,
-        dismiss_disabled: true
+    let frame = ResolvedModal({
+        session: State_practice_home_view.home.session,
+        props: {
+            id: 17402n,
+            title: Locale("practice_recovery_title"),
+            width: width,
+            height: height,
+            scale: State_practice_home_view.home.scale,
+            strong_title: true,
+            title_at_start: true,
+            dismiss_disabled: true
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            let area = frame.layout.content;
+            let gap = float32(ScalePixels(8n, State_practice_home_view.home.scale));
+            let button_h = float32(ScalePixels(44n, State_practice_home_view.home.scale));
+            let row_y = area.y + area.height - button_h;
+            let detail_h = row_y - area.y - gap;
+            if (State_practice_home_view.home.note.count > 0n) {
+                let note_h = float32(ScalePixels(26n, State_practice_home_view.home.scale));
+                <Text
+                    session={State_practice_home_view.home.session}
+                    props={{
+                        text: State_practice_home_view.home.note,
+                        size: State_practice_home_view.home.small_font,
+                        bounds: { x: area.x, y: row_y - note_h, width: area.width, height: note_h }
+                    }}
+                />;
+                detail_h = detail_h - note_h;
+            }
+            let left = area.x;
+            let available = area.width;
+            if (State_practice_home_view.home.banner.count > 0n) {
+                let thumb = area.width / 3.2;
+                if (thumb > detail_h) {
+                    thumb = detail_h;
+                }
+                if (thumb > gap * 3.0) {
+                    <Image
+                        session={State_practice_home_view.home.session}
+                        props={{
+                            asset_path: State_practice_home_view.home.banner,
+                            bounds: { x: left, y: area.y, width: thumb, height: thumb },
+                            fit: ImageFit.ImageFitCover
+                        }}
+                    />;
+                    left = left + (thumb + gap);
+                    available = available - (thumb + gap);
+                }
+            }
+            let title_h = float32(ScalePixels(28n, State_practice_home_view.home.scale));
+            let clock_h = float32(ScalePixels(26n, State_practice_home_view.home.scale));
+            let y = area.y;
+            if (State_practice_home_view.home.title.count > 0n) {
+                <Text
+                    session={State_practice_home_view.home.session}
+                    props={{
+                        text: State_practice_home_view.home.title,
+                        size: State_practice_home_view.home.font,
+                        wrap: Wrap.TextWrapEllipsis,
+                        bounds: { x: left, y: y, width: available, height: title_h }
+                    }}
+                />;
+                y = y + title_h;
+            }
+            if (State_practice_home_view.home.subtitle.count > 0n) {
+                let stage_h = detail_h - (y - area.y) - clock_h;
+                if (stage_h > title_h * 1.5) {
+                    stage_h = title_h * 1.5;
+                }
+                if (stage_h > 0.0) {
+                    <Text
+                        session={State_practice_home_view.home.session}
+                        props={{
+                            text: State_practice_home_view.home.subtitle,
+                            size: State_practice_home_view.home.small_font,
+                            wrap: Wrap.TextWrapAuto,
+                            bounds: { x: left, y: y, width: available, height: stage_h }
+                        }}
+                    />;
+                    y = y + stage_h;
+                }
+            }
+            if (State_practice_home_view.home.status.count > 0n) {
+                <Text
+                    session={State_practice_home_view.home.session}
+                    props={{
+                        text: State_practice_home_view.home.status,
+                        size: State_practice_home_view.home.small_font,
+                        wrap: Wrap.TextWrapEllipsis,
+                        bounds: { x: left, y: y, width: available, height: clock_h }
+                    }}
+                />;
+            }
+            let button_w = (area.width - gap) / 2.0;
+            if (
+                Button({
+                    session: State_practice_home_view.home.session,
+                    props: {
+                        id: 17404n,
+                        label: Locale("cancel_button"),
+                        bounds: {
+                            x: area.x,
+                            y: row_y,
+                            width: State_practice_home_view.home.ready ? button_w : area.width,
+                            height: button_h
+                        }
+                    }
+                })
+            ) {
+                State_practice_home_view.home.action = PRACTICE_HOME_RECOVERY_CANCEL;
+            }
+            if (
+                State_practice_home_view.home.ready &&
+                Button({
+                    session: State_practice_home_view.home.session,
+                    props: {
+                        id: 17403n,
+                        label: Locale("practice_recovery_continue"),
+                        disabled: State_practice_home_view.home.offer_disabled,
+                        tone: ButtonTone.ButtonToneAccent,
+                        emphasis: ButtonEmphasis.ButtonEmphasisFilled,
+                        bounds: {
+                            x: area.x + button_w + gap,
+                            y: row_y,
+                            width: button_w,
+                            height: button_h
+                        }
+                    }
+                })
+            ) {
+                State_practice_home_view.home.action = PRACTICE_HOME_RECOVERY_CONTINUE;
+            }
+        }
     });
-    if (!frame.opened) {
-        return;
-    }
-    let area = frame.layout.content;
-    let gap = float32(ScalePixels(8n, State_practice_home_view.home.scale));
-    let button_h = float32(ScalePixels(44n, State_practice_home_view.home.scale));
-    let row_y = area.y + area.height - button_h;
-    let detail_h = row_y - area.y - gap;
-    if (State_practice_home_view.home.note.count > 0n) {
-        let note_h = float32(ScalePixels(26n, State_practice_home_view.home.scale));
-        <Text
-            session={State_practice_home_view.home.session}
-            props={{
-                text: State_practice_home_view.home.note,
-                size: State_practice_home_view.home.small_font,
-                bounds: { x: area.x, y: row_y - note_h, width: area.width, height: note_h }
-            }}
-        />;
-        detail_h = detail_h - note_h;
-    }
-    let left = area.x;
-    let available = area.width;
-    if (State_practice_home_view.home.banner.count > 0n) {
-        let thumb = area.width / 3.2;
-        if (thumb > detail_h) {
-            thumb = detail_h;
-        }
-        if (thumb > gap * 3.0) {
-            <Image
-                session={State_practice_home_view.home.session}
-                props={{
-                    asset_path: State_practice_home_view.home.banner,
-                    bounds: { x: left, y: area.y, width: thumb, height: thumb },
-                    fit: ImageFit.ImageFitCover
-                }}
-            />;
-            left = left + (thumb + gap);
-            available = available - (thumb + gap);
-        }
-    }
-    let title_h = float32(ScalePixels(28n, State_practice_home_view.home.scale));
-    let clock_h = float32(ScalePixels(26n, State_practice_home_view.home.scale));
-    let y = area.y;
-    if (State_practice_home_view.home.title.count > 0n) {
-        <Text
-            session={State_practice_home_view.home.session}
-            props={{
-                text: State_practice_home_view.home.title,
-                size: State_practice_home_view.home.font,
-                wrap: Wrap.TextWrapEllipsis,
-                bounds: { x: left, y: y, width: available, height: title_h }
-            }}
-        />;
-        y = y + title_h;
-    }
-    if (State_practice_home_view.home.subtitle.count > 0n) {
-        let stage_h = detail_h - (y - area.y) - clock_h;
-        if (stage_h > title_h * 1.5) {
-            stage_h = title_h * 1.5;
-        }
-        if (stage_h > 0.0) {
-            <Text
-                session={State_practice_home_view.home.session}
-                props={{
-                    text: State_practice_home_view.home.subtitle,
-                    size: State_practice_home_view.home.small_font,
-                    wrap: Wrap.TextWrapAuto,
-                    bounds: { x: left, y: y, width: available, height: stage_h }
-                }}
-            />;
-            y = y + stage_h;
-        }
-    }
-    if (State_practice_home_view.home.status.count > 0n) {
-        <Text
-            session={State_practice_home_view.home.session}
-            props={{
-                text: State_practice_home_view.home.status,
-                size: State_practice_home_view.home.small_font,
-                wrap: Wrap.TextWrapEllipsis,
-                bounds: { x: left, y: y, width: available, height: clock_h }
-            }}
-        />;
-    }
-    let button_w = (area.width - gap) / 2.0;
-    if (
-        Button({
-            session: State_practice_home_view.home.session,
-            props: {
-                id: 17404n,
-                label: Locale("cancel_button"),
-                bounds: {
-                    x: area.x,
-                    y: row_y,
-                    width: State_practice_home_view.home.ready ? button_w : area.width,
-                    height: button_h
-                }
-            }
-        })
-    ) {
-        State_practice_home_view.home.action = PRACTICE_HOME_RECOVERY_CANCEL;
-    }
-    if (
-        State_practice_home_view.home.ready &&
-        Button({
-            session: State_practice_home_view.home.session,
-            props: {
-                id: 17403n,
-                label: Locale("practice_recovery_continue"),
-                disabled: State_practice_home_view.home.offer_disabled,
-                tone: ButtonTone.ButtonToneAccent,
-                emphasis: ButtonEmphasis.ButtonEmphasisFilled,
-                bounds: {
-                    x: area.x + button_w + gap,
-                    y: row_y,
-                    width: button_w,
-                    height: button_h
-                }
-            }
-        })
-    ) {
-        State_practice_home_view.home.action = PRACTICE_HOME_RECOVERY_CONTINUE;
-    }
-    End(State_practice_home_view.home.session);
 }

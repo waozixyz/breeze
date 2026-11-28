@@ -1136,7 +1136,7 @@ DiaryBlobCompressionSafe :: (key: string, node: string, blob: string, changed: s
     defer { PackageFree(target_record) }
     content := EntityPhotoContent(target_record)
     return EntityPhotoAcknowledged(target, target_record) &&
-        EntityContentOnNode(content, node) && EntityContentVerified(content, node)
+    EntityContentOnNode(content, node) && EntityContentVerified(content, node)
 }
 
 // A download that found nothing on this node asks the next one for the
@@ -1192,22 +1192,23 @@ DiaryBlobChunkArrived :: (pass: *DiaryBlobPass, request: *DiaryBlobRequest, answ
     if pass.received_size < request.size {
         return
     }
-    check := EntityContent.{.valid = true, .hash = request.hash, .size = request.size}
-    received := TextFromBytes(BytesFromPointer(pass.received, cast(u64)pass.received_size))
-    if request.kind == DIARY_BLOB_VERIFY {
-        if EntityContentMatches(check, received) {
-            DiaryBlobRun("INSERT OR IGNORE INTO verified_contents(node,hash) VALUES(?1,?2)", node,
-                TextFromBytes(request.hash[:64]))
-            // The photo's old records may name it now (media_diary_photos.zi).
-            diary_blob_generation += 1
+    {
+        check := EntityContent.{.valid = true, .hash = request.hash, .size = request.size}
+        received := TextFromBytes(BytesFromPointer(pass.received, cast(u64)pass.received_size))
+        if request.kind == DIARY_BLOB_VERIFY {
+            if EntityContentMatches(check, received) {
+                DiaryBlobRun("INSERT OR IGNORE INTO verified_contents(node,hash) VALUES(?1,?2)", node,
+                    TextFromBytes(request.hash[:64]))
+                // The photo's old records may name it now (media_diary_photos.zi).
+                diary_blob_generation += 1
+            }
+        } else {
+            photo_hash := EntityPhotoKeyHash(TextUntilNul(request.key[:]))
+            path := MediaPath(photo_hash, request.preview)
+            unused DiaryBlobStore(TextUntilNul(request.key[:]), path, received, check)
+            PackageFree(path)
         }
-        DiaryBlobJobDone(pass)
-        return
     }
-    photo_hash := EntityPhotoKeyHash(TextUntilNul(request.key[:]))
-    path := MediaPath(photo_hash, request.preview)
-    unused DiaryBlobStore(TextUntilNul(request.key[:]), path, received, check)
-    PackageFree(path)
     DiaryBlobJobDone(pass)
 }
 
