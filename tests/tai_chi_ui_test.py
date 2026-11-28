@@ -300,7 +300,8 @@ with tempfile.TemporaryDirectory(prefix='profile-', dir=OUTPUT) as profile, cont
     def choose_lesson(label):
         if label == 'Posture and breathing':
             driver.press(key=reveal_button('Foundations')['key'])
-            driver.wait(label=label, role='heading')
+            driver.press(key=reveal_button(label)['key'])
+            driver.wait(label=label, role='modal')
         else:
             reveal_button(label)
 
