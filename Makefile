@@ -463,7 +463,7 @@ APP_RESOURCES += $(wildcard apps/*/achievements.json) $(wildcard apps/*/achievem
 APP_RESOURCES += $(wildcard assets/*/sidebar.shape)
 
 APPS_BUNDLE ?= build/apps-ui/apps.zx
-EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) assets/app/icon.webp
+EMBEDDED_ASSET_FILES := apps/publishers.json $(INBE_BUNDLE) assets/app/icon.webp assets/habits/sidebar.shape assets/practices/sidebar.shape assets/lists/sidebar.shape assets/diary/sidebar.shape assets/leaderboard/sidebar.shape assets/lumi/sidebar.shape
 KRY_GEN_DIR := $(BUILD_DIR)/kryon/generated
 # Dependencies are imported as PACKAGE/Module through their linked packages.
 ZI_PACKAGE_PATHS := $(shell sh scripts/package-paths.sh)

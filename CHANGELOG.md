@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- Give every sub-app its own outline icon from one generated set, shown in the dock, the Apps launcher and each package.
+
 ## [2.1.64] - 2026-11-28
 
 - Learn Tai Chi through illustrated lessons, Foundations drills and Woman or Man playback.

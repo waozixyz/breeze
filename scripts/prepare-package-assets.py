@@ -46,6 +46,8 @@ patterns = (
     'assets/social/*.png', 'assets/social/*.webp', 'assets/social/telegram.svg',
     'assets/sounds/*.ogg',
     'assets/habits/**/*', 'assets/lists/**/*', 'assets/diary/**/*', 'assets/lumi/**/*',
+    'assets/practices/sidebar.shape', 'assets/practices/sidebar.svg',
+    'assets/leaderboard/sidebar.shape', 'assets/leaderboard/sidebar.svg',
     'assets/fonts/subset/*-App-Regular.*', 'assets/styles/*.css',
     'locales/*.txt', 'themes/catalog_*.css',
     'build/packages/css/styles/*.css', 'build/packages/kryon/icons/ui.webp',
@@ -88,7 +90,8 @@ for file, path in sorted(sources.items(), key=lambda source: source[1]):
     # Each practice's pictures ship only in its pack. Its banners ship with
     # Practices, whose tabs show every practice before it is downloaded.
     if (path.startswith('assets/practices/') and '/banner-' not in path
-            and not path.startswith('assets/practices/shared/')):
+            and not path.startswith('assets/practices/shared/')
+            and path.count('/') > 2):
         practice = path.split('/')[2]
         owner = 'practice-' + practice
         if '/voice/' in path:
@@ -98,7 +101,7 @@ for file, path in sorted(sources.items(), key=lambda source: source[1]):
             # The male recording is its own pack per language.
             code = path.split('/voice-male/', 1)[1].split('/')[0]
             owner += '-voice-' + code + '-male'
-    for feature in ('habits', 'lists', 'diary', 'lumi') + NODE_APPS:
+    for feature in ('habits', 'lists', 'diary', 'lumi', 'leaderboard') + NODE_APPS:
         if path.startswith('assets/' + feature + '/'):
             owner = feature
     for prefix in ('build/packages/css/', 'build/packages/kryon/'):
@@ -125,7 +128,8 @@ if not options.node_only:
 
     # Catalog outlines are small metadata, available before an app is installed.
     # The app retains its own copy for standalone and embedded use.
-    for name in NODE_APPS:
+    for name in ('habits', 'practices', 'lists', 'diary', 'leaderboard',
+                 'arcade') + NODE_APPS:
         source = ROOT / 'assets' / name / 'sidebar.shape'
         if source.is_file():
             destination = OUTPUT / 'inbe/assets/apps/icons' / (name + '.shape')
