@@ -10,14 +10,15 @@ mkdir -p "$work/c"
 cd "$root"
 "$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c --no-main \
     --root "$root/src" -o "$work/c" "$root/src/screens/settings/settings_ui.zi"
-for header in "$work/c"/p*_tree.h "$work/c"/p*_tree_input.h "$work/c"/p*_paint_queue.h; do
+for header in "$work/c"/kryon__tree.h "$work/c"/kryon__tree_input.h "$work/c"/kryon__paint_queue.h; do
     test -f "$header"
     printf '#include "%s"\n' "${header##*/}"
 done > "$work/c/settings_test_backend.h"
 "${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \
     -Wl,--gc-sections -I"$root/build/packages/ziran/include" -I"$work/c" \
     "$root/tests/settings_ui_link_test.c" "$work/c"/*.c -lm -o "$work/test"
-env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
+env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+    HARMONY_DESKTOP_RECOVERY=0 "$work/test"
 for widget in device breaks notifications; do
     generated="$work/$widget"
     mkdir -p "$generated"

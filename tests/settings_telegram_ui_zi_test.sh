@@ -15,17 +15,12 @@ python3 scripts/stage-practice-figure.py
 "$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} --target=c --no-main \
     --define PLATFORM_DESKTOP --root "$root/src" \
     -o "$work/storage" "$root/src/storage/storage_thread_buffers.zi"
-for header in "$work/c"/p*_session.h "$work/c"/p*_tree.h "$work/c"/p*_tree_input.h "$work/c"/p*_paint_queue.h "$work/c"/p*_scroll_device.h "$work/c"/p*_scroll.h; do
+for header in "$work/c"/kryon__session.h "$work/c"/kryon__tree.h "$work/c"/kryon__tree_input.h "$work/c"/kryon__paint_queue.h "$work/c"/kryon__scroll_device.h "$work/c"/kryon__scroll.h; do
     test -f "$header"
     printf '#include "%s"\n' "${header##*/}"
 done > "$work/c/settings_telegram_ui_backend.h"
-set -- "$work/c"/p*_scroll.h
-scroll_module=${1##*/}
-printf '#define DrawTestScroll %s_Draw\n' "${scroll_module%.h}" >> "$work/c/settings_telegram_ui_backend.h"
-set -- "$work/c"/p*_scroll_props.h
-props_type=$(sed -n 's/^typedef struct [^ ]* \(zir_[[:xdigit:]]*_Props\);$/\1/p' "$1")
-test -n "$props_type"
-printf 'typedef %s TestScrollProps;\n' "$props_type" >> "$work/c/settings_telegram_ui_backend.h"
+printf '#define DrawTestScroll(session, props) kryon__scroll_Draw((session), (props), (Source_Code_Location){0})\n' >> "$work/c/settings_telegram_ui_backend.h"
+printf 'typedef kryon__scroll_props_Props TestScrollProps;\n' >> "$work/c/settings_telegram_ui_backend.h"
 set -- "$root/tests/settings_telegram_ui_test.c"
 find "$work/c" -type f -name '*.c' -print > "$work/c-files"
 while IFS= read -r generated; do
@@ -39,4 +34,4 @@ done < "$work/c-files"
     -I"$root/build/packages/ziran/include" -I"$work/c" -I"$work/c/screens/settings" \
     "$@" "$work/storage/storage_thread_buffers.c" "$sqlite" "$liboqs" -lm -pthread -o "$work/test"
 env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
-    YUE_DESKTOP_RECOVERY=0 "$work/test"
+    HARMONY_DESKTOP_RECOVERY=0 "$work/test"

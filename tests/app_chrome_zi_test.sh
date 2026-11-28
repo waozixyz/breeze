@@ -13,16 +13,13 @@ cd "$root"
     "$root/src/app/image_dimensions.zi"
 python3 "$root/scripts/embed-app-assets.py" "$work/assets.c" \
     "$root/build/packages/kryon/icons/ui.webp"
-# Project mode prefixes dependency C headers with their package identity.
-for header in "$work/c"/p*_image.h "$work/c"/p*_paint_queue.h "$work/c"/p*_image_raster.h "$work/c"/p*_tree.h; do
+# Project mode uses the dependency module identity in generated C headers.
+for header in "$work/c"/kryon__image.h "$work/c"/kryon__paint_queue.h "$work/c"/kryon__image_raster.h "$work/c"/kryon__tree.h; do
     test -f "$header"
     printf '#include "%s"\n' "${header##*/}"
 done > "$work/c/chrome_test_backend.h"
-set -- "$work/c"/p*_image.h
-image_module=${1##*/}
-printf '#define InstallChromePictures %s_ImageUsePictures\n' "${image_module%.h}" >> "$work/c/chrome_test_backend.h"
-set -- "$work/c"/p*_paint_queue.h
-printf '#include "%s"\n' "${1##*/}" > "$work/c/kryon_raster_test_backend.h"
+printf '#define InstallChromePictures kryon__image_ImageUsePictures\n' >> "$work/c/chrome_test_backend.h"
+printf '#include "kryon__paint_queue.h"\n' > "$work/c/kryon_raster_test_backend.h"
 "${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \
     -Dimage_dimensions_ImageWidth=ImageWidth \
     -Dimage_dimensions_ImageHeight=ImageHeight \
@@ -30,5 +27,6 @@ printf '#include "%s"\n' "${1##*/}" > "$work/c/kryon_raster_test_backend.h"
     -I"$root/src/app" \
     "$root/tests/app_chrome_link_test.c" "$root/tests/kryon_raster_test_host.c" "$work/assets.c" "$work/c"/*.c \
     -lm -o "$work/test"
-env -u DISPLAY -u WAYLAND_DISPLAY "$work/test"
+env -u DISPLAY -u WAYLAND_DISPLAY -u XAUTHORITY -u DBUS_SESSION_BUS_ADDRESS \
+    HARMONY_DESKTOP_RECOVERY=0 "$work/test"
 echo "Inbe title bar Ziran/native link test passed"

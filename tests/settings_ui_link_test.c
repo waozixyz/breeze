@@ -1,4 +1,5 @@
 #include "settings_ui.h"
+#include "settings_ui_ui.h"
 #include "zir_string.h"
 #include "settings_test_backend.h"
 #include "metrics.h"
@@ -96,7 +97,7 @@ int main(void)
     assert(toggle_row_height(label, 300) >= 52);
 
     TreeStart(app.ui.session, 1, (Rectangle){0, 0, 400, 300});
-    assert(!settings_ui_draw_toggle_row(&app, 10, 300, &y, label, &enabled));
+    assert(!settings_ui_ui_draw_toggle_row(&app, 10, 300, &y, label, &enabled));
     assert(enabled == 0);
     assert(draw_audio_meter(&app, 0.5f, 10, 120, 300,
         StringView("Output", 6)) == audio_meter_height());
@@ -112,7 +113,7 @@ int main(void)
 
     y = 10;
     TreeStart(app.ui.session, 1, (Rectangle){0, 0, 400, 300});
-    assert(settings_ui_draw_toggle_row(&app, 10, 300, &y, label, &enabled));
+    assert(settings_ui_ui_draw_toggle_row(&app, 10, 300, &y, label, &enabled));
     assert(enabled == 1);
     assert(TreeFinish(app.ui.session));
     assert(SessionClose(app.ui.session));

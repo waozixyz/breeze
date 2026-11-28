@@ -10,7 +10,7 @@ cd "$root"
 sh "$root/scripts/run-ziran.sh" "$bin/ziran" build --project --offline ${PACKAGE_FLAGS:-} \
     --target=c --no-main --define DESKTOP_HOST --define KRYON_TEST_DRIVER --root "$root" \
     -o "$work/c" "$root/tests/notification_lifecycle_behavior.zi"
-paint_header=$(find "$work/c" -name 'p*_paint_queue.h' -type f)
+paint_header=$(find "$work/c" -name 'kryon__paint_queue.h' -type f)
 test -f "$paint_header"
 printf '#include "%s"\n' "$(basename "$paint_header")" > "$work/c/kryon_raster_test_backend.h"
 cat > "$work/c/image_fixture.c" <<'C'
@@ -32,7 +32,7 @@ C
 # painting fails without starting a desktop surface.
 set --
 for source in "$work/c"/*.c "$work/c/tests"/*.c; do
-    case "$source" in */p*_cairo_raster.c) continue ;; esac
+    case "$source" in */kryon__cairo_raster.c) continue ;; esac
     set -- "$@" "$source"
 done
 "${CC:-cc}" -std=c11 -ffunction-sections -fdata-sections \

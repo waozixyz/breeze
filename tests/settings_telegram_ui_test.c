@@ -1,4 +1,5 @@
 #include "settings_telegram.h"
+#include "settings_telegram_ui.h"
 #include "zir_string.h"
 #include "settings_telegram_ui_backend.h"
 #include "lumi_authorization.h"
@@ -301,7 +302,7 @@ static ScrollResult render(InnerBreeze *app, int32_t offset, bool exhausted)
     ScrollResult scroll = DrawTestScroll(app->ui.session, props);
     assert(scroll.opened);
     int32_t y = (int32_t)scroll.content.y + AppScale(12);
-    settings_telegram_settings_telegram_draw(app, AppScale(16), width, &y);
+    settings_telegram_ui_settings_telegram_draw(app, AppScale(16), width, &y);
     assert(End(app->ui.session));
     assert(TreeFinish(app->ui.session));
     return scroll;

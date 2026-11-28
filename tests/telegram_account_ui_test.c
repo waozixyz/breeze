@@ -1,4 +1,5 @@
 #include "telegram_account.h"
+#include "telegram_account_ui.h"
 #include "zir_string.h"
 #include "telegram_account_ui_backend.h"
 #include "text_buffers.h"
@@ -77,7 +78,7 @@ static int32_t render(InnerBreeze *app, TelegramAccountView *view)
     FrameTextReset(&app->ui.frame_text);
     TreeStart(app->ui.session, 1, (Rectangle){0, 0, app->ui.view_width, app->ui.view_height});
     BeginScrollFrame(app->ui.session, (Vector2){0, 0}, false, false, false, 0, 1.0);
-    int32_t action = telegram_account_DrawTelegramAccount(app, view);
+    int32_t action = telegram_account_ui_DrawTelegramAccount(app, view);
     assert(TreeFinish(app->ui.session));
     for (int32_t i = 0; i < PendingPaintCount(app->ui.session); ++i) {
         PaintCommand paint = PendingPaintAt(app->ui.session, i);
@@ -351,7 +352,7 @@ int main(void)
     AppMetricsConfigure(1.0f);
     assert_grouped_review_text();
     TelegramAccountView view = {0};
-    assert(telegram_account_DrawTelegramAccount(&app, &view) == 0);
+    assert(telegram_account_ui_DrawTelegramAccount(&app, &view) == 0);
     assert(!telegram_account_TelegramAccountActionAllowed(&view, 0));
     assert(!telegram_account_TelegramAccountActionAllowed(&view, 8));
     view.visible = true;
