@@ -5,8 +5,8 @@ Git runs this from .githooks/pre-push with the pushed refs on stdin, so the
 checks that fail most often on GitHub (versions, translations, fonts, the
 canonical UI APIs, the app bundles and the workflows) fail here first, in a
 minute or two. `make pre-push-check` runs it for everything not yet on
-origin/master. The checks read the working tree; `git push --no-verify`
-skips them.
+origin/master. Metadata checks read the working tree. App runtime checks run
+on physical Alpha against each exact pushed candidate.
 """
 
 import os
@@ -62,7 +62,7 @@ def plan(files):
     if any_suffix(".zi", ".ts", ".tsx"):
         checks.append(("canonical UI APIs", ["make", "-s", "clean-text-api-check", "button-api-check"]))
     if any_of("apps/", "src/apps/", "locales/"):
-        checks.append(("app bundles", ["make", "-s", "apps-test"]))
+        checks.append(("app bundles", ["python3", "scripts/release-ready-alpha.py", "apps-test"]))
     if any_of(".github/workflows/", "scripts/package-release.py", "scripts/release",
               "scripts/check-version.py", "tests/release_test.py", "tests/package_workflow_test.py"):
         checks.append(("release workflow", ["python3", "tests/release_test.py"]))
@@ -90,16 +90,23 @@ def run(checks, ranges):
     # Python caches under the checkout would be swept into commits.
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     for name, command in checks:
-        started = time.monotonic()
-        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, env=environment)
-        seconds = time.monotonic() - started
-        if result.returncode == 0:
-            print(f"pre-push: {name} passed ({seconds:.0f} s)")
-            continue
-        output = (result.stdout + result.stderr).strip().splitlines()
-        print("\n".join(output[-25:]))
-        print(f"pre-push: {name} FAILED: {' '.join(command)}")
-        failed.append(name)
+        candidates = list(dict.fromkeys(tip for _, tip in ranges)) if name == "app bundles" else [None]
+        for candidate in candidates:
+            check_environment = dict(environment)
+            label = name
+            if candidate is not None:
+                check_environment["RELEASE_READY_REVISION"] = candidate
+                label += " at " + candidate[:12]
+            started = time.monotonic()
+            result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, env=check_environment)
+            seconds = time.monotonic() - started
+            if result.returncode == 0:
+                print(f"pre-push: {label} passed ({seconds:.0f} s)")
+                continue
+            output = (result.stdout + result.stderr).strip().splitlines()
+            print("\n".join(output[-25:]))
+            print(f"pre-push: {label} FAILED: {' '.join(command)}")
+            failed.append(label)
     return failed
 
 
@@ -117,8 +124,7 @@ def main():
         return 0
     failed = run(plan(files), ranges)
     if failed:
-        print("pre-push: not pushed. Fix: " + ", ".join(failed) +
-              " (git push --no-verify skips these checks)")
+        print("pre-push: not pushed. Fix: " + ", ".join(failed))
         return 1
     return 0
 

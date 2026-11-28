@@ -1060,6 +1060,11 @@ tooling may change after the check; any app change needs a new one.
 
 A release names one fixed commit while peers keep working on master:
 
+The pre-push app-bundle check also uses this Alpha runner, with `apps-test`
+for each exact pushed commit. Metadata and source checks remain local. Its
+target-only run preserves all app assertions and does not create a release
+pass stamp.
+
 1. Add the numeric `CHANGELOG.md` entry, run `./update_version.sh`, and commit
    the intended source. Do not freeze the repository, dependency lock or
    another session's work.
