@@ -119,6 +119,13 @@ with tempfile.TemporaryDirectory(prefix="profile-", dir=OUTPUT) as directory, co
                 assert app.poll() is None, "App crashed"
             finally:
                 stop(app)
+                # Each window case is independent. Terminating its owned app
+                # leaves a recoverable session; do not carry that modal into
+                # the next case in this temporary profile.
+                database = profile / "inbe.db"
+                if database.exists():
+                    with sqlite3.connect(database) as db:
+                        db.execute("DELETE FROM practice_draft")
 
     def capture(window, label):
         path = OUTPUT / (label + ".png")
@@ -643,6 +650,7 @@ with tempfile.TemporaryDirectory(prefix="profile-", dir=OUTPUT) as directory, co
             client_type=connection.intern_atom("WM_PROTOCOLS"),
             data=(32, [connection.intern_atom("WM_DELETE_WINDOW"), X.CurrentTime, 0, 0, 0])),
             event_mask=X.NoEventMask)
+        connection.sync()
         connection.close()
         wait_screen(window, SCREEN_SESSION, "Closing the practice window did not return the practice")
         wait_running(window, "Closing the practice window ended the practice")
@@ -672,7 +680,8 @@ with tempfile.TemporaryDirectory(prefix="profile-", dir=OUTPUT) as directory, co
             ("button-click-to-focus", False, False),
             ("double-tap", True, True)):
         save_settings(dict(advanced_session_controls="1", picture_in_picture="1",
-                           double_tap_to_breathe="1" if double_tap_mode else "0"))
+                           double_tap_to_breathe="1" if double_tap_mode else "0",
+                           sound_volume="80"))
 
         def held():
             if double_tap_mode:
