@@ -9,8 +9,8 @@ apps-controller-zi-test: $(ZIRAN_BIN) $(ZIRAN_BUILD_DIR)/libziran.a $(APPS_BUNDL
 	sh tests/apps_controller_zi_test.sh $(abspath $(ZIRAN_BIN)) $(abspath $(ZIRAN_BUILD_DIR)/libziran.a) $(abspath $(APPS_BUNDLE))
 
 .PHONY: apps-test
-apps-test: library-reader-test apps $(ZIRAN_BUILD_DIR)/libziran.a $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H)
-	sh tests/apps_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
+apps-test: library-reader-test apps $(ZIRAN_BUILD_DIR)/libziran.a $(LIBOQS_A) $(SQLITE_SRC) $(SQLITE_AMALGAMATION_H) $(WEBP_A) $(AUDIO_MP3_A)
+	APPS_TEST_BUNDLES="$(abspath $(BUILD_DIR))" WEBP_A="$(abspath $(WEBP_A))" sh tests/apps_zi_test.sh $(ZIRAN_BIN) $(LIBOQS_A)
 
 .PHONY: apps-platform-test apps-android-probe
 apps-platform-test: apps $(ZIRAN_BUILD_DIR)/libziran.a $(SQLITE_SRC) $(LIBOQS_A)
