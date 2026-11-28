@@ -287,14 +287,20 @@ set(APP_BUNDLE_RUNTIME_DIR "${CMAKE_BINARY_DIR}/bundle-runtime")
 set(APP_BUNDLE_RUNTIME "${APP_BUNDLE_RUNTIME_DIR}/libziran.a")
 # Let Ziran's make check its complete runtime dependency graph on every build.
 # A configure-time build leaves this archive stale after local runtime edits.
+set(APP_BUNDLE_RUNTIME_POOL)
+if(CMAKE_JOB_POOL_COMPILE)
+    list(APPEND APP_BUNDLE_RUNTIME_POOL JOB_POOL "${CMAKE_JOB_POOL_COMPILE}")
+endif()
 add_custom_target(app_bundle_runtime
     BYPRODUCTS "${APP_BUNDLE_RUNTIME}"
     COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/build-bundle-runtime.py"
         --source "${ZIRAN_DIR}" --output "${APP_BUNDLE_RUNTIME_DIR}"
+        --host-zi2c "${ZI2C_BIN}"
         --cc "${CMAKE_C_COMPILER} --target=${CMAKE_C_COMPILER_TARGET} --sysroot=${CMAKE_SYSROOT}"
         --ar "${CMAKE_AR}" --objcopy "${CMAKE_OBJCOPY}"
         "--flags=-O2 -fPIC -ffunction-sections -fdata-sections"
     DEPENDS "${ZI2C_BIN}" "${REPO_ROOT}/scripts/build-bundle-runtime.py"
+    ${APP_BUNDLE_RUNTIME_POOL}
     WORKING_DIRECTORY "${REPO_ROOT}" VERBATIM)
 
 set(APP_EMBEDDED_INPUTS

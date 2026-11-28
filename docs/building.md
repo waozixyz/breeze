@@ -47,6 +47,9 @@ The directory must be inside the resolved Ziran checkout and contain a matching
 without rebuilding its executables; package resolution, target runtime sources,
 source checking and build-law gates still use the current project configuration.
 Direct Gradle builds also accept `-Pziran.hostBinDir=PATH`.
+The portable bundle runtime uses the same selected `zi2c` and invalidates its
+generated output when that compiler payload changes. Its nested build uses
+`ZIRAN_JOBS`, then `CMAKE_BUILD_PARALLEL_LEVEL`, or one worker by default.
 
 Build the web app:
 

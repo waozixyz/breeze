@@ -844,16 +844,16 @@ android-release android-bundle android-copy-release-apks android-copy-fdroid-apk
 # Actual artifacts are gated too, including direct and incremental builds.
 $(TARGET) $(WIN64_TARGET) $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(SYNC_RETRY_SOURCE) | build-laws
 
-BUNDLE_RUNTIME_INPUTS := $(wildcard $(ZIRAN_DIR)/cmd/zir/*.[ch]) $(ZIRAN_DIR)/Makefile scripts/build-bundle-runtime.py
+BUNDLE_RUNTIME_INPUTS := $(wildcard $(ZIRAN_DIR)/cmd/zir/*.[ch]) $(ZIRAN_DIR)/Makefile scripts/build-bundle-runtime.py $(ZI2C_BIN)
 WEB_BUNDLE_RUNTIME := $(abspath $(BUILD_DIR)/bundle-runtime/web/libziran.a)
 WINDOWS_BUNDLE_RUNTIME := $(abspath $(BUILD_DIR)/bundle-runtime/windows/libziran.a)
 CLICK_BUNDLE_RUNTIME := $(abspath $(BUILD_DIR)/bundle-runtime/click/libziran.a)
 $(WEB_BUNDLE_RUNTIME): $(BUNDLE_RUNTIME_INPUTS)
-	python3 scripts/build-bundle-runtime.py --source $(ZIRAN_DIR) --output $(dir $@) --cc '$(WEB_CC)' --ar '$(WEB_AR)' --objcopy true --flags='-O2' --wasm
+	python3 scripts/build-bundle-runtime.py --source $(ZIRAN_DIR) --host-zi2c '$(ZI2C_BIN)' --output $(dir $@) --cc '$(WEB_CC)' --ar '$(WEB_AR)' --objcopy true --flags='-O2' --wasm
 $(WINDOWS_BUNDLE_RUNTIME): $(BUNDLE_RUNTIME_INPUTS)
-	python3 scripts/build-bundle-runtime.py --source $(ZIRAN_DIR) --output $(dir $@) --cc '$(WIN64_CC)' --ar '$(WIN64_AR)' --objcopy x86_64-w64-mingw32-objcopy
+	python3 scripts/build-bundle-runtime.py --source $(ZIRAN_DIR) --host-zi2c '$(ZI2C_BIN)' --output $(dir $@) --cc '$(WIN64_CC)' --ar '$(WIN64_AR)' --objcopy x86_64-w64-mingw32-objcopy
 $(CLICK_BUNDLE_RUNTIME): $(BUNDLE_RUNTIME_INPUTS)
-	python3 scripts/build-bundle-runtime.py --source $(ZIRAN_DIR) --output $(dir $@) --cc '$(AARCH64_CC)' --ar '$(AARCH64_AR)' --objcopy aarch64-linux-gnu-objcopy
+	python3 scripts/build-bundle-runtime.py --source $(ZIRAN_DIR) --host-zi2c '$(ZI2C_BIN)' --output $(dir $@) --cc '$(AARCH64_CC)' --ar '$(AARCH64_AR)' --objcopy aarch64-linux-gnu-objcopy
 $(WIN64_TARGET): $(WINDOWS_BUNDLE_RUNTIME)
 $(WEB_JS_TARGET) $(WEB_CANVAS_TARGET): $(WEB_BUNDLE_RUNTIME)
 $(CLICK_BIN): $(CLICK_BUNDLE_RUNTIME)
