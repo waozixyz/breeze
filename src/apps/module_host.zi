@@ -164,6 +164,9 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
     if slot.kind == MODULE_LUMI {
         if name == "ReadLumiHost" && count == 0 {
             message := ifx identifying then LumiMessage.{.abi = MODULE_ABI} else lumi_message
+            if !identifying && slot.received {
+                message.input = AppTextFromCString(*lumi_message_input[0], LUMI_INPUT_MAX)
+            }
             result.* = EncodeLumiMessage(message, *lumi_codec)
             return 1
         }
@@ -172,7 +175,9 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
             if message.input.count >= LUMI_INPUT_MAX || !AppCopyText(message.input, lumi_message_input[:]) {
                 return 0
             }
-            message.input = AppTextFromCString(*lumi_message_input[0], LUMI_INPUT_MAX)
+            // Keep the owned bytes between calls, and borrow them only while
+            // encoding or returning the result, before the next write.
+            message.input = ""
             lumi_message = message
             slot.received = true
             return 1
@@ -237,9 +242,13 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
             if !HostScalarValid(arguments[0], "string", cast(s32)HostString) {
                 return 0
             }
-            filename := TextFromBytes(BytesFromPointer(arguments[0].data,
-                cast(u64)arguments[0].length))
-            result.* = EncodeDiaryFileResult(DiaryStoreRead(filename), *diary_file_codec)
+            reply: HostValue
+            {
+                filename := TextFromBytes(BytesFromPointer(arguments[0].data,
+                    cast(u64)arguments[0].length))
+                reply = EncodeDiaryFileResult(DiaryStoreRead(filename), *diary_file_codec)
+            }
+            result.* = reply
             return 1
         }
         if name == "SaveDiaryFileHost" && count == 2 && !identifying {
@@ -247,11 +256,15 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
             !HostScalarValid(arguments[1], "string", cast(s32)HostString) {
                 return 0
             }
-            filename := TextFromBytes(BytesFromPointer(arguments[0].data,
-                cast(u64)arguments[0].length))
-            data := TextFromBytes(BytesFromPointer(arguments[1].data,
-                cast(u64)arguments[1].length))
-            result.* = HostScalar("bool", ifx DiaryStoreSave(filename, data) then 1 else 0)
+            saved: bool
+            {
+                filename := TextFromBytes(BytesFromPointer(arguments[0].data,
+                    cast(u64)arguments[0].length))
+                data := TextFromBytes(BytesFromPointer(arguments[1].data,
+                    cast(u64)arguments[1].length))
+                saved = DiaryStoreSave(filename, data)
+            }
+            result.* = HostScalar("bool", ifx saved then 1 else 0)
             return 1
         }
         if name == "DiaryClockHost" && count == 0 && !identifying {
@@ -318,6 +331,7 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
     if slot.kind == MODULE_LISTS {
         if name == "ReadListsHost" && count == 0 {
             message := ifx identifying then ListsMessage.{.abi = MODULE_ABI} else lists_message
+            if !identifying { message = ListsOwnedMessage(message) }
             result.* = EncodeListsMessage(message, *lists_codec)
             return 1
         }
@@ -326,24 +340,7 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
                 return 0
             }
             message := DecodeListsMessage(arguments[0])
-            // VM result strings are borrowed only during this callback.
-            if !AppCopyText(message.id, lists_id[:]) ||
-            !AppCopyText(message.parent_id, lists_parent[:]) ||
-            !AppCopyText(message.selected_id, lists_selected[:]) ||
-            !AppCopyText(message.completing_id, lists_completing[:]) ||
-            !AppCopyText(message.title, lists_title[:]) ||
-            !AppCopyText(message.comment, lists_comment[:]) ||
-            !AppCopyText(message.request_body, lists_request_body[:]) {
-                return 0
-            }
-            message.id = AppTextFromCString(*lists_id[0], 37)
-            message.parent_id = AppTextFromCString(*lists_parent[0], 37)
-            message.selected_id = AppTextFromCString(*lists_selected[0], 37)
-            message.completing_id = AppTextFromCString(*lists_completing[0], 37)
-            message.title = AppTextFromCString(*lists_title[0], ELIST_TITLE_SIZE)
-            message.comment = AppTextFromCString(*lists_comment[0], ELIST_COMMENT_SIZE)
-            message.request_body = AppTextFromCString(*lists_request_body[0], 262144)
-            lists_message = message
+            if !ListsStoreMessage(message) { return 0 }
             slot.received = true
             return 1
         }
@@ -362,6 +359,7 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
     } else if slot.kind == MODULE_HABITS {
         if name == "ReadHabitsHost" && count == 0 {
             message := ifx identifying then HabitsMessage.{.abi = MODULE_ABI} else habits_message
+            if !identifying { message = HabitsOwnedMessage(message) }
             result.* = EncodeHabitsMessage(message, *habits_codec)
             return 1
         }
@@ -370,13 +368,7 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
                 return 0
             }
             message := DecodeHabitsMessage(arguments[0])
-            if !AppCopyText(message.name, habit_name[:]) ||
-            !AppCopyText(message.description, habit_description[:]) {
-                return 0
-            }
-            message.name = AppTextFromCString(*habit_name[0], HABIT_NAME_SIZE)
-            message.description = AppTextFromCString(*habit_description[0], HABIT_DESCRIPTION_SIZE)
-            habits_message = message
+            if !HabitsStoreMessage(message) { return 0 }
             slot.received = true
             return 1
         }
@@ -385,10 +377,13 @@ ModuleHostCall :: (context: *void, module: *u8, function: *u8,
             !HostScalarValid(arguments[1], "s32", cast(s32)HostInteger) {
                 return 0
             }
-            text := TextFromBytes(BytesFromPointer(arguments[0].data,
-                cast(u64)arguments[0].length))
-            result.* = HostScalar("bool", ifx habit_exists(text,
-                cast(s32)arguments[1].integer) then 1 else 0)
+            exists: bool
+            {
+                text := TextFromBytes(BytesFromPointer(arguments[0].data,
+                    cast(u64)arguments[0].length))
+                exists = habit_exists(text, cast(s32)arguments[1].integer)
+            }
+            result.* = HostScalar("bool", ifx exists then 1 else 0)
             return 1
         }
         if name == "SaveHabitHost" && count == 1 && !identifying && habit_save != null {
@@ -1492,6 +1487,9 @@ AppsUiBegin :: (callback: HostCall, context: *void) {
 #program_export
 AppsUiEnd :: () {
     ui_active = false
+    // End of the hosted composition: drop the stored context so no global
+    // keeps the caller's frame records alive after the call returns.
+    ui_context = null
 }
 
 #program_export
@@ -1514,17 +1512,134 @@ DiaryRun :: (message: DiaryMessage) -> DiaryMessage {
     return diary_message
 }
 
+// Form views only while the receiver reads the owned result. Stored messages
+// carry the scalar state, so subsequent callbacks can reuse their byte buffers.
+#scope_file
+ListsScalarMessage :: (message: ListsMessage) -> ListsMessage {
+    return ListsMessage.{
+        .abi = message.abi,
+        .action = message.action,
+        .index = message.index,
+        .selected_list = message.selected_list,
+        .list_count = message.list_count,
+        .item_count = message.item_count,
+        .editing_item = message.editing_item,
+        .done = message.done,
+        .sort_order = message.sort_order,
+        .show_completed = message.show_completed,
+        .now = message.now,
+        .completing_until = message.completing_until,
+        .visibility_deadline = message.visibility_deadline,
+        .succeeded = message.succeeded,
+        .changed = message.changed,
+        .visible = message.visible,
+        .reset_input = message.reset_input,
+        .reset_scroll = message.reset_scroll,
+        .reload = message.reload,
+        .sync = message.sync,
+        .input_error = message.input_error,
+        .screen = message.screen,
+        .shared = message.shared,
+        .remote = message.remote,
+    }
+}
+
+#scope_file
+ListsStoreMessage :: (message: ListsMessage) -> bool {
+    if !AppCopyText(message.id, lists_id[:]) ||
+    !AppCopyText(message.parent_id, lists_parent[:]) ||
+    !AppCopyText(message.selected_id, lists_selected[:]) ||
+    !AppCopyText(message.completing_id, lists_completing[:]) ||
+    !AppCopyText(message.title, lists_title[:]) ||
+    !AppCopyText(message.comment, lists_comment[:]) ||
+    !AppCopyText(message.request_body, lists_request_body[:]) {
+        return false
+    }
+    lists_message = ListsScalarMessage(message)
+    return true
+}
+
+#scope_export
+ListsOwnedMessage :: (message: ListsMessage) -> ListsMessage {
+    owned := ListsScalarMessage(message)
+    owned.id = AppTextFromCString(*lists_id[0], 37)
+    owned.parent_id = AppTextFromCString(*lists_parent[0], 37)
+    owned.selected_id = AppTextFromCString(*lists_selected[0], 37)
+    owned.completing_id = AppTextFromCString(*lists_completing[0], 37)
+    owned.title = AppTextFromCString(*lists_title[0], ELIST_TITLE_SIZE)
+    owned.comment = AppTextFromCString(*lists_comment[0], ELIST_COMMENT_SIZE)
+    owned.request_body = AppTextFromCString(*lists_request_body[0], 262144)
+    return owned
+}
+
+#scope_file
+HabitsScalarMessage :: (message: HabitsMessage) -> HabitsMessage {
+    return HabitsMessage.{
+        .abi = message.abi,
+        .action = message.action,
+        .index = message.index,
+        .count = message.count,
+        .selected = message.selected,
+        .screen_mode = message.screen_mode,
+        .view_mode = message.view_mode,
+        .tab = message.tab,
+        .day_index = message.day_index,
+        .weekdays = message.weekdays,
+        .counter_enabled = message.counter_enabled,
+        .counter_target = message.counter_target,
+        .linked_count = message.linked_count,
+        .sync_activity = message.sync_activity,
+        .sync_mode = message.sync_mode,
+        .reminder_hour = message.reminder_hour,
+        .modal_active = message.modal_active,
+        .scheduled = message.scheduled,
+        .completed = message.completed,
+        .decrement = message.decrement,
+        .is_new = message.is_new,
+        .active = message.active,
+        .color = message.color,
+        .succeeded = message.succeeded,
+        .reset_scroll = message.reset_scroll,
+        .cancel_edit = message.cancel_edit,
+        .name_error = message.name_error,
+        .day_action = message.day_action,
+        .block_click = message.block_click,
+        .screen = message.screen,
+        .question_count = message.question_count,
+        .span = message.span,
+    }
+}
+
+HabitsStoreMessage :: (message: HabitsMessage) -> bool {
+    if !AppCopyText(message.name, habit_name[:]) ||
+    !AppCopyText(message.description, habit_description[:]) {
+        return false
+    }
+    habits_message = HabitsScalarMessage(message)
+    return true
+}
+
+#scope_export
+HabitsOwnedMessage :: (message: HabitsMessage) -> HabitsMessage {
+    owned := HabitsScalarMessage(message)
+    owned.name = AppTextFromCString(*habit_name[0], HABIT_NAME_SIZE)
+    owned.description = AppTextFromCString(*habit_description[0], HABIT_DESCRIPTION_SIZE)
+    return owned
+}
+
 #program_export
 ListsRun :: (message: ListsMessage) -> ListsMessage {
     message.abi = MODULE_ABI
     message.succeeded = false
     AppsFeatureWait(0)
-    lists_message = message
+    if !ListsStoreMessage(message) { return ListsScalarMessage(message) }
     if !ModuleRun(*slots[0]) {
-        message.succeeded = false
-        return message
+        // A guest can have replied before its frame failed. Restore the
+        // original request, including its text, for the failed result.
+        unused ListsStoreMessage(message)
+        return ListsOwnedMessage(ListsScalarMessage(message))
     }
-    return lists_message
+    return ListsOwnedMessage(lists_message)
 }
 
 #program_export
@@ -1544,12 +1659,12 @@ HabitsRun :: (message: HabitsMessage) -> HabitsMessage {
     message.abi = MODULE_ABI
     message.succeeded = false
     AppsFeatureWait(1)
-    habits_message = message
+    if !HabitsStoreMessage(message) { return HabitsScalarMessage(message) }
     if !ModuleRun(*slots[1]) {
-        message.succeeded = false
-        return message
+        unused HabitsStoreMessage(message)
+        return HabitsOwnedMessage(HabitsScalarMessage(message))
     }
-    return habits_message
+    return HabitsOwnedMessage(habits_message)
 }
 
 #program_export
@@ -1775,7 +1890,11 @@ LumiRun :: (message: LumiMessage) -> LumiMessage {
     if !ModuleRun(*slots[5]) {
         return message
     }
-    return lumi_message
+    observed := lumi_message
+    if slots[5].received {
+        observed.input = AppTextFromCString(*lumi_message_input[0], LUMI_INPUT_MAX)
+    }
+    return observed
 }
 
 #program_export

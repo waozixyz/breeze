@@ -64,6 +64,8 @@ EntityHabitLinkedEntries :: (app: *InnerBreeze, habit_index: s32,
     day_filter: s32) -> *HabitLinkedContext #foreign c "habit_cached_linked_entries";
 
 entity_context: AppContext;
+// The runtime context persists between frames, so its input storage does too.
+entity_typed: [1024]u8;
 entity_opened: bool;
 entity_document: string;
 entity_inner_breeze: bool;
@@ -500,8 +502,12 @@ EntityHostCall :: (context: *void, module: *u8, function: *u8,
         return 1
     }
     if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.dew" && DewAvailable() {
-        request := AppArgumentText(arguments[1])
-        result.* = EntityHostText(ifx request == "" then InbeEntityDew() else ifx DewRequestRefresh(request) then "queued" else "rejected")
+        reply: HostValue
+        {
+            request := AppArgumentText(arguments[1])
+            reply = EntityHostText(ifx request == "" then InbeEntityDew() else ifx DewRequestRefresh(request) then "queued" else "rejected")
+        }
+        result.* = reply
         return 1
     }
     if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.activity" {
@@ -510,13 +516,17 @@ EntityHostCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "AppServiceHost" && count == 2 && AppArgumentText(arguments[0]) == "entity.management" {
         InbeManagementStart(app)
-        request := AppArgumentText(arguments[1])
-        if request == "" {
-            Provider.ProviderRefresh(*entity_management)
-            result.* = EntityHostText(entity_management.document)
-        } else {
-            result.* = EntityHostText(ifx Provider.ProviderEnqueue(*entity_management, request) then "queued" else "rejected")
+        reply: HostValue
+        {
+            request := AppArgumentText(arguments[1])
+            if request == "" {
+                Provider.ProviderRefresh(*entity_management)
+                reply = EntityHostText(entity_management.document)
+            } else {
+                reply = EntityHostText(ifx Provider.ProviderEnqueue(*entity_management, request) then "queued" else "rejected")
+            }
         }
+        result.* = reply
         return 1
     }
     if name == "AppLocaleHost" && count == 1 {
@@ -532,8 +542,11 @@ EntityHostCall :: (context: *void, module: *u8, function: *u8,
         path: [4096]u8
         file := Shared.NativeJoin(path[:], data_root(), AppArgumentText(arguments[0]))
         if name == "WriteStoreHost" {
-            value := AppArgumentText(arguments[1])
-            saved := (value == "-" || ReferralModel.ReferralToken(value)) && Shared.NativeWrite(file, value)
+            saved: bool
+            {
+                value := AppArgumentText(arguments[1])
+                saved = (value == "-" || ReferralModel.ReferralToken(value)) && Shared.NativeWrite(file, value)
+            }
             result.* = HostScalar("bool", ifx saved then 1 else 0)
         } else {
             bytes: [129]u8
@@ -597,12 +610,16 @@ EntityHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
         entity_context.allows = EntityHostAllows
         entity_context.services = EntityHostCall
         entity_context.widgets = WidgetHostCall
-        if !AppContextOpen(*entity_context, bundle.data) { return false }
+        if !AppContextOpen(*entity_context, bundle.data) {
+            entity_context.input = .{}
+            entity_context.input_codec = .{}
+            entity_context.area_codec = .{}
+            return false
+        }
         entity_opened = true
     }
     InbeManagementPump(app)
     EntityHostReferralPump(app)
-    typed: [1024]u8
     if entity_reload_after_route {
         entity_context.command = "reload"
         unused AppContextRun(*entity_context, Portable.APP_COMMAND)
@@ -637,11 +654,12 @@ EntityHostFrame :: (app: *InnerBreeze, bounds: Rectangle) -> bool {
     entity_context.dark = app.dark_mode != 0
     entity_context.scale = MetricsScale()
     entity_context.font = AppFontSize()
-    entity_context.input = SampleTextFieldInput(true, typed[:])
+    if !AppContextSetInput(*entity_context, SampleTextFieldInput(true, entity_typed[:])) {
+        return false
+    }
     WidgetHostBegin(app.ui.session, EntityHostAssetAllowed)
     ran := AppContextRun(*entity_context, Portable.APP_FRAME)
     WidgetHostEnd()
-    entity_context.input = .{}
     InbeManagementPump(app)
     EntityHostReferralPump(app)
     if !ran { return false }

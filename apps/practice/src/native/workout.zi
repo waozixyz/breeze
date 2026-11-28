@@ -1,3 +1,4 @@
+#import "vec"
 #import "workout_ui"
 #import "practice_title_bar_ui"
 #import "application_close_ui"
@@ -231,7 +232,7 @@ WorkoutRecoveryDecode :: (draft: *PracticeRecoveryDraft, state: *WorkoutRecovery
     count := WorkoutRoutineCount(state.routine)
     if state.routine == WORKOUT_ROUTINE_CUSTOM {
         if !WorkoutPlanDecode(TextFromBytes(draft.resume.definition[:draft.resume.definition_length]), *state.plan) ||
-            !WorkoutPlanExpand(*state.plan, *state.sequence) {
+        !WorkoutPlanExpand(*state.plan, *state.sequence) {
             return false
         }
         count = state.sequence.count
@@ -244,7 +245,7 @@ WorkoutRecoveryDecode :: (draft: *PracticeRecoveryDraft, state: *WorkoutRecovery
     }
     slots := (draft.resume.count - WORKOUT_RECOVERY_HEADER) / 2
     if draft.resume.count != WORKOUT_RECOVERY_HEADER + slots * 2 ||
-        (slots != count && !(slots == WORKOUT_EXERCISE_COUNT && count <= WORKOUT_EXERCISE_COUNT)) {
+    (slots != count && !(slots == WORKOUT_EXERCISE_COUNT && count <= WORKOUT_EXERCISE_COUNT)) {
         return false
     }
     for index: cast(s32)0..slots - 1 {
@@ -493,9 +494,11 @@ WorkoutExitPrompt :: (app: *InnerBreeze) -> s32 {
     if app.modal.active == 0 || app.modal.type != cast(ModalType)ModalConfirmExitSession {
         return 0
     }
+    // Keep the neutral words of the other timed practices alive through the modal.
+    save_message: Text = TextCopy(LocaleText("patterns_save_elapsed_message"))
+    discard_message: Text = TextCopy(LocaleText("patterns_under_minute_exit_message"))
     result := app_draw_session_exit_modal(app, ifx WorkoutPlayedSeconds() >= 60 then 1 else 0,
-        // The neutral words of the other timed practices; this is not a meditation.
-        LocaleText("patterns_save_elapsed_message"), LocaleText("patterns_under_minute_exit_message"))
+        TextView(save_message), TextView(discard_message))
     if result == cast(SessionExitModalResult)SessionExitModalCancel {
         app_close_modal(app)
         app.session_paused = workout_exit_was_paused
@@ -537,7 +540,8 @@ WorkoutGentleText :: (exercise: s32, tip: bool) -> string {
 
 WorkoutExerciseText :: (app: *InnerBreeze, prefix: string, exercise: s32) -> string {
     if WorkoutGentleExercise(exercise) {
-        return WorkoutGentleText(exercise, prefix == "workout_tip_")
+        return FrameTextHold(*app.ui.frame_text,
+            WorkoutGentleText(exercise, prefix == "workout_tip_"))
     }
     key: [64]u8
     return WorkoutText(app, WorkoutKeyFor(prefix, exercise, key[:]))
@@ -551,21 +555,21 @@ WorkoutHeading :: (app: *InnerBreeze, step: WorkoutStep) -> string {
 // "Get into position" while waiting, "Exercise 2 of 12" while working.
 WorkoutSubheading :: (app: *InnerBreeze, step: WorkoutStep) -> string {
     if workout_startup == WORKOUT_START_WAITING {
-        return LocaleText("workout_loading_scene")
+        return FrameTextHold(*app.ui.frame_text, LocaleText("workout_loading_scene"))
     }
     if step.phase == WORKOUT_PHASE_PREPARE { return "" }
     if step.phase == WORKOUT_PHASE_REST && workout_routine == WORKOUT_ROUTINE_CUSTOM {
-        return LocaleText("workout_custom_transition")
+        return FrameTextHold(*app.ui.frame_text, LocaleText("workout_custom_transition"))
     }
     if step.phase == WORKOUT_PHASE_REST && WorkoutGentleExercise(step.exercise) {
-        return LocaleText("workout_rest_before_next")
+        return FrameTextHold(*app.ui.frame_text, LocaleText("workout_rest_before_next"))
     }
     if step.phase != WORKOUT_PHASE_WORK {
-        return LocaleText("workout_get_into_position")
+        return FrameTextHold(*app.ui.frame_text, LocaleText("workout_get_into_position"))
     }
     buffer: [160]u8
     args: [2]FormatArg = .[FormatArg.{.number = step.index + 1},
-        FormatArg.{.number = WorkoutActiveCount()}]
+    FormatArg.{.number = WorkoutActiveCount()}]
     unused FormatTemplate(LocaleText("workout_exercise_number"), args[:], buffer[:])
     return FrameTextHold(*app.ui.frame_text, TextUntilNul(buffer[:]))
 }
@@ -575,12 +579,12 @@ WorkoutTip :: (app: *InnerBreeze, step: WorkoutStep) -> string {
     if workout_routine == WORKOUT_ROUTINE_CUSTOM && step.index >= 0 && step.index < workout_custom.count {
         variant := workout_custom.blocks[step.index].variant
         if variant != WORKOUT_CUSTOM_ORDINARY {
-            return LocaleText(WorkoutBuilderVariantKey(variant))
+            return FrameTextHold(*app.ui.frame_text, LocaleText(WorkoutBuilderVariantKey(variant)))
         }
     }
     if workout_routine != WORKOUT_ROUTINE_CUSTOM && step.phase == WORKOUT_PHASE_WORK && step.exercise == WORKOUT_SIDE_PLANK &&
     step.elapsed_ms >= WORKOUT_SIDE_SWITCH_MS && step.elapsed_ms < WORKOUT_SIDE_SWITCH_MS + 3000 {
-        return LocaleText("workout_switch_sides")
+        return FrameTextHold(*app.ui.frame_text, LocaleText("workout_switch_sides"))
     }
     return WorkoutExerciseText(app, "workout_tip_", step.exercise)
 }
@@ -717,14 +721,18 @@ WorkoutSessionFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
 }
 
 WorkoutDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
-    title := WorkoutTitle(workout_routine)
-    custom_title: [WORKOUT_CUSTOM_NAME_LIMIT]u8
-    if workout_routine == WORKOUT_ROUTINE_CUSTOM {
-        title = FrameTextHold(*app.ui.frame_text, WorkoutSequenceName(*workout_custom, custom_title[:]))
-    }
     top := PracticeTitleBarHeight()
-    if PracticeTitleBar(app, title, top) {
-        WorkoutRequestExit(app)
+    {
+        title: string
+        custom_title: [WORKOUT_CUSTOM_NAME_LIMIT]u8
+        if workout_routine == WORKOUT_ROUTINE_CUSTOM {
+            title = FrameTextHold(*app.ui.frame_text, WorkoutSequenceName(*workout_custom, custom_title[:]))
+        } else {
+            title = FrameTextHold(*app.ui.frame_text, WorkoutTitle(workout_routine))
+        }
+        if PracticeTitleBar(app, title, top) {
+            WorkoutRequestExit(app)
+        }
     }
     if WorkoutExitPrompt(app) != 0 {
         return

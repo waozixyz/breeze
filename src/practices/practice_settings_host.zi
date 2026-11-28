@@ -20,6 +20,7 @@ save_settings :: (app: *InnerBreeze) #foreign c3 "save_settings";
 #import "hosted_values"
 #import "widget_host"
 #import "file_download"
+#import "vec"
 #import, file "../app/app_types.zi";
 #import, file "../app/modal_rules.zi";
 #import, file "../app/app_settings.zi";
@@ -58,8 +59,11 @@ practice_settings_character_codec: WidgetPracticeCharacterChoiceCodec;
 // The languages narration is listed in this frame: each one's pack, code,
 // name, state and place among the app's languages.
 practice_settings_packs: [PRACTICE_SETTINGS_LANGUAGE_MAX]s32;
-practice_settings_codes: [PRACTICE_SETTINGS_LANGUAGE_MAX]string;
-practice_settings_labels: [PRACTICE_SETTINGS_LANGUAGE_MAX]string;
+PracticeSettingsLanguageText :: struct {
+    code: Text
+    label: Text
+}
+practice_settings_languages: [PRACTICE_SETTINGS_LANGUAGE_MAX]PracticeSettingsLanguageText;
 practice_settings_ranks: [PRACTICE_SETTINGS_LANGUAGE_MAX]s32;
 
 PracticeSettingsCall :: (context: *void, module: *u8, function: *u8,
@@ -100,7 +104,7 @@ PracticeSettingsCall :: (context: *void, module: *u8, function: *u8,
         index := cast(s32)arguments[0].integer
         choice: PracticeNarrationChoice
         if index >= 0 && index < practice_settings_frame.narration_count {
-            choice = PracticeNarrationChoice.{.label = practice_settings_labels[index],
+            choice = PracticeNarrationChoice.{.label = TextView(practice_settings_languages[index].label),
                 .state = PracticeNarrationState(practice_settings_packs[index]),
                 .rank = practice_settings_ranks[index]}
         }
@@ -119,10 +123,14 @@ PracticeSettingsCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "SettingsLocaleHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
+        reply: HostValue
+        {
+            key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            text := LocaleText(key)
+            reply = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+        }
+        result.* = reply
         return 1
     }
     return 0
@@ -197,18 +205,24 @@ practice_settings_narration :: (app: *InnerBreeze, practice: s32, frame: *Practi
     }
     PracticeContentReviewNext()
     count: s32 = 0
-    spoken := PracticeNarrationLanguage(practice, voice)
-    shown := ifx spoken.count > 0 then spoken else PracticeNarrationPreferred(practice)
+    shown_bytes: [16]u8
+    unused AppCopyText(PracticeNarrationShownLanguage(practice, voice), shown_bytes[:])
+    shown := AppTextFromCString(*shown_bytes[0], 16)
     frame.narration_selected = -1
     for rank: cast(s32)0..LocaleLanguageCount() - 1 {
-        language := LocaleLanguageAt(rank)
-        index := PracticeNarrationPack(practice, language.code, voice)
+        index := PracticeNarrationPackAt(practice, rank, voice)
         if index < 0 || count >= PRACTICE_SETTINGS_LANGUAGE_MAX {
             continue
         }
+        language := LocaleLanguageAt(rank)
         practice_settings_packs[count] = index
-        practice_settings_codes[count] = language.code
-        practice_settings_labels[count] = language.label
+        cached := *practice_settings_languages[count]
+        if TextView(cached.code) != language.code {
+            cached.code = TextCopy(language.code)
+        }
+        if TextView(cached.label) != language.label {
+            cached.label = TextCopy(language.label)
+        }
         practice_settings_ranks[count] = rank
         if language.code == shown {
             frame.narration_selected = count
@@ -391,13 +405,13 @@ practice_settings_apply :: (app: *InnerBreeze, practice: s32, frame: PracticeSet
         practice_settings_save(app)
     } else if action == PRACTICE_SETTINGS_LANGUAGE && value >= 0 && value < frame.narration_count {
         if practice == EXERCISE_ASTRAL_PROJECTION {
-            unused AppCopyText(practice_settings_codes[value], app.astral_projection_narration_language[:])
+            unused AppCopyText(TextView(practice_settings_languages[value].code), app.astral_projection_narration_language[:])
         } else if practice == EXERCISE_SUN_SALUTATION {
-            unused AppCopyText(practice_settings_codes[value], app.sun_salutation_narration_language[:])
+            unused AppCopyText(TextView(practice_settings_languages[value].code), app.sun_salutation_narration_language[:])
         } else if practice == EXERCISE_TAI_CHI {
-            unused AppCopyText(practice_settings_codes[value], app.tai_chi_narration_language[:])
+            unused AppCopyText(TextView(practice_settings_languages[value].code), app.tai_chi_narration_language[:])
         }
-        PracticeNarrationPrefer(practice, practice_settings_codes[value])
+        PracticeNarrationPrefer(practice, TextView(practice_settings_languages[value].code))
         PracticeNarrationDownload(practice_settings_packs[value])
         practice_settings_save(app)
     } else if action == PRACTICE_SETTINGS_LANGUAGE_ACTION && value >= 0 && value < frame.narration_count {

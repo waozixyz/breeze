@@ -31,12 +31,17 @@ PracticeDownloadLocked :: (practice: s32) -> bool {
 }
 
 PracticeDownloadPriceText :: (app: *InnerBreeze, key: string) -> string {
+    range := PracticeDownloadPriceRange(app, key)
+    return FrameTextRead(*app.ui.frame_text, range)
+}
+
+PracticeDownloadPriceRange :: (app: *InnerBreeze, key: string) -> FrameTextRange {
     price: [32]u8
     unused DewFormat(unlock_price, DewUnits, price[:])
     args: [1]FormatArg = .[FormatArg.{.text = TextUntilNul(price[:]), .is_text = true}]
     buffer: [256]u8
     unused FormatTemplate(LocaleText(key), args[:], buffer[:])
-    return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
+    return FrameTextSave(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
 }
 
 // Narration follows its practice in the language it speaks, so it counts in
@@ -127,12 +132,12 @@ PracticeDownloadNote :: (practice: s32) -> string {
     return ""
 }
 
-PracticeDownloadActionLabel :: (app: *InnerBreeze, practice: s32, action: s32) -> string {
+PracticeDownloadActionLabel :: (app: *InnerBreeze, practice: s32, action: s32) -> FrameTextRange {
     if action == PRACTICE_OFFER_BUY {
-        return PracticeDownloadPriceText(app, "practice_unlock_button")
+        return PracticeDownloadPriceRange(app, "practice_unlock_button")
     }
     if action == PRACTICE_OFFER_DOWNLOADING {
-        return LocaleText("practice_download_busy")
+        return FrameTextSave(*app.ui.frame_text, LocaleText("practice_download_busy"))
     }
     // The size rides on the button, so the row's text stays short.
     size: [32]u8
@@ -142,7 +147,7 @@ PracticeDownloadActionLabel :: (app: *InnerBreeze, practice: s32, action: s32) -
     unused AppCopyText(caption, label[:])
     unused AppAppendText(" · ", label[:])
     unused AppAppendText(TextUntilNul(size[:]), label[:])
-    return FrameTextHold(*app.ui.frame_text, TextUntilNul(label[:]))
+    return FrameTextSave(*app.ui.frame_text, TextUntilNul(label[:]))
 }
 
 // Does what a card's download button says.
@@ -173,12 +178,21 @@ PracticeDownloadsTick :: () {
 
 // What Practice's home shows for a practice: the button in place of Start
 // and the lines under its title.
-PracticeOfferFill :: (app: *InnerBreeze, practice: s32, frame: *PracticeHomeFrame) {
+PracticeOfferText :: struct {
+    note: FrameTextRange
+    label: FrameTextRange
+    regular_price: FrameTextRange
+    discount: FrameTextRange
+}
+
+PracticeOfferFill :: (app: *InnerBreeze, practice: s32,
+    frame: *PracticeHomeFrame) -> PracticeOfferText {
+    text: PracticeOfferText
     offer := PracticeDownloadAction(practice)
     frame.ready = PracticeDownloadReady(practice)
     frame.offer = offer
     frame.status = ""
-    frame.note = PracticeDownloadNote(practice)
+    text.note = FrameTextSave(*app.ui.frame_text, PracticeDownloadNote(practice))
     if offer != PRACTICE_OFFER_NONE {
         disabled := app.modal.active != 0 || practice_active(app) != null
         if offer == PRACTICE_OFFER_DOWNLOADING {
@@ -188,19 +202,19 @@ PracticeOfferFill :: (app: *InnerBreeze, practice: s32, frame: *PracticeHomeFram
         } else if offer == PRACTICE_OFFER_INSTALL {
             disabled = disabled || !PracticePackReviewed(practice, "")
         }
-        frame.offer_label = PracticeDownloadActionLabel(app, practice, offer)
+        text.label = PracticeDownloadActionLabel(app, practice, offer)
         frame.offer_disabled = disabled
     }
     frame.priced = PracticeDownloadLocked(practice) && !PracticePreviewReady(practice)
     if !frame.priced {
-        return
+        return text
     }
     DewRatesRefresh()
     if UnlockOffer() && unlock_regular_price > 0 {
         regular: [32]u8
         unused DewFormat(unlock_regular_price, DewUnits, regular[:])
         unused AppAppendText(" Dew", regular[:])
-        frame.regular_price = FrameTextHold(*app.ui.frame_text, TextUntilNul(regular[:]))
+        text.regular_price = FrameTextSave(*app.ui.frame_text, TextUntilNul(regular[:]))
         percent := ((unlock_regular_price - unlock_price) * 100 + unlock_regular_price / 2) /
         unlock_regular_price
         badge: [16]u8
@@ -209,6 +223,7 @@ PracticeOfferFill :: (app: *InnerBreeze, practice: s32, frame: *PracticeHomeFram
         unused AppFormatS64(percent, number[:])
         unused AppAppendText(TextUntilNul(number[:]), badge[:])
         unused AppAppendText("%", badge[:])
-        frame.discount = FrameTextHold(*app.ui.frame_text, TextUntilNul(badge[:]))
+        text.discount = FrameTextSave(*app.ui.frame_text, TextUntilNul(badge[:]))
     }
+    return text
 }

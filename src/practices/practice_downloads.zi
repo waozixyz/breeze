@@ -5,6 +5,7 @@
 #import "file_linux"
 #import "json_scan"
 #import "byte_text_linux"
+#import "text_buffer"
 #import "std/c_string"
 #import "mesh_client/crypto"
 #import "vec"
@@ -363,8 +364,13 @@ PracticeDefaultBytes :: (index: s32) -> string {
 }
 
 PracticeShippedBytes :: (index: s32) -> string {
-    bytes := PracticeDefaultBytes(index)
-    return ifx bytes.count > 0 then bytes else PracticeShippedFrom(index, "shipped/")
+    {
+        bytes := PracticeDefaultBytes(index)
+        if bytes.count > 0 {
+            return bytes
+        }
+    }
+    return PracticeShippedFrom(index, "shipped/")
 }
 
 // The practice comes with the app, so adding it needs no network.
@@ -605,9 +611,9 @@ PracticeDownloadFailed :: (index: s32, reason: string, http_status: s32 = 0) {
     unused CopyCString(reason, pack.failure_error[:])
     recovery := DownloadRecovery.{.attempts = pack.attempts}
     retryable := DownloadRetryable(http_status) ||
-        pack.product[0] != cast(u8)0 && (http_status == 401 || http_status == 403)
+    pack.product[0] != cast(u8)0 && (http_status == 401 || http_status == 403)
     if pack.attempts < PracticeDownloadRetries && retryable &&
-        DownloadRecoverySchedule(*recovery, DownloadRecoveryNow()) {
+    DownloadRecoverySchedule(*recovery, DownloadRecoveryNow()) {
         pack.attempts = recovery.attempts
         pack.retry_at = recovery.retry_at
         practice_packs[index].requested = true
@@ -922,6 +928,25 @@ PracticeNarrationPack :: (content: s32, language: string, voice: string) -> s32 
     return -1
 }
 
+// Catalog loading may replace provider views; keep the index code separate.
+PracticeNarrationPackAt :: (content: s32, rank: s32, voice: string) -> s32 {
+    code: [16]u8
+    if !AppCopyText(LocaleLanguageAt(rank).code, code[:]) {
+        return -1
+    }
+    return PracticeNarrationPack(content, TextUntilNul(code[:]), voice)
+}
+
+PracticeNarrationShownLanguage :: (content: s32, voice: string) -> string {
+    {
+        spoken := PracticeNarrationLanguage(content, voice)
+        if spoken.count > 0 {
+            return spoken
+        }
+    }
+    return PracticeNarrationPreferred(content)
+}
+
 // 0 not on this device, 1 downloading, 2 on this device, 3 failed.
 PracticeNarrationState :: (index: s32) -> s32 {
     if index < 0 || index >= practice_pack_count {
@@ -939,15 +964,23 @@ PracticePreviewNarrationLanguage :: (content: s32, voice: string) -> string {
     if !PracticePreviewReady(content) {
         return ""
     }
-    preferred := PracticeNarrationPreferred(content)
-    active := LocaleActiveCode()
+    preferred_bytes: [16]u8
+    active_bytes: [16]u8
+    unused AppCopyText(PracticeNarrationPreferred(content), preferred_bytes[:])
+    unused AppCopyText(LocaleActiveCode(), active_bytes[:])
     for index: cast(s32)0..LocaleLanguageCount() + 1 {
-        code := preferred
-        if index == 1 {
-            code = active
-        } else if index >= 2 {
-            code = LocaleLanguageAt(index - 2).code
+        candidate: [16]u8
+        if index == 0 {
+            unused AppCopyText(TextUntilNul(preferred_bytes[:]), candidate[:])
         }
+        if index == 1 {
+            unused AppCopyText(TextUntilNul(active_bytes[:]), candidate[:])
+        } else if index >= 2 {
+            if !AppCopyText(LocaleLanguageAt(index - 2).code, candidate[:]) {
+                continue
+            }
+        }
+        code := TextUntilNul(candidate[:])
         base := PackageText("assets/practices/taichi-preview/",
             ifx voice == "male" then "voice-male/" else "voice/")
         localized := PackageText(base, code)
@@ -957,7 +990,13 @@ PracticePreviewNarrationLanguage :: (content: s32, voice: string) -> string {
         PackageFree(localized)
         PackageFree(path)
         if found {
-            return code
+            if index == 0 {
+                return PracticeNarrationPreferred(content)
+            }
+            if index == 1 {
+                return LocaleActiveCode()
+            }
+            return LocaleLanguageAt(index - 2).code
         }
     }
     return ""
@@ -968,8 +1007,12 @@ PracticePreviewNarrationLanguage :: (content: s32, voice: string) -> string {
 // language order; "" without any. Guides stay in the selected language.
 PracticeNarrationLanguage :: (content: s32, voice: string) -> string {
     PracticeCatalogLoad()
-    preferred := PracticeNarrationPreferred(content)
-    app_language := LocaleActiveCode()
+    preferred_bytes: [16]u8
+    app_language_bytes: [16]u8
+    unused AppCopyText(PracticeNarrationPreferred(content), preferred_bytes[:])
+    unused AppCopyText(LocaleActiveCode(), app_language_bytes[:])
+    preferred := TextUntilNul(preferred_bytes[:])
+    app_language := TextUntilNul(app_language_bytes[:])
     best: s32 = -1
     best_rank: s32 = 0
     for index: cast(s32)0..practice_pack_count - 1 {
@@ -1067,7 +1110,9 @@ PracticeNarrationDeclined :: (index: s32, declined: bool) {
 // The bytes of the narration that follows a practice: its pack in the language
 // and voice it should speak, unless that language was removed.
 PracticeNarrationFollowingBytes :: (content: s32) -> s64 {
-    index := PracticeNarrationPack(content, PracticeNarrationPreferred(content), PracticeVoiceFor(content))
+    language: [16]u8
+    unused AppCopyText(PracticeNarrationPreferred(content), language[:])
+    index := PracticeNarrationPack(content, TextUntilNul(language[:]), PracticeVoiceFor(content))
     return ifx index < 0 || practice_packs[index].declined then 0 else practice_packs[index].size
 }
 
@@ -1126,7 +1171,9 @@ PracticeNarrationRequest :: (guide: bool, language: string) {
 // Narration downloads by itself in the language it should speak, unless the
 // person removed that language. A failed download waits for the next start.
 PracticeNarrationEnsure :: (content: s32) {
-    index := PracticeNarrationPack(content, PracticeNarrationPreferred(content), PracticeVoiceFor(content))
+    language: [16]u8
+    unused AppCopyText(PracticeNarrationPreferred(content), language[:])
+    index := PracticeNarrationPack(content, TextUntilNul(language[:]), PracticeVoiceFor(content))
     if index < 0 {
         return
     }
@@ -1200,13 +1247,13 @@ PracticeProduct :: (practice: s32) -> string {
 // Public basics ship under a separate path; paid pack state stays unchanged.
 PracticePreviewReady :: (practice: s32) -> bool {
     return !practice_catalog_invalid && practice == PracticeContentIndex("taichi") &&
-        AssetRead("assets/practices/taichi-preview/course.zip").found &&
-        AssetRead("assets/practices/taichi-preview/flat-edge.png").found
+    AssetRead("assets/practices/taichi-preview/course.zip").found &&
+    AssetRead("assets/practices/taichi-preview/flat-edge.png").found
 }
 
 PracticeHidden :: (practice: s32) -> bool {
     return !PracticePreviewReady(practice) &&
-        !practice_paid_allowed && PracticeProduct(practice).count > 0
+    !practice_paid_allowed && PracticeProduct(practice).count > 0
 }
 
 // Practice's home offers only installed practices.
@@ -1545,8 +1592,12 @@ PracticeDownloadsPump :: (selected: s32, narration: bool, guide_narration: bool,
         return
     }
     voice := PracticeVoiceFor(selected)
-    spoken := PracticeNarrationLanguage(selected, voice)
-    guide_spoken := PracticeNarrationLanguage(PracticeGuide, "")
+    spoken_bytes: [16]u8
+    unused AppCopyText(PracticeNarrationLanguage(selected, voice), spoken_bytes[:])
+    guide_spoken_bytes: [16]u8
+    unused AppCopyText(PracticeNarrationLanguage(PracticeGuide, ""), guide_spoken_bytes[:])
+    spoken := TextFromCString(*spoken_bytes[0])
+    guide_spoken := TextFromCString(*guide_spoken_bytes[0])
     changed := selected != practice_selected || narration != practice_narration_selected ||
     guide_narration != practice_guide_narration_selected ||
     voice != TextFromCString(*practice_voice_selected[0]) ||
@@ -1650,8 +1701,8 @@ PracticeTransfersPump :: (narration_only: bool) {
                 continue
             }
             if practice_packs[index].attempts > 0 &&
-                !DownloadRecoveryReady(DownloadRecovery.{.retry_at = practice_packs[index].retry_at},
-                    DownloadRecoveryNow()) { continue }
+            !DownloadRecoveryReady(DownloadRecovery.{.retry_at = practice_packs[index].retry_at},
+                DownloadRecoveryNow()) { continue }
             if narration_only && practice_packs[index].language[0] == cast(u8)0 {
                 continue
             }

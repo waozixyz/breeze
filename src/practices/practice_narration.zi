@@ -19,7 +19,9 @@ practice_voice_paused: bool;
 // The clip's packed path; empty without a downloaded language. Files keep
 // their .ogg name: recordings are Ogg Opus, or Ogg Vorbis in older packs.
 PracticeNarrationPath :: (practice: string, key: string, path: []u8) -> string {
-    language := PracticeNarrationLanguage(PracticeContentIndex(practice), PracticeVoiceChoice())
+    language_bytes: [16]u8
+    unused AppCopyText(PracticeNarrationLanguage(PracticeContentIndex(practice), PracticeVoiceChoice()), language_bytes[:])
+    language := AppTextFromCString(*language_bytes[0], 16)
     if language.count == 0 {
         return ""
     }
@@ -99,19 +101,28 @@ PracticeNarrationUpdate :: (app: *InnerBreeze, practice: string, key: string) {
         PracticeNarrationStop()
         return
     }
-    language := PracticeNarrationLanguage(PracticeContentIndex(practice), PracticeVoiceChoice())
-    changed := !practice_voice || TextFromCString(*practice_voice_key[0]) != key ||
-    TextFromCString(*practice_voice_language[0]) != language ||
-    TextFromCString(*practice_voice_choice_playing[0]) != PracticeVoiceChoice()
+    changed: bool
+    {
+        language := PracticeNarrationLanguage(PracticeContentIndex(practice), PracticeVoiceChoice())
+        changed = !practice_voice || TextFromCString(*practice_voice_key[0]) != key ||
+        TextFromCString(*practice_voice_language[0]) != language ||
+        TextFromCString(*practice_voice_choice_playing[0]) != PracticeVoiceChoice()
+        if changed {
+            PracticeNarrationStop()
+            unused AppCopyText(key, practice_voice_key[:])
+            unused AppCopyText(language, practice_voice_language[:])
+            unused AppCopyText(PracticeVoiceChoice(), practice_voice_choice_playing[:])
+        }
+    }
     if changed {
-        PracticeNarrationStop()
-        unused AppCopyText(key, practice_voice_key[:])
-        unused AppCopyText(language, practice_voice_language[:])
-        unused AppCopyText(PracticeVoiceChoice(), practice_voice_choice_playing[:])
         path: [256]u8
         found := PracticeNarrationPath(practice, key, path[:])
-        clip := ifx found.count > 0 then AssetRead(found) else AssetView.{}
-        if clip.found && OggClipMilliseconds(clip.data) > 0 {
+        valid_clip: bool
+        {
+            clip := ifx found.count > 0 then AssetRead(found) else AssetView.{}
+            valid_clip = clip.found && OggClipMilliseconds(clip.data) > 0
+        }
+        if valid_clip {
             app_audio_ensure_ready(app)
             if app.audio_ready != 0 {
                 practice_voice = VoiceAudioStart(app, VoiceAudioPractice, found,

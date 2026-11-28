@@ -17,32 +17,34 @@ NodeAppEmbeddedRelease :: (name: string) -> PackageRelease {
     if !NodeAppNameValid(name) {
         return PackageRelease.{}
     }
-    metadata := AssetRead("assets/apps/bundled/releases.json")
-    if !metadata.found || metadata.data.count > 16384 {
-        return PackageRelease.{}
-    }
-    at := FieldAt(metadata.data, 0, name)
-    api := PackageNumber(metadata.data, at, "host_api")
-    index := NodeAppSlotFor(name)
-    oldest := PackageHostAPIOldestFor(ifx index >= 0 then NodeAppIndex(index) else -1)
-    if at < 0 || api < oldest || api > PackageHostAPI {
-        return PackageRelease.{}
-    }
-    release: PackageRelease
-    unused PackageField(metadata.data, at, "version", release.version[:])
-    unused PackageField(metadata.data, at, "sha256", release.hash[:])
-    unused PackageField(metadata.data, at, "key_id", release.key_id[:])
-    release.size = PackageNumber(metadata.data, at, "bytes")
-    release.sequence = cast(s32)PackageNumber(metadata.data, at, "sequence")
-    id: [32]u8
     expected := PackageText("inbe.", name)
     defer {
         PackageFree(expected)
     }
-    if PackageField(metadata.data, at, "id", id[:]) != expected ||
-    release.size <= 0 || release.size > PackageMaximumBytes || release.sequence < 1 ||
-    release.version[0] == 0 {
-        return PackageRelease.{}
+    release: PackageRelease
+    {
+        metadata := AssetRead("assets/apps/bundled/releases.json")
+        if !metadata.found || metadata.data.count > 16384 {
+            return PackageRelease.{}
+        }
+        at := FieldAt(metadata.data, 0, name)
+        api := PackageNumber(metadata.data, at, "host_api")
+        index := NodeAppSlotFor(name)
+        oldest := PackageHostAPIOldestFor(ifx index >= 0 then NodeAppIndex(index) else -1)
+        if at < 0 || api < oldest || api > PackageHostAPI {
+            return PackageRelease.{}
+        }
+        unused PackageField(metadata.data, at, "version", release.version[:])
+        unused PackageField(metadata.data, at, "sha256", release.hash[:])
+        unused PackageField(metadata.data, at, "key_id", release.key_id[:])
+        release.size = PackageNumber(metadata.data, at, "bytes")
+        release.sequence = cast(s32)PackageNumber(metadata.data, at, "sequence")
+        id: [32]u8
+        if PackageField(metadata.data, at, "id", id[:]) != expected ||
+        release.size <= 0 || release.size > PackageMaximumBytes || release.sequence < 1 ||
+        release.version[0] == 0 {
+            return PackageRelease.{}
+        }
     }
     // Metadata is authenticated by the root package. Keep the same publisher
     // scope check as downloaded releases; an embedded app gains no new key.
@@ -74,25 +76,42 @@ NodeAppEmbedded :: (name: string) -> AssetView {
     return asset
 }
 
-NodeAppEmbeddedOffers :: () {
+// Copy the small catalog before looking up other provider-owned assets.
+NodeAppEmbeddedCatalog :: (output: []u8) -> s64 {
     catalog := AssetRead("assets/apps/bundled/catalog.txt")
-    if !catalog.found || catalog.data.count > 4096 {
+    if !catalog.found || catalog.data.count > 4096 || catalog.data.count > output.count {
+        return -1
+    }
+    for index: cast(s64)0..catalog.data.count - 1 {
+        output[index] = catalog.data[index]
+    }
+    return catalog.data.count
+}
+
+NodeAppEmbeddedAvailable :: (name: string) -> bool {
+    return NodeAppEmbedded(name).found
+}
+
+NodeAppEmbeddedOffers :: () {
+    catalog_bytes: [4096]u8
+    count := NodeAppEmbeddedCatalog(catalog_bytes[:])
+    if count < 0 {
         return
     }
+    catalog := TextView(catalog_bytes[0:count])
     at: s64 = 0
-    while at < catalog.data.count && node_offer_count < NODE_APP_OFFERS {
+    while at < catalog.count && node_offer_count < NODE_APP_OFFERS {
         end := at
-        while end < catalog.data.count && catalog.data[end] != #char "\n" {
+        while end < catalog.count && catalog[end] != #char "\n" {
             end += 1
         }
-        name := catalog.data[at:end]
-        asset := NodeAppEmbedded(name)
-        if asset.found && !NodeAppOffered(name) {
-            offer := *node_offers[node_offer_count]
-            offer.* = NodeAppOffer.{}
+        name := catalog[at:end]
+        if NodeAppEmbeddedAvailable(name) && !NodeAppOffered(name) {
+            offer: NodeAppOffer
             unused AppCopyText(name, offer.name[:])
             unused AppCopyText(NodeAppTitle(name), offer.title[:])
             offer.size = NodeAppEmbeddedSize(name)
+            node_offers[node_offer_count] = offer
             node_offer_count += 1
         }
         at = end + 1

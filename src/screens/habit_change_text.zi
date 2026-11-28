@@ -8,6 +8,7 @@
 #import, file "../habits/habit_coins.zi";
 #import, file "../app/locale.zi";
 #import, file "../app/text_buffers.zi";
+#import "vec"
 
 // A number, time of day or length as statistics show it.
 HabitStatsValueText :: (answer_type: s32, value: s32, output: []u8) -> string {
@@ -94,6 +95,8 @@ HabitGoalDescribe :: (goal: HabitGoal, answer_type: s32, average_x100: s64,
     low: [24]u8
     high: [24]u8
     args: [4]FormatArg
+    conjunction := TextCopy(ifx goal.kind == HABIT_GOAL_BETWEEN
+        then LocaleText("habit_goal_and") else "")
     args[0].text = HabitGoalKindLabel(goal.kind, answer_type)
     args[0].is_text = true
     template := "%s"
@@ -107,7 +110,7 @@ HabitGoalDescribe :: (goal: HabitGoal, answer_type: s32, average_x100: s64,
     } else if goal.kind == HABIT_GOAL_BETWEEN {
         args[1].text = HabitStatsValueText(answer_type, goal.low, low[:])
         args[1].is_text = true
-        args[2].text = LocaleText("habit_goal_and")
+        args[2].text = TextView(conjunction)
         args[2].is_text = true
         args[3].text = HabitStatsValueText(answer_type, goal.high, high[:])
         args[3].is_text = true
@@ -167,6 +170,23 @@ HabitDifficultyLabel :: (difficulty: s32) -> string {
     return LocaleText("habit_difficulty_medium")
 }
 
+// Keep translated before/after labels alive across later locale lookups.
+HabitChangeValueLabel :: (kind: s32, text: string, output: []u8) -> Text {
+    if kind == HABIT_CHANGE_REMINDER {
+        return TextCopy(HabitReminderDescribe(text, output))
+    }
+    if kind == HABIT_CHANGE_DIFFICULTY {
+        return TextCopy(HabitDifficultyLabel(HabitAnswerNumber(text)))
+    }
+    if kind == HABIT_CHANGE_TRACKING {
+        return TextCopy(HabitTrackingDescribe(text, output))
+    }
+    if kind == HABIT_CHANGE_QUESTION_ANSWER {
+        return TextCopy(HabitAnswerTypeLabel(HabitAnswerTypeFromName(text)))
+    }
+    return .{}
+}
+
 // One change as a line: "Renamed: Run → Morning run", or "When did I start
 // eating?: good when Before 08:00 → Earlier than my average".
 HabitChangeDescribe :: (change: *HabitChange, output: []u8) -> string {
@@ -177,6 +197,8 @@ HabitChangeDescribe :: (change: *HabitChange, output: []u8) -> string {
     question := AppTextFromCString(*change.question_text[0],
         HABIT_QUESTION_TEXT_SIZE)
     args: [3]FormatArg
+    first_label := HabitChangeValueLabel(change.kind, before, first[:])
+    second_label := HabitChangeValueLabel(change.kind, after, second[:])
     for index: cast(s32)0..cast(s32)2 {
         args[index].is_text = true
     }
@@ -200,13 +222,13 @@ HabitChangeDescribe :: (change: *HabitChange, output: []u8) -> string {
         key = "habit_change_schedule"
     } else if change.kind == HABIT_CHANGE_REMINDER {
         key = "habit_change_reminder"
-        args[0].text = HabitReminderDescribe(before, first[:])
-        args[1].text = HabitReminderDescribe(after, second[:])
+        args[0].text = TextView(first_label)
+        args[1].text = TextView(second_label)
         used = 2
     } else if change.kind == HABIT_CHANGE_DIFFICULTY {
         key = "habit_change_difficulty"
-        args[0].text = HabitDifficultyLabel(HabitAnswerNumber(before))
-        args[1].text = HabitDifficultyLabel(HabitAnswerNumber(after))
+        args[0].text = TextView(first_label)
+        args[1].text = TextView(second_label)
         used = 2
     } else if change.kind == HABIT_CHANGE_COINS {
         key = "habit_change_coins"
@@ -215,8 +237,8 @@ HabitChangeDescribe :: (change: *HabitChange, output: []u8) -> string {
         used = 2
     } else if change.kind == HABIT_CHANGE_TRACKING {
         key = "habit_change_tracking"
-        args[0].text = HabitTrackingDescribe(before, first[:])
-        args[1].text = HabitTrackingDescribe(after, second[:])
+        args[0].text = TextView(first_label)
+        args[1].text = TextView(second_label)
         used = 2
     } else if change.kind == HABIT_CHANGE_PRACTICES {
         key = "habit_change_practices"
@@ -240,8 +262,8 @@ HabitChangeDescribe :: (change: *HabitChange, output: []u8) -> string {
     } else if change.kind == HABIT_CHANGE_QUESTION_ANSWER {
         key = "habit_change_question_answer"
         args[0].text = question
-        args[1].text = HabitAnswerTypeLabel(HabitAnswerTypeFromName(before))
-        args[2].text = HabitAnswerTypeLabel(HabitAnswerTypeFromName(after))
+        args[1].text = TextView(first_label)
+        args[2].text = TextView(second_label)
         used = 3
     } else if change.kind == HABIT_CHANGE_QUESTION_GOAL ||
     change.kind == HABIT_CHANGE_SPAN_GOAL {

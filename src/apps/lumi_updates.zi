@@ -74,6 +74,15 @@ LumiReleaseNotes :: (english: string, version: string, language: string) -> stri
     return resource.data
 }
 
+// Locale loading and translated notes can reuse the asset provider's storage.
+LumiEnglishReleaseNotes :: () -> string {
+    resource := AssetRead("assets/app/release-notes.json")
+    if !resource.found {
+        return ""
+    }
+    return PackageText(resource.data, "")
+}
+
 LumiAnnounceUpdate :: () {
     owner := AppTextFromCString(storage_user_id_buffer(), 64)
     assets := AssetGeneration()
@@ -81,12 +90,15 @@ LumiAnnounceUpdate :: () {
         owner == AppTextFromCString(*lumi_update_owner[0], 64)) {
         return
     }
-    resource := AssetRead("assets/app/release-notes.json")
-    if !resource.found {
+    english := LumiEnglishReleaseNotes()
+    defer {
+        PackageFree(english)
+    }
+    if english.count == 0 {
         return
     }
     version_bytes: [32]u8
-    version := LumiUpdateVersion(resource.data, version_bytes[:])
+    version := LumiUpdateVersion(english, version_bytes[:])
     if version.count == 0 {
         return
     }
@@ -104,7 +116,11 @@ LumiAnnounceUpdate :: () {
     args[0].is_text = true
     introduction: [256]u8
     unused FormatTemplate(LocaleText("lumi_update_intro"), args[:], introduction[:])
-    notes := LumiReleaseNotes(resource.data, version, LocaleActiveCode())
+    language_bytes: [33]u8
+    if !AppCopyText(LocaleActiveCode(), language_bytes[:]) {
+        return
+    }
+    notes := LumiReleaseNotes(english, version, TextUntilNul(language_bytes[:]))
     if LumiUpdateAppend(notes, TextUntilNul(introduction[:])) {
         storage_set_setting_text("lumi_release_announced", version)
         unused AppCopyText(owner, lumi_update_owner[:])

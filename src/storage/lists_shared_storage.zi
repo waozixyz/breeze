@@ -1,6 +1,7 @@
 // Account-scoped collaboration cache. Shared rows are observations, never
 // copied into the private encrypted list outbox as another person's records.
 #import "json_scan"
+#import "std/byte_text_linux"
 #import "text"
 #import "vec"
 #import, file "storage_settings.zi";
@@ -11,6 +12,7 @@
 
 ListsSharedCacheCapacity :: 1048576
 shared_cache: [ListsSharedCacheCapacity]u8;
+shared_cache_length: s64 = -1;
 
 ListsCacheKey :: (kind: string) -> string {
     out: Vec(u8)
@@ -34,9 +36,18 @@ ListsCacheWrite :: (kind: string, value: string) -> s32 {
 ListsSharedCache :: () -> string {
     if ListsCacheRead("lists.shared", *shared_cache[0],
         ListsSharedCacheCapacity) == 0 {
-        return "{\"lists\":[],\"invitations\":[]}"
+        shared_cache_length = -1
+    } else {
+        shared_cache_length = AppTextFromCString(*shared_cache[0], ListsSharedCacheCapacity).count
     }
-    return AppTextFromCString(*shared_cache[0], ListsSharedCacheCapacity)
+    return ListsSharedCacheView()
+}
+
+// Borrow the last loaded cache without another storage read. Callers keep
+// this view only until another cache load, just as they keep its row offsets.
+ListsSharedCacheView :: () -> string {
+    if shared_cache_length < 0 { return "{\"lists\":[],\"invitations\":[]}" }
+    return TextFromBytes(shared_cache[:shared_cache_length])
 }
 
 ListsCopyJson :: (json: string, object: s32, field: string, out: []u8) {

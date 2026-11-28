@@ -1,3 +1,4 @@
+#import "vec"
 #import "practice_title_bar_ui"
 #import "application_close_ui"
 #import, file "../../../../src/platform/host_clock.zi";
@@ -107,7 +108,8 @@ AstralCatalogueLoad :: () -> bool {
         return false
     }
     astral_catalogue_generation = generation
-    astral_content_error = false
+    // Refreshing the catalogue does not repair a failed selected session.
+    // Keep that error until another selection or a successful start clears it.
     return true
 }
 
@@ -147,11 +149,13 @@ AstralStartSelected :: (app: *InnerBreeze, allow_legacy: bool) {
         unused AppAppendText(TextFromCString(*selected.id[0]), path[:])
         unused AppAppendText(".json", path[:])
     }
-    asset := AssetRead(TextUntilNul(path[:]))
-    if !asset.found || !AstralCourseParse(asset.data, *astral_course) ||
-    (!astral_legacy && astral_course.duration != selected.duration) {
-        astral_content_error = true
-        return
+    {
+        asset := AssetRead(TextUntilNul(path[:]))
+        if !asset.found || !AstralCourseParse(asset.data, *astral_course) ||
+        (!astral_legacy && astral_course.duration != selected.duration) {
+            astral_content_error = true
+            return
+        }
     }
     astral_content_error = false
     astral_session_practice = selected
@@ -314,8 +318,10 @@ AstralExitPrompt :: (app: *InnerBreeze) -> s32 {
     if app.modal.active == 0 || app.modal.type != cast(ModalType)ModalConfirmExitSession {
         return 0
     }
+    save_message: Text = TextCopy(LocaleText("meditation_save_elapsed_message"))
+    discard_message: Text = TextCopy(LocaleText("meditation_under_minute_exit_message"))
     result := app_draw_session_exit_modal(app, ifx astral_playback.practiced.elapsed_seconds >= 60 then 1 else 0,
-        LocaleText("meditation_save_elapsed_message"), LocaleText("meditation_under_minute_exit_message"))
+        TextView(save_message), TextView(discard_message))
     if result == cast(SessionExitModalResult)SessionExitModalCancel {
         app_close_modal(app)
         app.session_paused = astral_exit_was_paused
@@ -341,9 +347,17 @@ AstralTextAsset :: (code: string) -> AssetView {
 }
 
 AstralText :: (key: string) -> string {
-    localized := AstralTextAsset(LocaleActiveCode())
+    language: [33]u8
+    unused AppCopyText(LocaleActiveCode(), language[:])
+    {
+        localized := AstralTextAsset(AppTextFromCString(*language[0], 33))
+        found := LocaleFindText(localized.data, key)
+        if found.found {
+            return localized.data[found.start:found.end]
+        }
+    }
     english := AstralTextAsset("en")
-    return LocaleResolveCatalog(localized.data, english.data, key)
+    return LocaleResolveCatalog("", english.data, key)
 }
 
 AstralCueText :: () -> string {
@@ -383,7 +397,8 @@ AstralPracticeFigure :: (app: *InnerBreeze, picture: Rectangle, key: u64, alt_te
 }
 
 AstralDrawWindow :: (app: *InnerBreeze, picture: Rectangle, output: []u8) -> string {
-    AstralPracticeFigure(app, picture, Layout.KeyHash("astral/window/scene"), LocaleText("exercise_astral_projection"))
+    AstralPracticeFigure(app, picture, Layout.KeyHash("astral/window/scene"),
+        FrameTextHold(*app.ui.frame_text, LocaleText("exercise_astral_projection")))
     return AstralTimeText(output)
 }
 
@@ -393,9 +408,13 @@ AstralSessionFigure :: (app: *InnerBreeze, request: PracticeFigureRequest) {
 
 AstralDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     top := PracticeTitleBarHeight()
-    if PracticeTitleBar(app, ifx astral_legacy then LocaleText("exercise_astral_projection") else
-        AstralText(TextFromCString(*astral_session_practice.title_key[0])), top) {
-        AstralRequestExit(app)
+    {
+        title := FrameTextHold(*app.ui.frame_text,
+            ifx astral_legacy then LocaleText("exercise_astral_projection") else
+            AstralText(TextFromCString(*astral_session_practice.title_key[0])))
+        if PracticeTitleBar(app, title, top) {
+            AstralRequestExit(app)
+        }
     }
     if AstralExitPrompt(app) != 0 {
         return
@@ -409,7 +428,7 @@ AstralDraw :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     time: [32]u8
     frame := PracticeMovementFrameFor(app, EXERCISE_ASTRAL_PROJECTION, top)
     frame.time = FrameTextHold(*app.ui.frame_text, AstralTimeText(time[:], true))
-    frame.cue = AstralCueText()
+    frame.cue = FrameTextHold(*app.ui.frame_text, AstralCueText())
     frame.elapsed_ms = AstralElapsed() * 1000
     frame.length_ms = AstralDuration() * 1000
     frame.progress = ifx AstralDuration() > 0 then AstralElapsed() * 1000 / AstralDuration() else 0

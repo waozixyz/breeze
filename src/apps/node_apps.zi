@@ -132,8 +132,6 @@ node_shared_lists: [NODE_APP_SHARED_LIMIT]s32;
 node_shared_count: s32;
 node_shared_invites: [NODE_APP_SHARED_LIMIT]s32;
 node_invite_count: s32;
-// The cache those offsets point into, read once per change.
-node_shared_json: string;
 // A desktop owner or a test can offer one local package as if the node
 // listed it: INBE_NODE_APP_FILE=/absolute/path/<name>.zx. It passes the
 // same interface, identity and resource checks; publisher signatures apply
@@ -328,18 +326,17 @@ NodeAppIconShape :: (slot: s32) -> string {
             return asset.data
         }
     }
-    fallback := NodeAppCatalogIcon(NodeAppName(slot))
-    if !NodeAppInstalled(slot) { return fallback }
-    version := ifx NodeAppLocal(NodeAppName(slot)) then "local" else PackageVersion(NodeAppIndex(slot))
-    if version.count == 0 || version.count >= NODE_APP_ICON_VERSION_MAX {
-        return fallback
+    if NodeAppInstalled(slot) {
+        version := ifx NodeAppLocal(NodeAppName(slot)) then "local" else PackageVersion(NodeAppIndex(slot))
+        if version.count > 0 && version.count < NODE_APP_ICON_VERSION_MAX {
+            NodeAppRequestIcon(slot, version)
+            state := *node_app_icons[slot]
+            if state.size > 0 {
+                return TextFromBytes(state.shape[:state.size])
+            }
+        }
     }
-    NodeAppRequestIcon(slot, version)
-    state := *node_app_icons[slot]
-    if state.size == 0 {
-        return fallback
-    }
-    return TextFromBytes(state.shape[:state.size])
+    return NodeAppCatalogIcon(NodeAppName(slot))
 }
 
 NodeAppForgetIcon :: (slot: s32) {
@@ -650,10 +647,12 @@ NodeAppUninstall :: (slot: s32) {
     if slot < 0 || slot >= NodeAppSlots {
         return
     }
-    name := NodeAppName(slot)
-    if !NodeAppClose(slot) { return }
-    if name.count > 0 && NodeAppMarked(name) {
-        NodeAppSetMark(name, false)
+    {
+        name := NodeAppName(slot)
+        if !NodeAppClose(slot) { return }
+        if name.count > 0 && NodeAppMarked(name) {
+            NodeAppSetMark(name, false)
+        }
     }
     PackageSetNodeAppWanted(slot, false)
     NodeAppAssign(slot, "")
@@ -679,9 +678,15 @@ NodeAppCloseRuntime :: (slot: s32) -> bool {
 NodeAppsReconcile :: () {
     slot: s32 = 0
     while slot < NodeAppSlots {
-        name := NodeAppName(slot)
-        if name.count > 0 && !NodeAppMarked(name) {
-            if !NodeAppClose(slot) { slot += 1; continue }
+        remove: bool
+        {
+            name := NodeAppName(slot)
+            if name.count > 0 && !NodeAppMarked(name) {
+                if !NodeAppClose(slot) { slot += 1; continue }
+                remove = true
+            }
+        }
+        if remove {
             PackageSetNodeAppWanted(slot, false)
             NodeAppAssign(slot, "")
         }
@@ -842,14 +847,16 @@ NodeAppMediaCall :: (name: string, arguments: *HostValue, count: s32,
     HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[2], "string", cast(s32)HostString) {
-        hash := NodeAppText(arguments[0])
-        field := NodeAppText(arguments[1])
-        value := NodeAppText(arguments[2])
         changed := false
-        if field == "trashed" && (value == "0" || value == "1") {
-            changed = MediaSetTrashed(hash, value == "1")
-        } else if field == "name" && value.count <= MEDIA_NAME_MAX {
-            changed = MediaSetName(hash, value)
+        {
+            hash := NodeAppText(arguments[0])
+            field := NodeAppText(arguments[1])
+            value := NodeAppText(arguments[2])
+            if field == "trashed" && (value == "0" || value == "1") {
+                changed = MediaSetTrashed(hash, value == "1")
+            } else if field == "name" && value.count <= MEDIA_NAME_MAX {
+                changed = MediaSetName(hash, value)
+            }
         }
         result.* = HostScalar("bool", ifx changed then 1 else 0)
         return 1
@@ -1020,13 +1027,15 @@ NodeAppCallFor :: (runner: *NodeAppRunner, app_name: string, module: *u8, functi
     }
     if name == "AppRecordHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        record := NodeAppText(arguments[0])
-        PackageFree(node_record_text)
-        node_record_text = ""
-        if NodeAppRecordNameValid(record) {
-            key := NodeAppRecordKey(app_name, record)
-            node_record_text = NodeAppRecordRead(key)
-            PackageFree(key)
+        {
+            record := NodeAppText(arguments[0])
+            PackageFree(node_record_text)
+            node_record_text = ""
+            if NodeAppRecordNameValid(record) {
+                key := NodeAppRecordKey(app_name, record)
+                node_record_text = NodeAppRecordRead(key)
+                PackageFree(key)
+            }
         }
         result.* = NodeAppString(node_record_text)
         return 1
@@ -1034,14 +1043,16 @@ NodeAppCallFor :: (runner: *NodeAppRunner, app_name: string, module: *u8, functi
     if name == "SaveAppRecordHost" && count == 2 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "string", cast(s32)HostString) {
-        record := NodeAppText(arguments[0])
-        text := NodeAppText(arguments[1])
         saved := false
-        if NodeAppRecordNameValid(record) && text.count < APP_RECORD_TEXT_MAX {
-            key := NodeAppRecordKey(app_name, record)
-            storage_set_setting_text(key, text)
-            saved = storage_setting_text_equals(key, text) != 0
-            PackageFree(key)
+        {
+            record := NodeAppText(arguments[0])
+            text := NodeAppText(arguments[1])
+            if NodeAppRecordNameValid(record) && text.count < APP_RECORD_TEXT_MAX {
+                key := NodeAppRecordKey(app_name, record)
+                storage_set_setting_text(key, text)
+                saved = storage_setting_text_equals(key, text) != 0
+                PackageFree(key)
+            }
         }
         result.* = HostScalar("bool", ifx saved then 1 else 0)
         return 1
@@ -1239,7 +1250,11 @@ NodeAppOpenFailed :: (slot: s32) -> bool {
 NodeAppRetryOpen :: (slot: s32) {
     if slot < 0 || slot >= NodeAppSlots { return }
     unused NodeOpenCancel(slot)
-    if !NodeAppOpen(slot) { unused NodeAppInstall(NodeAppName(slot)) }
+    if !NodeAppOpen(slot) {
+        name: [NODE_APP_NAME_MAX + 1]u8
+        unused AppCopyText(NodeAppName(slot), name[:])
+        unused NodeAppInstall(TextUntilNul(name[:]))
+    }
 }
 
 // Apply downloaded node-app updates at the host's existing safe reload
@@ -1416,8 +1431,7 @@ NodeAppSharedLoad :: (name: string) {
     unused AppCopyText(name, node_shared_name[:])
     node_shared_count = 0
     node_invite_count = 0
-    node_shared_json = ListsSharedCache()
-    json := node_shared_json
+    json := ListsSharedCache()
     lists := FieldAt(json, 0, "lists")
     count := ArrayCount(json, lists)
     index: s32 = 0
@@ -1486,7 +1500,7 @@ NodeAppSharedAt :: (index: s32) -> AppShared {
     if index < 0 || index >= node_shared_count {
         return AppShared.{}
     }
-    json := node_shared_json
+    json := ListsSharedCacheView()
     at := node_shared_lists[index]
     revision := ReadNumber(json, FieldAt(json, at, "revision"))
     alias := NodeAppJsonText(json, at, "alias", node_text_alias[:])
@@ -1502,7 +1516,7 @@ NodeAppSharedItemAt :: (index: s32, item: s32) -> AppSharedItem {
     if index < 0 || index >= node_shared_count {
         return AppSharedItem.{}
     }
-    json := node_shared_json
+    json := ListsSharedCacheView()
     items := FieldAt(json, node_shared_lists[index], "items")
     if item < 0 || item >= ArrayCount(json, items) {
         return AppSharedItem.{}
@@ -1519,7 +1533,7 @@ NodeAppInvitationAt :: (index: s32) -> AppInvitation {
     if index < 0 || index >= node_invite_count {
         return AppInvitation.{}
     }
-    json := node_shared_json
+    json := ListsSharedCacheView()
     at := node_shared_invites[index]
     owner := NodeAppJsonText(json, at, "owner", node_text_owner[:])
     alias := NodeAppJsonText(json, at, "alias", node_text_alias[:])
@@ -1895,21 +1909,23 @@ NodePortableCall :: (context: *void, module: *u8, function: *u8,
     if name == "ReadStoreHost" && count == 2 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     arguments[1].kind == cast(s32)HostSlice && arguments[1].elements != null {
-        record := AppArgumentText(arguments[0])
         used: s64 = -1
-        if NodeAppRecordNameValid(record) {
-            key := NodeAppRecordKey(NodeAppName(slot), record)
-            value := NodeAppRecordRead(key)
-            if value.count > 0 && cast(usize)value.count < arguments[1].length {
-                for index: 0..value.count {
-                    byte := ifx index < value.count then value[index] else cast(u8)0
-                    arguments[1].elements[index].bits = cast(u64)byte
-                    arguments[1].elements[index].integer = cast(s64)byte
+        {
+            record := AppArgumentText(arguments[0])
+            if NodeAppRecordNameValid(record) {
+                key := NodeAppRecordKey(NodeAppName(slot), record)
+                value := NodeAppRecordRead(key)
+                if value.count > 0 && cast(usize)value.count < arguments[1].length {
+                    for index: 0..value.count {
+                        byte := ifx index < value.count then value[index] else cast(u8)0
+                        arguments[1].elements[index].bits = cast(u64)byte
+                        arguments[1].elements[index].integer = cast(s64)byte
+                    }
+                    used = value.count
                 }
-                used = value.count
+                PackageFree(value)
+                PackageFree(key)
             }
-            PackageFree(value)
-            PackageFree(key)
         }
         result.* = HostScalar("s32", used)
         return 1
@@ -1917,14 +1933,16 @@ NodePortableCall :: (context: *void, module: *u8, function: *u8,
     if name == "WriteStoreHost" && count == 2 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "string", cast(s32)HostString) {
-        record := AppArgumentText(arguments[0])
-        text := AppArgumentText(arguments[1])
         saved := false
-        if NodeAppRecordNameValid(record) && text.count < APP_RECORD_TEXT_MAX {
-            key := NodeAppRecordKey(NodeAppName(slot), record)
-            storage_set_setting_text(key, text)
-            saved = storage_setting_text_equals(key, text) != 0
-            PackageFree(key)
+        {
+            record := AppArgumentText(arguments[0])
+            text := AppArgumentText(arguments[1])
+            if NodeAppRecordNameValid(record) && text.count < APP_RECORD_TEXT_MAX {
+                key := NodeAppRecordKey(NodeAppName(slot), record)
+                storage_set_setting_text(key, text)
+                saved = storage_setting_text_equals(key, text) != 0
+                PackageFree(key)
+            }
         }
         result.* = HostScalar("bool", ifx saved then 1 else 0)
         return 1
