@@ -23,20 +23,15 @@ import { session_window_breathe_button } from "session_window_view_ui";
 
 export function PracticeWindowControls(app: NativeRef<InnerBreeze>, bounds: Rectangle): s32 {
     let session = app.ui.session;
-    let card: NativeButton.Props = {};
-    card.id = SESSION_WINDOW_DESKTOP_ID + 2n;
-    card.bounds = bounds;
-    card.invisible = true;
-    card.label = practice_label(session_window_practice(app.session_window.screen));
-    let tapped = Button({ session: session, props: card });
-    let names: [string, string] = [
-        LocaleText("session_maximize_button"),
-        LocaleText("close_button")
-    ];
-    let icons: [string, string] = [
-        "S1.8rr:M14 5H19V10M10 19H5V14M19 5L13 11M5 19L11 13",
-        "S1.8rr:M6 6L18 18M18 6L6 18"
-    ];
+    let tapped = false;
+    {
+        let card: NativeButton.Props = {};
+        card.id = SESSION_WINDOW_DESKTOP_ID + 2n;
+        card.bounds = bounds;
+        card.invisible = true;
+        card.label = practice_label(session_window_practice(app.session_window.screen));
+        tapped = Button({ session: session, props: card });
+    }
     let action: s32 = PRACTICE_WINDOW_STAY;
     for (let index = s32(0n); index <= s32(1n); index += s32(1)) {
         let button: NativeButton.Props = {};
@@ -47,9 +42,13 @@ export function PracticeWindowControls(app: NativeRef<InnerBreeze>, bounds: Rect
             width: 36.0,
             height: 36.0
         };
-        button.label = nativeAt(names, index);
+        button.label =
+            index === 0n ? LocaleText("session_maximize_button") : LocaleText("close_button");
         button.icon_only = true;
-        button.icon_shape = nativeAt(icons, index);
+        button.icon_shape =
+            index === 0n
+                ? "S1.8rr:M14 5H19V10M10 19H5V14M19 5L13 11M5 19L11 13"
+                : "S1.8rr:M6 6L18 18M18 6L6 18";
         button.emphasis = ButtonEmphasis.ButtonEmphasisGhost;
         if (Button({ session: session, props: button })) {
             action = index === 0n ? PRACTICE_WINDOW_RESTORE : PRACTICE_WINDOW_CLOSE;

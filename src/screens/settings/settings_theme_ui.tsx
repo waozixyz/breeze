@@ -1,3 +1,5 @@
+import { ResolvedModal } from "kryon/tsx/modal";
+import { Scroll } from "kryon/tsx/scroll";
 // Authored UI composition; native application state remains in settings_theme.zi.
 import * as NativeDropdown from "kryon/dropdown";
 import * as NativeImage from "kryon/image";
@@ -13,7 +15,6 @@ import { app_refresh_theme } from "device_preferences";
 import { ButtonEmphasis, ButtonTone } from "kryon/control_props";
 import { TextAlign } from "kryon/text_align";
 import { Wrap } from "kryon/text_props";
-import { End } from "kryon/tree";
 import { PointerSample } from "kryon/tree_input";
 import { Button } from "kryon/tsx/button";
 import { DiscreteSlider } from "kryon/tsx/slider";
@@ -51,7 +52,14 @@ import {
     settings_section_end,
     settings_section_inner_width
 } from "settings_ui";
-import { AppTextFromCString, FormatArg, FormatTemplate, FrameTextHold } from "text_buffers";
+import {
+    AppTextFromCString,
+    FormatArg,
+    FormatTemplate,
+    FrameTextHold,
+    FrameTextRead,
+    FrameTextSave
+} from "text_buffers";
 import { ThemeCount } from "theme_catalog";
 
 export function settings_theme_draw(
@@ -65,14 +73,8 @@ export function settings_theme_draw(
         return;
     }
     let inner = settings_section_inner_width(w);
-    let theme = settings_section_begin(
-        app,
-        x,
-        w,
-        y,
-        LocaleText("theme_label"),
-        settings_theme_theme_body(inner)
-    );
+    let theme_height = settings_theme_theme_body(inner);
+    let theme = settings_section_begin(app, x, w, y, LocaleText("theme_label"), theme_height);
     if (SettingsAppIconAvailable()) {
         SettingsAppIconRow(app, theme, y, state);
     }
@@ -82,13 +84,14 @@ export function settings_theme_draw(
         app.settings_save_delay_ticks = 18n;
     }
     settings_section_end(y);
+    let layout_height = settings_theme_layout_body(app, inner);
     let layout = settings_section_begin(
         app,
         x,
         w,
         y,
         LocaleText("settings_section_layout"),
-        settings_theme_layout_body(app, inner)
+        layout_height
     );
     draw_scale_row(app, layout.inner_x, layout.inner_width, y, state);
     settings_row_divider(app, layout, nativeDeref(y));
@@ -130,63 +133,72 @@ function draw_theme_settings(
     state: NativeRef<SettingsThemeState>
 ): s32 {
     let changed: s32 = s32(0n);
-    let theme_options = NewThemeOptions();
-    nativeAt(theme_options, 0n).label = LocaleText("theme_system");
     {
-        let i: s32 = s32(0n);
-        while (i < ThemeCount) {
-            nativeAt(theme_options, i + 1n).label = ThemeLabel(i);
-            i = i + 1n;
+        let theme_options = NewThemeOptions();
+        nativeAt(theme_options, 0n).label = LocaleText("theme_system");
+        {
+            let i: s32 = s32(0n);
+            while (i < ThemeCount) {
+                nativeAt(theme_options, i + 1n).label = ThemeLabel(i);
+                i = i + 1n;
+            }
         }
-    }
-    let theme_index =
-        app.theme_source === s32(AppThemeSource.APP_THEME_SOURCE_SYSTEM) ? 0n : app.theme_id + 1n;
-    if (theme_index < 0n || theme_index > ThemeCount) {
-        theme_index = 1n;
-    }
-    let color_props: NativeDropdown.Props = {};
-    color_props.id = 103n;
-    color_props.bounds = settings_choice_row(
-        app,
-        section.inner_x,
-        section.inner_width,
-        y,
-        LocaleText("theme_color_label")
-    );
-    color_props.selected_index = theme_index;
-    let color_menu = Dropdown({
-        session: app.ui.session,
-        props: color_props,
-        options: nativeSlice(theme_options)
-    });
-    if (color_menu.changed) {
-        if (color_menu.selected_index === 0n) {
-            app.theme_source = s32(AppThemeSource.APP_THEME_SOURCE_SYSTEM);
-            app.theme_mode = s32(AppThemeMode.APP_THEME_SYSTEM);
-        } else {
-            app.theme_source = s32(AppThemeSource.APP_THEME_SOURCE_APP);
-            app.theme_id = color_menu.selected_index - 1n;
+        let theme_index =
+            app.theme_source === s32(AppThemeSource.APP_THEME_SOURCE_SYSTEM)
+                ? 0n
+                : app.theme_id + 1n;
+        if (theme_index < 0n || theme_index > ThemeCount) {
+            theme_index = 1n;
         }
-        changed = 1n;
+        let color_props: NativeDropdown.Props = {};
+        color_props.id = 103n;
+        color_props.bounds = settings_choice_row(
+            app,
+            section.inner_x,
+            section.inner_width,
+            y,
+            LocaleText("theme_color_label")
+        );
+        color_props.selected_index = theme_index;
+        let color_menu = Dropdown({
+            session: app.ui.session,
+            props: color_props,
+            options: nativeSlice(theme_options)
+        });
+        if (color_menu.changed) {
+            if (color_menu.selected_index === 0n) {
+                app.theme_source = s32(AppThemeSource.APP_THEME_SOURCE_SYSTEM);
+                app.theme_mode = s32(AppThemeMode.APP_THEME_SYSTEM);
+            } else {
+                app.theme_source = s32(AppThemeSource.APP_THEME_SOURCE_APP);
+                app.theme_id = color_menu.selected_index - 1n;
+            }
+            changed = 1n;
+        }
     }
     settings_row_divider(app, section, nativeDeref(y));
     // The dropdown paints after this function returns. Keep its formatted label in frame text.
     let follow_device_label = NewFollowDeviceLabel();
-    let follow_args: [FormatArg, FormatArg] = [
-        { text: LocaleText("theme_follow_device"), is_text: true },
-        { text: LocaleText(app.dark_mode !== 0n ? "theme_dark" : "theme_light"), is_text: true }
-    ];
-    FormatTemplate("%s (%s)", nativeSlice(follow_args), nativeSlice(follow_device_label));
-    let mode_options = NewModeOptions();
-    nativeAt(mode_options, 0n).label = FrameTextHold(
+    {
+        let follow_args: [FormatArg, FormatArg] = [
+            { text: LocaleText("theme_follow_device"), is_text: true },
+            { text: LocaleText(app.dark_mode !== 0n ? "theme_dark" : "theme_light"), is_text: true }
+        ];
+        FormatTemplate("%s (%s)", nativeSlice(follow_args), nativeSlice(follow_device_label));
+    }
+    let follow_range = FrameTextSave(
         nativeRef(app.ui.frame_text),
         AppTextFromCString(
             nativeRef(nativeAt(follow_device_label, 0n)),
             s32(follow_device_label.count)
         )
     );
-    nativeAt(mode_options, 1n).label = LocaleText("theme_light");
-    nativeAt(mode_options, 2n).label = LocaleText("theme_dark");
+    let light_range = FrameTextSave(nativeRef(app.ui.frame_text), LocaleText("theme_light"));
+    let dark_range = FrameTextSave(nativeRef(app.ui.frame_text), LocaleText("theme_dark"));
+    let mode_options = NewModeOptions();
+    nativeAt(mode_options, 0n).label = FrameTextRead(nativeRef(app.ui.frame_text), follow_range);
+    nativeAt(mode_options, 1n).label = FrameTextRead(nativeRef(app.ui.frame_text), light_range);
+    nativeAt(mode_options, 2n).label = FrameTextRead(nativeRef(app.ui.frame_text), dark_range);
     let mode_index = app.theme_mode;
     if (
         mode_index < s32(AppThemeMode.APP_THEME_SYSTEM) ||
@@ -227,68 +239,70 @@ function draw_scale_row(
     if (!state.scale_editing) {
         state.scale_preview = app.ui_scale_tenths;
     }
-    let label = LocaleText("appearance_scale_label");
-    let percentage = NewPercentage();
-    let percentage_args: [FormatArg] = [{ number: state.scale_preview * 10n }];
-    FormatTemplate("%d%%", nativeSlice(percentage_args), nativeSlice(percentage));
-    let value = FrameTextHold(
-        nativeRef(app.ui.frame_text),
-        AppTextFromCString(nativeRef(nativeAt(percentage, 0n)), s32(percentage.count))
-    );
-    let value_width = AppScale(64n);
-    let label_height = AppScale(22n);
-    let label_width = w - value_width;
-    let value_y = nativeDeref(y) + AppScale(10n);
-    let slider_y = nativeDeref(y) + AppScale(38n);
-    if (settings_theme_scale_stacked(w)) {
-        label_width = w;
-        label_height = settings_theme_scale_label_height(w);
-        value_y = value_y + (label_height + AppScale(6n));
-        slider_y = slider_y + (label_height + AppScale(6n));
-    }
-    <Text
-        session={app.ui.session}
-        props={{
-            bounds: {
-                x: float32(x),
-                y: float32(nativeDeref(y) + AppScale(10n)),
-                width: float32(label_width),
-                height: float32(label_height)
-            },
-            text: label,
-            wrap: Wrap.TextWrapAuto
-        }}
-    />;
-    <Text
-        session={app.ui.session}
-        props={{
-            bounds: {
-                x: float32(x + w - value_width),
-                y: float32(value_y),
-                width: float32(value_width),
-                height: float32(AppScale(22n))
-            },
-            text: value,
-            align: TextAlign.TextAlignEnd,
-            wrap: Wrap.TextWrapNone
-        }}
-    />;
-    let slider: NativeSlider.DiscreteSliderProps = {};
-    slider.id = 140n;
-    slider.bounds = {
-        x: float32(x),
-        y: float32(slider_y),
-        width: float32(w),
-        height: float32(AppScale(36n))
-    };
-    slider.semantic_label = label;
-    slider.value = state.scale_preview;
-    slider.min = 5n;
-    slider.max = 25n;
-    let result = DiscreteSlider({ session: app.ui.session, props: slider });
-    if (result.changed) {
-        state.scale_preview = result.value;
-        state.scale_editing = true;
+    {
+        let percentage = NewPercentage();
+        let percentage_args: [FormatArg] = [{ number: state.scale_preview * 10n }];
+        FormatTemplate("%d%%", nativeSlice(percentage_args), nativeSlice(percentage));
+        let value = FrameTextHold(
+            nativeRef(app.ui.frame_text),
+            AppTextFromCString(nativeRef(nativeAt(percentage, 0n)), s32(percentage.count))
+        );
+        let value_width = AppScale(64n);
+        let label_height = AppScale(22n);
+        let label_width = w - value_width;
+        let value_y = nativeDeref(y) + AppScale(10n);
+        let slider_y = nativeDeref(y) + AppScale(38n);
+        if (settings_theme_scale_stacked(w)) {
+            label_width = w;
+            label_height = settings_theme_scale_label_height(w);
+            value_y = value_y + (label_height + AppScale(6n));
+            slider_y = slider_y + (label_height + AppScale(6n));
+        }
+        let label = LocaleText("appearance_scale_label");
+        <Text
+            session={app.ui.session}
+            props={{
+                bounds: {
+                    x: float32(x),
+                    y: float32(nativeDeref(y) + AppScale(10n)),
+                    width: float32(label_width),
+                    height: float32(label_height)
+                },
+                text: label,
+                wrap: Wrap.TextWrapAuto
+            }}
+        />;
+        <Text
+            session={app.ui.session}
+            props={{
+                bounds: {
+                    x: float32(x + w - value_width),
+                    y: float32(value_y),
+                    width: float32(value_width),
+                    height: float32(AppScale(22n))
+                },
+                text: value,
+                align: TextAlign.TextAlignEnd,
+                wrap: Wrap.TextWrapNone
+            }}
+        />;
+        let slider: NativeSlider.DiscreteSliderProps = {};
+        slider.id = 140n;
+        slider.bounds = {
+            x: float32(x),
+            y: float32(slider_y),
+            width: float32(w),
+            height: float32(AppScale(36n))
+        };
+        slider.semantic_label = label;
+        slider.value = state.scale_preview;
+        slider.min = 5n;
+        slider.max = 25n;
+        let result = DiscreteSlider({ session: app.ui.session, props: slider });
+        if (result.changed) {
+            state.scale_preview = result.value;
+            state.scale_editing = true;
+        }
     }
     // Keep the layout and hit targets fixed through the drag, including focus loss.
     let pointer = PointerSample(app.ui.session);
@@ -334,35 +348,38 @@ function SettingsThemePickerRows(
 export function SettingsThemePickerModal(app: NativeRef<InnerBreeze>): void {
     let modal_w = AppScale(320n);
     let modal_h = AppScale(360n);
-    let title = LocaleText("theme_picker_title");
-    let frame = NativeModal.Draw(app.ui.session, {
-        key: NativeLayout.KeyHash("settings/theme-picker"),
-        title: title,
-        width: modal_w,
-        height: modal_h,
-        scale: MetricsScale(),
-        has_right_action: true,
-        right_label: LocaleText("close_button")
+    let title = FrameTextHold(nativeRef(app.ui.frame_text), LocaleText("theme_picker_title"));
+    let frame = ResolvedModal({
+        session: app.ui.session,
+        props: {
+            key: NativeLayout.KeyHash("settings/theme-picker"),
+            title: title,
+            width: modal_w,
+            height: modal_h,
+            scale: MetricsScale(),
+            has_right_action: true,
+            right_label: LocaleText("close_button")
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            const content = frame.layout.content;
+            const view = Scroll({
+                session: app.ui.session,
+                props: {
+                    key: NativeLayout.KeyHash("inbe/screens/settings/settings_theme/scroll/1"),
+                    bounds: content,
+                    content_height: theme_picker_content_height(s32(content.width)),
+                    scroll_offset: app.theme_state.theme_picker_scroll
+                },
+                children: (view: NativeScroll.ScrollResult): void => {
+                    SettingsThemePickerRows(app, view);
+                }
+            });
+        }
     });
     if (frame.dismissed || frame.right_clicked) {
         app_close_modal(app);
         return;
     }
-    if (!frame.opened) {
-        return;
-    }
-    const content = frame.layout.content;
-    const view = NativeScroll.Draw(app.ui.session, {
-        key: NativeLayout.KeyHash("inbe/screens/settings/settings_theme/scroll/1"),
-        bounds: content,
-        content_height: theme_picker_content_height(s32(content.width)),
-        scroll_offset: app.theme_state.theme_picker_scroll
-    });
-    if (view.opened) {
-        SettingsThemePickerRows(app, view);
-        End(app.ui.session);
-    }
-    End(app.ui.session);
 }
 
 function draw_theme_picker(x: s32, y: s32, w: s32, theme_id: NativeRef<s32>): s32 {
@@ -461,86 +478,90 @@ function SettingsAppIconRow(
 
 export function SettingsAppIconModal(app: NativeRef<InnerBreeze>): void {
     const state = nativeRef(app.theme_state);
-    const frame = NativeModal.Draw(app.ui.session, {
-        key: NativeLayout.KeyHash("settings/app-icon"),
-        title: LocaleText("app_icon_label"),
-        width: AppScale(360n),
-        height: AppScale(300n),
-        scale: MetricsScale(),
-        has_right_action: true,
-        right_label: LocaleText("close_button")
+    const frame = ResolvedModal({
+        session: app.ui.session,
+        props: {
+            key: NativeLayout.KeyHash("settings/app-icon"),
+            title: LocaleText("app_icon_label"),
+            width: AppScale(360n),
+            height: AppScale(300n),
+            scale: MetricsScale(),
+            has_right_action: true,
+            right_label: LocaleText("close_button")
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            const content = frame.layout.content;
+            const contentX = s32(content.x);
+            const contentY = s32(content.y);
+            const contentWidth = s32(content.width);
+            const gap = AppScale(12n);
+            const choiceWidth = (contentWidth - gap) / 2n;
+            const session = CurrentApp().ui.session;
+            for (let icon: s32 = s32(0n); icon < 2n; icon += 1n) {
+                const x = contentX + icon * (choiceWidth + gap);
+                const name = LocaleText(
+                    icon === 0n ? "app_icon_sky_cradle" : "app_icon_ink_and_air"
+                );
+                <Image
+                    session={session}
+                    props={{
+                        asset_path: AppIconPreview(icon),
+                        alt_text: name,
+                        bounds: {
+                            x: float32(x),
+                            y: float32(contentY),
+                            width: float32(choiceWidth),
+                            height: float32(AppScale(120n))
+                        },
+                        fit: NativeImage.ImageFit.ImageFitContain
+                    }}
+                />;
+                if (
+                    Button({
+                        session: session,
+                        props: {
+                            id: 153n + icon,
+                            bounds: {
+                                x: float32(x),
+                                y: float32(contentY + AppScale(128n)),
+                                width: float32(choiceWidth),
+                                height: float32(AppScale(44n))
+                            },
+                            label: name,
+                            tone:
+                                state.app_icon === icon
+                                    ? ButtonTone.ButtonToneAccent
+                                    : ButtonTone.ButtonToneNeutral,
+                            emphasis: ButtonEmphasis.ButtonEmphasisSoft
+                        }
+                    }) &&
+                    SettingsAppIconSelect(app, state, icon)
+                ) {
+                    app_close_modal(app);
+                    return;
+                }
+            }
+            const message = LocaleText(
+                state.app_icon_error !== 0n ? "app_icon_error" : "app_icon_hint"
+            );
+            <Text
+                session={session}
+                props={{
+                    bounds: {
+                        x: float32(contentX),
+                        y: float32(contentY + AppScale(184n)),
+                        width: float32(contentWidth),
+                        height: float32(AppScale(30n))
+                    },
+                    text: message,
+                    wrap: Wrap.TextWrapNone,
+                    size: AppFitFontSize(message, contentWidth, AppSmallFontSize(), AppScale(8n))
+                }}
+            />;
+        }
     });
     if (frame.dismissed || frame.right_clicked) {
         app_close_modal(app);
         return;
     }
-    if (!frame.opened) {
-        return;
-    }
-    const content = frame.layout.content;
-    const contentX = s32(content.x);
-    const contentY = s32(content.y);
-    const contentWidth = s32(content.width);
-    const gap = AppScale(12n);
-    const choiceWidth = (contentWidth - gap) / 2n;
-    const session = CurrentApp().ui.session;
-    for (let icon: s32 = s32(0n); icon < 2n; icon += 1n) {
-        const x = contentX + icon * (choiceWidth + gap);
-        const name = LocaleText(icon === 0n ? "app_icon_sky_cradle" : "app_icon_ink_and_air");
-        <Image
-            session={session}
-            props={{
-                asset_path: AppIconPreview(icon),
-                alt_text: name,
-                bounds: {
-                    x: float32(x),
-                    y: float32(contentY),
-                    width: float32(choiceWidth),
-                    height: float32(AppScale(120n))
-                },
-                fit: NativeImage.ImageFit.ImageFitContain
-            }}
-        />;
-        if (
-            Button({
-                session: session,
-                props: {
-                    id: 153n + icon,
-                    bounds: {
-                        x: float32(x),
-                        y: float32(contentY + AppScale(128n)),
-                        width: float32(choiceWidth),
-                        height: float32(AppScale(44n))
-                    },
-                    label: name,
-                    tone:
-                        state.app_icon === icon
-                            ? ButtonTone.ButtonToneAccent
-                            : ButtonTone.ButtonToneNeutral,
-                    emphasis: ButtonEmphasis.ButtonEmphasisSoft
-                }
-            }) &&
-            SettingsAppIconSelect(app, state, icon)
-        ) {
-            End(app.ui.session);
-            app_close_modal(app);
-            return;
-        }
-    }
-    const message = LocaleText(state.app_icon_error !== 0n ? "app_icon_error" : "app_icon_hint");
-    <Text
-        session={session}
-        props={{
-            bounds: {
-                x: float32(contentX),
-                y: float32(contentY + AppScale(184n)),
-                width: float32(contentWidth),
-                height: float32(AppScale(30n))
-            },
-            text: message,
-            wrap: Wrap.TextWrapNone,
-            size: AppFitFontSize(message, contentWidth, AppSmallFontSize(), AppScale(8n))
-        }}
-    />;
-    End(app.ui.session);
 }

@@ -234,12 +234,12 @@ export function settings_breaks_draw_week(
         index = index + 1n;
     }
     for (let kind = s32(0); kind <= BREAK_TYPE_COUNT - 1n; kind += s32(1)) {
-        let name: string = LocaleText("break_micro_title");
+        let name_key: string = "break_micro_title";
         if (kind === BREAK_REST) {
-            name = LocaleText("break_rest_title");
+            name_key = "break_rest_title";
         }
         if (kind === BREAK_DAILY) {
-            name = LocaleText("break_daily_title");
+            name_key = "break_daily_title";
         }
         let summary = SettingsBreaksNewSummary48u8();
         let summary_args: [FormatArg, FormatArg, FormatArg] = [
@@ -249,7 +249,7 @@ export function settings_breaks_draw_week(
         ];
         FormatTemplate("%d / %d / %d", nativeSlice(summary_args), nativeSlice(summary));
         let name_props: NativeText.Props = {};
-        name_props.text = name;
+        name_props.text = LocaleText(name_key);
         name_props.size = AppSmallFontSize();
         name_props.vertical_align = TextAlign.TextAlignCenter;
         name_props.bounds = {
@@ -284,13 +284,14 @@ export function settings_breaks_draw_general(
     y: NativeRef<s32>
 ): void {
     let inner = settings_section_inner_width(width);
+    let body_height = settings_breaks_general_body(inner);
     let section = settings_section_begin(
         app,
         x,
         width,
         y,
         LocaleText("settings_tab_breaks"),
-        settings_breaks_general_body(inner)
+        body_height
     );
     let ix = section.inner_x;
     let iw = section.inner_width;

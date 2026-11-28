@@ -18,6 +18,7 @@ Toggle :: #import "kryon/toggle";
 #import, file "../app/text_buffers.zi";
 #import "geometry"
 #import "control_props"
+Owned :: #import "vec";
 #import, file "practice_downloads.zi";
 
 using Text.Wrap;
@@ -31,26 +32,26 @@ NARRATION_LANGUAGE_MAX :: 32
 // A line under the language list while a language downloads, after one
 // failed, or while none is on this device; otherwise empty.
 PracticeNarrationStatus :: (app: *InnerBreeze, practice: s32, voice: string) -> string {
-    busy := ""
-    failed := ""
+    busy: s32 = -1
+    failed: s32 = -1
     for rank: cast(s32)0..LocaleLanguageCount() - 1 {
-        language := LocaleLanguageAt(rank)
-        state := PracticeNarrationState(PracticeNarrationPack(practice, language.code, voice))
-        if state == 1 && busy.count == 0 {
-            busy = language.label
-        } else if state == 3 && failed.count == 0 {
-            failed = language.label
+        state := PracticeNarrationState(PracticeNarrationPackAt(practice, rank, voice))
+        if state == 1 && busy < 0 {
+            busy = rank
+        } else if state == 3 && failed < 0 {
+            failed = rank
         }
     }
-    if busy.count == 0 && failed.count == 0 {
+    if busy < 0 && failed < 0 {
         if PracticeNarrationLanguage(practice, voice).count == 0 {
             return LocaleText("practice_narration_none")
         }
         return ""
     }
+    label: Owned.Text = Owned.TextCopy(LocaleLanguageAt(ifx busy >= 0 then busy else failed).label)
     buffer: [256]u8
-    args: [1]FormatArg = .[FormatArg.{.text = ifx busy.count > 0 then busy else failed, .is_text = true}]
-    unused FormatTemplate(LocaleText(ifx busy.count > 0 then "practice_narration_busy" else "practice_narration_failed"),
+    args: [1]FormatArg = .[FormatArg.{.text = TextView(label), .is_text = true}]
+    unused FormatTemplate(LocaleText(ifx busy >= 0 then "practice_narration_busy" else "practice_narration_failed"),
         args[:], buffer[:])
     return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 256))
 }

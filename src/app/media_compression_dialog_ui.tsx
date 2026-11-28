@@ -1,3 +1,6 @@
+import { DiscreteSlider } from "kryon/tsx/slider";
+import { ResolvedModal } from "kryon/tsx/modal";
+import { Scroll } from "kryon/tsx/scroll";
 // Authored UI composition; native application state remains in media_compression_dialog.zi.
 import * as NativeLayout from "kryon/layout";
 import * as NativeModal from "kryon/modal";
@@ -11,7 +14,6 @@ import { ButtonEmphasis, ButtonTone } from "kryon/control_props";
 import { Rectangle } from "kryon/geometry";
 import { ImageFit } from "kryon/image_props";
 import { Wrap } from "kryon/text_props";
-import { End } from "kryon/tree";
 import { Button } from "kryon/tsx/button";
 import { Image } from "kryon/tsx/image";
 import { Text } from "kryon/tsx/text";
@@ -37,7 +39,6 @@ import {
 import { AppScale, AppSmallFontSize, MetricsScale } from "metrics";
 import { PackageFree } from "package_files";
 import { AppRequestSmoothFrames } from "smooth_frames";
-import { FrameTextReset } from "text_buffers";
 
 export function MediaCompressionOfferDraw(app: NativeRef<InnerBreeze>): void {
     if (
@@ -99,7 +100,6 @@ export function MediaCompressionLine(
 }
 
 export function MediaCompressionDialogDraw(app: NativeRef<InnerBreeze>): void {
-    FrameTextReset(nativeRef(State_media_compression_dialog.media_compression_text));
     let width = AppScale(760n);
     if (width > app.ui.view_width - AppScale(24n)) {
         width = app.ui.view_width - AppScale(24n);
@@ -108,35 +108,41 @@ export function MediaCompressionDialogDraw(app: NativeRef<InnerBreeze>): void {
     if (height > app.ui.view_height - AppScale(24n)) {
         height = app.ui.view_height - AppScale(24n);
     }
-    let frame = NativeModal.Draw(app.ui.session, {
-        key: NativeLayout.KeyHash("media/compression/dialog"),
-        title: LocaleText("media_compression_title"),
-        width: width,
-        height: height,
-        scale: MetricsScale(),
-        has_right_action: true,
-        right_label: LocaleText("close_button")
+    let frame = ResolvedModal({
+        session: app.ui.session,
+        props: {
+            key: NativeLayout.KeyHash("media/compression/dialog"),
+            title: LocaleText("media_compression_title"),
+            width: width,
+            height: height,
+            scale: MetricsScale(),
+            has_right_action: true,
+            right_label: LocaleText("close_button")
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            let scroll = Scroll({
+                session: app.ui.session,
+                props: {
+                    key: NativeLayout.KeyHash("media/compression/scroll"),
+                    bounds: frame.layout.content,
+                    content_height: AppScale(520n),
+                    scroll_offset: State_media_compression_dialog.media_compression_scroll
+                },
+                children: (scroll: NativeScroll.ScrollResult): void => {
+                    State_media_compression_dialog.media_compression_scroll = scroll.scroll_offset;
+                    MediaCompressionContent(app, scroll.content);
+                }
+            });
+            if (!scroll.opened) {
+                State_media_compression_dialog.media_compression_scroll = scroll.scroll_offset;
+            }
+        }
     });
     if (frame.dismissed || frame.right_clicked) {
         MediaCompressionInvalidate(app);
         app_close_modal(app);
         return;
     }
-    if (!frame.opened) {
-        return;
-    }
-    let scroll = NativeScroll.Draw(app.ui.session, {
-        key: NativeLayout.KeyHash("media/compression/scroll"),
-        bounds: frame.layout.content,
-        content_height: AppScale(520n),
-        scroll_offset: State_media_compression_dialog.media_compression_scroll
-    });
-    State_media_compression_dialog.media_compression_scroll = scroll.scroll_offset;
-    if (scroll.opened) {
-        MediaCompressionContent(app, scroll.content);
-        End(app.ui.session);
-    }
-    End(app.ui.session);
 }
 
 export function MediaCompressionContent(app: NativeRef<InnerBreeze>, area: Rectangle): void {
@@ -145,18 +151,23 @@ export function MediaCompressionContent(app: NativeRef<InnerBreeze>, area: Recta
     let w = area.width - float32(AppScale(10n));
     let line = float32(AppScale(32n));
     let stats = State_media_compression_dialog.media_compression_statistics;
-    let quality = NativeSlider.DiscreteSlider(app.ui.session, {
-        key: NativeLayout.KeyHash("media/compression/quality"),
-        bounds: { x: x, y: y, width: w, height: line * 2.0 },
-        label: LocaleText("media_compression_quality"),
-        value_text: MediaCompressionCountText(
-            "media_compression_quality",
-            State_media_compression_dialog.media_compression_quality
-        ),
-        value: State_media_compression_dialog.media_compression_quality,
-        min: 1n,
-        max: 100n
+    let quality_label = MediaCompressionCountText(
+        "media_compression_quality",
+        State_media_compression_dialog.media_compression_quality
+    );
+    let quality = DiscreteSlider({
+        session: app.ui.session,
+        props: {
+            key: NativeLayout.KeyHash("media/compression/quality"),
+            bounds: { x: x, y: y, width: w, height: line * 2.0 },
+            label: LocaleText("media_compression_quality"),
+            value_text: quality_label,
+            value: State_media_compression_dialog.media_compression_quality,
+            min: 1n,
+            max: 100n
+        }
     });
+    PackageFree(quality_label);
     if (quality.changed) {
         State_media_compression_dialog.media_compression_quality = quality.value;
         MediaCompressionSetQuality(quality.value);
@@ -177,66 +188,80 @@ export function MediaCompressionContent(app: NativeRef<InnerBreeze>, area: Recta
         State_media_compression_dialog.media_compression_uploaded &&
         State_media_compression_dialog.media_compression_before.id !== 0n &&
         State_media_compression_dialog.media_compression_after.id !== 0n;
-    let before_label = LocaleText("media_compression_before");
-    let after_label = LocaleText("media_compression_after");
-    if (ready) {
-        before_label = MediaCompressionCountText(
-            "media_compression_before",
-            work.source.count,
-            true
-        );
-        after_label = MediaCompressionCountText(
-            "media_compression_after",
-            work.encoded.data.count,
-            true
-        );
-    }
-    MediaCompressionLine(app, { x: x, y: y, width: half, height: line }, before_label);
-    MediaCompressionLine(
-        app,
-        { x: x + half + float32(AppScale(12n)), y: y, width: half, height: line },
-        after_label
-    );
-    y = y + line;
     let image_height = float32(AppScale(180n));
-    <Image
-        session={app.ui.session}
-        props={{
-            key: NativeLayout.KeyHash("media/compression/original"),
-            bounds: { x: x, y: y, width: half, height: image_height },
-            texture: State_media_compression_dialog.media_compression_before,
-            alt_text: before_label,
-            fit: ImageFit.ImageFitContain,
-            smooth: true
-        }}
-    />;
-    <Image
-        session={app.ui.session}
-        props={{
-            key: NativeLayout.KeyHash("media/compression/encoded"),
-            bounds: {
-                x: x + half + float32(AppScale(12n)),
-                y: y,
-                width: half,
-                height: image_height
-            },
-            texture: State_media_compression_dialog.media_compression_after,
-            alt_text: after_label,
-            fit: ImageFit.ImageFitContain,
-            smooth: true
-        }}
-    />;
-    y = y + (image_height + float32(AppScale(8n)));
-    if (ready) {
+    {
+        let before_label: string = "";
+        if (ready) {
+            before_label = MediaCompressionCountText(
+                "media_compression_before",
+                work.source.count,
+                true
+            );
+        } else {
+            before_label = LocaleText("media_compression_before");
+        }
+        MediaCompressionLine(app, { x: x, y: y, width: half, height: line }, before_label);
+        <Image
+            session={app.ui.session}
+            props={{
+                key: NativeLayout.KeyHash("media/compression/original"),
+                bounds: { x: x, y: y + line, width: half, height: image_height },
+                texture: State_media_compression_dialog.media_compression_before,
+                alt_text: before_label,
+                fit: ImageFit.ImageFitContain,
+                smooth: true
+            }}
+        />;
+        if (ready) {
+            PackageFree(before_label);
+        }
+    }
+    {
+        let after_label: string = "";
+        if (ready) {
+            after_label = MediaCompressionCountText(
+                "media_compression_after",
+                work.encoded.data.count,
+                true
+            );
+        } else {
+            after_label = LocaleText("media_compression_after");
+        }
         MediaCompressionLine(
             app,
-            { x: x, y: y, width: w, height: line },
-            MediaCompressionCountText(
-                "media_compression_saving",
-                work.source.count - work.encoded.data.count,
-                true
-            )
+            { x: x + half + float32(AppScale(12n)), y: y, width: half, height: line },
+            after_label
         );
+        <Image
+            session={app.ui.session}
+            props={{
+                key: NativeLayout.KeyHash("media/compression/encoded"),
+                bounds: {
+                    x: x + half + float32(AppScale(12n)),
+                    y: y + line,
+                    width: half,
+                    height: image_height
+                },
+                texture: State_media_compression_dialog.media_compression_after,
+                alt_text: after_label,
+                fit: ImageFit.ImageFitContain,
+                smooth: true
+            }}
+        />;
+        if (ready) {
+            PackageFree(after_label);
+        }
+    }
+    y = y + line;
+    y = y + (image_height + float32(AppScale(8n)));
+    if (ready) {
+        let saving = MediaCompressionCountText(
+            "media_compression_saving",
+            work.source.count - work.encoded.data.count,
+            true
+        );
+        MediaCompressionLine(app, { x: x, y: y, width: w, height: line }, saving);
+        PackageFree(saving);
     }
     y = y + line;
     let apply = Button({

@@ -38,19 +38,21 @@ export function practice_draw_results_window(
         heading_height + gap + rule_height + gap + name_height + gap + float32(count) * line_height;
     let y = bounds.y + (bounds.height - total) * 0.5;
     let x = bounds.x + padding;
-    let heading = LocaleText("session_window_finished");
-    <Text
-        session={session}
-        props={{
-            key: NativeLayout.KeyHash("inbe/picture-window/results/heading"),
-            bounds: { x: x, y: y, width: width, height: heading_height },
-            text: heading,
-            size: AppFitFontSize(heading, s32(width), AppScale(24n), AppScale(14n)),
-            wrap: Wrap.TextWrapNone,
-            align: TextAlign.TextAlignCenter,
-            vertical_align: TextAlign.TextAlignCenter
-        }}
-    />;
+    {
+        let heading = LocaleText("session_window_finished");
+        <Text
+            session={session}
+            props={{
+                key: NativeLayout.KeyHash("inbe/picture-window/results/heading"),
+                bounds: { x: x, y: y, width: width, height: heading_height },
+                text: heading,
+                size: AppFitFontSize(heading, s32(width), AppScale(24n), AppScale(14n)),
+                wrap: Wrap.TextWrapNone,
+                align: TextAlign.TextAlignCenter,
+                vertical_align: TextAlign.TextAlignCenter
+            }}
+        />;
+    }
     y = y + (heading_height + gap);
     let rule_width = float32(AppScale(40n));
     <Box
@@ -68,20 +70,22 @@ export function practice_draw_results_window(
         }}
     />;
     y = y + (rule_height + gap);
-    let name = practice_label(result.activity);
-    <Text
-        session={session}
-        props={{
-            key: NativeLayout.KeyHash("inbe/picture-window/results/name"),
-            bounds: { x: x, y: y, width: width, height: name_height },
-            text: name,
-            size: AppFitFontSize(name, s32(width), AppScale(15n), AppScale(11n)),
-            wrap: Wrap.TextWrapNone,
-            align: TextAlign.TextAlignCenter,
-            vertical_align: TextAlign.TextAlignCenter,
-            class_name: CssClass("launcher-muted")
-        }}
-    />;
+    {
+        let name = practice_label(result.activity);
+        <Text
+            session={session}
+            props={{
+                key: NativeLayout.KeyHash("inbe/picture-window/results/name"),
+                bounds: { x: x, y: y, width: width, height: name_height },
+                text: name,
+                size: AppFitFontSize(name, s32(width), AppScale(15n), AppScale(11n)),
+                wrap: Wrap.TextWrapNone,
+                align: TextAlign.TextAlignCenter,
+                vertical_align: TextAlign.TextAlignCenter,
+                class_name: CssClass("launcher-muted")
+            }}
+        />;
+    }
     y = y + (name_height + gap);
     let keys: [u64, u64] = [
         NativeLayout.KeyHash("inbe/picture-window/results/line-1"),

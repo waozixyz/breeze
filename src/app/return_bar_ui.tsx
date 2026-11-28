@@ -28,11 +28,12 @@ export function app_draw_return_barView(app: NativeRef<InnerBreeze>): void {
     let control = float32(AppScale(44n));
     let inset = float32(AppScale(8n));
     let y = -height + (height - control) / 2.0;
-    let label = LocaleText(
-        app.breathing.screen === ScreenNodeApp ? "back_button" : "return_to_apps"
-    );
-    if (
-        Button({
+    let back_clicked = false;
+    {
+        let label = LocaleText(
+            app.breathing.screen === ScreenNodeApp ? "back_button" : "return_to_apps"
+        );
+        back_clicked = Button({
             session: app.ui.session,
             props: {
                 key: NativeLayout.KeyHash("inbe/return-to-apps"),
@@ -50,9 +51,9 @@ export function app_draw_return_barView(app: NativeRef<InnerBreeze>): void {
                 tone: ButtonTone.ButtonToneNeutral,
                 emphasis: ButtonEmphasis.ButtonEmphasisGhost
             }
-        }) &&
-        !app_node_app_back(app)
-    ) {
+        });
+    }
+    if (back_clicked && !app_node_app_back(app)) {
         app_return_to_apps(app);
     }
     let photos =

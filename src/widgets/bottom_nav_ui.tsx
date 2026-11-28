@@ -27,6 +27,7 @@ import { LauncherPlaceFavorite } from "launcher_policy";
 import { AppScale } from "metrics";
 import { app_return_bar_height } from "return_bar";
 import { AppNavRoute } from "route_types";
+import { FrameTextHold } from "text_buffers";
 
 export function app_draw_favorites_dockView(app: NativeRef<InnerBreeze>): void {
     let desktop = app_nav_desktop_rail_enabled(app) !== 0n;
@@ -92,10 +93,11 @@ export function app_draw_favorites_dockView(app: NativeRef<InnerBreeze>): void {
     let items = BottomNavNewItems();
     for (let index = s32(0n); index < count; index += s32(1)) {
         let route = nativeAt(routes, index);
+        const label = FrameTextHold(nativeRef(app.ui.frame_text), app_nav_route_label(route));
         nativeAt(items, index).key = u64(6600n + route);
         nativeAt(items, index).route = route;
-        nativeAt(items, index).label = app_nav_route_label(route);
-        nativeAt(items, index).image = bottom_nav_route_image(route);
+        nativeAt(items, index).label = label;
+        nativeAt(items, index).image = bottom_nav_route_image(route, label);
         nativeAt(items, index).icon_shape = app_nav_route_shape(route);
         nativeAt(items, index).active = !app.launcher_open && bottom_nav_route_active(app, route);
         nativeAt(items, index).disabled =

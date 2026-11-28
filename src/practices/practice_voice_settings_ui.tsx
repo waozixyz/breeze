@@ -2,7 +2,7 @@ import { PracticeVoiceSettingsNewCodes } from "practice_voice_settings";
 import { PracticeVoiceSettingsNewPacks } from "practice_voice_settings";
 import { PracticeVoiceSettingsNewOptions } from "practice_voice_settings";
 // Authored UI composition; native application state remains in practice_voice_settings.zi.
-import { AppCopyText } from "text_buffers";
+import { AppCopyText, FrameTextHold } from "text_buffers";
 import { PracticeNarrationDecline } from "practice_downloads";
 import * as NativeLayout from "kryon/layout";
 import * as NativeSegmentedControl from "kryon/segmented_control";
@@ -18,10 +18,9 @@ import { AppFontSize, AppParagraphHeight, AppScale } from "metrics";
 import {
     PracticeContentReviewNext,
     PracticeNarrationDownload,
-    PracticeNarrationLanguage,
-    PracticeNarrationPack,
+    PracticeNarrationPackAt,
     PracticeNarrationPrefer,
-    PracticeNarrationPreferred,
+    PracticeNarrationShownLanguage,
     PracticeNarrationState,
     PracticeVoiceRecorded
 } from "practice_downloads";
@@ -47,38 +46,43 @@ export function PracticeNarrationLanguagesView(
     let codes = PracticeVoiceSettingsNewCodes();
     let count: s32 = s32(0n);
     for (let rank = s32(0n); rank < LocaleLanguageCount(); rank += s32(1)) {
-        let language = LocaleLanguageAt(rank);
-        let index = PracticeNarrationPack(practice, language.code, voice);
+        let index = PracticeNarrationPackAt(practice, rank, voice);
         if (index < 0n || count >= NARRATION_LANGUAGE_MAX) {
             continue;
         }
         let state = PracticeNarrationState(index);
-        nativeSet(options, count, {
-            key: u64(rank + 1n),
-            label: language.label,
-            action_shape:
-                state === 2n
-                    ? NARRATION_REMOVE_ICON
-                    : state === 1n
-                      ? EmptyString()
-                      : NARRATION_DOWNLOAD_ICON,
-            action_label: LocaleText(
-                state === 2n ? "practice_download_remove" : "practice_narration_download"
-            )
-        });
+        {
+            let language = LocaleLanguageAt(rank);
+            nativeSet(options, count, {
+                key: u64(rank + 1n),
+                label: FrameTextHold(nativeRef(app.ui.frame_text), language.label),
+                action_shape:
+                    state === 2n
+                        ? NARRATION_REMOVE_ICON
+                        : state === 1n
+                          ? EmptyString()
+                          : NARRATION_DOWNLOAD_ICON,
+                action_label: ""
+            });
+            nativeSet(codes, count, FrameTextHold(nativeRef(app.ui.frame_text), language.code));
+        }
+        nativeAt(options, count).action_label = FrameTextHold(
+            nativeRef(app.ui.frame_text),
+            LocaleText(state === 2n ? "practice_download_remove" : "practice_narration_download")
+        );
         nativeSet(packs, count, index);
-        nativeSet(codes, count, language.code);
         count = count + 1n;
     }
     if (count === 0n) {
         return;
     }
-    let spoken = PracticeNarrationLanguage(practice, voice);
-    let shown = spoken.count > 0n ? spoken : PracticeNarrationPreferred(practice);
     let selected: s32 = s32(-1n);
-    for (let option = s32(0n); option < count; option += s32(1)) {
-        if (nativeAt(codes, option) === shown) {
-            selected = option;
+    {
+        let shown = PracticeNarrationShownLanguage(practice, voice);
+        for (let option = s32(0n); option < count; option += s32(1)) {
+            if (nativeAt(codes, option) === shown) {
+                selected = option;
+            }
         }
     }
     let pick = Dropdown({
@@ -186,31 +190,34 @@ export function PracticeNarrationSettingsView(
         PracticeNarrationLanguagesView(app, practice, EmptyString(), choice, x, width, y);
         return picked;
     }
-    let options: [NativeSegmentedControl.SegmentOption, NativeSegmentedControl.SegmentOption] = [
-        { label: LocaleText("practice_voice_female") },
-        { label: LocaleText("practice_voice_male") }
-    ];
-    let props: NativeSegmentedControl.Props = {};
-    props.key = NativeLayout.KeyHash("inbe/practice/customize/voice") + u64(practice);
-    props.bounds = {
-        x: float32(x),
-        y: float32(nativeDeref(y)),
-        width: float32(width),
-        height: float32(AppScale(42n))
-    };
-    props.height = AppScale(42n);
-    props.selected_index = male ? 1n : 0n;
-    props.has_selection = true;
-    let choice_voice = SegmentedControl({
-        session: app.ui.session,
-        props: props,
-        options: nativeSlice(options)
-    });
-    if (choice_voice.changed) {
-        picked = choice_voice.selected_index;
-        male = choice_voice.selected_index === 1n;
+    {
+        let options: [NativeSegmentedControl.SegmentOption, NativeSegmentedControl.SegmentOption] =
+            [
+                { label: LocaleText("practice_voice_female") },
+                { label: LocaleText("practice_voice_male") }
+            ];
+        let props: NativeSegmentedControl.Props = {};
+        props.key = NativeLayout.KeyHash("inbe/practice/customize/voice") + u64(practice);
+        props.bounds = {
+            x: float32(x),
+            y: float32(nativeDeref(y)),
+            width: float32(width),
+            height: float32(AppScale(42n))
+        };
+        props.height = AppScale(42n);
+        props.selected_index = male ? 1n : 0n;
+        props.has_selection = true;
+        let choice_voice = SegmentedControl({
+            session: app.ui.session,
+            props: props,
+            options: nativeSlice(options)
+        });
+        if (choice_voice.changed) {
+            picked = choice_voice.selected_index;
+            male = choice_voice.selected_index === 1n;
+        }
+        nativeDeref(y) = nativeDeref(y) + AppScale(42n + 12n);
     }
-    nativeDeref(y) = nativeDeref(y) + AppScale(42n + 12n);
     PracticeNarrationLanguagesView(
         app,
         practice,

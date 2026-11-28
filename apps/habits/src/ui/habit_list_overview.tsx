@@ -1,3 +1,4 @@
+import { Scroll } from "kryon/tsx/scroll";
 import * as Shared from "habit_shared";
 import * as Model from "habit_list_view";
 import { HABITS_LIST_CLOSE, HABITS_LIST_NONE, HABITS_LIST_OPEN } from "habits_types";
@@ -5,17 +6,15 @@ import * as NativeLayout from "kryon/layout";
 import * as NativeScroll from "kryon/scroll";
 import * as NativeText from "kryon/text";
 import { TextAlign } from "kryon/text_align";
-import { End } from "kryon/tree";
 import { Box } from "kryon/tsx/box";
 import { Text } from "kryon/tsx/text";
-import { HabitRowOffset, HabitTableLayoutFor } from "table_layout";
+import { HabitRowOffset, HabitTableLayout, HabitTableLayoutFor } from "table_layout";
 import { Fill } from "habit_list_visuals";
 import { TableHeader, NameResize, Row, RowDetail } from "habit_list_rows";
 import { DeactivatedRow, InactiveHeader, Drop } from "habit_list_drag";
 import { DrawHabitsSummary } from "habit_list_summary";
 
 export function Overview(): void {
-    const rows = Model.Rows();
     const list_state = Model.CurrentList();
     let x = s32(list_state.bounds.x);
     let y = s32(list_state.bounds.y);
@@ -105,140 +104,179 @@ export function Overview(): void {
             }
         }
     }
-    let scrolled = NativeScroll.Draw(list_state.session, {
-        key: NativeLayout.KeyHash("inbe/habits/overview"),
-        bounds: Shared.Bounds(x, rows_y, width, panel_rows_height),
-        content_height: content_height,
-        keep_scrollbar: keep_scrollbar,
-        scroll_offset: list_state.scroll
-    });
-    list_state.scroll = scrolled.scroll_offset;
-    if (!scrolled.opened) {
-        return;
-    }
-    let pad = Model.Scale(12n);
-    let table_x = s32(scrolled.content.x);
-    let table_width = s32(scrolled.content.width);
-    let name_preferred: s32 = Model.LIST_NAME_PREFERRED_WIDTH;
-    if (list_state.name_width > 0n) {
-        name_preferred = list_state.name_width;
-    }
-    if (name_preferred < Model.LIST_NAME_MIN_WIDTH) {
-        name_preferred = Model.LIST_NAME_MIN_WIDTH;
-    }
-    if (name_preferred > Model.LIST_NAME_MAXIMUM_WIDTH) {
-        name_preferred = Model.LIST_NAME_MAXIMUM_WIDTH;
-    }
-    let layout = HabitTableLayoutFor(
-        table_width - pad * 2n,
-        Model.Scale(name_preferred),
-        Model.Scale(Model.LIST_NAME_MIN_WIDTH),
-        Model.Scale(Model.LIST_ICON_COLUMN_WIDTH),
-        Model.Scale(Model.LIST_DAY_MIN_WIDTH),
-        Model.Scale(Model.LIST_DAY_MAX_WIDTH)
-    );
-    if (active_count === 0n) {
-        <Text
-            session={list_state.session}
-            props={{
-                bounds: Shared.Bounds(
-                    table_x + pad,
-                    s32(scrolled.content.y) + Model.Scale(10n),
-                    table_width - pad * 2n,
-                    Model.Scale(48n)
-                ),
-                text: Model.Locale("habit_empty_title"),
-                size: list_state.font,
-                wrap: NativeText.Wrap.TextWrapNone
-            }}
-        />;
-    }
-    let cards = Model.NewCards();
-    for (let position = s32(0n); position < active_count; position += s32(1)) {
-        let index = nativeAt(active, position);
-        let open = position === selected_position;
-        let row = Shared.Bounds(
-            table_x,
-            s32(scrolled.content.y) +
-                HabitRowOffset(position, selected_position, row_height, detail_height),
-            table_width,
-            row_height
-        );
-        nativeSet(cards, position, row);
-        if (position > 0n) {
-            Fill(
-                Shared.Bounds(table_x + pad, s32(row.y), table_width - pad * 2n, Model.Hairline()),
-                0.0,
-                Shared.Alpha(list_state.text_color, 0.08)
+    let layout: HabitTableLayout = {};
+    const layout_ref = nativeRef(layout);
+    let pad = s32(0);
+    const pad_ref = nativeRef(pad);
+    let table_x = s32(0);
+    const table_x_ref = nativeRef(table_x);
+    let scrolled = Scroll({
+        session: list_state.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/habits/overview"),
+            bounds: Shared.Bounds(x, rows_y, width, panel_rows_height),
+            content_height: content_height,
+            keep_scrollbar: keep_scrollbar,
+            scroll_offset: list_state.scroll
+        },
+        children: (scrolled: NativeScroll.ScrollResult): void => {
+            nativeDeref(list_state).scroll = scrolled.scroll_offset;
+
+            nativeDeref(pad_ref) = Model.Scale(12n);
+            nativeDeref(table_x_ref) = s32(scrolled.content.x);
+            let table_width = s32(scrolled.content.width);
+            let name_preferred: s32 = Model.LIST_NAME_PREFERRED_WIDTH;
+            if (list_state.name_width > 0n) {
+                name_preferred = list_state.name_width;
+            }
+            if (name_preferred < Model.LIST_NAME_MIN_WIDTH) {
+                name_preferred = Model.LIST_NAME_MIN_WIDTH;
+            }
+            if (name_preferred > Model.LIST_NAME_MAXIMUM_WIDTH) {
+                name_preferred = Model.LIST_NAME_MAXIMUM_WIDTH;
+            }
+            nativeDeref(layout_ref) = HabitTableLayoutFor(
+                table_width - nativeDeref(pad_ref) * 2n,
+                Model.Scale(name_preferred),
+                Model.Scale(Model.LIST_NAME_MIN_WIDTH),
+                Model.Scale(Model.LIST_ICON_COLUMN_WIDTH),
+                Model.Scale(Model.LIST_DAY_MIN_WIDTH),
+                Model.Scale(Model.LIST_DAY_MAX_WIDTH)
             );
-        }
-        if (position === 0n) {
-            list_state.anchor_table = row;
-        }
-        if (Row(index, position === 0n, row, layout, pad, open)) {
-            Model.Ask(open ? HABITS_LIST_CLOSE : HABITS_LIST_OPEN, index, 0n);
-        }
-        if (open) {
-            RowDetail(
-                index,
-                position === 0n,
-                Shared.Bounds(table_x, s32(row.y + row.height), table_width, detail_height),
-                pad
-            );
-        }
-    }
-    let section = Shared.Bounds(
-        table_x,
-        s32(scrolled.content.y) + active_height,
-        table_width,
-        section_height
-    );
-    if (show_section) {
-        Fill(
-            Shared.Bounds(table_x, s32(section.y), table_width, Model.Hairline()),
-            0.0,
-            Shared.Alpha(list_state.text_color, 0.12)
-        );
-        InactiveHeader(
-            Shared.Bounds(
-                table_x,
-                s32(section.y),
-                table_width,
-                Model.Scale(Model.LIST_INACTIVE_HEADER_HEIGHT)
-            ),
-            deactivated_count,
-            pad
-        );
-    }
-    if (show_section && list_state.show_deactivated) {
-        let row_y = s32(section.y) + Model.Scale(Model.LIST_INACTIVE_HEADER_HEIGHT);
-        <Text
-            session={list_state.session}
-            props={{
-                bounds: Shared.Bounds(
-                    table_x + pad,
-                    row_y,
-                    table_width - pad * 2n,
-                    Model.Scale(Model.LIST_DEACTIVATED_HINT_HEIGHT)
-                ),
-                text: Model.Locale("habits_deactivated_hint"),
-                size: list_state.small_font,
-                vertical_align: TextAlign.TextAlignCenter,
-                wrap: NativeText.Wrap.TextWrapAuto
-            }}
-        />;
-        row_y += Model.Scale(Model.LIST_DEACTIVATED_HINT_HEIGHT);
-        for (let index = s32(0n); index < Model.row_count; index += s32(1)) {
-            if (nativeAt(rows, index).deactivated) {
-                DeactivatedRow(
-                    index,
-                    Shared.Bounds(table_x, row_y, table_width, inactive_row_height)
+            if (active_count === 0n) {
+                <Text
+                    session={list_state.session}
+                    props={{
+                        bounds: Shared.Bounds(
+                            nativeDeref(table_x_ref) + nativeDeref(pad_ref),
+                            s32(scrolled.content.y) + Model.Scale(10n),
+                            table_width - nativeDeref(pad_ref) * 2n,
+                            Model.Scale(48n)
+                        ),
+                        text: Model.Locale("habit_empty_title"),
+                        size: list_state.font,
+                        wrap: NativeText.Wrap.TextWrapNone
+                    }}
+                />;
+            }
+            for (let position = s32(0n); position < active_count; position += s32(1)) {
+                let index = nativeAt(active, position);
+                let open = position === selected_position;
+                let row = Shared.Bounds(
+                    nativeDeref(table_x_ref),
+                    s32(scrolled.content.y) +
+                        HabitRowOffset(position, selected_position, row_height, detail_height),
+                    table_width,
+                    row_height
                 );
-                row_y += inactive_row_height;
+                if (position > 0n) {
+                    Fill(
+                        Shared.Bounds(
+                            nativeDeref(table_x_ref) + nativeDeref(pad_ref),
+                            s32(row.y),
+                            table_width - nativeDeref(pad_ref) * 2n,
+                            Model.Hairline()
+                        ),
+                        0.0,
+                        Shared.Alpha(list_state.text_color, 0.08)
+                    );
+                }
+                if (position === 0n) {
+                    nativeDeref(list_state).anchor_table = row;
+                }
+                if (
+                    Row(
+                        index,
+                        position === 0n,
+                        row,
+                        nativeDeref(layout_ref),
+                        nativeDeref(pad_ref),
+                        open
+                    )
+                ) {
+                    Model.Ask(open ? HABITS_LIST_CLOSE : HABITS_LIST_OPEN, index, 0n);
+                }
+                if (open) {
+                    RowDetail(
+                        index,
+                        position === 0n,
+                        Shared.Bounds(
+                            nativeDeref(table_x_ref),
+                            s32(row.y + row.height),
+                            table_width,
+                            detail_height
+                        ),
+                        nativeDeref(pad_ref)
+                    );
+                }
+            }
+            let section = Shared.Bounds(
+                nativeDeref(table_x_ref),
+                s32(scrolled.content.y) + active_height,
+                table_width,
+                section_height
+            );
+            if (show_section) {
+                Fill(
+                    Shared.Bounds(
+                        nativeDeref(table_x_ref),
+                        s32(section.y),
+                        table_width,
+                        Model.Hairline()
+                    ),
+                    0.0,
+                    Shared.Alpha(list_state.text_color, 0.12)
+                );
+                InactiveHeader(
+                    Shared.Bounds(
+                        nativeDeref(table_x_ref),
+                        s32(section.y),
+                        table_width,
+                        Model.Scale(Model.LIST_INACTIVE_HEADER_HEIGHT)
+                    ),
+                    deactivated_count,
+                    nativeDeref(pad_ref)
+                );
+            }
+            if (show_section && list_state.show_deactivated) {
+                let row_y = s32(section.y) + Model.Scale(Model.LIST_INACTIVE_HEADER_HEIGHT);
+                <Text
+                    session={list_state.session}
+                    props={{
+                        bounds: Shared.Bounds(
+                            nativeDeref(table_x_ref) + nativeDeref(pad_ref),
+                            row_y,
+                            table_width - nativeDeref(pad_ref) * 2n,
+                            Model.Scale(Model.LIST_DEACTIVATED_HINT_HEIGHT)
+                        ),
+                        text: Model.Locale("habits_deactivated_hint"),
+                        size: list_state.small_font,
+                        vertical_align: TextAlign.TextAlignCenter,
+                        wrap: NativeText.Wrap.TextWrapAuto
+                    }}
+                />;
+                row_y += Model.Scale(Model.LIST_DEACTIVATED_HINT_HEIGHT);
+                for (let index = s32(0n); index < Model.row_count; index += s32(1)) {
+                    if (Model.Row(index).deactivated) {
+                        DeactivatedRow(
+                            index,
+                            Shared.Bounds(
+                                nativeDeref(table_x_ref),
+                                row_y,
+                                table_width,
+                                inactive_row_height
+                            )
+                        );
+                        row_y += inactive_row_height;
+                    }
+                }
             }
         }
+    });
+    if (!scrolled.opened) {
+        list_state.scroll = scrolled.scroll_offset;
+        return;
     }
-    End(list_state.session);
     TableHeader(table_x + pad + layout.name_width, list_y, layout, header_height);
     NameResize(table_x + pad + layout.name_width, list_y, header_height, layout.name_width);
     Fill(
@@ -246,6 +284,26 @@ export function Overview(): void {
         0.0,
         Shared.Alpha(list_state.text_color, 0.12)
     );
+    let section = Shared.Bounds(
+        s32(scrolled.content.x),
+        s32(scrolled.content.y) + active_height,
+        s32(scrolled.content.width),
+        section_height
+    );
+    let cards = Model.NewCards();
+    for (let position = s32(0); position < active_count; position += s32(1)) {
+        nativeSet(
+            cards,
+            position,
+            Shared.Bounds(
+                s32(scrolled.content.x),
+                s32(scrolled.content.y) +
+                    HabitRowOffset(position, selected_position, row_height, detail_height),
+                s32(scrolled.content.width),
+                row_height
+            )
+        );
+    }
     Drop(
         viewport,
         scrolled.max_scroll,

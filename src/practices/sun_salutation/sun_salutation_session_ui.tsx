@@ -7,7 +7,9 @@ import { ButtonEmphasis, ButtonTone } from "kryon/control_props";
 import { LocaleText } from "locale";
 import { ModalType } from "modal_rules";
 import { NativePresent } from "native_flags";
+import { PackageFree, PackageText } from "package_files";
 import { exit_to_start } from "sun_salutation_session";
+import { FrameTextHold } from "text_buffers";
 
 export function sun_salutation_handle_exit_modalView(app: NativeRef<InnerBreeze>): s32 {
     if (
@@ -19,24 +21,26 @@ export function sun_salutation_handle_exit_modalView(app: NativeRef<InnerBreeze>
     }
     let actions: [NativeModal.ActionModalAction, NativeModal.ActionModalAction] = [
         {
-            label: LocaleText("cancel_button"),
+            label: FrameTextHold(nativeRef(app.ui.frame_text), LocaleText("cancel_button")),
             tone: ButtonTone.ButtonToneNeutral,
             emphasis: ButtonEmphasis.ButtonEmphasisSoft
         },
         {
-            label: LocaleText("exit_button"),
+            label: FrameTextHold(nativeRef(app.ui.frame_text), LocaleText("exit_button")),
             tone: ButtonTone.ButtonToneDanger,
             emphasis: ButtonEmphasis.ButtonEmphasisFilled
         }
     ];
+    let message = PackageText(LocaleText("all_progress_lost_message"), "");
     let modal_result = ActionModal({
         session: app.ui.session,
         props: {
             title: LocaleText("exit_session_title"),
-            message: LocaleText("all_progress_lost_message")
+            message: message
         },
         actions: nativeSlice(actions, 0n, 2n)
     }).action;
+    PackageFree(message);
     if (modal_result === 1n || modal_result === -1n) {
         app_close_modal(app);
     } else if (modal_result === 2n) {

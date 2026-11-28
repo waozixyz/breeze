@@ -114,118 +114,130 @@ export function settings_appearance_draw(
         }}
     />;
     nativeDeref(y) = nativeDeref(y) + (hint_height + AppScale(16n));
-    let scopes = SettingsAppearanceNewScopes();
-    nativeAt(scopes, 0n).label = LocaleText("appearance_css_all");
-    nativeAt(scopes, 1n).label = LocaleText("tab_elist");
-    nativeAt(scopes, 2n).label = LocaleText("tab_habits");
-    nativeAt(scopes, 3n).label = LocaleText("tab_practices");
-    nativeAt(scopes, 4n).label = LocaleText("tab_diary");
-    nativeAt(scopes, 5n).label = "Lumi";
-    let scope_props: NativeDropdown.Props = {};
-    scope_props.id = 7851n;
-    scope_props.bounds = settings_choice_row(app, x, width, y, LocaleText("appearance_css_scope"));
-    scope_props.selected_index = State_style_customization.style_editor_scope;
-    let custom_scope_menu = Dropdown({
-        session: app.ui.session,
-        props: scope_props,
-        options: nativeSlice(scopes)
-    });
-    if (custom_scope_menu.changed) {
-        State_style_customization.style_editor_scope = custom_scope_menu.selected_index;
-        state.custom_cursor = 0n;
-        state.custom_anchor = 0n;
-        state.custom_scroll = 0n;
-        state.custom_focused = false;
-        state.custom_pending = false;
-        app_apply_style(app);
+    {
+        let scopes = SettingsAppearanceNewScopes();
+        nativeAt(scopes, 0n).label = LocaleText("appearance_css_all");
+        nativeAt(scopes, 1n).label = LocaleText("tab_elist");
+        nativeAt(scopes, 2n).label = LocaleText("tab_habits");
+        nativeAt(scopes, 3n).label = LocaleText("tab_practices");
+        nativeAt(scopes, 4n).label = LocaleText("tab_diary");
+        nativeAt(scopes, 5n).label = "Lumi";
+        let scope_props: NativeDropdown.Props = {};
+        scope_props.id = 7851n;
+        scope_props.bounds = settings_choice_row(
+            app,
+            x,
+            width,
+            y,
+            LocaleText("appearance_css_scope")
+        );
+        scope_props.selected_index = State_style_customization.style_editor_scope;
+        let custom_scope_menu = Dropdown({
+            session: app.ui.session,
+            props: scope_props,
+            options: nativeSlice(scopes)
+        });
+        if (custom_scope_menu.changed) {
+            State_style_customization.style_editor_scope = custom_scope_menu.selected_index;
+            state.custom_cursor = 0n;
+            state.custom_anchor = 0n;
+            state.custom_scroll = 0n;
+            state.custom_focused = false;
+            state.custom_pending = false;
+            app_apply_style(app);
+        }
     }
-    let sources = SettingsAppearanceNewSources();
-    nativeAt(sources, 0n).label = LocaleText("appearance_css_custom");
-    nativeAt(sources, 1n).label = LocaleText("appearance_css_defaults");
-    nativeAt(sources, 2n).label = LocaleText("appearance_css_pack");
-    let source_props: NativeDropdown.Props = {};
-    source_props.id = 7852n;
-    source_props.bounds = settings_choice_row(
-        app,
-        x,
-        width,
-        y,
-        LocaleText("appearance_css_source")
-    );
-    source_props.selected_index = state.custom_source_view;
-    let custom_source_menu = Dropdown({
-        session: app.ui.session,
-        props: source_props,
-        options: nativeSlice(sources)
-    });
-    if (custom_source_menu.changed) {
-        state.custom_source_view = custom_source_menu.selected_index;
-        state.custom_cursor = 0n;
-        state.custom_anchor = 0n;
-        state.custom_scroll = 0n;
+    {
+        let sources = SettingsAppearanceNewSources();
+        nativeAt(sources, 0n).label = LocaleText("appearance_css_custom");
+        nativeAt(sources, 1n).label = LocaleText("appearance_css_defaults");
+        nativeAt(sources, 2n).label = LocaleText("appearance_css_pack");
+        let source_props: NativeDropdown.Props = {};
+        source_props.id = 7852n;
+        source_props.bounds = settings_choice_row(
+            app,
+            x,
+            width,
+            y,
+            LocaleText("appearance_css_source")
+        );
+        source_props.selected_index = state.custom_source_view;
+        let custom_source_menu = Dropdown({
+            session: app.ui.session,
+            props: source_props,
+            options: nativeSlice(sources)
+        });
+        if (custom_source_menu.changed) {
+            state.custom_source_view = custom_source_menu.selected_index;
+            state.custom_cursor = 0n;
+            state.custom_anchor = 0n;
+            state.custom_scroll = 0n;
+        }
     }
-    let source = StyleDraftSource(State_style_customization.style_editor_scope);
-    if (state.custom_source_view === 1n) {
-        source = StyleImport("inbe").data;
-    } else if (state.custom_source_view === 2n) {
-        source = StyleImport("material").data;
-    }
-    let typed = SettingsAppearanceNewTyped();
-    let area: NativeTextArea.Props = {};
-    area.key = u64(785300n);
-    area.focus_id = 7853n;
-    area.bounds = {
-        x: float32(x),
-        y: float32(nativeDeref(y)),
-        width: float32(width),
-        height: float32(AppScale(300n))
-    };
-    area.value = source;
-    if (state.custom_source_view === 0n) {
-        area.value = FrameTextHold(nativeRef(app.ui.frame_text), source);
-    }
-    area.label = LocaleText("appearance_css_custom");
-    area.placeholder = "Button { radius: 24; }";
-    area.cursor = state.custom_cursor;
-    area.anchor = state.custom_anchor;
-    area.scroll_y = state.custom_scroll;
-    area.focused = state.custom_focused;
-    area.selecting = state.custom_selecting;
-    area.preferred_x = state.custom_preferred_x;
-    area.preferred_x_valid = state.custom_preferred_x_valid;
-    area.wrap = true;
-    area.read_only = state.custom_source_view !== 0n;
-    area.max_bytes = StyleSourceCapacity - 1n;
-    area.max_codepoints = StyleSourceCapacity - 1n;
-    area.input = SampleTextAreaInput(area.focused, nativeSlice(typed));
-    let edited = TextArea({ session: app.ui.session, props: area });
-    state.custom_cursor = edited.cursor;
-    state.custom_anchor = edited.anchor;
-    state.custom_scroll = edited.scroll_y;
-    state.custom_focused = edited.focused;
-    state.custom_selecting = edited.selecting;
-    state.custom_preferred_x = edited.preferred_x;
-    state.custom_preferred_x_valid = edited.preferred_x_valid;
-    if (edited.clipboard_write) {
-        TextInputWriteClipboard(edited.clipboard_text);
-    }
-    if (edited.edit.changed && state.custom_source_view === 0n) {
-        let bytes = SettingsAppearanceNewBytes();
-        AppCopyText(source, nativeSlice(bytes));
-        if (
-            AppReplaceText(
-                nativeSlice(bytes),
-                edited.edit.start,
-                edited.edit.end,
-                edited.edit.replacement
-            )
-        ) {
-            StyleSetDraft(
-                State_style_customization.style_editor_scope,
-                AppTextFromCString(nativeRef(nativeAt(bytes, 0n)), StyleSourceCapacity)
-            );
-            state.custom_pending = true;
-            state.custom_preview_at = HostSeconds() + 0.25;
+    {
+        const source =
+            state.custom_source_view === 1n
+                ? StyleImport("inbe").data
+                : state.custom_source_view === 2n
+                  ? StyleImport("material").data
+                  : FrameTextHold(
+                        nativeRef(app.ui.frame_text),
+                        StyleDraftSource(State_style_customization.style_editor_scope)
+                    );
+        let typed = SettingsAppearanceNewTyped();
+        let area: NativeTextArea.Props = {};
+        area.key = u64(785300n);
+        area.focus_id = 7853n;
+        area.bounds = {
+            x: float32(x),
+            y: float32(nativeDeref(y)),
+            width: float32(width),
+            height: float32(AppScale(300n))
+        };
+        area.value = source;
+        area.label = LocaleText("appearance_css_custom");
+        area.placeholder = "Button { radius: 24; }";
+        area.cursor = state.custom_cursor;
+        area.anchor = state.custom_anchor;
+        area.scroll_y = state.custom_scroll;
+        area.focused = state.custom_focused;
+        area.selecting = state.custom_selecting;
+        area.preferred_x = state.custom_preferred_x;
+        area.preferred_x_valid = state.custom_preferred_x_valid;
+        area.wrap = true;
+        area.read_only = state.custom_source_view !== 0n;
+        area.max_bytes = StyleSourceCapacity - 1n;
+        area.max_codepoints = StyleSourceCapacity - 1n;
+        area.input = SampleTextAreaInput(area.focused, nativeSlice(typed));
+        let edited = TextArea({ session: app.ui.session, props: area });
+        state.custom_cursor = edited.cursor;
+        state.custom_anchor = edited.anchor;
+        state.custom_scroll = edited.scroll_y;
+        state.custom_focused = edited.focused;
+        state.custom_selecting = edited.selecting;
+        state.custom_preferred_x = edited.preferred_x;
+        state.custom_preferred_x_valid = edited.preferred_x_valid;
+        if (edited.clipboard_write) {
+            TextInputWriteClipboard(edited.clipboard_text);
+        }
+        if (edited.edit.changed && state.custom_source_view === 0n) {
+            let bytes = SettingsAppearanceNewBytes();
+            AppCopyText(source, nativeSlice(bytes));
+            if (
+                AppReplaceText(
+                    nativeSlice(bytes),
+                    edited.edit.start,
+                    edited.edit.end,
+                    edited.edit.replacement
+                )
+            ) {
+                StyleSetDraft(
+                    State_style_customization.style_editor_scope,
+                    AppTextFromCString(nativeRef(nativeAt(bytes, 0n)), StyleSourceCapacity)
+                );
+                state.custom_pending = true;
+                state.custom_preview_at = HostSeconds() + 0.25;
+            }
         }
     }
     if (state.custom_pending && HostSeconds() >= state.custom_preview_at) {
@@ -233,40 +245,42 @@ export function settings_appearance_draw(
         state.custom_pending = false;
     }
     nativeDeref(y) = nativeDeref(y) + AppScale(312n);
-    let error = AppTextFromCString(
-        nativeRef(nativeAt(State_style_customization.style_error, 0n)),
-        256n
-    );
-    let status =
-        StyleDraftSource(State_style_customization.style_editor_scope) ===
-        StyleSavedSource(State_style_customization.style_editor_scope)
-            ? LocaleText("appearance_css_saved")
-            : LocaleText("appearance_css_preview");
-    if (error.count > 0n) {
-        status = AppearanceErrorText(app, error);
+    {
+        let error = AppTextFromCString(
+            nativeRef(nativeAt(State_style_customization.style_error, 0n)),
+            256n
+        );
+        let status =
+            StyleDraftSource(State_style_customization.style_editor_scope) ===
+            StyleSavedSource(State_style_customization.style_editor_scope)
+                ? LocaleText("appearance_css_saved")
+                : LocaleText("appearance_css_preview");
+        if (error.count > 0n) {
+            status = AppearanceErrorText(app, error);
+        }
+        <Text
+            session={app.ui.session}
+            props={{
+                text: status,
+                bounds: {
+                    x: float32(x),
+                    y: float32(nativeDeref(y)),
+                    width: float32(width),
+                    height: float32(AppScale(66n))
+                },
+                size: AppSmallFontSize(),
+                wrap: Wrap.TextWrapAuto
+            }}
+        />;
+        nativeDeref(y) = nativeDeref(y) + AppScale(74n);
     }
-    <Text
-        session={app.ui.session}
-        props={{
-            text: status,
-            bounds: {
-                x: float32(x),
-                y: float32(nativeDeref(y)),
-                width: float32(width),
-                height: float32(AppScale(66n))
-            },
-            size: AppSmallFontSize(),
-            wrap: Wrap.TextWrapAuto
-        }}
-    />;
-    nativeDeref(y) = nativeDeref(y) + AppScale(74n);
-    let labels: [string, string, string, string, string, string] = [
-        LocaleText("save_button"),
-        LocaleText("appearance_css_format"),
-        LocaleText("appearance_css_undo"),
-        LocaleText("discard_button"),
-        LocaleText("reset_to_defaults_label"),
-        LocaleText("appearance_css_lumi")
+    let label_keys: [string, string, string, string, string, string] = [
+        "save_button",
+        "appearance_css_format",
+        "appearance_css_undo",
+        "discard_button",
+        "reset_to_defaults_label",
+        "appearance_css_lumi"
     ];
     let columns = AppearanceActionColumns(width);
     let gap = AppScale(8n);
@@ -283,7 +297,7 @@ export function settings_appearance_draw(
                         width: float32(button_width),
                         height: float32(AppScale(44n))
                     },
-                    label: nativeAt(labels, index),
+                    label: LocaleText(nativeAt(label_keys, index)),
                     tone: ButtonTone.ButtonToneNeutral,
                     emphasis: ButtonEmphasis.ButtonEmphasisSoft,
                     disabled: app.modal.active !== 0n
@@ -310,66 +324,76 @@ export function settings_appearance_draw(
         }
     }
     nativeDeref(y) = nativeDeref(y) + ((6n + columns - 1n) / columns) * AppScale(52n);
-    let targets = SettingsAppearanceNewTargets();
-    let labels_target: [
-        string,
-        string,
-        string,
-        string,
-        string,
-        string,
-        string,
-        string,
-        string,
-        string
-    ] = [
-        "Button",
-        "Text",
-        "Card",
-        "TextArea",
-        "TextField",
-        "NavigationBarItem.launcher-dock",
-        "Button.profile-header",
-        "Button.practice-pager",
-        "Button.launcher-tile",
-        "Image.pose-muted"
-    ];
-    for (let index = s32(0n); index <= s32(9n); index += s32(1)) {
-        nativeAt(targets, index).label = nativeAt(labels_target, index);
+    {
+        let targets = SettingsAppearanceNewTargets();
+        let labels_target: [
+            string,
+            string,
+            string,
+            string,
+            string,
+            string,
+            string,
+            string,
+            string,
+            string
+        ] = [
+            "Button",
+            "Text",
+            "Card",
+            "TextArea",
+            "TextField",
+            "NavigationBarItem.launcher-dock",
+            "Button.profile-header",
+            "Button.practice-pager",
+            "Button.launcher-tile",
+            "Image.pose-muted"
+        ];
+        for (let index = s32(0n); index <= s32(9n); index += s32(1)) {
+            nativeAt(targets, index).label = nativeAt(labels_target, index);
+        }
+        let target_props: NativeDropdown.Props = {};
+        target_props.id = 7870n;
+        target_props.bounds = settings_choice_row(
+            app,
+            x,
+            width,
+            y,
+            LocaleText("appearance_css_inspect")
+        );
+        target_props.selected_index = state.custom_target;
+        let custom_target_menu = Dropdown({
+            session: app.ui.session,
+            props: target_props,
+            options: nativeSlice(targets)
+        });
+        if (custom_target_menu.changed) {
+            state.custom_target = custom_target_menu.selected_index;
+        }
     }
-    let target_props: NativeDropdown.Props = {};
-    target_props.id = 7870n;
-    target_props.bounds = settings_choice_row(
-        app,
-        x,
-        width,
-        y,
-        LocaleText("appearance_css_inspect")
-    );
-    target_props.selected_index = state.custom_target;
-    let custom_target_menu = Dropdown({
-        session: app.ui.session,
-        props: target_props,
-        options: nativeSlice(targets)
-    });
-    if (custom_target_menu.changed) {
-        state.custom_target = custom_target_menu.selected_index;
-    }
-    let states = SettingsAppearanceNewStates();
-    for (let index = s32(0n); index <= s32(5n); index += s32(1)) {
-        nativeAt(states, index).label = AppearanceTargetState(index);
-    }
-    let state_props: NativeDropdown.Props = {};
-    state_props.id = 7871n;
-    state_props.bounds = settings_choice_row(app, x, width, y, LocaleText("appearance_css_state"));
-    state_props.selected_index = state.custom_state;
-    let custom_state_menu = Dropdown({
-        session: app.ui.session,
-        props: state_props,
-        options: nativeSlice(states)
-    });
-    if (custom_state_menu.changed) {
-        state.custom_state = custom_state_menu.selected_index;
+    {
+        let states = SettingsAppearanceNewStates();
+        for (let index = s32(0n); index <= s32(5n); index += s32(1)) {
+            nativeAt(states, index).label = AppearanceTargetState(index);
+        }
+        let state_props: NativeDropdown.Props = {};
+        state_props.id = 7871n;
+        state_props.bounds = settings_choice_row(
+            app,
+            x,
+            width,
+            y,
+            LocaleText("appearance_css_state")
+        );
+        state_props.selected_index = state.custom_state;
+        let custom_state_menu = Dropdown({
+            session: app.ui.session,
+            props: state_props,
+            options: nativeSlice(states)
+        });
+        if (custom_state_menu.changed) {
+            state.custom_state = custom_state_menu.selected_index;
+        }
     }
     if (
         State_settings_appearance.appearance_inspector_revision !==

@@ -1,3 +1,5 @@
+import { ResolvedModal } from "kryon/tsx/modal";
+import { Scroll } from "kryon/tsx/scroll";
 import { SettingsDataUiNewActions } from "settings_data_ui";
 import { SettingsDataUiNewQueued } from "settings_data_ui";
 import { ActionModal } from "kryon/tsx/action_modal";
@@ -28,7 +30,6 @@ import { ButtonEmphasis, ButtonTone } from "kryon/control_props";
 import { Rectangle } from "kryon/geometry";
 import { NextTextLine } from "kryon/text_layout";
 import { Wrap } from "kryon/text_props";
-import { End } from "kryon/tree";
 import { Button } from "kryon/tsx/button";
 import { Text } from "kryon/tsx/text";
 import { LocaleText } from "locale";
@@ -58,7 +59,14 @@ import {
     storage_sync_review_plan
 } from "sync_review";
 import { StorageSyncStatus, storage_sync_status } from "sync_state";
-import { AppTextFromCString, FormatNumberTemplate, FrameTextHold } from "text_buffers";
+import {
+    AppTextFromCString,
+    FormatNumberTemplate,
+    FrameTextHold,
+    FrameTextRange,
+    FrameTextSave,
+    FrameTextRead
+} from "text_buffers";
 
 export function settings_data_draw_actionsView(
     app: NativeRef<InnerBreeze>,
@@ -82,17 +90,19 @@ export function settings_data_draw_actionsView(
         <Text session={app.ui.session} props={props} />;
         nativeDeref(y) = nativeDeref(y) + AppScale(78n);
     }
-    let restore_button = SettingsDataButtonProps(
-        LocaleText("restore_last_good_button"),
-        x,
-        nativeDeref(y),
-        width,
-        5305n,
-        false
-    );
-    restore_button.disabled = State_settings_data_ui.restore_last_good_requested;
-    if (Button({ session: app.ui.session, props: restore_button })) {
-        State_settings_data_ui.restore_last_good_requested = true;
+    {
+        let restore_button = SettingsDataButtonProps(
+            LocaleText("restore_last_good_button"),
+            x,
+            nativeDeref(y),
+            width,
+            5305n,
+            false
+        );
+        restore_button.disabled = State_settings_data_ui.restore_last_good_requested;
+        if (Button({ session: app.ui.session, props: restore_button })) {
+            State_settings_data_ui.restore_last_good_requested = true;
+        }
     }
     if (State_settings_data_ui.restore_last_good_requested && app_sync_stop_for_restore(app)) {
         State_settings_data_ui.restore_last_good_requested = false;
@@ -107,53 +117,69 @@ export function settings_data_draw_actionsView(
         }
     }
     nativeDeref(y) = nativeDeref(y) + AppScale(50n);
-    let import_button = SettingsDataButtonProps(
-        LocaleText("import_data_button"),
-        x,
-        nativeDeref(y),
-        width,
-        5301n,
-        true
-    );
-    if (Button({ session: app.ui.session, props: import_button })) {
+    if (
+        Button({
+            session: app.ui.session,
+            props: SettingsDataButtonProps(
+                LocaleText("import_data_button"),
+                x,
+                nativeDeref(y),
+                width,
+                5301n,
+                true
+            )
+        })
+    ) {
         SettingsDataImport(app);
     }
     nativeDeref(y) = nativeDeref(y) + AppScale(50n);
-    let export_button = SettingsDataButtonProps(
-        LocaleText("export_data_button"),
-        x,
-        nativeDeref(y),
-        width,
-        5302n,
-        true
-    );
-    if (Button({ session: app.ui.session, props: export_button })) {
+    if (
+        Button({
+            session: app.ui.session,
+            props: SettingsDataButtonProps(
+                LocaleText("export_data_button"),
+                x,
+                nativeDeref(y),
+                width,
+                5302n,
+                true
+            )
+        })
+    ) {
         SettingsDataExport(app);
     }
     nativeDeref(y) = nativeDeref(y) + AppScale(50n);
-    let csv_button = SettingsDataButtonProps(
-        LocaleText("export_csv_button"),
-        x,
-        nativeDeref(y),
-        width,
-        5303n,
-        false
-    );
-    if (Button({ session: app.ui.session, props: csv_button })) {
+    if (
+        Button({
+            session: app.ui.session,
+            props: SettingsDataButtonProps(
+                LocaleText("export_csv_button"),
+                x,
+                nativeDeref(y),
+                width,
+                5303n,
+                false
+            )
+        })
+    ) {
         SettingsDataExportCsv(app);
     }
     nativeDeref(y) = nativeDeref(y) + AppScale(50n);
     let account: AccountKeys = {};
     if (sync_account_load(nativeRef(account)) === 0n) {
-        let clear_button = SettingsDataButtonProps(
-            LocaleText("clear_local_data_button"),
-            x,
-            nativeDeref(y),
-            width,
-            5304n,
-            false
-        );
-        if (Button({ session: app.ui.session, props: clear_button })) {
+        if (
+            Button({
+                session: app.ui.session,
+                props: SettingsDataButtonProps(
+                    LocaleText("clear_local_data_button"),
+                    x,
+                    nativeDeref(y),
+                    width,
+                    5304n,
+                    false
+                )
+            })
+        ) {
             if (data_has_any() !== 0n) {
                 app_open_modal(app, ModalType.ModalConfirmDeleteData);
             } else {
@@ -221,14 +247,27 @@ export function settings_data_draw_sync_statusView(x: s32, width: s32, y: Native
 export function SettingsDataPrompt(
     app: NativeRef<InnerBreeze>,
     key: string,
-    title: string,
-    message: string,
-    labels: string[]
+    title_key: string,
+    message_key: string,
+    label_keys: string[]
 ): s32 {
+    let title_range = FrameTextSave(nativeRef(app.ui.frame_text), LocaleText(title_key));
+    let message_range = FrameTextSave(nativeRef(app.ui.frame_text), LocaleText(message_key));
+    let label_ranges: [FrameTextRange, FrameTextRange, FrameTextRange] = [{}, {}, {}];
+    for (let i = s32(0n); i < s32(label_keys.count) && i < 3n; i += 1n) {
+        nativeSet(
+            label_ranges,
+            i,
+            FrameTextSave(nativeRef(app.ui.frame_text), LocaleText(nativeAt(label_keys, i)))
+        );
+    }
     let actions = SettingsDataUiNewActions();
     let index: s32 = s32(0n);
-    while (index < s32(labels.count) && index < 3n) {
-        nativeAt(actions, index).label = nativeAt(labels, index);
+    while (index < s32(label_keys.count) && index < 3n) {
+        nativeAt(actions, index).label = FrameTextRead(
+            nativeRef(app.ui.frame_text),
+            nativeAt(label_ranges, index)
+        );
         nativeAt(actions, index).tone =
             index === 0n ? ButtonTone.ButtonToneNeutral : ButtonTone.ButtonToneAccent;
         nativeAt(actions, index).emphasis =
@@ -237,13 +276,13 @@ export function SettingsDataPrompt(
     }
     let props: NativeModal.ActionModalProps = {};
     props.key = NativeLayout.KeyHash(key);
-    props.title = title;
-    props.message = message;
+    props.title = FrameTextRead(nativeRef(app.ui.frame_text), title_range);
+    props.message = FrameTextRead(nativeRef(app.ui.frame_text), message_range);
     props.max_width = AppScale(440n);
     let result = ActionModal({
         session: app.ui.session,
         props: props,
-        actions: nativeSlice(actions, 0n, labels.count)
+        actions: nativeSlice(actions, 0n, label_keys.count)
     });
     return result.action === -1n ? 1n : result.action;
 }
@@ -348,195 +387,231 @@ export function SettingsDataReviewModal(app: NativeRef<InnerBreeze>): s32 {
     if (height > AppScale(720n)) {
         height = AppScale(720n);
     }
-    let frame = NativeModal.Draw(app.ui.session, {
-        key: NativeLayout.KeyHash("inbe/data/sync-review"),
-        title: LocaleText("sync_review_title"),
-        width: width,
-        height: height,
-        has_right_action: true,
-        right_label: LocaleText("cancel_button")
+    let decision: s32 = s32(0n);
+    const decision_ref = nativeRef(decision);
+    let review_title_range = FrameTextSave(
+        nativeRef(app.ui.frame_text),
+        LocaleText("sync_review_title")
+    );
+    let review_cancel_range = FrameTextSave(
+        nativeRef(app.ui.frame_text),
+        LocaleText("cancel_button")
+    );
+    let review_unavailable_range = FrameTextSave(
+        nativeRef(app.ui.frame_text),
+        LocaleText("review_unavailable")
+    );
+    let review_explanation_range = FrameTextSave(
+        nativeRef(app.ui.frame_text),
+        LocaleText("review_merge_detail")
+    );
+    let review_direction_range = FrameTextSave(
+        nativeRef(app.ui.frame_text),
+        LocaleText("review_merge")
+    );
+    let review_replacement_range = FrameTextSave(
+        nativeRef(app.ui.frame_text),
+        LocaleText("review_replace_detail")
+    );
+    let frame = ResolvedModal({
+        session: app.ui.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/data/sync-review"),
+            title: FrameTextRead(nativeRef(app.ui.frame_text), review_title_range),
+            width: width,
+            height: height,
+            has_right_action: true,
+            right_label: FrameTextRead(nativeRef(app.ui.frame_text), review_cancel_range)
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            let content = frame.layout.content;
+            let x = s32(content.x);
+            let y = s32(content.y);
+            let text_width = s32(content.width);
+            let revision = storage_data_revision();
+            if (State_settings_data_ui.review_cached_revision !== revision) {
+                SettingsReviewClearCachedText();
+                State_settings_data_ui.review_cached_available =
+                    storage_sync_review_plan(
+                        2n,
+                        nativeRef(State_settings_data_ui.review_cached_text)
+                    ) !== 0n;
+                State_settings_data_ui.review_cached_replace_available =
+                    storage_sync_review_plan(
+                        1n,
+                        nativeRef(State_settings_data_ui.review_cached_replace_text)
+                    ) !== 0n;
+                State_settings_data_ui.review_cached_revision = storage_data_revision();
+            }
+            let value = State_settings_data_ui.review_cached_available
+                ? AppTextFromCString(State_settings_data_ui.review_cached_text, 2147483647n)
+                : FrameTextRead(nativeRef(app.ui.frame_text), review_unavailable_range);
+            let explanation = FrameTextRead(nativeRef(app.ui.frame_text), review_explanation_range);
+            let font = AppScale(16n);
+            let line_height = AppTextLineHeight(font);
+            let direction = FrameTextRead(nativeRef(app.ui.frame_text), review_direction_range);
+            let direction_height = AppParagraphHeight(direction, text_width, font, 0n);
+            let direction_props: NativeText.Props = SettingsDataTextProps(
+                direction,
+                x,
+                y,
+                text_width,
+                direction_height
+            );
+            direction_props.size = font;
+            direction_props.wrap = Wrap.TextWrapAuto;
+            direction_props.class_name = CssClass("review-heading");
+            <Text session={app.ui.session} props={direction_props} />;
+            y = y + (direction_height + AppScale(8n));
+            let view = SettingsDataRect(
+                x,
+                y,
+                text_width,
+                s32(content.y + content.height) - y - AppScale(140n)
+            );
+            let explanation_height =
+                SettingsReviewLines(
+                    SettingsReviewNoApp(),
+                    explanation,
+                    view,
+                    0n,
+                    font,
+                    line_height,
+                    "review-detail"
+                ) + line_height;
+            let props: NativeScroll.Props = {};
+            props.key = NativeLayout.KeyHash("inbe/data/sync-review/details");
+            props.bounds = view;
+            let merge_height = SettingsReviewLines(
+                SettingsReviewNoApp(),
+                value,
+                view,
+                0n,
+                font,
+                line_height,
+                ""
+            );
+            let removals = SettingsReviewRemovals(
+                AppTextFromCString(State_settings_data_ui.review_cached_replace_text, 2147483647n)
+            );
+            let replacement =
+                removals.count > 0n
+                    ? FrameTextRead(nativeRef(app.ui.frame_text), review_replacement_range)
+                    : "";
+            let replacement_height: s32 = s32(0n);
+            if (removals.count > 0n) {
+                replacement_height =
+                    SettingsReviewLines(
+                        SettingsReviewNoApp(),
+                        replacement,
+                        view,
+                        0n,
+                        font,
+                        line_height,
+                        "review-removed"
+                    ) + line_height;
+            }
+            props.content_height =
+                explanation_height +
+                merge_height +
+                replacement_height +
+                SettingsReviewLines(
+                    SettingsReviewNoApp(),
+                    removals,
+                    view,
+                    0n,
+                    font,
+                    line_height,
+                    "review-removed"
+                );
+            props.scroll_offset = State_settings_data_ui.review_scroll;
+            let scrolled = Scroll({
+                session: app.ui.session,
+                props: props,
+                children: (scrolled: NativeScroll.ScrollResult): void => {
+                    State_settings_data_ui.review_scroll = scrolled.scroll_offset;
+                    SettingsReviewLines(
+                        app,
+                        explanation,
+                        view,
+                        State_settings_data_ui.review_scroll,
+                        font,
+                        line_height,
+                        "review-detail"
+                    );
+                    SettingsReviewLines(
+                        app,
+                        value,
+                        view,
+                        State_settings_data_ui.review_scroll - explanation_height,
+                        font,
+                        line_height,
+                        ""
+                    );
+                    if (removals.count > 0n) {
+                        let replacement_offset =
+                            State_settings_data_ui.review_scroll -
+                            explanation_height -
+                            merge_height;
+                        SettingsReviewLines(
+                            app,
+                            replacement,
+                            view,
+                            replacement_offset,
+                            font,
+                            line_height,
+                            "review-removed"
+                        );
+                        SettingsReviewLines(
+                            app,
+                            removals,
+                            view,
+                            replacement_offset - replacement_height,
+                            font,
+                            line_height,
+                            "review-removed"
+                        );
+                    }
+                }
+            });
+            if (!scrolled.opened) {
+                State_settings_data_ui.review_scroll = scrolled.scroll_offset;
+            }
+            let options: [string, string, string] = [
+                "review_merge",
+                "sync_review_keep_local",
+                "sync_review_use_remote"
+            ];
+            let modes: [s32, s32, s32] = [2n, 0n, 1n];
+            y = s32(content.y + content.height) - AppScale(132n);
+            let index: s32 = s32(0n);
+            while (index < 3n) {
+                let button = SettingsDataButtonProps(
+                    LocaleText(nativeAt(options, index)),
+                    x,
+                    y,
+                    text_width,
+                    5351n + index,
+                    index === 0n
+                );
+                if (index === 0n) {
+                    button.disabled = !State_settings_data_ui.review_cached_available;
+                } else if (index === 2n) {
+                    button.disabled = !State_settings_data_ui.review_cached_replace_available;
+                    button.tone = ButtonTone.ButtonToneDanger;
+                }
+                if (Button({ session: app.ui.session, props: button })) {
+                    nativeDeref(decision_ref) = nativeAt(modes, index) + 1n;
+                }
+                y = y + AppScale(44n);
+                index = index + 1n;
+            }
+        }
     });
     if (frame.dismissed || frame.right_clicked) {
         SettingsReviewReset();
         app_close_modal(app);
         return 0n;
     }
-    if (!frame.opened) {
-        return 0n;
-    }
-    let content = frame.layout.content;
-    let x = s32(content.x);
-    let y = s32(content.y);
-    let text_width = s32(content.width);
-    let revision = storage_data_revision();
-    if (State_settings_data_ui.review_cached_revision !== revision) {
-        SettingsReviewClearCachedText();
-        State_settings_data_ui.review_cached_available =
-            storage_sync_review_plan(2n, nativeRef(State_settings_data_ui.review_cached_text)) !==
-            0n;
-        State_settings_data_ui.review_cached_replace_available =
-            storage_sync_review_plan(
-                1n,
-                nativeRef(State_settings_data_ui.review_cached_replace_text)
-            ) !== 0n;
-        State_settings_data_ui.review_cached_revision = storage_data_revision();
-    }
-    let value = LocaleText("review_unavailable");
-    if (State_settings_data_ui.review_cached_available) {
-        value = AppTextFromCString(State_settings_data_ui.review_cached_text, 2147483647n);
-    }
-    let explanation = LocaleText("review_merge_detail");
-    let font = AppScale(16n);
-    let line_height = AppTextLineHeight(font);
-    let direction = LocaleText("review_merge");
-    let direction_height = AppParagraphHeight(direction, text_width, font, 0n);
-    let direction_props: NativeText.Props = SettingsDataTextProps(
-        direction,
-        x,
-        y,
-        text_width,
-        direction_height
-    );
-    direction_props.size = font;
-    direction_props.wrap = Wrap.TextWrapAuto;
-    direction_props.class_name = CssClass("review-heading");
-    <Text session={app.ui.session} props={direction_props} />;
-    y = y + (direction_height + AppScale(8n));
-    let view = SettingsDataRect(
-        x,
-        y,
-        text_width,
-        s32(content.y + content.height) - y - AppScale(140n)
-    );
-    let explanation_height =
-        SettingsReviewLines(
-            SettingsReviewNoApp(),
-            explanation,
-            view,
-            0n,
-            font,
-            line_height,
-            "review-detail"
-        ) + line_height;
-    let props: NativeScroll.Props = {};
-    props.key = NativeLayout.KeyHash("inbe/data/sync-review/details");
-    props.bounds = view;
-    let merge_height = SettingsReviewLines(
-        SettingsReviewNoApp(),
-        value,
-        view,
-        0n,
-        font,
-        line_height,
-        ""
-    );
-    let removals = SettingsReviewRemovals(
-        AppTextFromCString(State_settings_data_ui.review_cached_replace_text, 2147483647n)
-    );
-    let replacement = "";
-    let replacement_height: s32 = s32(0n);
-    if (removals.count > 0n) {
-        replacement = LocaleText("review_replace_detail");
-        replacement_height =
-            SettingsReviewLines(
-                SettingsReviewNoApp(),
-                replacement,
-                view,
-                0n,
-                font,
-                line_height,
-                "review-removed"
-            ) + line_height;
-    }
-    props.content_height =
-        explanation_height +
-        merge_height +
-        replacement_height +
-        SettingsReviewLines(
-            SettingsReviewNoApp(),
-            removals,
-            view,
-            0n,
-            font,
-            line_height,
-            "review-removed"
-        );
-    props.scroll_offset = State_settings_data_ui.review_scroll;
-    let scrolled = NativeScroll.Draw(app.ui.session, props);
-    State_settings_data_ui.review_scroll = scrolled.scroll_offset;
-    if (scrolled.opened) {
-        SettingsReviewLines(
-            app,
-            explanation,
-            view,
-            State_settings_data_ui.review_scroll,
-            font,
-            line_height,
-            "review-detail"
-        );
-        SettingsReviewLines(
-            app,
-            value,
-            view,
-            State_settings_data_ui.review_scroll - explanation_height,
-            font,
-            line_height,
-            ""
-        );
-        if (removals.count > 0n) {
-            let replacement_offset =
-                State_settings_data_ui.review_scroll - explanation_height - merge_height;
-            SettingsReviewLines(
-                app,
-                replacement,
-                view,
-                replacement_offset,
-                font,
-                line_height,
-                "review-removed"
-            );
-            SettingsReviewLines(
-                app,
-                removals,
-                view,
-                replacement_offset - replacement_height,
-                font,
-                line_height,
-                "review-removed"
-            );
-        }
-        End(app.ui.session);
-    }
-    let options: [string, string, string] = [
-        "review_merge",
-        "sync_review_keep_local",
-        "sync_review_use_remote"
-    ];
-    let modes: [s32, s32, s32] = [2n, 0n, 1n];
-    y = s32(content.y + content.height) - AppScale(132n);
-    let index: s32 = s32(0n);
-    let decision: s32 = s32(0n);
-    while (index < 3n) {
-        let button = SettingsDataButtonProps(
-            LocaleText(nativeAt(options, index)),
-            x,
-            y,
-            text_width,
-            5351n + index,
-            index === 0n
-        );
-        if (index === 0n) {
-            button.disabled = !State_settings_data_ui.review_cached_available;
-        } else if (index === 2n) {
-            button.disabled = !State_settings_data_ui.review_cached_replace_available;
-            button.tone = ButtonTone.ButtonToneDanger;
-        }
-        if (Button({ session: app.ui.session, props: button })) {
-            decision = nativeAt(modes, index) + 1n;
-        }
-        y = y + AppScale(44n);
-        index = index + 1n;
-    }
-    End(app.ui.session);
     return decision;
 }

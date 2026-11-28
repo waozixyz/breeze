@@ -579,22 +579,26 @@ PracticeHomeCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "PracticeLocaleHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
+        reply: HostValue
+        {
+            key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            text := LocaleText(key)
+            reply = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+        }
+        result.* = reply
         return 1
     }
     return 0
 }
 
-PracticeRecoveryText :: (app: *InnerBreeze, key: string, args: []FormatArg) -> string {
+PracticeRecoveryText :: (app: *InnerBreeze, key: string, args: []FormatArg) -> FrameTextRange {
     output: [256]u8
     unused FormatTemplate(LocaleText(key), args, output[:])
-    return FrameTextHold(*app.ui.frame_text, TextUntilNul(output[:]))
+    return FrameTextSave(*app.ui.frame_text, TextUntilNul(output[:]))
 }
 
-PracticeRecoveryTime :: (app: *InnerBreeze, elapsed: s32, remaining: s32) -> string {
+PracticeRecoveryTime :: (app: *InnerBreeze, elapsed: s32, remaining: s32) -> FrameTextRange {
     elapsed_text: [32]u8
     remaining_text: [32]u8
     format_time(elapsed_text[:], elapsed)
@@ -608,68 +612,91 @@ PracticeRecoveryTime :: (app: *InnerBreeze, elapsed: s32, remaining: s32) -> str
     return PracticeRecoveryText(app, "practice_recovery_time", args[:])
 }
 
-PracticeRecoveryFrame :: (app: *InnerBreeze, draft: *PracticeRecoveryDraft, frame: *PracticeHomeFrame) {
+PracticeRecoveryLabels :: struct {
+    title: FrameTextRange
+    subtitle: FrameTextRange
+    status: FrameTextRange
+    note: FrameTextRange
+}
+
+PracticeRecoveryFrame :: (app: *InnerBreeze, draft: *PracticeRecoveryDraft,
+    frame: *PracticeHomeFrame) -> PracticeRecoveryLabels {
+    text: PracticeRecoveryLabels
     frame.title = ""
     frame.subtitle = ""
     frame.banner = ""
     frame.status = ""
-    frame.note = ifx practice_recovery_failed then LocaleText("results_write_failed") else ""
+    if practice_recovery_failed {
+        text.note = FrameTextSave(*app.ui.frame_text, LocaleText("results_write_failed"))
+    }
     frame.ready = false
     frame.offer_disabled = false
     if draft.started_at <= 0 {
-        return
+        return text
     }
-    frame.title = practice_home_title(draft.activity)
+    text.title = FrameTextSave(*app.ui.frame_text, practice_home_title(draft.activity))
     frame.banner = practice_card_banner_asset_path(app, draft.activity)
     workout: WorkoutRecovery
     if WorkoutRecoveryDecode(draft, *workout) {
         step := WorkoutRecoveryStep(*workout)
         if workout.routine == WORKOUT_ROUTINE_CUSTOM {
             name: [WORKOUT_CUSTOM_NAME_LIMIT]u8
-            frame.title = FrameTextHold(*app.ui.frame_text, WorkoutSequenceName(*workout.sequence, name[:]))
+            text.title = FrameTextSave(*app.ui.frame_text,
+                WorkoutSequenceName(*workout.sequence, name[:]))
         } else {
-            frame.title = WorkoutTitle(workout.routine)
+            text.title = FrameTextSave(*app.ui.frame_text, WorkoutTitle(workout.routine))
             if workout.routine == WORKOUT_ROUTINE_SHORT {
                 frame.banner = ifx app.dark_mode != 0 then "assets/practices/workout/banner-short-dark.webp" else "assets/practices/workout/banner-short-light.webp"
             }
         }
-        frame.status = PracticeRecoveryTime(app, workout.elapsed_ms / 1000,
+        text.status = PracticeRecoveryTime(app, workout.elapsed_ms / 1000,
             (workout.duration_ms - workout.elapsed_ms + 999) / 1000)
         frame.offer_disabled = !PracticeContentReady(EXERCISE_WORKOUT)
-        exercise := WorkoutHeading(app, step)
-        count := ifx workout.routine == WORKOUT_ROUTINE_CUSTOM then workout.sequence.count else WorkoutRoutineCount(workout.routine)
-        args: [3]FormatArg = .[.{.text = exercise, .is_text = true}, .{.number = step.index + 1}, .{.number = count}]
         if step.phase == WORKOUT_PHASE_DONE {
-            frame.subtitle = LocaleText("finish_button")
-        } else if step.phase == WORKOUT_PHASE_WORK {
-            frame.subtitle = PracticeRecoveryText(app, "practice_recovery_exercise", args[:])
+            text.subtitle = FrameTextSave(*app.ui.frame_text, LocaleText("finish_button"))
         } else {
-            stage := ifx step.phase == WORKOUT_PHASE_PREPARE then "practice_recovery_prepare" else "practice_recovery_transition"
-            frame.subtitle = PracticeRecoveryText(app, stage, args[:1])
+            subtitle: [256]u8
+            {
+                exercise := WorkoutHeading(app, step)
+                count := ifx workout.routine == WORKOUT_ROUTINE_CUSTOM then workout.sequence.count else WorkoutRoutineCount(workout.routine)
+                args: [3]FormatArg = .[.{.text = exercise, .is_text = true}, .{.number = step.index + 1}, .{.number = count}]
+                if step.phase == WORKOUT_PHASE_WORK {
+                    unused FormatTemplate(LocaleText("practice_recovery_exercise"), args[:], subtitle[:])
+                } else {
+                    stage := ifx step.phase == WORKOUT_PHASE_PREPARE then "practice_recovery_prepare" else "practice_recovery_transition"
+                    unused FormatTemplate(LocaleText(stage), args[:1], subtitle[:])
+                }
+            }
+            text.subtitle = FrameTextSave(*app.ui.frame_text, TextUntilNul(subtitle[:]))
         }
         frame.ready = true
-        return
+        return text
     }
 
     patterns: Patterns
     if PatternsRecoveryDecode(draft, *patterns) {
-        frame.title = LocaleText(patterns_preset_label_key(patterns.preset))
-        frame.subtitle = LocaleText(patterns_phase_label_key(patterns.phase))
+        text.title = FrameTextSave(*app.ui.frame_text,
+            LocaleText(patterns_preset_label_key(patterns.preset)))
+        text.subtitle = FrameTextSave(*app.ui.frame_text,
+            LocaleText(patterns_phase_label_key(patterns.phase)))
         remaining := ifx patterns.duration_minutes > 0 then patterns.duration_minutes * 60 - patterns.elapsed_seconds else -1
-        frame.status = PracticeRecoveryTime(app, patterns.elapsed_seconds, remaining)
+        text.status = PracticeRecoveryTime(app, patterns.elapsed_seconds, remaining)
         frame.ready = true
-        return
+        return text
     }
 
     meditation: MeditationRecovery
     if MeditationRecoveryDecode(draft, *meditation) {
         in_overtime := meditation.complete_waiting != 0 && meditation.overtime_enabled != 0
-        frame.subtitle = ifx meditation.complete_waiting != 0 && !in_overtime then LocaleText("finish_button") else ""
+        if meditation.complete_waiting != 0 && !in_overtime {
+            text.subtitle = FrameTextSave(*app.ui.frame_text, LocaleText("finish_button"))
+        }
         elapsed := meditation.duration - meditation.remaining + meditation.overtime_seconds
         remaining := ifx in_overtime then -1 else meditation.remaining
-        frame.status = PracticeRecoveryTime(app, elapsed, remaining)
+        text.status = PracticeRecoveryTime(app, elapsed, remaining)
         frame.ready = true
     }
+    return text
 }
 
 PracticeRecoveryContinue :: (app: *InnerBreeze) -> bool {
@@ -685,6 +712,16 @@ PracticeRecoveryContinue :: (app: *InnerBreeze) -> bool {
 
 practice_home_frame_for :: (app: *InnerBreeze, ids: []s32, listed: s32) -> PracticeHomeFrame {
     practice := practice_get(app.exercise_type)
+    selected := practice_home_selected(app)
+    title := FrameTextSave(*app.ui.frame_text,
+        ifx selected == PRACTICE_HOME_SHORT_WORKOUT then WorkoutTitle(WORKOUT_ROUTINE_SHORT)
+        else ifx selected == PRACTICE_HOME_CUSTOM_WORKOUT then WorkoutTitle(WORKOUT_ROUTINE_CUSTOM)
+        else practice_home_title(app.exercise_type))
+    subtitle := FrameTextSave(*app.ui.frame_text,
+        ifx selected == PRACTICE_HOME_SHORT_WORKOUT then LocaleText("practice_home_subtitle_workout_short")
+        else ifx selected == PRACTICE_HOME_CUSTOM_WORKOUT then ""
+        else practice_home_subtitle(app.exercise_type))
+    status: FrameTextRange
     frame := PracticeHomeFrame.{.session = app.ui.session, .scale = MetricsScale(),
         .view_width = app.ui.view_width, .view_height = app.ui.view_height,
         .top = app_content_top_reserved(app), .bottom = app_content_bottom_reserved(app),
@@ -697,21 +734,11 @@ practice_home_frame_for :: (app: *InnerBreeze, ids: []s32, listed: s32) -> Pract
         .choosing = app.modal.active == 0 && practice_screen_first_run_guide_active(app) == 0,
         .key_left = HostKeyPressed(KEY_LEFT), .key_right = HostKeyPressed(KEY_RIGHT),
         .swipe = app.practice_home_swipe, .swipe_frame = app.ui.manual_swipe_frame,
-        .practice = app.exercise_type, .title = practice_home_title(app.exercise_type),
-        .subtitle = practice_home_subtitle(app.exercise_type),
+        .practice = app.exercise_type,
         .banner = practice_card_banner_asset_path(app, app.exercise_type),
         .tab_scroll = practice_home_tab_scroll, .listed = listed,
         .has_manual = practice != null && practice.draw_manual != null,
-        .has_config = practice_home_has_config(practice)}
-    selected := practice_home_selected(app)
-    if selected == PRACTICE_HOME_SHORT_WORKOUT {
-        frame.title = WorkoutTitle(WORKOUT_ROUTINE_SHORT)
-        frame.subtitle = LocaleText("practice_home_subtitle_workout_short")
-    } else if selected == PRACTICE_HOME_CUSTOM_WORKOUT {
-        frame.title = WorkoutTitle(WORKOUT_ROUTINE_CUSTOM)
-        frame.subtitle = ""
-        frame.has_config = false
-    }
+        .has_config = selected != PRACTICE_HOME_CUSTOM_WORKOUT && practice_home_has_config(practice)}
     for index: cast(s32)0..listed - 1 {
         if ids[index] == selected {
             frame.index = index
@@ -719,19 +746,30 @@ practice_home_frame_for :: (app: *InnerBreeze, ids: []s32, listed: s32) -> Pract
     }
     frame.tab_count = practice_home_tabs(app, *frame.tab_selected)
     frame.tab_focus = practice_home_kind_of(app.exercise_type) != practice_home_tab_shown
-    PracticeOfferFill(app, app.exercise_type, *frame)
+    offer_text := PracticeOfferFill(app, app.exercise_type, *frame)
     if selected == PRACTICE_HOME_CUSTOM_WORKOUT {
         frame.offer = PRACTICE_OFFER_MANAGE_WORKOUT
-        frame.offer_label = LocaleText("workout_custom_manage")
+        offer_text.label = FrameTextSave(*app.ui.frame_text, LocaleText("workout_custom_manage"))
         frame.offer_disabled = frame.modal_active
     }
     if !frame.modal_active {
         draft: PracticeRecoveryDraft
         if PracticeDraftPending(*draft) && PracticeRecoveryValid(*draft) {
             frame.draft_pending = true
-            PracticeRecoveryFrame(app, *draft, *frame)
+            recovery_text := PracticeRecoveryFrame(app, *draft, *frame)
+            title = recovery_text.title
+            subtitle = recovery_text.subtitle
+            status = recovery_text.status
+            offer_text.note = recovery_text.note
         }
     }
+    frame.title = FrameTextRead(*app.ui.frame_text, title)
+    frame.subtitle = FrameTextRead(*app.ui.frame_text, subtitle)
+    frame.status = FrameTextRead(*app.ui.frame_text, status)
+    frame.note = FrameTextRead(*app.ui.frame_text, offer_text.note)
+    frame.offer_label = FrameTextRead(*app.ui.frame_text, offer_text.label)
+    frame.regular_price = FrameTextRead(*app.ui.frame_text, offer_text.regular_price)
+    frame.discount = FrameTextRead(*app.ui.frame_text, offer_text.discount)
     return frame
 }
 
@@ -762,9 +800,28 @@ practice_screen_draw_home_hero :: (app: *InnerBreeze) -> s32 {
     drawn := PracticeRun(PracticeMessage.{.action = PRACTICE_HOME_VIEW})
     AppsUiEnd()
     WidgetHostEnd()
-    // The frame's text lives in this frame's buffers; the next frame
-    // replaces it.
-    frame := practice_home_frame
+    // The view consumed its text. Keep only state and bounds before an
+    // action can start another practice and reuse the frame-text store.
+    frame := PracticeHomeFrame.{
+        .top = practice_home_frame.top,
+        .choosing = practice_home_frame.choosing,
+        .swipe = practice_home_frame.swipe,
+        .tab_scroll = practice_home_frame.tab_scroll,
+        .tab_count = practice_home_frame.tab_count,
+        .ready = practice_home_frame.ready,
+        .offer = practice_home_frame.offer,
+        .offer_disabled = practice_home_frame.offer_disabled,
+        .action = practice_home_frame.action,
+        .value = practice_home_frame.value,
+        .card = practice_home_frame.card,
+        .start = practice_home_frame.start,
+        .manual = practice_home_frame.manual,
+        .config = practice_home_frame.config,
+        .claim_pointer = practice_home_frame.claim_pointer,
+        .release_pointer = practice_home_frame.release_pointer,
+        .block_click = practice_home_frame.block_click
+    }
+    practice_home_frame = PracticeHomeFrame.{}
     if !drawn.succeeded {
         return 0
     }

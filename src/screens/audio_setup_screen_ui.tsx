@@ -39,21 +39,24 @@ export function AudioSetupScreen(app: NativeRef<InnerBreeze>): void {
     let column = NativeLayout.CenteredColumnFor(app.ui.view_width, AppScale(380n), AppScale(16n));
     let gap = AppScale(12n);
     let button_height = AppScale(48n);
-    let title = LocaleText("optional_audio_title");
-    let title_font = AppTitleFontSize(title, column.width);
     let size_buffer = AudioSetupScreenNewSizeBuffer();
     let size = AudioSetupSizeText(AudioSetupBytes(), nativeSlice(size_buffer));
-    let content_height =
-        AppTextLineHeight(title_font) +
-        AppTextLineHeight(AppSmallFontSize()) +
-        button_height * 2n +
-        gap * 4n;
-    let y = (app.ui.view_height - content_height) / 2n;
-    if (y < AppScale(16n)) {
-        y = AppScale(16n);
+    let y: s32 = s32(0n);
+    {
+        let title = LocaleText("optional_audio_title");
+        let title_font = AppTitleFontSize(title, column.width);
+        let content_height =
+            AppTextLineHeight(title_font) +
+            AppTextLineHeight(AppSmallFontSize()) +
+            button_height * 2n +
+            gap * 4n;
+        y = (app.ui.view_height - content_height) / 2n;
+        if (y < AppScale(16n)) {
+            y = AppScale(16n);
+        }
+        AudioSetupLine(app, title, title_font, y);
+        y = y + (AppTextLineHeight(title_font) + gap);
     }
-    AudioSetupLine(app, title, title_font, y);
-    y = y + (AppTextLineHeight(title_font) + gap);
     AudioSetupLine(app, size, AppSmallFontSize(), y);
     y = y + (AppTextLineHeight(AppSmallFontSize()) + gap * 2n);
     if (

@@ -315,13 +315,15 @@ export function break_overlay_draw_sized(app: NativeRef<InnerBreeze>, w: s32, h:
     let button_h = AppScale(36n);
     let gap = AppScale(12n);
     let button_w = AppScale(120n);
-    let labels: [string, string, string] = [
-        LocaleText("break_postpone_button"),
-        LocaleText("break_skip_button"),
-        LocaleText("break_rest_now_button")
+    let label_keys: [string, string, string] = [
+        "break_postpone_button",
+        "break_skip_button",
+        "break_rest_now_button"
     ];
     for (let label_index = s32(0); label_index <= 2n; label_index += s32(1)) {
-        let label_w = AppTextWidth(nativeAt(labels, label_index), AppFontSize()) + AppScale(32n);
+        let label_w =
+            AppTextWidth(LocaleText(nativeAt(label_keys, label_index)), AppFontSize()) +
+            AppScale(32n);
         if (label_w > button_w) {
             button_w = label_w;
         }

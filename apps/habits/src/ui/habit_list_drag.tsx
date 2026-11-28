@@ -29,7 +29,6 @@ function Grip(bounds: Rectangle): void {
 }
 
 function DragFace(index: s32, bounds: Rectangle): void {
-    const rows = Model.Rows();
     const list_state = Model.CurrentList();
     let icon_size = Model.Scale(32n);
     HabitIcon(
@@ -50,7 +49,7 @@ function DragFace(index: s32, bounds: Rectangle): void {
                 s32(bounds.width) - Model.Scale(104n),
                 s32(bounds.height)
             ),
-            text: nativeAt(rows, index).name,
+            text: Model.Row(index).name,
             size: list_state.font,
             vertical_align: TextAlign.TextAlignCenter,
             wrap: NativeText.Wrap.TextWrapEllipsis
@@ -121,7 +120,6 @@ export function Drop(
     section: Rectangle,
     released: boolean
 ): void {
-    const rows = Model.Rows();
     const list_state = Model.CurrentList();
     if (!list_state.dragging) {
         return;
@@ -131,7 +129,7 @@ export function Drop(
         Model.EndDrag();
         return;
     }
-    let reactivating = nativeAt(rows, dragged).deactivated;
+    let reactivating = Model.Row(dragged).deactivated;
     let point = list_state.drag_pointer;
     let in_section =
         list_state.drag_moving && section.height > 0.0 && Model.PointIn(point, section);

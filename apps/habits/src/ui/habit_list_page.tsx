@@ -47,14 +47,13 @@ function ViewSwitch(x: s32, width: s32, top: s32): s32 {
 }
 
 export function HabitPage(): void {
-    const rows = Model.Rows();
     const list_state = Model.CurrentList();
     let x = s32(list_state.bounds.x);
     let y = s32(list_state.bounds.y);
     let width = s32(list_state.bounds.width);
     let bottom = y + s32(list_state.bounds.height);
     let index = list_state.selected;
-    let top = PageHeader(x, y, width, nativeAt(rows, index).name);
+    let top = PageHeader(x, y, width, Model.Row(index).name);
     if (top < 0n) {
         Model.Ask(HABITS_LIST_BACK, index, 0n);
         return;

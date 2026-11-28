@@ -37,11 +37,6 @@ export function session_draw_start_previewView(
     center_x: s32,
     center_y: s32
 ): s32 {
-    let play_text: string = LocaleText("play_button");
-    let practice_text: string = practice_label(app.exercise_type);
-    let practice_font: s32 = AppFontSize();
-    let practice_w: s32 = s32(0);
-    let practice_y: s32 = s32(0);
     let radius: s32 = AppScale(44n);
     let pointer_x = app.ui.mouse_x - center_x;
     let pointer_y = app.ui.mouse_y - center_y;
@@ -58,30 +53,36 @@ export function session_draw_start_previewView(
         app.play_circle_scale = float32(1.08);
     }
     let scaled_radius: s32 = s32(float32(radius) * app.play_circle_scale);
-    practice_w = AppTextWidth(practice_text, practice_font);
-    if (practice_w > app.ui.view_width - AppScale(48n)) {
-        practice_font = AppSmallFontSize();
+    {
+        let practice_text: string = practice_label(app.exercise_type);
+        let practice_font: s32 = AppFontSize();
+        let practice_w: s32 = s32(0);
+        let practice_y: s32 = s32(0);
+        practice_w = AppTextWidth(practice_text, practice_font);
+        if (practice_w > app.ui.view_width - AppScale(48n)) {
+            practice_font = AppSmallFontSize();
+        }
+        practice_w = AppTextWidth(practice_text, practice_font);
+        practice_y = center_y - scaled_radius - AppScale(42n);
+        if (practice_y < AppScale(8n)) {
+            practice_y = AppScale(8n);
+        }
+        <Text
+            session={CurrentApp().ui.session}
+            props={{
+                bounds: {
+                    x: float32(center_x - practice_w / 2n),
+                    y: float32(
+                        AppControlTextY(practice_text, practice_y, AppScale(32n), practice_font)
+                    ),
+                    width: 0.0,
+                    height: 0.0
+                },
+                text: practice_text,
+                wrap: Wrap.TextWrapNone
+            }}
+        />;
     }
-    practice_w = AppTextWidth(practice_text, practice_font);
-    practice_y = center_y - scaled_radius - AppScale(42n);
-    if (practice_y < AppScale(8n)) {
-        practice_y = AppScale(8n);
-    }
-    <Text
-        session={CurrentApp().ui.session}
-        props={{
-            bounds: {
-                x: float32(center_x - practice_w / 2n),
-                y: float32(
-                    AppControlTextY(practice_text, practice_y, AppScale(32n), practice_font)
-                ),
-                width: 0.0,
-                height: 0.0
-            },
-            text: practice_text,
-            wrap: Wrap.TextWrapNone
-        }}
-    />;
     const clicked = Button({
         session: app.ui.session,
         props: {
@@ -91,7 +92,7 @@ export function session_draw_start_previewView(
                 width: float32(scaled_radius * 2n),
                 height: float32(scaled_radius * 2n)
             },
-            label: play_text,
+            label: LocaleText("play_button"),
             tone: ButtonTone.ButtonToneAccent,
             emphasis: ButtonEmphasis.ButtonEmphasisFilled,
             circle: true
@@ -288,22 +289,18 @@ export function session_draw_results_screenView(
             i = i + 1n;
         }
     }
-    let discard_label = LocaleText("discard_button");
-    let save_label = LocaleText("save_results_button");
-    let discard_w = AppTextWidth(discard_label, AppFontSize()) + AppScale(16n);
-    let save_w = AppTextWidth(save_label, AppFontSize()) + AppScale(16n);
     let button_h = AppTextLineHeight(AppFontSize()) + AppScale(8n);
-    if (discard_w < AppScale(34n)) {
-        discard_w = AppScale(34n);
-    }
-    if (save_w < AppScale(34n)) {
-        save_w = AppScale(34n);
-    }
     if (button_h < AppScale(34n)) {
         button_h = AppScale(34n);
     }
-    if (
-        Button({
+    let discard_clicked = false;
+    {
+        let discard_label = LocaleText("discard_button");
+        let discard_w = AppTextWidth(discard_label, AppFontSize()) + AppScale(16n);
+        if (discard_w < AppScale(34n)) {
+            discard_w = AppScale(34n);
+        }
+        discard_clicked = Button({
             session: CurrentApp().ui.session,
             props: {
                 label: discard_label,
@@ -316,13 +313,20 @@ export function session_draw_results_screenView(
                 tone: ButtonTone.ButtonToneNeutral,
                 emphasis: ButtonEmphasis.ButtonEmphasisSoft
             }
-        })
-    ) {
+        });
+    }
+    if (discard_clicked) {
         session_discard_saved_results(app);
         whm_exit_to_start(app);
     }
-    if (
-        Button({
+    let save_clicked = false;
+    {
+        let save_label = LocaleText("save_results_button");
+        let save_w = AppTextWidth(save_label, AppFontSize()) + AppScale(16n);
+        if (save_w < AppScale(34n)) {
+            save_w = AppScale(34n);
+        }
+        save_clicked = Button({
             session: CurrentApp().ui.session,
             props: {
                 label: save_label,
@@ -335,8 +339,9 @@ export function session_draw_results_screenView(
                 tone: ButtonTone.ButtonToneNeutral,
                 emphasis: ButtonEmphasis.ButtonEmphasisSoft
             }
-        })
-    ) {
+        });
+    }
+    if (save_clicked) {
         if (session_ensure_results_saved(app) !== 0n) {
             whm_exit_to_start(app);
         }

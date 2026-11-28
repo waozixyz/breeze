@@ -67,7 +67,7 @@ import {
     settings_row_dividerView as settings_row_divider,
     settings_section_beginView as settings_section_begin
 } from "settings_ui_ui";
-import { AppTextFromCString } from "text_buffers";
+import { AppTextFromCString, FrameTextRead, FrameTextSave } from "text_buffers";
 
 export function settings_audio_draw_status(x: s32, y: NativeRef<s32>, action: s32): void {
     if (
@@ -119,8 +119,8 @@ export function settings_audio_list_row(
     playing: boolean
 ): s32 {
     let control_h = AppScale(32n);
-    let play_label = playing ? LocaleText("audio_preview_stop") : LocaleText("audio_preview_play");
-    let play_w = settings_button_width(play_label, AppScale(72n));
+    let play_key = playing ? "audio_preview_stop" : "audio_preview_play";
+    let play_w = settings_button_width(LocaleText(play_key), AppScale(72n));
     let remove_w = settings_button_width(LocaleText("remove_button"), AppScale(92n));
     let gap = AppScale(8n);
     let row_h = settings_audio_list_row_height();
@@ -182,7 +182,7 @@ export function settings_audio_list_row(
                     width: float32(play_w),
                     height: float32(control_h)
                 },
-                label: play_label,
+                label: LocaleText(play_key),
                 tone: ButtonTone.ButtonToneNeutral,
                 emphasis: ButtonEmphasis.ButtonEmphasisSoft,
                 disabled: !NativePresent(app) || app.audio_ready === 0n
@@ -220,13 +220,14 @@ export function settings_audio_draw_output(
     w: s32,
     y: NativeRef<s32>
 ): void {
+    let body_height = settings_audio_output_body(w);
     let section = settings_section_begin(
         app,
         x,
         w,
         y,
         LocaleText("audio_output_label"),
-        settings_audio_output_body(w)
+        body_height
     );
     let ix = section.inner_x;
     let iw = section.inner_width;
@@ -243,10 +244,7 @@ export function settings_audio_draw_output(
         app.guide_narration_muted = 0n;
         save_settings(app);
     }
-    let status_label =
-        app.audio_ready !== 0n
-            ? LocaleText("audio_status_ready")
-            : LocaleText("audio_status_unavailable");
+    let status_key = app.audio_ready !== 0n ? "audio_status_ready" : "audio_status_unavailable";
     let status_w = AppScale(140n);
     <Text
         session={CurrentApp().ui.session}
@@ -271,7 +269,7 @@ export function settings_audio_draw_output(
                 width: float32(status_w),
                 height: float32(AppScale(48n))
             },
-            text: status_label,
+            text: LocaleText(status_key),
             align: TextAlign.TextAlignEnd,
             vertical_align: TextAlign.TextAlignCenter,
             wrap: Wrap.TextWrapNone
@@ -398,7 +396,7 @@ export function draw_import_button(
     x: s32,
     w: s32,
     y: NativeRef<s32>,
-    label: string,
+    label_key: string,
     action: s32,
     practice: s32
 ): void {
@@ -412,7 +410,7 @@ export function draw_import_button(
                     width: float32(w),
                     height: float32(AppScale(36n))
                 },
-                label: label,
+                label: LocaleText(label_key),
                 tone: ButtonTone.ButtonToneNeutral,
                 emphasis: ButtonEmphasis.ButtonEmphasisSoft,
                 disabled: false
@@ -436,61 +434,67 @@ export function draw_cue_selector(
     w: s32,
     y: NativeRef<s32>,
     cue: s32,
-    label: string,
+    label_key: string,
     action: s32
 ): void {
-    let options = SettingsAudioNewOptions();
-    let count = app.audio_custom_sound_count + 1n;
-    let play_label =
+    let play_key =
         settings_audio_preview_cue_playing(app, cue) !== 0n
-            ? LocaleText("audio_preview_stop")
-            : LocaleText("audio_preview_play");
-    let play_w = settings_button_width(play_label, AppScale(72n));
+            ? "audio_preview_stop"
+            : "audio_preview_play";
+    let play_w = settings_button_width(LocaleText(play_key), AppScale(72n));
     let import_w = settings_button_width(LocaleText("audio_import_sound_button"), AppScale(120n));
     let gap = AppScale(8n);
     let dropdown_w = w - play_w - import_w - gap * 2n;
-    nativeAt(options, 0n).label = LocaleText("audio_builtin_label");
-    if (count > AUDIO_CUSTOM_SOUND_MAX + 1n) {
-        count = AUDIO_CUSTOM_SOUND_MAX + 1n;
-    }
-    let i: s32 = s32(0n);
-    while (i < app.audio_custom_sound_count && i < AUDIO_CUSTOM_SOUND_MAX) {
-        nativeAt(options, i + 1n).label = AppTextFromCString(
-            nativeRef(nativeAt(nativeAt(app.audio_custom_sounds, i).title, 0n)),
-            AUDIO_LABEL_SIZE
-        );
-        i = i + 1n;
-    }
-    <Text
-        session={CurrentApp().ui.session}
-        props={{
-            bounds: {
-                x: float32(x),
-                y: float32(nativeDeref(y) + AppScale(10n)),
-                width: float32(w),
-                height: float32(AppScale(22n))
-            },
-            text: label,
-            wrap: Wrap.TextWrapNone
-        }}
-    />;
     let control_y = nativeDeref(y) + AppScale(38n);
-    let menu = Dropdown({
-        session: CurrentApp().ui.session,
-        props: {
-            id: s32(820n) + cue,
-            bounds: {
-                x: float32(x),
-                y: float32(control_y),
-                width: float32(dropdown_w),
-                height: float32(AppScale(36n))
+    let menu_changed = false;
+    let selected_index = s32(0n);
+    {
+        let options = SettingsAudioNewOptions();
+        let count = app.audio_custom_sound_count + 1n;
+        nativeAt(options, 0n).label = LocaleText("audio_builtin_label");
+        if (count > AUDIO_CUSTOM_SOUND_MAX + 1n) {
+            count = AUDIO_CUSTOM_SOUND_MAX + 1n;
+        }
+        let i: s32 = s32(0n);
+        while (i < app.audio_custom_sound_count && i < AUDIO_CUSTOM_SOUND_MAX) {
+            nativeAt(options, i + 1n).label = AppTextFromCString(
+                nativeRef(nativeAt(nativeAt(app.audio_custom_sounds, i).title, 0n)),
+                AUDIO_LABEL_SIZE
+            );
+            i = i + 1n;
+        }
+        <Text
+            session={CurrentApp().ui.session}
+            props={{
+                bounds: {
+                    x: float32(x),
+                    y: float32(nativeDeref(y) + AppScale(10n)),
+                    width: float32(w),
+                    height: float32(AppScale(22n))
+                },
+                text: LocaleText(label_key),
+                wrap: Wrap.TextWrapNone
+            }}
+        />;
+        let menu = Dropdown({
+            session: CurrentApp().ui.session,
+            props: {
+                id: s32(820n) + cue,
+                bounds: {
+                    x: float32(x),
+                    y: float32(control_y),
+                    width: float32(dropdown_w),
+                    height: float32(AppScale(36n))
+                },
+                selected_index: nativeAt(app.audio_cue_selected, cue)
             },
-            selected_index: nativeAt(app.audio_cue_selected, cue)
-        },
-        options: nativeSlice(options, 0n, count)
-    });
-    if (menu.changed) {
-        nativeSet(app.audio_cue_selected, cue, menu.selected_index);
+            options: nativeSlice(options, 0n, count)
+        });
+        menu_changed = menu.changed;
+        selected_index = menu.selected_index;
+    }
+    if (menu_changed) {
+        nativeSet(app.audio_cue_selected, cue, selected_index);
         settings_audio_stop_preview(app);
         app_audio_reload_cue_sounds(app);
         app.settings_dirty = 1n;
@@ -507,7 +511,7 @@ export function draw_cue_selector(
                     width: float32(play_w),
                     height: float32(AppScale(36n))
                 },
-                label: play_label,
+                label: LocaleText(play_key),
                 tone: ButtonTone.ButtonToneNeutral,
                 emphasis: ButtonEmphasis.ButtonEmphasisSoft,
                 disabled: !NativePresent(app) || app.audio_ready === 0n
@@ -630,13 +634,14 @@ export function settings_audio_draw_music(
     w: s32,
     y: NativeRef<s32>
 ): void {
+    let body_height = settings_audio_music_body(app);
     let section = settings_section_begin(
         app,
         x,
         w,
         y,
         LocaleText("audio_music_title"),
-        settings_audio_music_body(app)
+        body_height
     );
     let ix = section.inner_x;
     let iw = section.inner_width;
@@ -651,7 +656,7 @@ export function settings_audio_draw_music(
         ix,
         iw,
         y,
-        LocaleText("audio_import_music_button"),
+        "audio_import_music_button",
         SETTINGS_AUDIO_ACTION_MUSIC,
         -1n
     );
@@ -663,14 +668,22 @@ export function settings_audio_draw_music(
         let current = nativeAt(app.meditation.music_practice_tracks, p);
         if (current !== AUDIO_MUSIC_NONE && current >= 0n && current < count) {
             assigned = assigned + 1n;
+            let title_range = FrameTextSave(
+                nativeRef(app.ui.frame_text),
+                settings_audio_practice_label(p)
+            );
+            let detail_range = FrameTextSave(
+                nativeRef(app.ui.frame_text),
+                app_audio_music_label(app, current)
+            );
             let action = settings_audio_list_row(
                 app,
                 s32(18300n) + p * 2n,
                 ix,
                 iw,
                 y,
-                settings_audio_practice_label(p),
-                app_audio_music_label(app, current),
+                FrameTextRead(nativeRef(app.ui.frame_text), title_range),
+                FrameTextRead(nativeRef(app.ui.frame_text), detail_range),
                 settings_audio_preview_music_playing(current) !== 0n
             );
             if (action === 1n) {

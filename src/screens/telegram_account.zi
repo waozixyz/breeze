@@ -32,6 +32,7 @@ TelegramAccountPassword :: struct {
     scroll_x: s32
     focused: bool
     composition: CompositionState
+    preedit: [4096]u8
 }
 
 TelegramAccountView :: struct {
@@ -89,8 +90,68 @@ TelegramAccountActionLabel :: (action: s32) -> string {
 TelegramAccountClearPassword :: (password: *TelegramAccountPassword) {
     if password != null {
         SecureWipe(*password.value[0], 257)
+        SecureWipe(*password.preedit[0], 4096)
         password.* = TelegramAccountPassword.{}
     }
+}
+
+// A controlled widget result borrows value and input bytes. Keep only owned
+// edit/preedit bytes until that scope ends, then publish them together.
+TelegramAccountPasswordUpdate :: struct {
+    replacement: [257]u8
+    preedit: [4096]u8
+    start: s32
+    end: s32
+    changed: bool
+    cursor: s32
+    anchor: s32
+    scroll_x: s32
+    focused: bool
+    escaped: bool
+    composition_active: bool
+    composition_length: s32
+    composition_cursor: s32
+    composition_selection: s32
+    valid: bool
+}
+
+TelegramAccountObservePassword :: (result: TextField.Result) -> TelegramAccountPasswordUpdate {
+    update: TelegramAccountPasswordUpdate
+    if result.composition.text.count > update.preedit.count { return update }
+    update.start = result.edit.start
+    update.end = result.edit.end
+    update.changed = result.edit.changed && AppCopyText(result.edit.replacement, update.replacement[:])
+    update.cursor = result.cursor
+    update.anchor = result.anchor
+    update.scroll_x = result.scroll_x
+    update.focused = result.focused
+    update.escaped = result.escaped
+    update.composition_active = result.composition.active
+    update.composition_length = cast(s32)result.composition.text.count
+    update.composition_cursor = result.composition.cursor
+    update.composition_selection = result.composition.selection_length
+    for byte, index: result.composition.text { update.preedit[index] = byte }
+    update.valid = true
+    return update
+}
+
+TelegramAccountApplyPassword :: (password: *TelegramAccountPassword, update: *TelegramAccountPasswordUpdate) {
+    if !update.valid { return }
+    password.composition = CompositionState.{}
+    if update.changed {
+        unused AppReplaceText(password.value[:], update.start, update.end, TextUntilNul(update.replacement[:]))
+    }
+    password.cursor = update.cursor
+    password.anchor = update.anchor
+    password.scroll_x = update.scroll_x
+    password.focused = update.focused
+    SecureWipe(*password.preedit[0], 4096)
+    password.preedit = update.preedit
+    password.composition = CompositionState.{
+        .active = update.composition_active,
+        .text = TextView(password.preedit[0:update.composition_length]),
+        .cursor = update.composition_cursor,
+        .selection_length = update.composition_selection}
 }
 
 TelegramAccountPasswordMask :: (password: *TelegramAccountPassword, output: []u8) -> bool {

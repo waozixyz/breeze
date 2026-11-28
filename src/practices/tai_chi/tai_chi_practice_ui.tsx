@@ -25,6 +25,8 @@ import { PracticeFigureRequest } from "practice_ui_types";
 import { UnlockBuying, UnlockOwned } from "practice_unlocks";
 import { TAI_CHI_SOURCE_LOCKED, TaiChiCourseItemIndex } from "tai_chi_course";
 import { TAI_CHI_CHARACTER_COUNT } from "tai_chi_rules";
+import { PackageFree, PackageText } from "package_files";
+import { FrameTextHold } from "text_buffers";
 
 export function TaiChiCourseFigureView(
     app: NativeRef<InnerBreeze>,
@@ -86,28 +88,27 @@ export function TaiChiUnlockDrawView(app: NativeRef<InnerBreeze>): boolean {
     let busy = owned
         ? PracticeContentStatus(s32(ExerciseType.EXERCISE_TAI_CHI)) === 1n
         : UnlockBuying();
-    let note = LocaleText("tai_chi_unlock_message");
+    let note_key = "tai_chi_unlock_message";
     if (busy) {
-        note = LocaleText(owned ? "practice_download_busy" : "practice_unlock_busy");
+        note_key = owned ? "practice_download_busy" : "practice_unlock_busy";
     } else if (!owned && !DewReady()) {
-        note = LocaleText("practice_unlock_account");
+        note_key = "practice_unlock_account";
     } else if (!owned && State_practice_unlocks.unlock_notice.count > 0n) {
-        note = LocaleText(State_practice_unlocks.unlock_notice);
+        note_key = State_practice_unlocks.unlock_notice;
     } else if (owned && PracticeContentStatus(s32(ExerciseType.EXERCISE_TAI_CHI)) === 3n) {
-        note = LocaleText("practice_download_failed");
+        note_key = "practice_download_failed";
     }
-    let label = LocaleText("practice_install");
-    if (!owned) {
-        label = PracticeDownloadPriceText(app, "practice_unlock_button");
-    }
+    let note = PackageText(LocaleText(note_key), "");
     let actions: [NativeModal.ActionModalAction, NativeModal.ActionModalAction] = [
         {
-            label: LocaleText("back_button"),
+            label: FrameTextHold(nativeRef(app.ui.frame_text), LocaleText("back_button")),
             tone: ButtonTone.ButtonToneNeutral,
             emphasis: ButtonEmphasis.ButtonEmphasisSoft
         },
         {
-            label: label,
+            label: owned
+                ? FrameTextHold(nativeRef(app.ui.frame_text), LocaleText("practice_install"))
+                : PracticeDownloadPriceText(app, "practice_unlock_button"),
             tone: ButtonTone.ButtonToneAccent,
             emphasis: ButtonEmphasis.ButtonEmphasisFilled,
             disabled:
@@ -124,6 +125,7 @@ export function TaiChiUnlockDrawView(app: NativeRef<InnerBreeze>): boolean {
         },
         actions: nativeSlice(actions)
     }).action;
+    PackageFree(note);
     if (result === -1n || result === 1n) {
         EntryState.tai_chi_unlock_requested = false;
     } else if (result === 2n) {

@@ -21,10 +21,7 @@ export function PracticeAudioTriggerView(
     y: s32,
     music: boolean
 ): boolean {
-    let label = LocaleText("cue_volume_label");
-    if (music) {
-        label = LocaleText("practice_background_music_label");
-    }
+    let label = LocaleText(music ? "practice_background_music_label" : "cue_volume_label");
     let button: NativeButton.Props = {};
     button.id = id;
     button.bounds = {
@@ -93,12 +90,8 @@ export function PracticeAudioPopupView(
     panel.tone = ButtonTone.ButtonToneNeutral;
     panel.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
     <Button session={app.ui.session} props={panel} />;
-    let label = LocaleText("cue_volume_label");
-    let value = app.sound_volume;
-    if (music) {
-        label = LocaleText("music_volume_label");
-        value = app.music_volume;
-    }
+    let label = LocaleText(music ? "music_volume_label" : "cue_volume_label");
+    let value = music ? app.music_volume : app.sound_volume;
     let slider: NativeSlider.DiscreteSliderProps = {};
     slider.id = id + 1n;
     slider.semantic_label = label;

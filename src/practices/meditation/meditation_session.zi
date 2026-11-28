@@ -1,3 +1,4 @@
+#import "vec"
 #import "meditation_session_ui"
 #import "practice_window_ui"
 #import "practice_title_bar_ui"
@@ -438,10 +439,12 @@ meditation_handle_exit_modal :: (app: *InnerBreeze) -> s32 {
     }
 
     elapsed = elapsed_seconds(app)
+    save_message: Text = TextCopy(LocaleText("meditation_save_elapsed_message"))
+    discard_message: Text = TextCopy(LocaleText("meditation_under_minute_exit_message"))
     result = app_draw_session_exit_modal(app,
         ifx (elapsed >= 60) then (1) else (0),
-        LocaleText("meditation_save_elapsed_message"),
-        LocaleText("meditation_under_minute_exit_message")
+        TextView(save_message),
+        TextView(discard_message)
         )
 
     if result == cast(SessionExitModalResult)SessionExitModalCancel {
@@ -570,6 +573,11 @@ meditation_draw_window :: (app: *InnerBreeze, picture: Rectangle, status: []u8) 
 practice_meditation_frame: PracticeMeditationFrame;
 practice_meditation_frame_codec: WidgetPracticeMeditationFrameCodec;
 
+MeditationContentAction :: struct {
+    action: s32
+    value: s32
+}
+
 PracticeMeditationCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
     if TextFromCString(module) != "meditation_view" {
@@ -595,10 +603,14 @@ PracticeMeditationCall :: (context: *void, module: *u8, function: *u8,
 // Has Practices draw the circle with the time left and the extend controls;
 // returns what was pressed there. The question asked on leaving shows the
 // page without them.
-meditation_draw_content :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> PracticeMeditationFrame {
+meditation_draw_content :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> MeditationContentAction {
+    defer {
+        practice_meditation_frame = PracticeMeditationFrame.{}
+        practice_meditation_frame_codec = WidgetPracticeMeditationFrameCodec.{}
+    }
     if app.modal.active != 0 &&
     app.modal.type == cast(ModalType)ModalConfirmExitSession {
-        return PracticeMeditationFrame.{}
+        return MeditationContentAction.{}
     }
     time_text: [32]u8
     format_meditation_clock(app, time_text[:])
@@ -617,9 +629,10 @@ meditation_draw_content :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> 
     AppsUiEnd()
     WidgetHostEnd()
     if !drawn.succeeded {
-        return PracticeMeditationFrame.{}
+        return MeditationContentAction.{}
     }
-    return practice_meditation_frame
+    return MeditationContentAction.{.action = practice_meditation_frame.action,
+        .value = practice_meditation_frame.value}
 }
 
 meditation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
@@ -627,9 +640,12 @@ meditation_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     // first.
     content := meditation_draw_content(app, center_x, center_y)
 
-    if PracticeTitleBar(app, LocaleText("meditation_title"), PracticeTitleBarHeight()) {
-        meditation_request_exit(app)
-        return
+    {
+        title := FrameTextHold(*app.ui.frame_text, LocaleText("meditation_title"))
+        if PracticeTitleBar(app, title, PracticeTitleBarHeight()) {
+            meditation_request_exit(app)
+            return
+        }
     }
 
     if meditation_handle_exit_modal(app) != 0 {

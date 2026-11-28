@@ -1,3 +1,5 @@
+import { ResolvedModal } from "kryon/tsx/modal";
+import { Scroll } from "kryon/tsx/scroll";
 import { ProfileDewNewLink } from "profile_dew";
 import { ProfileDewNewAddress } from "profile_dew";
 import { ProfileDewNewUri } from "profile_dew";
@@ -42,7 +44,6 @@ import {
 } from "kryon/play_billing";
 import { TextAlign } from "kryon/text_align";
 import { Wrap } from "kryon/text_props";
-import { End } from "kryon/tree";
 import { Box } from "kryon/tsx/box";
 import { Button } from "kryon/tsx/button";
 import { LoadingIndicator } from "kryon/tsx/loading_indicator";
@@ -61,7 +62,7 @@ import {
     ProfileDewHeight,
     ProfileDewSizeText,
     ProfileTopUpAddressText,
-    ProfileTopUpPlayNotice,
+    ProfileTopUpPlayNoticeKey,
     ProfileTopUpPump,
     TopUpMinimumShown
 } from "profile_dew";
@@ -430,40 +431,56 @@ export function ProfileStoragePlansModalDraw(app: NativeRef<InnerBreeze>): void 
         height = app.ui.view_height - AppScale(48n);
     }
     DewRatesRefresh();
-    let frame = NativeModal.Draw(app.ui.session, {
-        key: NativeLayout.KeyHash("profile/storage/modal"),
-        title: LocaleText("profile_dew_plans"),
-        width: width,
-        height: height,
-        scale: MetricsScale(),
-        title_at_start: true,
-        strong_title: true,
-        has_right_action: true,
-        right_label: LocaleText("close_button")
+    let frame = ResolvedModal({
+        session: app.ui.session,
+        props: {
+            key: NativeLayout.KeyHash("profile/storage/modal"),
+            title: LocaleText("profile_dew_plans"),
+            width: width,
+            height: height,
+            scale: MetricsScale(),
+            title_at_start: true,
+            strong_title: true,
+            has_right_action: true,
+            right_label: LocaleText("close_button")
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            if (!DewReady() || !State_dew.dew_account.known) {
+                return;
+            }
+
+            let content_w = s32(frame.layout.content.width) - AppScale(10n);
+            let content_h: s32 = s32(0n);
+            ProfileStoragePlansContent(app, 0n, nativeRef(content_h), content_w, false);
+            let scroll = Scroll({
+                session: app.ui.session,
+                props: {
+                    key: NativeLayout.KeyHash("profile/storage/scroll"),
+                    bounds: frame.layout.content,
+                    content_height: content_h,
+                    scroll_offset: State_profile_dew.profile_storage_scroll
+                },
+                children: (scroll: NativeScroll.ScrollResult): void => {
+                    State_profile_dew.profile_storage_scroll = scroll.scroll_offset;
+                    let y = s32(scroll.content.y);
+                    ProfileStoragePlansContent(
+                        app,
+                        s32(scroll.content.x),
+                        nativeRef(y),
+                        content_w,
+                        true
+                    );
+                }
+            });
+            if (!scroll.opened) {
+                State_profile_dew.profile_storage_scroll = scroll.scroll_offset;
+            }
+        }
     });
     if (frame.dismissed || frame.right_clicked || !DewReady() || !State_dew.dew_account.known) {
         app_close_modal(app);
         return;
     }
-    if (!frame.opened) {
-        return;
-    }
-    let content_w = s32(frame.layout.content.width) - AppScale(10n);
-    let content_h: s32 = s32(0n);
-    ProfileStoragePlansContent(app, 0n, nativeRef(content_h), content_w, false);
-    let scroll = NativeScroll.Draw(app.ui.session, {
-        key: NativeLayout.KeyHash("profile/storage/scroll"),
-        bounds: frame.layout.content,
-        content_height: content_h,
-        scroll_offset: State_profile_dew.profile_storage_scroll
-    });
-    State_profile_dew.profile_storage_scroll = scroll.scroll_offset;
-    if (scroll.opened) {
-        let y = s32(scroll.content.y);
-        ProfileStoragePlansContent(app, s32(scroll.content.x), nativeRef(y), content_w, true);
-        End(app.ui.session);
-    }
-    End(app.ui.session);
 }
 
 export function ProfileTopUpPlayContent(
@@ -557,16 +574,16 @@ export function ProfileTopUpPlayContent(
             draw
         );
     }
-    let notice = ProfileTopUpPlayNotice(nativeRef(billing), shown);
-    if (notice !== "") {
-        ProfileDewText(app, notice, x, y, width, AppSmallFontSize(), draw);
+    let notice_key = ProfileTopUpPlayNoticeKey(nativeRef(billing), shown);
+    if (notice_key !== "") {
+        ProfileDewText(app, LocaleText(notice_key), x, y, width, AppSmallFontSize(), draw);
     }
-    if (shown === 0n && notice === LocaleText("profile_dew_play_unavailable")) {
+    if (shown === 0n && notice_key === "profile_dew_play_unavailable") {
         if (ProfileDewButton(app, LocaleText("retry_button"), x, y, width, busy, draw)) {
             State_profile_dew.profile_play_prices_deadline = HostSeconds() + 15.0;
             PlayBillingProducts(DEW_PLAY_PRODUCTS, nativeSlice(State_dew_payment.dew_play.state));
         }
-    } else if (shown === 0n && notice === LocaleText("profile_dew_play_loading")) {
+    } else if (shown === 0n && notice_key === "profile_dew_play_loading") {
         if (draw) {
             <LoadingIndicator
                 session={app.ui.session}
@@ -781,38 +798,48 @@ export function ProfileTopUpModalDraw(app: NativeRef<InnerBreeze>): void {
     if (height > app.ui.view_height - AppScale(48n)) {
         height = app.ui.view_height - AppScale(48n);
     }
-    let frame = NativeModal.Draw(app.ui.session, {
-        key: NativeLayout.KeyHash("profile/topup/modal"),
-        title: LocaleText("profile_dew_topup_title"),
-        width: width,
-        height: height,
-        scale: MetricsScale(),
-        title_at_start: true,
-        strong_title: true,
-        has_right_action: true,
-        right_label: LocaleText("close_button")
+    let frame = ResolvedModal({
+        session: app.ui.session,
+        props: {
+            key: NativeLayout.KeyHash("profile/topup/modal"),
+            title: LocaleText("profile_dew_topup_title"),
+            width: width,
+            height: height,
+            scale: MetricsScale(),
+            title_at_start: true,
+            strong_title: true,
+            has_right_action: true,
+            right_label: LocaleText("close_button")
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            if (!DewReady() || !State_dew.dew_account.known) {
+                return;
+            }
+
+            let content_w = s32(frame.layout.content.width) - AppScale(10n);
+            let content_h: s32 = s32(0n);
+            ProfileTopUpContent(app, 0n, nativeRef(content_h), content_w, false);
+            let scroll = Scroll({
+                session: app.ui.session,
+                props: {
+                    key: NativeLayout.KeyHash("profile/topup/scroll"),
+                    bounds: frame.layout.content,
+                    content_height: content_h,
+                    scroll_offset: State_profile_dew.profile_topup_scroll
+                },
+                children: (scroll: NativeScroll.ScrollResult): void => {
+                    State_profile_dew.profile_topup_scroll = scroll.scroll_offset;
+                    let y = s32(scroll.content.y);
+                    ProfileTopUpContent(app, s32(scroll.content.x), nativeRef(y), content_w, true);
+                }
+            });
+            if (!scroll.opened) {
+                State_profile_dew.profile_topup_scroll = scroll.scroll_offset;
+            }
+        }
     });
     if (frame.dismissed || frame.right_clicked || !DewReady() || !State_dew.dew_account.known) {
         app_close_modal(app);
         return;
     }
-    if (!frame.opened) {
-        return;
-    }
-    let content_w = s32(frame.layout.content.width) - AppScale(10n);
-    let content_h: s32 = s32(0n);
-    ProfileTopUpContent(app, 0n, nativeRef(content_h), content_w, false);
-    let scroll = NativeScroll.Draw(app.ui.session, {
-        key: NativeLayout.KeyHash("profile/topup/scroll"),
-        bounds: frame.layout.content,
-        content_height: content_h,
-        scroll_offset: State_profile_dew.profile_topup_scroll
-    });
-    State_profile_dew.profile_topup_scroll = scroll.scroll_offset;
-    if (scroll.opened) {
-        let y = s32(scroll.content.y);
-        ProfileTopUpContent(app, s32(scroll.content.x), nativeRef(y), content_w, true);
-        End(app.ui.session);
-    }
-    End(app.ui.session);
 }

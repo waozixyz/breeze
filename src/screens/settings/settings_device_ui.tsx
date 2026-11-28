@@ -32,13 +32,14 @@ export function settings_device_draw_display(
 ): void {
     let desktop = DesktopPlatform() !== 0n;
     let inner = settings_section_inner_width(width);
+    let body_height = settings_device_display_body(inner);
     let section = settings_section_begin(
         app,
         x,
         width,
         y,
         LocaleText("settings_section_display"),
-        settings_device_display_body(inner)
+        body_height
     );
     let orientation_count = settings_device_orientation_option_count();
     app.orientation_mode = settings_device_clamp(
@@ -113,13 +114,14 @@ export function settings_device_draw_window(
     y: NativeRef<s32>
 ): void {
     let inner = settings_section_inner_width(width);
+    let body_height = settings_device_window_body(inner);
     let section = settings_section_begin(
         app,
         x,
         width,
         y,
         LocaleText("settings_section_window"),
-        settings_device_window_body(inner)
+        body_height
     );
     let startup_options = SettingsDeviceNewStartupOptions();
     nativeAt(startup_options, 0n).label = LocaleText("desktop_startup_mode_normal");

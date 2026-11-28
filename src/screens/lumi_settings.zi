@@ -46,6 +46,64 @@ LumiSettingsField :: struct {
     scroll_x: s32
     focused: bool
     composition: CompositionState
+    preedit: [4096]u8
+}
+
+// Widget results borrow current value/input bytes. Keep the pending edit and
+// composition in owned storage before changing the field's backing buffers.
+LumiSettingsFieldUpdate :: struct {
+    replacement: [LUMI_PROVIDER_URL_MAX]u8
+    preedit: [4096]u8
+    start: s32
+    end: s32
+    changed: bool
+    cursor: s32
+    anchor: s32
+    scroll_x: s32
+    focused: bool
+    composition_active: bool
+    composition_length: s32
+    composition_cursor: s32
+    composition_selection: s32
+    valid: bool
+}
+
+LumiSettingsObserveField :: (result: TextField.Result) -> LumiSettingsFieldUpdate {
+    update: LumiSettingsFieldUpdate
+    if result.composition.text.count > update.preedit.count { return update }
+    update.start = result.edit.start
+    update.end = result.edit.end
+    update.changed = result.edit.changed && AppCopyText(result.edit.replacement, update.replacement[:])
+    update.cursor = result.cursor
+    update.anchor = result.anchor
+    update.scroll_x = result.scroll_x
+    update.focused = result.focused
+    update.composition_active = result.composition.active
+    update.composition_length = cast(s32)result.composition.text.count
+    update.composition_cursor = result.composition.cursor
+    update.composition_selection = result.composition.selection_length
+    for byte, index: result.composition.text { update.preedit[index] = byte }
+    update.valid = true
+    return update
+}
+
+LumiSettingsApplyField :: (field: *LumiSettingsField, update: *LumiSettingsFieldUpdate) {
+    if !update.valid { return }
+    field.composition = CompositionState.{}
+    if update.changed {
+        unused AppReplaceText(field.value[:], update.start, update.end, TextUntilNul(update.replacement[:]))
+    }
+    field.cursor = update.cursor
+    field.anchor = update.anchor
+    field.scroll_x = update.scroll_x
+    field.focused = update.focused
+    SecureWipe(*field.preedit[0], 4096)
+    field.preedit = update.preedit
+    field.composition = CompositionState.{
+        .active = update.composition_active,
+        .text = TextView(field.preedit[0:update.composition_length]),
+        .cursor = update.composition_cursor,
+        .selection_length = update.composition_selection}
 }
 
 lumi_settings_url: LumiSettingsField;
@@ -89,8 +147,11 @@ lumi_settings_connection_body :: (width: s32) -> s32 {
 
 lumi_settings_content_height :: (width: s32) -> s32 {
     inner := settings_section_inner_width(width)
-    return settings_section_height(LocaleText("lumi_settings_terms"), lumi_settings_terms_body(inner)) +
-    settings_section_height(LocaleText("lumi_settings_connection"), lumi_settings_connection_body(inner))
+    terms_body := lumi_settings_terms_body(inner)
+    terms_height := settings_section_height(LocaleText("lumi_settings_terms"), terms_body)
+    connection_body := lumi_settings_connection_body(inner)
+    return terms_height +
+    settings_section_height(LocaleText("lumi_settings_connection"), connection_body)
 }
 
 lumi_settings_load :: () {
@@ -117,20 +178,23 @@ lumi_settings_save :: () {
     model: [LUMI_PROVIDER_MODEL_MAX]u8
     unused AppCopyText(LumiLineTrimmed(TextUntilNul(lumi_settings_url.value[:])), url[:])
     unused AppCopyText(LumiLineTrimmed(TextUntilNul(lumi_settings_model.value[:])), model[:])
-    key := AppTextFromCString(*lumi_settings_key.value[0], LUMI_PROVIDER_URL_MAX)
-    if !LumiProviderUrlValid(TextUntilNul(url[:])) || !LumiProviderModelValid(TextUntilNul(model[:])) ||
-    !LumiProviderKeyValid(key) {
-        lumi_settings_notice = 2
-        return
+    {
+        key := AppTextFromCString(*lumi_settings_key.value[0], LUMI_PROVIDER_URL_MAX)
+        if !LumiProviderUrlValid(TextUntilNul(url[:])) || !LumiProviderModelValid(TextUntilNul(model[:])) ||
+        !LumiProviderKeyValid(key) {
+            lumi_settings_notice = 2
+            return
+        }
+        storage_settings_begin_write()
+        storage_set_setting_text(LumiProviderUrlSetting, TextUntilNul(url[:]))
+        storage_set_setting_text(LumiProviderModelSetting, TextUntilNul(model[:]))
+        if key.count > 0 {
+            storage_set_setting_text(LumiProviderKeySetting, key)
+        }
+        storage_settings_end_write()
     }
-    storage_settings_begin_write()
-    storage_set_setting_text(LumiProviderUrlSetting, TextUntilNul(url[:]))
-    storage_set_setting_text(LumiProviderModelSetting, TextUntilNul(model[:]))
-    if key.count > 0 {
-        storage_set_setting_text(LumiProviderKeySetting, key)
-    }
-    storage_settings_end_write()
     SecureWipe(*lumi_settings_key.value[0], LUMI_PROVIDER_URL_MAX)
+    SecureWipe(*lumi_settings_key.preedit[0], 4096)
     lumi_settings_key = LumiSettingsField.{}
     lumi_settings_notice = 1
 }

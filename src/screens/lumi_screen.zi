@@ -15,6 +15,7 @@
 #import "byte_text_linux"
 Layout :: #import "kryon/layout";
 Text :: #import "kryon/text";
+TextArea :: #import "kryon/text_area";
 #import "geometry"
 #import "drawing_props"
 #import "vec"
@@ -81,6 +82,12 @@ using AppNavRoute;
 using Text.Wrap;
 using TextAlign;
 using ExerciseType;
+// Input views live for one synchronous package call, never in saved UI state.
+LumiUiContext :: struct {
+    app: *InnerBreeze
+    input: TextArea.Input
+}
+
 lumi_ui: LumiUiFrame;
 lumi_ui_codec: WidgetLumiUiFrameCodec;
 lumi_row_codec: WidgetLumiChatRowCodec;
@@ -230,13 +237,17 @@ LumiAgreementPrepare :: (width: s32) {
         lumi_ui.agreement_height = 0
         return
     }
-    key := (Layout.KeyHash(lumi_ui.provider_host) ^ Layout.KeyHash(LocaleActiveCode()) ^ AssetGeneration()) *
+    provider_host: string
+    if lumi_ui.connection {
+        provider_host = AppTextFromCString(*lumi_provider_host_text[0], LUMI_PROVIDER_URL_MAX)
+    }
+    key := (Layout.KeyHash(provider_host) ^ Layout.KeyHash(LocaleActiveCode()) ^ AssetGeneration()) *
     cast(u64)1099511628211 + cast(u64)width * cast(u64)31 + cast(u64)lumi_ui.font
     if key != lumi_agreement_key || lumi_agreement_text.count == 0 {
         lumi_agreement_key = key
         lumi_ui.agreement_text = ""
         PackageFree(lumi_agreement_text)
-        lumi_agreement_text = LumiAgreementCompose(lumi_ui.provider_host)
+        lumi_agreement_text = LumiAgreementCompose(provider_host)
         counts := LumiFormatInto(lumi_agreement_text, true, lumi_agreement_bytes[:],
             lumi_agreement_strong[:])
         prepared := Text.PrepareText(Text.Props.{.text = TextFromBytes(lumi_agreement_bytes[:counts.count]),
@@ -329,8 +340,7 @@ AppearanceAskLumi :: (app: *InnerBreeze, scope: string) {
     text := BuilderFinish(prompt)
     defer { PackageFree(text) }
     unused AppCopyText(text, lumi_input[:])
-    lumi_ui.value = AppTextFromCString(*lumi_input[0], LUMI_INPUT_MAX)
-    lumi_ui.cursor = cast(s32)lumi_ui.value.count
+    lumi_ui.cursor = cast(s32)AppTextFromCString(*lumi_input[0], LUMI_INPUT_MAX).count
     lumi_ui.anchor = lumi_ui.cursor
     lumi_ui.focused = true
     app_apply_nav_route(app, APP_NAV_ROUTE_LUMI)
@@ -661,13 +671,15 @@ LumiPerform :: (app: *InnerBreeze, action: LumiAction) -> bool {
 
 LumiUiCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    host := cast(*LumiUiContext)context
+    app := host.app
     owner := TextFromCString(module)
     if owner != "lumi" && owner != "lumi_view" {
-        return WidgetHostCall(context, module, function, arguments, count, result)
+        return WidgetHostCall(cast(*void)app, module, function, arguments, count, result)
     }
     name := TextFromCString(function)
     if StoredAccountMode() == AccountModeDelegate {
-        if !LumiHostAllowed(cast(*InnerBreeze)context, name) {
+        if !LumiHostAllowed(app, name) {
             return 0
         }
         if name == "StartLumiOnlineHost" && count == 1 &&
@@ -736,10 +748,13 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     if name == "LumiFeedbackChoiceHost" && count == 2 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "s32", cast(s32)HostInteger) {
-        id := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        action := cast(s32)arguments[1].integer
-        // The confirmation card is the whole exchange; its buttons show the choice.
-        succeeded := FeedbackChoice(id, action)
+        succeeded: bool
+        {
+            id := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            action := cast(s32)arguments[1].integer
+            // The confirmation card is the whole exchange; its buttons show the choice.
+            succeeded = FeedbackChoice(id, action)
+        }
         result.* = HostScalar("bool", ifx succeeded then 1 else 0)
         return 1
     }
@@ -755,8 +770,12 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "StartLumiOnlineHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        input := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        result.* = HostScalar("bool", ifx LumiOnlineStart(input, lumi_telegram_current == null) then 1 else 0)
+        started: bool
+        {
+            input := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            started = LumiOnlineStart(input, lumi_telegram_current == null)
+        }
+        result.* = HostScalar("bool", ifx started then 1 else 0)
         return 1
     }
     if name == "SetLumiOnlineHost" && count == 1 &&
@@ -780,26 +799,32 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     if name == "LumiToolHost" && count == 2 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) &&
     HostScalarValid(arguments[1], "string", cast(s32)HostString) {
-        tool := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        tool_arguments := TextFromBytes(BytesFromPointer(arguments[1].data, cast(u64)arguments[1].length))
-        PackageFree(lumi_tool_text)
-        lumi_tool_text = AppToolExecute(cast(*InnerBreeze)context, tool, tool_arguments)
+        {
+            tool := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            tool_arguments := TextFromBytes(BytesFromPointer(arguments[1].data, cast(u64)arguments[1].length))
+            PackageFree(lumi_tool_text)
+            lumi_tool_text = AppToolExecute(app, tool, tool_arguments)
+        }
         result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
             .data = HostTextData(lumi_tool_text), .length = cast(usize)lumi_tool_text.count}
         return 1
     }
     if name == "ConfirmLumiDeleteHost" && count == 1 &&
     HostScalarValid(arguments[0], "bool", cast(s32)HostInteger) {
-        deleted := ConfirmLumiDelete(cast(*InnerBreeze)context, arguments[0].integer != 0)
+        deleted := ConfirmLumiDelete(app, arguments[0].integer != 0)
         result.* = HostScalar("bool", ifx deleted then 1 else 0)
         return 1
     }
     if name == "LumiEnglishLocaleHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleEnglishText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
+        reply: HostValue
+        {
+            key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            text := LocaleEnglishText(key)
+            reply = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+        }
+        result.* = reply
         return 1
     }
     if name == "ReadLumiToolsHost" && count == 0 {
@@ -839,7 +864,14 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         return 1
     }
     if name == "ReadLumiUiHost" && count == 0 {
-        result.* = WidgetEncodeLumiUiFrame(lumi_ui, *lumi_ui_codec)
+        // Borrow mutable composer/provider buffers only for this host call.
+        frame := lumi_ui
+        frame.input = host.input
+        frame.value = AppTextFromCString(*lumi_input[0], LUMI_INPUT_MAX)
+        if lumi_ui.connection {
+            frame.provider_host = AppTextFromCString(*lumi_provider_host_text[0], LUMI_PROVIDER_URL_MAX)
+        }
+        result.* = WidgetEncodeLumiUiFrame(frame, *lumi_ui_codec)
         return 1
     }
     if name == "WriteLumiUiHost" && count == 1 && WidgetValidLumiUiFrame(arguments[0]) {
@@ -851,7 +883,6 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         if frame.value.count >= LUMI_INPUT_MAX || !AppCopyText(frame.value, lumi_input[:]) {
             return 0
         }
-        lumi_ui.value = AppTextFromCString(*lumi_input[0], LUMI_INPUT_MAX)
         lumi_ui.cursor = frame.cursor
         lumi_ui.anchor = frame.anchor
         lumi_ui.input_scroll = frame.input_scroll
@@ -868,10 +899,14 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     }
     if (name == "LumiLocaleHost" || name == "LumiViewLocaleHost") && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
+        reply: HostValue
+        {
+            key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            text := LocaleText(key)
+            reply = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+        }
+        result.* = reply
         return 1
     }
     if name == "LumiTaskCountHost" && count == 0 {
@@ -885,7 +920,7 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     }
     if (name == "ReadLumiHabitHost" || name == "ReadLumiSuggestionHabitHost") && count == 1 &&
     HostScalarValid(arguments[0], "s32", cast(s32)HostInteger) {
-        result.* = WidgetEncodeLumiTask(LumiHabitAt(cast(*InnerBreeze)context,
+        result.* = WidgetEncodeLumiTask(LumiHabitAt(app,
             cast(s32)arguments[0].integer), *lumi_task_codec)
         return 1
     }
@@ -902,8 +937,11 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
     // A link Lumi found in a message opens with the platform's handler.
     if name == "OpenLinkHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        url := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        opened := LumiLinkValid(url) && OpenUri(url)
+        opened: bool
+        {
+            url := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            opened = LumiLinkValid(url) && OpenUri(url)
+        }
         result.* = HostScalar("bool", ifx opened then 1 else 0)
         return 1
     }
@@ -921,8 +959,12 @@ LumiUiCall :: (context: *void, module: *u8, function: *u8,
         return 1
     }
     if name == "PerformLumiActionHost" && count == 1 && WidgetValidLumiAction(arguments[0]) {
-        action := WidgetDecodeLumiAction(arguments[0], *lumi_action_codec)
-        result.* = HostScalar("bool", ifx LumiPerform(cast(*InnerBreeze)context, action) then 1 else 0)
+        succeeded: bool
+        {
+            action := WidgetDecodeLumiAction(arguments[0], *lumi_action_codec)
+            succeeded = LumiPerform(app, action)
+        }
+        result.* = HostScalar("bool", ifx succeeded then 1 else 0)
         return 1
     }
     return 0
@@ -1072,7 +1114,6 @@ LumiPrepareTools :: (app: *InnerBreeze) {
         lumi_ui.online = false
         lumi_ui.connection = false
         lumi_ui.agreement = 0
-        lumi_ui.provider_host = ""
         return
     }
 
@@ -1123,7 +1164,6 @@ LumiPrepareTools :: (app: *InnerBreeze) {
         unused AppCopyText(storage_get_setting_text(LumiProviderUrlSetting), url[:])
         unused AppCopyText(LumiProviderHost(TextUntilNul(url[:])), lumi_provider_host_text[:])
     }
-    lumi_ui.provider_host = AppTextFromCString(*lumi_provider_host_text[0], LUMI_PROVIDER_URL_MAX)
 }
 
 // Telegram and the native composer run the same interpreter against live app
@@ -1137,7 +1177,8 @@ LumiSubmit :: (app: *InnerBreeze, input: string) -> bool {
     lumi_pending_route = -1
     lumi_pending_practice = -1
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
-    AppsUiBegin(LumiUiCall, cast(*void)app)
+    host := LumiUiContext.{.app = app}
+    AppsUiBegin(LumiUiCall, cast(*void)(*host))
     response := LumiRun(LumiMessage.{.action = LUMI_SEND, .input = input})
     AppsUiEnd()
     WidgetHostEnd()
@@ -1210,7 +1251,9 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     revision := LumiStoreRevision()
     history_changed := revision != lumi_rows_revision
     assets := AssetGeneration()
-    language := LocaleActiveCode()
+    language_bytes: [32]u8
+    unused AppCopyText(LocaleActiveCode(), language_bytes[:])
+    language := AppTextFromCString(*language_bytes[0], 32)
     layout_changed := lumi_ui.width != lumi_rows_width ||
     lumi_ui.font != lumi_rows_font || lumi_ui.scale != lumi_rows_scale ||
     assets != lumi_rows_assets ||
@@ -1250,19 +1293,22 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     }
     column_width := Layout.CenteredColumnFor(lumi_ui.width, AppScale(720), AppScale(16)).width
     draft_width := column_width - AppScale(112)
-    if lumi_ui.value != AppTextFromCString(*lumi_draft[0], LUMI_INPUT_MAX) ||
-    draft_width != lumi_draft_width || lumi_ui.font != lumi_draft_font || assets != lumi_draft_assets ||
-    language != AppTextFromCString(*lumi_draft_language[0], 32) {
-        unused AppCopyText(lumi_ui.value, lumi_draft[:])
-        lumi_draft_width = draft_width
-        lumi_draft_font = lumi_ui.font
-        lumi_draft_assets = assets
-        unused AppCopyText(language, lumi_draft_language[:])
-        draft := Text.PrepareText(Text.Props.{.text = lumi_ui.value, .size = lumi_ui.font,
-                .wrap = cast(Text.Wrap)TextWrapAuto,
-                .bounds = Rectangle.{0.0, 0.0, cast(float32)draft_width, 0.0}},
-            Text.DefaultTextFace())
-        lumi_draft_height = cast(s32)draft.bounds.height
+    {
+        value := AppTextFromCString(*lumi_input[0], LUMI_INPUT_MAX)
+        if value != AppTextFromCString(*lumi_draft[0], LUMI_INPUT_MAX) ||
+        draft_width != lumi_draft_width || lumi_ui.font != lumi_draft_font || assets != lumi_draft_assets ||
+        language != AppTextFromCString(*lumi_draft_language[0], 32) {
+            unused AppCopyText(value, lumi_draft[:])
+            lumi_draft_width = draft_width
+            lumi_draft_font = lumi_ui.font
+            lumi_draft_assets = assets
+            unused AppCopyText(language, lumi_draft_language[:])
+            draft := Text.PrepareText(Text.Props.{.text = value, .size = lumi_ui.font,
+                    .wrap = cast(Text.Wrap)TextWrapAuto,
+                    .bounds = Rectangle.{0.0, 0.0, cast(float32)draft_width, 0.0}},
+                Text.DefaultTextFace())
+            lumi_draft_height = cast(s32)draft.bounds.height
+        }
     }
     lumi_ui.draft_height = lumi_draft_height
     if lumi_agreement_due {
@@ -1275,14 +1321,15 @@ lumi_screen_draw :: (app: *InnerBreeze) {
     // The terms wrap clear of their scroll bar, as Lumi's view draws them.
     LumiAgreementPrepare(column_width - AppScale(24))
     typed: [512]u8
-    lumi_ui.input = SampleTextAreaInput(lumi_ui.focused, typed[:])
-    enter := lumi_ui.input.enter || lumi_ui.input.commit
-    lumi_ui.input.enter = enter && lumi_ui.input.shift
-    lumi_ui.input.commit = enter && !lumi_ui.input.shift
+    input := SampleTextAreaInput(lumi_ui.focused, typed[:])
+    enter := input.enter || input.commit
+    input.enter = enter && input.shift
+    input.commit = enter && !input.shift
     lumi_pending_route = -1
     lumi_pending_practice = -1
     WidgetHostBegin(app.ui.session, HostedAssetAllowed)
-    AppsUiBegin(LumiUiCall, cast(*void)app)
+    host := LumiUiContext.{.app = app, .input = input}
+    AppsUiBegin(LumiUiCall, cast(*void)(*host))
     LumiSetFrameQuiet(quiet)
     #if #defined(LUMI_ANDROID_FRAME_WATCH) {
         LumiWatchMark(LumiWatchBundle)

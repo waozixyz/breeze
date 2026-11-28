@@ -2,6 +2,7 @@
 // Habit list and history state and host bindings. The host dispatch uses this module name.
 Press :: #import "kryon/press";
 Text :: #import "kryon/text";
+OwnedText :: #import "std/vec";
 #import "kryon/system_clipboard"
 #import "session"
 #import "geometry"
@@ -33,6 +34,11 @@ ReadHabitsListDayHost :: (index: s32, day: s32) -> HabitsListDay #foreign host_a
 HabitsLocaleHost :: (key: string) -> string #foreign host_api;
 list: HabitsListFrame;
 rows: [HABIT_MAX]HabitsListRow;
+HabitsRowText :: struct {
+    name: OwnedText.Text
+    description: OwnedText.Text
+}
+row_text: [HABIT_MAX]HabitsRowText;
 row_count: s32;
 // Today's state of each habit, read once a frame for the progress.
 today_days: [HABIT_MAX]HabitsListDay;
@@ -266,6 +272,35 @@ FaceState :: (bounds: Rectangle, selected: bool) -> ButtonState {
     return cast(ButtonState)ButtonStateNormal
 }
 
+// Keep full host text in the model. Unchanged rows reuse their bytes;
+// replacing text releases the old allocation instead of detaching it.
+StoreRowText :: (destination: *OwnedText.Text, value: string) {
+    if value != TextView(destination.*) {
+        fresh: OwnedText.Text = OwnedText.TextCopy(value)
+        VecFree(destination.bytes)
+        destination.bytes = fresh.bytes
+    }
+}
+
+// One row is read inside its own function, so the host frame's text
+// borrow ends lexically before the next row is read.
+ReadListRow :: (index: s32) {
+    {
+        row := ReadHabitsListRowHost(index)
+        StoreRowText(*row_text[index].name, row.name)
+        StoreRowText(*row_text[index].description, row.description)
+        rows[index].color = row.color
+        rows[index].icon = row.icon
+        rows[index].deactivated = row.deactivated
+        rows[index].counting = row.counting
+        rows[index].target = row.target
+        rows[index].streak = row.streak
+        rows[index].week_done = row.week_done
+        rows[index].week_planned = row.week_planned
+    }
+    today_days[index] = ReadHabitsListDayHost(index, list.today)
+}
+
 ReadRows :: () {
     row_count = list.habit_count
     if row_count > HABIT_MAX {
@@ -274,9 +309,16 @@ ReadRows :: () {
     if row_count < 0 {
         row_count = 0
     }
+    // Deleted rows release their storage; the mounted package owns active
+    // rows. Only Row's caller-scoped snapshots borrow these owners.
+    for index: cast(s32)0..HABIT_MAX - 1 {
+        if index >= row_count {
+            VecFree(row_text[index].name.bytes)
+            VecFree(row_text[index].description.bytes)
+        }
+    }
     for index: cast(s32)0..row_count - 1 {
-        rows[index] = ReadHabitsListRowHost(index)
-        today_days[index] = ReadHabitsListDayHost(index, list.today)
+        ReadListRow(index)
     }
 }
 
@@ -401,7 +443,7 @@ RowDetailHeight :: (index: s32) -> s32 {
     height := Scale(4) + Scale(LIST_DETAIL_PADDING) * 2 +
     Scale(LIST_DETAIL_ACTION_SIZE) + Scale(12) + Scale(LIST_FIGURE_CARD_HEIGHT) + Scale(12)
     height += Scale(LIST_DETAIL_TITLE_HEIGHT + LIST_DETAIL_TITLE_GAP)
-    if rows[index].description.count > 0 {
+    if row_text[index].description.bytes.count > 0 {
         height += Scale(30)
     }
     return height
@@ -532,8 +574,11 @@ SetList :: (value: HabitsListFrame) {
     list = value
 }
 
-Rows :: () -> []HabitsListRow {
-    return rows[:]
+Row :: (index: s32) -> HabitsListRow {
+    row := rows[index]
+    row.name = TextView(row_text[index].name)
+    row.description = TextView(row_text[index].description)
+    return row
 }
 
 CurrentPointerFrame :: () -> *PointerFrame {

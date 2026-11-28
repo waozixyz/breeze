@@ -1,3 +1,4 @@
+import { DiscreteSlider } from "kryon/tsx/slider";
 import { SettingsUiNewNumberBuffer } from "settings_ui";
 // Authored UI composition; native application state remains in settings_ui.zi.
 import * as NativeFieldset from "kryon/fieldset";
@@ -277,7 +278,7 @@ export function commit_slider_rowView(
     slider.value = nativeDeref(value);
     slider.min = minimum;
     slider.max = maximum;
-    let result = NativeSlider.DiscreteSlider(app.ui.session, slider);
+    let result = DiscreteSlider({ session: app.ui.session, props: slider });
     nativeDeref(y) = nativeDeref(y) + row_height;
     if (!result.changed) {
         return 0n;

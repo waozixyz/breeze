@@ -6,7 +6,6 @@ import { Overview } from "habit_list_overview";
 import { HabitPage } from "habit_list_page";
 
 export function HabitsListView(message: HabitsMessage): HabitsMessage {
-    const rows = Model.Rows();
     const list_state = Model.CurrentList();
     Model.SetList(Model.ReadHabitsListHost());
     list_state.action = HABITS_LIST_NONE;
@@ -29,7 +28,7 @@ export function HabitsListView(message: HabitsMessage): HabitsMessage {
         list_state.screen_mode === HABITS_SCREEN_HISTORY &&
         list_state.selected >= 0n &&
         list_state.selected < Model.row_count &&
-        !nativeAt(rows, list_state.selected).deactivated;
+        !Model.Row(list_state.selected).deactivated;
     if (page) {
         HabitPage();
     } else {

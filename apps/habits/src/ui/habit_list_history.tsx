@@ -28,9 +28,8 @@ function DayButton(
     bounds: Rectangle,
     dot: boolean
 ): void {
-    const rows = Model.Rows();
     const list_state = Model.CurrentList();
-    let row = nativeAt(rows, index);
+    let row = Model.Row(index);
     let state = Model.Day(index, day);
     let scheduled = state.planned;
     let complete = state.complete;
@@ -110,7 +109,6 @@ function DayButton(
 }
 
 export function Weekly(index: s32, x: s32, width: s32, top: s32, bottom: s32): void {
-    const rows = Model.Rows();
     const list_state = Model.CurrentList();
     let row_height = Model.Scale(46n);
     let gap = Model.Scale(8n);
@@ -144,7 +142,7 @@ export function Weekly(index: s32, x: s32, width: s32, top: s32, bottom: s32): v
             if (last_row >= count) {
                 last_row = count - 1n;
             }
-            let row = nativeAt(rows, index);
+            let row = Model.Row(index);
             for (let position = first_row; position <= last_row; position += s32(1)) {
                 let row_y = s32(scrolled.content.y) + position * (row_height + gap);
                 let day = Model.DayAgo(position);
@@ -191,7 +189,6 @@ export function Weekly(index: s32, x: s32, width: s32, top: s32, bottom: s32): v
 }
 
 export function Calendar(index: s32, x: s32, width: s32, top: s32): void {
-    const rows = Model.Rows();
     const list_state = Model.CurrentList();
     let year = list_state.today / 10000n;
     let month = ((list_state.today / 100n) % 100n) + list_state.month_offset;
@@ -284,7 +281,7 @@ export function Calendar(index: s32, x: s32, width: s32, top: s32): void {
     />;
     let weekday = Model.Weekday(year * 10000n + month * 100n + 1n);
     let cell_width = (width - gap * 6n) / 7n;
-    let counting = nativeAt(rows, index).counting;
+    let counting = Model.Row(index).counting;
     let cell_height = Model.Scale(counting ? 56n : 50n);
     let day: s32 = s32(1n);
     while (DateValid(year, month, day)) {

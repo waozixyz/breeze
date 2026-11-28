@@ -37,7 +37,7 @@ import {
 } from "settings_telegram";
 import { storage_get_setting_text } from "storage_settings";
 import { storage_has_sync_account } from "sync_state";
-import { FrameTextHold } from "text_buffers";
+import { FrameTextHold, FrameTextRead, FrameTextSave } from "text_buffers";
 
 export function settings_telegram_draw(
     app: NativeRef<InnerBreeze>,
@@ -105,6 +105,14 @@ export function settings_telegram_draw(
         nativeSet(State_settings_telegram.settings_telegram_stars_review, 0n, 0n);
     }
     if (linked && settings_telegram_authorization_active()) {
+        const stars_label_range = FrameTextSave(
+            nativeRef(app.ui.frame_text),
+            LocaleText("lumi_authorization_approve_stars")
+        );
+        const stars_disclosure_range = FrameTextSave(
+            nativeRef(app.ui.frame_text),
+            LocaleText("lumi_authorization_stars_disclosure")
+        );
         let status_height = settings_telegram_text_height(LumiAuthorizationStatusKey(), width);
         <Text
             session={app.ui.session}
@@ -180,7 +188,7 @@ export function settings_telegram_draw(
             <Text
                 session={app.ui.session}
                 props={{
-                    text: LocaleText(disclosure),
+                    text: FrameTextRead(nativeRef(app.ui.frame_text), stars_disclosure_range),
                     size: AppFontSize(),
                     bounds: {
                         x: float32(x),
@@ -192,11 +200,11 @@ export function settings_telegram_draw(
                 }}
             />;
             nativeDeref(y) = nativeDeref(y) + stars_height;
-            let stars_label = LocaleText("lumi_authorization_approve_stars");
+            let stars_label = FrameTextRead(nativeRef(app.ui.frame_text), stars_label_range);
             let stars_review = review_visible ? held_review : "";
             let stars_ready = settings_telegram_stars_ready(
                 stars_review,
-                LocaleText(disclosure),
+                FrameTextRead(nativeRef(app.ui.frame_text), stars_disclosure_range),
                 stars_label
             );
             if (

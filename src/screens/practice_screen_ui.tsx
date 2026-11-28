@@ -114,23 +114,27 @@ export function practice_home_theme_button(
     let height = float32(frame.top);
     let size = width < height ? width : height;
     let night = app.dark_mode !== 0n;
-    let button: NativeButton.Props = {
-        key: NativeLayout.KeyHash("practice/theme-mode"),
-        bounds: {
-            x: frame.card.x + frame.card.width - width - float32(AppScale(8n)),
-            y: (height - size) * 0.5,
-            width: width,
-            height: size
-        },
-        label: LocaleText(night ? "theme_light" : "theme_dark"),
-        icon_type: s32(night ? s32(IconType.IconSun) : s32(IconType.IconMoon)),
-        icon_only: true,
-        circle: true,
-        disabled: !frame.choosing,
-        tone: ButtonTone.ButtonToneNeutral,
-        emphasis: ButtonEmphasis.ButtonEmphasisGhost
-    };
-    if (!Button({ session: app.ui.session, props: button })) {
+    let clicked = false;
+    {
+        let button: NativeButton.Props = {
+            key: NativeLayout.KeyHash("practice/theme-mode"),
+            bounds: {
+                x: frame.card.x + frame.card.width - width - float32(AppScale(8n)),
+                y: (height - size) * 0.5,
+                width: width,
+                height: size
+            },
+            label: LocaleText(night ? "theme_light" : "theme_dark"),
+            icon_type: s32(night ? s32(IconType.IconSun) : s32(IconType.IconMoon)),
+            icon_only: true,
+            circle: true,
+            disabled: !frame.choosing,
+            tone: ButtonTone.ButtonToneNeutral,
+            emphasis: ButtonEmphasis.ButtonEmphasisGhost
+        };
+        clicked = Button({ session: app.ui.session, props: button });
+    }
+    if (!clicked) {
         return false;
     }
     if (!CurrentTheme().motion.reduced_motion) {

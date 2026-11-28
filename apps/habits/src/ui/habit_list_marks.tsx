@@ -12,9 +12,8 @@ import { Text } from "kryon/tsx/text";
 import { Circle } from "habit_list_visuals";
 
 export function HabitIcon(index: s32, bounds: Rectangle): void {
-    const rows = Model.Rows();
     const list_state = Model.CurrentList();
-    let row = nativeAt(rows, index);
+    let row = Model.Row(index);
     let radius = s32(bounds.width * 0.5);
     let center_x = s32(bounds.x) + radius;
     let center_y = s32(bounds.y) + radius;
@@ -132,9 +131,8 @@ export function DayCell(
     column: s32,
     bounds: Rectangle
 ): void {
-    const rows = Model.Rows();
     const list_state = Model.CurrentList();
-    let row = nativeAt(rows, index);
+    let row = Model.Row(index);
     let state = Model.Day(index, day);
     let shown = state.planned || state.complete || state.count > 0n || state.running;
     let id = 5200000n + index * 16n + column;

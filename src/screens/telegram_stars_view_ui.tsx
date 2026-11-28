@@ -1,3 +1,4 @@
+import { Scroll } from "kryon/tsx/scroll";
 import * as StarsState from "telegram_stars";
 import * as StarsViewState from "telegram_stars_view";
 import { app_content_bottom_reserved } from "app_nav_state";
@@ -10,7 +11,6 @@ import { InnerBreeze } from "app_types";
 import { StoredDelegateGeneration } from "delegate_store";
 import { DewFormat, DewUnits } from "entity/dew_model";
 import { Wrap } from "kryon/text_props";
-import { End } from "kryon/tree";
 import { Button } from "kryon/tsx/button";
 import { Text } from "kryon/tsx/text";
 import { TitleBar } from "kryon/tsx/title_bar";
@@ -124,137 +124,144 @@ export function TelegramStarsPage(app: NativeRef<InnerBreeze>): boolean {
         !busy &&
         (flow.notice === "telegram_stars_error" || flow.notice === "telegram_stars_pending");
     let can_cancel = !busy && nativeAt(flow.invoice.invoice_id, 0n) !== 0n;
-    let panel = NativeScroll.Draw(app.ui.session, {
-        key: NativeLayout.KeyHash("inbe/telegram/stars/scroll"),
-        bounds: {
-            x: 0.0,
-            y: float32(top),
-            width: float32(app.ui.view_width),
-            height: float32(bottom - top)
+    let panel = Scroll({
+        session: app.ui.session,
+        props: {
+            key: NativeLayout.KeyHash("inbe/telegram/stars/scroll"),
+            bounds: {
+                x: 0.0,
+                y: float32(top),
+                width: float32(app.ui.view_width),
+                height: float32(bottom - top)
+            },
+            content_height: AppScale(166n + flow.catalog.count * 86n),
+            scroll_offset: StarsViewState.telegram_stars_scroll,
+            scale: MetricsScale()
         },
-        content_height: AppScale(166n + flow.catalog.count * 86n),
-        scroll_offset: StarsViewState.telegram_stars_scroll,
-        scale: MetricsScale()
+        children: (panel: NativeScroll.ScrollResult): void => {
+            StarsViewState.telegram_stars_scroll = panel.scroll_offset;
+
+            let y = s32(panel.content.y) + AppScale(8n);
+            if (flow.balance_known) {
+                let balance = TelegramStarsViewNewBalance();
+                ProfileDewFormatDew(
+                    flow.balance,
+                    LocaleText("profile_dew_balance_line"),
+                    nativeSlice(balance)
+                );
+                TelegramStarsText(
+                    app,
+                    TextUntilNul(nativeSlice(balance)),
+                    column.x,
+                    column.width,
+                    nativeRef(y),
+                    AppScale(32n)
+                );
+            }
+            if (flow.notice !== "") {
+                TelegramStarsText(
+                    app,
+                    LocaleText(flow.notice),
+                    column.x,
+                    column.width,
+                    nativeRef(y),
+                    AppScale(64n)
+                );
+            }
+            if (can_retry || can_cancel) {
+                let width =
+                    can_retry && can_cancel ? (column.width - AppScale(8n)) / 2n : column.width;
+                if (
+                    can_retry &&
+                    Button({
+                        session: app.ui.session,
+                        props: {
+                            id: 7931n,
+                            label: LocaleText("retry_button"),
+                            bounds: {
+                                x: float32(column.x),
+                                y: float32(y),
+                                width: float32(width),
+                                height: float32(AppScale(48n))
+                            }
+                        }
+                    })
+                ) {
+                    TelegramStarsRetry();
+                }
+                let cancel_x = can_retry ? column.x + width + AppScale(8n) : column.x;
+                if (
+                    can_cancel &&
+                    Button({
+                        session: app.ui.session,
+                        props: {
+                            id: 7932n,
+                            label: LocaleText("cancel_button"),
+                            bounds: {
+                                x: float32(cancel_x),
+                                y: float32(y),
+                                width: float32(width),
+                                height: float32(AppScale(48n))
+                            }
+                        }
+                    })
+                ) {
+                    TelegramStarsCancelPurchase();
+                }
+                y = y + AppScale(56n);
+            }
+            for (let index = s32(0n); index < flow.catalog.count; index += s32(1)) {
+                let product = nativeRef(nativeAt(flow.catalog.products, index));
+                let units = TelegramStarsViewNewUnits();
+                let amount = TelegramStarsViewNewAmount();
+                DewFormat(product.units, DewUnits, nativeSlice(units));
+                AppFormatS64(product.amount, nativeSlice(amount));
+                let terms = TelegramStarsViewNewTerms();
+                let values: [FormatArg, FormatArg] = [
+                    { text: TextUntilNul(nativeSlice(units)), is_text: true },
+                    { text: TextUntilNul(nativeSlice(amount)), is_text: true }
+                ];
+                if (
+                    FormatTemplate(
+                        LocaleText("telegram_stars_product_terms"),
+                        nativeSlice(values),
+                        nativeSlice(terms)
+                    )
+                ) {
+                    TelegramStarsText(
+                        app,
+                        TextUntilNul(nativeSlice(terms)),
+                        column.x,
+                        column.width,
+                        nativeRef(y),
+                        AppScale(32n)
+                    );
+                }
+                if (
+                    Button({
+                        session: app.ui.session,
+                        props: {
+                            id: 7940n + index,
+                            label: TextUntilNul(nativeSlice(product.title)),
+                            bounds: {
+                                x: float32(column.x),
+                                y: float32(y),
+                                width: float32(column.width),
+                                height: float32(AppScale(46n))
+                            },
+                            disabled: busy || nativeAt(flow.nonce, 0n) !== 0n
+                        }
+                    })
+                ) {
+                    TelegramStarsSelect(index);
+                }
+                y = y + AppScale(54n);
+            }
+        }
     });
-    StarsViewState.telegram_stars_scroll = panel.scroll_offset;
     if (!panel.opened) {
+        StarsViewState.telegram_stars_scroll = panel.scroll_offset;
         return true;
     }
-    let y = s32(panel.content.y) + AppScale(8n);
-    if (flow.balance_known) {
-        let balance = TelegramStarsViewNewBalance();
-        ProfileDewFormatDew(
-            flow.balance,
-            LocaleText("profile_dew_balance_line"),
-            nativeSlice(balance)
-        );
-        TelegramStarsText(
-            app,
-            TextUntilNul(nativeSlice(balance)),
-            column.x,
-            column.width,
-            nativeRef(y),
-            AppScale(32n)
-        );
-    }
-    if (flow.notice !== "") {
-        TelegramStarsText(
-            app,
-            LocaleText(flow.notice),
-            column.x,
-            column.width,
-            nativeRef(y),
-            AppScale(64n)
-        );
-    }
-    if (can_retry || can_cancel) {
-        let width = can_retry && can_cancel ? (column.width - AppScale(8n)) / 2n : column.width;
-        if (
-            can_retry &&
-            Button({
-                session: app.ui.session,
-                props: {
-                    id: 7931n,
-                    label: LocaleText("retry_button"),
-                    bounds: {
-                        x: float32(column.x),
-                        y: float32(y),
-                        width: float32(width),
-                        height: float32(AppScale(48n))
-                    }
-                }
-            })
-        ) {
-            TelegramStarsRetry();
-        }
-        let cancel_x = can_retry ? column.x + width + AppScale(8n) : column.x;
-        if (
-            can_cancel &&
-            Button({
-                session: app.ui.session,
-                props: {
-                    id: 7932n,
-                    label: LocaleText("cancel_button"),
-                    bounds: {
-                        x: float32(cancel_x),
-                        y: float32(y),
-                        width: float32(width),
-                        height: float32(AppScale(48n))
-                    }
-                }
-            })
-        ) {
-            TelegramStarsCancelPurchase();
-        }
-        y = y + AppScale(56n);
-    }
-    for (let index = s32(0n); index < flow.catalog.count; index += s32(1)) {
-        let product = nativeRef(nativeAt(flow.catalog.products, index));
-        let units = TelegramStarsViewNewUnits();
-        let amount = TelegramStarsViewNewAmount();
-        DewFormat(product.units, DewUnits, nativeSlice(units));
-        AppFormatS64(product.amount, nativeSlice(amount));
-        let terms = TelegramStarsViewNewTerms();
-        let values: [FormatArg, FormatArg] = [
-            { text: TextUntilNul(nativeSlice(units)), is_text: true },
-            { text: TextUntilNul(nativeSlice(amount)), is_text: true }
-        ];
-        if (
-            FormatTemplate(
-                LocaleText("telegram_stars_product_terms"),
-                nativeSlice(values),
-                nativeSlice(terms)
-            )
-        ) {
-            TelegramStarsText(
-                app,
-                TextUntilNul(nativeSlice(terms)),
-                column.x,
-                column.width,
-                nativeRef(y),
-                AppScale(32n)
-            );
-        }
-        if (
-            Button({
-                session: app.ui.session,
-                props: {
-                    id: 7940n + index,
-                    label: TextUntilNul(nativeSlice(product.title)),
-                    bounds: {
-                        x: float32(column.x),
-                        y: float32(y),
-                        width: float32(column.width),
-                        height: float32(AppScale(46n))
-                    },
-                    disabled: busy || nativeAt(flow.nonce, 0n) !== 0n
-                }
-            })
-        ) {
-            TelegramStarsSelect(index);
-        }
-        y = y + AppScale(54n);
-    }
-    End(app.ui.session);
     return true;
 }

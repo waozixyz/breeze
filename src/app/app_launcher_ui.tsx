@@ -16,6 +16,7 @@ import * as NativeModal from "kryon/modal";
 import * as NativeOverlay from "kryon/overlay";
 import * as NativeText from "kryon/text";
 import * as NativeSharedLauncher from "apps/launcher";
+import { AppLauncherScreen } from "apps/tsx/launcher";
 import * as NativeEditIcon from "mingcute/mingcute_regular_edit";
 import * as State_app_launcher from "app_launcher";
 import * as State_app_launcher_pins from "app_launcher_pins";
@@ -82,7 +83,13 @@ import {
 } from "node_apps";
 import { PackageAutomaticUnasked, PackageSetAutomatic } from "package_manager";
 import { AppNavNodeSlot, AppNavRoute } from "route_types";
-import { AppCopyText, AppTextFromCString, FrameTextHold } from "text_buffers";
+import {
+    AppCopyText,
+    AppTextFromCString,
+    FrameTextHold,
+    FrameTextSave,
+    FrameTextRead
+} from "text_buffers";
 import { SampleTextFieldInput, TextInputWriteClipboard } from "text_input_host";
 import { ScreenAppSelection } from "types";
 import { GuideOverlayStepFor } from "widgets";
@@ -160,130 +167,155 @@ export function app_draw_launcherView(app: NativeRef<InnerBreeze>, dock_drawn: b
     let width = s32(panel.width) - margin * 2n;
     let title_y = AppScale(24n);
     let compact_header = width < AppScale(500n);
-    let identity = AppLauncherNewIdentity();
-    let subtitle = AppLauncherNewSubtitle();
-    app_nav_profile_identity(
-        app,
-        nativeSlice(identity),
-        identity.count,
-        nativeSlice(subtitle),
-        subtitle.count
-    );
-    let account: NativeButton.Props = {};
-    account.key = NativeLayout.KeyHash("inbe/apps/profile");
-    account.id = 6792n;
-    account.label = FrameTextHold(
-        nativeRef(app.ui.frame_text),
-        AppTextFromCString(nativeRef(nativeAt(identity, 0n)), s32(identity.count))
-    );
-    account.icon_shape = compact_header
-        ? ""
-        : app_nav_route_own_shape(s32(AppNavRoute.APP_NAV_ROUTE_PROFILE));
-    account.emphasis = ButtonEmphasis.ButtonEmphasisGhost;
-    account.bounds.height = float32(AppScale(44n));
-    let profile_w = s32(NativeButton.ButtonMeasure(account).width);
-    if (profile_w < AppScale(44n)) {
-        profile_w = AppScale(44n);
-    }
-    let edit: NativeButton.Props = {};
-    edit.key = NativeLayout.KeyHash("inbe/apps/edit");
-    edit.label = LocaleText(app.launcher_editing ? "done_button" : "launcher_edit_apps");
-    edit.icon_shape = NativeEditIcon.Shape;
-    edit.icon_only = compact_header;
-    edit.selected = app.launcher_editing;
-    edit.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
-    edit.bounds.height = float32(AppScale(44n));
-    let edit_w = s32(NativeButton.ButtonMeasure(edit).width);
-    if (edit_w < AppScale(44n)) {
-        edit_w = AppScale(44n);
-    }
-    let header_gap = AppScale(8n);
-    let title: NativeText.Props = {};
-    title.text = LocaleText("launcher_title");
-    title.size = AppScale(28n);
-    title.wrap = Wrap.TextWrapNone;
-    title.class_name = CssClass("launcher-title");
-    let title_w = TextWidth(app.ui.session, title);
-    let controls_y = title_y;
-    let profile_x = x + width - AppScale(52n) - edit_w - header_gap - profile_w;
-    if (profile_x < x + title_w + header_gap) {
-        controls_y = controls_y + AppScale(56n);
-        profile_x = x;
-    }
-    let profile_max = width - edit_w - header_gap;
-    let wrapped_account = profile_w > profile_max;
-    let account_h = AppScale(44n);
-    let account_text: NativeText.Props = {};
-    if (wrapped_account) {
-        profile_w = profile_max;
-        account.icon_shape = "";
-        account.icon_only = true;
-        account_text.text = account.label;
-        account_text.size = AppScale(16n);
-        account_text.wrap = Wrap.TextWrapAnywhere;
-        account_text.align = TextAlign.TextAlignCenter;
-        account_text.vertical_align = TextAlign.TextAlignCenter;
-        account_text.bounds.width = float32(profile_w - AppScale(24n));
-        account_h = TextHeight(app.ui.session, account_text) + AppScale(20n);
-        if (account_h < AppScale(44n)) {
-            account_h = AppScale(44n);
+    let search_y: s32 = s32(0n);
+    {
+        let identity = AppLauncherNewIdentity();
+        let subtitle = AppLauncherNewSubtitle();
+        app_nav_profile_identity(
+            app,
+            nativeSlice(identity),
+            identity.count,
+            nativeSlice(subtitle),
+            subtitle.count
+        );
+        let account_label = FrameTextSave(
+            nativeRef(app.ui.frame_text),
+            AppTextFromCString(nativeRef(nativeAt(identity, 0n)), s32(identity.count))
+        );
+        let account_icon = FrameTextSave(
+            nativeRef(app.ui.frame_text),
+            compact_header ? "" : app_nav_route_own_shape(s32(AppNavRoute.APP_NAV_ROUTE_PROFILE))
+        );
+        let edit_label = FrameTextSave(
+            nativeRef(app.ui.frame_text),
+            LocaleText(app.launcher_editing ? "done_button" : "launcher_edit_apps")
+        );
+        let title_label = FrameTextSave(nativeRef(app.ui.frame_text), LocaleText("launcher_title"));
+        let account: NativeButton.Props = {};
+        account.key = NativeLayout.KeyHash("inbe/apps/profile");
+        account.id = 6792n;
+        account.label = FrameTextRead(nativeRef(app.ui.frame_text), account_label);
+        account.icon_shape = FrameTextRead(nativeRef(app.ui.frame_text), account_icon);
+        account.emphasis = ButtonEmphasis.ButtonEmphasisGhost;
+        account.bounds.height = float32(AppScale(44n));
+        let profile_w = s32(NativeButton.ButtonMeasure(account).width);
+        if (profile_w < AppScale(44n)) {
+            profile_w = AppScale(44n);
         }
+        let edit: NativeButton.Props = {};
+        edit.key = NativeLayout.KeyHash("inbe/apps/edit");
+        edit.label = FrameTextRead(nativeRef(app.ui.frame_text), edit_label);
+        edit.icon_shape = NativeEditIcon.Shape;
+        edit.icon_only = compact_header;
+        edit.selected = app.launcher_editing;
+        edit.emphasis = ButtonEmphasis.ButtonEmphasisSoft;
+        edit.bounds.height = float32(AppScale(44n));
+        let edit_w = s32(NativeButton.ButtonMeasure(edit).width);
+        if (edit_w < AppScale(44n)) {
+            edit_w = AppScale(44n);
+        }
+        let header_gap = AppScale(8n);
+        let title: NativeText.Props = {};
+        title.text = FrameTextRead(nativeRef(app.ui.frame_text), title_label);
+        title.size = AppScale(28n);
+        title.wrap = Wrap.TextWrapNone;
+        title.class_name = CssClass("launcher-title");
+        let title_w = TextWidth(app.ui.session, title);
+        let controls_y = title_y;
+        let profile_x = x + width - AppScale(52n) - edit_w - header_gap - profile_w;
+        if (profile_x < x + title_w + header_gap) {
+            controls_y = controls_y + AppScale(56n);
+            profile_x = x;
+        }
+        let profile_max = width - edit_w - header_gap;
+        let wrapped_account = profile_w > profile_max;
+        let account_h = AppScale(44n);
+        let account_text: NativeText.Props = {};
+        if (wrapped_account) {
+            profile_w = profile_max;
+            account.icon_shape = "";
+            account.icon_only = true;
+            account_text.text = account.label;
+            account_text.size = AppScale(16n);
+            account_text.wrap = Wrap.TextWrapAnywhere;
+            account_text.align = TextAlign.TextAlignCenter;
+            account_text.vertical_align = TextAlign.TextAlignCenter;
+            account_text.bounds.width = float32(profile_w - AppScale(24n));
+            account_h = TextHeight(app.ui.session, account_text) + AppScale(20n);
+            if (account_h < AppScale(44n)) {
+                account_h = AppScale(44n);
+            }
+        }
+        title.bounds = {
+            x: float32(x),
+            y: float32(title_y),
+            width: float32(
+                controls_y === title_y ? profile_x - x - header_gap : width - AppScale(52n)
+            ),
+            height: float32(AppScale(40n))
+        };
+        <Text session={app.ui.session} props={title} />;
+        account.bounds = {
+            x: float32(profile_x),
+            y: float32(controls_y),
+            width: float32(profile_w),
+            height: float32(account_h)
+        };
+        if (Button({ session: app.ui.session, props: account })) {
+            app_launcher_activate(app, s32(AppNavRoute.APP_NAV_ROUTE_PROFILE));
+            End(app.ui.session);
+            return;
+        }
+        if (wrapped_account) {
+            account_text.bounds.x = account.bounds.x + float32(AppScale(12n));
+            account_text.bounds.y = account.bounds.y;
+            account_text.bounds.height = account.bounds.height;
+            <Text session={app.ui.session} props={account_text} />;
+        }
+        edit.bounds = {
+            x: float32(profile_x + profile_w + header_gap),
+            y: float32(controls_y),
+            width: float32(edit_w),
+            height: float32(AppScale(44n))
+        };
+        if (Button({ session: app.ui.session, props: edit })) {
+            app.launcher_editing = !app.launcher_editing;
+            app.launcher_drag_key = 0n;
+            app.launcher_drag_moving = false;
+            app_block_current_click(app);
+        }
+        search_y = controls_y + account_h + AppScale(12n);
     }
-    title.bounds = {
-        x: float32(x),
-        y: float32(title_y),
-        width: float32(controls_y === title_y ? profile_x - x - header_gap : width - AppScale(52n)),
-        height: float32(AppScale(40n))
-    };
-    <Text session={app.ui.session} props={title} />;
-    account.bounds = {
-        x: float32(profile_x),
-        y: float32(controls_y),
-        width: float32(profile_w),
-        height: float32(account_h)
-    };
-    if (Button({ session: app.ui.session, props: account })) {
-        app_launcher_activate(app, s32(AppNavRoute.APP_NAV_ROUTE_PROFILE));
-        End(app.ui.session);
-        return;
+    let settings_clicked = false;
+    {
+        let settings_label = FrameTextSave(
+            nativeRef(app.ui.frame_text),
+            LocaleText("settings_title")
+        );
+        let settings_shape = FrameTextSave(
+            nativeRef(app.ui.frame_text),
+            app_nav_route_own_shape(s32(AppNavRoute.APP_NAV_ROUTE_SETTINGS))
+        );
+        let settings: NativeButton.Props = {};
+        settings.key = NativeLayout.KeyHash("inbe/apps/settings");
+        settings.label = FrameTextRead(nativeRef(app.ui.frame_text), settings_label);
+        settings.icon_shape = FrameTextRead(nativeRef(app.ui.frame_text), settings_shape);
+        settings.icon_only = true;
+        settings.emphasis = ButtonEmphasis.ButtonEmphasisGhost;
+        settings.bounds = {
+            x: float32(x + width - AppScale(44n)),
+            y: float32(title_y),
+            width: float32(AppScale(44n)),
+            height: float32(AppScale(44n))
+        };
+        settings_clicked = Button({ session: app.ui.session, props: settings });
     }
-    if (wrapped_account) {
-        account_text.bounds.x = account.bounds.x + float32(AppScale(12n));
-        account_text.bounds.y = account.bounds.y;
-        account_text.bounds.height = account.bounds.height;
-        <Text session={app.ui.session} props={account_text} />;
-    }
-    edit.bounds = {
-        x: float32(profile_x + profile_w + header_gap),
-        y: float32(controls_y),
-        width: float32(edit_w),
-        height: float32(AppScale(44n))
-    };
-    if (Button({ session: app.ui.session, props: edit })) {
-        app.launcher_editing = !app.launcher_editing;
-        app.launcher_drag_key = 0n;
-        app.launcher_drag_moving = false;
-        app_block_current_click(app);
-    }
-    let settings: NativeButton.Props = {};
-    settings.key = NativeLayout.KeyHash("inbe/apps/settings");
-    settings.label = LocaleText("settings_title");
-    settings.icon_shape = app_nav_route_own_shape(s32(AppNavRoute.APP_NAV_ROUTE_SETTINGS));
-    settings.icon_only = true;
-    settings.emphasis = ButtonEmphasis.ButtonEmphasisGhost;
-    settings.bounds = {
-        x: float32(x + width - AppScale(44n)),
-        y: float32(title_y),
-        width: float32(AppScale(44n)),
-        height: float32(AppScale(44n))
-    };
-    if (Button({ session: app.ui.session, props: settings })) {
+    if (settings_clicked) {
         app_launcher_close(app);
         app_apply_nav_route(app, s32(AppNavRoute.APP_NAV_ROUTE_SETTINGS));
         End(app.ui.session);
         return;
     }
-    let search_y = controls_y + account_h + AppScale(12n);
     State_app_launcher.launcher_screen.query = app.launcher_search;
     State_app_launcher.launcher_screen.cursor = app.launcher_search_cursor;
     State_app_launcher.launcher_screen.anchor = app.launcher_search_anchor;
@@ -380,7 +412,7 @@ export function app_draw_launcherView(app: NativeRef<InnerBreeze>, dock_drawn: b
     }
     let typed = AppLauncherNewTyped();
     let input = SampleTextFieldInput(true, nativeSlice(typed));
-    let layout = NativeSharedLauncher.AppLauncherScreen(
+    let layout = AppLauncherScreen(
         app.ui.session,
         nativeRef(State_app_launcher.launcher_screen),
         {
@@ -474,7 +506,8 @@ export function app_draw_launcherView(app: NativeRef<InnerBreeze>, dock_drawn: b
     for (let index = s32(0n); index < pinned_count; index += s32(1)) {
         nativeSet(pinned_slots, index, GridCellBounds(pinned_cells, index, tile_height));
     }
-    let query = AppTextFromCString(nativeRef(nativeAt(app.launcher_search, 0n)), 128n);
+    let query_empty =
+        AppTextFromCString(nativeRef(nativeAt(app.launcher_search, 0n)), 128n).count === 0n;
     if (!dock_drawn) {
         app_draw_favorites_dock(app);
     }
@@ -482,7 +515,7 @@ export function app_draw_launcherView(app: NativeRef<InnerBreeze>, dock_drawn: b
         let point = app.launcher_drag_pointer;
         let target = app.launcher_dock_drop_index;
         if (
-            query.count === 0n &&
+            query_empty &&
             scrolled.opened &&
             PointInBounds(point.x, point.y, scrolled.viewport) &&
             PointInBounds(point.x, point.y, pinned_bounds)
@@ -524,7 +557,7 @@ export function app_draw_launcherView(app: NativeRef<InnerBreeze>, dock_drawn: b
                     app_launcher_pins_changed(app);
                 }
             } else if (
-                query.count === 0n &&
+                query_empty &&
                 scrolled.opened &&
                 PointInBounds(point.x, point.y, scrolled.viewport) &&
                 PointInBounds(point.x, point.y, more_bounds)
@@ -569,11 +602,17 @@ export function app_draw_launcherView(app: NativeRef<InnerBreeze>, dock_drawn: b
             let preview: NativeButton.Props = {};
             preview.id = 7290n;
             if (app.launcher_drag_route >= 0n) {
-                preview.label = app_nav_route_label(app.launcher_drag_route);
-                preview.image = bottom_nav_route_image(app.launcher_drag_route);
+                preview.label = FrameTextHold(
+                    nativeRef(app.ui.frame_text),
+                    app_nav_route_label(app.launcher_drag_route)
+                );
+                preview.image = bottom_nav_route_image(app.launcher_drag_route, preview.label);
                 preview.icon_shape = app_nav_route_shape(app.launcher_drag_route);
             } else {
-                preview.label = NodeAppTitle(LauncherLibraryName(app.launcher_drag_route));
+                preview.label = FrameTextHold(
+                    nativeRef(app.ui.frame_text),
+                    NodeAppTitle(LauncherLibraryName(app.launcher_drag_route))
+                );
                 preview.icon_shape = NodeAppCatalogIcon(
                     LauncherLibraryName(app.launcher_drag_route)
                 );
@@ -633,28 +672,47 @@ export function app_launcher_ask_package_updates(app: NativeRef<InnerBreeze>): v
     if (State_app_launcher.launcher_package_updates_closed || !PackageAutomaticUnasked()) {
         return;
     }
-    let actions: [NativeModal.ActionModalAction, NativeModal.ActionModalAction] = [
-        {
-            label: LocaleText("package_updates_decline"),
-            tone: ButtonTone.ButtonToneNeutral,
-            emphasis: ButtonEmphasis.ButtonEmphasisSoft
-        },
-        {
-            label: LocaleText("package_updates_allow"),
-            tone: ButtonTone.ButtonToneNeutral,
-            emphasis: ButtonEmphasis.ButtonEmphasisSoft
-        }
-    ];
-    let props: NativeModal.ActionModalProps = {};
-    props.key = NativeLayout.KeyHash("inbe/apps/package-updates");
-    props.title = LocaleText("package_updates_title");
-    props.message = LocaleText("package_updates_message");
-    props.max_width = 420n;
-    let answer = ActionModal({
-        session: app.ui.session,
-        props: props,
-        actions: nativeSlice(actions, 0n, 2n)
-    }).action;
+    let decline_range = FrameTextSave(
+        nativeRef(app.ui.frame_text),
+        LocaleText("package_updates_decline")
+    );
+    let allow_range = FrameTextSave(
+        nativeRef(app.ui.frame_text),
+        LocaleText("package_updates_allow")
+    );
+    let title_range = FrameTextSave(
+        nativeRef(app.ui.frame_text),
+        LocaleText("package_updates_title")
+    );
+    let message_range = FrameTextSave(
+        nativeRef(app.ui.frame_text),
+        LocaleText("package_updates_message")
+    );
+    let answer: s32 = s32(0n);
+    {
+        let actions: [NativeModal.ActionModalAction, NativeModal.ActionModalAction] = [
+            {
+                label: FrameTextRead(nativeRef(app.ui.frame_text), decline_range),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            },
+            {
+                label: FrameTextRead(nativeRef(app.ui.frame_text), allow_range),
+                tone: ButtonTone.ButtonToneNeutral,
+                emphasis: ButtonEmphasis.ButtonEmphasisSoft
+            }
+        ];
+        let props: NativeModal.ActionModalProps = {};
+        props.key = NativeLayout.KeyHash("inbe/apps/package-updates");
+        props.title = FrameTextRead(nativeRef(app.ui.frame_text), title_range);
+        props.message = FrameTextRead(nativeRef(app.ui.frame_text), message_range);
+        props.max_width = 420n;
+        answer = ActionModal({
+            session: app.ui.session,
+            props: props,
+            actions: nativeSlice(actions, 0n, 2n)
+        }).action;
+    }
     if (answer === 0n) {
         return;
     }

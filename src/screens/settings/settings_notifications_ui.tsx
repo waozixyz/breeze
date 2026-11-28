@@ -1,3 +1,4 @@
+import { ResolvedModal } from "kryon/tsx/modal";
 import { SettingsNotificationsNewDetail } from "settings_notifications";
 import { SettingsNotificationsNewOptions } from "settings_notifications";
 import { SettingsNotificationsNewTimeBytes } from "settings_notifications";
@@ -23,7 +24,6 @@ import { AndroidPlatform } from "environment";
 import { ButtonEmphasis, ButtonTone, ContentAlignment } from "kryon/control_props";
 import { ImageFit } from "kryon/image_props";
 import { TextAlign } from "kryon/text_align";
-import { End } from "kryon/tree";
 import { Button } from "kryon/tsx/button";
 import { Dropdown } from "kryon/tsx/dropdown";
 import { Spinbox } from "kryon/tsx/spinbox";
@@ -249,92 +249,96 @@ export function settings_notifications_handle_overlaysView(app: NativeRef<InnerB
     }
     let row = AppScale(SETTINGS_PUSH_ROW);
     let gap = AppScale(8n);
-    let frame = NativeModal.Draw(app.ui.session, {
-        key: NativeLayout.KeyHash("notifications/push-picker"),
-        id: 720n,
-        title: LocaleText("notifications_push_picker_title"),
-        strong_title: true,
-        width: AppScale(440n),
-        height: (count + 1n) * (row + gap) + AppScale(74n),
-        scale: MetricsScale()
+    let frame = ResolvedModal({
+        session: app.ui.session,
+        props: {
+            key: NativeLayout.KeyHash("notifications/push-picker"),
+            id: 720n,
+            title: LocaleText("notifications_push_picker_title"),
+            strong_title: true,
+            width: AppScale(440n),
+            height: (count + 1n) * (row + gap) + AppScale(74n),
+            scale: MetricsScale()
+        },
+        children: (frame: NativeModal.ModalFrameResult): void => {
+            let content = frame.layout.content;
+            let x = s32(content.x);
+            let width = s32(content.width);
+            let y = s32(content.y);
+            let index: s32 = s32(0n);
+            while (index < count) {
+                let label = AppTextFromCString(
+                    nativeRef(nativeAt(nativeAt(app.push_distributor_labels, index), 0n)),
+                    64n
+                );
+                let package = AppTextFromCString(
+                    nativeRef(nativeAt(nativeAt(app.push_distributors, index), 0n)),
+                    96n
+                );
+                let icon = AppTextFromCString(
+                    nativeRef(nativeAt(nativeAt(app.push_distributor_icons, index), 0n)),
+                    256n
+                );
+                let detail = SettingsNotificationsNewDetail();
+                let named = false;
+                for (const byte of package) {
+                    if (byte === u8(46n)) {
+                        named = true;
+                    }
+                }
+                if (named) {
+                    let args: [FormatArg] = [{ text: package, is_text: true }];
+                    FormatTemplate(
+                        LocaleText("notifications_push_uses_app"),
+                        nativeSlice(args),
+                        nativeSlice(detail)
+                    );
+                }
+                if (
+                    settings_notifications_push_row(
+                        app,
+                        7210n + index,
+                        label,
+                        FrameTextHold(
+                            nativeRef(app.ui.frame_text),
+                            AppTextFromCString(nativeRef(nativeAt(detail, 0n)), 160n)
+                        ),
+                        icon,
+                        x,
+                        y,
+                        width
+                    )
+                ) {
+                    PushConfigureWith(app, index);
+                    settings_notifications_close_picker(app);
+                }
+                y = y + (row + gap);
+                index = index + 1n;
+            }
+            if (
+                settings_notifications_push_row(
+                    app,
+                    7219n,
+                    FrameTextHold(
+                        nativeRef(app.ui.frame_text),
+                        LocaleText("notifications_push_none")
+                    ),
+                    LocaleText("notifications_push_none_detail"),
+                    "",
+                    x,
+                    y,
+                    width
+                )
+            ) {
+                PushDisable();
+                settings_notifications_close_picker(app);
+            }
+        }
     });
     if (frame.dismissed) {
         settings_notifications_close_picker(app);
         return;
     }
-    if (!frame.opened) {
-        return;
-    }
-    let content = frame.layout.content;
-    let x = s32(content.x);
-    let width = s32(content.width);
-    let y = s32(content.y);
-    let index: s32 = s32(0n);
-    while (index < count) {
-        let label = AppTextFromCString(
-            nativeRef(nativeAt(nativeAt(app.push_distributor_labels, index), 0n)),
-            64n
-        );
-        let package = AppTextFromCString(
-            nativeRef(nativeAt(nativeAt(app.push_distributors, index), 0n)),
-            96n
-        );
-        let icon = AppTextFromCString(
-            nativeRef(nativeAt(nativeAt(app.push_distributor_icons, index), 0n)),
-            256n
-        );
-        let detail = SettingsNotificationsNewDetail();
-        let named = false;
-        for (const byte of package) {
-            if (byte === u8(46n)) {
-                named = true;
-            }
-        }
-        if (named) {
-            let args: [FormatArg] = [{ text: package, is_text: true }];
-            FormatTemplate(
-                LocaleText("notifications_push_uses_app"),
-                nativeSlice(args),
-                nativeSlice(detail)
-            );
-        }
-        if (
-            settings_notifications_push_row(
-                app,
-                7210n + index,
-                label,
-                FrameTextHold(
-                    nativeRef(app.ui.frame_text),
-                    AppTextFromCString(nativeRef(nativeAt(detail, 0n)), 160n)
-                ),
-                icon,
-                x,
-                y,
-                width
-            )
-        ) {
-            PushConfigureWith(app, index);
-            settings_notifications_close_picker(app);
-        }
-        y = y + (row + gap);
-        index = index + 1n;
-    }
-    if (
-        settings_notifications_push_row(
-            app,
-            7219n,
-            LocaleText("notifications_push_none"),
-            LocaleText("notifications_push_none_detail"),
-            "",
-            x,
-            y,
-            width
-        )
-    ) {
-        PushDisable();
-        settings_notifications_close_picker(app);
-    }
-    End(app.ui.session);
 }
 
 export function settings_notifications_draw_push(
@@ -354,20 +358,23 @@ export function settings_notifications_draw_push(
         LocaleText("notifications_push_section"),
         settings_notifications_push_body()
     );
-    let status: NativeText.Props = {};
-    status.text = LocaleText("notifications_push_status_off");
-    if (PushRegistered() !== 0n) {
-        status.text = LocaleText("notifications_push_status_on");
+    {
+        let status: NativeText.Props = {};
+        status.text = LocaleText(
+            PushRegistered() !== 0n
+                ? "notifications_push_status_on"
+                : "notifications_push_status_off"
+        );
+        status.size = AppFontSize();
+        status.vertical_align = TextAlign.TextAlignCenter;
+        status.bounds = {
+            x: float32(section.inner_x),
+            y: float32(nativeDeref(y)),
+            width: float32(section.inner_width),
+            height: float32(AppScale(44n))
+        };
+        <Text session={app.ui.session} props={status} />;
     }
-    status.size = AppFontSize();
-    status.vertical_align = TextAlign.TextAlignCenter;
-    status.bounds = {
-        x: float32(section.inner_x),
-        y: float32(nativeDeref(y)),
-        width: float32(section.inner_width),
-        height: float32(AppScale(44n))
-    };
-    <Text session={app.ui.session} props={status} />;
     nativeDeref(y) = nativeDeref(y) + AppScale(44n);
     settings_row_divider(app, section, nativeDeref(y));
     if (

@@ -1,3 +1,4 @@
+#import "vec"
 #import "practice_window_ui"
 #import "practice_title_bar_ui"
 #import "application_close_ui"
@@ -107,10 +108,12 @@ patterns_handle_exit_modal :: (app: *InnerBreeze) -> s32 {
     if app == null || app.modal.active == 0  || app.modal.type != cast(ModalType)ModalConfirmExitSession {
         return 0
     }
+    save_message: Text = TextCopy(LocaleText("patterns_save_elapsed_message"))
+    discard_message: Text = TextCopy(LocaleText("patterns_under_minute_exit_message"))
     result = app_draw_session_exit_modal(app,
         ifx (app.patterns.elapsed_seconds >= 60) then (1) else (0),
-        LocaleText("patterns_save_elapsed_message"),
-        LocaleText("patterns_under_minute_exit_message")
+        TextView(save_message),
+        TextView(discard_message)
         )
     if result == cast(SessionExitModalResult)SessionExitModalCancel {
         app_close_modal(app)
@@ -303,10 +306,14 @@ patterns_status_text :: (app: *InnerBreeze, out: []u8) {
 // Has Practices draw the pattern's circle, phase, cycle and Pause; returns
 // what was pressed there. The question asked on leaving shows the page
 // without them.
-patterns_draw_content :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> PracticePatternsFrame {
+patterns_draw_content :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> s32 {
+    defer {
+        practice_patterns_frame = PracticePatternsFrame.{}
+        practice_patterns_frame_codec = WidgetPracticePatternsFrameCodec.{}
+    }
     if app.modal.active != 0 &&
     app.modal.type == cast(ModalType)ModalConfirmExitSession {
-        return PracticePatternsFrame.{}
+        return 0
     }
     max_radius := pattern_circle_max_radius()
     min_radius := max_radius * 38 / 100
@@ -335,9 +342,9 @@ patterns_draw_content :: (app: *InnerBreeze, center_x: s32, center_y: s32) -> Pr
     AppsUiEnd()
     WidgetHostEnd()
     if !drawn.succeeded {
-        return PracticePatternsFrame.{}
+        return 0
     }
-    return practice_patterns_frame
+    return practice_patterns_frame.action
 }
 
 patterns_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
@@ -352,10 +359,13 @@ patterns_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     }
     // On a short screen the circle reaches under the title bar, so it comes
     // first.
-    content := patterns_draw_content(app, center_x, center_y)
-    if patterns_draw_session_title_bar(app, LocaleText("patterns_title"), title_h) != 0 {
-        patterns_request_exit(app)
-        return
+    content_action := patterns_draw_content(app, center_x, center_y)
+    {
+        title := FrameTextHold(*app.ui.frame_text, LocaleText("patterns_title"))
+        if patterns_draw_session_title_bar(app, title, title_h) != 0 {
+            patterns_request_exit(app)
+            return
+        }
     }
     if patterns_handle_exit_modal(app) != 0 {
         return
@@ -363,12 +373,12 @@ patterns_draw_screen :: (app: *InnerBreeze, center_x: s32, center_y: s32) {
     practice_draw_audio_controls(app)
 
     if app.patterns.paused != 0 {
-        if content.action == PRACTICE_PATTERNS_RESUME {
+        if content_action == PRACTICE_PATTERNS_RESUME {
             app.patterns.paused = 0
         }
         return
     }
-    if HostKeyPressed(KEY_SPACE) || content.action == PRACTICE_PATTERNS_PAUSE {
+    if HostKeyPressed(KEY_SPACE) || content_action == PRACTICE_PATTERNS_PAUSE {
         app.patterns.paused = 1
         PatternsCheckpoint(app.patterns, true)
         return

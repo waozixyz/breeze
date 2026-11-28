@@ -1,5 +1,11 @@
+import { Scroll } from "kryon/tsx/scroll";
 import { LumiSettingsNewOptions } from "lumi_settings";
 import { LumiSettingsNewTyped } from "lumi_settings";
+import {
+    LumiSettingsApplyField,
+    LumiSettingsFieldUpdate,
+    LumiSettingsObserveField
+} from "lumi_settings";
 import { LumiSettingsNewMask } from "lumi_settings";
 import { app_content_bottom_reserved } from "app_nav_state";
 import { storage_set_setting_text } from "storage_settings";
@@ -13,7 +19,6 @@ import { InnerBreeze } from "app_types";
 import { SecureWipe } from "crypto/wipe";
 import { ButtonEmphasis, ButtonTone } from "kryon/control_props";
 import { Wrap } from "kryon/text_props";
-import { End } from "kryon/tree";
 import { Button } from "kryon/tsx/button";
 import { SegmentedControl } from "kryon/tsx/segmented_control";
 import { Text } from "kryon/tsx/text";
@@ -53,7 +58,7 @@ import { settings_section_end, settings_section_inner_width } from "settings_ui"
 import { settings_section_beginView as settings_section_begin } from "settings_ui_ui";
 import { TextUntilNul } from "std/text_buffer";
 import { storage_get_setting_text } from "storage_settings";
-import { AppReplaceText, AppTextFromCString } from "text_buffers";
+import { AppTextFromCString, FrameTextHold } from "text_buffers";
 import { SampleTextFieldInput } from "text_input_host";
 
 export function lumi_settings_field(
@@ -96,51 +101,48 @@ export function lumi_settings_field(
         }
     }
     let typed = LumiSettingsNewTyped();
-    let input = SampleTextFieldInput(field.focused, nativeSlice(typed));
-    if (secure) {
-        input.copy = false;
-        input.cut = false;
-    }
-    let result = ControlledTextField({
-        session: app.ui.session,
-        props: {
-            key: u64(id),
-            focus_id: id,
-            bounds: {
-                x: float32(x),
-                y: float32(nativeDeref(y)),
-                width: float32(width),
-                height: float32(AppScale(SETTINGS_LUMI_FIELD))
-            },
-            value: AppTextFromCString(nativeRef(nativeAt(field.value, 0n)), LUMI_PROVIDER_URL_MAX),
-            display_value: secure ? TextUntilNul(nativeSlice(mask)) : "",
-            label: label,
-            placeholder: placeholder,
-            cursor: field.cursor,
-            anchor: field.anchor,
-            scroll_x: field.scroll_x,
-            focused: field.focused,
-            composition: field.composition,
-            max_bytes: max_bytes,
-            max_codepoints: max_bytes,
-            secure: secure,
-            input: input,
-            scale: MetricsScale()
+    let update: LumiSettingsFieldUpdate = {};
+    {
+        let input = SampleTextFieldInput(field.focused, nativeSlice(typed));
+        if (secure) {
+            input.copy = false;
+            input.cut = false;
         }
-    });
-    if (result.edit.changed) {
-        AppReplaceText(
-            nativeSlice(field.value),
-            result.edit.start,
-            result.edit.end,
-            result.edit.replacement
-        );
+        let result = ControlledTextField({
+            session: app.ui.session,
+            props: {
+                key: u64(id),
+                focus_id: id,
+                bounds: {
+                    x: float32(x),
+                    y: float32(nativeDeref(y)),
+                    width: float32(width),
+                    height: float32(AppScale(SETTINGS_LUMI_FIELD))
+                },
+                value: AppTextFromCString(
+                    nativeRef(nativeAt(field.value, 0n)),
+                    LUMI_PROVIDER_URL_MAX
+                ),
+                display_value: secure ? TextUntilNul(nativeSlice(mask)) : "",
+                label: label,
+                placeholder: placeholder,
+                cursor: field.cursor,
+                anchor: field.anchor,
+                scroll_x: field.scroll_x,
+                focused: field.focused,
+                composition: field.composition,
+                max_bytes: max_bytes,
+                max_codepoints: max_bytes,
+                secure: secure,
+                input: input,
+                scale: MetricsScale()
+            }
+        });
+        update = LumiSettingsObserveField(result);
     }
-    field.cursor = result.cursor;
-    field.anchor = result.anchor;
-    field.scroll_x = result.scroll_x;
-    field.focused = result.focused;
-    field.composition = result.composition;
+    LumiSettingsApplyField(field, nativeRef(update));
+    SecureWipe(nativeSlice(update.replacement));
+    SecureWipe(nativeSlice(update.preedit));
     SecureWipe(nativeSlice(typed));
     nativeDeref(y) = nativeDeref(y) + AppScale(SETTINGS_LUMI_FIELD + 10n);
 }
@@ -156,31 +158,34 @@ export function lumi_settings_draw(
     }
     lumi_settings_load();
     let inner = settings_section_inner_width(width);
+    let terms_body = lumi_settings_terms_body(inner);
     let terms = settings_section_begin(
         app,
         x,
         width,
         y,
         LocaleText("lumi_settings_terms"),
-        lumi_settings_terms_body(inner)
+        terms_body
     );
-    let status = lumi_settings_status();
-    let status_height = lumi_settings_text_height(status, terms.inner_width);
-    <Text
-        session={app.ui.session}
-        props={{
-            text: status,
-            size: AppFontSize(),
-            wrap: Wrap.TextWrapAuto,
-            bounds: {
-                x: float32(terms.inner_x),
-                y: float32(nativeDeref(y) + AppScale(6n)),
-                width: float32(terms.inner_width),
-                height: float32(status_height)
-            }
-        }}
-    />;
-    nativeDeref(y) = nativeDeref(y) + status_height;
+    {
+        let status = lumi_settings_status();
+        let status_height = lumi_settings_text_height(status, terms.inner_width);
+        <Text
+            session={app.ui.session}
+            props={{
+                text: status,
+                size: AppFontSize(),
+                wrap: Wrap.TextWrapAuto,
+                bounds: {
+                    x: float32(terms.inner_x),
+                    y: float32(nativeDeref(y) + AppScale(6n)),
+                    width: float32(terms.inner_width),
+                    height: float32(status_height)
+                }
+            }}
+        />;
+        nativeDeref(y) = nativeDeref(y) + status_height;
+    }
     let agreed = LumiAiAgreed() && LumiNodeAgreed();
     let half = (terms.inner_width - AppScale(8n)) / 2n;
     let read_width = agreed ? half : terms.inner_width;
@@ -229,40 +234,47 @@ export function lumi_settings_draw(
     }
     nativeDeref(y) = nativeDeref(y) + AppScale(56n);
     settings_section_end(y);
+    let connection_body = lumi_settings_connection_body(inner);
     let connection = settings_section_begin(
         app,
         x,
         width,
         y,
         LocaleText("lumi_settings_connection"),
-        lumi_settings_connection_body(inner)
+        connection_body
     );
-    let own = LumiOwnProviderSelected();
-    let options: [NativeSegmentedControl.SegmentOption, NativeSegmentedControl.SegmentOption] = [
-        { label: LocaleText("lumi_settings_node") },
-        { label: LocaleText("lumi_settings_own") }
-    ];
-    let props: NativeSegmentedControl.Props = {};
-    props.id = 7803n;
-    props.bounds = {
-        x: float32(connection.inner_x),
-        y: float32(nativeDeref(y) + AppScale(6n)),
-        width: float32(connection.inner_width),
-        height: float32(AppScale(42n))
-    };
-    props.height = AppScale(42n);
-    props.selected_index = own ? 1n : 0n;
-    props.has_selection = true;
-    let choice = SegmentedControl({
-        session: app.ui.session,
-        props: props,
-        options: nativeSlice(options)
-    });
-    if (choice.changed) {
-        storage_set_setting_text(LumiProviderSetting, choice.selected_index === 1n ? "own" : "");
-        State_lumi_settings.lumi_settings_notice = 0n;
+    {
+        let own = LumiOwnProviderSelected();
+        let options: [NativeSegmentedControl.SegmentOption, NativeSegmentedControl.SegmentOption] =
+            [
+                { label: LocaleText("lumi_settings_node") },
+                { label: LocaleText("lumi_settings_own") }
+            ];
+        let props: NativeSegmentedControl.Props = {};
+        props.id = 7803n;
+        props.bounds = {
+            x: float32(connection.inner_x),
+            y: float32(nativeDeref(y) + AppScale(6n)),
+            width: float32(connection.inner_width),
+            height: float32(AppScale(42n))
+        };
+        props.height = AppScale(42n);
+        props.selected_index = own ? 1n : 0n;
+        props.has_selection = true;
+        let choice = SegmentedControl({
+            session: app.ui.session,
+            props: props,
+            options: nativeSlice(options)
+        });
+        if (choice.changed) {
+            storage_set_setting_text(
+                LumiProviderSetting,
+                choice.selected_index === 1n ? "own" : ""
+            );
+            State_lumi_settings.lumi_settings_notice = 0n;
+        }
+        nativeDeref(y) = nativeDeref(y) + AppScale(54n);
     }
-    nativeDeref(y) = nativeDeref(y) + AppScale(54n);
     if (!LumiOwnProviderSelected()) {
         settings_section_end(y);
         return;
@@ -284,7 +296,7 @@ export function lumi_settings_draw(
         app,
         nativeRef(State_lumi_settings.lumi_settings_key),
         7805n,
-        LocaleText("lumi_settings_key"),
+        FrameTextHold(nativeRef(app.ui.frame_text), LocaleText("lumi_settings_key")),
         key_saved ? LocaleText("lumi_settings_key_saved") : "",
         true,
         LUMI_PROVIDER_KEY_MAX - 1n,
@@ -304,23 +316,25 @@ export function lumi_settings_draw(
         connection.inner_width,
         y
     );
-    let note = LocaleText("lumi_settings_own_note");
-    let note_height = lumi_settings_text_height(note, connection.inner_width);
-    <Text
-        session={app.ui.session}
-        props={{
-            text: note,
-            size: AppSmallFontSize(),
-            wrap: Wrap.TextWrapAuto,
-            bounds: {
-                x: float32(connection.inner_x),
-                y: float32(nativeDeref(y)),
-                width: float32(connection.inner_width),
-                height: float32(note_height)
-            }
-        }}
-    />;
-    nativeDeref(y) = nativeDeref(y) + note_height;
+    {
+        let note = LocaleText("lumi_settings_own_note");
+        let note_height = lumi_settings_text_height(note, connection.inner_width);
+        <Text
+            session={app.ui.session}
+            props={{
+                text: note,
+                size: AppSmallFontSize(),
+                wrap: Wrap.TextWrapAuto,
+                bounds: {
+                    x: float32(connection.inner_x),
+                    y: float32(nativeDeref(y)),
+                    width: float32(connection.inner_width),
+                    height: float32(note_height)
+                }
+            }}
+        />;
+        nativeDeref(y) = nativeDeref(y) + note_height;
+    }
     if (State_lumi_settings.lumi_settings_notice !== 0n) {
         let notice = LocaleText(
             State_lumi_settings.lumi_settings_notice === 1n
@@ -395,19 +409,26 @@ export function lumi_settings_page_draw(
     scroll: NativeRef<s32>
 ): boolean {
     let title_h = AppScale(LUMI_SETTINGS_TITLE);
-    let bar: NativeTitleBar.Props = {};
-    bar.key = NativeLayout.KeyHash("lumi/settings/title");
-    bar.title = "Lumi";
-    bar.height = title_h;
-    bar.bounds = { x: 0.0, y: 0.0, width: float32(app.ui.view_width), height: float32(title_h) };
-    bar.has_leading_action = true;
-    bar.leading_label = LocaleText("back_button");
-    let options = LumiSettingsNewOptions();
-    if (
-        TitleBar({ session: app.ui.session, props: bar, options: nativeSlice(options, 0n, 0n) })
-            .clicked_leading
-    ) {
-        return true;
+    {
+        let bar: NativeTitleBar.Props = {};
+        bar.key = NativeLayout.KeyHash("lumi/settings/title");
+        bar.title = "Lumi";
+        bar.height = title_h;
+        bar.bounds = {
+            x: 0.0,
+            y: 0.0,
+            width: float32(app.ui.view_width),
+            height: float32(title_h)
+        };
+        bar.has_leading_action = true;
+        bar.leading_label = LocaleText("back_button");
+        let options = LumiSettingsNewOptions();
+        if (
+            TitleBar({ session: app.ui.session, props: bar, options: nativeSlice(options, 0n, 0n) })
+                .clicked_leading
+        ) {
+            return true;
+        }
     }
     let column = NativeLayout.CenteredColumnFor(app.ui.view_width, AppScale(720n), AppScale(16n));
     let top = title_h + AppScale(8n);
@@ -423,12 +444,17 @@ export function lumi_settings_page_draw(
     props.content_height = lumi_settings_content_height(column.width) + AppScale(16n);
     props.scroll_offset = nativeDeref(scroll);
     props.scale = MetricsScale();
-    let result = NativeScroll.Draw(app.ui.session, props);
-    nativeDeref(scroll) = result.scroll_offset;
-    if (result.opened) {
-        let y = s32(result.content.y);
-        lumi_settings_draw(app, column.x, column.width, nativeRef(y));
-        End(app.ui.session);
+    let result = Scroll({
+        session: app.ui.session,
+        props: props,
+        children: (result: NativeScroll.ScrollResult): void => {
+            nativeDeref(scroll) = result.scroll_offset;
+            let y = s32(result.content.y);
+            lumi_settings_draw(app, column.x, column.width, nativeRef(y));
+        }
+    });
+    if (!result.opened) {
+        nativeDeref(scroll) = result.scroll_offset;
     }
     return false;
 }

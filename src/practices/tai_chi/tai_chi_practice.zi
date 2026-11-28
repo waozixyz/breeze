@@ -64,24 +64,24 @@ TaiChiDurationText :: (app: *InnerBreeze, seconds: float64) -> string {
 }
 
 TaiChiItemDetail :: (app: *InnerBreeze, item: TaiChiItem) -> string {
-    duration := TaiChiDurationText(app, item.duration * 1.0)
-    if !UnlockOwned(UnlockTaiChi) && TaiChiItemFree(TaiChiCourseString(item.id)) {
-        free_text: [160]u8
-        values: [2]FormatArg = .[
-        FormatArg.{.text = LocaleText("tai_chi_free_item"), .is_text = true},
-        FormatArg.{.text = duration, .is_text = true}]
-        FormatTemplate("%s · %s", values[:], free_text[:])
-        return FrameTextHold(*app.ui.frame_text, TextUntilNul(free_text[:]))
-    }
-    if item.version < 0 {
-        return duration
-    }
     buffer: [160]u8
-    args: [2]FormatArg = .[
-    FormatArg.{.text = LocaleText(TaiChiCourseString(item.version)), .is_text = true},
-    FormatArg.{.text = duration, .is_text = true}
-    ]
-    FormatTemplate("%s · %s", args[:], buffer[:])
+    {
+        duration := TaiChiDurationText(app, item.duration * 1.0)
+        if !UnlockOwned(UnlockTaiChi) && TaiChiItemFree(TaiChiCourseString(item.id)) {
+            values: [2]FormatArg = .[
+            FormatArg.{.text = LocaleText("tai_chi_free_item"), .is_text = true},
+            FormatArg.{.text = duration, .is_text = true}]
+            FormatTemplate("%s · %s", values[:], buffer[:])
+        } else if item.version < 0 {
+            return duration
+        } else {
+            args: [2]FormatArg = .[
+            FormatArg.{.text = LocaleText(TaiChiCourseString(item.version)), .is_text = true},
+            FormatArg.{.text = duration, .is_text = true}
+            ]
+            FormatTemplate("%s · %s", args[:], buffer[:])
+        }
+    }
     return FrameTextHold(*app.ui.frame_text, AppTextFromCString(*buffer[0], 160))
 }
 
@@ -144,36 +144,49 @@ TaiChiCourseCall :: (context: *void, module: *u8, function: *u8,
         if arguments[0].integer != 0 {
             if index >= 0 && index < tai_chi_course.lesson_count {
                 lesson := tai_chi_course.lessons[index]
-                row.title = LocaleText(TaiChiCourseString(lesson.title))
-                row.subtitle = LocaleText(TaiChiCourseString(lesson.subtitle))
-                row.summary = LocaleText(TaiChiCourseString(ifx lesson.summary < 0 then lesson.subtitle else lesson.summary))
-                row.first = lesson.item_first
-                row.count = lesson.item_count
                 item := tai_chi_course.items[lesson.item_first]
-                row.kind = item.kind
-                row.locked = !TaiChiItemAllowed(lesson.item_first)
-                row.done = app.tai_chi.done[lesson.item_first]
-                row.detail = ifx row.locked then LocaleText("tai_chi_unlock_title") else TaiChiItemDetail(app, item)
+                locked := !TaiChiItemAllowed(lesson.item_first)
+                row = PracticeCourseRow.{
+                    .title = FrameTextHold(*app.ui.frame_text,
+                        LocaleText(TaiChiCourseString(lesson.title))),
+                    .subtitle = FrameTextHold(*app.ui.frame_text,
+                        LocaleText(TaiChiCourseString(lesson.subtitle))),
+                    .summary = FrameTextHold(*app.ui.frame_text,
+                        LocaleText(TaiChiCourseString(ifx lesson.summary < 0
+                        then lesson.subtitle else lesson.summary))),
+                    .first = lesson.item_first,
+                    .count = lesson.item_count,
+                    .kind = item.kind,
+                    .locked = locked,
+                    .done = app.tai_chi.done[lesson.item_first],
+                    .detail = ifx locked then FrameTextHold(*app.ui.frame_text,
+                        LocaleText("tai_chi_unlock_title")) else TaiChiItemDetail(app, item)
+                }
             }
         } else if index >= 0 && index < tai_chi_course.item_count {
             item := tai_chi_course.items[index]
-            row.title = LocaleText(TaiChiCourseString(item.title))
-            if TaiChiItemAllowed(index) {
-                row.detail = TaiChiItemDetail(app, item)
-            } else {
-                row.detail = LocaleText("tai_chi_unlock_title")
+            allowed := TaiChiItemAllowed(index)
+            row = PracticeCourseRow.{
+                .title = FrameTextHold(*app.ui.frame_text,
+                    LocaleText(TaiChiCourseString(item.title))),
+                .detail = ifx allowed then TaiChiItemDetail(app, item)
+                else FrameTextHold(*app.ui.frame_text, LocaleText("tai_chi_unlock_title")),
+                .done = app.tai_chi.done[index]
             }
-            row.done = app.tai_chi.done[index]
         }
         result.* = WidgetEncodePracticeCourseRow(row, *course_row_codec)
         return 1
     }
     if name == "CourseLocaleHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
+        reply: HostValue
+        {
+            key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            text := LocaleText(key)
+            reply = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+        }
+        result.* = reply
         return 1
     }
     return 0

@@ -8,6 +8,7 @@ import { ButtonEmphasis, ButtonTone } from "kryon/control_props";
 import { LocaleText } from "locale";
 import { meditation_start_seconds } from "meditation_session";
 import { NativePresent } from "native_flags";
+import { FrameTextHold } from "text_buffers";
 
 export function meditation_draw_setup_modalView(app: NativeRef<InnerBreeze>): void {
     if (!NativePresent(app)) {
@@ -22,32 +23,32 @@ export function meditation_draw_setup_modalView(app: NativeRef<InnerBreeze>): vo
         NativeModal.ActionModalAction
     ] = [
         {
-            label: LocaleText("duration_5m"),
+            label: FrameTextHold(nativeRef(app.ui.frame_text), LocaleText("duration_5m")),
             tone: ButtonTone.ButtonToneAccent,
             emphasis: ButtonEmphasis.ButtonEmphasisFilled
         },
         {
-            label: LocaleText("duration_15m"),
+            label: FrameTextHold(nativeRef(app.ui.frame_text), LocaleText("duration_15m")),
             tone: ButtonTone.ButtonToneAccent,
             emphasis: ButtonEmphasis.ButtonEmphasisFilled
         },
         {
-            label: LocaleText("duration_30m"),
+            label: FrameTextHold(nativeRef(app.ui.frame_text), LocaleText("duration_30m")),
             tone: ButtonTone.ButtonToneAccent,
             emphasis: ButtonEmphasis.ButtonEmphasisFilled
         },
         {
-            label: LocaleText("duration_1h"),
+            label: FrameTextHold(nativeRef(app.ui.frame_text), LocaleText("duration_1h")),
             tone: ButtonTone.ButtonToneAccent,
             emphasis: ButtonEmphasis.ButtonEmphasisFilled
         },
         {
-            label: LocaleText("duration_2h"),
+            label: FrameTextHold(nativeRef(app.ui.frame_text), LocaleText("duration_2h")),
             tone: ButtonTone.ButtonToneAccent,
             emphasis: ButtonEmphasis.ButtonEmphasisFilled
         },
         {
-            label: LocaleText("cancel_button"),
+            label: FrameTextHold(nativeRef(app.ui.frame_text), LocaleText("cancel_button")),
             tone: ButtonTone.ButtonToneNeutral,
             emphasis: ButtonEmphasis.ButtonEmphasisSoft
         }

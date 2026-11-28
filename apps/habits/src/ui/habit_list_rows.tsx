@@ -78,7 +78,6 @@ export function NameResize(x: s32, y: s32, height: s32, name_width: s32): void {
 }
 
 function RowFace(index: s32, bounds: Rectangle, layout: HabitTableLayout, pad: s32): void {
-    const rows = Model.Rows();
     const list_state = Model.CurrentList();
     let icon_size = Model.Scale(
         layout.names ? Model.LIST_ROW_ICON_SIZE : Model.LIST_ROW_SMALL_ICON_SIZE
@@ -104,7 +103,7 @@ function RowFace(index: s32, bounds: Rectangle, layout: HabitTableLayout, pad: s
                 layout.name_width - icon_size - Model.Scale(14n),
                 s32(bounds.height)
             ),
-            text: nativeAt(rows, index).name,
+            text: Model.Row(index).name,
             size: list_state.font,
             vertical_align: TextAlign.TextAlignCenter,
             wrap: NativeText.Wrap.TextWrapEllipsis
@@ -157,9 +156,8 @@ export function Row(
 }
 
 export function RowDetail(index: s32, first_active: boolean, bounds: Rectangle, pad: s32): void {
-    const rows = Model.Rows();
     const list_state = Model.CurrentList();
-    let row = nativeAt(rows, index);
+    let row = Model.Row(index);
     let panel_x = s32(bounds.x) + pad;
     let panel_width = s32(bounds.width) - pad * 2n;
     let panel_y = s32(bounds.y) + Model.Scale(4n);

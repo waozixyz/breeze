@@ -52,6 +52,7 @@ Text :: #import "kryon/text";
 #import, file "../app/text_buffers.zi";
 #import, file "../core/types.zi";
 #import, file "../storage/storage_settings.zi";
+#import, file "../storage/app_records.zi";
 #import, file "../storage/db.zi";
 #import, file "profile_social.zi";
 #import, file "../apps/media_store.zi";
@@ -160,9 +161,13 @@ NodeScreenUiCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "AppLocaleHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := NodeAppText(arguments[0])
-        translated := NodeAppLocaleText(app.node_app_slot, AppTextFromCString(*app.language[0], 16), key)
-        result.* = NodeAppString(ifx translated != "" then translated else LocaleText(key))
+        reply: HostValue
+        {
+            key := NodeAppText(arguments[0])
+            translated := NodeAppLocaleText(app.node_app_slot, AppTextFromCString(*app.language[0], 16), key)
+            reply = NodeAppString(ifx translated != "" then translated else LocaleText(key))
+        }
+        result.* = reply
         return 1
     }
     if name == "AppFriendHost" && count == 1 &&
@@ -239,7 +244,9 @@ node_app_screen_enter :: (app: *InnerBreeze) {
     if app == null {
         return
     }
-    name := NodeAppName(app.node_app_slot)
+    name_bytes: [NODE_APP_NAME_MAX + 1]u8
+    unused AppCopyText(NodeAppName(app.node_app_slot), name_bytes[:])
+    name := TextUntilNul(name_bytes[:])
     if name.count > 0 && !NodeAppRunning(app.node_app_slot) {
         unused NodeAppInstall(name)
     }
@@ -307,17 +314,25 @@ NodeScreenLoading :: (app: *InnerBreeze) {
         done := AppsFeaturesReadyCount()
         total := cast(s32)PackageCount - 1
         route := app_main_tab_route(app.main_tab)
-        title := app_nav_route_label(route)
-        if title.count == 0 {
-            title = LocaleText("app_loading_apps")
+        title: string
+        {
+            label := app_nav_route_label(route)
+            if label.count == 0 {
+                label = LocaleText("app_loading_apps")
+            }
+            title = PackageText(label, "")
         }
         NodeScreenProgress(app, area, title,
-            LocaleText("app_loading_open"), done, total)
+            FrameTextHold(*app.ui.frame_text, LocaleText("app_loading_open")), done, total)
+        PackageFree(title)
         return
     }
     step := NodeOpenStep(app.node_app_slot)
     stages: [4]string = .["app_loading_wait", "app_loading_read", "app_loading_open", "app_loading_ready"]
-    NodeScreenProgress(app, area, NodeAppTitle(NodeAppName(app.node_app_slot)), LocaleText(stages[step]), step, 3)
+    title := PackageText(NodeAppTitle(NodeAppName(app.node_app_slot)), "")
+    NodeScreenProgress(app, area, title,
+        FrameTextHold(*app.ui.frame_text, LocaleText(stages[step])), step, 3)
+    PackageFree(title)
 }
 
 // The bundled app that draws the current screen or supplies its required

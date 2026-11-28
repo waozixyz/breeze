@@ -205,52 +205,54 @@ export function settings_about_draw(
     w: s32,
     y: NativeRef<s32>
 ): void {
-    let title_text = SettingsAboutNewTitleText();
-    let title_args: [FormatArg, FormatArg] = [
-        { text: LocaleText("app_title"), is_text: true },
-        { text: VersionString, is_text: true }
-    ];
-    FormatTemplate("%s · v%s", nativeSlice(title_args), nativeSlice(title_text));
-    let title = FrameTextHold(
-        nativeRef(app.ui.frame_text),
-        AppTextFromCString(nativeRef(nativeAt(title_text, 0n)), s32(title_text.count))
-    );
-    let title_font = AppTitleFontSize(title, w);
     let font = AppFontSize();
-    let logo_size = AppScale(56n);
-    let text_w: s32 = s32(0n);
     let description: ParagraphSpec = {};
-    nativeDeref(y) = nativeDeref(y) + AppScale(16n);
-    <Image
-        session={CurrentApp().ui.session}
-        props={{
-            asset_path: "assets/app/icon.webp",
-            alt_text: "Inner Breeze",
-            bounds: {
-                x: float32(x + (w - logo_size) / 2n),
-                y: float32(nativeDeref(y)),
-                width: float32(logo_size),
-                height: float32(logo_size)
-            }
-        }}
-    />;
-    nativeDeref(y) = nativeDeref(y) + (logo_size + AppScale(12n));
-    text_w = AppTextWidth(title, title_font);
-    <Text
-        session={CurrentApp().ui.session}
-        props={{
-            bounds: {
-                x: float32(x + (w - text_w) / 2n),
-                y: float32(nativeDeref(y)),
-                width: 0n,
-                height: 0n
-            },
-            text: title,
-            size: title_font,
-            wrap: Wrap.TextWrapNone
-        }}
-    />;
-    nativeDeref(y) = nativeDeref(y) + AppScale(34n);
+    {
+        let title_text = SettingsAboutNewTitleText();
+        let title_args: [FormatArg, FormatArg] = [
+            { text: LocaleText("app_title"), is_text: true },
+            { text: VersionString, is_text: true }
+        ];
+        FormatTemplate("%s · v%s", nativeSlice(title_args), nativeSlice(title_text));
+        let title = FrameTextHold(
+            nativeRef(app.ui.frame_text),
+            AppTextFromCString(nativeRef(nativeAt(title_text, 0n)), s32(title_text.count))
+        );
+        let title_font = AppTitleFontSize(title, w);
+        let logo_size = AppScale(56n);
+        let text_w: s32 = s32(0n);
+        nativeDeref(y) = nativeDeref(y) + AppScale(16n);
+        <Image
+            session={CurrentApp().ui.session}
+            props={{
+                asset_path: "assets/app/icon.webp",
+                alt_text: "Inner Breeze",
+                bounds: {
+                    x: float32(x + (w - logo_size) / 2n),
+                    y: float32(nativeDeref(y)),
+                    width: float32(logo_size),
+                    height: float32(logo_size)
+                }
+            }}
+        />;
+        nativeDeref(y) = nativeDeref(y) + (logo_size + AppScale(12n));
+        text_w = AppTextWidth(title, title_font);
+        <Text
+            session={CurrentApp().ui.session}
+            props={{
+                bounds: {
+                    x: float32(x + (w - text_w) / 2n),
+                    y: float32(nativeDeref(y)),
+                    width: 0n,
+                    height: 0n
+                },
+                text: title,
+                size: title_font,
+                wrap: Wrap.TextWrapNone
+            }}
+        />;
+        nativeDeref(y) = nativeDeref(y) + AppScale(34n);
+    }
     if (PackageRootPending()) {
         <Text
             session={app.ui.session}

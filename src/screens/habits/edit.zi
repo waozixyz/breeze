@@ -275,21 +275,24 @@ habit_edit_commit :: (app: *InnerBreeze) {
     }
     HabitQuestionsKeepWorded(app.habit_edit.questions[:],
         *app.habit_edit.question_count)
-    message := HabitsMessageFor(app, HABITS_COMMIT)
-    message.active = app.habit_edit.active != 0
-    message.is_new = app.habit_edit.is_new != 0
-    message.index = app.habit_edit.index
-    message.name = AppTextFromCString(*app.habit_edit.text[0], HABIT_NAME_SIZE)
-    message.description = AppTextFromCString(*app.habit_edit.description[0], HABIT_DESCRIPTION_SIZE)
-    message.color = app.habit_edit.color
-    message.sync_activity = app.habit_edit.sync_activity
-    message.sync_mode = app.habit_edit.sync_mode
-    message.weekdays = HabitScheduleWeekdays(app.habit_edit.schedule)
-    message.reminder_hour = app.habit_edit.reminder_hour
-    message.counter_enabled = app.habit_edit.counter_enabled
-    message.counter_target = app.habit_edit.counter_target
-    message.name_error = app.habit_edit.name_error
-    message = HabitsRun(message)
+    message: HabitsMessage
+    {
+        request := HabitsMessageFor(app, HABITS_COMMIT)
+        request.active = app.habit_edit.active != 0
+        request.is_new = app.habit_edit.is_new != 0
+        request.index = app.habit_edit.index
+        request.name = AppTextFromCString(*app.habit_edit.text[0], HABIT_NAME_SIZE)
+        request.description = AppTextFromCString(*app.habit_edit.description[0], HABIT_DESCRIPTION_SIZE)
+        request.color = app.habit_edit.color
+        request.sync_activity = app.habit_edit.sync_activity
+        request.sync_mode = app.habit_edit.sync_mode
+        request.weekdays = HabitScheduleWeekdays(app.habit_edit.schedule)
+        request.reminder_hour = app.habit_edit.reminder_hour
+        request.counter_enabled = app.habit_edit.counter_enabled
+        request.counter_target = app.habit_edit.counter_target
+        request.name_error = app.habit_edit.name_error
+        message = HabitsRun(request)
+    }
     app.habit_edit.name_error = message.name_error
     if message.name_error != 0 {
         app.habits.scroll = 0
@@ -407,7 +410,10 @@ habit_edit_confirmation :: (app: *InnerBreeze, deleting: bool) -> s32 {
 
 // ---- The editor, which Habits draws ------------------------------------------
 
-habit_edit_frame: HabitsEditFrame;
+HabitEditUiContext :: struct {
+    app: *InnerBreeze
+    frame: *HabitsEditFrame
+}
 habit_edit_frame_codec: WidgetHabitsEditFrameCodec;
 habit_edit_question_codec: WidgetHabitsEditQuestionCodec;
 habit_edit_practice_codec: WidgetHabitsEditPracticeCodec;
@@ -416,7 +422,8 @@ HabitEditText :: (buffer: []u8) -> string {
     return AppTextFromCString(*buffer[0], cast(s32)buffer.count)
 }
 
-habit_edit_question_value :: (app: *InnerBreeze, index: s32) -> HabitsEditQuestion {
+habit_edit_question_value :: (app_view: []InnerBreeze, index: s32) -> HabitsEditQuestion {
+    app := *app_view[0]
     edit := *app.habit_edit
     question := *edit.questions[index]
     return HabitsEditQuestion.{.id = question.id, .answer_type = question.answer_type,
@@ -449,17 +456,18 @@ habit_edit_keep_question :: (app: *InnerBreeze, index: s32, changed: HabitsEditQ
 
 HabitEditCall :: (context: *void, module: *u8, function: *u8,
     arguments: *HostValue, count: s32, result: *HostValue) -> s32 {
+    host := cast(*HabitEditUiContext)context
     if TextFromCString(module) != "habit_edit_view" {
-        return WidgetHostCall(context, module, function, arguments, count, result)
+        return WidgetHostCall(cast(*void)host.app, module, function, arguments, count, result)
     }
-    app := cast(*InnerBreeze)context
+    app := host.app
     name := TextFromCString(function)
     if name == "ReadHabitsEditHost" && count == 0 {
-        result.* = WidgetEncodeHabitsEditFrame(habit_edit_frame, *habit_edit_frame_codec)
+        result.* = WidgetEncodeHabitsEditFrame(host.frame.*, *habit_edit_frame_codec)
         return 1
     }
     if name == "WriteHabitsEditHost" && count == 1 && WidgetValidHabitsEditFrame(arguments[0]) {
-        habit_edit_keep(app, WidgetDecodeHabitsEditFrame(arguments[0], *habit_edit_frame_codec))
+        habit_edit_keep(app, host.frame, WidgetDecodeHabitsEditFrame(arguments[0], *habit_edit_frame_codec))
         return 1
     }
     if name == "ReadHabitsEditQuestionHost" && count == 1 &&
@@ -467,7 +475,7 @@ HabitEditCall :: (context: *void, module: *u8, function: *u8,
         index := cast(s32)arguments[0].integer
         question: HabitsEditQuestion
         if index >= 0 && index < app.habit_edit.question_count {
-            question = habit_edit_question_value(app, index)
+            question = habit_edit_question_value(app[:1], index)
         }
         result.* = WidgetEncodeHabitsEditQuestion(question, *habit_edit_question_codec)
         return 1
@@ -493,18 +501,23 @@ HabitEditCall :: (context: *void, module: *u8, function: *u8,
     }
     if name == "HabitsLocaleHost" && count == 1 &&
     HostScalarValid(arguments[0], "string", cast(s32)HostString) {
-        key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
-        text := LocaleText(key)
-        result.* = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
-            .data = HostTextData(text), .length = cast(usize)text.count}
+        reply: HostValue
+        {
+            key := TextFromBytes(BytesFromPointer(arguments[0].data, cast(u64)arguments[0].length))
+            text := LocaleText(key)
+            reply = HostValue.{.kind = cast(s32)HostString, .type_name = HostTextData("string"),
+                .data = HostTextData(text), .length = cast(usize)text.count}
+        }
+        result.* = reply
         return 1
     }
     return 0
 }
 
 // The editor's frame: the habit being edited and its fields as kept.
-habit_edit_frame_for :: (app: *InnerBreeze, picking: bool, field: []u8,
+habit_edit_frame_for :: (app_view: []InnerBreeze, picking: bool, field: []u8,
     area: []u8) -> HabitsEditFrame {
+    app := *app_view[0]
     edit := *app.habit_edit
     rule := *edit.schedule
     card := CardProps(Rectangle.{})
@@ -573,7 +586,7 @@ habit_edit_clamp :: (value: s32, low: s32, high: s32) -> s32 {
 }
 
 // Keeps what the editor changed, within the values a habit can take.
-habit_edit_keep :: (app: *InnerBreeze, observed: HabitsEditFrame) {
+habit_edit_keep :: (app: *InnerBreeze, frame: *HabitsEditFrame, observed: HabitsEditFrame) {
     edit := *app.habit_edit
     rule := *edit.schedule
     // VM strings are borrowed only during this call; a text too long for
@@ -646,8 +659,8 @@ habit_edit_keep :: (app: *InnerBreeze, observed: HabitsEditFrame) {
     edit.goal_anchor = observed.goal_anchor
     edit.goal_scroll_x = observed.goal_scroll_x
     app.habits.scroll = observed.scroll
-    habit_edit_frame.action = observed.action
-    habit_edit_frame.action_index = observed.action_index
+    frame.action = observed.action
+    frame.action_index = observed.action_index
 }
 
 // Does what the editor asked for once it is drawn.
@@ -682,19 +695,25 @@ habit_edit_apply :: (app: *InnerBreeze, action: s32, index: s32) {
 
 // Has Habits draw the editor, or its practice picker.
 habit_edit_run :: (app: *InnerBreeze, picking: bool) {
-    field: [64]u8
-    area: [128]u8
-    habit_edit_frame = habit_edit_frame_for(app, picking, field[:], area[:])
-    habit_edit_frame.action = HABITS_EDIT_NONE
-    WidgetHostBegin(app.ui.session, HostedAssetAllowed)
-    AppsUiBegin(HabitEditCall, cast(*void)app)
-    drawn := HabitsRun(HabitsMessage.{.action = HABITS_EDIT_VIEW})
-    AppsUiEnd()
-    WidgetHostEnd()
-    action := habit_edit_frame.action
-    index := habit_edit_frame.action_index
-    habit_edit_frame = HabitsEditFrame.{}
-    if drawn.succeeded {
+    action: s32 = HABITS_EDIT_NONE
+    index: s32
+    succeeded := false
+    {
+        field: [64]u8
+        area: [128]u8
+        frame := habit_edit_frame_for(app[:1], picking, field[:], area[:])
+        frame.action = HABITS_EDIT_NONE
+        WidgetHostBegin(app.ui.session, HostedAssetAllowed)
+        host := HabitEditUiContext.{.app = app, .frame = *frame}
+        AppsUiBegin(HabitEditCall, cast(*void)(*host))
+        drawn := HabitsRun(HabitsMessage.{.action = HABITS_EDIT_VIEW})
+        AppsUiEnd()
+        WidgetHostEnd()
+        action = frame.action
+        index = frame.action_index
+        succeeded = drawn.succeeded
+    }
+    if succeeded {
         habit_edit_apply(app, action, index)
     } else if picking {
         app_close_modal(app)
