@@ -846,6 +846,45 @@ CheckPackagedLocales :: () {
     Expect(LocaleUse("en"), 218)
 }
 
+// A feature owns the text in its response until its next call. Keep the
+// request's owned text and carry its returned scalar state between cases.
+RunHabitRequest :: (message: HabitsMessage) -> HabitsMessage {
+    response := HabitsRun(message)
+    message.abi = response.abi
+    message.action = response.action
+    message.index = response.index
+    message.count = response.count
+    message.selected = response.selected
+    message.screen_mode = response.screen_mode
+    message.view_mode = response.view_mode
+    message.tab = response.tab
+    message.day_index = response.day_index
+    message.weekdays = response.weekdays
+    message.counter_enabled = response.counter_enabled
+    message.counter_target = response.counter_target
+    message.linked_count = response.linked_count
+    message.sync_activity = response.sync_activity
+    message.sync_mode = response.sync_mode
+    message.reminder_hour = response.reminder_hour
+    message.modal_active = response.modal_active
+    message.scheduled = response.scheduled
+    message.completed = response.completed
+    message.decrement = response.decrement
+    message.is_new = response.is_new
+    message.active = response.active
+    message.color = response.color
+    message.succeeded = response.succeeded
+    message.reset_scroll = response.reset_scroll
+    message.cancel_edit = response.cancel_edit
+    message.name_error = response.name_error
+    message.day_action = response.day_action
+    message.block_click = response.block_click
+    message.screen = response.screen
+    message.question_count = response.question_count
+    message.span = response.span
+    return message
+}
+
 #program_export
 CheckModules :: () -> s32 {
     lists := ModuleTestText("lists")
@@ -904,11 +943,12 @@ CheckModules :: () -> s32 {
         AppCopyText(AppTextFromCString(*app.habits.items[old_index].id[0], HABIT_ID_SIZE), migrated_habit_id[:])
     }
 
-    edit := ListsMessage.{.action = LISTS_COMMIT, .editing_item = -2, .title = "Trip"}
-    edit = ListsRun(edit)
-    Expect(edit.succeeded && edit.reload && edit.sync, 11)
-    AppCopyText(edit.selected_id, list_id[:])
-    edit = ListsMessage.{}
+    {
+        created := ListsRun(ListsMessage.{.action = LISTS_COMMIT,
+            .editing_item = -2, .title = "Trip"})
+        Expect(created.succeeded && created.reload && created.sync, 11)
+        AppCopyText(created.selected_id, list_id[:])
+    }
     unused storage_elist_load(cast(*void)*app.elist)
     Expect(app.elist.list_count == 1, 12)
     rename := ListsMessage.{.action = LISTS_COMMIT, .editing_item = -3,
@@ -916,14 +956,18 @@ CheckModules :: () -> s32 {
         .selected_id = AppTextFromCString(*list_id[0], 37),
         .id = "00000000-0000-0000-0000-000000000000",
         .title = "Trip renamed"}
-    rename = ListsRun(rename)
-    Expect(!rename.succeeded && rename.editing_item == -3 &&
-        rename.title == "Trip renamed" && !rename.reset_input, 275)
+    {
+        rejected := ListsRun(rename)
+        Expect(!rejected.succeeded && rejected.editing_item == -3 &&
+            rejected.title == "Trip renamed" && !rejected.reset_input, 275)
+        rename.input_error = rejected.input_error
+    }
     rename.id = AppTextFromCString(*list_id[0], 37)
-    rename = ListsRun(rename)
-    Expect(rename.succeeded && rename.editing_item == -1 && rename.reset_input, 276)
-    rename = ListsMessage.{}
-    edit = ListsMessage.{.action = LISTS_COMMIT, .editing_item = -1,
+    {
+        renamed := ListsRun(rename)
+        Expect(renamed.succeeded && renamed.editing_item == -1 && renamed.reset_input, 276)
+    }
+    edit := ListsMessage.{.action = LISTS_COMMIT, .editing_item = -1,
         .selected_list = 0, .list_count = 1, .selected_id = AppTextFromCString(*list_id[0], 37),
         .title = "Passport"}
     Expect(ListsRun(edit).succeeded, 13)
@@ -959,14 +1003,18 @@ CheckModules :: () -> s32 {
     edit.done = 1
     edit.comment = "Keep relationship"
     edit.now = 2.0
-    edit = ListsRun(edit)
-    Expect(edit.succeeded && edit.completing_until == 2.45, 14)
+    completing_id: [37]u8
+    {
+        completed := ListsRun(edit)
+        Expect(completed.succeeded && completed.completing_until == 2.45, 14)
+        AppCopyText(completed.completing_id, completing_id[:])
+        edit.completing_until = completed.completing_until
+    }
+    edit.completing_id = AppTextFromCString(*completing_id[0], 37)
     edit.action = LISTS_VISIBLE
-    edit = ListsRun(edit)
-    Expect(edit.visible, 15)
+    Expect(ListsRun(edit).visible, 15)
     edit.now = 3.0
     Expect(!ListsRun(edit).visible, 16)
-    edit = ListsMessage.{}
     unused storage_elist_load(cast(*void)*app.elist)
     AppCopyText(AppTextFromCString(*item_id[0], 37), app.elist.completing_item[:])
     app.elist.completing_until = 2.45
@@ -979,18 +1027,16 @@ CheckModules :: () -> s32 {
     app.elist.show_completed = 0
     unused storage_elist_load(cast(*void)*app.elist)
     Expect(!app.elist.visibility_valid && ListsRefreshVisibility(*app.elist, 3.0) && !app.elist.item_visibility[0], 55)
-    // A returned text view lasts until the next call to that feature. This
-    // selection follows several visibility calls, so start a fresh message.
-    edit = ListsMessage.{.action = LISTS_SELECT, .index = 1, .list_count = 2}
-    edit = ListsRun(edit)
-    Expect(edit.selected_list == 1 && edit.reset_input && edit.reset_scroll && edit.show_completed == 0, 17)
-    edit = ListsMessage.{}
+    {
+        selected := ListsRun(ListsMessage.{.action = LISTS_SELECT, .index = 1, .list_count = 2})
+        Expect(selected.selected_list == 1 && selected.reset_input && selected.reset_scroll && selected.show_completed == 0, 17)
+    }
 
     habit := HabitsMessageFor(*app, HABITS_COMMIT)
     habit.active = true
     habit.is_new = true
     habit.name = " \t "
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.name_error == 1 && !habit.cancel_edit, 18)
     // Reuse the rejected response, including its old validation error.
     habit.name = "Reading"
@@ -999,15 +1045,15 @@ CheckModules :: () -> s32 {
     habit.counter_enabled = 1
     habit.counter_target = 3
     habit.reminder_hour = 9
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.succeeded && habit.name_error == 0 && habit.cancel_edit, 19)
     habit.action = HABITS_COMMIT
     habit.count = app.habits.count
     habit.name = "Reading"
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.name_error == 2, 20)
     habit.name = "Writing"
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.succeeded && habit.name_error == 0 && habit.cancel_edit, 21)
     reading_index := FindHabit("Reading")
     Expect(reading_index >= 0, 45)
@@ -1021,7 +1067,7 @@ CheckModules :: () -> s32 {
         habit.counter_enabled = 1
         habit.counter_target = 7
         habit.weekdays = 31
-        habit = HabitsRun(habit)
+        habit = RunHabitRequest(habit)
         Expect(habit.succeeded && habit.cancel_edit, 46)
         Expect(ModuleTestCount("SELECT COUNT(*) FROM habits WHERE name='Reading' AND description='Edited through Habits bundle' AND counter_enabled=1 AND counter_target=7 AND weekdays=31") == 1, 47)
     }
@@ -1032,26 +1078,26 @@ CheckModules :: () -> s32 {
     habit.counter_enabled = 0
     habit.linked_count = 1
     habit.question_count = 2
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.day_action == HABITS_DAY_LINKED && habit.block_click, 22)
     habit.linked_count = 0
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.day_action == HABITS_DAY_QUESTIONS && habit.block_click, 48)
     habit.span = true
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.day_action == HABITS_DAY_SPAN && habit.block_click, 50)
     habit.span = false
     habit.question_count = 0
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.day_action == HABITS_DAY_TOGGLE, 49)
     habit.sync_activity = 16777216
     habit.day_index = 20240229
     habit.completed = true
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.day_action == HABITS_DAY_DIARY && habit.block_click &&
         habit.day_index == 20240229, 470)
     habit.completed = false
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.day_action == HABITS_DAY_DIARY && habit.block_click, 471)
     // A diary link takes priority over counts, linked practice sessions,
     // questions and spans, including the secondary count-down gesture.
@@ -1061,12 +1107,12 @@ CheckModules :: () -> s32 {
     habit.span = true
     habit.decrement = true
     habit.sync_activity = 16777217
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.day_action == HABITS_DAY_DIARY && habit.block_click, 472)
     habit.modal_active = true
     habit.day_action = HABITS_DAY_NONE
     habit.block_click = false
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.day_action == HABITS_DAY_NONE && !habit.block_click, 473)
     habit.modal_active = false
     habit.sync_activity = 0
@@ -1074,14 +1120,14 @@ CheckModules :: () -> s32 {
     habit.question_count = 0
     habit.span = false
     habit.decrement = false
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.day_action == HABITS_DAY_COUNT, 474)
     habit.decrement = true
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.day_action == HABITS_DAY_DECREMENT, 475)
     habit.action = HABITS_HISTORY
     habit.selected = 0
-    habit = HabitsRun(habit)
+    habit = RunHabitRequest(habit)
     Expect(habit.screen_mode == HABITS_SCREEN_HISTORY && habit.view_mode == HABIT_VIEW_CALENDAR, 23)
 
     step := PracticeMessage.{.action = PRACTICE_MEDITATION_STEP,
