@@ -1,10 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2.1.64] - 2026-11-28
 
-- Opravy Backspace, úprav a obnovy záloh. Fotky a Rádio. Dew za hvězdy Telegramu. Lumi hned odpoví a hlásí nepřečtené.
-- Start, změna, návrat. Posun v Astrálu. 4min a vlastní cviky. Denní/noční bannery. Stav stahování. Opravy PiP/Domů.
-- Reset časovačů po návratu. Tematické časovače/mince. Denní mince, odkazy Deníku, jeden graf návyků, statistiky, ikony.
+- Učte se tchaj-ťi s ilustrovanými lekcemi, základními cviky a ženskou nebo mužskou postavou.
+- Začněte v Cvičení; časovače, stahování a celoobrazovkové ovládání zůstávají spolehlivé při přepínání a návratu.
+- Vylepšené přehledy návyků, obnova účtu a chat s Lumi, s dobrovolným odesíláním hlášení o pádu.
 
 ## [2.1.63] - 2026-11-05
 

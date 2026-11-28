@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.65] - 2026-11-28
+
+- Bring Lumi 1.5.30, Habits 1.3.18, Practices 1.6.12, Lists 1.1.31, Diary 1.3.28 and Leaderboard 1.0.32 for Inner Breeze 2.1.64.
+
 ## [Unreleased]
 
 - Open Practices after first-run setup, preserving saved app choices. Keep setup and tutorial guides free of achievement interruptions.

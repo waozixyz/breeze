@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.1.31] - 2026-11-28
+
+- Maintenance release for Inner Breeze 2.1.64.
+
 ## [1.1.30] - 2026-11-05
 
 - Retain the cursor while correcting text in lists.

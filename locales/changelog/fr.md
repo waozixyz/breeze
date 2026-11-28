@@ -1,10 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2.1.64] - 2026-11-28
 
-- Corrige retour arrière, édition, restauration. Photos/Radio. Dew et étoiles Telegram. Lumi répond et alerte si non lu.
-- Débutez, changez, reprenez. Avance astrale. Circuits 4 min et perso. Bannières jour/nuit. Téléchargements. PiP/Accueil.
-- Minuteurs remis à zéro au retour. Pièces au thème et du jour, liens Journal, une courbe, stats, icônes Activité.
+- Apprenez le tai-chi avec des leçons illustrées, des exercices de base et un modèle féminin ou masculin.
+- Ouvrez Pratiques ; minuteurs, téléchargements et commandes plein écran restent fiables au changement et à la reprise.
+- Meilleur suivi des habitudes, récupération de compte et chat Lumi, avec des rapports de plantage facultatifs.
 
 ## [2.1.63] - 2026-11-05
 

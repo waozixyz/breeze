@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.3.18] - 2026-11-28
+
+- Maintenance release for Inner Breeze 2.1.64.
+
 ## [Unreleased]
 
 - Award habit creation for habits you create; starter habits earn milestones through actual use.

@@ -1,10 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2.1.64] - 2026-11-28
 
-- Retroceso, edición y copias corregidos. Fotos/Radio. Dew con estrellas de Telegram. Lumi responde y avisa si no lo ves.
-- Inicia, cambia, retoma. Avance astral. Rutinas de 4 min y propias. Banners día/noche. Reintento de descargas. PiP.
-- Reinicio al volver. Reloj y monedas del tema. Monedas diarias, Diario vinculado, una gráfica, totales e iconos.
+- Aprende taichí con lecciones ilustradas, ejercicios básicos y una guía femenina o masculina.
+- Empieza en Prácticas, con temporizadores, descargas y navegación a pantalla completa estables al cambiar o retomar.
+- Mejora de las tendencias de hábitos, la recuperación de cuentas y el chat con Lumi, con informes de errores opcionales.
 
 ## [2.1.63] - 2026-11-05
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.6.12] - 2026-11-28
+
+- Maintenance release for Inner Breeze 2.1.64.
+
 ## [Unreleased]
 
 - Organize app sources under `src/` with a clear `main.zi` program entry.

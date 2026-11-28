@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.1.64] - 2026-11-28
 
 - Learn Tai Chi through illustrated lessons, Foundations drills and Woman or Man playback.
 - Start in Practices and keep timers, downloads and full-screen navigation steady when switching or resuming.

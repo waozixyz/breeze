@@ -1,10 +1,10 @@
 # Changelog
 
-## [Unreleased]
+## [2.1.64] - 2026-11-28
 
-- Löschtaste, Text, Backup repariert. Fotos/Radio. Dew für Telegram-Sterne. Lumi antwortet gleich, meldet Ungelesenes.
-- Start, Wechsel, Fortsetzen. Astral spulen. 4-Min- und eigene Workouts. Tag/Nacht-Banner. Downloadstatus. PiP/Home-Fixes.
-- Pausentimer neu. Timer/Münzen im Design. Tagesmünzen, Tagebuch-Links, ein Gewohnheitsgraph, Statistik, Aktivitäts-Icons.
+- Tai-Chi mit illustrierten Lektionen, Grundlagenübungen und einer Frau oder einem Mann als Vorbild lernen.
+- Mit Übungen starten; Timer, Downloads und die Vollbildnavigation bleiben beim Wechseln und Fortsetzen zuverlässig.
+- Verbesserte Gewohnheitstrends, Kontowiederherstellung und Lumi-Chats, mit freiwilligen Absturzberichten.
 
 ## [2.1.63] - 2026-11-05
 
