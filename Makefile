@@ -58,9 +58,21 @@ ZIRAN_DIR := build/packages/ziran
 # here so source checks and C generation cannot use different compiler builds.
 ZIRAN_BUILD_DIR := $(abspath $(ZIRAN_DIR)/build)
 KRYON_LIBRARY_BUILD_DIR := $(abspath $(BUILD_DIR)/kryon-library)
-ZI2C_BIN := $(ZIRAN_BUILD_DIR)/bin/zi2c
-ZIRAN_BIN := $(ZIRAN_BUILD_DIR)/bin/ziran
-ZI2ZIR_BIN := $(ZIRAN_BUILD_DIR)/bin/zi2zir
+# An explicit, already-built variant keeps a long Android build independent
+# of compiler development. Project-mode tools must remain inside ZIRAN_DIR.
+ZIRAN_HOST_BIN_DIR ?=
+export ZIRAN_HOST_BIN_DIR
+ifneq ($(strip $(ZIRAN_HOST_BIN_DIR)),)
+ZIRAN_HOST_BIN_DIR := $(realpath $(ZIRAN_HOST_BIN_DIR))
+ifeq ($(filter $(realpath $(ZIRAN_DIR))/%,$(ZIRAN_HOST_BIN_DIR)),)
+$(error ZIRAN_HOST_BIN_DIR must be a built toolchain variant inside $(realpath $(ZIRAN_DIR)))
+endif
+$(foreach tool,ziran zi2zir zi2c zi2zx,$(if $(wildcard $(ZIRAN_HOST_BIN_DIR)/$(tool)),,$(error Missing host tool $(ZIRAN_HOST_BIN_DIR)/$(tool))))
+endif
+ZIRAN_TOOLS_BIN_DIR := $(if $(ZIRAN_HOST_BIN_DIR),$(ZIRAN_HOST_BIN_DIR),$(ZIRAN_BUILD_DIR)/bin)
+ZI2C_BIN := $(ZIRAN_TOOLS_BIN_DIR)/zi2c
+ZIRAN_BIN := $(ZIRAN_TOOLS_BIN_DIR)/ziran
+ZI2ZIR_BIN := $(ZIRAN_TOOLS_BIN_DIR)/zi2zir
 ZI_CHECK_STAMP := $(BUILD_DIR)/zi-check/native.fresh
 # Package commands are Ziran sources too. Changes there must rebuild the same
 # toolchain as compiler and runtime changes, including local package overrides.
@@ -636,8 +648,15 @@ all: native
 # mixing a new zi2zir with an old ziran fails on the ZIR version.
 ZIRAN_TOOLS := $(addprefix $(ZIRAN_BUILD_DIR)/bin/,zi2c zi2zir zi2zx zi2go ziran)
 
+ifeq ($(strip $(ZIRAN_HOST_BIN_DIR)),)
 $(ZI2C_BIN) $(ZIRAN_BUILD_DIR)/libziran.a &: $(ZIRAN_SOURCES) ziran.lock
 	$(MAKE) -C $(ZIRAN_DIR) BUILD_DIR=$(ZIRAN_BUILD_DIR) $(ZIRAN_TOOLS) $(ZIRAN_BUILD_DIR)/libziran.a
+else
+# Native runtime sources still come from the resolved package, independently
+# of the selected host executables. Android builds its own target runtime.
+$(ZIRAN_BUILD_DIR)/libziran.a: $(ZIRAN_SOURCES) ziran.lock
+	$(MAKE) -C $(ZIRAN_DIR) BUILD_DIR=$(ZIRAN_BUILD_DIR) $@
+endif
 
 $(ZIRAN_BIN): $(ZI2C_BIN)
 

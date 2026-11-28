@@ -40,6 +40,14 @@ PASSWORD=your-keystore-password make android-release
 PASSWORD=your-keystore-password make android-bundle
 ```
 
+A prebuilt host compiler variant can be selected with
+`ZIRAN_HOST_BIN_DIR=/absolute/toolchain/build/variant/bin make android-debug`.
+The directory must be inside the resolved Ziran checkout and contain a matching
+`ziran`, `zi2zir`, `zi2c` and `zi2zx`. Make, Gradle and CMake use that variant
+without rebuilding its executables; package resolution, target runtime sources,
+source checking and build-law gates still use the current project configuration.
+Direct Gradle builds also accept `-Pziran.hostBinDir=PATH`.
+
 Build the web app:
 
 ```bash

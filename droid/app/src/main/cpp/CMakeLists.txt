@@ -57,8 +57,24 @@ set(ZIRAN_DIR "${REPO_ROOT}/build/packages/ziran")
 # The pinned toolchain's own build, which `make` shares. Its checkout is
 # per commit, so a pin change never reuses objects from an older Ziran.
 set(ZIRAN_BUILD_DIR "${ZIRAN_DIR}/build")
-set(ZI2C_BIN "${ZIRAN_BUILD_DIR}/bin/zi2c")
-set(ZI2ZIR_BIN "${ZIRAN_BUILD_DIR}/bin/zi2zir")
+set(ZIRAN_HOST_BIN_DIR "" CACHE PATH "Already-built host toolchain variant inside ZIRAN_DIR")
+if(ZIRAN_HOST_BIN_DIR)
+    file(REAL_PATH "${ZIRAN_DIR}" ZIRAN_REAL_DIR)
+    file(REAL_PATH "${ZIRAN_HOST_BIN_DIR}" ZIRAN_TOOLS_BIN_DIR)
+    string(FIND "${ZIRAN_TOOLS_BIN_DIR}/" "${ZIRAN_REAL_DIR}/" ZIRAN_HOST_PREFIX)
+    if(NOT ZIRAN_HOST_PREFIX EQUAL 0)
+        message(FATAL_ERROR "ZIRAN_HOST_BIN_DIR must be a built toolchain variant inside ${ZIRAN_REAL_DIR}")
+    endif()
+    foreach(TOOL ziran zi2zir zi2c zi2zx)
+        if(NOT EXISTS "${ZIRAN_TOOLS_BIN_DIR}/${TOOL}")
+            message(FATAL_ERROR "Missing host tool ${ZIRAN_TOOLS_BIN_DIR}/${TOOL}")
+        endif()
+    endforeach()
+else()
+    set(ZIRAN_TOOLS_BIN_DIR "${ZIRAN_BUILD_DIR}/bin")
+endif()
+set(ZI2C_BIN "${ZIRAN_TOOLS_BIN_DIR}/zi2c")
+set(ZI2ZIR_BIN "${ZIRAN_TOOLS_BIN_DIR}/zi2zir")
 file(GLOB ZIRAN_SOURCES CONFIGURE_DEPENDS
     "${ZIRAN_DIR}/cmd/zir/*.c" "${ZIRAN_DIR}/cmd/zir/*.h"
     "${ZIRAN_DIR}/cmd/zir-c/*.c" "${ZIRAN_DIR}/cmd/zir-c/*.h"
@@ -66,7 +82,7 @@ file(GLOB ZIRAN_SOURCES CONFIGURE_DEPENDS
 find_program(HOST_MAKE NAMES make gmake REQUIRED)
 find_program(HOST_PYTHON NAMES python3 REQUIRED)
 find_program(HOST_CC NAMES cc gcc REQUIRED NO_CMAKE_FIND_ROOT_PATH)
-set(ZIRAN_BIN "${ZIRAN_BUILD_DIR}/bin/ziran")
+set(ZIRAN_BIN "${ZIRAN_TOOLS_BIN_DIR}/ziran")
 add_custom_target(app_build_laws
     COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-version.py"
     COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/tests/font_glyph_coverage_test.py"
@@ -85,15 +101,17 @@ add_custom_target(app_build_laws
     COMMENT "Checking release consistency and proving app laws"
     VERBATIM
 )
-add_custom_command(
-    OUTPUT "${ZI2C_BIN}"
-    BYPRODUCTS "${ZI2ZIR_BIN}"
-    COMMAND "${HOST_MAKE}" -j1 -C "${ZIRAN_DIR}"
-        "CC=${HOST_CC}" "HOST_CC=${HOST_CC}"
-        "BUILD_DIR=${ZIRAN_BUILD_DIR}" all
-    DEPENDS ${ZIRAN_SOURCES} "${ZIRAN_DIR}/Makefile"
-    VERBATIM
-)
+if(NOT ZIRAN_HOST_BIN_DIR)
+    add_custom_command(
+        OUTPUT "${ZI2C_BIN}"
+        BYPRODUCTS "${ZI2ZIR_BIN}"
+        COMMAND "${HOST_MAKE}" -j1 -C "${ZIRAN_DIR}"
+            "CC=${HOST_CC}" "HOST_CC=${HOST_CC}"
+            "BUILD_DIR=${ZIRAN_BUILD_DIR}" all
+        DEPENDS ${ZIRAN_SOURCES} "${ZIRAN_DIR}/Makefile"
+        VERBATIM
+    )
+endif()
 set(APP_ZIRAN_GEN_DIR "${CMAKE_BINARY_DIR}/ziran/generated")
 set(APP_ZIRAN_MANIFEST "${CMAKE_BINARY_DIR}/ziran/generated-sources.cmake")
 file(GLOB_RECURSE APP_ZIRAN_SOURCES CONFIGURE_DEPENDS
@@ -157,9 +175,11 @@ string(APPEND APP_ZIRAN_CHECK_DEFINES " ${APP_ZIRAN_ARCH}")
 
 # CMake needs the complete emitted import graph before it creates build rules.
 # Run the same required law gates before this initial source generation.
-execute_process(COMMAND "${HOST_MAKE}" -j1 -C "${ZIRAN_DIR}"
-    "CC=${HOST_CC}" "HOST_CC=${HOST_CC}"
-    "BUILD_DIR=${ZIRAN_BUILD_DIR}" all COMMAND_ERROR_IS_FATAL ANY)
+if(NOT ZIRAN_HOST_BIN_DIR)
+    execute_process(COMMAND "${HOST_MAKE}" -j1 -C "${ZIRAN_DIR}"
+        "CC=${HOST_CC}" "HOST_CC=${HOST_CC}"
+        "BUILD_DIR=${ZIRAN_BUILD_DIR}" all COMMAND_ERROR_IS_FATAL ANY)
+endif()
 execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/scripts/check-version.py"
     WORKING_DIRECTORY "${REPO_ROOT}" COMMAND_ERROR_IS_FATAL ANY)
 execute_process(COMMAND "${HOST_PYTHON}" "${REPO_ROOT}/tests/font_glyph_coverage_test.py"
