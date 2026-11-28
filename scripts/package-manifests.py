@@ -74,7 +74,7 @@ def manifest_for(component, existing, key_id, public):
         raise ValueError("refusing to change a node-restricted app registration")
     values = {field: existing[field] for field in FIELDS if existing.get(field)}
     values.update(app_id=component["id"], display_name=NAMES.get(component["name"]) or component["title"],
-                  homepage_url="https://inbe.waozi.xyz/",
+                  homepage_url="https://innerbreeze.org/",
                   source_url=component.get("source_url", "https://github.com/waozixyz/breeze"), status="active",
                   current_client_version=component["version"])
     keys = [dict(key) for key in existing.get("keys", [])]

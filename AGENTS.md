@@ -2,6 +2,11 @@
 
 ## Ownership and releases
 
+- Use `https://innerbreeze.org/` for public website links,
+  `/build/web/` for the browser app and `/install-apt` for Linux APT instructions.
+  Both APT build paths use `packaging/linux/apt/inbe.sources`. Keep the old
+  domains only for redirects, existing installations and origin-bound user data;
+  the `inbe` package and signing key paths remain unchanged.
 - Dependencies are Ziran packages pinned in `ziran.toml`/`ziran.lock` and
   linked under `build/packages/`; there is no `vendor/`. Never edit a package
   checkout. Change Kryon (or any dependency) in its own repository on `master`,

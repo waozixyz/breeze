@@ -67,7 +67,7 @@ apt_dir=$work/apt
 mkdir -p "$apt_dir/etc/sources.list.d" "$apt_dir/etc/preferences.d" "$apt_dir/state/lists/partial" \
 	"$apt_dir/cache/archives/partial"
 : > "$apt_dir/state/status"
-sed -e "s#https://breeze.waozi.xyz/apt#file://$work/repo#" \
+sed -e "s#https://innerbreeze.org/apt#file://$work/repo#" \
 	-e "s#/usr/share/keyrings/breeze-archive-keyring.gpg#$work/good.gpg#" \
 	"$work/repo/inbe.sources" > "$apt_dir/etc/sources.list.d/inbe.sources"
 apt_opts="-o Dir::Etc=$apt_dir/etc -o Dir::Etc::sourcelist=/dev/null -o Dir::State=$apt_dir/state

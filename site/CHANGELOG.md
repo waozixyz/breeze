@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Use innerbreeze.org for installation instructions, the signed APT source and app links.
 - See the animated Inner Breeze homepage with a simpler footer and reduced-motion support.
 - Find the right installer or launch the web app from the homepage’s platform cards.
 

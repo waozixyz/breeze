@@ -82,11 +82,5 @@ gpgv --keyring "$keyring" "$dist/InRelease" 2>/dev/null || {
 gpgv --keyring "$keyring" "$dist/Release.gpg" "$dist/Release" 2>/dev/null
 
 cp "$keyring" "$out_dir/breeze-archive-keyring.gpg"
-cat > "$out_dir/inbe.sources" <<'EOF'
-Types: deb
-URIs: https://breeze.waozi.xyz/apt
-Suites: stable
-Components: main
-Signed-By: /usr/share/keyrings/breeze-archive-keyring.gpg
-EOF
+cp "$root_dir/packaging/linux/apt/inbe.sources" "$out_dir/inbe.sources"
 printf 'APT repository for inbe %s written to %s\n' "$version" "$out_dir"

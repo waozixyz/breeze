@@ -8,8 +8,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-ORIGIN = 'https://breeze.waozi.xyz/apt'
+ORIGIN = 'https://innerbreeze.org/apt'
 KEYRING = Path('packaging/linux/apt/breeze-archive-keyring.gpg').resolve()
+SOURCES = Path('packaging/linux/apt/inbe.sources').resolve()
 DIST = 'dists/stable'
 
 
@@ -54,7 +55,7 @@ def main(destination):
                 raise SystemExit('Unexpected APT package path')
             check_file(download(destination, route), package['Size'], package['SHA256'])
     shutil.copyfile(KEYRING, destination / 'breeze-archive-keyring.gpg')
-    download(destination, 'inbe.sources')
+    shutil.copyfile(SOURCES, destination / 'inbe.sources')
     print('Preserved the verified live signed APT archive')
 
 

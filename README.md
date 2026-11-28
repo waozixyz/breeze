@@ -17,7 +17,9 @@ Free, open-source apps for breathing, meditation, habits and everyday life.
 Use them offline, keep your data on your device, and optionally connect an
 account to sync across devices.
 
-[Download the latest release](https://github.com/waozixyz/breeze/releases/latest)
+[Download Inner Breeze](https://innerbreeze.org/#download)
+· [Open the web app](https://innerbreeze.org/build/web/)
+· [Install with APT](https://innerbreeze.org/install-apt)
 · [What's new](CHANGELOG.md)
 
 ## Make space for yourself
@@ -61,7 +63,7 @@ Your data is stored locally. Account sync is optional. Lumi starts offline;
 connecting an AI provider asks for your agreement to the data sharing shown
 in the app. Use Inner Breeze's service or configure your own provider.
 
-[Privacy policy](https://inbe.waozi.xyz/privacy.html)
+[Privacy policy](https://innerbreeze.org/privacy.html)
 · [Account recovery and sync](docs/SYNC_RECOVERY.md)
 · [Appearance](docs/appearance.md)
 

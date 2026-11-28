@@ -23,6 +23,7 @@ verify_asset / build/site/index.html
 verify_asset /css/landing.css build/site/css/landing.css
 verify_asset /robots.txt build/site/robots.txt
 verify_asset /sitemap.xml build/site/sitemap.xml
+verify_asset /install-apt build/site/install-apt.html
 verify_asset /build/web/ build/site/build/web/index.html "$app_host"
 verify_asset /build/telegram/ build/site/build/telegram/index.html "$app_host"
 if [ -f build/site/build/web/source-build.txt ]; then
@@ -39,6 +40,8 @@ if [ -f build/site/build/web/source-build.txt ]; then
 fi
 verify_asset /delete-account build/site/delete-account.html "$app_host"
 verify_asset /apt/dists/stable/InRelease build/site/apt/dists/stable/InRelease
+verify_asset /apt/inbe.sources build/site/apt/inbe.sources
+verify_asset /apt/breeze-archive-keyring.gpg build/site/apt/breeze-archive-keyring.gpg
 missing_status=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' "https://innerbreeze.org/website-missing-route?revision=$revision")
 test "$missing_status" = 404
 printf 'Verified missing route returns HTTP 404\n'
